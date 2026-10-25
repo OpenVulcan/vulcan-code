@@ -50,6 +50,9 @@ pub struct PermissionJudgeSettingsSnapshot {
     /// Official model chosen for the direct backend, by its edge model id.
     /// 为官方直连后端选择的官方模型，以其边缘模型 id 表示。
     pub edge_model_id: Option<String>,
+    /// Endpoint the user locked the direct backend to; `None` selects automatically.
+    /// 用户为官方直连后端锁定的端点；`None` 表示自动选择。
+    pub edge_endpoint_id: Option<String>,
     /// Official packages this build recognizes, with their published formats.
     /// 本构建识别的官方模型包及其已发布格式。
     pub known_packages: Vec<PermissionJudgeKnownPackage>,
@@ -158,6 +161,105 @@ pub struct PermissionJudgeEdgeModel {
     /// Full edge model id, shown as is.
     /// 完整的边缘模型 id，原样显示。
     pub model_id: String,
+}
+
+/// How the direct backend picks its endpoint.
+/// 官方直连后端选择端点的方式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionJudgeEdgeEndpointMode {
+    /// The background prober picks the fastest eligible endpoint.
+    /// 后台探测选择最快的可用端点。
+    Auto,
+    /// Every request goes to the endpoint the user locked.
+    /// 每个请求都发往用户锁定的端点。
+    Locked,
+}
+
+/// Endpoints of the chosen official direct model and how requests are routed among them. Probe
+/// results live only in memory and start empty after a restart.
+/// 所选官方直连模型的端点，以及请求在其中的走向。探测结果只保存在内存中，重启后为空。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionJudgeEdgeEndpoints {
+    /// Edge model the endpoints serve; `None` when none is chosen.
+    /// 端点服务的边缘模型；未选择时为 `None`。
+    pub model_id: Option<String>,
+    /// Deployment id sent as the site marker; `None` until access was obtained.
+    /// 作为来源标记发送的部署 id；取得访问之前为 `None`。
+    pub site: Option<String>,
+    /// Routing mode.
+    /// 走向方式。
+    pub mode: PermissionJudgeEdgeEndpointMode,
+    /// Endpoint the user locked, when locked.
+    /// 锁定时用户锁定的端点。
+    pub locked_endpoint_id: Option<String>,
+    /// Endpoint requests go to now; `None` when no endpoint is known or the locked one is not
+    /// offered.
+    /// 请求当前发往的端点；尚无已知端点或锁定的端点未提供时为 `None`。
+    pub selected_endpoint_id: Option<String>,
+    /// When the last probe round finished, Unix milliseconds.
+    /// 上一轮探测完成的时间（Unix 毫秒）。
+    pub probed_at_ms: Option<u64>,
+    /// When the next scheduled probe round starts, Unix milliseconds.
+    /// 下一轮计划探测开始的时间（Unix 毫秒）。
+    pub next_probe_at_ms: Option<u64>,
+    /// Why the endpoint list could not be obtained, when it could not.
+    /// 无法取得端点列表时的原因。
+    pub error: Option<String>,
+    /// Endpoints in the deployment's priority order.
+    /// 按部署优先顺序排列的端点。
+    pub endpoints: Vec<PermissionJudgeEdgeEndpoint>,
+}
+
+/// One endpoint with its latest probe.
+/// 一个端点及其最近一次探测。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionJudgeEdgeEndpoint {
+    /// Endpoint id.
+    /// 端点 id。
+    pub endpoint_id: String,
+    /// Endpoint base URL.
+    /// 端点基础地址。
+    pub endpoint: String,
+    /// Operator's default order; lower comes first.
+    /// 运营方的默认顺序；数值小者在前。
+    pub priority: u32,
+    /// Whether the deployment heard from the endpoint recently; advisory only.
+    /// 部署最近是否收到该端点的上报；仅供参考。
+    pub online: bool,
+    /// Region the endpoint reported; `None` until probed successfully.
+    /// 端点报告的地区；成功探测之前为 `None`。
+    pub region: Option<String>,
+    /// Whether the endpoint reported it can judge.
+    /// 端点是否报告其可以判定。
+    pub ready: Option<bool>,
+    /// Whether the endpoint accepts this account's site.
+    /// 端点是否接受该账户的来源标记。
+    pub accepts_site: Option<bool>,
+    /// Median network round trip of the probe.
+    /// 探测的网络往返中位数。
+    pub rtt_ms: Option<u64>,
+    /// Median compute time the endpoint reported; `None` when it reported none.
+    /// 端点报告的计算耗时中位数；未报告时为 `None`。
+    pub compute_p50_ms: Option<u64>,
+    /// Estimated latency used for automatic selection; `None` when the endpoint is not eligible.
+    /// 自动选择使用的预计延迟；端点不可用时为 `None`。
+    pub score_ms: Option<u64>,
+    /// Why the probe failed, when it failed.
+    /// 探测失败时的原因。
+    pub error: Option<String>,
+}
+
+/// Locks the direct backend to one endpoint, or returns it to automatic selection.
+/// 将官方直连后端锁定到一个端点，或恢复自动选择。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PermissionJudgeEdgeEndpointLockRequest {
+    /// Endpoint to lock to; `None` selects automatically.
+    /// 要锁定的端点；`None` 表示自动选择。
+    pub endpoint_id: Option<String>,
 }
 
 /// One published format of an official package family.

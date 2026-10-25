@@ -17,9 +17,10 @@ mod model_discovery;
 mod openvulcan;
 pub use openvulcan::{
     OpenVulcanAccountIdentity, OpenVulcanEdgeAccess, OpenVulcanEdgeAccessError,
-    OpenVulcanEdgeModelUsage, OpenVulcanEdgeUsage, OpenVulcanUsagePage,
-    is_openvulcan_edge_model_id, query_openvulcan_identity, query_openvulcan_usage_page,
-    request_openvulcan_edge_access, request_openvulcan_edge_models, request_openvulcan_edge_usage,
+    OpenVulcanEdgeEndpoint, OpenVulcanEdgeModelUsage, OpenVulcanEdgeUsage, OpenVulcanUsagePage,
+    is_openvulcan_edge_model_id, is_openvulcan_site, query_openvulcan_identity,
+    query_openvulcan_usage_page, request_openvulcan_edge_access, request_openvulcan_edge_models,
+    request_openvulcan_edge_usage,
 };
 mod secondary_routes;
 

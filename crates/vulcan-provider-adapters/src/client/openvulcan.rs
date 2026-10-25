@@ -478,15 +478,46 @@ async fn edge_list_get(
     Ok(body.to_vec())
 }
 
-/// Edge endpoint and short-lived access token for one model. It has no `Debug` so the token
-/// cannot reach a log.
-/// 一个模型的边缘端点与短期访问令牌。不实现 `Debug`，使令牌无法进入日志。
-pub struct OpenVulcanEdgeAccess {
+/// Tells whether `text` is a deployment id the edge protocol accepts as a site marker: 1–32
+/// characters of `[a-z0-9-]`.
+/// 判断 `text` 是否为边缘协议接受作为来源标记的部署 id：1–32 个 `[a-z0-9-]` 字符。
+pub fn is_openvulcan_site(text: &str) -> bool {
+    (1..=32).contains(&text.len())
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+/// One edge endpoint the deployment enables for a model.
+/// 部署为某个模型启用的一个边缘端点。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenVulcanEdgeEndpoint {
+    /// Endpoint id registered in the deployment.
+    /// 部署中登记的端点 id。
+    pub endpoint_id: String,
     /// Endpoint base URL: an https origin, or http on loopback.
     /// 端点基础地址：https 源，或回环地址上的 http。
     pub endpoint: String,
-    /// Bearer token the endpoint accepts for this model, account and installation.
-    /// 端点为该模型、账户与安装接受的 Bearer 令牌。
+    /// Default order set by the operator; lower comes first.
+    /// 运营方设置的默认顺序；数值小者在前。
+    pub priority: u32,
+    /// Whether the deployment heard from the endpoint recently; advisory only.
+    /// 部署最近是否收到该端点的上报；仅供参考。
+    pub online: bool,
+}
+
+/// Endpoints and short-lived access token for one model. It has no `Debug` so the token cannot
+/// reach a log.
+/// 一个模型的边缘端点与短期访问令牌。不实现 `Debug`，使令牌无法进入日志。
+pub struct OpenVulcanEdgeAccess {
+    /// Deployment id that issued the token; sent as the site marker with every judge request.
+    /// 签发令牌的部署 id；作为来源标记随每个判定请求发送。
+    pub site: String,
+    /// Every endpoint enabled for the model, in the deployment's priority order; never empty.
+    /// 该模型启用的全部端点，按部署的优先顺序排列；从不为空。
+    pub endpoints: Vec<OpenVulcanEdgeEndpoint>,
+    /// Bearer token every endpoint of this model accepts for this account and installation.
+    /// 该模型每个端点都为该账户与安装接受的 Bearer 令牌。
     pub access_token: String,
     /// Token expiry in Unix milliseconds.
     /// 令牌到期时间（Unix 毫秒）。
@@ -512,15 +543,36 @@ struct EdgeAccessAnswer {
     /// Echo of the requested model.
     /// 请求模型的回显。
     model_id: String,
-    /// Endpoint base URL.
-    /// 端点基础地址。
-    endpoint: String,
+    /// Issuing deployment id.
+    /// 签发部署 id。
+    site: String,
+    /// Enabled endpoints of the model.
+    /// 该模型启用的端点。
+    endpoints: Vec<EdgeAccessEndpoint>,
     /// EdDSA JWT for the endpoint.
     /// 端点使用的 EdDSA JWT。
     access_token: String,
     /// RFC 3339 expiry equal to the token's `exp`.
     /// 等于令牌 `exp` 的 RFC 3339 到期时间。
     expires_at: String,
+}
+
+/// One endpoint of the edge-access answer.
+/// 边缘访问回答中的一个端点。
+#[derive(Deserialize)]
+struct EdgeAccessEndpoint {
+    /// Endpoint id.
+    /// 端点 id。
+    endpoint_id: String,
+    /// Endpoint base URL.
+    /// 端点基础地址。
+    endpoint: String,
+    /// Default order.
+    /// 默认顺序。
+    priority: u32,
+    /// Recent report seen by the deployment.
+    /// 部署最近是否收到上报。
+    online: bool,
 }
 
 /// Error envelope of the user center.
@@ -607,25 +659,54 @@ pub async fn request_openvulcan_edge_access(
             status.as_u16()
         )));
     }
-    let answer: EdgeAccessAnswer = serde_json::from_slice(&body)
-        .map_err(|_| failed("The OpenVulcan edge access answer violates its contract."))?;
-    let endpoint = edge_endpoint_origin(&answer.endpoint).ok_or_else(|| {
-        failed("OpenVulcan returned an edge endpoint that is not an https origin.")
-    })?;
+    parse_edge_access(&body, model_id).map_err(OpenVulcanEdgeAccessError::Failed)
+}
+
+/// Parses an edge-access answer for `model_id`: a valid site marker, at least one endpoint with a
+/// distinct valid id and an https origin, a token and an RFC 3339 expiry. Endpoints keep the
+/// deployment's order.
+/// 解析 `model_id` 的边缘访问回答：有效的来源标记、至少一个 id 有效且不重复并为 https 源的端点、
+/// 令牌与 RFC 3339 到期时间。端点保持部署给出的顺序。
+fn parse_edge_access(body: &[u8], model_id: &str) -> Result<OpenVulcanEdgeAccess, String> {
+    let violates = || String::from("The OpenVulcan edge access answer violates its contract.");
+    let answer: EdgeAccessAnswer = serde_json::from_slice(body).map_err(|_| violates())?;
+    if answer.model_id != model_id
+        || answer.access_token.is_empty()
+        || !is_openvulcan_site(&answer.site)
+        || answer.endpoints.is_empty()
+    {
+        return Err(violates());
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    let mut endpoints = Vec::with_capacity(answer.endpoints.len());
+    for entry in answer.endpoints {
+        if !is_openvulcan_edge_model_id(&entry.endpoint_id)
+            || !ids.insert(entry.endpoint_id.clone())
+        {
+            return Err(violates());
+        }
+        let endpoint = edge_endpoint_origin(&entry.endpoint).ok_or_else(|| {
+            String::from("OpenVulcan returned an edge endpoint that is not an https origin.")
+        })?;
+        endpoints.push(OpenVulcanEdgeEndpoint {
+            endpoint_id: entry.endpoint_id,
+            endpoint,
+            priority: entry.priority,
+            online: entry.online,
+        });
+    }
+    let invalid_expiry =
+        || String::from("The OpenVulcan edge access answer has an invalid expiry.");
     let expires_at = time::OffsetDateTime::parse(
         &answer.expires_at,
         &time::format_description::well_known::Rfc3339,
     )
-    .map_err(|_| failed("The OpenVulcan edge access answer has an invalid expiry."))?;
+    .map_err(|_| invalid_expiry())?;
     let expires_at_unix_ms = u64::try_from(expires_at.unix_timestamp_nanos() / 1_000_000)
-        .map_err(|_| failed("The OpenVulcan edge access answer has an invalid expiry."))?;
-    if answer.model_id != model_id || answer.access_token.is_empty() {
-        return Err(failed(
-            "The OpenVulcan edge access answer violates its contract.",
-        ));
-    }
+        .map_err(|_| invalid_expiry())?;
     Ok(OpenVulcanEdgeAccess {
-        endpoint,
+        site: answer.site,
+        endpoints,
         access_token: answer.access_token,
         expires_at_unix_ms,
     })
@@ -693,6 +774,82 @@ mod tests {
             serde_json::json!({"hours": 720, "models": [{"model_id": "a", "enabled": true, "requests": -1, "items": 0, "errors": 0}]}),
         ] {
             assert!(parse(refused.clone()).is_err(), "{refused}");
+        }
+    }
+
+    /// Edge-access answers carry a site marker and distinct https endpoints in the deployment's
+    /// order; anything else is refused.
+    /// 边缘访问回答带有来源标记与按部署顺序排列、不重复的 https 端点；其余一律拒绝。
+    #[test]
+    fn edge_access_answers_hold_a_site_and_distinct_endpoints() {
+        let endpoint = |id: &str, url: &str, priority: u32| serde_json::json!({"endpoint_id": id, "endpoint": url, "priority": priority, "online": true});
+        let answer = |site: &str, endpoints: Vec<serde_json::Value>| {
+            serde_json::json!({
+                "model_id": "m", "site": site, "endpoints": endpoints,
+                "access_token": "t", "expires_at": "2026-10-26T00:10:00Z"
+            })
+        };
+        let parse = |value: serde_json::Value| parse_edge_access(value.to_string().as_bytes(), "m");
+        let access = parse(answer(
+            "global",
+            vec![
+                endpoint("us-mini", "https://us-models.example.com/", 10),
+                endpoint("cn-mini", "https://cn-models.example.com", 20),
+            ],
+        ))
+        .expect("a valid answer parses");
+        assert_eq!(access.site, "global");
+        assert_eq!(
+            access
+                .endpoints
+                .iter()
+                .map(|endpoint| (endpoint.endpoint_id.as_str(), endpoint.endpoint.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("us-mini", "https://us-models.example.com"),
+                ("cn-mini", "https://cn-models.example.com")
+            ]
+        );
+        assert_eq!(access.endpoints[1].priority, 20);
+        let one = || vec![endpoint("a", "https://a.example.com", 0)];
+        let token = |model: &str, token: &str, expiry: &str| {
+            serde_json::json!({
+                "model_id": model, "site": "global", "endpoints": one(),
+                "access_token": token, "expires_at": expiry
+            })
+        };
+        for refused in [
+            answer("", one()),
+            answer("Global", one()),
+            answer(&"s".repeat(33), one()),
+            answer("global", Vec::new()),
+            answer(
+                "global",
+                vec![
+                    endpoint("a", "https://a.example.com", 0),
+                    endpoint("a", "https://b.example.com", 1),
+                ],
+            ),
+            answer("global", vec![endpoint("a b", "https://a.example.com", 0)]),
+            answer("global", vec![endpoint("a", "http://a.example.com", 0)]),
+            serde_json::json!({"model_id": "m", "endpoint": "https://a.example.com", "access_token": "t", "expires_at": "2026-10-26T00:10:00Z"}),
+            token("other", "t", "2026-10-26T00:10:00Z"),
+            token("m", "", "2026-10-26T00:10:00Z"),
+            token("m", "t", "soon"),
+        ] {
+            assert!(parse(refused.clone()).is_err(), "{refused}");
+        }
+    }
+
+    /// Site markers are 1–32 lowercase letters, digits or hyphens.
+    /// 来源标记为 1–32 个小写字母、数字或连字符。
+    #[test]
+    fn site_markers_are_short_lowercase_ids() {
+        for site in ["global", "cn", "eu", "us-west-2"] {
+            assert!(is_openvulcan_site(site), "{site}");
+        }
+        for site in ["", "Global", "c n", "cn_1", &"s".repeat(33)] {
+            assert!(!is_openvulcan_site(site), "{site}");
         }
     }
 

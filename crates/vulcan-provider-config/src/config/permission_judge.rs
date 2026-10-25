@@ -83,6 +83,11 @@ pub struct PersistedPermissionJudgeConfiguration {
     /// 官方直连后端调用的官方模型，以其边缘模型 id 表示。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edge_model_id: Option<String>,
+    /// Endpoint the user locked the direct backend to; `None` selects automatically. Written only
+    /// by the user's explicit choice and cleared when the edge model changes.
+    /// 用户为官方直连后端锁定的端点；`None` 表示自动选择。只由用户显式选择写入，切换边缘模型时清除。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge_endpoint_id: Option<String>,
     /// Lets the review LLM allow calls the judge blocked; off unless the user turns it on.
     /// 允许复核 LLM 放行判定器拦截的调用；用户开启前保持关闭。
     #[serde(default, skip_serializing_if = "is_false")]

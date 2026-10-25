@@ -3,6 +3,7 @@
 
 mod cloud;
 mod edge;
+mod edge_select;
 mod environment;
 mod records;
 mod review;
@@ -51,6 +52,9 @@ pub(crate) struct PermissionJudgeRuntime {
     /// Edge endpoints and tokens of the official direct judge.
     /// 官方直连判定的边缘端点与令牌。
     edge_access: edge::EdgeAccessCache,
+    /// Endpoint selection of the official direct judge.
+    /// 官方直连判定的端点选择。
+    edge_select: edge_select::EdgeSelector,
     /// Decision log of the judge and the reviewer.
     /// 判定器与复核器的判定记录。
     records: Arc<records::RecordStore>,

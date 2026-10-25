@@ -10,6 +10,7 @@
 pub mod cloud;
 pub mod decision;
 pub mod edge;
+pub mod edge_route;
 pub mod known;
 pub mod package;
 pub mod policy;
@@ -23,6 +24,10 @@ pub use decision::{JudgeLabel, NonFiniteLogits, decide};
 pub use edge::{
     EDGE_JUDGE_PATH, EdgeAnswer, EdgeJudgeRequest, EdgeJudgeResponse, EdgeJudgeResult, EdgeOutcome,
     edge_outcomes,
+};
+pub use edge_route::{
+    EDGE_SITE_HEADER, EDGE_STATUS_PATH, EDGE_SWITCH_PERCENT, EdgeCandidate, EdgeComputeMs,
+    EdgeExclusion, EdgeStatus, choose_edge_endpoint, edge_score, median_ms,
 };
 pub use known::{
     FP16_MIN_CUDA_COMPUTE_CAPABILITY, KnownDownload, KnownPackage, KnownVariant, ModelFormat,

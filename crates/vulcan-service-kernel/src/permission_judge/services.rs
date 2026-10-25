@@ -26,11 +26,12 @@ use vulcan_service_api::{
     PermissionJudgeBenchmarkRequest, PermissionJudgeBenchmarkResult, PermissionJudgeCudaArchive,
     PermissionJudgeCudaComponent, PermissionJudgeCudaDirectory, PermissionJudgeCudaInstall,
     PermissionJudgeCudaInstallRequest, PermissionJudgeCudaSnapshot, PermissionJudgeDeviceSummary,
-    PermissionJudgeEdgeModel, PermissionJudgeEdgeModels, PermissionJudgeIssue,
-    PermissionJudgeKnownPackage, PermissionJudgeKnownVariant, PermissionJudgeLink,
-    PermissionJudgeModelDownload, PermissionJudgeModelDownloadRequest,
-    PermissionJudgeModelRegisterRequest, PermissionJudgeModelRequest, PermissionJudgeModelSummary,
-    PermissionJudgeNvidiaDriver, PermissionJudgePackageFacts, PermissionJudgePackageInspectRequest,
+    PermissionJudgeEdgeEndpointLockRequest, PermissionJudgeEdgeEndpoints, PermissionJudgeEdgeModel,
+    PermissionJudgeEdgeModels, PermissionJudgeIssue, PermissionJudgeKnownPackage,
+    PermissionJudgeKnownVariant, PermissionJudgeLink, PermissionJudgeModelDownload,
+    PermissionJudgeModelDownloadRequest, PermissionJudgeModelRegisterRequest,
+    PermissionJudgeModelRequest, PermissionJudgeModelSummary, PermissionJudgeNvidiaDriver,
+    PermissionJudgePackageFacts, PermissionJudgePackageInspectRequest,
     PermissionJudgePackageInspection, PermissionJudgePolicyOption, PermissionJudgeRecord,
     PermissionJudgeRecordExport, PermissionJudgeRecordMarkRequest, PermissionJudgeRecordPage,
     PermissionJudgeRecordsRequest, PermissionJudgeSettingsSaveRequest,
@@ -48,8 +49,8 @@ use vulcan_service_runtime::judge_model_download::{
 
 use super::PermissionJudgeRuntime;
 use super::cloud::{self, CloudCall};
-use super::edge;
 use super::environment::{DEVICE_PREFERENCE, JudgeEnvironment, LoadSpec, device_name};
+use super::{edge, edge_select};
 use crate::runtime_workspace_helpers::workspace_task_project_for_project_id;
 use crate::{
     SharedServiceBridgeState, current_v1_unix_millis, emit_workbench_event,
@@ -138,7 +139,7 @@ fn cloud_enabled(settings: &PersistedPermissionJudgeConfiguration) -> bool {
 
 /// The official direct model the saved settings run, or `None` when another backend is chosen.
 /// 已保存设置运行的官方直连模型；选择其他后端时为 `None`。
-fn edge_model(settings: &PersistedPermissionJudgeConfiguration) -> Option<&str> {
+pub(super) fn edge_model(settings: &PersistedPermissionJudgeConfiguration) -> Option<&str> {
     settings
         .edge_model_id
         .as_deref()
@@ -385,6 +386,7 @@ async fn snapshot(
         active_model_id: settings.active_model_id.clone(),
         previous_model_id: settings.previous_model_id.clone(),
         edge_model_id: settings.edge_model_id.clone(),
+        edge_endpoint_id: settings.edge_endpoint_id.clone(),
         known_packages: known_packages()
             .iter()
             .map(|package| PermissionJudgeKnownPackage {
@@ -464,6 +466,69 @@ pub(crate) async fn service_permission_judge_edge_models(
     })
 }
 
+/// Returns the endpoints of the chosen official direct model with their latest probe.
+/// 返回所选官方直连模型的端点及其最近一次探测。
+pub(crate) async fn service_permission_judge_edge_endpoints(
+    state: SharedServiceBridgeState,
+) -> Result<PermissionJudgeEdgeEndpoints, String> {
+    let (runtime, settings) = read_state(&state)?;
+    runtime.edge_select.snapshot(&settings)
+}
+
+/// Probes every endpoint of the chosen official direct model now and returns the result.
+/// 立即探测所选官方直连模型的每个端点并返回结果。
+pub(crate) async fn service_probe_permission_judge_edge_endpoints(
+    state: SharedServiceBridgeState,
+) -> Result<PermissionJudgeEdgeEndpoints, String> {
+    let (runtime, _) = read_state(&state)?;
+    runtime.edge_select.probe(&state, &runtime).await?;
+    let (_, settings) = read_state(&state)?;
+    runtime.edge_select.snapshot(&settings)
+}
+
+/// Locks the official direct judge to one endpoint the deployment offers for the chosen model, or
+/// returns it to automatic selection.
+/// 将官方直连判定锁定到部署为所选模型提供的一个端点，或恢复自动选择。
+pub(crate) async fn service_lock_permission_judge_edge_endpoint(
+    state: SharedServiceBridgeState,
+    request: PermissionJudgeEdgeEndpointLockRequest,
+) -> Result<PermissionJudgeEdgeEndpoints, String> {
+    let (runtime, current) = read_state(&state)?;
+    if let Some(endpoint_id) = request.endpoint_id.as_deref() {
+        let model = edge_model(&current).ok_or_else(|| {
+            String::from("Choose the official direct judge before locking an endpoint.")
+        })?;
+        let (connection_id, secret) =
+            crate::public_ai_settings::openvulcan_account::signed_in_credential(&state)
+                .await?
+                .ok_or_else(|| {
+                    String::from(
+                        "Sign in to OpenVulcan before locking an official direct endpoint.",
+                    )
+                })?;
+        let grant = runtime
+            .edge_access
+            .access(&connection_id, &secret, model, false)
+            .await?;
+        if !grant
+            .endpoints
+            .iter()
+            .any(|endpoint| endpoint.endpoint_id == endpoint_id)
+        {
+            return Err(format!(
+                "OpenVulcan does not offer the endpoint `{endpoint_id}` for the official direct model `{model}`."
+            ));
+        }
+    }
+    let settings = save_settings(&state, |settings| {
+        settings.edge_endpoint_id = request.endpoint_id;
+        Ok(())
+    })
+    .await?;
+    runtime.edge_select.wake();
+    runtime.edge_select.snapshot(&settings)
+}
+
 /// Returns the live status polled while the settings page is open.
 /// 返回设置页打开期间轮询的实时状态。
 pub(crate) async fn service_permission_judge_status(
@@ -502,9 +567,15 @@ fn reconcile_worker(
     });
 }
 
-/// Warms the saved configuration at service start when the local judge is enabled.
-/// 本机判定器启用时，在服务启动时预热已保存的配置。
+/// Starts the official direct endpoint selection and, when the local judge is enabled, warms the
+/// saved configuration at service start.
+/// 在服务启动时开始官方直连端点选择；本机判定器启用时预热已保存的配置。
 pub(crate) fn start_permission_judge(state: &SharedServiceBridgeState) {
+    if let Ok(guard) = state.lock() {
+        let runtime = Arc::clone(&guard.permission_judge);
+        drop(guard);
+        edge_select::start(state, &runtime);
+    }
     if let Ok((runtime, settings)) = read_state(state)
         && local_enabled(&settings)
     {
@@ -608,6 +679,11 @@ pub(crate) async fn service_save_permission_judge_settings(
     }
     let settings = save_settings(&state, |settings| {
         settings.backend = request.backend;
+        // A lock names an endpoint of one model, so choosing another model releases it.
+        // 锁定指向某个模型的端点，因此选择其他模型时解除锁定。
+        if settings.edge_model_id != request.edge_model_id {
+            settings.edge_endpoint_id = None;
+        }
         settings.edge_model_id = request.edge_model_id;
         settings.device = request.device;
         settings.cuda_library_directory = cuda_library_directory;
@@ -624,6 +700,7 @@ pub(crate) async fn service_save_permission_judge_settings(
         emit_workbench_event(&app, &guard.workbench);
     }
     reconcile_worker(&runtime, &settings);
+    runtime.edge_select.wake();
     snapshot(&runtime, settings).await
 }
 
@@ -820,11 +897,16 @@ pub(crate) async fn service_benchmark_permission_judge(
     }
     let (runtime, settings) = read_state(&state)?;
     if let Some(model_id) = edge_model(&settings) {
-        let elapsed_ms =
-            edge::time_batch(&state, &runtime.edge_access, model_id, request.batch_size)
-                .await?
-                .as_secs_f64()
-                * 1_000.0;
+        let elapsed_ms = edge::time_batch(
+            &state,
+            &runtime,
+            model_id,
+            settings.edge_endpoint_id.as_deref(),
+            request.batch_size,
+        )
+        .await?
+        .as_secs_f64()
+            * 1_000.0;
         return Ok(PermissionJudgeBenchmarkResult {
             device: None,
             model_id: model_id.to_string(),
@@ -1254,15 +1336,21 @@ pub(crate) async fn judge_call(
             settings: trace.settings.clone(),
             rendered: trace.rendered.clone(),
         };
-        let judged = edge::judge(state, &runtime.edge_access, model, vec![input])
-            .await
-            .map(|mut answer: EdgeAnswer| {
-                let trace = JudgeTrace {
-                    checkpoint_sha256: Some(answer.checkpoint_sha256),
-                    ..trace.clone()
-                };
-                (answer.outcomes.pop(), trace)
-            });
+        let judged = edge::judge(
+            state,
+            &runtime,
+            model,
+            settings.edge_endpoint_id.as_deref(),
+            vec![input],
+        )
+        .await
+        .map(|mut answer: EdgeAnswer| {
+            let trace = JudgeTrace {
+                checkpoint_sha256: Some(answer.checkpoint_sha256),
+                ..trace.clone()
+            };
+            (answer.outcomes.pop(), trace)
+        });
         return match judged {
             Ok((
                 Some(EdgeOutcome::Evaluated {

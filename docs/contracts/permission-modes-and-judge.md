@@ -167,12 +167,35 @@
   （无参数，返回 `{ models: [{ modelId }] }`，按 id 排序，可为空；未登录时报错）以已登录账号读取
   `GET {认证源}/api/v1/vulcancode/edge-models`，id 必须是 1–64 个 `[A-Za-z0-9._:-]` 字符且不重复。所选
   模型以完整 id 原样保存在设置的 `edge_model_id`，服务端不再列出时也不改写。服务以已登录账号向
-  `POST {认证源}/api/v1/vulcancode/edge-access`（`model_id`、`client_id`）换取端点与短期访问令牌；
-  `404 model_unavailable` 表示当前未启用该模型。令牌按模型缓存并
-  绑定账号连接，剩余不足 `ACCESS_REFRESH_AHEAD_MS` 时续期；端点以 `401` 拒绝令牌时续期一次并只重试一次；
-  端点按调用方（签发部署、用户与安装）限速，超限时回答 `429 rate_limited` 与 `Retry-After`，记为独立的
-  限速拒绝（注明等待秒数）且不重试；其他拒绝、超时或格式错误同样直接交给下一层，从不放行。端点只接受
-  HTTPS 源（回环地址可用 HTTP），不跟随重定向。
+  `POST {认证源}/api/v1/vulcancode/edge-access`（`model_id`、`client_id`）换取
+  `{ model_id, site, endpoints: [{ endpoint_id, endpoint, priority, online }], access_token, expires_at }`：
+  `site` 是签发部署 id（1–32 个 `[a-z0-9-]` 字符，与令牌 `iss` 相同，客户端不按域名推断），`endpoints`
+  是该部署为该模型启用的全部端点（非空，id 规则同模型 id 且不重复，地址只接受 HTTPS 源、回环地址可用
+  HTTP），令牌对该模型的任一端点有效；旧的单端点字段不再接受。`404 model_unavailable` 表示当前未启用该
+  模型。令牌按模型缓存并绑定账号连接，剩余不足 `ACCESS_REFRESH_AHEAD_MS` 时续期。每个判定请求都带
+  `X-OpenVulcan-Site: <site>` 发往当前选中的端点；端点以 `401` 拒绝令牌时续期一次并只重试一次；
+  `400 site_required` 与 `403 site_not_accepted` 记为独立的来源拒绝且不重试；端点按调用方（签发部署、
+  用户与安装）限速，超限时回答 `429 rate_limited` 与 `Retry-After`，记为独立的限速拒绝（注明等待秒数）
+  且不重试；其他拒绝、超时或格式错误同样直接交给下一层，从不放行。请求失败不在请求内改投其他端点，不跟随
+  重定向。
+- **直连端点选择**：后台任务（`edge_select.rs`）在服务启动时、每 `PROBE_INTERVAL`（10 分钟）、判定设置
+  或锁定保存后（`WAKE_DEBOUNCE` 去抖），以及请求遇到网络错误、`5xx` 或 `site_not_accepted` 后（每
+  `FAILURE_REPROBE_GAP_MS` 至多一次）探测一轮；只在后端为官方直连且已登录时探测，从不随单个请求探测。
+  每轮依次对每个端点无凭证请求 `GET {endpoint}/v1/status` `PROBE_ATTEMPTS`（3）次，往返取成功次数的
+  中位数，全部失败才算探测失败；预计延迟 = 往返 + `compute_ms.p50`（为 `null` 时只取往返）。状态的端点 id
+  或模型不符、`sites` 不含本账号 `site`、`ready` 为假或探测失败的端点不参与自动选择。评分最低者胜出，平局
+  按 `priority`、id；当前端点仍可用时，只有最佳评分低于其 `EDGE_SWITCH_PERCENT`（80%）才切换。尚未探测或
+  无可用端点时使用 `priority` 最小的端点。探测结果只在内存中，重启后重新探测。
+  **锁定**：系统级设置 `edge_endpoint_id` 只由用户显式锁定写入
+  （`service_lock_permission_judge_edge_endpoint`，`{ request: { endpointId: string | null } }`，`null` 恢复
+  自动；锁定时校验该端点在当前部署为所选模型提供的列表中），选择其他直连模型时清除，判定设置保存请求不
+  携带它，避免遗漏字段改写锁定。锁定后请求始终发往该端点；该端点不再提供或不可达时直接报错交给下一层，
+  绝不回退到其他端点。`service_permission_judge_edge_endpoints`（无参数）返回内存快照，
+  `service_probe_permission_judge_edge_endpoints`（无参数）立即探测一轮后返回快照：
+  `{ modelId, site, mode: "auto" | "locked", lockedEndpointId, selectedEndpointId, probedAtMs, nextProbeAtMs,
+  error, endpoints: [{ endpointId, endpoint, priority, online, region, ready, acceptsSite, rttMs,
+  computeP50Ms, scoreMs, error }] }`；`selectedEndpointId` 是请求当前发往的端点（锁定时为锁定端点，未提供
+  时为 `null`），`scoreMs` 为 `null` 表示不参与自动选择。设置页每 `pollIntervalMs` 读取快照。
   端点 `POST /v1/judge` 已在节点应用模型包余量规则，标签原样采用；回答必须回显请求标识、检查点摘要为 64 位
   小写十六进制、策略版本等于随构建副本、结果数等于输入数，超过 token 上限的结果视为输入超限交给下一层。
   检查点不与本地清单比对，只记入判定轨迹（`checkpointSha256`）。官方模型包清单 `known-packages.json`
@@ -201,7 +224,7 @@
   审批以 `deadlineUnixMs` 投影给客户端。到期时经持久回复路径写入拒绝，先到的用户回答优先；拒绝文本
   `APPROVAL_EXPIRED_DENIAL` 告知代理无人及时回答、不要立即重试同一调用。等待适用于全部用户审批（含仅可查看
   与工作区修改模式的审批），无人值守会话不进入用户审批。
-- **速度测试**：1 条与 10 条两种，用户触发，结果只留在当前界面；云端测试会产生费用，执行前先确认；官方直连测试不收费，但以已保存的直连模型发送合成调用到官方端点。
+- **速度测试**：1 条与 10 条两种，用户触发，结果只留在当前界面；云端测试会产生费用，执行前先确认；官方直连测试不收费，但以已保存的直连模型发送合成调用到请求当前使用的端点（带来源标记）。后台端点探测只请求公开状态，不发送判定输入，与速度测试互不替代。
 
 ## 项目策略
 
@@ -279,11 +302,12 @@
 | 复核规则服务与有效规则 | `crates/vulcan-service-kernel/src/permission_judge/review_rules.rs`；类型与上限在 `crates/vulcan-permission-judge/src/system.rs` |
 | 复核附加提示词服务 | `crates/vulcan-service-kernel/src/permission_judge/review_prompt.rs`；会话旁置文件在 `crates/vulcan-workspace-store/src/workspace_store/session_sidecars.rs` |
 | 审批等待与到期拒绝 | `crates/vulcan-agent-runtime/src/agent_runtime/question_runtime/approval.rs`、`tool_permission.rs` 中的 `APPROVAL_EXPIRED_DENIAL` |
-| 判定设置、项目策略与速度测试服务 | `crates/vulcan-service-kernel/src/permission_judge/services.rs`；官方直连模型清单、令牌缓存、请求与限速处理在同目录 `edge.rs` |
+| 判定设置、项目策略与速度测试服务 | `crates/vulcan-service-kernel/src/permission_judge/services.rs`；官方直连模型清单、令牌缓存、请求、来源标记与限速处理在同目录 `edge.rs`，后台端点探测、选择与锁定在 `edge_select.rs` |
+| 直连状态探测形状、评分与切换规则 | `crates/vulcan-permission-judge/src/edge_route.rs` 中的 `EdgeStatus`、`edge_score`、`choose_edge_endpoint`、`EDGE_SWITCH_PERCENT` |
 | 判定记录存储、筛选、标记与导出 | `crates/vulcan-service-kernel/src/permission_judge/records.rs` |
 | 复核 LLM 请求 | `crates/vulcan-service-kernel/src/permission_judge/review.rs` |
 | 本机 worker、设备与 CUDA | `crates/vulcan-service-kernel/src/permission_judge/{worker,environment}.rs` |
 | 策略、模型包、官方清单、云端副本、直连回答检查与门槛 | `crates/vulcan-permission-judge/src/{policy,package,known,cloud,edge,decision}.rs` |
-| 官方直连模型清单、账号调用量与访问令牌换取 | `crates/vulcan-provider-adapters/src/client/openvulcan.rs` 中的 `request_openvulcan_edge_models`、`request_openvulcan_edge_usage`、`request_openvulcan_edge_access`，标识规则 `is_openvulcan_edge_model_id` |
+| 官方直连模型清单、账号调用量与访问令牌换取 | `crates/vulcan-provider-adapters/src/client/openvulcan.rs` 中的 `request_openvulcan_edge_models`、`request_openvulcan_edge_usage`、`request_openvulcan_edge_access`，标识规则 `is_openvulcan_edge_model_id`、`is_openvulcan_site` |
 | WebUI 界面 | `apps/vulcan-code-web/src/components/features/settings/permission-judge-*`、`components/features/onboarding/`、`components/project/project-permission-judge-section.tsx`、`components/composer/` |
 | TUI 界面 | `apps/vulcan-code-tui/src/app/pages/{permission_judge,setup_guide,project_permission_judge,unattended,review_rules}.rs`、`app/permission_mode.rs` |
