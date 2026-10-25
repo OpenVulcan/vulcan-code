@@ -248,6 +248,11 @@ export function useConversationScrollController(
   // layoutTransactionRef exists only while one manual fold animation owns viewport correction.
   // layoutTransactionRef 仅在单次手动折叠动画持有视口校正时存在。
   const layoutTransactionRef = React.useRef<ConversationLayoutTransaction | null>(null);
+  // surfaceRestoreRef holds a restored reading position until the reader acts, so content that finishes
+  // rendering after a surface switch is re-anchored instead of a temporary bottom clamp adopting the tail.
+  // surfaceRestoreRef 在阅读者操作前保持已恢复的阅读位置，使界面切换后才完成渲染的内容重新锚定，
+  // 而不是由暂时裁剪到的底部接管尾部跟随。
+  const surfaceRestoreRef = React.useRef<ConversationLayoutTransaction | null>(null);
   // userRevisionRef invalidates asynchronous restores when observed reader movement occurs.
   // userRevisionRef 在观察到阅读者移动时使异步恢复失效。
   const userRevisionRef = React.useRef(0);
@@ -733,6 +738,9 @@ export function useConversationScrollController(
       scrollTop: element.scrollHeight,
     };
     restoreSnapshot(element, savedSnapshot);
+    surfaceRestoreRef.current = savedSnapshot.followTail
+      ? null
+      : { surfaceId, snapshot: savedSnapshot, userRevision: userRevisionRef.current };
     writeCurrentSnapshot(element, surfaceId);
   }, [
     cancelPendingFrame,
@@ -766,6 +774,14 @@ export function useConversationScrollController(
       // The reserve absorbs shrinkage before any tail correction reads the new bottom.
       // 在任何尾部校正读取新底部之前，先由预留吸收收缩。
       reconcileTailReserve(element);
+      // A restored reading position keeps its anchor while the switched-in content finishes rendering.
+      // 切换进来的内容完成渲染期间，已恢复的阅读位置保持其锚点。
+      const restore = surfaceRestoreRef.current;
+      if (restore && restore.surfaceId === surfaceId && restore.userRevision === userRevisionRef.current) {
+        scheduleSnapshotRestore(restore.surfaceId, restore.snapshot, restore.userRevision);
+        return;
+      }
+      surfaceRestoreRef.current = null;
       // transaction keeps one immutable pre-mutation anchor instead of chasing snapshots rewritten every frame.
       // transaction 保持单个不可变修改前锚点，避免追逐每帧重写的快照。
       const transaction = layoutTransactionRef.current;
