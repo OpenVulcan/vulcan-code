@@ -22,8 +22,8 @@ use crate::app::action::{AskStep, UiAction};
 use crate::app::hit::Target;
 use crate::app::{App, Focus};
 use crate::model::{
-    ApprovalJudge, ApprovalReview, ApprovalSubject, PendingApproval, PendingEnvironmentRequest,
-    PendingQuestion,
+    ApprovalConfiguration, ApprovalJudge, ApprovalReview, ApprovalSubject, PendingApproval,
+    PendingEnvironmentRequest, PendingQuestion,
 };
 use crate::tr;
 
@@ -128,6 +128,102 @@ fn risk_label(key: &str) -> String {
     }
 }
 
+/// The summary and field lines of a configuration change; a creation shows only new values.
+/// 配置变更的概要与字段行；创建时只显示新值。
+fn configuration_lines(change: &ApprovalConfiguration) -> Vec<String> {
+    let value = |raw: &Option<String>| match raw.as_deref() {
+        None => tr!("ask.approval.config.unset"),
+        Some("true") => tr!("ask.approval.config.value.on"),
+        Some("false") => tr!("ask.approval.config.value.off"),
+        Some(other) => other.to_string(),
+    };
+    let creating = change.changes.iter().all(|field| field.before.is_none());
+    let mut lines = vec![tr!(
+        "ask.approval.config.summary",
+        action = config_action_label(&change.action),
+        kind = config_kind_label(&change.target_kind),
+        target = change.target.clone()
+    )];
+    for field in &change.changes {
+        let label = config_field_label(&field.field);
+        lines.push(if creating {
+            format!("{label}: {}", value(&field.after))
+        } else {
+            format!(
+                "{label}: {} → {}",
+                value(&field.before),
+                value(&field.after)
+            )
+        });
+    }
+    lines
+}
+
+/// Catalog label of a configured object key, or the key itself when unknown.
+/// 被配置对象键的目录标签；未知时返回键本身。
+fn config_kind_label(key: &str) -> String {
+    match key {
+        "mcp_server" => tr!("ask.approval.config.kind.mcpServer"),
+        "provider_connection" => tr!("ask.approval.config.kind.providerConnection"),
+        "custom_provider" => tr!("ask.approval.config.kind.customProvider"),
+        "provider" => tr!("ask.approval.config.kind.provider"),
+        other => other.to_string(),
+    }
+}
+
+/// Catalog label of a configuration action key, or the key itself when unknown.
+/// 配置动作键的目录标签；未知时返回键本身。
+fn config_action_label(key: &str) -> String {
+    match key {
+        "create" => tr!("ask.approval.config.action.create"),
+        "update" => tr!("ask.approval.config.action.update"),
+        "remove" => tr!("ask.approval.config.action.remove"),
+        "enable" => tr!("ask.approval.config.action.enable"),
+        "disable" => tr!("ask.approval.config.action.disable"),
+        "set_default" => tr!("ask.approval.config.action.setDefault"),
+        other => other.to_string(),
+    }
+}
+
+/// Catalog label of a configuration field key, or the key itself when unknown.
+/// 配置字段键的目录标签；未知时返回键本身。
+fn config_field_label(key: &str) -> String {
+    match key {
+        "name" => tr!("ask.approval.config.field.name"),
+        "enabled" => tr!("ask.approval.config.field.enabled"),
+        "transport" => tr!("ask.approval.config.field.transport"),
+        "command" => tr!("ask.approval.config.field.command"),
+        "args" => tr!("ask.approval.config.field.args"),
+        "cwd" => tr!("ask.approval.config.field.cwd"),
+        "env_passthrough" => tr!("ask.approval.config.field.envPassthrough"),
+        "url" => tr!("ask.approval.config.field.url"),
+        "headers_from_env" => tr!("ask.approval.config.field.headersFromEnv"),
+        "provider" => tr!("ask.approval.config.field.provider"),
+        "service_entry" => tr!("ask.approval.config.field.serviceEntry"),
+        "credential_profile" => tr!("ask.approval.config.field.credentialProfile"),
+        "api_key_env" => tr!("ask.approval.config.field.apiKeyEnv"),
+        "base_url" => tr!("ask.approval.config.field.baseUrl"),
+        "protocols" => tr!("ask.approval.config.field.protocols"),
+        "authentication" => tr!("ask.approval.config.field.authentication"),
+        "default_connection" => tr!("ask.approval.config.field.defaultConnection"),
+        other => other.to_string(),
+    }
+}
+
+/// Catalog sentence of a configuration consequence key, or the key itself when unknown.
+/// 配置后果键的目录语句；未知时返回键本身。
+fn config_notice_label(key: &str) -> String {
+    match key {
+        "activates_for_all_sessions" => tr!("ask.approval.config.notice.activates"),
+        "deactivates_for_all_sessions" => tr!("ask.approval.config.notice.deactivates"),
+        "removes_for_all_sessions" => tr!("ask.approval.config.notice.removes"),
+        "drops_secret_fields" => tr!("ask.approval.config.notice.dropsSecrets"),
+        "copies_api_key" => tr!("ask.approval.config.notice.copiesApiKey"),
+        "validates_with_provider" => tr!("ask.approval.config.notice.validates"),
+        other => other.to_string(),
+    }
+}
+
 /// Body rows of a tool-call approval: what would run, the mode, and any high risk.
 /// 工具调用审批的正文行：将执行的内容、模式及高风险（如有）。
 fn approval_rows(app: &App, approval: &PendingApproval, width: usize) -> Vec<Row> {
@@ -160,10 +256,19 @@ fn approval_rows(app: &App, approval: &PendingApproval, width: usize) -> Vec<Row
             (tr!("ask.approval.fileWrite", tool = tool), paths.clone())
         }
         ApprovalSubject::Opaque => (tr!("ask.approval.opaque", tool = tool), Vec::new()),
+        ApprovalSubject::Configuration(change) => (
+            tr!("ask.approval.config", tool = tool),
+            configuration_lines(change),
+        ),
     };
     push_wrapped(&mut rows, headline, theme.strong());
     for line in lines {
         push_wrapped(&mut rows, format!("  {line}"), theme.primary_text());
+    }
+    if let ApprovalSubject::Configuration(change) = &approval.subject {
+        for notice in &change.notices {
+            push_wrapped(&mut rows, config_notice_label(notice), theme.muted_text());
+        }
     }
     push_wrapped(
         &mut rows,

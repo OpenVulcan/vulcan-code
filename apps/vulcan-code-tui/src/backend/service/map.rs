@@ -254,6 +254,26 @@ fn pending_approval(approval: &api::PendingApprovalSnapshot) -> PendingApproval 
                 ApprovalSubject::FileWrite(paths.clone())
             }
             api::PendingApprovalSubject::Opaque => ApprovalSubject::Opaque,
+            api::PendingApprovalSubject::Configuration {
+                target_kind,
+                target,
+                action,
+                changes,
+                notices,
+            } => ApprovalSubject::Configuration(Box::new(crate::model::ApprovalConfiguration {
+                target_kind: target_kind.clone(),
+                target: target.clone(),
+                action: action.clone(),
+                changes: changes
+                    .iter()
+                    .map(|change| crate::model::ApprovalConfigurationField {
+                        field: change.field.clone(),
+                        before: change.before.clone(),
+                        after: change.after.clone(),
+                    })
+                    .collect(),
+                notices: notices.clone(),
+            })),
         },
         high_risk: approval.high_risk.clone(),
         judge: approval.judge.as_ref().map(|judge| match judge {

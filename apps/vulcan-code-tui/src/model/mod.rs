@@ -358,6 +358,45 @@ pub enum ApprovalSubject {
     Command(String),
     FileWrite(Vec<String>),
     Opaque,
+    /// A change to Vulcan's own configuration, boxed to keep pending questions small.
+    /// 对 Vulcan 自身配置的修改；装箱以保持待答问题体积较小。
+    Configuration(Box<ApprovalConfiguration>),
+}
+
+/// A configuration change awaiting approval; kinds, actions, fields and notices are stable keys.
+/// 待批准的配置变更；种类、动作、字段与提示均为稳定键。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovalConfiguration {
+    /// Configured object key, such as `mcp_server`.
+    /// 被配置对象的键，例如 `mcp_server`。
+    pub target_kind: String,
+    /// Name of the configured item.
+    /// 被配置条目的名称。
+    pub target: String,
+    /// Action key, such as `create` or `remove`.
+    /// 动作键，例如 `create` 或 `remove`。
+    pub action: String,
+    /// Fields whose value changes.
+    /// 值发生变化的字段。
+    pub changes: Vec<ApprovalConfigurationField>,
+    /// Consequence keys the user should know.
+    /// 用户应当知道的后果键。
+    pub notices: Vec<String>,
+}
+
+/// One field of a configuration change; secrets appear only as variable names.
+/// 配置变更中的一个字段；密钥只以变量名出现。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovalConfigurationField {
+    /// Stable field key.
+    /// 稳定字段键。
+    pub field: String,
+    /// Value before the change; `None` when unset.
+    /// 变更前的值；未设置时为 `None`。
+    pub before: Option<String>,
+    /// Value after the change; `None` when cleared.
+    /// 变更后的值；被清除时为 `None`。
+    pub after: Option<String>,
 }
 
 /// What the permission judge found for a call it did not clear.

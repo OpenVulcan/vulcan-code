@@ -1379,6 +1379,29 @@ fn tool_approval_answers_with_snapshot_labels_and_ignores_enter() {
     show(&mut h, reviewed);
     assert!(buffer_text(h.wide.backend().buffer()).contains("outside the project"));
 
+    show(
+        &mut h,
+        approval(
+            "configuration",
+            ApprovalSubject::Configuration(Box::new(crate::model::ApprovalConfiguration {
+                target_kind: "mcp_server".into(),
+                target: "docs-server".into(),
+                action: "update".into(),
+                changes: vec![crate::model::ApprovalConfigurationField {
+                    field: "url".into(),
+                    before: Some("https://a.test/mcp".into()),
+                    after: Some("https://b.test/mcp".into()),
+                }],
+                notices: vec!["future_notice".into()],
+            })),
+            None,
+        ),
+    );
+    let text = buffer_text(h.wide.backend().buffer());
+    assert!(text.contains("docs-server") && text.contains("https://b.test/mcp"));
+    assert!(text.contains("future_notice"));
+    snapshot(&mut h.app, "tool-approval-configuration");
+
     let mut delegated = approval("delegated", ApprovalSubject::Opaque, None);
     delegated.requester = Some("Explorer".into());
     show(&mut h, delegated);
