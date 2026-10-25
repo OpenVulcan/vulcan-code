@@ -1604,9 +1604,18 @@ fn run_service_bootstrap(
     // 此后构建的每个工具桥都通过此宿主注入 Vulcan 环境变量。
     agent_runtime.task_runtime.set_environment_host(Arc::new(
         crate::environment_variables::KernelEnvironmentHost::new(
-            permission_registry,
+            Arc::clone(&permission_registry),
             Arc::clone(&agent_runtime.question_runtime),
             Arc::downgrade(state),
+        ),
+    ));
+    // The configuration tools list and change settings through the settings services via this host.
+    // 配置工具经此宿主、通过设置服务列出并修改设置。
+    agent_runtime.task_runtime.set_configuration_host(Arc::new(
+        crate::ai_configuration::KernelConfigurationHost::new(
+            permission_registry,
+            Arc::downgrade(state),
+            event_emitter.clone(),
         ),
     ));
     logs.push(String::from(

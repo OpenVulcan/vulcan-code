@@ -84,20 +84,16 @@ impl KernelEnvironmentHost {
         }
     }
 
-    /// The root session of `session_id`, its project and the database handle.
-    /// `session_id` 的根会话、其项目以及数据库句柄。
+    /// The root session of `session_id` and its project.
+    /// `session_id` 的根会话及其项目。
     fn scope(&self, session_id: SessionId) -> Result<SessionScope, String> {
         let root = crate::tool_permission_host::root_session_of(&self.registry, session_id)?;
         let state = self
             .state
             .upgrade()
             .ok_or_else(|| String::from("The service is shutting down."))?;
-        let (database, project_id) = database_and_project(&state, root)?;
-        Ok(SessionScope {
-            root,
-            project_id,
-            database,
-        })
+        let (_, project_id) = database_and_project(&state, root)?;
+        Ok(SessionScope { root, project_id })
     }
 
     /// Storage locator of one registered session.
@@ -121,9 +117,6 @@ struct SessionScope {
     /// Project of the root session, when it belongs to one.
     /// 根会话所属的项目（如有）。
     project_id: Option<String>,
-    /// Application database handle.
-    /// 应用数据库句柄。
-    database: HostRuntimeHandle,
 }
 
 #[async_trait::async_trait]
@@ -132,14 +125,11 @@ impl NativeEnvironmentHost for KernelEnvironmentHost {
         &self,
         session_id: SessionId,
     ) -> Result<Vec<EffectiveEnvironmentVariable>, String> {
-        let scope = self.scope(session_id)?;
-        let records = list_environment_variables(&scope.database).await?;
-        let session = load_session_environment(&self.locator(scope.root)?)?;
-        Ok(resolve_effective_environment(
-            &records,
-            scope.project_id.as_deref(),
-            &session,
-        ))
+        let state = self
+            .state
+            .upgrade()
+            .ok_or_else(|| String::from("The service is shutting down."))?;
+        session_effective_environment(&self.registry, &state, session_id).await
     }
 
     async fn set_session_variable(
@@ -217,6 +207,28 @@ impl NativeEnvironmentHost for KernelEnvironmentHost {
             .request_environment_values(session_id, context, tool_name, arguments, prompt)
             .await
     }
+}
+
+/// Variables that apply to `session_id`: its root session's own, then its project's, then the
+/// global ones.
+/// 适用于 `session_id` 的变量：先是其根会话自身的，再是其项目的，最后是全局的。
+pub(crate) async fn session_effective_environment(
+    registry: &SessionRuntimeRegistry,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<Vec<EffectiveEnvironmentVariable>, String> {
+    let root = crate::tool_permission_host::root_session_of(registry, session_id)?;
+    let (database, project_id) = database_and_project(state, root)?;
+    let records = list_environment_variables(&database).await?;
+    let locator = crate::session_goal_lifecycle::registered_session_v1_handle(registry, root)?
+        .storage_locator()
+        .map_err(|error| error.to_string())?;
+    let session = load_session_environment(&locator)?;
+    Ok(resolve_effective_environment(
+        &records,
+        project_id.as_deref(),
+        &session,
+    ))
 }
 
 /// Reads the database handle and the project of one session from the service state.

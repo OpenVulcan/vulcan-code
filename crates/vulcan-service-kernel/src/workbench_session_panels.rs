@@ -15,7 +15,8 @@ use vulcan_service_api::{
 };
 use vulcan_service_api::{
     PendingApprovalJudge, PendingApprovalReview, PendingApprovalSnapshot, PendingApprovalSubject,
-    PendingEnvironmentRequestSnapshot, PendingEnvironmentVariableRequest,
+    PendingConfigurationChange, PendingEnvironmentRequestSnapshot,
+    PendingEnvironmentVariableRequest,
 };
 /// Projects the resident aggregate without scanning Turns or reading files.
 /// 直接投影常驻累计，不扫描回合或读取文件。
@@ -470,9 +471,26 @@ fn pending_approval_snapshot(
             PermissionSubject::FileWrite { paths } => PendingApprovalSubject::FileWrite {
                 paths: paths.clone(),
             },
-            PermissionSubject::Opaque | PermissionSubject::Ungoverned => {
-                PendingApprovalSubject::Opaque
-            }
+            PermissionSubject::Opaque
+            | PermissionSubject::Ungoverned
+            | PermissionSubject::Configuration { preview: None } => PendingApprovalSubject::Opaque,
+            PermissionSubject::Configuration {
+                preview: Some(preview),
+            } => PendingApprovalSubject::Configuration {
+                target_kind: preview.target_kind.clone(),
+                target: preview.target.clone(),
+                action: preview.action.clone(),
+                changes: preview
+                    .changes
+                    .iter()
+                    .map(|change| PendingConfigurationChange {
+                        field: change.field.clone(),
+                        before: change.before.clone(),
+                        after: change.after.clone(),
+                    })
+                    .collect(),
+                notices: preview.notices.clone(),
+            },
         },
         high_risk: prompt.high_risk.map(|category| category.key().to_string()),
         judge: prompt.judge.as_ref().map(|finding| match finding {

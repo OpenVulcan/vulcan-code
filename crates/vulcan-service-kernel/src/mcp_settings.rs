@@ -110,9 +110,6 @@ pub(super) async fn service_save_mcp_server_configuration(
     state: SharedServiceBridgeState,
     request: McpServerSaveRequest,
 ) -> Result<WorkbenchSnapshot, String> {
-    // configuration_transaction serializes clone, asynchronous runtime preparation, persistence, and runtime replacement.
-    // configuration_transaction 串行化克隆、异步运行时准备、持久化与运行时替换。
-    let configuration_transaction = begin_provider_configuration_transaction().await;
     let create_new_server = request
         .server_id
         .as_deref()
@@ -120,46 +117,20 @@ pub(super) async fn service_save_mcp_server_configuration(
         .filter(|value| !value.is_empty())
         .is_none();
     let (server_id, entry) = mcp_server_entry_from_request(request)?;
-    let next_configuration = {
-        let mut configuration = provider_configuration_from_state(&state)?;
-        apply_mcp_server_entry_to_configuration(
-            &mut configuration,
-            server_id,
-            entry,
-            create_new_server,
-        )?;
-        configuration
-    };
-    let current_mcp_runtime = agent_mcp_runtime_from_state(&state)?;
-    let next_mcp_runtime = replace_user_mcp_runtime_partition(
-        &current_mcp_runtime,
-        runtime_mcp_server_configs(&next_configuration)?,
+    commit_mcp_configuration_change(
+        &app,
+        &state,
+        |configuration| {
+            apply_mcp_server_entry_to_configuration(
+                configuration,
+                server_id,
+                entry,
+                create_new_server,
+            )
+        },
+        "Failed to save the MCP server",
     )
     .await
-    .map_err(|error| {
-        format!("Rebuilding the MCP runtime failed; the configuration was not saved: {error}")
-    })?;
-    // Ownership validation, persistence and Full replacement share one actual service lock after preparation finishes.
-    // 准备完成后，所有权校验、持久化及 Full 替换共享单个实际服务锁。
-    let workbench = match store_provider_and_mcp_configuration_after_change_with_persistence(
-        &state,
-        next_configuration,
-        next_mcp_runtime.clone(),
-        |configuration| {
-            configuration_transaction.persist(configuration, "Failed to save the MCP server")
-        },
-    ) {
-        Ok(workbench) => workbench,
-        Err(error) => {
-            next_mcp_runtime.shutdown_user_partition();
-            return Err(error);
-        }
-    };
-    // Release the global configuration transaction only after the rebuilt runtime is stored.
-    // 仅在重建运行时完成回存后释放全局配置事务。
-    drop(configuration_transaction);
-    emit_workbench_event(&app, &workbench);
-    Ok(workbench)
 }
 
 /// Removes one MCP server configuration from the WebUI settings page.
@@ -169,16 +140,44 @@ pub(super) async fn service_remove_mcp_server_configuration(
     state: SharedServiceBridgeState,
     server_id: String,
 ) -> Result<WorkbenchSnapshot, String> {
+    let server_id = server_id.trim().to_string();
+    let workbench = commit_mcp_configuration_change(
+        &app,
+        &state,
+        |configuration| {
+            configuration
+                .mcp
+                .servers
+                .remove(&server_id)
+                .map(|_| ())
+                .ok_or_else(|| format!("MCP server `{server_id}` not found."))
+        },
+        "Failed to remove the MCP server",
+    )
+    .await?;
+    // A later server reusing this identifier must not inherit the removed server's sign-in.
+    // 之后复用此标识的服务器不得继承已移除服务器的登录。
+    crate::mcp_oauth::forget_removed_mcp_server_oauth(&server_id).await;
+    Ok(workbench)
+}
+
+/// Applies `change` to the MCP server configuration, rebuilds the user MCP runtime partition,
+/// persists the result and publishes the workbench; the settings page and the `mcp_config` tool
+/// both change MCP servers only through here.
+/// 对 MCP 服务器配置应用 `change`，重建用户 MCP 运行时分区，持久化结果并发布工作台；设置页与
+/// `mcp_config` 工具都只通过此处修改 MCP 服务器。
+pub(super) async fn commit_mcp_configuration_change(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    change: impl FnOnce(&mut ProviderConfigurationFile) -> Result<(), String>,
+    persistence_failure: &str,
+) -> Result<WorkbenchSnapshot, String> {
     // configuration_transaction serializes clone, asynchronous runtime preparation, persistence, and runtime replacement.
     // configuration_transaction 串行化克隆、异步运行时准备、持久化与运行时替换。
     let configuration_transaction = begin_provider_configuration_transaction().await;
-    let mut next_configuration = provider_configuration_from_state(&state)?;
-    next_configuration
-        .mcp
-        .servers
-        .remove(server_id.trim())
-        .ok_or_else(|| format!("MCP server `{}` not found.", server_id.trim()))?;
-    let current_mcp_runtime = agent_mcp_runtime_from_state(&state)?;
+    let mut next_configuration = provider_configuration_from_state(state)?;
+    change(&mut next_configuration)?;
+    let current_mcp_runtime = agent_mcp_runtime_from_state(state)?;
     let next_mcp_runtime = replace_user_mcp_runtime_partition(
         &current_mcp_runtime,
         runtime_mcp_server_configs(&next_configuration)?,
@@ -187,15 +186,14 @@ pub(super) async fn service_remove_mcp_server_configuration(
     .map_err(|error| {
         format!("Rebuilding the MCP runtime failed; the configuration was not saved: {error}")
     })?;
-    // Reject an update's retained Full before durable removal, without leaving a validation-to-persistence pin window.
-    // 持久移除前拒绝更新保留 Full，不留下校验到持久化之间的固定窗口。
+    // Ownership validation, persistence and Full replacement share one actual service lock after
+    // preparation finishes, without leaving a validation-to-persistence pin window.
+    // 准备完成后，所有权校验、持久化及 Full 替换共享单个实际服务锁，不留下校验到持久化之间的固定窗口。
     let workbench = match store_provider_and_mcp_configuration_after_change_with_persistence(
-        &state,
+        state,
         next_configuration,
         next_mcp_runtime.clone(),
-        |configuration| {
-            configuration_transaction.persist(configuration, "Failed to remove the MCP server")
-        },
+        |configuration| configuration_transaction.persist(configuration, persistence_failure),
     ) {
         Ok(workbench) => workbench,
         Err(error) => {
@@ -206,10 +204,7 @@ pub(super) async fn service_remove_mcp_server_configuration(
     // Release the global configuration transaction only after the rebuilt runtime is stored.
     // 仅在重建运行时完成回存后释放全局配置事务。
     drop(configuration_transaction);
-    // A later server reusing this identifier must not inherit the removed server's sign-in.
-    // 之后复用此标识的服务器不得继承已移除服务器的登录。
-    crate::mcp_oauth::forget_removed_mcp_server_oauth(server_id.trim()).await;
-    emit_workbench_event(&app, &workbench);
+    emit_workbench_event(app, &workbench);
     Ok(workbench)
 }
 

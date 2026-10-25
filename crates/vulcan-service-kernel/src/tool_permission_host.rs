@@ -8,8 +8,8 @@ use vulcan_agent_runtime::agent_runtime::question_runtime::{
     ApprovalAnswer, QuestionRuntime, ToolApprovalPrompt,
 };
 use vulcan_agent_runtime::agent_runtime::tool_permission::{
-    JudgeCall, JudgeFailure, JudgeVerdict, LlmReview, PermissionMemory, PermissionRecord,
-    ReviewCall, ToolPermissionHost,
+    ConfigurationPreview, JudgeCall, JudgeFailure, JudgeVerdict, LlmReview, PermissionMemory,
+    PermissionRecord, ReviewCall, ToolPermissionHost,
 };
 use vulcan_agent_runtime::model::SessionId;
 use vulcan_session_core::v1::config::AccessConfig;
@@ -130,6 +130,26 @@ impl ToolPermissionHost for KernelToolPermissionHost {
             crate::session_goal_lifecycle::registered_session_v1_handle(&self.registry, root_id)?;
         let session_prompt = crate::permission_judge::session_review_prompt(handle.as_ref())?;
         crate::permission_judge::review_call(&state, call, session_prompt).await
+    }
+
+    async fn configuration_preview(
+        &self,
+        session_id: SessionId,
+        tool_name: &str,
+        args: &Value,
+    ) -> Result<ConfigurationPreview, String> {
+        let state = self
+            .state
+            .upgrade()
+            .ok_or_else(|| String::from("The service is shutting down."))?;
+        crate::ai_configuration::configuration_preview(
+            &self.registry,
+            &state,
+            session_id,
+            tool_name,
+            args,
+        )
+        .await
     }
 
     fn record(&self, record: PermissionRecord) {

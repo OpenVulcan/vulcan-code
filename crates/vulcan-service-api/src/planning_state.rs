@@ -183,6 +183,42 @@ pub enum PendingApprovalSubject {
     /// An extension tool not known to be read-only.
     /// 未知是否只读的扩展工具。
     Opaque,
+    /// A change to Vulcan's own configuration.
+    /// 对 Vulcan 自身配置的修改。
+    Configuration {
+        /// Configured object key, such as `mcp_server` or `provider_connection`.
+        /// 被配置对象的键，例如 `mcp_server` 或 `provider_connection`。
+        #[serde(rename = "targetKind")]
+        target_kind: String,
+        /// Name of the configured item.
+        /// 被配置条目的名称。
+        target: String,
+        /// Action key, such as `create`, `update` or `remove`.
+        /// 动作键，例如 `create`、`update` 或 `remove`。
+        action: String,
+        /// Fields whose value changes; secrets appear only as the names they are read from.
+        /// 值发生变化的字段；密钥只以其取值来源的名称出现。
+        changes: Vec<PendingConfigurationChange>,
+        /// Consequence keys the user should know.
+        /// 用户应当知道的后果键。
+        notices: Vec<String>,
+    },
+}
+
+/// One field of a pending configuration change.
+/// 待批准配置变更中的一个字段。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingConfigurationChange {
+    /// Stable field key.
+    /// 稳定字段键。
+    pub field: String,
+    /// Value before the change; absent when unset.
+    /// 变更前的值；未设置时缺省。
+    pub before: Option<String>,
+    /// Value after the change; absent when cleared.
+    /// 变更后的值；被清除时缺省。
+    pub after: Option<String>,
 }
 
 /// Describes one prompt inside a pending ask-tool request.

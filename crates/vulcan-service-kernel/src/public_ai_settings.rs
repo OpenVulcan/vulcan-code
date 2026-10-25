@@ -75,12 +75,8 @@ pub(super) use snapshot::{
 };
 
 use connections::{add_public_ai_connection_with_secret, apply_connection_update};
-// Preserve connection request paths, including contracts inferred by RPC dispatch.
-// 保留连接请求路径，包括 RPC 分发通过类型推导消费的契约。
-#[expect(
-    unused_imports,
-    reason = "Preserve the original connection request type paths."
-)]
+// Connection request paths: RPC dispatch infers them, and the configuration tools build them.
+// 连接请求路径：RPC 分发通过类型推导使用它们，配置工具自行构建它们。
 pub(super) use connections::{
     PublicAiConnectionAddRequest, PublicAiConnectionEnabledSaveRequest,
     PublicAiConnectionRemoveRequest, PublicAiConnectionUpdateRequest,
@@ -126,8 +122,10 @@ pub(super) use custom_models::{
 )]
 pub(super) use custom_providers::{
     PublicAiCustomProviderProbeResult, PublicAiCustomProviderRemoveRequest,
-    PublicAiCustomProviderSaveRequest,
 };
+// The configuration tools build this request themselves.
+// 配置工具自行构建此请求。
+pub(super) use custom_providers::PublicAiCustomProviderSaveRequest;
 pub(super) use custom_providers::{
     service_probe_public_ai_custom_provider, service_remove_public_ai_custom_provider,
     service_save_public_ai_custom_provider,

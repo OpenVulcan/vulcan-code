@@ -147,6 +147,7 @@ mod agent_collaboration;
 mod agent_collaboration_execution;
 mod agent_skills_watcher;
 mod agent_stream;
+mod ai_configuration;
 mod ai_credential_secret_store;
 mod answer_mode;
 mod attachments;
