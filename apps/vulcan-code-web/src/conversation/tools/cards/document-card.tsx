@@ -1,11 +1,12 @@
 // Document card for tools whose result is a document to read: skills, skill help, knowledge, library docs, code
-// navigation and debug sessions. The head names what was looked up; the body is the returned Markdown.
-// 结果为可读文档的工具卡：技能、技能帮助、知识库、库文档、代码导航与调试会话。标题说明查找了什么；
-// 正文为返回的 Markdown。
+// navigation, debug sessions, environment variables and session MCP connections. The head names what was looked up;
+// the body is the returned Markdown.
+// 结果为可读文档的工具卡：技能、技能帮助、知识库、库文档、代码导航、调试会话、环境变量与会话 MCP 连接。
+// 标题说明查找了什么；正文为返回的 Markdown。
 import * as React from "react";
 import {
-  AppWindow, Brain, BookOpen, BookText, Bug, Compass, FileCode2, FileSearch, FileText, FolderTree, Library, ListTree,
-  Map as MapIcon, Puzzle, ScrollText, Settings2, TextSearch, type LucideIcon,
+  AppWindow, Brain, BookOpen, BookText, Bug, Cable, Compass, FileCode2, FileSearch, FileText, FolderTree, KeyRound, Library,
+  ListTree, Map as MapIcon, Plug, Puzzle, ScrollText, Settings2, TextSearch, type LucideIcon,
 } from "lucide-react";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { ToolFrame, type ToolCardProps, type ToolFamily } from "../tool-card";
@@ -67,6 +68,15 @@ const lineRange = (input: Record<string, unknown>) => {
   const start = numberOf(input.startLine);
   const end = numberOf(input.endLine);
   return start !== null || end !== null ? ` L${start ?? 1}–${end ?? ""}` : "";
+};
+
+// variableNames names the variables one environment call sets or requests.
+// variableNames 标明一次环境调用设置或索取的变量。
+const variableNames = (input: Record<string, unknown>) => {
+  const requested = listOf(input.variables)
+    .map((item) => textOf((item as Record<string, unknown> | null)?.name)?.trim() ?? "")
+    .filter(Boolean);
+  return [field("action")(input), field("name")(input), ...requested].filter(Boolean).join(" · ");
 };
 
 // DOCUMENT_TOOLS is keyed by canonical tool name; only these tools use the document card.
@@ -134,6 +144,25 @@ const DOCUMENT_TOOLS: Readonly<Record<string, DocumentToolSpec>> = {
   browser_select: { family: "web", icon: AppWindow, target: field("browserId"), verb: "toolCard.doc.browserSelect" },
   browser_close: { family: "web", icon: AppWindow, target: field("browserId"), verb: "toolCard.doc.browserClose" },
   declare_intent: { family: "plan", icon: Compass, target: field("intent"), verb: "toolCard.doc.declareIntent" },
+  env: { family: "run", icon: KeyRound, target: variableNames, verb: "toolCard.doc.environment" },
+  mcp_connect: {
+    family: "run",
+    icon: Plug,
+    target: (input) => [field("action")(input), firstOf("name", "connection_id")(input)].filter(Boolean).join(" · "),
+    verb: "toolCard.doc.mcpConnect",
+  },
+  mcp_tools: {
+    family: "read",
+    icon: Cable,
+    target: (input) => [field("connection_id")(input), field("tool")(input)].filter(Boolean).join(" · "),
+    verb: "toolCard.doc.mcpTools",
+  },
+  mcp_call: {
+    family: "run",
+    icon: Cable,
+    target: (input) => [field("connection_id")(input), field("tool")(input)].filter(Boolean).join(" · "),
+    verb: "toolCard.doc.mcpCall",
+  },
   vulcan_file_list: { family: "read", icon: FolderTree, target: firstOf("path", "PWD"), verb: "toolCard.file.list" },
   vulcan_file_read: { family: "read", icon: FileText, target: field("path"), verb: "toolCard.file.read" },
 };

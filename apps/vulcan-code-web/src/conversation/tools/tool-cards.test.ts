@@ -67,6 +67,9 @@ describe("tool call reading", () => {
     expect(toolCallFamily(toolEvent("spawn_agent", { message: "work" }))).toBe("agent");
     expect(toolCallFamily(toolEvent("read_media", { path: "a.png" }))).toBe("read");
     expect(toolCallFamily(toolEvent("mcp_github_create_issue", {}))).toBe("other");
+    expect(toolCallFamily(toolEvent("mcp_tools", { connection_id: "mcp_1" }))).toBe("read");
+    expect(toolCallFamily(toolEvent("mcp_call", { connection_id: "mcp_1", tool: "click" }))).toBe("run");
+    expect(toolCallFamily(toolEvent("env", { action: "list" }))).toBe("run");
   });
 
   it("splits MCP tool names into server and tool", () => {
