@@ -7,6 +7,7 @@ import type {
   PermissionJudgeRecordPage,
   PermissionJudgeRecordsRequest,
   PermissionJudgeCudaComponent,
+  PermissionJudgeEdgeEndpoints,
   PermissionJudgeEdgeModels,
   PermissionJudgeModelFormat,
   PermissionJudgePackageInspection,
@@ -38,6 +39,27 @@ export async function loadPermissionJudgeStatus(): Promise<PermissionJudgeStatus
 // loadPermissionJudgeEdgeModels 列出已登录 OpenVulcan 账户所属部署当前提供的官方直连模型；无人登录时失败。
 export async function loadPermissionJudgeEdgeModels(): Promise<PermissionJudgeEdgeModels> {
   return serviceClient.request<PermissionJudgeEdgeModels>("service_permission_judge_edge_models", {});
+}
+
+// loadPermissionJudgeEdgeEndpoints reads the endpoint table of the chosen official direct model.
+// loadPermissionJudgeEdgeEndpoints 读取所选官方直连模型的端点表。
+export async function loadPermissionJudgeEdgeEndpoints(): Promise<PermissionJudgeEdgeEndpoints> {
+  return serviceClient.request<PermissionJudgeEdgeEndpoints>("service_permission_judge_edge_endpoints", {});
+}
+
+// probePermissionJudgeEdgeEndpoints probes every endpoint now and returns the new table.
+// probePermissionJudgeEdgeEndpoints 立即探测每个端点并返回新的端点表。
+export async function probePermissionJudgeEdgeEndpoints(): Promise<PermissionJudgeEdgeEndpoints> {
+  return serviceClient.request<PermissionJudgeEdgeEndpoints>("service_probe_permission_judge_edge_endpoints", {});
+}
+
+// lockPermissionJudgeEdgeEndpoint locks the official direct judge to one endpoint, or returns it
+// to automatic selection with null.
+// lockPermissionJudgeEdgeEndpoint 将官方直连判定锁定到一个端点；传 null 恢复自动选择。
+export async function lockPermissionJudgeEdgeEndpoint(endpointId: string | null): Promise<PermissionJudgeEdgeEndpoints> {
+  return serviceClient.request<PermissionJudgeEdgeEndpoints>("service_lock_permission_judge_edge_endpoint", {
+    request: { endpointId },
+  });
 }
 
 // savePermissionJudgeSettings saves the system-level choices.

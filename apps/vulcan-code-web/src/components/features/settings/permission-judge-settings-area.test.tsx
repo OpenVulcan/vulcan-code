@@ -18,6 +18,9 @@ const service = vi.hoisted(() => ({
   loadPermissionJudgeSettings: vi.fn(),
   loadPermissionJudgeStatus: vi.fn(),
   loadPermissionJudgeEdgeModels: vi.fn(),
+  loadPermissionJudgeEdgeEndpoints: vi.fn(() => new Promise(() => undefined)),
+  probePermissionJudgeEdgeEndpoints: vi.fn(),
+  lockPermissionJudgeEdgeEndpoint: vi.fn(),
   savePermissionJudgeSettings: vi.fn(),
   benchmarkPermissionJudge: vi.fn(),
   reloadPermissionJudge: vi.fn(),
@@ -87,7 +90,7 @@ function snapshot(phase: PermissionJudgeWorkerStatus["phase"]): PermissionJudgeS
     approvalTimeoutSeconds: 0,
     maxApprovalTimeoutSeconds: 3600,
     models: [{ id: "model-a", name: "A", path: "D:/models/a", knownPackageId: null, policyVersion: "1", precision: "fp16", totalBytes: 1, registeredAtMs: 1 }],
-    activeModelId: "model-a", previousModelId: null, edgeModelId: null, knownPackages: [], policyOptions: [], activeModelIssue: null,
+    activeModelId: "model-a", previousModelId: null, edgeModelId: null, edgeEndpointId: null, knownPackages: [], policyOptions: [], activeModelIssue: null,
     cuda: {
       platform: "windows", supported: false, cudaMajor: null, minimumDriverMajor: null, driver: null, driverError: null,
       requiredLibraries: [], onnxruntimeDirectory: null, detectedDirectories: [], lockedDirectory: null,

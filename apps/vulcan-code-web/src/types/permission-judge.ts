@@ -96,6 +96,41 @@ export interface PermissionJudgeEdgeModels {
   models: { modelId: string }[];
 }
 
+// PermissionJudgeEdgeEndpoint is one endpoint of the chosen official direct model with its latest
+// probe; probe fields are null until the endpoint answered a probe.
+// PermissionJudgeEdgeEndpoint 是所选官方直连模型的一个端点及其最近一次探测；端点回答探测之前探测字段为 null。
+export interface PermissionJudgeEdgeEndpoint {
+  endpointId: string;
+  endpoint: string;
+  priority: number;
+  online: boolean;
+  region: string | null;
+  ready: boolean | null;
+  acceptsSite: boolean | null;
+  rttMs: number | null;
+  computeP50Ms: number | null;
+  // Estimated latency used for automatic selection; null when the endpoint is not eligible.
+  // 自动选择使用的预计延迟；端点不可用时为 null。
+  scoreMs: number | null;
+  error: string | null;
+}
+
+// PermissionJudgeEdgeEndpoints is the in-memory endpoint table of the official direct judge.
+// PermissionJudgeEdgeEndpoints 是官方直连判定的内存端点表。
+export interface PermissionJudgeEdgeEndpoints {
+  modelId: string | null;
+  site: string | null;
+  mode: "auto" | "locked";
+  lockedEndpointId: string | null;
+  // Endpoint judge requests go to now; null when none is known or the locked one is not offered.
+  // 判定请求当前发往的端点；尚无已知端点或锁定端点未提供时为 null。
+  selectedEndpointId: string | null;
+  probedAtMs: number | null;
+  nextProbeAtMs: number | null;
+  error: string | null;
+  endpoints: PermissionJudgeEdgeEndpoint[];
+}
+
 // PermissionJudgePolicyOption is one authorization option of the policy in use.
 // PermissionJudgePolicyOption 是使用中策略的一个授权选项。
 export interface PermissionJudgePolicyOption {
@@ -206,6 +241,9 @@ export interface PermissionJudgeSettingsSnapshot {
   // Official model chosen for the direct backend, by its edge model id.
   // 为官方直连后端选择的官方模型，以其边缘模型 id 表示。
   edgeModelId: string | null;
+  // Endpoint the user locked the direct backend to; null selects automatically.
+  // 用户为官方直连后端锁定的端点；null 表示自动选择。
+  edgeEndpointId: string | null;
   knownPackages: PermissionJudgeKnownPackage[];
   policyOptions: PermissionJudgePolicyOption[];
   activeModelIssue: PermissionJudgeIssue | null;

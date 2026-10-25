@@ -19,6 +19,7 @@ import { PermissionJudgeDownloadsSection } from "@/components/features/settings/
 import {
   PermissionJudgeEdgeSection, edgeModelEnabled, type EdgeModelList,
 } from "@/components/features/settings/permission-judge-edge-section";
+import { PermissionJudgeEdgeEndpointsSection } from "@/components/features/settings/permission-judge-edge-endpoints-section";
 import { OpenVulcanAccountContext } from "@/components/features/account/openvulcan-account-context";
 import {
   PermissionJudgeCudaPage, cudaMissingLabels, cudaReadiness,
@@ -514,9 +515,15 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
       </PageNotice> : null}
     </PageSection> : choices.backend === "cloud"
       ? <PermissionJudgeCloudSection onConfiguredChange={setCloudConfigured} />
-      : <PermissionJudgeEdgeSection edgeModels={edgeModels} edgeModelId={choices.edgeModelId}
-        disabled={busy !== null} t={t} onEdgeModelChange={(edgeModelId) => persist({ edgeModelId })}
-        onRetry={() => void loadEdgeModels()} />}
+      : <>
+        <PermissionJudgeEdgeSection edgeModels={edgeModels} edgeModelId={choices.edgeModelId}
+          disabled={busy !== null} t={t} onEdgeModelChange={(edgeModelId) => persist({ edgeModelId })}
+          onRetry={() => void loadEdgeModels()} />
+        {signedIn && snapshot.backend === "edge" && snapshot.edgeModelId !== null
+          ? <PermissionJudgeEdgeEndpointsSection key={snapshot.edgeModelId} pollIntervalMs={pollIntervalMs}
+            disabled={busy !== null} t={t} locale={locale} />
+          : null}
+      </>}
 
     {configured && snapshot.policyOptions.length > 0 ? <PageSection layout="rows" data-judge-policy-summary=""
       title={t("settings.permissionJudge.policy.title")} description={t("settings.permissionJudge.policy.description")}
