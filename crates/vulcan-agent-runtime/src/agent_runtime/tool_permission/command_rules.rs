@@ -418,16 +418,25 @@ struct CommandScan {
     /// Whether output is redirected into anything other than a discard target.
     /// 是否把输出重定向到丢弃目标以外的地方。
     writes_redirection: bool,
-    /// Whether the text contains command substitution or an escape we do not interpret.
-    /// 文本是否含有命令替换或我们不解释的转义。
+    /// Whether the text contains command substitution or an expansion we do not interpret.
+    /// 文本是否含有命令替换或我们不解释的展开。
     has_substitution: bool,
+    /// Whether the shell may quote differently than the scan (escaped quotes, comments,
+    /// here-documents), so quoted spans and separators may be wrong.
+    /// shell 的引号划分是否可能与扫描不同（转义引号、注释、here 文档），因而引号范围与分隔符
+    /// 可能有误。
+    ambiguous_quoting: bool,
 }
 
 /// Returns whether every segment of `command` is known read-only under the selected `shell`.
 /// 返回 `command` 的每个片段在所选 `shell` 下是否都是已知只读命令。
 pub fn is_known_read_only(command: &str, shell: HostCommandShell) -> bool {
     let scan = scan_command(command, Some(shell));
-    if scan.writes_redirection || scan.has_substitution || scan.segments.is_empty() {
+    if scan.writes_redirection
+        || scan.has_substitution
+        || scan.ambiguous_quoting
+        || scan.segments.is_empty()
+    {
         return false;
     }
     scan.segments
@@ -942,6 +951,7 @@ fn scan_command(command: &str, shell: Option<HostCommandShell>) -> CommandScan {
         segments: Vec::new(),
         writes_redirection: false,
         has_substitution: false,
+        ambiguous_quoting: false,
     };
     let chars: Vec<char> = command.chars().collect();
     let mut words: Vec<String> = Vec::new();
@@ -955,13 +965,28 @@ fn scan_command(command: &str, shell: Option<HostCommandShell>) -> CommandScan {
     };
     while index < chars.len() {
         let current = chars[index];
-        // Reject syntax whose quoting/expansion differs across shells instead of guessing its effects.
-        // 拒绝跨 shell 引号或展开语义不一致的语法，不猜测其影响。
+        // Reject syntax whose quoting differs across shells instead of guessing its effects.
+        // Comments (`#`, PowerShell `<#`), here-documents (`<<`) and PowerShell here-strings
+        // (`@'`, `@"`) hold quote characters the shell ignores, which would shift every later
+        // quoted span; cmd has no `#` comments.
+        // 拒绝跨 shell 引号语义不一致的语法，不猜测其影响。注释（`#`、PowerShell `<#`）、here 文档
+        // （`<<`）与 PowerShell here 字符串（`@'`、`@"`）含有 shell 忽略的引号字符，会使之后所有
+        // 引号范围错位；cmd 没有 `#` 注释。
+        let unquoted = quote.is_none();
         if current == '\\' && matches!(chars.get(index + 1), Some('\'' | '"'))
             || matches!(current, '\u{2018}'..='\u{201b}' | '\u{201c}'..='\u{201e}')
-            || current == '^' && quote.is_none()
-            || shell == Some(HostCommandShell::Cmd) && matches!(current, '%' | '!')
-            || shell == Some(HostCommandShell::Cmd) && current == '"' && words.is_empty()
+            || unquoted && current == '^'
+            || unquoted
+                && current == '#'
+                && shell != Some(HostCommandShell::Cmd)
+                && (word.is_empty() || index > 0 && chars[index - 1] == '<')
+            || unquoted && current == '<' && chars.get(index + 1) == Some(&'<')
+            || unquoted && current == '@' && matches!(chars.get(index + 1), Some('\'' | '"'))
+        {
+            scan.ambiguous_quoting = true;
+        }
+        if shell == Some(HostCommandShell::Cmd)
+            && (matches!(current, '%' | '!') || current == '"' && words.is_empty())
         {
             scan.has_substitution = true;
         }
@@ -1040,7 +1065,7 @@ fn scan_command(command: &str, shell: Option<HostCommandShell>) -> CommandScan {
     }
     // An unterminated quote is not evidence of a read-only command.
     // 未闭合的引号不能作为只读命令的依据。
-    scan.has_substitution |= quote.is_some();
+    scan.ambiguous_quoting |= quote.is_some();
     finish_word(&mut word, &mut words);
     if !words.is_empty() {
         scan.segments.push(words);

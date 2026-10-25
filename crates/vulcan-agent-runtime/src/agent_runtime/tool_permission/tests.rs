@@ -25,6 +25,20 @@ fn ambiguous_shell_syntax_and_program_paths_escalate() {
         (HostCommandShell::Pwsh, "(./cat file).Count"),
         (HostCommandShell::Bash, "$program"),
         (HostCommandShell::Bash, "echo 'unterminated"),
+        // Quote characters inside comments, here-documents and here-strings are not quotes.
+        // 注释、here 文档与 here 字符串中的引号字符不是引号。
+        (HostCommandShell::Bash, "echo hi # '\ntouch e # '"),
+        (HostCommandShell::Zsh, "echo hi # '\ntouch e # '"),
+        (HostCommandShell::Pwsh, "echo hi # '\nNew-Item e # '"),
+        (
+            HostCommandShell::Pwsh,
+            "echo hi <# ' #> ; New-Item e ; echo <# ' #>",
+        ),
+        (
+            HostCommandShell::Bash,
+            "cat <<'E'\necho '\nE\ntouch e; echo '",
+        ),
+        (HostCommandShell::Pwsh, "echo @'\n'\n'@; New-Item e; echo '"),
     ] {
         assert!(!is_known_read_only(command, shell), "{shell:?}: {command}");
         for mode in [
@@ -391,6 +405,7 @@ fn known_read_only_commands_are_recognised() {
         "cat a.txt 2>&1",
         "find . -name '*.rs'",
         "echo 'a > b; rm -rf /'",
+        "echo issue#12",
         "(Get-ChildItem -LiteralPath 'D:\\work' -Directory -Force).Count",
         "(gci src).Count | Write-Output",
         "((Get-Content a.txt).Length)",
