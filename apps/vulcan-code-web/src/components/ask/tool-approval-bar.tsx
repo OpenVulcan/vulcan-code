@@ -2,7 +2,12 @@ import React from "react";
 import { CircleAlert, ShieldAlert } from "lucide-react";
 import { Button } from "@/ui-kit/primitives/button";
 import { formatMessage, useI18n, type Translate, type TranslationKey } from "@/i18n";
-import type { PendingApprovalSnapshot, PendingQuestionSnapshot, PermissionModeKey } from "@/types";
+import type {
+  PendingApprovalSnapshot,
+  PendingApprovalSubject,
+  PendingQuestionSnapshot,
+  PermissionModeKey,
+} from "@/types";
 import { useAskAnchorStyle } from "./use-ask-anchor-style";
 
 // ToolApprovalStage describes whether the user is deciding or confirming a stop.
@@ -50,6 +55,65 @@ export const HIGH_RISK_KEYS: Record<string, TranslationKey> = {
   permission_change: "ask.approval.risk.permissionChange",
   publish: "ask.approval.risk.publish",
   infrastructure_destroy: "ask.approval.risk.infrastructureDestroy",
+};
+
+// CONFIG_KIND_KEYS maps configured object keys to their catalog labels.
+// CONFIG_KIND_KEYS 将被配置对象键映射到目录标签。
+const CONFIG_KIND_KEYS: Record<string, TranslationKey> = {
+  mcp_server: "ask.approval.config.kind.mcpServer",
+  provider_connection: "ask.approval.config.kind.providerConnection",
+  custom_provider: "ask.approval.config.kind.customProvider",
+};
+
+// CONFIG_ACTION_KEYS maps configuration action keys to their catalog labels.
+// CONFIG_ACTION_KEYS 将配置动作键映射到目录标签。
+const CONFIG_ACTION_KEYS: Record<string, TranslationKey> = {
+  create: "ask.approval.config.action.create",
+  update: "ask.approval.config.action.update",
+  remove: "ask.approval.config.action.remove",
+  enable: "ask.approval.config.action.enable",
+  disable: "ask.approval.config.action.disable",
+  set_default: "ask.approval.config.action.setDefault",
+};
+
+// CONFIG_FIELD_KEYS maps configuration field keys to their catalog labels.
+// CONFIG_FIELD_KEYS 将配置字段键映射到目录标签。
+const CONFIG_FIELD_KEYS: Record<string, TranslationKey> = {
+  name: "ask.approval.config.field.name",
+  enabled: "ask.approval.config.field.enabled",
+  transport: "ask.approval.config.field.transport",
+  command: "ask.approval.config.field.command",
+  args: "ask.approval.config.field.args",
+  cwd: "ask.approval.config.field.cwd",
+  env_passthrough: "ask.approval.config.field.envPassthrough",
+  url: "ask.approval.config.field.url",
+  headers_from_env: "ask.approval.config.field.headersFromEnv",
+  provider: "ask.approval.config.field.provider",
+  service_entry: "ask.approval.config.field.serviceEntry",
+  credential_profile: "ask.approval.config.field.credentialProfile",
+  api_key_env: "ask.approval.config.field.apiKeyEnv",
+  base_url: "ask.approval.config.field.baseUrl",
+  protocols: "ask.approval.config.field.protocols",
+  authentication: "ask.approval.config.field.authentication",
+  default_connection: "ask.approval.config.field.defaultConnection",
+};
+
+// CONFIG_NOTICE_KEYS maps configuration consequence keys to their catalog sentences.
+// CONFIG_NOTICE_KEYS 将配置后果键映射到目录语句。
+const CONFIG_NOTICE_KEYS: Record<string, TranslationKey> = {
+  activates_for_all_sessions: "ask.approval.config.notice.activates",
+  deactivates_for_all_sessions: "ask.approval.config.notice.deactivates",
+  removes_for_all_sessions: "ask.approval.config.notice.removes",
+  drops_secret_fields: "ask.approval.config.notice.dropsSecrets",
+  copies_api_key: "ask.approval.config.notice.copiesApiKey",
+  validates_with_provider: "ask.approval.config.notice.validates",
+};
+
+// CONFIG_VALUE_KEYS maps boolean configuration values to their catalog labels.
+// CONFIG_VALUE_KEYS 将布尔配置值映射到目录标签。
+const CONFIG_VALUE_KEYS: Record<string, TranslationKey> = {
+  true: "ask.approval.config.value.on",
+  false: "ask.approval.config.value.off",
 };
 
 // JUDGE_LABEL_KEYS maps permission judge labels to their catalog labels.
@@ -274,6 +338,8 @@ function toolApprovalHeadlineKey(approval: PendingApprovalSnapshot): Translation
       return "ask.approval.fileWrite";
     case "opaque":
       return "ask.approval.opaque";
+    case "configuration":
+      return "ask.approval.config";
   }
 }
 
@@ -285,6 +351,9 @@ function ToolApprovalSubjectBody(props: {
   approval: PendingApprovalSnapshot;
 }) {
   const subject = props.approval.subject;
+  if (subject.kind === "configuration") {
+    return <ConfigurationChangeBody subject={subject} />;
+  }
   const lines = subject.kind === "command"
     ? (subject.text.trim() ? [subject.text] : [])
     : subject.kind === "file_write"
@@ -297,6 +366,51 @@ function ToolApprovalSubjectBody(props: {
     <pre className="vk-ask-subject">
       {lines.join("\n")}
     </pre>
+  );
+}
+
+// ConfigurationChangeBody lists what a configuration change sets, field by field, and its consequences.
+// ConfigurationChangeBody 逐字段列出配置变更设置的内容及其后果。
+function ConfigurationChangeBody(props: {
+  // Configuration subject to render.
+  // 要渲染的配置对象。
+  subject: Extract<PendingApprovalSubject, { kind: "configuration" }>;
+}) {
+  const { t } = useI18n();
+  const { subject } = props;
+  const label = (keys: Record<string, TranslationKey>, key: string) => keys[key] ? t(keys[key]) : key;
+  const value = (raw: string | null) => raw == null
+    ? t("ask.approval.config.unset")
+    : CONFIG_VALUE_KEYS[raw] ? t(CONFIG_VALUE_KEYS[raw]) : raw;
+  const creating = subject.changes.every((change) => change.before == null);
+  return (
+    <div className="vk-ask-config" data-config-action={subject.action}>
+      <div className="vk-ask-config-target">
+        {formatMessage(t("ask.approval.config.summary"), {
+          action: label(CONFIG_ACTION_KEYS, subject.action),
+          kind: label(CONFIG_KIND_KEYS, subject.targetKind),
+          target: subject.target,
+        })}
+      </div>
+      {subject.changes.length > 0 ? (
+        <dl className="vk-ask-config-fields">
+          {subject.changes.map((change) => (
+            <React.Fragment key={change.field}>
+              <dt>{label(CONFIG_FIELD_KEYS, change.field)}</dt>
+              <dd data-config-field={change.field}>
+                {creating ? null : <><del>{value(change.before)}</del>{" → "}</>}
+                <span>{value(change.after)}</span>
+              </dd>
+            </React.Fragment>
+          ))}
+        </dl>
+      ) : null}
+      {subject.notices.map((notice) => (
+        <p className="vk-ask-reason" data-config-notice={notice} key={notice}>
+          {label(CONFIG_NOTICE_KEYS, notice)}
+        </p>
+      ))}
+    </div>
   );
 }
 

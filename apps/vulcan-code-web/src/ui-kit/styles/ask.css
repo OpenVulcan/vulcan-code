@@ -87,6 +87,14 @@
 /* ---------- Approval facts ---------- */
 /* The command or file list reads as a terminal snippet; the chips state mode, risk and the judges' findings. */
 /* 命令或文件列表以终端片段呈现；标签说明模式、风险与判定结论。 */
+/* A configuration change lists each field with its old and new value, then its consequences. */
+/* 配置变更逐字段列出旧值与新值，随后列出其后果。 */
+.vk-ask-config { display: flex; flex: none; flex-direction: column; gap: calc(var(--vk-u) * 1.5); max-height: 16rem; min-height: 0; overflow: auto; }
+.vk-ask-config-target { font-size: var(--vk-fs-sm); font-weight: 600; overflow-wrap: anywhere; }
+.vk-ask-config-fields { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--vk-u) calc(var(--vk-u) * 3); margin: 0; padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3); background: var(--vk-sunken); font-size: var(--vk-fs-xs); line-height: 1.5; }
+.vk-ask-config-fields > dt { color: var(--vk-ink-3); }
+.vk-ask-config-fields > dd { margin: 0; font-family: var(--vk-font-mono); overflow-wrap: anywhere; }
+.vk-ask-config-fields del { color: var(--vk-ink-3); }
 pre.vk-ask-subject { flex: none; max-height: 10rem; min-height: 0; margin: 0; overflow: auto; padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3); background: var(--vk-term-bg); color: var(--vk-term-ink); font-family: var(--vk-font-mono); font-size: var(--vk-fs-sm); line-height: 1.55; white-space: pre-wrap; word-break: break-all; }
 .vk-ask-chips { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 1.5); }
 .vk-ask-chips > .vk-badge[data-approval-countdown] { font-variant-numeric: tabular-nums; }

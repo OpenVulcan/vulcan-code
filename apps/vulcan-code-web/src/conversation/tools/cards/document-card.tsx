@@ -163,6 +163,18 @@ const DOCUMENT_TOOLS: Readonly<Record<string, DocumentToolSpec>> = {
     target: (input) => [field("connection_id")(input), field("tool")(input)].filter(Boolean).join(" · "),
     verb: "toolCard.doc.mcpCall",
   },
+  mcp_config: {
+    family: "run",
+    icon: Settings2,
+    target: (input) => [field("action")(input), firstOf("server_id", "name")(input)].filter(Boolean).join(" · "),
+    verb: "toolCard.doc.mcpConfig",
+  },
+  provider_config: {
+    family: "run",
+    icon: Settings2,
+    target: (input) => [field("action")(input), firstOf("connection_id", "provider_id", "display_name")(input)].filter(Boolean).join(" · "),
+    verb: "toolCard.doc.providerConfig",
+  },
   vulcan_file_list: { family: "read", icon: FolderTree, target: firstOf("path", "PWD"), verb: "toolCard.file.list" },
   vulcan_file_read: { family: "read", icon: FileText, target: field("path"), verb: "toolCard.file.read" },
 };

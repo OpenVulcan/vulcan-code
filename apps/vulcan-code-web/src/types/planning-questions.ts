@@ -170,7 +170,39 @@ export type PermissionModeKey = "read_only" | "workspace_write" | "auto_approve"
 export type PendingApprovalSubject =
   | { kind: "command"; text: string }
   | { kind: "file_write"; paths: string[] }
-  | { kind: "opaque" };
+  | { kind: "opaque" }
+  | {
+      kind: "configuration";
+      // Configured object key, such as `mcp_server`.
+      // 被配置对象的键，例如 `mcp_server`。
+      targetKind: string;
+      // Name of the configured item.
+      // 被配置条目的名称。
+      target: string;
+      // Action key, such as `create` or `remove`.
+      // 动作键，例如 `create` 或 `remove`。
+      action: string;
+      // Fields whose value changes; secrets appear only as the variable names they are read from.
+      // 值发生变化的字段；密钥只以其取值来源的变量名出现。
+      changes: PendingConfigurationChange[];
+      // Consequence keys the user should know.
+      // 用户应当知道的后果键。
+      notices: string[];
+    };
+
+// PendingConfigurationChange is one field of a configuration change awaiting approval.
+// PendingConfigurationChange 是待批准配置变更中的一个字段。
+export interface PendingConfigurationChange {
+  // Stable field key.
+  // 稳定字段键。
+  field: string;
+  // Value before the change; null when unset.
+  // 变更前的值；未设置时为 null。
+  before: string | null;
+  // Value after the change; null when cleared.
+  // 变更后的值；被清除时为 null。
+  after: string | null;
+}
 
 // PendingQuestionPromptSummary describes one prompt inside a pending ask request.
 // PendingQuestionPromptSummary 描述待处理 ask 请求中的单条问题提示。

@@ -139,3 +139,40 @@ it("counts down to the service deadline and shows nothing without one", async ()
     vi.useRealTimers();
   }
 });
+
+it("lists a configuration change field by field with its notices and no raw keys", async () => {
+  await mount(approvalRequest("config", {
+    toolName: "mcp_config",
+    highRisk: null,
+    subject: {
+      kind: "configuration", targetKind: "mcp_server", target: "docs", action: "update",
+      changes: [
+        { field: "url", before: "https://a.test/mcp", after: "https://b.test/mcp" },
+        { field: "enabled", before: "false", after: "true" },
+        { field: "future_field", before: null, after: "x" },
+      ],
+      notices: ["activates_for_all_sessions", "future_notice"],
+    },
+  }));
+  const config = host.querySelector("[data-config-action]");
+  expect(config?.getAttribute("data-config-action")).toBe("update");
+  expect(host.querySelector('[data-config-field="url"] del')?.textContent).toBe("https://a.test/mcp");
+  expect(host.querySelector('[data-config-field="url"] span')?.textContent).toBe("https://b.test/mcp");
+  expect(host.querySelector('[data-config-field="enabled"] span')?.textContent).not.toBe("true");
+  expect(config?.textContent).toContain("future_field");
+  expect(host.querySelector('[data-config-notice="activates_for_all_sessions"]')?.textContent).not.toBe("activates_for_all_sessions");
+  expect(host.querySelector('[data-config-notice="future_notice"]')?.textContent).toBe("future_notice");
+  expect(host.textContent).not.toContain("{");
+  expect(host.querySelector("pre")).toBeNull();
+
+  await mount(approvalRequest("config-create", {
+    toolName: "provider_config",
+    highRisk: null,
+    subject: {
+      kind: "configuration", targetKind: "provider_connection", target: "DeepSeek", action: "create",
+      changes: [{ field: "api_key_env", before: null, after: "DEEPSEEK_KEY" }], notices: [],
+    },
+  }));
+  expect(host.querySelector('[data-config-field="api_key_env"] del')).toBeNull();
+  expect(host.querySelector('[data-config-field="api_key_env"] span')?.textContent).toBe("DEEPSEEK_KEY");
+});
