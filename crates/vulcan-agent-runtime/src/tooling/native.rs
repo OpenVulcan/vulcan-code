@@ -232,6 +232,7 @@ const TERMINAL_INTERRUPT_DRAIN_MAX_MS: u64 = 1_500;
 /// 合并相邻模型可见终端分片时使用的软字节限制。
 const TERMINAL_OUTPUT_CHUNK_COALESCE_SOFT_LIMIT_BYTES: usize = 2_048;
 mod apply_patch;
+mod configuration;
 mod environment;
 mod file;
 mod file_edit;
@@ -245,6 +246,11 @@ mod registry;
 mod session_mcp;
 mod shell_command;
 pub(crate) use apply_patch::*;
+pub use configuration::{
+    CONFIGURATION_LIST_ACTION, ConfigurationOutcome, ConfigurationRequest, MCP_CONFIG_TOOL_ID,
+    McpConfigRequest, NativeConfigurationHost, PROVIDER_CONFIG_TOOL_ID, ProviderConfigRequest,
+};
+pub(crate) use configuration::{build_mcp_config_tool, build_provider_config_tool};
 pub use environment::{
     ENVIRONMENT_SECRET_REDACTION_MIN_CHARS, ENVIRONMENT_TOOL_ID,
     ENVIRONMENT_VALUE_REQUEST_MAX_VARIABLES, EffectiveEnvironmentVariable, EnvironmentValueRequest,
@@ -402,6 +408,9 @@ pub struct NativeToolExecutionRequest {
     /// Optional session MCP access; the session MCP tools open and use connections through it.
     /// 可选的会话 MCP 访问；会话 MCP 工具通过它打开并使用连接。
     pub session_mcp: Option<NativeSessionMcpAccess>,
+    /// Optional configuration host; the configuration tools list and change settings through it.
+    /// 可选的配置宿主；配置工具通过它列出并修改设置。
+    pub configuration: Option<Arc<dyn NativeConfigurationHost>>,
     /// Optional project-authorized and session-enabled knowledge-library snapshot.
     /// 可选的项目授权且会话已启用知识库快照。
     pub knowledge_access: Option<ExecutionKnowledgeAccessContext>,
@@ -555,6 +564,8 @@ pub fn build_native_tool_catalog(
         build_mcp_connect_tool(),
         build_mcp_tools_tool(),
         build_mcp_call_tool(),
+        build_mcp_config_tool(),
+        build_provider_config_tool(),
         build_vmm_memory_search_tool(snapshot.clone()),
         build_vmm_turn_details_tool(snapshot.clone()),
         build_vmm_memory_write_tool(snapshot.clone()),

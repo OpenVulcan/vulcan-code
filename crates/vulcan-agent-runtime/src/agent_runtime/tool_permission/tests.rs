@@ -374,6 +374,25 @@ impl ToolPermissionHost for FixedHost {
     fn record(&self, record: PermissionRecord) {
         self.records.lock().unwrap().push(record);
     }
+
+    async fn configuration_preview(
+        &self,
+        _session_id: SessionId,
+        _tool_name: &str,
+        args: &Value,
+    ) -> Result<ConfigurationPreview, String> {
+        let name = args.get("name").and_then(Value::as_str).unwrap_or("server");
+        if name == "refused" {
+            return Err(String::from("refused by the host"));
+        }
+        Ok(ConfigurationPreview {
+            target_kind: String::from("mcp_server"),
+            target: name.to_string(),
+            action: String::from("create"),
+            changes: Vec::new(),
+            notices: Vec::new(),
+        })
+    }
 }
 
 /// Judge trace the fixed host reports with every verdict.
@@ -1779,4 +1798,112 @@ async fn unattended_mode_stops_reviewing_a_call_denied_twice_in_a_row() {
     )
     .await;
     assert_eq!(reviews(), before + 1);
+}
+
+/// Configuration changes skip the judge and the reviewer: the user approves a previewed change,
+/// full access runs it, an unattended session cannot make it, and a refused preview never asks.
+/// 配置变更跳过判定器与复核器：用户批准已预览的变更，完全访问直接执行，无人值守会话不能执行，
+/// 预览被拒绝时从不询问。
+#[tokio::test]
+async fn configuration_changes_need_the_user() {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = workspace.path();
+    let save = json!({"action": "save", "name": "docs", "transport": "stdio", "command": "npx"});
+    for (tool, args) in [
+        (
+            crate::tooling::native::MCP_CONFIG_TOOL_ID,
+            json!({"action": "list"}),
+        ),
+        (
+            crate::tooling::native::PROVIDER_CONFIG_TOOL_ID,
+            json!({"action": "list"}),
+        ),
+    ] {
+        assert_eq!(
+            classify_tool_call(&native(tool), &args),
+            PermissionSubject::Ungoverned
+        );
+    }
+    for (tool, args) in [
+        (crate::tooling::native::MCP_CONFIG_TOOL_ID, save.clone()),
+        (crate::tooling::native::MCP_CONFIG_TOOL_ID, json!({})),
+        (
+            crate::tooling::native::PROVIDER_CONFIG_TOOL_ID,
+            json!({"action": "set_default_connection", "connection_id": "c"}),
+        ),
+    ] {
+        assert_eq!(
+            classify_tool_call(&native(tool), &args),
+            PermissionSubject::Configuration { preview: None }
+        );
+    }
+
+    let tool = crate::tooling::native::MCP_CONFIG_TOOL_ID;
+    let full = FixedHost::new(Ok(PermissionMode::FullAccess), Ok(false));
+    assert_eq!(
+        admit_call(&full, tool, save.clone(), None, root).await,
+        ToolPermissionVerdict::Proceed
+    );
+    assert!(full.prompts.lock().unwrap().is_empty());
+
+    let reviewer = LlmReview {
+        verdict: ReviewVerdict::Allow,
+        reason: String::from("fine"),
+        may_allow_blocked: true,
+    };
+    let auto = FixedHost::reviewing(
+        Ok(PermissionMode::AutoApprove),
+        Ok(true),
+        Ok(Some(JudgeLabel::Allow)),
+        Ok(Some(reviewer.clone())),
+    );
+    assert_eq!(
+        admit_call(&auto, tool, save.clone(), None, root).await,
+        ToolPermissionVerdict::Proceed
+    );
+    assert!(
+        auto.judged.lock().unwrap().is_empty(),
+        "the judge never sees configuration changes"
+    );
+    assert!(
+        auto.reviewed.lock().unwrap().is_empty(),
+        "the reviewer never sees configuration changes"
+    );
+    {
+        let prompts = auto.prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 1);
+        assert!(matches!(
+            &prompts[0].1.subject,
+            PermissionSubject::Configuration { preview: Some(preview) } if preview.target == "docs"
+        ));
+    }
+
+    let denying = FixedHost::new(Ok(PermissionMode::WorkspaceWrite), Ok(false));
+    assert_eq!(
+        admit_call(&denying, tool, save.clone(), None, root).await,
+        ToolPermissionVerdict::Deny(String::from(USER_DENIAL))
+    );
+
+    let refused = FixedHost::new(Ok(PermissionMode::WorkspaceWrite), Ok(true));
+    let verdict = admit_call(
+        &refused,
+        tool,
+        json!({"action": "save", "name": "refused"}),
+        None,
+        root,
+    )
+    .await;
+    assert!(matches!(verdict, ToolPermissionVerdict::Deny(_)));
+    assert!(
+        refused.prompts.lock().unwrap().is_empty(),
+        "a refused preview never asks the user"
+    );
+
+    let unattended = unattended(PermissionMode::AutoApprove, Ok(Some(reviewer)));
+    assert_eq!(
+        admit_call(&unattended, tool, save, None, root).await,
+        ToolPermissionVerdict::Deny(String::from(CONFIGURATION_UNATTENDED_DENIAL))
+    );
+    assert!(unattended.prompts.lock().unwrap().is_empty());
+    assert!(unattended.reviewed.lock().unwrap().is_empty());
 }

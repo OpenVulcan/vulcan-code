@@ -106,6 +106,7 @@ pub fn build_vulcan_tools_manager(
     // 环境变量访问由所有原生工具共享；命令类工具注入其变量。
     let environment_access = task_runtime.native_environment_access();
     let session_mcp_access = task_runtime.native_session_mcp_access();
+    let configuration_host = task_runtime.configuration_host();
     for subagent_candidate in
         build_subagent_tool_candidates(task_runtime, native_agent_collaboration_runtime.clone())
     {
@@ -157,6 +158,7 @@ pub fn build_vulcan_tools_manager(
         let native_goal_runtime_for_context = native_goal_runtime.clone();
         let environment_access_for_context = environment_access.clone();
         let session_mcp_access_for_context = session_mcp_access.clone();
+        let configuration_host_for_context = configuration_host.clone();
         let native_browser_runtime_for_context = native_browser_runtime.clone();
         let knowledge_access_for_context = knowledge_access.clone();
         let enabled_prompt_skill_names_for_context = enabled_prompt_skill_names.clone();
@@ -179,6 +181,7 @@ pub fn build_vulcan_tools_manager(
                 let goal_runtime = native_goal_runtime_for_context.clone();
                 let environment = environment_access_for_context.clone();
                 let session_mcp = Some(session_mcp_access_for_context.clone());
+                let configuration = configuration_host_for_context.clone();
                 let knowledge_access = knowledge_access_for_context.clone();
                 let prompt_skill_user_root = prompt_skill_user_root_for_context.clone();
                 let enabled_prompt_skill_names = enabled_prompt_skill_names_for_context.clone();
@@ -201,6 +204,7 @@ pub fn build_vulcan_tools_manager(
                                 goal_runtime,
                                 environment,
                                 session_mcp,
+                                configuration,
                                 native_browser_runtime,
                                 knowledge_access,
                                 enabled_prompt_skill_names,

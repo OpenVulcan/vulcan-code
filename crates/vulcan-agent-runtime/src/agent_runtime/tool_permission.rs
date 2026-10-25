@@ -33,9 +33,10 @@ use vulcan_tools_manager::{
 use crate::agent_runtime::question_runtime::{ApprovalAnswer, ToolApprovalPrompt};
 use crate::model::SessionId;
 use crate::tooling::native::{
-    APPLY_PATCH_TOOL_ID, DECLARE_INTENT_TOOL_ID, FILE_EDIT_TOOL_ID, FILE_TOOL_ID,
-    FILE_WRITE_TOOL_ID, MAX_PERMISSION_REASON_CHARS, MCP_CALL_TOOL_ID, MCP_CONNECT_TOOL_ID,
-    SHELL_COMMAND_TOOL_ID, TERMINAL_SESSION_TOOL_ID, declared_intent, session_mcp_command_line,
+    APPLY_PATCH_TOOL_ID, CONFIGURATION_LIST_ACTION, DECLARE_INTENT_TOOL_ID, FILE_EDIT_TOOL_ID,
+    FILE_TOOL_ID, FILE_WRITE_TOOL_ID, MAX_PERMISSION_REASON_CHARS, MCP_CALL_TOOL_ID,
+    MCP_CONFIG_TOOL_ID, MCP_CONNECT_TOOL_ID, PROVIDER_CONFIG_TOOL_ID, SHELL_COMMAND_TOOL_ID,
+    TERMINAL_SESSION_TOOL_ID, declared_intent, session_mcp_command_line,
 };
 pub use command_rules::HighRiskCategory;
 
@@ -54,6 +55,10 @@ pub const REVIEW_DENIAL_PREFIX: &str = "The permission reviewer denied this call
 /// Model-visible explanation returned when the session permission mode cannot be read.
 /// 无法读取会话权限模式时返回给模型的说明。
 pub const MODE_UNAVAILABLE_DENIAL: &str = "The session permission mode could not be read, so this call was not executed. Tell the user that tool permissions are unavailable.";
+
+/// Denial of a configuration change in an unattended session, written for the agent.
+/// 无人值守会话中配置变更被拒绝的说明，写给代理。
+pub const CONFIGURATION_UNATTENDED_DENIAL: &str = "Configuration changes need the user's approval and no user can give it in an unattended session, so this change was not executed. Do not retry it. Describe the change you intended in your final answer so the user can make it later, and continue with the rest of the task.";
 
 /// Consecutive denials of one identical call an unattended session reviews; the next identical
 /// call is denied without review, so the agent cannot wear the reviewer down.
@@ -123,6 +128,20 @@ pub trait ToolPermissionHost: Send + Sync {
     /// 但无法复核本次调用。
     async fn review(&self, _call: ReviewCall) -> Result<Option<LlmReview>, String> {
         Ok(None)
+    }
+
+    /// Describes the configuration change one call would make, for the user to approve. An error
+    /// means the call is invalid or not allowed for this session; it is denied without asking.
+    /// 描述一次调用将做出的配置变更，供用户批准。错误表示该调用无效或本会话不允许，直接拒绝而不询问。
+    async fn configuration_preview(
+        &self,
+        _session_id: SessionId,
+        _tool_name: &str,
+        _args: &Value,
+    ) -> Result<ConfigurationPreview, String> {
+        Err(String::from(
+            "Configuration changes are not available in this runtime.",
+        ))
     }
 
     /// Keeps one finished decision that the judge or the reviewer took part in; it must not
@@ -434,6 +453,51 @@ pub enum PermissionSubject {
     /// An extension tool whose effects are unknown and not classified read-only.
     /// 效果未知且未被归类为只读的扩展工具。
     Opaque,
+    /// Changes Vulcan's own configuration; outside full access only the user may approve it.
+    /// 修改 Vulcan 自身配置；完全访问以外只有用户能批准。
+    Configuration {
+        /// The change shown to the user; the gate fills it from the host before asking.
+        /// 展示给用户的变更；闸门在询问前从宿主取得并填入。
+        preview: Option<ConfigurationPreview>,
+    },
+}
+
+/// One configuration change as the user approves it. Kinds, actions, field and notice names are
+/// stable keys that clients render in their own language; values are the configured data itself.
+/// 用户批准时看到的一次配置变更。类型、动作、字段与提示名称是客户端以自身语言渲染的稳定键；
+/// 值是配置数据本身。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigurationPreview {
+    /// What is configured, such as `mcp_server` or `provider_connection`.
+    /// 被配置的对象，例如 `mcp_server` 或 `provider_connection`。
+    pub target_kind: String,
+    /// Name of the configured item.
+    /// 被配置条目的名称。
+    pub target: String,
+    /// What happens to it, such as `create`, `update` or `remove`.
+    /// 对它执行的动作，例如 `create`、`update` 或 `remove`。
+    pub action: String,
+    /// Fields whose value changes.
+    /// 值发生变化的字段。
+    pub changes: Vec<ConfigurationFieldChange>,
+    /// Consequences the user should know, such as activating a server for every session.
+    /// 用户应当知道的后果，例如为所有会话启用某个服务器。
+    pub notices: Vec<String>,
+}
+
+/// One field of a configuration change; secrets never appear, only the names they are read from.
+/// 配置变更中的一个字段；密钥从不出现，只出现其取值来源的名称。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigurationFieldChange {
+    /// Stable field key.
+    /// 稳定字段键。
+    pub field: String,
+    /// Value before the change; absent when the field was unset.
+    /// 变更前的值；字段未设置时缺省。
+    pub before: Option<String>,
+    /// Value after the change; absent when the field is cleared.
+    /// 变更后的值；字段被清除时缺省。
+    pub after: Option<String>,
 }
 
 /// Outcome of the deterministic rule layer.
@@ -571,6 +635,12 @@ fn classify_native(tool_id: &str, args: &Value) -> PermissionSubject {
         MCP_CALL_TOOL_ID => match string_arg("tool") {
             Some(tool) if text_looks_read_only(&tool) => PermissionSubject::Ungoverned,
             _ => PermissionSubject::Opaque,
+        },
+        // Listing configuration reads it; every other action changes it, malformed ones included.
+        // 列出配置只是读取；其他任何动作（包括格式错误的）都会修改配置。
+        MCP_CONFIG_TOOL_ID | PROVIDER_CONFIG_TOOL_ID => match string_arg("action").as_deref() {
+            Some(CONFIGURATION_LIST_ACTION) => PermissionSubject::Ungoverned,
+            _ => PermissionSubject::Configuration { preview: None },
         },
         _ => PermissionSubject::Ungoverned,
     }
@@ -712,7 +782,9 @@ pub fn evaluate_rules(
                 RuleOutcome::Escalate { high_risk: None }
             }
         }
-        PermissionSubject::Opaque => RuleOutcome::Escalate { high_risk: None },
+        PermissionSubject::Opaque | PermissionSubject::Configuration { .. } => {
+            RuleOutcome::Escalate { high_risk: None }
+        }
     }
 }
 
@@ -928,7 +1000,9 @@ fn call_fingerprint(tool_name: &str, subject: &PermissionSubject, args: &Value) 
     let affected = match subject {
         PermissionSubject::Command { text, shell } => format!("{shell:?}\n{text}"),
         PermissionSubject::FileWrite { paths } => paths.join("\n"),
-        PermissionSubject::Ungoverned | PermissionSubject::Opaque => {
+        PermissionSubject::Ungoverned
+        | PermissionSubject::Opaque
+        | PermissionSubject::Configuration { .. } => {
             let mut args = args.clone();
             if let Some(object) = args.as_object_mut() {
                 object.remove("purpose");
@@ -1010,6 +1084,18 @@ pub async fn admit_tool_call(
     };
     if access.unattended.is_some() && mode != PermissionMode::AutoApprove {
         return ToolPermissionVerdict::Deny(String::from(MODE_UNAVAILABLE_DENIAL));
+    }
+    if matches!(subject, PermissionSubject::Configuration { .. }) {
+        return admit_configuration_change(
+            host,
+            session_id,
+            definition,
+            args,
+            context,
+            mode,
+            access.unattended.is_some(),
+        )
+        .await;
     }
     let unattended = access.unattended.map(|config| config.deny_policy);
     let purpose = if native {
@@ -1265,7 +1351,7 @@ async fn decide_escalated(
         review: review.clone(),
         deadline_unix_ms: None,
     };
-    match host
+    let answer = host
         .request_approval(
             session_id,
             context.clone(),
@@ -1273,27 +1359,85 @@ async fn decide_escalated(
             args.clone(),
             prompt,
         )
-        .await
-    {
-        Ok(ApprovalAnswer::Allowed) => decided(
+        .await;
+    let (verdict, outcome) = user_verdict(answer);
+    decided(verdict, outcome, review)
+}
+
+/// What the user's answer to an approval means for the call.
+/// 用户对审批的回答对调用意味着什么。
+fn user_verdict(
+    answer: Result<ApprovalAnswer, String>,
+) -> (ToolPermissionVerdict, PermissionOutcome) {
+    match answer {
+        Ok(ApprovalAnswer::Allowed) => (
             ToolPermissionVerdict::Proceed,
             PermissionOutcome::UserAllowed,
-            review,
         ),
-        Ok(ApprovalAnswer::Denied) => decided(
+        Ok(ApprovalAnswer::Denied) => (
             ToolPermissionVerdict::Deny(String::from(USER_DENIAL)),
             PermissionOutcome::UserDenied,
-            review,
         ),
-        Ok(ApprovalAnswer::Expired) => decided(
+        Ok(ApprovalAnswer::Expired) => (
             ToolPermissionVerdict::Deny(String::from(APPROVAL_EXPIRED_DENIAL)),
             PermissionOutcome::ApprovalExpired,
-            review,
         ),
-        Err(error) => decided(
+        Err(error) => (
             ToolPermissionVerdict::Fail(error),
             PermissionOutcome::Failed,
-            review,
         ),
     }
+}
+
+/// Asks the user about one configuration change, skipping the judge and the reviewer: changing
+/// what Vulcan itself runs is the user's decision alone, so an unattended session cannot do it.
+/// The host first previews the change; an invalid or refused change is denied without asking.
+/// 就一次配置变更询问用户，跳过判定器与复核器：修改 Vulcan 自身运行的内容只能由用户决定，因此
+/// 无人值守会话不能执行。宿主先预览变更；无效或被拒绝的变更不询问直接拒绝。
+async fn admit_configuration_change(
+    host: &Arc<dyn ToolPermissionHost>,
+    session_id: SessionId,
+    definition: &ResolvedToolDefinition,
+    args: &Value,
+    context: &VulcanToolInvocationContext,
+    mode: PermissionMode,
+    unattended: bool,
+) -> ToolPermissionVerdict {
+    if let Some(memory) = host.memory() {
+        memory.set_invitation(session_id, None);
+    }
+    if unattended {
+        return ToolPermissionVerdict::Deny(String::from(CONFIGURATION_UNATTENDED_DENIAL));
+    }
+    let preview = match host
+        .configuration_preview(session_id, &definition.descriptor.id, args)
+        .await
+    {
+        Ok(preview) => preview,
+        Err(error) => {
+            return ToolPermissionVerdict::Deny(format!(
+                "This configuration change was not executed: {error}"
+            ));
+        }
+    };
+    let prompt = ToolApprovalPrompt {
+        mode,
+        subject: PermissionSubject::Configuration {
+            preview: Some(preview),
+        },
+        high_risk: None,
+        judge: None,
+        review: None,
+        deadline_unix_ms: None,
+    };
+    let answer = host
+        .request_approval(
+            session_id,
+            context.clone(),
+            definition.descriptor.id.clone(),
+            args.clone(),
+            prompt,
+        )
+        .await;
+    user_verdict(answer).0
 }

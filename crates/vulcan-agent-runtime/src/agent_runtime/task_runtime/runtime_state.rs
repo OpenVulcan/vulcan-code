@@ -10,6 +10,7 @@ impl TaskRuntime {
             sensitive_tool_output_values: Arc::new(RwLock::new(Vec::new())),
             tool_permission_host: RwLock::new(None),
             environment_host: RwLock::new(None),
+            configuration_host: RwLock::new(None),
             session_mcp: Arc::new(crate::mcp::session::SessionMcpRegistry::new()),
             durable_return_mailboxes: RwLock::new(HashMap::new()),
             sessions: RwLock::new(HashMap::new()),
@@ -111,6 +112,32 @@ impl TaskRuntime {
             host,
             Arc::downgrade(self),
         ))
+    }
+
+    /// Installs the service kernel's configuration host; later tool bridges hand it to the
+    /// configuration tools.
+    /// 安装服务内核的配置宿主；之后构建的工具桥把它交给配置工具。
+    pub fn set_configuration_host(
+        &self,
+        host: Arc<dyn crate::tooling::native::NativeConfigurationHost>,
+    ) {
+        // The slot only holds an `Arc`, so a poisoned lock still carries a consistent value.
+        // 该槽位只保存 `Arc`，因此锁中毒后其值仍然一致。
+        *self
+            .configuration_host
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(host);
+    }
+
+    /// Returns the configuration host handed to native tools, or `None` without one.
+    /// 返回交给原生工具的配置宿主；没有时返回 `None`。
+    pub(crate) fn configuration_host(
+        &self,
+    ) -> Option<Arc<dyn crate::tooling::native::NativeConfigurationHost>> {
+        self.configuration_host
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// Returns the session MCP access handed to native tools.

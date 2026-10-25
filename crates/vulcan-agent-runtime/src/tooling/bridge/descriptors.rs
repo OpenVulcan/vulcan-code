@@ -111,6 +111,17 @@ pub(super) fn native_plan_policy(descriptor: &NativeToolDescriptor) -> VulcanPla
             field: String::from("action"),
             allowed_values: vec![String::from("status")],
         }
+    } else if descriptor.id == crate::tooling::native::MCP_CONFIG_TOOL_ID
+        || descriptor.id == crate::tooling::native::PROVIDER_CONFIG_TOOL_ID
+    {
+        // Plan mode only reads configuration; every other action changes it.
+        // 计划模式只读取配置；其他动作都会修改配置。
+        VulcanPlanToolPolicy::StringArgumentAllowlist {
+            field: String::from("action"),
+            allowed_values: vec![String::from(
+                crate::tooling::native::CONFIGURATION_LIST_ACTION,
+            )],
+        }
     } else if descriptor.id == crate::tooling::native::MCP_CALL_TOOL_ID {
         // Calls use the read-only name heuristic of configured MCP tools, on the called tool.
         // 调用对被调用工具使用已配置 MCP 工具的只读名称启发式。
@@ -210,5 +221,28 @@ mod tests {
             native_plan_policy(&build_mcp_call_tool().descriptor),
             VulcanPlanToolPolicy::HeuristicStringArgument { field } if field == "tool"
         ));
+    }
+
+    /// Plan mode only lists configuration; every configuration change stays out of it.
+    /// 计划模式只列出配置；任何配置修改都不在计划模式中执行。
+    #[test]
+    fn configuration_tools_only_list_in_plan_mode() {
+        use crate::tooling::native::{
+            CONFIGURATION_LIST_ACTION, build_mcp_config_tool, build_provider_config_tool,
+        };
+        for tool in [build_mcp_config_tool(), build_provider_config_tool()] {
+            let VulcanPlanToolPolicy::StringArgumentAllowlist {
+                field,
+                allowed_values,
+            } = native_plan_policy(&tool.descriptor)
+            else {
+                panic!(
+                    "{} should use an action-scoped Plan policy",
+                    tool.descriptor.id
+                );
+            };
+            assert_eq!(field, "action");
+            assert_eq!(allowed_values, [CONFIGURATION_LIST_ACTION]);
+        }
     }
 }

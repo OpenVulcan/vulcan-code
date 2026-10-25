@@ -163,6 +163,27 @@ fn approval_question(tool_name: &str, prompt: &ToolApprovalPrompt) -> QuestionPr
         PermissionSubject::Opaque | PermissionSubject::Ungoverned => {
             format!("Allow `{tool_name}` to run? It is not known to be read-only.")
         }
+        PermissionSubject::Configuration { preview } => {
+            let mut question = format!("Allow `{tool_name}` to change the configuration?");
+            if let Some(preview) = preview {
+                question.push_str(&format!(
+                    "\n\n{} {} `{}`",
+                    preview.action, preview.target_kind, preview.target
+                ));
+                for change in &preview.changes {
+                    question.push_str(&format!(
+                        "\n{}: {} -> {}",
+                        change.field,
+                        change.before.as_deref().unwrap_or("-"),
+                        change.after.as_deref().unwrap_or("-")
+                    ));
+                }
+                for notice in &preview.notices {
+                    question.push_str(&format!("\nNote: {notice}"));
+                }
+            }
+            question
+        }
     };
     if let Some(category) = prompt.high_risk {
         question.push_str(&format!("\n\nHigh risk: {}", category.key()));

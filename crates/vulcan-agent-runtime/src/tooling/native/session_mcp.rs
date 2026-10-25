@@ -485,11 +485,7 @@ async fn connect_request(
                 ))
             })
     };
-    let bearer_token = args
-        .bearer_token_env
-        .as_deref()
-        .map(&lookup)
-        .transpose()?;
+    let bearer_token = args.bearer_token_env.as_deref().map(&lookup).transpose()?;
     let headers = args
         .headers_from_env
         .unwrap_or_default()
