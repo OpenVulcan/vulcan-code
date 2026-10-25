@@ -30,6 +30,9 @@
   `<review_prompt>` 区段进入复核 LLM 输入，排在复核规则的拒绝 / 问我分组与项目策略之后，不能放宽它们；
   无人值守复核只读拒绝策略。会话自有文本读取失败时复核报错，不退回系统默认。长度上限只在
   `MAX_REVIEW_PROMPT_CHARS` 定义。
+- **配置修改只由用户批准。** `mcp_config` 与 `provider_config` 的修改动作属于配置类别：完全权限放行，其他模式
+  （含自动审批）跳过判定模型与复核 LLM 直接交给用户，无人值守会话直接拒绝；审批卡显示内核计算的变更预览，
+  预览出错即拒绝。详见 [`ai-configuration-tools.md`](ai-configuration-tools.md)。
 - **审批等待到期即拒绝。** 系统级 `approvalTimeoutSeconds` 大于 0 时，用户审批等待该秒数后按拒绝处理
   （判定记录结果 `approval_expired`），绝不按放行处理；0 表示一直等到回答。上限只在
   `MAX_APPROVAL_TIMEOUT_SECONDS` 定义，截止时间由服务掌握，客户端倒计时只是显示。
@@ -58,6 +61,7 @@
 | 文件写入工具 | 交给用户 | 工作区内直接放行，其余交给用户 | 工作区内直接放行，其余进入管线 | 放行 |
 | `shell_command`、`terminal_session` | 已知只读命令放行，其余交给用户 | 已知只读命令放行，其余交给用户 | 已知只读命令放行，其余进入管线 | 放行 |
 | MCP、插件与其他写入能力 | 已知只读放行，其余交给用户 | 已知只读放行，其余交给用户 | 已知只读放行，其余进入管线 | 放行 |
+| 配置修改（`mcp_config`、`provider_config`） | 交给用户 | 交给用户 | 交给用户（无人值守时拒绝） | 放行 |
 | 无人值守 | 不可用 | 不可用 | 可开启 | 不可用 |
 
 - “进入管线”指判定模型 → 复核 LLM → 用户；“交给用户”跳过判定层与复核层。
@@ -270,6 +274,7 @@
 | 模式读取、判定与复核宿主 | `crates/vulcan-service-kernel/src/tool_permission_host.rs` |
 | 会话模式修改与草稿首次提交 | `crates/vulcan-service-kernel/src/permission_mode.rs`、`conversation_submission.rs` |
 | 无人值守、连续拒绝记忆与代理理由 | `tool_permission.rs` 中的 `PermissionMemory`、`UNATTENDED_REVIEWED_REPEATS`；`tooling/native/declare_intent.rs` |
+| 配置类别与变更预览 | `tool_permission.rs` 中的 `admit_configuration_change`；预览由 `crates/vulcan-service-kernel/src/ai_configuration.rs` 计算 |
 | 无人值守默认值服务 | `crates/vulcan-service-kernel/src/permission_judge/unattended.rs` |
 | 复核规则服务与有效规则 | `crates/vulcan-service-kernel/src/permission_judge/review_rules.rs`；类型与上限在 `crates/vulcan-permission-judge/src/system.rs` |
 | 复核附加提示词服务 | `crates/vulcan-service-kernel/src/permission_judge/review_prompt.rs`；会话旁置文件在 `crates/vulcan-workspace-store/src/workspace_store/session_sidecars.rs` |

@@ -1,7 +1,8 @@
 # 会话临时 MCP
 
 本文是会话临时 MCP 连接的契约：AI 在会话内临时连接一个 MCP 服务器，查看其工具并调用，连接不写入任何配置。
-需要长期使用的服务器由用户在 MCP 设置页配置（或经后续的 AI 配置工具写入用户配置）。实现以下列源码为准，
+需要长期使用的服务器由用户在 MCP 设置页配置，或经 AI 配置工具 `mcp_config` 写入用户配置（见
+[`ai-configuration-tools.md`](ai-configuration-tools.md)）。实现以下列源码为准，
 修改其中任一处时同步本文与对应测试：
 
 - 连接注册表、边界常量、Schema 校验与断线跟踪：`crates/vulcan-agent-runtime/src/mcp/session.rs`

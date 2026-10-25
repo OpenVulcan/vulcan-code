@@ -47,6 +47,9 @@ Vulcan 把它们注入代理启动的命令、终端与 MCP 服务；AI 通过 `
    http/sse 连接的 `bearer_token_env` 与 `headers_from_env` 先查本会话生效变量再查进程环境。
    详见 [会话临时 MCP](session-mcp.md)。
 4. **启动发布失败只告警。** 启动时发布全局覆盖层失败只写警告日志，不阻止服务启动。
+5. **API Key 只复制一次。** `provider_config` 的 `api_key_env` 在执行时按本会话生效变量（会话 > 项目 > 全局）
+   读取值并复制进凭据存储，值不进入工具结果；之后修改或删除变量不影响已存密钥。详见
+   [AI 配置工具](ai-configuration-tools.md)。
 
 ## AI 工具 `env`
 
