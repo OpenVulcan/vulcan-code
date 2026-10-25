@@ -148,10 +148,10 @@ pub(super) fn validate_approval_answers(answers: &[Vec<String>]) -> Result<(), S
 /// 构建无法渲染审批的客户端所展示的默认语言提示。
 fn approval_question(tool_name: &str, prompt: &ToolApprovalPrompt) -> QuestionPrompt {
     let mut question = match &prompt.subject {
-        PermissionSubject::Command { text } if text.trim().is_empty() => {
+        PermissionSubject::Command { text, .. } if text.trim().is_empty() => {
             format!("Allow `{tool_name}` to start an interactive shell?")
         }
-        PermissionSubject::Command { text } => {
+        PermissionSubject::Command { text, .. } => {
             format!("Allow `{tool_name}` to run this command?\n\n{text}")
         }
         PermissionSubject::FileWrite { paths } => {
@@ -270,6 +270,7 @@ mod tests {
                     ToolApprovalPrompt {
                         mode: PermissionMode::AutoApprove,
                         subject: PermissionSubject::Command {
+                            shell: Some(vulcan_host_tools::shell_host::HostCommandShell::Bash),
                             text: String::from("rm -rf build"),
                         },
                         high_risk: Some(HighRiskCategory::RecursiveDelete),

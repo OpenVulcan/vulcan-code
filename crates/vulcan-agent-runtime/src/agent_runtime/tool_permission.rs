@@ -22,6 +22,7 @@ use serde_json::Value;
 use vulcan_host_tools::file_runtime::{
     apply_patch_write_paths, path_resolves_inside_workspace, path_targets_git_metadata,
 };
+use vulcan_host_tools::shell_host::HostCommandShell;
 pub use vulcan_permission_judge::JudgeLabel;
 use vulcan_session_core::v1::config::{AccessConfig, PermissionMode};
 use vulcan_tools_manager::{
@@ -426,6 +427,9 @@ pub enum PermissionSubject {
         /// Command text; empty means an interactive shell with no initial command.
         /// 命令文本；为空表示没有初始命令的交互式 shell。
         text: String,
+        /// Launcher family frozen by the native tool; unknown interactive input must escalate.
+        /// 原生工具固定的启动器类型；未知交互输入必须升级。
+        shell: Option<HostCommandShell>,
     },
     /// An extension tool whose effects are unknown and not classified read-only.
     /// 效果未知且未被归类为只读的扩展工具。
@@ -482,7 +486,16 @@ pub fn classify_tool_call(definition: &ResolvedToolDefinition, args: &Value) -> 
                 }
             })
         }
-        VulcanToolSourceKind::Native => classify_native(&definition.descriptor.id, args),
+        VulcanToolSourceKind::Native => {
+            let mut subject = classify_native(&definition.descriptor.id, args);
+            if let PermissionSubject::Command { shell, .. } = &mut subject
+                && (definition.descriptor.id == SHELL_COMMAND_TOOL_ID
+                    || args.get("action").and_then(Value::as_str) == Some("start"))
+            {
+                *shell = command_shell(definition, args);
+            }
+            subject
+        }
         VulcanToolSourceKind::Mcp
         | VulcanToolSourceKind::LuaSkills
         | VulcanToolSourceKind::VulcanPlugin => {
@@ -548,7 +561,7 @@ fn classify_native(tool_id: &str, args: &Value) -> PermissionSubject {
             }
         }
         SHELL_COMMAND_TOOL_ID => match string_arg("command") {
-            Some(text) => PermissionSubject::Command { text },
+            Some(text) => PermissionSubject::Command { text, shell: None },
             None => PermissionSubject::Opaque,
         },
         TERMINAL_SESSION_TOOL_ID => classify_terminal(args),
@@ -563,6 +576,7 @@ fn classify_native(tool_id: &str, args: &Value) -> PermissionSubject {
 fn classify_terminal(args: &Value) -> PermissionSubject {
     match args.get("action").and_then(Value::as_str) {
         Some("start") => PermissionSubject::Command {
+            shell: None,
             text: args
                 .get("command")
                 .and_then(Value::as_str)
@@ -587,11 +601,33 @@ fn classify_terminal(args: &Value) -> PermissionSubject {
                 PermissionSubject::Ungoverned
             } else {
                 PermissionSubject::Command {
+                    shell: None,
                     text: typed.join("\n"),
                 }
             }
         }
         _ => PermissionSubject::Ungoverned,
+    }
+}
+
+/// Resolves a native launch from its explicit selector or the same frozen default its executor uses.
+/// 根据显式选择或执行器使用的同一固定默认值解析原生启动类型。
+/// `definition` owns the generated schema; `args` supplies the selector. Invalid or absent facts return None.
+/// `definition` 持有生成的 Schema；`args` 提供选择器。事实缺失或无效时返回 None。
+fn command_shell(definition: &ResolvedToolDefinition, args: &Value) -> Option<HostCommandShell> {
+    // The schema default is derived from the executor's HostCommandShellSupport snapshot.
+    // Schema 默认值由执行器的 HostCommandShellSupport 快照派生。
+    let selector = match args.get("shell") {
+        None | Some(Value::Null) => "auto",
+        Some(Value::String(selector)) => selector.trim(),
+        _ => return None,
+    };
+    if selector.is_empty() || selector.eq_ignore_ascii_case("auto") {
+        definition.parameters_schema["properties"]["shell"]["default"]
+            .as_str()
+            .and_then(HostCommandShell::parse)
+    } else {
+        HostCommandShell::parse(selector)
     }
 }
 
@@ -609,12 +645,14 @@ pub fn evaluate_rules(
     }
     match subject {
         PermissionSubject::Ungoverned => RuleOutcome::Allow,
-        PermissionSubject::Command { text } => {
+        PermissionSubject::Command { text, shell } => {
             if let Some(category) = command_rules::high_risk_category(text) {
                 RuleOutcome::Escalate {
                     high_risk: Some(category),
                 }
-            } else if !text.trim().is_empty() && command_rules::is_known_read_only(text) {
+            } else if !text.trim().is_empty()
+                && shell.is_some_and(|shell| command_rules::is_known_read_only(text, shell))
+            {
                 RuleOutcome::Allow
             } else {
                 RuleOutcome::Escalate { high_risk: None }
@@ -852,7 +890,7 @@ impl PermissionMemory {
 /// 同一调用。
 fn call_fingerprint(tool_name: &str, subject: &PermissionSubject, args: &Value) -> String {
     let affected = match subject {
-        PermissionSubject::Command { text } => text.clone(),
+        PermissionSubject::Command { text, shell } => format!("{shell:?}\n{text}"),
         PermissionSubject::FileWrite { paths } => paths.join("\n"),
         PermissionSubject::Ungoverned | PermissionSubject::Opaque => {
             let mut args = args.clone();

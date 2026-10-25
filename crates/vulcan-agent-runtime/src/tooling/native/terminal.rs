@@ -362,6 +362,7 @@ pub(crate) fn terminal_session_args_schema(shell_support: &HostCommandShellSuppo
             "shell": {
                 "type": "string",
                 "enum": shell_support.schema_shell_ids(),
+                "default": shell_support.auto_shell().map(|entry| entry.shell.id()),
                 "description": terminal_session_schema_shell_description(shell_support)
             },
             "inputs": {

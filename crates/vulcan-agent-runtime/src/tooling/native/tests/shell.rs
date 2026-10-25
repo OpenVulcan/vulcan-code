@@ -97,6 +97,20 @@ fn shell_tool_schemas_expose_dynamic_detected_shells() {
         session_schema["properties"]["shell"]["enum"],
         json!(["auto", "pwsh", "powershell", "cmd"])
     );
+    // Permission classification and actual launch must see the same frozen automatic shell.
+    // 权限分类与实际启动必须看到相同的固定自动 shell。
+    for schema in [&command_schema, &session_schema] {
+        assert_eq!(
+            schema["properties"]["shell"]["default"],
+            json!(
+                shell_support
+                    .resolve_requested_shell(None)
+                    .unwrap()
+                    .shell
+                    .id()
+            )
+        );
+    }
 }
 
 /// The AI-facing shell schema text should stay in English and should document critical defaults and paging behavior explicitly.

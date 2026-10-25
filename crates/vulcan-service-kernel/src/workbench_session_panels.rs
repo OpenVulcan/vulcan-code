@@ -436,7 +436,7 @@ fn pending_approval_snapshot(
         tool_name: tool_name.to_string(),
         permission_mode: prompt.mode,
         subject: match &prompt.subject {
-            PermissionSubject::Command { text } => {
+            PermissionSubject::Command { text, .. } => {
                 PendingApprovalSubject::Command { text: text.clone() }
             }
             PermissionSubject::FileWrite { paths } => PendingApprovalSubject::FileWrite {

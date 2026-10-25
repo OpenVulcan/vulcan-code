@@ -4,6 +4,160 @@
 use super::command_rules::{high_risk_category, is_known_read_only};
 use super::*;
 
+/// Ambiguous quoting and explicit executable paths must never bypass any restricted mode.
+/// 有歧义的引号与显式可执行文件路径绝不能绕过任何受限模式。
+#[test]
+fn ambiguous_shell_syntax_and_program_paths_escalate() {
+    for (shell, command) in [
+        (HostCommandShell::Bash, r#"echo "\"" ; touch a"#),
+        (HostCommandShell::Bash, r#"echo \"; touch b; echo \""#),
+        (HostCommandShell::Bash, r#"echo $'\''; touch c; echo $'\''"#),
+        (
+            HostCommandShell::Pwsh,
+            "echo \"x\u{201c}; New-Item d; echo \u{201d}y\"",
+        ),
+        (HostCommandShell::Cmd, r#"echo ^"& type nul > f ^""#),
+        (HostCommandShell::Cmd, "echo '; type nul > f; echo '"),
+        (HostCommandShell::Cmd, "echo %UNTRUSTED%"),
+        (HostCommandShell::Cmd, "echo !UNTRUSTED!"),
+        (HostCommandShell::Bash, "./cat file"),
+        (HostCommandShell::Pwsh, r"C:\Temp\cat.exe file"),
+        (HostCommandShell::Pwsh, "(./cat file).Count"),
+        (HostCommandShell::Bash, "$program"),
+        (HostCommandShell::Bash, "echo 'unterminated"),
+    ] {
+        assert!(!is_known_read_only(command, shell), "{shell:?}: {command}");
+        for mode in [
+            PermissionMode::ReadOnly,
+            PermissionMode::WorkspaceWrite,
+            PermissionMode::AutoApprove,
+        ] {
+            assert!(
+                matches!(
+                    evaluate_rules(
+                        mode,
+                        &PermissionSubject::Command {
+                            text: command.into(),
+                            shell: Some(shell),
+                        },
+                        None
+                    ),
+                    RuleOutcome::Escalate { .. }
+                ),
+                "{mode:?}: {command}"
+            );
+        }
+    }
+    // High-risk detection intentionally still recognises path-qualified executables.
+    // 高风险识别仍有意匹配带路径的可执行文件。
+    assert_eq!(
+        high_risk_category("/bin/rm -rf folder"),
+        Some(HighRiskCategory::RecursiveDelete)
+    );
+}
+
+/// cmd built-ins remain useful, while bare or extension-qualified external programs escalate.
+/// cmd 内建命令仍然可用，裸外部程序名及带扩展名的程序则升级。
+#[test]
+fn cmd_does_not_trust_current_directory_programs() {
+    for command in ["dir /b", "echo hello", "type file.txt", "ver"] {
+        assert!(
+            is_known_read_only(command, HostCommandShell::Cmd),
+            "{command}"
+        );
+    }
+    for command in [
+        "findstr needle file",
+        "findstr.exe needle file",
+        "git status",
+        "cat file",
+        "echo.exe hello",
+    ] {
+        assert!(
+            !is_known_read_only(command, HostCommandShell::Cmd),
+            "{command}"
+        );
+    }
+    assert!(is_known_read_only("git status", HostCommandShell::Pwsh));
+    assert!(is_known_read_only("cat file", HostCommandShell::Bash));
+    assert!(!is_known_read_only(
+        r#""echo" hello"#,
+        HostCommandShell::Cmd
+    ));
+}
+
+/// Discard-target spellings only bypass write approval in their owning shell.
+/// 丢弃目标的拼写仅在所属 shell 中免于写入审批。
+#[test]
+fn redirection_sinks_are_shell_specific() {
+    for (shell, sink) in [
+        (HostCommandShell::Bash, "/dev/null"),
+        (HostCommandShell::Pwsh, "$null"),
+        (HostCommandShell::Cmd, "nul"),
+    ] {
+        assert!(is_known_read_only(&format!("echo hello > {sink}"), shell));
+        for other_sink in ["/dev/null", "$null", "nul"] {
+            if other_sink != sink {
+                assert!(
+                    !is_known_read_only(&format!("echo hello > {other_sink}"), shell),
+                    "{shell:?}: {other_sink}"
+                );
+            }
+        }
+    }
+}
+
+/// Auto launch classification follows the frozen tool default and never guesses an interactive shell.
+/// 自动启动分类跟随工具固定默认值，绝不猜测交互输入使用的 shell。
+#[test]
+fn command_classification_uses_the_frozen_shell_default() {
+    // Simulate a tool generation whose configured automatic launcher is cmd.
+    // 模拟自动启动器已配置为 cmd 的工具代际。
+    let mut tool = native(SHELL_COMMAND_TOOL_ID);
+    tool.parameters_schema["properties"]["shell"]["default"] = json!("cmd");
+    for args in [
+        json!({"command":"findstr needle file"}),
+        json!({"command":"findstr needle file","shell":"auto"}),
+    ] {
+        assert_eq!(
+            evaluate_rules(
+                PermissionMode::ReadOnly,
+                &classify_tool_call(&tool, &args),
+                None
+            ),
+            RuleOutcome::Escalate { high_risk: None }
+        );
+    }
+    assert_eq!(
+        evaluate_rules(
+            PermissionMode::ReadOnly,
+            &classify_tool_call(&tool, &json!({"command":"git status","shell":"pwsh"})),
+            None
+        ),
+        RuleOutcome::Allow
+    );
+    tool.parameters_schema = json!({});
+    assert_eq!(
+        evaluate_rules(
+            PermissionMode::ReadOnly,
+            &classify_tool_call(&tool, &json!({"command":"echo hello"})),
+            None
+        ),
+        RuleOutcome::Escalate { high_risk: None }
+    );
+    assert_eq!(
+        evaluate_rules(
+            PermissionMode::ReadOnly,
+            &classify_tool_call(
+                &native(TERMINAL_SESSION_TOOL_ID),
+                &json!({"action":"send","inputs":[{"kind":"text","text":"findstr needle file"}]})
+            ),
+            None
+        ),
+        RuleOutcome::Escalate { high_risk: None }
+    );
+}
+
 /// Knowledge mutations and host ingest reads bypass approval under their declared access contract.
 /// 知识变更及宿主搬运读取按已声明访问契约无需审批。
 #[test]
@@ -47,7 +201,7 @@ fn definition(
             None,
             VulcanToolOrigin::new(source, "test", id),
         ),
-        parameters_schema: json!({"type": "object"}),
+        parameters_schema: json!({"type": "object", "properties": {"shell": {"default": "pwsh"}}}),
         plan_policy,
         request_streaming: None,
         invoke: Arc::new(|_, _| {
@@ -235,7 +389,6 @@ fn known_read_only_commands_are_recognised() {
         "ls -la | head -20",
         "Get-ChildItem -Recurse src | Select-String foo",
         "cat a.txt 2>&1",
-        "git log > /dev/null",
         "find . -name '*.rs'",
         "echo 'a > b; rm -rf /'",
         "(Get-ChildItem -LiteralPath 'D:\\work' -Directory -Force).Count",
@@ -260,7 +413,10 @@ fn known_read_only_commands_are_recognised() {
         "Get-Content a.json | ConvertFrom-Json | Format-List",
         "[ -f Cargo.toml ]",
     ] {
-        assert!(is_known_read_only(command), "{command}");
+        assert!(
+            is_known_read_only(command, HostCommandShell::Pwsh),
+            "{command}"
+        );
     }
 }
 
@@ -333,7 +489,10 @@ fn writes_and_unknown_commands_are_not_read_only() {
         "FOO=1 ls",
         "tee out.txt",
     ] {
-        assert!(!is_known_read_only(command), "{command}");
+        assert!(
+            !is_known_read_only(command, HostCommandShell::Pwsh),
+            "{command}"
+        );
     }
 }
 
@@ -465,6 +624,7 @@ fn native_tools_are_classified_by_effect() {
             &json!({"command": "git status"})
         ),
         PermissionSubject::Command {
+            shell: Some(HostCommandShell::Pwsh),
             text: String::from("git status")
         }
     );
@@ -481,6 +641,7 @@ fn native_tools_are_classified_by_effect() {
             &json!({"action": "send", "inputs": [{"kind": "text", "text": "rm -rf x"}]})
         ),
         PermissionSubject::Command {
+            shell: None,
             text: String::from("rm -rf x")
         }
     );
@@ -625,12 +786,15 @@ fn rules_follow_the_mode_table() {
         paths: vec![String::from("src/x.rs"), String::from("../elsewhere.txt")],
     };
     let read_command = PermissionSubject::Command {
+        shell: Some(HostCommandShell::Pwsh),
         text: String::from("git status"),
     };
     let build = PermissionSubject::Command {
+        shell: Some(HostCommandShell::Pwsh),
         text: String::from("cargo build"),
     };
     let wipe = PermissionSubject::Command {
+        shell: Some(HostCommandShell::Pwsh),
         text: String::from("rm -rf target"),
     };
     let escalate = RuleOutcome::Escalate { high_risk: None };

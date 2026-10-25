@@ -11,9 +11,12 @@
 //! 重定向或命令替换时才算只读；无法识别的命令仅视为“非只读”并进入权限管线。内容本身只读的
 //! 裸分组 `(...)`（可后接 `.Count` 等属性访问）视为只读值。高风险清单标记判定模型不能单独放行的命令。
 
-/// Redirection targets that discard or merge output and therefore write nothing.
-/// 丢弃或合并输出、因而不写入任何内容的重定向目标。
-const HARMLESS_REDIRECTION_TARGETS: &[&str] = &["&1", "&2", "$null", "/dev/null", "nul"];
+use vulcan_host_tools::shell_host::HostCommandShell;
+
+/// cmd built-ins whose arguments cannot launch an external program or modify files.
+/// 参数不会启动外部程序或修改文件的 cmd 内建命令。
+const CMD_READ_ONLY_BUILTINS: &[&str] =
+    &["cd", "chdir", "dir", "echo", "rem", "type", "ver", "vol"];
 
 /// Placeholder word for a read-only grouping; the NUL prefix keeps it apart from typed words.
 /// 只读分组的占位词；NUL 前缀使其不会与输入的词混淆。
@@ -420,16 +423,16 @@ struct CommandScan {
     has_substitution: bool,
 }
 
-/// Returns whether `command` is a known read-only command in every segment.
-/// 返回 `command` 的每个片段是否都是已知只读命令。
-pub fn is_known_read_only(command: &str) -> bool {
-    let scan = scan_command(command);
+/// Returns whether every segment of `command` is known read-only under the selected `shell`.
+/// 返回 `command` 的每个片段在所选 `shell` 下是否都是已知只读命令。
+pub fn is_known_read_only(command: &str, shell: HostCommandShell) -> bool {
+    let scan = scan_command(command, Some(shell));
     if scan.writes_redirection || scan.has_substitution || scan.segments.is_empty() {
         return false;
     }
     scan.segments
         .iter()
-        .all(|words| segment_is_read_only(words))
+        .all(|words| segment_is_read_only(words, shell))
 }
 
 /// Returns the first high-risk category matched by `command`, if any.
@@ -442,7 +445,7 @@ pub fn high_risk_category(command: &str) -> Option<HighRiskCategory> {
     {
         return Some(HighRiskCategory::DatabaseDrop);
     }
-    let scan = scan_command(command);
+    let scan = scan_command(command, None);
     let mut previous_downloads = false;
     for words in &scan.segments {
         let Some(program) = words.first().map(|word| program_name(word)) else {
@@ -627,7 +630,7 @@ fn git_high_risk(args: &[String]) -> Option<HighRiskCategory> {
 
 /// Returns whether one segment is a known read-only command.
 /// 返回一个片段是否为已知只读命令。
-fn segment_is_read_only(words: &[String]) -> bool {
+fn segment_is_read_only(words: &[String], shell: HostCommandShell) -> bool {
     let Some(first) = words.first() else {
         return true;
     };
@@ -636,18 +639,31 @@ fn segment_is_read_only(words: &[String]) -> bool {
     if first == READ_ONLY_GROUP_WORD {
         return words.len() == 1;
     }
+    // Explicit paths may name workspace-owned impostors; only high-risk matching strips paths.
+    // 显式路径可能指向工作区中的冒名程序；只有高风险匹配才去掉路径。
+    if first.contains(['/', '\\']) {
+        return false;
+    }
+    // cmd searches the working directory before PATH, so even bare external names are untrusted.
+    // cmd 先搜索当前目录再搜索 PATH，因此裸外部程序名同样不可信。
+    if shell == HostCommandShell::Cmd {
+        return CMD_READ_ONLY_BUILTINS.contains(&first.to_ascii_lowercase().as_str());
+    }
     // PowerShell variables: a lone `$name.Property` only yields its value, and `$name = <read-only>`
     // stores one; preference and scope-qualified variables change how later commands run.
     // PowerShell 变量：单独的 `$name.Property` 只产生其值，`$name = <只读命令>` 只保存一个值；
     // 偏好变量与带作用域的变量会改变之后命令的运行方式。
     if let Some(name) = first.strip_prefix('$') {
+        if !matches!(shell, HostCommandShell::Pwsh | HostCommandShell::Powershell) {
+            return false;
+        }
         if words.len() == 1 {
             return !name.contains('=');
         }
         return words[1] == "="
             && words.len() > 2
             && plain_variable_name(name)
-            && segment_is_read_only(&words[2..]);
+            && segment_is_read_only(&words[2..], shell);
     }
     // `NAME=value cmd` changes the environment of an arbitrary program; never read-only.
     // `NAME=value cmd` 改变任意程序的环境；绝不视为只读。
@@ -869,7 +885,7 @@ fn collapse_whitespace(text: &str) -> String {
 /// Any other shape, such as a method call, an index, or an unmatched bracket, returns `None` so the
 /// caller keeps treating the text as nested code.
 /// 其他形态（方法调用、索引或括号不匹配）返回 `None`，调用方继续将该文本视为嵌套代码。
-fn read_only_group_end(chars: &[char], open: usize) -> Option<usize> {
+fn read_only_group_end(chars: &[char], open: usize, shell: HostCommandShell) -> Option<usize> {
     let mut depth = 0usize;
     let mut quote: Option<char> = None;
     let mut close = None;
@@ -895,7 +911,7 @@ fn read_only_group_end(chars: &[char], open: usize) -> Option<usize> {
     }
     let close = close?;
     let inner: String = chars[open + 1..close].iter().collect();
-    if !is_known_read_only(&inner) {
+    if !is_known_read_only(&inner, shell) {
         return None;
     }
     let mut end = close + 1;
@@ -921,7 +937,7 @@ fn read_only_group_end(chars: &[char], open: usize) -> Option<usize> {
 
 /// Splits `command` at unquoted separators and records redirections and substitutions.
 /// 在未加引号的分隔符处切分 `command`，并记录重定向与命令替换。
-fn scan_command(command: &str) -> CommandScan {
+fn scan_command(command: &str, shell: Option<HostCommandShell>) -> CommandScan {
     let mut scan = CommandScan {
         segments: Vec::new(),
         writes_redirection: false,
@@ -939,6 +955,16 @@ fn scan_command(command: &str) -> CommandScan {
     };
     while index < chars.len() {
         let current = chars[index];
+        // Reject syntax whose quoting/expansion differs across shells instead of guessing its effects.
+        // 拒绝跨 shell 引号或展开语义不一致的语法，不猜测其影响。
+        if current == '\\' && matches!(chars.get(index + 1), Some('\'' | '"'))
+            || matches!(current, '\u{2018}'..='\u{201b}' | '\u{201c}'..='\u{201e}')
+            || current == '^' && quote.is_none()
+            || shell == Some(HostCommandShell::Cmd) && matches!(current, '%' | '!')
+            || shell == Some(HostCommandShell::Cmd) && current == '"' && words.is_empty()
+        {
+            scan.has_substitution = true;
+        }
         if let Some(open) = quote {
             if current == open {
                 quote = None;
@@ -954,9 +980,12 @@ fn scan_command(command: &str) -> CommandScan {
             continue;
         }
         match current {
-            '\'' | '"' => quote = Some(current),
+            '"' => quote = Some(current),
+            '\'' if shell != Some(HostCommandShell::Cmd) => quote = Some(current),
             '(' if word.is_empty() => {
-                if let Some(end) = read_only_group_end(&chars, index) {
+                if let Some(shell @ (HostCommandShell::Pwsh | HostCommandShell::Powershell)) = shell
+                    && let Some(end) = read_only_group_end(&chars, index, shell)
+                {
                     words.push(String::from(READ_ONLY_GROUP_WORD));
                     index = end;
                     continue;
@@ -998,7 +1027,7 @@ fn scan_command(command: &str) -> CommandScan {
                     target_end += 1;
                 }
                 let target: String = chars[target_start..target_end].iter().collect();
-                if !HARMLESS_REDIRECTION_TARGETS.contains(&target.to_lowercase().as_str()) {
+                if !read_only_redirection_target(&target, shell) {
                     scan.writes_redirection = true;
                 }
                 index = target_end;
@@ -1009,9 +1038,30 @@ fn scan_command(command: &str) -> CommandScan {
         }
         index += 1;
     }
+    // An unterminated quote is not evidence of a read-only command.
+    // 未闭合的引号不能作为只读命令的依据。
+    scan.has_substitution |= quote.is_some();
     finish_word(&mut word, &mut words);
     if !words.is_empty() {
         scan.segments.push(words);
     }
     scan
+}
+
+/// Returns whether `target` merges streams or discards output in the selected `shell`.
+/// 返回 `target` 是否在所选 `shell` 中合并流或丢弃输出。
+/// A sink spelling can create a normal file in another shell; unknown shells grant no sink.
+/// 丢弃目标的拼写在其他 shell 中可能创建普通文件；未知 shell 不认可丢弃目标。
+fn read_only_redirection_target(target: &str, shell: Option<HostCommandShell>) -> bool {
+    matches!(target, "&1" | "&2")
+        || match shell {
+            Some(HostCommandShell::Cmd) => target.eq_ignore_ascii_case("nul"),
+            Some(HostCommandShell::Pwsh | HostCommandShell::Powershell) => {
+                target.eq_ignore_ascii_case("$null")
+            }
+            Some(HostCommandShell::Bash | HostCommandShell::Zsh | HostCommandShell::Sh) => {
+                target == "/dev/null"
+            }
+            None => false,
+        }
 }

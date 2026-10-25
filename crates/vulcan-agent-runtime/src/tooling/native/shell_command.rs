@@ -273,6 +273,7 @@ pub(crate) fn shell_command_args_schema(shell_support: &HostCommandShellSupport)
             "shell": {
                 "type": "string",
                 "enum": shell_support.schema_shell_ids(),
+                "default": shell_support.auto_shell().map(|entry| entry.shell.id()),
                 "description": shell_support.schema_shell_description()
             }
         },
