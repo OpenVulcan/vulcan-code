@@ -10,6 +10,7 @@ import {
   pluginDetailMountIcon,
   primaryFeatureAreas as buildPrimaryFeatureAreas,
 } from "@/components/features/feature-shell";
+import { Variable } from "lucide-react";
 import { ActivityRail, type ActivityRailEntry } from "@/components/shell/activity-rail";
 import { CommandPalette } from "@/components/shell/command-palette";
 import { useNewConversationRequests } from "@/components/composer/composer-external-commands";
@@ -857,8 +858,9 @@ export function WorkbenchLayout(props: {
   // commandPaletteOpen says whether the command palette (Ctrl+K) is shown.
   // commandPaletteOpen 表示命令面板（Ctrl+K）是否显示。
   const [commandPaletteOpen, setCommandPaletteOpen] = React.useState(false);
-  // railEntries lists built-in areas first, then every enabled plugin detail page from the live catalog.
-  // railEntries 先列出内置区域，再列出实时目录中每个已启用的插件详情页。
+  // railEntries lists built-in areas first, then the environment variable page, then every enabled plugin
+  // detail page from the live catalog.
+  // railEntries 先列出内置区域，再列出环境变量页，然后是实时目录中每个已启用的插件详情页。
   const railEntries = React.useMemo<ActivityRailEntry[]>(() => {
     const builtIns = WORKSPACE_FEATURE_AREAS.map((area): ActivityRailEntry => ({
       id: area.id,
@@ -866,15 +868,30 @@ export function WorkbenchLayout(props: {
       icon: areaIconMap[area.id],
       active: activeArea === "chat" && workspaceMainView === area.id,
       onSelect: () => {
-        // Plugin detail pages own their rail entries, so the plugin entry itself opens plugin management.
-        // 插件详情页拥有各自的轨道入口，因此插件入口本身打开插件管理。
-        if (area.id === "skills" && isPluginDetailSubArea(activeWorkbenchSkillSubArea)) {
+        // Plugin detail pages and the environment variable page own their rail entries, so the plugin entry
+        // itself opens plugin management.
+        // 插件详情页与环境变量页拥有各自的轨道入口，因此插件入口本身打开插件管理。
+        if (area.id === "skills" && (isPluginDetailSubArea(activeWorkbenchSkillSubArea)
+          || activeWorkbenchSkillSubArea === "environment-variables")) {
           setActiveWorkbenchSkillSubArea("catalog");
         }
         handleSelectTopFeatureArea(area.id);
       },
     }));
-    const pluginPages = enabledPluginDetailMounts(workbenchState.plugins).map((selection): ActivityRailEntry => ({
+    // environmentVariables is a plugin management page that can be pinned like a plugin detail page.
+    // environmentVariables 是插件管理下的页面，可以像插件详情页一样固定到轨道。
+    const environmentVariables: ActivityRailEntry = {
+      id: "environment-variables",
+      label: i18n.t("environment.area"),
+      icon: <Variable size={17} />,
+      active: activeArea === "chat" && workspaceMainView === "skills" && activeWorkbenchSkillSubArea === "environment-variables",
+      parentId: "skills",
+      onSelect: () => {
+        setActiveWorkbenchSkillSubArea("environment-variables");
+        handleSelectTopFeatureArea("skills");
+      },
+    };
+    const pluginPages =enabledPluginDetailMounts(workbenchState.plugins).map((selection): ActivityRailEntry => ({
       id: selection.subAreaId,
       label: localizedPluginMountLabel(selection, i18n.locale),
       icon: pluginDetailMountIcon(selection.mount.icon),
@@ -885,7 +902,7 @@ export function WorkbenchLayout(props: {
         handleSelectTopFeatureArea("skills");
       },
     }));
-    return [...builtIns, ...pluginPages];
+    return [...builtIns, environmentVariables, ...pluginPages];
   }, [activeArea, activeWorkbenchSkillSubArea, handleSelectTopFeatureArea, i18n, workbenchState.plugins, workspaceMainView]);
   // Other surfaces, such as the memory page, open a prefilled conversation in the active project, or the
   // first project when none is active.
