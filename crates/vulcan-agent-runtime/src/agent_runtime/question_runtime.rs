@@ -26,7 +26,10 @@ use crate::agent_runtime::tool_runtime_bridge::{
 };
 
 mod approval;
+mod environment;
+use crate::tooling::native::EnvironmentValuesPrompt;
 pub use approval::{APPROVAL_ALLOW_LABEL, APPROVAL_DENY_LABEL, ApprovalAnswer, ToolApprovalPrompt};
+pub use environment::{ENVIRONMENT_DECLINED_LABEL, ENVIRONMENT_SAVED_LABEL};
 
 /// Fallible callback invoked whenever pending-question visibility changes.
 /// 待回答问题可见性变化时触发的可失败回调。
@@ -177,6 +180,33 @@ pub struct QuestionRequest {
     /// Permission facts when this request approves a gated tool call instead of asking questions.
     /// 当该请求审批受闸门管控的工具调用而非提问时，携带的权限事实。
     pub approval: Option<ToolApprovalPrompt>,
+    /// Requested variables when this request asks the user for environment values instead of
+    /// asking questions.
+    /// 当该请求向用户索取环境变量值而非提问时，携带的请求变量。
+    pub environment: Option<EnvironmentValuesPrompt>,
+}
+
+impl QuestionRequest {
+    /// Whether this request is a model question answered with labels; approvals and value
+    /// requests are host requests that the client answers through their own flows.
+    /// 该请求是否为以标签作答的模型提问；审批与取值请求是由客户端经各自流程作答的宿主请求。
+    pub fn is_model_question(&self) -> bool {
+        self.approval.is_none() && self.environment.is_none()
+    }
+}
+
+/// What one suspended request waits for; it selects how replies are validated and committed.
+/// 一条挂起请求等待的内容；它决定回复如何校验与提交。
+enum PendingRequestKind {
+    /// Model questions answered with option labels or free text.
+    /// 以选项标签或自由文本作答的模型提问。
+    Question,
+    /// A permission approval of one gated call.
+    /// 一次受管控调用的权限审批。
+    Approval(ToolApprovalPrompt),
+    /// A request for environment values.
+    /// 一次环境变量取值请求。
+    Environment(EnvironmentValuesPrompt),
 }
 
 /// Canonical reply payload returned to the model once the user has answered every pending question.
@@ -372,15 +402,16 @@ impl QuestionRuntime {
             tool_name,
             tool_arguments,
             questions,
-            None,
+            PendingRequestKind::Question,
         )
         .await
     }
 
     /// Registers one pending request, commits it as WaitingUser, and waits for the user.
     /// 注册一条待处理请求，可靠提交为 WaitingUser，并等待用户处理。
-    /// Shared by Ask and permission approvals; `approval` selects how replies are committed.
-    /// 由 Ask 与权限审批共用；`approval` 决定回复的提交方式。
+    /// Shared by Ask, permission approvals and value requests; `kind` selects how replies are
+    /// committed.
+    /// 由 Ask、权限审批与取值请求共用；`kind` 决定回复的提交方式。
     async fn suspend(
         self: &Arc<Self>,
         session_id: SessionId,
@@ -392,8 +423,13 @@ impl QuestionRuntime {
         tool_name: String,
         tool_arguments: Value,
         questions: Vec<QuestionPrompt>,
-        approval: Option<ToolApprovalPrompt>,
+        kind: PendingRequestKind,
     ) -> Result<QuestionReply, String> {
+        let (approval, environment) = match kind {
+            PendingRequestKind::Question => (None, None),
+            PendingRequestKind::Approval(prompt) => (Some(prompt), None),
+            PendingRequestKind::Environment(prompt) => (None, Some(prompt)),
+        };
         if tool_name.trim().is_empty() || tool_name.trim() != tool_name {
             return Err(String::from(
                 "The Ask tool name must be exact, non-empty, and free of surrounding whitespace.",
@@ -447,6 +483,7 @@ impl QuestionRuntime {
                 sequence,
                 questions,
                 approval,
+                environment,
             };
             pending.insert(request_id.clone(), PendingQuestionEntry { request, sender });
         }
@@ -548,6 +585,9 @@ impl QuestionRuntime {
             };
             let action = if request.approval.is_some() {
                 approval::validate_approval_answers(&reply.answers)?;
+                PendingQuestionDurabilityAction::Resumed { request }
+            } else if request.environment.is_some() {
+                environment::validate_environment_answers(&reply.answers)?;
                 PendingQuestionDurabilityAction::Resumed { request }
             } else {
                 let result = build_question_core_result(&request, &reply)?;
@@ -1978,6 +2018,7 @@ mod tests {
                         sequence: 1,
                         questions: Vec::new(),
                         approval: None,
+                        environment: None,
                     },
                     sender: reply_sender,
                 },
@@ -1998,6 +2039,7 @@ mod tests {
                         sequence: 2,
                         questions: Vec::new(),
                         approval: None,
+                        environment: None,
                     },
                     sender: reject_sender,
                 },
@@ -2088,6 +2130,7 @@ mod tests {
                         sequence: 1,
                         questions: Vec::new(),
                         approval: None,
+                        environment: None,
                     },
                     sender: reply_sender,
                 },
@@ -2108,6 +2151,7 @@ mod tests {
                         sequence: 2,
                         questions: Vec::new(),
                         approval: None,
+                        environment: None,
                     },
                     sender: reject_sender,
                 },

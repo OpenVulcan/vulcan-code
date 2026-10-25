@@ -77,6 +77,7 @@ impl CommandSessionRuntime {
                 rows: DEFAULT_PTY_SCREEN_ROWS,
             },
             &request.path_prefixes,
+            &request.environment,
         )
         .await?;
 
@@ -97,6 +98,7 @@ impl CommandSessionRuntime {
             interactive_newline: request.interactive_newline,
             cwd: request.cwd,
             backend: CommandSessionBackend::Pty,
+            environment_fingerprint: request.environment_fingerprint,
             control_sender,
             shared_state: Arc::clone(&shared_state),
         });

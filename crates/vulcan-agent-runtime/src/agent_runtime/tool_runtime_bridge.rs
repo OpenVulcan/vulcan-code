@@ -28,6 +28,23 @@ use vulcan_tools_manager::{
     VulcanToolInvocationResult, VulcanToolsManager,
 };
 
+/// One exact value removed from tool results, with the text that replaces it.
+/// 从工具结果中移除的一个精确值，以及替换它的文本。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SensitiveToolOutputValue {
+    /// Exact value to remove.
+    /// 需要移除的精确值。
+    pub(crate) value: String,
+    /// Text written in its place.
+    /// 写在其位置上的文本。
+    pub(crate) replacement: String,
+}
+
+/// Live registry of values removed from every tool result, longest value first so a value that
+/// contains another is replaced whole.
+/// 从每个工具结果中移除的值的实时注册表，按值从长到短排列，使包含另一值的值被整体替换。
+pub(crate) type SensitiveToolOutputValues = Arc<RwLock<Vec<SensitiveToolOutputValue>>>;
+
 /// Shared host-managed tool bridge that backs the host executor and `vulcan-core` host-side tool execution.
 /// 同时支撑宿主执行器与 `vulcan-core` 宿主侧工具执行的共享宿主管理工具桥接层。
 #[derive(Clone)]
@@ -43,7 +60,7 @@ pub struct VulcanManagedToolRuntimeBridge {
     session_id: SessionId,
     /// Live exact-value filter for host credentials before tool outputs reach Core persistence.
     /// 工具输出进入 Core 持久化前用于宿主凭据的实时精确值过滤器。
-    sensitive_tool_output_values: Option<Arc<RwLock<Vec<String>>>>,
+    sensitive_tool_output_values: Option<SensitiveToolOutputValues>,
     /// Execution mode label used by invocation-time Plan-mode guards.
     /// 调用期计划模式守卫使用的执行模式标签。
     execution_mode: String,
@@ -207,7 +224,7 @@ impl VulcanManagedToolRuntimeBridge {
     /// `values` 与服务引导共享；返回的桥对每个结果应用该过滤器。
     pub(crate) fn with_sensitive_tool_output_values(
         mut self,
-        values: Arc<RwLock<Vec<String>>>,
+        values: SensitiveToolOutputValues,
     ) -> Self {
         self.sensitive_tool_output_values = Some(values);
         self
@@ -229,7 +246,9 @@ impl VulcanManagedToolRuntimeBridge {
             message: String::from("Sensitive tool-output filter is unavailable."),
         })?;
         for secret in values.iter() {
-            result.model_output = result.model_output.replace(secret, "[redacted]");
+            result.model_output = result
+                .model_output
+                .replace(&secret.value, &secret.replacement);
         }
         if let Some(host_result) = result.host_result.as_mut() {
             redact_sensitive_json_strings(host_result, &values);
@@ -1097,11 +1116,11 @@ pub fn persistent_tool_output_from_result(
 ///
 /// `value` is mutated in place and `secrets` contains only bootstrap-registered host values.
 /// `value` 就地修改，`secrets` 仅包含引导阶段注册的宿主值。
-fn redact_sensitive_json_strings(value: &mut Value, secrets: &[String]) {
+fn redact_sensitive_json_strings(value: &mut Value, secrets: &[SensitiveToolOutputValue]) {
     match value {
         Value::String(text) => {
             for secret in secrets {
-                *text = text.replace(secret, "[redacted]");
+                *text = text.replace(&secret.value, &secret.replacement);
             }
         }
         Value::Array(items) => {

@@ -97,6 +97,13 @@ pub(super) fn native_plan_policy(descriptor: &NativeToolDescriptor) -> VulcanPla
             field: String::from("action"),
             allowed_values: vec![String::from("list"), String::from("stat")],
         }
+    } else if descriptor.id == crate::tooling::native::ENVIRONMENT_TOOL_ID {
+        // Plan mode only reads variables; setting or requesting them changes later commands.
+        // 计划模式只读取变量；设置或索取变量会改变后续命令。
+        VulcanPlanToolPolicy::StringArgumentAllowlist {
+            field: String::from("action"),
+            allowed_values: vec![String::from("list")],
+        }
     } else if descriptor.available_in_plan {
         VulcanPlanToolPolicy::Visible
     } else {

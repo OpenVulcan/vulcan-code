@@ -232,6 +232,7 @@ const TERMINAL_INTERRUPT_DRAIN_MAX_MS: u64 = 1_500;
 /// 合并相邻模型可见终端分片时使用的软字节限制。
 const TERMINAL_OUTPUT_CHUNK_COALESCE_SOFT_LIMIT_BYTES: usize = 2_048;
 mod apply_patch;
+mod environment;
 mod file;
 mod file_edit;
 mod file_read;
@@ -243,6 +244,15 @@ mod prompt_skill;
 mod registry;
 mod shell_command;
 pub(crate) use apply_patch::*;
+pub use environment::{
+    ENVIRONMENT_SECRET_REDACTION_MIN_CHARS, ENVIRONMENT_TOOL_ID,
+    ENVIRONMENT_VALUE_REQUEST_MAX_VARIABLES, EffectiveEnvironmentVariable, EnvironmentValueRequest,
+    EnvironmentValuesAnswer, EnvironmentValuesPrompt, EnvironmentVariableKind,
+    EnvironmentVariableLayer, NativeEnvironmentAccess, NativeEnvironmentHost,
+};
+pub(crate) use environment::{
+    build_environment_tool, child_process_environment, environment_fingerprint,
+};
 pub(crate) use file::*;
 pub(crate) use file_edit::*;
 pub(crate) use file_read::*;
@@ -379,6 +389,9 @@ pub struct NativeToolExecutionRequest {
     /// Optional host-injected V1 Goal domain port bound to this execution.
     /// 绑定到本次执行的可选宿主注入 V1 Goal 领域端口。
     pub goal_runtime: Option<Arc<dyn NativeGoalRuntime>>,
+    /// Optional Vulcan environment access; command tools inject its variables into children.
+    /// 可选的 Vulcan 环境变量访问；命令类工具将其变量注入子进程。
+    pub environment: Option<NativeEnvironmentAccess>,
     /// Optional project-authorized and session-enabled knowledge-library snapshot.
     /// 可选的项目授权且会话已启用知识库快照。
     pub knowledge_access: Option<ExecutionKnowledgeAccessContext>,
@@ -517,6 +530,7 @@ pub fn build_native_tool_catalog(
         build_create_goal_tool(),
         build_update_goal_tool(),
         build_declare_intent_tool(),
+        build_environment_tool(),
         build_knowledge_search_tool(),
         build_knowledge_list_tool(),
         build_knowledge_read_tool(),

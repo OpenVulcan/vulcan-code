@@ -132,6 +132,10 @@ pub(crate) async fn execute_terminal_session_start_action(
     let requested_shell_selector = normalize_shell_selector(parsed_args.shell.as_deref());
     validate_terminal_session_start_shell_policy(parsed_args.shell.as_deref(), &shell_behavior)?;
     let session_name = require_terminal_session_start_name(parsed_args.name.as_deref())?;
+    // The terminal keeps the variables it started with; `snapshot` reports later changes.
+    // 终端保留启动时的变量；之后的变化由 `snapshot` 报告。
+    let environment = child_process_environment(&request).await?;
+    let environment_fingerprint = environment_fingerprint(&environment);
     let snapshot = command_session_runtime
         .start_session(CommandSessionStartRequest {
             owner_session_id,
@@ -152,6 +156,8 @@ pub(crate) async fn execute_terminal_session_start_action(
             initial_stdin: None,
             initial_stdin_append_newline: false,
             backend: default_terminal_session_backend(),
+            environment,
+            environment_fingerprint,
         })
         .await
         .map_err(NativeToolError::new)?;

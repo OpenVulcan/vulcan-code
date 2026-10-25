@@ -365,55 +365,54 @@ impl McpServerConfig {
     /// Returns owned text with credential-bearing values replaced and remote URLs reduced to their public origin.
     /// 返回将含凭据值替换、并把远程 URL 收敛到公开源站后的自有文本。
     pub(crate) fn sanitize_diagnostic(&self, diagnostic: &str) -> String {
-        let (mut sanitized, sensitive_values) = match &self.transport {
-            McpServerTransportConfig::Stdio {
-                args,
-                env,
-                env_passthrough,
-                ..
-            } => {
-                let values = args
-                    .iter()
-                    .chain(env.values())
-                    .cloned()
-                    .chain(
-                        env_passthrough
-                            .iter()
-                            .filter_map(|name| std::env::var(name).ok()),
-                    )
-                    .collect::<Vec<_>>();
-                (diagnostic.to_string(), values)
-            }
-            McpServerTransportConfig::Http {
-                url,
-                bearer_token,
-                headers,
-                headers_from_env,
-                oauth,
-            }
-            | McpServerTransportConfig::Sse {
-                url,
-                bearer_token,
-                headers,
-                headers_from_env,
-                oauth,
-            } => {
-                let mut text = diagnostic.replace(url, &redacted_remote_endpoint(url));
-                let mut values = bearer_token.iter().cloned().collect::<Vec<_>>();
-                values.extend(headers.values().cloned());
-                values.extend(
-                    headers_from_env
-                        .values()
-                        .filter_map(|name| std::env::var(name).ok()),
-                );
-                if let Some(oauth) = oauth {
-                    values.extend(oauth.client_id.iter().cloned());
-                    values.extend(oauth.client_secret.iter().cloned());
-                    values.extend(oauth.redirect_uri.iter().cloned());
+        let (mut sanitized, sensitive_values) =
+            match &self.transport {
+                McpServerTransportConfig::Stdio {
+                    args,
+                    env,
+                    env_passthrough,
+                    ..
+                } => {
+                    let values = args
+                        .iter()
+                        .chain(env.values())
+                        .cloned()
+                        .chain(
+                            env_passthrough
+                                .iter()
+                                .filter_map(|name| std::env::var(name).ok()),
+                        )
+                        .collect::<Vec<_>>();
+                    (diagnostic.to_string(), values)
                 }
-                (std::mem::take(&mut text), values)
-            }
-        };
+                McpServerTransportConfig::Http {
+                    url,
+                    bearer_token,
+                    headers,
+                    headers_from_env,
+                    oauth,
+                }
+                | McpServerTransportConfig::Sse {
+                    url,
+                    bearer_token,
+                    headers,
+                    headers_from_env,
+                    oauth,
+                } => {
+                    let mut text = diagnostic.replace(url, &redacted_remote_endpoint(url));
+                    let mut values = bearer_token.iter().cloned().collect::<Vec<_>>();
+                    values.extend(headers.values().cloned());
+                    values.extend(headers_from_env.values().filter_map(|name| {
+                        super::environment_overlay::lookup_mcp_environment(name)
+                    }));
+                    if let Some(oauth) = oauth {
+                        values.extend(oauth.client_id.iter().cloned());
+                        values.extend(oauth.client_secret.iter().cloned());
+                        values.extend(oauth.redirect_uri.iter().cloned());
+                    }
+                    (std::mem::take(&mut text), values)
+                }
+            };
         // sensitive_values is longest-first so overlapping credentials cannot expose an unmatched suffix.
         // sensitive_values 按长度降序排列，防止重叠凭据暴露未匹配后缀。
         let mut sensitive_values = sensitive_values
@@ -429,16 +428,34 @@ impl McpServerConfig {
     }
 
     /// Resolves the effective child-process environment by merging explicit variables with optional host passthrough entries.
-    /// 通过合并显式变量与可选宿主透传项解析最终子进程环境变量集合。
+    /// A server that inherits the host environment also receives the global Vulcan variables;
+    /// explicit and passthrough entries win.
+    /// 通过合并显式变量与可选宿主透传项解析最终子进程环境变量集合。继承宿主环境的服务还会收到全局
+    /// Vulcan 变量；显式项与透传项优先。
     fn resolved_env(&self) -> BTreeMap<String, String> {
         match &self.transport {
             McpServerTransportConfig::Stdio {
                 env,
                 env_passthrough,
+                inherit_environment,
                 ..
-            } => Self::resolved_env_with_lookup(env, env_passthrough, |env_name| {
-                std::env::var(env_name).ok()
-            }),
+            } => {
+                let mut resolved =
+                    Self::resolved_env_with_lookup(env, env_passthrough, |env_name| {
+                        super::environment_overlay::lookup_mcp_environment(env_name)
+                    });
+                if *inherit_environment {
+                    for (name, value) in super::environment_overlay::mcp_environment_overlay() {
+                        let taken = resolved
+                            .keys()
+                            .any(|existing| existing.eq_ignore_ascii_case(&name));
+                        if !taken {
+                            resolved.insert(name, value);
+                        }
+                    }
+                }
+                resolved
+            }
             McpServerTransportConfig::Http { .. } | McpServerTransportConfig::Sse { .. } => {
                 BTreeMap::new()
             }
@@ -459,7 +476,7 @@ impl McpServerConfig {
                 headers_from_env,
                 ..
             } => Self::resolved_headers_with_lookup(headers, headers_from_env, |env_name| {
-                std::env::var(env_name).ok()
+                super::environment_overlay::lookup_mcp_environment(env_name)
             }),
             McpServerTransportConfig::Stdio { .. } => BTreeMap::new(),
         }

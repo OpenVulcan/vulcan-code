@@ -237,6 +237,8 @@ pub fn resolve_terminal_host_path() -> Result<PathBuf, String> {
 /// - `request`：精确的终端程序、参数、工作目录及初始尺寸。
 /// - `path_prefixes`: Ordered directories inherited by the isolated host and its terminal child.
 /// - `path_prefixes`：由隔离宿主及其终端子进程继承的有序目录。
+/// - `environment`: Extra variables inherited by the isolated host and its terminal child.
+/// - `environment`：由隔离宿主及其终端子进程继承的额外变量。
 ///
 /// # Returns / 返回值
 /// Returns owned host pipes only after receiving a valid `Started` event.
@@ -244,6 +246,7 @@ pub fn resolve_terminal_host_path() -> Result<PathBuf, String> {
 pub async fn spawn_terminal_host(
     request: TerminalHostStartRequest,
     path_prefixes: &[PathBuf],
+    environment: &[(String, String)],
 ) -> Result<TerminalHostConnection, String> {
     let host_path = resolve_terminal_host_path()?;
     let mut command =
@@ -264,6 +267,9 @@ pub async fn spawn_terminal_host(
             "VULCAN_HOME",
             crate::runtime_assets::native_host_path(&user_vulcan_root),
         );
+    }
+    for (name, value) in environment {
+        command.env(name, value);
     }
     apply_child_path_prefixes(&mut command, path_prefixes)?;
     let mut child = command.spawn().map_err(|error| {
@@ -395,6 +401,7 @@ mod tests {
                 rows: 24,
             },
             std::slice::from_ref(&temp_root),
+            &[],
         )
         .await
         .expect("start terminal host with PATH prefix");

@@ -9,6 +9,7 @@ impl TaskRuntime {
         Self {
             sensitive_tool_output_values: Arc::new(RwLock::new(Vec::new())),
             tool_permission_host: RwLock::new(None),
+            environment_host: RwLock::new(None),
             durable_return_mailboxes: RwLock::new(HashMap::new()),
             sessions: RwLock::new(HashMap::new()),
             backends: RwLock::new(HashMap::new()),
@@ -40,20 +41,75 @@ impl TaskRuntime {
                 "Sensitive tool-output value is too short to register.",
             ));
         }
+        self.insert_sensitive_tool_output_value(secret, String::from("[redacted]"))
+    }
+
+    /// Registers one secret environment value for tool-result redaction; results show
+    /// `[redacted:NAME]` in its place. Values shorter than
+    /// [`crate::tooling::native::ENVIRONMENT_SECRET_REDACTION_MIN_CHARS`] are skipped, since replacing them would mangle
+    /// ordinary output; returns whether the value is redacted.
+    /// 注册一个密钥环境变量值用于工具结果遮蔽；结果中以 `[redacted:NAME]` 代替它。短于
+    /// [`crate::tooling::native::ENVIRONMENT_SECRET_REDACTION_MIN_CHARS`] 的值会跳过，因为替换它们会破坏普通输出；返回该值是否被遮蔽。
+    pub fn register_environment_secret(&self, name: &str, value: &str) -> Result<bool, String> {
+        if value.chars().count() < crate::tooling::native::ENVIRONMENT_SECRET_REDACTION_MIN_CHARS {
+            return Ok(false);
+        }
+        self.insert_sensitive_tool_output_value(value.to_string(), format!("[redacted:{name}]"))?;
+        Ok(true)
+    }
+
+    /// Adds one value unless it is already registered, keeping the longest values first.
+    /// 添加一个尚未注册的值，并保持最长的值在前。
+    fn insert_sensitive_tool_output_value(
+        &self,
+        value: String,
+        replacement: String,
+    ) -> Result<(), String> {
         let mut values = self
             .sensitive_tool_output_values
             .write()
             .map_err(|_| String::from("Sensitive tool-output registry is unavailable."))?;
-        if !values.contains(&secret) {
-            values.push(secret);
+        if !values.iter().any(|existing| existing.value == value) {
+            values.push(SensitiveToolOutputValue { value, replacement });
+            values.sort_by_key(|existing| std::cmp::Reverse(existing.value.len()));
         }
         Ok(())
     }
 
     /// Shares the live redaction registry with the host tool bridge for this runtime generation.
     /// 与当前运行世代的宿主工具桥共享实时遮蔽注册表。
-    pub(crate) fn sensitive_tool_output_values(&self) -> Arc<RwLock<Vec<String>>> {
+    pub(crate) fn sensitive_tool_output_values(&self) -> SensitiveToolOutputValues {
         Arc::clone(&self.sensitive_tool_output_values)
+    }
+
+    /// Installs the service kernel's environment host; later tool bridges hand it to native tools.
+    /// 安装服务内核的环境变量宿主；之后构建的工具桥把它交给原生工具。
+    pub fn set_environment_host(
+        &self,
+        host: Arc<dyn crate::tooling::native::NativeEnvironmentHost>,
+    ) {
+        // The slot only holds an `Arc`, so a poisoned lock still carries a consistent value.
+        // 该槽位只保存 `Arc`，因此锁中毒后其值仍然一致。
+        *self
+            .environment_host
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(host);
+    }
+
+    /// Returns the environment access handed to native tools, or `None` without a host.
+    /// 返回交给原生工具的环境变量访问；没有宿主时返回 `None`。
+    pub(crate) fn native_environment_access(
+        self: &Arc<Self>,
+    ) -> Option<crate::tooling::native::NativeEnvironmentAccess> {
+        let host = self
+            .environment_host
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()?;
+        Some(crate::tooling::native::NativeEnvironmentAccess::new(
+            host,
+            Arc::downgrade(self),
+        ))
     }
 
     /// Installs the service kernel's permission host; later tool bridges consult it per call.

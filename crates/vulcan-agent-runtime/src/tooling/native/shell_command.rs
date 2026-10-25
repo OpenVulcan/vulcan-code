@@ -79,6 +79,10 @@ pub(crate) struct ShellCommandProcessOptions {
     /// Exact environment contributions keyed by variable name.
     /// 以变量名为键的精确环境贡献。
     environment: BTreeMap<String, String>,
+    /// Vulcan environment variables of the session, applied before hook contributions so an
+    /// explicit hook value wins.
+    /// 会话的 Vulcan 环境变量，先于 Hook 贡献应用，使显式 Hook 值优先。
+    vulcan_environment: Vec<(String, String)>,
 }
 
 /// One generic user-visible display contribution returned by a shell transform hook.
@@ -399,6 +403,9 @@ fn apply_shell_command_process_options(
         );
     }
 
+    for (name, value) in &process_options.vulcan_environment {
+        command.env(name, value);
+    }
     for (name, value) in &process_options.environment {
         command.env(name, value);
     }
@@ -459,6 +466,7 @@ async fn apply_shell_command_plugin_hooks(
             ShellCommandProcessOptions {
                 path_prefixes: host_path_prefixes,
                 environment: BTreeMap::new(),
+                vulcan_environment: Vec::new(),
             },
             ShellCommandHookReport {
                 original_command: parsed_args.command.clone(),
@@ -566,6 +574,7 @@ async fn apply_shell_command_plugin_hooks(
         ShellCommandProcessOptions {
             path_prefixes,
             environment: transformed.environment,
+            vulcan_environment: Vec::new(),
         },
         ShellCommandHookReport {
             original_command: parsed_args.command.clone(),
@@ -1195,6 +1204,7 @@ pub(crate) async fn execute_shell_command_tool(
     shell_support: &HostCommandShellSupport,
     plugin_runtime: Option<&vulcan_plugin_runtime::VulcanPluginRuntimeManager>,
 ) -> Result<VulcanToolInvocationResult, NativeToolError> {
+    let vulcan_environment = child_process_environment(&request).await?;
     let parsed_args = parse_shell_command_tool_arguments(request.arguments)?;
     let effective_cwd = resolve_shell_command_working_directory(
         request.workspace_root.as_deref(),
@@ -1206,7 +1216,7 @@ pub(crate) async fn execute_shell_command_tool(
         &effective_cwd,
     );
     let session_id = request.session_id;
-    let (effective_args, process_options, hook_report) = apply_shell_command_plugin_hooks(
+    let (effective_args, mut process_options, hook_report) = apply_shell_command_plugin_hooks(
         &parsed_args,
         &effective_cwd,
         request.workspace_root.as_deref(),
@@ -1214,6 +1224,7 @@ pub(crate) async fn execute_shell_command_tool(
         plugin_runtime,
     )
     .await?;
+    process_options.vulcan_environment = vulcan_environment;
 
     let execution_report = execute_shell_command_process(
         &effective_args,
@@ -1573,6 +1584,7 @@ mod process_option_tests {
         let process_options = ShellCommandProcessOptions {
             path_prefixes: vec![temp.path().to_path_buf()],
             environment: BTreeMap::new(),
+            vulcan_environment: Vec::new(),
         };
         // report captures the real child-shell lookup result using only the injected PATH prefix.
         // report 捕获仅使用注入 PATH 前缀时真实子 Shell 的查找结果。

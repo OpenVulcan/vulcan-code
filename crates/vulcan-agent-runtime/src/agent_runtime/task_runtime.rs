@@ -22,8 +22,8 @@ use crate::agent_runtime::runtime_stream_bootstrap::bootstrap_runtime_stream;
 use crate::agent_runtime::runtime_stream_driver_loop::drive_runtime_stream_provider_loop;
 use crate::agent_runtime::runtime_stream_launch_payload::build_runtime_stream_launch_payload;
 use crate::agent_runtime::tool_runtime_bridge::{
-    attach_runtime_event_projection_barrier, cancel_runtime_event_projection_barrier,
-    wait_runtime_event_projection_barrier,
+    SensitiveToolOutputValue, SensitiveToolOutputValues, attach_runtime_event_projection_barrier,
+    cancel_runtime_event_projection_barrier, wait_runtime_event_projection_barrier,
 };
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 #[cfg(test)]
@@ -1077,9 +1077,13 @@ impl CloseAgentArchiveFailure {
 /// Host-managed registry for resumable task sessions and per-session task execution backends.
 /// 宿主管理的可恢复任务会话与按会话划分任务执行后端的注册表。
 pub struct TaskRuntime {
-    /// Exact host credentials that must be removed before any tool result reaches a model or durable history.
-    /// 工具结果到达模型或可靠历史前必须移除的精确宿主凭据。
-    sensitive_tool_output_values: Arc<RwLock<Vec<String>>>,
+    /// Exact host credentials and secret environment values that must be removed before any tool
+    /// result reaches a model or durable history.
+    /// 工具结果到达模型或可靠历史前必须移除的精确宿主凭据与密钥环境变量值。
+    sensitive_tool_output_values: SensitiveToolOutputValues,
+    /// Environment host installed once by the service kernel; absent in embedded runtimes.
+    /// 由服务内核安装一次的环境变量宿主；嵌入式运行时中缺省。
+    environment_host: RwLock<Option<Arc<dyn crate::tooling::native::NativeEnvironmentHost>>>,
     /// Permission host installed once by the service kernel; absent in embedded runtimes.
     /// 由服务内核安装一次的权限宿主；嵌入式运行时中缺省。
     tool_permission_host:

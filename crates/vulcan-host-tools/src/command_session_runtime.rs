@@ -510,6 +510,9 @@ pub struct CommandSessionSnapshot {
     /// Concrete host I/O backend used by this command session.
     /// 该命令会话使用的具体宿主 I/O 后端。
     pub backend: CommandSessionBackend,
+    /// Fingerprint of the Vulcan environment injected at start; empty when none was injected.
+    /// 启动时注入的 Vulcan 环境指纹；未注入时为空。
+    pub environment_fingerprint: String,
     /// Current command-session lifecycle status.
     /// 当前命令会话生命周期状态。
     pub status: CommandSessionStatus,
@@ -636,6 +639,12 @@ pub struct CommandSessionStartRequest {
     /// Requested host I/O backend for this command session.
     /// 本命令会话请求使用的宿主 I/O 后端。
     pub backend: CommandSessionBackend,
+    /// Extra variables set in the terminal host and so inherited by the terminal child.
+    /// 设置在终端宿主中、因而由终端子进程继承的额外变量。
+    pub environment: Vec<(String, String)>,
+    /// Fingerprint of the Vulcan environment injected at start; empty when none was injected.
+    /// 启动时注入的 Vulcan 环境指纹；未注入时为空。
+    pub environment_fingerprint: String,
 }
 
 mod pty;
@@ -747,6 +756,9 @@ struct CommandSessionRecord {
     /// Concrete host I/O backend used by this command session.
     /// 该命令会话使用的具体宿主 I/O 后端。
     backend: CommandSessionBackend,
+    /// Fingerprint of the Vulcan environment injected at start; empty when none was injected.
+    /// 启动时注入的 Vulcan 环境指纹；未注入时为空。
+    environment_fingerprint: String,
     /// Shared sender used to control the background process supervisor.
     /// 用于控制后台进程监管器的共享发送端。
     control_sender: Sender<CommandSessionControlMessage>,
@@ -782,6 +794,7 @@ impl CommandSessionRecord {
             launcher_shell_label: self.launcher_shell_label.clone(),
             cwd: self.cwd.clone(),
             backend: self.backend,
+            environment_fingerprint: self.environment_fingerprint.clone(),
             status: CommandSessionStatus::Running,
             exit_code: None,
             failure_reason: None,
@@ -809,6 +822,7 @@ impl CommandSessionRecord {
             launcher_shell_label: self.launcher_shell_label.clone(),
             cwd: self.cwd.clone(),
             backend: self.backend,
+            environment_fingerprint: self.environment_fingerprint.clone(),
             status: state.status,
             exit_code: state.exit_code,
             failure_reason: state.failure_reason.clone(),

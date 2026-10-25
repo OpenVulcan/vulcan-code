@@ -2,6 +2,7 @@
 //! 面向 compose 运行时基础架构的 MCP 配置与注册表胶水层。
 
 pub mod config;
+mod environment_overlay;
 mod oauth_credentials;
 mod plugin;
 pub mod registry;
@@ -11,6 +12,7 @@ pub use config::{
     McpServerConfig, McpServerOAuthConfig, McpServerSource, McpServerTransportConfig,
     McpTransportKind, runtime_mcp_server_configs,
 };
+pub use environment_overlay::publish_mcp_environment_overlay;
 pub use oauth_credentials::{install_mcp_oauth_credential_backend, mcp_oauth_credential_backend};
 // Re-exported so hosts drive OAuth through this crate without depending on the transport crate.
 // 重新导出，使宿主通过本 crate 驱动 OAuth，而无需依赖传输 crate。

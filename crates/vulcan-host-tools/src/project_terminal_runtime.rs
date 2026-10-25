@@ -599,6 +599,7 @@ impl ProjectTerminalRuntime {
                 rows: request.rows,
             },
             &[],
+            &[],
         )
         .await?;
         let terminal_id = Uuid::new_v4();

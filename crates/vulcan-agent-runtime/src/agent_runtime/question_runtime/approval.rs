@@ -92,7 +92,7 @@ impl QuestionRuntime {
             tool_name,
             tool_arguments,
             vec![question],
-            Some(prompt),
+            PendingRequestKind::Approval(prompt),
         );
         tokio::pin!(waiting);
         let mut expired = false;

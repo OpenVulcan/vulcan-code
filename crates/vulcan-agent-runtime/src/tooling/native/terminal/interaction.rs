@@ -49,9 +49,42 @@ pub(crate) async fn execute_terminal_session_read_like_action(
         )
         .await?
     };
+    let environment_changed = if matches!(action, TerminalSessionToolAction::Snapshot) {
+        let current = child_process_environment(&request).await?;
+        environment_fingerprint(&current) != wait_result.snapshot.environment_fingerprint
+    } else {
+        false
+    };
     let session_name = terminal_session_name_for_snapshot(&wait_result.snapshot);
     let returned_chunks = coalesce_terminal_output_chunks(wait_result.returned_chunks.clone());
     let (output_mode, confidence, reason) = detect_terminal_output_mode(&returned_chunks);
+    let mut notes = vec![
+        format!(
+            "Wait mode: {}",
+            terminal_wait_mode(parsed_args.wait_policy.as_ref()).as_str()
+        ),
+        format!("Wait elapsed: {} ms", wait_result.elapsed_ms),
+        format!(
+            "Pattern matched: {}",
+            wait_result
+                .pattern_matched
+                .map(|matched| matched.to_string())
+                .unwrap_or_else(|| String::from("n/a"))
+        ),
+        format!(
+            "Quiet observed: {}",
+            wait_result
+                .quiet_observed
+                .map(|observed| observed.to_string())
+                .unwrap_or_else(|| String::from("n/a"))
+        ),
+    ];
+    if environment_changed {
+        notes.push(String::from(
+            "Environment changed: the Vulcan environment variables differ from those this terminal \
+             started with. Stop and start the terminal to apply them.",
+        ));
+    }
     let render_input = build_terminal_session_render_input(
         action,
         &wait_result.snapshot,
@@ -59,27 +92,7 @@ pub(crate) async fn execute_terminal_session_read_like_action(
         &returned_chunks,
         wait_result.has_more,
         output_mode,
-        vec![
-            format!(
-                "Wait mode: {}",
-                terminal_wait_mode(parsed_args.wait_policy.as_ref()).as_str()
-            ),
-            format!("Wait elapsed: {} ms", wait_result.elapsed_ms),
-            format!(
-                "Pattern matched: {}",
-                wait_result
-                    .pattern_matched
-                    .map(|matched| matched.to_string())
-                    .unwrap_or_else(|| String::from("n/a"))
-            ),
-            format!(
-                "Quiet observed: {}",
-                wait_result
-                    .quiet_observed
-                    .map(|observed| observed.to_string())
-                    .unwrap_or_else(|| String::from("n/a"))
-            ),
-        ],
+        notes,
     );
     let budget = default_shell_command_budget_snapshot();
     let host_payload = build_terminal_session_host_payload(
@@ -100,6 +113,7 @@ pub(crate) async fn execute_terminal_session_read_like_action(
             "pattern_matched": wait_result.pattern_matched,
             "quiet_observed": wait_result.quiet_observed,
             "snapshot_advanced_ai_cursor": !matches!(action, TerminalSessionToolAction::Snapshot),
+            "environment_changed": environment_changed,
         }),
     );
     let model_output = render_tool_result_text(
