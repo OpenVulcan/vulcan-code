@@ -102,3 +102,11 @@ pre.vk-ask-subject { flex: none; max-height: 10rem; min-height: 0; margin: 0; ov
 .vk-ask-confirm small { display: block; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); line-height: 1.4; }
 .vk-ask-actions { display: flex; flex: none; align-items: center; justify-content: flex-end; gap: calc(var(--vk-u) * 1.5); }
 .vk-ask-actions .vk-kbd { height: 1.15rem; font-size: var(--vk-fs-2xs); }
+
+/* Environment value requests list one masked field per variable; the list scrolls inside the panel. */
+/* 环境变量取值请求为每个变量列出一个遮蔽输入框；列表在面板内滚动。 */
+.vk-ask-env-fields { display: grid; flex: 1; gap: calc(var(--vk-u) * 3); min-height: 0; overflow-y: auto; padding-right: calc(var(--vk-u) * 1); overscroll-behavior: contain; }
+.vk-ask-env-field { display: grid; gap: calc(var(--vk-u) * 1); }
+.vk-ask-env-name { font-family: var(--vk-font-mono); font-weight: 600; overflow-wrap: anywhere; }
+.vk-ask-env-controls { display: grid; grid-template-columns: minmax(0, 1fr) 9rem; align-items: center; gap: calc(var(--vk-u) * 1.5); }
+.vk-ask-env-controls > [role="combobox"] { width: 100%; }

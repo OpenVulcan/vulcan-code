@@ -32,6 +32,9 @@ export function activeSkillHeaderSummary(
   if (activeTab === "knowledge") {
     return { title: t("area.knowledge"), detail: t("area.knowledge.description") }
   }
+  if (activeTab === "environment-variables") {
+    return { title: t("environment.area"), detail: t("environment.area.description") }
+  }
   if (activeTab === "plugin-maintenance") {
     return { title: t("skills.navigation.pluginMaintenance"), detail: t("pluginMaintenance.description") }
   }

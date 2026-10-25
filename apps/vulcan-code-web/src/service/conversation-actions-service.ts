@@ -5,6 +5,7 @@ import type {
   ComposerAttachmentSummary,
   PendingPromptEditOutcome,
   ContextCompactionWindowNodeId,
+  EnvironmentValuesSubmitRequest,
   SessionAddonsChangedResponse,
   SessionGoalUserStatusUpdate,
   SubagentPanelRouteResponse,
@@ -728,6 +729,15 @@ export async function rejectPendingQuestion(requestId: string): Promise<boolean>
     return false;
   }
   return serviceClient.request<boolean>("service_reject_pending_question", { requestId });
+}
+
+// submitEnvironmentValues stores the values entered for one value request, or declines it.
+// submitEnvironmentValues 保存为一条取值请求输入的值，或拒绝该请求。
+export async function submitEnvironmentValues(request: EnvironmentValuesSubmitRequest): Promise<boolean> {
+  if (!hasServiceRuntime()) {
+    return false;
+  }
+  return serviceClient.request<boolean>("service_submit_environment_values", { request });
 }
 
 // openSubagentPanel asks the backend for one child-task transcript route response.

@@ -28,7 +28,7 @@ function request(id = "ask-1", multiple = false): PendingQuestionSnapshot {
 // mount renders the production component and callbacks; returns after React commits.
 // mount 渲染生产组件及回调；在 React 提交后返回。
 async function mount(snapshot: PendingQuestionSnapshot, submit: (id: string, answers: string[][]) => Promise<void>, reject = async (_id: string) => {}) {
-  await act(async () => root.render(<I18nProvider initialLocale="zh-CN"><AskQuestionDialog request={snapshot} onSubmit={submit} onReject={reject} /></I18nProvider>));
+  await act(async () => root.render(<I18nProvider initialLocale="zh-CN"><AskQuestionDialog request={snapshot} onSubmit={submit} onReject={reject} onSubmitEnvironment={async () => {}} /></I18nProvider>));
 }
 
 // button finds a visible action by its text; missing controls fail the test immediately.

@@ -80,6 +80,41 @@ export interface PendingQuestionSnapshot {
   // Permission facts when this request is a tool-call approval instead of an ask.
   // 当该请求是工具调用审批而非提问时的权限事实。
   approval?: PendingApprovalSnapshot | null;
+  // Requested variables when this request asks for environment values instead of an answer.
+  // 当该请求索取环境变量值而非回答时的请求变量。
+  environment?: PendingEnvironmentRequestSnapshot | null;
+}
+
+// PendingEnvironmentRequestSnapshot describes one pending request for environment values.
+// PendingEnvironmentRequestSnapshot 描述一条待处理环境变量取值请求。
+export interface PendingEnvironmentRequestSnapshot {
+  // Why the agent needs the values.
+  // 代理需要这些值的原因。
+  purpose: string;
+  // Requested variables in the agent's order.
+  // 按代理顺序排列的请求变量。
+  variables: PendingEnvironmentVariableRequest[];
+  // Whether the session belongs to a project, so the project scope can be chosen.
+  // 会话是否属于项目，从而可选择项目作用域。
+  projectAvailable: boolean;
+}
+
+// EnvironmentValueScope is where one entered value is stored.
+// EnvironmentValueScope 是一个输入值的存储位置。
+export type EnvironmentValueScope = "session" | "project" | "global";
+
+// PendingEnvironmentVariableRequest describes one requested variable.
+// PendingEnvironmentVariableRequest 描述一个请求的变量。
+export interface PendingEnvironmentVariableRequest {
+  name: string;
+  description: string;
+  secret: boolean;
+  // Scope the agent suggests.
+  // 代理建议的作用域。
+  scope: EnvironmentValueScope;
+  // Whether the system environment of the Vulcan service already defines the name.
+  // Vulcan 服务的系统环境是否已定义该名称。
+  definedBySystem: boolean;
 }
 
 // PendingApprovalSnapshot describes the permission facts of one gated tool call.

@@ -2,6 +2,7 @@ import { useI18n } from "@/i18n"
 import { PageEmptyState } from "@/components/page"
 import type { WorkbenchSnapshot } from "@/types"
 import { DynamicPluginMountPanel } from "@/components/plugins/dynamic-plugin-mount-panel"
+import { EnvironmentVariablesArea } from "@/components/features/environment/environment-variables-area"
 import { KnowledgeBaseArea } from "@/components/features/knowledge/knowledge-base-area"
 import { McpSettingsArea } from "@/components/features/settings/mcp-settings-area"
 
@@ -76,6 +77,12 @@ export function SkillsArea(props: {
         <McpSettingsArea actions={props.skillActions} servers={props.workbench.mcpServers ?? []} onOpenDiagnostics={props.onOpenDiagnostics} />
       ) : props.activeTab === "knowledge" ? (
         <KnowledgeBaseArea projects={props.workbench.projects} />
+      ) : props.activeTab === "environment-variables" ? (
+        <EnvironmentVariablesArea
+          conversations={props.workbench.conversations}
+          projects={props.workbench.projects}
+          selectedConversationId={props.workbench.selectedConversationId}
+        />
       ) : null}
       {pluginSelection ? (
         <div key={pluginSelection.subAreaId}>

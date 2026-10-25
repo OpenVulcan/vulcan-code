@@ -1,0 +1,37 @@
+/* Environment variable manager: stored and session variable lists, and the variable editor. Loaded only */
+/* with the plugins area page. */
+/* 环境变量管理器：已存储与会话变量列表，以及变量编辑器。仅随插件区页面加载。 */
+.vk-env-mono { font-family: var(--vk-font-mono); overflow-wrap: anywhere; }
+.vk-env-meta { display: inline-flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 2); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-env-value {
+  display: block;
+  max-width: 100%;
+  margin-top: calc(var(--vk-u) * 1);
+  overflow: hidden;
+  color: var(--vk-ink-2);
+  font-family: var(--vk-font-mono);
+  font-size: var(--vk-fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vk-env-value[data-secret] { color: var(--vk-ink-3); letter-spacing: 0.1em; }
+.vk-env-session-pick { min-width: 12rem; max-width: 20rem; }
+
+.vk-env-form { display: grid; gap: calc(var(--vk-u) * 4); }
+.vk-env-block { display: grid; gap: calc(var(--vk-u) * 2); min-width: 0; }
+.vk-env-block-title { font-size: var(--vk-fs-md); font-weight: 600; color: var(--vk-ink); }
+.vk-env-note { margin: 0; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); line-height: var(--vk-lh-ui); }
+.vk-env-note[data-tone="warn"] { color: var(--vk-warn); }
+
+.vk-env-checklist {
+  display: grid;
+  gap: calc(var(--vk-u) * 2);
+  max-height: 16rem;
+  overflow: auto;
+  padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3);
+  border: var(--vk-bw) solid var(--vk-line-soft);
+  background: var(--vk-sunken);
+}
+.vk-env-check { display: flex; align-items: flex-start; gap: calc(var(--vk-u) * 2); color: var(--vk-ink); font-size: var(--vk-fs-sm); cursor: pointer; }
+.vk-env-check > span { display: grid; gap: 2px; min-width: 0; }
+.vk-env-check small { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); overflow-wrap: anywhere; }

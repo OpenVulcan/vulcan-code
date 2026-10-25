@@ -19,10 +19,12 @@ import {
 } from "@/ui-kit/primitives/tooltip";
 import { useI18n, type TranslationKey } from "@/i18n";
 import type {
+  EnvironmentValuesSubmitRequest,
   PendingQuestionOptionSummary,
   PendingQuestionPromptSummary,
   PendingQuestionSnapshot,
 } from "@/types";
+import { EnvironmentValuesRequest } from "./environment-values-request";
 import { AskRequesterLine, ToolApprovalRequest } from "./tool-approval-bar";
 import { useAskAnchorStyle } from "./use-ask-anchor-style";
 
@@ -45,6 +47,9 @@ interface AskQuestionDialogProps {
   // Called when the user submits all validated answers.
   // 用户提交全部校验后的答案时调用。
   onSubmit: (requestId: string, answers: string[][]) => Promise<void>;
+  // Called when the user stores or declines the values of an environment value request.
+  // 用户存储或拒绝环境变量取值请求的值时调用。
+  onSubmitEnvironment: (request: EnvironmentValuesSubmitRequest) => Promise<void>;
 }
 
 // AskQuestionDraft stores one editable answer draft.
@@ -92,11 +97,23 @@ interface AskQuestionOptionDescriptor {
   option: PendingQuestionOptionSummary | null;
 }
 
-// AskQuestionDialog renders a blocking ask request or tool-call approval as a compact session bar.
-// AskQuestionDialog 将阻塞式 ask 请求或工具调用审批渲染为紧凑会话面板。
+// AskQuestionDialog renders a blocking ask request, tool-call approval or environment value request as a compact session bar.
+// AskQuestionDialog 将阻塞式 ask 请求、工具调用审批或环境变量取值请求渲染为紧凑会话面板。
 export function AskQuestionDialog(props: AskQuestionDialogProps) {
   if (!props.request) {
     return null;
+  }
+  if (props.request.environment) {
+    return (
+      <EnvironmentValuesRequest
+        environment={props.request.environment}
+        key={props.request.id}
+        onReject={props.onReject}
+        onSubmit={props.onSubmitEnvironment}
+        request={props.request}
+        requester={props.requester}
+      />
+    );
   }
   return props.request.approval
     ? <ToolApprovalRequest key={props.request.id} {...props} approval={props.request.approval} request={props.request} />

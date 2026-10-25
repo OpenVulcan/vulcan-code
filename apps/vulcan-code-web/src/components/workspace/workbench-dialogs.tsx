@@ -189,6 +189,9 @@ export interface WorkbenchDialogsProps {
   // Submits answers for the pending ask-tool request.
   // 提交当前待处理 ask 工具请求的答案。
   onSubmitPendingQuestion: React.ComponentProps<typeof AskQuestionDialog>["onSubmit"];
+  // Stores or declines the values of a pending environment value request.
+  // 存储或拒绝待处理环境变量取值请求的值。
+  onSubmitPendingEnvironment: React.ComponentProps<typeof AskQuestionDialog>["onSubmitEnvironment"];
 }
 
 // WorkbenchDialogs renders the globally mounted modal layer for the workbench.
@@ -255,6 +258,7 @@ export function WorkbenchDialogs(props: WorkbenchDialogsProps) {
         requester={props.pendingQuestionRequester}
         onReject={props.onRejectPendingQuestion}
         onSubmit={props.onSubmitPendingQuestion}
+        onSubmitEnvironment={props.onSubmitPendingEnvironment}
       />
       <StopConversationRunDialog
         agents={props.stopConversationAgents}

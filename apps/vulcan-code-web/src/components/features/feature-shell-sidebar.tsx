@@ -10,6 +10,7 @@ import {
   Puzzle,
   Route,
   Settings,
+  Variable,
   Wrench,
 } from "lucide-react"
 
@@ -325,6 +326,7 @@ function featureSidebarRows(
       { id: "luaskills-settings", label: t("skills.navigation.luaSettings"), detail: workbench.luaSkills.notice, icon: <Settings size={16} /> },
       { id: "mcp-servers", label: t("settings.mcpServers"), detail: t("settings.mcpServers.description"), icon: <Plug size={16} /> },
       { id: "knowledge", label: t("area.knowledge"), detail: t("area.knowledge.description"), icon: <BookMarked size={16} /> },
+      { id: "environment-variables", label: t("environment.area"), detail: t("environment.area.description"), icon: <Variable size={16} /> },
       { id: "luaskills-plugins", label: t("skills.navigation.plugins"), detail: formatSkillText(t("skills.sidebar.pluginDetail"), { count: workbench.plugins.filter((plugin) => plugin.managementKind === "vulcanPlugin").length }), icon: <Puzzle size={16} /> },
       { id: "luaskills-plugin-maintenance", label: t("skills.navigation.pluginMaintenance"), detail: t("pluginMaintenance.description"), icon: <Wrench size={16} /> },
       ...pluginRows,
@@ -384,7 +386,7 @@ function skillSidebarRowToSubArea(rowId: string): SkillSubAreaId | null {
   if (rowId === "luaskills-plugin-maintenance") {
     return "plugin-maintenance"
   }
-  if (rowId === "mcp-servers" || rowId === "knowledge") {
+  if (rowId === "mcp-servers" || rowId === "knowledge" || rowId === "environment-variables") {
     return rowId
   }
   if (rowId.startsWith("plugin:")) {

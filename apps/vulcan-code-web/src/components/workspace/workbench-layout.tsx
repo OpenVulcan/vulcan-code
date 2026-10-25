@@ -103,10 +103,12 @@ import type {
   StartupSnapshot,
   WorkbenchSnapshot,
   MediaUploadProgressChangedDelta,
+  EnvironmentValuesSubmitRequest,
 } from "@/types";
 import {
   rejectPendingQuestion,
   replyPendingQuestion,
+  submitEnvironmentValues,
   stageComposerAttachmentBytes,
 } from "@/service/conversation-actions-service";
 import {
@@ -1023,10 +1025,12 @@ export function WorkbenchLayout(props: {
     applyLifecycleResponseSnapshot,
   });
 
-  // approvalRequestId names the pending tool approval; its outcome shows on the resumed tool card and the session
-  // state, so only ask answers are acknowledged with a toast.
-  // approvalRequestId 标识待处理的工具审批；其结果体现在恢复的工具卡与会话状态上，因此只有 ask 回答才以提示确认。
-  const approvalRequestId = workbenchState.pendingQuestion?.approval ? workbenchState.pendingQuestion.id : null;
+  // approvalRequestId names the pending tool approval or value request; its outcome shows on the resumed tool card
+  // and the session state, so only ask answers are acknowledged with a toast.
+  // approvalRequestId 标识待处理的工具审批或取值请求；其结果体现在恢复的工具卡与会话状态上，因此只有 ask 回答才以提示确认。
+  const approvalRequestId = workbenchState.pendingQuestion?.approval || workbenchState.pendingQuestion?.environment
+    ? workbenchState.pendingQuestion.id
+    : null;
 
   // handlePendingQuestionSubmit resumes a blocked ask tool call with validated modal answers.
   // handlePendingQuestionSubmit 使用弹窗校验后的答案恢复被阻塞的 ask 工具调用。
@@ -1051,6 +1055,17 @@ export function WorkbenchLayout(props: {
       throw nextError;
     }
   }, [approvalRequestId, i18n.t]);
+
+  // handlePendingEnvironmentSubmit stores or declines the values of a pending environment value request.
+  // handlePendingEnvironmentSubmit 存储或拒绝待处理环境变量取值请求的值。
+  const handlePendingEnvironmentSubmit = React.useCallback(async (request: EnvironmentValuesSubmitRequest) => {
+    try {
+      await submitEnvironmentValues(request);
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+      throw nextError;
+    }
+  }, []);
 
   React.useEffect(() => {
     draftConversationIdRef.current = draftConversation?.id ?? null;
@@ -1434,6 +1449,7 @@ export function WorkbenchLayout(props: {
         onSaveVmmDraft={handleProjectSettingsVmmSave}
         onSetAgentSkillState={handleProjectSettingsAgentSkillSave}
         onSubmitPendingQuestion={handlePendingQuestionSubmit}
+        onSubmitPendingEnvironment={handlePendingEnvironmentSubmit}
       /></React.Suspense> : null}
     </div>
     </ComposerMediaUploadProgressContext.Provider>

@@ -32,7 +32,7 @@ function approvalRequest(id: string, approval: Partial<PendingApprovalSnapshot> 
 // mount renders the production Ask entry point; returns after React commits.
 // mount 渲染生产 Ask 入口；在 React 提交后返回。
 async function mount(snapshot: PendingQuestionSnapshot, submit = vi.fn(async () => {}), reject = vi.fn(async (_id: string) => {})) {
-  await act(async () => root.render(<I18nProvider initialLocale="zh-TW"><AskQuestionDialog request={snapshot} onSubmit={submit} onReject={reject} /></I18nProvider>));
+  await act(async () => root.render(<I18nProvider initialLocale="zh-TW"><AskQuestionDialog request={snapshot} onSubmit={submit} onReject={reject} onSubmitEnvironment={async () => {}} /></I18nProvider>));
   return { submit, reject };
 }
 
