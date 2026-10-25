@@ -8,6 +8,7 @@ import {
   Puzzle,
   Route,
   Settings,
+  Variable,
   Wrench,
 } from "lucide-react";
 import type { SkillActionProps, SkillSubAreaId } from "@/components/features/skills/skill-area-types";
@@ -103,6 +104,7 @@ export function PluginWorkspaceMenu(props: {
     { icon: <Settings size={15} />, id: "settings", label: t("skills.navigation.luaSettings") },
     { icon: <Plug size={15} />, id: "mcp-servers", label: t("settings.mcpServers") },
     { icon: <BookMarked size={15} />, id: "knowledge", label: t("area.knowledge") },
+    { icon: <Variable size={15} />, id: "environment-variables", label: t("environment.area") },
     { icon: <Puzzle size={15} />, id: "plugins", label: t("skills.navigation.plugins") },
     { icon: <Wrench size={15} />, id: "plugin-maintenance", label: t("skills.navigation.pluginMaintenance") },
   ];
@@ -142,6 +144,9 @@ export function skillSubAreaLabel(
   }
   if (subArea === "knowledge") {
     return t("area.knowledge");
+  }
+  if (subArea === "environment-variables") {
+    return t("environment.area");
   }
   // pluginSelection resolves the selected manifest-owned navigation label.
   // pluginSelection 解析选中的清单自有导航名称。
