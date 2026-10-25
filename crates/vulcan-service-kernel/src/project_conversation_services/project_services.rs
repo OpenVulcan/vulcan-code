@@ -512,6 +512,7 @@ pub(crate) async fn service_archive_project_conversations(
             plugin_cleanup_failures.join("; ")
         );
     }
+    close_session_mcp_connections_for_owners(&state, &archived_session_ids).await;
     // lifecycle_event carries every child transition in one transport-safe generation.
     // lifecycle_event 在单个传输安全 generation 中携带全部子转换。
     let lifecycle_event = conversations_archived_delta_envelope(&workbench, &archived_session_ids);
@@ -615,6 +616,7 @@ pub(crate) async fn service_remove_project(
             plugin_cleanup_failures.join("; ")
         );
     }
+    close_session_mcp_connections_for_owners(&state, &archived_session_ids).await;
     // lifecycle_event combines project and child transitions because the transport owns one envelope per generation.
     // lifecycle_event 合并项目与子转换，因为传输层每个 generation 只持有一个信封。
     let lifecycle_event =

@@ -155,6 +155,7 @@ pub(crate) async fn service_archive_conversation(
             plugin_cleanup_failures.join("; ")
         );
     }
+    close_session_mcp_connections_for_owners(&state, &[session_id]).await;
     // lifecycle_event carries only the archive-owned sidebar transition at the same committed generation.
     // lifecycle_event 仅携带同一已提交 generation 下归档领域拥有的侧栏转换。
     let lifecycle_event = conversation_archived_delta_envelope(&workbench, session_id);

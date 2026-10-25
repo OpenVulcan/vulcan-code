@@ -523,6 +523,39 @@ pub(crate) async fn drain_vulcan_plugin_sessions_for_owners(
     failures
 }
 
+/// Closes the session MCP connections of archived sessions; failures are only logged, since the
+/// connections are already removed and a stdio child stops when its transport is dropped.
+/// 关闭已归档会话的会话 MCP 连接；失败只记录日志，因为连接已被移除，且 stdio 子进程会在其传输释放时停止。
+pub(crate) async fn close_session_mcp_connections_for_owners(
+    state: &SharedServiceBridgeState,
+    owner_session_ids: &[SessionId],
+) {
+    let task_runtime = match state.lock() {
+        Ok(service) => service
+            .agent_runtime
+            .as_ref()
+            .map(|runtime| Arc::clone(&runtime.task_runtime)),
+        Err(error) => {
+            tracing::warn!("[session-mcp] failed to lock service state: {error}");
+            return;
+        }
+    };
+    let Some(task_runtime) = task_runtime else {
+        return;
+    };
+    for owner_session_id in owner_session_ids {
+        let failures = task_runtime
+            .close_session_mcp_connections(*owner_session_id)
+            .await;
+        if !failures.is_empty() {
+            tracing::warn!(
+                "[session-mcp] archived session `{owner_session_id}` cleanup warnings: {}",
+                failures.join("; ")
+            );
+        }
+    }
+}
+
 /// Stores a refreshed LuaSkills catalog in the shared service state.
 /// 在共享服务状态中存储刷新后的 LuaSkills 目录。
 pub(crate) fn store_luaskills_catalog(
