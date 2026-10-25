@@ -189,6 +189,37 @@ test('only this prefix\'s user service is re-registered and removed, and foreign
   await assert.rejects(readdir(context.prefix), { code: 'ENOENT' });
 }));
 
+// Unowned prefixes and their preexisting version directories must survive both entrypoints.
+// 非安装器拥有的前缀及其中既有版本目录必须在两个入口下均保持原样。
+test('installation and uninstall reject nonempty unowned prefixes without deleting files', { skip }, () => withHome(async context => {
+  // A preexisting versions directory is ordinary user data until ownership is established.
+  // 归属确立前，既有 versions 目录只是普通用户数据。
+  const foreignFile = path.join(context.prefix, 'versions', 'personal', 'keep.txt');
+  await mkdir(path.dirname(foreignFile), { recursive: true });
+  await writeFile(foreignFile, 'keep');
+  for (const args of [
+    ['--uninstall', '--prefix', context.prefix, '--bin-dir', context.bin],
+    ['--from', await writeSource(context.root, '0.1.0', ['linux-x64']), '--prefix', context.prefix, '--bin-dir', context.bin],
+    ['--uninstall', '--prefix', context.home, '--bin-dir', context.bin],
+  ]) {
+    assert.notEqual(context.install(args).status, 0);
+    assert.equal(await readFile(foreignFile, 'utf8'), 'keep');
+  }
+}));
+
+// Ownership covers installation entries, not later user documents under the same prefix.
+// 归属只覆盖安装条目，不覆盖后来放入同一前缀的用户文档。
+test('uninstall keeps additional files in an owned prefix', { skip }, () => withHome(async context => {
+  assert.equal(context.installFrom(await writeSource(context.root, '0.1.0', ['linux-x64'])).status, 0);
+  await writeFile(path.join(context.prefix, 'keep.txt'), 'keep');
+  // The installer removes its own namespace and leaves the additional file untouched.
+  // 安装器移除自身命名空间，并保留额外文件。
+  const result = context.install(['--uninstall', '--prefix', context.prefix, '--bin-dir', context.bin]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(await readdir(context.prefix), ['keep.txt']);
+  assert.equal(await readFile(path.join(context.prefix, 'keep.txt'), 'utf8'), 'keep');
+}));
+
 // The default source is a URL, so the download path is exercised against a local HTTP server.
 // 默认来源是 URL，因此使用本地 HTTP 服务验证下载路径。
 const downloader = ['curl', 'wget'].some(tool => spawnSync('sh', ['-c', `command -v ${tool}`]).status === 0);
