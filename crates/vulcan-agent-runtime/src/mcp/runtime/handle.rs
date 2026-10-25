@@ -292,7 +292,11 @@ const MCP_OPTIONAL_CAPABILITY_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(
 
 /// Host-owned deadline for launching one MCP transport and completing its initialize handshake.
 /// 启动单个 MCP 传输并完成 initialize 握手的宿主持有期限。
-const MCP_INITIALIZE_TIMEOUT: Duration = Duration::from_secs(15);
+pub(crate) const MCP_INITIALIZE_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Host-owned deadline for one complete `tools/list` request.
+/// 单次完整 `tools/list` 请求的宿主持有期限。
+pub(crate) const MCP_TOOLS_LIST_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Host-owned per-partition readiness timeout for one plugin MCP partition.
 /// 单个插件 MCP 分区使用的宿主持有就绪超时。
@@ -309,7 +313,7 @@ const MCP_MAX_CONCURRENT_TRANSPORT_STARTS: usize = 4;
 
 /// Returns the process-wide fair start gate without limiting already-connected servers.
 /// 返回进程级公平启动门，不限制已经连接的服务器数量。
-fn mcp_transport_startup_semaphore() -> &'static tokio::sync::Semaphore {
+pub(crate) fn mcp_transport_startup_semaphore() -> &'static tokio::sync::Semaphore {
     static STARTUP_SEMAPHORE: std::sync::OnceLock<tokio::sync::Semaphore> =
         std::sync::OnceLock::new();
     STARTUP_SEMAPHORE
@@ -2022,12 +2026,13 @@ async fn refresh_server_tools(
     server: &McpServerConfig,
     transport: Arc<dyn McpTransport>,
 ) -> Result<(), String> {
-    let schemas = tokio::time::timeout(Duration::from_secs(10), transport.list_tools())
+    let schemas = tokio::time::timeout(MCP_TOOLS_LIST_TIMEOUT, transport.list_tools())
         .await
         .map_err(|_| {
             format!(
-                "MCP server `{}` tools/list timed out after 10 seconds.",
-                server.name
+                "MCP server `{}` tools/list timed out after {} seconds.",
+                server.name,
+                MCP_TOOLS_LIST_TIMEOUT.as_secs()
             )
         })?
         .map_err(|error| {
@@ -2077,7 +2082,7 @@ async fn refresh_server_tools(
 /// 返回值
 /// Returns success only when names are non-empty and unique and every declared input/output JSON Schema is structurally valid.
 /// 仅当名称非空且唯一，并且所有已声明输入/输出 JSON Schema 结构有效时返回成功。
-fn validate_mcp_tool_schema_list(
+pub(crate) fn validate_mcp_tool_schema_list(
     server_name: &str,
     schemas: &[vulcan_mcp_runtime::McpToolSchema],
 ) -> Result<(), String> {

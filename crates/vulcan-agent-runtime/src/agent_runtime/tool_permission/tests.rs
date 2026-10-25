@@ -709,6 +709,69 @@ fn extension_tools_reuse_the_plan_read_only_classification() {
     );
 }
 
+/// Starting a session stdio server runs its command line, reaching a remote one is an extension
+/// effect, and calls follow the called tool's name like configured MCP tools.
+/// 启动会话 stdio 服务会运行其命令行，访问远程服务属于扩展效果，调用与已配置 MCP 工具一样按被调用工具名称分类。
+#[test]
+fn session_mcp_tools_are_classified_by_effect() {
+    let connect = native(MCP_CONNECT_TOOL_ID);
+    assert_eq!(
+        classify_tool_call(
+            &connect,
+            &json!({"action": "connect", "transport": "stdio", "command": "npx", "args": ["-y", "a b"]})
+        ),
+        PermissionSubject::Command {
+            shell: None,
+            text: String::from("npx -y \"a b\"")
+        }
+    );
+    assert!(matches!(
+        evaluate_rules(
+            PermissionMode::WorkspaceWrite,
+            &classify_tool_call(
+                &connect,
+                &json!({"action": "connect", "transport": "stdio", "command": "rm", "args": ["-rf", "/"]})
+            ),
+            None
+        ),
+        RuleOutcome::Escalate { high_risk: Some(_) }
+    ));
+    for args in [
+        json!({"action": "connect", "transport": "http", "url": "https://example.invalid/mcp"}),
+        json!({"action": "connect", "transport": "stdio"}),
+        json!({"action": "connect", "transport": "stdio", "command": "x", "args": "bad"}),
+    ] {
+        assert_eq!(
+            classify_tool_call(&connect, &args),
+            PermissionSubject::Opaque
+        );
+    }
+    for args in [json!({"action": "status"}), json!({"action": "disconnect"})] {
+        assert_eq!(
+            classify_tool_call(&connect, &args),
+            PermissionSubject::Ungoverned
+        );
+    }
+    assert_eq!(
+        classify_tool_call(
+            &native(crate::tooling::native::MCP_TOOLS_TOOL_ID),
+            &json!({"connection_id": "c"})
+        ),
+        PermissionSubject::Ungoverned
+    );
+    let call = native(MCP_CALL_TOOL_ID);
+    assert_eq!(
+        classify_tool_call(&call, &json!({"connection_id": "c", "tool": "list_items"})),
+        PermissionSubject::Ungoverned
+    );
+    for args in [
+        json!({"connection_id": "c", "tool": "create_item"}),
+        json!({"connection_id": "c"}),
+    ] {
+        assert_eq!(classify_tool_call(&call, &args), PermissionSubject::Opaque);
+    }
+}
+
 /// Built-in LuaSkills entries are classified exactly, directly and through the dispatcher.
 /// 内置 LuaSkills 入口被精确分类，直接调用与经调度器调用一致。
 #[test]

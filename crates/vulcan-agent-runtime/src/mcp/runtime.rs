@@ -38,6 +38,10 @@ pub use handle::{
     remove_plugin_mcp_runtime_partition, replace_plugin_mcp_runtime_partition,
     replace_user_mcp_runtime_partition, validate_plugin_mcp_runtime_partition,
 };
+pub(crate) use handle::{
+    MCP_INITIALIZE_TIMEOUT, MCP_TOOLS_LIST_TIMEOUT, mcp_transport_startup_semaphore,
+    validate_mcp_tool_schema_list,
+};
 pub use tools::{
     McpRuntimeAccess, McpRuntimeOwnedPartitionKey, McpRuntimeOwnedStdioPartition,
     McpRuntimeToolBinding, configured_mcp_runtime_access,

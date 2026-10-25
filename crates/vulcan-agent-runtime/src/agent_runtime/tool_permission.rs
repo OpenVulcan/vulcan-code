@@ -34,8 +34,8 @@ use crate::agent_runtime::question_runtime::{ApprovalAnswer, ToolApprovalPrompt}
 use crate::model::SessionId;
 use crate::tooling::native::{
     APPLY_PATCH_TOOL_ID, DECLARE_INTENT_TOOL_ID, FILE_EDIT_TOOL_ID, FILE_TOOL_ID,
-    FILE_WRITE_TOOL_ID, MAX_PERMISSION_REASON_CHARS, SHELL_COMMAND_TOOL_ID,
-    TERMINAL_SESSION_TOOL_ID, declared_intent,
+    FILE_WRITE_TOOL_ID, MAX_PERMISSION_REASON_CHARS, MCP_CALL_TOOL_ID, MCP_CONNECT_TOOL_ID,
+    SHELL_COMMAND_TOOL_ID, TERMINAL_SESSION_TOOL_ID, declared_intent, session_mcp_command_line,
 };
 pub use command_rules::HighRiskCategory;
 
@@ -565,7 +565,43 @@ fn classify_native(tool_id: &str, args: &Value) -> PermissionSubject {
             None => PermissionSubject::Opaque,
         },
         TERMINAL_SESSION_TOOL_ID => classify_terminal(args),
+        MCP_CONNECT_TOOL_ID => classify_mcp_connect(args),
+        // A session MCP tool is classified like a configured one, by the called tool's name.
+        // 会话 MCP 工具与已配置工具一样，按被调用工具的名称分类。
+        MCP_CALL_TOOL_ID => match string_arg("tool") {
+            Some(tool) if text_looks_read_only(&tool) => PermissionSubject::Ungoverned,
+            _ => PermissionSubject::Opaque,
+        },
         _ => PermissionSubject::Ungoverned,
+    }
+}
+
+/// Classifies one `mcp_connect` call: starting a stdio server runs its command line, and reaching
+/// a remote server is an extension effect; inspecting or closing connections is session state.
+/// 对一次 `mcp_connect` 调用分类：启动 stdio 服务会运行其命令行，访问远程服务属于扩展效果；
+/// 查看或关闭连接属于会话状态。
+fn classify_mcp_connect(args: &Value) -> PermissionSubject {
+    if args.get("action").and_then(Value::as_str) != Some("connect") {
+        return PermissionSubject::Ungoverned;
+    }
+    match args.get("transport").and_then(Value::as_str) {
+        Some("stdio") => {
+            let command = args.get("command").and_then(Value::as_str);
+            let arguments: Option<Vec<String>> = match args.get("args") {
+                None | Some(Value::Null) => Some(Vec::new()),
+                Some(value) => serde_json::from_value(value.clone()).ok(),
+            };
+            match (command, arguments) {
+                (Some(command), Some(arguments)) if !command.trim().is_empty() => {
+                    PermissionSubject::Command {
+                        text: session_mcp_command_line(command.trim(), &arguments),
+                        shell: None,
+                    }
+                }
+                _ => PermissionSubject::Opaque,
+            }
+        }
+        _ => PermissionSubject::Opaque,
     }
 }
 

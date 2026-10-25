@@ -104,6 +104,19 @@ pub(super) fn native_plan_policy(descriptor: &NativeToolDescriptor) -> VulcanPla
             field: String::from("action"),
             allowed_values: vec![String::from("list")],
         }
+    } else if descriptor.id == crate::tooling::native::MCP_CONNECT_TOOL_ID {
+        // Plan mode only inspects connections; opening one starts a process or reaches a server.
+        // 计划模式只查看连接；打开连接会启动进程或访问服务。
+        VulcanPlanToolPolicy::StringArgumentAllowlist {
+            field: String::from("action"),
+            allowed_values: vec![String::from("status")],
+        }
+    } else if descriptor.id == crate::tooling::native::MCP_CALL_TOOL_ID {
+        // Calls use the read-only name heuristic of configured MCP tools, on the called tool.
+        // 调用对被调用工具使用已配置 MCP 工具的只读名称启发式。
+        VulcanPlanToolPolicy::HeuristicStringArgument {
+            field: String::from("tool"),
+        }
     } else if descriptor.available_in_plan {
         VulcanPlanToolPolicy::Visible
     } else {
@@ -170,6 +183,32 @@ mod tests {
         assert!(matches!(
             native_plan_policy(&crate::tooling::native::build_file_write_tool().descriptor),
             VulcanPlanToolPolicy::Hidden
+        ));
+    }
+
+    /// Plan mode inspects session MCP connections and calls only read-like tools on them.
+    /// 计划模式只查看会话 MCP 连接，并且只调用其中的类只读工具。
+    #[test]
+    fn session_mcp_plan_policies_follow_the_effect() {
+        use crate::tooling::native::{
+            build_mcp_call_tool, build_mcp_connect_tool, build_mcp_tools_tool,
+        };
+        let VulcanPlanToolPolicy::StringArgumentAllowlist {
+            field,
+            allowed_values,
+        } = native_plan_policy(&build_mcp_connect_tool().descriptor)
+        else {
+            panic!("mcp_connect should use an action-scoped Plan policy");
+        };
+        assert_eq!(field, "action");
+        assert_eq!(allowed_values, ["status"]);
+        assert!(matches!(
+            native_plan_policy(&build_mcp_tools_tool().descriptor),
+            VulcanPlanToolPolicy::Visible
+        ));
+        assert!(matches!(
+            native_plan_policy(&build_mcp_call_tool().descriptor),
+            VulcanPlanToolPolicy::HeuristicStringArgument { field } if field == "tool"
         ));
     }
 }

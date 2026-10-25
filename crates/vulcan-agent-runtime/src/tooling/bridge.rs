@@ -105,6 +105,7 @@ pub fn build_vulcan_tools_manager(
     // Environment access is shared by every native tool; command tools inject its variables.
     // 环境变量访问由所有原生工具共享；命令类工具注入其变量。
     let environment_access = task_runtime.native_environment_access();
+    let session_mcp_access = task_runtime.native_session_mcp_access();
     for subagent_candidate in
         build_subagent_tool_candidates(task_runtime, native_agent_collaboration_runtime.clone())
     {
@@ -155,6 +156,7 @@ pub fn build_vulcan_tools_manager(
         let controller_runtime_for_context = controller_runtime.clone();
         let native_goal_runtime_for_context = native_goal_runtime.clone();
         let environment_access_for_context = environment_access.clone();
+        let session_mcp_access_for_context = session_mcp_access.clone();
         let native_browser_runtime_for_context = native_browser_runtime.clone();
         let knowledge_access_for_context = knowledge_access.clone();
         let enabled_prompt_skill_names_for_context = enabled_prompt_skill_names.clone();
@@ -176,6 +178,7 @@ pub fn build_vulcan_tools_manager(
                 let controller_runtime = controller_runtime_for_context.clone();
                 let goal_runtime = native_goal_runtime_for_context.clone();
                 let environment = environment_access_for_context.clone();
+                let session_mcp = Some(session_mcp_access_for_context.clone());
                 let knowledge_access = knowledge_access_for_context.clone();
                 let prompt_skill_user_root = prompt_skill_user_root_for_context.clone();
                 let enabled_prompt_skill_names = enabled_prompt_skill_names_for_context.clone();
@@ -197,6 +200,7 @@ pub fn build_vulcan_tools_manager(
                                 controller_runtime,
                                 goal_runtime,
                                 environment,
+                                session_mcp,
                                 native_browser_runtime,
                                 knowledge_access,
                                 enabled_prompt_skill_names,

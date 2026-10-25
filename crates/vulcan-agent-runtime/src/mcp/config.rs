@@ -631,7 +631,7 @@ pub fn runtime_mcp_server_configs(
 /// 返回值
 /// Returns the final path component or a fixed redacted label when it cannot be represented safely.
 /// 返回最终路径段；无法安全表示时返回固定脱敏标签。
-fn redacted_stdio_program(command: &str) -> String {
+pub(crate) fn redacted_stdio_program(command: &str) -> String {
     PathBuf::from(command)
         .file_name()
         .and_then(|name| name.to_str())
@@ -652,7 +652,7 @@ fn redacted_stdio_program(command: &str) -> String {
 /// 返回值
 /// Returns a safe origin summary or a fixed invalid-endpoint label.
 /// 返回安全源站摘要；解析失败时返回固定无效端点标签。
-fn redacted_remote_endpoint(url: &str) -> String {
+pub(crate) fn redacted_remote_endpoint(url: &str) -> String {
     reqwest::Url::parse(url)
         .ok()
         .map(|parsed| parsed.origin().ascii_serialization())

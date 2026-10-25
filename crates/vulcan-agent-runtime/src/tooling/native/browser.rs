@@ -436,6 +436,7 @@ mod tests {
             controller_runtime: None,
             goal_runtime: None,
             environment: None,
+            session_mcp: None,
             knowledge_access: None,
             spill_root: None,
             enabled_prompt_skill_names: Vec::new(),

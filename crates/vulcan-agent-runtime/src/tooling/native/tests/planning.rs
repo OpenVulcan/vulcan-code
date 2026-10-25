@@ -25,6 +25,7 @@ impl NativeGoalRuntimeFixture {
             session_id: Some(session_id),
             goal_runtime: Some(self.clone()),
             environment: None,
+            session_mcp: None,
             ..test_native_request(arguments)
         }
     }
@@ -548,6 +549,7 @@ async fn agent_registry_tool_exposes_extended_runtime_fields() {
             controller_runtime: None,
             goal_runtime: None,
             environment: None,
+            session_mcp: None,
             knowledge_access: None,
             spill_root: None,
             enabled_prompt_skill_names: Vec::new(),
@@ -654,6 +656,7 @@ async fn skill_registry_tool_exposes_extended_runtime_fields() {
             controller_runtime: None,
             goal_runtime: None,
             environment: None,
+            session_mcp: None,
             knowledge_access: None,
             spill_root: None,
             enabled_prompt_skill_names: Vec::new(),

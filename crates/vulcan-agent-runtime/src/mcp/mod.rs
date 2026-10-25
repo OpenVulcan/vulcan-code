@@ -7,6 +7,7 @@ mod oauth_credentials;
 mod plugin;
 pub mod registry;
 pub mod runtime;
+pub mod session;
 
 pub use config::{
     McpServerConfig, McpServerOAuthConfig, McpServerSource, McpServerTransportConfig,

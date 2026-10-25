@@ -10,6 +10,7 @@ impl TaskRuntime {
             sensitive_tool_output_values: Arc::new(RwLock::new(Vec::new())),
             tool_permission_host: RwLock::new(None),
             environment_host: RwLock::new(None),
+            session_mcp: Arc::new(crate::mcp::session::SessionMcpRegistry::new()),
             durable_return_mailboxes: RwLock::new(HashMap::new()),
             sessions: RwLock::new(HashMap::new()),
             backends: RwLock::new(HashMap::new()),
@@ -110,6 +111,39 @@ impl TaskRuntime {
             host,
             Arc::downgrade(self),
         ))
+    }
+
+    /// Returns the session MCP access handed to native tools.
+    /// 返回交给原生工具的会话 MCP 访问。
+    pub(crate) fn native_session_mcp_access(
+        self: &Arc<Self>,
+    ) -> crate::tooling::native::NativeSessionMcpAccess {
+        crate::tooling::native::NativeSessionMcpAccess::new(
+            Arc::clone(&self.session_mcp),
+            Arc::downgrade(self),
+        )
+    }
+
+    /// The root session of `session_id`: its origin session for a spawned agent, itself otherwise.
+    /// `session_id` 的根会话：派生代理为其来源会话，否则为其自身。
+    pub(crate) fn root_session_of(&self, session_id: SessionId) -> Result<SessionId, String> {
+        Ok(self
+            .sessions
+            .read()
+            .map_err(|_| {
+                String::from(
+                    "The task-session registry is locked and cannot resolve the root session.",
+                )
+            })?
+            .get(&session_id)
+            .map(|record| record.origin_session_id)
+            .unwrap_or(session_id))
+    }
+
+    /// Closes every MCP connection `session_id` opened; returns shutdown failures.
+    /// 关闭 `session_id` 打开的全部 MCP 连接；返回关闭失败。
+    pub async fn close_session_mcp_connections(&self, session_id: SessionId) -> Vec<String> {
+        self.session_mcp.close_session(session_id).await
     }
 
     /// Installs the service kernel's permission host; later tool bridges consult it per call.

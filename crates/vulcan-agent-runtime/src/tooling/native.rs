@@ -242,6 +242,7 @@ mod knowledge_base;
 mod markdown_memory;
 mod prompt_skill;
 mod registry;
+mod session_mcp;
 mod shell_command;
 pub(crate) use apply_patch::*;
 pub use environment::{
@@ -262,6 +263,12 @@ pub(crate) use markdown_memory::*;
 pub use markdown_memory::{current_memory_mode, memory_mode_vmm_layer, project_vmm_layer_for_mode};
 pub(crate) use prompt_skill::*;
 pub(crate) use registry::*;
+pub use session_mcp::{
+    MCP_CALL_TOOL_ID, MCP_CONNECT_TOOL_ID, MCP_TOOLS_TOOL_ID, NativeSessionMcpAccess,
+};
+pub(crate) use session_mcp::{
+    build_mcp_call_tool, build_mcp_connect_tool, build_mcp_tools_tool, session_mcp_command_line,
+};
 pub(crate) use shell_command::*;
 mod browser;
 mod declare_intent;
@@ -392,6 +399,9 @@ pub struct NativeToolExecutionRequest {
     /// Optional Vulcan environment access; command tools inject its variables into children.
     /// 可选的 Vulcan 环境变量访问；命令类工具将其变量注入子进程。
     pub environment: Option<NativeEnvironmentAccess>,
+    /// Optional session MCP access; the session MCP tools open and use connections through it.
+    /// 可选的会话 MCP 访问；会话 MCP 工具通过它打开并使用连接。
+    pub session_mcp: Option<NativeSessionMcpAccess>,
     /// Optional project-authorized and session-enabled knowledge-library snapshot.
     /// 可选的项目授权且会话已启用知识库快照。
     pub knowledge_access: Option<ExecutionKnowledgeAccessContext>,
@@ -542,6 +552,9 @@ pub fn build_native_tool_catalog(
         build_shell_command_tool(shell_support.clone(), plugin_runtime),
         build_terminal_session_tool(command_session_runtime, shell_support),
         build_mcp_server_list_tool(snapshot.clone()),
+        build_mcp_connect_tool(),
+        build_mcp_tools_tool(),
+        build_mcp_call_tool(),
         build_vmm_memory_search_tool(snapshot.clone()),
         build_vmm_turn_details_tool(snapshot.clone()),
         build_vmm_memory_write_tool(snapshot.clone()),
