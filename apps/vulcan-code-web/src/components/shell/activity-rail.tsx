@@ -64,8 +64,8 @@ export function ActivityRail(props: {
   // Opens the command palette.
   // 打开命令面板。
   onOpenCommandPalette: () => void;
-  // The session panel's own tree, shown in the flyout while the session area is open with its panel collapsed.
-  // 会话面板自身的会话树；处于会话区域且面板已折叠时显示在浮层中。
+  // The session panel's own tree, shown in the flyout while the session panel is not on screen.
+  // 会话面板自身的会话树；会话面板不在屏幕上时显示在浮层中。
   sessionTree: React.ReactNode;
   // Controls shown in the session flyout heading, such as the panel flow switch.
   // 显示在会话浮层标题中的控件，例如面板流切换。
@@ -124,11 +124,11 @@ export function ActivityRail(props: {
     navigate(props.onSelectSessions)();
   };
 
-  // sessionFlyoutEnabled previews sessions on hover only inside the session area while its panel is collapsed;
-  // on any other page the sessions button simply navigates back to the session area.
-  // sessionFlyoutEnabled 仅在处于会话区域且会话面板已折叠时通过悬停预览会话；
-  // 在其他页面中，会话按钮只负责返回会话区域。
-  const sessionFlyoutEnabled = !sidebar.isMobile && props.sessionsActive && sidebar.state === "collapsed";
+  // sessionFlyoutEnabled previews sessions on hover whenever the session panel itself is not on screen: on any
+  // other page, or inside the session area while its panel is collapsed. Clicking still opens the session area.
+  // sessionFlyoutEnabled 在会话面板本身不在屏幕上时通过悬停预览会话：处于其他页面，或处于会话区域且面板已折叠。
+  // 点击仍然打开会话区域。
+  const sessionFlyoutEnabled = !sidebar.isMobile && (!props.sessionsActive || sidebar.state === "collapsed");
   const sessionsButton = (
     <ActivityRailButton
       active={props.sessionsActive}

@@ -103,7 +103,7 @@ it("shows the session panel's own tree in the collapsed session area and reopens
   expect(flyout()).toBeNull();
 });
 
-it("navigates without a flyout from a feature page", async () => {
+it("previews sessions from a feature page and still navigates on click", async () => {
   const selectSessions = vi.fn();
   await renderRail({
     sessionsActive: false,
@@ -112,11 +112,11 @@ it("navigates without a flyout from a feature page", async () => {
     sessionTree: <div data-testid="session-tree">Alpha</div>,
     onSelectSessions: selectSessions,
   });
-  // Outside the session area the sessions button only navigates; the flyout waits until the user is there.
-  // 在会话区域之外，会话按钮只负责导航；浮层要等用户进入会话区域后才出现。
+  // Outside the session area the session panel is off screen, so the sessions button previews the tree.
+  // 在会话区域之外会话面板不在屏幕上，因此会话按钮预览会话树。
   const button = host.querySelector<HTMLButtonElement>('.vk-rail-btn[aria-label="工作台"]')!;
   await act(async () => button.focus());
-  expect(host.querySelector(".vk-rail-flyout")).toBeNull();
+  expect(host.querySelector('.vk-rail-flyout [data-testid="session-tree"]')).not.toBeNull();
   await act(async () => button.click());
   expect(selectSessions).toHaveBeenCalledTimes(1);
 });
