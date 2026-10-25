@@ -628,7 +628,7 @@ impl McpServer {
             })?;
         if question.approval_tool.is_some() {
             return Err(String::from(
-                "This is a permission approval. Only the user can approve or deny it in Vulcan Code.",
+                "Only the user can answer this request in Vulcan Code: it is a permission approval or a request for environment values.",
             ));
         }
         let answers = if arguments.dismiss.unwrap_or(false) {

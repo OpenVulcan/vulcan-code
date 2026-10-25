@@ -8,6 +8,7 @@
   "tui.ask.prev": "上一题",
   "tui.ask.single": "单选",
   "tui.ask.step": "第 {current}/{total} 题",
+  "tui.ask.environmentInWebui": "请在 Vulcan Code WebUI 中填写这些值；终端中只能拒绝。",
   "tui.attach.title": "附加文件",
   "tui.bar.agents": "智能体",
   "tui.bar.cache": "缓存",

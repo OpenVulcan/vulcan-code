@@ -1171,6 +1171,9 @@ impl World {
                 self.answer(&request_id, Some(answers));
             }
             Command::RejectPendingQuestion { request_id } => self.answer(&request_id, None),
+            Command::DeclineEnvironmentValues { request_id } => {
+                self.answer(&request_id, Some(vec![vec![String::from("Declined")]]));
+            }
             Command::SetSessionPlanMode {
                 conversation_id,
                 enabled,

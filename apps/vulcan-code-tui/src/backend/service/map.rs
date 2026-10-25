@@ -227,6 +227,17 @@ pub fn pending_question(
             })
             .collect(),
         approval: question.approval.as_ref().map(pending_approval),
+        environment: question
+            .environment
+            .as_ref()
+            .map(|request| PendingEnvironmentRequest {
+                purpose: request.purpose.clone(),
+                names: request
+                    .variables
+                    .iter()
+                    .map(|variable| variable.name.clone())
+                    .collect(),
+            }),
         requester,
     }
 }

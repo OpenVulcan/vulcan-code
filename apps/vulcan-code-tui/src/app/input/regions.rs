@@ -552,6 +552,17 @@ pub(super) fn on_ask_key(app: &mut App, key: KeyEvent) {
         }
         return;
     }
+    // Value requests are answered in the WebUI; the terminal can only decline or stop.
+    // 取值请求在 WebUI 中作答；终端只能拒绝或停止。
+    if pending.environment.is_some() {
+        match key.code {
+            KeyCode::Char('d') => ask_step(app, AskStep::Deny),
+            KeyCode::Char('x') | KeyCode::Delete => ask.confirm_reject = true,
+            KeyCode::Esc => app.focus = Focus::Composer,
+            _ => {}
+        }
+        return;
+    }
     // Approvals take explicit letter keys only; Enter never runs a gated call.
     // 审批只接受显式字母键；Enter 从不执行受管控调用。
     if pending.approval.is_some() {
@@ -639,6 +650,29 @@ pub fn ask_step(app: &mut App, step: AskStep) {
     app.focus = Focus::Ask;
     let total = pending.questions.len();
     let ask = &mut app.ask;
+    if pending.environment.is_some() {
+        match step {
+            AskStep::Deny => app.backend.send(Command::DeclineEnvironmentValues {
+                request_id: pending.id.clone(),
+            }),
+            AskStep::Reject => ask.confirm_reject = true,
+            AskStep::RejectCancel => ask.confirm_reject = false,
+            AskStep::RejectConfirm => {
+                ask.confirm_reject = false;
+                app.backend.send(Command::RejectPendingQuestion {
+                    request_id: pending.id.clone(),
+                });
+            }
+            // Values are entered in the WebUI only.
+            // 值只在 WebUI 中输入。
+            AskStep::Allow
+            | AskStep::Prev
+            | AskStep::Next
+            | AskStep::Submit
+            | AskStep::EditOther => {}
+        }
+        return;
+    }
     if let Some(approval) = &pending.approval {
         let label = match step {
             AskStep::Allow => &approval.allow_label,

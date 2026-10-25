@@ -62,6 +62,9 @@ pub enum Command {
     },
     /// `rejectPendingQuestion`
     RejectPendingQuestion { request_id: String },
+    /// `submitEnvironmentValues` with `declined: true`; values are only entered in the WebUI.
+    /// `declined: true` 的 `submitEnvironmentValues`；值只在 WebUI 中输入。
+    DeclineEnvironmentValues { request_id: String },
     /// `setSessionPlanMode`
     SetSessionPlanMode {
         conversation_id: ConversationId,

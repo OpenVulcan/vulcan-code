@@ -8,6 +8,7 @@
   "tui.ask.prev": "Previous",
   "tui.ask.single": "Choose one option",
   "tui.ask.step": "Question {current}/{total}",
+  "tui.ask.environmentInWebui": "Enter the values in the Vulcan Code WebUI; here you can only decline.",
   "tui.attach.title": "Attach a file",
   "tui.bar.agents": "Agents",
   "tui.bar.cache": "Cache",

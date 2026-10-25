@@ -22,7 +22,8 @@ use crate::app::action::{AskStep, UiAction};
 use crate::app::hit::Target;
 use crate::app::{App, Focus};
 use crate::model::{
-    ApprovalJudge, ApprovalReview, ApprovalSubject, PendingApproval, PendingQuestion,
+    ApprovalJudge, ApprovalReview, ApprovalSubject, PendingApproval, PendingEnvironmentRequest,
+    PendingQuestion,
 };
 use crate::tr;
 
@@ -252,7 +253,44 @@ fn seconds_until(deadline_unix_ms: u64) -> u64 {
     deadline_unix_ms.saturating_sub(now).div_ceil(1000)
 }
 
+/// Body rows of a value request: why, which names, and where to enter them.
+/// 取值请求的正文行：原因、哪些名称，以及在哪里输入。
+fn environment_rows(app: &App, request: &PendingEnvironmentRequest, width: usize) -> Vec<Row> {
+    let theme = &app.theme;
+    let mut rows = Vec::new();
+    let push_wrapped = |rows: &mut Vec<Row>, text: String, style: Style| {
+        for line in wrap(&[Span::styled(text, style)], width, &[], &[]) {
+            rows.push(Row::plain(line));
+        }
+    };
+    if app.ask.confirm_reject {
+        push_wrapped(
+            &mut rows,
+            tr!("ask.confirm.rejectTitle"),
+            Style::new().fg(theme.danger).add_modifier(Modifier::BOLD),
+        );
+        push_wrapped(&mut rows, tr!("ask.approval.stopBody"), theme.muted_text());
+        return rows;
+    }
+    push_wrapped(&mut rows, tr!("ask.environment.intro"), theme.strong());
+    if !request.purpose.is_empty() {
+        push_wrapped(&mut rows, request.purpose.clone(), theme.base());
+    }
+    for name in &request.names {
+        push_wrapped(&mut rows, format!("  {name}"), theme.primary_text());
+    }
+    push_wrapped(
+        &mut rows,
+        tr!("tui.ask.environmentInWebui"),
+        theme.muted_text(),
+    );
+    rows
+}
+
 fn body_rows(app: &App, pending: &PendingQuestion, width: usize) -> Vec<Row> {
+    if let Some(request) = &pending.environment {
+        return environment_rows(app, request, width);
+    }
     if let Some(approval) = &pending.approval {
         return approval_rows(app, approval, width);
     }
@@ -409,7 +447,12 @@ pub fn render(app: &App, pending: &PendingQuestion, area: Rect, buf: &mut Buffer
         mix(theme.warning, theme.border, 0.4)
     };
     let approval = pending.approval.as_ref();
-    let title = if approval.is_some() {
+    let environment = pending.environment.is_some();
+    // Value requests share the approval controls: an explicit letter key, never Enter.
+    // 取值请求沿用审批的控件：显式字母键，从不使用 Enter。
+    let title = if environment {
+        tr!("ask.environment.title")
+    } else if approval.is_some() {
         tr!("ask.approval.title")
     } else {
         tr!("ask.title")
@@ -420,7 +463,13 @@ pub fn render(app: &App, pending: &PendingQuestion, area: Rect, buf: &mut Buffer
         .requester
         .as_deref()
         .map(|agent| format!("· {} ", tr!("ask.requester.subagent", agent = agent)));
-    let hints = if approval.is_some() && focused && app.ask.confirm_reject {
+    let hints = if environment && focused && !app.ask.confirm_reject {
+        format!(
+            " d {} · x {} ",
+            tr!("ask.environment.decline"),
+            tr!("ask.approval.stop")
+        )
+    } else if (approval.is_some() || environment) && focused && app.ask.confirm_reject {
         format!(
             " Enter {} · Esc {} ",
             tr!("ask.action.confirmReject"),
@@ -549,7 +598,7 @@ pub fn render(app: &App, pending: &PendingQuestion, area: Rect, buf: &mut Buffer
             y,
             &format!(
                 "{} Esc",
-                if approval.is_some() {
+                if approval.is_some() || environment {
                     tr!("ask.approval.back")
                 } else {
                     tr!("ask.action.backToEdit")
@@ -558,6 +607,36 @@ pub fn render(app: &App, pending: &PendingQuestion, area: Rect, buf: &mut Buffer
             button_style(app, ButtonKind::Normal, bg),
             UiAction::Ask(AskStep::RejectCancel),
         );
+        return;
+    }
+    if environment {
+        // Decline on the left, Stop session on the right; values are entered in the WebUI.
+        // 左侧为拒绝，右侧为停止会话；值在 WebUI 中输入。
+        let bx =
+            x + button(
+                app,
+                buf,
+                x,
+                y,
+                &format!("{} d", tr!("ask.environment.decline")),
+                button_style(app, ButtonKind::Normal, bg),
+                UiAction::Ask(AskStep::Deny),
+            ) + 1;
+        let stop = format!(" {} ", tr!("ask.approval.stop"));
+        let sw = width_of(&stop) as u16 + 2;
+        if inner.right() > bx + sw {
+            button(
+                app,
+                buf,
+                inner.right() - sw,
+                y,
+                &tr!("ask.approval.stop"),
+                Style::new()
+                    .fg(theme.danger)
+                    .bg(mix(theme.danger, bg, 0.12)),
+                UiAction::Ask(AskStep::Reject),
+            );
+        }
         return;
     }
     if approval.is_some() {

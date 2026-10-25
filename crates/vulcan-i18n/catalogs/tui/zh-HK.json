@@ -8,6 +8,7 @@
   "tui.ask.prev": "上一題",
   "tui.ask.single": "單選",
   "tui.ask.step": "第 {current}/{total} 題",
+  "tui.ask.environmentInWebui": "請在 Vulcan Code WebUI 中填寫這些值；終端機中只能拒絕。",
   "tui.attach.title": "附加文件",
   "tui.bar.agents": "代理",
   "tui.bar.cache": "緩存",

@@ -8,6 +8,7 @@ mod browser;
 mod configuration;
 mod conversation_events_v1;
 mod conversation_runtime;
+mod environment;
 mod extensibility;
 mod knowledge_base;
 mod markdown_memory;
@@ -99,6 +100,10 @@ async fn dispatch_known_service_rpc(
         return Ok(outcome);
     }
     let outcome = browser::dispatch(state.clone(), method, params).await?;
+    if outcome.is_handled() {
+        return Ok(outcome);
+    }
+    let outcome = environment::dispatch(state.clone(), method, params).await?;
     if outcome.is_handled() {
         return Ok(outcome);
     }
@@ -224,6 +229,7 @@ pub(crate) fn service_rpc_method_names() -> BTreeSet<&'static str> {
         knowledge_base::RPC_METHODS,
         markdown_memory::RPC_METHODS,
         browser::RPC_METHODS,
+        environment::RPC_METHODS,
     ]
     .into_iter()
     .flatten()
@@ -254,7 +260,8 @@ mod tests {
         let declared_method_count = declared_method_count
             + knowledge_base::RPC_METHODS.len()
             + markdown_memory::RPC_METHODS.len()
-            + browser::RPC_METHODS.len();
+            + browser::RPC_METHODS.len()
+            + environment::RPC_METHODS.len();
         assert_eq!(methods.len(), declared_method_count);
         assert!(methods.contains("service_submit_conversation_prompt"));
         assert!(methods.contains("service_continue_conversation"));

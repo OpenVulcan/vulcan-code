@@ -9,11 +9,13 @@ use vulcan_agent_runtime::agent_runtime::question_runtime::{
 use vulcan_agent_runtime::agent_runtime::tool_permission::{
     JudgeFinding, PermissionSubject, ReviewFinding,
 };
+use vulcan_agent_runtime::tooling::native::{EnvironmentValuesPrompt, EnvironmentVariableKind};
 use vulcan_service_api::{
     ConversationAttentionSummary, ConversationSummary, SessionProviderUsageSummary,
 };
 use vulcan_service_api::{
     PendingApprovalJudge, PendingApprovalReview, PendingApprovalSnapshot, PendingApprovalSubject,
+    PendingEnvironmentRequestSnapshot, PendingEnvironmentVariableRequest,
 };
 /// Projects the resident aggregate without scanning Turns or reading files.
 /// 直接投影常驻累计，不扫描回合或读取文件。
@@ -396,6 +398,10 @@ fn project_pending_question_requests(
                     .approval
                     .as_ref()
                     .map(|prompt| pending_approval_snapshot(&request.tool_name, prompt)),
+                environment: request
+                    .environment
+                    .as_ref()
+                    .map(pending_environment_request_snapshot),
                 id: request.id,
                 session_id: request.session_id.to_string(),
                 sequence: request.sequence,
@@ -424,6 +430,28 @@ fn project_pending_question_requests(
         .collect::<Result<Vec<_>, String>>()?;
     snapshots.sort_by_key(|snapshot| snapshot.sequence);
     Ok(snapshots)
+}
+
+/// Projects one pending value request for client rendering. Values never appear here.
+/// 投影一条待处理取值请求，供客户端渲染。值绝不出现在此处。
+fn pending_environment_request_snapshot(
+    prompt: &EnvironmentValuesPrompt,
+) -> PendingEnvironmentRequestSnapshot {
+    PendingEnvironmentRequestSnapshot {
+        purpose: prompt.purpose.clone(),
+        variables: prompt
+            .variables
+            .iter()
+            .map(|variable| PendingEnvironmentVariableRequest {
+                name: variable.name.clone(),
+                description: variable.description.clone(),
+                secret: variable.kind == EnvironmentVariableKind::Secret,
+                scope: variable.layer.key().to_string(),
+                defined_by_system: std::env::var_os(&variable.name).is_some(),
+            })
+            .collect(),
+        project_available: prompt.project_available,
+    }
 }
 
 /// Projects the permission facts of one pending approval for client rendering.
@@ -884,6 +912,7 @@ mod tests {
             requester_label: None,
             questions: Vec::new(),
             approval: None,
+            environment: None,
         }
     }
 

@@ -106,8 +106,8 @@ pub enum AskStep {
     /// Runs the gated tool call once (approvals only).
     /// 执行一次受管控工具调用（仅审批）。
     Allow,
-    /// Refuses the gated tool call (approvals only).
-    /// 拒绝受管控工具调用（仅审批）。
+    /// Refuses the gated tool call (approvals), or declines a value request.
+    /// 拒绝受管控工具调用（审批），或拒绝取值请求。
     Deny,
 }
 

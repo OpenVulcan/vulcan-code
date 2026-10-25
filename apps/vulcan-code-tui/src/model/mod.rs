@@ -307,9 +307,21 @@ pub struct PendingQuestion {
     /// Permission facts when the request is a tool-call approval instead of an ask.
     /// 当请求是工具调用审批而非提问时的权限事实。
     pub approval: Option<PendingApproval>,
+    /// Requested variables when the request asks for environment values instead of an answer.
+    /// 当请求索取环境变量值而非回答时的请求变量。
+    pub environment: Option<PendingEnvironmentRequest>,
     /// Child agent title when a subagent of the shown conversation raised the request.
     /// 请求由所显示会话的子代理发起时的子代理标题。
     pub requester: Option<String>,
+}
+
+/// A request for environment values (`PendingEnvironmentRequestSnapshot`). Values are typed in the
+/// WebUI; the terminal only shows the names and can decline.
+/// 一次环境变量取值请求（`PendingEnvironmentRequestSnapshot`）。值在 WebUI 中输入；终端只显示名称并可拒绝。
+#[derive(Debug, Clone)]
+pub struct PendingEnvironmentRequest {
+    pub purpose: String,
+    pub names: Vec<String>,
 }
 
 /// Permission facts of one gated tool call (`PendingApprovalSnapshot`).

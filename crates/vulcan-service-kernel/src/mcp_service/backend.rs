@@ -412,7 +412,16 @@ fn session_row(conversation: &ConversationSummary) -> McpSessionRow {
 fn pending_question(question: PendingQuestionSnapshot) -> McpPendingQuestion {
     McpPendingQuestion {
         request_id: question.id,
-        approval_tool: question.approval.map(|approval| approval.tool_name),
+        // Value requests take what only the user may type, so they are user-only like approvals.
+        // 取值请求索取只有用户才能输入的内容，因此与审批一样只能由用户作答。
+        approval_tool: question
+            .approval
+            .map(|approval| approval.tool_name)
+            .or_else(|| {
+                question.environment.as_ref().map(|_| {
+                    String::from(vulcan_agent_runtime::tooling::native::ENVIRONMENT_TOOL_ID)
+                })
+            }),
         prompts: question
             .questions
             .into_iter()

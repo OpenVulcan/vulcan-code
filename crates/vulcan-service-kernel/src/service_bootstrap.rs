@@ -1595,11 +1595,20 @@ fn run_service_bootstrap(
         .task_runtime
         .set_tool_permission_host(Arc::new(
             crate::tool_permission_host::KernelToolPermissionHost::new(
-                permission_registry,
+                Arc::clone(&permission_registry),
                 Arc::clone(&agent_runtime.question_runtime),
                 Arc::downgrade(state),
             ),
         ));
+    // Every tool bridge built from now on injects Vulcan environment variables through this host.
+    // 此后构建的每个工具桥都通过此宿主注入 Vulcan 环境变量。
+    agent_runtime.task_runtime.set_environment_host(Arc::new(
+        crate::environment_variables::KernelEnvironmentHost::new(
+            permission_registry,
+            Arc::clone(&agent_runtime.question_runtime),
+            Arc::downgrade(state),
+        ),
+    ));
     logs.push(String::from(
         "[webui-service] agent runtime bridge ready: provider/LuaSkills/MCP handles are mounted",
     ));
@@ -1885,6 +1894,14 @@ fn run_service_bootstrap(
         knowledge_recovery_started_at,
         "result=ready",
     );
+    // MCP servers launched from now on see the global Vulcan environment variables. A storage
+    // failure is traced here and surfaces again in every command that needs the variables.
+    // 此后启动的 MCP 服务可见全局 Vulcan 环境变量。存储失败在此记录，并会在每个需要这些变量的命令中再次暴露。
+    if let Err(error) = runtime.block_on(crate::environment_variables::publish_global_environment(
+        state,
+    )) {
+        tracing::warn!("[webui-service] failed to publish global environment variables: {error}");
+    }
     trace_bootstrap_stage(
         "initial_workbench_projection",
         initial_projection_started_at,

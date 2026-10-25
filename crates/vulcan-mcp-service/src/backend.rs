@@ -84,8 +84,9 @@ pub struct McpPendingQuestion {
     /// Identifier passed back when answering.
     /// 回答时传回的标识。
     pub request_id: String,
-    /// Present when this is a permission approval, which only the user may decide.
-    /// 为权限审批时存在，只有用户可以决定。
+    /// Present when only the user may answer: a permission approval or a request for
+    /// environment values; names the tool that waits.
+    /// 只有用户可以作答时存在：权限审批或环境变量取值请求；指明等待中的工具。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub approval_tool: Option<String>,
     /// Questions in display order.

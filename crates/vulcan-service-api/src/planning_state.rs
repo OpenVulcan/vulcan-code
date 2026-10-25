@@ -31,6 +31,51 @@ pub struct PendingQuestionSnapshot {
     /// 请求审批受管控工具调用时的权限事实；此时问题提示只是默认语言后备，回复使用规范审批标签。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval: Option<PendingApprovalSnapshot>,
+    /// Requested variables when the request asks for environment values; the prompts are then a
+    /// default-language fallback, values are submitted through `service_submit_environment_values`
+    /// and never as a reply.
+    /// 请求索取环境变量值时的请求变量；此时问题提示只是默认语言后备，值通过
+    /// `service_submit_environment_values` 提交，绝不作为回复。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<PendingEnvironmentRequestSnapshot>,
+}
+
+/// One pending request for environment values, rendered by clients as a form.
+/// 一条待处理环境变量取值请求，由客户端渲染为表单。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingEnvironmentRequestSnapshot {
+    /// Why the agent needs the values.
+    /// 代理需要这些值的原因。
+    pub purpose: String,
+    /// Requested variables in the agent's order.
+    /// 按代理顺序排列的请求变量。
+    pub variables: Vec<PendingEnvironmentVariableRequest>,
+    /// Whether the session belongs to a project, so the project scope can be chosen.
+    /// 会话是否属于项目，从而可选择项目作用域。
+    pub project_available: bool,
+}
+
+/// One requested variable of a pending value request.
+/// 待处理取值请求中的一个请求变量。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingEnvironmentVariableRequest {
+    /// Variable name.
+    /// 变量名。
+    pub name: String,
+    /// What the value is.
+    /// 该值是什么。
+    pub description: String,
+    /// Whether the value is a secret.
+    /// 该值是否为密钥。
+    pub secret: bool,
+    /// Scope the agent suggests: `session`, `project` or `global`.
+    /// 代理建议的作用域：`session`、`project` 或 `global`。
+    pub scope: String,
+    /// Whether the system environment of the Vulcan service already defines the name.
+    /// Vulcan 服务的系统环境是否已定义该名称。
+    pub defined_by_system: bool,
 }
 
 /// Permission facts of one pending tool-call approval, rendered by clients in their own language.

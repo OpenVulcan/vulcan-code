@@ -1299,6 +1299,7 @@ fn tool_approval_answers_with_snapshot_labels_and_ignores_enter() {
             allow_label: "allow-label".into(),
             deny_label: "deny-label".into(),
         }),
+        environment: None,
         requester: None,
     };
     let show = |h: &mut Harness, question: PendingQuestion| {

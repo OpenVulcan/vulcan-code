@@ -34,13 +34,25 @@ pub(crate) fn service_reply_pending_question(
             String::from("service is still starting; question runtime is not ready")
         })?
     };
+    // Values are stored by their own service call; a reply label alone would skip storing them.
+    // 值由专用服务调用存储；仅凭回复标签会跳过存储。
+    if agent_runtime
+        .question_runtime
+        .list_pending()?
+        .iter()
+        .any(|request| request.id == request_id && request.environment.is_some())
+    {
+        return Err(String::from(
+            "Environment value requests are answered through `service_submit_environment_values`.",
+        ));
+    }
     // The hook observes only a committed answer, after the pending lock is released and before
     // the tool resumes, so the asking turn cannot end first.
     // hook 只观察已提交的回答，在 pending 锁释放后、工具恢复前运行，因此提问所在回合不会先结束。
     let answered = agent_runtime
         .question_runtime
         .reply_then(&request_id, answers, |request, answers| {
-            if request.approval.is_some() {
+            if !request.is_model_question() {
                 return;
             }
             record_question_lifecycle_hook(&agent_runtime.conversation_hook_runtime, |hooks| {
@@ -95,7 +107,7 @@ pub(crate) fn service_reject_pending_question(
     let rejected = agent_runtime
         .question_runtime
         .reject_then(&request_id, |request| {
-            if request.approval.is_some() {
+            if !request.is_model_question() {
                 return;
             }
             record_question_lifecycle_hook(&agent_runtime.conversation_hook_runtime, |hooks| {
@@ -242,9 +254,10 @@ pub(crate) fn install_webui_question_runtime_event_bridge(
                 handle
                     .mark_tool_waiting_user(request.api_call_id, request.tool_call_id, now_ms)
                     .map_err(|error| error.to_string())?;
-                // Permission approvals are not model questions, so they never reach question hooks.
-                // 权限审批不是模型提问，因此不会进入提问 hook。
-                if request.approval.is_none() {
+                // Approvals and value requests are not model questions, so they never reach
+                // question hooks.
+                // 审批与取值请求不是模型提问，因此不会进入提问 hook。
+                if request.is_model_question() {
                     // Registration commits outside the pending lock, so the hook lock nests under nothing.
                     // 注册在 pending 锁之外提交，因此 hook 锁不嵌套在任何锁之下。
                     record_question_lifecycle_hook(&hook_runtime, |hooks| {

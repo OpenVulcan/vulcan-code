@@ -1675,6 +1675,12 @@ impl Worker {
                     json!({ "requestId": request_id }),
                 );
             }
+            Command::DeclineEnvironmentValues { request_id } => {
+                let _ = self.call_as::<bool>(
+                    "service_submit_environment_values",
+                    json!({ "request": { "requestId": request_id, "declined": true, "values": [] } }),
+                );
+            }
             Command::SetSessionPlanMode {
                 conversation_id,
                 enabled,

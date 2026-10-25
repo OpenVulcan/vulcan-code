@@ -18,6 +18,28 @@ use vulcan_tools_manager::VulcanToolInvocationContext;
 use crate::ServiceBridgeState;
 use crate::session_runtime_registry_v1::SessionRuntimeRegistry;
 
+/// Returns the root user session of a registered child agent session, or the session itself.
+/// 返回已注册子代理会话的根用户会话；非子会话返回其自身。
+pub(crate) fn root_session_of(
+    registry: &SessionRuntimeRegistry,
+    session_id: SessionId,
+) -> Result<SessionId, String> {
+    let root = crate::session_goal_lifecycle::registered_session_v1_handle(registry, session_id)?
+        .read(|document| {
+            document
+                .metadata
+                .child_execution_profile
+                .as_ref()
+                .map(|profile| profile.root_session_id.clone())
+        })
+        .map_err(|error| error.to_string())?;
+    match root {
+        Some(root) => SessionId::parse_str(&root)
+            .map_err(|error| format!("invalid root session `{root}`: {error}")),
+        None => Ok(session_id),
+    }
+}
+
 /// Reads each session's live permission mode from its registered V1 document and asks the user
 /// through the shared question runtime.
 /// 从已注册的 V1 文档读取每个会话的实时权限模式，并通过共享问题运行时询问用户。
@@ -121,18 +143,7 @@ impl KernelToolPermissionHost {
     /// Returns the root user session of a child agent session, or the session itself.
     /// 返回子代理会话的根用户会话；非子会话返回其自身。
     fn root_of(&self, session_id: SessionId) -> Result<SessionId, String> {
-        let root = self.read(session_id, |document| {
-            document
-                .metadata
-                .child_execution_profile
-                .as_ref()
-                .map(|profile| profile.root_session_id.clone())
-        })?;
-        match root {
-            Some(root) => SessionId::parse_str(&root)
-                .map_err(|error| format!("invalid root session `{root}`: {error}")),
-            None => Ok(session_id),
-        }
+        root_session_of(&self.registry, session_id)
     }
 
     /// Reads one value from a registered session document.
