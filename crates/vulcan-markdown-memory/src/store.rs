@@ -13,6 +13,21 @@ use crate::{
 /// 串行化本进程内的全部记忆写入；读取不加锁。
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
 
+/// Proof that this process's memory write lock remains held throughout preparation and commit.
+/// 在准备与提交全程持有本进程记忆写锁的凭证。
+pub(crate) struct MemoryWriteGuard {
+    /// Private guard prevents callers from substituting an unrelated mutex.
+    /// 私有守卫防止调用方以无关互斥锁替代。
+    _guard: std::sync::MutexGuard<'static, ()>,
+}
+
+/// Attempts allowed for Windows sharing violations during replacement or rollback.
+/// Windows 替换或回滚发生共享冲突时允许的尝试次数。
+const WINDOWS_MUTATION_ATTEMPTS: usize = 5;
+/// Delay between Windows sharing-violation attempts; never applied to other errors or platforms.
+/// Windows 共享冲突重试间隔；不用于其他错误或平台。
+const WINDOWS_MUTATION_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(25);
+
 /// The project a request runs in, as known to the host.
 /// 宿主已知的请求所属项目。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -244,6 +259,9 @@ impl MarkdownMemoryStore {
         expected: &str,
         text: &str,
     ) -> Result<(), MemoryError> {
+        // Hold the same guard as node writes before reading the editor's expected revision.
+        // 在读取编辑器期望版本之前持有与节点写入相同的守卫。
+        let guard = write_guard();
         if text.len() > crate::MAX_FILE_BYTES {
             return Err(MemoryError::invalid(format!(
                 "A memory file can hold at most {} bytes.",
@@ -257,27 +275,32 @@ impl MarkdownMemoryStore {
                 path.display().to_string(),
             ));
         }
-        commit_files(vec![PreparedFile {
-            path,
-            original,
-            text: text.to_string(),
-        }])
+        commit_files(
+            &guard,
+            vec![PreparedFile {
+                path,
+                original,
+                text: text.to_string(),
+            }],
+        )
     }
 }
 
 /// Acquires the process-wide write lock, recovering from a poisoned holder.
 /// 获取进程级写锁；持有者崩溃导致中毒时恢复。
-pub(crate) fn write_guard() -> std::sync::MutexGuard<'static, ()> {
-    WRITE_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+pub(crate) fn write_guard() -> MemoryWriteGuard {
+    MemoryWriteGuard {
+        _guard: WRITE_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    }
 }
 
 /// Writes text through a sibling temporary file and an atomic rename.
 /// 通过同目录临时文件与原子重命名写入文本。
 pub(crate) fn write_atomically(path: &Path, text: &str) -> Result<(), MemoryError> {
     let temporary = write_temporary(path, text)?;
-    std::fs::rename(&temporary, path).map_err(|error| {
+    replace_file(&temporary, path).map_err(|error| {
         let _ = std::fs::remove_file(&temporary);
         MemoryError::io(path, "replaced", error)
     })
@@ -303,45 +326,157 @@ fn write_temporary(path: &Path, text: &str) -> Result<PathBuf, MemoryError> {
     Ok(temporary)
 }
 
-/// Commits several prepared files: every file is checked against its original and staged before any is replaced.
-/// 提交多个已准备文件：所有文件先核对原文并暂存，再逐一替换。
-pub(crate) fn commit_files(files: Vec<PreparedFile>) -> Result<(), MemoryError> {
-    let mut staged = Vec::with_capacity(files.len());
-    let cleanup = |staged: &[(PathBuf, PathBuf)]| {
-        for (temporary, _) in staged {
-            let _ = std::fs::remove_file(temporary);
-        }
+/// Retries `operation` only for transient Windows replacement failures and returns its final result.
+/// 仅对 Windows 临时替换失败重试 `operation`，并返回最终结果。
+fn retry_file_mutation(mut operation: impl FnMut() -> std::io::Result<()>) -> std::io::Result<()> {
+    // Other platforms retain their native single-attempt semantics.
+    // 其他平台保持原生单次尝试语义。
+    let attempts = if cfg!(windows) {
+        WINDOWS_MUTATION_ATTEMPTS
+    } else {
+        1
     };
-    for file in &files {
-        let current = match MarkdownMemoryStore::read_optional(&file.path) {
-            Ok(current) => current,
-            Err(error) => {
-                cleanup(&staged);
-                return Err(error);
+    for attempt in 0..attempts {
+        match operation() {
+            Err(error)
+                if cfg!(windows)
+                    && matches!(error.raw_os_error(), Some(5 | 32 | 33))
+                    && attempt + 1 < attempts =>
+            {
+                std::thread::sleep(WINDOWS_MUTATION_RETRY_DELAY)
             }
-        };
-        if current != file.original {
-            cleanup(&staged);
+            result => return result,
+        }
+    }
+    unreachable!("Every mutation attempt returns or retries within the fixed bound")
+}
+
+/// Atomically replaces `destination` with `temporary`, retrying transient Windows sharing failures.
+/// 以 `temporary` 原子替换 `destination`，并重试 Windows 临时共享冲突。
+fn replace_file(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+    retry_file_mutation(|| std::fs::rename(temporary, destination))
+}
+
+/// Temporary forward and rollback bytes; originals are detached only when manual recovery is required.
+/// 临时正向与回滚字节；仅在需要人工恢复时移交原文副本。
+struct StagedFile {
+    /// Prepared new bytes beside the destination.
+    /// 位于目标文件旁的待写新字节。
+    replacement: PathBuf,
+    /// Prepared original bytes, absent when the destination did not exist.
+    /// 待恢复的原文字节；目标原先不存在时缺省。
+    original: Option<PathBuf>,
+}
+
+impl Drop for StagedFile {
+    /// Removes unused temporary files while leaving explicitly detached recovery copies intact.
+    /// 删除未使用的临时文件，同时保留已明确移交的恢复副本。
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.replacement);
+        if let Some(original) = &self.original {
+            let _ = std::fs::remove_file(original);
+        }
+    }
+}
+
+/// Commits `files` under `guard`; failures restore completed replacements or report preserved recovery copies.
+/// 在 `guard` 下提交 `files`；失败时还原已完成替换，或报告保留的恢复副本。
+pub(crate) fn commit_files(
+    guard: &MemoryWriteGuard,
+    files: Vec<PreparedFile>,
+) -> Result<(), MemoryError> {
+    commit_files_with(guard, files, replace_file)
+}
+
+/// Runs the real commit/rollback algorithm with a replacement operation that tests can fault deterministically.
+/// 使用测试可确定性注入故障的替换操作运行真实提交与回滚算法。
+/// `guard` proves writer exclusion; `files` supplies exact originals; `replace` returns the filesystem outcome.
+/// `guard` 证明写入排他性；`files` 提供精确原文；`replace` 返回文件系统操作结果。
+fn commit_files_with(
+    _guard: &MemoryWriteGuard,
+    files: Vec<PreparedFile>,
+    mut replace: impl FnMut(&Path, &Path) -> std::io::Result<()>,
+) -> Result<(), MemoryError> {
+    // Stage both directions before publishing anything, so rollback never needs to recreate original bytes.
+    // 发布前暂存两个方向的字节，确保回滚无需重新生成原文。
+    let mut staged = Vec::with_capacity(files.len());
+    for file in &files {
+        if MarkdownMemoryStore::read_optional(&file.path)? != file.original {
             return Err(MemoryError::ConcurrentModification(
                 file.path.display().to_string(),
             ));
         }
-        match write_temporary(&file.path, &file.text) {
-            Ok(temporary) => staged.push((temporary, file.path.clone())),
-            Err(error) => {
-                cleanup(&staged);
-                return Err(error);
-            }
-        }
+        // RAII also cleans forward bytes if staging the original fails.
+        // 原文暂存失败时，RAII 同样清理正向字节。
+        let mut prepared = StagedFile {
+            replacement: write_temporary(&file.path, &file.text)?,
+            original: None,
+        };
+        prepared.original = file
+            .original
+            .as_deref()
+            .map(|text| write_temporary(&file.path, text))
+            .transpose()?;
+        staged.push(prepared);
     }
-    for (index, (temporary, path)) in staged.iter().enumerate() {
-        if let Err(error) = std::fs::rename(temporary, path) {
-            cleanup(&staged[index..]);
-            return Err(MemoryError::io(path, "replaced", error));
+    for (index, file) in files.iter().enumerate() {
+        // Recheck immediately before replacement to detect external edits during staging.
+        // 替换前立即重新检查，以发现暂存期间的外部编辑。
+        let result = match MarkdownMemoryStore::read_optional(&file.path) {
+            Ok(current) if current == file.original => {
+                replace(&staged[index].replacement, &file.path)
+                    .map_err(|error| MemoryError::io(&file.path, "replaced", error))
+            }
+            Ok(_) => Err(MemoryError::ConcurrentModification(
+                file.path.display().to_string(),
+            )),
+            Err(error) => Err(error),
+        };
+        if let Err(source) = result {
+            // Track exact destinations and detached originals for an actionable recovery error.
+            // 跟踪精确目标与移交的原文，以提供可执行的恢复错误。
+            let mut inconsistent_files = Vec::new();
+            let mut recovery_files = Vec::new();
+            for completed in (0..index).rev() {
+                // Never overwrite an unrelated external edit while undoing this transaction.
+                // 撤销此事务时绝不覆盖无关的外部编辑。
+                let previous = &files[completed];
+                let restored = match MarkdownMemoryStore::read_optional(&previous.path) {
+                    Ok(current) if current == previous.original => true,
+                    Ok(current) if current.as_deref() == Some(previous.text.as_str()) => {
+                        match &staged[completed].original {
+                            Some(original) => replace(original, &previous.path).is_ok(),
+                            None => {
+                                retry_file_mutation(|| std::fs::remove_file(&previous.path)).is_ok()
+                            }
+                        }
+                    }
+                    _ => false,
+                };
+                if !restored {
+                    inconsistent_files.push(previous.path.clone());
+                    if let Some(original) = staged[completed].original.take() {
+                        recovery_files.push(original);
+                    }
+                }
+            }
+            return if inconsistent_files.is_empty() {
+                Err(source)
+            } else {
+                Err(MemoryError::RollbackIncomplete {
+                    source: Box::new(source),
+                    inconsistent_files,
+                    recovery_files,
+                })
+            };
         }
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "store_commit_tests.rs"]
+mod commit_tests;
 
 #[cfg(test)]
 mod tests {
@@ -351,22 +486,28 @@ mod tests {
     /// 提交会拒绝读取后在磁盘上被修改的文件，且不遗留临时文件。
     #[test]
     fn commit_checks_originals_and_cleans_up() {
+        // Hold the same write capability required by production commits.
+        // 持有生产提交要求的同一写入凭证。
+        let guard = write_guard();
         let root = tempfile::tempdir().expect("temp dir");
         let first = root.path().join("a.md");
         let second = root.path().join("b.md");
         std::fs::write(&second, "external").expect("seed");
-        let result = commit_files(vec![
-            PreparedFile {
-                path: first.clone(),
-                original: None,
-                text: String::from("new"),
-            },
-            PreparedFile {
-                path: second.clone(),
-                original: Some(String::from("read earlier")),
-                text: String::from("mine"),
-            },
-        ]);
+        let result = commit_files(
+            &guard,
+            vec![
+                PreparedFile {
+                    path: first.clone(),
+                    original: None,
+                    text: String::from("new"),
+                },
+                PreparedFile {
+                    path: second.clone(),
+                    original: Some(String::from("read earlier")),
+                    text: String::from("mine"),
+                },
+            ],
+        );
         assert!(matches!(
             result,
             Err(MemoryError::ConcurrentModification(_))
@@ -375,11 +516,14 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&second).expect("kept"), "external");
         assert_eq!(std::fs::read_dir(root.path()).expect("dir").count(), 1);
 
-        commit_files(vec![PreparedFile {
-            path: first.clone(),
-            original: None,
-            text: String::from("new"),
-        }])
+        commit_files(
+            &guard,
+            vec![PreparedFile {
+                path: first.clone(),
+                original: None,
+                text: String::from("new"),
+            }],
+        )
         .expect("commit");
         assert_eq!(std::fs::read_to_string(&first).expect("written"), "new");
     }

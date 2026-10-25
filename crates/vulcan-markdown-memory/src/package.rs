@@ -578,7 +578,7 @@ impl MarkdownMemoryStore {
                 "The package changed since it was previewed; preview it again.",
             ));
         }
-        let _guard = write_guard();
+        let guard = write_guard();
         let mut registry = self.registry()?;
         let mappings = mapping_table(&package, &registry, mappings, true)?;
         let mut choices = HashMap::new();
@@ -705,7 +705,7 @@ impl MarkdownMemoryStore {
             });
         }
         report.backup_directory = self.back_up(&files, &now)?;
-        commit_files(files)?;
+        commit_files(&guard, files)?;
         Ok(report)
     }
 

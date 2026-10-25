@@ -1,5 +1,52 @@
 use super::*;
 
+/// A Windows sharing lock on the destination cannot lose a node moved from another scope.
+/// Windows 目标文件共享锁不会导致从其他层移动的节点丢失。
+#[cfg(windows)]
+#[test]
+fn failed_cross_scope_move_preserves_both_original_files() {
+    use std::os::windows::fs::OpenOptionsExt;
+    // Seed both scopes through the real write API before locking the target's directory entry.
+    // 通过真实写入 API 初始化两个层，再锁定目标目录项。
+    let (root, store) = store();
+    let context = project_context(&root);
+    let receipt = write(&store, &context, vec![
+        serde_json::json!({"action":"create","scope":"user","section":"identity","title":"Move me","body":"Preserve this node."}),
+        serde_json::json!({"action":"create","scope":"space","section":"conventions","title":"Existing","body":"Keep this node too."}),
+    ]).unwrap();
+    let node = receipt
+        .operations
+        .iter()
+        .find(|entry| entry.scope == MemoryScope::User)
+        .unwrap();
+    let user_before = store.read_file_text(MemoryScope::User, None).unwrap();
+    let space_before = store.read_file_text(MemoryScope::Space, None).unwrap();
+    // FILE_SHARE_READ | FILE_SHARE_WRITE deliberately omits FILE_SHARE_DELETE.
+    // FILE_SHARE_READ | FILE_SHARE_WRITE 有意省略 FILE_SHARE_DELETE。
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0x00000003)
+        .open(store.scope_path(MemoryScope::Space, None).unwrap())
+        .unwrap();
+    let result = write(
+        &store,
+        &context,
+        vec![
+            serde_json::json!({"action":"move","id":node.id,"expectedRevision":node.revision,"scope":"space","section":"conventions"}),
+        ],
+    );
+    assert!(matches!(result, Err(MemoryError::Io { .. })));
+    assert_eq!(
+        store.read_file_text(MemoryScope::User, None).unwrap(),
+        user_before
+    );
+    assert_eq!(
+        store.read_file_text(MemoryScope::Space, None).unwrap(),
+        space_before
+    );
+    drop(lock);
+}
+
 /// Builds a store in a temporary user root.
 /// 在临时用户根目录中构建存储。
 fn store() -> (tempfile::TempDir, MarkdownMemoryStore) {

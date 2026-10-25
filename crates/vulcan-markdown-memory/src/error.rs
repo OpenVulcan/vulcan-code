@@ -43,6 +43,22 @@ pub enum MemoryError {
     /// 准备写入期间记忆文件在 Vulcan 之外被修改。
     #[error("Memory file `{0}` changed on disk while the write was prepared; retry the write.")]
     ConcurrentModification(String),
+    /// A failed commit could not restore every original; recovery copies are preserved on disk.
+    /// 提交失败后无法还原所有原文；恢复副本保留在磁盘上。
+    #[error(
+        "Memory commit failed: {source}. Rollback is incomplete for {inconsistent_files:?}. Original recovery files: {recovery_files:?}. Restore these files before retrying."
+    )]
+    RollbackIncomplete {
+        /// Original failure that stopped publication.
+        /// 阻止发布的原始错误。
+        source: Box<MemoryError>,
+        /// Destinations that could not be restored without losing another writer's changes.
+        /// 无法在保留其他写入方修改的前提下还原的目标文件。
+        inconsistent_files: Vec<std::path::PathBuf>,
+        /// Exact original-byte copies retained for manual recovery; absent originals need no copy.
+        /// 为人工恢复保留的精确原文字节副本；原先不存在的文件无需副本。
+        recovery_files: Vec<std::path::PathBuf>,
+    },
     /// Reading or writing a memory file failed.
     /// 读取或写入记忆文件失败。
     #[error("Memory file `{path}` could not be {action}: {source}")]

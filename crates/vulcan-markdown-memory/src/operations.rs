@@ -332,8 +332,8 @@ struct WriteSession<'store> {
 }
 
 impl MarkdownMemoryStore {
-    /// Applies operations in order; any failure leaves every file untouched.
-    /// 按顺序应用操作；任一失败时所有文件保持不变。
+    /// Applies operations in order; failed commits restore originals or report an incomplete rollback.
+    /// 按顺序应用操作；提交失败时还原原文或报告未完成的回滚。
     pub fn write(
         &self,
         context: &ProjectContext,
@@ -347,7 +347,7 @@ impl MarkdownMemoryStore {
                 "Provide 1 to {MAX_OPERATIONS_PER_WRITE} operations."
             )));
         }
-        let _guard = write_guard();
+        let guard = write_guard();
         let registry = self.registry()?;
         let project_id = context
             .bound_project(&registry)?
@@ -373,7 +373,7 @@ impl MarkdownMemoryStore {
                 })?;
             receipts.push(receipt);
         }
-        session.finish(receipts, budget)
+        session.finish(receipts, budget, &guard)
     }
 }
 
@@ -913,6 +913,7 @@ impl WriteSession<'_> {
         mut self,
         operations: Vec<WriteOperationReceipt>,
         budget: &InjectionBudget,
+        guard: &crate::store::MemoryWriteGuard,
     ) -> Result<WriteReceipt, MemoryError> {
         let mut files = Vec::new();
         for loaded in self.scopes.values().filter(|loaded| loaded.changed) {
@@ -942,7 +943,7 @@ impl WriteSession<'_> {
                 text,
             });
         }
-        commit_files(files)?;
+        commit_files(guard, files)?;
         let touched = operations
             .iter()
             .map(|operation| operation.scope)
