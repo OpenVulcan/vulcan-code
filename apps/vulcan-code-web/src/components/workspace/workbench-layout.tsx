@@ -1334,15 +1334,6 @@ export function WorkbenchLayout(props: {
             rail={activityRail}
             activeSettingsSubArea={activeSettingsSubArea}
             onSelectSettingsSubArea={setActiveSettingsSubArea}
-            onSelectArea={handleSelectTopFeatureArea}
-            luaSkillActions={luaSkillActions}
-            agentSkillActions={agentSkillActions}
-            agentActions={agentActions}
-            memoryActions={{
-              onLoadProjectVmmConfig: loadProjectVmmConfig,
-              onRunVmmAction: runVmmMemoryAction,
-              onSaveVmmConfig: (request) => applySkillWorkbenchAction(() => saveVmmMemoryConfig(request)),
-            }}
             settingsActions={{
               onSavePromptOutputStyle: (styleId) => applySkillWorkbenchAction(async () => {
                 const saved = await savePromptOutputStyle(styleId);
@@ -1369,7 +1360,6 @@ export function WorkbenchLayout(props: {
               onDeleteArchivedConversations: (conversationIds) => applySkillWorkbenchAction(async () => (await deleteArchivedConversations(conversationIds)) ?? workbenchStateRef.current),
             }}
             workbench={workbenchState}
-            selectedConversationId={selectedConversationId}
             chromeActions={shellChromeActions}
             footer={statusBar}
             titlebarDragRegion={windowDragRegionEnabled}

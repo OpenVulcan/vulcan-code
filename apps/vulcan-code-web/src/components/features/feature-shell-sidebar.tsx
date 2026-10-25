@@ -2,27 +2,15 @@ import * as React from "react"
 import {
   Bot,
   Globe2,
-  BookMarked,
   ChartNoAxesCombined,
   Hammer,
   PanelTopOpen,
-  Plug,
   Puzzle,
   Route,
   Settings,
-  Variable,
-  Wrench,
 } from "lucide-react"
 
-import { formatSkillText } from "@/components/features/featureText"
 import { MemoryBrainIcon } from "@/components/shell/memory-brain-icon"
-import { localizedVmmManagementSection, vmmSectionIcon } from "@/components/features/memory/vmm-memory-sections"
-import type { SkillSubAreaId } from "@/components/features/skills/skill-area-types"
-import {
-  enabledPluginDetailMounts,
-  localizedPluginCapability,
-  localizedPluginMountLabel,
-} from "@/components/features/skills/skill-area-types"
 import {
   normalizeSettingsSubArea,
   settingsSubAreaGroups,
@@ -32,10 +20,8 @@ import {
   Sidebar,
   SidebarContent,
   SidebarGroup,
-  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
-  SidebarMenuButton,
   SidebarMenuItem,
   useSidebarNavigation,
 } from "@/ui-kit/shell/sidebar"
@@ -45,34 +31,17 @@ import type {
   FeatureAreaSummary,
   MainAreaId,
   SettingsSubAreaId,
-  WorkbenchSnapshot,
 } from "@/types"
 
-// MemorySubAreaId identifies one service-projected VMM section.
-// MemorySubAreaId 标识一个由服务投影的 VMM 分区。
-type MemorySubAreaId = string
-
-// FeatureSidebar renders the left navigation for one non-console feature area.
-// FeatureSidebar 渲染单个非控制台功能区的左侧导航。
+// FeatureSidebar renders the left navigation of the settings page.
+// FeatureSidebar 渲染设置页面的左侧导航。
 function FeatureSidebar(props: {
   // Active top-level area.
   // 当前顶层区域。
   activeArea: MainAreaId
-  // Selected VMM memory sub page.
-  // 当前选中的 VMM 记忆子页面。
-  activeMemorySubArea: MemorySubAreaId
-  // Selected skill sub page.
-  // 当前选中的技能子页面。
-  activeSkillSubArea: SkillSubAreaId
   // Selected settings sub page.
   // 当前设置二级页面。
   activeSettingsSubArea: SettingsSubAreaId
-  // Updates the selected skill sub page.
-  // 更新选中的技能子页面。
-  onSelectSkillSubArea: (area: SkillSubAreaId) => void
-  // Updates the selected VMM memory sub page.
-  // 更新选中的 VMM 记忆子页面。
-  onSelectMemorySubArea: (area: MemorySubAreaId) => void
   // Updates the selected settings sub page.
   // 更新设置二级页面选择。
   onSelectSettingsSubArea: (area: SettingsSubAreaId) => void
@@ -85,9 +54,6 @@ function FeatureSidebar(props: {
   // Handles title bar double-click maximize or restore behavior.
   // 处理标题栏双击最大化或还原行为。
   onTitlebarDoubleClick?: (event: React.MouseEvent<HTMLElement>) => void
-  // Workbench snapshot used for sidebar counters.
-  // 侧栏计数使用的工作台快照。
-  workbench: WorkbenchSnapshot
 }) {
   const { t } = useI18n()
   // navigate preserves each destination action and closes phone navigation.
@@ -111,98 +77,9 @@ function FeatureSidebar(props: {
             activeSettingsSubArea={props.activeSettingsSubArea}
             onSelectSettingsSubArea={navigate(props.onSelectSettingsSubArea)}
           />
-        ) : (
-          <FeatureOverviewMenu
-            activeArea={props.activeArea}
-            activeMemorySubArea={props.activeMemorySubArea}
-            activeSkillSubArea={props.activeSkillSubArea}
-            onSelectMemorySubArea={navigate(props.onSelectMemorySubArea)}
-            onSelectSkillSubArea={navigate(props.onSelectSkillSubArea)}
-            workbench={props.workbench}
-          />
-        )}
+        ) : null}
       </SidebarContent>
     </Sidebar>
-  )
-}
-
-// FeatureOverviewMenu renders compact side navigation for non-settings feature pages.
-// FeatureOverviewMenu 为非设置功能页渲染紧凑侧栏导航。
-function FeatureOverviewMenu(props: {
-  // Active feature area used to choose overview rows.
-  // 用于选择概览行的当前功能区域。
-  activeArea: MainAreaId
-  // Selected VMM memory sub page.
-  // 当前选中的 VMM 记忆子页面。
-  activeMemorySubArea: MemorySubAreaId
-  // Selected skill sub page.
-  // 当前选中的技能子页面。
-  activeSkillSubArea: SkillSubAreaId
-  // Updates the selected skill sub page.
-  // 更新选中的技能子页面。
-  onSelectSkillSubArea: (area: SkillSubAreaId) => void
-  // Updates the selected VMM memory sub page.
-  // 更新选中的 VMM 记忆子页面。
-  onSelectMemorySubArea: (area: MemorySubAreaId) => void
-  // Workbench snapshot used for row counters.
-  // 行计数使用的工作台快照。
-  workbench: WorkbenchSnapshot
-}) {
-  const { locale, t } = useI18n()
-  // rows contains static host pages and manifest-generated plugin pages.
-  // rows 包含宿主静态页面与清单生成的插件页面。
-  const rows = featureSidebarRows(props.activeArea, props.workbench, locale, t)
-
-  return (
-    <SidebarGroup>
-      <SidebarGroupLabel><PanelTopOpen size={15} /><span>{t("sidebar.overview")}</span></SidebarGroupLabel>
-      <SidebarMenu>
-        {rows.map((row) => (
-          <SidebarMenuItem key={row.id}>
-            {props.activeArea === "skills" ? (
-              <SidebarMenuButton
-                active={skillSidebarRowToSubArea(row.id) === props.activeSkillSubArea}
-                className="feature-sidebar-row"
-                onClick={() => {
-                  const subArea = skillSidebarRowToSubArea(row.id)
-                  if (subArea) {
-                    props.onSelectSkillSubArea(subArea)
-                  }
-                }}
-                tooltip={row.label}
-              >
-                {row.icon}
-                <span className="vk-side-text">
-                  <strong>{row.label}</strong>
-                  <small>{row.detail}</small>
-                </span>
-              </SidebarMenuButton>
-            ) : props.activeArea === "memory" ? (
-              <SidebarMenuButton
-                active={row.id === props.activeMemorySubArea}
-                className="feature-sidebar-row"
-                onClick={() => props.onSelectMemorySubArea(row.id)}
-                tooltip={row.label}
-              >
-                {row.icon}
-                <span className="vk-side-text">
-                  <strong>{row.label}</strong>
-                  <small>{row.detail}</small>
-                </span>
-              </SidebarMenuButton>
-            ) : (
-              <div className="vk-nav-item vk-side-button feature-sidebar-row" data-static="">
-                {row.icon}
-                <span className="vk-side-text">
-                  <strong>{row.label}</strong>
-                  <small>{row.detail}</small>
-                </span>
-              </div>
-            )}
-          </SidebarMenuItem>
-        ))}
-      </SidebarMenu>
-    </SidebarGroup>
   )
 }
 
@@ -271,10 +148,6 @@ function SettingsSidebarGroupRow(props: {
   )
 }
 
-// VmmScope identifies the active VMM configuration scope.
-// VmmScope 标识当前 VMM 配置作用域。
-
-
 // areaIconMap maps feature ids to lucide icons.
 // areaIconMap 将功能区域标识映射到 lucide 图标。
 const areaIconMap: Record<MainAreaId, React.ReactNode> = {
@@ -301,58 +174,6 @@ function primaryFeatureAreas(t: ReturnType<typeof useI18n>["t"]): FeatureAreaSum
   ]
 }
 
-// SettingsSubAreaEntry describes one leaf row in the settings sidebar tree.
-// SettingsSubAreaEntry 描述设置侧栏树中的单个叶子行。
-
-// featureSidebarRows builds left sidebar rows for the current non-settings feature.
-// featureSidebarRows 为当前非设置功能构建左侧栏条目。
-function featureSidebarRows(
-  activeArea: MainAreaId,
-  workbench: WorkbenchSnapshot,
-  locale: string,
-  t: ReturnType<typeof useI18n>["t"],
-): Array<{ id: string; label: string; detail: string; icon: React.ReactNode }> {
-  if (activeArea === "skills") {
-    // pluginRows projects every enabled detail mount into one independent navigation row.
-    // pluginRows 将每个已启用详情挂载点投影为独立导航行。
-    const pluginRows = enabledPluginDetailMounts(workbench.plugins).map((selection) => ({
-      id: selection.subAreaId,
-      label: localizedPluginMountLabel(selection, locale),
-      detail: localizedPluginCapability(selection.plugin, locale),
-      icon: pluginDetailMountIcon(selection.mount.icon),
-    }))
-    return [
-      { id: "luaskills-catalog", label: t("skills.navigation.list"), detail: formatSkillText(t("skills.sidebar.luaDetail"), { count: workbench.luaSkills.skills.length }), icon: <Hammer size={16} /> },
-      { id: "luaskills-settings", label: t("skills.navigation.luaSettings"), detail: workbench.luaSkills.notice, icon: <Settings size={16} /> },
-      { id: "mcp-servers", label: t("settings.mcpServers"), detail: t("settings.mcpServers.description"), icon: <Plug size={16} /> },
-      { id: "knowledge", label: t("area.knowledge"), detail: t("area.knowledge.description"), icon: <BookMarked size={16} /> },
-      { id: "environment-variables", label: t("environment.area"), detail: t("environment.area.description"), icon: <Variable size={16} /> },
-      { id: "luaskills-plugins", label: t("skills.navigation.plugins"), detail: formatSkillText(t("skills.sidebar.pluginDetail"), { count: workbench.plugins.filter((plugin) => plugin.managementKind === "vulcanPlugin").length }), icon: <Puzzle size={16} /> },
-      { id: "luaskills-plugin-maintenance", label: t("skills.navigation.pluginMaintenance"), detail: t("pluginMaintenance.description"), icon: <Wrench size={16} /> },
-      ...pluginRows,
-    ]
-  }
-  if (activeArea === "agent-skills") {
-    const effectiveRecords = workbench.agentSkills.records.filter((record) => record.effective)
-    return [
-      { id: "agent-skills-catalog", label: t("area.agentSkills"), detail: formatSkillText(t("skills.sidebar.agentDetail"), { count: effectiveRecords.length }), icon: <Hammer size={16} /> },
-    ]
-  }
-  if (activeArea === "agents") {
-    return [
-      { id: "agents-catalog", label: t("area.agents"), detail: formatSkillText(t("agents.header.detail"), { count: workbench.subagentCatalog.definitions.length, total: workbench.subagentCatalog.definitions.length, enabled: workbench.subagentCatalog.definitions.filter((definition) => definition.enabled).length, warnings: workbench.subagentCatalog.errors.length }), icon: <Bot size={16} /> },
-    ]
-  }
-  if (activeArea === "memory") {
-    return workbench.vmmMemory.sections.map((section) => ({
-      id: section.id,
-      ...localizedVmmManagementSection(section, workbench.vmmMemory.experienceState.deployment, t),
-      icon: vmmSectionIcon(section.id),
-    }))
-  }
-  return []
-}
-
 // pluginDetailMountIcon returns the host-owned icon declared by one plugin mount.
 // pluginDetailMountIcon 返回单个插件挂载点声明的宿主持有图标。
 //
@@ -370,28 +191,4 @@ function pluginDetailMountIcon(icon: "plugin" | "route" | "chart"): React.ReactN
   return <Puzzle size={16} />
 }
 
-
-// skillSidebarRowToSubArea maps a skills sidebar row id to its content page id.
-// skillSidebarRowToSubArea 将技能侧栏行标识映射到对应内容页面标识。
-function skillSidebarRowToSubArea(rowId: string): SkillSubAreaId | null {
-  if (rowId === "luaskills-catalog") {
-    return "catalog"
-  }
-  if (rowId === "luaskills-settings") {
-    return "settings"
-  }
-  if (rowId === "luaskills-plugins") {
-    return "plugins"
-  }
-  if (rowId === "luaskills-plugin-maintenance") {
-    return "plugin-maintenance"
-  }
-  if (rowId === "mcp-servers" || rowId === "knowledge" || rowId === "environment-variables") {
-    return rowId
-  }
-  if (rowId.startsWith("plugin:")) {
-    return rowId as SkillSubAreaId
-  }
-  return null
-}
 export { FeatureSidebar, areaIconMap, pluginDetailMountIcon, primaryFeatureAreas }
