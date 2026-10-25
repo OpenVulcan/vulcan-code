@@ -248,6 +248,34 @@ fn manager_checks_plan_mode_string_argument_allowlist() {
     ));
 }
 
+/// Verifies a dispatching tool is judged by the read-only heuristic on the named argument.
+/// 验证分派型工具按指定参数上的只读启发式判定。
+#[test]
+fn manager_checks_plan_mode_heuristic_string_argument() {
+    let manager = VulcanToolsManager::new(vec![test_candidate(
+        "mcp_call",
+        VulcanToolSourceKind::Native,
+        VulcanPlanToolPolicy::HeuristicStringArgument {
+            field: String::from("tool"),
+        },
+    )]);
+    let resolved = manager.resolve_for_execution_mode("Plan");
+    let tool = resolved
+        .definitions
+        .first()
+        .expect("resolved dispatching tool should exist");
+
+    assert!(super::tool_is_allowed_in_plan_with_args(
+        tool,
+        &json!({"tool": "search_docs"}),
+    ));
+    assert!(!super::tool_is_allowed_in_plan_with_args(
+        tool,
+        &json!({"tool": "delete_page"}),
+    ));
+    assert!(!super::tool_is_allowed_in_plan_with_args(tool, &json!({})));
+}
+
 /// Verifies native command-line tools remain executable in Plan mode for exploration and validation.
 /// 验证原生命令行工具在计划模式下仍可用于探索与验证。
 #[test]

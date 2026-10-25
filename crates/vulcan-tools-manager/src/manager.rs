@@ -110,6 +110,10 @@ pub fn tool_is_allowed_in_plan_with_args(tool: &ResolvedToolDefinition, args: &V
         VulcanPlanToolPolicy::Hidden => false,
         VulcanPlanToolPolicy::Visible => true,
         VulcanPlanToolPolicy::HeuristicText(text) => text_looks_read_only(text),
+        VulcanPlanToolPolicy::HeuristicStringArgument { field } => args
+            .get(field)
+            .and_then(Value::as_str)
+            .is_some_and(text_looks_read_only),
         VulcanPlanToolPolicy::StringArgumentAllowlist {
             field,
             allowed_values,

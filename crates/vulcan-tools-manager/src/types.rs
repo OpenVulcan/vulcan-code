@@ -175,6 +175,14 @@ pub enum VulcanPlanToolPolicy {
     /// The tool may execute in Plan mode only when the provided text matches one read-only heuristic keyword.
     /// 当前工具仅在给定文本命中只读启发式关键字时才允许在 Plan 模式中执行。
     HeuristicText(String),
+    /// The tool may execute in Plan mode only when one string argument matches the read-only
+    /// heuristic, as for a dispatcher that names the tool it runs.
+    /// 当前工具仅在一个字符串参数命中只读启发式时才允许在 Plan 模式中执行，适用于以参数指定所运行工具的调度器。
+    HeuristicStringArgument {
+        /// Exact top-level argument field inspected by the execution guard.
+        /// 执行守卫检查的精确顶层参数字段。
+        field: String,
+    },
     /// The tool may execute in Plan mode only when one string argument belongs to a closed allowlist.
     /// 当前工具仅在一个字符串参数属于封闭白名单时才允许在 Plan 模式中执行。
     StringArgumentAllowlist {
