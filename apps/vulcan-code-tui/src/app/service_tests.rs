@@ -398,3 +398,93 @@ fn system_prompt_editor_targets_the_loaded_scope() {
         json!({"request":{"scope":"project","projectId":"p-core","text":"project rules"}})
     );
 }
+
+/// The official direct endpoint table is re-read at the status interval, so the background probe
+/// shows up without the page probing.
+/// 官方直连端点表按状态间隔重读，使后台探测结果无需页面探测即可显示。
+#[test]
+fn judge_endpoint_table_is_polled_at_the_status_interval() {
+    let (mut app, _commands) = isolated_app();
+    app.slots.set(
+        Slot::PermissionJudgeStatus,
+        crate::service_api::permission_judge::load_permission_judge_status(),
+        json!({"worker": {}, "cudaInstall": null, "pollIntervalMs": 700}),
+    );
+    app.slots.set(
+        Slot::PermissionJudgeEdgeEndpoints,
+        crate::service_api::permission_judge::load_permission_judge_edge_endpoints(),
+        json!({"endpoints": []}),
+    );
+    app.arm_live_poll(Slot::PermissionJudgeEdgeEndpoints);
+    assert_eq!(
+        app.live_poll_due.get(&Slot::PermissionJudgeEdgeEndpoints),
+        Some(&(app.now + Duration::from_millis(700)))
+    );
+}
+
+/// With the direct backend saved, the page offers automatic selection or a lock per endpoint and
+/// a re-test that never replaces the table's loader.
+/// 已保存官方直连后端时，页面提供自动选择或按端点锁定，以及不替换端点表加载器的重新测试。
+#[test]
+fn judge_endpoint_rows_lock_and_retest_through_their_calls() {
+    use super::action::Edit;
+    use super::pages::{PageId, RowKind, rows};
+    use crate::model::SettingValue;
+    use crate::service_api::CallKind;
+    use crate::service_api::setter::Setter;
+    let (mut app, _commands) = isolated_app();
+    app.slots.set(
+        Slot::PermissionJudgeSettings,
+        crate::service_api::permission_judge::load_permission_judge_settings(),
+        json!({"backend": "edge", "edgeModelId": "m", "edgeEndpointId": null, "models": [],
+            "devices": [], "knownPackages": [], "policyOptions": []}),
+    );
+    app.slots.set(
+        Slot::PermissionJudgeEdgeEndpoints,
+        crate::service_api::permission_judge::load_permission_judge_edge_endpoints(),
+        json!({"modelId": "m", "site": "global", "mode": "auto", "lockedEndpointId": null,
+            "selectedEndpointId": "a", "probedAtMs": null, "nextProbeAtMs": null, "error": null,
+            "endpoints": [
+                {"endpointId": "a", "endpoint": "https://a.example.com", "priority": 10, "online": true,
+                 "region": "r", "ready": true, "acceptsSite": true, "rttMs": 10, "computeP50Ms": null,
+                 "scoreMs": 10, "error": null},
+                {"endpointId": "b", "endpoint": "https://b.example.com", "priority": 20, "online": true,
+                 "region": null, "ready": null, "acceptsSite": null, "rttMs": null, "computeP50Ms": null,
+                 "scoreMs": null, "error": "down"}
+            ]}),
+    );
+    let page = rows(&app, PageId::PermissionJudge);
+    assert!(
+        page.iter()
+            .any(|row| matches!(&row.kind, RowKind::Item { id, .. } if id == "b"))
+    );
+    let lock = page
+        .iter()
+        .find_map(|row| match &row.kind {
+            RowKind::Choice {
+                options,
+                edit: Edit::Call(Setter::Build { ctx, build }),
+                ..
+            } if options.iter().any(|(id, _)| id == "b") => Some((ctx.clone(), *build)),
+            _ => None,
+        })
+        .expect("the endpoint choice");
+    for (value, expected) in [("b", json!("b")), ("*", Value::Null)] {
+        let call = (lock.1)(&lock.0, &SettingValue::Choice(value.into())).unwrap();
+        assert_eq!(call.method, "service_lock_permission_judge_edge_endpoint");
+        assert_eq!(call.params, json!({"request": {"endpointId": expected}}));
+    }
+    let probe = page
+        .iter()
+        .find_map(|row| match &row.kind {
+            RowKind::Button {
+                action: UiAction::Send(Command::Call(call)),
+                ..
+            } if call.method == "service_probe_permission_judge_edge_endpoints" => {
+                Some(call.clone())
+            }
+            _ => None,
+        })
+        .expect("the re-test button");
+    assert!(matches!(probe.kind, CallKind::Mutate(_)));
+}

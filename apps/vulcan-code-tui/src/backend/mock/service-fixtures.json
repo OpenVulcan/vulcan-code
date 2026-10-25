@@ -1128,6 +1128,7 @@
       "activeModelId": "demo-judge-official",
       "previousModelId": "demo-judge-custom",
       "edgeModelId": null,
+      "edgeEndpointId": null,
       "knownPackages": [
         {
           "id": "demo-judge",
@@ -1718,6 +1719,27 @@
       ],
       "unsupportedOptions": {},
       "issue": null
+    },
+    "service_permission_judge_edge_endpoints": {
+      "modelId": "vulcan-decision-shell-v1-mini-preview",
+      "site": "global",
+      "mode": "auto",
+      "lockedEndpointId": null,
+      "selectedEndpointId": "us-mini",
+      "probedAtMs": 1790000000000,
+      "nextProbeAtMs": 1790000600000,
+      "error": null,
+      "endpoints": [
+        { "endpointId": "us-mini", "endpoint": "https://us-models.example.com", "priority": 10, "online": true,
+          "region": "us-west", "ready": true, "acceptsSite": true, "rttMs": 38, "computeP50Ms": 64,
+          "scoreMs": 102, "error": null },
+        { "endpointId": "cn-mini", "endpoint": "https://cn-models.example.com", "priority": 20, "online": true,
+          "region": "cn-east", "ready": true, "acceptsSite": false, "rttMs": 180, "computeP50Ms": null,
+          "scoreMs": null, "error": null },
+        { "endpointId": "pilot-mini", "endpoint": "https://pilot.example.com", "priority": 30, "online": false,
+          "region": null, "ready": null, "acceptsSite": null, "rttMs": null, "computeP50Ms": null,
+          "scoreMs": null, "error": "The endpoint status could not be reached." }
+      ]
     },
     "service_permission_judge_edge_models": {
       "models": [

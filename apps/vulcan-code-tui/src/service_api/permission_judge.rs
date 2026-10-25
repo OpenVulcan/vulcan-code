@@ -5,9 +5,13 @@ use serde_json::{Value, json};
 
 use super::{ServiceCall, Slot};
 
-// A registry or settings change refreshes the page snapshot and the live status together.
-// 登记表或设置变化会同时刷新页面快照与实时状态。
-const JUDGE: &[Slot] = &[Slot::PermissionJudgeSettings, Slot::PermissionJudgeStatus];
+// A registry or settings change refreshes the page snapshot, the live status and the endpoint table.
+// 登记表或设置变化会同时刷新页面快照、实时状态与端点表。
+const JUDGE: &[Slot] = &[
+    Slot::PermissionJudgeSettings,
+    Slot::PermissionJudgeStatus,
+    Slot::PermissionJudgeEdgeEndpoints,
+];
 
 /// Builds the request for `service_permission_judge_settings`, including device and CUDA probing.
 /// 构建 `service_permission_judge_settings` 的请求，包括设备与 CUDA 探测。
@@ -46,6 +50,53 @@ pub fn load_permission_judge_edge_models() -> ServiceCall {
         "service_permission_judge_edge_models",
         json!({}),
         Slot::PermissionJudgeEdgeModels,
+    )
+}
+
+/// Builds the request for `service_permission_judge_edge_endpoints`, the endpoint table of the
+/// chosen official direct model.
+/// 构建 `service_permission_judge_edge_endpoints` 的请求，即所选官方直连模型的端点表。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn load_permission_judge_edge_endpoints() -> ServiceCall {
+    ServiceCall::load(
+        "load_permission_judge_edge_endpoints",
+        "service_permission_judge_edge_endpoints",
+        json!({}),
+        Slot::PermissionJudgeEdgeEndpoints,
+    )
+}
+
+/// Builds the request for `service_probe_permission_judge_edge_endpoints`, which probes every
+/// endpoint now; the table is then re-read through its loader, so polling never probes.
+/// 构建 `service_probe_permission_judge_edge_endpoints` 的请求，立即探测每个端点；随后经端点表的
+/// 加载器重新读取，使轮询从不触发探测。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn probe_permission_judge_edge_endpoints() -> ServiceCall {
+    ServiceCall::mutate(
+        "probe_permission_judge_edge_endpoints",
+        "service_probe_permission_judge_edge_endpoints",
+        json!({}),
+        &[Slot::PermissionJudgeEdgeEndpoints],
+    )
+}
+
+/// Builds the request for `service_lock_permission_judge_edge_endpoint`.
+/// 构建 `service_lock_permission_judge_edge_endpoint` 的请求。
+/// `endpoint_id` is the endpoint to lock to; `None` returns to automatic selection.
+/// `endpoint_id` 为要锁定的端点；`None` 恢复自动选择。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn lock_permission_judge_edge_endpoint(endpoint_id: Option<&str>) -> ServiceCall {
+    ServiceCall::mutate(
+        "lock_permission_judge_edge_endpoint",
+        "service_lock_permission_judge_edge_endpoint",
+        json!({ "request": { "endpointId": endpoint_id } }),
+        &[
+            Slot::PermissionJudgeEdgeEndpoints,
+            Slot::PermissionJudgeSettings,
+        ],
     )
 }
 

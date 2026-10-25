@@ -488,10 +488,14 @@ impl PageId {
                         permission_judge::records_request(&Value::Null, None),
                     ),
                 ]);
-                // The official model list is read only while the direct section is shown.
-                // 只有显示官方直连区块时才读取官方模型清单。
+                // The official model list and endpoint table are read only while the direct
+                // section is shown.
+                // 只有显示官方直连区块时才读取官方模型清单与端点表。
                 if permission_judge::shows_edge(app.slots.value(Slot::PermissionJudgeSettings)) {
-                    calls.push(api::permission_judge::load_permission_judge_edge_models());
+                    calls.extend([
+                        api::permission_judge::load_permission_judge_edge_models(),
+                        api::permission_judge::load_permission_judge_edge_endpoints(),
+                    ]);
                 }
             }
             Self::SetupGuide => calls.extend([
@@ -548,7 +552,11 @@ impl PageId {
             }
             Self::Capabilities => &[Slot::ProviderTasks],
             Self::Mcp => &[Slot::McpOAuth],
-            Self::PermissionJudge | Self::SetupGuide => &[Slot::PermissionJudgeStatus],
+            Self::PermissionJudge => &[
+                Slot::PermissionJudgeStatus,
+                Slot::PermissionJudgeEdgeEndpoints,
+            ],
+            Self::SetupGuide => &[Slot::PermissionJudgeStatus],
             _ => &[],
         }
     }

@@ -452,6 +452,9 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
     }
     if edge {
         edge_rows(&mut rows, app, &enabled_models, &base);
+        if saved == Some("edge") && !s(snapshot, "/edgeModelId").is_empty() {
+            edge_endpoint_rows(&mut rows, app);
+        }
     }
     review_rows(&mut rows, ai);
     approval_rows(&mut rows, snapshot, &base);
@@ -705,6 +708,190 @@ fn edge_rows(rows: &mut Vec<Row>, app: &App, enabled: &[String], base: &Value) {
                 judge::save_permission_judge_settings,
             ),
         ));
+    }
+}
+
+// Choice value of automatic endpoint selection; endpoint ids never contain `*`.
+// 自动端点选择的选项值；端点 id 从不包含 `*`。
+const AUTO_ENDPOINT: &str = "*";
+
+/// Locks to the chosen endpoint, or returns to automatic selection for [`AUTO_ENDPOINT`].
+/// 锁定到所选端点；选择 [`AUTO_ENDPOINT`] 时恢复自动选择。
+fn lock_endpoint(_: &Value, value: &SettingValue) -> Option<ServiceCall> {
+    let chosen = value.as_str();
+    Some(judge::lock_permission_judge_edge_endpoint(
+        (chosen != AUTO_ENDPOINT).then_some(chosen),
+    ))
+}
+
+/// Status label and tone of one endpoint's latest probe, failure first, as in the WebUI.
+/// 一个端点最近探测的状态标签与色调，失败优先，与 WebUI 一致。
+fn endpoint_status(endpoint: &Value) -> (String, Tone) {
+    if !v(endpoint, "/error").is_null() {
+        (
+            tr!("settings.permissionJudge.edge.endpoints.status.failed"),
+            Tone::Bad,
+        )
+    } else if v(endpoint, "/rttMs").is_null() {
+        (
+            tr!("settings.permissionJudge.edge.endpoints.status.notProbed"),
+            Tone::Muted,
+        )
+    } else if v(endpoint, "/acceptsSite") == &Value::Bool(false) {
+        (
+            tr!("settings.permissionJudge.edge.endpoints.status.siteNotAccepted"),
+            Tone::Warn,
+        )
+    } else if v(endpoint, "/ready") == &Value::Bool(false) {
+        (
+            tr!("settings.permissionJudge.edge.endpoints.status.notReady"),
+            Tone::Warn,
+        )
+    } else {
+        (
+            tr!("settings.permissionJudge.edge.endpoints.status.available"),
+            Tone::Good,
+        )
+    }
+}
+
+/// The endpoints of the saved official direct model with their latest background probe, the
+/// endpoint judge requests use now, the automatic or locked choice and a re-test.
+/// 已保存官方直连模型的端点及其最近一次后台探测、判定请求当前使用的端点、自动或锁定选择，以及重新测试。
+fn edge_endpoint_rows(rows: &mut Vec<Row>, app: &App) {
+    rows.push(section(tr!(
+        "settings.permissionJudge.edge.endpoints.title"
+    )));
+    rows.push(note(
+        tr!("settings.permissionJudge.edge.endpoints.description"),
+        Tone::Muted,
+    ));
+    if app
+        .slot_errors
+        .contains_key(&Slot::PermissionJudgeEdgeEndpoints)
+    {
+        rows.push(note(
+            tr!("settings.permissionJudge.edge.endpoints.loadFailed"),
+            Tone::Bad,
+        ));
+        return;
+    }
+    let table = app.slots.value(Slot::PermissionJudgeEdgeEndpoints);
+    let time = |pointer: &str| match v(table, pointer).as_i64() {
+        Some(at) => super::settings::utc_time(at),
+        None => tr!("settings.permissionJudge.edge.endpoints.never"),
+    };
+    let ms = |pointer: &str, endpoint: &Value| match v(endpoint, pointer).as_i64() {
+        Some(value) => tr!("settings.permissionJudge.edge.endpoints.ms", value = value),
+        None => String::from("—"),
+    };
+    let endpoints = a(table, "/endpoints");
+    let locked = s(table, "/lockedEndpointId");
+    let mut options = vec![(
+        AUTO_ENDPOINT.to_string(),
+        tr!("settings.permissionJudge.edge.endpoints.auto"),
+    )];
+    let mut ids: Vec<String> = endpoints
+        .iter()
+        .map(|endpoint| s(endpoint, "/endpointId"))
+        .collect();
+    if !locked.is_empty() && !ids.contains(&locked) {
+        ids.push(locked.clone());
+        if !endpoints.is_empty() {
+            rows.push(note(
+                tr!(
+                    "settings.permissionJudge.edge.endpoints.lockedMissing",
+                    endpoint = locked.as_str()
+                ),
+                Tone::Warn,
+            ));
+        }
+    }
+    options.extend(ids.into_iter().map(|id| {
+        let label = tr!(
+            "settings.permissionJudge.edge.endpoints.lockTo",
+            endpoint = id.as_str()
+        );
+        (id, label)
+    }));
+    rows.push(
+        choice(
+            tr!("settings.permissionJudge.edge.endpoints.routing"),
+            options,
+            if locked.is_empty() {
+                AUTO_ENDPOINT.to_string()
+            } else {
+                locked.clone()
+            },
+            Edit::Call(Setter::Build {
+                ctx: Value::Null,
+                build: lock_endpoint,
+            }),
+        )
+        .detail(tr!(
+            "settings.permissionJudge.edge.endpoints.schedule",
+            probed = time("/probedAtMs"),
+            next = time("/nextProbeAtMs")
+        )),
+    );
+    rows.push(button(
+        tr!("settings.permissionJudge.edge.endpoints.probe"),
+        call(judge::probe_permission_judge_edge_endpoints()),
+        Tone::Normal,
+    ));
+    if !v(table, "/error").is_null() {
+        rows.push(
+            note(
+                tr!("settings.permissionJudge.edge.endpoints.accessFailed"),
+                Tone::Bad,
+            )
+            .detail(s(table, "/error")),
+        );
+    }
+    if endpoints.is_empty() {
+        rows.push(note(
+            tr!("settings.permissionJudge.edge.endpoints.empty"),
+            Tone::Muted,
+        ));
+        return;
+    }
+    let selected = s(table, "/selectedEndpointId");
+    for endpoint in endpoints {
+        let id = s(endpoint, "/endpointId");
+        let (status, tone) = endpoint_status(endpoint);
+        let mut row = item(&id, id.clone(), s(endpoint, "/endpoint")).lines(vec![
+            format!(
+                "{} {} · {} {} · {} {} · {} {}",
+                tr!("settings.permissionJudge.edge.endpoints.column.region"),
+                match s(endpoint, "/region") {
+                    region if region.is_empty() => String::from("—"),
+                    region => region,
+                },
+                tr!("settings.permissionJudge.edge.endpoints.column.network"),
+                ms("/rttMs", endpoint),
+                tr!("settings.permissionJudge.edge.endpoints.column.compute"),
+                ms("/computeP50Ms", endpoint),
+                tr!("settings.permissionJudge.edge.endpoints.column.total"),
+                ms("/scoreMs", endpoint),
+            ),
+            format!(
+                "{} {status}",
+                tr!("settings.permissionJudge.edge.endpoints.column.status")
+            ),
+        ]);
+        row = if id == selected {
+            row.badge(
+                if locked.is_empty() {
+                    tr!("settings.permissionJudge.edge.endpoints.current")
+                } else {
+                    tr!("settings.permissionJudge.edge.endpoints.locked")
+                },
+                Tone::Accent,
+            )
+        } else {
+            row.badge(status, tone)
+        };
+        rows.push(row);
     }
 }
 

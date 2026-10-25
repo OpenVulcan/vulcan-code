@@ -1197,6 +1197,13 @@ impl App {
                 .pointer("/pollIntervalMs")
                 .and_then(|interval| interval.as_u64())
                 .map(Duration::from_millis),
+            // The endpoint table follows the background prober at the status interval.
+            // 端点表按状态间隔跟随后台探测。
+            Slot::PermissionJudgeEdgeEndpoints => self
+                .slots
+                .at(Slot::PermissionJudgeStatus, "/pollIntervalMs")
+                .as_u64()
+                .map(Duration::from_millis),
             _ => return,
         };
         match interval {

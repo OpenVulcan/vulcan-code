@@ -949,6 +949,21 @@ impl FakeService {
                 snapshot["cuda"]["lockedDirectory"] =
                     required(request, "/cudaLibraryDirectory")?.clone();
             }
+            "service_lock_permission_judge_edge_endpoint" => {
+                // The demo mirrors the lock in the settings snapshot and the endpoint table, where
+                // a locked endpoint is the one requests use.
+                // 演示在设置快照与端点表中同步锁定，锁定的端点即请求使用的端点。
+                let locked = required(params, "/request/endpointId")?.clone();
+                self.loads["service_permission_judge_settings"]["edgeEndpointId"] = locked.clone();
+                let table = &mut self.loads["service_permission_judge_edge_endpoints"];
+                table["mode"] = json!(if locked.is_null() { "auto" } else { "locked" });
+                table["selectedEndpointId"] = if locked.is_null() {
+                    json!("us-mini")
+                } else {
+                    locked.clone()
+                };
+                table["lockedEndpointId"] = locked;
+            }
             "service_save_memory_settings" => {
                 // The demo keeps one settings document, also reported inside the overview.
                 // 演示保留一份设置文档，并在总览中同样报告。

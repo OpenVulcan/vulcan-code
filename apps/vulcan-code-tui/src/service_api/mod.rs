@@ -225,6 +225,10 @@ pub enum Slot {
     /// deployment currently serves.
     /// 已登录账户所属部署当前提供的官方直连模型。
     PermissionJudgeEdgeModels,
+    /// `loadPermissionJudgeEdgeEndpoints`: the endpoint table of the chosen official direct model,
+    /// polled while the permission judge page is open.
+    /// 所选官方直连模型的端点表，权限判定页打开期间轮询。
+    PermissionJudgeEdgeEndpoints,
     /// The latest `benchmarkPermissionJudge` result of this page; never saved.
     /// 本页最近一次 `benchmarkPermissionJudge` 结果；不会持久化。
     PermissionJudgeBenchmark,
