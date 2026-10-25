@@ -23,7 +23,7 @@ const SESSION_REVIEW_PROMPT_FILE: &str = "review-prompt.json";
 /// Loads one sidecar document, or `None` when the file is absent.
 /// Malformed files are explicit errors, never treated as absent.
 /// 加载一个旁置文档；文件缺失时返回 `None`。损坏的文件返回明确错误，绝不视为不存在。
-fn load_sidecar<T: DeserializeOwned>(
+pub(super) fn load_sidecar<T: DeserializeOwned>(
     locator: &SessionV1StorageLocator,
     file_name: &str,
 ) -> Result<Option<T>, String> {
@@ -40,7 +40,7 @@ fn load_sidecar<T: DeserializeOwned>(
 
 /// Saves one sidecar document, or removes the file when `document` is `None`.
 /// 保存一个旁置文档；`document` 为 `None` 时删除该文件。
-fn save_sidecar<T: Serialize>(
+pub(super) fn save_sidecar<T: Serialize>(
     locator: &SessionV1StorageLocator,
     file_name: &str,
     label: &str,

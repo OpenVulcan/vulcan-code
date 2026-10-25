@@ -18,6 +18,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use vulcan_sqlite_engine::sql_exec::SqliteValue;
 
 mod ai_credentials;
+mod environment_variables;
 mod git_preferences;
 mod persistence;
 mod project_groups;
@@ -36,6 +37,18 @@ pub use ai_credentials::{
     AiCredentialSecretRecord, create_ai_credential_secret_record,
     delete_ai_credential_secret_record, load_ai_credential_secret_record,
     replace_ai_credential_secret_record, restore_ai_credential_secret_record,
+};
+pub use environment_variables::{
+    ENVIRONMENT_VARIABLE_DESCRIPTION_MAX_CHARS, ENVIRONMENT_VARIABLE_NAME_MAX_CHARS,
+    ENVIRONMENT_VARIABLE_VALUE_MAX_BYTES, EffectiveEnvironmentVariable, EnvironmentVariableDraft,
+    EnvironmentVariableKind, EnvironmentVariableLayer, EnvironmentVariableRecord,
+    EnvironmentVariableScope, RECOMMENDED_ENVIRONMENT_VARIABLE_PREFIX,
+    RESERVED_ENVIRONMENT_VARIABLE_NAMES, SessionEnvironmentVariable, create_environment_variable,
+    delete_environment_variable, environment_variable_name_key, list_environment_variables,
+    load_session_environment, normalized_environment_variable_description,
+    resolve_effective_environment, save_session_environment, store_environment_variable_value,
+    update_environment_variable, validate_environment_variable_name,
+    validate_environment_variable_value,
 };
 pub use git_preferences::{
     load_git_repository_monitoring_preferences, persist_git_repository_monitoring_preference,

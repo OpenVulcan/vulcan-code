@@ -672,6 +672,32 @@ CREATE TABLE IF NOT EXISTS knowledge_operations (
 CREATE INDEX IF NOT EXISTS idx_knowledge_operations_library
 ON knowledge_operations(library_id, created_at_ms DESC);
 
+CREATE TABLE IF NOT EXISTS environment_variables (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    name_key TEXT NOT NULL,
+    stored_value TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('plain', 'secret')),
+    scope TEXT NOT NULL CHECK(scope IN ('global', 'project')),
+    description TEXT NOT NULL DEFAULT '',
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_environment_variables_global_name
+ON environment_variables(name_key) WHERE scope = 'global';
+
+CREATE TABLE IF NOT EXISTS environment_variable_project_bindings (
+    variable_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    PRIMARY KEY (variable_id, project_id),
+    FOREIGN KEY (variable_id) REFERENCES environment_variables(id) ON DELETE CASCADE,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_environment_variable_project_bindings_project
+ON environment_variable_project_bindings(project_id, variable_id);
+
 PRAGMA user_version = {schema_version};
 "#,
         schema_version = APP_SCHEMA_VERSION,
@@ -853,6 +879,8 @@ mod tests {
         let mut expected: Vec<(String, String)> = [
             ("table", AI_CREDENTIAL_SECRETS_TABLE),
             ("table", "app_metadata"),
+            ("table", "environment_variable_project_bindings"),
+            ("table", "environment_variables"),
             ("table", "knowledge_libraries"),
             ("table", "knowledge_library_project_bindings"),
             ("table", "knowledge_operations"),
@@ -860,6 +888,8 @@ mod tests {
             ("table", "projects"),
             ("table", "thread_goals"),
             ("table", "workspace_session_index"),
+            ("index", "idx_environment_variable_project_bindings_project"),
+            ("index", "idx_environment_variables_global_name"),
             ("index", "idx_knowledge_library_project_bindings_project"),
             ("index", "idx_knowledge_operations_library"),
             ("index", "idx_project_git_review_preferences_project"),
