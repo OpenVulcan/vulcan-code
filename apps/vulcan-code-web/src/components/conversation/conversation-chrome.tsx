@@ -5,8 +5,8 @@ import type { DraftConversationPendingSubmission } from "@/components/workspace/
 
 // ConversationScrollTail renders the end of the transcript scroll content: the tail reserve and the sticky footer.
 // ConversationScrollTail 渲染转录滚动内容的末尾：尾部预留与粘性页脚。
-// The scroll controller sizes the reserve so a followed tail never jumps back when the transcript shrinks.
-// 滚动控制器调整预留高度，使跟随中的尾部在转录收缩时不会回跳。
+// The scroll controller sizes the reserve so a manual fold never pulls the viewport bottom up.
+// 滚动控制器调整预留高度，使手动折叠不会把视口底部向上拉。
 export function ConversationScrollTail(props: {
   // Optional footer pinned to the bottom of the scrollport.
   // 固定在滚动视口底部的可选页脚。

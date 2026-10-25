@@ -74,17 +74,19 @@ export const CONVERSATION_ANCHOR_REVEAL_TOP_GAP_PX = 16;
 // 仍显示内容。
 export const CONVERSATION_TAIL_RESERVE_MAX_SHARE = 0.4;
 
-// conversationTailReserveHeight lets a followed transcript only extend downward: shrinkage below the
-// highest content height reached is absorbed by blank reserve, up to the cap.
-// conversationTailReserveHeight 让跟随中的转录只向下延伸：低于已达到最高内容高度的收缩由空白预留吸收，
-// 但不超过上限。
-// Parameters: floor is the highest total (content plus reserve) kept so far, contentHeight is the
-// current transcript height, and cap is the largest allowed reserve.
-// 参数：floor 是目前保留的最高总高度（内容加预留），contentHeight 是当前转录高度，cap 是允许的最大预留。
+// conversationTailReserveHeight keeps a manual fold from pulling the viewport bottom up: only the part
+// of the shrinkage that would leave blank space under the viewport is filled, up to the cap.
+// conversationTailReserveHeight 防止手动折叠把视口底部向上拉：只填补收缩后会在视口下方留空的部分，
+// 且不超过上限。
+// Parameters: foldLimit is the transcript height the viewport bottom reached when the fold began
+// (content plus reserve, minus the distance still scrollable below), contentHeight is the current
+// transcript height, and cap is the largest allowed reserve.
+// 参数：foldLimit 是折叠开始时视口底部所在的转录高度（内容加预留，减去下方仍可滚动的距离），
+// contentHeight 是当前转录高度，cap 是允许的最大预留。
 // Returns: the reserve height in CSS pixels.
 // 返回值：以 CSS 像素表示的预留高度。
-export function conversationTailReserveHeight(floor: number, contentHeight: number, cap: number): number {
-  return Math.max(0, Math.min(cap, floor - contentHeight));
+export function conversationTailReserveHeight(foldLimit: number, contentHeight: number, cap: number): number {
+  return Math.max(0, Math.min(cap, Math.ceil(foldLimit - contentHeight)));
 }
 
 // ProgrammaticScrollTarget describes one in-flight native scroll operation owned by the controller.
@@ -256,17 +258,21 @@ export function useConversationScrollController(
   // latestOptionsRef 向稳定原生与观察器处理器暴露当前回调。
   const latestOptionsRef = React.useRef(options);
   latestOptionsRef.current = options;
-  // tailFloorRef is the highest transcript-plus-reserve height kept while the tail is followed.
-  // tailFloorRef 是跟随尾部期间保留的最高“转录加预留”高度。
-  const tailFloorRef = React.useRef(0);
+  // tailTotalRef is the transcript-plus-reserve height after the last reconciliation.
+  // tailTotalRef 是上次协调后的“转录加预留”高度。
+  const tailTotalRef = React.useRef(0);
+  // foldLimitRef is the transcript height under the viewport bottom when a manual fold began; null
+  // outside a fold, when the reserve may only shrink.
+  // foldLimitRef 是手动折叠开始时视口底部所在的转录高度；折叠之外为 null，此时预留只能缩小。
+  const foldLimitRef = React.useRef<number | null>(null);
 
-  // reconcileTailReserve keeps a followed tail from jumping back when the transcript shrinks.
-  // reconcileTailReserve 防止跟随中的尾部在转录收缩时回跳。
-  // While following, shrinkage is absorbed by blank reserve up to the cap; once the reader owns the
-  // viewport, the reserve only shrinks to the part still on screen, so nothing visible moves and it
-  // disappears as the reader scrolls up.
-  // 跟随期间，收缩由空白预留吸收且不超过上限；阅读者接管视口后，预留只缩小到仍在屏幕上的部分，
-  // 因此可见内容不会移动，并随阅读者向上滚动而消失。
+  // reconcileTailReserve keeps a manual fold from pulling the content above down to the bottom.
+  // reconcileTailReserve 防止手动折叠把上方内容一下子拉到底部。
+  // Only during a manual fold may the reserve grow, and only by what the browser would otherwise clamp.
+  // Outside a fold it never grows: new content removes it while following, and once the reader owns
+  // the viewport it shrinks to the part still on screen, disappearing as the reader scrolls up.
+  // 只有手动折叠期间预留才会增长，且只增长浏览器原本会截断的部分。折叠之外绝不增长：跟随时新内容到达
+  // 即撤掉；阅读者接管视口后缩小到仍在屏幕上的部分，并随向上滚动而消失。
   // Parameters: element is the scrollport of the active surface.
   // 参数：element 是活动界面的滚动视口。
   // Returns: nothing.
@@ -278,17 +284,23 @@ export function useConversationScrollController(
       return;
     }
     const current = reserve.offsetHeight;
+    const contentHeight = timeline.offsetHeight;
     let next: number;
-    if (followTailRef.current) {
+    if (foldLimitRef.current !== null) {
       // visibleArea excludes the sticky footer that covers the bottom of the scrollport.
       // visibleArea 不含覆盖滚动视口底部的粘性页脚。
       const footer = element.querySelector<HTMLElement>("[data-conversation-scroll-footer]");
       const visibleArea = Math.max(0, element.clientHeight - (footer?.offsetHeight ?? 0));
       next = conversationTailReserveHeight(
-        tailFloorRef.current,
-        timeline.offsetHeight,
+        foldLimitRef.current,
+        contentHeight,
         Math.floor(visibleArea * CONVERSATION_TAIL_RESERVE_MAX_SHARE),
       );
+    } else if (followTailRef.current) {
+      // New content drops the reserve at once so the followed tail lands right above the composer
+      // instead of first filling blank space and catching up later.
+      // 新内容到达即撤掉预留，使跟随中的尾部直接贴在输入区上方，而不是先填满空白再滞后追底。
+      next = contentHeight > tailTotalRef.current - current ? 0 : current;
     } else {
       const onScreen = element.getBoundingClientRect().bottom - reserve.getBoundingClientRect().top;
       next = Math.max(0, Math.min(current, Math.ceil(onScreen)));
@@ -296,7 +308,23 @@ export function useConversationScrollController(
     if (next !== current) {
       reserve.style.height = `${next}px`;
     }
-    tailFloorRef.current = timeline.offsetHeight + next;
+    tailTotalRef.current = contentHeight + next;
+  }, []);
+
+  // beginFoldReserve records where the viewport bottom sits before a manual fold changes the transcript.
+  // beginFoldReserve 在手动折叠改变转录前记录视口底部所在位置。
+  // Parameters: element is the scrollport of the active surface.
+  // 参数：element 是活动界面的滚动视口。
+  // Returns: nothing.
+  // 返回值：无。
+  const beginFoldReserve = React.useCallback((element: HTMLElement): void => {
+    const reserve = element.querySelector<HTMLElement>(".vk-transcript-tail");
+    const timeline = element.querySelector<HTMLElement>(".vk-transcript-inner > .vk-timeline");
+    if (!reserve || !timeline) {
+      return;
+    }
+    const below = Math.max(0, element.scrollHeight - element.scrollTop - element.clientHeight);
+    foldLimitRef.current = timeline.offsetHeight + reserve.offsetHeight - below;
   }, []);
 
   // publishFollowTail updates the ownership ledger and visible affordance together.
@@ -516,6 +544,7 @@ export function useConversationScrollController(
     if (movement.readerMoved) {
       userRevisionRef.current += 1;
       layoutTransactionRef.current = null;
+      foldLimitRef.current = null;
       cancelPendingFrame();
       publishFollowTail(conversationViewportAllowsTailFollow(element));
     }
@@ -691,7 +720,8 @@ export function useConversationScrollController(
     // A newly rendered surface starts without the previous surface's tail reserve.
     // 新渲染的界面不继承上一界面的尾部预留。
     element.querySelector<HTMLElement>(".vk-transcript-tail")?.style.setProperty("height", "0px");
-    tailFloorRef.current = 0;
+    tailTotalRef.current = 0;
+    foldLimitRef.current = null;
     observedScrollTopRef.current = element.scrollTop;
     programmaticTargetRef.current = null;
     // savedSnapshot restores a previously read position; unseen surfaces start with explicit tail ownership.
@@ -897,6 +927,7 @@ export function useConversationScrollController(
       cancelPendingFrame();
       programmaticTargetRef.current = null;
       userRevisionRef.current += 1;
+      beginFoldReserve(element);
       // A fold click changes layout, not scroll intent: preserve tail ownership or the existing reader anchor.
       // 折叠点击只改变布局，不改变滚动意图：保留锁底状态或既有阅读锚点。
       const snapshot = writeCurrentSnapshot(element, detail.surfaceId);
@@ -909,7 +940,7 @@ export function useConversationScrollController(
     };
     window.addEventListener(CONVERSATION_MANUAL_VIEWPORT_INTERACTION_EVENT, handleManualViewportInteraction);
     return () => window.removeEventListener(CONVERSATION_MANUAL_VIEWPORT_INTERACTION_EVENT, handleManualViewportInteraction);
-  }, [cancelPendingFrame, scheduleSnapshotRestore, writeCurrentSnapshot]);
+  }, [beginFoldReserve, cancelPendingFrame, scheduleSnapshotRestore, writeCurrentSnapshot]);
 
   React.useEffect(() => {
     // handleLayoutSettled applies one final correction and releases per-frame transaction ownership.
@@ -921,6 +952,14 @@ export function useConversationScrollController(
       // detail prevents another mounted transcript from releasing this surface's transaction.
       // detail 防止其他已挂载转录界面释放当前界面的事务。
       const detail = (event as CustomEvent<ConversationLayoutSettledDetail>).detail;
+      // The fold window absorbs its final geometry, then the reserve may only shrink again.
+      // 折叠窗口吸收最终几何后关闭，此后预留只能缩小。
+      const element = latestOptionsRef.current.scrollRef.current;
+      if (foldLimitRef.current !== null && element && detail?.surfaceId
+        && detail.surfaceId === latestOptionsRef.current.surfaceId) {
+        reconcileTailReserve(element);
+        foldLimitRef.current = null;
+      }
       if (
         !transaction
         || !detail?.surfaceId
@@ -938,7 +977,7 @@ export function useConversationScrollController(
     };
     window.addEventListener(CONVERSATION_LAYOUT_SETTLED_EVENT, handleLayoutSettled);
     return () => window.removeEventListener(CONVERSATION_LAYOUT_SETTLED_EVENT, handleLayoutSettled);
-  }, [scheduleSnapshotRestore]);
+  }, [reconcileTailReserve, scheduleSnapshotRestore]);
 
   React.useEffect(() => () => {
     layoutTransactionRef.current = null;

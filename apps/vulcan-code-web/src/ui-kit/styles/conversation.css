@@ -68,7 +68,7 @@
   will-change: transform;
 }
 .vk-timeline { display: grid; align-content: start; gap: calc(var(--vk-u) * 2.5); min-width: 0; min-height: 0; }
-/* Blank tail kept while the transcript follows its end; the scroll controller owns its height. */
+/* Blank tail kept after a manual fold so the viewport bottom does not jump; the scroll controller owns its height. */
 .vk-transcript-tail { flex: none; height: 0; }
 .vk-transcript-foot {
   position: sticky;

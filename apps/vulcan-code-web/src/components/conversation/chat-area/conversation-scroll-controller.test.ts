@@ -99,15 +99,21 @@ describe("conversation scroll ownership ledger", () => {
   });
 });
 
-describe("followed tail reserve", () => {
-  // A collapse keeps the previous total height, so the followed tail stays put instead of jumping back.
-  // 折叠保留之前的总高度，使跟随中的尾部保持不动而不是回跳。
-  it("absorbs shrinkage below the highest height reached", () => {
+describe("manual fold reserve", () => {
+  // A fold at the bottom keeps the viewport bottom filled, so the content above does not drop down.
+  // 在底部折叠时保持视口底部有内容，使上方内容不会下坠。
+  it("fills only the gap under the viewport bottom", () => {
     expect(conversationTailReserveHeight(2000, 1800, 400)).toBe(200);
   });
 
-  // Regrowth consumes the reserve first, so expanding again does not push the tail either.
-  // 重新增长先消耗预留，因此再次展开也不会推动尾部。
+  // Content still below the viewport absorbs the fold itself, so no blank space is added.
+  // 视口下方仍有内容时由其吸收折叠，不添加空白。
+  it("adds nothing while content remains below the viewport", () => {
+    expect(conversationTailReserveHeight(1500, 1800, 400)).toBe(0);
+  });
+
+  // Expanding again during the same fold consumes the reserve first.
+  // 同一次折叠中再次展开时先消耗预留。
   it("releases the reserve as content grows back", () => {
     expect(conversationTailReserveHeight(2000, 1950, 400)).toBe(50);
     expect(conversationTailReserveHeight(2000, 2400, 400)).toBe(0);
