@@ -33,6 +33,8 @@ V0.1.x 是发布前版本，不保留任何元数据迁移：
 在会话生命周期守卫内先以 `session_v1_format_is_unsupported` 只读元数据确认其为 `UnsupportedDevelopmentFormat`，
 再经 `delete_session_v1` 删除会话目录与索引记录。可读会话返回 `ERR_SESSION_FORMAT_SUPPORTED`，损坏或缺失仍是
 错误，绝不当作旧格式处理。WebUI 在归档返回该错误码时弹出确认框，用户确认后才删除。
+已归档的旧版本会话走普通的彻底删除：`delete_session_lifecycle_v1` 先以同一只读检查确认格式，旧格式直接经
+`delete_session_v1` 删除目录与索引记录，可读会话仍加载完整树并执行协作检查。
 
 发布锁是协作式锁，进程退出会自动释放；锁文件本身永久保留，不能因“看起来为空”而删除。
 

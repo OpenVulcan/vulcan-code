@@ -316,3 +316,41 @@ async fn cold_root_deletion_preserves_completed_child_with_pending_question() {
     );
     fixture.shutdown().await;
 }
+
+/// Deletes an archived root whose metadata uses an older schema without loading it.
+/// 不加载即删除元数据采用旧模式版本的已归档根会话。
+/// Verifies the unreadable format removes both the exact directory and the archived row.
+/// 验证不可读格式同时移除精确目录与归档记录。
+#[tokio::test]
+async fn root_deletion_removes_an_unsupported_metadata_format() {
+    let fixture = LifecycleStorageFixture::start().await;
+    let registry = SessionRuntimeRegistry::default();
+    let root_id = SessionId::new_v4();
+    let root = create_fixture_session(&fixture, &registry, root_id).await;
+    close_fixture_turn(&root, 1_787_788_800_026);
+    let root_directory = root.storage_locator().unwrap().session_directory();
+    archive_session_lifecycle_v1(&fixture.controller, &registry, root_id, 1_787_788_800_027)
+        .await
+        .unwrap();
+    // Rewrite the durable version only, as a build bumping the schema would leave it behind.
+    // 只改写持久版本号，模拟模式版本递增后遗留的旧会话。
+    let metadata_path = root_directory.join("metadata.json");
+    let mut raw: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&metadata_path).unwrap()).unwrap();
+    raw["schema_version"] = (vulcan_session_core::v1::config::METADATA_SCHEMA_VERSION - 1).into();
+    std::fs::write(&metadata_path, serde_json::to_vec(&raw).unwrap()).unwrap();
+    // A fresh registry matches a restarted service that never loaded the old session.
+    // 全新注册表对应从未加载该旧会话的重启后服务。
+    let cold_registry = SessionRuntimeRegistry::default();
+    delete_session_lifecycle_v1(&fixture.controller, &cold_registry, root_id)
+        .await
+        .unwrap();
+    assert!(!root_directory.exists());
+    assert!(
+        list_archived_sessions_v1(&fixture.controller, "project-explicit")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    fixture.shutdown().await;
+}

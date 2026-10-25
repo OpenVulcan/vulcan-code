@@ -25,6 +25,7 @@ use vulcan_workspace_store::workspace_store::{
     list_archived_sessions_v1, load_session_v1_full, load_session_v1_tail,
     locate_embedded_task_session_v1, locate_optional_session_v1_storage, locate_session_v1_storage,
     preflight_session_v1_storage, project_resource_directory_v1, project_session_lifecycle_v1,
+    session_v1_format_is_unsupported,
 };
 
 use crate::session_runtime_registry_v1::{
@@ -1451,13 +1452,19 @@ pub(crate) async fn restore_session_lifecycle_v1(
 /// # Returns / 返回值
 ///
 /// Success after the exact directory is absent and the locator row is deleted. Project resources
-/// are never touched.
-/// 精确目录不存在且定位记录删除后返回成功；项目资源绝不会被触碰。
+/// are never touched. A root whose metadata uses a format this build no longer reads can be
+/// neither loaded nor checked, so its directory and row are removed directly.
+/// 精确目录不存在且定位记录删除后返回成功；项目资源绝不会被触碰。元数据格式已不受本构建支持的根
+/// 既无法加载也无法检查，因此直接删除其目录与记录。
 pub(crate) async fn delete_session_lifecycle_v1(
     controller: &HostRuntimeHandle,
     registry: &SessionRuntimeRegistry,
     session_id: SessionId,
 ) -> Result<(), SessionV1LifecycleError> {
+    if session_v1_format_is_unsupported(controller, &session_id.to_string()).await? {
+        delete_session_v1(controller, &session_id.to_string()).await?;
+        return Ok(());
+    }
     deletion::delete_tree(controller, registry, session_id).await
 }
 
