@@ -3,8 +3,9 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
+import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { appendFile, chmod, copyFile, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, copyFile, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -90,6 +91,16 @@ async function writeSource(root, version, platforms, describe = workingDescribe)
   return source;
 }
 
+// archiveGeneration derives the expected installation identity from the fixture archive's exact bytes.
+// archiveGeneration 根据夹具归档的精确字节派生期望的安装身份。
+async function archiveGeneration(source, version, platform) {
+  // The suffix is a content identity, not a fixed fixture snapshot.
+  // 后缀是内容身份，不是固定夹具快照。
+  const name = `vulcan-code-${version}-${platform}`;
+  const digest = createHash('sha256').update(await readFile(path.join(source, `${name}.tar.gz`))).digest('hex');
+  return `${name}-${digest.slice(0, 12)}`;
+}
+
 // run executes one installed launcher and returns its trimmed standard output.
 // run 执行一个已安装启动器，返回去除首尾空白的标准输出。
 function run(launcher, ...args) {
@@ -114,7 +125,7 @@ test('the archive matching the host operating system and architecture is install
     const bin = path.join(prefix, 'bin');
     const result = context.install(['--from', source, '--prefix', prefix, '--bin-dir', bin], identity);
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(await readlink(path.join(prefix, 'current')), `versions/vulcan-code-0.1.0-${expected}`);
+    assert.equal(await readlink(path.join(prefix, 'current')), `versions/${await archiveGeneration(source, '0.1.0', expected)}`);
     assert.equal(run(path.join(bin, 'vulcan-tui'), '--theme', 'dark'), `tui ${expected} 0.1.0 --theme dark`);
     assert.equal(run(path.join(bin, 'vulcan-code')), `desktop ${expected} 0.1.0`);
     assert.equal(result.stdout.includes('--install-browser-dependencies'), expected.startsWith('linux'));
@@ -122,20 +133,28 @@ test('the archive matching the host operating system and architecture is install
 }));
 
 test('upgrades switch the active version, keep the previous one, and prune older ones', { skip }, () => withHome(async context => {
-  for (const version of ['0.1.0', '0.1.1', '0.1.2', '0.1.2']) {
-    const result = context.installFrom(await writeSource(context.root, version, ['linux-x64']));
+  // Retention expectations follow the actual installed generation identities.
+  // 保留预期跟随实际安装的代际身份。
+  const installed = [];
+  for (const version of ['0.1.0', '0.1.1', '0.1.2']) {
+    const source = await writeSource(context.root, version, ['linux-x64']);
+    const result = context.installFrom(source);
     assert.equal(result.status, 0, result.stderr);
     assert.equal(run(path.join(context.bin, 'vulcan-tui')), `tui linux-x64 ${version}`);
+    installed.push(await archiveGeneration(source, version, 'linux-x64'));
   }
   assert.deepEqual((await readdir(path.join(context.prefix, 'versions'))).sort(),
-    ['vulcan-code-0.1.1-linux-x64', 'vulcan-code-0.1.2-linux-x64']);
+    installed.slice(-2).sort());
 }));
 
 test('tampered archives, unloadable builds, and unknown hosts leave the active version untouched', { skip }, () => withHome(async context => {
   assert.equal(context.installFrom(await writeSource(context.root, '0.1.0', ['linux-x64'])).status, 0);
+  // Capture the active content identity before probing failed installations.
+  // 在验证失败安装之前捕获当前内容身份。
+  const active = await readlink(path.join(context.prefix, 'current'));
   const assertUnchanged = async () => {
-    assert.equal(await readlink(path.join(context.prefix, 'current')), 'versions/vulcan-code-0.1.0-linux-x64');
-    assert.deepEqual(await readdir(path.join(context.prefix, 'versions')), ['vulcan-code-0.1.0-linux-x64']);
+    assert.equal(await readlink(path.join(context.prefix, 'current')), active);
+    assert.deepEqual(await readdir(path.join(context.prefix, 'versions')), [path.basename(active)]);
   };
 
   const tampered = await writeSource(context.root, '0.1.1', ['linux-x64']);
@@ -175,7 +194,7 @@ test('only this prefix\'s user service is re-registered and removed, and foreign
 
   // The unit now names this prefix's real version path, as --install-user-service writes it.
   // 单元现在指向本前缀的真实版本路径，与 --install-user-service 写入的一致。
-  await writeFile(unit, `ExecStart="${await realpath(context.prefix)}/versions/vulcan-code-0.1.0-linux-x64/bin/vulcan-code-service" --headless\n`);
+  await writeFile(unit, `ExecStart="${await realpath(path.join(context.prefix, 'current'))}/bin/vulcan-code-service" --headless\n`);
   const upgrade = context.installFrom(await writeSource(context.root, '0.1.1', ['linux-x64']), {}, ['--with-browser-dependencies']);
   assert.equal(upgrade.status, 0, upgrade.stderr);
   const calls = await context.calls();
@@ -218,6 +237,50 @@ test('uninstall keeps additional files in an owned prefix', { skip }, () => with
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(await readdir(context.prefix), ['keep.txt']);
   assert.equal(await readFile(path.join(context.prefix, 'keep.txt'), 'utf8'), 'keep');
+}));
+
+// Identical bytes do not rename any installed entry; rebuilt bytes retain the preceding generation.
+// 相同字节不重命名任何安装条目；重新构建的字节保留前一代际。
+test('same-version archives reuse identical generations and retain rebuilt predecessors', { skip }, () => withHome(async context => {
+  // Preserve the old directory and link identities as observable evidence for existing processes.
+  // 保留旧目录与链接身份，作为既有进程可观察的证据。
+  const source = await writeSource(context.root, '0.1.0', ['linux-x64']);
+  assert.equal(context.installFrom(source).status, 0);
+  const current = path.join(context.prefix, 'current');
+  const originalRoot = await realpath(current);
+  const originalInode = (await stat(originalRoot, { bigint: true })).ino;
+  const linkInode = (await lstat(current, { bigint: true })).ino;
+  const originalService = await readFile(path.join(originalRoot, 'bin/vulcan-code-service'));
+  const originalCalls = await context.calls();
+  assert.equal(context.installFrom(source).status, 0);
+  assert.equal((await stat(originalRoot, { bigint: true })).ino, originalInode);
+  assert.equal((await lstat(current, { bigint: true })).ino, linkInode);
+  assert.deepEqual(await context.calls(), originalCalls);
+
+  // This archive has the same version but a deliberately different executable body.
+  // 此归档具有相同版本，但可执行文件正文有意不同。
+  const rebuilt = await writeSource(path.join(context.root, 'rebuilt'), '0.1.0', ['linux-x64'], `${workingDescribe}\n:`);
+  const result = context.installFrom(rebuilt);
+  assert.equal(result.status, 0, result.stderr);
+  assert.notEqual(await realpath(current), originalRoot);
+  assert.equal((await stat(originalRoot, { bigint: true })).ino, originalInode);
+  assert.deepEqual(await readFile(path.join(originalRoot, 'bin/vulcan-code-service')), originalService);
+  assert.deepEqual((await readdir(path.join(context.prefix, 'versions'))).sort(), [path.basename(originalRoot), await archiveGeneration(rebuilt, '0.1.0', 'linux-x64')].sort());
+}));
+
+// An existing abbreviated digest directory must also carry the matching complete digest.
+// 既有缩写摘要目录还必须携带匹配的完整摘要。
+test('an existing generation with mismatching digest metadata is never overwritten', { skip }, () => withHome(async context => {
+  // Corrupt only this fixture's marker to simulate an incomplete generation or prefix collision.
+  // 仅损坏此夹具的标记，模拟不完整代际或前缀碰撞。
+  const source = await writeSource(context.root, '0.1.0', ['linux-x64']);
+  assert.equal(context.installFrom(source).status, 0);
+  const current = await realpath(path.join(context.prefix, 'current'));
+  const service = await readFile(path.join(current, 'bin/vulcan-code-service'));
+  await writeFile(path.join(current, '.vulcan-archive-sha256'), 'different archive\n');
+  assert.notEqual(context.installFrom(source).status, 0);
+  assert.equal(await realpath(path.join(context.prefix, 'current')), current);
+  assert.deepEqual(await readFile(path.join(current, 'bin/vulcan-code-service')), service);
 }));
 
 // The default source is a URL, so the download path is exercised against a local HTTP server.
