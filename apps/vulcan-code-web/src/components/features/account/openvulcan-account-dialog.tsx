@@ -43,19 +43,21 @@ export default function OpenVulcanAccountDialog() {
           </div>
         ) : (
           <div className="openvulcan-account-body">
-            <OpenVulcanSignIn account={account} />
+            <OpenVulcanSignIn account={account} onSkip={() => account.setOpen(false)} />
           </div>
         )}
-        <DialogFooter>
-          {signedIn && account.openDetails ? (
-            <Button variant="outline" disabled={account.busy} data-openvulcan-details="" onClick={account.openDetails}>
-              {t("openvulcan.account.details")}<ArrowRight aria-hidden="true" />
+        {signedIn ? (
+          <DialogFooter>
+            {account.openDetails ? (
+              <Button variant="outline" disabled={account.busy} data-openvulcan-details="" onClick={account.openDetails}>
+                {t("openvulcan.account.details")}<ArrowRight aria-hidden="true" />
+              </Button>
+            ) : null}
+            <Button variant="ghost" disabled={account.busy} onClick={() => account.setOpen(false)}>
+              {t("openvulcan.account.close")}
             </Button>
-          ) : null}
-          <Button variant="ghost" disabled={account.busy} onClick={() => account.setOpen(false)}>
-            {t(signedIn ? "openvulcan.account.close" : "openvulcan.account.skip")}
-          </Button>
-        </DialogFooter>
+          </DialogFooter>
+        ) : null}
       </DialogContent>
     </Dialog>
   );

@@ -44,9 +44,9 @@ beforeEach(() => {
   document.body.append(host);
   root = createRoot(host);
   account = {
-    snapshot: null, initialized: true, open: true, busy: false, waiting: false,
+    snapshot: null, initialized: true, open: true, busy: false, waiting: false, loginRegion: null,
     error: { stage: "connect", detail: `Synthetic account failure: https://example.invalid/${"long-segment/".repeat(160)}`, region: "china" },
-    setOpen: vi.fn(), login: vi.fn(), logout: vi.fn(), refresh: vi.fn(),
+    setOpen: vi.fn(), cancel: vi.fn(), login: vi.fn(), logout: vi.fn(), refresh: vi.fn(),
   };
 });
 afterEach(async () => {
@@ -87,28 +87,35 @@ it("resets disclosure for a new error and refreshes uncertain account state", as
   expect(account.login).not.toHaveBeenCalled();
 });
 
-// An active retry hides stale failure guidance and prevents competing regional authorizations.
-// 正在重试时隐藏过期失败说明，并阻止并发区域授权。
-it("shows pending progress and allows cancelling the waiting browser flow", async () => {
-  account = { ...account, waiting: true };
+// A waiting sign-in hides stale failure guidance, marks its site card, blocks competing sign-ins and can be
+// cancelled without closing the dialog.
+// 等待中的登录隐藏过期失败说明，标出其站点卡片，阻止并发登录，并可在不关闭弹窗的情况下取消。
+it("shows pending progress and cancels the waiting browser flow", async () => {
+  account = { ...account, waiting: true, loginRegion: "china" };
   await render();
   expect(document.querySelector('[role="alert"]')).toBeNull();
   expect(document.querySelector('[role="status"]')).not.toBeNull();
-  for (const site of document.querySelectorAll<HTMLButtonElement>("[data-openvulcan-site]")) expect(site.disabled).toBe(true);
-  expect(document.querySelector<HTMLButtonElement>("[data-openvulcan-login]")!.disabled).toBe(true);
-  await act(async () => button("openvulcan.account.skip").click());
-  expect(account.setOpen).toHaveBeenCalledExactlyOnceWith(false);
+  for (const site of document.querySelectorAll<HTMLButtonElement>("[data-openvulcan-login]")) expect(site.disabled).toBe(true);
+  expect(document.querySelector('[data-openvulcan-login="china"]')!.getAttribute("aria-busy")).toBe("true");
+  expect(document.querySelector('[data-openvulcan-login="global"]')!.hasAttribute("aria-busy")).toBe(false);
+  await act(async () => document.querySelector<HTMLButtonElement>("[data-openvulcan-cancel]")!.click());
+  expect(account.cancel).toHaveBeenCalledTimes(1);
+  expect(account.setOpen).not.toHaveBeenCalled();
 });
 
-// Signing in uses the chosen site, which defaults from the interface language and can be switched.
-// 登录使用所选站点；站点按界面语言默认，并可切换。
-it("signs in to the selected site", async () => {
+// The signed-out dialog offers the international site, the China site and "not now", in that order;
+// a site card signs in there at once and "not now" closes the dialog.
+// 未登录弹窗依次提供国际站、国内站与“暂不登录”；站点卡片点击即在该站点登录，“暂不登录”关闭弹窗。
+it("offers both sites and not now as cards", async () => {
   account = { ...account, error: null };
   await render();
-  expect(document.querySelector('[data-openvulcan-site="global"]')!.getAttribute("aria-checked")).toBe("true");
-  await act(async () => document.querySelector<HTMLButtonElement>('[data-openvulcan-site="china"]')!.click());
-  await act(async () => document.querySelector<HTMLButtonElement>("[data-openvulcan-login]")!.click());
+  const cards = [...document.querySelectorAll<HTMLButtonElement>(".openvulcan-account-choice")];
+  expect(cards.map((card) => card.getAttribute("data-openvulcan-login") ?? (card.hasAttribute("data-openvulcan-skip") ? "skip" : null)))
+    .toEqual(["global", "china", "skip"]);
+  await act(async () => cards[1].click());
   expect(account.login).toHaveBeenCalledExactlyOnceWith("china");
+  await act(async () => cards[2].click());
+  expect(account.setOpen).toHaveBeenCalledExactlyOnceWith(false);
 });
 
 // A signed-in account shows its name initial and sums its exact quota lots for the plan balance.

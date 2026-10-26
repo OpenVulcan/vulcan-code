@@ -33,6 +33,9 @@ export interface OpenVulcanAccountController {
   // Whether the browser authorization is waiting for the user.
   // 浏览器授权是否正在等待用户。
   waiting: boolean;
+  // Deployment of the latest sign-in, read only while it is starting or waiting.
+  // 最近一次登录的部署，仅在其启动或等待期间读取。
+  loginRegion: OpenVulcanRegion | null;
   // Latest service diagnostic for the visible action.
   // 可见操作的最近服务诊断。
   error: OpenVulcanAccountError | null;
@@ -42,6 +45,9 @@ export interface OpenVulcanAccountController {
   // Opens or closes the dialog; closing cancels its exact pending login.
   // 打开或关闭弹窗；关闭时取消其准确待处理登录。
   setOpen: (open: boolean) => void;
+  // Cancels the browser authorization being waited for and keeps the dialog open.
+  // 取消正在等待的浏览器授权，并保持弹窗打开。
+  cancel: () => void;
   // Starts one selected regional flow and retains its transaction identity.
   // 启动所选区域流程，并保留其事务身份。
   login: (region: OpenVulcanRegion) => Promise<void>;

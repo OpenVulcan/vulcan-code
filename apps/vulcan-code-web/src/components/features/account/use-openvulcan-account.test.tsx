@@ -166,3 +166,21 @@ it("refreshes an account after commit without authorizing or committing twice", 
   expect(service.startOpenVulcanLogin).toHaveBeenCalledTimes(1);
   expect(service.commitOpenVulcanLogin).toHaveBeenCalledTimes(1);
 });
+
+// Cancelling a waiting authorization releases exactly that transaction, keeps the dialog open and lets a
+// new sign-in start at once, as when the browser authorization page was closed.
+// 取消等待中的授权只释放该事务，保持弹窗打开，并允许立即开始新的登录，例如授权页已被关闭时。
+it("cancels the waiting login and allows a new one at once", async () => {
+  await act(async () => root.render(<Harness />));
+  await act(async () => account.login("global"));
+  expect(account.waiting).toBe(true);
+  expect(account.loginRegion).toBe("global");
+  await act(async () => account.cancel());
+  expect(service.cancelOpenVulcanLogin).toHaveBeenCalledExactlyOnceWith(transaction.transactionId);
+  expect(account.waiting).toBe(false);
+  expect(account.open).toBe(true);
+  expect(account.error).toBeNull();
+  await act(async () => account.login("china"));
+  expect(service.startOpenVulcanLogin).toHaveBeenLastCalledWith("china");
+  expect(account.waiting).toBe(true);
+});

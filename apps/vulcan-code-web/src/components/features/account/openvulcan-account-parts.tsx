@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ArrowUpRight, LoaderCircle, LogOut, RefreshCw } from "lucide-react";
+import { ArrowUpRight, LoaderCircle, LogOut, RefreshCw, X } from "lucide-react";
 import { Button } from "@/ui-kit/primitives/button";
 import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice";
 import { useI18n } from "@/i18n";
@@ -24,15 +24,9 @@ const failureCopy = {
 // SITES lists the two independent deployments with their public domains, in display order.
 // SITES 按显示顺序列出两个独立部署及其公开域名。
 export const SITES = [
-  { region: "china", domain: "openvulcan.cn", label: "openvulcan.account.china" },
   { region: "global", domain: "openvulcan.com", label: "openvulcan.account.global" },
+  { region: "china", domain: "openvulcan.cn", label: "openvulcan.account.china" },
 ] as const satisfies ReadonlyArray<{ region: OpenVulcanRegion; domain: string; label: string }>;
-
-// defaultSite suggests the deployment matching the interface language; the user can switch before signing in.
-// defaultSite 按界面语言建议部署；用户可在登录前切换。
-function defaultSite(locale: string): OpenVulcanRegion {
-  return locale.toLowerCase().startsWith("zh") ? "china" : "global";
-}
 
 // signedInAccount returns the snapshot only when an account is stored, whether or not it is still connected.
 // signedInAccount 仅在已保存账户时返回快照，无论其是否仍处于连接状态。
@@ -109,44 +103,55 @@ export function OpenVulcanIdentity(props: {
   );
 }
 
-// OpenVulcanSignIn is the signed-out entry: one primary sign-in action with the site choice as a quiet line.
-// OpenVulcanSignIn 是未登录入口：一个主登录操作，站点选择作为低调的次要行。
-export function OpenVulcanSignIn(props: { account: OpenVulcanAccountController }) {
-  const { locale, t } = useI18n();
+// OpenVulcanSignIn is the signed-out entry: one card per site that signs in there at once, and, where the
+// surface can be dismissed, a third card that continues without signing in. While the browser
+// authorization waits, it can be cancelled so a closed authorization page never blocks a new sign-in.
+// OpenVulcanSignIn 是未登录入口：每个站点一张卡片，点击即在该站点登录；界面可关闭时再提供第三张“暂不登录”
+// 卡片。浏览器授权等待期间可以取消，使已关闭的授权页不会阻塞新的登录。
+// Parameters: the account controller, and onSkip for surfaces that can continue without signing in.
+// 参数：账户控制器，以及可在不登录时继续的界面所提供的 onSkip。
+export function OpenVulcanSignIn(props: { account: OpenVulcanAccountController; onSkip?: () => void }) {
+  const { t } = useI18n();
   const { account } = props;
-  // site is the deployment the next sign-in uses; a failed login keeps its own region for retry.
-  // site 是下一次登录使用的部署；失败的登录保留自身区域以便重试。
-  const [site, setSite] = React.useState<OpenVulcanRegion>(() => account.error?.region ?? defaultSite(locale));
   const pending = account.busy || account.waiting;
   return (
     <div className="openvulcan-account-signin">
-      <Button className="openvulcan-account-login" disabled={pending} data-openvulcan-login="" onClick={() => void account.login(site)}>
-        {pending ? <LoaderCircle aria-hidden="true" className="vk-spin" /> : null}
-        {t("openvulcan.account.login")}
-        {pending ? null : <ArrowUpRight aria-hidden="true" />}
-      </Button>
-      <div className="openvulcan-account-site" role="radiogroup" aria-label={t("openvulcan.account.site")}>
-        <span>{t("openvulcan.account.site")}</span>
-        {SITES.map((entry) => (
-          <button
-            key={entry.region}
-            type="button"
-            role="radio"
-            aria-checked={site === entry.region}
-            aria-label={t(entry.label)}
-            title={t(entry.label)}
-            disabled={pending}
-            data-openvulcan-site={entry.region}
-            onClick={() => setSite(entry.region)}
-          >
-            {entry.domain}
+      <div className="openvulcan-account-choices" role="group" aria-label={t("openvulcan.account.choose")}>
+        {SITES.map((entry) => {
+          const active = pending && account.loginRegion === entry.region;
+          return (
+            <button
+              key={entry.region}
+              type="button"
+              className="openvulcan-account-choice"
+              aria-busy={active || undefined}
+              data-active={active || undefined}
+              disabled={pending}
+              data-openvulcan-login={entry.region}
+              onClick={() => void account.login(entry.region)}
+            >
+              <strong>{t(entry.label)}</strong>
+              <span>{entry.domain}</span>
+              {active ? <LoaderCircle aria-hidden="true" className="vk-spin" /> : <ArrowUpRight aria-hidden="true" />}
+            </button>
+          );
+        })}
+        {props.onSkip ? (
+          <button type="button" className="openvulcan-account-choice" data-openvulcan-skip="" disabled={account.busy} onClick={props.onSkip}>
+            <strong>{t("openvulcan.account.later")}</strong>
+            <span>{t("openvulcan.account.laterHint")}</span>
           </button>
-        ))}
+        ) : null}
       </div>
       {pending ? (
-        <p role="status" className="openvulcan-account-pending">
-          {t(account.waiting && !account.busy ? "openvulcan.account.waiting" : "openvulcan.account.connecting")}
-        </p>
+        <div role="status" className="openvulcan-account-pending">
+          <span>{t(account.waiting && !account.busy ? "openvulcan.account.waiting" : "openvulcan.account.connecting")}</span>
+          {account.waiting && !account.busy ? (
+            <Button variant="outline" size="sm" data-openvulcan-cancel="" onClick={account.cancel}>
+              <X aria-hidden="true" />{t("openvulcan.account.cancelLogin")}
+            </Button>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );

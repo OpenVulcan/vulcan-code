@@ -85,47 +85,68 @@
   background: var(--vk-warn);
 }
 
-/* Signed-out entry: one primary action, with the site choice as a quiet secondary line. */
-/* 未登录入口：一个主操作，站点选择作为低调的次要行。 */
-.openvulcan-account-login {
-  width: 100%;
+/* Signed-out entry: one card per site that signs in at once, then the optional "not now" card. */
+/* 未登录入口：每个站点一张点击即登录的卡片，随后是可选的“暂不登录”卡片。 */
+.openvulcan-account-choices {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
 }
 
-.openvulcan-account-site {
-  display: flex;
-  flex-wrap: wrap;
+.openvulcan-account-choice {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
   align-items: center;
-  justify-content: center;
-  gap: 4px;
+  column-gap: 12px;
+  row-gap: 2px;
+  padding: 12px 14px;
+  border: 1px solid var(--vk-line);
+  background: var(--vk-panel);
+  color: var(--vk-ink);
+  text-align: left;
+  transition: background-color var(--vk-t-fast) var(--vk-ease), border-color var(--vk-t-fast) var(--vk-ease);
+}
+
+.openvulcan-account-choice > strong {
+  font-size: var(--vk-fs-sm);
+  font-weight: 600;
+}
+
+.openvulcan-account-choice > span {
+  grid-row: 2;
   color: var(--vk-ink-2);
   font-size: var(--vk-fs-xs);
 }
 
-.openvulcan-account-site > span {
-  margin-right: 2px;
+.openvulcan-account-choice > svg {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  width: 16px;
+  height: 16px;
+  color: var(--vk-ink-2);
 }
 
-.openvulcan-account-site button {
-  padding: 2px 8px;
-  color: inherit;
-  transition: background-color var(--vk-t-fast) var(--vk-ease), color var(--vk-t-fast) var(--vk-ease);
+.openvulcan-account-choice:hover:not(:disabled) {
+  border-color: var(--vk-line-strong);
+  background: var(--vk-hover);
 }
 
-.openvulcan-account-site button:hover:not(:disabled) {
-  color: var(--vk-ink);
-}
-
-.openvulcan-account-site button[aria-checked="true"] {
+.openvulcan-account-choice[data-active] {
+  border-color: var(--vk-line-strong);
   background: var(--vk-sunken);
-  color: var(--vk-ink);
-  font-weight: 500;
 }
 
-.openvulcan-account-site button:disabled {
-  opacity: 0.6;
+.openvulcan-account-choice:disabled:not([data-active]) {
+  opacity: 0.55;
 }
 
 .openvulcan-account-pending {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 12px;
   color: var(--vk-ink-2);
   font-size: var(--vk-fs-sm);
   text-align: center;
@@ -513,7 +534,7 @@
 }
 
 .openvulcan-page-signin .openvulcan-account-signin {
-  width: min(100%, 22rem);
+  width: min(100%, 26rem);
 }
 
 .openvulcan-page-note {

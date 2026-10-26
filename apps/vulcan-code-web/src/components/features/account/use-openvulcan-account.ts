@@ -37,6 +37,9 @@ export function useOpenVulcanAccount(ready: boolean, serviceEpoch: number): Open
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<OpenVulcanAccountError | null>(null);
   const [challenge, setChallenge] = React.useState<PublicAiOAuthChallenge | null>(null);
+  // target is the deployment of the latest sign-in, shown on its card while it starts or waits.
+  // target 是最近一次登录的部署，在其启动或等待期间显示在对应卡片上。
+  const [target, setTarget] = React.useState<OpenVulcanRegion | null>(null);
   // generation rejects observations from actions that have been superseded or unmounted.
   // generation 拒绝来自已被替代或卸载操作的观测。
   const generation = React.useRef(0);
@@ -184,6 +187,18 @@ export function useOpenVulcanAccount(ready: boolean, serviceEpoch: number): Open
     setDialogOpen(next);
   }, []);
 
+  // cancel abandons the waiting browser authorization, for example after its page was closed, so a
+  // new sign-in can start at once instead of waiting for the transaction to expire.
+  // cancel 放弃正在等待的浏览器授权（例如授权页已被关闭），使新的登录可以立即开始，而不必等待事务过期。
+  const cancel = React.useCallback(() => {
+    if (mutation.current || !pending.current) return;
+    generation.current += 1;
+    const transactionId = pending.current;
+    pending.current = null;
+    setChallenge(null);
+    void cancelOpenVulcanLogin(transactionId).catch((cause: unknown) => setError({ stage: "authorize", detail: errorMessage(cause), region: loginRegion.current }));
+  }, []);
+
   // login starts the chosen region and rejects a late result after unmount or service restart.
   // login 启动所选区域，并拒绝卸载或服务重启后的迟到结果。
   const login = React.useCallback(async (region: OpenVulcanRegion) => {
@@ -191,6 +206,7 @@ export function useOpenVulcanAccount(ready: boolean, serviceEpoch: number): Open
     mutation.current = true;
     const epoch = ++generation.current;
     loginRegion.current = region;
+    setTarget(region);
     setBusy(true);
     setError(null);
     try {
@@ -244,5 +260,5 @@ export function useOpenVulcanAccount(ready: boolean, serviceEpoch: number): Open
     }
   }, []);
 
-  return { snapshot, initialized, open, busy, waiting: challenge !== null, error, setOpen, login, logout, refresh };
+  return { snapshot, initialized, open, busy, waiting: challenge !== null, loginRegion: target, error, setOpen, cancel, login, logout, refresh };
 }
