@@ -155,3 +155,14 @@ fn format_replaces_known_placeholders_and_keeps_the_rest() {
         "1 of 2 {missing} {} {a b}"
     );
 }
+
+/// Bumping the package version requires release notes for it at the top of the changelog.
+/// 提升包版本时，必须在更新记录顶部为其写好说明。
+#[test]
+fn newest_release_matches_the_package_version() {
+    assert_eq!(
+        RELEASES[0].version,
+        env!("CARGO_PKG_VERSION"),
+        "add notes for the workspace version to changelog/releases.json and changelog/<version>/"
+    );
+}

@@ -37,6 +37,7 @@ export type SettingsSubAreaId =
   | "git-commit"
   | "permission-judge"
   | "prompt-composer"
+  | "changelog"
   | "about-licenses"
   | "archived-restore"
   | "subagent-models"

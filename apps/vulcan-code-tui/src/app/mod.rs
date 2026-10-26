@@ -677,6 +677,9 @@ pub struct App {
     /// Backend-defined category currently filtering agent definitions.
     /// 当前筛选智能体定义的后端分类。
     pub agent_category: String,
+    /// Release shown on the changelog page; `None` opens the running version.
+    /// 更新记录页显示的发布；`None` 时打开正在运行的版本。
+    pub changelog_release: Option<String>,
     /// Backend-defined category currently filtering effective prompt skills.
     /// 当前筛选生效提示词技能的后端分类。
     pub skill_category: String,
@@ -813,6 +816,7 @@ impl App {
             plugin_loaded_at: HashMap::new(),
             live_poll_due: std::collections::BTreeMap::new(),
             agent_category: String::new(),
+            changelog_release: None,
             skill_category: String::new(),
             agent_query: String::new(),
             agent_status: "all".into(),

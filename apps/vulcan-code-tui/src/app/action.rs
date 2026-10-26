@@ -82,6 +82,9 @@ pub enum LocalSetting {
     /// Model list output-modality filter: all or one modality.
     /// 模型清单输出模态筛选：all 或单一模态。
     ModelOutput,
+    /// Release picked on the changelog page.
+    /// 更新记录页选中的发布。
+    ChangelogRelease,
 }
 
 /// Where an edited value goes.
@@ -292,6 +295,9 @@ pub enum UiAction {
     /// Selects a server-owned prompt-skill category, or the empty all-categories filter.
     /// 选择服务端提示词技能分类，或空的全部分类筛选。
     SkillCategory(String),
+    /// Shows one listed release on the changelog page.
+    /// 在更新记录页显示一个已列出的发布。
+    ChangelogRelease(String),
     /// Exact read navigation and explicit human lifecycle draft action.
     /// 精确读取导航及明确人工生命周期草稿动作。
     Knowledge(super::knowledge_actions::KnowledgeAction),
@@ -476,6 +482,12 @@ pub fn perform(app: &mut App, action: UiAction) {
         UiAction::SkillCategory(id) => {
             app.skill_category = id;
             app.pages.remove(&PageId::SkillList);
+        }
+        // A new release starts reading at its top, as the WebUI scrolls its heading into view.
+        // 新发布从顶部开始阅读，与 WebUI 将其标题滚入视野一致。
+        UiAction::ChangelogRelease(version) => {
+            app.changelog_release = Some(version);
+            app.pages.remove(&PageId::Changelog);
         }
         UiAction::OpenLibrary(id) => {
             app.select_library(Some(id));
@@ -874,6 +886,10 @@ pub fn apply_edit(app: &mut App, edit: Edit, value: SettingValue) {
                 }
                 // Tabs and chart periods change the view only; a tab loads just its unread data.
                 // 标签与图表周期只改变视图；切换标签只加载其尚未读取的数据。
+                LocalSetting::ChangelogRelease => {
+                    perform(app, UiAction::ChangelogRelease(value.as_str().to_string()));
+                    return;
+                }
                 LocalSetting::PluginTab => {
                     app.plugin_tab = Some(value.as_str().to_string());
                     for call in super::pages::plugin_tab_reads(app) {

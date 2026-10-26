@@ -1237,6 +1237,80 @@ pub(super) fn diagnostics(app: &App) -> Vec<Row> {
     rows
 }
 
+/// Pages through the release notes one release at a time in the interface language, opening on
+/// the running version, as the WebUI changelog area does.
+/// 以界面语言逐个发布翻阅更新记录，首先打开正在运行的版本，与 WebUI 更新记录区域一致。
+pub(super) fn changelog(app: &App) -> Vec<Row> {
+    let releases = vulcan_i18n::RELEASES;
+    let running = s(app.slots.value(Slot::Workbench), "/appVersion");
+    // at is the shown release: the picked one, else the running version, else the newest.
+    // at 为显示的发布：已选的发布，否则为运行版本，否则为最新发布。
+    let at = [app.changelog_release.as_deref(), Some(running.as_str())]
+        .into_iter()
+        .flatten()
+        .find_map(|version| {
+            releases
+                .iter()
+                .position(|release| release.version == version)
+        })
+        .unwrap_or(0);
+    let release = &releases[at];
+    let turn = |label: String, to: Option<usize>| RowAction {
+        label,
+        action: to.map(|index| UiAction::ChangelogRelease(releases[index].version.to_string())),
+        tone: Tone::Normal,
+        switch: None,
+    };
+    let pager = vec![
+        turn(tr!("settings.changelog.newer"), at.checked_sub(1)),
+        turn(
+            tr!("settings.changelog.older"),
+            (at + 1 < releases.len()).then_some(at + 1),
+        ),
+        action(
+            tr!("settings.changelog.version"),
+            UiAction::Pick {
+                title: tr!("settings.changelog.version"),
+                edit: Edit::Local(LocalSetting::ChangelogRelease),
+                options: releases
+                    .iter()
+                    .map(|release| (release.version.to_string(), release.version.to_string()))
+                    .collect(),
+                current: release.version.to_string(),
+            },
+            Tone::Normal,
+        ),
+    ];
+    let date = release
+        .date
+        .map_or_else(|| tr!("settings.changelog.unreleased"), str::to_string);
+    let mut heading = item(
+        "changelog-release",
+        release.version,
+        format!("{date} · {} / {}", at + 1, releases.len()),
+    )
+    .actions(pager.clone());
+    if release.version == running {
+        heading = heading.badge(tr!("settings.changelog.current"), Tone::Good);
+    }
+    let mut rows = vec![heading];
+    // Every registered language ships notes (vulcan-i18n's build script requires it).
+    // 每种注册语言都附有说明（vulcan-i18n 构建脚本强制要求）。
+    match release.notes(crate::i18n::active_locale()) {
+        Some(notes) => rows.push(Row::new(
+            RowKind::Markdown {
+                content: notes.to_string(),
+            },
+            "",
+        )),
+        None => rows.push(note(tr!("settings.changelog.loadError"), Tone::Bad)),
+    }
+    if releases.len() > 1 {
+        rows.push(item("changelog-pager", "", "").actions(pager));
+    }
+    rows
+}
+
 /// Shows the service version and licenses using catalog-owned ids and source digests.
 /// 使用目录持有的标识与来源摘要显示服务版本及许可证。
 pub(super) fn about(app: &App) -> Vec<Row> {

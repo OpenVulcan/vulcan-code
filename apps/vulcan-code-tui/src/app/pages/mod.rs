@@ -183,7 +183,10 @@ impl Area {
                 ),
                 (Some(tr!("settings.group.connections")), vec![McpService]),
                 (Some(tr!("settings.group.data")), vec![Archived]),
-                (Some(tr!("settings.group.about")), vec![Diagnostics, About]),
+                (
+                    Some(tr!("settings.group.about")),
+                    vec![Diagnostics, Changelog, About],
+                ),
             ],
         }
     }
@@ -231,6 +234,9 @@ pub enum PageId {
     McpService,
     Archived,
     Diagnostics,
+    /// Release notes from `vulcan_i18n::RELEASES`, one release per page.
+    /// 来自 `vulcan_i18n::RELEASES` 的更新记录，每页一个发布。
+    Changelog,
     About,
     MemoryOverview,
     MemoryContent,
@@ -320,6 +326,7 @@ impl PageId {
             PageId::McpService => tr!("settings.mcpService"),
             PageId::Archived => tr!("settings.misc.archivedConversations"),
             PageId::Diagnostics => tr!("settings.diagnostics"),
+            PageId::Changelog => tr!("settings.changelog"),
             PageId::About => tr!("settings.group.about"),
             PageId::MemoryOverview => tr!("tui.memory.overview"),
             PageId::MemoryContent => tr!("memory.content.title"),
@@ -679,6 +686,11 @@ pub enum RowKind {
     Document {
         /// Unescaped normalized Markdown returned by the document read service.
         /// 文档阅读服务返回的未经转义规范化 Markdown。
+        content: String,
+    },
+    /// Markdown rendered like a reply, closed `ui-*` answer component fences included.
+    /// 与回答同样渲染的 Markdown，含已闭合的 `ui-*` 回答组件围栏。
+    Markdown {
         content: String,
     },
     Toggle {
@@ -1140,6 +1152,7 @@ pub fn rows(app: &App, page: PageId) -> Vec<Row> {
         PageId::McpService => mcp_service::rows(app),
         PageId::Archived => settings::archived(app),
         PageId::Diagnostics => settings::diagnostics(app),
+        PageId::Changelog => settings::changelog(app),
         PageId::About => settings::about(app),
         PageId::MemoryOverview => memory::overview(app),
         PageId::MemoryContent => memory::content(app),

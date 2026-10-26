@@ -283,6 +283,7 @@ pub fn activate(app: &mut App, page: PageId, index: usize, how: Activate) {
         | RowKind::Info { .. }
         | RowKind::Note { .. }
         | RowKind::Document { .. }
+        | RowKind::Markdown { .. }
         | RowKind::Stats(_)
         | RowKind::Meter { .. }
         | RowKind::Spark { .. }

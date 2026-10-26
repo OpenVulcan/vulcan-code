@@ -15,7 +15,8 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
-      "@catalogs/*": ["../../crates/vulcan-i18n/catalogs/*"]
+      "@catalogs/*": ["../../crates/vulcan-i18n/catalogs/*"],
+      "@changelog/*": ["../../crates/vulcan-i18n/changelog/*"]
     },
     "resolveJsonModule": true,
     "isolatedModules": true,

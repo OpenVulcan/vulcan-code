@@ -9,6 +9,9 @@ import { VULCAN_DEV_WEBUI_ORIGIN } from "./src/service/vite-service-discovery-or
 // catalogsDir holds the language registry and catalogs shared with the TUI, the desktop shell and Core.
 // catalogsDir 保存与 TUI、桌面壳及 Core 共用的语言注册表与目录。
 const catalogsDir = path.resolve(__dirname, "../../crates/vulcan-i18n/catalogs");
+// changelogDir holds the per-language release notes shown in About, shared with the TUI.
+// changelogDir 保存“关于”中展示的分语言更新记录，与 TUI 共用。
+const changelogDir = path.resolve(__dirname, "../../crates/vulcan-i18n/changelog");
 
 // Configure the Vite app served by Core and loaded by the desktop shell.
 // 配置由 Core 提供页面并供桌面壳加载的 Vite 应用。
@@ -31,6 +34,7 @@ export default defineConfig(({ mode }) => {
       alias: {
         "@": path.resolve(__dirname, "./src"),
         "@catalogs": catalogsDir,
+        "@changelog": changelogDir,
       },
     },
     clearScreen: false,
@@ -69,9 +73,9 @@ export default defineConfig(({ mode }) => {
     server: isRelease
       ? undefined
       : {
-          // The shared language catalogs live in the vulcan-i18n crate, outside this package.
-          // 共享语言目录位于本包之外的 vulcan-i18n crate。
-          fs: { allow: [searchForWorkspaceRoot(process.cwd()), catalogsDir] },
+          // The shared language catalogs and release notes live in the vulcan-i18n crate, outside this package.
+          // 共享语言目录与更新记录位于本包之外的 vulcan-i18n crate。
+          fs: { allow: [searchForWorkspaceRoot(process.cwd()), catalogsDir, changelogDir] },
           host: new URL(VULCAN_DEV_WEBUI_ORIGIN).hostname,
           port: Number(new URL(VULCAN_DEV_WEBUI_ORIGIN).port),
           strictPort: true,

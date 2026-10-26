@@ -580,6 +580,9 @@ fn lay_out(
             // 文档空白承载代码及列表结构，必须通过通用行渲染器保留。
             lines.extend(super::text::wrap_verbatim(content, width, theme.base()));
         }
+        RowKind::Markdown { content } => {
+            lines.extend(super::markdown::render(content, width, theme));
+        }
         RowKind::Toggle { on, .. } => {
             let switch = theme.switch(*on, (&tr!("tui.page.on"), &tr!("tui.page.off")));
             lines.push(labeled(theme, &row.label, label_width, switch));

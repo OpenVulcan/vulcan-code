@@ -6,6 +6,7 @@ import {
   Cpu,
   Database,
   GitCommitHorizontal,
+  History,
   Info,
   Palette,
   Plug,
@@ -175,6 +176,7 @@ export function settingsSubAreaGroups(t: ReturnType<typeof useI18n>["t"]): Setti
       icon: <Info size={16} />,
       items: [
         { id: "runtime-diagnostics", label: t("settings.runtimeDiagnostics"), icon: <Stethoscope size={16} />, description: t("settings.runtimeDiagnostics.description") },
+        { id: "changelog", label: t("settings.changelog"), icon: <History size={16} />, description: t("settings.changelog.description") },
         { id: "about-licenses", label: t("settings.aboutLicenses"), icon: <ScrollText size={16} />, description: t("settings.aboutLicenses.description") },
         { id: "visual-lab", label: t("settings.visualLab"), icon: <Palette size={16} />, description: t("settings.visualLab.description") },
       ],

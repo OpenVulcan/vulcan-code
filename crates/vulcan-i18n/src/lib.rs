@@ -6,6 +6,11 @@
 //! through this crate, embedded at compile time.
 //! `catalogs/locales.json` 是唯一的受支持语言清单，`catalogs/<surface>/` 为每种语言保存一个扁平
 //! JSON 目录。WebUI 导入同一批文件；Rust 消费方通过本 crate 读取编译期内嵌的目录。
+//!
+//! `changelog/` holds the release notes the About area shows: one Markdown file per release and
+//! registered language, exposed as [`RELEASES`].
+//! `changelog/` 保存“关于”区域展示的更新记录：每个发布、每种注册语言各一个 Markdown 文件，以
+//! [`RELEASES`] 公开。
 
 use std::collections::HashMap;
 
@@ -71,6 +76,35 @@ impl Surface {
                 })
             })
             .unwrap_or_default()
+    }
+}
+
+/// One release in `changelog/releases.json`, with its notes in every supported language.
+/// `changelog/releases.json` 中的一个发布，附每种受支持语言的说明。
+#[derive(Debug)]
+pub struct Release {
+    /// Exact `x.y.z` version.
+    /// 精确的 `x.y.z` 版本。
+    pub version: &'static str,
+    /// Release day as `YYYY-MM-DD`; `None` while the newest release is unreleased.
+    /// 以 `YYYY-MM-DD` 表示的发布日；最新发布尚未发布时为 `None`。
+    pub date: Option<&'static str>,
+    notes: &'static [(&'static str, &'static str)],
+}
+
+impl Release {
+    /// Markdown notes of `code`, which may contain closed `ui-*` answer component fences.
+    /// `code` 语言的 Markdown 说明，可包含已闭合的 `ui-*` 回答组件围栏。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The notes for any registered code (`build.rs` requires every language), `None` otherwise.
+    /// 任一注册语言的说明（`build.rs` 要求每种语言都有）；否则返回 `None`。
+    pub fn notes(&self, code: &str) -> Option<&'static str> {
+        self.notes
+            .iter()
+            .find(|(candidate, _)| *candidate == code)
+            .map(|(_, notes)| *notes)
     }
 }
 

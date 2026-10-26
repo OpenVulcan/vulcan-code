@@ -1,0 +1,24 @@
+/* Release notes: the release heading and pager, then the notes in the shared Markdown and answer component styles. */
+/* 更新记录：发布标题与翻页，下方以共享 Markdown 与回答组件样式显示说明。 */
+.settings-changelog { display: flex; flex-direction: column; gap: calc(var(--vk-u) * 4); min-width: 0; }
+
+.settings-changelog-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(var(--vk-u) * 3);
+  padding-bottom: calc(var(--vk-u) * 3);
+  border-bottom: var(--vk-bw) solid var(--vk-line);
+  scroll-margin-top: calc(var(--vk-u) * 4);
+}
+.settings-changelog-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: calc(var(--vk-u) * 2); min-width: 0; }
+.settings-changelog-title strong { font-size: var(--vk-fs-lg); font-weight: 600; }
+.settings-changelog-title > span { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.settings-changelog-controls { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 2); }
+.settings-changelog-controls [data-slot="select-trigger"] { min-width: 7rem; }
+
+.settings-changelog-pager { display: flex; align-items: center; gap: calc(var(--vk-u) * 1); }
+.settings-changelog-position { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.settings-changelog-foot { display: flex; justify-content: flex-end; padding-top: calc(var(--vk-u) * 3); border-top: var(--vk-bw) solid var(--vk-line); }

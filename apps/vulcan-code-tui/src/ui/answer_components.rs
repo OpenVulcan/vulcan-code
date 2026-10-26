@@ -1323,6 +1323,56 @@ fn tree(rows: &[&str]) -> String {
 mod tests {
     use super::{flow_mermaid, row_cells, table_cell};
 
+    /// Every closed `ui-*` fence of every release note renders in the terminal, and none quotes
+    /// files with `ui-code`, whose lines are only captured when a reply is sealed.
+    /// 每份更新说明中所有已闭合的 `ui-*` 围栏都能在终端渲染，且都不使用只在回答封口时抓取文件行的
+    /// `ui-code`。
+    #[test]
+    fn release_notes_render_their_components() {
+        /// Checks the closed fences of `markdown`, descending into container bodies.
+        /// 检查 `markdown` 的已闭合围栏，并深入容器正文。
+        fn check(markdown: &str, owner: &str) {
+            let lines: Vec<&str> = markdown.lines().collect();
+            let mut index = 0;
+            while index < lines.len() {
+                let ticks = lines[index].len() - lines[index].trim_start_matches('`').len();
+                if ticks < 3 {
+                    index += 1;
+                    continue;
+                }
+                let info = lines[index][ticks..].trim();
+                let close = (index + 1..lines.len())
+                    .find(|&at| {
+                        let line = lines[at].trim_end();
+                        line.len() >= ticks && line.bytes().all(|byte| byte == b'`')
+                    })
+                    .unwrap_or_else(|| panic!("{owner}: unclosed fence `{info}`"));
+                let body = &lines[index + 1..close];
+                if info.starts_with("ui-") {
+                    assert!(
+                        !info.starts_with("ui-code"),
+                        "{owner}: ui-code in release notes"
+                    );
+                    let theme = crate::ui::theme::Theme::dark();
+                    assert!(
+                        super::render(info, body, 80, &theme, super::CodeSnapshots::None).is_some(),
+                        "{owner}: invalid `{info}`"
+                    );
+                    check(&body.join("\n"), owner);
+                }
+                index = close + 1;
+            }
+        }
+        for release in vulcan_i18n::RELEASES {
+            for locale in vulcan_i18n::LOCALES {
+                let notes = release
+                    .notes(locale.code)
+                    .expect("every language ships notes");
+                check(notes, &format!("{}/{}", release.version, locale.code));
+            }
+        }
+    }
+
     /// Pipes a cell keeps as text never shift columns; spaced pipes still separate cells.
     /// 单元格作为文本保留的竖线不会移动列；带空格的竖线仍分隔单元格。
     #[test]
