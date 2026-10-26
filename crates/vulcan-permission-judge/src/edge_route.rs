@@ -49,8 +49,9 @@ pub struct EdgeStatus {
     /// GPU nodes linked to the answering instance.
     /// 与作答实例相连的 GPU 节点数。
     pub nodes_online: u32,
-    /// Recent in-endpoint time of successful judgements; `None` when there were none.
-    /// 最近成功判定的端点内耗时；没有判定时为 `None`。
+    /// In-endpoint time of the latest successful judgements; `None` only before the instance's
+    /// first one.
+    /// 最近若干次成功判定的端点内耗时；只在实例首次成功判定之前为 `None`。
     pub compute_ms: Option<EdgeComputeMs>,
     /// Requests the instance is serving.
     /// 实例正在处理的请求数。
@@ -60,8 +61,8 @@ pub struct EdgeStatus {
     pub generated_at: String,
 }
 
-/// Percentiles of recent in-endpoint judgement time, in milliseconds (bucket upper bounds).
-/// 最近端点内判定耗时的分位，单位毫秒（分桶上界）。
+/// Percentiles of recent in-endpoint judgement time, in milliseconds.
+/// 最近端点内判定耗时的分位，单位毫秒。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub struct EdgeComputeMs {
     /// Median.
@@ -87,16 +88,28 @@ pub enum EdgeExclusion {
     NotReady,
 }
 
-/// Scores a successful probe of `endpoint_id` for `model_id` and `site`: the round trip plus the
-/// reported median compute time, or the round trip alone when the endpoint reports none.
-/// 为 `endpoint_id` 针对 `model_id` 与 `site` 的一次成功探测评分：往返加上报告的计算耗时中位数；
-/// 端点未报告时只取往返。
+/// Whether scores add the reported compute time: only when every endpoint that can be chosen
+/// reports one. Otherwise all of them compare by round trip alone, so an endpoint without a figure
+/// is neither favoured nor penalised.
+/// 评分是否加上报告的计算耗时：仅当所有可被选中的端点都报告了计算耗时。否则全部只按往返比较，
+/// 使没有数值的端点既不占便宜也不吃亏。
+pub fn scores_add_compute<'a>(eligible: impl IntoIterator<Item = &'a EdgeStatus>) -> bool {
+    eligible
+        .into_iter()
+        .all(|status| status.compute_ms.is_some())
+}
+
+/// Scores a successful probe of `endpoint_id` for `model_id` and `site`: the round trip, plus the
+/// reported median compute time when `with_compute` (see [`scores_add_compute`]).
+/// 为 `endpoint_id` 针对 `model_id` 与 `site` 的一次成功探测评分：往返；`with_compute` 时再加上报告的
+/// 计算耗时中位数（见 [`scores_add_compute`]）。
 pub fn edge_score(
     status: &EdgeStatus,
     rtt_ms: u64,
     endpoint_id: &str,
     model_id: &str,
     site: &str,
+    with_compute: bool,
 ) -> Result<u64, EdgeExclusion> {
     if status.endpoint_id != endpoint_id || status.model_id != model_id {
         return Err(EdgeExclusion::Mismatched);
@@ -107,7 +120,8 @@ pub fn edge_score(
     if !status.ready {
         return Err(EdgeExclusion::NotReady);
     }
-    Ok(rtt_ms.saturating_add(status.compute_ms.map_or(0, |compute| compute.p50)))
+    let compute = status.compute_ms.filter(|_| with_compute);
+    Ok(rtt_ms.saturating_add(compute.map_or(0, |compute| compute.p50)))
 }
 
 /// Median of round-trip samples; the lower middle one for an even count.
@@ -218,13 +232,23 @@ mod tests {
         );
     }
 
-    // Scores add the compute median when reported; exclusions name their cause.
-    // 有计算中位数时评分加上它；被排除时给出原因。
+    // Scores add the compute median only when asked; exclusions name their cause.
+    // 只在要求时评分加上计算中位数；被排除时给出原因。
     #[test]
     fn scores_add_reported_compute_and_exclude_unusable_endpoints() {
-        let score = |status: &EdgeStatus| edge_score(status, 40, "us-mini", "m", "cn");
+        let score = |status: &EdgeStatus| edge_score(status, 40, "us-mini", "m", "cn", true);
         assert_eq!(score(&status(true, &["global", "cn"], Some(64))), Ok(104));
-        assert_eq!(score(&status(true, &["cn"], None)), Ok(40));
+        assert_eq!(
+            edge_score(
+                &status(true, &["cn"], Some(64)),
+                40,
+                "us-mini",
+                "m",
+                "cn",
+                false
+            ),
+            Ok(40)
+        );
         assert_eq!(
             score(&status(true, &["global"], Some(64))),
             Err(EdgeExclusion::SiteNotAccepted)
@@ -234,13 +258,40 @@ mod tests {
             Err(EdgeExclusion::NotReady)
         );
         assert_eq!(
-            edge_score(&status(true, &["cn"], None), 40, "other", "m", "cn"),
+            edge_score(&status(true, &["cn"], None), 40, "other", "m", "cn", true),
             Err(EdgeExclusion::Mismatched)
         );
         assert_eq!(
-            edge_score(&status(true, &["cn"], None), 40, "us-mini", "other", "cn"),
+            edge_score(
+                &status(true, &["cn"], None),
+                40,
+                "us-mini",
+                "other",
+                "cn",
+                true
+            ),
             Err(EdgeExclusion::Mismatched)
         );
+    }
+
+    // Compute counts only when every eligible endpoint reports it; one missing figure makes all
+    // compare by round trip, so a slow-network endpoint without a figure cannot win on it.
+    // 只有所有可选端点都报告计算耗时时才计入；缺一个就全部按往返比较，网络慢但没有数值的端点
+    // 不能因此胜出。
+    #[test]
+    fn one_missing_compute_makes_all_compare_by_round_trip() {
+        let near = status(true, &["cn"], Some(200));
+        let far_unmeasured = status(true, &["cn"], None);
+        assert!(!scores_add_compute([&near, &far_unmeasured]));
+        assert!(scores_add_compute([
+            &near,
+            &status(true, &["cn"], Some(90))
+        ]));
+        assert!(scores_add_compute([]));
+        let with_compute = scores_add_compute([&near, &far_unmeasured]);
+        let near_score = edge_score(&near, 58, "us-mini", "m", "cn", with_compute).unwrap();
+        let far_score = edge_score(&far_unmeasured, 182, "us-mini", "m", "cn", with_compute);
+        assert!(near_score < far_score.unwrap());
     }
 
     // The median ignores outliers and needs at least one sample.

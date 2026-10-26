@@ -18,7 +18,7 @@ use futures_util::FutureExt;
 use tokio::sync::{Mutex, Notify};
 use vulcan_permission_judge::{
     EDGE_STATUS_PATH, EdgeCandidate, EdgeExclusion, EdgeStatus, choose_edge_endpoint, edge_score,
-    median_ms,
+    median_ms, scores_add_compute,
 };
 use vulcan_provider_adapters::OpenVulcanEdgeEndpoint;
 use vulcan_provider_config::provider_config::PersistedPermissionJudgeConfiguration;
@@ -197,9 +197,15 @@ async fn measure(endpoint: &str) -> Result<Measured, String> {
 
 impl Probed {
     /// Score for automatic selection, or why the endpoint is excluded; `None` when the probe
-    /// failed.
-    /// 自动选择使用的评分或端点被排除的原因；探测失败时为 `None`。
-    fn score(&self, model_id: &str, site: &str) -> Option<Result<u64, EdgeExclusion>> {
+    /// failed. `with_compute` comes from [`add_compute`] over the same endpoints.
+    /// 自动选择使用的评分或端点被排除的原因；探测失败时为 `None`。`with_compute` 来自对同一组端点的
+    /// [`add_compute`]。
+    fn score(
+        &self,
+        model_id: &str,
+        site: &str,
+        with_compute: bool,
+    ) -> Option<Result<u64, EdgeExclusion>> {
         let measured = self.outcome.as_ref().ok()?;
         Some(edge_score(
             &measured.status,
@@ -207,8 +213,22 @@ impl Probed {
             &self.endpoint.endpoint_id,
             model_id,
             site,
+            with_compute,
         ))
     }
+}
+
+/// Whether the scores of `endpoints` add compute time: only when every endpoint that can be chosen
+/// reports one, otherwise all compare by round trip.
+/// `endpoints` 的评分是否加上计算耗时：仅当所有可被选中的端点都报告了计算耗时，否则全部按往返比较。
+fn add_compute(model_id: &str, site: &str, endpoints: &[Probed]) -> bool {
+    scores_add_compute(endpoints.iter().filter_map(|probed| {
+        probed
+            .score(model_id, site, false)?
+            .ok()
+            .and(probed.outcome.as_ref().ok())
+            .map(|measured| &measured.status)
+    }))
 }
 
 /// Endpoint automatic selection picks among `endpoints`, keeping `current` unless another is
@@ -220,12 +240,15 @@ fn choose(
     endpoints: &[Probed],
     current: Option<&str>,
 ) -> Option<String> {
+    let with_compute = add_compute(model_id, site, endpoints);
     let candidates = endpoints
         .iter()
         .map(|probed| EdgeCandidate {
             endpoint_id: &probed.endpoint.endpoint_id,
             priority: probed.endpoint.priority,
-            score_ms: probed.score(model_id, site).and_then(Result::ok),
+            score_ms: probed
+                .score(model_id, site, with_compute)
+                .and_then(Result::ok),
         })
         .collect::<Vec<_>>();
     choose_edge_endpoint(&candidates, current).map(str::to_string)
@@ -394,11 +417,16 @@ impl EdgeSelector {
         let current = model_id.is_some() && view.model_id == model_id;
         let site = view.site.clone().filter(|_| current);
         let endpoints: Vec<PermissionJudgeEdgeEndpoint> = if current {
+            let model = model_id.as_deref().unwrap_or_default();
+            let with_compute = site
+                .as_deref()
+                .is_some_and(|site| add_compute(model, site, &view.endpoints));
             view.endpoints
                 .iter()
                 .map(|probed| {
-                    let model = model_id.as_deref().unwrap_or_default();
-                    let score = site.as_deref().and_then(|site| probed.score(model, site));
+                    let score = site
+                        .as_deref()
+                        .and_then(|site| probed.score(model, site, with_compute));
                     let measured = probed.outcome.as_ref().ok();
                     PermissionJudgeEdgeEndpoint {
                         endpoint_id: probed.endpoint.endpoint_id.clone(),
@@ -589,6 +617,38 @@ mod tests {
         let locked = selector.target("m", &offered, Some("b")).unwrap();
         assert_eq!(locked.endpoint, "https://b.example.com");
         assert!(selector.target("m", &offered, Some("gone")).is_err());
+    }
+
+    // An endpoint without a compute figure makes every endpoint compare by round trip.
+    // 有端点没有计算耗时时，所有端点都按往返比较。
+    #[test]
+    fn an_endpoint_without_compute_makes_selection_compare_round_trips() {
+        let probed = |id: &str, rtt_ms: u64, compute: Option<u64>| {
+            let mut answer = status(id, true);
+            answer["compute_ms"] = compute.map_or(
+                serde_json::Value::Null,
+                |p50| serde_json::json!({"p50": p50, "p95": p50}),
+            );
+            Probed {
+                endpoint: endpoint(id, "https://x.example.com", 10),
+                outcome: Ok(Measured {
+                    status: serde_json::from_value(answer).unwrap(),
+                    rtt_ms,
+                }),
+            }
+        };
+        // Near with 200 ms compute against far without any: compared by round trip, near wins.
+        let endpoints = [probed("near", 58, Some(200)), probed("far", 182, None)];
+        assert_eq!(
+            choose("m", "global", &endpoints, None).as_deref(),
+            Some("near")
+        );
+        // Once both report compute it counts: far's faster compute outweighs its round trip.
+        let endpoints = [probed("near", 58, Some(200)), probed("far", 182, Some(20))];
+        assert_eq!(
+            choose("m", "global", &endpoints, None).as_deref(),
+            Some("far")
+        );
     }
 
     // Selection skips endpoints that are not ready and keeps a selection made for the same model.

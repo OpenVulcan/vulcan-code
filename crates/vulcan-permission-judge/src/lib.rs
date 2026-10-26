@@ -27,7 +27,7 @@ pub use edge::{
 };
 pub use edge_route::{
     EDGE_SITE_HEADER, EDGE_STATUS_PATH, EDGE_SWITCH_PERCENT, EdgeCandidate, EdgeComputeMs,
-    EdgeExclusion, EdgeStatus, choose_edge_endpoint, edge_score, median_ms,
+    EdgeExclusion, EdgeStatus, choose_edge_endpoint, edge_score, median_ms, scores_add_compute,
 };
 pub use known::{
     FP16_MIN_CUDA_COMPUTE_CAPABILITY, KnownDownload, KnownPackage, KnownVariant, ModelFormat,
