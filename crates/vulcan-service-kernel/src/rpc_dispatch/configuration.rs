@@ -123,6 +123,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_permission_judge_edge_endpoints",
     "service_probe_permission_judge_edge_endpoints",
     "service_lock_permission_judge_edge_endpoint",
+    "service_test_permission_judge_edge_request",
     "service_save_permission_judge_settings",
     "service_inspect_permission_judge_package",
     "service_register_permission_judge_model",
@@ -847,6 +848,13 @@ pub(super) async fn dispatch(
         ),
         "service_lock_permission_judge_edge_endpoint" => rpc_json_result(
             permission_judge::service_lock_permission_judge_edge_endpoint(
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_test_permission_judge_edge_request" => rpc_json_result(
+            permission_judge::service_test_permission_judge_edge_request(
                 state,
                 rpc_required_param(params, "request")?,
             )

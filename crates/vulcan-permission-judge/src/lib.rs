@@ -22,8 +22,8 @@ pub mod system;
 pub use cloud::{CLOUD_ALLOW_PROBABILITY, cloud_label, cloud_policy, cloud_state};
 pub use decision::{JudgeLabel, NonFiniteLogits, decide};
 pub use edge::{
-    EDGE_JUDGE_PATH, EdgeAnswer, EdgeJudgeRequest, EdgeJudgeResponse, EdgeJudgeResult, EdgeOutcome,
-    edge_outcomes,
+    EDGE_JUDGE_PATH, EDGE_SERVER_TIMING_HEADER, EdgeAnswer, EdgeJudgeRequest, EdgeJudgeResponse,
+    EdgeJudgeResult, EdgeOutcome, EdgeServerTiming, edge_outcomes,
 };
 pub use edge_route::{
     EDGE_SITE_HEADER, EDGE_STATUS_PATH, EDGE_SWITCH_PERCENT, EdgeCandidate, EdgeComputeMs,

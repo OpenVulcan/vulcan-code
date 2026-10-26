@@ -27,7 +27,8 @@ use vulcan_service_api::{
     PermissionJudgeCudaComponent, PermissionJudgeCudaDirectory, PermissionJudgeCudaInstall,
     PermissionJudgeCudaInstallRequest, PermissionJudgeCudaSnapshot, PermissionJudgeDeviceSummary,
     PermissionJudgeEdgeEndpointLockRequest, PermissionJudgeEdgeEndpoints, PermissionJudgeEdgeModel,
-    PermissionJudgeEdgeModels, PermissionJudgeIssue, PermissionJudgeKnownPackage,
+    PermissionJudgeEdgeModels, PermissionJudgeEdgeRequestTest,
+    PermissionJudgeEdgeRequestTestRequest, PermissionJudgeIssue, PermissionJudgeKnownPackage,
     PermissionJudgeKnownVariant, PermissionJudgeLink, PermissionJudgeModelDownload,
     PermissionJudgeModelDownloadRequest, PermissionJudgeModelRegisterRequest,
     PermissionJudgeModelRequest, PermissionJudgeModelSummary, PermissionJudgeNvidiaDriver,
@@ -529,6 +530,27 @@ pub(crate) async fn service_lock_permission_judge_edge_endpoint(
     runtime.edge_select.snapshot(&settings)
 }
 
+/// Sends a few real judge requests to one endpoint of the chosen official direct model and reports
+/// each; endpoint selection and the lock are not changed.
+/// 向所选官方直连模型的一个端点发送若干真实判定请求并逐个报告；不改变端点选择与锁定。
+pub(crate) async fn service_test_permission_judge_edge_request(
+    state: SharedServiceBridgeState,
+    request: PermissionJudgeEdgeRequestTestRequest,
+) -> Result<PermissionJudgeEdgeRequestTest, String> {
+    let (runtime, settings) = read_state(&state)?;
+    let model_id = edge_model(&settings).ok_or_else(|| {
+        String::from("Choose the official direct judge before testing one of its endpoints.")
+    })?;
+    edge::test_endpoint(
+        &state,
+        &runtime,
+        model_id,
+        &request.endpoint_id,
+        &request.input,
+    )
+    .await
+}
+
 /// Returns the live status polled while the settings page is open.
 /// 返回设置页打开期间轮询的实时状态。
 pub(crate) async fn service_permission_judge_status(
@@ -896,27 +918,10 @@ pub(crate) async fn service_benchmark_permission_judge(
         ));
     }
     let (runtime, settings) = read_state(&state)?;
-    if let Some(model_id) = edge_model(&settings) {
-        let elapsed_ms = edge::time_batch(
-            &state,
-            &runtime,
-            model_id,
-            settings.edge_endpoint_id.as_deref(),
-            request.batch_size,
-        )
-        .await?
-        .as_secs_f64()
-            * 1_000.0;
-        return Ok(PermissionJudgeBenchmarkResult {
-            device: None,
-            model_id: model_id.to_string(),
-            batch_size: request.batch_size,
-            rounds: 1,
-            p50_ms: elapsed_ms,
-            p95_ms: elapsed_ms,
-            per_item_ms: elapsed_ms / f64::from(request.batch_size),
-            items_per_second: f64::from(request.batch_size) * 1_000.0 / elapsed_ms,
-        });
+    if edge_model(&settings).is_some() {
+        return Err(String::from(
+            "The official direct judge has no speed test; run a request test on one of its endpoints.",
+        ));
     }
     if cloud_enabled(&settings) {
         let model_id = cloud::configured_model(&state)?

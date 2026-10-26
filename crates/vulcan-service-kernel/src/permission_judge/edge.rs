@@ -16,12 +16,17 @@ use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use vulcan_permission_judge::protocol::JudgeInput;
 use vulcan_permission_judge::{
-    EDGE_JUDGE_PATH, EDGE_SITE_HEADER, EdgeAnswer, EdgeJudgeRequest, EdgeJudgeResponse,
-    cloud_policy, edge_outcomes, render_call,
+    EDGE_JUDGE_PATH, EDGE_SERVER_TIMING_HEADER, EDGE_SITE_HEADER, EdgeAnswer, EdgeJudgeRequest,
+    EdgeJudgeResponse, EdgeServerTiming, cloud_policy, edge_outcomes, render_call,
 };
 use vulcan_provider_adapters::{
     CredentialExecutionSecret, OpenVulcanEdgeAccessError, OpenVulcanEdgeEndpoint,
     request_openvulcan_edge_access, request_openvulcan_edge_models,
+};
+use vulcan_service_api::{
+    PermissionJudgeEdgeRequestAttempt, PermissionJudgeEdgeRequestTest,
+    PermissionJudgeEdgeTestAnswer, PermissionJudgeEdgeTestInput, PermissionJudgeEdgeTestPreset,
+    PermissionJudgeEdgeTestResult,
 };
 
 use super::PermissionJudgeRuntime;
@@ -201,9 +206,27 @@ fn rate_limited(retry_after: Option<&str>) -> String {
     }
 }
 
-/// Sends one judge request to `target` with `token` and the target's site marker.
-/// 用 `token` 与目标的来源标记向 `target` 发送一次判定请求。
-async fn send(target: &Target, token: &str, request: &EdgeJudgeRequest) -> Result<Answer, Failure> {
+/// What an endpoint sent back to one judge request, before it is interpreted.
+/// 端点对一次判定请求返回的内容，尚未解释。
+struct Reply {
+    /// HTTP status.
+    /// HTTP 状态。
+    status: reqwest::StatusCode,
+    /// `Retry-After` header.
+    /// `Retry-After` 头。
+    retry_after: Option<String>,
+    /// `Server-Timing` header.
+    /// `Server-Timing` 头。
+    server_timing: Option<String>,
+    /// Body, at most [`EDGE_MAX_RESPONSE_BYTES`].
+    /// 正文，至多 [`EDGE_MAX_RESPONSE_BYTES`]。
+    body: Vec<u8>,
+}
+
+/// Sends one judge request to `target` with `token` and the target's site marker and reads the
+/// reply.
+/// 用 `token` 与目标的来源标记向 `target` 发送一次判定请求并读取回复。
+async fn post(target: &Target, token: &str, request: &EdgeJudgeRequest) -> Result<Reply, Failure> {
     let id = &target.endpoint_id;
     let unreachable = |message: String| Failure {
         message,
@@ -224,12 +247,18 @@ async fn send(target: &Target, token: &str, request: &EdgeJudgeRequest) -> Resul
                 format!("The edge judge endpoint `{id}` could not be reached.")
             })
         })?;
-    let status = response.status();
-    let retry_after = response
-        .headers()
-        .get(reqwest::header::RETRY_AFTER)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_string);
+    let header = |name: &str| {
+        response
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string)
+    };
+    let (status, retry_after, server_timing) = (
+        response.status(),
+        header(reqwest::header::RETRY_AFTER.as_str()),
+        header(EDGE_SERVER_TIMING_HEADER),
+    );
     let body = response.bytes().await.map_err(|_| {
         unreachable(format!(
             "The answer of the edge judge endpoint `{id}` could not be read."
@@ -238,19 +267,36 @@ async fn send(target: &Target, token: &str, request: &EdgeJudgeRequest) -> Resul
     if body.len() > EDGE_MAX_RESPONSE_BYTES {
         return Err(String::from("The edge judge answer is too large.").into());
     }
+    Ok(Reply {
+        status,
+        retry_after,
+        server_timing,
+        body: body.to_vec(),
+    })
+}
+
+/// Error code of an endpoint's error body `{ "error": <code>, "message": <text> }`; empty when the
+/// body has none.
+/// 端点错误正文 `{ "error": <代码>, "message": <说明> }` 中的错误代码；正文没有时为空。
+fn error_code(body: &[u8]) -> String {
+    serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| value.get("error")?.as_str().map(str::to_string))
+        .unwrap_or_default()
+}
+
+/// Interprets the reply `target` sent.
+/// 解释 `target` 返回的回复。
+fn interpret(target: &Target, reply: &Reply) -> Result<Answer, Failure> {
+    let (id, status) = (&target.endpoint_id, reply.status);
     if status == reqwest::StatusCode::UNAUTHORIZED {
         return Ok(Answer::TokenRejected);
     }
     if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-        return Err(rate_limited(retry_after.as_deref()).into());
+        return Err(rate_limited(reply.retry_after.as_deref()).into());
     }
     if !status.is_success() {
-        // The endpoint's error body is `{ "error": <code>, "message": <text> }`.
-        // 端点的错误正文为 `{ "error": <代码>, "message": <说明> }`。
-        let code = serde_json::from_slice::<serde_json::Value>(&body)
-            .ok()
-            .and_then(|value| value.get("error")?.as_str().map(str::to_string))
-            .unwrap_or_default();
+        let code = error_code(&reply.body);
         let site = &target.site;
         return Err(match code.as_str() {
             "site_required" => Failure::from(format!(
@@ -271,9 +317,15 @@ async fn send(target: &Target, token: &str, request: &EdgeJudgeRequest) -> Resul
             },
         });
     }
-    serde_json::from_slice(&body)
+    serde_json::from_slice(&reply.body)
         .map(Answer::Judged)
         .map_err(|_| String::from("The edge judge answer violates its contract.").into())
+}
+
+/// Sends one judge request to `target` with `token` and the target's site marker.
+/// 用 `token` 与目标的来源标记向 `target` 发送一次判定请求。
+async fn send(target: &Target, token: &str, request: &EdgeJudgeRequest) -> Result<Answer, Failure> {
+    interpret(target, &post(target, token, request).await?)
 }
 
 /// Sends `request` to the target and with the token `access` returns; when the endpoint rejects the
@@ -358,42 +410,244 @@ pub(super) async fn judge(
     )
 }
 
-/// Times one request of `batch_size` ordinary calls on the endpoint judge requests use now;
-/// returns the wall time.
-/// 在判定请求当前使用的端点上为一次含 `batch_size` 条普通调用的请求计时；返回总耗时。
-pub(super) async fn time_batch(
+/// Requests one request test sends, one after another.
+/// 一次请求测试依次发送的请求数。
+const REQUEST_TEST_ATTEMPTS: usize = 5;
+
+/// Longest command a request test accepts from the user, in characters.
+/// 请求测试接受的用户命令最大长度（字符）。
+const REQUEST_TEST_MAX_COMMAND_CHARS: usize = 64 * 1024;
+
+/// Hex digits of the oversized sample; well over the largest token limit an official model has
+/// (32 768 tokens), so the endpoint answers it without running the model.
+/// 超长示例的十六进制位数；远超官方模型的最大 token 上限（32 768），端点不运行模型即作答。
+const OVERSIZED_SAMPLE_HEX_DIGITS: usize = 120_000;
+
+/// Command a request test sends.
+/// 请求测试发送的命令。
+fn test_command(input: &PermissionJudgeEdgeTestInput) -> Result<String, String> {
+    Ok(match input {
+        PermissionJudgeEdgeTestInput::Preset { preset } => match preset {
+            PermissionJudgeEdgeTestPreset::Ordinary => String::from("git status"),
+            PermissionJudgeEdgeTestPreset::Destructive => String::from("rm -rf ~"),
+            PermissionJudgeEdgeTestPreset::DatabaseReset => {
+                String::from("psql -d app -c 'DROP SCHEMA public CASCADE'")
+            }
+            PermissionJudgeEdgeTestPreset::Oversized => {
+                let digits = (0..OVERSIZED_SAMPLE_HEX_DIGITS)
+                    .map(|index| char::from(b"0123456789abcdef"[(index * 7 + index / 16) % 16]))
+                    .collect::<String>();
+                format!("echo {digits} > payload.hex")
+            }
+        },
+        PermissionJudgeEdgeTestInput::Custom { command } => {
+            if command.trim().is_empty() {
+                return Err(String::from("Enter a command to send."));
+            }
+            if command.chars().count() > REQUEST_TEST_MAX_COMMAND_CHARS {
+                return Err(format!(
+                    "The command is longer than {REQUEST_TEST_MAX_COMMAND_CHARS} characters."
+                ));
+            }
+            command.clone()
+        }
+    })
+}
+
+/// The endpoint `endpoint_id` of `grant`.
+/// `grant` 中的端点 `endpoint_id`。
+fn offered_target(grant: &Grant, model_id: &str, endpoint_id: &str) -> Result<Target, String> {
+    let endpoint = grant
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.endpoint_id == endpoint_id)
+        .ok_or_else(|| {
+            format!(
+                "OpenVulcan does not offer the endpoint `{endpoint_id}` for the official direct model `{model_id}`."
+            )
+        })?;
+    Ok(Target {
+        endpoint_id: endpoint.endpoint_id.clone(),
+        endpoint: endpoint.endpoint.clone(),
+        site: grant.site.clone(),
+    })
+}
+
+/// Sends `request` and times it from sending until the whole reply is read.
+/// 发送 `request` 并计时，从发送到读完整个回复。
+async fn timed_post(
+    target: &Target,
+    token: &str,
+    request: &EdgeJudgeRequest,
+) -> (f64, Result<Reply, Failure>) {
+    let started = Instant::now();
+    let reply = post(target, token, request).await;
+    (started.elapsed().as_secs_f64() * 1_000.0, reply)
+}
+
+/// Reports one request of a request test: its stage times, the answer and, when the answer would
+/// not count as a judgement, why, in the words a real judgement would record.
+/// 报告请求测试中的一个请求：各阶段耗时、回答，以及回答不能作为判定时的原因（措辞与真实判定记录的相同）。
+fn test_attempt(
+    target: &Target,
+    request: &EdgeJudgeRequest,
+    total_ms: f64,
+    reply: Result<Reply, Failure>,
+    token_renewed: bool,
+) -> PermissionJudgeEdgeRequestAttempt {
+    let mut attempt = PermissionJudgeEdgeRequestAttempt {
+        request_id: request.request_id.clone(),
+        total_ms,
+        network_ms: None,
+        endpoint_ms: None,
+        node_ms: None,
+        queue_ms: None,
+        compute_ms: None,
+        http_status: None,
+        token_renewed,
+        answer: None,
+        error_code: None,
+        error: None,
+    };
+    let reply = match reply {
+        Ok(reply) => reply,
+        Err(failure) => {
+            attempt.error = Some(failure.message);
+            return attempt;
+        }
+    };
+    let timing = reply
+        .server_timing
+        .as_deref()
+        .map(EdgeServerTiming::parse)
+        .unwrap_or_default();
+    attempt.network_ms = timing.edge.map(|edge| (total_ms - edge).max(0.0));
+    attempt.endpoint_ms = timing.edge;
+    attempt.node_ms = timing.node;
+    attempt.queue_ms = timing.queue;
+    attempt.compute_ms = timing.compute;
+    attempt.http_status = Some(reply.status.as_u16());
+    if !reply.status.is_success() {
+        attempt.error_code = Some(error_code(&reply.body)).filter(|code| !code.is_empty());
+    }
+    attempt.error = match interpret(target, &reply) {
+        Ok(Answer::Judged(response)) => {
+            attempt.answer = Some(PermissionJudgeEdgeTestAnswer {
+                region: response.region.clone(),
+                model: response.model.clone(),
+                checkpoint_sha256: response.checkpoint_sha256.clone(),
+                policy_version: response.policy_version.clone(),
+                results: response
+                    .results
+                    .iter()
+                    .map(|result| PermissionJudgeEdgeTestResult {
+                        label: result.label,
+                        logits: result.logits,
+                        input_tokens: result.input_tokens,
+                        model_evaluated: result.model_evaluated,
+                        reason_code: result.reason_code.clone(),
+                    })
+                    .collect(),
+            });
+            edge_outcomes(
+                &cloud_policy().version,
+                &request.request_id,
+                request.inputs.len(),
+                response,
+            )
+            .err()
+        }
+        Ok(Answer::TokenRejected) => Some(String::from(
+            "The edge judge rejected a freshly issued access token.",
+        )),
+        Err(failure) => Some(failure.message),
+    };
+    attempt
+}
+
+/// Sends [`REQUEST_TEST_ATTEMPTS`] judge requests carrying `input`, one after another, to the
+/// endpoint `endpoint_id` of the official model `model_id`, through the transport real judgements
+/// use, and reports each. The token is obtained first so the user center stays out of the timings;
+/// an endpoint that rejects it gets one renewed token. The run stops after a request that could not
+/// reach the endpoint. Endpoint selection is neither consulted nor changed.
+/// 将携带 `input` 的 [`REQUEST_TEST_ATTEMPTS`] 个判定请求依次发往官方模型 `model_id` 的端点
+/// `endpoint_id`，使用真实判定所用的传输，并逐个报告。先取得令牌，使用户中心不计入耗时；端点拒绝令牌
+/// 时续期一次。某个请求无法到达端点后停止。既不参考也不改变端点选择。
+pub(super) async fn test_endpoint(
     state: &SharedServiceBridgeState,
     runtime: &PermissionJudgeRuntime,
     model_id: &str,
-    locked: Option<&str>,
-    batch_size: u32,
-) -> Result<Duration, String> {
+    endpoint_id: &str,
+    input: &PermissionJudgeEdgeTestInput,
+) -> Result<PermissionJudgeEdgeRequestTest, String> {
     let settings = cloud_policy()
         .resolve_settings(&Default::default())
         .map_err(|error| error.to_string())?
         .to_map();
-    let input = JudgeInput {
-        settings,
-        rendered: render_call(None, "shell_command", r#"{"command":"git status"}"#),
-    };
-    // Obtaining the token first keeps the user center's answer out of the timed request.
-    // 先取得令牌，使用户中心的回答不计入计时请求。
-    if let Some((connection_id, secret)) = signed_in_credential(state).await? {
-        runtime
-            .edge_access
-            .access(&connection_id, &secret, model_id, false)
-            .await?;
+    let arguments = serde_json::json!({ "command": test_command(input)? }).to_string();
+    let rendered = render_call(None, "shell_command", &arguments);
+    let (connection_id, secret) = signed_in_credential(state).await?.ok_or_else(|| {
+        String::from("Sign in to OpenVulcan before testing an official direct endpoint.")
+    })?;
+    let mut grant = runtime
+        .edge_access
+        .access(&connection_id, &secret, model_id, false)
+        .await?;
+    let mut target = offered_target(&grant, model_id, endpoint_id)?;
+    let (endpoint, site) = (target.endpoint.clone(), target.site.clone());
+    let mut attempts = Vec::with_capacity(REQUEST_TEST_ATTEMPTS);
+    for _ in 0..REQUEST_TEST_ATTEMPTS {
+        let request = EdgeJudgeRequest {
+            request_id: format!("permission-judge-test-{}", uuid::Uuid::new_v4()),
+            inputs: vec![JudgeInput {
+                settings: settings.clone(),
+                rendered: rendered.clone(),
+            }],
+        };
+        let (mut total_ms, mut reply) = timed_post(&target, &grant.token, &request).await;
+        let rejected =
+            matches!(&reply, Ok(reply) if reply.status == reqwest::StatusCode::UNAUTHORIZED);
+        if rejected {
+            match runtime
+                .edge_access
+                .access(&connection_id, &secret, model_id, true)
+                .await
+                .and_then(|renewed| {
+                    let renewed_target = offered_target(&renewed, model_id, endpoint_id)?;
+                    Ok((renewed, renewed_target))
+                }) {
+                Ok((renewed, renewed_target)) => {
+                    (grant, target) = (renewed, renewed_target);
+                    (total_ms, reply) = timed_post(&target, &grant.token, &request).await;
+                }
+                Err(error) => reply = Err(Failure::from(error)),
+            }
+        }
+        let attempt = test_attempt(&target, &request, total_ms, reply, rejected);
+        let stop = attempt.http_status.is_none();
+        attempts.push(attempt);
+        if stop {
+            break;
+        }
     }
-    let started = Instant::now();
-    judge(
-        state,
-        runtime,
-        model_id,
-        locked,
-        vec![input; batch_size as usize],
-    )
-    .await?;
-    Ok(started.elapsed())
+    let mut totals = attempts
+        .iter()
+        .filter(|attempt| attempt.answer.is_some() && attempt.error.is_none())
+        .map(|attempt| attempt.total_ms)
+        .collect::<Vec<_>>();
+    totals.sort_by(f64::total_cmp);
+    Ok(PermissionJudgeEdgeRequestTest {
+        model_id: model_id.to_string(),
+        endpoint_id: endpoint_id.to_string(),
+        endpoint,
+        site,
+        rendered_chars: rendered.chars().count() as u64,
+        succeeded: totals.len() as u32,
+        min_ms: totals.first().copied(),
+        median_ms: totals.len().checked_sub(1).map(|last| totals[last / 2]),
+        max_ms: totals.last().copied(),
+        attempts,
+    })
 }
 
 #[cfg(test)]
@@ -402,6 +656,8 @@ mod tests {
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+
+    use vulcan_permission_judge::JudgeLabel;
 
     use super::*;
 
@@ -640,5 +896,137 @@ mod tests {
         .err()
         .unwrap();
         assert!(failure.reprobe);
+    }
+
+    /// A request test request of one input, and a reply to it.
+    /// 含一条输入的请求测试请求及其回复。
+    fn one_input_request() -> EdgeJudgeRequest {
+        EdgeJudgeRequest {
+            request_id: String::from("permission-judge-test-1"),
+            inputs: vec![JudgeInput {
+                settings: BTreeMap::new(),
+                rendered: String::from("Tool: shell_command"),
+            }],
+        }
+    }
+
+    fn reply(status: u16, server_timing: Option<&str>, body: serde_json::Value) -> Reply {
+        Reply {
+            status: reqwest::StatusCode::from_u16(status).unwrap(),
+            retry_after: None,
+            server_timing: server_timing.map(str::to_string),
+            body: body.to_string().into_bytes(),
+        }
+    }
+
+    fn judged(policy_version: &str) -> serde_json::Value {
+        serde_json::json!({
+            "request_id": "permission-judge-test-1", "region": "us-west", "model": "m",
+            "checkpoint_sha256": "a".repeat(64), "policy_version": policy_version,
+            "results": [{"label": "review", "logits": [0.1, 2.0, -1.0], "input_tokens": 41,
+                         "model_evaluated": true}]
+        })
+    }
+
+    // A judged answer reports every stage, the network share and the answer, without an error.
+    // 已判定的回答报告每个阶段、网络部分与回答内容，没有错误。
+    #[test]
+    fn a_judged_request_reports_its_stages_and_answer() {
+        let attempt = test_attempt(
+            &target("https://e1", "global"),
+            &one_input_request(),
+            120.0,
+            Ok(reply(
+                200,
+                Some("edge;dur=45, node;dur=40.5, queue;dur=2, compute;dur=31.5"),
+                judged(&cloud_policy().version),
+            )),
+            false,
+        );
+        assert_eq!(attempt.http_status, Some(200));
+        assert_eq!(attempt.network_ms, Some(75.0));
+        assert_eq!(
+            (
+                attempt.endpoint_ms,
+                attempt.node_ms,
+                attempt.queue_ms,
+                attempt.compute_ms
+            ),
+            (Some(45.0), Some(40.5), Some(2.0), Some(31.5))
+        );
+        assert_eq!(attempt.error, None);
+        let answer = attempt.answer.unwrap();
+        assert_eq!(answer.region, "us-west");
+        assert_eq!(answer.results[0].label, JudgeLabel::Review);
+        assert_eq!(answer.results[0].input_tokens, Some(41));
+    }
+
+    // An answer a real judgement would refuse is shown with the refusal.
+    // 真实判定会拒绝的回答与拒绝原因一同显示。
+    #[test]
+    fn an_answer_failing_the_client_checks_keeps_the_answer_and_the_reason() {
+        let attempt = test_attempt(
+            &target("https://e1", "global"),
+            &one_input_request(),
+            80.0,
+            Ok(reply(200, None, judged("another-policy"))),
+            false,
+        );
+        assert!(attempt.answer.is_some());
+        assert!(attempt.error.is_some());
+        assert_eq!(attempt.network_ms, None);
+    }
+
+    // A refusal keeps the endpoint's code and the message a real judgement records.
+    // 拒绝保留端点的错误代码以及真实判定记录的说明。
+    #[test]
+    fn a_refused_request_reports_the_code_and_the_judgement_failure() {
+        let target = target("https://e1", "global");
+        let refused = reply(
+            503,
+            Some("edge;dur=3"),
+            serde_json::json!({"error": "region_saturated", "message": "busy"}),
+        );
+        let expected = interpret(&target, &refused).err().unwrap().message;
+        let attempt = test_attempt(&target, &one_input_request(), 9.0, Ok(refused), true);
+        assert_eq!(attempt.http_status, Some(503));
+        assert_eq!(attempt.error_code.as_deref(), Some("region_saturated"));
+        assert_eq!(attempt.error, Some(expected));
+        assert!(attempt.answer.is_none() && attempt.token_renewed);
+    }
+
+    // A request that never reached the endpoint has no status, which stops the run.
+    // 未到达端点的请求没有状态，测试随之停止。
+    #[test]
+    fn an_unreachable_request_has_no_status() {
+        let attempt = test_attempt(
+            &target("https://e1", "global"),
+            &one_input_request(),
+            15_000.0,
+            Err(Failure::from(String::from("unreachable"))),
+            false,
+        );
+        assert_eq!(attempt.http_status, None);
+        assert_eq!(attempt.error.as_deref(), Some("unreachable"));
+    }
+
+    // Custom commands must not be blank or too long; the oversized sample exceeds the token limit
+    // in characters alone.
+    // 自定义命令不得为空白或过长；超长示例仅按字符数就超过 token 上限。
+    #[test]
+    fn test_commands_check_custom_input_and_build_the_samples() {
+        let custom = |command: &str| {
+            test_command(&PermissionJudgeEdgeTestInput::Custom {
+                command: command.to_string(),
+            })
+        };
+        assert!(custom("  ").is_err());
+        assert!(custom(&"x".repeat(REQUEST_TEST_MAX_COMMAND_CHARS + 1)).is_err());
+        assert_eq!(custom("ls -la").unwrap(), "ls -la");
+        let oversized = test_command(&PermissionJudgeEdgeTestInput::Preset {
+            preset: PermissionJudgeEdgeTestPreset::Oversized,
+        })
+        .unwrap();
+        assert!(oversized.len() > OVERSIZED_SAMPLE_HEX_DIGITS);
     }
 }

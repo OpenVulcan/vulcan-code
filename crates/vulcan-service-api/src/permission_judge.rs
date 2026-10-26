@@ -262,6 +262,185 @@ pub struct PermissionJudgeEdgeEndpointLockRequest {
     pub endpoint_id: Option<String>,
 }
 
+/// Sends a few real judge requests to one endpoint of the chosen official direct model and reports
+/// each one; endpoint selection and the lock are not changed.
+/// 向所选官方直连模型的一个端点发送若干真实判定请求并逐个报告；不改变端点选择与锁定。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PermissionJudgeEdgeRequestTestRequest {
+    /// Endpoint to test; it must be offered for the chosen model.
+    /// 要测试的端点；必须在所选模型的提供之列。
+    pub endpoint_id: String,
+    /// Call the requests carry.
+    /// 请求携带的调用。
+    pub input: PermissionJudgeEdgeTestInput,
+}
+
+/// Call a request test sends, rendered as a `shell_command` call.
+/// 请求测试发送的调用，渲染为 `shell_command` 调用。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PermissionJudgeEdgeTestInput {
+    /// A sample command the service defines.
+    /// 服务定义的示例命令。
+    Preset {
+        /// Which sample.
+        /// 哪个示例。
+        preset: PermissionJudgeEdgeTestPreset,
+    },
+    /// A command the user typed.
+    /// 用户输入的命令。
+    Custom {
+        /// Command text; it must not be blank.
+        /// 命令文本；不得为空白。
+        command: String,
+    },
+}
+
+/// Sample commands of the request test; the interface labels them by value.
+/// 请求测试的示例命令；界面按取值显示标签。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionJudgeEdgeTestPreset {
+    /// Ordinary work: `git status`.
+    /// 普通工作：`git status`。
+    Ordinary,
+    /// Deleting the home directory.
+    /// 删除主目录。
+    Destructive,
+    /// Dropping a database schema.
+    /// 删除数据库模式。
+    DatabaseReset,
+    /// An input longer than any model's token limit, answered without running the model.
+    /// 超过任何模型 token 上限的输入，不运行模型即作答。
+    Oversized,
+}
+
+/// Result of a request test; kept only in the page that asked for it.
+/// 请求测试结果；只保留在发起请求的页面中。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionJudgeEdgeRequestTest {
+    /// Edge model the requests named.
+    /// 请求所用的边缘模型。
+    pub model_id: String,
+    /// Tested endpoint id.
+    /// 被测试的端点 id。
+    pub endpoint_id: String,
+    /// Tested endpoint base URL.
+    /// 被测试端点的基础地址。
+    pub endpoint: String,
+    /// Site marker the requests carried.
+    /// 请求携带的来源标记。
+    pub site: String,
+    /// Characters of the rendered call each request carried.
+    /// 每个请求携带的渲染调用字符数。
+    pub rendered_chars: u64,
+    /// Requests in the order sent; the run stops after one that could not reach the endpoint.
+    /// 按发送顺序排列的请求；某个请求无法到达端点后停止。
+    pub attempts: Vec<PermissionJudgeEdgeRequestAttempt>,
+    /// Requests answered with judgements that passed the client's checks.
+    /// 得到并通过客户端检查的判定回答的请求数。
+    pub succeeded: u32,
+    /// Fastest total time of the successful requests.
+    /// 成功请求的最短总耗时。
+    pub min_ms: Option<f64>,
+    /// Median total time of the successful requests.
+    /// 成功请求的总耗时中位数。
+    pub median_ms: Option<f64>,
+    /// Slowest total time of the successful requests.
+    /// 成功请求的最长总耗时。
+    pub max_ms: Option<f64>,
+}
+
+/// One request of a request test. Stage times come from the endpoint's `Server-Timing` header and
+/// are `None` when it did not report them.
+/// 请求测试中的一个请求。各阶段耗时来自端点的 `Server-Timing` 头，未报告时为 `None`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionJudgeEdgeRequestAttempt {
+    /// Request identifier sent and expected back.
+    /// 发送并期望回显的请求标识。
+    pub request_id: String,
+    /// Client time from sending to the whole answer being read.
+    /// 客户端从发送到读完整个回答的耗时。
+    pub total_ms: f64,
+    /// Total time minus the time inside the endpoint.
+    /// 总耗时减去端点内部耗时。
+    pub network_ms: Option<f64>,
+    /// Time inside the endpoint.
+    /// 端点内部耗时。
+    pub endpoint_ms: Option<f64>,
+    /// Round trip between the endpoint and its GPU node.
+    /// 端点与其 GPU 节点之间的往返耗时。
+    pub node_ms: Option<f64>,
+    /// Time the inputs waited in the node's queue.
+    /// 输入在节点队列中的等待耗时。
+    pub queue_ms: Option<f64>,
+    /// Model compute time on the node.
+    /// 节点上的模型计算耗时。
+    pub compute_ms: Option<f64>,
+    /// HTTP status of the answer; `None` when the endpoint could not be reached.
+    /// 回答的 HTTP 状态；无法到达端点时为 `None`。
+    pub http_status: Option<u16>,
+    /// The endpoint rejected the cached token, so this request was sent again with a renewed one.
+    /// 端点拒绝了缓存的令牌，因此该请求以续期后的令牌重新发送。
+    pub token_renewed: bool,
+    /// The answer's content, when the endpoint judged.
+    /// 端点作出判定时的回答内容。
+    pub answer: Option<PermissionJudgeEdgeTestAnswer>,
+    /// Error code from the endpoint's error body.
+    /// 端点错误正文中的错误代码。
+    pub error_code: Option<String>,
+    /// Why the request failed, as a real judgement would record it; English.
+    /// 请求失败的原因，与真实判定记录的相同；英文。
+    pub error: Option<String>,
+}
+
+/// What an endpoint answered.
+/// 端点的回答。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionJudgeEdgeTestAnswer {
+    /// Region of the endpoint that answered.
+    /// 作答端点所在的区域。
+    pub region: String,
+    /// Model id the endpoint serves.
+    /// 端点提供的模型 id。
+    pub model: String,
+    /// Digest of the checkpoint the node ran.
+    /// 节点运行的检查点摘要。
+    pub checkpoint_sha256: String,
+    /// Policy revision of the deployed package.
+    /// 已部署模型包的策略修订。
+    pub policy_version: String,
+    /// One result per input.
+    /// 每条输入一条结果。
+    pub results: Vec<PermissionJudgeEdgeTestResult>,
+}
+
+/// One result of an answer.
+/// 回答中的一条结果。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionJudgeEdgeTestResult {
+    /// Decision after the package's margin rule.
+    /// 应用模型包余量规则后的判定。
+    pub label: JudgeLabel,
+    /// Raw scores in label order; present when the model ran.
+    /// 按标签顺序排列的原始分数；模型运行时存在。
+    pub logits: Option<[f32; 3]>,
+    /// Sequence length the model read; present when the model ran.
+    /// 模型读取的序列长度；模型运行时存在。
+    pub input_tokens: Option<u32>,
+    /// Whether the model scored the input.
+    /// 模型是否为该输入评分。
+    pub model_evaluated: bool,
+    /// Why the model did not run, when it did not.
+    /// 模型未运行时的原因。
+    pub reason_code: Option<String>,
+}
+
 /// One published format of an official package family.
 /// 官方模型包家族的一个已发布格式。
 #[derive(Debug, Clone, Serialize, Deserialize)]

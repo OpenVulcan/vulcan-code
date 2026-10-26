@@ -21,6 +21,55 @@ use crate::protocol::JudgeInput;
 /// 判定路由在边缘端点基础地址下的路径。
 pub const EDGE_JUDGE_PATH: &str = "/v1/judge";
 
+/// Header in which an edge endpoint reports its stage times.
+/// 边缘端点报告各阶段耗时的响应头。
+pub const EDGE_SERVER_TIMING_HEADER: &str = "server-timing";
+
+/// Stage times of one answer, in milliseconds, from `Server-Timing: edge;dur=…, node;dur=…,
+/// queue;dur=…, compute;dur=…`; a stage the endpoint did not report is `None`.
+/// 一次回答的各阶段耗时（毫秒），取自 `Server-Timing: edge;dur=…, node;dur=…, queue;dur=…,
+/// compute;dur=…`；端点未报告的阶段为 `None`。
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct EdgeServerTiming {
+    /// Time inside the endpoint.
+    /// 端点内部耗时。
+    pub edge: Option<f64>,
+    /// Round trip between the endpoint and its node.
+    /// 端点与其节点之间的往返耗时。
+    pub node: Option<f64>,
+    /// Time the inputs waited in the node's queue.
+    /// 输入在节点队列中的等待耗时。
+    pub queue: Option<f64>,
+    /// Model compute time on the node.
+    /// 节点上的模型计算耗时。
+    pub compute: Option<f64>,
+}
+
+impl EdgeServerTiming {
+    /// Reads the header value; unknown metrics and malformed or negative durations are ignored.
+    /// 读取响应头取值；忽略未知指标以及格式不符或为负的耗时。
+    pub fn parse(header: &str) -> Self {
+        let mut timing = Self::default();
+        for metric in header.split(',') {
+            let mut parts = metric.split(';').map(str::trim);
+            let name = parts.next().unwrap_or_default();
+            let duration = parts
+                .filter_map(|parameter| parameter.strip_prefix("dur="))
+                .find_map(|value| value.parse::<f64>().ok())
+                .filter(|value| value.is_finite() && *value >= 0.0);
+            let slot = match name {
+                "edge" => &mut timing.edge,
+                "node" => &mut timing.node,
+                "queue" => &mut timing.queue,
+                "compute" => &mut timing.compute,
+                _ => continue,
+            };
+            *slot = duration;
+        }
+        timing
+    }
+}
+
 /// Reason code of a result whose input exceeded the model's token limit.
 /// 输入超过模型 token 上限的结果所带的原因代码。
 const INPUT_TOKEN_LIMIT_REASON: &str = "input_token_limit";
@@ -276,6 +325,29 @@ mod tests {
                 "{results}"
             );
         }
+    }
+
+    #[test]
+    fn server_timing_reads_the_four_stages_and_ignores_the_rest() {
+        assert_eq!(
+            EdgeServerTiming::parse(
+                "edge;dur=41, node;dur=33.5, queue;dur=1.2, compute;dur=30.0, cdn;dur=4"
+            ),
+            EdgeServerTiming {
+                edge: Some(41.0),
+                node: Some(33.5),
+                queue: Some(1.2),
+                compute: Some(30.0),
+            }
+        );
+        assert_eq!(
+            EdgeServerTiming::parse("edge;desc=\"x\";dur=7, node;dur=-1, queue;dur=abc, compute"),
+            EdgeServerTiming {
+                edge: Some(7.0),
+                ..Default::default()
+            }
+        );
+        assert_eq!(EdgeServerTiming::parse(""), EdgeServerTiming::default());
     }
 
     #[test]

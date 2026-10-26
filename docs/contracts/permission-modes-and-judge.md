@@ -196,6 +196,16 @@
   error, endpoints: [{ endpointId, endpoint, priority, online, region, ready, acceptsSite, rttMs,
   computeP50Ms, scoreMs, error }] }`；`selectedEndpointId` 是请求当前发往的端点（锁定时为锁定端点，未提供
   时为 `null`），`scoreMs` 为 `null` 表示不参与自动选择。设置页每 `pollIntervalMs` 读取快照。
+  **请求测试**：`service_test_permission_judge_edge_request`（`{ request: { endpointId, input } }`，`input` 为
+  `{ kind: "preset", preset: "ordinary" | "destructive" | "database_reset" | "oversized" }` 或
+  `{ kind: "custom", command }`，自定义命令不得为空且不超过 `REQUEST_TEST_MAX_COMMAND_CHARS`）以已保存的直连
+  模型、按真实判定的渲染与传输向指定端点依次发送 `REQUEST_TEST_ATTEMPTS`（5）个单条请求，不改变选择与锁定，
+  计入账号用量，结果只留在界面。令牌被拒时续期一次并重发该请求；某次请求未得到 HTTP 状态即停止。返回
+  `{ modelId, endpointId, endpoint, site, renderedChars, attempts: [{ requestId, totalMs, networkMs, endpointMs,
+  nodeMs, queueMs, computeMs, httpStatus, tokenRenewed, answer, errorCode, error }], succeeded, minMs, medianMs,
+  maxMs }`：各阶段取自回答的 `Server-Timing`（`edge`、`node`、`queue`、`compute`），网络为总耗时减端点耗时；
+  `answer` 原样保留端点回答（区域、模型、检查点、策略版本、每条结果的标签、分数、token 数、是否评分与原因），
+  未通过客户端校验时同时给出 `error`；汇总只统计有回答且无错误的请求，中位数取偏低的中间值。
   端点 `POST /v1/judge` 已在节点应用模型包余量规则，标签原样采用；回答必须回显请求标识、检查点摘要为 64 位
   小写十六进制、策略版本等于随构建副本、结果数等于输入数，超过 token 上限的结果视为输入超限交给下一层。
   检查点不与本地清单比对，只记入判定轨迹（`checkpointSha256`）。官方模型包清单 `known-packages.json`
@@ -224,7 +234,7 @@
   审批以 `deadlineUnixMs` 投影给客户端。到期时经持久回复路径写入拒绝，先到的用户回答优先；拒绝文本
   `APPROVAL_EXPIRED_DENIAL` 告知代理无人及时回答、不要立即重试同一调用。等待适用于全部用户审批（含仅可查看
   与工作区修改模式的审批），无人值守会话不进入用户审批。
-- **速度测试**：1 条与 10 条两种，用户触发，结果只留在当前界面；云端测试会产生费用，执行前先确认；官方直连测试不收费，但以已保存的直连模型发送合成调用到请求当前使用的端点（带来源标记）。后台端点探测只请求公开状态，不发送判定输入，与速度测试互不替代。
+- **速度测试**：只用于本机与云端，1 条与 10 条两种，用户触发，结果只留在当前界面；云端测试会产生费用，执行前先确认。官方直连没有速度测试（`service_benchmark_permission_judge` 直接报错），改为在端点表中对单个端点做请求测试（见直连端点选择）。后台端点探测只请求公开状态，不发送判定输入，与请求测试互不替代。
 
 ## 项目策略
 
@@ -302,7 +312,7 @@
 | 复核规则服务与有效规则 | `crates/vulcan-service-kernel/src/permission_judge/review_rules.rs`；类型与上限在 `crates/vulcan-permission-judge/src/system.rs` |
 | 复核附加提示词服务 | `crates/vulcan-service-kernel/src/permission_judge/review_prompt.rs`；会话旁置文件在 `crates/vulcan-workspace-store/src/workspace_store/session_sidecars.rs` |
 | 审批等待与到期拒绝 | `crates/vulcan-agent-runtime/src/agent_runtime/question_runtime/approval.rs`、`tool_permission.rs` 中的 `APPROVAL_EXPIRED_DENIAL` |
-| 判定设置、项目策略与速度测试服务 | `crates/vulcan-service-kernel/src/permission_judge/services.rs`；官方直连模型清单、令牌缓存、请求、来源标记与限速处理在同目录 `edge.rs`，后台端点探测、选择与锁定在 `edge_select.rs` |
+| 判定设置、项目策略与速度测试服务 | `crates/vulcan-service-kernel/src/permission_judge/services.rs`；官方直连模型清单、令牌缓存、请求、来源标记、限速处理与请求测试在同目录 `edge.rs`，后台端点探测、选择与锁定在 `edge_select.rs` |
 | 直连状态探测形状、评分与切换规则 | `crates/vulcan-permission-judge/src/edge_route.rs` 中的 `EdgeStatus`、`edge_score`、`choose_edge_endpoint`、`EDGE_SWITCH_PERCENT` |
 | 判定记录存储、筛选、标记与导出 | `crates/vulcan-service-kernel/src/permission_judge/records.rs` |
 | 复核 LLM 请求 | `crates/vulcan-service-kernel/src/permission_judge/review.rs` |
