@@ -232,6 +232,9 @@ pub enum Slot {
     /// The latest `benchmarkPermissionJudge` result of this page; never saved.
     /// 本页最近一次 `benchmarkPermissionJudge` 结果；不会持久化。
     PermissionJudgeBenchmark,
+    /// The latest `testPermissionJudgeEdgeRequest` result of this page; never saved.
+    /// 本页最近一次 `testPermissionJudgeEdgeRequest` 结果；不会持久化。
+    PermissionJudgeEdgeRequestTest,
     /// The latest `inspectPermissionJudgePackage` result of the registration form; never saved.
     /// 登记表单最近一次 `inspectPermissionJudgePackage` 结果；不会持久化。
     PermissionJudgePackageInspection,

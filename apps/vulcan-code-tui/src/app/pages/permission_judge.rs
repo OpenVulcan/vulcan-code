@@ -891,7 +891,304 @@ fn edge_endpoint_rows(rows: &mut Vec<Row>, app: &App) {
         } else {
             row.badge(status, tone)
         };
-        rows.push(row);
+        rows.push(row.actions(request_test_actions(&id)));
+    }
+    request_test_rows(rows, app);
+}
+
+// Sample calls the service defines for a request test, with their labels, in the WebUI's order.
+// 服务为请求测试定义的示例调用及其标签，顺序与 WebUI 一致。
+fn request_test_presets() -> Vec<(String, String)> {
+    [
+        (
+            "ordinary",
+            tr!("settings.permissionJudge.edge.requestTest.preset.ordinary"),
+        ),
+        (
+            "destructive",
+            tr!("settings.permissionJudge.edge.requestTest.preset.destructive"),
+        ),
+        (
+            "database_reset",
+            tr!("settings.permissionJudge.edge.requestTest.preset.databaseReset"),
+        ),
+        (
+            "oversized",
+            tr!("settings.permissionJudge.edge.requestTest.preset.oversized"),
+        ),
+    ]
+    .into_iter()
+    .map(|(preset, label)| (preset.to_string(), label))
+    .collect()
+}
+
+/// Sends a request test of the picked sample to the endpoint in `ctx`.
+/// 向 `ctx` 中的端点发送所选示例的请求测试。
+fn test_preset(ctx: &Value, value: &SettingValue) -> Option<ServiceCall> {
+    Some(judge::test_permission_judge_edge_request(json!({
+        "endpointId": ctx,
+        "input": { "kind": "preset", "preset": value.as_str() },
+    })))
+}
+
+/// An endpoint's request test actions: send a sample call, or type a command to send.
+/// 端点的请求测试操作：发送示例调用，或输入要发送的命令。
+fn request_test_actions(endpoint_id: &str) -> Vec<RowAction> {
+    vec![
+        action(
+            tr!("settings.permissionJudge.edge.requestTest.open"),
+            UiAction::Pick {
+                title: tr!(
+                    "settings.permissionJudge.edge.requestTest.title",
+                    endpoint = endpoint_id
+                ),
+                edit: Edit::Call(Setter::Build {
+                    ctx: json!(endpoint_id),
+                    build: test_preset,
+                }),
+                options: request_test_presets(),
+                current: String::new(),
+            },
+            Tone::Normal,
+        ),
+        action(
+            tr!("settings.permissionJudge.edge.requestTest.custom"),
+            form(
+                json!({
+                    "endpointId": endpoint_id,
+                    "input": { "kind": "custom", "command": "" },
+                }),
+                vec![field(
+                    tr!("settings.permissionJudge.edge.requestTest.customPlaceholder"),
+                    "/input/command",
+                    false,
+                    false,
+                )],
+                judge::test_permission_judge_edge_request,
+            ),
+            Tone::Normal,
+        ),
+    ]
+}
+
+/// The latest request test: its summary, each request's stage times and outcome, the latest
+/// answer and the failures, as in the WebUI dialog.
+/// 最近一次请求测试：汇总、每个请求的各阶段耗时与结果、最近一次回答及失败，与 WebUI 对话框一致。
+fn request_test_rows(rows: &mut Vec<Row>, app: &App) {
+    let slot = Slot::PermissionJudgeEdgeRequestTest;
+    let result = app.slots.value(slot);
+    let error = app.slot_errors.get(&slot);
+    if result.is_null() && error.is_none() {
+        return;
+    }
+    // The tested endpoint comes from the request that produced the result.
+    // 被测试的端点来自产生该结果的请求。
+    let tested = app
+        .slots
+        .loader(slot)
+        .map(|call| s(call.param("/request"), "/endpointId"))
+        .unwrap_or_default();
+    rows.push(section(tr!(
+        "settings.permissionJudge.edge.requestTest.title",
+        endpoint = tested.as_str()
+    )));
+    if let Some(error) = error {
+        rows.push(note(
+            format!(
+                "{} {error}",
+                tr!("settings.permissionJudge.edge.requestTest.failed")
+            ),
+            Tone::Bad,
+        ));
+        return;
+    }
+    let ms = |value: &Value| match value.as_f64() {
+        Some(value) => tr!(
+            "settings.permissionJudge.edge.endpoints.ms",
+            value = value.round() as i64
+        ),
+        None => String::from("—"),
+    };
+    let attempts = a(result, "/attempts");
+    let succeeded = n(result, "/succeeded");
+    rows.push(note(
+        if succeeded > 0 {
+            tr!(
+                "settings.permissionJudge.edge.requestTest.summary",
+                succeeded = succeeded,
+                total = attempts.len(),
+                min = ms(v(result, "/minMs")),
+                median = ms(v(result, "/medianMs")),
+                max = ms(v(result, "/maxMs")),
+            )
+        } else {
+            tr!(
+                "settings.permissionJudge.edge.requestTest.noneSucceeded",
+                total = attempts.len()
+            )
+        },
+        if succeeded as usize == attempts.len() {
+            Tone::Good
+        } else {
+            Tone::Bad
+        },
+    ));
+    rows.push(note(
+        format!(
+            "{} {}",
+            tr!(
+                "settings.permissionJudge.edge.requestTest.target",
+                endpoint = s(result, "/endpoint"),
+                site = s(result, "/site"),
+                chars = n(result, "/renderedChars"),
+            ),
+            tr!("settings.permissionJudge.edge.requestTest.firstNote")
+        ),
+        Tone::Muted,
+    ));
+    for (index, attempt) in attempts.iter().enumerate() {
+        let stages = [
+            (
+                tr!("settings.permissionJudge.edge.requestTest.column.total"),
+                "/totalMs",
+            ),
+            (
+                tr!("settings.permissionJudge.edge.requestTest.column.network"),
+                "/networkMs",
+            ),
+            (
+                tr!("settings.permissionJudge.edge.requestTest.column.endpoint"),
+                "/endpointMs",
+            ),
+            (
+                tr!("settings.permissionJudge.edge.requestTest.column.node"),
+                "/nodeMs",
+            ),
+            (
+                tr!("settings.permissionJudge.edge.requestTest.column.queue"),
+                "/queueMs",
+            ),
+            (
+                tr!("settings.permissionJudge.edge.requestTest.column.compute"),
+                "/computeMs",
+            ),
+        ]
+        .map(|(column, pointer)| format!("{column} {}", ms(v(attempt, pointer))))
+        .join(" · ");
+        let first = v(attempt, "/answer/results/0");
+        let mut outcome = Vec::new();
+        if !first.is_null() {
+            outcome.push(record_result_label(&s(first, "/label")));
+        }
+        outcome.push(match v(attempt, "/httpStatus").as_u64() {
+            Some(status) => tr!(
+                "settings.permissionJudge.edge.requestTest.httpStatus",
+                status = status
+            ),
+            None => tr!("settings.permissionJudge.edge.requestTest.unreachable"),
+        });
+        if let Some(tokens) = v(first, "/inputTokens").as_u64() {
+            outcome.push(tr!(
+                "settings.permissionJudge.edge.requestTest.tokens",
+                tokens = tokens
+            ));
+        }
+        if !first.is_null() && !b(first, "/modelEvaluated") {
+            outcome.push(tr!(
+                "settings.permissionJudge.edge.requestTest.notEvaluated",
+                reason = match s(first, "/reasonCode") {
+                    reason if reason.is_empty() => String::from("—"),
+                    reason => reason,
+                }
+            ));
+        }
+        let code = s(attempt, "/errorCode");
+        if !code.is_empty() {
+            outcome.push(code);
+        }
+        if b(attempt, "/tokenRenewed") {
+            outcome.push(tr!(
+                "settings.permissionJudge.edge.requestTest.tokenRenewed"
+            ));
+        }
+        let mut text = format!("{stages}\n{}", outcome.join(" · "));
+        let error = s(attempt, "/error");
+        if !error.is_empty() {
+            text.push('\n');
+            text.push_str(&error);
+        }
+        let answered = !v(attempt, "/answer").is_null() && error.is_empty();
+        rows.push(info(
+            format!("#{}", index + 1),
+            text,
+            if answered { Tone::Good } else { Tone::Bad },
+        ));
+    }
+    if let Some(answered) = attempts
+        .iter()
+        .rev()
+        .find(|attempt| !v(attempt, "/answer").is_null())
+    {
+        let answer = v(answered, "/answer");
+        for (label, value) in [
+            (
+                tr!("settings.permissionJudge.edge.requestTest.answer.region"),
+                s(answer, "/region"),
+            ),
+            (
+                tr!("settings.permissionJudge.edge.requestTest.answer.model"),
+                s(answer, "/model"),
+            ),
+            (
+                tr!("settings.permissionJudge.edge.requestTest.answer.policy"),
+                s(answer, "/policyVersion"),
+            ),
+        ] {
+            rows.push(info(label, value, Tone::Normal));
+        }
+        for result in a(answer, "/results") {
+            let logits = a(result, "/logits");
+            if logits.len() == 3 {
+                let score = |index: usize| format!("{:.3}", logits[index].as_f64().unwrap_or(0.0));
+                rows.push(info(
+                    tr!("settings.permissionJudge.edge.requestTest.answer.scores"),
+                    tr!(
+                        "settings.permissionJudge.edge.requestTest.answer.scoresValue",
+                        allow = score(0),
+                        review = score(1),
+                        block = score(2),
+                    ),
+                    Tone::Normal,
+                ));
+            }
+        }
+        rows.push(info(
+            tr!("settings.permissionJudge.edge.requestTest.answer.checkpoint"),
+            s(answer, "/checkpointSha256"),
+            Tone::Muted,
+        ));
+        rows.push(info(
+            tr!("settings.permissionJudge.edge.requestTest.answer.requestId"),
+            s(answered, "/requestId"),
+            Tone::Muted,
+        ));
+    }
+    let failures: Vec<String> = attempts
+        .iter()
+        .filter(|attempt| !v(attempt, "/error").is_null())
+        .map(|attempt| format!("{}: {}", s(attempt, "/requestId"), s(attempt, "/error")))
+        .collect();
+    if !failures.is_empty() {
+        rows.push(
+            note(
+                tr!(
+                    "settings.permissionJudge.edge.requestTest.failures",
+                    count = failures.len()
+                ),
+                Tone::Bad,
+            )
+            .detail(failures.join("\n")),
+        );
     }
 }
 
@@ -1023,20 +1320,21 @@ fn benchmark_rows(
     status: &Value,
     configured: bool,
 ) {
-    // The saved backend decides what the test runs on, as in the WebUI.
-    // 与 WebUI 一致，由已保存的后端决定测试对象。
+    // The saved backend decides what the test runs on, as in the WebUI. The official direct judge
+    // is tested per endpoint from its endpoint table instead.
+    // 与 WebUI 一致，由已保存的后端决定测试对象。官方直连判定改为在其端点表中按端点测试。
     let backend = s(snapshot, "/backend");
+    if configured && backend == "edge" {
+        return;
+    }
+    // The cloud judge has no local worker; its speed test times real requests.
+    // 云端判定没有本机 worker；其速度测试为真实请求计时。
     let saved_cloud = configured && backend == "cloud";
-    // A remote judge has no local worker; its speed test times real requests.
-    // 远端判定没有本机 worker；其速度测试为真实请求计时。
-    let saved_remote = saved_cloud || (configured && backend == "edge");
-    let ready = saved_remote || s(status, "/worker/phase") == "ready";
+    let ready = saved_cloud || s(status, "/worker/phase") == "ready";
     rows.push(section(tr!("settings.permissionJudge.benchmark")));
     rows.push(note(
         if saved_cloud {
             tr!("settings.permissionJudge.benchmarkCloudHint")
-        } else if saved_remote {
-            tr!("settings.permissionJudge.benchmarkEdgeHint")
         } else {
             tr!("settings.permissionJudge.benchmarkHint")
         },

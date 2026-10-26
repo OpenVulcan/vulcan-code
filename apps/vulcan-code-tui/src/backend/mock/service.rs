@@ -593,6 +593,14 @@ impl FakeService {
                     policy["projectId"] = required(&call.params, "/projectId")?.clone();
                     return Ok(policy);
                 }
+                // The demo keeps one request test and reports it for the requested endpoint.
+                // 演示只保留一次请求测试，并按所请求的端点报告。
+                "service_test_permission_judge_edge_request" => {
+                    required(&call.params, "/request/input/kind")?;
+                    let mut test = self.loads[call.method].clone();
+                    test["endpointId"] = required(&call.params, "/request/endpointId")?.clone();
+                    return Ok(test);
+                }
                 // The demo shows one memory tree and reports it for the requested host project.
                 // 演示只有一棵记忆树，并按所请求的宿主项目报告。
                 "service_load_markdown_memory" => {

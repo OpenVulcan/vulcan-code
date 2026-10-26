@@ -488,3 +488,110 @@ fn judge_endpoint_rows_lock_and_retest_through_their_calls() {
         .expect("the re-test button");
     assert!(matches!(probe.kind, CallKind::Mutate(_)));
 }
+
+/// Each official direct endpoint sends a sample or a typed command as a request test of that
+/// endpoint, the result lists every request, and the direct backend offers no speed test.
+/// 每个官方直连端点都能将示例或输入的命令作为该端点的请求测试发送，结果列出每个请求，且直连后端不提供速度测试。
+#[test]
+fn judge_endpoint_request_test_targets_its_endpoint_and_lists_each_request() {
+    use super::action::Edit;
+    use super::pages::{PageId, RowKind, rows};
+    use crate::model::SettingValue;
+    use crate::service_api::permission_judge as judge;
+    use crate::service_api::setter::Setter;
+    let (mut app, _commands) = isolated_app();
+    app.slots.set(
+        Slot::PermissionJudgeSettings,
+        judge::load_permission_judge_settings(),
+        json!({"backend": "edge", "edgeModelId": "m", "edgeEndpointId": null, "models": [],
+            "devices": [], "knownPackages": [], "policyOptions": []}),
+    );
+    app.slots.set(
+        Slot::PermissionJudgeEdgeEndpoints,
+        judge::load_permission_judge_edge_endpoints(),
+        json!({"modelId": "m", "site": "global", "mode": "auto", "lockedEndpointId": null,
+        "selectedEndpointId": "a", "probedAtMs": null, "nextProbeAtMs": null, "error": null,
+        "endpoints": [
+            {"endpointId": "a", "endpoint": "https://a.example.com", "priority": 10, "online": true,
+             "region": "r", "ready": true, "acceptsSite": true, "rttMs": 10, "computeP50Ms": null,
+             "scoreMs": 10, "error": null},
+            {"endpointId": "b", "endpoint": "https://b.example.com", "priority": 20, "online": true,
+             "region": "r", "ready": true, "acceptsSite": true, "rttMs": 20, "computeP50Ms": null,
+             "scoreMs": 20, "error": null}
+        ]}),
+    );
+    let page = rows(&app, PageId::PermissionJudge);
+    assert!(!page.iter().any(|row| matches!(&row.kind, RowKind::Section)
+        && row.label == crate::tr!("settings.permissionJudge.benchmark")));
+    let actions = page
+        .iter()
+        .find_map(|row| match &row.kind {
+            RowKind::Item { id, actions, .. } if id == "b" => Some(actions.clone()),
+            _ => None,
+        })
+        .expect("the endpoint row");
+    let preset = actions
+        .iter()
+        .find_map(|action| match &action.action {
+            Some(UiAction::Pick {
+                edit: Edit::Call(Setter::Build { ctx, build }),
+                options,
+                ..
+            }) => Some((ctx.clone(), *build, options.clone())),
+            _ => None,
+        })
+        .expect("the sample picker");
+    assert!(preset.2.iter().any(|(value, _)| value == "database_reset"));
+    let call = (preset.1)(&preset.0, &SettingValue::Choice("database_reset".into())).unwrap();
+    assert_eq!(call.method, "service_test_permission_judge_edge_request");
+    assert_eq!(
+        call.params,
+        json!({"request": {"endpointId": "b", "input": {"kind": "preset", "preset": "database_reset"}}})
+    );
+    let custom = actions
+        .iter()
+        .find_map(|action| match &action.action {
+            Some(UiAction::Form(form)) => Some(form.clone()),
+            _ => None,
+        })
+        .expect("the custom command form");
+    assert_eq!(
+        custom.request,
+        json!({"endpointId": "b", "input": {"kind": "custom", "command": ""}})
+    );
+    assert_eq!(custom.fields[0].pointer, "/input/command");
+
+    let attempt = |request_id: &str, error: Value| {
+        json!({"requestId": request_id, "totalMs": 120.0, "networkMs": 75.0, "endpointMs": 45.0,
+            "nodeMs": 40.0, "queueMs": 2.0, "computeMs": 31.0, "httpStatus": 200, "tokenRenewed": false,
+            "answer": {"region": "r", "model": "m", "checkpointSha256": "c", "policyVersion": "p",
+                "results": [{"label": "allow", "logits": [2.0, 0.5, -1.0], "inputTokens": 41,
+                    "modelEvaluated": true, "reasonCode": null}]},
+            "errorCode": null, "error": error})
+    };
+    app.slots.set(
+        Slot::PermissionJudgeEdgeRequestTest,
+        call,
+        json!({"modelId": "m", "endpointId": "b", "endpoint": "https://b.example.com", "site": "global",
+            "renderedChars": 52, "attempts": [attempt("r1", Value::Null), attempt("r2", json!("mismatch"))],
+            "succeeded": 1, "minMs": 120.0, "medianMs": 120.0, "maxMs": 120.0}),
+    );
+    let page = rows(&app, PageId::PermissionJudge);
+    let requests: Vec<_> = page
+        .iter()
+        .filter_map(|row| match &row.kind {
+            RowKind::Info { tone, .. } if row.label.starts_with('#') => Some(*tone),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        requests,
+        [super::pages::Tone::Good, super::pages::Tone::Bad]
+    );
+    assert!(page.iter().any(|row| matches!(
+        &row.kind,
+        RowKind::Note {
+            tone: super::pages::Tone::Bad
+        }
+    ) && row.detail.contains("r2: mismatch")));
+}

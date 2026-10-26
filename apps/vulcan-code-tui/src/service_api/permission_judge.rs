@@ -100,6 +100,23 @@ pub fn lock_permission_judge_edge_endpoint(endpoint_id: Option<&str>) -> Service
     )
 }
 
+/// Builds the request for `service_test_permission_judge_edge_request`, which sends real judge
+/// requests to one endpoint; the result replaces the page's request test slot and is never saved.
+/// 构建 `service_test_permission_judge_edge_request` 的请求，向一个端点发送真实判定请求；结果替换本页
+/// 请求测试槽位，不会持久化。
+/// `request` is `{endpointId, input}`, where `input` is a preset or a custom command.
+/// `request` 为 `{endpointId, input}`，其中 `input` 为示例或自定义命令。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn test_permission_judge_edge_request(request: Value) -> ServiceCall {
+    ServiceCall::load(
+        "test_permission_judge_edge_request",
+        "service_test_permission_judge_edge_request",
+        json!({ "request": request }),
+        Slot::PermissionJudgeEdgeRequestTest,
+    )
+}
+
 /// Builds the request for `service_save_permission_judge_settings`.
 /// 构建 `service_save_permission_judge_settings` 的请求。
 /// `request` is the complete `PermissionJudgeSettingsSaveRequest`.

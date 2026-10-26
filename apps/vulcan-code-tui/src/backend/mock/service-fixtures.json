@@ -1741,6 +1741,39 @@
           "scoreMs": null, "error": "The endpoint status could not be reached." }
       ]
     },
+    "service_test_permission_judge_edge_request": {
+      "modelId": "vulcan-decision-shell-v1-mini-preview",
+      "endpointId": "us-mini",
+      "endpoint": "https://us-models.example.com",
+      "site": "global",
+      "renderedChars": 52,
+      "attempts": [
+        { "requestId": "permission-judge-test-1", "totalMs": 182.4, "networkMs": 96.1, "endpointMs": 86.3,
+          "nodeMs": 41.0, "queueMs": 0.4, "computeMs": 30.2, "httpStatus": 200, "tokenRenewed": false,
+          "answer": { "region": "us-west", "model": "vulcan-decision-shell-v1-mini-preview",
+            "checkpointSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+            "policyVersion": "2026.09", "results": [
+              { "label": "allow", "logits": [3.12, -0.84, -2.41], "inputTokens": 41, "modelEvaluated": true,
+                "reasonCode": null } ] },
+          "errorCode": null, "error": null },
+        { "requestId": "permission-judge-test-2", "totalMs": 101.7, "networkMs": 54.2, "endpointMs": 47.5,
+          "nodeMs": 39.8, "queueMs": 0.3, "computeMs": 29.6, "httpStatus": 200, "tokenRenewed": false,
+          "answer": { "region": "us-west", "model": "vulcan-decision-shell-v1-mini-preview",
+            "checkpointSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+            "policyVersion": "2026.09", "results": [
+              { "label": "allow", "logits": [3.10, -0.82, -2.40], "inputTokens": 41, "modelEvaluated": true,
+                "reasonCode": null } ] },
+          "errorCode": null, "error": null },
+        { "requestId": "permission-judge-test-3", "totalMs": 64.0, "networkMs": null, "endpointMs": 3.1,
+          "nodeMs": null, "queueMs": null, "computeMs": null, "httpStatus": 503, "tokenRenewed": false,
+          "answer": null, "errorCode": "region_saturated",
+          "error": "The official direct judge refused the request (503 region_saturated)." }
+      ],
+      "succeeded": 2,
+      "minMs": 101.7,
+      "medianMs": 101.7,
+      "maxMs": 182.4
+    },
     "service_permission_judge_edge_models": {
       "models": [
         { "modelId": "vulcan-decision-shell-v1-flash-preview" },
