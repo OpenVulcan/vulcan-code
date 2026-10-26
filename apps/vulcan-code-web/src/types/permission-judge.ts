@@ -131,6 +131,74 @@ export interface PermissionJudgeEdgeEndpoints {
   endpoints: PermissionJudgeEdgeEndpoint[];
 }
 
+// PermissionJudgeEdgeTestPreset names a sample command of the request test.
+// PermissionJudgeEdgeTestPreset 指定请求测试的示例命令。
+export type PermissionJudgeEdgeTestPreset = "ordinary" | "destructive" | "database_reset" | "oversized";
+
+// PermissionJudgeEdgeTestInput is the call a request test sends: a sample the service defines or a
+// command the user typed.
+// PermissionJudgeEdgeTestInput 是请求测试发送的调用：服务定义的示例或用户输入的命令。
+export type PermissionJudgeEdgeTestInput =
+  | { kind: "preset"; preset: PermissionJudgeEdgeTestPreset }
+  | { kind: "custom"; command: string };
+
+// PermissionJudgeEdgeTestResult is one result of an endpoint's answer.
+// PermissionJudgeEdgeTestResult 是端点回答中的一条结果。
+export interface PermissionJudgeEdgeTestResult {
+  label: JudgeLabel;
+  logits: [number, number, number] | null;
+  inputTokens: number | null;
+  modelEvaluated: boolean;
+  reasonCode: string | null;
+}
+
+// PermissionJudgeEdgeTestAnswer is what an endpoint answered.
+// PermissionJudgeEdgeTestAnswer 是端点的回答。
+export interface PermissionJudgeEdgeTestAnswer {
+  region: string;
+  model: string;
+  checkpointSha256: string;
+  policyVersion: string;
+  results: PermissionJudgeEdgeTestResult[];
+}
+
+// PermissionJudgeEdgeRequestAttempt is one request of a request test; stage times come from the
+// endpoint's Server-Timing header and are null when it did not report them, httpStatus is null when
+// the endpoint could not be reached, and error is the English reason a real judgement would record.
+// PermissionJudgeEdgeRequestAttempt 是请求测试中的一个请求；各阶段耗时来自端点的 Server-Timing 头，
+// 未报告时为 null；无法到达端点时 httpStatus 为 null；error 是真实判定会记录的英文原因。
+export interface PermissionJudgeEdgeRequestAttempt {
+  requestId: string;
+  totalMs: number;
+  networkMs: number | null;
+  endpointMs: number | null;
+  nodeMs: number | null;
+  queueMs: number | null;
+  computeMs: number | null;
+  httpStatus: number | null;
+  tokenRenewed: boolean;
+  answer: PermissionJudgeEdgeTestAnswer | null;
+  errorCode: string | null;
+  error: string | null;
+}
+
+// PermissionJudgeEdgeRequestTest is one request test, kept only on the page that ran it; the
+// summary covers the requests whose answers passed the client's checks.
+// PermissionJudgeEdgeRequestTest 是一次请求测试，只保留在执行它的页面上；汇总只计入回答通过客户端
+// 检查的请求。
+export interface PermissionJudgeEdgeRequestTest {
+  modelId: string;
+  endpointId: string;
+  endpoint: string;
+  site: string;
+  renderedChars: number;
+  attempts: PermissionJudgeEdgeRequestAttempt[];
+  succeeded: number;
+  minMs: number | null;
+  medianMs: number | null;
+  maxMs: number | null;
+}
+
 // PermissionJudgePolicyOption is one authorization option of the policy in use.
 // PermissionJudgePolicyOption 是使用中策略的一个授权选项。
 export interface PermissionJudgePolicyOption {

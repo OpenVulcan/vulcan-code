@@ -9,6 +9,8 @@ import type {
   PermissionJudgeCudaComponent,
   PermissionJudgeEdgeEndpoints,
   PermissionJudgeEdgeModels,
+  PermissionJudgeEdgeRequestTest,
+  PermissionJudgeEdgeTestInput,
   PermissionJudgeModelFormat,
   PermissionJudgePackageInspection,
   PermissionJudgeSettingsSaveRequest,
@@ -59,6 +61,19 @@ export async function probePermissionJudgeEdgeEndpoints(): Promise<PermissionJud
 export async function lockPermissionJudgeEdgeEndpoint(endpointId: string | null): Promise<PermissionJudgeEdgeEndpoints> {
   return serviceClient.request<PermissionJudgeEdgeEndpoints>("service_lock_permission_judge_edge_endpoint", {
     request: { endpointId },
+  });
+}
+
+// testPermissionJudgeEdgeRequest sends a few real judge requests carrying input to one endpoint of
+// the chosen official direct model and reports each; endpoint selection is not changed.
+// testPermissionJudgeEdgeRequest 向所选官方直连模型的一个端点发送若干携带 input 的真实判定请求并
+// 逐个报告；不改变端点选择。
+export async function testPermissionJudgeEdgeRequest(
+  endpointId: string,
+  input: PermissionJudgeEdgeTestInput,
+): Promise<PermissionJudgeEdgeRequestTest> {
+  return serviceClient.request<PermissionJudgeEdgeRequestTest>("service_test_permission_judge_edge_request", {
+    request: { endpointId, input },
   });
 }
 

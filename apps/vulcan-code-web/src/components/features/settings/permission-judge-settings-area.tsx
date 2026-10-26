@@ -366,15 +366,15 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
     </>);
   }
   if (view === "diagnostics") {
-    // A remote judge has no local worker; its speed test times real requests.
-    // 远端判定没有本机 worker；其速度测试为真实请求计时。
-    const savedRemote = snapshot.backend === "cloud" || snapshot.backend === "edge";
-    const benchmarkReady = savedRemote || status.worker.phase === "ready";
+    // The cloud judge has no local worker; its speed test times real requests. The official direct
+    // judge is tested per endpoint from its endpoint table instead.
+    // 云端判定没有本机 worker，其速度测试为真实请求计时。官方直连判定改为在其端点表中按端点测试。
+    const savedCloud = snapshot.backend === "cloud";
+    const benchmarkReady = savedCloud || status.worker.phase === "ready";
     return subPage(t("settings.permissionJudge.diagnostics"), <>
-      {savedRemote ? null : <WorkerStatusSection snapshot={snapshot} status={status} t={t} />}
+      {savedCloud ? null : <WorkerStatusSection snapshot={snapshot} status={status} t={t} />}
       <PageSection layout="rows" title={t("settings.permissionJudge.benchmark")}
-        description={t(snapshot.backend === "cloud" ? "settings.permissionJudge.benchmarkCloudHint"
-          : snapshot.backend === "edge" ? "settings.permissionJudge.benchmarkEdgeHint" : "settings.permissionJudge.benchmarkHint")}
+        description={t(savedCloud ? "settings.permissionJudge.benchmarkCloudHint" : "settings.permissionJudge.benchmarkHint")}
         actions={([1, 10] as const).map((batchSize) => (
           <Button key={batchSize} type="button" variant="outline" size="sm"
             disabled={busy !== null || !benchmarkReady}
@@ -559,8 +559,8 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
     <PageSection layout="rows" data-judge-tools="" title={t("settings.permissionJudge.tools")}>
       <PageItem icon={<Bot />} title={t("settings.permissionJudge.unattended.title")}
         description={t("settings.permissionJudge.unattended.entryHint")} actions={open("unattended")} />
-      <PageItem icon={<Activity />} title={t("settings.permissionJudge.diagnostics")}
-        description={t("settings.permissionJudge.diagnosticsHint")} actions={open("diagnostics")} />
+      {snapshot.backend === "edge" ? null : <PageItem icon={<Activity />} title={t("settings.permissionJudge.diagnostics")}
+        description={t("settings.permissionJudge.diagnosticsHint")} actions={open("diagnostics")} />}
       <PageItem icon={<History />} title={t("settings.permissionJudge.records.title")}
         meta={<Badge variant="outline" data-records-state={choices.recordDecisions ? "on" : "off"}>
           {t(choices.recordDecisions ? "settings.permissionJudge.records.on" : "settings.permissionJudge.records.off")}

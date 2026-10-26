@@ -2,7 +2,12 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { PermissionJudgeEdgeEndpoint, PermissionJudgeEdgeEndpoints } from "@/types";
+import type {
+  PermissionJudgeEdgeEndpoint,
+  PermissionJudgeEdgeEndpoints,
+  PermissionJudgeEdgeRequestAttempt,
+  PermissionJudgeEdgeRequestTest,
+} from "@/types";
 import { formatMessage, type Translate } from "@/i18n";
 
 // Every service call is synthetic; nothing reaches a running service.
@@ -11,6 +16,7 @@ const service = vi.hoisted(() => ({
   loadPermissionJudgeEdgeEndpoints: vi.fn(),
   probePermissionJudgeEdgeEndpoints: vi.fn(),
   lockPermissionJudgeEdgeEndpoint: vi.fn(),
+  testPermissionJudgeEdgeRequest: vi.fn(),
 }));
 vi.mock("@/service/permission-judge-service", () => service);
 
@@ -109,4 +115,44 @@ it("maps probe outcomes to statuses", () => {
   ].map((probe) => endpointStatus(probe).key);
   expect(new Set(keys).size).toBe(keys.length);
   expect(keys[1]).toBe("settings.permissionJudge.edge.endpoints.status.failed");
+});
+
+// attempt builds one request of a request test; overrides turn it into a failure.
+// attempt 构建请求测试中的一个请求；overrides 将其变为失败。
+function attempt(requestId: string, overrides: Partial<PermissionJudgeEdgeRequestAttempt> = {}): PermissionJudgeEdgeRequestAttempt {
+  return {
+    requestId, totalMs: 120, networkMs: 75, endpointMs: 45, nodeMs: 40, queueMs: 2, computeMs: 31, httpStatus: 200,
+    tokenRenewed: false, errorCode: null, error: null,
+    answer: {
+      region: "us-west", model: "m", checkpointSha256: "a".repeat(64), policyVersion: "p",
+      results: [{ label: "allow", logits: [2, 0.5, -1], inputTokens: 41, modelEvaluated: true, reasonCode: null }],
+    },
+    ...overrides,
+  };
+}
+
+// A request test opens for the row's endpoint, sends the chosen sample there and lists every
+// request with its stage times, the summary and the failures.
+// 请求测试针对所在行的端点打开，向其发送所选示例，并列出每个请求的各阶段耗时、汇总与失败。
+it("sends a request test to the row's endpoint and lists every request", async () => {
+  await mount(table());
+  const result: PermissionJudgeEdgeRequestTest = {
+    modelId: "m", endpointId: "cn-mini", endpoint: "https://cn-mini.example.com", site: "global", renderedChars: 52,
+    attempts: [
+      attempt("r1"),
+      attempt("r2", { httpStatus: 503, answer: null, errorCode: "region_saturated", error: "refused", networkMs: null, endpointMs: 3 }),
+    ],
+    succeeded: 1, minMs: 120, medianMs: 120, maxMs: 120,
+  };
+  service.testPermissionJudgeEdgeRequest.mockResolvedValue(result);
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-judge-edge-request-test-open="cn-mini"]')!.click());
+  const dialog = document.querySelector('[data-judge-edge-request-test="cn-mini"]')!;
+  expect(dialog).not.toBeNull();
+  await act(async () => dialog.querySelector<HTMLButtonElement>("[data-judge-edge-test-send]")!.click());
+  expect(service.testPermissionJudgeEdgeRequest).toHaveBeenCalledExactlyOnceWith("cn-mini", { kind: "preset", preset: "ordinary" });
+  expect(dialog.querySelectorAll("tbody tr")).toHaveLength(2);
+  expect(dialog.querySelector("[data-judge-edge-test-summary]")?.textContent).toContain("settings.permissionJudge.edge.requestTest.summary");
+  expect(dialog.querySelector("[data-judge-edge-test-answer]")).not.toBeNull();
+  expect(dialog.querySelector("[data-judge-edge-test-failures]")).not.toBeNull();
+  expect(service.lockPermissionJudgeEdgeEndpoint).not.toHaveBeenCalled();
 });

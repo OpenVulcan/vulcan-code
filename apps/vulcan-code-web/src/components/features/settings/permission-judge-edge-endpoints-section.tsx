@@ -1,6 +1,7 @@
 import * as React from "react";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, Send } from "lucide-react";
 import { PageEmptyState, PageNotice, PageRow, PageSection, PageTable, type PageTableRow } from "@/components/page";
+import { PermissionJudgeEdgeRequestTestDialog } from "@/components/features/settings/permission-judge-edge-request-test-dialog";
 import { StatusPill } from "@/components/shared/status";
 import { Badge } from "@/ui-kit/primitives/badge";
 import { Button } from "@/ui-kit/primitives/button";
@@ -30,9 +31,11 @@ export function endpointStatus(endpoint: PermissionJudgeEdgeEndpoint): { status:
 
 // PermissionJudgeEdgeEndpointsSection shows the endpoints of the saved official direct model with
 // their latest background probe, marks the endpoint judge requests use now, and lets the user lock
-// one endpoint or re-test now. It reads the in-memory table at the status poll interval.
+// one endpoint, re-test now, or send real requests to one endpoint. It reads the in-memory table at
+// the status poll interval.
 // PermissionJudgeEdgeEndpointsSection 显示已保存官方直连模型的端点及其最近一次后台探测，标出判定请求
-// 当前使用的端点，并允许用户锁定端点或立即重新测试。它按状态轮询间隔读取内存端点表。
+// 当前使用的端点，并允许用户锁定端点、立即重新测试或向某个端点发送真实请求。它按状态轮询间隔读取内存
+// 端点表。
 // Parameters: the poll interval, whether controls are locked, the translator and the locale.
 // Returns the section.
 // 参数：轮询间隔、控件是否锁定、翻译函数与语言。返回该区块。
@@ -47,6 +50,7 @@ export function PermissionJudgeEdgeEndpointsSection(props: {
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const [actionError, setActionError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState<"probe" | "lock" | null>(null);
+  const [testing, setTesting] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -102,6 +106,10 @@ export function PermissionJudgeEdgeEndpointsSection(props: {
         compute: ms(endpoint.computeP50Ms),
         total: ms(endpoint.scoreMs),
         status: <span title={endpoint.error ?? undefined}><StatusPill status={status.status} label={t(status.key)} /></span>,
+        test: <Button type="button" size="sm" variant="ghost" disabled={props.disabled}
+          data-judge-edge-request-test-open={endpoint.endpointId} onClick={() => setTesting(endpoint.endpointId)}>
+          <Send size={14} />{t("settings.permissionJudge.edge.requestTest.open")}
+        </Button>,
       },
     };
   });
@@ -159,11 +167,13 @@ export function PermissionJudgeEdgeEndpointsSection(props: {
         { key: "compute", label: t("settings.permissionJudge.edge.endpoints.column.compute"), numeric: true },
         { key: "total", label: t("settings.permissionJudge.edge.endpoints.column.total"), numeric: true },
         { key: "status", label: t("settings.permissionJudge.edge.endpoints.column.status") },
+        { key: "test", label: t("settings.permissionJudge.edge.requestTest.open") },
       ]}
       label={t("settings.permissionJudge.edge.endpoints.title")}
       rows={rows}
-      minWidth={560}
+      minWidth={680}
       empty={<PageEmptyState size="inline" title={t("settings.permissionJudge.edge.endpoints.empty")} />}
     />
+    <PermissionJudgeEdgeRequestTestDialog endpointId={testing} onClose={() => setTesting(null)} t={t} />
   </PageSection>;
 }
