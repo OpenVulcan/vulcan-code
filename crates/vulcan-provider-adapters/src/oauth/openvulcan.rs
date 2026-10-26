@@ -56,6 +56,11 @@ struct TokenResponse {
     /// Server-owned RFC3339 expiry.
     /// 服务端持有的 RFC3339 过期时间。
     expires_at: String,
+    /// Deployment id the official direct judge sends as its site marker; the host reads it from
+    /// each edge access grant instead, so it is accepted here without being stored.
+    /// 官方直连判定作为来源标记发送的部署 id；宿主改从每次边缘授权读取，因此此处只接受、不保存。
+    #[serde(default, rename = "site")]
+    _site: Option<String>,
 }
 
 /// Maps kind to its exact native deployment, or None for unrelated registered flows.
@@ -581,6 +586,47 @@ mod tests {
             assert!(!html.contains("private-code"));
             assert!(!html.contains("private-verifier"));
         }
+    }
+
+    /// A token answer carrying the deployment's site marker exchanges into device material.
+    /// 携带部署来源标记的令牌回答可交换为设备凭据材料。
+    #[tokio::test]
+    async fn token_exchange_accepts_the_site_marker() {
+        // upstream is an isolated synthetic authority; no real account or credential is used.
+        // upstream 是隔离的合成授权端；不使用真实账户或凭据。
+        let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let authority = format!("http://{}", upstream.local_addr().unwrap());
+        let body = serde_json::json!({
+            "access_token": "A".repeat(43),
+            "token_type": "Auth",
+            "authorization_id": "7ece2792-a3a2-4130-8259-de937f7c93dc",
+            "expires_at": "2999-01-01T00:00:00Z",
+            "site": "global",
+        })
+        .to_string();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = upstream.accept().await.unwrap();
+            let mut request = [0_u8; 8192];
+            assert!(stream.read(&mut request).await.unwrap() > 0);
+            stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+        });
+        let material = exchange_callback_code(
+            &native_client().unwrap(),
+            &authority,
+            "private-code",
+            "private-verifier",
+            OpenVulcanRegion::Global,
+        )
+        .await
+        .unwrap();
+        server.await.unwrap();
+        assert!(matches!(
+            material,
+            CredentialSecretMaterial::OpenVulcanAuth {
+                region: OpenVulcanRegion::Global,
+                ..
+            }
+        ));
     }
 
     /// Verifies callback binding rejects duplicate selectors, wrong paths and cross-transaction state.
