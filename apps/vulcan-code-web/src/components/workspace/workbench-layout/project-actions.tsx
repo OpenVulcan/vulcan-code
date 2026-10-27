@@ -68,6 +68,7 @@ import {
   uninstallUserPlugin,
   updateLocalPlugin,
   updateLuaSkill,
+  setLuaSkillsGithubToken,
   validateLuaSkillConfig,
 } from "@/service/skills-actions-service";
 import { saveVmmMemoryConfig } from "@/service/memory-actions-service";
@@ -333,7 +334,8 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
       () => saveLuaSkillsRuntimeSettings(settings),
     ),
     onInstallLuaSkill: (skillId, source, sourceType) => runLuaSkillsCatalogAction(() => installLuaSkill(skillId, source, sourceType)),
-    onUpdateLuaSkill: (skillId) => runLuaSkillsCatalogAction(() => updateLuaSkill(skillId)),
+    onUpdateLuaSkill: (skillId, replacement) => runLuaSkillsCatalogAction(() => updateLuaSkill(skillId, replacement ?? null)),
+    onSetLuaSkillsGithubToken: (token) => runLuaSkillsCatalogAction(() => setLuaSkillsGithubToken(token)),
     onSetLuaSkillEnabled: (skillId, enabled) => runLuaSkillsCatalogAction(() => setLuaSkillEnabled(skillId, enabled)),
     onSetVulcanPluginEnabled: (pluginId, enabled) => runLuaSkillsCatalogAction(() => setVulcanPluginEnabled(pluginId, enabled)),
     onPluginEnvironmentReady: pluginEnvironmentReady,

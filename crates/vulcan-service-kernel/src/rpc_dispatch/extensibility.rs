@@ -31,6 +31,10 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_install_luaskill",
     "service_search_luaskills_hub",
     "service_update_luaskill",
+    "service_check_luaskill_updates",
+    "service_luaskills_github_mirrors",
+    "service_probe_luaskills_github_mirrors",
+    "service_set_luaskills_github_token",
     "service_luaskill_operation_progress",
     "service_set_luaskill_enabled",
     "service_set_vulcan_plugin_enabled",
@@ -258,8 +262,31 @@ pub(super) async fn dispatch(
             .await,
         ),
         "service_update_luaskill" => rpc_json_result(
-            service_update_luaskill(app.clone(), state, rpc_required_param(params, "skillId")?)
-                .await,
+            service_update_luaskill(
+                app.clone(),
+                state,
+                rpc_required_param(params, "skillId")?,
+                rpc_optional_param(params, "sourceType")?,
+                rpc_optional_param(params, "source")?,
+            )
+            .await,
+        ),
+        "service_check_luaskill_updates" => rpc_json_result(
+            service_check_luaskill_updates(state, rpc_optional_param(params, "skillIds")?).await,
+        ),
+        "service_luaskills_github_mirrors" => {
+            rpc_json_result::<_, String>(Ok(service_luaskills_github_mirrors()))
+        }
+        "service_probe_luaskills_github_mirrors" => rpc_json_result(
+            service_probe_luaskills_github_mirrors(rpc_required_param(params, "targets")?).await,
+        ),
+        "service_set_luaskills_github_token" => rpc_json_result(
+            service_set_luaskills_github_token(
+                app.clone(),
+                state,
+                rpc_optional_param(params, "token")?,
+            )
+            .await,
         ),
         "service_luaskill_operation_progress" => {
             let correlation_id: String = rpc_required_param(params, "correlationId")?;

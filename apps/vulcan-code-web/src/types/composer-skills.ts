@@ -629,6 +629,112 @@ export interface LuaSkillsNetworkSettings {
   // Allowed URL prefixes for private skill manifests.
   // 私有技能清单允许的 URL 前缀。
   privateSkillSourceAllowlist: string[];
+  // User-added GitHub mirrors offered beside the built-in catalog.
+  // 用户添加的 GitHub 镜像，与内置目录并列提供。
+  customGithubMirrors: LuaSkillsCustomGithubMirror[];
+  // Account regions whose Hub switch prompt the user dismissed.
+  // 用户已拒绝 Hub 切换提示的账号区域。
+  dismissedHubRegionPrompts: string[];
+}
+
+// LuaSkillsCustomGithubMirror describes one user-added GitHub mirror.
+// LuaSkillsCustomGithubMirror 描述一个用户添加的 GitHub 镜像。
+export interface LuaSkillsCustomGithubMirror {
+  // Stable mirror identifier unique among built-in and custom mirrors.
+  // 在内置与自定义镜像中唯一的稳定镜像标识。
+  id: string;
+  // Display label chosen by the user.
+  // 用户选择的显示名称。
+  label: string;
+  // Mirror base URL that replaces https://github.com.
+  // 替换 https://github.com 的镜像基址。
+  githubBaseUrl: string;
+}
+
+// LuaSkillsGithubMirror describes one built-in GitHub mirror offered by LuaSkills.
+// LuaSkillsGithubMirror 描述 LuaSkills 提供的一个内置 GitHub 镜像。
+export interface LuaSkillsGithubMirror {
+  // Stable mirror identifier.
+  // 稳定镜像标识。
+  id: string;
+  // Display label.
+  // 显示名称。
+  label: string;
+  // Mirror kind: direct GitHub, a prefix proxy or a LuaSkills resource station.
+  // 镜像类型：直连 GitHub、前缀代理或 LuaSkills 资源站。
+  kind: "direct" | "prefix" | "luaskills_station";
+  // Region the mirror mainly serves.
+  // 镜像主要服务的区域。
+  region: "china" | "global";
+  // Mirror base URL that replaces https://github.com, null for direct GitHub.
+  // 替换 https://github.com 的镜像基址；直连 GitHub 时为 null。
+  githubBaseUrl: string | null;
+  // GitHub API base URL served by this mirror, null when it serves none.
+  // 该镜像提供的 GitHub API 基址；不提供时为 null。
+  githubApiBaseUrl: string | null;
+}
+
+// LuaSkillsGithubMirrorProbeTarget names one mirror to speed-test.
+// LuaSkillsGithubMirrorProbeTarget 指定一个待测速的镜像。
+export interface LuaSkillsGithubMirrorProbeTarget {
+  // Mirror identifier echoed in the result.
+  // 在结果中回显的镜像标识。
+  id: string;
+  // Mirror base URL to probe, null to probe github.com directly.
+  // 待探测的镜像基址；为 null 时直接探测 github.com。
+  githubBaseUrl: string | null;
+}
+
+// LuaSkillsGithubMirrorProbeResult reports one mirror speed test.
+// LuaSkillsGithubMirrorProbeResult 报告一个镜像的测速结果。
+export interface LuaSkillsGithubMirrorProbeResult {
+  // Mirror identifier from the probe target.
+  // 来自测速目标的镜像标识。
+  id: string;
+  // Whether the mirror answered with a usable response.
+  // 镜像是否返回了可用响应。
+  ok: boolean;
+  // Whether the sample download finished within the byte budget.
+  // 样本下载是否在字节预算内完成。
+  complete: boolean;
+  // HTTP status, null when no response arrived.
+  // HTTP 状态码；未收到响应时为 null。
+  httpStatus: number | null;
+  // Time to first byte in milliseconds.
+  // 首字节耗时（毫秒）。
+  ttfbMs: number | null;
+  // Measured download throughput in bytes per second.
+  // 测得的下载吞吐（字节每秒）。
+  bytesPerSecond: number | null;
+  // Failure reason when the probe failed.
+  // 测速失败时的原因。
+  error: string | null;
+}
+
+// LuaSkillUpdateCheck reports whether one managed skill has a newer version.
+// LuaSkillUpdateCheck 报告一个受管技能是否存在更新版本。
+export interface LuaSkillUpdateCheck {
+  // Skill identifier.
+  // 技能标识。
+  skillId: string;
+  // Installed version, null when unknown.
+  // 已安装版本；未知时为 null。
+  installedVersion: string | null;
+  // Latest available version, null when the check failed.
+  // 最新可用版本；检查失败时为 null。
+  latestVersion: string | null;
+  // Whether the latest version is newer than the installed one.
+  // 最新版本是否比已安装版本更新。
+  updateAvailable: boolean;
+  // Recorded install source type label.
+  // 已记录的安装来源类型标签。
+  sourceType: string | null;
+  // Recorded install source locator.
+  // 已记录的安装来源定位符。
+  sourceLocator: string | null;
+  // Failure reason when the check failed.
+  // 检查失败时的原因。
+  error: string | null;
 }
 
 // LuaSkillsCapabilitySettings describes LuaSkills host capabilities captured at startup.
@@ -854,6 +960,9 @@ export interface LuaSkillsCatalogSummary {
   // Whether saved startup settings require an application restart.
   // 已保存启动设置是否需要重启应用。
   restartRequired: boolean;
+  // Whether a GitHub token is configured; the token itself never leaves the service.
+  // 是否已配置 GitHub 令牌；令牌本身绝不离开服务端。
+  githubTokenConfigured: boolean;
   // Total visible runtime entry count.
   // 可见运行时入口总数。
   entryCount: number;

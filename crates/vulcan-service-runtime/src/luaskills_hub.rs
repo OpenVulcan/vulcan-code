@@ -3,8 +3,8 @@
 //!
 //! Installation itself stays inside the LuaSkills engine through the `official_hub` source
 //! type; this module only lists what the configured Hub can resolve, against the same Hub
-//! base URL the running engine was built with.
-//! 安装本身仍通过 `official_hub` 来源类型留在 LuaSkills 引擎内；本模块只针对运行中引擎构建时
+//! base URL the running engine currently uses.
+//! 安装本身仍通过 `official_hub` 来源类型留在 LuaSkills 引擎内；本模块只针对运行中引擎当前
 //! 使用的同一 Hub 基础地址，列出该 Hub 可解析的技能。
 
 use crate::luaskills_bridge::TauriLuaSkillsHandle;
@@ -152,9 +152,7 @@ pub fn search_official_hub(
     query: &str,
     cursor: Option<&str>,
 ) -> Result<LuaSkillsHubSearchPage, String> {
-    let hub_base_url = handle
-        .effective_runtime_settings
-        .network
+    let hub_base_url = crate::luaskills_bridge::live_network_settings(handle)?
         .effective_official_skill_hub_base_url();
     search_hub(&hub_base_url, query, cursor)
 }

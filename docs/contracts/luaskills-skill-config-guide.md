@@ -376,10 +376,20 @@ Vulcan 的**配置侧已齐备**：`enable_private_url_skill_install` 与 `priva
 ### 13.6 `official_hub` 来源与 LuaSkills Hub 搜索
 
 - **来源值**：`official_hub` 的 `source` 是 Hub 扁平技能标识（如 `weather`），由 LuaSkills 引擎经 `{Hub}/api/v1/skills/{id}/resolve?version=latest` 解析下载地址；宿主不自行下载或校验压缩包。
-- **Hub 基础地址只有一处定义**：`vulcan-luaskills-config` 的 `DEFAULT_OFFICIAL_SKILL_HUB_BASE_URL`（`https://hub.luaskills.com`）。`LuaSkillsNetworkSettings::effective_official_skill_hub_base_url` 在用户未填写 `official_skill_hub_base_url` 时只在内存中返回该默认值，**不回写**用户配置；引擎宿主选项与搜索客户端都使用这一结果。中国大陆用户可在设置中显式填写 `https://hub.luaskills.cn`（只读镜像），宿主不按地区自动切换，也不默认改写 GitHub 镜像地址。
+- **Hub 基础地址只有一处定义**：`vulcan-luaskills-config` 的 `DEFAULT_OFFICIAL_SKILL_HUB_BASE_URL`（`https://hub.luaskills.com`）。`LuaSkillsNetworkSettings::effective_official_skill_hub_base_url` 在用户未填写 `official_skill_hub_base_url` 时只在内存中返回该默认值，**不回写**用户配置；引擎宿主选项与搜索客户端都使用这一结果。中国大陆用户可在“Hub 与下载源”页选择中国站 `https://hub.luaskills.cn`；宿主不按地区静默切换，账号区域提示见 §13.7，也不随 Hub 改写 GitHub 镜像地址。
 - **只读元数据管理器**（`build_skill_manager_for_root`）刻意不设置 Hub 地址，它不执行安装。
-- **搜索 RPC**：`service_search_luaskills_hub`（参数 `query`、`cursor`，均可选）→ `luaskills_hub::search_official_hub`，访问运行中引擎构建时所用的同一 Hub 的 `GET /api/v1/skills/search`。搜索不获取 LuaSkills 管理锁；查询长度、游标格式、响应大小、超时与重定向（禁止）都在 `luaskills_hub.rs` 内定义唯一边界。保存新的 Hub 地址后需重启 LuaSkills 运行时，搜索才会切换到新地址。
+- **搜索 RPC**：`service_search_luaskills_hub`（参数 `query`、`cursor`，均可选）→ `luaskills_hub::search_official_hub`，访问运行中引擎构建时所用的同一 Hub 的 `GET /api/v1/skills/search`。搜索不获取 LuaSkills 管理锁；查询长度、游标格式、响应大小、超时与重定向（禁止）都在 `luaskills_hub.rs` 内定义唯一边界。搜索读取宿主的实时网络设置（`luaskills_bridge::live_network_settings`），保存新的 Hub 地址后立即切换，无需重启。
 - **界面**：WebUI 安装对话框默认来源为 LuaSkills Hub，搜索选择后按技能标识安装；TUI 在 LuaSkills 页提供搜索表单、逐项安装与下一页按钮，镜像同一 RPC。
+- **更新检查**：`service_check_luaskill_updates`（参数 `skillIds`，可选；缺省检查全部受管技能）按每个技能记录的安装来源查询最新版本，返回逐项结果，失败写入该行 `error`，不获取管理锁、不修改任何文件。ROOT 层技能走 System 权限的检查入口。WebUI 技能列表提供“检查更新”“全部更新”（逐个执行，首个失败即停止）与可更新标记。
+- **更换来源**：`service_update_luaskill` 的 `sourceType` 与 `source` 必须同时给出或同时省略；给出时以 `replace_source: true` 更新，技能标识不变，只替换已记录来源。WebUI 在受管技能的操作菜单中提供“更换来源”，执行时复用更新进度弹窗。
+
+### 13.7 网络来源：Hub 站点、GitHub 镜像与令牌
+
+- **即时生效**：下载开关、GitHub 下载/API 基址与 Hub 地址保存后由 `save_luaskills_runtime_settings` 在引擎写锁内直接调用 `set_network_options` 应用，不需要重启。只有私有清单策略（`enable_private_url_skill_install` 与允许列表）仍由 `LuaSkillsNetworkSettings::requires_engine_restart_from` 判定为需要重启。
+- **镜像目录**：内置镜像唯一来源是 LuaSkills 的 `builtin_github_mirrors`，宿主经 `service_luaskills_github_mirrors` 原样投影（`kind` 为 `direct`/`prefix`/`luaskills_station`，`region` 为 `china`/`global`）。用户镜像保存在 `network.customGithubMirrors`，保存时由 `luaskills_network::validated_custom_github_mirrors` 校验标识与名称并用上游 `normalize_github_mirror_base_url` 规范化地址；标识不得与内置镜像重复。镜像失败不自动换用其他镜像。
+- **测速**：`service_probe_luaskills_github_mirrors`（参数 `targets`，每项 `id` 与可空 `githubBaseUrl`）调用上游 `probe_github_mirrors`，样本路径、字节上限与超时使用上游默认值，宿主不另设边界。选用镜像时同时写入该镜像的下载与 API 基址。
+- **GitHub 令牌**：只存放在操作系统凭据库（服务 `vulcan-code.luaskills.github-token-v1`，账户 `default`），绝不进入设置文件、应用数据库、日志或服务响应；目录只投影 `githubTokenConfigured`。`service_set_luaskills_github_token`（参数 `token`，`null` 表示清除）在管理锁下写入凭据库并立即应用到引擎；启动时读取失败只记录英文日志并以无令牌继续。令牌只由 LuaSkills 发给官方 GitHub API。
+- **账号区域提示**：已登录 OpenVulcan 账号的区域（`china`/`global`）与当前官方 Hub 站点不一致时，WebUI 在技能列表与“Hub 与下载源”页提示切换。用户确认才写入 Hub 地址；选择保留则把该区域写入 `network.dismissedHubRegionPrompts`，此后不再为该区域提示。自定义 Hub 不提示。
 
 ## 14. 可延后项的结论与后续入口
 

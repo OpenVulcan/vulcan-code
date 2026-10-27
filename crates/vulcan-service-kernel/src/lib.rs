@@ -182,6 +182,7 @@ mod markdown_memory_services;
 mod mcp_oauth;
 mod mcp_service;
 mod mcp_settings;
+mod luaskills_github_token_store;
 mod media_upload;
 mod native_plugin_shutdown;
 mod native_vmm;

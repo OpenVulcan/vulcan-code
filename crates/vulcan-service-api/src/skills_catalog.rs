@@ -178,6 +178,10 @@ pub struct LuaSkillsCatalogSummary {
     /// Whether saved startup settings require an application restart to take effect.
     /// 已保存启动设置是否需要重启应用后才能生效。
     pub restart_required: bool,
+    /// Whether a GitHub token is configured; the token itself is never projected.
+    /// 是否已配置 GitHub 令牌；令牌本身绝不投影。
+    #[serde(default)]
+    pub github_token_configured: bool,
     /// Total visible runtime entry count.
     /// 可见运行时入口总数。
     pub entry_count: usize,

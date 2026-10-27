@@ -18,6 +18,7 @@ pub(crate) fn empty_luaskills_catalog() -> TauriLuaSkillsCatalog {
         runtime_settings: vulcan_luaskills_config::LuaSkillsRuntimeSettings::default(),
         runtime_settings_file: PathBuf::new(),
         restart_required: false,
+        github_token_configured: false,
     }
 }
 

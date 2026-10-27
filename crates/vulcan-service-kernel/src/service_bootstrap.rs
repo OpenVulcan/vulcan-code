@@ -626,12 +626,25 @@ fn run_service_bootstrap(
     );
 
     let luaskills_started_at = start_bootstrap_stage("luaskills");
+    // A credential-store failure only costs the higher GitHub API rate limit, so startup continues without the token.
+    // 凭据库失败只会失去更高的 GitHub API 额度，因此启动在没有令牌的情况下继续。
+    let luaskills_github_token =
+        match crate::luaskills_github_token_store::read_luaskills_github_token() {
+            Ok(token) => token,
+            Err(error) => {
+                logs.push(format!(
+                    "[webui-service] LuaSkills GitHub token unavailable; continuing without it: {error}"
+                ));
+                None
+            }
+        };
     let (luaskills_runtime, luaskills_catalog, luaskills_step_status, luaskills_step_message) =
         match vulcan_service_runtime::luaskills_bridge::bootstrap_luaskills(
             |message| update_luaskills_bootstrap_progress(state, event_emitter, &logs, message),
             |progress| {
                 update_managed_runtime_bootstrap_progress(state, event_emitter, &logs, progress)
             },
+            luaskills_github_token,
         ) {
             Ok(runtime_handle) => {
                 // managed_runtime_report is diagnostic-only and cannot invalidate an otherwise usable engine.

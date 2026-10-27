@@ -1,5 +1,5 @@
 import * as React from "react";
-import { PackagePlus, Search } from "lucide-react";
+import { PackagePlus, RefreshCw, Search } from "lucide-react";
 import { PageEmptyState, PageNotice, PageToolbar } from "@/components/page";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/ui-kit/primitives/input-group";
 import { Button } from "@/ui-kit/primitives/button";
@@ -22,8 +22,11 @@ import {
 import { LuaSkillConfigDialog } from "@/components/features/skills/lua-skill-config-dialog";
 import { LuaSkillUpdateProgressDialog, type LuaSkillUpdateRequest } from "./lua-skill-update-progress-dialog";
 import { LuaSkillHubPicker } from "./lua-skill-hub-picker";
+import { LuaSkillChangeSourceDialog } from "./lua-skill-change-source-dialog";
+import { LuaSkillsHubRegionNotice } from "./lua-skills-hub-region-notice";
+import { checkLuaSkillUpdates } from "@/service/skills-actions-service";
 import { formatMessage, useI18n } from "@/i18n";
-import type { LuaSkillSummary, LuaSkillsOperationProgressSummary } from "@/types";
+import type { LuaSkillSummary, LuaSkillUpdateCheck, LuaSkillsOperationProgressSummary, LuaSkillsRuntimeSettings } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
 
 // LuaSkillStatusFilter identifies the enabled-state subset shown in the LuaSkills list.
@@ -67,6 +70,9 @@ export function LuaSkillsPanel(props: {
   // Latest install or update operation progress, or null when none is tracked.
   // 最近的安装或更新操作进度；未跟踪任何操作时为 null。
   operationProgress?: LuaSkillsOperationProgressSummary | null;
+  // Committed LuaSkills settings for the account-region Hub prompt; the prompt is omitted without them.
+  // 供账号区域 Hub 提示使用的已提交 LuaSkills 设置；缺省时不显示该提示。
+  runtimeSettings?: LuaSkillsRuntimeSettings | null;
   // Lua Skill rows.
   // Lua Skill 行。
   skills: LuaSkillSummary[];
@@ -114,6 +120,15 @@ export function LuaSkillsPanel(props: {
   // updateDialogOpen 跟随本地请求或新观察到的服务更新。
   const updateDialogOpen = updateRequest !== null
     || (updateProgress !== null && updateProgress.correlationId !== dismissedUpdateId);
+  // updateChecks keeps the latest update check per skill; it is cleared for a skill once it is updated.
+  // updateChecks 保存每个技能最近一次更新检查；技能更新后清除其记录。
+  const [updateChecks, setUpdateChecks] = React.useState<ReadonlyMap<string, LuaSkillUpdateCheck>>(new Map());
+  // checkingUpdates marks the in-flight update check.
+  // checkingUpdates 标记进行中的更新检查。
+  const [checkingUpdates, setCheckingUpdates] = React.useState(false);
+  // changeSourceSkillId stores the managed skill whose source is being changed.
+  // changeSourceSkillId 保存正在更换来源的受管技能。
+  const [changeSourceSkillId, setChangeSourceSkillId] = React.useState<string | null>(null);
   // detailSkillId stores the Lua Skill selected for the details dialog.
   // detailSkillId 保存当前打开详情弹窗的 Lua Skill 标识。
   const [detailSkillId, setDetailSkillId] = React.useState<string | null>(null);
@@ -141,6 +156,18 @@ export function LuaSkillsPanel(props: {
     () => props.skills.find((skill) => skill.skillId === configSkillId) ?? null,
     [configSkillId, props.skills],
   );
+  // changeSourceSkill derives the change-source target from the latest snapshot.
+  // changeSourceSkill 从最新快照派生更换来源的目标。
+  const changeSourceSkill = React.useMemo(
+    () => props.skills.find((skill) => skill.skillId === changeSourceSkillId) ?? null,
+    [changeSourceSkillId, props.skills],
+  );
+  // pendingUpdates lists skills whose latest check reported a newer version.
+  // pendingUpdates 列出最近检查报告存在新版本的技能。
+  const pendingUpdates = React.useMemo(
+    () => [...updateChecks.values()].filter((check) => check.updateAvailable),
+    [updateChecks],
+  );
   // visibleSkills applies text, enabled-state, and ownership filters to the current snapshot.
   // visibleSkills 对当前快照应用文本、启停状态与归属筛选。
   const visibleSkills = React.useMemo(() => props.skills.filter((skill) => {
@@ -164,11 +191,11 @@ export function LuaSkillsPanel(props: {
   //
   // Parameters: label identifies the action, action performs it, and skillId identifies the clicked package.
   // 参数：label 标识动作，action 执行动作，skillId 标识已点击的技能包。
-  // Returns: a promise that settles after the accepted action releases the synchronous guard.
-  // 返回值：在已接受动作释放同步守卫后结束的 Promise。
-  const runAction = React.useCallback(async (label: string, action: () => Promise<void>, skillId: string) => {
+  // Returns: whether the action ran and succeeded, after the accepted action releases the synchronous guard.
+  // 返回值：动作是否执行并成功；在已接受动作释放同步守卫后给出。
+  const runAction = React.useCallback(async (label: string, action: () => Promise<void>, skillId: string): Promise<boolean> => {
     if (actionRunningRef.current) {
-      return;
+      return false;
     }
     actionRunningRef.current = true;
     setBusyAction(label);
@@ -180,7 +207,13 @@ export function LuaSkillsPanel(props: {
       await action();
       if (label === "update") {
         setUpdateRequest((current) => current === null ? null : { ...current, outcome: "succeeded" });
+        setUpdateChecks((current) => {
+          const next = new Map(current);
+          next.delete(skillId);
+          return next;
+        });
       }
+      return true;
     } catch (error) {
       // message belongs to the request error, not an inferred progress event.
       // message 属于请求错误，不是推测出来的进度事件。
@@ -190,11 +223,38 @@ export function LuaSkillsPanel(props: {
       } else {
         setActionError(message);
       }
+      return false;
     } finally {
       actionRunningRef.current = false;
       setBusyAction(null);
     }
   }, [operationProgress?.correlationId]);
+
+  // checkUpdates asks every managed skill source for its latest version.
+  // checkUpdates 向每个受管技能来源查询最新版本。
+  const checkUpdates = React.useCallback(async () => {
+    setCheckingUpdates(true);
+    setActionError("");
+    try {
+      const checks = await checkLuaSkillUpdates(null);
+      setUpdateChecks(new Map(checks.map((check) => [check.skillId, check])));
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCheckingUpdates(false);
+    }
+  }, []);
+
+  // updateAll updates every skill with a reported newer version, one at a time, stopping at the first failure.
+  // updateAll 逐个更新所有报告有新版本的技能，遇到首个失败即停止。
+  const updateAll = React.useCallback(async () => {
+    for (const check of pendingUpdates) {
+      const updated = await runAction("update", () => props.actions.onUpdateLuaSkill(check.skillId), check.skillId);
+      if (!updated) {
+        return;
+      }
+    }
+  }, [pendingUpdates, props.actions, runAction]);
   // configWatchIssues retains unresolved configuration-watch or reload failures by
   // their exact store and optional package identity.
   // configWatchIssues 按精确存储域与可选技能包身份保留尚未恢复的配置监听或重载失败。
@@ -283,6 +343,7 @@ export function LuaSkillsPanel(props: {
 
   return (
     <div className="skill-page-body lua-skill-page-body">
+      {props.runtimeSettings ? <LuaSkillsHubRegionNotice settings={props.runtimeSettings} onSave={props.actions.onSaveLuaSkillsRuntimeSettings} /> : null}
       {actionError ? <PageNotice details={actionError} detailsLabel={t("skills.lua.errorDetails")} tone="error">
         {t("skills.lua.skillActionFailedTry")}
       </PageNotice> : null}
@@ -356,6 +417,26 @@ export function LuaSkillsPanel(props: {
             <SelectItem value="user">{t("skills.label.user")}</SelectItem>
           </SelectContent>
         </Select>
+        <Button
+          disabled={checkingUpdates || busyAction !== null || operationProgress?.inFlight === true}
+          onClick={() => void checkUpdates()}
+          size="sm"
+          type="button"
+          variant="outline"
+        >
+          <RefreshCw size={14} />
+          <span>{checkingUpdates ? t("skills.luaSources.checkingUpdates") : t("skills.luaSources.checkUpdates")}</span>
+        </Button>
+        {pendingUpdates.length > 0 ? (
+          <Button
+            disabled={busyAction !== null || operationProgress?.inFlight === true}
+            onClick={() => void updateAll()}
+            size="sm"
+            type="button"
+          >
+            {formatMessage(t("skills.luaSources.updateAll"), { count: pendingUpdates.length })}
+          </Button>
+        ) : null}
       </PageToolbar>
       <div className="skill-card-list agent-skill-card-list">
         {visibleSkills.length === 0 ? (
@@ -369,7 +450,9 @@ export function LuaSkillsPanel(props: {
             onOpenConfig={(selectedSkill) => setConfigSkillId(selectedSkill.skillId)}
             onOpenTools={(selectedSkill) => setToolsSkillId(selectedSkill.skillId)}
             onRequestUninstall={(selectedSkill) => { setActionError(""); setPendingUninstall(selectedSkill); }}
-            onRunAction={(label, action) => runAction(label, action, skill.skillId)}
+            onRequestChangeSource={(selectedSkill) => setChangeSourceSkillId(selectedSkill.skillId)}
+            updateCheck={updateChecks.get(skill.skillId) ?? null}
+            onRunAction={async (label, action) => { await runAction(label, action, skill.skillId); }}
             skill={skill}
           />
         ))}
@@ -381,6 +464,14 @@ export function LuaSkillsPanel(props: {
         onClose={() => {
           setDismissedUpdateId(operationProgress?.correlationId ?? null);
           setUpdateRequest(null);
+        }}
+      />
+      <LuaSkillChangeSourceDialog
+        skill={changeSourceSkill}
+        onClose={() => setChangeSourceSkillId(null)}
+        onConfirm={(skill, replacement) => {
+          setChangeSourceSkillId(null);
+          void runAction("update", () => props.actions.onUpdateLuaSkill(skill.skillId, replacement), skill.skillId);
         }}
       />
       <LuaSkillDetailDialog

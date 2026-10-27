@@ -21,7 +21,9 @@
     "githubApiBaseUrl": null,
     "officialSkillHubBaseUrl": null,
     "enablePrivateUrlSkillInstall": false,
-    "privateSkillSourceAllowlist": []
+    "privateSkillSourceAllowlist": [],
+    "customGithubMirrors": [],
+    "dismissedHubRegionPrompts": []
   },
   "capabilities": {
     "defaultTextEncoding": null,

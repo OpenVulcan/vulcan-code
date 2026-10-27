@@ -61,7 +61,7 @@ jieba-rs = { version = "0.10" }
 libc = { version = "0.2", features = ["extra_traits"] }
 litemap = { version = "0.8", default-features = false, features = ["alloc"] }
 lock_api = { version = "0.4", features = ["arc_lock"] }
-luaskills = { version = "0.6", default-features = false, features = ["contract-generation"] }
+luaskills = { version = "0.7", default-features = false, features = ["contract-generation"] }
 memchr = { version = "2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
 num-traits = { version = "0.2", features = ["i128", "libm"] }

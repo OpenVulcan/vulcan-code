@@ -1586,11 +1586,25 @@ pub(crate) async fn service_search_luaskills_hub(
 
 /// Updates one managed LuaSkill package and refreshes the WebUI snapshot.
 /// 更新单个受管 LuaSkill 包并刷新 WebUI 快照。
+///
+/// `source_type` and `source` together move the package to a new source; both or neither are given.
+/// `source_type` 与 `source` 同时给出时把技能包迁移到新来源；二者须同时给出或同时省略。
 pub(crate) async fn service_update_luaskill(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     skill_id: String,
+    source_type: Option<String>,
+    source: Option<String>,
 ) -> Result<LuaSkillsCatalogUpdate, String> {
+    let replacement = match (source_type, source) {
+        (Some(source_type), Some(source)) => Some((source_type, source)),
+        (None, None) => None,
+        _ => {
+            return Err(String::from(
+                "Changing a skill source needs both sourceType and source.",
+            ));
+        }
+    };
     run_luaskills_management_owned("update skill", move || async move {
         let correlation_id = crate::luaskills_install_progress::begin_global_operation(
             luaskills::SkillLifecycleAction::Update,
@@ -1598,7 +1612,11 @@ pub(crate) async fn service_update_luaskill(
         let outcome = async {
             let handle = service_luaskills_handle(&state)?;
             let (message, catalog) = run_extension_management_blocking("update skill", move || {
-                vulcan_service_runtime::luaskills_bridge::update_luaskill(&handle, skill_id)
+                vulcan_service_runtime::luaskills_bridge::update_luaskill(
+                    &handle,
+                    skill_id,
+                    replacement,
+                )
             })
             .await?;
             store_luaskills_catalog_with_log(&state, catalog, message)?;
@@ -1606,6 +1624,76 @@ pub(crate) async fn service_update_luaskill(
         }
         .await;
         finalize_luaskills_operation_progress(&app, &state, correlation_id.as_deref(), outcome)
+    })
+    .await
+}
+
+/// Checks managed LuaSkill packages for newer versions without changing anything.
+/// 检查受管 LuaSkill 包是否有新版本，不做任何修改。
+///
+/// The check only reads source metadata, so it does not take the management lock; it waits
+/// only while a running install or update holds the engine.
+/// 检查只读取来源元数据，因此不获取管理锁；只在进行中的安装或更新占用引擎时等待。
+pub(crate) async fn service_check_luaskill_updates(
+    state: SharedServiceBridgeState,
+    skill_ids: Option<Vec<String>>,
+) -> Result<Vec<vulcan_service_runtime::luaskills_bridge::TauriLuaSkillUpdateCheck>, String> {
+    let handle = service_luaskills_handle(&state)?;
+    tokio::task::spawn_blocking(move || {
+        vulcan_service_runtime::luaskills_bridge::check_luaskill_updates(&handle, skill_ids)
+    })
+    .await
+    .map_err(|error| format!("LuaSkills update check task failed: {error}"))?
+}
+
+/// Returns the built-in GitHub mirror catalog shipped with LuaSkills.
+/// 返回 LuaSkills 随附的内置 GitHub 镜像目录。
+pub(crate) fn service_luaskills_github_mirrors()
+-> Vec<vulcan_service_runtime::luaskills_network::LuaSkillsGithubMirror> {
+    vulcan_service_runtime::luaskills_network::github_mirror_catalog()
+}
+
+/// Probes GitHub mirrors in parallel; the result only measures and never changes settings.
+/// 并行测速 GitHub 镜像；结果只做测量，绝不修改设置。
+pub(crate) async fn service_probe_luaskills_github_mirrors(
+    targets: Vec<vulcan_service_runtime::luaskills_network::LuaSkillsGithubMirrorProbeTarget>,
+) -> Result<Vec<vulcan_service_runtime::luaskills_network::LuaSkillsGithubMirrorProbeResult>, String>
+{
+    tokio::task::spawn_blocking(move || {
+        vulcan_service_runtime::luaskills_network::probe_mirrors(targets)
+    })
+    .await
+    .map_err(|error| format!("GitHub mirror probe task failed: {error}"))?
+}
+
+/// Saves or clears the LuaSkills GitHub token and applies it to the running engine.
+/// 保存或清除 LuaSkills GitHub 令牌，并将其应用到运行中引擎。
+///
+/// `token` is `None` to clear. The value goes to the OS credential store and engine memory
+/// only; the returned catalog reports just whether a token is configured.
+/// `token` 为 `None` 时清除。令牌只进入操作系统凭据库与引擎内存；返回的目录只报告是否已配置。
+pub(crate) async fn service_set_luaskills_github_token(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    token: Option<String>,
+) -> Result<LuaSkillsCatalogUpdate, String> {
+    run_luaskills_management_owned("set GitHub token", move || async move {
+        let handle = service_luaskills_handle(&state)?;
+        let catalog = run_extension_management_blocking("set GitHub token", move || {
+            let stored = match token {
+                Some(token) => Some(
+                    crate::luaskills_github_token_store::store_luaskills_github_token(&token)?,
+                ),
+                None => {
+                    crate::luaskills_github_token_store::delete_luaskills_github_token()?;
+                    None
+                }
+            };
+            vulcan_service_runtime::luaskills_bridge::set_luaskills_github_token(&handle, stored)
+        })
+        .await?;
+        store_luaskills_catalog(&state, catalog)?;
+        refresh_luaskills_local_state_and_emit(&app, &state).await
     })
     .await
 }

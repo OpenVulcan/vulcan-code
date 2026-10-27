@@ -101,8 +101,8 @@ impl LuaSkillsToolCacheSettings {
     }
 }
 
-/// Network download and source-routing settings consumed during engine creation.
-/// 引擎创建期间消费的网络下载与来源路由设置。
+/// Network download and source-routing settings; the endpoint fields are also replaced live.
+/// 网络下载与来源路由设置；其中端点字段也会实时替换。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct LuaSkillsNetworkSettings {
@@ -124,9 +124,44 @@ pub struct LuaSkillsNetworkSettings {
     /// Allowed URL prefixes for private skill manifests.
     /// 私有技能清单允许的 URL 前缀。
     pub private_skill_source_allowlist: Vec<String>,
+    /// User-added GitHub mirrors listed and probed beside the built-in mirror catalog.
+    /// 用户添加的 GitHub 镜像，与内置镜像目录一起列出和测速。
+    #[serde(default)]
+    pub custom_github_mirrors: Vec<LuaSkillsCustomGithubMirror>,
+    /// Account regions (`china`, `global`) whose Hub-switch suggestion the user turned off.
+    /// 用户已关闭 Hub 切换建议的账号区域（`china`、`global`）。
+    #[serde(default)]
+    pub dismissed_hub_region_prompts: Vec<String>,
+}
+
+/// One user-added GitHub mirror stored in the runtime settings document.
+/// 运行时设置文档中保存的一个用户添加的 GitHub 镜像。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LuaSkillsCustomGithubMirror {
+    /// Stable identifier, unique among custom mirrors.
+    /// 稳定标识，在自定义镜像中唯一。
+    pub id: String,
+    /// User-facing label.
+    /// 面向用户的名称。
+    pub label: String,
+    /// Normalized GitHub-compatible download base URL.
+    /// 规范化后的 GitHub 兼容下载基址。
+    pub github_base_url: String,
 }
 
 impl LuaSkillsNetworkSettings {
+    /// Returns whether network fields the engine cannot replace while running differ from `running`.
+    /// 返回引擎运行中无法替换的网络字段是否与 `running` 不同。
+    ///
+    /// The download switch, GitHub endpoints and Hub address are applied live; the private
+    /// manifest policy is captured at engine creation.
+    /// 下载开关、GitHub 端点与 Hub 地址实时生效；私有清单策略在引擎创建时捕获。
+    pub fn requires_engine_restart_from(&self, running: &Self) -> bool {
+        self.enable_private_url_skill_install != running.enable_private_url_skill_install
+            || self.private_skill_source_allowlist != running.private_skill_source_allowlist
+    }
+
     /// Return the Hub base URL the engine uses: the user's override, otherwise the official Hub.
     /// 返回引擎使用的 Hub 基址：用户覆盖值，否则为官方 Hub。
     pub fn effective_official_skill_hub_base_url(&self) -> String {
@@ -150,6 +185,24 @@ impl LuaSkillsNetworkSettings {
             enable_private_url_skill_install: self.enable_private_url_skill_install,
             private_skill_source_allowlist: self
                 .private_skill_source_allowlist
+                .iter()
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .map(String::from)
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+            custom_github_mirrors: self
+                .custom_github_mirrors
+                .iter()
+                .map(|mirror| LuaSkillsCustomGithubMirror {
+                    id: mirror.id.trim().to_string(),
+                    label: mirror.label.trim().to_string(),
+                    github_base_url: mirror.github_base_url.trim().to_string(),
+                })
+                .collect(),
+            dismissed_hub_region_prompts: self
+                .dismissed_hub_region_prompts
                 .iter()
                 .map(|value| value.trim())
                 .filter(|value| !value.is_empty())
@@ -417,6 +470,8 @@ impl Default for LuaSkillsRuntimeSettings {
                 official_skill_hub_base_url: None,
                 enable_private_url_skill_install: false,
                 private_skill_source_allowlist: Vec::new(),
+                custom_github_mirrors: Vec::new(),
+                dismissed_hub_region_prompts: Vec::new(),
             },
             capabilities: LuaSkillsCapabilitySettings {
                 default_text_encoding: None,
@@ -461,14 +516,15 @@ impl LuaSkillsRuntimeSettings {
     /// Returns whether persisted engine-startup fields differ from one running-engine baseline.
     /// 返回持久化引擎启动字段是否不同于某个运行中引擎基线。
     ///
-    /// The host-only AI tool exposure is applied live and is intentionally excluded.
-    /// 宿主专用 AI 工具曝光会实时应用，因此刻意排除在外。
+    /// The host-only AI tool exposure and the live network fields are applied while running
+    /// and are intentionally excluded.
+    /// 宿主专用 AI 工具曝光与可实时替换的网络字段在运行中应用，因此刻意排除在外。
     pub fn requires_engine_restart_from(&self, running: &Self) -> bool {
         self.schema_version != running.schema_version
             || self.vm_pool != running.vm_pool
             || self.run_lua_pool != running.run_lua_pool
             || self.tool_cache != running.tool_cache
-            || self.network != running.network
+            || self.network.requires_engine_restart_from(&running.network)
             || self.capabilities != running.capabilities
             || self.managed_runtime != running.managed_runtime
     }
@@ -662,6 +718,30 @@ mod tests {
             network.effective_official_skill_hub_base_url(),
             "https://hub.example.test"
         );
+    }
+
+    /// Verify live network fields never demand a restart while the private manifest policy does.
+    /// 验证实时网络字段从不要求重启，而私有清单策略仍要求重启。
+    #[test]
+    fn only_private_manifest_policy_requires_restart() {
+        let running = LuaSkillsRuntimeSettings::default();
+        let mut saved = running.clone();
+        saved.network.allow_downloads = false;
+        saved.network.github_base_url = Some("https://ghfast.top/https://github.com".to_string());
+        saved.network.github_api_base_url = Some("https://hub.luaskills.cn/github-api".to_string());
+        saved.network.official_skill_hub_base_url = Some("https://hub.luaskills.cn".to_string());
+        saved
+            .network
+            .custom_github_mirrors
+            .push(LuaSkillsCustomGithubMirror {
+                id: "mine".to_string(),
+                label: "Mine".to_string(),
+                github_base_url: "https://mirror.example/https://github.com".to_string(),
+            });
+        saved.network.dismissed_hub_region_prompts = vec!["china".to_string()];
+        assert!(!saved.requires_engine_restart_from(&running));
+        saved.network.private_skill_source_allowlist = vec!["https://skills.example/".to_string()];
+        assert!(saved.requires_engine_restart_from(&running));
     }
 
     /// Verify invalid pool ordering is rejected instead of being silently normalized.

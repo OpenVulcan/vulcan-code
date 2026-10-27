@@ -489,6 +489,8 @@
 /* LuaSkills 设置：字段集内的套件页面分区、运行时状态行与吸底保存栏。 */
 .lua-settings-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: calc(var(--vk-u) * 3); min-width: 0; }
 .lua-settings-encoding { width: min(100%, 20rem); }
+.lua-mirror-name,
+.lua-mirror-actions { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 1.5); min-width: 0; }
 .lua-inference-route-row > .vk-page-row-text { flex: 0 1 16rem; }
 .lua-inference-route-row > .vk-page-actions { flex: 1 1 22rem; flex-wrap: nowrap; }
 .lua-inference-route-row > .vk-page-actions > :first-child { flex: 1; min-width: 0; }

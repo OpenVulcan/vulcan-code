@@ -4,7 +4,6 @@ import { Button } from "@/ui-kit/primitives/button"
 import { Input } from "@/ui-kit/primitives/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
 import { Switch } from "@/ui-kit/primitives/switch"
-import { Textarea } from "@/ui-kit/primitives/textarea"
 import { useI18n } from "@/i18n"
 import { PageActionBar, PageBody, PageNotice, PageRow, PageSection } from "@/components/page"
 import type {
@@ -34,14 +33,6 @@ type LuaVmPoolNumberKey = keyof LuaVmPoolSettings
 // LuaSkillsToolCacheNumberKey identifies one numeric tool-cache setting.
 // LuaSkillsToolCacheNumberKey 标识一个数值型工具缓存设置。
 type LuaSkillsToolCacheNumberKey = keyof LuaSkillsToolCacheSettings
-
-// LuaSkillsNetworkBooleanKey identifies one Boolean network setting.
-// LuaSkillsNetworkBooleanKey 标识一个布尔型网络设置。
-type LuaSkillsNetworkBooleanKey = "allowDownloads" | "enablePrivateUrlSkillInstall"
-
-// LuaSkillsNetworkTextKey identifies one optional network endpoint setting.
-// LuaSkillsNetworkTextKey 标识一个可选网络端点设置。
-type LuaSkillsNetworkTextKey = "githubBaseUrl" | "githubApiBaseUrl" | "officialSkillHubBaseUrl"
 
 // LuaSkillsCapabilityBooleanKey identifies one Boolean host capability setting.
 // LuaSkillsCapabilityBooleanKey 标识一个布尔型宿主能力设置。
@@ -194,10 +185,7 @@ function cloneLuaSkillsRuntimeSettings(settings: LuaSkillsRuntimeSettings): LuaS
     vmPool: { ...settings.vmPool },
     runLuaPool: { ...settings.runLuaPool },
     toolCache: { ...settings.toolCache },
-    network: {
-      ...settings.network,
-      privateSkillSourceAllowlist: [...settings.network.privateSkillSourceAllowlist],
-    },
+    network: structuredClone(settings.network),
     capabilities: { ...settings.capabilities },
     managedRuntime: { ...settings.managedRuntime },
     aiTools: { ...settings.aiTools },
@@ -207,12 +195,15 @@ function cloneLuaSkillsRuntimeSettings(settings: LuaSkillsRuntimeSettings): LuaS
 // runtimeSettingsAreEqual compares two normalized settings documents for dirty-state display.
 // runtimeSettingsAreEqual 比较两份规范设置文档以展示脏状态。
 //
+// The network block is edited and saved on the sources page, so it never makes this page dirty.
+// 网络块在来源页面编辑与保存，因此它从不使本页面变脏。
+//
 // Parameters: left and right are complete schema-versioned settings documents.
 // 参数：left 与 right 是完整且带 schema 版本的设置文档。
-// Returns: true only when every persisted field has the same value and order.
-// 返回值：仅当所有持久化字段的值与顺序都一致时返回 true。
+// Returns: true only when every persisted field outside the network block has the same value and order.
+// 返回值：仅当网络块以外的所有持久化字段的值与顺序都一致时返回 true。
 function runtimeSettingsAreEqual(left: LuaSkillsRuntimeSettings, right: LuaSkillsRuntimeSettings): boolean {
-  return JSON.stringify(left) === JSON.stringify(right)
+  return JSON.stringify({ ...left, network: null }) === JSON.stringify({ ...right, network: null })
 }
 
 // runtimeSettingsValidationError validates the constraints already enforced by the Rust package.
@@ -372,39 +363,6 @@ export function LuaSkillsSettingsPanel(props: {
     setFeedback(null)
   }, [])
 
-  // updateNetworkBoolean updates one exact Boolean network setting.
-  // updateNetworkBoolean 更新一个精确的布尔型网络设置。
-  const updateNetworkBoolean = React.useCallback((field: LuaSkillsNetworkBooleanKey, value: boolean) => {
-    setDraft((current) => ({
-      ...current,
-      network: { ...current.network, [field]: value },
-    }))
-    setFeedback(null)
-  }, [])
-
-  // updateNetworkText updates one exact optional network endpoint.
-  // updateNetworkText 更新一个精确的可选网络端点。
-  const updateNetworkText = React.useCallback((field: LuaSkillsNetworkTextKey, value: string) => {
-    setDraft((current) => ({
-      ...current,
-      network: { ...current.network, [field]: value },
-    }))
-    setFeedback(null)
-  }, [])
-
-  // updateNetworkAllowlist updates the exact private source prefix list from one line per entry.
-  // updateNetworkAllowlist 按每行一个条目更新精确的私有来源前缀列表。
-  const updateNetworkAllowlist = React.useCallback((value: string) => {
-    setDraft((current) => ({
-      ...current,
-      network: {
-        ...current.network,
-        privateSkillSourceAllowlist: value.split(/\r?\n/),
-      },
-    }))
-    setFeedback(null)
-  }, [])
-
   // updateCapabilityBoolean updates one exact Boolean host capability.
   // updateCapabilityBoolean 更新一个精确的布尔型宿主能力。
   const updateCapabilityBoolean = React.useCallback((field: LuaSkillsCapabilityBooleanKey, value: boolean) => {
@@ -475,7 +433,9 @@ export function LuaSkillsSettingsPanel(props: {
     setError(null)
     setFeedback(null)
     try {
-      await props.actions.onSaveLuaSkillsRuntimeSettings(draft)
+      // The committed network block is sent unchanged so this page never overwrites the sources page.
+      // 原样发送已提交的网络块，使本页面绝不覆盖来源页面的设置。
+      await props.actions.onSaveLuaSkillsRuntimeSettings({ ...draft, network: props.catalog.runtimeSettings.network })
       setExternalUpdate(false)
       setFeedback(t("skills.luaSettings.saved"))
     } catch (caughtError) {
@@ -484,7 +444,7 @@ export function LuaSkillsSettingsPanel(props: {
       operationRef.current = false
       setSaving(false)
     }
-  }, [draft, props.actions, t])
+  }, [draft, props.actions, props.catalog.runtimeSettings.network, t])
 
   // retryManagedRuntimes executes the service-owned bootstrap and lets the returned catalog carry failures.
   // retryManagedRuntimes 执行服务持有的初始化，并由返回目录承载失败结果。
@@ -618,45 +578,6 @@ export function LuaSkillsSettingsPanel(props: {
               onChange={(value) => updateToolCacheSetting("maxTtlSecs", value)}
             />
           </div>
-        </PageSection>
-
-        <PageSection title={t("skills.luaSettings.network")}>
-          <ToggleSettingField
-            label={t("skills.luaSettings.allowDownloads")}
-            checked={draft.network.allowDownloads}
-            onChange={(checked) => updateNetworkBoolean("allowDownloads", checked)}
-          />
-          <div className="lua-settings-grid">
-            <TextSettingField
-              label={t("skills.luaSettings.githubBaseUrl")}
-              value={draft.network.githubBaseUrl ?? ""}
-              onChange={(value) => updateNetworkText("githubBaseUrl", value)}
-            />
-            <TextSettingField
-              label={t("skills.luaSettings.githubApiBaseUrl")}
-              value={draft.network.githubApiBaseUrl ?? ""}
-              onChange={(value) => updateNetworkText("githubApiBaseUrl", value)}
-            />
-            <TextSettingField
-              label={t("skills.luaSettings.skillHubBaseUrl")}
-              hint={t("skills.luaSettings.skillHubBaseUrlHint")}
-              value={draft.network.officialSkillHubBaseUrl ?? ""}
-              onChange={(value) => updateNetworkText("officialSkillHubBaseUrl", value)}
-            />
-          </div>
-          <ToggleSettingField
-            label={t("skills.luaSettings.privateUrlInstall")}
-            checked={draft.network.enablePrivateUrlSkillInstall}
-            onChange={(checked) => updateNetworkBoolean("enablePrivateUrlSkillInstall", checked)}
-          />
-          <label className="vk-field">
-            <span>{t("skills.luaSettings.privateAllowlist")}</span>
-            <Textarea
-              value={draft.network.privateSkillSourceAllowlist.join("\n")}
-              onChange={(event) => updateNetworkAllowlist(event.currentTarget.value)}
-            />
-            <small className="vk-field-hint">{t("skills.luaSettings.privateAllowlistHint")}</small>
-          </label>
         </PageSection>
 
         <PageSection title={t("skills.luaSettings.capabilities")}>
@@ -818,35 +739,6 @@ function OptionalNumberSettingField(props: {
           props.onChange(nextValue === "" ? null : Number(nextValue))
         }}
       />
-    </label>
-  )
-}
-
-// TextSettingField renders one optional package startup text value.
-// TextSettingField 渲染一个可选的包启动文本值。
-function TextSettingField(props: {
-  // Localized field label.
-  // 本地化字段标签。
-  label: string
-  // Optional localized explanation shown under the input.
-  // 可选的本地化说明，显示在输入框下方。
-  hint?: string
-  // Current text value.
-  // 当前文本值。
-  value: string
-  // Commits the next text draft value.
-  // 提交下一份文本草稿。
-  onChange: (value: string) => void
-}) {
-  return (
-    <label className="vk-field">
-      <span>{props.label}</span>
-      <Input
-        type="text"
-        value={props.value}
-        onChange={(event) => props.onChange(event.currentTarget.value)}
-      />
-      {props.hint ? <small className="vk-field-hint">{props.hint}</small> : null}
     </label>
   )
 }

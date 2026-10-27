@@ -142,6 +142,8 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
         officialSkillHubBaseUrl: null,
         enablePrivateUrlSkillInstall: false,
         privateSkillSourceAllowlist: [],
+        customGithubMirrors: [],
+        dismissedHubRegionPrompts: [],
       },
       capabilities: {
         defaultTextEncoding: null,
@@ -157,6 +159,7 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
       },
     },
     restartRequired: false,
+    githubTokenConfigured: false,
     entryCount: 3,
     notice: "浏览器预览模式正在显示 LuaSkills 示例目录。",
     skills: [

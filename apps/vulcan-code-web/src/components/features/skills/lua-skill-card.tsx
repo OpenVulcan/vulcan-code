@@ -1,6 +1,7 @@
 import * as React from "react";
 import { PageNotice } from "@/components/page";
 import {
+  ArrowRightLeft,
   ChevronDown,
   Package,
   RotateCw,
@@ -27,7 +28,7 @@ import {
 } from "@/ui-kit/primitives/dropdown-menu";
 import { formatSkillText } from "@/components/features/featureText";
 import { useI18n } from "@/i18n";
-import type { LuaSkillSummary, LuaSkillToolSummary } from "@/types";
+import type { LuaSkillSummary, LuaSkillToolSummary, LuaSkillUpdateCheck } from "@/types";
 import type { SkillActionProps } from "./skill-area-types";
 
 // SKILL_SOURCE_TYPE_NAMES spells install source kinds the way their owners write them; the kinds are protocol
@@ -78,6 +79,12 @@ export function LuaSkillCard(props: {
   // Runs a labeled async action with page-level busy state.
   // 使用页面级忙碌状态运行带标签的异步动作。
   onRunAction: (label: string, action: () => Promise<void>) => Promise<void>;
+  // Opens the change-source dialog for this managed Lua Skill.
+  // 为当前受管 Lua Skill 打开更换来源弹窗。
+  onRequestChangeSource: (skill: LuaSkillSummary) => void;
+  // Latest update check for this skill, or null before any check.
+  // 当前技能最近一次更新检查结果；尚未检查时为 null。
+  updateCheck: LuaSkillUpdateCheck | null;
   // Lua Skill row rendered by this card.
   // 当前卡片渲染的 Lua Skill 行。
   skill: LuaSkillSummary;
@@ -125,6 +132,13 @@ export function LuaSkillCard(props: {
           <div className="agent-definition-row-badges">
             {sourceTypeLabel ? <Badge variant="outline">{sourceTypeLabel}</Badge> : null}
             <Badge variant="secondary">v{props.skill.version}</Badge>
+            {props.updateCheck?.updateAvailable ? (
+              <Badge variant="default">{formatSkillText(t("skills.luaSources.updateAvailable"), { version: props.updateCheck.latestVersion ?? "" })}</Badge>
+            ) : props.updateCheck?.error ? (
+              <Badge variant="outline" title={props.updateCheck.error}>{t("skills.luaSources.updateCheckFailed")}</Badge>
+            ) : props.updateCheck ? (
+              <Badge variant="outline">{t("skills.luaSources.upToDate")}</Badge>
+            ) : null}
             <Badge variant="outline">{props.skill.rootName === "ROOT" ? t("skills.label.system") : props.skill.rootName}</Badge>
             <Badge variant="outline">{t("skills.label.explicit")} {explicitToolCount}</Badge>
             <Badge variant="outline">{t("skills.label.implicit")} {implicitToolCount}</Badge>
@@ -176,7 +190,7 @@ export function LuaSkillCard(props: {
             <RotateCw size={14} />
           </IconButton>
         ) : null}
-        {!props.skill.systemOwned ? (
+        {!props.skill.systemOwned || props.skill.managed ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <IconButton aria-label={t("skills.action.action")} disabled={props.busy} title={t("skills.action.action")} type="button">
@@ -184,10 +198,18 @@ export function LuaSkillCard(props: {
               </IconButton>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="lua-skill-action-menu">
-              <DropdownMenuItem variant="destructive" onSelect={() => props.onRequestUninstall(props.skill)}>
-                <Trash2 size={15} />
-                <span>{t("skills.action.delete")}</span>
-              </DropdownMenuItem>
+              {props.skill.managed ? (
+                <DropdownMenuItem onSelect={() => props.onRequestChangeSource(props.skill)}>
+                  <ArrowRightLeft size={15} />
+                  <span>{t("skills.luaSources.changeSource")}</span>
+                </DropdownMenuItem>
+              ) : null}
+              {!props.skill.systemOwned ? (
+                <DropdownMenuItem variant="destructive" onSelect={() => props.onRequestUninstall(props.skill)}>
+                  <Trash2 size={15} />
+                  <span>{t("skills.action.delete")}</span>
+                </DropdownMenuItem>
+              ) : null}
             </DropdownMenuContent>
           </DropdownMenu>
         ) : null}

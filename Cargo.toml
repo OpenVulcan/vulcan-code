@@ -64,6 +64,7 @@ resolver = "3"
 # 保持 Lance 编解码器不变，仅替换其停止维护的标识符拼接宏依赖。
 [patch.crates-io]
 lance-bitpacking = { path = "vendor/lance-bitpacking" }
+luaskills = { path = "../../projects/vulcan-luaskills" }
 
 [workspace.package]
 authors = ["OpenVulcan"]
@@ -177,7 +178,7 @@ include_dir = "0.7.4"
 jsonschema = { version = "=0.49.9", default-features = false }
 keyring = { version = "4.1.6", default-features = false, features = ["v1"] }
 libc = "0.2"
-luaskills = "=0.6.1"
+luaskills = "=0.7.0"
 notify = "8.2.0"
 notify-rust = "=4.18.0"
 png = "0.18.1"

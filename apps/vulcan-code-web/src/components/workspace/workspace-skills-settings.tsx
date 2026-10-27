@@ -3,6 +3,7 @@ import * as React from "react";
 import {
   BookMarked,
   ChartNoAxesCombined,
+  CloudDownload,
   Hammer,
   Plug,
   Puzzle,
@@ -101,6 +102,7 @@ export function PluginWorkspaceMenu(props: {
   // rows 保存静态内嵌技能菜单行。
   const rows: Array<{ icon: React.ReactNode; id: SkillSubAreaId; label: string }> = [
     { icon: <Hammer size={15} />, id: "catalog", label: t("skills.navigation.list") },
+    { icon: <CloudDownload size={15} />, id: "sources", label: t("skills.navigation.luaSources") },
     { icon: <Settings size={15} />, id: "settings", label: t("skills.navigation.luaSettings") },
     { icon: <Plug size={15} />, id: "mcp-servers", label: t("settings.mcpServers") },
     { icon: <BookMarked size={15} />, id: "knowledge", label: t("area.knowledge") },
@@ -132,6 +134,9 @@ export function skillSubAreaLabel(
 ): string {
   if (subArea === "settings") {
     return t("skills.navigation.luaSettings");
+  }
+  if (subArea === "sources") {
+    return t("skills.navigation.luaSources");
   }
   if (subArea === "plugins") {
     return t("skills.navigation.plugins");

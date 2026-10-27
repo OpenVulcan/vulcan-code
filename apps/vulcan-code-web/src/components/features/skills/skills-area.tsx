@@ -8,6 +8,7 @@ import { McpSettingsArea } from "@/components/features/settings/mcp-settings-are
 
 import { LuaSkillsPanel, LuaSkillInstallDialog } from "./lua-skills-panel"
 import { LuaSkillsSettingsPanel } from "./lua-skills-settings-panel"
+import { LuaSkillsSourcesPanel } from "./lua-skills-sources-panel"
 import { VulcanPluginsPanel } from "./vulcan-plugins-panel"
 import { PluginMaintenancePage } from "./plugin-maintenance-page"
 import {
@@ -52,7 +53,13 @@ export function SkillsArea(props: {
         <LuaSkillsPanel
           actions={props.skillActions}
           operationProgress={props.workbench.luaSkills.operationProgress ?? null}
+          runtimeSettings={props.workbench.luaSkills.runtimeSettings}
           skills={props.workbench.luaSkills.skills}
+        />
+      ) : props.activeTab === "sources" ? (
+        <LuaSkillsSourcesPanel
+          actions={props.skillActions}
+          catalog={props.workbench.luaSkills}
         />
       ) : props.activeTab === "plugins" ? (
         <VulcanPluginsPanel

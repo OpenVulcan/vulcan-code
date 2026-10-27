@@ -17,9 +17,12 @@ export interface SkillActionProps extends McpSettingsActionProps {
   // Installs one Lua Skill package.
   // 安装单个 Lua Skill 包。
   onInstallLuaSkill: (skillId: string, source: string, sourceType: string) => Promise<void>
-  // Updates one managed Lua Skill package.
-  // 更新单个受管 Lua Skill 包。
-  onUpdateLuaSkill: (skillId: string) => Promise<void>
+  // Updates one managed Lua Skill package, optionally switching it to a new install source.
+  // 更新单个受管 Lua Skill 包，可选地将其切换到新的安装来源。
+  onUpdateLuaSkill: (skillId: string, replacement?: import("@/service/skills-actions-service").LuaSkillReplacementSource | null) => Promise<void>
+  // Stores or clears the LuaSkills GitHub token; null clears it.
+  // 保存或清除 LuaSkills GitHub 令牌；null 表示清除。
+  onSetLuaSkillsGithubToken: (token: string | null) => Promise<void>
   // Toggles one Lua Skill package lifecycle state.
   // 切换单个 Lua Skill 包生命周期状态。
   onSetLuaSkillEnabled: (skillId: string, enabled: boolean) => Promise<void>
@@ -101,7 +104,7 @@ export type PluginSkillSubAreaId = `plugin:${string}:${string}`
 
 // SkillSubAreaId identifies the selected skill management category.
 // SkillSubAreaId 标识当前选中的技能管理分类。
-export type SkillSubAreaId = "catalog" | "plugins" | "plugin-maintenance" | "settings" | "mcp-servers" | "knowledge" | "environment-variables" | PluginSkillSubAreaId
+export type SkillSubAreaId = "catalog" | "sources" | "plugins" | "plugin-maintenance" | "settings" | "mcp-servers" | "knowledge" | "environment-variables" | PluginSkillSubAreaId
 
 // PluginDetailMountSelection binds one enabled plugin to one exact detail mount and navigation id.
 // PluginDetailMountSelection 将一个已启用插件绑定到一个精确详情挂载点及导航标识。

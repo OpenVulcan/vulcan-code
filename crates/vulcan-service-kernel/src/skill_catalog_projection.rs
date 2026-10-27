@@ -421,6 +421,7 @@ pub(crate) fn lua_skills_catalog_summary(
         ),
         runtime_settings: catalog.runtime_settings.clone(),
         restart_required: catalog.restart_required,
+        github_token_configured: catalog.github_token_configured,
         entry_count: catalog.entry_count,
         notice: if catalog.runtime_root.as_os_str().is_empty() {
             String::from("The LuaSkills skill catalog is not loaded yet.")

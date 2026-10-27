@@ -5,6 +5,10 @@ import type {
   AgentSkillSaveRequest,
   LuaSkillsCatalogUpdate,
   LuaSkillsHubSearchPage,
+  LuaSkillsGithubMirror,
+  LuaSkillsGithubMirrorProbeResult,
+  LuaSkillsGithubMirrorProbeTarget,
+  LuaSkillUpdateCheck,
   LuaSkillConfigDeleteRequest,
   LuaSkillConfigDeleteResult,
   LuaSkillConfigDescriptor,
@@ -299,18 +303,90 @@ export async function searchLuaSkillsHub(query: string, cursor: string | null): 
   return serviceClient.request<LuaSkillsHubSearchPage>("service_search_luaskills_hub", { query: query.trim() || null, cursor });
 }
 
-// updateLuaSkill updates one managed Lua Skill package.
-// updateLuaSkill 更新单个受管 Lua Skill 包。
-export async function updateLuaSkill(skillId: string): Promise<LuaSkillsCatalogUpdate> {
+// LuaSkillReplacementSource names the new install source an update switches one skill to.
+// LuaSkillReplacementSource 指定更新时将技能切换到的新安装来源。
+export interface LuaSkillReplacementSource {
+  // Install source type such as `official_hub` or `github`.
+  // 安装来源类型，例如 `official_hub` 或 `github`。
+  sourceType: string;
+  // Source locator understood by that type.
+  // 该类型可识别的来源定位符。
+  source: string;
+}
+
+// updateLuaSkill updates one managed Lua Skill package, optionally switching its install source.
+// updateLuaSkill 更新单个受管 Lua Skill 包，可选地切换其安装来源。
+export async function updateLuaSkill(
+  skillId: string,
+  replacement: LuaSkillReplacementSource | null = null,
+): Promise<LuaSkillsCatalogUpdate> {
   if (!hasServiceRuntime()) {
     return luaSkillsCatalogUpdateFromSnapshot(updateBrowserFallbackWorkbench((snapshot) => {
       const skill = snapshot.luaSkills.skills.find((item) => item.skillId === skillId);
       if (skill) {
         skill.version = skill.version || "0.1.0";
+        if (replacement) {
+          skill.sourceType = replacement.sourceType;
+          skill.sourceLocator = replacement.source;
+        }
       }
     }));
   }
-  return serviceClient.request<LuaSkillsCatalogUpdate>("service_update_luaskill", { skillId });
+  return serviceClient.request<LuaSkillsCatalogUpdate>("service_update_luaskill", {
+    skillId,
+    sourceType: replacement?.sourceType ?? null,
+    source: replacement?.source ?? null,
+  });
+}
+
+// checkLuaSkillUpdates asks each managed skill's recorded source for its latest version.
+// checkLuaSkillUpdates 向每个受管技能记录的来源查询其最新版本。
+//
+// Parameters: skillIds limits the check; null checks every managed skill.
+// 参数：skillIds 限定检查范围；为 null 时检查全部受管技能。
+// Returns: one row per checked skill, failures carried in `error`.
+// 返回值：每个被检查技能一行，失败原因放在 `error` 中。
+export async function checkLuaSkillUpdates(skillIds: string[] | null = null): Promise<LuaSkillUpdateCheck[]> {
+  if (!hasServiceRuntime()) {
+    return [];
+  }
+  return serviceClient.request<LuaSkillUpdateCheck[]>("service_check_luaskill_updates", { skillIds });
+}
+
+// listLuaSkillsGithubMirrors returns the built-in GitHub mirror catalog.
+// listLuaSkillsGithubMirrors 返回内置 GitHub 镜像目录。
+export async function listLuaSkillsGithubMirrors(): Promise<LuaSkillsGithubMirror[]> {
+  if (!hasServiceRuntime()) {
+    return [];
+  }
+  return serviceClient.request<LuaSkillsGithubMirror[]>("service_luaskills_github_mirrors");
+}
+
+// probeLuaSkillsGithubMirrors speed-tests the given mirrors in parallel.
+// probeLuaSkillsGithubMirrors 并行测速给定镜像。
+export async function probeLuaSkillsGithubMirrors(
+  targets: LuaSkillsGithubMirrorProbeTarget[],
+): Promise<LuaSkillsGithubMirrorProbeResult[]> {
+  if (!hasServiceRuntime()) {
+    throw new Error("Mirror speed tests require the local service runtime.");
+  }
+  return serviceClient.request<LuaSkillsGithubMirrorProbeResult[]>("service_probe_luaskills_github_mirrors", { targets });
+}
+
+// setLuaSkillsGithubToken stores or clears the GitHub token in the operating-system credential store.
+// setLuaSkillsGithubToken 在操作系统凭据库中保存或清除 GitHub 令牌。
+//
+// Parameters: token is the pasted token, or null to clear it.
+// 参数：token 是粘贴的令牌，为 null 时清除。
+// Returns: the revisioned catalog whose `githubTokenConfigured` reflects the change.
+// 返回值：带版本的目录，其 `githubTokenConfigured` 反映本次变更。
+export async function setLuaSkillsGithubToken(token: string | null): Promise<LuaSkillsCatalogUpdate> {
+  if (!hasServiceRuntime()) {
+    return luaSkillsCatalogUpdateFromSnapshot(updateBrowserFallbackWorkbench((snapshot) => {
+      snapshot.luaSkills.githubTokenConfigured = token !== null;
+    }));
+  }
+  return serviceClient.request<LuaSkillsCatalogUpdate>("service_set_luaskills_github_token", { token });
 }
 
 // setLuaSkillEnabled toggles one Lua Skill package lifecycle state.

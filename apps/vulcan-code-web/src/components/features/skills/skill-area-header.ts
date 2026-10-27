@@ -26,6 +26,9 @@ export function activeSkillHeaderSummary(
       detail: workbench.luaSkills.restartRequired ? `${t("skills.luaSettings.restartRequired")} · ${description}` : description,
     }
   }
+  if (activeTab === "sources") {
+    return { title: t("skills.navigation.luaSources"), detail: t("skills.luaSources.description") }
+  }
   if (activeTab === "mcp-servers") {
     return { title: t("settings.mcpServers"), detail: t("settings.mcpServers.description") }
   }

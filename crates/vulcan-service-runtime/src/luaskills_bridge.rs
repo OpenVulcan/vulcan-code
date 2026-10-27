@@ -16,7 +16,8 @@ use luaskills::runtime_options::LuaRuntimeRunLuaPoolConfig;
 use luaskills::skill::manager::collect_effective_skill_instances_from_roots;
 use luaskills::{
     LuaEngine, LuaEngineOptions, LuaRuntimeCapabilityOptions, LuaRuntimeHostOptions,
-    LuaRuntimeManagedRuntimeConfig, LuaVmPoolConfig, RuntimeEntryDescriptor,
+    LuaRuntimeManagedRuntimeConfig, LuaRuntimeNetworkOptions, LuaRuntimeSecretString,
+    LuaVmPoolConfig, RuntimeEntryDescriptor,
     RuntimeSkillConfigEventBatch, RuntimeSkillConfigStoreRefresh,
     RuntimeSkillPackageConfigDescriptor, RuntimeSkillPackageConfigItemDescriptor,
     RuntimeSkillPackageConfigStatus, RuntimeSkillRoot, SkillConfigDeleteResult,
@@ -25,8 +26,8 @@ use luaskills::{
     SkillPackageConfigItemState, SkillUninstallOptions, ToolCacheConfig,
 };
 use vulcan_luaskills_config::{
-    LuaSkillsRuntimeSettings, load_runtime_settings, runtime_settings_file_path,
-    save_runtime_settings,
+    LuaSkillsNetworkSettings, LuaSkillsRuntimeSettings, load_runtime_settings,
+    runtime_settings_file_path, save_runtime_settings,
 };
 
 /// Declarative bootstrap configuration for host-managed ROOT skills.
@@ -178,6 +179,9 @@ pub struct TauriLuaSkillsHandle {
     /// Runtime settings captured when the retained engine was created.
     /// 创建保留引擎时捕获的运行时设置。
     pub effective_runtime_settings: LuaSkillsRuntimeSettings,
+    /// Network settings currently applied to the engine, replaced after every settings save.
+    /// 当前应用到引擎的网络设置，每次保存设置后替换。
+    live_network_settings: Arc<Mutex<LuaSkillsNetworkSettings>>,
 }
 
 impl std::fmt::Debug for TauriLuaSkillsHandle {
@@ -204,6 +208,7 @@ impl std::fmt::Debug for TauriLuaSkillsHandle {
                 "effective_runtime_settings",
                 &self.effective_runtime_settings,
             )
+            .field("live_network_settings", &self.live_network_settings)
             .finish()
     }
 }
@@ -245,6 +250,9 @@ pub struct TauriLuaSkillsCatalog {
     /// Whether saved settings differ from the running engine configuration.
     /// 已保存设置是否不同于运行中引擎配置。
     pub restart_required: bool,
+    /// Whether the running engine holds a GitHub token; the token itself never leaves the engine.
+    /// 运行中引擎是否持有 GitHub 令牌；令牌本身绝不离开引擎。
+    pub github_token_configured: bool,
 }
 
 /// Lightweight summary for one effective LuaSkill package.
@@ -315,9 +323,13 @@ pub struct TauriLuaSkillToolSummary {
 
 /// Bootstraps LuaSkills using the in-process database mode shared by Vulcan Code hosts.
 /// 使用 Vulcan Code 宿主共享的进程内数据库模式引导 LuaSkills。
+///
+/// `github_token` is the token read from the host's secure store; it only reaches engine memory.
+/// `github_token` 是从宿主安全存储读取的令牌；它只进入引擎内存。
 pub fn bootstrap_luaskills<F, G>(
     mut progress: F,
     mut managed_progress: G,
+    github_token: Option<String>,
 ) -> Result<TauriLuaSkillsHandle, String>
 where
     F: FnMut(&str),
@@ -386,12 +398,13 @@ where
         "Managed Python/Node runtime: {}",
         managed_runtime_report.diagnostic
     ));
-    let host_options = build_host_options(
+    let mut host_options = build_host_options(
         &runtime_root,
         &managed_runtime_distribution_root,
         &skill_config_root,
         &runtime_settings,
     );
+    host_options.github_token = github_token.map(LuaRuntimeSecretString::new);
     let pool_config = LuaVmPoolConfig {
         min_size: runtime_settings.vm_pool.min_size,
         max_size: runtime_settings.vm_pool.max_size,
@@ -425,6 +438,7 @@ where
         managed_runtime_report: Arc::new(Mutex::new(managed_runtime_report)),
         managed_runtime_progress: Arc::new(Mutex::new(None)),
         config_capability_cache: Arc::new(Mutex::new(LuaSkillConfigCapabilityCache::default())),
+        live_network_settings: Arc::new(Mutex::new(runtime_settings.network.clone())),
         effective_runtime_settings: runtime_settings,
     })
 }
@@ -798,8 +812,75 @@ pub fn save_luaskills_runtime_settings(
     handle: &TauriLuaSkillsHandle,
     settings: &LuaSkillsRuntimeSettings,
 ) -> Result<TauriLuaSkillsCatalog, String> {
-    save_runtime_settings(&handle.output_config_directory, settings)?;
-    load_luaskills_catalog(handle)
+    let mut settings = settings.clone();
+    settings.network.custom_github_mirrors =
+        crate::luaskills_network::validated_custom_github_mirrors(
+            &settings.network.custom_github_mirrors,
+        )?;
+    save_runtime_settings(&handle.output_config_directory, &settings)?;
+    // The saved file is re-read so the engine receives exactly what normalization persisted.
+    // 重新读取已保存文件，使引擎收到的正是规范化后持久化的内容。
+    let saved = load_runtime_settings(&handle.output_config_directory)?;
+    let mut engine = handle.engine.write().map_err(|_| {
+        String::from(
+            "The LuaSkills engine write lock is poisoned; the network settings cannot be applied.",
+        )
+    })?;
+    apply_live_network_settings(handle, &mut engine, &saved.network)?;
+    build_luaskills_catalog(handle, &engine)
+}
+
+/// Replaces the engine's live network policy with `network`, keeping the token it already holds.
+/// 用 `network` 替换引擎的实时网络策略，并保留其已持有的令牌。
+fn apply_live_network_settings(
+    handle: &TauriLuaSkillsHandle,
+    engine: &mut LuaEngine,
+    network: &LuaSkillsNetworkSettings,
+) -> Result<(), String> {
+    let current = engine.network_options();
+    engine.set_network_options(LuaRuntimeNetworkOptions {
+        allow_network_download: network.allow_downloads,
+        github_base_url: network.github_base_url.clone(),
+        github_api_base_url: network.github_api_base_url.clone(),
+        github_token: current.github_token,
+        official_skill_hub_base_url: Some(network.effective_official_skill_hub_base_url()),
+    });
+    *handle.live_network_settings.lock().map_err(|_| {
+        String::from("The LuaSkills network settings lock is poisoned; the Hub address cannot be updated.")
+    })? = network.clone();
+    Ok(())
+}
+
+/// Returns the network settings the running engine currently uses.
+/// 返回运行中引擎当前使用的网络设置。
+pub fn live_network_settings(
+    handle: &TauriLuaSkillsHandle,
+) -> Result<LuaSkillsNetworkSettings, String> {
+    handle
+        .live_network_settings
+        .lock()
+        .map(|settings| settings.clone())
+        .map_err(|_| String::from("The LuaSkills network settings lock is poisoned."))
+}
+
+/// Replaces or clears the GitHub token held by the running engine and returns the refreshed catalog.
+/// 替换或清除运行中引擎持有的 GitHub 令牌，并返回刷新的目录。
+///
+/// The caller persists the token in the secure store first; this only updates engine memory.
+/// 调用方先把令牌写入安全存储；此处只更新引擎内存。
+pub fn set_luaskills_github_token(
+    handle: &TauriLuaSkillsHandle,
+    github_token: Option<String>,
+) -> Result<TauriLuaSkillsCatalog, String> {
+    let mut engine = handle.engine.write().map_err(|_| {
+        String::from(
+            "The LuaSkills engine write lock is poisoned; the GitHub token cannot be applied.",
+        )
+    })?;
+    let mut network = engine.network_options();
+    network.github_token = github_token.map(LuaRuntimeSecretString::new);
+    engine.set_network_options(network);
+    build_luaskills_catalog(handle, &engine)
 }
 
 /// Retries managed Python and Node bootstrap and returns the refreshed catalog projection.
@@ -902,6 +983,7 @@ pub fn install_luaskill(
         skill_id: normalize_optional_field(skill_id),
         source: normalize_optional_field(Some(source)),
         source_type: parse_skill_install_source_type(&source_type)?,
+        replace_source: false,
     };
     let result = engine
         .install_skill_in_root(&handle.skill_roots, &user_root, &request)
@@ -933,18 +1015,34 @@ pub fn install_luaskill(
 
 /// Updates one managed LuaSkills package in its owning root.
 /// 在所属根中更新单个受管 LuaSkills 包。
+///
+/// `replacement` carries a new `(source_type, source)` pair to move the package to another
+/// source; the engine refuses a different skill or an older version.
+/// `replacement` 携带新的 `(source_type, source)`，用于把技能包迁移到另一来源；引擎拒绝不同技能或更旧版本。
 pub fn update_luaskill(
     handle: &TauriLuaSkillsHandle,
     skill_id: String,
+    replacement: Option<(String, String)>,
 ) -> Result<(String, TauriLuaSkillsCatalog), String> {
     let mut engine = handle.engine.write().map_err(|_| {
         String::from("The LuaSkills engine write lock is poisoned; the skill cannot be updated.")
     })?;
     let target_root = target_root_for_skill(handle, &skill_id)?;
-    let request = SkillInstallRequest {
-        skill_id: Some(skill_id),
-        source: None,
-        source_type: SkillInstallSourceType::Github,
+    let request = match replacement {
+        Some((source_type, source)) => SkillInstallRequest {
+            skill_id: Some(skill_id),
+            source: normalize_optional_field(Some(source)),
+            source_type: parse_skill_install_source_type(&source_type)?,
+            replace_source: true,
+        },
+        // A plain update keeps the recorded source; the source type here is not consulted.
+        // 普通更新沿用已记录来源；此处的来源类型不会被读取。
+        None => SkillInstallRequest {
+            skill_id: Some(skill_id),
+            source: None,
+            source_type: SkillInstallSourceType::Github,
+            replace_source: false,
+        },
     };
     let result = if target_root.name.eq_ignore_ascii_case("ROOT") {
         engine
@@ -986,6 +1084,133 @@ pub fn update_luaskill(
         )
     })?;
     Ok((result.message, catalog))
+}
+
+/// Update availability of one managed LuaSkills package.
+/// 单个受管 LuaSkills 包的更新可用性。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TauriLuaSkillUpdateCheck {
+    /// Stable skill identifier.
+    /// 稳定技能标识。
+    pub skill_id: String,
+    /// Version recorded by the install workflow.
+    /// 安装流程记录的版本。
+    pub installed_version: Option<String>,
+    /// Latest version the recorded source resolves to.
+    /// 已记录来源解析出的最新版本。
+    pub latest_version: Option<String>,
+    /// Whether the latest version is newer than the installed one.
+    /// 最新版本是否比已安装版本更新。
+    pub update_available: bool,
+    /// Stable source type key, such as `github` or `officialHub`.
+    /// 稳定来源类型键，例如 `github` 或 `officialHub`。
+    pub source_type: Option<String>,
+    /// Recorded source locator.
+    /// 已记录的来源定位值。
+    pub source_locator: Option<String>,
+    /// Failure for this package only; other packages are still reported.
+    /// 仅属于本包的失败；其他包仍会照常报告。
+    pub error: Option<String>,
+}
+
+/// Checks managed packages for newer versions without downloading or changing anything.
+/// 检查受管技能包是否有新版本，不下载也不修改任何内容。
+///
+/// `skill_ids` limits the check; `None` checks every effective managed package.
+/// `skill_ids` 限定检查范围；`None` 检查全部生效的受管技能包。
+pub fn check_luaskill_updates(
+    handle: &TauriLuaSkillsHandle,
+    skill_ids: Option<Vec<String>>,
+) -> Result<Vec<TauriLuaSkillUpdateCheck>, String> {
+    let engine = handle.engine.read().map_err(|_| {
+        String::from("The LuaSkills engine read lock is poisoned; updates cannot be checked.")
+    })?;
+    let instances = collect_effective_skill_instances_from_roots(&handle.skill_roots)
+        .map_err(|error| format!("Failed to resolve the skill directories: {error}"))?;
+    let mut checks = Vec::new();
+    // managed_ids groups the packages to check by the root that owns their install record.
+    // managed_ids 按持有安装记录的根对待检查的包分组。
+    let mut managed_ids = BTreeMap::<String, Vec<String>>::new();
+    for instance in &instances {
+        let requested = skill_ids
+            .as_ref()
+            .is_none_or(|ids| ids.contains(&instance.skill_id));
+        if !requested {
+            continue;
+        }
+        let managed = build_skill_manager_for_root(handle, &instance.root_name)?
+            .install_record(&instance.skill_id)
+            .map_err(|error| {
+                format!(
+                    "Failed to read the skill installation record ({}): {error}",
+                    instance.skill_id
+                )
+            })?
+            .is_some_and(|record| record.managed);
+        if managed {
+            managed_ids
+                .entry(instance.root_name.clone())
+                .or_default()
+                .push(instance.skill_id.clone());
+        } else if skill_ids.is_some() {
+            checks.push(update_check_error(
+                &instance.skill_id,
+                "The skill was not installed by the install workflow, so it has no source to check.",
+            ));
+        }
+    }
+    if let Some(ids) = &skill_ids {
+        for skill_id in ids {
+            if !instances.iter().any(|instance| &instance.skill_id == skill_id) {
+                checks.push(update_check_error(
+                    skill_id,
+                    "No effective directory was found for this skill.",
+                ));
+            }
+        }
+    }
+    for (root_name, ids) in managed_ids {
+        let root = resolve_named_skill_root(&handle.skill_roots, &root_name)?;
+        let results = if root.name.eq_ignore_ascii_case("ROOT") {
+            engine.system_check_skill_updates_in_root(
+                &handle.skill_roots,
+                &root,
+                SkillManagementAuthority::System,
+                Some(&ids),
+            )
+        } else {
+            engine.check_skill_updates_in_root(&handle.skill_roots, &root, Some(&ids))
+        }
+        .map_err(|error| format!("Failed to check LuaSkills updates: {error}"))?;
+        checks.extend(results.into_iter().map(|check| TauriLuaSkillUpdateCheck {
+            skill_id: check.skill_id,
+            installed_version: check.installed_version,
+            latest_version: check.latest_version,
+            update_available: check.update_available,
+            source_type: check
+                .source_type
+                .map(|source_type| skill_install_source_type_label(source_type).to_string()),
+            source_locator: check.source_locator,
+            error: check.error,
+        }));
+    }
+    checks.sort_by(|left, right| left.skill_id.cmp(&right.skill_id));
+    Ok(checks)
+}
+
+/// Builds the update check row reported for a package that could not be checked.
+/// 构建无法检查的包所报告的更新检查行。
+fn update_check_error(skill_id: &str, error: &str) -> TauriLuaSkillUpdateCheck {
+    TauriLuaSkillUpdateCheck {
+        skill_id: skill_id.to_string(),
+        installed_version: None,
+        latest_version: None,
+        update_available: false,
+        source_type: None,
+        source_locator: None,
+        error: Some(error.to_string()),
+    }
 }
 
 /// Enables or disables one LuaSkills package in its owning root.
@@ -1267,6 +1492,7 @@ fn build_luaskills_catalog(
             &runtime_settings_file_path(&handle.output_config_directory),
         ),
         restart_required,
+        github_token_configured: engine.network_options().github_token.is_some(),
     })
 }
 
@@ -1372,6 +1598,7 @@ fn ensure_configured_root_skills_installed(
             skill_id: Some(configured_skill.skill_id.clone()),
             source: Some(configured_skill.source.clone()),
             source_type: resolved_source_type,
+            replace_source: false,
         };
         engine
             .system_install_skill_in_root(
@@ -1719,6 +1946,7 @@ fn build_skill_manager_for_root(
         allow_network_download: false,
         github_base_url: None,
         github_api_base_url: None,
+        github_token: None,
         official_skill_hub_base_url: None,
         enable_private_url_skill_install: false,
         private_skill_source_allowlist: Vec::new(),

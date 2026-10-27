@@ -670,6 +670,7 @@ fn isolated_handle(
         managed_runtime_report: Arc::new(Mutex::new(ManagedRuntimeBootstrapReport::default())),
         managed_runtime_progress: Arc::new(Mutex::new(None)),
         config_capability_cache: Arc::new(Mutex::new(LuaSkillConfigCapabilityCache::default())),
+        live_network_settings: Arc::new(Mutex::new(runtime_settings.network.clone())),
         effective_runtime_settings: runtime_settings,
     }
 }
@@ -860,7 +861,7 @@ fn production_install_and_update_use_local_github_routes_safely() {
 
     server.select_latest(1);
     let (_, updated) =
-        update_luaskill(&handle, String::from(FIXTURE_SKILL_ID)).expect("local GitHub update");
+        update_luaskill(&handle, String::from(FIXTURE_SKILL_ID), None).expect("local GitHub update");
     assert_eq!(catalog_version(&updated, FIXTURE_SKILL_ID), "2.0.0");
     assert!(
         std::fs::read_to_string(&installed_lua)
@@ -870,7 +871,7 @@ fn production_install_and_update_use_local_github_routes_safely() {
 
     // A no-op upstream update does not reload; the host must still project the current catalog.
     // 上游无版本变化的更新不会重载，宿主仍须正确投影当前目录。
-    let (_, unchanged) = update_luaskill(&handle, String::from(FIXTURE_SKILL_ID))
+    let (_, unchanged) = update_luaskill(&handle, String::from(FIXTURE_SKILL_ID), None)
         .expect("updating the current version must preserve its catalog");
     assert_eq!(catalog_version(&unchanged, FIXTURE_SKILL_ID), "2.0.0");
 
@@ -892,7 +893,7 @@ fn production_install_and_update_use_local_github_routes_safely() {
     );
 
     server.select_latest(2);
-    let error = update_luaskill(&handle, String::from(FIXTURE_SKILL_ID))
+    let error = update_luaskill(&handle, String::from(FIXTURE_SKILL_ID), None)
         .expect_err("invalid archive update must fail");
     assert!(
         error.contains("Failed to update the LuaSkills skill"),
@@ -908,7 +909,7 @@ fn production_install_and_update_use_local_github_routes_safely() {
     );
 
     server.select_latest(3);
-    let checksum_error = update_luaskill(&handle, String::from(FIXTURE_SKILL_ID))
+    let checksum_error = update_luaskill(&handle, String::from(FIXTURE_SKILL_ID), None)
         .expect_err("checksum-mismatched update must fail");
     assert!(
         checksum_error.contains("checksum") || checksum_error.contains("SHA-256"),
@@ -923,7 +924,7 @@ fn production_install_and_update_use_local_github_routes_safely() {
     );
 
     server.select_latest(4);
-    let interruption_error = update_luaskill(&handle, String::from(FIXTURE_SKILL_ID))
+    let interruption_error = update_luaskill(&handle, String::from(FIXTURE_SKILL_ID), None)
         .expect_err("interrupted update must fail");
     assert!(
         interruption_error.contains("Failed to stream")
@@ -940,7 +941,7 @@ fn production_install_and_update_use_local_github_routes_safely() {
     );
 
     server.select_latest(5);
-    let reload_error = update_luaskill(&handle, String::from(FIXTURE_SKILL_ID))
+    let reload_error = update_luaskill(&handle, String::from(FIXTURE_SKILL_ID), None)
         .expect_err("invalid Lua update must fail during runtime reload");
     assert!(
         reload_error.contains("Failed to reload LuaSkills after Update"),
