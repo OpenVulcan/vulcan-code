@@ -27,16 +27,8 @@ function network(change: Partial<LuaSkillsNetworkSettings> = {}): LuaSkillsNetwo
 }
 
 const BUILTINS: LuaSkillsGithubMirror[] = [
-  { id: "github", label: "GitHub", kind: "direct", region: "global", githubBaseUrl: null, githubApiBaseUrl: null },
-  {
-    id: "luaskills-cn",
-    label: "Station",
-    kind: "luaskills_station",
-    region: "china",
-    githubBaseUrl: "https://res.luaskills.cn/github",
-    githubApiBaseUrl: "https://hub.luaskills.cn/github-api",
-  },
-  { id: "ghfast-top", label: "ghfast.top", kind: "prefix", region: "china", githubBaseUrl: "https://ghfast.top/https://github.com", githubApiBaseUrl: null },
+  { id: "github", label: "GitHub", kind: "direct", region: "global", githubBaseUrl: null },
+  { id: "ghfast-top", label: "ghfast.top", kind: "prefix", region: "china", githubBaseUrl: "https://ghfast.top/https://github.com" },
 ]
 
 describe("hubRegionPromptTarget", () => {
@@ -54,14 +46,14 @@ describe("hubRegionPromptTarget", () => {
 })
 
 describe("activeMirrorId", () => {
-  it("matches both saved addresses, treating empty as direct GitHub", () => {
+  it("matches the saved download address, treating empty as direct GitHub", () => {
     const choices = mirrorChoices(BUILTINS, [])
     expect(activeMirrorId(choices, network({ githubBaseUrl: "" }))).toBe("github")
     expect(activeMirrorId(choices, network({
-      githubBaseUrl: "https://res.luaskills.cn/github/",
-      githubApiBaseUrl: "https://hub.luaskills.cn/github-api",
-    }))).toBe("luaskills-cn")
-    expect(activeMirrorId(choices, network({ githubBaseUrl: "https://res.luaskills.cn/github" }))).toBeNull()
+      githubBaseUrl: "https://ghfast.top/https://github.com/",
+      githubApiBaseUrl: "https://api.example.test",
+    }))).toBe("ghfast-top")
+    expect(activeMirrorId(choices, network({ githubBaseUrl: "https://other.example.test/https://github.com" }))).toBeNull()
   })
 
   it("selects a user mirror by its download address", () => {

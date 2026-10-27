@@ -29,8 +29,8 @@ pub struct LuaSkillsGithubMirror {
     /// English label; interfaces may localize known identifiers.
     /// 英文名称；界面可按已知标识本地化。
     pub label: String,
-    /// `direct`, `prefix` or `luaskills_station`.
-    /// `direct`、`prefix` 或 `luaskills_station`。
+    /// `direct` or `prefix`.
+    /// `direct` 或 `prefix`。
     pub kind: String,
     /// `china` or `global`.
     /// `china` 或 `global`。
@@ -38,9 +38,6 @@ pub struct LuaSkillsGithubMirror {
     /// Download base URL, absent for direct GitHub.
     /// 下载基址；直连 GitHub 时缺省。
     pub github_base_url: Option<String>,
-    /// API base URL, absent when the official API is used.
-    /// API 基址；使用官方 API 时缺省。
-    pub github_api_base_url: Option<String>,
 }
 
 /// One mirror to probe, built-in or custom.
@@ -188,7 +185,6 @@ fn service_mirror(mirror: LuaRuntimeGithubMirror) -> LuaSkillsGithubMirror {
         kind: match mirror.kind {
             LuaRuntimeGithubMirrorKind::Direct => "direct",
             LuaRuntimeGithubMirrorKind::Prefix => "prefix",
-            LuaRuntimeGithubMirrorKind::LuaskillsStation => "luaskills_station",
         }
         .to_string(),
         region: match mirror.region {
@@ -197,7 +193,6 @@ fn service_mirror(mirror: LuaRuntimeGithubMirror) -> LuaSkillsGithubMirror {
         }
         .to_string(),
         github_base_url: mirror.github_base_url,
-        github_api_base_url: mirror.github_api_base_url,
     }
 }
 
@@ -258,7 +253,7 @@ mod tests {
         let catalog = github_mirror_catalog();
         assert!(!catalog.is_empty());
         for mirror in catalog {
-            assert!(["direct", "prefix", "luaskills_station"].contains(&mirror.kind.as_str()));
+            assert!(["direct", "prefix"].contains(&mirror.kind.as_str()));
             assert!(["china", "global"].contains(&mirror.region.as_str()));
         }
     }

@@ -247,18 +247,15 @@ function MirrorSection(props: {
     }
   }
 
-  // applyMirror applies both addresses of one mirror together.
-  // applyMirror 同时应用一个镜像的两个地址。
-  const applyMirror = (choice: LuaSkillsMirrorChoice) => props.onSave({
-    githubBaseUrl: choice.githubBaseUrl,
-    githubApiBaseUrl: choice.githubApiBaseUrl,
-  })
+  // applyMirror applies one mirror's download address; the API address stays an advanced setting.
+  // applyMirror 应用一个镜像的下载地址；API 地址仍属于高级设置。
+  const applyMirror = (choice: LuaSkillsMirrorChoice) => props.onSave({ githubBaseUrl: choice.githubBaseUrl })
 
   // removeMirror deletes one user mirror and falls back to direct GitHub when it was in use.
   // removeMirror 删除一个用户镜像；若它正在使用，则回到直连 GitHub。
   const removeMirror = (id: string) => props.onSave({
     customGithubMirrors: props.network.customGithubMirrors.filter((mirror) => mirror.id !== id),
-    ...(activeId === id ? { githubBaseUrl: null, githubApiBaseUrl: null } : {}),
+    ...(activeId === id ? { githubBaseUrl: null } : {}),
   })
 
   // addMirror saves one user mirror; the service normalizes and validates the address.
@@ -331,7 +328,7 @@ function MirrorSection(props: {
           cells: {
             name: (
               <span className="lua-mirror-name">
-                <span>{choice.builtin?.kind === "luaskills_station" ? t("skills.luaSources.stationName") : choice.label}</span>
+                <span>{choice.label}</span>
                 {choice.builtin ? (
                   <Badge variant="outline">{t(choice.builtin.region === "china" ? "skills.luaSources.regionChina" : "skills.luaSources.regionGlobal")}</Badge>
                 ) : (

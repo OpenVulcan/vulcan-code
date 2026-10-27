@@ -660,18 +660,15 @@ export interface LuaSkillsGithubMirror {
   // Display label.
   // 显示名称。
   label: string;
-  // Mirror kind: direct GitHub, a prefix proxy or a LuaSkills resource station.
-  // 镜像类型：直连 GitHub、前缀代理或 LuaSkills 资源站。
-  kind: "direct" | "prefix" | "luaskills_station";
+  // Mirror kind: direct GitHub or a prefix proxy.
+  // 镜像类型：直连 GitHub 或前缀代理。
+  kind: "direct" | "prefix";
   // Region the mirror mainly serves.
   // 镜像主要服务的区域。
   region: "china" | "global";
   // Mirror base URL that replaces https://github.com, null for direct GitHub.
   // 替换 https://github.com 的镜像基址；直连 GitHub 时为 null。
   githubBaseUrl: string | null;
-  // GitHub API base URL served by this mirror, null when it serves none.
-  // 该镜像提供的 GitHub API 基址；不提供时为 null。
-  githubApiBaseUrl: string | null;
 }
 
 // LuaSkillsGithubMirrorProbeTarget names one mirror to speed-test.

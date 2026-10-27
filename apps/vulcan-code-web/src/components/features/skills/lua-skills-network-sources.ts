@@ -83,9 +83,6 @@ export interface LuaSkillsMirrorChoice {
   // Download base URL, null for direct GitHub.
   // 下载基址；直连 GitHub 时为 null。
   githubBaseUrl: string | null
-  // API base URL applied together with the download base URL.
-  // 与下载基址一同应用的 API 基址。
-  githubApiBaseUrl: string | null
 }
 
 // mirrorChoices merges the built-in catalog with the user's mirrors in display order.
@@ -100,29 +97,24 @@ export function mirrorChoices(
       label: mirror.label,
       builtin: mirror,
       githubBaseUrl: mirror.githubBaseUrl,
-      githubApiBaseUrl: mirror.githubApiBaseUrl,
     })),
     ...customs.map((mirror) => ({
       id: mirror.id,
       label: mirror.label,
       builtin: null,
       githubBaseUrl: mirror.githubBaseUrl,
-      githubApiBaseUrl: null,
     })),
   ]
 }
 
-// activeMirrorId finds the mirror whose addresses equal the saved ones, or null for a hand-typed address.
-// activeMirrorId 找出地址与已保存值一致的镜像；手工填写的地址返回 null。
+// activeMirrorId finds the mirror whose download address equals the saved one, or null for a hand-typed address.
+// activeMirrorId 找出下载地址与已保存值一致的镜像；手工填写的地址返回 null。
 export function activeMirrorId(
   choices: readonly LuaSkillsMirrorChoice[],
   network: LuaSkillsNetworkSettings,
 ): string | null {
   const download = trimmedUrl(network.githubBaseUrl)
-  const api = trimmedUrl(network.githubApiBaseUrl)
-  return choices.find((choice) => (
-    trimmedUrl(choice.githubBaseUrl) === download && trimmedUrl(choice.githubApiBaseUrl) === api
-  ))?.id ?? null
+  return choices.find((choice) => trimmedUrl(choice.githubBaseUrl) === download)?.id ?? null
 }
 
 // customMirrorId derives a fresh identifier that cannot collide with existing mirrors.

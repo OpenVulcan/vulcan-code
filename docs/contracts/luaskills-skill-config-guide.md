@@ -386,8 +386,8 @@ Vulcan 的**配置侧已齐备**：`enable_private_url_skill_install` 与 `priva
 ### 13.7 网络来源：Hub 站点、GitHub 镜像与令牌
 
 - **即时生效**：下载开关、GitHub 下载/API 基址与 Hub 地址保存后由 `save_luaskills_runtime_settings` 在引擎写锁内直接调用 `set_network_options` 应用，不需要重启。只有私有清单策略（`enable_private_url_skill_install` 与允许列表）仍由 `LuaSkillsNetworkSettings::requires_engine_restart_from` 判定为需要重启。
-- **镜像目录**：内置镜像唯一来源是 LuaSkills 的 `builtin_github_mirrors`，宿主经 `service_luaskills_github_mirrors` 原样投影（`kind` 为 `direct`/`prefix`/`luaskills_station`，`region` 为 `china`/`global`）。用户镜像保存在 `network.customGithubMirrors`，保存时由 `luaskills_network::validated_custom_github_mirrors` 校验标识与名称并用上游 `normalize_github_mirror_base_url` 规范化地址；标识不得与内置镜像重复。镜像失败不自动换用其他镜像。
-- **测速**：`service_probe_luaskills_github_mirrors`（参数 `targets`，每项 `id` 与可空 `githubBaseUrl`）调用上游 `probe_github_mirrors`，样本路径、字节上限与超时使用上游默认值，宿主不另设边界。选用镜像时同时写入该镜像的下载与 API 基址。
+- **镜像目录**：内置镜像唯一来源是 LuaSkills 的 `builtin_github_mirrors`，宿主经 `service_luaskills_github_mirrors` 原样投影（`kind` 为 `direct`/`prefix`，`region` 为 `china`/`global`）。LuaSkills Hub 是独立发布体系，技能包下载地址由 Hub API 返回，不是 GitHub 镜像，不进入镜像目录。用户镜像保存在 `network.customGithubMirrors`，保存时由 `luaskills_network::validated_custom_github_mirrors` 校验标识与名称并用上游 `normalize_github_mirror_base_url` 规范化地址；标识不得与内置镜像重复。镜像失败不自动换用其他镜像。
+- **测速**：`service_probe_luaskills_github_mirrors`（参数 `targets`，每项 `id` 与可空 `githubBaseUrl`）调用上游 `probe_github_mirrors`，样本路径、字节上限与超时使用上游默认值，宿主不另设边界。选用镜像只写入下载基址；GitHub API 基址仍是独立的高级设置。
 - **GitHub 令牌**：只存放在操作系统凭据库（服务 `vulcan-code.luaskills.github-token-v1`，账户 `default`），绝不进入设置文件、应用数据库、日志或服务响应；目录只投影 `githubTokenConfigured`。`service_set_luaskills_github_token`（参数 `token`，`null` 表示清除）在管理锁下写入凭据库并立即应用到引擎；启动时读取失败只记录英文日志并以无令牌继续。令牌只由 LuaSkills 发给官方 GitHub API。
 - **账号区域提示**：已登录 OpenVulcan 账号的区域（`china`/`global`）与当前官方 Hub 站点不一致时，WebUI 在技能列表与“Hub 与下载源”页提示切换。用户确认才写入 Hub 地址；选择保留则把该区域写入 `network.dismissedHubRegionPrompts`，此后不再为该区域提示。自定义 Hub 不提示。
 

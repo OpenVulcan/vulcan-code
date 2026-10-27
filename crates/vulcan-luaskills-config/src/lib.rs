@@ -728,7 +728,7 @@ mod tests {
         let mut saved = running.clone();
         saved.network.allow_downloads = false;
         saved.network.github_base_url = Some("https://ghfast.top/https://github.com".to_string());
-        saved.network.github_api_base_url = Some("https://hub.luaskills.cn/github-api".to_string());
+        saved.network.github_api_base_url = Some("https://api.example.test".to_string());
         saved.network.official_skill_hub_base_url = Some("https://hub.luaskills.cn".to_string());
         saved
             .network
