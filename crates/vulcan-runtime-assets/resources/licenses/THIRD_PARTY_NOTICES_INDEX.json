@@ -2,7 +2,7 @@
   "schema_version": 2,
   "scope": "rust-desktop-dependencies",
   "source_file": "THIRD_PARTY_NOTICES.md",
-  "source_sha256": "a8b3c0e8c36925c5610b5da6df512813eb3fb3b8a0f7db1ee4d8aa74f90ba91f",
+  "source_sha256": "bed667c02a4b1717dc01debabeccd00bea6aba7d5db0a35095293454dcad0d15",
   "licenses": [
     {
       "id": "rust-license-1",
@@ -703,28 +703,16 @@
           "id": "rust-license-2-section-19",
           "dependencies": [
             {
-              "name": "lance-bitpacking",
-              "version": "11.0.0",
-              "source": "https://github.com/lance-format/lance"
-            }
-          ],
-          "start_line": 3951,
-          "end_line": 4206
-        },
-        {
-          "id": "rust-license-2-section-20",
-          "dependencies": [
-            {
               "name": "ipnet",
               "version": "2.12.1",
               "source": "https://github.com/krisprice/ipnet"
             }
           ],
-          "start_line": 4215,
-          "end_line": 4416
+          "start_line": 3951,
+          "end_line": 4152
         },
         {
-          "id": "rust-license-2-section-21",
+          "id": "rust-license-2-section-20",
           "dependencies": [
             {
               "name": "kasuari",
@@ -732,11 +720,11 @@
               "source": "https://github.com/ratatui/kasuari"
             }
           ],
-          "start_line": 4425,
-          "end_line": 4626
+          "start_line": 4161,
+          "end_line": 4362
         },
         {
-          "id": "rust-license-2-section-22",
+          "id": "rust-license-2-section-21",
           "dependencies": [
             {
               "name": "bytecount",
@@ -759,11 +747,11 @@
               "source": "https://github.com/retep998/winapi-rs"
             }
           ],
-          "start_line": 4638,
-          "end_line": 4839
+          "start_line": 4374,
+          "end_line": 4575
         },
         {
-          "id": "rust-license-2-section-23",
+          "id": "rust-license-2-section-22",
           "dependencies": [
             {
               "name": "cobs",
@@ -891,11 +879,11 @@
               "source": "https://github.com/swgillespie/unicode-categories"
             }
           ],
-          "start_line": 4872,
-          "end_line": 5074
+          "start_line": 4608,
+          "end_line": 4810
         },
         {
-          "id": "rust-license-2-section-24",
+          "id": "rust-license-2-section-23",
           "dependencies": [
             {
               "name": "async-broadcast",
@@ -903,11 +891,11 @@
               "source": "https://github.com/smol-rs/async-broadcast"
             }
           ],
-          "start_line": 5083,
-          "end_line": 5273
+          "start_line": 4819,
+          "end_line": 5009
         },
         {
-          "id": "rust-license-2-section-25",
+          "id": "rust-license-2-section-24",
           "dependencies": [
             {
               "name": "vulcan-apply-patch",
@@ -915,7 +903,19 @@
               "source": "https://crates.io/crates/vulcan-apply-patch"
             }
           ],
-          "start_line": 5282,
+          "start_line": 5018,
+          "end_line": 5219
+        },
+        {
+          "id": "rust-license-2-section-25",
+          "dependencies": [
+            {
+              "name": "lance-bitpacking",
+              "version": "11.0.0",
+              "source": "https://github.com/lance-format/lance"
+            }
+          ],
+          "start_line": 5228,
           "end_line": 5483
         },
         {
@@ -2934,6 +2934,11 @@
               "source": "https://github.com/serde-rs/json"
             },
             {
+              "name": "serde_norway",
+              "version": "0.9.42",
+              "source": "https://github.com/cafkafk/serde-yaml"
+            },
+            {
               "name": "serde_path_to_error",
               "version": "0.1.20",
               "source": "https://github.com/dtolnay/path-to-error"
@@ -3079,8 +3084,8 @@
               "source": "https://github.com/gyscos/zstd-rs"
             }
           ],
-          "start_line": 12976,
-          "end_line": 13049
+          "start_line": 12977,
+          "end_line": 13050
         },
         {
           "id": "rust-license-2-section-63",
@@ -3091,8 +3096,8 @@
               "source": "https://github.com/chronotope/chrono-tz"
             }
           ],
-          "start_line": 13058,
-          "end_line": 13286
+          "start_line": 13059,
+          "end_line": 13287
         },
         {
           "id": "rust-license-2-section-64",
@@ -3103,8 +3108,8 @@
               "source": "https://github.com/chronotope/chrono"
             }
           ],
-          "start_line": 13295,
-          "end_line": 13535
+          "start_line": 13296,
+          "end_line": 13536
         }
       ]
     },
@@ -3122,8 +3127,8 @@
               "source": "https://github.com/MnO2/cedarwood"
             }
           ],
-          "start_line": 13544,
-          "end_line": 13570
+          "start_line": 13545,
+          "end_line": 13571
         },
         {
           "id": "rust-license-3-section-2",
@@ -3134,8 +3139,8 @@
               "source": "https://github.com/droundy/arrayref"
             }
           ],
-          "start_line": 13579,
-          "end_line": 13605
+          "start_line": 13580,
+          "end_line": 13606
         }
       ]
     },
@@ -3158,8 +3163,8 @@
               "source": "https://github.com/ibraheemdev/matchit"
             }
           ],
-          "start_line": 13615,
-          "end_line": 13644
+          "start_line": 13616,
+          "end_line": 13645
         },
         {
           "id": "rust-license-4-section-2",
@@ -3180,8 +3185,8 @@
               "source": "https://github.com/dropbox/rust-brotli"
             }
           ],
-          "start_line": 13655,
-          "end_line": 13667
+          "start_line": 13656,
+          "end_line": 13668
         },
         {
           "id": "rust-license-4-section-3",
@@ -3192,8 +3197,8 @@
               "source": "https://github.com/dalek-cryptography/subtle"
             }
           ],
-          "start_line": 13676,
-          "end_line": 13705
+          "start_line": 13677,
+          "end_line": 13706
         },
         {
           "id": "rust-license-4-section-4",
@@ -3204,8 +3209,8 @@
               "source": "https://github.com/dalek-cryptography/curve25519-dalek/tree/main/curve25519-dalek"
             }
           ],
-          "start_line": 13714,
-          "end_line": 13743
+          "start_line": 13715,
+          "end_line": 13744
         },
         {
           "id": "rust-license-4-section-5",
@@ -3216,8 +3221,8 @@
               "source": "https://github.com/dalek-cryptography/curve25519-dalek/tree/main/ed25519-dalek"
             }
           ],
-          "start_line": 13752,
-          "end_line": 13780
+          "start_line": 13753,
+          "end_line": 13781
         },
         {
           "id": "rust-license-4-section-6",
@@ -3228,8 +3233,8 @@
               "source": "https://github.com/Xuanwo/frostem"
             }
           ],
-          "start_line": 13789,
-          "end_line": 13819
+          "start_line": 13790,
+          "end_line": 13820
         },
         {
           "id": "rust-license-4-section-7",
@@ -3250,8 +3255,8 @@
               "source": "https://github.com/mitsuhiko/sha1-smol"
             }
           ],
-          "start_line": 13830,
-          "end_line": 13841
+          "start_line": 13831,
+          "end_line": 13842
         },
         {
           "id": "rust-license-4-section-8",
@@ -3262,8 +3267,8 @@
               "source": "https://github.com/hsivonen/encoding_rs"
             }
           ],
-          "start_line": 13850,
-          "end_line": 13876
+          "start_line": 13851,
+          "end_line": 13877
         }
       ]
     },
@@ -3281,8 +3286,8 @@
               "source": "https://github.com/DoumanAsh/xxhash-rust"
             }
           ],
-          "start_line": 13885,
-          "end_line": 13908
+          "start_line": 13886,
+          "end_line": 13909
         }
       ]
     },
@@ -3300,8 +3305,8 @@
               "source": "https://github.com/notify-rs/notify.git"
             }
           ],
-          "start_line": 13917,
-          "end_line": 13957
+          "start_line": 13918,
+          "end_line": 13958
         }
       ]
     },
@@ -3319,8 +3324,8 @@
               "source": "https://github.com/rustls/webpki-roots"
             }
           ],
-          "start_line": 13966,
-          "end_line": 14027
+          "start_line": 13967,
+          "end_line": 14028
         }
       ]
     },
@@ -3338,8 +3343,8 @@
               "source": "https://github.com/briansmith/untrusted"
             }
           ],
-          "start_line": 14036,
-          "end_line": 14049
+          "start_line": 14037,
+          "end_line": 14050
         },
         {
           "id": "rust-license-8-section-2",
@@ -3350,8 +3355,8 @@
               "source": "https://github.com/hannobraun/inotify-sys"
             }
           ],
-          "start_line": 14058,
-          "end_line": 14070
+          "start_line": 14059,
+          "end_line": 14071
         },
         {
           "id": "rust-license-8-section-3",
@@ -3362,8 +3367,8 @@
               "source": "https://github.com/hannobraun/inotify-rs"
             }
           ],
-          "start_line": 14079,
-          "end_line": 14092
+          "start_line": 14080,
+          "end_line": 14093
         },
         {
           "id": "rust-license-8-section-4",
@@ -3374,8 +3379,8 @@
               "source": "https://github.com/briansmith/ring"
             }
           ],
-          "start_line": 14101,
-          "end_line": 14114
+          "start_line": 14102,
+          "end_line": 14115
         },
         {
           "id": "rust-license-8-section-5",
@@ -3396,8 +3401,8 @@
               "source": "https://github.com/nagisa/rust_libloading/"
             }
           ],
-          "start_line": 14125,
-          "end_line": 14137
+          "start_line": 14126,
+          "end_line": 14138
         },
         {
           "id": "rust-license-8-section-6",
@@ -3408,8 +3413,8 @@
               "source": "https://github.com/rustls/webpki"
             }
           ],
-          "start_line": 14146,
-          "end_line": 14165
+          "start_line": 14147,
+          "end_line": 14166
         },
         {
           "id": "rust-license-8-section-7",
@@ -3425,8 +3430,8 @@
               "source": "https://github.com/aws/aws-lc-rs"
             }
           ],
-          "start_line": 14175,
-          "end_line": 14183
+          "start_line": 14176,
+          "end_line": 14184
         }
       ]
     },
@@ -3444,8 +3449,8 @@
               "source": "https://github.com/acatton/serde-yaml-ng"
             }
           ],
-          "start_line": 14192,
-          "end_line": 14214
+          "start_line": 14193,
+          "end_line": 14215
         },
         {
           "id": "rust-license-9-section-2",
@@ -3456,8 +3461,8 @@
               "source": "https://github.com/haraldh/rust_uds_windows"
             }
           ],
-          "start_line": 14223,
-          "end_line": 14244
+          "start_line": 14224,
+          "end_line": 14245
         },
         {
           "id": "rust-license-9-section-3",
@@ -3468,8 +3473,8 @@
               "source": "https://github.com/ratatui/instability"
             }
           ],
-          "start_line": 14253,
-          "end_line": 14275
+          "start_line": 14254,
+          "end_line": 14276
         },
         {
           "id": "rust-license-9-section-4",
@@ -3480,8 +3485,8 @@
               "source": "https://github.com/mlua-rs/mlua"
             }
           ],
-          "start_line": 14284,
-          "end_line": 14309
+          "start_line": 14285,
+          "end_line": 14310
         },
         {
           "id": "rust-license-9-section-5",
@@ -3492,8 +3497,8 @@
               "source": "https://github.com/dropbox/rust-brotli"
             }
           ],
-          "start_line": 14318,
-          "end_line": 14337
+          "start_line": 14319,
+          "end_line": 14338
         },
         {
           "id": "rust-license-9-section-6",
@@ -3504,8 +3509,8 @@
               "source": "https://github.com/tokio-rs/mio"
             }
           ],
-          "start_line": 14346,
-          "end_line": 14365
+          "start_line": 14347,
+          "end_line": 14366
         },
         {
           "id": "rust-license-9-section-7",
@@ -3521,8 +3526,8 @@
               "source": "https://github.com/rusqlite/rusqlite"
             }
           ],
-          "start_line": 14375,
-          "end_line": 14394
+          "start_line": 14376,
+          "end_line": 14395
         },
         {
           "id": "rust-license-9-section-8",
@@ -3538,8 +3543,8 @@
               "source": "https://github.com/rust-bakery/nom"
             }
           ],
-          "start_line": 14404,
-          "end_line": 14424
+          "start_line": 14405,
+          "end_line": 14425
         },
         {
           "id": "rust-license-9-section-9",
@@ -3550,8 +3555,8 @@
               "source": "https://github.com/hyperium/hyper"
             }
           ],
-          "start_line": 14433,
-          "end_line": 14452
+          "start_line": 14434,
+          "end_line": 14453
         },
         {
           "id": "rust-license-9-section-10",
@@ -3562,8 +3567,8 @@
               "source": "https://github.com/gentoo90/winreg-rs"
             }
           ],
-          "start_line": 14461,
-          "end_line": 14480
+          "start_line": 14462,
+          "end_line": 14481
         },
         {
           "id": "rust-license-9-section-11",
@@ -3579,8 +3584,8 @@
               "source": "https://github.com/reem/rust-ordered-float"
             }
           ],
-          "start_line": 14490,
-          "end_line": 14515
+          "start_line": 14491,
+          "end_line": 14516
         },
         {
           "id": "rust-license-9-section-12",
@@ -3591,8 +3596,8 @@
               "source": "https://github.com/harryfei/which-rs.git"
             }
           ],
-          "start_line": 14524,
-          "end_line": 14543
+          "start_line": 14525,
+          "end_line": 14544
         },
         {
           "id": "rust-license-9-section-13",
@@ -3603,8 +3608,8 @@
               "source": "https://github.com/steffengy/schannel-rs"
             }
           ],
-          "start_line": 14552,
-          "end_line": 14559
+          "start_line": 14553,
+          "end_line": 14560
         },
         {
           "id": "rust-license-9-section-14",
@@ -3615,8 +3620,8 @@
               "source": "https://github.com/arcnmx/serde-value"
             }
           ],
-          "start_line": 14568,
-          "end_line": 14587
+          "start_line": 14569,
+          "end_line": 14588
         },
         {
           "id": "rust-license-9-section-15",
@@ -3627,8 +3632,8 @@
               "source": "https://github.com/snapview/tokio-tungstenite"
             }
           ],
-          "start_line": 14596,
-          "end_line": 14616
+          "start_line": 14597,
+          "end_line": 14617
         },
         {
           "id": "rust-license-9-section-16",
@@ -3639,8 +3644,8 @@
               "source": "https://github.com/Gilnaa/memoffset"
             }
           ],
-          "start_line": 14625,
-          "end_line": 14643
+          "start_line": 14626,
+          "end_line": 14644
         },
         {
           "id": "rust-license-9-section-17",
@@ -3651,8 +3656,8 @@
               "source": "https://gitlab.com/timvisee/version-compare"
             }
           ],
-          "start_line": 14652,
-          "end_line": 14672
+          "start_line": 14653,
+          "end_line": 14673
         },
         {
           "id": "rust-license-9-section-18",
@@ -3663,8 +3668,8 @@
               "source": "https://github.com/hyperium/h2"
             }
           ],
-          "start_line": 14681,
-          "end_line": 14706
+          "start_line": 14682,
+          "end_line": 14707
         },
         {
           "id": "rust-license-9-section-19",
@@ -3675,8 +3680,8 @@
               "source": "https://github.com/tokio-rs/bytes"
             }
           ],
-          "start_line": 14715,
-          "end_line": 14740
+          "start_line": 14716,
+          "end_line": 14741
         },
         {
           "id": "rust-license-9-section-20",
@@ -3687,8 +3692,8 @@
               "source": "https://github.com/seanmonstar/want"
             }
           ],
-          "start_line": 14749,
-          "end_line": 14769
+          "start_line": 14750,
+          "end_line": 14770
         },
         {
           "id": "rust-license-9-section-21",
@@ -3699,8 +3704,8 @@
               "source": "https://github.com/seanmonstar/try-lock"
             }
           ],
-          "start_line": 14778,
-          "end_line": 14799
+          "start_line": 14779,
+          "end_line": 14800
         },
         {
           "id": "rust-license-9-section-22",
@@ -3711,8 +3716,8 @@
               "source": "https://github.com/tokio-rs/axum"
             }
           ],
-          "start_line": 14808,
-          "end_line": 14833
+          "start_line": 14809,
+          "end_line": 14834
         },
         {
           "id": "rust-license-9-section-23",
@@ -3723,8 +3728,8 @@
               "source": "https://github.com/tokio-rs/slab"
             }
           ],
-          "start_line": 14842,
-          "end_line": 14867
+          "start_line": 14843,
+          "end_line": 14868
         },
         {
           "id": "rust-license-9-section-24",
@@ -3735,8 +3740,8 @@
               "source": "https://github.com/hawkw/sharded-slab"
             }
           ],
-          "start_line": 14876,
-          "end_line": 14895
+          "start_line": 14877,
+          "end_line": 14896
         },
         {
           "id": "rust-license-9-section-25",
@@ -3747,8 +3752,8 @@
               "source": "https://github.com/hawkw/matchers"
             }
           ],
-          "start_line": 14904,
-          "end_line": 14923
+          "start_line": 14905,
+          "end_line": 14924
         },
         {
           "id": "rust-license-9-section-26",
@@ -3784,8 +3789,8 @@
               "source": "https://github.com/tokio-rs/tracing"
             }
           ],
-          "start_line": 14937,
-          "end_line": 14962
+          "start_line": 14938,
+          "end_line": 14963
         },
         {
           "id": "rust-license-9-section-27",
@@ -3806,8 +3811,8 @@
               "source": "https://github.com/tower-rs/tower"
             }
           ],
-          "start_line": 14973,
-          "end_line": 14998
+          "start_line": 14974,
+          "end_line": 14999
         },
         {
           "id": "rust-license-9-section-28",
@@ -3818,8 +3823,8 @@
               "source": "https://github.com/tokio-rs/axum"
             }
           ],
-          "start_line": 15007,
-          "end_line": 15032
+          "start_line": 15008,
+          "end_line": 15033
         },
         {
           "id": "rust-license-9-section-29",
@@ -3835,8 +3840,8 @@
               "source": "https://github.com/tower-rs/tower-http"
             }
           ],
-          "start_line": 15042,
-          "end_line": 15067
+          "start_line": 15043,
+          "end_line": 15068
         },
         {
           "id": "rust-license-9-section-30",
@@ -3852,8 +3857,8 @@
               "source": "https://github.com/hyperium/http-body"
             }
           ],
-          "start_line": 15077,
-          "end_line": 15102
+          "start_line": 15078,
+          "end_line": 15103
         },
         {
           "id": "rust-license-9-section-31",
@@ -3864,8 +3869,8 @@
               "source": "https://github.com/hyperium/hyper-util"
             }
           ],
-          "start_line": 15111,
-          "end_line": 15130
+          "start_line": 15112,
+          "end_line": 15131
         },
         {
           "id": "rust-license-9-section-32",
@@ -3876,8 +3881,8 @@
               "source": "https://github.com/yegor256/micromap"
             }
           ],
-          "start_line": 15139,
-          "end_line": 15158
+          "start_line": 15140,
+          "end_line": 15159
         },
         {
           "id": "rust-license-9-section-33",
@@ -3888,8 +3893,8 @@
               "source": "https://github.com/ratatui/ratatui"
             }
           ],
-          "start_line": 15167,
-          "end_line": 15187
+          "start_line": 15168,
+          "end_line": 15188
         },
         {
           "id": "rust-license-9-section-34",
@@ -3920,8 +3925,8 @@
               "source": "https://github.com/z-galaxy/zbus/"
             }
           ],
-          "start_line": 15200,
-          "end_line": 15225
+          "start_line": 15201,
+          "end_line": 15226
         },
         {
           "id": "rust-license-9-section-35",
@@ -3937,8 +3942,8 @@
               "source": "https://github.com/hyperium/tonic"
             }
           ],
-          "start_line": 15235,
-          "end_line": 15254
+          "start_line": 15236,
+          "end_line": 15255
         },
         {
           "id": "rust-license-9-section-36",
@@ -3949,8 +3954,8 @@
               "source": "https://github.com/z-galaxy/zcheapstr/"
             }
           ],
-          "start_line": 15263,
-          "end_line": 15288
+          "start_line": 15264,
+          "end_line": 15289
         },
         {
           "id": "rust-license-9-section-37",
@@ -3961,8 +3966,8 @@
               "source": "https://github.com/BenjaminRi/winresource"
             }
           ],
-          "start_line": 15297,
-          "end_line": 15322
+          "start_line": 15298,
+          "end_line": 15323
         },
         {
           "id": "rust-license-9-section-38",
@@ -3973,8 +3978,8 @@
               "source": "https://github.com/mystor/synstructure"
             }
           ],
-          "start_line": 15331,
-          "end_line": 15338
+          "start_line": 15332,
+          "end_line": 15339
         },
         {
           "id": "rust-license-9-section-39",
@@ -3985,8 +3990,8 @@
               "source": "https://github.com/rkyv/bytecheck"
             }
           ],
-          "start_line": 15347,
-          "end_line": 15354
+          "start_line": 15348,
+          "end_line": 15355
         },
         {
           "id": "rust-license-9-section-40",
@@ -3997,8 +4002,8 @@
               "source": "https://github.com/tokio-rs/axum"
             }
           ],
-          "start_line": 15363,
-          "end_line": 15370
+          "start_line": 15364,
+          "end_line": 15371
         },
         {
           "id": "rust-license-9-section-41",
@@ -4029,8 +4034,8 @@
               "source": "https://github.com/rkyv/rkyv"
             }
           ],
-          "start_line": 15383,
-          "end_line": 15390
+          "start_line": 15384,
+          "end_line": 15391
         },
         {
           "id": "rust-license-9-section-42",
@@ -4046,8 +4051,8 @@
               "source": "https://github.com/rkyv/rancor"
             }
           ],
-          "start_line": 15400,
-          "end_line": 15407
+          "start_line": 15401,
+          "end_line": 15408
         },
         {
           "id": "rust-license-9-section-43",
@@ -4063,8 +4068,8 @@
               "source": "https://github.com/djkoloski/munge"
             }
           ],
-          "start_line": 15417,
-          "end_line": 15424
+          "start_line": 15418,
+          "end_line": 15425
         },
         {
           "id": "rust-license-9-section-44",
@@ -4075,8 +4080,8 @@
               "source": "https://github.com/pdf-rs/fax"
             }
           ],
-          "start_line": 15433,
-          "end_line": 15440
+          "start_line": 15434,
+          "end_line": 15441
         },
         {
           "id": "rust-license-9-section-45",
@@ -4087,8 +4092,8 @@
               "source": "https://github.com/jeromefroe/lru-rs.git"
             }
           ],
-          "start_line": 15449,
-          "end_line": 15469
+          "start_line": 15450,
+          "end_line": 15470
         },
         {
           "id": "rust-license-9-section-46",
@@ -4099,8 +4104,8 @@
               "source": "https://github.com/bancek/rust-http-range.git"
             }
           ],
-          "start_line": 15478,
-          "end_line": 15499
+          "start_line": 15479,
+          "end_line": 15500
         },
         {
           "id": "rust-license-9-section-47",
@@ -4111,8 +4116,8 @@
               "source": "https://github.com/pacman82/atoi-rs"
             }
           ],
-          "start_line": 15508,
-          "end_line": 15529
+          "start_line": 15509,
+          "end_line": 15530
         },
         {
           "id": "rust-license-9-section-48",
@@ -4123,8 +4128,8 @@
               "source": "https://github.com/webdesus/fs_extra"
             }
           ],
-          "start_line": 15538,
-          "end_line": 15559
+          "start_line": 15539,
+          "end_line": 15560
         },
         {
           "id": "rust-license-9-section-49",
@@ -4135,8 +4140,8 @@
               "source": "https://github.com/myrrlyn/tap"
             }
           ],
-          "start_line": 15568,
-          "end_line": 15589
+          "start_line": 15569,
+          "end_line": 15590
         },
         {
           "id": "rust-license-9-section-50",
@@ -4147,8 +4152,8 @@
               "source": "https://github.com/vitiral/std_prelude"
             }
           ],
-          "start_line": 15598,
-          "end_line": 15620
+          "start_line": 15599,
+          "end_line": 15621
         },
         {
           "id": "rust-license-9-section-51",
@@ -4199,8 +4204,8 @@
               "source": "https://github.com/TedDriggs/darling"
             }
           ],
-          "start_line": 15637,
-          "end_line": 15658
+          "start_line": 15638,
+          "end_line": 15659
         },
         {
           "id": "rust-license-9-section-52",
@@ -4211,8 +4216,8 @@
               "source": "https://github.com/image-rs/image-tiff"
             }
           ],
-          "start_line": 15667,
-          "end_line": 15688
+          "start_line": 15668,
+          "end_line": 15689
         },
         {
           "id": "rust-license-9-section-53",
@@ -4228,8 +4233,8 @@
               "source": "https://github.com/wezterm/wezterm"
             }
           ],
-          "start_line": 15698,
-          "end_line": 15719
+          "start_line": 15699,
+          "end_line": 15720
         },
         {
           "id": "rust-license-9-section-54",
@@ -4245,8 +4250,8 @@
               "source": "https://github.com/myrrlyn/wyz"
             }
           ],
-          "start_line": 15729,
-          "end_line": 15750
+          "start_line": 15730,
+          "end_line": 15751
         },
         {
           "id": "rust-license-9-section-55",
@@ -4257,8 +4262,8 @@
               "source": "https://github.com/xacrimon/dashmap"
             }
           ],
-          "start_line": 15759,
-          "end_line": 15780
+          "start_line": 15760,
+          "end_line": 15781
         },
         {
           "id": "rust-license-9-section-56",
@@ -4269,8 +4274,8 @@
               "source": "https://github.com/nukesor/comfy-table"
             }
           ],
-          "start_line": 15789,
-          "end_line": 15810
+          "start_line": 15790,
+          "end_line": 15811
         },
         {
           "id": "rust-license-9-section-57",
@@ -4286,8 +4291,8 @@
               "source": "https://github.com/GREsau/schemars"
             }
           ],
-          "start_line": 15820,
-          "end_line": 15841
+          "start_line": 15821,
+          "end_line": 15842
         },
         {
           "id": "rust-license-9-section-58",
@@ -4303,8 +4308,8 @@
               "source": "https://github.com/Peternator7/strum"
             }
           ],
-          "start_line": 15851,
-          "end_line": 15872
+          "start_line": 15852,
+          "end_line": 15873
         },
         {
           "id": "rust-license-9-section-59",
@@ -4315,8 +4320,8 @@
               "source": "https://github.com/johnstonskj/rust-email_address.git"
             }
           ],
-          "start_line": 15881,
-          "end_line": 15902
+          "start_line": 15882,
+          "end_line": 15903
         },
         {
           "id": "rust-license-9-section-60",
@@ -4327,8 +4332,8 @@
               "source": "https://github.com/tokio-rs/tokio"
             }
           ],
-          "start_line": 15911,
-          "end_line": 15933
+          "start_line": 15912,
+          "end_line": 15934
         },
         {
           "id": "rust-license-9-section-61",
@@ -4339,8 +4344,8 @@
               "source": "https://github.com/bitvecto-rs/radium"
             }
           ],
-          "start_line": 15942,
-          "end_line": 15963
+          "start_line": 15943,
+          "end_line": 15964
         },
         {
           "id": "rust-license-9-section-62",
@@ -4351,8 +4356,8 @@
               "source": "https://github.com/tokio-rs/axum"
             }
           ],
-          "start_line": 15972,
-          "end_line": 15998
+          "start_line": 15973,
+          "end_line": 15999
         },
         {
           "id": "rust-license-9-section-63",
@@ -4363,8 +4368,8 @@
               "source": "https://github.com/tabac/hyperloglog.rs"
             }
           ],
-          "start_line": 16007,
-          "end_line": 16028
+          "start_line": 16008,
+          "end_line": 16029
         },
         {
           "id": "rust-license-9-section-64",
@@ -4380,8 +4385,8 @@
               "source": "https://github.com/katharostech/cfg_aliases"
             }
           ],
-          "start_line": 16038,
-          "end_line": 16047
+          "start_line": 16039,
+          "end_line": 16048
         },
         {
           "id": "rust-license-9-section-65",
@@ -4392,8 +4397,8 @@
               "source": "https://github.com/magiclen/unicode-blocks"
             }
           ],
-          "start_line": 16056,
-          "end_line": 16077
+          "start_line": 16057,
+          "end_line": 16078
         },
         {
           "id": "rust-license-9-section-66",
@@ -4404,8 +4409,8 @@
               "source": "https://github.com/myrrlyn/funty"
             }
           ],
-          "start_line": 16086,
-          "end_line": 16107
+          "start_line": 16087,
+          "end_line": 16108
         },
         {
           "id": "rust-license-9-section-67",
@@ -4416,8 +4421,8 @@
               "source": "https://github.com/apache/arrow-rs"
             }
           ],
-          "start_line": 16116,
-          "end_line": 16137
+          "start_line": 16117,
+          "end_line": 16138
         },
         {
           "id": "rust-license-9-section-68",
@@ -4428,8 +4433,8 @@
               "source": "https://github.com/mlua-rs/luajit-src-rs"
             }
           ],
-          "start_line": 16146,
-          "end_line": 16167
+          "start_line": 16147,
+          "end_line": 16168
         },
         {
           "id": "rust-license-9-section-69",
@@ -4445,8 +4450,8 @@
               "source": "https://github.com/Stranger6667/jsonschema"
             }
           ],
-          "start_line": 16177,
-          "end_line": 16198
+          "start_line": 16178,
+          "end_line": 16199
         },
         {
           "id": "rust-license-9-section-70",
@@ -4457,8 +4462,8 @@
               "source": "https://github.com/ParkMyCar/compact_str"
             }
           ],
-          "start_line": 16207,
-          "end_line": 16228
+          "start_line": 16208,
+          "end_line": 16229
         },
         {
           "id": "rust-license-9-section-71",
@@ -4469,8 +4474,8 @@
               "source": "https://gitlab.com/samsartor/async_cell"
             }
           ],
-          "start_line": 16237,
-          "end_line": 16258
+          "start_line": 16238,
+          "end_line": 16259
         },
         {
           "id": "rust-license-9-section-72",
@@ -4481,8 +4486,8 @@
               "source": "https://github.com/sagebind/castaway"
             }
           ],
-          "start_line": 16267,
-          "end_line": 16288
+          "start_line": 16268,
+          "end_line": 16289
         },
         {
           "id": "rust-license-9-section-73",
@@ -4493,8 +4498,8 @@
               "source": "https://github.com/arthurprs/quick-cache"
             }
           ],
-          "start_line": 16297,
-          "end_line": 16318
+          "start_line": 16298,
+          "end_line": 16319
         },
         {
           "id": "rust-license-9-section-74",
@@ -4510,8 +4515,8 @@
               "source": "https://github.com/ibraheemdev/matchit"
             }
           ],
-          "start_line": 16328,
-          "end_line": 16349
+          "start_line": 16329,
+          "end_line": 16350
         },
         {
           "id": "rust-license-9-section-75",
@@ -4522,8 +4527,8 @@
               "source": "https://github.com/Nugine/outref"
             }
           ],
-          "start_line": 16358,
-          "end_line": 16378
+          "start_line": 16359,
+          "end_line": 16379
         },
         {
           "id": "rust-license-9-section-76",
@@ -4539,8 +4544,8 @@
               "source": "https://github.com/TheLarkInn/is-wsl"
             }
           ],
-          "start_line": 16388,
-          "end_line": 16409
+          "start_line": 16389,
+          "end_line": 16410
         },
         {
           "id": "rust-license-9-section-77",
@@ -4551,8 +4556,8 @@
               "source": "https://github.com/yescallop/fluent-uri-rs"
             }
           ],
-          "start_line": 16418,
-          "end_line": 16438
+          "start_line": 16419,
+          "end_line": 16439
         },
         {
           "id": "rust-license-9-section-78",
@@ -4563,23 +4568,11 @@
               "source": "https://github.com/rutrum/convert-case"
             }
           ],
-          "start_line": 16447,
-          "end_line": 16467
+          "start_line": 16448,
+          "end_line": 16468
         },
         {
           "id": "rust-license-9-section-79",
-          "dependencies": [
-            {
-              "name": "luaskills",
-              "version": "0.6.1",
-              "source": "https://github.com/LuaSkills/luaskills"
-            }
-          ],
-          "start_line": 16476,
-          "end_line": 16497
-        },
-        {
-          "id": "rust-license-9-section-80",
           "dependencies": [
             {
               "name": "vulcan-code-service",
@@ -5012,11 +5005,11 @@
               "source": "https://github.com/Nugine/simd"
             }
           ],
-          "start_line": 16591,
-          "end_line": 16609
+          "start_line": 16562,
+          "end_line": 16580
         },
         {
-          "id": "rust-license-9-section-81",
+          "id": "rust-license-9-section-80",
           "dependencies": [
             {
               "name": "tokio-stream",
@@ -5034,11 +5027,11 @@
               "source": "https://github.com/tokio-rs/tokio"
             }
           ],
-          "start_line": 16620,
-          "end_line": 16641
+          "start_line": 16591,
+          "end_line": 16612
         },
         {
-          "id": "rust-license-9-section-82",
+          "id": "rust-license-9-section-81",
           "dependencies": [
             {
               "name": "simd-adler32",
@@ -5046,11 +5039,11 @@
               "source": "https://github.com/mcountryman/simd-adler32"
             }
           ],
-          "start_line": 16650,
-          "end_line": 16671
+          "start_line": 16621,
+          "end_line": 16642
         },
         {
-          "id": "rust-license-9-section-83",
+          "id": "rust-license-9-section-82",
           "dependencies": [
             {
               "name": "crossterm",
@@ -5063,8 +5056,20 @@
               "source": "https://github.com/crossterm-rs/crossterm-winapi"
             }
           ],
-          "start_line": 16681,
-          "end_line": 16702
+          "start_line": 16652,
+          "end_line": 16673
+        },
+        {
+          "id": "rust-license-9-section-83",
+          "dependencies": [
+            {
+              "name": "luaskills",
+              "version": "0.7.0",
+              "source": "https://github.com/LuaSkills/luaskills"
+            }
+          ],
+          "start_line": 16682,
+          "end_line": 16703
         },
         {
           "id": "rust-license-9-section-84",
@@ -5073,6 +5078,11 @@
               "name": "endi",
               "version": "1.1.1",
               "source": "https://github.com/zeenix/endi"
+            },
+            {
+              "name": "unsafe-libyaml-norway",
+              "version": "0.2.15",
+              "source": "https://github.com/cafkafk/unsafe-libyaml-norway"
             },
             {
               "name": "unsafe-libyaml",
@@ -5090,8 +5100,8 @@
               "source": "https://github.com/z-galaxy/zbus/"
             }
           ],
-          "start_line": 16714,
-          "end_line": 16737
+          "start_line": 16716,
+          "end_line": 16739
         },
         {
           "id": "rust-license-9-section-85",
@@ -5107,8 +5117,8 @@
               "source": "https://github.com/winnow-rs/winnow"
             }
           ],
-          "start_line": 16747,
-          "end_line": 16765
+          "start_line": 16749,
+          "end_line": 16767
         },
         {
           "id": "rust-license-9-section-86",
@@ -5214,8 +5224,8 @@
               "source": "https://github.com/gtk-rs/gtk-rs-core"
             }
           ],
-          "start_line": 16793,
-          "end_line": 16811
+          "start_line": 16795,
+          "end_line": 16813
         },
         {
           "id": "rust-license-9-section-87",
@@ -5231,8 +5241,8 @@
               "source": "https://github.com/sile/libflate"
             }
           ],
-          "start_line": 16821,
-          "end_line": 16842
+          "start_line": 16823,
+          "end_line": 16844
         },
         {
           "id": "rust-license-9-section-88",
@@ -5248,8 +5258,8 @@
               "source": "https://github.com/raphlinus/pulldown-cmark"
             }
           ],
-          "start_line": 16852,
-          "end_line": 16873
+          "start_line": 16854,
+          "end_line": 16875
         },
         {
           "id": "rust-license-9-section-89",
@@ -5265,8 +5275,8 @@
               "source": "https://github.com/fancy-regex/fancy-regex"
             }
           ],
-          "start_line": 16883,
-          "end_line": 16904
+          "start_line": 16885,
+          "end_line": 16906
         },
         {
           "id": "rust-license-9-section-90",
@@ -5277,23 +5287,11 @@
               "source": "https://github.com/zip-rs/zip2"
             }
           ],
-          "start_line": 16913,
-          "end_line": 16934
+          "start_line": 16915,
+          "end_line": 16936
         },
         {
           "id": "rust-license-9-section-91",
-          "dependencies": [
-            {
-              "name": "zip",
-              "version": "2.4.2",
-              "source": "https://github.com/zip-rs/zip2.git"
-            }
-          ],
-          "start_line": 16943,
-          "end_line": 16966
-        },
-        {
-          "id": "rust-license-9-section-92",
           "dependencies": [
             {
               "name": "phf",
@@ -5326,11 +5324,11 @@
               "source": "https://github.com/rust-phf/rust-phf"
             }
           ],
-          "start_line": 16980,
-          "end_line": 17000
+          "start_line": 16950,
+          "end_line": 16970
         },
         {
-          "id": "rust-license-9-section-93",
+          "id": "rust-license-9-section-92",
           "dependencies": [
             {
               "name": "aho-corasick",
@@ -5408,11 +5406,11 @@
               "source": "https://github.com/BurntSushi/walkdir"
             }
           ],
-          "start_line": 17023,
-          "end_line": 17044
+          "start_line": 16993,
+          "end_line": 17014
         },
         {
-          "id": "rust-license-9-section-94",
+          "id": "rust-license-9-section-93",
           "dependencies": [
             {
               "name": "lz4-sys",
@@ -5425,11 +5423,11 @@
               "source": "https://github.com/10xGenomics/lz4-rs"
             }
           ],
-          "start_line": 17054,
-          "end_line": 17076
+          "start_line": 17024,
+          "end_line": 17046
         },
         {
-          "id": "rust-license-9-section-95",
+          "id": "rust-license-9-section-94",
           "dependencies": [
             {
               "name": "nix",
@@ -5442,11 +5440,11 @@
               "source": "https://github.com/nix-rust/nix"
             }
           ],
-          "start_line": 17086,
-          "end_line": 17107
+          "start_line": 17056,
+          "end_line": 17077
         },
         {
-          "id": "rust-license-9-section-96",
+          "id": "rust-license-9-section-95",
           "dependencies": [
             {
               "name": "strsim",
@@ -5454,11 +5452,11 @@
               "source": "https://github.com/rapidfuzz/strsim-rs"
             }
           ],
-          "start_line": 17116,
-          "end_line": 17139
+          "start_line": 17086,
+          "end_line": 17109
         },
         {
-          "id": "rust-license-9-section-97",
+          "id": "rust-license-9-section-96",
           "dependencies": [
             {
               "name": "twox-hash",
@@ -5466,11 +5464,11 @@
               "source": "https://github.com/shepmaster/twox-hash"
             }
           ],
-          "start_line": 17148,
-          "end_line": 17169
+          "start_line": 17118,
+          "end_line": 17139
         },
         {
-          "id": "rust-license-9-section-98",
+          "id": "rust-license-9-section-97",
           "dependencies": [
             {
               "name": "fsevent-sys",
@@ -5478,11 +5476,11 @@
               "source": "https://github.com/octplane/fsevent-rust/tree/master/fsevent-sys"
             }
           ],
-          "start_line": 17178,
-          "end_line": 17200
+          "start_line": 17148,
+          "end_line": 17170
         },
         {
-          "id": "rust-license-9-section-99",
+          "id": "rust-license-9-section-98",
           "dependencies": [
             {
               "name": "data-encoding",
@@ -5490,11 +5488,11 @@
               "source": "https://github.com/ia0/data-encoding"
             }
           ],
-          "start_line": 17209,
-          "end_line": 17231
+          "start_line": 17179,
+          "end_line": 17201
         },
         {
-          "id": "rust-license-9-section-100",
+          "id": "rust-license-9-section-99",
           "dependencies": [
             {
               "name": "aws-lc-sys",
@@ -5502,11 +5500,11 @@
               "source": "https://github.com/aws/aws-lc-rs"
             }
           ],
-          "start_line": 17240,
-          "end_line": 17262
+          "start_line": 17210,
+          "end_line": 17232
         },
         {
-          "id": "rust-license-9-section-101",
+          "id": "rust-license-9-section-100",
           "dependencies": [
             {
               "name": "derive_more-impl",
@@ -5519,11 +5517,11 @@
               "source": "https://github.com/JelteF/derive_more"
             }
           ],
-          "start_line": 17272,
-          "end_line": 17293
+          "start_line": 17242,
+          "end_line": 17263
         },
         {
-          "id": "rust-license-9-section-102",
+          "id": "rust-license-9-section-101",
           "dependencies": [
             {
               "name": "vt100",
@@ -5531,11 +5529,11 @@
               "source": "https://github.com/doy/vt100-rust"
             }
           ],
-          "start_line": 17302,
-          "end_line": 17323
+          "start_line": 17272,
+          "end_line": 17293
         },
         {
-          "id": "rust-license-9-section-103",
+          "id": "rust-license-9-section-102",
           "dependencies": [
             {
               "name": "color_quant",
@@ -5543,11 +5541,11 @@
               "source": "https://github.com/image-rs/color_quant.git"
             }
           ],
-          "start_line": 17332,
-          "end_line": 17353
+          "start_line": 17302,
+          "end_line": 17323
         },
         {
-          "id": "rust-license-9-section-104",
+          "id": "rust-license-9-section-103",
           "dependencies": [
             {
               "name": "ratatui-core",
@@ -5570,11 +5568,11 @@
               "source": "https://github.com/ratatui/ratatui"
             }
           ],
-          "start_line": 17365,
-          "end_line": 17387
+          "start_line": 17335,
+          "end_line": 17357
         },
         {
-          "id": "rust-license-9-section-105",
+          "id": "rust-license-9-section-104",
           "dependencies": [
             {
               "name": "same-file",
@@ -5587,11 +5585,11 @@
               "source": "https://github.com/BurntSushi/winapi-util"
             }
           ],
-          "start_line": 17397,
-          "end_line": 17418
+          "start_line": 17367,
+          "end_line": 17388
         },
         {
-          "id": "rust-license-9-section-106",
+          "id": "rust-license-9-section-105",
           "dependencies": [
             {
               "name": "lz4_flex",
@@ -5599,11 +5597,11 @@
               "source": "https://github.com/pseitz/lz4_flex"
             }
           ],
-          "start_line": 17427,
-          "end_line": 17447
+          "start_line": 17397,
+          "end_line": 17417
         },
         {
-          "id": "rust-license-9-section-107",
+          "id": "rust-license-9-section-106",
           "dependencies": [
             {
               "name": "crunchy",
@@ -5611,11 +5609,11 @@
               "source": "https://github.com/eira-fransham/crunchy"
             }
           ],
-          "start_line": 17456,
-          "end_line": 17477
+          "start_line": 17426,
+          "end_line": 17447
         },
         {
-          "id": "rust-license-9-section-108",
+          "id": "rust-license-9-section-107",
           "dependencies": [
             {
               "name": "open",
@@ -5623,11 +5621,11 @@
               "source": "https://github.com/Byron/open-rs"
             }
           ],
-          "start_line": 17486,
-          "end_line": 17511
+          "start_line": 17456,
+          "end_line": 17481
         },
         {
-          "id": "rust-license-9-section-109",
+          "id": "rust-license-9-section-108",
           "dependencies": [
             {
               "name": "zstd",
@@ -5635,11 +5633,11 @@
               "source": "https://github.com/gyscos/zstd-rs"
             }
           ],
-          "start_line": 17520,
-          "end_line": 17528
+          "start_line": 17490,
+          "end_line": 17498
         },
         {
-          "id": "rust-license-9-section-110",
+          "id": "rust-license-9-section-109",
           "dependencies": [
             {
               "name": "nu-ansi-term",
@@ -5647,11 +5645,11 @@
               "source": "https://github.com/nushell/nu-ansi-term"
             }
           ],
-          "start_line": 17537,
-          "end_line": 17559
+          "start_line": 17507,
+          "end_line": 17529
         },
         {
-          "id": "rust-license-9-section-111",
+          "id": "rust-license-9-section-110",
           "dependencies": [
             {
               "name": "mime_guess",
@@ -5659,11 +5657,11 @@
               "source": "https://github.com/abonander/mime_guess"
             }
           ],
-          "start_line": 17568,
-          "end_line": 17590
+          "start_line": 17538,
+          "end_line": 17560
         },
         {
-          "id": "rust-license-9-section-112",
+          "id": "rust-license-9-section-111",
           "dependencies": [
             {
               "name": "generic-array",
@@ -5671,11 +5669,11 @@
               "source": "https://github.com/fizyk20/generic-array.git"
             }
           ],
-          "start_line": 17599,
-          "end_line": 17619
+          "start_line": 17569,
+          "end_line": 17589
         },
         {
-          "id": "rust-license-9-section-113",
+          "id": "rust-license-9-section-112",
           "dependencies": [
             {
               "name": "ratatui-textarea",
@@ -5683,11 +5681,11 @@
               "source": "https://github.com/ratatui/ratatui-textarea"
             }
           ],
-          "start_line": 17628,
-          "end_line": 17650
+          "start_line": 17598,
+          "end_line": 17620
         },
         {
-          "id": "rust-license-9-section-114",
+          "id": "rust-license-9-section-113",
           "dependencies": [
             {
               "name": "urlencoding",
@@ -5695,8 +5693,8 @@
               "source": "https://github.com/kornelski/rust_urlencoding"
             }
           ],
-          "start_line": 17659,
-          "end_line": 17679
+          "start_line": 17629,
+          "end_line": 17649
         }
       ]
     },
@@ -5714,8 +5712,8 @@
               "source": "https://github.com/yescallop/borrow-or-share"
             }
           ],
-          "start_line": 17688,
-          "end_line": 17705
+          "start_line": 17658,
+          "end_line": 17675
         }
       ]
     },
@@ -5733,8 +5731,8 @@
               "source": "https://github.com/soc/option-ext.git"
             }
           ],
-          "start_line": 17714,
-          "end_line": 18087
+          "start_line": 17684,
+          "end_line": 18057
         }
       ]
     },
@@ -5752,8 +5750,8 @@
               "source": "https://github.com/dtolnay/unicode-ident"
             }
           ],
-          "start_line": 18096,
-          "end_line": 18135
+          "start_line": 18066,
+          "end_line": 18105
         },
         {
           "id": "rust-license-12-section-2",
@@ -5869,8 +5867,8 @@
               "source": "https://github.com/unicode-org/icu4x"
             }
           ],
-          "start_line": 18165,
-          "end_line": 18211
+          "start_line": 18135,
+          "end_line": 18181
         }
       ]
     },
@@ -5888,8 +5886,8 @@
               "source": "https://github.com/trifectatechfoundation/zlib-rs"
             }
           ],
-          "start_line": 18220,
-          "end_line": 18239
+          "start_line": 18190,
+          "end_line": 18209
         },
         {
           "id": "rust-license-13-section-2",
@@ -5905,8 +5903,8 @@
               "source": "https://github.com/orlp/foldhash"
             }
           ],
-          "start_line": 18249,
-          "end_line": 18267
+          "start_line": 18219,
+          "end_line": 18237
         },
         {
           "id": "rust-license-13-section-3",
@@ -5917,8 +5915,8 @@
               "source": "https://github.com/remram44/adler32-rs"
             }
           ],
-          "start_line": 18276,
-          "end_line": 18287
+          "start_line": 18246,
+          "end_line": 18257
         }
       ]
     }

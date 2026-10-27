@@ -2,17 +2,19 @@
 
 ## 1. 适用范围
 
-本文说明 Vulcan Code 的 LuaSkills 技能包配置入口，面向技能包作者、宿主维护者和桌面端使用者。当前独立集成采用正式零点六点一注册表依赖，其版本和来源以根清单、实际锁与本轮元数据为准。
+本文说明 Vulcan Code 的 LuaSkills 技能包配置入口，面向技能包作者、宿主维护者和桌面端使用者。当前独立集成采用正式 0.7.0 注册表依赖，其版本和来源以根清单与实际锁为准。
 
 技能配置声明以当前上游源码及已有生成技能配置契约为准，不执行旧配置探测、迁移、别名兼容、旧文件提示或自动清理。本文后续零点五点九版本引用保留历史契约与验证背景；不能用于证明零点六候选的构建来源。正式插件执行契约另见[插件执行引擎归属](plugin-execution-engine.md)。
 
 ### 1.1 当前正式依赖与本地验证边界
 
-本独立集成检出的根 `Cargo.toml` 精确声明 `luaskills = "=0.6.1"`。实际 `cargo update -p luaskills --precise 0.6.1` 已从 crates.io 解析该版本，当前工作锁的来源为 `registry+https://github.com/rust-lang/crates.io-index`，校验和为 `e3a1a7bf25b63489568217f69d470fe6e248117ee7a0ac900f8c4b0d547e803b`。`cargo metadata --locked` 的包清单指向实际 registry 缓存中的 `luaskills-0.6.1/Cargo.toml`，没有 LuaSkills 本地 path patch。此处记录实际解析身份，不把根清单声明单独视为构建或现场验收通过。
+根 `Cargo.toml` 精确声明 `luaskills = "=0.7.0"`，没有 LuaSkills 本地 path patch。实际锁的来源为
+`registry+https://github.com/rust-lang/crates.io-index`，校验和为
+`d11ac402de4bb8d4ad331a4b9742e21273c31d3916cf6ff468125ddd54545d2a`。该版本在 Core 五平台 GitHub
+发布（标签 `v0.7.0`）全部门禁通过后才发布到 crates.io。
 
-此前本地验证通过显式 `--config patch.crates-io.luaskills.path=<已冻结的 Core 检出>` 指定来源，其实际包清单指向该检出，不具有零点六注册表来源或校验和。旧验证检出的未提交混合锁原样保护，不复制到当前集成锁。当前正式解析在 Core 零点六点一 GitHub 与 Cargo 完整公共门禁通过后执行；普通正式构建入口、资源同步及宿主现场验收另行完成，不能由此次解析推断通过。
-
-本轮原生库及性能消费者使用明确的已提交 Core 来源；各自清单、元数据、锁和完整描述由证据保存。本地通过不表示五平台发布或正式注册表消费已完成。
+开发 Core 期间可以临时在根清单 `[patch.crates-io]` 指向本地 Core 检出做联调，但提交前必须移除并重新从
+注册表解析；path 来源没有注册表校验和，不能作为正式依赖的证据。
 
 ### 1.2 已发布零点五点九依赖的历史记录
 

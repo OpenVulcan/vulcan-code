@@ -21,19 +21,14 @@ ignore = [
     # The permission-judge tokenizer still uses this compile-time macro; it is unmaintained, not vulnerable.
     # 权限判定分词器仍使用此编译期宏；它只是停止维护，并无漏洞。
     { id = "RUSTSEC-2024-0436", reason = "tokenizers 0.23 still depends on paste; review when upgrading tokenizers" },
-    # serde_yaml (workspace and luaskills) and serde_yaml_ng (lindera) both parse through this crate; it is unmaintained, not vulnerable.
-    # serde_yaml（工作区与 luaskills）和 serde_yaml_ng（lindera）都经由此包解析；它只是停止维护，并无漏洞。
-    { id = "RUSTSEC-2024-0449", reason = "serde_yaml, luaskills and lindera still parse YAML through unsafe-libyaml; review when replacing serde_yaml" },
+    # serde_yaml (workspace) and serde_yaml_ng (lindera) both parse through this crate; it is unmaintained, not vulnerable.
+    # serde_yaml（工作区）和 serde_yaml_ng（lindera）都经由此包解析；它只是停止维护，并无漏洞。
+    { id = "RUSTSEC-2024-0449", reason = "serde_yaml and lindera still parse YAML through unsafe-libyaml; review when replacing serde_yaml" },
     # zbus 5 split crates are unmaintained after their merge into zbus 6; notify-rust and secret-service still require zbus 5 on Linux.
     # zbus 5 的拆分包在并入 zbus 6 后停止维护；Linux 上的 notify-rust 与 secret-service 仍要求 zbus 5。
     { id = "RUSTSEC-2026-0370", reason = "zvariant 5 comes from zbus 5 via notify-rust and keyring secret-service; review when they move to zbus 6" },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names 4 comes from zbus 5 via notify-rust and keyring secret-service; review when they move to zbus 6" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 5 comes from zbus 5 via notify-rust and keyring secret-service; review when they move to zbus 6" },
-    # The workspace uses zip 9; only luaskills 0.6.1 still pins zip 2, and it extracts entries itself instead of calling the affected extract APIs.
-    # 工作区使用 zip 9；只有 luaskills 0.6.1 仍锁定 zip 2，且它自行逐条解压，不调用受影响的 extract 接口。
-    { id = "RUSTSEC-2026-0367", reason = "only luaskills 0.6.1 uses zip 2 and never calls ZipArchive::extract; remove after luaskills moves to zip 9" },
-    { id = "RUSTSEC-2026-0368", reason = "only luaskills 0.6.1 uses zip 2 and never calls ZipArchive::extract; remove after luaskills moves to zip 9" },
-    { id = "RUSTSEC-2026-0369", reason = "only luaskills 0.6.1 uses zip 2 and never calls the extract APIs; remove after luaskills moves to zip 9" },
 ]
 
 # Keep the allowlist intentionally conservative and extend it only after legal review.
