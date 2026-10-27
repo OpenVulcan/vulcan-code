@@ -2,7 +2,7 @@
   "schema_version": 2,
   "scope": "rust-desktop-dependencies",
   "source_file": "THIRD_PARTY_NOTICES.md",
-  "source_sha256": "bed667c02a4b1717dc01debabeccd00bea6aba7d5db0a35095293454dcad0d15",
+  "source_sha256": "6fe3fade16c5956d056d4b3469319379823231706ff963a2c0a645c5a1ca9b96",
   "licenses": [
     {
       "id": "rust-license-1",
@@ -4575,6 +4575,18 @@
           "id": "rust-license-9-section-79",
           "dependencies": [
             {
+              "name": "luaskills",
+              "version": "0.7.1",
+              "source": "https://github.com/LuaSkills/luaskills"
+            }
+          ],
+          "start_line": 16477,
+          "end_line": 16498
+        },
+        {
+          "id": "rust-license-9-section-80",
+          "dependencies": [
+            {
               "name": "vulcan-code-service",
               "version": "0.1.0",
               "source": "https://crates.io/crates/vulcan-code-service"
@@ -5005,11 +5017,11 @@
               "source": "https://github.com/Nugine/simd"
             }
           ],
-          "start_line": 16562,
-          "end_line": 16580
+          "start_line": 16592,
+          "end_line": 16610
         },
         {
-          "id": "rust-license-9-section-80",
+          "id": "rust-license-9-section-81",
           "dependencies": [
             {
               "name": "tokio-stream",
@@ -5027,11 +5039,11 @@
               "source": "https://github.com/tokio-rs/tokio"
             }
           ],
-          "start_line": 16591,
-          "end_line": 16612
+          "start_line": 16621,
+          "end_line": 16642
         },
         {
-          "id": "rust-license-9-section-81",
+          "id": "rust-license-9-section-82",
           "dependencies": [
             {
               "name": "simd-adler32",
@@ -5039,11 +5051,11 @@
               "source": "https://github.com/mcountryman/simd-adler32"
             }
           ],
-          "start_line": 16621,
-          "end_line": 16642
+          "start_line": 16651,
+          "end_line": 16672
         },
         {
-          "id": "rust-license-9-section-82",
+          "id": "rust-license-9-section-83",
           "dependencies": [
             {
               "name": "crossterm",
@@ -5054,18 +5066,6 @@
               "name": "crossterm_winapi",
               "version": "0.9.1",
               "source": "https://github.com/crossterm-rs/crossterm-winapi"
-            }
-          ],
-          "start_line": 16652,
-          "end_line": 16673
-        },
-        {
-          "id": "rust-license-9-section-83",
-          "dependencies": [
-            {
-              "name": "luaskills",
-              "version": "0.7.0",
-              "source": "https://github.com/LuaSkills/luaskills"
             }
           ],
           "start_line": 16682,
