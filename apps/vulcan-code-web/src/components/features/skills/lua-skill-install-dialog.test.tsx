@@ -18,14 +18,23 @@ vi.mock("@/service/skills-actions-service", async (importOriginal) => ({
   getLuaSkillsHubSkill: vi.fn(),
 }));
 
-// HUB_DEBOUNCE_WAIT_MS outlasts the picker's search debounce.
-// HUB_DEBOUNCE_WAIT_MS 长于选择器的搜索防抖时长。
-const HUB_DEBOUNCE_WAIT_MS = 400;
+// HUB_SETTLE_WAIT_MS outlasts the deferred first load, pending answers and any typing debounce a regression could add.
+// HUB_SETTLE_WAIT_MS 长于推迟的首次载入、待处理的响应，以及回归可能加入的任何输入防抖。
+const HUB_SETTLE_WAIT_MS = 400;
 
-// settle waits past the search debounce inside act so the resulting render is committed.
-// settle 在 act 内等待超过搜索防抖时长，使随后的渲染得到提交。
+// settle waits inside act so pending loads resolve and the resulting render is committed.
+// settle 在 act 内等待，使待处理的载入完成并提交随后的渲染。
 async function settle(): Promise<void> {
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, HUB_DEBOUNCE_WAIT_MS)); });
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, HUB_SETTLE_WAIT_MS)); });
+}
+
+// typeInto sets an input's value the way React observes a user edit.
+// typeInto 以 React 能观察到用户编辑的方式设置输入框的值。
+async function typeInto(input: HTMLInputElement, value: string): Promise<void> {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
 }
 
 // chooseSourceType opens the production Select by keyboard and picks the exact visible option.
@@ -171,5 +180,75 @@ it("shows translated summaries and switches the detail drawer between translatio
   } finally {
     await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals();
     vi.mocked(searchLuaSkillsHub).mockReset(); vi.mocked(getLuaSkillsHubSkill).mockReset();
+  }
+});
+
+it("searches the Hub only when Enter is pressed and never submits the install form", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.mocked(searchLuaSkillsHub).mockResolvedValue(hubPage(["weather"], "2"));
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host);
+  const install = vi.fn().mockResolvedValue(undefined);
+  try {
+    await act(async () => root.render(<LuaSkillInstallDialog open actions={{ onInstallLuaSkill: install } as unknown as SkillActionProps} onOpenChange={vi.fn()} />));
+    await settle();
+    expect(searchLuaSkillsHub).toHaveBeenCalledTimes(1);
+    expect(searchLuaSkillsHub).toHaveBeenLastCalledWith("", null, "en-US");
+    const weather = document.querySelector<HTMLButtonElement>(".lua-skill-hub-result")!;
+    await act(async () => weather.click());
+
+    const input = document.querySelector<HTMLInputElement>(".lua-skill-hub-search input")!;
+    await typeInto(input, "clo");
+    await typeInto(input, "clock");
+    await settle();
+    expect(searchLuaSkillsHub).toHaveBeenCalledTimes(1);
+
+    const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    await act(async () => { input.dispatchEvent(enter); });
+    await settle();
+    expect(enter.defaultPrevented).toBe(true);
+    expect(searchLuaSkillsHub).toHaveBeenCalledTimes(2);
+    expect(searchLuaSkillsHub).toHaveBeenLastCalledWith("clock", null, "en-US");
+    expect(install).not.toHaveBeenCalled();
+
+    // Further typing does not move "Load more" off the submitted query.
+    // 继续输入不会让“加载更多”偏离已提交的查询。
+    await typeInto(input, "clockwork");
+    const loadMore = [...document.querySelectorAll("button")].find((button) => button.textContent === "skills.lua.hubLoadMore")!;
+    await act(async () => loadMore.click());
+    expect(searchLuaSkillsHub).toHaveBeenCalledTimes(3);
+    expect(searchLuaSkillsHub).toHaveBeenLastCalledWith("clock", "2", "en-US");
+  } finally {
+    await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); vi.mocked(searchLuaSkillsHub).mockReset();
+  }
+});
+
+it("shows the refined intro as a tooltip on focus only for results that have one", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const page = hubPage(["weather", "clock"], null);
+  page.items[0]!.content = { ...hubContent("original", "Forecasts", null), intro: "fixture-intro-marker" };
+  page.items[1]!.content = { ...hubContent("original", "Time", null), intro: "" };
+  vi.mocked(searchLuaSkillsHub).mockResolvedValue(page);
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<LuaSkillHubPicker disabled={false} selectedSkillId="" onSelect={vi.fn()} />));
+    await settle();
+    const row = (skillId: string) => [...document.querySelectorAll<HTMLButtonElement>(".lua-skill-hub-result")]
+      .find((candidate) => candidate.textContent?.includes(skillId))!;
+    const tooltip = () => document.querySelector('[role="tooltip"]');
+
+    expect(row("weather").getAttribute("data-slot")).toBe("tooltip-trigger");
+    expect(row("clock").hasAttribute("data-slot")).toBe(false);
+    expect(row("weather").textContent).not.toContain("fixture-intro-marker");
+
+    await act(async () => row("weather").focus());
+    expect(tooltip()?.textContent).toBe("fixture-intro-marker");
+    expect(row("weather").getAttribute("aria-describedby")).toBe(tooltip()?.id);
+
+    await act(async () => row("clock").focus());
+    expect(tooltip()).toBeNull();
+  } finally {
+    await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); vi.mocked(searchLuaSkillsHub).mockReset();
   }
 });

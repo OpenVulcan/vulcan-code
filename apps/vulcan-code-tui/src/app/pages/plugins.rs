@@ -139,6 +139,13 @@ fn hub_results(app: &App, rows: &mut Vec<Row>) {
             .into_iter()
             .find(|summary| !summary.is_empty());
         lines.extend(summary);
+        // The AI-refined introduction joins the expanded detail when the Hub returned one,
+        // mirroring the WebUI result tooltip.
+        // Hub 返回 AI 精炼介绍时将其加入展开详情，与 WebUI 结果提示一致。
+        let intro = s(skill, "/content/intro");
+        if !intro.trim().is_empty() {
+            lines.push(intro.trim().to_string());
+        }
         let mut row = item(
             &format!("hub:{id}"),
             s(skill, "/displayName"),

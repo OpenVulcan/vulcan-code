@@ -783,6 +783,58 @@ fn hub_results_install_through_official_hub_and_page_with_the_same_query() {
     );
 }
 
+/// A Hub result carries its refined intro in the expanded detail only when the Hub returned one.
+/// Hub 结果仅在 Hub 返回精炼介绍时，将其放入展开详情。
+/// Parameters: none. Returns after checking the rendered detail lines with and without an intro.
+/// 参数：无。检查有无介绍时渲染的详情行后返回。
+#[test]
+fn hub_result_detail_shows_the_intro_only_when_present() {
+    let (mut app, _, fixture) = fixture_app();
+    // Fixture page whose first skill gets a content node.
+    // 首个技能带内容节点的夹具页面。
+    let mut page = fixture["loads"]["service_search_luaskills_hub"].clone();
+    let mut bare = page["items"][0].clone();
+    bare["skillId"] = json!("demo-bare");
+    bare["content"] = json!({
+        "requestedLocale": "en-US", "locale": "en-US", "kind": "original", "sourceLocale": "en-US",
+        "summary": "Short summary", "intro": "  ", "features": [], "readme": null
+    });
+    page["items"][0]["content"] = json!({
+        "requestedLocale": "en-US", "locale": "en-US", "kind": "original", "sourceLocale": "en-US",
+        "summary": "Short summary", "intro": "fixture-intro-marker", "features": [], "readme": null
+    });
+    page["items"].as_array_mut().unwrap().push(bare);
+    app.apply(BackendEvent::Slot {
+        slot: Slot::LuaSkillsHub,
+        call: crate::service_api::skills_actions::search_luaskills_hub("", None, "en-US"),
+        value: page,
+    });
+    // Detail lines of the result row with the given identity.
+    // 指定身份结果行的详情行。
+    let detail = |target: &str| {
+        rows(&app, PageId::LuaSkills)
+            .into_iter()
+            .find_map(|row| match row.kind {
+                RowKind::Item { id, lines, .. } if id == target => Some(lines),
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                panic!("expected Hub result row {target}; the fixture may have changed")
+            })
+    };
+    assert!(
+        detail("hub:demo-weather")
+            .iter()
+            .any(|line| line == "fixture-intro-marker")
+    );
+    assert!(
+        !detail("hub:demo-bare")
+            .iter()
+            .any(|line| line.contains("fixture-intro-marker") || line.trim().is_empty()),
+        "a blank intro must not add a detail line"
+    );
+}
+
 /// The Hub detail shows the translated README and switches to the original node and published
 /// README for that skill only.
 /// Hub 详情显示译文 README，并仅为该技能切换到原文节点与已发布的 README。

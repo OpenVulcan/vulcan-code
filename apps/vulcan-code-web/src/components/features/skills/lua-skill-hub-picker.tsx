@@ -3,14 +3,11 @@ import { Search } from "lucide-react";
 import { PageNotice } from "@/components/page";
 import { Badge } from "@/ui-kit/primitives/badge";
 import { Button } from "@/ui-kit/primitives/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui-kit/primitives/tooltip";
 import { formatMessage, useI18n } from "@/i18n";
 import { searchLuaSkillsHub } from "@/service/skills-actions-service";
 import type { LuaSkillsHubSkill } from "@/types";
 import { LuaSkillHubDetailSheet } from "./lua-skill-hub-detail-sheet";
-
-// HUB_SEARCH_DEBOUNCE_MS delays a search until typing pauses.
-// HUB_SEARCH_DEBOUNCE_MS 在输入停顿后才发起搜索。
-const HUB_SEARCH_DEBOUNCE_MS = 300;
 
 // LuaSkillHubPicker searches the configured LuaSkills Hub and selects one skill to install.
 // LuaSkillHubPicker 搜索已配置的 LuaSkills Hub 并选择一个待安装技能。
@@ -26,9 +23,12 @@ export function LuaSkillHubPicker(props: {
   disabled: boolean;
 }) {
   const { t, locale } = useI18n();
-  // query is the search text typed by the user.
-  // query 是用户输入的搜索文本。
+  // query is the search text typed by the user; typing alone never sends a request.
+  // query 是用户输入的搜索文本；仅输入不会发出请求。
   const [query, setQuery] = React.useState("");
+  // submittedRef holds the query last submitted with Enter, which "Load more" and a language change continue.
+  // submittedRef 保存最近一次按 Enter 提交的查询，供“加载更多”与语言切换沿用。
+  const submittedRef = React.useRef("");
   // items accumulates every loaded page for the current query.
   // items 累积当前查询已载入的全部页面。
   const [items, setItems] = React.useState<LuaSkillsHubSkill[]>([]);
@@ -71,12 +71,25 @@ export function LuaSkillHubPicker(props: {
     }
   }, [locale]);
 
-  // A query or interface-language change starts the search over.
-  // 查询或界面语言变化时重新开始搜索。
+  // Opening the picker browses the first page once; an interface-language change reloads the submitted query.
+  // The request waits one task so a StrictMode rehearsal mount does not spend a rate-limited search.
+  // 打开选择器时浏览一次首页；界面语言变化时重新载入已提交的查询。
+  // 请求推迟一个任务，避免 StrictMode 演练挂载消耗受限流的搜索次数。
   React.useEffect(() => {
-    const timer = window.setTimeout(() => void load(query, null), HUB_SEARCH_DEBOUNCE_MS);
+    const timer = window.setTimeout(() => void load(submittedRef.current, null), 0);
     return () => window.clearTimeout(timer);
-  }, [load, query]);
+  }, [load]);
+
+  // submitSearch starts the typed query over; the Hub rate-limits searches, so only Enter sends one.
+  // submitSearch 重新开始输入的查询；Hub 对搜索限流，因此只有 Enter 才会发出请求。
+  const submitSearch = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+    // The picker sits inside the install form; Enter must search, never submit the install.
+    // 选择器位于安装表单内；Enter 只能搜索，绝不能提交安装。
+    event.preventDefault();
+    submittedRef.current = query;
+    void load(query, null);
+  };
 
   // Invalidate any in-flight answer when the picker unmounts.
   // 选择器卸载时作废任何进行中的响应。
@@ -95,6 +108,7 @@ export function LuaSkillHubPicker(props: {
             type="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={submitSearch}
           />
         </span>
       </label>
@@ -102,7 +116,8 @@ export function LuaSkillHubPicker(props: {
         {items.map((skill) => {
           const selected = skill.skillId === props.selectedSkillId;
           const summary = skill.content?.summary || skill.summary;
-          return (
+          const intro = skill.content?.intro.trim() ?? "";
+          const row = (
             <button
               key={skill.skillId}
               aria-selected={selected}
@@ -125,6 +140,15 @@ export function LuaSkillHubPicker(props: {
               {summary ? <span className="lua-skill-hub-result-summary">{summary}</span> : null}
             </button>
           );
+          // The AI-refined introduction shows on hover or keyboard focus when the Hub provides one.
+          // Hub 提供 AI 精炼介绍时，在悬停或键盘聚焦时显示。
+          if (!intro) return row;
+          return (
+            <Tooltip key={skill.skillId}>
+              <TooltipTrigger asChild>{row}</TooltipTrigger>
+              <TooltipContent side="right">{intro}</TooltipContent>
+            </Tooltip>
+          );
         })}
         {!loading && !searchError && items.length === 0 ? (
           <p className="lua-skill-hub-status">{t("skills.lua.hubEmpty")}</p>
@@ -145,7 +169,7 @@ export function LuaSkillHubPicker(props: {
             </Button>
           ) : null}
           {nextCursor && !loading ? (
-            <Button disabled={props.disabled} size="sm" type="button" variant="outline" onClick={() => void load(query, nextCursor)}>
+            <Button disabled={props.disabled} size="sm" type="button" variant="outline" onClick={() => void load(submittedRef.current, nextCursor)}>
               {t("skills.lua.hubLoadMore")}
             </Button>
           ) : null}
