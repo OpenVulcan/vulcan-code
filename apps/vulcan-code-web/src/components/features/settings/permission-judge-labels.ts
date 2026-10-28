@@ -1,5 +1,5 @@
 import type { Translate, TranslationKey } from "@/i18n";
-import type { JudgeDevice } from "@/types";
+import type { JudgeDevice, PermissionJudgeDownloadSource } from "@/types";
 
 // Labels of stable codes sent by the service, shared by the settings page and the setup guide.
 // 服务发送的稳定代码对应的标签，由设置页与初始化引导共用。
@@ -19,6 +19,11 @@ export const REASON_KEYS: Record<string, TranslationKey> = {
 export const FORMAT_KEYS: Record<string, TranslationKey> = {
   "fp16-mixed": "settings.permissionJudge.format.fp16Mixed",
   fp32: "settings.permissionJudge.format.fp32",
+};
+export const SOURCE_KEYS: Record<PermissionJudgeDownloadSource, TranslationKey> = {
+  huggingface: "settings.permissionJudge.downloads.source.huggingface",
+  "modelscope-cn": "settings.permissionJudge.downloads.source.modelscopeCn",
+  "modelscope-intl": "settings.permissionJudge.downloads.source.modelscopeIntl",
 };
 export const PHASE_KEYS: Record<string, TranslationKey> = {
   not_loaded: "settings.permissionJudge.phase.notLoaded",

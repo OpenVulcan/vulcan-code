@@ -430,6 +430,11 @@ fn known_variants(
                 .download
                 .as_ref()
                 .map(|download| download.total_bytes),
+            download_sources: variant
+                .download
+                .iter()
+                .flat_map(|download| download.sources.iter().map(|known| known.source))
+                .collect(),
             recommended: recommended == Some(variant.format),
             installed_model_id: settings
                 .models
@@ -1042,6 +1047,7 @@ pub(crate) async fn service_download_permission_judge_model(
         )
     })?;
     let format = request.format;
+    let source = request.source;
     let download = known
         .variant(format)
         .ok_or_else(|| {
@@ -1060,6 +1066,17 @@ pub(crate) async fn service_download_permission_judge_model(
                 known.display_name
             )
         })?;
+    let base_url = download
+        .base_url(source)
+        .ok_or_else(|| {
+            format!(
+                "The {} format of {} is not published on {}.",
+                format.key(),
+                known.display_name,
+                source.key()
+            )
+        })?
+        .to_string();
     let models_root = vulcan_runtime_assets::resolve_judge_models_root()
         .ok_or_else(|| String::from("The user directory is unavailable."))?;
     {
@@ -1073,6 +1090,7 @@ pub(crate) async fn service_download_permission_judge_model(
         *current = Some(PermissionJudgeModelDownload {
             package_id: known.id.clone(),
             format,
+            source,
             running: true,
             phase: None,
             completed_bytes: 0,
@@ -1083,9 +1101,16 @@ pub(crate) async fn service_download_permission_judge_model(
     }
     let task_runtime = Arc::clone(&runtime);
     tokio::spawn(async move {
-        let result =
-            download_and_register(&state, &task_runtime, known, format, download, models_root)
-                .await;
+        let result = download_and_register(
+            &state,
+            &task_runtime,
+            known,
+            format,
+            download,
+            base_url,
+            models_root,
+        )
+        .await;
         update_download(&task_runtime, |current| {
             current.running = false;
             match result {
@@ -1110,21 +1135,23 @@ fn update_download(
     }
 }
 
-/// Downloads, verifies and registers one published format; returns the registration identity.
-/// 下载、验证并登记一个已发布格式；返回登记身份。
+/// Downloads, verifies and registers one published format from the directory `base_url` of the
+/// chosen hub; returns the registration identity.
+/// 从所选托管平台的目录 `base_url` 下载、验证并登记一个已发布格式；返回登记身份。
 async fn download_and_register(
     state: &SharedServiceBridgeState,
     runtime: &Arc<PermissionJudgeRuntime>,
     known: &'static KnownPackage,
     format: ModelFormat,
     download: KnownDownload,
+    base_url: String,
     models_root: PathBuf,
 ) -> Result<String, String> {
     let progress_runtime = Arc::clone(runtime);
     let directory = blocking(move || {
         let name = package_directory_name(&known.id, format.key(), &download.manifest_sha256);
         let source = ModelPackageSource {
-            base_url: &download.base_url,
+            base_url: &base_url,
             manifest_sha256: &download.manifest_sha256,
             total_bytes: download.total_bytes,
         };

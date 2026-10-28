@@ -1501,6 +1501,17 @@ fn download_phase_label(code: &str) -> String {
     }
 }
 
+/// Labels a download hub; unknown hubs render as themselves.
+/// 为下载托管平台生成标签；未知平台按原样显示。
+fn download_source_label(code: &str) -> String {
+    match code {
+        "huggingface" => tr!("settings.permissionJudge.downloads.source.huggingface"),
+        "modelscope-cn" => tr!("settings.permissionJudge.downloads.source.modelscopeCn"),
+        "modelscope-intl" => tr!("settings.permissionJudge.downloads.source.modelscopeIntl"),
+        other => other.to_string(),
+    }
+}
+
 /// Official package name and format, such as `Risk 164M · FP32 full precision`.
 /// 官方模型包名称与格式，例如 `Risk 164M · FP32 全精度`。
 fn variant_name(snapshot: &Value, package: &str, format: &str) -> String {
@@ -1577,12 +1588,30 @@ fn download_rows(rows: &mut Vec<Row>, snapshot: &Value, status: &Value) {
             };
             row = row.badge(badges.join(" · "), tone);
         }
-        if !installed && !running && !v(variant, "/downloadBytes").is_null() {
-            row = row.actions(vec![action(
-                tr!("settings.permissionJudge.downloads.download"),
-                call(judge::download_permission_judge_model(&package, &format)),
-                Tone::Accent,
-            )]);
+        // Each hub serving the format has its own action; the first one is the accent.
+        // 提供该格式的每个托管平台各有一个操作；第一个为强调色。
+        let sources = a(variant, "/downloadSources");
+        if !installed && !running && !sources.is_empty() {
+            row = row.actions(
+                sources
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .enumerate()
+                    .map(|(index, source)| {
+                        action(
+                            download_source_label(source),
+                            call(judge::download_permission_judge_model(
+                                &package, &format, source,
+                            )),
+                            if index == 0 {
+                                Tone::Accent
+                            } else {
+                                Tone::Normal
+                            },
+                        )
+                    })
+                    .collect(),
+            );
         }
         rows.push(row);
     }
@@ -1599,6 +1628,7 @@ fn download_rows(rows: &mut Vec<Row>, snapshot: &Value, status: &Value) {
             tr!(
                 "settings.permissionJudge.downloads.running",
                 name = name,
+                source = download_source_label(&s(download, "/source")),
                 phase = v(download, "/phase")
                     .as_str()
                     .map_or_else(|| "…".into(), download_phase_label),
@@ -2357,11 +2387,12 @@ mod tests {
             "id": "risk", "displayName": "Risk",
             "variants": [
                 { "format": "fp16-mixed", "devices": ["cuda"], "downloadBytes": null,
-                  "recommended": true, "installedModelId": null },
+                  "downloadSources": [], "recommended": true, "installedModelId": null },
                 { "format": "fp32", "devices": ["cpu"], "downloadBytes": 2048,
+                  "downloadSources": ["huggingface", "modelscope-cn"],
                   "recommended": false, "installedModelId": null },
                 { "format": "int8", "devices": ["cpu"], "downloadBytes": 1024,
-                  "recommended": false, "installedModelId": "added" }
+                  "downloadSources": ["huggingface"], "recommended": false, "installedModelId": "added" }
             ]
         }] });
         let mut rows = Vec::new();
@@ -2369,12 +2400,14 @@ mod tests {
         assert!(download_calls(&rows, "download-risk-fp16-mixed").is_empty());
         assert!(download_calls(&rows, "download-risk-int8").is_empty());
         let calls = download_calls(&rows, "download-risk-fp32");
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].method, "service_download_permission_judge_model");
-        assert_eq!(
-            calls[0].params,
-            json!({ "request": { "packageId": "risk", "format": "fp32" } })
-        );
+        assert_eq!(calls.len(), 2);
+        for (call, source) in calls.iter().zip(["huggingface", "modelscope-cn"]) {
+            assert_eq!(call.method, "service_download_permission_judge_model");
+            assert_eq!(
+                call.params,
+                json!({ "request": { "packageId": "risk", "format": "fp32", "source": source } })
+            );
+        }
 
         let running = json!({ "modelDownload": {
             "packageId": "risk", "format": "fp32", "running": true, "phase": "downloading",

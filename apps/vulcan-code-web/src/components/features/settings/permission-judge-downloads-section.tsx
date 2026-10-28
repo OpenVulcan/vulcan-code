@@ -5,8 +5,9 @@ import { Button } from "@/ui-kit/primitives/button";
 import { Progress } from "@/ui-kit/primitives/progress";
 import { formatMessage, type Translate, type TranslationKey } from "@/i18n";
 import { formatBytes } from "@/lib/display-format";
-import { DEVICE_KEYS, FORMAT_KEYS, label } from "@/components/features/settings/permission-judge-labels";
+import { DEVICE_KEYS, FORMAT_KEYS, SOURCE_KEYS, label } from "@/components/features/settings/permission-judge-labels";
 import type {
+  PermissionJudgeDownloadSource,
   PermissionJudgeKnownPackage,
   PermissionJudgeModelDownload,
   PermissionJudgeModelFormat,
@@ -23,15 +24,16 @@ const DOWNLOAD_PHASE_KEYS: Record<string, TranslationKey> = {
 };
 
 // PermissionJudgeDownloadsSection lists the published formats of every official package, marks the
-// one recommended for the device and graphics card, and downloads one into the registry.
+// one recommended for the device and graphics card, and downloads one into the registry from the
+// hub the user picks: each hub serving a format has its own button.
 // PermissionJudgeDownloadsSection 列出每个官方模型包的已发布格式，标记适合当前设备与显卡的推荐格式，
-// 并将其中一个下载到登记表。
+// 并从用户选择的托管平台将其中一个下载到登记表：提供该格式的每个平台各有一个按钮。
 export function PermissionJudgeDownloadsSection(props: {
   busy: string | null;
   download: PermissionJudgeModelDownload | null;
   knownPackages: PermissionJudgeKnownPackage[];
   t: Translate;
-  onDownload: (packageId: string, format: PermissionJudgeModelFormat) => void;
+  onDownload: (packageId: string, format: PermissionJudgeModelFormat, source: PermissionJudgeDownloadSource) => void;
 }) {
   const { download, knownPackages, t } = props;
   const running = download?.running ?? false;
@@ -60,15 +62,21 @@ export function PermissionJudgeDownloadsSection(props: {
           {installed ? <Badge variant="outline">{t("settings.permissionJudge.downloads.installed")}</Badge> : null}
         </>}
         description={`${formatMessage(t("settings.permissionJudge.downloads.devices"), { devices })} · ${size}`}
-        actions={installed ? undefined : <Button type="button" size="sm" variant={variant.recommended ? "default" : "outline"}
-          disabled={variant.downloadBytes === null || running || props.busy !== null}
-          onClick={() => props.onDownload(known.id, variant.format)}>
-          <Download size={14} />{t("settings.permissionJudge.downloads.download")}
-        </Button>} />;
+        actions={installed || variant.downloadSources.length === 0 ? undefined : <>
+          {variant.downloadSources.map((source, index) => (
+            <Button key={source} type="button" size="sm" data-judge-download-source={source}
+              variant={variant.recommended && index === 0 ? "default" : "outline"}
+              disabled={running || props.busy !== null}
+              onClick={() => props.onDownload(known.id, variant.format, source)}>
+              <Download size={14} />{t(SOURCE_KEYS[source])}
+            </Button>
+          ))}
+        </>} />;
     })}
     {running && download ? <PageNotice tone="info" data-judge-download-progress="">
       <p>{formatMessage(t("settings.permissionJudge.downloads.running"), {
         name: nameOf(download.packageId, download.format),
+        source: t(SOURCE_KEYS[download.source]),
         phase: download.phase ? label(t, DOWNLOAD_PHASE_KEYS, download.phase) : "…",
         progress: `${formatBytes(download.completedBytes)} / ${formatBytes(download.totalBytes)}`,
       })}</p>

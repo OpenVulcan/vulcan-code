@@ -10,8 +10,11 @@
 //! Each package lists the weight formats it is published in and the devices each format is
 //! verified on. A format without a published download location is still listed, so the
 //! recommendation stays visible; it can only be registered from a local directory until then.
+//! A published format names one manifest digest and the hubs serving that same package; the user
+//! picks the hub, and a failed download never moves to another one.
 //! 每个模型包列出其发布的权重格式与各格式经过验证的设备。尚未公布下载位置的格式仍会列出，使推荐保持
-//! 可见；在此之前只能从本机目录登记。
+//! 可见；在此之前只能从本机目录登记。已发布格式只固定一个清单摘要，并列出提供同一模型包的各托管平台；
+//! 由用户选择平台，下载失败时绝不改用其他平台。
 
 use std::sync::LazyLock;
 
@@ -21,7 +24,7 @@ use crate::protocol::JudgeDevice;
 
 /// Schema version of `known-packages.json` this build reads.
 /// 本构建读取的 `known-packages.json` Schema 版本。
-const KNOWN_PACKAGES_SCHEMA_VERSION: u32 = 4;
+const KNOWN_PACKAGES_SCHEMA_VERSION: u32 = 5;
 
 /// Lowest CUDA compute capability with native half-precision arithmetic; older GPUs emulate it
 /// slowly, so they are recommended full precision.
@@ -77,20 +80,75 @@ impl ModelFormat {
     }
 }
 
-/// Published location of one format: the package directory as files below `base_url`.
-/// 一种格式的发布位置：以 `base_url` 下文件形式提供的模型包目录。
+/// Hub a published package can be downloaded from.
+/// 可下载已发布模型包的托管平台。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum DownloadSource {
+    /// Hugging Face (huggingface.co).
+    /// Hugging Face（huggingface.co）。
+    #[serde(rename = "huggingface")]
+    HuggingFace,
+    /// ModelScope China site (modelscope.cn).
+    /// 魔搭国内站（modelscope.cn）。
+    #[serde(rename = "modelscope-cn")]
+    ModelScopeCn,
+    /// ModelScope international site (modelscope.ai).
+    /// 魔搭国际站（modelscope.ai）。
+    #[serde(rename = "modelscope-intl")]
+    ModelScopeIntl,
+}
+
+impl DownloadSource {
+    /// Stable key, also the key of its localized label.
+    /// 稳定键，同时是其本地化标签的键。
+    pub fn key(self) -> &'static str {
+        match self {
+            DownloadSource::HuggingFace => "huggingface",
+            DownloadSource::ModelScopeCn => "modelscope-cn",
+            DownloadSource::ModelScopeIntl => "modelscope-intl",
+        }
+    }
+}
+
+/// One hub serving a published format: the package directory as files below `base_url`.
+/// 提供某个已发布格式的一个托管平台：以 `base_url` 下文件形式提供的模型包目录。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KnownSource {
+    /// Hub serving the files.
+    /// 提供文件的托管平台。
+    pub source: DownloadSource,
+    /// HTTPS directory URL ending in `/`, pinned to a commit; `MANIFEST.json` and every file it
+    /// lists sit below it.
+    /// 以 `/` 结尾并固定到某个提交的 HTTPS 目录 URL；`MANIFEST.json` 及其列出的每个文件都位于其下。
+    pub base_url: String,
+}
+
+/// Published location of one format: the same pinned package on one or more hubs.
+/// 一种格式的发布位置：同一个已固定的模型包，由一个或多个托管平台提供。
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct KnownDownload {
-    /// HTTPS directory URL ending in `/`; `MANIFEST.json` and every file it lists sit below it.
-    /// 以 `/` 结尾的 HTTPS 目录 URL；`MANIFEST.json` 及其列出的每个文件都位于其下。
-    pub base_url: String,
     /// SHA-256 of `MANIFEST.json`, which pins every other file of the package.
     /// `MANIFEST.json` 的 SHA-256，它固定了模型包的其他每个文件。
     pub manifest_sha256: String,
     /// Total size of all listed files, shown before downloading.
     /// 所有列出文件的总大小，下载前展示。
     pub total_bytes: u64,
+    /// Hubs serving the package, in display order; each hub at most once.
+    /// 提供该模型包的托管平台，按显示顺序排列；每个平台至多一次。
+    pub sources: Vec<KnownSource>,
+}
+
+impl KnownDownload {
+    /// Directory URL of the package on `source`, when that hub serves it.
+    /// 该模型包在 `source` 上的目录 URL（如该平台提供）。
+    pub fn base_url(&self, source: DownloadSource) -> Option<&str> {
+        self.sources
+            .iter()
+            .find(|known| known.source == source)
+            .map(|known| known.base_url.as_str())
+    }
 }
 
 /// One format a package is published in.
@@ -187,9 +245,10 @@ pub(crate) fn is_sha256(text: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-/// Parses the list and refuses duplicate identifiers, checkpoints or formats, malformed digests,
-/// and download locations that are not HTTPS directories.
-/// 解析清单，并拒绝重复的标识、检查点或格式，格式错误的摘要，以及不是 HTTPS 目录的下载位置。
+/// Parses the list and refuses duplicate identifiers, checkpoints, formats or hubs, malformed
+/// digests, and download locations without a hub or that are not HTTPS directories.
+/// 解析清单，并拒绝重复的标识、检查点、格式或托管平台，格式错误的摘要，以及没有托管平台或不是 HTTPS
+/// 目录的下载位置。
 fn parse_known_packages(text: &str) -> Result<Vec<KnownPackage>, String> {
     let file: KnownPackagesFile = serde_json::from_str(text).map_err(|error| error.to_string())?;
     if file.schema_version != KNOWN_PACKAGES_SCHEMA_VERSION {
@@ -230,10 +289,15 @@ fn parse_known_packages(text: &str) -> Result<Vec<KnownPackage>, String> {
                 ));
             }
             if let Some(download) = &variant.download {
-                let valid = download.base_url.starts_with("https://")
-                    && download.base_url.ends_with('/')
-                    && is_sha256(&download.manifest_sha256)
-                    && download.total_bytes > 0;
+                let mut sources = std::collections::BTreeSet::new();
+                let valid = is_sha256(&download.manifest_sha256)
+                    && download.total_bytes > 0
+                    && !download.sources.is_empty()
+                    && download.sources.iter().all(|known| {
+                        sources.insert(known.source)
+                            && known.base_url.starts_with("https://")
+                            && known.base_url.ends_with('/')
+                    });
                 if !valid {
                     return Err(format!(
                         "package `{}` format `{}` has a malformed download location",
@@ -286,8 +350,8 @@ mod tests {
         assert_eq!(find_known_package(&"0".repeat(64)), None);
     }
 
-    // Schema 4 names no edge models; schema 3 and its `edge_model_id` field are refused.
-    // Schema 4 不再列出边缘模型；Schema 3 及其 `edge_model_id` 字段一律拒绝。
+    // Older schemas and fields they had, such as schema 3's `edge_model_id`, are refused.
+    // 旧 Schema 及其字段（如 Schema 3 的 `edge_model_id`）一律拒绝。
     #[test]
     fn list_rejects_repeated_checkpoints_old_schemas_and_unknown_fields() {
         let variants = r#"[{"format":"fp32","devices":["cpu"],"download":null}]"#;
@@ -299,7 +363,7 @@ mod tests {
         };
         let list = |packages: &[String]| {
             format!(
-                r#"{{"schema_version":4,"packages":[{}]}}"#,
+                r#"{{"schema_version":5,"packages":[{}]}}"#,
                 packages.join(",")
             )
         };
@@ -309,31 +373,43 @@ mod tests {
             list(&[package("a", 'a'), package("b", 'a')]),
             distinct.replace(r#""variants""#, r#""url":"x","variants""#),
             distinct.replace(r#""variants""#, r#""edge_model_id":"m","variants""#),
-            distinct.replace(r#""schema_version":4"#, r#""schema_version":3"#),
+            distinct.replace(r#""schema_version":5"#, r#""schema_version":4"#),
         ] {
             assert!(parse_known_packages(&broken).is_err(), "{broken}");
         }
     }
 
     #[test]
-    fn downloads_must_be_pinned_https_directories() {
+    fn downloads_must_be_pinned_https_directories_on_distinct_hubs() {
         let digest = "a".repeat(64);
         let list = |download: &str| {
             format!(
-                r#"{{"schema_version":4,"packages":[{{"id":"a","display_name":"A",
+                r#"{{"schema_version":5,"packages":[{{"id":"a","display_name":"A",
                 "checkpoints":["{digest}"],
                 "variants":[{{"format":"fp32","devices":["cpu"],"download":{download}}}]}}]}}"#
             )
         };
-        let pinned = format!(
-            r#"{{"base_url":"https://models.example/a/fp32/","manifest_sha256":"{digest}","total_bytes":1}}"#
+        let hf = r#"{"source":"huggingface","base_url":"https://hf.example/a/fp32/"}"#;
+        let ms = r#"{"source":"modelscope-cn","base_url":"https://ms.example/a/fp32/"}"#;
+        let pinned =
+            format!(r#"{{"manifest_sha256":"{digest}","total_bytes":1,"sources":[{hf},{ms}]}}"#);
+        let parsed = parse_known_packages(&list(&pinned)).unwrap();
+        let download = parsed[0].variants[0].download.as_ref().unwrap();
+        assert_eq!(
+            download.base_url(DownloadSource::ModelScopeCn),
+            Some("https://ms.example/a/fp32/")
         );
-        assert!(parse_known_packages(&list(&pinned)).is_ok());
+        assert_eq!(download.base_url(DownloadSource::ModelScopeIntl), None);
         for broken in [
-            pinned.replace("https://", "http://"),
-            pinned.replace("fp32/\"", "fp32\""),
+            pinned.replace("https://hf", "http://hf"),
+            pinned.replace("fp32/\"}]", "fp32\"}]"),
             pinned.replace(&digest, "abc"),
             pinned.replace("\"total_bytes\":1", "\"total_bytes\":0"),
+            pinned.replace(ms, hf),
+            format!(r#"{{"manifest_sha256":"{digest}","total_bytes":1,"sources":[]}}"#),
+            format!(
+                r#"{{"manifest_sha256":"{digest}","total_bytes":1,"sources":[{{"source":"mirror","base_url":"https://m.example/"}}]}}"#
+            ),
         ] {
             assert!(parse_known_packages(&list(&broken)).is_err(), "{broken}");
         }

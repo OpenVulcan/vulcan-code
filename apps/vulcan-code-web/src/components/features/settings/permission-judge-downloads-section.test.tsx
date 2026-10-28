@@ -24,14 +24,14 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-// One family with an unpublished recommended format and a published one.
-// 一个家族：推荐格式尚未发布下载，另一格式已发布。
+// One family with an unpublished recommended format and one published on two hubs.
+// 一个家族：推荐格式尚未发布下载，另一格式已在两个托管平台发布。
 const packages: PermissionJudgeKnownPackage[] = [{
   id: "risk",
   displayName: "Risk",
   variants: [
-    { format: "fp16-mixed", devices: ["cuda", "cpu"], downloadBytes: null, recommended: true, installedModelId: null },
-    { format: "fp32", devices: ["cpu"], downloadBytes: 2048, recommended: false, installedModelId: null },
+    { format: "fp16-mixed", devices: ["cuda", "cpu"], downloadBytes: null, downloadSources: [], recommended: true, installedModelId: null },
+    { format: "fp32", devices: ["cpu"], downloadBytes: 2048, downloadSources: ["huggingface", "modelscope-cn"], recommended: false, installedModelId: null },
   ],
 }];
 
@@ -41,34 +41,35 @@ async function render(download: PermissionJudgeModelDownload | null, onDownload 
   return onDownload;
 }
 
-function downloadButton(variant: string): HTMLButtonElement {
+function sourceButtons(variant: string): HTMLButtonElement[] {
   const item = host.querySelector(`[data-judge-variant="${variant}"]`);
-  const button = item?.querySelector("button");
-  if (!(button instanceof HTMLButtonElement)) throw new Error(`no download button for ${variant}`);
-  return button;
+  return Array.from(item?.querySelectorAll<HTMLButtonElement>("button[data-judge-download-source]") ?? []);
 }
 
-// Only a published format downloads; the recommendation is marked on its own format.
-// 只有已发布的格式可以下载；推荐标记位于对应格式上。
-it("downloads published formats and marks the recommended one", async () => {
+// A published format has one button per hub and downloads from the hub clicked; an unpublished
+// format has none, and the recommendation is marked on its own format.
+// 已发布格式每个托管平台一个按钮，并从所点平台下载；未发布格式没有按钮，推荐标记位于对应格式上。
+it("downloads published formats from the chosen hub and marks the recommended one", async () => {
   const onDownload = await render(null);
   const recommended = host.querySelector('[data-judge-variant="risk:fp16-mixed"]');
   expect(recommended?.querySelector("[data-judge-recommended]")).not.toBeNull();
   expect(host.querySelector('[data-judge-variant="risk:fp32"] [data-judge-recommended]')).toBeNull();
-  expect(downloadButton("risk:fp16-mixed").disabled).toBe(true);
-  expect(downloadButton("risk:fp32").disabled).toBe(false);
-  await act(async () => downloadButton("risk:fp32").click());
-  expect(onDownload).toHaveBeenCalledWith("risk", "fp32");
+  expect(sourceButtons("risk:fp16-mixed")).toHaveLength(0);
+  const buttons = sourceButtons("risk:fp32");
+  expect(buttons.map((button) => button.dataset.judgeDownloadSource)).toEqual(["huggingface", "modelscope-cn"]);
+  expect(buttons.every((button) => !button.disabled)).toBe(true);
+  await act(async () => buttons[1].click());
+  expect(onDownload).toHaveBeenCalledWith("risk", "fp32", "modelscope-cn");
 });
 
 // A running download shows its progress and blocks starting another.
 // 运行中的下载显示进度，并阻止开始另一个下载。
 it("shows progress and blocks other downloads while one runs", async () => {
   await render({
-    packageId: "risk", format: "fp32", running: true, phase: "downloading",
+    packageId: "risk", format: "fp32", source: "huggingface", running: true, phase: "downloading",
     completedBytes: 1024, totalBytes: 2048, modelId: null, error: null,
   });
   expect(host.querySelector("[data-judge-download-progress]")?.textContent)
     .toContain("settings.permissionJudge.downloads.running");
-  expect(downloadButton("risk:fp32").disabled).toBe(true);
+  expect(sourceButtons("risk:fp32").every((button) => button.disabled)).toBe(true);
 });

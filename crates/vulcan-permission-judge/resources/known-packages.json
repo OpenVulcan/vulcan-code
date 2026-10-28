@@ -1,5 +1,5 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "packages": [
     {
       "id": "decision-shell-mini",
@@ -11,12 +11,38 @@
         {
           "format": "fp16-mixed",
           "devices": ["cuda", "webgpu"],
-          "download": null
+          "download": {
+            "manifest_sha256": "dc57ba263b4b32c1443b78b42ce81371aed85f93fb3f3afd5e5f77afd059dbf9",
+            "total_bytes": 486866780,
+            "sources": [
+              {
+                "source": "huggingface",
+                "base_url": "https://huggingface.co/openvulcan/vulcan-decision-shell-v1-runtime/resolve/fd5e1d09f54df4133956bb9e192ac7771401d7d7/mini/fp16/"
+              },
+              {
+                "source": "modelscope-cn",
+                "base_url": "https://www.modelscope.cn/models/OpenVulcan/vulcan-decision-shell-v1-runtime/resolve/e96d96744c20f691ea6045cf21c232cbc8fa8e09/mini/fp16/"
+              }
+            ]
+          }
         },
         {
           "format": "fp32",
           "devices": ["cuda", "cpu", "webgpu"],
-          "download": null
+          "download": {
+            "manifest_sha256": "eb3d48b93d030b9f67bbcf7fcea1179b854287b44e5c16b72a8e0be9694c194e",
+            "total_bytes": 800073215,
+            "sources": [
+              {
+                "source": "huggingface",
+                "base_url": "https://huggingface.co/openvulcan/vulcan-decision-shell-v1-runtime/resolve/fd5e1d09f54df4133956bb9e192ac7771401d7d7/mini/fp32/"
+              },
+              {
+                "source": "modelscope-cn",
+                "base_url": "https://www.modelscope.cn/models/OpenVulcan/vulcan-decision-shell-v1-runtime/resolve/e96d96744c20f691ea6045cf21c232cbc8fa8e09/mini/fp32/"
+              }
+            ]
+          }
         }
       ]
     },
@@ -30,12 +56,38 @@
         {
           "format": "fp16-mixed",
           "devices": ["cuda", "cpu", "webgpu"],
-          "download": null
+          "download": {
+            "manifest_sha256": "075e61a05063272b13d966c1f9b6e55ce99acbf5055de16b675ae1b442e6ffed",
+            "total_bytes": 822382021,
+            "sources": [
+              {
+                "source": "huggingface",
+                "base_url": "https://huggingface.co/openvulcan/vulcan-decision-shell-v1-runtime/resolve/fd5e1d09f54df4133956bb9e192ac7771401d7d7/flash/fp16/"
+              },
+              {
+                "source": "modelscope-cn",
+                "base_url": "https://www.modelscope.cn/models/OpenVulcan/vulcan-decision-shell-v1-runtime/resolve/e96d96744c20f691ea6045cf21c232cbc8fa8e09/flash/fp16/"
+              }
+            ]
+          }
         },
         {
           "format": "fp32",
           "devices": ["cuda", "webgpu"],
-          "download": null
+          "download": {
+            "manifest_sha256": "6b652427b61922ea573fd3509ed41b47cbc6037ffa47db7d6edf325cd12c4374",
+            "total_bytes": 1451479031,
+            "sources": [
+              {
+                "source": "huggingface",
+                "base_url": "https://huggingface.co/openvulcan/vulcan-decision-shell-v1-runtime/resolve/fd5e1d09f54df4133956bb9e192ac7771401d7d7/flash/fp32/"
+              },
+              {
+                "source": "modelscope-cn",
+                "base_url": "https://www.modelscope.cn/models/OpenVulcan/vulcan-decision-shell-v1-runtime/resolve/e96d96744c20f691ea6045cf21c232cbc8fa8e09/flash/fp32/"
+              }
+            ]
+          }
         }
       ]
     },
@@ -49,7 +101,20 @@
         {
           "format": "fp16-mixed",
           "devices": ["cuda", "cpu", "webgpu"],
-          "download": null
+          "download": {
+            "manifest_sha256": "de1d7e101998b4ac978038c2ae3251a0fdb86567ec22b263fe7cec5b76b26ade",
+            "total_bytes": 1533602510,
+            "sources": [
+              {
+                "source": "huggingface",
+                "base_url": "https://huggingface.co/openvulcan/vulcan-decision-shell-v1-runtime/resolve/fd5e1d09f54df4133956bb9e192ac7771401d7d7/standard/fp16/"
+              },
+              {
+                "source": "modelscope-cn",
+                "base_url": "https://www.modelscope.cn/models/OpenVulcan/vulcan-decision-shell-v1-runtime/resolve/e96d96744c20f691ea6045cf21c232cbc8fa8e09/standard/fp16/"
+              }
+            ]
+          }
         }
       ]
     }

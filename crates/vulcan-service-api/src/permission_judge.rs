@@ -5,9 +5,9 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use vulcan_permission_judge::JudgeLabel;
-pub use vulcan_permission_judge::ModelFormat;
 pub use vulcan_permission_judge::protocol::JudgeDevice;
 pub use vulcan_permission_judge::system::{JudgeBackend, ReviewRules};
+pub use vulcan_permission_judge::{DownloadSource, ModelFormat};
 
 /// Everything the "Permission judge" settings page shows.
 /// “权限判定”设置页展示的全部内容。
@@ -455,6 +455,9 @@ pub struct PermissionJudgeKnownVariant {
     /// Download size; absent while no download address is published for this format.
     /// 下载大小；该格式尚未发布下载地址时缺省。
     pub download_bytes: Option<u64>,
+    /// Hubs serving this format, in display order; empty while it is not published.
+    /// 提供该格式的托管平台，按显示顺序排列；尚未发布时为空。
+    pub download_sources: Vec<DownloadSource>,
     /// Whether this is the format recommended for the effective device and GPU.
     /// 是否为当前生效设备与显卡推荐的格式。
     pub recommended: bool,
@@ -746,6 +749,9 @@ pub struct PermissionJudgeModelDownload {
     /// Weight format being downloaded.
     /// 正在下载的权重格式。
     pub format: ModelFormat,
+    /// Hub the package is downloaded from.
+    /// 下载模型包的托管平台。
+    pub source: DownloadSource,
     /// Whether the download is still running.
     /// 下载是否仍在运行。
     pub running: bool,
@@ -946,6 +952,9 @@ pub struct PermissionJudgeModelDownloadRequest {
     /// Weight format to download.
     /// 要下载的权重格式。
     pub format: ModelFormat,
+    /// Hub to download from; it must serve this format, and a failure never moves to another hub.
+    /// 下载所用的托管平台；必须提供该格式，失败时绝不改用其他平台。
+    pub source: DownloadSource,
 }
 
 /// A project's policy choices against the model in use.

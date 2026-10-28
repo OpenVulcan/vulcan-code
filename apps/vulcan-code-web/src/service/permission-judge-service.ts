@@ -7,6 +7,7 @@ import type {
   PermissionJudgeRecordPage,
   PermissionJudgeRecordsRequest,
   PermissionJudgeCudaComponent,
+  PermissionJudgeDownloadSource,
   PermissionJudgeEdgeEndpoints,
   PermissionJudgeEdgeModels,
   PermissionJudgeEdgeRequestTest,
@@ -151,15 +152,16 @@ export async function installPermissionJudgeCuda(
   });
 }
 
-// downloadPermissionJudgeModel starts downloading one published format of an official package;
-// it is verified and registered without being put in use.
-// downloadPermissionJudgeModel 开始下载官方模型包的一个已发布格式；下载后验证并登记，但不投入使用。
+// downloadPermissionJudgeModel starts downloading one published format of an official package from
+// the chosen hub; it is verified and registered without being put in use.
+// downloadPermissionJudgeModel 从所选托管平台开始下载官方模型包的一个已发布格式；下载后验证并登记，但不投入使用。
 export async function downloadPermissionJudgeModel(
   packageId: string,
   format: PermissionJudgeModelFormat,
+  source: PermissionJudgeDownloadSource,
 ): Promise<PermissionJudgeStatus> {
   return serviceClient.request<PermissionJudgeStatus>("service_download_permission_judge_model", {
-    request: { packageId, format },
+    request: { packageId, format, source },
   });
 }
 

@@ -30,8 +30,8 @@ pub use edge_route::{
     EdgeExclusion, EdgeStatus, choose_edge_endpoint, edge_score, median_ms, scores_add_compute,
 };
 pub use known::{
-    FP16_MIN_CUDA_COMPUTE_CAPABILITY, KnownDownload, KnownPackage, KnownVariant, ModelFormat,
-    find_known_package, known_package, known_packages,
+    DownloadSource, FP16_MIN_CUDA_COMPUTE_CAPABILITY, KnownDownload, KnownPackage, KnownSource,
+    KnownVariant, ModelFormat, find_known_package, known_package, known_packages,
 };
 pub use package::{
     DigestCache, Encoding, JudgePackage, ManifestFile, MemoryDigestCache, PackageError,

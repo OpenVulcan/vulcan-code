@@ -46,7 +46,10 @@
 - **只有显式选择写入设置。** 判定出厂为“未设定”；初始化引导中选择“暂不启用”不写入任何内容。启动或刷新
   不得回写权限模式、判定设置或项目策略（AGENTS 第 5 条）。
 - **官方下载只走固定地址并完整校验。** 官方模型包清单（`known-packages.json`）按格式列出已发布变体；只有
-  清单固定了 HTTPS 目录、`MANIFEST.json` 摘要与总大小的变体才能下载，未发布地址时下载按钮禁用、服务拒绝。
+  清单固定了 `MANIFEST.json` 摘要、总大小与至少一个托管平台目录的变体才能下载，未发布地址时不显示下载按钮、
+  服务拒绝。同一格式的各平台（`huggingface`、`modelscope-cn`、`modelscope-intl`，每个至多一次）提供同一份
+  模型包，目录为固定到提交的 HTTPS 地址；每个平台一个下载按钮，由用户选择，不写入设置，下载失败直接报错，
+  绝不自动改用其他平台。
   下载先校验清单摘要与总大小，再逐个文件校验大小与摘要，全部通过后原子发布到
   `<user-vulcan-root>/code/judge-models/<包>-<格式>-<清单摘要前 12 位>`，再按普通登记流程验证并登记；
   下载绝不自动投入使用，也不替换已登记目录。用户自选本机路径登记照常可用。
@@ -165,10 +168,10 @@
   设备，可手动覆写；CUDA 执行库可锁定文件夹或一键安装。闲置卸载尚未实现。
   登记表单可从服务宿主浏览选择文件夹，并先经 `service_inspect_permission_judge_package` 完整校验（不登记，
   结果按稳定代码本地化）；只有校验通过才可提交，非官方模型包须显式勾选信任。
-  官方下载经 `service_download_permission_judge_model { packageId, format }` 在后台运行，同一时间只有一个；
-  进度在状态的 `modelDownload`（阶段 `manifest`、`downloading`、`verifying`、`installing`，字节数覆盖整个
+  官方下载经 `service_download_permission_judge_model { packageId, format, source }` 在后台运行，同一时间只有一个；
+  进度在状态的 `modelDownload`（含所选 `source`，阶段 `manifest`、`downloading`、`verifying`、`installing`，字节数覆盖整个
   模型包）中轮询，完成后给出登记标识；已有同一登记时保留用户命名。快照的 `knownPackages[].variants` 给出
-  格式、适用设备、下载大小（未发布为 `null`）、是否推荐与本机已有登记。
+  格式、适用设备、下载大小（未发布为 `null`）、提供该格式的平台 `downloadSources`（未发布为空）、是否推荐与本机已有登记。
 - **云端后端**：使用 `permission_judge` 消费者配置档的判定路由（TypeSafe 或 OpenRouter 上的 jev）。放行
   概率门槛只在 `CLOUD_ALLOW_PROBABILITY` 定义，当前值尚未用样本校准；不记录费用。
 - **官方直连后端**（`edge`）：调用官方部署的判定端点，不收费，但判定输入（工具参数文本）离开本机。可用的
@@ -218,7 +221,7 @@
   端点 `POST /v1/judge` 已在节点应用模型包余量规则，标签原样采用；回答必须回显请求标识、检查点摘要为 64 位
   小写十六进制、策略版本等于随构建副本、结果数等于输入数，超过 token 上限的结果视为输入超限交给下一层。
   检查点不与本地清单比对，只记入判定轨迹（`checkpointSha256`）。官方模型包清单 `known-packages.json`
-  只服务本机后端，格式版本为 4，不再含直连字段，旧版本 3 明确拒绝。
+  只服务本机后端，格式版本为 5（下载位置按托管平台列出），不含直连字段，旧版本明确拒绝。
   OpenVulcan 账户页的“模型”分区以“工具裁定模型”类型列出直连模型及本账号的调用：
   `service_openvulcan_edge_usage`（无参数，未登录时报错）读取 `GET {认证源}/api/v1/vulcancode/edge-usage`，
   回答 `{ hours, models: [{ model_id, enabled, requests, items, errors, last_hour? }] }` 按 id 升序，含每个

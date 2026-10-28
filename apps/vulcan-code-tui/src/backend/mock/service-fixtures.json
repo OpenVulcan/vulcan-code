@@ -1179,6 +1179,7 @@
               "format": "fp16-mixed",
               "devices": ["cuda", "webgpu", "cpu"],
               "downloadBytes": null,
+              "downloadSources": [],
               "recommended": true,
               "installedModelId": "demo-judge-official"
             },
@@ -1186,6 +1187,7 @@
               "format": "fp32",
               "devices": ["cuda", "cpu"],
               "downloadBytes": 671088640,
+              "downloadSources": ["huggingface", "modelscope-cn"],
               "recommended": false,
               "installedModelId": null
             }

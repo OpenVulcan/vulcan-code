@@ -67,6 +67,10 @@ export interface PermissionJudgeModelSummary {
 // PermissionJudgeModelFormat 是已发布模型包的权重格式。
 export type PermissionJudgeModelFormat = "fp16-mixed" | "fp32";
 
+// PermissionJudgeDownloadSource is a hub serving official packages.
+// PermissionJudgeDownloadSource 是提供官方模型包的托管平台。
+export type PermissionJudgeDownloadSource = "huggingface" | "modelscope-cn" | "modelscope-intl";
+
 // PermissionJudgeKnownVariant is one published format of an official package family.
 // PermissionJudgeKnownVariant 是官方模型包家族的一个已发布格式。
 export interface PermissionJudgeKnownVariant {
@@ -75,6 +79,9 @@ export interface PermissionJudgeKnownVariant {
   // Download size; null while no download address is published for this format.
   // 下载大小；该格式尚未发布下载地址时为 null。
   downloadBytes: number | null;
+  // Hubs serving this format, in display order; empty while it is not published.
+  // 提供该格式的托管平台，按显示顺序排列；尚未发布时为空。
+  downloadSources: PermissionJudgeDownloadSource[];
   // Whether this format is recommended for the effective device and graphics card.
   // 是否为当前生效设备与显卡推荐的格式。
   recommended: boolean;
@@ -279,6 +286,7 @@ export interface PermissionJudgeCudaInstall {
 export interface PermissionJudgeModelDownload {
   packageId: string;
   format: PermissionJudgeModelFormat;
+  source: PermissionJudgeDownloadSource;
   running: boolean;
   phase: string | null;
   completedBytes: number;

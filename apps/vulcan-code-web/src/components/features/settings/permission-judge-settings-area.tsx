@@ -50,6 +50,7 @@ import type {
   JudgeBackend,
   JudgeDevice,
   PermissionJudgeBenchmarkResult,
+  PermissionJudgeDownloadSource,
   PermissionJudgeModelFormat,
   PermissionJudgeSettingsSnapshot,
   PermissionJudgeStatus,
@@ -334,8 +335,8 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
   if (view === "models") {
     return subPage(t("settings.permissionJudge.models"),
       <ModelsPage applySnapshot={applySnapshot} busy={busy} run={run} snapshot={snapshot} status={status} t={t}
-        onDownload={(packageId, format) => void run(`download-${packageId}-${format}`, "settings.permissionJudge.downloads.failed",
-          async () => setStatus(await downloadPermissionJudgeModel(packageId, format)))} />);
+        onDownload={(packageId, format, source) => void run(`download-${packageId}-${format}`, "settings.permissionJudge.downloads.failed",
+          async () => setStatus(await downloadPermissionJudgeModel(packageId, format, source)))} />);
   }
   if (view === "cuda") {
     return subPage(t("settings.permissionJudge.cuda"),
@@ -648,7 +649,7 @@ function ModelsPage(props: {
   snapshot: PermissionJudgeSettingsSnapshot;
   status: PermissionJudgeStatus;
   t: Translate;
-  onDownload: (packageId: string, format: PermissionJudgeModelFormat) => void;
+  onDownload: (packageId: string, format: PermissionJudgeModelFormat, source: PermissionJudgeDownloadSource) => void;
 }) {
   const { t, snapshot } = props;
   const packageName = (id: string | null) => snapshot.knownPackages.find((known) => known.id === id)?.displayName ?? id ?? "";
