@@ -37,7 +37,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut out = String::new();
     let mut codes = BTreeSet::new();
     writeln!(out, "/// Every supported language in display order.")?;
-    writeln!(out, "/// 按展示顺序排列的全部受支持语言。")?;
     writeln!(out, "pub static LOCALES: &[Locale] = &[")?;
     for locale in locales {
         let field = |name: &str| {
@@ -65,7 +64,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         out,
         "/// Language used when nothing else matches; it completes every catalog."
     )?;
-    writeln!(out, "/// 无其他匹配时使用的语言；它补全所有目录。")?;
     writeln!(out, "pub const DEFAULT_LOCALE: &str = {default:?};")?;
 
     let surfaces = registry["surfaces"]
@@ -92,7 +90,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             )?;
         }
         writeln!(out, "/// The `{name}` surface catalogs.")?;
-        writeln!(out, "/// `{name}` 分面目录。")?;
         writeln!(
             out,
             "pub static {}: Surface = Surface {{\n    name: {name:?},\n    complete: {complete},\n    files: &[\n{files}    ],\n}};",
@@ -137,7 +134,6 @@ fn embed_changelog(root: &Path, codes: &[&str], out: &mut String) -> Result<(), 
         out,
         "/// Every release, newest first, with notes in every supported language."
     )?;
-    writeln!(out, "/// 全部发布，从新到旧，附每种受支持语言的说明。")?;
     writeln!(out, "pub static RELEASES: &[Release] = &[")?;
     let mut previous: Option<(u64, u64, u64)> = None;
     let mut listed = BTreeSet::new();
