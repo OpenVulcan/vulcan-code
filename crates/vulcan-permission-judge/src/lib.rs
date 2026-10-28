@@ -34,8 +34,8 @@ pub use known::{
     find_known_package, known_package, known_packages,
 };
 pub use package::{
-    DigestCache, JudgePackage, ManifestFile, MemoryDigestCache, PackageError, PackageSummary,
-    RuntimeConfig, manifest_files,
+    DigestCache, Encoding, JudgePackage, ManifestFile, MemoryDigestCache, PackageError,
+    PackageSummary, RuntimeConfig, manifest_files,
 };
 pub use policy::{JudgePolicy, JudgeSettings, PolicyOption, SettingsError};
 pub use render::render_call;

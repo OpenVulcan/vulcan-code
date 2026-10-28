@@ -75,6 +75,7 @@ function worker(phase: PermissionJudgeWorkerStatus["phase"]): PermissionJudgeWor
     verifyMs: null, loadMs: null, warmupMs: null, workingSetBytes: null, privateBytes: null,
     gpuDedicatedBytes: null, gpuSharedBytes: null, gpuUtilizationPercent: null,
     evaluations: 0, recentP50Ms: null, recentP95Ms: null,
+    maxTokens: null, maxRequestItems: null, microBatch: null, paddedBatchTokens: null,
   };
 }
 

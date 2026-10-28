@@ -8,10 +8,11 @@ use ort::ep::{ArenaExtendStrategy, CUDA, ExecutionProviderLibrary};
 use ort::session::builder::{GraphOptimizationLevel, SessionBuilder};
 use ort::session::{RunOptions, Session};
 use ort::value::Tensor;
+use vulcan_permission_judge::package::OUTPUT_FIELD;
 use vulcan_permission_judge::protocol::{JudgeDevice, JudgeOutcome};
 use vulcan_permission_judge::{JudgePackage, JudgeSettings, RuntimeConfig, decide};
 
-use crate::sequence::{EncodeOutcome, Encoded, Encoder};
+use crate::sequence::{EncodeOutcome, Encoder};
 
 /// Intra-op threads of the session.
 /// 会话的算子内线程数。
@@ -62,6 +63,12 @@ impl Engine {
         device: JudgeDevice,
         execution_provider_library: Option<&Path>,
     ) -> Result<Self, String> {
+        if !package.config.devices.contains(&device) {
+            return Err(format!(
+                "This package was validated on {:?} only; it does not run on {device:?}.",
+                package.config.devices
+            ));
+        }
         let fail =
             |error: ort::Error<SessionBuilder>| format!("Failed to build the session: {error}");
         let mut builder = Session::builder()
@@ -156,7 +163,10 @@ impl Engine {
             }
         }
         for batch in batches(&encoded, &self.config) {
-            let rows: Vec<&Encoded> = batch.iter().map(|position| &encoded[*position].1).collect();
+            let rows: Vec<&[i64]> = batch
+                .iter()
+                .map(|position| encoded[*position].1.as_slice())
+                .collect();
             let scores = self.run(&rows, encoder.pad)?;
             for (position, logits) in batch.into_iter().zip(scores) {
                 let (index, row) = &encoded[position];
@@ -164,7 +174,7 @@ impl Engine {
                     label: decide(logits, self.config.allow_margin)
                         .map_err(|error| error.to_string())?,
                     logits,
-                    input_tokens: row.ids.len() as u32,
+                    input_tokens: row.len() as u32,
                 });
             }
         }
@@ -178,28 +188,23 @@ impl Engine {
 
     /// Runs one padded batch and returns three logits per row.
     /// 运行一个已填充批次，并返回每行三个分数。
-    fn run(&mut self, rows: &[&Encoded], pad: i64) -> Result<Vec<[f32; 3]>, String> {
+    fn run(&mut self, rows: &[&[i64]], pad: i64) -> Result<Vec<[f32; 3]>, String> {
         let count = rows.len();
-        let length = rows.iter().map(|row| row.ids.len()).max().unwrap_or(0);
+        let length = rows.iter().map(|row| row.len()).max().unwrap_or(0);
         if count == 0 || length == 0 {
             return Ok(Vec::new());
         }
         let mut ids = vec![pad; count * length];
         let mut attention = vec![0_i64; count * length];
-        let mut markers = Vec::with_capacity(count * 3);
         for (index, row) in rows.iter().enumerate() {
             let start = index * length;
-            ids[start..start + row.ids.len()].copy_from_slice(&row.ids);
-            attention[start..start + row.ids.len()].fill(1);
-            markers.extend(row.markers);
+            ids[start..start + row.len()].copy_from_slice(row);
+            attention[start..start + row.len()].fill(1);
         }
         let tensor = |error: ort::Error| format!("Failed to build an input tensor: {error}");
         let inputs = ort::inputs! {
             "input_ids" => Tensor::from_array(([count, length], ids)).map_err(tensor)?,
             "attention_mask" => Tensor::from_array(([count, length], attention)).map_err(tensor)?,
-            "marker_pos" => Tensor::from_array(([count, 3], markers)).map_err(tensor)?,
-            "marker_mask" => Tensor::from_array(([count, 3], vec![true; count * 3])).map_err(tensor)?,
-            "qtype" => Tensor::from_array(([count], vec![0_i64; count])).map_err(tensor)?,
         };
         let trim = self
             .trim
@@ -210,7 +215,7 @@ impl Engine {
             None => self.session.run(inputs),
         }
         .map_err(|error| format!("Model inference failed: {error}"))?;
-        let (_, scores) = outputs["logits"]
+        let (_, scores) = outputs[OUTPUT_FIELD]
             .try_extract_tensor::<f32>()
             .map_err(|error| format!("The model returned no logits: {error}"))?;
         if scores.len() != count * 3 {
@@ -256,15 +261,17 @@ fn existing_file(path: &Path) -> Result<&Path, String> {
 /// 按长度将已编码行分组为同时受行数与填充词元预算约束的批次。
 /// Returns positions into `encoded`.
 /// 返回 `encoded` 中的位置。
-fn batches(encoded: &[(usize, Encoded)], config: &RuntimeConfig) -> Vec<Vec<usize>> {
+/// A row longer than the padded budget runs alone.
+/// 超过填充预算的单行单独运行。
+fn batches(encoded: &[(usize, Vec<i64>)], config: &RuntimeConfig) -> Vec<Vec<usize>> {
     let mut order: Vec<usize> = (0..encoded.len()).collect();
-    order.sort_by_key(|position| encoded[*position].1.ids.len());
+    order.sort_by_key(|position| encoded[*position].1.len());
     let rows = config.micro_batch.min(config.max_request_items) as usize;
-    let budget = config.max_tokens as usize;
+    let budget = config.padded_batch_tokens as usize;
     let mut batches = Vec::new();
     let mut current: Vec<usize> = Vec::new();
     for position in order {
-        let length = encoded[position].1.ids.len();
+        let length = encoded[position].1.len();
         if !current.is_empty() && (current.len() >= rows || (current.len() + 1) * length > budget) {
             batches.push(std::mem::take(&mut current));
         }
@@ -281,29 +288,31 @@ mod tests {
     use super::*;
     use crate::sequence::tests::config;
 
-    fn row(length: usize) -> Encoded {
-        Encoded {
-            ids: vec![1; length],
-            markers: [0, 1, 2],
-        }
-    }
-
     #[test]
-    fn batches_respect_row_and_token_budgets() {
-        let config = config(100);
-        let encoded: Vec<(usize, Encoded)> = [30, 10, 60, 20, 10]
+    fn batches_respect_row_and_padded_token_budgets() {
+        // A 300-token limit with a 100-token padded budget: the 150-token row must run alone.
+        // 上限 300 词元、填充预算 100 词元：150 词元的行必须单独运行。
+        let config = config(300);
+        let encoded: Vec<(usize, Vec<i64>)> = [30, 10, 60, 20, 10, 150]
             .into_iter()
             .enumerate()
-            .map(|(index, length)| (index, row(length)))
+            .map(|(index, length)| (index, vec![1; length]))
             .collect();
         let batches = batches(&encoded, &config);
         for batch in &batches {
             assert!(batch.len() <= config.micro_batch as usize);
-            let longest = batch.iter().map(|p| encoded[*p].1.ids.len()).max().unwrap();
-            assert!(batch.len() * longest <= config.max_tokens as usize);
+            let longest = batch.iter().map(|p| encoded[*p].1.len()).max().unwrap();
+            assert!(
+                batch.len() == 1 || batch.len() * longest <= config.padded_batch_tokens as usize
+            );
         }
+        assert!(batches.contains(&vec![5]), "an over-budget row runs alone");
         let mut seen: Vec<usize> = batches.concat();
         seen.sort_unstable();
-        assert_eq!(seen, [0, 1, 2, 3, 4], "every row is scheduled exactly once");
+        assert_eq!(
+            seen,
+            [0, 1, 2, 3, 4, 5],
+            "every row is scheduled exactly once"
+        );
     }
 }

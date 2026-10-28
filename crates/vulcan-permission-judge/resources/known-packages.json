@@ -2,15 +2,53 @@
   "schema_version": 4,
   "packages": [
     {
-      "id": "risk-164m",
-      "display_name": "Risk 164M",
+      "id": "decision-shell-mini",
+      "display_name": "Decision Shell Mini",
       "checkpoints": [
-        "7a46ab8306e720a88040fe01435500ed4d106942341c792ad5cb147e4c483851"
+        "ea29c64bbbf98daf3555061aad5ddf87700c216b8a2dc7a8932fb53ed9549e87"
       ],
       "variants": [
         {
           "format": "fp16-mixed",
-          "devices": ["cuda", "webgpu", "cpu"],
+          "devices": ["cuda"],
+          "download": null
+        },
+        {
+          "format": "fp32",
+          "devices": ["cuda", "cpu"],
+          "download": null
+        }
+      ]
+    },
+    {
+      "id": "decision-shell-flash",
+      "display_name": "Decision Shell Flash",
+      "checkpoints": [
+        "b860d1a155b8240fc1a153bf48ce987ef431732a6e95ba443a1e7c6d9b4008bf"
+      ],
+      "variants": [
+        {
+          "format": "fp16-mixed",
+          "devices": ["cuda", "cpu"],
+          "download": null
+        },
+        {
+          "format": "fp32",
+          "devices": ["cuda"],
+          "download": null
+        }
+      ]
+    },
+    {
+      "id": "decision-shell-standard",
+      "display_name": "Decision Shell Standard",
+      "checkpoints": [
+        "ce8e905daaa5726b2ef162a08120955c52700d3ed686ca2f429ce8b01a60cb35"
+      ],
+      "variants": [
+        {
+          "format": "fp16-mixed",
+          "devices": ["cuda", "cpu"],
           "download": null
         }
       ]

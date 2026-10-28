@@ -204,6 +204,7 @@ impl Worker {
             load_ms,
             warmup_ms,
             self_check_items: expected.len() as u32,
+            limits: package.config.batch_limits(),
         };
         let model = LoadedModel {
             package_dir: package.root().to_path_buf(),

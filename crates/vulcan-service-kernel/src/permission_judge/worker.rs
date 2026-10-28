@@ -9,11 +9,11 @@
 
 use std::sync::Mutex;
 
-use tokio::sync::{Mutex as AsyncMutex, MutexGuard};
+use tokio::sync::{Mutex as AsyncMutex, MutexGuard, oneshot};
 use tokio::time::{Duration, timeout};
 use vulcan_host_tools::judge_host_client::JudgeHostClient;
 use vulcan_permission_judge::protocol::{
-    BenchmarkReport, HostStatus, JudgeInput, JudgeOutcome, LoadReport,
+    BenchmarkReport, HostStatus, JudgeBatchLimits, JudgeInput, JudgeOutcome, LoadReport,
 };
 use vulcan_service_api::{PermissionJudgeWorkerPhase, PermissionJudgeWorkerStatus};
 
@@ -32,6 +32,74 @@ const JUDGE_WARMUP_WAIT: Duration = Duration::from_secs(30);
 struct LoadedWorker {
     spec: LoadSpec,
     client: JudgeHostClient,
+    limits: JudgeBatchLimits,
+}
+
+/// One caller waiting for its calls to be judged.
+/// 一个等待其调用被判定的调用方。
+struct Waiting {
+    model_id: String,
+    items: Vec<JudgeInput>,
+    reply: oneshot::Sender<Result<Vec<JudgeOutcome>, String>>,
+}
+
+/// Outcome of one caller's calls.
+/// 一个调用方的调用结果。
+type CallerResult = Result<Vec<JudgeOutcome>, String>;
+
+/// Flattens the callers' calls in order into requests of at most `limit` calls; each call keeps
+/// the index of the caller that owns it.
+/// 按顺序将各调用方的调用展平为每个最多 `limit` 条的请求；每条调用保留其所属调用方的索引。
+fn merge_requests(groups: Vec<Vec<JudgeInput>>, limit: usize) -> Vec<Vec<(usize, JudgeInput)>> {
+    let mut requests: Vec<Vec<(usize, JudgeInput)>> = Vec::new();
+    for (owner, items) in groups.into_iter().enumerate() {
+        for item in items {
+            match requests.last_mut() {
+                Some(request) if request.len() < limit.max(1) => request.push((owner, item)),
+                _ => requests.push(vec![(owner, item)]),
+            }
+        }
+    }
+    requests
+}
+
+/// Gathers each caller's outcomes from the request results, in request order; a caller with any
+/// call in a failed request receives that failure.
+/// 按请求顺序从请求结果中收集每个调用方的结果；任一调用位于失败请求中的调用方收到该失败。
+fn split_results(
+    callers: usize,
+    answered: Vec<(Vec<usize>, Result<Vec<JudgeOutcome>, String>)>,
+) -> Vec<CallerResult> {
+    let mut results: Vec<CallerResult> = (0..callers).map(|_| Ok(Vec::new())).collect();
+    for (owners, result) in answered {
+        match result {
+            Ok(outcomes) => {
+                for (owner, outcome) in owners.into_iter().zip(outcomes) {
+                    if let Some(Ok(collected)) = results.get_mut(owner) {
+                        collected.push(outcome);
+                    }
+                }
+            }
+            Err(error) => {
+                for owner in owners {
+                    if let Some(slot) = results.get_mut(owner) {
+                        *slot = Err(error.clone());
+                    }
+                }
+            }
+        }
+    }
+    results
+}
+
+/// Result a caller receives; a dropped reply means the serving caller was cancelled mid-request.
+/// 调用方收到的结果；应答被丢弃表示代为服务的调用方在请求中途被取消。
+fn answered_or_dropped(answered: Result<CallerResult, oneshot::error::RecvError>) -> CallerResult {
+    answered.unwrap_or_else(|_| {
+        Err(String::from(
+            "The local judge request was cancelled before it finished.",
+        ))
+    })
 }
 
 /// Last known lifecycle state, readable without waiting for the worker.
@@ -67,6 +135,7 @@ impl Default for PhaseState {
 pub(crate) struct JudgeWorker {
     slot: AsyncMutex<Option<LoadedWorker>>,
     phase: Mutex<PhaseState>,
+    queue: Mutex<Vec<Waiting>>,
 }
 
 /// Starts a worker and loads `spec`.
@@ -167,10 +236,12 @@ impl JudgeWorker {
         self.mark_warming(spec);
         match start(spec).await {
             Ok((client, report)) => {
+                let limits = report.limits;
                 self.mark_loaded(spec, Ok((client.process_id(), report)));
                 *slot = Some(LoadedWorker {
                     spec: spec.clone(),
                     client,
+                    limits,
                 });
                 Ok(slot)
             }
@@ -196,10 +267,12 @@ impl JudgeWorker {
         if let Some(previous) = slot.take() {
             previous.client.shutdown().await;
         }
+        let limits = report.limits;
         self.mark_loaded(spec, Ok((client.process_id(), report)));
         *slot = Some(LoadedWorker {
             spec: spec.clone(),
             client,
+            limits,
         });
         Ok(())
     }
@@ -245,25 +318,84 @@ impl JudgeWorker {
     /// missing or failed worker sends the call to the user instead.
     /// 当已加载 worker 持有 `model_id` 时用它判定 `items`，对进行中的预热最多等待
     /// [`JUDGE_WARMUP_WAIT`]。它从不启动或重试加载，因此缺失或失败的 worker 会让调用交给用户。
+    ///
+    /// Concurrent callers, such as the gates of one model reply's tool calls, are merged: each
+    /// queues its calls, and whoever holds the worker next sends every queued call in requests of
+    /// at most the package's `max_request_items`, so a caller may be answered by another one.
+    /// 并发调用方（例如同一模型回复中各工具调用的闸门）会被合并：每个调用方把调用加入队列，下一个持有
+    /// worker 的调用方以每个请求最多 `max_request_items` 条的方式发送全部排队调用，因此调用方可能由
+    /// 其他调用方代为应答。
     pub(crate) async fn evaluate(
         &self,
         model_id: &str,
         items: Vec<JudgeInput>,
     ) -> Result<Vec<JudgeOutcome>, String> {
-        let mut slot = timeout(JUDGE_WARMUP_WAIT, self.slot.lock())
-            .await
-            .map_err(|_| String::from("The local judge is still warming up."))?;
-        let loaded = slot
-            .as_mut()
-            .filter(|loaded| loaded.spec.model_id == model_id && loaded.client.is_usable())
-            .ok_or_else(|| {
-                self.phase
-                    .lock()
-                    .ok()
-                    .and_then(|phase| phase.error.clone())
-                    .unwrap_or_else(|| String::from("The local judge is not loaded."))
-            })?;
-        loaded.client.evaluate(items).await
+        let (reply, mut answer) = oneshot::channel();
+        if let Ok(mut queue) = self.queue.lock() {
+            queue.push(Waiting {
+                model_id: model_id.to_string(),
+                items,
+                reply,
+            });
+        }
+        let slot = tokio::select! {
+            answered = &mut answer => return answered_or_dropped(answered),
+            slot = timeout(JUDGE_WARMUP_WAIT, self.slot.lock()) => slot
+                .map_err(|_| String::from("The local judge is still warming up."))?,
+        };
+        self.serve_queue(slot).await;
+        answered_or_dropped(answer.await)
+    }
+
+    /// Sends every queued call to the loaded worker in merged requests and answers each caller;
+    /// callers whose model is not the loaded one are refused.
+    /// 以合并请求将全部排队调用发送给已加载 worker 并应答每个调用方；模型不是已加载模型的调用方被拒绝。
+    async fn serve_queue(&self, mut slot: MutexGuard<'_, Option<LoadedWorker>>) {
+        let waiting: Vec<Waiting> = match self.queue.lock() {
+            Ok(mut queue) => queue.drain(..).collect(),
+            Err(_) => return,
+        };
+        // A caller that stopped waiting needs no answer.
+        // 已停止等待的调用方无需应答。
+        let waiting = waiting.into_iter().filter(|entry| !entry.reply.is_closed());
+        let loaded = slot.as_mut().filter(|loaded| loaded.client.is_usable());
+        let Some(loaded) = loaded else {
+            let reason = self.not_loaded_reason();
+            for entry in waiting {
+                let _ = entry.reply.send(Err(reason.clone()));
+            }
+            return;
+        };
+        let (served, refused): (Vec<Waiting>, Vec<Waiting>) =
+            waiting.partition(|entry| entry.model_id == loaded.spec.model_id);
+        let reason = self.not_loaded_reason();
+        for entry in refused {
+            let _ = entry.reply.send(Err(reason.clone()));
+        }
+        let (groups, replies): (Vec<Vec<JudgeInput>>, Vec<_>) = served
+            .into_iter()
+            .map(|entry| (entry.items, entry.reply))
+            .unzip();
+        let limit = loaded.limits.max_request_items as usize;
+        let mut answered = Vec::new();
+        for request in merge_requests(groups, limit) {
+            let (owners, items): (Vec<usize>, Vec<JudgeInput>) = request.into_iter().unzip();
+            answered.push((owners, loaded.client.evaluate(items).await));
+        }
+        let results = split_results(replies.len(), answered);
+        for (reply, result) in replies.into_iter().zip(results) {
+            let _ = reply.send(result);
+        }
+    }
+
+    /// Why calls cannot be judged now: the last load failure, or that nothing is loaded.
+    /// 当前无法判定调用的原因：上次加载失败，或尚未加载。
+    fn not_loaded_reason(&self) -> String {
+        self.phase
+            .lock()
+            .ok()
+            .and_then(|phase| phase.error.clone())
+            .unwrap_or_else(|| String::from("The local judge is not loaded."))
     }
 
     /// Times `batch_size` self-check inputs on the model of `spec`.
@@ -304,6 +436,7 @@ impl JudgeWorker {
             .map(|phase| phase.clone())
             .unwrap_or_default();
         let status = phase.status.as_ref();
+        let limits = phase.report.as_ref().map(|report| report.limits);
         PermissionJudgeWorkerStatus {
             phase: phase.phase,
             model_id: phase.model_id.clone(),
@@ -321,6 +454,10 @@ impl JudgeWorker {
             evaluations: status.map_or(0, |status| status.evaluations),
             recent_p50_ms: status.and_then(|status| status.recent_p50_ms),
             recent_p95_ms: status.and_then(|status| status.recent_p95_ms),
+            max_tokens: limits.map(|limits| limits.max_tokens),
+            max_request_items: limits.map(|limits| limits.max_request_items),
+            micro_batch: limits.map(|limits| limits.micro_batch),
+            padded_batch_tokens: limits.map(|limits| limits.padded_batch_tokens),
         }
     }
 }
@@ -335,6 +472,66 @@ mod tests {
 
     use super::*;
     use crate::permission_judge::environment::JudgeEnvironment;
+
+    fn input(rendered: &str) -> JudgeInput {
+        JudgeInput {
+            settings: Default::default(),
+            rendered: rendered.to_string(),
+        }
+    }
+
+    fn outcome(input_tokens: u32) -> JudgeOutcome {
+        JudgeOutcome::InputTokenLimit { input_tokens }
+    }
+
+    // Concurrent callers share requests; a caller larger than the limit is split across requests.
+    // 并发调用方共享请求；超过上限的调用方被拆分到多个请求。
+    #[test]
+    fn merged_requests_respect_the_limit_and_keep_owners() {
+        let groups = vec![
+            vec![input("a0")],
+            vec![input("b0"), input("b1"), input("b2")],
+            vec![input("c0")],
+        ];
+        let requests = merge_requests(groups, 2);
+        let shape: Vec<Vec<(usize, &str)>> = requests
+            .iter()
+            .map(|request| {
+                request
+                    .iter()
+                    .map(|(owner, item)| (*owner, item.rendered.as_str()))
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                vec![(0, "a0"), (1, "b0")],
+                vec![(1, "b1"), (1, "b2")],
+                vec![(2, "c0")]
+            ]
+        );
+    }
+
+    // Each caller gets its own outcomes in order; a failed request fails every caller in it.
+    // 每个调用方按顺序得到自己的结果；失败的请求使其中每个调用方失败。
+    #[test]
+    fn split_results_return_each_callers_outcomes_or_its_failure() {
+        let answered = vec![
+            (vec![0, 1], Ok(vec![outcome(1), outcome(2)])),
+            (vec![1, 1], Ok(vec![outcome(3), outcome(4)])),
+            (vec![2], Err(String::from("worker failed"))),
+        ];
+        let results = split_results(4, answered);
+        assert_eq!(results[0], Ok(vec![outcome(1)]));
+        assert_eq!(results[1], Ok(vec![outcome(2), outcome(3), outcome(4)]));
+        assert_eq!(results[2], Err(String::from("worker failed")));
+        assert_eq!(
+            results[3],
+            Ok(Vec::new()),
+            "a caller without calls gets none"
+        );
+    }
 
     /// Loads a real package on the bundled CPU and WebGPU runtimes, switches between them, times
     /// both speed-test sizes and checks that a broken package fails without replacing the device.

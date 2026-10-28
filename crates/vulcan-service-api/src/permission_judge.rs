@@ -693,6 +693,18 @@ pub struct PermissionJudgeWorkerStatus {
     /// 95th percentile of recent evaluation latencies.
     /// 最近评估延迟的第 95 百分位。
     pub recent_p95_ms: Option<f64>,
+    /// Longest call in tokens the loaded package evaluates.
+    /// 已加载模型包评估的最长调用词元数。
+    pub max_tokens: Option<u32>,
+    /// Most calls the service merges into one evaluation request; more are split.
+    /// 服务合并进一个评估请求的最多调用数；更多的会拆分。
+    pub max_request_items: Option<u32>,
+    /// Most rows per graph run.
+    /// 每次计算图运行的最多行数。
+    pub micro_batch: Option<u32>,
+    /// Most padded tokens (rows times the longest row) per graph run.
+    /// 每次计算图运行的最多填充词元数（行数乘以最长行）。
+    pub padded_batch_tokens: Option<u32>,
 }
 
 /// Progress of one CUDA installation.

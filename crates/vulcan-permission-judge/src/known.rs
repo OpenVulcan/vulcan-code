@@ -56,10 +56,14 @@ impl ModelFormat {
     /// precision no published format uses.
     /// 由模型包 `runtime-config.json` 声明的精度得出格式；任何已发布格式都不使用的精度返回 `None`。
     pub fn from_precision(precision: &str) -> Option<Self> {
-        match precision {
-            "fp32" => Some(ModelFormat::Fp32),
-            precision if precision.starts_with("fp16") => Some(ModelFormat::Fp16Mixed),
-            _ => None,
+        // The leading word names the weight precision; attention may still run in another one.
+        // 开头的词表示权重精度；注意力仍可能以其他精度运行。
+        if precision.starts_with("fp32") {
+            Some(ModelFormat::Fp32)
+        } else if precision.starts_with("fp16") {
+            Some(ModelFormat::Fp16Mixed)
+        } else {
+            None
         }
     }
 
@@ -389,6 +393,10 @@ mod tests {
             Some(ModelFormat::Fp16Mixed)
         );
         assert_eq!(ModelFormat::from_precision("fp32"), Some(ModelFormat::Fp32));
+        assert_eq!(
+            ModelFormat::from_precision("fp32, fp16 flash attention"),
+            Some(ModelFormat::Fp32)
+        );
         assert_eq!(ModelFormat::from_precision("int4"), None);
     }
 }

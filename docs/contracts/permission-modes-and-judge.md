@@ -51,8 +51,17 @@
   `<user-vulcan-root>/code/judge-models/<包>-<格式>-<清单摘要前 12 位>`，再按普通登记流程验证并登记；
   下载绝不自动投入使用，也不替换已登记目录。用户自选本机路径登记照常可用。
 - **推荐格式按设备与显卡决定。** 推荐格式取生效设备（已选设备，否则推荐设备）：GPU 设备优先
-  `fp16-mixed`，CPU 优先 `fp32`；CUDA 上最低计算能力低于 `FP16_MIN_CUDA_COMPUTE_CAPABILITY` 时不推荐半精度。
-  计算能力经 `nvidia-smi` 单独查询，旧驱动不支持时视为未知，不阻止推荐。推荐只是标记，不改写设备或模型选择。
+  `fp16-mixed`，CPU 优先 `fp32`，只在清单为该格式列出该设备时推荐；CUDA 上最低计算能力低于
+  `FP16_MIN_CUDA_COMPUTE_CAPABILITY` 时不推荐半精度。计算能力经 `nvidia-smi` 单独查询，旧驱动不支持时视为未知，
+  不阻止推荐。推荐只是标记，不改写设备或模型选择。
+- **模型包格式只有一种接口。** 官方模型包来自 decision-shell 运行包仓库（Mini、Flash、Standard），清单
+  `format_version` 为 2，旧格式明确拒绝。计算图一律输入 `input_ids`、`attention_mask` 并输出 `logits`；
+  `runtime-config.json` 的 `encoding` 声明文本编码（`marker-head` 或 `decision-prompt`），`devices` 声明已验证
+  设备，加载到未声明的设备直接拒绝（部分计算图在 CPU 上会崩溃）。
+- **批次上限来自模型包。** `max_tokens`、`max_request_items`、`micro_batch`、`padded_batch_tokens` 只在模型包
+  `runtime-config.json` 中定义，加载报告与 worker 状态原样投影。并发的受管控调用（同一模型回复中的多个工具
+  调用）在服务端排队合并，由下一个持有 worker 的调用方按 `max_request_items` 拆分提交；宿主按长度排序，每次
+  计算图运行不超过 `micro_batch` 行与 `padded_batch_tokens` 个填充词元，单条超过填充预算的调用单独运行。
 
 ## 权限模式
 

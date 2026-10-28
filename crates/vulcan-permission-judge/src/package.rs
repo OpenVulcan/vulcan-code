@@ -1,13 +1,15 @@
 //! Verified loading of one local judge model package.
 //! 本机判定模型包的验证加载。
 //!
-//! A package is a directory exported by the training side. `MANIFEST.json` lists every file with
-//! its size and SHA-256; `runtime-config.json` holds the tensor and decision limits; the policy and
-//! tokenizer live under `assets/`. The supported layout is fixed here, not declared by the package:
-//! an unknown layout is refused instead of guessed.
-//! 模型包是训练端导出的目录。`MANIFEST.json` 列出每个文件的大小与 SHA-256；`runtime-config.json`
-//! 保存张量与判定上限；策略与分词器位于 `assets/`。支持的布局在此固定，而非由模型包声明：
-//! 未知布局直接拒绝，不做猜测。
+//! A package is a directory of the decision-shell runtime repository. `MANIFEST.json` lists every
+//! file with its size and SHA-256; `runtime-config.json` holds the request, batch and decision
+//! limits and the text encoding; the policy and tokenizer live under `assets/`. Every model family
+//! shares one graph interface (`input_ids`, `attention_mask` -> `logits`); the families differ only
+//! in the declared encoding. An unknown layout or encoding is refused instead of guessed.
+//! 模型包是 decision-shell 运行包仓库中的一个目录。`MANIFEST.json` 列出每个文件的大小与 SHA-256；
+//! `runtime-config.json` 保存请求、批次与判定上限及文本编码；策略与分词器位于 `assets/`。所有模型
+//! 家族共享同一计算图接口（`input_ids`、`attention_mask` -> `logits`），只在声明的编码上不同。
+//! 未知布局或编码直接拒绝，不做猜测。
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
@@ -21,13 +23,14 @@ use sha2::{Digest, Sha256};
 
 use crate::decision::JudgeLabel;
 use crate::policy::JudgePolicy;
+use crate::protocol::{JudgeBatchLimits, JudgeDevice};
 
 /// File listing every package file with its size and digest.
 /// 列出每个模型包文件及其大小与摘要的文件。
 pub const MANIFEST_FILE: &str = "MANIFEST.json";
 /// The only manifest format this build reads.
 /// 本构建唯一读取的清单格式。
-pub const MANIFEST_FORMAT_VERSION: u32 = 1;
+pub const MANIFEST_FORMAT_VERSION: u32 = 2;
 /// Tensor and decision limits.
 /// 张量与判定上限。
 pub const RUNTIME_CONFIG_FILE: &str = "runtime-config.json";
@@ -43,39 +46,64 @@ pub const EXAMPLES_FILE: &str = "example-input.json";
 /// Expected self-check results.
 /// 自检预期结果。
 pub const VALIDATION_FILE: &str = "reports/delivery-validation.json";
-/// Graph inputs of the supported model family, in feed order.
-/// 支持的模型家族的计算图输入，按输入顺序排列。
-pub const INPUT_FIELDS: [&str; 5] = [
-    "input_ids",
-    "attention_mask",
-    "marker_pos",
-    "marker_mask",
-    "qtype",
-];
+/// Graph inputs shared by every model family, in feed order.
+/// 所有模型家族共享的计算图输入，按输入顺序排列。
+pub const INPUT_FIELDS: [&str; 2] = ["input_ids", "attention_mask"];
+/// Graph output holding three scores per row in label order.
+/// 按标签顺序为每行保存三个分数的计算图输出。
+pub const OUTPUT_FIELD: &str = "logits";
 
 /// Bytes read per hashing step.
 /// 每个哈希步骤读取的字节数。
 const HASH_CHUNK_BYTES: usize = 1 << 20;
 
-/// Tensor and decision limits declared by the package.
-/// 模型包声明的张量与判定上限。
+/// How a call becomes the token sequence the weights were trained on.
+/// 调用如何变成权重训练时的词元序列。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum Encoding {
+    /// `[CLS]` policy head `[SEP]`, three `[MASK]` choice markers with their criteria, `[SEP]`, the
+    /// rendered call and `[SEP]`; the graph finds the markers itself.
+    /// `[CLS]` 策略头 `[SEP]`，三个 `[MASK]` 选项标记及其判据，`[SEP]`，渲染后的调用与 `[SEP]`；
+    /// 计算图自行定位标记。
+    MarkerHead {
+        /// Token budget of the policy head including the option markers.
+        /// 策略头（含选项标记）的词元预算。
+        head_tokens: u32,
+        /// Token cap of each criterion text.
+        /// 每条判据文本的词元上限。
+        option_tokens: u32,
+    },
+    /// One English decision prompt holding the policy, the three options and the rendered call,
+    /// tokenized without special tokens.
+    /// 一段包含策略、三个选项与渲染后调用的英文判定提示，分词时不加特殊词元。
+    DecisionPrompt {
+        /// Token id used to pad rows on the right.
+        /// 用于在右侧填充各行的词元标识。
+        pad_token_id: i64,
+    },
+}
+
+/// Request, batch and decision limits declared by the package.
+/// 模型包声明的请求、批次与判定上限。
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct RuntimeConfig {
+    /// Model family, which must match the manifest.
+    /// 模型家族，必须与清单一致。
+    pub family: String,
     /// Longest complete sequence the model may read; longer calls are not evaluated.
     /// 模型可读取的最长完整序列；更长的调用不评估。
     pub max_tokens: u32,
-    /// Token budget of the policy head including the option markers.
-    /// 策略头（含选项标记）的词元预算。
-    pub head_tokens: u32,
-    /// Token cap of each criterion text.
-    /// 每条判据文本的词元上限。
-    pub option_tokens: u32,
+    /// Most calls one evaluation request may carry; callers split larger groups.
+    /// 单次评估请求可携带的最多调用数；调用方拆分更大的分组。
+    pub max_request_items: u32,
     /// Most rows one graph run may take.
     /// 单次计算图运行可接收的最多行数。
-    pub max_request_items: u32,
-    /// Preferred rows per graph run.
-    /// 单次计算图运行的首选行数。
     pub micro_batch: u32,
+    /// Most padded tokens (rows times the longest row) one graph run may take; a single row longer
+    /// than this still runs alone.
+    /// 单次计算图运行可接收的最多填充词元数（行数乘以最长行）；超过该值的单行仍单独运行。
+    pub padded_batch_tokens: u32,
     /// Logit lead allow needs over the best other label.
     /// allow 需要领先其他最高分的分数差。
     pub allow_margin: f32,
@@ -85,24 +113,52 @@ pub struct RuntimeConfig {
     /// Graph input names.
     /// 计算图输入名称。
     pub input_fields: Vec<String>,
+    /// Graph output name.
+    /// 计算图输出名称。
+    pub output_field: String,
     /// Graph file relative to the package root.
     /// 相对模型包根目录的计算图文件。
     pub model_file: String,
     /// Weight precision description.
     /// 权重精度说明。
     pub precision: String,
+    /// Devices the package was validated on; others are refused because some graphs crash there.
+    /// 模型包已验证的设备；其他设备被拒绝，因为部分计算图在其上会崩溃。
+    pub devices: Vec<JudgeDevice>,
     /// GPU memory cap for the CUDA arena.
     /// CUDA 内存池的显存上限。
     pub gpu_memory_limit_mib: u64,
     /// Sequence length above which temporary GPU arenas are released after a run.
     /// 序列长度超过该值时，运行后释放临时显存池。
     pub arena_trim_above_tokens: u32,
+    /// Text encoding the weights were trained with.
+    /// 权重训练所用的文本编码。
+    pub encoding: Encoding,
+}
+
+impl RuntimeConfig {
+    /// Request and batch limits callers and hosts need to group calls.
+    /// 调用方与宿主分组调用所需的请求与批次上限。
+    pub fn batch_limits(&self) -> JudgeBatchLimits {
+        JudgeBatchLimits {
+            max_tokens: self.max_tokens,
+            max_request_items: self.max_request_items,
+            micro_batch: self.micro_batch,
+            padded_batch_tokens: self.padded_batch_tokens,
+        }
+    }
 }
 
 /// Identity and provenance of a verified package, for registries and audit records.
 /// 已验证模型包的身份与来源，用于登记表与审计记录。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageSummary {
+    /// Model family.
+    /// 模型家族。
+    pub family: String,
+    /// Package format name, such as `fp16`.
+    /// 模型包格式名，例如 `fp16`。
+    pub format: String,
     /// Export status declared by the training side.
     /// 训练端声明的导出状态。
     pub status: String,
@@ -258,6 +314,8 @@ impl DigestCache for MemoryDigestCache {
 struct Manifest {
     format_version: u32,
     status: String,
+    family: String,
+    format: String,
     parent_sha256: String,
     files: BTreeMap<String, ManifestEntry>,
 }
@@ -359,6 +417,15 @@ impl JudgePackage {
         let config: RuntimeConfig =
             parse_json(RUNTIME_CONFIG_FILE, &read_file(root, RUNTIME_CONFIG_FILE)?)?;
         check_config(&config)?;
+        if config.family != manifest.family {
+            return Err(PackageError::Malformed {
+                file: RUNTIME_CONFIG_FILE.to_string(),
+                detail: format!(
+                    "family `{}` differs from the manifest family `{}`",
+                    config.family, manifest.family
+                ),
+            });
+        }
         if !manifest.files.contains_key(&config.model_file) {
             return Err(PackageError::MissingFile(config.model_file.clone()));
         }
@@ -370,6 +437,8 @@ impl JudgePackage {
                 detail,
             })?;
         let summary = PackageSummary {
+            family: manifest.family,
+            format: manifest.format,
             status: manifest.status,
             parent_sha256: manifest.parent_sha256,
             precision: config.precision.clone(),
@@ -430,22 +499,33 @@ fn check_config(config: &RuntimeConfig) -> Result<(), PackageError> {
             config.labels
         )));
     }
-    if config.input_fields != INPUT_FIELDS {
+    if config.input_fields != INPUT_FIELDS || config.output_field != OUTPUT_FIELD {
         return Err(PackageError::Unsupported(format!(
-            "graph inputs {:?} (supported: {INPUT_FIELDS:?})",
-            config.input_fields
+            "graph interface {:?} -> {} (supported: {INPUT_FIELDS:?} -> {OUTPUT_FIELD})",
+            config.input_fields, config.output_field
         )));
     }
-    let consistent = config.head_tokens > 0
-        && config.option_tokens > 0
-        && config.max_tokens > config.head_tokens
+    let encoding_fits = match config.encoding {
+        Encoding::MarkerHead {
+            head_tokens,
+            option_tokens,
+        } => head_tokens > 0 && option_tokens > 0 && config.max_tokens > head_tokens,
+        Encoding::DecisionPrompt { pad_token_id } => pad_token_id >= 0,
+    };
+    let consistent = encoding_fits
+        && config.max_tokens > 0
         && config.micro_batch > 0
+        && config.padded_batch_tokens > 0
         && config.max_request_items > 0
-        && config.allow_margin.is_finite();
+        && !config.devices.is_empty()
+        && config.allow_margin.is_finite()
+        && config.allow_margin >= 0.0;
     if !consistent {
         return Err(PackageError::Malformed {
             file: RUNTIME_CONFIG_FILE.to_string(),
-            detail: String::from("token limits, batch sizes or the allow margin are inconsistent"),
+            detail: String::from(
+                "token limits, batch sizes, devices, the encoding or the allow margin are inconsistent",
+            ),
         });
     }
     Ok(())
@@ -551,10 +631,12 @@ mod tests {
     /// 写出一个合成模型包，其清单与列出的每个文件一致。
     fn write_package(root: &Path) {
         let config = json!({
-            "max_tokens": 1024, "head_tokens": 64, "option_tokens": 8, "max_request_items": 4,
-            "micro_batch": 2, "allow_margin": 1.0, "labels": ["allow", "review", "block"],
-            "input_fields": INPUT_FIELDS, "model_file": "models/graph.onnx", "precision": "fp16",
-            "gpu_memory_limit_mib": 1024, "arena_trim_above_tokens": 512
+            "family": "mini", "max_tokens": 1024, "max_request_items": 4, "micro_batch": 2,
+            "padded_batch_tokens": 1024, "allow_margin": 1.0, "labels": ["allow", "review", "block"],
+            "input_fields": INPUT_FIELDS, "output_field": OUTPUT_FIELD,
+            "model_file": "models/graph.onnx", "precision": "fp16", "devices": ["cuda"],
+            "gpu_memory_limit_mib": 1024, "arena_trim_above_tokens": 512,
+            "encoding": {"kind": "marker-head", "head_tokens": 64, "option_tokens": 8}
         });
         let files: [(&str, Vec<u8>); 6] = [
             (RUNTIME_CONFIG_FILE, serde_json::to_vec(&config).unwrap()),
@@ -575,7 +657,8 @@ mod tests {
             );
         }
         let manifest = json!({
-            "format_version": 1, "status": "candidate", "parent_sha256": "abc", "files": listed
+            "format_version": 2, "status": "experimental", "family": "mini", "format": "fp16",
+            "parent_sha256": "abc", "files": listed
         });
         std::fs::write(
             root.join(MANIFEST_FILE),
@@ -599,18 +682,20 @@ mod tests {
             .expect("the graph is listed");
         assert_eq!(graph.bytes, 3000);
         let escaping = json!({
-            "format_version": 1, "status": "candidate", "parent_sha256": "abc",
+            "format_version": 2, "status": "experimental", "family": "mini", "format": "fp16",
+            "parent_sha256": "abc",
             "files": { "../outside": { "bytes": 1, "sha256": "00" } }
         });
         assert!(matches!(
             manifest_files(&serde_json::to_vec(&escaping).unwrap()),
             Err(PackageError::UnsafeEntry(_))
         ));
-        let future = json!({
-            "format_version": 2, "status": "candidate", "parent_sha256": "abc", "files": {}
+        let older = json!({
+            "format_version": 1, "status": "candidate", "family": "mini", "format": "fp16",
+            "parent_sha256": "abc", "files": {}
         });
         assert!(matches!(
-            manifest_files(&serde_json::to_vec(&future).unwrap()),
+            manifest_files(&serde_json::to_vec(&older).unwrap()),
             Err(PackageError::Unsupported(_))
         ));
     }
@@ -623,6 +708,14 @@ mod tests {
         let package = JudgePackage::open(dir.path(), &cache).unwrap();
         assert_eq!(package.policy.options.len(), 2);
         assert_eq!(package.summary.policy_version, "test-v1");
+        assert_eq!(
+            (
+                package.summary.family.as_str(),
+                package.summary.format.as_str()
+            ),
+            ("mini", "fp16")
+        );
+        assert_eq!(package.config.batch_limits().padded_batch_tokens, 1024);
         assert_eq!(cache.0.lock().unwrap().len(), 6);
         JudgePackage::open(dir.path(), &cache).unwrap();
     }
@@ -651,7 +744,7 @@ mod tests {
         let error = JudgePackage::open(dir.path(), &cache()).unwrap_err();
         assert_eq!(error.code(), "unsafe_entry");
 
-        manifest["format_version"] = json!(2);
+        manifest["format_version"] = json!(1);
         std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
         let error = JudgePackage::open(dir.path(), &cache()).unwrap_err();
         assert_eq!(error.code(), "unsupported");

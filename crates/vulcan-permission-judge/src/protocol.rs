@@ -192,6 +192,31 @@ pub struct LoadReport {
     /// Self-check inputs that matched their expected decision.
     /// 与预期判定一致的自检输入数。
     pub self_check_items: u32,
+    /// Request and batch limits of the loaded package.
+    /// 已加载模型包的请求与批次上限。
+    pub limits: JudgeBatchLimits,
+}
+
+/// Request and batch limits a loaded package declares. A caller may merge concurrent calls into one
+/// request of at most `max_request_items`; the host sorts them by length and runs graph batches of
+/// at most `micro_batch` rows and `padded_batch_tokens` padded tokens.
+/// 已加载模型包声明的请求与批次上限。调用方可把并发调用合并为最多 `max_request_items` 条的一个请求；
+/// 宿主按长度排序后，以每批最多 `micro_batch` 行、`padded_batch_tokens` 个填充词元运行计算图。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JudgeBatchLimits {
+    /// Longest call in tokens; longer calls are reported, not evaluated.
+    /// 以词元计的最长调用；更长的调用如实报告而不评估。
+    pub max_tokens: u32,
+    /// Most calls per evaluation request.
+    /// 每个评估请求的最多调用数。
+    pub max_request_items: u32,
+    /// Most rows per graph run.
+    /// 每次计算图运行的最多行数。
+    pub micro_batch: u32,
+    /// Most padded tokens per graph run.
+    /// 每次计算图运行的最多填充词元数。
+    pub padded_batch_tokens: u32,
 }
 
 /// Result for one input.

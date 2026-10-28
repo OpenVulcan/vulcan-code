@@ -254,6 +254,12 @@ export interface PermissionJudgeWorkerStatus {
   evaluations: number;
   recentP50Ms: number | null;
   recentP95Ms: number | null;
+  // Batch limits of the loaded package; null while no model is loaded.
+  // 已加载模型包的批次上限；未加载模型时为 null。
+  maxTokens: number | null;
+  maxRequestItems: number | null;
+  microBatch: number | null;
+  paddedBatchTokens: number | null;
 }
 
 // PermissionJudgeCudaInstall is the progress of one CUDA installation.
