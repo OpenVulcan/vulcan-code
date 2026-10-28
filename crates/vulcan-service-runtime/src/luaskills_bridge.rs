@@ -17,13 +17,13 @@ use luaskills::skill::manager::collect_effective_skill_instances_from_roots;
 use luaskills::{
     LuaEngine, LuaEngineOptions, LuaRuntimeCapabilityOptions, LuaRuntimeHostOptions,
     LuaRuntimeManagedRuntimeConfig, LuaRuntimeNetworkOptions, LuaRuntimeSecretString,
-    LuaVmPoolConfig, RuntimeEntryDescriptor,
-    RuntimeSkillConfigEventBatch, RuntimeSkillConfigStoreRefresh,
-    RuntimeSkillPackageConfigDescriptor, RuntimeSkillPackageConfigItemDescriptor,
-    RuntimeSkillPackageConfigStatus, RuntimeSkillRoot, SkillConfigDeleteResult,
-    SkillConfigWriteResult, SkillInstallRequest, SkillInstallSourceType, SkillManagementAuthority,
-    SkillManager, SkillManagerConfig, SkillMeta, SkillPackageConfigInputValue,
-    SkillPackageConfigItemState, SkillUninstallOptions, ToolCacheConfig,
+    LuaVmPoolConfig, RuntimeEntryDescriptor, RuntimeSkillConfigEventBatch,
+    RuntimeSkillConfigStoreRefresh, RuntimeSkillPackageConfigDescriptor,
+    RuntimeSkillPackageConfigItemDescriptor, RuntimeSkillPackageConfigStatus, RuntimeSkillRoot,
+    SkillConfigDeleteResult, SkillConfigWriteResult, SkillInstallRequest, SkillInstallSourceType,
+    SkillManagementAuthority, SkillManager, SkillManagerConfig, SkillMeta,
+    SkillPackageConfigInputValue, SkillPackageConfigItemState, SkillUninstallOptions,
+    ToolCacheConfig,
 };
 use vulcan_luaskills_config::{
     LuaSkillsNetworkSettings, LuaSkillsRuntimeSettings, load_runtime_settings,
@@ -846,7 +846,9 @@ fn apply_live_network_settings(
         official_skill_hub_base_url: Some(network.effective_official_skill_hub_base_url()),
     });
     *handle.live_network_settings.lock().map_err(|_| {
-        String::from("The LuaSkills network settings lock is poisoned; the Hub address cannot be updated.")
+        String::from(
+            "The LuaSkills network settings lock is poisoned; the Hub address cannot be updated.",
+        )
     })? = network.clone();
     Ok(())
 }
@@ -1162,7 +1164,10 @@ pub fn check_luaskill_updates(
     }
     if let Some(ids) = &skill_ids {
         for skill_id in ids {
-            if !instances.iter().any(|instance| &instance.skill_id == skill_id) {
+            if !instances
+                .iter()
+                .any(|instance| &instance.skill_id == skill_id)
+            {
                 checks.push(update_check_error(
                     skill_id,
                     "No effective directory was found for this skill.",
@@ -1183,16 +1188,18 @@ pub fn check_luaskill_updates(
             engine.check_skill_updates_in_root(&handle.skill_roots, &root, Some(&ids))
         }
         .map_err(|error| format!("Failed to check LuaSkills updates: {error}"))?;
-        checks.extend(results.into_iter().map(|check| TauriLuaSkillUpdateCheck {
-            skill_id: check.skill_id,
-            installed_version: check.installed_version,
-            latest_version: check.latest_version,
-            update_available: check.update_available,
-            source_type: check
-                .source_type
-                .map(|source_type| skill_install_source_type_label(source_type).to_string()),
-            source_locator: check.source_locator,
-            error: check.error,
+        checks.extend(results.into_iter().map(|check| {
+            TauriLuaSkillUpdateCheck {
+                skill_id: check.skill_id,
+                installed_version: check.installed_version,
+                latest_version: check.latest_version,
+                update_available: check.update_available,
+                source_type: check
+                    .source_type
+                    .map(|source_type| skill_install_source_type_label(source_type).to_string()),
+                source_locator: check.source_locator,
+                error: check.error,
+            }
         }));
     }
     checks.sort_by(|left, right| left.skill_id.cmp(&right.skill_id));

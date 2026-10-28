@@ -860,8 +860,8 @@ fn production_install_and_update_use_local_github_routes_safely() {
     );
 
     server.select_latest(1);
-    let (_, updated) =
-        update_luaskill(&handle, String::from(FIXTURE_SKILL_ID), None).expect("local GitHub update");
+    let (_, updated) = update_luaskill(&handle, String::from(FIXTURE_SKILL_ID), None)
+        .expect("local GitHub update");
     assert_eq!(catalog_version(&updated, FIXTURE_SKILL_ID), "2.0.0");
     assert!(
         std::fs::read_to_string(&installed_lua)

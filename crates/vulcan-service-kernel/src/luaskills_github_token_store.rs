@@ -22,8 +22,11 @@ const LUASKILLS_GITHUB_TOKEN_MAX_BYTES: usize = 512;
 /// Opens the single token slot.
 /// 打开唯一的令牌槽位。
 fn token_entry() -> Result<Entry, String> {
-    Entry::new(LUASKILLS_GITHUB_TOKEN_SERVICE, LUASKILLS_GITHUB_TOKEN_ACCOUNT)
-        .map_err(|_| String::from("Failed to open the operating-system credential store."))
+    Entry::new(
+        LUASKILLS_GITHUB_TOKEN_SERVICE,
+        LUASKILLS_GITHUB_TOKEN_ACCOUNT,
+    )
+    .map_err(|_| String::from("Failed to open the operating-system credential store."))
 }
 
 /// Reads the stored token, returning `None` when none was saved.
@@ -69,7 +72,9 @@ fn validated_token(token: &str) -> Result<String, String> {
         return Err(String::from("The GitHub token is empty."));
     }
     if token.len() > LUASKILLS_GITHUB_TOKEN_MAX_BYTES
-        || token.chars().any(|character| character.is_whitespace() || character.is_control())
+        || token
+            .chars()
+            .any(|character| character.is_whitespace() || character.is_control())
     {
         return Err(String::from(
             "The GitHub token contains spaces or is too long; paste only the token itself.",

@@ -1681,9 +1681,9 @@ pub(crate) async fn service_set_luaskills_github_token(
         let handle = service_luaskills_handle(&state)?;
         let catalog = run_extension_management_blocking("set GitHub token", move || {
             let stored = match token {
-                Some(token) => Some(
-                    crate::luaskills_github_token_store::store_luaskills_github_token(&token)?,
-                ),
+                Some(token) => {
+                    Some(crate::luaskills_github_token_store::store_luaskills_github_token(&token)?)
+                }
                 None => {
                     crate::luaskills_github_token_store::delete_luaskills_github_token()?;
                     None
