@@ -298,6 +298,9 @@ pub enum UiAction {
     /// Shows one listed release on the changelog page.
     /// 在更新记录页显示一个已列出的发布。
     ChangelogRelease(String),
+    /// Shows the original (`Some(skill)`) or the translation (`None`) of the open Hub skill detail.
+    /// 显示所打开 Hub 技能详情的原文（`Some(skill)`）或译文（`None`）。
+    HubOriginal(Option<String>),
     /// Exact read navigation and explicit human lifecycle draft action.
     /// 精确读取导航及明确人工生命周期草稿动作。
     Knowledge(super::knowledge_actions::KnowledgeAction),
@@ -488,6 +491,10 @@ pub fn perform(app: &mut App, action: UiAction) {
         UiAction::ChangelogRelease(version) => {
             app.changelog_release = Some(version);
             app.pages.remove(&PageId::Changelog);
+        }
+        UiAction::HubOriginal(skill) => {
+            app.hub_original_skill = skill;
+            app.pages.remove(&PageId::LuaSkills);
         }
         UiAction::OpenLibrary(id) => {
             app.select_library(Some(id));

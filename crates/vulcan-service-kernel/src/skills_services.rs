@@ -1571,6 +1571,7 @@ pub(crate) async fn service_search_luaskills_hub(
     state: SharedServiceBridgeState,
     query: Option<String>,
     cursor: Option<String>,
+    locale: Option<String>,
 ) -> Result<vulcan_service_runtime::luaskills_hub::LuaSkillsHubSearchPage, String> {
     let handle = service_luaskills_handle(&state)?;
     tokio::task::spawn_blocking(move || {
@@ -1578,10 +1579,33 @@ pub(crate) async fn service_search_luaskills_hub(
             &handle,
             query.as_deref().unwrap_or_default(),
             cursor.as_deref(),
+            locale.as_deref(),
         )
     })
     .await
     .map_err(|error| format!("LuaSkills Hub search task failed: {error}"))?
+}
+
+/// Reads one skill's detail, README included, from the same Hub as the search.
+/// 从与搜索相同的 Hub 读取一个技能的详情（含 README）。
+///
+/// `locale` is the client's interface language; the Hub returns its translation when one exists.
+/// `locale` 是客户端界面语言；存在译文时 Hub 返回译文。
+pub(crate) async fn service_get_luaskills_hub_skill(
+    state: SharedServiceBridgeState,
+    skill_id: String,
+    locale: Option<String>,
+) -> Result<vulcan_service_runtime::luaskills_hub::LuaSkillsHubSkillDetail, String> {
+    let handle = service_luaskills_handle(&state)?;
+    tokio::task::spawn_blocking(move || {
+        vulcan_service_runtime::luaskills_hub::get_official_hub_skill(
+            &handle,
+            &skill_id,
+            locale.as_deref(),
+        )
+    })
+    .await
+    .map_err(|error| format!("LuaSkills Hub skill detail task failed: {error}"))?
 }
 
 /// Updates one managed LuaSkill package and refreshes the WebUI snapshot.

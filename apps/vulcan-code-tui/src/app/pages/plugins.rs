@@ -13,7 +13,95 @@ fn install_lua(request: Value) -> ServiceCall {
 /// Builds the first-page LuaSkills Hub search mirrored from the WebUI install dialog.
 /// 构建镜像 WebUI 安装弹窗的 LuaSkills Hub 首页搜索。
 fn search_hub(request: Value) -> ServiceCall {
-    skills::search_luaskills_hub(&s(&request, "/query"), None)
+    skills::search_luaskills_hub(&s(&request, "/query"), None, crate::i18n::active_locale())
+}
+
+/// Shows the loaded Hub skill detail: language note, AI overview and README, in the translation
+/// unless the user switched this skill to the original.
+/// 显示已载入的 Hub 技能详情：语言说明、AI 概览与 README；除非用户将该技能切换为原文，否则显示译文。
+fn hub_detail(app: &App, rows: &mut Vec<Row>) {
+    if !app.slots.loaded(Slot::LuaSkillsHubSkill) {
+        return;
+    }
+    // Detail.
+    // 当前 Hub 技能详情。
+    let detail = app.slots.value(Slot::LuaSkillsHubSkill);
+    let skill = v(detail, "/skill");
+    let id = s(skill, "/skillId");
+    let content = v(skill, "/content");
+    let kind = s(content, "/kind");
+    let original = app.hub_original_skill.as_deref() == Some(id.as_str());
+    rows.push(section(s(skill, "/displayName")));
+    match kind.as_str() {
+        "translation" => {
+            // Native name of the source language, as the WebUI drawer shows it.
+            // 源语言的本地名称，与 WebUI 抽屉显示一致。
+            let source = s(content, "/sourceLocale");
+            let language = crate::i18n::LOCALES
+                .iter()
+                .find(|locale| locale.code == source)
+                .map_or_else(
+                    || tr!("skills.lua.hubLanguageOther"),
+                    |locale| locale.native_name.to_string(),
+                );
+            let toggle = if original {
+                action(
+                    tr!("skills.lua.hubShowTranslation"),
+                    UiAction::HubOriginal(None),
+                    Tone::Normal,
+                )
+            } else {
+                action(
+                    tr!("skills.lua.hubShowOriginal"),
+                    UiAction::HubOriginal(Some(id.clone())),
+                    Tone::Normal,
+                )
+            };
+            rows.push(
+                item(
+                    "hub-detail-language",
+                    tr!("skills.lua.hubMachineTranslated", language = language),
+                    "",
+                )
+                .actions(vec![toggle]),
+            );
+        }
+        "original_fallback" => rows.push(note(tr!("skills.lua.hubNoTranslation"), Tone::Muted)),
+        _ => {}
+    }
+    // Shown content: the original node when toggled, else the requested one.
+    // 显示的内容：切换时为原文节点，否则为请求的节点。
+    let shown = if original && v(detail, "/original").is_object() {
+        v(detail, "/original")
+    } else {
+        content
+    };
+    if shown.is_object() {
+        let mut overview = vec![s(shown, "/intro")];
+        overview.extend(
+            a(shown, "/features")
+                .iter()
+                .map(|feature| format!("· {}", feature.as_str().unwrap_or_default())),
+        );
+        rows.push(
+            item("hub-detail-overview", tr!("skills.lua.hubAiOverview"), "").lines(
+                overview
+                    .into_iter()
+                    .filter(|line| !line.is_empty())
+                    .collect(),
+            ),
+        );
+    }
+    // Only a translation node carries its own README; everything else shows the published one.
+    // 只有译文节点自带 README；其余情况显示已发布的 README。
+    let translated = s(shown, "/readme");
+    let readme = if translated.is_empty() {
+        s(detail, "/latest/readme")
+    } else {
+        translated
+    };
+    rows.push(section(tr!("skills.lua.hubReadme")));
+    rows.push(Row::new(RowKind::Markdown { content: readme }, ""));
 }
 
 /// Lists the loaded Hub page; each skill installs through the `official_hub` source.
@@ -45,22 +133,37 @@ fn hub_results(app: &App, rows: &mut Vec<Row>) {
             .collect::<Vec<_>>()
             .join(" · "),
         ];
-        if !s(skill, "/summary").is_empty() {
-            lines.push(s(skill, "/summary"));
-        }
-        rows.push(
-            item(
-                &format!("hub:{id}"),
-                s(skill, "/displayName"),
-                s(skill, "/latestVersion"),
-            )
-            .lines(lines)
-            .actions(vec![action(
+        // The localized summary when the Hub returned one, else the published summary.
+        // Hub 返回本地化摘要时使用它，否则使用已发布的摘要。
+        let summary = [s(skill, "/content/summary"), s(skill, "/summary")]
+            .into_iter()
+            .find(|summary| !summary.is_empty());
+        lines.extend(summary);
+        let mut row = item(
+            &format!("hub:{id}"),
+            s(skill, "/displayName"),
+            s(skill, "/latestVersion"),
+        )
+        .lines(lines)
+        .actions(vec![
+            action(
                 tr!("tui.field.install"),
                 call(skills::install_luaskill("", &id, "official_hub")),
                 Tone::Accent,
-            )]),
-        );
+            ),
+            action(
+                tr!("skills.lua.hubDetails"),
+                call(skills::get_luaskills_hub_skill(
+                    &id,
+                    crate::i18n::active_locale(),
+                )),
+                Tone::Normal,
+            ),
+        ]);
+        if s(skill, "/content/kind") == "translation" {
+            row = row.badge(tr!("skills.lua.hubTranslatedBadge"), Tone::Muted);
+        }
+        rows.push(row);
     }
     if a(page, "/items").is_empty() {
         rows.push(info(tr!("tui.field.hubEmpty"), String::new(), Tone::Muted));
@@ -76,6 +179,7 @@ fn hub_results(app: &App, rows: &mut Vec<Row>) {
             call(skills::search_luaskills_hub(
                 &s(&previous.params, "/query"),
                 Some(&cursor),
+                crate::i18n::active_locale(),
             )),
             Tone::Normal,
         ));
@@ -119,6 +223,7 @@ pub(super) fn lua_skills(app: &App) -> Vec<Row> {
         ),
     ];
     hub_results(app, &mut rows);
+    hub_detail(app, &mut rows);
     for progress in ["/operationProgress", "/managedRuntimeProgress"] {
         if v(catalog, progress).is_object() {
             rows.push(

@@ -730,6 +730,7 @@ fn catalogs_use_real_categories_and_effective_skill_counts() {
 /// 参数：无。检查真实 LuaSkills 页面渲染的动作后返回。
 #[test]
 fn hub_results_install_through_official_hub_and_page_with_the_same_query() {
+    let _locale = crate::i18n::lock_locale("ja-JP");
     let (mut app, _, fixture) = fixture_app();
     // Fixture page with a continuation cursor.
     // 带续页游标的夹具页面。
@@ -737,7 +738,7 @@ fn hub_results_install_through_official_hub_and_page_with_the_same_query() {
     page["nextCursor"] = json!("24");
     app.apply(BackendEvent::Slot {
         slot: Slot::LuaSkillsHub,
-        call: crate::service_api::skills_actions::search_luaskills_hub("weather", None),
+        call: crate::service_api::skills_actions::search_luaskills_hub("weather", None, "ja-JP"),
         value: page,
     });
     // Every service call reachable from the rendered page.
@@ -770,6 +771,79 @@ fn hub_results_install_through_official_hub_and_page_with_the_same_query() {
             .iter()
             .any(|call| call.method == "service_search_luaskills_hub"
                 && call.param("/query") == "weather"
-                && call.param("/cursor") == "24")
+                && call.param("/cursor") == "24"
+                && call.param("/locale") == "ja-JP")
     );
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.method == "service_get_luaskills_hub_skill"
+                && call.param("/skillId") == "demo-weather"
+                && call.param("/locale") == "ja-JP")
+    );
+}
+
+/// The Hub detail shows the translated README and switches to the original node and published
+/// README for that skill only.
+/// Hub 详情显示译文 README，并仅为该技能切换到原文节点与已发布的 README。
+/// Parameters: none. Returns after checking the rendered LuaSkills page before and after the toggle.
+/// 参数：无。检查切换前后渲染的 LuaSkills 页面后返回。
+#[test]
+fn hub_detail_toggles_between_translation_and_original() {
+    let (mut app, _, fixture) = fixture_app();
+    // Fixture detail with a translated node and its original.
+    // 带译文节点及其原文的夹具详情。
+    let detail = fixture["loads"]["service_get_luaskills_hub_skill"].clone();
+    let text = |pointer: &str| {
+        detail
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_string()
+    };
+    app.apply(BackendEvent::Slot {
+        slot: Slot::LuaSkillsHubSkill,
+        call: crate::service_api::skills_actions::get_luaskills_hub_skill("demo-weather", "zh-CN"),
+        value: detail.clone(),
+    });
+    // Markdown bodies and overview lines rendered on the page.
+    // 页面渲染的 Markdown 正文与概览行。
+    let shown = |app: &App| -> (Vec<String>, Vec<String>, Vec<UiAction>) {
+        let mut markdown = Vec::new();
+        let mut overview = Vec::new();
+        let mut toggles = Vec::new();
+        for row in rows(app, PageId::LuaSkills) {
+            match row.kind {
+                RowKind::Markdown { content } => markdown.push(content),
+                RowKind::Item { id, actions, .. } if id == "hub-detail-language" => {
+                    toggles.extend(actions.into_iter().filter_map(|action| action.action));
+                }
+                RowKind::Item { id, lines, .. } if id == "hub-detail-overview" => {
+                    overview.extend(lines);
+                }
+                _ => {}
+            }
+        }
+        (markdown, overview, toggles)
+    };
+    let (markdown, overview, toggles) = shown(&app);
+    assert_eq!(markdown, vec![text("/skill/content/readme")]);
+    assert!(
+        overview
+            .iter()
+            .any(|line| line.contains(&text("/skill/content/features/0")))
+    );
+    assert!(matches!(
+        toggles.as_slice(),
+        [UiAction::HubOriginal(Some(skill))] if skill == "demo-weather"
+    ));
+    perform(&mut app, toggles.into_iter().next().unwrap());
+    let (markdown, overview, toggles) = shown(&app);
+    assert_eq!(markdown, vec![text("/latest/readme")]);
+    assert!(
+        overview
+            .iter()
+            .any(|line| line.contains(&text("/original/features/0")))
+    );
+    assert!(matches!(toggles.as_slice(), [UiAction::HubOriginal(None)]));
 }

@@ -1070,10 +1070,51 @@
           "license": "MIT",
           "tags": ["demo"],
           "latestVersion": "1.0.0",
-          "updatedAt": "2026-10-01T00:00:00Z"
+          "updatedAt": "2026-10-01T00:00:00Z",
+          "content": null
         }
       ],
       "nextCursor": null
+    },
+    "service_get_luaskills_hub_skill": {
+      "hubBaseUrl": "https://hub.example",
+      "skill": {
+        "skillId": "demo-weather",
+        "publisher": "Demo Publisher",
+        "displayName": "Demo Weather",
+        "summary": "Synthetic Hub listing",
+        "repositoryUrl": "",
+        "homepageUrl": "",
+        "license": "MIT",
+        "tags": ["demo"],
+        "latestVersion": "1.0.0",
+        "updatedAt": "2026-10-01T00:00:00Z",
+        "content": {
+          "requestedLocale": "zh-CN",
+          "locale": "zh-CN",
+          "kind": "translation",
+          "sourceLocale": "en-US",
+          "summary": "合成的 Hub 条目",
+          "intro": "合成的天气技能。",
+          "features": ["合成预报"],
+          "readme": "# 合成天气"
+        }
+      },
+      "original": {
+        "requestedLocale": "zh-CN",
+        "locale": "en-US",
+        "kind": "original",
+        "sourceLocale": "en-US",
+        "summary": "Synthetic Hub listing",
+        "intro": "A synthetic weather skill.",
+        "features": ["Synthetic forecasts"],
+        "readme": null
+      },
+      "latest": {
+        "version": "1.0.0",
+        "readme": "# Synthetic Weather",
+        "publishedAt": "2026-10-01T00:00:00Z"
+      }
     },
     "service_mcp_oauth_status": {
       "serverId": "demo-mcp",

@@ -90,9 +90,11 @@ pub fn install_luaskill(skill_id: &str, source: &str, source_type: &str) -> Serv
 /// `query` 为搜索文本；为空时列出 Hub 默认排序。
 /// `cursor` continues a previous page, `None` starts over.
 /// `cursor` 继续上一页，`None` 表示重新开始。
+/// `locale` is the interface language the Hub localizes summaries into.
+/// `locale` 是 Hub 本地化摘要所用的界面语言。
 /// Returns an unexecuted ServiceCall whose page replaces the Hub result slot.
 /// 返回尚未执行的 ServiceCall，其结果页替换 Hub 结果槽位。
-pub fn search_luaskills_hub(query: &str, cursor: Option<&str>) -> ServiceCall {
+pub fn search_luaskills_hub(query: &str, cursor: Option<&str>, locale: &str) -> ServiceCall {
     // Search text sent as null when blank, as the WebUI does.
     // 空白时以 null 发送的搜索文本，与 WebUI 一致。
     let query = query.trim();
@@ -102,8 +104,27 @@ pub fn search_luaskills_hub(query: &str, cursor: Option<&str>) -> ServiceCall {
         json!({
             "query": (!query.is_empty()).then_some(query),
             "cursor": cursor,
+            "locale": locale,
         }),
         Slot::LuaSkillsHub,
+    )
+}
+
+/// Builds the request for `service_get_luaskills_hub_skill`.
+/// 构建 `service_get_luaskills_hub_skill` 的请求。
+/// `skill_id` is the exact Hub skill identity; `locale` is the interface language.
+/// `skill_id` 为准确的 Hub 技能身份；`locale` 为界面语言。
+/// Returns an unexecuted ServiceCall whose detail replaces the Hub detail slot.
+/// 返回尚未执行的 ServiceCall，其详情替换 Hub 详情槽位。
+pub fn get_luaskills_hub_skill(skill_id: &str, locale: &str) -> ServiceCall {
+    ServiceCall::load(
+        "get_luaskills_hub_skill",
+        "service_get_luaskills_hub_skill",
+        json!({
+            "skillId": skill_id,
+            "locale": locale,
+        }),
+        Slot::LuaSkillsHubSkill,
     )
 }
 

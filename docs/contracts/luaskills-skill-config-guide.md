@@ -380,8 +380,10 @@ Vulcan 的**配置侧已齐备**：`enable_private_url_skill_install` 与 `priva
 - **来源值**：`official_hub` 的 `source` 是 Hub 扁平技能标识（如 `weather`），由 LuaSkills 引擎经 `{Hub}/api/v1/skills/{id}/resolve?version=latest` 解析下载地址；宿主不自行下载或校验压缩包。
 - **Hub 基础地址只有一处定义**：`vulcan-luaskills-config` 的 `DEFAULT_OFFICIAL_SKILL_HUB_BASE_URL`（`https://hub.luaskills.com`）。`LuaSkillsNetworkSettings::effective_official_skill_hub_base_url` 在用户未填写 `official_skill_hub_base_url` 时只在内存中返回该默认值，**不回写**用户配置；引擎宿主选项与搜索客户端都使用这一结果。中国大陆用户可在“Hub 与下载源”页选择中国站 `https://hub.luaskills.cn`；宿主不按地区静默切换，账号区域提示见 §13.7，也不随 Hub 改写 GitHub 镜像地址。
 - **只读元数据管理器**（`build_skill_manager_for_root`）刻意不设置 Hub 地址，它不执行安装。
-- **搜索 RPC**：`service_search_luaskills_hub`（参数 `query`、`cursor`，均可选）→ `luaskills_hub::search_official_hub`，访问运行中引擎构建时所用的同一 Hub 的 `GET /api/v1/skills/search`。搜索不获取 LuaSkills 管理锁；查询长度、游标格式、响应大小、超时与重定向（禁止）都在 `luaskills_hub.rs` 内定义唯一边界。搜索读取宿主的实时网络设置（`luaskills_bridge::live_network_settings`），保存新的 Hub 地址后立即切换，无需重启。
-- **界面**：WebUI 安装对话框默认来源为 LuaSkills Hub，搜索选择后按技能标识安装；TUI 在 LuaSkills 页提供搜索表单、逐项安装与下一页按钮，镜像同一 RPC。
+- **搜索 RPC**：`service_search_luaskills_hub`（参数 `query`、`cursor`、`locale`，均可选）→ `luaskills_hub::search_official_hub`，访问运行中引擎构建时所用的同一 Hub 的 `GET /api/v1/skills/search`。搜索不获取 LuaSkills 管理锁；查询长度、游标格式、响应大小、超时与重定向（禁止）都在 `luaskills_hub.rs` 内定义唯一边界。搜索读取宿主的实时网络设置（`luaskills_bridge::live_network_settings`），保存新的 Hub 地址后立即切换，无需重启。
+- **按语言查询**：`locale` 是界面语言代码，宿主只做字符集与长度的边界校验后原样作为 `lang` 传给 Hub，不在客户端匹配语言；省略时 Hub 返回原文（旧客户端行为不变）。每个结果可带 `content`（`kind` 为 `original`、`translation` 或 `original_fallback`，含本地化摘要、AI 简介与功能列表），未精炼的技能为 `null`。
+- **详情 RPC**：`service_get_luaskills_hub_skill`（参数 `skillId` 必填、`locale` 可选）→ `luaskills_hub::get_official_hub_skill`，访问 `GET /api/v1/skills/{id}?lang=`，返回 `skill`（含请求语言的 `content`，只有译文节点带 `readme`）、`original`（原文节点，不带 `readme`）与 `latest`（已发布版本及其原文 README）。详情响应上限 `HUB_DETAIL_RESPONSE_MAX_BYTES`（2 MiB）与搜索上限同在 `luaskills_hub.rs` 唯一定义。
+- **界面**：WebUI 安装对话框默认来源为 LuaSkills Hub，搜索选择后按技能标识安装；结果卡片显示本地化摘要并为译文标“译”，详情抽屉复用会话 Markdown 渲染 README，并可在译文与原文之间切换；界面语言变化时重新查询。TUI 在 LuaSkills 页提供搜索表单、逐项安装、详情与下一页按钮，详情以 Markdown 行显示 README 并提供同样的原文切换，镜像同一 RPC。
 - **更新检查**：`service_check_luaskill_updates`（参数 `skillIds`，可选；缺省检查全部受管技能）按每个技能记录的安装来源查询最新版本，返回逐项结果，失败写入该行 `error`，不获取管理锁、不修改任何文件。ROOT 层技能走 System 权限的检查入口。WebUI 技能列表提供“检查更新”“全部更新”（逐个执行，首个失败即停止）与可更新标记。
 - **更换来源**：`service_update_luaskill` 的 `sourceType` 与 `source` 必须同时给出或同时省略；给出时以 `replace_source: true` 更新，技能标识不变，只替换已记录来源。WebUI 在受管技能的操作菜单中提供“更换来源”，执行时复用更新进度弹窗。
 

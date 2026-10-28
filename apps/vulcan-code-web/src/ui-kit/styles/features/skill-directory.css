@@ -465,11 +465,54 @@
   font-size: var(--vk-fs-xs);
 }
 
-.lua-skill-hub-footer > span {
+.lua-skill-hub-footer > span:first-child {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.lua-skill-hub-footer-actions {
+  flex: none;
+  display: flex;
+  gap: 6px;
+}
+
+.lua-skill-hub-detail-language {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--vk-ember);
+  background: var(--vk-ember-soft);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
+}
+
+.lua-skill-hub-detail-section {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.lua-skill-hub-detail-section h3 {
+  margin: 0;
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.lua-skill-hub-detail-section p,
+.lua-skill-hub-detail-section ul {
+  margin: 0;
+  font-size: var(--vk-fs-sm);
+}
+
+.lua-skill-hub-detail-section ul {
+  padding-left: 18px;
 }
 
 .agent-skill-page-body > .skill-warning-list {

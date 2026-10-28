@@ -82,6 +82,9 @@ pub enum Slot {
     /// `searchLuaSkillsHub`
     /// 当前一页 LuaSkills Hub 搜索结果。
     LuaSkillsHub,
+    /// `getLuaSkillsHubSkill`
+    /// 当前打开的 LuaSkills Hub 技能详情。
+    LuaSkillsHubSkill,
     /// `loadPublicAiSettings`
     /// 公开 AI 设置快照。
     PublicAiSettings,

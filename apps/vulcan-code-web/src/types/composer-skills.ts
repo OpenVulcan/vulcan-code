@@ -1391,6 +1391,59 @@ export interface LuaSkillsHubSkill {
   // RFC 3339 time of the latest catalog change.
   // 最近一次目录变更的 RFC 3339 时间。
   updatedAt: string;
+  // Refined content in the requested language, null without a language or before refinement finishes.
+  // 所请求语言的精炼内容；未指定语言或精炼完成前为 null。
+  content: LuaSkillsHubContent | null;
+}
+
+// LuaSkillsHubContentKind tells whether content is the original, a translation, or the original standing in for a missing one.
+// LuaSkillsHubContentKind 说明内容是原文、译文，还是在缺少译文时代替它的原文。
+export type LuaSkillsHubContentKind = "original" | "translation" | "original_fallback";
+
+// LuaSkillsHubContent is the refined content of a skill's latest version in one language.
+// LuaSkillsHubContent 是技能最新版本在某一语言下的精炼内容。
+export interface LuaSkillsHubContent {
+  // Language the client asked for.
+  // 客户端请求的语言。
+  requestedLocale: string;
+  // Language of this content.
+  // 本内容的语言。
+  locale: string;
+  kind: LuaSkillsHubContentKind;
+  // Language the publisher wrote in, `other` outside the Hub's languages.
+  // 发布者使用的语言；不在 Hub 语言之内时为 `other`。
+  sourceLocale: string;
+  // One-line summary in this language.
+  // 本语言的单行摘要。
+  summary: string;
+  // AI-written introduction.
+  // AI 撰写的介绍。
+  intro: string;
+  // AI-extracted feature points.
+  // AI 提取的功能要点。
+  features: string[];
+  // Translated README, present only on skill detail for a translation.
+  // 翻译后的 README，仅在技能详情且为译文时出现。
+  readme: string | null;
+}
+
+// LuaSkillsHubSkillDetail is one skill's localized entry, original content and latest README.
+// LuaSkillsHubSkillDetail 是一个技能的本地化条目、原文内容与最新 README。
+export interface LuaSkillsHubSkillDetail {
+  // Hub base URL that answered the request.
+  // 响应本次请求的 Hub 基础地址。
+  hubBaseUrl: string;
+  skill: LuaSkillsHubSkill;
+  // Original-language content, null without a language or before refinement finishes.
+  // 原文语言内容；未指定语言或精炼完成前为 null。
+  original: LuaSkillsHubContent | null;
+  latest: {
+    version: string;
+    // Original README of the latest version.
+    // 最新版本的原文 README。
+    readme: string;
+    publishedAt: string;
+  };
 }
 
 // LuaSkillsHubSearchPage carries one page of LuaSkills Hub search results.

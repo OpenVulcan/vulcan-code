@@ -5,6 +5,7 @@ import type {
   AgentSkillSaveRequest,
   LuaSkillsCatalogUpdate,
   LuaSkillsHubSearchPage,
+  LuaSkillsHubSkillDetail,
   LuaSkillsGithubMirror,
   LuaSkillsGithubMirrorProbeResult,
   LuaSkillsGithubMirrorProbeTarget,
@@ -296,11 +297,19 @@ export async function installLuaSkill(skillId: string, source: string, sourceTyp
 
 // searchLuaSkillsHub lists installable skills from the Hub that `official_hub` installs resolve against.
 // searchLuaSkillsHub 列出 `official_hub` 安装所解析的 Hub 中的可安装技能。
-export async function searchLuaSkillsHub(query: string, cursor: string | null): Promise<LuaSkillsHubSearchPage> {
+// `locale` is the interface language; the Hub answers with translated summaries where they exist.
+// `locale` 是界面语言；存在译文时 Hub 返回翻译后的摘要。
+export async function searchLuaSkillsHub(query: string, cursor: string | null, locale: string): Promise<LuaSkillsHubSearchPage> {
   if (!hasServiceRuntime()) {
     return { hubBaseUrl: "", items: [], nextCursor: null };
   }
-  return serviceClient.request<LuaSkillsHubSearchPage>("service_search_luaskills_hub", { query: query.trim() || null, cursor });
+  return serviceClient.request<LuaSkillsHubSearchPage>("service_search_luaskills_hub", { query: query.trim() || null, cursor, locale });
+}
+
+// getLuaSkillsHubSkill reads one skill's detail and README from the same Hub in the interface language.
+// getLuaSkillsHubSkill 以界面语言从同一 Hub 读取一个技能的详情与 README。
+export async function getLuaSkillsHubSkill(skillId: string, locale: string): Promise<LuaSkillsHubSkillDetail> {
+  return serviceClient.request<LuaSkillsHubSkillDetail>("service_get_luaskills_hub_skill", { skillId, locale });
 }
 
 // LuaSkillReplacementSource names the new install source an update switches one skill to.

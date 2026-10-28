@@ -1,10 +1,12 @@
 import * as React from "react";
 import { Search } from "lucide-react";
 import { PageNotice } from "@/components/page";
+import { Badge } from "@/ui-kit/primitives/badge";
 import { Button } from "@/ui-kit/primitives/button";
 import { formatMessage, useI18n } from "@/i18n";
 import { searchLuaSkillsHub } from "@/service/skills-actions-service";
 import type { LuaSkillsHubSkill } from "@/types";
+import { LuaSkillHubDetailSheet } from "./lua-skill-hub-detail-sheet";
 
 // HUB_SEARCH_DEBOUNCE_MS delays a search until typing pauses.
 // HUB_SEARCH_DEBOUNCE_MS 在输入停顿后才发起搜索。
@@ -23,7 +25,7 @@ export function LuaSkillHubPicker(props: {
   // 安装请求是否正在执行。
   disabled: boolean;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   // query is the search text typed by the user.
   // query 是用户输入的搜索文本。
   const [query, setQuery] = React.useState("");
@@ -38,18 +40,21 @@ export function LuaSkillHubPicker(props: {
   const [hubBaseUrl, setHubBaseUrl] = React.useState("");
   const [loading, setLoading] = React.useState(false);
   const [searchError, setSearchError] = React.useState("");
+  // detailOpen shows the selected skill's detail drawer.
+  // detailOpen 显示已选技能的详情抽屉。
+  const [detailOpen, setDetailOpen] = React.useState(false);
   // requestRef identifies the newest request so late answers never overwrite newer results.
   // requestRef 标识最新请求，确保迟到响应不会覆盖较新结果。
   const requestRef = React.useRef(0);
 
-  // load fetches one page; a null cursor starts the query over.
-  // load 拉取一页；null 游标表示重新开始查询。
+  // load fetches one page in the interface language; a null cursor starts the query over.
+  // load 以界面语言拉取一页；null 游标表示重新开始查询。
   const load = React.useCallback(async (text: string, cursor: string | null) => {
     const request = ++requestRef.current;
     setLoading(true);
     setSearchError("");
     try {
-      const page = await searchLuaSkillsHub(text, cursor);
+      const page = await searchLuaSkillsHub(text, cursor, locale);
       if (request !== requestRef.current) return;
       setHubBaseUrl(page.hubBaseUrl);
       setItems((current) => (cursor === null ? page.items : [...current, ...page.items]));
@@ -64,8 +69,10 @@ export function LuaSkillHubPicker(props: {
     } finally {
       if (request === requestRef.current) setLoading(false);
     }
-  }, []);
+  }, [locale]);
 
+  // A query or interface-language change starts the search over.
+  // 查询或界面语言变化时重新开始搜索。
   React.useEffect(() => {
     const timer = window.setTimeout(() => void load(query, null), HUB_SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
@@ -94,6 +101,7 @@ export function LuaSkillHubPicker(props: {
       <div className="lua-skill-hub-results" role="listbox" aria-label={t("skills.lua.hubSearch")} aria-busy={loading}>
         {items.map((skill) => {
           const selected = skill.skillId === props.selectedSkillId;
+          const summary = skill.content?.summary || skill.summary;
           return (
             <button
               key={skill.skillId}
@@ -107,11 +115,14 @@ export function LuaSkillHubPicker(props: {
               <span className="lua-skill-hub-result-title">
                 <strong>{skill.displayName || skill.skillId}</strong>
                 {skill.latestVersion ? <code>{skill.latestVersion}</code> : null}
+                {skill.content?.kind === "translation" ? (
+                  <Badge variant="outline" title={t("skills.lua.hubTranslatedTitle")}>{t("skills.lua.hubTranslatedBadge")}</Badge>
+                ) : null}
               </span>
               <span className="lua-skill-hub-result-meta">
                 {[skill.skillId, skill.publisher, skill.license].filter(Boolean).join(" · ")}
               </span>
-              {skill.summary ? <span className="lua-skill-hub-result-summary">{skill.summary}</span> : null}
+              {summary ? <span className="lua-skill-hub-result-summary">{summary}</span> : null}
             </button>
           );
         })}
@@ -127,12 +138,22 @@ export function LuaSkillHubPicker(props: {
       ) : null}
       <div className="lua-skill-hub-footer">
         <span>{hubBaseUrl ? formatMessage(t("skills.lua.hubSourceLabel"), { hub: hubBaseUrl }) : ""}</span>
-        {nextCursor && !loading ? (
-          <Button disabled={props.disabled} size="sm" type="button" variant="outline" onClick={() => void load(query, nextCursor)}>
-            {t("skills.lua.hubLoadMore")}
-          </Button>
-        ) : null}
+        <span className="lua-skill-hub-footer-actions">
+          {props.selectedSkillId ? (
+            <Button size="sm" type="button" variant="outline" onClick={() => setDetailOpen(true)}>
+              {t("skills.lua.hubDetails")}
+            </Button>
+          ) : null}
+          {nextCursor && !loading ? (
+            <Button disabled={props.disabled} size="sm" type="button" variant="outline" onClick={() => void load(query, nextCursor)}>
+              {t("skills.lua.hubLoadMore")}
+            </Button>
+          ) : null}
+        </span>
       </div>
+      {props.selectedSkillId ? (
+        <LuaSkillHubDetailSheet open={detailOpen} skillId={props.selectedSkillId} onOpenChange={setDetailOpen} />
+      ) : null}
     </div>
   );
 }
