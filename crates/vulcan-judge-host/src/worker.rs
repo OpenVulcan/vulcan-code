@@ -489,24 +489,32 @@ mod tests {
         ));
     }
 
-    /// Loads a real package on the CPU. Run with `--ignored` after setting
+    /// Loads a real package on the CPU, or on WebGPU when `VULCAN_JUDGE_TEST_WEBGPU` names the
+    /// WebGPU execution-provider library. Run with `--ignored` after setting
     /// `VULCAN_JUDGE_TEST_PACKAGE` (package directory) and `VULCAN_JUDGE_TEST_ORT` (ONNX Runtime
-    /// library), both absolute.
-    /// 在 CPU 上加载真实模型包。设置绝对路径 `VULCAN_JUDGE_TEST_PACKAGE`（模型包目录）与
-    /// `VULCAN_JUDGE_TEST_ORT`（ONNX Runtime 库）后以 `--ignored` 运行。
+    /// library), all absolute.
+    /// 在 CPU 上加载真实模型包；`VULCAN_JUDGE_TEST_WEBGPU` 指定 WebGPU 执行提供程序库时改用 WebGPU。
+    /// 设置绝对路径 `VULCAN_JUDGE_TEST_PACKAGE`（模型包目录）与 `VULCAN_JUDGE_TEST_ORT`
+    /// （ONNX Runtime 库）后以 `--ignored` 运行。
     #[test]
     #[ignore = "needs a model package and an ONNX Runtime library"]
-    fn a_real_package_loads_judges_and_benchmarks_on_the_cpu() {
+    fn a_real_package_loads_judges_and_benchmarks() {
         let path = |name| {
             PathBuf::from(std::env::var_os(name).unwrap_or_else(|| panic!("{name:?} is not set")))
+        };
+        let webgpu = std::env::var_os("VULCAN_JUDGE_TEST_WEBGPU").map(PathBuf::from);
+        let device = if webgpu.is_some() {
+            JudgeDevice::WebGpu
+        } else {
+            JudgeDevice::Cpu
         };
         let mut worker = Worker::default();
         let response = worker.handle(JudgeHostRequest::Load {
             id: 1,
             package_dir: path("VULCAN_JUDGE_TEST_PACKAGE"),
             runtime_library: path("VULCAN_JUDGE_TEST_ORT"),
-            execution_provider_library: None,
-            device: JudgeDevice::Cpu,
+            execution_provider_library: webgpu,
+            device,
         });
         let JudgeHostResponse::Loaded { report, .. } = response else {
             panic!("load failed: {response:?}");
@@ -553,6 +561,7 @@ mod tests {
             panic!("benchmark failed");
         };
         assert!(report.p50_ms > 0.0 && report.p95_ms >= report.p50_ms);
+        eprintln!("{report:?}");
         let JudgeHostResponse::Status { status, .. } =
             worker.handle(JudgeHostRequest::Status { id: 4 })
         else {

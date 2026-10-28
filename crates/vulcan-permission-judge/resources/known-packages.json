@@ -10,12 +10,12 @@
       "variants": [
         {
           "format": "fp16-mixed",
-          "devices": ["cuda"],
+          "devices": ["cuda", "webgpu"],
           "download": null
         },
         {
           "format": "fp32",
-          "devices": ["cuda", "cpu"],
+          "devices": ["cuda", "cpu", "webgpu"],
           "download": null
         }
       ]
@@ -29,12 +29,12 @@
       "variants": [
         {
           "format": "fp16-mixed",
-          "devices": ["cuda", "cpu"],
+          "devices": ["cuda", "cpu", "webgpu"],
           "download": null
         },
         {
           "format": "fp32",
-          "devices": ["cuda"],
+          "devices": ["cuda", "webgpu"],
           "download": null
         }
       ]
@@ -48,7 +48,7 @@
       "variants": [
         {
           "format": "fp16-mixed",
-          "devices": ["cuda", "cpu"],
+          "devices": ["cuda", "cpu", "webgpu"],
           "download": null
         }
       ]
