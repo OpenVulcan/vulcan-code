@@ -16471,7 +16471,7 @@ SOFTWARE.
 ### MIT License
 
 Used by:
-- luaskills 0.7.1 - https://github.com/LuaSkills/luaskills
+- luaskills 0.7.2 - https://github.com/LuaSkills/luaskills
 
 ```text
 MIT License
