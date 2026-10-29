@@ -36,6 +36,7 @@ import type {
   ResourceId,
 } from "@/service/conversation-event-window-store";
 import { useConversationSessionResourcesV1 } from "@/state/conversation-session-resources-v1";
+import { withStoppedTurnStatsV1 } from "@/service/conversation-stopped-turn-stats-v1";
 import type {
   CommandSessionSummary,
   ComposerAttachmentSummary,
@@ -235,6 +236,12 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
   // resources resolves only project-level ResourceIds owned by this exact session.
   // resources 仅解析由当前精确会话拥有的项目级 ResourceId。
   const resources = useConversationSessionResourcesV1(ownerReady ? props.sessionId : null, resourceIds);
+  // presentedEvents adds the statistics a stopped Turn shows until Continue consumes it.
+  // presentedEvents 追加已停止 Turn 在被继续执行消费前展示的统计。
+  const presentedEvents = React.useMemo(
+    () => (ownerReady && !props.sessionRunning ? withStoppedTurnStatsV1(props.snapshot) : events),
+    [events, ownerReady, props.sessionRunning, props.snapshot],
+  );
   // projectBranchPresentation keeps per-event projections across snapshots of this surface: it projects everything
   // on first open or after the session changes, then re-projects only the events each streaming update replaced.
   // projectBranchPresentation 在本界面的各次快照之间保留逐事件投影：首次打开或会话变化后全量投影，之后每次流式
@@ -243,9 +250,9 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
   // canonicalPresentation is a pure display projection and never becomes storage or RPC authority.
   // canonicalPresentation 是纯展示投影，绝不成为存储或 RPC 权威。
   const canonicalPresentation = React.useMemo(
-    () => projectBranchPresentation(props.sessionId, events, resources, t, props.providers,
+    () => projectBranchPresentation(props.sessionId, presentedEvents, resources, t, props.providers,
       props.sessionRunning ? requestDrafts : NO_REQUEST_DRAFTS),
-    [events, projectBranchPresentation, props.sessionId, props.providers, props.sessionRunning, requestDrafts, resources, t],
+    [presentedEvents, projectBranchPresentation, props.sessionId, props.providers, props.sessionRunning, requestDrafts, resources, t],
   );
   // messages appends only the process-local optimistic bubble after canonical V1 facts.
   // messages 仅在规范 V1 事实之后追加进程内乐观气泡。
