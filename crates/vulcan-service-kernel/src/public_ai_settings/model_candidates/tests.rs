@@ -2,7 +2,6 @@
 //! 声明式成员系统供应商上已拉取模型候选的行为覆盖。
 
 use super::*;
-use std::collections::BTreeMap;
 use vulcan_provider_adapters::{
     CredentialConnection, CredentialMode, ProtocolModelVariant,
     UnavailableCredentialSecretResolver, parse_openrouter_model_catalog,
@@ -37,7 +36,6 @@ fn openrouter_runtime() -> (PublicAiRuntime, PersistedAiConfiguration) {
                 secret_reference: String::from("secret-openrouter-account"),
                 management_secret_reference: None,
                 service_origin_override: None,
-                prompt_cache_by_protocol: BTreeMap::new(),
             },
         )
         .expect("connection should register");

@@ -52,7 +52,6 @@ fn single_visible_public_model_configuration() -> (
             secret_reference: String::from("secret-a"),
             management_secret_reference: None,
             service_origin_override: None,
-            prompt_cache_by_protocol: std::collections::BTreeMap::new(),
         },
     );
     let catalog = vulcan_provider_adapters::parse_openrouter_model_catalog(

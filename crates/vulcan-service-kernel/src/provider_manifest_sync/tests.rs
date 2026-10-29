@@ -2109,7 +2109,6 @@ async fn signed_manifest_e2e_new_model_rejection_and_rollback() {
                 secret_reference: String::from("signed-alibaba-secret"),
                 management_secret_reference: None,
                 service_origin_override: None,
-                prompt_cache_by_protocol: std::collections::BTreeMap::new(),
             },
         )
         .expect("Alibaba connection should register");
@@ -2133,7 +2132,6 @@ async fn signed_manifest_e2e_new_model_rejection_and_rollback() {
                 secret_reference: String::from("signed-alibaba-media-secret"),
                 management_secret_reference: None,
                 service_origin_override: None,
-                prompt_cache_by_protocol: std::collections::BTreeMap::new(),
             },
         )
         .expect("Alibaba media connection should register");
@@ -3002,7 +3000,6 @@ fn provider_manifest_status_includes_discovered_models_and_available_protocols()
                 secret_reference: String::from("openai-discovery-secret"),
                 management_secret_reference: None,
                 service_origin_override: None,
-                prompt_cache_by_protocol: BTreeMap::new(),
             },
         )
         .expect("OpenAI connection should register");

@@ -320,7 +320,6 @@ export function ModelServicesArea(props: ModelServicesAreaProps) {
       />
       <CustomProviderDialog
         connections={snapshot?.connections ?? []}
-        modelOverrideRecords={snapshot?.modelOverrideRecords ?? []}
         onOpenChange={(open) => {
           if (!open) setCustomEditor(null)
         }}

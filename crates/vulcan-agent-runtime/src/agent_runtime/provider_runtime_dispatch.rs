@@ -623,7 +623,6 @@ mod tests {
             secret_reference: String::from("secret-missing"),
             management_secret_reference: None,
             service_origin_override: None,
-            prompt_cache_by_protocol: BTreeMap::new(),
         };
         configuration
             .connection_graph
@@ -884,7 +883,6 @@ mod tests {
             secret_reference: String::from("secret-deepseek"),
             management_secret_reference: None,
             service_origin_override: None,
-            prompt_cache_by_protocol: BTreeMap::new(),
         };
         configuration
             .connection_graph

@@ -17,7 +17,7 @@ const connection: PublicAiConnection = {
   credential_profile_id: "account-auth", billing_kind: "token_plan", usage_capability: "open_design_wallet",
   usage_requires_management_key: false, has_management_key: false, credential_mode: "auth",
   credential_id: "synthetic-credential", display_name: "Synthetic account", enabled: true,
-  prompt_cache_by_protocol: {}, pending_validation: false,
+  pending_validation: false,
 }
 
 // The declared usage capability owns quota rendering, independently of provider names.

@@ -60,7 +60,6 @@ fn openvulcan_core_provider_follows_global_account_visibility() {
         secret_reference: String::from("fixture-secret"),
         management_secret_reference: None,
         service_origin_override: None,
-        prompt_cache_by_protocol: BTreeMap::new(),
     };
     configuration
         .connection_graph
@@ -185,7 +184,6 @@ fn settings_snapshot_excludes_isolated_custom_provider_connection() {
             secret_reference: String::from("isolated-settings-secret"),
             management_secret_reference: None,
             service_origin_override: None,
-            prompt_cache_by_protocol: BTreeMap::new(),
         },
     );
     configuration.custom_provider_manifest_failures = vec![CustomProviderManifestFailure {
@@ -271,7 +269,6 @@ fn settings_snapshot_separates_provider_tool_templates_from_conversation_access(
         secret_reference: String::from("alibaba-template-secret"),
         management_secret_reference: None,
         service_origin_override: None,
-        prompt_cache_by_protocol: BTreeMap::new(),
     };
     configuration
         .connection_graph
@@ -352,7 +349,6 @@ fn settings_snapshot_limits_source_catalogs_to_custom_providers() {
         secret_reference: format!("{id}-secret"),
         management_secret_reference: None,
         service_origin_override: None,
-        prompt_cache_by_protocol: BTreeMap::new(),
     };
     for account in [
         connection("custom-source-account", &custom_provider_id, "default"),

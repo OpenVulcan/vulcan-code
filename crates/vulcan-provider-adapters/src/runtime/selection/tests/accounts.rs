@@ -8,13 +8,11 @@ use crate::runtime::test_support::{
     with_protocol_variants,
 };
 use crate::{
-    ActiveAiModelSelection, ConnectionModel, ConnectionModelCatalog, ModelExecutionOverrides,
-    PersistedAiConfiguration, parse_openai_model_catalog,
+    ActiveAiModelSelection, ConnectionModel, ConnectionModelCatalog, PersistedAiConfiguration,
+    parse_openai_model_catalog,
 };
 use std::collections::BTreeMap;
-use vulcan_ai_contract::{
-    AiOperation, CapabilitySupport, ModelCapabilities, PromptCachePolicy, ReasoningControlMode,
-};
+use vulcan_ai_contract::{AiOperation, CapabilitySupport, ModelCapabilities, ReasoningControlMode};
 use vulcan_llm_core::{
     ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
 };
@@ -443,43 +441,6 @@ fn active_selection_uses_exact_configured_connection() {
         .resolve_active_selection(&configuration)
         .expect("active account should resolve");
     assert_eq!(selection.route.connection.id, "two");
-}
-
-/// Verifies accounts sharing a provider, model, and protocol receive the same override.
-/// 验证共享供应商、模型与协议的账号取得同一份覆盖。
-#[test]
-fn model_overrides_are_shared_across_matching_accounts() {
-    let (runtime, mut configuration) = two_account_runtime();
-    let key = PersistedAiConfiguration::provider_model_protocol_key(
-        "openrouter",
-        "openai/gpt-5.6-sol",
-        OPENAI_RESPONSES_PROFILE_ID,
-    );
-    configuration.model_overrides.insert(
-        key,
-        ModelExecutionOverrides {
-            prompt_cache: Some(PromptCachePolicy::ProviderDefault),
-            ..ModelExecutionOverrides::default()
-        },
-    );
-
-    for connection_id in ["one", "two"] {
-        configuration.active = Some(ActiveAiModelSelection {
-            provider_id: String::from("openrouter"),
-            model_id: String::from("openai/gpt-5.6-sol"),
-            connection_id: connection_id.to_string(),
-        });
-        runtime
-            .replace_configuration(configuration.clone())
-            .expect("active override selection should cross the activation boundary");
-        let selection = runtime
-            .resolve_active_selection(&configuration)
-            .expect("shared model override should resolve");
-        assert_eq!(
-            selection.overrides.prompt_cache,
-            Some(PromptCachePolicy::ProviderDefault)
-        );
-    }
 }
 
 /// Verifies three custom providers stay fully isolated across models and credentials.

@@ -454,7 +454,6 @@ mod tests {
                     secret_reference: String::from("unused-summary-secret"),
                     management_secret_reference: None,
                     service_origin_override: None,
-                    prompt_cache_by_protocol: Default::default(),
                 },
             )
             .expect("isolated connection");

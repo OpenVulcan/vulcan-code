@@ -9,7 +9,6 @@ use super::catalog_policy::{
     validate_resolved_catalog_limits, validate_resolved_model_capability_limits,
 };
 use super::catalog_sources::{empty_model_source_catalog, resolved_model_source_policy};
-use super::model_overrides::validate_model_overrides;
 use super::tool_targets::{AvailableProviderToolTarget, provider_tool_target_allows_credential};
 use super::{PublicAiRuntime, ResolvedProviderGeneration};
 use crate::{
@@ -1591,68 +1590,6 @@ impl PublicAiRuntime {
         if !matched {
             return Err(format!(
                 "Provider `{provider_id}` has no synchronized model catalog for provider-level capability settings."
-            ));
-        }
-        Ok(())
-    }
-
-    /// Validates one protocol-specific model setting against every account support route.
-    /// 针对每条账号支持路由校验一项协议专属模型设置。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `configuration` owns immutable membership; provider, model, and protocol identify the
-    /// shared route; `overrides` contains the proposed exact adapter controls.
-    /// `configuration` 持有不可变成员关系；供应商、模型与协议标识共享路由；`overrides`
-    /// 包含候选精确适配器控制项。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Success only when at least one support route exists and every matching model accepts the settings.
-    /// 仅当至少存在一条支持路由且每个匹配模型都接受设置时返回成功。
-    pub fn validate_model_execution_override_candidate(
-        &self,
-        configuration: &PersistedAiConfiguration,
-        provider_id: &str,
-        model_id: &str,
-        protocol_id: &str,
-        overrides: &crate::ModelExecutionOverrides,
-    ) -> Result<(), String> {
-        // support_configuration removes account visibility without weakening provider membership.
-        // support_configuration 移除账号可见性，但不会削弱供应商成员关系。
-        let mut support_configuration = configuration.clone();
-        support_configuration
-            .connection_model_access_policies
-            .clear();
-        let catalogs = self.resolved_model_catalog_snapshot(&support_configuration)?;
-        let mut matched_connection = false;
-        for connection in support_configuration
-            .connection_graph
-            .connections
-            .values()
-            .filter(|connection| connection.provider_id == provider_id)
-        {
-            let Some(model) = catalogs
-                .get(connection.id.as_str())
-                .and_then(|catalog| catalog.models.iter().find(|model| model.id == model_id))
-            else {
-                continue;
-            };
-            // effectiveProtocolId mirrors request selection and accepts only frozen model bindings.
-            // effectiveProtocolId 镜像请求选择，并且只接受冻结的模型绑定。
-            let effective_protocol_id = model
-                .resolved_protocol_binding
-                .as_ref()
-                .map(|binding| binding.protocol_profile_id.as_str());
-            if effective_protocol_id != Some(protocol_id) {
-                continue;
-            }
-            matched_connection = true;
-            validate_model_overrides(model, protocol_id, overrides)?;
-        }
-        if !matched_connection {
-            return Err(format!(
-                "Provider `{provider_id}` model `{model_id}` has no synchronized account with effective protocol `{protocol_id}`."
             ));
         }
         Ok(())

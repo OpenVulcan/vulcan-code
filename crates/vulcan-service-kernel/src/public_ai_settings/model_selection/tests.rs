@@ -35,7 +35,6 @@ fn invalid_active_account_rebinds_same_model_before_model_fallback() {
         secret_reference: String::from("stale-secret"),
         management_secret_reference: None,
         service_origin_override: None,
-        prompt_cache_by_protocol: BTreeMap::new(),
     };
     // availableConnection is the exact preferred credential that still exposes the model.
     // availableConnection 是仍公开该模型的精确首选凭据。
@@ -50,7 +49,6 @@ fn invalid_active_account_rebinds_same_model_before_model_fallback() {
         secret_reference: String::from("available-secret"),
         management_secret_reference: None,
         service_origin_override: None,
-        prompt_cache_by_protocol: BTreeMap::new(),
     };
     // configuration retains the stale exact active account and the valid model-level preference.
     // configuration 保留失效的精确活动账号与有效的模型级账号偏好。
@@ -247,7 +245,6 @@ fn missing_session_models_remain_exact_until_explicit_reselection_or_revocation(
         secret_reference: String::from("fallback-secret"),
         management_secret_reference: None,
         service_origin_override: None,
-        prompt_cache_by_protocol: BTreeMap::new(),
     };
     // conversation_capabilities make both catalog models valid text-conversation candidates.
     // conversation_capabilities 使两个目录模型都成为有效文本会话候选。

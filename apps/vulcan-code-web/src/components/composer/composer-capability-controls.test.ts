@@ -60,8 +60,6 @@ function settingsFixture(): PublicAiSettingsSnapshot {
     catalogErrors: {},
     sourceCatalogs: {},
     catalogStatuses: {},
-    modelOverrides: {},
-    modelOverrideRecords: [],
     modelAccessRecords: [],
     providerToolTemplateModels: [],
     connectionModelAccessPolicyRecords: [],

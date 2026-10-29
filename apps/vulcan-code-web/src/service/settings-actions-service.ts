@@ -19,7 +19,6 @@ import type {
   PublicAiContextWindowPolicyOverrides,
   PublicAiMediaDeliveryPolicy,
   PublicAiContextCompactionWindowConfiguration,
-  PublicAiModelOverrides,
   PublicAiInferenceRoute,
   PublicAiInferenceTestResult,
   PublicAiReasoningEffort,
@@ -528,17 +527,6 @@ export async function selectPublicAiModel(request: {
   conversationId?: string | null;
 }): Promise<PublicAiSettingsSnapshot> {
   return serviceClient.request<PublicAiSettingsSnapshot>("service_select_public_ai_model", { request });
-}
-
-// savePublicAiModelOverrides saves local model narrowing and registered parameters.
-// savePublicAiModelOverrides 保存本地模型收窄与注册参数。
-export async function savePublicAiModelOverrides(request: {
-  providerId: string;
-  modelId: string;
-  protocolId: string;
-  overrides?: PublicAiModelOverrides;
-}): Promise<PublicAiSettingsSnapshot> {
-  return serviceClient.request<PublicAiSettingsSnapshot>("service_save_public_ai_model_overrides", { request });
 }
 
 // savePublicAiModelEnabled persists one provider-model conversation choice.

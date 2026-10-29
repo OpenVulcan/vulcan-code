@@ -50,7 +50,6 @@ fn custom_codex_provider_candidate_preserves_explicit_responses_capabilities() {
         session_header: Some(String::from("x-custom-session")),
         allow_manual_fallback: false,
         allow_pending_validation: false,
-        confirm_inactive_protocol_override_deletion: false,
     };
     // candidate is the exact non-persisted descriptor produced by the save boundary.
     // candidate 是保存边界生成的精确未持久化描述符。
@@ -128,7 +127,6 @@ fn custom_codex_capability_switch_is_not_a_connection_contract_change() {
         session_header: None,
         allow_manual_fallback: false,
         allow_pending_validation: false,
-        confirm_inactive_protocol_override_deletion: false,
     };
     // candidate preserves the changed feature values while retaining the same connection contract.
     // candidate 保留已变更能力值，同时维持相同连接契约。
@@ -188,7 +186,6 @@ fn custom_provider_edit_atomically_migrates_every_existing_credential() {
         secret_reference: String::from("secret-existing"),
         management_secret_reference: None,
         service_origin_override: None,
-        prompt_cache_by_protocol: BTreeMap::new(),
     };
     let mut configuration = PersistedAiConfiguration::default();
     configuration
@@ -216,7 +213,6 @@ fn custom_provider_edit_atomically_migrates_every_existing_credential() {
         session_header: None,
         allow_manual_fallback: false,
         allow_pending_validation: false,
-        confirm_inactive_protocol_override_deletion: false,
     };
 
     let candidate = prepare_custom_provider_candidate(&request, &configuration)
@@ -264,7 +260,6 @@ fn custom_provider_edit_atomically_migrates_every_existing_credential() {
         session_header: None,
         allow_manual_fallback: false,
         allow_pending_validation: false,
-        confirm_inactive_protocol_override_deletion: false,
     };
     // cosmetic_candidate proves display-only edits do not disturb credential state.
     // cosmetic_candidate 验证仅展示信息编辑不会扰动凭据状态。
@@ -650,7 +645,6 @@ fn multi_protocol_custom_provider_projects_one_route_per_protocol() {
         session_header: None,
         allow_manual_fallback: false,
         allow_pending_validation: false,
-        confirm_inactive_protocol_override_deletion: false,
     };
     let candidate =
         prepare_custom_provider_candidate(&request, &PersistedAiConfiguration::default())
@@ -666,78 +660,6 @@ fn multi_protocol_custom_provider_projects_one_route_per_protocol() {
         candidate.activation_target.default_protocol_profile_id,
         entry.protocol_routes[0].protocol_profile_id
     );
-}
-
-/// Verifies removing one protocol reports exactly that protocol and preserves the rest.
-/// 验证删除一个协议时精确报告该协议，并完整保留其余协议。
-#[test]
-fn removed_protocols_reports_only_the_deleted_protocol() {
-    let mut current = PersistedAiConfiguration::default();
-    let request = PublicAiCustomProviderSaveRequest {
-        provider_id: Some(String::from("custom:multi")),
-        display_name: String::from("Multi Protocol"),
-        base_url: String::from("https://multi.example.test/v1"),
-        remote_compaction_policy: ResponsesRemoteCompactionPolicy::Disabled,
-        websocket_policy: ResponsesWebsocketPolicy::Disabled,
-        authentication: CustomProviderAuthentication::BearerAuthorization,
-        credential_display_name: None,
-        secret: None,
-        validation_connection_id: None,
-        model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
-        model_discovery_path: None,
-        protocols: vec![
-            CustomProviderProtocol::OpenAiResponses,
-            CustomProviderProtocol::AnthropicMessages,
-        ],
-        protocol_routes: Vec::new(),
-        request_headers: BTreeMap::new(),
-        session_header: None,
-        allow_manual_fallback: false,
-        allow_pending_validation: false,
-        confirm_inactive_protocol_override_deletion: false,
-    };
-    let candidate =
-        prepare_custom_provider_candidate(&request, &PersistedAiConfiguration::default())
-            .expect("candidate should compile");
-    // existing_descriptor carries the full three-protocol set before the edit drops Chat.
-    // existing_descriptor 在编辑删除 Chat 前携带完整三协议集合。
-    let existing_descriptor = CustomProviderDefinition {
-        id: String::from("custom:multi"),
-        display_name: String::from("Multi Protocol"),
-        base_url: String::from("https://multi.example.test/v1"),
-        protocols: vec![
-            CustomProviderProtocol::OpenAiResponses,
-            CustomProviderProtocol::AnthropicMessages,
-            CustomProviderProtocol::OpenAiChat,
-        ],
-        authentication: CustomProviderAuthentication::BearerAuthorization,
-        model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
-        model_discovery_path: None,
-        protocol_routes: Vec::new(),
-        request_headers: BTreeMap::new(),
-        session_header: None,
-    }
-    .into_descriptor()
-    .expect("existing descriptor should compile");
-    current
-        .custom_providers
-        .insert(String::from("custom:multi"), existing_descriptor);
-
-    let removed = custom_provider_removed_protocols(&current, &candidate)
-        .expect("removed protocols should resolve");
-    assert_eq!(
-        removed,
-        BTreeSet::from([String::from("openai-chat-completions.v1")]),
-        "only Chat is removed; Responses and Anthropic survive"
-    );
-    // A cosmetic edit with the same protocol set removes nothing.
-    // 协议集合不变的展示性编辑不删除任何协议。
-    let cosmetic = current.clone();
-    let mut unchanged_candidate = candidate;
-    unchanged_candidate.descriptor = current.custom_providers["custom:multi"].clone();
-    let removed = custom_provider_removed_protocols(&cosmetic, &unchanged_candidate)
-        .expect("unchanged protocol set should resolve");
-    assert!(removed.is_empty());
 }
 
 /// Verifies the connection contract comparison normalizes every route, not only the first.
@@ -831,7 +753,6 @@ fn bounded_fixed_headers_survive_prepare_and_registry_revalidation() {
         session_header: None,
         allow_manual_fallback: false,
         allow_pending_validation: false,
-        confirm_inactive_protocol_override_deletion: false,
     };
     let candidate =
         prepare_custom_provider_candidate(&request, &PersistedAiConfiguration::default())
@@ -868,7 +789,6 @@ fn secret_fixed_headers_are_rejected_at_service_save_boundary() {
             session_header: None,
             allow_manual_fallback: false,
             allow_pending_validation: false,
-            confirm_inactive_protocol_override_deletion: false,
         };
         let error =
             prepare_custom_provider_candidate(&request, &PersistedAiConfiguration::default())

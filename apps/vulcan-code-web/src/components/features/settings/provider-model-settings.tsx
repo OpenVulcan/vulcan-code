@@ -1,8 +1,5 @@
 import * as React from "react"
-import {
-  Search,
-  SlidersHorizontal,
-} from "lucide-react"
+import { Search } from "lucide-react"
 
 import {
   filterProviderModels,
@@ -24,7 +21,6 @@ import {
   providerExtensionActiveSelections,
   providerExtensionModeOf,
 } from "@/lib/provider-tool-capabilities"
-import { PublicAiModelOverridesDialog } from "@/components/features/settings/public-ai-model-overrides-dialog"
 import { PublicAiModelCapabilityDialog } from "@/components/features/settings/public-ai-model-capability-dialog"
 import { Badge } from "@/ui-kit/primitives/badge"
 import { Button } from "@/ui-kit/primitives/button"
@@ -162,16 +158,12 @@ export function ProviderModelCatalog(props: ProviderModelCatalogProps) {
   const { t } = useI18n()
   const { snapshot, mutations } = props
   const pendingMutationKey = mutations.pendingKey
-  const [editingRoute, setEditingRoute] = React.useState<{ providerId: string; route: PublicModelProtocolRoute } | null>(null)
   // inspectingModel identifies a read-only access window by exact provider and model, never row position.
   // inspectingModel 使用准确供应商和模型标识接入详情窗口，不使用行位置。
   const [inspectingModel, setInspectingModel] = React.useState<{ providerId: string; modelId: string } | null>(null)
   // accessTrigger restores keyboard focus to the actual button that opened access details.
   // accessTrigger 将键盘焦点恢复到实际打开接入详情的按钮。
   const accessTrigger = React.useRef<HTMLButtonElement | null>(null)
-  // routeConditionsTrigger restores focus within the parent access dialog after nested editing.
-  // routeConditionsTrigger 在嵌套编辑结束后将焦点恢复到父级接入窗口内。
-  const routeConditionsTrigger = React.useRef<HTMLButtonElement | null>(null)
   const [editingCapability, setEditingCapability] = React.useState<{ provider: PublicAiProviderDescriptor; model: PublicAiModel } | null>(null)
   const [searchQuery, setSearchQuery] = React.useState("")
   // usageFilter narrows visible rows using independent backend-owned admission dimensions.
@@ -276,7 +268,6 @@ export function ProviderModelCatalog(props: ProviderModelCatalogProps) {
   React.useEffect(() => {
     if (inspectingModel && !inspectedRow) {
       setInspectingModel(null)
-      setEditingRoute(null)
     }
   }, [inspectedRow, inspectingModel])
   // unavailableAdmissions retain a cleanup path even when every route of an admitted model disappears.
@@ -650,7 +641,6 @@ export function ProviderModelCatalog(props: ProviderModelCatalogProps) {
       <Dialog open={inspectedRow !== undefined} onOpenChange={(open) => {
         if (!open) {
           setInspectingModel(null)
-          setEditingRoute(null)
         }
       }}>
         <DialogContent size="lg" scrollMode="body-scroll" className="vk-mcat-access-dialog" onCloseAutoFocus={(event) => {
@@ -672,17 +662,6 @@ export function ProviderModelCatalog(props: ProviderModelCatalogProps) {
               <div className="vk-mcat-access-route-heading">
                 <div><strong>{route.serviceEntryName}</strong><span>{protocolDisplayName(route.protocolId)}</span></div>
                 <ProviderModelModalitySummary model={route.model} />
-                <Button
-                  aria-label={t("settings.models.additionalConditions").replace("{protocol}", protocolDisplayName(route.protocolId))}
-                  disabled={pendingMutationKey !== null}
-                  onClick={(event) => {
-                    routeConditionsTrigger.current = event.currentTarget
-                    setEditingRoute({ providerId: inspectedRow.provider.id, route })
-                  }}
-                  size="sm"
-                  type="button"
-                  variant="outline"
-                ><SlidersHorizontal aria-hidden="true" size={14} />{t("settings.modelExperience.routeSettings")}</Button>
               </div>
               <dl className="vk-mcat-access-metadata">
                 <div><dt>{t("settings.modelExperience.bindingSource")}</dt><dd>{route.bindingSource} · {route.bindingRuleId ?? t("settings.models.routeNoRule")} · r{route.manifestRevision}</dd></div>
@@ -699,33 +678,6 @@ export function ProviderModelCatalog(props: ProviderModelCatalogProps) {
               </div>
             </section>)}
           </div>
-          <PublicAiModelOverridesDialog
-            model={editingRoute?.route.model ?? null}
-            onCloseAutoFocus={(event) => {
-              if (routeConditionsTrigger.current?.isConnected) {
-                event.preventDefault()
-                routeConditionsTrigger.current.focus()
-              }
-            }}
-            onOpenChange={(open) => {
-              if (!open) {
-                setEditingRoute(null)
-              }
-            }}
-            onSaved={(next) => {
-              props.onSnapshot(next)
-              setEditingRoute(null)
-            }}
-            open={editingRoute !== null}
-            overrides={snapshot.modelOverrideRecords.find((record) => (
-              record.providerId === editingRoute?.providerId
-              && record.modelId === editingRoute?.route.model.id
-              && record.protocolId === editingRoute?.route.protocolId
-            ))?.overrides}
-            protocolId={editingRoute?.route.protocolId ?? null}
-            providerDisplayName={inspectedRow ? providerLabel(inspectedRow.provider) : null}
-            providerId={editingRoute?.providerId ?? null}
-          />
         </DialogContent>
       </Dialog>
       <PublicAiModelCapabilityDialog

@@ -1057,7 +1057,6 @@ mod submission_model_selection_tests {
             secret_reference: String::from("secret-openrouter-account"),
             management_secret_reference: None,
             service_origin_override: None,
-            prompt_cache_by_protocol: BTreeMap::new(),
         };
         configuration
             .connection_graph
@@ -1150,7 +1149,6 @@ mod submission_model_selection_tests {
                     secret_reference: String::from("secret-openai-account"),
                     management_secret_reference: None,
                     service_origin_override: None,
-                    prompt_cache_by_protocol: BTreeMap::new(),
                 },
             )
             .expect("connection should register");
@@ -1378,7 +1376,6 @@ mod submission_model_selection_tests {
             secret_reference: String::from("secret-openrouter-stale-account"),
             management_secret_reference: None,
             service_origin_override: None,
-            prompt_cache_by_protocol: BTreeMap::new(),
         };
         configuration
             .connection_graph

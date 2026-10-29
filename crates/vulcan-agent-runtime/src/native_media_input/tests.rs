@@ -4,7 +4,7 @@
 use super::*;
 use crate::agent_runtime::events::ProviderRequestMediaContext;
 use serde_json::json;
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 use vulcan_ai_contract::{AiExecutionRequest, AiMessage, ContentItem, MessageRole, ToolResult};
 use vulcan_provider_adapters::{
     CredentialConnection, CredentialMode, CredentialSecretEnvelope, CredentialSecretResolver,
@@ -87,7 +87,6 @@ fn fixture(
                 secret_reference: "native-media-test-secret".into(),
                 management_secret_reference: None,
                 service_origin_override: None,
-                prompt_cache_by_protocol: BTreeMap::new(),
             },
         )
         .unwrap();

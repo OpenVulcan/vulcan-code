@@ -106,7 +106,6 @@ async fn manifest_only_refresh_performs_no_credential_or_remote_discovery() {
         secret_reference: String::from("unavailable-secret-must-not-be-read"),
         management_secret_reference: None,
         service_origin_override: None,
-        prompt_cache_by_protocol: BTreeMap::new(),
     };
     let mut configuration = PersistedAiConfiguration::default();
     configuration
@@ -167,7 +166,6 @@ async fn custom_manual_only_refresh_performs_no_credential_or_remote_discovery()
         secret_reference: String::from("unavailable-secret-must-not-be-read"),
         management_secret_reference: None,
         service_origin_override: None,
-        prompt_cache_by_protocol: BTreeMap::new(),
     };
     let mut configuration = PersistedAiConfiguration::default();
     configuration

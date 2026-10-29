@@ -25,7 +25,6 @@ function providerRemovalCustomizationCount(snapshot: PublicAiSettingsSnapshot, p
     Object.keys(snapshot.customModels?.[providerId] ?? {}).length,
     snapshot.customProviderModelDefaults?.[providerId] ? 1 : 0,
     snapshot.customModelTemplateDecisionRecords?.filter((record) => record.providerId === providerId).length ?? 0,
-    snapshot.modelOverrideRecords.filter((record) => record.providerId === providerId).length,
     snapshot.modelAccessRecords.filter((record) => record.providerId === providerId && record.enabled !== record.defaultEnabled).length,
     snapshot.modelCapabilityOverrideRecords?.filter((record) => record.providerId === providerId).length ?? 0,
     snapshot.customModelConnectionAvailabilityRecords?.filter((record) => connectionIds.has(record.connectionId)).length ?? 0,

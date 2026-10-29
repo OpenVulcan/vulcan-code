@@ -130,29 +130,6 @@ fn model_level_protocol_routing_uses_declared_bindings_per_model() {
         .reapply_model_catalog_overlays(&configuration)
         .expect("protocol-routing generation should publish");
 
-    runtime
-        .validate_model_execution_override_candidate(
-            &configuration,
-            "openrouter",
-            "openai/gpt-5.6-sol",
-            OPENAI_RESPONSES_PROFILE_ID,
-            &crate::ModelExecutionOverrides::default(),
-        )
-        .expect("model settings must validate against the frozen Responses binding");
-    let wrong_protocol_error = runtime
-        .validate_model_execution_override_candidate(
-            &configuration,
-            "openrouter",
-            "openai/gpt-5.6-sol",
-            OPENAI_CHAT_PROFILE_ID,
-            &crate::ModelExecutionOverrides::default(),
-        )
-        .expect_err("another protocol must not authorize model settings");
-    assert!(
-        wrong_protocol_error.contains("effective protocol"),
-        "unexpected wrong-protocol error: {wrong_protocol_error}"
-    );
-
     let published_catalogs = runtime
         .catalog_snapshot()
         .expect("published catalogs should remain readable");

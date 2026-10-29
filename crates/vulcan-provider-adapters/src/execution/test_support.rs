@@ -67,7 +67,6 @@ pub(crate) fn bundled_manifest_route(
         secret_reference: String::from("secret"),
         management_secret_reference: None,
         service_origin_override: None,
-        prompt_cache_by_protocol: BTreeMap::new(),
     };
     let effective_protocol_id = protocol_id.to_string();
     let mut route = ProviderExecutionRoute::resolve(

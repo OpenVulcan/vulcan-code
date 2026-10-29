@@ -242,7 +242,6 @@ async fn run_child_maintenance(native: bool, refresh: bool, standalone: bool) {
                 } else {
                     Some(format!("https://{}", https::HOST))
                 },
-                prompt_cache_by_protocol: Default::default(),
             },
         )
         .unwrap();

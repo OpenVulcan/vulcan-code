@@ -34,7 +34,6 @@ function connectionFixture(id: string, displayName: string): PublicAiConnection 
     credential_id: `credential-${id}`,
     display_name: displayName,
     enabled: true,
-    prompt_cache_by_protocol: {},
     pending_validation: false,
   }
 }
@@ -136,8 +135,6 @@ function snapshotFixture(): PublicAiSettingsSnapshot {
       beta: { state: "ready", model_count: 2, generation: 3, observed_at_ms: 20 },
     },
     catalogErrors: {},
-    modelOverrides: {},
-    modelOverrideRecords: [],
     modelAccessRecords: [
       { providerId: "custom:test", modelId: "shared/chat", enabled: true, defaultEnabled: false },
     ],

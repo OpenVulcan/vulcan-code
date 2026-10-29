@@ -90,17 +90,6 @@ export interface CustomProviderProtocolCollection {
   drafts: Partial<Record<PublicAiCustomProviderProtocol, CustomProtocolRouteDraft>>
 }
 
-// CustomProviderProtocolSetChange reports the exact set difference of one collection edit.
-// CustomProviderProtocolSetChange 报告一次集合编辑的精确集合差异。
-export interface CustomProviderProtocolSetChange {
-  // Protocols added by the edit; additions never invalidate existing explicit bindings.
-  // 编辑新增的协议；新增绝不让既有显式绑定失效。
-  added: PublicAiCustomProviderProtocol[]
-  // Protocols removed by the edit; only their owned overrides are cleaned up on confirm.
-  // 编辑删除的协议；确认时只清理它们拥有的覆盖。
-  removed: PublicAiCustomProviderProtocol[]
-}
-
 /**
  * Returns the backend-resolved route for one exact provider, model, and credential connection.
  * 返回一个精确供应商、模型与凭据连接对应的后端已解析路由。
@@ -320,21 +309,6 @@ export function protocolRoutesFromCollection(
     routes.push(route)
   }
   return routes
-}
-
-// protocolSetChange computes the exact set difference between one persisted collection and a
-// next collection (plan §R6.8).
-// protocolSetChange 计算一个持久化集合与下一集合之间的精确集合差异（方案 §R6.8）。
-export function protocolSetChange(
-  current: PublicAiCustomProviderProtocol[],
-  next: PublicAiCustomProviderProtocol[],
-): CustomProviderProtocolSetChange {
-  const currentSet = new Set(current)
-  const nextSet = new Set(next)
-  return {
-    added: [...nextSet].filter((protocol) => !currentSet.has(protocol)),
-    removed: [...currentSet].filter((protocol) => !nextSet.has(protocol)),
-  }
 }
 
 // customProtocolFromProfile maps one persisted runtime profile identifier back to the browser

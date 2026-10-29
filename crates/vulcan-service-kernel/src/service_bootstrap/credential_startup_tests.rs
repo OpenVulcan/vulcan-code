@@ -49,7 +49,6 @@ fn credential_repair_startup_isolates_old_accounts_without_rewriting_configurati
                 secret_reference: connection_id,
                 management_secret_reference: None,
                 service_origin_override: None,
-                prompt_cache_by_protocol: BTreeMap::new(),
             },
         );
     }
@@ -192,7 +191,6 @@ fn startup_restores_saved_credentials_into_fresh_generation() {
             secret_reference: "saved-startup-secret".into(),
             management_secret_reference: None,
             service_origin_override: None,
-            prompt_cache_by_protocol: BTreeMap::new(),
         },
     );
     configuration

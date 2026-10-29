@@ -881,10 +881,6 @@ pub struct PersistedAiConfiguration {
     /// 供应商连接与账号偏好。
     #[serde(default)]
     pub connection_graph: PersistedConnectionGraph,
-    /// Per-provider, model, and protocol overrides keyed by a collision-resistant composite key.
-    /// 按抗冲突组合键索引的供应商、模型与协议覆盖。
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub model_overrides: BTreeMap<String, ModelExecutionOverrides>,
     /// User conversation-publication choices that differ from the provider default policy.
     /// 与供应商默认策略不同的用户模型会话发布选择。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -1016,7 +1012,6 @@ impl Default for PersistedAiConfiguration {
             disabled_connection_ids: BTreeSet::new(),
             active: None,
             connection_graph: PersistedConnectionGraph::default(),
-            model_overrides: BTreeMap::new(),
             model_enabled_overrides: BTreeMap::new(),
             model_capability_overrides: BTreeMap::new(),
             provider_capability_overrides: BTreeMap::new(),
@@ -2110,8 +2105,6 @@ impl PersistedAiConfiguration {
             .account_preferences
             .model_last_connections
             .remove(provider_model_key.as_str());
-        self.model_overrides
-            .retain(|key, _| !key.starts_with(provider_model_prefix.as_str()));
         self.internal_model_enabled_overrides
             .remove(provider_model_key.as_str());
         self.internal_model_overrides
@@ -2376,10 +2369,6 @@ impl PersistedAiConfiguration {
                 .keys()
                 .any(|key| key.starts_with(provider_model_prefix.as_str()))
             || self
-                .model_overrides
-                .keys()
-                .any(|key| key.starts_with(provider_model_prefix.as_str()))
-            || self
                 .internal_model_enabled_overrides
                 .keys()
                 .any(|key| key.starts_with(provider_model_prefix.as_str()))
@@ -2464,120 +2453,6 @@ impl PersistedAiConfiguration {
         })
     }
 
-    /// Counts protocol-scoped model settings that cannot apply to a selected provider protocol.
-    /// 统计无法应用于所选供应商协议的协议作用域模型设置。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `provider_id` identifies the edited provider and `protocol_id` is its selected target route.
-    /// `provider_id` 标识正在编辑的供应商，`protocol_id` 是其选定目标路由。
-    ///
-    /// # Returns
-    /// 返回值
-    /// The number of exact provider-owned records bound to another protocol.
-    /// 返回绑定到其他协议的精确供应商自有记录数量。
-    pub fn inactive_provider_model_override_count(
-        &self,
-        provider_id: &str,
-        protocol_id: &str,
-    ) -> usize {
-        self.model_overrides
-            .keys()
-            .filter(|key| {
-                Self::provider_model_protocol_key_parts(key).is_some_and(
-                    |(record_provider_id, _, record_protocol_id)| {
-                        record_provider_id == provider_id && record_protocol_id != protocol_id
-                    },
-                )
-            })
-            .count()
-    }
-
-    /// Removes protocol-scoped model settings that cannot apply after a confirmed protocol switch.
-    /// 在已确认协议切换后移除无法继续应用的协议作用域模型设置。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `provider_id` identifies the edited provider and `protocol_id` is the retained target route.
-    /// `provider_id` 标识正在编辑的供应商，`protocol_id` 是要保留的目标路由。
-    pub fn remove_inactive_provider_model_overrides(
-        &mut self,
-        provider_id: &str,
-        protocol_id: &str,
-    ) {
-        self.model_overrides.retain(|key, _| {
-            Self::provider_model_protocol_key_parts(key).is_none_or(
-                |(record_provider_id, _, record_protocol_id)| {
-                    record_provider_id != provider_id || record_protocol_id == protocol_id
-                },
-            )
-        });
-    }
-
-    /// Counts protocol-scoped model settings owned by protocols removed from an edited provider.
-    /// 统计被编辑供应商移除协议所拥有的协议作用域模型设置数量。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `provider_id` identifies the edited provider and `removed_protocols` is the exact set of
-    /// protocols the edit deletes. New protocols never invalidate existing settings, so only
-    /// the removed set participates (plan §R6.8).
-    /// `provider_id` 标识正在编辑的供应商，`removed_protocols` 是编辑删除的精确协议集合。
-    /// 新增协议绝不让既有设置失效，因此只统计被删除集合（方案 §R6.8）。
-    ///
-    /// # Returns
-    /// 返回值
-    /// The number of exact provider-owned records bound to a removed protocol.
-    /// 返回绑定到被删协议的精确供应商自有记录数量。
-    pub fn removed_protocol_model_override_count(
-        &self,
-        provider_id: &str,
-        removed_protocols: &BTreeSet<String>,
-    ) -> usize {
-        if removed_protocols.is_empty() {
-            return 0;
-        }
-        self.model_overrides
-            .keys()
-            .filter(|key| {
-                Self::provider_model_protocol_key_parts(key).is_some_and(
-                    |(record_provider_id, _, record_protocol_id)| {
-                        record_provider_id == provider_id
-                            && removed_protocols.contains(record_protocol_id)
-                    },
-                )
-            })
-            .count()
-    }
-
-    /// Removes protocol-scoped model settings owned by protocols removed from an edited provider.
-    /// 移除被编辑供应商移除协议所拥有的协议作用域模型设置。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `provider_id` identifies the edited provider and `removed_protocols` is the exact set of
-    /// protocols the edit deletes. Only the removed set is cleaned; retained protocols keep
-    /// every owned override (plan §R6.8).
-    /// `provider_id` 标识正在编辑的供应商，`removed_protocols` 是编辑删除的精确协议集合。
-    /// 只清理被删除集合；保留协议及其全部覆盖不被触碰（方案 §R6.8）。
-    pub fn remove_removed_protocol_model_overrides(
-        &mut self,
-        provider_id: &str,
-        removed_protocols: &BTreeSet<String>,
-    ) {
-        if removed_protocols.is_empty() {
-            return;
-        }
-        self.model_overrides.retain(|key, _| {
-            Self::provider_model_protocol_key_parts(key).is_none_or(
-                |(record_provider_id, _, record_protocol_id)| {
-                    record_provider_id != provider_id
-                        || !removed_protocols.contains(record_protocol_id)
-                },
-            )
-        });
-    }
-
     /// Removes every persisted model setting and inference route owned by one provider.
     /// 移除一个供应商持有的全部持久化模型设置与推理路由。
     ///
@@ -2635,8 +2510,6 @@ impl PersistedAiConfiguration {
                 }
                 !options.is_empty()
             });
-        self.model_overrides
-            .retain(|key, _| !key.starts_with(provider_model_prefix.as_str()));
         self.internal_model_enabled_overrides
             .retain(|key, _| !key.starts_with(provider_model_prefix.as_str()));
         self.internal_model_overrides

@@ -99,10 +99,6 @@ pub(crate) struct PublicAiCustomProviderSaveRequest {
     /// 允许在可重试发现失败后将供应商保存为待验证状态。
     #[serde(default)]
     allow_pending_validation: bool,
-    /// Confirms deletion of protocol-scoped model settings that cannot apply after a protocol switch.
-    /// 确认删除协议切换后无法继续应用的协议作用域模型设置。
-    #[serde(default)]
-    confirm_inactive_protocol_override_deletion: bool,
 }
 
 /// Returns one typed, non-persistent custom-provider validation observation.
@@ -347,7 +343,6 @@ fn prepare_custom_provider_candidate(
                     .management_secret_reference
                     .clone(),
                 service_origin_override: existing_connection.service_origin_override.clone(),
-                prompt_cache_by_protocol: existing_connection.prompt_cache_by_protocol.clone(),
             }),
             None,
         )
@@ -380,7 +375,6 @@ fn prepare_custom_provider_candidate(
                 secret_reference,
                 management_secret_reference: None,
                 service_origin_override: None,
-                prompt_cache_by_protocol: BTreeMap::new(),
             }),
             Some(CredentialSecretEnvelope::new_api_key(secret.to_string())?),
         )
@@ -516,67 +510,6 @@ fn custom_provider_connection_contract_changed(
     Ok(existing_entries != candidate_entries)
 }
 
-/// Reports whether an edited custom provider changes its enabled protocol set.
-/// 报告被编辑的自定义供应商是否改变其启用协议集合。
-///
-/// # Parameters
-/// 参数
-/// `current` owns the durable descriptor and `candidate` contains the newly selected routes.
-/// `current` 持有持久化描述符，`candidate` 包含新选择的路由。
-///
-/// # Returns
-/// 返回值
-/// The exact set of protocol profile identifiers removed by the edit; an empty set means the
-/// enabled protocol set was not reduced (creation, cosmetics, or additions only).
-/// 返回编辑移除的精确协议配置档标识集合；空集合表示启用协议集合未被缩减
-/// （新建、展示性修改或仅新增协议）。
-fn custom_provider_removed_protocols(
-    current: &PersistedAiConfiguration,
-    candidate: &PreparedCustomProviderCandidate,
-) -> Result<BTreeSet<String>, String> {
-    if !candidate.updating_existing {
-        return Ok(BTreeSet::new());
-    }
-    // existing_protocols is the full enabled protocol set of the persisted descriptor; the
-    // single-route authority is removed for multi-protocol providers (plan §R6.9).
-    // existing_protocols 是持久化描述符的完整启用协议集合；多协议供应商不再使用
-    // 单路由权威（方案 §R6.9）。
-    let existing_protocols = current
-        .custom_providers
-        .get(candidate.provider_id.as_str())
-        .map(|provider| {
-            provider
-                .service_entries
-                .iter()
-                .flat_map(|entry| entry.protocol_routes.iter())
-                .map(|route| route.protocol_profile_id.clone())
-                .collect::<BTreeSet<_>>()
-        })
-        .ok_or_else(|| {
-            format!(
-                "Custom provider `{}` is not configured.",
-                candidate.provider_id
-            )
-        })?;
-    if existing_protocols.is_empty() {
-        return Err(format!(
-            "Custom provider `{}` has no persisted protocol route.",
-            candidate.provider_id
-        ));
-    }
-    let candidate_protocols = candidate
-        .descriptor
-        .service_entries
-        .iter()
-        .flat_map(|entry| entry.protocol_routes.iter())
-        .map(|route| route.protocol_profile_id.clone())
-        .collect::<BTreeSet<_>>();
-    Ok(existing_protocols
-        .difference(&candidate_protocols)
-        .cloned()
-        .collect())
-}
-
 /// Builds one isolated validation candidate for every credential owned by an edited provider.
 /// 为被编辑供应商持有的每份凭据构建一个隔离验证候选项。
 ///
@@ -626,7 +559,6 @@ fn custom_provider_edit_validation_candidates(
                 secret_reference: existing.secret_reference,
                 management_secret_reference: existing.management_secret_reference,
                 service_origin_override: existing.service_origin_override,
-                prompt_cache_by_protocol: existing.prompt_cache_by_protocol,
             };
             (
                 source_connection_id,
@@ -1037,27 +969,6 @@ pub(crate) async fn service_save_public_ai_custom_provider(
     // connection_contract_changed 防止仅修改供应商展示信息时强制重新验证账号。
     let connection_contract_changed =
         custom_provider_connection_contract_changed(&current_configuration, &candidate)?;
-    // removed_protocols scopes destructive cleanup to the actual protocols the edit deletes;
-    // additions never invalidate existing settings (plan §R6.8).
-    // removed_protocols 把破坏性清理限定到编辑实际删除的协议；新增协议绝不让既有设置失效
-    // （方案 §R6.8）。
-    let removed_protocols = custom_provider_removed_protocols(&current_configuration, &candidate)?;
-    // inactive_protocol_override_count identifies route settings owned by the removed protocols.
-    // inactive_protocol_override_count 标识被移除协议拥有的路由设置。
-    let inactive_protocol_override_count = current_configuration
-        .removed_protocol_model_override_count(candidate.provider_id.as_str(), &removed_protocols);
-    if inactive_protocol_override_count > 0 && !request.confirm_inactive_protocol_override_deletion
-    {
-        return Err(format!(
-            "Removing protocol(s) `{}` from custom provider `{}` would deactivate {inactive_protocol_override_count} protocol-scoped model setting(s). Explicit confirmation is required to delete those incompatible settings.",
-            removed_protocols
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(", "),
-            candidate.provider_id
-        ));
-    }
     // edit_validation_outcomes remains empty for creation and complete for every existing credential during edits.
     // edit_validation_outcomes 在新建时为空，在编辑时包含每份现有凭据的完整结果。
     let edit_validation_outcomes = if candidate.updating_existing && connection_contract_changed {
@@ -1283,21 +1194,6 @@ pub(crate) async fn service_save_public_ai_custom_provider(
                             outcome.pending_validation,
                         )?;
                     }
-                }
-                if !removed_protocols.is_empty() {
-                    // Cascade cleanup is scoped to the removed protocol set: overrides owned by
-                    // removed protocols are deleted. Explicit model preferences that point at a
-                    // removed protocol are intentionally retained so binding resolution keeps
-                    // failing closed (ExplicitProtocolDisabled) and the model stays blocked until
-                    // the user re-selects; silently dropping the preference would fall back to
-                    // Auto (plan §R6.8).
-                    // 级联清理限定到被删除协议集合：被删协议拥有的覆盖被删除。指向被删协议的
-                    // 显式模型偏好被刻意保留，使绑定解析持续失败封闭（ExplicitProtocolDisabled）
-                    // 且模型保持 blocked 直到用户重选；静默删除偏好会回退到 Auto（方案 §R6.8）。
-                    configuration.remove_removed_protocol_model_overrides(
-                        provider_id.as_str(),
-                        &removed_protocols,
-                    );
                 }
                 if connection_contract_changed || !updating_existing {
                     // candidateCatalogs uses the validated staged sources without publishing them;

@@ -242,7 +242,6 @@ fn model_source_policies_control_runtime_identity_union() {
                 secret_reference: String::from("secret-source-policy"),
                 management_secret_reference: None,
                 service_origin_override: None,
-                prompt_cache_by_protocol: BTreeMap::new(),
             };
             let mut configuration = PersistedAiConfiguration::default();
             configuration

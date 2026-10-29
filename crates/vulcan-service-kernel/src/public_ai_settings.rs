@@ -70,7 +70,7 @@ use snapshot::build_public_ai_settings_snapshot;
 pub(super) use snapshot::{
     PublicAiConnectionSnapshot, PublicAiCustomModelConnectionAvailabilityRecord,
     PublicAiCustomModelProtocolPreferenceRecord, PublicAiCustomModelTemplateDecisionRecord,
-    PublicAiModelAccessRecord, PublicAiModelCapabilityOverrideRecord, PublicAiModelOverrideRecord,
+    PublicAiModelAccessRecord, PublicAiModelCapabilityOverrideRecord,
     PublicAiMultimodalUnderstandingCandidateRecord, PublicAiProviderToolTargetSnapshot,
     PublicAiSettingsSnapshot,
 };
@@ -190,15 +190,14 @@ use model_selection::{
 pub(super) use model_settings::{
     PublicAiConnectionModelEnabledSaveRequest, PublicAiConnectionModelsEnabledSaveRequest,
     PublicAiModelCapabilityOverridesSaveRequest, PublicAiModelEnabledSaveRequest,
-    PublicAiModelOverridesSaveRequest, PublicAiProviderCapabilityOverridesSaveRequest,
+    PublicAiProviderCapabilityOverridesSaveRequest,
 };
 pub(super) use model_settings::{
     service_save_public_ai_connection_model_enabled,
     service_save_public_ai_connection_model_set_enabled,
     service_save_public_ai_connection_models_enabled,
     service_save_public_ai_model_capability_overrides, service_save_public_ai_model_enabled,
-    service_save_public_ai_model_overrides, service_save_public_ai_model_set_enabled,
-    service_save_public_ai_provider_capability_overrides,
+    service_save_public_ai_model_set_enabled, service_save_public_ai_provider_capability_overrides,
 };
 // Preserve the existing OAuth request paths while RPC dispatch infers request types.
 // RPC 分发推导请求类型时仍保留现有 OAuth 请求路径。

@@ -2,7 +2,6 @@
 //! 凭据连接生命周期、精确验证与秘密变更补偿。
 
 use serde::Deserialize;
-use std::collections::BTreeMap;
 use vulcan_ai_contract::{AccountUsageAvailability, AccountUsageSnapshot};
 use vulcan_provider_adapters::{
     CredentialConnection, CredentialMode, CredentialSecretEnvelope, CredentialSecretMaterial,
@@ -365,7 +364,6 @@ pub(super) async fn add_public_ai_connection_with_secret(
         secret_reference: secret_reference.clone(),
         management_secret_reference: management_secret_reference.clone(),
         service_origin_override,
-        prompt_cache_by_protocol: BTreeMap::new(),
     };
     let secret_store = runtime.credential_secret_store();
     CredentialSecretStore::create_secret(secret_store.as_ref(), secret_reference.as_str(), &secret)

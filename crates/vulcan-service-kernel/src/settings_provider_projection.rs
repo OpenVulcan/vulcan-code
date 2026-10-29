@@ -733,7 +733,6 @@ pub(crate) fn memories(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
     use std::sync::Arc;
 
     use super::{
@@ -774,7 +773,6 @@ mod tests {
                     secret_reference: String::from("secret-global-account"),
                     management_secret_reference: None,
                     service_origin_override: None,
-                    prompt_cache_by_protocol: BTreeMap::new(),
                 },
             )
             .expect("global connection should register");

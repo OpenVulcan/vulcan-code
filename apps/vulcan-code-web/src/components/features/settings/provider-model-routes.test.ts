@@ -61,7 +61,6 @@ function connectionFixture(id: string, serviceEntryId: string): PublicAiConnecti
     credential_id: `credential-${id}`,
     display_name: id,
     enabled: true,
-    prompt_cache_by_protocol: {},
     pending_validation: false,
   }
 }

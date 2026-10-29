@@ -178,7 +178,6 @@ async fn context_with_http(
             secret_reference: "test-media-secret".into(),
             management_secret_reference: None,
             service_origin_override: None,
-            prompt_cache_by_protocol: BTreeMap::new(),
         },
     )?;
     configuration.set_model_enabled("openrouter", "openai/gpt-5.6-terra", true);

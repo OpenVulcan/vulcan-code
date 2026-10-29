@@ -17,10 +17,10 @@ import { Switch } from "@/ui-kit/primitives/switch"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/ui-kit/primitives/dialog"
 import { useI18n } from "@/i18n"
 import type { TranslationKey } from "@/i18n-messages"
-import { CUSTOM_PROTOCOL_ROUTE_INHERIT_SELECT_VALUE, codexResponsesFeaturePoliciesFromEntry, customProtocolRouteDraftValue, customProtocolRouteSelectValue, customProtocolProfileId, emptyProtocolRouteDraft, protocolCollectionChanged, protocolCollectionFromEntry, protocolRoutesFromCollection, protocolSetChange, sortProtocolsByAutoPriority } from "@/components/features/settings/custom-provider-protocol-drafts"
+import { CUSTOM_PROTOCOL_ROUTE_INHERIT_SELECT_VALUE, codexResponsesFeaturePoliciesFromEntry, customProtocolRouteDraftValue, customProtocolRouteSelectValue, customProtocolProfileId, emptyProtocolRouteDraft, protocolCollectionChanged, protocolCollectionFromEntry, protocolRoutesFromCollection, sortProtocolsByAutoPriority } from "@/components/features/settings/custom-provider-protocol-drafts"
 import type { CustomProtocolRouteDraft, CustomProviderProtocolCollection } from "@/components/features/settings/custom-provider-protocol-drafts"
 import { probePublicAiCustomProvider, savePublicAiCustomProvider } from "@/service/settings-actions-service"
-import type { PublicAiCustomProviderModelDiscoveryMode, PublicAiCustomProviderProbeResult, PublicAiCustomProviderProtocol, PublicAiCustomProviderSaveRequest, PublicAiResponsesRemoteCompactionPolicy, PublicAiResponsesWebsocketPolicy, PublicAiConnection, PublicAiModelCapabilityEvidence, PublicAiModelOverrideRecord, PublicAiProviderDescriptor, PublicAiServiceEntry, PublicAiSettingsSnapshot } from "@/types"
+import type { PublicAiCustomProviderModelDiscoveryMode, PublicAiCustomProviderProbeResult, PublicAiCustomProviderProtocol, PublicAiCustomProviderSaveRequest, PublicAiResponsesRemoteCompactionPolicy, PublicAiResponsesWebsocketPolicy, PublicAiConnection, PublicAiModelCapabilityEvidence, PublicAiProviderDescriptor, PublicAiServiceEntry, PublicAiSettingsSnapshot } from "@/types"
 import { formatDateTime, errorMessage } from "@/lib/display-format"
 import { protocolDisplayName } from "./protocol-display-name"
 import "@/ui-kit/styles/features/settings-forms.css"
@@ -149,7 +149,6 @@ function CustomProtocolRouteDraftCard(props: {
 // CustomProviderDialog 编辑精确的公开自定义供应商契约。
 export function CustomProviderDialog(props: {
   connections: PublicAiConnection[]
-  modelOverrideRecords: PublicAiModelOverrideRecord[]
   onOpenChange: (open: boolean) => void
   onSaved: (snapshot: PublicAiSettingsSnapshot) => void
   open: boolean
@@ -178,9 +177,6 @@ export function CustomProviderDialog(props: {
   const [probing, setProbing] = React.useState(false)
   const [saving, setSaving] = React.useState(false)
   const [pendingConfirmation, setPendingConfirmation] = React.useState<"manual" | "pending" | null>(null)
-  // protocolOverrideConfirmation retains the original save intent while incompatible route settings are confirmed.
-  // protocolOverrideConfirmation 在确认不兼容路由设置期间保留原始保存意图。
-  const [protocolOverrideConfirmation, setProtocolOverrideConfirmation] = React.useState<"ready" | "manual" | "pending" | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   // One operation owns the wizard draft until probing or saving has settled.
   // 探测或保存结束前，由单次操作持有向导草稿。
@@ -234,7 +230,6 @@ export function CustomProviderDialog(props: {
     setStep("connection")
     setProbeResult(null)
     setPendingConfirmation(null)
-    setProtocolOverrideConfirmation(null)
     setInvalidHeaderProtocols(new Set())
     setError(null)
   }, [props.open, props.provider, providerConnections])
@@ -281,7 +276,6 @@ export function CustomProviderDialog(props: {
   // requestBody 从当前表单构造精确的类型化服务请求。
   const requestBody = React.useCallback((
     acceptance?: "manual" | "pending",
-    confirmInactiveProtocolOverrideDeletion = false,
   ): PublicAiCustomProviderSaveRequest => ({
     providerId: props.provider?.id,
     displayName: displayName.trim(),
@@ -309,7 +303,6 @@ export function CustomProviderDialog(props: {
     protocolRoutes: protocolRoutesFromCollection({ protocols, drafts: routeDrafts }),
     allowManualFallback: acceptance === "manual",
     allowPendingValidation: acceptance === "pending",
-    confirmInactiveProtocolOverrideDeletion,
   }), [authentication, baseUrl, credentialDisplayName, displayName, modelDiscoveryMode, modelDiscoveryPath, props.provider, protocols, remoteCompactionPolicy, routeDrafts, secret, sessionHeader, validationConnectionId, websocketPolicy])
 
   // probe verifies authentication and model discovery without persisting the provider or secret.
@@ -345,40 +338,17 @@ export function CustomProviderDialog(props: {
   // contract (plan §R6.8).
   // originalProtocols 是投影到浏览器可编辑契约中的精确持久化协议集合（方案 §R6.8）。
   const originalProtocols = protocolCollectionFromEntry(originalEntry).protocols
-  // protocolSetChange distinguishes destructive protocol removals from other technical edits;
-  // additions never invalidate existing settings (plan §R6.8).
-  // protocolSetChange 将破坏性协议删除与其他技术编辑区分开；新增绝不让既有设置失效
-  // （方案 §R6.8）。
-  const protocolChange = protocolSetChange(originalProtocols, protocols)
-  const removedProtocols = protocolChange.removed
-  // inactiveProtocolOverrideCount counts exact settings owned by the removed protocols that
-  // require explicit deletion confirmation.
-  // inactiveProtocolOverrideCount 统计被移除协议拥有的、需要显式确认删除的精确设置数量。
-  const inactiveProtocolOverrideCount = props.provider && removedProtocols.length > 0
-    ? props.modelOverrideRecords.filter((record) => (
-        record.providerId === props.provider?.id
-        && removedProtocols.some((removed) => customProtocolProfileId(removed) === record.protocolId)
-      )).length
-    : 0
 
   // save persists only the explicit action represented by the result screen.
   // save 仅持久化结果页明确表示的操作。
-  const save = React.useCallback(async (
-    acceptance?: "manual" | "pending",
-    confirmInactiveProtocolOverrideDeletion = false,
-  ) => {
+  const save = React.useCallback(async (acceptance?: "manual" | "pending") => {
     if (operationRunningRef.current || !headersValid) return
-    if (inactiveProtocolOverrideCount > 0 && !confirmInactiveProtocolOverrideDeletion) {
-      setPendingConfirmation(null)
-      setProtocolOverrideConfirmation(acceptance ?? "ready")
-      return
-    }
     operationRunningRef.current = true
     setSaving(true)
     setError(null)
     try {
       await persistAndApplyCustomProviderSnapshot(
-        requestBody(acceptance, confirmInactiveProtocolOverrideDeletion),
+        requestBody(acceptance),
         savePublicAiCustomProvider,
         props.onSaved,
       )
@@ -389,7 +359,7 @@ export function CustomProviderDialog(props: {
       operationRunningRef.current = false
       setSaving(false)
     }
-  }, [headersValid, inactiveProtocolOverrideCount, props, requestBody])
+  }, [headersValid, props, requestBody])
 
   // saveCredentialFreeEdit persists a valid provider contract when no account exists to probe.
   // saveCredentialFreeEdit 在不存在可探测账号时持久化有效的供应商契约。
@@ -729,40 +699,6 @@ export function CustomProviderDialog(props: {
               >
                 {saving ? <LoaderCircle className="vk-spin" /> : null}
                 {t("settings.customProviders.confirmPending")}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-        <AlertDialog
-          onOpenChange={(open) => {
-            if (!open && !saving) setProtocolOverrideConfirmation(null)
-          }}
-          open={protocolOverrideConfirmation !== null}
-        >
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>{t("settings.customProviders.protocolOverridesConfirmTitle")}</AlertDialogTitle>
-              <AlertDialogDescription>
-                {t("settings.customProviders.protocolOverridesConfirmDescription")
-                  .replace("{count}", String(inactiveProtocolOverrideCount))
-                  .replace("{protocol}", removedProtocols
-                    .map((removed) => protocolDisplayName(customProtocolProfileId(removed)))
-                    .join(", ") || t("settings.customProviders.protocol"))}
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel disabled={saving}>{t("memory.common.cancel")}</AlertDialogCancel>
-              <AlertDialogAction
-                disabled={saving || protocolOverrideConfirmation === null}
-                onClick={() => {
-                  const acceptance = protocolOverrideConfirmation === "ready"
-                    ? undefined
-                    : protocolOverrideConfirmation ?? undefined
-                  void save(acceptance, true)
-                }}
-              >
-                {saving ? <LoaderCircle className="vk-spin" /> : null}
-                {t("settings.customProviders.protocolOverridesConfirmAction")}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

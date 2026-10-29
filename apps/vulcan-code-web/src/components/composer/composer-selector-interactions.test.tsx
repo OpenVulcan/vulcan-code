@@ -214,7 +214,7 @@ it("does not offer usage refresh without the declared credential profile", async
   snapshot.connections = [{ id: "a", provider_id: "p", service_entry_id: "entry", credential_profile_id: "profile",
     billing_kind: "pay_as_you_go", usage_capability: "unsupported", usage_requires_management_key: false,
     has_management_key: false, credential_mode: "token", credential_id: "synthetic", display_name: "Account A",
-    enabled: true, prompt_cache_by_protocol: {}, pending_validation: false }];
+    enabled: true, pending_validation: false }];
   vi.mocked(loadPublicAiSettings).mockResolvedValue(snapshot);
   await render(<MergedHarness />);
   await click("Model");
@@ -259,7 +259,7 @@ it("refreshes declared account usage once and recovers from an explicit failure"
   snapshot.connections = [{ id: "a", provider_id: "p", service_entry_id: "entry", credential_profile_id: "profile",
     billing_kind: "pay_as_you_go", usage_capability: "deep_seek_balance", usage_requires_management_key: false,
     has_management_key: false, credential_mode: "token", credential_id: "synthetic", display_name: "Account A",
-    enabled: true, prompt_cache_by_protocol: {}, pending_validation: false }];
+    enabled: true, pending_validation: false }];
   snapshot.providers = [{ id: "p", display_name: "Provider", kind: "custom", category: "unclassified",
     credential_directory_visibility: "configured_only", credential_registration: "direct", service_entries: [{
       id: "entry", display_name: "Entry", kind: "conversation", base_url: "https://audit.invalid/v1",
@@ -442,7 +442,7 @@ function settings(): PublicAiSettingsSnapshot {
     ] },
     newSessionContextCompactionWindowNodeId: null,
     providerPriorities: {}, usageCache: {}, connections: [], providers: [], providerDefaults: {}, catalogs: {}, modelSupportCatalogs: {},
-    catalogErrors: {}, sourceCatalogs: {}, catalogStatuses: {}, modelOverrides: {}, modelOverrideRecords: [], modelAccessRecords: [],
+    catalogErrors: {}, sourceCatalogs: {}, catalogStatuses: {}, modelAccessRecords: [],
     providerToolTemplateModels: [], connectionModelAccessPolicyRecords: [], customModels: {},
     customProviderSystemModelDefaults: { context_limit: 200_000, output_limit: 32_768, input_resources: [], reasoning: "native", reasoning_control: "effort_selection", reasoning_efforts: ["high"] },
     modelCapabilityOverrides: {}, modelCapabilityOverrideRecords: [], providerToolTargets: [{ connectionId: "a", connectionDisplayName: "Account A", manifestSourceLayer: "bundled",

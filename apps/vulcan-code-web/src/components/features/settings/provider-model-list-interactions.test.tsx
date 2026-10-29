@@ -21,7 +21,7 @@ vi.mock("@/service/settings-actions-service", async (importOriginal) => ({
 afterEach(() => { vi.clearAllMocks(); vi.unstubAllGlobals() })
 
 describe("model list access and usage interactions", () => {
-  it("keeps route details out of rows and returns from route editing through the correct access window", async () => {
+  it("keeps route details out of rows and returns focus from the access window to its trigger", async () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true)
     // snapshot reuses existing multi-account fixtures without adding a per-file visual harness.
     // snapshot 复用现有多账号数据，不增加逐文件视觉夹具。
@@ -47,17 +47,6 @@ describe("model list access and usage interactions", () => {
       expect(document.querySelector(".vk-mcat-access-routes")?.textContent).toContain("模型 1 停用账号")
       expect(document.querySelector(".vk-mcat-access-routes")?.textContent).toContain("账号未准入此模型")
       expect(document.querySelectorAll(".vk-mcat-access-route")).toHaveLength(2)
-      // conditions enters the existing editor while preserving its parent route context.
-      // conditions 进入现有编辑器，同时保留父级路由上下文。
-      const conditions = document.querySelector<HTMLButtonElement>(".vk-mcat-access-route-heading button")!
-      conditions.focus()
-      await act(async () => conditions.click())
-      expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(2)
-      await act(async () => document.querySelectorAll<HTMLButtonElement>('[data-slot="dialog-close"]')[1].click())
-      expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1)
-      // Radix restores focus from its deferred unmount callback; observe completion, not the render tick.
-      // Radix 在延迟卸载回调中恢复焦点；等待该行为完成，不假设与渲染同一时刻发生。
-      await vi.waitFor(() => expect(document.activeElement).toBe(conditions))
       await act(async () => document.querySelector<HTMLButtonElement>('.vk-mcat-access-dialog > [data-slot="dialog-close"]')!.click())
       expect(document.querySelector('[role="dialog"]')).toBeNull()
       await vi.waitFor(() => expect(document.activeElement).toBe(trigger))

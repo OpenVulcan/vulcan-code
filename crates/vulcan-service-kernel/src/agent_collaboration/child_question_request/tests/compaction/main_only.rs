@@ -70,7 +70,6 @@ async fn run(executor: Arc<tokio::runtime::Runtime>) {
                 secret_reference: "compaction-test-secret".into(),
                 management_secret_reference: None,
                 service_origin_override: Some(format!("https://{}", https::HOST)),
-                prompt_cache_by_protocol: Default::default(),
             },
         )
         .unwrap();

@@ -118,7 +118,6 @@ mod tests {
                     secret_reference: id.into(),
                     management_secret_reference: None,
                     service_origin_override: None,
-                    prompt_cache_by_protocol: Default::default(),
                 },
             );
         }

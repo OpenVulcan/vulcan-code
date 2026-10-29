@@ -22,7 +22,6 @@ function requestFixture(providerId?: string): PublicAiCustomProviderSaveRequest 
     requestHeaders: {},
     allowManualFallback: true,
     allowPendingValidation: false,
-    confirmInactiveProtocolOverrideDeletion: false,
   }
 }
 

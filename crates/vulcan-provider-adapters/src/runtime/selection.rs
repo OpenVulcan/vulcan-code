@@ -617,27 +617,13 @@ impl PublicAiRuntime {
         // Every executable model owns one active model-level protocol binding.
         // 每个可执行模型都持有一项活动的模型级协议绑定。
         let effective_protocol_id = protocol_binding.protocol_profile_id.as_str();
-        let override_key = PersistedAiConfiguration::provider_model_protocol_key(
-            connection.provider_id.as_str(),
-            model.id.as_str(),
-            effective_protocol_id,
-        );
-        let mut overrides = configuration
-            .model_overrides
-            .get(override_key.as_str())
-            .cloned()
-            .unwrap_or_default();
-        if overrides.prompt_cache.is_none() {
-            overrides.prompt_cache = connection
-                .prompt_cache_by_protocol
-                .get(effective_protocol_id)
-                .cloned();
-        }
-        // Without a model or connection choice, Anthropic Messages routes cache by default.
-        // 没有模型或连接选择时，Anthropic Messages 路由默认启用缓存。
-        if overrides.prompt_cache.is_none()
-            && vulcan_llm_core::is_anthropic_messages_profile(effective_protocol_id)
-        {
+        // Execution choices are not stored per model: the session picks the cache lifetime and
+        // service tier at dispatch, so only adapter defaults are frozen here.
+        // 执行选择不按模型保存：会话在调度时选择缓存时长与服务档位，这里只冻结适配器默认值。
+        let mut overrides = crate::ModelExecutionOverrides::default();
+        // Anthropic Messages routes cache by default; the session may pick another lifetime.
+        // Anthropic Messages 路由默认启用缓存；会话可选择其他时长。
+        if vulcan_llm_core::is_anthropic_messages_profile(effective_protocol_id) {
             overrides.prompt_cache = Some(vulcan_llm_core::anthropic_default_prompt_cache_policy());
         }
         apply_model_parameter_defaults(&model, effective_protocol_id, &mut overrides)?;

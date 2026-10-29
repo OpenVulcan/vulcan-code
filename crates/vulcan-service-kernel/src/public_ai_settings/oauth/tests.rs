@@ -45,7 +45,6 @@ async fn cached_runtime() -> (
                 secret_reference: id.to_string(),
                 management_secret_reference: None,
                 service_origin_override: None,
-                prompt_cache_by_protocol: Default::default(),
             },
         );
         runtime

@@ -23,7 +23,7 @@ function fixtureConnection(index: number): PublicAiConnection {
   return { id: `audit-account-${index}`, provider_id: `custom:audit-${index}`, service_entry_id: "compatible-api", credential_profile_id: "api-key",
     billing_kind: "pay_as_you_go", usage_capability: "unsupported", usage_requires_management_key: false, has_management_key: false,
     credential_mode: "token", credential_id: `synthetic-credential-${index}`, display_name: `验收账号 ${index}`, enabled: true,
-    prompt_cache_by_protocol: {}, pending_validation: false };
+    pending_validation: false };
 }
 
 // fixtureModel supplies declared capabilities and evidence for real model editors and catalog selectors.
@@ -55,7 +55,7 @@ export function publicAiSettingsWithInvalidDefaultFixture(): PublicAiSettingsSna
       { id: "compression-window-1", tokens: 200000 }, { id: "compression-window-2", tokens: 256000 },
       { id: "compression-window-3", tokens: 272000 }, { id: "compression-window-4", tokens: 373000 }, { id: "compression-window-5", tokens: 500000 },
     ] }, providerPriorities: {}, usageCache: {}, providers: [], connections: [], providerDefaults: {}, catalogs: {}, sourceCatalogs: {}, modelSupportCatalogs: {},
-    catalogStatuses: {}, catalogErrors: {}, modelOverrides: {}, modelOverrideRecords: [], modelAccessRecords: [], providerToolTemplateModels: [],
+    catalogStatuses: {}, catalogErrors: {}, modelAccessRecords: [], providerToolTemplateModels: [],
     connectionModelAccessPolicyRecords: [], customModels: {}, customProviderSystemModelDefaults: { context_limit: 200000, output_limit: 32768,
       input_resources: [], reasoning: "native", reasoning_control: "effort_selection", reasoning_efforts: ["none", "minimal", "low", "medium", "high", "xhigh"] },
     providerToolTargets: [], providerToolSelections: {}, providerToolEnabledCapabilities: [], providerExtensionModes: {}, providerExtensionTargetSets: {},

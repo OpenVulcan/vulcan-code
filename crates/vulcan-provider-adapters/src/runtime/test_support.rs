@@ -119,7 +119,6 @@ pub(super) fn connection(id: &str) -> CredentialConnection {
         secret_reference: format!("secret-{id}"),
         management_secret_reference: None,
         service_origin_override: None,
-        prompt_cache_by_protocol: BTreeMap::new(),
     }
 }
 
@@ -274,7 +273,6 @@ pub(super) fn custom_connection(id: &str, provider_id: &str) -> CredentialConnec
         secret_reference: format!("secret-{id}"),
         management_secret_reference: None,
         service_origin_override: None,
-        prompt_cache_by_protocol: BTreeMap::new(),
     }
 }
 

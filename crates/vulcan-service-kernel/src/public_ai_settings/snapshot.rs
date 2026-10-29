@@ -3,7 +3,7 @@
 
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
-use vulcan_ai_contract::{AccountUsageSnapshot, PromptCachePolicy};
+use vulcan_ai_contract::AccountUsageSnapshot;
 use vulcan_context::{
     ContextCompactionWindowNodeId, ContextWindowPolicy, ContextWindowPolicyOverrides,
 };
@@ -15,9 +15,9 @@ use vulcan_provider_adapters::{
     CustomModelTemplateDecision, CustomProviderManifestFailure, CustomProviderModelDefaults,
     DeclaredProviderToolTemplateModel, InferenceProfile, InternalModelOverrides,
     ManifestSourceLayer, MediaUnderstandingBackendOptions, MediaUnderstandingBackendSelection,
-    ModelCapabilityOverrides, ModelExecutionOverrides, PersistedAiConfiguration,
-    ProviderDescriptor, ProviderRegistry, ProviderToolCapabilityKind, ProviderToolTarget,
-    ProviderToolTargetSelection, PublicAiRuntime, PublicAiRuntimeSettingsCatalogSnapshot,
+    ModelCapabilityOverrides, PersistedAiConfiguration, ProviderDescriptor, ProviderRegistry,
+    ProviderToolCapabilityKind, ProviderToolTarget, ProviderToolTargetSelection, PublicAiRuntime,
+    PublicAiRuntimeSettingsCatalogSnapshot,
 };
 
 use super::{
@@ -114,12 +114,6 @@ pub(crate) struct PublicAiSettingsSnapshot {
     /// Latest process-local model synchronization errors.
     /// 最近的进程内模型同步错误。
     catalog_errors: BTreeMap<String, String>,
-    /// Provider-model-protocol local overrides.
-    /// 供应商、模型与协议作用域的本地覆盖。
-    model_overrides: BTreeMap<String, ModelExecutionOverrides>,
-    /// Explicit override records that avoid exposing composite-key parsing to the browser.
-    /// 避免浏览器解析组合键的显式覆盖记录。
-    model_override_records: Vec<PublicAiModelOverrideRecord>,
     /// Conversation publication records derived from runtime catalogs and persisted choices.
     /// 从运行时目录与持久化选择派生的会话发布记录。
     model_access_records: Vec<PublicAiModelAccessRecord>,
@@ -343,9 +337,6 @@ pub(crate) struct PublicAiConnectionSnapshot {
     /// Whether this credential connection currently participates in runtime work.
     /// 此凭据连接当前是否参与运行时工作。
     enabled: bool,
-    /// Protocol-scoped public cache policies.
-    /// 协议作用域的公共缓存策略。
-    prompt_cache_by_protocol: BTreeMap<String, PromptCachePolicy>,
     /// Whether normal routing is blocked until an explicit paid model validation succeeds.
     /// 在显式付费模型验证成功前是否阻止常规路由。
     pending_validation: bool,
@@ -408,30 +399,10 @@ impl PublicAiConnectionSnapshot {
             credential_id: connection.credential_id.clone(),
             display_name: connection.display_name.clone(),
             enabled: configuration.connection_is_enabled(connection.id.as_str()),
-            prompt_cache_by_protocol: connection.prompt_cache_by_protocol.clone(),
             pending_validation: configuration
                 .connection_is_pending_validation(connection.id.as_str()),
         })
     }
-}
-
-/// Browser-facing exact model override record.
-/// 面向浏览器的精确模型覆盖记录。
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct PublicAiModelOverrideRecord {
-    /// Exact provider identifier.
-    /// 精确供应商标识。
-    provider_id: String,
-    /// Exact model identifier.
-    /// 精确模型标识。
-    model_id: String,
-    /// Exact protocol profile identifier.
-    /// 精确协议配置档标识。
-    protocol_id: String,
-    /// Complete local override value.
-    /// 完整本地覆盖值。
-    overrides: ModelExecutionOverrides,
 }
 
 /// Browser-facing provider-model conversation publication state.
@@ -513,29 +484,8 @@ pub(super) fn build_public_ai_settings_snapshot(
     // configuration is the executable projection captured with the catalog generation above.
     // configuration 是与上述目录代际共同捕获的可执行投影。
     let configuration = &runtime_configuration;
-    let mut model_override_records_by_key = BTreeMap::new();
     let mut model_access_records_by_key = BTreeMap::new();
     let mut custom_model_template_decision_records_by_key = BTreeMap::new();
-    // Protocol records are projected directly from persistence so inactive settings remain visible
-    // for protocol-switch warnings instead of becoming inaccessible composite-key state.
-    // 协议记录直接从持久化状态投影，使非活动设置仍可用于协议切换警告，
-    // 而不会变成无法访问的组合键状态。
-    for (key, overrides) in &configuration.model_overrides {
-        let Some((provider_id, model_id, protocol_id)) =
-            PersistedAiConfiguration::provider_model_protocol_key_parts(key.as_str())
-        else {
-            continue;
-        };
-        model_override_records_by_key.insert(
-            key.clone(),
-            PublicAiModelOverrideRecord {
-                provider_id: provider_id.to_string(),
-                model_id: model_id.to_string(),
-                protocol_id: protocol_id.to_string(),
-                overrides: overrides.clone(),
-            },
-        );
-    }
     // Capability records are projected directly from persistence so provider-disabled, account-hidden,
     // and credential-free custom models retain an editable and restorable settings surface.
     // 能力记录直接从持久化状态投影，使供应商关闭、账号隐藏以及无凭据自定义模型
@@ -636,9 +586,6 @@ pub(super) fn build_public_ai_settings_snapshot(
             }
         }
     }
-    // model_override_records projects protocol-scoped execution differences for the browser.
-    // model_override_records 向浏览器投影协议作用域执行差异。
-    let model_override_records = model_override_records_by_key.into_values().collect();
     // model_access_records contains only conversation publication choices.
     // model_access_records 仅包含会话发布选择。
     let model_access_records = model_access_records_by_key.into_values().collect();
@@ -823,8 +770,6 @@ pub(super) fn build_public_ai_settings_snapshot(
         model_route_records,
         catalog_statuses,
         catalog_errors,
-        model_overrides: configuration.model_overrides.clone(),
-        model_override_records,
         model_access_records,
         provider_tool_template_models,
         custom_models: configuration.custom_models.clone(),

@@ -602,7 +602,6 @@ async fn staged_manifest_catalogs_publish_only_through_activation_batch() {
                 secret_reference: String::from("secret-alibaba-activation"),
                 management_secret_reference: None,
                 service_origin_override: None,
-                prompt_cache_by_protocol: BTreeMap::new(),
             },
         )
         .expect("Alibaba connection should register");

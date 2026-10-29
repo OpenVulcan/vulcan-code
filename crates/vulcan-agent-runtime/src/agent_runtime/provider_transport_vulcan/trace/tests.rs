@@ -208,7 +208,6 @@ fn compaction_trace_route(base_url: &str) -> ProviderExecutionRoute {
         secret_reference: String::from("compaction-trace-secret-reference"),
         management_secret_reference: None,
         service_origin_override: None,
-        prompt_cache_by_protocol: BTreeMap::new(),
     };
     let mut route = ProviderExecutionRoute::resolve(
         provider,

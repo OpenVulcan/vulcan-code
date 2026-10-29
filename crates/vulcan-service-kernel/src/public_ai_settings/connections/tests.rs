@@ -26,7 +26,6 @@ fn connection_removal_clears_exact_media_and_extension_references() {
         secret_reference: String::from("removed-secret"),
         management_secret_reference: None,
         service_origin_override: None,
-        prompt_cache_by_protocol: BTreeMap::new(),
     };
     // removedTarget and retainedTarget prove cleanup is exact rather than capability-wide.
     // removedTarget 与 retainedTarget 证明清理按精确账号执行，而不是整项能力清空。
@@ -295,7 +294,6 @@ async fn credential_identity_validation_discards_previous_usage_and_preserves_ro
                     secret_reference: id.to_string(),
                     management_secret_reference: None,
                     service_origin_override: None,
-                    prompt_cache_by_protocol: Default::default(),
                 },
             );
             runtime

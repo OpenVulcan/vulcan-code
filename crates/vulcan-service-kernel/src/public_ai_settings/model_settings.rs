@@ -5,8 +5,7 @@ use serde::Deserialize;
 use std::collections::BTreeSet;
 use vulcan_provider_adapters::{
     ConnectionModel, ConnectionModelAccessPolicy, ConnectionModelCatalog, ModelCapabilityOverrides,
-    ModelExecutionOverrides, PersistedAiConfiguration, PublicAiRuntime,
-    model_capability_limit_issue,
+    PersistedAiConfiguration, PublicAiRuntime, model_capability_limit_issue,
 };
 use vulcan_service_api::ServiceEventEmitter;
 
@@ -79,25 +78,6 @@ pub(crate) struct PublicAiProviderCapabilityOverridesSaveRequest {
     /// Replacement difference, or null to restore inherited catalog defaults.
     /// 替换差异；为 null 时恢复继承的目录默认值。
     overrides: Option<ModelCapabilityOverrides>,
-}
-
-/// Saves local narrowing and model parameter values.
-/// 保存本地收窄与模型参数值。
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct PublicAiModelOverridesSaveRequest {
-    /// Exact provider identifier.
-    /// 精确供应商标识。
-    provider_id: String,
-    /// Exact model identifier.
-    /// 精确模型标识。
-    model_id: String,
-    /// Exact protocol profile identifier.
-    /// 精确协议配置档标识。
-    protocol_id: String,
-    /// Complete replacement override value, or null to restore protocol defaults.
-    /// 完整替换覆盖值；为 null 时还原协议默认值。
-    overrides: Option<ModelExecutionOverrides>,
 }
 
 /// Saves one provider-model conversation choice independent from credentials and protocols.
@@ -693,62 +673,6 @@ pub(crate) async fn service_save_public_ai_provider_capability_overrides(
                 configuration
                     .provider_capability_overrides
                     .remove(provider_id.as_str());
-            }
-            Ok(())
-        },
-        |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
-    )?;
-    drop(transaction);
-    Ok(snapshot)
-}
-
-/// Saves one provider-model-protocol override set after validating every matching account route.
-/// 在校验全部匹配账号路由后保存一组供应商、模型与协议覆盖。
-///
-/// # Parameters
-/// 参数
-/// `app` publishes changes, `state` owns configuration/runtime, and `request` identifies one provider/model/protocol override.
-/// `app` 发布变更，`state` 持有配置与运行时，`request` 标识一组供应商模型协议覆盖。
-///
-/// # Returns
-/// 返回值
-/// Returns the rebuilt snapshot after validating matching routes and persisting the override, or an explicit failure.
-/// 校验匹配路由并保存覆盖后返回重建快照，或返回显式失败。
-pub(crate) async fn service_save_public_ai_model_overrides(
-    app: ServiceEventEmitter,
-    state: SharedServiceBridgeState,
-    request: PublicAiModelOverridesSaveRequest,
-) -> Result<PublicAiSettingsSnapshot, String> {
-    // overrides collapses an empty browser record into restoration semantics.
-    // overrides 将空浏览器记录折叠为还原语义。
-    let overrides = request.overrides.filter(|overrides| !overrides.is_empty());
-    let transaction = begin_public_ai_configuration_transaction().await;
-    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
-    let key = PersistedAiConfiguration::provider_model_protocol_key(
-        request.provider_id.as_str(),
-        request.model_id.as_str(),
-        request.protocol_id.as_str(),
-    );
-    if let Some(overrides) = overrides.as_ref() {
-        runtime.validate_model_execution_override_candidate(
-            &current_configuration,
-            request.provider_id.as_str(),
-            request.model_id.as_str(),
-            request.protocol_id.as_str(),
-            overrides,
-        )?;
-    }
-    let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_in_transaction(
-        &app,
-        &state,
-        runtime.as_ref(),
-        &current_configuration,
-        "Failed to save the public AI model overrides",
-        |configuration| {
-            if let Some(overrides) = overrides.clone() {
-                configuration.model_overrides.insert(key.clone(), overrides);
-            } else {
-                configuration.model_overrides.remove(key.as_str());
             }
             Ok(())
         },

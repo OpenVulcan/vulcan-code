@@ -25,7 +25,6 @@ fn internal_conversation_candidate_uses_model_protocol_binding() {
         secret_reference: String::from("openrouter-model-binding-secret"),
         management_secret_reference: None,
         service_origin_override: None,
-        prompt_cache_by_protocol: BTreeMap::new(),
     };
     // capabilities expose one internal conversation operation through the frozen variant.
     // capabilities 通过冻结变体公开一项内部对话操作。

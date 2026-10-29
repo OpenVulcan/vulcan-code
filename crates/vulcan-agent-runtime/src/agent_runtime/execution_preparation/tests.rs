@@ -982,7 +982,6 @@ pub(in crate::agent_runtime) fn test_runtime_foundation(
             secret_reference: String::from("secret-a"),
             management_secret_reference: None,
             service_origin_override: None,
-            prompt_cache_by_protocol: BTreeMap::new(),
         },
     );
     public_configuration.set_model_enabled("openrouter", "openai/gpt-5.6-sol", true);

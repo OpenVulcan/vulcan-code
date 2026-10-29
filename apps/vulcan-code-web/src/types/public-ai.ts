@@ -286,9 +286,6 @@ export interface PublicAiCustomProviderSaveRequest {
   modelDiscoveryPath?: string;
   allowManualFallback?: boolean;
   allowPendingValidation?: boolean;
-  // Confirms deletion of model settings bound to protocols other than the selected target.
-  // 确认删除绑定到所选目标之外协议的模型设置。
-  confirmInactiveProtocolOverrideDeletion?: boolean;
 }
 
 // PublicAiCustomProviderProbeResult is one typed non-persistent credential observation.
@@ -605,7 +602,6 @@ export interface PublicAiConnection {
   // Whether this stored credential currently participates in model and tool routing.
   // 此已保存凭据当前是否参与模型与工具路由。
   enabled: boolean;
-  prompt_cache_by_protocol: Record<string, unknown>;
   // Whether normal routing is blocked until one explicit model validation succeeds.
   // 在一次显式模型验证成功前是否阻止常规路由。
   pending_validation: boolean;
@@ -839,22 +835,6 @@ export interface PublicAiActiveSelection {
   provider_id: string;
   model_id: string;
   connection_id: string;
-}
-
-// PublicAiModelOverrides stores protocol-scoped cache choices and registered parameter values.
-// PublicAiModelOverrides 保存协议作用域缓存选择与注册参数值。
-export interface PublicAiModelOverrides {
-  prompt_cache?: unknown;
-  model_parameters?: Record<string, unknown>;
-}
-
-// PublicAiModelOverrideRecord identifies one override without composite-key parsing.
-// PublicAiModelOverrideRecord 无需解析组合键即可标识一个覆盖。
-export interface PublicAiModelOverrideRecord {
-  providerId: string;
-  modelId: string;
-  protocolId: string;
-  overrides: PublicAiModelOverrides;
 }
 
 // PublicAiModelAccessRecord carries one provider-model effective and default conversation state.
@@ -1412,8 +1392,6 @@ export interface PublicAiSettingsSnapshot {
   modelRouteRecords?: PublicAiModelRouteRecord[];
   catalogStatuses: Record<string, PublicAiCatalogDiscoveryStatus>;
   catalogErrors: Record<string, string>;
-  modelOverrides: Record<string, PublicAiModelOverrides>;
-  modelOverrideRecords: PublicAiModelOverrideRecord[];
   modelAccessRecords: PublicAiModelAccessRecord[];
   // providerToolTemplateModels is the enablement-independent signed media/tool inventory.
   // providerToolTemplateModels 是独立于启用状态的签名媒体/工具目录。

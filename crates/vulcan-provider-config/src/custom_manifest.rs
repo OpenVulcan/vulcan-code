@@ -22,9 +22,8 @@ use serde::{Deserialize, Serialize};
 use vulcan_provider_adapters::{
     CustomModelDefinition, CustomModelProtocolPreference, CustomModelTemplateDecision,
     CustomProviderManifestFailure, CustomProviderModelDefaults, InternalModelOverrides,
-    MAX_STRING_LEN, ManifestOwnership, ModelCapabilityOverrides, ModelExecutionOverrides,
-    PersistedAiConfiguration, ProviderDescriptor, ProviderManifestV1,
-    validate_custom_provider_identifier,
+    MAX_STRING_LEN, ManifestOwnership, ModelCapabilityOverrides, PersistedAiConfiguration,
+    ProviderDescriptor, ProviderManifestV1, validate_custom_provider_identifier,
 };
 
 use crate::manifest_store::ManifestStoreLayout;
@@ -125,10 +124,6 @@ pub struct CustomProviderLocalOverridesV1 {
     /// 精确供应商/模型能力覆盖。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub model_capability_overrides: BTreeMap<String, ModelCapabilityOverrides>,
-    /// Exact provider/model/protocol execution overrides.
-    /// 精确供应商/模型/协议执行覆盖。
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub model_execution_overrides: BTreeMap<String, ModelExecutionOverrides>,
     /// Internal operation enablement differences owned by this provider.
     /// 由该供应商持有的内部操作启用差异。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -217,12 +212,6 @@ fn local_overrides_from_configuration(
             .filter(|(key, _)| filter(key))
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect(),
-        model_execution_overrides: configuration
-            .model_overrides
-            .iter()
-            .filter(|(key, _)| filter(key))
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect(),
         internal_model_enabled_overrides: configuration
             .internal_model_enabled_overrides
             .iter()
@@ -267,13 +256,6 @@ fn validate_local_override_ownership(
             "model capability override",
             overrides
                 .model_capability_overrides
-                .keys()
-                .collect::<Vec<_>>(),
-        ),
-        (
-            "model execution override",
-            overrides
-                .model_execution_overrides
                 .keys()
                 .collect::<Vec<_>>(),
         ),
@@ -343,9 +325,6 @@ fn remove_hydrated_provider_owned_state(
         .model_capability_overrides
         .retain(|key, _| retain_other_provider(key));
     configuration
-        .model_overrides
-        .retain(|key, _| retain_other_provider(key));
-    configuration
         .internal_model_enabled_overrides
         .retain(|key, _| retain_other_provider(key));
     configuration
@@ -389,9 +368,6 @@ fn apply_local_overrides(
     configuration
         .model_capability_overrides
         .extend(overrides.model_capability_overrides);
-    configuration
-        .model_overrides
-        .extend(overrides.model_execution_overrides);
     configuration
         .internal_model_enabled_overrides
         .extend(overrides.internal_model_enabled_overrides);
@@ -1473,11 +1449,6 @@ pub(crate) mod tests {
         let provider_id = "custom:round-trip";
         let model_id = "model-a";
         let model_key = PersistedAiConfiguration::provider_model_key(provider_id, model_id);
-        let execution_key = PersistedAiConfiguration::provider_model_protocol_key(
-            provider_id,
-            model_id,
-            vulcan_provider_adapters::CustomProviderProtocol::OpenAiResponses.profile_id(),
-        );
         let mut configuration = PersistedAiConfiguration::default();
         let descriptor = custom_descriptor(provider_id);
         configuration
@@ -1496,13 +1467,6 @@ pub(crate) mod tests {
         configuration
             .model_enabled_overrides
             .insert(model_key.clone(), false);
-        configuration.model_overrides.insert(
-            execution_key.clone(),
-            ModelExecutionOverrides {
-                prompt_cache: Some(Default::default()),
-                ..ModelExecutionOverrides::default()
-            },
-        );
 
         let document = document_from_configuration(&configuration, provider_id, &descriptor)
             .expect("complete document should build");
@@ -1553,14 +1517,6 @@ pub(crate) mod tests {
             Some(&CustomModelProtocolPreference::Explicit {
                 protocol: vulcan_provider_adapters::CustomProviderProtocol::OpenAiResponses,
             })
-        );
-        assert_eq!(
-            parsed
-                .local_overrides
-                .model_execution_overrides
-                .get(execution_key.as_str())
-                .map(|overrides| overrides.prompt_cache.is_some()),
-            Some(true)
         );
     }
 

@@ -328,7 +328,6 @@ mod tests {
             secret_reference: format!("secret-{id}"),
             management_secret_reference: None,
             service_origin_override: None,
-            prompt_cache_by_protocol: BTreeMap::new(),
         }
     }
 

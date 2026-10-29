@@ -7,7 +7,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use vulcan_ai_contract::{
     AiOperation, EmbeddingBatchCapabilities, InferenceBatchResultDelivery, InferenceBatchTransport,
-    InferenceUsageScope, ModelCapabilities, PromptCachePolicy, RerankTruncation, ResourceKind,
+    InferenceUsageScope, ModelCapabilities, RerankTruncation, ResourceKind,
 };
 use vulcan_llm_core::UsageExtractionProfile;
 
@@ -1185,10 +1185,6 @@ pub struct CredentialConnection {
     /// 供应商声明可配置入口使用的可选凭据作用域服务源地址。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service_origin_override: Option<String>,
-    /// Protocol-scoped prompt-cache settings.
-    /// 协议作用域的提示词缓存设置。
-    #[serde(default)]
-    pub prompt_cache_by_protocol: BTreeMap<String, PromptCachePolicy>,
 }
 
 /// Maximum models accepted in one credential-scoped runtime catalog.

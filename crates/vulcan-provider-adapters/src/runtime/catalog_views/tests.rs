@@ -578,18 +578,6 @@ fn provider_model_management_uses_support_catalog_when_account_is_disabled() {
             }),
         )
         .expect("account visibility must not block system model capability settings");
-    runtime
-        .validate_model_execution_override_candidate(
-            &configuration,
-            "openrouter",
-            "openai/gpt-5.6-sol",
-            OPENAI_RESPONSES_PROFILE_ID,
-            &crate::ModelExecutionOverrides {
-                prompt_cache: Some(vulcan_ai_contract::PromptCachePolicy::ProviderDefault),
-                ..crate::ModelExecutionOverrides::default()
-            },
-        )
-        .expect("account visibility must not block the frozen model protocol settings");
 }
 
 /// Verifies a credential-free custom provider can retain direct settings for its manual model.

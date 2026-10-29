@@ -13,7 +13,6 @@ import {
   protocolCollectionChanged,
   protocolCollectionFromEntry,
   protocolRoutesFromCollection,
-  protocolSetChange,
   selectableCustomModelProtocols,
   sortProtocolsByAutoPriority,
   shouldShowCustomModelProtocolPreferenceCard,
@@ -236,15 +235,6 @@ describe("custom provider protocol drafts", () => {
       "open_ai_responses",
       "anthropic_messages",
     ])
-  })
-
-  it("computes the exact set difference for additions and removals", () => {
-    const change = protocolSetChange(
-      ["open_ai_responses", "anthropic_messages", "open_ai_chat"],
-      ["open_ai_responses", "anthropic_messages", "gemini_generate_content"],
-    )
-    expect(change.removed).toEqual(["open_ai_chat"])
-    expect(change.added).toEqual(["gemini_generate_content"])
   })
 
   it("detects additions and edits on every protocol route", () => {

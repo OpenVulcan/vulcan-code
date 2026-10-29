@@ -31,7 +31,6 @@ fn openrouter_account_projection_uses_signed_initial_checks() {
                 secret_reference: String::from("openrouter-secret"),
                 management_secret_reference: None,
                 service_origin_override: None,
-                prompt_cache_by_protocol: BTreeMap::new(),
             },
         )
         .expect("account should register");
@@ -98,7 +97,6 @@ fn zero_limit_media_model_has_no_conversation_route() {
         secret_reference: String::from("openrouter-secret"),
         management_secret_reference: None,
         service_origin_override: None,
-        prompt_cache_by_protocol: BTreeMap::new(),
     };
     configuration
         .connection_graph
@@ -178,7 +176,6 @@ fn custom_model_route_status_exposes_model_specific_protocol_block() {
         secret_reference: String::from("model-route-status-secret"),
         management_secret_reference: None,
         service_origin_override: None,
-        prompt_cache_by_protocol: BTreeMap::new(),
     };
     let providers = runtime
         .effective_providers(&configuration)
@@ -280,7 +277,6 @@ fn codex_route_with_frozen_behavior_is_executable() {
         secret_reference: String::from("codex-diagnostic-secret"),
         management_secret_reference: None,
         service_origin_override: None,
-        prompt_cache_by_protocol: BTreeMap::new(),
     };
     configuration
         .connection_graph
@@ -383,7 +379,6 @@ fn system_connection_directory_uses_manifest_routes() {
         secret_reference: String::from("legacy-secret"),
         management_secret_reference: None,
         service_origin_override: None,
-        prompt_cache_by_protocol: BTreeMap::new(),
     };
 
     assert_eq!(
@@ -446,7 +441,6 @@ fn multi_protocol_directory_kind_aggregates_route_discovery() {
         secret_reference: String::from("mixed-directory-secret"),
         management_secret_reference: None,
         service_origin_override: None,
-        prompt_cache_by_protocol: BTreeMap::new(),
     };
     // providers is the exact effective registry consumed by the browser projection.
     // providers 是浏览器投影消费的精确有效注册表。

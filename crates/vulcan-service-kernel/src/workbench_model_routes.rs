@@ -423,7 +423,7 @@ pub(super) async fn service_select_webui_locale(
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, sync::Arc};
+    use std::sync::Arc;
 
     use vulcan_provider_adapters::{
         ActiveAiModelSelection, CredentialConnection, CredentialMode, PersistedAiConfiguration,
@@ -456,7 +456,6 @@ mod tests {
                     secret_reference: String::from("secret-openrouter"),
                     management_secret_reference: None,
                     service_origin_override: None,
-                    prompt_cache_by_protocol: BTreeMap::new(),
                 },
             )
             .expect("account should register");

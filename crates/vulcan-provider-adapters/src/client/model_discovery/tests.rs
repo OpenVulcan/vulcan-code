@@ -231,7 +231,6 @@ fn custom_openai_fixture(
         secret_reference: String::from("secret"),
         management_secret_reference: None,
         service_origin_override: None,
-        prompt_cache_by_protocol: BTreeMap::new(),
     };
     (provider, connection)
 }
@@ -282,7 +281,6 @@ fn custom_anthropic_fixture(
         secret_reference: String::from("secret"),
         management_secret_reference: None,
         service_origin_override: None,
-        prompt_cache_by_protocol: BTreeMap::new(),
     };
     (provider, connection)
 }
@@ -899,7 +897,6 @@ async fn multi_protocol_discovery_merges_shared_signature_into_per_protocol_vari
         secret_reference: String::from("secret"),
         management_secret_reference: None,
         service_origin_override: None,
-        prompt_cache_by_protocol: BTreeMap::new(),
     };
     let secret = CredentialSecretEnvelope::new_api_key(String::from("test-key"))
         .expect("test credential envelope")
@@ -1001,7 +998,6 @@ async fn discovery_projects_all_manifest_verified_protocol_variants() {
         secret_reference: String::from("secret"),
         management_secret_reference: None,
         service_origin_override: None,
-        prompt_cache_by_protocol: BTreeMap::new(),
     };
     // secret is confined to the local fixture request boundary.
     // secret 被限制在本地夹具请求边界内。
@@ -1138,7 +1134,6 @@ async fn multi_protocol_discovery_merges_distinct_signatures_separately() {
         secret_reference: String::from("secret"),
         management_secret_reference: None,
         service_origin_override: None,
-        prompt_cache_by_protocol: BTreeMap::new(),
     };
     let secret = CredentialSecretEnvelope::new_api_key(String::from("test-key"))
         .expect("test credential envelope")

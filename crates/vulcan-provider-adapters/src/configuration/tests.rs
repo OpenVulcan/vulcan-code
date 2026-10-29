@@ -75,7 +75,6 @@ fn custom_provider_connection(
         secret_reference: format!("secret-{connection_id}"),
         management_secret_reference: None,
         service_origin_override: None,
-        prompt_cache_by_protocol: BTreeMap::new(),
     }
 }
 
@@ -555,163 +554,6 @@ fn provider_removal_cleans_every_owned_media_backend() {
             .is_empty()
     );
     assert!(configuration.media_understanding_selections.is_empty());
-}
-
-/// Verifies a confirmed protocol switch removes only incompatible route settings for that provider.
-/// 验证已确认协议切换只会移除该供应商不兼容的路由设置。
-#[test]
-fn protocol_switch_cleanup_preserves_target_and_other_provider_settings() {
-    let mut configuration = PersistedAiConfiguration::default();
-    for (provider_id, protocol_id) in [
-        ("custom:test", "openai-chat-completions.v1"),
-        ("custom:test", "openai-responses.v1"),
-        ("custom:other", "openai-chat-completions.v1"),
-    ] {
-        configuration.model_overrides.insert(
-            PersistedAiConfiguration::provider_model_protocol_key(
-                provider_id,
-                "private/chat",
-                protocol_id,
-            ),
-            ModelExecutionOverrides {
-                prompt_cache: Some(PromptCachePolicy::ProviderDefault),
-                ..ModelExecutionOverrides::default()
-            },
-        );
-    }
-
-    assert_eq!(
-        configuration.inactive_provider_model_override_count("custom:test", "openai-responses.v1"),
-        1
-    );
-    configuration.remove_inactive_provider_model_overrides("custom:test", "openai-responses.v1");
-
-    assert_eq!(configuration.model_overrides.len(), 2);
-    assert!(
-        configuration.model_overrides.contains_key(
-            PersistedAiConfiguration::provider_model_protocol_key(
-                "custom:test",
-                "private/chat",
-                "openai-responses.v1"
-            )
-            .as_str()
-        )
-    );
-    assert!(
-        configuration.model_overrides.contains_key(
-            PersistedAiConfiguration::provider_model_protocol_key(
-                "custom:other",
-                "private/chat",
-                "openai-chat-completions.v1"
-            )
-            .as_str()
-        )
-    );
-}
-
-/// Verifies the removed-protocol set cleanup deletes only that protocol's overrides,
-/// while explicit preferences pointing at the removed protocol survive so binding keeps
-/// failing closed until the user re-selects (plan §R6.8).
-/// 验证被删除协议集合的清理只删除该协议拥有的覆盖；指向被删协议的显式偏好被保留，
-/// 使绑定持续失败封闭直到用户重选（方案 §R6.8）。
-#[test]
-fn removed_protocol_cleanup_is_scoped_to_the_removed_set() {
-    let mut configuration = PersistedAiConfiguration::default();
-    for (provider_id, protocol_id) in [
-        ("custom:test", "openai-chat-completions.v1"),
-        ("custom:test", "openai-responses.v1"),
-        ("custom:test", "anthropic-messages.v1"),
-        ("custom:other", "openai-chat-completions.v1"),
-    ] {
-        configuration.model_overrides.insert(
-            PersistedAiConfiguration::provider_model_protocol_key(
-                provider_id,
-                "private/chat",
-                protocol_id,
-            ),
-            ModelExecutionOverrides {
-                prompt_cache: Some(PromptCachePolicy::ProviderDefault),
-                ..ModelExecutionOverrides::default()
-            },
-        );
-    }
-    configuration.custom_model_protocol_preferences.insert(
-        PersistedAiConfiguration::provider_model_key("custom:test", "private/chat"),
-        crate::CustomModelProtocolPreference::Explicit {
-            protocol: crate::CustomProviderProtocol::OpenAiChat,
-        },
-    );
-    configuration.custom_model_protocol_preferences.insert(
-        PersistedAiConfiguration::provider_model_key("custom:test", "private/chat2"),
-        crate::CustomModelProtocolPreference::Explicit {
-            protocol: crate::CustomProviderProtocol::OpenAiResponses,
-        },
-    );
-    let removed = std::collections::BTreeSet::from([String::from("openai-chat-completions.v1")]);
-
-    assert_eq!(
-        configuration.removed_protocol_model_override_count("custom:test", &removed),
-        1,
-        "only the chat-completions override is owned by the removed protocol"
-    );
-    configuration.remove_removed_protocol_model_overrides("custom:test", &removed);
-    assert_eq!(configuration.model_overrides.len(), 3);
-    assert!(
-        configuration.model_overrides.contains_key(
-            PersistedAiConfiguration::provider_model_protocol_key(
-                "custom:test",
-                "private/chat",
-                "openai-responses.v1"
-            )
-            .as_str()
-        ),
-        "retained protocols keep their overrides"
-    );
-    assert!(
-        configuration.model_overrides.contains_key(
-            PersistedAiConfiguration::provider_model_protocol_key(
-                "custom:test",
-                "private/chat",
-                "anthropic-messages.v1"
-            )
-            .as_str()
-        )
-    );
-    assert!(
-        configuration.model_overrides.contains_key(
-            PersistedAiConfiguration::provider_model_protocol_key(
-                "custom:other",
-                "private/chat",
-                "openai-chat-completions.v1"
-            )
-            .as_str()
-        ),
-        "other providers are never touched"
-    );
-
-    // The explicit preference for the removed protocol survives: dropping it would
-    // silently fall back to Auto, while retaining it keeps the model blocked
-    // (ExplicitProtocolDisabled) until the user re-selects (plan §R6.8).
-    // 指向被删协议的显式偏好被保留：删除它会静默回退 Auto，保留它则使模型保持
-    // blocked（ExplicitProtocolDisabled）直到用户重选（方案 §R6.8）。
-    assert!(
-        configuration
-            .custom_model_protocol_preferences
-            .contains_key(
-                PersistedAiConfiguration::provider_model_key("custom:test", "private/chat")
-                    .as_str()
-            ),
-        "explicit preference for the removed protocol survives to keep the model blocked"
-    );
-    assert!(
-        configuration
-            .custom_model_protocol_preferences
-            .contains_key(
-                PersistedAiConfiguration::provider_model_key("custom:test", "private/chat2")
-                    .as_str()
-            ),
-        "explicit preference for a retained protocol survives"
-    );
 }
 
 /// Verifies configuration contains no provider-owned default policy.
@@ -1332,7 +1174,6 @@ fn removing_model_clears_every_model_owned_non_route_setting() {
             secret_reference: String::from("secret"),
             management_secret_reference: None,
             service_origin_override: None,
-            prompt_cache_by_protocol: BTreeMap::new(),
         },
     );
     configuration
@@ -1346,10 +1187,6 @@ fn removing_model_clears_every_model_owned_non_route_setting() {
     configuration.model_capability_overrides.insert(
         provider_model_key.clone(),
         ModelCapabilityOverrides::default(),
-    );
-    configuration.model_overrides.insert(
-        PersistedAiConfiguration::provider_model_protocol_key(provider_id, model_id, "openai_chat"),
-        ModelExecutionOverrides::default(),
     );
     configuration.internal_model_enabled_overrides.insert(
         PersistedAiConfiguration::provider_model_key(provider_id, model_id),
@@ -1382,7 +1219,6 @@ fn removing_model_clears_every_model_owned_non_route_setting() {
             .custom_model_connection_enabled_overrides
             .is_empty()
     );
-    assert!(configuration.model_overrides.is_empty());
     assert!(configuration.internal_model_enabled_overrides.is_empty());
     assert!(configuration.secondary_routes.is_empty());
     assert!(
@@ -1572,14 +1408,6 @@ fn removing_custom_provider_clears_all_owned_state_without_touching_peers() {
             template_revision: String::from(CUSTOM_MODEL_TEMPLATE_REVISION),
         },
     );
-    configuration.model_overrides.insert(
-        PersistedAiConfiguration::provider_model_protocol_key(
-            removed_provider,
-            "private-model",
-            "openai_chat",
-        ),
-        ModelExecutionOverrides::default(),
-    );
     configuration
         .internal_model_enabled_overrides
         .insert(removed_internal_key.clone(), true);
@@ -1729,7 +1557,6 @@ fn removing_custom_provider_clears_all_owned_state_without_touching_peers() {
     assert!(configuration.model_capability_overrides.is_empty());
     assert!(configuration.custom_provider_model_defaults.is_empty());
     assert!(configuration.custom_model_template_decisions.is_empty());
-    assert!(configuration.model_overrides.is_empty());
     assert!(configuration.internal_model_enabled_overrides.is_empty());
     assert_eq!(
         configuration.internal_model_overrides,
