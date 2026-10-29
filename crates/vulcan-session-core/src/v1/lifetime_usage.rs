@@ -135,7 +135,7 @@ impl SessionUsageBucket {
             cache_write_tokens: UsageMeasurement::observe(usage.cache_write_tokens),
             output_tokens: UsageMeasurement::observe(usage.output_tokens),
             reasoning_tokens: UsageMeasurement::observe(usage.reasoning_tokens),
-            total_tokens: UsageMeasurement::observe(usage.total_tokens),
+            total_tokens: UsageMeasurement::observe(accounted_total(usage)?),
             budget_tokens: UsageMeasurement::observe(budget),
             first_token_ms: UsageMeasurement::observe(duration(
                 timing.dispatched_at_ms,
@@ -382,6 +382,25 @@ fn duration(start: Option<i64>, end: Option<i64>) -> Option<u64> {
         .map(|(start, end)| end.abs_diff(start))
 }
 
+/// Returns the reported total, or uncached input plus cache reads plus output for protocols such as
+/// Anthropic Messages that never report a total; unknown when input or output is missing.
+/// 返回上报的总量；对 Anthropic Messages 等从不上报总量的协议，取未缓存输入、缓存读取与输出之和；
+/// 输入或输出缺失时保持未知。
+fn accounted_total(usage: &UsageSnapshot) -> Result<Option<u64>, String> {
+    if usage.total_tokens.is_some_and(|total| total > 0) {
+        return Ok(usage.total_tokens);
+    }
+    let derived = usage
+        .uncached_input_tokens
+        .zip(usage.output_tokens)
+        .map(|(input, output)| {
+            add(input, usage.cache_read_tokens.unwrap_or_default())
+                .and_then(|cached| add(cached, output))
+        })
+        .transpose()?;
+    Ok(derived.or(usage.total_tokens))
+}
+
 /// Adds monotonic counters; returns a visible error instead of wrapping or saturating.
 /// 累加单调计数；溢出时明确报错，不回绕或饱和。
 fn add(left: u64, right: u64) -> Result<u64, String> {
@@ -543,5 +562,23 @@ mod tests {
         let increment = SessionUsageBucket::from_api(&reported(), &ApiTimings::default()).unwrap();
         assert!(ledger.apply("root", &increment, 1).is_err());
         assert_eq!(ledger, before);
+    }
+
+    /// A protocol without a reported total still yields a total from its known parts.
+    /// 未上报总量的协议仍可由已知分项得到总量。
+    #[test]
+    fn missing_reported_total_is_derived_from_known_parts() {
+        let unreported = UsageSnapshot {
+            total_tokens: None,
+            ..reported()
+        };
+        let bucket = SessionUsageBucket::from_api(&unreported, &ApiTimings::default()).unwrap();
+        assert_eq!(bucket.total_tokens, UsageMeasurement::observe(Some(120)));
+        let output_unknown = UsageSnapshot {
+            output_tokens: None,
+            ..unreported
+        };
+        let bucket = SessionUsageBucket::from_api(&output_unknown, &ApiTimings::default()).unwrap();
+        assert_eq!(bucket.total_tokens, UsageMeasurement::observe(None));
     }
 }
