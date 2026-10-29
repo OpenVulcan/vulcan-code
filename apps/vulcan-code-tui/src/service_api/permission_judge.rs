@@ -39,9 +39,9 @@ pub fn load_permission_judge_status() -> ServiceCall {
     )
 }
 
-/// Builds the request for `service_permission_judge_edge_models`, the official direct models the
+/// Builds the request for `service_permission_judge_edge_models`, the cloud models the
 /// signed-in account's deployment currently serves.
-/// 构建 `service_permission_judge_edge_models` 的请求，即已登录账户所属部署当前提供的官方直连模型。
+/// 构建 `service_permission_judge_edge_models` 的请求，即已登录账户所属部署当前提供的云端模型。
 /// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
 /// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
 pub fn load_permission_judge_edge_models() -> ServiceCall {
@@ -54,8 +54,8 @@ pub fn load_permission_judge_edge_models() -> ServiceCall {
 }
 
 /// Builds the request for `service_permission_judge_edge_endpoints`, the endpoint table of the
-/// chosen official direct model.
-/// 构建 `service_permission_judge_edge_endpoints` 的请求，即所选官方直连模型的端点表。
+/// chosen cloud model.
+/// 构建 `service_permission_judge_edge_endpoints` 的请求，即所选云端模型的端点表。
 /// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
 /// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
 pub fn load_permission_judge_edge_endpoints() -> ServiceCall {

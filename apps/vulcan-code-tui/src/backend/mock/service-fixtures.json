@@ -1810,7 +1810,7 @@
         { "requestId": "permission-judge-test-3", "totalMs": 64.0, "networkMs": null, "endpointMs": 3.1,
           "nodeMs": null, "queueMs": null, "computeMs": null, "httpStatus": 503, "tokenRenewed": false,
           "answer": null, "errorCode": "region_saturated",
-          "error": "The official direct judge refused the request (503 region_saturated)." }
+          "error": "The cloud judge refused the request (503 region_saturated)." }
       ],
       "succeeded": 2,
       "minMs": 101.7,

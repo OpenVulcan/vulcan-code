@@ -355,9 +355,9 @@ fn parse_edge_models(body: &[u8]) -> Result<Vec<String>, String> {
     Ok(ids.into_iter().collect())
 }
 
-/// Lists the official direct models the credential's deployment currently serves, sorted by id;
+/// Lists the cloud models the credential's deployment currently serves, sorted by id;
 /// an empty list means none is enabled.
-/// 列出凭据所属部署当前提供的官方直连模型，按 id 排序；空清单表示没有启用任何模型。
+/// 列出凭据所属部署当前提供的云端模型，按 id 排序；空清单表示没有启用任何模型。
 pub async fn request_openvulcan_edge_models(
     http: &reqwest::Client,
     secret: &CredentialExecutionSecret,
@@ -366,9 +366,9 @@ pub async fn request_openvulcan_edge_models(
     parse_edge_models(&body)
 }
 
-/// Answer of `GET /api/v1/vulcancode/edge-usage`: the signed-in account's official direct judge
+/// Answer of `GET /api/v1/vulcancode/edge-usage`: the signed-in account's cloud judge
 /// calls per model, with every model the deployment enables listed.
-/// `GET /api/v1/vulcancode/edge-usage` 的回答：已登录账户按模型的官方直连判定调用，并列出部署启用的
+/// `GET /api/v1/vulcancode/edge-usage` 的回答：已登录账户按模型的云端判定调用，并列出部署启用的
 /// 每个模型。
 #[derive(Debug, Deserialize, serde::Serialize)]
 pub struct OpenVulcanEdgeUsage {
@@ -427,8 +427,8 @@ fn parse_edge_usage(body: &[u8]) -> Result<OpenVulcanEdgeUsage, String> {
     Ok(answer)
 }
 
-/// Reads the signed-in account's official direct judge calls per model.
-/// 读取已登录账户按模型的官方直连判定调用。
+/// Reads the signed-in account's cloud judge calls per model.
+/// 读取已登录账户按模型的云端判定调用。
 pub async fn request_openvulcan_edge_usage(
     http: &reqwest::Client,
     secret: &CredentialExecutionSecret,
@@ -620,7 +620,7 @@ pub async fn request_openvulcan_edge_access(
 ) -> Result<OpenVulcanEdgeAccess, OpenVulcanEdgeAccessError> {
     let failed = |message: &str| OpenVulcanEdgeAccessError::Failed(String::from(message));
     if !is_openvulcan_edge_model_id(model_id) {
-        return Err(failed("The official direct model id is malformed."));
+        return Err(failed("The cloud model id is malformed."));
     }
     let region = secret
         .openvulcan_region()

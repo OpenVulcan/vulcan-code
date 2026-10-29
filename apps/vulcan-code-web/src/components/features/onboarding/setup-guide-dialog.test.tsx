@@ -16,14 +16,15 @@ vi.mock("@/i18n", async (importOriginal) => {
 // 所有服务调用均为合成；不会访问运行中的服务。
 const service = vi.hoisted(() => ({
   loadPermissionJudgeSettings: vi.fn(),
+  loadPermissionJudgeEdgeModels: vi.fn(),
   savePermissionJudgeSettings: vi.fn(),
   inspectPermissionJudgePackage: vi.fn(),
   registerPermissionJudgeModel: vi.fn(),
   activatePermissionJudgeModel: vi.fn(),
 }));
 vi.mock("@/service/permission-judge-service", () => service);
-// The cloud route section keeps loading; its behavior has its own test.
-// 云端路由区块保持加载中；其行为有独立测试。
+// The API route section keeps loading; its behavior has its own test.
+// API 路由区块保持加载中；其行为有独立测试。
 vi.mock("@/service/settings-actions-service", () => ({
   loadPublicAiSettings: vi.fn(() => new Promise(() => undefined)),
   savePublicAiInferenceRoute: vi.fn(),
@@ -31,6 +32,8 @@ vi.mock("@/service/settings-actions-service", () => ({
 }));
 
 const { default: SetupGuideDialog } = await import("./setup-guide-dialog");
+const { OpenVulcanAccountContext } = await import("@/components/features/account/openvulcan-account-context");
+type OpenVulcanAccountController = import("@/components/features/account/openvulcan-account-context").OpenVulcanAccountController;
 
 let host: HTMLDivElement;
 let root: Root;
@@ -89,9 +92,21 @@ async function choose(value: string) {
   await act(async () => radio.click());
 }
 
-async function mount(initial: PermissionJudgeSettingsSnapshot, onOpenChange = vi.fn()) {
+// account builds an OpenVulcan account controller that is signed in or not.
+// account 构建已登录或未登录的 OpenVulcan 账户控制器。
+function account(connected: boolean): OpenVulcanAccountController {
+  return {
+    snapshot: { connected, connectionId: connected ? "c1" : null, displayName: connected ? "user" : null, region: null, message: null },
+    initialized: true, open: false, busy: false, waiting: false, error: null,
+    refresh: vi.fn(), setOpen: vi.fn(), login: vi.fn(), logout: vi.fn(),
+  } as unknown as OpenVulcanAccountController;
+}
+
+async function mount(initial: PermissionJudgeSettingsSnapshot, onOpenChange = vi.fn(), connected = false) {
   service.loadPermissionJudgeSettings.mockResolvedValue(initial);
-  await act(async () => root.render(<SetupGuideDialog open onOpenChange={onOpenChange} onOpenProviderSettings={() => undefined} />));
+  await act(async () => root.render(<OpenVulcanAccountContext.Provider value={account(connected)}>
+    <SetupGuideDialog open onOpenChange={onOpenChange} onOpenProviderSettings={() => undefined} />
+  </OpenVulcanAccountContext.Provider>));
   return onOpenChange;
 }
 
@@ -143,10 +158,34 @@ it("enables the local judge only after a registered model warms up", async () =>
   });
 });
 
-// The cloud choice cannot be confirmed before a decision route is saved.
-// 保存判定路由之前无法确认云端选项。
-it("waits for a cloud route before enabling the cloud judge", async () => {
+// The API choice cannot be confirmed before a decision route is saved.
+// 保存判定路由之前无法确认 API 选项。
+it("waits for an API route before enabling the API judge", async () => {
+  await mount(snapshot(null));
+  await choose("api");
+  expect(buttonByKey("setupGuide.api.confirm")?.disabled).toBe(true);
+});
+
+// The cloud choice waits for a sign-in and reads no model list until then.
+// 云端选项等待登录，在此之前不读取模型清单。
+it("waits for a sign-in before enabling the cloud judge", async () => {
   await mount(snapshot(null));
   await choose("cloud");
+  expect(service.loadPermissionJudgeEdgeModels).not.toHaveBeenCalled();
   expect(buttonByKey("setupGuide.cloud.confirm")?.disabled).toBe(true);
+});
+
+// Signed in, the cloud choice saves the cloud backend with the first model the server enables.
+// 已登录时，云端选项以服务端启用的第一个模型保存云端后端。
+it("saves the cloud judge with the first enabled official model", async () => {
+  service.loadPermissionJudgeEdgeModels.mockResolvedValue({ models: [{ modelId: "shell-mini" }, { modelId: "shell" }] });
+  const onOpenChange = await mount(snapshot(null), vi.fn(), true);
+  await choose("cloud");
+  expect(service.loadPermissionJudgeEdgeModels).toHaveBeenCalledOnce();
+  service.savePermissionJudgeSettings.mockResolvedValue({ ...snapshot(null), backend: "cloud", edgeModelId: "shell-mini" });
+  await act(async () => buttonByKey("setupGuide.cloud.confirm")!.click());
+  expect(service.savePermissionJudgeSettings).toHaveBeenCalledExactlyOnceWith({
+    backend: "cloud", edgeModelId: "shell-mini", device: "cpu", cudaLibraryDirectory: null, llmMayAllowBlocked: false, recordDecisions: false, approvalTimeoutSeconds: 0,
+  });
+  expect(onOpenChange).toHaveBeenCalledWith(false);
 });

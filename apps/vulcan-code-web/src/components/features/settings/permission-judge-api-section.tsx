@@ -6,6 +6,7 @@ import { Button } from "@/ui-kit/primitives/button";
 import { Combobox } from "@/ui-kit/primitives/combobox";
 import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { inferenceRouteKey, inferenceRoutePickerOptions } from "@/components/features/inference-route-picker";
+import { providerIsCoreAccount } from "@/components/features/settings/model-services/provider-directory";
 import { formatMessage, useI18n } from "@/i18n";
 import { errorMessage } from "@/lib/display-format";
 import {
@@ -16,33 +17,39 @@ import {
 import type {
   PublicAiInferenceRoute,
   PublicAiInternalInferenceCandidate,
+  PublicAiProviderDescriptor,
   PublicAiSettingsSnapshot,
 } from "@/types";
 
-// The cloud judge's consumer profile, owned by the service kernel.
-// 云端判定的消费者配置档，由服务内核持有。
+// The API judge's consumer profile, owned by the service kernel.
+// API 判定的消费者配置档，由服务内核持有。
 const PERMISSION_JUDGE_CONSUMER_PROFILE_ID = "permission_judge";
 
-// permissionJudgeCloudCandidates keeps the validated internal decision routes, mirroring the
-// backend's save validation.
-// permissionJudgeCloudCandidates 保留已验证的内部判定路由，与后端保存校验一致。
-export function permissionJudgeCloudCandidates(
+// permissionJudgeApiCandidates keeps the validated internal decision routes of providers the user
+// connects themselves, mirroring the backend's save validation: OpenVulcan account routes judge only
+// as the cloud judge, never as the API judge.
+// permissionJudgeApiCandidates 保留用户自行接入的供应商中已验证的内部判定路由，与后端保存校验一致：
+// OpenVulcan 账户的路由只能作为云端判定，不能作为 API 判定。
+export function permissionJudgeApiCandidates(
   candidates: PublicAiInternalInferenceCandidate[],
+  providers: readonly PublicAiProviderDescriptor[],
 ): PublicAiInternalInferenceCandidate[] {
+  const coreAccounts = new Set(providers.filter(providerIsCoreAccount).map((provider) => provider.id));
   return candidates.filter((candidate) => (
     candidate.enabled
+    && !coreAccounts.has(candidate.route.provider_id)
     && candidate.route.usage_scope === "internal_background"
     && candidate.route.operation === "decision_evaluate"
     && candidate.route.binding.kind === "action"
   ));
 }
 
-// PermissionJudgeCloudSection selects the cloud decision route, states that calls leave this
+// PermissionJudgeApiSection selects the API decision route, states that calls leave this
 // machine, and tests the saved route with one real request.
-// PermissionJudgeCloudSection 选择云端判定路由，说明调用会离开本机，并用一次真实请求测试已保存路由。
+// PermissionJudgeApiSection 选择 API 判定路由，说明调用会离开本机，并用一次真实请求测试已保存路由。
 // Parameters: `onConfiguredChange` receives whether a decision route is saved.
 // 参数：`onConfiguredChange` 接收是否已保存判定路由。
-export function PermissionJudgeCloudSection(props: { onConfiguredChange: (configured: boolean) => void }) {
+export function PermissionJudgeApiSection(props: { onConfiguredChange: (configured: boolean) => void }) {
   const { t } = useI18n();
   const { onConfiguredChange } = props;
   const [snapshot, setSnapshot] = React.useState<PublicAiSettingsSnapshot | null>(null);
@@ -64,16 +71,16 @@ export function PermissionJudgeCloudSection(props: { onConfiguredChange: (config
   React.useEffect(() => { onConfiguredChange(savedRoute !== undefined); }, [onConfiguredChange, savedRoute]);
 
   const candidates = React.useMemo(
-    () => permissionJudgeCloudCandidates(snapshot?.internalInferenceCandidates ?? []),
+    () => permissionJudgeApiCandidates(snapshot?.internalInferenceCandidates ?? [], snapshot?.providers ?? []),
     [snapshot],
   );
   const options = React.useMemo(() => inferenceRoutePickerOptions(candidates), [candidates]);
 
   if (!snapshot) {
-    return <PageSection title={t("settings.permissionJudge.cloud.title")}>
+    return <PageSection title={t("settings.permissionJudge.api.title")}>
       {loadError
         ? <PageNotice tone="error" details={loadError} detailsLabel={t("settings.errors.showErrorDetails")}>
-          {t("settings.permissionJudge.cloud.loadFailed")}
+          {t("settings.permissionJudge.api.loadFailed")}
         </PageNotice>
         : <StreamPlaceholder label={t("ui.loading")} shape="rows" count={2} />}
     </PageSection>;
@@ -94,9 +101,9 @@ export function PermissionJudgeCloudSection(props: { onConfiguredChange: (config
         operation: "decision_evaluate",
         route,
       }));
-      toast.success(t(route ? "settings.permissionJudge.cloud.saved" : "settings.permissionJudge.cloud.cleared"));
+      toast.success(t(route ? "settings.permissionJudge.api.saved" : "settings.permissionJudge.api.cleared"));
     } catch (cause) {
-      setActionError({ message: t("settings.permissionJudge.cloud.saveFailed"), detail: errorMessage(cause) });
+      setActionError({ message: t("settings.permissionJudge.api.saveFailed"), detail: errorMessage(cause) });
     } finally {
       setBusy(false);
     }
@@ -113,48 +120,48 @@ export function PermissionJudgeCloudSection(props: { onConfiguredChange: (config
         consumerProfileId: PERMISSION_JUDGE_CONSUMER_PROFILE_ID,
         operation: "decision_evaluate",
       });
-      setTestResult(formatMessage(t("settings.permissionJudge.cloud.testResult"), {
+      setTestResult(formatMessage(t("settings.permissionJudge.api.testResult"), {
         model: result.modelId,
         duration: formatMessage(t("settings.permissionJudge.ms"), { value: result.durationMs.toFixed(0) }),
       }));
     } catch (cause) {
-      setActionError({ message: t("settings.permissionJudge.cloud.testFailed"), detail: errorMessage(cause) });
+      setActionError({ message: t("settings.permissionJudge.api.testFailed"), detail: errorMessage(cause) });
     } finally {
       setBusy(false);
     }
   };
 
-  return <PageSection layout="rows" data-permission-judge-cloud title={t("settings.permissionJudge.cloud.title")}
-    description={t("settings.permissionJudge.cloud.description")}
+  return <PageSection layout="rows" data-permission-judge-api title={t("settings.permissionJudge.api.title")}
+    description={t("settings.permissionJudge.api.description")}
     footer={savedRoute ? <>
       <Button type="button" variant="outline" size="sm" disabled={busy || !selected} onClick={() => void test()}>
-        <PlugZap size={14} />{t("settings.permissionJudge.cloud.test")}
+        <PlugZap size={14} />{t("settings.permissionJudge.api.test")}
       </Button>
       <Button type="button" variant="ghost" size="sm" disabled={busy}
-        onClick={() => void save(null)}>{t("settings.permissionJudge.cloud.clear")}</Button>
+        onClick={() => void save(null)}>{t("settings.permissionJudge.api.clear")}</Button>
     </> : undefined}>
-    <PageNotice tone="warning" role="note">{t("settings.permissionJudge.cloud.dataNotice")}</PageNotice>
+    <PageNotice tone="warning" role="note">{t("settings.permissionJudge.api.dataNotice")}</PageNotice>
     {savedRoute && !selected
-      ? <PageNotice tone="error">{t("settings.permissionJudge.cloud.unavailable")}</PageNotice>
+      ? <PageNotice tone="error">{t("settings.permissionJudge.api.unavailable")}</PageNotice>
       : null}
-    <PageRow label={t("settings.permissionJudge.cloud.route")}>
+    <PageRow label={t("settings.permissionJudge.api.route")}>
       <Combobox
-        ariaLabel={t("settings.permissionJudge.cloud.route")}
+        ariaLabel={t("settings.permissionJudge.api.route")}
         disabled={busy || candidates.length === 0}
-        emptyText={t("settings.permissionJudge.cloud.noCandidate")}
+        emptyText={t("settings.permissionJudge.api.noCandidate")}
         onValueChange={(key) => {
           const candidate = candidates.find((item) => inferenceRouteKey(item.route) === key);
           if (candidate) void save(candidate.route);
         }}
         options={options}
         placeholder={t(candidates.length === 0
-          ? "settings.permissionJudge.cloud.noCandidate"
-          : "settings.permissionJudge.cloud.selectRoute")}
-        searchPlaceholder={t("settings.permissionJudge.cloud.search")}
+          ? "settings.permissionJudge.api.noCandidate"
+          : "settings.permissionJudge.api.selectRoute")}
+        searchPlaceholder={t("settings.permissionJudge.api.search")}
         value={selected ? routeKey : ""}
       />
     </PageRow>
-    {testResult ? <PageNotice tone="success" data-cloud-test-result="">{testResult}</PageNotice> : null}
+    {testResult ? <PageNotice tone="success" data-api-test-result="">{testResult}</PageNotice> : null}
     {actionError
       ? <PageNotice tone="error" details={actionError.detail} detailsLabel={t("settings.errors.showErrorDetails")}>
         {actionError.message}

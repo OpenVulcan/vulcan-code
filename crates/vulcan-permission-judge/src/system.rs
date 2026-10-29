@@ -12,13 +12,17 @@ pub enum JudgeBackend {
     /// The active registered model in a local worker process.
     /// 在本机 worker 进程中运行的使用中登记模型。
     Local,
-    /// The decision route saved for the permission judge, such as jev on TypeSafe or OpenRouter.
-    /// 为权限判定保存的判定路由，例如 TypeSafe 或 OpenRouter 上的 jev。
+    /// The official judge OpenVulcan serves from its edge endpoints, reached with the signed-in
+    /// account; same classifier and labels as the local judge. This is the only way OpenVulcan
+    /// takes part in judging.
+    /// OpenVulcan 由其边缘端点提供的官方判定，使用已登录账户访问；分类器与标签同本机判定器。这是
+    /// OpenVulcan 参与判定的唯一方式。
     Cloud,
-    /// The official model served by an OpenVulcan edge endpoint, reached with the signed-in
-    /// account; same classifier and labels as the local judge.
-    /// 由 OpenVulcan 边缘端点提供的官方模型，使用已登录账户访问；分类器与标签同本机判定器。
-    Edge,
+    /// The decision route the user connects with their own provider account, such as jev on
+    /// TypeSafe or OpenRouter; routes of the OpenVulcan account are refused.
+    /// 用户以自己的供应商账号接入的判定路由，例如 TypeSafe 或 OpenRouter 上的 jev；拒绝 OpenVulcan
+    /// 账户的路由。
+    Api,
 }
 
 /// Most characters of one review rule text; the settings services refuse longer text.

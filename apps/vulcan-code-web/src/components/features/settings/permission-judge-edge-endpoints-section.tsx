@@ -29,11 +29,11 @@ export function endpointStatus(endpoint: PermissionJudgeEdgeEndpoint): { status:
   return { status: "ready", key: "settings.permissionJudge.edge.endpoints.status.available" };
 }
 
-// PermissionJudgeEdgeEndpointsSection shows the endpoints of the saved official direct model with
+// PermissionJudgeEdgeEndpointsSection shows the endpoints of the saved cloud model with
 // their latest background probe, marks the endpoint judge requests use now, and lets the user lock
 // one endpoint, re-test now, or send real requests to one endpoint. It reads the in-memory table at
 // the status poll interval.
-// PermissionJudgeEdgeEndpointsSection 显示已保存官方直连模型的端点及其最近一次后台探测，标出判定请求
+// PermissionJudgeEdgeEndpointsSection 显示已保存云端模型的端点及其最近一次后台探测，标出判定请求
 // 当前使用的端点，并允许用户锁定端点、立即重新测试或向某个端点发送真实请求。它按状态轮询间隔读取内存
 // 端点表。
 // Parameters: the poll interval, whether controls are locked, the translator and the locale.

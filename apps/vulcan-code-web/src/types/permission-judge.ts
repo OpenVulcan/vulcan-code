@@ -2,12 +2,14 @@
 // `vulcan_service_api::permission_judge`.
 // 权限判定设置、模型登记表、worker 状态与 CUDA 执行库，镜像 `vulcan_service_api::permission_judge`。
 
-// JudgeBackend names where calls are judged: the local model, the saved cloud decision route, or
-// the official model on an OpenVulcan edge endpoint. A saved backend is what makes the judge
-// configured and auto-approve available.
-// JudgeBackend 指定判定调用的位置：本机模型、已保存的云端判定路由，或 OpenVulcan 边缘端点上的官方
-// 模型。已保存的后端即表示判定器已配置，自动审批也因此可用。
-export type JudgeBackend = "local" | "cloud" | "edge";
+// JudgeBackend names where calls are judged: the local model, the cloud judge (the official model
+// OpenVulcan serves from its edge endpoints, the only way OpenVulcan judges), or the API judge (the
+// decision route saved on a provider account the user connects; OpenVulcan account routes are
+// refused). A saved backend is what makes the judge configured and auto-approve available.
+// JudgeBackend 指定判定调用的位置：本机模型、云端判定（OpenVulcan 由边缘端点提供的官方模型，是
+// OpenVulcan 参与判定的唯一方式），或 API 判定（保存在用户自行接入的供应商账号上的判定路由；拒绝
+// OpenVulcan 账户的路由）。已保存的后端即表示判定器已配置，自动审批也因此可用。
+export type JudgeBackend = "local" | "cloud" | "api";
 
 // JudgeDevice is the execution device of the local model.
 // JudgeDevice 是本机模型的执行设备。
@@ -96,16 +98,16 @@ export interface PermissionJudgeKnownPackage {
   variants: PermissionJudgeKnownVariant[];
 }
 
-// PermissionJudgeEdgeModels lists the official direct models the signed-in account's deployment
+// PermissionJudgeEdgeModels lists the cloud models the signed-in account's deployment
 // currently serves, sorted by id; empty when none is enabled.
-// PermissionJudgeEdgeModels 列出已登录账户所属部署当前提供的官方直连模型，按 id 排序；没有启用任何模型时为空。
+// PermissionJudgeEdgeModels 列出已登录账户所属部署当前提供的云端模型，按 id 排序；没有启用任何模型时为空。
 export interface PermissionJudgeEdgeModels {
   models: { modelId: string }[];
 }
 
-// PermissionJudgeEdgeEndpoint is one endpoint of the chosen official direct model with its latest
+// PermissionJudgeEdgeEndpoint is one endpoint of the chosen cloud model with its latest
 // probe; probe fields are null until the endpoint answered a probe.
-// PermissionJudgeEdgeEndpoint 是所选官方直连模型的一个端点及其最近一次探测；端点回答探测之前探测字段为 null。
+// PermissionJudgeEdgeEndpoint 是所选云端模型的一个端点及其最近一次探测；端点回答探测之前探测字段为 null。
 export interface PermissionJudgeEdgeEndpoint {
   endpointId: string;
   endpoint: string;
@@ -122,8 +124,8 @@ export interface PermissionJudgeEdgeEndpoint {
   error: string | null;
 }
 
-// PermissionJudgeEdgeEndpoints is the in-memory endpoint table of the official direct judge.
-// PermissionJudgeEdgeEndpoints 是官方直连判定的内存端点表。
+// PermissionJudgeEdgeEndpoints is the in-memory endpoint table of the cloud judge.
+// PermissionJudgeEdgeEndpoints 是云端判定的内存端点表。
 export interface PermissionJudgeEdgeEndpoints {
   modelId: string | null;
   site: string | null;
@@ -321,10 +323,10 @@ export interface PermissionJudgeSettingsSnapshot {
   activeModelId: string | null;
   previousModelId: string | null;
   // Official model chosen for the direct backend, by its edge model id.
-  // 为官方直连后端选择的官方模型，以其边缘模型 id 表示。
+  // 为云端后端选择的官方模型，以其边缘模型 id 表示。
   edgeModelId: string | null;
   // Endpoint the user locked the direct backend to; null selects automatically.
-  // 用户为官方直连后端锁定的端点；null 表示自动选择。
+  // 用户为云端后端锁定的端点；null 表示自动选择。
   edgeEndpointId: string | null;
   knownPackages: PermissionJudgeKnownPackage[];
   policyOptions: PermissionJudgePolicyOption[];
@@ -341,8 +343,8 @@ export interface PermissionJudgeSettingsSnapshot {
 // PermissionJudgeSettingsSaveRequest 保存系统级选择。
 export interface PermissionJudgeSettingsSaveRequest {
   backend: JudgeBackend | null;
-  // Required with the official direct backend.
-  // 选择官方直连后端时必填。
+  // Required with the cloud backend.
+  // 选择云端后端时必填。
   edgeModelId: string | null;
   device: JudgeDevice | null;
   cudaLibraryDirectory: string | null;
@@ -354,8 +356,8 @@ export interface PermissionJudgeSettingsSaveRequest {
 // PermissionJudgeBenchmarkResult is one speed test, kept only on the page that ran it.
 // PermissionJudgeBenchmarkResult 是一次速度测试，只保留在执行它的页面上。
 export interface PermissionJudgeBenchmarkResult {
-  // Device of the local model; null for the cloud and official direct judges.
-  // 本机模型的设备；云端与官方直连判定时为 null。
+  // Device of the local model; null for the cloud and API judges.
+  // 本机模型的设备；云端与 API 判定时为 null。
   device: JudgeDevice | null;
   modelId: string;
   batchSize: number;
@@ -387,13 +389,13 @@ export interface PermissionJudgeRecordTrace {
   policyVersion: string;
   settings: Record<string, string>;
   rendered: string;
-  // Raw local scores in label order; null for the cloud judge.
-  // 按标签顺序排列的本机原始分数；云端判定时为 null。
+  // Raw local scores in label order; null for the API judge.
+  // 按标签顺序排列的本机原始分数；API 判定时为 null。
   logits: [number, number, number] | null;
   allowProbability: number | null;
   inputTokens: number | null;
-  // Checkpoint digest the official direct endpoint reported; absent for other backends.
-  // 官方直连端点报告的检查点摘要；其他后端缺省。
+  // Checkpoint digest the cloud endpoint reported; absent for other backends.
+  // 云端端点报告的检查点摘要；其他后端缺省。
   checkpointSha256?: string;
 }
 

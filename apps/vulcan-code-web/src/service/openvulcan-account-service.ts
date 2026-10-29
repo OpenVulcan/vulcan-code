@@ -112,9 +112,9 @@ export function loadOpenVulcanUsagePage(cursor: string): Promise<OpenVulcanUsage
   return serviceClient.request("service_openvulcan_usage_page", { cursor });
 }
 
-// OpenVulcanEdgeUsage is the account's official direct judge calls per model, with every model the
+// OpenVulcanEdgeUsage is the account's cloud judge calls per model, with every model the
 // deployment serves listed, sorted by id.
-// OpenVulcanEdgeUsage 是账户按模型的官方直连判定调用，并列出部署提供的每个模型，按 id 排序。
+// OpenVulcanEdgeUsage 是账户按模型的云端判定调用，并列出部署提供的每个模型，按 id 排序。
 export interface OpenVulcanEdgeUsage {
   // Window of the totals in hours, ending at the current hour.
   // 合计的时间窗（小时），截至当前小时。
@@ -137,8 +137,8 @@ export interface OpenVulcanEdgeUsage {
   }>;
 }
 
-// loadOpenVulcanEdgeUsage reads the signed-in account's official direct judge calls per model.
-// loadOpenVulcanEdgeUsage 读取已登录账户按模型的官方直连判定调用。
+// loadOpenVulcanEdgeUsage reads the signed-in account's cloud judge calls per model.
+// loadOpenVulcanEdgeUsage 读取已登录账户按模型的云端判定调用。
 export function loadOpenVulcanEdgeUsage(): Promise<OpenVulcanEdgeUsage> {
   return serviceClient.request("service_openvulcan_edge_usage", {});
 }

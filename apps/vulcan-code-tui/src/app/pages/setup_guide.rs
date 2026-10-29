@@ -1,11 +1,14 @@
-// Setup guide page: its first step is the permission judge, answered by a local model, a cloud
-// judge or not now, mirroring the WebUI setup guide dialog. Only a backend's confirm button saves
-// the system settings; not now and leaving the page write nothing, so an unset judge stays unset.
-// 初始化引导页：第一步是权限判定，可选本机模型、云端判定或暂不启用，镜像 WebUI 初始化引导对话框。
-// 只有后端的确认按钮会保存系统设置；暂不启用与离开页面不写入任何内容，未设定的判定保持未设定。
+// Setup guide page: its first step is the permission judge, answered by a local model, the
+// OpenVulcan cloud judge, a judge API or not now, mirroring the WebUI setup guide dialog. Only a
+// backend's confirm button saves the system settings; not now and leaving the page write nothing,
+// so an unset judge stays unset.
+// 初始化引导页：第一步是权限判定，可选本机模型、OpenVulcan 云端判定、判定 API 或暂不启用，镜像 WebUI
+// 初始化引导对话框。只有后端的确认按钮会保存系统设置；暂不启用与离开页面不写入任何内容，未设定的判定
+// 保持未设定。
 
 use super::permission_judge::{
-    JUDGE_PROFILE, cloud_rows, device_label, phase_label, reason_label, register_rows,
+    JUDGE_PROFILE, api_rows, cloud_model, device_label, edge_models, edge_rows, phase_label,
+    reason_label, register_rows, save_request,
 };
 use super::*;
 use crate::service_api::permission_judge as judge;
@@ -21,6 +24,7 @@ fn choice_request(snapshot: &Value, backend: &str) -> Value {
     };
     json!({
         "backend": backend,
+        "edgeModelId": v(snapshot, "/edgeModelId"),
         "device": device,
         "cudaLibraryDirectory": v(snapshot, "/cuda/lockedDirectory"),
         "llmMayAllowBlocked": b(snapshot, "/llmMayAllowBlocked"),
@@ -56,23 +60,41 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
         status => status,
     };
     let ai = app.slots.value(Slot::PublicAiSettings);
-    let cloud_route = v(ai, &format!("/inferenceProfiles/{JUDGE_PROFILE}/decision"));
+    let api_route = v(ai, &format!("/inferenceProfiles/{JUDGE_PROFILE}/decision"));
 
     let mut rows = vec![note(tr!("setupGuide.judge.intro"), Tone::Muted)];
     local_rows(&mut rows, app, snapshot, status);
 
+    // The cloud choice saves the model the settings page would: the saved one, else the first
+    // one the server enables.
+    // 云端选项保存与设置页相同的模型：已保存的模型，否则为服务端启用的第一个。
     rows.push(section(tr!("setupGuide.cloud.title")));
     rows.push(note(tr!("setupGuide.cloud.description"), Tone::Muted));
-    cloud_rows(&mut rows, ai, cloud_route);
+    let enabled = edge_models(app);
+    edge_rows(&mut rows, app, &enabled, &save_request(snapshot));
+    let cloud = cloud_model(app, snapshot, &enabled);
+    rows.push(confirm_row(
+        tr!("setupGuide.cloud.confirm"),
+        cloud.as_ref().ok().map(|model| {
+            let mut request = choice_request(snapshot, "cloud");
+            request["edgeModelId"] = model.clone();
+            request
+        }),
+        cloud.err().unwrap_or_default(),
+    ));
+
+    rows.push(section(tr!("setupGuide.api.title")));
+    rows.push(note(tr!("setupGuide.api.description"), Tone::Muted));
+    api_rows(&mut rows, ai, api_route);
     rows.push(button(
-        tr!("setupGuide.cloud.providers"),
+        tr!("setupGuide.api.providers"),
         UiAction::GoPage(PageId::Providers),
         Tone::Normal,
     ));
     rows.push(confirm_row(
-        tr!("setupGuide.cloud.confirm"),
-        (!cloud_route.is_null()).then(|| choice_request(snapshot, "cloud")),
-        tr!("settings.permissionJudge.needsCloudRoute"),
+        tr!("setupGuide.api.confirm"),
+        (!api_route.is_null()).then(|| choice_request(snapshot, "api")),
+        tr!("settings.permissionJudge.needsApiRoute"),
     ));
 
     rows.push(section(tr!("setupGuide.off.title")));
@@ -164,7 +186,7 @@ mod tests {
     /// 未设定的判定，带推荐设备与已保存的 CUDA 文件夹。
     fn unset() -> Value {
         json!({
-            "backend": null, "device": null, "recommendedDevice": "cpu",
+            "backend": null, "edgeModelId": null, "device": null, "recommendedDevice": "cpu",
             "llmMayAllowBlocked": true, "recordDecisions": true, "cuda": { "lockedDirectory": "D:/cuda" },
             "approvalTimeoutSeconds": 120,
         })
@@ -177,7 +199,7 @@ mod tests {
         assert_eq!(
             choice_request(&unset(), "local"),
             json!({
-                "backend": "local", "device": "cpu",
+                "backend": "local", "edgeModelId": null, "device": "cpu",
                 "cudaLibraryDirectory": "D:/cuda", "llmMayAllowBlocked": true,
                 "recordDecisions": true, "approvalTimeoutSeconds": 120,
             })

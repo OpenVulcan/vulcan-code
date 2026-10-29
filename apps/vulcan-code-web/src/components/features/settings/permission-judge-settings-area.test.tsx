@@ -173,8 +173,8 @@ it("keeps the use action disabled until the backend is set up", async () => {
 // 已启用的判定不会切换到尚未设置的后端；切换会等待其设置完成。
 it("waits to switch an enabled judge to a backend that is not set up", async () => {
   await mount("ready");
-  const cloud = host.querySelector<HTMLButtonElement>('[data-slot="segmented-control-item"][value="cloud"]')!;
-  await act(async () => cloud.click());
+  const api = host.querySelector<HTMLButtonElement>('[data-slot="segmented-control-item"][value="api"]')!;
+  await act(async () => api.click());
   expect(service.savePermissionJudgeSettings).not.toHaveBeenCalled();
   expect(host.querySelector("[data-judge-switching]")).not.toBeNull();
   expect(host.querySelector('[aria-label="settings.permissionJudge.device"]')).toBeNull();
@@ -211,12 +211,12 @@ it("offers a retry only after a failed load", async () => {
   expect(service.reloadPermissionJudge).toHaveBeenCalledOnce();
 });
 
-// A saved cloud judge runs speed tests without a local worker and hides the local-model controls.
-// 已保存的云端判定无需本机 worker 即可执行速度测试，并隐藏本机模型控件。
-it("benchmarks a saved cloud judge without the local model", async () => {
-  const cloud = { ...snapshot("not_loaded"), backend: "cloud" as const };
-  service.loadPermissionJudgeSettings.mockResolvedValue(cloud);
-  service.loadPermissionJudgeStatus.mockResolvedValue(cloud.status);
+// A saved API judge runs speed tests without a local worker and hides the local-model controls.
+// 已保存的 API 判定无需本机 worker 即可执行速度测试，并隐藏本机模型控件。
+it("benchmarks a saved API judge without the local model", async () => {
+  const api = { ...snapshot("not_loaded"), backend: "api" as const };
+  service.loadPermissionJudgeSettings.mockResolvedValue(api);
+  service.loadPermissionJudgeStatus.mockResolvedValue(api.status);
   await act(async () => root.render(<PermissionJudgeSettingsArea />));
   expect(host.querySelector('[aria-label="settings.permissionJudge.device"]')).toBeNull();
   expect(host.querySelector('[data-judge-open="models"]')).toBeNull();
@@ -228,8 +228,8 @@ it("benchmarks a saved cloud judge without the local model", async () => {
   expect(service.benchmarkPermissionJudge).toHaveBeenCalledExactlyOnceWith(1);
 });
 
-// MINI and FULL are official direct model ids; the server lists only the enabled ones.
-// MINI 与 FULL 是官方直连模型 id；服务端只列出已启用的模型。
+// MINI and FULL are cloud judge model ids; the server lists only the enabled ones.
+// MINI 与 FULL 是云端判定模型 id；服务端只列出已启用的模型。
 const MINI = "vulcan-decision-shell-v1-mini-preview";
 const FULL = "vulcan-decision-shell-v1-preview";
 
@@ -253,20 +253,20 @@ async function mountJudge(loaded: PermissionJudgeSettingsSnapshot, controller: O
   </OpenVulcanAccountContext.Provider>));
 }
 
-// mountEdge renders an enabled local judge and picks the official direct backend.
-// mountEdge 渲染已启用的本机判定并选择官方直连后端。
+// mountEdge renders an enabled local judge and picks the cloud backend.
+// mountEdge 渲染已启用的本机判定并选择云端后端。
 async function mountEdge(connected: boolean) {
   const controller = account(connected);
   await mountJudge(snapshot("ready"), controller);
-  service.savePermissionJudgeSettings.mockResolvedValue({ ...snapshot("ready"), backend: "edge", edgeModelId: MINI });
-  const edge = host.querySelector<HTMLButtonElement>('[data-slot="segmented-control-item"][value="edge"]')!;
+  service.savePermissionJudgeSettings.mockResolvedValue({ ...snapshot("ready"), backend: "cloud", edgeModelId: MINI });
+  const edge = host.querySelector<HTMLButtonElement>('[data-slot="segmented-control-item"][value="cloud"]')!;
   await act(async () => edge.click());
   return controller;
 }
 
 // Signed in, the model list is read and the switch saves the first model the server enables.
 // 已登录时读取模型清单，切换时保存服务端启用的第一个模型。
-it("switches to the official direct judge with the first model the server enables", async () => {
+it("switches to the cloud judge with the first model the server enables", async () => {
   service.loadPermissionJudgeEdgeModels.mockResolvedValue({ models: [{ modelId: MINI }, { modelId: FULL }] });
   await mountEdge(true);
   expect(service.loadPermissionJudgeEdgeModels).toHaveBeenCalledOnce();
@@ -274,14 +274,14 @@ it("switches to the official direct judge with the first model the server enable
   expect(service.savePermissionJudgeSettings).not.toHaveBeenCalled();
   await act(async () => buttonByKey("settings.permissionJudge.switchBackend")!.click());
   expect(service.savePermissionJudgeSettings).toHaveBeenCalledExactlyOnceWith({
-    backend: "edge", edgeModelId: MINI, device: "webgpu", cudaLibraryDirectory: null,
+    backend: "cloud", edgeModelId: MINI, device: "webgpu", cudaLibraryDirectory: null,
     llmMayAllowBlocked: false, recordDecisions: false, approvalTimeoutSeconds: 0,
   });
 });
 
 // With no enabled model the switch stays unavailable.
 // 没有已启用的模型时无法切换。
-it("cannot switch to the official direct judge while the server enables no model", async () => {
+it("cannot switch to the cloud judge while the server enables no model", async () => {
   service.loadPermissionJudgeEdgeModels.mockResolvedValue({ models: [] });
   await mountEdge(true);
   expect(buttonByKey("settings.permissionJudge.switchBackend")?.disabled).toBe(true);
@@ -289,7 +289,7 @@ it("cannot switch to the official direct judge while the server enables no model
 
 // Signed out, the list is not read, the switch waits and the sign-in action opens the account dialog.
 // 未登录时不读取清单，切换会等待，登录操作打开共享账户弹窗。
-it("waits for a sign-in before switching to the official direct judge", async () => {
+it("waits for a sign-in before switching to the cloud judge", async () => {
   const controller = await mountEdge(false);
   expect(service.loadPermissionJudgeEdgeModels).not.toHaveBeenCalled();
   expect(service.savePermissionJudgeSettings).not.toHaveBeenCalled();
@@ -302,7 +302,7 @@ it("waits for a sign-in before switching to the official direct judge", async ()
 // 服务端已不再启用的已保存模型仍保持选中并标为不可用。
 it("keeps a saved official model the server no longer enables", async () => {
   service.loadPermissionJudgeEdgeModels.mockResolvedValue({ models: [{ modelId: MINI }] });
-  await mountJudge({ ...snapshot("ready"), backend: "edge", edgeModelId: FULL }, account(true));
+  await mountJudge({ ...snapshot("ready"), backend: "cloud", edgeModelId: FULL }, account(true));
   expect(host.querySelector("[data-judge-edge-saved-unavailable]")).not.toBeNull();
   expect(service.savePermissionJudgeSettings).not.toHaveBeenCalled();
 });
@@ -312,7 +312,7 @@ it("keeps a saved official model the server no longer enables", async () => {
 it("retries a failed official model list", async () => {
   service.loadPermissionJudgeEdgeModels.mockRejectedValueOnce(new Error("offline"))
     .mockResolvedValueOnce({ models: [{ modelId: MINI }] });
-  await mountJudge({ ...snapshot("ready"), backend: "edge", edgeModelId: MINI }, account(true));
+  await mountJudge({ ...snapshot("ready"), backend: "cloud", edgeModelId: MINI }, account(true));
   expect(host.querySelector("[data-judge-edge-models]")?.getAttribute("data-judge-edge-models")).toBe("failed");
   await act(async () => buttonByKey("settings.permissionJudge.reload")!.click());
   expect(service.loadPermissionJudgeEdgeModels).toHaveBeenCalledTimes(2);

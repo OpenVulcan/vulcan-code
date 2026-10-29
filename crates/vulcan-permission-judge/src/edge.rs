@@ -1,15 +1,15 @@
-//! Official direct judge: the wire shape of an edge endpoint's `POST /v1/judge` and the checks its
+//! Cloud judge: the wire shape of an edge endpoint's `POST /v1/judge` and the checks its
 //! answer must pass.
-//! 官方直连判定：边缘端点 `POST /v1/judge` 的线协议形状及其回答必须通过的检查。
+//! 云端判定：边缘端点 `POST /v1/judge` 的线协议形状及其回答必须通过的检查。
 //!
 //! The edge endpoint runs an official model on a GPU node and applies its frozen margin rule there,
 //! so its label stands as is. The operator chooses which models and checkpoints are served, so the
 //! client does not pin a checkpoint: it records the one the node reports. The client renders the
-//! input with the policy this build ships, the same one the cloud judge reads, and refuses an
+//! input with the policy this build ships, the same one the API judge reads, and refuses an
 //! answer under another policy.
 //! 边缘端点在 GPU 节点上运行官方模型，并在节点上应用其冻结的余量规则，因此其标签原样采用。提供哪些
 //! 模型与检查点由运营方决定，客户端不固定检查点，只记录节点报告的检查点。客户端用本构建随附的策略
-//! （与云端判定读取的相同）渲染输入，并拒绝其他策略下的回答。
+//! （与 API 判定读取的相同）渲染输入，并拒绝其他策略下的回答。
 
 use serde::{Deserialize, Serialize};
 
