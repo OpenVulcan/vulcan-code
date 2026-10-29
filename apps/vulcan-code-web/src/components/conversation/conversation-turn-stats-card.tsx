@@ -33,6 +33,9 @@ interface TurnStatsUsageSnapshot {
   // Optional Provider-reported cache-hit input token count.
   // Provider 报告的可选缓存命中输入 Token 数。
   cachedInputTokens: number | null;
+  // Optional Provider-reported cache-write input token count, already inside uncached input.
+  // Provider 报告的可选缓存写入输入 Token 数，已包含在无缓存输入中。
+  cacheCreationInputTokens: number | null;
   // Coverage is derived only for V1 views and never replaces the strict persisted totals.
   // 覆盖信息仅为 V1 视图派生，绝不替换严格持久化总量。
   coverage: UsageCoverage | null;
@@ -155,6 +158,9 @@ function TurnStatsUsageRows(props: {
   // cached displays recorded counts and preserves absence with a dash.
   // cached 显示已记录数值，并以短横线保留缺失状态。
   const cached = usageMetricDisplay(props.usage.cachedInputTokens, "cache_read_tokens", props.usage.coverage);
+  // cacheCreation shows the writes that a hit rate over uncached input already pays for.
+  // cacheCreation 展示命中率分母中无缓存输入已计入的缓存写入。
+  const cacheCreation = usageMetricDisplay(props.usage.cacheCreationInputTokens, "cache_write_tokens", props.usage.coverage);
   // uncached never presents the Provider total input as non-cached input.
   // uncached 绝不把 Provider 输入总量冒充无缓存输入。
   const uncached = usageMetricDisplay(props.usage.uncachedInputTokens, "uncached_input_tokens", props.usage.coverage);
@@ -163,7 +169,11 @@ function TurnStatsUsageRows(props: {
   const output = usageMetricDisplay(props.usage.outputTokens, "output_tokens", props.usage.coverage);
   // Total keeps the same source precedence without extra visible qualifiers.
   // 总量保持相同来源优先级，不附加可见限定说明。
-  const total = usageMetricDisplay(props.usage.totalTokens, "total_tokens", props.usage.coverage);
+  const total = usageMetricDisplay(
+    props.usage.totalTokens ?? accountedTurnStatsTotal(props.usage),
+    "total_tokens",
+    props.usage.coverage,
+  );
   return (
     <div className="vk-stats-grid">
       <TurnStatsMetricRow
@@ -173,16 +183,20 @@ function TurnStatsUsageRows(props: {
         rightValue={formatTurnStatsNumber(props.usage.toolCallCount, props.locale)}
       />
       <TurnStatsMetricRow
-        leftLabel={t("conversation.turnStats.cachedTokens")}
+        leftLabel={t("conversation.usage.cacheRead")}
         leftValue={cached}
-        rightLabel={t("conversation.turnStats.uncachedInput")}
-        rightValue={uncached}
+        rightLabel={t("conversation.usage.cacheWrite")}
+        rightValue={cacheCreation}
       />
       <TurnStatsMetricRow
-        leftLabel={t("conversation.turnStats.outputTokens")}
-        leftValue={output}
-        rightLabel={t("conversation.turnStats.totalTokens")}
-        rightValue={total}
+        leftLabel={t("conversation.turnStats.uncachedInput")}
+        leftValue={uncached}
+        rightLabel={t("conversation.turnStats.outputTokens")}
+        rightValue={output}
+      />
+      <TurnStatsMetricRow
+        leftLabel={t("conversation.turnStats.totalTokens")}
+        leftValue={total}
       />
       {props.children}
     </div>
@@ -203,12 +217,12 @@ function TurnStatsMetricRow(props: {
   // Formatted value for the left metric.
   // 左侧统计格式化值。
   leftValue: string;
-  // Label for the right metric.
-  // 右侧统计标签。
-  rightLabel: string;
+  // Label for the right metric; a row without one keeps the left column alignment.
+  // 右侧统计标签；缺省时该行保持左列对齐。
+  rightLabel?: string;
   // Formatted value for the right metric.
   // 右侧统计格式化值。
-  rightValue: string;
+  rightValue?: string;
 }) {
   return (
     <div className="vk-stats-pair">
@@ -216,12 +230,28 @@ function TurnStatsMetricRow(props: {
         <span>{props.leftLabel}</span>
         <strong>{props.leftValue}</strong>
       </div>
-      <div className="vk-stat">
-        <span>{props.rightLabel}</span>
-        <strong>{props.rightValue}</strong>
-      </div>
+      {props.rightLabel === undefined ? null : (
+        <div className="vk-stat">
+          <span>{props.rightLabel}</span>
+          <strong>{props.rightValue}</strong>
+        </div>
+      )}
     </div>
   );
+}
+
+// accountedTurnStatsTotal derives a total for Providers that report none (Anthropic).
+// accountedTurnStatsTotal 为不报告总量的 Provider（Anthropic）派生总量。
+//
+// Parameters:
+// 参数：usage 是一个统计范围的核算字段。
+// Returns uncached input + cache reads + output when all three are known, otherwise null.
+// 三项均已知时返回无缓存输入 + 缓存读取 + 输出，否则返回 null。
+function accountedTurnStatsTotal(usage: TurnStatsUsageSnapshot): number | null {
+  if (usage.uncachedInputTokens == null || usage.cachedInputTokens == null || usage.outputTokens == null) {
+    return null;
+  }
+  return usage.uncachedInputTokens + usage.cachedInputTokens + usage.outputTokens;
 }
 
 // turnStatsUsageSnapshot reads one aggregate or usage-group object through the established turn_stats field contract.
@@ -251,6 +281,9 @@ function turnStatsUsageSnapshot(stats: Record<string, unknown>): TurnStatsUsageS
     outputTokens: optionalTurnStatsCount(stats.output_tokens ?? stats.outputTokens),
     totalTokens: optionalTurnStatsCount(stats.total_tokens ?? stats.totalTokens),
     cachedInputTokens,
+    cacheCreationInputTokens: optionalTurnStatsCount(
+      stats.cache_creation_input_tokens ?? stats.cacheCreationInputTokens,
+    ),
     coverage: readUsageCoverage(stats.usage_coverage),
   };
 }
