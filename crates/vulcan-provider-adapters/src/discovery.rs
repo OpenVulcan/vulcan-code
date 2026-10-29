@@ -961,6 +961,12 @@ pub(crate) fn parse_anthropic_model_page(
                     String::from("anthropic-compatible.models.v1"),
                 )
             };
+            // Only the official API publishes reviewed per-model limits; zero means unpublished.
+            // 只有官方 API 公布经审核的逐模型上限；零表示未公布。
+            let published =
+                |limit: Option<u64>| limit.filter(|&tokens| official_anthropic && tokens > 0);
+            let context_limit = published(model.max_input_tokens);
+            let output_limit = published(model.max_tokens);
             ConnectionModel {
                 id: model.id,
                 display_name: model.display_name,
@@ -968,6 +974,8 @@ pub(crate) fn parse_anthropic_model_page(
                     operations: vec![AiOperation::ConversationRespond],
                     reasoning: reasoning_support,
                     reasoning_efforts,
+                    context_limit,
+                    output_limit,
                     prompt_cache: if official_anthropic {
                         anthropic_prompt_cache()
                     } else {
@@ -976,7 +984,11 @@ pub(crate) fn parse_anthropic_model_page(
                     evidence_revision,
                     ..ModelCapabilities::default()
                 },
-                capability_evidence: ModelCapabilityEvidence::default(),
+                capability_evidence: ModelCapabilityEvidence {
+                    context_limit_declared: context_limit.is_some(),
+                    output_limit_declared: output_limit.is_some(),
+                    ..ModelCapabilityEvidence::default()
+                },
                 protocol_variants: BTreeMap::new(),
                 resolved_protocol_binding: None,
             }
@@ -1738,6 +1750,14 @@ struct AnthropicModelEntry {
     /// User-visible model name.
     /// 用户可见模型名称。
     display_name: String,
+    /// Maximum input context window in tokens; `null` when not published.
+    /// 最大输入上下文窗口（token）；未公布时为 `null`。
+    #[serde(default)]
+    max_input_tokens: Option<u64>,
+    /// Maximum accepted `max_tokens` value; `null` when not published.
+    /// 可接受的最大 `max_tokens` 值；未公布时为 `null`。
+    #[serde(default)]
+    max_tokens: Option<u64>,
 }
 
 /// Parsed Gemini page shared with the HTTP pagination client.
@@ -2355,6 +2375,33 @@ mod tests {
         assert_eq!(
             catalog.discovery_schema_revision,
             "anthropic.models.2023-06-01"
+        );
+    }
+
+    /// Verifies only the official API's published limits become declared discovery evidence.
+    /// 验证只有官方 API 公布的上限成为已声明的发现证据。
+    #[test]
+    fn anthropic_discovery_declares_official_published_limits() {
+        let body = r#"{"data":[{"type":"model","id":"claude-limits","display_name":"Claude Limits","max_input_tokens":1000000,"max_tokens":128000},{"type":"model","id":"claude-unpublished","display_name":"Claude Unpublished","max_input_tokens":0,"max_tokens":null}],"has_more":false,"last_id":"claude-unpublished"}"#;
+        let official =
+            parse_anthropic_model_page(body, true).expect("documented response should parse");
+        let published = &official.models[0];
+        assert_eq!(published.capabilities.context_limit, Some(1_000_000));
+        assert_eq!(published.capabilities.output_limit, Some(128_000));
+        assert!(published.capability_evidence.context_limit_declared);
+        assert!(published.capability_evidence.output_limit_declared);
+        let unpublished = &official.models[1];
+        assert_eq!(unpublished.capabilities.context_limit, None);
+        assert_eq!(unpublished.capabilities.output_limit, None);
+        assert!(!unpublished.capability_evidence.context_limit_declared);
+
+        let compatible =
+            parse_anthropic_model_page(body, false).expect("documented response should parse");
+        assert_eq!(compatible.models[0].capabilities.context_limit, None);
+        assert!(
+            !compatible.models[0]
+                .capability_evidence
+                .context_limit_declared
         );
     }
 
