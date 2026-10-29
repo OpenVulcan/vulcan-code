@@ -36,8 +36,10 @@
     结构有调整时，必须通过独立、显式的维护入口将本地已存在的 Debug 数据库同步到最新结构，
     先备份，事务执行，验证保留数据与完整性；不得删除数据库重建，不得猜测字段映射或补默认值。
     应用启动流程不承担历史结构兼容、迁移或降级，维护工具不进入 Release 启动及发布流程。
-    其他持久格式仍按各自契约递增版本并明确拒绝旧格式。V0.2 及以后，持久格式变化需要逐版本迁移
-    与原字节备份。
+    会话协议（会话目录下的持久文档，如 `metadata.json` 及其嵌套版本）自 2026-10-29 起为发行做准备，
+    任何版本递增必须同时提供从上一版本自动升级的路径：先保留原字节备份，再转换并原子写回，读取时
+    自动完成，不要求用户操作；当时已有的版本是升级基线，更早的版本仍明确拒绝。其他持久格式仍按各自
+    契约递增版本并明确拒绝旧格式。V0.2 及以后，所有持久格式变化都需要逐版本迁移与原字节备份。
 
 ## 二、按需文档入口
 
@@ -46,7 +48,7 @@
 | 任务条件 | 红线（不可协商） | 细节 |
 | --- | --- | --- |
 | 修改宿主消息固定指引或锁定基线校验 | 指引版本目录只能追加；已锁定正文不得重写，新版说明通过持久动态上下文追加 | [`host-message-guidance-versions.md`](docs/contracts/host-message-guidance-versions.md) |
-| 修改会话元数据持久字段、模式版本或读取入口 | 递增 `METADATA_SCHEMA_VERSION`；V0.1.x 不新增迁移，旧版本明确拒绝（见第一节第 12 条），V0.2 起才提供逐版本迁移并在升级前保留原字节备份；未知版本不得降级，用户观察权限不得猜测 | [`session-metadata-migrations.md`](docs/contracts/session-metadata-migrations.md) |
+| 修改会话元数据持久字段、模式版本或读取入口 | 递增 `METADATA_SCHEMA_VERSION` 并同时提供从上一版本自动升级的步骤（见第一节第 12 条）：升级前保留原字节备份，转换后原子写回；基线之前的版本明确拒绝；未知或未来版本不得降级，用户观察权限不得猜测 | [`session-metadata-migrations.md`](docs/contracts/session-metadata-migrations.md) |
 | 修改预发布应用 SQLite 数据库结构 | 应用数据库保持 v1；通过独立工具显式同步本地既有 Debug 库，先备份并验证数据，应用启动不自动迁移；未知字段映射必须停止 | [`debug-database-maintenance.md`](docs/contracts/debug-database-maintenance.md) |
 | 修改 `shell_command`、`terminal_session` 或命令会话状态 | `timeout_ms` 省略表示无限等待；`shell_command` 合并输出超过 8 MiB 硬上限时终止进程树并丢弃全部输出，不返回给模型；内联输出超过 `200000` 字节转到 `.vulcan/temp/` 分页文件；`terminal_session.read` 是轮询不是事件推送；`cwd` 只在 `start` 生效 | [`tooling-and-terminal-runtime.md`](docs/contracts/tooling-and-terminal-runtime.md) |
 | 修改权限模式、工具权限闸门、判定模型、复核 LLM、用户审批或其设置界面 | 管线固定为模式闸门 → 确定性规则 → 判定模型 → 复核 LLM → 用户，任何错误都不放行，放行只对本次调用有效；判定与复核只用于自动审批模式，无人值守只属于自动审批且切换模式即关闭；无人值守会话永不询问用户，复核未放行即拒绝；高风险或判定拦截项不能由单层放行；模型与后端是系统级，项目配置只保存类别档位；只有显式选择写入判定设置 | [`permission-modes-and-judge.md`](docs/contracts/permission-modes-and-judge.md) |
