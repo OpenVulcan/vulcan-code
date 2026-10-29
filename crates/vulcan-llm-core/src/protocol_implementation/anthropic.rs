@@ -416,6 +416,9 @@ struct AnthropicStreamDecoder {
     /// Open content blocks keyed by Anthropic index.
     /// 按 Anthropic 索引保存的打开内容块。
     blocks: BTreeMap<u32, AnthropicBlock>,
+    /// Last reported cache write; a later usage event may repeat input without it.
+    /// 最近上报的缓存写入；后续用量事件可能只重复输入而不带它。
+    cache_write_tokens: UsageValue,
 }
 
 /// Tracks one Anthropic content block.
@@ -480,6 +483,7 @@ impl AnthropicStreamDecoder {
             terminal: false,
             message_id: None,
             blocks: BTreeMap::new(),
+            cache_write_tokens: UsageValue::Unknown,
         }
     }
 
@@ -779,13 +783,18 @@ impl ProtocolStreamDecoder for AnthropicStreamDecoder {
         let mut decoded = match wire_type {
             "message_start" => {
                 let mut message_events = self.capture_message_id(&value)?;
-                message_events.extend(usage_from_anthropic(value.pointer("/message/usage")));
+                message_events.extend(usage_from_anthropic(
+                    value.pointer("/message/usage"),
+                    &mut self.cache_write_tokens,
+                ));
                 message_events
             }
             "content_block_start" => self.decode_block_start(&value)?,
             "content_block_delta" => self.decode_block_delta(&value)?,
             "content_block_stop" => self.decode_block_stop(&value)?,
-            "message_delta" => usage_from_anthropic(value.get("usage")),
+            "message_delta" => {
+                usage_from_anthropic(value.get("usage"), &mut self.cache_write_tokens)
+            }
             "message_stop" => {
                 if !self.blocks.is_empty() {
                     return Err(ProtocolConversionError::new(
@@ -829,12 +838,24 @@ impl ProtocolStreamDecoder for AnthropicStreamDecoder {
 
 /// Converts Anthropic usage fields while keeping missing fields unknown.
 /// 转换 Anthropic 用量字段，并保持缺失字段为未知。
-fn usage_from_anthropic(value: Option<&Value>) -> Vec<AiStreamEvent> {
+///
+/// `cache_write_tokens` carries the last reported cache write across events of one message, so
+/// a later event that repeats `input_tokens` alone cannot drop the write from uncached input.
+/// `cache_write_tokens` 在同一消息的事件之间保留最近上报的缓存写入，使后续仅重复
+/// `input_tokens` 的事件不会把缓存写入从未缓存输入中丢掉。
+fn usage_from_anthropic(
+    value: Option<&Value>,
+    cache_write_tokens: &mut UsageValue,
+) -> Vec<AiStreamEvent> {
     let Some(value) = value else {
         return Vec::new();
     };
     let input_tokens = reported_usage(value, "input_tokens");
-    let cache_write_tokens = reported_usage(value, "cache_creation_input_tokens");
+    let reported_cache_write = reported_usage(value, "cache_creation_input_tokens");
+    if !matches!(reported_cache_write, UsageValue::Unknown) {
+        *cache_write_tokens = reported_cache_write;
+    }
+    let cache_write_tokens = *cache_write_tokens;
     let uncached_input_tokens = if matches!(cache_write_tokens, UsageValue::Unknown) {
         input_tokens
     } else {
@@ -1667,10 +1688,13 @@ mod tests {
     /// 验证缺失的缓存用量保持未知，而明确上报的零保持已知。
     #[test]
     fn anthropic_usage_distinguishes_unknown_from_reported_zero() {
-        let events = usage_from_anthropic(Some(&json!({
-            "input_tokens": 7,
-            "cache_read_input_tokens": 0
-        })));
+        let events = usage_from_anthropic(
+            Some(&json!({
+                "input_tokens": 7,
+                "cache_read_input_tokens": 0
+            })),
+            &mut UsageValue::Unknown,
+        );
         let usage = events
             .iter()
             .find_map(|event| match event {
@@ -1686,6 +1710,38 @@ mod tests {
             }
         );
         assert_eq!(usage.cache_write_tokens, UsageValue::Unknown);
+    }
+
+    /// Verifies a final usage event without cache writes keeps them in uncached input.
+    /// 验证不带缓存写入的最终用量事件仍把缓存写入保留在未缓存输入中。
+    #[test]
+    fn message_delta_without_cache_write_keeps_it_in_uncached_input() {
+        let mut decoder = AnthropicStreamDecoder::new(String::from("execution"));
+        let mut uncached = Vec::new();
+        for (event, data) in [
+            (
+                "message_start",
+                r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":8,"cache_creation_input_tokens":1200,"cache_read_input_tokens":90000,"output_tokens":1}}}"#,
+            ),
+            (
+                "message_delta",
+                r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":8,"cache_read_input_tokens":90000,"output_tokens":40}}"#,
+            ),
+        ] {
+            for decoded in decoder
+                .push_sse(Some(event), data)
+                .expect("usage events should decode")
+            {
+                if let AiStreamEvent::UsageUpdated { usage } = decoded {
+                    uncached.push(usage.uncached_input_tokens);
+                }
+            }
+        }
+        let expected = UsageValue::Known {
+            value: 1208,
+            source: UsageValueSource::Derived,
+        };
+        assert_eq!(uncached, vec![expected, expected]);
     }
 
     /// Verifies a gateway transport sentinel after message_stop does not invalidate completed output.
