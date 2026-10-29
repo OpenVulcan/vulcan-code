@@ -60,6 +60,9 @@ export interface ModelAccountDetails {
   // Exact acquisition and usage contract selected by the credential.
   // 该凭据选择的精确获取与用量契约。
   credentialProfile: PublicAiCredentialProfile | undefined;
+  // Latest settings snapshot read for this account; null until the first read settles.
+  // 为该账号读取的最新设置快照；首次读取完成前为 null。
+  snapshot: PublicAiSettingsSnapshot | null;
   // Latest cached or explicitly refreshed account observation.
   // 最新缓存或显式刷新的账号观测。
   usage: PublicAiAccountUsage | undefined;
@@ -178,6 +181,7 @@ export function useModelAccountDetails(accounts: ModelPickerChoice[], value: str
     connection,
     provider,
     credentialProfile,
+    snapshot,
     usage,
     effectiveProtocolId,
     quotaWindowsSupported,

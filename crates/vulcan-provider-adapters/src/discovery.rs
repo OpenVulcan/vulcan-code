@@ -977,7 +977,7 @@ pub(crate) fn parse_anthropic_model_page(
                     context_limit,
                     output_limit,
                     prompt_cache: if official_anthropic {
-                        anthropic_prompt_cache()
+                        vulcan_llm_core::anthropic_prompt_cache_capability()
                     } else {
                         Default::default()
                     },
@@ -1178,48 +1178,6 @@ pub fn parse_google_code_assist_model_catalog(
     })
 }
 
-/// Builds verified MiniMax capabilities for one exact protocol route.
-/// 为一个精确协议路由构建已验证的 MiniMax 能力。
-///
-/// # Parameters
-/// 参数
-/// `model_id` is the exact identity returned by MiniMax model discovery and
-/// `protocol_id` is the credential-selected compatible protocol.
-/// `model_id` 是 MiniMax 模型发现返回的精确身份，
-/// `protocol_id` 是凭据选择的兼容协议。
-///
-/// # Returns
-/// 返回值
-/// A model-specific capability set; unknown identities receive a conservative contract.
-/// 返回模型专属能力集合；未知身份获得保守契约。
-/// Builds the protocol-wide cache capability documented for every active Claude model.
-/// 构建所有活跃 Claude 模型均已文档化支持的协议级缓存能力。
-fn anthropic_prompt_cache() -> PromptCacheCapability {
-    PromptCacheCapability {
-        provider_default_behavior: String::from(
-            "Anthropic provider defaults are used without host-injected cache breakpoints.",
-        ),
-        supports_managed_explicit: true,
-        supported_ttl_options: vec![
-            vulcan_ai_contract::PromptCacheTtlOption {
-                id: String::from("5m"),
-                display_name: String::from("5 minutes"),
-                description: Some(String::from("Anthropic default ephemeral cache lifetime.")),
-            },
-            vulcan_ai_contract::PromptCacheTtlOption {
-                id: String::from("1h"),
-                display_name: String::from("1 hour"),
-                description: Some(String::from("Anthropic extended ephemeral cache lifetime.")),
-            },
-        ],
-        profile_default_ttl_option_id: Some(String::from("5m")),
-        minimum_cacheable_tokens: None,
-        maximum_breakpoints: Some(4),
-    }
-}
-
-/// Builds a provider-default-only cache capability.
-/// 构建仅支持供应商默认行为的缓存能力。
 /// Builds the minimum safe capability set for an unverified OpenRouter model.
 /// 为未验证的 OpenRouter 模型构建最小安全能力集合。
 fn openrouter_reported_capabilities(model: &OpenRouterModelEntry) -> ModelCapabilities {

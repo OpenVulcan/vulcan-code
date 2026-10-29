@@ -590,6 +590,10 @@ impl PublicAiRuntime {
                 &mut model.capabilities,
             );
         }
+        super::catalog_policy::apply_protocol_prompt_cache_capability(
+            protocol_binding.protocol_profile_id.as_str(),
+            &mut model.capabilities,
+        );
         // Capability admission must consume the effective binding projection. Checking the raw
         // catalog compatibility fields before binding resolution can authorize or reject the
         // model with evidence from a different protocol (plan §13.1/§13.4).
@@ -628,6 +632,13 @@ impl PublicAiRuntime {
                 .prompt_cache_by_protocol
                 .get(effective_protocol_id)
                 .cloned();
+        }
+        // Without a model or connection choice, Anthropic Messages routes cache by default.
+        // 没有模型或连接选择时，Anthropic Messages 路由默认启用缓存。
+        if overrides.prompt_cache.is_none()
+            && vulcan_llm_core::is_anthropic_messages_profile(effective_protocol_id)
+        {
+            overrides.prompt_cache = Some(vulcan_llm_core::anthropic_default_prompt_cache_policy());
         }
         apply_model_parameter_defaults(&model, effective_protocol_id, &mut overrides)?;
         validate_model_overrides(&model, effective_protocol_id, &overrides)?;

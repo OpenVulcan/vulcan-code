@@ -24,17 +24,18 @@ use bindings::{
     frozen_binding_variant_is_missing,
 };
 use capabilities::{
-    apply_custom_model_advanced_declaration, apply_custom_model_defaults,
-    clamp_catalog_output_limits_to_context_window, custom_provider_system_baseline_for_protocol,
-    manual_model_capability_evidence,
+    apply_catalog_protocol_prompt_cache, apply_custom_model_advanced_declaration,
+    apply_custom_model_defaults, clamp_catalog_output_limits_to_context_window,
+    custom_provider_system_baseline_for_protocol, manual_model_capability_evidence,
 };
 pub use capabilities::{
     apply_host_default_reasoning_policy, model_capability_limit_issue, model_supports_reasoning,
     model_supports_text_conversation,
 };
 pub(super) use capabilities::{
-    retain_models_with_valid_limits, validate_catalog_model_count,
-    validate_resolved_catalog_limits, validate_resolved_model_capability_limits,
+    apply_protocol_prompt_cache_capability, retain_models_with_valid_limits,
+    validate_catalog_model_count, validate_resolved_catalog_limits,
+    validate_resolved_model_capability_limits,
 };
 
 /// Adds the one explicitly selected user protocol variant for an unsigned system model identity.
@@ -853,6 +854,7 @@ pub(super) fn apply_model_catalog_overlays_with_account_access(
     // Effective output ceilings must fit the effective context window after every policy layer.
     // 所有策略层应用完成后，有效输出上限必须收敛到有效上下文窗口内。
     clamp_catalog_output_limits_to_context_window(catalog);
+    apply_catalog_protocol_prompt_cache(catalog);
     if custom_provider {
         // Custom providers are conversation-only adapters; the effective bound variant decides
         // support, never an arbitrary discovery route's compatibility fields. An unbound model

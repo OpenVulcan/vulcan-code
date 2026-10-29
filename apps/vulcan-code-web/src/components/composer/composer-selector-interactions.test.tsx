@@ -196,7 +196,9 @@ it("shows a read-only model, reasoning and plan usage summary until the popover 
   expect(summary?.textContent).toContain("composer.modelReasoning.planUsage");
   expect(summary?.querySelectorAll(".vk-mr-pips > span[data-on]")).toHaveLength(2);
   expect(summary?.querySelector('button, [role="slider"], input')).toBeNull();
-  expect(loadPublicAiSettings).toHaveBeenCalledOnce();
+  // One read resolves the cache lifetime on mount; the account pane adds exactly one more.
+  // 挂载时一次读取解析缓存时长；账号面板只再增加一次。
+  expect(loadPublicAiSettings).toHaveBeenCalledTimes(2);
   expect(queryPublicAiConnectionUsage).not.toHaveBeenCalled();
   await click("Model");
   expect(document.querySelector(".vk-mr-summary")).toBeNull();
@@ -216,7 +218,9 @@ it("does not offer usage refresh without the declared credential profile", async
   vi.mocked(loadPublicAiSettings).mockResolvedValue(snapshot);
   await render(<MergedHarness />);
   await click("Model");
-  expect(loadPublicAiSettings).toHaveBeenCalledOnce();
+  // One read resolves the cache lifetime on mount; the account pane adds exactly one more.
+  // 挂载时一次读取解析缓存时长；账号面板只再增加一次。
+  expect(loadPublicAiSettings).toHaveBeenCalledTimes(2);
   await click("Account");
   expect(document.querySelector(".vk-account-card")?.textContent).toContain("Account A");
   expect(document.querySelector('[aria-label="composer.accountCard.refresh"]')).toBeNull();
@@ -228,7 +232,8 @@ it("ignores an account detail failure after switching to another account", async
   // rejectRead owns the delayed response from account a; account b must not inherit its error.
   // rejectRead 持有账号 a 的延迟响应；账号 b 不得继承该错误。
   let rejectRead!: (reason: Error) => void;
-  vi.mocked(loadPublicAiSettings).mockReturnValueOnce(new Promise((_, reject) => { rejectRead = reject; }))
+  vi.mocked(loadPublicAiSettings).mockResolvedValueOnce(settings())
+    .mockReturnValueOnce(new Promise((_, reject) => { rejectRead = reject; }))
     .mockReturnValue(new Promise(() => {}));
   // accounts contains two eligible identities for the same explicit model.
   // accounts 包含同一明确模型的两个可用身份。
@@ -237,7 +242,7 @@ it("ignores an account detail failure after switching to another account", async
   await render(<MergedHarness accounts={accounts} />);
   await click("Model");
   await click("Account");
-  expect(loadPublicAiSettings).toHaveBeenCalledOnce();
+  expect(loadPublicAiSettings).toHaveBeenCalledTimes(2);
   await render(<MergedHarness accounts={accounts} accountValue="b" />);
   await act(async () => rejectRead(new Error("old account failure")));
   expect(document.querySelector(".vk-account-card")?.textContent).toContain("Account B");

@@ -267,3 +267,27 @@ fn unknown_compatible_conversation_defaults_to_enabled_reasoning() {
             .contains(HOST_DEFAULT_REASONING_EVIDENCE_REVISION)
     );
 }
+
+/// Ensures Anthropic Messages routes gain managed caching while other protocols stay unchanged.
+/// 确保 Anthropic Messages 路由获得托管缓存能力，其他协议保持不变。
+#[test]
+fn anthropic_messages_routes_gain_managed_prompt_cache() {
+    let mut anthropic = ModelCapabilities::default();
+    apply_protocol_prompt_cache_capability("anthropic-messages.v1", &mut anthropic);
+    assert!(anthropic.prompt_cache.supports_managed_explicit);
+    assert_eq!(
+        anthropic.prompt_cache.profile_default_ttl_option_id.as_deref(),
+        Some("5m")
+    );
+    let option_ids: Vec<&str> = anthropic
+        .prompt_cache
+        .supported_ttl_options
+        .iter()
+        .map(|option| option.id.as_str())
+        .collect();
+    assert_eq!(option_ids, ["5m", "1h"]);
+
+    let mut chat = ModelCapabilities::default();
+    apply_protocol_prompt_cache_capability("openai-chat-completions.v1", &mut chat);
+    assert_eq!(chat.prompt_cache, ModelCapabilities::default().prompt_cache);
+}

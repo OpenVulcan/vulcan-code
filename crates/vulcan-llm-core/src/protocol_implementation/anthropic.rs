@@ -10,9 +10,9 @@ use std::collections::BTreeMap;
 use vulcan_ai_contract::{
     AiContinuationUpdate, AiErrorCategory, AiExecutionError, AiExecutionRequest, AiStreamEvent,
     ContentItem, DispatchOutcome, MessageRole, NativeToolKind, ParallelToolCallPolicy,
-    PromptCachePolicy, PromptCacheTtlSelection, ReasoningOutputPolicy, RequestUsage,
-    StructuredOutputPolicy, ToolCall, ToolCallProgress, ToolChoicePolicy, UsageValue,
-    UsageValueSource, derive_usage_sum,
+    PromptCacheCapability, PromptCachePolicy, PromptCacheTtlOption, PromptCacheTtlSelection,
+    ReasoningOutputPolicy, RequestUsage, StructuredOutputPolicy, ToolCall, ToolCallProgress,
+    ToolChoicePolicy, UsageValue, UsageValueSource, derive_usage_sum,
 };
 
 /// Stable Anthropic Messages profile identifier.
@@ -22,6 +22,50 @@ pub const ANTHROPIC_MESSAGES_PROFILE_ID: &str = "anthropic-messages.v1";
 /// Stable Anthropic-compatible profile identifier with a registered video block extension.
 /// 带已注册视频内容块扩展的稳定 Anthropic 兼容 Profile 标识。
 pub const ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID: &str = "anthropic-messages-video.v1";
+
+/// Whether `protocol_profile_id` encodes requests through the Anthropic Messages cache controls.
+/// `protocol_profile_id` 是否通过 Anthropic Messages 缓存控制编码请求。
+pub fn is_anthropic_messages_profile(protocol_profile_id: &str) -> bool {
+    protocol_profile_id == ANTHROPIC_MESSAGES_PROFILE_ID
+        || protocol_profile_id == ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
+}
+
+/// Builds the prompt-cache capability every Anthropic Messages route offers: 5-minute and
+/// 1-hour breakpoints, 5 minutes by default.
+/// 构建每条 Anthropic Messages 路由提供的提示词缓存能力：5 分钟与 1 小时断点，默认 5 分钟。
+pub fn anthropic_prompt_cache_capability() -> PromptCacheCapability {
+    PromptCacheCapability {
+        provider_default_behavior: String::from(
+            "Anthropic routes cache prompts by default with 5-minute breakpoints; choose 1 hour for longer pauses between requests.",
+        ),
+        supports_managed_explicit: true,
+        supported_ttl_options: vec![
+            PromptCacheTtlOption {
+                id: String::from("5m"),
+                display_name: String::from("5 minutes"),
+                description: Some(String::from("Anthropic default ephemeral cache lifetime.")),
+            },
+            PromptCacheTtlOption {
+                id: String::from("1h"),
+                display_name: String::from("1 hour"),
+                description: Some(String::from(
+                    "Anthropic extended ephemeral cache lifetime; cache writes cost more.",
+                )),
+            },
+        ],
+        profile_default_ttl_option_id: Some(String::from("5m")),
+        minimum_cacheable_tokens: None,
+        maximum_breakpoints: Some(4),
+    }
+}
+
+/// The cache policy an Anthropic Messages route uses when no setting chooses one.
+/// 没有设置选择缓存策略时 Anthropic Messages 路由使用的策略。
+pub fn anthropic_default_prompt_cache_policy() -> PromptCachePolicy {
+    PromptCachePolicy::ManagedExplicit {
+        ttl: PromptCacheTtlSelection::ProfileDefault,
+    }
+}
 /// Encodes public requests as Anthropic Messages requests.
 /// 将公共请求编码为 Anthropic Messages 请求。
 #[derive(Debug, Default)]

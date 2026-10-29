@@ -223,6 +223,39 @@ pub(super) fn clamp_catalog_output_limits_to_context_window(catalog: &mut Connec
     }
 }
 
+/// Gives every Anthropic Messages route the protocol's prompt-cache capability.
+/// 为每条 Anthropic Messages 路由提供该协议的提示词缓存能力。
+///
+/// Prompt caching is encoded by the protocol itself, so a route keeps an explicit managed-cache
+/// declaration of its own and otherwise receives the protocol's 5-minute and 1-hour options.
+/// 提示词缓存由协议本身编码，因此路由保留自身明确的托管缓存声明，否则获得协议的 5 分钟与 1 小时选项。
+pub(in crate::runtime) fn apply_protocol_prompt_cache_capability(
+    protocol_profile_id: &str,
+    capabilities: &mut ModelCapabilities,
+) {
+    if vulcan_llm_core::is_anthropic_messages_profile(protocol_profile_id)
+        && !capabilities.prompt_cache.supports_managed_explicit
+    {
+        capabilities.prompt_cache = vulcan_llm_core::anthropic_prompt_cache_capability();
+    }
+}
+
+/// Applies the protocol prompt-cache capability to every bound projection and protocol variant.
+/// 将协议提示词缓存能力应用到每个已绑定投影与协议变体。
+pub(super) fn apply_catalog_protocol_prompt_cache(catalog: &mut ConnectionModelCatalog) {
+    for model in &mut catalog.models {
+        if let Some(binding) = model.resolved_protocol_binding.as_ref() {
+            apply_protocol_prompt_cache_capability(
+                binding.protocol_profile_id.as_str(),
+                &mut model.capabilities,
+            );
+        }
+        for (protocol_profile_id, variant) in &mut model.protocol_variants {
+            apply_protocol_prompt_cache_capability(protocol_profile_id, &mut variant.capabilities);
+        }
+    }
+}
+
 /// Validates the final context and output limits resolved for one account model.
 /// 校验一个账号模型最终解析得到的上下文与输出限制。
 ///

@@ -14,12 +14,14 @@ import {
   resolveModelPickerDisplayedChoice,
   type ModelPickerChoice,
 } from "@/components/composer/model-picker-control";
+import { promptCacheOptionShortLabel, useComposerPromptCache } from "@/components/composer/composer-prompt-cache";
 import type { ComposerSelectOption } from "@/components/composer/composer-model";
 import { ProviderIcon } from "@/components/features/settings/provider-icon";
 import { ComposerAccountStatus } from "./composer-account-status";
 import { localizedProviderName } from "@/components/features/settings/provider-presentation";
 import { Button } from "@/ui-kit/primitives/button";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/ui-kit/primitives/hover-card";
+import { SegmentedControl, SegmentedControlItem } from "@/ui-kit/primitives/choice-controls";
 import { Popover, PopoverContent, PopoverTrigger } from "@/ui-kit/primitives/popover";
 import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui-kit/primitives/tooltip";
@@ -254,6 +256,13 @@ export function ModelReasoningPickerControl(props: {
   // until the pointer leaves the trigger.
   // summarySuppressedRef 在浮层关闭、焦点回到触发器后阻止摘要卡片弹出，直到指针离开触发器。
   const summarySuppressedRef = React.useRef(false);
+  // promptCache drives the cache-lifetime selector, shown only for Anthropic Messages routes.
+  // promptCache 驱动缓存时长选择器，仅在 Anthropic Messages 路由显示。
+  const promptCache = useComposerPromptCache(selectedChoice ?? null, account.snapshot);
+  const loadPromptCache = promptCache.load;
+  const promptCacheLabel = promptCache.route && promptCache.optionId
+    ? promptCacheOptionShortLabel(promptCache.optionId)
+    : null;
 
   React.useEffect(() => {
     const modelChanged = observedModelSignal.current !== props.modelOpenSignal;
@@ -290,6 +299,14 @@ export function ModelReasoningPickerControl(props: {
       void loadAccount();
     }
   }, [popoverOpen, props.accountValue, props.accounts.length, loadAccount]);
+
+  React.useEffect(() => {
+    // With an account row the account read above supplies the shared snapshot.
+    // 存在账号行时，上方的账号读取提供共享快照。
+    if (popoverOpen && props.accounts.length === 0) {
+      void loadPromptCache();
+    }
+  }, [popoverOpen, props.accounts.length, loadPromptCache]);
 
   // openPane enters a secondary pane from the reasoning pane, so leaving it steps back.
   // openPane 从思考面板进入次级面板，离开时返回上一层。
@@ -364,6 +381,7 @@ export function ModelReasoningPickerControl(props: {
               <span className="vk-pick-icon"><Cpu size={15} /></span>
               <span className="vk-pick-label">{modelLabel}</span>
               {triggerLevel ? <span className="vk-pick-level">{triggerLevel}</span> : null}
+              {promptCacheLabel ? <span className="vk-pick-level">{promptCacheLabel}</span> : null}
               {accountMissing ? <UserRound aria-hidden="true" className="vk-pick-alert" size={13} /> : null}
               <ChevronDown aria-hidden="true" className="vk-pick-chevron" />
             </button>
@@ -531,6 +549,29 @@ export function ModelReasoningPickerControl(props: {
                 <p className="vk-mr-hint">{t(FIXED_REASONING_HINT_KEYS[reasoning.tone])}</p>
               </div>
             )}
+            {promptCache.route ? (
+              <div className="vk-mr-block">
+                <div className="vk-mr-heading">
+                  <span className="vk-mr-eyebrow">{t("composer.promptCache.title")}</span>
+                </div>
+                <SegmentedControl
+                  aria-label={t("composer.promptCache.title")}
+                  disabled={promptCache.saving}
+                  onValueChange={(optionId) => { void promptCache.select(optionId); }}
+                  value={promptCache.optionId ?? ""}
+                >
+                  {promptCache.route.options.map((option) => (
+                    <SegmentedControlItem key={option.id} value={option.id}>
+                      {promptCacheOptionShortLabel(option.id)}
+                    </SegmentedControlItem>
+                  ))}
+                </SegmentedControl>
+                <p className="vk-mr-hint">
+                  {promptCache.error
+                    ?? (promptCache.optionId ? t("composer.promptCache.hint") : t("composer.promptCache.disabled"))}
+                </p>
+              </div>
+            ) : null}
           </div>
         )}
       </PopoverContent>
