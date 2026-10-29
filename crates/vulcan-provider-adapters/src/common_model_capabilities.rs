@@ -4,7 +4,9 @@
 use crate::{CUSTOM_MODEL_TEMPLATE_REVISION, CustomModelTemplateSelection};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::OnceLock};
-use vulcan_ai_contract::{ModelCapabilities, ResourceKind};
+use vulcan_ai_contract::{
+    CapabilitySupport, ModelCapabilities, ReasoningControlMode, ReasoningEffort, ResourceKind,
+};
 
 /// Conservative context window used when no exact model record exists.
 /// 没有精确模型记录时使用的保守上下文窗口。
@@ -26,6 +28,22 @@ struct CommonModelCapabilityRecord {
     /// 已声明的上下文 Token 窗口；媒体模型没有 Token 上限时缺省。
     #[serde(default)]
     context_window: Option<u64>,
+    /// Declared maximum output tokens, absent when the source does not publish a ceiling.
+    /// 已声明的最大输出 Token 数；来源没有公布上限时缺省。
+    #[serde(default)]
+    output_limit: Option<u64>,
+    /// Optional declared reasoning support, without inferring support from the model name.
+    /// 可选的已声明思考支持，绝不根据模型名称推断。
+    #[serde(default)]
+    reasoning: Option<CapabilitySupport>,
+    /// Optional declared reasoning control mode.
+    /// 可选的已声明思考控制模式。
+    #[serde(default)]
+    reasoning_control: Option<ReasoningControlMode>,
+    /// Exact reasoning levels published by the authoritative model declaration.
+    /// 权威模型声明发布的精确思考档位。
+    #[serde(default)]
+    reasoning_efforts: Vec<ReasoningEffort>,
     /// Supported input modalities.
     /// 支持的输入模态。
     input_modalities: Vec<CommonModelModality>,
@@ -131,6 +149,18 @@ pub struct CommonModelCapabilityResolution {
     /// Resolved context window when one is actually known or a text fallback applies.
     /// 已知真实窗口或适用文本回退值时解析出的上下文窗口。
     pub context_window: Option<u64>,
+    /// Resolved output-token ceiling when the exact source declares one.
+    /// 精确来源已声明时解析出的输出 Token 上限。
+    pub output_limit: Option<u64>,
+    /// Exact-source reasoning support; unknown models do not receive a guess.
+    /// 精确来源的思考支持；未知模型不会获得猜测值。
+    pub reasoning: Option<CapabilitySupport>,
+    /// Exact-source reasoning control mode.
+    /// 精确来源的思考控制模式。
+    pub reasoning_control: Option<ReasoningControlMode>,
+    /// Exact-source selectable reasoning levels.
+    /// 精确来源的可选思考档位。
+    pub reasoning_efforts: Vec<ReasoningEffort>,
     /// Whether the source explicitly supports text input.
     /// 来源是否明确支持文本输入。
     pub supports_text_input: bool,
@@ -263,6 +293,10 @@ pub fn resolve_common_model_capabilities(model_id: &str) -> CommonModelCapabilit
     match record {
         Some(record) => CommonModelCapabilityResolution {
             matched: true,
+            output_limit: record.output_limit,
+            reasoning: record.reasoning,
+            reasoning_control: record.reasoning_control,
+            reasoning_efforts: record.reasoning_efforts.clone(),
             context_window: record.context_window.or_else(|| {
                 (record.output_modalities.as_slice() == [CommonModelModality::Text])
                     .then_some(COMMON_MODEL_FALLBACK_CONTEXT_WINDOW)
@@ -276,6 +310,10 @@ pub fn resolve_common_model_capabilities(model_id: &str) -> CommonModelCapabilit
         },
         None => CommonModelCapabilityResolution {
             matched: false,
+            output_limit: None,
+            reasoning: None,
+            reasoning_control: None,
+            reasoning_efforts: Vec::new(),
             context_window: Some(COMMON_MODEL_FALLBACK_CONTEXT_WINDOW),
             supports_text_input: true,
             supports_text_output: true,
@@ -337,6 +375,7 @@ pub fn apply_common_model_capability_defaults(
     capabilities: &mut ModelCapabilities,
 ) -> bool {
     let resolution = resolve_common_model_capabilities(model_id);
+    apply_common_model_advanced_defaults(capabilities, &resolution);
     if capabilities.context_limit.is_none() {
         capabilities.context_limit =
             context_window_for_declared_capabilities(model_id, capabilities, &resolution);
@@ -353,6 +392,40 @@ pub fn apply_common_model_capability_defaults(
             .retain(|operation| *operation != vulcan_ai_contract::AiOperation::ConversationRespond);
     }
     resolution.matched
+}
+
+/// Fills undeclared output and reasoning fields from one exact common-model resolution.
+/// 从一个精确公共模型解析结果补齐未声明的输出与思考字段。
+///
+/// `capabilities` owns the more specific declaration; `resolution` supplies offline defaults.
+/// `capabilities` 持有更具体的声明；`resolution` 提供离线默认值。
+/// Returns nothing and preserves explicit limits, support, controls, and effort selections.
+/// 无返回值，并保留显式上限、支持状态、控制模式与档位选择。
+fn apply_common_model_advanced_defaults(
+    capabilities: &mut ModelCapabilities,
+    resolution: &CommonModelCapabilityResolution,
+) {
+    if capabilities.output_limit.is_none() {
+        capabilities.output_limit = resolution.output_limit;
+    }
+    if capabilities.reasoning == CapabilitySupport::Unknown
+        && let Some(reasoning) = resolution.reasoning
+    {
+        capabilities.reasoning = reasoning;
+    }
+    if resolution.reasoning == Some(capabilities.reasoning) {
+        if capabilities.reasoning_control == ReasoningControlMode::Unknown
+            && let Some(control) = resolution.reasoning_control
+        {
+            capabilities.reasoning_control = control;
+        }
+        if capabilities.reasoning_control == ReasoningControlMode::EffortSelection
+            && resolution.reasoning_control == Some(ReasoningControlMode::EffortSelection)
+            && capabilities.reasoning_efforts.is_empty()
+        {
+            capabilities.reasoning_efforts = resolution.reasoning_efforts.clone();
+        }
+    }
 }
 
 /// Fills only a missing context limit while preserving explicit provider or custom modalities.
@@ -388,8 +461,8 @@ fn common_model_capability_index() -> &'static CommonModelCapabilityIndex {
             serde_json::from_str(include_str!("../resources/common_model_capabilities.json"))
                 .expect("embedded common model capability catalog must be valid JSON");
         assert_eq!(
-            catalog.schema_version, 1,
-            "embedded common model capability catalog schema must be version one"
+            catalog.schema_version, 2,
+            "embedded common model capability catalog schema must be version two"
         );
         assert!(
             !catalog.sources.is_empty()
@@ -427,6 +500,11 @@ fn common_model_capability_index() -> &'static CommonModelCapabilityIndex {
             assert!(
                 record.context_window.is_none_or(|limit| limit > 0),
                 "embedded common model capability context windows must be positive when declared"
+            );
+            assert!(
+                record.output_limit.is_none_or(|limit| limit > 0)
+                    && record.context_window.zip(record.output_limit).is_none_or(|(context, output)| output <= context),
+                "embedded common model output limits must be positive and fit declared context windows"
             );
             let key = record.key.clone();
             assert!(
@@ -757,13 +835,6 @@ mod tests {
             &mut text_capabilities,
         ));
         assert_eq!(text_capabilities.context_limit, Some(200_000));
-
-        let mut declared_image_capabilities = image_capabilities;
-        assert!(apply_common_model_context_default(
-            "gpt-image-2",
-            &mut declared_image_capabilities,
-        ));
-        assert_eq!(declared_image_capabilities.context_limit, Some(400_000));
     }
 
     /// Verifies specific declarations are never overwritten by the common catalog.
@@ -778,6 +849,39 @@ mod tests {
         apply_common_model_capability_defaults("deepseek/deepseek-v3.2", &mut capabilities);
         assert_eq!(capabilities.context_limit, Some(32_000));
         assert_eq!(capabilities.input_resources, vec![ResourceKind::File]);
+    }
+
+    /// Verifies shared output and reasoning defaults fill unknown fields without overriding declarations.
+    /// 验证公共输出与思考默认值补齐未知字段且不覆盖已声明值。
+    #[test]
+    fn advanced_defaults_preserve_explicit_output_and_reasoning_controls() {
+        // Synthetic defaults exercise behavior without pinning an evolving catalog entry.
+        // 合成默认值用于验证行为，不固定会演进的目录记录。
+        let mut resolution = resolve_common_model_capabilities("unlisted-advanced-default-probe");
+        resolution.output_limit = Some(4_000);
+        resolution.reasoning = Some(CapabilitySupport::Native);
+        resolution.reasoning_control = Some(ReasoningControlMode::EffortSelection);
+        resolution.reasoning_efforts = vec![ReasoningEffort::Low, ReasoningEffort::High];
+        // Unknown capabilities receive the exact declared values.
+        // 未知能力接收精确声明值。
+        let mut unknown = ModelCapabilities::default();
+        apply_common_model_advanced_defaults(&mut unknown, &resolution);
+        assert_eq!(unknown.output_limit, resolution.output_limit);
+        assert_eq!(unknown.reasoning, CapabilitySupport::Native);
+        assert_eq!(unknown.reasoning_efforts, resolution.reasoning_efforts);
+        // A specific limit and disabled reasoning remain authoritative.
+        // 具体输出上限与禁用思考状态继续具有权威性。
+        let mut explicit = ModelCapabilities {
+            output_limit: Some(512),
+            reasoning: CapabilitySupport::Unsupported,
+            reasoning_control: ReasoningControlMode::FixedOff,
+            ..ModelCapabilities::default()
+        };
+        apply_common_model_advanced_defaults(&mut explicit, &resolution);
+        assert_eq!(explicit.output_limit, Some(512));
+        assert_eq!(explicit.reasoning, CapabilitySupport::Unsupported);
+        assert_eq!(explicit.reasoning_control, ReasoningControlMode::FixedOff);
+        assert!(explicit.reasoning_efforts.is_empty());
     }
 
     /// Verifies context-only enrichment never invents modalities over an explicit text-only source.

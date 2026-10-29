@@ -63,16 +63,16 @@ pub(super) fn manifest_protocol_authorizes_model_variant(
             .iter()
             .any(|protocol| protocol == protocol_profile_id);
     }
-    manifest.unknown_model_policy
-        == crate::provider_manifest::UnknownModelPolicy::DefaultBindingAllowed
-        && manifest
-            .model_defaults_for_entry(service_entry_id)
-            .is_ok_and(|defaults| {
-                defaults
+    manifest
+        .model_defaults_for_entry(service_entry_id)
+        .is_ok_and(|defaults| {
+            defaults.unknown_model_policy
+                == crate::provider_manifest::UnknownModelPolicy::DefaultBindingAllowed
+                && defaults
                     .supported_protocols
                     .iter()
                     .any(|protocol| protocol == protocol_profile_id)
-            })
+        })
 }
 
 impl HttpProviderMetadataClient {

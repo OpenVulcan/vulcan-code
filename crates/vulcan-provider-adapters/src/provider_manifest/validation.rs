@@ -2072,7 +2072,10 @@ fn validate_model_catalog(
         }
     }
     if catalog.source_policy.includes_manifest()
-        && manifest.model_defaults.unknown_model_policy == UnknownModelPolicy::DeclaredRuleRequired
+        && manifest
+            .model_defaults
+            .unknown_model_policy_for_entry(entry)
+            == UnknownModelPolicy::DeclaredRuleRequired
         && let Some(models) = &catalog.models
     {
         for (model_index, model) in models.iter().enumerate() {
@@ -2228,7 +2231,11 @@ fn validate_model_defaults(
     if let Some(capabilities) = &defaults.capabilities {
         validate_capabilities(capabilities, base, errors);
     }
-    if defaults.unknown_model_policy == UnknownModelPolicy::DefaultBindingAllowed {
+    if manifest.services.iter().any(|entry| {
+        entry.kind == crate::provider_manifest::schema::ManifestEntryKind::Conversation
+            && defaults.unknown_model_policy_for_entry(entry)
+                == UnknownModelPolicy::DefaultBindingAllowed
+    }) {
         if defaults.capabilities.is_none() {
             errors.push(ManifestValidationError::new(
                 "default_binding_allowed_requires_capabilities",
@@ -2238,6 +2245,8 @@ fn validate_model_defaults(
         }
         for (entry_index, entry) in manifest.services.iter().enumerate().filter(|(_, entry)| {
             entry.kind == crate::provider_manifest::schema::ManifestEntryKind::Conversation
+                && defaults.unknown_model_policy_for_entry(entry)
+                    == UnknownModelPolicy::DefaultBindingAllowed
         }) {
             let overlay = entry.model_defaults_override.as_ref();
             let supported_protocols = overlay
@@ -6198,6 +6207,16 @@ fn validate_provider_tool_output_contract(
                 "invalid_resource_decoder_source_pointer",
                 format!("{decoder_path}.source_path"),
                 "resource decoder source must be an absolute JSON pointer",
+            ));
+        }
+        if let Some(path) = decoder.item_source_path.as_deref()
+            && (!is_valid_json_pointer_path(path)
+                || decoder.encoding == crate::ProviderToolResourceEncoding::BinaryBody)
+        {
+            errors.push(ManifestValidationError::new(
+                "invalid_resource_decoder_item_pointer",
+                format!("{decoder_path}.item_source_path"),
+                "resource decoder item selector must be an absolute JSON pointer on a JSON carrier",
             ));
         }
         if decoder.resource_kind.trim().is_empty()

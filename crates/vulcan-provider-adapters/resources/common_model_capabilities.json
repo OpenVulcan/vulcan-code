@@ -1,9 +1,11 @@
 {
-    "schema_version":  1,
+    "schema_version":  2,
     "sources":  [
                     "vulcan:bundled-provider-manifests",
                     "vulcan:provider-specific-capabilities",
-                    "openrouter:/api/v1/models?output_modalities=all (cross reference for context and modality metadata only)"
+                    "openrouter:/api/v1/models?output_modalities=all (cross reference for context and modality metadata only)",
+                    "openai:official-api-models-and-user-policy-2026-10-29 (output limits and reasoning included)",
+                    "anthropic:official-model-overviews-and-inherited-thinking-2026-10-29 (Sonnet 5.5, Opus 5.5 and Fable 5.1)"
                 ],
     "fallback":  {
                      "context_window":  200000,
@@ -65,6 +67,16 @@
 
                                    ],
                        "context_window":  1000000,
+                       "output_limit":  128000,
+                       "reasoning":  "native",
+                       "reasoning_control":  "unknown",
+                       "reasoning_efforts":  [
+                                                  "low",
+                                                  "medium",
+                                                  "high",
+                                                  "xhigh",
+                                                  "max"
+                                              ],
                        "input_modalities":  [
                                                 "image",
                                                 "text"
@@ -103,10 +115,9 @@
                                              ]
                    },
                    {
-                       "key":  "claude-haiku-5.5",
+                       "key":  "claude-haiku-5-5",
                        "aliases":  [
-                                       "anthropic/claude-haiku-5.5-20261007",
-                                       "anthropic: claude haiku 5.5"
+
                                    ],
                        "context_window":  1000000,
                        "input_modalities":  [
@@ -119,9 +130,10 @@
                                              ]
                    },
                    {
-                       "key":  "claude-haiku-5-5",
+                       "key":  "claude-haiku-5.5",
                        "aliases":  [
-
+                                       "anthropic/claude-haiku-5.5-20261007",
+                                       "anthropic: claude haiku 5.5"
                                    ],
                        "context_window":  1000000,
                        "input_modalities":  [
@@ -210,6 +222,28 @@
                                              ]
                    },
                    {
+                       "key":  "claude-opus-5-5",
+                       "aliases":  [],
+                       "context_window":  1000000,
+                       "output_limit":  128000,
+                       "reasoning":  "native",
+                       "reasoning_control":  "unknown",
+                       "reasoning_efforts":  [
+                                                  "low",
+                                                  "medium",
+                                                  "high",
+                                                  "xhigh",
+                                                  "max"
+                                              ],
+                       "input_modalities":  [
+                                                "image",
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
                        "key":  "claude-sonnet-4-6",
                        "aliases":  [
 
@@ -240,66 +274,21 @@
                                              ]
                    },
                    {
-                       "key":  "deepseek/deepseek-v4.1-flash",
-                       "aliases":  [
-
-                                   ],
+                       "key":  "claude-sonnet-5-5",
+                       "aliases":  [],
                        "context_window":  1000000,
+                       "output_limit":  128000,
+                       "reasoning":  "native",
+                       "reasoning_control":  "unknown",
+                       "reasoning_efforts":  [
+                                                  "low",
+                                                  "medium",
+                                                  "high",
+                                                  "xhigh",
+                                                  "max"
+                                              ],
                        "input_modalities":  [
                                                 "image",
-                                                "text"
-                                            ],
-                       "output_modalities":  [
-                                                 "text"
-                                             ]
-                   },
-                   {
-                       "key":  "deepseek/deepseek-v4-flash",
-                       "aliases":  [
-
-                                   ],
-                       "context_window":  1000000,
-                       "input_modalities":  [
-                                                "text"
-                                            ],
-                       "output_modalities":  [
-                                                 "text"
-                                             ]
-                   },
-                   {
-                       "key":  "deepseek/deepseek-v4-flash-fast",
-                       "aliases":  [
-                                       "deepseek-v4-flash-fast"
-                                   ],
-                       "context_window":  1000000,
-                       "input_modalities":  [
-                                                "text"
-                                            ],
-                       "output_modalities":  [
-                                                 "text"
-                                             ]
-                   },
-                   {
-                       "key":  "deepseek/deepseek-v4-flash-vision-exp",
-                       "aliases":  [
-
-                                   ],
-                       "context_window":  1000000,
-                       "input_modalities":  [
-                                                "image",
-                                                "text"
-                                            ],
-                       "output_modalities":  [
-                                                 "text"
-                                             ]
-                   },
-                   {
-                       "key":  "deepseek/deepseek-v4-pro",
-                       "aliases":  [
-
-                                   ],
-                       "context_window":  1000000,
-                       "input_modalities":  [
                                                 "text"
                                             ],
                        "output_modalities":  [
@@ -328,20 +317,6 @@
                                    ],
                        "context_window":  131072,
                        "input_modalities":  [
-                                                "text"
-                                            ],
-                       "output_modalities":  [
-                                                 "text"
-                                             ]
-                   },
-                   {
-                       "key":  "deepseek-v4.1-flash",
-                       "aliases":  [
-
-                                   ],
-                       "context_window":  1000000,
-                       "input_modalities":  [
-                                                "image",
                                                 "text"
                                             ],
                        "output_modalities":  [
@@ -417,6 +392,104 @@
                                              ]
                    },
                    {
+                       "key":  "deepseek-v4.1-flash",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  1000000,
+                       "input_modalities":  [
+                                                "image",
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
+                       "key":  "deepseek/deepseek-v4-flash",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  1000000,
+                       "input_modalities":  [
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
+                       "key":  "deepseek/deepseek-v4-flash-fast",
+                       "aliases":  [
+                                       "deepseek-v4-flash-fast"
+                                   ],
+                       "context_window":  1000000,
+                       "input_modalities":  [
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
+                       "key":  "deepseek/deepseek-v4-flash-vision-exp",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  1000000,
+                       "input_modalities":  [
+                                                "image",
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
+                       "key":  "deepseek/deepseek-v4-pro",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  1000000,
+                       "input_modalities":  [
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
+                       "key":  "deepseek/deepseek-v4.1-flash",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  1000000,
+                       "input_modalities":  [
+                                                "image",
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
+                       "key":  "gemini-3-flash",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  1048576,
+                       "input_modalities":  [
+                                                "audio",
+                                                "file",
+                                                "image",
+                                                "text",
+                                                "video"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
                        "key":  "gemini-3.1-flash-lite",
                        "aliases":  [
 
@@ -483,23 +556,6 @@
                    },
                    {
                        "key":  "gemini-3.6-flash",
-                       "aliases":  [
-
-                                   ],
-                       "context_window":  1048576,
-                       "input_modalities":  [
-                                                "audio",
-                                                "file",
-                                                "image",
-                                                "text",
-                                                "video"
-                                            ],
-                       "output_modalities":  [
-                                                 "text"
-                                             ]
-                   },
-                   {
-                       "key":  "gemini-3-flash",
                        "aliases":  [
 
                                    ],
@@ -793,149 +849,234 @@
                    {
                        "key":  "gpt-5.6-luna",
                        "aliases":  [
-                                       "openai/gpt-5.6-luna-20260709",
-                                       "openai: gpt-5.6 luna"
-                                   ],
-                       "context_window":  272000,
+                           "openai: gpt-5.6 luna"
+                       ],
+                       "context_window":  1050000,
                        "input_modalities":  [
-                                                "file",
-                                                "image",
-                                                "text"
-                                            ],
+                           "file",
+                           "image",
+                           "text"
+                       ],
                        "output_modalities":  [
-                                                 "text"
-                                             ]
+                           "text"
+                       ],
+                       "output_limit":  128000,
+                       "reasoning":  "native",
+                       "reasoning_control":  "effort_selection",
+                       "reasoning_efforts":  [
+                           "low",
+                           "medium",
+                           "high",
+                           "xhigh",
+                           "max"
+                       ]
                    },
                    {
                        "key":  "gpt-5.6-sol",
-                       "aliases":  [
-
-                                   ],
-                       "context_window":  272000,
+                       "aliases":  [],
+                       "context_window":  1050000,
                        "input_modalities":  [
-                                                "file",
-                                                "image",
-                                                "text"
-                                            ],
+                           "file",
+                           "image",
+                           "text"
+                       ],
                        "output_modalities":  [
-                                                 "text"
-                                             ]
+                           "text"
+                       ],
+                       "output_limit":  128000,
+                       "reasoning":  "native",
+                       "reasoning_control":  "effort_selection",
+                       "reasoning_efforts":  [
+                           "low",
+                           "medium",
+                           "high",
+                           "xhigh",
+                           "max"
+                       ]
                    },
                    {
                        "key":  "gpt-5.6-terra",
-                       "aliases":  [
-
-                                   ],
-                       "context_window":  272000,
+                       "aliases":  [],
+                       "context_window":  1050000,
                        "input_modalities":  [
-                                                "file",
-                                                "image",
-                                                "text"
-                                            ],
+                           "file",
+                           "image",
+                           "text"
+                       ],
                        "output_modalities":  [
-                                                 "text"
-                                             ]
+                           "text"
+                       ],
+                       "output_limit":  128000,
+                       "reasoning":  "native",
+                       "reasoning_control":  "effort_selection",
+                       "reasoning_efforts":  [
+                           "low",
+                           "medium",
+                           "high",
+                           "xhigh",
+                           "max"
+                       ]
                    },
                    {
                        "key":  "gpt-6-astra",
                        "aliases":  [
-                                       "openai/gpt-6-astra-20260903",
-                                       "openai: gpt-6 astra"
-                                   ],
-                       "context_window":  272000,
+                           "openai: gpt-6 astra"
+                       ],
+                       "context_window":  1050000,
                        "input_modalities":  [
-                                                "file",
-                                                "image",
-                                                "text"
-                                            ],
+                           "file",
+                           "image",
+                           "text"
+                       ],
                        "output_modalities":  [
-                                                 "text"
-                                             ]
+                           "text"
+                       ],
+                       "output_limit":  128000,
+                       "reasoning":  "native",
+                       "reasoning_control":  "effort_selection",
+                       "reasoning_efforts":  [
+                           "low",
+                           "medium",
+                           "high",
+                           "xhigh",
+                           "max"
+                       ]
                    },
                    {
                        "key":  "gpt-6-luna",
                        "aliases":  [
-                                       "openai/gpt-6-luna-20260922",
-                                       "openai: gpt-6 luna"
-                                   ],
+                           "openai: gpt-6 luna"
+                       ],
                        "context_window":  1050000,
                        "input_modalities":  [
-                                                "file",
-                                                "image",
-                                                "text"
-                                            ],
+                           "file",
+                           "image",
+                           "text"
+                       ],
                        "output_modalities":  [
-                                                 "text"
-                                             ]
+                           "text"
+                       ],
+                       "output_limit":  128000,
+                       "reasoning":  "native",
+                       "reasoning_control":  "effort_selection",
+                       "reasoning_efforts":  [
+                           "low",
+                           "medium",
+                           "high",
+                           "xhigh",
+                           "max"
+                       ]
                    },
                    {
                        "key":  "gpt-6-sol",
-                       "aliases":  [
-
-                                   ],
-                       "context_window":  272000,
+                       "aliases":  [],
+                       "context_window":  1050000,
                        "input_modalities":  [
-                                                "file",
-                                                "image",
-                                                "text"
-                                            ],
+                           "file",
+                           "image",
+                           "text"
+                       ],
                        "output_modalities":  [
-                                                 "text"
-                                             ]
+                           "text"
+                       ],
+                       "output_limit":  128000,
+                       "reasoning":  "native",
+                       "reasoning_control":  "effort_selection",
+                       "reasoning_efforts":  [
+                           "low",
+                           "medium",
+                           "high",
+                           "xhigh",
+                           "max"
+                       ]
                    },
                    {
                        "key":  "gpt-6.1-sol",
-                       "aliases":  [
-
-                                   ],
-                       "context_window":  272000,
+                       "aliases":  [],
+                       "context_window":  1050000,
                        "input_modalities":  [
-                                                "file",
-                                                "image",
-                                                "text"
-                                            ],
+                           "file",
+                           "image",
+                           "text"
+                       ],
                        "output_modalities":  [
-                                                 "text"
-                                             ]
+                           "text"
+                       ],
+                       "output_limit":  128000,
+                       "reasoning":  "native",
+                       "reasoning_control":  "effort_selection",
+                       "reasoning_efforts":  [
+                           "low",
+                           "medium",
+                           "high",
+                           "xhigh",
+                           "max"
+                       ]
+                   },
+                   {
+                       "key":  "gpt-6.1-terra",
+                       "aliases":  [],
+                       "context_window":  1050000,
+                       "input_modalities":  [
+                           "file",
+                           "image",
+                           "text"
+                       ],
+                       "output_modalities":  [
+                           "text"
+                       ],
+                       "output_limit":  128000,
+                       "reasoning":  "native",
+                       "reasoning_control":  "effort_selection",
+                       "reasoning_efforts":  [
+                           "low",
+                           "medium",
+                           "high",
+                           "xhigh",
+                           "max"
+                       ]
                    },
                    {
                        "key":  "gpt-image-2",
                        "aliases":  [
-                                       "openai: gpt image 2"
-                                   ],
-                       "context_window":  400000,
+                           "openai: gpt image 2"
+                       ],
                        "input_modalities":  [
-                                                "text"
-                                            ],
+                           "text"
+                       ],
                        "output_modalities":  [
-                                                 "image"
-                                             ]
+                           "image"
+                       ],
+                       "reasoning":  "unsupported",
+                       "reasoning_control":  "fixed_off"
                    },
                    {
                        "key":  "gpt-image-2.5-flare",
                        "aliases":  [
-                                       "openai/gpt-image-2.5-flare-20260908",
-                                       "openai: gpt image 2.5 flare"
-                                   ],
+                           "openai: gpt image 2.5 flare"
+                       ],
                        "input_modalities":  [
-                                                "text"
-                                            ],
+                           "text"
+                       ],
                        "output_modalities":  [
-                                                 "image"
-                                             ]
+                           "image"
+                       ],
+                       "reasoning":  "unsupported",
+                       "reasoning_control":  "fixed_off"
                    },
                    {
                        "key":  "gpt-image-2.5-sunburst",
                        "aliases":  [
-                                       "openai/gpt-image-2.5-sunburst-20260908",
-                                       "openai: gpt image 2.5 sunburst"
-                                   ],
+                           "openai: gpt image 2.5 sunburst"
+                       ],
                        "input_modalities":  [
-                                                "text"
-                                            ],
+                           "text"
+                       ],
                        "output_modalities":  [
-                                                 "image"
-                                             ]
+                           "image"
+                       ],
+                       "reasoning":  "unsupported",
+                       "reasoning_control":  "fixed_off"
                    },
                    {
                        "key":  "grok-4.5",
@@ -1088,6 +1229,19 @@
                                              ]
                    },
                    {
+                       "key":  "jev-1.14.0",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  32768,
+                       "input_modalities":  [
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+
+                                             ]
+                   },
+                   {
                        "key":  "k3",
                        "aliases":  [
 
@@ -1111,21 +1265,6 @@
                        "input_modalities":  [
                                                 "image",
                                                 "text"
-                                            ],
-                       "output_modalities":  [
-                                                 "text"
-                                             ]
-                   },
-                   {
-                       "key":  "kimi/kimi-k3",
-                       "aliases":  [
-
-                                   ],
-                       "context_window":  1048576,
-                       "input_modalities":  [
-                                                "image",
-                                                "text",
-                                                "video"
                                             ],
                        "output_modalities":  [
                                                  "text"
@@ -1221,6 +1360,21 @@
                    },
                    {
                        "key":  "kimi-k3",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  1048576,
+                       "input_modalities":  [
+                                                "image",
+                                                "text",
+                                                "video"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
+                       "key":  "kimi/kimi-k3",
                        "aliases":  [
 
                                    ],
@@ -1415,6 +1569,72 @@
                                              ]
                    },
                    {
+                       "key":  "minimax-m2.5",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  196608,
+                       "input_modalities":  [
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
+                       "key":  "minimax-m2.7",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  204800,
+                       "input_modalities":  [
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
+                       "key":  "minimax-m3",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  1000000,
+                       "input_modalities":  [
+                                                "image",
+                                                "text",
+                                                "video"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
+                       "key":  "minimax-m3.1-flash",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  1000000,
+                       "output_limit":  128000,
+                       "reasoning":  "native",
+                       "reasoning_control":  "effort_selection",
+                       "reasoning_efforts":  [
+                                                  "low",
+                                                  "medium",
+                                                  "high",
+                                                  "xhigh",
+                                                  "max"
+                                              ],
+                       "input_modalities":  [
+                                                "image",
+                                                "text",
+                                                "video"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
                        "key":  "minimax/minimax-m3",
                        "aliases":  [
 
@@ -1457,132 +1677,6 @@
                    },
                    {
                        "key":  "minimaxai/minimax-m3",
-                       "aliases":  [
-
-                                   ],
-                       "context_window":  1000000,
-                       "input_modalities":  [
-                                                "image",
-                                                "text"
-                                            ],
-                       "output_modalities":  [
-                                                 "text"
-                                             ]
-                   },
-                   {
-                       "key":  "minimax-m2.5",
-                       "aliases":  [
-
-                                   ],
-                       "context_window":  196608,
-                       "input_modalities":  [
-                                                "text"
-                                            ],
-                       "output_modalities":  [
-                                                 "text"
-                                             ]
-                   },
-                   {
-                       "key":  "minimax-m2.7",
-                       "aliases":  [
-
-                                   ],
-                       "context_window":  204800,
-                       "input_modalities":  [
-                                                "text"
-                                            ],
-                       "output_modalities":  [
-                                                 "text"
-                                             ]
-                   },
-                   {
-                       "key":  "minimax-m3",
-                       "aliases":  [
-
-                                   ],
-                       "context_window":  1000000,
-                       "input_modalities":  [
-                                                "image",
-                                                "text",
-                                                "video"
-                                            ],
-                       "output_modalities":  [
-                                                 "text"
-                                             ]
-                   },
-                   {
-                       "key":  "minimax-m3.1-flash-preview",
-                       "aliases":  [
-
-                                   ],
-                       "context_window":  1000000,
-                       "input_modalities":  [
-                                                "image",
-                                                "text",
-                                                "video"
-                                            ],
-                       "output_modalities":  [
-                                                 "text"
-                                             ]
-                   },
-                   {
-                       "key":  "moonshotai/kimi-k2.5",
-                       "aliases":  [
-
-                                   ],
-                       "context_window":  256000,
-                       "input_modalities":  [
-                                                "image",
-                                                "text"
-                                            ],
-                       "output_modalities":  [
-                                                 "text"
-                                             ]
-                   },
-                   {
-                       "key":  "moonshotai/kimi-k2.6",
-                       "aliases":  [
-
-                                   ],
-                       "context_window":  256000,
-                       "input_modalities":  [
-                                                "image",
-                                                "text"
-                                            ],
-                       "output_modalities":  [
-                                                 "text"
-                                             ]
-                   },
-                   {
-                       "key":  "moonshotai/kimi-k2.7-code",
-                       "aliases":  [
-
-                                   ],
-                       "context_window":  256000,
-                       "input_modalities":  [
-                                                "image",
-                                                "text"
-                                            ],
-                       "output_modalities":  [
-                                                 "text"
-                                             ]
-                   },
-                   {
-                       "key":  "moonshotai/kimi-k2.7-code-highspeed",
-                       "aliases":  [
-
-                                   ],
-                       "context_window":  262000,
-                       "input_modalities":  [
-                                                "image",
-                                                "text"
-                                            ],
-                       "output_modalities":  [
-                                                 "text"
-                                             ]
-                   },
-                   {
-                       "key":  "moonshotai/kimi-k3",
                        "aliases":  [
 
                                    ],
@@ -1677,6 +1771,76 @@
                                              ]
                    },
                    {
+                       "key":  "moonshotai/kimi-k2.5",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  256000,
+                       "input_modalities":  [
+                                                "image",
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
+                       "key":  "moonshotai/kimi-k2.6",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  256000,
+                       "input_modalities":  [
+                                                "image",
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
+                       "key":  "moonshotai/kimi-k2.7-code",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  256000,
+                       "input_modalities":  [
+                                                "image",
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
+                       "key":  "moonshotai/kimi-k2.7-code-highspeed",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  262000,
+                       "input_modalities":  [
+                                                "image",
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
+                       "key":  "moonshotai/kimi-k3",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  1000000,
+                       "input_modalities":  [
+                                                "image",
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
                        "key":  "muse-spark-1.2-contributor",
                        "aliases":  [
 
@@ -1762,6 +1926,18 @@
                                             ],
                        "output_modalities":  [
                                                  "text"
+                                             ]
+                   },
+                   {
+                       "key":  "qwen-image-2.0",
+                       "aliases":  [
+
+                                   ],
+                       "input_modalities":  [
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+                                                 "image"
                                              ]
                    },
                    {
@@ -1888,6 +2064,19 @@
                                             ],
                        "output_modalities":  [
                                                  "text"
+                                             ]
+                   },
+                   {
+                       "key":  "qwen3-rerank",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  120000,
+                       "input_modalities":  [
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+
                                              ]
                    },
                    {
@@ -2087,31 +2276,6 @@
                                             ],
                        "output_modalities":  [
                                                  "text"
-                                             ]
-                   },
-                   {
-                       "key":  "qwen3-rerank",
-                       "aliases":  [
-
-                                   ],
-                       "context_window":  120000,
-                       "input_modalities":  [
-                                                "text"
-                                            ],
-                       "output_modalities":  [
-
-                                             ]
-                   },
-                   {
-                       "key":  "qwen-image-2.0",
-                       "aliases":  [
-
-                                   ],
-                       "input_modalities":  [
-                                                "text"
-                                            ],
-                       "output_modalities":  [
-                                                 "image"
                                              ]
                    },
                    {

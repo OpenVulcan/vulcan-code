@@ -174,21 +174,21 @@ fn minimax_openai_chat_projects_adaptive_thinking() {
     assert!(encoded.body.get("reasoning_effort").is_none());
 }
 
-/// Verifies MiniMax M2.x sends its sole adaptive equivalent through the exact Anthropic profile.
-/// 验证 MiniMax M2.x 通过精确 Anthropic Profile 发送唯一等价 adaptive。
+/// Verifies MiniMax M3 sends enabled adaptive thinking through the exact Anthropic profile.
+/// 验证 MiniMax M3 通过精确 Anthropic Profile 发送已开启的自适应思考。
 #[test]
-fn minimax_m2_anthropic_projects_only_adaptive_thinking() {
+fn minimax_m3_anthropic_projects_adaptive_thinking() {
     let client = ProviderExecutionClient::new(
         reqwest::Client::new(),
         Arc::new(ProtocolRegistry::first_batch().expect("profiles should register")),
     );
     let mut request = minimal_request();
-    request.model_id = String::from("MiniMax-M2.7-highspeed");
+    request.model_id = String::from("MiniMax-M3");
     request.reasoning_effort = Some(ReasoningEffort::Adaptive);
 
     let encoded = client
         .encode_request(&minimax_route(ANTHROPIC_MESSAGES_PROFILE_ID), &request)
-        .expect("MiniMax M2.x adaptive request should encode");
+        .expect("MiniMax M3 adaptive request should encode");
 
     assert_eq!(encoded.body["thinking"]["type"], "adaptive");
 }

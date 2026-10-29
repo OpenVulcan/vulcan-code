@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "minimax",
-  "revision": 34,
-  "published_at": "2026-10-21T05:38:41Z",
+  "revision": 35,
+  "published_at": "2026-10-29T14:56:07Z",
   "engine_contract": {
     "minimum_manifest_engine": 2,
     "required_protocol_profiles": [
@@ -96,8 +96,8 @@
         "discovery_kind": "anthropic_compatible",
         "models": [
           {
-            "model_id": "MiniMax-M3.1-Flash-Preview",
-            "display_name": "M3.1-Flash-Preview",
+            "model_id": "MiniMax-M3.1-Flash",
+            "display_name": "M3.1-Flash",
             "credential_profile_ids": [
               "token-plan-key",
               "token-plan-oauth"
@@ -239,8 +239,8 @@
         "discovery_kind": "anthropic_compatible",
         "models": [
           {
-            "model_id": "MiniMax-M3.1-Flash-Preview",
-            "display_name": "M3.1-Flash-Preview",
+            "model_id": "MiniMax-M3.1-Flash",
+            "display_name": "M3.1-Flash",
             "credential_profile_ids": [
               "token-plan-key",
               "token-plan-oauth"
@@ -330,8 +330,8 @@
   ],
   "model_defaults": {
     "default_enabled": true,
-    "catalog_membership_policy": "declared_and_discovery",
-    "unknown_model_policy": "default_binding_allowed",
+    "catalog_membership_policy": "declared_only",
+    "unknown_model_policy": "declared_rule_required",
     "supported_protocols": [
       "anthropic-messages.v1",
       "openai-chat-completions.v1"
@@ -349,17 +349,18 @@
   },
   "model_rules": [
     {
-      "rule_id": "minimax-m3-1-flash-preview-token-plan",
-      "display_name": "M3.1-Flash-Preview",
+      "rule_id": "minimax-m3-1-flash",
+      "display_name": "M3.1-Flash",
       "scope": {
         "credential_profile_ids": [
+          "payg-api-key",
           "token-plan-key",
           "token-plan-oauth"
         ]
       },
       "matcher": {
         "kind": "exact",
-        "value": "MiniMax-M3.1-Flash-Preview"
+        "value": "MiniMax-M3.1-Flash"
       },
       "supported_protocols": [
         "anthropic-messages-video.v1"
@@ -382,12 +383,12 @@
           "max"
         ],
         "prompt_cache": {
-          "provider_default_behavior": "MiniMax M3.1 Flash Preview caching follows the Token Plan provider default.",
+          "provider_default_behavior": "MiniMax M3.1 Flash caching follows the provider default.",
           "supports_managed_explicit": false
         },
         "context_limit": 1000000,
         "output_limit": 128000,
-        "evidence_revision": "minimax-code-managed-m3.1-flash-preview-2026-09-27"
+        "evidence_revision": "minimax-m3.1-flash-official-and-inherited-limits-2026-10-29"
       },
       "input_resource_constraints": [
         {
@@ -414,7 +415,7 @@
         {
           "id": "sampling.temperature",
           "display_name": "Temperature",
-          "description": "Controls MiniMax M3.1 Flash Preview sampling randomness; the verified compatible-API range is greater than 0 through 1.",
+          "description": "Accepted legacy sampling value in (0, 1]; MiniMax M3.1 Flash ignores this field and always uses temperature 1.",
           "schema": {
             "type": "decimal",
             "maximum": "1",
@@ -427,18 +428,18 @@
             "anthropic-messages-video.v1"
           ],
           "model_ids": [
-            "MiniMax-M3.1-Flash-Preview"
+            "MiniMax-M3.1-Flash"
           ],
           "dependent_required": [],
           "conflicts": [],
-          "evidence_revision": "minimax-code-managed-m3.1-flash-preview-2026-09-27"
+          "evidence_revision": "minimax-m3.1-flash-official-and-inherited-limits-2026-10-29"
         }
       ]
     },
     {
       "rule_id": "reasoning-minimax-m3",
       "matcher": {
-        "kind": "prefix",
+        "kind": "exact",
         "value": "MiniMax-M3"
       },
       "supported_protocols": [
@@ -528,105 +529,6 @@
           "dependent_required": [],
           "conflicts": [],
           "evidence_revision": "minimax-openai-reasoning-split-m3-2026-10-21"
-        }
-      ]
-    },
-    {
-      "rule_id": "reasoning-minimax-m2",
-      "matcher": {
-        "kind": "prefix",
-        "value": "MiniMax-M2"
-      },
-      "supported_protocols": [
-        "anthropic-messages.v1",
-        "openai-chat-completions.v1"
-      ],
-      "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
-        "provider_native_tools": [],
-        "reasoning_control": "provider_adaptive",
-        "reasoning_efforts": [
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "MiniMax automatic caching is used without host-injected cache controls.",
-          "supports_managed_explicit": false
-        },
-        "context_limit": 204800,
-        "evidence_revision": "minimax-m2-provider-adaptive-2026-09-01"
-      },
-      "protocol_capabilities": {
-        "anthropic-messages.v1": {
-          "prompt_cache": {
-            "provider_default_behavior": "MiniMax automatic caching is used without host-injected cache controls.",
-            "supports_managed_explicit": true,
-            "supported_ttl_options": [
-              {
-                "id": "5m",
-                "display_name": "5 minutes",
-                "description": "MiniMax explicit Anthropic-compatible cache lifetime."
-              }
-            ],
-            "profile_default_ttl_option_id": "5m",
-            "minimum_cacheable_tokens": 512,
-            "maximum_breakpoints": 4
-          }
-        },
-        "openai-chat-completions.v1": {
-          "prompt_cache": {
-            "provider_default_behavior": "MiniMax OpenAI-compatible prompt caching is automatic and does not accept host-injected cache markers.",
-            "supports_managed_explicit": false
-          }
-        }
-      },
-      "model_parameters": [
-        {
-          "id": "sampling.temperature",
-          "display_name": "Temperature",
-          "description": "Controls MiniMax sampling randomness; the verified compatible-API range is greater than 0 through 1.",
-          "schema": {
-            "type": "decimal",
-            "maximum": "1",
-            "exclusive_minimum": "0"
-          },
-          "default": {
-            "type": "provider_default"
-          },
-          "protocol_ids": [
-            "anthropic-messages.v1",
-            "openai-chat-completions.v1"
-          ],
-          "model_ids": [],
-          "dependent_required": [],
-          "conflicts": [],
-          "evidence_revision": "minimax-compatible-text-api-2026-07-28"
-        },
-        {
-          "id": "minimax.reasoning_split",
-          "display_name": "Separate reasoning",
-          "description": "Returns MiniMax interleaved thinking in the OpenAI-compatible reasoning_details field.",
-          "schema": {
-            "type": "boolean"
-          },
-          "default": {
-            "type": "explicit_value",
-            "value": {
-              "type": "boolean",
-              "value": true
-            }
-          },
-          "protocol_ids": [
-            "openai-chat-completions.v1"
-          ],
-          "model_ids": [],
-          "dependent_required": [],
-          "conflicts": [],
-          "evidence_revision": "minimax-openai-reasoning-split-2026-07-28"
         }
       ]
     }
@@ -872,10 +774,10 @@
     },
     {
       "profile_id": "minimax.anthropic.m3-1-flash-effort.v1",
-      "description": "MiniMax M3.1 Flash Preview Anthropic effort projection",
+      "description": "MiniMax M3.1 Flash Anthropic effort projection",
       "payload": {
         "profile_id": "minimax.anthropic.m3-1-flash-effort.v1",
-        "revision": 1,
+        "revision": 2,
         "steps": [
           {
             "op": "enum_map",
@@ -890,7 +792,7 @@
               "max": "max"
             },
             "unmatched": "error",
-            "default": "default"
+            "default": "max"
           },
           {
             "op": "delete_json_pointer",
@@ -4768,6 +4670,18 @@
       {
         "url": "https://github.com/MiniMax-AI/minimax-code/tree/0f6ad5229ff1f144c72dd15a4b2d520feb26cd3d",
         "note": "MiniMax Code implements managed forced-on reasoning effort selection and validates the M3.1 1,000,000-token context and 128,000-token output contract; the official managed catalog snapshot observed on 2026-09-27 identifies MiniMax-M3.1-Flash-Preview with low, medium, high, xhigh, and max efforts plus image and video input."
+      },
+      {
+        "url": "https://platform.minimax.io/docs/m-plan/intro",
+        "note": "Checked 2026-10-29: MiniMax has retired the M3.1 Flash Preview name in favor of MiniMax-M3.1-Flash. Both regional Token Plan catalog identities now use the formal ID; no Preview alias is registered."
+      },
+      {
+        "url": "https://platform.minimax.io/docs/guides/text-generation",
+        "note": "Checked 2026-10-29: the current official text models are MiniMax-M3 and MiniMax-M3.1-Flash. At the user's request, M2 through M2.7 registration is removed and exact-rule membership is required for conversation discovery. Formal M3.1 uses the dedicated multimodal Anthropic rule for pay-as-you-go and Token Plan credentials, preserving the former 1000000 context and 128000 output configuration, image/video input, and low/medium/high/xhigh/max efforts; its documented default effort is max. No inference or capacity probe was run."
+      },
+      {
+        "url": "https://platform.minimax.io/docs/api-reference/text-anthropic-api",
+        "note": "Checked 2026-10-29: formal M3.1 always reasons, rejects disabled thinking and accepts output_config.effort with five effort values. Temperature is accepted but ignored and always uses 1; its parameter description reflects that behavior."
       }
     ]
   }

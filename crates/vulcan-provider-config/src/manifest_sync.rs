@@ -650,6 +650,28 @@ pub fn validate_bundled_trust_ceiling(
                 )
             })?;
         validate_service_entry_trust_ceiling(bundled_entry, candidate_entry)?;
+        // Entry overrides cannot recover authority that the bundled entry deliberately removed.
+        // 入口覆盖不能恢复随包入口已明确收回的权限。
+        if !unknown_model_policy_is_subset(
+            candidate
+                .model_defaults
+                .unknown_model_policy_for_entry(candidate_entry),
+            bundled
+                .model_defaults
+                .unknown_model_policy_for_entry(bundled_entry),
+        ) || !catalog_membership_policy_is_subset(
+            candidate
+                .model_defaults
+                .catalog_membership_for_entry(candidate_entry),
+            bundled
+                .model_defaults
+                .catalog_membership_for_entry(bundled_entry),
+        ) {
+            return Err(format!(
+                "Service entry `{}` expands its bundled model membership or binding authority.",
+                candidate_entry.service_entry_id
+            ));
+        }
     }
     for candidate_channel in &candidate.upload_channels {
         let bundled_channel = bundled
@@ -2498,6 +2520,56 @@ mod tests {
         let error = validate_bundled_trust_ceiling(&bundled, &changed_target)
             .expect_err("an unreviewed tool target must be rejected");
         assert!(error.contains("tool target"), "{error}");
+    }
+
+    /// Verifies removing entry overrides cannot broaden bundled model membership or binding.
+    /// 验证移除入口覆盖不能扩大随包模型成员或绑定权限。
+    #[test]
+    fn bundled_trust_ceiling_rejects_entry_policy_expansion() {
+        // The provider shell supplies reviewed hosts and routes; this test owns only the policies.
+        // 供应商外壳提供已审核主机和路由；本测试仅持有策略设置。
+        let mut bundled: vulcan_provider_adapters::ProviderManifestV1 =
+            serde_json::from_str(&bundled_manifest_with_revision("openai", 1))
+                .expect("bundled shell must deserialize");
+        bundled.model_defaults.catalog_membership_policy =
+            vulcan_provider_adapters::CatalogMembershipPolicy::DeclaredAndDiscovery;
+        bundled.model_defaults.unknown_model_policy =
+            vulcan_provider_adapters::UnknownModelPolicy::DefaultBindingAllowed;
+        // Both restrictions are explicit in this synthetic baseline.
+        // 合成基线显式声明两个限制。
+        let entry = bundled
+            .services
+            .iter_mut()
+            .find(|entry| entry.service_entry_id == "public-api")
+            .expect("public API shell must exist");
+        let overlay = entry
+            .model_defaults_override
+            .as_mut()
+            .expect("entry overlay must exist");
+        overlay.catalog_membership_policy =
+            Some(vulcan_provider_adapters::CatalogMembershipPolicy::DeclaredOnly);
+        overlay.unknown_model_policy =
+            Some(vulcan_provider_adapters::UnknownModelPolicy::DeclaredRuleRequired);
+        assert!(validate_bundled_trust_ceiling(&bundled, &bundled).is_ok());
+        for remove_membership in [false, true] {
+            // Omission inherits the permissive root, so it is an authority expansion too.
+            // 省略字段会继承宽松根默认值，因此同样构成权限扩张。
+            let mut candidate = bundled.clone();
+            let overlay = candidate
+                .services
+                .iter_mut()
+                .find(|entry| entry.service_entry_id == "public-api")
+                .expect("candidate entry must exist")
+                .model_defaults_override
+                .as_mut()
+                .expect("candidate overlay must exist");
+            if remove_membership {
+                overlay.catalog_membership_policy = None;
+            } else {
+                overlay.unknown_model_policy = None;
+            }
+            assert!(validate_bundled_trust_ceiling(&bundled, &candidate).is_err());
+        }
     }
 
     /// Verifies signed updates cannot promote an unverified route or inspect new diagnostics.

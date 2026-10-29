@@ -304,6 +304,8 @@ fn model_scoped_profiles_freeze_into_the_execution_route() {
         .entry_model_defaults
         .get_mut("official-api")
         .expect("DeepSeek official entry defaults must compile");
+    defaults.unknown_model_policy =
+        crate::provider_manifest::UnknownModelPolicy::DefaultBindingAllowed;
     defaults.usage_profile_refs = vec![String::from("deepseek.chat.body.v1")];
     defaults.request_profile_refs = vec![String::from("deepseek.responses.docs.v1")];
     defaults.response_profile_refs = vec![default_response.profile_id.clone()];

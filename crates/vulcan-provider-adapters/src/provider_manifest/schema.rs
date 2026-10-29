@@ -739,6 +739,14 @@ fn default_true() -> bool {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelDefaultsOverlay {
+    /// Overrides discovered-model membership for this exact service entry.
+    /// 覆盖此精确服务入口的发现模型成员策略。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_membership_policy: Option<CatalogMembershipPolicy>,
+    /// Overrides unmatched-model binding authority for this exact service entry.
+    /// 覆盖此精确服务入口的未匹配模型绑定权限。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unknown_model_policy: Option<UnknownModelPolicy>,
     /// Overrides the default protocol candidate set for this entry.
     /// 覆盖此入口的默认协议候选集合。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -747,6 +755,44 @@ pub struct ModelDefaultsOverlay {
     /// 覆盖此入口的默认生效协议。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected_protocol: Option<String>,
+}
+
+impl ModelDefaults {
+    /// Resolves catalog membership from the explicit entry override or the provider default.
+    /// 从显式入口覆盖或供应商默认值解析目录成员策略。
+    ///
+    /// `entry` identifies the service whose optional policy override is applied.
+    /// `entry` 标识需要应用可选策略覆盖的服务入口。
+    /// Returns the single effective membership policy for that entry.
+    /// 返回该入口唯一生效的成员策略。
+    pub fn catalog_membership_for_entry(
+        &self,
+        entry: &ManifestServiceEntry,
+    ) -> CatalogMembershipPolicy {
+        entry
+            .model_defaults_override
+            .as_ref()
+            .and_then(|overlay| overlay.catalog_membership_policy)
+            .unwrap_or(self.catalog_membership_policy)
+    }
+
+    /// Resolves unmatched-model authority from the explicit entry override or the provider default.
+    /// 从显式入口覆盖或供应商默认值解析未匹配模型权限。
+    ///
+    /// `entry` identifies the service whose optional binding override is applied.
+    /// `entry` 标识需要应用可选绑定覆盖的服务入口。
+    /// Returns the single effective unknown-model policy for that entry.
+    /// 返回该入口唯一生效的未知模型策略。
+    pub fn unknown_model_policy_for_entry(
+        &self,
+        entry: &ManifestServiceEntry,
+    ) -> UnknownModelPolicy {
+        entry
+            .model_defaults_override
+            .as_ref()
+            .and_then(|overlay| overlay.unknown_model_policy)
+            .unwrap_or(self.unknown_model_policy)
+    }
 }
 
 /// Catalog membership policy for models discovered outside manifest rules.

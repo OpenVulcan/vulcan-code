@@ -135,7 +135,19 @@ fn model_source_policies_control_runtime_identity_union() {
         CatalogMembershipPolicy::DeclaredAndDiscovery,
     ];
     for source_policy in source_policies {
-        for membership_policy in membership_policies {
+        for (membership_policy, entry_override) in membership_policies
+            .into_iter()
+            .flat_map(|policy| [(policy, false), (policy, true)])
+        {
+            // Opposing root defaults prove an entry override is actually consumed.
+            // 相反的根默认值证明入口覆盖确实被消费。
+            let root_membership = if !entry_override {
+                membership_policy
+            } else if membership_policy == CatalogMembershipPolicy::DeclaredOnly {
+                CatalogMembershipPolicy::DeclaredAndDiscovery
+            } else {
+                CatalogMembershipPolicy::DeclaredOnly
+            };
             let discovery_kind = if source_policy.includes_discovery() {
                 "open_ai"
             } else if source_policy.includes_manifest() {
@@ -154,7 +166,7 @@ fn model_source_policies_control_runtime_identity_union() {
                     {"model_id": "manifest-model", "display_name": "Manifest Model"}
                 ]);
             }
-            let manifest_value = serde_json::json!({
+            let mut manifest_value = serde_json::json!({
                 "schema_version": "vulcan.provider-manifest.v2",
                 "provider_id": "source-policy-probe",
                 "revision": 1,
@@ -184,7 +196,7 @@ fn model_source_policies_control_runtime_identity_union() {
                 }],
                 "model_defaults": {
                     "default_enabled": true,
-                    "catalog_membership_policy": serde_json::to_value(membership_policy)
+                    "catalog_membership_policy": serde_json::to_value(root_membership)
                         .expect("membership policy must serialize"),
                     "unknown_model_policy": "declared_rule_required",
                     "supported_protocols": [OPENAI_CHAT_PROFILE_ID],
@@ -207,6 +219,11 @@ fn model_source_policies_control_runtime_identity_union() {
                 ],
                 "provenance": {"status": "migrated", "sources": []}
             });
+            if entry_override {
+                manifest_value["services"][0]["model_defaults_override"] = serde_json::json!({
+                    "catalog_membership_policy": membership_policy
+                });
+            }
             let manifest = crate::provider_manifest::compile_manifest_text(
                 serde_json::to_string(&manifest_value)
                     .expect("source-policy manifest must serialize")
@@ -317,7 +334,7 @@ fn model_source_policies_control_runtime_identity_union() {
                 .collect::<BTreeSet<_>>();
             assert_eq!(
                 actual_model_ids, expected_model_ids,
-                "source {source_policy:?}, membership {membership_policy:?}"
+                "source {source_policy:?}, membership {membership_policy:?}, entry override {entry_override}"
             );
             let manual_model = source_catalog
                 .models

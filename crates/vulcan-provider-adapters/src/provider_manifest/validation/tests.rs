@@ -2594,6 +2594,48 @@ fn browser_callback_authorization_is_bounded_and_system_only() {
     );
 }
 
+/// Verifies record item selectors are explicit JSON pointers and cannot target binary bodies.
+/// 验证记录项选择器必须使用显式 JSON Pointer，且不能作用于二进制正文。
+#[test]
+fn resource_record_selector_validation_fails_closed() {
+    // A synthetic output contract isolates pointer validation from provider catalogs.
+    // 合成输出契约将指针校验与供应商目录隔离。
+    let mut output: crate::ProviderToolOutputContract = serde_json::from_value(serde_json::json!({
+        "kind": "resources",
+        "source_path": "/",
+        "normalized_result_path": "resources",
+        "mime_types": ["image/png"],
+        "resource_decoders": [{
+            "source_path": "/data",
+            "item_source_path": "/b64_json",
+            "encoding": "base64",
+            "resource_kind": "image",
+            "mime_type": "image/png",
+            "max_bytes": 16
+        }]
+    }))
+    .expect("resource contract must deserialize");
+    // The valid record selector retains all existing output-contract guards.
+    // 有效记录选择器保留现有全部输出契约守卫。
+    let mut errors = Vec::new();
+    validate_provider_tool_output_contract(&output, "$.output", &mut errors);
+    assert!(errors.is_empty(), "{errors:?}");
+    for (pointer, encoding) in [
+        ("b64_json", crate::ProviderToolResourceEncoding::Base64),
+        ("/b64_json", crate::ProviderToolResourceEncoding::BinaryBody),
+    ] {
+        output.resource_decoders[0].item_source_path = Some(pointer.to_string());
+        output.resource_decoders[0].encoding = encoding;
+        errors.clear();
+        validate_provider_tool_output_contract(&output, "$.output", &mut errors);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.code == "invalid_resource_decoder_item_pointer")
+        );
+    }
+}
+
 /// Builds one default tool target declaration for closure tests.
 /// 为闭合测试构建一条默认工具目标声明。
 fn tool_target_declaration(

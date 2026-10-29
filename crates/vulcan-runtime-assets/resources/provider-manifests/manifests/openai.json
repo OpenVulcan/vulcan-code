@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "openai",
-  "revision": 18,
-  "published_at": "2026-10-24T16:46:16Z",
+  "revision": 20,
+  "published_at": "2026-10-29T14:02:30Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -48,7 +48,7 @@
       "default_authentication": "bearer_authorization",
       "request_projector": "direct",
       "model_catalog": {
-        "source_policy": "manifest_and_discovery",
+        "source_policy": "discovery_only",
         "discovery_kind": "open_ai"
       },
       "protocol_routes": [
@@ -76,7 +76,15 @@
           ],
           "verified": true
         }
-      ]
+      ],
+      "model_defaults_override": {
+        "catalog_membership_policy": "declared_only",
+        "unknown_model_policy": "declared_rule_required",
+        "supported_protocols": [
+          "openai-responses.v1"
+        ],
+        "selected_protocol": "openai-responses.v1"
+      }
     },
     {
       "service_entry_id": "codex-subscription",
@@ -151,250 +159,479 @@
   },
   "model_rules": [
     {
-      "rule_id": "reasoning-gpt-5.4-pro",
-      "matcher": {
-        "kind": "prefix",
-        "value": "gpt-5.4-pro"
-      },
-      "supported_protocols": [
-        "openai-chat-completions.v1",
-        "openai-responses.v1"
-      ],
-      "capabilities": {
-        "operations": ["conversation_respond"],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
-        "provider_native_tools": [],
-        "reasoning_control": "unknown",
-        "reasoning_efforts": [
-          "medium",
-          "high",
-          "xhigh"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
-        "evidence_revision": "openai-model-docs-2026-07-28"
-      },
+      "rule_id": "public-api-gpt-5-6-sol",
+      "display_name": "GPT-5.6 Sol",
       "scope": {
         "service_entry_ids": [
           "public-api"
-        ]
-      }
-    },
-    {
-      "rule_id": "reasoning-gpt-5.2-pro",
-      "matcher": {
-        "kind": "prefix",
-        "value": "gpt-5.2-pro"
-      },
-      "supported_protocols": [
-        "openai-chat-completions.v1",
-        "openai-responses.v1"
-      ],
-      "capabilities": {
-        "operations": ["conversation_respond"],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
-        "provider_native_tools": [],
-        "reasoning_control": "unknown",
-        "reasoning_efforts": [
-          "medium",
-          "high",
-          "xhigh"
         ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
-        "evidence_revision": "openai-model-docs-2026-07-28"
-      },
-      "scope": {
-        "service_entry_ids": [
-          "public-api"
+        "credential_profile_ids": [
+          "api-key"
         ]
-      }
-    },
-    {
-      "rule_id": "reasoning-gpt-5.6",
+      },
       "matcher": {
-        "kind": "prefix",
-        "value": "gpt-5.6"
+        "kind": "exact",
+        "value": "gpt-5.6-sol"
       },
       "supported_protocols": [
-        "openai-chat-completions.v1",
         "openai-responses.v1"
       ],
+      "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "operations": ["conversation_respond"],
-        "input_resources": [],
+        "operations": [
+          "conversation_respond"
+        ],
+        "input_resources": [
+          "file",
+          "image"
+        ],
         "output_resources": [],
         "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "unknown",
+        "reasoning_control": "effort_selection",
         "reasoning_efforts": [
-          "none",
           "low",
           "medium",
           "high",
           "xhigh",
           "max"
         ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
-        "evidence_revision": "openai-model-docs-2026-07-28"
+        "context_limit": 1050000,
+        "output_limit": 128000,
+        "evidence_revision": "openai.public-api.models.20261029"
       },
+      "provenance_ref": "builtin:openai.public-api.user-declaration.20261029"
+    },
+    {
+      "rule_id": "public-api-gpt-5-6-terra",
+      "display_name": "GPT-5.6 Terra",
       "scope": {
         "service_entry_ids": [
           "public-api"
-        ]
-      }
-    },
-    {
-      "rule_id": "reasoning-gpt-5.4",
-      "matcher": {
-        "kind": "prefix",
-        "value": "gpt-5.4"
-      },
-      "supported_protocols": [
-        "openai-chat-completions.v1",
-        "openai-responses.v1"
-      ],
-      "capabilities": {
-        "operations": ["conversation_respond"],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
-        "provider_native_tools": [],
-        "reasoning_control": "unknown",
-        "reasoning_efforts": [
-          "none",
-          "low",
-          "medium",
-          "high",
-          "xhigh"
         ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
-        "evidence_revision": "openai-model-docs-2026-07-28"
-      },
-      "scope": {
-        "service_entry_ids": [
-          "public-api"
+        "credential_profile_ids": [
+          "api-key"
         ]
-      }
-    },
-    {
-      "rule_id": "reasoning-gpt-5.2-codex",
+      },
       "matcher": {
-        "kind": "prefix",
-        "value": "gpt-5.2-codex"
+        "kind": "exact",
+        "value": "gpt-5.6-terra"
       },
       "supported_protocols": [
-        "openai-chat-completions.v1",
         "openai-responses.v1"
       ],
+      "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "operations": ["conversation_respond"],
-        "input_resources": [],
+        "operations": [
+          "conversation_respond"
+        ],
+        "input_resources": [
+          "file",
+          "image"
+        ],
         "output_resources": [],
         "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "unknown",
+        "reasoning_control": "effort_selection",
         "reasoning_efforts": [
           "low",
           "medium",
           "high",
-          "xhigh"
+          "xhigh",
+          "max"
         ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
-        "evidence_revision": "openai-model-docs-2026-07-28"
+        "context_limit": 1050000,
+        "output_limit": 128000,
+        "evidence_revision": "openai.public-api.models.20261029"
       },
+      "provenance_ref": "builtin:openai.public-api.user-declaration.20261029"
+    },
+    {
+      "rule_id": "public-api-gpt-5-6-luna",
+      "display_name": "GPT-5.6 Luna",
       "scope": {
         "service_entry_ids": [
           "public-api"
+        ],
+        "credential_profile_ids": [
+          "api-key"
         ]
-      }
-    },
-    {
-      "rule_id": "reasoning-gpt-5.1",
+      },
       "matcher": {
-        "kind": "prefix",
-        "value": "gpt-5.1"
+        "kind": "exact",
+        "value": "gpt-5.6-luna"
       },
       "supported_protocols": [
-        "openai-chat-completions.v1",
         "openai-responses.v1"
       ],
+      "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "operations": ["conversation_respond"],
-        "input_resources": [],
+        "operations": [
+          "conversation_respond"
+        ],
+        "input_resources": [
+          "file",
+          "image"
+        ],
         "output_resources": [],
         "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "unknown",
+        "reasoning_control": "effort_selection",
         "reasoning_efforts": [
-          "none",
           "low",
           "medium",
-          "high"
+          "high",
+          "xhigh",
+          "max"
         ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
-        "evidence_revision": "openai-model-docs-2026-07-28"
+        "context_limit": 1050000,
+        "output_limit": 128000,
+        "evidence_revision": "openai.public-api.models.20261029"
       },
+      "provenance_ref": "builtin:openai.public-api.user-declaration.20261029"
+    },
+    {
+      "rule_id": "public-api-gpt-6-astra",
+      "display_name": "GPT-6 Astra",
       "scope": {
         "service_entry_ids": [
           "public-api"
+        ],
+        "credential_profile_ids": [
+          "api-key"
         ]
-      }
-    },
-    {
-      "rule_id": "reasoning-gpt-5",
+      },
       "matcher": {
-        "kind": "prefix",
-        "value": "gpt-5"
+        "kind": "exact",
+        "value": "gpt-6-astra"
       },
       "supported_protocols": [
-        "openai-chat-completions.v1",
         "openai-responses.v1"
       ],
+      "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "operations": ["conversation_respond"],
-        "input_resources": [],
+        "operations": [
+          "conversation_respond"
+        ],
+        "input_resources": [
+          "file",
+          "image"
+        ],
         "output_resources": [],
         "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "unknown",
+        "reasoning_control": "effort_selection",
         "reasoning_efforts": [
-          "minimal",
           "low",
           "medium",
-          "high"
+          "high",
+          "xhigh",
+          "max"
         ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
-        "evidence_revision": "openai-model-docs-2026-07-28"
+        "context_limit": 1050000,
+        "output_limit": 128000,
+        "evidence_revision": "openai.public-api.models.20261029"
       },
+      "provenance_ref": "builtin:openai.public-api.user-declaration.20261029"
+    },
+    {
+      "rule_id": "public-api-gpt-6-sol",
+      "display_name": "GPT-6 Sol",
       "scope": {
         "service_entry_ids": [
           "public-api"
+        ],
+        "credential_profile_ids": [
+          "api-key"
         ]
-      }
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "gpt-6-sol"
+      },
+      "supported_protocols": [
+        "openai-responses.v1"
+      ],
+      "selected_protocol": "openai-responses.v1",
+      "capabilities": {
+        "operations": [
+          "conversation_respond"
+        ],
+        "input_resources": [
+          "file",
+          "image"
+        ],
+        "output_resources": [],
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "context_limit": 1050000,
+        "output_limit": 128000,
+        "evidence_revision": "openai.public-api.models.20261029"
+      },
+      "provenance_ref": "builtin:openai.public-api.user-declaration.20261029"
+    },
+    {
+      "rule_id": "public-api-gpt-6-luna",
+      "display_name": "GPT-6 Luna",
+      "scope": {
+        "service_entry_ids": [
+          "public-api"
+        ],
+        "credential_profile_ids": [
+          "api-key"
+        ]
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "gpt-6-luna"
+      },
+      "supported_protocols": [
+        "openai-responses.v1"
+      ],
+      "selected_protocol": "openai-responses.v1",
+      "capabilities": {
+        "operations": [
+          "conversation_respond"
+        ],
+        "input_resources": [
+          "file",
+          "image"
+        ],
+        "output_resources": [],
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "context_limit": 1050000,
+        "output_limit": 128000,
+        "evidence_revision": "openai.public-api.models.20261029"
+      },
+      "provenance_ref": "builtin:openai.public-api.user-declaration.20261029"
+    },
+    {
+      "rule_id": "public-api-gpt-6-1-sol",
+      "display_name": "GPT-6.1 Sol",
+      "scope": {
+        "service_entry_ids": [
+          "public-api"
+        ],
+        "credential_profile_ids": [
+          "api-key"
+        ]
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "gpt-6.1-sol"
+      },
+      "supported_protocols": [
+        "openai-responses.v1"
+      ],
+      "selected_protocol": "openai-responses.v1",
+      "capabilities": {
+        "operations": [
+          "conversation_respond"
+        ],
+        "input_resources": [
+          "file",
+          "image"
+        ],
+        "output_resources": [],
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "context_limit": 1050000,
+        "output_limit": 128000,
+        "evidence_revision": "openai.public-api.models.20261029"
+      },
+      "provenance_ref": "builtin:openai.public-api.user-declaration.20261029"
+    },
+    {
+      "rule_id": "public-api-gpt-6-1-terra",
+      "display_name": "GPT-6.1 Terra",
+      "scope": {
+        "service_entry_ids": [
+          "public-api"
+        ],
+        "credential_profile_ids": [
+          "api-key"
+        ]
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "gpt-6.1-terra"
+      },
+      "supported_protocols": [
+        "openai-responses.v1"
+      ],
+      "selected_protocol": "openai-responses.v1",
+      "capabilities": {
+        "operations": [
+          "conversation_respond"
+        ],
+        "input_resources": [
+          "file",
+          "image"
+        ],
+        "output_resources": [],
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "context_limit": 1050000,
+        "output_limit": 128000,
+        "evidence_revision": "openai.public-api.models.20261029"
+      },
+      "provenance_ref": "builtin:openai.public-api.user-declaration.20261029"
+    },
+    {
+      "rule_id": "public-api-gpt-image-2",
+      "display_name": "GPT Image 2",
+      "scope": {
+        "service_entry_ids": [
+          "public-api"
+        ],
+        "credential_profile_ids": [
+          "api-key"
+        ]
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "gpt-image-2"
+      },
+      "supported_protocols": [
+        "openai-responses.v1"
+      ],
+      "selected_protocol": "openai-responses.v1",
+      "default_enabled": false,
+      "capabilities": {
+        "operations": [
+          "image_generate"
+        ],
+        "input_resources": [],
+        "output_resources": [
+          "image"
+        ],
+        "reasoning": "unsupported",
+        "reasoning_control": "fixed_off",
+        "reasoning_efforts": [],
+        "provider_native_tools": [],
+        "context_limit": null,
+        "output_limit": null,
+        "evidence_revision": "openai.public-api.images.20261029"
+      },
+      "operation_refs": [
+        "public-api.gpt-image.generate"
+      ],
+      "provenance_ref": "https://developers.openai.com/api/reference/resources/images/methods/generate"
+    },
+    {
+      "rule_id": "public-api-gpt-image-2-5-flare",
+      "display_name": "GPT Image 2.5 Flare",
+      "scope": {
+        "service_entry_ids": [
+          "public-api"
+        ],
+        "credential_profile_ids": [
+          "api-key"
+        ]
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "gpt-image-2.5-flare"
+      },
+      "supported_protocols": [
+        "openai-responses.v1"
+      ],
+      "selected_protocol": "openai-responses.v1",
+      "default_enabled": false,
+      "capabilities": {
+        "operations": [
+          "image_generate"
+        ],
+        "input_resources": [],
+        "output_resources": [
+          "image"
+        ],
+        "reasoning": "unsupported",
+        "reasoning_control": "fixed_off",
+        "reasoning_efforts": [],
+        "provider_native_tools": [],
+        "context_limit": null,
+        "output_limit": null,
+        "evidence_revision": "openai.public-api.images.20261029"
+      },
+      "operation_refs": [
+        "public-api.gpt-image.generate"
+      ],
+      "provenance_ref": "https://developers.openai.com/api/reference/resources/images/methods/generate"
+    },
+    {
+      "rule_id": "public-api-gpt-image-2-5-sunburst",
+      "display_name": "GPT Image 2.5 Sunburst",
+      "scope": {
+        "service_entry_ids": [
+          "public-api"
+        ],
+        "credential_profile_ids": [
+          "api-key"
+        ]
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "gpt-image-2.5-sunburst"
+      },
+      "supported_protocols": [
+        "openai-responses.v1"
+      ],
+      "selected_protocol": "openai-responses.v1",
+      "default_enabled": false,
+      "capabilities": {
+        "operations": [
+          "image_generate"
+        ],
+        "input_resources": [],
+        "output_resources": [
+          "image"
+        ],
+        "reasoning": "unsupported",
+        "reasoning_control": "fixed_off",
+        "reasoning_efforts": [],
+        "provider_native_tools": [],
+        "context_limit": null,
+        "output_limit": null,
+        "evidence_revision": "openai.public-api.images.20261029"
+      },
+      "operation_refs": [
+        "public-api.gpt-image.generate"
+      ],
+      "provenance_ref": "https://developers.openai.com/api/reference/resources/images/methods/generate"
     },
     {
       "rule_id": "codex-gpt-5-6-luna",
@@ -727,6 +964,26 @@
       "upload_bindings": [],
       "timeout_ms": 300000,
       "idempotent": false
+    },
+    {
+      "operation_id": "public-api.gpt-image.generate",
+      "operation": "image_generate",
+      "carrier": "provider_tool",
+      "input_resources": [],
+      "output_resources": [
+        "image"
+      ],
+      "tool_target_refs": [
+        "public-api.gpt-image-2.generate",
+        "public-api.gpt-image-2.5-flare.generate",
+        "public-api.gpt-image-2.5-sunburst.generate"
+      ],
+      "request_profile_refs": [],
+      "response_profile_refs": [],
+      "upload_channel_refs": [],
+      "upload_bindings": [],
+      "timeout_ms": 300000,
+      "idempotent": false
     }
   ],
   "tool_targets": [
@@ -774,15 +1031,676 @@
         "adapter": "generic_json",
         "execution_kind": "http_json_sync"
       }
+    },
+    {
+      "target_id": "public-api.gpt-image-2.generate",
+      "description": "Generate images synchronously with gpt-image-2 through the official OpenAI Images API. Custom width and height must each be divisible by 16; use output_format png or webp for transparency.",
+      "service_entry_id": "public-api",
+      "credential_profile_ids": [
+        "api-key"
+      ],
+      "upstream_target_id": "gpt-image-2",
+      "availability_model_ids_any": [
+        "gpt-image-2"
+      ],
+      "display_name": "GPT Image 2 Generation",
+      "tool_id": "image_generate",
+      "capability": "image_generate",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "type": "string",
+            "const": "gpt-image-2",
+            "default": "gpt-image-2",
+            "description": "Exact image model selected by this target."
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32000,
+            "description": "Describe the requested image, composition, content, and style."
+          },
+          "n": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 1,
+            "description": "Number of images to return; every image is retained."
+          },
+          "quality": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "auto"
+            ],
+            "default": "auto",
+            "description": "Image rendering quality; xhigh and max require a GPT Image 2.5 model."
+          },
+          "size": {
+            "type": "string",
+            "pattern": "^(auto|[1-9][0-9]{1,3}x[1-9][0-9]{1,3})$",
+            "default": "auto",
+            "description": "Use auto or WIDTHxHEIGHT. Each edge must be divisible by 16 and at most 3840 px. Aspect ratio must stay within 1:3 to 3:1. Total pixels must be 655360 through 8294400; above 3686400 pixels is experimental."
+          },
+          "background": {
+            "type": "string",
+            "enum": [
+              "transparent",
+              "opaque",
+              "auto"
+            ],
+            "default": "auto",
+            "description": "Select transparency explicitly. Transparent output requires PNG or WebP; GPT Image 2 transparency remains in preview."
+          },
+          "output_format": {
+            "type": "string",
+            "enum": [
+              "png",
+              "jpeg",
+              "webp"
+            ],
+            "default": "png",
+            "description": "Returned image encoding."
+          },
+          "output_compression": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "JPEG or WebP compression percentage. Omit for PNG; the API default for supported formats is 100."
+          },
+          "moderation": {
+            "type": "string",
+            "enum": [
+              "low",
+              "auto"
+            ],
+            "default": "auto",
+            "description": "Provider content filtering level."
+          },
+          "safety_identifier": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional pseudonymous end-user identifier for provider safety monitoring."
+          },
+          "stream": {
+            "type": "boolean",
+            "const": false,
+            "default": false,
+            "description": "This target uses one synchronous JSON response."
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "background": {
+                  "const": "transparent"
+                }
+              },
+              "required": [
+                "background"
+              ]
+            },
+            "then": {
+              "properties": {
+                "output_format": {
+                  "enum": [
+                    "png",
+                    "webp"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "output_compression"
+              ]
+            },
+            "then": {
+              "properties": {
+                "output_format": {
+                  "enum": [
+                    "jpeg",
+                    "webp"
+                  ]
+                }
+              },
+              "required": [
+                "output_format"
+              ]
+            }
+          }
+        ]
+      },
+      "extension_profile": {
+        "summary": "Official synchronous text-to-image generation with model-specific quality settings.",
+        "input_modes": [
+          "text"
+        ],
+        "resolution_policy": {
+          "mode": "bounded_custom",
+          "custom_bounds": {
+            "minimum_width": 16,
+            "maximum_width": 3840,
+            "minimum_height": 16,
+            "maximum_height": 3840,
+            "step": 16,
+            "minimum_pixels": 655360,
+            "maximum_pixels": 8294400
+          }
+        },
+        "format_policy": {
+          "output_formats": [
+            "png",
+            "jpeg",
+            "webp"
+          ]
+        },
+        "constraints": [
+          "Each custom dimension must be a multiple of 16 pixels.",
+          "The longer-to-shorter edge ratio must not exceed 3:1.",
+          "Transparent backgrounds require PNG or WebP.",
+          "PNG requests must omit output_compression."
+        ],
+        "limitations": [
+          "Resolutions above 3686400 pixels are experimental.",
+          "Transparent backgrounds are in preview for GPT Image 2."
+        ],
+        "evidence_refs": [
+          "docs/contracts/providers/openai-public-api-verified-facts.md#同步图片生成"
+        ]
+      },
+      "output": {
+        "kind": "resources",
+        "source_path": "/",
+        "normalized_result_path": "resources",
+        "resource_kind": "image",
+        "mime_types": [
+          "image/png",
+          "image/jpeg",
+          "image/webp"
+        ],
+        "resource_decoders": [
+          {
+            "source_path": "/data",
+            "item_source_path": "/b64_json",
+            "encoding": "base64",
+            "resource_kind": "image",
+            "mime_type_request_path": "/output_format",
+            "mime_types_by_request_value": {
+              "png": "image/png",
+              "jpeg": "image/jpeg",
+              "webp": "image/webp"
+            },
+            "max_bytes": 104857600,
+            "output_id_prefix": "image"
+          }
+        ]
+      },
+      "execution": {
+        "endpoint_path": "/images/generations",
+        "authentication": "bearer_authorization",
+        "adapter": "generic_json",
+        "execution_kind": "http_json_sync"
+      }
+    },
+    {
+      "target_id": "public-api.gpt-image-2.5-flare.generate",
+      "description": "Generate images synchronously with gpt-image-2.5-flare through the official OpenAI Images API. Custom width and height must each be divisible by 16; use output_format png or webp for transparency.",
+      "service_entry_id": "public-api",
+      "credential_profile_ids": [
+        "api-key"
+      ],
+      "upstream_target_id": "gpt-image-2.5-flare",
+      "availability_model_ids_any": [
+        "gpt-image-2.5-flare"
+      ],
+      "display_name": "GPT Image 2.5 flare Generation",
+      "tool_id": "image_generate",
+      "capability": "image_generate",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "type": "string",
+            "const": "gpt-image-2.5-flare",
+            "default": "gpt-image-2.5-flare",
+            "description": "Exact image model selected by this target."
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32000,
+            "description": "Describe the requested image, composition, content, and style."
+          },
+          "n": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 1,
+            "description": "Number of images to return; every image is retained."
+          },
+          "quality": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max",
+              "auto"
+            ],
+            "default": "auto",
+            "description": "Image rendering quality; xhigh and max require a GPT Image 2.5 model."
+          },
+          "size": {
+            "type": "string",
+            "pattern": "^(auto|[1-9][0-9]{1,3}x[1-9][0-9]{1,3})$",
+            "default": "auto",
+            "description": "Use auto or WIDTHxHEIGHT. Each edge must be divisible by 16 and at most 3840 px. Aspect ratio must stay within 1:3 to 3:1. Total pixels must be 655360 through 8294400; above 3686400 pixels is experimental."
+          },
+          "background": {
+            "type": "string",
+            "enum": [
+              "transparent",
+              "opaque",
+              "auto"
+            ],
+            "default": "auto",
+            "description": "Select transparency explicitly. Transparent output requires PNG or WebP; GPT Image 2 transparency remains in preview."
+          },
+          "output_format": {
+            "type": "string",
+            "enum": [
+              "png",
+              "jpeg",
+              "webp"
+            ],
+            "default": "png",
+            "description": "Returned image encoding."
+          },
+          "output_compression": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "JPEG or WebP compression percentage. Omit for PNG; the API default for supported formats is 100."
+          },
+          "moderation": {
+            "type": "string",
+            "enum": [
+              "low",
+              "auto"
+            ],
+            "default": "auto",
+            "description": "Provider content filtering level."
+          },
+          "safety_identifier": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional pseudonymous end-user identifier for provider safety monitoring."
+          },
+          "stream": {
+            "type": "boolean",
+            "const": false,
+            "default": false,
+            "description": "This target uses one synchronous JSON response."
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "background": {
+                  "const": "transparent"
+                }
+              },
+              "required": [
+                "background"
+              ]
+            },
+            "then": {
+              "properties": {
+                "output_format": {
+                  "enum": [
+                    "png",
+                    "webp"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "output_compression"
+              ]
+            },
+            "then": {
+              "properties": {
+                "output_format": {
+                  "enum": [
+                    "jpeg",
+                    "webp"
+                  ]
+                }
+              },
+              "required": [
+                "output_format"
+              ]
+            }
+          }
+        ]
+      },
+      "extension_profile": {
+        "summary": "Official synchronous text-to-image generation with model-specific quality settings.",
+        "input_modes": [
+          "text"
+        ],
+        "resolution_policy": {
+          "mode": "bounded_custom",
+          "custom_bounds": {
+            "minimum_width": 16,
+            "maximum_width": 3840,
+            "minimum_height": 16,
+            "maximum_height": 3840,
+            "step": 16,
+            "minimum_pixels": 655360,
+            "maximum_pixels": 8294400
+          }
+        },
+        "format_policy": {
+          "output_formats": [
+            "png",
+            "jpeg",
+            "webp"
+          ]
+        },
+        "constraints": [
+          "Each custom dimension must be a multiple of 16 pixels.",
+          "The longer-to-shorter edge ratio must not exceed 3:1.",
+          "Transparent backgrounds require PNG or WebP.",
+          "PNG requests must omit output_compression."
+        ],
+        "limitations": [
+          "Resolutions above 3686400 pixels are experimental."
+        ],
+        "evidence_refs": [
+          "docs/contracts/providers/openai-public-api-verified-facts.md#同步图片生成"
+        ]
+      },
+      "output": {
+        "kind": "resources",
+        "source_path": "/",
+        "normalized_result_path": "resources",
+        "resource_kind": "image",
+        "mime_types": [
+          "image/png",
+          "image/jpeg",
+          "image/webp"
+        ],
+        "resource_decoders": [
+          {
+            "source_path": "/data",
+            "item_source_path": "/b64_json",
+            "encoding": "base64",
+            "resource_kind": "image",
+            "mime_type_request_path": "/output_format",
+            "mime_types_by_request_value": {
+              "png": "image/png",
+              "jpeg": "image/jpeg",
+              "webp": "image/webp"
+            },
+            "max_bytes": 104857600,
+            "output_id_prefix": "image"
+          }
+        ]
+      },
+      "execution": {
+        "endpoint_path": "/images/generations",
+        "authentication": "bearer_authorization",
+        "adapter": "generic_json",
+        "execution_kind": "http_json_sync"
+      }
+    },
+    {
+      "target_id": "public-api.gpt-image-2.5-sunburst.generate",
+      "description": "Generate images synchronously with gpt-image-2.5-sunburst through the official OpenAI Images API. Custom width and height must each be divisible by 16; use output_format png or webp for transparency.",
+      "service_entry_id": "public-api",
+      "credential_profile_ids": [
+        "api-key"
+      ],
+      "upstream_target_id": "gpt-image-2.5-sunburst",
+      "availability_model_ids_any": [
+        "gpt-image-2.5-sunburst"
+      ],
+      "display_name": "GPT Image 2.5 sunburst Generation",
+      "tool_id": "image_generate",
+      "capability": "image_generate",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "type": "string",
+            "const": "gpt-image-2.5-sunburst",
+            "default": "gpt-image-2.5-sunburst",
+            "description": "Exact image model selected by this target."
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32000,
+            "description": "Describe the requested image, composition, content, and style."
+          },
+          "n": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 1,
+            "description": "Number of images to return; every image is retained."
+          },
+          "quality": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max",
+              "auto"
+            ],
+            "default": "auto",
+            "description": "Image rendering quality; xhigh and max require a GPT Image 2.5 model."
+          },
+          "size": {
+            "type": "string",
+            "pattern": "^(auto|[1-9][0-9]{1,3}x[1-9][0-9]{1,3})$",
+            "default": "auto",
+            "description": "Use auto or WIDTHxHEIGHT. Each edge must be divisible by 16 and at most 3840 px. Aspect ratio must stay within 1:3 to 3:1. Total pixels must be 655360 through 8294400; above 3686400 pixels is experimental."
+          },
+          "background": {
+            "type": "string",
+            "enum": [
+              "transparent",
+              "opaque",
+              "auto"
+            ],
+            "default": "auto",
+            "description": "Select transparency explicitly. Transparent output requires PNG or WebP; GPT Image 2 transparency remains in preview."
+          },
+          "output_format": {
+            "type": "string",
+            "enum": [
+              "png",
+              "jpeg",
+              "webp"
+            ],
+            "default": "png",
+            "description": "Returned image encoding."
+          },
+          "output_compression": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "JPEG or WebP compression percentage. Omit for PNG; the API default for supported formats is 100."
+          },
+          "moderation": {
+            "type": "string",
+            "enum": [
+              "low",
+              "auto"
+            ],
+            "default": "auto",
+            "description": "Provider content filtering level."
+          },
+          "safety_identifier": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional pseudonymous end-user identifier for provider safety monitoring."
+          },
+          "stream": {
+            "type": "boolean",
+            "const": false,
+            "default": false,
+            "description": "This target uses one synchronous JSON response."
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "background": {
+                  "const": "transparent"
+                }
+              },
+              "required": [
+                "background"
+              ]
+            },
+            "then": {
+              "properties": {
+                "output_format": {
+                  "enum": [
+                    "png",
+                    "webp"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "output_compression"
+              ]
+            },
+            "then": {
+              "properties": {
+                "output_format": {
+                  "enum": [
+                    "jpeg",
+                    "webp"
+                  ]
+                }
+              },
+              "required": [
+                "output_format"
+              ]
+            }
+          }
+        ]
+      },
+      "extension_profile": {
+        "summary": "Official synchronous text-to-image generation with model-specific quality settings.",
+        "input_modes": [
+          "text"
+        ],
+        "resolution_policy": {
+          "mode": "bounded_custom",
+          "custom_bounds": {
+            "minimum_width": 16,
+            "maximum_width": 3840,
+            "minimum_height": 16,
+            "maximum_height": 3840,
+            "step": 16,
+            "minimum_pixels": 655360,
+            "maximum_pixels": 8294400
+          }
+        },
+        "format_policy": {
+          "output_formats": [
+            "png",
+            "jpeg",
+            "webp"
+          ]
+        },
+        "constraints": [
+          "Each custom dimension must be a multiple of 16 pixels.",
+          "The longer-to-shorter edge ratio must not exceed 3:1.",
+          "Transparent backgrounds require PNG or WebP.",
+          "PNG requests must omit output_compression."
+        ],
+        "limitations": [
+          "Resolutions above 3686400 pixels are experimental."
+        ],
+        "evidence_refs": [
+          "docs/contracts/providers/openai-public-api-verified-facts.md#同步图片生成"
+        ]
+      },
+      "output": {
+        "kind": "resources",
+        "source_path": "/",
+        "normalized_result_path": "resources",
+        "resource_kind": "image",
+        "mime_types": [
+          "image/png",
+          "image/jpeg",
+          "image/webp"
+        ],
+        "resource_decoders": [
+          {
+            "source_path": "/data",
+            "item_source_path": "/b64_json",
+            "encoding": "base64",
+            "resource_kind": "image",
+            "mime_type_request_path": "/output_format",
+            "mime_types_by_request_value": {
+              "png": "image/png",
+              "jpeg": "image/jpeg",
+              "webp": "image/webp"
+            },
+            "max_bytes": 104857600,
+            "output_id_prefix": "image"
+          }
+        ]
+      },
+      "execution": {
+        "endpoint_path": "/images/generations",
+        "authentication": "bearer_authorization",
+        "adapter": "generic_json",
+        "execution_kind": "http_json_sync"
+      }
     }
   ],
   "provenance": {
     "status": "verified",
     "sources": [
-      {
-        "url": "builtin:vulcan.reasoning-catalog.2026-08-06",
-        "note": "Legacy reasoning effort rules migrated into manifest model rules; evidence follows the legacy reasoning catalog."
-      },
       {
         "url": "https://chatgpt.com/backend-api/codex/images/generations",
         "note": "Codex subscription image generation follows the openai/codex ImagesClient request and response contract (codex-rs/codex-api/src/endpoint/images.rs, model gpt-image-2)."
@@ -790,7 +1708,28 @@
       {
         "url": "https://github.com/openai/codex/blob/970111f6cb/codex-rs/ext/image-generation/src/tool.rs",
         "note": "The official client always sends size auto and exposes no size argument; live probes on 2026-10-24 requesting 1024x1024 all returned 1536x1024, so size is pinned to auto (openai/codex#43965 reports the same)."
+      },
+      {
+        "url": "builtin:openai.public-api.user-declaration.20261029",
+        "note": "The user explicitly fixes the public API inventory to eight undated GPT-5.6, GPT-6 and GPT-6.1 conversation models. All use Responses, file/image input, low/medium/high/xhigh/max reasoning, 1050000 context and 128000 maximum output. API filtering is entry-scoped; Codex subscription declarations remain unchanged."
+      },
+      {
+        "url": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+        "note": "Official Sol documentation supplies the shared 1050000 context, 128000 maximum output and reasoning levels adopted by the explicit user policy."
+      },
+      {
+        "url": "https://api.openai.com/v1/models",
+        "note": "Authenticated read-only discovery on 2026-10-29 listed all eleven approved undated IDs. The endpoint reports identity and lifecycle fields only, so runtime membership intersects this exact allowlist; inference was not tested."
+      },
+      {
+        "url": "https://developers.openai.com/api/reference/resources/images/methods/generate",
+        "note": "Official generation parameters define synchronous JSON requests, prompt length, n 1-10, output formats, conditional compression/transparency, safety identifier and per-model quality levels. GPT Image 2.5 adds xhigh/max; legacy style and response_format are excluded."
+      },
+      {
+        "url": "https://developers.openai.com/api/docs/guides/image-prompting",
+        "note": "Custom dimensions require multiples of 16, edges no greater than 3840, aspect ratio within 1:3 and 3:1, and 655360-8294400 pixels. Outputs above 3686400 pixels are experimental."
       }
-    ]
+    ],
+    "verified_at": "2026-10-29T13:36:33Z"
   }
 }

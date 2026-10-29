@@ -243,7 +243,7 @@ pub(super) fn project_manifest_protocol_variants_for_connection(
         model.id.as_str(),
     );
     if rule.is_none()
-        && manifest.unknown_model_policy
+        && entry_defaults.unknown_model_policy
             == crate::provider_manifest::UnknownModelPolicy::DeclaredRuleRequired
     {
         model.protocol_variants.clear();

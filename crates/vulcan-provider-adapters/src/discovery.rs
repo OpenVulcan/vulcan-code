@@ -573,9 +573,9 @@ pub fn enrich_compatible_model_catalog_with_manifest(
             model,
         );
         if !matched
-            && resolved.unknown_model_policy
-                == crate::provider_manifest::UnknownModelPolicy::DefaultBindingAllowed
             && let Ok(defaults) = resolved.model_defaults_for_entry(service_entry_id)
+            && defaults.unknown_model_policy
+                == crate::provider_manifest::UnknownModelPolicy::DefaultBindingAllowed
             && let Some(default_capabilities) = defaults.capabilities.as_ref()
         {
             // Dedicated discovery endpoints prove specialized operations, and the signed native

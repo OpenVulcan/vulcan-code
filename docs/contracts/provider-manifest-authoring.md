@@ -201,6 +201,12 @@ Schema v2 将凭据档的用途字段固定为 `default_usage_scopes`。它只�
 - 一个或多个已验证 `protocol_routes`；
 - 可选入口级模型默认覆盖。
 
+`model_defaults_override` 可以分别覆盖 `catalog_membership_policy`、`unknown_model_policy`、
+`supported_protocols` 与 `selected_protocol`。缺省字段继承供应商根默认值。编译器将生效策略冻结到
+逐入口默认值中，目录成员投影、发现授权、协议绑定、默认能力和 Profile 继承必须读取同一入口的
+冻结值；不能用供应商根策略覆盖入口声明。远端更新不能通过删除覆盖字段或修改根默认值，扩大
+随包入口的生效成员或绑定权限。
+
 `request_projector` 只允许供应商无关的三种封闭原语：
 
 - `direct`：协议编码后不进入供应商兼容投影；自定义供应商固定使用此值；
@@ -564,6 +570,17 @@ signed_object_upload
 3. `tool_targets` 把 AI Tool 绑定到入口、凭据档和 Operation；
 4. 模型规则通过 `operation_refs` 或 capabilities 声明模型支持的功能；
 5. fixtures 验证参数映射、请求、轮询/取消和规范化输出。
+
+资源解码器的 `source_path` 选择一个载体或有序数组。响应为对象数组时，可额外声明
+`item_source_path`，在每条记录内用精确 JSON Pointer 选择载体；例如 `/data` 配合 `/b64_json`。
+每一项都必须解码成功，资源数量和单项字节上限继续生效。不得只读取数组首项或猜测载体字段。
+二进制正文不能声明记录项选择器。
+
+公共模型能力资源 `common_model_capabilities.json` 的版本为 2。除上下文和输入输出模态外，记录还可
+声明 `output_limit`、`reasoning`、`reasoning_control`、`reasoning_efforts`。这些字段只由精确来源声明
+补齐未知能力，不能覆盖更具体的供应商事实。旧资源版本明确拒绝。生成脚本优先采用官方供应商
+声明，再处理同名中转记录；供应商清单仍持有逐入口协议和 Provider Tool 参数，公共表不授予模型
+目录成员权限。
 
 图片、视频、音频理解使用额外的固定宿主外壳。`image_understand`、`video_understand`、
 `audio_understand` 暴露给 AI 的参数永远分别只有一个媒体路径或 URL 和 `prompt`；Manifest 中的

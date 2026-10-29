@@ -14,7 +14,7 @@ fn explicit_model_parameter_defaults_are_applied_before_validation() {
     let mut catalog = parse_openai_model_catalog(
         "connection",
         1,
-        r#"{"object":"list","data":[{"id":"MiniMax-M2.7","object":"model","created":1,"owned_by":"minimax"}]}"#,
+        r#"{"object":"list","data":[{"id":"MiniMax-M3","object":"model","created":1,"owned_by":"minimax"}]}"#,
     )
     .expect("MiniMax model fixture should parse");
     let manifests = crate::provider_manifest::load_bundled_resolved_catalog();

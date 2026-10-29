@@ -17,6 +17,9 @@ import grokLightIcon from "@/assets/provider-icons/provider-grok-light.svg"
 import kimiDarkIcon from "@/assets/provider-icons/provider-kimi-dark.svg"
 import kimiLightIcon from "@/assets/provider-icons/provider-kimi-light.svg"
 import miniMaxIcon from "@/assets/provider-icons/provider-minimax.svg"
+// NODEAI's supplied square artwork uses the shared proportional icon sizing.
+// NODEAI 提供的方形原图使用共享图标布局等比缩放。
+import nodeAiIcon from "@/assets/provider-icons/provider-nodeai.png"
 import openAICompatibilityDarkIcon from "@/assets/provider-icons/provider-openai-compat-dark.svg"
 import openAICompatibilityLightIcon from "@/assets/provider-icons/provider-openai-compat-light.svg"
 import openCodeGoIcon from "@/assets/provider-icons/provider-opencode-go.svg"
@@ -51,6 +54,7 @@ export type ProviderIconKey =
   | "grok"
   | "kimi"
   | "minimax"
+  | "nodeai"
   | "opencode-go"
   | "open-design"
   | "openvulcan"
@@ -122,6 +126,7 @@ const providerIconLibrary: Readonly<Record<ProviderIconKey, ProviderIconAsset>> 
     transparent: true,
   },
   minimax: { light: miniMaxIcon },
+  nodeai: { light: nodeAiIcon, transparent: true },
   "opencode-go": { light: openCodeGoIcon, monochrome: true, transparent: true },
   "open-design": { light: openDesignIcon, monochrome: true, transparent: true },
   openvulcan: { symbol: "vulcan" },
@@ -151,6 +156,7 @@ const providerIconMap: Readonly<Record<string, ProviderIconKey>> = {
   google: "gemini",
   kimi: "kimi",
   minimax: "minimax",
+  nodeai: "nodeai",
   openai: "compatibility",
   "opencode-go": "opencode-go",
   "open-design": "open-design",

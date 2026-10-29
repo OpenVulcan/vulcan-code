@@ -326,29 +326,21 @@ fn minimax_manifest_request_profiles_produce_legacy_equivalent_wire() {
     );
 }
 
-/// Verifies the Token Plan M3.1 Flash Preview rule and every explicit reasoning effort.
-/// 验证 Token Plan 的 M3.1 Flash Preview 规则与全部显式推理档位。
+/// Verifies the formal M3.1 Flash rule and every explicit reasoning effort across credential scopes.
+/// 验证正式版 M3.1 Flash 在各凭据作用域中的规则与全部显式推理档位。
 #[test]
-fn minimax_m3_1_flash_preview_projects_token_plan_efforts() {
+fn minimax_m3_1_flash_projects_reasoning_efforts() {
     // manifest is the compiled bundled authority used to resolve credential-scoped model rules.
     // manifest 是解析凭据作用域模型规则所使用的已编译内置权威清单。
     let manifests = crate::provider_manifest::load_bundled_resolved_manifests();
     let manifest = manifests
         .get("minimax")
         .expect("MiniMax manifest must be bundled");
-    // tokenPlanRule proves the exact preview model is declared only for Token Plan credentials.
-    // tokenPlanRule 验证预览模型的精确规则仅向 Token Plan 凭据声明。
+    // tokenPlanRule resolves the formal model independently of the older M3 reasoning toggle.
+    // tokenPlanRule 独立于旧 M3 思考开关解析正式版模型。
     let token_plan_rule = manifest
-        .rule_for_model(
-            "global",
-            Some("token-plan-key"),
-            "MiniMax-M3.1-Flash-Preview",
-        )
-        .expect("Token Plan M3.1 Flash Preview rule must resolve");
-    assert_eq!(
-        token_plan_rule.rule_id,
-        "minimax-m3-1-flash-preview-token-plan"
-    );
+        .rule_for_model("global", Some("token-plan-key"), "MiniMax-M3.1-Flash")
+        .expect("Token Plan M3.1 Flash rule must resolve");
     assert_eq!(
         token_plan_rule.selected_protocol.as_deref(),
         Some(ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID)
@@ -371,12 +363,22 @@ fn minimax_m3_1_flash_preview_projects_token_plan_efforts() {
             ReasoningEffort::Max,
         ]
     );
-    // paygRule confirms the Token Plan declaration does not leak into pay-as-you-go identity.
-    // paygRule 确认 Token Plan 声明不会泄漏到按量付费身份。
-    let payg_rule = manifest
-        .rule_for_model("global", Some("payg-api-key"), "MiniMax-M3.1-Flash-Preview")
-        .expect("the existing M3 prefix remains the pay-as-you-go fallback");
-    assert_eq!(payg_rule.rule_id, "reasoning-minimax-m3");
+    // serviceEntry and credentialProfile exercise both regions and every supported credential kind.
+    // serviceEntry 与 credentialProfile 覆盖两个区域及每种受支持的凭据类型。
+    for service_entry in ["global", "cn"] {
+        for credential_profile in ["payg-api-key", "token-plan-key", "token-plan-oauth"] {
+            // formalRule must retain the exact effort contract instead of inheriting the M3 toggle.
+            // formalRule 必须保留精确的档位契约，不能继承 M3 的思考开关。
+            let formal_rule = manifest
+                .rule_for_model(
+                    service_entry,
+                    Some(credential_profile),
+                    "MiniMax-M3.1-Flash",
+                )
+                .expect("formal M3.1 Flash rule must resolve for this credential");
+            assert_eq!(formal_rule.rule_id, token_plan_rule.rule_id);
+        }
+    }
 
     // effortProfile is the model-owned projection that replaces the older adaptive-thinking chain.
     // effortProfile 是替换旧自适应思考链的模型专属投影。
@@ -407,7 +409,7 @@ fn minimax_m3_1_flash_preview_projects_token_plan_efforts() {
         // request carries one exact user-selected effort without a synthetic thinking toggle.
         // request 携带一个精确的用户所选档位，且不引入虚构的思考开关。
         let mut request = minimal_request();
-        request.model_id = String::from("MiniMax-M3.1-Flash-Preview");
+        request.model_id = String::from("MiniMax-M3.1-Flash");
         request.reasoning_effort = Some(effort);
         // encoded must match MiniMax Code's forced-on output_config effort contract.
         // encoded 必须符合 MiniMax Code 强制开启思考时的 output_config 档位契约。
@@ -418,17 +420,17 @@ fn minimax_m3_1_flash_preview_projects_token_plan_efforts() {
         assert!(encoded.body.get("thinking").is_none());
     }
 
-    // defaultRequest represents the user-visible default option and must project MiniMax's literal label.
-    // defaultRequest 表示用户可见的默认选项，必须投影 MiniMax 的字面档位标签。
+    // defaultRequest represents the user-visible default option and uses the documented maximum effort.
+    // defaultRequest 表示用户可见的默认选项，使用文档声明的最高思考档位。
     let mut default_request = minimal_request();
-    default_request.model_id = String::from("MiniMax-M3.1-Flash-Preview");
-    // defaultEncoded matches MiniMax Code's managed forced-on payload for the default selection.
-    // defaultEncoded 对齐 MiniMax Code 托管强制思考模式下默认选择的请求载荷。
+    default_request.model_id = String::from("MiniMax-M3.1-Flash");
+    // defaultEncoded must never send the retired Preview-only default effort label.
+    // defaultEncoded 不能继续发送已退役 Preview 专属的 default 档位标签。
     let default_encoded = client
         .encode_request(&route, &default_request)
         .expect("M3.1 Flash provider default should encode");
     assert!(default_encoded.body.get("thinking").is_none());
-    assert_eq!(default_encoded.body["output_config"]["effort"], "default");
+    assert_eq!(default_encoded.body["output_config"]["effort"], "max");
 }
 
 /// Verifies the projection executor rejects an unsupported MiniMax effort like the legacy fn.

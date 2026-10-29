@@ -3221,6 +3221,16 @@ fn decode_declared_generic_resources(
             ));
         }
         for (source_index, value) in values.iter().enumerate() {
+            // A declared record selector preserves every array item without guessing carrier fields.
+            // 已声明的记录选择器保留每个数组项，绝不猜测载体字段。
+            let value = match decoder.item_source_path.as_deref() {
+                Some(path) => value.pointer(path).ok_or_else(|| {
+                    format!(
+                        "Provider tool resource decoder {decoder_index} item {source_index} is missing item source path `{path}`."
+                    )
+                })?,
+                None => value,
+            };
             // The global index is stable across multiple extractor declarations.
             // 全局索引在多个提取器声明之间保持稳定。
             let global_index = resources.len();
@@ -4672,6 +4682,7 @@ mod tests {
             resource_decoders: vec![
                 crate::ProviderToolResourceDecoder {
                     source_path: String::from("/inline"),
+                    item_source_path: None,
                     encoding: crate::ProviderToolResourceEncoding::DataUrl,
                     resource_kind: String::from("image"),
                     mime_type: None,
@@ -4683,6 +4694,7 @@ mod tests {
                 },
                 crate::ProviderToolResourceDecoder {
                     source_path: String::from("/url"),
+                    item_source_path: None,
                     encoding: crate::ProviderToolResourceEncoding::HttpsUrl,
                     resource_kind: String::from("image"),
                     mime_type: Some(String::from("image/png")),
@@ -4734,6 +4746,7 @@ mod tests {
             resource_decoders: vec![
                 crate::ProviderToolResourceDecoder {
                     source_path: String::from("/data/audio"),
+                    item_source_path: None,
                     encoding: crate::ProviderToolResourceEncoding::Hex,
                     resource_kind: String::from("audio"),
                     mime_type: None,
@@ -4745,6 +4758,7 @@ mod tests {
                 },
                 crate::ProviderToolResourceDecoder {
                     source_path: String::from("/data/subtitle_file"),
+                    item_source_path: None,
                     encoding: crate::ProviderToolResourceEncoding::PublicHttpUrl,
                     resource_kind: String::from("file"),
                     mime_type: Some(String::from("application/json")),
@@ -4826,6 +4840,7 @@ mod tests {
             mime_types: vec![String::from("audio/mpeg")],
             resource_decoders: vec![crate::ProviderToolResourceDecoder {
                 source_path: String::from("/audio"),
+                item_source_path: None,
                 encoding: crate::ProviderToolResourceEncoding::Base64,
                 resource_kind: String::from("audio"),
                 mime_type: None,
@@ -4858,6 +4873,75 @@ mod tests {
         )
         .expect_err("unregistered request MIME selection must fail");
         assert!(mime_error.contains("no MIME mapping"));
+    }
+
+    /// Verifies record-array decoders retain every ordered image and select the requested MIME.
+    /// 验证记录数组解码器保留每张图片的顺序，并选择请求指定的 MIME。
+    #[test]
+    fn generic_resource_record_arrays_preserve_all_items_and_request_formats() {
+        // The declared item pointer selects the carrier inside each response record.
+        // 已声明的数组项指针选择每条响应记录内部的载体。
+        let contract: crate::ProviderToolOutputContract = serde_json::from_value(serde_json::json!({
+            "kind": "resources",
+            "source_path": "/",
+            "normalized_result_path": "resources",
+            "resource_kind": "image",
+            "mime_types": ["image/png", "image/jpeg", "image/webp"],
+            "resource_decoders": [{
+                "source_path": "/data",
+                "item_source_path": "/b64_json",
+                "encoding": "base64",
+                "resource_kind": "image",
+                "mime_type_request_path": "/output_format",
+                "mime_types_by_request_value": {"png": "image/png", "jpeg": "image/jpeg", "webp": "image/webp"},
+                "max_bytes": 16,
+                "output_id_prefix": "image"
+            }]
+        })).expect("record array contract must deserialize");
+        for (format, mime) in [
+            ("png", "image/png"),
+            ("jpeg", "image/jpeg"),
+            ("webp", "image/webp"),
+        ] {
+            // Distinct decoded bytes make loss or reordering observable.
+            // 不同解码字节使丢失或顺序变化可被观察。
+            let result = decode_generic_json_sync_output_with_request(
+                &contract,
+                r#"{"data":[{"b64_json":"Zmlyc3Q="},{"b64_json":"c2Vjb25k"}]}"#,
+                Some(&serde_json::json!({"output_format": format})),
+            )
+            .expect("every declared image format must decode");
+            let ProviderToolNormalizedOutput::Resources(resources) = result.output else {
+                panic!("record array must produce resources");
+            };
+            assert_eq!(resources.len(), 2);
+            assert_eq!(resources[0].bytes.as_deref(), Some(b"first".as_slice()));
+            assert_eq!(resources[1].bytes.as_deref(), Some(b"second".as_slice()));
+            assert!(resources.iter().all(|resource| resource.mime_type == mime));
+        }
+        // An absent carrier cannot be skipped after another record has already decoded.
+        // 即使之前已有记录解码成功，也不能跳过缺失的载体。
+        assert!(
+            decode_generic_json_sync_output_with_request(
+                &contract,
+                r#"{"data":[{"b64_json":"Zmlyc3Q="},{}]}"#,
+                Some(&serde_json::json!({"output_format": "png"})),
+            )
+            .is_err()
+        );
+        // Existing resource-count bounds still apply to record arrays.
+        // 现有资源数量边界仍适用于记录数组。
+        let oversized = serde_json::json!({
+            "data": vec![serde_json::json!({"b64_json": "aA=="}); GENERIC_RESOURCE_COUNT_LIMIT + 1]
+        });
+        assert!(
+            decode_generic_json_sync_output_with_request(
+                &contract,
+                &oversized.to_string(),
+                Some(&serde_json::json!({"output_format": "png"})),
+            )
+            .is_err()
+        );
     }
 
     /// Verifies generic error envelopes retain every standard diagnostic field.

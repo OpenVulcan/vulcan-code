@@ -83,10 +83,10 @@ pub fn models() -> Vec<ModelInfo> {
         ),
         model("gpt-5.6", "GPT-5.6", "OpenAI", 272_000),
         model(
-            "minimax-m3.1-flash-preview",
-            "MiniMax M3.1 Flash Preview",
+            "MiniMax-M3.1-Flash",
+            "MiniMax M3.1 Flash",
             "MiniMax",
-            200_000,
+            1_000_000,
         ),
     ]
 }

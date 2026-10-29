@@ -288,6 +288,7 @@ pub(super) fn apply_model_catalog_overlays_with_account_access(
         // 远端证据；用户手工身份仍只由显式来源策略管理。
         if source_is_discovery
             && !manifest
+                .model_defaults_for_entry(service_entry_id)?
                 .catalog_membership_policy
                 .admits_unmatched_discovery()
         {
@@ -310,6 +311,7 @@ pub(super) fn apply_model_catalog_overlays_with_account_access(
             });
         } else if source_is_manifest
             && !manifest
+                .model_defaults_for_entry(service_entry_id)?
                 .catalog_membership_policy
                 .includes_declared_identities()
         {
@@ -324,6 +326,7 @@ pub(super) fn apply_model_catalog_overlays_with_account_access(
             )
         })?;
         if manifest
+            .model_defaults_for_entry(service_entry_id)?
             .catalog_membership_policy
             .includes_declared_identities()
         {

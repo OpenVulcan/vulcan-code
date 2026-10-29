@@ -808,10 +808,6 @@ const NESTED_CONTRACT_CASES: &[NestedContractCase] = &[
         "openai.json",
         &["services", "protocol_routes", "responses_features"],
     ),
-    (
-        "openai.json",
-        &["model_rules", "capabilities", "prompt_cache"],
-    ),
     ("alibaba.json", &["usage_profiles", "payload"]),
     ("minimax.json", &["request_profiles", "payload", "steps"]),
     ("minimax.json", &["response_profiles", "payload", "steps"]),
@@ -944,6 +940,35 @@ fn nested_contract_trail_resolution_backtracks() {
         nested_contract_target(&mut document, &["services", "absent_contract"]),
         None
     );
+}
+
+/// Verifies optional prompt-cache contracts close unknown fields without requiring catalog content.
+/// 验证可选提示词缓存契约拒绝未知字段，且不依赖目录内容。
+#[test]
+fn optional_prompt_cache_contract_closes_unknown_fields() {
+    // A synthetic cache declaration keeps this format probe independent of model additions/removals.
+    // 合成缓存声明使此格式验证独立于模型增删。
+    let mut cache = serde_json::json!({
+        "provider_default_behavior": "probe",
+        "supports_managed_explicit": false,
+        "supported_ttl_options": []
+    });
+    // The same committed definition and imported Rust type must agree on both shapes.
+    // 同一已提交定义与导入的 Rust 类型必须对两种形状保持一致。
+    let schema = load_schema("provider-manifest-v2.schema.json");
+    let cache_schema = serde_json::json!({
+        "$defs": schema["$defs"],
+        "$ref": "#/$defs/prompt_cache_capability"
+    });
+    let validator =
+        jsonschema::draft202012::new(&cache_schema).expect("cache contract schema must compile");
+    assert!(validator.is_valid(&cache));
+    assert!(
+        serde_json::from_value::<vulcan_ai_contract::PromptCacheCapability>(cache.clone()).is_ok()
+    );
+    cache["unexpected"] = serde_json::json!(true);
+    assert!(!validator.is_valid(&cache));
+    assert!(serde_json::from_value::<vulcan_ai_contract::PromptCacheCapability>(cache).is_err());
 }
 
 /// Verifies production manifest parsing rejects unknown fields in imported nested contracts.

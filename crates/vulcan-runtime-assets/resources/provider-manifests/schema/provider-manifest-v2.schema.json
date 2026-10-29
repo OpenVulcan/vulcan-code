@@ -826,6 +826,12 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
+              "catalog_membership_policy": {
+                "$ref": "#/properties/model_defaults/properties/catalog_membership_policy"
+              },
+              "unknown_model_policy": {
+                "$ref": "#/properties/model_defaults/properties/unknown_model_policy"
+              },
               "supported_protocols": {
                 "type": "array",
                 "items": {
@@ -1405,6 +1411,7 @@
       "required": ["source_path", "encoding", "resource_kind"],
       "properties": {
         "source_path": {"type": "string"},
+        "item_source_path": {"type": "string"},
         "encoding": {"$ref": "#/$defs/provider_tool_resource_encoding"},
         "resource_kind": {"type": "string"},
         "mime_type": {"type": "string"},

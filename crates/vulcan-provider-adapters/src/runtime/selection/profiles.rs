@@ -96,7 +96,10 @@ fn effective_model_profile_refs<'a>(
             ),
         });
     }
-    if manifest.unknown_model_policy
+    // Unmatched models may inherit profiles only under their own service entry's authority.
+    // 未匹配模型仅能依据自身服务入口的权限继承 Profile。
+    let defaults = manifest.model_defaults_for_entry(service_entry_id)?;
+    if defaults.unknown_model_policy
         != crate::provider_manifest::UnknownModelPolicy::DefaultBindingAllowed
     {
         return Ok(EffectiveModelProfileRefs {
@@ -108,7 +111,6 @@ fn effective_model_profile_refs<'a>(
             response_overrides_route_default: false,
         });
     }
-    let defaults = manifest.model_defaults_for_entry(service_entry_id)?;
     Ok(EffectiveModelProfileRefs {
         usage: defaults.usage_profile_refs.as_slice(),
         usage_overrides_route_default: !defaults.usage_profile_refs.is_empty(),

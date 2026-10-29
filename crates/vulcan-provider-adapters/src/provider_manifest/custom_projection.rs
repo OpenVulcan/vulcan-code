@@ -345,6 +345,8 @@ fn convert_service_entry(entry: &ServiceEntry) -> ManifestServiceEntry {
             .collect(),
         model_defaults_override: (entry.kind == crate::ServiceEntryKind::Conversation).then_some(
             ModelDefaultsOverlay {
+                catalog_membership_policy: None,
+                unknown_model_policy: None,
                 supported_protocols: Some(supported_protocols),
                 selected_protocol,
             },

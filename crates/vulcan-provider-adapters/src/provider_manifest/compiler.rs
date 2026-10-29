@@ -106,6 +106,12 @@ struct BundledManifestGenerationLoad {
 /// 为一个精确对话服务入口冻结的生效供应商默认值。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedEntryModelDefaults {
+    /// Effective membership authority frozen for this service entry.
+    /// 为此服务入口冻结的生效成员权限。
+    pub catalog_membership_policy: CatalogMembershipPolicy,
+    /// Effective unmatched-model binding authority frozen for this service entry.
+    /// 为此服务入口冻结的生效未匹配模型绑定权限。
+    pub unknown_model_policy: UnknownModelPolicy,
     /// Protocol candidates authorized for unmatched models and inherited rules on this entry.
     /// 此入口上授权给未匹配模型并由规则继承的协议候选。
     pub supported_protocols: Vec<String>,
@@ -1221,6 +1227,12 @@ pub fn compile_manifest_with_layer(
             (
                 entry.service_entry_id.clone(),
                 ResolvedEntryModelDefaults {
+                    catalog_membership_policy: manifest
+                        .model_defaults
+                        .catalog_membership_for_entry(entry),
+                    unknown_model_policy: manifest
+                        .model_defaults
+                        .unknown_model_policy_for_entry(entry),
                     supported_protocols,
                     selected_protocol,
                     tool_schema_projection: manifest.model_defaults.tool_schema_projection,

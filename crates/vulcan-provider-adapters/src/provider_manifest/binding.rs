@@ -219,16 +219,18 @@ pub fn resolve_system_model_protocol_binding(
             rule_id: instance.rule_id.clone(),
         });
     }
-    match resolved.unknown_model_policy {
+    // The compiled entry owns fallback authority independently from sibling services.
+    // 已编译入口独立于同级服务持有兜底绑定权限。
+    let defaults = resolved
+        .model_defaults_for_entry(service_entry_id)
+        .map_err(|_| ModelProtocolBindingError::UnknownServiceEntry {
+            service_entry_id: service_entry_id.to_string(),
+        })?;
+    match defaults.unknown_model_policy {
         UnknownModelPolicy::DeclaredRuleRequired => Err(ModelProtocolBindingError::Missing {
             model_id: model_id.to_string(),
         }),
         UnknownModelPolicy::DefaultBindingAllowed => {
-            let defaults = resolved
-                .model_defaults_for_entry(service_entry_id)
-                .map_err(|_| ModelProtocolBindingError::UnknownServiceEntry {
-                    service_entry_id: service_entry_id.to_string(),
-                })?;
             let protocol_profile_id = defaults.selected_protocol.clone().ok_or_else(|| {
                 ModelProtocolBindingError::NoDefaultProtocol {
                     model_id: model_id.to_string(),
@@ -528,32 +530,106 @@ mod tests {
         assert!(matches!(error, ModelProtocolBindingError::Missing { .. }));
     }
 
-    /// Verifies entry-level defaults prevent subscription routes from inheriting another entry's protocol.
-    /// 验证入口级默认值可防止订阅路由继承其他入口的协议。
+    /// Verifies entry policies isolate default binding and membership authority between services.
+    /// 验证入口策略在不同服务之间隔离默认绑定与成员权限。
     #[test]
     fn default_binding_uses_exact_service_entry_override() {
-        let manifest = compile_manifest_text(&bundled_text("openai"), ManifestOwnership::System)
-            .expect("openai manifest must compile");
-        let public_binding = resolve_system_model_protocol_binding(
-            &manifest,
-            "public-api",
-            Some("api-key"),
-            "gpt-future-public",
-        )
-        .expect("public unknown model must use the public entry default");
-        assert_eq!(public_binding.protocol_profile_id, OPENAI_CHAT_PROFILE_ID);
-
-        let subscription_binding = resolve_system_model_protocol_binding(
-            &manifest,
-            "codex-subscription",
-            Some("codex-oauth"),
-            "gpt-future-subscription",
-        )
-        .expect("subscription unknown model must use the subscription entry default");
-        assert_eq!(
-            subscription_binding.protocol_profile_id,
-            OPENAI_CODEX_RESPONSES_PROFILE_ID
-        );
+        // Synthetic services isolate policy behavior from the bundled model inventory.
+        // 合成服务将策略行为与内置模型清单隔离。
+        let mut declaration = serde_json::json!({
+            "schema_version": "vulcan.provider-manifest.v2",
+            "provider_id": "entry-policy-probe",
+            "revision": 1,
+            "published_at": "2026-10-29T00:00:00Z",
+            "engine_contract": {
+                "minimum_manifest_engine": 1,
+                "required_protocol_profiles": [OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID]
+            },
+            "display": {"name": "Entry Policy Probe", "category": "official"},
+            "services": [],
+            "model_defaults": {
+                "default_enabled": true,
+                "catalog_membership_policy": "declared_and_discovery",
+                "unknown_model_policy": "default_binding_allowed",
+                "supported_protocols": [OPENAI_CHAT_PROFILE_ID],
+                "selected_protocol": OPENAI_CHAT_PROFILE_ID,
+                "capabilities": {"operations": ["conversation_respond"]}
+            },
+            "model_rules": [],
+            "provenance": {"status": "migrated", "sources": []}
+        });
+        for (entry_id, protocol, membership, binding) in [
+            (
+                "restricted",
+                OPENAI_RESPONSES_PROFILE_ID,
+                "declared_only",
+                "declared_rule_required",
+            ),
+            (
+                "discovered",
+                OPENAI_CHAT_PROFILE_ID,
+                "discovery_evidence",
+                "default_binding_allowed",
+            ),
+        ] {
+            declaration["services"].as_array_mut().expect("service array").push(serde_json::json!({
+                "service_entry_id": entry_id,
+                "display_name": entry_id,
+                "kind": "conversation",
+                "base_url": "https://entry-policy.example.test/v1",
+                "credential_profiles": [{"credential_profile_id": "api-key", "display_name": "API Key", "credential_mode": "token"}],
+                "default_authentication": "bearer_authorization",
+                "model_catalog": {"source_policy": "discovery_only", "discovery_kind": "open_ai"},
+                "model_defaults_override": {
+                    "catalog_membership_policy": membership,
+                    "unknown_model_policy": binding,
+                    "supported_protocols": [protocol],
+                    "selected_protocol": protocol
+                },
+                "protocol_routes": [{"protocol_profile_id": protocol, "endpoint_path": "/inference", "verified": true}]
+            }));
+        }
+        for root_binding in ["default_binding_allowed", "declared_rule_required"] {
+            declaration["model_defaults"]["unknown_model_policy"] = serde_json::json!(root_binding);
+            // Each compiled entry freezes its own authority regardless of the root setting.
+            // 无论根设置如何，每个已编译入口都冻结自身权限。
+            let manifest =
+                compile_manifest_text(&declaration.to_string(), ManifestOwnership::System)
+                    .expect("entry policy declaration must compile");
+            assert!(matches!(
+                resolve_system_model_protocol_binding(
+                    &manifest,
+                    "restricted",
+                    Some("api-key"),
+                    "unknown"
+                ),
+                Err(ModelProtocolBindingError::Missing { .. })
+            ));
+            // The permissive sibling retains its own route and default binding.
+            // 允许发现模型的同级入口保留自身路由与默认绑定。
+            let binding = resolve_system_model_protocol_binding(
+                &manifest,
+                "discovered",
+                Some("api-key"),
+                "unknown",
+            )
+            .expect("the permissive sibling must retain its own default binding");
+            assert_eq!(binding.protocol_profile_id, OPENAI_CHAT_PROFILE_ID);
+            assert_eq!(
+                manifest
+                    .model_defaults_for_entry("restricted")
+                    .expect("restricted defaults")
+                    .catalog_membership_policy,
+                super::super::CatalogMembershipPolicy::DeclaredOnly
+            );
+            assert_eq!(
+                manifest
+                    .model_defaults_for_entry("discovered")
+                    .expect("discovered defaults")
+                    .catalog_membership_policy,
+                super::super::CatalogMembershipPolicy::DiscoveryEvidence
+            );
+        }
     }
 
     /// Verifies Auto resolves by the fixed priority inside the enabled set (plan §13.3.4).

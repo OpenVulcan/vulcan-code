@@ -39,8 +39,34 @@ function Format-ModalityList {
     return @($Values | Where-Object { $_ } | Sort-Object -Unique)
 }
 
-# Resolves effective model capabilities with the same field-presence inheritance used by the manifest compiler.
-# 按清单编译器的字段存在性继承规则解析模型的生效能力。
+# Reads one capability by field presence, including an explicitly empty list or null.
+# 按字段存在性读取能力，保留显式空列表和 null。
+# Parameters identify the default object, optional rule object, and exact field name.
+# 参数指定默认对象、可选规则对象与精确字段名。
+# Returns the declared field value or null when neither declaration owns that field.
+# 返回已声明字段值；两层都未持有该字段时返回 null。
+function Get-DeclaredCapabilityValue {
+    param(
+        [AllowNull()][object]$Defaults,
+        [AllowNull()][object]$Specific,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    if ($null -ne $Specific -and $null -ne $Specific.PSObject.Properties[$Name]) {
+        return $Specific.PSObject.Properties[$Name].Value
+    }
+    if ($null -ne $Defaults -and $null -ne $Defaults.PSObject.Properties[$Name]) {
+        return $Defaults.PSObject.Properties[$Name].Value
+    }
+    return $null
+}
+
+# Builds one common record from exact default and rule declarations.
+# 从精确默认值与规则声明构建一条公共记录。
+# Parameters identify the canonical key, owning manifest, and optional matched rule.
+# 参数指定规范键、所属清单与可选匹配规则。
+# Returns declared limits, reasoning settings, and operation-derived modalities.
+# 返回已声明上限、思考设置与根据操作派生的模态。
 function New-ProviderCapabilityRecord {
     param(
         [Parameter(Mandatory = $true)][string]$Key,
@@ -50,10 +76,10 @@ function New-ProviderCapabilityRecord {
 
     $defaults = $Manifest.model_defaults.capabilities
     $specific = if ($null -ne $Rule) { $Rule.capabilities } else { $null }
-    $operations = @(if ($null -ne $specific -and $null -ne $specific.operations) { $specific.operations } else { $defaults.operations })
-    $declaredInputs = @(if ($null -ne $specific -and $null -ne $specific.input_resources) { $specific.input_resources } else { $defaults.input_resources })
-    $declaredOutputs = @(if ($null -ne $specific -and $null -ne $specific.output_resources) { $specific.output_resources } else { $defaults.output_resources })
-    $contextWindow = if ($null -ne $specific -and $null -ne $specific.context_limit) { $specific.context_limit } else { $defaults.context_limit }
+    $operations = @(Get-DeclaredCapabilityValue $defaults $specific "operations")
+    $declaredInputs = @(Get-DeclaredCapabilityValue $defaults $specific "input_resources")
+    $declaredOutputs = @(Get-DeclaredCapabilityValue $defaults $specific "output_resources")
+    $contextWindow = Get-DeclaredCapabilityValue $defaults $specific "context_limit"
     if ($null -ne $contextWindow -and [long]$contextWindow -le 0) { $contextWindow = $null }
     $inputs = Format-ModalityList (@($(if ($operations.Count -gt 0) { "text" })) + @($declaredInputs | ForEach-Object { ConvertTo-VulcanModality ([string]$_) }))
     $outputs = Format-ModalityList (@($(if ($operations -contains "conversation_respond") { "text" })) + @($declaredOutputs | ForEach-Object { ConvertTo-VulcanModality ([string]$_) }))
@@ -62,6 +88,10 @@ function New-ProviderCapabilityRecord {
         key = $Key
         aliases = if ($tail -ne $Key) { @($tail) } else { @() }
         context_window = $contextWindow
+        output_limit = Get-DeclaredCapabilityValue $defaults $specific "output_limit"
+        reasoning = Get-DeclaredCapabilityValue $defaults $specific "reasoning"
+        reasoning_control = Get-DeclaredCapabilityValue $defaults $specific "reasoning_control"
+        reasoning_efforts = @(Get-DeclaredCapabilityValue $defaults $specific "reasoning_efforts")
         input_modalities = $inputs
         output_modalities = $outputs
     }
@@ -77,12 +107,24 @@ function Get-ProviderConfiguredModelRecords {
 
     $records = [System.Collections.Generic.List[object]]::new()
     $keys = [System.Collections.Generic.HashSet[string]]::new()
-    foreach ($file in (Get-ChildItem -Path $Directory -Filter "*.json" -File | Sort-Object Name)) {
+    # Official providers own shared model facts before relays with the same model identifier.
+    # 官方供应商优先于同模型标识的中转供应商持有公共模型事实。
+    $manifestSources = foreach ($file in (Get-ChildItem -Path $Directory -Filter "*.json" -File)) {
         # Read as UTF-8 explicitly: a Windows PowerShell 5.1 host would otherwise decode a
         # BOM-less manifest with the ANSI code page and corrupt non-ASCII display names.
         # 显式以 UTF-8 读取：Windows PowerShell 5.1 主机否则会用 ANSI 代码页解码无 BOM 清单，
         # 破坏其中的非 ASCII 显示名。 (CN)
         $manifest = [System.IO.File]::ReadAllText($file.FullName, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+        [pscustomobject]@{
+            FileName = $file.Name
+            Authority = if ($manifest.display.category -eq "official") { 0 } else { 1 }
+            Manifest = $manifest
+        }
+    }
+    foreach ($source in ($manifestSources | Sort-Object Authority, FileName)) {
+        # The source object retains the already decoded authoritative manifest.
+        # 来源对象保留已解码的权威清单。
+        $manifest = $source.Manifest
         foreach ($rule in $manifest.model_rules) {
             # Only exact matchers name a model identity; prefix matchers are family selectors.
             # 只有 exact 匹配器才指向一个模型身份；prefix 匹配器是族选择器。 (CN)
@@ -173,6 +215,10 @@ function Get-ExistingModelRecords {
             key = [string]$_.key
             aliases = @($_.aliases)
             context_window = if ($null -ne $_.context_window) { [long]$_.context_window } else { $null }
+            output_limit = $_.output_limit
+            reasoning = $_.reasoning
+            reasoning_control = $_.reasoning_control
+            reasoning_efforts = @($_.reasoning_efforts)
             input_modalities = @($_.input_modalities)
             output_modalities = @($_.output_modalities)
         }
@@ -230,6 +276,10 @@ function Merge-RemoteCapabilityMetadata {
             key = $record.key
             aliases = $aliases
             context_window = $contextWindow
+            output_limit = $record.output_limit
+            reasoning = $record.reasoning
+            reasoning_control = $record.reasoning_control
+            reasoning_efforts = @($record.reasoning_efforts)
             input_modalities = Format-ModalityList $inputs
             output_modalities = Format-ModalityList $outputs
         })
@@ -274,11 +324,15 @@ function New-CommonModelCapabilityDocument {
         }
         $entry.input_modalities = @($record.input_modalities)
         $entry.output_modalities = @($record.output_modalities)
+        if ($null -ne $record.output_limit) { $entry.output_limit = [long]$record.output_limit }
+        if ($null -ne $record.reasoning) { $entry.reasoning = [string]$record.reasoning }
+        if ($null -ne $record.reasoning_control) { $entry.reasoning_control = [string]$record.reasoning_control }
+        if (@($record.reasoning_efforts).Count -gt 0) { $entry.reasoning_efforts = @($record.reasoning_efforts) }
         $entry
     }
 
     return [ordered]@{
-        schema_version = 1
+        schema_version = 2
         sources = @(
             "vulcan:bundled-provider-manifests",
             "vulcan:provider-specific-capabilities",

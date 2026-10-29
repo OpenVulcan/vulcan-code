@@ -1,0 +1,295 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "openai-public-api-gpt-image-2.5-sunburst-generate",
+  "base_manifest": "openai.json",
+  "production_target_refs": [
+    "openai::public-api.gpt-image-2.5-sunburst.generate"
+  ],
+  "tool_target": {
+    "target_id": "public-api.fixture-gpt-image-2.5-sunburst-generate",
+    "description": "Generate images synchronously with gpt-image-2.5-sunburst through the official OpenAI Images API. Custom width and height must each be divisible by 16; use output_format png or webp for transparency.",
+    "service_entry_id": "public-api",
+    "credential_profile_ids": [
+      "api-key"
+    ],
+    "upstream_target_id": "gpt-image-2.5-sunburst",
+    "availability_model_ids_any": [
+      "gpt-image-2.5-sunburst"
+    ],
+    "display_name": "GPT Image 2.5 sunburst Generation",
+    "tool_id": "fixture_openai_public_api_image_generate",
+    "capability": "image_generate",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "type": "string",
+          "const": "gpt-image-2.5-sunburst",
+          "default": "gpt-image-2.5-sunburst",
+          "description": "Exact image model selected by this target."
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32000,
+          "description": "Describe the requested image, composition, content, and style."
+        },
+        "n": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10,
+          "default": 1,
+          "description": "Number of images to return; every image is retained."
+        },
+        "quality": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "auto"
+          ],
+          "default": "auto",
+          "description": "Image rendering quality; xhigh and max require a GPT Image 2.5 model."
+        },
+        "size": {
+          "type": "string",
+          "pattern": "^(auto|[1-9][0-9]{1,3}x[1-9][0-9]{1,3})$",
+          "default": "auto",
+          "description": "Use auto or WIDTHxHEIGHT. Each edge must be divisible by 16 and at most 3840 px. Aspect ratio must stay within 1:3 to 3:1. Total pixels must be 655360 through 8294400; above 3686400 pixels is experimental."
+        },
+        "background": {
+          "type": "string",
+          "enum": [
+            "transparent",
+            "opaque",
+            "auto"
+          ],
+          "default": "auto",
+          "description": "Select transparency explicitly. Transparent output requires PNG or WebP; GPT Image 2 transparency remains in preview."
+        },
+        "output_format": {
+          "type": "string",
+          "enum": [
+            "png",
+            "jpeg",
+            "webp"
+          ],
+          "default": "png",
+          "description": "Returned image encoding."
+        },
+        "output_compression": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "JPEG or WebP compression percentage. Omit for PNG; the API default for supported formats is 100."
+        },
+        "moderation": {
+          "type": "string",
+          "enum": [
+            "low",
+            "auto"
+          ],
+          "default": "auto",
+          "description": "Provider content filtering level."
+        },
+        "safety_identifier": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Optional pseudonymous end-user identifier for provider safety monitoring."
+        },
+        "stream": {
+          "type": "boolean",
+          "const": false,
+          "default": false,
+          "description": "This target uses one synchronous JSON response."
+        }
+      },
+      "required": [
+        "prompt"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "background": {
+                "const": "transparent"
+              }
+            },
+            "required": [
+              "background"
+            ]
+          },
+          "then": {
+            "properties": {
+              "output_format": {
+                "enum": [
+                  "png",
+                  "webp"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "output_compression"
+            ]
+          },
+          "then": {
+            "properties": {
+              "output_format": {
+                "enum": [
+                  "jpeg",
+                  "webp"
+                ]
+              }
+            },
+            "required": [
+              "output_format"
+            ]
+          }
+        }
+      ]
+    },
+    "extension_profile": {
+      "summary": "Official synchronous text-to-image generation with model-specific quality settings.",
+      "input_modes": [
+        "text"
+      ],
+      "resolution_policy": {
+        "mode": "bounded_custom",
+        "custom_bounds": {
+          "minimum_width": 16,
+          "maximum_width": 3840,
+          "minimum_height": 16,
+          "maximum_height": 3840,
+          "step": 16,
+          "minimum_pixels": 655360,
+          "maximum_pixels": 8294400
+        }
+      },
+      "format_policy": {
+        "output_formats": [
+          "png",
+          "jpeg",
+          "webp"
+        ]
+      },
+      "constraints": [
+        "Each custom dimension must be a multiple of 16 pixels.",
+        "The longer-to-shorter edge ratio must not exceed 3:1.",
+        "Transparent backgrounds require PNG or WebP.",
+        "PNG requests must omit output_compression."
+      ],
+      "limitations": [
+        "Resolutions above 3686400 pixels are experimental."
+      ],
+      "evidence_refs": [
+        "docs/contracts/providers/openai-public-api-verified-facts.md#同步图片生成"
+      ]
+    },
+    "output": {
+      "kind": "resources",
+      "source_path": "/",
+      "normalized_result_path": "resources",
+      "resource_kind": "image",
+      "mime_types": [
+        "image/png",
+        "image/jpeg",
+        "image/webp"
+      ],
+      "resource_decoders": [
+        {
+          "source_path": "/data",
+          "item_source_path": "/b64_json",
+          "encoding": "base64",
+          "resource_kind": "image",
+          "mime_type_request_path": "/output_format",
+          "mime_types_by_request_value": {
+            "png": "image/png",
+            "jpeg": "image/jpeg",
+            "webp": "image/webp"
+          },
+          "max_bytes": 104857600,
+          "output_id_prefix": "image"
+        }
+      ]
+    },
+    "execution": {
+      "endpoint_path": "/fixtures/openai-public-api-gpt-image-2.5-sunburst-generate",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "http_json_sync"
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.openai-public-api-gpt-image-2.5-sunburst-generate",
+    "operation": "image_generate",
+    "carrier": "provider_tool",
+    "input_resources": [],
+    "output_resources": [
+      "image"
+    ],
+    "tool_target_refs": [
+      "public-api.fixture-gpt-image-2.5-sunburst-generate"
+    ],
+    "request_profile_refs": [],
+    "response_profile_refs": [],
+    "upload_channel_refs": [],
+    "upload_bindings": [],
+    "timeout_ms": 300000,
+    "idempotent": false
+  },
+  "upload_channels": [],
+  "required_execution_primitives": [
+    "http_json_sync"
+  ],
+  "required_upload_primitives": [],
+  "arguments": {
+    "prompt": "A portrait character on a transparent background",
+    "n": 3,
+    "quality": "max",
+    "size": "1152x2048",
+    "background": "transparent",
+    "output_format": "webp",
+    "output_compression": 90
+  },
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/fixtures/openai-public-api-gpt-image-2.5-sunburst-generate",
+      "expected_json_body": {
+        "model": "gpt-image-2.5-sunburst",
+        "n": 3,
+        "quality": "max",
+        "size": "1152x2048",
+        "background": "transparent",
+        "output_format": "webp",
+        "moderation": "auto",
+        "stream": false,
+        "prompt": "A portrait character on a transparent background",
+        "output_compression": 90
+      },
+      "response_status": 200,
+      "response_json_body": {
+        "data": [
+          {
+            "b64_json": "aW1hZ2U="
+          },
+          {
+            "b64_json": "aW1hZ2U="
+          },
+          {
+            "b64_json": "aW1hZ2U="
+          }
+        ]
+      }
+    }
+  ],
+  "expected_output_kind": "resources"
+}

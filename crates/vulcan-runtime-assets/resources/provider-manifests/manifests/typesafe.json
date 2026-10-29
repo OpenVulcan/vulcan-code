@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "typesafe",
-  "revision": 2,
-  "published_at": "2026-10-19T07:42:22Z",
+  "revision": 3,
+  "published_at": "2026-10-26T15:26:02Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -47,6 +47,10 @@
         "discovery_kind": "manifest_static",
         "models": [
           {
+            "model_id": "jev-1.14.0",
+            "display_name": "Jev 1.14"
+          },
+          {
             "model_id": "jev-1.13.0",
             "display_name": "Jev 1.13"
           }
@@ -81,12 +85,53 @@
       "typesafe-systemone.v1"
     ],
     "selected_protocol": "typesafe-systemone.v1",
+    "capabilities": {
+      "operations": [
+        "decision_evaluate"
+      ],
+      "input_resources": [],
+      "output_resources": [],
+      "reasoning": "unsupported",
+      "provider_native_tools": [],
+      "reasoning_control": "fixed_off",
+      "reasoning_efforts": [],
+      "context_limit": 32768,
+      "prompt_cache": {
+        "provider_default_behavior": "host-managed prompt cache injection is not available",
+        "supports_managed_explicit": false,
+        "supported_ttl_options": []
+      },
+      "model_parameters": [],
+      "evidence_revision": "typesafe.systemone.models.20261026",
+      "output_limit": null,
+      "embedding": null,
+      "rerank": null
+    },
     "default_usage_profile_refs": [],
     "default_request_profile_refs": [],
     "default_response_profile_refs": [],
-    "default_operation_refs": []
+    "default_operation_refs": [],
+    "provenance_ref": "https://docs.typesafe.ai/models"
   },
   "model_rules": [
+    {
+      "rule_id": "typesafe-jev-1-14-0",
+      "display_name": "Jev 1.14",
+      "scope": {
+        "service_entry_ids": ["public-api"],
+        "credential_profile_ids": ["api-key"]
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "jev-1.14.0"
+      },
+      "supported_protocols": [
+        "typesafe-systemone.v1"
+      ],
+      "selected_protocol": "typesafe-systemone.v1",
+      "model_parameters": [],
+      "provenance_ref": "https://docs.typesafe.ai/models"
+    },
     {
       "rule_id": "typesafe-jev-1-13-0",
       "display_name": "Jev 1.13",
@@ -102,30 +147,8 @@
         "typesafe-systemone.v1"
       ],
       "selected_protocol": "typesafe-systemone.v1",
-      "capabilities": {
-        "operations": [
-          "decision_evaluate"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "unsupported",
-        "provider_native_tools": [],
-        "reasoning_control": "fixed_off",
-        "reasoning_efforts": [],
-        "context_limit": 32768,
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
-        "model_parameters": [],
-        "evidence_revision": "typesafe.systemone.2026-10-10",
-        "output_limit": null,
-        "embedding": null,
-        "rerank": null
-      },
       "model_parameters": [],
-      "provenance_ref": "https://openrouter.ai/typesafe/jev-latest"
+      "provenance_ref": "https://api.typesafe.ai/v1/systemone"
     }
   ],
   "usage_profiles": [],
@@ -136,15 +159,27 @@
   "tool_targets": [],
   "provenance": {
     "status": "verified",
-    "verified_at": "2026-10-10T00:00:00Z",
+    "verified_at": "2026-10-26T15:20:59Z",
     "sources": [
       {
-        "url": "https://openrouter.ai/typesafe/jev-latest",
-        "note": "Context length is listed as 32K on one page and 64K on another; the smaller 32768 is declared."
+        "url": "https://docs.typesafe.ai/models",
+        "note": "Checked 2026-10-26: jev-1.14.0 is the latest stable release; jev-1.13.0 remains available. Both use POST /v1/systemone. Default limits are 64k tokens per request and 32k per question; the host retains its existing conservative 32768-token budget. The 262k experimental long-context header is not enabled. Moving aliases are not configured so an existing decision route never silently changes model version. Jev 1.14 has not been live-tested here."
       },
       {
         "url": "https://api.typesafe.ai/v1/systemone",
         "note": "Verified 2026-10-10 with a real request: POST with Bearer authorization and {model, state, questions} returns 200 application/json with {model, answers: {id: {type: choice, choice, probabilities, confidence}}, usage: {input_tokens, output_tokens}}; the response model echoes jev-1.13.0. Errors observed in documentation: 401, 422, 429, 529; only 429 and 529 are retryable."
+      },
+      {
+        "url": "https://docs.typesafe.ai/images",
+        "note": "Both Jev versions accept experimental PNG/JPEG image assets with TypeSafe-Danger-Zone-Images: true. The reviewed host DecisionRequest and SystemOneWireRequest do not carry assets, so this manifest intentionally does not advertise executable image input. Audio, video and image generation are not supported by this service."
+      },
+      {
+        "url": "https://docs.typesafe.ai/primitives/box",
+        "note": "Box questions require Jev 1.14 and the experimental images header. The current host decision contract and decoder support Choice only; no Box capability is enabled by this catalog update."
+      },
+      {
+        "url": "https://api.typesafe.ai/openapi.json",
+        "note": "Reviewed 2026-10-26: SystemOneRequest adds top-level assets; image data uses part or format plus data_base64. The API supports Choice, Noul, Score and Box. Box confidence is nullable in the published OpenAPI schema; a future host extension must preserve that null instead of inventing confidence."
       }
     ]
   }

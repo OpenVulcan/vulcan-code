@@ -1541,6 +1541,10 @@ pub struct ProviderToolResourceDecoder {
     /// Exact response JSON Pointer containing one resource or an ordered resource array.
     /// 包含一个资源或有序资源数组的精确响应 JSON Pointer。
     pub source_path: String,
+    /// Optional exact JSON Pointer selecting the carrier inside each selected resource record.
+    /// 可选精确 JSON Pointer，用于选择每个已选资源记录中的载体。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_source_path: Option<String>,
     /// Closed carrier encoding used to decode every selected value.
     /// 用于解码每个选中值的封闭载体编码。
     pub encoding: ProviderToolResourceEncoding,
