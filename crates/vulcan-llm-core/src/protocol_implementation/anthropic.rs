@@ -1198,9 +1198,10 @@ pub(crate) fn encode_anthropic_video(
     }))
 }
 
-/// Projects the public prompt-cache policy into Anthropic request fields.
-/// 将公共提示词缓存策略投影为 Anthropic 请求字段。
-fn encode_anthropic_cache_policy(
+/// Projects the public prompt-cache policy into Anthropic request fields, for both the direct
+/// encoder and the internal Responses projection.
+/// 将公共提示词缓存策略投影为 Anthropic 请求字段，供直接编码器与内部 Responses 投影共用。
+pub(crate) fn encode_anthropic_cache_policy(
     body: &mut Map<String, Value>,
     policy: &PromptCachePolicy,
 ) -> Result<(), ProtocolConversionError> {
@@ -1227,6 +1228,12 @@ fn encode_anthropic_cache_policy(
             {
                 tool.insert(String::from("cache_control"), cache_control.clone());
                 breakpoints += 1;
+            }
+            // A plain-text system prompt becomes one text block so it can carry a breakpoint.
+            // 纯文本系统提示词转为一个文本块，以便携带断点。
+            if let Some(Value::String(text)) = body.get("system") {
+                let block = json!([{ "type": "text", "text": text }]);
+                body.insert(String::from("system"), block);
             }
             if let Some(system) = body.get_mut("system").and_then(Value::as_array_mut)
                 && let Some(block) = system.last_mut().and_then(Value::as_object_mut)

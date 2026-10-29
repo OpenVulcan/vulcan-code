@@ -220,6 +220,9 @@ impl ProtocolProfile for OpenAiCodexResponsesProfile {
         &self,
         request: &AiExecutionRequest,
     ) -> Result<EncodedWireRequest, ProtocolConversionError> {
+        // Codex has no cache projector; internal envelopes carry the policy to their target instead.
+        // Codex 没有缓存投影器；内部封装则把策略带到其目标协议。
+        require_default_cache_policy(&request.prompt_cache, self.id())?;
         internal_input::encode_request_envelope(request, &mut encode_responses_resource)
             .map(|(encoded, _)| encoded)
     }

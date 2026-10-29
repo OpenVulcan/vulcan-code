@@ -11,7 +11,7 @@ use crate::{
 };
 use serde::Deserialize;
 use serde_json::Value;
-use vulcan_ai_contract::{ResourceKind, ResourceReference, ResourceSourceKind};
+use vulcan_ai_contract::{PromptCachePolicy, ResourceKind, ResourceReference, ResourceSourceKind};
 
 #[cfg(test)]
 mod tests;
@@ -320,6 +320,16 @@ pub fn project_internal_request_for_provider(
     context: &ProviderRouteContext,
     profile_id: &str,
 ) -> Result<EncodedWireRequest, LlmCoreError> {
+    // Only a target with a cache projector may receive an explicit cache policy.
+    // 只有具备缓存投影器的目标才能接收显式缓存策略。
+    let prompt_cache = request.prompt_cache().clone();
+    if context.upstream_protocol != UpstreamProtocol::AnthropicMessages
+        && prompt_cache != PromptCachePolicy::ProviderDefault
+    {
+        return Err(LlmCoreError::new(format!(
+            "Protocol profile `{profile_id}` requires a provider cache projector for explicit caching."
+        )));
+    }
     // Consume the internal owner; it is never serialized or sent as a wire request.
     // 消费内部所有者；内部对象绝不直接序列化或发送为线路请求。
     let (body, baseline_headers, resources, replay_sidecar) = request.into_parts();
@@ -379,12 +389,22 @@ pub fn project_internal_request_for_provider(
             )?
         }
         UpstreamProtocol::AnthropicMessages => {
-            crate::responses_to_anthropic::responses_to_anthropic_messages_with_media(
-                body,
-                context.anthropic_reasoning_mode,
-                Some(projector),
-                declared_anthropic_sidecar,
-            )?
+            let mut projected =
+                crate::responses_to_anthropic::responses_to_anthropic_messages_with_media(
+                    body,
+                    context.anthropic_reasoning_mode,
+                    Some(projector),
+                    declared_anthropic_sidecar,
+                )?;
+            let object = projected.as_object_mut().ok_or_else(|| {
+                LlmCoreError::new("Anthropic projection must produce a JSON object.")
+            })?;
+            crate::protocol_implementation::anthropic::encode_anthropic_cache_policy(
+                object,
+                &prompt_cache,
+            )
+            .map_err(|error| LlmCoreError::new(error.to_string()))?;
+            projected
         }
         UpstreamProtocol::GeminiGenerateContent => {
             crate::responses_to_gemini::responses_to_gemini_generate_content_with_media(

@@ -52,9 +52,18 @@ pub struct InternalResponsesRequest {
     /// Assistant messages captured before the generic encoder could drop any of their content.
     /// 在通用编码器可能丢弃其内容之前捕获的助手消息。
     replay_sidecar: vulcan_ai_contract::ReplaySidecar,
+    /// Prompt-cache policy applied by the exact target projection, never by this envelope.
+    /// 由精确目标投影应用的提示词缓存策略，绝不由本封装应用。
+    prompt_cache: PromptCachePolicy,
 }
 
 impl InternalResponsesRequest {
+    /// Returns the prompt-cache policy the target projection must apply or reject.
+    /// 返回目标投影必须应用或拒绝的提示词缓存策略。
+    pub(crate) fn prompt_cache(&self) -> &PromptCachePolicy {
+        &self.prompt_cache
+    }
+
     /// Exposes the internal body for existing trusted replay and token-limit projection.
     /// 公开内部正文，供既有可信重放与 Token 限制投影使用。
     /// Returns a mutable reference, not a serialized request or a transport permit.
@@ -124,6 +133,7 @@ pub fn encode_internal_responses_request(
         headers: encoded.headers,
         resources,
         replay_sidecar,
+        prompt_cache: request.prompt_cache.clone(),
     })
 }
 
@@ -194,7 +204,6 @@ pub(super) fn encode_request_envelope(
     request: &AiExecutionRequest,
     resource_encoder: ResponsesResourceEncoder<'_>,
 ) -> Result<(EncodedWireRequest, Vec<ResponsesMessageInputRange>), ProtocolConversionError> {
-    require_default_cache_policy(&request.prompt_cache, OPENAI_CODEX_RESPONSES_PROFILE_ID)?;
     // The cursor stays bound to the existing Codex continuation proof.
     // 游标继续绑定既有 Codex 延续证明。
     let continuation =

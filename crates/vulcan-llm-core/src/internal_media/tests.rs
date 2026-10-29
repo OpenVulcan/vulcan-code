@@ -306,3 +306,48 @@ fn uploaded_image_ids_use_standard_protocol_file_blocks() {
         ResourceSourceKind::ProviderFileId
     ));
 }
+
+/// Explicit caching reaches the Anthropic projection and is rejected by targets without a projector.
+/// 显式缓存到达 Anthropic 投影，没有投影器的目标则拒绝它。
+#[test]
+fn internal_envelopes_carry_explicit_cache_only_to_anthropic() {
+    let text = |role, text: &str| AiMessage {
+        role,
+        content: vec![ContentItem::Text {
+            text: text.to_string(),
+        }],
+        provider_context_items: Vec::new(),
+    };
+    let cached = AiExecutionRequest {
+        messages: vec![
+            text(MessageRole::System, "stable rules"),
+            text(MessageRole::User, "hello"),
+        ],
+        prompt_cache: crate::anthropic_default_prompt_cache_policy(),
+        ..request()
+    };
+    let projected = project_internal_request_for_provider(
+        encode_internal_responses_request(&cached).unwrap(),
+        &context(UpstreamProtocol::AnthropicMessages),
+        ANTHROPIC_MESSAGES_PROFILE_ID,
+    )
+    .unwrap();
+    assert_eq!(
+        projected.body["system"][0]["cache_control"],
+        json!({ "type": "ephemeral" })
+    );
+    let messages = projected.body["messages"].as_array().unwrap();
+    let last_block = messages.last().unwrap()["content"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap();
+    assert_eq!(last_block["cache_control"], json!({ "type": "ephemeral" }));
+
+    let rejected = project_internal_request_for_provider(
+        encode_internal_responses_request(&cached).unwrap(),
+        &context(UpstreamProtocol::OpenAiChatCompletions),
+        OPENAI_CHAT_PROFILE_ID,
+    );
+    assert!(rejected.is_err());
+}
