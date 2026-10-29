@@ -68,13 +68,15 @@ pub(crate) fn responses_to_anthropic_messages_with_media(
             )
         })?;
     result.insert(String::from("max_tokens"), Value::Number(max_tokens.into()));
-    result.insert(
-        String::from("stream"),
-        Value::Bool(body.get("stream").and_then(Value::as_bool).unwrap_or(true)),
-    );
+    let stream = body.get("stream").and_then(Value::as_bool).unwrap_or(true);
+    result.insert(String::from("stream"), Value::Bool(stream));
 
     if let Some(tools) = body.get("tools") {
-        let mapped_tools = map_anthropic_tools(tools)?;
+        // Native Anthropic buffers tool input unless asked; compatible gateways may reject the field.
+        // 原生 Anthropic 默认缓冲工具输入；兼容网关可能拒绝该字段。
+        let eager_input_streaming =
+            stream && reasoning_mode == AnthropicReasoningMode::NativeBudget;
+        let mapped_tools = map_anthropic_tools(tools, eager_input_streaming)?;
         if !mapped_tools.is_empty() {
             result.insert(String::from("tools"), Value::Array(mapped_tools));
         }
@@ -756,7 +758,14 @@ fn anthropic_tool_result_content(value: Option<&Value>) -> Result<Value, LlmCore
 
 /// Maps Responses function tools into Anthropic tool definitions.
 /// 将 Responses 函数工具转换为 Anthropic 工具定义。
-fn map_anthropic_tools(tools: &Value) -> Result<Vec<Value>, LlmCoreError> {
+///
+/// `eager_input_streaming` streams function-tool input as it is generated; the stream decoder
+/// still rejects input that does not end as complete JSON.
+/// `eager_input_streaming` 让函数工具输入边生成边流式返回；流解码器仍拒绝未以完整 JSON 结束的输入。
+fn map_anthropic_tools(
+    tools: &Value,
+    eager_input_streaming: bool,
+) -> Result<Vec<Value>, LlmCoreError> {
     let values = tools
         .as_array()
         .ok_or_else(|| LlmCoreError::new("Responses tools must be an array."))?;
@@ -797,6 +806,9 @@ fn map_anthropic_tools(tools: &Value) -> Result<Vec<Value>, LlmCoreError> {
             let mut mapped = json!({"name":name,"input_schema":input_schema});
             if let Some(description) = tool.get("description") {
                 mapped["description"] = description.clone();
+            }
+            if eager_input_streaming {
+                mapped["eager_input_streaming"] = Value::Bool(true);
             }
             Ok(mapped)
         })

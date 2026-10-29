@@ -81,8 +81,8 @@ pub enum UpstreamProtocol {
 /// 选择 Anthropic 推理使用原生预算契约，还是交由供应商专用投影器处理。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnthropicReasoningMode {
-    /// Emits Anthropic-native `thinking.budget_tokens` controls.
-    /// 输出 Anthropic 原生的 `thinking.budget_tokens` 控制字段。
+    /// Emits Anthropic-native `thinking.budget_tokens` controls and eager tool-input streaming.
+    /// 输出 Anthropic 原生的 `thinking.budget_tokens` 控制字段与工具输入即时流式。
     NativeBudget,
     /// Leaves reasoning controls to the exact provider profile selected by the caller.
     /// 将推理控制字段留给调用方选定的精确供应商配置处理。
@@ -559,6 +559,45 @@ mod tests {
         assert_eq!(
             converted["tools"],
             json!([{"type":"web_search_20250305","name":"web_search"}])
+        );
+    }
+
+    /// Verifies only native streaming Anthropic routes ask for eager function-tool input.
+    /// 验证只有原生流式 Anthropic 路由请求即时流式的函数工具输入。
+    #[test]
+    fn anthropic_conversion_streams_tool_input_only_on_native_streaming_routes() {
+        let body = |stream: bool| {
+            json!({
+                "model": "claude-test",
+                "input": "Patch the file.",
+                "max_output_tokens": 1024,
+                "stream": stream,
+                "tools": [
+                    {"type": "function", "name": "apply_patch", "parameters": {"type": "object"}},
+                    {"type": "web_search"}
+                ]
+            })
+        };
+        let eager = |mode: AnthropicReasoningMode, stream: bool| {
+            let converted = responses_to_anthropic_messages_for_route(body(stream), mode)
+                .expect("Anthropic tools should convert");
+            (
+                converted["tools"][0].get("eager_input_streaming").cloned(),
+                converted["tools"][1].get("eager_input_streaming").cloned(),
+            )
+        };
+
+        assert_eq!(
+            eager(AnthropicReasoningMode::NativeBudget, true),
+            (Some(json!(true)), None)
+        );
+        assert_eq!(
+            eager(AnthropicReasoningMode::NativeBudget, false),
+            (None, None)
+        );
+        assert_eq!(
+            eager(AnthropicReasoningMode::ProviderSpecific, true),
+            (None, None)
         );
     }
 
