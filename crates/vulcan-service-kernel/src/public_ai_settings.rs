@@ -12,6 +12,7 @@ mod inference_testing;
 mod inference_validation;
 mod media_candidates;
 mod media_delivery_settings;
+mod model_candidates;
 mod model_selection;
 mod model_settings;
 mod oauth;
@@ -162,6 +163,9 @@ pub(super) use inference_testing::{PublicAiInferenceTestRequest, PublicAiInferen
     reason = "Preserve the original media candidate type path."
 )]
 pub(super) use media_candidates::PublicAiMediaUnderstandingModelCandidate;
+pub(super) use model_candidates::{
+    service_list_public_ai_model_candidates, service_prepare_public_ai_model_candidate,
+};
 // Preserve the model-selection request path while dispatch infers its contract.
 // 分发层推导契约时保留模型选择请求路径。
 #[expect(

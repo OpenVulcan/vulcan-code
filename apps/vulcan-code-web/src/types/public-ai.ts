@@ -474,6 +474,43 @@ export interface PublicAiCustomModelTemplateSuggestionsRecord {
   suggestions: PublicAiCommonModelTemplateSuggestion[];
 }
 
+// PublicAiModelCandidateKind is the detected category of one fetched model.
+// PublicAiModelCandidateKind 是一个已拉取模型检测出的类别。
+export type PublicAiModelCandidateKind =
+  | "conversation"
+  | "image"
+  | "video"
+  | "embedding"
+  | "rerank"
+  | "audio"
+  | "unknown";
+
+// PublicAiModelCandidate is one fetched model that is neither featured nor added.
+// PublicAiModelCandidate 是一个既非精选也未添加的已拉取模型。
+export interface PublicAiModelCandidate {
+  modelId: string;
+  displayName: string;
+  kind: PublicAiModelCandidateKind;
+  addable: boolean;
+}
+
+// PublicAiModelCandidatesRecord lists the candidates of one account and its node.
+// PublicAiModelCandidatesRecord 列出一个账号的候选及其节点。
+export interface PublicAiModelCandidatesRecord {
+  providerId: string;
+  serviceEntryId: string;
+  candidates: PublicAiModelCandidate[];
+}
+
+// PublicAiModelCandidateDraft is the prefilled definition the user confirms before saving.
+// PublicAiModelCandidateDraft 是用户确认后再保存的预填定义。
+export interface PublicAiModelCandidateDraft {
+  providerId: string;
+  model: PublicAiCustomModelDefinition;
+  commonTemplateMatched: boolean;
+  limitsComplete: boolean;
+}
+
 // PublicAiCustomModelTemplateDecisionBatchItem carries one reviewed batch decision.
 // PublicAiCustomModelTemplateDecisionBatchItem 承载一项已审查批量决策。
 export interface PublicAiCustomModelTemplateDecisionBatchItem {

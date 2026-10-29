@@ -11,6 +11,8 @@ import type {
   PublicAiCustomModelTemplateSuggestionsRecord,
   PublicAiCommonModelTemplateSuggestion,
   PublicAiCustomModelDefinition,
+  PublicAiModelCandidateDraft,
+  PublicAiModelCandidatesRecord,
   PublicAiCustomModelValidationResult,
   PublicAiCustomModelProtocolPreference,
   PublicAiModelCapabilityOverrides,
@@ -283,6 +285,29 @@ export async function savePublicAiCustomProviderModelDefaults(request: {
   return serviceClient.request<PublicAiSettingsSnapshot>(
     "service_save_public_ai_custom_provider_model_defaults",
     { request },
+  );
+}
+
+// listPublicAiModelCandidates returns fetched models of one system account that are not added yet.
+// listPublicAiModelCandidates 返回一个系统账号中已拉取但尚未添加的模型。
+export async function listPublicAiModelCandidates(
+  connectionId: string,
+): Promise<PublicAiModelCandidatesRecord> {
+  return serviceClient.request<PublicAiModelCandidatesRecord>(
+    "service_list_public_ai_model_candidates",
+    { request: { connectionId } },
+  );
+}
+
+// preparePublicAiModelCandidate returns a prefilled definition; saving uses savePublicAiCustomModels.
+// preparePublicAiModelCandidate 返回预填定义；保存走 savePublicAiCustomModels。
+export async function preparePublicAiModelCandidate(
+  connectionId: string,
+  modelId: string,
+): Promise<PublicAiModelCandidateDraft> {
+  return serviceClient.request<PublicAiModelCandidateDraft>(
+    "service_prepare_public_ai_model_candidate",
+    { request: { connectionId, modelId } },
   );
 }
 

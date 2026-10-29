@@ -61,6 +61,8 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_save_public_ai_custom_model_template_decision",
     "service_save_public_ai_custom_model_template_decisions_batch",
     "service_save_public_ai_custom_model_connection_availability",
+    "service_list_public_ai_model_candidates",
+    "service_prepare_public_ai_model_candidate",
     "service_save_public_ai_connection_model_enabled",
     "service_save_public_ai_connection_models_enabled",
     "service_save_public_ai_connection_model_set_enabled",
@@ -455,6 +457,15 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
+        "service_list_public_ai_model_candidates" => rpc_json_result(
+            service_list_public_ai_model_candidates(state, rpc_required_param(params, "request")?),
+        ),
+        "service_prepare_public_ai_model_candidate" => {
+            rpc_json_result(service_prepare_public_ai_model_candidate(
+                state,
+                rpc_required_param(params, "request")?,
+            ))
+        }
         "service_save_public_ai_connection_model_enabled" => rpc_json_result(
             service_save_public_ai_connection_model_enabled(
                 app,
