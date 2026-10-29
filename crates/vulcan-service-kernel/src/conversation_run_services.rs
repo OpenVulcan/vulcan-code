@@ -1048,6 +1048,11 @@ pub(crate) async fn service_set_session_context_compaction_window(
         guard.live_context_budgets.remove(&session_id);
     }
     drop(configuration_transaction);
+    if mutation.changed {
+        // The usage orb re-reads recorded usage against the new window immediately.
+        // 用量圈立即按新窗口重新计算已记录用量。
+        crate::emit_session_context_usage_changed(&app, &state, session_id)?;
+    }
     emit_session_addons_changed_delta(&app, &state, session_id)
 }
 

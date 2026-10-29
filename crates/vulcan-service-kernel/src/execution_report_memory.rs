@@ -861,7 +861,14 @@ fn emit_terminal_execution_report_workbench_deltas(
                 v1_usage_facts.as_ref(),
                 &guard.live_context_budgets,
                 public_model_capabilities.as_ref(),
-                None,
+                crate::context_compaction_window_limit_from_configuration(
+                    workspace.session_runtime_state.get(&session_id),
+                    guard
+                        .agent_runtime
+                        .as_ref()
+                        .and_then(|runtime| runtime.public_ai_runtime.configuration_snapshot().ok())
+                        .as_ref(),
+                ),
             )
         } else {
             None

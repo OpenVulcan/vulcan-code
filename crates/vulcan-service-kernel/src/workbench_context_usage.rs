@@ -172,6 +172,16 @@ pub(crate) fn emit_session_context_usage_changed(
             session_id,
             runtime_state,
         );
+        // The session's chosen compaction window is the denominator once no live budget remains.
+        // 没有实时预算时，以会话选定的压缩窗口作为分母。
+        let compression_window_limit = context_compaction_window_limit_from_configuration(
+            runtime_state,
+            guard
+                .agent_runtime
+                .as_ref()
+                .and_then(|runtime| runtime.public_ai_runtime.configuration_snapshot().ok())
+                .as_ref(),
+        );
         // Reuse the canonical calibrated projection instead of maintaining a second token counter.
         // 复用规范校准投影，避免维护第二份 Token 计数器。
         let context_usage = context_usage_snapshot_from_runtime_state(
@@ -180,7 +190,7 @@ pub(crate) fn emit_session_context_usage_changed(
             facts.as_ref(),
             &guard.live_context_budgets,
             capabilities.as_ref(),
-            None,
+            compression_window_limit,
         );
         if guard.workbench.context_usage == context_usage {
             return Ok(());

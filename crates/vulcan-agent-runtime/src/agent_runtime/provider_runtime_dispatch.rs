@@ -2,7 +2,7 @@
 //! 负责解析运行时输入并启动宿主控制传输流的 Provider 运行时分发辅助模块。
 
 use crate::agent_runtime::config::RuntimeAgentDefinition;
-use crate::agent_runtime::execution_models::{ExecutionPreparation, ExecutionPromptPurpose};
+use crate::agent_runtime::execution_models::ExecutionPreparation;
 use crate::agent_runtime::provider_reasoning::validate_exact_wire_reasoning_effort;
 use crate::agent_runtime::provider_runtime_inputs::one_shot_provider_error_stream;
 use crate::agent_runtime::provider_stream::ProviderDeltaStream;
@@ -323,10 +323,10 @@ pub(crate) fn execute_provider_prompt_stream(
                 .as_ref()
                 .and_then(|budget| budget.auto_compact_prefill_input_tokens),
         )
-        // Only user turns own a host compaction path that can resume after the line.
-        // 只有用户回合拥有可在压缩线后继续执行的宿主压缩路径。
+        // Only user turns and their retries own a host compaction path that can resume after the line.
+        // 只有用户回合及其重试拥有可在压缩线后继续执行的宿主压缩路径。
         .with_turn_compaction_line(
-            preparation.prompt_purpose == ExecutionPromptPurpose::UserTurn
+            preparation.prompt_purpose.supports_host_auto_compaction()
                 && preparation
                     .context_budget
                     .as_ref()

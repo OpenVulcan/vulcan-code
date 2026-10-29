@@ -18,7 +18,10 @@ mod restart_state;
 mod runtime_event;
 mod stream_exit;
 
-use context_policy_refresh::refreshed_execution_request_after_context_compaction_policy_change;
+use context_policy_refresh::{
+    context_compaction_node_change_intervention,
+    refreshed_execution_request_after_context_compaction_policy_change,
+};
 use finished::{FinishedStreamEventOutcome, handle_finished_stream_event};
 pub(crate) use launch_failure::StreamTaskLaunchFailureCommit;
 pub(crate) use launch_failure::{
@@ -819,7 +822,10 @@ fn spawn_agent_stream_task_with_restart_state(
             Arc::clone(&agent_runtime.command_session_runtime),
             Some(Arc::clone(&agent_runtime.public_ai_runtime)),
             request.clone(),
-            None,
+            Some(context_compaction_node_change_intervention(
+                task_state.clone(),
+                request.context_compaction_window_node_id,
+            )),
         ));
 
         webui_trace(

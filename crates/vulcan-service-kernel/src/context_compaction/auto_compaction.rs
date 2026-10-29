@@ -85,7 +85,7 @@ async fn maybe_auto_compact_webui_session_with_mode(
     preparation: &ExecutionPreparation,
     force_compaction: bool,
 ) -> Result<Option<ExecutionPreparationRequest>, String> {
-    if request.prompt_purpose != ExecutionPromptPurpose::UserTurn {
+    if !request.prompt_purpose.supports_host_auto_compaction() {
         return Ok(None);
     }
     // Dedicated sessions keep their locked memory verbatim and are never compacted.

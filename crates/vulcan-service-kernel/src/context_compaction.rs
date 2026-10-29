@@ -7,8 +7,7 @@ use uuid::Uuid;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use vulcan_agent_runtime::{
-    ExecutionPreparation, ExecutionPreparationRequest, ExecutionPromptPurpose,
-    ExecutionStreamEvent,
+    ExecutionPreparation, ExecutionPreparationRequest, ExecutionStreamEvent,
     agent_runtime::{
         context_injection_runtime::core_provider_context_injection_from_state_for_turn_draining_expiry_events,
         prompt_compaction::{

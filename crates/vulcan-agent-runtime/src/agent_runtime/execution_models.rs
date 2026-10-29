@@ -519,6 +519,15 @@ impl ExecutionPromptPurpose {
         )
     }
 
+    /// Returns whether the host may compact this main-conversation execution and resume it.
+    /// 返回宿主是否可以压缩该主会话执行并继续执行。
+    /// Retries resume the same canonical conversation from a restored checkpoint, so they share the
+    /// user-turn compaction path; subagent, auxiliary and internal requests never do.
+    /// 重试从恢复检查点继续同一规范会话，因此与用户回合共享压缩路径；子代理、辅助及内部请求从不参与。
+    pub const fn supports_host_auto_compaction(self) -> bool {
+        matches!(self, Self::UserTurn | Self::ExecutionRetry)
+    }
+
     /// Returns whether this purpose should run completed-turn hooks.
     /// 返回该用途是否应该运行完成回合 hook。
     pub const fn runs_completed_turn_hooks(self) -> bool {

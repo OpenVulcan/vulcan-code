@@ -609,7 +609,16 @@ pub(crate) fn sync_workbench_runtime_control_fields_locked(
             selected_context_usage_facts.as_ref(),
             &guard.live_context_budgets,
             public_model_capabilities.as_ref(),
-            None,
+            crate::context_compaction_window_limit_from_configuration(
+                workspace
+                    .session_runtime_state
+                    .get(&workspace.selected_session),
+                guard
+                    .agent_runtime
+                    .as_ref()
+                    .and_then(|runtime| runtime.public_ai_runtime.configuration_snapshot().ok())
+                    .as_ref(),
+            ),
         )
     });
     let bridged_media_kinds = guard
