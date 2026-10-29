@@ -19,10 +19,10 @@ use vulcan_llm_core::{
     ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
 };
 
-/// Verifies execution ignores persisted system-provider reasoning contract overrides.
-/// 验证执行忽略持久化的系统供应商思考契约覆盖。
+/// Verifies execution applies system reasoning levels but never a projection stored in the override layer.
+/// 验证执行应用系统模型思考档位，但绝不使用覆盖层中保存的投影。
 #[test]
-fn selection_ignores_persisted_system_reasoning_contract_overrides() {
+fn selection_applies_system_reasoning_levels_without_override_projection() {
     let (runtime, mut configuration) = two_account_runtime();
     configuration.model_capability_overrides.insert(
         PersistedAiConfiguration::provider_model_key("openrouter", "openai/gpt-5.6-sol"),
@@ -83,7 +83,10 @@ fn selection_ignores_persisted_system_reasoning_contract_overrides() {
     );
     assert_eq!(
         selection.model.capabilities.reasoning_efforts,
-        crate::CUSTOM_PROVIDER_OPENAI_REASONING_EFFORTS
+        [
+            vulcan_ai_contract::ReasoningEffort::None,
+            vulcan_ai_contract::ReasoningEffort::Medium,
+        ]
     );
     assert!(
         selection.route.custom_model_projection.is_none(),

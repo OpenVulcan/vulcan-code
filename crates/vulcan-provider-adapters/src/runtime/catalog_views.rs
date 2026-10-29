@@ -377,6 +377,74 @@ pub(super) fn resolve_model_catalog_overlays_from_inputs(
 /// 返回值
 /// `true` when a manual declaration or any access-independent account catalog contains the model.
 /// 当手工声明或任一独立于访问开关的账号目录包含该模型时返回 `true`。
+/// Validates a system-model input override against every signed route the model resolves to.
+/// 按模型解析到的每条签名路由校验系统模型输入覆盖。
+///
+/// # Parameters
+/// 参数
+/// `manifest` owns the signed routes, `service_entry_id` is the account's entry, `model` is the
+/// overlaid catalog model, and `input_resources` is the candidate replacement set.
+/// `manifest` 持有签名路由，`service_entry_id` 是账号所在入口，`model` 是叠加后的目录模型，
+/// `input_resources` 是候选替换集合。
+///
+/// # Returns
+/// 返回值
+/// Success only when each resolved protocol route can carry every declared input.
+/// 仅当每条已解析协议路由都能承载全部已声明输入时成功。
+fn validate_system_override_input_routes(
+    manifest: &crate::provider_manifest::ResolvedProviderManifest,
+    service_entry_id: &str,
+    model: &crate::ConnectionModel,
+    input_resources: &[vulcan_ai_contract::ResourceKind],
+) -> Result<(), String> {
+    let entry = manifest
+        .descriptor
+        .service_entries
+        .iter()
+        .find(|entry| entry.id == service_entry_id)
+        .ok_or_else(|| {
+            format!(
+                "System provider `{}` has no service entry `{service_entry_id}` for model `{}`.",
+                manifest.descriptor.id, model.id
+            )
+        })?;
+    let mut protocol_ids = model
+        .protocol_variants
+        .keys()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    if let Some(binding) = model.resolved_protocol_binding.as_ref()
+        && !protocol_ids.contains(&binding.protocol_profile_id.as_str())
+    {
+        protocol_ids.push(binding.protocol_profile_id.as_str());
+    }
+    if protocol_ids.is_empty() {
+        return Err(format!(
+            "Model `{}` has no resolved protocol route to validate input overrides against.",
+            model.id
+        ));
+    }
+    for protocol_id in protocol_ids {
+        let route = entry
+            .protocol_routes
+            .iter()
+            .find(|route| route.verified && route.protocol_profile_id == protocol_id)
+            .ok_or_else(|| {
+                format!(
+                    "Service entry `{service_entry_id}` has no verified protocol route `{protocol_id}` for model `{}`.",
+                    model.id
+                )
+            })?;
+        crate::validate_route_input_resources(
+            service_entry_id,
+            route,
+            input_resources,
+            model.id.as_str(),
+        )?;
+    }
+    Ok(())
+}
+
 fn provider_conversation_model_is_supported_in_generation(
     configuration: &PersistedAiConfiguration,
     provider_id: &str,
@@ -1332,13 +1400,8 @@ impl PublicAiRuntime {
         model_id: &str,
         overrides: Option<&crate::ModelCapabilityOverrides>,
     ) -> Result<(), String> {
-        if overrides.is_some() && !provider_id.starts_with("custom:") {
-            return Err(String::from(
-                "System model capabilities are owned by the signed Manifest or a manual model definition.",
-            ));
-        }
         if let Some(overrides) = overrides {
-            overrides.validate_for_provider(provider_id)?;
+            overrides.validate_for_model(provider_id)?;
         }
         let mut candidate_configuration = configuration.clone();
         // Provider-level capability settings must remain editable when every account hides the model.
@@ -1419,6 +1482,18 @@ impl PublicAiRuntime {
                 && let Some(projection) = overrides.request_projection.as_ref()
             {
                 projection.validate_for_capabilities(&model.capabilities)?;
+            }
+            if !provider_id.starts_with("custom:")
+                && let Some(input_resources) =
+                    overrides.and_then(|overrides| overrides.input_resources.as_deref())
+                && let Some(manifest) = generation.manifests.manifest(provider_id)
+            {
+                validate_system_override_input_routes(
+                    manifest,
+                    connection.service_entry_id.as_str(),
+                    model,
+                    input_resources,
+                )?;
             }
         }
         if !matched_connection

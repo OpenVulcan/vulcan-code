@@ -21,10 +21,15 @@ pub(super) fn resolve_request_projection(
     provider_id: &str,
     model_id: &str,
 ) -> Result<Option<crate::CustomModelRequestProjection>, String> {
-    // System-provider request projection is immutable Manifest data and cannot be supplied by user configuration.
-    // 系统供应商请求投影属于不可变 Manifest 数据，不能由用户配置提供。
+    // Signed system models keep the route template as their only mapping. A model the user added
+    // to a system provider may carry its own mapping, applied after the template.
+    // 签名系统模型只使用路由模板映射。用户添加到系统供应商的模型可携带自己的映射，在模板之后应用。
     if !provider_id.starts_with("custom:") {
-        return Ok(None);
+        return Ok(configuration
+            .custom_model(provider_id, model_id)
+            .filter(|definition| definition.system_binding.is_some())
+            .map(|definition| definition.request_projection.clone())
+            .filter(|projection| *projection != crate::CustomModelRequestProjection::default()));
     }
     let mut merged = crate::CustomModelRequestProjection::default();
     let mut found = false;

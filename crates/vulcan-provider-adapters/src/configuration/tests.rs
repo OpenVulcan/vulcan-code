@@ -1218,35 +1218,54 @@ fn custom_capability_overrides_leave_immutable_source_fields_untouched() {
     );
 }
 
-/// Verifies system providers ignore all persisted model capability overrides.
-/// 验证系统供应商忽略全部持久化模型能力覆盖。
+/// Verifies system models accept limit, input and reasoning-level overrides but never a wire mapping.
+/// 验证系统模型接受上限、输入与思考档位覆盖，但绝不接受线协议映射。
 #[test]
-fn system_provider_capability_contract_is_not_user_overridable() {
-    assert!(
-        ModelCapabilityOverrides {
-            context_limit: Some(200_000),
-            output_limit: Some(32_000),
-            ..Default::default()
-        }
-        .validate_for_provider("system-provider")
-        .is_err()
-    );
-    let mut configuration = PersistedAiConfiguration::default();
-    let key = PersistedAiConfiguration::provider_model_key("minimax", "MiniMax-M2.7");
-    let stale = ModelCapabilityOverrides {
+fn system_model_overrides_cover_limits_inputs_and_reasoning_levels_only() {
+    let editable = ModelCapabilityOverrides {
         context_limit: Some(128_000),
+        output_limit: Some(16_000),
         input_resources: Some(vec![ResourceKind::Image]),
-        structured_output: Some(StructuredOutputCapability::JsonSchema),
-        reasoning: Some(CapabilitySupport::Unsupported),
-        reasoning_control: Some(ReasoningControlMode::FixedOff),
-        reasoning_efforts: Some(vec![ReasoningEffort::None]),
-        request_projection: Some(CustomModelRequestProjection::default()),
+        reasoning: Some(CapabilitySupport::Native),
+        reasoning_control: Some(ReasoningControlMode::Toggle),
+        reasoning_efforts: Some(vec![
+            ReasoningEffort::None,
+            ReasoningEffort::Low,
+            ReasoningEffort::High,
+        ]),
         ..ModelCapabilityOverrides::default()
     };
-    assert!(stale.validate_for_provider("minimax").is_err());
-    configuration
-        .model_capability_overrides
-        .insert(key.clone(), stale);
+    editable
+        .validate_for_model("minimax")
+        .expect("system model limits, inputs and reasoning levels are editable");
+    assert!(
+        editable.validate_for_provider("minimax").is_err(),
+        "system provider-wide defaults stay owned by the signed manifest"
+    );
+    for rejected in [
+        ModelCapabilityOverrides {
+            structured_output: Some(StructuredOutputCapability::JsonSchema),
+            ..ModelCapabilityOverrides::default()
+        },
+        ModelCapabilityOverrides {
+            request_projection: Some(CustomModelRequestProjection::default()),
+            ..ModelCapabilityOverrides::default()
+        },
+        ModelCapabilityOverrides {
+            reasoning: Some(CapabilitySupport::Native),
+            reasoning_control: Some(ReasoningControlMode::Unknown),
+            reasoning_efforts: Some(vec![ReasoningEffort::High]),
+            ..ModelCapabilityOverrides::default()
+        },
+    ] {
+        assert!(rejected.validate_for_model("minimax").is_err());
+    }
+
+    let mut configuration = PersistedAiConfiguration::default();
+    configuration.model_capability_overrides.insert(
+        PersistedAiConfiguration::provider_model_key("minimax", "MiniMax-M2.7"),
+        editable,
+    );
     let mut effective = ModelCapabilities {
         context_limit: Some(204_800),
         input_resources: Vec::new(),
@@ -1259,19 +1278,25 @@ fn system_provider_capability_contract_is_not_user_overridable() {
 
     configuration.apply_model_capability_overrides("minimax", "MiniMax-M2.7", &mut effective);
 
-    assert_eq!(effective.context_limit, Some(204_800));
-    assert!(effective.input_resources.is_empty());
+    assert_eq!(effective.context_limit, Some(128_000));
+    assert_eq!(effective.output_limit, Some(16_000));
+    assert_eq!(effective.input_resources, [ResourceKind::Image]);
     assert_eq!(
         effective.structured_output,
         StructuredOutputCapability::JsonObject
     );
-    assert_eq!(effective.reasoning, CapabilitySupport::Native);
+    assert_eq!(effective.reasoning_control, ReasoningControlMode::Toggle);
     assert_eq!(
-        effective.reasoning_control,
-        ReasoningControlMode::ProviderAdaptive
+        effective.reasoning_efforts,
+        [
+            ReasoningEffort::None,
+            ReasoningEffort::Low,
+            ReasoningEffort::High
+        ]
     );
-    assert_eq!(effective.reasoning_efforts, [ReasoningEffort::Adaptive]);
-    assert!(configuration.validate_current_schema().is_err());
+    configuration
+        .validate_current_schema()
+        .expect("persisted system model overrides validate");
 }
 
 /// Verifies misspelled capability fields fail instead of appearing to persist successfully.

@@ -15,10 +15,10 @@ use vulcan_llm_core::{
     ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
 };
 
-/// Verifies signed system capabilities win over persisted user overlays.
-/// 验证受签名系统能力高于持久化的用户覆盖。
+/// Verifies a persisted user overlay changes the effective system model but never the source evidence.
+/// 验证持久化用户覆盖改变系统模型的生效能力，但绝不改变来源证据。
 #[test]
-fn signed_system_model_capabilities_win_over_user_overlay() {
+fn signed_system_model_applies_user_overlay_without_touching_source() {
     let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
     let mut configuration = PersistedAiConfiguration::default();
     configuration
@@ -88,7 +88,10 @@ fn signed_system_model_capabilities_win_over_user_overlay() {
         })
         .expect("effective model should exist");
     assert_eq!(immutable_context, Some(8_192));
-    assert_eq!(effective_model.capabilities, signed_capabilities);
+    let mut expected = signed_capabilities;
+    expected.context_limit = Some(4_096);
+    expected.input_resources = vec![vulcan_ai_contract::ResourceKind::Image];
+    assert_eq!(effective_model.capabilities, expected);
 }
 
 /// Verifies an exact signed identity rejects a colliding manual definition.
@@ -484,10 +487,10 @@ fn zero_limit_media_discovery_cannot_publish_unsupported_model() {
     );
 }
 
-/// Verifies system model capability writes fail while obsolete overrides can be cleared.
-/// 验证系统模型能力写入被拒绝，而过期覆盖仍可清除。
+/// Verifies system model limits are editable, a wire mapping is not, and overrides can be cleared.
+/// 验证系统模型上限可编辑、线协议映射不可编辑，且覆盖可以清除。
 #[test]
-fn system_model_capability_override_candidate_is_rejected() {
+fn system_model_capability_override_candidate_accepts_limits_only() {
     let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
     let mut configuration = PersistedAiConfiguration::default();
     configuration
@@ -501,29 +504,32 @@ fn system_model_capability_override_candidate_is_rejected() {
         .expect("connection should register");
     install_source_catalog(&runtime, catalog("one"));
 
-    for overrides in [
-        crate::ModelCapabilityOverrides {
-            context_limit: Some(8_192),
-            ..crate::ModelCapabilityOverrides::default()
-        },
-        crate::ModelCapabilityOverrides {
-            output_limit: Some(4_096),
-            ..crate::ModelCapabilityOverrides::default()
-        },
-    ] {
-        let error = runtime
+    runtime
+        .validate_model_capability_override_candidate(
+            &configuration,
+            "openrouter",
+            "openai/gpt-5.6-sol",
+            Some(&crate::ModelCapabilityOverrides {
+                context_limit: Some(200_000),
+                output_limit: Some(4_096),
+                ..crate::ModelCapabilityOverrides::default()
+            }),
+        )
+        .expect("system model limits are user-editable");
+    assert!(
+        runtime
             .validate_model_capability_override_candidate(
                 &configuration,
                 "openrouter",
                 "openai/gpt-5.6-sol",
-                Some(&overrides),
+                Some(&crate::ModelCapabilityOverrides {
+                    request_projection: Some(crate::CustomModelRequestProjection::default()),
+                    ..crate::ModelCapabilityOverrides::default()
+                }),
             )
-            .expect_err("system model capability writes must be rejected");
-        assert!(
-            error.contains("System model capabilities are owned"),
-            "unexpected validation error: {error}"
-        );
-    }
+            .is_err(),
+        "signed models keep the route template as their only request mapping"
+    );
     runtime
         .validate_model_capability_override_candidate(
             &configuration,
@@ -560,7 +566,7 @@ fn provider_model_management_uses_support_catalog_when_account_is_disabled() {
             .provider_model_is_supported(&configuration, "openrouter", "openai/gpt-5.6-sol")
             .expect("provider support should resolve")
     );
-    let error = runtime
+    runtime
         .validate_model_capability_override_candidate(
             &configuration,
             "openrouter",
@@ -571,8 +577,7 @@ fn provider_model_management_uses_support_catalog_when_account_is_disabled() {
                 ..crate::ModelCapabilityOverrides::default()
             }),
         )
-        .expect_err("system capability settings must remain immutable");
-    assert!(error.contains("System model capabilities are owned"));
+        .expect("account visibility must not block system model capability settings");
     runtime
         .validate_model_execution_override_candidate(
             &configuration,
@@ -634,10 +639,10 @@ fn credential_free_manual_model_accepts_direct_capability_settings() {
         .expect("manual provider-only validation should not require a credential");
 }
 
-/// Verifies a system-model override remains forbidden across multiple account catalogs.
-/// 验证系统模型覆盖在多个账号目录中仍被禁止。
+/// Verifies a system-model override resolves against every account catalog of the provider.
+/// 验证系统模型覆盖会针对供应商的每个账号目录解析。
 #[test]
-fn system_capability_override_is_rejected_across_accounts() {
+fn system_capability_override_resolves_across_accounts() {
     let (runtime, configuration) = two_account_runtime();
     install_source_catalog(&runtime, catalog("one"));
     install_source_catalog(
@@ -657,24 +662,23 @@ fn system_capability_override_is_rejected_across_accounts() {
         ),
     );
 
-    let error = runtime
+    runtime
         .validate_model_capability_override_candidate(
             &configuration,
             "openrouter",
             "openai/gpt-5.6-sol",
             Some(&crate::ModelCapabilityOverrides {
-                output_limit: Some(3_000),
+                output_limit: Some(1_000),
                 ..crate::ModelCapabilityOverrides::default()
             }),
         )
-        .expect_err("account-specific evidence cannot authorize a system override");
-    assert!(error.contains("System model capabilities are owned"));
+        .expect("an output limit within every account's context is accepted");
 }
 
-/// Verifies persisted model limit overlays cannot change signed model capabilities.
-/// 验证持久化模型上限覆盖不能改变受签名模型能力。
+/// Verifies a persisted limit overlay changes only the overridden field of a signed model.
+/// 验证持久化上限覆盖只改变受签名模型的被覆盖字段。
 #[test]
-fn signed_model_rebuild_ignores_persisted_limit_overlay() {
+fn signed_model_rebuild_applies_persisted_limit_overlay() {
     let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
     let mut configuration = PersistedAiConfiguration::default();
     configuration
@@ -702,7 +706,7 @@ fn signed_model_rebuild_ignores_persisted_limit_overlay() {
     configuration.model_capability_overrides.insert(
         PersistedAiConfiguration::provider_model_key("openrouter", "openai/gpt-5.6-sol"),
         crate::ModelCapabilityOverrides {
-            output_limit: Some(9_000),
+            output_limit: Some(4_000),
             ..crate::ModelCapabilityOverrides::default()
         },
     );
@@ -723,7 +727,9 @@ fn signed_model_rebuild_ignores_persisted_limit_overlay() {
                 .find(|model| model.id == "openai/gpt-5.6-sol")
         })
         .expect("effective model should remain visible");
-    assert_eq!(model.capabilities, baseline);
+    let mut expected = baseline;
+    expected.output_limit = Some(4_000);
+    assert_eq!(model.capabilities, expected);
 }
 
 /// Verifies removing a manual-only definition removes the model from its exact connection.

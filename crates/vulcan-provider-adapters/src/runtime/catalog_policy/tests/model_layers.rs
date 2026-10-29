@@ -104,10 +104,10 @@ fn native_only_conversation_declaration_defaults_to_enabled_reasoning() {
     );
 }
 
-/// Verifies a system model cannot replace the catalog reasoning contract with a disabled override.
-/// 验证系统模型不能用关闭覆盖替换目录中的思考契约。
+/// Verifies a user override can switch a system model's catalog reasoning contract off.
+/// 验证用户覆盖可以关闭系统模型目录中的思考契约。
 #[test]
-fn system_model_reasoning_disablement_override_is_ignored() {
+fn system_model_reasoning_disablement_override_is_applied() {
     let mut configuration = PersistedAiConfiguration::default();
     configuration.model_capability_overrides.insert(
         PersistedAiConfiguration::provider_model_key("apikeyfan", "gpt-5.6-luna"),
@@ -126,24 +126,24 @@ fn system_model_reasoning_disablement_override_is_ignored() {
     .expect("compatible source catalog should parse");
 
     apply_model_catalog_overlays(&configuration, "apikeyfan", &mut catalog)
-        .expect("system capability override should be ignored");
+        .expect("system capability override should apply");
 
     let model = catalog.models.first().expect("model should remain visible");
-    assert_eq!(model.capabilities.reasoning, CapabilitySupport::Native);
+    assert_eq!(model.capabilities.reasoning, CapabilitySupport::Unsupported);
     assert_eq!(
         model.capabilities.reasoning_control,
-        ReasoningControlMode::EffortSelection
+        ReasoningControlMode::FixedOff
     );
     assert_eq!(
         model.capabilities.reasoning_efforts,
-        crate::CUSTOM_PROVIDER_OPENAI_REASONING_EFFORTS
+        vec![vulcan_ai_contract::ReasoningEffort::None]
     );
 }
 
-/// Verifies a system model cannot replace a disabled catalog contract with an enabled override.
-/// 验证系统模型不能用开启覆盖替换目录中的关闭契约。
+/// Verifies a user override can switch a disabled system catalog contract on.
+/// 验证用户覆盖可以开启系统目录中已关闭的思考契约。
 #[test]
-fn system_model_reasoning_enablement_override_is_ignored() {
+fn system_model_reasoning_enablement_override_is_applied() {
     let model_id = "gpt-5.6-luna";
     let mut configuration = PersistedAiConfiguration::default();
     configuration.model_capability_overrides.insert(
@@ -171,17 +171,17 @@ fn system_model_reasoning_enablement_override_is_ignored() {
     source_capabilities.reasoning_efforts = vec![vulcan_ai_contract::ReasoningEffort::None];
 
     apply_model_catalog_overlays(&configuration, "apikeyfan", &mut catalog)
-        .expect("system capability override should be ignored");
+        .expect("system capability override should apply");
 
     let model = catalog.models.first().expect("model should remain visible");
-    assert_eq!(model.capabilities.reasoning, CapabilitySupport::Unsupported);
+    assert_eq!(model.capabilities.reasoning, CapabilitySupport::Native);
     assert_eq!(
         model.capabilities.reasoning_control,
-        ReasoningControlMode::FixedOff
+        ReasoningControlMode::EffortSelection
     );
     assert_eq!(
         model.capabilities.reasoning_efforts,
-        vec![vulcan_ai_contract::ReasoningEffort::None]
+        crate::CUSTOM_PROVIDER_OPENAI_REASONING_EFFORTS
     );
 }
 
@@ -556,10 +556,10 @@ fn discovered_custom_model_applies_only_manual_advanced_declarations() {
     );
 }
 
-/// Verifies system-provider runtime settings cannot change model capability limits.
-/// 验证系统供应商运行时设置不能改变模型能力上限。
+/// Verifies a system provider-wide layer is ignored while its model layer applies.
+/// 验证系统供应商级覆盖被忽略，而模型级覆盖生效。
 #[test]
-fn system_provider_runtime_overrides_do_not_change_capabilities() {
+fn system_provider_wide_overrides_are_ignored_but_model_overrides_apply() {
     let provider_id = "system-provider";
     let model_id = "chat-model";
     let mut configuration = PersistedAiConfiguration::default();
@@ -596,7 +596,7 @@ fn system_provider_runtime_overrides_do_not_change_capabilities() {
         .iter()
         .find(|model| model.id == model_id)
         .expect("model should remain visible");
-    assert_eq!(model.capabilities.context_limit, Some(200_000));
+    assert_eq!(model.capabilities.context_limit, Some(16_000));
     assert_eq!(model.capabilities.output_limit, None);
     assert_eq!(
         model.capabilities.reasoning_efforts,

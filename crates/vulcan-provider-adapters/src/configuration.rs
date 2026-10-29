@@ -6,6 +6,7 @@ use crate::{
     CustomProviderModelDefaults, PersistedConnectionGraph, ProviderDescriptor,
     ProviderExtensionModeSelection, ProviderToolCapabilityKind, ProviderToolTargetSelection,
     SecondaryRouteSelection, validate_custom_provider_reasoning_settings,
+    validate_system_model_reasoning_settings,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -93,6 +94,20 @@ impl ModelCapabilityOverrides {
     /// Success only when limits are positive and reasoning fields form one complete policy.
     /// 仅在限制为正且思考字段形成完整策略时返回成功。
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_shape()?;
+        if let (Some(reasoning), Some(control), Some(efforts)) = (
+            self.reasoning,
+            self.reasoning_control,
+            self.reasoning_efforts.as_deref(),
+        ) {
+            validate_custom_provider_reasoning_settings(reasoning, control, efforts)?;
+        }
+        Ok(())
+    }
+
+    /// Validates provider-independent structure: positive limits, complete reasoning fields and safe paths.
+    /// 校验与供应商无关的结构：限制为正、思考字段完整且路径安全。
+    fn validate_shape(&self) -> Result<(), String> {
         if self.context_limit == Some(0) {
             return Err(String::from(
                 "A direct model context limit must be greater than zero.",
@@ -113,21 +128,14 @@ impl ModelCapabilityOverrides {
                 "Model reasoning support, control, and levels must be saved together.",
             ));
         }
-        if let (Some(reasoning), Some(control), Some(efforts)) = (
-            self.reasoning,
-            self.reasoning_control,
-            self.reasoning_efforts.as_deref(),
-        ) {
-            validate_custom_provider_reasoning_settings(reasoning, control, efforts)?;
-        }
         if let Some(request_projection) = self.request_projection.as_ref() {
             request_projection.validate_paths()?;
         }
         Ok(())
     }
 
-    /// Validates one override against the editable surface owned by its exact provider kind.
-    /// 根据精确供应商类型所拥有的可编辑范围校验一层覆盖。
+    /// Validates one provider-wide override against the editable surface owned by its provider kind.
+    /// 根据供应商类型所拥有的可编辑范围校验一层供应商级覆盖。
     ///
     /// # Parameters
     /// 参数
@@ -136,16 +144,56 @@ impl ModelCapabilityOverrides {
     ///
     /// # Returns
     /// 返回值
-    /// Custom providers may declare capabilities; system providers accept only an empty override.
-    /// 自定义供应商可声明能力；系统供应商仅接受空覆盖。
+    /// Custom providers may declare provider defaults; system providers accept only an empty override.
+    /// 自定义供应商可声明供应商默认值；系统供应商仅接受空覆盖。
     pub fn validate_for_provider(&self, provider_id: &str) -> Result<(), String> {
         self.validate()?;
         if provider_id.starts_with("custom:") || self.is_empty() {
             return Ok(());
         }
         Err(String::from(
-            "System model capabilities are owned by the signed manifest and cannot be overridden.",
+            "System provider capability defaults are owned by the signed manifest and cannot be overridden.",
         ))
+    }
+
+    /// Validates one model-level override against the editable surface owned by its provider kind.
+    /// 根据供应商类型所拥有的可编辑范围校验一层模型级覆盖。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `provider_id` identifies either one system provider or one user-owned custom provider.
+    /// `provider_id` 标识一个系统供应商或用户自有自定义供应商。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Custom providers may override every field. System models may override limits, input
+    /// resources and the reasoning control and levels; the wire mapping of each level stays with
+    /// the signed route template, so structured output and request projections are rejected.
+    /// 自定义供应商可覆盖全部字段。系统模型可覆盖限制、输入资源以及思考控制与档位；每个档位的
+    /// 线协议映射仍归签名路由模板，因此拒绝结构化输出与请求投影。
+    pub fn validate_for_model(&self, provider_id: &str) -> Result<(), String> {
+        if provider_id.starts_with("custom:") {
+            return self.validate();
+        }
+        self.validate_shape()?;
+        if self.structured_output.is_some() {
+            return Err(String::from(
+                "System model structured-output support is owned by the signed manifest and cannot be overridden.",
+            ));
+        }
+        if self.request_projection.is_some() {
+            return Err(String::from(
+                "System model request projections are owned by the signed route template and cannot be overridden.",
+            ));
+        }
+        if let (Some(reasoning), Some(control), Some(efforts)) = (
+            self.reasoning,
+            self.reasoning_control,
+            self.reasoning_efforts.as_deref(),
+        ) {
+            validate_system_model_reasoning_settings(reasoning, control, efforts)?;
+        }
+        Ok(())
     }
 }
 
@@ -1215,7 +1263,7 @@ impl PersistedAiConfiguration {
             let (provider_id, _) = Self::provider_model_key_parts(key).ok_or_else(|| {
                 format!("Persisted model capability override key `{key}` is malformed.")
             })?;
-            overrides.validate_for_provider(provider_id)?;
+            overrides.validate_for_model(provider_id)?;
         }
         for (provider_id, overrides) in &self.provider_capability_overrides {
             overrides.validate_for_provider(provider_id)?;
@@ -2012,11 +2060,9 @@ impl PersistedAiConfiguration {
         model_id: &str,
         capabilities: &mut ModelCapabilities,
     ) {
-        // System identities and user-defined system models carry their own authoritative capabilities.
-        // 系统身份与用户手工定义的系统模型各自持有权威能力声明。
-        if !provider_id.starts_with("custom:") {
-            return;
-        }
+        // System models accept the same sparse layer; validation keeps request projections and
+        // structured output out of it, so only limits, inputs and reasoning levels apply.
+        // 系统模型接受同一稀疏层；校验已排除请求投影与结构化输出，因此只应用限制、输入与思考档位。
         let Some(overrides) = self.model_capability_overrides(provider_id, model_id) else {
             return;
         };

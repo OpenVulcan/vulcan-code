@@ -286,6 +286,113 @@ pub fn validate_custom_provider_reasoning_settings(
     ))
 }
 
+/// Validates the reasoning control and levels a user declares for one system-provider model.
+/// 校验用户为一个系统供应商模型声明的思考控制与档位。
+///
+/// # Parameters
+/// 参数
+/// `support`, `control`, and `efforts` are the complete user reasoning declaration.
+/// `support`、`control` 与 `efforts` 是完整的用户思考声明。
+///
+/// # Returns
+/// 返回值
+/// Success for an explicit disable, or for native reasoning with a known control mode and at
+/// least one enabled level. Level encoding stays with the signed route template, so any
+/// contract level is accepted and an unmapped level fails when the template runs.
+/// 显式关闭，或原生思考配合已知控制方式及至少一个开启档位时成功。档位编码仍归签名路由模板，
+/// 因此接受任何契约档位，模板未映射的档位在模板执行时报错。
+pub fn validate_system_model_reasoning_settings(
+    support: CapabilitySupport,
+    control: ReasoningControlMode,
+    efforts: &[ReasoningEffort],
+) -> Result<(), String> {
+    let unique_efforts = efforts.iter().copied().collect::<BTreeSet<_>>();
+    if unique_efforts.len() != efforts.len() {
+        return Err(String::from(
+            "System model reasoning levels must not contain duplicates.",
+        ));
+    }
+    let disabled = support == CapabilitySupport::Unsupported
+        && control == ReasoningControlMode::FixedOff
+        && efforts == [ReasoningEffort::None];
+    let enabled = support == CapabilitySupport::Native
+        && !matches!(
+            control,
+            ReasoningControlMode::Unknown | ReasoningControlMode::FixedOff
+        )
+        && efforts
+            .iter()
+            .any(|effort| *effort != ReasoningEffort::None);
+    if disabled || enabled {
+        return Ok(());
+    }
+    Err(String::from(
+        "System model reasoning settings must be natively enabled with a known control mode and at least one enabled level, or explicitly disabled.",
+    ))
+}
+
+/// Validates that one verified route can carry every declared non-text input resource.
+/// 校验一条已验证路由能够承载每一种已声明的非文本输入资源。
+///
+/// # Parameters
+/// 参数
+/// `service_entry_id` and `route` identify the exact signed route; `resources` are the declared
+/// inputs and `model_id` names the model in errors.
+/// `service_entry_id` 与 `route` 标识精确签名路由；`resources` 是已声明输入，`model_id` 用于错误说明。
+///
+/// # Returns
+/// 返回值
+/// Success only when the protocol encoder supports each resource and video is declared by the route.
+/// 仅当协议编码器支持每种资源且路由声明了视频输入时成功。
+pub fn validate_route_input_resources(
+    service_entry_id: &str,
+    route: &crate::ProtocolRoute,
+    resources: &[ResourceKind],
+    model_id: &str,
+) -> Result<(), String> {
+    let protocol_profile_id = route.protocol_profile_id.as_str();
+    for resource in resources {
+        // A model declaration cannot make a wire projector encode a modality it does not own.
+        // 模型声明不能让 Wire 投影器编码其本身不支持的输入模态。
+        let mime = match resource {
+            ResourceKind::Image => "image/png",
+            ResourceKind::Audio => "audio/wav",
+            ResourceKind::Video => "video/mp4",
+            ResourceKind::File => "application/pdf",
+        };
+        let protocol_can_encode = [
+            vulcan_ai_contract::ResourceSourceKind::InlineData,
+            vulcan_ai_contract::ResourceSourceKind::RemoteUrl,
+            vulcan_ai_contract::ResourceSourceKind::ProviderFileId,
+        ]
+        .into_iter()
+        .any(|source| {
+            vulcan_llm_core::protocol_profile_supports_media_source(
+                protocol_profile_id,
+                *resource,
+                mime,
+                source,
+            )
+        });
+        if !protocol_can_encode {
+            return Err(format!(
+                "Protocol `{protocol_profile_id}` cannot encode {resource:?} input for model `{model_id}`."
+            ));
+        }
+        if resource == &ResourceKind::Video
+            && !route
+                .input_resource_constraints
+                .iter()
+                .any(|constraint| constraint.resource_kind == *resource)
+        {
+            return Err(format!(
+                "Service entry `{service_entry_id}` protocol `{protocol_profile_id}` does not declare video input for model `{model_id}`."
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Stores the confirmed common template snapshot applied to one custom-provider model.
 /// 保存应用到某个自定义供应商模型的已确认公共模板快照。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -746,63 +853,23 @@ pub fn validate_system_manual_model_definition(
             model.id
         ));
     }
-    // System request projections are owned by the signed route; accepting a user projection
-    // here would silently discard it in the current execution path.
-    // 系统请求投影由签名路由持有；当前执行链会静默丢弃用户投影，因此在入口明确拒绝。
-    if model.request_projection != CustomModelRequestProjection::default() {
-        return Err(format!(
-            "System manual model `{}` cannot override the signed request projection.",
-            model.id
-        ));
-    }
+    // A user-added model may carry its own reasoning mapping. Execution applies it after the
+    // signed route template, so it can rewrite the template's reasoning fields for model
+    // families the shared route does not map.
+    // 用户新增模型可携带自己的思考映射。执行链在签名路由模板之后应用它，因此可以为共享路由
+    // 未映射的模型家族改写模板产生的思考字段。
     if model.tool_schema_projection != ToolSchemaProjectionMode::Lightweight {
         return Err(format!(
             "System manual model `{}` cannot override the signed tool-schema projection.",
             model.id
         ));
     }
-    for resource in &model.capabilities.input_resources {
-        // A model declaration cannot make a wire projector encode a modality it does not own.
-        // 模型声明不能让 Wire 投影器编码其本身不支持的输入模态。
-        let mime = match resource {
-            vulcan_ai_contract::ResourceKind::Image => "image/png",
-            vulcan_ai_contract::ResourceKind::Audio => "audio/wav",
-            vulcan_ai_contract::ResourceKind::Video => "video/mp4",
-            vulcan_ai_contract::ResourceKind::File => "application/pdf",
-        };
-        let protocol_can_encode = [
-            vulcan_ai_contract::ResourceSourceKind::InlineData,
-            vulcan_ai_contract::ResourceSourceKind::RemoteUrl,
-            vulcan_ai_contract::ResourceSourceKind::ProviderFileId,
-        ]
-        .into_iter()
-        .any(|source| {
-            vulcan_llm_core::protocol_profile_supports_media_source(
-                binding.protocol_profile_id.as_str(),
-                *resource,
-                mime,
-                source,
-            )
-        });
-        if !protocol_can_encode {
-            return Err(format!(
-                "Protocol `{}` cannot encode {resource:?} input for manual model `{}`.",
-                binding.protocol_profile_id, model.id
-            ));
-        }
-        if resource == &vulcan_ai_contract::ResourceKind::Video
-            && !route
-                .input_resource_constraints
-                .iter()
-                .any(|constraint| constraint.resource_kind == *resource)
-        {
-            return Err(format!(
-                "Service entry `{}` protocol `{}` does not declare video input for manual model `{}`.",
-                binding.service_entry_id, binding.protocol_profile_id, model.id
-            ));
-        }
-    }
-    Ok(())
+    validate_route_input_resources(
+        binding.service_entry_id.as_str(),
+        route,
+        &model.capabilities.input_resources,
+        model.id.as_str(),
+    )
 }
 
 impl CustomModelRequestProjection {
@@ -1148,11 +1215,8 @@ mod tests {
             .request_projection
             .defaults
             .insert(String::from("temperature"), serde_json::json!(0.3));
-        assert!(
-            validate_system_manual_model_definition(manifest, &model)
-                .expect_err("system request projection remains manifest-owned")
-                .contains("cannot override the signed request projection")
-        );
+        validate_system_manual_model_definition(manifest, &model)
+            .expect("a user-added model may carry its own request mapping");
         model.request_projection.defaults.clear();
         model.capabilities.input_resources = vec![vulcan_ai_contract::ResourceKind::Video];
         assert!(
