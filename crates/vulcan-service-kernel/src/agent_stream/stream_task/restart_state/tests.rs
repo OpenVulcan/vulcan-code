@@ -98,19 +98,22 @@ fn stale_or_failed_preparation_keeps_configuration_restart_debt() {
     assert!(!state.try_configuration_restart());
 }
 
-/// Actual V1 permit discrimination resets configuration debt but does not reopen the independent compaction guard.
-/// 实际V1许可判别重置配置消耗，但不重开独立压缩守卫。
+/// Only an actual V1 permit resets configuration debt and re-arms automatic compaction.
+/// 只有实际V1许可才重置配置消耗并重新启用自动压缩。
 #[test]
-fn v1_permit_resets_only_configuration_restart_debt() {
-    // The prior automatic compaction attempt must remain consumed after a successful provider permit.
-    // 成功供应商许可后，先前自动压缩尝试仍必须保持已消耗。
+fn v1_permit_resets_restart_debt_and_rearms_compaction() {
     let mut state = StreamRestartState::default().with_auto_compaction_attempted(true);
     for _ in 0..3 {
         assert!(state.try_configuration_restart());
     }
+    // A rejected or changed candidate proves no progress, so the compaction attempt stays consumed.
+    // 被拒绝或已变更的候选不证明进展，因此压缩尝试保持已消耗。
+    state.observe_preparation(&Ok(PreparedPhysicalApi::RequestConfigurationChanged));
+    state.observe_preparation(&Err("source preparation failed".into()));
+    assert!(state.auto_compaction_already_attempted);
     state.observe_preparation(&Ok(successful_permit_fixture()));
     assert_eq!(state.configuration_restarts, 0);
-    assert!(state.auto_compaction_already_attempted);
+    assert!(!state.auto_compaction_already_attempted);
     assert!(state.try_configuration_restart());
 }
 

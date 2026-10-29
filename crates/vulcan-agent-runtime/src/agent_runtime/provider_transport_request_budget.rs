@@ -9,6 +9,7 @@ use crate::context_budget::{
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::sync::{Arc, Mutex};
 use vulcan_ai_contract::ModelCapabilities;
 use vulcan_core::provider::{
     VulcanProviderAdapter, VulcanProviderDeltaSink, VulcanStreamingProviderAdapter,
@@ -372,6 +373,12 @@ pub struct ProviderRequestBudgetGuard {
     /// Absolute BodyAfterPrefix baseline from the active compaction window.
     /// 当前压缩窗口的绝对 BodyAfterPrefix 基线。
     prefill_input_tokens: Option<usize>,
+    /// Whether a follow-up request in this turn may stop at the session compaction line.
+    /// 本回合的后续请求是否可以停在会话压缩线处。
+    turn_compaction_line_armed: bool,
+    /// Usage of the latest completed response in this turn, shared by every clone of the guard.
+    /// 本回合最近一次完成响应的用量，由守卫的所有克隆共享。
+    latest_turn_usage: Arc<Mutex<Option<ProviderUsageSnapshot>>>,
 }
 
 impl ProviderRequestBudgetGuard {
@@ -410,7 +417,94 @@ impl ProviderRequestBudgetGuard {
             context_compaction_policy,
             context_budget_override,
             prefill_input_tokens,
+            turn_compaction_line_armed: false,
+            latest_turn_usage: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Arms the session compaction line for follow-up requests of a turn that began below it.
+    /// 为起始时低于会话压缩线的回合，在后续请求上启用该压缩线。
+    ///
+    /// A turn that began at or above the line already had its compaction chance, so arming it
+    /// would only restart compaction that cannot get under the line.
+    /// 起始时已在压缩线及以上的回合已经有过压缩机会；启用只会重复无法降到线下的压缩。
+    pub(crate) fn with_turn_compaction_line(mut self, turn_began_below_line: bool) -> Self {
+        self.turn_compaction_line_armed = turn_began_below_line;
+        self
+    }
+
+    /// Records the usage of one completed response in this turn.
+    /// 记录本回合一次完成响应的用量。
+    fn observe_turn_response(&self, response: &CoreProviderTurnResponse) {
+        if let Some(usage) = response.usage.as_ref()
+            && let Ok(mut latest) = self.latest_turn_usage.lock()
+        {
+            *latest = Some(usage.clone());
+        }
+    }
+
+    /// Stops a follow-up request once the turn's last real usage reached the session compaction line.
+    /// 当本回合最近一次真实用量达到会话压缩线时，停止后续请求。
+    ///
+    /// The previous request's input plus its output is a floor for the next request, so the
+    /// line is detected from Provider evidence rather than a character estimate.
+    /// 上一次请求的输入加输出是下一次请求的下限，因此以 Provider 证据而非字符估算判定压缩线。
+    fn validate_turn_compaction_line(
+        &self,
+        snapshot: &CoreProviderRequestSnapshot,
+    ) -> Result<(), VulcanCoreError> {
+        if !self.turn_compaction_line_armed {
+            return Ok(());
+        }
+        let Some(usage) = self
+            .latest_turn_usage
+            .lock()
+            .ok()
+            .and_then(|latest| latest.clone())
+        else {
+            return Ok(());
+        };
+        // Normalized uncached input plus cache reads is the full input on every protocol, even
+        // where the Provider reports no total (Anthropic).
+        // 归一化未缓存输入加缓存读取在所有协议上都是完整输入，即使 Provider 不报告总量（Anthropic）。
+        let full_input_tokens = usage
+            .uncached_input_tokens
+            .zip(usage.cached_input_tokens)
+            .map(|(uncached, cached)| uncached.saturating_add(cached));
+        let Some(input_tokens) = full_input_tokens
+            .or_else(|| vulcan_context::observed_input_tokens_from_usage(Some(&usage)))
+        else {
+            return Ok(());
+        };
+        let accounted_input_tokens =
+            input_tokens.saturating_add(usage.output_tokens.unwrap_or_default());
+        let budget = build_request_context_compaction_budget_snapshot(
+            RequestContextCompactionBudgetSnapshotInput {
+                provider_id: self.provider_id.as_str(),
+                model_id: self.model_id.as_str(),
+                protocol_profile_id: self.protocol_profile_id.as_str(),
+                capabilities: &self.capabilities,
+                reasoning: &self.reasoning,
+                request_snapshot: snapshot,
+                compaction_policy: self.context_compaction_policy,
+                context_budget_override: self.context_budget_override,
+                observed_usage: Some(&usage),
+                accounted_input_tokens: Some(accounted_input_tokens),
+                accounting_source: ContextBudgetAccountingSource::ProviderAnchorPlusCharacterDelta,
+                accounting_warning_code: Some("provider_previous_response_floor"),
+                provider_anchor_call_id: None,
+                prefill_input_tokens: self.prefill_input_tokens,
+            },
+        );
+        if budget.should_compact() {
+            return Err(VulcanCoreError::ContextCompactionRequired {
+                message: format!(
+                    "The context reached the session compaction line during this turn: {}.",
+                    budget.summary_note()
+                ),
+            });
+        }
+        Ok(())
     }
 
     /// Validates one final request snapshot and rejects dispatch when automatic compaction should run first.
@@ -796,7 +890,11 @@ where
         &self,
         request: Self::Request,
     ) -> Result<Self::Response, VulcanCoreError> {
-        self.inner.execute_request(request).await
+        let response = self.inner.execute_request(request).await?;
+        if let Some(guard) = self.request_budget_guard.as_ref() {
+            guard.observe_turn_response(&response);
+        }
+        Ok(response)
     }
 
     /// Validates the exact request snapshot before network dispatch.
@@ -812,6 +910,7 @@ where
                 }
             })?;
             guard.validate_budget(budget)?;
+            guard.validate_turn_compaction_line(request.budget_snapshot())?;
         }
         Ok(())
     }
@@ -833,7 +932,11 @@ where
     where
         S: VulcanProviderDeltaSink,
     {
-        self.inner.execute_request_streaming(request, sink).await
+        let response = self.inner.execute_request_streaming(request, sink).await?;
+        if let Some(guard) = self.request_budget_guard.as_ref() {
+            guard.observe_turn_response(&response);
+        }
+        Ok(response)
     }
 }
 
@@ -1118,6 +1221,75 @@ mod tests {
             error,
             VulcanCoreError::ContextCompactionRequired { .. }
         ));
+    }
+
+    /// Verifies cached Provider usage, not a character estimate, stops a follow-up at the line.
+    /// 验证以含缓存的 Provider 用量而非字符估算，在压缩线处停止后续请求。
+    #[test]
+    fn turn_compaction_line_stops_follow_up_after_real_usage_reaches_it() {
+        let guard = |armed: bool| {
+            ProviderRequestBudgetGuard::new_v1(
+                "test-provider",
+                "test-model",
+                vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
+                "sha256:test-route",
+                ModelCapabilities {
+                    context_limit: Some(1_000_000),
+                    ..ModelCapabilities::default()
+                },
+                ProviderRuntimeReasoningResolution::default(),
+                Some(ContextCompactionPolicy {
+                    window: vulcan_context::ContextWindowPolicy {
+                        auto_compact_token_limit: Some(1_000),
+                        ..vulcan_context::ContextWindowPolicy::default()
+                    },
+                    ..ContextCompactionPolicy::default()
+                }),
+                None,
+                None,
+            )
+            .with_turn_compaction_line(armed)
+        };
+        let response = |cached_input_tokens: usize| CoreProviderTurnResponse {
+            assistant_text: String::new(),
+            assistant_reasoning: String::new(),
+            provider_message_id: None,
+            provider_message_state: None,
+            // Anthropic reports cache reads beside a small uncached input.
+            // Anthropic 在少量未缓存输入之外单独报告缓存读取。
+            usage: Some(ProviderUsageSnapshot {
+                input_tokens: Some(8),
+                uncached_input_tokens: Some(8),
+                cached_input_tokens: Some(cached_input_tokens),
+                output_tokens: Some(50),
+                ..ProviderUsageSnapshot::default()
+            }),
+            tool_calls: Vec::new(),
+            continuation: None,
+        };
+        let request = request_snapshot(Vec::new());
+
+        let armed = guard(true);
+        armed
+            .validate_turn_compaction_line(&request)
+            .expect("the first request has no turn usage yet");
+        armed.observe_turn_response(&response(500));
+        armed
+            .validate_turn_compaction_line(&request)
+            .expect("usage below the line keeps the turn going");
+        // A clone shares the observed usage, as each provider turn rebuilds its adapter.
+        // 克隆共享已观察用量，因为每个 Provider 回合都会重建适配器。
+        armed.clone().observe_turn_response(&response(1_000));
+        assert!(matches!(
+            armed.validate_turn_compaction_line(&request),
+            Err(VulcanCoreError::ContextCompactionRequired { .. })
+        ));
+
+        let unarmed = guard(false);
+        unarmed.observe_turn_response(&response(1_000));
+        unarmed
+            .validate_turn_compaction_line(&request)
+            .expect("a turn that began above the line is never restarted by it");
     }
 
     /// Verifies disabling automatic compaction never disables the hard-window dispatch gate.

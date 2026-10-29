@@ -158,11 +158,14 @@ impl StreamRestartState {
 
     /// Observes the actual `result`; only a durable V1 permit resets configuration churn, never a stale or failed candidate.
     /// 观察实际`result`；只有可靠V1许可重置配置抖动，陈旧或失败候选绝不重置。
-    /// Returns no value and leaves the separate automatic-compaction guard unchanged.
-    /// 不返回值，保持独立自动压缩守卫不变。
+    /// The same permit re-arms automatic compaction: it proves the compacted request passed every
+    /// budget gate, so a later compaction line in a long turn is new growth, not a retry loop.
+    /// 同一许可也重新启用自动压缩：它证明压缩后的请求已通过所有预算闸门，因此长回合中之后
+    /// 再到压缩线属于新增长，而非重试循环。
     pub(super) fn observe_preparation(&mut self, result: &Result<PreparedPhysicalApi, String>) {
         if let Ok(PreparedPhysicalApi::SessionV1 { core_start, .. }) = result {
             self.configuration_restarts = 0;
+            self.auto_compaction_already_attempted = false;
             if let Some(execution) = &mut self.question_execution {
                 execution.api_call_id = Some(core_start.api_call_id);
             }

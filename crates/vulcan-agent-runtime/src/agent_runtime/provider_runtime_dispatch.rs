@@ -2,7 +2,7 @@
 //! 负责解析运行时输入并启动宿主控制传输流的 Provider 运行时分发辅助模块。
 
 use crate::agent_runtime::config::RuntimeAgentDefinition;
-use crate::agent_runtime::execution_models::ExecutionPreparation;
+use crate::agent_runtime::execution_models::{ExecutionPreparation, ExecutionPromptPurpose};
 use crate::agent_runtime::provider_reasoning::validate_exact_wire_reasoning_effort;
 use crate::agent_runtime::provider_runtime_inputs::one_shot_provider_error_stream;
 use crate::agent_runtime::provider_stream::ProviderDeltaStream;
@@ -235,20 +235,31 @@ pub(crate) fn execute_provider_prompt_stream(
     // maxTurns 保持无限，因此只有模型返回无工具调用的响应才会结束 Provider 循环。
     let max_turns = resolve_runtime_default_max_turns_limit(active_agent);
     let model_id = preparation.model_blueprint.model_id.as_str();
-    let request_budget_guard = Some(ProviderRequestBudgetGuard::new_v1(
-        preparation.model_blueprint.provider_id.clone(),
-        preparation.model_blueprint.model_id.clone(),
-        preparation.model_blueprint.protocol_profile_id.clone(),
-        preparation.model_blueprint.route_revision.clone(),
-        preparation.model_blueprint.public_capabilities.clone(),
-        preparation.model_blueprint.reasoning.clone(),
-        preparation.context_compaction_policy,
-        preparation.context_budget_override,
-        preparation
-            .context_budget
-            .as_ref()
-            .and_then(|budget| budget.auto_compact_prefill_input_tokens),
-    ));
+    let request_budget_guard = Some(
+        ProviderRequestBudgetGuard::new_v1(
+            preparation.model_blueprint.provider_id.clone(),
+            preparation.model_blueprint.model_id.clone(),
+            preparation.model_blueprint.protocol_profile_id.clone(),
+            preparation.model_blueprint.route_revision.clone(),
+            preparation.model_blueprint.public_capabilities.clone(),
+            preparation.model_blueprint.reasoning.clone(),
+            preparation.context_compaction_policy,
+            preparation.context_budget_override,
+            preparation
+                .context_budget
+                .as_ref()
+                .and_then(|budget| budget.auto_compact_prefill_input_tokens),
+        )
+        // Only user turns own a host compaction path that can resume after the line.
+        // 只有用户回合拥有可在压缩线后继续执行的宿主压缩路径。
+        .with_turn_compaction_line(
+            preparation.prompt_purpose == ExecutionPromptPurpose::UserTurn
+                && preparation
+                    .context_budget
+                    .as_ref()
+                    .is_some_and(|budget| !budget.should_compact()),
+        ),
+    );
     let retry_policy = ProviderRetryPolicy::from_config(&config.retry);
 
     let mut transport_request = build_provider_transport_execution_request(
