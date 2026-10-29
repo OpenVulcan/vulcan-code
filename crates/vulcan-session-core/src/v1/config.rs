@@ -20,11 +20,15 @@ use crate::v1::ids::{ApiCallId, ClientActionId, PendingInputId, ResourceId, Seq,
 /// V1 会话元数据文档的文件契约。
 pub const METADATA_CONTRACT: &str = "vulcan.session.v1";
 
-/// Current metadata schema. Pre-release builds (V0.1.x) reject every other version instead of
-/// migrating it; per-version migrations become mandatory from V0.2 (AGENTS.md section 1 rule 12).
-/// 当前元数据模式版本。发布前版本（V0.1.x）拒绝其他任何版本而不迁移；自 V0.2 起才必须提供逐版本迁移
-/// （AGENTS.md 第一节第 12 条）。
-pub const METADATA_SCHEMA_VERSION: u32 = 9;
+/// Current metadata schema. Versions from `METADATA_UPGRADE_BASELINE_VERSION` upward are upgraded
+/// automatically on first read; older and future versions are rejected (AGENTS.md section 1 rule 12).
+/// 当前元数据模式版本。自 `METADATA_UPGRADE_BASELINE_VERSION` 起的版本在首次读取时自动升级；
+/// 更早与未来的版本一律拒绝（AGENTS.md 第一节第 12 条）。
+pub const METADATA_SCHEMA_VERSION: u32 = 10;
+
+/// Oldest metadata schema that can still be upgraded; it was current on 2026-10-29.
+/// 仍可自动升级的最早元数据模式版本；即 2026-10-29 时的当前版本。
+pub const METADATA_UPGRADE_BASELINE_VERSION: u32 = 9;
 
 /// Maximum number of Unicode scalar values accepted in one Goal objective.
 /// 一个 Goal 目标内容允许的 Unicode 标量值最大数量。
@@ -609,6 +613,30 @@ impl VmmSessionPolicyConfig {
     }
 }
 
+/// Session-level request options applied to every following Provider request when the route
+/// supports them and ignored otherwise.
+/// 会话级请求选项：路由支持时作用于之后的每次 Provider 请求，不支持时忽略。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RequestOptionsConfig {
+    /// Prompt-cache TTL option id (for example `1h`); absent means the route default.
+    /// 提示词缓存 TTL 选项标识（例如 `1h`）；缺省表示路由默认值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_ttl: Option<String>,
+    /// Provider service tier (for example a Codex fast tier); absent means the provider default.
+    /// 供应商服务档位（例如 Codex 快速档）；缺省表示供应商默认值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
+}
+
+impl RequestOptionsConfig {
+    /// Returns whether every option follows its default.
+    /// 返回是否所有选项都采用默认值。
+    pub fn is_empty(&self) -> bool {
+        self.prompt_cache_ttl.is_none() && self.service_tier.is_none()
+    }
+}
+
 /// Latest user selections for capabilities and personalities.
 /// 用户在能力与人格上的最新选择。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -649,6 +677,10 @@ pub struct SelectionConfig {
     /// 会话级 VMM 行为覆盖。
     #[serde(default, skip_serializing_if = "VmmSessionPolicyConfig::is_empty")]
     pub vmm: VmmSessionPolicyConfig,
+    /// Session-level request options such as prompt-cache TTL and service tier.
+    /// 会话级请求选项，如提示词缓存 TTL 与服务档位。
+    #[serde(default, skip_serializing_if = "RequestOptionsConfig::is_empty")]
+    pub request_options: RequestOptionsConfig,
     /// Web-search enable flag.
     /// 网页搜索启用标记。
     #[serde(default, skip_serializing_if = "Option::is_none")]

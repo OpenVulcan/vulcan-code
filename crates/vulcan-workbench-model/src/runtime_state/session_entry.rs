@@ -413,6 +413,9 @@ pub struct SessionRuntimeStateEntry {
     /// Session-level VMM memory integration overrides.
     /// 会话级 VMM 记忆集成覆盖配置。
     pub vmm: VmmConfigLayer,
+    /// Process-local mirror of the session request options (prompt-cache TTL, service tier).
+    /// 会话请求选项（提示词缓存 TTL、服务档位）的进程内镜像。
+    pub request_options: vulcan_session_core::v1::config::RequestOptionsConfig,
     /// Process-local mirror of the session knowledge-library selection.
     /// 会话知识库选择的进程内镜像。
     pub knowledge_library_selection: SessionKnowledgeLibrarySelection,

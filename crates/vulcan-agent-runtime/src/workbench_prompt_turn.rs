@@ -1397,6 +1397,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         context_window_prefill_input_tokens: runtime_state.auto_compact_prefill_input_tokens,
         execution_mode: input.start.execution_mode,
         temperature: None,
+        session_request_options: runtime_state.request_options.clone(),
         reasoning_effort: input
             .start
             .reasoning_effort

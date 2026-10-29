@@ -1785,6 +1785,7 @@ fn build_prompt_compaction_launch_request(
         context_window_prefill_input_tokens: None,
         execution_mode: launch_context.execution_mode.clone(),
         temperature: launch_context.temperature,
+        session_request_options: Default::default(),
         reasoning_effort,
         tool_exposure_override: launch_context.tool_exposure_override.clone(),
         captured_child_tool_admission: launch_context.captured_child_tool_admission.clone(),

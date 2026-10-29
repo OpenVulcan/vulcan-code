@@ -14,7 +14,7 @@ import {
   resolveModelPickerDisplayedChoice,
   type ModelPickerChoice,
 } from "@/components/composer/model-picker-control";
-import { promptCacheOptionShortLabel, useComposerPromptCache } from "@/components/composer/composer-prompt-cache";
+import { requestOptionShortLabel, useComposerRequestOptions } from "@/components/composer/composer-request-options";
 import type { ComposerSelectOption } from "@/components/composer/composer-model";
 import { ProviderIcon } from "@/components/features/settings/provider-icon";
 import { ComposerAccountStatus } from "./composer-account-status";
@@ -141,6 +141,10 @@ export function describeReasoningSelection(
   };
 }
 
+// STANDARD_SERVICE_TIER is the selector value of the standard tier, which the session stores as no choice.
+// STANDARD_SERVICE_TIER 是标准档位的选择器取值，会话将其保存为未选择。
+const STANDARD_SERVICE_TIER = "\u0000standard";
+
 // PickerView names the panes of the merged popover; "reasoning" is the home pane.
 // PickerView 命名合并浮层的各个面板；"reasoning" 为首页面板。
 type PickerView = "reasoning" | "models" | "account";
@@ -209,6 +213,9 @@ export function ModelReasoningPickerControl(props: {
   // Whether the host flow temporarily disables the control.
   // 宿主流程是否临时禁用该控件。
   disabled?: boolean;
+  // Created session whose request options (cache lifetime, service tier) are shown; null or absent for drafts.
+  // 显示其请求选项（缓存时长、服务档位）的已创建会话；草稿时为 null 或缺省。
+  conversationId?: string | null;
 }) {
   const { t } = useI18n();
   const [open, setOpen] = React.useState(false);
@@ -256,12 +263,15 @@ export function ModelReasoningPickerControl(props: {
   // until the pointer leaves the trigger.
   // summarySuppressedRef 在浮层关闭、焦点回到触发器后阻止摘要卡片弹出，直到指针离开触发器。
   const summarySuppressedRef = React.useRef(false);
-  // promptCache drives the cache-lifetime selector, shown only for Anthropic Messages routes.
-  // promptCache 驱动缓存时长选择器，仅在 Anthropic Messages 路由显示。
-  const promptCache = useComposerPromptCache(selectedChoice ?? null, account.snapshot);
-  const loadPromptCache = promptCache.load;
-  const promptCacheLabel = promptCache.route && promptCache.optionId
-    ? promptCacheOptionShortLabel(promptCache.optionId)
+  // requestOptions drive the session cache-lifetime and service-tier selectors, shown only where the route offers them.
+  // requestOptions 驱动会话缓存时长与服务档位选择器，仅在路由提供时显示。
+  const requestOptions = useComposerRequestOptions(selectedChoice ?? null, account.snapshot, props.conversationId ?? null);
+  const loadRequestOptions = requestOptions.load;
+  const promptCacheLabel = requestOptions.routes.promptCache && requestOptions.promptCacheTtl
+    ? requestOptionShortLabel(requestOptions.promptCacheTtl)
+    : null;
+  const serviceTierLabel = requestOptions.routes.serviceTier && requestOptions.serviceTier
+    ? requestOptionShortLabel(requestOptions.serviceTier)
     : null;
 
   React.useEffect(() => {
@@ -301,12 +311,12 @@ export function ModelReasoningPickerControl(props: {
   }, [popoverOpen, props.accountValue, props.accounts.length, loadAccount]);
 
   React.useEffect(() => {
-    // With an account row the account read above supplies the shared snapshot.
-    // 存在账号行时，上方的账号读取提供共享快照。
-    if (popoverOpen && props.accounts.length === 0) {
-      void loadPromptCache();
+    // With an account row the account read above supplies the shared settings snapshot.
+    // 存在账号行时，上方的账号读取提供共享设置快照。
+    if (popoverOpen) {
+      void loadRequestOptions(props.accounts.length === 0);
     }
-  }, [popoverOpen, props.accounts.length, loadPromptCache]);
+  }, [popoverOpen, props.accounts.length, loadRequestOptions]);
 
   // openPane enters a secondary pane from the reasoning pane, so leaving it steps back.
   // openPane 从思考面板进入次级面板，离开时返回上一层。
@@ -382,6 +392,7 @@ export function ModelReasoningPickerControl(props: {
               <span className="vk-pick-label">{modelLabel}</span>
               {triggerLevel ? <span className="vk-pick-level">{triggerLevel}</span> : null}
               {promptCacheLabel ? <span className="vk-pick-level">{promptCacheLabel}</span> : null}
+              {serviceTierLabel ? <span className="vk-pick-level">{serviceTierLabel}</span> : null}
               {accountMissing ? <UserRound aria-hidden="true" className="vk-pick-alert" size={13} /> : null}
               <ChevronDown aria-hidden="true" className="vk-pick-chevron" />
             </button>
@@ -549,26 +560,52 @@ export function ModelReasoningPickerControl(props: {
                 <p className="vk-mr-hint">{t(FIXED_REASONING_HINT_KEYS[reasoning.tone])}</p>
               </div>
             )}
-            {promptCache.route ? (
+            {requestOptions.routes.promptCache ? (
               <div className="vk-mr-block">
                 <div className="vk-mr-heading">
                   <span className="vk-mr-eyebrow">{t("composer.promptCache.title")}</span>
                 </div>
                 <SegmentedControl
                   aria-label={t("composer.promptCache.title")}
-                  disabled={promptCache.saving}
-                  onValueChange={(optionId) => { void promptCache.select(optionId); }}
-                  value={promptCache.optionId ?? ""}
+                  disabled={!requestOptions.editable || requestOptions.saving}
+                  onValueChange={(optionId) => { if (optionId) void requestOptions.select({ promptCacheTtl: optionId }); }}
+                  value={requestOptions.promptCacheTtl ?? ""}
                 >
-                  {promptCache.route.options.map((option) => (
+                  {requestOptions.routes.promptCache.options.map((option) => (
                     <SegmentedControlItem key={option.id} value={option.id}>
-                      {promptCacheOptionShortLabel(option.id)}
+                      {requestOptionShortLabel(option.id)}
                     </SegmentedControlItem>
                   ))}
                 </SegmentedControl>
                 <p className="vk-mr-hint">
-                  {promptCache.error
-                    ?? (promptCache.optionId ? t("composer.promptCache.hint") : t("composer.promptCache.disabled"))}
+                  {requestOptions.error
+                    ?? (requestOptions.editable ? t("composer.promptCache.hint") : t("composer.requestOptions.draftHint"))}
+                </p>
+              </div>
+            ) : null}
+            {requestOptions.routes.serviceTier ? (
+              <div className="vk-mr-block">
+                <div className="vk-mr-heading">
+                  <span className="vk-mr-eyebrow">{t("composer.serviceTier.title")}</span>
+                </div>
+                <SegmentedControl
+                  aria-label={t("composer.serviceTier.title")}
+                  disabled={!requestOptions.editable || requestOptions.saving}
+                  onValueChange={(value) => {
+                    if (value) void requestOptions.select({ serviceTier: value === STANDARD_SERVICE_TIER ? null : value });
+                  }}
+                  value={requestOptions.serviceTier ?? STANDARD_SERVICE_TIER}
+                >
+                  <SegmentedControlItem value={STANDARD_SERVICE_TIER}>{t("composer.serviceTier.standard")}</SegmentedControlItem>
+                  {requestOptions.routes.serviceTier.values.map((value) => (
+                    <SegmentedControlItem key={value} value={value}>
+                      {requestOptionShortLabel(value)}
+                    </SegmentedControlItem>
+                  ))}
+                </SegmentedControl>
+                <p className="vk-mr-hint">
+                  {requestOptions.error
+                    ?? (requestOptions.editable ? t("composer.serviceTier.hint") : t("composer.requestOptions.draftHint"))}
                 </p>
               </div>
             ) : null}

@@ -613,6 +613,7 @@ fn build_git_commit_summary_execution_request(
         context_window_prefill_input_tokens: None,
         execution_mode: String::from("GitCommitSummary"),
         temperature: None,
+        session_request_options: Default::default(),
         reasoning_effort,
         tool_exposure_override: Default::default(),
         captured_child_tool_admission: None,

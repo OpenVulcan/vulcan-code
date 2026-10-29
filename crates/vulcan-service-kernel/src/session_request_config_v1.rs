@@ -4,7 +4,7 @@
 use vulcan_provider_config::config::ReasoningEffortLevel;
 use vulcan_session_core::v1::config::{
     ActiveRequestConfig, AnswerMode, KnowledgeLibrarySelectionConfig, PendingRequestConfig,
-    ProviderToolSelectionConfig, VmmSessionPolicyConfig,
+    ProviderToolSelectionConfig, RequestOptionsConfig, VmmSessionPolicyConfig,
 };
 use vulcan_session_core::v1::document::SessionSelectionBundleInput;
 use vulcan_workbench_model::SessionRuntimeStateEntry;
@@ -858,6 +858,31 @@ pub(crate) fn set_vmm_session_policy_value_v1(
             },
         )
         .map_err(|error| format!("Failed to save the V1 VMM session policy: {error}"))?;
+    Ok(receipt.changed)
+}
+
+/// Persists the session request options (cache lifetime and service tier).
+/// 持久化会话请求选项（缓存时长与服务档位）。
+/// `options` replaces the stored options; returns whether metadata changed.
+/// `options` 替换已保存选项；返回元数据是否发生变化。
+pub(crate) fn set_request_options_v1(
+    handle: &SessionHandle,
+    options: RequestOptionsConfig,
+    now_ms: i64,
+) -> Result<bool, String> {
+    let receipt = handle
+        .mutate_durable_if_changed(
+            SessionMutationAdmission::MetadataOnly,
+            SessionFlushReason::MetadataChanged,
+            move |document| {
+                if document.set_request_options(options, now_ms)? {
+                    Ok(SessionMutationChange::Changed(()))
+                } else {
+                    Ok(SessionMutationChange::Unchanged(()))
+                }
+            },
+        )
+        .map_err(|error| format!("Failed to save the V1 session request options: {error}"))?;
     Ok(receipt.changed)
 }
 

@@ -323,6 +323,9 @@ pub struct ExecutionPreparationRequest {
     /// Optional sampling temperature override from the run-time controls.
     /// 来自运行参数控制区的可选采样温度覆盖值。
     pub temperature: Option<f32>,
+    /// Session request options (prompt-cache TTL, service tier) applied when the route supports them.
+    /// 路由支持时应用的会话请求选项（提示词缓存 TTL、服务档位）。
+    pub session_request_options: vulcan_session_core::v1::config::RequestOptionsConfig,
     /// Shared reasoning-effort preset selected by the current workbench run controls.
     /// 当前工作台运行控制区选择的共享推理档位预设。
     pub reasoning_effort: ReasoningEffortLevel,
@@ -595,6 +598,9 @@ pub struct ExecutionPreparation {
     /// Optional sampling temperature captured for the run.
     /// 为本次运行捕获的可选采样温度。
     pub temperature: Option<f32>,
+    /// Session request options captured for the run.
+    /// 为本次运行捕获的会话请求选项。
+    pub session_request_options: vulcan_session_core::v1::config::RequestOptionsConfig,
     /// Prompt-composer configuration captured for this run.
     /// 为本次运行捕获的提示词组合配置。
     pub prompt_configuration: PersistedPromptConfiguration,

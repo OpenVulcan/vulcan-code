@@ -646,6 +646,7 @@ mod tests {
             context_history_count: 0,
             execution_mode: String::from("默认模式"),
             temperature: Some(0.2),
+            session_request_options: Default::default(),
             prompt_configuration: crate::provider_config::PersistedPromptConfiguration::default(),
             output_style_snapshot: None,
             prompt_purpose: crate::agent_runtime::ExecutionPromptPurpose::UserTurn,

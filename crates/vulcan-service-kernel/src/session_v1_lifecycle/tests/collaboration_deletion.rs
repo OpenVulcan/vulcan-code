@@ -337,7 +337,8 @@ async fn root_deletion_removes_an_unsupported_metadata_format() {
     let metadata_path = root_directory.join("metadata.json");
     let mut raw: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&metadata_path).unwrap()).unwrap();
-    raw["schema_version"] = (vulcan_session_core::v1::config::METADATA_SCHEMA_VERSION - 1).into();
+    raw["schema_version"] =
+        (vulcan_session_core::v1::config::METADATA_UPGRADE_BASELINE_VERSION - 1).into();
     std::fs::write(&metadata_path, serde_json::to_vec(&raw).unwrap()).unwrap();
     // A fresh registry matches a restarted service that never loaded the old session.
     // 全新注册表对应从未加载该旧会话的重启后服务。

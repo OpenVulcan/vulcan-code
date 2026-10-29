@@ -95,6 +95,7 @@ mod tests {
             context_history_count: 2,
             execution_mode: String::from("Build"),
             temperature: Some(0.2),
+            session_request_options: Default::default(),
             prompt_configuration: crate::provider_config::PersistedPromptConfiguration::default(),
             output_style_snapshot: None,
             prompt_purpose: crate::agent_runtime::ExecutionPromptPurpose::UserTurn,

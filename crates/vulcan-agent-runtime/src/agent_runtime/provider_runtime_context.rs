@@ -2769,6 +2769,7 @@ mod tests {
             context_history_count: 0,
             execution_mode: String::from("Build"),
             temperature: None,
+            session_request_options: Default::default(),
             prompt_configuration,
             output_style_snapshot: None,
             prompt_purpose: ExecutionPromptPurpose::UserTurn,

@@ -220,6 +220,7 @@ mod session_media_resources_v1;
 mod session_model_projection_v1;
 mod session_plan_runtime;
 mod session_request_config_v1;
+mod session_request_options_services;
 mod session_runtime_kernel;
 mod session_runtime_registry_v1;
 mod session_v1_lifecycle;
@@ -368,6 +369,9 @@ use session_hydration::{
     retained_submission_snapshot_is_usable, sync_hydrated_session_dialogue_ready_marker,
 };
 use session_plan_runtime::*;
+use session_request_options_services::{
+    service_get_session_request_options, service_set_session_request_options,
+};
 use session_runtime_kernel::*;
 use settings_provider_projection::*;
 use settings_runtime_projection::*;

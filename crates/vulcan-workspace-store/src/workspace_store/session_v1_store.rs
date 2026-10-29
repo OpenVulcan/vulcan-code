@@ -3090,7 +3090,7 @@ END;
             serde_json::from_slice(&fs::read(&delete_metadata_path).expect("read metadata"))
                 .expect("parse metadata");
         raw_metadata["schema_version"] =
-            (vulcan_session_core::v1::config::METADATA_SCHEMA_VERSION - 1).into();
+            (vulcan_session_core::v1::config::METADATA_UPGRADE_BASELINE_VERSION - 1).into();
         fs::write(
             &delete_metadata_path,
             serde_json::to_vec(&raw_metadata).expect("encode metadata"),

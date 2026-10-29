@@ -82,6 +82,9 @@ struct SessionV1RuntimeProjection {
     /// Complete session-owned VMM policy pair.
     /// 当前会话持有的完整 VMM 策略对。
     vmm: VmmSessionPolicyConfig,
+    /// Session request options applied by later Provider requests.
+    /// 之后的 Provider 请求所应用的会话请求选项。
+    request_options: vulcan_session_core::v1::config::RequestOptionsConfig,
 }
 
 /// Projects all Stage 6 restart facts from one immutable V1 document view.
@@ -122,6 +125,7 @@ fn session_v1_runtime_projection(
             .knowledge_libraries
             .clone(),
         vmm: document.metadata.config.selection.vmm.clone(),
+        request_options: document.metadata.config.selection.request_options.clone(),
     }
 }
 
@@ -210,6 +214,9 @@ fn apply_session_v1_runtime_projection(
     };
     runtime_state.vmm.precheck_enabled = projection.vmm.precheck_enabled;
     runtime_state.vmm.memory_writeback_enabled = projection.vmm.memory_writeback_enabled;
+    runtime_state
+        .request_options
+        .clone_from(&projection.request_options);
     runtime_state.updated_at.clone_from(&projection.updated_at);
 }
 

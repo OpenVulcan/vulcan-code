@@ -1,18 +1,21 @@
-//! Exact-version metadata reads and the shared metadata publication lock.
-//! 精确版本的元数据读取与共享元数据发布锁。
+//! Metadata reads with automatic upgrades, and the shared metadata publication lock.
+//! 带自动升级的元数据读取，以及共享元数据发布锁。
 //!
-//! Pre-release builds (V0.1.x) do not migrate older metadata schemas: any other version is
-//! rejected explicitly and the file is left untouched (AGENTS.md section 1 rule 12).
-//! 发布前版本（V0.1.x）不迁移旧元数据模式：其他版本一律明确拒绝，且不改动文件（AGENTS.md 第一节第 12 条）。
+//! Versions from the upgrade baseline up to the current schema are upgraded on first read: the
+//! original bytes are kept beside the file, the converted document is validated and published
+//! atomically. Older and future versions are rejected untouched (AGENTS.md section 1 rule 12).
+//! 自升级基线到当前模式之间的版本在首次读取时自动升级：原字节保留在文件旁，转换后的文档经校验后
+//! 原子发布。更早与未来的版本原样拒绝（AGENTS.md 第一节第 12 条）。
 
 use std::fs::{self, File, OpenOptions};
 use std::path::Path;
 
 use serde::Deserialize;
 use vulcan_session_core::v1::config::{
-    METADATA_CONTRACT, METADATA_SCHEMA_VERSION, MetadataDocument,
+    METADATA_CONTRACT, METADATA_SCHEMA_VERSION, METADATA_UPGRADE_BASELINE_VERSION, MetadataDocument,
 };
 
+use super::atomic_io::write_file_atomic;
 use super::errors::{ErrorCode, SessionV1Error};
 
 /// Minimal version discriminator, decoded before the current required fields.
@@ -69,21 +72,42 @@ pub(super) fn publication_lock(path: &Path) -> Result<File, SessionV1Error> {
     Ok(file)
 }
 
-/// Reads metadata of the exact current schema; every other version is rejected without writes.
-/// 读取精确当前模式的元数据；其他任何版本都在不写入的情况下被拒绝。
-/// `path` identifies one session; returns the typed document.
-/// `path` 标识一个会话；返回强类型文档。
+/// Reads metadata, upgrading a supported older schema on first read.
+/// 读取元数据；受支持的旧模式在首次读取时升级。
+/// `path` identifies one session; returns the typed current document.
+/// `path` 标识一个会话；返回当前强类型文档。
 pub(super) fn read_metadata(path: &Path) -> Result<MetadataDocument, SessionV1Error> {
     let bytes = read_bytes(path)?;
-    require_current_schema(path, &bytes)?;
-    decode(path, &bytes)
+    if schema_version(path, &bytes)? == METADATA_SCHEMA_VERSION {
+        return decode(path, &bytes);
+    }
+    upgrade_metadata(path)
 }
 
 /// Validates the metadata family and requires the exact current schema version.
 /// 校验元数据家族并要求精确的当前模式版本。
-/// `bytes` are the untouched file contents; older and future versions both return `unsupported`.
-/// `bytes` 是未改动的文件内容；旧版本与未来版本都返回 `unsupported`。
+/// `bytes` are the untouched file contents. Callers that never upgrade (explicit rebuilds) use it;
+/// upgradable versions are reported as unsupported here until an ordinary read upgrades them.
+/// `bytes` 是未改动的文件内容。不做升级的调用方（显式重建）使用它；可升级版本在普通读取完成升级前
+/// 在此报告为不支持。
 pub(super) fn require_current_schema(path: &Path, bytes: &[u8]) -> Result<(), SessionV1Error> {
+    let version = schema_version(path, bytes)?;
+    if version != METADATA_SCHEMA_VERSION {
+        return Err(SessionV1Error::unsupported(
+            path,
+            format!(
+                "metadata schema {version} must be read once to upgrade it to {METADATA_SCHEMA_VERSION} before this operation"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Returns the schema version of a supported metadata family revision.
+/// 返回受支持元数据家族修订的模式版本。
+/// Versions below the upgrade baseline and future versions return `unsupported` without writes.
+/// 低于升级基线的版本与未来版本在不写入的情况下返回 `unsupported`。
+fn schema_version(path: &Path, bytes: &[u8]) -> Result<u32, SessionV1Error> {
     let header: MetadataHeader = decode(path, bytes)?;
     if header.contract != METADATA_CONTRACT {
         return Err(SessionV1Error::unsupported(
@@ -91,18 +115,100 @@ pub(super) fn require_current_schema(path: &Path, bytes: &[u8]) -> Result<(), Se
             format!("unsupported metadata contract {:?}", header.contract),
         ));
     }
-    if header.schema_version != METADATA_SCHEMA_VERSION {
-        // Pre-release builds deliberately keep no upgrade path for older sessions.
-        // 发布前版本刻意不为旧会话保留升级路径。
+    if !(METADATA_UPGRADE_BASELINE_VERSION..=METADATA_SCHEMA_VERSION)
+        .contains(&header.schema_version)
+    {
         return Err(SessionV1Error::unsupported(
             path,
             format!(
-                "metadata schema {} is not supported by this pre-release build (requires exactly {}); older sessions are not migrated",
-                header.schema_version, METADATA_SCHEMA_VERSION,
+                "metadata schema {} is not supported (this build reads {METADATA_UPGRADE_BASELINE_VERSION} through {METADATA_SCHEMA_VERSION}); sessions older than the upgrade baseline are not migrated",
+                header.schema_version,
             ),
         ));
     }
+    Ok(header.schema_version)
+}
+
+/// Upgrades one older metadata file in place under the publication lock.
+/// 在发布锁内原地升级一个旧元数据文件。
+///
+/// The original bytes are kept as `metadata.v{N}.backup.json` before the converted document is
+/// published atomically. A concurrent reader that won the lock leaves a current file behind,
+/// which is returned without a second upgrade.
+/// 转换后的文档原子发布之前，原字节保存为 `metadata.v{N}.backup.json`。抢先取得锁的并发读取方
+/// 会留下当前版本文件，此时直接返回而不再次升级。
+fn upgrade_metadata(path: &Path) -> Result<MetadataDocument, SessionV1Error> {
+    let _guard = publication_lock(path)?;
+    let original = read_bytes(path)?;
+    let from_version = schema_version(path, &original)?;
+    if from_version == METADATA_SCHEMA_VERSION {
+        return decode(path, &original);
+    }
+    let mut raw: serde_json::Value = decode(path, &original)?;
+    for version in from_version..METADATA_SCHEMA_VERSION {
+        upgrade_step(path, version, &mut raw)?;
+    }
+    let document: MetadataDocument = serde_json::from_value(raw)
+        .map_err(|error| corrupt(path, format!("validate upgraded metadata: {error}")))?;
+    let encoded = serde_json::to_vec(&document).map_err(|error| {
+        SessionV1Error::atomic_write(path, "serialize", format!("serialize metadata: {error}"))
+    })?;
+    keep_original_bytes(path, from_version, &original)?;
+    write_file_atomic(path, &encoded, "metadata")?;
+    Ok(document)
+}
+
+/// Converts one raw document from `version` to `version + 1`.
+/// 将一份原始文档从 `version` 转换到 `version + 1`。
+fn upgrade_step(
+    path: &Path,
+    version: u32,
+    raw: &mut serde_json::Value,
+) -> Result<(), SessionV1Error> {
+    match version {
+        // 10 adds the optional `config.selection.request_options`; absence means defaults.
+        // 10 新增可选的 `config.selection.request_options`；缺省即默认值。
+        9 => {}
+        other => {
+            return Err(SessionV1Error::unsupported(
+                path,
+                format!("no upgrade step from metadata schema {other}"),
+            ));
+        }
+    }
+    let object = raw
+        .as_object_mut()
+        .ok_or_else(|| corrupt(path, "metadata root must be an object"))?;
+    object.insert(String::from("schema_version"), (version + 1).into());
     Ok(())
+}
+
+/// Stores the untouched original bytes beside the metadata file before it is replaced.
+/// 在元数据文件被替换前，将未改动的原字节保存在其旁边。
+///
+/// An existing backup with identical bytes is kept (an earlier attempt failed after writing it);
+/// different bytes are a conflict and stop the upgrade so no original is ever overwritten.
+/// 已存在且字节相同的备份予以保留（先前尝试在写入备份后失败）；字节不同属于冲突并中止升级，
+/// 从而绝不覆盖任何原始文件。
+fn keep_original_bytes(path: &Path, version: u32, original: &[u8]) -> Result<(), SessionV1Error> {
+    let backup = path.with_file_name(format!("metadata.v{version}.backup.json"));
+    match fs::read(&backup) {
+        Ok(existing) if existing == original => return Ok(()),
+        Ok(_) => {
+            return Err(SessionV1Error::io(
+                &backup,
+                "a different metadata backup already exists; refusing to overwrite it",
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(SessionV1Error::io(
+                &backup,
+                format!("inspect metadata backup: {error}"),
+            ));
+        }
+    }
+    write_file_atomic(&backup, original, "session upgrade backup")
 }
 
 /// Reads exact metadata bytes, preserving absence and I/O diagnostics.

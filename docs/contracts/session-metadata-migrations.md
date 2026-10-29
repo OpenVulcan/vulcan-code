@@ -36,6 +36,11 @@
 `CHILD_EXECUTION_PROFILE_VERSION`（当前为 3，版本 3 捕获扩展模式），仍保存在 `metadata.json` 的 `child_execution_profile` 中；
 基线之前的版本不读取，也不迁移、补值或探测旧字段，这些本地会话无法打开。
 
+基线之后的版本（均带自动升级）：10 在 `config.selection` 引入可选的 `request_options`（会话级请求选项：
+`prompt_cache_ttl` 为 Anthropic 提示词缓存时长选项，如 `5m` / `1h`；`service_tier` 为 Codex 服务档位，如
+`priority`；缺省即路由默认时长与标准档位，只由提供该能力的路由应用，其他路由忽略）。9→10 只更新版本号，
+原字节保存为同目录的 `metadata.v9.backup.json`。
+
 基线之前的会话无法加载，因此也无法走“先归档再删除”。唯一清理入口是 `service_delete_unsupported_conversation`：
 在会话生命周期守卫内先以 `session_v1_format_is_unsupported` 只读元数据确认其为 `UnsupportedDevelopmentFormat`，
 再经 `delete_session_v1` 删除会话目录与索引记录。可读会话返回 `ERR_SESSION_FORMAT_SUPPORTED`，损坏或缺失仍是
@@ -55,6 +60,9 @@
    - 升级在 `read_metadata` 的首次读取中自动完成：在 `metadata.write.lock` 内读取原字节，在同目录保留原字节
      备份，转换内存候选并按完整类型校验，再经原子发布写回。
    - 多个版本的差距按版本逐步升级，不跳步。
+   - 原字节备份命名为 `metadata.v{N}.backup.json`（`N` 为升级前版本）。已存在且字节相同的备份直接复用
+     （上次在写回前失败）；字节不同则停止升级并报错，绝不覆盖。升级步骤在 `metadata_access::upgrade_step`
+     中逐版本登记，`METADATA_UPGRADE_BASELINE_VERSION` 定义可升级的最低版本。
 3. 补齐测试：旧形状升级、重复读取不再升级、未来版本拒绝、备份冲突、写入故障与并发首次读取。
 4. 已升级到当前版本的文件缺字段仍属于损坏，不能添加全局反序列化默认值来掩盖。
 5. 在本文“版本历史”追加一句说明。

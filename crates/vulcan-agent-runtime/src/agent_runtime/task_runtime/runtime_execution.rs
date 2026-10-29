@@ -1991,6 +1991,7 @@ mod standalone_compaction_tests {
             context_history_count: 1,
             execution_mode: String::from("Build"),
             temperature: Some(0.2),
+            session_request_options: Default::default(),
             prompt_configuration: crate::provider_config::PersistedPromptConfiguration::default(),
             output_style_snapshot: None,
             // The standalone compaction purpose is the declared workload under test.

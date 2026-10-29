@@ -5,6 +5,7 @@ use super::*;
 use crate::v1::config::{
     ProviderExtensionModeConfig, ProviderExtensionModeKind,
     ProviderMediaUnderstandingReasoningEffort, ProviderMediaUnderstandingRouteConfig,
+    RequestOptionsConfig,
 };
 
 /// Pending request promotion and Goal terminal updates mutate metadata and
@@ -541,6 +542,43 @@ fn knowledge_and_vmm_selections_are_atomic_idempotent_and_strict() -> Result<(),
     let vmm_revision = doc.memory_revision();
     assert!(!doc.set_vmm_session_policy(vmm, T0 + 5)?);
     assert_eq!(doc.memory_revision(), vmm_revision);
+    Ok(())
+}
+
+/// Request options are idempotent, reject untrimmed values atomically and vanish when default.
+/// 请求选项幂等、原子拒绝未修剪的值，且为默认值时不序列化。
+#[test]
+fn request_options_are_idempotent_strict_and_omitted_when_default()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut doc = new_document();
+    let options = RequestOptionsConfig {
+        prompt_cache_ttl: Some(String::from("1h")),
+        service_tier: Some(String::from("priority")),
+    };
+    assert!(doc.set_request_options(options.clone(), T0 + 1)?);
+    assert_eq!(doc.metadata.config.selection.request_options, options);
+    let revision = doc.memory_revision();
+    assert!(!doc.set_request_options(options, T0 + 2)?);
+    assert_eq!(doc.memory_revision(), revision);
+
+    let before_invalid = doc.clone();
+    assert!(matches!(
+        doc.set_request_options(
+            RequestOptionsConfig {
+                prompt_cache_ttl: Some(String::from(" 1h")),
+                service_tier: None,
+            },
+            T0 + 3,
+        ),
+        Err(DomainError::InvalidSelectionConfiguration {
+            field: "request_options"
+        })
+    ));
+    assert_eq!(doc, before_invalid);
+
+    assert!(doc.set_request_options(RequestOptionsConfig::default(), T0 + 4)?);
+    let selection = serde_json::to_value(&doc.metadata.config.selection)?;
+    assert!(selection.get("request_options").is_none());
     Ok(())
 }
 

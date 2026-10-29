@@ -59,6 +59,7 @@ fn test_parent_execution_request(session_id: SessionId) -> ExecutionPreparationR
         context_window_prefill_input_tokens: None,
         execution_mode: String::from("build"),
         temperature: None,
+        session_request_options: Default::default(),
         reasoning_effort: ReasoningEffortLevel::High,
         tool_exposure_override: ToolExposureSnapshot::default(),
         captured_child_tool_admission: None,

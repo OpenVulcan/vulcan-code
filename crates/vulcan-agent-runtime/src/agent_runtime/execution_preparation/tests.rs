@@ -1101,6 +1101,7 @@ fn test_execution_preparation_request() -> ExecutionPreparationRequest {
         context_window_prefill_input_tokens: None,
         execution_mode: String::from("Build"),
         temperature: None,
+        session_request_options: Default::default(),
         reasoning_effort: ReasoningEffortLevel::Off,
         tool_exposure_override: Default::default(),
         captured_child_tool_admission: None,

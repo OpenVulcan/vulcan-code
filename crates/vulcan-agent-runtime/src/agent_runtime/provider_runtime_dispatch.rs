@@ -18,12 +18,17 @@ use crate::provider_config::ProviderConfigurationFile;
 use async_stream::stream;
 use futures_util::StreamExt;
 use std::sync::Arc;
-use vulcan_ai_contract::{ModelParameterValue, ReasoningEffort};
+use vulcan_ai_contract::{
+    ModelParameterValue, PromptCachePolicy, PromptCacheTtlSelection, ReasoningEffort,
+};
 use vulcan_core::types::{
     ConversationSnapshot as CoreConversationSnapshot,
     ProviderPromptLayers as CoreProviderPromptLayers,
 };
-use vulcan_provider_adapters::{ResolvedPublicAiExecution, SAMPLING_TEMPERATURE_PARAMETER_ID};
+use vulcan_provider_adapters::{
+    CODEX_SERVICE_TIER_PARAMETER_ID, ResolvedPublicAiExecution, SAMPLING_TEMPERATURE_PARAMETER_ID,
+};
+use vulcan_session_core::v1::config::RequestOptionsConfig;
 use vulcan_session_core::v1::context::LockedBaselineProjection;
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 
@@ -90,6 +95,73 @@ fn apply_runtime_temperature_override(
         .model_parameters
         .insert(String::from(SAMPLING_TEMPERATURE_PARAMETER_ID), value);
     Ok(())
+}
+
+/// Applies the session request options that the exact route supports and ignores the rest.
+/// 应用精确路由支持的会话请求选项，忽略其余选项。
+///
+/// # Parameters
+/// 参数
+/// `execution` is the selected model whose overrides are refined, and `options` is the session
+/// choice. A TTL applies only to a route that offers managed explicit caching with that option; a
+/// service tier applies only to a model that registers it for the current protocol.
+/// `execution` 是待细化覆盖的已选模型，`options` 是会话选择。TTL 只作用于提供该选项的显式托管
+/// 缓存路由；服务档位只作用于在当前协议注册了它的模型。
+fn apply_session_request_options(
+    execution: &mut ResolvedPublicAiExecution,
+    options: &RequestOptionsConfig,
+) {
+    apply_session_request_options_to_overrides(
+        &execution.model.capabilities,
+        execution.route.protocol_route.protocol_profile_id.as_str(),
+        &mut execution.overrides,
+        options,
+    );
+}
+
+/// Applies supported session request options to one model's execution overrides.
+/// 将受支持的会话请求选项应用到一个模型的执行覆盖。
+fn apply_session_request_options_to_overrides(
+    capabilities: &vulcan_ai_contract::ModelCapabilities,
+    protocol_id: &str,
+    overrides: &mut vulcan_provider_adapters::ModelExecutionOverrides,
+    options: &RequestOptionsConfig,
+) {
+    if let Some(option_id) = options.prompt_cache_ttl.as_deref() {
+        let capability = &capabilities.prompt_cache;
+        if capability.supports_managed_explicit
+            && capability
+                .supported_ttl_options
+                .iter()
+                .any(|option| option.id == option_id)
+        {
+            overrides.prompt_cache = Some(PromptCachePolicy::ManagedExplicit {
+                ttl: PromptCacheTtlSelection::CapabilityOption {
+                    option_id: option_id.to_string(),
+                },
+            });
+        }
+    }
+    if let Some(tier) = options.service_tier.as_deref() {
+        let value = ModelParameterValue::String(tier.to_string());
+        let registered = capabilities
+            .model_parameters
+            .iter()
+            .find(|definition| definition.id == CODEX_SERVICE_TIER_PARAMETER_ID)
+            .is_some_and(|definition| {
+                (definition.protocol_ids.is_empty()
+                    || definition
+                        .protocol_ids
+                        .iter()
+                        .any(|candidate| candidate == protocol_id))
+                    && definition.validate_value(&value).is_ok()
+            });
+        if registered {
+            overrides
+                .model_parameters
+                .insert(String::from(CODEX_SERVICE_TIER_PARAMETER_ID), value);
+        }
+    }
 }
 
 /// Resolves and validates the workbench reasoning preference against provider metadata.
@@ -231,6 +303,7 @@ pub(crate) fn execute_provider_prompt_stream(
         .and_then(|agent| agent.temperature)
         .or(preparation.temperature);
     let temperature = requested_temperature.map(f64::from);
+    let session_request_options = preparation.session_request_options.clone();
     // maxTurns remains unlimited so only the model's no-tool response ends the provider loop.
     // maxTurns 保持无限，因此只有模型返回无工具调用的响应才会结束 Provider 循环。
     let max_turns = resolve_runtime_default_max_turns_limit(active_agent);
@@ -361,6 +434,7 @@ pub(crate) fn execute_provider_prompt_stream(
             yield Err(diagnose_provider_failure(error, diagnostic_context.as_str()));
             return;
         }
+        apply_session_request_options(&mut public_execution, &session_request_options);
         let reasoning_effort =
             match resolve_runtime_reasoning_effort(&public_execution, reasoning_effort) {
                 Ok(effort) => effort,
@@ -386,6 +460,8 @@ pub(crate) fn execute_provider_prompt_stream(
 #[cfg(test)]
 mod tests {
     use super::{
+        CODEX_SERVICE_TIER_PARAMETER_ID, ModelParameterValue, PromptCachePolicy,
+        PromptCacheTtlSelection, RequestOptionsConfig, apply_session_request_options_to_overrides,
         provider_selection_diagnostic_context, resolve_frozen_provider_execution,
         resolve_runtime_reasoning_effort_for_capabilities,
     };
@@ -607,6 +683,95 @@ mod tests {
         assert!(
             error.contains("secret") || error.contains("credential"),
             "the failure must be a controlled credential error: {error}"
+        );
+    }
+
+    /// Verifies session request options apply only where the model offers them.
+    /// 验证会话请求选项只在模型提供时生效。
+    #[test]
+    fn session_request_options_apply_only_to_supporting_routes() {
+        use vulcan_ai_contract::{
+            ModelParameterDefault, ModelParameterDefinition, ModelParameterSchema,
+            PromptCacheCapability, PromptCacheTtlOption,
+        };
+        let options = RequestOptionsConfig {
+            prompt_cache_ttl: Some(String::from("1h")),
+            service_tier: Some(String::from("priority")),
+        };
+        let supporting = ModelCapabilities {
+            prompt_cache: PromptCacheCapability {
+                supports_managed_explicit: true,
+                supported_ttl_options: ["5m", "1h"]
+                    .into_iter()
+                    .map(|id| PromptCacheTtlOption {
+                        id: String::from(id),
+                        display_name: String::from(id),
+                        description: None,
+                    })
+                    .collect(),
+                provider_default_behavior: String::from("none"),
+                profile_default_ttl_option_id: Some(String::from("5m")),
+                minimum_cacheable_tokens: None,
+                maximum_breakpoints: None,
+            },
+            model_parameters: vec![ModelParameterDefinition {
+                id: String::from(CODEX_SERVICE_TIER_PARAMETER_ID),
+                display_name: String::from("Service tier"),
+                description: String::new(),
+                schema: ModelParameterSchema::Enum {
+                    values: vec![String::from("priority")],
+                },
+                default: ModelParameterDefault::ProviderDefault {},
+                protocol_ids: vec![String::from("codex-protocol")],
+                model_ids: Vec::new(),
+                dependent_required: Vec::new(),
+                conflicts: Vec::new(),
+                evidence_revision: String::from("test"),
+            }],
+            ..ModelCapabilities::default()
+        };
+
+        let mut overrides = vulcan_provider_adapters::ModelExecutionOverrides::default();
+        apply_session_request_options_to_overrides(
+            &supporting,
+            "codex-protocol",
+            &mut overrides,
+            &options,
+        );
+        assert_eq!(
+            overrides.prompt_cache,
+            Some(PromptCachePolicy::ManagedExplicit {
+                ttl: PromptCacheTtlSelection::CapabilityOption {
+                    option_id: String::from("1h"),
+                },
+            })
+        );
+        assert_eq!(
+            overrides
+                .model_parameters
+                .get(CODEX_SERVICE_TIER_PARAMETER_ID),
+            Some(&ModelParameterValue::String(String::from("priority")))
+        );
+
+        let mut untouched = vulcan_provider_adapters::ModelExecutionOverrides::default();
+        apply_session_request_options_to_overrides(
+            &supporting,
+            "other-protocol",
+            &mut untouched,
+            &RequestOptionsConfig {
+                prompt_cache_ttl: Some(String::from("24h")),
+                service_tier: Some(String::from("priority")),
+            },
+        );
+        apply_session_request_options_to_overrides(
+            &ModelCapabilities::default(),
+            "codex-protocol",
+            &mut untouched,
+            &options,
+        );
+        assert_eq!(
+            untouched,
+            vulcan_provider_adapters::ModelExecutionOverrides::default()
         );
     }
 

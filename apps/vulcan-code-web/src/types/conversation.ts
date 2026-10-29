@@ -537,6 +537,20 @@ export interface SessionAddonsChangedResponse extends SessionAddonsChangedDelta 
   revision: number;
 }
 
+// SessionRequestOptions are the per-session request choices applied by routes that offer them.
+// SessionRequestOptions 是由提供它们的路由应用的会话级请求选择。
+export interface SessionRequestOptions {
+  // Session the options belong to.
+  // 选项所属会话。
+  conversationId: string;
+  // Prompt-cache lifetime option id such as "1h"; null uses the route default.
+  // 提示词缓存时长选项标识，如 "1h"；null 时使用路由默认值。
+  promptCacheTtl: string | null;
+  // Service tier such as "priority"; null uses the standard tier.
+  // 服务档位，如 "priority"；null 时使用标准档位。
+  serviceTier: string | null;
+}
+
 // SubmitConversationPromptAck acknowledges that a composer prompt was accepted by the service.
 // SubmitConversationPromptAck 确认输入区提示词已被服务接收。
 export interface SubmitConversationPromptAck {

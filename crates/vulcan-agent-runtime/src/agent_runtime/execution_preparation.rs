@@ -504,6 +504,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         context_history_count: request.conversation_state.messages.len(),
         execution_mode: request.execution_mode.clone(),
         temperature,
+        session_request_options: request.session_request_options.clone(),
         prompt_configuration: config.prompt.clone(),
         output_style_snapshot: request.output_style_snapshot.clone(),
         prompt_purpose: request.prompt_purpose,

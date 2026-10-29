@@ -1,8 +1,8 @@
-//! Exact-version metadata access through production storage readers.
-//! 通过生产存储读取入口验证精确版本的元数据访问。
+//! Metadata access and automatic upgrades through production storage readers.
+//! 通过生产存储读取入口验证元数据访问与自动升级。
 
 use super::*;
-use vulcan_session_core::v1::config::METADATA_SCHEMA_VERSION;
+use vulcan_session_core::v1::config::{METADATA_SCHEMA_VERSION, METADATA_UPGRADE_BASELINE_VERSION};
 
 /// Publishes one ordinary session and returns its storage plus the expected metadata.
 /// 发布一个普通会话，返回其存储及预期元数据。
@@ -44,11 +44,15 @@ fn metadata_access_reads_current_schema_without_side_effects() {
     assert_eq!(session_files(&layout), before);
 }
 
-/// Older and future schemas are rejected as unsupported, leaving bytes and directory unchanged.
-/// 旧模式与未来模式都以不受支持拒绝，文件字节与目录保持不变。
+/// Schemas below the upgrade baseline and future schemas are rejected unchanged.
+/// 低于升级基线的模式与未来模式原样拒绝。
 #[test]
-fn metadata_access_rejects_other_schemas_unchanged() {
-    for schema in [1, METADATA_SCHEMA_VERSION - 1, METADATA_SCHEMA_VERSION + 1] {
+fn metadata_access_rejects_unsupported_schemas_unchanged() {
+    for schema in [
+        1,
+        METADATA_UPGRADE_BASELINE_VERSION - 1,
+        METADATA_SCHEMA_VERSION + 1,
+    ] {
         let (_root, layout, metadata) = fixture();
         let original = write_schema(&layout, &metadata, schema);
         let files = session_files(&layout);
@@ -68,6 +72,103 @@ fn metadata_access_rejects_other_schemas_unchanged() {
     }
 }
 
+/// Returns the backup path the upgrade uses for one original schema.
+/// 返回升级为某个原始模式使用的备份路径。
+fn backup_path(layout: &SessionV1Layout, schema: u32) -> PathBuf {
+    layout
+        .session_dir()
+        .join(format!("metadata.v{schema}.backup.json"))
+}
+
+/// Every supported older schema upgrades once on first read and keeps its original bytes.
+/// 每个受支持的旧模式在首次读取时升级一次，并保留原字节。
+#[test]
+fn metadata_access_upgrades_supported_schemas_once_with_backup() {
+    for schema in METADATA_UPGRADE_BASELINE_VERSION..METADATA_SCHEMA_VERSION {
+        let (_root, layout, metadata) = fixture();
+        let original = write_schema(&layout, &metadata, schema);
+
+        assert_eq!(read_metadata(&layout.metadata_path()).unwrap(), metadata);
+        assert_eq!(
+            std::fs::read(backup_path(&layout, schema)).unwrap(),
+            original
+        );
+        let upgraded = std::fs::read(layout.metadata_path()).unwrap();
+        let raw: serde_json::Value = serde_json::from_slice(&upgraded).unwrap();
+        assert_eq!(raw["schema_version"], METADATA_SCHEMA_VERSION);
+
+        let files = session_files(&layout);
+        assert_eq!(load_session(&layout).unwrap().metadata, metadata);
+        assert_eq!(std::fs::read(layout.metadata_path()).unwrap(), upgraded);
+        assert_eq!(session_files(&layout), files, "a second read never upgrades");
+    }
+}
+
+/// A different existing backup stops the upgrade; an identical one is reused.
+/// 已存在的不同备份会中止升级；相同备份则复用。
+#[test]
+fn metadata_access_upgrade_never_overwrites_a_different_backup() {
+    let (_root, layout, metadata) = fixture();
+    let original = write_schema(&layout, &metadata, METADATA_UPGRADE_BASELINE_VERSION);
+    let backup = backup_path(&layout, METADATA_UPGRADE_BASELINE_VERSION);
+    std::fs::write(&backup, b"unrelated").unwrap();
+
+    assert!(read_metadata(&layout.metadata_path()).is_err());
+    assert_eq!(std::fs::read(layout.metadata_path()).unwrap(), original);
+    assert_eq!(std::fs::read(&backup).unwrap(), b"unrelated");
+
+    std::fs::write(&backup, &original).unwrap();
+    assert_eq!(read_metadata(&layout.metadata_path()).unwrap(), metadata);
+    assert_eq!(std::fs::read(&backup).unwrap(), original);
+}
+
+/// A failed publish leaves the original file readable and the next read finishes the upgrade.
+/// 发布失败时原文件保持可读，下一次读取完成升级。
+#[test]
+fn metadata_access_upgrade_survives_a_failed_publish() {
+    let (_root, layout, metadata) = fixture();
+    let original = write_schema(&layout, &metadata, METADATA_UPGRADE_BASELINE_VERSION);
+
+    test_hooks::fail_next_artifact(WriteStage::Rename, "metadata");
+    let error = read_metadata(&layout.metadata_path()).unwrap_err();
+    test_hooks::clear_failures();
+    assert_eq!(error.code, ErrorCode::AtomicWriteFailed);
+    assert_eq!(std::fs::read(layout.metadata_path()).unwrap(), original);
+
+    assert_eq!(read_metadata(&layout.metadata_path()).unwrap(), metadata);
+    assert_eq!(
+        std::fs::read(backup_path(&layout, METADATA_UPGRADE_BASELINE_VERSION)).unwrap(),
+        original
+    );
+}
+
+/// Concurrent first reads all return the upgraded document and leave one backup.
+/// 并发首次读取都返回升级后的文档，并只留下一个备份。
+#[test]
+fn metadata_access_concurrent_first_reads_upgrade_once() {
+    let (_root, layout, metadata) = fixture();
+    let original = write_schema(&layout, &metadata, METADATA_UPGRADE_BASELINE_VERSION);
+    let path = layout.metadata_path();
+    let readers = (0..4)
+        .map(|_| {
+            let path = path.clone();
+            std::thread::spawn(move || read_metadata(&path).unwrap())
+        })
+        .collect::<Vec<_>>();
+    for reader in readers {
+        assert_eq!(reader.join().unwrap(), metadata);
+    }
+    assert_eq!(
+        std::fs::read(backup_path(&layout, METADATA_UPGRADE_BASELINE_VERSION)).unwrap(),
+        original
+    );
+    let backups = session_files(&layout)
+        .into_iter()
+        .filter(|name| name.ends_with(".backup.json"))
+        .count();
+    assert_eq!(backups, 1);
+}
+
 /// A capability rebuild replaces only its subtree on the current schema and never publishes.
 /// 能力重建只在当前模式上替换其子树，且绝不自行发布。
 #[test]
@@ -83,7 +184,7 @@ fn metadata_access_capability_rebuild_requires_current_schema() {
     assert_eq!(candidate.session_id, metadata.session_id);
     assert_eq!(std::fs::read(layout.metadata_path()).unwrap(), original);
 
-    let old = write_schema(&layout, &metadata, METADATA_SCHEMA_VERSION - 1);
+    let old = write_schema(&layout, &metadata, METADATA_UPGRADE_BASELINE_VERSION);
     let error = super::super::documents::read_metadata_for_provider_tool_rebuild(
         &layout.metadata_path(),
         &Default::default(),
@@ -93,10 +194,10 @@ fn metadata_access_capability_rebuild_requires_current_schema() {
     assert_eq!(std::fs::read(layout.metadata_path()).unwrap(), old);
 }
 
-/// The production configuration reader surfaces the rejection instead of upgrading.
-/// 生产配置读取入口直接暴露拒绝，而不是升级。
+/// The production configuration reader rejects schemas below the upgrade baseline unchanged.
+/// 生产配置读取入口原样拒绝低于升级基线的模式。
 #[test]
-fn metadata_access_configuration_read_rejects_old_schema() {
+fn metadata_access_configuration_read_rejects_pre_baseline_schema() {
     let root = tempfile::tempdir().unwrap();
     let locator = crate::workspace_store::session_v1_store::create_session_v1_storage_fixture(
         root.path(),
@@ -108,7 +209,7 @@ fn metadata_access_configuration_read_rejects_old_schema() {
     let path = locator.session_directory().join("metadata.json");
     let mut raw: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    raw["schema_version"] = (METADATA_SCHEMA_VERSION - 1).into();
+    raw["schema_version"] = (METADATA_UPGRADE_BASELINE_VERSION - 1).into();
     let original = serde_json::to_vec(&raw).unwrap();
     std::fs::write(&path, &original).unwrap();
     assert!(locator.read_request_configuration().is_err());

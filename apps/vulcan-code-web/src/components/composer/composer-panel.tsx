@@ -983,6 +983,7 @@ export function ComposerPanel(props: {
                   accounts={activeModelAccounts}
                   accountValue={activeModelChoice?.connectionId ?? ""}
                   ariaLabel={t("composer.aria.modelReasoning")}
+                  conversationId={props.conversationId}
                   onAccountChange={(choice) => void handlePersistedModelChoiceChange(choice)}
                   defaultReasoningEffort={defaultReasoningEffort}
                   fallbackLabel={t("composer.modelPicker.placeholder")}

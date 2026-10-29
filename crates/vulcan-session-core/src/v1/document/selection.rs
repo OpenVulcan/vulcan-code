@@ -9,7 +9,7 @@ use crate::v1::config::{
     ProviderExtensionTargetSetConfig, ProviderMediaUnderstandingMode,
     ProviderMediaUnderstandingRouteConfig, ProviderMediaUnderstandingSelection,
     ProviderToolCapabilitySelection, ProviderToolSelectionConfig, ProviderToolTargetConfig,
-    VmmSessionPolicyConfig,
+    RequestOptionsConfig, VmmSessionPolicyConfig,
 };
 use crate::v1::errors::DomainError;
 use crate::v1::event::{
@@ -671,6 +671,40 @@ impl SessionDocument {
         }
         self.reject_dedicated_change("vmm")?;
         self.metadata.config.selection.vmm = config;
+        self.bump_revision(&[DirtyFile::Metadata], now_ms, &[]);
+        Ok(true)
+    }
+
+    /// Replaces the session request options; they apply from the next Provider request.
+    /// 替换会话请求选项；自下一次 Provider 请求起生效。
+    ///
+    /// Like the reasoning level these are request controls, so dedicated sessions keep them editable.
+    /// 与思考档位一样属于请求控制，因此专职会话仍可修改。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` only when the stored options changed.
+    /// 仅当已存储选项变化时返回 `true`。
+    pub fn set_request_options(
+        &mut self,
+        options: RequestOptionsConfig,
+        now_ms: i64,
+    ) -> Result<bool, DomainError> {
+        validate_timestamp("updated_at_ms", now_ms)?;
+        for value in [&options.prompt_cache_ttl, &options.service_tier]
+            .into_iter()
+            .flatten()
+        {
+            if value.trim().is_empty() || value.trim() != value {
+                return Err(DomainError::InvalidSelectionConfiguration {
+                    field: "request_options",
+                });
+            }
+        }
+        if self.metadata.config.selection.request_options == options {
+            return Ok(false);
+        }
+        self.metadata.config.selection.request_options = options;
         self.bump_revision(&[DirtyFile::Metadata], now_ms, &[]);
         Ok(true)
     }

@@ -8,6 +8,7 @@ import type {
   EnvironmentValuesSubmitRequest,
   SessionAddonsChangedResponse,
   SessionGoalUserStatusUpdate,
+  SessionRequestOptions,
   SubagentPanelRouteResponse,
   SubmitConversationPromptAck,
   WorkbenchSnapshot,
@@ -567,6 +568,28 @@ export async function setSessionVmmPolicy(
       policy,
       mode,
     },
+  });
+}
+
+// getSessionRequestOptions reads the cache lifetime and service tier stored for one session.
+// getSessionRequestOptions 读取一个会话已保存的缓存时长与服务档位。
+export async function getSessionRequestOptions(conversationId: string): Promise<SessionRequestOptions | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<SessionRequestOptions>("service_get_session_request_options", {
+    request: { conversationId },
+  });
+}
+
+// setSessionRequestOptions replaces the cache lifetime and service tier of one session; null means default.
+// setSessionRequestOptions 替换一个会话的缓存时长与服务档位；null 表示默认值。
+export async function setSessionRequestOptions(options: SessionRequestOptions): Promise<SessionRequestOptions | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<SessionRequestOptions>("service_set_session_request_options", {
+    request: options,
   });
 }
 

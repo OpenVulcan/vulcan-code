@@ -44,6 +44,8 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_set_session_unattended",
     "service_session_unattended_default",
     "service_set_session_vmm_policy",
+    "service_get_session_request_options",
+    "service_set_session_request_options",
     "service_set_session_context_compaction_window",
     "service_set_session_output_style",
     "service_compact_selected_conversation_context",
@@ -330,6 +332,14 @@ pub(super) async fn dispatch(
         ),
         "service_set_session_vmm_policy" => rpc_json_result(
             service_set_session_vmm_policy(app, state, rpc_required_param(params, "request")?)
+                .await,
+        ),
+        "service_get_session_request_options" => rpc_json_result(
+            service_get_session_request_options(state, rpc_required_param(params, "request")?)
+                .await,
+        ),
+        "service_set_session_request_options" => rpc_json_result(
+            service_set_session_request_options(state, rpc_required_param(params, "request")?)
                 .await,
         ),
         "service_set_session_context_compaction_window" => rpc_json_result(
