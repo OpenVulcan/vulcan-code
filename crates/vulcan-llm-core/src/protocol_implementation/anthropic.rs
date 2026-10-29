@@ -457,6 +457,10 @@ enum AnthropicBlock {
         /// Raw accumulated JSON text.
         /// 累积的原始 JSON 文本。
         arguments: String,
+        /// Input carried by `content_block_start`; complete when no `input_json_delta` follows,
+        /// as for a call without arguments.
+        /// `content_block_start` 携带的输入；之后没有 `input_json_delta` 时（如无参数调用）即为完整输入。
+        start_input: Value,
     },
     /// Provider-managed server tool blocks whose execution is completed upstream.
     /// 已由供应商上游完成执行的服务端工具内容块。
@@ -595,6 +599,10 @@ impl AnthropicStreamDecoder {
                         call_id: call_id.clone(),
                         tool_name: tool_name.clone(),
                         arguments: String::new(),
+                        start_input: block
+                            .get("input")
+                            .cloned()
+                            .unwrap_or_else(|| Value::Object(Map::new())),
                     },
                 );
                 AiStreamEvent::ToolCallStarted {
@@ -662,6 +670,7 @@ impl AnthropicStreamDecoder {
                     call_id,
                     tool_name,
                     arguments,
+                    ..
                 },
                 "input_json_delta",
             ) => {
@@ -728,7 +737,12 @@ impl AnthropicStreamDecoder {
                 call_id,
                 tool_name,
                 arguments,
-            } => match serde_json::from_str::<Value>(arguments.as_str()) {
+                start_input,
+            } => match if arguments.trim().is_empty() {
+                Ok(start_input)
+            } else {
+                serde_json::from_str::<Value>(arguments.as_str())
+            } {
                 Ok(arguments) => Ok(vec![AiStreamEvent::ToolCallCompleted {
                     item_id,
                     call: ToolCall {
@@ -1652,6 +1666,49 @@ mod tests {
             AiStreamEvent::ToolCallCompleted { call, .. }
                 if call.arguments == json!({"text": "hello"})
         )));
+    }
+
+    /// Verifies a call without arguments completes with the start block's input when no
+    /// `input_json_delta` arrives, or only an empty one.
+    /// 验证无参数调用在没有或只有空 `input_json_delta` 时以起始块输入完成。
+    #[test]
+    fn tool_without_argument_deltas_completes_with_start_input() {
+        for deltas in [&[][..], &[""][..]] {
+            let mut decoder = AnthropicStreamDecoder::new(String::from("execution"));
+            decoder
+                .push_sse(
+                    Some("content_block_start"),
+                    r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call","name":"agent_orchestration_info","input":{}}}"#,
+                )
+                .expect("tool should start");
+            for fragment in deltas {
+                decoder
+                    .push_sse(
+                        Some("content_block_delta"),
+                        json!({
+                            "type": "content_block_delta",
+                            "index": 0,
+                            "delta": {"type": "input_json_delta", "partial_json": fragment},
+                        })
+                        .to_string()
+                        .as_str(),
+                    )
+                    .expect("empty fragment should buffer");
+            }
+            let completed = decoder
+                .push_sse(
+                    Some("content_block_stop"),
+                    r#"{"type":"content_block_stop","index":0}"#,
+                )
+                .expect("block should stop");
+            assert!(
+                completed.iter().any(|event| matches!(
+                    event,
+                    AiStreamEvent::ToolCallCompleted { call, .. } if call.arguments == json!({})
+                )),
+                "deltas {deltas:?} must complete with empty object arguments: {completed:?}"
+            );
+        }
     }
 
     /// Verifies truncated Anthropic tool JSON becomes a controlled aborted event.

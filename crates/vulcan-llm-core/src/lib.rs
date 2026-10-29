@@ -568,7 +568,7 @@ mod tests {
     fn anthropic_conversion_streams_tool_input_only_on_native_streaming_routes() {
         let body = |stream: bool| {
             json!({
-                "model": "claude-test",
+                "model": "claude-test", "max_output_tokens": 64,
                 "input": "Patch the file.",
                 "max_output_tokens": 1024,
                 "stream": stream,
@@ -1499,5 +1499,31 @@ mod tests {
             outcome.is_err(),
             "a textless record must fail instead of becoming redacted_thinking: {outcome:#?}"
         );
+    }
+
+    /// Verifies a rejected call's null arguments, raw or serialized, replay as an empty tool input.
+    /// 验证被拒绝调用的 null 参数（原值或序列化文本）重放为空工具输入。
+    #[test]
+    fn rejected_call_null_arguments_replay_as_empty_tool_input() {
+        for arguments in [serde_json::Value::Null, json!("null")] {
+            let body = json!({
+                "model": "claude-test", "max_output_tokens": 64,
+                "input": [
+                    {"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]},
+                    {"type":"function_call","call_id":"call_1","name":"agent_orchestration_info","arguments":arguments},
+                    {"type":"function_call_output","call_id":"call_1","output":"rejected"}
+                ]
+            });
+            let anthropic = responses_to_anthropic_messages(body.clone())
+                .expect("null arguments should replay to Anthropic");
+            let tool_use = anthropic["messages"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .flat_map(|message| message["content"].as_array().into_iter().flatten())
+                .find(|block| block["type"] == "tool_use")
+                .expect("tool_use block should be present");
+            assert_eq!(tool_use["input"], json!({}));
+        }
     }
 }

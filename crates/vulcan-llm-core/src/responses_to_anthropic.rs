@@ -710,6 +710,10 @@ fn object_arguments(value: Option<&Value>, name: &str) -> Result<Value, LlmCoreE
         })?,
         other => other.clone(),
     };
+    // A rejected call replays null arguments, raw or serialized, because no valid input was
+    // received; tool-use blocks still need an object.
+    // 被拒绝的调用以 null 参数重放（原值或序列化文本），因为未收到有效输入；工具调用块仍需对象。
+    let parsed = if parsed.is_null() { json!({}) } else { parsed };
     if !parsed.is_object() {
         return Err(LlmCoreError::new(format!(
             "Responses function_call `{name}` arguments must be a JSON object."
