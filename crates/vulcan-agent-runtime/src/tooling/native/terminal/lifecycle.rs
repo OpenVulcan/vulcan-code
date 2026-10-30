@@ -106,6 +106,7 @@ pub(crate) async fn execute_terminal_session_start_action(
     owner_session_id: SessionId,
     command_session_runtime: Arc<CommandSessionRuntime>,
     shell_support: &HostCommandShellSupport,
+    rtk_host_environment: &[(String, String)],
 ) -> Result<VulcanToolInvocationResult, NativeToolError> {
     let command_text = parsed_args
         .command
@@ -134,8 +135,14 @@ pub(crate) async fn execute_terminal_session_start_action(
     let session_name = require_terminal_session_start_name(parsed_args.name.as_deref())?;
     // The terminal keeps the variables it started with; `snapshot` reports later changes.
     // 终端保留启动时的变量；之后的变化由 `snapshot` 报告。
-    let environment = child_process_environment(&request).await?;
-    let environment_fingerprint = environment_fingerprint(&environment);
+    let session_environment = child_process_environment(&request).await?;
+    // The fingerprint covers session variables only, matching the comparison `snapshot` performs.
+    // 指纹只覆盖会话变量，与 `snapshot` 执行的比较一致。
+    let environment_fingerprint = environment_fingerprint(&session_environment);
+    // Host RTK variables come first so a session variable of the same name wins.
+    // 宿主 RTK 变量排在最前，使同名会话变量优先。
+    let mut environment = rtk_host_environment.to_vec();
+    environment.extend(session_environment);
     let snapshot = command_session_runtime
         .start_session(CommandSessionStartRequest {
             owner_session_id,
@@ -277,6 +284,7 @@ pub(crate) async fn execute_terminal_session_tool(
     request: NativeToolExecutionRequest,
     command_session_runtime: Arc<CommandSessionRuntime>,
     shell_support: &HostCommandShellSupport,
+    rtk_host_environment: &[(String, String)],
 ) -> Result<VulcanToolInvocationResult, NativeToolError> {
     let owner_session_id = require_terminal_session_owner_session_id(request.session_id)?;
     let parsed_args = parse_terminal_session_tool_arguments(request.arguments.clone())?;
@@ -292,6 +300,7 @@ pub(crate) async fn execute_terminal_session_tool(
                 owner_session_id,
                 command_session_runtime,
                 shell_support,
+                rtk_host_environment,
             )
             .await
         }

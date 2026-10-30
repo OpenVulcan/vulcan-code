@@ -23,9 +23,17 @@ pub(crate) use wait::*;
 /// 交互式终端会话原生工具的稳定标识。
 pub const TERMINAL_SESSION_TOOL_ID: &str = "terminal_session";
 
+/// Builds the interactive terminal-session native tool.
+/// 构建交互式终端会话原生工具。
+///
+/// # Parameters
+/// 参数
+/// `rtk_host_environment` is the fixed RTK variable set injected when a terminal starts.
+/// `rtk_host_environment` 是终端启动时注入的固定 RTK 变量集合。
 pub(crate) fn build_terminal_session_tool(
     command_session_runtime: Arc<CommandSessionRuntime>,
     shell_support: HostCommandShellSupport,
+    rtk_host_environment: Vec<(String, String)>,
 ) -> Arc<NativeToolDefinition> {
     let descriptor = NativeToolDescriptor {
         id: String::from(TERMINAL_SESSION_TOOL_ID),
@@ -42,9 +50,15 @@ pub(crate) fn build_terminal_session_tool(
         move |request: NativeToolExecutionRequest| {
             let command_session_runtime = Arc::clone(&command_session_runtime);
             let shell_support = shell_support.clone();
+            let rtk_host_environment = rtk_host_environment.clone();
             Box::pin(async move {
-                execute_terminal_session_tool(request, command_session_runtime, &shell_support)
-                    .await
+                execute_terminal_session_tool(
+                    request,
+                    command_session_runtime,
+                    &shell_support,
+                    &rtk_host_environment,
+                )
+                .await
             })
         },
     )

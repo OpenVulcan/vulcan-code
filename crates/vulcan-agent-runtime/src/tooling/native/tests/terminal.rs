@@ -80,8 +80,11 @@ fn terminal_session_schema_publishes_hard_read_limits() {
 /// terminal-session 工具应在 Plan 模式下继续对 AI 可见，避免交互式命令工作流被模型静默隐藏。
 #[test]
 fn terminal_session_tool_stays_visible_in_plan_mode() {
-    let tool =
-        build_terminal_session_tool(Arc::new(CommandSessionRuntime::new()), test_shell_support());
+    let tool = build_terminal_session_tool(
+        Arc::new(CommandSessionRuntime::new()),
+        test_shell_support(),
+        Vec::new(),
+    );
     assert!(tool.descriptor.ai_visible);
     assert!(tool.descriptor.available_in_plan);
     assert!(
@@ -379,7 +382,7 @@ fn terminal_pattern_matching_checks_joined_output_chunks() {
 #[tokio::test]
 async fn terminal_powershell_text_is_literal_and_shell_remains_usable() {
     let runtime = Arc::new(CommandSessionRuntime::new());
-    let tool = build_terminal_session_tool(Arc::clone(&runtime), test_shell_support());
+    let tool = build_terminal_session_tool(Arc::clone(&runtime), test_shell_support(), Vec::new());
     let owner_session_id = Uuid::from_u128(0x7001);
     let start_result = tool
         .invoke(NativeToolExecutionRequest {
@@ -648,6 +651,7 @@ async fn terminal_session_tool_enforces_owner_isolation_and_stop() {
     let tool = build_terminal_session_tool(
         Arc::new(CommandSessionRuntime::new()),
         HostCommandShellSupport::from_configured_default_id(None),
+        Vec::new(),
     );
     let owner_session_id = Uuid::from_u128(0x7101);
     let foreign_session_id = Uuid::from_u128(0x7102);

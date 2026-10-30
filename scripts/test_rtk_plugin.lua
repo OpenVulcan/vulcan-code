@@ -1,5 +1,5 @@
--- Exercise the real RTK bundle against the native process-result and CLI table contracts.
--- 根据原生进程结果和 CLI 表格契约验证真实 RTK Bundle。
+-- Exercise the real RTK bundle's statistics actions against the native process-result and CLI table contracts.
+-- 根据原生进程结果和 CLI 表格契约验证真实 RTK Bundle 的统计 Action。
 
 -- runtime_vulcan retains the real JSON codec while process execution is replaced with deterministic results.
 -- runtime_vulcan 保留真实 JSON 编解码器，同时用确定性结果替换进程执行。
@@ -23,7 +23,6 @@ end
 local state = {
     config = runtime_vulcan.json.decode(read_text(args.defaults_path)),
     calls = {},
-    rewrite = {},
     gain_failed = false,
     reset_failed = false,
     storage_failed = false,
@@ -67,9 +66,6 @@ local function process_exec(binary, options)
     assert(options.env.RTK_SUPPRESS_HOOK_WARNING == "1")
     assert(options.env.RTK_TELEMETRY_DISABLED == (state.config.telemetryDisabled and "1" or nil))
     table.insert(state.calls, options)
-    if options.args[1] == "rewrite" then
-        return state.rewrite
-    end
     assert(options.args[1] == "gain")
     if options.args[2] == "--reset" then
         assert(options.args[3] == "--yes" and #options.args == 3)
@@ -146,96 +142,6 @@ local function decode_result(raw)
     return decoded.result
 end
 
--- Invoke the real shell hook; command is host-owned input and the return value is its decoded HookResult.
--- 调用真实 Shell Hook；command 为宿主持有的输入，返回解码后的 HookResult。
-local function shell_hook(command)
-    return decode_result(plugin.transform_shell_command({
-        invocation_json = runtime_vulcan.json.encode({
-            registration = { id = "vulcan-plugin/vulcan-rtk/shell-command-rewrite" },
-            payload = { value = {
-                command = command,
-                cwd = args.workspace_root,
-                environment = runtime_vulcan.json.object(),
-                binary_path_requests = runtime_vulcan.json.array(),
-                contributions = runtime_vulcan.json.array(),
-            } },
-        }),
-    }))
-end
-
--- Both rewrite statuses must preserve every command line and request only the declared RTK executable.
--- 两种改写状态都必须保留全部命令行，并且只请求已声明的 RTK 可执行文件。
-for _, code in ipairs({ 0, 3 }) do
-    state.rewrite = {
-        code = code,
-        success = code == 0,
-        timed_out = false,
-        stdout = "rtk git status --short\nrtk cargo check",
-        stderr = "",
-    }
-    -- result is the actual transformed host payload for this exit status.
-    -- result 是此退出状态对应的真实宿主转换载荷。
-    local result = shell_hook("git status --short\ncargo check").payload.value
-    assert(result.command == state.rewrite.stdout)
-    assert(#result.binary_path_requests == 1)
-    for _, request in ipairs(result.binary_path_requests) do
-        assert(request.binary_id == "rtk")
-    end
-    assert(result.environment.NO_COLOR == "1")
-    assert(result.environment.RTK_SUPPRESS_HOOK_WARNING == "1")
-end
-
--- Rejected, interrupted, and failed outcomes must never execute even plausible stdout as a rewritten command.
--- 拒绝、中断和失败结果都不得将看似有效的 stdout 当作改写命令执行。
-for _, outcome in ipairs({
-    { code = 1, timed_out = false },
-    { code = 2, timed_out = false },
-    { code = 9, timed_out = false },
-    { timed_out = false },
-    { code = 3, timed_out = true },
-    { code = 0, timed_out = false },
-}) do
-    outcome.success = false
-    outcome.stdout = "rtk git status --short"
-    outcome.stderr = "fixture process outcome"
-    state.rewrite = outcome
-    -- result must retain the original host command and have no executable injection request.
-    -- result 必须保留原宿主命令，且不包含可执行文件注入请求。
-    local result = shell_hook("git status --short").payload.value
-    assert(result.command == "git status --short")
-    assert(#result.binary_path_requests == 0 and #result.contributions == 0)
-end
-
-state.rewrite = { code = 0, success = true, timed_out = false, stdout = "\n  ", stderr = "" }
-assert(shell_hook("git status").payload.value.command == "git status")
-
--- The route filter inspects later lines too, so a denied second route cannot hide behind an allowed first one.
--- 路由过滤器也检查后续行，禁止的第二条路由不能藏在允许的第一条路由之后。
-state.rewrite = {
-    code = 3,
-    success = false,
-    timed_out = false,
-    stdout = "rtk git status\nrtk docker ps",
-    stderr = "",
-}
-assert(shell_hook("git status\ndocker ps").payload.value.command == "git status\ndocker ps")
-
--- Disabling routing must bypass process execution without rewriting persisted configuration.
--- 禁用路由必须跳过进程执行，且不改写持久化配置。
-state.config.enabled = false
--- call_count captures the process boundary before the disabled invocation.
--- call_count 保存禁用调用之前的进程边界计数。
-local call_count = #state.calls
-assert(shell_hook("git status").payload.value.command == "git status")
-assert(#state.calls == call_count)
-state.config.enabled = true
-
--- Telemetry remains an explicit user setting while plain output and host-integrated warning behavior stay fixed.
--- 遥测保持为显式用户设置，纯文本输出与宿主集成警告行为保持固定。
-state.config.telemetryDisabled = false
-state.rewrite = { code = 0, success = true, timed_out = false, stdout = "rtk git status", stderr = "" }
-assert(shell_hook("git status").payload.value.environment.RTK_TELEMETRY_DISABLED == nil)
-
 -- statistics must preserve excluded-count metadata and both positive and negative weighted command rates.
 -- statistics 必须保留排除数量元数据，以及正负两种命令加权节省率。
 local statistics = decode_result(plugin.statistics_get({}))
@@ -287,7 +193,9 @@ state.reset_failed = false
 -- Storage must be available before starting the destructive CLI mutation.
 -- 开始具有破坏性的 CLI 变更前，存储必须可用。
 state.storage_failed = true
-call_count = #state.calls
+-- call_count captures the process boundary before the rejected reset.
+-- call_count 保存被拒绝重置之前的进程边界计数。
+local call_count = #state.calls
 assert(not pcall(plugin.statistics_clear, { arguments = {} }))
 assert(#state.calls == call_count)
 state.storage_failed = false

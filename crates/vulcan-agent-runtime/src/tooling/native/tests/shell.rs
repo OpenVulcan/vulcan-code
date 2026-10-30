@@ -118,10 +118,11 @@ fn shell_tool_schemas_expose_dynamic_detected_shells() {
 #[test]
 fn shell_tool_schema_descriptions_document_defaults_in_english() {
     let shell_support = test_shell_support();
-    let command_tool = build_shell_command_tool(shell_support.clone(), None);
+    let command_tool = build_shell_command_tool(shell_support.clone(), None, test_rtk_disabled());
     let session_tool = build_terminal_session_tool(
         Arc::new(CommandSessionRuntime::new()),
         shell_support.clone(),
+        Vec::new(),
     );
     let command_schema = shell_command_args_schema(&shell_support);
     let session_schema = terminal_session_args_schema(&shell_support);
@@ -309,7 +310,7 @@ fn session_shell_behavior_detects_nested_bash_from_command_text() {
 /// shell-command 工具应在 Plan 模式下继续对 AI 可见，以便规划回合仍能发现并选择宿主命令执行能力。
 #[test]
 fn shell_command_tool_stays_visible_in_plan_mode() {
-    let tool = build_shell_command_tool(test_shell_support(), None);
+    let tool = build_shell_command_tool(test_shell_support(), None, test_rtk_disabled());
     assert!(tool.descriptor.ai_visible);
     assert!(tool.descriptor.available_in_plan);
 }
@@ -321,6 +322,7 @@ async fn shell_command_tool_executes_simple_command() {
     let tool = build_shell_command_tool(
         HostCommandShellSupport::from_configured_default_id(None),
         None,
+        test_rtk_disabled(),
     );
     let result = tool
         .invoke(NativeToolExecutionRequest {
@@ -369,6 +371,7 @@ async fn shell_command_tool_spills_oversized_output_to_page_file() {
     let tool = build_shell_command_tool(
         HostCommandShellSupport::from_configured_default_id(None),
         None,
+        test_rtk_disabled(),
     );
     let result = tool
         .invoke(NativeToolExecutionRequest {

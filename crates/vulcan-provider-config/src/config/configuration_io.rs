@@ -116,6 +116,14 @@ pub struct ProviderConfigurationFile {
         skip_serializing_if = "PersistedGitCommitConfiguration::is_default"
     )]
     pub git_commit: PersistedGitCommitConfiguration,
+    /// Persisted host-native RTK command-router settings.
+    /// 持久化的宿主原生 RTK 命令路由设置。
+    #[serde(
+        default,
+        rename = "rtk",
+        skip_serializing_if = "PersistedRtkConfiguration::is_default"
+    )]
+    pub rtk: PersistedRtkConfiguration,
     /// Persisted skill definitions keyed by stable skill id.
     /// 以稳定技能标识为键保存的技能定义集合。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

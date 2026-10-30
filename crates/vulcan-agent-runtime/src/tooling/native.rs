@@ -517,9 +517,13 @@ impl NativeToolCatalog {
 
 /// Builds the built-in native tool catalog from the runtime aggregate configuration.
 /// 根据运行时聚合配置构建内建原生工具目录。
+///
+/// `rtk` is the RTK router configuration captured for `shell_command` and `terminal_session`.
+/// `rtk` 是为 `shell_command` 与 `terminal_session` 捕获的 RTK 路由配置。
 pub fn build_native_tool_catalog(
     config: &AgentRuntimeConfig,
     configured_default_command_shell_id: Option<&str>,
+    rtk: &crate::provider_config::PersistedRtkConfiguration,
     command_session_runtime: Arc<CommandSessionRuntime>,
     vmm_global: VmmConfigLayer,
     plugin_runtime: Option<vulcan_plugin_runtime::VulcanPluginRuntimeManager>,
@@ -558,8 +562,12 @@ pub fn build_native_tool_catalog(
         build_memory_search_tool(),
         build_memory_write_tool(),
         build_prompt_skill_detail_tool(),
-        build_shell_command_tool(shell_support.clone(), plugin_runtime),
-        build_terminal_session_tool(command_session_runtime, shell_support),
+        build_shell_command_tool(shell_support.clone(), plugin_runtime, rtk.clone()),
+        build_terminal_session_tool(
+            command_session_runtime,
+            shell_support,
+            vulcan_host_tools::rtk::rtk_host_environment(rtk.telemetry_disabled),
+        ),
         build_mcp_server_list_tool(snapshot.clone()),
         build_mcp_connect_tool(),
         build_mcp_tools_tool(),

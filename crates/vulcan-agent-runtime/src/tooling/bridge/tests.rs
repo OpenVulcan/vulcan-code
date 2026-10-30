@@ -255,6 +255,7 @@ fn native_file_public_ids_are_reserved_and_deduplicated() {
         let native_catalog = build_native_tool_catalog(
             &runtime_config,
             None,
+            &Default::default(),
             Arc::new(crate::tooling::CommandSessionRuntime::new()),
             VmmConfigLayer::default(),
             None,
@@ -381,6 +382,7 @@ fn vmm_memory_tools_are_filtered_by_effective_config_and_live_runtime() {
     let native_catalog = build_native_tool_catalog(
         &runtime_config,
         None,
+        &Default::default(),
         Arc::new(crate::tooling::CommandSessionRuntime::new()),
         global_vmm,
         None,
@@ -559,6 +561,7 @@ fn native_collaboration_candidates_are_registered_by_bridge() {
     let native_catalog = build_native_tool_catalog(
         &runtime_config,
         None,
+        &Default::default(),
         Arc::new(crate::tooling::CommandSessionRuntime::new()),
         VmmConfigLayer::default(),
         None,
@@ -846,6 +849,7 @@ fn frozen_bridge_tools(
     let native_catalog = build_native_tool_catalog(
         &runtime_config,
         None,
+        &Default::default(),
         Arc::new(crate::tooling::CommandSessionRuntime::new()),
         VmmConfigLayer::default(),
         None,

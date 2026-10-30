@@ -134,16 +134,6 @@ lua_runtime:
       callers:
         - plugin_ui
   hooks:
-    - id: shell-command-rewrite
-      point: tool.shell_command.before_execute
-      mode: transform
-      scope: workspace
-      function: transform_shell_command
-      priority: 100
-      timeout_ms: 3000
-      failure_policy: continue
-      display_name: RTK command routing
-      progress_label: Rewriting command with RTK
     - id: git-commit-context
       point: git.commit_summary.context
       mode: transform

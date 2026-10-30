@@ -51,9 +51,19 @@ WebUI 展示时阅读。普通业务任务不需要加载这些细节。
   Hook，不部署完整引擎或 `rtk-proxy`。发行标签、各平台制品名与摘要以 `scripts/build-inputs.lock.json`
   的 `tools.rtk` 为准，与 sg/rg 一同安装到 `third_party/tools/<target>/bin/`，由 `make.ps1 sync`
   复制到发行目录 `tools/bin/`；锁文件未声明制品的宿主（目前为 Windows arm64）不随包提供 RTK。
+- Shell 命令改写由宿主原生执行（[`rtk.rs`](../../crates/vulcan-host-tools/src/rtk.rs)），不经插件 Hook：
+  `shell_command` 先以隐藏窗口子进程调用 `tools/bin` 中的 `rtk rewrite`（超时唯一定义为
+  `RTK_REWRITE_TIMEOUT`），再把结果交给插件 Hook 链；报告中的 `original_command` 始终是模型原命令。
+  设置保存在配置文件 `rtk` 块（`PersistedRtkConfiguration`），全部为默认值时不写出；工具目录每回合
+  重建，因此设置从下一回合生效。随包缺少 RTK 时跳过改写并给出 info 诊断。
 - `rewrite` 的上游协议归属为固定发行标签下的 `src/hooks/rewrite_cmd.rs`：退出码 `0/3` 携带改写，
   `1/2` 保持原命令；退出码不赋予 Vulcan 工具执行权限。超时或其他失败不得执行部分输出，
-  多行改写必须保留完整命令并检查其中全部 RTK 路由。
+  多行改写必须保留完整命令并检查其中全部 RTK 路由；`selected` 模式只看 `enabledRoutes`，`all` 模式只看
+  `disabledRoutes`。
+- 宿主为模型启动的进程固定注入 RTK 变量：`shell_command` 每次执行、`terminal_session` 仅在 `start` 时
+  注入 `RTK_SUPPRESS_HOOK_WARNING=1`（抑制 `rtk init` 提示），遥测关闭时再加 `RTK_TELEMETRY_DISABLED=1`；
+  会话环境变量与 Hook 贡献可覆盖这些值。终端环境指纹只覆盖会话变量。`NO_COLOR=1` 只用于 `rtk rewrite`
+  检查进程与已改写的命令，不进入终端会话。
 - 统计协议归属为上游 `src/analytics/gain.rs` 与 `src/core/tracking.rs`：汇总保留其超大输入排除口径，
   按命令明细使用加权节省率并允许负值；CLI 文本表使用 `gain --text`，原始 JSON 汇总不自行重算。
   上游版本更新时须重新核对以上源码并同步插件行为测试与统计说明。

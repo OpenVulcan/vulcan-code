@@ -66,6 +66,15 @@ fn long_lived_terminal_test_command() -> &'static str {
     if cfg!(windows) { "cmd /D /Q" } else { "sh" }
 }
 
+/// RTK settings with routing disabled, so tests never launch the bundled RTK executable.
+/// 关闭路由的 RTK 设置，使测试从不启动随包 RTK 可执行文件。
+fn test_rtk_disabled() -> crate::provider_config::PersistedRtkConfiguration {
+    crate::provider_config::PersistedRtkConfiguration {
+        enabled: false,
+        ..Default::default()
+    }
+}
+
 /// Builds one native-tool execution request with only arguments varied.
 /// 构建一条仅变更参数的原生工具执行请求。
 fn test_native_request(arguments: serde_json::Value) -> NativeToolExecutionRequest {
@@ -119,6 +128,7 @@ fn native_catalog_registers_browser_and_file_tools() {
     let catalog = build_native_tool_catalog(
         &config,
         None,
+        &test_rtk_disabled(),
         Arc::new(CommandSessionRuntime::new()),
         VmmConfigLayer::default(),
         None,

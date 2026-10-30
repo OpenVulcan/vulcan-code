@@ -28,7 +28,7 @@
 | 插件 | 当前关键入口和已复用资源 | 建议优先处理 | 容量判断 | 本轮状态 |
 | --- | --- | --- | --- | --- |
 | Context7 | 两个普通无状态工具；UI Action 独立；每次 HTTP 调用新建并关闭 curl easy handle | 首先试验逐工具 VM 复用，保留模块加载结果，严格清理请求状态 | 先共享；出现其他插件竞争后再评估专用工具容量 | 分析完成，未启用复用 |
-| RTK | 持久 Hook；每次转换仍调用 RTK 子进程；统计 Action 有结果缓存 | 分离进程启动、重写、Git 查询与排队时间 | 只在 Hook 入场竞争明确时考虑预留；不能消除外部进程耗时 | 分析完成，未改变 Hook 策略 |
+| RTK | Shell 改写已由宿主原生执行；插件只剩 Git 上下文 Hook 与统计 Action（有结果缓存） | 分离进程启动、Git 查询与排队时间 | 只在 Hook 入场竞争明确时考虑预留；不能消除外部进程耗时 | Shell 改写已原生化，其余未改变 |
 | 调试运行时 | 固定工具会话；一个会话 VM 持有其 Node sidecar | 保持会话亲和，优化连接与事件读取，分别测首次和连续调用 | 长会话受竞争影响时评估专用会话容量 | 保持现有固定会话 |
 | 浏览器 | 持久 Hook、UI Action；实际浏览工作由 MCP 与浏览器承担 | 测量 MCP 准备、浏览器启动、导航和截图传输 | Lua Hook 容量仅影响入场，不代表浏览器性能 | 保持现有 MCP 与会话链 |
 | 使用统计 | 持久 UI Action；已有按视图查询、分页和版本核查 | 分析 SQL 查询计划、重复扫描、数据规模和宿主回调次数 | 先共享；专用 Action 容量不能修复数据库瓶颈 | 分析完成，未调整 SQL |
@@ -54,7 +54,8 @@
 ### RTK：先处理外部调用成本
 
 源码：[清单](../../plugins/vulcan-rtk/plugin.yaml)、[Lua 业务](../../plugins/vulcan-rtk/runtime/plugin.bundle.lua)。
-`transform_shell_command` 调用 `rtk rewrite`；`transform_git_commit_context` 顺序取得 Git 上下文；`statistics_get` 调用统计命令。配置按调用读取。
+Shell 命令改写已移到宿主原生 `shell_command`（见 [`tooling-and-terminal-runtime.md`](tooling-and-terminal-runtime.md)），
+不再经过插件 Hook。`transform_git_commit_context` 顺序取得 Git 上下文；`statistics_get` 调用统计命令。配置按调用读取。
 Hook 已使用持久运行路径，统计界面已有延迟加载和清单声明的结果缓存。
 
 应记录每次 Hook 的等待时间、配置回调、RTK 进程启动和执行时间，再判断是否值得改变调用粒度。

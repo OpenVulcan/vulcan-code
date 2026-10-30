@@ -286,6 +286,7 @@ impl RuntimeFoundation {
         let native_tools = build_native_tool_catalog(
             &runtime_config,
             config.default_command_shell.as_deref(),
+            &config.rtk,
             Arc::clone(&command_session_runtime),
             crate::tooling::memory_mode_vmm_layer(&config.vmm),
             vulcan_plugin_runtime.clone(),

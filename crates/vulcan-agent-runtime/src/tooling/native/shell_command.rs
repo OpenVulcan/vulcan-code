@@ -1,14 +1,19 @@
 use super::*;
 use crate::agent_runtime::conversation_hooks::HOOK_TOOL_SHELL_COMMAND_BEFORE_EXECUTE;
 use crate::agent_runtime::vulcan_plugin_hooks::dispatch_vulcan_plugin_hook;
+use crate::provider_config::PersistedRtkConfiguration;
 use std::collections::BTreeMap;
-use vulcan_hooks::{HookActor, HookCapabilitySet, HookContext, HookScope};
+use vulcan_hooks::{HookActor, HookCapabilitySet, HookContext, HookDiagnosticSeverity, HookScope};
 use vulcan_host_tools::process_creation::{
     apply_child_path_prefixes, new_background_tokio_command,
 };
 use vulcan_host_tools::process_tree::{
     CHILD_OUTPUT_DRAIN_GRACE, ChildProcessTreeDropGuard, isolate_child_process_tree,
     terminate_child_process_tree,
+};
+use vulcan_host_tools::rtk::{
+    RTK_PLAIN_OUTPUT_VARIABLE, RtkRewriteOutcome, resolve_rtk_executable, rtk_command_routes,
+    rtk_host_environment, run_rtk_rewrite,
 };
 
 /// Stable identifier of the one-shot shell-command native tool.
@@ -17,9 +22,15 @@ pub const SHELL_COMMAND_TOOL_ID: &str = "shell_command";
 
 /// Builds the one-shot shell-command host-owned native tool.
 /// 构建一次性 shell 命令宿主自有原生工具。
+///
+/// # Parameters
+/// 参数
+/// `rtk` is the RTK router configuration captured when the tool catalog is built.
+/// `rtk` 是构建工具目录时捕获的 RTK 路由配置。
 pub(crate) fn build_shell_command_tool(
     shell_support: HostCommandShellSupport,
     plugin_runtime: Option<vulcan_plugin_runtime::VulcanPluginRuntimeManager>,
+    rtk: PersistedRtkConfiguration,
 ) -> Arc<NativeToolDefinition> {
     let descriptor = NativeToolDescriptor {
         id: String::from(SHELL_COMMAND_TOOL_ID),
@@ -36,8 +47,10 @@ pub(crate) fn build_shell_command_tool(
         move |request: NativeToolExecutionRequest| {
             let shell_support = shell_support.clone();
             let plugin_runtime = plugin_runtime.clone();
+            let rtk = rtk.clone();
             Box::pin(async move {
-                execute_shell_command_tool(request, &shell_support, plugin_runtime.as_ref()).await
+                execute_shell_command_tool(request, &shell_support, plugin_runtime.as_ref(), &rtk)
+                    .await
             })
         },
     )
@@ -79,6 +92,10 @@ pub(crate) struct ShellCommandProcessOptions {
     /// Exact environment contributions keyed by variable name.
     /// 以变量名为键的精确环境贡献。
     environment: BTreeMap<String, String>,
+    /// Host-owned variables such as the RTK warning switch, applied first so session and hook
+    /// values win.
+    /// 宿主持有的变量（如 RTK 提示开关），最先应用，使会话与 Hook 值优先。
+    host_environment: Vec<(String, String)>,
     /// Vulcan environment variables of the session, applied before hook contributions so an
     /// explicit hook value wins.
     /// 会话的 Vulcan 环境变量，先于 Hook 贡献应用，使显式 Hook 值优先。
@@ -167,6 +184,121 @@ pub(crate) struct ShellCommandHookReport {
     /// Serialized non-fatal handler failures.
     /// 序列化的非致命处理器失败。
     failures: Vec<Value>,
+}
+
+/// Command state after the host-native RTK rewrite, which plugin hooks receive as their input.
+/// 宿主原生 RTK 改写后的命令状态，作为插件 Hook 的输入。
+#[derive(Debug, Clone)]
+struct NativeShellRewrite {
+    /// Command after the RTK rewrite, or the model's command when none applied.
+    /// RTK 改写后的命令；未改写时为模型命令。
+    command: String,
+    /// Variables the routed command needs.
+    /// 经路由的命令所需的变量。
+    environment: BTreeMap<String, String>,
+    /// Display contribution describing the applied routes.
+    /// 描述已应用路由的展示贡献。
+    contributions: Vec<ShellCommandHookContribution>,
+    /// Serialized `HookDiagnostic`-shaped notes explaining a skipped rewrite.
+    /// 解释跳过改写原因的 `HookDiagnostic` 形状序列化说明。
+    diagnostics: Vec<Value>,
+}
+
+impl NativeShellRewrite {
+    /// Returns the unchanged command state for one model command.
+    /// 返回一条模型命令的未改写状态。
+    fn unchanged(command: &str) -> Self {
+        Self {
+            command: command.to_string(),
+            environment: BTreeMap::new(),
+            contributions: Vec::new(),
+            diagnostics: Vec::new(),
+        }
+    }
+
+    /// Returns the unchanged command state with one diagnostic.
+    /// 返回带一条诊断的未改写状态。
+    fn skipped(command: &str, severity: HookDiagnosticSeverity, message: String) -> Self {
+        let mut rewrite = Self::unchanged(command);
+        rewrite
+            .diagnostics
+            .push(json!({ "severity": severity, "message": message }));
+        rewrite
+    }
+}
+
+/// Routes one model command through the bundled RTK executable when the settings allow it.
+/// 设置允许时，经随包 RTK 可执行文件路由一条模型命令。
+///
+/// # Parameters
+/// 参数
+/// `command` is the model's command, `cwd` its working directory, and `rtk` the router settings.
+/// `command` 是模型命令，`cwd` 是其工作目录，`rtk` 是路由设置。
+///
+/// # Returns
+/// 返回值
+/// The rewritten command only when RTK produced one and every route is allowed; otherwise the
+/// original command, never partial output.
+/// 仅当 RTK 产生改写且全部路由均被允许时返回改写命令；否则返回原命令，绝不返回部分输出。
+async fn apply_native_rtk_rewrite(
+    command: &str,
+    cwd: &Path,
+    rtk: &PersistedRtkConfiguration,
+) -> NativeShellRewrite {
+    if !rtk.routing_enabled() {
+        return NativeShellRewrite::unchanged(command);
+    }
+    let Some(executable) = resolve_rtk_executable() else {
+        return NativeShellRewrite::skipped(
+            command,
+            HookDiagnosticSeverity::Info,
+            String::from("RTK is not bundled for this host; command routing was skipped."),
+        );
+    };
+    let mut environment = rtk_host_environment(rtk.telemetry_disabled);
+    environment.push((String::from(RTK_PLAIN_OUTPUT_VARIABLE), String::from("1")));
+    let rewritten = match run_rtk_rewrite(&executable, command, cwd, &environment).await {
+        RtkRewriteOutcome::Rewritten(rewritten) => rewritten,
+        RtkRewriteOutcome::NoRewrite => return NativeShellRewrite::unchanged(command),
+        RtkRewriteOutcome::Denied => {
+            return NativeShellRewrite::skipped(
+                command,
+                HookDiagnosticSeverity::Info,
+                String::from("An RTK deny rule matched; the original command runs unchanged."),
+            );
+        }
+        RtkRewriteOutcome::Failed(reason) => {
+            return NativeShellRewrite::skipped(
+                command,
+                HookDiagnosticSeverity::Warning,
+                format!("RTK rewrite was not applied: {reason}"),
+            );
+        }
+    };
+    if rewritten == command {
+        return NativeShellRewrite::unchanged(command);
+    }
+    let routes = rtk_command_routes(&rewritten);
+    if !rtk.allows_routes(&routes) {
+        return NativeShellRewrite::skipped(
+            command,
+            HookDiagnosticSeverity::Info,
+            format!(
+                "RTK routes are not enabled in the RTK settings: {}",
+                routes.join(", ")
+            ),
+        );
+    }
+    NativeShellRewrite {
+        command: rewritten,
+        environment: BTreeMap::from([(String::from(RTK_PLAIN_OUTPUT_VARIABLE), String::from("1"))]),
+        contributions: vec![ShellCommandHookContribution {
+            badge: Some(String::from("RTK")),
+            label: String::from("Command router"),
+            value: format!("rtk ({})", routes.join(", ")),
+        }],
+        diagnostics: Vec::new(),
+    }
 }
 
 /// One internal execution status returned by the host-owned shell-command runner.
@@ -403,6 +535,9 @@ fn apply_shell_command_process_options(
         );
     }
 
+    for (name, value) in &process_options.host_environment {
+        command.env(name, value);
+    }
     for (name, value) in &process_options.vulcan_environment {
         command.env(name, value);
     }
@@ -420,8 +555,9 @@ fn apply_shell_command_process_options(
 ///
 /// # Parameters
 /// 参数
-/// The original arguments and cwd are host-owned; plugin runtime, workspace, and session are context.
-/// 原始参数与 cwd 由宿主持有；插件运行时、工作区与会话构成上下文。
+/// The original arguments and cwd are host-owned; `native` is the RTK-routed command state the
+/// hooks start from; plugin runtime, workspace, and session are context.
+/// 原始参数与 cwd 由宿主持有；`native` 是 Hook 起始的 RTK 路由后命令状态；插件运行时、工作区与会话构成上下文。
 ///
 /// # Returns
 /// 返回值
@@ -430,6 +566,7 @@ fn apply_shell_command_process_options(
 async fn apply_shell_command_plugin_hooks(
     parsed_args: &ShellCommandToolArgs,
     effective_cwd: &Path,
+    native: NativeShellRewrite,
     workspace_root: Option<&Path>,
     session_id: Option<SessionId>,
     plugin_runtime: Option<&vulcan_plugin_runtime::VulcanPluginRuntimeManager>,
@@ -453,25 +590,31 @@ async fn apply_shell_command_plugin_hooks(
         .unwrap_or_else(|| String::from("auto"));
     let initial_payload = ShellCommandHookPayload {
         schema_version: 1,
-        command: parsed_args.command.clone(),
+        command: native.command.clone(),
         cwd: original_cwd.clone(),
         shell: shell.clone(),
-        environment: BTreeMap::new(),
+        environment: native.environment.clone(),
         binary_path_requests: Vec::new(),
-        contributions: Vec::new(),
+        contributions: native.contributions.clone(),
     };
     let Some(plugin_runtime) = plugin_runtime else {
+        let mut effective_args = parsed_args.clone();
+        effective_args.command = native.command.clone();
         return Ok((
-            parsed_args.clone(),
+            effective_args,
             ShellCommandProcessOptions {
                 path_prefixes: host_path_prefixes,
-                environment: BTreeMap::new(),
+                environment: native.environment,
+                host_environment: Vec::new(),
                 vulcan_environment: Vec::new(),
             },
             ShellCommandHookReport {
                 original_command: parsed_args.command.clone(),
-                effective_command: parsed_args.command.clone(),
-                ..ShellCommandHookReport::default()
+                effective_command: native.command,
+                completed_hooks: Vec::new(),
+                contributions: native.contributions,
+                diagnostics: native.diagnostics,
+                failures: Vec::new(),
             },
         ));
     };
@@ -547,16 +690,14 @@ async fn apply_shell_command_plugin_hooks(
             path_prefixes.push(directory);
         }
     }
-    let diagnostics = report
-        .diagnostics
-        .iter()
-        .map(serde_json::to_value)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| {
+    let mut diagnostics = native.diagnostics;
+    for diagnostic in &report.diagnostics {
+        diagnostics.push(serde_json::to_value(diagnostic).map_err(|error| {
             NativeToolError::new(format!(
                 "Failed to encode shell_command hook diagnostics: {error}"
             ))
-        })?;
+        })?);
+    }
     let failures = report
         .failures
         .iter()
@@ -574,6 +715,7 @@ async fn apply_shell_command_plugin_hooks(
         ShellCommandProcessOptions {
             path_prefixes,
             environment: transformed.environment,
+            host_environment: Vec::new(),
             vulcan_environment: Vec::new(),
         },
         ShellCommandHookReport {
@@ -1106,11 +1248,15 @@ pub(crate) fn build_shell_command_text_render_input(
     if let Some(reason) = execution_report.failure_reason.as_deref() {
         lines.push(format!("Reason: {reason}"));
     }
-    if hook_report.original_command != hook_report.effective_command {
+    if !hook_report.completed_hooks.is_empty()
+        && hook_report.original_command != hook_report.effective_command
+    {
         lines.push(format!(
             "Plugin hooks: transformed by {} completed hook(s)",
             hook_report.completed_hooks.len()
         ));
+    }
+    if hook_report.original_command != hook_report.effective_command {
         lines.push(format!(
             "Original command: {}",
             hook_report.original_command
@@ -1203,6 +1349,7 @@ pub(crate) async fn execute_shell_command_tool(
     request: NativeToolExecutionRequest,
     shell_support: &HostCommandShellSupport,
     plugin_runtime: Option<&vulcan_plugin_runtime::VulcanPluginRuntimeManager>,
+    rtk: &PersistedRtkConfiguration,
 ) -> Result<VulcanToolInvocationResult, NativeToolError> {
     let vulcan_environment = child_process_environment(&request).await?;
     let parsed_args = parse_shell_command_tool_arguments(request.arguments)?;
@@ -1216,14 +1363,17 @@ pub(crate) async fn execute_shell_command_tool(
         &effective_cwd,
     );
     let session_id = request.session_id;
+    let native_rewrite = apply_native_rtk_rewrite(&parsed_args.command, &effective_cwd, rtk).await;
     let (effective_args, mut process_options, hook_report) = apply_shell_command_plugin_hooks(
         &parsed_args,
         &effective_cwd,
+        native_rewrite,
         request.workspace_root.as_deref(),
         session_id,
         plugin_runtime,
     )
     .await?;
+    process_options.host_environment = rtk_host_environment(rtk.telemetry_disabled);
     process_options.vulcan_environment = vulcan_environment;
 
     let execution_report = execute_shell_command_process(
@@ -1584,6 +1734,7 @@ mod process_option_tests {
         let process_options = ShellCommandProcessOptions {
             path_prefixes: vec![temp.path().to_path_buf()],
             environment: BTreeMap::new(),
+            host_environment: Vec::new(),
             vulcan_environment: Vec::new(),
         };
         // report captures the real child-shell lookup result using only the injected PATH prefix.

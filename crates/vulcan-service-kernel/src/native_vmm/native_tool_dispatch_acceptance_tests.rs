@@ -146,6 +146,7 @@ pub(super) async fn verify(
     let catalog = build_native_tool_catalog(
         &config,
         None,
+        &Default::default(),
         Arc::new(CommandSessionRuntime::new()),
         global,
         None,

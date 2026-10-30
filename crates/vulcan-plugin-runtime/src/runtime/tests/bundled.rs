@@ -611,8 +611,8 @@ fn bundled_context7_plugin_loads_with_typed_json_surface() {
         .expect("load and close the real Context7 probe lease");
 }
 
-/// Verifies the repository RTK plugin executes its actions, shell transform, and Git context transform through the fixed bridge.
-/// 验证仓库 RTK 插件通过固定桥接层执行 Action、Shell 转换与 Git 上下文转换。
+/// Verifies the repository RTK plugin executes its actions and Git context transform through the fixed bridge.
+/// 验证仓库 RTK 插件通过固定桥接层执行 Action 与 Git 上下文转换。
 #[cfg(target_os = "windows")]
 #[test]
 fn bundled_rtk_plugin_uses_generic_action_and_hook_boundaries() {
@@ -678,13 +678,18 @@ fn bundled_rtk_plugin_uses_generic_action_and_hook_boundaries() {
     let catalog = manager
         .refresh_catalog(&BTreeSet::new(), &BTreeSet::new())
         .expect("load repository plugin catalog");
-    let hook = catalog
-        .enabled_hooks
-        .get("vulcan-plugin/vulcan-rtk/shell-command-rewrite")
-        .cloned()
-        .expect("resolve RTK shell hook");
-    // git_hook is the production Git commit-context registration whose contribution protocol differs from the shell hook.
-    // git_hook 是生产 Git 提交上下文注册，其贡献协议不同于 Shell Hook。
+    // Shell routing is host-native, so the plugin must no longer register a shell transform.
+    // Shell 路由由宿主原生承担，插件不得再注册 Shell 转换。
+    assert!(
+        !catalog
+            .enabled_hooks
+            .values()
+            .any(|hook| hook.plugin_id == "vulcan-rtk"
+                && hook.manifest.point == "tool.shell_command.before_execute"),
+        "RTK shell routing must stay host-native"
+    );
+    // git_hook is the production Git commit-context registration.
+    // git_hook 是生产 Git 提交上下文注册。
     let git_hook = catalog
         .enabled_hooks
         .get("vulcan-plugin/vulcan-rtk/git-commit-context")
@@ -729,59 +734,6 @@ fn bundled_rtk_plugin_uses_generic_action_and_hook_boundaries() {
     );
     assert!(statistics["byCommand"].is_array());
 
-    let invocation = HookInvocation {
-        registration: HookRegistration::new(
-            hook.registration_id.clone(),
-            "tool.shell_command.before_execute",
-            HookMode::Transform,
-        ),
-        context: HookContext {
-            run_id: Uuid::new_v4().to_string(),
-            point: String::from("tool.shell_command.before_execute"),
-            scope: HookScope::Workspace,
-            actor: HookActor::new("runtime-test"),
-            workspace_id: Some(workspace_root.to_string_lossy().into_owned()),
-            project_id: None,
-            session_id: Some(String::from("session-rtk")),
-            conversation_id: Some(String::from("session-rtk")),
-            user_id: None,
-            capabilities: HookCapabilitySet::default(),
-            metadata: BTreeMap::from([(
-                String::from("workspace_root"),
-                Value::String(workspace_root.to_string_lossy().into_owned()),
-            )]),
-        },
-        payload: HookPayload {
-            value: json!({
-                "schema_version": 1,
-                "command": "git status --short",
-                "cwd": workspace_root.to_string_lossy(),
-                "shell": "auto",
-                "environment": {},
-                "binary_path_requests": [],
-                "contributions": [],
-            }),
-        },
-    };
-    let hook_result = runtime
-        .block_on(manager.invoke_hook(&hook, invocation))
-        .expect("invoke RTK shell transform");
-    let transformed = hook_result
-        .payload
-        .clone()
-        .expect("RTK hook should return transformed payload")
-        .value;
-    assert_eq!(
-        transformed["command"], "rtk git status --short",
-        "RTK hook diagnostics: {:?}",
-        hook_result.diagnostics
-    );
-    assert_eq!(transformed["binary_path_requests"][0]["binary_id"], "rtk");
-    assert_eq!(transformed["contributions"][0]["badge"], "RTK");
-    assert!(
-        transformed["environment"].is_object(),
-        "LuaSkills must preserve an empty shell environment as a JSON object"
-    );
     // git_invocation uses the exact strict service-kernel payload contract for commit-summary context transforms.
     // git_invocation 使用提交摘要上下文转换的精确严格 Service Kernel 载荷契约。
     let git_invocation = HookInvocation {
@@ -843,7 +795,7 @@ fn bundled_rtk_plugin_uses_generic_action_and_hook_boundaries() {
     // resolvedBinaryDirectory proves the logical hook request resolves to the repository plugin bin.
     // resolvedBinaryDirectory 证明逻辑 Hook 请求会解析到仓库插件 bin 目录。
     let resolved_binary_directory = manager
-        .hook_binary_directory(&hook.registration_id, "rtk")
+        .hook_binary_directory(&git_hook.registration_id, "rtk")
         .expect("resolve RTK hook binary directory");
     // expectedBinaryDirectory is canonicalized independently from the plugin manifest path.
     // expectedBinaryDirectory 从插件清单路径独立执行规范化。
@@ -854,12 +806,12 @@ fn bundled_rtk_plugin_uses_generic_action_and_hook_boundaries() {
     assert_eq!(resolved_binary_directory, expected_binary_directory);
 }
 
-/// Verify the real RTK bundle's process protocol and statistics parsing with isolated native Lua execution.
-/// 使用隔离的原生 Lua 执行验证真实 RTK Bundle 的进程协议和统计解析。
+/// Verify the real RTK bundle's statistics protocol and parsing with isolated native Lua execution.
+/// 使用隔离的原生 Lua 执行验证真实 RTK Bundle 的统计协议与解析。
 /// Takes no parameters and returns after all fixture behavior assertions succeed.
 /// 不接收参数，在全部夹具行为断言成功后返回。
 #[test]
-fn bundled_rtk_plugin_preserves_rewrite_and_statistics_contracts() {
+fn bundled_rtk_plugin_preserves_statistics_contracts() {
     // temporary owns the real Lua engine state without using the user's RTK history or configuration.
     // temporary 持有真实 Lua 引擎状态，不使用用户的 RTK 历史或配置。
     let temporary = tempfile::tempdir().expect("create RTK contract fixture directory");
@@ -888,6 +840,6 @@ fn bundled_rtk_plugin_preserves_rewrite_and_statistics_contracts() {
             }),
             None,
         )
-        .expect("execute RTK rewrite and statistics behavior fixture");
+        .expect("execute RTK statistics behavior fixture");
     assert_eq!(result["passed"], true);
 }

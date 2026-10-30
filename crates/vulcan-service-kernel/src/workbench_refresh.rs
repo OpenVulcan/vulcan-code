@@ -788,6 +788,7 @@ pub(crate) fn native_tool_summaries_from_agent_runtime(
             .provider_configuration
             .default_command_shell
             .as_deref(),
+        &agent_runtime.provider_configuration.rtk,
         std::sync::Arc::clone(&agent_runtime.command_session_runtime),
         vulcan_agent_runtime::tooling::memory_mode_vmm_layer(
             &agent_runtime.provider_configuration.vmm,

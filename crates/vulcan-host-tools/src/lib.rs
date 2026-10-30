@@ -15,6 +15,7 @@ pub mod process_tree;
 pub mod project_temp_maintenance;
 pub mod project_terminal_runtime;
 pub mod result_format;
+pub mod rtk;
 pub mod shell_host;
 pub mod terminal_host_client;
 pub mod text_document;
