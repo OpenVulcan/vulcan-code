@@ -86,6 +86,30 @@
                                              ]
                    },
                    {
+                       "key":  "claude-fable-5-1-thinking",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  1000000,
+                       "output_limit":  128000,
+                       "reasoning":  "native",
+                       "reasoning_control":  "unknown",
+                       "reasoning_efforts":  [
+                                                  "low",
+                                                  "medium",
+                                                  "high",
+                                                  "xhigh",
+                                                  "max"
+                                              ],
+                       "input_modalities":  [
+                                                "image",
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
                        "key":  "claude-haiku-4-5",
                        "aliases":  [
 
@@ -244,6 +268,28 @@
                                              ]
                    },
                    {
+                       "key":  "claude-opus-5-5-thinking",
+                       "aliases":  [],
+                       "context_window":  1000000,
+                       "output_limit":  128000,
+                       "reasoning":  "native",
+                       "reasoning_control":  "unknown",
+                       "reasoning_efforts":  [
+                                                  "low",
+                                                  "medium",
+                                                  "high",
+                                                  "xhigh",
+                                                  "max"
+                                              ],
+                       "input_modalities":  [
+                                                "image",
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
                        "key":  "claude-sonnet-4-6",
                        "aliases":  [
 
@@ -275,6 +321,28 @@
                    },
                    {
                        "key":  "claude-sonnet-5-5",
+                       "aliases":  [],
+                       "context_window":  1000000,
+                       "output_limit":  128000,
+                       "reasoning":  "native",
+                       "reasoning_control":  "unknown",
+                       "reasoning_efforts":  [
+                                                  "low",
+                                                  "medium",
+                                                  "high",
+                                                  "xhigh",
+                                                  "max"
+                                              ],
+                       "input_modalities":  [
+                                                "image",
+                                                "text"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
+                       "key":  "claude-sonnet-5-5-thinking",
                        "aliases":  [],
                        "context_window":  1000000,
                        "output_limit":  128000,

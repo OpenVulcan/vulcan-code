@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "nodeai",
-  "revision": 3,
-  "published_at": "2026-10-29T14:40:08Z",
+  "revision": 4,
+  "published_at": "2026-10-30T09:25:54Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -301,6 +301,96 @@
       },
       "request_profile_refs": ["anthropic.default-adaptive-effort.v1"],
       "provenance_ref": "https://platform.claude.com/docs/en/models/fable-5-1/overview"
+    },
+    {
+      "rule_id": "anthropic-claude-sonnet-5-5-thinking",
+      "scope": {
+        "service_entry_ids": ["anthropic-api"],
+        "credential_profile_ids": ["api-key"]
+      },
+      "matcher": {"kind": "exact", "value": "claude-sonnet-5-5-thinking"},
+      "display_name": "Claude Sonnet 5.5 Thinking",
+      "supported_protocols": ["anthropic-messages.v1"],
+      "selected_protocol": "anthropic-messages.v1",
+      "capabilities": {
+        "operations": ["conversation_respond"],
+        "input_resources": ["image"],
+        "output_resources": [],
+        "structured_output": "json_schema",
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "unknown",
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
+        "prompt_cache": {
+          "provider_default_behavior": "host-managed prompt cache injection is not available",
+          "supports_managed_explicit": false
+        },
+        "context_limit": 1000000,
+        "output_limit": 128000,
+        "evidence_revision": "nodeai.anthropic.thinking.user-declaration.20261030"
+      },
+      "request_profile_refs": ["anthropic.default-adaptive-effort.v1"],
+      "provenance_ref": "builtin:nodeai.anthropic.thinking.user-declaration.20261030"
+    },
+    {
+      "rule_id": "anthropic-claude-opus-5-5-thinking",
+      "scope": {
+        "service_entry_ids": ["anthropic-api"],
+        "credential_profile_ids": ["api-key"]
+      },
+      "matcher": {"kind": "exact", "value": "claude-opus-5-5-thinking"},
+      "display_name": "Claude Opus 5.5 Thinking",
+      "supported_protocols": ["anthropic-messages.v1"],
+      "selected_protocol": "anthropic-messages.v1",
+      "capabilities": {
+        "operations": ["conversation_respond"],
+        "input_resources": ["image"],
+        "output_resources": [],
+        "structured_output": "json_schema",
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "unknown",
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
+        "prompt_cache": {
+          "provider_default_behavior": "host-managed prompt cache injection is not available",
+          "supports_managed_explicit": false
+        },
+        "context_limit": 1000000,
+        "output_limit": 128000,
+        "evidence_revision": "nodeai.anthropic.thinking.user-declaration.20261030"
+      },
+      "request_profile_refs": ["anthropic.default-adaptive-effort.v1"],
+      "provenance_ref": "builtin:nodeai.anthropic.thinking.user-declaration.20261030"
+    },
+    {
+      "rule_id": "anthropic-claude-fable-5-1-thinking",
+      "scope": {
+        "service_entry_ids": ["anthropic-api"],
+        "credential_profile_ids": ["api-key"]
+      },
+      "matcher": {"kind": "exact", "value": "claude-fable-5-1-thinking"},
+      "display_name": "Claude Fable 5.1 Thinking",
+      "supported_protocols": ["anthropic-messages.v1"],
+      "selected_protocol": "anthropic-messages.v1",
+      "capabilities": {
+        "operations": ["conversation_respond"],
+        "input_resources": ["image"],
+        "output_resources": [],
+        "structured_output": "json_schema",
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "unknown",
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
+        "prompt_cache": {
+          "provider_default_behavior": "host-managed prompt cache injection is not available",
+          "supports_managed_explicit": false
+        },
+        "context_limit": 1000000,
+        "output_limit": 128000,
+        "evidence_revision": "nodeai.anthropic.thinking.user-declaration.20261030"
+      },
+      "request_profile_refs": ["anthropic.default-adaptive-effort.v1"],
+      "provenance_ref": "builtin:nodeai.anthropic.thinking.user-declaration.20261030"
     }
   ],
   "usage_profiles": [],
@@ -387,6 +477,10 @@
       {
         "url": "https://nodeai.cc/register?aff=ZP8C2RWW64D7",
         "note": "User-supplied referral URL and public campaign identifier registered on 2026-10-29; the existing referral disclosure is reused."
+      },
+      {
+        "url": "builtin:nodeai.anthropic.thinking.user-declaration.20261030",
+        "note": "Authenticated NODEAI discovery on 2026-10-30 returned 40 models, including claude-sonnet-5-5-thinking, claude-opus-5-5-thinking and claude-fable-5-1-thinking. At the user's request, only these three IDs are added as separate exact Anthropic rules alongside their ordinary counterparts, with distinct display names and no alias mapping. Protocol, context/output limits, modalities and reasoning/profile settings are inherited from the corresponding existing ordinary rules; no additional inference or thinking-control behavior was live-tested."
       }
     ],
     "verified_at": "2026-10-25T10:36:07Z"
