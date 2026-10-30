@@ -3417,100 +3417,128 @@ fn projected_assistant_replay_prefers_durable_items_on_matching_route() {
     assert_eq!(items, envelope.provider_context_items);
 }
 
-/// Verifies route changes retain canonical history while excluding all opaque replay evidence.
-/// 验证路由变化保留规范历史，同时排除所有不透明回放证据。
+/// Verifies a matching canonical route retains its own recorded reasoning.
+/// 验证匹配的规范路由保留自身记录的思考；无参数，无返回值。
 #[test]
-fn projected_assistant_replay_preserves_plaintext_on_foreign_route() {
-    let envelope = durable_reasoning_envelope();
-    // Each identity dimension independently invalidates native replay without blocking text.
-    // 每个身份维度都独立使原生回放失效，但不会阻断文本。
-    for field in ["provider", "connection", "endpoint", "protocol", "model"] {
-        let mut route = deepseek_replay_route();
-        match field {
-            "provider" => route.provider_id.push_str("-changed"),
-            "connection" => route.connection_id.push_str("-changed"),
-            "endpoint" => route.route_fingerprint.push_str("-changed"),
-            "protocol" => route.protocol_profile_id.push_str("-changed"),
-            "model" => route.model_id.push_str("-changed"),
-            _ => unreachable!(),
-        }
-        // Signed content proves neither reasoning nor tool signatures leak into the new route.
-        // signed_content 用于证明推理签名和工具签名都不会泄漏到新路由。
-        let mut signed_content = durable_canonical_content();
-        for item in &mut signed_content {
-            if let ContentItem::Reasoning { signature, .. } = item {
-                *signature = Some(String::from("openai#old-route-secret"));
-            }
-        }
-        signed_content.push(ContentItem::ToolCall {
-            call: AiToolCall {
-                id: String::from("call-1"),
-                name: String::from("read_file"),
-                arguments: json!({}),
-                signature: Some(String::from("gemini#old-route-secret")),
-            },
-        });
-        let (content, items) = resolve_projected_assistant_replay(
-            signed_content,
-            Some(&envelope),
-            Some(&route),
-            "v1-provider-message-1",
-        )
-        .expect("route changes must preserve portable canonical history");
-        assert!(
-            items.is_empty(),
-            "foreign native items must not cross the {field} boundary"
-        );
-        assert!(content.iter().any(|item| matches!(item, ContentItem::Reasoning { text, signature: None } if text == "durable-reasoning")));
-        assert!(content.iter().any(|item| matches!(item, ContentItem::ToolCall { call } if call.id == "call-1" && call.signature.is_none())));
-        assert_eq!(
-            envelope,
-            durable_reasoning_envelope(),
-            "stored history must remain immutable"
-        );
-    }
-    let foreign = V1ReplayRouteIdentity {
-        connection_id: String::from("connection-2"),
-        ..deepseek_replay_route()
-    };
-
-    // A turn with no reasoning at stake still falls back to its plain local text.
-    // 没有推理风险的回合仍回退为原有纯文本。
-    let text_only = vec![ContentItem::Text {
-        text: String::from("durable-answer"),
-    }];
-    let (content, items) = resolve_projected_assistant_replay(
-        text_only.clone(),
-        Some(&envelope),
-        Some(&foreign),
-        "v1-provider-message-1",
-    )
-    .expect("a turn without reasoning at stake must keep the plain local text");
-    assert_eq!(content, text_only);
-    assert!(items.is_empty());
-
-    // A target with no plaintext contract receives reasoning as labeled historical text.
-    // 未声明明文契约的目标以标明来源的历史文本接收推理。
-    let undeclared = V1ReplayRouteIdentity {
-        connection_id: String::from("connection-2"),
-        ..undeclared_replay_route()
-    };
+fn projected_assistant_replay_keeps_matching_canonical_reasoning() {
+    // Empty native items select the proven canonical replay path.
+    // 空的原生项选择已确认的规范回放路径。
+    let mut envelope = durable_reasoning_envelope();
+    envelope.provider_context_items.clear();
+    // The matching route remains the owner of this reasoning.
+    // 匹配路由仍是该思考的所有者。
+    let route = deepseek_replay_route();
+    // Compare complete content so no extra text can replace the reasoning item.
+    // 比较完整内容，防止额外正文替代思考项。
     let (content, items) = resolve_projected_assistant_replay(
         durable_canonical_content(),
         Some(&envelope),
-        Some(&undeclared),
-        "v1-provider-message-1",
+        Some(&route),
+        "matching-canonical",
     )
-    .expect("a route without a plaintext contract must still retain readable history");
+    .expect("matching canonical history must remain replayable");
+    assert_eq!(content, durable_canonical_content());
     assert!(
         content
             .iter()
-            .all(|item| !matches!(item, ContentItem::Reasoning { .. }))
+            .any(|item| matches!(item, ContentItem::Reasoning { .. }))
     );
-    assert!(content.iter().any(
-        |item| matches!(item, ContentItem::Text { text } if text.contains("durable-reasoning"))
-    ));
     assert!(items.is_empty());
+}
+
+/// Verifies route changes retain visible history and tool calls while omitting historical reasoning.
+/// 验证路由变化保留可见历史及工具调用，同时省略历史思考。
+#[test]
+fn projected_assistant_replay_preserves_plaintext_on_foreign_route() {
+    // Cover targets with and without a declared reasoning contract.
+    // 覆盖声明与未声明思考回传契约的目标。
+    for declared in [true, false] {
+        // Every frozen identity dimension independently marks the history as foreign.
+        // 冻结身份的每个维度都可独立标记该历史来自外路由。
+        for field in ["provider", "connection", "endpoint", "protocol", "model"] {
+            // Preserve the original envelope for the immutability assertion.
+            // 保留原始封套，用于验证其不可变性。
+            let envelope = durable_reasoning_envelope();
+            // Rebuild the target independently for each identity change.
+            // 每次身份变化都独立构建目标。
+            let mut route = if declared {
+                deepseek_replay_route()
+            } else {
+                undeclared_replay_route()
+            };
+            match field {
+                "provider" => route.provider_id.push_str("-changed"),
+                "connection" => route.connection_id.push_str("-changed"),
+                "endpoint" => route.route_fingerprint.push_str("-changed"),
+                "protocol" => route.protocol_profile_id.push_str("-changed"),
+                "model" => route.model_id.push_str("-changed"),
+                _ => unreachable!(),
+            }
+            // Visible text and parallel calls retain their order, identities and arguments.
+            // 可见正文与并行调用保留顺序、标识及参数。
+            let expected = vec![
+                ContentItem::Text {
+                    text: String::from("durable-answer"),
+                },
+                ContentItem::ToolCall {
+                    call: AiToolCall {
+                        id: String::from("call-1"),
+                        name: String::from("read_file"),
+                        arguments: json!({"path":"a"}),
+                        signature: None,
+                    },
+                },
+                ContentItem::ToolCall {
+                    call: AiToolCall {
+                        id: String::from("call-2"),
+                        name: String::from("read_file"),
+                        arguments: json!({"path":"b"}),
+                        signature: None,
+                    },
+                },
+            ];
+            // Both signed plaintext and opaque-only reasoning must stay on their original route.
+            // 带签名明文思考与纯不透明思考都必须留在原路由。
+            let mut source = vec![
+                ContentItem::Reasoning {
+                    text: String::from("durable-reasoning"),
+                    signature: Some(String::from("openai#old-route-secret")),
+                },
+                ContentItem::Reasoning {
+                    text: String::new(),
+                    signature: Some(String::from("openai#opaque")),
+                },
+            ];
+            source.extend(expected.clone());
+            for item in &mut source {
+                if let ContentItem::ToolCall { call } = item {
+                    call.signature = Some(String::from("gemini#old-route-secret"));
+                }
+            }
+            // Omit reasoning instead of injecting it as another visible text block.
+            // 省略思考，不再将其作为额外可见正文注入。
+            let (content, items) = resolve_projected_assistant_replay(
+                source,
+                Some(&envelope),
+                Some(&route),
+                "v1-provider-message-1",
+            )
+            .expect("a model switch must retain visible history without foreign reasoning");
+            assert_eq!(
+                content, expected,
+                "visible history changed across the {field} boundary"
+            );
+            assert!(
+                items.is_empty(),
+                "foreign provider items crossed the {field} boundary"
+            );
+            assert_eq!(
+                envelope,
+                durable_reasoning_envelope(),
+                "stored history must remain immutable"
+            );
+        }
+    }
 }
 
 /// A cross-model target cannot consume encrypted-only reasoning but keeps the rest of the turn.

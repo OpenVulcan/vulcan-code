@@ -1111,6 +1111,8 @@ impl V1ReplayRouteIdentity {
 /// rebuild.
 /// 返回一对互斥载荷。供应商原生项仅在属于其路由时替代规范内容；不可用封套会变成受控错误，
 /// 而不是静默的本地重建。
+/// Foreign-route reasoning is omitted while visible text and tool calls retain their order.
+/// 外路由思考被省略，可见正文与工具调用保持原有顺序。
 fn resolve_projected_assistant_replay(
     content: Vec<ContentItem>,
     envelope: Option<&ProviderReplayEnvelope>,
@@ -1141,34 +1143,19 @@ fn resolve_projected_assistant_replay(
             )))
         }
         Some(ProviderReplayProjection::RouteMismatch) => {
-            // Route identity protects opaque replay, not portable canonical text. The target's
-            // declared encoder validates whether the retained plaintext can reach its wire format.
-            // 路由身份保护不透明回放，而非可移植的规范文本。目标声明的编码器负责校验
-            // 保留的明文是否能够抵达其线路格式。
-            // State-only projections lack a target contract and do not prepare transport bytes.
-            // 仅状态投影没有目标契约，也不准备传输字节。
-            let Some(route) = route else {
+            // State-only projections have no frozen execution and do not prepare transport bytes.
+            // 仅状态投影没有冻结执行，也不准备传输字节。
+            if route.is_none() {
                 return Ok((content, Vec::new()));
-            };
+            }
+            // Reasoning belongs to its producing route; a model switch retains only visible history.
+            // 思考归产生它的路由持有；模型切换仅保留可见历史。
+            // This request-only filter leaves the durable envelope and displayed history intact.
+            // 此请求级过滤保留持久化封套及界面历史。
             let content = content
                 .into_iter()
                 .filter_map(|item| match item {
-                    // An opaque-only block has no portable text; its original envelope stays stored.
-                    // 纯不透明块没有可移植文本；原封套仍保留在存储中。
-                    ContentItem::Reasoning { text, .. } if text.trim().is_empty() => None,
-                    ContentItem::Reasoning { text, .. }
-                        if route.reasoning_replay_contract.is_some() =>
-                    {
-                        Some(ContentItem::Reasoning {
-                            text,
-                            signature: None,
-                        })
-                    }
-                    // Generic routes receive readable history, never a forged native thinking block.
-                    // 通用路由接收可读历史，绝不接收伪造的原生思考块。
-                    ContentItem::Reasoning { text, .. } => Some(ContentItem::Text {
-                        text: format!("Historical reasoning text from a previous model:\n{text}"),
-                    }),
+                    ContentItem::Reasoning { .. } => None,
                     ContentItem::ToolCall { mut call } => {
                         call.signature = None;
                         Some(ContentItem::ToolCall { call })
@@ -1405,6 +1392,11 @@ fn rebuild_provider_transport_candidate_with_compaction(
                     replay_route.as_ref(),
                     provider_projection_message_id(index).as_str(),
                 )?;
+                // A foreign reasoning-only turn has no remaining wire content after a model switch.
+                // 模型切换后，外路由纯思考回合不再有可发送内容。
+                if content.is_empty() && provider_context_items.is_empty() {
+                    continue;
+                }
                 request_messages.push(AiMessage {
                     role: MessageRole::Assistant,
                     content,

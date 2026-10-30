@@ -193,3 +193,182 @@ async fn native_media_before_compaction_frontier_keeps_only_its_address()
     assert!(body.contains("image.png"));
     Ok(())
 }
+
+/// Verifies the real frozen-request rebuild drops foreign reasoning and preserves body and tools.
+/// 验证真实冻结请求重建会丢弃外模型思考，并保留正文及工具；无参数，返回测试结果。
+#[tokio::test]
+async fn model_switch_preserves_visible_history_and_tool_results()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Reuse an isolated frozen route without dispatching any inference request.
+    // 复用隔离的冻结路由，不发送任何推理请求。
+    let (_context, facts, candidate, mut snapshot, _base64, _directory) =
+        native_read_fixture().await?;
+    // Only the archived model differs from the actual target execution.
+    // 仅归档模型与实际目标执行不同。
+    let target = V1ReplayRouteIdentity::from_candidate(&candidate)
+        .expect("the fixture must provide a frozen execution route");
+    // Keep the old model identity explicit instead of inferring it from visible text.
+    // 显式记录旧模型身份，不从可见文本推断。
+    let previous_model = format!("{}-previous", target.model_id);
+    // Build durable provenance for the supplied canonical content, retaining all original records.
+    // 为传入的规范内容构建持久化来源，保留全部原始记录。
+    let source_for = |content: Vec<ContentItem>| vulcan_session_core::v1::event::ProviderSource {
+        fingerprint_version:
+            vulcan_session_core::v1::event::ProviderFingerprintVersion::ImmutableProjectionV1,
+        provider: target.provider_id.clone(),
+        profile: Some(target.protocol_profile_id.clone()),
+        model: previous_model.clone(),
+        connection_id: Some(target.connection_id.clone()),
+        message_id: Some(String::from("recorded-message")),
+        response_id: None,
+        replay: Some(ProviderReplayEnvelope::new(
+            target.provider_id.clone(),
+            target.connection_id.clone(),
+            target.route_fingerprint.clone(),
+            target.protocol_profile_id.clone(),
+            previous_model.clone(),
+            content,
+            Vec::new(),
+        )),
+        covered_until_seq: Seq::try_new(1).expect("the fixture source sequence is valid"),
+        fingerprint_sha256: String::from("0").repeat(64),
+    };
+    // This reasoning must remain visible in canonical history but absent from the target request.
+    // 此思考须保留在规范历史中，但不能进入目标请求。
+    let old_reasoning = String::from("source-analysis-only");
+    // The user's visible assistant body must survive unchanged.
+    // 用户可见的助手正文必须原样保留。
+    let visible_body = String::from("recorded-visible-answer");
+    // Locate the recorded assistant by kind so fixture ordering can evolve safely.
+    // 按种类定位记录的助手消息，使夹具排序可以安全变化。
+    let assistant = snapshot
+        .items
+        .iter_mut()
+        .find(|item| matches!(item, ProjectedItem::AssistantText { .. }))
+        .expect("the fixture must contain an assistant tool-call turn");
+    if let ProjectedItem::AssistantText {
+        text,
+        reasoning,
+        tool_calls,
+        provider_source,
+    } = assistant
+    {
+        *text = visible_body.clone();
+        *reasoning = Some(old_reasoning.clone());
+        // Mirror the exact canonical call identities and arguments in the durable envelope.
+        // 在持久化封套中保留精确的规范调用标识及参数。
+        let mut content = vec![
+            ContentItem::Reasoning {
+                text: old_reasoning.clone(),
+                signature: None,
+            },
+            ContentItem::Text {
+                text: visible_body.clone(),
+            },
+        ];
+        for call in tool_calls {
+            content.push(ContentItem::ToolCall {
+                call: AiToolCall {
+                    id: provider_wire_tool_call_id(
+                        call.tool_call_id,
+                        call.provider_tool_call_id.as_deref(),
+                    ),
+                    name: call.tool_name.clone(),
+                    arguments: serde_json::to_value(&call.input)?,
+                    signature: None,
+                },
+            });
+        }
+        *provider_source = Some(Box::new(source_for(content)));
+    }
+    // A reasoning-only archived turn must disappear instead of becoming an empty assistant message.
+    // 纯思考归档回合须被省略，不能变成空的助手消息。
+    snapshot.items.insert(
+        0,
+        ProjectedItem::AssistantText {
+            text: String::new(),
+            reasoning: Some(old_reasoning.clone()),
+            tool_calls: Vec::new(),
+            provider_source: Some(Box::new(source_for(vec![ContentItem::Reasoning {
+                text: old_reasoning.clone(),
+                signature: None,
+            }]))),
+        },
+    );
+    // Use an ordinary tool result to verify complete preservation of its structured payload.
+    // 使用普通工具结果验证其结构化载荷完整保留。
+    let result = snapshot
+        .items
+        .iter_mut()
+        .find(|item| matches!(item, ProjectedItem::ToolResult { .. }))
+        .expect("the fixture must contain a recorded tool result");
+    // The expected value comes from the actual persisted payload, not from transport assumptions.
+    // 期望值来自实际持久化载荷，不依赖传输层假设。
+    let expected_output = if let ProjectedItem::ToolResult {
+        tool_call_id,
+        provider_tool_call_id,
+        tool_name,
+        output,
+        ..
+    } = result
+    {
+        *output = ToolPayload::try_new(json!({
+            "tool_call_id":provider_wire_tool_call_id(*tool_call_id, provider_tool_call_id.as_deref()),
+            "tool_name":tool_name.clone(), "model_output":"recorded-tool-data",
+            "host_result":null, "is_error":false,
+        }))?;
+        serde_json::to_value(output)?
+    } else {
+        unreachable!("the preceding kind match selected a tool result")
+    };
+    // Execute the same authoritative reconstruction used for production dispatch.
+    // 执行生产分派使用的同一权威重建流程。
+    let prepared =
+        rebuild_provider_transport_candidate(snapshot, &facts, candidate, Default::default())?;
+    // All assertions inspect the actual final physical request.
+    // 所有断言均检查实际最终物理请求。
+    let messages = &prepared.transport.exact_request.messages;
+    assert!(
+        messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .all(|item| !matches!(item, ContentItem::Reasoning { .. }))
+    );
+    assert!(
+        messages
+            .iter()
+            .filter(|message| message.role == MessageRole::Assistant)
+            .all(
+                |message| !message.content.is_empty() || !message.provider_context_items.is_empty()
+            )
+    );
+    // The visible assistant turn must contain exactly its body and original tool call.
+    // 可见助手回合必须只包含其正文及原工具调用。
+    let visible = messages
+        .iter()
+        .find(|message| {
+            message.role == MessageRole::Assistant
+                && message
+                    .content
+                    .iter()
+                    .any(|item| matches!(item, ContentItem::Text { text } if text == &visible_body))
+        })
+        .expect("the recorded visible answer must survive the model switch");
+    assert!(visible.content.iter().all(|item| match item {
+        ContentItem::Text { text } => text == &visible_body,
+        ContentItem::ToolCall { .. } => true,
+        _ => false,
+    }));
+    assert!(
+        visible
+            .content
+            .iter()
+            .any(|item| matches!(item, ContentItem::ToolCall { .. }))
+    );
+    assert!(messages.iter().flat_map(|message| &message.content)
+        .any(|item| matches!(item, ContentItem::ToolResult { result } if result.content == expected_output)));
+    assert!(
+        serde_json::to_string(&prepared.transport.controller_snapshot)?.contains(&old_reasoning)
+    );
+    Ok(())
+}
