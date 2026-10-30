@@ -169,7 +169,7 @@ $BuiltTuiPath = [string]($CargoBuildResult.Artifacts | Where-Object { $_.target.
 
 # DistributionRoot selects the same validated output boundary as sync and desktop packaging.
 # DistributionRoot 选择与同步和桌面打包相同的已验证输出边界。
-$DistributionRoot = (& node (Join-Path $PSScriptRoot "desktop-runtime.mjs") root | Out-String).Trim()
+$DistributionRoot = (& node (Join-Path $PSScriptRoot "desktop-runtime.mjs") root $BuildProfileName | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or -not [IO.Path]::IsPathFullyQualified($DistributionRoot)) {
     throw "Could not resolve the desktop distribution root."
 }

@@ -55,9 +55,17 @@ if ($IsWindowsPlatform) {
     $BinaryFileName = "vulcan-code-service.exe"
 }
 
-# OutputBinDir stores the stable runtime binary directory produced by make build.
-# OutputBinDir 保存 make build 产出的稳定运行时二进制目录。
-$OutputBinDir = Join-Path $ProjectDir "output\bin"
+# ProfileName describes the selected runtime profile and selects its own distribution root.
+# ProfileName 描述选定的运行时 profile，并选择该模式自己的发行根目录。
+$ProfileName = if ($Release) { "release" } else { "debug" }
+
+# OutputBinDir stores the stable runtime binary directory produced by make build for this profile.
+# OutputBinDir 保存 make build 为该模式产出的稳定运行时二进制目录。
+$DistributionRoot = (& node (Join-Path $PSScriptRoot "desktop-runtime.mjs") root $ProfileName | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or -not [System.IO.Path]::IsPathFullyQualified($DistributionRoot)) {
+    throw "Could not resolve the $ProfileName distribution root."
+}
+$OutputBinDir = Join-Path $DistributionRoot "bin"
 
 # OutputBinaryPath stores the exact executable launched by this script.
 # OutputBinaryPath 保存本脚本启动的精确可执行文件路径。
@@ -70,9 +78,6 @@ if (-not (Test-Path -LiteralPath $OutputBinaryPath -PathType Leaf)) {
     throw "Missing built service binary: $OutputBinaryPath. Run $BuildCommand first."
 }
 
-# ProfileName describes the selected runtime profile in command output.
-# ProfileName 在命令输出中描述选定的运行时 profile。
-$ProfileName = if ($Release) { "release" } else { "debug" }
 Write-Host "==> Running Vulcan Code desktop $ProfileName..."
 if (-not $Release) {
     & (Join-Path $PSScriptRoot 'vite_dev_server.ps1') start

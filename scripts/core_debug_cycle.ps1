@@ -26,7 +26,7 @@ $RuntimeScriptPath = Join-Path $PSScriptRoot 'desktop-runtime.mjs'
 
 # OutputRoot is the exact generated distribution selected by the existing runtime entrypoint.
 # OutputRoot 是现有运行入口选定的精确生成发行目录。
-$OutputRoot = (& node $RuntimeScriptPath root).Trim()
+$OutputRoot = (& node $RuntimeScriptPath root debug).Trim()
 if ($LASTEXITCODE -ne 0 -or -not [IO.Path]::IsPathFullyQualified($OutputRoot)) {
     throw 'Could not resolve the built desktop distribution root.'
 }

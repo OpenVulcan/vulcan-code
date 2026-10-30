@@ -108,7 +108,9 @@ export async function requiredGlibc(files) {
 // packageCurrentDistribution verifies the live distribution exactly as a launch would, then archives it.
 // packageCurrentDistribution 按启动时的标准验证当前发行物，再将其归档。
 async function packageCurrentDistribution(outputOverride) {
-  const root = execFileSync(process.execPath, [path.join(repository, 'scripts/desktop-runtime.mjs'), 'root'], { encoding: 'utf8' }).trim();
+  // Only the release distribution is ever archived, and it lives in its own root beside the debug one.
+  // 只归档正式版发行物，它位于与调试版并列的独立目录。
+  const root = execFileSync(process.execPath, [path.join(repository, 'scripts/desktop-runtime.mjs'), 'root', 'release'], { encoding: 'utf8' }).trim();
   const layout = JSON.parse(await readFile(path.join(root, 'runtime-layout.json'), 'utf8'));
   validateRuntimeLayoutIdentity(layout, 'release');
   await verifyPackagedLayout(layout, root);

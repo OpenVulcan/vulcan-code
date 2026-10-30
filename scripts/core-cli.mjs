@@ -233,7 +233,9 @@ export async function restartLinuxCore(root) {
   // The existing resolver remains the authority for root selection and layout identity.
   // 既有解析器继续作为根目录选择及布局身份的权威。
   const resolver = path.join(root, 'scripts', 'desktop-runtime.mjs');
-  const selectedRoot = (await execFileAsync(process.execPath, [resolver, 'root'])).stdout.trim();
+  // Core restart only ever targets the Debug distribution, so the release root is never named here.
+  // Core 重启只针对 Debug 发行目录，因此这里从不涉及正式版根目录。
+  const selectedRoot = (await execFileAsync(process.execPath, [resolver, 'root', 'debug'])).stdout.trim();
   // Share the publisher's guard so concurrent full builds and Core restarts cannot replace each other's files.
   // 共用发布器的锁，避免并发完整构建与 Core 重启互相替换文件。
   const guard = `${selectedRoot}.publishing`;

@@ -42,7 +42,7 @@ define route-command
 endef
 endif
 
-.PHONY: help sync vite start stop status build build-release release clean run run-release service core-build core-restart br br-release bt licenses check test full deps deps-all deps-host deps-vldb deps-rtk deps-tools deps-lua init-system deps-rust-tools host vldb rtk tools lua rust-tools all
+.PHONY: help sync sync-release vite start stop status build build-release release clean run run-release service core-build core-restart br br-release bt licenses check test full deps deps-all deps-host deps-vldb deps-rtk deps-tools deps-lua init-system deps-rust-tools host vldb rtk tools lua rust-tools all
 
 # VITE_ACTION captures the required lifecycle action from `make vite start`, `stop`, or `status`.
 # VITE_ACTION 从 `make vite start`、`stop` 或 `status` 中捕获必需的生命周期操作。
@@ -60,7 +60,8 @@ DEPS_ROUTE_COMMAND := $(if $(DEPS_COMPANION_GOALS),deps $(DEPS_COMPANION_GOALS),
 # help 输出 Makefile 路由层支持的目标。
 help:
 	@echo "Targets:"
-	@echo "  make sync          # synchronize runtime resources into output"
+	@echo "  make sync          # synchronize runtime resources into output (debug)"
+	@echo "  make sync release  # synchronize runtime resources into output-release"
 	@echo "  make vite start    # start the standalone WebUI Vite dev server"
 	@echo "  make vite stop     # stop the standalone WebUI Vite dev server"
 	@echo "  make vite status   # show the standalone WebUI Vite dev server status"
@@ -76,7 +77,7 @@ help:
 	@echo "  make core-restart  # Windows/Linux: compile and restart Debug Core"
 	@echo "  make bt            # full build, start Core, and open TUI; no desktop or Vite"
 	@echo "  make br            # build Core/WebUI/Electron and run desktop with Vite"
-	@echo "  make br-release    # build Core/WebUI/Electron and run desktop"
+	@echo "  make br-release    # build Core/WebUI/Electron and run desktop from output-release"
 	@echo "  make licenses      # generate Rust third-party notices"
 	@echo "  make check         # static gates: fmt, clippy -D warnings, lint, typecheck"
 	@echo "  make test          # Rust tests without long real-time and plugin-lifecycle tests"
@@ -90,10 +91,15 @@ help:
 	@echo "  make deps-rust-tools # install cargo-hakari and cargo-nextest"
 	@echo "  make deps-lua      # install Lua dependencies"
 
-# sync routes the explicit runtime-resource synchronization command.
-# sync 路由显式运行时资源同步命令。
+# sync routes debug by default, or release when the release companion goal is present.
+# sync 默认路由 debug，存在 release 伴随目标时路由 release。
 sync:
-	$(call route-command,sync)
+	$(call route-command,$(if $(filter release,$(MAKECMDGOALS)),sync release,sync))
+
+# sync-release routes the explicit release synchronization command.
+# sync-release 路由显式的 release 同步命令。
+sync-release:
+	$(call route-command,sync release)
 
 # vite routes one explicit standalone Vite lifecycle action.
 # vite 路由一个显式的独立 Vite 生命周期操作。
@@ -143,7 +149,7 @@ build-release:
 # release routes the short release build command or becomes a companion no-op for paired goals.
 # release 路由短形式 release 构建命令，或在组合目标中作为伴随空操作。
 release:
-ifneq ($(filter build build-release run run-release service br br-release bt clean,$(MAKECMDGOALS)),)
+ifneq ($(filter sync build build-release run run-release service br br-release bt clean,$(MAKECMDGOALS)),)
 	@:
 else
 	$(call route-command,release)

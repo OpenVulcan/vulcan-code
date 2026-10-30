@@ -14,10 +14,6 @@ ScriptDir=$(CDPATH= cd "$(dirname "$0")" && pwd -P)
 # ProjectDir 保存仓库根目录，确保子命令路径稳定。
 ProjectDir=$(CDPATH= cd "$ScriptDir/.." && pwd -P)
 
-# OutputRootDir is the same validated distribution root used by sync and packaging.
-# OutputRootDir 是同步与打包共同使用的已验证发行根目录。
-OutputRootDir=$(node "$ProjectDir/scripts/desktop-runtime.mjs" root)
-
 # Release stores whether this build should target Cargo release output.
 # Release 保存本次构建是否面向 Cargo release 产物。
 Release=0
@@ -28,6 +24,17 @@ elif [ "${1:-}" != "" ]; then
     echo "Unsupported build_tauri.sh argument: $1" >&2
     exit 1
 fi
+
+# ProfileName selects the distribution this build owns, so the other profile's root is never touched.
+# ProfileName 选择本次构建拥有的发行目录，因此绝不触碰另一个模式的根目录。
+ProfileName=debug
+if [ "$Release" = "1" ]; then
+    ProfileName=release
+fi
+
+# OutputRootDir is the same validated distribution root used by sync and packaging.
+# OutputRootDir 是同步与打包共同使用的已验证发行根目录。
+OutputRootDir=$(node "$ProjectDir/scripts/desktop-runtime.mjs" root "$ProfileName")
 
 # WebAppDir points at the Vite React WebUI project.
 # WebAppDir 指向 Vite React WebUI 工程。
@@ -89,13 +96,6 @@ CargoTargetDir=$(cargo metadata --locked --format-version 1 --no-deps | node -e 
 if [ -z "$CargoTargetDir" ]; then
     echo "Cargo metadata did not return target_directory." >&2
     exit 1
-fi
-
-# ProfileName selects the Cargo profile directory that contains the built shell.
-# ProfileName 选择包含已构建桌面壳的 Cargo profile 目录。
-ProfileName=debug
-if [ "$Release" = "1" ]; then
-    ProfileName=release
 fi
 
 # BinaryFileName stores the platform-specific Tauri shell binary name.

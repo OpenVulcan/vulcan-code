@@ -137,14 +137,25 @@ function Invoke-TauriBuild {
 
 # Invoke-TauriSync synchronizes runtime resources without compiling the application.
 # Invoke-TauriSync 用于在不编译应用的情况下同步运行时资源。
+# IsRelease selects the release distribution (output-release) instead of the debug one (output).
+# IsRelease 用于选择正式版发行目录 output-release，而不是调试版发行目录 output。
 # This function returns no value and exits with the child script status on failure.
 # 此函数不返回值，并在子脚本失败时以其状态码退出。
 function Invoke-TauriSync {
+    param(
+        [bool]$IsRelease = $false
+    )
+
     if (-not (Test-Path -LiteralPath $TauriSyncScriptPath)) {
         throw "Missing Tauri runtime synchronization script: $TauriSyncScriptPath"
     }
 
-    & $TauriSyncScriptPath
+    if ($IsRelease) {
+        & $TauriSyncScriptPath -Release
+    }
+    else {
+        & $TauriSyncScriptPath
+    }
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }
@@ -308,8 +319,14 @@ function Invoke-SystemInitialization {
 
     # Prepare the browser's shared Node prerequisites without needing a previously started Core.
     # 无需先启动 Core，即可准备浏览器所需的共享 Node 前置依赖。
-    & node (Join-Path $ScriptDir "scripts/managed-node.mjs") (Join-Path $ScriptDir "output")
-    if ($LASTEXITCODE -ne 0) { throw "Managed Node initialization failed." }
+    # Both profiles own a distribution, so each receives its pinned Node before browser synchronization.
+    # 两个模式各自拥有发行目录，因此在浏览器同步前各自取得锁定的 Node。
+    foreach ($DistributionProfile in @('debug', 'release')) {
+        $ProfileRoot = (& node (Join-Path $ScriptDir 'scripts/desktop-runtime.mjs') root $DistributionProfile | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0) { throw "Could not resolve the $DistributionProfile distribution root." }
+        & node (Join-Path $ScriptDir "scripts/managed-node.mjs") $ProfileRoot
+        if ($LASTEXITCODE -ne 0) { throw "Managed Node initialization failed for the $DistributionProfile distribution." }
+    }
 
     Write-Host "==> System initialization completed."
 }
@@ -344,14 +361,15 @@ function Invoke-RustDependencyCheck {
 # Show-Usage 用于输出支持的命令形式，方便贡献者在输入无效参数后快速恢复。
 function Show-Usage {
     Write-Host "Usage:"
-    Write-Host "  ./make sync        # synchronize runtime resources into output"
+    Write-Host "  ./make sync        # synchronize runtime resources into output (debug)"
+    Write-Host "  ./make sync release # synchronize runtime resources into output-release"
     Write-Host "  ./make vite start  # start the standalone WebUI Vite dev server"
     Write-Host "  ./make vite stop   # stop the standalone WebUI Vite dev server"
     Write-Host "  ./make vite status # show the standalone WebUI Vite dev server status"
     Write-Host "  ./make             # Core/Electron/WebUI debug build"
     Write-Host "  ./make build       # Core/Electron/WebUI debug build"
     Write-Host "  ./make br          # build Core/WebUI/Electron and run desktop with Vite"
-    Write-Host "  ./make br release  # build Core/WebUI/Electron and run desktop"
+    Write-Host "  ./make br release  # build Core/WebUI/Electron and run desktop from output-release"
     Write-Host "  ./make release     # Core/Electron/WebUI release build"
     Write-Host "  ./make licenses    # generate Rust third-party notices for the About page"
     Write-Host "  ./make check-deps  # verify Rust dependency policy without changing manifests or the lockfile"
@@ -441,12 +459,12 @@ switch ($NormalizedMode) {
         }
     }
     "sync" {
-        if (-not [string]::IsNullOrWhiteSpace($NormalizedVariant)) {
+        if ($NormalizedVariant -ne "" -and $NormalizedVariant -ne "release") {
             Write-Error "Unsupported sync command: '$CommandVariant'"
             Show-Usage
             exit 1
         }
-        Invoke-TauriSync
+        Invoke-TauriSync -IsRelease ($NormalizedVariant -eq "release")
     }
     "vite" {
         if ($NormalizedVariant -eq "start" -or $NormalizedVariant -eq "stop" -or $NormalizedVariant -eq "status") {

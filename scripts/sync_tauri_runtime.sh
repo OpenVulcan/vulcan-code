@@ -12,13 +12,23 @@ ScriptDir=$(CDPATH= cd "$(dirname "$0")" && pwd -P)
 # ProjectDir 保存仓库根目录，确保源目录与输出目录路径稳定。
 ProjectDir=$(CDPATH= cd "$ScriptDir/.." && pwd -P)
 
+# ProfileName selects the distribution this synchronization owns: debug by default, or release.
+# ProfileName 选择本次同步拥有的发行目录：默认 debug，或 release。
+ProfileName=debug
+if [ "${1:-}" = "release" ]; then
+    ProfileName=release
+elif [ "${1:-}" != "" ]; then
+    echo "Unsupported sync_tauri_runtime.sh argument: $1" >&2
+    exit 1
+fi
+
 # OutputRootDir is validated before any synchronization or recursive cleanup.
 # OutputRootDir 在任何同步或递归清理之前完成验证。
-OutputRootDir=$(node "$ProjectDir/scripts/desktop-runtime.mjs" root)
+OutputRootDir=$(node "$ProjectDir/scripts/desktop-runtime.mjs" root "$ProfileName")
 
 # Download locked browser dependencies only during explicit build synchronization.
 # 仅在显式构建同步期间下载锁定浏览器依赖。
-node "$ProjectDir/scripts/browser-runtime.mjs" prepare
+node "$ProjectDir/scripts/browser-runtime.mjs" prepare "$OutputRootDir"
 
 # SourceConfigDir points at repository-owned packaged configuration templates.
 # SourceConfigDir 指向仓库持有的打包配置模板目录。

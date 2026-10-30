@@ -40,7 +40,7 @@ for (const release of [false, true]) {
         writeFileSync(path.join(root, '.cargo/config.toml'), '[build]\ntarget-dir="cargo artifacts"\n');
         // Retained files represent complete download directories and the separate published application.
         // 保留文件代表完整下载目录与独立的已发布应用。
-        const retained = [...Object.values(buildInputPaths(root)), path.join(root, 'output'), path.join(artifacts, 'unrelated')];
+        const retained = [...Object.values(buildInputPaths(root)), path.join(root, 'output'), path.join(root, 'output-release'), path.join(artifacts, 'unrelated')];
         for (const directory of [...retained, path.join(artifacts, 'debug'), path.join(artifacts, 'release')]) {
           mkdirSync(directory, { recursive: true });
           writeFileSync(path.join(directory, 'keep.bin'), 'preserve');

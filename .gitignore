@@ -34,10 +34,15 @@ target
 /.claude
 /.vulcan/
 /output
-# Distribution publication keeps the prior generation and any rejected one beside /output.
-# 发行目录发布会在 /output 旁保留上一代及被拒绝的一代。
+# The release distribution is a sibling of /output so debug and release can run side by side.
+# 正式版发行目录与 /output 并列，使调试版与正式版可同时运行。
+/output-release
+# Distribution publication keeps the prior generation and any rejected one beside each distribution.
+# 发行目录发布会在各发行目录旁保留上一代及被拒绝的一代。
 /output.previous
 /output.rejected-*
+/output-release.previous
+/output-release.rejected-*
 /temp
 # RTK executables are fetched per target by make init-system (make deps rtk), never committed.
 # RTK 可执行文件由 make init-system（make deps rtk）按目标平台拉取，绝不提交。

@@ -13,8 +13,14 @@ import { createCoreContext, ensureHeadlessCore } from './core-cli.mjs';
 // The repository is resolved from this script rather than the caller's working directory.
 // 仓库由脚本位置确定，不依赖调用方工作目录。
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-// Output defaults to the shared distribution; an explicit absolute root isolates release verification.
-// 输出默认使用共享发行目录；显式绝对根目录可隔离发布验收。
+// Command and profile are explicit; a release launch cannot silently reuse a debug distribution.
+// 命令和模式显式指定，发布启动不能静默复用调试发行物。
+const [command, profile = 'debug'] = process.argv.slice(2);
+// Each profile owns one sibling distribution so a debug build can never stop or overwrite a running release, nor the reverse.
+// 每个模式拥有一个同级发行目录，调试构建绝不会停止或覆盖运行中的正式版，反之亦然。
+const distributionDirectoryNames = { debug: 'output', release: 'output-release' };
+// Output defaults to the profile's own distribution; an explicit absolute root isolates release verification.
+// 输出默认使用该模式自己的发行目录；显式绝对根目录可隔离发布验收。
 const outputOverride = process.env.VULCAN_DESKTOP_DISTRIBUTION_ROOT;
 if (outputOverride && !path.isAbsolute(outputOverride)) {
   throw new Error('VULCAN_DESKTOP_DISTRIBUTION_ROOT must be an absolute path.');
@@ -27,13 +33,13 @@ if (outputOverride) {
     throw new Error('VULCAN_DESKTOP_DISTRIBUTION_ROOT must be inside the repository target directory.');
   }
 }
-const output = outputOverride ? path.resolve(outputOverride) : path.join(repository, 'output');
+// An unknown profile has no directory; main() rejects it with the usage error before any path is used.
+// 未知模式没有目录；main() 会在使用任何路径前以用法错误拒绝它。
+const output = outputOverride ? path.resolve(outputOverride)
+  : path.join(repository, distributionDirectoryNames[profile] ?? distributionDirectoryNames.debug);
 if (path.resolve(output) === repository) {
   throw new Error('The distribution root must not be the repository root.');
 }
-// Command and profile are explicit; a release launch cannot silently reuse a debug distribution.
-// 命令和模式显式指定，发布启动不能静默复用调试发行物。
-const [command, profile = 'debug'] = process.argv.slice(2);
 // One schema authority is shared by packaging, launching, and the Core restart layout reader.
 // 打包、启动与核心重启布局读取器共享唯一的架构版本权威。
 export const runtimeLayoutSchemaVersion = 3;
@@ -387,11 +393,14 @@ async function verifyServiceProfile(executable) {
 
 async function main() {
   await verifyIsolatedDistributionBoundary();
+  if (!['debug', 'release'].includes(profile)) {
+    throw new Error('Usage: node scripts/desktop-runtime.mjs root|package|run|service|tui|layout [debug|release]');
+  }
   if (command === 'root') {
     process.stdout.write(output);
     return;
   }
-  if (!['package', 'run', 'service', 'tui', 'layout'].includes(command) || !['debug', 'release'].includes(profile)) {
+  if (!['package', 'run', 'service', 'tui', 'layout'].includes(command)) {
     throw new Error('Usage: node scripts/desktop-runtime.mjs root|package|run|service|tui|layout [debug|release]');
   }
   if (command === 'package') {

@@ -53,7 +53,8 @@ export async function verifyPackagedLayout(layout, root) {
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   if (process.argv[2] === 'root') {
-    process.stdout.write(path.join(process.env.VULCAN_FIXTURE_ROOT, 'output'));
+    // Each profile owns a sibling root, mirroring the real resolver's one-root-per-profile contract.
+    process.stdout.write(path.join(process.env.VULCAN_FIXTURE_ROOT, process.argv[3] === 'release' ? 'output-release' : 'output'));
   } else if (process.argv[2] === 'package') {
     const layout = { profile: process.argv[3] };
     const root = process.env.VULCAN_DESKTOP_DISTRIBUTION_ROOT;
@@ -79,7 +80,11 @@ for (const scenario of [
       assert.equal(path.dirname(root), path.resolve(os.tmpdir()));
       t.after(() => rm(root, { recursive: true, force: true }));
       const sourceScripts = path.dirname(fileURLToPath(import.meta.url));
-      for (const directory of ['scripts', 'fake-bin', 'output/bin', 'apps/vulcan-code-web/node_modules', 'apps/vulcan-code-desktop/node_modules/electron']) {
+      // owned is the distribution this profile publishes into; other must stay byte-for-byte untouched.
+      // owned 是该模式发布所在的发行目录；other 必须保持逐字节不变。
+      const owned = scenario.profile === 'release' ? 'output-release' : 'output';
+      const other = scenario.profile === 'release' ? 'output' : 'output-release';
+      for (const directory of ['scripts', 'fake-bin', 'output/bin', 'output-release/bin', 'apps/vulcan-code-web/node_modules', 'apps/vulcan-code-desktop/node_modules/electron']) {
         await mkdir(path.join(root, directory), { recursive: true });
       }
       for (const script of ['build_tauri.sh', 'build-input-paths.mjs', 'publish-distribution.mjs', 'directory-publication.mjs', 'shipped-rust-packages.json', 'shipped-rust-packages.mjs']) {
@@ -92,6 +97,7 @@ for (const scenario of [
       await writeFile(path.join(root, 'fake-bin/pnpm'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
       for (const item of shippedRustPackages) {
         await writeFile(path.join(root, 'output/bin', item.binary), 'old:' + item.package);
+        await writeFile(path.join(root, 'output-release/bin', item.binary), 'old:' + item.package);
       }
       const result = spawnSync('sh', [path.join(root, 'scripts/build_tauri.sh'), ...(scenario.profile === 'release' ? ['--release'] : [])], {
         cwd: root, encoding: 'utf8', timeout: 30000,
@@ -101,8 +107,9 @@ for (const scenario of [
       assert.equal(result.error, undefined);
       assert.equal(result.status, scenario.electronFailure ? 23 : scenario.omit ? 1 : 0, result.stdout + result.stderr);
       for (const item of shippedRustPackages) {
-        assert.equal(await readFile(path.join(root, 'output/bin', item.binary), 'utf8'),
+        assert.equal(await readFile(path.join(root, owned, 'bin', item.binary), 'utf8'),
           (scenario.omit || scenario.electronFailure ? 'old:' : 'new:') + item.package);
+        assert.equal(await readFile(path.join(root, other, 'bin', item.binary), 'utf8'), 'old:' + item.package);
       }
     });
 }

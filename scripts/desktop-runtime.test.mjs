@@ -73,6 +73,36 @@ test('rejects an isolated distribution root outside generated target artifacts',
   assert.match(result.stderr, /must be inside the repository target directory/);
 });
 
+// Debug and release must resolve to different sibling roots so neither can stop or overwrite the other.
+// 调试版与正式版必须解析到不同的同级目录，使任一方都无法停止或覆盖另一方。
+test('each profile resolves its own sibling distribution root', () => {
+  const script = fileURLToPath(new URL('./desktop-runtime.mjs', import.meta.url));
+  // The override is removed so the default per-profile directories are what the CLI reports.
+  // 移除覆盖变量，使命令报告的是各模式的默认目录。
+  const { VULCAN_DESKTOP_DISTRIBUTION_ROOT: _ignored, ...environment } = process.env;
+  const resolve = (...args) => {
+    const result = spawnSync(process.execPath, [script, 'root', ...args], { env: environment, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout;
+  };
+  const repository = path.resolve(path.dirname(script), '..');
+  assert.equal(resolve(), path.join(repository, 'output'));
+  assert.equal(resolve('debug'), path.join(repository, 'output'));
+  const release = resolve('release');
+  assert.equal(release, path.join(repository, 'output-release'));
+  // A sibling shares the parent but never nests inside, so process ownership by prefix cannot overlap.
+  // 同级目录共享父目录但互不嵌套，因此按前缀判定的进程归属不会重叠。
+  assert.equal(path.dirname(release), path.dirname(resolve('debug')));
+  assert.ok(!release.startsWith(resolve('debug') + path.sep));
+});
+
+test('rejects an unknown profile instead of falling back to the debug distribution', () => {
+  const script = fileURLToPath(new URL('./desktop-runtime.mjs', import.meta.url));
+  const result = spawnSync(process.execPath, [script, 'root', 'staging'], { encoding: 'utf8' });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Usage: node scripts\/desktop-runtime\.mjs/);
+});
+
 test('prints one validated isolated root and refuses a linked cleanup boundary', async (t) => {
   // script and target derive from the same repository entry used by the actual build scripts.
   // script 与 target 来自真实构建脚本使用的同一仓库入口。

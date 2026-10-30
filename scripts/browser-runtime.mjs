@@ -98,8 +98,9 @@ async function run(executable, args, options = {}) {
 
 // Prepare all network dependencies explicitly during sync, never from an end-user session.
 // 在同步期间显式准备全部网络依赖，绝不由最终用户会话下载。
-async function prepare() {
-  const root = path.join(repository, 'output');
+// root is the profile-owned distribution root chosen by the caller, so one profile never prepares another's tree.
+// root 是调用方选定、由模式拥有的发行根，因此一个模式绝不会准备另一个模式的目录树。
+async function prepare(root) {
   await prepareManagedNode(root);
   const executable = await browserNodeExecutable(root);
   const pnpm = path.join(root, 'dependencies/runtimes/node', `pnpm-${browserVersions.pnpm}`, 'bin/pnpm.cjs');
@@ -114,6 +115,8 @@ async function prepare() {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  if (process.argv[2] !== 'prepare') throw new Error('Usage: node scripts/browser-runtime.mjs prepare');
-  await prepare();
+  if (process.argv[2] !== 'prepare' || process.argv.length !== 4) {
+    throw new Error('Usage: node scripts/browser-runtime.mjs prepare <distribution-root>');
+  }
+  await prepare(path.resolve(process.argv[3]));
 }

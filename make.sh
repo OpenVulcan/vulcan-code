@@ -69,14 +69,19 @@ invoke_tauri_build() {
 
 # invoke_tauri_sync synchronizes runtime resources without compiling the application.
 # invoke_tauri_sync 用于在不编译应用的情况下同步运行时资源。
-# The function accepts no arguments and returns the child synchronization status.
-# 此函数不接收参数，并返回子同步脚本的状态。
+# The optional argument is 1 to synchronize the release distribution (output-release); it returns the child status.
+# 可选参数为 1 时同步正式版发行目录 output-release；返回子同步脚本的状态。
 invoke_tauri_sync() {
+    IsRelease=${1:-0}
     if [ ! -f "$TauriSyncScriptPath" ]; then
         echo "Missing Tauri runtime synchronization script: $TauriSyncScriptPath" >&2
         exit 1
     fi
-    sh "$TauriSyncScriptPath"
+    if [ "$IsRelease" = "1" ]; then
+        sh "$TauriSyncScriptPath" release
+    else
+        sh "$TauriSyncScriptPath"
+    fi
 }
 
 # invoke_vite_dev_server delegates one explicit standalone Vite lifecycle action.
@@ -183,7 +188,11 @@ invoke_system_initialization() {
     node "$ScriptDir/scripts/install-locked-tools.mjs" protoc --repository-root "$ScriptDir"
     # Prepare pinned Node prerequisites before browser synchronization, without starting Core.
     # 在同步浏览器前准备锁定的 Node 前置依赖，无需启动 Core。
-    node "$ScriptDir/scripts/managed-node.mjs" "$ScriptDir/output"
+    # Both profiles own a distribution, so each receives its pinned Node before browser synchronization.
+    # 两个模式各自拥有发行目录，因此在浏览器同步前各自取得锁定的 Node。
+    for DistributionProfile in debug release; do
+        node "$ScriptDir/scripts/managed-node.mjs" "$(node "$ScriptDir/scripts/desktop-runtime.mjs" root "$DistributionProfile")"
+    done
     echo "==> System initialization completed."
 }
 
@@ -191,14 +200,15 @@ invoke_system_initialization() {
 # show_usage 用于输出支持的命令形式，方便贡献者在输入无效参数后快速恢复。
 show_usage() {
     echo "Usage:"
-    echo "  ./make.sh sync        # synchronize runtime resources into output"
+    echo "  ./make.sh sync        # synchronize runtime resources into output (debug)"
+    echo "  ./make.sh sync release # synchronize runtime resources into output-release"
     echo "  ./make.sh vite start  # start the standalone WebUI Vite dev server"
     echo "  ./make.sh vite stop   # stop the standalone WebUI Vite dev server"
     echo "  ./make.sh vite status # show the standalone WebUI Vite dev server status"
     echo "  ./make.sh             # Core/Electron/WebUI debug build"
     echo "  ./make.sh build       # Core/Electron/WebUI debug build"
     echo "  ./make.sh br          # build Core/WebUI/Electron and run desktop with Vite"
-    echo "  ./make.sh br release  # build Core/WebUI/Electron and run desktop"
+    echo "  ./make.sh br release  # build Core/WebUI/Electron and run desktop from output-release"
     echo "  ./make.sh release     # Core/Electron/WebUI release build"
     echo "  ./make.sh clean       # clean Debug Cargo artifacts; preserve output and downloads"
     echo "  ./make.sh clean release # clean Release Cargo artifacts only"
@@ -265,12 +275,15 @@ case "$NormalizedMode" in
         fi
         ;;
     sync)
-        if [ "$NormalizedVariant" != "" ]; then
+        if [ "$NormalizedVariant" = "" ]; then
+            invoke_tauri_sync 0
+        elif [ "$NormalizedVariant" = "release" ]; then
+            invoke_tauri_sync 1
+        else
             echo "Unsupported sync command: '$CommandVariant'" >&2
             show_usage
             exit 1
         fi
-        invoke_tauri_sync
         ;;
     vite)
         case "$NormalizedVariant" in

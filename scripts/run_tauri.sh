@@ -37,9 +37,16 @@ if [ "$IsWindowsPlatform" = "1" ]; then
     BinaryFileName=vulcan-code-service.exe
 fi
 
-# OutputBinDir stores the stable runtime binary directory produced by make build.
-# OutputBinDir 保存 make build 产出的稳定运行时二进制目录。
-OutputBinDir="$ProjectDir/output/bin"
+# ProfileName describes the selected runtime profile and selects its own distribution root.
+# ProfileName 描述选定的运行时 profile，并选择该模式自己的发行根目录。
+ProfileName=debug
+if [ "$Release" = "1" ]; then
+    ProfileName=release
+fi
+
+# OutputBinDir stores the stable runtime binary directory produced by make build for this profile.
+# OutputBinDir 保存 make build 为该模式产出的稳定运行时二进制目录。
+OutputBinDir="$(node "$ProjectDir/scripts/desktop-runtime.mjs" root "$ProfileName")/bin"
 
 # OutputBinaryPath stores the exact executable launched by this script.
 # OutputBinaryPath 保存本脚本启动的精确可执行文件路径。
@@ -54,13 +61,6 @@ if [ ! -f "$OutputBinaryPath" ]; then
     fi
     echo "Missing built Tauri binary: $OutputBinaryPath. Run $BuildCommand first." >&2
     exit 1
-fi
-
-# ProfileName describes the selected runtime profile in command output.
-# ProfileName 在命令输出中描述选定的运行时 profile。
-ProfileName=debug
-if [ "$Release" = "1" ]; then
-    ProfileName=release
 fi
 
 echo "==> Running Vulcan Code desktop $ProfileName..."

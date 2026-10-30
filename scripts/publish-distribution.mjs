@@ -115,6 +115,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   // binaryPaths must identify every successful Cargo artifact; inventory validation is shared with the API entry.
   // binaryPaths 必须标识全部成功的 Cargo 制品；清单校验与 API 入口共用。
   const [profile, ...binaryPaths] = process.argv.slice(2);
-  const destination = execFileSync(process.execPath, [path.join(repository, 'scripts/desktop-runtime.mjs'), 'root'], { encoding: 'utf8' }).trim();
+  const destination = execFileSync(process.execPath, [path.join(repository, 'scripts/desktop-runtime.mjs'), 'root', profile], { encoding: 'utf8' }).trim();
   await publishDistribution(repository, destination, binaryPaths.map(binary => path.resolve(binary)), profile);
 }

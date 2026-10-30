@@ -1,5 +1,15 @@
 # sync_tauri_runtime.ps1 synchronizes runtime resources into the stable output tree.
 # sync_tauri_runtime.ps1 用于把运行时资源同步到稳定的 output 目录树。
+# Usage:
+# 用法：
+#   .\sync_tauri_runtime.ps1           # synchronize the debug distribution (output)
+#   .\sync_tauri_runtime.ps1 -Release  # synchronize the release distribution (output-release)
+
+param(
+    # Release selects the release distribution instead of the debug one.
+    # Release 用于选择正式版发行目录而不是调试版发行目录。
+    [switch]$Release
+)
 
 $ErrorActionPreference = "Stop"
 
@@ -16,7 +26,11 @@ if ($PSVersionTable.PSEdition -ne "Core") {
     # PowerShellCore 保存检测到的 PowerShell 7 可执行文件（如果存在）。
     $PowerShellCore = Get-Command "pwsh" -ErrorAction SilentlyContinue
     if ($PowerShellCore -and -not [string]::IsNullOrWhiteSpace($CurrentScriptPath)) {
-        & $PowerShellCore.Source -NoProfile -ExecutionPolicy Bypass -File $CurrentScriptPath
+        # ForwardedArguments preserves only the explicitly requested distribution profile.
+        # ForwardedArguments 仅保留显式请求的发行模式。
+        $ForwardedArguments = @()
+        if ($Release) { $ForwardedArguments += "-Release" }
+        & $PowerShellCore.Source -NoProfile -ExecutionPolicy Bypass -File $CurrentScriptPath @ForwardedArguments
         exit $LASTEXITCODE
     }
 }
@@ -96,21 +110,17 @@ $SourceVulcanPluginsDir = Join-Path $ProjectDir "plugins"
 # SourcePluginBridgeDir 包含 Vulcan 插件使用的唯一 LuaSkills System package。
 $SourcePluginBridgeDir = Join-Path $ProjectDir "plugin-bridge\vulcan-plugin-bridge"
 
+# SyncProfileName selects the distribution this synchronization owns; the other profile's tree is never touched.
+# SyncProfileName 选择本次同步拥有的发行目录；绝不触碰另一个模式的目录树。
+$SyncProfileName = if ($Release) { "release" } else { "debug" }
+
 # OutputRootDir stores the only directory tree that synchronization may clean.
 # OutputRootDir 保存同步流程允许执行清理的唯一目录树。
-$OutputRootDir = Join-Path $ProjectDir "output"
-if (-not [string]::IsNullOrWhiteSpace($env:VULCAN_DESKTOP_DISTRIBUTION_ROOT)) {
-    if (-not [System.IO.Path]::IsPathFullyQualified($env:VULCAN_DESKTOP_DISTRIBUTION_ROOT)) {
-        throw "VULCAN_DESKTOP_DISTRIBUTION_ROOT must be an absolute path."
-    }
-    # TargetRoot confines isolated release verification to generated build artifacts.
-    # TargetRoot 将独立发布验收限定在构建生成产物内。
-    $TargetRoot = [System.IO.Path]::GetFullPath((Join-Path $ProjectDir "target"))
-    $SelectedRoot = [System.IO.Path]::GetFullPath($env:VULCAN_DESKTOP_DISTRIBUTION_ROOT)
-    if (-not $SelectedRoot.StartsWith($TargetRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar, $OutputPathComparison)) {
-        throw "VULCAN_DESKTOP_DISTRIBUTION_ROOT must be inside the repository target directory."
-    }
-    $OutputRootDir = $SelectedRoot
+# The directory name and the isolated-root validation have one owner, desktop-runtime.mjs, shared with build and run.
+# 目录名与独立根校验只有 desktop-runtime.mjs 一个归属，与构建和运行共用。
+$OutputRootDir = (& node (Join-Path $PSScriptRoot "desktop-runtime.mjs") root $SyncProfileName | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or -not [System.IO.Path]::IsPathFullyQualified($OutputRootDir)) {
+    throw "Could not resolve the $SyncProfileName distribution root."
 }
 
 # OutputConfigDir stores packaged configuration read by distribution runtime launches.
@@ -369,7 +379,7 @@ function Copy-DirectoryContents {
 
 # Prepare the bundled browser before copying plugins; all downloads belong to this build step.
 # 复制插件前准备内置浏览器；全部下载仅属于此构建步骤。
-& node (Join-Path $ProjectDir "scripts/browser-runtime.mjs") prepare
+& node (Join-Path $ProjectDir "scripts/browser-runtime.mjs") prepare $OutputRootDir
 if ($LASTEXITCODE -ne 0) { throw "Built-in browser preparation failed." }
 
 Write-Host "==> Syncing packaged config..."
