@@ -177,6 +177,17 @@ it("floats the context panel when docking would squeeze the conversation", () =>
   expect(wide.layout().rightPanelFloating).toBe(false);
 });
 
+// The explicit close path hides the panel and drops floating mode, matching the manual toggle.
+// 显式关闭路径隐藏面板并清除浮动模式，与手动切换一致。
+it("closes a floating context panel through the explicit close path", () => {
+  const harness = renderPanelLayout(true, dockedPanelFitWidth() - 1);
+  act(() => harness.layout().openRightContextPanel());
+  expect(harness.layout().rightPanelFloating).toBe(true);
+  act(() => harness.layout().closeRightContextPanel());
+  expect(harness.layout().effectiveRightPanelOpen).toBe(false);
+  expect(harness.layout().rightPanelFloating).toBe(false);
+});
+
 // Draft and feature pages never show a context panel opened by another surface.
 // 草稿与功能页面绝不显示由其他界面打开的上下文面板。
 it("keeps the context panel closed without a persisted conversation", () => {

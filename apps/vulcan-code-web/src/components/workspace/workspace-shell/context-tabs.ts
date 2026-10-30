@@ -200,6 +200,32 @@ export function closeWorkspaceContextTab(
   };
 }
 
+// WorkspaceContextTabCount records how many tabs one conversation's right panel held at one render.
+// WorkspaceContextTabCount 记录某个会话右侧面板在一次渲染时持有的页签数量。
+export interface WorkspaceContextTabCount {
+  // Cache key of the conversation surface that owns the tabs.
+  // 拥有这些页签的会话界面缓存键。
+  cacheKey: string;
+  // Number of opened tabs.
+  // 已打开页签数量。
+  count: number;
+}
+
+// workspaceContextLastTabClosed reports whether the panel's last page was just closed in the same conversation.
+// Switching to a conversation that has no pages is not a close, so the panel stays as the user left it.
+// workspaceContextLastTabClosed 判断是否刚在同一会话内关闭了面板的最后一个页面。
+// 切换到没有页面的会话不算关闭，面板保持用户离开时的状态。
+export function workspaceContextLastTabClosed(
+  // Tab count observed at the previous render.
+  // 上一次渲染观察到的页签数量。
+  previous: WorkspaceContextTabCount,
+  // Tab count observed at the current render.
+  // 当前渲染观察到的页签数量。
+  next: WorkspaceContextTabCount,
+): boolean {
+  return previous.cacheKey === next.cacheKey && previous.count > 0 && next.count === 0;
+}
+
 // activateWorkspaceContextTab activates an already opened tab.
 // activateWorkspaceContextTab 激活一个已经打开的页签。
 export function activateWorkspaceContextTab(

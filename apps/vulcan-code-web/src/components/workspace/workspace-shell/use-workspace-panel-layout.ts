@@ -45,6 +45,9 @@ export interface WorkspacePanelLayout {
   // Opens the context panel, floating it when the docked panel would not fit.
   // 打开上下文面板，停靠放不下时改为浮动。
   openRightContextPanel: () => void;
+  // Closes the context panel and clears its floating mode.
+  // 关闭上下文面板并清除其浮动模式。
+  closeRightContextPanel: () => void;
   // Records a manual left sidebar toggle.
   // 记录一次手动切换左侧栏。
   handleLeftPanelToggle: () => void;
@@ -98,6 +101,14 @@ export function useWorkspacePanelLayout(options: WorkspacePanelLayoutOptions): W
     setRightPanelOpen(true);
   }, [notifyConversationLayoutWillChange, setRightPanelOpen, sidebar.isMobile, sidebar.open]);
 
+  // closeRightContextPanel is the single close path shared by the manual toggle and the empty-tabs rule.
+  // closeRightContextPanel 是手动切换与“页签清空”规则共用的唯一关闭路径。
+  const closeRightContextPanel = React.useCallback(() => {
+    notifyConversationLayoutWillChange();
+    setRightPanelFloating(false);
+    setRightPanelOpen(false);
+  }, [notifyConversationLayoutWillChange, setRightPanelOpen]);
+
   // handleLeftPanelToggle clears automatic restore intent when the user toggles the left sidebar manually.
   // handleLeftPanelToggle 在用户手动切换左侧栏时清除自动恢复意图。
   const handleLeftPanelToggle = React.useCallback(() => {
@@ -107,15 +118,12 @@ export function useWorkspacePanelLayout(options: WorkspacePanelLayoutOptions): W
   // handleRightPanelToggle clears automatic restore intent when the user toggles the right panel manually.
   // handleRightPanelToggle 在用户手动切换右侧面板时清除自动恢复意图。
   const handleRightPanelToggle = React.useCallback(() => {
-    notifyConversationLayoutWillChange();
-    const nextOpen = !rightPanelOpen;
-    if (!nextOpen) {
-      setRightPanelFloating(false);
-      setRightPanelOpen(false);
+    if (rightPanelOpen) {
+      closeRightContextPanel();
       return;
     }
     openRightContextPanel();
-  }, [notifyConversationLayoutWillChange, openRightContextPanel, rightPanelOpen, setRightPanelOpen]);
+  }, [closeRightContextPanel, openRightContextPanel, rightPanelOpen]);
 
   React.useEffect(() => {
     if (chatViewActive && !hasSelectedChatConversation && rightPanelOpen) {
@@ -187,6 +195,7 @@ export function useWorkspacePanelLayout(options: WorkspacePanelLayoutOptions): W
     rightPanelFloating,
     effectiveRightPanelOpen,
     openRightContextPanel,
+    closeRightContextPanel,
     handleLeftPanelToggle,
     handleRightPanelToggle,
   };

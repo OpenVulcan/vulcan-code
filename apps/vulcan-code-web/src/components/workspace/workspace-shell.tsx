@@ -79,6 +79,8 @@ import {
   workspaceSubagentTabId,
   workspaceContextTabStateCache,
   workspaceContextTabCacheKey,
+  workspaceContextLastTabClosed,
+  type WorkspaceContextTabCount,
   type WorkspaceContextTabStateEntry,
 } from "@/components/workspace/workspace-shell/context-tabs";
 import { useWorkspaceGitState } from "@/components/workspace/workspace-shell/use-workspace-git-state";
@@ -258,6 +260,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     rightPanelFloating,
     effectiveRightPanelOpen,
     openRightContextPanel,
+    closeRightContextPanel,
     handleLeftPanelToggle,
     handleRightPanelToggle,
   } = useWorkspacePanelLayout({
@@ -409,6 +412,22 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     );
     trimWorkspaceContextTabStateCache();
   }, [contextTabStateEntry, hasSelectedChatConversation]);
+  // previousContextTabsRef remembers the last tab list per cache key so only a real "last page closed" transition
+  // closes the panel; switching to a conversation without pages, or opening the empty launcher, keeps it open.
+  // previousContextTabsRef 按缓存键记住上一份页签列表，只有真正“关闭最后一个页面”的转换才关闭面板；
+  // 切换到没有页面的会话或打开空白启动页时保持面板展开。
+  const previousContextTabsRef = React.useRef<WorkspaceContextTabCount>({
+    cacheKey: contextTabStateEntry.cacheKey,
+    count: contextTabState.tabs.length,
+  });
+  React.useEffect(() => {
+    const previous = previousContextTabsRef.current;
+    const next = { cacheKey: contextTabStateEntry.cacheKey, count: contextTabState.tabs.length };
+    previousContextTabsRef.current = next;
+    if (effectiveRightPanelOpen && workspaceContextLastTabClosed(previous, next)) {
+      closeRightContextPanel();
+    }
+  }, [closeRightContextPanel, contextTabState.tabs.length, contextTabStateEntry.cacheKey, effectiveRightPanelOpen]);
   // openContextTab opens a new file tab or focuses the singleton review/memory tab.
   // openContextTab 打开新的文件页签或聚焦单例审查/记忆页签。
   const openContextTab = React.useCallback((kind: WorkspaceContextTabKind) => {
