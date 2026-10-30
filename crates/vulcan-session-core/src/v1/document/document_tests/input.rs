@@ -679,6 +679,28 @@ fn guided_queued_input_is_durable_idempotent_and_same_turn() -> Result<(), Domai
         AssistantSemanticStatus::Completed,
         T0 + 6,
     )?;
+    // A tool-bearing response continues inside the same Turn instead of selecting a fresh successor.
+    // 含工具的响应在同一回合内继续，不选择新后继。
+    let tool = document
+        .start_tool(
+            api_call_id,
+            "read_file",
+            ToolPayload::try_new(serde_json::json!({})).unwrap(),
+            None,
+            T0 + 6,
+        )
+        .unwrap();
+    document
+        .finish_tool(
+            api_call_id,
+            tool,
+            tool_completion(
+                Some(ToolPayload::try_new(serde_json::json!({"ok":true})).unwrap()),
+                ToolCallStatus::Completed,
+                T0 + 6,
+            ),
+        )
+        .unwrap();
     let promoted = document
         .complete_api_group(
             api_call_id,

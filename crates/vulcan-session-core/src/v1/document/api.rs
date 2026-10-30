@@ -1521,12 +1521,27 @@ impl SessionDocument {
         let mut api = self.require_active_api(api_call_id)?;
         let failure_notice = completion.end_reason.and_then(api_failure_notice);
         let redacted_detail = completion.error.as_ref().map(|error| error.message.clone());
+        // A final answer leaves unconsumed insertions for atomic successor selection.
+        // 最终回答把未消费的插队留给原子后继选择。
+        let handoff_pending_inputs = completion.status == ApiCallStatus::Completed
+            && !matches!(
+                api.purpose,
+                ApiPurposeKind::Compaction | ApiPurposeKind::QuestionExecution
+            )
+            && api.text_seq.is_some()
+            && api.tool_seqs.is_empty();
+        // Tool loops and failures retain the existing same-Turn input projection.
+        // 工具循环及失败仍保留既有同回合输入投影。
         let pending_inputs = self.metadata.input_state.pending_in_turn_inputs.clone();
         let had_pending_inputs = !pending_inputs.is_empty();
-        let bound_request_config = pending_inputs
-            .iter()
-            .rev()
-            .find_map(|pending| pending.bound_request_config.clone());
+        let bound_request_config = if handoff_pending_inputs {
+            None
+        } else {
+            pending_inputs
+                .iter()
+                .rev()
+                .find_map(|pending| pending.bound_request_config.clone())
+        };
         for pending in &pending_inputs {
             validate_user_input(pending.text.clone(), &pending.resource_ids)?;
             if let Some(parameters) = &pending.parameters {
@@ -1540,7 +1555,9 @@ impl SessionDocument {
         }
         let promotable_count = pending_inputs
             .iter()
-            .filter(|pending| !self.input_id_already_streamed(pending.input_id))
+            .filter(|pending| {
+                !handoff_pending_inputs && !self.input_id_already_streamed(pending.input_id)
+            })
             .count();
         let promotable_count = u64::try_from(promotable_count)
             .map_err(|_| DomainError::invalid_id("pending_input_count", u64::MAX))?;
@@ -1697,7 +1714,10 @@ impl SessionDocument {
             )?;
         }
         let mut promoted_input_seqs = Vec::new();
-        for pending in pending_inputs {
+        for pending in pending_inputs
+            .into_iter()
+            .filter(|_| !handoff_pending_inputs)
+        {
             if self.input_id_already_streamed(pending.input_id) {
                 continue;
             }
@@ -1718,7 +1738,9 @@ impl SessionDocument {
             )?;
             promoted_input_seqs.push(promoted_seq);
         }
-        staged_metadata.input_state.pending_in_turn_inputs.clear();
+        if !handoff_pending_inputs {
+            staged_metadata.input_state.pending_in_turn_inputs.clear();
+        }
         let mut changed_event_seqs: Vec<Seq> = staged_event_updates
             .values()
             .map(ConversationEvent::seq)

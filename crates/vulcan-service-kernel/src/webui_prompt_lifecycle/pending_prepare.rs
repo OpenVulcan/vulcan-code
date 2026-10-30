@@ -382,13 +382,36 @@ pub(crate) fn queued_dispatch_authority_from_v1_handle(
                     "The queued successor identity differs from its durable completion receipt.",
                 ));
             }
+            // The initial batch is frozen by consecutive canonical inputs before preparation begins.
+            // 初始批次由准备开始前的连续规范输入冻结。
+            let batch = document
+                .initial_queued_input_batch(turn_id, input_seq)
+                .map_err(|error| error.to_string())?;
+            // Each message remains separate in Provider history; the preparation prompt covers the complete batch.
+            // 每条消息在供应商历史中保持独立，准备提示则覆盖完整批次。
+            let text = batch
+                .iter()
+                .map(|(_, input)| input.text.as_str())
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            // Preparation attachments form an ordered union; per-message resource ownership stays canonical.
+            // 准备附件形成有序并集，每条消息的资源归属仍以规范记录为准。
+            let mut resource_ids = Vec::new();
+            for (_, input) in &batch {
+                for resource_id in &input.resource_ids {
+                    if !resource_ids.contains(resource_id) {
+                        resource_ids.push(*resource_id);
+                    }
+                }
+            }
             Ok(SessionQueuedDispatchAuthority {
                 turn_id,
                 input_id,
                 client_action_id: client_action_id.clone(),
                 input_seq,
-                text: input.text.clone(),
-                resource_ids: input.resource_ids.clone(),
+                text,
+                resource_ids,
             })
         })
         .map_err(|error| format!("Failed to read the V1 queued successor: {error}"))?

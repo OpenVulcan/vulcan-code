@@ -560,6 +560,27 @@ fn pending_inputs_promote_after_group_close() {
     assert_eq!(doc.metadata.input_state.pending_in_turn_inputs.len(), 1);
     doc.append_assistant_text(api, "a1", AssistantSemanticStatus::Completed, T0 + 2)
         .unwrap();
+    // A tool-bearing response continues inside the same Turn instead of selecting a fresh successor.
+    // 含工具的响应在同一回合内继续，不选择新后继。
+    let tool = doc
+        .start_tool(
+            api,
+            "read_file",
+            ToolPayload::try_new(serde_json::json!({})).unwrap(),
+            None,
+            T0 + 2,
+        )
+        .unwrap();
+    doc.finish_tool(
+        api,
+        tool,
+        tool_completion(
+            Some(ToolPayload::try_new(serde_json::json!({"ok":true})).unwrap()),
+            ToolCallStatus::Completed,
+            T0 + 2,
+        ),
+    )
+    .unwrap();
     let completion = doc
         .complete_api_group(
             api,

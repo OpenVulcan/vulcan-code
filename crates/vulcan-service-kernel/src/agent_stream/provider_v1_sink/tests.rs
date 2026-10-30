@@ -3,6 +3,7 @@ mod compaction_budget;
 mod compaction_continuation;
 mod context_usage;
 mod host_guidance;
+mod insertion_continuation;
 mod model_selection;
 mod native_media;
 mod permission_mode;
@@ -63,8 +64,8 @@ use vulcan_ai_contract::{
 };
 use vulcan_session_core::v1::context::LockedBaselineProjection;
 use vulcan_session_core::v1::document::{
-    ClientInputSubmission, FlushCandidate, IdempotentMutation, PrepareAndStartApiInput,
-    SessionDocument, SubagentReturnBuildRequest,
+    ClientInputSubmission, FlushCandidate, PrepareAndStartApiInput, SessionDocument,
+    SubagentReturnBuildRequest,
 };
 use vulcan_session_core::v1::event::{
     ApiEndReason, ApiErrorCategory, ApiPurposeKind, ApiRequestSnapshot, ApiTimings,
@@ -2426,85 +2427,206 @@ async fn native_goal_creation_inside_v1_tool_api_succeeds() {
         .unwrap();
 }
 
-/// Verifies an in-turn supplement closes one physical API without closing the logical Turn.
-/// 验证回合内补充会闭合一次物理 API，但不会闭合逻辑回合。
+/// Verifies that final-answer settlement hands the complete insertion batch to one fresh queued Turn.
+/// 验证最终回答结算把完整插队批次交接给一个新的排队回合；无参数，无返回值。
 #[tokio::test]
-async fn api_terminal_atomically_promotes_in_turn_input_without_turn_completion() {
-    let handle = published_open_turn();
+async fn final_answer_terminal_hands_off_insertion_batch_before_queue() {
+    // A final assistant response must transfer the entire batch before the ordinary queue.
+    // 最终助手回答必须把整个批次转交到普通队列之前。
+    let (_directory, handle) = published_stored_open_turn();
     let mut sink = ProviderV1StreamSink::new(
         Arc::clone(&handle),
         Arc::new(ProjectResourceCatalogRegistry::default()),
     );
     prepare_sink_request(&handle, &mut sink);
-    sink.append_assistant_delta("partial answer", 4)
-        .expect("assistant delta before supplement");
+    sink.append_assistant_delta("final answer", 4)
+        .expect("assistant answer before insertion");
     handle
         .mutate_durable_if_changed(
             SessionMutationAdmission::ExistingTurn,
             SessionFlushReason::InputAccepted,
             |document| {
-                let outcome = document.add_pending_in_turn_input(
-                    ClientInputSubmission::new(
-                        ClientActionId::try_new("provider-v1-in-turn-supplement")?,
-                        "supplement",
-                        Vec::new(),
-                    ),
-                    5,
-                )?;
-                Ok(match outcome {
-                    IdempotentMutation::Committed(input_id) => {
-                        SessionMutationChange::Changed(input_id)
+                document.apply_atomic_transition(|document| {
+                    document.enqueue_input(
+                        ClientInputSubmission::new(
+                            ClientActionId::try_new("ordinary-after-batch")?,
+                            "ordinary",
+                            Vec::new(),
+                        ),
+                        5,
+                    )?;
+                    for (position, text) in ["first insertion", "second insertion"]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        // Exercise the exact queue audit that must survive cross-Turn handoff.
+                        // 覆盖必须跨回合交接保留的精确队列审计。
+                        let action = ClientActionId::try_new(format!("insertion-{position}"))?;
+                        // Preserve the accepted identity through explicit insertion promotion.
+                        // 在明确插队提升中保留已接纳身份。
+                        let input_id = document
+                            .enqueue_input(
+                                ClientInputSubmission::new(action.clone(), text, Vec::new()),
+                                6 + position as i64,
+                            )?
+                            .into_value()
+                            .input_id;
+                        document.promote_queued_input_to_pending_turn(
+                            vulcan_session_core::v1::config::QueuedInputIdentity {
+                                client_action_id: action,
+                                input_id,
+                            },
+                            8 + position as i64,
+                        )?;
                     }
-                    IdempotentMutation::Idempotent(input_id) => {
-                        SessionMutationChange::Unchanged(input_id)
-                    }
+                    Ok(SessionMutationChange::Changed(()))
                 })
             },
         )
-        .expect("persist pending in-turn supplement");
+        .expect("persist both input classes");
     assert_eq!(
         sink.accept_terminal(terminal_facts(0))
             .await
-            .expect("terminal boundary with in-turn supplement"),
+            .expect("final terminal"),
         ProviderV1TerminalOutcome::Completed
     );
-
+    // The old API receipt does not claim to consume inputs delegated to the next Turn.
+    // 旧 API 回执不能声称消费已委托给下一回合的输入。
     let durability = sink.take_finished_durability();
-    let api_terminal = durability
-        .api_terminal
-        .expect("physical API terminal receipt");
-    assert_eq!(api_terminal.value.promoted_input_seqs.len(), 1);
-    assert!(
-        durability.turn_completion.is_none(),
-        "promoted in-turn work must keep the logical Turn open"
-    );
-    let authority =
-        crate::webui_prompt_lifecycle::pending_in_turn_dispatch_authority_from_v1_handle(
-            handle.as_ref(),
-            &api_terminal.value,
+    let api_terminal = durability.api_terminal.expect("physical terminal");
+    assert!(api_terminal.value.promoted_input_seqs.is_empty());
+    let completion = durability
+        .turn_completion
+        .expect("durable old-Turn closure");
+    let TurnSuccessor::QueuedUser {
+        turn_id,
+        input_id,
+        client_action_id,
+        input_seq,
+    } = completion.value.successor
+    else {
+        panic!("the insertion batch must open one queued Turn");
+    };
+    assert_ne!(turn_id, api_terminal.value.turn_id);
+    // Real dispatch authority must cover every member in one preparation prompt.
+    // 真实派发权威必须在一个准备提示中覆盖全部成员。
+    let authority = crate::webui_prompt_lifecycle::queued_dispatch_authority_from_v1_handle(
+        handle.as_ref(),
+        turn_id,
+        input_id,
+        &client_action_id,
+        input_seq,
+    )
+    .expect("reconstruct full-batch dispatch");
+    assert_eq!(authority.text, "first insertion\n\nsecond insertion");
+    // A collaboration message can arrive adjacent to the batch before its first physical request.
+    // 协作消息可能在批次首次物理请求前紧邻批次到达。
+    let guidance_seq = handle
+        .mutate_durable(
+            SessionMutationAdmission::ExistingTurn,
+            SessionFlushReason::InputAccepted,
+            |document| {
+                document
+                    .append_in_turn_guidance_before_api(
+                        ClientActionId::try_new("post-batch-guidance")?,
+                        "collaboration guidance".to_owned(),
+                        20,
+                    )
+                    .map(|receipt| receipt.into_value())
+            },
         )
-        .expect("rebuild exact same-Turn dispatch authority");
-    assert_eq!(authority.turn_id, api_terminal.value.turn_id);
-    assert_eq!(authority.inputs.len(), 1);
-    assert_eq!(authority.inputs[0].text, "supplement");
-    let (has_open_turn, has_turn_boundary, has_turn_stats) = handle
+        .expect("persist adjacent guidance")
+        .value;
+    assert_eq!(
+        crate::webui_prompt_lifecycle::queued_dispatch_authority_from_v1_handle(
+            handle.as_ref(),
+            turn_id,
+            input_id,
+            &client_action_id,
+            input_seq,
+        )
+        .expect("guidance must not invalidate batch admission"),
+        authority,
+    );
+    assert!(
+        handle
+            .read(|document| document
+                .events()
+                .iter()
+                .any(|event| event.seq == guidance_seq))
+            .expect("read persisted guidance")
+    );
+    handle
         .read(|document| {
-            (
-                document.active_turn().is_some_and(|turn| !turn.closed),
+            assert_eq!(
+                document.active_turn().expect("new open Turn").turn_id,
+                turn_id
+            );
+            assert_eq!(
                 document
-                    .events()
-                    .iter()
-                    .any(|event| matches!(event.event, EventBody::TurnBoundary(_))),
+                    .initial_queued_input_batch(turn_id, input_seq)
+                    .expect("initial batch")
+                    .len(),
+                2
+            );
+            assert!(
                 document
-                    .events()
-                    .iter()
-                    .any(|event| matches!(event.event, EventBody::TurnStats(_))),
-            )
+                    .metadata
+                    .input_state
+                    .pending_in_turn_inputs
+                    .is_empty()
+            );
+            assert_eq!(document.metadata.input_state.queued_inputs.len(), 1);
+            assert_eq!(
+                document
+                    .metadata
+                    .input_state
+                    .queued_inputs
+                    .first()
+                    .expect("ordinary queue")
+                    .text,
+                "ordinary"
+            );
         })
-        .expect("read logical Turn after physical terminal");
-    assert!(has_open_turn);
-    assert!(!has_turn_boundary);
-    assert!(!has_turn_stats);
+        .expect("inspect authoritative successor");
+    // Read the actual stored files to verify the atomic publication survives strict cold loading.
+    // 读取真实存储文件，验证原子发布能够通过严格冷加载。
+    let locator = handle.storage_locator().expect("isolated storage locator");
+    let loaded = vulcan_workspace_store::workspace_store::load_session_v1_full(&locator)
+        .expect("strict reload of the handed-off batch");
+    assert_eq!(
+        loaded
+            .document
+            .initial_queued_input_batch(turn_id, input_seq)
+            .expect("stored initial batch")
+            .len(),
+        2,
+    );
+    // The real provider projection includes each insertion once and leaves the ordinary queue out.
+    // 真实供应商投影只包含各插队一次，并把普通队列留在历史之外。
+    let projection = handle
+        .capture_controller_projection_snapshot()
+        .expect("provider source projection");
+    let insertion_texts = projection
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            ProjectedItem::UserInput { text, .. }
+                if text == "first insertion" || text == "second insertion" =>
+            {
+                Some(text.as_str())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(insertion_texts, ["first insertion", "second insertion"]);
+    assert_eq!(projection.items.iter().filter(|item|
+        matches!(item, ProjectedItem::UserInput { text, .. } if text == "collaboration guidance")).count(), 1);
+    assert!(
+        !projection.items.iter().any(
+            |item| matches!(item, ProjectedItem::UserInput { text, .. } if text == "ordinary")
+        )
+    );
 }
 
 /// Physical terminal accounting must precede the same request's Goal budget decision.

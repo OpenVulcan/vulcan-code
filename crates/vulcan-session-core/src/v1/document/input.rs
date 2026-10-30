@@ -621,8 +621,14 @@ pub(super) fn validate_queued_input_resolution_history(
                     let action_matches = input.client_action_id == resolution.client_action_id;
                     let input_matches = input.input_id == resolution.input_id;
                     if action_matches && input_matches {
-                        if candidate.turn_id != Some(turn_id)
-                            || input.input_source != UserInputSource::PendingInTurn
+                        // A completed-Turn handoff must prove exact membership in the next initial batch.
+                        // 已完成回合交接必须证明其属于下一初始批次的精确成员。
+                        let same_turn = candidate.turn_id == Some(turn_id)
+                            && input.input_source == UserInputSource::PendingInTurn;
+                        if !(same_turn
+                            || super::input_handoff::input_was_handed_off(
+                                events, candidate, turn_id,
+                            ))
                             || input.text != resolution.text
                             || input.resource_ids != resolution.resource_ids
                             || !initial_preparation_matches(
@@ -2399,7 +2405,10 @@ impl SessionDocument {
                 continue;
             }
             if let EventBody::UserInput(input) = &event.event
-                && input.input_source == UserInputSource::PendingInTurn
+                && matches!(
+                    input.input_source,
+                    UserInputSource::PendingInTurn | UserInputSource::QueuedScheduled
+                )
                 && input.text == text
                 && input.resource_ids == resource_ids
                 && initial_preparation_matches(input.parameters.as_ref(), parameters)

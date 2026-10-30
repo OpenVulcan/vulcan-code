@@ -2368,15 +2368,20 @@ impl ProviderV1StreamSink {
                         flush_reason: receipt.flush_reason,
                     });
                 }
+                SuccessfulTurnSettlement::PendingInTurn(promoted_input_seqs) => {
+                    // Publish the exact durable input boundary for whichever continuation dispatches first.
+                    // 为首先分发的续跑发布精确持久输入边界。
+                    // A child-return continuation can take priority and must still read every promoted input.
+                    // 子任务回流续跑可以优先分发，但仍必须读取全部已提升输入。
+                    let api_terminal = self.api_terminal_completion.as_mut().ok_or_else(|| {
+                        provider_projection_runtime_error(
+                            "Insertion settlement requires the preceding durable API terminal receipt.",
+                        )
+                    })?;
+                    api_terminal.value.promoted_input_seqs = promoted_input_seqs;
+                }
                 // Terminal handling reads pending returns from the owner after releasing admission.
                 // 终态处理释放准入后从所有者读取待回流结果，不保留可能过期的快照。
-                // The late inputs follow this API terminal, so its receipt authorizes the continuation.
-                // 迟到输入位于本次 API 终态之后，因此由其回执授权续跑。
-                SuccessfulTurnSettlement::PendingInTurn(promoted_input_seqs) => {
-                    if let Some(api_terminal) = self.api_terminal_completion.as_mut() {
-                        api_terminal.value.promoted_input_seqs = promoted_input_seqs;
-                    }
-                }
                 SuccessfulTurnSettlement::SubagentReturn
                 | SuccessfulTurnSettlement::Collaboration
                 | SuccessfulTurnSettlement::Deferred => {}

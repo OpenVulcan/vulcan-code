@@ -200,9 +200,9 @@ pub(crate) enum SuccessfulTurnSettlement {
     /// A durable return keeps the logical turn open for one more physical request.
     /// 可靠回流保持逻辑回合开放，以便继续一次物理请求。
     SubagentReturn,
-    /// Inputs inserted after the final API were streamed; the turn stays open for one continuation.
-    /// 最后一次 API 之后插入的输入已写入事件流；回合保持开放以续跑一次。
-    PendingInTurn(Vec<vulcan_session_core::v1::ids::Seq>),
+    /// Collaboration keeps the original Turn open, and these insertions must enter its next request.
+    /// 协作保持原回合开放，这些插队必须进入其下一次请求。
+    PendingInTurn(Vec<Seq>),
 }
 
 /// Determines which immutable frontier owns instruction filtering for a durable projection.
@@ -2528,8 +2528,8 @@ impl SessionHandle {
     ///
     /// # Returns
     /// 返回值
-    /// Returns a pending-child decision without closure, or one durable closure and successor receipt.
-    /// 返回不闭合回合的待处理子任务决策，或一份可靠回合闭合及后继回执。
+    /// Returns a continuation with any promoted inputs, or one durable closure and successor receipt.
+    /// 返回续跑决策及可能提升的输入，或一份可靠回合闭合及后继回执。
     pub(crate) async fn complete_successful_turn(
         self: &Arc<Self>,
         now_ms: i64,
@@ -2538,30 +2538,29 @@ impl SessionHandle {
         // Read accounting inside the document transaction; accounting never locks documents.
         // 在文档事务中读取统计；统计模块永不获取文档锁。
         let usage_handle = self.clone();
+        // Preserve the owner identity for a possible natural-idle transition.
+        // 为可能的自然空闲转换保留所有者身份。
         let session_id = self.session_id;
+        // The writer lock covers continuation selection and insertion publication together.
+        // 写锁同时覆盖续跑选择及插队发布。
         let completion_receipt = self
             .clone()
             .mutate_durable_if_changed_async(
                 SessionMutationAdmission::ExistingTurn,
                 SessionFlushReason::TurnCompleted,
                 move |document| {
-                    // Check under the same writer lock as closure, so no return can land between the two.
-                    // 在关闭事务的同一写锁下检查，防止回流落在检查与关闭之间。
-                    if document.pending_subagent_return_dispatch()?.is_some() {
-                        return Ok(SessionMutationChange::Unchanged(
-                            SuccessfulTurnSettlement::SubagentReturn,
-                        ));
-                    }
+                    // Capture the canonical business owner before examining its obligations.
+                    // 检查义务之前捕获规范业务所有者。
                     let expected_turn_id = document
                         .active_turn()
                         .map(|turn| turn.turn_id)
                         .ok_or(DomainError::NoActiveTurn)?;
+                    // Auxiliary execution and Stop must not gain dispatch permission from pending inputs.
+                    // 辅助执行及停止状态不能从待处理输入取得分发许可。
                     let active_turn_origin = document
                         .active_turn()
                         .map(|turn| turn.origin)
                         .ok_or(DomainError::NoActiveTurn)?;
-                    // Question executions and explicit stop states never create a second business completion.
-                    // 问题执行与明确停止状态绝不创建第二次业务完成。
                     if active_turn_origin == TurnOrigin::QuestionExecution
                         || !matches!(
                             document.collaboration_run_control(),
@@ -2572,33 +2571,41 @@ impl SessionHandle {
                             SuccessfulTurnSettlement::Deferred,
                         ));
                     }
-                    // Resume accepted business guidance through its own durable dispatch authority.
-                    // 通过独立可靠分发权威继续已接纳业务方向。
-                    if document.pending_collaboration_continuation().is_some() {
-                        return Ok(SessionMutationChange::Unchanged(
-                            SuccessfulTurnSettlement::Collaboration,
-                        ));
-                    }
-                    // Keep the logical Turn open while Core still owns a reserved or active child task.
-                    // 当 Core 仍持有预留或活动子任务时保持逻辑回合开启。
-                    if !document
+                    // A text-only physical terminal is not a logical end while collaboration requires work.
+                    // 协作仍要求执行时，仅有正文的物理终态并不表示逻辑结束。
+                    // Choose under the same lock as promotion so arriving child results cannot split the decision.
+                    // 在提升所用的同一锁内选择，避免到达的子结果把决策分裂。
+                    let continuation = if document.pending_subagent_return_dispatch()?.is_some() {
+                        Some(SuccessfulTurnSettlement::SubagentReturn)
+                    } else if document.pending_collaboration_continuation().is_some() {
+                        Some(SuccessfulTurnSettlement::Collaboration)
+                    } else if !document
                         .completion_obligations(expected_turn_id)
                         .open_child_task_ids
                         .is_empty()
                     {
-                        return Ok(SessionMutationChange::Unchanged(
-                            SuccessfulTurnSettlement::Deferred,
-                        ));
+                        Some(SuccessfulTurnSettlement::Deferred)
+                    } else {
+                        None
+                    };
+                    if let Some(continuation) = continuation {
+                        // Every accepted insertion must precede the next request of this still-open Turn.
+                        // 本回合仍开放，所有已接纳插队必须先于其下一次请求入流。
+                        // Ordinary queued inputs stay untouched; a nonempty receipt authorizes same-Turn dispatch.
+                        // 普通排队输入保持不变；非空回执授权同回合分发。
+                        let promoted_input_seqs =
+                            document.promote_pending_in_turn_inputs_after_api(now_ms)?;
+                        return Ok(if promoted_input_seqs.is_empty() {
+                            SessionMutationChange::Unchanged(continuation)
+                        } else {
+                            SessionMutationChange::Changed(SuccessfulTurnSettlement::PendingInTurn(
+                                promoted_input_seqs,
+                            ))
+                        });
                     }
                     document.apply_atomic_transition(move |document| {
-                        // An insertion that missed the final API terminal still reaches the model.
-                        // 错过最后一次 API 终态的插入仍须送达模型。
-                        let promoted = document.promote_pending_in_turn_inputs_after_api(now_ms)?;
-                        if !promoted.is_empty() {
-                            return Ok(SessionMutationChange::Changed(
-                                SuccessfulTurnSettlement::PendingInTurn(promoted),
-                            ));
-                        }
+                        // Only true logical completion transfers the insertion batch to a fresh queued Turn.
+                        // 只有真实逻辑完成才把插队批次转交给新的排队回合。
                         let transition = document.complete_turn_with_lifetime_usage(
                             expected_turn_id,
                             now_ms,

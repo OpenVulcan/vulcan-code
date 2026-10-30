@@ -309,6 +309,7 @@ pub(super) async fn handle_finished_stream_event(
         task_state,
         agent_runtime,
         report,
+        logical_turn_completed,
     ) {
         Ok(apply) => Some(apply),
         Err(error) => {

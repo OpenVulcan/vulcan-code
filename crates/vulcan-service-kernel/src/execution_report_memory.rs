@@ -157,13 +157,20 @@ impl TerminalConversationHookAction {
     /// 参数
     /// `is_main_session` proves ownership, `is_success` is the report result, and `owns_hook_turn` proves hook participation.
     /// `is_main_session` 证明所有权，`is_success` 是报告结果，`owns_hook_turn` 证明 Hook 参与。
+    /// `durable_turn_completed` proves that Core published the logical Turn closure, not just an API terminal.
+    /// `durable_turn_completed` 证明 Core 已发布逻辑回合闭合，而不仅是 API 终态。
     ///
     /// # Returns
     /// 返回值
     /// Returns exactly one action without permitting contradictory completion and termination.
     /// 返回唯一操作，不允许同时完成与终止的矛盾状态。
-    fn from_terminal_facts(is_main_session: bool, is_success: bool, owns_hook_turn: bool) -> Self {
-        if !is_main_session || !owns_hook_turn {
+    fn from_terminal_facts(
+        is_main_session: bool,
+        is_success: bool,
+        owns_hook_turn: bool,
+        durable_turn_completed: bool,
+    ) -> Self {
+        if !is_main_session || !owns_hook_turn || (is_success && !durable_turn_completed) {
             Self::None
         } else if is_success {
             Self::Complete
@@ -456,6 +463,8 @@ pub(super) fn apply_task_session_execution_report_to_memory_in_place(
 /// `agent_runtime` 提供会话 hook 与 VMM 同步状态。
 /// `report` is the terminal execution report produced by the agent runtime.
 /// `report` 是 Agent 运行时产出的终态执行报告。
+/// `durable_turn_completed` comes from the exact V1 Turn-completion receipt and authorizes Hook completion.
+/// `durable_turn_completed` 来自精确 V1 回合完成回执，并授权 Hook 完成。
 ///
 /// # Returns
 /// 返回值
@@ -466,6 +475,7 @@ pub(super) fn apply_execution_report_to_memory(
     state: &SharedServiceBridgeState,
     agent_runtime: &AgentRuntimeBridge,
     report: ExecutionRunReport,
+    durable_turn_completed: bool,
 ) -> Result<TerminalReportMemoryApply, String> {
     let session_id = report.session_id;
     webui_trace(
@@ -588,13 +598,15 @@ pub(super) fn apply_execution_report_to_memory(
                 is_main_session,
                 apply_result.is_success,
                 runs_completed_turn_hooks || completion_gate.has_active_hook_turn,
+                durable_turn_completed,
             );
             // completion_status freezes the inspected gate decision for hook commit and context consumption.
             // completion_status 固化已检查的闸门决策，供 Hook 提交与上下文消费共同使用。
             let completion_status = completion_gate.completion_status();
-            // Logical completion requires both a successful physical report and a clear durable collaboration gate.
-            // 逻辑完成同时要求物理报告成功且可靠协作完成门已经清空。
-            let logical_turn_completed = apply_result.is_success && completion_status.is_final();
+            // Only the durable Turn receipt authorizes logical completion after a successful physical report.
+            // 物理报告成功后，只有可靠回合回执才能授权逻辑完成。
+            let logical_turn_completed =
+                durable_turn_completed && apply_result.is_success && completion_status.is_final();
             // consumes_vmm_ttl identifies the single final boundary before either state machine commits ownership.
             // consumes_vmm_ttl 在任一状态机提交所有权前标识唯一终态边界。
             let consumes_vmm_ttl = vmm_runtime_ready
@@ -785,15 +797,13 @@ pub(super) fn apply_execution_report_to_memory(
     );
     // conversation_run_outcome crosses the service boundary only for a genuinely final main-session turn.
     // conversation_run_outcome 仅在主会话回合真正结束时跨越服务边界。
-    let conversation_run_outcome =
-        completion_gate
-            .completion_status()
-            .is_final()
-            .then_some(if report.error.is_some() {
-                ConversationRunOutcome::Failed
-            } else {
-                ConversationRunOutcome::Completed
-            });
+    let conversation_run_outcome = (durable_turn_completed
+        && completion_gate.completion_status().is_final())
+    .then_some(if report.error.is_some() {
+        ConversationRunOutcome::Failed
+    } else {
+        ConversationRunOutcome::Completed
+    });
     Ok(TerminalReportMemoryApply {
         project_id,
         completion_request,
@@ -1236,20 +1246,25 @@ mod tests {
     #[test]
     fn terminal_conversation_hook_action_is_exclusive() {
         assert_eq!(
-            TerminalConversationHookAction::from_terminal_facts(true, true, true),
+            TerminalConversationHookAction::from_terminal_facts(true, true, true, true),
             TerminalConversationHookAction::Complete
         );
         assert_eq!(
-            TerminalConversationHookAction::from_terminal_facts(true, false, true),
+            TerminalConversationHookAction::from_terminal_facts(true, false, true, false),
             TerminalConversationHookAction::Terminate
         );
         assert_eq!(
-            TerminalConversationHookAction::from_terminal_facts(true, true, false),
+            TerminalConversationHookAction::from_terminal_facts(true, true, false, true),
             TerminalConversationHookAction::None
         );
         assert_eq!(
-            TerminalConversationHookAction::from_terminal_facts(false, true, true),
+            TerminalConversationHookAction::from_terminal_facts(false, true, true, true),
             TerminalConversationHookAction::None
+        );
+        assert_eq!(
+            TerminalConversationHookAction::from_terminal_facts(true, true, true, false),
+            TerminalConversationHookAction::None,
+            "a physical terminal must preserve the Hook of an unfinished logical Turn"
         );
     }
 

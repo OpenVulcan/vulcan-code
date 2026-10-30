@@ -112,8 +112,8 @@ pub enum TurnSuccessor {
     /// No successor Turn was opened.
     /// 未开启后继回合。
     None,
-    /// The FIFO head queued user input opened the next UserRoot Turn.
-    /// FIFO 队首用户输入开启了下一个 UserRoot 回合。
+    /// A complete insertion batch or the FIFO queue head opened the next UserRoot Turn.
+    /// 完整插队批次或 FIFO 队首开启了下一个 UserRoot 回合。
     QueuedUser {
         /// Newly opened Turn identity.
         /// 新开启的回合身份。
@@ -147,8 +147,8 @@ pub struct TurnCompletionTransition {
     /// Final statistics seq of the completed turn.
     /// 已完成回合的最终统计 seq。
     pub completed_turn_final_seq: Seq,
-    /// Unique successor selected by queued-user-first policy.
-    /// 按排队用户优先策略选定的唯一后继。
+    /// Unique successor selected in insertion-batch, ordinary-queue, then Goal order.
+    /// 按插队批次、普通队列、目标的顺序选定的唯一后继。
     pub successor: TurnSuccessor,
 }
 
@@ -871,12 +871,21 @@ impl SessionDocument {
             });
         }
         self.require_final_assistant(expected_turn_id)?;
-        // Successful completion must first stream late inputs and continue the turn for them.
-        // 成功完成前必须先写入迟到输入，并为其续跑回合。
-        if !self.metadata.input_state.pending_in_turn_inputs.is_empty() {
-            return Err(DomainError::InvalidQueuedInputOrder {
-                field: "pending_input_unstreamed_at_completion",
-            });
+        // Freeze every unconsumed insertion under the same transaction as old-Turn closure.
+        // 在旧回合关闭的同一事务内冻结全部未消费插队。
+        let pending_inputs = self.metadata.input_state.pending_in_turn_inputs.clone();
+        for pending in &pending_inputs {
+            validate_user_input(pending.text.clone(), &pending.resource_ids)?;
+            if let Some(parameters) = &pending.parameters {
+                parameters.validate_pending(&pending.resource_ids)?;
+            }
+            if pending.turn_id != expected_turn_id
+                || self.input_id_already_streamed(pending.input_id)
+            {
+                return Err(DomainError::InvalidQueuedInputOrder {
+                    field: "pending_input_handoff_owner",
+                });
+            }
         }
         let turn_start_event = self
             .events
@@ -899,7 +908,13 @@ impl SessionDocument {
         // 用于时序展示，同时推进 `updated_at_ms` 以开启新 generation；普通回合的两个时间相等。
         let duration_ms = now_ms.saturating_sub(turn_start_event.updated_at_ms).max(0);
 
-        let queued_successor = self.metadata.input_state.queued_inputs.first().cloned();
+        // The complete insertion batch takes one Turn before the ordinary FIFO queue.
+        // 全部插队批次占用一个回合，并优先于普通先进先出队列。
+        let queued_successor = if pending_inputs.is_empty() {
+            self.metadata.input_state.queued_inputs.first().cloned()
+        } else {
+            None
+        };
         if let Some(queued) = queued_successor.as_ref() {
             validate_user_input(queued.text.clone(), &queued.resource_ids)?;
         }
@@ -917,9 +932,11 @@ impl SessionDocument {
             GoalStopReason::UnknownUsage => Some(GoalState::Blocked),
             _ => None,
         };
-        let goal_objective = (queued_successor.is_none() && decision.should_continue)
-            .then(|| self.metadata.mode.goal.objective.clone());
-        let has_successor = queued_successor.is_some() || goal_objective.is_some();
+        let goal_objective =
+            (pending_inputs.is_empty() && queued_successor.is_none() && decision.should_continue)
+                .then(|| self.metadata.mode.goal.objective.clone());
+        let has_successor =
+            !pending_inputs.is_empty() || queued_successor.is_some() || goal_objective.is_some();
         let expiring_contexts = expiring_ttl_contexts(self, expected_turn_id)?;
         let ttl_expiration_count = u64::try_from(expiring_contexts.len()).map_err(|_| {
             DomainError::ImmutableFieldMutation {
@@ -927,14 +944,33 @@ impl SessionDocument {
                 field: "event_count",
             }
         })?;
-        let queued_request_config_count = u64::from(
-            queued_successor
-                .as_ref()
-                .is_some_and(|queued| queued.bound_request_config.is_some()),
+        // The latest accepted insertion owns the batch route, matching same-Turn admission.
+        // 最新接纳的插队持有批次路由，与同回合准入一致。
+        let batch_request_config = pending_inputs
+            .iter()
+            .rev()
+            .find_map(|pending| pending.bound_request_config.clone());
+        // Count all batch messages before allocating or changing any durable owner.
+        // 在分配或修改任何可靠所有者之前计入全部批次消息。
+        let successor_event_count = if pending_inputs.is_empty() {
+            u64::from(has_successor)
+        } else {
+            u64::try_from(pending_inputs.len()).map_err(|_| {
+                DomainError::InvalidQueuedInputOrder {
+                    field: "pending_input_handoff_count",
+                }
+            })?
+        };
+        let request_config_count = u64::from(
+            batch_request_config.is_some()
+                || queued_successor
+                    .as_ref()
+                    .is_some_and(|queued| queued.bound_request_config.is_some()),
         );
-        let appended_event_count = (if has_successor { 3 } else { 2 })
+        let appended_event_count = 2
+            + successor_event_count
             + u64::from(next_goal_state.is_some())
-            + queued_request_config_count
+            + request_config_count
             + ttl_expiration_count;
         self.ensure_transition_capacity(appended_event_count, u64::from(has_successor))?;
         let buckets = self.aggregate_turn_buckets(expected_turn_id, turn.start_seq)?;
@@ -980,7 +1016,65 @@ impl SessionDocument {
                 )?;
             }
         }
-        let successor = if let Some(queued) = queued_successor {
+        let successor = if let Some(first_input) = pending_inputs.first().cloned() {
+            // A scheduled first input opens one fresh Turn; the remaining inputs join its initial request.
+            // 调度首条输入开启一个新回合，其余输入加入该回合的首次请求。
+            let turn_id = TurnId::try_new(staged_allocator.next_local_id()?)?;
+            if let Some(request_config) = batch_request_config {
+                self.stage_bound_request_activation(
+                    &mut staged_metadata,
+                    &mut staged_allocator,
+                    &mut staged_events,
+                    request_config,
+                    Some(turn_id),
+                    now_ms,
+                )?;
+            }
+            // The batch has already proved nonempty and preserves every original input identity.
+            // 批次已证明非空，并保留每条原始输入身份。
+            let mut first_input_seq = None;
+            for (position, pending) in pending_inputs.into_iter().enumerate() {
+                // Only the first message starts the fresh Turn in history and UI.
+                // 只有首条消息在历史与界面中开启新回合。
+                let input_seq = self.stage_event(
+                    &mut staged_allocator,
+                    &mut staged_events,
+                    Some(turn_id),
+                    EventVisibility::Provider,
+                    EventBody::UserInput(UserInputEvent {
+                        parameters: pending.parameters,
+                        client_action_id: pending.client_action_id,
+                        input_id: pending.input_id,
+                        input_source: if position == 0 {
+                            UserInputSource::QueuedScheduled
+                        } else {
+                            UserInputSource::PendingInTurn
+                        },
+                        text: pending.text,
+                        resource_ids: pending.resource_ids,
+                    }),
+                    now_ms,
+                )?;
+                first_input_seq.get_or_insert(input_seq);
+            }
+            // This mutation transfers the whole frozen batch; ordinary queued inputs remain untouched.
+            // 本次修改转交整个冻结批次，普通排队输入保持不变。
+            let input_seq = first_input_seq.expect("the insertion batch was proven nonempty");
+            staged_metadata.input_state.pending_in_turn_inputs.clear();
+            staged_active_turn = Some(ActiveTurnState {
+                turn_id,
+                origin: TurnOrigin::UserRoot,
+                start_seq: input_seq,
+                closed: false,
+            });
+            staged_metadata.open_turn_start_seq = Some(input_seq);
+            TurnSuccessor::QueuedUser {
+                turn_id,
+                input_id: first_input.input_id,
+                client_action_id: first_input.client_action_id,
+                input_seq,
+            }
+        } else if let Some(queued) = queued_successor {
             let turn_id = TurnId::try_new(staged_allocator.next_local_id()?)?;
             if let Some(request_config) = queued.bound_request_config.clone() {
                 self.stage_bound_request_activation(

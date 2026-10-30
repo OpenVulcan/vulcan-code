@@ -3,6 +3,121 @@
 
 use super::*;
 
+/// Late user insertions enter the next collaboration request without opening a second business Turn.
+/// 迟到用户插队进入下一协作请求，不开启第二个业务回合。
+#[tokio::test]
+async fn late_insertion_continuation_preserves_collaboration_guidance() {
+    use crate::session_runtime_registry_v1::SuccessfulTurnSettlement;
+    use vulcan_session_core::v1::projection::ProjectedItem;
+    use vulcan_session_core::v1::{ClientActionId, ClientInputSubmission};
+    // Reuse real message admission and disk publication instead of synthesizing collaboration state.
+    // 复用真实消息准入及磁盘发布，不合成协作状态。
+    let (_root, invocation, target, context) = message_fixture(false).await;
+    finish_business_response(&target);
+    send(
+        &invocation,
+        &target,
+        context,
+        SessionMessageDeliveryMode::Interrupt,
+        "collaboration-direction-marker",
+    )
+    .await
+    .unwrap();
+    // Both user inputs arrive after the physical API but before logical settlement.
+    // 两条用户输入均在物理请求之后、逻辑结算之前到达。
+    let texts = ["late-user-alpha", "late-user-beta"];
+    target
+        .mutate_durable(
+            SessionMutationAdmission::ExistingTurn,
+            SessionFlushReason::InputAccepted,
+            |document| {
+                document.apply_atomic_transition(|document| {
+                    for text in texts {
+                        document.add_pending_in_turn_input(
+                            ClientInputSubmission::new(
+                                ClientActionId::try_new(text)?,
+                                text,
+                                vec![],
+                            ),
+                            9,
+                        )?;
+                    }
+                    Ok(())
+                })
+            },
+        )
+        .unwrap();
+    // Capture the original owner before the settlement can choose continuation.
+    // 在结算选择续跑之前捕获原所有者。
+    let original_turn = target
+        .read(|document| document.active_turn().unwrap().turn_id)
+        .unwrap();
+    let SuccessfulTurnSettlement::PendingInTurn(promoted) =
+        target.complete_successful_turn(10).await.unwrap().value
+    else {
+        panic!("collaboration continuation must first publish late user inputs");
+    };
+    assert_eq!(promoted.len(), texts.len());
+    assert_eq!(
+        target
+            .read(|document| document.active_turn().unwrap().turn_id)
+            .unwrap(),
+        original_turn
+    );
+    project_collaboration_before_api(&invocation.state, &target, 11)
+        .await
+        .unwrap();
+    // The real Provider projection must contain both the collaboration guidance and user insertions.
+    // 真实供应商投影必须同时包含协作引导及用户插队。
+    let projection = target.capture_controller_projection_snapshot().unwrap();
+    // Stable test markers select inputs without depending on evolving event positions.
+    // 稳定测试标记用于选择输入，不依赖演进中的事件位置。
+    let actual = projection
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            ProjectedItem::UserInput { text, .. } if texts.contains(&text.as_str()) => {
+                Some(text.as_str())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(actual, texts);
+    assert!(projection.items.iter().any(|item|
+        matches!(item, ProjectedItem::UserInput { text, .. } if text.contains("collaboration-direction-marker"))));
+    assert!(
+        target
+            .read(|document| document.pending_collaboration_continuation().is_some())
+            .unwrap()
+    );
+    // With no new insertions, a repeated settlement remains read-only and keeps the same obligation.
+    // 没有新插队时，重复结算保持只读并保留同一义务。
+    let retry = target.complete_successful_turn(12).await.unwrap();
+    assert!(!retry.changed);
+    assert!(matches!(
+        retry.value,
+        SuccessfulTurnSettlement::Collaboration
+    ));
+    finish_business_response(&target);
+    assert!(matches!(
+        target.complete_successful_turn(13).await.unwrap().value,
+        SuccessfulTurnSettlement::Completed(_)
+    ));
+    // The committed history must pass normal strict loading after continuation and closure.
+    // 续跑及关闭后的已提交历史必须通过普通严格加载。
+    let loaded = load_session_v1_for_runtime(&target.storage_locator().unwrap())
+        .unwrap()
+        .document;
+    assert!(
+        loaded
+            .metadata
+            .input_state
+            .pending_in_turn_inputs
+            .is_empty()
+    );
+    assert!(loaded.pending_collaboration_continuation().is_none());
+}
+
 /// Commits a real completed API and final assistant through the canonical session handle.
 /// 通过规范会话句柄提交真实完成 API 和最终助手正文。
 /// `handle` keeps its logical business turn open for the separate completion decision.
@@ -799,10 +914,10 @@ async fn session_completed_task_result_revoked_before_receipt_is_redacted() {
     );
 }
 
-/// An insertion that lands after the final API terminal keeps the turn open for one continuation.
-/// 落在最后一次 API 终态之后的插入保持回合开放，以续跑一次。
+/// An insertion after the final API terminal closes its predecessor and opens one fresh successor.
+/// 最后一次 API 终态之后的插队会关闭前驱并开启一个新后继；无参数，无返回值。
 #[tokio::test]
-async fn late_in_turn_insertion_continues_instead_of_closing() {
+async fn late_in_turn_insertion_opens_one_new_successor() {
     use crate::session_runtime_registry_v1::SuccessfulTurnSettlement;
     use vulcan_session_core::v1::document::ClientInputSubmission;
     use vulcan_session_core::v1::ids::ClientActionId;
@@ -829,17 +944,23 @@ async fn late_in_turn_insertion_continues_instead_of_closing() {
     let original_turn = target
         .read(|document| document.active_turn().unwrap().turn_id)
         .unwrap();
-    let SuccessfulTurnSettlement::PendingInTurn(promoted) =
+    let SuccessfulTurnSettlement::Completed(transition) =
         target.complete_successful_turn(11).await.unwrap().value
     else {
-        panic!("a late insertion must keep the turn open");
+        panic!("a late insertion must close its predecessor and select a new Turn");
     };
-    assert_eq!(promoted.len(), 1);
+    let vulcan_session_core::v1::document::TurnSuccessor::QueuedUser {
+        turn_id: successor, ..
+    } = transition.successor
+    else {
+        panic!("the late insertion must become a queued successor");
+    };
     target
         .read(|document| {
             let turn = document.active_turn().unwrap();
             assert!(!turn.closed);
-            assert_eq!(turn.turn_id, original_turn);
+            assert_ne!(turn.turn_id, original_turn);
+            assert_eq!(turn.turn_id, successor);
             assert!(
                 document
                     .metadata

@@ -231,7 +231,14 @@ impl SessionDocument {
         }
 
         let target_index = self.require_generation_turn_end_target(input.source_turn_end_seq)?;
-        let retained = self.events[..=target_index].to_vec();
+        let mut retained = self.events[..=target_index].to_vec();
+        // The child excludes successor work, while the source retains its complete cross-Turn audit.
+        // 子会话排除后继工作，来源继续保留完整跨回合审计。
+        self.retire_input_handoffs_outside_fork(
+            &mut retained,
+            input.source_turn_end_seq,
+            input.now_ms,
+        )?;
         let fork_origin = ForkOrigin {
             source_session_id: self.metadata.session_id.clone(),
             source_segment_generation: self.metadata.segment_generation,

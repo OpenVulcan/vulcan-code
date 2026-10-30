@@ -14,6 +14,7 @@ mod compaction;
 mod hydration;
 mod inactive_admission;
 mod input;
+mod input_handoff;
 mod invariants;
 mod modes;
 mod persistence;

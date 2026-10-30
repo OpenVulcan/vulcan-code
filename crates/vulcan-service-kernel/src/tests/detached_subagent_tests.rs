@@ -334,6 +334,7 @@ fn regular_execution_report_hook_lock_failure_preserves_workspace_state() {
         &state,
         &agent_runtime,
         report,
+        true,
     ) {
         Ok(_) => panic!("poisoned hook runtime must reject terminal report commit"),
         Err(error) => error,
@@ -481,6 +482,27 @@ fn regular_execution_report_ignores_stale_vmm_owner_without_active_hook() {
         provider_failure_category: None,
         controller_events: Vec::new(),
     };
+    // A successful physical report without a durable Turn closure must retain its original Hook.
+    // 没有可靠回合闭合的成功物理报告必须保留原 Hook。
+    let unfinished = apply_execution_report_to_memory(
+        &ServiceEventEmitter::new(Vec::new()),
+        &state,
+        &agent_runtime,
+        report.clone(),
+        false,
+    )
+    .expect("an unfinished logical Turn remains available for continuation");
+    assert!(unfinished.completion_request.is_none());
+    assert!(unfinished.conversation_run_outcome.is_none());
+    assert_eq!(
+        agent_runtime
+            .conversation_hook_runtime
+            .lock()
+            .expect("read retained Hook")
+            .active_turn_id(session_id),
+        Some(retained_hook_turn_id.as_str()),
+        "a physical terminal must not remove the unfinished business owner",
+    );
     // outcome proves a stopped service cannot inject a stale VMM identity check into terminal commit.
     // outcome 证明未启动服务不能把陈旧 VMM 身份校验注入终态提交。
     let outcome = apply_execution_report_to_memory(
@@ -488,6 +510,7 @@ fn regular_execution_report_ignores_stale_vmm_owner_without_active_hook() {
         &state,
         &agent_runtime,
         report,
+        true,
     )
     .expect("stopped VMM service must not reject the ordinary terminal commit");
     assert!(outcome.completion_request.is_some());
