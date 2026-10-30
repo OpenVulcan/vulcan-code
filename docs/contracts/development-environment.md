@@ -157,7 +157,7 @@ make deps-rust-tools
 
 ### 持续集成中的精简准备
 
-开发机继续使用 `make init-system`。GitHub Actions 的 Rust 作业运行在已有编译器的 Windows 镜像中，只准备当前检查实际使用的依赖：由 `install-locked-tools.mjs` 安装 protoc、nextest 与内置 sg/rg，执行 `make.ps1 deps lua` 和 `managed-node.mjs output`（该作业只验证 Debug 发行目录），在运行时回归前显式 `make.ps1 sync`。不为这些测试编译安装未使用的 hakari、deny、about 或 RTK。
+开发机继续使用 `make init-system`。GitHub Actions 的 Rust 作业运行在已有编译器的 Windows 镜像中，只准备当前检查实际使用的依赖：由 `install-locked-tools.mjs` 安装 protoc、nextest 与内置 sg/rg/rtk，执行 `make.ps1 deps lua` 和 `managed-node.mjs output`（该作业只验证 Debug 发行目录），在运行时回归前显式 `make.ps1 sync`。不为这些测试编译安装未使用的 hakari、deny 或 about。
 
 nextest 的 CI 二进制仅支持该作业使用的 Windows x64，安装到忽略目录 `target/ci-tools/bin/`，不覆盖开发机全局 Cargo 工具。唯一版本与归档 SHA-256 来源为 `scripts/build-inputs.lock.json`；下载器检查缓存摘要，安装器检查实际版本，不使用 latest 或未校验的归档。开发机其他平台仍使用原初始化入口。分类与缓存规则见 [仓库检查](repository-quality-gates.md)。
 
@@ -241,7 +241,7 @@ cargo test --doc
 
 ## 锁定命令行构建输入
 
-scripts/build-inputs.lock.json 是内建 sg、rg 和 protoc 的版本、各平台归档摘要及许可证摘要的唯一来源。安装入口共用 install-locked-tools.mjs，不查询最新发行版；升级必须评审清单差异并验证对应平台。此清单不替代 Cargo、pnpm 及已有受管 Node 的锁定机制。
+scripts/build-inputs.lock.json 是内建 sg、rg、rtk 和 protoc 的版本、各平台归档摘要及许可证摘要的唯一来源。安装入口共用 install-locked-tools.mjs，不查询最新发行版；升级必须评审清单差异并验证对应平台。此清单不替代 Cargo、pnpm 及已有受管 Node 的锁定机制。
 
 同一清单的 `judge_runtime` 段锁定本机权限判定器的随包执行库：官方 ONNX Runtime CPU 核心库与 WebGPU 执行提供器插件（通用 GPU 路径，适配任意支持 WebGPU 的显卡）。`make init-system` 与 `make deps tools` 经 `install_bundled_tools` 依次安装 `bundled` 与 `judge-runtime` 两组；后者只把各归档中声明的成员复制到 `third_party/judge-runtime/<target>/`，并写入记录每个文件摘要的 `judge-runtime.json`。清单未声明的宿主（目前为没有官方构建的 macOS x64）只输出说明，不安装。`make sync` 通过 `install-locked-tools.mjs verify-judge-runtime` 按锁文件复核清单与全部摘要后复制到 `output/judge-runtime/`；已声明宿主缺失或文件被改动时同步失败并提示执行 `make deps tools`。发布布局校验要求已声明宿主的发行物包含该清单与两个库。CUDA 执行库因显卡与驱动差异不随包提供。
 

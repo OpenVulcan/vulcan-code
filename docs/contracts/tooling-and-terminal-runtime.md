@@ -47,9 +47,10 @@ WebUI 展示时阅读。普通业务任务不需要加载这些细节。
 
 ## 随包 RTK OSS 接入
 
-- RTK 以 `plugins/vulcan-rtk/` 中的独立 OSS 可执行文件接入，仅保留 Shell 命令改写与 Git 提交上下文过滤；
-  不注册通用输出压缩 Hook，不部署完整引擎或 `rtk-proxy`。发行标签、制品名与摘要以
-  `scripts/install_host_deps.ps1` 为准；运行时依赖更新后必须显式执行 `make.ps1 sync`。
+- RTK 以独立 OSS 可执行文件接入，仅保留 Shell 命令改写与 Git 提交上下文过滤；不注册通用输出压缩
+  Hook，不部署完整引擎或 `rtk-proxy`。发行标签、各平台制品名与摘要以 `scripts/build-inputs.lock.json`
+  的 `tools.rtk` 为准，与 sg/rg 一同安装到 `third_party/tools/<target>/bin/`，由 `make.ps1 sync`
+  复制到发行目录 `tools/bin/`；锁文件未声明制品的宿主（目前为 Windows arm64）不随包提供 RTK。
 - `rewrite` 的上游协议归属为固定发行标签下的 `src/hooks/rewrite_cmd.rs`：退出码 `0/3` 携带改写，
   `1/2` 保持原命令；退出码不赋予 Vulcan 工具执行权限。超时或其他失败不得执行部分输出，
   多行改写必须保留完整命令并检查其中全部 RTK 路由。

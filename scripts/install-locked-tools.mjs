@@ -85,6 +85,17 @@ async function publishInstallation(prepared, destination) {
 // JUDGE_RUNTIME_MANIFEST 是服务读取以定位随包判定执行库的清单文件名。
 export const JUDGE_RUNTIME_MANIFEST = 'judge-runtime.json';
 
+// bundledToolIds returns the bundled tool ids the lock declares for one target, in installation order.
+// bundledToolIds 返回锁文件为某个目标声明的随包工具标识，按安装顺序排列。
+//
+// Parameters: lock is the parsed build-input lock and target is a resolveToolPlatform target triple.
+// 参数：lock 是已解析的构建输入锁文件，target 是 resolveToolPlatform 给出的目标三元组。
+// Returns: sg and rg always; rtk only where its lock targets name the host, because RTK publishes no build elsewhere.
+// 返回值：始终包含 sg 与 rg；rtk 仅在其锁文件 targets 列出该宿主时包含，因为 RTK 未在其他宿主发布构建。
+export function bundledToolIds(lock, target) {
+  return ['sg', 'rg', ...(lock.tools.rtk.targets[target] ? ['rtk'] : [])];
+}
+
 // prepareJudgeRuntime copies only the declared members of each verified archive into prepared and writes the manifest.
 // prepareJudgeRuntime 只把每个已校验归档中声明的成员复制到 prepared，并写入清单。
 async function prepareJudgeRuntime(runtime, target, temporary, prepared, cache, offline) {
@@ -212,7 +223,7 @@ export async function installLockedTools(group, repositoryRoot, offline = false)
     if (group === 'bundled' && await pathExists(destination)) await cp(destination, prepared, { recursive: true });
     // entries identifies exactly the requested tool set; tools are validated before any installation switch.
     // entries 明确请求的工具集合；所有工具均在安装切换之前验证。
-    const entries = group === 'bundled' ? ['sg', 'rg'] : group === 'judge-runtime' ? [] : [group];
+    const entries = group === 'bundled' ? bundledToolIds(lock, platform.target) : group === 'judge-runtime' ? [] : [group];
     if (judgeTarget) await prepareJudgeRuntime(lock.judge_runtime, judgeTarget, temporary, prepared, cache, offline);
     // id selects the exact declared tool contract.
     // id 选择明确声明的工具契约。
@@ -224,7 +235,9 @@ export async function installLockedTools(group, repositoryRoot, offline = false)
       // archiveName 遵循各上游工具的平台命名契约。
       const archiveName = id === 'protoc' ? `protoc-${version}-${platform.protoc}.zip`
         : id === 'nextest' ? `cargo-nextest-${version}-${platform.target}.zip`
-        : id === 'sg' ? `app-${platform.target}.zip` : `ripgrep-${version}-${platform.rgTarget}.${platform.archiveKind}`;
+        : id === 'sg' ? `app-${platform.target}.zip`
+        : id === 'rtk' ? lock.tools.rtk.targets[platform.target]
+        : `ripgrep-${version}-${platform.rgTarget}.${platform.archiveKind}`;
       // assets is the declared archive list for this tool.
       // assets 是此工具声明的归档列表。
       const assets = id === 'protoc' || id === 'nextest' ? lock[id].assets : lock.tools[id].assets;
@@ -260,7 +273,7 @@ export async function installLockedTools(group, repositoryRoot, offline = false)
       // expected includes the tool name so unrelated executables cannot pass a version substring check.
       // expected 包含工具名，避免无关程序通过版本子串检查。
       const expected = id === 'protoc' ? `libprotoc ${version}` : id === 'nextest' ? `cargo-nextest ${version}`
-        : id === 'sg' ? `ast-grep ${version}` : `ripgrep ${version}`;
+        : id === 'sg' ? `ast-grep ${version}` : id === 'rtk' ? `rtk ${version.replace(/^v/, '')}` : `ripgrep ${version}`;
       // ripgrep includes a revision suffix in its first line; compare the full version token, not a substring.
       // ripgrep 首行包含修订后缀；比较完整版本标记，而非子串。
       const firstLine = reported.split(/\r?\n/)[0];
@@ -305,6 +318,13 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   // verify-judge-runtime prints the verified runtime directory, or nothing for an undeclared host, for the sync scripts.
   // verify-judge-runtime 为同步脚本打印已校验的执行库目录；未声明的宿主不打印任何内容。
   const verifying = group === 'verify-judge-runtime';
+  // bundled-tool-ids prints the space-separated tools the sync scripts must find for this host.
+  // bundled-tool-ids 打印同步脚本在本宿主上必须找到的工具，以空格分隔。
+  if (group === 'bundled-tool-ids') {
+    const lock = JSON.parse(await readFile(new URL('./build-inputs.lock.json', import.meta.url), 'utf8'));
+    console.log(bundledToolIds(lock, resolveToolPlatform().target).join(' '));
+    process.exit(0);
+  }
   // root defaults to the checkout containing this installer.
   // root 默认使用包含此安装器的检出目录。
   let root = path.resolve(fileURLToPath(new URL('..', import.meta.url)));

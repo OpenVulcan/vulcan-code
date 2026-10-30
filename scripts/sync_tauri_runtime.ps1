@@ -143,8 +143,8 @@ $OutputSystemPromptSkillsDir = Join-Path $OutputResourcesDir "prompt-skills\syst
 # OutputLuaRuntimeDir 保存应用持有的 LuaSkills 运行时根目录。
 $OutputLuaRuntimeDir = Join-Path $OutputRootDir "lua_runtime"
 
-# OutputBundledToolsDir is the runtime-owned sg and rg distribution root.
-# OutputBundledToolsDir 是运行时持有的 sg 与 rg 发行根目录。
+# OutputBundledToolsDir is the runtime-owned sg, rg, and rtk distribution root.
+# OutputBundledToolsDir 是运行时持有的 sg、rg 与 rtk 发行根目录。
 $OutputBundledToolsDir = Join-Path $OutputRootDir "tools"
 
 # LegacyManagedRuntimeScriptsDir stores obsolete downloader scripts removed by native Rust bootstrap.
@@ -397,9 +397,13 @@ Copy-DirectoryContents -SourceDirectory $SourceLuaRuntimeDir -DestinationDirecto
 # BundledToolBinarySuffix selects the executable suffix required by the current host.
 # BundledToolBinarySuffix 选择当前宿主所需的可执行文件后缀。
 $BundledToolBinarySuffix = if ($IsWindowsPlatform) { ".exe" } else { "" }
+# BundledToolNames are the tools the build-input lock declares for this host.
+# BundledToolNames 是构建输入锁文件为当前宿主声明的工具。
+$BundledToolNames = ((& node (Join-Path $ProjectDir "scripts/install-locked-tools.mjs") bundled-tool-ids | Out-String).Trim()) -split ' '
+if ($LASTEXITCODE -ne 0) { throw "Could not resolve the bundled tools for this host." }
 # BundledToolName iterates the exact commands required by the runtime PATH contract.
 # BundledToolName 遍历运行时 PATH 契约要求的精确命令。
-foreach ($BundledToolName in @("sg", "rg")) {
+foreach ($BundledToolName in $BundledToolNames) {
     # SourceBundledToolBinary is the exact verified dependency required before synchronization.
     # SourceBundledToolBinary 是同步前必需的精确已校验依赖。
     $SourceBundledToolBinary = Join-Path $SourceBundledToolsDir "bin\$BundledToolName$BundledToolBinarySuffix"
@@ -407,7 +411,7 @@ foreach ($BundledToolName in @("sg", "rg")) {
         throw "Bundled tool '$BundledToolName' is missing; run make deps tools before synchronization."
     }
 }
-Write-Host "==> Syncing bundled sg and rg tools..."
+Write-Host "==> Syncing bundled tools ($($BundledToolNames -join ', '))..."
 Copy-DirectoryContents -SourceDirectory $SourceBundledToolsDir -DestinationDirectory $OutputBundledToolsDir -Clean
 
 # SourceJudgeRuntimeDir is the lock-verified judge runtime of this host, or empty when the lock declares none.

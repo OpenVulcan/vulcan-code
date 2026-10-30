@@ -35,7 +35,7 @@ $RtkRepo = "rtk-ai/rtk"
 
 # RtkTag pins the stable Apache-2.0 OSS release used by this dependency bootstrap.
 # RtkTag 固定此依赖初始化使用的 Apache-2.0 OSS 稳定发行版。
-$RtkTag = "v1.0.1"
+$RtkTag = "v1.1.0"
 
 # RtkLicenseUrl pins source-license bytes independently of archive line-ending conversion.
 # RtkLicenseUrl 独立固定源码许可证字节，不受归档换行转换影响。
@@ -163,7 +163,7 @@ function Get-RtkAssetInfo {
             plugin_target = "x86_64-pc-windows-msvc"
             archive_ext = ".zip"
             binary_name = "rtk.exe"
-            sha256 = "0e53e2eca471e15fbd3636e64e6bc0b182cbc278ed0339c80450a2dd03f4cd6b"
+            sha256 = "9b076379be9d86011ca3f3a0264d0be4851da5535453a47f67fa46b4e893fbb2"
         }
     }
 
@@ -174,7 +174,7 @@ function Get-RtkAssetInfo {
                 plugin_target = "x86_64-unknown-linux-gnu"
                 archive_ext = ".tar.gz"
                 binary_name = "rtk"
-                sha256 = "a44e8ffc43981100b4ddf1710399a1649a6c874591aa6d0c0727fe6cbd983c41"
+                sha256 = "4dec94a64035e08189ae82fd5408fe4ae9ae27a665fc07e3e3ec3c4c2d8e8a3e"
             }
         }
 
@@ -183,7 +183,7 @@ function Get-RtkAssetInfo {
             plugin_target = "aarch64-unknown-linux-gnu"
             archive_ext = ".tar.gz"
             binary_name = "rtk"
-            sha256 = "ee24a43dac9162de55fea8460b5efcd56d401ec28b5117c921bffa8a57bc136e"
+            sha256 = "57a4fac13d18da77f0577ea8b68def7934b934bf76d0a6e161f0bfd06b1e1078"
         }
     }
 
@@ -194,7 +194,7 @@ function Get-RtkAssetInfo {
                 plugin_target = "x86_64-apple-darwin"
                 archive_ext = ".tar.gz"
                 binary_name = "rtk"
-                sha256 = "2cf4d6dd2cabccbc74aa6aba2a48e60aad85b1a31e3d740e6ca0b2fa0060b06a"
+                sha256 = "559156238dd3e148c84c88c3a62a7594b874f68793208994e1b02e77a9d9abf9"
             }
         }
 
@@ -203,7 +203,7 @@ function Get-RtkAssetInfo {
             plugin_target = "aarch64-apple-darwin"
             archive_ext = ".tar.gz"
             binary_name = "rtk"
-            sha256 = "4a4d9d09656ff29423336aa506e680afc3f7b6dafe84f0194a1c9a523a3c80e1"
+            sha256 = "1623590dd8d65374f61589c599c764c08ba9ce993ebe6b601312a89a3c874558"
         }
     }
 

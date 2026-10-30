@@ -106,6 +106,51 @@
           "sha256": "7e12e5df4bae12cb21581ba157ced20e1986a0508dd10d0e8a4ab9a4cf94e85c"
         }
       ]
+    },
+    "rtk": {
+      "repository": "rtk-ai/rtk",
+      "tag_name": "v1.1.0",
+      "targets": {
+        "x86_64-pc-windows-msvc": "rtk-oss-x86_64-pc-windows-msvc.zip",
+        "x86_64-unknown-linux-gnu": "rtk-oss-x86_64-unknown-linux-musl.tar.gz",
+        "aarch64-unknown-linux-gnu": "rtk-oss-aarch64-unknown-linux-gnu.tar.gz",
+        "x86_64-apple-darwin": "rtk-oss-x86_64-apple-darwin.tar.gz",
+        "aarch64-apple-darwin": "rtk-oss-aarch64-apple-darwin.tar.gz"
+      },
+      "assets": [
+        {
+          "name": "rtk-oss-aarch64-apple-darwin.tar.gz",
+          "digest": "sha256:1623590dd8d65374f61589c599c764c08ba9ce993ebe6b601312a89a3c874558",
+          "browser_download_url": "https://github.com/rtk-ai/rtk/releases/download/v1.1.0/rtk-oss-aarch64-apple-darwin.tar.gz"
+        },
+        {
+          "name": "rtk-oss-aarch64-unknown-linux-gnu.tar.gz",
+          "digest": "sha256:57a4fac13d18da77f0577ea8b68def7934b934bf76d0a6e161f0bfd06b1e1078",
+          "browser_download_url": "https://github.com/rtk-ai/rtk/releases/download/v1.1.0/rtk-oss-aarch64-unknown-linux-gnu.tar.gz"
+        },
+        {
+          "name": "rtk-oss-x86_64-apple-darwin.tar.gz",
+          "digest": "sha256:559156238dd3e148c84c88c3a62a7594b874f68793208994e1b02e77a9d9abf9",
+          "browser_download_url": "https://github.com/rtk-ai/rtk/releases/download/v1.1.0/rtk-oss-x86_64-apple-darwin.tar.gz"
+        },
+        {
+          "name": "rtk-oss-x86_64-pc-windows-msvc.zip",
+          "digest": "sha256:9b076379be9d86011ca3f3a0264d0be4851da5535453a47f67fa46b4e893fbb2",
+          "browser_download_url": "https://github.com/rtk-ai/rtk/releases/download/v1.1.0/rtk-oss-x86_64-pc-windows-msvc.zip"
+        },
+        {
+          "name": "rtk-oss-x86_64-unknown-linux-musl.tar.gz",
+          "digest": "sha256:4dec94a64035e08189ae82fd5408fe4ae9ae27a665fc07e3e3ec3c4c2d8e8a3e",
+          "browser_download_url": "https://github.com/rtk-ai/rtk/releases/download/v1.1.0/rtk-oss-x86_64-unknown-linux-musl.tar.gz"
+        }
+      ],
+      "licenses": [
+        {
+          "name": "LICENSE",
+          "url": "https://raw.githubusercontent.com/rtk-ai/rtk/v1.1.0/LICENSE",
+          "sha256": "33f694a31d9f9df3e292a9413a3cdb0113fa72698e2c719f657ff6b53165dcc4"
+        }
+      ]
     }
   },
   "protoc": {

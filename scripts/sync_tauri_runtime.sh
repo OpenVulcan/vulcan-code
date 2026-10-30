@@ -98,8 +98,8 @@ OutputSystemPromptSkillsDir="$OutputResourcesDir/prompt-skills/system"
 # OutputLuaRuntimeDir 保存应用持有的 LuaSkills 运行时根目录。
 OutputLuaRuntimeDir="$OutputRootDir/lua_runtime"
 
-# OutputBundledToolsDir is the runtime-owned sg and rg distribution root.
-# OutputBundledToolsDir 是运行时持有的 sg 与 rg 发行根目录。
+# OutputBundledToolsDir is the runtime-owned sg, rg, and rtk distribution root.
+# OutputBundledToolsDir 是运行时持有的 sg、rg 与 rtk 发行根目录。
 OutputBundledToolsDir="$OutputRootDir/tools"
 
 # LegacyManagedRuntimeDistributionDir is the obsolete LuaSkills-private Python/Node location.
@@ -183,9 +183,12 @@ copy_directory_contents "$SourceSystemPromptSkillsDir" "$OutputSystemPromptSkill
 echo "==> Syncing LuaSkills runtime payload..."
 copy_directory_contents "$SourceLuaRuntimeDir" "$OutputLuaRuntimeDir" 0
 
+# BundledToolNames are the tools the build-input lock declares for this host.
+# BundledToolNames 是构建输入锁文件为当前宿主声明的工具。
+BundledToolNames=$(node "$ProjectDir/scripts/install-locked-tools.mjs" bundled-tool-ids)
 # BundledToolName iterates the exact commands required by the runtime PATH contract.
 # BundledToolName 遍历运行时 PATH 契约要求的精确命令。
-for BundledToolName in sg rg; do
+for BundledToolName in $BundledToolNames; do
     # SourceBundledToolBinary is the exact verified dependency required before synchronization.
     # SourceBundledToolBinary 是同步前必需的精确已校验依赖。
     SourceBundledToolBinary="$SourceBundledToolsDir/bin/$BundledToolName$BundledToolBinarySuffix"
@@ -194,7 +197,7 @@ for BundledToolName in sg rg; do
         exit 1
     fi
 done
-echo "==> Syncing bundled sg and rg tools..."
+echo "==> Syncing bundled tools ($BundledToolNames)..."
 copy_directory_contents "$SourceBundledToolsDir" "$OutputBundledToolsDir" 1
 
 # SourceJudgeRuntimeDir is the lock-verified judge runtime of this host, or empty when the lock declares none.

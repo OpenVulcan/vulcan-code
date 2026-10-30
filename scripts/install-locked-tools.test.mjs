@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { JUDGE_RUNTIME_MANIFEST, resolveToolPlatform, verifyJudgeRuntime } from './install-locked-tools.mjs';
+import { JUDGE_RUNTIME_MANIFEST, bundledToolIds, resolveToolPlatform, verifyJudgeRuntime } from './install-locked-tools.mjs';
 
 // Resolve every declared host against the actual lock; missing assets cannot silently choose another host.
 // 将每个声明的宿主与真实锁文件匹配；缺失资产不能静默选择其他宿主。
@@ -25,6 +25,28 @@ test('all supported hosts have exactly one locked tool archive', async () => {
   assert.equal(lock.nextest.assets.length, 1);
   assert.equal(lock.nextest.assets[0].name, `cargo-nextest-${lock.nextest.version}-x86_64-pc-windows-msvc.zip`);
   assert.match(lock.nextest.assets[0].sha256, /^[a-f0-9]{64}$/);
+});
+
+// RTK ships only where its lock names an archive, and each named archive is one locked asset.
+// RTK 仅在锁文件为其命名归档的宿主随附，且每个命名归档恰好对应一个锁定资产。
+test('rtk targets resolve to exactly one locked archive and join the bundled set only there', async () => {
+  // lock supplies the declared targets rather than a duplicated host list.
+  // lock 提供已声明目标，避免重复宿主清单。
+  const lock = JSON.parse(await readFile(new URL('./build-inputs.lock.json', import.meta.url), 'utf8'));
+  const supported = new Set(['win32', 'linux', 'darwin'].flatMap(os => ['x64', 'arm64'].map(cpu => resolveToolPlatform(os, cpu).target)));
+  for (const [target, archive] of Object.entries(lock.tools.rtk.targets)) {
+    assert.ok(supported.has(target), `undeclared host target ${target}`);
+    const matches = lock.tools.rtk.assets.filter(asset => asset.name === archive);
+    assert.equal(matches.length, 1, `${target} archive ${archive}`);
+    assert.match(matches[0].digest, /^sha256:[a-f0-9]{64}$/);
+    assert.ok(matches[0].browser_download_url.startsWith('https://'));
+  }
+  assert.ok(lock.tools.rtk.licenses.length > 0);
+  for (const target of supported) {
+    const ids = bundledToolIds(lock, target);
+    assert.deepEqual(ids.slice(0, 2), ['sg', 'rg']);
+    assert.equal(ids.includes('rtk'), Boolean(lock.tools.rtk.targets[target]), target);
+  }
 });
 
 // Every declared judge runtime installs both of its libraries from pinned HTTPS archives.
