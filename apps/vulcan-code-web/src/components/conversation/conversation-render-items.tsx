@@ -25,7 +25,7 @@ import {
   type ToolDetailPayload,
 } from "@/components/conversation/conversation-detail";
 import { ConversationBlocksView } from "@/components/conversation/conversation-block-renderer";
-import { isMergeableToolBlock } from "@/components/conversation/conversation-classifiers";
+import { isContextCompactionBlock, isMergeableToolBlock } from "@/components/conversation/conversation-classifiers";
 import type { ToolExecutionConversationBlock } from "@/components/conversation/conversation-tool-execution-types";
 import { fixedV1ToolEvent } from "@/components/conversation/tool-presentations/presentation-value-readers";
 import { ToolSequenceHead, toolSequenceEntry } from "@/conversation/tools/tool-sequence";
@@ -185,7 +185,10 @@ export function groupVisibleProcessBodyEntries(
       pendingToolItems.push(item);
       continue;
     }
-    flushPendingTools(isAssistantMarkdownRenderItem(item));
+    // A context-compaction card also closes the run: compaction starts only after the preceding model call
+    // ended, so no later tool can join these rows.
+    // 上下文压缩卡同样结束序列：压缩只在前一次模型调用结束后开始，之后的工具不会再并入这些记录。
+    flushPendingTools(isAssistantMarkdownRenderItem(item) || item.blocks.some(isContextCompactionBlock));
     entries.push({ kind: "item", item });
   }
   flushPendingTools(finalAssistantFollows);

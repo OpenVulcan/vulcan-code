@@ -160,3 +160,15 @@ it("keeps tools unbounded through repeated reasoning and folds once assistant te
   await render([row("one"), thinking, row("two"), answer, row("three")]);
   expect(host.querySelector(".vk-tool-seq")?.getAttribute("data-expanded")).toBe("true");
 });
+
+it("closes and folds the tools before a context-compaction card", () => {
+  // compaction is the notice row the transcript classifier marks as a compaction section.
+  // compaction 是转录分类器标记为压缩分段的通知行。
+  const compaction: ConversationRenderItem = { id: "compaction", role: "system", sourceMessages: [], blocks: [
+    { id: "compaction-block", kind: "notice", title: "", body: "", summary: "", compactionSectionId: "s", compactionRole: "end", compactionState: "completed" },
+  ] };
+  const [tools, card, after] = groupVisibleProcessBodyEntries("process", [row("one"), row("two"), compaction, row("three")], true);
+  expect(tools).toMatchObject({ kind: "tool-sequence", active: false });
+  expect(card).toMatchObject({ kind: "item", item: { id: "compaction" } });
+  expect(after).toMatchObject({ kind: "tool-sequence", active: true });
+});
