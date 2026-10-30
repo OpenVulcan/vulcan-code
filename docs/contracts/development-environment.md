@@ -43,11 +43,26 @@ Vite 仅在 Debug 开发期间使用 `17601`，不参与数据库端口选择。
 
 GNU Make 在 Unix 下通过 `make.sh` 分发构建及运行；直接执行 `pwsh -File make.ps1 build/run/service/br/bt/core-build/core-restart` 时也显式委托同一 Unix 入口，不会执行面向 Windows 的 Core 生命周期脚本。依赖初始化中原本共用的 PowerShell 安装器继续保留。
 
+### Debug 与 Release 的发行目录
+
+Debug 与 Release 各自拥有独立的同级发行目录，使两个版本可以同时运行，并允许用已运行的 Release 版调试正在开发的 Debug 版：
+
+| 模式 | 发行目录 | 构建并运行 | 仅同步资源 |
+| --- | --- | --- | --- |
+| Debug | `output/` | `make br` | `make sync` |
+| Release | `output-release/` | `make br release` | `make sync release` |
+
+目录名只在 `scripts/desktop-runtime.mjs` 中定义一次，其余入口（构建、同步、运行、发布、打包、TUI）一律通过 `desktop-runtime.mjs root <debug|release>` 取得，不自行拼接路径。未知模式直接报错，不回退到 Debug 目录。`VULCAN_DESKTOP_DISTRIBUTION_ROOT` 仍可把发行目录整体改到 `target/` 之内，用于发布验收，此时它覆盖两个模式的默认目录。
+
+发布前的进程释放（`Prepare-DistributionPublication`）只停止可执行文件位于本模式发行目录内的进程；`output-release/` 与 `output/` 互为同级而非嵌套，`make br` 不会停止 Release 版，`make br release` 也不会停止 Debug 版。两个版本的用户数据根与默认端口本来就按 `cfg!(debug_assertions)` 分开，因此同时运行不会争用同一份数据或端口。
+
+`make init-system` 为两个发行目录分别准备受管 Node/pnpm。`make clean` 与 `make clean release` 只清理 Cargo 编译产物，两个发行目录都不触碰。`make core-build`、`make core-restart` 只针对 Debug 发行目录。`output-release/` 与其 `.previous`、`.rejected-*` 备份同样由 `.gitignore` 忽略，且与 `output/` 一样不得手工编辑。
+
 ### 清理编译产物
 
-`make clean` 仅执行 `cargo clean --profile dev`，清理 Debug 编译产物；`make clean release` 仅执行 `cargo clean --profile release`，清理 Release 编译产物。`release` 在此是模式参数，不会触发构建。Windows、Linux、macOS 共用相同语义；目标目录与目标三元组由 Cargo 根据环境变量及 `.cargo/config.toml` 解析，不手工猜测目录。清理不依赖 Node、pnpm 或下载依赖，不触碰 `output/`、`third_party/`、用户数据及另一模式的编译产物；它不会停止运行中的应用，文件被占用时保留 Cargo 的错误并退出。
+`make clean` 仅执行 `cargo clean --profile dev`，清理 Debug 编译产物；`make clean release` 仅执行 `cargo clean --profile release`，清理 Release 编译产物。`release` 在此是模式参数，不会触发构建。Windows、Linux、macOS 共用相同语义；目标目录与目标三元组由 Cargo 根据环境变量及 `.cargo/config.toml` 解析，不手工猜测目录。清理不依赖 Node、pnpm 或下载依赖，不触碰 `output/`、`output-release/`、`third_party/`、用户数据及另一模式的编译产物；它不会停止运行中的应用，文件被占用时保留 Cargo 的错误并退出。
 
-下载的构建输入统一保存在 `third_party/`，具体目录由 `scripts/build-input-paths.mjs` 定义。`output/` 仅保存运行与分发副本，可以重新同步及打包恢复。直接运行无参数 `cargo clean` 仍会清空整个 Cargo 目标目录，但不会删除这些持久输入。旧的 `target/browser-runtime/`、`target/build-input-cache/` 与 `target/electron-runtime-cache/` 不再作为下载源；切换入口前可显式复制到对应的新目录并核对完整性，脚本不会探测或静默回退到旧路径。
+下载的构建输入统一保存在 `third_party/`，具体目录由 `scripts/build-input-paths.mjs` 定义。`output/` 与 `output-release/` 仅保存运行与分发副本，可以重新同步及打包恢复。直接运行无参数 `cargo clean` 仍会清空整个 Cargo 目标目录，但不会删除这些持久输入。旧的 `target/browser-runtime/`、`target/build-input-cache/` 与 `target/electron-runtime-cache/` 不再作为下载源；切换入口前可显式复制到对应的新目录并核对完整性，脚本不会探测或静默回退到旧路径。
 
 ## Windows Debug 下只更新 Core
 
@@ -60,7 +75,7 @@ GNU Make 在 Unix 下通过 `make.sh` 分发构建及运行；直接执行 `pwsh
 
 “Vulcan 浏览器”保留插件设置入口，作为随包交付的内置组件。官方 MCP 固定为 `0.0.82`，其 Playwright 与 playwright-core 固定为 `1.64.0-alpha-1789764292000`；版本组合在 `scripts/browser-runtime.mjs` 中校验，不使用 `latest`。升级必须同时更新锁文件并重新验证 MCP 导航、快照、点击、截图及授权撤销。
 
-先执行 `make init-system` 准备受管 Node `24.18.0` 和 pnpm `11.11.0`，再执行 `make sync`。这两个入口都会通过 `scripts/managed-node.mjs` 在 `third_party/managed-node/` 补齐缺失的受管 Node/pnpm，使用官方精确版本地址并校验 SHA-256/SHA-512，再复制到 `output/dependencies/runtimes/node/`；删除发行副本后可从持久输入离线恢复，不依赖已有 `output/browser` 或正在运行的 Core。同步阶段按锁文件准备插件依赖，并把对应 Chromium 下载到仓库 `third_party/browser-runtime/<Playwright版本>/<系统-架构>/`；`make build` 仅使用已准备、已同步的输入，复制 Chromium 并生成 `output/browser`，缺失时失败，不在运行期间下载。Electron 构建下载缓存单独保存在 `third_party/electron-runtime-cache/`，不与 Chromium 混用。系统 Node/pnpm 仍属于下文规定的开发机前置工具。
+先执行 `make init-system` 准备受管 Node `24.18.0` 和 pnpm `11.11.0`，再执行 `make sync`。这两个入口都会通过 `scripts/managed-node.mjs` 在 `third_party/managed-node/` 补齐缺失的受管 Node/pnpm，使用官方精确版本地址并校验 SHA-256/SHA-512，再复制到对应发行目录的 `dependencies/runtimes/node/`（Debug 为 `output/`，Release 为 `output-release/`，`make sync release` 同步后者）；删除发行副本后可从持久输入离线恢复，不依赖已有 `output/browser` 或正在运行的 Core。同步阶段按锁文件准备插件依赖，并把对应 Chromium 下载到仓库 `third_party/browser-runtime/<Playwright版本>/<系统-架构>/`；`make build` 仅使用已准备、已同步的输入，复制 Chromium 并生成 `output/browser`，缺失时失败，不在运行期间下载。Electron 构建下载缓存单独保存在 `third_party/electron-runtime-cache/`，不与 Chromium 混用。系统 Node/pnpm 仍属于下文规定的开发机前置工具。
 
 发行物中 `desktop/runtime/` 仅运行 Electron GUI；`browser/runtime/` 保存 Core 浏览器宿主及驱动，`browser/chromium/` 保存独立 Chromium，宿主由 `dependencies/runtimes/node/` 的受管 Node 启动。运行布局架构为 3，`browserHostExecutable` 与 `desktopExecutable` 分别声明两个程序；`tuiExecutable` 声明与服务同目录发布的终端客户端 `bin/vulcan-tui`，Windows 托盘的“打开终端客户端”只按该条目启动。旧版用户目录下的浏览器下载不会覆盖随包版本，也不会在启动时自动删除。
 
@@ -142,7 +157,7 @@ make deps-rust-tools
 
 ### 持续集成中的精简准备
 
-开发机继续使用 `make init-system`。GitHub Actions 的 Rust 作业运行在已有编译器的 Windows 镜像中，只准备当前检查实际使用的依赖：由 `install-locked-tools.mjs` 安装 protoc、nextest 与内置 sg/rg，执行 `make.ps1 deps lua` 和 `managed-node.mjs output`，在运行时回归前显式 `make.ps1 sync`。不为这些测试编译安装未使用的 hakari、deny、about 或 RTK。
+开发机继续使用 `make init-system`。GitHub Actions 的 Rust 作业运行在已有编译器的 Windows 镜像中，只准备当前检查实际使用的依赖：由 `install-locked-tools.mjs` 安装 protoc、nextest 与内置 sg/rg，执行 `make.ps1 deps lua` 和 `managed-node.mjs output`（该作业只验证 Debug 发行目录），在运行时回归前显式 `make.ps1 sync`。不为这些测试编译安装未使用的 hakari、deny、about 或 RTK。
 
 nextest 的 CI 二进制仅支持该作业使用的 Windows x64，安装到忽略目录 `target/ci-tools/bin/`，不覆盖开发机全局 Cargo 工具。唯一版本与归档 SHA-256 来源为 `scripts/build-inputs.lock.json`；下载器检查缓存摘要，安装器检查实际版本，不使用 latest 或未校验的归档。开发机其他平台仍使用原初始化入口。分类与缓存规则见 [仓库检查](repository-quality-gates.md)。
 
@@ -238,7 +253,7 @@ scripts/build-inputs.lock.json 是内建 sg、rg 和 protoc 的版本、各平�
 
 ## 类 Unix 完整发行目录切换
 
-全部平台的分发 Rust 包与二进制名称以 `scripts/shipped-rust-packages.json` 为唯一清单。PowerShell 的构建及第三方声明入口、Unix 的 Cargo 包选择与发布校验共用该清单。Unix 必须把 Core、终端宿主、判定宿主与 TUI 的本轮成功制品全部带入暂存目录；缺失或重复制品直接失败，不能借用旧 `output/bin` 文件补齐。`node --test scripts/unix-distribution.test.mjs scripts/directory-publication.test.mjs` 在隔离目录验证 debug/release 完整发布、旧 TUI 掩盖缺失制品的拒绝，以及切换失败时保留旧发行物；该测试不替代真实 Rust、Electron 和应用运行验收。
+全部平台的分发 Rust 包与二进制名称以 `scripts/shipped-rust-packages.json` 为唯一清单。PowerShell 的构建及第三方声明入口、Unix 的 Cargo 包选择与发布校验共用该清单。Unix 必须把 Core、终端宿主、判定宿主与 TUI 的本轮成功制品全部带入暂存目录；缺失或重复制品直接失败，不能借用旧发行目录的 `bin` 文件补齐，且每种模式只写入自己的发行目录，另一模式目录中的文件必须保持不变。`node --test scripts/unix-distribution.test.mjs scripts/directory-publication.test.mjs` 在隔离目录验证 debug/release 完整发布、旧 TUI 掩盖缺失制品的拒绝，以及切换失败时保留旧发行物；该测试不替代真实 Rust、Electron 和应用运行验收。
 
 Unix 构建在执行 Cargo 前，调用锁定 Electron npm 包自带的 `install.js` 核验运行时版本、路径标记及可执行文件。`node_modules` 存在不表示 Electron 运行时已下载；缺失时仍由官方安装器按该 npm 包内置校验和准备运行时，下载或解压失败立即终止，不跳过验证、不使用其他版本。网络受限时可以经其他机器取得同版本官方归档，完整摘要核验后填充该安装器的缓存，再由原安装器完成解压；不手写 `path.txt` 冒充安装成功。
 

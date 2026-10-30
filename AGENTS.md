@@ -24,8 +24,9 @@
 7. **历史状态与实时状态分层。** 一次性结果可以依赖历史记录；长生命周期任务、命令和异步 Provider
    工作必须保留按稳定 ID 查询实时状态的路径。
 8. **源码资源与运行产物分离。** 只修改 `crates/vulcan-runtime-assets/resources/` 下的权威资源，不直接
-   编辑 `output/`。资源、配置、技能或运行时依赖变化后显式执行 `make.ps1 sync`；`build`、`br` 和
-   `release` 不负责同步。
+   编辑 `output/` 或 `output-release/`（Debug 与 Release 各自的发行目录，互不停止、可同时运行）。
+   资源、配置、技能或运行时依赖变化后显式执行 `make.ps1 sync`（Release 用 `make.ps1 sync release`）；
+   `build`、`br` 和 `release` 不负责同步。
 9. **版本以实时依赖为准。** 任何库、协议或运行时版本先读取当前 `Cargo.toml`、`Cargo.lock`、Schema
    和生成配置，不从本文档标题、日期或历史记录推断。
 10. **按需文档是条件性强制要求。** 任务命中下列领域时，必须先阅读对应链接，再开始修改。
