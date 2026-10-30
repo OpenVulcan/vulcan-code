@@ -346,6 +346,32 @@ fn extract_compaction_model_summary_rejects_tagged_output_without_summary() {
     assert_eq!(extract_compaction_model_summary(output), None);
 }
 
+/// Verifies the live preview hides protocol tags and switches to the summary once it starts.
+/// 验证实时预览隐藏协议标签，并在摘要开始后切换为摘要正文。
+#[test]
+fn preview_compaction_model_output_follows_the_streaming_protocol() {
+    assert_eq!(
+        preview_compaction_model_output("<analysis>\ndraft line"),
+        "draft line"
+    );
+    assert_eq!(
+        preview_compaction_model_output(
+            "<analysis>\ndraft\n</analysis>\n<summary>\nNext Step:\n- partial"
+        ),
+        "Next Step:\n- partial"
+    );
+    assert_eq!(
+        preview_compaction_model_output(
+            "<analysis>a</analysis>\n<summary>\nDone\n</summary>\ntrailing"
+        ),
+        "Done"
+    );
+    assert_eq!(
+        preview_compaction_model_output("untagged summary"),
+        "untagged summary"
+    );
+}
+
 /// Verifies legacy continuation prompts still expose only their summary payload.
 /// 验证旧版续写提示词仍然只会暴露其中的摘要正文。
 #[test]

@@ -193,6 +193,20 @@ export interface TransientReasoningStatusChangedDelta {
   status?: TransientReasoningStatus | null;
 }
 
+// ContextCompactionPreviewChangedDelta replaces or clears the live summary preview of one compaction API.
+// ContextCompactionPreviewChangedDelta 替换或清除单次压缩 API 的实时摘要预览。
+export interface ContextCompactionPreviewChangedDelta {
+  // Stable conversation identifier owning the compaction.
+  // 拥有该压缩的稳定会话标识。
+  conversationId: string;
+  // Durable V1 API call identity of the compaction request.
+  // 压缩请求的持久 V1 API 调用身份。
+  apiCallId: number;
+  // Latest cumulative preview text, or null once the durable summary owns the card.
+  // 最新累计预览文本；持久摘要接管卡片后为 null。
+  text?: string | null;
+}
+
 // UpdateConversationRunPhaseDelta updates a conversation phase without transcript rows.
 // UpdateConversationRunPhaseDelta 在不携带转录行的情况下更新会话阶段。
 export interface UpdateConversationRunPhaseDelta {
@@ -613,6 +627,10 @@ export type WorkbenchDelta =
   | {
     kind: "transientReasoningStatusChanged";
     payload: TransientReasoningStatusChangedDelta;
+  }
+  | {
+    kind: "contextCompactionPreviewChanged";
+    payload: ContextCompactionPreviewChangedDelta;
   };
 
 // AgentSkillsCatalogChangedDelta replaces only the Agent Skills workbench domain.

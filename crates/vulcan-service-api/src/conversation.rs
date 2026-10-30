@@ -371,6 +371,9 @@ pub enum WorkbenchDelta {
     /// Ephemeral replace-in-place reasoning status for one active conversation.
     /// 单个活动会话使用的瞬态原地替换式推理状态。
     TransientReasoningStatusChanged(TransientReasoningStatusChangedDelta),
+    /// Ephemeral replace-in-place summary preview for one running context compaction.
+    /// 单次运行中上下文压缩使用的瞬态原地替换式摘要预览。
+    ContextCompactionPreviewChanged(ContextCompactionPreviewChangedDelta),
 }
 
 /// Classifies the visible form of one transient reasoning status.
@@ -428,6 +431,22 @@ pub struct TransientReasoningStatusChangedDelta {
     /// Latest transient status, or `None` to clear it immediately.
     /// 最新瞬态状态；为 `None` 时立即清除。
     pub status: Option<TransientReasoningStatusSnapshot>,
+}
+
+/// Replaces or clears the live summary preview of one compaction API call.
+/// 替换或清除单次压缩 API 调用的实时摘要预览。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextCompactionPreviewChangedDelta {
+    /// Stable conversation identifier owning the compaction.
+    /// 拥有该压缩的稳定会话标识。
+    pub conversation_id: String,
+    /// Durable V1 API call identity of the compaction request.
+    /// 压缩请求的持久 V1 API 调用身份。
+    pub api_call_id: u64,
+    /// Latest cumulative preview text, or `None` once the durable summary owns the card.
+    /// 最新累计预览文本；持久摘要接管卡片后为 `None`。
+    pub text: Option<String>,
 }
 
 /// Replaces the Agent Skills domain without resending the full workbench snapshot.
@@ -1109,6 +1128,37 @@ mod tests {
                             }],
                             "reasoningTokens": 321
                         }
+                    }
+                }
+            })
+        );
+    }
+
+    /// Verifies the compaction preview uses the camel-case replace-and-clear Web contract.
+    /// 验证压缩预览使用驼峰式替换与清除 Web 契约。
+    #[test]
+    fn context_compaction_preview_serializes_for_the_live_store() {
+        let envelope = WorkbenchDeltaEnvelope {
+            generation: 11,
+            delta: WorkbenchDelta::ContextCompactionPreviewChanged(
+                ContextCompactionPreviewChangedDelta {
+                    conversation_id: String::from("conversation"),
+                    api_call_id: 4,
+                    text: Some(String::from("Next Step:")),
+                },
+            ),
+        };
+
+        assert_eq!(
+            serde_json::to_value(envelope).expect("compaction preview should serialize"),
+            serde_json::json!({
+                "generation": 11,
+                "delta": {
+                    "kind": "contextCompactionPreviewChanged",
+                    "payload": {
+                        "conversationId": "conversation",
+                        "apiCallId": 4,
+                        "text": "Next Step:"
                     }
                 }
             })

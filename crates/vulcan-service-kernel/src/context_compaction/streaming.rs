@@ -5,8 +5,9 @@ use super::*;
 use crate::{
     ActiveStreamTaskRegistrationMode, ProviderTelemetryHookGuard, ProviderV1FinishedDurability,
     ProviderV1SinkError, ProviderV1StreamSink, ProviderV1TerminalOutcome,
-    ProviderV1ToolBoundaryOutcome, Uuid, emit_transient_reasoning_status,
-    provider_v1_stream_sink_for_session, spawn_registered_active_stream_task_with_mode,
+    ProviderV1ToolBoundaryOutcome, Uuid, emit_context_compaction_preview,
+    emit_transient_reasoning_status, provider_v1_stream_sink_for_session,
+    spawn_registered_active_stream_task_with_mode,
 };
 use vulcan_agent_runtime::agent_runtime::provider_request_telemetry::ProviderRequestTelemetryEventKind;
 use vulcan_agent_runtime::agent_runtime::provider_v1_bridge::ProviderV1LifecycleFacts;
@@ -15,7 +16,9 @@ use vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::{
     acknowledge_tool_batch_projection_barrier_from_event,
     reject_runtime_event_projection_barrier_from_event_with_reason,
 };
-use vulcan_context_compaction::extract_compaction_model_summary;
+use vulcan_context_compaction::{
+    extract_compaction_model_summary, preview_compaction_model_output,
+};
 
 /// Prompt-compaction result paired with the exact durable V1 semantic and API receipts.
 /// 提示词压缩结果及其精确可靠 V1 语义与 API 回执。
@@ -78,6 +81,9 @@ pub(crate) async fn stream_webui_context_compaction_execution(
     // rawAssistantOutput retains the exact wire text until terminal normalization.
     // rawAssistantOutput 保留精确线缆文本，直到终态规范化。
     let mut raw_assistant_output = String::new();
+    // previewApiCallId is the compaction API whose live preview must be cleared after the attempt.
+    // previewApiCallId 是本次尝试结束后必须清除实时预览的压缩 API。
+    let mut preview_api_call_id: Option<u64> = None;
     // terminalResult retains the Agent runtime result without becoming a persistence authority.
     // terminalResult 保留 Agent 运行时结果，但不成为持久化权威。
     let mut terminal_result = None;
@@ -130,6 +136,7 @@ pub(crate) async fn stream_webui_context_compaction_execution(
                     projection_error = Some(error);
                     break;
                 }
+                clear_context_compaction_preview(app, state, session_id, &mut preview_api_call_id);
                 raw_assistant_output.clear();
             }
             PromptCompactionStreamEvent::PreparedSource { source, mode } => {
@@ -137,6 +144,7 @@ pub(crate) async fn stream_webui_context_compaction_execution(
                     projection_error = Some(error);
                     break;
                 }
+                clear_context_compaction_preview(app, state, session_id, &mut preview_api_call_id);
                 // A retry's durable summary must contain only that attempt's output.
                 // 重试的可靠摘要只能包含本次尝试的输出。
                 raw_assistant_output.clear();
@@ -157,6 +165,9 @@ pub(crate) async fn stream_webui_context_compaction_execution(
                 }
             }
             PromptCompactionStreamEvent::Stream(event) => {
+                // outputDelta marks events that grow the live summary preview.
+                // outputDelta 标记会增长实时摘要预览的事件。
+                let output_delta = matches!(event, ExecutionStreamEvent::OutputDelta { .. });
                 if let Err(error) = apply_context_compaction_stream_event(
                     app,
                     state,
@@ -177,6 +188,16 @@ pub(crate) async fn stream_webui_context_compaction_execution(
                     projection_error = Some(error);
                     break;
                 }
+                if output_delta {
+                    publish_context_compaction_preview(
+                        app,
+                        state,
+                        session_id,
+                        &provider_v1_sink,
+                        &raw_assistant_output,
+                        &mut preview_api_call_id,
+                    );
+                }
             }
             PromptCompactionStreamEvent::Finished(result) => {
                 terminal_result = Some(result.and_then(|execution| {
@@ -192,6 +213,9 @@ pub(crate) async fn stream_webui_context_compaction_execution(
             }
         }
     }
+    // The durable summary or terminal state owns the card from here on.
+    // 从这里开始由持久摘要或终态接管卡片。
+    clear_context_compaction_preview(app, state, session_id, &mut preview_api_call_id);
     if let Some(event) = provider_telemetry_guard.take_cancelled_event() {
         provider_telemetry_guard.forward(event);
         if let Err(error) =
@@ -223,6 +247,52 @@ pub(crate) async fn stream_webui_context_compaction_execution(
         retained_from_seq,
         durability,
     })
+}
+
+/// Publishes the display-only summary preview of the active compaction API.
+/// 发布活动压缩 API 的仅显示摘要预览。
+/// `raw_assistant_output` is the cumulative output of this attempt; `preview_api_call_id` records the
+/// API whose preview must be cleared later. Preview failures are logged and never fail the compaction.
+/// `raw_assistant_output` 是本次尝试的累计输出；`preview_api_call_id` 记录稍后需要清除预览的 API。
+/// 预览失败只记录日志，绝不导致压缩失败。
+fn publish_context_compaction_preview(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    provider_v1_sink: &ProviderV1StreamSink,
+    raw_assistant_output: &str,
+    preview_api_call_id: &mut Option<u64>,
+) {
+    let api_call_id = match provider_v1_sink.request_preview_api_id() {
+        Ok(api_call_id) => api_call_id,
+        Err(error) => {
+            tracing::warn!("[webui-service] context compaction preview has no active API: {error}");
+            return;
+        }
+    };
+    *preview_api_call_id = Some(api_call_id);
+    let preview = preview_compaction_model_output(raw_assistant_output);
+    if let Err(error) =
+        emit_context_compaction_preview(app, state, session_id, api_call_id, Some(preview))
+    {
+        tracing::warn!("[webui-service] context compaction preview emit failed: {error}");
+    }
+}
+
+/// Clears the live summary preview recorded in `preview_api_call_id`, if any.
+/// 清除 `preview_api_call_id` 中记录的实时摘要预览（如有）。
+fn clear_context_compaction_preview(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    preview_api_call_id: &mut Option<u64>,
+) {
+    let Some(api_call_id) = preview_api_call_id.take() else {
+        return;
+    };
+    if let Err(error) = emit_context_compaction_preview(app, state, session_id, api_call_id, None) {
+        tracing::warn!("[webui-service] context compaction preview clear failed: {error}");
+    }
 }
 
 /// Persists native `checkpoint` and `event` through the owning sink, then acknowledges `completion`.

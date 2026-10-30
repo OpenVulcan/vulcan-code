@@ -768,6 +768,10 @@ function applyWorkbenchDeltaPayload(
       // Transient reasoning lives only in ConversationLiveStreamStore and never enters snapshots.
       // 瞬态推理仅存在于 ConversationLiveStreamStore，绝不进入快照。
       return workbench;
+    case "contextCompactionPreviewChanged":
+      // The compaction preview lives only in ConversationLiveStreamStore and never enters snapshots.
+      // 压缩预览仅存在于 ConversationLiveStreamStore，绝不进入快照。
+      return workbench;
   }
 }
 

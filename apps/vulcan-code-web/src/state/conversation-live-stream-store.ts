@@ -28,6 +28,16 @@ export function transientReasoningStatusKey(conversationId: string): string {
   return `transient-reasoning-status:${conversationId}`;
 }
 
+// contextCompactionPreviewKey builds the subscription identity for one compaction card preview.
+// contextCompactionPreviewKey 构建单张压缩卡预览的订阅身份。
+// Parameters: conversationId owns the compaction and apiCallId is its durable V1 API identity.
+// 参数：conversationId 是压缩所属会话，apiCallId 是其持久 V1 API 身份。
+// Returns: one namespace-isolated store subscription key.
+// 返回值：一个命名空间隔离的存储订阅键。
+export function contextCompactionPreviewKey(conversationId: string, apiCallId: number): string {
+  return `context-compaction-preview:${conversationId}:${apiCallId}`;
+}
+
 // toolRequestProgressKey builds the subscription identity for one request-stream card.
 // toolRequestProgressKey 构建单个请求流卡片的订阅身份。
 // Parameters: conversationId owns the request and requestStreamId is the exact coordinator identity.
@@ -47,6 +57,10 @@ export class ConversationLiveStreamStore {
   // transientReasoningStatuses stores replace-in-place Provider progress outside the transcript.
   // transientReasoningStatuses 在转录之外保存原位替换的 Provider 进度。
   readonly #transientReasoningStatuses = new Map<string, TransientReasoningStatus>();
+
+  // contextCompactionPreviews stores the live summary text of running compaction APIs outside the transcript.
+  // contextCompactionPreviews 在转录之外保存运行中压缩 API 的实时摘要文本。
+  readonly #contextCompactionPreviews = new Map<string, string>();
 
   // toolRequestProgressSnapshots stores high-frequency argument formation outside retained events.
   // toolRequestProgressSnapshots 在持久化事件之外保存高频参数构造状态。
@@ -135,6 +149,18 @@ export class ConversationLiveStreamStore {
       this.#dirtyKeys.add(key);
       return true;
     }
+    if (envelope.delta.kind === "contextCompactionPreviewChanged") {
+      const { conversationId, apiCallId, text } = envelope.delta.payload;
+      const key = contextCompactionPreviewKey(conversationId, apiCallId);
+      if (typeof text === "string") {
+        if (this.#contextCompactionPreviews.get(key) === text) return false;
+        this.#contextCompactionPreviews.set(key, text);
+      } else if (!this.#contextCompactionPreviews.delete(key)) {
+        return false;
+      }
+      this.#dirtyKeys.add(key);
+      return true;
+    }
     return false;
   }
 
@@ -147,6 +173,10 @@ export class ConversationLiveStreamStore {
       this.#dirtyKeys.add(transientReasoningStatusKey(conversationId));
     }
     this.#transientReasoningStatuses.clear();
+    for (const key of this.#contextCompactionPreviews.keys()) {
+      this.#dirtyKeys.add(key);
+    }
+    this.#contextCompactionPreviews.clear();
     for (const key of this.#toolRequestProgressSnapshots.keys()) {
       this.#dirtyKeys.add(key);
     }
@@ -165,6 +195,16 @@ export class ConversationLiveStreamStore {
   // 返回值：当前状态；不存在时返回 null。
   getTransientReasoningStatus(conversationId: string): TransientReasoningStatus | null {
     return this.#transientReasoningStatuses.get(conversationId) ?? null;
+  }
+
+  // getContextCompactionPreview returns the live summary preview of one compaction API.
+  // getContextCompactionPreview 返回单次压缩 API 的实时摘要预览。
+  // Parameters: conversationId and apiCallId form the exact identity.
+  // 参数：conversationId 与 apiCallId 组成精确身份。
+  // Returns: the current preview text, or null when absent or cleared.
+  // 返回值：当前预览文本；不存在或已清除时返回 null。
+  getContextCompactionPreview(conversationId: string, apiCallId: number): string | null {
+    return this.#contextCompactionPreviews.get(contextCompactionPreviewKey(conversationId, apiCallId)) ?? null;
   }
 
   // getToolRequestProgress returns the stable high-frequency snapshot for one request stream.

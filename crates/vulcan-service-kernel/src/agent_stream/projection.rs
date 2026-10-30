@@ -128,6 +128,55 @@ pub(crate) fn emit_transient_reasoning_status(
     Ok(())
 }
 
+/// Emits one live compaction summary preview without mutating transcript or V1 state.
+/// 发送一条实时压缩摘要预览，且不修改转录或 V1 状态。
+///
+/// # Parameters
+/// 参数
+/// `app` emits the lightweight event, `state` owns generation ordering, `session_id` and
+/// `api_call_id` select the compaction card, and `text` replaces or clears its preview.
+/// `app` 发送轻量事件，`state` 持有代际顺序，`session_id` 与 `api_call_id` 选择压缩卡，
+/// `text` 替换或清除其预览。
+///
+/// # Returns
+/// 返回值
+/// Success after the ordered event is emitted, or an explicit lock failure.
+/// 有序事件发送后返回成功，否则返回明确的加锁失败。
+pub(crate) fn emit_context_compaction_preview(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    api_call_id: u64,
+    text: Option<String>,
+) -> Result<(), String> {
+    // event takes the next generation but leaves snapshot data untouched.
+    // event 占用下一个代际，但不修改快照数据。
+    let event = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        let generation = guard.workbench_generation;
+        guard.workbench.revision = generation;
+        WorkbenchDeltaEnvelope {
+            generation,
+            delta: WorkbenchDelta::ContextCompactionPreviewChanged(
+                ContextCompactionPreviewChangedDelta {
+                    conversation_id: session_id.to_string(),
+                    api_call_id,
+                    text,
+                },
+            ),
+        }
+    };
+    emit_service_event_with_trace(
+        app,
+        "workbench_context_compaction_preview_emit",
+        ServiceEvent::WorkbenchDelta(Box::new(event)),
+    );
+    Ok(())
+}
+
 /// Emits or clears one ephemeral tool-request progress snapshot under exact runtime authority.
 /// 在精确运行时权限下发送或清除单个瞬态工具请求进度快照。
 ///

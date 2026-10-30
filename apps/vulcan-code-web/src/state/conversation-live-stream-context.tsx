@@ -1,6 +1,7 @@
 import React from "react";
 import {
   ConversationLiveStreamStore,
+  contextCompactionPreviewKey,
   toolRequestProgressKey,
   toolRequestMembershipKey,
   transientReasoningStatusKey,
@@ -72,6 +73,29 @@ export function useConversationTransientReasoningStatus(
   const getSnapshot = React.useCallback(
     () => (conversationId ? store.getTransientReasoningStatus(conversationId) : null),
     [conversationId, store],
+  );
+  return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+// useConversationContextCompactionPreview subscribes one compaction card to its live summary preview.
+// useConversationContextCompactionPreview 让单张压缩卡订阅其实时摘要预览。
+// Parameters: conversationId and apiCallId identify the card; null for either disables the subscription.
+// 参数：conversationId 与 apiCallId 标识卡片；任一为 null 时禁用订阅。
+// Returns: the latest preview text, or null when absent or cleared.
+// 返回值：最新预览文本；不存在或已清除时返回 null。
+export function useConversationContextCompactionPreview(
+  conversationId: string | null,
+  apiCallId: number | null,
+): string | null {
+  const store = useConversationLiveStreamStore();
+  const key = conversationId && apiCallId !== null ? contextCompactionPreviewKey(conversationId, apiCallId) : null;
+  const subscribe = React.useCallback(
+    (listener: () => void) => (key ? store.subscribe(key, listener) : () => {}),
+    [key, store],
+  );
+  const getSnapshot = React.useCallback(
+    () => (conversationId && apiCallId !== null ? store.getContextCompactionPreview(conversationId, apiCallId) : null),
+    [apiCallId, conversationId, store],
   );
   return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }

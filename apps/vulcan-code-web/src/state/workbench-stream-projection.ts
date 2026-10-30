@@ -27,7 +27,8 @@ export function mergePendingWorkbenchDeltaSignal(
 // 返回值：全局 React 工作台状态必须消费该事件时返回 true。
 export function workbenchEnvelopeRequiresReactProjection(envelope: WorkbenchDeltaEnvelope): boolean {
   return envelope.delta.kind !== "transientReasoningStatusChanged"
-    && envelope.delta.kind !== "toolRequestProgressChanged";
+    && envelope.delta.kind !== "toolRequestProgressChanged"
+    && envelope.delta.kind !== "contextCompactionPreviewChanged";
 }
 
 // workbenchEnvelopeRequiresImmediateLiveFlush identifies request lifecycle boundaries that must bypass hot-delta batching.

@@ -322,6 +322,28 @@ describe("ConversationBranchWorkspaceV1", () => {
     expect(markup).not.toContain("压缩摘要正文");
     expect(markup).toContain("压缩之后的正常回答");
   });
+  // The running card streams the live preview; the durable summary takes over without duplicating it.
+  // 运行中的卡片流式显示实时预览；持久摘要接管后不重复显示。
+  it("streams the live compaction preview until the durable summary arrives", () => {
+    const store = new ConversationLiveStreamStore();
+    const events = [completeTurnEvents()[0], eventSummary(2, {
+      kind: "api_started", api_call_id: 9, purpose: "compaction", request: { provider: "test", model: "test" },
+    })];
+    store.applyEnvelope({ generation: 1, delta: { kind: "contextCompactionPreviewChanged",
+      payload: { conversationId: "session-branch-v1", apiCallId: 9, text: "live-preview-text" } } });
+    store.flushNotifications();
+    expect(renderWorkspace(events, "inline_output", [], true, undefined, store)).toContain("live-preview-text");
+    // A preview for another API never leaks into this card.
+    // 其他 API 的预览绝不会泄漏到当前卡片。
+    const otherStore = new ConversationLiveStreamStore();
+    otherStore.applyEnvelope({ generation: 1, delta: { kind: "contextCompactionPreviewChanged",
+      payload: { conversationId: "session-branch-v1", apiCallId: 8, text: "foreign-preview" } } });
+    expect(renderWorkspace(events, "inline_output", [], true, undefined, otherStore)).not.toContain("foreign-preview");
+    events.push(eventSummary(3, { kind: "assistant_text", api_call_id: 9, text: "durable-summary-text", status: "completed" }));
+    const durable = renderWorkspace(events, "inline_output", [], true, undefined, store);
+    expect(durable).toContain("durable-summary-text");
+    expect(durable).not.toContain("live-preview-text");
+  });
   it("binds drafts to their exact API and removes them on durable handoff or failure", () => {
     // A draft cannot invent an API or use another API's Turn.
     // 草稿不能伪造 API 或使用其他 API 的回合。

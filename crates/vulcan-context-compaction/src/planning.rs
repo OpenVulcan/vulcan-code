@@ -31,4 +31,5 @@ pub use summary::{
     build_compaction_continuation_prompt, build_compaction_continuation_prompt_with_options,
     build_compaction_request_prompt, build_compaction_request_prompt_for_mode,
     extract_compaction_model_summary, extract_compaction_previous_summary,
+    preview_compaction_model_output,
 };

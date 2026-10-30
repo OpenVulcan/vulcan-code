@@ -194,6 +194,34 @@ pub fn extract_compaction_model_summary(summary_text: &str) -> Option<String> {
     (!normalized.is_empty()).then_some(normalized)
 }
 
+/// Builds the live display preview of one still-streaming model compaction response.
+/// 为仍在流式生成的模型压缩响应构建实时显示预览。
+///
+/// # Parameters
+/// # 参数
+/// `output_text` is the cumulative raw assistant output received so far.
+/// `output_text` 是目前已收到的累计原始助手输出。
+///
+/// # Returns
+/// # 返回值
+/// The summary body once its tag has started, otherwise the drafting text without protocol tags.
+/// The preview is display-only; `extract_compaction_model_summary` stays the sole durable authority.
+/// 摘要标签开始后返回摘要正文，否则返回去掉协议标签的草稿文本。
+/// 预览只用于显示；`extract_compaction_model_summary` 仍是唯一的持久权威。
+pub fn preview_compaction_model_output(output_text: &str) -> String {
+    if let Some((_, after_start)) = output_text.split_once(MODEL_SUMMARY_START_TAG) {
+        let summary = after_start
+            .split_once(MODEL_SUMMARY_END_TAG)
+            .map_or(after_start, |(summary, _)| summary);
+        return summary.trim().to_string();
+    }
+    output_text
+        .replace(MODEL_ANALYSIS_START_TAG, "")
+        .replace(MODEL_ANALYSIS_END_TAG, "")
+        .trim()
+        .to_string()
+}
+
 /// Normalizes one compaction summary into a non-empty plain-text block before it becomes the synthetic continuation prompt body.
 /// 在把压缩总结转换为合成续写提示词正文之前，将其规范化为非空纯文本块。
 fn normalize_compaction_summary_text(summary_text: &str) -> String {

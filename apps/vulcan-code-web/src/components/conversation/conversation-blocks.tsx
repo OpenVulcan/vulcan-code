@@ -28,6 +28,7 @@ import {
   metadataValue,
   numberMetadata,
 } from "@/components/conversation/conversation-metadata";
+import { useConversationContextCompactionPreview } from "@/state/conversation-live-stream-context";
 import { formatWorkProcessDuration } from "@/components/conversation/conversation-timeline";
 import { TurnStatsTooltipCard } from "@/components/conversation/conversation-turn-stats-card";
 import { useOpenTurnChangeReview } from "@/components/conversation/turn-change-review-context";
@@ -129,7 +130,16 @@ export function ContextCompactionBlock(props: {
     : running
       ? t("contextCompaction.title.running")
       : t("contextCompaction.title.completed");
-  const detailBody = bodyBlock?.body?.trim() || (displayStatus === "failed" ? contextCompactionFailedDetail(endBlock, t) : "");
+  // apiCallId is the typed V1 identity of this compaction request; it keys the live summary preview.
+  // apiCallId 是本次压缩请求的强类型 V1 身份，用作实时摘要预览的键。
+  const apiCallIdValue = metadataValue(startBlock?.rawMetadata, ["api_call_id"]);
+  const apiCallId = typeof apiCallIdValue === "number" ? apiCallIdValue : null;
+  // livePreview streams the summary while it is generated; the durable body replaces it afterwards.
+  // livePreview 在摘要生成期间流式显示；持久正文随后替换它。
+  const livePreview = useConversationContextCompactionPreview(running ? props.conversationId : null, apiCallId);
+  const durableBody = bodyBlock?.body?.trim() ?? "";
+  const previewBody = !durableBody && livePreview ? livePreview : "";
+  const detailBody = durableBody || previewBody || (displayStatus === "failed" ? contextCompactionFailedDetail(endBlock, t) : "");
   const shouldShowProgress = progressBlocks.length > 0 && thinkingBlocks.length === 0 && !detailBody;
   const hasExpandedContent = shouldShowProgress || thinkingBlocks.length > 0 || Boolean(detailBody);
 
@@ -174,7 +184,7 @@ export function ContextCompactionBlock(props: {
             );
           })}
           {detailBody ? (
-            <MarkdownMessage content={detailBody} onOpenMedia={props.onOpenMedia} />
+            <MarkdownMessage content={detailBody} streaming={Boolean(previewBody)} onOpenMedia={props.onOpenMedia} />
           ) : !hasExpandedContent ? (
             <span className="vk-shimmer-text">{t("contextCompaction.generating")}</span>
           ) : null}
