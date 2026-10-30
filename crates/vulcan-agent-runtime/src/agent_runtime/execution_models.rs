@@ -190,6 +190,32 @@ pub struct ExecutionProviderRequestContinuation {
     /// Zero-based physical Provider attempt index assigned to the replacement stream's first request.
     /// 分配给替代流首次请求的从零开始物理 Provider 尝试索引。
     pub next_provider_attempt_index: u32,
+    /// Manual Continue action retained only until its first durable API permit is confirmed.
+    /// 仅在首次可靠 API 许可确认前保留的手动 Continue 动作。
+    pub pending_continuation_action_id: Option<vulcan_session_core::v1::ClientActionId>,
+    /// Permission to restore a retained assistant tail throughout the admitted Provider loop.
+    /// 在已准入 Provider 循环全程中恢复保留助手尾部的能力。
+    /// Consuming the Continue action binds one API; it does not revoke this loop capability.
+    /// 消费 Continue 动作只会绑定一次 API，不会撤销此循环能力。
+    pub allows_assistant_tail_restore: bool,
+}
+
+/// Resolves assistant-tail recovery from the authoritative admission or host handoff.
+/// 从权威准入信息或宿主交接解析助手尾部恢复能力。
+/// `continuation_action_id` identifies the initial admission; `continuation` owns subsequent restarts.
+/// `continuation_action_id` 标识首次准入；`continuation` 持有后续重启的状态。
+/// Returns the loop capability independently of whether its one-shot action has been consumed.
+/// 返回循环恢复能力，不受对应一次性动作是否已消费的影响。
+pub(crate) fn resolve_assistant_tail_restore(
+    continuation_action_id: Option<&vulcan_session_core::v1::ClientActionId>,
+    continuation: Option<&ExecutionProviderRequestContinuation>,
+) -> bool {
+    // A handoff is authoritative; only the initial stream derives capability from admission.
+    // 交接状态是权威来源；只有首次流根据准入动作建立能力。
+    match continuation {
+        Some(continuation) => continuation.allows_assistant_tail_restore,
+        None => continuation_action_id.is_some(),
+    }
 }
 
 /// Minimal execution request captured from the current workbench state.
@@ -421,8 +447,8 @@ pub struct ExecutionPreparationRequest {
 }
 
 impl ExecutionPreparationRequest {
-    /// Replaces an already-consumed replay action with the exact next Provider-request identity.
-    /// 使用精确的下一 Provider 请求身份替换已经消费的重放动作。
+    /// Adopts the next Provider-request identity and retains only an unconsumed Continue action.
+    /// 采用下一 Provider 请求身份，并且仅保留尚未消费的 Continue 动作。
     ///
     /// # Parameters
     /// 参数
@@ -437,6 +463,9 @@ impl ExecutionPreparationRequest {
         &mut self,
         continuation: ExecutionProviderRequestContinuation,
     ) {
+        // Only telemetry can distinguish an unconsumed action from one already bound to a durable API.
+        // 只有遥测状态机能区分尚未消费的动作与已经绑定可靠 API 的动作。
+        self.continuation_action_id = continuation.pending_continuation_action_id.clone();
         self.provider_request_continuation = Some(continuation);
     }
 }

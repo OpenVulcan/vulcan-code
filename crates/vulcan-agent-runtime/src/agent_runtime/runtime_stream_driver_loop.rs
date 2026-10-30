@@ -287,11 +287,14 @@ pub(crate) fn drive_runtime_stream_provider_loop(
             return;
         }
 
-        if let Some((conversation_state, reason)) = stream_state.take_context_compaction_required() {
+        if let Some((conversation_state, reason, provider_request_continuation)) =
+            stream_state.take_context_compaction_required()
+        {
             yield Box::new(ExecutionStreamEvent::ContextCompactionRequired {
                 session_id,
                 conversation_state,
                 reason,
+                provider_request_continuation,
             });
             return;
         }

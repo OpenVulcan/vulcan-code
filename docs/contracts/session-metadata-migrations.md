@@ -8,6 +8,10 @@
 - 唯一自动读取入口：`session_v1::documents::read_metadata`，实现位于 `session_v1::metadata_access`。
 - 普通发布仍经 `write_json_document`；精确 `metadata.json` 写入与显式能力重建共用 `metadata.write.lock`。
 - 元数据版本与 `runtime.json`、`compactions.json` 的版本独立，不一起递增。
+- 冷启动及导航通过索引定位器的 `read_request_configuration` 从同一元数据修订读取活动路由、待生效路由与
+  `config.context_compaction_window_node_id`，同时投影运行态及按会话保留的界面控件，不加载交互历史或写回默认值。
+  提交时先保留易失执行状态，再以 V1 水合覆盖持久配置；普通输入及 Continue 的分派边界再次读取所有者配置。
+  重选相同节点只修复陈旧投影及派生预算，不追加元数据修订。本规则不改变持久格式，不递增版本。
 
 ## 自动升级门槛（`AGENTS.md` 第一节第 12 条）
 

@@ -327,6 +327,7 @@ pub(crate) fn execute_provider_prompt_stream(
         // 只有用户回合及其重试拥有可在压缩线后继续执行的宿主压缩路径。
         .with_turn_compaction_line(
             preparation.prompt_purpose.supports_host_auto_compaction()
+                && preparation.dedicated_session.is_none()
                 && preparation
                     .context_budget
                     .as_ref()

@@ -5,7 +5,9 @@ use crate::agent_runtime::execution_models::{
     ExecutionPreparation, ExecutionProviderRequestContinuation, ExecutionRunReport,
 };
 use crate::agent_runtime::provider_request_telemetry::ProviderRequestTelemetryEvent;
-use crate::agent_runtime::provider_transport_request_budget::ProviderRequestBudgetGuard;
+use crate::agent_runtime::provider_transport_request_budget::{
+    ProviderRequestBudgetDecision, ProviderRequestBudgetGuard,
+};
 use crate::context_budget::ContextBudgetSnapshot;
 use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
@@ -21,9 +23,7 @@ use vulcan_core::types::{
 };
 use vulcan_session_core::v1::context::LockedBaselineProjection;
 use vulcan_session_core::v1::document::PreparedApiStart;
-use vulcan_session_core::v1::{
-    ProviderProjectionProof, ProviderRequestBudgetEvidence, ProviderUsageBudgetAnchor,
-};
+use vulcan_session_core::v1::{ProviderProjectionProof, ProviderUsageBudgetAnchor};
 use vulcan_workspace_store::workspace_store::ProviderApiTraceStore;
 
 /// Shared single-use sender backing one Provider durability completion handle.
@@ -107,20 +107,20 @@ impl ProviderRequestPreparationCandidate {
     ///
     /// # Returns
     /// 返回值
-    /// Returns the evidence that must be committed with api_started after storing the final budget.
-    /// 保存最终预算后，返回必须与 api_started 同时提交的证据。
+    /// Stores the final budget and returns its admission decision and durable request evidence.
+    /// 保存最终预算，返回其准入判定与持久化请求证据。
     pub fn finalize_v1_request_budget(
         &mut self,
         projection: &ProviderProjectionProof,
         anchor: Option<&ProviderUsageBudgetAnchor>,
-    ) -> Result<ProviderRequestBudgetEvidence, String> {
+    ) -> Result<ProviderRequestBudgetDecision, String> {
         let guard = self.request_budget_guard.as_ref().ok_or_else(|| {
             String::from("The V1 Provider permit is missing its frozen request-budget guard.")
         })?;
         let decision =
             guard.build_v1_budget_decision(&self.request_snapshot, projection, anchor)?;
-        self.context_budget = Some(decision.context_budget);
-        Ok(decision.evidence)
+        self.context_budget = Some(decision.context_budget.clone());
+        Ok(decision)
     }
 
     /// Converts an explicitly excluded non-session candidate into its transport permit.
@@ -170,6 +170,13 @@ fn non_session_resource_requires_prompt_owner(
 /// 由唯一准备所有者放行的精确物理 Provider 请求。
 #[derive(Debug, Clone)]
 pub enum PreparedPhysicalApi {
+    /// Final V1 budget requires host compaction before any API identity or Continue action is consumed.
+    /// 最终 V1 预算要求在消费任何 API 身份或 Continue 动作之前进行宿主压缩。
+    ContextCompactionRequired {
+        /// Final calibrated budget explanation forwarded to the existing compaction restart path.
+        /// 传给既有压缩重启路径的最终校准预算说明。
+        reason: String,
+    },
     /// Newer session inputs or configuration require rebuilding this undispatched candidate on the same logical turn.
     /// 较新的会话输入或配置要求在同一逻辑回合内重建尚未派发的候选请求。
     RequestConfigurationChanged,
@@ -655,6 +662,9 @@ pub enum ExecutionStreamEvent {
         /// Verified context-budget diagnostic produced before dispatch.
         /// 分派前生成的已验证上下文预算诊断。
         reason: String,
+        /// Next request identity and unconsumed Continue action retained across compaction.
+        /// 跨压缩保留的下一请求身份与尚未消费的 Continue 动作。
+        provider_request_continuation: ExecutionProviderRequestContinuation,
     },
     /// Requests the host to activate a pending exact model route and restart the active turn.
     /// 请求宿主激活待生效精确模型路由并重启当前活动回合。

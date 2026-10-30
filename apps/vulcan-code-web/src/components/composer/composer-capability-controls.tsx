@@ -181,6 +181,27 @@ export function ContextUsageOrb(props: {
   // selectedNodeIsInvalid 在全局节点变化失效后仍保持可见，直到用户恢复默认。
   const selectedNodeIsInvalid = selectedNode != null
     && !availableNodes.some((node) => node.id === selectedNode.id);
+  // Persists a validated switch value, including explicit reselection to repair a stale service mirror.
+  // 持久化已校验的开关值，包括用于修复陈旧服务镜像的显式重选。
+  // value is the node id or default sentinel; returns immediately while one acknowledged mutation runs.
+  // value 是节点标识或默认哨兵；在一个等待确认的修改执行期间立即返回。
+  const handleNodeSelection = (value: string): void => {
+    // nextNodeId comes only from the current backend-owned node catalog.
+    // nextNodeId 仅来自当前后端持有的节点目录。
+    const nextNodeId = contextWindowNodeIdFromSwitchValue(value, props.contextCompactionWindowNodes);
+    if (nextNodeId === undefined || nodeMutation.current) return;
+    nodeMutation.current = true;
+    setNodeSaving(true);
+    setNodeError(null);
+    void props.onNodeChange(nextNodeId).then((saved) => {
+      if (!saved) setNodeError("");
+    }).catch((reason: unknown) => {
+      setNodeError(errorMessage(reason));
+    }).finally(() => {
+      nodeMutation.current = false;
+      setNodeSaving(false);
+    });
+  };
   // contextUsageAriaLabel exposes the same session-level summary through the capacity control.
   // contextUsageAriaLabel 通过上下文容量控件公开同一份会话级统计摘要。
   const contextUsageAriaLabel = [
@@ -284,26 +305,14 @@ export function ContextUsageOrb(props: {
           <SegmentedControl
             aria-label={t("composer.contextWindow.title")}
             disabled={nodeSaving}
-            onValueChange={(value) => {
-              const nextNodeId = contextWindowNodeIdFromSwitchValue(value, props.contextCompactionWindowNodes);
-              if (nextNodeId !== undefined && !nodeMutation.current) {
-                nodeMutation.current = true;
-                setNodeSaving(true);
-                setNodeError(null);
-                void props.onNodeChange(nextNodeId).then((saved) => {
-                  if (!saved) setNodeError("");
-                }).catch((reason: unknown) => {
-                  setNodeError(errorMessage(reason));
-                }).finally(() => {
-                  nodeMutation.current = false;
-                  setNodeSaving(false);
-                });
-              }
-            }}
+            onValueChange={handleNodeSelection}
             value={props.selectedNodeId ?? "default"}
           >
             {availableNodes.map((node) => (
-              <SegmentedControlItem key={node.id} value={node.id}>
+              <SegmentedControlItem key={node.id} value={node.id}
+                // Shared radio state intentionally suppresses unchanged values; only this control resubmits explicit clicks.
+                // 共享单选状态有意忽略同值；仅此控件重新提交显式点击。
+                onClick={() => { if (props.selectedNodeId === node.id) handleNodeSelection(node.id); }}>
                 {formatContextWindowNodeTokens(node.tokens)}
               </SegmentedControlItem>
             ))}
@@ -317,6 +326,7 @@ export function ContextUsageOrb(props: {
             <SegmentedControlItem
               aria-label={`${t("composer.contextWindow.default")} · ${defaultContextWindowLabel}`}
               value="default"
+              onClick={() => { if (props.selectedNodeId === null) handleNodeSelection("default"); }}
             >
               {defaultContextWindowLabel}
             </SegmentedControlItem>

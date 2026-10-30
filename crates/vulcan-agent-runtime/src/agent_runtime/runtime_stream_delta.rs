@@ -77,7 +77,11 @@ pub(crate) struct RuntimeStreamDeltaState {
     terminal_provider_failure_category: Option<AiErrorCategory>,
     /// Host-owned context compaction request captured at a replay-safe boundary.
     /// 在可回放安全边界捕获的宿主上下文压缩请求。
-    context_compaction_required: Option<(SessionConversationState, String)>,
+    context_compaction_required: Option<(
+        SessionConversationState,
+        String,
+        ExecutionProviderRequestContinuation,
+    )>,
     /// Host-owned exact-route switch captured at a replay-safe boundary.
     /// 在可回放安全边界捕获的宿主精确路由切换请求。
     provider_route_switch_required: Option<(
@@ -279,9 +283,15 @@ impl RuntimeStreamDeltaState {
 
     /// Drains a pending host-owned context compaction request.
     /// 提取等待中的宿主上下文压缩请求。
+    /// Returns the committed state, diagnostic, and next request identity, or None when absent.
+    /// 返回已提交状态、诊断与下一请求身份；没有待处理请求时返回 None。
     pub(crate) fn take_context_compaction_required(
         &mut self,
-    ) -> Option<(SessionConversationState, String)> {
+    ) -> Option<(
+        SessionConversationState,
+        String,
+        ExecutionProviderRequestContinuation,
+    )> {
         self.context_compaction_required.take()
     }
 
@@ -673,7 +683,25 @@ pub(crate) fn process_provider_stream_delta(
             conversation_state,
             reason,
         }) => {
-            state.context_compaction_required = Some((conversation_state, reason));
+            // A budget rejection may supersede a candidate before it obtains a durable permit.
+            // 预算拒绝可能在候选请求获得可靠许可之前取代它。
+            state.provider_request_telemetry.reject_prepared_request();
+            // provider_request_continuation preserves the action consumption state across compaction.
+            // provider_request_continuation 在压缩前后保留动作消费状态。
+            let provider_request_continuation = match state
+                .provider_request_telemetry
+                .next_request_continuation_identity()
+            {
+                Ok(identity) => identity,
+                Err(error) => {
+                    state.terminal_error = Some(format!(
+                        "Context compaction continuation identity was unavailable: {error}"
+                    ));
+                    return Vec::new();
+                }
+            };
+            state.context_compaction_required =
+                Some((conversation_state, reason, provider_request_continuation));
             Vec::new()
         }
         Ok(ProviderStreamDelta::ProviderRouteSwitchRequired {
@@ -1628,6 +1656,144 @@ mod tests {
             state.take_terminal_error().as_deref(),
             Some("provider failed")
         );
+    }
+
+    /// Checks the Continue identity carried by one host restart before and after durable permission.
+    /// 检查一种宿主重启在可靠许可前后携带的 Continue 身份。
+    /// `restart_delta` creates the control event, `take_pending` drains its state, and `prepare_candidate`
+    /// models a pre-permit candidate; returns no value and asserts exact action and attempt retention.
+    /// `restart_delta` 创建控制事件，`take_pending` 提取对应状态，`prepare_candidate` 模拟许可前候选；
+    /// 无返回值，并断言动作与尝试编号被精确保留。
+    fn assert_continue_at_host_restart(
+        restart_delta: fn() -> ProviderStreamDelta,
+        take_pending: fn(
+            &mut RuntimeStreamDeltaState,
+        ) -> Option<(
+            SessionConversationState,
+            String,
+            ExecutionProviderRequestContinuation,
+        )>,
+        prepare_candidate: bool,
+    ) {
+        // confirmed distinguishes an unconsumed action from one already bound to a completed API.
+        // confirmed 区分尚未消费的动作与已经绑定已完成 API 的动作。
+        for confirmed in [false, true] {
+            // action is the user-authorized Continue that must never bind two physical requests.
+            // action 是用户授权的 Continue，绝不能绑定两次物理请求。
+            let action =
+                vulcan_session_core::v1::ClientActionId::try_new("restart-boundary-continue")
+                    .expect("valid Continue action");
+            // context freezes action admission and recovery capability before telemetry starts.
+            // context 在遥测启动前冻结动作准入信息与恢复能力。
+            let context = ProviderRequestTelemetryContext::for_continued_test(action.clone());
+            // state consumes the same provider deltas as the production stream driver.
+            // state 消费与生产流驱动相同的 Provider 增量。
+            let mut state = build_delta_state().with_provider_request_telemetry_context(context);
+            if confirmed {
+                test_start_durable_request(Uuid::nil(), &mut state, build_request_snapshot());
+                process_provider_stream_delta(
+                    Uuid::nil(),
+                    &mut state,
+                    Ok(build_request_succeeded_delta(None)),
+                );
+            }
+            if prepare_candidate {
+                state
+                    .provider_request_telemetry
+                    .prepare_request(&build_request_snapshot(), None)
+                    .expect("reserve a candidate before the restart");
+            }
+            // events must contain no spurious failure for the interrupted pre-permit candidate.
+            // events 不得为被中断的许可前候选包含虚假失败。
+            let events =
+                process_provider_stream_delta(Uuid::nil(), &mut state, Ok(restart_delta()));
+            assert!(events.is_empty());
+            assert!(!state.has_terminal_error());
+            // continuation is the authoritative identity forwarded to the replacement stream.
+            // continuation 是转交给替代流的权威身份。
+            let (_, _, continuation) =
+                take_pending(&mut state).expect("host restart remains pending");
+            assert_eq!(continuation.logical_request_id, "execution-1");
+            assert!(continuation.allows_assistant_tail_restore);
+            assert_eq!(
+                continuation.next_provider_attempt_index,
+                u32::from(confirmed)
+            );
+            assert_eq!(
+                continuation.pending_continuation_action_id,
+                if confirmed { None } else { Some(action) }
+            );
+        }
+    }
+
+    /// Verifies compaction forwards only an unconsumed Continue action, including pre-permit rejection.
+    /// 验证压缩只转交尚未消费的 Continue 动作，并覆盖许可前拒绝。
+    /// Takes no arguments and returns no value; checks both sides of the durable permission boundary.
+    /// 无参数、无返回值；检查可靠许可边界的前后两种状态。
+    #[test]
+    fn continued_context_compaction_preserves_action_consumption() {
+        assert_continue_at_host_restart(
+            || ProviderStreamDelta::ContextCompactionRequired {
+                conversation_state: SessionConversationState::default(),
+                reason: String::from("context budget exceeded"),
+            },
+            RuntimeStreamDeltaState::take_context_compaction_required,
+            true,
+        );
+    }
+
+    /// Verifies route changes forward only an unconsumed Continue action before replacing the stream.
+    /// 验证路由变更在替换流前只转交尚未消费的 Continue 动作。
+    /// Takes no arguments and returns no value; checks both sides of the durable permission boundary.
+    /// 无参数、无返回值；检查可靠许可边界的前后两种状态。
+    #[test]
+    fn continued_route_switch_preserves_action_consumption() {
+        assert_continue_at_host_restart(
+            || ProviderStreamDelta::ProviderRouteSwitchRequired {
+                conversation_state: SessionConversationState::default(),
+                reason: String::from("exact route changed"),
+            },
+            RuntimeStreamDeltaState::take_provider_route_switch_required,
+            true,
+        );
+    }
+
+    /// Verifies policy refreshes forward only an unconsumed Continue action at a safe tool boundary.
+    /// 验证策略刷新在安全工具边界只转交尚未消费的 Continue 动作。
+    /// Takes no arguments and returns no value; checks both sides of the durable permission boundary.
+    /// 无参数、无返回值；检查可靠许可边界的前后两种状态。
+    #[test]
+    fn continued_policy_refresh_preserves_action_consumption() {
+        assert_continue_at_host_restart(
+            || ProviderStreamDelta::ContextCompactionPolicyRefreshRequired {
+                conversation_state: SessionConversationState::default(),
+                reason: String::from("compaction policy changed"),
+            },
+            RuntimeStreamDeltaState::take_context_compaction_policy_refresh_required,
+            false,
+        );
+    }
+
+    /// Verifies compaction cannot restart a stream while its durable physical request is still active.
+    /// 验证可靠物理请求仍活动时，压缩不能重启流。
+    /// Takes no arguments and returns no value; an unsafe boundary must remain a terminal error.
+    /// 无参数、无返回值；不安全边界必须保持为终态错误。
+    #[test]
+    fn context_compaction_rejects_active_request_boundary() {
+        // state retains an active API rather than a superseded preparation candidate.
+        // state 保留活动 API，而非已被取代的准备候选。
+        let mut state = build_delta_state_with_telemetry();
+        test_start_durable_request(Uuid::nil(), &mut state, build_request_snapshot());
+        process_provider_stream_delta(
+            Uuid::nil(),
+            &mut state,
+            Ok(ProviderStreamDelta::ContextCompactionRequired {
+                conversation_state: SessionConversationState::default(),
+                reason: String::from("context budget exceeded"),
+            }),
+        );
+        assert!(state.has_terminal_error());
+        assert!(state.take_context_compaction_required().is_none());
     }
 
     /// Verifies a superseded first candidate keeps attempt zero and never becomes a terminal failure.

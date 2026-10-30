@@ -90,6 +90,8 @@ pub(crate) fn retained_submission_snapshot_is_usable(
 /// `workspace_snapshot` 是本次提交正在使用的保留 WebUI 工作区快照。
 /// `session_id` selects the submitted existing session.
 /// `session_id` 选择本次提交的既有会话。
+/// `preserved_state` retains volatile execution state, applied before authoritative V1 controls.
+/// `preserved_state` 保留易失执行状态，先于权威 V1 控制项应用。
 ///
 /// # Returns
 /// 返回值
@@ -100,7 +102,11 @@ pub(crate) async fn hydrate_retained_submission_session_if_needed(
     controller_runtime: HostRuntimeHandle,
     workspace_snapshot: &mut WorkspaceSnapshot,
     session_id: SessionId,
+    preserved_state: Option<&PreservedWorkspaceRunState>,
 ) -> Result<(), String> {
+    // A metadata-only old row must never overwrite the persisted node after hydration.
+    // 纯元数据旧行绝不能在水合后覆盖持久节点。
+    preserve_active_session_run_state(preserved_state, workspace_snapshot);
     let hydration_started_at = current_unix_millis_value();
     crate::sync_selected_session_v1_projection_from_store(
         state,

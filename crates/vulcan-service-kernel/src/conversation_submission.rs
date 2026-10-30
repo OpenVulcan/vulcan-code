@@ -2635,8 +2635,14 @@ async fn service_start_conversation_execution(
             controller_runtime.clone(),
             &mut workspace_snapshot,
             session_id,
+            preserved_workspace_run_state.as_ref(),
         )
         .await?;
+    } else {
+        preserve_active_session_run_state(
+            preserved_workspace_run_state.as_ref(),
+            &mut workspace_snapshot,
+        );
     }
     webui_submit_trace(
         "submit_prompt_workspace_ready",
@@ -2645,10 +2651,6 @@ async fn service_start_conversation_execution(
             conversation_id.as_deref().unwrap_or("<draft>"),
             current_unix_millis_value().saturating_sub(workspace_load_started_at)
         ),
-    );
-    preserve_active_session_run_state(
-        preserved_workspace_run_state.as_ref(),
-        &mut workspace_snapshot,
     );
     // existingAuthority is loaded before attachment resolution so persisted ResourceId references
     // are resolved only through the exact V1 project owner.

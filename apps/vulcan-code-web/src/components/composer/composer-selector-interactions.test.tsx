@@ -359,6 +359,37 @@ it("opens context controls with a real popover and preserves node selection on r
   expect(document.querySelector('[role="radio"][value="default"]')?.getAttribute("aria-checked")).toBe("true");
 });
 
+// Repeated explicit selection must reach the service even when the controlled value is unchanged.
+// 即使受控值不变，重复显式选择也必须到达服务。
+it.each([null, "compression-window-1"] as const)("resubmits the selected compaction node %s and coalesces only pending writes", async (selectedNodeId) => {
+  // finishWrite settles the current service acknowledgement without changing the selected value.
+  // finishWrite 结束当前服务确认，而不改变已选值。
+  let finishWrite!: (saved: boolean) => void;
+  // change records the exact idempotent mutation emitted by the real selector.
+  // change 记录真实选择器发出的精确幂等修改。
+  const change = vi.fn(() => new Promise<boolean>((resolve) => { finishWrite = resolve; }));
+  await render(<ContextUsageOrb snapshot={{ baselineMatchesActiveRuntime: true, breakdown: [], cacheHitBasisPoints: null,
+    maxTokens: 950_000, percent: 8, severity: "normal", tooltipRows: [], usageBasisPoints: 800, usedTokens: 76_000 }}
+    contextCompactionWindowNodes={settings().contextCompactionWindowNodes.nodes} selectedNodeId={selectedNodeId}
+    modelContextLimit={950_000} onNodeChange={change} />);
+  await act(async () => host.querySelector<HTMLButtonElement>(".vk-ctx-button")!.click());
+  expect(change).not.toHaveBeenCalled();
+  // selected resolves by state, so catalog insertion or reordering does not change the test target.
+  // selected 按状态定位，因此目录插入或重排不会改变测试对象。
+  const selected = document.querySelector<HTMLButtonElement>('[role="radio"][aria-checked="true"]')!;
+  await act(async () => { selected.click(); selected.click(); });
+  expect(change).toHaveBeenCalledExactlyOnceWith(selectedNodeId);
+  expect(selected.disabled).toBe(true);
+  await act(async () => finishWrite(true));
+  expect(selected.disabled).toBe(false);
+  await act(async () => selected.click());
+  expect(change).toHaveBeenCalledTimes(2);
+  expect(change).toHaveBeenLastCalledWith(selectedNodeId);
+  await act(async () => finishWrite(true));
+  expect(selected.getAttribute("aria-checked")).toBe("true");
+  expect(document.querySelector('[role="alert"]')).toBeNull();
+});
+
 // CapacityToolbar mounts the production owner boundary and capacity selector with complete synthetic props.
 // CapacityToolbar 使用完整合成参数挂载生产所有者边界及容量选择器。
 function CapacityToolbar({ owner, change }: { owner: string; change: React.ComponentProps<typeof ComposerPanelToolbarRight>["onSetSessionContextCompactionWindow"] }) {

@@ -5,6 +5,7 @@ use super::*;
 use tokio::sync::oneshot;
 
 mod completion;
+mod continuation;
 
 /// Creates one real temporary V1 store with an open root turn and a typed request snapshot.
 /// 创建一个真实临时 V1 存储，其中包含开放根回合及强类型请求快照。
@@ -137,7 +138,9 @@ async fn physical_preparation_releases_writer_and_publisher_during_build() {
 /// 验证并发文档或选择器写入会使已准备字节失效，而不会产生虚假 API 起始。
 #[tokio::test]
 async fn physical_preparation_rejects_frontier_changes_during_build() {
-    for change_model in [false, true] {
+    for (change_model, requires_compaction) in
+        [(false, false), (true, false), (false, true), (true, true)]
+    {
         let (_directory, handle, request) = preparation_fixture();
         // Paired channels pause the resource phase at a deterministic boundary.
         // 成对通道把资源阶段暂停在确定性边界。
@@ -155,7 +158,13 @@ async fn physical_preparation_rejects_frontier_changes_during_build() {
                     move |snapshot, _preparation| async move {
                         entered_tx.send(()).expect("builder entered");
                         release_rx.await.expect("release builder");
-                        Ok(Some(prepared_fixture(snapshot)))
+                        if requires_compaction {
+                            Err(SessionRuntimeError::ProviderContextCompactionRequired(
+                                "stale final budget".into(),
+                            ))
+                        } else {
+                            Ok(Some(prepared_fixture(snapshot)))
+                        }
                     },
                 )
                 .await

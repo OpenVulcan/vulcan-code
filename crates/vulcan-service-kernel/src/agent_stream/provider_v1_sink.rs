@@ -1546,14 +1546,24 @@ fn rebuild_provider_transport_candidate_with_compaction(
         through_seq: snapshot.through_seq,
         fingerprint_sha256,
     };
-    let request_budget_evidence = candidate
+    let budget_decision = candidate
         .finalize_v1_request_budget(&projection, snapshot.provider_usage_budget_anchor.as_ref())
         .map_err(provider_projection_runtime_error)?;
+    // Stop before ApiStarted so the continuation action remains available to the compacted request.
+    // 在 ApiStarted 前停止，使延续动作仍可供压缩后的请求使用。
+    if budget_decision.host_compaction_required {
+        return Err(SessionRuntimeError::ProviderContextCompactionRequired(
+            format!(
+                "The final V1 request reached the session compaction line: {}.",
+                budget_decision.context_budget.summary_note()
+            ),
+        ));
+    }
     Ok(SessionPreparedPhysicalRequest {
         user_prompt_media: prepared_media.bindings,
         transport: candidate,
         projection,
-        request_budget_evidence,
+        request_budget_evidence: budget_decision.evidence,
     })
 }
 
@@ -1950,7 +1960,15 @@ impl ProviderV1StreamSink {
                     .map_err(|error| SessionRuntimeError::BlockingTaskJoin(error.to_string()))?
                 },
             )
-            .await?;
+            .await;
+        // A compaction boundary is control flow, not a failed or committed physical request.
+        // 压缩边界属于控制流，不是失败或已提交的物理请求。
+        let receipt = match receipt {
+            Err(SessionRuntimeError::ProviderContextCompactionRequired(reason)) => {
+                return Ok(PreparedPhysicalApi::ContextCompactionRequired { reason });
+            }
+            result => result?,
+        };
         let Some(receipt) = receipt else {
             return Ok(PreparedPhysicalApi::RequestConfigurationChanged);
         };

@@ -715,6 +715,9 @@ pub(crate) enum SessionRuntimeError {
     /// One exact Provider projection or request reconstruction invariant failed.
     /// 一条精确 Provider 投影或请求重建不变量失败。
     ProviderProjectionInvariant(String),
+    /// Final request accounting requires compaction before a physical API can be committed.
+    /// 最终请求记账要求在提交物理 API 前执行压缩。
+    ProviderContextCompactionRequired(String),
     /// The physical V1 store rejected or failed one complete candidate.
     /// 物理 V1 存储拒绝或写入失败了一份完整候选。
     Storage(Box<SessionV1StoreError>),
@@ -869,6 +872,7 @@ impl fmt::Display for SessionRuntimeError {
                     "V1 Provider projection invariant failed: {detail}"
                 )
             }
+            Self::ProviderContextCompactionRequired(reason) => formatter.write_str(reason),
             Self::Storage(error) => write!(formatter, "V1 session storage failure: {error}"),
             Self::BlockingTaskJoin(error) => {
                 write!(
@@ -1815,16 +1819,22 @@ impl SessionHandle {
         // 第二阶段仅在两个同步守卫释放后，才可异步读取媒体、上传或编码。
         // Keep the potentially large media/encoding future off every enclosing async frame without spawning detached work.
         // 将可能较大的媒体及编码Future移出各层外围异步帧，不启动分离工作。
-        let Some(prepared) = Box::pin(build(snapshot, Arc::clone(&preparation))).await? else {
-            return Ok(None);
+        // Soft budget control must pass the same frontier validation as a permit; stale routes never trigger compaction.
+        // 软预算控制必须通过与许可相同的前沿校验；陈旧路由绝不能触发压缩。
+        let prepared = match Box::pin(build(snapshot, Arc::clone(&preparation))).await {
+            Ok(Some(prepared)) => Ok(prepared),
+            Ok(None) => return Ok(None),
+            Err(error @ SessionRuntimeError::ProviderContextCompactionRequired(_)) => Err(error),
+            Err(error) => return Err(error),
         };
         // Only the official durable recapture can advance request proof after this preparation's own writes.
         // 本准备自身写入之后，只有正式可靠重捕获可以推进请求证明。
         let snapshot = preparation.last_snapshot()?;
-        if prepared.projection.segment_generation != snapshot.segment_generation
-            || prepared.projection.document_revision != snapshot.document_revision
-            || prepared.projection.retained_from_seq != snapshot.retained_from_seq
-            || prepared.projection.through_seq != snapshot.through_seq
+        if let Ok(prepared) = &prepared
+            && (prepared.projection.segment_generation != snapshot.segment_generation
+                || prepared.projection.document_revision != snapshot.document_revision
+                || prepared.projection.retained_from_seq != snapshot.retained_from_seq
+                || prepared.projection.through_seq != snapshot.through_seq)
         {
             return Err(SessionRuntimeError::ProviderProjectionInvariant(
                 String::from("request proof does not match the captured durable V1 frontier"),
@@ -1859,6 +1869,9 @@ impl SessionHandle {
                 return Ok(None);
             }
         }
+        // Only a current final-budget refusal may leave the preparation owner as host control flow.
+        // 只有仍为当前状态的最终预算拒绝才能作为宿主控制流离开准备所有者。
+        let prepared = prepared?;
         let expected_request = request.clone();
         let expected_projection = prepared.projection.clone();
         let expected_request_budget_evidence = prepared.request_budget_evidence.clone();

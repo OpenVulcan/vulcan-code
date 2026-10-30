@@ -18,6 +18,7 @@ use test_support::*;
 
 mod active_session_state_tests;
 mod capability_metadata_tests;
+mod compaction_window_tests;
 mod mcp_catalog_projection_tests;
 mod question_execution_finish_tests;
 mod terminal_settlement_tests;

@@ -1,4 +1,5 @@
 mod answer_mode;
+mod compaction_budget;
 mod context_usage;
 mod host_guidance;
 mod model_selection;

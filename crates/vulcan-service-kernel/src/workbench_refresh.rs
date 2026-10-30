@@ -919,6 +919,7 @@ pub(crate) fn detached_task_event_trace_detail(event: &DetachedTaskRuntimeEvent)
                 session_id,
                 conversation_state,
                 reason,
+                ..
             },
         ) => format!(
             "session={session_id} records={} messages={} reason={reason}",

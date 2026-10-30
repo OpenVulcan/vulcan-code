@@ -50,7 +50,7 @@ fn continuation_rejects_protocol_profile_switch() {
         }],
         continuation: ProviderContinuation {
             provider_id: Some(String::from("minimax")),
-            protocol_profile_id: Some(String::from("anthropic-messages")),
+            protocol_profile_id: Some(String::from(vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID)),
             model_id: Some(String::from("MiniMax-M3")),
             last_provider_message_id: Some(String::from("response-1")),
             last_local_message_id: Some(String::from("assistant-1")),
@@ -60,12 +60,25 @@ fn continuation_rejects_protocol_profile_switch() {
         ..CoreConversationSnapshot::default()
     };
 
+    // A matching route is the positive control: rejection must be caused by the protocol switch.
+    // 匹配路由是正向对照：拒绝必须由协议切换引起。
     assert!(
         build_public_continuation(
             &snapshot,
             &config,
             "minimax",
-            "openai-chat",
+            vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID,
+            "MiniMax-M3",
+            1,
+        )
+        .is_some()
+    );
+    assert!(
+        build_public_continuation(
+            &snapshot,
+            &config,
+            "minimax",
+            vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,
             "MiniMax-M3",
             1,
         )

@@ -5,6 +5,7 @@ use crate::agent_runtime::config::RuntimeAgentDefinition;
 use crate::agent_runtime::events::RuntimeEvent;
 use crate::agent_runtime::execution_models::{
     ExecutionPreparation, ExecutionPreparationRequest, ExecutionTurnStartMode,
+    resolve_assistant_tail_restore,
 };
 use crate::agent_runtime::provider_request_telemetry::ProviderRequestTelemetryContext;
 use crate::agent_runtime::runtime_stream_bootstrap::RuntimeStreamBootstrap;
@@ -31,8 +32,8 @@ pub(crate) enum RuntimeStreamTurnStartMode {
     /// Start from provider-visible messages already seeded into the snapshot.
     /// 从已经播种到快照中的 Provider 可见消息启动。
     RestoredCheckpoint,
-    /// Resume an explicitly admitted Continue action without requiring another user-authored input.
-    /// 恢复已明确准入的继续动作，不要求另一条用户输入。
+    /// Resume an admitted Provider loop even after its one-shot Continue action has been consumed.
+    /// 恢复已准入的 Provider 循环，即使对应一次性 Continue 动作已经消费。
     ContinuedProviderTurn,
 }
 
@@ -176,9 +177,12 @@ pub(crate) fn runtime_stream_turn_start_mode_for_request(
         return match mode {
             ExecutionTurnStartMode::UserPrompt => RuntimeStreamTurnStartMode::UserPrompt,
             ExecutionTurnStartMode::RestoredCheckpoint => {
-                // Only the host-admitted action can resume an interrupted assistant tail.
-                // 只有宿主已准入的动作才可恢复中断助手尾部。
-                if request.continuation_action_id.is_some() {
+                // Recovery survives API binding; only an admitted loop may restore an assistant tail.
+                // 恢复能力在 API 绑定后仍保留；只有已准入循环可以恢复助手尾部。
+                if resolve_assistant_tail_restore(
+                    request.continuation_action_id.as_ref(),
+                    request.provider_request_continuation.as_ref(),
+                ) {
                     RuntimeStreamTurnStartMode::ContinuedProviderTurn
                 } else {
                     RuntimeStreamTurnStartMode::RestoredCheckpoint
@@ -304,6 +308,8 @@ fn projected_user_prompt_matches_request(projected_prompt: &str, raw_prompt: &st
 mod tests {
     //! Launch-payload assembly tests for runtime stream orchestration.
     //! 面向运行时流编排的启动载荷组装测试。
+
+    mod continuation;
 
     use super::*;
     use crate::agent_runtime::conversation_hooks::ConversationHookRuntime;
@@ -1035,6 +1041,180 @@ mod tests {
             runtime_stream_turn_start_mode_for_request(&request),
             RuntimeStreamTurnStartMode::UserPrompt
         );
+    }
+
+    /// Builds a fresh tracker from `request` through the production preparation-to-telemetry bridge.
+    /// 根据 `request` 通过生产准备到遥测桥接链路构建全新跟踪器。
+    /// Returns an idle tracker carrying the request's exact Continue and host-restart identities.
+    /// 返回空闲跟踪器，其中携带请求的精确 Continue 与宿主重启身份。
+    fn continuation_test_tracker(
+        request: &ExecutionPreparationRequest,
+    ) -> crate::agent_runtime::provider_request_telemetry::ProviderRequestTelemetryTracker {
+        // preparation reproduces the authoritative identity copy performed by execution preparation.
+        // preparation 复现执行准备中权威身份字段的复制。
+        let mut preparation = build_test_preparation();
+        preparation.continuation_action_id = request.continuation_action_id.clone();
+        preparation.conversation_hook_turn_id = request.conversation_hook_turn_id.clone();
+        // context exercises the real template and attempt-seed construction for every replacement stream.
+        // context 为每个替代流执行真实模板与尝试种子的构建。
+        let context = crate::agent_runtime::provider_request_telemetry::ProviderRequestTelemetryContext::from_preparation(
+            &preparation,
+            request.provider_request_continuation.as_ref(),
+        )
+        .expect("host continuation should build an exact telemetry context");
+        // tracker starts empty so no prior stream's in-memory attempt state can mask the regression.
+        // tracker 从空状态开始，避免旧流的内存尝试状态掩盖回归。
+        let mut tracker =
+            crate::agent_runtime::provider_request_telemetry::ProviderRequestTelemetryTracker::default();
+        tracker.install_context(context);
+        tracker
+    }
+
+    /// Verifies host handoffs consume Continue once while retaining only the admitted loop's recovery capability.
+    /// 验证宿主交接只消费 Continue 一次，同时仅保留已准入循环的恢复能力。
+    /// Takes no arguments; returns no value and checks both successful and failed permitted requests.
+    /// 无参数、无返回值；同时检查已许可请求的成功与失败情形。
+    #[test]
+    fn continued_host_restarts_separate_action_consumption_from_tail_recovery() {
+        use crate::agent_runtime::provider_v1_bridge::ProviderV1LifecycleFacts;
+        use vulcan_session_core::v1::event::ApiPurposeKind;
+
+        // request_failed covers both terminal outcomes after the same durable permission boundary.
+        // request_failed 覆盖相同可靠许可边界之后的两种终态。
+        for request_failed in [false, true] {
+            // action identifies the single user-authorized Continue throughout all replacement streams.
+            // action 标识全部替代流中唯一一次用户授权的 Continue。
+            let action = vulcan_session_core::v1::ClientActionId::try_new("host-restart-continue")
+                .expect("valid Continue action");
+            // request is the actual host request mutated by every restart handoff.
+            // request 是每次重启交接实际修改的宿主请求。
+            let mut request = build_test_request();
+            request.continuation_action_id = Some(action.clone());
+            request.turn_start_mode = Some(ExecutionTurnStartMode::RestoredCheckpoint);
+            // snapshot supplies an offline physical request without provider or credential access.
+            // snapshot 提供离线物理请求，不访问供应商或凭据。
+            let snapshot = vulcan_core::types::ProviderRequestSnapshot {
+                provider_id: String::from("openai"),
+                model_id: String::from("gpt-test"),
+                system_prompt: String::new(),
+                prompt_layers: Default::default(),
+                prompt: String::from("continue"),
+                prompt_in_history: false,
+                history: Vec::new(),
+                temperature: None,
+                max_turns: 1,
+                tool_schemas: Vec::new(),
+                additional_params: None,
+                request_headers: None,
+                continuation: Default::default(),
+            };
+            // tracker owns the real reserve, permit, terminal, and restart lifecycle.
+            // tracker 持有真实的预留、许可、终态与重启生命周期。
+            let mut tracker = continuation_test_tracker(&request);
+            tracker
+                .prepare_request(&snapshot, None)
+                .expect("reserve candidate");
+            tracker.reject_prepared_request();
+            // pending captures a pre-permit restart without consuming the user action or attempt.
+            // pending 捕获许可前重启，不消耗用户动作或尝试编号。
+            let pending = tracker
+                .next_request_continuation_identity()
+                .expect("safe pre-permit boundary");
+            assert_eq!(pending.pending_continuation_action_id, Some(action.clone()));
+            assert!(pending.allows_assistant_tail_restore);
+            assert_eq!(pending.next_provider_attempt_index, 0);
+            request.replace_retry_replay_with_provider_request_continuation(pending);
+            assert_eq!(
+                runtime_stream_turn_start_mode_for_request(&request),
+                RuntimeStreamTurnStartMode::ContinuedProviderTurn
+            );
+            tracker = continuation_test_tracker(&request);
+            // prepared proves the surviving action still binds the first actual request.
+            // prepared 证明保留下来的动作仍绑定首次实际请求。
+            let prepared = tracker
+                .prepare_request(&snapshot, None)
+                .expect("prepare continued request");
+            assert!(
+                matches!(prepared.v1_lifecycle, Some(ProviderV1LifecycleFacts::RequestPrepared(ref facts))
+                if facts.purpose == ApiPurposeKind::Continue && facts.continuation_action_id.as_ref() == Some(&action))
+            );
+            tracker
+                .confirm_prepared_request(&snapshot, None)
+                .expect("confirm durable permit");
+            assert!(tracker.next_request_continuation_identity().is_err());
+            if request_failed {
+                assert_eq!(
+                    tracker
+                        .complete_failure(false, 0, 0, 0, "context_length_exceeded", None, None)
+                        .len(),
+                    1
+                );
+            } else {
+                tracker
+                    .complete_success(
+                        None,
+                        crate::agent_runtime::provider_v1_bridge::test_provider_v1_source_input(),
+                        1,
+                    )
+                    .expect("complete continued request");
+            }
+
+            // Repeat the handoff to prove a replacement stream cannot resurrect a consumed action.
+            // 重复交接，证明替代流无法复活已消费的动作。
+            for _ in 0..2 {
+                // continuation must advance the physical attempt without retaining the old action.
+                // continuation 必须推进物理尝试编号，同时不保留旧动作。
+                let continuation = tracker
+                    .next_request_continuation_identity()
+                    .expect("safe completed boundary");
+                assert_eq!(continuation.pending_continuation_action_id, None);
+                assert!(continuation.allows_assistant_tail_restore);
+                assert_eq!(continuation.next_provider_attempt_index, 1);
+                assert_eq!(
+                    continuation.logical_turn_id,
+                    request.conversation_hook_turn_id
+                );
+                request.replace_retry_replay_with_provider_request_continuation(continuation);
+                assert_eq!(request.continuation_action_id, None);
+                assert_eq!(
+                    runtime_stream_turn_start_mode_for_request(&request),
+                    RuntimeStreamTurnStartMode::ContinuedProviderTurn
+                );
+                tracker = continuation_test_tracker(&request);
+                // followup uses the replacement stream's first slot, which previously rebound Continue.
+                // followup 使用替代流的首个槽位，旧逻辑会在此重新绑定 Continue。
+                let followup = tracker
+                    .prepare_request(&snapshot, None)
+                    .expect("prepare ordinary followup");
+                assert_eq!(followup.payload["attempt_index"], 1);
+                assert!(
+                    matches!(followup.v1_lifecycle, Some(ProviderV1LifecycleFacts::RequestPrepared(ref facts))
+                    if facts.purpose == ApiPurposeKind::MainGeneration && facts.continuation_action_id.is_none())
+                );
+                tracker.reject_prepared_request();
+            }
+
+            // Explicit new input still owns its own boundary even when a prior loop could restore a tail.
+            // 即使之前循环可恢复尾部，明确的新输入仍持有自己的边界。
+            request.turn_start_mode = Some(ExecutionTurnStartMode::UserPrompt);
+            assert_eq!(
+                runtime_stream_turn_start_mode_for_request(&request),
+                RuntimeStreamTurnStartMode::UserPrompt
+            );
+            request.turn_start_mode = Some(ExecutionTurnStartMode::RestoredCheckpoint);
+            // purpose keeps auxiliary execution strict even if a caller carries the admitted loop state.
+            // purpose 保持辅助执行的严格边界，即使调用方携带已准入循环状态。
+            for purpose in [
+                crate::agent_runtime::execution_models::ExecutionPromptPurpose::QuestionExecution,
+                crate::agent_runtime::execution_models::ExecutionPromptPurpose::AgentTask,
+            ] {
+                request.prompt_purpose = purpose;
+                assert_eq!(
+                    runtime_stream_turn_start_mode_for_request(&request),
+                    RuntimeStreamTurnStartMode::RestoredCheckpoint
+                );
+            }
+        }
     }
 
     /// Auxiliary questions start from their already-projected canonical history without a user prompt.

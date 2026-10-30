@@ -687,6 +687,34 @@ fn select_conversation_in_retained_state(
 
     guard.workbench.selected_conversation_id = Some(conversation_id.to_string());
     guard.workbench.subagent_navigation = subagent_navigation;
+    // Retained addon rows drive both backend and frontend selection; refresh the node from metadata.
+    // 保留的附属行同时驱动后端和前端选择；根据元数据刷新节点。
+    if let Some(runtime) = selected_runtime_state {
+        // An explicit None clears the node; an absent runtime supplies no new projection authority.
+        // 显式 None 清除节点；缺失运行态则不提供新的投影权威。
+        let node_id = runtime
+            .context_compaction_window_node_id
+            .map(|node| node.as_str().to_string());
+        if let Some(addons) = guard
+            .workbench
+            .session_addons_by_conversation
+            .iter_mut()
+            .find(|entry| entry.conversation_id == conversation_id)
+        {
+            addons.session_context_compaction_window_node_id = node_id;
+        } else if let Some(addons) = session_addons_changed_delta_for_retained_list(
+            conversation_id.to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            node_id,
+            None,
+        ) {
+            guard.workbench.session_addons_by_conversation.push(addons);
+        }
+    }
     sync_selected_conversation_fields_for_retained_workbench(&mut guard.workbench, conversation_id);
     guard.workspace_snapshot = Some(workspace_snapshot);
     if let Some(provider_configuration) = provider_configuration.as_ref() {

@@ -344,6 +344,9 @@ mod tests {
         for result in [
             Err("storage admission failed".into()),
             Ok(PreparedPhysicalApi::RequestConfigurationChanged),
+            Ok(PreparedPhysicalApi::ContextCompactionRequired {
+                reason: "final budget requires compaction".into(),
+            }),
             Ok(preparation_permit(false)),
         ] {
             guard.observe_preparation_result(&started, &result);

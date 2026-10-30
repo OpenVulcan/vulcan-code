@@ -26,6 +26,9 @@ pub(crate) struct SessionModelProjectionV1 {
     /// Latest user choice waiting for the next API boundary.
     /// 等待下个 API 边界生效的最新用户选择。
     pending: Option<PendingRequestConfig>,
+    /// Session-owned compaction node captured from the same metadata revision as the route.
+    /// 与路由从同一元数据修订捕获的会话自有压缩节点。
+    context_compaction_window_node_id: Option<vulcan_context::ContextCompactionWindowNodeId>,
     /// Keeps archive/delete from invalidating the selected owner before publication.
     /// 防止归档或删除在发布前使选中的 owner 失效。
     _lifecycle: SessionLifecycleTransitionGuard,
@@ -151,7 +154,7 @@ pub(crate) async fn read_session_model_projection_v1(
     .map_err(|error| format!("Failed to locate the session model configuration: {error}"))?;
     // A resident writer may hold a newer pending choice than the latest disk publication.
     // 常驻写入器可能持有比最新磁盘发布更新的待生效选择。
-    let (active, pending) = registry.with_configuration_access(
+    let (active, pending, context_compaction_window_node_id) = registry.with_configuration_access(
         session_id,
         |handle| {
             handle
@@ -159,6 +162,7 @@ pub(crate) async fn read_session_model_projection_v1(
                     (
                         document.metadata.config.active_request.clone(),
                         document.metadata.config.pending_request.clone(),
+                        document.metadata.config.context_compaction_window_node_id,
                     )
                 })
                 .map_err(|error| format!("Failed to read the session model configuration: {error}"))
@@ -173,6 +177,7 @@ pub(crate) async fn read_session_model_projection_v1(
         session_id,
         active,
         pending,
+        context_compaction_window_node_id,
         _lifecycle: lifecycle,
     })
 }
@@ -189,27 +194,33 @@ impl SessionModelProjectionV1 {
     ) -> Result<(), String> {
         // Recheck a resident owner to avoid publishing a snapshot older than a completed model selection.
         // 重新检查常驻 owner，避免发布比已完成模型选择更旧的快照。
-        let (active, pending) = match registry.get(self.session_id) {
-            Ok(handle) => handle
-                .read(|document| {
-                    (
-                        document.metadata.config.active_request.clone(),
-                        document.metadata.config.pending_request.clone(),
-                    )
-                })
-                .map_err(|error| {
-                    format!("Failed to read the session model configuration: {error}")
-                })?,
-            Err(SessionRuntimeError::SessionNotRegistered(_)) => {
-                (self.active.clone(), self.pending.clone())
-            }
-            Err(error) => return Err(error.to_string()),
-        };
-        apply_request_model_projection_v1(
-            states.entry(self.session_id).or_default(),
-            &active,
-            pending.as_ref(),
-        );
+        let (active, pending, context_compaction_window_node_id) =
+            match registry.get(self.session_id) {
+                Ok(handle) => handle
+                    .read(|document| {
+                        (
+                            document.metadata.config.active_request.clone(),
+                            document.metadata.config.pending_request.clone(),
+                            document.metadata.config.context_compaction_window_node_id,
+                        )
+                    })
+                    .map_err(|error| {
+                        format!("Failed to read the session model configuration: {error}")
+                    })?,
+                Err(SessionRuntimeError::SessionNotRegistered(_)) => (
+                    self.active.clone(),
+                    self.pending.clone(),
+                    self.context_compaction_window_node_id,
+                ),
+                Err(error) => return Err(error.to_string()),
+            };
+        // One exact session row receives all controls from the same authoritative revision.
+        // 一个精确会话行接收来自同一权威修订的全部控制项。
+        let state = states.entry(self.session_id).or_default();
+        apply_request_model_projection_v1(state, &active, pending.as_ref());
+        // Metadata-only navigation must restore the planning control before the first submission.
+        // 纯元数据导航必须在首次提交前恢复规划控制项。
+        state.context_compaction_window_node_id = context_compaction_window_node_id;
         Ok(())
     }
 }
@@ -300,6 +311,9 @@ mod tests {
             session_id: first_id,
             active: active("kimi", "kimi-account", "k3-256k"),
             pending: None,
+            context_compaction_window_node_id: Some(
+                vulcan_context::ContextCompactionWindowNodeId::CompressionWindow4,
+            ),
             _lifecycle: registry
                 .acquire_lifecycle_transition(first_id)
                 .await
@@ -310,6 +324,9 @@ mod tests {
         let second = SessionModelProjectionV1 {
             session_id: second_id,
             active: active("deepseek", "ds-account", "deepseek-v4"),
+            context_compaction_window_node_id: Some(
+                vulcan_context::ContextCompactionWindowNodeId::CompressionWindow2,
+            ),
             pending: Some(PendingRequestConfig {
                 provider: Some("minimax".into()),
                 connection_id: Some("mm-account".into()),
@@ -329,6 +346,14 @@ mod tests {
         for projection in [&first, &second, &first, &second] {
             projection.apply(&registry, &mut states).unwrap();
         }
+        assert_eq!(
+            states[&first_id].context_compaction_window_node_id,
+            first.context_compaction_window_node_id
+        );
+        assert_eq!(
+            states[&second_id].context_compaction_window_node_id,
+            second.context_compaction_window_node_id
+        );
         assert_eq!(
             states[&first_id].active_model_id.as_deref(),
             Some("k3-256k")
@@ -375,6 +400,9 @@ mod tests {
             session_id,
             active: active("old", "old-account", "old-model"),
             pending: None,
+            context_compaction_window_node_id: Some(
+                vulcan_context::ContextCompactionWindowNodeId::CompressionWindow2,
+            ),
             _lifecycle: registry
                 .acquire_lifecycle_transition(session_id)
                 .await
@@ -384,6 +412,8 @@ mod tests {
         // 已注册文档提供当前 metadata，且不存在任何开放回合。
         let mut document = SessionDocument::new(session_id.to_string(), "project", "test", 1);
         document.metadata.config.active_request = active("kimi", "kimi-account", "k3-256k");
+        document.metadata.config.context_compaction_window_node_id =
+            Some(vulcan_context::ContextCompactionWindowNodeId::CompressionWindow4);
         // Record the original revision to prove projection does not create a model-switch event.
         // 记录原修订号，证明投影不会创建模型切换事件。
         let revision = document.metadata.document_revision;
@@ -411,6 +441,10 @@ mod tests {
             Some("plan")
         );
         assert!(states[&session_id].provider_tool_settings_initialized);
+        assert_eq!(
+            states[&session_id].context_compaction_window_node_id,
+            Some(vulcan_context::ContextCompactionWindowNodeId::CompressionWindow4)
+        );
         handle
             .read(|document| {
                 assert_eq!(document.metadata.document_revision, revision);

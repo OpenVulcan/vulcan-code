@@ -178,6 +178,9 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                     ),
                 )
             })? {
+            PreparedPhysicalApi::ContextCompactionRequired { reason } => {
+                return Err(VulcanCoreError::ContextCompactionRequired { message: reason });
+            }
             PreparedPhysicalApi::RequestConfigurationChanged => {
                 return Err(VulcanCoreError::ProviderRouteSwitchRequired {
                     message: String::from("The captured session inputs or request configuration changed before dispatch."),

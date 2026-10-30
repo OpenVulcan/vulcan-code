@@ -370,6 +370,10 @@ pub(super) async fn execute_durable(
                     trace_capture,
                 )
             }
+            PreparedPhysicalApi::ContextCompactionRequired { reason } => {
+                tracker.reject_prepared_request();
+                return Err(reason);
+            }
             PreparedPhysicalApi::RequestConfigurationChanged => {
                 tracker.reject_prepared_request();
                 return Err(String::from(

@@ -65,6 +65,9 @@ pub(crate) struct ProviderRequestTelemetryContext {
     /// Zero-based physical Provider attempt index assigned to the first request in this stream.
     /// 分配给当前流首个请求的从零开始的物理 Provider attempt 索引。
     initial_attempt_index: u32,
+    /// Assistant-tail recovery capability retained after the one-shot Continue action is consumed.
+    /// 一次性 Continue 动作消费后仍保留的助手尾部恢复能力。
+    allows_assistant_tail_restore: bool,
     /// Current session identity.
     /// 当前会话身份。
     session_id: SessionId,
@@ -268,6 +271,11 @@ impl ProviderRequestTelemetryContext {
             v1_request_template,
             execution_id,
             initial_attempt_index,
+            allows_assistant_tail_restore:
+                crate::agent_runtime::execution_models::resolve_assistant_tail_restore(
+                    preparation.continuation_action_id.as_ref(),
+                    provider_request_continuation,
+                ),
             session_id: preparation.session_id,
             workspace_id: preparation.workspace_path.clone(),
             provider_name: preparation.model_blueprint.provider_name.clone(),
@@ -310,6 +318,7 @@ impl ProviderRequestTelemetryContext {
             },
             execution_id: String::from("execution-1"),
             initial_attempt_index: 0,
+            allows_assistant_tail_restore: false,
             session_id: SessionId::nil(),
             workspace_id: String::from("workspace-1"),
             provider_name: String::from("Mock Provider"),
@@ -344,6 +353,20 @@ impl ProviderRequestTelemetryContext {
             turn_id: Some(String::from("turn-1")),
             context_generation_id: Some(String::from("context-1")),
         }
+    }
+
+    /// Builds a test context for an admitted Continue action and its independent recovery capability.
+    /// 为已准入 Continue 动作及其独立恢复能力构建测试上下文。
+    /// `action` is the unconsumed action; returns an initialized context before its first API permit.
+    /// `action` 是尚未消费的动作；返回首次 API 许可前已初始化的上下文。
+    #[cfg(test)]
+    pub(crate) fn for_continued_test(action: vulcan_session_core::v1::ClientActionId) -> Self {
+        // context keeps the two admission facts consistent for delta state-machine fixtures.
+        // context 为增量状态机夹具保持两项准入事实一致。
+        let mut context = Self::for_test();
+        context.v1_request_template.continuation_action_id = Some(action);
+        context.allows_assistant_tail_restore = true;
+        context
     }
 }
 
@@ -863,6 +886,8 @@ impl ProviderRequestTelemetryTracker {
                 "Provider request continuation cannot be captured while a physical request is active or awaiting its durable permit.",
             ));
         }
+        // context owns the action admitted for this stream and its first physical attempt.
+        // context 持有当前流获准的动作及其首次物理尝试编号。
         let context = self.context.as_ref().ok_or_else(|| {
             String::from("Provider request continuation has no initialized telemetry context.")
         })?;
@@ -870,6 +895,16 @@ impl ProviderRequestTelemetryTracker {
             logical_request_id: context.execution_id.clone(),
             logical_turn_id: context.turn_id.clone(),
             next_provider_attempt_index: self.next_attempt_index,
+            allows_assistant_tail_restore: context.allows_assistant_tail_restore,
+            // A confirmed durable permit consumes the action even if transport later fails.
+            // 可靠许可一旦确认就消耗该动作，即使之后传输失败也不能复用。
+            pending_continuation_action_id: if self.next_attempt_index
+                == context.initial_attempt_index
+            {
+                context.v1_request_template.continuation_action_id.clone()
+            } else {
+                None
+            },
         })
     }
 
@@ -2252,6 +2287,7 @@ mod tests {
         tracker.install_context(ProviderRequestTelemetryContext {
             execution_id: String::from("execution-1"),
             initial_attempt_index: 0,
+            allows_assistant_tail_restore: false,
             session_id: SessionId::nil(),
             turn_id: None,
             workspace_id: String::from("workspace-1"),
@@ -3001,6 +3037,8 @@ mod tests {
             logical_request_id: String::from("logical-request-a"),
             logical_turn_id: Some(String::from("logical-turn-a")),
             next_provider_attempt_index: 5,
+            pending_continuation_action_id: None,
+            allows_assistant_tail_restore: false,
         };
 
         let seed = provider_request_telemetry_seed(
@@ -3030,6 +3068,8 @@ mod tests {
             logical_request_id: String::from("host-request"),
             logical_turn_id: Some(String::from("host-turn")),
             next_provider_attempt_index: 3,
+            pending_continuation_action_id: None,
+            allows_assistant_tail_restore: false,
         };
 
         let error = provider_request_telemetry_seed(
@@ -3091,6 +3131,8 @@ mod tests {
                 logical_request_id: String::from("logical-request-a"),
                 logical_turn_id: Some(String::from("logical-turn-a")),
                 next_provider_attempt_index: 5,
+                pending_continuation_action_id: None,
+                allows_assistant_tail_restore: false,
             }
         );
     }

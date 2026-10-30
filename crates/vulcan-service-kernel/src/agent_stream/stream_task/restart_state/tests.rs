@@ -110,6 +110,9 @@ fn v1_permit_resets_restart_debt_and_rearms_compaction() {
     // 被拒绝或已变更的候选不证明进展，因此压缩尝试保持已消耗。
     state.observe_preparation(&Ok(PreparedPhysicalApi::RequestConfigurationChanged));
     state.observe_preparation(&Err("source preparation failed".into()));
+    state.observe_preparation(&Ok(PreparedPhysicalApi::ContextCompactionRequired {
+        reason: "final budget requires compaction".into(),
+    }));
     assert!(state.auto_compaction_already_attempted);
     state.observe_preparation(&Ok(successful_permit_fixture()));
     assert_eq!(state.configuration_restarts, 0);

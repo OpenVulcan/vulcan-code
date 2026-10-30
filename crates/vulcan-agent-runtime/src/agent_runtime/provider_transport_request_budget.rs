@@ -230,6 +230,9 @@ pub(crate) fn build_provider_request_budget_evidence(
 /// 一次经 V1 许可的物理请求所对应的精确预算判定与持久化请求证据。
 #[derive(Debug, Clone)]
 pub struct ProviderRequestBudgetDecision {
+    /// Whether an eligible host turn must compact before this request receives a durable permit.
+    /// 可用宿主回合是否必须在此请求获得可靠许可前压缩。
+    pub host_compaction_required: bool,
     /// Context-budget decision validated against the exact final request.
     /// 针对精确最终请求校验得到的上下文预算判定。
     pub context_budget: ContextBudgetSnapshot,
@@ -373,8 +376,8 @@ pub struct ProviderRequestBudgetGuard {
     /// Absolute BodyAfterPrefix baseline from the active compaction window.
     /// 当前压缩窗口的绝对 BodyAfterPrefix 基线。
     prefill_input_tokens: Option<usize>,
-    /// Whether a follow-up request in this turn may stop at the session compaction line.
-    /// 本回合的后续请求是否可以停在会话压缩线处。
+    /// Whether final V1 preparation and follow-up requests may stop at the session compaction line.
+    /// 最终 V1 准备及后续请求是否可以停在会话压缩线处。
     turn_compaction_line_armed: bool,
     /// Usage of the latest completed response in this turn, shared by every clone of the guard.
     /// 本回合最近一次完成响应的用量，由守卫的所有克隆共享。
@@ -422,13 +425,17 @@ impl ProviderRequestBudgetGuard {
         }
     }
 
-    /// Arms the session compaction line for follow-up requests of a turn that began below it.
-    /// 为起始时低于会话压缩线的回合，在后续请求上启用该压缩线。
+    /// Arms final and follow-up checks for an eligible host turn whose precheck began below the line.
+    /// 为预检低于压缩线且支持宿主压缩的回合启用最终及后续请求检查。
     ///
     /// A turn that began at or above the line already had its compaction chance, so arming it
     /// would only restart compaction that cannot get under the line.
     /// 起始时已在压缩线及以上的回合已经有过压缩机会；启用只会重复无法降到线下的压缩。
-    pub(crate) fn with_turn_compaction_line(mut self, turn_began_below_line: bool) -> Self {
+    /// `turn_began_below_line` excludes auxiliary/dedicated runs and already attempted over-line requests.
+    /// `turn_began_below_line` 排除辅助、专职执行及已尝试压缩但仍超线的请求。
+    /// Returns the same frozen guard with its host-compaction admission policy set.
+    /// 返回已设置宿主压缩准入策略的同一冻结守卫。
+    pub fn with_turn_compaction_line(mut self, turn_began_below_line: bool) -> Self {
         self.turn_compaction_line_armed = turn_began_below_line;
         self
     }
@@ -464,15 +471,9 @@ impl ProviderRequestBudgetGuard {
         else {
             return Ok(());
         };
-        // Normalized uncached input plus cache reads is the full input on every protocol, even
-        // where the Provider reports no total (Anthropic).
-        // 归一化未缓存输入加缓存读取在所有协议上都是完整输入，即使 Provider 不报告总量（Anthropic）。
-        let full_input_tokens = usage
-            .uncached_input_tokens
-            .zip(usage.cached_input_tokens)
-            .map(|(uncached, cached)| uncached.saturating_add(cached));
-        let Some(input_tokens) = full_input_tokens
-            .or_else(|| vulcan_context::observed_input_tokens_from_usage(Some(&usage)))
+        // Canonical input includes cache creation as well as reads; disjoint counters are not a second total.
+        // 规范输入包含缓存创建及读取；拆分计数不是另一份总输入。
+        let Some(input_tokens) = vulcan_context::observed_input_tokens_from_usage(Some(&usage))
         else {
             return Ok(());
         };
@@ -597,6 +598,8 @@ impl ProviderRequestBudgetGuard {
             self.validate_budget(&fallback)
                 .map_err(|error| error.to_string())?;
             return Ok(ProviderRequestBudgetDecision {
+                host_compaction_required: self.turn_compaction_line_armed
+                    && fallback.should_compact(),
                 context_budget: fallback,
                 evidence,
             });
@@ -608,6 +611,8 @@ impl ProviderRequestBudgetGuard {
             self.validate_budget(&fallback)
                 .map_err(|error| error.to_string())?;
             return Ok(ProviderRequestBudgetDecision {
+                host_compaction_required: self.turn_compaction_line_armed
+                    && fallback.should_compact(),
                 context_budget: fallback,
                 evidence,
             });
@@ -663,6 +668,8 @@ impl ProviderRequestBudgetGuard {
             self.validate_budget(&budget)
                 .map_err(|error| error.to_string())?;
             return Ok(ProviderRequestBudgetDecision {
+                host_compaction_required: self.turn_compaction_line_armed
+                    && budget.should_compact(),
                 context_budget: budget,
                 evidence,
             });
@@ -689,6 +696,7 @@ impl ProviderRequestBudgetGuard {
         self.validate_budget(&budget)
             .map_err(|error| error.to_string())?;
         Ok(ProviderRequestBudgetDecision {
+            host_compaction_required: self.turn_compaction_line_armed && budget.should_compact(),
             context_budget: budget,
             evidence,
         })
@@ -944,6 +952,8 @@ where
 mod tests {
     //! Request-budget guard tests for provider and tool boundaries.
     //! Provider 与工具边界的请求预算守卫测试。
+
+    mod compaction;
 
     use super::*;
     use vulcan_core::types::{
@@ -1255,10 +1265,10 @@ mod tests {
             assistant_reasoning: String::new(),
             provider_message_id: None,
             provider_message_state: None,
-            // Anthropic reports cache reads beside a small uncached input.
-            // Anthropic 在少量未缓存输入之外单独报告缓存读取。
+            // Normalized input already includes cache reads from the raw protocol response.
+            // 归一化输入已经包含原始协议响应中的缓存读取。
             usage: Some(ProviderUsageSnapshot {
-                input_tokens: Some(8),
+                input_tokens: Some(8 + cached_input_tokens),
                 uncached_input_tokens: Some(8),
                 cached_input_tokens: Some(cached_input_tokens),
                 output_tokens: Some(50),

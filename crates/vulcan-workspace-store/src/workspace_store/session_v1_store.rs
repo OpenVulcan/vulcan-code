@@ -269,16 +269,17 @@ impl SessionV1StorageLocator {
             .is_some())
     }
 
-    /// Reads the exact active and pending request configuration from metadata only.
-    /// 仅从 metadata 读取精确的活动及待生效请求配置。
-    /// Returns both request states without replaying Turns, repairing history, or writing files.
-    /// 返回两种请求状态，不重放回合、不修复历史，也不写入文件。
+    /// Reads active/pending requests and the session compaction node from one metadata revision.
+    /// 从同一 metadata 修订读取活动、待生效请求及会话压缩节点。
+    /// Returns session controls without replaying Turns, repairing history, or writing files.
+    /// 返回会话控制项，不重放回合、不修复历史，也不写入文件。
     pub fn read_request_configuration(
         &self,
     ) -> Result<
         (
             vulcan_session_core::v1::config::ActiveRequestConfig,
             Option<vulcan_session_core::v1::config::PendingRequestConfig>,
+            Option<vulcan_context::ContextCompactionWindowNodeId>,
         ),
         SessionV1StoreError,
     > {
@@ -288,6 +289,7 @@ impl SessionV1StorageLocator {
         Ok((
             metadata.config.active_request,
             metadata.config.pending_request,
+            metadata.config.context_compaction_window_node_id,
         ))
     }
 
@@ -1848,6 +1850,8 @@ mod tests {
             thinking_level: Some("max".into()),
             ..Default::default()
         };
+        metadata.config.context_compaction_window_node_id =
+            Some(vulcan_context::ContextCompactionWindowNodeId::CompressionWindow4);
         metadata.config.pending_request = Some(PendingRequestConfig {
             provider: Some("other-provider".into()),
             connection_id: Some("other-account".into()),
@@ -1877,7 +1881,8 @@ mod tests {
             locator.read_request_configuration().unwrap(),
             (
                 metadata.config.active_request.clone(),
-                metadata.config.pending_request.clone()
+                metadata.config.pending_request.clone(),
+                metadata.config.context_compaction_window_node_id,
             )
         );
         assert_eq!(

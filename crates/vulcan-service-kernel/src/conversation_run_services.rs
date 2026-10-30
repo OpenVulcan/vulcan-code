@@ -1025,11 +1025,13 @@ pub(crate) async fn service_set_session_context_compaction_window(
             },
         )
         .map_err(|error| format!("Failed to persist the V1 context compaction window: {error}"))?;
-    if mutation.changed {
+    // An idempotent durable choice still repairs a stale or absent presentation mirror.
+    // 幂等的持久化选择仍须修复陈旧或缺失的展示镜像。
+    let projection_changed = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        {
+        let mirror_changed = {
             let workspace = guard.workspace_snapshot.as_mut().ok_or_else(|| {
                 String::from("service is still starting; workspace snapshot is not ready")
             })?;
@@ -1040,15 +1042,25 @@ pub(crate) async fn service_set_session_context_compaction_window(
                     updated_at: updated_at.clone(),
                     ..SessionRuntimeStateEntry::default()
                 });
+            // Invalidate derived usage only when durable or mirrored policy actually changes.
+            // 仅在持久策略或镜像策略实际变化时，使派生用量失效。
+            let changed =
+                mutation.changed || runtime_state.context_compaction_window_node_id != node_id;
             runtime_state.context_compaction_window_node_id = node_id;
-            runtime_state.live_context_budget_fingerprint = None;
-            runtime_state.anchor_context_budget_fingerprint = None;
-            runtime_state.updated_at = updated_at.clone();
+            if changed {
+                runtime_state.live_context_budget_fingerprint = None;
+                runtime_state.anchor_context_budget_fingerprint = None;
+                runtime_state.updated_at = updated_at.clone();
+            }
+            changed
+        };
+        if mirror_changed {
+            guard.live_context_budgets.remove(&session_id);
         }
-        guard.live_context_budgets.remove(&session_id);
-    }
+        mirror_changed
+    };
     drop(configuration_transaction);
-    if mutation.changed {
+    if projection_changed {
         // The usage orb re-reads recorded usage against the new window immediately.
         // 用量圈立即按新窗口重新计算已记录用量。
         crate::emit_session_context_usage_changed(&app, &state, session_id)?;

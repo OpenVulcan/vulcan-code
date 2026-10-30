@@ -120,7 +120,9 @@ impl StreamRestartState {
                     "A question execution cannot release a non-session provider request.".into(),
                 );
             }
-            Ok(PreparedPhysicalApi::RequestConfigurationChanged) | Err(_) => return Ok(()),
+            Ok(PreparedPhysicalApi::RequestConfigurationChanged)
+            | Ok(PreparedPhysicalApi::ContextCompactionRequired { .. })
+            | Err(_) => return Ok(()),
         };
         // The sole registered owner supplies both the running execution and its just-committed API.
         // 唯一已登记所有者同时提供运行中执行及其刚提交的 API。

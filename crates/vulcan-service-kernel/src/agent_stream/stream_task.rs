@@ -1533,6 +1533,7 @@ fn spawn_agent_stream_task_with_restart_state(
                     session_id,
                     conversation_state,
                     reason,
+                    provider_request_continuation,
                 } => {
                     if restart_state.auto_compaction_already_attempted {
                         tracing::warn!(
@@ -1584,6 +1585,11 @@ fn spawn_agent_stream_task_with_restart_state(
                         return;
                     };
                     let mut compaction_request = request.clone();
+                    // Preserve the telemetry-owned action consumption state before rebuilding the compacted request.
+                    // 重建压缩后请求前，保留遥测状态机拥有的动作消费状态。
+                    compaction_request.replace_retry_replay_with_provider_request_continuation(
+                        provider_request_continuation,
+                    );
                     compaction_request.conversation_state = conversation_state;
                     let compaction_result =
                         force_auto_compact_webui_session_after_provider_boundary(
