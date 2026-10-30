@@ -1287,9 +1287,9 @@ describe("ConversationBranchWorkspaceV1", () => {
     expect(markup).not.toContain("host_result");
   });
 
-  // Only durable error notes retain the system role and they render through the established error card.
-  // 只有可靠错误提示保留 system 角色，并通过既有错误卡片渲染。
-  it("renders system identity only together with an error card", () => {
+  // Durable error notes render through the established error card without an extra role label.
+  // 可靠错误提示通过既有错误卡片渲染，不额外显示角色标签。
+  it("renders a durable error note as an error card without a role label", () => {
     const markup = renderWorkspace([
       eventSummary(1, {
         kind: "api_stats",
@@ -1314,7 +1314,7 @@ describe("ConversationBranchWorkspaceV1", () => {
       }, "ui_only"),
     ]);
 
-    expect(markup).toContain(">SYSTEM<");
+    expect(markup).not.toContain("vk-role-label");
     expect(markup).toContain("vk-error-card");
     expect(markup).toContain("request failed");
   });

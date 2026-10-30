@@ -287,7 +287,6 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-answer-row { display: flex; justify-content: flex-start; min-width: 0; }
 .vk-flow { display: grid; gap: calc(var(--vk-u) * 2.5); width: 100%; min-width: 0; color: var(--vk-ink); }
 .vk-flow-body { min-width: 0; }
-.vk-role-label { color: var(--vk-ink-3); font-family: var(--vk-label-font); font-size: var(--vk-fs-xs); font-weight: 600; letter-spacing: var(--vk-label-track); }
 /* Reasoning tags live in the column's left gutter, so replies and tools keep their content alignment. */
 .vk-flow[data-think],
 .vk-gutter-anchor { position: relative; display: block; }

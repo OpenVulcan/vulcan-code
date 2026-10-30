@@ -872,7 +872,6 @@ function ConversationRenderItemContent(props: ConversationRenderItemViewProps) {
         {props.item.leadingThinking ? <ThinkingPreview compact>
           {props.item.leadingThinking.map((block) => <MarkdownMessage key={block.id} content={block.body} eager onOpenMedia={props.onOpenMedia} />)}
         </ThinkingPreview> : null}
-        {props.item.role === "system" && !props.item.sourceMessage?.agentInteraction ? <span className="vk-role-label">SYSTEM</span> : null}
         <div className="vk-flow-body">
         <ConversationBlocksView
           autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
