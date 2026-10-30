@@ -574,6 +574,32 @@ fn additive_total_usage_derivation_requires_engine_two() {
     }));
 }
 
+/// Independent thinking normalization requires engine three and remains valid when declared.
+/// 独立思考归一化要求引擎三，且显式声明该版本后保持有效。
+#[test]
+fn disjoint_reasoning_usage_derivation_requires_engine_three() {
+    let mut manifest = minimal_manifest();
+    let profile = vulcan_llm_core::standard_usage_profiles(
+        vulcan_llm_core::UpstreamProtocol::GeminiGenerateContent,
+    )
+    .into_iter()
+    .find(|profile| profile.record_kind == vulcan_llm_core::UsageRecordKind::JsonBody)
+    .expect("Gemini body usage contract must exist; fixture may need updating");
+    manifest.usage_profiles = vec![crate::provider_manifest::schema::UsageProfileDeclaration {
+        profile_id: profile.profile_id.clone(),
+        description: String::from("Independent thinking usage"),
+        payload: Some(profile),
+    }];
+    let errors = validate_manifest(&manifest, ManifestOwnership::System, &registry()).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.code == "engine_contract_missing_usage_derivation_version")
+    );
+    manifest.engine_contract.minimum_manifest_engine = DISJOINT_REASONING_USAGE_MIN_ENGINE;
+    assert!(validate_manifest(&manifest, ManifestOwnership::System, &registry()).is_ok());
+}
+
 /// Verifies revision zero is rejected.
 /// 验证修订号为零被拒绝。
 #[test]

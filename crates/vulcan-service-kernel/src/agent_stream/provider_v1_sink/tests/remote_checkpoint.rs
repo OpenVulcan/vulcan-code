@@ -403,6 +403,15 @@ fn remote_checkpoint_cold_projection_and_native_encoding_preserve_payload() {
     // 通过与生产相同的不可变发布边界捕获。
     let snapshot = cold.capture_controller_projection_snapshot().unwrap();
     assert_eq!(snapshot.sourced_items, warm.sourced_items);
+    // Opaque checkpoints never acquire the local summary's synthetic continuation control.
+    // 不透明检查点绝不能获得本地摘要的合成续接控制消息。
+    let local_control_id = format!(
+        "v1-compaction-continuation-{}",
+        snapshot.current_compaction_id.unwrap().value()
+    );
+    assert!(!snapshot.items.iter().any(|item| matches!(
+        item, ProjectedItem::SystemText { text, .. } if text.contains(&local_control_id)
+    )));
     assert!(
         matches!(&snapshot.items[0], ProjectedItem::RemoteCompactionCheckpoint { checkpoint: actual, .. } if **actual == checkpoint())
     );

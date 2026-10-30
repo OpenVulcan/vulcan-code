@@ -131,13 +131,12 @@ pub(super) fn extract_profiled_usage_value_events(
         else {
             continue;
         };
-        let usage = observation.usage.clone();
         if accumulator
             .apply(None, observation)
             .map_err(|error| ProtocolConversionError::new(error.message))?
         {
             events.push(AiStreamEvent::UsageUpdated {
-                usage: Box::new(usage),
+                usage: Box::new(accumulator.usage().clone()),
             });
         }
     }

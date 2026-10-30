@@ -649,24 +649,16 @@ fn required_cohere_index(value: &Value) -> Result<usize, ProtocolConversionError
         .map_err(|_| ProtocolConversionError::new("Cohere stream index exceeds usize."))
 }
 
-/// Converts Cohere token or billed-unit usage without inventing missing fields.
-/// 转换 Cohere Token 或计费单位用量且不伪造缺失字段。
+/// Convert actual counters from the Cohere `value` usage object; return unknown for missing tokens.
+/// 转换 Cohere `value` 用量对象中的实际计数，缺失 Token 返回未知。
 fn cohere_usage(value: &Value) -> RequestUsage {
-    let input = value
-        .pointer("/tokens/input_tokens")
-        .or_else(|| value.pointer("/billed_units/input_tokens"));
-    let output = value
-        .pointer("/tokens/output_tokens")
-        .or_else(|| value.pointer("/billed_units/output_tokens"));
-    let input_tokens = reported_cohere_usage(input);
-    let output_tokens = reported_cohere_usage(output);
-    let total_tokens = match (known_usage(input_tokens), known_usage(output_tokens)) {
-        (Some(input), Some(output)) => UsageValue::Known {
-            value: input.saturating_add(output),
-            source: UsageValueSource::Derived,
-        },
-        _ => UsageValue::Unknown,
-    };
+    // Cohere's token counts measure context; billed units may exclude processed tokens.
+    // Cohere 的 Token 计数衡量上下文，而计费单位可能排除已处理的 Token。
+    let input_tokens = reported_cohere_usage(value.pointer("/tokens/input_tokens"));
+    let output_tokens = reported_cohere_usage(value.pointer("/tokens/output_tokens"));
+    // Missing actual counters stay unknown instead of borrowing a different billing measure.
+    // 实际计数缺失时保持未知，不借用不同的计费指标。
+    let total_tokens = vulcan_ai_contract::derive_usage_sum(input_tokens, output_tokens);
     RequestUsage {
         input_tokens,
         uncached_input_tokens: input_tokens,
@@ -700,6 +692,7 @@ fn reported_cohere_usage(value: Option<&Value>) -> UsageValue {
 
 /// Returns a known usage count without changing provenance.
 /// 返回已知用量计数且不改变来源。
+#[cfg(test)]
 fn known_usage(value: UsageValue) -> Option<u64> {
     match value {
         UsageValue::Known { value, .. } => Some(value),
@@ -811,5 +804,32 @@ mod tests {
             )
             .expect_err("missing content index must fail");
         assert!(error.to_string().contains("missing `index`"));
+    }
+
+    /// Billing units cannot supply missing physical counters or dilute known context usage.
+    /// 计费单位不能补齐缺失的实际计数，也不能稀释已知上下文用量。
+    #[test]
+    fn cohere_usage_preserves_actual_token_presence() {
+        for input in [None, Some(0), Some(71)] {
+            for output in [None, Some(0), Some(418)] {
+                // Billing dimensions deliberately differ from the actual protocol counters.
+                // 计费维度故意与实际协议计数不同。
+                let mut record =
+                    json!({"tokens":{},"billed_units":{"input_tokens":5,"output_tokens":20}});
+                if let Some(input) = input {
+                    record["tokens"]["input_tokens"] = json!(input);
+                }
+                if let Some(output) = output {
+                    record["tokens"]["output_tokens"] = json!(output);
+                }
+                let usage = cohere_usage(&record);
+                assert_eq!(known_usage(usage.input_tokens), input);
+                assert_eq!(known_usage(usage.output_tokens), output);
+                assert_eq!(
+                    known_usage(usage.total_tokens),
+                    input.zip(output).map(|(i, o)| i + o)
+                );
+            }
+        }
     }
 }

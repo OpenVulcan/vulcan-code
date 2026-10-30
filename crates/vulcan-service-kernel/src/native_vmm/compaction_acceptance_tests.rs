@@ -443,6 +443,26 @@ pub(super) async fn verify(
     let projection = handle
         .capture_controller_projection_snapshot()
         .expect("committed projection");
+    // A committed summary owns one host continuation, without inventing a new durable user event.
+    // 已提交摘要拥有一条宿主续接信息，不虚构新的可靠用户事件。
+    let continuation_id = format!(
+        "v1-compaction-continuation-{}",
+        projection.current_compaction_id.unwrap().value()
+    );
+    assert_eq!(
+        projection
+            .items
+            .iter()
+            .filter(|item| matches!(
+                item,
+                vulcan_session_core::v1::projection::ProjectedItem::SystemText {
+                    role: vulcan_session_core::v1::projection::ProjectedSystemRole::HiddenUserShell,
+                    text, ..
+                } if text.contains(&continuation_id)
+            ))
+            .count(),
+        1
+    );
     assert!(!projection.items.iter().any(|item| matches!(
         item,
         vulcan_session_core::v1::projection::ProjectedItem::UserInput { .. }

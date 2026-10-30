@@ -710,6 +710,8 @@ fn session_goal_summary_from_document(
         usage_tokens: saturating_u64_to_i64(known_budget.unwrap_or_default()),
         api_call_count: saturating_u64_to_usize(usage.request_count),
         tool_call_count: saturating_u64_to_usize(usage.tool_call_count),
+        // The Goal DTO exposes non-read input (including cache writes), unlike canonical Provider input.
+        // Goal DTO 暴露未命中输入（包含缓存写入），不同于统一 Provider 完整输入。
         input_tokens: saturating_u64_to_i64(usage.uncached_input_tokens.sum),
         cached_input_tokens: saturating_u64_to_i64(usage.cache_read_tokens.sum),
         output_tokens: saturating_u64_to_i64(usage.output_tokens.sum),
@@ -772,6 +774,53 @@ mod tests {
     };
     use vulcan_session_core::v1::ids::{ClientActionId, PendingInputId};
     use vulcan_workspace_store::workspace_store::{SessionV1FlushResult, SessionV1StoreError};
+
+    /// Checks that canonical usage reaches the Goal DTO with disjoint input and cache-read dimensions.
+    /// 检查统一用量进入 Goal DTO 后，输入与缓存读取维度互不重叠。
+    /// No inputs or return value; the real lifetime bucket and frozen baseline drive all expectations.
+    /// 无参数或返回值，所有期望值由真实生命周期桶及冻结基线驱动。
+    #[test]
+    fn goal_summary_input_and_cache_read_reconstruct_full_input_once() {
+        use vulcan_session_core::v1::lifetime_usage::{GoalUsageSnapshot, SessionUsageBucket};
+
+        // The Goal owns a zero baseline before this request is accounted.
+        // 此请求计入之前，Goal 持有零基线。
+        let session_id = SessionId::new_v4();
+        let mut document = SessionDocument::new(session_id.to_string(), "project", "title", 1);
+        document.metadata.mode.goal = GoalConfig {
+            enabled: true,
+            objective: String::from("goal-usage-fixture"),
+            usage_baseline: Some(GoalUsageSnapshot::default()),
+            ..GoalConfig::default()
+        };
+        // Full input includes 900 reads and 50 writes; reasoning is already inside the 50 output tokens.
+        // 完整输入包含 900 次读取及 50 次写入 Token；思考已经计入 50 个输出 Token。
+        let usage = vulcan_session_core::v1::stats::UsageSnapshot {
+            input_tokens: Some(1_000),
+            uncached_input_tokens: Some(100),
+            cache_read_tokens: Some(900),
+            cache_write_tokens: Some(50),
+            output_tokens: Some(50),
+            reasoning_tokens: Some(20),
+            total_tokens: Some(1_050),
+            ..Default::default()
+        };
+        // Build the same aggregate and baseline delta used by real Goal projection.
+        // 构建真实 Goal 投影使用的同一种累计值及基线差值。
+        let current = GoalUsageSnapshot {
+            main: SessionUsageBucket::from_api(&usage, &Default::default()).unwrap(),
+            children: Default::default(),
+        };
+        let summary = session_goal_summary_from_document(&document, session_id, Some(&current))
+            .expect("enabled Goal should project");
+        assert!(summary.usage_known);
+        assert_eq!(summary.input_tokens, 100);
+        assert_eq!(summary.cached_input_tokens, 900);
+        assert_eq!(summary.input_tokens + summary.cached_input_tokens, 1_000);
+        assert_eq!(summary.tokens_used, 150);
+        assert_eq!(summary.total_tokens, 1_050);
+        assert_eq!(summary.reasoning_tokens, 20);
+    }
 
     /// Read-only backend proving authority reads never need a persistence side effect.
     /// 只读后端，用于证明权威读取不需要任何持久化副作用。

@@ -173,12 +173,13 @@ pub fn build_session_turn_stats_from_state_with_segments(
                 assistant_segment.reasoning_tokens = assistant_segment
                     .reasoning_tokens
                     .saturating_add(usage.reasoning_tokens.unwrap_or(0));
+                // Canonical output already includes thinking; retain the reported total, including explicit zero.
+                // 统一输出已经包含思考；保留报告总额，包括明确的零值。
                 let total_tokens = usage.total_tokens.unwrap_or_else(|| {
                     usage
                         .input_tokens
                         .unwrap_or(0)
                         .saturating_add(usage.output_tokens.unwrap_or(0))
-                        .saturating_add(usage.reasoning_tokens.unwrap_or(0))
                 });
                 stats.total_tokens = stats.total_tokens.saturating_add(total_tokens);
                 assistant_segment.total_tokens =

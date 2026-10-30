@@ -1159,16 +1159,16 @@ pub struct ProviderUsageSnapshot {
     /// 最新 Provider 用量观测的精确合并类型。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub update_kind: Option<vulcan_ai_contract::UsageUpdateKind>,
-    /// Optional provider-reported input token count.
-    /// Provider 报告的可选输入 Token 数量。
+    /// Optional normalized full input, including cache reads and writes exactly once.
+    /// 可选的归一化完整输入，缓存读取与写入均只包含一次。
     #[serde(default)]
     pub input_tokens: Option<usize>,
-    /// Optional normalized input token count not served from cache.
-    /// 可选的规范化非缓存输入 Token 数量。
+    /// Optional normalized non-read input, including newly written cache tokens.
+    /// 可选的归一化未命中输入，包含新写入缓存的 Token。
     #[serde(default)]
     pub uncached_input_tokens: Option<usize>,
-    /// Optional provider-reported output token count.
-    /// Provider 报告的可选输出 Token 数量。
+    /// Optional normalized complete output, including independent thinking exactly once.
+    /// 可选的归一化完整输出，独立思考只包含一次。
     #[serde(default)]
     pub output_tokens: Option<usize>,
     /// Optional provider-reported reasoning token count.

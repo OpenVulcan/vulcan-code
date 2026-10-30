@@ -26,8 +26,8 @@ export function ComposerGoalDetails({ goal }: { goal: SessionGoalSummary }) {
     [t("composer.goal.tooltip.input"), formatTokenCount(goal.inputTokens)], [t("composer.goal.tooltip.cache"), formatTokenCount(goal.cachedInputTokens)],
     [t("composer.goal.tooltip.output"), formatTokenCount(goal.outputTokens)], [t("composer.goal.tooltip.reasoning"), formatTokenCount(goal.reasoningTokens)],
   ];
-  // input is the complete input denominator; zero input has no defined cache-hit percentage.
-  // input 是完整输入分母；输入为零时不存在有效缓存命中率。
+  // The Goal DTO's inputTokens excludes cache reads; adding its disjoint cache detail reconstructs full input.
+  // Goal DTO 的 inputTokens 排除缓存读取；加上互不重叠的缓存明细可还原完整输入。
   const input = goal.inputTokens + goal.cachedInputTokens;
   // cachePercent preserves the distinction between no samples and a real zero hit rate.
   // cachePercent 区分尚无样本与真实的零命中率。

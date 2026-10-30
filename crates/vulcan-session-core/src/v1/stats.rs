@@ -11,21 +11,21 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Official token usage reported by one physical Provider API call.
-/// 一次物理 Provider API 调用上报的官方 token 用量。
+/// Provider token usage normalized at extraction for one physical API call.
+/// 一次物理 API 调用在提取阶段归一化的供应商 Token 用量。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UsageSnapshot {
-    /// Official input token count.
-    /// 官方输入 token 数。
+    /// Complete input count, including cache reads and writes exactly once.
+    /// 完整输入计数，缓存读取与写入均只包含一次。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_tokens: Option<u64>,
-    /// Official uncached input token count.
-    /// 官方未缓存输入 token 数。
+    /// Non-read input count, including cache writes.
+    /// 未命中输入计数，包含缓存写入。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uncached_input_tokens: Option<u64>,
-    /// Official output token count.
-    /// 官方输出 token 数。
+    /// Complete output count, including independent thinking exactly once.
+    /// 完整输出计数，独立思考只包含一次。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_tokens: Option<u64>,
     /// Official reasoning token count.

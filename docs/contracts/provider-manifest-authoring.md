@@ -503,10 +503,34 @@ Wire JSON；内部封装不是标准 Responses 请求。媒体载荷保存在请
 已取证的逐帧累计 Usage 必须声明为 `snapshot`，避免第一条统计提前冻结终态；不能把累计值声明为
 `delta` 后逐帧相加。入口与模型作用域示例见 [Step Plan 用量证据](providers/stepfun-usage-evidence.md)。
 
+用量提取与累计的实现权威是 `vulcan-llm-core/src/usage.rs`。修改用量字段、派生项或上游协议修订时，
+必须同时复核这里的口径和回归测试。传输层先合并一次物理请求的原始分量，再按已声明的依赖顺序
+归一化，并向下游发布累计快照；不同请求及协议路由不得共享累加器。
+
+- 下游 `input_tokens` 是含缓存读取、缓存写入各一次的完整输入；`uncached_input_tokens` 是未由缓存
+  读取提供的输入，因此包含缓存写入。已包含缓存的输入不能再次加缓存明细。
+- 下游 `output_tokens` 是完整输出，`reasoning_tokens` 保留为其中的明细。只有 Profile 显式声明
+  `output_from_disjoint_reasoning` 时，才把线路上的独立思考量加入输出；使用该派生的 Manifest 必须
+  声明 `minimum_manifest_engine >= 3`。思考可选省略；原始输出缺失时完整输出仍保持未知。
+- 字段缺失与明确报告零值不同。缺失输入不能由总量减输出、再减思考来猜测；上下文预算保留已有的
+  字符估算及警告。缺失完整输出但已知思考时，回合内预算可将思考作为已知下界，而不伪造完整输出。
+- 默认 Anthropic Profile 从互斥的普通输入、缓存读取和缓存写入构造完整输入；`message_delta` 的
+  累计更新继续替换原始分量，直到 `message_stop` 冻结。聚合缓存写入存在时不再叠加其时长分项。
+- 默认 Gemini 与 Interactions 的现代字段把思考作为独立输出分量；Code Assist 使用精确的
+  `/response/usageMetadata` 封装路径。OpenAI 的缓存与思考明细已包含在相应总维度中，不再相加。
+  已声明的供应商覆盖 Profile 仍是权威，不因协议基线增加字段而自动继承未经取证的字段。
+- Cohere 的 `billed_units` 是计费指标，不能代替 `tokens` 上下文计数；实际计数缺失时保持未知。
+
+上述上游字段说明归属于 [Anthropic 流式契约](https://platform.claude.com/docs/en/build-with-claude/streaming)、
+[Gemini 用量契约](https://ai.google.dev/api/generate-content#UsageMetadata) 和
+[Cohere Chat 契约](https://docs.cohere.com/v2/reference/chat)；上游字段或内置 Profile 修订时必须重新核对，
+不能把本节转录文字作为独立的字段定义来源。
+
 `usage_profiles[].payload.derivations` 可选声明
 `total_from_input_components_and_output`。该派生只在供应商证据证明
-`uncached_input_tokens`、`cache_read_tokens`、`cache_write_tokens` 与 `output_tokens` 互不重叠时使用，
-计算式为四项相加；其中缓存读取和缓存写入字段缺失按零处理，非缓存输入或输出缺失、以及加法溢出
+线路上绑定的 `uncached_input_tokens`、`cache_read_tokens`、`cache_write_tokens` 与完整输出互不重叠时使用，
+计算式为三个原始输入分量加归一化输出，不能再次添加归一化未命中输入中已经包含的缓存写入；其中
+缓存读取和缓存写入字段缺失按零处理，普通输入或输出缺失、以及加法溢出
 仍保持 Unknown。供应商直接报告的 `total_tokens` 始终优先，派生不能覆盖。未声明该项的路由不得
 自动相加，避免把“字段缺失”误判成可推导总额。
 

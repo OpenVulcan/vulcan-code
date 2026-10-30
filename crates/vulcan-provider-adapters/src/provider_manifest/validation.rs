@@ -47,6 +47,9 @@ const MAX_ENGINE_CONTRACT_REQUIREMENTS: usize = 64;
 /// Minimum manifest engine required by configured additive total usage derivation.
 /// 配置式用量总额加法派生所需的最低 Manifest 引擎版本。
 const ADDITIVE_TOTAL_USAGE_DERIVATION_MIN_ENGINE: u32 = 2;
+/// Minimum manifest engine supporting independent reasoning in normalized complete output.
+/// 支持将独立思考归一化到完整输出的最低 Manifest 引擎版本。
+const DISJOINT_REASONING_USAGE_MIN_ENGINE: u32 = 3;
 /// Sensitive response headers that may never be reclassified as provider request identifiers.
 /// 绝不能被重新归类为供应商请求标识的敏感响应头。
 const FORBIDDEN_PROVIDER_REQUEST_ID_RESPONSE_HEADERS: &[&str] = &[
@@ -379,6 +382,17 @@ fn validate_engine_contract(
         let Some(payload) = declaration.payload.as_ref() else {
             continue;
         };
+        if payload
+            .derivations
+            .contains(&vulcan_llm_core::UsageDerivation::OutputFromDisjointReasoning)
+            && contract.minimum_manifest_engine < DISJOINT_REASONING_USAGE_MIN_ENGINE
+        {
+            errors.push(ManifestValidationError::new(
+                "engine_contract_missing_usage_derivation_version",
+                format!("$.usage_profiles[{profile_index}].payload.derivations"),
+                format!("usage derivation `output_from_disjoint_reasoning` requires manifest engine {DISJOINT_REASONING_USAGE_MIN_ENGINE} or newer"),
+            ));
+        }
         if payload
             .derivations
             .contains(&vulcan_llm_core::UsageDerivation::TotalFromInputComponentsAndOutput)

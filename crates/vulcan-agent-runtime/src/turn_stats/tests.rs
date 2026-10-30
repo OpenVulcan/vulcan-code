@@ -5,6 +5,64 @@ use vulcan_workbench_model::SessionTurnUsageGroupKind;
 use super::*;
 use crate::conversation_protocol::{SessionConversationMessage, SessionConversationToolCall};
 
+/// Verifies turn aggregation and explicit usage segments share complete-output accounting.
+/// 验证回合汇总与显式用量分段共享完整输出口径。
+/// No inputs or return value; missing fields, explicit zero and thinking-only reports are checked.
+/// 无参数或返回值，检查缺字段、明确零值及仅报告思考的情况。
+#[test]
+fn normalized_usage_totals_do_not_add_reasoning_twice() {
+    for input in [None, Some(0), Some(100)] {
+        for output in [None, Some(0), Some(50)] {
+            for total in [None, Some(0), Some(200)] {
+                // Input/output are canonical complete dimensions; reasoning remains a separate detail.
+                // 输入及输出是统一的完整维度，思考仍作为独立明细保留。
+                let usage = ProviderUsageSnapshot {
+                    input_tokens: input,
+                    output_tokens: output,
+                    total_tokens: total,
+                    reasoning_tokens: Some(20),
+                    cached_input_tokens: Some(30),
+                    ..Default::default()
+                };
+                // Numeric display counters retain their existing missing-as-zero presentation contract.
+                // 数字展示计数保持既有缺失按零展示的契约。
+                let expected = total.unwrap_or(input.unwrap_or(0) + output.unwrap_or(0));
+                // Explicit compaction segments use the shared workbench constructor.
+                // 显式压缩分段使用共享工作台构造函数。
+                let segment = SessionTurnUsageSegment::from_provider_usage(
+                    SessionTurnUsageSegmentKind::ContextCompaction,
+                    1,
+                    Some(&usage),
+                );
+                assert_eq!(segment.total_tokens, expected);
+                assert_eq!(segment.reasoning_tokens, 20);
+                // Ordinary turns aggregate the same normalized observation from canonical assistant history.
+                // 普通回合从规范助手历史汇总相同的归一化观测。
+                let state = SessionConversationState {
+                    messages: vec![assistant_message(
+                        "session-1-protocol-assistant-2001",
+                        usage,
+                        false,
+                    )],
+                    records: vec![summary_record("summary-current", "2002")],
+                    continuation: Default::default(),
+                };
+                // Both production consumers must produce the same total without adding cache or reasoning details.
+                // 两个生产消费者必须产生相同总额，不额外相加缓存或思考明细。
+                let stats = build_session_turn_stats_from_state(
+                    &state,
+                    "summary-current",
+                    SessionTurnStatsStatus::Completed,
+                    Some(1),
+                )
+                .unwrap();
+                assert_eq!(stats.total_tokens, expected);
+                assert_eq!(stats.reasoning_tokens, 20);
+            }
+        }
+    }
+}
+
 /// Builds one visible transcript user record for turn-boundary tests.
 /// 为轮次边界测试构建一条可见用户转录记录。
 fn user_record(id: &str, created_at: &str, body: &str) -> SessionConversationRecord {

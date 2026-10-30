@@ -11,6 +11,9 @@ use vulcan_ai_contract::{
 
 use crate::LlmCoreError;
 
+#[cfg(test)]
+mod accounting_tests;
+
 /// Maximum number of explicit JSON Pointer aliases accepted by one usage profile.
 /// 单个用量 Profile 允许接受的显式 JSON Pointer 别名总数上限。
 const USAGE_PROFILE_MAX_POINTERS: usize = 64;
@@ -146,6 +149,9 @@ pub enum UsageDerivation {
     /// Derives total usage by adding disjoint input components and complete output.
     /// 通过相加互斥输入分项与完整输出推导用量总额。
     TotalFromInputComponentsAndOutput,
+    /// Includes separately reported reasoning in complete output; absent reasoning contributes zero.
+    /// 将单独上报的思考计入完整输出；省略思考时其贡献为零。
+    OutputFromDisjointReasoning,
 }
 
 /// Freezes the usage extraction contract selected by one resolved route.
@@ -393,6 +399,9 @@ impl UsageExtractionProfile {
                 update_kind: self.update_kind,
                 ..RequestUsage::default()
             },
+            reported_usage: RequestUsage::default(),
+            reported_source_paths: BTreeMap::new(),
+            derivations: self.derivations.clone(),
             source_paths: BTreeMap::new(),
             response_model: None,
             response_id: None,
@@ -404,6 +413,11 @@ impl UsageExtractionProfile {
             };
             observation.assign(binding, pointer, raw)?;
         }
+        // Preserve wire components so later partial records can be normalized from their merged facts.
+        // 保留线路分量，使后续分段记录可以基于合并事实归一化。
+        observation.enrich_usage();
+        observation.reported_usage = observation.usage.clone();
+        observation.reported_source_paths = observation.source_paths.clone();
         observation.apply_derivations(&self.derivations);
         observation.enrich_usage();
         Ok(Some(observation))
@@ -427,8 +441,8 @@ pub fn standard_usage_profiles(protocol: crate::UpstreamProtocol) -> Vec<UsageEx
         crate::UpstreamProtocol::OpenAiResponses => responses_usage_profiles(),
         crate::UpstreamProtocol::OpenAiChatCompletions => chat_usage_profiles(),
         crate::UpstreamProtocol::AnthropicMessages => anthropic_usage_profiles(),
-        crate::UpstreamProtocol::GeminiGenerateContent
-        | crate::UpstreamProtocol::GoogleCodeAssist => gemini_usage_profiles(),
+        crate::UpstreamProtocol::GeminiGenerateContent => gemini_usage_profiles(),
+        crate::UpstreamProtocol::GoogleCodeAssist => code_assist_usage_profiles(),
         crate::UpstreamProtocol::GeminiInteractions => interactions_usage_profiles(),
     }
 }
@@ -459,23 +473,26 @@ fn interactions_usage_profiles() -> Vec<UsageExtractionProfile> {
     vec![
         UsageExtractionProfile {
             profile_id: String::from("gemini.interactions.completed.usage.v1"),
-            revision: 1,
+            revision: 2,
             record_kind: UsageRecordKind::SseEvent,
             update_kind: UsageUpdateKind::Final,
             event_type_pointer: Some(String::from("/event_type")),
             event_type_value: Some(String::from("interaction.completed")),
-            required_pointer: Some(String::from("/interaction/usage/total_input_tokens")),
+            required_pointer: Some(String::from("/interaction/usage")),
             bindings,
-            derivations: vec![UsageDerivation::UncachedInputFromInputMinusCacheRead],
+            derivations: vec![
+                UsageDerivation::UncachedInputFromInputMinusCacheRead,
+                UsageDerivation::OutputFromDisjointReasoning,
+            ],
         },
         UsageExtractionProfile {
             profile_id: String::from("gemini.interactions.completed.legacy-usage.v1"),
-            revision: 1,
+            revision: 2,
             record_kind: UsageRecordKind::SseEvent,
             update_kind: UsageUpdateKind::Final,
             event_type_pointer: Some(String::from("/type")),
             event_type_value: Some(String::from("interaction.completed")),
-            required_pointer: Some(String::from("/interaction/usage/input_tokens")),
+            required_pointer: Some(String::from("/interaction/usage")),
             bindings: vec![
                 token_binding(UsageField::InputTokens, "/interaction/usage/input_tokens"),
                 token_binding(
@@ -494,7 +511,7 @@ fn interactions_usage_profiles() -> Vec<UsageExtractionProfile> {
         },
         UsageExtractionProfile {
             profile_id: String::from("gemini.interactions.finish.usage.v1"),
-            revision: 1,
+            revision: 2,
             record_kind: UsageRecordKind::SseEvent,
             update_kind: UsageUpdateKind::Final,
             event_type_pointer: Some(String::from("/event_type")),
@@ -522,7 +539,10 @@ fn interactions_usage_profiles() -> Vec<UsageExtractionProfile> {
                     "/metadata/total_usage/total_tokens",
                 ),
             ],
-            derivations: vec![UsageDerivation::UncachedInputFromInputMinusCacheRead],
+            derivations: vec![
+                UsageDerivation::UncachedInputFromInputMinusCacheRead,
+                UsageDerivation::OutputFromDisjointReasoning,
+            ],
         },
     ]
 }
@@ -535,6 +555,10 @@ fn responses_usage_profiles() -> Vec<UsageExtractionProfile> {
         token_binding(
             UsageField::CacheReadTokens,
             "/usage/input_tokens_details/cached_tokens",
+        ),
+        token_binding(
+            UsageField::CacheWriteTokens,
+            "/usage/input_tokens_details/cache_write_tokens",
         ),
         token_binding(UsageField::OutputTokens, "/usage/output_tokens"),
         token_binding(
@@ -556,7 +580,7 @@ fn responses_usage_profiles() -> Vec<UsageExtractionProfile> {
     vec![
         UsageExtractionProfile {
             profile_id: String::from("openai.responses.body.v1"),
-            revision: 1,
+            revision: 2,
             record_kind: UsageRecordKind::JsonBody,
             update_kind: UsageUpdateKind::Final,
             event_type_pointer: None,
@@ -567,7 +591,7 @@ fn responses_usage_profiles() -> Vec<UsageExtractionProfile> {
         },
         UsageExtractionProfile {
             profile_id: String::from("openai.responses.sse.completed.v1"),
-            revision: 1,
+            revision: 2,
             record_kind: UsageRecordKind::SseEvent,
             update_kind: UsageUpdateKind::Final,
             event_type_pointer: Some(String::from("/type")),
@@ -578,7 +602,7 @@ fn responses_usage_profiles() -> Vec<UsageExtractionProfile> {
         },
         UsageExtractionProfile {
             profile_id: String::from("openai.responses.ws.completed.v1"),
-            revision: 1,
+            revision: 2,
             record_kind: UsageRecordKind::WebSocketFrame,
             update_kind: UsageUpdateKind::Final,
             event_type_pointer: Some(String::from("/type")),
@@ -599,6 +623,10 @@ fn chat_usage_profiles() -> Vec<UsageExtractionProfile> {
             UsageField::CacheReadTokens,
             "/usage/prompt_tokens_details/cached_tokens",
         ),
+        token_binding(
+            UsageField::CacheWriteTokens,
+            "/usage/prompt_tokens_details/cache_write_tokens",
+        ),
         token_binding(UsageField::OutputTokens, "/usage/completion_tokens"),
         token_binding(
             UsageField::ReasoningTokens,
@@ -611,7 +639,7 @@ fn chat_usage_profiles() -> Vec<UsageExtractionProfile> {
     vec![
         UsageExtractionProfile {
             profile_id: String::from("openai.chat.body.v1"),
-            revision: 1,
+            revision: 2,
             record_kind: UsageRecordKind::JsonBody,
             update_kind: UsageUpdateKind::Final,
             event_type_pointer: None,
@@ -622,7 +650,7 @@ fn chat_usage_profiles() -> Vec<UsageExtractionProfile> {
         },
         UsageExtractionProfile {
             profile_id: String::from("openai.chat.sse.usage.v1"),
-            revision: 1,
+            revision: 2,
             record_kind: UsageRecordKind::SseEvent,
             update_kind: UsageUpdateKind::Final,
             event_type_pointer: None,
@@ -662,7 +690,7 @@ fn anthropic_usage_profiles() -> Vec<UsageExtractionProfile> {
     vec![
         UsageExtractionProfile {
             profile_id: String::from("anthropic.message.body.usage.v1"),
-            revision: 1,
+            revision: 2,
             record_kind: UsageRecordKind::JsonBody,
             update_kind: UsageUpdateKind::Final,
             event_type_pointer: None,
@@ -676,13 +704,13 @@ fn anthropic_usage_profiles() -> Vec<UsageExtractionProfile> {
         },
         UsageExtractionProfile {
             profile_id: String::from("anthropic.message_start.usage.v1"),
-            revision: 1,
+            revision: 2,
             record_kind: UsageRecordKind::SseEvent,
             update_kind: UsageUpdateKind::Snapshot,
             event_type_pointer: Some(String::from("/type")),
             event_type_value: Some(String::from("message_start")),
             required_pointer: Some(String::from("/message/usage")),
-            bindings: prefix_bindings(body_bindings, "/message"),
+            bindings: prefix_bindings(body_bindings.clone(), "/message"),
             derivations: vec![
                 UsageDerivation::CacheWriteFromDurations,
                 UsageDerivation::InputFromDisjointDimensions,
@@ -690,16 +718,27 @@ fn anthropic_usage_profiles() -> Vec<UsageExtractionProfile> {
         },
         UsageExtractionProfile {
             profile_id: String::from("anthropic.message_delta.usage.v1"),
+            revision: 2,
+            record_kind: UsageRecordKind::SseEvent,
+            update_kind: UsageUpdateKind::Snapshot,
+            event_type_pointer: Some(String::from("/type")),
+            event_type_value: Some(String::from("message_delta")),
+            required_pointer: Some(String::from("/usage")),
+            bindings: body_bindings,
+            derivations: vec![
+                UsageDerivation::CacheWriteFromDurations,
+                UsageDerivation::InputFromDisjointDimensions,
+            ],
+        },
+        UsageExtractionProfile {
+            profile_id: String::from("anthropic.message_stop.usage.v1"),
             revision: 1,
             record_kind: UsageRecordKind::SseEvent,
             update_kind: UsageUpdateKind::Final,
             event_type_pointer: Some(String::from("/type")),
-            event_type_value: Some(String::from("message_delta")),
-            required_pointer: Some(String::from("/usage")),
-            bindings: vec![token_binding(
-                UsageField::OutputTokens,
-                "/usage/output_tokens",
-            )],
+            event_type_value: Some(String::from("message_stop")),
+            required_pointer: None,
+            bindings: Vec::new(),
             derivations: Vec::new(),
         },
     ]
@@ -729,27 +768,53 @@ fn gemini_usage_profiles() -> Vec<UsageExtractionProfile> {
     vec![
         UsageExtractionProfile {
             profile_id: String::from("google.gemini.body.v1"),
-            revision: 1,
+            revision: 2,
             record_kind: UsageRecordKind::JsonBody,
             update_kind: UsageUpdateKind::Final,
             event_type_pointer: None,
             event_type_value: None,
             required_pointer: Some(String::from("/usageMetadata")),
             bindings: bindings.clone(),
-            derivations: vec![UsageDerivation::UncachedInputFromInputMinusCacheRead],
+            derivations: vec![
+                UsageDerivation::UncachedInputFromInputMinusCacheRead,
+                UsageDerivation::OutputFromDisjointReasoning,
+            ],
         },
         UsageExtractionProfile {
             profile_id: String::from("google.gemini.stream.v1"),
-            revision: 1,
+            revision: 2,
             record_kind: UsageRecordKind::SseEvent,
             update_kind: UsageUpdateKind::Snapshot,
             event_type_pointer: None,
             event_type_value: None,
             required_pointer: Some(String::from("/usageMetadata")),
             bindings,
-            derivations: vec![UsageDerivation::UncachedInputFromInputMinusCacheRead],
+            derivations: vec![
+                UsageDerivation::UncachedInputFromInputMinusCacheRead,
+                UsageDerivation::OutputFromDisjointReasoning,
+            ],
         },
     ]
+}
+
+/// Builds Code Assist profiles for its required outer response envelope using Gemini accounting.
+/// 使用 Gemini 计数规则，为 Code Assist 必需的外层 response 信封构建 Profile。
+/// Takes no arguments; returns profiles that never match unwrapped Gemini records.
+/// 无参数，返回绝不匹配未包装 Gemini 记录的 Profile。
+fn code_assist_usage_profiles() -> Vec<UsageExtractionProfile> {
+    gemini_usage_profiles()
+        .into_iter()
+        .map(|mut profile| {
+            profile.profile_id = match profile.record_kind {
+                UsageRecordKind::JsonBody => String::from("google.code_assist.body.v1"),
+                UsageRecordKind::SseEvent => String::from("google.code_assist.stream.v1"),
+                _ => unreachable!("Gemini defaults only declare body and stream usage"),
+            };
+            profile.required_pointer = Some(String::from("/response/usageMetadata"));
+            profile.bindings = prefix_bindings(profile.bindings, "/response");
+            profile
+        })
+        .collect()
 }
 
 /// Returns canonical Responses usage bindings without an event envelope.
@@ -760,6 +825,10 @@ fn responses_usage_bindings() -> Vec<UsageFieldBinding> {
         token_binding(
             UsageField::CacheReadTokens,
             "/usage/input_tokens_details/cached_tokens",
+        ),
+        token_binding(
+            UsageField::CacheWriteTokens,
+            "/usage/input_tokens_details/cache_write_tokens",
         ),
         token_binding(UsageField::OutputTokens, "/usage/output_tokens"),
         token_binding(
@@ -817,6 +886,19 @@ fn derive_usage_copy(value: UsageValue) -> UsageValue {
             source: UsageValueSource::Derived,
         },
         UsageValue::Unknown => UsageValue::Unknown,
+    }
+}
+
+/// Adds a required count and a profile-declared optional contribution, without manufacturing the required count.
+/// 相加必需计数和 Profile 声明的可选贡献，不虚构必需计数。
+/// `required` remains unknown when absent; `optional` contributes zero only under the selected derivation contract.
+/// `required` 缺失时保持未知，`optional` 仅在已选派生契约内允许以零贡献处理。
+/// Returns a checked derived sum, or unknown for a missing required value or overflow.
+/// 返回经溢出检查的派生和，必需值缺失或溢出时返回未知。
+fn derive_optional_usage_sum(required: UsageValue, optional: UsageValue) -> UsageValue {
+    match optional {
+        UsageValue::Unknown => derive_usage_copy(required),
+        known => derive_usage_sum(required, known),
     }
 }
 
@@ -891,6 +973,15 @@ pub struct UsageObservation {
     /// Normalized missing-aware usage update.
     /// 归一化且可表达缺失的用量更新。
     pub usage: RequestUsage,
+    /// Unmodified extracted dimensions retained for merging before normalization.
+    /// 保留未经转换的提取维度，用于归一化前合并。
+    reported_usage: RequestUsage,
+    /// Exact source paths before any declared derivation replaces a dimension.
+    /// 声明的派生替换维度之前的精确来源路径。
+    reported_source_paths: BTreeMap<UsageField, String>,
+    /// Derivations explicitly declared by this record's frozen profile.
+    /// 此记录冻结 Profile 显式声明的派生。
+    derivations: Vec<UsageDerivation>,
     /// Exact JSON Pointer used for every known field.
     /// 每个已知字段实际使用的精确 JSON Pointer。
     pub source_paths: BTreeMap<UsageField, String>,
@@ -955,7 +1046,22 @@ impl UsageObservation {
     /// Applies only the derivations explicitly registered by the selected profile.
     /// 仅应用已选 Profile 显式注册的推导关系。
     fn apply_derivations(&mut self, derivations: &[UsageDerivation]) {
-        for derivation in derivations {
+        // An overflowing duration sum is invalid evidence, not an omitted optional cache contribution.
+        // 时长分项相加溢出属于无效证据，不能被当作省略的可选缓存贡献。
+        let mut cache_write_sum_invalid = false;
+        // Evaluate declared dependencies before their consumers, regardless of profile ordering.
+        // 无论 Profile 如何排序，都先求值已声明的依赖，再求值消费该依赖的派生项。
+        for derivation in [
+            UsageDerivation::CacheWriteFromDurations,
+            UsageDerivation::InputFromDisjointDimensions,
+            UsageDerivation::UncachedInputFromInput,
+            UsageDerivation::UncachedInputFromInputMinusCacheRead,
+            UsageDerivation::OutputFromDisjointReasoning,
+            UsageDerivation::TotalFromInputComponentsAndOutput,
+        ] {
+            if !derivations.contains(&derivation) {
+                continue;
+            }
             match derivation {
                 UsageDerivation::UncachedInputFromInput => {
                     if matches!(self.usage.uncached_input_tokens, UsageValue::Unknown) {
@@ -985,10 +1091,24 @@ impl UsageObservation {
                 }
                 UsageDerivation::CacheWriteFromDurations => {
                     if matches!(self.usage.cache_write_tokens, UsageValue::Unknown) {
-                        self.usage.cache_write_tokens = derive_usage_sum(
-                            self.usage.cache_write_5m_tokens,
-                            self.usage.cache_write_1h_tokens,
-                        );
+                        self.usage.cache_write_tokens = match self.usage.cache_write_5m_tokens {
+                            UsageValue::Unknown => {
+                                derive_usage_copy(self.usage.cache_write_1h_tokens)
+                            }
+                            five_minute => derive_optional_usage_sum(
+                                five_minute,
+                                self.usage.cache_write_1h_tokens,
+                            ),
+                        };
+                        cache_write_sum_invalid =
+                            matches!(self.usage.cache_write_tokens, UsageValue::Unknown)
+                                && (!matches!(
+                                    self.usage.cache_write_5m_tokens,
+                                    UsageValue::Unknown
+                                ) || !matches!(
+                                    self.usage.cache_write_1h_tokens,
+                                    UsageValue::Unknown
+                                ));
                         if !matches!(self.usage.cache_write_tokens, UsageValue::Unknown) {
                             self.source_paths.insert(
                                 UsageField::CacheWriteTokens,
@@ -998,12 +1118,16 @@ impl UsageObservation {
                     }
                 }
                 UsageDerivation::InputFromDisjointDimensions => {
-                    if !matches!(self.usage.input_tokens, UsageValue::Unknown) {
+                    if !matches!(self.usage.input_tokens, UsageValue::Unknown)
+                        || cache_write_sum_invalid
+                    {
                         continue;
                     }
-                    let input = derive_usage_sum(
-                        derive_usage_sum(
-                            self.usage.uncached_input_tokens,
+                    // This declaration owns disjoint input; only its optional cache contributions may be omitted.
+                    // 此声明负责互斥输入，只有其中的可选缓存贡献允许省略。
+                    let input = derive_optional_usage_sum(
+                        derive_optional_usage_sum(
+                            self.reported_usage.uncached_input_tokens,
                             self.usage.cache_read_tokens,
                         ),
                         self.usage.cache_write_tokens,
@@ -1019,14 +1143,16 @@ impl UsageObservation {
                     }
                 }
                 UsageDerivation::TotalFromInputComponentsAndOutput => {
-                    if !matches!(self.usage.total_tokens, UsageValue::Unknown) {
+                    if !matches!(self.usage.total_tokens, UsageValue::Unknown)
+                        || cache_write_sum_invalid
+                    {
                         continue;
                     }
                     // total is derived only for a profile that explicitly declares disjoint input
                     // components and complete output semantics.
                     // total 仅在 Profile 显式声明输入分项互斥且输出完整时进行派生。
                     let total = derive_total_from_input_components_and_output(
-                        self.usage.uncached_input_tokens,
+                        self.reported_usage.uncached_input_tokens,
                         self.usage.cache_read_tokens,
                         self.usage.cache_write_tokens,
                         self.usage.output_tokens,
@@ -1041,6 +1167,46 @@ impl UsageObservation {
                         );
                     }
                 }
+                UsageDerivation::OutputFromDisjointReasoning => {
+                    self.usage.output_tokens = derive_optional_usage_sum(
+                        self.reported_usage.output_tokens,
+                        self.usage.reasoning_tokens,
+                    );
+                    if !matches!(self.usage.output_tokens, UsageValue::Unknown) {
+                        self.source_paths.insert(
+                            UsageField::OutputTokens,
+                            String::from("derived:output_tokens+reasoning_tokens"),
+                        );
+                    } else {
+                        self.source_paths.remove(&UsageField::OutputTokens);
+                    }
+                }
+            }
+        }
+        if derivations.iter().any(|derivation| {
+            matches!(
+                derivation,
+                UsageDerivation::InputFromDisjointDimensions
+                    | UsageDerivation::TotalFromInputComponentsAndOutput
+            )
+        }) {
+            // Cache writes are processed input, not cache hits; keep raw disjoint input only in reported evidence.
+            // 缓存写入属于已处理输入而非缓存命中，原始互斥输入仅保留在报告证据中。
+            self.usage.uncached_input_tokens = if cache_write_sum_invalid {
+                UsageValue::Unknown
+            } else {
+                derive_optional_usage_sum(
+                    self.reported_usage.uncached_input_tokens,
+                    self.usage.cache_write_tokens,
+                )
+            };
+            if !matches!(self.usage.uncached_input_tokens, UsageValue::Unknown) {
+                self.source_paths.insert(
+                    UsageField::UncachedInputTokens,
+                    String::from("derived:uncached_input_tokens+cache_write_tokens"),
+                );
+            } else {
+                self.source_paths.remove(&UsageField::UncachedInputTokens);
             }
         }
     }
@@ -1069,6 +1235,15 @@ pub struct UsageAccumulator {
     /// Accumulated normalized usage.
     /// 已累计的归一化用量。
     usage: RequestUsage,
+    /// Merged raw dimensions; derived values never feed the next normalization pass.
+    /// 合并后的原始维度，派生值绝不进入下一次归一化计算。
+    reported_usage: RequestUsage,
+    /// Raw paths accumulated across partial records of this physical attempt.
+    /// 当前物理尝试各分段记录累计的原始路径。
+    reported_source_paths: BTreeMap<UsageField, String>,
+    /// Declared derivations retained across start and terminal profiles.
+    /// 跨起始与终态 Profile 保留的声明派生。
+    derivations: Vec<UsageDerivation>,
     /// Latest source path for every known field.
     /// 每个已知字段的最新来源路径。
     source_paths: BTreeMap<UsageField, String>,
@@ -1134,8 +1309,8 @@ impl UsageAccumulator {
 
         if !matches!(observation.usage.update_kind, UsageUpdateKind::Delta) {
             record_monotonic_regressions(
-                &self.usage,
-                &observation.usage,
+                &self.reported_usage,
+                &observation.reported_usage,
                 &mut observation.validation_flags,
             );
         }
@@ -1164,9 +1339,33 @@ impl UsageAccumulator {
             }
             new_validation_flags.push(flag.clone());
         }
-        self.usage.merge_update(observation.usage.clone());
-        self.source_paths.extend(observation.source_paths);
+        // Merge raw counters first; otherwise later cache or thought-only records cannot repair derived totals.
+        // 先合并原始计数，否则后续仅补报缓存或思考的记录无法更新派生总量。
+        self.reported_usage
+            .merge_update(observation.reported_usage.clone());
+        self.reported_source_paths
+            .extend(observation.reported_source_paths.clone());
+        for derivation in &observation.derivations {
+            if !self.derivations.contains(derivation) {
+                self.derivations.push(*derivation);
+            }
+        }
         self.validation_flags.extend(new_validation_flags);
+        observation.reported_usage = self.reported_usage.clone();
+        observation.usage = self.reported_usage.clone();
+        observation.source_paths = self.reported_source_paths.clone();
+        observation.response_model = self.reported_usage.response_model.clone();
+        observation.response_id = self.reported_usage.response_id.clone();
+        observation.validation_flags = self.validation_flags.clone();
+        observation.apply_derivations(&self.derivations);
+        observation.enrich_usage();
+        // Downstream consumers receive cumulative snapshots, never cumulative numbers mislabeled as deltas.
+        // 下游接收累计快照，绝不把累计数值误标为增量。
+        if observation.usage.update_kind != UsageUpdateKind::Final {
+            observation.usage.update_kind = UsageUpdateKind::Snapshot;
+        }
+        self.usage = observation.usage.clone();
+        self.source_paths = observation.source_paths;
         if matches!(observation.usage.update_kind, UsageUpdateKind::Final) {
             self.terminal_observation = Some(canonical);
         }
@@ -1857,6 +2056,9 @@ mod tests {
             profile_id: String::from("fixture.snapshot.v1"),
             profile_revision: 1,
             usage: RequestUsage::default(),
+            reported_usage: RequestUsage::default(),
+            reported_source_paths: BTreeMap::new(),
+            derivations: Vec::new(),
             source_paths: BTreeMap::new(),
             response_model: None,
             response_id: None,
@@ -1898,6 +2100,9 @@ mod tests {
                 profile_id: String::from("fixture.snapshot.v1"),
                 profile_revision: 1,
                 usage: RequestUsage::default(),
+                reported_usage: RequestUsage::default(),
+                reported_source_paths: BTreeMap::new(),
+                derivations: Vec::new(),
                 source_paths: BTreeMap::new(),
                 response_model: None,
                 response_id: None,
@@ -1915,6 +2120,9 @@ mod tests {
             profile_id: String::from("fixture.snapshot.v1"),
             profile_revision: 1,
             usage: RequestUsage::default(),
+            reported_usage: RequestUsage::default(),
+            reported_source_paths: BTreeMap::new(),
+            derivations: Vec::new(),
             source_paths: BTreeMap::new(),
             response_model: None,
             response_id: None,
@@ -1988,8 +2196,8 @@ mod tests {
         assert_eq!(
             observation.usage.uncached_input_tokens,
             UsageValue::Known {
-                value: 20,
-                source: UsageValueSource::Reported,
+                value: 25,
+                source: UsageValueSource::Derived,
             }
         );
         assert_eq!(

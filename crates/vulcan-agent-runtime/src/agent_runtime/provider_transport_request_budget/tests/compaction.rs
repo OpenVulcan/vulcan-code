@@ -119,7 +119,7 @@ fn normalized_protocol_usage_compacts_cache_writes_and_counts_cache_reads_once()
             vulcan_llm_core::GOOGLE_CODE_ASSIST_PROFILE_ID,
             vec![(
                 UsageRecordKind::JsonBody,
-                json!({"usageMetadata":{"promptTokenCount":449277,"cachedContentTokenCount":449273,"candidatesTokenCount":18628,"totalTokenCount":467905}}),
+                json!({"response":{"usageMetadata":{"promptTokenCount":449277,"cachedContentTokenCount":449273,"candidatesTokenCount":18628,"totalTokenCount":467905}}}),
             )],
         ),
         (
@@ -355,3 +355,48 @@ fn final_character_budget_checks_growth_without_enabling_disabled_compaction() {
     );
 }
 
+/// Partial output evidence bounds the next input without adding a reasoning subset twice.
+/// 局部输出证据为下一次输入提供下界，且不会重复添加思考子集。
+#[test]
+fn thinking_floor_and_missing_input_do_not_guess_cache_or_totals() {
+    for (input, output, reasoning, floor) in [
+        (Some(10000), Some(7500), Some(2500), Some(17500)),
+        (Some(10000), Some(5000), Some(2500), Some(15000)),
+        (Some(10000), None, Some(2500), Some(12500)),
+        (None, Some(5000), Some(2500), None),
+    ] {
+        // Deliberately matching cache and thinking counts exercise the removed arithmetic heuristic.
+        // 故意相同的缓存与思考计数覆盖已经移除的算术猜测。
+        let response = CoreProviderTurnResponse {
+            assistant_text: String::new(),
+            assistant_reasoning: String::new(),
+            provider_message_id: None,
+            provider_message_state: None,
+            usage: Some(ProviderUsageSnapshot {
+                input_tokens: input,
+                output_tokens: output,
+                reasoning_tokens: reasoning,
+                cached_input_tokens: Some(2500),
+                total_tokens: Some(17500),
+                ..Default::default()
+            }),
+            tool_calls: Vec::new(),
+            continuation: None,
+        };
+        for line in [10001, 12500, 12501, 15000, 15001, 17500, 17501] {
+            let guard = compaction_guard(
+                vulcan_llm_core::GEMINI_GENERATE_CONTENT_PROFILE_ID,
+                line,
+                true,
+            );
+            guard.observe_turn_response(&response);
+            assert_eq!(
+                matches!(
+                    guard.validate_turn_compaction_line(&request_snapshot(Vec::new())),
+                    Err(VulcanCoreError::ContextCompactionRequired { .. })
+                ),
+                floor.is_some_and(|floor| floor >= line as usize)
+            );
+        }
+    }
+}

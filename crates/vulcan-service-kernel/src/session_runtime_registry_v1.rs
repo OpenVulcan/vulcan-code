@@ -57,6 +57,7 @@ use vulcan_workspace_store::workspace_store::{
     flush_session_v1_candidate, load_session_v1_full, publish_edit_session_v1,
 };
 
+mod compaction_continuation;
 mod lifetime_usage;
 mod request_preparation;
 pub(crate) use request_preparation::SessionPhysicalPreparation;
@@ -2015,6 +2016,7 @@ impl SessionHandle {
             retained_from_seq,
             context_frozen_at,
             remote_checkpoint,
+            summary_compaction,
             through_seq,
             preparing_user_prompt_media_seqs,
             initialized_locked_baseline,
@@ -2045,7 +2047,7 @@ impl SessionHandle {
                 })?;
             // Both identities come from the same committed node; later requests never advance this frontier.
             // 两种身份来自同一已提交节点；后续请求绝不推进此前沿。
-            let (retained_from_seq, context_frozen_at, remote_checkpoint) =
+            let (retained_from_seq, context_frozen_at, remote_checkpoint, summary_compaction) =
                 match document.runtime_lock.current_compaction_id {
                     Some(compaction_id) => document
                         .compactions
@@ -2066,14 +2068,20 @@ impl SessionHandle {
                                     },
                                 }),
                             };
-                            (node.retained_from_seq, Some(node.api_stats_seq), checkpoint)
+                            // Only a committed local summary owns a protocol-neutral continuation control.
+                            // 只有已提交的本地摘要拥有与协议无关的续接控制消息。
+                            let summary = matches!(
+                                &node.content,
+                                vulcan_session_core::v1::context::CompactionContent::Summary { .. }
+                            ).then(|| node.clone());
+                            (node.retained_from_seq, Some(node.api_stats_seq), checkpoint, summary)
                         })
                         .ok_or_else(|| {
                             SessionRuntimeError::ProviderProjectionInvariant(String::from(
                                 "runtime compaction pointer has no matching durable node",
                             ))
                         })?,
-                    None => (Seq::try_new(1)?, None, None),
+                    None => (Seq::try_new(1)?, None, None, None),
                 };
             (
                 document.segment_generation(),
@@ -2081,6 +2089,7 @@ impl SessionHandle {
                 retained_from_seq,
                 context_frozen_at,
                 remote_checkpoint,
+                summary_compaction,
                 Seq::try_new(through_value)?,
                 document.preparing_user_prompt_media_seqs(),
                 LockedBaselineProjection::from_initialized_runtime_lock(&document.runtime_lock)?,
@@ -2122,6 +2131,11 @@ impl SessionHandle {
             retained_from_seq,
             instruction_frontier,
         )?;
+        // Derive the same fixed control for planning, controller restore and physical request preparation.
+        // 为规划、控制器恢复与物理请求准备派生同一条固定控制消息。
+        if let Some(summary) = summary_compaction {
+            compaction_continuation::insert_summary_continuation(&mut sourced_items, &summary)?;
+        }
         // The checkpoint replaces the discarded prefix and therefore precedes all retained history.
         // 检查点替代已丢弃前缀，因此位于全部保留历史之前。
         if let Some(checkpoint) = remote_checkpoint {

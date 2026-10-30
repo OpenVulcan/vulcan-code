@@ -98,37 +98,11 @@ impl ContextBudgetCapabilities {
 /// Returns the observed provider input-token count when the provider reported enough usage data.
 /// 当 Provider 返回了足够的用量数据时，返回实测输入 Token 数。
 pub fn observed_input_tokens_from_usage(usage: Option<&ProviderUsageSnapshot>) -> Option<usize> {
-    let snapshot = usage?;
-    if let Some(input_tokens) = snapshot.input_tokens {
-        // cache_tokens captures Provider-reported cache reads and cache writes that may sit outside input_tokens.
-        // cache_tokens 汇总 Provider 报告且可能未包含在 input_tokens 内的缓存读取与缓存写入。
-        let cache_tokens = snapshot
-            .cached_input_tokens
-            .unwrap_or_default()
-            .saturating_add(snapshot.cache_creation_input_tokens.unwrap_or_default());
-        // expanded_input_tokens represents the Anthropic-style split-input interpretation.
-        // expanded_input_tokens 表示 Anthropic 风格的拆分输入口径。
-        let expanded_input_tokens = input_tokens.saturating_add(cache_tokens);
-        // provider_total_input derives the full input side without assuming whether cache tokens are a subset.
-        // provider_total_input 从总量推导完整输入侧，且不预设缓存 Token 是否属于 input_tokens 子集。
-        let provider_total_input = snapshot
-            .total_tokens
-            .zip(snapshot.output_tokens)
-            .map(|(total_tokens, output_tokens)| total_tokens.saturating_sub(output_tokens));
-        if cache_tokens > 0 && provider_total_input == Some(expanded_input_tokens) {
-            return Some(expanded_input_tokens);
-        }
-        return Some(input_tokens);
-    }
-    snapshot.total_tokens.map(|total_tokens| {
-        let known_non_input_tokens = snapshot
-            .output_tokens
-            .unwrap_or(0usize)
-            .saturating_add(snapshot.reasoning_tokens.unwrap_or(0usize));
-        total_tokens
-            .saturating_sub(known_non_input_tokens)
-            .max(1usize)
-    })
+    // Protocol extraction owns full input, including cache reads and writes exactly once.
+    // 协议提取负责完整输入，缓存读取与写入均只计入一次。
+    // A total can include independent thoughts or server-tool work; it cannot recover missing input here.
+    // 总量可能包含独立思考或服务端工具工作，不能在此反推缺失输入。
+    usage.and_then(|snapshot| snapshot.input_tokens)
 }
 
 /// Returns one calibrated input-token estimate, preferring provider-observed usage over host heuristics.
@@ -875,12 +849,12 @@ mod tests {
         );
     }
 
-    /// Verifies Anthropic cache reads outside input_tokens contribute to the complete context window.
-    /// 验证 Anthropic 在 input_tokens 之外报告的缓存读取会计入完整上下文窗口。
+    /// Verifies normalized Anthropic input includes cache reads exactly once.
+    /// 验证归一化的 Anthropic 输入只包含一次缓存读取。
     #[test]
-    fn observed_input_tokens_include_anthropic_split_cache_usage() {
+    fn observed_input_tokens_use_normalized_anthropic_input() {
         let usage = ProviderUsageSnapshot {
-            input_tokens: Some(399),
+            input_tokens: Some(112_015),
             uncached_input_tokens: Some(399),
             output_tokens: Some(380),
             reasoning_tokens: None,
@@ -919,6 +893,31 @@ mod tests {
             observed_input_tokens_from_usage(Some(&usage)),
             Some(112_015)
         );
+    }
+
+    /// Exercises absent, zero and reported inputs against coincident cache and thinking totals.
+    /// 验证输入缺失、零值与已报告值不会被恰好相等的缓存和思考总量改写。
+    #[test]
+    fn observed_input_preserves_unknown_and_ignores_cache_total_coincidences() {
+        for input in [None, Some(0), Some(10_000)] {
+            for cache in [None, Some(0), Some(2_500)] {
+                // The total includes independent thinking; cache remains an input subset.
+                // 总量包含独立思考，而缓存仍然只是输入子集。
+                let usage = ProviderUsageSnapshot {
+                    input_tokens: input,
+                    output_tokens: Some(5_000),
+                    reasoning_tokens: Some(2_500),
+                    total_tokens: Some(17_500),
+                    cached_input_tokens: cache,
+                    ..Default::default()
+                };
+                assert_eq!(observed_input_tokens_from_usage(Some(&usage)), input);
+                assert_eq!(
+                    calibrated_input_token_estimate(321, Some(&usage)),
+                    input.unwrap_or(321)
+                );
+            }
+        }
     }
 
     /// Verifies ratio boundaries map to the shared context-budget severity buckets.

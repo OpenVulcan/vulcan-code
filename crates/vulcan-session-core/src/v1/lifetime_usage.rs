@@ -93,8 +93,8 @@ pub struct SessionUsageBucket {
     /// Output tokens belonging to exactly the measured output-duration cohort.
     /// 精确属于已测输出时长样本组的输出 Token。
     pub measured_output_tokens: u64,
-    /// Uncached input plus cache reads from the paired cache-rate cohort.
-    /// 缓存率配对样本组的非缓存输入加缓存读取。
+    /// Complete input from the paired cache-rate cohort, including cache writes.
+    /// 缓存率配对样本组的完整输入，包含缓存写入。
     pub cache_input_tokens: UsageMeasurement,
     /// Cache reads belonging to exactly the paired cache-rate cohort.
     /// 精确属于缓存率配对样本组的缓存读取。
@@ -109,16 +109,20 @@ impl SessionUsageBucket {
     pub fn from_api(usage: &UsageSnapshot, timing: &ApiTimings) -> Result<Self, String> {
         // Paired groups prevent unrelated missing observations from diluting averages.
         // 配对样本避免无关缺失观测稀释平均值。
-        let budget = usage
-            .uncached_input_tokens
+        // Full input and cache reads define non-read work, including newly written cache tokens.
+        // 完整输入与缓存读取定义未命中工作量，其中包含新写入缓存的 Token。
+        let uncached_input = match (usage.input_tokens, usage.cache_read_tokens) {
+            (Some(input), Some(read)) => input.checked_sub(read),
+            _ => usage.uncached_input_tokens,
+        };
+        let budget = uncached_input
             .zip(usage.output_tokens)
             .map(|(input, output)| add(input, output))
             .transpose()?;
         let cache = usage
-            .uncached_input_tokens
+            .input_tokens
             .zip(usage.cache_read_tokens)
-            .map(|(input, read)| add(input, read).map(|total| (total, read)))
-            .transpose()?;
+            .filter(|(input, read)| read <= input);
         let output = timing
             .first_token_at_ms
             .zip(timing.completed_at_ms)
@@ -130,7 +134,7 @@ impl SessionUsageBucket {
             request_count: 1,
             unknown_usage_count: u64::from(usage.has_no_usage()),
             input_tokens: UsageMeasurement::observe(usage.input_tokens),
-            uncached_input_tokens: UsageMeasurement::observe(usage.uncached_input_tokens),
+            uncached_input_tokens: UsageMeasurement::observe(uncached_input),
             cache_read_tokens: UsageMeasurement::observe(usage.cache_read_tokens),
             cache_write_tokens: UsageMeasurement::observe(usage.cache_write_tokens),
             output_tokens: UsageMeasurement::observe(usage.output_tokens),
@@ -382,23 +386,21 @@ fn duration(start: Option<i64>, end: Option<i64>) -> Option<u64> {
         .map(|(start, end)| end.abs_diff(start))
 }
 
-/// Returns the reported total, or uncached input plus cache reads plus output for protocols such as
-/// Anthropic Messages that never report a total; unknown when input or output is missing.
-/// 返回上报的总量；对 Anthropic Messages 等从不上报总量的协议，取未缓存输入、缓存读取与输出之和；
-/// 输入或输出缺失时保持未知。
+/// Returns the reported total, or normalized full input plus complete output when the total is absent.
+/// 返回上报总量，总量缺失时使用归一化完整输入与完整输出之和。
+/// `usage` retains explicit zero and unknown dimensions; missing input/output stays unknown and overflow fails.
+/// `usage` 保留明确零值与未知维度，输入或输出缺失时保持未知，溢出时失败。
 fn accounted_total(usage: &UsageSnapshot) -> Result<Option<u64>, String> {
-    if usage.total_tokens.is_some_and(|total| total > 0) {
+    if usage.total_tokens.is_some() {
         return Ok(usage.total_tokens);
     }
-    let derived = usage
-        .uncached_input_tokens
+    // Full input already contains cache reads and writes; complete output already contains reasoning.
+    // 完整输入已经包含缓存读取与写入，完整输出已经包含思考。
+    usage
+        .input_tokens
         .zip(usage.output_tokens)
-        .map(|(input, output)| {
-            add(input, usage.cache_read_tokens.unwrap_or_default())
-                .and_then(|cached| add(cached, output))
-        })
-        .transpose()?;
-    Ok(derived.or(usage.total_tokens))
+        .map(|(input, output)| add(input, output))
+        .transpose()
 }
 
 /// Adds monotonic counters; returns a visible error instead of wrapping or saturating.
@@ -580,5 +582,89 @@ mod tests {
         };
         let bucket = SessionUsageBucket::from_api(&output_unknown, &ApiTimings::default()).unwrap();
         assert_eq!(bucket.total_tokens, UsageMeasurement::observe(None));
+    }
+
+    /// Cache writes contribute once to lifetime totals, goal budgets and cache-rate denominators.
+    /// 缓存写入只计入一次生命周期总量、目标预算与缓存率分母。
+    #[test]
+    fn cache_write_and_thinking_dimensions_are_not_added_twice() {
+        for (input, read, write, output, reasoning) in [
+            (449_277, 0, 449_273, 18_628, 0),
+            (10_000, 2_500, 0, 7_500, 2_500),
+            (10_000, 3_000, 6_000, 5_000, 2_500),
+        ] {
+            // The full input/read pair also corrects old persisted non-read mirrors.
+            // 完整输入与读取配对也会校正此前持久化的未命中镜像。
+            let usage = UsageSnapshot {
+                input_tokens: Some(input),
+                uncached_input_tokens: Some(4),
+                cache_read_tokens: Some(read),
+                cache_write_tokens: Some(write),
+                output_tokens: Some(output),
+                reasoning_tokens: Some(reasoning),
+                ..Default::default()
+            };
+            let bucket = SessionUsageBucket::from_api(&usage, &ApiTimings::default()).unwrap();
+            assert_eq!(
+                bucket.total_tokens,
+                UsageMeasurement::observe(Some(input + output))
+            );
+            assert_eq!(bucket.known_budget(), Some(input - read + output));
+            assert_eq!(
+                bucket.cache_input_tokens,
+                UsageMeasurement::observe(Some(input))
+            );
+            assert_eq!(bucket.measured_cache_read_tokens, read);
+        }
+    }
+
+    /// Missing dimensions and explicit zeros remain distinct across all summary measurements.
+    /// 所有汇总测量中缺失维度与明确零值保持区分。
+    #[test]
+    fn missing_dimensions_preserve_unknown_totals_and_budget_samples() {
+        for input in [None, Some(0), Some(100)] {
+            for output in [None, Some(0), Some(20)] {
+                for read in [None, Some(0), Some(50), Some(101)] {
+                    for total in [None, Some(0), Some(500)] {
+                        let usage = UsageSnapshot {
+                            input_tokens: input,
+                            output_tokens: output,
+                            cache_read_tokens: read,
+                            total_tokens: total,
+                            reasoning_tokens: Some(10),
+                            ..Default::default()
+                        };
+                        let bucket =
+                            SessionUsageBucket::from_api(&usage, &ApiTimings::default()).unwrap();
+                        let expected_total =
+                            total.or_else(|| input.zip(output).map(|(i, o)| i + o));
+                        let non_read = input.zip(read).and_then(|(i, r)| i.checked_sub(r));
+                        assert_eq!(
+                            bucket.total_tokens,
+                            UsageMeasurement::observe(expected_total)
+                        );
+                        assert_eq!(
+                            bucket.known_budget(),
+                            non_read.zip(output).map(|(i, o)| i + o)
+                        );
+                        assert_eq!(
+                            bucket.cache_input_tokens.samples,
+                            u64::from(input.zip(read).is_some_and(|(i, r)| r <= i))
+                        );
+                    }
+                }
+            }
+        }
+        assert!(
+            SessionUsageBucket::from_api(
+                &UsageSnapshot {
+                    input_tokens: Some(u64::MAX),
+                    output_tokens: Some(1),
+                    ..Default::default()
+                },
+                &ApiTimings::default()
+            )
+            .is_err()
+        );
     }
 }

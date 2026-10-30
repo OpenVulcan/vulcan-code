@@ -152,13 +152,11 @@ impl SessionTurnUsageSegment {
         let input_tokens = usage.and_then(|usage| usage.input_tokens).unwrap_or(0);
         let output_tokens = usage.and_then(|usage| usage.output_tokens).unwrap_or(0);
         let reasoning_tokens = usage.and_then(|usage| usage.reasoning_tokens).unwrap_or(0);
+        // Complete output already contains reasoning; details must not expand the fallback total.
+        // 完整输出已经包含思考，明细不得扩增备用总额。
         let total_tokens = usage
             .and_then(|usage| usage.total_tokens)
-            .unwrap_or_else(|| {
-                input_tokens
-                    .saturating_add(output_tokens)
-                    .saturating_add(reasoning_tokens)
-            });
+            .unwrap_or_else(|| input_tokens.saturating_add(output_tokens));
         Self {
             kind,
             trigger: None,

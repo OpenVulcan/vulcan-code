@@ -1696,12 +1696,11 @@ fn build_completed_event(
     // normalizedUsage uses provider facts when available and preserves absent numeric facts as unknown.
     // normalizedUsage 在可用时使用 Provider 事实，并将缺失数字事实保留为未知。
     let normalized_usage = usage.cloned().unwrap_or_default();
-    // uncachedInputTokens converts protocol-specific input semantics into the statistics contract once at the telemetry boundary.
-    // uncachedInputTokens 在遥测边界一次性把协议专属输入语义转换为统计契约。
-    let uncached_input_tokens =
-        uncached_input_tokens(context.protocol_profile_id.as_str(), &normalized_usage);
-    // outputTokens converts protocol-specific reasoning semantics into one complete output count.
-    // outputTokens 将协议专属的思考语义转换为一个完整输出计数。
+    // Non-read input is derived from normalized dimensions, independent of the selected next protocol.
+    // 未命中输入由归一化维度派生，不依赖下一次选择的协议。
+    let uncached_input_tokens = uncached_input_tokens(&normalized_usage);
+    // Complete output already includes any independently reported thinking at extraction time.
+    // 完整输出在提取时已经计入所有独立报告的思考量。
     let output_tokens =
         complete_output_tokens(context.protocol_profile_id.as_str(), &normalized_usage);
     // outputTokensWithPresence preserves the distinction between an absent output field and a reported zero.
@@ -1709,11 +1708,8 @@ fn build_completed_event(
     let output_tokens_with_presence = normalized_usage.output_tokens.map(|_| output_tokens);
     // accountedTokens keeps Provider-reported totals separate from the statistics total used by the plugin.
     // accountedTokens 将 Provider 报告总量与插件使用的统计总量分开保存。
-    let (accounted_tokens, accounted_total_source) = accounted_total_tokens(
-        &normalized_usage,
-        uncached_input_tokens,
-        output_tokens_with_presence,
-    );
+    let (accounted_tokens, accounted_total_source) =
+        accounted_total_tokens(&normalized_usage, output_tokens_with_presence);
     let completed_usage = usage.is_some().then_some(ProviderRequestCompletedUsage {
         update_kind: normalized_usage.update_kind,
         input_tokens: normalized_usage.input_tokens,
@@ -1840,46 +1836,33 @@ fn build_completed_event(
     }
 }
 
-/// Converts Provider-specific input-token semantics into a non-cached input count for statistics consumers.
-/// 将 Provider 专属输入 Token 语义转换为供统计消费方使用的非缓存输入量。
-///
-/// `api_family` identifies the exact wire-protocol usage contract.
-/// `api_family` 标识精确的线协议用量契约。
+/// Derives non-read input for statistics from normalized dimensions.
+/// 从归一化维度派生供统计使用的未命中输入。
 /// `usage` contains the final normalized Provider usage snapshot.
 /// `usage` 包含最终规范化 Provider 用量快照。
 /// Returns the non-cached input-token count without changing the Provider-reported fields.
 /// 返回非缓存输入 Token 数量，且不修改 Provider 原始报告字段。
-fn uncached_input_tokens(
-    protocol_profile_id: &str,
-    usage: &ProviderUsageSnapshot,
-) -> Option<usize> {
-    if let Some(uncached_input_tokens) = usage.uncached_input_tokens {
-        return Some(uncached_input_tokens);
-    }
-    // inputTokens preserves the Provider-reported input value before statistics normalization.
-    // inputTokens 在统计归一化前保留 Provider 报告的输入值。
-    let input_tokens = usage.input_tokens?;
-    if protocol_profile_id == vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID {
-        // Anthropic reports cache writes separately from both uncached input and cache reads.
-        // Anthropic 将缓存写入与非缓存输入、缓存读取分别报告。
-        input_tokens.checked_add(usage.cache_creation_input_tokens.unwrap_or_default())
-    } else {
-        input_tokens.checked_sub(usage.cached_input_tokens.unwrap_or_default())
+fn uncached_input_tokens(usage: &ProviderUsageSnapshot) -> Option<usize> {
+    // Canonical full input and cache reads define non-read work, including cache writes.
+    // 统一的完整输入与缓存读取定义未命中工作量，其中包含缓存写入。
+    match (usage.input_tokens, usage.cached_input_tokens) {
+        (Some(input), Some(read)) => input.checked_sub(read),
+        _ => usage.uncached_input_tokens,
     }
 }
 
-/// Converts Provider-specific reasoning semantics into a complete output count.
-/// 将 Provider 专属的思考语义转换为完整输出计数。
+/// Reads complete output after the selected profile has normalized its declared reasoning relationship.
+/// 在已选 Profile 按其声明的思考关系归一化之后读取完整输出。
 ///
-/// `api_family` identifies whether reasoning is already included in the reported output.
-/// `api_family` 标识报告的输出中是否已经包含思考。
+/// `_protocol_profile_id` is diagnostic identity and does not reinterpret normalized counters.
+/// `_protocol_profile_id` 是诊断身份，不重新解释归一化计数。
 /// `usage` contains the final normalized Provider usage snapshot.
 /// `usage` 包含最终规范化 Provider 用量快照。
 /// Returns complete output without counting a Provider-reported reasoning subset twice.
 /// 返回完整输出，并避免重复计算 Provider 报告的思考子集。
 fn complete_output_tokens(_protocol_profile_id: &str, usage: &ProviderUsageSnapshot) -> usize {
-    // All enabled public profiles normalize reasoning into the reported output count.
-    // 所有已启用公共档案都会把推理归一化到已报告输出计数中。
+    // Independent thinking is added by extraction; an inclusive-output profile keeps its subset unchanged.
+    // 独立思考由提取层相加，输出已包含思考的 Profile 则保持其子集不变。
     usage.output_tokens.unwrap_or_default()
 }
 
@@ -1887,27 +1870,19 @@ fn complete_output_tokens(_protocol_profile_id: &str, usage: &ProviderUsageSnaps
 /// 在保留 Provider 报告总量的同时推导统计总量及其质量。
 fn accounted_total_tokens(
     usage: &ProviderUsageSnapshot,
-    uncached_input_tokens: Option<usize>,
     output_tokens: Option<usize>,
 ) -> (Option<usize>, &'static str) {
-    // derivedTotal is available only when the normalized input and complete output are both known.
-    // derivedTotal 仅在规范化输入和完整输出都已知时可用。
-    let derived_total =
-        uncached_input_tokens
-            .zip(output_tokens)
-            .and_then(|(uncached_input, output)| {
-                uncached_input
-                    .checked_add(usage.cached_input_tokens.unwrap_or_default())?
-                    .checked_add(output)
-            });
-
+    // Cache and thinking details are subsets of the two normalized complete dimensions.
+    // 缓存与思考明细属于两个已归一化完整维度的子集。
+    let derived_total = usage
+        .input_tokens
+        .zip(output_tokens)
+        .and_then(|(input, output)| input.checked_add(output));
     match (usage.total_tokens, derived_total) {
-        (Some(reported), Some(derived)) if reported == derived => (Some(reported), "reported"),
-        // A zero total beside known positive components is the legacy bridge representation of a missing total.
-        // 已知分项为正而总量为零时，视为旧桥接层对缺失总量的兼容表示。
-        (Some(0), Some(derived)) if derived > 0 => (Some(derived), "inconsistent"),
-        (Some(reported), Some(_)) => (Some(reported), "inconsistent"),
-        (Some(reported), None) => (Some(reported), "reported"),
+        // A larger reported total may include provider-managed tool work and remains authoritative.
+        // 更大的报告总量可能包含供应商管理的工具工作，仍保持权威。
+        (Some(reported), Some(derived)) if reported < derived => (Some(reported), "inconsistent"),
+        (Some(reported), _) => (Some(reported), "reported"),
         (None, Some(derived)) => (Some(derived), "derived"),
         (None, None) => (None, "unknown"),
     }
@@ -2618,7 +2593,7 @@ mod tests {
             .complete_success(
                 Some(&ProviderUsageSnapshot {
                     input_tokens: Some(10),
-                    uncached_input_tokens: Some(10),
+                    uncached_input_tokens: Some(7),
                     output_tokens: Some(5),
                     reasoning_tokens: Some(2),
                     total_tokens: Some(18),
@@ -2633,7 +2608,7 @@ mod tests {
         assert_eq!(completed.kind, ProviderRequestTelemetryEventKind::Completed);
         assert_eq!(completed.payload["status"], "succeeded");
         assert_eq!(completed.payload["total_tokens"], 18);
-        assert_eq!(completed.payload["uncached_input_tokens"], 10);
+        assert_eq!(completed.payload["uncached_input_tokens"], 7);
         assert_eq!(completed.payload["accounted_total_tokens"], 18);
         assert_eq!(completed.payload["accounted_total_source"], "reported");
         match completed.v1_lifecycle.as_ref() {
@@ -2652,7 +2627,7 @@ mod tests {
             completed.completed_usage,
             Some(ProviderRequestCompletedUsage {
                 input_tokens: Some(10),
-                uncached_input_tokens: Some(10),
+                uncached_input_tokens: Some(7),
                 cached_input_tokens: Some(3),
                 cache_creation_input_tokens: None,
                 output_tokens: Some(5),
@@ -2904,7 +2879,7 @@ mod tests {
         // anthropicUsage models Kimi's Anthropic-compatible separated cache accounting.
         // anthropicUsage 模拟 Kimi Anthropic 兼容接口的缓存分离计量。
         let anthropic_usage = ProviderUsageSnapshot {
-            input_tokens: Some(2_509),
+            input_tokens: Some(66_540),
             uncached_input_tokens: None,
             output_tokens: Some(330),
             reasoning_tokens: None,
@@ -2920,17 +2895,8 @@ mod tests {
             ..anthropic_usage.clone()
         };
 
-        assert_eq!(
-            uncached_input_tokens(
-                vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID,
-                &anthropic_usage,
-            ),
-            Some(2_540)
-        );
-        assert_eq!(
-            uncached_input_tokens(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID, &openai_usage,),
-            Some(2_509)
-        );
+        assert_eq!(uncached_input_tokens(&anthropic_usage), Some(2_540));
+        assert_eq!(uncached_input_tokens(&openai_usage), Some(2_509));
     }
 
     /// Verifies inconsistent cache totals remain unknown instead of becoming a fabricated zero.
@@ -2943,18 +2909,15 @@ mod tests {
             ..ProviderUsageSnapshot::default()
         };
 
-        assert_eq!(
-            uncached_input_tokens(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID, &usage),
-            None
-        );
+        assert_eq!(uncached_input_tokens(&usage), None);
     }
 
-    /// Verifies missing or bridged-zero Provider totals use the normalized token breakdown.
-    /// 验证缺失或被桥接为零的 Provider 总量使用规范化 Token 分项计算。
+    /// Verifies missing totals are derived while a reported zero is retained as evidence.
+    /// 验证缺失总量可以派生，而明确报告的零值仍作为证据保留。
     #[test]
     fn derives_accounted_total_from_normalized_breakdown() {
         let usage = ProviderUsageSnapshot {
-            input_tokens: Some(2_509),
+            input_tokens: Some(66_540),
             uncached_input_tokens: Some(2_540),
             output_tokens: Some(330),
             cached_input_tokens: Some(64_000),
@@ -2963,7 +2926,7 @@ mod tests {
         };
 
         assert_eq!(
-            accounted_total_tokens(&usage, Some(2_540), Some(330)),
+            accounted_total_tokens(&usage, Some(330)),
             (Some(66_870), "derived")
         );
 
@@ -2972,8 +2935,8 @@ mod tests {
             ..usage
         };
         assert_eq!(
-            accounted_total_tokens(&bridged_zero_usage, Some(2_540), Some(330)),
-            (Some(66_870), "inconsistent")
+            accounted_total_tokens(&bridged_zero_usage, Some(330)),
+            (Some(0), "inconsistent")
         );
     }
 

@@ -201,8 +201,24 @@ fn stepfun_cumulative_profile_is_limited_to_observed_route() {
                 .find(|profile| profile.record_kind == vulcan_llm_core::UsageRecordKind::JsonBody)
                 .expect("the captured route must retain non-streaming usage");
             assert_eq!(body.update_kind, vulcan_ai_contract::UsageUpdateKind::Final);
-            assert_eq!(body.bindings, standard_body.bindings);
-            assert_eq!(body.derivations, standard_body.derivations);
+            // Explicit overrides retain their proven wire contract when the baseline gains optional fields.
+            // 默认配置新增可选字段时，显式覆盖仍保留已经验证的线协议契约。
+            let record = serde_json::json!({"usage":{"prompt_tokens":100,"prompt_tokens_details":{"cached_tokens":40},"completion_tokens":20,"completion_tokens_details":{"reasoning_tokens":5},"total_tokens":120}});
+            let actual = body
+                .extract(vulcan_llm_core::UsageRecordKind::JsonBody, &record)
+                .unwrap()
+                .unwrap()
+                .usage;
+            let expected = standard_body
+                .extract(vulcan_llm_core::UsageRecordKind::JsonBody, &record)
+                .unwrap()
+                .unwrap()
+                .usage;
+            assert_eq!(actual.input_tokens, expected.input_tokens);
+            assert_eq!(actual.uncached_input_tokens, expected.uncached_input_tokens);
+            assert_eq!(actual.output_tokens, expected.output_tokens);
+            assert_eq!(actual.reasoning_tokens, expected.reasoning_tokens);
+            assert_eq!(actual.total_tokens, expected.total_tokens);
             let stream = profiles
                 .iter()
                 .find(|profile| profile.record_kind == vulcan_llm_core::UsageRecordKind::SseEvent)

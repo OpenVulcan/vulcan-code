@@ -1,6 +1,12 @@
 //! Exact host conversation lineage for native and external memory cache projections.
 //! 原生及外置记忆缓存投影使用的准确宿主会话沿革。
 
+/// Revision of canonical Provider message positions; advance whenever projection changes existing identities.
+/// 规范 Provider 消息位置的修订号；投影改变既有身份时必须递增。
+/// Revision 2 includes the host continuation after a committed local compaction summary.
+/// 修订 2 包含已提交本地压缩摘要之后的宿主续接消息。
+const PROVIDER_PROJECTION_REVISION: u32 = 2;
+
 /// Identifies the authoritative host generation and its optional committed compaction.
 /// 标识权威宿主代次及其可选已提交压缩。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,14 +45,22 @@ impl VmmContextEpoch {
         self.compaction_id.as_deref()
     }
 
-    /// Encodes the complete host lineage into the existing opaque cache epoch field.
-    /// 将完整宿主沿革编码进既有不透明缓存纪元字段。
+    /// Encodes projection revision and complete host lineage into the existing opaque cache epoch field.
+    /// 将投影修订号及完整宿主沿革编码进既有不透明缓存纪元字段。
+    /// Old positional anchors are reconciled through the normal durable epoch transition, never shifted heuristically.
+    /// 旧位置锚点通过正常的可靠纪元转换对账，绝不启发式移动。
     /// Returns an unambiguous ID; absence and a literal compaction name can never collide.
     /// 返回无歧义 ID；缺失状态与字面压缩名称绝不会冲突。
     pub fn cache_epoch_id(&self) -> String {
         match &self.compaction_id {
-            Some(id) => format!("v1:{}:compaction:{id}", self.generation),
-            None => format!("v1:{}:uncompacted", self.generation),
+            Some(id) => format!(
+                "v{PROVIDER_PROJECTION_REVISION}:{}:compaction:{id}",
+                self.generation
+            ),
+            None => format!(
+                "v{PROVIDER_PROJECTION_REVISION}:{}:uncompacted",
+                self.generation
+            ),
         }
     }
 }
@@ -68,6 +82,10 @@ mod tests {
         assert_ne!(first.cache_epoch_id(), edited.cache_epoch_id());
         assert_ne!(edited.cache_epoch_id(), rewound.cache_epoch_id());
         assert_ne!(rewound.cache_epoch_id(), literal.cache_epoch_id());
+        // The previous persisted encoding must not retain anchors from the old message layout.
+        // 先前的持久化编码不得保留旧消息布局的锚点。
+        assert_ne!(first.cache_epoch_id(), "v1:1:compaction:9");
+        assert_ne!(rewound.cache_epoch_id(), "v1:2:uncompacted");
         assert_eq!(first.compaction_id(), Some("9"));
         assert_eq!(rewound.compaction_id(), None);
         assert!(VmmContextEpoch::new(1, Some(" ".to_owned())).is_err());

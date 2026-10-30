@@ -13,6 +13,9 @@ fn budget_candidate(handle: &SessionHandle, armed: bool) -> ProviderRequestPrepa
     // Production reconstruction supplies exact history and immutable baseline before the final permit.
     // 生产重建在最终许可前提供精确历史和不可变基线。
     let mut candidate = super::host_guidance::candidate_for(handle);
+    // Real Anthropic encoding requires the model-resolved output limit at the final permit.
+    // 最终许可上的真实 Anthropic 编码要求携带模型已解析的输出上限。
+    candidate.exact_request.output_token_limit = Some(1024);
     candidate.request_budget_guard = Some(
         ProviderRequestBudgetGuard::new_v1(
             "provider-1",
@@ -270,6 +273,7 @@ async fn final_compaction_boundary_preserves_continue_until_post_compaction_perm
     let PreparedPhysicalApi::SessionV1 {
         core_start: resumed,
         context_budget,
+        exact_request,
         ..
     } = sink
         .prepare_request(
@@ -287,6 +291,10 @@ async fn final_compaction_boundary_preserves_continue_until_post_compaction_perm
     };
     assert_ne!(resumed.api_call_id, core_start.api_call_id);
     assert_ne!(resumed.api_call_id, summary_start.api_call_id);
+    super::compaction_continuation::assert_user_tail(
+        vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID,
+        &exact_request,
+    );
     assert!(!context_budget.unwrap().should_compact());
     assert_eq!(starts(&cold), before + 2);
     // Disk reload must retain the final fresh identity and the configured compaction boundary result.

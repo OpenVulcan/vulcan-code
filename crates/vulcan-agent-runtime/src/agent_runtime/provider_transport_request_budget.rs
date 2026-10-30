@@ -477,8 +477,13 @@ impl ProviderRequestBudgetGuard {
         else {
             return Ok(());
         };
-        let accounted_input_tokens =
-            input_tokens.saturating_add(usage.output_tokens.unwrap_or_default());
+        // Thinking is a subset after normalization and remains a known lower bound if output is absent.
+        // 归一化后思考属于输出子集，输出缺失时它仍是已知下界。
+        let output_floor = usage
+            .output_tokens
+            .unwrap_or_default()
+            .max(usage.reasoning_tokens.unwrap_or_default());
+        let accounted_input_tokens = input_tokens.saturating_add(output_floor);
         let budget = build_request_context_compaction_budget_snapshot(
             RequestContextCompactionBudgetSnapshotInput {
                 provider_id: self.provider_id.as_str(),
