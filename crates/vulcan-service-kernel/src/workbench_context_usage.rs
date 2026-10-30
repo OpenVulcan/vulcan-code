@@ -5,7 +5,7 @@ use super::*;
 use crate::session_runtime_registry_v1::{SessionRuntimeError, SessionRuntimeRegistry};
 use vulcan_session_core::v1::event::ApiStartedEvent;
 use vulcan_session_core::v1::{
-    AggregatedUsage, ApiStatsEvent, ConversationEvent, EventBody, ProviderRequestContextBreakdown,
+    ApiStatsEvent, ConversationEvent, EventBody, ProviderRequestContextBreakdown,
     ProviderRequestTextMeasurement, ProviderUsageBudgetAnchor, SessionDocument, UsageSnapshot,
 };
 
@@ -16,15 +16,45 @@ pub(crate) struct SessionContextUsageFacts {
     /// Latest completed API that matches the current active request route and reports input usage.
     /// 与当前生效请求路由一致且上报输入用量的最近一次已完成 API。
     latest_anchor: ProviderUsageBudgetAnchor,
-    /// Poison-preserving aggregate over every terminal physical API in the V1 stream.
-    /// 对 V1 流中每次终态物理 API 进行保留未知传播语义的聚合。
-    cumulative_usage: AggregatedUsage,
+    /// Cache-hit evidence from terminal APIs that reported both input and cache-read tokens.
+    /// 来自同时上报输入与缓存读取 Token 的终态 API 的缓存命中证据。
+    paired_cache_usage: PairedCacheUsage,
     /// Latest request measurement eligible for the current route, including an in-flight request.
     /// 当前路由可用的最近请求测量，包含在途请求。
     latest_request_measurement: ProviderRequestTextMeasurement,
     /// Whether the current V1 runtime points at a committed compaction node.
     /// 当前 V1 runtime 是否指向一个已提交压缩节点。
     has_compaction: bool,
+}
+
+/// Sums taken only from requests whose input and cache-read counts are both known.
+/// 仅从输入与缓存读取数均已知的请求中取得的累计值。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct PairedCacheUsage {
+    /// Cache-read tokens, each sample clamped to its own input count.
+    /// 缓存读取 Token，每个样本都钳制到自身输入数以内。
+    cached_input_tokens: u64,
+    /// Full input tokens of exactly the same requests, cache reads included.
+    /// 完全相同请求的完整输入 Token，包含缓存读取。
+    input_tokens: u64,
+}
+
+impl PairedCacheUsage {
+    /// Accumulates the paired samples and skips any request missing either count.
+    /// 累加配对样本，跳过缺少任一计数的请求。
+    fn from_samples<'a>(samples: impl IntoIterator<Item = &'a UsageSnapshot>) -> Self {
+        samples
+            .into_iter()
+            .fold(Self::default(), |mut paired, sample| {
+                if let (Some(input), Some(cached)) = (sample.input_tokens, sample.cache_read_tokens)
+                {
+                    paired.input_tokens = paired.input_tokens.saturating_add(input);
+                    paired.cached_input_tokens =
+                        paired.cached_input_tokens.saturating_add(cached.min(input));
+                }
+                paired
+            })
+    }
 }
 
 /// Projects context-usage facts from one authoritative V1 session document.
@@ -38,7 +68,7 @@ pub(crate) fn session_context_usage_facts_from_v1_document(
         EventBody::ApiStats(stats) => Some(&stats.usage),
         _ => None,
     });
-    let cumulative_usage = AggregatedUsage::aggregate(terminal_usages);
+    let paired_cache_usage = PairedCacheUsage::from_samples(terminal_usages);
     let latest_anchor = events.iter().rev().find_map(|event| {
         let EventBody::ApiStats(stats) = &event.event else {
             return None;
@@ -85,7 +115,7 @@ pub(crate) fn session_context_usage_facts_from_v1_document(
         .unwrap_or_else(|| latest_anchor.evidence.request_text_measurement.clone());
     Some(SessionContextUsageFacts {
         latest_anchor,
-        cumulative_usage,
+        paired_cache_usage,
         latest_request_measurement,
         has_compaction: document.runtime_lock.current_compaction_id.is_some(),
     })
@@ -355,18 +385,19 @@ fn context_usage_basis_points(usage_ratio: f32) -> u16 {
     (usage_ratio * 10_000.0).round().clamp(0.0, 10_000.0) as u16
 }
 
-/// Calculates cumulative active-branch cache-hit rate from Provider facts only.
-/// 仅根据 Provider 事实计算活动分支累计缓存命中率。
+/// Calculates the cumulative cache-hit rate over requests that reported both input and cache reads.
+/// 根据同时上报输入与缓存读取的请求计算累计缓存命中率。
+///
+/// Requests missing either count are left out instead of hiding the rate; no paired input yields `None`.
+/// 缺少任一计数的请求被排除而不是隐藏命中率；没有配对输入时返回 `None`。
 fn context_usage_cache_hit_basis_points(facts: &SessionContextUsageFacts) -> Option<u16> {
-    let usage = aggregated_v1_usage_to_core(&facts.cumulative_usage)?;
-    let cached_input_tokens = usage.cached_input_tokens?;
-    let input_tokens = vulcan_context::observed_input_tokens_from_usage(Some(&usage))?;
-    if input_tokens == 0 {
-        return Some(0);
+    let paired = facts.paired_cache_usage;
+    if paired.input_tokens == 0 {
+        return None;
     }
-    let basis_points = (cached_input_tokens.min(input_tokens) as u128)
+    let basis_points = u128::from(paired.cached_input_tokens)
         .saturating_mul(10_000)
-        .saturating_div(input_tokens as u128);
+        .saturating_div(u128::from(paired.input_tokens));
     u16::try_from(basis_points).ok()
 }
 
@@ -756,25 +787,6 @@ fn v1_usage_to_core(usage: &UsageSnapshot) -> Option<vulcan_core::types::Provide
     })
 }
 
-/// Converts one poison-preserving V1 aggregate into the existing context-budget value type.
-/// 将一份保留未知传播语义的 V1 聚合转换为现有上下文预算值类型。
-fn aggregated_v1_usage_to_core(
-    usage: &AggregatedUsage,
-) -> Option<vulcan_core::types::ProviderUsageSnapshot> {
-    v1_usage_to_core(&UsageSnapshot {
-        input_tokens: usage.input_tokens,
-        uncached_input_tokens: usage.uncached_input_tokens,
-        output_tokens: usage.output_tokens,
-        reasoning_tokens: usage.reasoning_tokens,
-        total_tokens: usage.total_tokens,
-        cache_read_tokens: usage.cache_read_tokens,
-        cache_write_tokens: usage.cache_write_tokens,
-        audio_input_tokens: usage.audio_input_tokens,
-        audio_output_tokens: usage.audio_output_tokens,
-        billing_tier: None,
-    })
-}
-
 /// Converts one optional JS-safe V1 token count into the host release width.
 /// 将一个可选 JS 安全 V1 Token 数转换为宿主 Release 位宽。
 fn checked_v1_token_dimension(value: Option<u64>) -> Option<Option<usize>> {
@@ -980,7 +992,7 @@ mod tests {
                         ..Default::default()
                     },
                 },
-                cumulative_usage: AggregatedUsage::aggregate(std::iter::empty::<&UsageSnapshot>()),
+                paired_cache_usage: PairedCacheUsage::default(),
                 has_compaction: true,
             };
             // project uses identical canonical facts with and without the process-local cache.
@@ -1009,6 +1021,66 @@ mod tests {
             );
         }
         assert_eq!(live_budgets[&session_id].active_context_tokens, 682_800);
+    }
+
+    /// Verifies the cache-hit rate uses only requests reporting both counts and stays absent without any pair.
+    /// 验证缓存命中率只使用同时上报两项计数的请求，且没有任何配对时保持缺失。
+    #[test]
+    fn context_usage_cache_hit_rate_uses_only_paired_requests() {
+        let complete = UsageSnapshot {
+            input_tokens: Some(1_000),
+            cache_read_tokens: Some(900),
+            ..Default::default()
+        };
+        let interrupted = UsageSnapshot::default();
+        let missing_cache_read = UsageSnapshot {
+            input_tokens: Some(5_000),
+            ..Default::default()
+        };
+        let over_reported = UsageSnapshot {
+            input_tokens: Some(1_000),
+            cache_read_tokens: Some(1_500),
+            ..Default::default()
+        };
+        let rate = |samples: &[&UsageSnapshot]| {
+            let paired = PairedCacheUsage::from_samples(samples.iter().copied());
+            let facts = SessionContextUsageFacts {
+                paired_cache_usage: paired,
+                ..test_context_usage_facts()
+            };
+            context_usage_cache_hit_basis_points(&facts)
+        };
+
+        assert_eq!(
+            rate(&[&complete, &interrupted, &missing_cache_read]),
+            Some(9_000)
+        );
+        assert_eq!(rate(&[&complete, &over_reported]), Some(9_500));
+        assert_eq!(rate(&[&interrupted, &missing_cache_read]), None);
+        assert_eq!(rate(&[]), None);
+    }
+
+    /// Builds minimal context-usage facts whose cache evidence callers replace.
+    /// 构建最小上下文用量事实，调用方替换其中的缓存证据。
+    fn test_context_usage_facts() -> SessionContextUsageFacts {
+        let evidence = crate::session_runtime_registry_v1::test_provider_request_budget_evidence();
+        SessionContextUsageFacts {
+            latest_request_measurement: evidence.request_text_measurement.clone(),
+            latest_anchor: ProviderUsageBudgetAnchor {
+                api_call_id: vulcan_session_core::v1::ApiCallId::try_new(1).expect("valid API id"),
+                projection: vulcan_session_core::v1::event::ProviderProjectionProof {
+                    segment_generation: 1,
+                    document_revision: 1,
+                    retained_from_seq: vulcan_session_core::v1::Seq::try_new(1).expect("valid seq"),
+                    through_seq: vulcan_session_core::v1::Seq::try_new(1).expect("valid seq"),
+                    fingerprint_sha256: "test-projection".into(),
+                },
+                evidence,
+                usage: UsageSnapshot::default(),
+            },
+            paired_cache_usage: PairedCacheUsage::default(),
+            has_compaction: false,
+        }
     }
 
     /// Verifies detailed rows preserve the Provider-calibrated token and percentage totals.
