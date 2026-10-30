@@ -1182,7 +1182,13 @@ fn user_prompt_media_edit_resets_only_replaced_prompt() -> Result<(), DomainErro
         now_ms: T0 + 10,
     })?;
     assert_eq!(edited.events[0], document.events()[0]);
-    let EventBody::UserInput(input) = &edited.events.last().expect("edited prompt").event else {
+    let EventBody::UserInput(input) = &edited
+        .events
+        .iter()
+        .find(|event| event.seq == second)
+        .expect("edited prompt keeps the target seq")
+        .event
+    else {
         unreachable!("edited root")
     };
     assert_eq!(

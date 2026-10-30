@@ -1,7 +1,9 @@
 //! Pure domain builders for edited and forked history generations.
 //! 编辑与分叉历史 generation 的纯领域构建器。
 
-use crate::v1::collaboration::CollaborationMetadata;
+use crate::v1::collaboration::{
+    CollaborationMetadata, CollaborationOperationId, CollaborationRunControl, SetRunControlInput,
+};
 use crate::v1::compaction_frontier::select_node_for_seq;
 use crate::v1::config::{ForkOrigin, GoalConfig, InputState, MetadataDocument, PlanModeConfig};
 use crate::v1::context::{CompactionNode, RuntimeInitializationState, RuntimeLock};
@@ -508,6 +510,45 @@ impl SessionDocument {
             document.metadata = staged_metadata;
             document.id_allocator = staged_allocator;
             document.events.extend(staged_events);
+        }
+        // An edit reopens its root Turn and is dispatched at once, so it is admitted as Running exactly
+        // like a submitted root input. The fresh collaboration state above starts naturally idle, and a
+        // successful turn only closes while Running: without this, the edited Turn would stay open after
+        // its final answer until the next input stopped it. Forks keep no open Turn and stay idle.
+        // 编辑会重新打开根回合并立即分发，因此与提交根输入一样以运行中状态准入。上面新建的协作状态
+        // 初始为自然空闲，而成功回合只在运行中才会关闭：缺少此步时，编辑后的回合在最终回答后仍保持
+        // 开放，直到下一次输入将其停止。分叉没有开放回合，保持空闲。
+        if let Some(start_seq) = document
+            .active_turn()
+            .filter(|turn| !turn.closed)
+            .map(|turn| turn.start_seq)
+        {
+            let client_action_id = document
+                .events
+                .iter()
+                .find_map(|event| match &event.event {
+                    EventBody::UserInput(input) if event.seq == start_seq => {
+                        Some(input.client_action_id.clone())
+                    }
+                    _ => None,
+                })
+                .ok_or(DomainError::InvalidGenerationInput {
+                    field: "target_seq",
+                })?;
+            // Like the reset and request-switch events above, this event joins the generation's single
+            // publication revision instead of advancing a second one.
+            // 与上面的重置及请求切换事件一样，此事件并入本代次唯一的发布修订，不再推进第二个修订。
+            let publication_revision = document.metadata.document_revision;
+            document.set_collaboration_run_control(SetRunControlInput {
+                operation_id: CollaborationOperationId::try_new(format!(
+                    "root-input-running:{}:{}",
+                    document.metadata.session_id,
+                    client_action_id.as_str()
+                ))?,
+                state: CollaborationRunControl::Running,
+                changed_at_ms: now_ms,
+            })?;
+            document.metadata.document_revision = publication_revision;
         }
         metadata.id_frontier = document.id_frontier();
         document.metadata.id_frontier = metadata.id_frontier;
@@ -1202,6 +1243,14 @@ mod tests {
             output.events,
         )
         .expect("edited generation must reconstruct");
+        // The reopened root is admitted as Running like a submitted input; only a Running turn closes
+        // successfully, so a naturally idle edit would keep its answered Turn open.
+        // 重新打开的根回合与提交的输入一样以运行中准入；只有运行中的回合才会成功关闭，
+        // 自然空闲的编辑会让已回答的回合一直保持开放。
+        assert_eq!(
+            edited.collaboration_run_control(),
+            CollaborationRunControl::Running
+        );
         let turn_id = edited
             .active_turn()
             .expect("edited root must own an open Turn")
@@ -1359,6 +1408,12 @@ mod tests {
                 if context_key == "dynamic.post_boundary"
         )));
         assert!(output.metadata.collaboration.state.questions.is_empty());
+        // A fork keeps no open Turn, so it is not admitted as Running.
+        // 分叉没有开放回合，因此不以运行中准入。
+        assert_eq!(
+            output.metadata.collaboration.state.run_control,
+            CollaborationRunControl::NaturallyIdle
+        );
         assert!(
             output
                 .metadata

@@ -1777,6 +1777,12 @@ fn edit_generation_replaces_resident_owner_and_publishes_rebase() {
             .expect("inspect replaced resident generation");
     let durable = load_session_v1_full(&locator).expect("strict reload edited generation");
     assert_eq!(durable.document.segment_generation(), 2);
+    // The reopened root survives strict reload as Running, so its successful answer can close it.
+    // 重新打开的根回合经严格重载后仍为运行中，其成功回答因此可以关闭回合。
+    assert_eq!(
+        durable.document.collaboration_run_control(),
+        vulcan_session_core::v1::collaboration::CollaborationRunControl::Running
+    );
     assert_eq!(
         durable.document.memory_revision(),
         receipt.document_revision
