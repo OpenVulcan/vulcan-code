@@ -126,9 +126,16 @@
 .vk-composer:focus-within { border-color: var(--vk-ink-3); box-shadow: var(--vk-shadow-2); }
 .vk-composer[data-drag-over] { border-color: var(--vk-signal); box-shadow: var(--vk-shadow-2), 0 0 0 3px var(--vk-signal-soft); }
 .vk-composer > .vk-textarea {
+  /* The single bound of how far the prompt field grows: its resting height plus this many lines of text,
+     after which it scrolls. useComposerTextareaAutosize sets the height and never caps it itself. */
+  /* 输入框可增高范围的唯一边界：静止高度再加上这里的文本行数，超出后内部滚动。
+     useComposerTextareaAutosize 只设置高度，自身不设上限。 */
+  --vk-composer-extra-lines: 15;
+  --vk-composer-rest-height: 60px;
+  --vk-composer-max-height: calc(var(--vk-composer-rest-height) + var(--vk-composer-extra-lines) * 1em * var(--vk-lh-ui));
   height: auto;
-  min-height: 60px;
-  max-height: 300px;
+  min-height: var(--vk-composer-rest-height);
+  max-height: var(--vk-composer-max-height);
   padding: calc(var(--vk-u) * 3.5) calc(var(--vk-u) * 4.5) calc(var(--vk-u) * 1.5);
   overflow-y: auto;
   border: 0;
@@ -436,7 +443,11 @@ button.vk-attach-warn { right: 6px; bottom: 6px; color: var(--vk-warn); }
   .vk-composer-bar { flex-wrap: wrap; gap: 4px; padding: 6px; }
   .vk-composer-tools { display: contents; }
   .vk-composer-end { margin-left: auto; max-width: 100%; }
-  .vk-composer > .vk-textarea { max-height: min(240px, 30dvh); font-size: var(--vk-fs-lg); }
+  .vk-composer > .vk-textarea {
+    /* The same line bound, also kept within part of a short viewport. 同一行数边界，同时不超过矮视口的一部分。 */
+    max-height: min(var(--vk-composer-max-height), 60dvh);
+    font-size: var(--vk-fs-lg);
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   .vk-dock { transition: none; }

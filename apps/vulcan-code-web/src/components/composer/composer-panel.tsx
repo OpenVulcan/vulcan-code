@@ -72,6 +72,7 @@ import { useComposerAttachmentRemoval } from "@/components/composer/composer-pan
 import { useComposerAttachmentSubmissionGate } from "@/components/composer/composer-panel/attachment-submission-gate";
 import { useComposerSlashSession } from "@/components/composer/composer-panel/use-composer-slash-session";
 import { useComposerTextareaKeys } from "@/components/composer/composer-panel/use-composer-textarea-keys";
+import { useComposerTextareaAutosize } from "@/components/composer/composer-panel/use-composer-textarea-autosize";
 import { ComposerPathMentionPanel } from "@/components/composer/composer-panel/composer-path-mention-panel";
 export { ComposerSessionProgressCapsule } from "@/components/composer/composer-panel/progress-capsule";
 // ComposerPanel renders the first-version message input surface.
@@ -809,6 +810,7 @@ export function ComposerPanel(props: {
   }, [draftSlotKey, resetSlashCommands]);
 
   useComposerTypingRedirect(composerTextareaRef, pendingPromptEditRef, appendGlobalInput);
+  useComposerTextareaAutosize(composerTextareaRef, draftInput);
 
   return (
     <TooltipProvider>
