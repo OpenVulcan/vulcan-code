@@ -40,7 +40,7 @@
 .vk-md a.vk-a-path { text-decoration: none; }
 .vk-md a.vk-a-path:hover { border-color: var(--vk-signal); color: var(--vk-signal); }
 .vk-a-delta { font-family: var(--vk-font-mono); font-size: var(--vk-fs-sm); font-weight: 600; white-space: nowrap; }
-.vk-a-delta > .vk-del { margin-inline-start: calc(var(--vk-u) * 1.5); }
+.vk-a-delta > .vk-add + .vk-del { margin-inline-start: calc(var(--vk-u) * 1.5); }
 
 /* ---------- Compare ---------- */
 .vk-a-compare td:first-child { color: var(--vk-ink); font-weight: 600; }

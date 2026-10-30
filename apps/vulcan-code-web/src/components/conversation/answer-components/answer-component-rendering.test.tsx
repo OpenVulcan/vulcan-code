@@ -69,6 +69,16 @@ describe("answer components in conversation Markdown", () => {
     expect((await render(fence, { workspace: "D:\\repo" })).querySelector("a.vk-a-path")).toBeNull();
   });
 
+  it("links a checklist location cell and shows one-sided file counts and change labels", async () => {
+    const checklist = await render("```ui-checklist\nno | Double count | reasoning in output | src/turn_stats.rs:150\n```", { workspace: "D:\\repo" });
+    expect(checklist.querySelector(".vk-a-checklist a.vk-a-path")?.getAttribute("href")).toBe("file:///D:/repo/src/turn_stats.rs");
+    const files = await render("```ui-files\nsrc/a.ts | +145 | entry\nsrc/b.ts | new | project id\n```");
+    const rows = files.querySelectorAll(".vk-a-files li");
+    expect(rows[0].querySelector(".vk-add")?.textContent).toBe("+145");
+    expect(rows[0].querySelector(".vk-del")).toBeNull();
+    expect(rows[1].querySelector(".vk-badge")?.textContent).toBe("new");
+  });
+
   it("frames Markdown tables and right-aligns numeric columns only", async () => {
     const host = await render("| Stage | ms | Note |\n| --- | --- | --- |\n| Acquire | 12.4 | lock |\n| Execute | 1,204 | — |");
     expect(host.querySelector(".vk-figure table.vk-table")).not.toBeNull();

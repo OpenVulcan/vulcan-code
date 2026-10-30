@@ -9,6 +9,7 @@ import { MermaidDiagram } from "@/components/conversation/conversation-mermaid";
 import { SvgPreview } from "@/components/conversation/conversation-svg-preview";
 import type { AnswerComponentHost } from "@/components/conversation/answer-components/answer-component-view";
 import { AnswerFrame } from "@/components/conversation/answer-components/answer-frame";
+import { answerLocationPath } from "@/components/conversation/answer-components/answer-file-location";
 import { markdownTable, numericCells } from "@/components/conversation/answer-components/answer-markdown-table";
 import { splitStreamingMarkdownBlocks, STREAMING_MARKDOWN_RAW_TAIL_MAX_CHARS } from "@/components/conversation/streaming-markdown-blocks";
 import type { GeneratedMediaAttachment } from "@/components/media/generated-media";
@@ -1223,11 +1224,8 @@ function answerMediaSource(path: string, workspacePath: string | null): string |
 // answerFileHref links a file reference such as `src/a.rs:42` to its file URL; the line suffix is display-only.
 // answerFileHref 将 `src/a.rs:42` 这类文件引用链接到文件 URL；行号后缀仅用于显示。
 function answerFileHref(location: string, workspacePath: string | null): string | null {
-  const path = location.trim().replace(/:\d+(?::\d+)?$/u, "");
-  // Models sometimes put prose in a location cell; only a path-shaped token, without spaces or full-width
-  // punctuation and with a separator or an extension, is treated as a file.
-  // 模型有时会在位置单元格写入说明文字；只有不含空白与全角标点、且带分隔符或扩展名的路径形词元才视为文件。
-  if (!/^[^\s　-〿＀-￯]+$/u.test(path) || !/[\\/]|\.[\p{L}\p{N}]+$/u.test(path)) return null;
+  const path = answerLocationPath(location);
+  if (path === null) return null;
   let absolute: string | null = null;
   if (looksLikeAbsoluteLocalFilesystemPath(path)) {
     absolute = path;

@@ -4,6 +4,7 @@ import {
   ANSWER_CODE_MAX_LINES,
   ANSWER_COMPONENT_MAX_ROWS,
 } from "@/generated/protocol-limits";
+import { answerLocationPath } from "./answer-file-location";
 
 // Parsed `ui-*` answer component fences. Parsing is pure and total: any fence that does not match
 // its documented syntax returns null so the caller keeps showing it as ordinary code. The syntax
@@ -102,12 +103,14 @@ export interface AnswerTreeNode {
   children: AnswerTreeNode[];
 }
 
-// One changed file; `added` and `removed` are present together.
-// 单个变更文件；`added` 与 `removed` 同时存在。
+// One changed file. Either line count may be missing when the row names only one side (`+145`); `status` is a
+// change label such as `new` written in place of the counts.
+// 单个变更文件。行只写出一侧（如 `+145`）时另一侧行数缺省；`status` 是写在行数位置的变更标签，如 `new`。
 export interface AnswerFile {
   path: string;
   added?: number;
   removed?: number;
+  status?: string;
   note?: string;
 }
 
@@ -183,7 +186,7 @@ export type AnswerComponentBody =
   | { kind: "metrics"; rows: AnswerMetric[] }
   | { kind: "findings"; rows: { severity: AnswerSeverity; text: string; location?: string }[] }
   | { kind: "compare"; header: string[]; rows: { criterion: string; cells: AnswerTonedText[] }[] }
-  | { kind: "checklist"; items: { status: AnswerStatus; item: string; note?: string }[] }
+  | { kind: "checklist"; items: { status: AnswerStatus; item: string; note?: string; location?: string }[] }
   | { kind: "steps"; steps: { status: AnswerStepStatus; title: string; text?: string }[] }
   | { kind: "timeline"; rows: { time: string; title: string; text?: string }[] }
   | { kind: "cards"; cards: { title: string; text: string; tag?: AnswerTonedText }[] }
@@ -224,7 +227,7 @@ export function parseAnswerComponent(language: string, meta: string, body: strin
     case "ui-kv":
       return titled(args, () => mapRows(body, 2, 2, ([label, value]) => ({ label, value }), (rows) => ({ kind: "kv", rows })));
     case "ui-metrics":
-      return titled(args, () => mapRows(body, 2, 5, metric, (rows) => ({ kind: "metrics", rows })));
+      return titled(args, () => mapLines(body, metricCells, metric, (rows) => ({ kind: "metrics", rows })));
     case "ui-findings":
       return titled(args, () => mapRows(body, 2, 3, ([severity, text, location]) => (
         SEVERITIES.has(severity) ? { severity: severity as AnswerSeverity, text, location } : null
@@ -232,9 +235,7 @@ export function parseAnswerComponent(language: string, meta: string, body: strin
     case "ui-compare":
       return titled(args, () => compare(body));
     case "ui-checklist":
-      return titled(args, () => mapRows(body, 2, 3, ([status, item, note]) => (
-        STATUSES.has(status) ? { status: status as AnswerStatus, item, note } : null
-      ), (items) => ({ kind: "checklist", items })));
+      return titled(args, () => checklist(body));
     case "ui-steps":
       return titled(args, () => mapRows(body, 2, 3, ([status, title, text]) => (
         STEP_STATUSES.has(status) ? { status: status as AnswerStepStatus, title, text } : null
@@ -247,9 +248,7 @@ export function parseAnswerComponent(language: string, meta: string, body: strin
     case "ui-files":
       return titled(args, () => files(body));
     case "ui-code":
-      // Code snapshots are captured by the backend for the bare `ui-code` info string only.
-      // 代码快照仅由后端按不带参数的 `ui-code` 信息串抓取。
-      return args ? null : code(body);
+      return titled(args, () => code(body));
     case "ui-gallery":
       return titled(args, () => mapRows(body, 1, 2, ([path, caption]) => ({ path, caption }), (items) => ({ kind: "gallery", items })));
     case "ui-tree":
@@ -347,12 +346,23 @@ function mapRows<T>(
   row: (cells: string[]) => T | null,
   wrap: (rows: T[]) => AnswerComponent,
 ): AnswerComponent | null {
+  return mapLines(body, (line) => rowCells(line, min, max), row, wrap);
+}
+
+// Parse rows whose cells come from `cells` and wrap them; null when a row is invalid or the row count is out of range.
+// 解析单元格由 `cells` 拆出的各行并包装；任一行无效或行数越界时返回 null。
+function mapLines<T>(
+  body: string,
+  cells: (line: string) => string[] | null,
+  row: (cells: string[]) => T | null,
+  wrap: (rows: T[]) => AnswerComponent,
+): AnswerComponent | null {
   const lines = dataLines(body);
   if (lines.length === 0 || lines.length > ANSWER_COMPONENT_MAX_ROWS) return null;
   const rows: T[] = [];
   for (const line of lines) {
-    const cells = rowCells(line, min, max);
-    const parsed = cells === null ? null : row(cells);
+    const split = cells(line);
+    const parsed = split === null ? null : row(split);
     if (parsed === null) return null;
     rows.push(parsed);
   }
@@ -373,18 +383,41 @@ function number(text: string): number | null {
 }
 
 // `label | value [| maximum [| unit]] [| tone]`; a maximum requires a nonnegative numeric value, and a value
-// above it is an overrun whose tone defaults to `no`.
+// above it is an overrun whose tone defaults to `no`. Models also write `label | value | unit`: a lone third cell
+// that is not a number is read as the unit, without a meter. Models also leave the maximum and unit cells empty
+// to keep the columns aligned (`label | value | | | tone`, `label | value | | MB`); an empty cell in those two
+// positions means the value is absent, while an empty label, value or any other cell is still malformed.
 // `标签 | 数值 [| 最大值 [| 单位]] [| 色调]`；提供最大值时数值必须为非负数字，超出最大值即为超限，色调默认 `no`。
+// 模型也会写 `标签 | 数值 | 单位`：单独的第三格不是数字时读作单位，不显示进度条。
+// 模型还会把最大值与单位格留空以对齐列（`标签 | 数值 | | | 色调`、`标签 | 数值 | | MB`）：这两个位置的空格表示该项缺省，
+// 标签、数值或其他位置为空仍属格式错误。
 function metric(input: string[]): AnswerMetric | null {
   const cells = [...input];
+  if (!cells[0] || !cells[1]) return null;
   const tone = cells.length > 2 && TONES.has(cells[cells.length - 1]) ? cells.pop() as AnswerTone : undefined;
-  const [label, value, maximum, unit] = cells;
-  if (maximum === undefined) return { label, value, tone };
-  const numeric = number(value);
+  if (cells.slice(4).some((cell) => !cell)) return null;
+  const [label, value] = cells;
+  const maximum = cells[2] || undefined;
+  const unit = cells[3] || undefined;
+  if (maximum === undefined) return { label, value, unit, tone };
   const max = number(maximum);
+  if (max === null && unit === undefined) return { label, value, unit: maximum, tone };
+  const numeric = number(value);
   if (numeric === null || max === null || max <= 0 || numeric < 0) return null;
   const over = numeric > max;
   return { label, value, numeric, maximum: max, over, unit, tone: tone ?? (over ? "no" : undefined) };
+}
+
+// Cells of one metric row, 2..=5 of them, keeping empty cells for `metric` to judge; a row with too many cells is
+// split again leniently, as `rowCells` does.
+// 单条指标行的单元格（2 到 5 个），保留空单元格交给 `metric` 判断；单元格过多的行与 `rowCells` 一样宽松地再拆一次。
+function metricCells(line: string): string[] | null {
+  const fits = (cells: string[]) => cells.length >= 2 && cells.length <= 5;
+  const cells = answerCells(line);
+  if (fits(cells)) return cells;
+  if (cells.length <= 5) return null;
+  const lenient = answerCells(line, true);
+  return fits(lenient) ? lenient : null;
 }
 
 // Decision matrix: a header of criterion and at least two options, then one row per criterion.
@@ -403,20 +436,49 @@ function compare(body: string): AnswerComponent | null {
   return { kind: "compare", header, rows };
 }
 
-// `path | +added -removed | note` rows; both later cells are optional, totals are summed.
-// `路径 | +新增 -删除 | 说明` 行；后两个单元格可省略，并汇总合计。
+// `path | +added -removed | note` rows; both later cells are optional, totals are summed. Models also write one
+// side only (`+145`) or a change label in place of the counts (`path | new | note`); both are accepted.
+// `路径 | +新增 -删除 | 说明` 行；后两个单元格可省略，并汇总合计。模型也会只写一侧（`+145`），或在行数位置写变更标签
+// （`路径 | 新建 | 说明`），两者均被接受。
 function files(body: string): AnswerComponent | null {
   let added = 0;
   let removed = 0;
   return mapRows(body, 1, 3, ([path, second, third]): AnswerFile | null => {
-    const delta = second === undefined ? null : /^\+(\d+)\s+[-−](\d+)$/u.exec(second);
-    if (delta === null && third !== undefined) return null;
+    const delta = second === undefined ? null : lineDelta(second);
+    if (delta === null && third !== undefined) return { path, status: second, note: third };
     if (delta === null) return { path, note: second };
-    const file = { path, added: Number(delta[1]), removed: Number(delta[2]), note: third };
-    added += file.added;
-    removed += file.removed;
-    return file;
+    added += delta.added ?? 0;
+    removed += delta.removed ?? 0;
+    return { path, ...delta, note: third };
   }, (rows) => ({ kind: "files", files: rows, added, removed }));
+}
+
+// Line counts of `+added -removed`, `+added` or `-removed` (`−` also marks removals); null for other text.
+// `+新增 -删除`、`+新增` 或 `-删除`（`−` 同样表示删除）的行数；其他文字为 null。
+function lineDelta(cell: string): { added?: number; removed?: number } | null {
+  const match = /^(?:\+(\d+)(?:\s+[-−](\d+))?|[-−](\d+))$/u.exec(cell);
+  if (match === null) return null;
+  const removed = match[2] ?? match[3];
+  return {
+    ...(match[1] === undefined ? {} : { added: Number(match[1]) }),
+    ...(removed === undefined ? {} : { removed: Number(removed) }),
+  };
+}
+
+// `status | item | note` rows. Models sometimes add a fourth location cell as in `ui-findings`; it is accepted only
+// when it is path-shaped, so a genuinely extra column of prose still invalidates the component.
+// `状态 | 事项 | 说明` 行。模型有时仿照 `ui-findings` 追加第四格位置；仅当其呈路径形态时接受，
+// 因此真正多出的说明列仍使组件无效。
+function checklist(body: string): AnswerComponent | null {
+  const cells = (line: string) => {
+    const plain = rowCells(line, 2, 3);
+    if (plain !== null) return plain;
+    const located = rowCells(line, 4, 4);
+    return located !== null && answerLocationPath(located[3]) !== null ? located : null;
+  };
+  return mapLines(body, cells, ([status, item, note, location]) => (
+    STATUSES.has(status) ? { status: status as AnswerStatus, item, note, location } : null
+  ), (items) => ({ kind: "checklist", items }));
 }
 
 // `path:start-end | highlights | note` rows; at most ANSWER_CODE_MAX_EXCERPTS, each range at most
@@ -765,20 +827,23 @@ function er(horizontal: boolean, body: string): AnswerComponent | null {
 
 // `ui-math [title]`: formula lines, then after a blank line optional `symbol | meaning` legend rows. Each
 // formula line is one displayed equation unless the formula uses a `\begin` environment.
+// Models also separate equations with blank lines: when no line after the first blank line is a
+// `symbol | meaning` row, those lines are further formulas and there is no legend. A mix of both is invalid.
 // `ui-math [标题]`：公式行，空行之后为可选的 `符号 | 含义` 图例行。除非公式使用 `\begin` 环境，每行公式各自独立显示。
+// 模型也会用空行分隔公式：第一个空行之后若没有任何 `符号 | 含义` 行，这些行按公式处理，不再有图例；两者混杂则无效。
 function math(args: string, body: string): AnswerComponent | null {
   const lines = body.split(/\r?\n/u);
   while (lines.length > 0 && !lines[0].trim()) lines.shift();
   const blank = lines.findIndex((line) => !line.trim());
-  const formula = (blank < 0 ? lines : lines.slice(0, blank)).map((line) => line.trim());
-  const legend = blank < 0 ? [] : dataLines(lines.slice(blank + 1).join("\n"));
+  const after = blank < 0 ? [] : dataLines(lines.slice(blank + 1).join("\n"));
+  const legendRows = after.map((line) => rowCells(line, 2, 2));
+  const isLegend = legendRows.every((cells) => cells !== null);
+  if (!isLegend && legendRows.some((cells) => cells !== null)) return null;
+  const formula = (blank < 0 ? lines : lines.slice(0, blank)).map((line) => line.trim())
+    .concat(isLegend ? [] : after.map((line) => line.trim()));
+  const legend = isLegend ? legendRows as string[][] : [];
   if (formula.length === 0 || formula.length + legend.length > ANSWER_COMPONENT_MAX_ROWS) return null;
-  const symbols: AnswerMathSymbol[] = [];
-  for (const line of legend) {
-    const cells = rowCells(line, 2, 2);
-    if (cells === null) return null;
-    symbols.push({ symbol: cells[0], meaning: cells[1] });
-  }
+  const symbols: AnswerMathSymbol[] = legend.map(([symbol, meaning]) => ({ symbol, meaning }));
   const equations = formula.some((line) => line.includes("\\begin")) ? [formula.join("\n")] : formula;
   return { kind: "math", title: args || undefined, equations, symbols };
 }

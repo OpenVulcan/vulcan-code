@@ -50,6 +50,32 @@ describe("parseAnswerComponent", () => {
     expect(parse("ui-metrics", "Coverage | -1 | 100")).toBeNull();
   });
 
+  it("reads a lone non-numeric third metric cell as the unit, without a meter", () => {
+    expect(parse("ui-metrics", "Files | 9\nScan time | 10.9 | s\nOutput | 59 | MB | warn")).toMatchObject({
+      kind: "metrics", rows: [{ value: "9" }, { value: "10.9", unit: "s" }, { value: "59", unit: "MB", tone: "warn" }],
+    });
+    expect(parse("ui-metrics", "Scan time | 10.9 | s")).not.toHaveProperty("rows.0.maximum");
+    // A non-numeric maximum followed by a unit is still a malformed meter.
+    expect(parse("ui-metrics", "Coverage | 80 | high | %")).toBeNull();
+  });
+
+  it("treats empty maximum and unit cells as absent, keeping other empty cells malformed", () => {
+    // Same column shape as the sample that failed to render, with marker labels.
+    const body = "raw-rg | 506 s | | | no\nfixed-rg | 2.58 s\ncopy-size | 0.96 | | MB | ok";
+    expect(parse("ui-metrics", body)).toMatchObject({
+      kind: "metrics", rows: [
+        { label: "raw-rg", value: "506 s", tone: "no" },
+        { value: "2.58 s" },
+        { value: "0.96", unit: "MB", tone: "ok" },
+      ],
+    });
+    expect(parse("ui-metrics", "Coverage | 80 | | %")).not.toHaveProperty("rows.0.maximum");
+    expect(parse("ui-metrics", " | 80")).toBeNull();
+    expect(parse("ui-metrics", "Coverage | ")).toBeNull();
+    // Outer pipes are optional, so an empty fifth cell needs a closing pipe after it.
+    expect(parse("ui-metrics", "Coverage | 80 | 100 | % |  |")).toBeNull();
+  });
+
   it("marks a value above its maximum as an overrun whose tone defaults to no", () => {
     expect(parse("ui-metrics", "Images | 620 | 500 | KB\nScripts | 200 | 170 | KB | warn\nFonts | 40 | 50")).toMatchObject({
       kind: "metrics", rows: [{ over: true, tone: "no" }, { over: true, tone: "warn" }, { over: false }],
@@ -79,14 +105,37 @@ describe("parseAnswerComponent", () => {
     });
     expect(parse("ui-math", "\\begin{aligned}\na &= b \\\\\n&= c\n\\end{aligned}")).toMatchObject({ equations: ["\\begin{aligned}\na &= b \\\\\n&= c\n\\end{aligned}"] });
     expect(parse("ui-math", "|x| = 1")).toMatchObject({ equations: ["|x| = 1"], symbols: [] });
-    expect(parse("ui-math", "x = 1\n\nx")).toBeNull();
+    expect(parse("ui-math", "x = 1\n\nx | ok\ny")).toBeNull();
   });
 
-  it("sums file deltas and rejects a third cell without a delta", () => {
+  it("reads lines after a blank line as further formulas when none is a legend row", () => {
+    expect(parse("ui-math Rate", "r = a / b\n\nso: \\quad r = a / c\ns = 1")).toEqual({
+      kind: "math", title: "Rate", equations: ["r = a / b", "so: \\quad r = a / c", "s = 1"], symbols: [],
+    });
+  });
+
+  it("sums file deltas, including one-sided counts", () => {
     expect(parse("ui-files", "a.rs | +9 -2 | note\nb.rs | +1 −0\nc.md | only a note")).toMatchObject({
       kind: "files", added: 10, removed: 2, files: [{ added: 9, note: "note" }, { removed: 0 }, { note: "only a note" }],
     });
-    expect(parse("ui-files", "a.rs | changed | note")).toBeNull();
+    expect(parse("ui-files", "a.rs | +145 | entry\nb.rs | -3\nc.rs | +2 -1")).toMatchObject({
+      kind: "files", added: 147, removed: 4, files: [{ added: 145, note: "entry" }, { removed: 3 }, { added: 2, removed: 1 }],
+    });
+    expect(parse("ui-files", "a.rs | +145")).not.toHaveProperty("files.0.removed");
+  });
+
+  it("reads a change label written in place of the file counts", () => {
+    expect(parse("ui-files", "a.ts | new | maps cwd to a project\nb.yaml | changed | lockfile")).toMatchObject({
+      kind: "files", added: 0, removed: 0, files: [{ path: "a.ts", status: "new", note: "maps cwd to a project" }, { status: "changed" }],
+    });
+  });
+
+  it("accepts a fourth checklist cell only when it is a path-shaped location", () => {
+    expect(parse("ui-checklist", "no | Sums reasoning twice | double count | crates/a/src/turn_stats.rs:150\nok | Builds")).toMatchObject({
+      kind: "checklist", items: [{ status: "no", note: "double count", location: "crates/a/src/turn_stats.rs:150" }, { item: "Builds" }],
+    });
+    expect(parse("ui-checklist", "warn | item | note | needs a second look")).toBeNull();
+    expect(parse("ui-checklist", "warn | item | note | src/a.rs | extra")).toBeNull();
   });
 
   it("parses compare matrices with tone cells and requires matching widths", () => {
@@ -233,6 +282,9 @@ describe("parseAnswerComponent", () => {
     const rows = (count: number) => Array.from({ length: count }, (_, index) => `a.rs:${index + 1}`).join("\n");
     expect(parse("ui-code", rows(ANSWER_CODE_MAX_EXCERPTS))).not.toBeNull();
     expect(parse("ui-code", rows(ANSWER_CODE_MAX_EXCERPTS + 1))).toBeNull();
-    expect(parse("ui-code extra", "a.rs:1")).toBeNull();
+  });
+
+  it("reads text after the ui-code name as its heading", () => {
+    expect(parse("ui-code Key lines", "a.rs:1-2 | 2 | note")).toMatchObject({ kind: "code", heading: "Key lines", excerpts: [{ location: "a.rs:1-2" }] });
   });
 });

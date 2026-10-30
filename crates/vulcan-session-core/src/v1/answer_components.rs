@@ -39,8 +39,8 @@ pub const ANSWER_CODE_MAX_EXCERPTS: usize = 16;
 /// 单个已抓取摘录存储的最多 UTF-8 字节数；更大的范围记录为过大。
 pub const ANSWER_CODE_MAX_BYTES: usize = 64 * 1024;
 
-/// Fence info string of the code excerpt component.
-/// 代码摘录组件的围栏信息串。
+/// Fence name of the code excerpt component; text after it on the info string is a heading.
+/// 代码摘录组件的围栏名称；信息串中其后的文字是标题。
 const ANSWER_CODE_FENCE: &str = "ui-code";
 
 /// One parsed `path:start-end` location cell of a `ui-code` row.
@@ -130,7 +130,9 @@ fn collect_answer_code_locations(
             return;
         };
         let body = &lines[index..index + close];
-        if info == ANSWER_CODE_FENCE {
+        // Models often write a title after the name (`ui-code Key lines`); the renderers show it as a heading.
+        // 模型常在名称后写标题（`ui-code 关键行`）；渲染器将其作为标题显示。
+        if info.split_whitespace().next() == Some(ANSWER_CODE_FENCE) {
             for row in body {
                 let first = row.trim().trim_start_matches('|').split('|').next();
                 let Some(location) = first.and_then(parse_answer_code_location) else {
@@ -338,6 +340,19 @@ src/b.rs:2
             .map(|location| location.location)
             .collect();
         assert_eq!(locations, ["src/a.rs:1", "src/b.rs:2"]);
+    }
+
+    /// A title after the name still quotes the rows, while a longer name is another fence.
+    /// 名称后带标题时仍引用各行，而更长的名称是另一种围栏。
+    #[test]
+    fn titled_code_fences_quote_their_rows() {
+        let text =
+            "```ui-code Key lines\nsrc/a.rs:1-2 | 2 | note\n```\n\n```ui-codex\nsrc/b.rs:3\n```\n";
+        let locations: Vec<String> = answer_code_locations(text)
+            .into_iter()
+            .map(|location| location.location)
+            .collect();
+        assert_eq!(locations, ["src/a.rs:1-2"]);
     }
 
     #[test]

@@ -764,10 +764,37 @@ A[Plan] --> B[Build]";
         let math = joined("```ui-math Law\nL = \\lambda W\n\nL | requests-marker\n```");
         assert!(!math.contains("ui-math"));
         assert!(math.contains("L = \\lambda W") && math.contains("requests-marker"));
-        assert!(joined("```ui-math\nx = 1\n\nx\n```").contains("ui-math"));
+        assert!(joined("```ui-math\nx = 1\n\nx | ok\ny\n```").contains("ui-math"));
+        // Lines after the blank line are further formulas when none is a legend row.
+        // 空行之后没有图例行时，这些行按公式处理。
+        let formulas = joined("```ui-math\nr = a\n\nso-marker r = b\n```");
+        assert!(!formulas.contains("ui-math") && formulas.contains("so-marker r = b"));
 
         let over = joined("```ui-metrics\nImages | 620 | 500 | KB\n```");
         assert!(!over.contains("ui-metrics") && over.contains("✗") && over.contains("██████████"));
+
+        // Lenient forms models write: a unit as the third metric cell, one-sided file counts or a
+        // change label, and a path-shaped fourth checklist cell.
+        // 模型的宽松写法：指标第三格为单位、文件只写一侧行数或变更标签、清单第四格为路径。
+        let unit = joined("```ui-metrics\nScan | 10.9 | s\n```");
+        assert!(unit.contains("10.9 s") && !unit.contains("ui-metrics") && !unit.contains('░'));
+        // Empty maximum and unit cells keep columns aligned and mean the value is absent.
+        // 空的最大值与单位格用于对齐列，表示该项缺省。
+        let aligned =
+            joined("```ui-metrics\nraw-marker | 506 s | | | no\nsize | 0.96 | | MB | ok\n```");
+        assert!(
+            !aligned.contains("ui-metrics")
+                && aligned.contains("raw-marker")
+                && aligned.contains("0.96 MB")
+        );
+        assert!(joined("```ui-metrics\n | 80\n```").contains("ui-metrics"));
+        let files = joined("```ui-files\nsrc/a.ts | +145 | entry\nsrc/b.ts | new | id\n```");
+        assert!(!files.contains("ui-files") && files.contains("+145 −0") && files.contains("new"));
+        let located = joined("```ui-checklist\nno | item | note | src/a.rs:150\n```");
+        assert!(!located.contains("ui-checklist") && located.contains("src/a.rs:150"));
+        assert!(
+            joined("```ui-checklist\nno | item | note | more prose\n```").contains("ui-checklist")
+        );
 
         let decision = joined("```ui-decision\nLifetime?\n* Ten | deploys\n- Hour\n```");
         assert!(!decision.contains("ui-decision") && decision.contains("Lifetime?"));

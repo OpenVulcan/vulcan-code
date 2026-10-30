@@ -75,7 +75,18 @@ pub fn render(
         }
         "details" => (!args.is_empty())
             .then(|| framed(&format!("▾ {args}"), theme.border, body, width, theme, code)),
-        "code" if args.is_empty() => code_excerpts(body, width, theme, code),
+        "code" => {
+            // Text after the name is a heading, as for the other row components.
+            // 名称后的文字作为标题，与其他行组件一致。
+            let excerpts = code_excerpts(body, width, theme, code)?;
+            let mut lines = if args.is_empty() {
+                Vec::new()
+            } else {
+                markdown::render(&format!("**{args}**"), width, theme)
+            };
+            lines.extend(excerpts);
+            Some(lines)
+        }
         "tabs" | "columns" => {
             let sections = body.iter().filter(|line| line.starts_with("### ")).count();
             let first = body.iter().find(|line| !line.trim().is_empty())?;
@@ -475,7 +486,7 @@ fn component_markdown(
         "kv" => rows_markdown(lines, 2, 2, |cell| {
             Some(format!("- **{}**: {}\n", cell[0], cell[1]))
         }),
-        "metrics" => rows_markdown(lines, 2, 5, metric),
+        "metrics" => metrics(lines),
         "findings" => rows_markdown(lines, 2, 3, |cell| {
             let severity = match cell[0] {
                 "high" => tr!("answerComponents.severity.high"),
@@ -487,13 +498,7 @@ fn component_markdown(
             let location = cell.get(2).map_or(String::new(), |at| format!(" — `{at}`"));
             Some(format!("- **[{severity}]** {}{location}\n", cell[1]))
         }),
-        "checklist" => rows_markdown(lines, 2, 3, |cell| {
-            let symbol = status_symbol(cell[0])?;
-            let note = cell
-                .get(2)
-                .map_or(String::new(), |note| format!(" — {note}"));
-            Some(format!("- {symbol} {}{note}\n", cell[1]))
-        }),
+        "checklist" => checklist(lines),
         "steps" => {
             let mut number = 0;
             rows_markdown(lines, 2, 3, |cell| {
@@ -553,10 +558,32 @@ fn component_markdown(
     Some(heading + &body)
 }
 
+/// Metric rows of 2..=5 cells, keeping empty cells for [`metric`] to judge; a row with too many cells
+/// is split again leniently, as [`row_cells`] does.
+/// 含 2 到 5 个单元格的指标行，保留空单元格交给 [`metric`] 判断；单元格过多的行与 [`row_cells`] 一样宽松地再拆一次。
+fn metrics(lines: &[&str]) -> Option<String> {
+    let rows = data_rows(lines);
+    if rows.is_empty() || rows.len() > ANSWER_COMPONENT_MAX_ROWS {
+        return None;
+    }
+    let fits = |cells: &Vec<&str>| (2..=5).contains(&cells.len());
+    rows.iter()
+        .map(|line| {
+            let cells = Some(answer_cells(line, false))
+                .filter(fits)
+                .or_else(|| Some(answer_cells(line, true)).filter(fits))?;
+            metric(&cells)
+        })
+        .collect()
+}
+
 /// `label | value [| maximum [| unit]] [| tone]` as a bullet with an optional ten-cell meter.
 /// `标签 | 数值 [| 最大值 [| 单位]] [| 色调]` 转为条目，可带十格进度条。
 fn metric(cell: &[&str]) -> Option<String> {
     let mut cell = cell.to_vec();
+    if cell[0].is_empty() || cell[1].is_empty() {
+        return None;
+    }
     let tone = cell
         .last()
         .filter(|_| cell.len() > 2)
@@ -564,12 +591,33 @@ fn metric(cell: &[&str]) -> Option<String> {
     if tone.is_some() {
         cell.pop();
     }
+    // Models leave the maximum and unit cells empty to keep columns aligned (`label | value | | | tone`);
+    // an empty cell there means the value is absent, as in the WebUI. Other empty cells stay malformed.
+    // 模型会把最大值与单位格留空以对齐列（`标签 | 数值 | | | 色调`）；与 WebUI 一致，这两个位置的空格表示缺省，
+    // 其他位置为空仍属格式错误。
+    if cell.iter().skip(4).any(|text| text.is_empty()) {
+        return None;
+    }
+    let present = |index: usize| cell.get(index).copied().filter(|text| !text.is_empty());
     let prefix = tone.map_or(String::new(), |symbol| format!("{symbol} "));
-    let Some(maximum) = cell.get(2) else {
-        return Some(format!("- {prefix}**{}**: {}\n", cell[0], cell[1]));
+    let unit = present(3);
+    let Some(maximum) = present(2) else {
+        let unit = unit.map_or(String::new(), |unit| format!(" {unit}"));
+        return Some(format!("- {prefix}**{}**: {}{unit}\n", cell[0], cell[1]));
+    };
+    let limit: f64 = match maximum.parse() {
+        Ok(limit) => limit,
+        // Models also write `label | value | unit`: a lone non-numeric third cell is the unit, without a meter.
+        // 模型也会写 `标签 | 数值 | 单位`：单独的非数字第三格读作单位，不显示进度条。
+        Err(_) if unit.is_none() => {
+            return Some(format!(
+                "- {prefix}**{}**: {} {maximum}\n",
+                cell[0], cell[1]
+            ));
+        }
+        Err(_) => return None,
     };
     let value: f64 = cell[1].parse().ok()?;
-    let limit: f64 = maximum.parse().ok()?;
     if !value.is_finite() || !limit.is_finite() || limit <= 0.0 || value < 0.0 {
         return None;
     }
@@ -597,38 +645,60 @@ fn metric(cell: &[&str]) -> Option<String> {
         "- {prefix}**{}**: {} / {maximum}{} `{}{}`{overshoot}\n",
         cell[0],
         cell[1],
-        cell.get(3).map_or(String::new(), |unit| format!(" {unit}")),
+        unit.map_or(String::new(), |unit| format!(" {unit}")),
         "█".repeat(filled),
         "░".repeat(10 - filled)
     ))
 }
 
-/// Parse a `+added -removed` cell.
-/// 解析 `+新增 -删除` 单元格。
-fn line_delta(text: &str) -> Option<(u64, u64)> {
-    let (added, removed) = text.split_once(char::is_whitespace)?;
-    Some((
-        added.strip_prefix('+')?.parse().ok()?,
-        removed.trim().strip_prefix(['-', '−'])?.parse().ok()?,
-    ))
+/// Parse a `+added -removed`, `+added` or `-removed` cell (`−` also marks removals); a side the cell
+/// does not state is `None`.
+/// 解析 `+新增 -删除`、`+新增` 或 `-删除` 单元格（`−` 同样表示删除）；未写出的一侧为 `None`。
+fn line_delta(text: &str) -> Option<(Option<u64>, Option<u64>)> {
+    let count = |digits: &str| {
+        (!digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()))
+            .then(|| digits.parse().ok())
+            .flatten()
+    };
+    if let Some(rest) = text.strip_prefix('+') {
+        return match rest.split_once(char::is_whitespace) {
+            None => Some((Some(count(rest)?), None)),
+            Some((added, removed)) => Some((
+                Some(count(added)?),
+                Some(count(removed.trim_start().strip_prefix(['-', '−'])?)?),
+            )),
+        };
+    }
+    Some((None, Some(count(text.strip_prefix(['-', '−'])?)?)))
 }
 
-/// `path | +added -removed | note` rows under a summed header; later cells are optional.
-/// `路径 | +新增 -删除 | 说明` 行并附合计标题；后续单元格可省略。
+/// `path | +added -removed | note` rows under a summed header; later cells are optional. Models also
+/// write one side only (`+145`) or a change label in place of the counts (`path | new | note`), as the
+/// WebUI accepts.
+/// `路径 | +新增 -删除 | 说明` 行并附合计标题；后续单元格可省略。与 WebUI 一致，也接受只写一侧（`+145`）
+/// 或在行数位置写变更标签（`路径 | 新建 | 说明`）。
 fn files(lines: &[&str]) -> Option<String> {
     let (mut count, mut added, mut removed) = (0usize, 0u64, 0u64);
     let body = rows_markdown(lines, 1, 3, |cell| {
         let delta = cell.get(1).and_then(|text| line_delta(text));
-        if delta.is_none() && cell.len() == 3 {
-            return None;
-        }
-        let note = cell.get(if delta.is_some() { 2 } else { 1 });
-        count += 1;
-        let delta = delta.map_or(String::new(), |(plus, minus)| {
-            added += plus;
-            removed += minus;
-            format!(" +{plus} −{minus}")
+        let label = (delta.is_none() && cell.len() == 3).then(|| cell[1]);
+        let note = cell.get(if delta.is_some() || label.is_some() {
+            2
+        } else {
+            1
         });
+        count += 1;
+        let delta = match (delta, label) {
+            (Some((plus, minus)), _) => {
+                added += plus.unwrap_or(0);
+                removed += minus.unwrap_or(0);
+                let plus = plus.map_or(String::new(), |plus| format!(" +{plus}"));
+                let minus = minus.map_or(String::new(), |minus| format!(" −{minus}"));
+                plus + &minus
+            }
+            (None, Some(label)) => format!(" `{label}`"),
+            (None, None) => String::new(),
+        };
         let note = note.map_or(String::new(), |note| format!(" — {note}"));
         Some(format!("- `{}`{delta}{note}\n", cell[0]))
     })?;
@@ -636,6 +706,53 @@ fn files(lines: &[&str]) -> Option<String> {
         "**{}** +{added} −{removed}\n\n{body}",
         tr!("answerComponents.fileCount", count = count)
     ))
+}
+
+/// `status | item | note` rows. Models sometimes add a fourth location cell as in `ui-findings`; it is
+/// accepted only when path-shaped, so a genuinely extra column of prose still invalidates the component.
+/// `状态 | 事项 | 说明` 行。模型有时仿照 `ui-findings` 追加第四格位置；仅当其呈路径形态时接受，
+/// 因此真正多出的说明列仍使组件无效。
+fn checklist(lines: &[&str]) -> Option<String> {
+    let rows = data_rows(lines);
+    if rows.is_empty() || rows.len() > ANSWER_COMPONENT_MAX_ROWS {
+        return None;
+    }
+    rows.iter()
+        .map(|line| {
+            let cell = row_cells(line, 2, 3)
+                .or_else(|| row_cells(line, 4, 4).filter(|cell| is_location_path(cell[3])))?;
+            let symbol = status_symbol(cell[0])?;
+            let note = cell
+                .get(2)
+                .map_or(String::new(), |note| format!(" — {note}"));
+            let location = cell.get(3).map_or(String::new(), |at| format!(" `{at}`"));
+            Some(format!("- {symbol} {}{note}{location}\n", cell[1]))
+        })
+        .collect()
+}
+
+/// Whether a location cell is path-shaped, as the WebUI decides before linking it: no whitespace or
+/// full-width punctuation, and a separator or an extension once a `:line[:column]` suffix is removed.
+/// 位置单元格是否呈路径形态，与 WebUI 链接前的判断一致：不含空白与全角标点，去掉 `:行[:列]` 后缀后
+/// 带分隔符或扩展名。
+fn is_location_path(location: &str) -> bool {
+    let mut path = location.trim();
+    for _ in 0..2 {
+        if let Some((head, tail)) = path.rsplit_once(':')
+            && !tail.is_empty()
+            && tail.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            path = head;
+        }
+    }
+    let plain = !path.is_empty()
+        && path.chars().all(|ch| {
+            !ch.is_whitespace() && !matches!(ch, '\u{3000}'..='\u{303f}' | '\u{ff00}'..='\u{ffef}')
+        });
+    let extension = path
+        .rsplit_once('.')
+        .is_some_and(|(_, ext)| !ext.is_empty() && ext.chars().all(char::is_alphanumeric));
+    plain && (path.contains(['/', '\\']) || extension)
 }
 
 /// Decision matrix: a header of criterion and options, then one row per criterion.
@@ -1179,8 +1296,10 @@ fn entities(args: &str, lines: &[&str]) -> Option<String> {
 }
 
 /// `ui-math [title]`: formula lines as a TeX code block, then after the first blank line an optional
-/// `symbol | meaning` legend.
-/// `ui-math [标题]`：公式行以 TeX 代码块显示，第一个空行之后为可选的 `符号 | 含义` 图例。
+/// `symbol | meaning` legend. As in the WebUI, when no line after the first blank line is a legend row,
+/// those lines are further formulas; a mix of both is invalid.
+/// `ui-math [标题]`：公式行以 TeX 代码块显示，第一个空行之后为可选的 `符号 | 含义` 图例。与 WebUI 一致，
+/// 第一个空行之后若没有任何图例行，这些行按公式处理；两者混杂则无效。
 fn math(args: &str, lines: &[&str]) -> Option<String> {
     let start = lines.iter().position(|line| !line.trim().is_empty())?;
     let lines = &lines[start..];
@@ -1188,8 +1307,13 @@ fn math(args: &str, lines: &[&str]) -> Option<String> {
         .iter()
         .position(|line| line.trim().is_empty())
         .unwrap_or(lines.len());
-    let legend = data_rows(&lines[blank..]);
-    if blank + legend.len() > ANSWER_COMPONENT_MAX_ROWS {
+    let after = data_rows(&lines[blank..]);
+    let legend: Vec<Option<Vec<&str>>> = after.iter().map(|row| row_cells(row, 2, 2)).collect();
+    let is_legend = legend.iter().all(Option::is_some);
+    if !is_legend && legend.iter().any(Option::is_some) {
+        return None;
+    }
+    if blank + after.len() > ANSWER_COMPONENT_MAX_ROWS {
         return None;
     }
     let mut output = String::new();
@@ -1197,13 +1321,13 @@ fn math(args: &str, lines: &[&str]) -> Option<String> {
         output.push_str(&format!("**{args}**\n\n"));
     }
     output.push_str("```tex\n");
-    for line in &lines[..blank] {
+    let extra: &[&str] = if is_legend { &[] } else { &after };
+    for line in lines[..blank].iter().chain(extra) {
         output.push_str(line.trim());
         output.push('\n');
     }
     output.push_str("```\n");
-    for row in legend {
-        let cell = row_cells(row, 2, 2)?;
+    for cell in legend.into_iter().flatten().filter(|_| is_legend) {
         output.push_str(&format!("- $`{}`$ — {}\n", cell[0], cell[1]));
     }
     Some(output)

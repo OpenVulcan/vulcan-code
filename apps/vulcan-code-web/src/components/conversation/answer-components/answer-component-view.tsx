@@ -183,7 +183,9 @@ export function AnswerComponentView({ component, host, replyKey }: { component: 
             <li data-status={item.status} key={index}>
               <span aria-hidden="true" className="vk-a-status" data-status={item.status}>{STATUS_SYMBOLS[item.status]}</span>
               <span>{item.item}</span>
-              {item.note ? <small>{item.note}</small> : null}
+              {item.note || item.location
+                ? <small>{item.note}{item.location ? <> <FileLink host={host} location={item.location} /></> : null}</small>
+                : null}
             </li>
           ))}
         </ul>
@@ -238,7 +240,9 @@ export function AnswerComponentView({ component, host, replyKey }: { component: 
             {component.files.map((file, index) => (
               <li key={index}>
                 <span className="vk-a-files-path"><FileLink host={host} location={file.path} />{file.note ? <small>{file.note}</small> : null}</span>
-                {file.added !== undefined ? <LineDelta added={file.added} removed={file.removed!} /> : null}
+                {file.added !== undefined || file.removed !== undefined
+                  ? <LineDelta added={file.added} removed={file.removed} />
+                  : file.status ? <span className="vk-badge">{file.status}</span> : null}
               </li>
             ))}
           </ul>
@@ -346,12 +350,13 @@ function tonedMarkdown(value: AnswerTonedText): string {
   return [symbol, value.text].filter(Boolean).join(" ");
 }
 
-// Added and removed line counts.
-// 新增与删除行数。
-function LineDelta({ added, removed }: { added: number; removed: number }) {
+// Added and removed line counts; a side a file row did not state is left out.
+// 新增与删除行数；文件行未写出的一侧不显示。
+function LineDelta({ added, removed }: { added?: number; removed?: number }) {
   return (
     <span className="vk-a-delta">
-      <span className="vk-add">+{formatChartNumber(added)}</span><span className="vk-del">−{formatChartNumber(removed)}</span>
+      {added !== undefined ? <span className="vk-add">+{formatChartNumber(added)}</span> : null}
+      {removed !== undefined ? <span className="vk-del">−{formatChartNumber(removed)}</span> : null}
     </span>
   );
 }
