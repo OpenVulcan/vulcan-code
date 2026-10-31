@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { HOVER_CARD_OPEN_DELAY_MS } from "@/ui-kit/primitives/hover-card";
 import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import { mediaDeliverySettingsFixture } from "@/test-fixtures/media-delivery";
@@ -30,6 +30,12 @@ vi.mock("@/service/settings-actions-service", () => ({
 // root 与 host 仅持有隔离组件测试文档。
 let root: Root;
 let host: HTMLDivElement;
+// The account card renders usage through a lazily loaded module. Loading it once up front makes every
+// later React.lazy read resolve synchronously, so assertions follow component state instead of how fast
+// a dynamic import happens to finish under a busy test run.
+// 账号卡片通过懒加载模块渲染用量。提前加载一次，使之后每次 React.lazy 读取都同步完成，
+// 让断言跟随组件状态，而不取决于繁忙测试运行中动态导入恰好多快完成。
+beforeAll(async () => { await import("@/components/public-ai/credential-usage-overview"); });
 beforeEach(() => {
   vi.clearAllMocks(); vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });

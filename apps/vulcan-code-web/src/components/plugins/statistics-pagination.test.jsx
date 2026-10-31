@@ -51,7 +51,9 @@ beforeEach(async () => {
   // 宿主调用不访问服务、供应商、真实设置或用户统计。
   const invoke = (action, args) => {
     if (action === "settings-get") return Promise.resolve({ modelOverrides: {}, catalogModels: [] });
-    if (action === "dashboard-get" && ["overview", "details"].includes(args.view)) return Promise.resolve({ ...dashboard, view: args.view });
+    // Whole-tab views answer at once; only paged table projections stay pending for the test to settle.
+    // 整页视图立即返回；只有分页表格投影保持挂起，由测试决定其结果。
+    if (action === "dashboard-get" && ["overview", "providers", "recent"].includes(args.view)) return Promise.resolve({ ...dashboard, view: args.view, providers: [] });
     return new Promise((resolve, reject) => requests.push({ action, args, resolve, reject }));
   };
   const Panel = createPluginPanel({ React, components, locale: "en", t: (_, fallback) => fallback, invoke });
@@ -85,38 +87,44 @@ async function choose(label, value, scope = host) {
   await act(async () => { select.value = value; select.dispatchEvent(new Event("change", { bubbles: true })); });
 }
 
-it("requests isolated table pages, retains neighboring cards and rejects stale category responses", async () => {
-  await click("details");
-  // Capture mounted cards so a whole-dashboard clear cannot masquerade as local refresh.
+it("requests isolated table pages and rejects stale category responses", async () => {
+  await click("recent");
+  // Capture the mounted card so a whole-dashboard clear cannot masquerade as local refresh.
   // 捕获已挂载卡片，防止整份仪表盘清空伪装成局部刷新。
-  const [daily, recent] = [section("Model usage"), section("Recent physical attempts")];
+  const recent = section("Recent physical attempts");
   await choose("Model types", "embedding", recent);
   expect(requests[0].args.view).toBe("recent-page");
-  expect(daily.hidden).toBe(false);
-  expect(daily.getAttribute("aria-busy")).toBe("false");
   await choose("Model types", "rerank", recent);
   expect(requests[1].args.recentModelType).toBe("rerank");
   await act(async () => requests[1].resolve({ recentAttempts: [], recentCount: 75 }));
   await act(async () => requests[0].resolve({ recentAttempts: [], recentCount: 999 }));
   expect(recent.textContent).toContain("0 / 75");
   expect(recent.textContent).not.toContain("999");
-  await click("Next", daily);
-  expect(requests[2].args.view).toBe("daily-page");
-  expect(requests[2].args.dailyOffset).toBe(100);
-  expect(recent.getAttribute("aria-busy")).toBe("false");
-  await act(async () => requests[2].reject(new Error("page read failed")));
-  expect(daily.textContent).toContain("page read failed");
-  expect(recent.textContent).not.toContain("page read failed");
-  await click("Retry", daily);
-  await act(async () => requests[3].resolve({ daily: [], dailyCount: 150 }));
-  expect(daily.textContent).toContain("100 / 150");
+  // Leaving and returning to the committed category supersedes the pending request without another one,
+  // and its late response is ignored.
+  // 离开再回到已提交分类会取代挂起请求而不再发新请求，其迟到的响应被忽略。
   await choose("Model types", "embedding", recent);
-  expect(requests).toHaveLength(5);
+  expect(requests).toHaveLength(3);
   await choose("Model types", "rerank", recent);
-  expect(requests).toHaveLength(5);
+  expect(requests).toHaveLength(3);
   expect(recent.getAttribute("aria-busy")).toBe("false");
-  await act(async () => requests[4].resolve({ recentAttempts: [], recentCount: 999 }));
+  await act(async () => requests[2].resolve({ recentAttempts: [], recentCount: 999 }));
   expect(recent.textContent).toContain("0 / 75");
+});
+
+it("keeps a failed daily page inside its own section and retries it", async () => {
+  await click("providers");
+  const daily = section("Model usage");
+  await click("Next", daily);
+  expect(requests[0].args.view).toBe("daily-page");
+  expect(requests[0].args.dailyOffset).toBe(100);
+  expect(daily.getAttribute("aria-busy")).toBe("true");
+  await act(async () => requests[0].reject(new Error("page read failed")));
+  expect(daily.textContent).toContain("page read failed");
+  await click("Retry", daily);
+  await act(async () => requests[1].resolve({ daily: [], dailyCount: 150 }));
+  expect(daily.textContent).toContain("100 / 150");
+  expect(daily.textContent).not.toContain("page read failed");
 });
 
 it("keeps pricing rows and committed page numbers during loading, failure and retry", async () => {
@@ -158,15 +166,11 @@ it("hides token generation timing for embeddings and reranking in both tables", 
     outputTokensPerSecond: 20, timedAttemptCount: 1,
     estimatedCost: null, estimatedCurrency: null, pricingDetails: null, pricingMatchStatus: "unpriced",
   }));
-  await click("details");
-  // These stable cards receive independent aggregate and attempt responses through the real host boundary.
-  // 通过真实宿主边界向稳定卡片分别提供聚合和请求响应。
-  const [daily, recent] = [section("Model usage"), section("Recent physical attempts")];
-  await click("Next", daily);
-  await act(async () => requests[0].resolve({ daily: rows, dailyCount: 103 }));
-  await choose("Model types", "embedding", recent);
-  await act(async () => requests[1].resolve({ recentAttempts: rows, recentCount: 3 }));
-  for (const card of [daily, recent]) {
+  // Each tab's card receives its own aggregate or attempt response through the real host boundary.
+  // 每个标签页的卡片通过真实宿主边界分别接收聚合或请求响应。
+  // expectTiming checks one rendered table; card is the section that owns it.
+  // expectTiming 检查一张已渲染表格；card 是其所属区块。
+  const expectTiming = (card) => {
     // Each table must retain duration for every operation while only conversation requests expose token timing.
     // 每张表都必须保留全部操作的耗时，仅对话请求展示 Token 计时。
     const cells = card.querySelectorAll(".plugin-statistics-latency");
@@ -178,5 +182,15 @@ it("hides token generation timing for embeddings and reranking in both tables", 
     }
     expect(cells[2].textContent).toContain("First token");
     expect(cells[2].textContent).toContain("20.0 tokens/s");
-  }
+  };
+  await click("providers");
+  const daily = section("Model usage");
+  await click("Next", daily);
+  await act(async () => requests[0].resolve({ daily: rows, dailyCount: 103 }));
+  expectTiming(daily);
+  await click("recent");
+  const recent = section("Recent physical attempts");
+  await choose("Model types", "embedding", recent);
+  await act(async () => requests[1].resolve({ recentAttempts: rows, recentCount: 3 }));
+  expectTiming(recent);
 });
