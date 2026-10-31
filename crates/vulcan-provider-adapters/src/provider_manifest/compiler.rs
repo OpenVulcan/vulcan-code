@@ -1925,6 +1925,10 @@ fn compile_service_entry(
         service_origin_override_policy: entry.service_origin_override_policy.clone(),
         native_inference_bindings: entry.native_inference_bindings.clone(),
         model_discovery,
+        model_discovery_path: entry
+            .model_catalog
+            .as_ref()
+            .and_then(|catalog| catalog.path.clone()),
         request_projector: entry
             .request_projector
             .unwrap_or(RequestProjectorKind::Direct),

@@ -333,7 +333,7 @@ fn convert_service_entry(entry: &ServiceEntry) -> ManifestServiceEntry {
                     }
                 },
                 discovery_kind: Some(entry.model_discovery),
-                path: None,
+                path: entry.model_discovery_path.clone(),
                 models: None,
             }),
             crate::ServiceEntryKind::ProviderTools => None,

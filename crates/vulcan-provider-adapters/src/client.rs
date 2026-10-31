@@ -31,7 +31,7 @@ use account_usage::{
 };
 pub use minimax_registration::MiniMaxKeyRegistration;
 use model_discovery::{
-    default_discovery_path, manifest_protocol_authorizes_model_variant,
+    custom_catalog_url, default_discovery_path, manifest_protocol_authorizes_model_variant,
     validate_discovered_catalog_bounds,
 };
 use secondary_routes::query_openrouter_model_endpoints;
@@ -362,6 +362,19 @@ impl ProviderMetadataClient for HttpProviderMetadataClient {
             .iter()
             .filter(|route| route_is_available_for_discovery(route))
         {
+            if provider.kind == crate::ProviderKind::Custom {
+                // One selected entry catalog supplies identities for every declared conversation route.
+                // 一个选定的入口目录为全部已声明会话路由提供模型身份。
+                let signature = crate::discovery_signature::discovery_signature(
+                    entry.model_discovery,
+                    &custom_catalog_url(entry),
+                    &connection.credential_profile_id,
+                    &entry.authentication,
+                    &entry.request_headers,
+                );
+                groups.entry(signature).or_default().push(route);
+                continue;
+            }
             let authentication = route
                 .resolved_authentication(entry.authentication, credential_profile.authentication);
             let url = route.model_discovery_url(
@@ -395,8 +408,11 @@ impl ProviderMetadataClient for HttpProviderMetadataClient {
             // The shared network result is fetched exactly once per signature; each protocol
             // route then receives its own capability/evidence enrichment and variant.
             // 每个签名的共享网络结果只获取一次；随后每条协议路由获得各自的能力/证据补全与变体。
-            let raw = self
-                .discover_for_route(
+            let raw = if provider.kind == crate::ProviderKind::Custom {
+                self.discover_custom_catalog(entry, connection, secret, generation)
+                    .await?
+            } else {
+                self.discover_for_route(
                     entry,
                     connection,
                     secret,
@@ -404,7 +420,8 @@ impl ProviderMetadataClient for HttpProviderMetadataClient {
                     generation,
                     routes[0],
                 )
-                .await?;
+                .await?
+            };
             if merged.discovery_schema_revision.is_empty() {
                 merged.discovery_schema_revision = raw.discovery_schema_revision.clone();
             }

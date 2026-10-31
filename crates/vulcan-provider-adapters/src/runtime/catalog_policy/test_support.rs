@@ -54,6 +54,7 @@ pub(in crate::runtime) fn apply_model_catalog_overlays(
             protocols: vec![crate::CustomProviderProtocol::OpenAiChat],
             authentication: crate::CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: discovery_mode,
+            model_discovery_protocol: crate::CustomProviderModelDiscoveryProtocol::OpenAi,
             model_discovery_path: None,
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),

@@ -137,6 +137,12 @@ export interface PublicAiServiceEntry {
   session_header?: string;
   service_origin_override_policy?: PublicAiServiceOriginOverridePolicy;
   model_discovery: PublicAiModelDiscoveryKind;
+  // One shared model-catalog path, independent of conversation route endpoints.
+  // 唯一共享模型目录路径，独立于会话路由端点。
+  model_discovery_path?: string;
+  // Non-sensitive entry headers shared by the catalog and inherited conversation routes.
+  // 目录与继承该入口的会话路由共享的非敏感请求头。
+  request_headers?: Record<string, string>;
   protocol_routes: PublicAiProtocolRoute[];
 }
 
@@ -229,8 +235,8 @@ export type PublicAiCustomModelProtocolPreference =
   | { mode: "explicit"; protocol: PublicAiCustomProviderProtocol };
 
 // PublicAiCustomProviderProtocolRoute overrides one protocol route with its own base URL,
-// endpoint path, authentication, discovery, and fixed headers.
-// PublicAiCustomProviderProtocolRoute 以专属基础 URL、端点路径、鉴权、发现与固定请求头
+// endpoint path, authentication, and fixed conversation headers.
+// PublicAiCustomProviderProtocolRoute 以专属基础 URL、端点路径、鉴权与固定会话请求头
 // 覆盖一条协议路由。
 export interface PublicAiCustomProviderProtocolRoute {
   protocol: PublicAiCustomProviderProtocol;
@@ -241,8 +247,6 @@ export interface PublicAiCustomProviderProtocolRoute {
   // Route-level API-key projection; omitted inherits the shared provider projection.
   // 路由级 API Key 投影；省略时继承供应商共享投影。
   authentication?: "bearer_authorization" | "google_api_key" | "x_api_key";
-  model_discovery_mode?: PublicAiCustomProviderModelDiscoveryMode;
-  model_discovery_path?: string;
   request_headers?: Record<string, string>;
 }
 
@@ -283,6 +287,9 @@ export interface PublicAiCustomProviderSaveRequest {
   secret?: string;
   validationConnectionId?: string;
   modelDiscoveryMode: PublicAiCustomProviderModelDiscoveryMode;
+  // Single catalog wire format, independent of enabled conversation protocols.
+  // 唯一目录线格式，独立于启用的会话协议。
+  modelDiscoveryProtocol: "open_ai" | "anthropic" | "gemini";
   modelDiscoveryPath?: string;
   allowManualFallback?: boolean;
   allowPendingValidation?: boolean;

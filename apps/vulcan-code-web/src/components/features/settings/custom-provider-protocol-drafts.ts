@@ -22,12 +22,6 @@ export interface CustomProtocolRouteDraft {
   // Route-specific API-key projection; empty inherits the shared provider projection.
   // 路由专属 API Key 投影；空值继承共享供应商投影。
   authentication: "bearer_authorization" | "google_api_key" | "x_api_key" | ""
-  // Route-specific model-discovery mode; empty inherits the shared provider mode.
-  // 路由专属模型发现模式；空值继承共享供应商模式。
-  modelDiscoveryMode: "standard" | "custom_path" | "manual" | ""
-  // Same-origin relative discovery path used only by the custom-path route mode.
-  // 仅由自定义路径路由模式使用的同源相对发现路径。
-  modelDiscoveryPath: string
   // Bounded non-sensitive fixed request headers for this route only.
   // 仅作用于该路由的有界非敏感固定请求头。
   requestHeaders: Record<string, string>
@@ -152,8 +146,6 @@ export function emptyProtocolRouteDraft(): CustomProtocolRouteDraft {
     baseUrlOverride: "",
     endpointPath: "",
     authentication: "",
-    modelDiscoveryMode: "",
-    modelDiscoveryPath: "",
     requestHeaders: {},
   }
 }
@@ -196,14 +188,6 @@ export function protocolCollectionFromEntry(
     draft.endpointPath = route.endpoint_path ?? ""
     if (route.authentication) {
       draft.authentication = route.authentication as CustomProtocolRouteDraft["authentication"]
-    }
-    if (route.model_discovery === "manual") {
-      draft.modelDiscoveryMode = "manual"
-    } else if (route.model_discovery_path) {
-      draft.modelDiscoveryMode = "custom_path"
-      draft.modelDiscoveryPath = route.model_discovery_path
-    } else if (route.model_discovery) {
-      draft.modelDiscoveryMode = "standard"
     }
     if (route.request_headers) {
       draft.requestHeaders = { ...route.request_headers }
@@ -293,12 +277,6 @@ export function protocolRoutesFromCollection(
     }
     if (draft.authentication) {
       route.authentication = draft.authentication
-    }
-    if (draft.modelDiscoveryMode) {
-      route.model_discovery_mode = draft.modelDiscoveryMode
-    }
-    if (draft.modelDiscoveryMode === "custom_path" && draft.modelDiscoveryPath.trim()) {
-      route.model_discovery_path = draft.modelDiscoveryPath.trim()
     }
     const headers = Object.fromEntries(
       Object.entries(draft.requestHeaders).filter(([, value]) => value.trim().length > 0),

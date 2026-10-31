@@ -303,6 +303,10 @@ pub struct ServiceEntry {
     /// Exact model-discovery implementation for this entry.
     /// 此入口使用的精确模型发现实现。
     pub model_discovery: ModelDiscoveryKind,
+    /// Entry-owned catalog path, independent from conversation endpoint overrides.
+    /// 入口持有的目录路径，独立于会话端点覆盖。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_discovery_path: Option<String>,
     /// Exact registered request projector for this provider product entry.
     /// 当前供应商产品入口使用的精确已注册请求投影器。
     pub request_projector: RequestProjectorKind,

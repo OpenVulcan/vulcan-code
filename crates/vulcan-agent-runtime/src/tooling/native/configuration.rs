@@ -152,6 +152,10 @@ pub enum ProviderConfigRequest {
         /// Protocols the endpoint speaks.
         /// 端点支持的协议。
         protocols: Vec<CustomProviderProtocol>,
+        /// Single model-catalog format, independent from conversation protocols; defaults to OpenAI.
+        /// 独立于会话协议的唯一模型目录格式；默认 OpenAI。
+        #[serde(default)]
+        model_discovery_protocol: vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol,
         /// How the API key is sent; defaults to a bearer `Authorization` header.
         /// API Key 的发送方式；默认使用 Bearer `Authorization` 请求头。
         authentication: Option<CustomProviderAuthentication>,
@@ -321,6 +325,11 @@ fn provider_config_args_schema() -> Value {
             "display_name": { "type": "string", "description": "add_connection: connection name; add_custom_provider: provider name." },
             "api_key_env": { "type": "string", "description": "add_connection/add_custom_provider: name of the Vulcan environment variable holding the API key." },
             "base_url": { "type": "string", "description": "add_custom_provider: API base URL." },
+            "model_discovery_protocol": {
+                "type": "string",
+                "enum": ["open_ai", "anthropic", "gemini"],
+                "description": "add_custom_provider: the single catalog format to fetch using the shared base URL and authentication. Independent from conversation protocols. Defaults to open_ai."
+            },
             "protocols": {
                 "type": "array",
                 "items": {

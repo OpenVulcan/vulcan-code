@@ -1728,7 +1728,12 @@ pub(crate) async fn service_sync_public_ai_connection(
     )?;
     validate_model_synchronization_directory(
         connection_id.as_str(),
-        service_entry_model_directory_kind(&entry),
+        service_entry_model_directory_kind(
+            &entry,
+            configuration
+                .custom_providers
+                .contains_key(&connection.provider_id),
+        ),
     )?;
     let refresh_result = validate_connection_credential(
         runtime.as_ref(),

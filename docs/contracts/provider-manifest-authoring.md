@@ -46,6 +46,19 @@ crates/vulcan-runtime-assets/resources/provider-manifests/fixtures/
 自定义供应商以 `custom:` 命名空间和独立文件持久化。它可以有多个实例、多个启用协议、发现模型
 和手动模型；实例之间的端点、凭据、模型和选择不得串用。
 
+自定义供应商的模型目录只配置一次，与会话可用协议集合独立。设置请求用 `modelDiscoveryProtocol`
+选择 `open_ai`、`anthropic` 或 `gemini`，默认值在界面明确显示为 OpenAI；持久化权威是入口
+`model_catalog.discovery_kind` 与 `model_catalog.path`。目录使用入口共享地址、鉴权和非敏感请求头，
+只执行所选发现链（有分页时继续同一链），再为已声明会话协议投影模型变体。Chat 与 Responses 共用
+OpenAI 目录格式；仅启用 Anthropic 会话协议也可以使用 OpenAI 目录。会话路由的地址、鉴权和请求头
+覆盖只用于模型调用，路由级目录字段不再决定自定义供应商的发现行为，编辑器不再提交这些字段。
+HTTP、解析或分页失败直接保留错误，绝不改用另一个目录协议；手工模式不读取凭据也不访问远端。
+标准目录路径追加到入口基础地址之后；Gemini 的版本前缀由基础地址提供，例如 `.../v1beta`
+请求 `.../v1beta/models`，不重复追加版本。显式自定义目录路径同样保留基础地址已有前缀，分页只增加查询参数。
+Anthropic 目录请求复用 LLM 核心的协议版本头声明，显式入口版本头优先，认证仍严格按用户选择发送。
+实现与回归位于 `client/model_discovery`、`custom_provider`、`runtime/catalog_sources`、独立清单保存重载
+测试和 WebUI `custom-provider-catalog-draft`；系统供应商仍按签名清单的原有目录声明执行。
+
 ### 1.1 自定义供应商文件位置与格式
 
 宿主先解析应用数据根目录，再把每个自定义供应商保存到：

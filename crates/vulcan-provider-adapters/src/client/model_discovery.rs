@@ -34,6 +34,20 @@ const MODEL_DISCOVERY_MAX_PAGES: u32 = 1_024;
 /// 因此跟随已发布的官方客户端版本。
 const OPENAI_CODEX_DISCOVERY_CLIENT_VERSION: &str = "0.163.0";
 
+/// Resolves the shared custom catalog URL from its entry-owned base and optional path.
+/// 从入口持有的基础地址及可选路径解析共享自定义目录 URL。
+/// `entry` supplies the declared catalog; returns the exact URL without route selection.
+/// `entry` 提供目录声明；返回精确 URL，不选择会话路由。
+pub(super) fn custom_catalog_url(entry: &ServiceEntry) -> String {
+    // path uses the selected catalog's standard endpoint only when no explicit path is declared.
+    // path 仅在未声明显式路径时使用所选目录的标准端点。
+    let path = entry
+        .model_discovery_path
+        .as_deref()
+        .unwrap_or_else(|| default_discovery_path(entry.model_discovery));
+    format!("{}{}", entry.base_url.trim_end_matches('/'), path)
+}
+
 /// Reports whether one signed Manifest authorizes a protocol variant for an exact model scope.
 /// 报告一份签名 Manifest 是否为精确模型作用域授权一个协议变体。
 ///
@@ -76,6 +90,82 @@ pub(super) fn manifest_protocol_authorizes_model_variant(
 }
 
 impl HttpProviderMetadataClient {
+    /// Fetches the entry's single selected custom catalog; never probes conversation routes.
+    /// 拉取入口选定的唯一自定义目录，绝不探测会话路由。
+    ///
+    /// `entry` owns transport settings; `connection`, `secret`, and `generation` scope the catalog.
+    /// `entry` 持有传输设置；`connection`、`secret` 和 `generation` 限定目录归属。
+    /// Returns the complete bounded catalog or the original failure.
+    /// 返回完整的有界目录或原始失败。
+    pub(super) async fn discover_custom_catalog(
+        &self,
+        entry: &ServiceEntry,
+        connection: &CredentialConnection,
+        secret: &CredentialExecutionSecret,
+        generation: u64,
+    ) -> Result<ConnectionModelCatalog, ModelDiscoveryError> {
+        // url comes only from the shared catalog declaration, independent of enabled protocols.
+        // url 仅来自共享目录声明，独立于已启用协议。
+        let url = custom_catalog_url(entry);
+        match entry.model_discovery {
+            ModelDiscoveryKind::OpenAi => {
+                // body retains the exact selected response; parser errors never select another format.
+                // body 保留精确选定响应；解析错误绝不触发其他格式。
+                let body = send_metadata_get_with_authentication(
+                    &self.http,
+                    entry,
+                    entry.authentication,
+                    &url,
+                    secret,
+                    "model discovery",
+                )
+                .await?;
+                parse_openai_model_catalog(&connection.id, generation, &body)
+                    .map_err(ModelDiscoveryError::invalid_response)
+            }
+            ModelDiscoveryKind::AnthropicCompatible => {
+                // catalog_entry receives protocol-owned version headers without changing saved settings.
+                // catalog_entry 接收协议持有的版本头，不改变已保存设置。
+                let mut catalog_entry = entry.clone();
+                for (name, value) in vulcan_llm_core::converted_protocol_headers(
+                    vulcan_llm_core::UpstreamProtocol::AnthropicMessages,
+                ) {
+                    if !catalog_entry
+                        .request_headers
+                        .keys()
+                        .any(|header| header.eq_ignore_ascii_case(&name))
+                    {
+                        catalog_entry.request_headers.insert(name, value);
+                    }
+                }
+                discover_anthropic_compatible_models(
+                    &self.http,
+                    &catalog_entry,
+                    connection,
+                    entry.authentication,
+                    secret,
+                    generation,
+                    &url,
+                )
+                .await
+            }
+            ModelDiscoveryKind::Gemini => {
+                discover_gemini_models(&self.http, entry, connection, secret, generation, &url)
+                    .await
+            }
+            ModelDiscoveryKind::Manual => Ok(ConnectionModelCatalog {
+                connection_id: connection.id.clone(),
+                models: Vec::new(),
+                generation,
+                page_count: 0,
+                discovery_schema_revision: String::from("manual.models.v1"),
+            }),
+            _ => Err(ModelDiscoveryError::failed(
+                "Custom provider catalog uses an unsupported discovery protocol.",
+            )),
+        }
+    }
+
     /// Discovers the raw model catalog through one exact protocol route without enrichment.
     /// 通过一条精确协议路由发现原始模型目录，不做补全。
     pub(super) async fn discover_for_route(
@@ -226,7 +316,11 @@ impl HttpProviderMetadataClient {
                 .await?
             }
             ModelDiscoveryKind::Gemini => {
-                discover_gemini_models(&self.http, entry, connection, secret, generation).await?
+                // url preserves the existing system Gemini catalog location.
+                // url 保留现有系统 Gemini 目录位置。
+                let url = format!("{}/models", entry.base_url.trim_end_matches('/'));
+                discover_gemini_models(&self.http, entry, connection, secret, generation, &url)
+                    .await?
             }
             ModelDiscoveryKind::GoogleCodeAssist => {
                 discover_google_code_assist_models(
@@ -350,11 +444,10 @@ fn build_manifest_static_catalog(
     })
 }
 
-/// Returns the default discovery path for one discovery kind, used only to build the
-/// signature URL. The exact URL is a grouping key: identical kinds and configurations must
-/// share a signature; distinct discovery behavior must split it.
-/// 返回一种发现契约的默认发现路径，仅用于构建签名 URL。精确 URL 是分组键：
-/// 相同契约与配置必须共享签名；不同发现行为必须拆分签名。
+/// Returns the default path for `kind`, used by custom catalog requests and discovery signatures.
+/// 返回 `kind` 的默认路径，用于自定义目录请求及发现签名。
+/// The base URL owns its version and relay prefix; identical request URLs must share a signature.
+/// 基础地址持有版本及中转前缀；相同请求 URL 必须共享签名。
 pub(super) fn default_discovery_path(kind: ModelDiscoveryKind) -> &'static str {
     match kind {
         ModelDiscoveryKind::OpenVulcan => "/api/v1/vulcancode/models",
@@ -365,8 +458,8 @@ pub(super) fn default_discovery_path(kind: ModelDiscoveryKind) -> &'static str {
         ModelDiscoveryKind::OpenRouter => "/models/user",
         ModelDiscoveryKind::OpenAi
         | ModelDiscoveryKind::OpenAiCodex
-        | ModelDiscoveryKind::AnthropicCompatible => "/models",
-        ModelDiscoveryKind::Gemini => "/v1beta/models",
+        | ModelDiscoveryKind::AnthropicCompatible
+        | ModelDiscoveryKind::Gemini => "/models",
         ModelDiscoveryKind::GoogleCodeAssist => "/v1/codeassist:fetchAvailableModels",
     }
 }
@@ -775,12 +868,17 @@ async fn discover_anthropic_compatible_models(
 
 /// Fetches every documented Gemini model page.
 /// 获取每一页文档化 Gemini 模型。
+/// `http` sends requests using `entry` headers and `secret`; `discovery_url` fixes the catalog endpoint.
+/// `http` 使用 `entry` 请求头与 `secret` 发送请求；`discovery_url` 固定目录端点。
+/// `connection` and `generation` identify the returned complete catalog; pagination failures remain explicit.
+/// `connection` 与 `generation` 标识返回的完整目录；分页失败会明确返回。
 async fn discover_gemini_models(
     http: &reqwest::Client,
     entry: &ServiceEntry,
     connection: &CredentialConnection,
     secret: &CredentialExecutionSecret,
     generation: u64,
+    discovery_url: &str,
 ) -> Result<ConnectionModelCatalog, ModelDiscoveryError> {
     let mut models = Vec::<ConnectionModel>::new();
     let mut model_ids = BTreeSet::new();
@@ -788,10 +886,8 @@ async fn discover_gemini_models(
     let mut page_token = None::<String>;
     let mut page_count = 0_u32;
     loop {
-        let mut url = reqwest::Url::parse(
-            format!("{}/models", entry.base_url.trim_end_matches('/')).as_str(),
-        )
-        .map_err(|_| ModelDiscoveryError::failed("Gemini model discovery URL is invalid."))?;
+        let mut url = reqwest::Url::parse(discovery_url)
+            .map_err(|_| ModelDiscoveryError::failed("Gemini model discovery URL is invalid."))?;
         url.query_pairs_mut().append_pair("pageSize", "1000");
         if let Some(token) = page_token.as_deref() {
             url.query_pairs_mut().append_pair("pageToken", token);

@@ -916,6 +916,7 @@ async fn plan_provider_change(
             display_name,
             base_url,
             protocols,
+            model_discovery_protocol,
             authentication,
             api_key_env,
         } => {
@@ -940,6 +941,11 @@ async fn plan_provider_change(
                     field: String::from("protocols"),
                     before: None,
                     after: protocol_labels,
+                },
+                ConfigurationFieldChange {
+                    field: String::from("model_discovery_protocol"),
+                    before: None,
+                    after: Some(label(json!(model_discovery_protocol))),
                 },
                 ConfigurationFieldChange {
                     field: String::from("authentication"),
@@ -969,6 +975,7 @@ async fn plan_provider_change(
                         base_url,
                         authentication,
                         protocols,
+                        *model_discovery_protocol,
                         &secret,
                     )?,
                     api_key_env: api_key_env.trim().to_string(),
@@ -1080,11 +1087,18 @@ fn add_connection_request(
 
 /// The settings page's save request creating one custom provider with its first connection.
 /// 设置页创建一个自定义供应商及其首个连接的保存请求。
+/// `display_name`, `base_url`, `authentication`, and `secret` describe the shared connection.
+/// `display_name`、`base_url`、`authentication` 与 `secret` 描述共享连接。
+/// `protocols` enables conversation routes; `model_discovery_protocol` independently chooses one catalog.
+/// `protocols` 启用会话路由；`model_discovery_protocol` 独立选择唯一目录。
+/// Returns the exact settings request, or a decoding error before any configuration is changed.
+/// 返回精确设置请求，或在任何配置变更前返回解码错误。
 fn custom_provider_request(
     display_name: &str,
     base_url: &str,
     authentication: CustomProviderAuthentication,
     protocols: &[vulcan_provider_adapters::CustomProviderProtocol],
+    model_discovery_protocol: vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol,
     secret: &str,
 ) -> Result<PublicAiCustomProviderSaveRequest, String> {
     settings_request(json!({
@@ -1095,6 +1109,7 @@ fn custom_provider_request(
         "credentialDisplayName": display_name,
         "secret": secret,
         "protocols": protocols,
+        "modelDiscoveryProtocol": model_discovery_protocol,
     }))
 }
 

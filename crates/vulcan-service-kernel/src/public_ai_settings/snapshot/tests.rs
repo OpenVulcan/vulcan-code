@@ -321,6 +321,7 @@ fn settings_snapshot_limits_source_catalogs_to_custom_providers() {
         base_url: String::from("https://source-catalog-scope.example.test/v1"),
         authentication: vulcan_provider_adapters::CustomProviderAuthentication::BearerAuthorization,
         model_discovery_mode: vulcan_provider_adapters::CustomProviderModelDiscoveryMode::Standard,
+        model_discovery_protocol: vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol::OpenAi,
         model_discovery_path: None,
         protocols: vec![vulcan_provider_adapters::CustomProviderProtocol::OpenAiResponses],
         protocol_routes: Vec::new(),

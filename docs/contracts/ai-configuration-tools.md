@@ -44,7 +44,9 @@
    `drops_secret_fields`。已启用服务器的工具从下一轮起进入会话（工具清单按执行快照）。
 2. **`provider_config`。** `list` 返回接受 API Key 的供应商（含服务入口与凭据档）和全部连接（启用、待验证、默认）；
    `add_connection` 为内置供应商添加 API Key 连接，入口或凭据档只有一个时可省略；`add_custom_provider` 添加兼容
-   OpenAI、Anthropic 或 Gemini 的供应商及首个连接，认证缺省为 Bearer；`set_connection_enabled` 与
+   OpenAI、Anthropic 或 Gemini 的供应商及首个连接，认证缺省为 Bearer；`model_discovery_protocol`
+   独立选择唯一目录格式（`open_ai`、`anthropic`、`gemini`，默认 `open_ai`），目录使用共享地址与认证，
+   不随 `protocols` 逐个拉取或失败切换；`set_connection_enabled` 与
    `set_default_connection` 切换已有连接。浏览器登录类账号、核心账号与删除只在设置页处理。
 3. **执行时重新规划。** 执行针对提交事务持有的配置重新规划同一请求；预览与执行之间配置被他处修改时以执行时为准，
    不做额外防护。
@@ -56,7 +58,7 @@
 - 种类：`mcp_server`、`provider_connection`、`custom_provider`、`provider`
 - 动作：`create`、`update`、`remove`、`enable`、`disable`、`set_default`
 - 字段：`name`、`enabled`、`transport`、`command`、`args`、`cwd`、`env_passthrough`、`url`、`headers_from_env`、
-  `provider`、`service_entry`、`credential_profile`、`api_key_env`、`base_url`、`protocols`、`authentication`、
+  `provider`、`service_entry`、`credential_profile`、`api_key_env`、`base_url`、`protocols`、`model_discovery_protocol`、`authentication`、
   `default_connection`
 - 提示：`activates_for_all_sessions`、`deactivates_for_all_sessions`、`removes_for_all_sessions`、
   `drops_secret_fields`、`copies_api_key`、`validates_with_provider`

@@ -1,66 +1,75 @@
-//! Source-policy route aggregation and credential-free non-remote refresh regressions.
-//! 来源策略路由聚合与无需凭据的非远端刷新回归测试。
+//! Shared catalog source policy and credential-free non-remote refresh regressions.
+//! 共享目录来源策略与无需凭据的非远端刷新回归测试。
 
 use super::super::PublicAiRuntime;
 use super::super::catalog_policy::MANUAL_MODEL_CATALOG_SCHEMA_REVISION;
 use super::*;
 use vulcan_ai_contract::{AiOperation, ModelCapabilities};
 
-/// Verifies a later remote route keeps discovery enabled when the first route is manual.
-/// 验证首条路由为手工发现时，后续远端路由仍会保持发现能力。
+/// Verifies only the shared custom catalog determines whether discovery is enabled.
+/// 验证仅共享自定义目录决定是否启用模型发现。
 #[test]
-fn mixed_custom_protocol_discovery_aggregates_every_verified_route() {
-    // provider declares Responses as manual first and Chat as a route-specific remote source.
-    // provider 首先声明手工 Responses，并把 Chat 声明为路由专属远端来源。
-    let provider = crate::CustomProviderDefinition {
+fn custom_catalog_source_ignores_conversation_route_discovery() {
+    // provider declares one shared manual catalog and multiple independently configured conversation routes.
+    // provider 声明唯一共享手工目录及多条独立配置的会话路由。
+    let mut provider = crate::CustomProviderDefinition {
         id: String::from("custom:mixed-discovery"),
         display_name: String::from("Mixed Discovery"),
         base_url: String::from("https://mixed-discovery.example.test/v1"),
         protocols: vec![
             crate::CustomProviderProtocol::OpenAiResponses,
-            crate::CustomProviderProtocol::OpenAiChat,
+            crate::CustomProviderProtocol::AnthropicMessages,
         ],
         authentication: crate::CustomProviderAuthentication::BearerAuthorization,
         model_discovery_mode: crate::CustomProviderModelDiscoveryMode::Manual,
+        model_discovery_protocol: crate::CustomProviderModelDiscoveryProtocol::OpenAi,
         model_discovery_path: None,
-        protocol_routes: vec![crate::CustomProtocolRoute {
-            protocol: crate::CustomProviderProtocol::OpenAiChat,
-            base_url: None,
-            endpoint_path: None,
-            authentication: None,
-            model_discovery_mode: Some(crate::CustomProviderModelDiscoveryMode::Standard),
-            model_discovery_path: None,
-            request_headers: BTreeMap::new(),
-        }],
+        protocol_routes: Vec::new(),
         request_headers: BTreeMap::new(),
         session_header: None,
     }
     .into_descriptor()
-    .expect("mixed custom provider should project");
-    // entry retains Manual only as a compatibility projection of the first route.
-    // entry 仅把 Manual 保留为首条路由的兼容投影。
-    let entry = provider
-        .service_entries
-        .first()
-        .expect("custom provider should expose one entry");
-    assert_eq!(entry.model_discovery, ModelDiscoveryKind::Manual);
-    // configuration supplies the exact descriptor to the production source-policy resolver.
-    // configuration 向生产来源策略解析器提供精确描述符。
+    .expect("custom provider should project");
+    // entry retains an existing route-level declaration to verify that it cannot override catalog ownership.
+    // entry 保留既有路由级声明，以验证它不能覆盖目录归属。
+    let entry = provider.service_entries.first_mut().expect("custom entry");
+    for route in &mut entry.protocol_routes {
+        route.model_discovery = Some(ModelDiscoveryKind::AnthropicCompatible);
+    }
+    // configuration exercises the resolver both with and without a compiled manifest.
+    // configuration 同时覆盖有无已编译清单的解析路径。
     let mut configuration = PersistedAiConfiguration::default();
-    configuration
-        .custom_providers
-        .insert(provider.id.clone(), provider.clone());
-
-    assert_eq!(
-        resolved_model_source_policy(
-            &configuration,
-            provider.id.as_str(),
-            entry.id.as_str(),
-            None,
-        )
-        .expect("mixed route source policy should resolve"),
-        ModelSourcePolicy::DiscoveryAndManual,
-    );
+    for (kind, expected) in [
+        (ModelDiscoveryKind::Manual, ModelSourcePolicy::ManualOnly),
+        (
+            ModelDiscoveryKind::OpenAi,
+            ModelSourcePolicy::DiscoveryAndManual,
+        ),
+    ] {
+        provider
+            .service_entries
+            .first_mut()
+            .expect("custom entry")
+            .model_discovery = kind;
+        configuration
+            .custom_providers
+            .insert(provider.id.clone(), provider.clone());
+        assert_eq!(
+            resolved_model_source_policy(&configuration, &provider.id, "default", None).unwrap(),
+            expected
+        );
+        // manifest verifies that cold compilation agrees with the descriptor's shared catalog.
+        // manifest 验证冷编译与描述符共享目录保持一致。
+        let manifest =
+            crate::project_custom_descriptor_manifest(&provider).expect("project manifest");
+        let resolved = crate::compile_manifest(&manifest, crate::ManifestOwnership::Custom)
+            .expect("compile manifest");
+        assert_eq!(
+            resolved_model_source_policy(&configuration, &provider.id, "default", Some(&resolved))
+                .unwrap(),
+            expected
+        );
+    }
 }
 
 /// Verifies Manifest-only refresh succeeds without reading a secret or contacting metadata.
@@ -136,6 +145,7 @@ async fn custom_manual_only_refresh_performs_no_credential_or_remote_discovery()
         protocols: vec![crate::CustomProviderProtocol::OpenAiChat],
         authentication: crate::CustomProviderAuthentication::BearerAuthorization,
         model_discovery_mode: crate::CustomProviderModelDiscoveryMode::Manual,
+        model_discovery_protocol: crate::CustomProviderModelDiscoveryProtocol::OpenAi,
         model_discovery_path: None,
         protocol_routes: Vec::new(),
         request_headers: BTreeMap::new(),

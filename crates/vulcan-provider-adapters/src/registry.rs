@@ -713,6 +713,7 @@ mod tests {
             authentication:
                 crate::custom_provider::CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: crate::custom_provider::CustomProviderModelDiscoveryMode::Manual,
+            model_discovery_protocol: crate::CustomProviderModelDiscoveryProtocol::OpenAi,
             model_discovery_path: None,
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
@@ -738,6 +739,7 @@ mod tests {
             protocols: vec![CustomProviderProtocol::OpenAiChat],
             authentication: CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
+            model_discovery_protocol: crate::CustomProviderModelDiscoveryProtocol::OpenAi,
             model_discovery_path: None,
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),

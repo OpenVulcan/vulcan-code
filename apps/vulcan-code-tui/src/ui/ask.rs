@@ -204,6 +204,7 @@ fn config_field_label(key: &str) -> String {
         "api_key_env" => tr!("ask.approval.config.field.apiKeyEnv"),
         "base_url" => tr!("ask.approval.config.field.baseUrl"),
         "protocols" => tr!("ask.approval.config.field.protocols"),
+        "model_discovery_protocol" => tr!("ask.approval.config.field.model_discovery_protocol"),
         "authentication" => tr!("ask.approval.config.field.authentication"),
         "default_connection" => tr!("ask.approval.config.field.defaultConnection"),
         other => other.to_string(),

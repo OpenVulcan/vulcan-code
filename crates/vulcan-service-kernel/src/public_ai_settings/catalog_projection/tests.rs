@@ -150,6 +150,8 @@ fn custom_model_route_status_exposes_model_specific_protocol_block() {
         base_url: String::from("https://model-route-status.example.test/v1"),
         authentication: CustomProviderAuthentication::BearerAuthorization,
         model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
+        model_discovery_protocol:
+            vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol::OpenAi,
         model_discovery_path: None,
         protocols: vec![
             CustomProviderProtocol::OpenAiResponses,
@@ -387,12 +389,12 @@ fn system_connection_directory_uses_manifest_routes() {
     );
 }
 
-/// Verifies account synchronization remains available when any protocol route is remote.
-/// 验证任一协议路由为远端发现时账号同步仍保持可用。
+/// Verifies account synchronization follows the shared catalog instead of conversation routes.
+/// 验证账号同步跟随共享目录，而不由会话路由决定。
 #[test]
-fn multi_protocol_directory_kind_aggregates_route_discovery() {
-    // provider declares a manual first route and a remote second route.
-    // provider 声明一条手工首路由与一条远端次路由。
+fn custom_directory_kind_uses_the_shared_catalog() {
+    // provider declares a shared manual catalog with two independently enabled conversation routes.
+    // provider 声明共享手工目录，并独立启用两条会话路由。
     let provider = vulcan_provider_adapters::CustomProviderDefinition {
         id: String::from("custom:mixed-directory"),
         display_name: String::from("Mixed Directory"),
@@ -403,14 +405,14 @@ fn multi_protocol_directory_kind_aggregates_route_discovery() {
         ],
         authentication: CustomProviderAuthentication::BearerAuthorization,
         model_discovery_mode: CustomProviderModelDiscoveryMode::Manual,
+        model_discovery_protocol:
+            vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol::OpenAi,
         model_discovery_path: None,
         protocol_routes: vec![vulcan_provider_adapters::CustomProtocolRoute {
             protocol: CustomProviderProtocol::OpenAiChat,
             base_url: None,
             endpoint_path: None,
             authentication: None,
-            model_discovery_mode: Some(CustomProviderModelDiscoveryMode::Standard),
-            model_discovery_path: None,
             request_headers: BTreeMap::new(),
         }],
         request_headers: BTreeMap::new(),
@@ -449,6 +451,6 @@ fn multi_protocol_directory_kind_aggregates_route_discovery() {
 
     assert_eq!(
         connection_model_directory_kind(&providers, &connection),
-        PublicAiModelDirectoryKind::Dynamic,
+        PublicAiModelDirectoryKind::Manual,
     );
 }

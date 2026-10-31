@@ -125,7 +125,10 @@ fn connection_model_directory_kind(
     else {
         return PublicAiModelDirectoryKind::Unavailable;
     };
-    service_entry_model_directory_kind(entry)
+    service_entry_model_directory_kind(
+        entry,
+        provider.kind == vulcan_provider_adapters::ProviderKind::Custom,
+    )
 }
 
 /// Resolves the closed aggregate model-directory kind for one exact service entry.
@@ -133,16 +136,26 @@ fn connection_model_directory_kind(
 ///
 /// # Parameters
 /// 参数
-/// `entry` is the Manifest-compiled service entry whose verified routes own discovery semantics.
-/// `entry` 是由已验证路由持有发现语义的 Manifest 编译服务入口。
+/// `entry` is the compiled entry; `shared_catalog` selects custom-provider catalog ownership.
+/// `entry` 是编译后的入口；`shared_catalog` 选择自定义供应商的共享目录归属。
 ///
 /// # Returns
 /// 返回值
-/// Dynamic when any verified route can refresh remotely; otherwise fixed, manual, or unavailable.
-/// 任一已验证路由可远端刷新时返回动态，否则返回固定、手工或不可用。
+/// Returns the shared catalog kind for custom entries, or aggregates verified system routes.
+/// 对自定义入口返回共享目录类型，对系统入口聚合已验证路由。
 pub(super) fn service_entry_model_directory_kind(
     entry: &ServiceEntry,
+    shared_catalog: bool,
 ) -> PublicAiModelDirectoryKind {
+    if shared_catalog {
+        return match entry.model_discovery {
+            ModelDiscoveryKind::Manual => PublicAiModelDirectoryKind::Manual,
+            ModelDiscoveryKind::OpenAi
+            | ModelDiscoveryKind::AnthropicCompatible
+            | ModelDiscoveryKind::Gemini => PublicAiModelDirectoryKind::Dynamic,
+            _ => PublicAiModelDirectoryKind::Unavailable,
+        };
+    }
     // hasDynamic, hasFixed, and hasManual summarize route-owned discovery contracts.
     // hasDynamic、hasFixed 与 hasManual 汇总路由持有的发现契约。
     let mut has_dynamic = false;

@@ -775,13 +775,19 @@ impl PublicAiRuntime {
         // remoteDiscoveryEnabled 要求远端实现同时获得来源策略与活动 Manifest 路由集合授权；
         // 凭据记录永远不持有协议权威。
         let remote_discovery_enabled = source_policy.includes_discovery()
-            && entry
-                .protocol_routes
-                .iter()
-                .filter(|route| crate::client::route_is_available_for_discovery(route))
-                .any(|route| {
-                    model_discovery_is_remote(route.resolved_model_discovery(entry.model_discovery))
-                });
+            && if provider.kind == crate::ProviderKind::Custom {
+                model_discovery_is_remote(entry.model_discovery)
+            } else {
+                entry
+                    .protocol_routes
+                    .iter()
+                    .filter(|route| crate::client::route_is_available_for_discovery(route))
+                    .any(|route| {
+                        model_discovery_is_remote(
+                            route.resolved_model_discovery(entry.model_discovery),
+                        )
+                    })
+            };
         if source_policy.includes_discovery()
             && !remote_discovery_enabled
             && !source_policy.includes_manual()

@@ -94,6 +94,7 @@ const CONFIG_FIELD_KEYS: Record<string, TranslationKey> = {
   api_key_env: "ask.approval.config.field.apiKeyEnv",
   base_url: "ask.approval.config.field.baseUrl",
   protocols: "ask.approval.config.field.protocols",
+  model_discovery_protocol: "ask.approval.config.field.model_discovery_protocol",
   authentication: "ask.approval.config.field.authentication",
   default_connection: "ask.approval.config.field.defaultConnection",
 };

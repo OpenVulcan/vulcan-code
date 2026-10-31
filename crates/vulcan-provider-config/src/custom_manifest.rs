@@ -1379,6 +1379,7 @@ pub(crate) mod tests {
                 service_origin_override_policy: None,
                 native_inference_bindings: Vec::new(),
                 model_discovery: ModelDiscoveryKind::OpenAi,
+                model_discovery_path: None,
                 request_projector: RequestProjectorKind::Direct,
                 protocol_routes: vec![ProtocolRoute {
                     protocol_profile_id: String::from("openai-responses.v1"),

@@ -167,6 +167,7 @@ fn settings_requests_match_the_settings_types() {
         "https://relay.example.test/v1",
         CustomProviderAuthentication::BearerAuthorization,
         &[vulcan_provider_adapters::CustomProviderProtocol::OpenAiChat],
+        vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol::OpenAi,
         "key",
     )
     .expect("the custom-provider request should parse");

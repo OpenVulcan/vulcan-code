@@ -33,47 +33,17 @@ pub(super) fn resolved_model_source_policy(
     if let Some(manifest) = manifest {
         return manifest.model_source_policy(service_entry_id);
     }
+    // entry owns the single catalog source independently from its conversation routes.
+    // entry 独立于会话路由持有唯一目录来源。
     let entry = resolve_custom_model_service_entry(configuration, provider_id, service_entry_id)?;
-    // Custom providers may declare a distinct discovery contract per protocol route. The source
-    // policy therefore aggregates every verified route instead of inheriting the first route's
-    // compatibility projection; any remote route keeps hot model discovery enabled.
-    // 自定义供应商可以为每条协议路由声明不同的发现契约。因此来源策略聚合全部已验证路由，
-    // 而不是继承首条路由的兼容投影；任一远端路由都会保持模型热发现能力。
-    // hasManual and hasRemote retain the complete verified route-set classification.
-    // hasManual 与 hasRemote 保留完整已验证路由集合的分类结果。
-    let mut has_manual = false;
-    let mut has_remote = false;
-    for route in entry.protocol_routes.iter().filter(|route| route.verified) {
-        match route.resolved_model_discovery(entry.model_discovery) {
-            ModelDiscoveryKind::Manual => has_manual = true,
-            ModelDiscoveryKind::ProviderToolsOnly => {
-                return Err(format!(
-                    "Provider-tools service entry `{service_entry_id}` does not own a conversation model source policy."
-                ));
-            }
-            ModelDiscoveryKind::ManifestStatic => {
-                return Err(format!(
-                    "Custom provider `{provider_id}` cannot use Manifest-static model identity without an active Manifest."
-                ));
-            }
-            ModelDiscoveryKind::OpenRouter
-            | ModelDiscoveryKind::OpenVulcan
-            | ModelDiscoveryKind::OpenAi
-            | ModelDiscoveryKind::OpenAiCodex
-            | ModelDiscoveryKind::Anthropic
-            | ModelDiscoveryKind::AnthropicCompatible
-            | ModelDiscoveryKind::Gemini
-            | ModelDiscoveryKind::GoogleCodeAssist => has_remote = true,
-        }
-    }
-    if has_remote {
-        Ok(ModelSourcePolicy::DiscoveryAndManual)
-    } else if has_manual {
-        Ok(ModelSourcePolicy::ManualOnly)
-    } else {
-        Err(format!(
-            "Custom provider `{provider_id}` service entry `{service_entry_id}` has no verified model discovery route."
-        ))
+    match entry.model_discovery {
+        ModelDiscoveryKind::Manual => Ok(ModelSourcePolicy::ManualOnly),
+        ModelDiscoveryKind::OpenAi
+        | ModelDiscoveryKind::AnthropicCompatible
+        | ModelDiscoveryKind::Gemini => Ok(ModelSourcePolicy::DiscoveryAndManual),
+        _ => Err(format!(
+            "Custom provider `{provider_id}` service entry `{service_entry_id}` uses an unsupported catalog source."
+        )),
     }
 }
 

@@ -27,6 +27,7 @@ fn custom_provider_descriptor(provider_id: &str) -> ProviderDescriptor {
         protocols: vec![CustomProviderProtocol::OpenAiResponses],
         authentication: CustomProviderAuthentication::BearerAuthorization,
         model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
+        model_discovery_protocol: crate::CustomProviderModelDiscoveryProtocol::OpenAi,
         model_discovery_path: None,
         protocol_routes: Vec::new(),
         request_headers: BTreeMap::new(),

@@ -3,6 +3,7 @@
 import * as React from "react"
 import { CircleAlert, CircleCheckBig, LoaderCircle } from "lucide-react"
 import { parseCustomProviderHeaderDraft } from "../custom-provider-header-draft"
+import { customProviderCatalogDraft } from "../custom-provider-catalog-draft"
 import { persistAndApplyCustomProviderSnapshot } from "@/components/features/settings/custom-provider-save-state"
 import { Alert, AlertDescription, AlertTitle } from "@/ui-kit/primitives/alert"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/ui-kit/primitives/alert-dialog"
@@ -26,10 +27,10 @@ import { protocolDisplayName } from "./protocol-display-name"
 import "@/ui-kit/styles/features/settings-forms.css"
 
 // CustomProtocolRouteDraftCard edits one enabled protocol's route overrides: base URL
-// override, endpoint path, authentication, discovery, and fixed headers. Empty values
+// override, endpoint path, authentication, and fixed headers. Empty values
 // inherit the shared provider projection on save (plan §R6.5).
 // CustomProtocolRouteDraftCard 编辑一个启用协议的路由覆盖：基础 URL 覆盖、端点路径、
-// 鉴权、发现与固定请求头。保存时空值继承共享供应商投影（方案 §R6.5）。
+// 鉴权与固定请求头。保存时空值继承共享供应商投影（方案 §R6.5）。
 function CustomProtocolRouteDraftCard(props: {
   draft: CustomProtocolRouteDraft
   onChange: (draft: CustomProtocolRouteDraft) => void
@@ -92,37 +93,7 @@ function CustomProtocolRouteDraftCard(props: {
               </SelectContent>
             </Select>
           </label>
-          <label className="vk-field">
-            <span>{t("settings.customProviders.routeDiscoveryMode")}</span>
-            <Select
-              onValueChange={(value) => onChange({
-                ...draft,
-                modelDiscoveryMode: customProtocolRouteDraftValue(value) as CustomProtocolRouteDraft["modelDiscoveryMode"],
-              })}
-              value={customProtocolRouteSelectValue(draft.modelDiscoveryMode)}
-            >
-              <SelectTrigger><SelectValue placeholder={t("settings.customProviders.routeInherit")} /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value={CUSTOM_PROTOCOL_ROUTE_INHERIT_SELECT_VALUE}>
-                  {t("settings.customProviders.routeInherit")}
-                </SelectItem>
-                <SelectItem value="standard">{t("settings.customProviders.discoveryStandard")}</SelectItem>
-                <SelectItem value="custom_path">{t("settings.customProviders.discoveryCustomPath")}</SelectItem>
-                <SelectItem value="manual">{t("settings.customProviders.discoveryManual")}</SelectItem>
-              </SelectContent>
-            </Select>
-          </label>
         </div>
-        {draft.modelDiscoveryMode === "custom_path" ? (
-          <label className="vk-field">
-            <span>{t("settings.customProviders.routeDiscoveryPath")}</span>
-            <Input
-              onChange={(event) => onChange({ ...draft, modelDiscoveryPath: event.target.value })}
-              placeholder="/models"
-              value={draft.modelDiscoveryPath}
-            />
-          </label>
-        ) : null}
         <label className="vk-field">
           <span>{t("settings.customProviders.routeHeaders")}</span>
           <textarea
@@ -168,6 +139,9 @@ export function CustomProviderDialog(props: {
   const [websocketPolicy, setWebsocketPolicy] = React.useState<PublicAiResponsesWebsocketPolicy>("disabled")
   const [authentication, setAuthentication] = React.useState<"bearer_authorization" | "google_api_key" | "x_api_key">("bearer_authorization")
   const [modelDiscoveryMode, setModelDiscoveryMode] = React.useState<PublicAiCustomProviderModelDiscoveryMode>("standard")
+  // modelDiscoveryProtocol selects exactly one directory format independently from conversation protocols.
+  // modelDiscoveryProtocol 独立于会话协议选择唯一目录格式。
+  const [modelDiscoveryProtocol, setModelDiscoveryProtocol] = React.useState<PublicAiCustomProviderSaveRequest["modelDiscoveryProtocol"]>("open_ai")
   const [modelDiscoveryPath, setModelDiscoveryPath] = React.useState("")
   const [credentialDisplayName, setCredentialDisplayName] = React.useState("")
   const [secret, setSecret] = React.useState("")
@@ -221,9 +195,12 @@ export function CustomProviderDialog(props: {
     const codexFeatures = codexResponsesFeaturePoliciesFromEntry(entry)
     setRemoteCompactionPolicy(codexFeatures.remoteCompactionPolicy)
     setWebsocketPolicy(codexFeatures.websocketPolicy)
-    setModelDiscoveryMode(customProviderDiscoveryMode(entry))
-    const firstDraft = collection.drafts[collection.protocols[0]]
-    setModelDiscoveryPath(firstDraft?.modelDiscoveryPath ?? "")
+    // catalog restores only the entry-owned selection, including the shared custom path.
+    // catalog 只恢复入口持有的选择，包括共享自定义路径。
+    const catalog = customProviderCatalogDraft(entry)
+    setModelDiscoveryMode(catalog.modelDiscoveryMode)
+    setModelDiscoveryProtocol(catalog.modelDiscoveryProtocol)
+    setModelDiscoveryPath(catalog.modelDiscoveryPath ?? "")
     setCredentialDisplayName(props.provider?.display_name ?? "")
     setSecret("")
     setValidationConnectionId(providerConnections[0]?.id ?? "")
@@ -294,16 +271,18 @@ export function CustomProviderDialog(props: {
           secret: secret.trim(),
         }),
     modelDiscoveryMode,
+    modelDiscoveryProtocol,
     modelDiscoveryPath: modelDiscoveryMode === "custom_path" ? modelDiscoveryPath.trim() : undefined,
+    requestHeaders: props.provider?.service_entries[0]?.request_headers,
     // Per-protocol route overrides are serialized from the independent drafts so edits never
-    // silently drop route-level base URLs, authentication, discovery, or headers (plan
+    // silently drop route-level base URLs, authentication, or headers (plan
     // §R6.5/§R6.10).
-    // 逐协议路由覆盖从独立草稿序列化，使编辑绝不静默丢弃路由级基础 URL、鉴权、发现或
+    // 逐协议路由覆盖从独立草稿序列化，使编辑绝不静默丢弃路由级基础 URL、鉴权或
     // 请求头（方案 §R6.5/§R6.10）。
     protocolRoutes: protocolRoutesFromCollection({ protocols, drafts: routeDrafts }),
     allowManualFallback: acceptance === "manual",
     allowPendingValidation: acceptance === "pending",
-  }), [authentication, baseUrl, credentialDisplayName, displayName, modelDiscoveryMode, modelDiscoveryPath, props.provider, protocols, remoteCompactionPolicy, routeDrafts, secret, sessionHeader, validationConnectionId, websocketPolicy])
+  }), [authentication, baseUrl, credentialDisplayName, displayName, modelDiscoveryMode, modelDiscoveryProtocol, modelDiscoveryPath, props.provider, protocols, remoteCompactionPolicy, routeDrafts, secret, sessionHeader, validationConnectionId, websocketPolicy])
 
   // probe verifies authentication and model discovery without persisting the provider or secret.
   // probe 在不持久化供应商或秘密的情况下验证鉴权与模型发现。
@@ -334,10 +313,6 @@ export function CustomProviderDialog(props: {
   // originalEntry is the persisted technical contract used to distinguish cosmetic edits.
   // originalEntry 是用于区分纯展示编辑的持久化技术契约。
   const originalEntry = props.provider?.service_entries[0]
-  // originalProtocols is the exact persisted protocol set projected into the browser-editable
-  // contract (plan §R6.8).
-  // originalProtocols 是投影到浏览器可编辑契约中的精确持久化协议集合（方案 §R6.8）。
-  const originalProtocols = protocolCollectionFromEntry(originalEntry).protocols
 
   // save persists only the explicit action represented by the result screen.
   // save 仅持久化结果页明确表示的操作。
@@ -389,9 +364,10 @@ export function CustomProviderDialog(props: {
     || sessionHeader.trim() !== (originalEntry.session_header ?? "")
     || protocolCollectionChanged(originalEntry, { protocols, drafts: routeDrafts })
     || authentication !== customProviderAuthentication(originalEntry)
-    || modelDiscoveryMode !== customProviderDiscoveryMode(originalEntry)
+    || modelDiscoveryMode !== customProviderCatalogDraft(originalEntry).modelDiscoveryMode
+    || (modelDiscoveryMode !== "manual" && modelDiscoveryProtocol !== customProviderCatalogDraft(originalEntry).modelDiscoveryProtocol)
     || (modelDiscoveryMode === "custom_path"
-      && modelDiscoveryPath.trim() !== (protocolCollectionFromEntry(originalEntry).drafts[originalProtocols[0]]?.modelDiscoveryPath ?? ""))
+      && modelDiscoveryPath.trim() !== (originalEntry.model_discovery_path ?? ""))
   )
   // responsesFeaturesChanged tracks explicit Codex transport capabilities without forcing credential revalidation.
   // responsesFeaturesChanged 跟踪显式 Codex 传输能力开关，但不会强制重新验证凭据。
@@ -551,6 +527,20 @@ export function CustomProviderDialog(props: {
               <label className="vk-field">
                 <span>{t("settings.customProviders.discoveryPath")}</span>
                 <Input onChange={(event) => setModelDiscoveryPath(event.target.value)} placeholder="/models" value={modelDiscoveryPath} />
+              </label>
+            ) : null}
+            {modelDiscoveryMode !== "manual" ? (
+              <label className="vk-field">
+                <span>{t("settings.customProviders.discoveryProtocol")}</span>
+                <Select onValueChange={(value) => setModelDiscoveryProtocol(value as PublicAiCustomProviderSaveRequest["modelDiscoveryProtocol"])} value={modelDiscoveryProtocol}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="open_ai">{t("settings.customProviders.discoveryProtocolOpenAi")}</SelectItem>
+                    <SelectItem value="anthropic">{t("settings.customProviders.discoveryProtocolAnthropic")}</SelectItem>
+                    <SelectItem value="gemini">{t("settings.customProviders.discoveryProtocolGemini")}</SelectItem>
+                  </SelectContent>
+                </Select>
+                <span className="vk-form-note">{t("settings.customProviders.discoveryProtocolHint")}</span>
               </label>
             ) : null}
             <DisclosureSection description={t("settings.customProviders.advancedOptionsHint")} title={t("settings.customProviders.advancedOptions")}>
@@ -810,28 +800,6 @@ function validateCustomProviderConnectionStep(draft: CustomProviderConnectionDra
     }
   }
   return null
-}
-
-// customProviderDiscoveryMode reconstructs the persisted discovery choice from one exact service entry.
-// customProviderDiscoveryMode 从一个精确服务入口重建持久化的发现选择。
-//
-// Parameters
-// 参数
-// `entry` is the single custom-provider service entry, when editing an existing definition.
-// `entry` 是编辑现有定义时的唯一自定义供应商服务入口。
-//
-// Returns
-// 返回值
-// The user-facing discovery mode represented by the runtime descriptor.
-// 返回运行时描述所表示的用户发现模式。
-function customProviderDiscoveryMode(entry: PublicAiServiceEntry | undefined): PublicAiCustomProviderModelDiscoveryMode {
-  if (entry?.model_discovery === "manual") {
-    return "manual"
-  }
-  if (entry?.protocol_routes[0]?.model_discovery_path) {
-    return "custom_path"
-  }
-  return "standard"
 }
 
 // customProviderAuthentication maps one persisted entry to the editable authentication contract.

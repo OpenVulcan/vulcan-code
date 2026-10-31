@@ -3456,6 +3456,7 @@ mod tests {
             native_inference_bindings: Vec::new(),
             request_projector: crate::RequestProjectorKind::Direct,
             model_discovery: crate::ModelDiscoveryKind::ProviderToolsOnly,
+            model_discovery_path: None,
             protocol_routes: Vec::new(),
             default_usage_scopes: Default::default(),
         }

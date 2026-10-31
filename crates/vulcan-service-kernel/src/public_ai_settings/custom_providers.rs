@@ -72,6 +72,10 @@ pub(crate) struct PublicAiCustomProviderSaveRequest {
     /// 选定的模型目录发现行为。
     #[serde(default)]
     model_discovery_mode: CustomProviderModelDiscoveryMode,
+    /// Single catalog protocol shared by every enabled conversation protocol.
+    /// 全部启用会话协议共享的唯一目录协议。
+    #[serde(default)]
+    model_discovery_protocol: vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol,
     /// Same-origin relative discovery path used by custom-path mode.
     /// 自定义路径模式使用的同源相对发现路径。
     #[serde(default)]
@@ -79,8 +83,8 @@ pub(crate) struct PublicAiCustomProviderSaveRequest {
     /// Non-empty compatible protocol collection served by this provider.
     /// 此供应商提供的非空兼容协议集合。
     protocols: Vec<CustomProviderProtocol>,
-    /// Per-protocol route overrides with route-specific base URL, path, discovery, and headers.
-    /// 带路由专属基础 URL、路径、发现与请求头的逐协议路由覆盖。
+    /// Conversation-only route overrides for base URL, endpoint, authentication, and headers.
+    /// 仅用于会话的路由基础 URL、端点、认证及请求头覆盖。
     #[serde(default)]
     protocol_routes: Vec<CustomProtocolRoute>,
     /// Bounded non-sensitive fixed request headers shared by every route.
@@ -238,6 +242,7 @@ fn prepare_custom_provider_candidate(
         protocols: request.protocols.clone(),
         authentication: request.authentication,
         model_discovery_mode: request.model_discovery_mode,
+        model_discovery_protocol: request.model_discovery_protocol,
         model_discovery_path: request.model_discovery_path.clone(),
         protocol_routes: request.protocol_routes.clone(),
         request_headers: request.request_headers.clone(),

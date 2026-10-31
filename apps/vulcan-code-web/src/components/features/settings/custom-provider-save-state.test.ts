@@ -19,6 +19,7 @@ function requestFixture(providerId?: string): PublicAiCustomProviderSaveRequest 
     websocketPolicy: "disabled",
     authentication: "bearer_authorization",
     modelDiscoveryMode: "manual",
+    modelDiscoveryProtocol: "open_ai",
     requestHeaders: {},
     allowManualFallback: true,
     allowPendingValidation: false,

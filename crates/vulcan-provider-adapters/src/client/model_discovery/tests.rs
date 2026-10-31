@@ -18,6 +18,8 @@ use vulcan_llm_core::{
     ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
 };
 
+mod single_catalog;
+
 /// Native catalog capabilities survive manifest enrichment for every declared regional account route.
 /// 每个已声明区域账户路由的原生目录能力均在 Manifest 补全后保持不变。
 #[test]
@@ -213,6 +215,7 @@ fn custom_openai_fixture(
         protocols: vec![CustomProviderProtocol::OpenAiChat],
         authentication: CustomProviderAuthentication::BearerAuthorization,
         model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
+        model_discovery_protocol: crate::CustomProviderModelDiscoveryProtocol::OpenAi,
         model_discovery_path: None,
         protocol_routes: Vec::new(),
         request_headers: BTreeMap::new(),
@@ -258,6 +261,7 @@ fn custom_anthropic_fixture(
         base_url: base_url.to_string(),
         protocols: vec![CustomProviderProtocol::AnthropicMessages],
         authentication: CustomProviderAuthentication::XApiKey,
+        model_discovery_protocol: crate::CustomProviderModelDiscoveryProtocol::Anthropic,
         model_discovery_mode: if model_discovery_path.is_some() {
             CustomProviderModelDiscoveryMode::CustomPath
         } else {

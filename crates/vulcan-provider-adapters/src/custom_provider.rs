@@ -70,6 +70,23 @@ pub enum CustomProviderModelDiscoveryMode {
     Manual,
 }
 
+/// Selects the single catalog wire format independently from conversation protocols.
+/// 独立于会话协议选择唯一的目录线格式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CustomProviderModelDiscoveryProtocol {
+    /// Reads the shared OpenAI-compatible models endpoint.
+    /// 读取共享的 OpenAI 兼容模型目录端点。
+    #[default]
+    OpenAi,
+    /// Reads the paginated Anthropic-compatible models endpoint.
+    /// 读取分页的 Anthropic 兼容模型目录端点。
+    Anthropic,
+    /// Reads the paginated Gemini models endpoint.
+    /// 读取分页的 Gemini 模型目录端点。
+    Gemini,
+}
+
 impl CustomProviderAuthentication {
     /// Projects the public custom setting into the runtime authentication contract.
     /// 将公开自定义设置投影为运行时鉴权契约。
@@ -128,14 +145,6 @@ pub struct CustomProtocolRoute {
     /// 路由专属 API Key 投影；省略时继承供应商投影。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authentication: Option<CustomProviderAuthentication>,
-    /// Route-specific model-discovery mode; inherits the provider mode when omitted.
-    /// 路由专属模型发现模式；省略时继承供应商模式。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_discovery_mode: Option<CustomProviderModelDiscoveryMode>,
-    /// Route-specific same-origin discovery path.
-    /// 路由专属同源发现路径。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_discovery_path: Option<String>,
     /// Bounded non-sensitive fixed request headers for this route only.
     /// 仅作用于该路由的有界非敏感固定请求头。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -166,6 +175,10 @@ pub struct CustomProviderDefinition {
     /// 选定的远程模型发现行为。
     #[serde(default)]
     pub model_discovery_mode: CustomProviderModelDiscoveryMode,
+    /// Single catalog protocol; conversation protocol selections do not change it.
+    /// 唯一目录协议；会话协议选择不会改变此项。
+    #[serde(default)]
+    pub model_discovery_protocol: CustomProviderModelDiscoveryProtocol,
     /// Same-origin relative model-discovery path used only by custom-path mode.
     /// 仅由自定义路径模式使用的同源相对模型目录路径。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -288,14 +301,11 @@ impl CustomProviderDefinition {
             }
         }
         validate_custom_provider_fixed_headers(&self.request_headers)?;
-        // The entry-level discovery is the shared legacy fallback; multi-protocol routes always
-        // declare their own discovery, so the entry value follows the first enabled protocol.
-        // 入口级发现是共享的旧版回退；多协议路由总是声明自己的发现，
-        // 因此入口值跟随第一个启用的协议。
+        // The entry owns one catalog contract; conversation routes only execute requests.
+        // 入口持有唯一目录契约；会话路由仅负责执行请求。
         let model_discovery = self.resolve_discovery(
             self.model_discovery_mode,
             self.model_discovery_path.as_deref(),
-            protocols.first(),
         )?;
         let protocol_routes = protocols
             .iter()
@@ -313,15 +323,6 @@ impl CustomProviderDefinition {
                     .map(|route| route.request_headers.clone())
                     .unwrap_or_default();
                 validate_custom_provider_fixed_headers(&route_headers)?;
-                let route_discovery = self.resolve_discovery(
-                    override_route
-                        .and_then(|route| route.model_discovery_mode)
-                        .unwrap_or(self.model_discovery_mode),
-                    override_route
-                        .and_then(|route| route.model_discovery_path.as_deref())
-                        .or(self.model_discovery_path.as_deref()),
-                    Some(protocol),
-                )?;
                 // Route-level authentication overrides the shared provider projection; an
                 // absent route value inherits the entry-level projection through `None`.
                 // 路由级鉴权覆盖共享供应商投影；路由缺省时通过 `None` 继承入口级投影。
@@ -335,8 +336,8 @@ impl CustomProviderDefinition {
                     base_url_override: route_base_url,
                     request_headers: route_headers,
                     authentication: route_authentication,
-                    model_discovery: Some(route_discovery.1),
-                    model_discovery_path: route_discovery.0,
+                    model_discovery: None,
+                    model_discovery_path: None,
                     model_discovery_base_url_override: None,
                     responses_features: (*protocol == CustomProviderProtocol::OpenAiCodexResponses)
                         .then_some(ResponsesRouteFeatures::default()),
@@ -391,6 +392,7 @@ impl CustomProviderDefinition {
                 service_origin_override_policy: None,
                 native_inference_bindings: Vec::new(),
                 model_discovery: model_discovery.1,
+                model_discovery_path: model_discovery.0,
                 request_projector: crate::RequestProjectorKind::Direct,
                 protocol_routes,
                 default_usage_scopes: BTreeSet::from([
@@ -402,36 +404,31 @@ impl CustomProviderDefinition {
         })
     }
 
-    /// Resolves one effective discovery declaration from provider and route layers.
-    /// 从供应商层与路由层解析一项生效的发现声明。
+    /// Resolves the single provider-owned catalog declaration.
+    /// 解析供应商持有的唯一目录声明。
     ///
     /// # Parameters
     /// 参数
-    /// `mode` is the effective mode, `path` the effective same-origin path, and `protocol`
-    /// the target protocol used for the protocol-standard discovery kind.
-    /// `mode` 为生效模式，`path` 为生效同源路径，`protocol` 为目标协议（用于推导协议标准发现类型）。
+    /// `mode` selects remote or manual discovery; `path` is the explicit same-origin catalog path.
+    /// `mode` 选择远端或手工发现；`path` 是显式同源目录路径。
     ///
     /// # Returns
     /// 返回值
-    /// `(discovery path, discovery kind)` with the protocol-standard kind for manual mode.
-    /// 返回 `(发现路径, 发现类型)`；手动模式下返回协议标准类型。
+    /// Returns the selected path and format, or the explicit manual kind without a remote path.
+    /// 返回所选路径与格式，或不带远端路径的显式手工类别。
     fn resolve_discovery(
         &self,
         mode: CustomProviderModelDiscoveryMode,
         path: Option<&str>,
-        protocol: Option<&CustomProviderProtocol>,
     ) -> Result<(Option<String>, ModelDiscoveryKind), String> {
-        let protocol_discovery = match protocol {
-            Some(CustomProviderProtocol::AnthropicMessages) => {
+        // The selected catalog format is authoritative even when its conversation protocol is disabled.
+        // 即使对应会话协议未启用，所选目录格式仍是唯一权威。
+        let protocol_discovery = match self.model_discovery_protocol {
+            CustomProviderModelDiscoveryProtocol::OpenAi => ModelDiscoveryKind::OpenAi,
+            CustomProviderModelDiscoveryProtocol::Anthropic => {
                 ModelDiscoveryKind::AnthropicCompatible
             }
-            Some(
-                CustomProviderProtocol::OpenAiChat
-                | CustomProviderProtocol::OpenAiResponses
-                | CustomProviderProtocol::OpenAiCodexResponses,
-            ) => ModelDiscoveryKind::OpenAi,
-            Some(CustomProviderProtocol::GeminiGenerateContent) => ModelDiscoveryKind::Gemini,
-            None => ModelDiscoveryKind::OpenAi,
+            CustomProviderModelDiscoveryProtocol::Gemini => ModelDiscoveryKind::Gemini,
         };
         match mode {
             CustomProviderModelDiscoveryMode::Standard => Ok((None, protocol_discovery)),
@@ -656,6 +653,25 @@ fn validate_persisted_custom_provider_service_entry(
     validate_custom_provider_fixed_headers(&entry.request_headers)?;
     validate_custom_provider_session_header(entry.session_header.as_deref())?;
     if !matches!(
+        entry.model_discovery,
+        ModelDiscoveryKind::Manual
+            | ModelDiscoveryKind::OpenAi
+            | ModelDiscoveryKind::AnthropicCompatible
+            | ModelDiscoveryKind::Gemini
+    ) {
+        return Err(String::from(
+            "Custom provider catalog uses an unsupported discovery protocol.",
+        ));
+    }
+    if let Some(path) = entry.model_discovery_path.as_deref() {
+        if entry.model_discovery == ModelDiscoveryKind::Manual {
+            return Err(String::from(
+                "Manual custom provider catalog must not declare a discovery path.",
+            ));
+        }
+        validate_custom_model_discovery_path(path)?;
+    }
+    if !matches!(
         entry.authentication,
         AuthenticationProjection::BearerAuthorization
             | AuthenticationProjection::XApiKey
@@ -688,7 +704,7 @@ fn validate_persisted_custom_provider_service_entry(
     }
     let mut seen_routes = BTreeSet::new();
     for route in &entry.protocol_routes {
-        validate_persisted_custom_provider_route(entry, route, &mut seen_routes)?;
+        validate_persisted_custom_provider_route(route, &mut seen_routes)?;
     }
     Ok(())
 }
@@ -698,16 +714,14 @@ fn validate_persisted_custom_provider_service_entry(
 ///
 /// # Parameters
 /// 参数
-/// `entry` owns the shared discovery contract, `route` is the exact route under validation, and
-/// `seen_routes` rejects duplicate protocol declarations.
-/// `entry` 持有共享发现契约，`route` 是接受校验的精确路由，`seen_routes` 拒绝重复协议声明。
+/// `route` is the exact conversation route; `seen_routes` rejects duplicate protocol declarations.
+/// `route` 是精确会话路由；`seen_routes` 拒绝重复协议声明。
 ///
 /// # Returns
 /// 返回值
 /// Success only when the route stays inside the verified custom-provider contract.
 /// 仅当路由处于已验证的自定义供应商契约内时返回成功。
 fn validate_persisted_custom_provider_route(
-    entry: &crate::ServiceEntry,
     route: &ProtocolRoute,
     seen_routes: &mut BTreeSet<String>,
 ) -> Result<(), String> {
@@ -772,25 +786,23 @@ fn validate_persisted_custom_provider_route(
             "Persisted non-Codex custom provider must not declare Responses capabilities.",
         ));
     }
-    let expected_discovery = match protocol {
-        CustomProviderProtocol::AnthropicMessages => ModelDiscoveryKind::AnthropicCompatible,
-        CustomProviderProtocol::OpenAiChat
-        | CustomProviderProtocol::OpenAiResponses
-        | CustomProviderProtocol::OpenAiCodexResponses => ModelDiscoveryKind::OpenAi,
-        CustomProviderProtocol::GeminiGenerateContent => ModelDiscoveryKind::Gemini,
-    };
-    let route_discovery = route.model_discovery.ok_or_else(|| {
-        String::from("Persisted custom provider protocol route must declare model discovery.")
-    })?;
-    if !matches!(route_discovery, ModelDiscoveryKind::Manual)
-        && route_discovery != expected_discovery
-    {
+    // Existing route declarations remain readable, but only the entry catalog drives discovery.
+    // 既有路由声明仍可读取，但仅入口目录驱动模型发现。
+    if route.model_discovery.is_some_and(|kind| {
+        !matches!(
+            kind,
+            ModelDiscoveryKind::Manual
+                | ModelDiscoveryKind::OpenAi
+                | ModelDiscoveryKind::AnthropicCompatible
+                | ModelDiscoveryKind::Gemini
+        )
+    }) {
         return Err(String::from(
-            "Persisted custom provider model discovery does not match its protocol.",
+            "Persisted custom provider route uses an unsupported discovery protocol.",
         ));
     }
     match route.model_discovery_path.as_deref() {
-        Some(_) if route_discovery == ModelDiscoveryKind::Manual => {
+        Some(_) if route.model_discovery == Some(ModelDiscoveryKind::Manual) => {
             return Err(String::from(
                 "Persisted manual custom provider must not declare a model-discovery path.",
             ));
@@ -799,19 +811,6 @@ fn validate_persisted_custom_provider_route(
             validate_custom_model_discovery_path(path)?;
         }
         None => {}
-    }
-    // Entry-level discovery must stay consistent with the route set: the shared legacy fallback
-    // either is manual or appears among the routes actually declared by this entry.
-    // 入口级发现必须与路由集合保持一致：共享旧版回退要么是手动，要么出现在该入口实际声明的路由中。
-    let entry_consistent = entry.model_discovery == ModelDiscoveryKind::Manual
-        || entry.protocol_routes.iter().any(|route| {
-            route.model_discovery == Some(entry.model_discovery)
-                || route.model_discovery == Some(ModelDiscoveryKind::Manual)
-        });
-    if !entry_consistent {
-        return Err(String::from(
-            "Persisted custom provider entry discovery is not declared by any protocol route.",
-        ));
     }
     Ok(())
 }
@@ -928,6 +927,7 @@ mod tests {
             protocols: vec![CustomProviderProtocol::OpenAiResponses],
             authentication: CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
+            model_discovery_protocol: crate::CustomProviderModelDiscoveryProtocol::OpenAi,
             model_discovery_path: None,
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
@@ -952,6 +952,7 @@ mod tests {
             protocols: vec![CustomProviderProtocol::OpenAiChat],
             authentication: CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: CustomProviderModelDiscoveryMode::Manual,
+            model_discovery_protocol: crate::CustomProviderModelDiscoveryProtocol::OpenAi,
             model_discovery_path: None,
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
@@ -981,6 +982,7 @@ mod tests {
             protocols: vec![CustomProviderProtocol::GeminiGenerateContent],
             authentication: CustomProviderAuthentication::GoogleApiKey,
             model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
+            model_discovery_protocol: crate::CustomProviderModelDiscoveryProtocol::Gemini,
             model_discovery_path: None,
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
@@ -1017,6 +1019,7 @@ mod tests {
             protocols: vec![CustomProviderProtocol::OpenAiCodexResponses],
             authentication: CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: CustomProviderModelDiscoveryMode::Manual,
+            model_discovery_protocol: crate::CustomProviderModelDiscoveryProtocol::OpenAi,
             model_discovery_path: None,
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
@@ -1079,6 +1082,7 @@ mod tests {
             protocols: vec![CustomProviderProtocol::OpenAiChat],
             authentication: CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
+            model_discovery_protocol: crate::CustomProviderModelDiscoveryProtocol::OpenAi,
             model_discovery_path: None,
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
@@ -1106,6 +1110,7 @@ mod tests {
                 protocols: vec![CustomProviderProtocol::OpenAiChat],
                 authentication: CustomProviderAuthentication::BearerAuthorization,
                 model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
+                model_discovery_protocol: crate::CustomProviderModelDiscoveryProtocol::OpenAi,
                 model_discovery_path: None,
                 protocol_routes: Vec::new(),
                 request_headers: BTreeMap::new(),
@@ -1129,6 +1134,7 @@ mod tests {
             protocols: vec![CustomProviderProtocol::OpenAiChat],
             authentication: CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: CustomProviderModelDiscoveryMode::CustomPath,
+            model_discovery_protocol: crate::CustomProviderModelDiscoveryProtocol::OpenAi,
             model_discovery_path: Some(String::from("/catalog/models")),
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
@@ -1137,7 +1143,7 @@ mod tests {
         .into_descriptor()
         .expect("same-origin model path should be valid");
         assert_eq!(
-            descriptor.service_entries[0].protocol_routes[0]
+            descriptor.service_entries[0]
                 .model_discovery_path
                 .as_deref(),
             Some("/catalog/models")
@@ -1150,6 +1156,7 @@ mod tests {
             protocols: vec![CustomProviderProtocol::OpenAiChat],
             authentication: CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: CustomProviderModelDiscoveryMode::CustomPath,
+            model_discovery_protocol: crate::CustomProviderModelDiscoveryProtocol::OpenAi,
             model_discovery_path: Some(String::from("/../models")),
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
@@ -1174,6 +1181,7 @@ mod tests {
                 protocols: vec![CustomProviderProtocol::OpenAiChat],
                 authentication: CustomProviderAuthentication::BearerAuthorization,
                 model_discovery_mode: CustomProviderModelDiscoveryMode::CustomPath,
+                model_discovery_protocol: crate::CustomProviderModelDiscoveryProtocol::OpenAi,
                 model_discovery_path: Some(String::from(unsafe_path)),
                 protocol_routes: Vec::new(),
                 request_headers: BTreeMap::new(),
@@ -1198,6 +1206,7 @@ mod tests {
             protocols: vec![CustomProviderProtocol::OpenAiChat],
             authentication: CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: CustomProviderModelDiscoveryMode::CustomPath,
+            model_discovery_protocol: crate::CustomProviderModelDiscoveryProtocol::OpenAi,
             model_discovery_path: Some(String::from("/catalog/models")),
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),

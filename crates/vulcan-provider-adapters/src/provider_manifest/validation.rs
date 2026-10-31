@@ -1970,11 +1970,17 @@ fn validate_model_catalog(
     });
     // effectiveDiscoveryKinds verifies every route against the closed identity-source policy.
     // effectiveDiscoveryKinds 根据封闭身份来源策略校验每条路由。
-    let effective_discovery_kinds = entry
-        .protocol_routes
-        .iter()
-        .map(|route| route.model_discovery.or(entry_discovery_kind))
-        .collect::<Vec<_>>();
+    let effective_discovery_kinds = if manifest.provider_id.starts_with("custom:") {
+        // Custom identity discovery belongs to the entry, independently from conversation routes.
+        // 自定义模型身份发现属于入口，独立于会话路由。
+        vec![entry_discovery_kind]
+    } else {
+        entry
+            .protocol_routes
+            .iter()
+            .map(|route| route.model_discovery.or(entry_discovery_kind))
+            .collect::<Vec<_>>()
+    };
     if catalog.source_policy.includes_discovery() {
         if effective_discovery_kinds.iter().any(Option::is_none) {
             errors.push(ManifestValidationError::new(
