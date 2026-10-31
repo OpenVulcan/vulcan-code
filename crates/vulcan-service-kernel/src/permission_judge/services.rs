@@ -1662,7 +1662,8 @@ mod tests {
             "variants": [
                 { "format": "fp16-mixed", "devices": ["cuda", "webgpu", "cpu"], "download": null },
                 { "format": "fp32", "devices": ["cuda", "cpu"], "download": {
-                    "base_url": "https://example.com/risk/", "manifest_sha256": "m", "total_bytes": 9
+                    "manifest_sha256": "m", "total_bytes": 9,
+                    "sources": [{ "source": "huggingface", "base_url": "https://example.com/risk/" }]
                 } }
             ]
         }))
