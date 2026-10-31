@@ -51,6 +51,7 @@ use vulcan_service_runtime::judge_model_download::{
 use super::PermissionJudgeRuntime;
 use super::cloud::{self, CloudCall};
 use super::environment::{DEVICE_PREFERENCE, JudgeEnvironment, LoadSpec, device_name};
+use super::usage::{JudgeRoute, JudgeUsage, JudgeUsageOutcome, record_judge_usage};
 use super::{edge, edge_select};
 use crate::runtime_workspace_helpers::workspace_task_project_for_project_id;
 use crate::{
@@ -1451,7 +1452,33 @@ pub(crate) async fn judge_call(
         settings: trace.settings.clone(),
         rendered: trace.rendered.clone(),
     };
-    let outcome = match runtime.worker.evaluate(&model.id, vec![input]).await {
+    let started_at_ms = current_v1_unix_millis().map_err(fail)?;
+    let evaluated = runtime.worker.evaluate(&model.id, vec![input]).await;
+    let usage_outcome = match &evaluated {
+        Ok(outcomes) => match outcomes.last() {
+            Some(JudgeOutcome::Evaluated { input_tokens, .. }) => JudgeUsageOutcome::Evaluated {
+                input_tokens: *input_tokens,
+            },
+            Some(JudgeOutcome::InputTokenLimit { input_tokens }) => {
+                JudgeUsageOutcome::InputTokenLimit {
+                    input_tokens: Some(*input_tokens),
+                }
+            }
+            None => JudgeUsageOutcome::Failed,
+        },
+        Err(_) => JudgeUsageOutcome::Failed,
+    };
+    record_judge_usage(
+        state,
+        JudgeUsage {
+            route: JudgeRoute::Local,
+            model: model.name.clone(),
+            started_at_ms,
+            finished_at_ms: current_v1_unix_millis().map_err(fail)?,
+            outcome: usage_outcome,
+        },
+    );
+    let outcome = match evaluated {
         Ok(mut outcomes) => outcomes.pop(),
         Err(reason) => {
             return Err(JudgeFailure {

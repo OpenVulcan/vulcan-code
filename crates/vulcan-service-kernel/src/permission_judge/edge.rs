@@ -17,7 +17,7 @@ use tokio::sync::Mutex;
 use vulcan_permission_judge::protocol::JudgeInput;
 use vulcan_permission_judge::{
     EDGE_JUDGE_PATH, EDGE_SERVER_TIMING_HEADER, EDGE_SITE_HEADER, EdgeAnswer, EdgeJudgeRequest,
-    EdgeJudgeResponse, EdgeServerTiming, cloud_policy, edge_outcomes, render_call,
+    EdgeJudgeResponse, EdgeOutcome, EdgeServerTiming, cloud_policy, edge_outcomes, render_call,
 };
 use vulcan_provider_adapters::{
     CredentialExecutionSecret, OpenVulcanEdgeAccessError, OpenVulcanEdgeEndpoint,
@@ -30,6 +30,7 @@ use vulcan_service_api::{
 };
 
 use super::PermissionJudgeRuntime;
+use super::usage::{JudgeRoute, JudgeUsage, JudgeUsageOutcome, record_judge_usage};
 use crate::public_ai_settings::openvulcan_account::signed_in_credential;
 use crate::{SharedServiceBridgeState, current_v1_unix_millis};
 
@@ -365,9 +366,9 @@ pub(super) async fn list_models(state: &SharedServiceBridgeState) -> Result<Vec<
 
 /// Judges `inputs` with the official model `model_id` on the locked endpoint, or the selected one
 /// when `locked` is `None`; one checked outcome per input, in order, with the checkpoint the node
-/// reported.
+/// reported. Every judgement sent for the signed-in account is recorded in the usage ledger.
 /// 用官方模型 `model_id` 在锁定的端点（`locked` 为 `None` 时为选中的端点）上判定 `inputs`；每条输入
-/// 按顺序得到一条已检查的结果，并附节点报告的检查点。
+/// 按顺序得到一条已检查的结果，并附节点报告的检查点。为已登录账户发出的每次判定都记入用量账本。
 pub(super) async fn judge(
     state: &SharedServiceBridgeState,
     runtime: &PermissionJudgeRuntime,
@@ -378,12 +379,56 @@ pub(super) async fn judge(
     let (connection_id, secret) = signed_in_credential(state).await?.ok_or_else(|| {
         String::from("Sign in to OpenVulcan before using the official direct judge.")
     })?;
+    let started_at_ms = current_v1_unix_millis()?;
+    let answer = judge_signed_in(runtime, model_id, locked, inputs, &connection_id, &secret).await;
+    let finished_at_ms = current_v1_unix_millis()?;
+    let outcomes = match &answer {
+        Ok(answer) => answer
+            .outcomes
+            .iter()
+            .map(|outcome| match outcome {
+                EdgeOutcome::Evaluated { input_tokens, .. } => JudgeUsageOutcome::Evaluated {
+                    input_tokens: *input_tokens,
+                },
+                EdgeOutcome::InputTokenLimit => {
+                    JudgeUsageOutcome::InputTokenLimit { input_tokens: None }
+                }
+            })
+            .collect(),
+        Err(_) => vec![JudgeUsageOutcome::Failed],
+    };
+    for outcome in outcomes {
+        record_judge_usage(
+            state,
+            JudgeUsage {
+                route: JudgeRoute::Edge {
+                    connection_id: connection_id.clone(),
+                },
+                model: model_id.to_string(),
+                started_at_ms,
+                finished_at_ms,
+                outcome,
+            },
+        );
+    }
+    answer
+}
+
+/// Judges `inputs` for the signed-in account `connection_id` holding `secret`; see [`judge`].
+/// 为持有 `secret` 的已登录账户 `connection_id` 判定 `inputs`；见 [`judge`]。
+async fn judge_signed_in(
+    runtime: &PermissionJudgeRuntime,
+    model_id: &str,
+    locked: Option<&str>,
+    inputs: Vec<JudgeInput>,
+    connection_id: &str,
+    secret: &CredentialExecutionSecret,
+) -> Result<EdgeAnswer, String> {
     let expected = inputs.len();
     let request = EdgeJudgeRequest {
         request_id: format!("permission-judge-{}", uuid::Uuid::new_v4()),
         inputs,
     };
-    let (connection_id, secret) = (&connection_id, &secret);
     let response = exchange(
         |renew| async move {
             let grant = runtime

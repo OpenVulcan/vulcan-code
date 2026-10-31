@@ -28,9 +28,10 @@ pub(crate) const PERMISSION_JUDGE_CONSUMER_PROFILE_ID: &str = "permission_judge"
 /// 稳定能力注册标识。
 const JUDGE_REGISTRATION_ID: &str = "vulcan-code-permission-judge";
 
-/// Owner and caller identity of the registration.
-/// 注册的持有者与调用方标识。
-const JUDGE_CALLER_ID: &str = "vulcan-code-permission-judge";
+/// Owner and caller identity of the registration, and the usage-ledger consumer of every judge
+/// backend.
+/// 注册的持有者与调用方标识，也是所有判定后端的用量账本消费者。
+pub(super) const JUDGE_CALLER_ID: &str = "vulcan-code-permission-judge";
 
 /// Longest wait for one cloud judgement; the call then goes to the next layer.
 /// 一次云端判定的最长等待时间；超时后调用交给下一层。

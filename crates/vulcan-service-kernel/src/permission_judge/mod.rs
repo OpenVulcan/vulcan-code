@@ -11,6 +11,7 @@ mod review_prompt;
 mod review_rules;
 mod services;
 mod unattended;
+mod usage;
 mod worker;
 
 use std::sync::{Arc, Mutex};
