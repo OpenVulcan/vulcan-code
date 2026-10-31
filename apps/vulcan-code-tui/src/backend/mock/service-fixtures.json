@@ -235,6 +235,8 @@
       "jitterPercent": 10,
       "respectRetryAfter": true,
       "retry429": true,
+      "retryKeywords": ["error decoding response body"],
+      "defaultRetryKeywords": ["request or response body error", "error decoding response body"],
       "rateLimit": {
         "maxRetries": 5,
         "initialDelayMs": 2000,

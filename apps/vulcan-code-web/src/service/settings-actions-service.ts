@@ -1044,6 +1044,7 @@ export async function saveProviderRetrySettings(request: {
   jitterPercent: number;
   respectRetryAfter: boolean;
   retry429: boolean;
+  retryKeywords: string[];
   rateLimit: {
     maxRetries: number;
     initialDelayMs: number;

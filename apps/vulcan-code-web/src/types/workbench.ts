@@ -354,6 +354,12 @@ export interface ProviderRetrySettingsSummary {
   // Whether HTTP 429 and structured rate-limit errors may be retried.
   // 是否允许重试 HTTP 429 与结构化限流错误。
   retry429: boolean;
+  // Case-insensitive error keywords whose match makes a dispatched failure replayable.
+  // 不区分大小写的错误关键词；命中时已分派失败可重放。
+  retryKeywords: string[];
+  // Built-in keyword list restored by the reset action.
+  // 重置操作所恢复的内置关键词列表。
+  defaultRetryKeywords: string[];
   // Dedicated rate-limit retry schedule.
   // 专用限流重试调度规则。
   rateLimit: ProviderRateLimitRetrySettingsSummary;

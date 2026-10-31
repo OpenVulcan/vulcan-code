@@ -11,6 +11,25 @@ pub const PROVIDER_RETRY_MAX_RETRIES: u32 = 100;
 /// 初始请求后的限流重试所使用的宿主硬上限。
 pub const PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES: u32 = 100_000;
 
+/// Built-in error keywords that mark a dispatched failure as a replayable transient interruption.
+/// 将已分派失败标记为可重放瞬态中断的内置错误关键词。
+///
+/// The entries are the exact `reqwest` display texts for an interrupted response body and a
+/// failed body decode, which carry no request-level rejection.
+/// 这些条目是 `reqwest` 对响应体中断与响应体解码失败的精确展示文本，不代表请求级拒绝。
+pub const PROVIDER_RETRY_DEFAULT_KEYWORDS: &[&str] = &[
+    "request or response body error",
+    "error decoding response body",
+];
+
+/// Maximum number of configured retry keywords.
+/// 已配置重试关键词的最大数量。
+pub const PROVIDER_RETRY_KEYWORD_MAX_COUNT: usize = 64;
+
+/// Maximum character length of one configured retry keyword.
+/// 单个已配置重试关键词的最大字符长度。
+pub const PROVIDER_RETRY_KEYWORD_MAX_CHARACTERS: usize = 200;
+
 /// Persisted provider retry behavior shared by public-contract transports.
 /// 公共契约传输链路共享的持久化 Provider 重试行为配置。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -59,6 +78,17 @@ pub struct PersistedProviderRetryConfiguration {
     /// 是否重试可重试的 HTTP 429 失败。
     #[serde(rename = "retry429", default = "default_provider_retry_429")]
     pub retry_429: bool,
+    /// Case-insensitive error keywords whose match makes a dispatched failure replayable.
+    /// 不区分大小写的错误关键词；命中时已分派失败可重放。
+    ///
+    /// Omitted while equal to the built-in list so later default updates still apply.
+    /// 与内置列表相同时省略，使后续默认值更新仍能生效。
+    #[serde(
+        rename = "retryKeywords",
+        default = "default_provider_retry_keywords",
+        skip_serializing_if = "provider_retry_keywords_are_default"
+    )]
+    pub retry_keywords: Vec<String>,
     /// Rate-limit-specific retry schedule.
     /// 限流专用重试调度规则。
     #[serde(
@@ -88,6 +118,7 @@ impl Default for PersistedProviderRetryConfiguration {
             jitter_percent: default_provider_retry_jitter_percent(),
             respect_retry_after: default_provider_retry_respect_retry_after(),
             retry_429: default_provider_retry_429(),
+            retry_keywords: default_provider_retry_keywords(),
             rate_limit: PersistedProviderRateLimitRetryConfiguration::default(),
         }
     }
@@ -234,6 +265,24 @@ fn default_provider_retry_429() -> bool {
     true
 }
 
+/// Returns the built-in retry keyword list.
+/// 返回内置重试关键词列表。
+pub fn default_provider_retry_keywords() -> Vec<String> {
+    PROVIDER_RETRY_DEFAULT_KEYWORDS
+        .iter()
+        .map(|keyword| String::from(*keyword))
+        .collect()
+}
+
+/// Returns whether a keyword list equals the built-in list.
+/// 返回关键词列表是否等于内置列表。
+fn provider_retry_keywords_are_default(keywords: &[String]) -> bool {
+    keywords
+        .iter()
+        .map(String::as_str)
+        .eq(PROVIDER_RETRY_DEFAULT_KEYWORDS.iter().copied())
+}
+
 /// Returns the default first rate-limit retry delay.
 /// 返回默认首次限流重试等待时间。
 fn default_provider_rate_limit_retry_initial_delay_ms() -> u64 {
@@ -278,5 +327,37 @@ mod tests {
             normalize_provider_rate_limit_retry_max_retries(u32::MAX),
             PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES
         );
+    }
+
+    /// Verifies the default keyword list is omitted on disk while a customized list persists.
+    /// 验证默认关键词列表不写入磁盘，而自定义列表会被持久化。
+    #[test]
+    fn retry_keywords_persist_only_when_customized() {
+        let default_json = serde_json::to_value(PersistedProviderRetryConfiguration::default())
+            .expect("default retry configuration must serialize");
+        assert!(default_json.get("retryKeywords").is_none());
+        let omitted: PersistedProviderRetryConfiguration =
+            serde_json::from_str("{}").expect("an empty block must use defaults");
+        assert_eq!(omitted.retry_keywords, default_provider_retry_keywords());
+
+        let customized = PersistedProviderRetryConfiguration {
+            retry_keywords: vec![String::from("connection reset")],
+            ..PersistedProviderRetryConfiguration::default()
+        };
+        let customized_json =
+            serde_json::to_value(&customized).expect("customized configuration must serialize");
+        assert_eq!(
+            customized_json.get("retryKeywords"),
+            Some(&serde_json::json!(["connection reset"]))
+        );
+        let empty = PersistedProviderRetryConfiguration {
+            retry_keywords: Vec::new(),
+            ..PersistedProviderRetryConfiguration::default()
+        };
+        let round_trip: PersistedProviderRetryConfiguration = serde_json::from_value(
+            serde_json::to_value(&empty).expect("empty keyword list must serialize"),
+        )
+        .expect("empty keyword list must deserialize");
+        assert!(round_trip.retry_keywords.is_empty());
     }
 }

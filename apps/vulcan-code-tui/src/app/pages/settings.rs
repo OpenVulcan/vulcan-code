@@ -1218,6 +1218,21 @@ pub(super) fn diagnostics(app: &App) -> Vec<Row> {
                 settings::save_provider_retry_settings,
             ),
         ));
+        rows.push(string_list(
+            tr!("settings.retry.retryWhenTheError"),
+            retry,
+            "/retryKeywords",
+            settings::save_provider_retry_settings,
+        ));
+        // restored copies the service-projected default list into the complete retry DTO.
+        // restored 将服务投影的默认列表复制进完整重试 DTO。
+        let mut restored = retry.clone();
+        restored["retryKeywords"] = v(retry, "/defaultRetryKeywords").clone();
+        rows.push(button(
+            tr!("settings.retry.restoreDefaultKeywords"),
+            call(settings::save_provider_retry_settings(restored)),
+            Tone::Normal,
+        ));
     }
     rows.push(section(tr!("tui.field.modules")));
     for (index, module) in a(wb, "/modules").iter().enumerate() {

@@ -3,9 +3,11 @@
 
 use serde::Deserialize;
 use vulcan_agent_runtime::provider_config::{
-    PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES, PROVIDER_RETRY_MAX_RETRIES,
+    PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES, PROVIDER_RETRY_KEYWORD_MAX_CHARACTERS,
+    PROVIDER_RETRY_KEYWORD_MAX_COUNT, PROVIDER_RETRY_MAX_RETRIES,
     PersistedProviderRateLimitRetryConfiguration, PersistedProviderRetryConfiguration,
-    ProviderConfigurationFile, normalize_provider_rate_limit_retry_max_retries,
+    ProviderConfigurationFile, default_provider_retry_keywords,
+    normalize_provider_rate_limit_retry_max_retries,
 };
 use vulcan_service_api::{
     ProviderRateLimitRetrySettingsSummary, ProviderRetrySettingsSummary, ServiceEventEmitter,
@@ -52,6 +54,9 @@ pub(super) struct ProviderRetrySettingsSaveRequest {
     /// Whether HTTP 429 and structured rate-limit errors may be retried.
     /// 是否允许重试 HTTP 429 与结构化限流错误。
     retry_429: bool,
+    /// Complete case-insensitive retry keyword list; an empty list disables keyword retry.
+    /// 完整的不区分大小写重试关键词列表；空列表表示关闭关键词重试。
+    retry_keywords: Vec<String>,
     /// Dedicated rate-limit retry schedule.
     /// 专用限流重试调度规则。
     rate_limit: ProviderRateLimitRetrySettingsSaveRequest,
@@ -107,6 +112,7 @@ pub(super) async fn service_save_provider_retry_settings(
         jitter_percent: request.jitter_percent,
         respect_retry_after: request.respect_retry_after,
         retry_429: request.retry_429,
+        retry_keywords: normalized_retry_keywords(&request.retry_keywords),
         rate_limit: PersistedProviderRateLimitRetryConfiguration {
             max_retries: request.rate_limit.max_retries,
             initial_delay_ms: request.rate_limit.initial_delay_ms,
@@ -285,6 +291,8 @@ pub(crate) fn provider_retry_settings(
         jitter_percent: retry.jitter_percent.min(80),
         respect_retry_after: retry.respect_retry_after,
         retry_429: retry.retry_429,
+        retry_keywords: normalized_retry_keywords(&retry.retry_keywords),
+        default_retry_keywords: default_provider_retry_keywords(),
         rate_limit: ProviderRateLimitRetrySettingsSummary {
             max_retries: normalize_provider_rate_limit_retry_max_retries(
                 retry.rate_limit.max_retries,
@@ -318,6 +326,7 @@ fn validate_provider_retry_settings_request(
             "The ordinary retry jitter percentage must be between 0 and 80.",
         ));
     }
+    validate_retry_keywords(&request.retry_keywords)?;
     if !(1..=PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES).contains(&request.rate_limit.max_retries) {
         return Err(format!(
             "The maximum rate-limit retry count must be between 1 and {PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES}."
@@ -330,6 +339,58 @@ fn validate_provider_retry_settings_request(
         Some(PROVIDER_RETRY_SETTINGS_MAX_DELAY_MS),
     )?;
     validate_backoff_factor_milli("rate-limit retry", request.rate_limit.backoff_factor_milli)
+}
+
+/// Validates the submitted retry keyword list against the persisted count and length ceilings.
+/// 按持久化数量与长度上限校验提交的重试关键词列表。
+///
+/// # Parameters
+/// 参数
+/// `keywords` is the complete list submitted by the settings page.
+/// `keywords` 是设置页提交的完整列表。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` when every non-blank keyword fits; blank entries are dropped during normalization.
+/// 每个非空关键词都符合上限时返回 `Ok(())`；空白条目在规范化时被丢弃。
+fn validate_retry_keywords(keywords: &[String]) -> Result<(), String> {
+    let normalized = normalized_retry_keywords(keywords);
+    if normalized.len() > PROVIDER_RETRY_KEYWORD_MAX_COUNT {
+        return Err(format!(
+            "At most {PROVIDER_RETRY_KEYWORD_MAX_COUNT} retry keywords are allowed."
+        ));
+    }
+    if normalized
+        .iter()
+        .any(|keyword| keyword.chars().count() > PROVIDER_RETRY_KEYWORD_MAX_CHARACTERS)
+    {
+        return Err(format!(
+            "Each retry keyword must be at most {PROVIDER_RETRY_KEYWORD_MAX_CHARACTERS} characters."
+        ));
+    }
+    Ok(())
+}
+
+/// Trims keywords and removes blank entries and case-insensitive duplicates, keeping first order.
+/// 修剪关键词，并移除空白条目与不区分大小写的重复项，保留首次出现顺序。
+///
+/// # Parameters
+/// 参数
+/// `keywords` is one submitted or persisted keyword list.
+/// `keywords` 是一份提交或持久化的关键词列表。
+///
+/// # Returns
+/// 返回值
+/// The canonical keyword list stored and projected by the settings surface.
+/// 返回设置界面存储与投影的规范关键词列表。
+fn normalized_retry_keywords(keywords: &[String]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    keywords
+        .iter()
+        .map(|keyword| keyword.trim())
+        .filter(|keyword| !keyword.is_empty() && seen.insert(keyword.to_lowercase()))
+        .map(String::from)
+        .collect()
 }
 
 /// Validates one initial and maximum retry-delay pair in milliseconds.
@@ -399,6 +460,7 @@ mod tests {
             jitter_percent: 20,
             respect_retry_after: true,
             retry_429: true,
+            retry_keywords: default_provider_retry_keywords(),
             rate_limit: ProviderRateLimitRetrySettingsSaveRequest {
                 max_retries: PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES,
                 initial_delay_ms: 5_000,
@@ -449,5 +511,43 @@ mod tests {
         let mut rate_limit_request = valid_retry_request();
         rate_limit_request.rate_limit.max_delay_ms = 1_800_001;
         assert!(validate_provider_retry_settings_request(&rate_limit_request).is_err());
+    }
+
+    /// Verifies keyword normalization and the count and length ceilings.
+    /// 验证关键词规范化以及数量与长度上限。
+    #[test]
+    fn retry_keywords_are_normalized_and_bounded() {
+        let submitted = vec![
+            String::from("  Connection Reset "),
+            String::from("connection reset"),
+            String::from("   "),
+            String::from("broken pipe"),
+        ];
+        assert_eq!(
+            normalized_retry_keywords(&submitted),
+            vec![
+                String::from("Connection Reset"),
+                String::from("broken pipe")
+            ]
+        );
+
+        let mut too_many = valid_retry_request();
+        too_many.retry_keywords = (0..=PROVIDER_RETRY_KEYWORD_MAX_COUNT)
+            .map(|index| format!("keyword-{index}"))
+            .collect();
+        assert!(validate_provider_retry_settings_request(&too_many).is_err());
+        let mut too_long = valid_retry_request();
+        too_long.retry_keywords = vec!["k".repeat(PROVIDER_RETRY_KEYWORD_MAX_CHARACTERS + 1)];
+        assert!(validate_provider_retry_settings_request(&too_long).is_err());
+        let mut cleared = valid_retry_request();
+        cleared.retry_keywords = Vec::new();
+        assert!(validate_provider_retry_settings_request(&cleared).is_ok());
+
+        let summary = provider_retry_settings(&ProviderConfigurationFile::default());
+        assert_eq!(summary.retry_keywords, default_provider_retry_keywords());
+        assert_eq!(
+            summary.default_retry_keywords,
+            default_provider_retry_keywords()
+        );
     }
 }

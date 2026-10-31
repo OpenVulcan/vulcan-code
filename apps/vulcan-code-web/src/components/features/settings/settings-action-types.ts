@@ -41,6 +41,9 @@ export interface ProviderRetrySettingsSaveRequest {
   // Whether HTTP 429 and structured rate-limit errors may be retried.
   // 是否允许重试 HTTP 429 与结构化限流错误。
   retry429: boolean
+  // Complete retry keyword list; an empty list disables keyword retry.
+  // 完整的重试关键词列表；空列表表示关闭关键词重试。
+  retryKeywords: string[]
   // Dedicated rate-limit scheduling values.
   // 专用限流调度值。
   rateLimit: {

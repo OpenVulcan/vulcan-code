@@ -32,6 +32,12 @@ pub struct ProviderRetrySettingsSummary {
     /// Whether HTTP 429 and structured rate-limit errors may be retried.
     /// 是否允许重试 HTTP 429 与结构化限流错误。
     pub retry_429: bool,
+    /// Case-insensitive error keywords whose match makes a dispatched failure replayable.
+    /// 不区分大小写的错误关键词；命中时已分派失败可重放。
+    pub retry_keywords: Vec<String>,
+    /// Built-in keyword list restored by the settings page reset action.
+    /// 设置页重置操作所恢复的内置关键词列表。
+    pub default_retry_keywords: Vec<String>,
     /// Dedicated rate-limit retry schedule.
     /// 专用限流重试调度规则。
     pub rate_limit: ProviderRateLimitRetrySettingsSummary,
@@ -50,6 +56,8 @@ impl Default for ProviderRetrySettingsSummary {
             jitter_percent: 20,
             respect_retry_after: true,
             retry_429: true,
+            retry_keywords: Vec::new(),
+            default_retry_keywords: Vec::new(),
             rate_limit: ProviderRateLimitRetrySettingsSummary::default(),
         }
     }

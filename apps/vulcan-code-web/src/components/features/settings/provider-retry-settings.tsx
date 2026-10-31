@@ -7,6 +7,7 @@ import { Button } from "@/ui-kit/primitives/button"
 import { DisclosureSection } from "@/ui-kit/primitives/disclosure"
 import { Input } from "@/ui-kit/primitives/input"
 import { Switch } from "@/ui-kit/primitives/switch"
+import { Textarea } from "@/ui-kit/primitives/textarea"
 import { toast } from "@/ui-kit/primitives/toast"
 import { formatMessage, useI18n, type Translate } from "@/i18n"
 import type { ProviderRetrySettingsSummary } from "@/types"
@@ -23,6 +24,8 @@ const DEFAULT_PROVIDER_RETRY_SETTINGS: ProviderRetrySettingsSummary = {
   jitterPercent: 20,
   respectRetryAfter: true,
   retry429: true,
+  retryKeywords: [],
+  defaultRetryKeywords: [],
   rateLimit: {
     maxRetries: 100_000,
     initialDelayMs: 5_000,
@@ -62,6 +65,9 @@ interface ProviderRetrySettingsDraft {
   // Whether rate-limit failures may be retried.
   // 是否允许重试限流失败。
   retry429: boolean
+  // Retry keywords, one per line; the backend trims, deduplicates and bounds them.
+  // 重试关键词，每行一个；后台负责修剪、去重与上限校验。
+  retryKeywords: string
   // Maximum finite rate-limit retries.
   // 限流最大有限重试次数。
   rateLimitMaxRetries: string
@@ -241,6 +247,32 @@ export function ProviderRetrySettingsArea(props: {
             </div>
           </DisclosureSection>
         </fieldset>
+
+        <fieldset className="context-basics-group">
+          <legend>{t("settings.retry.errorKeywords")}</legend>
+          <div className="vk-form-pref">
+            <span className="vk-form-pref-text"><strong>{t("settings.retry.retryWhenTheError")}</strong><small className="vk-form-note">{t("settings.retry.oneKeywordPerLine")}</small></span>
+          </div>
+          <Textarea
+            aria-label={t("settings.retry.retryWhenTheError")}
+            onChange={(event) => {
+              const retryKeywords = event.currentTarget.value
+              setDraft((current) => ({ ...current, retryKeywords }))
+            }}
+            rows={4}
+            spellCheck={false}
+            value={draft.retryKeywords}
+          />
+          <div>
+            <Button
+              disabled={draft.retryKeywords === keywordsText(settings.defaultRetryKeywords)}
+              onClick={() => setDraft((current) => ({ ...current, retryKeywords: keywordsText(settings.defaultRetryKeywords) }))}
+              size="sm"
+              type="button"
+              variant="outline"
+            >{t("settings.retry.restoreDefaultKeywords")}</Button>
+          </div>
+        </fieldset>
       </fieldset>
       {validationError || saveError ? <p className="vk-field-error" role="alert">{validationError ?? saveError}</p> : null}
       {sourceChanged ? (
@@ -272,6 +304,7 @@ function retrySettingsDraft(settings: ProviderRetrySettingsSummary): ProviderRet
     jitterPercent: String(settings.jitterPercent),
     respectRetryAfter: settings.respectRetryAfter,
     retry429: settings.retry429,
+    retryKeywords: keywordsText(settings.retryKeywords),
     rateLimitMaxRetries: String(settings.rateLimit.maxRetries),
     rateLimitInitialDelaySeconds: millisecondsToSecondsText(settings.rateLimit.initialDelayMs),
     rateLimitMaxDelaySeconds: millisecondsToSecondsText(settings.rateLimit.maxDelayMs),
@@ -291,6 +324,7 @@ function retrySettingsRequest(draft: ProviderRetrySettingsDraft): ProviderRetryS
     jitterPercent: Number(draft.jitterPercent),
     respectRetryAfter: draft.respectRetryAfter,
     retry429: draft.retry429,
+    retryKeywords: draft.retryKeywords.split("\n"),
     rateLimit: {
       maxRetries: Number(draft.rateLimitMaxRetries),
       initialDelayMs: secondsTextToMilliseconds(draft.rateLimitInitialDelaySeconds),
@@ -320,6 +354,12 @@ function validateRetrySettingsDraft(draft: ProviderRetrySettingsDraft, t: Transl
   if (!validDelayPair(rateLimitInitialSeconds, rateLimitMaxSeconds, 1800)) return t("settings.retry.rateLimitWaitsMust")
   if (rateLimitFactor == null || rateLimitFactor < 1 || rateLimitFactor > 8) return t("settings.retry.rateLimitWaitGrowth")
   return null
+}
+
+// keywordsText joins a keyword list into the one-per-line editor text.
+// keywordsText 将关键词列表拼接为每行一个的编辑文本。
+function keywordsText(keywords: readonly string[]): string {
+  return keywords.join("\n")
 }
 
 // validDelayPair checks one initial and maximum delay pair expressed in seconds.
