@@ -51,7 +51,7 @@ export function AssistantDockButton() {
           <Bot size={16} />
         </Button>
       </HoverCardTrigger>
-      <HoverCardContent align="end" side="bottom" width="sm">
+      <HoverCardContent align="end" side="bottom" width="lg">
         <div aria-label={t("assistantDock.menu")} className="vk-assist-menu" role="menu">
           {dock.assistants.map((assistant) => {
             const shown = assistantWindowOf(dock.state, assistant.id) !== null;
@@ -65,7 +65,7 @@ export function AssistantDockButton() {
                 type="button"
               >
                 <AssistantAvatar active={shown} name={assistant.name} />
-                <span>
+                <span className="vk-assist-text">
                   <strong>{assistant.name}</strong>
                   {assistant.projectName ? <small>{assistant.projectName}</small> : null}
                 </span>
