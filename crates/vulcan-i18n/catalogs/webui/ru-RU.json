@@ -5644,7 +5644,6 @@
   "conversation.turnStats.subagentTokens": "Токены субагентов",
   "conversation.turnStats.requests": "Запросы",
   "conversation.turnStats.toolCalls": "Вызовы инструментов",
-  "conversation.turnStats.cachedTokens": "Кэшированные токены",
   "conversation.turnStats.uncachedInput": "Некэшированный ввод",
   "conversation.turnStats.outputTokens": "Выходные токены",
   "conversation.turnStats.totalTokens": "Всего токенов",

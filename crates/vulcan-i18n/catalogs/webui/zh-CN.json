@@ -5644,7 +5644,6 @@
   "conversation.turnStats.subagentTokens": "智能体 Token",
   "conversation.turnStats.requests": "总请求次数",
   "conversation.turnStats.toolCalls": "工具调用次数",
-  "conversation.turnStats.cachedTokens": "缓存 Token",
   "conversation.turnStats.uncachedInput": "无缓存输入",
   "conversation.turnStats.outputTokens": "输出 Token",
   "conversation.turnStats.totalTokens": "合计 Token",

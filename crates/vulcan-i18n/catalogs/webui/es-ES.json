@@ -5644,7 +5644,6 @@
   "conversation.turnStats.subagentTokens": "Tokens de subagentes",
   "conversation.turnStats.requests": "Solicitudes",
   "conversation.turnStats.toolCalls": "Llamadas a herramientas",
-  "conversation.turnStats.cachedTokens": "Tokens en caché",
   "conversation.turnStats.uncachedInput": "Entrada sin caché",
   "conversation.turnStats.outputTokens": "Tokens de salida",
   "conversation.turnStats.totalTokens": "Tokens totales",

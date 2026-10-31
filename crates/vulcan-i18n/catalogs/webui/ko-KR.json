@@ -5644,7 +5644,6 @@
   "conversation.turnStats.subagentTokens": "하위 에이전트 토큰",
   "conversation.turnStats.requests": "요청 수",
   "conversation.turnStats.toolCalls": "도구 호출 수",
-  "conversation.turnStats.cachedTokens": "캐시된 토큰",
   "conversation.turnStats.uncachedInput": "캐시되지 않은 입력",
   "conversation.turnStats.outputTokens": "출력 토큰",
   "conversation.turnStats.totalTokens": "총 토큰",

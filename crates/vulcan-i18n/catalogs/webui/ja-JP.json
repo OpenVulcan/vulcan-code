@@ -5644,7 +5644,6 @@
   "conversation.turnStats.subagentTokens": "サブエージェントのトークン",
   "conversation.turnStats.requests": "リクエスト数",
   "conversation.turnStats.toolCalls": "ツール呼び出し数",
-  "conversation.turnStats.cachedTokens": "キャッシュ済みトークン",
   "conversation.turnStats.uncachedInput": "キャッシュなし入力",
   "conversation.turnStats.outputTokens": "出力トークン",
   "conversation.turnStats.totalTokens": "合計トークン",

@@ -5644,7 +5644,6 @@
   "conversation.turnStats.subagentTokens": "子代理 Token",
   "conversation.turnStats.requests": "總請求次數",
   "conversation.turnStats.toolCalls": "工具呼叫次數",
-  "conversation.turnStats.cachedTokens": "快取 Token",
   "conversation.turnStats.uncachedInput": "無快取輸入",
   "conversation.turnStats.outputTokens": "輸出 Token",
   "conversation.turnStats.totalTokens": "合計 Token",
