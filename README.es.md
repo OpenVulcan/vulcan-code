@@ -4,9 +4,9 @@
 
 # Vulcan Code
 
-**Un entorno de escritorio de AI Coding con interfaz gráfica (GUI) y de código abierto**
+**Un entorno de AI Coding de código abierto: aplicación de escritorio con GUI + TUI para la terminal**
 
-Rust Core · Shell de escritorio Electron · React WebUI
+Rust Core · Shell de escritorio Electron · React WebUI · ratatui TUI
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Issues](https://img.shields.io/github/issues/OpenVulcan/vulcan-code)](https://github.com/OpenVulcan/vulcan-code/issues)
@@ -22,7 +22,7 @@ Rust Core · Shell de escritorio Electron · React WebUI
 
 ## Acerca del proyecto
 
-Vulcan Code es una **aplicación de AI Coding con interfaz gráfica**. Reúne proyectos, sesiones, terminales, un navegador, revisión de código y commits de Git en un único entorno de escritorio, para que la IA entienda tu código, haga avanzar las tareas y entregue resultados que puedes revisar.
+Vulcan Code es una **aplicación de AI Coding** con dos clientes: una aplicación de escritorio con GUI y una TUI para la terminal. Reúne proyectos, sesiones, terminales, un navegador, revisión de código y commits de Git en un único entorno de trabajo, para que la IA entienda tu código, haga avanzar las tareas y entregue resultados que puedes revisar.
 
 El proyecto se ha desarrollado y depurado internamente durante mucho tiempo y ahora se publica como código abierto bajo la **licencia MIT**. Queremos que sea algo más que el producto de un equipo: una herramienta que la comunidad perfeccione en conjunto.
 
@@ -40,6 +40,13 @@ El proyecto se ha desarrollado y depurado internamente durante mucho tiempo y ah
 - Edita una pregunta anterior para regenerar la respuesta o bifurca una nueva sesión desde cualquier turno completado
 - Interfaz en chino e inglés, temas claro y oscuro
 
+### 💻 Cliente de terminal (TUI)
+
+- El mismo entorno de trabajo en la terminal: proyectos y sesiones, conversación y razonamiento, llamadas a herramientas, preguntas, cambios y commits de Git, además de memoria, base de conocimiento, skills, agentes, gestión de plugins y ajustes del sistema
+- Comparte la misma interfaz de servicio que el WebUI y se conecta al mismo Core
+- Soporte completo de ratón: clic, doble clic, menú contextual y rueda; paleta de comandos, comandos de barra y atajos de teclado
+- Ábrelo desde el menú de la bandeja o compílalo e inícialo con `make bt`; consulta la [guía de la TUI](apps/vulcan-code-tui/README.md)
+
 ### 🎯 Avanzar con las tareas
 
 - **Modo Goal**: define un objetivo y un presupuesto de tokens; la IA sigue trabajando turno a turno y puedes pausar, reanudar o borrar el objetivo
@@ -50,8 +57,8 @@ El proyecto se ha desarrollado y depurado internamente durante mucho tiempo y ah
 
 ### 🧠 Comprender el código y acumular experiencia
 
-- **Índice semántico de código VCE**: construye un índice vectorial del proyecto para que la IA encuentre el código relevante antes de modificarlo; el índice se sincroniza automáticamente con los cambios
-- **Base de conocimiento del proyecto**: importa carpetas Markdown, con búsqueda BM25 e híbrida vectorial; se autoriza por proyecto y se selecciona por sesión
+- **Navegación de código CodeKit**: localización estructural, búsqueda de texto, extracción del cuerpo de funciones y sustitución de funciones completas directamente sobre el árbol de trabajo en vivo; no hay índice precompilado, así que nada queda desactualizado. Conecta un servicio MCP externo cuando necesites búsqueda semántica de código
+- **Base de conocimiento gestionada por la IA**: la IA organiza, lee y busca material a largo plazo con herramientas dedicadas, con búsqueda BM25, vectorial e híbrida; el historial se conserva para siempre y se puede restaurar; se autoriza por proyecto y se selecciona por sesión
 - **Memoria a largo plazo MemoryMesh**: extrae experiencia al final de cada turno y la recupera antes del siguiente; las memorias se pueden ver, corregir y eliminar, con papelera y trazabilidad del origen
 
 ### 🔍 Resultados verificables
@@ -66,21 +73,21 @@ El proyecto se ha desarrollado y depurado internamente durante mucho tiempo y ah
 - **LuaSkills**: empaqueta acciones frecuentes en paquetes de capacidades programables, configurables e instalables
 - **MCP**: servidores MCP de proceso local y HTTP, con diagnóstico de conexión e inspección de esquemas de herramientas
 - **Servicio MCP**: Vulcan también es un servidor MCP. Otras herramientas de IA como Claude Code y Codex pueden, según lo concedido, listar proyectos y sesiones, enviar un mensaje y esperar la respuesta, iniciar sesiones, detener ejecuciones y responder preguntas, y llamar a modelos de imagen y vídeo concedidos aparte; cada herramienta tiene su propio token y las aprobaciones de permisos siempre se quedan en Vulcan
-- **Sistema de plugins**: los plugins pueden aportar herramientas y montar su propia interfaz. Plugins integrados: búsqueda de documentación Context7, navegador de IA, compresión de salida de comandos RTK, estadísticas de uso y herramientas de depuración CDP/DAP
+- **Sistema de plugins**: los plugins pueden aportar herramientas y montar su propia interfaz. Plugins integrados: búsqueda de documentación Context7, navegador de IA, estadísticas de uso y herramientas de depuración CDP/DAP
 
 ### ⚙️ Modelos y proveedores
 
 - Compatible con las familias de protocolos OpenAI, Anthropic, Gemini y Cohere, con configuraciones integradas para OpenAI, Anthropic, Google, DeepSeek, Kimi, MiniMax, Alibaba, OpenRouter y otros; también puedes añadir proveedores personalizados
-- Conversación, recuperación de memoria, indexación de código y generación multimedia pueden usar cada una un modelo distinto
+- Conversación, recuperación de memoria, vectores de la base de conocimiento y generación multimedia pueden usar cada una un modelo distinto
 - Capacidades ampliadas: búsqueda y extracción web; comprensión de imágenes, vídeo y audio; generación de imágenes y vídeo; síntesis de voz y transcripción
 - Políticas de ventana de contexto por capas, con compactación automática o manual (`/compact`)
+- **Compresión de salida de comandos RTK**: RTK está integrado de forma nativa en el host y comprime la salida de comandos y el contexto de commits de Git para reducir el consumo de tokens; se activa en los ajustes, donde también se ven las estadísticas de ahorro
 - Estadísticas de uso de tokens, latencia y coste de referencia
 
 ## Hoja de ruta
 
-Hoy está disponible la **aplicación de escritorio con GUI**. Próximamente:
+Hoy están disponibles la **aplicación de escritorio con GUI** y la **TUI para la terminal**. Próximamente:
 
-- [ ] **Versión TUI**: usar Vulcan Code en la terminal
 - [ ] **Conexión remota desde el móvil**: ver y controlar desde el teléfono las sesiones que se ejecutan en tu escritorio
 - [ ] **Verificación en Linux / macOS**: los scripts de compilación existen, falta una verificación completa en cada plataforma
 
@@ -88,23 +95,25 @@ Si alguno de estos puntos te interesa o tienes nuevas ideas, hablemos en los Iss
 
 ## Arquitectura
 
-```
-┌──────────────────────────┐      ┌──────────────────────────────────────────┐
-│  Electron desktop shell  │      │  Rust Core (vulcan-code-service)         │
-│  window / tray / host    │◀────▶│  session kernel · agent runtime · tools  │
-│  ┌────────────────────┐  │ RPC  │  provider protocols · MCP · LuaSkills    │
-│  │ React WebUI        │  │events│  VCE index · knowledge base · MemoryMesh │
-│  └────────────────────┘  │      │  terminal host · browser host · plugins  │
-└──────────────────────────┘      └──────────────────────────────────────────┘
+```mermaid
+flowchart LR
+  subgraph Desktop["Shell de escritorio Electron (ventana / bandeja / host)"]
+    WebUI["React WebUI"]
+  end
+  TUI["Cliente de terminal TUI (ratatui)"]
+  Core["Rust Core (vulcan-code-service)<br/>núcleo de sesiones · runtime de agentes · herramientas<br/>protocolos de proveedores · MCP · LuaSkills<br/>base de conocimiento · MemoryMesh · RTK<br/>host de terminal · host de navegador · plugins"]
+  WebUI <-->|"RPC / eventos"| Core
+  TUI <-->|"mismo RPC / eventos"| Core
 ```
 
-El servicio Core puede ejecutarse por sí solo en segundo plano (bandeja del sistema); cerrar la ventana de escritorio no interrumpe las tareas en curso.
+El servicio Core puede ejecutarse por sí solo en segundo plano (bandeja del sistema); cerrar la ventana de escritorio o salir de la TUI no interrumpe las tareas en curso. La aplicación de escritorio, el WebUI en un navegador y la TUI se conectan al mismo Core.
 
 | Directorio | Descripción |
 | --- | --- |
 | `apps/vulcan-code-service` | Host del servicio Core: núcleo de sesiones, runtime de agentes y servicios RPC/streaming del WebUI |
 | `apps/vulcan-code-desktop` | Shell de escritorio Electron: ventana y bandeja; inicia el Core local y carga el WebUI |
 | `apps/vulcan-code-web` | WebUI React/Vite: entorno de trabajo, ajustes, sesiones, diff, skills y más |
+| `apps/vulcan-code-tui` | Cliente de terminal TUI (ratatui): llama a la misma interfaz de servicio con las funciones y parámetros del WebUI |
 | `crates/vulcan-agent-runtime` | Runtime compartido de agentes: proveedores, herramientas, LuaSkills, MCP, ejecución en streaming |
 | `crates/vulcan-service-*` | API de servicios backend, núcleo del servicio Core y adaptadores de runtime |
 | `crates/vulcan-memorymesh-*` | Memoria a largo plazo MemoryMesh |
@@ -132,7 +141,7 @@ make build         # Compila Core, WebUI y el shell de escritorio Electron
 make run           # Inicia la aplicación de escritorio
 ```
 
-También puedes usar `make br` para compilar y ejecutar en un solo paso. Para compilaciones de release, usa `make release`.
+También puedes usar `make br` para compilar y ejecutar en un solo paso; `make bt` hace una compilación completa, inicia el Core y abre la TUI, sin la aplicación de escritorio ni Vite. Para compilaciones de release, usa `make release`.
 
 Consulta [`docs/contracts/development-environment.md`](docs/contracts/development-environment.md) para más detalles sobre el entorno.
 
@@ -191,7 +200,7 @@ Vulcan Code se apoya en muchos proyectos de código abierto excelentes. Gracias 
 
 **Componentes y herramientas integrados**
 
-- [RTK](https://github.com/rtk-ai/rtk): compresión de la salida de comandos para ahorrar tokens (plugin Vulcan RTK)
+- [RTK](https://github.com/rtk-ai/rtk): compresión de la salida de comandos para ahorrar tokens (integrado de forma nativa en el host)
 - [Context7](https://github.com/upstash/context7): documentación de bibliotecas actualizada y específica por versión (plugin Context7)
 - [Playwright](https://github.com/microsoft/playwright) / [Playwright MCP](https://github.com/microsoft/playwright-mcp): controlador y herramientas del navegador de IA
 - [LuaSkills](https://github.com/LuaSkills/luaskills): runtime de LuaSkills
@@ -206,6 +215,10 @@ Vulcan Code se apoya en muchos proyectos de código abierto excelentes. Gracias 
 - [Shiki](https://shiki.style/): resaltado de sintaxis de código y diffs
 - [Mermaid](https://mermaid.js.org/): renderizado de diagramas
 - [Lucide](https://lucide.dev/), [Iconify](https://iconify.design/): iconos
+
+**Cliente de terminal**
+
+- [Ratatui](https://ratatui.rs/): framework de renderizado de la TUI
 
 **Rust Core**
 

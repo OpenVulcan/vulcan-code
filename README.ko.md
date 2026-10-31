@@ -4,9 +4,9 @@
 
 # Vulcan Code
 
-**오픈소스 GUI 기반 AI Coding 데스크톱 워크벤치**
+**오픈소스 AI Coding 워크벤치: GUI 데스크톱 앱 + 터미널 TUI**
 
-Rust Core · Electron 데스크톱 셸 · React WebUI
+Rust Core · Electron 데스크톱 셸 · React WebUI · ratatui TUI
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Issues](https://img.shields.io/github/issues/OpenVulcan/vulcan-code)](https://github.com/OpenVulcan/vulcan-code/issues)
@@ -22,7 +22,7 @@ Rust Core · Electron 데스크톱 셸 · React WebUI
 
 ## 프로젝트 소개
 
-Vulcan Code는 **그래픽 인터페이스(GUI) 기반의 AI Coding 소프트웨어**입니다. 프로젝트, 세션, 터미널, 브라우저, 코드 리뷰, Git 커밋을 하나의 데스크톱 워크벤치에 모아, AI가 코드를 이해하고 작업을 진행하며 검토 가능한 결과물을 내놓을 수 있게 합니다.
+Vulcan Code는 **AI Coding 소프트웨어**로, GUI 데스크톱 앱과 터미널 TUI 두 가지 클라이언트를 제공합니다. 프로젝트, 세션, 터미널, 브라우저, 코드 리뷰, Git 커밋을 하나의 워크벤치에 모아, AI가 코드를 이해하고 작업을 진행하며 검토 가능한 결과물을 내놓을 수 있게 합니다.
 
 이 프로젝트는 오랜 기간 내부에서 개발과 디버깅을 거쳤고, 이제 **MIT 라이선스**로 오픈소스화했습니다. 한 팀의 제품에 머무르지 않고 커뮤니티가 함께 다듬어 가는 도구가 되기를 바랍니다.
 
@@ -40,6 +40,13 @@ Vulcan Code는 **그래픽 인터페이스(GUI) 기반의 AI Coding 소프트웨
 - 이전 질문을 수정해 다시 생성하거나, 완료된 어느 턴에서든 새 세션으로 분기 가능
 - 중국어·영어 UI, 라이트/다크 테마
 
+### 💻 터미널 클라이언트(TUI)
+
+- 같은 워크벤치를 터미널에서: 프로젝트와 세션, 대화와 사고 과정, 도구 호출, 질문, Git 변경과 커밋, 그리고 메모리, 지식 베이스, 스킬, 에이전트, 플러그인 관리, 시스템 설정
+- WebUI와 같은 서비스 인터페이스를 사용하며 같은 Core에 연결
+- 마우스 완전 지원: 클릭, 더블 클릭, 우클릭 메뉴, 휠 모두 사용 가능. 명령 팔레트, 슬래시 명령, 단축키 제공
+- 트레이 메뉴에서 바로 열거나 `make bt`로 빌드 후 실행. 자세한 내용은 [TUI 안내](apps/vulcan-code-tui/README.md) 참고
+
 ### 🎯 작업 진행
 
 - **Goal 모드**: 목표와 토큰 예산을 설정하면 AI가 턴 단위로 작업을 이어감. 일시정지·재개·해제 가능
@@ -50,8 +57,8 @@ Vulcan Code는 **그래픽 인터페이스(GUI) 기반의 AI Coding 소프트웨
 
 ### 🧠 코드 이해와 경험 축적
 
-- **VCE 시맨틱 코드 인덱스**: 프로젝트의 벡터 인덱스를 구축해 AI가 관련 구현을 먼저 찾은 뒤 수정. 코드 변경에 따라 인덱스 자동 동기화
-- **프로젝트 지식 베이스**: Markdown 폴더를 가져와 BM25와 벡터 하이브리드 검색 지원. 프로젝트별 권한 부여, 세션별 선택 가능
+- **CodeKit 코드 탐색**: 실시간 작업 트리에서 바로 구조 위치 찾기, 텍스트 검색, 함수 본문 추출, 함수 단위 교체를 수행. 인덱스를 미리 만들지 않으므로 인덱스가 오래될 일도 없음. 시맨틱 코드 검색이 필요하면 외부 MCP 서비스를 연결
+- **AI 관리 지식 베이스**: AI가 전용 도구로 장기 자료를 정리·읽기·검색. BM25, 벡터, 하이브리드 검색 지원, 이력은 영구 보존되며 복원 가능. 프로젝트별 권한 부여, 세션별 선택 가능
 - **MemoryMesh 장기 메모리**: 턴이 끝나면 경험을 추출하고 다음 턴 전에 자동으로 떠올림. 메모리는 조회·수정·삭제할 수 있으며 휴지통과 출처 추적 제공
 
 ### 🔍 검토 가능한 결과
@@ -66,21 +73,21 @@ Vulcan Code는 **그래픽 인터페이스(GUI) 기반의 AI Coding 소프트웨
 - **LuaSkills**: 자주 쓰는 동작을 설정·설치 가능한 프로그래밍형 기능 패키지로 묶음
 - **MCP**: 로컬 프로세스와 HTTP 방식의 MCP 서버를 모두 지원하며 연결 진단과 도구 스키마 조회 제공
 - **MCP 서비스**: Vulcan 자체도 MCP 서버입니다. Claude Code, Codex 등 다른 AI 도구가 권한에 따라 프로젝트와 세션 나열, 메시지 보내고 답장 기다리기, 세션 시작, 실행 중지, 질문 답변을 할 수 있고, 따로 허용한 이미지·동영상 모델도 호출할 수 있습니다. 도구마다 토큰을 하나씩 발급하며 권한 승인은 항상 Vulcan에 남습니다
-- **플러그인 시스템**: 플러그인은 도구를 제공하고 자체 UI를 탑재할 수 있음. 내장 플러그인: Context7 문서 검색, AI 브라우저, RTK 명령 출력 압축, 사용량 통계, CDP/DAP 디버깅 도구
+- **플러그인 시스템**: 플러그인은 도구를 제공하고 자체 UI를 탑재할 수 있음. 내장 플러그인: Context7 문서 검색, AI 브라우저, 사용량 통계, CDP/DAP 디버깅 도구
 
 ### ⚙️ 모델과 공급자
 
 - OpenAI, Anthropic, Gemini, Cohere 등 프로토콜 계열 지원. OpenAI, Anthropic, Google, DeepSeek, Kimi, MiniMax, Alibaba, OpenRouter 등의 공급자 설정이 내장되어 있으며 사용자 정의 공급자 추가 가능
-- 대화, 메모리 검색, 코드 인덱싱, 미디어 생성마다 서로 다른 모델 선택 가능
+- 대화, 메모리 검색, 지식 베이스 벡터, 미디어 생성마다 서로 다른 모델 선택 가능
 - 확장 기능: 웹 검색과 페이지 가져오기, 이미지/동영상/오디오 이해, 이미지·동영상 생성, 음성 합성과 받아쓰기
 - 계층형 컨텍스트 윈도 정책과 자동 또는 수동(`/compact`) 컨텍스트 압축
+- **RTK 명령 출력 압축**: 호스트에 RTK를 네이티브로 통합해 명령 출력과 Git 커밋 컨텍스트를 압축하고 토큰 소비를 절감. 설정에서 켜고 끌 수 있으며 절감 통계 확인 가능
 - 토큰 사용량, 지연 시간, 참고 비용 통계
 
 ## 로드맵
 
-현재 사용할 수 있는 것은 **GUI 데스크톱 버전**입니다. 다음 계획:
+현재 사용할 수 있는 것은 **GUI 데스크톱 버전**과 **터미널 TUI 버전**입니다. 다음 계획:
 
-- [ ] **TUI 버전**: 터미널에서 Vulcan Code 사용
 - [ ] **휴대폰 원격 연결**: 데스크톱에서 실행 중인 세션을 휴대폰으로 확인하고 제어
 - [ ] **Linux / macOS 검증**: 빌드 스크립트는 준비되어 있으며, 각 플랫폼에서의 전체 검증이 필요
 
@@ -88,23 +95,25 @@ Vulcan Code는 **그래픽 인터페이스(GUI) 기반의 AI Coding 소프트웨
 
 ## 아키텍처
 
-```
-┌──────────────────────────┐      ┌──────────────────────────────────────────┐
-│  Electron desktop shell  │      │  Rust Core (vulcan-code-service)         │
-│  window / tray / host    │◀────▶│  session kernel · agent runtime · tools  │
-│  ┌────────────────────┐  │ RPC  │  provider protocols · MCP · LuaSkills    │
-│  │ React WebUI        │  │events│  VCE index · knowledge base · MemoryMesh │
-│  └────────────────────┘  │      │  terminal host · browser host · plugins  │
-└──────────────────────────┘      └──────────────────────────────────────────┘
+```mermaid
+flowchart LR
+  subgraph Desktop["Electron 데스크톱 셸(창 / 트레이 / 호스트 기능)"]
+    WebUI["React WebUI"]
+  end
+  TUI["TUI 터미널 클라이언트(ratatui)"]
+  Core["Rust Core(vulcan-code-service)<br/>세션 커널 · 에이전트 런타임 · 도구 실행<br/>공급자 프로토콜 · MCP · LuaSkills<br/>지식 베이스 · MemoryMesh · RTK<br/>터미널 호스트 · 브라우저 호스트 · 플러그인 런타임"]
+  WebUI <-->|"RPC / 이벤트"| Core
+  TUI <-->|"같은 RPC / 이벤트"| Core
 ```
 
-Core 서비스는 백그라운드(시스템 트레이)에서 독립적으로 실행될 수 있어, 데스크톱 창을 닫아도 실행 중인 작업이 중단되지 않습니다.
+Core 서비스는 백그라운드(시스템 트레이)에서 독립적으로 실행될 수 있어, 데스크톱 창을 닫거나 TUI를 종료해도 실행 중인 작업이 중단되지 않습니다. 데스크톱 앱, 브라우저의 WebUI, TUI는 모두 같은 Core에 연결됩니다.
 
 | 디렉터리 | 설명 |
 | --- | --- |
 | `apps/vulcan-code-service` | Core 서비스 호스트. 세션 커널, 에이전트 런타임, WebUI RPC/스트리밍 서비스 담당 |
 | `apps/vulcan-code-desktop` | Electron 데스크톱 셸. 창과 트레이를 제공하고 로컬 Core를 시작해 WebUI를 로드 |
 | `apps/vulcan-code-web` | React/Vite WebUI. 워크벤치, 설정, 세션, Diff, 스킬 등 화면 |
+| `apps/vulcan-code-tui` | TUI 터미널 클라이언트(ratatui). WebUI의 함수와 매개변수 그대로 같은 서비스 인터페이스를 호출 |
 | `crates/vulcan-agent-runtime` | 공유 에이전트 런타임. 공급자, 도구, LuaSkills, MCP, 스트리밍 실행 |
 | `crates/vulcan-service-*` | 백엔드 서비스 API, 코어 서비스 커널, 런타임 어댑터 |
 | `crates/vulcan-memorymesh-*` | MemoryMesh 장기 메모리 |
@@ -132,7 +141,7 @@ make build         # Core, WebUI, Electron 데스크톱 셸 빌드
 make run           # 데스크톱 앱 실행
 ```
 
-`make br`로 빌드와 실행을 한 번에 할 수도 있습니다. 릴리스 빌드는 `make release`를 사용하세요.
+`make br`로 빌드와 실행을 한 번에 할 수도 있습니다. `make bt`는 전체 빌드 후 Core를 시작하고 TUI로 들어가며, 데스크톱 앱과 Vite는 시작하지 않습니다. 릴리스 빌드는 `make release`를 사용하세요.
 
 자세한 환경 설명은 [`docs/contracts/development-environment.md`](docs/contracts/development-environment.md)를 참고하세요.
 
@@ -191,7 +200,7 @@ Vulcan Code는 수많은 훌륭한 오픈소스 프로젝트 위에 만들어졌
 
 **내장 구성 요소와 도구**
 
-- [RTK](https://github.com/rtk-ai/rtk): 명령 출력을 압축해 토큰 소비 절감(Vulcan RTK 플러그인)
+- [RTK](https://github.com/rtk-ai/rtk): 명령 출력을 압축해 토큰 소비 절감(호스트 네이티브 통합)
 - [Context7](https://github.com/upstash/context7): 버전에 맞는 최신 라이브러리 문서 검색(Context7 플러그인)
 - [Playwright](https://github.com/microsoft/playwright) / [Playwright MCP](https://github.com/microsoft/playwright-mcp): AI 브라우저 드라이버와 도구
 - [LuaSkills](https://github.com/LuaSkills/luaskills): LuaSkills 런타임
@@ -206,6 +215,10 @@ Vulcan Code는 수많은 훌륭한 오픈소스 프로젝트 위에 만들어졌
 - [Shiki](https://shiki.style/): 코드와 Diff 구문 강조
 - [Mermaid](https://mermaid.js.org/): 다이어그램 렌더링
 - [Lucide](https://lucide.dev/), [Iconify](https://iconify.design/): 아이콘
+
+**터미널 클라이언트**
+
+- [Ratatui](https://ratatui.rs/): TUI 렌더링 프레임워크
 
 **Rust Core**
 

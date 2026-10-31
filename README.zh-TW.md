@@ -4,9 +4,9 @@
 
 # Vulcan Code
 
-**開源的圖形介面（GUI）AI Coding 桌面工作台**
+**開源的 AI Coding 工作台：圖形介面桌面端 + 終端機 TUI**
 
-Rust Core · Electron 桌面殼 · React WebUI
+Rust Core · Electron 桌面殼 · React WebUI · ratatui TUI
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Issues](https://img.shields.io/github/issues/OpenVulcan/vulcan-code)](https://github.com/OpenVulcan/vulcan-code/issues)
@@ -22,7 +22,7 @@ Rust Core · Electron 桌面殼 · React WebUI
 
 ## 關於專案
 
-Vulcan Code 是一款**圖形介面的 AI Coding 軟體**。它把專案、對話、終端機、瀏覽器、程式碼審查與 Git 提交整合到同一個桌面工作台，讓 AI 能理解你的程式碼、推進任務，並交付可以檢查的成果。
+Vulcan Code 是一款 **AI Coding 軟體**，提供圖形介面桌面端與終端機 TUI 兩種用戶端。它把專案、對話、終端機、瀏覽器、程式碼審查與 Git 提交整合到同一個工作台，讓 AI 能理解你的程式碼、推進任務，並交付可以檢查的成果。
 
 這個專案已在內部開發與除錯了很長一段時間，現在以 **MIT 授權**開源。我們希望它不只是一個團隊的產品，而是由社群一起打磨的工具：
 
@@ -40,6 +40,13 @@ Vulcan Code 是一款**圖形介面的 AI Coding 軟體**。它把專案、對�
 - 可以編輯歷史提問重新生成，也可以從任一已完成的回合分岔出新對話
 - 中英文介面，明暗主題
 
+### 💻 終端機用戶端（TUI）
+
+- 在終端機中使用同一個工作台：專案與對話、對話內容與思考過程、工具呼叫、提問、Git 變更與提交，以及記憶、知識庫、技能、代理、外掛管理與系統設定
+- 與 WebUI 共用同一套服務介面，連線的是同一個 Core
+- 完整滑鼠操作：單擊、雙擊、右鍵選單、滾輪皆可使用；命令面板、斜線命令與快速鍵一應俱全
+- 可以從系統匣選單直接開啟，也可以用 `make bt` 建置後啟動；詳見 [TUI 說明](apps/vulcan-code-tui/README.md)
+
 ### 🎯 任務推進
 
 - **Goal 目標模式**：設定目標與 Token 預算，AI 逐回合持續推進，可暫停、恢復、清除
@@ -50,8 +57,8 @@ Vulcan Code 是一款**圖形介面的 AI Coding 軟體**。它把專案、對�
 
 ### 🧠 理解程式碼與累積經驗
 
-- **VCE 程式碼語意索引**：為專案建立向量索引，AI 先找到相關實作再動手修改；索引隨程式碼變更自動同步
-- **專案知識庫**：匯入 Markdown 資料目錄，支援 BM25 與向量混合檢索，可依專案授權、依對話選擇
+- **CodeKit 程式碼導覽**：直接在即時工作樹上進行結構定位、文字搜尋、函式本文擷取與整函式替換，不預建索引，也就不會有索引過期；需要語意程式碼檢索時可以接入外部 MCP 服務
+- **AI 管理知識庫**：AI 以專用工具整理、讀取與檢索長期資料，支援 BM25、向量與混合檢索，歷史永久保留、可以還原；依專案授權、依對話選擇
 - **MemoryMesh 長期記憶**：回合結束後自動提煉經驗，回合開始前自動召回；記憶可以檢視、修正、刪除，並提供資源回收筒與來源追溯
 
 ### 🔍 成果可檢查
@@ -66,21 +73,21 @@ Vulcan Code 是一款**圖形介面的 AI Coding 軟體**。它把專案、對�
 - **LuaSkills**：把常用動作封裝成可設定、可安裝的程式化能力包
 - **MCP**：支援本機程序與 HTTP 兩種 MCP 伺服器，附連線診斷與工具 Schema 檢視
 - **MCP 服務**：Vulcan 本身也是 MCP 伺服器。Claude Code、Codex 等其他 AI 工具可依授權列出專案與工作階段、傳送訊息並等待回覆、新增工作階段、停止執行、回答提問，也能呼叫另行授權的圖片與影片模型；每個工具一枚權杖，權限核准始終留在 Vulcan 中
-- **外掛系統**：外掛可以提供工具，也可以掛載自己的介面。內建外掛：Context7 文件檢索、AI 瀏覽器、RTK 命令輸出壓縮、用量統計、CDP/DAP 除錯工具
+- **外掛系統**：外掛可以提供工具，也可以掛載自己的介面。內建外掛：Context7 文件檢索、AI 瀏覽器、用量統計、CDP/DAP 除錯工具
 
 ### ⚙️ 模型與供應商
 
 - 支援 OpenAI、Anthropic、Gemini、Cohere 等協定族，內建 OpenAI、Anthropic、Google、DeepSeek、Kimi、MiniMax、阿里、OpenRouter 等供應商設定，也可以新增自訂供應商
-- 對話、記憶檢索、程式碼索引、媒體生成可以各自選用不同的模型
+- 對話、記憶檢索、知識庫向量、媒體生成可以各自選用不同的模型
 - 擴充能力：網頁搜尋與擷取，圖片/影片/音訊理解，圖片與影片生成，語音合成與轉寫
 - 上下文視窗分層策略，自動或手動（`/compact`）壓縮上下文
+- **RTK 命令輸出壓縮**：宿主原生整合 RTK，壓縮命令輸出與 Git 提交上下文以減少 Token 消耗，可以在設定中開關並檢視節省統計
 - Token 用量、延遲、參考費用統計
 
 ## 路線圖
 
-目前已可使用的是 **GUI 桌面版**，接下來計畫：
+目前已可使用的是 **GUI 桌面版**與**終端機 TUI 版**，接下來計畫：
 
-- [ ] **TUI 版本**：在終端機中使用 Vulcan Code
 - [ ] **遠端手機連線**：用手機遠端檢視與操控桌面上執行的對話
 - [ ] **Linux / macOS 適配驗證**：建置腳本已具備，仍需在各平台完成完整驗證
 
@@ -88,23 +95,25 @@ Vulcan Code 是一款**圖形介面的 AI Coding 軟體**。它把專案、對�
 
 ## 架構
 
-```
-┌──────────────────────────┐      ┌──────────────────────────────────────────┐
-│  Electron desktop shell  │      │  Rust Core (vulcan-code-service)         │
-│  window / tray / host    │◀────▶│  session kernel · agent runtime · tools  │
-│  ┌────────────────────┐  │ RPC  │  provider protocols · MCP · LuaSkills    │
-│  │ React WebUI        │  │events│  VCE index · knowledge base · MemoryMesh │
-│  └────────────────────┘  │      │  terminal host · browser host · plugins  │
-└──────────────────────────┘      └──────────────────────────────────────────┘
+```mermaid
+flowchart LR
+  subgraph Desktop["Electron 桌面殼（視窗 / 系統匣 / 宿主能力）"]
+    WebUI["React WebUI"]
+  end
+  TUI["TUI 終端機用戶端（ratatui）"]
+  Core["Rust Core（vulcan-code-service）<br/>對話核心 · Agent 執行階段 · 工具執行<br/>Provider 協定 · MCP · LuaSkills<br/>知識庫 · MemoryMesh · RTK<br/>終端機宿主 · 瀏覽器宿主 · 外掛執行階段"]
+  WebUI <-->|"RPC / 事件"| Core
+  TUI <-->|"同一套 RPC / 事件"| Core
 ```
 
-Core 服務可以獨立在背景（系統匣）執行，關閉桌面視窗不會中斷正在執行的任務。
+Core 服務可以獨立在背景（系統匣）執行，關閉桌面視窗或退出 TUI 都不會中斷正在執行的任務。桌面端、瀏覽器中的 WebUI 與 TUI 連線的是同一個 Core。
 
 | 目錄 | 說明 |
 | --- | --- |
 | `apps/vulcan-code-service` | Core 服務宿主，承載對話核心、Agent 執行階段與 WebUI RPC/串流服務 |
 | `apps/vulcan-code-desktop` | Electron 桌面殼：視窗、系統匣，負責啟動本機 Core 並載入 WebUI |
 | `apps/vulcan-code-web` | React/Vite WebUI：工作台、設定、對話、Diff、技能等介面 |
+| `apps/vulcan-code-tui` | TUI 終端機用戶端（ratatui），依 WebUI 的函式與參數呼叫同一套服務介面 |
 | `crates/vulcan-agent-runtime` | 共用代理執行階段：Provider、工具、LuaSkills、MCP、串流執行 |
 | `crates/vulcan-service-*` | 後端服務 API、核心服務核心與執行階段適配 |
 | `crates/vulcan-memorymesh-*` | MemoryMesh 長期記憶 |
@@ -132,7 +141,7 @@ make build         # 建置 Core、WebUI 與 Electron 桌面殼
 make run           # 啟動桌面端
 ```
 
-也可以用 `make br` 一步完成建置與執行。發行建置使用 `make release`。
+也可以用 `make br` 一步完成建置與執行；`make bt` 會完整建置後啟動 Core 並進入 TUI，不啟動桌面端與 Vite。發行建置使用 `make release`。
 
 詳細的環境說明請見 [`docs/contracts/development-environment.md`](docs/contracts/development-environment.md)。
 
@@ -191,7 +200,7 @@ Vulcan Code 建立在眾多優秀的開源專案之上，感謝這些專案的�
 
 **內建元件與工具**
 
-- [RTK](https://github.com/rtk-ai/rtk)：命令輸出壓縮，減少 Token 消耗（Vulcan RTK 外掛）
+- [RTK](https://github.com/rtk-ai/rtk)：命令輸出壓縮，減少 Token 消耗（宿主原生整合）
 - [Context7](https://github.com/upstash/context7)：依版本檢索最新的函式庫文件（Context7 外掛）
 - [Playwright](https://github.com/microsoft/playwright) / [Playwright MCP](https://github.com/microsoft/playwright-mcp)：AI 瀏覽器的驅動與工具
 - [LuaSkills](https://github.com/LuaSkills/luaskills)：LuaSkills 技能執行環境
@@ -206,6 +215,10 @@ Vulcan Code 建立在眾多優秀的開源專案之上，感謝這些專案的�
 - [Shiki](https://shiki.style/)：程式碼與 Diff 語法高亮
 - [Mermaid](https://mermaid.js.org/)：圖表渲染
 - [Lucide](https://lucide.dev/)、[Iconify](https://iconify.design/)：圖示
+
+**終端機用戶端**
+
+- [Ratatui](https://ratatui.rs/)：TUI 繪製框架
 
 **Rust Core**
 

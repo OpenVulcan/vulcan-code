@@ -4,9 +4,9 @@
 
 # Vulcan Code
 
-**オープンソースの GUI 型 AI Coding デスクトップワークベンチ**
+**オープンソースの AI Coding ワークベンチ：GUI デスクトップ版 + ターミナル TUI**
 
-Rust Core · Electron デスクトップシェル · React WebUI
+Rust Core · Electron デスクトップシェル · React WebUI · ratatui TUI
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Issues](https://img.shields.io/github/issues/OpenVulcan/vulcan-code)](https://github.com/OpenVulcan/vulcan-code/issues)
@@ -22,7 +22,7 @@ Rust Core · Electron デスクトップシェル · React WebUI
 
 ## プロジェクトについて
 
-Vulcan Code は **GUI で使う AI Coding ソフトウェア**です。プロジェクト、セッション、ターミナル、ブラウザ、コードレビュー、Git コミットをひとつのデスクトップワークベンチにまとめ、AI がコードを理解し、タスクを進め、確認可能な成果を届けられるようにします。
+Vulcan Code は **AI Coding ソフトウェア**で、GUI デスクトップ版とターミナル TUI の 2 つのクライアントを提供します。プロジェクト、セッション、ターミナル、ブラウザ、コードレビュー、Git コミットをひとつのワークベンチにまとめ、AI がコードを理解し、タスクを進め、確認可能な成果を届けられるようにします。
 
 本プロジェクトは長期間にわたって社内で開発・デバッグを重ね、このたび **MIT ライセンス**でオープンソース化しました。ひとつのチームの製品にとどめず、コミュニティと一緒に磨き上げていくツールにしたいと考えています。
 
@@ -40,6 +40,13 @@ Vulcan Code は **GUI で使う AI Coding ソフトウェア**です。プロジ
 - 過去の質問を編集して再生成したり、完了済みの任意のターンから新しいセッションを分岐したりできます
 - 中国語・英語 UI、ライト/ダークテーマ
 
+### 💻 ターミナルクライアント（TUI）
+
+- 同じワークベンチをターミナルで：プロジェクトとセッション、会話と思考過程、ツール呼び出し、質問、Git の変更とコミット、さらにメモリ、ナレッジベース、スキル、エージェント、プラグイン管理、システム設定
+- WebUI と同じサービスインターフェースを使い、同じ Core に接続します
+- フルマウス操作：クリック、ダブルクリック、右クリックメニュー、ホイールに対応。コマンドパレット、スラッシュコマンド、ショートカットも揃っています
+- トレイメニューから直接開くか、`make bt` でビルドして起動できます。詳しくは [TUI ガイド](apps/vulcan-code-tui/README.md)
+
 ### 🎯 タスクを前に進める
 
 - **Goal モード**：目標とトークン予算を設定すると、AI がターンごとに作業を継続。一時停止・再開・クリアが可能
@@ -50,8 +57,8 @@ Vulcan Code は **GUI で使う AI Coding ソフトウェア**です。プロジ
 
 ### 🧠 コード理解と経験の蓄積
 
-- **VCE セマンティックコードインデックス**：プロジェクトのベクトルインデックスを構築し、AI が関連する実装を見つけてから修正に取りかかります。インデックスはコードの変更に合わせて自動同期
-- **プロジェクトナレッジベース**：Markdown フォルダを取り込み、BM25 とベクトルのハイブリッド検索に対応。プロジェクト単位で許可し、セッション単位で選択可能
+- **CodeKit コードナビゲーション**：ライブのワークツリー上で直接、構造の特定、テキスト検索、関数本体の抽出、関数単位の置換を行います。事前にインデックスを構築しないため、インデックスが古くなることもありません。セマンティックなコード検索が必要な場合は外部の MCP サービスを接続できます
+- **AI 管理ナレッジベース**：AI が専用ツールで長期的な資料を整理・読み取り・検索します。BM25、ベクトル、ハイブリッド検索に対応し、履歴は永久に保持され復元も可能。プロジェクト単位で許可し、セッション単位で選択可能
 - **MemoryMesh 長期メモリ**：ターン終了後に経験を抽出し、次のターン開始前に自動で想起。メモリは閲覧・修正・削除でき、ゴミ箱と出典の追跡も備えています
 
 ### 🔍 確認できる成果
@@ -66,21 +73,21 @@ Vulcan Code は **GUI で使う AI Coding ソフトウェア**です。プロジ
 - **LuaSkills**：よく使う操作を、設定・インストール可能なプログラム型の機能パッケージにまとめられます
 - **MCP**：ローカルプロセスと HTTP の両方の MCP サーバーに対応し、接続診断とツールスキーマの確認が可能
 - **MCP サービス**：Vulcan 自体も MCP サーバーです。Claude Code や Codex などほかの AI ツールが、許可に応じてプロジェクトとセッションの一覧、メッセージ送信と返信待ち、セッション開始、実行停止、質問への回答を行え、個別に許可した画像・動画モデルも呼び出せます。ツールごとにトークンを発行し、権限の承認は常に Vulcan 側に残ります
-- **プラグインシステム**：プラグインはツールを提供でき、独自の UI も組み込めます。組み込みプラグイン：Context7 ドキュメント検索、AI ブラウザ、RTK コマンド出力圧縮、使用量統計、CDP/DAP デバッグツール
+- **プラグインシステム**：プラグインはツールを提供でき、独自の UI も組み込めます。組み込みプラグイン：Context7 ドキュメント検索、AI ブラウザ、使用量統計、CDP/DAP デバッグツール
 
 ### ⚙️ モデルとプロバイダー
 
 - OpenAI、Anthropic、Gemini、Cohere などのプロトコルファミリーに対応。OpenAI、Anthropic、Google、DeepSeek、Kimi、MiniMax、Alibaba、OpenRouter などのプロバイダー設定を内蔵し、カスタムプロバイダーも追加できます
-- 会話、メモリ検索、コードインデックス、メディア生成でそれぞれ別のモデルを選択可能
+- 会話、メモリ検索、ナレッジベースのベクトル、メディア生成でそれぞれ別のモデルを選択可能
 - 拡張機能：Web 検索と取得、画像/動画/音声の理解、画像・動画生成、音声合成と文字起こし
 - 階層化されたコンテキストウィンドウポリシーと、自動または手動（`/compact`）のコンテキスト圧縮
+- **RTK コマンド出力圧縮**：ホストに RTK をネイティブ統合し、コマンド出力と Git コミットのコンテキストを圧縮してトークン消費を削減。設定でオン/オフでき、削減量の統計も確認できます
 - トークン使用量、レイテンシ、参考コストの統計
 
 ## ロードマップ
 
-現在利用できるのは **GUI デスクトップ版**です。今後の予定：
+現在利用できるのは **GUI デスクトップ版**と**ターミナル TUI 版**です。今後の予定：
 
-- [ ] **TUI 版**：ターミナルで Vulcan Code を使う
 - [ ] **スマートフォンからのリモート接続**：デスクトップで動いているセッションをスマホから確認・操作
 - [ ] **Linux / macOS 対応の検証**：ビルドスクリプトは用意済みで、各プラットフォームでの完全な検証が必要です
 
@@ -88,23 +95,25 @@ Vulcan Code は **GUI で使う AI Coding ソフトウェア**です。プロジ
 
 ## アーキテクチャ
 
-```
-┌──────────────────────────┐      ┌──────────────────────────────────────────┐
-│  Electron desktop shell  │      │  Rust Core (vulcan-code-service)         │
-│  window / tray / host    │◀────▶│  session kernel · agent runtime · tools  │
-│  ┌────────────────────┐  │ RPC  │  provider protocols · MCP · LuaSkills    │
-│  │ React WebUI        │  │events│  VCE index · knowledge base · MemoryMesh │
-│  └────────────────────┘  │      │  terminal host · browser host · plugins  │
-└──────────────────────────┘      └──────────────────────────────────────────┘
+```mermaid
+flowchart LR
+  subgraph Desktop["Electron デスクトップシェル（ウィンドウ / トレイ / ホスト機能）"]
+    WebUI["React WebUI"]
+  end
+  TUI["TUI ターミナルクライアント（ratatui）"]
+  Core["Rust Core（vulcan-code-service）<br/>セッションカーネル · エージェントランタイム · ツール実行<br/>プロバイダープロトコル · MCP · LuaSkills<br/>ナレッジベース · MemoryMesh · RTK<br/>ターミナルホスト · ブラウザホスト · プラグインランタイム"]
+  WebUI <-->|"RPC / イベント"| Core
+  TUI <-->|"同じ RPC / イベント"| Core
 ```
 
-Core サービスはバックグラウンド（システムトレイ）で単独動作できるため、デスクトップウィンドウを閉じても実行中のタスクは中断されません。
+Core サービスはバックグラウンド（システムトレイ）で単独動作できるため、デスクトップウィンドウを閉じても TUI を終了しても実行中のタスクは中断されません。デスクトップ版、ブラウザ上の WebUI、TUI はすべて同じ Core に接続します。
 
 | ディレクトリ | 説明 |
 | --- | --- |
 | `apps/vulcan-code-service` | Core サービスホスト。セッションカーネル、エージェントランタイム、WebUI RPC/ストリーミングサービスを担当 |
 | `apps/vulcan-code-desktop` | Electron デスクトップシェル。ウィンドウとトレイを提供し、ローカル Core を起動して WebUI を読み込み |
 | `apps/vulcan-code-web` | React/Vite WebUI。ワークベンチ、設定、セッション、Diff、スキルなどの画面 |
+| `apps/vulcan-code-tui` | TUI ターミナルクライアント（ratatui）。WebUI の関数とパラメーターのまま同じサービスインターフェースを呼び出します |
 | `crates/vulcan-agent-runtime` | 共有エージェントランタイム。プロバイダー、ツール、LuaSkills、MCP、ストリーミング実行 |
 | `crates/vulcan-service-*` | バックエンドサービス API、コアサービスカーネル、ランタイムアダプター |
 | `crates/vulcan-memorymesh-*` | MemoryMesh 長期メモリ |
@@ -132,7 +141,7 @@ make build         # Core、WebUI、Electron デスクトップシェルをビ�
 make run           # デスクトップアプリを起動
 ```
 
-`make br` でビルドと実行を一度に行うこともできます。リリースビルドには `make release` を使います。
+`make br` でビルドと実行を一度に行うこともできます。`make bt` はフルビルド後に Core を起動して TUI に入り、デスクトップ版と Vite は起動しません。リリースビルドには `make release` を使います。
 
 環境の詳細は [`docs/contracts/development-environment.md`](docs/contracts/development-environment.md) を参照してください。
 
@@ -191,7 +200,7 @@ Vulcan Code は数多くの優れたオープンソースプロジェクトの�
 
 **同梱コンポーネントとツール**
 
-- [RTK](https://github.com/rtk-ai/rtk)：コマンド出力を圧縮してトークン消費を削減（Vulcan RTK プラグイン）
+- [RTK](https://github.com/rtk-ai/rtk)：コマンド出力を圧縮してトークン消費を削減（ホストにネイティブ統合）
 - [Context7](https://github.com/upstash/context7)：バージョンに応じた最新のライブラリドキュメント検索（Context7 プラグイン）
 - [Playwright](https://github.com/microsoft/playwright) / [Playwright MCP](https://github.com/microsoft/playwright-mcp)：AI ブラウザのドライバーとツール
 - [LuaSkills](https://github.com/LuaSkills/luaskills)：LuaSkills ランタイム
@@ -206,6 +215,10 @@ Vulcan Code は数多くの優れたオープンソースプロジェクトの�
 - [Shiki](https://shiki.style/)：コードと Diff のシンタックスハイライト
 - [Mermaid](https://mermaid.js.org/)：図の描画
 - [Lucide](https://lucide.dev/)、[Iconify](https://iconify.design/)：アイコン
+
+**ターミナルクライアント**
+
+- [Ratatui](https://ratatui.rs/)：TUI 描画フレームワーク
 
 **Rust Core**
 
