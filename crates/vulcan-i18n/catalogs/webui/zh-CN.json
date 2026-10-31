@@ -1077,6 +1077,7 @@
   "conversation.providerRetry.retrying": "正在重试",
   "conversation.providerRetry.succeeded": "重试成功",
   "conversation.providerRetry.failed": "重试失败",
+  "conversation.providerRetry.countdown": "{seconds} 秒后重试（第 {attempt}/{max} 次）",
   "conversation.modelSwitch.title": "模型切换",
   "conversation.modelSwitch.changed": "模型已从 {previous} 切换为 {current}。",
   "conversation.goalNotice.saved": "目标已保存",

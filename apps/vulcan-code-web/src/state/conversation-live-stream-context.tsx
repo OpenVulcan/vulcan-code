@@ -2,9 +2,11 @@ import React from "react";
 import {
   ConversationLiveStreamStore,
   contextCompactionPreviewKey,
+  providerRetryStatusKey,
   toolRequestProgressKey,
   toolRequestMembershipKey,
   transientReasoningStatusKey,
+  type ProviderRetryCountdown,
 } from "./conversation-live-stream-store";
 import type { ToolRequestProgressSnapshot, TransientReasoningStatus } from "@/types";
 
@@ -72,6 +74,28 @@ export function useConversationTransientReasoningStatus(
   // getSnapshot 同步读取最新替换值。
   const getSnapshot = React.useCallback(
     () => (conversationId ? store.getTransientReasoningStatus(conversationId) : null),
+    [conversationId, store],
+  );
+  return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+// useConversationProviderRetryStatus subscribes to one conversation's pending Provider retry wait.
+// useConversationProviderRetryStatus 订阅单个会话待执行的 Provider 重试等待。
+// Parameters: conversationId is the exact conversation identity, or null to disable the subscription.
+// 参数：conversationId 是精确会话身份；为 null 时禁用订阅。
+// Returns: the latest locally anchored countdown, or null when no retry is waiting.
+// 返回值：最新的本地锚定倒计时；没有等待中的重试时返回 null。
+export function useConversationProviderRetryStatus(
+  conversationId: string | null,
+): ProviderRetryCountdown | null {
+  const store = useConversationLiveStreamStore();
+  const key = conversationId ? providerRetryStatusKey(conversationId) : null;
+  const subscribe = React.useCallback(
+    (listener: () => void) => (key ? store.subscribe(key, listener) : () => {}),
+    [key, store],
+  );
+  const getSnapshot = React.useCallback(
+    () => (conversationId ? store.getProviderRetryStatus(conversationId) : null),
     [conversationId, store],
   );
   return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);

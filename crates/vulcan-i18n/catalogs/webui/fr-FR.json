@@ -1077,6 +1077,7 @@
   "conversation.providerRetry.retrying": "Nouvelle tentative",
   "conversation.providerRetry.succeeded": "Nouvelle tentative réussie",
   "conversation.providerRetry.failed": "Échec de la nouvelle tentative",
+  "conversation.providerRetry.countdown": "Nouvelle tentative dans {seconds} s (tentative {attempt} sur {max})",
   "conversation.modelSwitch.title": "Modèle changé",
   "conversation.modelSwitch.changed": "Le modèle est passé de {previous} à {current}.",
   "conversation.goalNotice.saved": "Objectif enregistré",

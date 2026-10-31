@@ -207,6 +207,34 @@ export interface ContextCompactionPreviewChangedDelta {
   text?: string | null;
 }
 
+// ProviderRetryStatus describes one pending automatic Provider retry wait.
+// ProviderRetryStatus 描述一条待执行的 Provider 自动重试等待。
+export interface ProviderRetryStatus {
+  // 1-based retry number that starts after the wait.
+  // 等待结束后开始的从 1 起算的重试序号。
+  attempt: number;
+  // Effective finite retry limit of the current request.
+  // 当前请求的有效有限重试上限。
+  maxRetries: number;
+  // Wait before the retry starts, in milliseconds.
+  // 重试开始前的等待时长，单位毫秒。
+  delayMs: number;
+  // English retry reason produced by the backend retry classifier.
+  // 后端重试分类器产生的英文重试原因。
+  reason: string;
+}
+
+// ProviderRetryStatusChangedDelta replaces or clears one conversation's live retry wait.
+// ProviderRetryStatusChangedDelta 替换或清除单个会话的实时重试等待。
+export interface ProviderRetryStatusChangedDelta {
+  // Stable conversation identifier owning the retried request.
+  // 拥有被重试请求的稳定会话标识。
+  conversationId: string;
+  // Latest retry wait, or null once the retry request starts or the stream ends.
+  // 最新重试等待；重试请求开始或流结束后为 null。
+  status?: ProviderRetryStatus | null;
+}
+
 // UpdateConversationRunPhaseDelta updates a conversation phase without transcript rows.
 // UpdateConversationRunPhaseDelta 在不携带转录行的情况下更新会话阶段。
 export interface UpdateConversationRunPhaseDelta {
@@ -631,6 +659,10 @@ export type WorkbenchDelta =
   | {
     kind: "contextCompactionPreviewChanged";
     payload: ContextCompactionPreviewChangedDelta;
+  }
+  | {
+    kind: "providerRetryStatusChanged";
+    payload: ProviderRetryStatusChangedDelta;
   };
 
 // AgentSkillsCatalogChangedDelta replaces only the Agent Skills workbench domain.

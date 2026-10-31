@@ -374,6 +374,9 @@ pub enum WorkbenchDelta {
     /// Ephemeral replace-in-place summary preview for one running context compaction.
     /// 单次运行中上下文压缩使用的瞬态原地替换式摘要预览。
     ContextCompactionPreviewChanged(ContextCompactionPreviewChangedDelta),
+    /// Ephemeral replace-in-place automatic Provider retry wait for one active conversation.
+    /// 单个活动会话使用的瞬态原地替换式 Provider 自动重试等待状态。
+    ProviderRetryStatusChanged(ProviderRetryStatusChangedDelta),
 }
 
 /// Classifies the visible form of one transient reasoning status.
@@ -447,6 +450,38 @@ pub struct ContextCompactionPreviewChangedDelta {
     /// Latest cumulative preview text, or `None` once the durable summary owns the card.
     /// 最新累计预览文本；持久摘要接管卡片后为 `None`。
     pub text: Option<String>,
+}
+
+/// Carries one pending automatic Provider retry wait displayed outside the transcript.
+/// 携带一条显示在转录之外的待执行 Provider 自动重试等待。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderRetryStatusSnapshot {
+    /// 1-based retry number that starts after the wait.
+    /// 等待结束后开始的从 1 起算的重试序号。
+    pub attempt: u32,
+    /// Effective finite retry limit of the current request.
+    /// 当前请求的有效有限重试上限。
+    pub max_retries: u32,
+    /// Wait before the retry starts, in milliseconds.
+    /// 重试开始前的等待时长，单位毫秒。
+    pub delay_ms: u64,
+    /// English retry reason produced by the retry classifier.
+    /// 重试分类器产生的英文重试原因。
+    pub reason: String,
+}
+
+/// Replaces or clears one conversation's non-persistent Provider retry wait.
+/// 替换或清除单个会话的非持久化 Provider 重试等待。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderRetryStatusChangedDelta {
+    /// Stable conversation identifier owning the retried request.
+    /// 拥有被重试请求的稳定会话标识。
+    pub conversation_id: String,
+    /// Latest retry wait, or `None` once the retry request starts or the stream ends.
+    /// 最新重试等待；重试请求开始或流结束后为 `None`。
+    pub status: Option<ProviderRetryStatusSnapshot>,
 }
 
 /// Replaces the Agent Skills domain without resending the full workbench snapshot.
@@ -1160,6 +1195,60 @@ mod tests {
                         "apiCallId": 4,
                         "text": "Next Step:"
                     }
+                }
+            })
+        );
+    }
+
+    /// Verifies the Provider retry wait uses the camel-case replace-and-clear Web contract.
+    /// 验证 Provider 重试等待使用驼峰式替换与清除 Web 契约。
+    #[test]
+    fn provider_retry_status_serializes_for_the_live_store() {
+        let pending = WorkbenchDeltaEnvelope {
+            generation: 12,
+            delta: WorkbenchDelta::ProviderRetryStatusChanged(ProviderRetryStatusChangedDelta {
+                conversation_id: String::from("conversation"),
+                status: Some(ProviderRetryStatusSnapshot {
+                    attempt: 2,
+                    max_retries: 5,
+                    delay_ms: 4_000,
+                    reason: String::from("Provider HTTP 503"),
+                }),
+            }),
+        };
+        let cleared = WorkbenchDeltaEnvelope {
+            generation: 13,
+            delta: WorkbenchDelta::ProviderRetryStatusChanged(ProviderRetryStatusChangedDelta {
+                conversation_id: String::from("conversation"),
+                status: None,
+            }),
+        };
+
+        assert_eq!(
+            serde_json::to_value(pending).expect("retry status should serialize"),
+            serde_json::json!({
+                "generation": 12,
+                "delta": {
+                    "kind": "providerRetryStatusChanged",
+                    "payload": {
+                        "conversationId": "conversation",
+                        "status": {
+                            "attempt": 2,
+                            "maxRetries": 5,
+                            "delayMs": 4000,
+                            "reason": "Provider HTTP 503"
+                        }
+                    }
+                }
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(cleared).expect("retry clear should serialize"),
+            serde_json::json!({
+                "generation": 13,
+                "delta": {
+                    "kind": "providerRetryStatusChanged",
+                    "payload": { "conversationId": "conversation", "status": null }
                 }
             })
         );

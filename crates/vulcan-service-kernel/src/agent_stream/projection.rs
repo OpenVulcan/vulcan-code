@@ -177,6 +177,92 @@ pub(crate) fn emit_context_compaction_preview(
     Ok(())
 }
 
+/// Emits one live Provider retry wait without mutating transcript or V1 state.
+/// 发送一条实时 Provider 重试等待，且不修改转录或 V1 状态。
+///
+/// # Parameters
+/// 参数
+/// `app` emits the lightweight event, `state` owns generation ordering, `session_id` selects the
+/// conversation, and `status` replaces or clears its retry wait.
+/// `app` 发送轻量事件，`state` 持有代际顺序，`session_id` 选择会话，`status` 替换或清除其重试等待。
+///
+/// # Returns
+/// 返回值
+/// Success after the ordered event is emitted, or an explicit lock failure.
+/// 有序事件发送后返回成功，否则返回明确的加锁失败。
+pub(crate) fn emit_provider_retry_status(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    status: Option<ProviderRetryStatusSnapshot>,
+) -> Result<(), String> {
+    // event takes the next generation but leaves snapshot data untouched.
+    // event 占用下一个代际，但不修改快照数据。
+    let event = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        let generation = guard.workbench_generation;
+        guard.workbench.revision = generation;
+        WorkbenchDeltaEnvelope {
+            generation,
+            delta: WorkbenchDelta::ProviderRetryStatusChanged(ProviderRetryStatusChangedDelta {
+                conversation_id: session_id.to_string(),
+                status,
+            }),
+        }
+    };
+    emit_service_event_with_trace(
+        app,
+        "workbench_provider_retry_status_emit",
+        ServiceEvent::WorkbenchDelta(Box::new(event)),
+    );
+    Ok(())
+}
+
+/// Reads the live retry wait carried by one runtime `Retrying` event.
+/// 读取一条运行时 `Retrying` 事件携带的实时重试等待。
+///
+/// # Parameters
+/// 参数
+/// `event` is the runtime event emitted right before the retry sleep.
+/// `event` 是在重试休眠前发出的运行时事件。
+///
+/// # Returns
+/// 返回值
+/// The retry wait, or an error naming the metadata field that does not match the producer contract.
+/// 返回重试等待；元数据字段不符合生产端契约时返回指明该字段的错误。
+pub(crate) fn provider_retry_status_from_event(
+    event: &RuntimeEvent,
+) -> Result<ProviderRetryStatusSnapshot, String> {
+    let metadata = event
+        .metadata
+        .as_ref()
+        .ok_or_else(|| String::from("retry event has no metadata"))?;
+    let unsigned = |field: &str| {
+        metadata.get(field).and_then(Value::as_u64).ok_or_else(|| {
+            format!("retry event metadata field `{field}` is not an unsigned integer")
+        })
+    };
+    let bounded = |field: &str| {
+        unsigned(field).and_then(|value| {
+            u32::try_from(value)
+                .map_err(|_| format!("retry event metadata field `{field}` exceeds u32"))
+        })
+    };
+    Ok(ProviderRetryStatusSnapshot {
+        attempt: bounded("attempt")?,
+        max_retries: bounded("max_retries")?,
+        delay_ms: unsigned("delay_ms")?,
+        reason: metadata
+            .get("reason")
+            .and_then(Value::as_str)
+            .ok_or_else(|| String::from("retry event metadata field `reason` is not a string"))?
+            .to_string(),
+    })
+}
+
 /// Emits or clears one ephemeral tool-request progress snapshot under exact runtime authority.
 /// 在精确运行时权限下发送或清除单个瞬态工具请求进度快照。
 ///

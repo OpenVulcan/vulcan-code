@@ -1,4 +1,5 @@
 import type {
+  ProviderRetryStatus,
   ToolRequestProgressSnapshot,
   TransientReasoningStatus,
   WorkbenchDeltaEnvelope,
@@ -38,6 +39,24 @@ export function contextCompactionPreviewKey(conversationId: string, apiCallId: n
   return `context-compaction-preview:${conversationId}:${apiCallId}`;
 }
 
+// providerRetryStatusKey builds the subscription identity for one conversation retry countdown.
+// providerRetryStatusKey 构建单个会话重试倒计时的订阅身份。
+// Parameters: conversationId is the exact owning conversation identity.
+// 参数：conversationId 是精确的所属会话身份。
+// Returns: a namespace-isolated store subscription key.
+// 返回值：一个命名空间隔离的存储订阅键。
+export function providerRetryStatusKey(conversationId: string): string {
+  return `provider-retry-status:${conversationId}`;
+}
+
+// ProviderRetryCountdown is one retry wait anchored to the local clock at arrival.
+// ProviderRetryCountdown 是一条以到达时本地时钟为锚点的重试等待。
+export interface ProviderRetryCountdown extends ProviderRetryStatus {
+  // Local epoch milliseconds when the retry request is expected to start.
+  // 预计开始重试请求的本地纪元毫秒。
+  retryAtMs: number;
+}
+
 // toolRequestProgressKey builds the subscription identity for one request-stream card.
 // toolRequestProgressKey 构建单个请求流卡片的订阅身份。
 // Parameters: conversationId owns the request and requestStreamId is the exact coordinator identity.
@@ -61,6 +80,18 @@ export class ConversationLiveStreamStore {
   // contextCompactionPreviews stores the live summary text of running compaction APIs outside the transcript.
   // contextCompactionPreviews 在转录之外保存运行中压缩 API 的实时摘要文本。
   readonly #contextCompactionPreviews = new Map<string, string>();
+
+  // providerRetryStatuses stores the pending retry wait of each conversation outside the transcript.
+  // providerRetryStatuses 在转录之外保存每个会话待执行的重试等待。
+  readonly #providerRetryStatuses = new Map<string, ProviderRetryCountdown>();
+
+  // now reads the local clock; tests inject a deterministic clock.
+  // now 读取本地时钟；测试注入确定性时钟。
+  readonly #now: () => number;
+
+  constructor(now: () => number = Date.now) {
+    this.#now = now;
+  }
 
   // toolRequestProgressSnapshots stores high-frequency argument formation outside retained events.
   // toolRequestProgressSnapshots 在持久化事件之外保存高频参数构造状态。
@@ -161,6 +192,20 @@ export class ConversationLiveStreamStore {
       this.#dirtyKeys.add(key);
       return true;
     }
+    if (envelope.delta.kind === "providerRetryStatusChanged") {
+      const { conversationId, status } = envelope.delta.payload;
+      const key = providerRetryStatusKey(conversationId);
+      if (status) {
+        this.#providerRetryStatuses.set(conversationId, {
+          ...status,
+          retryAtMs: this.#now() + status.delayMs,
+        });
+      } else if (!this.#providerRetryStatuses.delete(conversationId)) {
+        return false;
+      }
+      this.#dirtyKeys.add(key);
+      return true;
+    }
     return false;
   }
 
@@ -177,6 +222,10 @@ export class ConversationLiveStreamStore {
       this.#dirtyKeys.add(key);
     }
     this.#contextCompactionPreviews.clear();
+    for (const conversationId of this.#providerRetryStatuses.keys()) {
+      this.#dirtyKeys.add(providerRetryStatusKey(conversationId));
+    }
+    this.#providerRetryStatuses.clear();
     for (const key of this.#toolRequestProgressSnapshots.keys()) {
       this.#dirtyKeys.add(key);
     }
@@ -205,6 +254,16 @@ export class ConversationLiveStreamStore {
   // 返回值：当前预览文本；不存在或已清除时返回 null。
   getContextCompactionPreview(conversationId: string, apiCallId: number): string | null {
     return this.#contextCompactionPreviews.get(contextCompactionPreviewKey(conversationId, apiCallId)) ?? null;
+  }
+
+  // getProviderRetryStatus returns the pending retry countdown of one conversation.
+  // getProviderRetryStatus 返回单个会话待执行的重试倒计时。
+  // Parameters: conversationId is the exact owner.
+  // 参数：conversationId 是精确所有者。
+  // Returns: the stable countdown object, or null when no retry is waiting.
+  // 返回值：稳定的倒计时对象；没有等待中的重试时返回 null。
+  getProviderRetryStatus(conversationId: string): ProviderRetryCountdown | null {
+    return this.#providerRetryStatuses.get(conversationId) ?? null;
   }
 
   // getToolRequestProgress returns the stable high-frequency snapshot for one request stream.

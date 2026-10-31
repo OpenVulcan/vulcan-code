@@ -1,7 +1,9 @@
+import React from "react";
 import { CircleCheck, CircleX, RefreshCw, type LucideIcon } from "lucide-react";
 
 import type { ConversationBlock } from "@/components/conversation/conversation-model";
 import { useI18n } from "@/i18n";
+import type { ProviderRetryCountdown } from "@/state/conversation-live-stream-store";
 
 // ProviderRetryDisplayState describes the exact lifecycle shown by one retained retry notice.
 // ProviderRetryDisplayState 描述一条已保留重试提示展示的精确生命周期。
@@ -79,5 +81,55 @@ export function ProviderRetryCard(props: ProviderRetryCardProps) {
         <span>{props.block.body}</span>
       </div>
     </section>
+  );
+}
+
+// COUNTDOWN_TICK_MS is the refresh interval of the visible whole-second countdown.
+// COUNTDOWN_TICK_MS 是可见整秒倒计时的刷新间隔。
+const COUNTDOWN_TICK_MS = 250;
+
+// remainingRetrySeconds converts a local retry deadline into whole seconds left, never below zero.
+// remainingRetrySeconds 将本地重试截止时间换算为剩余整秒数，最小为零。
+// Parameters: retryAtMs is the local deadline and nowMs the current local clock.
+// 参数：retryAtMs 是本地截止时间，nowMs 是当前本地时钟。
+// Returns: the rounded-up number of seconds before the retry starts.
+// 返回值：重试开始前向上取整的秒数。
+export function remainingRetrySeconds(retryAtMs: number, nowMs: number): number {
+  return Math.max(0, Math.ceil((retryAtMs - nowMs) / 1000));
+}
+
+// ProviderRetryCountdownLine renders the live wait before the next automatic Provider retry.
+// ProviderRetryCountdownLine 渲染下一次 Provider 自动重试前的实时等待。
+// Parameters: countdown is the locally anchored retry wait from the live stream store.
+// 参数：countdown 是实时流存储中以本地时钟锚定的重试等待。
+// Returns: one polite live status line that ticks until the retry request starts.
+// 返回值：一行礼貌播报的实时状态，持续跳动直到重试请求开始。
+export function ProviderRetryCountdownLine(props: { countdown: ProviderRetryCountdown }) {
+  const { t } = useI18n();
+  const { retryAtMs } = props.countdown;
+  const [nowMs, setNowMs] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    setNowMs(Date.now());
+    const timer = window.setInterval(() => {
+      const current = Date.now();
+      setNowMs(current);
+      if (current >= retryAtMs) window.clearInterval(timer);
+    }, COUNTDOWN_TICK_MS);
+    return () => window.clearInterval(timer);
+  }, [retryAtMs]);
+  const text = t("conversation.providerRetry.countdown")
+    .replace("{seconds}", String(remainingRetrySeconds(retryAtMs, nowMs)))
+    .replace("{attempt}", String(props.countdown.attempt))
+    .replace("{max}", String(props.countdown.maxRetries));
+  return (
+    <div
+      aria-busy="true"
+      aria-live="polite"
+      className="vk-reason-status"
+      data-provider-retry-countdown=""
+      title={props.countdown.reason}
+    >
+      <div className="vk-reason-line vk-shimmer-text">{text}</div>
+    </div>
   );
 }

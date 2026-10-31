@@ -33,6 +33,7 @@ import {
 } from "@/ui-kit/primitives/dialog";
 import { ConversationBranchWorkspaceV1 } from "@/components/conversation/conversation-branch-workspace-v1";
 import { TransientReasoningStatusLine } from "@/components/conversation/conversation-live-reasoning";
+import { ProviderRetryCountdownLine } from "@/components/conversation/conversation-provider-retry-card";
 import type {
   ConversationSurfaceExpandedState,
 } from "@/components/conversation/conversation-layout-restore";
@@ -57,7 +58,10 @@ import type {
 } from "@/diff/types";
 import { cx } from "@/ui-kit/behavior/core";
 import { useI18n, type TranslationKey } from "@/i18n";
-import { useConversationTransientReasoningStatus } from "@/state/conversation-live-stream-context";
+import {
+  useConversationProviderRetryStatus,
+  useConversationTransientReasoningStatus,
+} from "@/state/conversation-live-stream-context";
 import { useConversationSessionEventWindowOwnerV1 } from "@/state/conversation-session-event-window-owner-v1";
 import type { WorkspaceDiffFileDetailLoadOptions } from "@/service/workbench-snapshot-service";
 import type {
@@ -963,9 +967,12 @@ function WorkspaceSubagentPanel(args: {
   // transientReasoningStatus subscribes only while this exact child remains live.
   // transientReasoningStatus 仅在当前精确子会话仍实时存在时订阅。
   const transientReasoningStatus = useConversationTransientReasoningStatus(taskOpen ? taskId : null);
+  // providerRetryStatus subscribes to the child's retry wait under the same liveness rule.
+  // providerRetryStatus 在相同存活规则下订阅子会话的重试等待。
+  const providerRetryStatus = useConversationProviderRetryStatus(taskOpen ? taskId : null);
   // transientReasoningStatusVisible tracks insertion and removal while shared resize handling owns node reflow.
   // transientReasoningStatusVisible 跟踪插入与移除，共享尺寸处理负责节点重排。
-  const transientReasoningStatusVisible = transientReasoningStatus !== null;
+  const transientReasoningStatusVisible = transientReasoningStatus !== null || providerRetryStatus !== null;
   // subagentConversation supplies only the visual summary fields required by the restored branch shell.
   // subagentConversation 仅提供恢复后的分支界面所需的视觉摘要字段。
   const subagentConversation = React.useMemo(() => ({
@@ -1118,7 +1125,9 @@ function WorkspaceSubagentPanel(args: {
         sessionRunning={Boolean(task?.isRunning)}
         snapshot={transcriptOwner.snapshot}
         suppressEmptyPlaceholder={transcriptOwner.loading}
-        transientReasoningStatus={transientReasoningStatus ? (
+        transientReasoningStatus={providerRetryStatus ? (
+          <ProviderRetryCountdownLine countdown={providerRetryStatus} />
+        ) : transientReasoningStatus ? (
           <TransientReasoningStatusLine status={transientReasoningStatus} />
         ) : null}
         workspacePath={workspacePath}

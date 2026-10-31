@@ -1077,6 +1077,7 @@
   "conversation.providerRetry.retrying": "Wird wiederholt",
   "conversation.providerRetry.succeeded": "Wiederholung erfolgreich",
   "conversation.providerRetry.failed": "Wiederholung fehlgeschlagen",
+  "conversation.providerRetry.countdown": "Neuer Versuch in {seconds} s (Versuch {attempt} von {max})",
   "conversation.modelSwitch.title": "Modell gewechselt",
   "conversation.modelSwitch.changed": "Modell von {previous} zu {current} gewechselt.",
   "conversation.goalNotice.saved": "Ziel gespeichert",

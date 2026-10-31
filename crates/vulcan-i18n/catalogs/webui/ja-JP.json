@@ -1077,6 +1077,7 @@
   "conversation.providerRetry.retrying": "再試行中",
   "conversation.providerRetry.succeeded": "再試行に成功しました",
   "conversation.providerRetry.failed": "再試行に失敗しました",
+  "conversation.providerRetry.countdown": "{seconds} 秒後に再試行します（{attempt}/{max} 回目）",
   "conversation.modelSwitch.title": "モデルの変更",
   "conversation.modelSwitch.changed": "モデルを {previous} から {current} に変更しました。",
   "conversation.goalNotice.saved": "目標を保存しました",

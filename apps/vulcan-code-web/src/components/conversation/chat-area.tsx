@@ -19,6 +19,7 @@ import {
   StreamingThinkingOverlay,
   TransientReasoningStatusLine,
 } from "@/components/conversation/conversation-live-reasoning";
+import { ProviderRetryCountdownLine } from "@/components/conversation/conversation-provider-retry-card";
 import {
   conversationIsRunning,
   conversationRuntimeCue,
@@ -31,7 +32,10 @@ import type { ComposerSubmission } from "@/components/composer/composer-model";
 import { useI18n, type Translate } from "@/i18n";
 import { selectConversationSessionTodolistV1 } from "@/service/conversation-session-tools-v1";
 import { projectForConversation } from "@/state/workbench-selectors";
-import { useConversationTransientReasoningStatus } from "@/state/conversation-live-stream-context";
+import {
+  useConversationProviderRetryStatus,
+  useConversationTransientReasoningStatus,
+} from "@/state/conversation-live-stream-context";
 import { toast } from "@/ui-kit/primitives/toast";
 import type { ChatAreaProps } from "@/components/conversation/chat-area/types";
 import { useChatAreaPlanActions } from "@/components/conversation/chat-area/plan-actions";
@@ -374,6 +378,9 @@ export function ChatArea(props: ChatAreaProps) {
   const transientReasoningStatus = useConversationTransientReasoningStatus(
     activeSurfaceConversationId,
   );
+  // providerRetryStatus is the request-local wait before the next automatic Provider retry.
+  // providerRetryStatus 是下一次 Provider 自动重试前的请求局部等待。
+  const providerRetryStatus = useConversationProviderRetryStatus(activeSurfaceConversationId);
   // Canonical correlation retires only this accepted first prompt after it is already renderable.
   // 规范关联只在该首条提示词已经可渲染后移除同一乐观记录。
   React.useEffect(() => {
@@ -384,7 +391,7 @@ export function ChatArea(props: ChatAreaProps) {
   }, [eventWindowOwnerReady, pendingSubmissionVisible, props.onFirstSubmissionReconciled, props.selectedDraftConversation?.pendingSubmission, selectedConversation]);
   // transientReasoningStatusVisible tracks insertion and removal; the shared ResizeObserver owns node reflow.
   // transientReasoningStatusVisible 跟踪插入与移除；共享 ResizeObserver 负责节点重排。
-  const transientReasoningStatusVisible = transientReasoningStatus !== null;
+  const transientReasoningStatusVisible = transientReasoningStatus !== null || providerRetryStatus !== null;
   // streamingReasoningBlock is derived only from the latest canonical V1 streaming reasoning event.
   // streamingReasoningBlock 仅从最新 canonical V1 流式思考事件派生。
   const streamingReasoningBlock = React.useMemo(
@@ -645,7 +652,9 @@ export function ChatArea(props: ChatAreaProps) {
           sessionRunning={conversationIsRunning(surfaceConversation)}
           snapshot={eventWindowSnapshot}
           suppressEmptyPlaceholder={isEmptyConversation || isMaterializingConversationSurface}
-          transientReasoningStatus={transientReasoningStatus ? (
+          transientReasoningStatus={providerRetryStatus ? (
+            <ProviderRetryCountdownLine countdown={providerRetryStatus} />
+          ) : transientReasoningStatus ? (
             <TransientReasoningStatusLine status={transientReasoningStatus} />
           ) : null}
           workspacePath={selectedProject?.path ?? null}

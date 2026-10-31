@@ -862,6 +862,9 @@ fn spawn_agent_stream_task_with_restart_state(
         // transientReasoningStatusActive avoids redundant clear events while preserving every exit path.
         // transientReasoningStatusActive 避免冗余清除事件，同时覆盖所有退出路径。
         let mut transient_reasoning_status_active = false;
+        // providerRetryStatusActive tracks the live retry wait so the next request or any exit clears it once.
+        // providerRetryStatusActive 跟踪实时重试等待，使下一次请求或任意退出只清除一次。
+        let mut provider_retry_status_active = false;
         // stream_exit_reason makes every polling-loop terminal path explicit without a shadow completion boolean.
         // stream_exit_reason 显式表达每条轮询循环终止路径，不再使用影子完成布尔值。
         let stream_exit_reason = loop {
@@ -1125,6 +1128,16 @@ fn spawn_agent_stream_task_with_restart_state(
                     );
                 }
                 ExecutionStreamEvent::RequestStarted { session_id } => {
+                    // The retried physical request has started, so its wait countdown is over.
+                    // 被重试的真实请求已经开始，其等待倒计时随之结束。
+                    if std::mem::take(&mut provider_retry_status_active)
+                        && let Err(error) =
+                            emit_provider_retry_status(&app, &task_state, session_id, None)
+                    {
+                        tracing::warn!(
+                            "[webui-service] provider retry status clear failed: {error}"
+                        );
+                    }
                     handle_request_phase_stream_event(
                         &app,
                         &task_state,
@@ -1331,6 +1344,30 @@ fn spawn_agent_stream_task_with_restart_state(
                             );
                         }
                         continue;
+                    }
+                    if event.kind
+                        == vulcan_agent_runtime::agent_runtime::events::RuntimeEventKind::Retrying
+                    {
+                        match provider_retry_status_from_event(&event) {
+                            Ok(status) => {
+                                provider_retry_status_active = true;
+                                if let Err(error) = emit_provider_retry_status(
+                                    &app,
+                                    &task_state,
+                                    session_id,
+                                    Some(status),
+                                ) {
+                                    tracing::warn!(
+                                        "[webui-service] provider retry status emit failed: {error}"
+                                    );
+                                }
+                            }
+                            Err(error) => {
+                                tracing::warn!(
+                                    "[webui-service] provider retry status unreadable: {error}"
+                                );
+                            }
+                        }
                     }
                     handle_runtime_stream_event(
                         &app,
@@ -1735,6 +1772,11 @@ fn spawn_agent_stream_task_with_restart_state(
             && let Err(error) = emit_transient_reasoning_status(&app, &task_state, session_id, None)
         {
             tracing::warn!("[webui-service] transient reasoning status clear failed: {error}");
+        }
+        if provider_retry_status_active
+            && let Err(error) = emit_provider_retry_status(&app, &task_state, session_id, None)
+        {
+            tracing::warn!("[webui-service] provider retry status clear failed: {error}");
         }
         // stream_exit_outcome records the exact ownership decision made after polling stops.
         // stream_exit_outcome 记录轮询停止后作出的精确所有权决策。

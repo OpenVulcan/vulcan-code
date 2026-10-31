@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   ConversationLiveStreamStore,
+  providerRetryStatusKey,
   toolRequestProgressKey,
   toolRequestMembershipKey,
   transientReasoningStatusKey,
@@ -102,6 +103,45 @@ describe("ConversationLiveStreamStore", () => {
     expect(store.getTransientReasoningStatus("session-1")).toBeNull();
     expect(store.flushNotifications()).toBe(1);
     expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  it("anchors the retry countdown to the local clock and clears it at the explicit boundary", () => {
+    let now = 10_000;
+    const store = new ConversationLiveStreamStore(() => now);
+    const listener = vi.fn();
+    store.subscribe(providerRetryStatusKey("session-1"), listener);
+    const status = { attempt: 2, maxRetries: 5, delayMs: 4_000, reason: "HTTP 503" };
+
+    expect(store.applyEnvelope(envelope(1, {
+      kind: "providerRetryStatusChanged",
+      payload: { conversationId: "session-1", status },
+    }))).toBe(true);
+    expect(store.getProviderRetryStatus("session-1")).toEqual({ ...status, retryAtMs: 14_000 });
+    expect(store.getProviderRetryStatus("session-2")).toBeNull();
+    expect(store.flushNotifications()).toBe(1);
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    now = 20_000;
+    expect(store.applyEnvelope(envelope(2, {
+      kind: "providerRetryStatusChanged",
+      payload: { conversationId: "session-1", status: null },
+    }))).toBe(true);
+    expect(store.getProviderRetryStatus("session-1")).toBeNull();
+    // A repeated clear changes nothing and must not notify again.
+    // 重复清除不改变任何值，不得再次通知。
+    expect(store.applyEnvelope(envelope(3, {
+      kind: "providerRetryStatusChanged",
+      payload: { conversationId: "session-1", status: null },
+    }))).toBe(false);
+    expect(store.flushNotifications()).toBe(1);
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    expect(store.applyEnvelope(envelope(4, {
+      kind: "providerRetryStatusChanged",
+      payload: { conversationId: "session-1", status },
+    }))).toBe(true);
+    store.resetForWorkbenchSnapshot();
+    expect(store.getProviderRetryStatus("session-1")).toBeNull();
   });
 
   it("accepts monotonic tool progress and prevents terminal resurrection", () => {

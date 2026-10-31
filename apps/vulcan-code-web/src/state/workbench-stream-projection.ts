@@ -28,7 +28,8 @@ export function mergePendingWorkbenchDeltaSignal(
 export function workbenchEnvelopeRequiresReactProjection(envelope: WorkbenchDeltaEnvelope): boolean {
   return envelope.delta.kind !== "transientReasoningStatusChanged"
     && envelope.delta.kind !== "toolRequestProgressChanged"
-    && envelope.delta.kind !== "contextCompactionPreviewChanged";
+    && envelope.delta.kind !== "contextCompactionPreviewChanged"
+    && envelope.delta.kind !== "providerRetryStatusChanged";
 }
 
 // workbenchEnvelopeRequiresImmediateLiveFlush identifies request lifecycle boundaries that must bypass hot-delta batching.

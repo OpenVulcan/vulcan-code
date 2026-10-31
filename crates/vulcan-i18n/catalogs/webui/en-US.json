@@ -1077,6 +1077,7 @@
   "conversation.providerRetry.retrying": "Retrying",
   "conversation.providerRetry.succeeded": "Retry succeeded",
   "conversation.providerRetry.failed": "Retry failed",
+  "conversation.providerRetry.countdown": "Retrying in {seconds}s (attempt {attempt} of {max})",
   "conversation.modelSwitch.title": "Model changed",
   "conversation.modelSwitch.changed": "Model changed from {previous} to {current}.",
   "conversation.goalNotice.saved": "Goal saved",

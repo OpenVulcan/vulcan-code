@@ -1077,6 +1077,7 @@
   "conversation.providerRetry.retrying": "Повтор",
   "conversation.providerRetry.succeeded": "Повтор выполнен",
   "conversation.providerRetry.failed": "Повтор не удался",
+  "conversation.providerRetry.countdown": "Повтор через {seconds} с (попытка {attempt} из {max})",
   "conversation.modelSwitch.title": "Модель изменена",
   "conversation.modelSwitch.changed": "Модель изменена с {previous} на {current}.",
   "conversation.goalNotice.saved": "Цель сохранена",

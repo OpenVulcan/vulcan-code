@@ -772,6 +772,10 @@ function applyWorkbenchDeltaPayload(
       // The compaction preview lives only in ConversationLiveStreamStore and never enters snapshots.
       // 压缩预览仅存在于 ConversationLiveStreamStore，绝不进入快照。
       return workbench;
+    case "providerRetryStatusChanged":
+      // The retry countdown lives only in ConversationLiveStreamStore and never enters snapshots.
+      // 重试倒计时仅存在于 ConversationLiveStreamStore，绝不进入快照。
+      return workbench;
   }
 }
 
