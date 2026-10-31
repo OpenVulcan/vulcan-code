@@ -5,6 +5,7 @@ import { DynamicPluginMountPanel } from "@/components/plugins/dynamic-plugin-mou
 import { EnvironmentVariablesArea } from "@/components/features/environment/environment-variables-area"
 import { KnowledgeBaseArea } from "@/components/features/knowledge/knowledge-base-area"
 import { McpSettingsArea } from "@/components/features/settings/mcp-settings-area"
+import { RtkSettingsArea } from "@/components/features/rtk/rtk-settings-area"
 
 import { LuaSkillsPanel, LuaSkillInstallDialog } from "./lua-skills-panel"
 import { LuaSkillsSettingsPanel } from "./lua-skills-settings-panel"
@@ -90,6 +91,8 @@ export function SkillsArea(props: {
           projects={props.workbench.projects}
           selectedConversationId={props.workbench.selectedConversationId}
         />
+      ) : props.activeTab === "rtk" ? (
+        <RtkSettingsArea />
       ) : null}
       {pluginSelection ? (
         <div key={pluginSelection.subAreaId}>

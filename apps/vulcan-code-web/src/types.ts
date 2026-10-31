@@ -14,6 +14,7 @@ export * from "./types/service-events";
 export * from "./types/terminal";
 export * from "./types/permission-judge";
 export * from "./types/subagent-models";
+export * from "./types/rtk";
 export * from "./types/mcp-service";
 export * from "./types/environment-variables";
 export * from "./types/review-prompt";

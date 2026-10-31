@@ -38,6 +38,9 @@ export function activeSkillHeaderSummary(
   if (activeTab === "environment-variables") {
     return { title: t("environment.area"), detail: t("environment.area.description") }
   }
+  if (activeTab === "rtk") {
+    return { title: t("rtk.area"), detail: t("rtk.area.description") }
+  }
   if (activeTab === "plugin-maintenance") {
     return { title: t("skills.navigation.pluginMaintenance"), detail: t("pluginMaintenance.description") }
   }

@@ -157,6 +157,10 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_save_subagent_models",
     "service_session_subagent_models",
     "service_save_session_subagent_models",
+    "service_rtk_settings",
+    "service_save_rtk_settings",
+    "service_rtk_statistics",
+    "service_clear_rtk_statistics",
     "service_mcp_service_snapshot",
     "service_set_mcp_service_enabled",
     "service_create_mcp_client",
@@ -1010,6 +1014,20 @@ pub(super) async fn dispatch(
         }
         "service_subagent_models" => {
             rpc_json_result(crate::subagent_models::service_subagent_models(state))
+        }
+        "service_rtk_settings" => rpc_json_result(crate::rtk_settings::service_rtk_settings(state)),
+        "service_save_rtk_settings" => rpc_json_result(
+            crate::rtk_settings::service_save_rtk_settings(
+                state,
+                rpc_required_param(params, "request")?,
+            )
+            .await,
+        ),
+        "service_rtk_statistics" => {
+            rpc_json_result(crate::rtk_settings::service_rtk_statistics(state).await)
+        }
+        "service_clear_rtk_statistics" => {
+            rpc_json_result(crate::rtk_settings::service_clear_rtk_statistics(state).await)
         }
         "service_save_subagent_models" => rpc_json_result(
             crate::subagent_models::service_save_subagent_models(

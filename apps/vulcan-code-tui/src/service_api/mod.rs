@@ -26,6 +26,7 @@ pub mod permission_judge;
 pub mod permission_mode;
 pub mod project_actions;
 pub mod review_prompt;
+pub mod rtk;
 pub mod setter;
 pub mod settings_actions;
 pub mod skills_actions;
@@ -271,6 +272,12 @@ pub enum Slot {
     /// `loadSessionSubagentModels` of the selected saved session.
     /// 所选已保存会话的 `loadSessionSubagentModels`。
     SessionSubagentModels,
+    /// `loadRtkSettings` of the RTK page.
+    /// RTK 页的 `loadRtkSettings`。
+    RtkSettings,
+    /// `loadRtkStatistics` of the RTK page.
+    /// RTK 页的 `loadRtkStatistics`。
+    RtkStatistics,
     /// `loadMcpService`: the endpoint switch, its clients and the grantable media models.
     /// 端点开关、其客户端与可授权媒体模型的 `loadMcpService`。
     McpService,

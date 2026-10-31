@@ -22,6 +22,7 @@ mod plugin_settings;
 mod plugins;
 mod project_permission_judge;
 mod review_rules;
+mod rtk;
 mod settings;
 mod setup_guide;
 mod subagent_models;
@@ -112,6 +113,7 @@ impl Area {
             Area::Plugins => vec![
                 (Some("LuaSkills".into()), vec![LuaSkills, LuaSettings]),
                 (Some(tr!("settings.mcpServers")), vec![Mcp]),
+                (Some(tr!("rtk.area")), vec![Rtk]),
                 (
                     Some(tr!("skills.navigation.plugins")),
                     vec![VulcanPlugins, PluginMount],
@@ -299,6 +301,9 @@ pub enum PageId {
     SkillList,
     LuaSkills,
     LuaSettings,
+    /// Host-native RTK: routing switches, the route checklist and token-saving statistics.
+    /// 宿主原生 RTK：路由开关、路由清单与 Token 节省统计。
+    Rtk,
 
     VulcanPlugins,
     /// The open plugin detail mount; navigation lists one row per runtime-ready mount.
@@ -359,6 +364,7 @@ impl PageId {
             PageId::SkillList => tr!("area.agentSkills"),
             PageId::LuaSkills => tr!("skills.navigation.list"),
             PageId::LuaSettings => tr!("skills.navigation.luaSettings"),
+            PageId::Rtk => tr!("rtk.area"),
 
             PageId::VulcanPlugins => tr!("skills.navigation.externalPlugins"),
             PageId::PluginMount => tr!("tui.plugin.page"),
@@ -478,6 +484,10 @@ impl PageId {
                 }
             }
             Self::McpService => calls.push(api::mcp_service::load_mcp_service()),
+            Self::Rtk => calls.extend([
+                api::rtk::load_rtk_settings(),
+                api::rtk::load_rtk_statistics(),
+            ]),
             Self::SubagentModels => {
                 calls.push(api::subagent_models::load_subagent_models());
                 if let Some(conversation) = subagent_models::saved_conversation(app) {
@@ -1185,6 +1195,7 @@ pub fn rows(app: &App, page: PageId) -> Vec<Row> {
         PageId::SkillList => catalog::skills(app),
         PageId::LuaSkills => plugins::lua_skills(app),
         PageId::LuaSettings => plugins::lua_settings(app),
+        PageId::Rtk => rtk::rows(app),
 
         PageId::VulcanPlugins => plugins::plugins(app),
         PageId::PluginMount => plugin_settings::rows(app),

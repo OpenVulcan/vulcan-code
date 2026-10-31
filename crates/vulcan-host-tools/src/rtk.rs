@@ -23,6 +23,10 @@ pub const RTK_REWRITE_TIMEOUT: Duration = Duration::from_millis(2_000);
 /// 压缩提交总结上下文的每条 RTK Git 命令的上限。
 pub const RTK_GIT_CONTEXT_TIMEOUT: Duration = Duration::from_millis(5_000);
 
+/// Upper bound for one `rtk gain` statistics run; RTK rescans its whole history each time.
+/// 单次 `rtk gain` 统计运行的上限；RTK 每次都会重新扫描全部历史。
+pub const RTK_STATISTICS_TIMEOUT: Duration = Duration::from_millis(60_000);
+
 /// Environment variable that keeps RTK output free of ANSI colors; set only for routed commands.
 /// 使 RTK 输出不含 ANSI 颜色的环境变量；只为经路由的命令设置。
 pub const RTK_PLAIN_OUTPUT_VARIABLE: &str = "NO_COLOR";

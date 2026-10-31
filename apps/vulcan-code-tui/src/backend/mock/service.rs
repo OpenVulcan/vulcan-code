@@ -1009,6 +1009,30 @@ impl FakeService {
                 self.loads["service_session_subagent_models"]["models"] =
                     required(params, "/request/models")?.clone();
             }
+            "service_save_rtk_settings" => {
+                self.loads["service_rtk_settings"]["settings"] =
+                    required(params, "/request/settings")?.clone();
+                return Ok(self.loads["service_rtk_settings"].clone());
+            }
+            "service_clear_rtk_statistics" => {
+                // The demo empties every series and keeps the snapshot shape.
+                // 演示清空全部序列并保留快照结构。
+                let statistics = &mut self.loads["service_rtk_statistics"];
+                for series in ["daily", "weekly", "monthly", "byCommand"] {
+                    statistics[series] = json!([]);
+                }
+                for total in [
+                    "totalCommands",
+                    "totalInput",
+                    "totalOutput",
+                    "totalSaved",
+                    "oversizedExcluded",
+                ] {
+                    statistics["summary"][total] = json!(0);
+                }
+                statistics["summary"]["avgSavingsPct"] = json!(0.0);
+                return Ok(statistics.clone());
+            }
             "service_set_mcp_service_enabled" => {
                 self.loads["service_mcp_service_snapshot"]["enabled"] =
                     required(params, "/enabled")?.clone();

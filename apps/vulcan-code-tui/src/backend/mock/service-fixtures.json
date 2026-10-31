@@ -1725,6 +1725,44 @@
       "maxNoteChars": 400,
       "maxModels": 16
     },
+    "service_rtk_settings": {
+      "settings": {
+        "enabled": true,
+        "routeMode": "selected",
+        "enabledRoutes": ["git", "grep", "ls"],
+        "disabledRoutes": [],
+        "telemetryDisabled": true,
+        "gitCommitContextEnabled": true
+      },
+      "curatedRoutes": ["git", "grep", "ls"],
+      "extendedRoutes": ["cargo", "docker"]
+    },
+    "service_rtk_statistics": {
+      "available": true,
+      "error": null,
+      "summary": {
+        "totalCommands": 42,
+        "totalInput": 180000,
+        "totalOutput": 36000,
+        "totalSaved": 144000,
+        "avgSavingsPct": 80.0,
+        "oversizedExcluded": 1
+      },
+      "daily": [
+        { "start": "2026-10-29", "end": null, "commands": 20, "savedTokens": 70000, "savingsPct": 78.5 },
+        { "start": "2026-10-30", "end": null, "commands": 22, "savedTokens": 74000, "savingsPct": 81.2 }
+      ],
+      "weekly": [
+        { "start": "2026-10-26", "end": "2026-11-01", "commands": 42, "savedTokens": 144000, "savingsPct": 80.0 }
+      ],
+      "monthly": [
+        { "start": "2026-10", "end": null, "commands": 42, "savedTokens": 144000, "savingsPct": 80.0 }
+      ],
+      "byCommand": [
+        { "command": "rtk git status", "count": 30, "savedTokens": 120000, "savingsPct": 85.0, "avgTimeMs": 40 },
+        { "command": "rtk grep", "count": 12, "savedTokens": 24000, "savingsPct": 60.0, "avgTimeMs": 15 }
+      ]
+    },
     "service_session_subagent_models": {
       "sessionId": "",
       "models": null,

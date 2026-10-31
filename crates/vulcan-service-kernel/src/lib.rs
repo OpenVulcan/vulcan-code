@@ -232,6 +232,7 @@ mod skill_catalog_projection;
 mod skills_services;
 mod state;
 mod subagent_event_ingest;
+mod rtk_settings;
 mod subagent_models;
 mod subagent_panels;
 mod subagent_workspace_mutation;
