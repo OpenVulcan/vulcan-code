@@ -172,3 +172,28 @@ it("closes and folds the tools before a context-compaction card", () => {
   expect(card).toMatchObject({ kind: "item", item: { id: "compaction" } });
   expect(after).toMatchObject({ kind: "tool-sequence", active: true });
 });
+
+it.each(["context_injection", "reasoning_effort_switch", "model_switch"])(
+  "closes the tools before a %s notice and opens a new run after it",
+  (noticeKind) => {
+    // notice is the display row inserted between tool calls by a prompt injection or a settings switch.
+    // notice 是提示词注入或设置切换插入到工具调用之间的显示行。
+    const notice: ConversationRenderItem = { id: "notice", role: "assistant", sourceMessages: [], blocks: [
+      { id: "notice-block", kind: "notice", title: "", body: "", summary: "", rawMetadata: { notice_kind: noticeKind } },
+    ] };
+    const [tools, card, after] = groupVisibleProcessBodyEntries("process", [row("one"), row("two"), notice, row("three"), row("four", "running")], true);
+    expect(tools).toMatchObject({ kind: "tool-sequence", active: false });
+    expect(card).toMatchObject({ kind: "item", item: { id: "notice" } });
+    expect(after).toMatchObject({ kind: "tool-sequence", active: true });
+    if (after?.kind !== "tool-sequence") throw new Error("Expected the run after the notice to be a tool sequence");
+    expect(after.collapseId).not.toBe((tools as { collapseId: string }).collapseId);
+  },
+);
+
+it("keeps a run expanded across a notice while one of its tools is still running", () => {
+  const notice: ConversationRenderItem = { id: "notice", role: "assistant", sourceMessages: [], blocks: [
+    { id: "notice-block", kind: "notice", title: "", body: "", summary: "", rawMetadata: { notice_kind: "context_injection" } },
+  ] };
+  const [tools] = groupVisibleProcessBodyEntries("process", [row("one"), row("two", "running"), notice], true);
+  expect(tools).toMatchObject({ kind: "tool-sequence", active: true });
+});

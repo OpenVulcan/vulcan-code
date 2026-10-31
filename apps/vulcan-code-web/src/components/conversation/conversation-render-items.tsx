@@ -25,7 +25,7 @@ import {
   type ToolDetailPayload,
 } from "@/components/conversation/conversation-detail";
 import { ConversationBlocksView } from "@/components/conversation/conversation-block-renderer";
-import { isContextCompactionBlock, isMergeableToolBlock } from "@/components/conversation/conversation-classifiers";
+import { isMergeableToolBlock } from "@/components/conversation/conversation-classifiers";
 import type { ToolExecutionConversationBlock } from "@/components/conversation/conversation-tool-execution-types";
 import { fixedV1ToolEvent } from "@/components/conversation/tool-presentations/presentation-value-readers";
 import { ToolSequenceHead, toolSequenceEntry } from "@/conversation/tools/tool-sequence";
@@ -41,7 +41,6 @@ import {
   conversationMessageUnixMillis,
   formatShortConversationTimestamp,
   formatWorkProcessDuration,
-  isAssistantMarkdownRenderItem,
 } from "@/components/conversation/conversation-timeline";
 import type {
   ConversationProcessRenderItem,
@@ -109,8 +108,8 @@ type ConversationProcessBodyEntry =
     runningItems: ConversationRenderItem[];
   };
 
-// groupVisibleProcessBodyEntries keeps reasoning inside tool runs until assistant content closes them.
-// groupVisibleProcessBodyEntries 将思考保留在工具序列内，直到助手正文结束序列。
+// groupVisibleProcessBodyEntries keeps reasoning inside tool runs until any other visible row closes them.
+// groupVisibleProcessBodyEntries 将思考保留在工具序列内，直到任何其他可见行结束序列。
 // Parameters: processId identifies the owning turn, items contains already display-filtered rows,
 // sessionRunning resolves unfinished calls, and finalAssistantFollows identifies the final answer extracted by the timeline.
 // 参数：processId 标识所属回合，items 包含显示过滤后的记录，sessionRunning 判定未完成调用，finalAssistantFollows 表示时间线已提取尾部最终回复。
@@ -185,10 +184,12 @@ export function groupVisibleProcessBodyEntries(
       pendingToolItems.push(item);
       continue;
     }
-    // A context-compaction card also closes the run: compaction starts only after the preceding model call
-    // ended, so no later tool can join these rows.
-    // 上下文压缩卡同样结束序列：压缩只在前一次模型调用结束后开始，之后的工具不会再并入这些记录。
-    flushPendingTools(isAssistantMarkdownRenderItem(item) || item.blocks.some(isContextCompactionBlock));
+    // Any other row (assistant text, context compaction, prompt injection, model or reasoning-effort switch,
+    // in-turn guidance) closes the run: later tools can never rejoin rows already separated by it, so the
+    // preceding run folds and the next tool opens a new one. Running tools still keep their run expanded.
+    // 其他任何行（助手正文、上下文压缩、提示词注入、模型或思考级别切换、回合内引导）都结束序列：之后的工具
+    // 不可能再并入已被它隔开的记录，因此前面的序列折叠，下一个工具开启新折叠区；仍在运行的工具保持展开。
+    flushPendingTools(true);
     entries.push({ kind: "item", item });
   }
   flushPendingTools(finalAssistantFollows);
