@@ -169,6 +169,9 @@ fn upgrade_step(
         // 10 adds the optional `config.selection.request_options`; absence means defaults.
         // 10 新增可选的 `config.selection.request_options`；缺省即默认值。
         9 => {}
+        // 11 permits a null maintenance child identity for explicit root compaction; existing identities remain exact.
+        // 11 允许显式主会话压缩使用空子执行身份；已有身份原样保留。
+        10 => {}
         other => {
             return Err(SessionV1Error::unsupported(
                 path,

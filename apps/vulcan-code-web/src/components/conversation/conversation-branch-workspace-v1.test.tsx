@@ -195,6 +195,63 @@ function completeTurnEvents(): readonly ConversationEventSummary[] {
   ];
 }
 
+// maintenanceEvents appends Core-shaped maintenance ownership and API facts to a completed business turn.
+// maintenanceEvents 向已完成业务回合追加与 Core 形状一致的维护归属与 API 事实。
+// Parameters: businessExecutionId distinguishes roots from children; completed includes terminal facts. Returns: an ordered window.
+// 参数：businessExecutionId 区分主会话与子会话；completed 包含终态事实。返回值：有序窗口。
+function maintenanceEvents(businessExecutionId: string | null, completed: boolean): readonly ConversationEventSummary[] {
+  // Both lifecycle records share the exact execution source while retaining separate event sequences.
+  // 两条生命周期记录共享精确执行来源，同时保留独立事件序号。
+  const maintenance: Extract<ConversationEventSummary["event"], { kind: "context_maintenance" }> = {
+    kind: "context_maintenance", execution_id: "maintenance-fixture", business_execution_id: businessExecutionId,
+    business_turn_id: 11, turn_id: 12, segment_generation: 3, source_revision: 8,
+    source_compaction_id: null, started_seq: 9, started_at_ms: 1009, terminal: null,
+  };
+  // The auxiliary terminal has its own statistics, independently of the original business turn.
+  // 辅助终态拥有自己的统计，与原业务回合独立。
+  const bucket = { api_call_count: 1, unknown_usage_api_call_count: 0, tool_call_count: 0, subagent_return_count: 0, usage: {} };
+  return [
+    ...completeTurnEvents(),
+    { ...eventSummary(9, maintenance, "host_only"), turn_id: maintenance.turn_id },
+    { ...eventSummary(10, { kind: "api_started", api_call_id: 3, purpose: "compaction", request: {
+      provider: "fixture-provider", model: "fixture-model",
+    } }, "host_only"), turn_id: 12 },
+    { ...eventSummary(11, { kind: "assistant_text", api_call_id: 3, text: "Retained fixture summary", status: completed ? "completed" : "streaming" }), turn_id: maintenance.turn_id },
+    ...(completed ? [
+      { ...eventSummary(12, { kind: "api_stats", api_call_id: 3, purpose: "compaction", provider: "fixture-provider", model: "fixture-model",
+        usage: {}, status: "completed", continuation_eligibility: "forbidden", timing: { completed_at_ms: 1012 } }, "ui_only"), turn_id: maintenance.turn_id },
+      { ...eventSummary(13, { ...maintenance, terminal: { reason: "completed", compaction_id: 42, end_seq: 15, completed_at_ms: 1013 } }, "host_only"), turn_id: maintenance.turn_id },
+      { ...eventSummary(14, { kind: "turn_boundary", purpose: "context_maintenance", reason: "completed", outcome: "completed" }, "ui_only"), turn_id: maintenance.turn_id },
+      { ...eventSummary(15, { kind: "turn_stats", start_seq: maintenance.started_seq, end_seq: 15, outcome: "completed", buckets: {
+        direct: bucket, total: bucket, subagent: { ...bucket, api_call_count: 0 },
+      } }, "ui_only"), turn_id: maintenance.turn_id },
+    ] : []),
+  ];
+}
+
+// The actual workspace must render a complete maintenance window without treating its host record as a message.
+// 真实工作区必须渲染完整维护窗口，且不把宿主记录当作消息。
+// Parameters: root or child ownership and running state. Returns: none; verifies projection and React rendering.
+// 参数：主会话或子会话归属及运行状态。返回值：无；验证投影与 React 渲染。
+it.each([null, "child-business"])("renders maintenance windows for business execution %s", (businessExecutionId) => {
+  for (const running of [false, true]) {
+    // Exercise both a live incomplete window and reopening persisted terminal records.
+    // 同时覆盖实时未完成窗口和重新打开已持久化终态记录。
+    const events = maintenanceEvents(businessExecutionId, !running);
+    // The projector preserves conversation and compaction cards without rendering maintenance bookkeeping.
+    // 投影器保留对话与压缩卡，不渲染维护记账。
+    const presentation = projectConversationBranchPresentationV1("session-branch-v1", events, emptyResourceCatalog(), (key) => key);
+    // Locate hidden records by their typed kind instead of relying on a fixed history position.
+    // 按强类型种类定位隐藏记录，不依赖固定历史位置。
+    const maintenanceSeqs = new Set(events.filter((event) => event.event.kind === "context_maintenance").map((event) => event.seq));
+    expect(maintenanceSeqs.size).toBeGreaterThan(0);
+    expect(presentation.messages.some((message) => message.role === "user")).toBe(true);
+    expect(presentation.messages.some((message) => message.recordKind === "compaction-status")).toBe(true);
+    expect(presentation.messages.some((message) => maintenanceSeqs.has((message.metadata as Record<string, unknown>).v1_seq as number))).toBe(false);
+    expect(() => renderToStaticMarkup(workspaceTree(events, "inline_output", [], running))).not.toThrow();
+  }
+});
+
 // snapshot builds one exact owner-ready event-window snapshot.
 // snapshot 构建一份精确归属就绪的事件窗口快照。
 function snapshot(events: readonly ConversationEventSummary[]): ConversationEventWindowControllerSnapshot {

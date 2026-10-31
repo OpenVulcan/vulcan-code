@@ -100,8 +100,50 @@ fn metadata_access_upgrades_supported_schemas_once_with_backup() {
         let files = session_files(&layout);
         assert_eq!(load_session(&layout).unwrap().metadata, metadata);
         assert_eq!(std::fs::read(layout.metadata_path()).unwrap(), upgraded);
-        assert_eq!(session_files(&layout), files, "a second read never upgrades");
+        assert_eq!(
+            session_files(&layout),
+            files,
+            "a second read never upgrades"
+        );
     }
+}
+
+/// The v10 child maintenance identity survives the nullable-owner upgrade without being reclassified as a root.
+/// v10 子维护身份在可空所有者升级后保持不变，不会被重新归类为主会话。
+/// Returns nothing; verifies the production reader and the exact original-byte backup.
+/// 不返回值；验证生产读取器及精确原字节备份。
+#[test]
+fn metadata_access_upgrade_preserves_child_maintenance_identity() {
+    // This storage-only fixture isolates the metadata wire contract from transcript validation.
+    // 此存储专用夹具将元数据线协议与转录校验隔离。
+    let (_root, layout, metadata) = fixture();
+    // Version 10 always encoded a concrete child execution identity.
+    // 版本 10 始终编码具体子执行身份。
+    let mut raw = serde_json::to_value(metadata).unwrap();
+    raw["schema_version"] = 10.into();
+    raw["context_maintenance"] = serde_json::json!({
+        "execution_id": "maintenance-owner", "business_execution_id": "child-owner",
+        "business_turn_id": 1, "turn_id": 2, "segment_generation": 1, "source_revision": 1,
+        "source_compaction_id": null, "started_seq": 4, "started_at_ms": 3, "terminal": null
+    });
+    // Retain exact pre-upgrade bytes, including the concrete source identity.
+    // 保留精确升级前字节，包含具体来源身份。
+    let original = serde_json::to_vec(&raw).unwrap();
+    std::fs::write(layout.metadata_path(), &original).unwrap();
+    // The normal read path performs the same atomic upgrade used by Release.
+    // 正常读取路径执行 Release 使用的同一原子升级。
+    let upgraded = read_metadata(&layout.metadata_path()).unwrap();
+    assert_eq!(upgraded.schema_version, METADATA_SCHEMA_VERSION);
+    assert_eq!(
+        upgraded
+            .context_maintenance
+            .unwrap()
+            .business_execution_id
+            .unwrap()
+            .as_str(),
+        "child-owner"
+    );
+    assert_eq!(std::fs::read(backup_path(&layout, 10)).unwrap(), original);
 }
 
 /// A different existing backup stops the upgrade; an identical one is reused.

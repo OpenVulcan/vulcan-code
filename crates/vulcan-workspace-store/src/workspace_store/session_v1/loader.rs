@@ -444,6 +444,13 @@ fn explicit_turn_start_index(
                             == vulcan_session_core::v1::event::SystemContextOperation::Upsert
                         && open_start == Some(event.seq))
             }
+            // Maintenance has its own typed start; no synthetic user message is required.
+            // 维护回合拥有独立的强类型起点，不需要合成用户消息。
+            EventBody::ContextMaintenance(maintenance) => {
+                maintenance.terminal.is_none()
+                    && maintenance.turn_id == turn_id
+                    && maintenance.started_seq == event.seq
+            }
             // Collaboration starts are typed host facts; tagged User text is never a start authority.
             // 协作起点是强类型宿主事实；带标签的 User 正文绝不是起点权威。
             EventBody::Collaboration(collaboration) => {

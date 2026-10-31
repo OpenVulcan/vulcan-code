@@ -22,6 +22,7 @@ use vulcan_session_core::v1::collaboration::{
 };
 use vulcan_session_core::v1::config::QueuedInputIdentity;
 use vulcan_session_core::v1::context::LockedBaselineProjection;
+use vulcan_session_core::v1::context_maintenance::ManualContextMaintenanceSource;
 use vulcan_session_core::v1::dedicated::dedicated_provider_events;
 use vulcan_session_core::v1::document::{
     ApiTransportObservedReceipt, ClientInputSubmission, CompactionCommitInput,
@@ -1960,6 +1961,68 @@ impl SessionHandle {
         self.capture_durable_projection(SessionProjectionPurpose::CompactionContext)
     }
 
+    /// Captures compaction history and its admission source under one publisher/writer boundary.
+    /// 在同一个发布器和写入器边界内捕获压缩历史及其准入来源。
+    /// Returns a durable projection and opaque source proof; concurrent draft writes are checked at admission.
+    /// 返回可靠投影与不透明来源证明；并发草稿写入在准入时检查。
+    pub(crate) fn capture_context_compaction_planning_snapshot_with_source(
+        &self,
+    ) -> Result<
+        (
+            SessionProviderProjectionSnapshot,
+            ManualContextMaintenanceSource,
+        ),
+        SessionRuntimeError,
+    > {
+        self.capture_durable_projection_with(
+            SessionProjectionPurpose::CompactionContext,
+            SessionDocument::capture_manual_context_maintenance_source,
+        )
+    }
+
+    /// Flushes the selected projection and captures additional source evidence without releasing its locks.
+    /// 刷新所选投影并捕获额外来源证据，期间不释放锁。
+    /// `capture` reads the same durable document as `purpose`; returns their pair or an explicit capture error.
+    /// `capture` 读取与 `purpose` 相同的可靠文档；返回两者或明确的捕获错误。
+    fn capture_durable_projection_with<T>(
+        &self,
+        purpose: SessionProjectionPurpose,
+        capture: impl FnOnce(&SessionDocument) -> Result<T, DomainError>,
+    ) -> Result<(SessionProviderProjectionSnapshot, T), SessionRuntimeError> {
+        self.ensure_admitted(SessionMutationAdmission::ExistingTurn)?;
+        // Writer and publisher ownership prevent a draft or history mutation between the two captures.
+        // 写入器及发布器归属防止两次捕获之间发生草稿或历史修改。
+        let _writer = self
+            .writer
+            .lock()
+            .map_err(|_| SessionRuntimeError::WriterLockPoisoned)?;
+        // Keep the established writer-before-publisher lock order used by durable projection capture.
+        // 保持可靠投影捕获使用的既定先写入器后发布器锁顺序。
+        let _publisher = self
+            .mutation_publisher
+            .lock()
+            .map_err(|_| SessionRuntimeError::MutationPublisherLockPoisoned)?;
+        self.ensure_admitted(SessionMutationAdmission::ExistingTurn)?;
+        // Publish the current source before deriving either representation.
+        // 派生任一表示之前发布当前来源。
+        let revision = self
+            .document
+            .lock()
+            .map_err(|_| SessionRuntimeError::DocumentLockPoisoned)?
+            .memory_revision();
+        self.flush_through_with_writer_and_publisher_locked(revision)?;
+        // Projection and admission evidence share the same mutation-free capture boundary.
+        // 投影与准入证据共享同一个无修改捕获边界。
+        let snapshot = self.capture_provider_projection_snapshot_with_publisher_locked(purpose)?;
+        // Retain the document only for the bounded evidence copy, never for later plan construction.
+        // 仅在有界证据复制期间持有文档，绝不延续到后续规划构造。
+        let document = self
+            .document
+            .lock()
+            .map_err(|_| SessionRuntimeError::DocumentLockPoisoned)?;
+        Ok((snapshot, capture(&document)?))
+    }
+
     /// Captures a flushed snapshot for the specified projection purpose under the existing writer and publisher locks.
     /// 在既有写入与发布锁内，为指定投影用途捕获已落盘快照。
     /// Returns the exact source projection, or an admission, persistence, or projection error.
@@ -1968,23 +2031,8 @@ impl SessionHandle {
         &self,
         purpose: SessionProjectionPurpose,
     ) -> Result<SessionProviderProjectionSnapshot, SessionRuntimeError> {
-        self.ensure_admitted(SessionMutationAdmission::ExistingTurn)?;
-        let _writer = self
-            .writer
-            .lock()
-            .map_err(|_| SessionRuntimeError::WriterLockPoisoned)?;
-        let _publisher = self
-            .mutation_publisher
-            .lock()
-            .map_err(|_| SessionRuntimeError::MutationPublisherLockPoisoned)?;
-        self.ensure_admitted(SessionMutationAdmission::ExistingTurn)?;
-        let revision = self
-            .document
-            .lock()
-            .map_err(|_| SessionRuntimeError::DocumentLockPoisoned)?
-            .memory_revision();
-        self.flush_through_with_writer_and_publisher_locked(revision)?;
-        self.capture_provider_projection_snapshot_with_publisher_locked(purpose)
+        self.capture_durable_projection_with(purpose, |_| Ok(()))
+            .map(|(snapshot, ())| snapshot)
     }
 
     /// Captures the complete durable Provider history used by a Continue-owned controller run.

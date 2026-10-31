@@ -437,8 +437,11 @@ pub struct SessionRuntimeStateEntry {
     /// Latest compaction identifier attached to the session.
     /// 附着在该会话上的最近一次压缩标识。
     pub last_compaction_id: Option<String>,
-    /// Consecutive automatic context-compaction failures observed for this session.
-    /// 该会话连续自动上下文压缩失败次数。
+    /// Exact stream task whose automatic compaction failures are counted; a new user attempt has a new owner.
+    /// 自动压缩失败计数所属的精确流任务；用户的新尝试拥有新的所有者。
+    pub auto_compaction_failure_task_id: Option<uuid::Uuid>,
+    /// Consecutive automatic context-compaction failures within the owning stream task.
+    /// 所属流任务内的连续自动上下文压缩失败次数。
     pub auto_compaction_consecutive_failures: usize,
     /// Current message identifier used as the next context reconstruction anchor.
     /// 当前用作下一轮上下文重建锚点的消息标识。

@@ -142,25 +142,69 @@ async fn maybe_auto_compact_webui_session_with_mode(
     // vmm_pressure_requires_compaction 仅在达到绝对或比例阈值后提高压缩优先级。
     let vmm_pressure_requires_compaction =
         vmm_cache_pressure_requires_compaction(context_budget, vmm_cache_pressure);
-    if !force_compaction && !context_budget.should_compact() && !vmm_pressure_requires_compaction {
+    // Completed usage can already exceed the line even when the first character estimate is low.
+    // 即使首轮字符估算偏低，已完成请求的实测用量也可能已经超过压缩线。
+    let observed_budget = if !force_compaction && !context_budget.should_compact() {
+        observed_compaction_budget_before_provider_request(
+            state,
+            request.session_id,
+            &preparation.model_blueprint,
+            context_budget,
+        )?
+    } else {
+        None
+    };
+    // This historical signal only triggers maintenance; final request admission retains its exact evidence checks.
+    // 历史信号仅触发维护；最终请求准入仍保留精确证据校验。
+    let observed_usage_requires_compaction = observed_budget
+        .as_ref()
+        .is_some_and(ContextBudgetSnapshot::should_compact);
+    if !force_compaction
+        && !context_budget.should_compact()
+        && !vmm_pressure_requires_compaction
+        && !observed_usage_requires_compaction
+    {
         return Ok(None);
     }
     let session_id = request.session_id;
+    // Label the previous observation explicitly rather than presenting it as this request's exact size.
+    // 显式标注此前观测，避免将其呈现为本次请求的精确大小。
+    let observed_note = observed_budget
+        .as_ref()
+        .filter(|_| observed_usage_requires_compaction)
+        .map(|budget| {
+            format!(
+                "; prior uncompacted business context: {}",
+                budget.summary_note()
+            )
+        })
+        .unwrap_or_default();
     let budget_note = format!(
-        "{}; VMM reclaimable anchors about {} tokens ({} bytes)",
+        "{}{}; VMM reclaimable anchors about {} tokens ({} bytes)",
         context_budget.summary_note(),
+        observed_note,
         vmm_cache_pressure.reclaimable_anchor_estimated_tokens,
         vmm_cache_pressure.reclaimable_anchor_bytes,
     );
     webui_trace(
         "stream_auto_compaction_needed",
         format!(
-            "session={session_id} severity={:?} usage={} vmm_reclaimable_tokens={} vmm_pressure_trigger={vmm_pressure_requires_compaction}",
+            "session={session_id} severity={:?} usage={} vmm_reclaimable_tokens={} vmm_pressure_trigger={vmm_pressure_requires_compaction} observed_usage_trigger={observed_usage_requires_compaction}",
             context_budget.severity,
             context_budget.usage_label(),
             vmm_cache_pressure.reclaimable_anchor_estimated_tokens,
         ),
     );
+
+    // A blocked attempt does not rewrite status or count as another failed Provider request.
+    // 被拦截的尝试不改写状态，也不计为另一次供应商请求失败。
+    if webui_auto_context_compaction_failure_count(state, session_id, active_stream_task_id)
+        >= MAX_CONSECUTIVE_AUTO_COMPACTION_FAILURES
+    {
+        return Err(format!(
+            "Automatic context compaction failed {MAX_CONSECUTIVE_AUTO_COMPACTION_FAILURES} times in this execution; retry explicitly to start a new attempt."
+        ));
+    }
 
     // preparation_commit carries the previous phase, status id, and aligned delta from one exact-owner mutation.
     // preparation_commit 携带由一次精确所有者变更生成的前序阶段、状态标识与对齐增量。
@@ -217,28 +261,6 @@ async fn maybe_auto_compact_webui_session_with_mode(
         "context_compaction_preparing_phase_delta_emit",
         ServiceEvent::WorkbenchDelta(Box::new(phase_event)),
     );
-
-    if webui_auto_context_compaction_failure_count(state, session_id)
-        >= MAX_CONSECUTIVE_AUTO_COMPACTION_FAILURES
-    {
-        let error = format!(
-            "Automatic context compaction failed {MAX_CONSECUTIVE_AUTO_COMPACTION_FAILURES} times in a row; this request was stopped to avoid overwriting or repeatedly rewriting the current session state."
-        );
-        persist_failed_webui_context_compaction(
-            app,
-            state,
-            controller_runtime,
-            active_stream_task_id,
-            session_id,
-            previous_phase,
-            &status_message_id,
-            &budget_note,
-            AUTO_CONTEXT_COMPACTION_TRIGGER,
-            &error,
-        )
-        .await?;
-        return Err(error);
-    }
 
     // modelTarget freezes the exact route, declared window, and tail policy before planning.
     // modelTarget 在规划前冻结精确路由、声明窗口与尾部策略。
@@ -441,11 +463,12 @@ fn vmm_cache_pressure_requires_compaction(
     })
 }
 
-/// Returns the current consecutive automatic compaction failure count for one session.
-/// 返回单个会话当前连续自动压缩失败次数。
+/// Returns consecutive failures for `task_id` only; a different stream starts with a fresh retry budget.
+/// 只返回 `task_id` 的连续失败次数；不同流拥有新的重试额度。
 pub(crate) fn webui_auto_context_compaction_failure_count(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
+    task_id: Uuid,
 ) -> usize {
     state
         .lock()
@@ -455,6 +478,9 @@ pub(crate) fn webui_auto_context_compaction_failure_count(
                 .workspace_snapshot
                 .as_ref()
                 .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
+                .filter(|runtime_state| {
+                    runtime_state.auto_compaction_failure_task_id == Some(task_id)
+                })
                 .map(|runtime_state| runtime_state.auto_compaction_consecutive_failures)
         })
         .unwrap_or_default()
@@ -464,6 +490,9 @@ pub(crate) fn webui_auto_context_compaction_failure_count(
 /// 承载一份仅从可靠 V1 Provider 投影派生的上下文压缩计划。
 #[derive(Debug, Clone)]
 pub(crate) struct WebuiContextCompactionPlan {
+    /// Exact source proof that permits only composer draft changes before standalone admission.
+    /// 精确来源证明，仅允许独立准入前发生输入框草稿变化。
+    pub(crate) source: vulcan_session_core::v1::context_maintenance::ManualContextMaintenanceSource,
     /// Exact frozen prompt-media source owner from the same snapshot as the transcript plan.
     /// 与转录计划来自相同快照的精确冻结提示词媒体来源所有者。
     pub(crate) media_projection:
@@ -489,8 +518,8 @@ pub(crate) fn webui_context_compaction_plan_from_v1(
 ) -> Result<WebuiContextCompactionPlan, String> {
     let handle =
         crate::session_goal_lifecycle::registered_session_v1_handle_from_state(state, session_id)?;
-    let snapshot = handle
-        .capture_context_compaction_planning_snapshot()
+    let (snapshot, source) = handle
+        .capture_context_compaction_planning_snapshot_with_source()
         .map_err(|error| format!("failed to capture V1 compaction projection: {error}"))?;
     let projected_messages = snapshot
         .sourced_items
@@ -557,6 +586,7 @@ pub(crate) fn webui_context_compaction_plan_from_v1(
         resource_registry,
     )?;
     Ok(WebuiContextCompactionPlan {
+        source,
         media_projection,
         plan,
         full_context_state,

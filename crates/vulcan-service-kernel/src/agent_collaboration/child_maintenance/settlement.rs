@@ -70,7 +70,8 @@ pub(super) async fn settle(
                     .child_execution_profile
                     .as_ref()
                     .is_some_and(|profile| {
-                        profile.business_execution_id == current.business_execution_id.as_str()
+                        current.business_execution_id.as_ref().map(|id| id.as_str())
+                            == Some(profile.business_execution_id.as_str())
                             && profile.business_turn_id == current.business_turn_id
                             && profile.segment_generation == current.segment_generation
                             && profile.task_id.as_str() == handle.session_id().to_string()
@@ -170,7 +171,7 @@ pub(super) async fn settle(
                         return Ok(SessionMutationChange::Unchanged(()));
                     }
                     document
-                        .finish_child_context_maintenance(&execution_id, reason, now_ms)
+                        .finish_context_maintenance(&execution_id, reason, now_ms)
                         .map(|result| match result {
                             IdempotentMutation::Committed(_) => SessionMutationChange::Changed(()),
                             IdempotentMutation::Idempotent(_) => {

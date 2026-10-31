@@ -3,6 +3,9 @@
 
 use super::*;
 
+#[path = "maintenance/manual.rs"]
+mod manual;
+
 /// Restart closes unfinished maintenance with or without a physical API and never reopens business.
 /// 重启闭合有或无物理 API 的未完成维护，绝不重开业务。
 /// Returns nothing; reloads actual serialized records before and after interruption publication.
@@ -261,7 +264,7 @@ fn maintenance_lifecycle_failure_is_independent_and_recoverable() {
     );
     assert!(
         document
-            .finish_child_context_maintenance(&maintenance_id, TurnClosureReason::Completed, 12)
+            .finish_context_maintenance(&maintenance_id, TurnClosureReason::Completed, 12)
             .is_err()
     );
     assert_eq!(document, before);
@@ -317,13 +320,13 @@ fn maintenance_lifecycle_failure_is_independent_and_recoverable() {
     // 冲突终态重放失败，而不是把维护失败提升为成功。
     assert!(
         !document
-            .finish_child_context_maintenance(&maintenance_id, TurnClosureReason::Failed, 14)
+            .finish_context_maintenance(&maintenance_id, TurnClosureReason::Failed, 14)
             .unwrap()
             .changed()
     );
     assert!(
         document
-            .finish_child_context_maintenance(&maintenance_id, TurnClosureReason::Completed, 14)
+            .finish_context_maintenance(&maintenance_id, TurnClosureReason::Completed, 14)
             .is_err()
     );
 }
@@ -374,7 +377,7 @@ fn maintenance_lifecycle_success_requires_owned_compaction() {
         .into_value();
     assert!(
         document
-            .finish_child_context_maintenance(&maintenance_id, TurnClosureReason::Failed, 13)
+            .finish_context_maintenance(&maintenance_id, TurnClosureReason::Failed, 13)
             .is_err()
     );
     document
@@ -395,7 +398,7 @@ fn maintenance_lifecycle_success_requires_owned_compaction() {
         .unwrap();
     assert!(
         document
-            .finish_child_context_maintenance(&maintenance_id, TurnClosureReason::Completed, 14)
+            .finish_context_maintenance(&maintenance_id, TurnClosureReason::Completed, 14)
             .is_err()
     );
     document
@@ -411,7 +414,7 @@ fn maintenance_lifecycle_success_requires_owned_compaction() {
         )
         .unwrap();
     document
-        .finish_child_context_maintenance(&maintenance_id, TurnClosureReason::Completed, 15)
+        .finish_context_maintenance(&maintenance_id, TurnClosureReason::Completed, 15)
         .unwrap();
     assert_eq!(
         &document.events()[..original_events.len()],

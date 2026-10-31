@@ -59,8 +59,8 @@ pub(super) const MANUAL_CONTEXT_COMPACTION_TRIGGER: &str = "manual_slash";
 /// Metadata trigger label for host-initiated budget auto-compaction.
 /// 宿主因预算触发自动上下文压缩的元数据触发标签。
 const AUTO_CONTEXT_COMPACTION_TRIGGER: &str = "auto_budget";
-/// Maximum consecutive automatic compaction failures before the session circuit breaker opens.
-/// 会话自动压缩熔断前允许的最大连续失败次数。
+/// Maximum consecutive automatic compaction failures within one stream execution.
+/// 单个流执行内允许的最大连续自动压缩失败次数。
 const MAX_CONSECUTIVE_AUTO_COMPACTION_FAILURES: usize = 3;
 /// Fixed input-token reserve kept free when deciding whether compaction input must be clone-pruned.
 /// 判断压缩输入是否必须进行克隆剪枝时保留的固定输入 Token 安全阈值。
@@ -79,6 +79,7 @@ mod auto_compaction;
 mod budget;
 mod completion;
 mod draft;
+mod manual;
 mod messages;
 mod persist_display;
 mod streaming;

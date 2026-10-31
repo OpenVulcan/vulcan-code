@@ -3,6 +3,9 @@
 
 use super::*;
 
+mod preflight;
+pub(super) use preflight::observed_compaction_budget_before_provider_request;
+
 /// Returns the current compact budget note for one compaction status row.
 /// 返回单条压缩状态行使用的当前预算摘要。
 pub(crate) fn context_compaction_budget_note_from_state(

@@ -566,6 +566,9 @@ function conversationMessagesForV1Event(
     case "api_started":
     case "turn_boundary":
     case "execution_control":
+    case "context_maintenance":
+      // Maintenance ownership remains in the event window; its API facts own the visible compaction card.
+      // 维护归属保留在事件窗口中；其 API 事实拥有可见压缩卡片。
       return [];
   }
 }

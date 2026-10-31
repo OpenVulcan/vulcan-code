@@ -85,7 +85,11 @@ fn validate_owner(
             || maintenance.turn_id != turn.turn_id
             || turn.origin != TurnOrigin::ContextMaintenance
             || maintenance.business_turn_id != profile.business_turn_id
-            || maintenance.business_execution_id.as_str() != profile.business_execution_id
+            || maintenance
+                .business_execution_id
+                .as_ref()
+                .map(|id| id.as_str())
+                != Some(profile.business_execution_id.as_str())
             || maintenance.segment_generation != document.segment_generation())
     {
         return Err(DomainError::CollaborationStateViolation {

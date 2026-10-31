@@ -177,6 +177,52 @@ function apiStats(apiCallId: number, status: ApiStatStatus): ConversationEventBo
 }
 
 describe("conversation-event-window-store V1 ownership and boundaries", () => {
+  /** Maintenance records remain immutable host facts across live append, pagination and hydration.
+   * 维护记录在实时追加、分页和首次加载期间保持为不可变宿主事实。
+   * Parameters: root or child business identity. Returns: none; verifies preservation and ownership rejection.
+   * 参数：主会话或子会话业务身份。返回值：无；验证记录保留及归属拒绝。 */
+  it.each([null, "child-business"])("preserves context maintenance ownership for %s", (businessExecutionId) => {
+    // The original start anchor uses exactly the Core wire fields and nullability.
+    // 原起始锚点使用精确 Core 线协议字段及可空性。
+    const body: Extract<ConversationEventBody, { kind: "context_maintenance" }> = {
+      kind: "context_maintenance", execution_id: "maintenance-a", business_execution_id: businessExecutionId,
+      business_turn_id: 1, turn_id: 2, segment_generation: WINDOW_GENERATION, source_revision: 1,
+      source_compaction_id: null, started_seq: 1, started_at_ms: 10, terminal: null,
+    };
+    // Start and closure are separate immutable records even when they share execution identity.
+    // 即使共享执行身份，起始与闭合仍是两条独立不可变记录。
+    const started: ConversationEventSummary = { ...summary(body.started_seq, body, 10), turn_id: body.turn_id, visibility: "host_only" };
+    // A later page can contain closure without the start, so pagination must preserve both records.
+    // 后续页面可以仅包含闭合而不包含起始，因此分页必须保留两条记录。
+    const terminal: ConversationEventSummary = {
+      ...started, seq: started.seq + 1, event_revision: 2, updated_at_ms: 20,
+      event: { ...body, terminal: { reason: "failed", compaction_id: null, end_seq: started.seq + 3, completed_at_ms: 20 } },
+    };
+    // The store accepts canonical live facts without replacing earlier history at the same execution ID.
+    // 存储接纳规范实时事实，不用同执行 ID 替换较早历史。
+    const live = new ConversationEventWindowStore();
+    live.hydrate(batch([]));
+    live.applyLive(livePatch([started]));
+    live.applyLive(livePatch([terminal]));
+    expect(live.render()).toEqual([started, terminal]);
+    // Cold loading and pagination must retain the same typed window as live updates.
+    // 冷加载与分页必须保留与实时更新相同的强类型窗口。
+    const restored = new ConversationEventWindowStore();
+    restored.hydrate(batch([terminal]));
+    restored.prependPage(batch([started]));
+    expect(restored.render()).toEqual(live.render());
+    // A same-sequence replacement may never switch to another maintenance execution.
+    // 同序号替换绝不能切换到另一个维护执行。
+    const replaced = { ...started, event_revision: 3, updated_at_ms: 30, event: { ...body, execution_id: "maintenance-b" } };
+    expect(() => restored.applyLive(livePatch([replaced]))).toThrow(/identity conflict/);
+    expect(restored.render()).toEqual([started, terminal]);
+    // A higher revision cannot turn the immutable start fact into its terminal record either.
+    // 较高修订也不能将不可变起始事实改成其终态记录。
+    const rewritten = { ...terminal, seq: started.seq, event_revision: 3 };
+    expect(() => restored.applyLive(livePatch([rewritten]))).toThrow(/illegal context_maintenance evolution/);
+    expect(restored.render()).toEqual([started, terminal]);
+  });
+
   it("requires one shared branded ClientActionId on every user_input body", () => {
     expect(USER_INPUT_HAS_REQUIRED_STRONG_CLIENT_ACTION_ID).toBe(true);
   });

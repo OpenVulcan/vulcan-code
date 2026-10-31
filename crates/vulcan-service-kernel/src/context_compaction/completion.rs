@@ -552,6 +552,12 @@ pub(crate) async fn finish_webui_context_compaction_execution(
             format!("V1 compaction committed, but VMM epoch publication failed: {error}")
         })?;
 
+    // Close the durable auxiliary turn before releasing the manual stream's admission slot.
+    // 在释放手动流的准入槽位前闭合可靠辅助回合。
+    if commit_mode.finishes_active_stream() {
+        super::manual::complete(state, session_id, commit_mode.task_id())?;
+    }
+
     // The retained workspace is now display-only projection. It must not retain
     // another compaction checkpoint or runtime anchor.
     // 此后的保留工作区仅是显示投影，不得再保存另一份压缩检查点或 runtime 锚点。
@@ -570,13 +576,17 @@ pub(crate) async fn finish_webui_context_compaction_execution(
                 .insert(session_id, previous_phase);
             // This is only the Hook's derived identity hint; the V1 receipt remains the sole compaction authority.
             // 此值仅是 Hook 的派生身份提示；V1 回执仍是唯一压缩权威。
-            workspace
+            let runtime_state = workspace
                 .session_runtime_state
                 .get_mut(&session_id)
                 .ok_or_else(|| {
                     "Committed V1 compaction has no active session projection.".to_owned()
-                })?
-                .last_compaction_id = Some(compaction_receipt.value.value().to_string());
+                })?;
+            runtime_state.last_compaction_id = Some(compaction_receipt.value.value().to_string());
+            // A committed summary ends the consecutive failure sequence for every compaction trigger.
+            // 已提交摘要终结所有压缩触发方式的连续失败序列。
+            runtime_state.auto_compaction_failure_task_id = None;
+            runtime_state.auto_compaction_consecutive_failures = 0;
             if let Some(session) = workspace
                 .sessions
                 .iter_mut()
@@ -681,6 +691,17 @@ pub(crate) fn fail_webui_context_compaction_execution(
     commit_mode: ContextCompactionCommitMode,
     error: &str,
 ) -> Result<WorkspaceSnapshot, String> {
+    // Publish the canonical error before releasing standalone ownership, including rejected summaries.
+    // 在释放独立所有权前发布规范错误，包含被拒绝的摘要。
+    if commit_mode.finishes_active_stream() {
+        {
+            // A stale callback must not append an error to replacement work.
+            // 过期回调不得向替代工作追加错误。
+            let guard = state.lock().map_err(|error| error.to_string())?;
+            ensure_context_compaction_commit_owner(&guard, session_id, commit_mode)?;
+        }
+        super::manual::fail(state, session_id, commit_mode.task_id(), error)?;
+    }
     // committed_state carries the post-terminal workspace and its aligned phase delta.
     // committed_state 携带终结后的工作区及其对齐阶段增量。
     let (workspace, phase_event) = {
@@ -702,6 +723,7 @@ pub(crate) fn fail_webui_context_compaction_execution(
                 section_id,
                 budget_note,
                 trigger,
+                commit_mode.task_id(),
                 error,
             )?;
         }
@@ -729,6 +751,16 @@ pub(crate) fn fail_webui_context_compaction_execution(
 
 /// Applies failed context-compaction state inside one retained workspace snapshot.
 /// 在单个保留的工作区快照内应用上下文压缩失败状态。
+/// `workspace` owns `session_id`; phase and section arguments identify its display record, while `trigger` and `task_id` bind retry accounting.
+/// `workspace` 拥有 `session_id`；阶段与分段参数标识显示记录，`trigger` 和 `task_id` 绑定重试计数。
+/// `error` is retained verbatim; returns only after the complete process-local projection is installed.
+/// `error` 原样保留；仅在完整进程内投影安装后返回。
+// Keep retry ownership explicit beside the existing display projection coordinates.
+// 在既有显示投影坐标旁保持重试归属明确。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Failure projection requires exact display and retry ownership."
+)]
 pub(crate) fn apply_webui_context_compaction_failure_to_workspace(
     workspace: &mut WorkspaceSnapshot,
     session_id: SessionId,
@@ -736,6 +768,7 @@ pub(crate) fn apply_webui_context_compaction_failure_to_workspace(
     section_id: &str,
     budget_note: &str,
     trigger: &str,
+    task_id: Uuid,
     error: &str,
 ) -> Result<(), String> {
     let now = current_unix_millis_text();
@@ -766,6 +799,12 @@ pub(crate) fn apply_webui_context_compaction_failure_to_workspace(
         error,
     )?;
     if trigger == AUTO_CONTEXT_COMPACTION_TRIGGER {
+        // A newly admitted stream owns a fresh retry budget, even when the old attempt reached its limit.
+        // 新准入流拥有新的重试额度，即使旧尝试已达到限制。
+        if runtime_state.auto_compaction_failure_task_id != Some(task_id) {
+            runtime_state.auto_compaction_failure_task_id = Some(task_id);
+            runtime_state.auto_compaction_consecutive_failures = 0;
+        }
         runtime_state.auto_compaction_consecutive_failures = runtime_state
             .auto_compaction_consecutive_failures
             .saturating_add(1);

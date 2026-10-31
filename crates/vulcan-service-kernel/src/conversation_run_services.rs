@@ -317,6 +317,7 @@ pub(crate) async fn service_compact_selected_conversation_context(
         compaction_plan.full_context_state,
         compaction_plan.media_projection,
         compaction_plan.retained_from_seq,
+        compaction_plan.source,
         model_target,
     )?;
     Ok(workbench)

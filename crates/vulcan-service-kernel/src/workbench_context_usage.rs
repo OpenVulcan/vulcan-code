@@ -765,7 +765,11 @@ pub(crate) fn context_budget_severity_key(context_budget: &ContextBudgetSnapshot
 
 /// Converts one V1 usage snapshot into the existing context-budget value type without estimates.
 /// 将一份 V1 用量快照无估算地转换为现有上下文预算值类型。
-fn v1_usage_to_core(usage: &UsageSnapshot) -> Option<vulcan_core::types::ProviderUsageSnapshot> {
+/// `usage` supplies canonical dimensions; returns `None` only when a dimension exceeds the host integer width.
+/// `usage` 提供规范维度；仅在某一维度超过宿主整数位宽时返回 `None`。
+pub(crate) fn v1_usage_to_core(
+    usage: &UsageSnapshot,
+) -> Option<vulcan_core::types::ProviderUsageSnapshot> {
     Some(vulcan_core::types::ProviderUsageSnapshot {
         update_kind: None,
         input_tokens: checked_v1_token_dimension(usage.input_tokens)?,

@@ -304,7 +304,12 @@ async fn settle_owned(
             let service = read_state.lock().map_err(|error| error.to_string())?;
             match service.child_maintenance_owners.get(&session_id) {
                 Some(owner)
-                    if owner.execution.business_execution_id.as_str() == business_execution_id =>
+                    if owner
+                        .execution
+                        .business_execution_id
+                        .as_ref()
+                        .map(|id| id.as_str())
+                        == Some(business_execution_id.as_str()) =>
                 {
                     Ok(Some(owner.execution.execution_id.clone()))
                 }

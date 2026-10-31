@@ -274,7 +274,7 @@ async fn maintenance_cancelled_waiter_preserves_publication_owner() {
             SessionFlushReason::MetadataChanged,
             |document| {
                 document
-                    .finish_child_context_maintenance(
+                    .finish_context_maintenance(
                         &execution.execution_id,
                         TurnClosureReason::Stopped,
                         11,
@@ -415,7 +415,7 @@ async fn maintenance_admission_retains_owner_until_durable_terminal() {
                 SessionMutationAdmission::ExistingTurn,
                 SessionFlushReason::MetadataChanged,
                 |document| {
-                    document.finish_child_context_maintenance(
+                    document.finish_context_maintenance(
                         &execution.execution_id,
                         TurnClosureReason::Failed,
                         11,

@@ -5,6 +5,8 @@ use super::*;
 use crate::v1::collaboration::{CollaborationExecutionId, CollaborationRunControl};
 use crate::v1::context_maintenance::{ContextMaintenanceExecution, ContextMaintenanceTerminal};
 
+mod manual;
+
 /// Immutable successful source captured from one fully published child document.
 /// 从一个完整发布的子文档捕获的不可变成功来源。
 /// Private fields prevent callers from manufacturing admission by copying arbitrary coordinates.
@@ -151,17 +153,22 @@ impl SessionDocument {
                     field: "context_maintenance.metadata_journal",
                 });
             }
+            // A child keeps its exact captured profile; a manual root has neither child identity nor profile.
+            // 子代理保留精确捕获配置；手动主会话既没有子执行身份，也没有子执行配置。
+            let owner_matches = match (
+                record.business_execution_id.as_ref(),
+                self.metadata.child_execution_profile.as_ref(),
+            ) {
+                (Some(identity), Some(profile)) => {
+                    profile.business_execution_id == identity.as_str()
+                        && profile.business_turn_id == record.business_turn_id
+                        && profile.segment_generation == record.segment_generation
+                }
+                (None, None) => true,
+                _ => false,
+            };
             if record.terminal.is_none()
-                && (self.metadata.open_turn_start_seq != Some(record.started_seq)
-                    || self
-                        .metadata
-                        .child_execution_profile
-                        .as_ref()
-                        .is_none_or(|profile| {
-                            profile.business_execution_id != record.business_execution_id.as_str()
-                                || profile.business_turn_id != record.business_turn_id
-                                || profile.segment_generation != record.segment_generation
-                        }))
+                && (self.metadata.open_turn_start_seq != Some(record.started_seq) || !owner_matches)
             {
                 return Err(DomainError::CollaborationStateViolation {
                     field: "context_maintenance.active_profile",
@@ -197,7 +204,11 @@ impl SessionDocument {
             && existing.execution_id == execution_id
         {
             if existing.source_revision != source.revision
-                || existing.business_execution_id.as_str() != source.profile.business_execution_id
+                || existing
+                    .business_execution_id
+                    .as_ref()
+                    .map(|id| id.as_str())
+                    != Some(source.profile.business_execution_id.as_str())
                 || self.metadata.child_execution_profile.as_ref() != Some(&source.profile)
             {
                 return Err(DomainError::CollaborationStateViolation {
@@ -231,9 +242,9 @@ impl SessionDocument {
         // 日志后状态同时是元数据恢复权威。
         let record = ContextMaintenanceExecution {
             execution_id,
-            business_execution_id: CollaborationExecutionId::try_new(
+            business_execution_id: Some(CollaborationExecutionId::try_new(
                 &source.profile.business_execution_id,
-            )?,
+            )?),
             business_turn_id: source.profile.business_turn_id,
             turn_id,
             segment_generation: self.segment_generation(),
@@ -277,7 +288,7 @@ impl SessionDocument {
     /// 在 `now_ms` 仅以 `reason` 闭合 `execution_id`；成功要求其自身已提交的压缩节点。
     /// Returns the exact auxiliary terminal sequence and never publishes business results or consumes TTL.
     /// 返回精确辅助终态序号，绝不发布业务结果或消耗 TTL。
-    pub fn finish_child_context_maintenance(
+    pub fn finish_context_maintenance(
         &mut self,
         execution_id: &CollaborationExecutionId,
         reason: TurnClosureReason,

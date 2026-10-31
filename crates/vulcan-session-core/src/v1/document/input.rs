@@ -1170,11 +1170,13 @@ impl SessionDocument {
         // 将已观察队列输入与准入一起持久化，先于任何进程内 Hook 通知。
         // Canonical turn ownership exists before Hook preparation, closing that initial crash window too.
         // Hook 准备前已存在规范回合归属，同时关闭该初始崩溃窗口。
-        if let Some(turn) = self
-            .active_turn
-            .as_ref()
-            .filter(|turn| !turn.closed && turn.origin != TurnOrigin::QuestionExecution)
-        {
+        if let Some(turn) = self.active_turn.as_ref().filter(|turn| {
+            !turn.closed
+                && !matches!(
+                    turn.origin,
+                    TurnOrigin::QuestionExecution | TurnOrigin::ContextMaintenance
+                )
+        }) {
             staged_metadata
                 .business_hook
                 .observed_inputs
@@ -1612,6 +1614,11 @@ impl SessionDocument {
         // An auxiliary turn cannot own a human task; leave its exact queue entry untouched.
         // 辅助回合不能拥有人类任务；保持精确队列项不变。
         let turn = self.require_open_turn()?;
+        if turn.origin == TurnOrigin::ContextMaintenance {
+            return Err(DomainError::CollaborationStateViolation {
+                field: "context_maintenance.business_inputs",
+            });
+        }
         if turn.origin == TurnOrigin::QuestionExecution {
             return Err(DomainError::CollaborationStateViolation {
                 field: "question_execution.business_inputs",
@@ -1955,6 +1962,11 @@ impl SessionDocument {
         // Direct callers must obey the same auxiliary boundary as queue promotion.
         // 直接调用者必须遵守与队列晋升相同的辅助边界。
         let turn = self.require_open_turn()?;
+        if turn.origin == TurnOrigin::ContextMaintenance {
+            return Err(DomainError::CollaborationStateViolation {
+                field: "context_maintenance.business_inputs",
+            });
+        }
         if turn.origin == TurnOrigin::QuestionExecution {
             return Err(DomainError::CollaborationStateViolation {
                 field: "question_execution.business_inputs",
@@ -2026,6 +2038,13 @@ impl SessionDocument {
         }
         let turn = self.require_open_turn()?;
         let turn_id = turn.turn_id;
+        // Compaction produces a summary, never a response to newly inserted business input.
+        // 压缩只产生摘要，绝不响应新插入的业务输入。
+        if turn.origin == TurnOrigin::ContextMaintenance {
+            return Err(DomainError::CollaborationStateViolation {
+                field: "context_maintenance.business_inputs",
+            });
+        }
         if turn.origin == TurnOrigin::QuestionExecution {
             return Err(DomainError::CollaborationStateViolation {
                 field: "question_execution.business_inputs",

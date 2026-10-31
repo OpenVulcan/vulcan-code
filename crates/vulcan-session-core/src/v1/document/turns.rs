@@ -641,7 +641,7 @@ impl SessionDocument {
                 .execution_id
                 .clone();
             return self
-                .finish_child_context_maintenance(&execution_id, outcome.into(), now_ms)
+                .finish_context_maintenance(&execution_id, outcome.into(), now_ms)
                 .map(IdempotentMutation::into_value);
         }
         let turn_id = self.require_open_turn()?.turn_id;

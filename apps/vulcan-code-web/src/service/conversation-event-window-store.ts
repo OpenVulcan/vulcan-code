@@ -76,7 +76,10 @@ export type ApiPurposeKind =
   | "retry_generation"
   | "compaction"
   | "continue"
-  | "subagent";
+  | "subagent"
+  // Matches the canonical collaboration-question request purpose in Session Core.
+  // 对齐 Session Core 中规范的协作答疑请求用途。
+  | "question_execution";
 
 /** Immutable resolved configuration of one Provider request.
  * 一次 Provider 请求的不可变已解析配置。 */
@@ -934,6 +937,62 @@ export interface RedactedApiError {
   message: string;
 }
 
+/** Host closure reasons shared by ordinary and auxiliary turns, matching Core's TurnClosureReason.
+ * 普通与辅助回合共享的宿主闭合原因，与 Core 的 TurnClosureReason 一致。 */
+export type TurnClosureReason = "completed" | "abandoned" | "stopped" | "failed";
+
+/** Terminal maintenance facts serialized by Core; null on the execution means it remains open.
+ * Core 序列化的维护终态事实；执行上的空值表示仍未闭合。 */
+export interface ContextMaintenanceTerminal {
+  /** Explicit closure classification, independent of business outcome.
+   * 明确闭合分类，独立于业务结果。 */
+  reason: TurnClosureReason;
+  /** Committed summary identity, present only after successful maintenance.
+   * 已提交摘要身份，仅成功维护后存在。 */
+  compaction_id: number | null;
+  /** Unique terminal statistics sequence for this auxiliary turn.
+   * 此辅助回合唯一的终态统计序号。 */
+  end_seq: number;
+  /** Completion timestamp in Unix milliseconds.
+   * 完成时间戳，单位为 Unix 毫秒。 */
+  completed_at_ms: number;
+}
+
+/** Exact Core ContextMaintenanceExecution wire record retained by hydration, pagination and live updates.
+ * 由首次加载、分页和实时更新保留的精确 Core ContextMaintenanceExecution 线协议记录。 */
+export interface ContextMaintenanceExecution {
+  /** Unique auxiliary execution identity, independent of business execution.
+   * 唯一辅助执行身份，独立于业务执行。 */
+  execution_id: string;
+  /** Original child execution identity; manual root maintenance explicitly stores null.
+   * 原子执行身份；手动主会话维护明确存储空值。 */
+  business_execution_id: string | null;
+  /** Completed business source turn, never reopened by maintenance.
+   * 已完成的业务来源回合，绝不由维护重开。 */
+  business_turn_id: number;
+  /** Separate turn owning the maintenance API requests.
+   * 拥有维护 API 请求的独立回合。 */
+  turn_id: number;
+  /** Exact history generation owning the execution.
+   * 拥有执行的精确历史代次。 */
+  segment_generation: number;
+  /** Durable planning revision verified at admission.
+   * 准入时核验的可靠规划修订。 */
+  source_revision: number;
+  /** Compaction checkpoint preceding this attempt, explicitly null before the first one.
+   * 本次尝试之前的压缩检查点，首次压缩前明确为空。 */
+  source_compaction_id: number | null;
+  /** Immutable host-only start event sequence.
+   * 不可变的仅宿主起始事件序号。 */
+  started_seq: number;
+  /** Admission timestamp in Unix milliseconds.
+   * 准入时间戳，单位为 Unix 毫秒。 */
+  started_at_ms: number;
+  /** Published auxiliary closure, explicitly null while execution is open.
+   * 已发布的辅助闭合；执行开放期间明确为空。 */
+  terminal: ContextMaintenanceTerminal | null;
+}
+
 /** Full strongly typed persisted event body.
  * 完整强类型持久化事件体。 */
 export type ConversationEventBody =
@@ -1034,11 +1093,11 @@ resolution: "moved_to_draft" | "removed" | "promoted_to_pending_in_turn";
       kind: "turn_boundary";
       /** Explicit host closure classification, independent of the aggregate stopped outcome.
        * 明确宿主闭合分类，独立于聚合停止结果。 */
-      reason: "completed" | "abandoned" | "stopped" | "failed";
+      reason: TurnClosureReason;
       outcome: "completed" | "abandoned" | "stopped";
-      /** Durable purpose distinguishes business completion from auxiliary question execution.
-       * 持久化用途区分业务完成与辅助答疑执行。 */
-      purpose: "business" | "question_execution";
+      /** Durable purpose distinguishes business completion from auxiliary questions and maintenance.
+       * 持久化用途区分业务完成、辅助答疑和维护。 */
+      purpose: "business" | "question_execution" | "context_maintenance";
     }
   | {
       kind: "turn_stats";
@@ -1113,7 +1172,8 @@ resolution: "moved_to_draft" | "removed" | "promoted_to_pending_in_turn";
       api_call_id?: number;
       client_action_id?: ClientActionId;
     }
-  | CollaborationEvent;
+  | CollaborationEvent
+  | ({ kind: "context_maintenance" } & ContextMaintenanceExecution);
 
 /** Stable event kind derived from the discriminated event body.
  * 从判别事件体派生的稳定事件种类。 */
@@ -2238,6 +2298,10 @@ function eventIdentity(summary: ConversationEventSummary): EventIdentity {
       return `${event.kind}:${event.control_kind}:${event.api_call_id ?? "none"}:${event.client_action_id ?? "none"}`;
     case "collaboration":
       return `${event.kind}:${event.operation_id}`;
+    case "context_maintenance":
+      // Start and terminal records retain their execution owner; sequence identity keeps both facts separate.
+      // 起始与终态记录保留执行所有者；序号身份让两条事实彼此独立。
+      return `${event.kind}:${event.execution_id}`;
   }
 }
 

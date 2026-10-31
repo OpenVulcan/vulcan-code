@@ -131,8 +131,8 @@ pub enum TurnOrigin {
     /// A dedicated auxiliary turn answered a temporary collaboration question.
     /// 专用辅助回合回答临时协作问题。
     QuestionExecution,
-    /// An independent auxiliary execution maintains a completed child's context.
-    /// 独立辅助执行维护已完成子任务的上下文。
+    /// An independent auxiliary execution maintains an idle root or completed child's context.
+    /// 独立辅助执行维护空闲主会话或已完成子任务的上下文。
     ContextMaintenance,
 }
 

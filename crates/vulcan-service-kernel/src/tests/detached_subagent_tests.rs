@@ -954,6 +954,7 @@ fn context_compaction_registration_failure_commits_domain_terminal_state() {
                 &section_id,
                 "预算说明",
                 MANUAL_CONTEXT_COMPACTION_TRIGGER,
+                Uuid::new_v4(),
                 "registered task start gate closed",
             )
             .expect("formal compaction failure should commit");

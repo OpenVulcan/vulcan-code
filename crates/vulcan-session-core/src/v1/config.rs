@@ -24,7 +24,7 @@ pub const METADATA_CONTRACT: &str = "vulcan.session.v1";
 /// automatically on first read; older and future versions are rejected (AGENTS.md section 1 rule 12).
 /// 当前元数据模式版本。自 `METADATA_UPGRADE_BASELINE_VERSION` 起的版本在首次读取时自动升级；
 /// 更早与未来的版本一律拒绝（AGENTS.md 第一节第 12 条）。
-pub const METADATA_SCHEMA_VERSION: u32 = 10;
+pub const METADATA_SCHEMA_VERSION: u32 = 11;
 
 /// Oldest metadata schema that can still be upgraded; it was current on 2026-10-29.
 /// 仍可自动升级的最早元数据模式版本；即 2026-10-29 时的当前版本。
@@ -790,7 +790,11 @@ struct AnswerModePreferenceWire {
 
 /// Decode a present nullable field; a missing field stays a schema error.
 /// 解码存在且可为空的字段；缺失字段仍是模式错误。
-fn deserialize_required_nullable<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
+pub(super) fn deserialize_required_nullable<
+    'de,
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+>(
     deserializer: D,
 ) -> Result<Option<T>, D::Error> {
     Option::deserialize(deserializer)

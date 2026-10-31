@@ -161,7 +161,16 @@ pub(super) async fn verify(
         .as_mut()
         .expect("workspace")
         .session_runtime_state
-        .insert(session_id, SessionRuntimeStateEntry::default());
+        .insert(
+            session_id,
+            SessionRuntimeStateEntry {
+                // A manual success must clear the previous automatic failure streak.
+                // 手动成功必须清除先前的自动失败序列。
+                auto_compaction_failure_task_id: Some(uuid::Uuid::new_v4()),
+                auto_compaction_consecutive_failures: 1,
+                ..SessionRuntimeStateEntry::default()
+            },
+        );
     let state = Arc::new(Mutex::new(service));
     assert!(
         crate::webui_vmm_runtime_readiness(&state)
@@ -181,6 +190,35 @@ pub(super) async fn verify(
             2,
         )
         .expect("root input");
+    // The explicit command owns a distinct auxiliary turn before its physical compaction API.
+    // 显式命令在物理压缩 API 前拥有独立辅助回合。
+    let task_id = uuid::Uuid::new_v4();
+    handle
+        .mutate_durable(
+            SessionMutationAdmission::ExistingTurn,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document.close_turn(vulcan_session_core::v1::event::TurnOutcome::Stopped, 0, 2)
+            },
+        )
+        .expect("close original business");
+    handle
+        .mutate_durable(
+            SessionMutationAdmission::RootTurn,
+            SessionFlushReason::MetadataChanged,
+            |document| {
+                document
+                    .begin_manual_context_maintenance(
+                        &document.capture_manual_context_maintenance_source()?,
+                        vulcan_session_core::v1::collaboration::CollaborationExecutionId::try_new(
+                            task_id.to_string(),
+                        )?,
+                        2,
+                    )
+                    .map(|receipt| receipt.into_value())
+            },
+        )
+        .expect("manual maintenance owner");
     let request = ApiRequestSnapshot::new("provider-1", "model-1");
     let preparation = handle
         .read(|document| {
@@ -290,7 +328,6 @@ pub(super) async fn verify(
     // A bounded channel owns the test stream; dropping the sender also terminates it on assertion failure.
     // 有界通道持有测试流；断言失败时发送端析构也会使其终结。
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
-    let task_id = uuid::Uuid::new_v4();
     crate::spawn_registered_active_stream_task_with_mode(
         &state,
         session_id,
@@ -369,6 +406,45 @@ pub(super) async fn verify(
         outcome,
         ContextCompactionFinishOutcome::Committed { .. }
     ));
+    // Durable success closes the auxiliary owner and resets retry state before the kernel slot is released.
+    // 可靠成功闭合辅助所有者，并在内核槽位释放前重置重试状态。
+    handle
+        .read(|document| {
+            assert!(document.active_turn().is_none_or(|turn| turn.closed));
+            assert!(
+                document
+                    .metadata
+                    .context_maintenance
+                    .as_ref()
+                    .unwrap()
+                    .terminal
+                    .as_ref()
+                    .unwrap()
+                    .compaction_id
+                    .is_some()
+            );
+        })
+        .expect("completed manual owner");
+    {
+        // Read retry state from the same workspace used by subsequent user requests.
+        // 从后续用户请求使用的同一工作区读取重试状态。
+        let guard = state.lock().expect("completed compaction workspace");
+        // This session's runtime is the unique retry-budget authority.
+        // 本会话运行态是唯一重试额度权威。
+        let runtime = guard
+            .workspace_snapshot
+            .as_ref()
+            .unwrap()
+            .session_runtime_state
+            .get(&session_id)
+            .unwrap();
+        assert_eq!(runtime.auto_compaction_consecutive_failures, 0);
+        assert!(runtime.auto_compaction_failure_task_id.is_none());
+        assert!(!guard.active_stream_tasks.contains_key(&session_id));
+        assert!(!crate::webui_session_kernel_has_active_turn(
+            &guard, session_id
+        ));
+    }
     if let Some((hook, before, pending_jobs)) = native_hook_baseline {
         // Wait for the real asynchronous notification's committed effect, never call ChatCompact from the test.
         // 等待真实异步通知的已提交效果，测试绝不直接调用 ChatCompact。

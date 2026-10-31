@@ -14,6 +14,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 mod fingerprints;
+mod maintenance_runtime;
 mod metadata_access;
 mod user_prompt;
 

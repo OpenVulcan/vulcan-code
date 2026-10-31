@@ -344,6 +344,10 @@ pub(crate) async fn apply_remote_compaction_completion(
 /// 启动当前会话的上下文压缩流，并将流式事件镜像到 WebUI 状态。
 /// `model_target` is the exact route and adaptive tail policy frozen before planning.
 /// `model_target` 是规划前冻结的精确路由与自适应尾部策略。
+/// `source` binds manual admission to the same durable history used by the plan and media projection.
+/// `source` 将手动准入绑定到规划及媒体投影所用的同一可靠历史。
+/// Returns after task registration; asynchronous failures are published as durable session errors.
+/// 任务登记后返回；异步失败发布为可靠会话错误。
 // Compaction keeps durable identity, UI presentation and borrowed execution owners separate.
 // 压缩流程分别保留持久化身份、界面展示及借用的执行所有者。
 #[expect(
@@ -366,6 +370,7 @@ pub(crate) fn spawn_webui_context_compaction_task(
         dyn vulcan_agent_runtime::prompt_media_projection::PromptMediaProjectionRuntime,
     >,
     retained_from_seq: Seq,
+    source: vulcan_session_core::v1::context_maintenance::ManualContextMaintenanceSource,
     model_target: PromptCompactionModelTarget,
 ) -> Result<(), String> {
     let request = build_webui_context_compaction_job_request(
@@ -400,7 +405,20 @@ pub(crate) fn spawn_webui_context_compaction_task(
         .ok()
         .and_then(|guard| webui_session_kernel_generation(&guard, session_id));
     let task_future = async move {
-        let terminal_result = match request {
+        // Admission creates the real V1 owner before the first physical request is prepared.
+        // 准入在准备首个物理请求前创建真实 V1 所有者。
+        let admitted_request = match super::manual::begin(
+            &task_state,
+            session_id,
+            active_stream_task_id,
+            source,
+        )
+        .await
+        {
+            Ok(()) => request,
+            Err(error) => Err(error),
+        };
+        let terminal_result = match admitted_request {
             Ok(request) => {
                 stream_webui_context_compaction_execution(
                     &task_app,
@@ -490,6 +508,23 @@ pub(crate) fn spawn_webui_context_compaction_task(
             }
             Err(error) => {
                 tracing::warn!("[webui-service] context compaction finish failed: {error}");
+                // A post-stream publication failure must settle the auxiliary owner instead of leaving a busy kernel.
+                // 流结束后的发布失败必须结算辅助所有者，不能遗留忙碌内核。
+                if let Err(settlement_error) = fail_webui_context_compaction_execution(
+                    &task_app,
+                    &task_state,
+                    session_id,
+                    previous_phase,
+                    &status_message_id,
+                    &budget_note,
+                    &trigger,
+                    commit_mode,
+                    &error,
+                ) {
+                    tracing::warn!(
+                        "[webui-service] manual compaction failure settlement failed: {settlement_error}"
+                    );
+                }
             }
         }
     };
@@ -526,6 +561,7 @@ pub(crate) fn spawn_webui_context_compaction_task(
                     &registration_failure_status_message_id,
                     &registration_failure_budget_note,
                     &registration_failure_trigger,
+                    active_stream_task_id,
                     &registration_error_text,
                 )?;
                 // phase_event is generated inside the exact launch-ownership transaction.

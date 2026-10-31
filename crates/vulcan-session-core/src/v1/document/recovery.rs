@@ -319,7 +319,7 @@ impl SessionDocument {
                 None,
                 now_ms,
             )?;
-            staged.finish_child_context_maintenance(
+            staged.finish_context_maintenance(
                 &execution_id,
                 crate::v1::event::TurnClosureReason::Failed,
                 now_ms,

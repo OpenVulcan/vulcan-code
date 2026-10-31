@@ -34,6 +34,34 @@ function requestConfigSummary(
 }
 
 describe("V1 branch request configuration presentation", () => {
+  // A manual compaction failure remains a visible error even if admission failed before any API existed.
+  // 即使手动压缩在任何 API 建立前准入失败，仍应保留可见错误。
+  // Parameters: the optional auxiliary turn identity. Returns: none; checks rendering and diagnostic preservation.
+  // 参数：可选辅助回合身份。返回值：无；验证渲染和诊断保留。
+  it.each([null, 2])("renders a pre-API compaction error with turn %s", (turnId) => {
+    // The diagnostic is retained as data rather than inferred from missing API statistics.
+    // 诊断作为数据保留，不从缺失的 API 统计推断。
+    const detail = "Fixture compaction preparation failed.";
+    // This window intentionally contains no ApiStarted or ApiStats event.
+    // 此窗口有意不包含 ApiStarted 或 ApiStats 事件。
+    const presentation = projectConversationBranchPresentationV1("session-request-config", [{
+      seq: 1, turn_id: turnId, created_at_ms: 1, updated_at_ms: 1, event_revision: 1, visibility: "ui_only",
+      event: { kind: "display_note", notice_kind: "system_error", severity: "error", reason_code: "context_compaction_failed", redacted_detail: detail },
+    }], EMPTY_RESOURCES, (key) => zhCNTranslations[key]);
+    // Locate the rendered error by its semantic role, independent of adjacent history cards.
+    // 按语义角色定位渲染错误，不依赖相邻历史卡片。
+    const message = presentation.messages.find((entry) => entry.role === "system");
+    expect(message).toBeDefined();
+    // The actual parser must accept the durable failure as an error notice without inventing a model route.
+    // 真实解析器必须将可靠失败接纳为错误提示，且不捏造模型路由。
+    const error = parseSystemProviderError(message!.body);
+    expect(error?.upstreamCode).toBe("context_compaction_failed");
+    expect(error?.message).toBe(detail);
+    expect(error?.dispatchOutcome).toBe("unknown");
+    expect(error?.structured).not.toHaveProperty("model_id");
+    expect(parseConversationBlocks(message!).some((block) => block.kind === "notice")).toBe(true);
+  });
+
   // A pre-API host failure must retain its original message without claiming unknown dispatch facts.
   // API 前宿主失败必须保留原始消息，不得声称未知的派发事实。
   it("does not manufacture dispatched provider identity for a host failure", () => {

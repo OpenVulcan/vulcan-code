@@ -9,6 +9,23 @@ use super::{
 };
 use serde::{Deserialize, Serialize};
 
+/// Opaque in-memory source captured with a durable compaction projection; it is never persisted.
+/// 与可靠压缩投影一同捕获的不透明内存来源；绝不持久化。
+/// All execution state and event revisions remain exact while composer-only draft edits may proceed.
+/// 全部执行状态与事件修订保持精确，同时允许仅输入框草稿的编辑。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ManualContextMaintenanceSource {
+    /// The full metadata source prevents unrelated control or configuration changes from being ignored.
+    /// 完整元数据来源防止忽略其他控制或配置变化。
+    pub(crate) metadata: super::config::MetadataDocument,
+    /// Locked context and committed compaction identity must still match the planned source.
+    /// 锁定上下文与已提交压缩身份必须仍匹配规划来源。
+    pub(crate) runtime_lock: super::context::RuntimeLock,
+    /// Resident event identities and revisions detect in-place changes without copying historical text.
+    /// 常驻事件身份及修订检测原位变化，无须复制历史正文。
+    pub(crate) event_revisions: Vec<(Seq, u64)>,
+}
+
 /// Terminal maintenance fact, independent from the original business outcome.
 /// 维护终态事实，独立于原业务结果。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -36,17 +53,18 @@ pub struct ContextMaintenanceExecution {
     /// Unique auxiliary execution identity, distinct from the business execution.
     /// 唯一辅助执行身份，与业务执行区分。
     pub execution_id: CollaborationExecutionId,
-    /// Original completed business identity.
-    /// 原已完成业务身份。
-    pub business_execution_id: CollaborationExecutionId,
+    /// Original child execution identity; manual root maintenance has no child execution.
+    /// 原子执行身份；手动主会话维护没有子执行身份。
+    #[serde(deserialize_with = "super::config::deserialize_required_nullable")]
+    pub business_execution_id: Option<CollaborationExecutionId>,
     /// Original completed business turn, never reopened by maintenance.
     /// 原已完成业务回合，绝不被维护重开。
     pub business_turn_id: TurnId,
     /// Separate physical API owner allocated for this auxiliary execution.
     /// 为本辅助执行分配的独立物理 API 所有者。
     pub turn_id: TurnId,
-    /// Exact child history generation owning this execution.
-    /// 拥有此执行的精确子历史代次。
+    /// Exact history generation owning this execution.
+    /// 拥有此执行的精确历史代次。
     pub segment_generation: u64,
     /// Durable source revision verified before admission.
     /// 准入前核验的可靠来源修订。
@@ -72,7 +90,7 @@ impl ContextMaintenanceExecution {
         if self.segment_generation != generation
             || generation == 0
             || self.source_revision == 0
-            || self.execution_id == self.business_execution_id
+            || self.business_execution_id.as_ref() == Some(&self.execution_id)
             || self.turn_id <= self.business_turn_id
             || self.started_at_ms < 0
             || self.terminal.as_ref().is_some_and(|terminal| {

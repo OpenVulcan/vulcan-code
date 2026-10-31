@@ -557,7 +557,7 @@ async fn run_child_maintenance(native: bool, refresh: bool, standalone: bool) {
     // 维护终态独立于保持不变的原业务档案。
     let maintenance = reloaded.metadata.context_maintenance.as_ref().unwrap();
     assert_eq!(
-        maintenance.business_execution_id.as_str(),
+        maintenance.business_execution_id.as_ref().unwrap().as_str(),
         profile.business_execution_id
     );
     assert_eq!(

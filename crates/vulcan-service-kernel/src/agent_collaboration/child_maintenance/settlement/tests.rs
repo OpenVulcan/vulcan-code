@@ -203,7 +203,7 @@ async fn maintenance_settlement_keeps_existing_terminal() {
             SessionMutationAdmission::ExistingTurn,
             SessionFlushReason::MetadataChanged,
             |document| {
-                document.finish_child_context_maintenance(
+                document.finish_context_maintenance(
                     &execution.execution_id,
                     TurnClosureReason::Failed,
                     11,

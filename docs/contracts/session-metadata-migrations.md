@@ -45,6 +45,16 @@
 `priority`；缺省即路由默认时长与标准档位，只由提供该能力的路由应用，其他路由忽略）。9→10 只更新版本号，
 原字节保存为同目录的 `metadata.v9.backup.json`。
 
+11 将 `context_maintenance.business_execution_id` 扩展为必填可空：子代理仍保存原执行身份，
+用户显式手动压缩主会话时为 `null`，真实来源由 `business_turn_id` 绑定。10→11 保留已有子执行身份，
+只更新版本号；原字节保存为 `metadata.v10.backup.json`。维护使用独立回合，成功、失败、停止和进程中断
+均通过正式事件闭合，不重开已结束业务，也不构造用户提示词。
+维护期间新消息可正常排队，但不允许插入维护回合，不将用户输入或记忆观察归入压缩请求。
+运行时尾段加载必须识别未终结的 `ContextMaintenance` 起始事件，核对事件回合、记录回合与起始序号；
+起点位于已封口分片时，按 `open_turn_start_seq` 加载对应区间。服务重新取得会话所有权后，通过领域中断恢复
+闭合失去进程所有者的维护及 API，并在向草稿或请求入口发布句柄前可靠写入；不删除历史、不清空草稿，也不要求
+用户手工修复文件。当前格式新建会话、分片滚动、API 启动前后中断和冷草稿读写均由回归测试约束。
+
 基线之前的会话无法加载，因此也无法走“先归档再删除”。唯一清理入口是 `service_delete_unsupported_conversation`：
 在会话生命周期守卫内先以 `session_v1_format_is_unsupported` 只读元数据确认其为 `UnsupportedDevelopmentFormat`，
 再经 `delete_session_v1` 删除会话目录与索引记录。可读会话返回 `ERR_SESSION_FORMAT_SUPPORTED`，损坏或缺失仍是
