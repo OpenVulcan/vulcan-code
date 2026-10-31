@@ -37,13 +37,13 @@ function row(id: string, status: "running" | "completed" | "failed" | "stopped" 
   }] };
 }
 
-/** Renders the first production sequence; active omits the following answer, enabled controls folding; returns completion.
- * 渲染首个生产序列；active 表示后续回复尚未到达，enabled 控制折叠；返回渲染完成。
+/** Renders the first production sequence; enabled controls folding; returns completion.
+ * 渲染首个生产序列；enabled 控制折叠；返回渲染完成。
  */
-async function render(items: ConversationRenderItem[], active = true, enabled = true) {
+async function render(items: ConversationRenderItem[], enabled = true) {
   // entry uses production grouping, including the single-tool case.
   // entry 使用生产分组逻辑，包含单工具情况。
-  const entry = groupVisibleProcessBodyEntries("process", items, true, !active)[0];
+  const entry = groupVisibleProcessBodyEntries("process", items, true)[0];
   if (entry.kind !== "tool-sequence") throw new Error("Expected tool group");
   await act(async () => root.render(<I18nProvider initialLocale="zh-CN">
     <ConversationMeasuredCollapseProvider initialMemory={{}} onMemoryChange={() => {}} scopeId="session">
@@ -53,14 +53,8 @@ async function render(items: ConversationRenderItem[], active = true, enabled = 
   </I18nProvider>));
 }
 
-it.each([
-  ["running", true],
-  ["completed", true],
-  ["completed", false],
-  ["failed", false],
-  ["stopped", false],
-] as const)("shows a single %s tool without a group toggle (active=%s)", async (status, active) => {
-  await render([row("one", status)], active);
+it.each(["running", "completed", "failed", "stopped"] as const)("shows a single %s tool without a group toggle", async (status) => {
+  await render([row("one", status)]);
   expect(host.querySelector(".vk-tools-head")).toBeNull();
   expect(host.querySelector('[data-tool="one"]')).not.toBeNull();
   expect(host.querySelector(".vk-tool-seq")?.getAttribute("data-expanded")).toBe("true");
@@ -68,10 +62,10 @@ it.each([
 });
 
 it("keeps a single tool visible even when its group previously remembered a manual collapse", async () => {
-  await render([row("one"), row("two")], false);
+  await render([row("one"), row("two")]);
   await act(async () => host.querySelector<HTMLButtonElement>(".vk-tools-head")!.click());
   await act(async () => host.querySelector<HTMLButtonElement>(".vk-tools-head")!.click());
-  await render([row("one")], false);
+  await render([row("one")]);
   expect(host.querySelector(".vk-tools-head")).toBeNull();
   expect(host.querySelector('[data-tool="one"]')).not.toBeNull();
 });
@@ -120,36 +114,33 @@ it("keeps every card of a running run visible once the user expands it", async (
 
 it("folds the entire stable group and preserves explicit manual expansion across updates", async () => {
   await render([row("one"), row("two")]);
-  await render([row("one"), row("two")], false);
   expect(host.querySelector(".vk-tool-seq")?.getAttribute("data-expanded")).toBe("false");
   expect(host.querySelectorAll("[data-tool]")).toHaveLength(0);
   await act(async () => host.querySelector<HTMLButtonElement>(".vk-tools-head")!.click());
   expect(host.querySelectorAll("[data-tool]")).toHaveLength(2);
-  await render([row("one"), row("two"), row("three")], false);
+  await render([row("one"), row("two"), row("three")]);
   expect(host.querySelectorAll("[data-tool]")).toHaveLength(3);
 });
 
 it("keeps every row open with folding disabled, including a previously manually closed group", async () => {
-  await render([row("one"), row("two")], false);
+  await render([row("one"), row("two")]);
   await act(async () => host.querySelector<HTMLButtonElement>(".vk-tools-head")!.click());
   await act(async () => host.querySelector<HTMLButtonElement>(".vk-tools-head")!.click());
   expect(host.querySelectorAll("[data-tool]")).toHaveLength(0);
-  await render([row("one"), row("two")], false, false);
+  await render([row("one"), row("two")], false);
   expect(host.querySelectorAll("[data-tool]")).toHaveLength(2);
   expect(host.querySelector(".vk-tools-head")).toBeNull();
   expect(host.querySelector(".vk-tool-seq")?.getAttribute("data-grouped")).toBe("false");
 });
 
 it("shows every row without a summary while folding is disabled, without remounting tool rows", async () => {
-  await render([row("one"), row("two", "running")], true, false);
+  await render([row("one"), row("two", "running")], false);
   // first verifies changing the setting does not reset the tool card's own state.
   // first 验证切换设置不会重置工具卡片自身的状态。
   const first = host.querySelector('[data-tool="one"]');
   expect(first).not.toBeNull();
   expect(host.querySelector(".vk-tools-head")).toBeNull();
-  await render([row("one"), row("two")], true, false);
-  expect(host.querySelector('[data-tool="one"]')).toBe(first);
-  await render([row("one"), row("two")], false, false);
+  await render([row("one"), row("two")], false);
   expect(host.querySelector('[data-tool="one"]')).toBe(first);
   expect(host.querySelectorAll("[data-tool]")).toHaveLength(2);
   expect(host.querySelector(".vk-tools-head")).toBeNull();
@@ -192,9 +183,9 @@ it("closes and folds the tools before a context-compaction card", () => {
     { id: "compaction-block", kind: "notice", title: "", body: "", summary: "", compactionSectionId: "s", compactionRole: "end", compactionState: "completed" },
   ] };
   const [tools, card, after] = groupVisibleProcessBodyEntries("process", [row("one"), row("two"), compaction, row("three")], true);
-  expect(tools).toMatchObject({ kind: "tool-sequence", active: false });
+  expect(tools).toMatchObject({ kind: "tool-sequence", runningItems: [] });
   expect(card).toMatchObject({ kind: "item", item: { id: "compaction" } });
-  expect(after).toMatchObject({ kind: "tool-sequence", active: true });
+  expect(after).toMatchObject({ kind: "tool-sequence", items: [{ id: "three" }] });
 });
 
 it.each(["context_injection", "reasoning_effort_switch", "model_switch"])(
@@ -206,18 +197,18 @@ it.each(["context_injection", "reasoning_effort_switch", "model_switch"])(
       { id: "notice-block", kind: "notice", title: "", body: "", summary: "", rawMetadata: { notice_kind: noticeKind } },
     ] };
     const [tools, card, after] = groupVisibleProcessBodyEntries("process", [row("one"), row("two"), notice, row("three"), row("four", "running")], true);
-    expect(tools).toMatchObject({ kind: "tool-sequence", active: false });
+    expect(tools).toMatchObject({ kind: "tool-sequence", runningItems: [] });
     expect(card).toMatchObject({ kind: "item", item: { id: "notice" } });
-    expect(after).toMatchObject({ kind: "tool-sequence", active: true });
+    expect(after).toMatchObject({ kind: "tool-sequence", runningItems: [{ id: "four" }] });
     if (after?.kind !== "tool-sequence") throw new Error("Expected the run after the notice to be a tool sequence");
     expect(after.collapseId).not.toBe((tools as { collapseId: string }).collapseId);
   },
 );
 
-it("keeps a run expanded across a notice while one of its tools is still running", () => {
+it("keeps a still-running tool visible in a run closed by a notice", () => {
   const notice: ConversationRenderItem = { id: "notice", role: "assistant", sourceMessages: [], blocks: [
     { id: "notice-block", kind: "notice", title: "", body: "", summary: "", rawMetadata: { notice_kind: "context_injection" } },
   ] };
   const [tools] = groupVisibleProcessBodyEntries("process", [row("one"), row("two", "running"), notice], true);
-  expect(tools).toMatchObject({ kind: "tool-sequence", active: true });
+  expect(tools).toMatchObject({ kind: "tool-sequence", runningItems: [{ id: "two" }] });
 });
