@@ -42,9 +42,9 @@ const LABEL_KEYS: Record<JudgeLabel, TranslationKey> = {
 // LABEL_VARIANTS 为每种判定结果着色。
 const LABEL_VARIANTS: Record<JudgeLabel, BadgeVariant> = { allow: "success", review: "warning", block: "destructive" };
 
-// PermissionJudgeEdgeRequestTestDialog sends real judge requests to one official direct endpoint
+// PermissionJudgeEdgeRequestTestDialog sends real judge requests to one cloud endpoint
 // and shows each request's stage times and answer; results stay in the dialog.
-// PermissionJudgeEdgeRequestTestDialog 向一个官方直连端点发送真实判定请求，显示每个请求的各阶段
+// PermissionJudgeEdgeRequestTestDialog 向一个云端端点发送真实判定请求，显示每个请求的各阶段
 // 耗时与回答；结果只保留在对话框中。
 // Parameters: the endpoint to test (null closes the dialog), the close callback and the translator.
 // Returns the dialog.

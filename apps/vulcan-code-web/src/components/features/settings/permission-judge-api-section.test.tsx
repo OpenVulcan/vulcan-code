@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { PublicAiInternalInferenceCandidate, PublicAiSettingsSnapshot } from "@/types";
+import type { PublicAiInternalInferenceCandidate, PublicAiProviderDescriptor, PublicAiSettingsSnapshot } from "@/types";
 
 // The translator returns keys, so assertions name controls by catalog key instead of wording.
 // 翻译函数返回键名，使断言以目录键而非文案定位控件。
@@ -22,7 +22,7 @@ const service = vi.hoisted(() => ({
 }));
 vi.mock("@/service/settings-actions-service", () => service);
 
-const { PermissionJudgeCloudSection, permissionJudgeCloudCandidates } = await import("./permission-judge-cloud-section");
+const { PermissionJudgeApiSection, permissionJudgeApiCandidates } = await import("./permission-judge-api-section");
 
 let host: HTMLDivElement;
 let root: Root;
@@ -42,11 +42,13 @@ afterEach(async () => {
 
 // candidate builds one enabled internal route for the given operation and binding kind.
 // candidate 构建一条指定操作与绑定类型的已启用内部路由。
-function candidate(modelId: string, operation: string, bindingKind: "action" | "protocol"): PublicAiInternalInferenceCandidate {
+function candidate(
+  modelId: string, operation: string, bindingKind: "action" | "protocol", providerId = "p",
+): PublicAiInternalInferenceCandidate {
   return {
     providerDisplayName: "P", serviceEntryDisplayName: "S", connectionDisplayName: "C", modelDisplayName: modelId,
     route: {
-      provider_id: "p", service_entry_id: "s", connection_id: "c", model_id: modelId,
+      provider_id: providerId, service_entry_id: "s", connection_id: "c", model_id: modelId,
       binding: bindingKind === "action"
         ? { kind: "action", action_binding_id: "system_one" }
         : { kind: "protocol", protocol_profile_id: "chat" },
@@ -74,11 +76,23 @@ function configured(decision: PublicAiInternalInferenceCandidate): PublicAiSetti
 
 it("offers only internal decision routes", () => {
   const decision = candidate("jev", "decision_evaluate", "action");
-  expect(permissionJudgeCloudCandidates([
+  expect(permissionJudgeApiCandidates([
     decision,
     candidate("chat", "conversation_respond", "protocol"),
     candidate("rerank", "rerank_documents", "action"),
-  ])).toEqual([decision]);
+  ], [])).toEqual([decision]);
+});
+
+it("never offers a route of the OpenVulcan account", () => {
+  const own = candidate("jev", "decision_evaluate", "action", "typesafe");
+  const providers = [
+    { id: "openvulcan", credential_directory_visibility: "core_account" },
+    { id: "typesafe", credential_directory_visibility: "configured_only" },
+  ] as unknown as PublicAiProviderDescriptor[];
+  expect(permissionJudgeApiCandidates([
+    own,
+    candidate("jev", "decision_evaluate", "action", "openvulcan"),
+  ], providers)).toEqual([own]);
 });
 
 it("reports the saved route and tests it with one decision request", async () => {
@@ -87,15 +101,15 @@ it("reports the saved route and tests it with one decision request", async () =>
   service.testPublicAiInferenceRoute.mockResolvedValue({ modelId: "jev", durationMs: 320 });
   const onConfiguredChange = vi.fn();
 
-  await act(async () => root.render(<PermissionJudgeCloudSection onConfiguredChange={onConfiguredChange} />));
+  await act(async () => root.render(<PermissionJudgeApiSection onConfiguredChange={onConfiguredChange} />));
   expect(onConfiguredChange).toHaveBeenLastCalledWith(true);
-  await act(async () => buttonByKey("settings.permissionJudge.cloud.test")!.click());
+  await act(async () => buttonByKey("settings.permissionJudge.api.test")!.click());
 
   expect(service.testPublicAiInferenceRoute).toHaveBeenCalledExactlyOnceWith({
     consumerProfileId: "permission_judge",
     operation: "decision_evaluate",
   });
-  expect(host.querySelector("[data-cloud-test-result]")).not.toBeNull();
+  expect(host.querySelector("[data-api-test-result]")).not.toBeNull();
 });
 
 it("clears the saved route through the shared route transaction", async () => {
@@ -104,8 +118,8 @@ it("clears the saved route through the shared route transaction", async () => {
   service.savePublicAiInferenceRoute.mockResolvedValue({ ...configured(decision), inferenceProfiles: {} });
   const onConfiguredChange = vi.fn();
 
-  await act(async () => root.render(<PermissionJudgeCloudSection onConfiguredChange={onConfiguredChange} />));
-  await act(async () => buttonByKey("settings.permissionJudge.cloud.clear")!.click());
+  await act(async () => root.render(<PermissionJudgeApiSection onConfiguredChange={onConfiguredChange} />));
+  await act(async () => buttonByKey("settings.permissionJudge.api.clear")!.click());
 
   expect(service.savePublicAiInferenceRoute).toHaveBeenCalledExactlyOnceWith({
     consumerProfileId: "permission_judge",
@@ -113,5 +127,5 @@ it("clears the saved route through the shared route transaction", async () => {
     route: null,
   });
   expect(onConfiguredChange).toHaveBeenLastCalledWith(false);
-  expect(buttonByKey("settings.permissionJudge.cloud.clear")).toBeUndefined();
+  expect(buttonByKey("settings.permissionJudge.api.clear")).toBeUndefined();
 });

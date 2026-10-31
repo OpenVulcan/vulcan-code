@@ -208,7 +208,7 @@ pub enum PageId {
     Appearance,
     Context,
     GitCommit,
-    /// The permission judge: backend, cloud or local model, LLM review and speed tests.
+    /// The permission judge: backend, local, cloud or API model, LLM review and speed tests.
     /// 权限判定：后端、云端或本机模型、LLM 复核与速度测试。
     PermissionJudge,
     /// The re-entrant setup guide; its first step is the permission judge.
@@ -505,9 +505,9 @@ impl PageId {
                         permission_judge::records_request(&Value::Null, None),
                     ),
                 ]);
-                // The official model list and endpoint table are read only while the direct
+                // The official model list and endpoint table are read only while the cloud
                 // section is shown.
-                // 只有显示官方直连区块时才读取官方模型清单与端点表。
+                // 只有显示云端区块时才读取官方模型清单与端点表。
                 if permission_judge::shows_edge(app.slots.value(Slot::PermissionJudgeSettings)) {
                     calls.extend([
                         api::permission_judge::load_permission_judge_edge_models(),
@@ -519,6 +519,7 @@ impl PageId {
                 settings::load_public_ai_settings(),
                 api::permission_judge::load_permission_judge_settings(),
                 api::permission_judge::load_permission_judge_status(),
+                api::permission_judge::load_permission_judge_edge_models(),
             ]),
             // The layout's own reads follow its arrival, since they depend on its content.
             // 版面自身的读取在其到达后发出，因为它们取决于版面内容。

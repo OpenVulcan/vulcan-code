@@ -1,7 +1,7 @@
-//! Endpoint selection of the official direct judge: a background task probes every endpoint of
+//! Endpoint selection of the cloud judge: a background task probes every endpoint of
 //! the chosen model through its public status route and picks the one judge requests use, unless
 //! the user locked one.
-//! 官方直连判定的端点选择：后台任务通过公开状态路由探测所选模型的每个端点，并选出判定请求使用的
+//! 云端判定的端点选择：后台任务通过公开状态路由探测所选模型的每个端点，并选出判定请求使用的
 //! 端点，除非用户已锁定端点。
 //!
 //! Probing never happens per request: it runs at start, on a fixed interval, after a settings
@@ -305,7 +305,7 @@ impl EdgeSelector {
             .find(|endpoint| endpoint.endpoint_id == chosen)
             .ok_or_else(|| {
                 format!(
-                    "The locked official direct endpoint `{chosen}` is not offered for `{model_id}`; lock another endpoint or return to automatic selection."
+                    "The locked cloud judge endpoint `{chosen}` is not offered for `{model_id}`; lock another endpoint or return to automatic selection."
                 )
             })?;
         Ok(Target {
@@ -338,8 +338,8 @@ impl EdgeSelector {
     }
 
     /// Runs one round for the saved settings: obtains the grant, probes every endpoint in turn and
-    /// updates the selection. Clears the findings when the direct backend is not in use.
-    /// 按已保存设置运行一轮：取得授权，依次探测每个端点并更新选择。未使用官方直连后端时清空发现。
+    /// updates the selection. Clears the findings when the cloud backend is not in use.
+    /// 按已保存设置运行一轮：取得授权，依次探测每个端点并更新选择。未使用云端后端时清空发现。
     pub(super) async fn probe(
         &self,
         state: &SharedServiceBridgeState,
@@ -359,7 +359,7 @@ impl EdgeSelector {
                     .await
             }
             Ok(None) => Err(String::from(
-                "Sign in to OpenVulcan before using the official direct judge.",
+                "Sign in to OpenVulcan before using the cloud judge.",
             )),
             Err(error) => Err(error),
         };
@@ -484,13 +484,13 @@ impl EdgeSelector {
 /// Error for a poisoned selection lock.
 /// 选择锁中毒时的错误。
 fn poisoned() -> String {
-    String::from("The official direct endpoint selection state is unavailable.")
+    String::from("The cloud judge endpoint selection state is unavailable.")
 }
 
 /// Error for a grant without endpoints, which the access parser already refuses.
 /// 授权没有端点时的错误；访问解析已拒绝这种情况。
 fn no_endpoint(model_id: &str) -> String {
-    format!("OpenVulcan offered no endpoint for the official direct model `{model_id}`.")
+    format!("OpenVulcan offered no endpoint for the cloud model `{model_id}`.")
 }
 
 /// Starts the background selection task once per process. It probes at start, then every

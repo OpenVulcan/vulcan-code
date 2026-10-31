@@ -647,6 +647,18 @@ pub(crate) async fn service_save_public_ai_inference_route(
         // 路由选择只消费“模型列表”持有的模型级状态，绝不能从消费者专属设置界面修改或绕过它。
         let selection =
             runtime.resolve_internal_inference_selection(&current_configuration, route)?;
+        // The API judge never runs on the OpenVulcan account; OpenVulcan judges only as the cloud
+        // backend.
+        // API 判定绝不运行在 OpenVulcan 账户上；OpenVulcan 只以云端后端参与判定。
+        if request.consumer_profile_id
+            == crate::permission_judge::PERMISSION_JUDGE_CONSUMER_PROFILE_ID
+        {
+            crate::permission_judge::reject_openvulcan_route(
+                &runtime,
+                &current_configuration,
+                route,
+            )?;
+        }
         validate_vmm_llm_reasoning_policy(
             request.consumer_profile_id.as_str(),
             request.purpose_id.as_deref(),

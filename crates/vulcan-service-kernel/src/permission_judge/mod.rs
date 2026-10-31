@@ -1,7 +1,7 @@
 //! Permission judge service: system settings, model registry, local worker and CUDA runtime.
 //! 权限判定服务：系统设置、模型登记表、本机 worker 与 CUDA 执行库。
 
-mod cloud;
+mod api;
 mod edge;
 mod edge_select;
 mod environment;
@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use vulcan_permission_judge::MemoryDigestCache;
 use vulcan_service_api::{PermissionJudgeCudaInstall, PermissionJudgeModelDownload};
 
-pub(crate) use cloud::PERMISSION_JUDGE_CONSUMER_PROFILE_ID;
+pub(crate) use api::{PERMISSION_JUDGE_CONSUMER_PROFILE_ID, reject_openvulcan_route};
 pub(crate) use review::{
     PERMISSION_REVIEW_CONSUMER_PROFILE_ID, PERMISSION_REVIEW_PURPOSE_ID, review_call,
 };
@@ -50,11 +50,11 @@ pub(crate) struct PermissionJudgeRuntime {
     /// Latest official model download.
     /// 最近一次官方模型下载。
     model_download: Mutex<Option<PermissionJudgeModelDownload>>,
-    /// Edge endpoints and tokens of the official direct judge.
-    /// 官方直连判定的边缘端点与令牌。
+    /// Edge endpoints and tokens of the cloud judge.
+    /// 云端判定的边缘端点与令牌。
     edge_access: edge::EdgeAccessCache,
-    /// Endpoint selection of the official direct judge.
-    /// 官方直连判定的端点选择。
+    /// Endpoint selection of the cloud judge.
+    /// 云端判定的端点选择。
     edge_select: edge_select::EdgeSelector,
     /// Decision log of the judge and the reviewer.
     /// 判定器与复核器的判定记录。

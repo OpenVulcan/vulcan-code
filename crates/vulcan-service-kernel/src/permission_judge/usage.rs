@@ -1,7 +1,7 @@
-//! Usage-ledger rows for the judges that do not run through the host AI port: the official direct
-//! (edge) judge and the local worker. The cloud judge is recorded by the host AI port itself.
-//! 不经宿主 AI 端口运行的判定器（官方直连与本机 worker）的用量账本记录；云端判定由宿主 AI 端口
-//! 自行记录。
+//! Usage-ledger rows for the judges that do not run through the host AI port: the cloud (official
+//! edge) judge and the local worker. The API judge is recorded by the host AI port itself.
+//! 不经宿主 AI 端口运行的判定器（云端官方边缘节点与本机 worker）的用量账本记录；API 判定由宿主
+//! AI 端口自行记录。
 //!
 //! A row is written after the judgement finished and never delays or changes the gate decision; a
 //! failure to write it is only logged.
@@ -14,9 +14,9 @@ use vulcan_workspace_store::workspace_store::{
     ProviderUsageAttemptRecord, persist_provider_usage_attempt_and_rebuild_daily,
 };
 
-// The cloud judge's caller identity is the ledger consumer of every judge backend.
-// 云端判定的调用方标识即所有判定后端的账本消费者。
-use super::cloud::JUDGE_CALLER_ID as PERMISSION_JUDGE_CONSUMER_ID;
+// The API judge's caller identity is the ledger consumer of every judge backend.
+// API 判定的调用方标识即所有判定后端的账本消费者。
+use super::api::JUDGE_CALLER_ID as PERMISSION_JUDGE_CONSUMER_ID;
 use crate::SharedServiceBridgeState;
 
 /// Provider identity of judgements answered by the local worker.
@@ -31,15 +31,15 @@ const LOCAL_JUDGE_ENDPOINT_ID: &str = "local";
 /// 本机 worker 判定宿主进程的协议。
 const LOCAL_JUDGE_PROTOCOL_ID: &str = "vulcan-judge-host.v1";
 
-/// Protocol of the official direct judge endpoints.
-/// 官方直连判定端点的协议。
+/// Protocol of the cloud judge's official edge endpoints.
+/// 云端判定官方边缘端点的协议。
 const EDGE_JUDGE_PROTOCOL_ID: &str = "openvulcan-edge-judge.v1";
 
 /// Where one judgement was answered.
 /// 一次判定的作答方。
 pub(super) enum JudgeRoute {
-    /// The official direct judge of the signed-in OpenVulcan account.
-    /// 已登录 OpenVulcan 账户的官方直连判定。
+    /// The cloud judge of the signed-in OpenVulcan account, served from the official edge.
+    /// 已登录 OpenVulcan 账户的云端判定，由官方边缘节点提供。
     Edge {
         /// Account connection the request was sent with.
         /// 发送请求所用的账户连接。

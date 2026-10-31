@@ -111,6 +111,21 @@ fn account_connection(
     Ok(account)
 }
 
+/// Whether provider_id is the core OpenVulcan account provider in the current registry.
+/// provider_id 是否为当前注册表中的 OpenVulcan 核心账户供应商。
+pub(crate) fn is_core_account_provider(
+    runtime: &PublicAiRuntime,
+    configuration: &PersistedAiConfiguration,
+    provider_id: &str,
+) -> Result<bool, String> {
+    Ok(runtime
+        .effective_providers(configuration)?
+        .provider(provider_id)
+        .is_some_and(|provider| {
+            provider.credential_directory_visibility == CredentialDirectoryVisibility::CoreAccount
+        }))
+}
+
 /// Rejects a generic mutation for provider_id when its account is lifecycle-managed.
 /// 当 provider_id 的账户由生命周期管理时拒绝通用变更。
 /// state resolves the current registry; success admits ordinary providers, while a core provider returns a controlled error.
@@ -120,13 +135,7 @@ pub(super) fn reject_generic_provider_mutation(
     provider_id: &str,
 ) -> Result<(), String> {
     let (runtime, configuration) = public_ai_runtime_and_configuration(state)?;
-    if runtime
-        .effective_providers(&configuration)?
-        .provider(provider_id)
-        .is_some_and(|provider| {
-            provider.credential_directory_visibility == CredentialDirectoryVisibility::CoreAccount
-        })
-    {
+    if is_core_account_provider(&runtime, &configuration, provider_id)? {
         return Err(String::from(
             "Core account connections must be managed through account sign-in and sign-out.",
         ));
@@ -213,9 +222,9 @@ pub(crate) async fn usage_page(
     vulcan_provider_adapters::query_openvulcan_usage_page(&http, entry, &secret, &cursor).await
 }
 
-/// Reads the signed-in account's official direct judge calls per model, with every model the
+/// Reads the signed-in account's cloud judge calls per model, with every model the
 /// deployment enables listed; fails when nobody is signed in or the user center cannot answer.
-/// 读取已登录账户按模型的官方直连判定调用，并列出部署启用的每个模型；无人登录或用户中心无法回答时失败。
+/// 读取已登录账户按模型的云端判定调用，并列出部署启用的每个模型；无人登录或用户中心无法回答时失败。
 pub(crate) async fn edge_usage(
     state: SharedServiceBridgeState,
 ) -> Result<vulcan_provider_adapters::OpenVulcanEdgeUsage, String> {

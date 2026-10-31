@@ -7,7 +7,11 @@ import { Button } from "@/ui-kit/primitives/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/ui-kit/primitives/dialog";
 import { RadioGroup, RadioGroupItem } from "@/ui-kit/primitives/radio-group";
 import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
-import { PermissionJudgeCloudSection } from "@/components/features/settings/permission-judge-cloud-section";
+import { OpenVulcanAccountContext } from "@/components/features/account/openvulcan-account-context";
+import { PermissionJudgeApiSection } from "@/components/features/settings/permission-judge-api-section";
+import {
+  PermissionJudgeEdgeSection, edgeModelEnabled, type EdgeModelList,
+} from "@/components/features/settings/permission-judge-edge-section";
 import { DEVICE_KEYS, PHASE_KEYS, REASON_KEYS, label } from "@/components/features/settings/permission-judge-labels";
 import { PermissionJudgeRegisterForm, type PermissionJudgeRegisterRequest } from "@/components/features/settings/permission-judge-register-form";
 import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice";
@@ -15,6 +19,7 @@ import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
 import { errorMessage } from "@/lib/display-format";
 import {
   activatePermissionJudgeModel,
+  loadPermissionJudgeEdgeModels,
   loadPermissionJudgeSettings,
   registerPermissionJudgeModel,
   savePermissionJudgeSettings,
@@ -22,15 +27,16 @@ import {
 import type { PermissionJudgeSettingsSnapshot } from "@/types";
 import "@/ui-kit/styles/features/settings-forms.css";
 
-// Choice is one of the three permission judge answers the guide offers.
-// Choice 是引导提供的三种权限判定答案之一。
-type Choice = "local" | "cloud" | "off";
+// Choice is one of the four permission judge answers the guide offers.
+// Choice 是引导提供的四种权限判定答案之一。
+type Choice = "local" | "cloud" | "api" | "off";
 
 // CHOICES lists the answers in the order the plan presents them, with their copy keys.
 // CHOICES 按计划呈现的顺序列出答案及其文案键。
 const CHOICES: { value: Choice; title: TranslationKey; description: TranslationKey; confirm: TranslationKey }[] = [
   { value: "local", title: "setupGuide.local.title", description: "setupGuide.local.description", confirm: "setupGuide.local.confirm" },
   { value: "cloud", title: "setupGuide.cloud.title", description: "setupGuide.cloud.description", confirm: "setupGuide.cloud.confirm" },
+  { value: "api", title: "setupGuide.api.title", description: "setupGuide.api.description", confirm: "setupGuide.api.confirm" },
   { value: "off", title: "setupGuide.off.title", description: "setupGuide.off.description", confirm: "setupGuide.off.confirm" },
 ];
 
@@ -53,9 +59,11 @@ export interface SetupGuideDialogProps {
   onOpenProviderSettings: () => void;
 }
 
-// SetupGuideDialog walks through the first setup step, the permission judge: a local model, a
-// cloud judge or not now. Only a confirmed choice saves the system settings.
-// SetupGuideDialog 引导第一步设定权限判定：本机模型、云端判定或暂不启用。只有确认的选择才会保存系统设置。
+// SetupGuideDialog walks through the first setup step, the permission judge: a local model, the
+// OpenVulcan cloud judge, a judge API on the user's own provider or not now. Only a confirmed choice
+// saves the system settings.
+// SetupGuideDialog 引导第一步设定权限判定：本机模型、OpenVulcan 云端判定、用户自有供应商上的判定 API 或
+// 暂不启用。只有确认的选择才会保存系统设置。
 export default function SetupGuideDialog(props: SetupGuideDialogProps) {
   const { t } = useI18n();
   const [snapshot, setSnapshot] = React.useState<PermissionJudgeSettingsSnapshot | null>(null);
@@ -63,9 +71,38 @@ export default function SetupGuideDialog(props: SetupGuideDialogProps) {
   const [choice, setChoice] = React.useState<Choice>("local");
   const [busy, setBusy] = React.useState<string | null>(null);
   const [failure, setFailure] = React.useState<Failure | null>(null);
-  // cloudConfigured tells whether a cloud decision route is saved, as reported by its section.
-  // cloudConfigured 表示是否已保存云端判定路由，由其区块报告。
-  const [cloudConfigured, setCloudConfigured] = React.useState(false);
+  // apiConfigured tells whether an API decision route is saved, as reported by its section.
+  // apiConfigured 表示是否已保存 API 判定路由，由其区块报告。
+  const [apiConfigured, setApiConfigured] = React.useState(false);
+  // signedIn tells whether the OpenVulcan account the cloud judge uses is signed in.
+  // signedIn 表示云端判定所用的 OpenVulcan 账户是否已登录。
+  const signedIn = React.useContext(OpenVulcanAccountContext)?.snapshot?.connected === true;
+  // edgeModels is the cloud model list, read while the cloud answer is chosen and the account is
+  // signed in; edgeRead drops answers of superseded reads. pickedEdgeModel is the model picked here.
+  // edgeModels 是云端模型清单，在选中云端答案且账户已登录时读取；edgeRead 丢弃已被取代的读取结果。
+  // pickedEdgeModel 是在此处选择的模型。
+  const [edgeModels, setEdgeModels] = React.useState<EdgeModelList>({ phase: "signedOut" });
+  const [pickedEdgeModel, setPickedEdgeModel] = React.useState<string | null>(null);
+  const edgeRead = React.useRef(0);
+  const loadEdgeModels = React.useCallback(async () => {
+    const read = ++edgeRead.current;
+    setEdgeModels({ phase: "loading" });
+    try {
+      const list = await loadPermissionJudgeEdgeModels();
+      if (read === edgeRead.current) setEdgeModels({ phase: "ready", models: list.models.map((model) => model.modelId) });
+    } catch (cause) {
+      if (read === edgeRead.current) setEdgeModels({ phase: "failed", error: errorMessage(cause) });
+    }
+  }, []);
+  const cloudShown = props.open && choice === "cloud";
+  React.useEffect(() => {
+    if (signedIn && cloudShown) {
+      void loadEdgeModels();
+    } else {
+      edgeRead.current += 1;
+      setEdgeModels({ phase: "signedOut" });
+    }
+  }, [signedIn, cloudShown, loadEdgeModels]);
 
   // Every opening re-reads the settings, so re-entering shows the current state.
   // 每次打开都重新读取设置，使重新进入时显示当前状态。
@@ -96,7 +133,13 @@ export default function SetupGuideDialog(props: SetupGuideDialogProps) {
   };
 
   const activeModel = snapshot?.models.find((model) => model.id === snapshot.activeModelId) ?? null;
-  const ready = choice === "local" ? activeModel !== null : choice === "cloud" ? cloudConfigured : true;
+  // The cloud model is the one picked here, else the saved one, else the first the server enables.
+  // 云端模型依次为此处选择的、已保存的、服务端启用的第一个。
+  const edgeModelId = pickedEdgeModel ?? snapshot?.edgeModelId
+    ?? (edgeModels.phase === "ready" ? edgeModels.models[0] ?? null : null);
+  const ready = choice === "local" ? activeModel !== null
+    : choice === "cloud" ? signedIn && edgeModelEnabled(edgeModels, edgeModelId)
+      : choice === "api" ? apiConfigured : true;
   // confirm saves the chosen backend and keeps the other saved fields; not now writes nothing.
   // confirm 保存所选后端并保留其他已保存字段；暂不启用不写入任何内容。
   const confirm = () => run("confirm", "setupGuide.saveFailed", async () => {
@@ -107,7 +150,7 @@ export default function SetupGuideDialog(props: SetupGuideDialogProps) {
     }
     await savePermissionJudgeSettings({
       backend: choice,
-      edgeModelId: snapshot.edgeModelId,
+      edgeModelId: choice === "cloud" ? edgeModelId : snapshot.edgeModelId,
       device: snapshot.device ?? snapshot.recommendedDevice,
       cudaLibraryDirectory: snapshot.cuda.lockedDirectory,
       llmMayAllowBlocked: snapshot.llmMayAllowBlocked,
@@ -144,11 +187,15 @@ export default function SetupGuideDialog(props: SetupGuideDialogProps) {
             {choice === "local"
               ? <LocalModelStep busy={busy} run={run} snapshot={snapshot} onSnapshot={setSnapshot} />
               : null}
-            {choice === "cloud" ? <div className="vk-form-stack">
-              <PermissionJudgeCloudSection onConfiguredChange={setCloudConfigured} />
+            {choice === "cloud"
+              ? <PermissionJudgeEdgeSection edgeModels={edgeModels} edgeModelId={edgeModelId} disabled={busy !== null}
+                t={t} onEdgeModelChange={setPickedEdgeModel} onRetry={() => void loadEdgeModels()} />
+              : null}
+            {choice === "api" ? <div className="vk-form-stack">
+              <PermissionJudgeApiSection onConfiguredChange={setApiConfigured} />
               <div className="vk-form-inline">
                 <Button type="button" size="sm" variant="ghost" onClick={props.onOpenProviderSettings}>
-                  <ExternalLink size={14} />{t("setupGuide.cloud.providers")}
+                  <ExternalLink size={14} />{t("setupGuide.api.providers")}
                 </Button>
               </div>
             </div> : null}

@@ -8,10 +8,10 @@ import { errorMessage } from "@/lib/display-format";
 import { loadOpenVulcanEdgeUsage, type OpenVulcanEdgeUsage } from "@/service/openvulcan-account-service";
 import { formatCount, formatUsageHour } from "./openvulcan-usage-format";
 
-// OpenVulcanJudgeModels lists the official direct judge models of the account's deployment as tool
+// OpenVulcanJudgeModels lists the cloud judge models of the account's deployment as tool
 // judging models, each with the account's calls over the server's window. It reads when it mounts and on
 // refresh, dropping stale responses; a model the deployment stopped serving stays listed while it has calls.
-// OpenVulcanJudgeModels 以工具裁定模型列出账户所属部署的官方直连判定模型，并附该账户在服务端时间窗内的调用。
+// OpenVulcanJudgeModels 以工具裁定模型列出账户所属部署的云端判定模型，并附该账户在服务端时间窗内的调用。
 // 挂载与刷新时读取并丢弃过期响应；部署已停止提供但仍有调用的模型继续列出。
 // The parent keys this component by connection ID; returns the model table.
 // 父组件按连接 ID 设置本组件 key；返回模型表。

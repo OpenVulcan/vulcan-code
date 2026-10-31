@@ -399,9 +399,9 @@ fn system_prompt_editor_targets_the_loaded_scope() {
     );
 }
 
-/// The official direct endpoint table is re-read at the status interval, so the background probe
+/// The cloud judge endpoint table is re-read at the status interval, so the background probe
 /// shows up without the page probing.
-/// 官方直连端点表按状态间隔重读，使后台探测结果无需页面探测即可显示。
+/// 云端端点表按状态间隔重读，使后台探测结果无需页面探测即可显示。
 #[test]
 fn judge_endpoint_table_is_polled_at_the_status_interval() {
     let (mut app, _commands) = isolated_app();
@@ -422,9 +422,9 @@ fn judge_endpoint_table_is_polled_at_the_status_interval() {
     );
 }
 
-/// With the direct backend saved, the page offers automatic selection or a lock per endpoint and
+/// With the cloud backend saved, the page offers automatic selection or a lock per endpoint and
 /// a re-test that never replaces the table's loader.
-/// 已保存官方直连后端时，页面提供自动选择或按端点锁定，以及不替换端点表加载器的重新测试。
+/// 已保存云端后端时，页面提供自动选择或按端点锁定，以及不替换端点表加载器的重新测试。
 #[test]
 fn judge_endpoint_rows_lock_and_retest_through_their_calls() {
     use super::action::Edit;
@@ -436,7 +436,7 @@ fn judge_endpoint_rows_lock_and_retest_through_their_calls() {
     app.slots.set(
         Slot::PermissionJudgeSettings,
         crate::service_api::permission_judge::load_permission_judge_settings(),
-        json!({"backend": "edge", "edgeModelId": "m", "edgeEndpointId": null, "models": [],
+        json!({"backend": "cloud", "edgeModelId": "m", "edgeEndpointId": null, "models": [],
             "devices": [], "knownPackages": [], "policyOptions": []}),
     );
     app.slots.set(
@@ -489,9 +489,9 @@ fn judge_endpoint_rows_lock_and_retest_through_their_calls() {
     assert!(matches!(probe.kind, CallKind::Mutate(_)));
 }
 
-/// Each official direct endpoint sends a sample or a typed command as a request test of that
-/// endpoint, the result lists every request, and the direct backend offers no speed test.
-/// 每个官方直连端点都能将示例或输入的命令作为该端点的请求测试发送，结果列出每个请求，且直连后端不提供速度测试。
+/// Each cloud judge endpoint sends a sample or a typed command as a request test of that
+/// endpoint, the result lists every request, and the cloud backend offers no speed test.
+/// 每个云端端点都能将示例或输入的命令作为该端点的请求测试发送，结果列出每个请求，且云端后端不提供速度测试。
 #[test]
 fn judge_endpoint_request_test_targets_its_endpoint_and_lists_each_request() {
     use super::action::Edit;
@@ -503,7 +503,7 @@ fn judge_endpoint_request_test_targets_its_endpoint_and_lists_each_request() {
     app.slots.set(
         Slot::PermissionJudgeSettings,
         judge::load_permission_judge_settings(),
-        json!({"backend": "edge", "edgeModelId": "m", "edgeEndpointId": null, "models": [],
+        json!({"backend": "cloud", "edgeModelId": "m", "edgeEndpointId": null, "models": [],
             "devices": [], "knownPackages": [], "policyOptions": []}),
     );
     app.slots.set(

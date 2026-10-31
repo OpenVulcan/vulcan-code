@@ -56,9 +56,9 @@ struct TokenResponse {
     /// Server-owned RFC3339 expiry.
     /// 服务端持有的 RFC3339 过期时间。
     expires_at: String,
-    /// Deployment id the official direct judge sends as its site marker; the host reads it from
+    /// Deployment id the cloud judge sends as its site marker; the host reads it from
     /// each edge access grant instead, so it is accepted here without being stored.
-    /// 官方直连判定作为来源标记发送的部署 id；宿主改从每次边缘授权读取，因此此处只接受、不保存。
+    /// 云端判定作为来源标记发送的部署 id；宿主改从每次边缘授权读取，因此此处只接受、不保存。
     #[serde(default, rename = "site")]
     _site: Option<String>,
 }

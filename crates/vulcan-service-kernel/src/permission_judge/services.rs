@@ -16,7 +16,7 @@ use vulcan_permission_judge::protocol::{JudgeDevice, JudgeInput, JudgeOutcome};
 use vulcan_permission_judge::system::MAX_APPROVAL_TIMEOUT_SECONDS;
 use vulcan_permission_judge::{
     EdgeAnswer, EdgeOutcome, JudgePackage, JudgePolicy, KnownDownload, KnownPackage, ModelFormat,
-    cloud_policy, find_known_package, known_package, known_packages, render_call,
+    find_known_package, hosted_policy, known_package, known_packages, render_call,
 };
 use vulcan_provider_config::provider_config::{
     JudgeBackend, PersistedPermissionJudgeConfiguration, RegisteredJudgeModel,
@@ -49,7 +49,7 @@ use vulcan_service_runtime::judge_model_download::{
 };
 
 use super::PermissionJudgeRuntime;
-use super::cloud::{self, CloudCall};
+use super::api::{self, ApiCall};
 use super::environment::{DEVICE_PREFERENCE, JudgeEnvironment, LoadSpec, device_name};
 use super::usage::{JudgeRoute, JudgeUsage, JudgeUsageOutcome, record_judge_usage};
 use super::{edge, edge_select};
@@ -133,25 +133,25 @@ pub(super) fn local_enabled(settings: &PersistedPermissionJudgeConfiguration) ->
     settings.backend == Some(JudgeBackend::Local)
 }
 
-/// Whether the saved settings run the cloud judge.
-/// 已保存设置是否运行云端判定。
-fn cloud_enabled(settings: &PersistedPermissionJudgeConfiguration) -> bool {
-    settings.backend == Some(JudgeBackend::Cloud)
+/// Whether the saved settings run the API judge.
+/// 已保存设置是否运行 API 判定。
+fn api_enabled(settings: &PersistedPermissionJudgeConfiguration) -> bool {
+    settings.backend == Some(JudgeBackend::Api)
 }
 
-/// The official direct model the saved settings run, or `None` when another backend is chosen.
-/// 已保存设置运行的官方直连模型；选择其他后端时为 `None`。
+/// The cloud model the saved settings run, or `None` when another backend is chosen.
+/// 已保存设置运行的云端模型；选择其他后端时为 `None`。
 pub(super) fn edge_model(settings: &PersistedPermissionJudgeConfiguration) -> Option<&str> {
     settings
         .edge_model_id
         .as_deref()
-        .filter(|_| settings.backend == Some(JudgeBackend::Edge))
+        .filter(|_| settings.backend == Some(JudgeBackend::Cloud))
 }
 
-/// Policy of the chosen backend: the policy this build ships for the cloud and official direct
-/// judges, or the local model in use; `None` when none applies or the local package cannot be
+/// Policy of the chosen backend: the policy this build ships for the cloud and API judges,
+/// or the local model in use; `None` when none applies or the local package cannot be
 /// opened.
-/// 所选后端的策略：本构建为云端与官方直连判定随附的策略，或使用中本机模型的策略；都不适用或本机
+/// 所选后端的策略：本构建为云端与 API 判定随附的策略，或使用中本机模型的策略；都不适用或本机
 /// 模型包无法打开时为 `None`。
 pub(super) async fn backend_policy(
     runtime: &Arc<PermissionJudgeRuntime>,
@@ -159,9 +159,9 @@ pub(super) async fn backend_policy(
 ) -> Result<Option<JudgePolicy>, PermissionJudgeIssue> {
     if matches!(
         settings.backend,
-        Some(JudgeBackend::Cloud | JudgeBackend::Edge)
+        Some(JudgeBackend::Api | JudgeBackend::Cloud)
     ) {
-        return Ok(Some(cloud_policy().clone()));
+        return Ok(Some(hosted_policy().clone()));
     }
     match settings.active_model() {
         Some(model) => open_package(runtime, PathBuf::from(&model.path))
@@ -458,9 +458,9 @@ pub(crate) async fn service_permission_judge_settings(
     snapshot(&runtime, settings).await
 }
 
-/// Lists the official direct models the signed-in OpenVulcan account's deployment currently
+/// Lists the cloud models the signed-in OpenVulcan account's deployment currently
 /// serves; fails when nobody is signed in or the user center cannot answer.
-/// 列出已登录 OpenVulcan 账户所属部署当前提供的官方直连模型；无人登录或用户中心无法回答时失败。
+/// 列出已登录 OpenVulcan 账户所属部署当前提供的云端模型；无人登录或用户中心无法回答时失败。
 pub(crate) async fn service_permission_judge_edge_models(
     state: SharedServiceBridgeState,
 ) -> Result<PermissionJudgeEdgeModels, String> {
@@ -473,8 +473,8 @@ pub(crate) async fn service_permission_judge_edge_models(
     })
 }
 
-/// Returns the endpoints of the chosen official direct model with their latest probe.
-/// 返回所选官方直连模型的端点及其最近一次探测。
+/// Returns the endpoints of the chosen cloud model with their latest probe.
+/// 返回所选云端模型的端点及其最近一次探测。
 pub(crate) async fn service_permission_judge_edge_endpoints(
     state: SharedServiceBridgeState,
 ) -> Result<PermissionJudgeEdgeEndpoints, String> {
@@ -482,8 +482,8 @@ pub(crate) async fn service_permission_judge_edge_endpoints(
     runtime.edge_select.snapshot(&settings)
 }
 
-/// Probes every endpoint of the chosen official direct model now and returns the result.
-/// 立即探测所选官方直连模型的每个端点并返回结果。
+/// Probes every endpoint of the chosen cloud model now and returns the result.
+/// 立即探测所选云端模型的每个端点并返回结果。
 pub(crate) async fn service_probe_permission_judge_edge_endpoints(
     state: SharedServiceBridgeState,
 ) -> Result<PermissionJudgeEdgeEndpoints, String> {
@@ -493,25 +493,22 @@ pub(crate) async fn service_probe_permission_judge_edge_endpoints(
     runtime.edge_select.snapshot(&settings)
 }
 
-/// Locks the official direct judge to one endpoint the deployment offers for the chosen model, or
+/// Locks the cloud judge to one endpoint the deployment offers for the chosen model, or
 /// returns it to automatic selection.
-/// 将官方直连判定锁定到部署为所选模型提供的一个端点，或恢复自动选择。
+/// 将云端判定锁定到部署为所选模型提供的一个端点，或恢复自动选择。
 pub(crate) async fn service_lock_permission_judge_edge_endpoint(
     state: SharedServiceBridgeState,
     request: PermissionJudgeEdgeEndpointLockRequest,
 ) -> Result<PermissionJudgeEdgeEndpoints, String> {
     let (runtime, current) = read_state(&state)?;
     if let Some(endpoint_id) = request.endpoint_id.as_deref() {
-        let model = edge_model(&current).ok_or_else(|| {
-            String::from("Choose the official direct judge before locking an endpoint.")
-        })?;
+        let model = edge_model(&current)
+            .ok_or_else(|| String::from("Choose the cloud judge before locking an endpoint."))?;
         let (connection_id, secret) =
             crate::public_ai_settings::openvulcan_account::signed_in_credential(&state)
                 .await?
                 .ok_or_else(|| {
-                    String::from(
-                        "Sign in to OpenVulcan before locking an official direct endpoint.",
-                    )
+                    String::from("Sign in to OpenVulcan before locking a cloud judge endpoint.")
                 })?;
         let grant = runtime
             .edge_access
@@ -523,7 +520,7 @@ pub(crate) async fn service_lock_permission_judge_edge_endpoint(
             .any(|endpoint| endpoint.endpoint_id == endpoint_id)
         {
             return Err(format!(
-                "OpenVulcan does not offer the endpoint `{endpoint_id}` for the official direct model `{model}`."
+                "OpenVulcan does not offer the endpoint `{endpoint_id}` for the cloud model `{model}`."
             ));
         }
     }
@@ -536,16 +533,16 @@ pub(crate) async fn service_lock_permission_judge_edge_endpoint(
     runtime.edge_select.snapshot(&settings)
 }
 
-/// Sends a few real judge requests to one endpoint of the chosen official direct model and reports
+/// Sends a few real judge requests to one endpoint of the chosen cloud model and reports
 /// each; endpoint selection and the lock are not changed.
-/// 向所选官方直连模型的一个端点发送若干真实判定请求并逐个报告；不改变端点选择与锁定。
+/// 向所选云端模型的一个端点发送若干真实判定请求并逐个报告；不改变端点选择与锁定。
 pub(crate) async fn service_test_permission_judge_edge_request(
     state: SharedServiceBridgeState,
     request: PermissionJudgeEdgeRequestTestRequest,
 ) -> Result<PermissionJudgeEdgeRequestTest, String> {
     let (runtime, settings) = read_state(&state)?;
     let model_id = edge_model(&settings).ok_or_else(|| {
-        String::from("Choose the official direct judge before testing one of its endpoints.")
+        String::from("Choose the cloud judge before testing one of its endpoints.")
     })?;
     edge::test_endpoint(
         &state,
@@ -595,9 +592,9 @@ fn reconcile_worker(
     });
 }
 
-/// Starts the official direct endpoint selection and, when the local judge is enabled, warms the
+/// Starts the cloud judge endpoint selection and, when the local judge is enabled, warms the
 /// saved configuration at service start.
-/// 在服务启动时开始官方直连端点选择；本机判定器启用时预热已保存的配置。
+/// 在服务启动时开始云端端点选择；本机判定器启用时预热已保存的配置。
 pub(crate) fn start_permission_judge(state: &SharedServiceBridgeState) {
     if let Ok(guard) = state.lock() {
         let runtime = Arc::clone(&guard.permission_judge);
@@ -630,27 +627,27 @@ pub(crate) async fn service_save_permission_judge_settings(
             "Register and activate a local model before choosing the local judge.",
         ));
     }
-    if request.backend == Some(JudgeBackend::Cloud) && cloud::configured_model(&state)?.is_none() {
+    if request.backend == Some(JudgeBackend::Api) && api::configured_model(&state)?.is_none() {
         return Err(String::from(
-            "Choose a decision model before choosing the cloud judge.",
+            "Choose a decision model before choosing the API judge.",
         ));
     }
-    if request.backend == Some(JudgeBackend::Edge) {
+    if request.backend == Some(JudgeBackend::Cloud) {
         let model = request.edge_model_id.as_deref().ok_or_else(|| {
-            String::from("Choose an official model before choosing the official direct judge.")
+            String::from("Choose an official model before choosing the cloud judge.")
         })?;
         if crate::public_ai_settings::openvulcan_account::signed_in_credential(&state)
             .await?
             .is_none()
         {
             return Err(String::from(
-                "Sign in to OpenVulcan before choosing the official direct judge.",
+                "Sign in to OpenVulcan before choosing the cloud judge.",
             ));
         }
         // Only a new choice is checked against the server's list, so a saved model the operator
         // has since disabled stays saved while other settings change.
         // 只有新的选择才对照服务端清单检查，使运营方后来停用的已保存模型在修改其他设置时保持不变。
-        let unchanged = current.backend == Some(JudgeBackend::Edge)
+        let unchanged = current.backend == Some(JudgeBackend::Cloud)
             && current.edge_model_id.as_deref() == Some(model);
         if !unchanged
             && !edge::list_models(&state)
@@ -659,7 +656,7 @@ pub(crate) async fn service_save_permission_judge_settings(
                 .any(|id| id == model)
         {
             return Err(format!(
-                "OpenVulcan does not currently enable the official direct model `{model}`."
+                "OpenVulcan does not currently enable the cloud model `{model}`."
             ));
         }
     }
@@ -926,15 +923,15 @@ pub(crate) async fn service_benchmark_permission_judge(
     let (runtime, settings) = read_state(&state)?;
     if edge_model(&settings).is_some() {
         return Err(String::from(
-            "The official direct judge has no speed test; run a request test on one of its endpoints.",
+            "The cloud judge has no speed test; run a request test on one of its endpoints.",
         ));
     }
-    if cloud_enabled(&settings) {
-        let model_id = cloud::configured_model(&state)?
-            .ok_or_else(|| String::from("Choose a decision model for the cloud judge."))?;
+    if api_enabled(&settings) {
+        let model_id = api::configured_model(&state)?
+            .ok_or_else(|| String::from("Choose a decision model for the API judge."))?;
         // One timed round keeps a paid speed test to the calls the user asked for.
         // 仅计时一轮，使付费速度测试只发出用户要求的调用。
-        let elapsed_ms = cloud::time_batch(&state, request.batch_size)
+        let elapsed_ms = api::time_batch(&state, request.batch_size)
             .await?
             .as_secs_f64()
             * 1_000.0;
@@ -1361,10 +1358,10 @@ pub(crate) async fn judge_call(
         input_tokens: None,
         checkpoint_sha256: None,
     };
-    if settings.backend == Some(JudgeBackend::Edge) {
-        let model = edge_model(&settings)
-            .ok_or_else(|| fail(String::from("No official direct model is chosen.")))?;
-        let trace = trace("edge", model.to_string());
+    if settings.backend == Some(JudgeBackend::Cloud) {
+        let model =
+            edge_model(&settings).ok_or_else(|| fail(String::from("No cloud model is chosen.")))?;
+        let trace = trace("cloud", model.to_string());
         let input = JudgeInput {
             settings: trace.settings.clone(),
             rendered: trace.rendered.clone(),
@@ -1414,16 +1411,16 @@ pub(crate) async fn judge_call(
             }),
         };
     }
-    if cloud_enabled(&settings) {
-        let model = cloud::configured_model(state)
+    if api_enabled(&settings) {
+        let model = api::configured_model(state)
             .ok()
             .flatten()
             .unwrap_or_default();
-        let trace = trace("cloud", model);
-        let judged = cloud::judge(
+        let trace = trace("api", model);
+        let judged = api::judge(
             state,
             &modes,
-            CloudCall {
+            ApiCall {
                 project_root: root.as_deref(),
                 tool: &call.tool_name,
                 raw_arguments: &raw_arguments,

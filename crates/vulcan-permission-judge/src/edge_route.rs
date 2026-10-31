@@ -1,6 +1,6 @@
-//! Endpoint choice of the official direct judge: the wire shape of an edge endpoint's public
+//! Endpoint choice of the cloud judge: the wire shape of an edge endpoint's public
 //! `GET /v1/status` and the rule that turns probe results into the endpoint judge requests go to.
-//! 官方直连判定的端点选择：边缘端点公开 `GET /v1/status` 的线协议形状，以及把探测结果转换为判定
+//! 云端判定的端点选择：边缘端点公开 `GET /v1/status` 的线协议形状，以及把探测结果转换为判定
 //! 请求所用端点的规则。
 //!
 //! A probe's estimated latency is its network round trip plus the compute time the endpoint

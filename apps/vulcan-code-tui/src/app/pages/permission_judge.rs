@@ -1,8 +1,8 @@
-// Permission judge page: switch and backend, the cloud decision route, the official direct model or
-// the local model status, the LLM review route, speed tests, the model registry and the CUDA
+// Permission judge page: switch and backend, the cloud model, the API decision route or the local
+// model status, the LLM review route, speed tests, the model registry and the CUDA
 // runtime, mirroring the WebUI permission judge settings area. Every edit saves at once through the
 // complete save request.
-// 权限判定页：开关与后端、云端判定路由、官方直连模型或本机模型状态、LLM 复核路由、速度测试、模型
+// 权限判定页：开关与后端、云端模型、API 判定路由或本机模型状态、LLM 复核路由、速度测试、模型
 // 登记表与 CUDA 执行库，镜像 WebUI 权限判定设置区。每次编辑都通过完整保存请求立即保存。
 
 use super::*;
@@ -23,7 +23,7 @@ pub(super) fn backend_label(code: &str) -> String {
     match code {
         "local" => tr!("settings.permissionJudge.backend.local"),
         "cloud" => tr!("settings.permissionJudge.backend.cloud"),
-        "edge" => tr!("settings.permissionJudge.backend.edge"),
+        "api" => tr!("settings.permissionJudge.backend.api"),
         other => other.to_string(),
     }
 }
@@ -174,26 +174,55 @@ fn optional_bytes(value: &Value) -> String {
     value.as_f64().map_or_else(|| "—".into(), format_bytes)
 }
 
-/// Whether the page shows the official direct section: while no backend is saved, before the
-/// snapshot arrives, or when the direct backend is saved.
-/// 页面是否显示官方直连区块：未保存后端、快照到达之前，或已保存官方直连后端时。
+/// Whether the page shows the cloud section: while no backend is saved, before the
+/// snapshot arrives, or when the cloud backend is saved.
+/// 页面是否显示云端区块：未保存后端、快照到达之前，或已保存云端后端时。
 pub(super) fn shows_edge(snapshot: &Value) -> bool {
-    matches!(v(snapshot, "/backend").as_str(), None | Some("edge"))
+    matches!(v(snapshot, "/backend").as_str(), None | Some("cloud"))
 }
 
-/// Official direct models the server currently enables, sorted by id; empty until they load.
-/// 服务端当前启用的官方直连模型，按 id 排序；加载前为空。
-fn edge_models(app: &App) -> Vec<String> {
+/// Cloud models the server currently enables, sorted by id; empty until they load.
+/// 服务端当前启用的云端模型，按 id 排序；加载前为空。
+pub(super) fn edge_models(app: &App) -> Vec<String> {
     a(app.slots.value(Slot::PermissionJudgeEdgeModels), "/models")
         .iter()
         .map(|model| s(model, "/modelId"))
         .collect()
 }
 
+/// The cloud model to save with the cloud backend: the saved one, else the first one the server
+/// enables, as in the WebUI. It can be chosen only while the server enables it; otherwise the error
+/// says what is missing.
+/// 与云端后端一同保存的云端模型：已保存的模型，否则为服务端启用的第一个，与 WebUI 一致。只有服务端
+/// 启用时才能选择；否则错误说明缺少什么。
+pub(super) fn cloud_model(
+    app: &App,
+    snapshot: &Value,
+    enabled: &[String],
+) -> Result<Value, String> {
+    let model = match v(snapshot, "/edgeModelId") {
+        Value::Null => enabled.first().map_or(Value::Null, |id| json!(id)),
+        model => model.clone(),
+    };
+    if model
+        .as_str()
+        .is_some_and(|id| enabled.iter().any(|known| known == id))
+    {
+        Ok(model)
+    } else if app
+        .slot_errors
+        .contains_key(&Slot::PermissionJudgeEdgeModels)
+    {
+        Err(tr!("settings.permissionJudge.needsCloudAccount"))
+    } else {
+        Err(tr!("settings.permissionJudge.edge.noModel"))
+    }
+}
+
 /// The complete save request for the saved choices; an unset backend is local and an unset
 /// device follows the recommendation, as the WebUI draft does.
 /// 已保存选择对应的完整保存请求；未设置的后端为本机，未设置的设备跟随推荐值，与 WebUI 草稿一致。
-fn save_request(snapshot: &Value) -> Value {
+pub(super) fn save_request(snapshot: &Value) -> Value {
     // Saved device, else the recommendation.
     // 已保存设备，否则为推荐设备。
     let device = match v(snapshot, "/device") {
@@ -224,10 +253,18 @@ fn set_cuda_directory(base: &Value, value: &SettingValue) -> Option<ServiceCall>
     Some(judge::save_permission_judge_settings(request))
 }
 
-/// Mirrors `permissionJudgeCloudCandidates`: validated internal decision routes.
-/// 镜像 `permissionJudgeCloudCandidates`：已验证的内部判定路由。
-fn cloud_candidate(candidate: &Value) -> bool {
-    b(candidate, "/enabled")
+/// Mirrors `permissionJudgeApiCandidates`: validated internal decision routes outside the
+/// OpenVulcan account, whose decision models never judge as the API backend.
+/// 镜像 `permissionJudgeApiCandidates`：OpenVulcan 账户之外的已验证内部判定路由；该账户的判定模型绝不
+/// 作为 API 后端判定。
+fn api_candidate(ai: &Value, candidate: &Value) -> bool {
+    let provider = s(candidate, "/route/provider_id");
+    let core_account = a(ai, "/providers").iter().any(|descriptor| {
+        s(descriptor, "/id") == provider
+            && s(descriptor, "/credential_directory_visibility") == "core_account"
+    });
+    !core_account
+        && b(candidate, "/enabled")
         && s(candidate, "/route/usage_scope") == "internal_background"
         && s(candidate, "/route/operation") == "decision_evaluate"
         && s(candidate, "/route/binding/kind") == "action"
@@ -264,9 +301,9 @@ fn route_options(candidates: &[&Value]) -> Vec<(String, String)> {
     options
 }
 
-/// Saves the selected cloud decision route, or removes it.
-/// 保存所选云端判定路由，或将其移除。
-fn select_cloud_route(_: &Value, value: &SettingValue) -> Option<ServiceCall> {
+/// Saves the selected API decision route, or removes it.
+/// 保存所选 API 判定路由，或将其移除。
+fn select_api_route(_: &Value, value: &SettingValue) -> Option<ServiceCall> {
     Some(settings::save_public_ai_inference_route(
         JUDGE_PROFILE,
         None,
@@ -337,31 +374,14 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
     let saved = v(snapshot, "/backend").as_str();
     let configured = saved.is_some();
     let local = saved.is_none() || saved == Some("local");
-    let cloud = saved.is_none() || saved == Some("cloud");
+    let api = saved.is_none() || saved == Some("api");
     let edge = shows_edge(snapshot);
-    // The official direct model: the saved one, else the first one the server enables, as in the
-    // WebUI; it can be switched to only while the server enables it.
-    // 官方直连模型：已保存的模型，否则为服务端启用的第一个，与 WebUI 一致；只有服务端启用时才能切换到它。
     let enabled_models = edge_models(app);
-    let edge_model = match v(snapshot, "/edgeModelId") {
-        Value::Null => enabled_models.first().map_or(Value::Null, |id| json!(id)),
-        model => model.clone(),
-    };
-    let edge_ready = edge_model
-        .as_str()
-        .is_some_and(|id| enabled_models.iter().any(|enabled| enabled == id));
-    let edge_missing = if app
-        .slot_errors
-        .contains_key(&Slot::PermissionJudgeEdgeModels)
-    {
-        tr!("settings.permissionJudge.needsEdgeAccount")
-    } else {
-        tr!("settings.permissionJudge.edge.noModel")
-    };
+    let cloud = cloud_model(app, snapshot, &enabled_models);
     let active_model = a(snapshot, "/models")
         .iter()
         .find(|model| v(model, "/id") == v(snapshot, "/activeModelId"));
-    let cloud_route = v(ai, &format!("/inferenceProfiles/{JUDGE_PROFILE}/decision"));
+    let api_route = v(ai, &format!("/inferenceProfiles/{JUDGE_PROFILE}/decision"));
 
     let mut rows = vec![button(
         tr!("setupGuide.open"),
@@ -385,9 +405,9 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
         Tone::Muted,
     ));
     // Each other backend is offered only once it is set up, so the judge never points at one
-    // that cannot run. The direct backend needs an OpenVulcan sign-in, which the service checks
+    // that cannot run. The cloud backend needs an OpenVulcan sign-in, which the service checks
     // when it is saved.
-    // 其他后端只有在设置完成后才提供，因此判定器不会指向无法运行的后端。直连后端需要登录
+    // 其他后端只有在设置完成后才提供，因此判定器不会指向无法运行的后端。云端后端需要登录
     // OpenVulcan，由服务在保存时检查。
     for (backend, ready, missing) in [
         (
@@ -397,10 +417,14 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
         ),
         (
             "cloud",
-            !cloud_route.is_null(),
-            tr!("settings.permissionJudge.needsCloudRoute"),
+            cloud.is_ok(),
+            cloud.clone().err().unwrap_or_default(),
         ),
-        ("edge", edge_ready, edge_missing),
+        (
+            "api",
+            !api_route.is_null(),
+            tr!("settings.permissionJudge.needsApiRoute"),
+        ),
     ] {
         if saved == Some(backend) {
             continue;
@@ -408,8 +432,8 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
         if ready {
             let mut request = base.clone();
             request["backend"] = json!(backend);
-            if backend == "edge" {
-                request["edgeModelId"] = edge_model.clone();
+            if backend == "cloud" {
+                request["edgeModelId"] = cloud.clone().unwrap_or_default();
             }
             let name = backend_label(backend);
             rows.push(button(
@@ -447,14 +471,14 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
     if local {
         status_rows(&mut rows, snapshot, status);
     }
-    if cloud {
-        cloud_rows(&mut rows, ai, cloud_route);
-    }
     if edge {
         edge_rows(&mut rows, app, &enabled_models, &base);
-        if saved == Some("edge") && !s(snapshot, "/edgeModelId").is_empty() {
+        if saved == Some("cloud") && !s(snapshot, "/edgeModelId").is_empty() {
             edge_endpoint_rows(&mut rows, app);
         }
+    }
+    if api {
+        api_rows(&mut rows, ai, api_route);
     }
     review_rows(&mut rows, ai);
     approval_rows(&mut rows, snapshot, &base);
@@ -636,13 +660,13 @@ fn status_rows(rows: &mut Vec<Row>, snapshot: &Value, status: &Value) {
     ));
 }
 
-/// The official direct judge: what leaves the machine, the sign-in it needs and the official model
+/// The cloud judge: what leaves the machine, the sign-in it needs and the official model
 /// it calls, chosen among the models the server enables. A saved model the server no longer
 /// enables stays listed and is marked unavailable.
-/// 官方直连判定：离开本机的数据说明、所需的登录，以及从服务端启用的模型中选择的官方模型。服务端已不再
+/// 云端判定：离开本机的数据说明、所需的登录，以及从服务端启用的模型中选择的官方模型。服务端已不再
 /// 启用的已保存模型仍会列出并标为不可用。
-fn edge_rows(rows: &mut Vec<Row>, app: &App, enabled: &[String], base: &Value) {
-    rows.push(section(tr!("settings.permissionJudge.backend.edge")));
+pub(super) fn edge_rows(rows: &mut Vec<Row>, app: &App, enabled: &[String], base: &Value) {
+    rows.push(section(tr!("settings.permissionJudge.backend.cloud")));
     rows.push(note(
         tr!("settings.permissionJudge.edge.description"),
         Tone::Muted,
@@ -755,9 +779,9 @@ fn endpoint_status(endpoint: &Value) -> (String, Tone) {
     }
 }
 
-/// The endpoints of the saved official direct model with their latest background probe, the
+/// The endpoints of the saved cloud model with their latest background probe, the
 /// endpoint judge requests use now, the automatic or locked choice and a re-test.
-/// 已保存官方直连模型的端点及其最近一次后台探测、判定请求当前使用的端点、自动或锁定选择，以及重新测试。
+/// 已保存云端模型的端点及其最近一次后台探测、判定请求当前使用的端点、自动或锁定选择，以及重新测试。
 fn edge_endpoint_rows(rows: &mut Vec<Row>, app: &App) {
     rows.push(section(tr!(
         "settings.permissionJudge.edge.endpoints.title"
@@ -1192,51 +1216,51 @@ fn request_test_rows(rows: &mut Vec<Row>, app: &App) {
     }
 }
 
-/// The cloud decision route, what leaves the machine, and a billed connection test.
-/// 云端判定路由、离开本机的数据说明，以及一次计费的连接测试。
-pub(super) fn cloud_rows(rows: &mut Vec<Row>, ai: &Value, saved: &Value) {
-    rows.push(section(tr!("settings.permissionJudge.cloud.title")));
+/// The API decision route, what leaves the machine, and a billed connection test.
+/// API 判定路由、离开本机的数据说明，以及一次计费的连接测试。
+pub(super) fn api_rows(rows: &mut Vec<Row>, ai: &Value, saved: &Value) {
+    rows.push(section(tr!("settings.permissionJudge.api.title")));
     rows.push(note(
-        tr!("settings.permissionJudge.cloud.description"),
+        tr!("settings.permissionJudge.api.description"),
         Tone::Muted,
     ));
     rows.push(note(
-        tr!("settings.permissionJudge.cloud.dataNotice"),
+        tr!("settings.permissionJudge.api.dataNotice"),
         Tone::Warn,
     ));
     let candidates: Vec<&Value> = a(ai, "/internalInferenceCandidates")
         .iter()
-        .filter(|candidate| cloud_candidate(candidate))
+        .filter(|candidate| api_candidate(ai, candidate))
         .collect();
     let selected = candidates
         .iter()
         .any(|candidate| v(candidate, "/route") == saved);
     if !saved.is_null() && !selected {
         rows.push(note(
-            tr!("settings.permissionJudge.cloud.unavailable"),
+            tr!("settings.permissionJudge.api.unavailable"),
             Tone::Warn,
         ));
     }
     if candidates.is_empty() {
         rows.push(note(
-            tr!("settings.permissionJudge.cloud.noCandidate"),
+            tr!("settings.permissionJudge.api.noCandidate"),
             Tone::Muted,
         ));
     }
     rows.push(choice(
-        tr!("settings.permissionJudge.cloud.route"),
+        tr!("settings.permissionJudge.api.route"),
         route_options(&candidates),
         saved.to_string(),
         Edit::Call(Setter::Build {
             ctx: Value::Null,
-            build: select_cloud_route,
+            build: select_api_route,
         }),
     ));
     if selected {
         rows.push(button(
-            tr!("settings.permissionJudge.cloud.test"),
+            tr!("settings.permissionJudge.api.test"),
             confirm(
-                tr!("settings.permissionJudge.cloud.test"),
+                tr!("settings.permissionJudge.api.test"),
                 tr!("tui.field.paidTest"),
                 tr!("tui.field.confirm"),
                 call(settings::test_public_ai_inference_route(
@@ -1320,21 +1344,21 @@ fn benchmark_rows(
     status: &Value,
     configured: bool,
 ) {
-    // The saved backend decides what the test runs on, as in the WebUI. The official direct judge
+    // The saved backend decides what the test runs on, as in the WebUI. The cloud judge
     // is tested per endpoint from its endpoint table instead.
-    // 与 WebUI 一致，由已保存的后端决定测试对象。官方直连判定改为在其端点表中按端点测试。
+    // 与 WebUI 一致，由已保存的后端决定测试对象。云端判定改为在其端点表中按端点测试。
     let backend = s(snapshot, "/backend");
-    if configured && backend == "edge" {
+    if configured && backend == "cloud" {
         return;
     }
-    // The cloud judge has no local worker; its speed test times real requests.
-    // 云端判定没有本机 worker；其速度测试为真实请求计时。
-    let saved_cloud = configured && backend == "cloud";
-    let ready = saved_cloud || s(status, "/worker/phase") == "ready";
+    // The API judge has no local worker; its speed test times real requests.
+    // API 判定没有本机 worker；其速度测试为真实请求计时。
+    let saved_api = configured && backend == "api";
+    let ready = saved_api || s(status, "/worker/phase") == "ready";
     rows.push(section(tr!("settings.permissionJudge.benchmark")));
     rows.push(note(
-        if saved_cloud {
-            tr!("settings.permissionJudge.benchmarkCloudHint")
+        if saved_api {
+            tr!("settings.permissionJudge.benchmarkApiHint")
         } else {
             tr!("settings.permissionJudge.benchmarkHint")
         },
@@ -1346,9 +1370,9 @@ fn benchmark_rows(
             (10, tr!("settings.permissionJudge.benchmarkBatch")),
         ] {
             let run = call(judge::benchmark_permission_judge(batch));
-            // Cloud tests are billed requests, so they ask first.
-            // 云端测试是计费请求，因此先确认。
-            let action = if saved_cloud {
+            // API tests are billed requests, so they ask first.
+            // API 测试是计费请求，因此先确认。
+            let action = if saved_api {
                 confirm(
                     label.clone(),
                     tr!("tui.field.paidTest"),
@@ -1377,7 +1401,7 @@ fn benchmark_rows(
                 ),
             ),
             None => tr!(
-                "settings.permissionJudge.benchmarkCloudResult",
+                "settings.permissionJudge.benchmarkApiResult",
                 batch = n(result, "/batchSize"),
                 model = s(result, "/modelId"),
                 total = ms(v(result, "/p50Ms")),

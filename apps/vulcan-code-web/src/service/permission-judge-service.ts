@@ -37,15 +37,15 @@ export async function loadPermissionJudgeStatus(): Promise<PermissionJudgeStatus
   return serviceClient.request<PermissionJudgeStatus>("service_permission_judge_status", {});
 }
 
-// loadPermissionJudgeEdgeModels lists the official direct models the signed-in OpenVulcan account's
+// loadPermissionJudgeEdgeModels lists the cloud models the signed-in OpenVulcan account's
 // deployment currently serves; it fails when nobody is signed in.
-// loadPermissionJudgeEdgeModels 列出已登录 OpenVulcan 账户所属部署当前提供的官方直连模型；无人登录时失败。
+// loadPermissionJudgeEdgeModels 列出已登录 OpenVulcan 账户所属部署当前提供的云端模型；无人登录时失败。
 export async function loadPermissionJudgeEdgeModels(): Promise<PermissionJudgeEdgeModels> {
   return serviceClient.request<PermissionJudgeEdgeModels>("service_permission_judge_edge_models", {});
 }
 
-// loadPermissionJudgeEdgeEndpoints reads the endpoint table of the chosen official direct model.
-// loadPermissionJudgeEdgeEndpoints 读取所选官方直连模型的端点表。
+// loadPermissionJudgeEdgeEndpoints reads the endpoint table of the chosen cloud model.
+// loadPermissionJudgeEdgeEndpoints 读取所选云端模型的端点表。
 export async function loadPermissionJudgeEdgeEndpoints(): Promise<PermissionJudgeEdgeEndpoints> {
   return serviceClient.request<PermissionJudgeEdgeEndpoints>("service_permission_judge_edge_endpoints", {});
 }
@@ -56,9 +56,9 @@ export async function probePermissionJudgeEdgeEndpoints(): Promise<PermissionJud
   return serviceClient.request<PermissionJudgeEdgeEndpoints>("service_probe_permission_judge_edge_endpoints", {});
 }
 
-// lockPermissionJudgeEdgeEndpoint locks the official direct judge to one endpoint, or returns it
+// lockPermissionJudgeEdgeEndpoint locks the cloud judge to one endpoint, or returns it
 // to automatic selection with null.
-// lockPermissionJudgeEdgeEndpoint 将官方直连判定锁定到一个端点；传 null 恢复自动选择。
+// lockPermissionJudgeEdgeEndpoint 将云端判定锁定到一个端点；传 null 恢复自动选择。
 export async function lockPermissionJudgeEdgeEndpoint(endpointId: string | null): Promise<PermissionJudgeEdgeEndpoints> {
   return serviceClient.request<PermissionJudgeEdgeEndpoints>("service_lock_permission_judge_edge_endpoint", {
     request: { endpointId },
@@ -66,8 +66,8 @@ export async function lockPermissionJudgeEdgeEndpoint(endpointId: string | null)
 }
 
 // testPermissionJudgeEdgeRequest sends a few real judge requests carrying input to one endpoint of
-// the chosen official direct model and reports each; endpoint selection is not changed.
-// testPermissionJudgeEdgeRequest 向所选官方直连模型的一个端点发送若干携带 input 的真实判定请求并
+// the chosen cloud model and reports each; endpoint selection is not changed.
+// testPermissionJudgeEdgeRequest 向所选云端模型的一个端点发送若干携带 input 的真实判定请求并
 // 逐个报告；不改变端点选择。
 export async function testPermissionJudgeEdgeRequest(
   endpointId: string,

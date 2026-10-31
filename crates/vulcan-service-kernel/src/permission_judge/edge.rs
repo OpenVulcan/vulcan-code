@@ -1,6 +1,6 @@
-//! Official direct judge: the signed-in OpenVulcan account obtains the endpoints, site marker and a
+//! Cloud judge: the signed-in OpenVulcan account obtains the endpoints, site marker and a
 //! short-lived token per model, and each escalated call goes straight to the selected endpoint.
-//! 官方直连判定：已登录的 OpenVulcan 账户按模型获取端点、来源标记与短期令牌，每次升级调用直接发往
+//! 云端判定：已登录的 OpenVulcan 账户按模型获取端点、来源标记与短期令牌，每次升级调用直接发往
 //! 选中的端点。
 //!
 //! Tokens are cached per model and account and renewed shortly before they expire; an endpoint
@@ -17,7 +17,7 @@ use tokio::sync::Mutex;
 use vulcan_permission_judge::protocol::JudgeInput;
 use vulcan_permission_judge::{
     EDGE_JUDGE_PATH, EDGE_SERVER_TIMING_HEADER, EDGE_SITE_HEADER, EdgeAnswer, EdgeJudgeRequest,
-    EdgeJudgeResponse, EdgeOutcome, EdgeServerTiming, cloud_policy, edge_outcomes, render_call,
+    EdgeJudgeResponse, EdgeOutcome, EdgeServerTiming, edge_outcomes, hosted_policy, render_call,
 };
 use vulcan_provider_adapters::{
     CredentialExecutionSecret, OpenVulcanEdgeAccessError, OpenVulcanEdgeEndpoint,
@@ -171,9 +171,9 @@ impl EdgeAccessCache {
         let access = request_openvulcan_edge_access(http()?, secret, model_id)
             .await
             .map_err(|error| match error {
-                OpenVulcanEdgeAccessError::ModelUnavailable => format!(
-                    "OpenVulcan does not currently enable the official direct model `{model_id}`."
-                ),
+                OpenVulcanEdgeAccessError::ModelUnavailable => {
+                    format!("OpenVulcan does not currently enable the cloud model `{model_id}`.")
+                }
                 OpenVulcanEdgeAccessError::Failed(reason) => reason,
             })?;
         let grant = Grant {
@@ -199,10 +199,10 @@ impl EdgeAccessCache {
 fn rate_limited(retry_after: Option<&str>) -> String {
     match retry_after.and_then(|value| value.trim().parse::<u64>().ok()) {
         Some(seconds) => format!(
-            "The official direct judge rate limit for this account and installation was reached; it accepts calls again in {seconds} seconds."
+            "The cloud judge rate limit for this account and installation was reached; it accepts calls again in {seconds} seconds."
         ),
         None => String::from(
-            "The official direct judge rate limit for this account and installation was reached.",
+            "The cloud judge rate limit for this account and installation was reached.",
         ),
     }
 }
@@ -354,13 +354,13 @@ where
     }
 }
 
-/// Lists the official direct models the signed-in account's deployment currently serves, sorted
+/// Lists the cloud models the signed-in account's deployment currently serves, sorted
 /// by id.
-/// 列出已登录账户所属部署当前提供的官方直连模型，按 id 排序。
+/// 列出已登录账户所属部署当前提供的云端模型，按 id 排序。
 pub(super) async fn list_models(state: &SharedServiceBridgeState) -> Result<Vec<String>, String> {
     let (_, secret) = signed_in_credential(state)
         .await?
-        .ok_or_else(|| String::from("Sign in to OpenVulcan to list the official direct models."))?;
+        .ok_or_else(|| String::from("Sign in to OpenVulcan to list the cloud models."))?;
     request_openvulcan_edge_models(http()?, &secret).await
 }
 
@@ -376,9 +376,9 @@ pub(super) async fn judge(
     locked: Option<&str>,
     inputs: Vec<JudgeInput>,
 ) -> Result<EdgeAnswer, String> {
-    let (connection_id, secret) = signed_in_credential(state).await?.ok_or_else(|| {
-        String::from("Sign in to OpenVulcan before using the official direct judge.")
-    })?;
+    let (connection_id, secret) = signed_in_credential(state)
+        .await?
+        .ok_or_else(|| String::from("Sign in to OpenVulcan before using the cloud judge."))?;
     let started_at_ms = current_v1_unix_millis()?;
     let answer = judge_signed_in(runtime, model_id, locked, inputs, &connection_id, &secret).await;
     let finished_at_ms = current_v1_unix_millis()?;
@@ -448,7 +448,7 @@ async fn judge_signed_in(
         failure.message
     })?;
     edge_outcomes(
-        &cloud_policy().version,
+        &hosted_policy().version,
         &request.request_id,
         expected,
         response,
@@ -508,7 +508,7 @@ fn offered_target(grant: &Grant, model_id: &str, endpoint_id: &str) -> Result<Ta
         .find(|endpoint| endpoint.endpoint_id == endpoint_id)
         .ok_or_else(|| {
             format!(
-                "OpenVulcan does not offer the endpoint `{endpoint_id}` for the official direct model `{model_id}`."
+                "OpenVulcan does not offer the endpoint `{endpoint_id}` for the cloud model `{model_id}`."
             )
         })?;
     Ok(Target {
@@ -595,7 +595,7 @@ fn test_attempt(
                     .collect(),
             });
             edge_outcomes(
-                &cloud_policy().version,
+                &hosted_policy().version,
                 &request.request_id,
                 request.inputs.len(),
                 response,
@@ -625,14 +625,14 @@ pub(super) async fn test_endpoint(
     endpoint_id: &str,
     input: &PermissionJudgeEdgeTestInput,
 ) -> Result<PermissionJudgeEdgeRequestTest, String> {
-    let settings = cloud_policy()
+    let settings = hosted_policy()
         .resolve_settings(&Default::default())
         .map_err(|error| error.to_string())?
         .to_map();
     let arguments = serde_json::json!({ "command": test_command(input)? }).to_string();
     let rendered = render_call(None, "shell_command", &arguments);
     let (connection_id, secret) = signed_in_credential(state).await?.ok_or_else(|| {
-        String::from("Sign in to OpenVulcan before testing an official direct endpoint.")
+        String::from("Sign in to OpenVulcan before testing a cloud judge endpoint.")
     })?;
     let mut grant = runtime
         .edge_access
@@ -984,7 +984,7 @@ mod tests {
             Ok(reply(
                 200,
                 Some("edge;dur=45, node;dur=40.5, queue;dur=2, compute;dur=31.5"),
-                judged(&cloud_policy().version),
+                judged(&hosted_policy().version),
             )),
             false,
         );

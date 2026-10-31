@@ -7,9 +7,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { OpenVulcanAccountContext } from "@/components/features/account/openvulcan-account-context";
 import { formatMessage, type Translate } from "@/i18n";
 
-// EdgeModelList is the official direct model list as last read from the service: not read while
+// EdgeModelList is the cloud model list as last read from the service: not read while
 // signed out, loading, the enabled model ids sorted by id, or the read failure.
-// EdgeModelList 是最近一次从服务读取的官方直连模型清单：未登录时不读取、加载中、按 id 排序的已启用模型
+// EdgeModelList 是最近一次从服务读取的云端模型清单：未登录时不读取、加载中、按 id 排序的已启用模型
 // id，或读取失败。
 export type EdgeModelList =
   | { phase: "signedOut" }
@@ -23,11 +23,11 @@ export function edgeModelEnabled(list: EdgeModelList, modelId: string | null): b
   return modelId !== null && list.phase === "ready" && list.models.includes(modelId);
 }
 
-// PermissionJudgeEdgeSection sets up the official direct judge: the OpenVulcan account it signs in
+// PermissionJudgeEdgeSection sets up the cloud judge: the OpenVulcan account it signs in
 // with and the official model it calls, chosen among the models the server currently enables. A
 // chosen model the server no longer enables stays visible and is marked unavailable. Calls leave
 // this machine, which the notice states first.
-// PermissionJudgeEdgeSection 设置官方直连判定：用于登录的 OpenVulcan 账户及其调用的官方模型，从服务端
+// PermissionJudgeEdgeSection 设置云端判定：用于登录的 OpenVulcan 账户及其调用的官方模型，从服务端
 // 当前启用的模型中选择。服务端已不再启用的所选模型保持可见并标为不可用。调用会离开本机，提示先说明这一点。
 // Parameters: the model list, the chosen edge model, whether controls are locked, the change
 // callback and the list retry. Returns the section.
@@ -54,7 +54,7 @@ export function PermissionJudgeEdgeSection(props: {
   const modelHint = edgeModels.phase === "signedOut" ? t("settings.permissionJudge.edge.modelsSignIn")
     : edgeModels.phase === "loading" ? t("settings.permissionJudge.edge.modelsLoading")
       : edgeModels.phase === "ready" && enabled.length === 0 ? t("settings.permissionJudge.edge.noModel") : undefined;
-  return <PageSection layout="rows" data-judge-edge="" title={t("settings.permissionJudge.backend.edge")}
+  return <PageSection layout="rows" data-judge-edge="" title={t("settings.permissionJudge.backend.cloud")}
     description={t("settings.permissionJudge.edge.description")}>
     <PageNotice tone="info">{t("settings.permissionJudge.edge.dataNotice")}</PageNotice>
     <PageRow label={t("settings.permissionJudge.edge.account")} description={signedIn

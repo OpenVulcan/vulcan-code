@@ -154,11 +154,11 @@ pub trait ToolPermissionHost: Send + Sync {
 /// 一次判定读取与产生的内容，供判定记录保存。
 #[derive(Debug, Clone, PartialEq)]
 pub struct JudgeTrace {
-    /// Judge backend key, `local`, `cloud` or `edge`.
-    /// 判定后端键，`local`、`cloud` 或 `edge`。
+    /// Judge backend key, `local`, `cloud` or `api`.
+    /// 判定后端键，`local`、`cloud` 或 `api`。
     pub backend: String,
-    /// Local model name, cloud model id or official direct model id.
-    /// 本机模型名称或云端模型标识。
+    /// Local model name, cloud model id or API model id.
+    /// 本机模型名称、云端模型标识或 API 模型标识。
     pub model: String,
     /// Policy version of the model.
     /// 模型的策略版本。
@@ -172,14 +172,14 @@ pub struct JudgeTrace {
     /// Raw local scores in label order.
     /// 按标签顺序排列的本机原始分数。
     pub logits: Option<[f32; 3]>,
-    /// Cloud probability of the allow label.
-    /// 云端 allow 标签的概率。
+    /// API probability of the allow label.
+    /// API allow 标签的概率。
     pub allow_probability: Option<f32>,
     /// Sequence length the local model read or refused.
     /// 本机模型读取或拒绝的序列长度。
     pub input_tokens: Option<u32>,
-    /// Checkpoint digest the official direct endpoint reported.
-    /// 官方直连端点报告的检查点摘要。
+    /// Checkpoint digest the cloud judge endpoint reported.
+    /// 云端端点报告的检查点摘要。
     pub checkpoint_sha256: Option<String>,
 }
 

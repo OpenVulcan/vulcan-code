@@ -14,7 +14,7 @@ import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 import { Switch } from "@/ui-kit/primitives/switch";
 import { formatMessage, useI18n, type Translate, type TranslationKey } from "@/i18n";
 import { errorMessage, formatBytes } from "@/lib/display-format";
-import { PermissionJudgeCloudSection } from "@/components/features/settings/permission-judge-cloud-section";
+import { PermissionJudgeApiSection } from "@/components/features/settings/permission-judge-api-section";
 import { PermissionJudgeDownloadsSection } from "@/components/features/settings/permission-judge-downloads-section";
 import {
   PermissionJudgeEdgeSection, edgeModelEnabled, type EdgeModelList,
@@ -63,16 +63,16 @@ import "@/ui-kit/styles/features/settings-forms.css"
 const BACKEND_KEYS: Record<JudgeBackend, TranslationKey> = {
   local: "settings.permissionJudge.backend.local",
   cloud: "settings.permissionJudge.backend.cloud",
-  edge: "settings.permissionJudge.backend.edge",
+  api: "settings.permissionJudge.backend.api",
 };
 
-// NEEDS_KEYS explain what a backend still lacks before it can be used; the direct backend first
+// NEEDS_KEYS explain what a backend still lacks before it can be used; the cloud backend first
 // needs a sign-in, then an official model the server enables.
-// NEEDS_KEYS 说明后端在可用之前仍缺少什么；官方直连后端先需要登录，再需要服务端启用的官方模型。
+// NEEDS_KEYS 说明后端在可用之前仍缺少什么；云端后端先需要登录，再需要服务端启用的官方模型。
 const NEEDS_KEYS: Record<JudgeBackend, TranslationKey> = {
   local: "settings.permissionJudge.needsModel",
-  cloud: "settings.permissionJudge.needsCloudRoute",
-  edge: "settings.permissionJudge.needsEdgeAccount",
+  cloud: "settings.permissionJudge.needsCloudAccount",
+  api: "settings.permissionJudge.needsApiRoute",
 };
 
 // formatMs renders a duration, or a dash when the reading is absent.
@@ -100,9 +100,9 @@ interface Choices {
   approvalTimeoutSeconds: number;
 }
 
-// savedChoices reads the saved choices; an unset backend is local, an unset official direct model is
-// the first one the server enables and an unset device follows the recommendation.
-// savedChoices 读取已保存的选择；未设置的后端为本机，未设置的官方直连模型为服务端启用的第一个，未设置的
+// savedChoices reads the saved choices; an unset backend is local, an unset cloud model is the
+// first one the server enables and an unset device follows the recommendation.
+// savedChoices 读取已保存的选择；未设置的后端为本机，未设置的云端模型为服务端启用的第一个，未设置的
 // 设备跟随推荐值。
 function savedChoices(snapshot: PermissionJudgeSettingsSnapshot, edgeModels: EdgeModelList): Choices {
   return {
@@ -146,8 +146,8 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
   // openGuide re-enters the setup guide; absent outside the workbench layout.
   // openGuide 重新进入初始化引导；在工作台布局之外为空。
   const openGuide = React.useContext(PermissionJudgeEntryContext)?.openGuide;
-  // signedIn tells whether the OpenVulcan account the official direct judge uses is signed in.
-  // signedIn 表示官方直连判定所用的 OpenVulcan 账户是否已登录。
+  // signedIn tells whether the OpenVulcan account the cloud judge uses is signed in.
+  // signedIn 表示云端判定所用的 OpenVulcan 账户是否已登录。
   const signedIn = React.useContext(OpenVulcanAccountContext)?.snapshot?.connected === true;
   // snapshot is the last full read; status is refreshed separately by polling.
   // snapshot 是最近一次完整读取；status 由轮询单独刷新。
@@ -165,9 +165,9 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
   // benchmarks keeps this page's speed test results, newest first; they are never saved.
   // benchmarks 保存本页速度测试结果（最新在前），不会持久化。
   const [benchmarks, setBenchmarks] = React.useState<PermissionJudgeBenchmarkResult[]>([]);
-  // cloudConfigured tells whether a cloud decision route is saved, as reported by its section.
-  // cloudConfigured 表示是否已保存云端判定路由，由其区块报告。
-  const [cloudConfigured, setCloudConfigured] = React.useState(false);
+  // apiConfigured tells whether an API decision route is saved, as reported by its section.
+  // apiConfigured 表示是否已保存 API 判定路由，由其区块报告。
+  const [apiConfigured, setApiConfigured] = React.useState(false);
   // topRef brings a newly opened page or a new failure into view.
   // topRef 将新打开的页面或新失败滚动到可见处。
   const topRef = React.useRef<HTMLDivElement>(null);
@@ -193,12 +193,12 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
 
   React.useEffect(() => { void reload(); }, [reload]);
 
-  // edgeModels is the official direct model list, read while the direct backend is on screen and
-  // the account is signed in; edgeRead drops answers of superseded reads.
-  // edgeModels 是官方直连模型清单，在界面显示官方直连后端且账户已登录时读取；edgeRead 丢弃已被取代的读取结果。
+  // edgeModels is the cloud model list, read while the cloud backend is on screen and the account
+  // is signed in; edgeRead drops answers of superseded reads.
+  // edgeModels 是云端模型清单，在界面显示云端后端且账户已登录时读取；edgeRead 丢弃已被取代的读取结果。
   const [edgeModels, setEdgeModels] = React.useState<EdgeModelList>({ phase: "signedOut" });
   const edgeRead = React.useRef(0);
-  const edgeShown = (held.backend ?? snapshot?.backend ?? "local") === "edge";
+  const edgeShown = (held.backend ?? snapshot?.backend ?? "local") === "cloud";
   const loadEdgeModels = React.useCallback(async () => {
     const read = ++edgeRead.current;
     setEdgeModels({ phase: "loading" });
@@ -280,13 +280,13 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
   const choices: Choices = { ...saved, ...held };
   const activeModel = snapshot.models.find((model) => model.id === snapshot.activeModelId) ?? null;
   const local = choices.backend === "local";
-  // The direct backend is ready with a signed-in account and a model the server enables; the saved
-  // direct model also stays ready, since the service keeps an unchanged choice.
-  // 官方直连后端在账户已登录且模型由服务端启用时就绪；已保存的直连模型同样保持就绪，因为服务会保留未变的选择。
+  // The cloud backend is ready with a signed-in account and a model the server enables; the saved
+  // cloud model also stays ready, since the service keeps an unchanged choice.
+  // 云端后端在账户已登录且模型由服务端启用时就绪；已保存的云端模型同样保持就绪，因为服务会保留未变的选择。
   const ready = (backend: JudgeBackend, edgeModelId = choices.edgeModelId) => backend === "local"
     ? activeModel !== null
-    : backend === "cloud" ? cloudConfigured : signedIn && (edgeModelEnabled(edgeModels, edgeModelId)
-      || (snapshot.backend === "edge" && edgeModelId !== null && edgeModelId === snapshot.edgeModelId));
+    : backend === "api" ? apiConfigured : signedIn && (edgeModelEnabled(edgeModels, edgeModelId)
+      || (snapshot.backend === "cloud" && edgeModelId !== null && edgeModelId === snapshot.edgeModelId));
   const configured = snapshot.backend !== null;
 
   // persist saves `change` at once. A backend is saved only when it is chosen explicitly (`change`
@@ -298,9 +298,9 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
     const next = { ...choices, ...change };
     const chosen = commit || change.backend !== undefined;
     const backend = chosen && ready(next.backend, next.edgeModelId) ? next.backend : snapshot.backend;
-    // The official direct model is saved with its backend; until then it stays held like the backend.
-    // 官方直连模型与其后端一同保存；在此之前与后端一样保持暂存。
-    const edgeModelId = backend === "edge" ? next.edgeModelId : snapshot.edgeModelId;
+    // The cloud model is saved with its backend; until then it stays held like the backend.
+    // 云端模型与其后端一同保存；在此之前与后端一样保持暂存。
+    const edgeModelId = backend === "cloud" ? next.edgeModelId : snapshot.edgeModelId;
     const remaining: Partial<Choices> = {
       ...(backend === next.backend ? {} : { backend: next.backend }),
       ...(edgeModelId === next.edgeModelId ? {} : { edgeModelId: next.edgeModelId }),
@@ -367,15 +367,15 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
     </>);
   }
   if (view === "diagnostics") {
-    // The cloud judge has no local worker; its speed test times real requests. The official direct
-    // judge is tested per endpoint from its endpoint table instead.
-    // 云端判定没有本机 worker，其速度测试为真实请求计时。官方直连判定改为在其端点表中按端点测试。
-    const savedCloud = snapshot.backend === "cloud";
-    const benchmarkReady = savedCloud || status.worker.phase === "ready";
+    // The API judge has no local worker; its speed test times real requests. The cloud judge is
+    // tested per endpoint from its endpoint table instead.
+    // API 判定没有本机 worker，其速度测试为真实请求计时。云端判定改为在其端点表中按端点测试。
+    const savedApi = snapshot.backend === "api";
+    const benchmarkReady = savedApi || status.worker.phase === "ready";
     return subPage(t("settings.permissionJudge.diagnostics"), <>
-      {savedCloud ? null : <WorkerStatusSection snapshot={snapshot} status={status} t={t} />}
+      {savedApi ? null : <WorkerStatusSection snapshot={snapshot} status={status} t={t} />}
       <PageSection layout="rows" title={t("settings.permissionJudge.benchmark")}
-        description={t(savedCloud ? "settings.permissionJudge.benchmarkCloudHint" : "settings.permissionJudge.benchmarkHint")}
+        description={t(savedApi ? "settings.permissionJudge.benchmarkApiHint" : "settings.permissionJudge.benchmarkHint")}
         actions={([1, 10] as const).map((batchSize) => (
           <Button key={batchSize} type="button" variant="outline" size="sm"
             disabled={busy !== null || !benchmarkReady}
@@ -396,7 +396,7 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
               perItem: formatMs(t, result.perItemMs),
               rate: result.itemsPerSecond.toFixed(1),
             })
-            : formatMessage(t("settings.permissionJudge.benchmarkCloudResult"), {
+            : formatMessage(t("settings.permissionJudge.benchmarkApiResult"), {
               batch: result.batchSize,
               model: result.modelId,
               total: formatMs(t, result.p50Ms),
@@ -422,7 +422,7 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
     ? formatMessage(t("settings.permissionJudge.switchBackendPending"), { backend: pendingBackend })
     : ready(choices.backend)
       ? formatMessage(t("settings.permissionJudge.readyToUse"), { backend: pendingBackend })
-      : t(choices.backend === "edge" && signedIn ? "settings.permissionJudge.needsEdgeModel" : NEEDS_KEYS[choices.backend]);
+      : t(choices.backend === "cloud" && signedIn ? "settings.permissionJudge.needsCloudModel" : NEEDS_KEYS[choices.backend]);
   const worker = status.worker;
   const phaseTone = worker.phase === "ready" ? "ready" : worker.phase === "failed" ? "error" : worker.phase === "warming" ? "warning" : "pending";
   const cudaMissing = snapshot.cuda.supported ? cudaMissingLabels(t, cudaReadiness(snapshot.cuda)) : [];
@@ -514,13 +514,13 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
       {snapshot.activeModelIssue ? <PageNotice tone="error" details={snapshot.activeModelIssue.detail} detailsLabel={t("settings.errors.showErrorDetails")}>
         {formatMessage(t("settings.permissionJudge.activeModelIssue"), { code: snapshot.activeModelIssue.code })}
       </PageNotice> : null}
-    </PageSection> : choices.backend === "cloud"
-      ? <PermissionJudgeCloudSection onConfiguredChange={setCloudConfigured} />
+    </PageSection> : choices.backend === "api"
+      ? <PermissionJudgeApiSection onConfiguredChange={setApiConfigured} />
       : <>
         <PermissionJudgeEdgeSection edgeModels={edgeModels} edgeModelId={choices.edgeModelId}
           disabled={busy !== null} t={t} onEdgeModelChange={(edgeModelId) => persist({ edgeModelId })}
           onRetry={() => void loadEdgeModels()} />
-        {signedIn && snapshot.backend === "edge" && snapshot.edgeModelId !== null
+        {signedIn && snapshot.backend === "cloud" && snapshot.edgeModelId !== null
           ? <PermissionJudgeEdgeEndpointsSection key={snapshot.edgeModelId} pollIntervalMs={pollIntervalMs}
             disabled={busy !== null} t={t} locale={locale} />
           : null}
@@ -560,7 +560,7 @@ export function PermissionJudgeSettingsArea(props: { projects?: readonly Project
     <PageSection layout="rows" data-judge-tools="" title={t("settings.permissionJudge.tools")}>
       <PageItem icon={<Bot />} title={t("settings.permissionJudge.unattended.title")}
         description={t("settings.permissionJudge.unattended.entryHint")} actions={open("unattended")} />
-      {snapshot.backend === "edge" ? null : <PageItem icon={<Activity />} title={t("settings.permissionJudge.diagnostics")}
+      {snapshot.backend === "cloud" ? null : <PageItem icon={<Activity />} title={t("settings.permissionJudge.diagnostics")}
         description={t("settings.permissionJudge.diagnosticsHint")} actions={open("diagnostics")} />}
       <PageItem icon={<History />} title={t("settings.permissionJudge.records.title")}
         meta={<Badge variant="outline" data-records-state={choices.recordDecisions ? "on" : "off"}>

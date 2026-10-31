@@ -47,11 +47,11 @@ pub struct PermissionJudgeSettingsSnapshot {
     /// Registration a rollback returns to.
     /// 回退将返回的登记。
     pub previous_model_id: Option<String>,
-    /// Official model chosen for the direct backend, by its edge model id.
-    /// 为官方直连后端选择的官方模型，以其边缘模型 id 表示。
+    /// Official model chosen for the cloud backend, by its edge model id.
+    /// 为云端后端选择的官方模型，以其边缘模型 id 表示。
     pub edge_model_id: Option<String>,
-    /// Endpoint the user locked the direct backend to; `None` selects automatically.
-    /// 用户为官方直连后端锁定的端点；`None` 表示自动选择。
+    /// Endpoint the user locked the cloud backend to; `None` selects automatically.
+    /// 用户为云端后端锁定的端点；`None` 表示自动选择。
     pub edge_endpoint_id: Option<String>,
     /// Official packages this build recognizes, with their published formats.
     /// 本构建识别的官方模型包及其已发布格式。
@@ -143,8 +143,8 @@ pub struct PermissionJudgeKnownPackage {
     pub variants: Vec<PermissionJudgeKnownVariant>,
 }
 
-/// Official direct models the signed-in account's deployment currently serves.
-/// 已登录账户所属部署当前提供的官方直连模型。
+/// Cloud models the signed-in account's deployment currently serves.
+/// 已登录账户所属部署当前提供的云端模型。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionJudgeEdgeModels {
@@ -153,8 +153,8 @@ pub struct PermissionJudgeEdgeModels {
     pub models: Vec<PermissionJudgeEdgeModel>,
 }
 
-/// One official direct model.
-/// 一个官方直连模型。
+/// One cloud model.
+/// 一个云端模型。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionJudgeEdgeModel {
@@ -163,8 +163,8 @@ pub struct PermissionJudgeEdgeModel {
     pub model_id: String,
 }
 
-/// How the direct backend picks its endpoint.
-/// 官方直连后端选择端点的方式。
+/// How the cloud backend picks its endpoint.
+/// 云端后端选择端点的方式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionJudgeEdgeEndpointMode {
@@ -176,9 +176,9 @@ pub enum PermissionJudgeEdgeEndpointMode {
     Locked,
 }
 
-/// Endpoints of the chosen official direct model and how requests are routed among them. Probe
+/// Endpoints of the chosen cloud model and how requests are routed among them. Probe
 /// results live only in memory and start empty after a restart.
-/// 所选官方直连模型的端点，以及请求在其中的走向。探测结果只保存在内存中，重启后为空。
+/// 所选云端模型的端点，以及请求在其中的走向。探测结果只保存在内存中，重启后为空。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionJudgeEdgeEndpoints {
@@ -252,8 +252,8 @@ pub struct PermissionJudgeEdgeEndpoint {
     pub error: Option<String>,
 }
 
-/// Locks the direct backend to one endpoint, or returns it to automatic selection.
-/// 将官方直连后端锁定到一个端点，或恢复自动选择。
+/// Locks the cloud backend to one endpoint, or returns it to automatic selection.
+/// 将云端后端锁定到一个端点，或恢复自动选择。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PermissionJudgeEdgeEndpointLockRequest {
@@ -262,9 +262,9 @@ pub struct PermissionJudgeEdgeEndpointLockRequest {
     pub endpoint_id: Option<String>,
 }
 
-/// Sends a few real judge requests to one endpoint of the chosen official direct model and reports
+/// Sends a few real judge requests to one endpoint of the chosen cloud model and reports
 /// each one; endpoint selection and the lock are not changed.
-/// 向所选官方直连模型的一个端点发送若干真实判定请求并逐个报告；不改变端点选择与锁定。
+/// 向所选云端模型的一个端点发送若干真实判定请求并逐个报告；不改变端点选择与锁定。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PermissionJudgeEdgeRequestTestRequest {
@@ -778,14 +778,14 @@ pub struct PermissionJudgeModelDownload {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PermissionJudgeSettingsSaveRequest {
     /// Backend to configure; absent leaves the judge unconfigured. A backend is saved only once it
-    /// is ready: a local model in use, a chosen cloud decision model, or a signed-in OpenVulcan
-    /// account with an official direct model.
-    /// 要配置的后端；缺省表示不配置判定器。后端只有在就绪后才能保存：本机有使用中的模型、云端已
-    /// 选择判定模型，或已登录 OpenVulcan 账户并选择了官方直连模型。
+    /// is ready: a local model in use, a signed-in OpenVulcan account with a cloud model, or a
+    /// chosen API decision model.
+    /// 要配置的后端；缺省表示不配置判定器。后端只有在就绪后才能保存：本机有使用中的模型、已登录
+    /// OpenVulcan 账户并选择了云端模型，或 API 已选择判定模型。
     #[serde(default)]
     pub backend: Option<JudgeBackend>,
-    /// Official model for the direct backend, by its edge model id; required with that backend.
-    /// 官方直连后端使用的官方模型，以其边缘模型 id 表示；选择该后端时必填。
+    /// Official model for the cloud backend, by its edge model id; required with that backend.
+    /// 云端后端使用的官方模型，以其边缘模型 id 表示；选择该后端时必填。
     #[serde(default)]
     pub edge_model_id: Option<String>,
     /// Chosen device; absent follows the recommendation.
@@ -905,8 +905,8 @@ pub struct PermissionJudgeBenchmarkRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionJudgeBenchmarkResult {
-    /// Device the session runs on; absent for the cloud and official direct judges.
-    /// 会话运行的设备；云端与官方直连判定时缺省。
+    /// Device the session runs on; absent for the cloud and API judges.
+    /// 会话运行的设备；云端与 API 判定时缺省。
     pub device: Option<JudgeDevice>,
     /// Registration that was timed.
     /// 被计时的登记。
@@ -1067,11 +1067,11 @@ pub struct PermissionJudgeRecordJudge {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PermissionJudgeRecordTrace {
-    /// Judge backend key, `local`, `cloud` or `edge`.
-    /// 判定后端键，`local`、`cloud` 或 `edge`。
+    /// Judge backend key, `local`, `cloud` or `api`.
+    /// 判定后端键，`local`、`cloud` 或 `api`。
     pub backend: String,
-    /// Local model name, cloud model id or official direct model id.
-    /// 本机模型名称、云端模型标识或官方直连模型标识。
+    /// Local model name, cloud model id or API model id.
+    /// 本机模型名称、云端模型标识或 API 模型标识。
     pub model: String,
     /// Policy version of the model.
     /// 模型的策略版本。
@@ -1085,14 +1085,14 @@ pub struct PermissionJudgeRecordTrace {
     /// Raw local scores in label order.
     /// 按标签顺序排列的本机原始分数。
     pub logits: Option<[f32; 3]>,
-    /// Cloud probability of the allow label.
-    /// 云端 allow 标签的概率。
+    /// API probability of the allow label.
+    /// API allow 标签的概率。
     pub allow_probability: Option<f32>,
     /// Sequence length the local model read or refused.
     /// 本机模型读取或拒绝的序列长度。
     pub input_tokens: Option<u32>,
-    /// Checkpoint digest the official direct endpoint reported; absent for other backends.
-    /// 官方直连端点报告的检查点摘要；其他后端缺省。
+    /// Checkpoint digest the cloud judge endpoint reported; absent for other backends.
+    /// 云端端点报告的检查点摘要；其他后端缺省。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checkpoint_sha256: Option<String>,
 }
