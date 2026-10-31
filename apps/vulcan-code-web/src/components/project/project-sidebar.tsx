@@ -1,5 +1,6 @@
 import React from "react";
 import {
+  ArrowDownUp,
   ChevronsUpDown,
   CodeXml,
   Folder,
@@ -16,9 +17,12 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/ui-kit/primitives/dropdown-menu";
+import { toast } from "@/ui-kit/primitives/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui-kit/primitives/tooltip";
 import {
   Sidebar,
@@ -29,14 +33,23 @@ import {
   useSidebarNavigation,
 } from "@/ui-kit/shell/sidebar";
 import { SidebarBrandMenu } from "@/components/sidebar/sidebar-profile-menus";
-import { useI18n, type TranslationKey } from "@/i18n";
-import type { ConversationSummary, ProjectSummary, ProjectTreeSummary } from "@/types";
+import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
+import type { ConversationSummary, ProjectSessionSortMode, ProjectSummary, ProjectTreeSummary } from "@/types";
 import { ConversationTreeRow, type ConversationRowVariant } from "./project-sidebar-conversation-row";
 import { EMPTY_PROJECT_TREE } from "./project-group-layout";
 import { ProjectTreeSection, type ProjectGroupAction, type ProjectRowPlacement } from "./project-sidebar-groups";
 import { SortableProjectRow } from "./project-sidebar-project-row";
+import { SortableSessionList } from "./project-sidebar-session-sort";
 import type { SortableRowBinding } from "./project-sidebar-sortable";
 import { ProjectIcon } from "./project-icons";
+import {
+  lastRequestMillis,
+  orderProjectSessions,
+  pinsWithSessionOrder,
+  SESSION_SORT_MODES,
+  sessionSortModeOf,
+  withSubsetOrder,
+} from "./project-session-order";
 import type { ConversationMenuAction, ProjectMenuAction } from "./project-sidebar-types";
 import { handleSessionStepKey, handleSessionTreeKey, SESSION_TREE_ROW_SELECTOR } from "./session-tree-keys";
 import { setSidebarFlow, useSidebarFlow, type SidebarFlow } from "./sidebar-flow";
@@ -210,6 +223,12 @@ export function NavigationPanelBody(props: ProjectSessionTreeProps) {
               </TooltipTrigger>
               <TooltipContent side="bottom">{t("sidebar.newProject")}</TooltipContent>
             </Tooltip>
+            {flow === "session" ? (
+              <SessionSortSwitch
+                mode={sessionSortModeOf(currentProject)}
+                onChange={(mode) => runGroupAction(props.onProjectGroupAction, { kind: "session-sort-mode", projectId: currentProject.id, mode })}
+              />
+            ) : null}
           </div>
         ) : null}
         {props.projects.length > 0 ? (
@@ -313,6 +332,51 @@ function ProjectSwitch(props: {
 }
 
 // NoProjectsEntry is the actionable empty state shown before any project exists.
+// runGroupAction persists one sidebar change and reports a rejection as a toast, since no dialog holds it.
+// runGroupAction 持久化一次侧栏变更，并以提示报告失败，因为没有对话框承载该错误。
+function runGroupAction(handler: (action: ProjectGroupAction) => Promise<void>, action: ProjectGroupAction): Promise<void> {
+  return handler(action).catch((error: unknown) => {
+    toast.error(error instanceof Error ? error.message : String(error));
+  });
+}
+
+// SessionSortSwitch chooses how the session flow orders the current project's sessions: recency groups that
+// cannot be dragged, or one manual list that can.
+// SessionSortSwitch 选择会话流如何排列当前项目的会话：不可拖动的时间分组，或可拖动的单一手动列表。
+function SessionSortSwitch(props: { mode: ProjectSessionSortMode; onChange: (mode: ProjectSessionSortMode) => void }) {
+  const { t } = useI18n();
+  const current = SESSION_SORT_MODES.find((entry) => entry.mode === props.mode) ?? SESSION_SORT_MODES[0];
+  const label = formatMessage(t("sidebar.sessionSort.current"), { mode: t(current.label) });
+  return (
+    <DropdownMenu>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <IconButton aria-label={label} data-action="session-sort" variant="outline">
+              <ArrowDownUp aria-hidden="true" />
+            </IconButton>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{label}</TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent align="end">
+        <DropdownMenuRadioGroup
+          onValueChange={(value) => {
+            const entry = SESSION_SORT_MODES.find((candidate) => candidate.mode === value);
+            if (entry && entry.mode !== props.mode) props.onChange(entry.mode);
+          }}
+          value={props.mode}
+        >
+          {SESSION_SORT_MODES.map((entry) => (
+            <DropdownMenuRadioItem key={entry.mode} value={entry.mode}>{t(entry.label)}</DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+// NoProjectsEntry is the actionable empty state shown before any project exists.
 // NoProjectsEntry 是尚无项目时显示的可操作空状态。
 function NoProjectsEntry(props: { onCreateProject: () => void }) {
   const { t } = useI18n();
@@ -377,24 +441,27 @@ const SESSION_WHEN_ORDER: ReadonlyArray<[SessionWhen, TranslationKey]> = [
   ["older", "sidebar.when.older"],
 ];
 
-// sessionWhen places one conversation in a calendar bucket relative to local midnight; unknown times are older.
-// sessionWhen 以本地零点为基准将会话放入日历分组；时间未知的归入更早。
+// sessionWhen places one conversation in a calendar bucket by its latest request, relative to local midnight;
+// unknown times are older.
+// sessionWhen 按最近一次请求时间、以本地零点为基准将会话放入日历分组；时间未知的归入更早。
 export function sessionWhen(conversation: ConversationSummary, nowMs: number): SessionWhen {
-  const updatedAtMs = Number.parseInt(conversation.lastUpdatedAt ?? "", 10);
-  if (!Number.isFinite(updatedAtMs) || updatedAtMs <= 0) return "older";
+  const requestedAtMs = lastRequestMillis(conversation);
+  if (requestedAtMs <= 0) return "older";
   const midnight = new Date(nowMs);
   midnight.setHours(0, 0, 0, 0);
   const dayMs = 24 * 60 * 60 * 1000;
   const startOfToday = midnight.getTime();
-  if (updatedAtMs >= startOfToday) return "today";
-  if (updatedAtMs >= startOfToday - dayMs) return "yesterday";
-  if (updatedAtMs >= startOfToday - 6 * dayMs) return "week";
-  if (updatedAtMs >= startOfToday - 29 * dayMs) return "month";
+  if (requestedAtMs >= startOfToday) return "today";
+  if (requestedAtMs >= startOfToday - dayMs) return "yesterday";
+  if (requestedAtMs >= startOfToday - 6 * dayMs) return "week";
+  if (requestedAtMs >= startOfToday - 29 * dayMs) return "month";
   return "older";
 }
 
-// SessionFlowList lists the current project's sessions by recency, pinned ones first.
-// SessionFlowList 按最近程度列出当前项目的会话，置顶会话在前。
+// SessionFlowList lists the current project's sessions, pinned ones first and draggable among themselves. The rest
+// follow the project's sort mode: recency groups by last request, or one draggable manual list.
+// SessionFlowList 列出当前项目的会话，置顶会话在前且可在置顶范围内拖动。其余会话遵循项目排序方式：按最近请求的时间分组，
+// 或一个可拖动的手动列表。
 function SessionFlowList(props: ProjectSessionTreeProps & {
   // Project whose sessions are listed.
   // 列出其会话的项目。
@@ -417,13 +484,18 @@ function SessionFlowList(props: ProjectSessionTreeProps & {
   const pinned = projectSessions
     .filter((conversation) => props.pinnedConversationIds.has(conversation.id))
     .sort((left, right) => pinOrder.indexOf(left.id) - pinOrder.indexOf(right.id));
+  const mode = sessionSortModeOf(props.currentProject);
+  const unpinned = orderProjectSessions(
+    projectSessions.filter((conversation) => !props.pinnedConversationIds.has(conversation.id)),
+    mode,
+  );
+  const filtering = props.query !== "";
   const buckets = new Map<SessionWhen, ConversationSummary[]>();
-  for (const conversation of projectSessions) {
-    if (props.pinnedConversationIds.has(conversation.id)) continue;
+  for (const conversation of unpinned) {
     const when = sessionWhen(conversation, nowMs);
     buckets.set(when, [...(buckets.get(when) ?? []), conversation]);
   }
-  const renderRow = (conversation: ConversationSummary, variant: ConversationRowVariant) => (
+  const renderRow = (conversation: ConversationSummary, variant: ConversationRowVariant, sortable?: SortableRowBinding) => (
     <ConversationTreeRow
       compactPinned={false}
       conversation={conversation}
@@ -434,21 +506,55 @@ function SessionFlowList(props: ProjectSessionTreeProps & {
       nowMs={nowMs}
       onAction={props.onConversationMenuAction}
       onSelectConversation={navigate(props.onSelectConversation)}
+      sortable={sortable}
       variant={variant}
     />
   );
+  // reorderPinned rewrites the complete pin list, since the pinned order request names every shown pin.
+  // reorderPinned 重写完整置顶列表，因为置顶排序请求需列出每个已显示的置顶项。
+  const reorderPinned = (orderedIds: string[]) => props.onProjectGroupAction({
+    kind: "pins-order",
+    pins: pinsWithSessionOrder((props.projectTree ?? EMPTY_PROJECT_TREE).pins, orderedIds),
+  });
+  const reorderManual = (orderedIds: string[]) => props.onProjectGroupAction({
+    kind: "sessions-order",
+    projectId: props.currentProject.id,
+    conversationIds: orderedIds,
+  });
   if (projectSessions.length === 0) {
     return <div className="vk-tree-blank">{t(props.query ? "sidebar.noMatches" : "projectRow.noConversations")}</div>;
   }
   return (
-    <div className="vk-session-flow">
+    <div className="vk-session-flow" data-sort={mode}>
       {pinned.length > 0 ? (
         <section>
           <TreeHead icon={<Pin aria-hidden="true" />} label={t("sidebar.pinned")} />
-          <SidebarMenu>{pinned.map((conversation) => renderRow(conversation, "flow"))}</SidebarMenu>
+          <SidebarMenu>
+            <SortableSessionList
+              disabled={filtering}
+              onReorder={reorderPinned}
+              renderRow={(conversation, sortable) => renderRow(conversation, "flow", sortable)}
+              reorderLabel="sidebar.pinReorder"
+              sessions={pinned}
+            />
+          </SidebarMenu>
         </section>
       ) : null}
-      {SESSION_WHEN_ORDER.map(([when, label]) => {
+      {mode === "manual" ? (
+        unpinned.length > 0 ? (
+          <section>
+            <SidebarMenu>
+              <SortableSessionList
+                disabled={filtering}
+                onReorder={reorderManual}
+                renderRow={(conversation, sortable) => renderRow(conversation, "flow", sortable)}
+                reorderLabel="sidebar.sessionReorder"
+                sessions={unpinned}
+              />
+            </SidebarMenu>
+          </section>
+        ) : null
+      ) : SESSION_WHEN_ORDER.map(([when, label]) => {
         const sessions = buckets.get(when);
         if (!sessions?.length) return null;
         return (
@@ -589,9 +695,22 @@ function ProjectSessionTree(props: ProjectSessionTreeProps & {
   const renderProjectRow = (project: ProjectSummary, placement: ProjectRowPlacement | null, sortableId?: string) => {
     const allConversations = conversationsByProject[project.id] ?? [];
     const nameMatches = matchesQuery(project.name, props.query);
-    const projectConversations = allConversations
-      .filter((conversation) => !props.pinnedConversationIds.has(conversation.id))
+    const mode = sessionSortModeOf(project);
+    const unpinnedConversations = orderProjectSessions(
+      allConversations.filter((conversation) => !props.pinnedConversationIds.has(conversation.id)),
+      mode,
+    );
+    const projectConversations = unpinnedConversations
       .filter((conversation) => nameMatches || matchesQuery(conversation.title, props.query));
+    // A dragged preview reorders only the rows it shows, so the order sent keeps the rows it hides in place.
+    // 被拖动的预览只重排其显示的行，因此发送的顺序让隐藏的行保持原位。
+    const reorderConversations = mode === "manual" && !filtering
+      ? (orderedIds: string[]) => props.onProjectGroupAction({
+        kind: "sessions-order",
+        projectId: project.id,
+        conversationIds: withSubsetOrder(unpinnedConversations.map((conversation) => conversation.id), orderedIds),
+      })
+      : undefined;
     return (
       <SortableProjectRow
         conversations={projectConversations}
@@ -604,6 +723,12 @@ function ProjectSessionTree(props: ProjectSessionTreeProps & {
         onConversationMenuAction={props.onConversationMenuAction}
         onCreateConversation={navigate(props.onCreateConversation)}
         onProjectMenuAction={props.onProjectMenuAction}
+        onReorderConversations={reorderConversations}
+        onSessionSortModeChange={(target, nextMode) => runGroupAction(props.onProjectGroupAction, {
+          kind: "session-sort-mode",
+          projectId: target.id,
+          mode: nextMode,
+        })}
         renderConversationRow={renderConversationRow}
         onSelectConversation={navigate(props.onSelectConversation)}
         onSelectProject={props.onSelectProject}

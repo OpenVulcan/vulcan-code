@@ -860,6 +860,47 @@ RETURNING id;
     validate_project_mutation_identity_rows(project_id, &rows, "update the project icon")
 }
 
+/// Stores how one active project orders its sessions in the sidebar.
+/// 保存一个活动项目在侧栏中的会话排序方式。
+///
+/// # Parameters
+/// 参数
+/// `project_id` is the exact active project; `mode` is the chosen sort mode, stored explicitly even when it
+/// equals the default so the user's choice survives a later default change.
+/// `project_id` 为精确的活动项目；`mode` 为所选排序方式。即使等于默认值也显式存储，使用户的选择不受日后默认值变化影响。
+///
+/// # Returns
+/// 返回值
+/// Returns success only after the preference is written for one exact active project.
+/// 仅在偏好写入一个精确活动项目后返回成功。
+pub async fn persist_project_session_sort_mode(
+    host_runtime: HostRuntimeHandle,
+    project_id: &str,
+    mode: crate::model::ProjectSessionSortMode,
+) -> Result<(), String> {
+    validate_project_mutation_id(project_id, "set the session sort mode")?;
+    // result proves the preference row belongs to one exact active project.
+    // result 证明偏好行属于一个精确的活动项目。
+    let result = local_sql::query_json_async(
+        &host_runtime.local,
+        LogicalDatabase::AppState,
+        r#"
+INSERT INTO project_session_preferences (project_id, session_sort_mode)
+SELECT id, ?2 FROM projects WHERE id = ?1 AND archived = 0
+ON CONFLICT(project_id) DO UPDATE SET session_sort_mode = excluded.session_sort_mode
+RETURNING project_id AS id;
+"#,
+        vec![
+            SqliteValue::Text(project_id.to_string()),
+            SqliteValue::Text(mode.as_str().to_string()),
+        ],
+    )
+    .await
+    .map_err(|error| format!("Failed to set the session sort mode: {error}"))?;
+    let rows = decode_query_rows::<ProjectMutationIdentityRow>(&result.json_data)?;
+    validate_project_mutation_identity_rows(project_id, &rows, "set the session sort mode")
+}
+
 /// Normalizes and validates one optional project icon pair.
 /// 规范化并校验一组可选项目图标对。
 ///

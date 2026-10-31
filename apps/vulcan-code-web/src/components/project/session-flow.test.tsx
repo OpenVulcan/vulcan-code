@@ -17,7 +17,8 @@ const DAY = 24 * 60 * 60 * 1000;
 // session builds one conversation fixture updated a given number of milliseconds before NOW.
 // session 构建一个在 NOW 之前给定毫秒数更新的会话测试数据。
 function session(id: string, projectId: string, ageMs: number): ConversationSummary {
-  return { id, title: `title-${id}`, status: "idle", projectId, lastUpdatedAt: String(NOW - ageMs) };
+  const at = String(NOW - ageMs);
+  return { id, title: `title-${id}`, status: "idle", projectId, lastUpdatedAt: at, lastRequestAt: at, createdAt: at };
 }
 
 let container: HTMLDivElement;
@@ -35,9 +36,9 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-// mount renders the panel with two projects; the first is active.
-// mount 渲染含两个项目的面板，第一个为活动项目。
-async function mount(onCreateDedicatedConversation = vi.fn()) {
+// mount renders the panel with two projects; the first is active and uses the given sort mode.
+// mount 渲染含两个项目的面板，第一个为活动项目并使用给定的排序方式。
+async function mount(onCreateDedicatedConversation = vi.fn(), sessionSortMode: "last_request" | "manual" = "last_request") {
   const noop = () => undefined;
   await act(async () => root.render(
     <I18nProvider initialLocale="en-US"><TooltipProvider><SidebarProvider defaultOpen>
@@ -54,7 +55,7 @@ async function mount(onCreateDedicatedConversation = vi.fn()) {
         onSelectConversation={noop}
         onSelectProject={noop}
         pinnedConversationIds={new Set()}
-        projects={[{ id: "a", name: "Alpha", path: "D:/a" }, { id: "b", name: "Beta", path: "D:/b" }]}
+        projects={[{ id: "a", name: "Alpha", path: "D:/a", sessionSortMode }, { id: "b", name: "Beta", path: "D:/b" }]}
         rail={null}
         selectedConversationId={null}
       />
@@ -105,4 +106,19 @@ it("opens a dedicated assistant draft in the current project", async () => {
   const dedicated = container.querySelector<HTMLButtonElement>('.vk-sidebar-actions [data-action="new-dedicated"]')!;
   await act(async () => dedicated.click());
   expect(onCreateDedicatedConversation).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: "a" }));
+});
+
+it("shows one draggable list without recency groups in manual mode, newest creation first", async () => {
+  setSidebarFlow("session");
+  await mount(vi.fn(), "manual");
+  expect(container.querySelector(".vk-session-flow")?.getAttribute("data-sort")).toBe("manual");
+  expect(container.querySelectorAll(".vk-session-group")).toHaveLength(0);
+  expect(rowTitles()).toEqual(["title-a1", "title-a2", "title-a3"]);
+  expect(container.querySelectorAll(".vk-session-flow .vk-tree-grip")).toHaveLength(3);
+});
+
+it("keeps recency groups without grips in last-request mode", async () => {
+  setSidebarFlow("session");
+  await mount();
+  expect(container.querySelectorAll(".vk-session-flow .vk-tree-grip")).toHaveLength(0);
 });

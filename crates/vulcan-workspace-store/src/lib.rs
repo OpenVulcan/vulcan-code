@@ -1,6 +1,7 @@
 //! Shared in-process workspace storage and bootstrap surface reused by the WebUI shell.
 //! 供 WebUI 壳层复用的共享进程内工作区存储与引导表面。
 
+mod app_schema_migrations;
 pub mod data_plane;
 pub mod knowledge_base;
 pub mod local_database_runtime;

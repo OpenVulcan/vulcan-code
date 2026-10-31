@@ -42,6 +42,7 @@ fn mcp_test_state() -> SharedServiceBridgeState {
             pinned: false,
             icon_pack: None,
             icon_key: None,
+            session_sort_mode: Default::default(),
         });
         service_state
             .workbench
@@ -53,6 +54,9 @@ fn mcp_test_state() -> SharedServiceBridgeState {
                 run_phase: String::from("Idle"),
                 last_updated_label: String::from("now"),
                 last_updated_at: String::from("2026-10-22T00:00:00Z"),
+                created_at: String::from("2026-10-22T00:00:00Z"),
+                last_request_at: String::from("2026-10-22T00:00:00Z"),
+                manual_position: None,
                 unread: false,
                 attention: None,
                 project_id: Some(project.to_string()),

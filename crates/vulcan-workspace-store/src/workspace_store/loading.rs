@@ -20,6 +20,9 @@ struct ValidatedProjectRow {
     /// Non-negative section order converted without clamping or truncation.
     /// 未经钳制或截断转换的非负分区顺序。
     sort_order: usize,
+    /// Session sort mode; a project without a stored choice uses the default mode.
+    /// 会话排序方式；没有已存储选择的项目使用默认方式。
+    session_sort_mode: crate::model::ProjectSessionSortMode,
 }
 
 /// Validates one raw SQLite project row before it can trigger writes or enter workspace projection.
@@ -90,11 +93,23 @@ fn validate_project_row(row: StoredProjectRow) -> Result<ValidatedProjectRow, St
             row.id, row.sort_order
         )
     })?;
+    // session_sort_mode rejects stored values outside the declared mode set instead of defaulting them.
+    // session_sort_mode 拒绝声明集合之外的存储值，而不是将其视为默认值。
+    let session_sort_mode = match row.session_sort_mode.as_deref() {
+        None => crate::model::ProjectSessionSortMode::default(),
+        Some(value) => crate::model::ProjectSessionSortMode::parse(value).ok_or_else(|| {
+            format!(
+                "Project index `{}` contains an invalid session sort mode `{value}`.",
+                row.id
+            )
+        })?,
+    };
     Ok(ValidatedProjectRow {
         stored: row,
         pinned,
         archived,
         sort_order,
+        session_sort_mode,
     })
 }
 
@@ -241,6 +256,7 @@ pub async fn load_workspace_index_report(
     let mut seen_sessions = BTreeSet::new();
     let mut dedicated_session_ids = BTreeSet::new();
     let mut assistant_names = BTreeMap::new();
+    let mut list_states = BTreeMap::new();
     if session_index_available {
         match super::index_read::list_workspace_rows(&host_runtime).await {
             Ok(report) => {
@@ -249,6 +265,7 @@ pub async fn load_workspace_index_report(
                 issues.extend(report.issues);
                 dedicated_session_ids = report.dedicated_session_ids;
                 assistant_names = report.assistant_names;
+                list_states = report.list_states;
                 for row in report.rows {
                     let Some(project) = project_by_id.get(row.project_id.as_str()) else {
                         continue;
@@ -310,7 +327,8 @@ pub async fn load_workspace_index_report(
             row.icon_pack.clone(),
             row.icon_key.clone(),
             Vec::new(),
-        );
+        )
+        .with_session_sort_mode(validated_row.session_sort_mode);
 
         if validated_row.archived {
             archived_task_projects.push(project);
@@ -365,6 +383,17 @@ pub async fn load_workspace_index_report(
         append_indexed_session(projects, positions, project_id, project_name, session_id);
         let dedicated = dedicated_session_ids.contains(&row.session_id);
         let assistant_name = assistant_names.remove(&row.session_id);
+        // Every admitted row joined its list state, so a missing entry is an index defect.
+        // 每条已准入记录都已连接其列表状态，因此缺失即为索引缺陷。
+        let Some(list_state) = list_states.remove(&row.session_id) else {
+            issues.push(WorkspaceIndexLoadIssue {
+                stage: WorkspaceIndexLoadStage::Index,
+                project_id: Some(row.project_id),
+                session_id: Some(row.session_id),
+                detail: String::from("session list state is missing"),
+            });
+            continue;
+        };
         let session_summary = SessionSummary::new(
             session_id,
             Some(project_id.to_string()),
@@ -378,6 +407,8 @@ pub async fn load_workspace_index_report(
         .with_title_source(SessionTitleSource::Manual)
         .with_created_at(row.created_at_ms.to_string())
         .with_updated_at(row.updated_at_ms.to_string())
+        .with_last_request_at(list_state.last_request_at_ms.to_string())
+        .with_manual_position(list_state.manual_position)
         .with_dedicated(dedicated)
         .with_assistant_name(assistant_name);
         session_updated_at.insert(session_id, row.updated_at_ms);
@@ -726,6 +757,7 @@ mod tests {
             icon_pack: None,
             icon_key: None,
             archived: 0,
+            session_sort_mode: None,
         }
     }
 

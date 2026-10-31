@@ -151,6 +151,9 @@ pub(crate) fn materialize_prompt_session(
         };
         session.status = SessionState::Running;
         session.last_updated_label = String::from("just now");
+        // The submission is the latest request, so last-request ordering moves this session first.
+        // 本次提交即为最近一次请求，因此按最近请求排序时该会话移到最前。
+        session.last_request_at = current_unix_millis_text();
         workspace_snapshot.selected_session = session_id;
         let session_title = session.title.clone();
         let owner_project_id = session_summary_project_id(session).map(str::to_string);
@@ -205,6 +208,7 @@ pub(crate) fn materialize_prompt_session(
     )
     .with_title_source(SessionTitleSource::Generated)
     .with_created_at(now.clone())
+    .with_last_request_at(now.clone())
     .with_updated_at(now);
 
     project

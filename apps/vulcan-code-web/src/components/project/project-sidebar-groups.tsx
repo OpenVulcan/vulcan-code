@@ -41,7 +41,7 @@ import { Spinner } from "@/ui-kit/primitives/spinner";
 import { toast } from "@/ui-kit/primitives/toast";
 import { SidebarMenu } from "@/ui-kit/shell/sidebar";
 import { formatMessage, useI18n } from "@/i18n";
-import type { ConversationSummary, ProjectSummary, ProjectTreePin, ProjectTreeSummary } from "@/types";
+import type { ConversationSummary, ProjectSessionSortMode, ProjectSummary, ProjectTreePin, ProjectTreeSummary } from "@/types";
 import {
   buildProjectTreeLayout,
   containerOf,
@@ -62,7 +62,9 @@ export type ProjectGroupAction =
   | { kind: "delete"; groupId: string }
   | { kind: "layout"; layout: ProjectGroupLayout }
   | { kind: "pin"; item: ProjectTreePin; pinned: boolean }
-  | { kind: "pins-order"; pins: ProjectTreePin[] };
+  | { kind: "pins-order"; pins: ProjectTreePin[] }
+  | { kind: "session-sort-mode"; projectId: string; mode: ProjectSessionSortMode }
+  | { kind: "sessions-order"; projectId: string; conversationIds: string[] };
 
 // ProjectRowPlacement lets a project row offer "move to group"; pinned rows have none.
 // ProjectRowPlacement 让项目行提供“移动到分组”；置顶行没有该项。

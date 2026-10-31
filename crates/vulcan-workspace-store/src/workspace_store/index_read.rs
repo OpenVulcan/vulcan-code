@@ -21,9 +21,24 @@ pub(super) struct WorkspaceIndexRows {
     /// Display names of admitted dedicated sessions converted into floating assistants.
     /// 已准入、已转换为浮动助手的专职会话显示名称。
     pub assistant_names: BTreeMap<String, String>,
+    /// Sidebar ordering facts of admitted sessions: latest request time and optional manual position.
+    /// 已准入会话的侧栏排序事实：最近请求时间与可选手动位置。
+    pub list_states: BTreeMap<String, SessionListState>,
     /// Corrupt records excluded from rows but retained for incomplete-load reporting.
     /// 未放入有效记录、但保留用于不完整加载报告的损坏记录。
     pub issues: Vec<WorkspaceIndexLoadIssue>,
+}
+
+/// Sidebar ordering facts stored beside one session locator.
+/// 与一条会话定位记录一同保存的侧栏排序事实。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct SessionListState {
+    /// Time of the latest request in Unix milliseconds.
+    /// 最近一次请求的时间（Unix 毫秒）。
+    pub last_request_at_ms: i64,
+    /// Manual-order position, absent until the user arranges the project.
+    /// 手动排列位置；用户排列该项目之前不存在。
+    pub manual_position: Option<i64>,
 }
 
 /// Read all lightweight rows with one connection and statement, never one query per project/session.
@@ -44,7 +59,7 @@ fn read_rows(connection: &rusqlite::Connection) -> rusqlite::Result<WorkspaceInd
     // Retain a single SQL snapshot instead of retrying each project after a decode error.
     // 保留单次 SQL 快照，避免解码失败后逐项目重试。
     let mut statement = connection.prepare(
-        "SELECT session_id, project_id, project_tag, storage_partition, relative_path, title, created_at_ms, updated_at_ms, archived_at_ms, unread, EXISTS (SELECT 1 FROM session_dedicated_index_v1 AS marker WHERE marker.session_id = session_index_v1.session_id) AS dedicated, (SELECT assistant.name FROM session_assistant_index_v1 AS assistant WHERE assistant.session_id = session_index_v1.session_id) AS assistant_name FROM session_index_v1 WHERE project_id IN (SELECT id FROM projects) ORDER BY session_id"
+        "SELECT session_index_v1.session_id AS session_id, project_id, project_tag, storage_partition, relative_path, title, created_at_ms, updated_at_ms, archived_at_ms, unread, EXISTS (SELECT 1 FROM session_dedicated_index_v1 AS marker WHERE marker.session_id = session_index_v1.session_id) AS dedicated, (SELECT assistant.name FROM session_assistant_index_v1 AS assistant WHERE assistant.session_id = session_index_v1.session_id) AS assistant_name, list_state.last_request_at_ms AS last_request_at_ms, list_state.manual_position AS manual_position FROM session_index_v1 JOIN session_list_state_v1 AS list_state ON list_state.session_id = session_index_v1.session_id WHERE project_id IN (SELECT id FROM projects) ORDER BY session_index_v1.session_id"
     )?;
     // Cursor failures abort the snapshot; only typed decoding failures isolate one row.
     // 游标读取失败终止快照；仅强类型解码失败隔离单条记录。
@@ -55,6 +70,7 @@ fn read_rows(connection: &rusqlite::Connection) -> rusqlite::Result<WorkspaceInd
         rows: Vec::new(),
         dedicated_session_ids: BTreeSet::new(),
         assistant_names: BTreeMap::new(),
+        list_states: BTreeMap::new(),
         issues: Vec::new(),
     };
     while let Some(row) = cursor.next()? {
@@ -63,9 +79,13 @@ fn read_rows(connection: &rusqlite::Connection) -> rusqlite::Result<WorkspaceInd
                 decoded,
                 row.get::<_, bool>("dedicated")?,
                 row.get::<_, Option<String>>("assistant_name")?,
+                SessionListState {
+                    last_request_at_ms: row.get("last_request_at_ms")?,
+                    manual_position: row.get("manual_position")?,
+                },
             ))
         }) {
-            Ok((decoded, dedicated, assistant_name)) => {
+            Ok((decoded, dedicated, assistant_name, list_state)) => {
                 if dedicated {
                     report
                         .dedicated_session_ids
@@ -76,6 +96,9 @@ fn read_rows(connection: &rusqlite::Connection) -> rusqlite::Result<WorkspaceInd
                         .assistant_names
                         .insert(decoded.session_id.clone(), name);
                 }
+                report
+                    .list_states
+                    .insert(decoded.session_id.clone(), list_state);
                 report.rows.push(decoded);
             }
             Err(error) => report.issues.push(WorkspaceIndexLoadIssue {
@@ -171,7 +194,8 @@ mod tests {
             .expect("production index schema");
         connection.execute_batch("CREATE TABLE projects (id TEXT PRIMARY KEY); INSERT INTO projects VALUES ('one'), ('two'); INSERT INTO session_index_v1 VALUES
             ('a','one','tag','sessions','sessions/tag/session-a','active',1,2,NULL,0),
-            ('b','two','tag','sessions','sessions/tag/session-b','archived',1,3,3,1)").expect("rows");
+            ('b','two','tag','sessions','sessions/tag/session-b','archived',1,3,3,1);
+            INSERT INTO session_list_state_v1 VALUES ('a', 2, NULL), ('b', 3, 0);").expect("rows");
         connection
     }
 
@@ -191,6 +215,13 @@ mod tests {
         assert_eq!(archived.project_id, "two");
         assert_eq!(archived.archived_at_ms, Some(3));
         assert_eq!(archived.unread, 1);
+        assert_eq!(
+            report.list_states.get("b"),
+            Some(&SessionListState {
+                last_request_at_ms: 3,
+                manual_position: Some(0)
+            })
+        );
     }
 
     /// Only marked sessions are reported as dedicated, and pruning a row removes its marker.

@@ -341,6 +341,60 @@ pub(crate) async fn service_rename_project(
     refresh_workbench_snapshot(state).await
 }
 
+/// Stores how one project orders its unpinned sessions and returns the refreshed workbench snapshot.
+/// 保存一个项目排列非置顶会话的方式，并返回刷新后的工作台快照。
+pub(crate) async fn service_set_project_session_sort_mode(
+    state: SharedServiceBridgeState,
+    project_id: String,
+    mode: vulcan_service_api::ProjectSessionSortMode,
+) -> Result<WorkbenchSnapshot, String> {
+    let (controller_runtime, _project) = controller_runtime_and_active_project_from_state(
+        &state,
+        &project_id,
+        "set the session sort mode",
+    )?;
+    let mode = match mode {
+        vulcan_service_api::ProjectSessionSortMode::LastRequest => {
+            vulcan_workbench_model::ProjectSessionSortMode::LastRequest
+        }
+        vulcan_service_api::ProjectSessionSortMode::Manual => {
+            vulcan_workbench_model::ProjectSessionSortMode::Manual
+        }
+    };
+    vulcan_workspace_store::workspace_store::persist_project_session_sort_mode(
+        controller_runtime,
+        &project_id,
+        mode,
+    )
+    .await?;
+    refresh_workbench_snapshot(state).await
+}
+
+/// Stores the manual order of one project's sessions and returns the refreshed workbench snapshot.
+/// 保存一个项目会话的手动顺序，并返回刷新后的工作台快照。
+///
+/// `conversation_ids` lists the project's unpinned sessions top to bottom; storage rejects
+/// duplicates and sessions that are not active members of the project.
+/// `conversation_ids` 自上而下列出该项目的非置顶会话；存储层拒绝重复项及非该项目活动成员的会话。
+pub(crate) async fn service_reorder_project_sessions(
+    state: SharedServiceBridgeState,
+    project_id: String,
+    conversation_ids: Vec<String>,
+) -> Result<WorkbenchSnapshot, String> {
+    let (controller_runtime, _project) = controller_runtime_and_active_project_from_state(
+        &state,
+        &project_id,
+        "reorder the sessions",
+    )?;
+    vulcan_workspace_store::workspace_store::set_project_session_order_v1(
+        &controller_runtime,
+        &project_id,
+        conversation_ids,
+    )
+    .await?;
+    refresh_workbench_snapshot(state).await
+}
+
 /// Applies a project icon override without rebuilding the full workbench snapshot.
 /// 应用项目图标覆盖，但不重建完整工作台快照。
 pub(crate) async fn service_set_project_icon(

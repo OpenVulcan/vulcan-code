@@ -241,6 +241,24 @@ pub struct ProjectSummary {
     /// 用于渲染项目的可选图标键。
     #[serde(default)]
     pub icon_key: Option<String>,
+    /// How the sidebar orders this project's unpinned sessions.
+    /// 侧栏如何排列该项目的非置顶会话。
+    #[serde(default)]
+    pub session_sort_mode: ProjectSessionSortMode,
+}
+
+/// Sidebar ordering of one project's unpinned sessions.
+/// 一个项目非置顶会话的侧栏排序方式。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectSessionSortMode {
+    /// Newest submitted request first, grouped by recency; not draggable.
+    /// 按最近请求时间倒序并按时间分组；不可拖动。
+    #[default]
+    LastRequest,
+    /// User-arranged order; unarranged sessions lead, newest creation first.
+    /// 用户排列的顺序；未排列的会话在前，按创建时间倒序。
+    Manual,
 }
 
 /// Summarizes one user-named project group shown in the WebUI sidebar.

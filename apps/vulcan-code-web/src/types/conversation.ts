@@ -77,6 +77,15 @@ export interface ConversationSummary {
   // Raw last-updated timestamp as Unix milliseconds text.
   // 以 Unix 毫秒文本表示的原始最近更新时间。
   lastUpdatedAt?: string;
+  // Creation timestamp as Unix milliseconds text.
+  // 以 Unix 毫秒文本表示的创建时间。
+  createdAt?: string;
+  // Latest submitted request as Unix milliseconds text; creation time until the first request.
+  // 以 Unix 毫秒文本表示的最近一次请求时间；首次请求前为创建时间。
+  lastRequestAt?: string;
+  // Position in the project's manual order; absent until the user arranges the project.
+  // 在项目手动顺序中的位置；用户排列项目之前缺省。
+  manualPosition?: number | null;
   // Whether the conversation has unread activity.
   // 会话是否存在未读活动。
   unread?: boolean;

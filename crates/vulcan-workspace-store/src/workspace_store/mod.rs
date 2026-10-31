@@ -56,7 +56,8 @@ pub use git_preferences::{
 pub use persistence::{
     delete_active_project_row_v1, persist_collapsed_task_project_ids, persist_new_project,
     persist_project_icon_update, persist_project_order_update,
-    persist_project_pinned_and_order_update, rename_project, restore_archived_project_row_v1,
+    persist_project_pinned_and_order_update, persist_project_session_sort_mode, rename_project,
+    restore_archived_project_row_v1,
 };
 pub use project_groups::{
     DEFAULT_PROJECT_GROUP_ID, PROJECT_GROUP_NAME_MAX_CHARS, PROJECT_GROUPS_FORMAT_VERSION,
@@ -78,6 +79,9 @@ pub use resource_catalog::{
     resolve_project_resource_source,
 };
 pub use session_index_v1::SESSION_ASSISTANT_NAME_MAX_CHARS;
+#[cfg(test)]
+pub(crate) use session_index_v1::SESSION_INDEX_V1_SCHEMA_SQL;
+pub use session_index_v1::{record_session_request_v1, set_project_session_order_v1};
 pub use session_sidecars::{
     load_session_review_prompt, load_session_subagent_models, save_session_review_prompt,
     save_session_subagent_models,
@@ -219,8 +223,7 @@ pub fn persist_vmm_structured_output_failure(
     let encoded = serde_json::to_vec(record).map_err(|error| {
         format!("VMM structured-output failure JSON serialization failed: {error}")
     })?;
-    if u64::try_from(encoded.len()).unwrap_or(u64::MAX) > VMM_STRUCTURED_OUTPUT_FAILURE_MAX_BYTES
-    {
+    if u64::try_from(encoded.len()).unwrap_or(u64::MAX) > VMM_STRUCTURED_OUTPUT_FAILURE_MAX_BYTES {
         return Err(format!(
             "VMM structured-output failure record exceeds its {VMM_STRUCTURED_OUTPUT_FAILURE_MAX_BYTES}-byte slot capacity."
         ));

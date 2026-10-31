@@ -51,6 +51,7 @@ pub(crate) fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot 
             pinned: false,
             icon_pack: None,
             icon_key: None,
+            session_sort_mode: Default::default(),
         }],
         expanded_project_ids: vec![String::from("current-workspace")],
         project_tree: Default::default(),

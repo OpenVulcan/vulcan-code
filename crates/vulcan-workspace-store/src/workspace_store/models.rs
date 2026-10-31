@@ -64,6 +64,9 @@ pub(super) struct StoredProjectRow {
     /// SQLite numeric archived flag.
     /// SQLite 数值型归档标记。
     pub(super) archived: i64,
+    /// Stored session sort mode; absent when the user never chose one.
+    /// 已存储的会话排序方式；用户从未选择时为空。
+    pub(super) session_sort_mode: Option<String>,
 }
 
 /// Raw application metadata row decoded from the host_runtime SQLite query payload.

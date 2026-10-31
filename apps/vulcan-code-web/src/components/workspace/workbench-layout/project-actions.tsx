@@ -16,9 +16,11 @@ import {
   deleteProjectGroup,
   openProjectDirectory,
   renameProjectGroup,
+  reorderProjectSessions,
   resetProjectIcon,
   setExpandedTaskProjects,
   setProjectGroupsLayout,
+  setProjectSessionSortMode,
   setProjectTreePinned,
   setProjectTreePinsOrder,
   setProjectIcon,
@@ -484,6 +486,8 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
         case "layout": return setProjectGroupsLayout(action.layout.groups);
         case "pin": return setProjectTreePinned(action.item.kind, action.item.id, action.pinned);
         case "pins-order": return setProjectTreePinsOrder(action.pins);
+        case "session-sort-mode": return setProjectSessionSortMode(action.projectId, action.mode);
+        case "sessions-order": return reorderProjectSessions(action.projectId, action.conversationIds);
       }
     })();
     if (acceptServiceWorkbenchSnapshot(snapshot)) {

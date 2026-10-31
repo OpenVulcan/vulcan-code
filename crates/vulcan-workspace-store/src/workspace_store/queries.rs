@@ -10,8 +10,9 @@ pub(super) async fn query_project_rows(
         LogicalDatabase::AppState,
         r#"
 SELECT p.id, p.name, p.root_path, p.pinned, p.sort_order, p.icon_pack, p.icon_key,
-       p.archived
+       p.archived, preference.session_sort_mode
 FROM projects p
+LEFT JOIN project_session_preferences preference ON preference.project_id = p.id
 ORDER BY p.pinned DESC, p.sort_order ASC, p.updated_at DESC;
 "#,
         &[],

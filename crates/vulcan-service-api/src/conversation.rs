@@ -69,6 +69,18 @@ pub struct ConversationSummary {
     /// 以 Unix 毫秒文本表示的原始最近更新时间。
     #[serde(default)]
     pub last_updated_at: String,
+    /// Creation timestamp as Unix milliseconds text.
+    /// 以 Unix 毫秒文本表示的创建时间。
+    #[serde(default)]
+    pub created_at: String,
+    /// Time of the latest submitted request as Unix milliseconds text; creation time until the first request.
+    /// 以 Unix 毫秒文本表示的最近一次请求时间；首次请求前为创建时间。
+    #[serde(default)]
+    pub last_request_at: String,
+    /// Position in the project's manual session order; `None` until the user arranges the project.
+    /// 在项目手动会话顺序中的位置；用户排列项目之前为 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manual_position: Option<i64>,
     /// Whether the conversation has unread completed activity.
     /// 会话是否存在未读的已完成活动。
     #[serde(default)]

@@ -86,6 +86,12 @@ pub struct SessionSummary {
     /// Raw last-updated timestamp as Unix milliseconds text.
     /// 以 Unix 毫秒文本保存的原始最近更新时间。
     pub updated_at: String,
+    /// Time of the latest request sent to the session, as Unix milliseconds text.
+    /// 最近一次向该会话发送请求的时间，以 Unix 毫秒文本表示。
+    pub last_request_at: String,
+    /// Manual-order position within the project; `None` until the user arranges the project's sessions.
+    /// 项目内的手动排列位置；用户排列该项目会话之前为 `None`。
+    pub manual_position: Option<i64>,
     /// Whether the session was created as a dedicated session; the kind never changes afterwards.
     /// 会话是否以专职会话创建；该种类创建后永不改变。
     pub dedicated: bool,
@@ -123,6 +129,8 @@ impl SessionSummary {
             queued_steps,
             last_updated_label: last_updated_label.into(),
             updated_at: String::new(),
+            last_request_at: String::new(),
+            manual_position: None,
             dedicated: false,
             assistant_name: None,
         }
@@ -160,6 +168,20 @@ impl SessionSummary {
     /// 覆盖动态客户端使用的原始最近更新时间。
     pub fn with_updated_at(mut self, updated_at: impl Into<String>) -> Self {
         self.updated_at = updated_at.into();
+        self
+    }
+
+    /// Overrides the time of the latest request sent to the session.
+    /// 覆盖最近一次向该会话发送请求的时间。
+    pub fn with_last_request_at(mut self, last_request_at: impl Into<String>) -> Self {
+        self.last_request_at = last_request_at.into();
+        self
+    }
+
+    /// Records the persisted manual-order position of the session.
+    /// 记录会话已持久化的手动排列位置。
+    pub fn with_manual_position(mut self, manual_position: Option<i64>) -> Self {
+        self.manual_position = manual_position;
         self
     }
 

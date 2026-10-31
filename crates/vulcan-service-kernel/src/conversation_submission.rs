@@ -2419,6 +2419,12 @@ async fn materialize_submission_session_v1(
                         now_ms,
                     )
                     .await?;
+                    record_existing_session_request_v1(
+                        controller_runtime,
+                        materialized_session.session_id,
+                        now_ms,
+                    )
+                    .await;
                 }
                 ConversationSubmissionMode::Continuation => {
                     // Continuation keeps the same admitted preparation instead of recreating origin from the current model.
@@ -2432,12 +2438,40 @@ async fn materialize_submission_session_v1(
                         .handle
                         .continue_turn(continuation, now_ms)
                         .map_err(|error| error.to_string())?;
+                    record_existing_session_request_v1(
+                        controller_runtime,
+                        materialized_session.session_id,
+                        now_ms,
+                    )
+                    .await;
                     return Ok(Some(receipt.value));
                 }
             }
         }
     }
     Ok(None)
+}
+
+/// Records an accepted request on an existing session for last-request ordering.
+/// 为按最近请求排序记录既有会话上一次已接受的请求。
+///
+/// The input is already durable when this runs, so a failed write is logged instead of failing a
+/// committed submission; the sidebar order then lags until the next request.
+/// 运行到这里时输入已可靠落盘，因此写入失败只记录日志而不让已提交的输入失败；侧栏顺序会滞后到下一次请求。
+async fn record_existing_session_request_v1(
+    controller_runtime: &HostRuntimeHandle,
+    session_id: SessionId,
+    now_ms: i64,
+) {
+    if let Err(error) = vulcan_workspace_store::workspace_store::record_session_request_v1(
+        controller_runtime,
+        &session_id.to_string(),
+        now_ms,
+    )
+    .await
+    {
+        tracing::warn!(%session_id, %error, "failed to record the session request time");
+    }
 }
 
 /// Submits one ordinary user prompt or one revision-bound recovery through the shared conversation pipeline.

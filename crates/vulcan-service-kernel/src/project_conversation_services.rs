@@ -28,8 +28,9 @@ pub use project_services::service_add_project_initial_directory;
 pub(super) use project_services::{
     service_archive_project_conversations, service_open_project_directory,
     service_open_project_directory_path, service_remove_project, service_rename_project,
-    service_reorder_projects, service_reset_project_icon, service_set_expanded_task_projects,
-    service_set_project_icon, service_toggle_project_pinned,
+    service_reorder_project_sessions, service_reorder_projects, service_reset_project_icon,
+    service_set_expanded_task_projects, service_set_project_icon,
+    service_set_project_session_sort_mode, service_toggle_project_pinned,
 };
 
 /// Owns one in-progress session turn-admission transaction and clears only its reservations on exit.

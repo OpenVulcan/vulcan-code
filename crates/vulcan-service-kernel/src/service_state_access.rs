@@ -1220,6 +1220,7 @@ mod tests {
             pinned: false,
             icon_pack: None,
             icon_key: None,
+            session_sort_mode: Default::default(),
         }];
         guard.workspace_snapshot = Some(WorkspaceSnapshot {
             task_projects: vec![TaskProjectSummary::new(

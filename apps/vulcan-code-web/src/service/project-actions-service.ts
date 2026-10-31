@@ -1,6 +1,7 @@
 import type {
   ProjectDirectoryListing,
   ProjectGroupLayoutEntry,
+  ProjectSessionSortMode,
   ProjectTreeItemKind,
   ProjectTreePin,
   WorkbenchSnapshot,
@@ -89,6 +90,30 @@ export async function resetProjectIcon(projectId: string): Promise<void> {
     throw new Error("Service runtime is unavailable; the project icon was not reset.");
   }
   await serviceClient.request<void>("service_reset_project_icon", { projectId });
+}
+
+// setProjectSessionSortMode persists how one project orders its unpinned sessions.
+// setProjectSessionSortMode 持久化一个项目排列非置顶会话的方式。
+export async function setProjectSessionSortMode(
+  projectId: string,
+  mode: ProjectSessionSortMode,
+): Promise<WorkbenchSnapshot> {
+  if (!hasServiceRuntime()) {
+    throw new Error("Service runtime is unavailable; the session sort mode was not saved.");
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_set_project_session_sort_mode", { projectId, mode });
+}
+
+// reorderProjectSessions persists the manual top-to-bottom order of one project's unpinned sessions.
+// reorderProjectSessions 持久化一个项目非置顶会话自上而下的手动顺序。
+export async function reorderProjectSessions(
+  projectId: string,
+  conversationIds: string[],
+): Promise<WorkbenchSnapshot> {
+  if (!hasServiceRuntime()) {
+    throw new Error("Service runtime is unavailable; the session order was not saved.");
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_reorder_project_sessions", { projectId, conversationIds });
 }
 
 // setExpandedTaskProjects asks the desktop shell to persist expanded project rows.

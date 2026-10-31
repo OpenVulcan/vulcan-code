@@ -17,7 +17,14 @@ export interface ProjectSummary {
   // Optional icon key selected for the project.
   // 项目选择的可选图标键。
   iconKey?: string | null;
+  // How the sidebar orders the project's unpinned sessions; absent means last-request order.
+  // 侧栏如何排列该项目的非置顶会话；缺省表示按最近请求排序。
+  sessionSortMode?: ProjectSessionSortMode;
 }
+
+// ProjectSessionSortMode mirrors the service enum: recency groups versus a user-arranged, draggable order.
+// ProjectSessionSortMode 镜像服务枚举：按时间分组或用户排列且可拖动的顺序。
+export type ProjectSessionSortMode = "last_request" | "manual";
 
 // ProjectGroupSummary describes one user-named project group in display order.
 // ProjectGroupSummary 描述一个按显示顺序排列的用户命名项目分组。

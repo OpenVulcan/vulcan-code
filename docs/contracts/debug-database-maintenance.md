@@ -1,11 +1,32 @@
-# 本地 Debug 应用数据库维护
+# 应用数据库升级与本地 Debug 维护
 
-## 适用范围与权威来源
+## 运行时逐版本升级
 
-首次正式发布前（当前 V0.1.x），应用 SQLite 数据库的 `APP_SCHEMA_VERSION`、
-`PRAGMA user_version` 和 `app_metadata.schema_version` 保持 v1。结构变化直接更新当前 DDL，
-再使用独立维护命令同步本地既有 Debug 数据库。应用启动不执行历史结构迁移，也不通过重标版本
-掩盖结构差异。会话文档、会话元数据、系统统计、VMM 或知识库的独立存储格式不因此重置版本。
+应用 SQLite 数据库的版本由 `crates/vulcan-workspace-store/src/app_schema_migrations.rs` 中的升级链
+`APP_SCHEMA_MIGRATIONS` 唯一决定：`APP_SCHEMA_VERSION = APP_SCHEMA_BASELINE_VERSION + 链长度`，
+不另写字面量。基线为 v1；`PRAGMA user_version` 与 `app_metadata.schema_version` 必须同时等于当前版本。
+
+应用启动在执行当前 DDL 之前调用 `upgrade_application_schema`：
+
+1. 新库（版本 0）与当前版本库不做任何事，也不创建备份。
+2. 基线到当前版本之间的库先做 `integrity_check`，再用 `VACUUM INTO` 在同目录写出
+   `app-workspace-before-v{目标}-from-v{原}-*.sqlite3` 完整快照并只读校验；失败时原库不变。
+3. 在 `BEGIN IMMEDIATE` 事务内按顺序执行从原版本到当前版本的每一步，写入两个版本标记，复查完整性后提交；
+   任一步失败整体回滚，备份保留。
+4. 低于基线或高于当前版本的库直接报错，不改写、不降级。
+
+升级步骤只追加不修改：已发布的步骤冻结自身 SQL，不引用会随当前 DDL 演进的常量。新增结构变化时，
+同时修改当前 DDL 并追加一步，使升级后的结构与新建库一致（`upgraded_schema_equals_a_new_database` 校验）。
+步骤只做已查证的明确映射，不猜测字段用途或补默认值。会话文档、会话元数据、系统统计、VMM 或知识库的
+独立存储格式不受此链约束。
+
+v1→v2：新增 `project_session_preferences`（项目会话排序方式，缺行即默认 `last_request`），并在会话定位
+索引存在时新增 `session_list_state_v1`（最近请求时间与手动位置），以 `updated_at_ms` 回填最近请求时间。
+
+## 本地 Debug 离线维护的适用范围与权威来源
+
+运行时升级处理版本递增。离线维护命令只处理同一版本内的结构漂移（开发期直接修改当前 DDL 而未递增版本），
+要求库已处于当前 `APP_SCHEMA_VERSION`，不进入 Release 启动及发布流程。
 
 结构权威是 `crates/vulcan-workspace-store/src/data_plane.rs` 中的
 `build_application_schema_script()`。维护程序在内存 SQLite 中执行该生成器，再读取
@@ -72,8 +93,8 @@ OpenCode Console 授权增加 `opencode_console_oauth` 材料类型及必要计�
   未映射列、额外索引、视图、触发器及其他表指向该表的外键均明确拒绝，包含空的依赖表。
   表与索引身份同样按 ASCII 大小写不敏感规则核对。
 
-上述映射仅属于显式离线维护命令；应用启动、每库内容、套件与会话元数据都不新增旧格式兼容。
-同步仍保持应用数据库 v1，并验证项目授权、既有通用操作及其他保留数据的值、类型和重复次数。
+上述映射仅属于显式离线维护命令；每库内容、套件与会话元数据都不新增旧格式兼容。
+同步不改变应用数据库版本，并验证项目授权、既有通用操作及其他保留数据的值、类型和重复次数。
 
 恢复时先退出 Core，保留失败库及其 WAL/SHM 文件，再使用 SQLite 工具从已验证快照恢复。
 不能在运行中的服务旁覆盖单个主文件，也不能删掉库或备份来绕过结构错误。
@@ -87,6 +108,7 @@ SQLite 行为依据：[一致快照与 VACUUM INTO](https://www.sqlite.org/lang_
 ```powershell
 rtk cargo test -p vulcan-workspace-store --features debug-db-maintenance --bin vulcan-debug-db -- --test-threads=1
 rtk cargo test -p vulcan-workspace-store --lib data_plane::tests -- --test-threads=1
+rtk cargo test -p vulcan-workspace-store --lib app_schema_migrations -- --test-threads=1
 ```
 
 夹具仅使用临时 SQLite 数据库。覆盖双密钥约束更新、保留值及类型、父表重建不级联丢失子行、可读备份、

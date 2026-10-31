@@ -16,6 +16,8 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_rename_project",
     "service_set_project_icon",
     "service_reset_project_icon",
+    "service_set_project_session_sort_mode",
+    "service_reorder_project_sessions",
     "service_set_expanded_task_projects",
     "service_create_project_group",
     "service_rename_project_group",
@@ -115,6 +117,26 @@ pub(super) async fn dispatch(
             &app,
             &state.clone(),
             service_reset_project_icon(state, rpc_required_param(params, "projectId")?).await,
+        )),
+        "service_set_project_session_sort_mode" => rpc_json_result(broadcast_after_success(
+            &app,
+            &state.clone(),
+            service_set_project_session_sort_mode(
+                state,
+                rpc_required_param(params, "projectId")?,
+                rpc_required_param(params, "mode")?,
+            )
+            .await,
+        )),
+        "service_reorder_project_sessions" => rpc_json_result(broadcast_after_success(
+            &app,
+            &state.clone(),
+            service_reorder_project_sessions(
+                state,
+                rpc_required_param(params, "projectId")?,
+                rpc_required_param(params, "conversationIds")?,
+            )
+            .await,
         )),
         "service_set_expanded_task_projects" => rpc_json_result(
             service_set_expanded_task_projects(state, rpc_required_param(params, "projectIds")?)

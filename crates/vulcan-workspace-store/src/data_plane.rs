@@ -36,11 +36,9 @@ static APP_SQLITE_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 /// 进程内序号，为每次系统统计引导提供不同的绑定后缀。
 static SYSTEM_STATISTICS_SQLITE_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
-/// Pre-release application schema version, including atomic OpenDesign credential pairs.
-/// 预发布应用结构版本，包含原子 OpenDesign 凭据对。
-/// Local Debug structure changes use the standalone maintenance tool while this version stays at v1.
-/// 此版本保持 v1，本地 Debug 结构变化通过独立维护工具同步。
-pub const APP_SCHEMA_VERSION: i64 = 1;
+/// Current application schema version; the runtime upgrade chain is its single source.
+/// 当前应用结构版本；运行时升级链是其唯一来源。
+pub use crate::app_schema_migrations::{APP_SCHEMA_BASELINE_VERSION, APP_SCHEMA_VERSION};
 
 /// Credential table shared by initialization and every persistence operation.
 /// 初始化与全部持久化操作共用的凭据表。
@@ -222,13 +220,22 @@ pub async fn bootstrap_application_data_plane() -> Result<DataPlaneBootstrapRepo
         // The binding identifiers stay in the runtime metadata because plugin LanceDB paths use
         // them to address the host's own in-process databases.
         // 绑定标识符保留在运行期元数据中，因为插件的 LanceDB 路径用它们寻址宿主自身的进程内数据库。
-        // Initialization checks the declared version; existing Debug structures are synchronized separately.
-        // 初始化检查声明版本；已有 Debug 结构由独立入口同步。
+        // An existing database is upgraded through the versioned chain before the current DDL runs.
+        // 既有数据库先通过带版本的升级链升级，再执行当前 DDL。
         {
-            let connection = local
+            let mut connection = local
                 .connect(LogicalDatabase::AppState)
                 .map_err(|error| format!("Failed to open the application database: {error}"))?;
-            validate_application_schema_for_initialization(&connection)?;
+            if let Some(backup) = crate::app_schema_migrations::upgrade_application_schema(
+                &mut connection,
+                &sqlite_path,
+            )? {
+                tracing::info!(
+                    backup = %backup.display(),
+                    version = APP_SCHEMA_VERSION,
+                    "application database upgraded"
+                );
+            }
             connection
                 .execute_batch(&build_application_schema_script())
                 .map_err(|error| {
@@ -285,27 +292,6 @@ pub async fn prepare_application_schema_for_test(
     )
     .await
     .map_err(|error| format!("Initialize private application schema: {error}"))?;
-    Ok(())
-}
-
-/// Checks the existing schema version before initialization can overwrite its version marker.
-/// 在初始化覆盖版本标记之前检查既有结构版本。
-///
-/// `connection` is the application database; accepts new or current-version databases without migrating DDL.
-/// `connection` 为应用数据库；接受新库或当前版本数据库，不迁移 DDL。
-fn validate_application_schema_for_initialization(
-    connection: &rusqlite::Connection,
-) -> Result<(), String> {
-    // observed is read before CREATE IF NOT EXISTS, which cannot update old CHECK constraints.
-    // observed 在 CREATE IF NOT EXISTS 之前读取；后者无法更新旧 CHECK 约束。
-    let observed: i64 = connection
-        .query_row("PRAGMA user_version", [], |row| row.get(0))
-        .map_err(|_| String::from("Failed to inspect the application schema version."))?;
-    if observed != 0 && observed != APP_SCHEMA_VERSION {
-        return Err(format!(
-            "Unsupported application schema version {observed}; expected {APP_SCHEMA_VERSION}."
-        ));
-    }
     Ok(())
 }
 
@@ -457,6 +443,11 @@ CREATE TABLE IF NOT EXISTS projects (
 
 CREATE INDEX IF NOT EXISTS idx_projects_sort
 ON projects(pinned DESC, sort_order ASC, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS project_session_preferences (
+    project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+    session_sort_mode TEXT NOT NULL CHECK(session_sort_mode IN ('last_request', 'manual'))
+);
 
 CREATE TABLE IF NOT EXISTS workspace_session_index (
     id TEXT PRIMARY KEY,
@@ -709,33 +700,6 @@ PRAGMA user_version = {schema_version};
 mod tests {
     use super::*;
 
-    /// Verifies initialization refuses unknown versions before modifying the version or stored data.
-    /// 验证初始化在修改版本或已存数据之前拒绝未知版本。
-    #[test]
-    fn initialization_rejects_unknown_version_without_mutation() {
-        // connection models a pre-existing database independently of the production data directory.
-        // connection 模拟既有数据库，与生产数据目录隔离。
-        let connection = rusqlite::Connection::open_in_memory().unwrap();
-        // unsupported_version deliberately differs from the version declared by the application.
-        // unsupported_version 刻意使用与应用声明不同的版本。
-        let unsupported_version = APP_SCHEMA_VERSION + 1;
-        connection.execute_batch(&format!("PRAGMA user_version = {unsupported_version}; CREATE TABLE sentinel(value TEXT); INSERT INTO sentinel VALUES ('retained');")).unwrap();
-        assert!(validate_application_schema_for_initialization(&connection).is_err());
-        assert_eq!(
-            connection
-                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
-                .unwrap(),
-            unsupported_version
-        );
-        assert_eq!(
-            connection
-                .query_row("SELECT value FROM sentinel", [], |row| row
-                    .get::<_, String>(0))
-                .unwrap(),
-            "retained"
-        );
-    }
-
     /// Verifies that the base schema no longer creates legacy SQLite transcript tables.
     /// 验证基础结构不再创建旧版 SQLite 转录表。
     #[test]
@@ -885,6 +849,7 @@ mod tests {
             ("table", "knowledge_library_project_bindings"),
             ("table", "knowledge_operations"),
             ("table", "project_git_review_preferences"),
+            ("table", "project_session_preferences"),
             ("table", "projects"),
             ("table", "thread_goals"),
             ("table", "workspace_session_index"),

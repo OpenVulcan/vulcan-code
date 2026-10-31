@@ -1,6 +1,7 @@
 import React from "react";
 import {
   Archive,
+  ArrowDownUp,
   Copy,
   FolderInput,
   FolderPlus,
@@ -29,7 +30,8 @@ import {
   ContextMenuTrigger,
 } from "@/ui-kit/primitives/context-menu";
 import { useI18n } from "@/i18n";
-import type { ConversationSummary, ProjectSummary } from "@/types";
+import type { ConversationSummary, ProjectSessionSortMode, ProjectSummary } from "@/types";
+import { SESSION_SORT_MODES, sessionSortModeOf } from "./project-session-order";
 import type { ProjectRowPlacement } from "./project-sidebar-groups";
 import type { ConversationMenuAction, ProjectMenuAction } from "./project-sidebar-types";
 
@@ -48,6 +50,9 @@ export function ProjectContextMenu(props: {
   // Handles one project menu action.
   // 处理单个项目菜单动作。
   onAction: (action: ProjectMenuAction, project: ProjectSummary) => void;
+  // Stores how the project orders its sessions; the submenu is hidden when absent.
+  // 保存项目排列会话的方式；缺省时隐藏该子菜单。
+  onSessionSortModeChange?: (project: ProjectSummary, mode: ProjectSessionSortMode) => void;
 }) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
@@ -61,6 +66,12 @@ export function ProjectContextMenu(props: {
           <span>{props.project.pinned ? t("projectMenu.unpin") : t("projectMenu.pin")}</span>
         </ContextMenuItem>
         {props.placement ? <MoveToGroupSubmenu placement={props.placement} /> : null}
+        {props.onSessionSortModeChange ? (
+          <SessionSortSubmenu
+            mode={sessionSortModeOf(props.project)}
+            onChange={(mode) => props.onSessionSortModeChange!(props.project, mode)}
+          />
+        ) : null}
         <ContextMenuItem onSelect={() => props.onAction("open-directory", props.project)}>
           <FolderOpen size={15} />
           <span>{t("projectMenu.openDirectory")}</span>
@@ -118,6 +129,33 @@ function MoveToGroupSubmenu(props: { placement: ProjectRowPlacement }) {
           <FolderPlus size={15} />
           <span>{t("projectMenu.moveToNewGroup")}</span>
         </ContextMenuItem>
+      </ContextMenuSubContent>
+    </ContextMenuSub>
+  );
+}
+
+// SessionSortSubmenu chooses how one project orders its sessions; the current mode carries the radio mark.
+// SessionSortSubmenu 选择一个项目排列会话的方式；当前方式带单选标记。
+function SessionSortSubmenu(props: { mode: ProjectSessionSortMode; onChange: (mode: ProjectSessionSortMode) => void }) {
+  const { t } = useI18n();
+  return (
+    <ContextMenuSub>
+      <ContextMenuSubTrigger>
+        <ArrowDownUp size={15} />
+        <span>{t("projectMenu.sessionSort")}</span>
+      </ContextMenuSubTrigger>
+      <ContextMenuSubContent>
+        <ContextMenuRadioGroup
+          onValueChange={(value) => {
+            const entry = SESSION_SORT_MODES.find((candidate) => candidate.mode === value);
+            if (entry && entry.mode !== props.mode) props.onChange(entry.mode);
+          }}
+          value={props.mode}
+        >
+          {SESSION_SORT_MODES.map((entry) => (
+            <ContextMenuRadioItem key={entry.mode} value={entry.mode}>{t(entry.label)}</ContextMenuRadioItem>
+          ))}
+        </ContextMenuRadioGroup>
       </ContextMenuSubContent>
     </ContextMenuSub>
   );

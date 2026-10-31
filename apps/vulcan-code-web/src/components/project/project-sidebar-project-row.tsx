@@ -9,12 +9,13 @@ import {
 
 import { SidebarMenu, SidebarMenuItem } from "@/ui-kit/shell/sidebar";
 import { useI18n, formatMessage } from "@/i18n";
-import type { ConversationSummary, ProjectSummary } from "@/types";
+import type { ConversationSummary, ProjectSessionSortMode, ProjectSummary } from "@/types";
 
 import { ProjectIcon } from "./project-icons";
 import type { ProjectRowPlacement } from "./project-sidebar-groups";
 import { ProjectContextMenu } from "./project-sidebar-menus";
-import { useVerticalSortableItem } from "./project-sidebar-sortable";
+import { SortableSessionList } from "./project-sidebar-session-sort";
+import { useVerticalSortableItem, type SortableRowBinding } from "./project-sidebar-sortable";
 import type { ConversationMenuAction, ProjectMenuAction } from "./project-sidebar-types";
 
 // SortableProjectRow renders one dnd-kit sortable project folder and its conversations.
@@ -65,6 +66,12 @@ export function SortableProjectRow(props: {
   // Handles project context menu actions.
   // 处理项目右键菜单动作。
   onProjectMenuAction: (action: ProjectMenuAction, project: ProjectSummary) => void;
+  // Stores how the project orders its sessions.
+  // 保存项目排列会话的方式。
+  onSessionSortModeChange: (project: ProjectSummary, mode: ProjectSessionSortMode) => void;
+  // Persists a dragged session order; present only when the project uses manual order and no filter applies.
+  // 持久化拖动后的会话顺序；仅当项目使用手动排序且未筛选时提供。
+  onReorderConversations?: (orderedIds: string[]) => Promise<void>;
   // Handles conversation context menu actions.
   // 处理会话右键菜单动作。
   onConversationMenuAction: (action: ConversationMenuAction, conversation: ConversationSummary) => void;
@@ -73,7 +80,7 @@ export function SortableProjectRow(props: {
   onSelectConversation: (conversationId: string) => void;
   // Renders one conversation row with the shared sidebar style.
   // 使用共享侧栏样式渲染单个会话行。
-  renderConversationRow: (conversation: ConversationSummary, compactPinned?: boolean) => React.ReactNode;
+  renderConversationRow: (conversation: ConversationSummary, compactPinned?: boolean, sortable?: SortableRowBinding) => React.ReactNode;
 }) {
   const { t } = useI18n();
   // reorderLabel names the project and explains the independent keyboard sort interaction.
@@ -119,7 +126,12 @@ ${props.project.path}`}
       style={sortable.sortableStyle}
     >
       <div className="vk-tree-item" data-kind="project">
-        <ProjectContextMenu placement={props.placement} project={props.project} onAction={props.onProjectMenuAction}>
+        <ProjectContextMenu
+          onAction={props.onProjectMenuAction}
+          onSessionSortModeChange={props.onSessionSortModeChange}
+          placement={props.placement}
+          project={props.project}
+        >
           {projectFolderButton}
         </ProjectContextMenu>
         <span className="vk-tree-actions">
@@ -155,7 +167,15 @@ ${props.project.path}`}
         <SidebarMenu className="vk-tree-children">
           {props.conversations.length > 0 ? (
             <>
-              {visibleConversations.map((conversation) => props.renderConversationRow(conversation))}
+              {props.onReorderConversations ? (
+                <SortableSessionList
+                  disabled={false}
+                  onReorder={props.onReorderConversations}
+                  renderRow={(conversation, sortable) => props.renderConversationRow(conversation, false, sortable)}
+                  reorderLabel="sidebar.sessionReorder"
+                  sessions={visibleConversations}
+                />
+              ) : visibleConversations.map((conversation) => props.renderConversationRow(conversation))}
               {hasConversationOverflow ? (
                 <SidebarMenuItem>
                   <button

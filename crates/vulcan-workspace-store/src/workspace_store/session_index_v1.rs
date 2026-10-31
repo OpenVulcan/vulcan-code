@@ -294,7 +294,12 @@ pub fn compose_relative_path(
 
 /// Authoritative V1 locator schema, shared by initialization and isolated query tests.
 /// V1 定位器权威结构，由初始化与隔离查询测试共用。
-pub(super) const SESSION_INDEX_V1_SCHEMA_SQL: &str = r#"
+///
+/// `session_list_state_v1` keeps sidebar ordering facts beside the locator: the time of the latest request and
+/// the optional manual position. Every locator insertion writes its state row in the same transaction.
+/// `session_list_state_v1` 在定位器旁保存侧栏排序事实：最近一次请求时间与可选的手动位置。每次插入定位器都在
+/// 同一事务内写入其状态行。
+pub(crate) const SESSION_INDEX_V1_SCHEMA_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS session_index_v1 (
     session_id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL,
@@ -318,7 +323,18 @@ CREATE TABLE IF NOT EXISTS session_assistant_index_v1 (
         REFERENCES session_dedicated_index_v1(session_id) ON DELETE CASCADE,
     name TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS session_list_state_v1 (
+    session_id TEXT PRIMARY KEY
+        REFERENCES session_index_v1(session_id) ON DELETE CASCADE,
+    last_request_at_ms INTEGER NOT NULL,
+    manual_position INTEGER
+);
 "#;
+
+/// SQL that records the creation time as the first request of a newly indexed session.
+/// 将创建时间记录为新索引会话首次请求时间的 SQL。
+const INSERT_SESSION_LIST_STATE_V1_SQL: &str = "INSERT INTO session_list_state_v1 (session_id, last_request_at_ms, manual_position) VALUES (?1, ?2, NULL);";
 
 /// Upper bound, in characters, of a trimmed floating-assistant display name.
 /// 去除首尾空白后的浮动助手显示名称上限（字符数）。
@@ -421,6 +437,13 @@ fn insert_session_index_v1_rows(
     )?;
     if inserted != 1 {
         return Err(rusqlite::Error::StatementChangedRows(inserted));
+    }
+    let listed = transaction.execute(
+        INSERT_SESSION_LIST_STATE_V1_SQL,
+        rusqlite::params![row.session_id, row.created_at_ms],
+    )?;
+    if listed != 1 {
+        return Err(rusqlite::Error::StatementChangedRows(listed));
     }
     if dedicated {
         let marked = transaction.execute(
@@ -800,6 +823,98 @@ WHERE session_id = ?4 AND relative_path = ?5;
         false,
     )
     .await
+}
+
+/// Records that a request was just sent to one indexed session; the stored time never moves backwards.
+/// 记录刚刚向一个已索引会话发送了请求；已存储的时间绝不回退。
+///
+/// `session_id` is the indexed session and `at_ms` the request time in Unix milliseconds. Returns an
+/// error when the session has no list state, which every indexed session receives with its locator.
+/// `session_id` 为已索引会话，`at_ms` 为请求时间（Unix 毫秒）。会话没有列表状态时返回错误；每个已索引
+/// 会话都会随其定位记录获得列表状态。
+pub async fn record_session_request_v1(
+    host_runtime: &HostRuntimeHandle,
+    session_id: &str,
+    at_ms: i64,
+) -> Result<(), SessionIndexV1Error> {
+    execute_session_index_v1_write(
+        host_runtime,
+        "record_request",
+        session_id,
+        "UPDATE session_list_state_v1 SET last_request_at_ms = MAX(last_request_at_ms, ?2) WHERE session_id = ?1;",
+        vec![
+            SqliteValue::Text(session_id.to_string()),
+            SqliteValue::Integer(at_ms),
+        ],
+        false,
+    )
+    .await
+}
+
+/// Stores one project's manual session order: the listed sessions receive positions in list order.
+/// 保存一个项目的手动会话顺序：所列会话按列表顺序获得位置。
+///
+/// `project_id` owns every listed session and `ordered_session_ids` names each at most once. Every
+/// listed session must be an active indexed session of the project; otherwise nothing is written.
+/// Sessions not listed keep their stored position.
+/// `project_id` 拥有所列的全部会话，`ordered_session_ids` 中每个会话至多出现一次。所列会话必须都是该项目的
+/// 活动已索引会话，否则不写入任何内容。未列出的会话保留已存储的位置。
+pub async fn set_project_session_order_v1(
+    host_runtime: &HostRuntimeHandle,
+    project_id: &str,
+    ordered_session_ids: Vec<String>,
+) -> Result<(), String> {
+    let project_id = project_id.to_string();
+    local_sql::with_connection_async(
+        &host_runtime.local,
+        LogicalDatabase::AppState,
+        move |connection| {
+            write_project_session_order(connection, &project_id, &ordered_session_ids)
+        },
+    )
+    .await
+}
+
+/// Writes manual positions in one transaction after checking ownership of every listed session.
+/// 在检查每个所列会话的归属后，于一个事务内写入手动位置。
+pub(super) fn write_project_session_order(
+    connection: &mut rusqlite::Connection,
+    project_id: &str,
+    ordered_session_ids: &[String],
+) -> Result<(), String> {
+    let unique = ordered_session_ids
+        .iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    if unique.len() != ordered_session_ids.len() {
+        return Err(String::from(
+            "Failed to order the sessions: the order names a session more than once.",
+        ));
+    }
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Failed to order the sessions: {error}"))?;
+    for (position, session_id) in ordered_session_ids.iter().enumerate() {
+        let position = i64::try_from(position)
+            .map_err(|_| String::from("Failed to order the sessions: the order is too long."))?;
+        let changed = transaction
+            .execute(
+                "UPDATE session_list_state_v1 SET manual_position = ?1
+                 WHERE session_id = ?2 AND session_id IN (
+                     SELECT session_id FROM session_index_v1
+                     WHERE project_id = ?3 AND archived_at_ms IS NULL
+                 );",
+                rusqlite::params![position, session_id, project_id],
+            )
+            .map_err(|error| format!("Failed to order the sessions: {error}"))?;
+        if changed != 1 {
+            return Err(format!(
+                "Failed to order the sessions: {session_id} is not an active session of project {project_id}."
+            ));
+        }
+    }
+    transaction
+        .commit()
+        .map_err(|error| format!("Failed to order the sessions: {error}"))
 }
 
 /// Decodes one row-only list and verifies engine cardinality and project ownership.

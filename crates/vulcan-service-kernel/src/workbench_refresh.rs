@@ -1039,6 +1039,21 @@ pub(crate) fn detached_task_event_label(event: &DetachedTaskRuntimeEvent) -> &'s
     }
 }
 
+/// Maps the workbench session sort mode onto its service contract variant.
+/// 将工作台会话排序方式映射为服务契约变体。
+pub(crate) fn project_session_sort_mode_summary(
+    mode: vulcan_workbench_model::ProjectSessionSortMode,
+) -> vulcan_service_api::ProjectSessionSortMode {
+    match mode {
+        vulcan_workbench_model::ProjectSessionSortMode::LastRequest => {
+            vulcan_service_api::ProjectSessionSortMode::LastRequest
+        }
+        vulcan_workbench_model::ProjectSessionSortMode::Manual => {
+            vulcan_service_api::ProjectSessionSortMode::Manual
+        }
+    }
+}
+
 /// Projects the stored project tree onto the visible projects and sessions, keeping empty groups.
 /// 将已保存的项目树投影到可见项目与会话上，并保留空分组。
 ///
@@ -1317,6 +1332,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                 pinned: project.pinned,
                 icon_pack: project.icon_pack.clone(),
                 icon_key: project.icon_key.clone(),
+                session_sort_mode: project_session_sort_mode_summary(project.session_sort_mode),
             })
             .collect(),
         expanded_project_ids: workspace.expanded_task_projects.iter().cloned().collect(),
@@ -1356,6 +1372,9 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                     run_phase: effective_run_phase.to_string(),
                     last_updated_label: session.last_updated_label.clone(),
                     last_updated_at: session.updated_at.clone(),
+                    created_at: session.created_at.clone(),
+                    last_request_at: session.last_request_at.clone(),
+                    manual_position: session.manual_position,
                     unread,
                     attention: conversation_attention_summary_for_session(
                         session.id,
@@ -1380,6 +1399,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                 pinned: project.pinned,
                 icon_pack: project.icon_pack.clone(),
                 icon_key: project.icon_key.clone(),
+                session_sort_mode: project_session_sort_mode_summary(project.session_sort_mode),
             })
             .collect(),
         archived_conversations: workspace
@@ -1393,6 +1413,9 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                 run_phase: SessionRunPhase::Idle.to_string(),
                 last_updated_label: session.last_updated_label.clone(),
                 last_updated_at: session.updated_at.clone(),
+                created_at: session.created_at.clone(),
+                last_request_at: session.last_request_at.clone(),
+                manual_position: session.manual_position,
                 unread: false,
                 attention: None,
                 project_id: session_summary_project_id_owned(session),
