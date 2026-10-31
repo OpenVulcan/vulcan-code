@@ -56,6 +56,11 @@ WebUI 展示时阅读。普通业务任务不需要加载这些细节。
   `RTK_REWRITE_TIMEOUT`），再把结果交给插件 Hook 链；报告中的 `original_command` 始终是模型原命令。
   设置保存在配置文件 `rtk` 块（`PersistedRtkConfiguration`），全部为默认值时不写出；工具目录每回合
   重建，因此设置从下一回合生效。随包缺少 RTK 时跳过改写并给出 info 诊断。
+- Git 提交总结上下文同样由宿主原生压缩（`commit_summary.rs` 的 `apply_native_rtk_git_context`），在
+  `git.commit_summary.context` 插件 Hook 之前执行，受 `rtk.enabled` 与 `gitCommitContextEnabled` 控制：
+  依次运行 `rtk git status --short --branch`、`rtk git diff --cached --no-color`（含未暂存时再加
+  `rtk git diff --no-color`），每条上限 `RTK_GIT_CONTEXT_TIMEOUT`；去除 `[rtk]` 提示行，空输出记为
+  `(none)`，并保留宿主生成的未跟踪文件区块。任何一条失败都保留原始 Git 区块不变。
 - `rewrite` 的上游协议归属为固定发行标签下的 `src/hooks/rewrite_cmd.rs`：退出码 `0/3` 携带改写，
   `1/2` 保持原命令；退出码不赋予 Vulcan 工具执行权限。超时或其他失败不得执行部分输出，
   多行改写必须保留完整命令并检查其中全部 RTK 路由；`selected` 模式只看 `enabledRoutes`，`all` 模式只看

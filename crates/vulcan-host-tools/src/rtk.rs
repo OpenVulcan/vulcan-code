@@ -19,6 +19,10 @@ pub const RTK_BINARY_STEM: &str = "rtk";
 /// 单次 `rtk rewrite` 检查的上限；超时后原命令保持不变地执行。
 pub const RTK_REWRITE_TIMEOUT: Duration = Duration::from_millis(2_000);
 
+/// Upper bound for each RTK Git command that compresses commit-summary context.
+/// 压缩提交总结上下文的每条 RTK Git 命令的上限。
+pub const RTK_GIT_CONTEXT_TIMEOUT: Duration = Duration::from_millis(5_000);
+
 /// Environment variable that keeps RTK output free of ANSI colors; set only for routed commands.
 /// 使 RTK 输出不含 ANSI 颜色的环境变量；只为经路由的命令设置。
 pub const RTK_PLAIN_OUTPUT_VARIABLE: &str = "NO_COLOR";
@@ -68,6 +72,94 @@ pub fn rtk_host_environment(telemetry_disabled: bool) -> Vec<(String, String)> {
         ));
     }
     environment
+}
+
+/// Builds the variables for an RTK process the host runs itself: the host set plus plain output.
+/// 构建宿主自行运行 RTK 进程所用的变量：宿主变量集合加纯文本输出。
+///
+/// # Parameters
+/// 参数
+/// `telemetry_disabled` is the user's RTK telemetry setting.
+/// `telemetry_disabled` 是用户的 RTK 遥测设置。
+pub fn rtk_invocation_environment(telemetry_disabled: bool) -> Vec<(String, String)> {
+    let mut environment = rtk_host_environment(telemetry_disabled);
+    environment.push((String::from(RTK_PLAIN_OUTPUT_VARIABLE), String::from("1")));
+    environment
+}
+
+/// Builds one hidden, bounded RTK child process with piped output.
+/// 构建一个隐藏、有界且输出走管道的 RTK 子进程。
+fn rtk_command(
+    executable: &Path,
+    arguments: &[&str],
+    cwd: &Path,
+    environment: &[(String, String)],
+) -> tokio::process::Command {
+    let mut command = new_background_tokio_command(executable);
+    command
+        .args(arguments)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    for (name, value) in environment {
+        command.env(name, value);
+    }
+    command
+}
+
+/// Runs one RTK command and returns its stdout when it exits successfully within `timeout`.
+/// 运行一条 RTK 命令，在 `timeout` 内成功退出时返回其标准输出。
+///
+/// # Parameters
+/// 参数
+/// `arguments` follow the executable; `cwd` and `environment` configure the hidden child.
+/// `arguments` 跟在可执行文件之后；`cwd` 与 `environment` 配置隐藏子进程。
+///
+/// # Returns
+/// 返回值
+/// Decoded stdout, or an English reason for a timeout, launch failure, or non-zero exit.
+/// 解码后的标准输出；超时、启动失败或非零退出时返回英文原因。
+pub async fn run_rtk_capture(
+    executable: &Path,
+    arguments: &[&str],
+    cwd: &Path,
+    environment: &[(String, String)],
+    timeout: Duration,
+) -> Result<String, String> {
+    let child = rtk_command(executable, arguments, cwd, environment)
+        .spawn()
+        .map_err(|error| format!("failed to launch rtk: {error}"))?;
+    let output = tokio::time::timeout(timeout, child.wait_with_output())
+        .await
+        .map_err(|_| format!("rtk timed out after {} ms", timeout.as_millis()))?
+        .map_err(|error| format!("rtk failed: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "rtk exited with {}: {}",
+            output
+                .status
+                .code()
+                .map_or_else(|| String::from("a signal"), |code| format!("code {code}")),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(crate::output_decode::decode_shell_output_bytes(
+        &output.stdout,
+    ))
+}
+
+/// Removes RTK's own `[rtk]` notice lines and surrounding whitespace from compressed output.
+/// 从压缩输出中移除 RTK 自身的 `[rtk]` 提示行及两端空白。
+pub fn strip_rtk_notices(stdout: &str) -> String {
+    stdout
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("[rtk]"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
 }
 
 /// Result of asking RTK whether one shell command has an RTK equivalent.
@@ -137,19 +229,8 @@ pub async fn run_rtk_rewrite(
     cwd: &Path,
     environment: &[(String, String)],
 ) -> RtkRewriteOutcome {
-    let mut command = new_background_tokio_command(executable);
-    command
-        .arg("rewrite")
-        .arg(command_text)
-        .current_dir(cwd)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    for (name, value) in environment {
-        command.env(name, value);
-    }
-    let child = match command.spawn() {
+    let child = match rtk_command(executable, &["rewrite", command_text], cwd, environment).spawn()
+    {
         Ok(child) => child,
         Err(error) => {
             return RtkRewriteOutcome::Failed(format!("failed to launch rtk rewrite: {error}"));
@@ -339,5 +420,16 @@ mod tests {
             names(false),
             vec![String::from(RTK_SUPPRESS_HOOK_WARNING_VARIABLE)]
         );
+    }
+
+    /// Only `[rtk]` notice lines are dropped; indented diff content stays intact.
+    /// 只丢弃 `[rtk]` 提示行；缩进的 diff 内容保持不变。
+    #[test]
+    fn rtk_notice_lines_are_stripped() {
+        assert_eq!(
+            strip_rtk_notices("\n[rtk] notice\nM src/a.rs\n  [rtk] hint\n  +line\n\n"),
+            "M src/a.rs\n  +line"
+        );
+        assert_eq!(strip_rtk_notices("[rtk] only\n"), "");
     }
 }

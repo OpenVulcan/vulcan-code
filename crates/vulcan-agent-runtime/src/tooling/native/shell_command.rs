@@ -13,7 +13,7 @@ use vulcan_host_tools::process_tree::{
 };
 use vulcan_host_tools::rtk::{
     RTK_PLAIN_OUTPUT_VARIABLE, RtkRewriteOutcome, resolve_rtk_executable, rtk_command_routes,
-    rtk_host_environment, run_rtk_rewrite,
+    rtk_host_environment, rtk_invocation_environment, run_rtk_rewrite,
 };
 
 /// Stable identifier of the one-shot shell-command native tool.
@@ -255,8 +255,7 @@ async fn apply_native_rtk_rewrite(
             String::from("RTK is not bundled for this host; command routing was skipped."),
         );
     };
-    let mut environment = rtk_host_environment(rtk.telemetry_disabled);
-    environment.push((String::from(RTK_PLAIN_OUTPUT_VARIABLE), String::from("1")));
+    let environment = rtk_invocation_environment(rtk.telemetry_disabled);
     let rewritten = match run_rtk_rewrite(&executable, command, cwd, &environment).await {
         RtkRewriteOutcome::Rewritten(rewritten) => rewritten,
         RtkRewriteOutcome::NoRewrite => return NativeShellRewrite::unchanged(command),

@@ -24,6 +24,10 @@ use vulcan_agent_runtime::{
 use vulcan_context::estimate_mixed_language_text_tokens;
 use vulcan_hooks::{HookActor, HookCapabilitySet, HookContext, HookScope};
 use vulcan_host_tools::output_decode::decode_shell_output_bytes;
+use vulcan_host_tools::rtk::{
+    RTK_GIT_CONTEXT_TIMEOUT, resolve_rtk_executable, rtk_invocation_environment, run_rtk_capture,
+    strip_rtk_notices,
+};
 use vulcan_session_core::{ExecutionRuntimePolicy, ExecutionScope, SessionNodeId};
 use vulcan_workbench_model::SessionId;
 
@@ -63,7 +67,7 @@ pub(crate) async fn service_generate_git_commit_message(
         &resolved_workspace_path,
         request.repository_key.as_deref(),
     )?;
-    let (agent_runtime, provider_id, model_id, reasoning_effort, extra_prompt, plugin_runtime) = {
+    let (agent_runtime, provider_id, model_id, reasoning_effort, extra_prompt, plugin_runtime, rtk) = {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -102,6 +106,7 @@ pub(crate) async fn service_generate_git_commit_message(
             .trim()
             .to_string();
         let plugin_runtime = Some(agent_runtime.vulcan_plugin_runtime.clone());
+        let rtk = summary_provider_configuration.rtk.clone();
         agent_runtime.provider_configuration = summary_provider_configuration;
         (
             agent_runtime,
@@ -110,11 +115,13 @@ pub(crate) async fn service_generate_git_commit_message(
             reasoning_effort,
             extra_prompt,
             plugin_runtime,
+            rtk,
         )
     };
     let summary_input = build_git_commit_summary_input(
         &repository_root,
         request.include_unstaged,
+        &rtk,
         plugin_runtime.as_ref(),
         session_id,
     )
@@ -220,6 +227,7 @@ struct GitCommitContextHookPayload {
 async fn build_git_commit_summary_input(
     repository_root: &Path,
     include_unstaged: bool,
+    rtk: &vulcan_agent_runtime::provider_config::PersistedRtkConfiguration,
     plugin_runtime: Option<&vulcan_plugin_runtime::VulcanPluginRuntimeManager>,
     session_id: SessionId,
 ) -> Result<GitCommitSummaryInput, String> {
@@ -250,7 +258,7 @@ async fn build_git_commit_summary_input(
     }
     let repository_root_text =
         vulcan_runtime_assets::native_host_path_text_from_path(repository_root);
-    let initial_payload = GitCommitContextHookPayload {
+    let mut initial_payload = GitCommitContextHookPayload {
         schema_version: 1,
         repository_root: repository_root_text.clone(),
         include_unstaged,
@@ -258,6 +266,9 @@ async fn build_git_commit_summary_input(
         notices,
         contributions: Vec::new(),
     };
+    if rtk.enabled && rtk.git_commit_context_enabled {
+        apply_native_rtk_git_context(&mut initial_payload, repository_root, rtk).await;
+    }
     let transformed_payload = apply_git_commit_context_hooks(
         initial_payload,
         plugin_runtime,
@@ -311,6 +322,95 @@ fn append_git_commit_context_section(
         code_fence: false,
     });
     true
+}
+
+/// Replaces raw Git sections with RTK-compressed status and diffs when every RTK call succeeds.
+/// 当全部 RTK 调用成功时，用经 RTK 压缩的状态与差异替换原始 Git 区块。
+///
+/// # Parameters
+/// 参数
+/// `payload` holds the raw sections; `repository_root` is the RTK working directory and `rtk`
+/// supplies the telemetry setting.
+/// `payload` 持有原始区块；`repository_root` 是 RTK 工作目录，`rtk` 提供遥测设置。
+///
+/// Any failure, including an unbundled RTK, keeps the raw sections unchanged.
+/// 任何失败（包括随包未提供 RTK）都保持原始区块不变。
+async fn apply_native_rtk_git_context(
+    payload: &mut GitCommitContextHookPayload,
+    repository_root: &Path,
+    rtk: &vulcan_agent_runtime::provider_config::PersistedRtkConfiguration,
+) {
+    let Some(executable) = resolve_rtk_executable() else {
+        return;
+    };
+    let environment = rtk_invocation_environment(rtk.telemetry_disabled);
+    let run = |arguments: &'static [&'static str]| {
+        let executable = executable.clone();
+        let environment = environment.clone();
+        async move {
+            run_rtk_capture(
+                &executable,
+                arguments,
+                repository_root,
+                &environment,
+                RTK_GIT_CONTEXT_TIMEOUT,
+            )
+            .await
+            .map(|stdout| {
+                let body = strip_rtk_notices(&stdout);
+                if body.is_empty() {
+                    String::from("(none)")
+                } else {
+                    body
+                }
+            })
+        }
+    };
+    let (Ok(status), Ok(staged)) = (
+        run(&["git", "status", "--short", "--branch"]).await,
+        run(&["git", "diff", "--cached", "--no-color"]).await,
+    ) else {
+        return;
+    };
+    let mut sections = vec![
+        GitCommitContextSection {
+            id: String::from("status"),
+            title: String::from("Status (RTK)"),
+            body: status,
+            code_fence: true,
+        },
+        GitCommitContextSection {
+            id: String::from("staged"),
+            title: String::from("Staged changes (RTK compressed)"),
+            body: staged,
+            code_fence: true,
+        },
+    ];
+    if payload.include_unstaged {
+        let Ok(unstaged) = run(&["git", "diff", "--no-color"]).await else {
+            return;
+        };
+        sections.push(GitCommitContextSection {
+            id: String::from("unstaged"),
+            title: String::from("Unstaged tracked changes (RTK compressed)"),
+            body: unstaged,
+            code_fence: true,
+        });
+        // RTK compresses tracked output only, so host-built untracked context is kept.
+        // RTK 只压缩已跟踪输出，因此保留宿主生成的未跟踪上下文。
+        sections.extend(
+            payload
+                .sections
+                .iter()
+                .filter(|section| section.id == "untracked")
+                .cloned(),
+        );
+    }
+    payload.sections = sections;
+    payload.contributions.push(GitCommitContextContribution {
+        label: String::from("Git context"),
+        value: String::from("compressed by rtk"),
+    });
 }
 
 /// Applies the generic plugin transform chain to one exact Git context payload.

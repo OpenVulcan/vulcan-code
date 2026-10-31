@@ -4,7 +4,7 @@ version: 0.1.2
 default_enabled: true
 display:
   name: Vulcan RTK
-  capability: Command routing, compressed Git context, and token-saving statistics
+  capability: Token-saving statistics
 permissions:
   - process_binary
   - config
@@ -133,17 +133,6 @@ lua_runtime:
       timeout_ms: 65000
       callers:
         - plugin_ui
-  hooks:
-    - id: git-commit-context
-      point: git.commit_summary.context
-      mode: transform
-      scope: workspace
-      function: transform_git_commit_context
-      priority: 100
-      timeout_ms: 12000
-      failure_policy: continue
-      display_name: RTK Git context compression
-      progress_label: Compressing Git context with RTK
 config:
   schema_file: config/schema.json
   defaults_file: config/defaults.json
