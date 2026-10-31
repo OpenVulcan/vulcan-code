@@ -3760,6 +3760,55 @@ fn provider_diagnostic_key_is_sensitive(key: &str) -> bool {
     .any(|suffix| lowercase.ends_with(suffix))
 }
 
+/// Replaces every URL-shaped substring with a stable marker while keeping the surrounding text.
+/// 将每个 URL 形态子串替换为稳定标记，同时保留其周围文本。
+///
+/// # Parameters
+/// 参数
+/// `value` is one provider-controlled string that may embed request URLs.
+/// `value` 是一段可能嵌入请求 URL 的供应商控制字符串。
+///
+/// # Returns
+/// 返回值
+/// The text with each `scheme://...` run, up to whitespace or a quoting delimiter, replaced.
+/// 返回将每段 `scheme://...`（直到空白或引用分隔符）替换后的文本。
+fn redact_provider_diagnostic_urls(value: &str) -> String {
+    // is_url_delimiter ends a URL at whitespace or at the quoting characters diagnostics wrap
+    // URLs in, so signed query strings never survive.
+    // is_url_delimiter 在空白或诊断包裹 URL 的引用字符处结束 URL，确保签名查询串不会保留。
+    let is_url_delimiter = |character: char| {
+        character.is_whitespace()
+            || matches!(
+                character,
+                '`' | '"' | '\'' | '<' | '>' | '(' | ')' | '[' | ']' | '{' | '}'
+            )
+    };
+    let mut redacted = String::with_capacity(value.len());
+    let mut remaining = value;
+    while let Some(separator) = remaining.find("://") {
+        // scheme_start walks back over RFC 3986 scheme characters before the separator.
+        // scheme_start 从分隔符向前回溯 RFC 3986 scheme 字符。
+        let scheme_start = remaining[..separator]
+            .char_indices()
+            .rev()
+            .take_while(|(_, character)| {
+                character.is_ascii_alphanumeric() || matches!(character, '+' | '-' | '.')
+            })
+            .last()
+            .map_or(separator, |(index, _)| index);
+        // url_end is the first delimiter after the separator, or the end of the text.
+        // url_end 是分隔符之后的第一个分隔字符，或文本末尾。
+        let url_end = remaining[separator + 3..]
+            .find(is_url_delimiter)
+            .map_or(remaining.len(), |offset| separator + 3 + offset);
+        redacted.push_str(&remaining[..scheme_start]);
+        redacted.push_str("<redacted-url>");
+        remaining = &remaining[url_end..];
+    }
+    redacted.push_str(remaining);
+    redacted
+}
+
 /// Sanitizes one provider-controlled diagnostic scalar without retaining URLs or credentials.
 /// 清理一个供应商控制的诊断标量，不保留 URL 或凭据。
 ///
@@ -3770,16 +3819,17 @@ fn provider_diagnostic_key_is_sensitive(key: &str) -> bool {
 ///
 /// # Returns
 /// 返回值
-/// A bounded safe value or a stable redaction marker.
-/// 返回有界安全值或稳定脱敏标记。
+/// A bounded value whose URLs are replaced in place, or a stable redaction marker when the
+/// remaining text still carries a credential shape.
+/// 返回 URL 已就地替换的有界值；剩余文本仍带凭据形态时返回稳定脱敏标记。
 pub(crate) fn sanitize_provider_diagnostic_text(value: &str) -> String {
+    // url_safe keeps the diagnostic words around each URL, such as a transport failure reason.
+    // url_safe 保留每个 URL 周围的诊断文字，例如传输失败原因。
+    let url_safe = redact_provider_diagnostic_urls(value);
     // lowercase and trimmed expose credential shapes without changing retained safe text.
     // lowercase 与 trimmed 在不改变保留安全文本的前提下暴露凭据形态。
-    let lowercase = value.to_ascii_lowercase();
+    let lowercase = url_safe.to_ascii_lowercase();
     let trimmed = lowercase.trim();
-    if lowercase.contains("://") {
-        return String::from("<redacted-url>");
-    }
     if [
         "authorization=",
         "authorization:",
@@ -3817,7 +3867,10 @@ pub(crate) fn sanitize_provider_diagnostic_text(value: &str) -> String {
     {
         return String::from("<redacted>");
     }
-    bound_provider_diagnostic_text(value, PROVIDER_TOOL_DIAGNOSTIC_FIELD_MAX_CHARACTERS)
+    bound_provider_diagnostic_text(
+        url_safe.as_str(),
+        PROVIDER_TOOL_DIAGNOSTIC_FIELD_MAX_CHARACTERS,
+    )
 }
 
 /// Recursively redacts sensitive metadata keys and bounds every provider-controlled string.
@@ -5013,6 +5066,21 @@ mod tests {
             diagnostic.chars().count() <= PROVIDER_TOOL_DIAGNOSTIC_MAX_CHARACTERS,
             "diagnostic exceeded the character ceiling"
         );
+    }
+
+    /// Verifies URL redaction removes the whole URL yet keeps the surrounding failure reason.
+    /// 验证 URL 脱敏移除整个 URL，同时保留周围的失败原因。
+    #[test]
+    fn diagnostic_text_redacts_urls_in_place_and_keeps_failure_reason() {
+        // sanitized models a transport failure whose reason follows a signed request URL.
+        // sanitized 模拟失败原因位于签名请求 URL 之后的传输失败。
+        let sanitized = sanitize_provider_diagnostic_text(
+            "Provider stream from `https://api.example.invalid/v1/messages?signature=temporary-signature` failed: error decoding response body",
+        );
+        assert!(!sanitized.contains("temporary-signature"));
+        assert!(!sanitized.contains("api.example.invalid"));
+        assert!(sanitized.starts_with("Provider stream from `<redacted-url>`"));
+        assert!(sanitized.ends_with("failed: error decoding response body"));
     }
 
     /// Verifies every bundled system target has left the legacy execution bridge.
