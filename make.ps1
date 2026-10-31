@@ -63,10 +63,6 @@ $TauriRunScriptPath = Join-Path $ScriptDir "scripts\run_tauri.ps1"
 # CoreDebugCycleScriptPath 指向仅构建与重启 Debug Core 的工作流。
 $CoreDebugCycleScriptPath = Join-Path $ScriptDir "scripts\core_debug_cycle.ps1"
 
-# HostDepsScriptPath points at the dedicated PowerShell host-dependency bootstrap script.
-# HostDepsScriptPath 用于指向专用的 PowerShell 宿主依赖初始化脚本。
-$HostDepsScriptPath = Join-Path $ScriptDir "scripts\install_host_deps.ps1"
-
 # BundledToolsDepsScriptPath points at the latest sg and rg dependency installer.
 # BundledToolsDepsScriptPath 用于指向最新版 sg 与 rg 依赖安装器。
 $BundledToolsDepsScriptPath = Join-Path $ScriptDir "scripts\install_bundled_tools.ps1"
@@ -257,14 +253,12 @@ function Invoke-CoreDebugCycle {
 # DependencyKind 用于选择要初始化的依赖域。
 function Invoke-DependencyInstall {
     param(
-        [ValidateSet("rust-tools", "host", "rtk", "tools", "lua", "protoc")]
+        [ValidateSet("rust-tools", "tools", "lua", "protoc")]
         [string]$DependencyKind
     )
 
     $ScriptPath = switch ($DependencyKind) {
         "rust-tools" { $RustDevToolsScriptPath }
-        "host" { $HostDepsScriptPath }
-        "rtk"  { $HostDepsScriptPath }
         "tools" { $BundledToolsDepsScriptPath }
         "lua"  { $LuaDepsScriptPath }
         "protoc" { $ProtocDepsScriptPath }
@@ -276,16 +270,11 @@ function Invoke-DependencyInstall {
     }
 
     $PowerShellCommand = Get-Command "pwsh" -ErrorAction SilentlyContinue
-    $ScriptArguments = @()
-    if ($DependencyKind -eq "rtk") {
-        $ScriptArguments += $DependencyKind
-    }
-
     if ($PowerShellCommand) {
-        & $PowerShellCommand.Source -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @ScriptArguments
+        & $PowerShellCommand.Source -NoProfile -ExecutionPolicy Bypass -File $ScriptPath
     }
     else {
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @ScriptArguments
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ScriptPath
     }
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
@@ -312,7 +301,6 @@ function Invoke-SystemInitialization {
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     }
     Invoke-DependencyInstall -DependencyKind "rust-tools"
-    Invoke-DependencyInstall -DependencyKind "host"
     Invoke-DependencyInstall -DependencyKind "tools"
     Invoke-DependencyInstall -DependencyKind "lua"
     Invoke-DependencyInstall -DependencyKind "protoc"
@@ -384,12 +372,10 @@ function Show-Usage {
     Write-Host "  ./make core-restart # Windows: compile and restart Debug Core; keep GUI running"
     Write-Host "  ./make clean       # clean Debug Cargo artifacts; preserve output and downloads"
     Write-Host "  ./make clean release # clean Release Cargo artifacts only"
-    Write-Host "  ./make deps        # install host, bundled tools, and LuaSkills dependencies"
+    Write-Host "  ./make deps        # install bundled tools (sg, rg, rtk) and LuaSkills dependencies"
     Write-Host "  ./make deps rust-tools # install cargo-hakari, cargo-nextest, and cargo-deny"
     Write-Host "  ./make init-system # bootstrap Rust tools and all repository dependencies"
-    Write-Host "  ./make deps host   # install host native dependencies only"
-    Write-Host "  ./make deps rtk    # install RTK host dependency only"
-    Write-Host "  ./make deps tools  # install the latest bundled sg and rg tools"
+    Write-Host "  ./make deps tools  # install the locked bundled sg, rg, and rtk tools"
     Write-Host "  ./make deps lua    # install official LuaSkills runtime dependencies only"
 }
 
@@ -570,20 +556,12 @@ switch ($NormalizedMode) {
     "deps" {
         switch ($NormalizedVariant) {
             "" {
-                Invoke-DependencyInstall -DependencyKind "host"
                 Invoke-DependencyInstall -DependencyKind "tools"
                 Invoke-DependencyInstall -DependencyKind "lua"
             }
             "all" {
-                Invoke-DependencyInstall -DependencyKind "host"
                 Invoke-DependencyInstall -DependencyKind "tools"
                 Invoke-DependencyInstall -DependencyKind "lua"
-            }
-            "host" {
-                Invoke-DependencyInstall -DependencyKind "host"
-            }
-            "rtk" {
-                Invoke-DependencyInstall -DependencyKind "rtk"
             }
             "rust-tools" {
                 Invoke-DependencyInstall -DependencyKind "rust-tools"

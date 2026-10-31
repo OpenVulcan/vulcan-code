@@ -323,32 +323,4 @@ done
 echo "==> Syncing fixed LuaSkills plugin bridge package..."
 copy_directory_contents "$SourcePluginBridgeDir" "$OutputPluginBridgeDir" 0
 
-# RtkHostIdentity selects the exact target artifact already copied with the plugin package.
-# RtkHostIdentity 选择随插件包一并复制的当前宿主精确目标制品。
-RtkHostIdentity="$(uname -s 2>/dev/null || printf unknown):$(uname -m 2>/dev/null || printf unknown)"
-# RtkTargetTriple stores the target directory selected for the current host.
-# RtkTargetTriple 保存为当前宿主选择的目标目录。
-RtkTargetTriple=""
-# RtkBinaryName stores the platform-specific RTK executable name.
-# RtkBinaryName 保存平台相关的 RTK 可执行文件名称。
-RtkBinaryName=""
-case "$RtkHostIdentity" in
-    MINGW*:*|MSYS*:*|CYGWIN*:*) RtkTargetTriple="x86_64-pc-windows-msvc"; RtkBinaryName="rtk.exe" ;;
-    Darwin:arm64|Darwin:aarch64) RtkTargetTriple="aarch64-apple-darwin"; RtkBinaryName="rtk" ;;
-    Darwin:*) RtkTargetTriple="x86_64-apple-darwin"; RtkBinaryName="rtk" ;;
-    Linux:aarch64|Linux:arm64) RtkTargetTriple="aarch64-unknown-linux-gnu"; RtkBinaryName="rtk" ;;
-    Linux:*) RtkTargetTriple="x86_64-unknown-linux-gnu"; RtkBinaryName="rtk" ;;
-    *)
-        echo "Unsupported RTK plugin synchronization target." >&2
-        exit 1
-        ;;
-esac
-# OutputRtkPluginBinary is the exact manifest-owned executable required for this package.
-# OutputRtkPluginBinary 是当前插件包要求的精确清单自有可执行文件。
-OutputRtkPluginBinary="$OutputVulcanPluginsDir/vulcan-rtk/bin/$RtkTargetTriple/$RtkBinaryName"
-if [ ! -f "$OutputRtkPluginBinary" ]; then
-    echo "RTK plugin binary is missing; run make deps-rtk before synchronization." >&2
-    exit 1
-fi
-
 echo "==> Done. Runtime resources synchronized into: $OutputRootDir"

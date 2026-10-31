@@ -70,13 +70,15 @@ WebUI 展示时阅读。普通业务任务不需要加载这些细节。
   会话环境变量与 Hook 贡献可覆盖这些值。终端环境指纹只覆盖会话变量。`NO_COLOR=1` 只用于 `rtk rewrite`
   检查进程与已改写的命令，不进入终端会话。
 - 统计协议归属为上游 `src/analytics/gain.rs` 与 `src/core/tracking.rs`：汇总保留其超大输入排除口径，
-  按命令明细使用加权节省率并允许负值；CLI 文本表使用 `gain --text`，原始 JSON 汇总不自行重算。
-  上游版本更新时须重新核对以上源码并同步插件行为测试与统计说明。
-- 统计页的清理入口仅由用户点击触发 `statistics-clear` 变更 Action，调用官方 `gain --reset --yes`，
-  不删除数据库文件、不修改路由配置；作用域与统计读取相同，共用该统计库的终端历史也会清空。
-  清理范围以上游 `src/analytics/gain.rs`、`src/core/tracking.rs` 与 `src/core/retriever.rs` 为准，
-  包括命令、Token、解析失败、Hook 与回读统计，保留可回读内容。插件私有 SQLite 仅保存界面递增修订号，
-  成功后发布 `rtk.statistics` 失效事件以刷新缓存；禁止使用进程局部计数器替代持久修订号。
+  按命令明细使用加权节省率并允许负值；汇总读取 `gain --all --format json`，按命令明细解析
+  `gain --text`，原始 JSON 汇总不自行重算。上游版本更新时须重新核对以上源码并同步
+  [`rtk_settings.rs`](../../crates/vulcan-service-kernel/src/rtk_settings.rs) 的解析与测试。
+- RTK 设置与统计页面由宿主原生提供（WebUI 插件工作区内置页、TUI 插件区页面），服务为
+  `service_rtk_settings`、`service_save_rtk_settings`、`service_rtk_statistics` 与
+  `service_clear_rtk_statistics`；统计每次按需读取，不做宿主缓存与失效事件。
+- 清理统计仅由用户点击触发，调用官方 `gain --reset --yes`，不删除数据库文件、不修改路由配置；
+  共用该统计库的终端历史也会清空。清理范围以上游 `src/analytics/gain.rs`、`src/core/tracking.rs`
+  与 `src/core/retriever.rs` 为准，包括命令、Token、解析失败、Hook 与回读统计，保留可回读内容。
 
 ## 最终返回预算与分页包装
 

@@ -22,7 +22,7 @@ $ProjectDir = Split-Path -Parent $ScriptDir
 # RtkCommand 解析仓库强制使用的 Shell 命令代理。
 $script:RtkCommand = Get-Command "rtk" -ErrorAction SilentlyContinue
 if (-not $script:RtkCommand) {
-    throw "rtk is required to verify Rust dependency policy. Run make deps rtk first."
+    throw "rtk is required to verify Rust dependency policy. Run make deps tools first."
 }
 
 # Invoke-RtkChecked executes one RTK-prefixed command and fails closed on a non-zero exit code.

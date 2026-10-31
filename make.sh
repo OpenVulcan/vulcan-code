@@ -180,7 +180,6 @@ invoke_rust_dev_tools_deps() {
 invoke_system_initialization() {
     sh "$ScriptDir/scripts/install_linux_system_deps.sh"
     invoke_rust_dev_tools_deps
-    invoke_powershell_route deps host
     invoke_bundled_tools_deps
     invoke_powershell_route deps lua
     # Install the locked compiler and protobuf headers before reporting initialization complete.
@@ -223,11 +222,10 @@ show_usage() {
     echo "  ./make.sh core-build  # compile Debug Core without rebuilding GUI"
     echo "  ./make.sh core-restart # Linux: compile and restart Debug Core"
     echo "  ./make.sh bt          # full build, start Core, and open TUI; no desktop or Vite"
-    echo "  ./make.sh deps        # install host, bundled tools, and LuaSkills dependencies"
+    echo "  ./make.sh deps        # install bundled tools (sg, rg, rtk) and LuaSkills dependencies"
     echo "  ./make.sh deps rust-tools # install cargo-hakari, cargo-nextest, and cargo-deny"
     echo "  ./make.sh init-system # bootstrap Rust tools and all repository dependencies"
-    echo "  ./make.sh deps host   # install host native dependencies only"
-    echo "  ./make.sh deps tools  # install the latest bundled sg and rg tools"
+    echo "  ./make.sh deps tools  # install the locked bundled sg, rg, and rtk tools"
     echo "  ./make.sh deps lua    # install official LuaSkills runtime dependencies only"
 }
 
@@ -403,7 +401,7 @@ case "$NormalizedMode" in
             rust-tools)
                 invoke_rust_dev_tools_deps
                 ;;
-            ""|all|host|lua)
+            ""|all|lua)
                 invoke_powershell_route deps "$NormalizedVariant"
                 ;;
             *)

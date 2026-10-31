@@ -521,13 +521,4 @@ Set-Content -LiteralPath $ManagedVulcanPluginIndexPath -Value ($SourceVulcanPlug
 Write-Host "==> Syncing fixed LuaSkills plugin bridge package..."
 Copy-DirectoryContents -SourceDirectory $SourcePluginBridgeDir -DestinationDirectory $OutputPluginBridgeDir
 
-if ($IsWindowsPlatform) {
-    # OutputRtkPluginBinary is the exact current-target artifact already copied with the plugin package.
-    # OutputRtkPluginBinary 是随插件包一并复制的当前目标精确制品。
-    $OutputRtkPluginBinary = Join-Path $OutputVulcanPluginsDir "vulcan-rtk\bin\x86_64-pc-windows-msvc\rtk.exe"
-    if (-not (Test-Path -LiteralPath $OutputRtkPluginBinary -PathType Leaf)) {
-        throw "RTK plugin binary is missing; run make deps-rtk before synchronization."
-    }
-}
-
 Write-Host "==> Done. Runtime resources synchronized into: $OutputRootDir"

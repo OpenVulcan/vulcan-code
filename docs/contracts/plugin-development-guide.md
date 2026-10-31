@@ -122,7 +122,7 @@ Rust 目录加载声明的语言文件，并投影到插件描述及 UI 模块�
 在仓库根运行实际插件 UI 测试：
 
 ```text
-rtk proxy node --test plugins/context7/ui/settings.test.mjs plugins/vulcan-rtk/ui/settings.test.mjs plugins/vulcan-usage-statistics/ui/index.test.mjs
+rtk proxy node --test plugins/context7/ui/settings.test.mjs plugins/vulcan-usage-statistics/ui/index.test.mjs
 ```
 
 在 `apps/vulcan-code-web` 运行语言覆盖及宿主挂载测试：

@@ -24,9 +24,6 @@ function Get-InstallerFunctionDefinitions {
 # TemporaryRoot 与 TestRoot 将全部夹具写入和递归清理限制在一个自有目录中。
 $TemporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $TestRoot = Join-Path $TemporaryRoot ('vulcan-archive-test-' + [Guid]::NewGuid().ToString('N'))
-# WindowsHost selects only the current host's actual archive and executable behavior.
-# WindowsHost 只选择当前宿主实际的归档与可执行行为。
-$WindowsHost = [Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([Runtime.InteropServices.OSPlatform]::Windows)
 # TarPath is the production resolver result, not a mock or a hard-coded operating-system path.
 # TarPath 来自生产解析函数，不是模拟或硬编码的操作系统路径。
 $TarPath = Get-AvailableTarPath
@@ -56,122 +53,6 @@ try {
     catch { $Rejected = $true }
     if (-not $Rejected) { throw 'Native tar failure was ignored.' }
     Write-Host 'PASS: nonzero tar exit rejects corrupt archives.'
-
-    & {
-        . (Get-InstallerFunctionDefinitions -Path (Join-Path $PSScriptRoot 'install_host_deps.ps1'))
-        # Installer fixtures use only this test's plugin root and local archive pool.
-        # 安装器夹具仅使用本测试的插件根目录和本地归档池。
-        $RtkPluginDir = Join-Path $TestRoot 'host/plugins/vulcan-rtk'
-        $RtkBinRoot = Join-Path $RtkPluginDir 'bin'
-        $ThirdParty = Join-Path $TestRoot 'host/third_party'
-        $RtkTag = 'vfixture'
-        $RtkLicenseUrl = 'https://example.invalid/fixture-license'
-        $RtkLicenseFile = Join-Path $RtkPluginDir 'LICENSE'
-        # RtkLicenseSha256 represents the test-owned license bytes, independent of the production release.
-        # RtkLicenseSha256 表示测试拥有的许可证字节，与生产发行版无关。
-        $FixtureLicense = Join-Path $TestRoot 'license.fixture.txt'
-        [IO.File]::WriteAllText($FixtureLicense, 'fixture license')
-        $RtkLicenseSha256 = (Get-FileHash -LiteralPath $FixtureLicense -Algorithm SHA256).Hash.ToLowerInvariant()
-        $FixturePayload = Join-Path $TestRoot 'rtk payload'
-        New-Item -ItemType Directory -Path $FixturePayload, $ThirdParty -Force | Out-Null
-        # BinaryName and FixtureExtension select the actual host branch without emulating another OS.
-        # BinaryName 与 FixtureExtension 选择实际宿主分支，不模拟其他操作系统。
-        $BinaryName = if ($WindowsHost) { 'rtk.exe' } else { 'rtk' }
-        $FixtureExtension = if ($WindowsHost) { '.zip' } else { '.tar.gz' }
-        $FixtureBinary = Join-Path $FixturePayload $BinaryName
-        [IO.File]::WriteAllText($FixtureBinary, "#!/bin/sh`nprintf '%s\n' 'fixture-rtk'`n")
-        if (-not $WindowsHost) {
-            & chmod 755 $FixtureBinary
-            if ($LASTEXITCODE -ne 0) { throw 'Fixture executable permission setup failed.' }
-        }
-        $FixtureArchive = Join-Path $ThirdParty "rtk-oss-fixture$FixtureExtension"
-        if ($WindowsHost) { Compress-Archive -LiteralPath $FixtureBinary -DestinationPath $FixtureArchive }
-        else {
-            & $TarPath -czf $FixtureArchive -C $FixturePayload $BinaryName
-            if ($LASTEXITCODE -ne 0) { throw 'RTK fixture archive creation failed.' }
-        }
-        $FixtureAsset = @{ target = 'fixture'; plugin_target = 'fixture'; binary_name = $BinaryName;
-            archive_ext = $FixtureExtension; sha256 = (Get-FileHash -LiteralPath $FixtureArchive -Algorithm SHA256).Hash }
-        # Get-RtkAssetInfo substitutes only the upstream fixture identity; extraction and publishing remain production functions.
-        # Get-RtkAssetInfo 仅替换上游夹具身份；解压与发布仍使用生产函数。
-        # Returns the locally generated archive identity and digest with no network access.
-        # 返回本地生成归档的身份及摘要，不访问网络。
-        function Get-RtkAssetInfo { return $FixtureAsset }
-        # A legacy edition marker must not prevent the pinned OSS archive from replacing its executable.
-        # 旧发行类型的标记不得阻止固定 OSS 归档替换其可执行文件。
-        New-Item -ItemType Directory -Path (Join-Path $RtkBinRoot 'fixture') -Force | Out-Null
-        [IO.File]::WriteAllText((Join-Path $RtkBinRoot 'fixture/.installed-vfixture'), '')
-        [IO.File]::WriteAllText((Join-Path $RtkBinRoot "fixture/$BinaryName"), 'legacy-edition')
-        if ($WindowsHost) {
-            # ZIP extraction must work even when no tar application is available to the host installer.
-            # 即使宿主安装器无法取得 tar 程序，ZIP 解压仍必须成功。
-            # Returns nothing and fails if the ZIP branch incorrectly requests a tar executable.
-            # 无返回值；ZIP 分支错误请求 tar 时立即失败。
-            function Get-AvailableTarPath { throw 'ZIP installation unexpectedly requested tar.' }
-        }
-        # Invoke-WebRequest substitutes the license transport only and writes the declared offline fixture.
-        # Invoke-WebRequest 仅替换许可证传输，并写入声明的离线夹具。
-        # Uri and OutFile identify the fixture request; UseBasicParsing matches the production signature; returns nothing.
-        # Uri 与 OutFile 标识夹具请求；UseBasicParsing 匹配生产签名；无返回值。
-        function Invoke-WebRequest {
-            param([string]$Uri, [string]$OutFile, [switch]$UseBasicParsing)
-            if ($Uri -ne $RtkLicenseUrl) { throw 'Unexpected fixture download.' }
-            [IO.File]::WriteAllText($OutFile, 'fixture license')
-        }
-        # OriginalTemp is restored after proving that the installer does not require the Windows TEMP variable.
-        # OriginalTemp 在验证安装器不依赖 Windows TEMP 变量后恢复。
-        $OriginalTemp = $env:TEMP
-        try {
-            $env:TEMP = $null
-            Install-RtkBinary
-            Install-RtkLicense
-        } finally { $env:TEMP = $OriginalTemp }
-        $InstalledBinary = Join-Path $RtkBinRoot "fixture/$BinaryName"
-        if ([IO.File]::ReadAllText($InstalledBinary) -ne [IO.File]::ReadAllText($FixtureBinary)) { throw 'RTK payload changed.' }
-        if (-not (Test-Path -LiteralPath (Join-Path $RtkBinRoot 'fixture/.installed-oss-vfixture'))) {
-            throw 'RTK OSS installation did not publish its edition-specific marker.'
-        }
-        if ([IO.File]::ReadAllText($RtkLicenseFile) -ne 'fixture license') { throw 'License fixture was not installed.' }
-        if (-not $WindowsHost) {
-            & $InstalledBinary | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw 'Installed Unix RTK fixture is not executable.' }
-        }
-        if ($WindowsHost) { Write-Host 'PASS: offline Windows ZIP and license installation without TEMP or tar.' }
-        else { Write-Host 'PASS: offline Unix RTK and license installation without TEMP; executable preserved.' }
-        Install-RtkBinary
-        # Remove only the test-owned marker to simulate a checkout that already contains the correct license.
-        # 仅移除测试拥有的标记，以模拟检出目录已经包含正确许可证的情况。
-        Remove-Item -LiteralPath (Join-Path $RtkBinRoot '.license-vfixture') -Force
-        # Invoke-WebRequest must not run when exact license bytes already exist locally.
-        # 精确许可证字节已在本地存在时，必须不调用 Invoke-WebRequest。
-        # Accepts the production transport parameters and throws if unnecessary network access occurs.
-        # 接收生产传输参数；发生不必要的联网时抛出异常。
-        function Invoke-WebRequest {
-            param([string]$Uri, [string]$OutFile, [switch]$UseBasicParsing)
-            throw 'Verified local license unexpectedly triggered a download.'
-        }
-        Install-RtkLicense
-        Write-Host 'PASS: repeated RTK installation and verified checkout license avoid downloads.'
-        [IO.File]::WriteAllText($RtkLicenseFile, 'corrupt license')
-        $Rejected = $false
-        try { Install-RtkLicense } catch { $Rejected = $true }
-        if (-not $Rejected) { throw 'An installed license marker bypassed content verification.' }
-        Write-Host 'PASS: a license marker cannot bypass the required content digest.'
-        if (-not $WindowsHost) {
-            # The second fixture is checksum-valid but extraction-invalid; no success marker may be published.
-            # 第二个夹具摘要有效但无法解压；不得发布成功标记。
-            $RtkTag = 'vcorrupt'
-            $FixtureAsset.plugin_target = 'corrupt'
-            Copy-Item -LiteralPath $CorruptArchive -Destination $FixtureArchive -Force
-            $FixtureAsset.sha256 = (Get-FileHash -LiteralPath $FixtureArchive -Algorithm SHA256).Hash
-            $Rejected = $false
-            try { Install-RtkBinary } catch { $Rejected = $true }
-            if (-not $Rejected -or (Test-Path -LiteralPath (Join-Path $RtkBinRoot 'corrupt/.installed-oss-vcorrupt'))) {
-                throw 'Failed RTK extraction published success.'
-            }
-            Write-Host 'PASS: failed RTK extraction does not publish an installed marker.'
-        }
-    }
 
     & {
         . (Get-InstallerFunctionDefinitions -Path (Join-Path $PSScriptRoot 'install_lua_deps.ps1'))

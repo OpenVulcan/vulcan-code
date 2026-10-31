@@ -153,7 +153,7 @@ function Invoke-GenerateRustThirdPartyNotices {
     # RtkCommand 解析 Cargo 执行所需的仓库强制命令代理。
     $RtkCommand = Get-Command "rtk" -ErrorAction SilentlyContinue
     if (-not $RtkCommand) {
-        throw 'Missing rtk. Run `make deps rtk` before generating Rust third-party notices.'
+        throw 'Missing rtk. Run `make deps tools` before generating Rust third-party notices.'
     }
 
     if (-not (Test-Path -LiteralPath $CargoAboutConfigFile)) {

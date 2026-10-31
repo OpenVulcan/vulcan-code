@@ -139,11 +139,9 @@ make init-system
 
 已满足版本要求的工具会被保留，不会重复安装。
 
-类 Unix 初始化同样必须实际执行锁定的 `protoc` 安装步骤，成功后才准备受管 Node 并报告完成。`node --test scripts/check-build-environment.test.cjs scripts/install-linux-system-deps.test.cjs` 使用隔离子程序验证真实入口的阶段顺序、失败传递，以及 Linux 系统依赖就绪时跳过安装、权限不足时拒绝、安装后仍未满足依赖时拒绝等行为，不运行真实包管理器或联网；`pwsh -NoProfile -File scripts/test_dependency_archive.ps1` 使用真实离线归档验证宿主与 Lua 安装器的解压、临时目录、标记及失败保留行为。
+类 Unix 初始化同样必须实际执行锁定的 `protoc` 安装步骤，成功后才准备受管 Node 并报告完成。`node --test scripts/check-build-environment.test.cjs scripts/install-linux-system-deps.test.cjs` 使用隔离子程序验证真实入口的阶段顺序、失败传递，以及 Linux 系统依赖就绪时跳过安装、权限不足时拒绝、安装后仍未满足依赖时拒绝等行为，不运行真实包管理器或联网；`pwsh -NoProfile -File scripts/test_dependency_archive.ps1` 使用真实离线归档验证共享解压规则与 Lua 安装器的解压、标记及失败保留行为。
 
-宿主依赖与 Lua 运行时安装器通过 `scripts/dependency-archive.ps1` 共用解压规则：Windows 使用系统 `tar.exe` 或 PATH 中的同名应用，Linux/macOS 使用 PATH 中的 `tar`；ZIP 解压不额外要求 tar。RTK 临时文件使用平台临时目录接口，不要求 Unix 设置 Windows 的 `TEMP` 变量。原生 tar 返回非零退出码时立即失败，不继续发布文件或写入安装标记。
-
-RTK 安装器可复用 `third_party/` 中名称匹配且摘要正确的官方归档；检出目录中已有的 RTK 许可证也须与固定上游标签的 SHA-256 一致后才能复用，安装标记不能代替内容校验。网络受限时可从其他机器取得同一官方归档，经传输后仍由原安装器校验，不修改版本或跳过摘要验证。
+Lua 运行时安装器通过 `scripts/dependency-archive.ps1` 使用共享解压规则：Windows 使用系统 `tar.exe` 或 PATH 中的同名应用，Linux/macOS 使用 PATH 中的 `tar`。原生 tar 返回非零退出码时立即失败，不继续发布文件或写入安装标记。RTK 与 sg/rg 一样由 `install-locked-tools.mjs` 按锁文件安装（`make deps tools`）。
 
 Rust 工具已存在时会只打印版本并跳过安装，不会重复编译或覆盖现有工具。Windows 通过 `make.ps1` 执行，类 Unix 环境通过 `make.sh` 转发到同一套 PowerShell 依赖入口。
 

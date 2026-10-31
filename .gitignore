@@ -44,10 +44,6 @@ target
 /output-release.previous
 /output-release.rejected-*
 /temp
-# RTK executables are fetched per target by make init-system (make deps rtk), never committed.
-# RTK 可执行文件由 make init-system（make deps rtk）按目标平台拉取，绝不提交。
-/plugins/vulcan-rtk/bin/
-
 # Documentation stays local by default: plans, audits, reviews, and drafts are not shipped.
 # 文档默认仅保留在本地：计划、审计、评审与草稿都不随仓库分发。
 # Only docs/contracts/ ships: those are the documents AGENTS.md requires every session to read.

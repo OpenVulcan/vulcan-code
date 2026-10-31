@@ -42,14 +42,14 @@ define route-command
 endef
 endif
 
-.PHONY: help sync sync-release vite start stop status build build-release release clean run run-release service core-build core-restart br br-release bt licenses check test full deps deps-all deps-host deps-vldb deps-rtk deps-tools deps-lua init-system deps-rust-tools host vldb rtk tools lua rust-tools all
+.PHONY: help sync sync-release vite start stop status build build-release release clean run run-release service core-build core-restart br br-release bt licenses check test full deps deps-all deps-vldb deps-tools deps-lua init-system deps-rust-tools vldb tools lua rust-tools all
 
 # VITE_ACTION captures the required lifecycle action from `make vite start`, `stop`, or `status`.
 # VITE_ACTION 从 `make vite start`、`stop` 或 `status` 中捕获必需的生命周期操作。
 VITE_ACTION := $(filter start stop status,$(MAKECMDGOALS))
 
-# DEPS_COMPANION_GOALS captures optional secondary dependency goals such as `make deps rtk`.
-# DEPS_COMPANION_GOALS 捕获 `make deps rtk` 这类可选的依赖二级目标。
+# DEPS_COMPANION_GOALS captures optional secondary dependency goals such as `make deps tools`.
+# DEPS_COMPANION_GOALS 捕获 `make deps tools` 这类可选的依赖二级目标。
 DEPS_COMPANION_GOALS := $(filter-out deps,$(MAKECMDGOALS))
 
 # DEPS_ROUTE_COMMAND selects the command forwarded by the deps router.
@@ -82,12 +82,10 @@ help:
 	@echo "  make check         # static gates: fmt, clippy -D warnings, lint, typecheck"
 	@echo "  make test          # Rust tests without long real-time and plugin-lifecycle tests"
 	@echo "  make test full     # every Rust test, isolated LuaSkills callbacks, and doctests"
-	@echo "  make deps          # install host, bundled tools, and Lua dependencies"
+	@echo "  make deps          # install bundled tools (sg, rg, rtk) and Lua dependencies"
 	@echo "  make init-system   # bootstrap Rust tools and all repository dependencies"
-	@echo "  make deps-host     # install host dependencies"
 	@echo "  make deps-vldb     # install vldb-controller host dependency"
-	@echo "  make deps-rtk      # install RTK host dependency"
-	@echo "  make deps-tools    # install the latest bundled sg and rg tools"
+	@echo "  make deps-tools    # install the locked bundled sg, rg, and rtk tools"
 	@echo "  make deps-rust-tools # install cargo-hakari and cargo-nextest"
 	@echo "  make deps-lua      # install Lua dependencies"
 
@@ -241,20 +239,10 @@ init-system:
 deps-all:
 	$(call route-command,deps all)
 
-# deps-host routes host dependency installation.
-# deps-host 路由宿主依赖安装步骤。
-deps-host:
-	$(call route-command,deps host)
-
 # deps-vldb routes vldb-controller host dependency installation.
 # deps-vldb 路由 vldb-controller 宿主依赖安装步骤。
 deps-vldb:
 	$(call route-command,deps vldb)
-
-# deps-rtk routes RTK host dependency installation.
-# deps-rtk 路由 RTK 宿主依赖安装步骤。
-deps-rtk:
-	$(call route-command,deps rtk)
 
 # deps-tools routes the latest bundled sg and rg installation step.
 # deps-tools 路由最新版内建 sg 与 rg 安装步骤。
@@ -280,15 +268,6 @@ else
 	$(call route-command,build)
 endif
 
-# host is a deps companion no-op when used as `make deps host`.
-# host 在 `make deps host` 形式中作为 deps 的伴随空目标。
-host:
-ifneq ($(filter deps,$(MAKECMDGOALS)),)
-	@:
-else
-	$(call route-command,deps host)
-endif
-
 # vldb is a deps companion no-op when used as `make deps vldb`.
 # vldb 在 `make deps vldb` 形式中作为 deps 的伴随空目标。
 vldb:
@@ -296,15 +275,6 @@ ifneq ($(filter deps,$(MAKECMDGOALS)),)
 	@:
 else
 	$(call route-command,deps vldb)
-endif
-
-# rtk is a deps companion no-op when used as `make deps rtk`.
-# rtk 在 `make deps rtk` 形式中作为 deps 的伴随空目标。
-rtk:
-ifneq ($(filter deps,$(MAKECMDGOALS)),)
-	@:
-else
-	$(call route-command,deps rtk)
 endif
 
 # tools is a deps companion no-op when used as `make deps tools`.
