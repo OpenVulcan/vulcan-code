@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "nodeai",
-  "revision": 4,
-  "published_at": "2026-10-30T09:25:54Z",
+  "revision": 6,
+  "published_at": "2026-10-31T10:22:39Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -481,6 +481,14 @@
       {
         "url": "builtin:nodeai.anthropic.thinking.user-declaration.20261030",
         "note": "Authenticated NODEAI discovery on 2026-10-30 returned 40 models, including claude-sonnet-5-5-thinking, claude-opus-5-5-thinking and claude-fable-5-1-thinking. At the user's request, only these three IDs are added as separate exact Anthropic rules alongside their ordinary counterparts, with distinct display names and no alias mapping. Protocol, context/output limits, modalities and reasoning/profile settings are inherited from the corresponding existing ordinary rules; no additional inference or thinking-control behavior was live-tested."
+      },
+      {
+        "url": "builtin:nodeai.anthropic.chat.user-declaration.20261031",
+        "note": "On 2026-10-31 the user explicitly switched the existing Anthropic group and all six exact Claude model rules to OpenAI-compatible Chat Completions at https://nodeai.cc/v1/chat/completions with Bearer authentication. The service identity, discovery intersection, model identities, limits, modalities and effort choices are retained. The previous Messages route, anthropic-version header and adaptive-thinking request profile are removed; the registered Chat encoder maps reasoning effort to reasoning_effort. This supersedes the earlier Messages protocol declarations above. The Chat route and inference were not live-tested as part of this configuration change."
+      },
+      {
+        "url": "builtin:nodeai.anthropic.messages-restored.user-declaration.20261031",
+        "note": "On 2026-10-31 the user explicitly restored the existing Anthropic group and all six exact Claude model rules to Anthropic Messages at https://nodeai.cc/v1/messages, with x-api-key authentication, anthropic-version 2023-06-01 and the adaptive-thinking effort request profile. This supersedes the Chat protocol declaration above. The OpenAI-compatible model-discovery catalog, model identities and capability limits are unchanged. No new live inference request was made for this restoration."
       }
     ],
     "verified_at": "2026-10-25T10:36:07Z"
