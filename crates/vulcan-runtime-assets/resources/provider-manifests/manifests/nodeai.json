@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "nodeai",
-  "revision": 6,
-  "published_at": "2026-10-31T10:22:39Z",
+  "revision": 7,
+  "published_at": "2026-10-31T11:07:44Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -42,7 +42,7 @@
           "display_name": "API Key",
           "credential_mode": "token",
           "billing_kind": "provider_managed",
-          "account_usage_query": "unsupported",
+          "account_usage_query": "node_ai_balance",
           "key_prefix": "sk-",
           "default_usage_scopes": [
             "interactive_agent",
@@ -80,7 +80,7 @@
           "display_name": "API Key",
           "credential_mode": "token",
           "billing_kind": "provider_managed",
-          "account_usage_query": "unsupported",
+          "account_usage_query": "node_ai_balance",
           "key_prefix": "sk-",
           "default_usage_scopes": [
             "interactive_agent",
@@ -442,6 +442,14 @@
   "provenance": {
     "status": "verified",
     "sources": [
+      {
+        "url": "https://nodeai.cc/key-usage",
+        "note": "On 2026-10-31 the official Key Usage page used GET /v1/usage with Bearer API-key authentication. An authenticated read returned HTTP 200 with isValid, mode=unrestricted, numeric balance and unit. Wallet balance is shared across provider groups; both ChatGPT and Anthropic credentials use the same query primitive. Preserve the API unit instead of the page's hard-coded currency symbol; restricted-key quotas and subscription allowances must not be substituted for wallet balance."
+      },
+      {
+        "url": "https://nodeai.cc/docs/zh/api-reference/billing",
+        "note": "On 2026-10-31 all three documented legacy endpoints (/v1/dashboard/billing/subscription, /v1/dashboard/billing/usage, /api/usage/token/) returned HTTP 404 with the authorized API key. The implemented query follows the verified live /v1/usage endpoint without legacy fallback or quota conversion."
+      },
       {
         "url": "https://nodeai.cc/v1/models",
         "note": "Authenticated discovery on 2026-10-25 included all five approved ChatGPT models. Runtime membership is the intersection of the current credential catalog and exact model rules; review, gpt-6, newly discovered models and image-generation models are excluded. On 2026-10-29, authenticated discovery returned 28 models including the three approved Anthropic IDs, using both Bearer and x-api-key authentication. The response has an OpenAI-style data/object envelope without Anthropic pagination fields, so the Anthropic service also uses open_ai discovery with exact-rule intersection."

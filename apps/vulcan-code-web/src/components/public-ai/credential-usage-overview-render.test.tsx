@@ -142,3 +142,41 @@ describe("OpenCode account card", () => {
     expect(root.textContent).not.toContain("Provider weekly label")
   })
 })
+
+describe("NODEAI shared wallet", () => {
+  // Both inference groups display the same account balance with the API-owned unit and no quota bar.
+  // 两个推理分组显示相同的账号余额与 API 单位，不显示额度进度条。
+  it.each(["chatgpt", "anthropic-api"])("renders the shared wallet for %s", (serviceEntryId) => {
+    // root renders only synthetic provider observations through the shared production card.
+    // root 通过生产共用卡片仅渲染合成供应商观测。
+    const root = document.createElement("div")
+    root.innerHTML = renderToStaticMarkup(
+      <CredentialUsageOverview
+        connection={{ ...connection, provider_id: "nodeai", service_entry_id: serviceEntryId, usage_capability: "node_ai_balance" }}
+        credentialProfile={{ ...profile, account_usage_query: "node_ai_balance" }}
+        usage={{ ...usage, balance_amount: "13.33928437", currency: "USD", quota_windows: [] }}
+      />,
+    )
+    expect(root.textContent).toContain("13.34 USD")
+    expect(root.textContent).toContain("composer.accountCard.nonPlan")
+    expect(root.textContent).toContain("composer.accountCard.accountType")
+    expect(root.querySelector('[role="progressbar"]')).toBeNull()
+  })
+
+  // Wallet refresh failures must not be hidden behind the no-plan-window hint.
+  // 钱包刷新失败不得被无套餐窗口提示隐藏。
+  it.each(["node_ai_balance", "deep_seek_balance"] as const)("keeps %s refresh failures visible", (capability) => {
+    // root represents the account settings surface, which displays refresh diagnostics.
+    // root 代表显示刷新诊断的账号设置界面。
+    const root = document.createElement("div")
+    root.innerHTML = renderToStaticMarkup(
+      <CredentialUsageOverview
+        connection={{ ...connection, usage_capability: capability }}
+        credentialProfile={{ ...profile, account_usage_query: capability }}
+        usage={{ credential_id: usage.credential_id, availability: "temporarily_unavailable", quota_windows: [] }}
+      />,
+    )
+    expect(root.textContent).toContain("composer.accountCard.usageUnavailable")
+    expect(root.textContent).not.toContain("composer.accountCard.noQuotaWindows")
+  })
+})

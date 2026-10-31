@@ -352,6 +352,14 @@ RPC 也必须在凭据校验和网络请求之前拒绝，以防旧客户端或�
 - 未声明 `account_model_access` 的供应商完全不进入该链。APIKEY.FUN 的 Key 分组继续只使用
   `/models ∩ 精确本地规则`，不得与套餐投影混用。
 
+NODEAI 的 `node_ai_balance` 只查询账号公共钱包，不按推理分组拆分余额，也不参与模型访问过滤。
+协议归属为 NODEAI 当前 [Key 用量页](https://nodeai.cc/key-usage) 使用的 `GET /v1/usage`，
+使用当前 API Key 的 Bearer 鉴权；Anthropic 分组的推理鉴权不会覆盖余额查询鉴权。
+2026-10-31 实测钱包响应的 `isValid`、`mode`、`balance`、`unit`；金额和单位直接取响应字段，
+缺失钱包余额时明确报告失败，不以密钥限额、订阅额度或旧版 billing 字段补齐。
+同日旧余额文档中的三个端点均返回 404，详情记录在 `nodeai.json` 的 `provenance.sources`。
+上游页面或 `/v1/usage` 形状变化时须重新核验该原语、回归测试与清单证据，不探测备用端点。
+
 ### 3.3 凭据授权声明
 
 凭据获取能力由 `credential_profiles[].authorization` 声明，不再使用供应商专属的

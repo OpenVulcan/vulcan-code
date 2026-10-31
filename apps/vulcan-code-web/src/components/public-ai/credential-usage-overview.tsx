@@ -63,6 +63,7 @@ export function credentialUsageIsNonPlanAccount(
   credentialProfile: PublicAiCredentialProfile | undefined,
 ): boolean {
   return credentialProfile?.account_usage_query === "deep_seek_balance"
+    || credentialProfile?.account_usage_query === "node_ai_balance"
 }
 
 // CredentialUsageOverview renders shared balance, plan, and quota presentation.
@@ -112,7 +113,9 @@ export function useCredentialUsageOverview(props: CredentialUsageOverviewProps):
   }
   // quotaContent adapts the declared provider capability before entering the pure display layer.
   // quotaContent 在进入纯展示层前适配已声明的供应商能力。
-  const quotaContent = nonPlanAccount ? (
+  // Only a successful balance observation can suppress quota details; failed reads retain their diagnostic.
+  // 只有成功余额观测可以省略额度详情；查询失败仍保留诊断信息。
+  const quotaContent = nonPlanAccount && props.usage?.availability === "supported" ? (
     <span className="vk-usage-hint">
       {t("composer.accountCard.noQuotaWindows")}
     </span>

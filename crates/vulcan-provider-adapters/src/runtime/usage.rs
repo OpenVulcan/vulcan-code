@@ -36,6 +36,7 @@ pub(super) fn account_usage_secret_reference<'a>(
         | crate::AccountUsageQueryKind::MiniMaxTokenPlan
         | crate::AccountUsageQueryKind::TavilyCredits
         | crate::AccountUsageQueryKind::DeepSeekBalance
+        | crate::AccountUsageQueryKind::NodeAiBalance
         | crate::AccountUsageQueryKind::KimiCodingPlan
         | crate::AccountUsageQueryKind::OpenDesignWallet
         | crate::AccountUsageQueryKind::CommandCodeUsage
@@ -274,6 +275,7 @@ impl PublicAiRuntime {
                 crate::AccountUsageQueryKind::MiniMaxTokenPlan => true,
                 crate::AccountUsageQueryKind::TavilyCredits => true,
                 crate::AccountUsageQueryKind::DeepSeekBalance => true,
+                crate::AccountUsageQueryKind::NodeAiBalance => true,
                 crate::AccountUsageQueryKind::KimiCodingPlan => true,
                 crate::AccountUsageQueryKind::CommandCodeUsage => true,
                 crate::AccountUsageQueryKind::OpenDesignWallet => true,

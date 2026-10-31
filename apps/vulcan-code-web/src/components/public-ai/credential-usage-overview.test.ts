@@ -38,6 +38,7 @@ describe("credentialUsageIsNonPlanAccount", () => {
   // 验证 UI 语义跟随凭据配置档而绝不跟随供应商标识。
   it("uses the manifest-projected usage capability", () => {
     expect(credentialUsageIsNonPlanAccount(credentialProfile("deep_seek_balance"))).toBe(true)
+    expect(credentialUsageIsNonPlanAccount(credentialProfile("node_ai_balance"))).toBe(true)
     expect(credentialUsageIsNonPlanAccount(credentialProfile("open_router_credits"))).toBe(false)
     expect(credentialUsageIsNonPlanAccount(undefined)).toBe(false)
   })
@@ -114,6 +115,8 @@ describe("usageCapabilitySupportsQuotaWindows", () => {
     expect(usageCapabilitySupportsQuotaWindows("open_ai_codex_usage")).toBe(true)
     expect(usageCapabilitySupportsQuotaWindows("open_router_credits")).toBe(false)
     expect(usageCapabilitySupportsQuotaWindows("deep_seek_balance")).toBe(false)
+    expect(usageCapabilitySupportsQuotaWindows("node_ai_balance")).toBe(false)
+    expect(usageCapabilityRequiresManagementKey("node_ai_balance")).toBe(false)
     expect(usageCapabilitySupportsQuotaWindows("unsupported")).toBe(false)
   })
 })

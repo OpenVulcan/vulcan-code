@@ -112,9 +112,9 @@ fn account_usage_snapshot_kind(query: AccountUsageQueryKind) -> &'static str {
         | AccountUsageQueryKind::OpenVulcan
         | AccountUsageQueryKind::TavilyCredits
         | AccountUsageQueryKind::CommandCodeUsage => "quota",
-        AccountUsageQueryKind::DeepSeekBalance | AccountUsageQueryKind::OpenDesignWallet => {
-            "balance"
-        }
+        AccountUsageQueryKind::DeepSeekBalance
+        | AccountUsageQueryKind::NodeAiBalance
+        | AccountUsageQueryKind::OpenDesignWallet => "balance",
         AccountUsageQueryKind::Unsupported => "unsupported",
     }
 }

@@ -815,6 +815,9 @@ pub enum AccountUsageQueryKind {
     /// DeepSeek official account balance endpoint.
     /// DeepSeek 官方账号余额端点。
     DeepSeekBalance,
+    /// NODEAI wallet balance queried with the inference API key.
+    /// 使用推理 API Key 查询的 NODEAI 钱包余额。
+    NodeAiBalance,
     /// Kimi Coding Plan membership and rolling usage endpoint.
     /// Kimi Coding Plan 会员与滚动用量端点。
     KimiCodingPlan,
