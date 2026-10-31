@@ -290,7 +290,7 @@ export function createPluginPanel(sdk) {
         setFollowNow(value.endAtMs === null); setRangeError(""); setOpen(true);
       } }, timeRangeLabel(value)),
       h(Dialog, { open, onOpenChange: setOpen },
-        h(DialogContent, { className: "plugin-statistics-range-dialog" },
+        h(DialogContent, { size: "md" },
           h(DialogHeader, null,
             h(DialogTitle, null, text("range.label", "Time range")),
             h(DialogDescription, null, text("range.description", "Choose local dates and times."))),
@@ -777,9 +777,9 @@ export function createPluginPanel(sdk) {
     // section selects one reachable task area without losing unsaved pricing drafts.
     // section 选择可达任务区域，同时保留尚未保存的定价草稿。
     const [section, setSection] = React.useState("overview");
-    // dashboardView requests only projections used by the active task area.
-    // dashboardView 仅请求当前任务区域使用的投影。
-    const dashboardView = section === "details" ? "details" : "overview";
+    // dashboardView requests only projections used by the active task area; pricing reads its own directory.
+    // dashboardView 仅请求当前任务区域使用的投影；定价读取独立目录。
+    const dashboardView = section === "pricing" ? "overview" : section;
     // Apply one exact time interval to all usage queries; null end follows query time.
     // 为所有用量查询应用同一精确时间区间；空终点跟随查询时刻。
     const [timeRange, setTimeRange] = React.useState(() => ({ ...presetTimeRange(30), endAtMs: null }));
@@ -795,6 +795,9 @@ export function createPluginPanel(sdk) {
     // Select a server-filtered model category; switching categories starts at its first page.
     // 选择服务端筛选的模型类别；切换类别时从该类别首页开始。
     const [recentModelType, setRecentModelType] = React.useState("llm");
+    // providerFilter narrows the Provider tab to one exact Provider; empty selects all Providers.
+    // providerFilter 将供应商分类限定为一个精确 Provider；空值表示全部 Provider。
+    const [providerFilter, setProviderFilter] = React.useState("");
     // pricingSearch and pricingFilter narrow the complete declared price catalog.
     // pricingSearch 与 pricingFilter 筛选完整声明的定价目录。
     const [pricingSearch, setPricingSearch] = React.useState("");
@@ -883,10 +886,14 @@ export function createPluginPanel(sdk) {
       try {
         // argumentsValue captures the declared query contract for exact request deduplication.
         // argumentsValue 捕获声明的查询契约，以精确合并相同请求。
+        // Each tab sends only its own filters, so a Provider choice never narrows recent attempts.
+        // 每个标签页仅发送自身筛选，Provider 选择不会收窄最近请求。
         const argumentsValue = {
           view: dashboardView,
           startAtMs: timeRange.startAtMs, endAtMs: timeRange.endAtMs, consumerId: consumerFilter === ALL_CONSUMERS ? "" : consumerFilter,
-          dailyOffset, recentOffset, recentModelType, modelQuery, sortOrder,
+          modelQuery, sortOrder,
+          ...(dashboardView === "providers" ? { providerId: providerFilter, dailyOffset } : {}),
+          ...(dashboardView === "recent" ? { recentOffset, recentModelType } : {}),
         };
         // key compares only immutable action arguments, never SQL or runtime guesses.
         // key 仅比较不可变 Action 参数，不使用 SQL 或运行时猜测。
@@ -904,11 +911,11 @@ export function createPluginPanel(sdk) {
           // 对比已提交分页与请求分页的声明式 Action 参数。
           const previous = JSON.parse(dashboardKey.current);
           const next = JSON.parse(key);
-          if (["view", "startAtMs", "endAtMs", "consumerId", "modelQuery", "sortOrder"].every((field) => previous[field] === next[field])) {
+          if (["view", "startAtMs", "endAtMs", "consumerId", "providerId", "modelQuery", "sortOrder"].every((field) => previous[field] === next[field])) {
             // Both tables may change when the user navigates before an earlier response completes.
             // 用户在前一次响应完成前导航时，两张表格可能同时变化。
-            const daily = previous.dailyOffset !== dailyOffset;
-            const recent = previous.recentOffset !== recentOffset || previous.recentModelType !== recentModelType;
+            const daily = previous.dailyOffset !== next.dailyOffset;
+            const recent = previous.recentOffset !== next.recentOffset || previous.recentModelType !== next.recentModelType;
             if (daily || recent) changedTables = { daily, recent };
           }
         }
@@ -951,7 +958,7 @@ export function createPluginPanel(sdk) {
       } finally {
         if (mountedRef.current && sequence === requestSequence.current) setLoading(false);
       }
-    }, [timeRange, consumerFilter, dailyOffset, recentOffset, recentModelType, modelQuery, sortOrder, dashboardView]);
+    }, [timeRange, consumerFilter, providerFilter, dailyOffset, recentOffset, recentModelType, modelQuery, sortOrder, dashboardView]);
 
     // Post-write refresh follows the currently rendered scope even if the user navigated during the write.
     // 即使用户在写入期间切换页面，写入后的刷新也遵循当前渲染作用域。
@@ -1105,6 +1112,19 @@ export function createPluginPanel(sdk) {
       }
     }, [consumerFilter, consumerIds, dashboard]);
 
+    // Drop a Provider selection that the current scope no longer contains.
+    // 当前作用域不再包含所选 Provider 时清除该选择。
+    React.useEffect(() => {
+      if (dashboard?.providers && providerFilter !== "" && !dashboard.providers.some((provider) => provider.providerId === providerFilter)) {
+        setProviderFilter("");
+        setDailyOffset(0);
+      }
+    }, [dashboard, providerFilter]);
+
+    // providerTotal counts every attempt of the unfiltered Provider list for the "all" entry.
+    // providerTotal 统计未筛选 Provider 列表的全部调用，用于「全部」项。
+    const providerTotal = (dashboard?.providers ?? []).reduce((total, provider) => total + provider.attempts, 0);
+
     // filteredDaily applies the selected consumer without changing persisted aggregates.
     // filteredDaily 应用选定消费者，且不改变持久化聚合。
     const filteredDaily = dashboard?.daily.filter(
@@ -1117,7 +1137,8 @@ export function createPluginPanel(sdk) {
     ) ?? [];
     // Display counts from the committed page while a replacement page is pending or failed.
     // 新分页等待或失败时，计数继续采用已提交分页的位置。
-    const displayedPage = dashboardKey.current === null ? { dailyOffset: 0, recentOffset: 0 } : JSON.parse(dashboardKey.current);
+    const committedPage = dashboardKey.current === null ? {} : JSON.parse(dashboardKey.current);
+    const displayedPage = { dailyOffset: committedPage.dailyOffset ?? 0, recentOffset: committedPage.recentOffset ?? 0 };
     // summary is a display-only projection over already persisted host facts.
     // summary 是对已持久化宿主事实的纯展示投影。
     const summary = dashboard ? {
@@ -1158,6 +1179,20 @@ export function createPluginPanel(sdk) {
     // tableError 将失败的导航保留在所属区块内，位于保留行之上。
     const tableError = (kind) => tableRefresh[kind] && tableRefresh.error
       ? h(PageNotice, { tone: "error", actions: retryButton(() => void refresh()) }, tableRefresh.error) : null;
+    // searchForm renders the shared model search and time order used by both usage tabs.
+    // searchForm 渲染两个用量标签页共用的模型搜索与时间排序。
+    const searchForm = () => h("form", { role: "search", onSubmit: (event) => { event.preventDefault(); setModelQuery(modelDraft.trim()); setDailyOffset(0); setRecentOffset(0); } },
+      h(PageToolbar, {
+        actions: h(SelectControl, { ariaLabel: text("usage.order", "Time order"), value: sortOrder,
+          options: ["newest", "oldest"].map((value) => ({ value, label: text(`usage.${value}`, value) })),
+          onValueChange: (value) => { setSortOrder(value); setDailyOffset(0); setRecentOffset(0); } }),
+      },
+        h(Input, { density: "compact", type: "search", maxLength: 256,
+          "aria-label": text("usage.search", "Search usage by model"), placeholder: text("usage.search", "Search usage by model"),
+          value: modelDraft, onChange: (event) => setModelDraft(event.currentTarget.value) }),
+        h(Button, { type: "submit", size: "sm", variant: "outline", disabled: loading }, text("usage.applySearch", "Search")),
+      ),
+    );
     // loadingPlaceholder stands in for dashboard content until the first snapshot arrives; a failed read shows only its notice.
     // loadingPlaceholder 在首个快照到达前代替仪表盘内容；读取失败时只显示其提示。
     const loadingPlaceholder = (withTiles) => error ? null : h(React.Fragment, null,
@@ -1169,7 +1204,7 @@ export function createPluginPanel(sdk) {
         ariaLabel: text("sections.label", "Statistics sections"),
         value: section,
         onValueChange: setSection,
-        options: ["overview", "details", "pricing"].map((value) => ({ value, label: text(`sections.${value}`, value) })),
+        options: ["overview", "providers", "recent", "pricing"].map((value) => ({ value, label: text(`sections.${value}`, value) })),
         actions: h(StatusPill, {
           status: loading ? "loading" : error || dashboard?.healthStatus !== "ready" ? "warning" : "ready",
           label: loading
@@ -1300,21 +1335,51 @@ export function createPluginPanel(sdk) {
           h(ChartLegend, { items: legendItems, onToggle: toggleSeries }),
         ),
       )),
-      h(PageTabPanel, { active: section === "details" },
-        h("form", { role: "search", onSubmit: (event) => { event.preventDefault(); setModelQuery(modelDraft.trim()); setDailyOffset(0); setRecentOffset(0); } },
-          h(PageToolbar, {
-            actions: h(SelectControl, { ariaLabel: text("usage.order", "Time order"), value: sortOrder,
-              options: ["newest", "oldest"].map((value) => ({ value, label: text(`usage.${value}`, value) })),
-              onValueChange: (value) => { setSortOrder(value); setDailyOffset(0); setRecentOffset(0); } }),
-          },
-            h(Input, { density: "compact", type: "search", maxLength: 256,
-              "aria-label": text("usage.search", "Search usage by model"), placeholder: text("usage.search", "Search usage by model"),
-              value: modelDraft, onChange: (event) => setModelDraft(event.currentTarget.value) }),
-            h(Button, { type: "submit", size: "sm", variant: "outline", disabled: loading }, text("usage.applySearch", "Search")),
+      h(PageTabPanel, { active: section === "providers" },
+        searchForm(),
+        !dashboard ? loadingPlaceholder(false) : h("div", { className: "plugin-statistics-provider-layout" },
+          h("nav", { className: "plugin-statistics-provider-list", "aria-label": text("providers.label", "Providers") },
+            ...[{ providerId: "", attempts: providerTotal }, ...(dashboard.providers ?? [])].map((provider) => h(Button, {
+              key: provider.providerId || ALL_CONSUMERS,
+              type: "button", size: "sm",
+              variant: providerFilter === provider.providerId ? "secondary" : "ghost",
+              "aria-pressed": providerFilter === provider.providerId,
+              className: "plugin-statistics-provider-option",
+              disabled: loading,
+              onClick: () => { setProviderFilter(provider.providerId); setDailyOffset(0); },
+            },
+              h("span", { title: provider.providerId }, provider.providerId || text("providers.all", "All providers")),
+              h("small", null, formatInteger(provider.attempts)))),
           ),
-        ),
-        !dashboard ? loadingPlaceholder(false) : h(React.Fragment, null,
-          h(PageSection, {
+          h("div", { className: "plugin-statistics-provider-main" },
+            h(MetricGrid, null,
+              h(MetricCard, {
+                icon: "requests",
+                label: text("summary.requests", "Physical attempts"),
+                value: formatInteger(summary.attempts),
+                detail: text("summary.requestsDetail", "Includes retries and failures"),
+              }),
+              h(MetricCard, {
+                icon: "success",
+                label: text("summary.successRate", "Success rate"),
+                value: summary.successRate === null ? "—" : formatPercent(summary.successRate),
+                detail: `${formatInteger(summary.successes)} ${text("summary.successes", "successful attempts")}`,
+              }),
+              h(MetricCard, {
+                icon: "tokens",
+                label: text("summary.tokens", "Known tokens"),
+                value: formatInteger(summary.totalTokens),
+                detail: text("summary.tokensDetail", "Unknown usage remains absent"),
+              }),
+              ...dashboard.summary.costs.map((cost) => h(MetricCard, {
+                key: cost.currency,
+                icon: "activity",
+                label: text("cost.reference", "Reference cost"),
+                value: cost.amount === null ? "-" : currencyAmount(formatMoney(cost.amount, sdk.locale), cost.currency),
+                detail: cost.unpricedRows + cost.incompleteRows > 0 ? text("cost.partial", "Partial coverage") : undefined,
+              })),
+            ),
+            h(PageSection, {
             title: text("daily.title", "Model usage"),
             "aria-busy": tableRefresh.daily && !tableRefresh.error,
             status: h(React.Fragment, null,
@@ -1349,8 +1414,13 @@ export function createPluginPanel(sdk) {
               })),
               empty: h(PageEmptyState, { title: text("daily.empty", "No usage in this range") }),
             }),
+            ),
           ),
-          h(PageSection, {
+        ),
+      ),
+      h(PageTabPanel, { active: section === "recent" },
+        searchForm(),
+        !dashboard ? loadingPlaceholder(false) : h(PageSection, {
             title: text("recent.title", "Recent physical attempts"),
             "aria-busy": tableRefresh.recent && !tableRefresh.error,
             status: h(React.Fragment, null,
@@ -1359,7 +1429,7 @@ export function createPluginPanel(sdk) {
             actions: h(SelectControl, {
               ariaLabel: text("recent.modelTypes", "Model types"),
               value: recentModelType,
-              options: [{ value: "llm", label: "Chat models" }, { value: "embedding", label: "Embedding models" }, { value: "rerank", label: "Reranking models" }]
+              options: [{ value: "llm", label: "Chat models" }, { value: "embedding", label: "Embedding models" }, { value: "rerank", label: "Reranking models" }, { value: "decision", label: "Decision models" }]
                 .map(({ value, label }) => ({ value, label: text(`recent.group.${value}`, label) })),
               onValueChange: (value) => { setRecentModelType(value); setRecentOffset(0); },
             }),
@@ -1397,7 +1467,6 @@ export function createPluginPanel(sdk) {
               empty: h(PageEmptyState, { title: text("recent.empty", "No physical attempt records") }),
             }),
           ),
-        ),
       ),
       h(PageTabPanel, { active: section === "pricing" },
         pricingSettings === null

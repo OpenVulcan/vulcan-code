@@ -657,6 +657,9 @@ FROM provider_usage_meta WHERE meta_key = 'aggregate_revision';
         -- 零表示旧调用省略边界；显式输入为正 Unix 毫秒数。
         { kind = "int64", value = input.startAtMs or 0 },
         { kind = "int64", value = input.endAtMs or 0 },
+        -- An empty Provider keeps every Provider; the Provider list itself ignores this filter.
+        -- 空 Provider 保留全部 Provider；Provider 列表本身不应用此筛选。
+        { kind = "string", value = input.providerId or "" },
     }
     -- query binds one shared filter contract to every dashboard projection.
     -- query 为每个仪表盘投影绑定同一个筛选契约。
@@ -664,13 +667,15 @@ FROM provider_usage_meta WHERE meta_key = 'aggregate_revision';
     -- sql 是固定源码 SQL；返回系统数据库中的已解码行。
     local function query(sql)
         return sqlite_query([[
-WITH filtered_attempts AS (
+WITH scoped_attempts AS (
     SELECT * FROM provider_usage_attempts_v3
     WHERE terminal_at_ms >= CASE WHEN ?10 > 0 THEN ?10
       ELSE CAST(strftime('%s', date('now', 'localtime', '-' || (?1 - 1) || ' days'), 'utc') AS INTEGER) * 1000 END
       AND (?11 = 0 OR terminal_at_ms <= ?11)
       AND (?2 = '' OR consumer_id = ?2)
       AND (?5 = '' OR instr(lower(mapped_model), lower(?5)) > 0)
+), filtered_attempts AS (
+    SELECT * FROM scoped_attempts WHERE ?12 = '' OR provider_id = ?12
 ), filtered_daily AS (
     SELECT calendar_date, provider_id, service_entry_id, consumer_id, operation, mapped_model AS model_id,
       COUNT(*) AS attempt_count,
@@ -702,14 +707,17 @@ WITH filtered_attempts AS (
 ), recent_model_attempts AS (
     SELECT * FROM timed_attempts
     WHERE ?9 = 'all'
-       OR (?9 = 'llm' AND operation IN ('conversation', 'conversation_respond', 'compact', 'warmup'))
+       OR (?9 = 'llm' AND operation IN ('conversation', 'conversation_respond', 'compact', 'warmup')
+           AND consumer_id NOT IN ('vulcan-code-permission-judge', 'vulcan-code-permission-review'))
        OR (?9 = 'embedding' AND operation = 'embedding_create')
        OR (?9 = 'rerank' AND operation = 'rerank_documents')
+       OR (?9 = 'decision' AND (operation = 'decision_evaluate'
+           OR consumer_id IN ('vulcan-code-permission-judge', 'vulcan-code-permission-review')))
 ), page_offsets AS (SELECT ?3 AS daily_offset, ?4 AS recent_offset, ?6 AS sort_order, ?7 AS priced_models, ?8 AS cost_offset)
 ]] .. sql, filter_params)
     end
     local model_overrides = config.modelOverrides
-    local daily = (view == "all" or view == "details" or view == "daily-page" or view == "detail-pages") and query([[
+    local daily = (view == "all" or view == "details" or view == "providers" or view == "daily-page" or view == "detail-pages") and query([[
 , daily_timing AS (
     SELECT provider_id, service_entry_id, consumer_id, operation, mapped_model AS model_id,
       AVG(request_duration_ms) AS requestDurationMs,
@@ -804,7 +812,7 @@ SELECT calendar_date AS date, seriesKey, label, value
 FROM projected
 ORDER BY date, seriesKey;
 ]]) or vulcan.json.array()
-    local recent_attempts = (view == "all" or view == "details" or view == "recent-page" or view == "detail-pages") and query([[
+    local recent_attempts = (view == "all" or view == "details" or view == "recent" or view == "recent-page" or view == "detail-pages") and query([[
 SELECT attempts.attempt_id AS attemptId, attempts.consumer_id AS consumerId,
        attempts.operation, attempts.provider_id AS providerId,
        attempts.service_entry_id AS serviceEntryId,
@@ -899,6 +907,17 @@ LIMIT 500;
         account.payload = decode_json_text(account.payloadJson, "payload_json")
         account.payloadJson = nil
     end
+    -- providers lists every Provider in the scope without the Provider filter, so the selector keeps its options.
+    -- providers 列出不含 Provider 筛选的作用域内全部 Provider，使选择器保留全部选项。
+    local providers = (view == "all" or view == "providers") and query([[
+SELECT provider_id AS providerId, COUNT(*) AS attempts,
+       SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) AS successes,
+       COALESCE(SUM(total_tokens), 0) AS totalTokens
+FROM scoped_attempts
+GROUP BY provider_id
+ORDER BY attempts DESC, provider_id
+LIMIT 200;
+]]) or nil
     local meta_rows = query([[
 SELECT CAST(strftime('%s', 'now') AS INTEGER) * 1000 AS generatedAtMs,
        (SELECT COUNT(*) FROM range_usage) AS dailyCount,
@@ -993,7 +1012,7 @@ FROM provider_usage_meta WHERE meta_key = 'aggregate_revision';
         incompleteRows = incomplete_rows,
         unpricedRows = meta.dailyCount - priced_rows - incomplete_rows,
     }}
-    return {
+    local dashboard = {
         generatedAtMs = meta.generatedAtMs,
         view = view,
         schemaRevision = meta.schemaRevision,
@@ -1017,6 +1036,8 @@ FROM provider_usage_meta WHERE meta_key = 'aggregate_revision';
         recentAttempts = recent_attempts,
         accounts = accounts,
     }
+    if providers then dashboard.providers = providers end
+    return dashboard
 end
 
 -- Return the current plugin-owned model pricing overrides and default model list.

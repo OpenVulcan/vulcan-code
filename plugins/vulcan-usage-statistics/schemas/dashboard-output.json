@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
-    "view": { "enum": ["all", "overview", "details", "maintenance", "daily-page", "recent-page", "detail-pages"] },
+    "view": { "enum": ["all", "overview", "details", "providers", "recent", "maintenance", "daily-page", "recent-page", "detail-pages"] },
     "generatedAtMs": { "type": "integer" },
     "schemaRevision": { "type": "integer", "minimum": 0 },
     "aggregateRevision": { "type": "integer", "minimum": 0 },
@@ -63,6 +63,11 @@
       "type": "array",
       "maxItems": 500,
       "items": { "$ref": "#/$defs/accountSummary" }
+    },
+    "providers": {
+      "type": "array",
+      "maxItems": 200,
+      "items": { "$ref": "#/$defs/providerSummary" }
     }
   },
   "required": ["view", "generatedAtMs", "aggregateRevision"],
@@ -71,7 +76,9 @@
       "then": { "required": ["daily", "dailyCount"] } },
     { "if": { "properties": { "view": { "enum": ["recent-page", "detail-pages"] } } },
       "then": { "required": ["recentAttempts", "recentCount"] } },
-    { "if": { "properties": { "view": { "enum": ["all", "overview", "details", "maintenance"] } } },
+    { "if": { "properties": { "view": { "enum": ["all", "providers"] } } },
+      "then": { "required": ["providers"] } },
+    { "if": { "properties": { "view": { "enum": ["all", "overview", "details", "providers", "recent", "maintenance"] } } },
       "then": { "required": [
     "view",
     "generatedAtMs",
@@ -98,6 +105,17 @@
     },
     "nullableString": {
       "type": ["string", "null"]
+    },
+    "providerSummary": {
+      "type": "object",
+      "properties": {
+        "providerId": { "type": "string", "minLength": 1 },
+        "attempts": { "type": "integer", "minimum": 0 },
+        "successes": { "type": "integer", "minimum": 0 },
+        "totalTokens": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["providerId", "attempts", "successes", "totalTokens"],
+      "additionalProperties": false
     },
     "pricingMatchStatus": {
       "type": "string",

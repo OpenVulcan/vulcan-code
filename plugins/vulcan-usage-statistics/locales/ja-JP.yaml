@@ -91,7 +91,15 @@ messages:
   status.unknown: 統計の稼働状態は不明です
   sections.label: 統計のセクション
   sections.overview: 概要
-  sections.details: 使用量の詳細
+  sections.providers: "プロバイダー別"
+  sections.recent: "最近のリクエスト"
+  providers.label: "プロバイダー"
+  providers.all: "すべてのプロバイダー"
+  cost.reference: "参考費用"
+  recent.group.decision: "判定モデル"
+  consumer.name.vulcan-code-permission-judge: "判定モデル"
+  consumer.name.vulcan-code-permission-review: "判定の二次審査"
+  operation.decision_evaluate: "判定評価"
   sections.pricing: モデル料金
   sections.maintenance: メンテナンス
   range.label: 期間

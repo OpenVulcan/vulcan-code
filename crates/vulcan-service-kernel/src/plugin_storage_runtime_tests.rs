@@ -229,6 +229,11 @@ fn real_plugin_empty_database_stage_measurements() {
         root.join("plugin_state"),
         root.join("plugin_runtime"),
     );
+    // Plugin actions execute only through the manager-owned formal runtime.
+    // 插件 Action 只能通过管理器持有的正式运行时执行。
+    manager
+        .initialize_formal_runtime(vulcan_plugin_runtime::VulcanPluginRuntimeSettings::default())
+        .unwrap();
     let vldb = Arc::new(TimedVldb {
         service: PluginVldbService::new(host.clone(), runtime.handle().clone()),
         timings: Mutex::new(Vec::new()),
@@ -335,7 +340,7 @@ WITH RECURSIVE samples(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM samples WHERE
 INSERT INTO provider_usage_attempts_v3 (
  attempt_id, logical_request_id, attempt_index, consumer_id, operation, provider_id,
  service_entry_id, connection_id, protocol_profile_id, requested_model, mapped_model,
- dispatched_at_ms, first_token_at_ms, terminal_at_ms, status, dispatched, semantic_output_observed,
+ dispatched_at_ms, first_token_at_ms, terminal_at_ms, status, dispatched, dispatched_known, semantic_output_observed,
  usage_availability, input_tokens, uncached_input_tokens, cache_read_tokens, cache_write_tokens,
  output_tokens, total_tokens, calendar_date)
 SELECT 'sample-' || n, 'request-' || n, 0, 'fixture-' || (n % 3), 'conversation',
@@ -344,7 +349,7 @@ SELECT 'sample-' || n, 'request-' || n, 0, 'fixture-' || (n % 3), 'conversation'
  (unixepoch('now') - (n % 28) * 86400) * 1000 - 1000,
  (unixepoch('now') - (n % 28) * 86400) * 1000 - 500,
  (unixepoch('now') - (n % 28) * 86400) * 1000,
- CASE WHEN n % 10 = 0 THEN 'failed' ELSE 'succeeded' END, 1, 1,
+ CASE WHEN n % 10 = 0 THEN 'failed' ELSE 'succeeded' END, 1, 1, 1,
  'final', 1000, 800, 200, 0, 200, 1200, date('now', '-' || (n % 28) || ' days') FROM samples
 "#,
                             [rows],
@@ -354,7 +359,7 @@ SELECT 'sample-' || n, 'request-' || n, 0, 'fixture-' || (n % 3), 'conversation'
                 },
             ))
             .unwrap();
-        for view in ["overview", "details"] {
+        for view in ["overview", "providers", "recent"] {
             vldb.timings.lock().unwrap().clear();
             let started = Instant::now();
             let result = runtime

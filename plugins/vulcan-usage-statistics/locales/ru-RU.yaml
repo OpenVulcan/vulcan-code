@@ -91,7 +91,15 @@ messages:
   status.unknown: Состояние статистики неизвестно
   sections.label: Разделы статистики
   sections.overview: Обзор
-  sections.details: Подробности использования
+  sections.providers: "По провайдерам"
+  sections.recent: "Последние запросы"
+  providers.label: "Провайдеры"
+  providers.all: "Все провайдеры"
+  cost.reference: "Справочная стоимость"
+  recent.group.decision: "Модели решений"
+  consumer.name.vulcan-code-permission-judge: "Модель решений"
+  consumer.name.vulcan-code-permission-review: "Повторная проверка решения"
+  operation.decision_evaluate: "Оценка решения"
   sections.pricing: Цены моделей
   sections.maintenance: Обслуживание
   range.label: Период

@@ -221,6 +221,8 @@ impl VulcanPluginVldbService for RecordingVldbService {
             ])
         } else if sql.contains("AS resultJson") {
             json!([{ "resultJson": "{\"totalCount\":1,\"models\":[{\"modelId\":\"private-model\",\"attempts\":1}]}" }])
+        } else if sql.contains("COUNT(*) AS attempts") {
+            json!([{ "providerId": "provider-1", "attempts": 3, "successes": 3, "totalTokens": 37 }])
         } else if sql.contains("AS attempts") {
             json!([{
                 "attempts": 3, "successes": 3, "reported": 3, "totalTokens": 37,
@@ -359,6 +361,8 @@ fn bundled_usage_statistics_plugin_loads_through_system_vldb_bridge() {
     assert_eq!(dashboard["summary"]["costs"][0]["unpricedRows"], 1);
     assert_eq!(dashboard["summary"]["costs"][0]["incompleteRows"], 1);
     assert_eq!(dashboard["recentAttempts"][0]["attemptId"], "attempt-1");
+    assert_eq!(dashboard["providers"][0]["providerId"], "provider-1");
+    assert_eq!(dashboard["providers"][0]["attempts"], 3);
     assert_eq!(
         dashboard["recentAttempts"][0]["estimatedCost"],
         "0.00021025"
@@ -471,19 +475,23 @@ fn bundled_usage_statistics_plugin_loads_through_system_vldb_bridge() {
     assert_eq!(clear_result["clearedTokenCount"], 35);
     assert_eq!(clear_result["aggregateRevision"], 8);
     let calls = vldb.calls.lock().expect("lock recorded VLDB calls");
-    // Each of two dashboard calls adds a start/end revision read; the final call remains the guarded clear write.
-    // 两次仪表盘调用各增加开始与结束版本读取；最后一项仍为受保护的清理写入。
-    assert_eq!(calls.len(), 24);
-    assert!(calls[..23].iter().all(|call| {
+    // recorded_calls is the authorized call total that a later capability withdrawal must leave unchanged.
+    // recorded_calls 是授权期间的调用总数，后续撤销能力后必须保持不变。
+    let recorded_calls = calls.len();
+    // Each of two dashboard calls adds a start/end revision read and a Provider list read; the final call remains
+    // the guarded clear write.
+    // 两次仪表盘调用各增加开始与结束版本读取及 Provider 列表读取；最后一项仍为受保护的清理写入。
+    assert_eq!(calls.len(), 26);
+    assert!(calls[..25].iter().all(|call| {
         call.plugin_id == "vulcan-usage-statistics"
             && call.operation == VulcanPluginVldbOperation::SqliteQuery
             && call.payload["binding"] == "system.statistics"
     }));
     assert_eq!(
-        calls[23].operation,
+        calls[25].operation,
         VulcanPluginVldbOperation::SqliteExecute
     );
-    assert_eq!(calls[23].payload["binding"], "system.statistics");
+    assert_eq!(calls[25].payload["binding"], "system.statistics");
     drop(calls);
     // unauthorizedSnapshot removes only the VLDB capability while preserving the enabled runtime lease.
     // unauthorizedSnapshot 仅移除 VLDB 能力，同时保留已启用的运行时租约。
@@ -538,7 +546,7 @@ fn bundled_usage_statistics_plugin_loads_through_system_vldb_bridge() {
             .lock()
             .expect("no call after permission withdrawal")
             .len(),
-        24
+        recorded_calls
     );
 }
 

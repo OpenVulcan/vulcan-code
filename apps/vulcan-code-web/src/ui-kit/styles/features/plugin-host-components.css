@@ -66,7 +66,6 @@
 
 /* Usage statistics range dialog: shared Input and Checkbox controls in a compact two-column draft. */
 /* 用量统计时间范围对话框：在紧凑双列草稿中使用共享 Input 与 Checkbox 控件。 */
-.plugin-statistics-range-dialog { width: min(560px, calc(100vw - 32px)); }
 .plugin-statistics-range-presets { display: flex; flex-wrap: wrap; gap: calc(var(--vk-u) * 2); }
 .plugin-statistics-range-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: calc(var(--vk-u) * 3); }
 .plugin-statistics-range-fields label { display: grid; gap: calc(var(--vk-u) * 2); min-width: 0; font-size: var(--vk-fs-sm); color: var(--vk-ink-2); }
@@ -297,6 +296,24 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
   gap: calc(var(--vk-u) * 4);
+}
+
+/* The Provider tab keeps a fixed selector column beside its statistics and stacks on narrow panels. */
+/* 供应商分类在统计旁保留固定选择列，窄面板时上下堆叠。 */
+.plugin-statistics-provider-layout {
+  display: grid;
+  grid-template-columns: minmax(160px, 220px) minmax(0, 1fr);
+  gap: calc(var(--vk-u) * 4);
+  align-items: start;
+}
+.plugin-statistics-provider-list { display: grid; gap: var(--vk-u); position: sticky; top: 0; }
+.plugin-statistics-provider-option { justify-content: space-between; width: 100%; min-width: 0; }
+.plugin-statistics-provider-option > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-statistics-provider-option > small { color: var(--vk-ink-2); font-variant-numeric: tabular-nums; }
+.plugin-statistics-provider-main { display: grid; gap: calc(var(--vk-u) * 4); min-width: 0; }
+@media (max-width: 720px) {
+  .plugin-statistics-provider-layout { grid-template-columns: minmax(0, 1fr); }
+  .plugin-statistics-provider-list { position: static; }
 }
 .plugin-statistics-cost { display: grid; justify-items: start; gap: var(--vk-u); }
 .plugin-statistics-cost-value { font-size: clamp(18px, 2vw, 25px); font-weight: 650; line-height: 1.3; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }

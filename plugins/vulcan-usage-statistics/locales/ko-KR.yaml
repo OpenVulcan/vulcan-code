@@ -91,7 +91,15 @@ messages:
   status.unknown: 통계 상태를 알 수 없음
   sections.label: 통계 영역
   sections.overview: 개요
-  sections.details: 사용량 상세
+  sections.providers: "공급자별"
+  sections.recent: "최근 요청"
+  providers.label: "공급자"
+  providers.all: "모든 공급자"
+  cost.reference: "참고 비용"
+  recent.group.decision: "판정 모델"
+  consumer.name.vulcan-code-permission-judge: "판정 모델"
+  consumer.name.vulcan-code-permission-review: "판정 2차 검토"
+  operation.decision_evaluate: "판정 평가"
   sections.pricing: 모델 가격
   sections.maintenance: 유지 관리
   range.label: 시간 범위

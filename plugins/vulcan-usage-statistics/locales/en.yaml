@@ -91,7 +91,15 @@ messages:
   status.unknown: Statistics health is unknown
   sections.label: Statistics sections
   sections.overview: Overview
-  sections.details: Usage details
+  sections.providers: "Provider breakdown"
+  sections.recent: "Recent requests"
+  providers.label: "Providers"
+  providers.all: "All providers"
+  cost.reference: "Reference cost"
+  recent.group.decision: "Decision models"
+  consumer.name.vulcan-code-permission-judge: "Decision model"
+  consumer.name.vulcan-code-permission-review: "Decision review"
+  operation.decision_evaluate: "Decision evaluation"
   sections.pricing: Model pricing
   sections.maintenance: Maintenance
   range.label: Time range

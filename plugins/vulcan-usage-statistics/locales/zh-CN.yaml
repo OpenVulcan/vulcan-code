@@ -186,7 +186,15 @@ messages:
   privacy: Vulcan 只将 Token 事实写入独立系统数据库。本原生插件直接查询和清理该数据库，并在每次查询时基于插件自有价目表重新计算参考费用。
   sections.label: 统计区域
   sections.overview: 概览
-  sections.details: 用量明细
+  sections.providers: "供应商分类"
+  sections.recent: "最近请求"
+  providers.label: "供应商"
+  providers.all: "全部供应商"
+  cost.reference: "参考费用"
+  recent.group.decision: "决策模型"
+  consumer.name.vulcan-code-permission-judge: "决策模型"
+  consumer.name.vulcan-code-permission-review: "决策二审"
+  operation.decision_evaluate: "决策评估"
   sections.pricing: 模型定价
   sections.maintenance: 维护
   range.label: 时间范围

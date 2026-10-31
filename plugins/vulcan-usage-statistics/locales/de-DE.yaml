@@ -91,7 +91,15 @@ messages:
   status.unknown: Statistikzustand unbekannt
   sections.label: Statistikbereiche
   sections.overview: Übersicht
-  sections.details: Nutzungsdetails
+  sections.providers: "Nach Anbieter"
+  sections.recent: "Letzte Anfragen"
+  providers.label: "Anbieter"
+  providers.all: "Alle Anbieter"
+  cost.reference: "Referenzkosten"
+  recent.group.decision: "Entscheidungsmodelle"
+  consumer.name.vulcan-code-permission-judge: "Entscheidungsmodell"
+  consumer.name.vulcan-code-permission-review: "Entscheidungsprüfung"
+  operation.decision_evaluate: "Entscheidungsbewertung"
   sections.pricing: Modellpreise
   sections.maintenance: Wartung
   range.label: Zeitraum

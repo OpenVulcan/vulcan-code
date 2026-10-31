@@ -142,7 +142,7 @@ const pricingDirectory = { currency: "USD", totalCount: 1, models: [{ modelId: "
 // panel is the mounted plugin fixture; returns after the directory page has resolved.
 // panel 是已挂载插件夹具；目录分页完成后返回。
 async function openPricing(panel) {
-  await React.act(async () => panel.container.querySelector("nav button:nth-child(3)").click());
+  await React.act(async () => panel.container.querySelector("nav button:nth-child(4)").click());
   await React.act(async () => new Promise((resolve) => window.setTimeout(resolve, 250)));
 }
 
@@ -185,7 +185,7 @@ test("French host locale formats percentage spacing, cache share and translated 
   // messages is the declared host translation projection, independent from plugin calculations.
   // messages 为声明的宿主译文投影，与插件计算相互独立。
   const messages = {
-    "sections.overview": "Vue d’ensemble", "sections.details": "Détails d’utilisation",
+    "sections.overview": "Vue d’ensemble", "sections.providers": "Par fournisseur",
     "tokens.composition": "Entrée {{input}} · Sortie {{output}}",
     "heatmap.tooltip": "{{date}} : {{value}} tokens · {{requests}} requêtes · {{successRate}} de réussite · {{model}}",
   };
@@ -195,7 +195,7 @@ test("French host locale formats percentage spacing, cache share and translated 
   }), false, "fr-FR", messages);
   try {
     assert.match(panel.container.textContent, /Vue d’ensemble/);
-    assert.match(panel.container.textContent, /Détails d’utilisation/);
+    assert.match(panel.container.textContent, /Par fournisseur/);
     const bar = panel.container.querySelector('.plugin-statistics-token-bar[role="img"]');
     assert.equal(bar.getAttribute("aria-label"), "Entrée 80,0\u00a0% · Sortie 20,0\u00a0%");
     assert.equal(bar.children[0].style.width, "80%");
@@ -228,7 +228,7 @@ test("every host locale renders real translations, percentage measurements and s
     }), false, locale, catalog.messages);
     try {
       assert.match(panel.container.textContent, new RegExp(catalog.messages["sections.overview"].replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), locale);
-      assert.ok([...panel.container.querySelectorAll("nav button")].some((button) => button.textContent === catalog.messages["sections.details"]), locale);
+      assert.ok([...panel.container.querySelectorAll("nav button")].some((button) => button.textContent === catalog.messages["sections.providers"]), locale);
       // percent keeps the locale's exact whitespace and suffix in accessibility labels.
       // percent 在无障碍标签中保留语言精确的空白与后缀。
       const percent = new Intl.NumberFormat(locale, { style: "percent", minimumFractionDigits: 1, maximumFractionDigits: 1 });
@@ -326,7 +326,7 @@ test("price-save completion refreshes the currently selected dashboard scope", a
     await React.act(async () => finishSave());
     assert.equal(reads.at(-1).startAtMs, presetTimeRange(7).startAtMs);
     assert.equal(typeof reads.at(-1).endAtMs, "number");
-    assert.equal(reads.at(-1).view, "details");
+    assert.equal(reads.at(-1).view, "providers");
     assert.match(panel.container.textContent, /Revision 7\b/);
     assert.doesNotMatch(panel.container.textContent, /Revision 30\b/);
   } finally { await panel.close(); }
@@ -390,7 +390,7 @@ test("used-price directory reads and paginates the full server filter", async ()
       attempts: 1, source: "unpriced", prices: null,
     }] });
   });
-  await React.act(async () => panel.container.querySelector("nav button:nth-child(3)").click());
+  await React.act(async () => panel.container.querySelector("nav button:nth-child(4)").click());
   await React.act(async () => new Promise((resolve) => window.setTimeout(resolve, 250)));
   await React.act(async () => {
     const select = panel.container.querySelector('select[aria-label="Price filter"]');
@@ -502,5 +502,26 @@ test("price save rejects duplicate events and retains failed exact decimals", as
     assert.equal(input.value, "0.12345678901234567890");
     assert.equal(save.disabled, false);
     assert.match(panel.container.textContent, /isolated write rejected/);
+  } finally { await panel.close(); }
+});
+
+// Provider selection narrows only the Provider tab; recent attempts never inherit it.
+// Provider 选择只收窄供应商分类，最近请求不会继承该筛选。
+test("provider selection scopes the provider tab without narrowing recent attempts", async () => {
+  const reads = [];
+  const panel = await mount((action, args) => {
+    if (action === "settings-get") return Promise.resolve(settings);
+    reads.push(args);
+    return Promise.resolve({ ...dashboard, providers: [{ providerId: "provider-a", attempts: 3, successes: 3, totalTokens: 10 }] });
+  });
+  try {
+    await React.act(async () => panel.container.querySelector("nav button:nth-child(2)").click());
+    assert.equal(reads.at(-1).view, "providers");
+    assert.equal(reads.at(-1).providerId, "");
+    await React.act(async () => panel.container.querySelector('button[aria-pressed="false"]').click());
+    assert.equal(reads.at(-1).providerId, "provider-a");
+    await React.act(async () => panel.container.querySelector("nav button:nth-child(3)").click());
+    assert.equal(reads.at(-1).view, "recent");
+    assert.equal("providerId" in reads.at(-1), false);
   } finally { await panel.close(); }
 });

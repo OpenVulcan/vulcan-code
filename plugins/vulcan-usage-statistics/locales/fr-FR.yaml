@@ -91,7 +91,15 @@ messages:
   status.unknown: État des statistiques inconnu
   sections.label: Sections des statistiques
   sections.overview: Vue d’ensemble
-  sections.details: Détails d’utilisation
+  sections.providers: "Par fournisseur"
+  sections.recent: "Requêtes récentes"
+  providers.label: "Fournisseurs"
+  providers.all: "Tous les fournisseurs"
+  cost.reference: "Coût indicatif"
+  recent.group.decision: "Modèles de décision"
+  consumer.name.vulcan-code-permission-judge: "Modèle de décision"
+  consumer.name.vulcan-code-permission-review: "Révision de décision"
+  operation.decision_evaluate: "Évaluation de décision"
   sections.pricing: Prix des modèles
   sections.maintenance: Maintenance
   range.label: Période
