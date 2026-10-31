@@ -1,4 +1,5 @@
 import type {
+  ApiPurposeKind,
   ConversationEventBody,
   ConversationEventSummary,
 } from "./conversation-event-window-store";
@@ -36,8 +37,8 @@ export interface ConversationContinueCandidateV1 {
   api_stats_event_revision: number;
 }
 
-/** Selects the only continuation candidate authorized by the latest physical API boundary.
- * 选择最后一个物理 API 边界授权的唯一 Continue 候选。
+/** Selects the continuation candidate authorized by the latest business API after all physical work stops.
+ * 全部物理请求停止后，选择最近业务 API 授权的 Continue 候选。
  *
  * @param snapshot complete controller window including HostOnly events.
  *                 包含 HostOnly 事件的完整控制器窗口。
@@ -52,41 +53,53 @@ export function selectConversationContinueCandidateV1(
   const openTurnId = snapshot.open_turn_id;
   if (owner === null || openTurnId === null) return null;
 
-  // latestApiCallId tracks only the last physical ApiStarted boundary in the open Turn.
-  // latestApiCallId 只跟踪开放 Turn 中最后一个物理 ApiStarted 边界。
+  // latestApiCallId includes auxiliaries because every active physical request remains exclusive.
+  // latestApiCallId 包含辅助请求，因为每个活动物理请求都仍保持排他。
   let latestApiCallId: number | null = null;
-  // terminalStats belongs only to latestApiCallId and is reset by every newer ApiStarted.
-  // terminalStats 只属于 latestApiCallId，并在每个更新 ApiStarted 出现时重置。
+  // latestApiIsTerminal prevents a business candidate from bypassing an active auxiliary request.
+  // latestApiIsTerminal 防止业务候选绕过仍活动的辅助请求。
+  let latestApiIsTerminal = false;
+  // latestBusinessApiCallId mirrors Core: auxiliary requests cannot grant or revoke business Continue.
+  // latestBusinessApiCallId 对齐 Core：辅助请求不能授予或撤销业务 Continue。
+  let latestBusinessApiCallId: number | null = null;
+  // terminalStats retains only the exact latest business terminal, never an auxiliary terminal.
+  // terminalStats 只保留精确的最近业务终态，不采用辅助终态。
   let terminalStats: ApiStatsSummary | null = null;
   for (const summary of snapshot.events) {
     if (summary.turn_id !== openTurnId) continue;
     if (summary.event.kind === "api_started") {
       latestApiCallId = summary.event.api_call_id;
-      terminalStats = null;
+      latestApiIsTerminal = false;
+      if (isBusinessApiPurpose(summary.event.purpose)) {
+        latestBusinessApiCallId = summary.event.api_call_id;
+        terminalStats = null;
+      }
       continue;
     }
-    if (
-      summary.event.kind === "api_stats"
-      && latestApiCallId !== null
-      && summary.event.api_call_id === latestApiCallId
-    ) {
-      terminalStats = summary as ApiStatsSummary;
+    if (summary.event.kind === "api_stats") {
+      if (summary.event.api_call_id === latestApiCallId) {
+        latestApiIsTerminal = isTerminalApiStatsStatus(summary.event.status);
+      }
+      if (summary.event.api_call_id === latestBusinessApiCallId) {
+        terminalStats = summary as ApiStatsSummary;
+      }
     }
   }
 
   if (
-    terminalStats === null
+    !latestApiIsTerminal
+    || terminalStats === null
     || terminalStats.event.continuation_eligibility !== "allowed"
     || !isTerminalApiStatsStatus(terminalStats.event.status)
   ) {
     return null;
   }
 
-  // A later continuation control consumes the visible candidate before the next API starts.
-  // 后续 Continue 控制事件会在下一次 API 启动前消费当前可见候选。
+  // Auxiliary work does not supersede the business boundary or undo an admitted Continue action.
+  // 辅助工作不会替代业务边界，也不能撤销已准入的 Continue 动作。
   for (const summary of snapshot.events) {
     if (summary.seq <= terminalStats.seq || summary.turn_id !== openTurnId) continue;
-    if (summary.event.kind === "api_started") return null;
+    if (summary.event.kind === "api_started" && isBusinessApiPurpose(summary.event.purpose)) return null;
     if (
       summary.event.kind === "execution_control"
       && (
@@ -116,6 +129,16 @@ export function selectConversationContinueCandidateV1(
     api_stats_seq: terminalStats.seq,
     api_stats_event_revision: terminalStats.event_revision,
   };
+}
+
+/** Classifies the canonical purpose using the same business boundary as Session Core.
+ * 使用与 Session Core 相同的业务边界划分规范请求用途。
+ * @param purpose the declared purpose from ApiStarted, never inferred from status or model.
+ *                ApiStarted 声明的用途，绝不从状态或模型推断。
+ * @returns false for compaction and question execution, which cannot authorize business Continue.
+ *          压缩与答疑返回 false，因为它们不能授权业务 Continue。 */
+function isBusinessApiPurpose(purpose: ApiPurposeKind): boolean {
+  return purpose !== "compaction" && purpose !== "question_execution";
 }
 
 /** Returns whether one ApiStats status is terminal rather than an in-flight snapshot.

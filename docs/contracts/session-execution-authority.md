@@ -10,6 +10,8 @@
 - 服务启动和打开普通历史会话不执行旧任务，包括此前失败、中断以及输入已保存但首个请求尚未发出的任务。
 - 冷加载可将失去进程所有者的请求投影为中断；该投影必须先持久化再发布会话句柄，不能附带供应商调用。
 - 用户点击继续，通过唯一继续动作标识、派发互斥及原请求的继续策略取得许可；禁止继续的错误不能被后台恢复绕过。
+- 继续入口只采用最近业务 API 的持久终态。压缩与协作答疑终态不能授予或撤销业务继续许可；任何仍在执行的
+  物理请求都保持排他。前端使用同一边界，避免把压缩中断误判为业务可继续，并将输入区的新消息错误改送 Continue。
 - 用户发送新任务，在确认旧执行者不存在后，可原子收口遗留回合并接纳新输入；不能仅因缺少旧回合结束标记而永久拒绝。
 - 当前进程内正常的用户队列、方向引导、目标续跑及协作消息，使用各自的明确来源和准入入口。不得用“扫描所有开放回合”补偿任何特定来源的唤醒遗漏。
 - 协作启动恢复可以依据具体消息、问题或子执行的持久凭据，按既有契约恢复该项工作或补齐结果投递；这不授予任意普通历史主任务新的执行许可。仅修复子任务回执不需要创建主业务钩子或派发主任务。
@@ -83,6 +85,7 @@
 | 冷加载与中断持久化 | `crates/vulcan-service-kernel/src/session_v1_lifecycle.rs` 中的 `get_or_load_session_v1` |
 | 显式继续动作 | `crates/vulcan-service-kernel/src/conversation_submission.rs` 中的 `service_continue_conversation_with_submission` |
 | 已失去执行者后的新输入 | `crates/vulcan-session-core/src/v1/document/recovery.rs` 中的 `submit_root_input_after_execution_ended` |
+| 辅助中断后的继续入口与新输入 | `apps/vulcan-code-web/src/service/conversation-continuation-selector-v1.test.ts`、`crates/vulcan-session-core/src/v1/document/document_tests/inactive_admission.rs` |
 | 六种普通历史状态及重复扫描 | `crates/vulcan-service-kernel/src/agent_collaboration/session_wait/tests/task_messages/recovery/main_business.rs` |
 | 子树结果恢复不派发主任务 | `crates/vulcan-service-kernel/src/agent_collaboration/session_wait/tests/task_messages/recovery/embedded_tree.rs` |
 

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { selectConversationContinueCandidateV1 } from "./conversation-continuation-selector-v1";
 import type { ConversationEventWindowControllerSnapshot } from "./conversation-event-window-controller";
 import type {
+  ApiPurposeKind,
   ConversationEventBody,
   ConversationEventSummary,
 } from "./conversation-event-window-store";
@@ -34,18 +35,28 @@ function summary(
 }
 
 /** Builds one HostOnly physical API start boundary.
- * 构建一条 HostOnly 物理 API 起始边界。 */
-function apiStarted(apiCallId: number): ConversationEventBody {
+ * 构建一条 HostOnly 物理 API 起始边界。
+ * @param apiCallId exact physical request identity; purpose distinguishes business from auxiliary work.
+ *                 精确物理请求身份；purpose 区分业务与辅助请求。
+ * @returns the canonical start event used by selector fixtures.
+ *          选择器夹具使用的规范起始事件。 */
+function apiStarted(apiCallId: number, purpose: ApiPurposeKind = "main_generation"): ConversationEventBody {
   return {
     kind: "api_started",
     api_call_id: apiCallId,
-    purpose: "main_generation",
+    purpose,
     request: { provider: "provider", model: "model" },
   };
 }
 
 /** Builds one typed API statistic with an explicit continuation policy.
- * 构建一条携带显式 Continue 策略的强类型 API 统计。 */
+ * 构建一条携带显式 Continue 策略的强类型 API 统计。
+ * @param apiCallId physical identity; eligibility, status and endReason freeze its terminal policy.
+ *                 物理身份；eligibility、status 与 endReason 固定其终态策略。
+ * @param purpose canonical purpose of the matching request start.
+ *                对应请求起始事件的规范用途。
+ * @returns a canonical statistic paired with that physical request.
+ *          与该物理请求配对的规范统计。 */
 function apiStats(
   apiCallId: number,
   eligibility: "allowed" | "forbidden",
@@ -53,11 +64,12 @@ function apiStats(
   endReason: NonNullable<ApiStatsEventBody["end_reason"]> = status === "interrupted"
     ? "user_interrupted"
     : "completed_successfully",
+  purpose: ApiPurposeKind = "main_generation",
 ): ConversationEventBody {
   return {
     kind: "api_stats",
     api_call_id: apiCallId,
-    purpose: "main_generation",
+    purpose,
     provider: "provider",
     model: "model",
     usage: {},
@@ -182,6 +194,81 @@ describe("V1 conversation continuation selector", () => {
       api_stats_event_revision: 2,
     });
   });
+
+  it.each(["compaction", "question_execution"] as const)(
+    "does not let interrupted %s authorize Continue after a completed business request",
+    (purpose) => {
+      // The auxiliary interruption must leave new composer input on the ordinary root-input path.
+      // 辅助中断必须让新的输入区消息沿普通根输入路径发送。
+      const stoppedAuxiliary = snapshot([
+        summary(1, apiStarted(11)),
+        summary(2, apiStats(11, "forbidden", "completed")),
+        summary(3, apiStarted(12, purpose)),
+        summary(4, apiStats(12, "allowed", "interrupted", "user_interrupted", purpose)),
+      ]);
+
+      expect(selectConversationContinueCandidateV1(stoppedAuxiliary)).toBeNull();
+    },
+  );
+
+  it.each(["compaction", "question_execution"] as const)(
+    "preserves the business continuation identity after terminal %s",
+    (purpose) => {
+      // Auxiliary completion cannot revoke an otherwise recoverable business boundary.
+      // 辅助请求完成不能撤销原本可恢复的业务边界。
+      const completedAuxiliary = snapshot([
+        summary(1, apiStarted(11)),
+        summary(2, apiStats(11, "allowed"), 3),
+        summary(3, apiStarted(12, purpose)),
+        summary(4, apiStats(12, "forbidden", "completed", "completed_successfully", purpose)),
+      ]);
+
+      expect(selectConversationContinueCandidateV1(completedAuxiliary)).toMatchObject({
+        api_call_id: 11,
+        api_stats_seq: 2,
+        api_stats_event_revision: 3,
+      });
+    },
+  );
+
+  it.each(["compaction", "question_execution"] as const)(
+    "keeps active %s exclusive and cannot infer a missing business boundary",
+    (purpose) => {
+      // An auxiliary start still owns the physical execution until its matching terminal arrives.
+      // 辅助起始事件在匹配终态到达之前仍拥有物理执行权。
+      const activeAuxiliary = snapshot([
+        summary(1, apiStarted(11)),
+        summary(2, apiStats(11, "allowed")),
+        summary(3, apiStarted(12, purpose)),
+      ]);
+      // A window containing only auxiliary work provides no business continuation authority.
+      // 仅包含辅助工作的窗口不提供业务继续许可。
+      const auxiliaryOnly = snapshot([
+        summary(1, apiStarted(12, purpose)),
+        summary(2, apiStats(12, "allowed", "interrupted", "user_interrupted", purpose)),
+      ]);
+
+      expect(selectConversationContinueCandidateV1(activeAuxiliary)).toBeNull();
+      expect(selectConversationContinueCandidateV1(auxiliaryOnly)).toBeNull();
+    },
+  );
+
+  it.each(["compaction", "question_execution"] as const)(
+    "does not revive a consumed Continue action after interrupted %s",
+    (purpose) => {
+      // A preparation-time auxiliary request cannot undo the existing Continue admission.
+      // 准备阶段的辅助请求不能撤销既有 Continue 准入。
+      const consumed = snapshot([
+        summary(1, apiStarted(11)),
+        summary(2, apiStats(11, "allowed")),
+        summary(3, { kind: "execution_control", control_kind: "turn_resumed", api_call_id: 11 }),
+        summary(4, apiStarted(12, purpose)),
+        summary(5, apiStats(12, "allowed", "interrupted", "user_interrupted", purpose)),
+      ]);
+
+      expect(selectConversationContinueCandidateV1(consumed)).toBeNull();
+    },
+  );
 
   it.each(["turn_continue_requested", "turn_resumed"] as const)(
     "consumes an allowed candidate after %s",
