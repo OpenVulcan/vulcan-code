@@ -1288,6 +1288,47 @@ async fn apply_patch_preserves_mixed_context_endings_after_insertion() {
     );
 }
 
+/// Verifies context-only hunks are located but never emitted as empty ChangeSet hunks.
+/// 验证仅含上下文的 hunk 会被定位校验，但绝不会作为空 ChangeSet hunk 输出。
+#[tokio::test]
+async fn apply_patch_context_only_hunks_do_not_break_the_change_set() {
+    let directory = tempdir().expect("create temporary directory");
+    let path = directory.path().join("sample.txt");
+    fs::write(&path, "alpha\nbeta\ngamma\n").expect("write fixture");
+
+    // A context-only hunk alongside a real hunk must apply the real change only.
+    // 仅含上下文的 hunk 与真实 hunk 并存时，只应用真实修改。
+    let response = execute_apply_patch(
+        directory.path().to_path_buf(),
+        String::from(
+            "*** Begin Patch\n*** Update File: sample.txt\n@@\n alpha\n@@\n-gamma\n+delta\n*** End Patch\n",
+        ),
+    )
+    .await
+    .expect("context-only hunk must not invalidate the ChangeSet");
+    assert_eq!(
+        fs::read_to_string(&path).expect("read patched file"),
+        "alpha\nbeta\ndelta\n"
+    );
+    let hunks = response
+        .change_set
+        .as_ref()
+        .and_then(|change_set| change_set.pointer("/files/0/hunks"))
+        .and_then(Value::as_array)
+        .expect("modify record carries hunks");
+    assert_eq!(hunks.len(), 1);
+
+    // A patch made only of context lines is a reported no-op, not an internal defect.
+    // 只由上下文行组成的 patch 是明确的无变更，而不是内部缺陷。
+    let error = execute_apply_patch(
+        directory.path().to_path_buf(),
+        String::from("*** Begin Patch\n*** Update File: sample.txt\n@@\n beta\n*** End Patch\n"),
+    )
+    .await
+    .expect_err("context-only patch changes nothing");
+    assert_eq!(error.code, "no_change");
+}
+
 /// Verifies failed patch preflight leaves every file operation unapplied.
 /// 验证 patch 预校验失败会使每项文件操作都保持未应用。
 #[tokio::test]

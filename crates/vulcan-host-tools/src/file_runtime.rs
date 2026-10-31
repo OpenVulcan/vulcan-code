@@ -2485,9 +2485,15 @@ fn plan_patch_replacements(
                 "Patch hunks must target non-overlapping ranges in the original file snapshot.",
             ));
         }
+        cursor = start.saturating_add(new_lines.len());
+        // A context-only hunk has been verified against the file but changes nothing; it must
+        // not produce a replacement, because a ChangeSet hunk needs a deleted or inserted line.
+        // 仅含上下文的 hunk 已完成定位校验但不改变内容；ChangeSet hunk 必须含删除或插入行，故不生成替换。
+        if old_lines == new_lines {
+            continue;
+        }
         working.splice(start..start + old_lines.len(), new_lines.clone());
         cumulative_delta += new_lines.len() as isize - old_lines.len() as isize;
-        cursor = start.saturating_add(new_lines.len());
         replacements.push(ReplacementPlan {
             operation_id: format!("patch-{operation_index}-{hunk_index}"),
             start: original_start,
