@@ -41,6 +41,11 @@ pub struct LiveFileWatchEvent {
     /// Changed paths in sorted order with duplicates removed. A root invalidates all its descendants.
     /// 已排序去重的变更路径；根路径表示需要重新核对该根的全部后代。
     pub paths: Vec<PathBuf>,
+    /// Paths with proven non-structural modifications only; roots and ambiguous events are excluded.
+    /// 仅具有明确非结构性修改证据的路径；不包含根失效通知和歧义事件。
+    /// Consumers may ignore directory metadata noise without dropping directory creation or removal.
+    /// 消费者可据此忽略目录属性噪声，而不丢弃目录的新建或删除。
+    pub modification_only_paths: BTreeSet<PathBuf>,
 }
 
 /// Path subscription requested by a live watcher subscriber.
@@ -187,9 +192,7 @@ impl LiveWatchReceiver {
             {
                 let mut changed_paths = self.inner.changed_paths.lock().await;
                 if !changed_paths.is_empty() {
-                    return Some(LiveFileWatchEvent {
-                        paths: changed_paths.take(),
-                    });
+                    return Some(changed_paths.take());
                 }
                 if self.inner.sender_count.load(Ordering::Acquire) == 0 {
                     return None;
@@ -203,12 +206,21 @@ impl LiveWatchReceiver {
 impl LiveWatchSender {
     /// Bound pending paths and degrade to the exact registered roots rather than dropping changes.
     /// 限制待处理路径数量，超限时退化为精确注册根失效，而不是丢弃变化。
-    async fn add_changed_paths(&self, paths: &[PathBuf], roots: &[PathBuf]) {
+    /// `paths` is the routed batch, `roots` bounds recovery, and `modification_only` carries native evidence.
+    /// `paths` 是已路由批次，`roots` 限定恢复范围，`modification_only` 传递原生事件证据。
+    /// Returns after merging the batch and waking the receiver; it does not wait for consumption.
+    /// 合并批次并唤醒接收器后返回，不等待消费完成。
+    async fn add_changed_paths(
+        &self,
+        paths: &[PathBuf],
+        roots: &[PathBuf],
+        modification_only: bool,
+    ) {
         if paths.is_empty() {
             return;
         }
         let mut changed_paths = self.inner.changed_paths.lock().await;
-        if changed_paths.add(paths, roots) {
+        if changed_paths.add(paths, roots, modification_only) {
             self.inner.health.record_gap();
         }
         self.inner.notify.notify_one();
@@ -730,7 +742,13 @@ impl LiveFileWatcher {
                                 continue;
                             }
                             let inner = inner.as_ref().and_then(std::sync::Weak::upgrade);
-                            Self::notify_subscribers(&state, inner.as_ref(), &event.paths).await;
+                            Self::notify_subscribers(
+                                &state,
+                                inner.as_ref(),
+                                &event.paths,
+                                is_modification_only_event(&event),
+                            )
+                            .await;
                         }
                         Some(raw_events::RawWatchMessage::Event(Err(err))) => {
                             event_loop_health.0.record_gap();
@@ -757,7 +775,7 @@ impl LiveFileWatcher {
                             let inner = inner.as_ref().and_then(std::sync::Weak::upgrade);
                             // Root delivery both reconciles fallback watches and forces consumer rescan.
                             // 根通知同时重新核对回退监听，并要求消费者重新扫描。
-                            Self::notify_subscribers(&state, inner.as_ref(), &roots).await;
+                            Self::notify_subscribers(&state, inner.as_ref(), &roots, false).await;
                         }
                         None => break,
                     }
@@ -770,10 +788,15 @@ impl LiveFileWatcher {
 
     /// Routes and probes on the blocking boundary without retaining shared state across filesystem I/O.
     /// 在阻塞边界进行路由与探测，文件系统 I/O 期间不保留共享状态锁。
+    /// `state` and `inner` own registrations; `event_paths` and `modification_only` describe one native batch.
+    /// `state` 与 `inner` 持有注册状态；`event_paths` 与 `modification_only` 描述单个原生批次。
+    /// Returns after delivery is queued for every matching subscriber.
+    /// 为所有匹配订阅者排入投递后返回。
     async fn notify_subscribers(
         state: &Arc<RwLock<WatchState>>,
         inner: Option<&Arc<Mutex<LiveFileWatcherInner>>>,
         event_paths: &[PathBuf],
+        modification_only: bool,
     ) {
         let state = Arc::clone(state);
         let inner = inner.cloned();
@@ -787,7 +810,9 @@ impl LiveFileWatcher {
         match delivered {
             Ok(deliveries) => {
                 for (sender, paths, roots) in deliveries {
-                    sender.add_changed_paths(&paths, &roots).await;
+                    sender
+                        .add_changed_paths(&paths, &roots, modification_only)
+                        .await;
                 }
             }
             Err(error) => {
@@ -802,7 +827,7 @@ impl LiveFileWatcher {
     /// 通过正常匹配链路发送合成路径。
     #[cfg(test)]
     async fn send_paths_for_test(&self, paths: Vec<PathBuf>) {
-        Self::notify_subscribers(&self.state, self.inner.as_ref(), &paths).await;
+        Self::notify_subscribers(&self.state, self.inner.as_ref(), &paths, false).await;
     }
 
     /// Return ref counts for tests.
@@ -827,6 +852,25 @@ fn is_mutating_event(event: &Event) -> bool {
         event.kind,
         EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
     )
+}
+
+/// Reports whether the native event proves a non-structural modification suitable for directory filtering.
+/// 判断原生事件是否能证明可用于目录过滤的非结构性修改。
+/// Rescan hints and backend-dependent directory-content events retain full invalidation semantics.
+/// 重扫提示和依赖后端语义的目录内容事件保留完整失效语义。
+fn is_modification_only_event(event: &Event) -> bool {
+    if event.need_rescan() {
+        return false;
+    }
+    match event.kind {
+        EventKind::Modify(notify::event::ModifyKind::Metadata(_)) => true,
+        // notify's Windows backend emits Any for FILE_ACTION_MODIFIED, with distinct rename/create/remove kinds.
+        // notify 的 Windows 后端将 FILE_ACTION_MODIFIED 映射为 Any，重命名、新建和删除使用独立类型。
+        // Kqueue's Any and Data can instead report structural directory changes.
+        // Kqueue 的 Any 与 Data 则可能表示目录结构变更。
+        EventKind::Modify(notify::event::ModifyKind::Any) => cfg!(windows),
+        _ => false,
+    }
 }
 
 /// Sort and deduplicate watch paths.

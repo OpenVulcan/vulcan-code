@@ -206,7 +206,10 @@ mod tests {
             timeout(Duration::from_secs(2), receiver.recv())
                 .await
                 .expect("path delivery"),
-            Some(LiveFileWatchEvent { paths: vec![root] })
+            Some(LiveFileWatchEvent {
+                paths: vec![root],
+                modification_only_paths: BTreeSet::new(),
+            })
         );
         assert_eq!(
             registration

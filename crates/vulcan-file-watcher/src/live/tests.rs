@@ -42,7 +42,8 @@ async fn throttled_receiver_coalesces_within_interval() {
     let (tx, rx) = watch_channel(Arc::new(LiveWatchHealthState::default()));
     let mut throttled = ThrottledLiveWatchReceiver::new(rx, TEST_THROTTLE_INTERVAL);
 
-    tx.add_changed_paths(&[path("a")], &[path("root")]).await;
+    tx.add_changed_paths(&[path("a")], &[path("root")], false)
+        .await;
     let first = timeout(Duration::from_secs(1), throttled.recv())
         .await
         .expect("first emit timeout");
@@ -50,10 +51,11 @@ async fn throttled_receiver_coalesces_within_interval() {
         first,
         Some(LiveFileWatchEvent {
             paths: vec![path("a")],
+            modification_only_paths: BTreeSet::new(),
         })
     );
 
-    tx.add_changed_paths(&[path("b"), path("c")], &[path("root")])
+    tx.add_changed_paths(&[path("b"), path("c")], &[path("root")], false)
         .await;
     let blocked = timeout(TEST_THROTTLE_INTERVAL / 2, throttled.recv()).await;
     assert!(blocked.is_err());
@@ -65,6 +67,7 @@ async fn throttled_receiver_coalesces_within_interval() {
         second,
         Some(LiveFileWatchEvent {
             paths: vec![path("b"), path("c")],
+            modification_only_paths: BTreeSet::new(),
         })
     );
 }
@@ -85,6 +88,116 @@ fn is_mutating_event_filters_non_mutating_event_kinds() {
         EventKind::Access(AccessKind::Open(AccessMode::Any)),
         vec![path("/tmp/accessed")]
     )));
+}
+
+/// Raw delivery distinguishes directory modifications from renames, creation, removal and rescans.
+/// 原始事件投递区分目录修改与重命名、新建、删除以及重扫。
+#[tokio::test]
+async fn raw_delivery_retains_modification_evidence_without_weakening_structural_events() {
+    // Isolate real directory metadata checks while injecting deterministic raw events.
+    // 隔离真实目录属性检查，同时注入确定性的原始事件。
+    let root = unique_temp_dir("vulcan-live-watch-modification");
+    std::fs::create_dir_all(root.join(".git")).expect("create administrative directory");
+    // Match the canonical path namespace used by the native backend.
+    // 匹配原生后端使用的规范路径命名空间。
+    let root = std::fs::canonicalize(root).expect("canonicalize fixture root");
+    // Keep OS notifications out of the fixture; the production raw loop is still exercised.
+    // 将 OS 通知排除在夹具外，但仍覆盖生产原始循环。
+    let watcher = Arc::new(LiveFileWatcher::noop());
+    // This subscriber represents the repository's recursive Git watch.
+    // 此订阅者代表仓库的递归 Git 监听。
+    let (subscriber, mut receiver) = watcher.add_subscriber();
+    // Retain registration ownership through every injected event.
+    // 在全部注入事件期间保持注册归属。
+    let registration = subscriber.register_path(root.clone(), true);
+    // A peer consumer must receive the same paths, including events Git later treats as noise.
+    // 同级消费者必须收到相同路径，包括 Git 后续视为噪声的事件。
+    let (peer, mut peer_receiver) = watcher.add_subscriber();
+    // Independent registration ownership must not inherit any Git-specific suppression.
+    // 独立注册归属不得继承任何 Git 专用过滤。
+    let peer_registration = peer.register_path(root.clone(), true);
+    // Inject the same event classifications produced by the native notify backend.
+    // 注入与原生 notify 后端相同的事件分类。
+    let (sender, raw) = raw_events::channel(Arc::clone(&watcher.health));
+    watcher.spawn_event_loop(raw);
+    for (kind, modification_only) in [
+        (EventKind::Modify(ModifyKind::Any), cfg!(windows)),
+        (
+            EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Any)),
+            false,
+        ),
+        (
+            EventKind::Modify(ModifyKind::Metadata(notify::event::MetadataKind::Any)),
+            true,
+        ),
+        (
+            EventKind::Modify(ModifyKind::Name(notify::event::RenameMode::Any)),
+            false,
+        ),
+        (EventKind::Modify(ModifyKind::Other), false),
+        (EventKind::Create(CreateKind::Folder), false),
+        (EventKind::Remove(notify::event::RemoveKind::Folder), false),
+    ] {
+        sender
+            .send(Ok(notify_event(kind, vec![root.join(".git")])))
+            .expect("inject event");
+        // Each delivery must retain the path regardless of whether Git later filters its metadata.
+        // 无论 Git 后续是否过滤属性，每次投递都必须保留路径。
+        let event = timeout(Duration::from_secs(2), receiver.recv())
+            .await
+            .expect("receive raw event")
+            .expect("open receiver");
+        assert_eq!(event.paths, vec![root.join(".git")]);
+        assert_eq!(
+            timeout(Duration::from_secs(2), peer_receiver.recv())
+                .await
+                .expect("receive peer event")
+                .expect("open peer receiver"),
+            event,
+        );
+        assert_eq!(
+            event.modification_only_paths.contains(&root.join(".git")),
+            modification_only
+        );
+    }
+    sender
+        .send(Ok(notify_event(
+            EventKind::Modify(ModifyKind::Any),
+            vec![root.join(".git")],
+        )
+        .set_flag(notify::event::Flag::Rescan)))
+        .expect("inject rescan hint");
+    // Rescan hints cannot be mistaken for ordinary directory modification noise.
+    // 重扫提示不能被误认为普通目录修改噪声。
+    let rescan = timeout(Duration::from_secs(2), receiver.recv())
+        .await
+        .expect("receive rescan")
+        .expect("open receiver");
+    assert!(rescan.modification_only_paths.is_empty());
+    assert_eq!(
+        timeout(Duration::from_secs(2), peer_receiver.recv())
+            .await
+            .expect("receive peer rescan")
+            .expect("open peer receiver"),
+        rescan,
+    );
+    drop(registration);
+    sender
+        .send(Ok(notify_event(
+            EventKind::Create(CreateKind::File),
+            vec![root.join(".git/index.lock")],
+        )))
+        .expect("inject lock event after peer release");
+    // Releasing the Git-side watch must not suppress lock paths for the remaining consumer.
+    // 释放 Git 侧监听后，不得为剩余消费者抑制锁文件路径。
+    let peer_lock = timeout(Duration::from_secs(2), peer_receiver.recv())
+        .await
+        .expect("receive peer lock")
+        .expect("open peer receiver");
+    assert_eq!(peer_lock.paths, vec![root.join(".git/index.lock")]);
+    drop(sender);
+    drop(peer_registration);
+    std::fs::remove_dir_all(root).expect("remove isolated fixture");
 }
 
 /// Verify a live watcher is refused outside a runtime, where its event loop could never deliver a change.
