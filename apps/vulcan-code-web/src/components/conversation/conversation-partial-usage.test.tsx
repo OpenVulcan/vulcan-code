@@ -1,6 +1,8 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+import { readLocaleMessage, type LocaleCode } from "@/i18n";
+import type { TranslationKey } from "@/i18n-messages";
 import { kimiPartialUsageEvents } from "@/service/__fixtures__/kimi-partial-usage";
 import { projectConversationBranchPresentationV1 } from "./conversation-branch-presentation-v1";
 import { TurnStatsTooltipCard } from "./conversation-turn-stats-card";
@@ -12,6 +14,30 @@ vi.mock("@/ui-kit/primitives/tooltip", () => {
   const Passthrough = (props: { children: React.ReactNode }) => <>{props.children}</>;
   return { Tooltip: Passthrough, TooltipContent: Passthrough, TooltipProvider: Passthrough, TooltipTrigger: Passthrough };
 });
+
+// label returns the rendered metric label cell for a catalog key, so assertions follow the catalog wording.
+// label 按目录键返回渲染后的指标标签单元，使断言跟随目录文案。
+function label(locale: LocaleCode, key: TranslationKey): string {
+  return `${readLocaleMessage(locale, key)}</span>`;
+}
+
+// statsPairCount counts the metric rows of one rendered card body.
+// statsPairCount 统计一张已渲染卡片正文的指标行数。
+function statsPairCount(markup: string): number {
+  return markup.match(/class="vk-stats-pair"/g)?.length ?? 0;
+}
+
+// completeLayoutPairCount is the row count of a card whose every usage field is reported; partial data
+// must render the same layout, so a failure here may mean the card layout itself changed.
+// completeLayoutPairCount 是所有用量字段均已上报时卡片的行数；部分数据必须渲染相同版面，
+// 此处失败也可能意味着卡片版面本身已变化。
+function completeLayoutPairCount(): number {
+  const metadata = { turn_stats: {
+    provider_call_count: 1, tool_call_count: 1, cached_input_tokens: 1, cache_creation_input_tokens: 1,
+    uncached_input_tokens: 1, output_tokens: 1, total_tokens: 3,
+  } };
+  return statsPairCount(renderToStaticMarkup(<TurnStatsTooltipCard metadata={metadata} locale="zh-CN" subagentStats={false} />));
+}
 
 describe("partial usage display from old persisted V1 events", () => {
   // Throughput requires paired output measurements, never turn duration or a zero divisor.
@@ -59,12 +85,12 @@ describe("partial usage display from old persisted V1 events", () => {
     const markup = renderToStaticMarkup(<TurnStatsTooltipCard metadata={metadata} locale="zh-CN" subagentStats={false} />);
     expect(markup).toContain("179.5K");
     expect(markup).toContain("16.1K");
-    expect(markup).toContain("缓存 Token</span>");
-    expect(markup).toContain("无缓存输入</span>");
-    expect(markup).toContain("缓存命中率</span>");
+    expect(markup).toContain(label("zh-CN", "conversation.usage.cacheRead"));
+    expect(markup).toContain(label("zh-CN", "conversation.turnStats.uncachedInput"));
+    expect(markup).toContain(label("zh-CN", "conversation.turnStats.cacheHitRate"));
     expect(markup).toContain("91.8%");
     expect(markup).not.toMatch(/≥|7\/8|turn-stats-coverage-note/);
-    expect(markup.match(/class="vk-stats-pair"/g)).toHaveLength(3);
+    expect(statsPairCount(markup)).toBe(completeLayoutPairCount());
     expect(markup).toContain("214.8K");
     expect(markup).not.toContain("83.98");
     expect(JSON.stringify(events)).toBe(original);
@@ -89,8 +115,8 @@ describe("partial usage display from old persisted V1 events", () => {
     // 英文界面保留相同数值，不附加覆盖限定说明。
     const markup = renderToStaticMarkup(<TurnStatsTooltipCard metadata={metadata} locale="en-US" subagentStats={false} />);
     expect(markup).toContain("179.5K");
-    expect(markup).toContain("Cached tokens</span>");
-    expect(markup).toContain("Cache hit rate</span>");
+    expect(markup).toContain(label("en-US", "conversation.usage.cacheRead"));
+    expect(markup).toContain(label("en-US", "conversation.turnStats.cacheHitRate"));
     expect(markup).not.toMatch(/≥|known|Known|7\/8|turn-stats-coverage-note/);
   });
 
@@ -103,9 +129,9 @@ describe("partial usage display from old persisted V1 events", () => {
     // Render the actual main-card body so missing-value formatting and layout are verified together.
     // 渲染真实主卡正文，同时验证缺失值格式与布局。
     const markup = renderToStaticMarkup(<TurnStatsTooltipCard metadata={metadata} locale="zh-CN" subagentStats={false} />);
-    expect(markup).toContain("缓存 Token</span><strong>-</strong>");
-    expect(markup).toContain("无缓存输入</span><strong>-</strong>");
-    expect(markup.match(/class="vk-stats-pair"/g)).toHaveLength(3);
+    expect(markup).toContain(`${label("zh-CN", "conversation.usage.cacheRead")}<strong>-</strong>`);
+    expect(markup).toContain(`${label("zh-CN", "conversation.turnStats.uncachedInput")}<strong>-</strong>`);
+    expect(statsPairCount(markup)).toBe(completeLayoutPairCount());
     expect(metadata.turn_stats).not.toHaveProperty("cached_input_tokens");
   });
 });
