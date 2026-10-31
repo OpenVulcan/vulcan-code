@@ -836,13 +836,16 @@ impl PublicAiRuntime {
     ///
     /// # Returns
     /// 返回值
-    /// The compiled manifest when the provider is registered, otherwise `None`.
-    /// 供应商已注册时返回编译清单，否则返回 `None`。
+    /// The compiled manifest for a registered system provider; custom and absent providers return `None`.
+    /// 返回已注册系统供应商的编译清单；自定义或不存在的供应商返回 `None`。
     pub fn system_manifest(&self, provider_id: &str) -> Option<Arc<ResolvedProviderManifest>> {
         self.resolved_provider_generation
             .read()
             .ok()
             .and_then(|generation| generation.manifests.manifest_arc(provider_id))
+            // Activation also publishes custom manifests; presence alone does not grant system ownership.
+            // 激活也会发布自定义清单；仅有清单存在不代表具备系统归属。
+            .filter(|manifest| manifest.descriptor.kind == ProviderKind::System)
     }
 
     /// Captures one system manifest and all paired model-catalog facts from one generation.

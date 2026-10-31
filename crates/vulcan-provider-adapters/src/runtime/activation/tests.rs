@@ -10,6 +10,56 @@ use crate::{
 };
 use vulcan_ai_contract::AccountUsageSnapshot;
 
+/// Verifies system-only lookup excludes an activated custom manifest without removing it from execution.
+/// 验证系统专用查询排除已激活的自定义清单，但不会将其从执行目录中移除。
+/// No inputs or return value; assertions inspect both lookup boundaries after real activation.
+/// 无输入或返回值；断言检查真实激活后的两种查询边界。
+#[test]
+fn manual_model_ownership_lookup_excludes_custom_manifests() {
+    // runtime publishes both ownership kinds in the same immutable generation.
+    // runtime 在同一不可变代际中发布两种归属的清单。
+    let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
+    // provider_id identifies the user-owned provider independently of any model name.
+    // provider_id 标识用户自有供应商，与任何模型名称无关。
+    let provider_id = "custom:manual-model-ownership";
+    // configuration activates the same custom manifest shape used by the settings service.
+    // configuration 激活与设置服务相同形状的自定义清单。
+    let mut configuration = PersistedAiConfiguration::default();
+    install_current_custom_provider(
+        &mut configuration,
+        custom_definition_with_discovery_mode(
+            provider_id,
+            &[crate::CustomProviderProtocol::AnthropicMessages],
+            crate::CustomProviderModelDiscoveryMode::Manual,
+        ),
+    );
+    runtime
+        .reapply_model_catalog_overlays(&configuration)
+        .expect("custom manifest should activate");
+
+    assert!(
+        runtime.system_manifest(provider_id).is_none(),
+        "an activated custom manifest must never be classified as a system manifest"
+    );
+    assert!(runtime.system_manifest("custom:missing-provider").is_none());
+    assert_eq!(
+        runtime
+            .system_manifest("anthropic")
+            .expect("system manifest must remain available")
+            .descriptor
+            .kind,
+        ProviderKind::System,
+    );
+    // snapshot proves filtering the system lookup does not delete the active custom authority.
+    // snapshot 证明过滤系统查询不会删除已激活的自定义权威清单。
+    let snapshot = runtime
+        .provider_manifest_runtime_snapshot(provider_id, &configuration)
+        .expect("custom runtime snapshot should resolve")
+        .expect("custom manifest must remain published");
+    assert_eq!(snapshot.manifest.descriptor.kind, ProviderKind::Custom);
+    assert_eq!(snapshot.manifest.descriptor.id, provider_id);
+}
+
 /// Verifies isolated preparation remains invisible until one compare-and-swap publication.
 /// 验证隔离准备在一次比较交换发布前始终不可见。
 #[test]

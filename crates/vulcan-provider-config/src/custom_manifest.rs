@@ -379,6 +379,10 @@ fn apply_local_overrides(
 
 /// Builds the complete standalone document for one in-memory custom provider.
 /// 为一个内存自定义供应商构建完整独立文档。
+/// `configuration` owns the existing manifest and overrides; `provider_id` identifies it; `descriptor` supplies explicit edits.
+/// `configuration` 持有既有清单与覆盖；`provider_id` 标识供应商；`descriptor` 提供显式编辑。
+/// Returns a fully validated document without modifying the supplied configuration, or an explicit contract error.
+/// 返回完整校验后的文档且不修改传入配置，或返回明确的契约错误。
 fn document_from_configuration(
     configuration: &PersistedAiConfiguration,
     provider_id: &str,
@@ -406,6 +410,64 @@ fn document_from_configuration(
             &provider_manifest.services,
             &mut generated.services,
         );
+        // previous_sources and generated_sources compare source choices by exact service identity.
+        // previous_sources 与 generated_sources 按精确服务身份比较来源选择。
+        // Route order and protocol changes do not alter source ownership.
+        // 路由顺序和协议变化不会改变来源归属。
+        let previous_sources = provider_manifest
+            .services
+            .iter()
+            .map(|service| {
+                (
+                    service.service_entry_id.as_str(),
+                    service
+                        .model_catalog
+                        .as_ref()
+                        .map(|catalog| catalog.source_policy),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let generated_sources = generated
+            .services
+            .iter()
+            .map(|service| {
+                (
+                    service.service_entry_id.as_str(),
+                    service
+                        .model_catalog
+                        .as_ref()
+                        .map(|catalog| catalog.source_policy),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        if previous_sources != generated_sources {
+            // A changed source must update membership or the old declared-only policy erases new discoveries.
+            // 来源变化时必须更新成员策略，否则旧的仅声明策略会清除新发现的模型。
+            // Keep independently authored membership whenever the source policies remain unchanged.
+            // 来源策略未变化时，保留独立编写的成员限制。
+            provider_manifest.model_defaults.catalog_membership_policy =
+                generated.model_defaults.catalog_membership_policy;
+        }
+        // New routes require the generated protocol dependencies.
+        // 新路由需要生成清单声明的协议依赖。
+        // Retain existing dependencies still referenced by surviving rules and advanced profiles.
+        // 保留仍被留下的规则和高级 Profile 引用的既有依赖。
+        for protocol in generated.engine_contract.required_protocol_profiles {
+            if !provider_manifest
+                .engine_contract
+                .required_protocol_profiles
+                .contains(&protocol)
+            {
+                provider_manifest
+                    .engine_contract
+                    .required_protocol_profiles
+                    .push(protocol);
+            }
+        }
+        provider_manifest.engine_contract.minimum_manifest_engine = provider_manifest
+            .engine_contract
+            .minimum_manifest_engine
+            .max(generated.engine_contract.minimum_manifest_engine);
         provider_manifest.display = generated.display;
         provider_manifest.credential_registration = generated.credential_registration;
         provider_manifest.services = generated.services;
@@ -1333,6 +1395,8 @@ pub(crate) mod tests {
         CredentialRegistrationKind, ModelDiscoveryKind, ProtocolRoute, ProviderCategory,
         ProviderKind, RequestProjectorKind, ServiceEntry, ServiceEntryKind,
     };
+
+    mod protocol_edits;
 
     /// Builds one isolated store layout inside a temporary directory.
     /// 在临时目录内构建一个隔离的存储布局。

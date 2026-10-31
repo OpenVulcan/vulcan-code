@@ -4,6 +4,9 @@
 use super::*;
 use vulcan_provider_adapters::CustomProviderProtocol;
 
+mod manual_model_ownership;
+mod validation;
+
 /// Verifies account membership cannot reopen a model disabled by its provider.
 /// 验证账号成员关系不能重新开启已被供应商关闭的模型。
 #[test]

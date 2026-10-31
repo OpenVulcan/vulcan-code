@@ -253,6 +253,57 @@ impl PublicAiRuntime {
         )
     }
 
+    /// Resolves one explicitly requested model-validation probe without publishing routing access.
+    /// 解析一次明确请求的模型验证探测，不发布路由访问权限。
+    ///
+    /// `connection_id`, `provider_id`, and `model_id` identify the exact validation target.
+    /// `connection_id`、`provider_id` 与 `model_id` 标识精确验证目标。
+    /// Returns a frozen selection from the active generation with request-local validation access.
+    /// 返回来自活动代际且具有请求局部验证权限的冻结选择。
+    /// Only pending status and conversation visibility are relaxed for this request.
+    /// 仅为本次请求放宽待验证状态与会话可见性。
+    /// Disabled accounts, membership, capabilities, protocol and credential ownership remain checked.
+    /// 被禁用账号、成员关系、能力、协议及凭据归属继续接受校验。
+    pub fn resolve_connection_model_validation_selection(
+        &self,
+        connection_id: &str,
+        provider_id: &str,
+        model_id: &str,
+    ) -> Result<ResolvedPublicAiSelection, String> {
+        // Capture configuration and catalog together; caller-owned edits cannot alter this authority.
+        // 一并捕获配置与目录，调用方持有的修改不能改变此权威。
+        let generation = self.selection_catalog_snapshot()?;
+        // Only the exact selected connection may use the request-local validation exception.
+        // 仅精确选中的连接可以使用请求局部验证例外。
+        let connection = generation
+            .configuration
+            .connection_graph
+            .connections
+            .get(connection_id)
+            .cloned()
+            .ok_or_else(|| format!("Connection `{connection_id}` is not configured."))?;
+        if connection.provider_id != provider_id {
+            return Err(format!(
+                "Connection `{connection_id}` does not belong to provider `{provider_id}`."
+            ));
+        }
+        // This private view never reaches activation or persistence, so peers stay isolated even in flight.
+        // 此私有视图绝不进入激活或持久化，因此即使请求执行中，其他请求也仍保持隔离。
+        let mut validation_configuration = generation.configuration.as_ref().clone();
+        validation_configuration
+            .pending_validation_connection_ids
+            .remove(connection_id);
+        validation_configuration.set_model_enabled(provider_id, model_id, true);
+        self.resolve_selection_for_connection(
+            &validation_configuration,
+            connection,
+            provider_id,
+            model_id,
+            None,
+            generation,
+        )
+    }
+
     /// Resolves one exact configured internal inference route without applying workbench access.
     /// 解析一条精确已配置内部推理路由且不应用工作台访问状态。
     ///

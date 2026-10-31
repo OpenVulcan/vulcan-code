@@ -248,21 +248,9 @@ pub(crate) async fn service_validate_public_ai_custom_model(
         ));
     }
 
-    // validation_configuration bypasses only the pending/workbench gates for this explicit action.
-    // validation_configuration 仅为此次显式操作绕过待验证与工作台开关门禁。
-    let mut validation_configuration = current_configuration.clone();
-    validation_configuration
-        .pending_validation_connection_ids
-        .remove(request.connection_id.as_str());
-    validation_configuration.model_enabled_overrides.insert(
-        PersistedAiConfiguration::provider_model_key(
-            request.provider_id.as_str(),
-            request.model_id.as_str(),
-        ),
-        true,
-    );
-    let selection = runtime.resolve_connection_model_selection(
-        &validation_configuration,
+    // Explicit validation resolves against one captured generation without publishing temporary access.
+    // 显式验证在一个已捕获代际上解析，不发布临时访问权限。
+    let selection = runtime.resolve_connection_model_validation_selection(
         request.connection_id.as_str(),
         request.provider_id.as_str(),
         request.model_id.as_str(),
