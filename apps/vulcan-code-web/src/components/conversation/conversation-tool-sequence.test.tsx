@@ -76,20 +76,46 @@ it("keeps a single tool visible even when its group previously remembered a manu
   expect(host.querySelector('[data-tool="one"]')).not.toBeNull();
 });
 
-it("keeps the first tool in the same body through append, completion, and a long idle gap", async () => {
+it("keeps a lone running tool as a plain card and keeps its DOM identity while it completes", async () => {
   await render([row("one", "running")]);
   expect(host.querySelector(".vk-tools-head")).toBeNull();
   // first preserves the DOM identity rather than remounting into a retirement layer.
   // first 保留 DOM 标识，而不是重新挂载到退场层。
   const first = host.querySelector('[data-tool="one"]');
-  await render([row("one"), row("two", "running")]);
-  expect(host.querySelector(".vk-tools-head")).toBeNull();
-  expect(host.querySelector('[data-tool="one"]')).toBe(first);
-  await render([row("one"), row("two")]);
+  await render([row("one")]);
   await act(async () => vi.advanceTimersByTime(60_000));
-  expect(host.querySelectorAll("[data-tool]")).toHaveLength(2);
+  expect(host.querySelector('[data-tool="one"]')).toBe(first);
   expect(host.querySelector(".vk-tool-seq")?.getAttribute("data-expanded")).toBe("true");
   expect(host.querySelector(".vk-tool-seq-running, [data-retirement-phase]")).toBeNull();
+});
+
+it("folds a run from its second tool on, showing only the running cards under the summary", async () => {
+  await render([row("one", "running"), row("two", "running")]);
+  expect(host.querySelector(".vk-tools-head")).not.toBeNull();
+  expect(host.querySelector(".vk-tool-seq")?.getAttribute("data-running")).toBe("true");
+  // two is still the same card when its neighbour finishes, so a live terminal keeps its state.
+  // one 结束时 two 仍是同一张卡片，使实时终端保持其状态。
+  const two = host.querySelector('[data-tool="two"]');
+  await render([row("one"), row("two", "running")]);
+  expect([...host.querySelectorAll("[data-tool]")].map((element) => element.getAttribute("data-tool"))).toEqual(["two"]);
+  expect(host.querySelector('[data-tool="two"]')).toBe(two);
+  // The last running card stays mounted while the body closes, then the group is a summary only.
+  // 正文收起期间最后一张运行卡片保持挂载，之后分组只剩摘要。
+  await render([row("one"), row("two"), row("three", "running")]);
+  expect([...host.querySelectorAll("[data-tool]")].map((element) => element.getAttribute("data-tool"))).toEqual(["three"]);
+  await render([row("one"), row("two"), row("three")]);
+  expect(host.querySelector(".vk-tool-seq")?.getAttribute("data-running")).toBe("false");
+  expect(host.querySelector(".vk-tools-head")?.getAttribute("aria-expanded")).toBe("false");
+});
+
+it("keeps every card of a running run visible once the user expands it", async () => {
+  await render([row("one"), row("two", "running")]);
+  await act(async () => host.querySelector<HTMLButtonElement>(".vk-tools-head")!.click());
+  expect(host.querySelectorAll("[data-tool]")).toHaveLength(2);
+  await render([row("one"), row("two"), row("three", "running")]);
+  expect(host.querySelectorAll("[data-tool]")).toHaveLength(3);
+  await render([row("one"), row("two"), row("three")]);
+  expect(host.querySelectorAll("[data-tool]")).toHaveLength(3);
 });
 
 it("folds the entire stable group and preserves explicit manual expansion across updates", async () => {
@@ -114,23 +140,22 @@ it("keeps every row open with folding disabled, including a previously manually 
   expect(host.querySelector(".vk-tool-seq")?.getAttribute("data-grouped")).toBe("false");
 });
 
-it("hides running and completed summaries while folding is disabled without remounting tool rows", async () => {
+it("shows every row without a summary while folding is disabled, without remounting tool rows", async () => {
   await render([row("one"), row("two", "running")], true, false);
   // first verifies changing the setting does not reset the tool card's own state.
   // first 验证切换设置不会重置工具卡片自身的状态。
   const first = host.querySelector('[data-tool="one"]');
   expect(first).not.toBeNull();
   expect(host.querySelector(".vk-tools-head")).toBeNull();
-  await render([row("one"), row("two")], true, true);
+  await render([row("one"), row("two")], true, false);
   expect(host.querySelector('[data-tool="one"]')).toBe(first);
-  expect(host.querySelector(".vk-tools-head")).toBeNull();
   await render([row("one"), row("two")], false, false);
   expect(host.querySelector('[data-tool="one"]')).toBe(first);
   expect(host.querySelectorAll("[data-tool]")).toHaveLength(2);
   expect(host.querySelector(".vk-tools-head")).toBeNull();
 });
 
-it("keeps tools unbounded through repeated reasoning and folds once assistant text arrives", async () => {
+it("keeps reasoning inside the run and keeps one group from the second tool through the answer", async () => {
   // thinking and answer model actual stream rows, not forced component lifecycle overrides.
   // thinking 与 answer 模拟真实流记录，不直接覆盖组件生命周期。
   const thinking: ConversationRenderItem = { id: "thinking", role: "assistant", sourceMessages: [], blocks: [
@@ -140,16 +165,15 @@ it("keeps tools unbounded through repeated reasoning and folds once assistant te
     { id: "answer-block", kind: "markdown", title: "", body: "Done", summary: "" },
   ] };
   await render([row("one")]);
-  const first = host.querySelector('[data-tool="one"]');
+  await render([row("one"), thinking]);
+  expect(host.querySelector(".vk-tool-seq")?.getAttribute("data-grouped")).toBe("false");
   for (const items of [
-    [row("one"), thinking],
     [row("one"), thinking, row("two")],
     [row("one"), thinking, row("two"), { ...thinking, id: "thinking-next" }],
   ]) {
     await render(items);
-    expect(host.querySelector('[data-tool="one"]')).toBe(first);
-    expect(host.querySelector(".vk-tools-head")).toBeNull();
-    expect(host.querySelector(".vk-tool-seq")?.getAttribute("data-grouped")).toBe("false");
+    expect(host.querySelector(".vk-tool-seq")?.getAttribute("data-grouped")).toBe("true");
+    expect(host.querySelectorAll(".vk-tool-seq")).toHaveLength(1);
   }
   await render([row("one"), thinking, row("two"), answer]);
   expect(host.querySelector(".vk-tool-seq")?.getAttribute("data-expanded")).toBe("false");

@@ -34,7 +34,10 @@ import {
   ConversationMeasuredCollapse,
   useConversationMeasuredExpansion,
 } from "@/components/conversation/conversation-measured-collapse";
-import { dispatchConversationManualViewportInteraction } from "@/components/conversation/conversation-layout-events";
+import {
+  dispatchConversationAutomaticFold,
+  dispatchConversationManualViewportInteraction,
+} from "@/components/conversation/conversation-layout-events";
 import type { PlanArtifactActionPayload } from "@/components/conversation/conversation-plan-artifact";
 import type { ConversationPlanArtifact } from "@/components/conversation/conversation-model";
 import {
@@ -197,6 +200,49 @@ export function groupVisibleProcessBodyEntries(
 }
 
 // ConversationToolSequenceGroup renders one pure display-only fold for consecutive tool rows.
+// BOUNDED_BODY_FOLLOW_SLACK_PX is how close to its bottom a bounded tool body must sit to keep following
+// new cards; a reader who scrolled further up inside it keeps that position.
+// BOUNDED_BODY_FOLLOW_SLACK_PX 是限高工具正文距底部多近才继续跟随新卡片；在其中向上滚得更远的阅读者保持原位。
+const BOUNDED_BODY_FOLLOW_SLACK_PX = 8;
+
+// useBoundedBodyFollow keeps a height-limited tool body pinned to its newest card while it was already at
+// its bottom, so a growing run shows the running tool instead of the first ones.
+// useBoundedBodyFollow 在限高工具正文原本已位于底部时让其贴住最新卡片，使增长中的序列显示运行中的工具而不是最早的那些。
+// Parameters: bodyRef is the bounded viewport, shownItems are the rows it renders. Returns nothing.
+// 参数：bodyRef 是限高视口，shownItems 是其渲染的记录。无返回值。
+function useBoundedBodyFollow(
+  bodyRef: React.RefObject<HTMLDivElement | null>,
+  shownItems: readonly ConversationRenderItem[],
+): void {
+  // pinnedRef records whether the body sat at its bottom before the latest change.
+  // pinnedRef 记录正文在最近一次变化前是否位于底部。
+  const pinnedRef = React.useRef(true);
+  React.useLayoutEffect(() => {
+    const body = bodyRef.current;
+    if (!body) return;
+    const onScroll = () => {
+      pinnedRef.current = body.scrollHeight - body.scrollTop - body.clientHeight <= BOUNDED_BODY_FOLLOW_SLACK_PX;
+    };
+    body.addEventListener("scroll", onScroll, { passive: true });
+    return () => body.removeEventListener("scroll", onScroll);
+  }, [bodyRef]);
+  React.useLayoutEffect(() => {
+    const body = bodyRef.current;
+    if (!body || typeof ResizeObserver === "undefined") return;
+    // Card content keeps growing after mount (streamed output), so follow every size change, not only new rows.
+    // 卡片挂载后内容仍会增长（流式输出），因此跟随每次尺寸变化，而不只是新增记录。
+    const follow = () => {
+      if (pinnedRef.current && body.scrollHeight > body.clientHeight) body.scrollTop = body.scrollHeight;
+    };
+    follow();
+    const observer = new ResizeObserver(follow);
+    for (const child of body.children) observer.observe(child);
+    observer.observe(body);
+    return () => observer.disconnect();
+  }, [bodyRef, shownItems]);
+}
+
+// ConversationToolSequenceGroup renders one pure display-only fold for consecutive tool rows.
 // ConversationToolSequenceGroup 渲染一个仅用于显示的连续工具记录折叠组。
 // Parameters: collapseId preserves expansion memory, item arrays preserve execution state and order,
 // renderItem renders the original row; active and collapseEnabled determine the lifecycle default.
@@ -204,37 +250,25 @@ export function groupVisibleProcessBodyEntries(
 // Returns one summary and one stable ordered body, without a separate retirement layer.
 // 返回一个摘要及一个稳定有序正文，不再有独立退场层。
 export function ConversationToolSequenceGroup(props: {
-  // Whether this sequence still awaits assistant content or a running tool.
-  // 此序列是否仍在等待助手正文或正在运行的工具。
-  active: boolean;
   // Whether automatic tool folding is enabled for this conversation.
   // 当前会话是否启用工具自动折叠。
   collapseEnabled: boolean;
   // Stable identity retained from the very first tool.
   // 从首个工具开始保持不变的标识。
   collapseId: string;
-  // Terminal rows used only to calculate the summary.
-  // 仅用于计算摘要的终态记录。
-  completedItems: ConversationRenderItem[];
   // All tools remain in this one ordered body, including running tools.
   // 所有工具（包括运行中工具）始终留在此有序正文内。
   items: ConversationRenderItem[];
   // Original row renderer; returns one tool card without changing its identity.
   // 原始记录渲染器；返回工具卡且不改变其标识。
   renderItem: (item: ConversationRenderItem) => React.ReactNode;
-  // Running rows used only to calculate the summary.
-  // 仅用于计算摘要的运行中记录。
+  // Running rows, shown as full cards inside a folded group until they finish.
+  // 运行中记录，在折叠组中以完整卡片显示，直到执行结束。
   runningItems: ConversationRenderItem[];
 }) {
-  // Active sequences force visibility below; closed groups start collapsed without an effect-driven intermediate frame.
-  // 活动序列在下方强制展示；已结束分组直接默认收起，避免等待 effect 时出现中间帧。
+  // Groups start folded; only an explicit user expansion is remembered as open.
+  // 分组默认收起；只有用户明确展开才被记忆为打开。
   const [rememberedExpanded, setExpanded] = useConversationMeasuredExpansion(props.collapseId, false);
-  // The summary and bounded viewport appear only after assistant content closes multiple tools.
-  // 只有助手正文结束多工具序列后才显示汇总栏与限高视口。
-  const grouped = props.collapseEnabled && !props.active && props.completedItems.length > 1;
-  // Single tools and disabled folding override any remembered collapsed state.
-  // 单工具与关闭折叠均优先于任何已记忆的收起状态。
-  const expanded = !grouped || rememberedExpanded;
   // entries counts each tool row by family and state for the sequence head; reasoning rows are skipped.
   // entries 按家族与状态统计每个工具行供序列标题使用；跳过思考行。
   const entries = React.useMemo(() => props.items.flatMap((item) => {
@@ -242,13 +276,58 @@ export function ConversationToolSequenceGroup(props: {
     if (toolBlocks.length === 0) return [];
     return [toolSequenceEntry(fixedV1ToolEvent(toolBlocks as ToolExecutionConversationBlock[]), props.runningItems.includes(item))];
   }), [props.items, props.runningItems]);
+  // A run becomes one folded group from its second tool on, while it is still running; a single tool stays a plain card.
+  // 运行从第二个工具起即成为一个折叠组（运行期间同样如此）；单个工具保持普通卡片。
+  const grouped = props.collapseEnabled && entries.length > 1;
+  // open shows every row: no group, folding disabled, or the user expanded it.
+  // open 表示显示全部记录：未成组、关闭折叠或用户已展开。
+  const open = !grouped || rememberedExpanded;
+  // shownItems are the rows inside the bounded body: all rows when open, otherwise only running tools.
+  // shownItems 是限高正文内的记录：打开时为全部，否则只有运行中的工具。
+  const liveItems = open ? props.items : props.runningItems;
+  // lastShownRef keeps the last running cards on screen while the closing animation runs, so the
+  // body shrinks from what was visible instead of first jumping to empty.
+  // lastShownRef 在收起动画期间保留最后显示的运行卡片，使正文从可见内容收缩，而不是先跳空。
+  const lastShownRef = React.useRef<ConversationRenderItem[]>(liveItems);
+  const shownItems = liveItems.length > 0 ? liveItems : lastShownRef.current;
+  lastShownRef.current = shownItems;
+  const bodyVisible = liveItems.length > 0;
+  // sectionRef locates this group's transcript when announcing an automatic fold.
+  // sectionRef 用于在通告自动折叠时定位本分组所属的转录。
+  const sectionRef = React.useRef<HTMLElement | null>(null);
+  // shownIdsRef holds the rows shown by the previous commit to detect rows that just left the body.
+  // shownIdsRef 保存上次提交显示的记录，用于检测刚离开正文的记录。
+  const shownIdsRef = React.useRef<ReadonlySet<string>>(new Set());
+  React.useLayoutEffect(() => {
+    const previous = shownIdsRef.current;
+    const current = new Set(liveItems.map((item) => item.id));
+    shownIdsRef.current = current;
+    // A finished tool leaving a folded group shrinks the transcript without any user action; announce it
+    // in the same commit, before observers see the smaller height, so the followed tail keeps its place.
+    // 已完成工具离开折叠组时，转录在无用户操作下变矮；在同一提交内、观察器看到新高度之前通告，
+    // 使锁底尾部保持原位。
+    const left = [...previous].some((id) => !current.has(id));
+    if (left && grouped && !open && sectionRef.current) {
+      dispatchConversationAutomaticFold(sectionRef.current);
+    }
+  }, [grouped, liveItems, open]);
+  // bodyRef is the bounded scroll viewport shared by every group state.
+  // bodyRef 是所有分组状态共用的限高滚动视口。
+  const bodyRef = React.useRef<HTMLDivElement | null>(null);
+  useBoundedBodyFollow(bodyRef, shownItems);
 
   return (
-    <section className="vk-tool-seq" data-expanded={expanded ? "true" : "false"} data-grouped={grouped ? "true" : "false"}>
-      {grouped ? <ToolSequenceHead entries={entries} expanded={expanded} onToggle={() => setExpanded(!expanded)} /> : null}
-      <ConversationMeasuredCollapse collapseId={props.collapseId} expanded={expanded}>
-        <div className="vk-tool-seq-body">
-          {props.items.map(props.renderItem)}
+    <section
+      className="vk-tool-seq"
+      data-expanded={open ? "true" : "false"}
+      data-grouped={grouped ? "true" : "false"}
+      data-running={grouped && !open && props.runningItems.length > 0 ? "true" : "false"}
+      ref={sectionRef}
+    >
+      {grouped ? <ToolSequenceHead entries={entries} expanded={open} onToggle={() => setExpanded(!open)} /> : null}
+      <ConversationMeasuredCollapse collapseId={props.collapseId} expanded={bodyVisible}>
+        <div className="vk-tool-seq-body" ref={bodyRef}>
+          {shownItems.map(props.renderItem)}
         </div>
       </ConversationMeasuredCollapse>
     </section>
@@ -532,10 +611,8 @@ export function ConversationProcessGroup(props: {
               ? renderProcessBodyItem(entry.item)
               : (
                 <ConversationToolSequenceGroup
-                  active={entry.active}
                   collapseEnabled={toolCollapseEnabled}
                   collapseId={entry.collapseId}
-                  completedItems={entry.completedItems}
                   items={entry.items}
                   key={entry.collapseId}
                   renderItem={renderProcessBodyItem}
@@ -1000,4 +1077,5 @@ export function finalAssistantOutputText(item: ConversationRenderItem): string {
     .filter(Boolean)
     .join("\n\n");
 }
+
 

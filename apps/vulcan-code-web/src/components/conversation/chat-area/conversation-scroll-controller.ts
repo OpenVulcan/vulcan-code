@@ -6,12 +6,14 @@ import {
   type ConversationScrollSnapshot,
 } from "@/components/conversation/chat-area-scroll";
 import {
+  CONVERSATION_AUTOMATIC_FOLD_EVENT,
   CONVERSATION_LAYOUT_SETTLED_EVENT,
   CONVERSATION_LAYOUT_WILL_CHANGE_EVENT,
   CONVERSATION_MANUAL_VIEWPORT_INTERACTION_EVENT,
   type ConversationLayoutSettledDetail,
   type ConversationManualViewportInteractionDetail,
 } from "@/components/conversation/conversation-layout-events";
+import { motionTokenMs } from "@/lib/motion-tokens";
 
 // UseConversationScrollControllerOptions defines the single owner of one mounted transcript scrollport.
 // UseConversationScrollControllerOptions 定义单个已挂载转录滚动视口的唯一所有者。
@@ -302,10 +304,10 @@ export function useConversationScrollController(
         Math.floor(visibleArea * CONVERSATION_TAIL_RESERVE_MAX_SHARE),
       );
     } else if (followTailRef.current) {
-      // New content drops the reserve at once so the followed tail lands right above the composer
-      // instead of first filling blank space and catching up later.
-      // 新内容到达即撤掉预留，使跟随中的尾部直接贴在输入区上方，而不是先填满空白再滞后追底。
-      next = contentHeight > tailTotalRef.current - current ? 0 : current;
+      // New content consumes the reserve by exactly its own growth, so the followed page keeps its height
+      // when a folded tool batch is replaced by a shorter one, and the content above never jumps.
+      // 新内容按其自身增长量消耗预留，使折叠的工具批次被更短的批次替换时页面保持高度，上方内容不跳动。
+      next = Math.max(0, Math.min(current, tailTotalRef.current - contentHeight));
     } else {
       const onScreen = element.getBoundingClientRect().bottom - reserve.getBoundingClientRect().top;
       next = Math.max(0, Math.min(current, Math.ceil(onScreen)));
@@ -957,6 +959,42 @@ export function useConversationScrollController(
     window.addEventListener(CONVERSATION_MANUAL_VIEWPORT_INTERACTION_EVENT, handleManualViewportInteraction);
     return () => window.removeEventListener(CONVERSATION_MANUAL_VIEWPORT_INTERACTION_EVENT, handleManualViewportInteraction);
   }, [beginFoldReserve, cancelPendingFrame, scheduleSnapshotRestore, writeCurrentSnapshot]);
+
+  React.useEffect(() => {
+    // automaticFoldTimer releases a fold window that no settled event closes, such as a running tool
+    // finishing while another one keeps the group body open.
+    // automaticFoldTimer 释放没有稳定事件来关闭的折叠窗口，例如另一个工具仍使分组正文打开时某个工具完成。
+    let automaticFoldTimer: number | null = null;
+    // handleAutomaticFold lets a self-started fold use the same tail reserve as a manual one, but only
+    // while the tail is followed: a reader elsewhere in the history keeps the existing anchor behavior.
+    // handleAutomaticFold 让自行发起的折叠与手动折叠共用尾部预留，但仅限锁底期间：位于历史其他位置的阅读者保持既有锚点行为。
+    const handleAutomaticFold = (event: Event): void => {
+      const detail = (event as CustomEvent<ConversationManualViewportInteractionDetail>).detail;
+      const currentOptions = latestOptionsRef.current;
+      if (!detail?.surfaceId || detail.surfaceId !== currentOptions.surfaceId || !followTailRef.current) {
+        return;
+      }
+      const element = currentOptions.scrollRef.current;
+      if (!element || element.dataset.conversationSurfaceId !== detail.surfaceId) {
+        return;
+      }
+      beginFoldReserve(element);
+      if (automaticFoldTimer !== null) window.clearTimeout(automaticFoldTimer);
+      automaticFoldTimer = window.setTimeout(() => {
+        automaticFoldTimer = null;
+        const current = latestOptionsRef.current.scrollRef.current;
+        if (foldLimitRef.current !== null && current) {
+          reconcileTailReserve(current);
+          foldLimitRef.current = null;
+        }
+      }, motionTokenMs("--vk-t-med") + 80);
+    };
+    window.addEventListener(CONVERSATION_AUTOMATIC_FOLD_EVENT, handleAutomaticFold);
+    return () => {
+      window.removeEventListener(CONVERSATION_AUTOMATIC_FOLD_EVENT, handleAutomaticFold);
+      if (automaticFoldTimer !== null) window.clearTimeout(automaticFoldTimer);
+    };
+  }, [beginFoldReserve, reconcileTailReserve]);
 
   React.useEffect(() => {
     // handleLayoutSettled applies one final correction and releases per-frame transaction ownership.

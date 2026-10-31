@@ -339,12 +339,14 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-process-body { display: grid; gap: calc(var(--vk-u) * 3); }
 .vk-process-stopped { justify-self: end; padding: calc(var(--vk-u) * 1) 0; color: var(--vk-ink-3); font-size: var(--vk-fs-sm); }
 
-/* Consecutive tool rows, folded behind one summary head once the answer that closes them arrives. */
-.vk-tool-seq { display: grid; grid-template-columns: minmax(0, 1fr); gap: calc(var(--vk-u) * 2); min-width: 0; }
+/* Consecutive tool rows, folded behind one summary head from the second tool on; running tools stay
+ * visible inside the folded group until they finish. */
+.vk-tool-seq { --vk-tool-seq-max-h: min(52.5rem, 78vh); display: grid; grid-template-columns: minmax(0, 1fr); gap: calc(var(--vk-u) * 2); min-width: 0; }
 .vk-tool-seq-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: calc(var(--vk-u) * 3); min-width: 0; }
-/* Only a folded multi-tool group gets a bounded viewport; tools scroll sideways themselves, and wheel
- * deltas at the edges carry on into the transcript. */
-.vk-tool-seq[data-grouped="true"] > .vk-collapse > .vk-collapse-inner > .vk-tool-seq-body { max-height: min(52.5rem, 78vh); overflow-x: hidden; overflow-y: auto; overscroll-behavior: auto; scrollbar-gutter: stable; }
+/* Every tool run, running or finished, folded or expanded, shares one bounded viewport, so a run never
+ * grows taller than this before folding; tools scroll sideways themselves, and wheel deltas at the edges
+ * carry on into the transcript. */
+.vk-tool-seq > .vk-collapse > .vk-collapse-inner > .vk-tool-seq-body { max-height: var(--vk-tool-seq-max-h); overflow-x: hidden; overflow-y: auto; overscroll-behavior: auto; scrollbar-gutter: stable; }
 /* Clipping surfaces reach into the gutter, then pad back, so gutter tags inside them stay visible. */
 .vk-process > .vk-collapse,
 .vk-tool-seq > .vk-collapse,

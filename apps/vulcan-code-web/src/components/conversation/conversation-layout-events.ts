@@ -10,6 +10,12 @@ export const CONVERSATION_LAYOUT_SETTLED_EVENT = "vulcan:conversation-layout-set
 // CONVERSATION_MANUAL_VIEWPORT_INTERACTION_EVENT 标记需要保留点击视口的用户折叠操作。
 export const CONVERSATION_MANUAL_VIEWPORT_INTERACTION_EVENT = "vulcan:conversation-manual-viewport-interaction";
 
+// CONVERSATION_AUTOMATIC_FOLD_EVENT marks a fold the transcript starts by itself, such as finished tools
+// leaving a folded tool run, so a followed tail keeps its place until new content refills the space.
+// CONVERSATION_AUTOMATIC_FOLD_EVENT 标记转录自行发起的折叠（例如已完成工具收回折叠组），
+// 使锁底尾部保持原位，直到新内容填回空间。
+export const CONVERSATION_AUTOMATIC_FOLD_EVENT = "vulcan:conversation-automatic-fold";
+
 // ConversationManualViewportInteractionDetail identifies the exact transcript owning a manual fold action.
 // ConversationManualViewportInteractionDetail 标识拥有手动折叠操作的精确转录界面。
 export interface ConversationManualViewportInteractionDetail {
@@ -41,6 +47,22 @@ export function dispatchConversationLayoutWillChange(): void {
 export function dispatchConversationLayoutSettled(surfaceId: string | null): void {
   window.dispatchEvent(new CustomEvent<ConversationLayoutSettledDetail>(
     CONVERSATION_LAYOUT_SETTLED_EVENT,
+    { detail: { surfaceId } },
+  ));
+}
+
+// dispatchConversationAutomaticFold announces a self-started fold before its content shrinks.
+// dispatchConversationAutomaticFold 在自行发起的折叠收缩内容之前发出通知。
+// Parameters: owner is any committed element inside the folding transcript.
+// 参数：owner 是正在折叠的转录中任一已提交元素。
+// Returns: nothing.
+// 返回值：无。
+export function dispatchConversationAutomaticFold(owner: Element): void {
+  // surfaceId comes from the folding element itself, never from focus, because no control was used.
+  // surfaceId 取自折叠元素本身而非焦点，因为此次折叠没有经过任何控件。
+  const surfaceId = owner.closest<HTMLElement>("[data-conversation-surface-id]")?.dataset.conversationSurfaceId ?? null;
+  window.dispatchEvent(new CustomEvent<ConversationManualViewportInteractionDetail>(
+    CONVERSATION_AUTOMATIC_FOLD_EVENT,
     { detail: { surfaceId } },
   ));
 }
