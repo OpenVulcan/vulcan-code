@@ -16,7 +16,7 @@ import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 // Replace transcript IO and unrelated descendants, preserving the actual workspace controls and Radix dialogs.
 // 替换转录输入输出及无关后代，保留真实工作区控件和 Radix 弹窗。
 vi.mock("@/components/conversation/conversation-branch-workspace-v1", () => ({ ConversationBranchWorkspaceV1: () => null }));
-vi.mock("@/state/conversation-live-stream-context", () => ({ useConversationTransientReasoningStatus: () => null }));
+vi.mock("@/state/conversation-live-stream-context", () => ({ useConversationTransientReasoningStatus: () => null, useConversationProviderRetryStatus: () => null }));
 vi.mock("@/state/conversation-session-event-window-owner-v1", () => ({ useConversationSessionEventWindowOwnerV1: () => ({ snapshot: { events: [] }, loading: false, error: null }) }));
 vi.mock("@/components/conversation/chat-area/conversation-scroll-controller", () => ({ useConversationScrollController: () => ({ scheduleStoredRestore: () => undefined }) }));
 vi.mock("@/ui-kit/shell/sidebar", () => ({ SidebarTrigger: () => null }));
