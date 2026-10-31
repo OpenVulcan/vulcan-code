@@ -231,8 +231,8 @@ sha256 = "577ebc1dcab0e28553cd7a674094cea0d1c91e7a7c13bcd78299d2d61d8b93f3"
 
 [[files]]
 path = "prompts/default_cn/postaction_l2_main.md"
-length = 6976
-sha256 = "5ab57929b7f5edcdae0259ee49b1b63e1b8d1bcb39c66c1f7c402cbfb46aef6f"
+length = 7372
+sha256 = "eeac601c52ea42e98772fc2ecdde9ab0e7ea08cde6984182883a187420ba5634"
 
 [[files]]
 path = "prompts/default_cn/precheck_l1_main.md"
@@ -256,8 +256,8 @@ sha256 = "11fd5de8ee7192469b5e09ed0715958d54e1f93d0495b9eae97eca8a5cdca6c1"
 
 [[files]]
 path = "prompts/default_en/postaction_l2_main.md"
-length = 7460
-sha256 = "ee022fbb73eb52eeee26c378b64b88f009cfbb2e643bfd619fc50fdc5a32faf1"
+length = 7904
+sha256 = "b277a491fcef8d2c44563f2970f544e4703d72dc67b2697123f011065c23e566"
 
 [[files]]
 path = "prompts/default_en/precheck_l1_main.md"

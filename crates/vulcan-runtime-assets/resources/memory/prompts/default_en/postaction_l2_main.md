@@ -36,7 +36,7 @@ Usually drop when:
 - The candidate is a Q&A echo, existing memory restatement, existing profile echo, general knowledge answer, temporary state, or instant observation.
 - Expensive research or tools rediscovered the same stable fact; cost does not override duplication.
 
-If one old memory covers the core fact, set `dedupe_memory_id` to that candidate's own `similar_memories.memory_id`. If several old memories together cover it, use the memory ID that best represents the core fact. If there is no reliable old memory, omit or leave `dedupe_memory_id` empty.
+If one old memory covers the core fact, set `dedupe_memory_id` to that candidate's own `similar_memories.memory_id`. If several old memories together cover it, use the memory ID that best represents the core fact. If there is no reliable old memory, set `dedupe_memory_id` to null or omit the key; never write an empty string.
 
 ## Accept a memory candidate
 Accept only when the candidate adds a durable fact missing from old memories, or clearly corrects, updates, or advances an old fact. If it replaces old memory wording or content, set `supersede_memory_ids` using only that candidate's own `similar_memories.memory_id`. If it is a parallel addition, use an empty supersede list.
@@ -68,6 +68,10 @@ A general food preference can be stable, but "like" does not imply maximum autho
 
 # Output Contract
 Return only one valid JSON object. The first character must be `{` and the last character must be `}`. Do not output Markdown, explanation, prefix, suffix, or reasoning.
+
+Check before output:
+- Within each block, the `candidate_index` values of the two result lists together cover every input index of that block exactly once; for `user` / `project`, valid indexes are only the `candidate_index` values in that block's own `new_candidates`.
+- Every ID field is copied verbatim from the input; when there is nothing to reference, omit the key or use an empty array, never `""`.
 
 Shape:
 {

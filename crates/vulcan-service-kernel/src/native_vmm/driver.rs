@@ -19,14 +19,14 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use vulcan_ai_contract::{
     AiMessage, AiOperation, ContentItem, EmbeddingCapabilities, EmbeddingEncoding, EmbeddingInput,
     EmbeddingInputContent, EmbeddingInvalidInputPolicy, EmbeddingOutputKind, EmbeddingPayload,
-    EmbeddingRequest, EmbeddingSpaceFingerprint, EmbeddingTask, HostAiCallContext,
-    HostAiCancellation, HostAiCapabilityHandle, HostAiCapabilityRegistration,
+    EmbeddingRequest, EmbeddingSpaceFingerprint, EmbeddingTask, ExecutionRouteSnapshot,
+    HostAiCallContext, HostAiCancellation, HostAiCapabilityHandle, HostAiCapabilityRegistration,
     HostAiCapabilityRequirement, HostAiEmbeddingRequest, HostAiError, HostAiErrorCode, HostAiPort,
     INFERENCE_CONTRACT_VERSION, InferenceCallerBudget, InferenceCallerContext,
     InferenceOperationCapability, InferencePermission, InferenceUsageScope, MessageRole,
@@ -1791,18 +1791,39 @@ impl NativeVmmHostDriver {
             Err(error) => return Ok(ai_failure(EffectFailureKind::Llm, error)),
         };
         let encoded;
-        let bytes = if let Some(value) = response.structured_output.as_ref() {
+        let (bytes, output_source) = if let Some(value) = response.structured_output.as_ref() {
             encoded = serde_json::to_vec(value).map_err(|error| {
                 core_effect_error(format!(
                     "failed to encode native VMM structured output: {error}"
                 ))
             })?;
-            encoded.as_slice()
+            (encoded.as_slice(), "structured_output")
         } else {
-            response.output_text.as_bytes()
+            (response.output_text.as_bytes(), "output_text")
         };
-        let output = llm_contract::parse_host_response(effect, bytes)?;
-        Ok(HostEffectResult::Llm(output))
+        match llm_contract::parse_host_response(effect, bytes) {
+            Ok(output) => Ok(HostEffectResult::Llm(output)),
+            Err(error) => {
+                if error.code == ErrorCode::StructuredOutputContractViolation {
+                    // The rejected bytes are the only evidence of which field the model got wrong.
+                    // 被拒绝的原始字节是判断模型写错哪个字段的唯一证据。
+                    let record = structured_output_failure_record(
+                        &StructuredOutputFailureEvidence {
+                            purpose_id,
+                            output_contract: structured_output_name(effect.output_contract),
+                            request_id: &request_id,
+                            route: &response.route,
+                            termination_reason: &response.termination_reason,
+                            diagnostic: &error.diagnostic,
+                            output_source,
+                        },
+                        bytes,
+                    );
+                    persist_structured_output_failure(record).await;
+                }
+                Err(error)
+            }
+        }
     }
 
     /// Runs one ordered dense embedding batch through the unified host AI Port.
@@ -3658,6 +3679,115 @@ const fn structured_output_name(
     }
 }
 
+/// Stable schema identity of one rejected structured-output diagnostic record.
+/// 一份被拒绝结构化输出诊断记录的稳定模式标识。
+const STRUCTURED_OUTPUT_FAILURE_SCHEMA_VERSION: &str = "vulcan.vmm-structured-output-failure.v1";
+/// Raw model output retained per record; one eighth of the slot leaves room for JSON escaping.
+/// 每条记录保留的模型原始输出；取槽位的八分之一，为 JSON 转义留出空间。
+const STRUCTURED_OUTPUT_FAILURE_RAW_BYTES: usize =
+    (vulcan_workspace_store::workspace_store::VMM_STRUCTURED_OUTPUT_FAILURE_MAX_BYTES / 8) as usize;
+/// Process-local sequence that rotates rejected structured-output records across their slots.
+/// 在各槽位之间轮转被拒绝结构化输出记录的进程内序号。
+static STRUCTURED_OUTPUT_FAILURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Identifies one rejected structured output without carrying the model bytes.
+/// 标识一次被拒绝的结构化输出，不携带模型字节。
+struct StructuredOutputFailureEvidence<'a> {
+    /// Configured VMM purpose that produced the output.
+    /// 产生该输出的已配置 VMM 用途。
+    purpose_id: &'a str,
+    /// Stable JSON Schema name sent to the provider.
+    /// 发送给供应商的稳定 JSON Schema 名称。
+    output_contract: &'a str,
+    /// Host request identity shared with the configured-inference request trace.
+    /// 与已配置推理请求追踪共享的宿主请求标识。
+    request_id: &'a str,
+    /// Exact route that answered the request.
+    /// 应答该请求的准确路由。
+    route: &'a ExecutionRouteSnapshot,
+    /// Provider termination reason, which separates truncation from malformed answers.
+    /// 供应商终止原因，用于区分截断与格式错误的回答。
+    termination_reason: &'a str,
+    /// Contract violation reported by the strict decoder.
+    /// 严格解码器报告的契约违规。
+    diagnostic: &'a str,
+    /// Response field that carried the rejected bytes.
+    /// 承载被拒绝字节的响应字段。
+    output_source: &'static str,
+}
+
+/// Builds one bounded, secret-free diagnostic record for a rejected structured output.
+/// 为一次被拒绝的结构化输出构建有界且不含秘密的诊断记录。
+///
+/// # Parameters
+/// 参数
+/// `evidence` identifies the request and violation; `raw` is the exact rejected model output.
+/// `evidence` 标识请求与违规；`raw` 是被拒绝的准确模型输出。
+///
+/// # Returns
+/// 返回值
+/// A JSON document whose raw output is truncated on a character boundary.
+/// 返回原始输出已按字符边界截断的 JSON 文档。
+fn structured_output_failure_record(
+    evidence: &StructuredOutputFailureEvidence<'_>,
+    raw: &[u8],
+) -> serde_json::Value {
+    let text = String::from_utf8_lossy(raw);
+    let mut retained = text.len().min(STRUCTURED_OUTPUT_FAILURE_RAW_BYTES);
+    while !text.is_char_boundary(retained) {
+        retained -= 1;
+    }
+    let raw_output =
+        vulcan_workspace_store::workspace_store::redact_provider_secrets(&text[..retained], &[]);
+    serde_json::json!({
+        "schema_version": STRUCTURED_OUTPUT_FAILURE_SCHEMA_VERSION,
+        "captured_at_unix_ms": SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)),
+        "purpose_id": evidence.purpose_id,
+        "output_contract": evidence.output_contract,
+        "request_id": evidence.request_id,
+        "route": evidence.route,
+        "termination_reason": evidence.termination_reason,
+        "diagnostic": evidence.diagnostic,
+        "output_source": evidence.output_source,
+        "raw_output_bytes": raw.len(),
+        "raw_output_truncated": retained < text.len(),
+        "raw_output": raw_output,
+    })
+}
+
+/// Persists one rejected structured-output record; failures are logged and never mask the violation.
+/// 持久化一份被拒绝结构化输出记录；失败只记录日志，绝不掩盖原有违规。
+///
+/// # Parameters
+/// 参数
+/// `record` is the complete document built by `structured_output_failure_record`.
+/// `record` 是由 `structured_output_failure_record` 构建的完整文档。
+async fn persist_structured_output_failure(record: serde_json::Value) {
+    let slot_index = STRUCTURED_OUTPUT_FAILURE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        % vulcan_workspace_store::workspace_store::VMM_STRUCTURED_OUTPUT_FAILURE_SLOT_COUNT;
+    let data_root = vulcan_workspace_store::data_plane::application_data_root();
+    let persisted = tokio::task::spawn_blocking(move || {
+        vulcan_workspace_store::workspace_store::persist_vmm_structured_output_failure(
+            &data_root, slot_index, &record,
+        )
+    })
+    .await;
+    match persisted {
+        Ok(Ok(path)) => tracing::warn!(
+            "[native-vmm] structured output rejected; raw output saved to {}",
+            path.display()
+        ),
+        Ok(Err(error)) => tracing::warn!(
+            "[native-vmm] structured output rejected; saving raw output failed: {error}"
+        ),
+        Err(error) => tracing::warn!(
+            "[native-vmm] structured output rejected; raw output writer failed: {error}"
+        ),
+    }
+}
+
 /// Bounds the diagnostic retained by Core, including transport status and provider code.
 /// 限制 Core 保留的诊断长度，包含传输状态和供应商错误码。
 const AI_FAILURE_DIAGNOSTIC_CHARS: usize = 512;
@@ -3919,6 +4049,56 @@ mod tests {
         DistanceMetric, EmbeddingCapabilities, EmbeddingNormalization, InferenceCapabilitySnapshot,
         InferenceOperationCapability,
     };
+
+    /// Verifies rejected structured outputs are bounded on a character boundary and fit one slot.
+    /// 验证被拒绝的结构化输出按字符边界截断且能放入一个槽位。
+    #[test]
+    fn structured_output_failure_record_truncates_on_char_boundary() {
+        let route = ExecutionRouteSnapshot {
+            provider_id: String::from("synthetic-provider"),
+            service_entry_id: String::from("synthetic-entry"),
+            connection_id: String::from("synthetic-connection"),
+            model_id: String::from("synthetic-model"),
+            protocol_binding_id: Some(String::from("openai-chat-completions.v1")),
+            action_binding_id: None,
+            secondary_route_id: None,
+            secondary_provider_name: None,
+            secondary_endpoint_name: None,
+            capability_revision: String::from("capability"),
+            catalog_revision: String::from("catalog"),
+            route_revision: String::from("route"),
+            usage_scope: InferenceUsageScope::InternalBackground,
+        };
+        let evidence = StructuredOutputFailureEvidence {
+            purpose_id: "postaction_l2",
+            output_contract: "vmm_postaction_review",
+            request_id: "vmm-llm-synthetic",
+            route: &route,
+            termination_reason: "stop",
+            diagnostic: "synthetic violation",
+            output_source: "output_text",
+        };
+
+        let short = structured_output_failure_record(&evidence, br#"{"memory":{}}"#);
+        assert_eq!(short["raw_output"], r#"{"memory":{}}"#);
+        assert_eq!(short["raw_output_truncated"], false);
+
+        // Three-byte characters make a byte-exact cut land inside a character.
+        // 三字节字符使按字节截断恰好落在字符内部。
+        let raw = "记".repeat(STRUCTURED_OUTPUT_FAILURE_RAW_BYTES);
+        let long = structured_output_failure_record(&evidence, raw.as_bytes());
+        let retained = long["raw_output"].as_str().expect("raw output is text");
+        assert_eq!(long["raw_output_truncated"], true);
+        assert_eq!(long["raw_output_bytes"], raw.len());
+        assert!(retained.len() <= STRUCTURED_OUTPUT_FAILURE_RAW_BYTES);
+        assert!(raw.starts_with(retained));
+        let encoded = serde_json::to_vec(&long).expect("encode failure record");
+        assert!(
+            u64::try_from(encoded.len()).expect("length fits u64")
+                <= vulcan_workspace_store::workspace_store::VMM_STRUCTURED_OUTPUT_FAILURE_MAX_BYTES,
+            "a truncated record must fit one diagnostic slot"
+        );
+    }
 
     /// Verifies provider failures retain structured transport identifiers and the existing size bound.
     /// 验证供应商失败保留结构化传输标识及既有长度上限。

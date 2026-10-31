@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "deepseek",
-  "revision": 18,
-  "published_at": "2026-10-19T07:42:22Z",
+  "revision": 19,
+  "published_at": "2026-10-31T13:56:12Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -208,7 +208,9 @@
         "openai-responses.v1": {
           "provider_native_tools": [
             "web_search"
-          ]
+          ],
+          "structured_output": "json_schema",
+          "evidence_revision": "deepseek.api-docs.create-response.json-schema.2026-10-31"
         }
       },
       "input_resource_constraints": [
@@ -302,7 +304,9 @@
         "openai-responses.v1": {
           "provider_native_tools": [
             "web_search"
-          ]
+          ],
+          "structured_output": "json_schema",
+          "evidence_revision": "deepseek.api-docs.create-response.json-schema.2026-10-31"
         }
       },
       "model_parameters": [

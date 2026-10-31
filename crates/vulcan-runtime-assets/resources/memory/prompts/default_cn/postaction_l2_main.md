@@ -36,7 +36,7 @@
 - 只是问答回显、已有记忆复述、已有画像回显、通识回答、临时状态或瞬时观测值。
 - 高成本检索或工具再次得到的仍是旧事实；检索成本不能抵消重复判定。
 
-如果丢弃原因是某条旧记忆已覆盖核心事实，在 `dedupe_memory_id` 写入该候选自己的 `similar_memories.memory_id`。如果多条旧记忆共同覆盖，填写最能代表核心事实的那条。没有可信旧记忆可复用时可省略或留空。
+如果丢弃原因是某条旧记忆已覆盖核心事实，在 `dedupe_memory_id` 写入该候选自己的 `similar_memories.memory_id`。如果多条旧记忆共同覆盖，填写最能代表核心事实的那条。没有可信旧记忆可复用时将 `dedupe_memory_id` 写为 null 或省略该键，不得写空字符串。
 
 ## 保留新记忆
 只有新候选明确提供旧记忆没有的长期事实，或明确纠正、更新、推进旧事实时才保留。若新候选替代了旧记忆表达，在 `supersede_memory_ids` 写入该候选自己的 `similar_memories.memory_id`。如果只是并行补充，不构成覆盖，则 `supersede_memory_ids` 为空数组。
@@ -68,6 +68,10 @@
 
 # Output Contract
 只输出一个合法 JSON object。第一个字符必须是 `{`，最后一个字符必须是 `}`。不要输出 Markdown、解释、前缀、后缀或思考过程。
+
+输出前自查：
+- 每个块内，两个结果列表的 `candidate_index` 合起来恰好覆盖该块全部输入编号各一次；`user` / `project` 的有效编号只有该块自己 `new_candidates` 中的 `candidate_index`。
+- 所有 ID 字段只照抄输入原值；无可引用时省略该键或使用空数组，不得写 `""`。
 
 输出形状：
 {

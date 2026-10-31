@@ -4601,7 +4601,8 @@ fn responses_provider_request(
     let structured_output = structured_output_policy_for_protocol(
         selection.route.protocol_route.protocol_profile_id.as_str(),
         &request.structured_output,
-    );
+        &effective_capabilities,
+    )?;
     Ok(AiExecutionRequest {
         operation: AiOperation::ConversationRespond,
         model_id: selection.model.id.clone(),
@@ -4791,28 +4792,57 @@ fn resource_kind_label(kind: ResourceKind) -> &'static str {
 ///
 /// # Parameters
 /// 参数
-/// `protocol_id` is the exact frozen protocol profile and `policy` is the caller-owned JSON contract.
-/// `protocol_id` 是冻结的精确协议 Profile，`policy` 是调用方拥有的 JSON 契约。
+/// `protocol_id` is the exact frozen protocol profile, `policy` is the caller-owned JSON contract,
+/// and `capabilities` is the selected model declaration for that route.
+/// `protocol_id` 是冻结的精确协议 Profile，`policy` 是调用方拥有的 JSON 契约，
+/// `capabilities` 是该路由所选模型的声明。
 ///
 /// # Returns
 /// 返回值
-/// Anthropic keeps the exact JSON Schema contract. Protocols whose provider APIs expose a
-/// JSON-object switch receive `JsonObject`, while the shared host finalizer still enforces the
-/// caller-owned schema after decoding. Unknown profiles receive no native projection.
-/// Anthropic 保留准确 JSON Schema 契约；提供方 API 暴露 JSON-object 开关的协议接收
-/// `JsonObject`，共享宿主终结器仍在解码后强制校验调用方拥有的 Schema；未知协议不投影。
+/// Anthropic keeps the exact JSON Schema contract. OpenAI Responses keeps it only when the model
+/// declares `json_schema`; a strict schema is then sent in the provider form where every object
+/// requires all of its properties. Other protocols whose provider APIs expose a JSON-object switch
+/// receive `JsonObject`. The shared host finalizer always enforces the caller-owned schema after
+/// decoding. Unknown profiles receive no native projection. A strict schema whose optional
+/// property rejects `null` is a contract error instead of a silent downgrade.
+/// Anthropic 保留准确 JSON Schema 契约；OpenAI Responses 仅在模型声明 `json_schema` 时保留，
+/// 严格 Schema 以每个对象全部属性必填的提供方形态发送；其他暴露 JSON-object 开关的协议接收
+/// `JsonObject`。共享宿主终结器始终在解码后校验调用方拥有的 Schema；未知协议不投影。严格
+/// Schema 中拒绝 `null` 的可选属性按契约错误处理，不静默降级。
 fn structured_output_policy_for_protocol(
     protocol_id: &str,
     policy: &StructuredOutputPolicy,
-) -> StructuredOutputPolicy {
+    capabilities: &ModelCapabilities,
+) -> Result<StructuredOutputPolicy, ConfiguredInferenceError> {
     if matches!(policy, StructuredOutputPolicy::None) {
-        return StructuredOutputPolicy::None;
+        return Ok(StructuredOutputPolicy::None);
     }
     if matches!(
         protocol_id,
         ANTHROPIC_MESSAGES_PROFILE_ID | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
     ) {
-        return policy.clone();
+        return Ok(policy.clone());
+    }
+    if protocol_id == OPENAI_RESPONSES_PROFILE_ID
+        && capabilities.structured_output == StructuredOutputCapability::JsonSchema
+        && let StructuredOutputPolicy::JsonSchema {
+            name,
+            description,
+            schema,
+            strict,
+        } = policy
+    {
+        let schema = if *strict {
+            strict_provider_schema(schema)?
+        } else {
+            schema.clone()
+        };
+        return Ok(StructuredOutputPolicy::JsonSchema {
+            name: name.clone(),
+            description: description.clone(),
+            schema,
+            strict: *strict,
+        });
     }
     if matches!(
         protocol_id,
@@ -4824,9 +4854,125 @@ fn structured_output_policy_for_protocol(
             | GEMINI_INTERACTIONS_PROFILE_ID
             | COHERE_CHAT_PROFILE_ID
     ) {
-        return StructuredOutputPolicy::JsonObject;
+        return Ok(StructuredOutputPolicy::JsonObject);
     }
-    StructuredOutputPolicy::None
+    Ok(StructuredOutputPolicy::None)
+}
+
+/// Rewrites a caller schema into the strict provider form where every object lists all of its
+/// properties as required.
+/// 将调用方 Schema 改写为严格提供方形态：每个对象把全部属性列为必填。
+///
+/// # Parameters
+/// 参数
+/// `schema` is the caller-owned JSON Schema; the caller's copy stays the host validation authority.
+/// `schema` 是调用方拥有的 JSON Schema；调用方副本仍是宿主校验权威。
+///
+/// # Returns
+/// 返回值
+/// The provider schema, or a contract error when an omissible property does not accept `null`,
+/// because requiring it would change the caller contract.
+/// 返回提供方 Schema；可省略属性不接受 `null` 时返回契约错误，因为将其设为必填会改变调用方契约。
+fn strict_provider_schema(
+    schema: &serde_json::Value,
+) -> Result<serde_json::Value, ConfiguredInferenceError> {
+    let mut projected = schema.clone();
+    require_all_properties(&mut projected)?;
+    Ok(projected)
+}
+
+/// Recursively completes `required` on every object schema reachable through schema keywords.
+/// 递归补全经 Schema 关键字可达的每个对象 Schema 的 `required`。
+///
+/// # Parameters
+/// 参数
+/// `node` is one schema node; only schema-valued keywords are visited, never data keywords.
+/// `node` 是一个 Schema 节点；只访问值为 Schema 的关键字，绝不访问数据关键字。
+///
+/// # Returns
+/// 返回值
+/// Success after rewriting, or a contract error for an omissible property that rejects `null`.
+/// 改写后返回成功；可省略属性拒绝 `null` 时返回契约错误。
+fn require_all_properties(node: &mut serde_json::Value) -> Result<(), ConfiguredInferenceError> {
+    let Some(object) = node.as_object_mut() else {
+        return Ok(());
+    };
+    if let Some(properties) = object
+        .get_mut("properties")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        for property in properties.values_mut() {
+            require_all_properties(property)?;
+        }
+    }
+    if let Some(properties) = object
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+    {
+        let required: BTreeSet<&str> = object
+            .get("required")
+            .and_then(serde_json::Value::as_array)
+            .map(|names| names.iter().filter_map(serde_json::Value::as_str).collect())
+            .unwrap_or_default();
+        for (name, property) in properties {
+            if !required.contains(name.as_str()) && !schema_accepts_null(property) {
+                return Err(ConfiguredInferenceError::new(
+                    ConfiguredInferenceErrorCategory::Contract,
+                    format!(
+                        "Strict JSON Schema property `{name}` is optional but does not accept null, so the provider form cannot require it."
+                    ),
+                ));
+            }
+        }
+        let all = properties
+            .keys()
+            .map(|name| serde_json::Value::String(name.clone()))
+            .collect();
+        object.insert(String::from("required"), serde_json::Value::Array(all));
+    }
+    if let Some(items) = object.get_mut("items") {
+        require_all_properties(items)?;
+    }
+    for keyword in ["anyOf", "oneOf", "allOf", "prefixItems"] {
+        if let Some(branches) = object
+            .get_mut(keyword)
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            for branch in branches {
+                require_all_properties(branch)?;
+            }
+        }
+    }
+    for keyword in ["$defs", "definitions"] {
+        if let Some(definitions) = object
+            .get_mut(keyword)
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            for definition in definitions.values_mut() {
+                require_all_properties(definition)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Reports whether one property schema explicitly admits JSON `null`.
+/// 判断一个属性 Schema 是否显式接受 JSON `null`。
+fn schema_accepts_null(schema: &serde_json::Value) -> bool {
+    let is_null_type = |value: &serde_json::Value| match value.get("type") {
+        Some(serde_json::Value::String(kind)) => kind == "null",
+        Some(serde_json::Value::Array(kinds)) => kinds.iter().any(|kind| kind == "null"),
+        _ => false,
+    };
+    if is_null_type(schema) {
+        return true;
+    }
+    ["anyOf", "oneOf"].iter().any(|keyword| {
+        schema
+            .get(*keyword)
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|branches| branches.iter().any(is_null_type))
+    })
 }
 
 /// Verifies that one exact model and protocol route can carry the requested structured contract.
@@ -4901,25 +5047,27 @@ fn model_route_supports_structured_output(
     requested: StructuredOutputCapability,
     capabilities: &ModelCapabilities,
 ) -> bool {
-    let provider_requirement = if matches!(
-        protocol_id,
-        ANTHROPIC_MESSAGES_PROFILE_ID | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
-    ) {
-        requested
-    } else if matches!(
-        protocol_id,
-        OPENAI_CHAT_PROFILE_ID
-            | OPENAI_RESPONSES_PROFILE_ID
-            | OPENAI_CODEX_RESPONSES_PROFILE_ID
-            | GEMINI_GENERATE_CONTENT_PROFILE_ID
-            | GOOGLE_CODE_ASSIST_PROFILE_ID
-            | GEMINI_INTERACTIONS_PROFILE_ID
-            | COHERE_CHAT_PROFILE_ID
-    ) {
-        StructuredOutputCapability::JsonObject
-    } else {
-        return false;
-    };
+    let provider_requirement =
+        if matches!(
+            protocol_id,
+            ANTHROPIC_MESSAGES_PROFILE_ID | ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID
+        ) || route_projects_provider_json_schema(protocol_id, capabilities)
+        {
+            requested
+        } else if matches!(
+            protocol_id,
+            OPENAI_CHAT_PROFILE_ID
+                | OPENAI_RESPONSES_PROFILE_ID
+                | OPENAI_CODEX_RESPONSES_PROFILE_ID
+                | GEMINI_GENERATE_CONTENT_PROFILE_ID
+                | GOOGLE_CODE_ASSIST_PROFILE_ID
+                | GEMINI_INTERACTIONS_PROFILE_ID
+                | COHERE_CHAT_PROFILE_ID
+        ) {
+            StructuredOutputCapability::JsonObject
+        } else {
+            return false;
+        };
     if !protocol_profile_supports_structured_output(protocol_id, provider_requirement) {
         return false;
     }
@@ -4932,6 +5080,26 @@ fn model_route_supports_structured_output(
         }
         StructuredOutputCapability::Unsupported => false,
     }
+}
+
+/// Reports whether a non-Anthropic route sends the caller JSON Schema to the provider.
+/// 判断一条非 Anthropic 路由是否把调用方 JSON Schema 发送给提供方。
+///
+/// # Parameters
+/// 参数
+/// `protocol_id` is the frozen encoder and `capabilities` is the selected model declaration.
+/// `protocol_id` 是冻结编码器，`capabilities` 是所选模型声明。
+///
+/// # Returns
+/// 返回值
+/// `true` only for OpenAI Responses routes whose model declares `json_schema`.
+/// 仅当 OpenAI Responses 路由的模型声明 `json_schema` 时返回 `true`。
+fn route_projects_provider_json_schema(
+    protocol_id: &str,
+    capabilities: &ModelCapabilities,
+) -> bool {
+    protocol_id == OPENAI_RESPONSES_PROFILE_ID
+        && capabilities.structured_output == StructuredOutputCapability::JsonSchema
 }
 
 /// Applies the shared restricted-request reasoning policy and removes conflicting provider controls.
@@ -8286,29 +8454,147 @@ mod tests {
             }),
             strict: true,
         };
+        let json_object_model = ModelCapabilities::default();
+        let project = |protocol_id: &str, capabilities: &ModelCapabilities| {
+            structured_output_policy_for_protocol(protocol_id, &policy, capabilities)
+                .expect("a schema whose properties are all required must project")
+        };
 
         assert_eq!(
-            structured_output_policy_for_protocol(ANTHROPIC_MESSAGES_PROFILE_ID, &policy),
+            project(ANTHROPIC_MESSAGES_PROFILE_ID, &json_object_model),
             policy
         );
+        for protocol_id in [
+            vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,
+            vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
+            vulcan_llm_core::GEMINI_GENERATE_CONTENT_PROFILE_ID,
+            vulcan_llm_core::COHERE_CHAT_PROFILE_ID,
+        ] {
+            assert_eq!(
+                project(protocol_id, &json_object_model),
+                StructuredOutputPolicy::JsonObject,
+                "{protocol_id} without a json_schema declaration must request a JSON object"
+            );
+        }
         assert_eq!(
-            structured_output_policy_for_protocol(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID, &policy),
-            StructuredOutputPolicy::JsonObject
+            project("unknown.protocol", &json_object_model),
+            StructuredOutputPolicy::None
+        );
+    }
+
+    /// Verifies only declared Responses routes keep the schema, in the strict provider form.
+    /// 验证只有声明能力的 Responses 路由保留 Schema，并以严格提供方形态发送。
+    #[test]
+    fn responses_json_schema_routes_send_strict_provider_schema() {
+        let caller_schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "verdict": { "type": "string", "enum": ["allow", "deny"] },
+                "note": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "index": { "type": "integer" },
+                            "reason": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+                        },
+                        "required": ["index"],
+                        "additionalProperties": false
+                    }
+                }
+            },
+            "required": ["verdict", "items"],
+            "additionalProperties": false
+        });
+        let policy = |strict: bool| StructuredOutputPolicy::JsonSchema {
+            name: String::from("decision"),
+            description: Some(String::from("decision output")),
+            schema: caller_schema.clone(),
+            strict,
+        };
+        let json_schema_model = ModelCapabilities {
+            structured_output: StructuredOutputCapability::JsonSchema,
+            ..ModelCapabilities::default()
+        };
+
+        let StructuredOutputPolicy::JsonSchema { schema, strict, .. } =
+            structured_output_policy_for_protocol(
+                vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
+                &policy(true),
+                &json_schema_model,
+            )
+            .expect("nullable optional properties must project")
+        else {
+            panic!("a declared Responses route must keep the JSON Schema policy");
+        };
+        assert!(strict);
+        let required = |node: &serde_json::Value| -> BTreeSet<String> {
+            node["required"]
+                .as_array()
+                .expect("every object must list required properties")
+                .iter()
+                .filter_map(|name| name.as_str().map(str::to_owned))
+                .collect()
+        };
+        let properties = |node: &serde_json::Value| -> BTreeSet<String> {
+            node["properties"]
+                .as_object()
+                .expect("object schema")
+                .keys()
+                .cloned()
+                .collect()
+        };
+        assert_eq!(required(&schema), properties(&schema));
+        let nested = &schema["properties"]["items"]["items"];
+        assert_eq!(required(nested), properties(nested));
+
+        assert_eq!(
+            structured_output_policy_for_protocol(
+                vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
+                &policy(false),
+                &json_schema_model,
+            )
+            .expect("non-strict schemas project unchanged"),
+            policy(false)
         );
         assert_eq!(
             structured_output_policy_for_protocol(
-                vulcan_llm_core::GEMINI_GENERATE_CONTENT_PROFILE_ID,
-                &policy
-            ),
-            StructuredOutputPolicy::JsonObject
+                vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,
+                &policy(true),
+                &json_schema_model,
+            )
+            .expect("chat projection must succeed"),
+            StructuredOutputPolicy::JsonObject,
+            "only the Responses encoder is enabled for provider-side JSON Schema"
         );
-        assert_eq!(
-            structured_output_policy_for_protocol(vulcan_llm_core::COHERE_CHAT_PROFILE_ID, &policy),
-            StructuredOutputPolicy::JsonObject
-        );
-        assert_eq!(
-            structured_output_policy_for_protocol("unknown.protocol", &policy),
-            StructuredOutputPolicy::None
-        );
+    }
+
+    /// Verifies a strict schema cannot be made provider-strict when an optional key rejects null.
+    /// 验证可选键拒绝 null 时，严格 Schema 无法转为提供方严格形态。
+    #[test]
+    fn responses_strict_schema_rejects_optional_non_nullable_property() {
+        let policy = StructuredOutputPolicy::JsonSchema {
+            name: String::from("decision"),
+            description: None,
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": { "note": { "type": "string" } },
+                "additionalProperties": false
+            }),
+            strict: true,
+        };
+        let json_schema_model = ModelCapabilities {
+            structured_output: StructuredOutputCapability::JsonSchema,
+            ..ModelCapabilities::default()
+        };
+
+        let error = structured_output_policy_for_protocol(
+            vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
+            &policy,
+            &json_schema_model,
+        )
+        .expect_err("requiring a non-nullable optional key would change the caller contract");
+        assert_eq!(error.category, ConfiguredInferenceErrorCategory::Contract);
     }
 }

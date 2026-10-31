@@ -124,6 +124,15 @@ pub const CONFIGURED_INFERENCE_PROVIDER_REQUEST_TRACE_SLOT_COUNT: u64 = 4;
 /// Maximum encoded bytes retained in one configured inference trace slot.
 /// 单个已配置推理追踪槽位保留的最大编码字节数。
 pub const CONFIGURED_INFERENCE_PROVIDER_REQUEST_TRACE_MAX_BYTES: u64 = 16 * 1024 * 1024;
+/// Application-level directory that owns rejected native VMM structured outputs.
+/// 保存被拒绝的原生 VMM 结构化输出的应用级目录。
+const VMM_STRUCTURED_OUTPUT_FAILURE_DIRECTORY: &str = "vmm-structured-output-failures";
+/// Number of exact rotating files retained for rejected VMM structured outputs.
+/// 被拒绝的 VMM 结构化输出保留的精确轮转文件数量。
+pub const VMM_STRUCTURED_OUTPUT_FAILURE_SLOT_COUNT: u64 = 8;
+/// Maximum encoded bytes retained in one rejected VMM structured-output slot.
+/// 单个被拒绝 VMM 结构化输出槽位保留的最大编码字节数。
+pub const VMM_STRUCTURED_OUTPUT_FAILURE_MAX_BYTES: u64 = 1024 * 1024;
 /// Serializes configured inference trace-slot replacement.
 /// 串行化已配置推理追踪槽位替换。
 static CONFIGURED_INFERENCE_PROVIDER_REQUEST_TRACE_WRITE_LOCK: OnceLock<Mutex<()>> =
@@ -179,6 +188,53 @@ pub fn persist_configured_inference_provider_request_trace(
         "configured-inference provider request trace",
     )?;
     Ok(trace_path)
+}
+
+/// Persists one rejected native VMM structured output into an exact rotating slot.
+/// 将一份被拒绝的原生 VMM 结构化输出持久化到精确轮转槽位。
+///
+/// # Parameters
+/// 参数
+/// `data_root` is the host_runtime-managed Vulcan data root; `slot_index` is the deterministic
+/// bounded slot; and `record` is the complete secret-free diagnostic document whose text fields
+/// the caller has already truncated.
+/// `data_root` 是宿主运行时管理的 Vulcan 数据根目录；`slot_index` 是确定性有界槽位；
+/// `record` 是调用方已截断文本字段的完整不含秘密诊断文档。
+///
+/// # Returns
+/// 返回值
+/// The final record path after atomic publication, or an explicit validation and storage error.
+/// 原子发布完成后返回最终记录路径，或返回明确的校验与存储错误。
+pub fn persist_vmm_structured_output_failure(
+    data_root: &Path,
+    slot_index: u64,
+    record: &Value,
+) -> Result<PathBuf, String> {
+    if slot_index >= VMM_STRUCTURED_OUTPUT_FAILURE_SLOT_COUNT {
+        return Err(format!(
+            "VMM structured-output failure slot {slot_index} is outside the 0..{} range.",
+            VMM_STRUCTURED_OUTPUT_FAILURE_SLOT_COUNT - 1
+        ));
+    }
+    let encoded = serde_json::to_vec(record).map_err(|error| {
+        format!("VMM structured-output failure JSON serialization failed: {error}")
+    })?;
+    if u64::try_from(encoded.len()).unwrap_or(u64::MAX) > VMM_STRUCTURED_OUTPUT_FAILURE_MAX_BYTES
+    {
+        return Err(format!(
+            "VMM structured-output failure record exceeds its {VMM_STRUCTURED_OUTPUT_FAILURE_MAX_BYTES}-byte slot capacity."
+        ));
+    }
+    let record_path = data_root
+        .join("diagnostics")
+        .join(VMM_STRUCTURED_OUTPUT_FAILURE_DIRECTORY)
+        .join(format!("slot-{slot_index:02}.json"));
+    replace_exact_provider_request_trace_slot(
+        &record_path,
+        &encoded,
+        "VMM structured-output failure record",
+    )?;
+    Ok(record_path)
 }
 
 /// Encodes one compact trace and omits only the oversized request body before response evidence.
