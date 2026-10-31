@@ -50,7 +50,8 @@ impl Fixture {
             protocols: vec![protocol],
             authentication: CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: CustomProviderModelDiscoveryMode::Manual,
-            model_discovery_protocol: vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol::OpenAi,
+            model_discovery_protocol:
+                vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol::OpenAi,
             model_discovery_path: None,
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),
@@ -391,7 +392,8 @@ async fn custom_protocol_edit_keeps_discovered_models_after_save() {
             protocols: vec![protocol],
             authentication: CustomProviderAuthentication::BearerAuthorization,
             model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
-            model_discovery_protocol: vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol::OpenAi,
+            model_discovery_protocol:
+                vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol::OpenAi,
             model_discovery_path: None,
             protocol_routes: Vec::new(),
             request_headers: BTreeMap::new(),

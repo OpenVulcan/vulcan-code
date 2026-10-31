@@ -44,7 +44,8 @@ fn custom_codex_provider_candidate_preserves_explicit_responses_capabilities() {
         secret: Some(String::from("test-secret")),
         validation_connection_id: None,
         model_discovery_mode: CustomProviderModelDiscoveryMode::Manual,
-        model_discovery_protocol: vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol::OpenAi,
+        model_discovery_protocol:
+            vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol::OpenAi,
         model_discovery_path: None,
         protocol_routes: Vec::new(),
         request_headers: BTreeMap::new(),
@@ -95,7 +96,8 @@ fn custom_codex_capability_switch_is_not_a_connection_contract_change() {
         protocols: vec![CustomProviderProtocol::OpenAiCodexResponses],
         authentication: CustomProviderAuthentication::BearerAuthorization,
         model_discovery_mode: CustomProviderModelDiscoveryMode::Manual,
-        model_discovery_protocol: vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol::OpenAi,
+        model_discovery_protocol:
+            vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol::OpenAi,
         model_discovery_path: None,
         protocol_routes: Vec::new(),
         request_headers: BTreeMap::new(),
@@ -123,7 +125,8 @@ fn custom_codex_capability_switch_is_not_a_connection_contract_change() {
         secret: None,
         validation_connection_id: None,
         model_discovery_mode: CustomProviderModelDiscoveryMode::Manual,
-        model_discovery_protocol: vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol::OpenAi,
+        model_discovery_protocol:
+            vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol::OpenAi,
         model_discovery_path: None,
         protocol_routes: Vec::new(),
         request_headers: BTreeMap::new(),
@@ -158,7 +161,8 @@ fn custom_provider_edit_atomically_migrates_every_existing_credential() {
         protocols: vec![CustomProviderProtocol::OpenAiResponses],
         authentication: CustomProviderAuthentication::BearerAuthorization,
         model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
-        model_discovery_protocol: vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol::OpenAi,
+        model_discovery_protocol:
+            vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol::OpenAi,
         model_discovery_path: None,
         protocol_routes: Vec::new(),
         request_headers: BTreeMap::new(),
@@ -211,7 +215,8 @@ fn custom_provider_edit_atomically_migrates_every_existing_credential() {
         secret: None,
         validation_connection_id: Some(existing.id.clone()),
         model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
-        model_discovery_protocol: vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol::OpenAi,
+        model_discovery_protocol:
+            vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol::OpenAi,
         model_discovery_path: None,
         protocol_routes: Vec::new(),
         request_headers: BTreeMap::new(),
@@ -259,7 +264,8 @@ fn custom_provider_edit_atomically_migrates_every_existing_credential() {
         secret: None,
         validation_connection_id: Some(existing.id.clone()),
         model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
-        model_discovery_protocol: vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol::OpenAi,
+        model_discovery_protocol:
+            vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol::OpenAi,
         model_discovery_path: None,
         protocol_routes: Vec::new(),
         request_headers: BTreeMap::new(),
@@ -640,7 +646,8 @@ fn multi_protocol_custom_provider_projects_one_route_per_protocol() {
         secret: Some(String::from("secret")),
         validation_connection_id: None,
         model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
-        model_discovery_protocol: vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol::OpenAi,
+        model_discovery_protocol:
+            vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol::OpenAi,
         model_discovery_path: None,
         protocols: vec![
             CustomProviderProtocol::OpenAiResponses,
@@ -684,7 +691,8 @@ fn connection_contract_comparison_normalizes_every_route() {
         ],
         authentication: CustomProviderAuthentication::BearerAuthorization,
         model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
-        model_discovery_protocol: vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol::OpenAi,
+        model_discovery_protocol:
+            vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol::OpenAi,
         model_discovery_path: None,
         protocol_routes: Vec::new(),
         request_headers: BTreeMap::new(),
@@ -751,7 +759,8 @@ fn bounded_fixed_headers_survive_prepare_and_registry_revalidation() {
         secret: Some(String::from("secret")),
         validation_connection_id: None,
         model_discovery_mode: CustomProviderModelDiscoveryMode::Manual,
-        model_discovery_protocol: vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol::OpenAi,
+        model_discovery_protocol:
+            vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol::OpenAi,
         model_discovery_path: None,
         protocols: vec![CustomProviderProtocol::OpenAiChat],
         protocol_routes: Vec::new(),
@@ -791,7 +800,8 @@ fn secret_fixed_headers_are_rejected_at_service_save_boundary() {
             secret: Some(String::from("secret")),
             validation_connection_id: None,
             model_discovery_mode: CustomProviderModelDiscoveryMode::Manual,
-            model_discovery_protocol: vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol::OpenAi,
+            model_discovery_protocol:
+                vulcan_provider_adapters::CustomProviderModelDiscoveryProtocol::OpenAi,
             model_discovery_path: None,
             protocols: vec![CustomProviderProtocol::OpenAiChat],
             protocol_routes: Vec::new(),

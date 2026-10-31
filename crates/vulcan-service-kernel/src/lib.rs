@@ -98,10 +98,10 @@ use vulcan_service_api::{
     ProjectTerminalCatalog, ProjectTerminalDisplayAttachment, ProjectTerminalDisplayChangedEvent,
     ProjectTerminalRunningCountChangedEvent, ProjectTerminalShellOption, ProjectTerminalSummary,
     ProviderModelSummary, ProviderRetryStatusChangedDelta, ProviderRetryStatusSnapshot,
-    ProviderSummary, ReasoningSelectionOptionSummary,
-    ReasoningSelectionSummary, RuntimeModuleSnapshot, ServiceActiveWorkSummary, ServiceEvent,
-    ServiceEventEmitter, ServiceLifecycle, ServiceStatusFailure, ServiceStatusSnapshot,
-    SessionAddonChangedEvent, SessionAddonsChangedDelta, SessionAddonsChangedResponse,
+    ProviderSummary, ReasoningSelectionOptionSummary, ReasoningSelectionSummary,
+    RuntimeModuleSnapshot, ServiceActiveWorkSummary, ServiceEvent, ServiceEventEmitter,
+    ServiceLifecycle, ServiceStatusFailure, ServiceStatusSnapshot, SessionAddonChangedEvent,
+    SessionAddonsChangedDelta, SessionAddonsChangedResponse,
     SessionContextCompactionWindowUpdateRequest, SessionGoalSummary, SessionOutputStyleSummary,
     SessionOutputStyleUpdateRequest, SessionPlanArtifactSummary, SessionPlanModeSummary,
     SessionTodolistItemSummary, SessionTodolistSummary, SessionVmmPolicyByConversation,
@@ -208,6 +208,7 @@ mod provider_settings;
 mod provider_usage_runtime;
 mod public_ai_settings;
 mod rpc_dispatch;
+mod rtk_settings;
 mod runtime_summary_projection;
 mod runtime_workspace_helpers;
 mod service_bootstrap;
@@ -232,7 +233,6 @@ mod skill_catalog_projection;
 mod skills_services;
 mod state;
 mod subagent_event_ingest;
-mod rtk_settings;
 mod subagent_models;
 mod subagent_panels;
 mod subagent_workspace_mutation;

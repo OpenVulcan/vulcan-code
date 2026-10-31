@@ -66,10 +66,7 @@ fn merge_requests(groups: Vec<Vec<JudgeInput>>, limit: usize) -> Vec<Vec<(usize,
 /// Gathers each caller's outcomes from the request results, in request order; a caller with any
 /// call in a failed request receives that failure.
 /// 按请求顺序从请求结果中收集每个调用方的结果；任一调用位于失败请求中的调用方收到该失败。
-fn split_results(
-    callers: usize,
-    answered: Vec<(Vec<usize>, CallerResult)>,
-) -> Vec<CallerResult> {
+fn split_results(callers: usize, answered: Vec<(Vec<usize>, CallerResult)>) -> Vec<CallerResult> {
     let mut results: Vec<CallerResult> = (0..callers).map(|_| Ok(Vec::new())).collect();
     for (owners, result) in answered {
         match result {
