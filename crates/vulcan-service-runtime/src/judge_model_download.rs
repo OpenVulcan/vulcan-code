@@ -401,7 +401,9 @@ mod tests {
             files.insert(path.to_string(), body);
         }
         let manifest = serde_json::to_vec(&json!({
-            "format_version": 1, "status": "release", "parent_sha256": "abc", "files": listed
+            "format_version": vulcan_permission_judge::package::MANIFEST_FORMAT_VERSION,
+            "status": "experimental", "family": "mini", "format": "fp32",
+            "parent_sha256": "abc", "files": listed
         }))
         .unwrap();
         let digest = hex(&manifest);
