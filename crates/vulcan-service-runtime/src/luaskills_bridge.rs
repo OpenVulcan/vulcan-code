@@ -15,15 +15,14 @@ use crate::managed_runtime_bootstrap::{
 use luaskills::runtime_options::LuaRuntimeRunLuaPoolConfig;
 use luaskills::skill::manager::collect_effective_skill_instances_from_roots;
 use luaskills::{
-    LuaEngine, LuaEngineOptions, LuaRuntimeCapabilityOptions, LuaRuntimeHostOptions,
-    LuaRuntimeManagedRuntimeConfig, LuaRuntimeNetworkOptions, LuaRuntimeSecretString,
-    LuaVmPoolConfig, RuntimeEntryDescriptor, RuntimeSkillConfigEventBatch,
+    LuaEngine, LuaEngineOptions, LuaRuntimeCapabilityOptions, LuaRuntimeHostMode,
+    LuaRuntimeHostOptions, LuaRuntimeManagedRuntimeConfig, LuaRuntimeNetworkOptions,
+    LuaRuntimeSecretString, LuaVmPoolConfig, RuntimeEntryDescriptor, RuntimeSkillConfigEventBatch,
     RuntimeSkillConfigStoreRefresh, RuntimeSkillPackageConfigDescriptor,
     RuntimeSkillPackageConfigItemDescriptor, RuntimeSkillPackageConfigStatus, RuntimeSkillRoot,
     SkillConfigDeleteResult, SkillConfigWriteResult, SkillInstallRequest, SkillInstallSourceType,
     SkillManagementAuthority, SkillManager, SkillManagerConfig, SkillMeta,
-    SkillPackageConfigInputValue, SkillPackageConfigItemState, SkillUninstallOptions,
-    ToolCacheConfig,
+    SkillPackageConfigInputValue, SkillPackageConfigItemState, ToolCacheConfig,
 };
 use vulcan_luaskills_config::{
     LuaSkillsNetworkSettings, LuaSkillsRuntimeSettings, load_runtime_settings,
@@ -1301,12 +1300,7 @@ pub fn uninstall_luaskill(
     })?;
     let target_root = ordinary_uninstall_target_root_for_skill(handle, &skill_id)?;
     let result = engine
-        .uninstall_skill_in_root(
-            &handle.skill_roots,
-            &target_root,
-            &skill_id,
-            &SkillUninstallOptions::default(),
-        )
+        .uninstall_skill_in_root(&handle.skill_roots, &target_root, &skill_id)
         .map_err(|error| format!("Failed to uninstall the LuaSkills skill: {error}"))?;
     // The uninstall is committed on disk once the engine call returns, so a later
     // failure is a projection failure rather than an uninstall failure. Its message
@@ -1805,8 +1799,8 @@ fn ordinary_uninstall_target_root_for_skill(
     Ok(resolved)
 }
 
-/// Builds LuaSkills host options that route both databases through this process's own engine.
-/// 构建使 LuaSkills 两个数据库都经由本进程自身引擎的宿主选项。
+/// Builds LuaSkills host options for the desktop host, whose SQLite callback is served by this process.
+/// 为桌面宿主构建 LuaSkills 宿主选项，其 SQLite 回调由本进程承载。
 fn build_host_options(
     runtime_root: &Path,
     managed_runtime_distribution_root: &Path,
@@ -1821,6 +1815,11 @@ fn build_host_options(
     let lua_managed_runtime_distribution_root =
         vulcan_runtime_assets::native_host_path(managed_runtime_distribution_root);
     let mut host_options = LuaRuntimeHostOptions::with_runtime_root(lua_runtime_root.clone());
+    // The service runs behind a GUI shell with no console of its own, so runtime-owned console children
+    // (skill `exec`, managed runtimes) must not open a visible console window on Windows.
+    // 服务运行于无自身控制台的 GUI 外壳之后，因此运行时拥有的控制台子进程（技能 `exec`、托管运行时）
+    // 在 Windows 上不得弹出可见控制台窗口。
+    host_options.host_mode = LuaRuntimeHostMode::Desktop;
     host_options.skill_config_root =
         Some(vulcan_runtime_assets::native_host_path(skill_config_root));
     host_options.managed_runtime_distribution_root = Some(lua_managed_runtime_distribution_root);
@@ -1871,20 +1870,6 @@ fn build_host_options(
             .enable_skill_management_bridge,
         enable_managed_io_compat: runtime_settings.capabilities.enable_managed_io_compat,
     };
-    // The mode comes from the host-provider policy rather than a local literal. It deliberately remains
-    // `HostCallback` even before installation, so a broken startup order fails loudly instead of selecting the
-    // retired external-controller path.
-    // 模式取自宿主 provider 策略而非本地字面量。它在安装前也刻意保持 `HostCallback`，使错误的启动顺序响亮
-    // 失败，而不是选择已退役的外部控制器路径。
-    //
-    // The LuaSkills `space_controller` options keep their crate defaults. That mode talks to an external
-    // controller process, which Vulcan Code neither ships nor supports any more.
-    // LuaSkills 的 `space_controller` 选项保持该 crate 的默认值。该模式与外部控制器进程通信，
-    // 而 Vulcan Code 已不再随附也不再支持它。
-    host_options.sqlite_provider_mode =
-        vulcan_agent_runtime::luaskills_runtime::host_database_providers::provider_mode();
-    host_options.lancedb_provider_mode =
-        vulcan_agent_runtime::luaskills_runtime::host_database_providers::provider_mode();
     host_options
 }
 

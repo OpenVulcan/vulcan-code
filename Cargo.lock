@@ -5204,16 +5204,6 @@ dependencies = [
 
 [[package]]
 name = "libloading"
-version = "0.8.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
-dependencies = [
- "cfg-if",
- "windows-link 0.2.1",
-]
-
-[[package]]
-name = "libloading"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60"
@@ -5402,9 +5392,9 @@ dependencies = [
 
 [[package]]
 name = "luaskills"
-version = "0.7.2"
+version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f33e379cfc6aed6002f72b72c51b6d2b32b0007015372d0093aa6bf1376461d1"
+checksum = "025d5da9dff108d1c6ca737ce4817b948814d4909a94eef53504e538d14418b7"
 dependencies = [
  "base64 0.22.1",
  "encoding_rs",
@@ -5412,11 +5402,9 @@ dependencies = [
  "getrandom 0.3.4",
  "jsonschema",
  "libc",
- "libloading 0.8.9",
  "mlua",
  "notify",
  "reqwest 0.12.28",
- "rusqlite",
  "schemars 1.2.2",
  "semver",
  "serde",
@@ -5425,7 +5413,6 @@ dependencies = [
  "sha2 0.10.9",
  "tar",
  "tokio",
- "vldb-controller-client",
  "windows-sys 0.61.2",
  "zip",
 ]
@@ -9227,7 +9214,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac2a5518c70fa84342385732db33fb3f44bc4cc748936eb5833d2df34d6445ef"
 dependencies = [
  "async-trait",
- "axum 0.8.9",
  "base64 0.22.1",
  "bytes",
  "h2",
@@ -9727,22 +9713,6 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
-
-[[package]]
-name = "vldb-controller-client"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb18823ea72ebce89658ed9f93ef07accf5674535c0b77b49b74cb6dea97023d"
-dependencies = [
- "prost",
- "protoc-bin-vendored",
- "serde",
- "serde_json",
- "tokio",
- "tonic",
- "tonic-prost",
- "tonic-prost-build",
-]
 
 [[package]]
 name = "vsimd"
@@ -11460,8 +11430,6 @@ dependencies = [
  "arrow-ipc",
  "arrow-schema",
  "async-compression",
- "axum 0.8.9",
- "axum-core 0.5.6",
  "bitflags 2.13.1",
  "bytemuck",
  "bytes",
@@ -11531,7 +11499,6 @@ dependencies = [
  "regex-syntax",
  "reqwest 0.12.28",
  "reqwest 0.13.4",
- "rusqlite",
  "rustix",
  "rustls",
  "rustls-webpki",
@@ -11559,7 +11526,6 @@ dependencies = [
  "tokio-util",
  "toml_datetime 1.1.1+spec-1.1.0",
  "toml_parser",
- "tonic",
  "tower",
  "tower-http 0.6.11",
  "tracing",

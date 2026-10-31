@@ -2,16 +2,23 @@
 
 ## 1. 适用范围
 
-本文说明 Vulcan Code 的 LuaSkills 技能包配置入口，面向技能包作者、宿主维护者和桌面端使用者。当前独立集成采用正式 0.7.2 注册表依赖，其版本和来源以根清单与实际锁为准。
+本文说明 Vulcan Code 的 LuaSkills 技能包配置入口，面向技能包作者、宿主维护者和桌面端使用者。当前独立集成采用正式 0.7.4 注册表依赖，其版本和来源以根清单与实际锁为准。
 
 技能配置声明以当前上游源码及已有生成技能配置契约为准，不执行旧配置探测、迁移、别名兼容、旧文件提示或自动清理。本文后续零点五点九版本引用保留历史契约与验证背景；不能用于证明零点六候选的构建来源。正式插件执行契约另见[插件执行引擎归属](plugin-execution-engine.md)。
 
 ### 1.1 当前正式依赖与本地验证边界
 
-根 `Cargo.toml` 精确声明 `luaskills = "=0.7.2"`，没有 LuaSkills 本地 path patch。实际锁的来源为
+根 `Cargo.toml` 精确声明 `luaskills = "=0.7.4"`，没有 LuaSkills 本地 path patch。实际锁的来源为
 `registry+https://github.com/rust-lang/crates.io-index`，校验和为
-`f33e379cfc6aed6002f72b72c51b6d2b32b0007015372d0093aa6bf1376461d1`。该版本在 Core 五平台 GitHub
-发布（标签 `v0.7.2`）全部门禁通过后才发布到 crates.io。
+`025d5da9dff108d1c6ca737ce4817b948814d4909a94eef53504e538d14418b7`。该版本在 Core 五平台 GitHub
+发布（标签 `v0.7.4`）全部门禁通过后才发布到 crates.io。
+
+0.7.3 起 LuaSkills 不再拥有数据库存储：SQLite 只经宿主注册的回调承载，LanceDB 能力与
+`vldb-controller-client` 依赖均已移除。宿主在创建引擎前通过
+`host_database_providers::install` 注册 SQLite 回调；`build_host_options` 设置
+`host_mode = LuaRuntimeHostMode::Desktop`，使 Windows 上运行时拥有的控制台子进程不弹出窗口。
+`crates/vulcan-service-runtime/managed-runtimes.json` 的 `luaskills_version` 必须与根清单版本一致，
+否则构建脚本拒绝构建。
 
 开发 Core 期间可以临时在根清单 `[patch.crates-io]` 指向本地 Core 检出做联调，但提交前必须移除并重新从
 注册表解析；path 来源没有注册表校验和，不能作为正式依赖的证据。

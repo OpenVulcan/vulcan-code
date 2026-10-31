@@ -1,39 +1,29 @@
-//! Publication of the host's in-process database providers for LuaSkills.
-//! 为 LuaSkills 发布宿主进程内数据库 provider。
+//! Publication of the host's in-process SQLite provider for LuaSkills.
+//! 为 LuaSkills 发布宿主进程内 SQLite provider。
 //!
-//! LuaSkills chooses its database path through `LuaRuntimeDatabaseProviderMode`. The mode that forwards every
-//! statement to an external database controller process is not used here, while `HostCallback` calls a callback
-//! registered inside this process. **This application uses `HostCallback` only**: the storage engine is in
-//! process, and no controller process is shipped, configured or started any more. This module owns that choice:
-//! [`install`] starts the execution channel, registers both provider callbacks and records the fact
-//! process-wide, and [`provider_mode`] is what an entry point consults while it builds host options.
-//! LuaSkills 通过 `LuaRuntimeDatabaseProviderMode` 选择其数据库路径。把每条语句转发给外部数据库控制器进程的模式
-//! 在此不被使用，而 `HostCallback` 调用注册在本进程内的回调。**本应用只使用 `HostCallback`**：存储引擎在进程内，
-//! 且不再随附、配置或启动任何控制器进程。本模块持有该选择：`install` 启动执行通道、注册两个 provider 回调并在
-//! 进程级记录该事实，`provider_mode` 是入口在构建宿主选项时所查询的东西。
+//! LuaSkills owns no database storage: every skill SQLite request is delivered to a callback registered by the
+//! host, and LuaSkills exposes no LanceDB capability at all. [`install`] starts the execution channel, registers
+//! the SQLite callback and records the installation process-wide.
+//! LuaSkills 不拥有任何数据库存储：每个技能 SQLite 请求都交给宿主注册的回调，且 LuaSkills 完全不提供 LanceDB
+//! 能力。`install` 启动执行通道、注册 SQLite 回调并在进程级记录该安装。
 //!
 //! # Registration order / 注册顺序
 //!
-//! The engine refuses to start when `HostCallback` is selected and no callback is registered, so the mode and
-//! the callbacks must agree. [`provider_mode`] answers `HostCallback` unconditionally and never varies, which is
-//! why an entry point can call it immediately before it creates its engine without a second ordering rule to
-//! remember. When [`install`] has not run, the engine's own refusal names the missing callback — a loud failure
-//! that is strictly preferable to silently selecting a mode this application cannot serve.
-//! 当选择了 `HostCallback` 而未注册回调时，引擎拒绝启动，因此模式与回调必须一致。`provider_mode` 无条件回答
-//! `HostCallback` 且从不变化，这正是入口可以在创建引擎之前紧邻调用它而无需记住第二条顺序规则的原因。当
-//! `install` 尚未运行时，引擎自身的拒绝会指名缺失的回调——这是一次响亮的失败，远优于静默选择一条本应用无法
-//! 承载的模式。
+//! An engine snapshots the process callbacks when it is created and refuses to load a SQLite-enabled skill when
+//! that snapshot holds no callback. [`install`] must therefore run before an entry point creates its engine; when
+//! it has not, loading such a skill fails with an error naming the missing callback.
+//! 引擎在创建时快照进程回调；若快照中没有回调，则拒绝加载启用 SQLite 的技能。因此 `install` 必须在入口创建引擎
+//! 之前运行；未运行时，加载此类技能会以指名缺失回调的错误失败。
 
 use std::sync::{Arc, Mutex, OnceLock};
 
 use vulcan_workspace_store::local_database_runtime::LocalDatabaseRuntime;
 
-use super::LuaRuntimeDatabaseProviderMode;
 use super::database_bridge::{HostExecutionChannel, HostExecutionChannelSnapshot};
-use super::database_callbacks::{SkillLanceDbProvider, SkillSqliteProvider};
+use super::database_callbacks::SkillSqliteProvider;
 
-/// One installed pair of providers together with the channel that runs their work.
-/// 已安装的一对 provider，以及运行其工作的通道。
+/// One installed SQLite provider together with the channel that runs its work.
+/// 已安装的 SQLite provider，以及运行其工作的通道。
 pub struct InstalledHostDatabaseProviders {
     channel: Arc<HostExecutionChannel<Arc<LocalDatabaseRuntime>>>,
 }
@@ -80,8 +70,8 @@ impl std::fmt::Debug for InstalledHostDatabaseProviders {
 }
 
 impl Drop for InstalledHostDatabaseProviders {
-    /// Clears both callbacks and closes the channel.
-    /// 清空两个回调并关闭通道。
+    /// Clears the SQLite callback and closes the channel.
+    /// 清空 SQLite 回调并关闭通道。
     fn drop(&mut self) {
         // A removed installation may remain alive in a bootstrap/service owner while a later generation has
         // already occupied the process slot. Only an installation with no active successor may clear the global
@@ -96,12 +86,11 @@ impl Drop for InstalledHostDatabaseProviders {
             // Clear first so no new callback work can enter while the execution channel is closing.
             // 先清空回调，避免执行通道关闭期间仍有新的回调工作进入。
             luaskills::set_sqlite_provider_callback(None);
-            luaskills::set_lancedb_provider_callback(None);
         }
-        // The registered callbacks were this channel's other owners, so after clearing them this handle is
+        // The registered callback was this channel's other owner, so after clearing it this handle is
         // normally unique and the channel closes. When some other holder remains, the channel stays open
         // rather than cancelling work that holder may still be awaiting.
-        // 已注册的回调曾是该通道的其他所有者，因此清空它们之后本句柄通常已唯一，通道随之关闭。若仍有其他持有者，
+        // 已注册的回调曾是该通道的另一所有者，因此清空它之后本句柄通常已唯一，通道随之关闭。若仍有其他持有者，
         // 通道保持打开，而不是取消该持有者可能仍在等待的工作。
         if let Some(channel) = Arc::get_mut(&mut self.channel) {
             channel.close();
@@ -127,8 +116,8 @@ fn slot() -> &'static Mutex<Option<Arc<InstalledHostDatabaseProviders>>> {
     INSTALLED.get_or_init(|| Mutex::new(None))
 }
 
-/// Installs both provider callbacks over one shared runtime.
-/// 在一个共享运行时之上安装两个 provider 回调。
+/// Installs the SQLite provider callback over one shared runtime.
+/// 在一个共享运行时之上安装 SQLite provider 回调。
 ///
 /// # Parameters / 参数
 /// `runtime` is the in-process database runtime that owns every database the host serves, and `handle` is the
@@ -149,12 +138,10 @@ pub fn install(
 ) -> Result<Arc<InstalledHostDatabaseProviders>, String> {
     // A poisoned slot is recovered rather than refused. The guarded value is a single `Option` assignment, so a
     // panic while the lock was held cannot leave a half-updated value behind, and refusing instead would leave a
-    // process that had registered its callbacks permanently unable to install — `provider_mode` would then keep
-    // misreporting the mode for a process whose callbacks exist. This also matches the recovery convention
-    // used throughout `local_database_runtime`.
+    // process that had registered its callback permanently unable to install. This also matches the recovery
+    // convention used throughout `local_database_runtime`.
     // 毒化的槽位被恢复而非拒绝。受保护的值是一次 `Option` 赋值，因此持锁期间的崩溃不可能留下半更新值；而拒绝会让
-    // 一个已注册回调的进程永久无法安装——`provider_mode` 随后会为一个回调确实存在的进程持续报告
-    // 误报模式。这也与 `local_database_runtime` 全篇采用的恢复惯例一致。
+    // 一个已注册回调的进程永久无法安装。这也与 `local_database_runtime` 全篇采用的恢复惯例一致。
     let mut guard = slot()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -165,12 +152,10 @@ pub fn install(
     }
     let channel = Arc::new(HostExecutionChannel::start(handle, runtime));
     let sqlite = Arc::new(SkillSqliteProvider::new(Arc::clone(&channel)));
-    let lancedb = Arc::new(SkillLanceDbProvider::new(Arc::clone(&channel)));
-    // Both callbacks are registered before the installation is published, so `provider_mode` can never report
-    // `HostCallback` for a process whose callbacks are missing.
-    // 两个回调在安装被发布之前完成注册，因此 `provider_mode` 绝不会为缺少回调的进程报告 `HostCallback`。
+    // The callback is registered before the installation is published, so `is_installed` never reports an
+    // installation whose callback is missing.
+    // 回调在安装被发布之前完成注册，因此 `is_installed` 绝不会报告一个缺少回调的安装。
     luaskills::set_sqlite_provider_callback(Some(sqlite.callback()));
-    luaskills::set_lancedb_provider_callback(Some(lancedb.callback()));
     let installed = Arc::new(InstalledHostDatabaseProviders { channel });
     *guard = Some(Arc::clone(&installed));
     Ok(installed)
@@ -193,8 +178,8 @@ pub fn installed() -> Option<Arc<InstalledHostDatabaseProviders>> {
         .clone()
 }
 
-/// Reports whether both provider callbacks are installed.
-/// 报告两个 provider 回调是否已安装。
+/// Reports whether the SQLite provider callback is installed.
+/// 报告 SQLite provider 回调是否已安装。
 ///
 /// # Parameters / 参数
 /// This function takes no parameters.
@@ -205,29 +190,6 @@ pub fn installed() -> Option<Arc<InstalledHostDatabaseProviders>> {
 /// 在安装已注册期间返回 `true`。
 pub fn is_installed() -> bool {
     installed().is_some()
-}
-
-/// Returns the provider mode an entry point must select for its engine.
-/// 返回入口必须为其引擎选择的 provider 模式。
-///
-/// # Parameters / 参数
-/// This function takes no parameters.
-/// 本函数不接收参数。
-///
-/// # Returns / 返回值
-/// Always returns `HostCallback`. Vulcan Code's storage engine is in process, so this is the only mode the
-/// application supports; the LuaSkills mode that forwards every statement to an external controller
-/// process is one this application no longer ships, configures or starts. Answering `HostCallback` unconditionally is
-/// deliberate: when the providers really are missing, LuaSkills refuses to build the engine and names the
-/// missing callback, which is a loud failure. Answering the external-controller mode would silently select a mode
-/// that cannot work, which is exactly the kind of fallback this migration removes.
-/// 始终返回 `HostCallback`。Vulcan Code 的存储引擎在进程内，这是应用唯一支持的模式；LuaSkills 的
-/// 把每条语句转发给外部控制器进程的那个模式，本应用已不再随附、不再配置、也不再启动。
-/// 无条件回答 `HostCallback` 是刻意的：当 provider 确实缺失时，LuaSkills 会拒绝构建引擎并指名缺失的回调，
-/// 这是一次响亮的失败；若改答外部控制器模式，则会静默选择一条无法工作的模式，而那正是本次迁移要移除的
-/// 那类回退。
-pub fn provider_mode() -> LuaRuntimeDatabaseProviderMode {
-    LuaRuntimeDatabaseProviderMode::HostCallback
 }
 
 /// Removes the installation from the process-wide slot.
@@ -260,7 +222,9 @@ pub fn shutdown() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use luaskills::{LuaEngine, LuaEngineOptions, LuaRuntimeHostOptions, LuaVmPoolConfig};
+    use luaskills::{
+        LuaEngine, LuaEngineOptions, LuaRuntimeHostOptions, LuaVmPoolConfig, RuntimeSkillRoot,
+    };
     use std::collections::HashMap;
 
     /// Serializes the tests in this module, because the installation is process-wide.
@@ -298,32 +262,65 @@ mod tests {
         Arc::new(LocalDatabaseRuntime::open(HashMap::new()).expect("open in-process runtime"))
     }
 
-    /// Verifies the mode is `HostCallback` whether or not an installation is present.
-    /// 验证无论是否存在安装，模式都是 `HostCallback`。
+    /// Creates an engine, loads one SQLite-enabled skill and reports whether its entry was registered.
+    /// 创建引擎、加载一个启用 SQLite 的技能，并报告其入口是否已注册。
     ///
-    /// This is the ordering invariant entry points rely on: an entry point may consult the mode immediately
-    /// before it creates its engine without remembering a second rule. The mode must never answer
-    /// the external-controller mode, because that mode talks to a controller process this application does not
-    /// ship, configure or start.
-    /// 这是入口所依赖的顺序不变量：入口可以在创建引擎之前紧邻查询模式，而无需记住第二条规则。模式绝不能回答
-    /// 外部控制器模式，因为该模式与一个本应用不随附、不配置也不启动的控制器进程通信。
+    /// LuaSkills checks the SQLite callback while loading such a skill and skips the skill when the callback is
+    /// missing, so a registered entry is the observable proof that the callback was present.
+    /// LuaSkills 在加载此类技能时检查 SQLite 回调，缺失时跳过该技能，因此入口已注册即回调存在的可观察证据。
+    fn sqlite_skill_loads() -> bool {
+        let temp = tempfile::tempdir().expect("create isolated runtime root");
+        let runtime_root = temp.path().join("runtime");
+        let skill_root = runtime_root.join("root_skills");
+        let skill_dir = skill_root.join("sqlite-probe");
+        std::fs::create_dir_all(skill_dir.join("runtime")).expect("create skill runtime directory");
+        std::fs::write(
+            skill_dir.join("skill.yaml"),
+            "name: sqlite-probe\nversion: 0.1.0\nenable: true\ndebug: false\nsqlite:\n  enable: true\nentries:\n  - name: ping\n    description: SQLite probe.\n    lua_entry: runtime/ping.lua\n    lua_module: sqlite-probe.ping\n",
+        )
+        .expect("write skill metadata");
+        std::fs::write(
+            skill_dir.join("runtime").join("ping.lua"),
+            "return function() return 'ready' end\n",
+        )
+        .expect("write skill entry");
+        let native_runtime_root = crate::runtime_assets::native_host_path(
+            &runtime_root
+                .canonicalize()
+                .expect("canonicalize runtime root"),
+        );
+        let mut engine = LuaEngine::new(LuaEngineOptions::new(
+            LuaVmPoolConfig {
+                min_size: 1,
+                max_size: 1,
+                idle_ttl_secs: 30,
+            },
+            LuaRuntimeHostOptions::with_runtime_root(native_runtime_root),
+        ))
+        .expect("create LuaSkills test engine");
+        engine
+            .load_from_roots(&[RuntimeSkillRoot {
+                name: String::from("ROOT"),
+                skills_dir: skill_root,
+            }])
+            .expect("load skill roots");
+        !engine
+            .list_entries()
+            .expect("list loaded entries")
+            .is_empty()
+    }
+
+    /// Verifies install, shutdown and handle ownership report the installation exactly.
+    /// 验证安装、关闭与句柄所有权精确报告安装状态。
     #[test]
-    fn the_mode_is_always_host_callback() {
+    fn install_and_shutdown_track_the_installation() {
         let _guard = TEST_LOCK.lock().expect("test lock");
         let _ = shutdown();
         assert!(!is_installed());
-        assert_eq!(
-            provider_mode(),
-            LuaRuntimeDatabaseProviderMode::HostCallback
-        );
 
         let runtime = runtime();
         let installed = install_or_panic(database_runtime(), runtime.handle().clone());
         assert!(is_installed());
-        assert_eq!(
-            provider_mode(),
-            LuaRuntimeDatabaseProviderMode::HostCallback
-        );
         assert!(installed.is_open());
 
         assert!(
@@ -331,10 +328,6 @@ mod tests {
             "shutdown must report that it removed an installation"
         );
         assert!(!is_installed());
-        assert_eq!(
-            provider_mode(),
-            LuaRuntimeDatabaseProviderMode::HostCallback
-        );
         // The test still holds the handle, so the channel is deliberately still open until it goes away.
         // 测试仍持有该句柄，因此通道刻意保持打开直到句柄消失。
         assert!(installed.is_open());
@@ -379,38 +372,24 @@ mod tests {
         let successor = install_or_panic(database_runtime(), runtime.handle().clone());
         drop(old);
 
-        let host_options = LuaRuntimeHostOptions {
-            sqlite_provider_mode: provider_mode(),
-            lancedb_provider_mode: provider_mode(),
-            ..LuaRuntimeHostOptions::default()
-        };
-        LuaEngine::new(LuaEngineOptions::new(
-            LuaVmPoolConfig {
-                min_size: 1,
-                max_size: 1,
-                idle_ttl_secs: 30,
-            },
-            host_options,
-        ))
-        .expect("successor callbacks must remain registered after stale owner drop");
+        assert!(
+            sqlite_skill_loads(),
+            "successor callback must remain registered after stale owner drop"
+        );
 
         assert!(successor.is_open());
         assert!(shutdown());
         drop(successor);
     }
 
-    /// Verifies the last owner closing the installation leaves the process back on the controller path.
-    /// 验证最后一个所有者关闭安装后，进程回到控制器路径。
+    /// Verifies the last owner closing the installation clears the callback.
+    /// 验证最后一个所有者关闭安装后回调被清空。
     #[test]
     fn dropping_the_last_owner_clears_the_installation() {
         let _guard = TEST_LOCK.lock().expect("test lock");
         let _ = shutdown();
         let runtime = runtime();
         let installed = install_or_panic(database_runtime(), runtime.handle().clone());
-        assert_eq!(
-            provider_mode(),
-            LuaRuntimeDatabaseProviderMode::HostCallback
-        );
 
         let slot_handle = shutdown();
         assert!(slot_handle);
@@ -421,23 +400,21 @@ mod tests {
         // 丢弃最后一个所有者会关闭通道并清空回调。
         drop(installed);
         assert!(!is_installed());
-        // The mode stays `HostCallback` regardless of the slot: this application has no other storage mode, so
-        // an empty slot must surface as LuaSkills refusing to build an engine rather than as a silent switch.
-        // 无论槽位如何，模式都保持 `HostCallback`：本应用没有其他存储模式，因此空槽位必须以 LuaSkills 拒绝
-        // 构建引擎的方式暴露，而不是变成一次静默切换。
-        assert_eq!(
-            provider_mode(),
-            LuaRuntimeDatabaseProviderMode::HostCallback
+        // With no callback left, a SQLite-enabled skill must be refused loudly rather than silently served.
+        // 回调清空后，启用 SQLite 的技能必须被明确拒绝，而不是被静默承载。
+        assert!(
+            !sqlite_skill_loads(),
+            "a cleared callback must refuse SQLite-enabled skills"
         );
     }
     /// Verifies a poisoned slot still reports the installation that exists.
     /// 验证被毒化的槽位仍报告确实存在的安装。
     ///
     /// The slot lock is poisoned deliberately, by panicking while holding it. Treating that poison as "nothing is
-    /// installed" would misreport the mode for a process whose callbacks are registered, and refusing to
+    /// installed" would misreport a process whose callback is registered, and refusing to
     /// install would leave such a process permanently unable to repair itself. The recovery must therefore keep
     /// reading the value that is really there, which is what this test pins.
-    /// 槽位锁被刻意毒化：持锁时触发 panic。把该毒化当作"未安装"会为一个回调已注册的进程误报模式，
+    /// 槽位锁被刻意毒化：持锁时触发 panic。把该毒化当作"未安装"会误报一个回调已注册的进程，
     /// 而拒绝安装会让这样的进程永久无法自我修复。因此恢复必须继续读取确实存在的值，这正是本测试所钉定的。
     #[test]
     fn a_poisoned_slot_still_reports_the_installation() {
@@ -463,10 +440,6 @@ mod tests {
             "a poisoned slot must still report the installation that is really there"
         );
         assert!(is_installed());
-        assert_eq!(
-            provider_mode(),
-            LuaRuntimeDatabaseProviderMode::HostCallback
-        );
         assert!(
             shutdown(),
             "a poisoned slot must still remove its installation"

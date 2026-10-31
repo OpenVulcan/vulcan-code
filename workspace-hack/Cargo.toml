@@ -24,8 +24,6 @@ arrow-cast = { version = "58", default-features = false, features = ["prettyprin
 arrow-data = { version = "58", default-features = false, features = ["ffi"] }
 arrow-ipc = { version = "58", features = ["lz4", "zstd"] }
 arrow-schema = { version = "58", default-features = false, features = ["canonical_extension_types", "ffi"] }
-axum = { version = "0.8", features = ["ws"] }
-axum-core = { version = "0.5", default-features = false, features = ["tracing"] }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 bytemuck = { version = "1", default-features = false, features = ["derive", "extern_crate_alloc"] }
 bytes = { version = "1" }
@@ -78,7 +76,6 @@ regex-automata = { version = "0.4", default-features = false, features = ["dfa",
 regex-syntax = { version = "0.8" }
 reqwest-594e8ee84c453af0 = { package = "reqwest", version = "0.13", default-features = false, features = ["blocking", "brotli", "charset", "default-tls", "deflate", "form", "gzip", "http2", "json", "multipart", "stream", "system-proxy", "zstd"] }
 reqwest-5ef9efb8ec2df382 = { package = "reqwest", version = "0.12", default-features = false, features = ["blocking", "charset", "gzip", "http2", "json", "macos-system-configuration", "multipart", "rustls-tls", "rustls-tls-native-roots", "stream"] }
-rusqlite = { version = "0.40", features = ["bundled", "column_decltype", "limits", "pointer"] }
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "aws_lc_rs", "logging", "ring", "std", "tls12"] }
 rustls-webpki = { version = "0.103", default-features = false, features = ["aws-lc-rs", "ring", "std"] }
 serde = { version = "1", features = ["alloc", "derive", "rc"] }
@@ -99,7 +96,6 @@ tokio-rustls = { version = "0.26" }
 tokio-stream = { version = "0.1", features = ["net", "sync"] }
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"] }
 tokio-util = { version = "0.7", features = ["codec", "io"] }
-tonic = { version = "0.14" }
 tower = { version = "0.5", default-features = false, features = ["balance", "buffer", "limit", "load-shed", "log"] }
 tracing = { version = "0.1", features = ["log"] }
 tungstenite = { version = "0.29", default-features = false, features = ["__rustls-tls", "handshake"] }
