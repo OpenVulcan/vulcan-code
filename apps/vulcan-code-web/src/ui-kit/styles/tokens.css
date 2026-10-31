@@ -61,7 +61,7 @@
   /* Width the stage keeps for the conversation before the context panel floats and the navigation folds:
    * the limited column plus the reasoning overhang. "full" keeps the standard measure, so it reserves that. */
   --vk-reserve-w: calc(var(--vk-read-col) + var(--vk-u) * 10);
-  --vk-statusbar-h: calc(var(--vk-u) * 6);
+  --vk-statusbar-h: calc(var(--vk-u) * 7);
   --vk-titlebar-h: calc(var(--vk-u) * 12);
   /* Preference and plugin settings pages read as one centred column of this width. */
   /* 偏好页与插件设置页以此宽度呈现为一条居中的阅读列。 */

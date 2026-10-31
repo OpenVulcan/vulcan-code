@@ -14,7 +14,6 @@ import {
 import { ComposerPanel, ComposerSessionProgressCapsule } from "@/components/composer/composer-panel";
 import type { ConversationSessionReviewSummary } from "@/components/conversation/session-todolist-panel";
 import type {
-  ComposerRuntimeCue,
   ComposerTraceCallback,
 } from "@/components/composer/composer-control-types";
 import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
@@ -256,12 +255,6 @@ export function ComposerDock(props: {
   // 记忆就绪状态与配置导航直接透传，不改变策略状态。
   vmmStatus?: "disabled" | "not_ready" | "ready";
   onOpenMemorySettings?: () => void;
-  // runtimeCue shows the current session in-progress activity near the composer.
-  // runtimeCue 在工作区底部状态栏显示当前会话的进行中活动。
-  runtimeCue: ComposerRuntimeCue | null;
-  // Runtime status portal host mounted in the center of the workspace status bar.
-  // 挂载在工作区状态栏中央的运行状态 Portal 宿主。
-  runtimeStatusHost: HTMLElement | null;
   // Todolist status portal host mounted immediately after the workspace version.
   // 紧跟工作区版本号挂载的 Todo 状态 Portal 宿主。
   todolistStatusHost: HTMLElement | null;
@@ -425,14 +418,6 @@ export function ComposerDock(props: {
             todolist={visibleSessionTodolist}
           />,
           props.todolistStatusHost,
-        )
-        : null}
-      {props.runtimeStatusHost && props.runtimeCue
-        ? createPortal(
-          <span className="vk-status-item" data-static="" aria-live="polite" aria-busy="true">
-            <span className="vk-shimmer-text">{props.runtimeCue.text}</span>
-          </span>,
-          props.runtimeStatusHost,
         )
         : null}
     </div>

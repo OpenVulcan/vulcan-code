@@ -23,6 +23,38 @@ import {
 } from "@/components/conversation/streaming-thinking-markdown";
 import type { TransientReasoningStatus } from "@/types";
 import { THINKING_OVERLAY_EXIT_MS } from "@/components/conversation/chat-area/visual-state";
+import type { RuntimeCue } from "@/components/conversation/conversation-model";
+import { formatWorkProcessDuration } from "@/components/conversation/conversation-timeline";
+
+// RUNTIME_CUE_TICK_MS is the refresh interval of the elapsed time shown beside a runtime cue.
+// RUNTIME_CUE_TICK_MS 是运行提示旁已等待时长的刷新间隔。
+const RUNTIME_CUE_TICK_MS = 1000;
+
+// RuntimeCueLine renders the session's in-progress cue at the transcript tail with the time spent in it.
+// The clock starts when the cue mounts; callers key it by the cue text so each phase counts from zero.
+// RuntimeCueLine 在转录尾部渲染会话进行中提示及其已持续时长。
+// 计时从提示挂载开始；调用方以提示文本作为 key，使每个阶段从零计时。
+export function RuntimeCueLine(props: {
+  // Cue resolved from the backend session run phase.
+  // 由后端会话运行阶段解析出的提示。
+  cue: RuntimeCue;
+}) {
+  const { locale } = useI18n();
+  const [startedAtMs] = React.useState(() => Date.now());
+  const [nowMs, setNowMs] = React.useState(startedAtMs);
+  React.useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), RUNTIME_CUE_TICK_MS);
+    return () => window.clearInterval(timer);
+  }, []);
+  return (
+    <div aria-busy="true" aria-live="polite" className="vk-reason-status" data-runtime-cue="">
+      <div className="vk-reason-line">
+        <span className="vk-shimmer-text">{props.cue.text}</span>
+        <span className="vk-reason-elapsed">{formatWorkProcessDuration(nowMs - startedAtMs, locale)}</span>
+      </div>
+    </div>
+  );
+}
 
 // TransientReasoningStatusLine renders request-local reasoning progress outside the durable event ledger.
 // TransientReasoningStatusLine 在持久化事件账本之外渲染请求局部的思考进度。

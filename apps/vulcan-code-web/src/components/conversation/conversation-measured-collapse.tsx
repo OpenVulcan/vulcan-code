@@ -496,7 +496,7 @@ export function ConversationMeasuredCollapse(props: ConversationMeasuredCollapse
 
 // usePrefersReducedMotion mirrors the browser motion preference for transcript animations.
 // usePrefersReducedMotion 同步浏览器的动效偏好用于会话动画。
-function usePrefersReducedMotion(): boolean {
+export function usePrefersReducedMotion(): boolean {
   const [reduced, setReduced] = React.useState(false);
   React.useEffect(() => {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") {

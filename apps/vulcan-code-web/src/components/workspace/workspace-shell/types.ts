@@ -205,9 +205,6 @@ export interface WorkspaceShellProps {
   // Fixed footer content pinned to the workspace bottom edge.
   // 固定在工作区底边的信息栏内容。
   footer?: React.ReactNode;
-  // DOM host for the centered session runtime status.
-  // 会话运行状态居中显示使用的 DOM 宿主。
-  runtimeStatusHost: HTMLElement | null;
   // DOM host for the todolist status placed beside the version label.
   // 放在版本号旁边的 Todo 状态所使用的 DOM 宿主。
   todolistStatusHost: HTMLElement | null;

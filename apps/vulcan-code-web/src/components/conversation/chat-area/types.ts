@@ -41,9 +41,6 @@ export interface ChatAreaProps {
   // Opens the review panel on the project's uncommitted changes.
   // 在审查面板中打开项目的未提交变更。
   onOpenReviewChanges?: () => void;
-  // Optional DOM host that receives the session runtime status through a React portal.
-  // 通过 React Portal 接收会话运行状态的可选 DOM 宿主。
-  runtimeStatusHost?: HTMLElement | null;
   // Optional DOM host that receives the session todolist status through a React portal.
   // 通过 React Portal 接收会话 Todo 状态的可选 DOM 宿主。
   todolistStatusHost?: HTMLElement | null;

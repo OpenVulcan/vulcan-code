@@ -182,7 +182,31 @@
 .vk-send > svg { width: 15px; height: 15px; }
 .vk-send:hover { box-shadow: var(--vk-glow); }
 .vk-send:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: 2px; }
-.vk-send[data-state="stop"] { background: var(--vk-ink); color: var(--vk-ink-inverse); }
+/* Stop keeps the ember family but recedes to a soft tint: a small ember-ink square inside a slowly
+ * turning arc, so a running turn reads as live without a heavy black block. */
+/* 停止保持余烬色系但退为柔和底色：缓慢旋转的弧线内是一个余烬墨色小方块，运行中可感知而不显成黑块。 */
+.vk-send[data-state="stop"] {
+  position: relative;
+  background: var(--vk-ember-soft);
+  color: var(--vk-ember-ink);
+  box-shadow: inset 0 0 0 var(--vk-bw) color-mix(in srgb, var(--vk-ember) 35%, transparent);
+}
+.vk-send[data-state="stop"] > svg { width: 10px; height: 10px; }
+.vk-send[data-state="stop"]::before {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  background: conic-gradient(var(--vk-ember) 0 25%, transparent 25% 100%);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1.5px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 1.5px), #000 calc(100% - 1.5px));
+  animation: vk-spin 1.4s linear infinite;
+  pointer-events: none;
+}
+.vk-send[data-state="stop"]:hover { background: color-mix(in srgb, var(--vk-ember) 18%, var(--vk-ember-soft)); box-shadow: inset 0 0 0 var(--vk-bw) var(--vk-ember), var(--vk-glow); }
+.vk-send[data-state="stop"][aria-busy="true"]::before { content: none; }
+@media (prefers-reduced-motion: reduce) { .vk-send[data-state="stop"]::before { animation: none; } }
+:root[data-vk-motion="reduce"] .vk-send[data-state="stop"]::before { animation: none; }
 .vk-send[data-state="empty"],
 .vk-send:disabled:not([data-state="stop"]) { background: var(--vk-sunken); color: var(--vk-ink-3); box-shadow: none; cursor: default; }
 .vk-send:disabled { cursor: not-allowed; }

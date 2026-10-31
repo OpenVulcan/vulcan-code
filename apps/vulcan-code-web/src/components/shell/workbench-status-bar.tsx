@@ -40,9 +40,6 @@ export interface WorkbenchStatusBarHosts {
   // Receives the session todolist progress capsule.
   // 接收会话待办进度胶囊。
   todolist: (node: HTMLDivElement | null) => void;
-  // Receives the composer runtime cue.
-  // 接收输入区运行提示。
-  runtime: (node: HTMLDivElement | null) => void;
   // Receives the composer's model account item.
   // 接收输入区的模型账号项。
   account: (node: HTMLDivElement | null) => void;
@@ -172,7 +169,7 @@ export function WorkbenchStatusBar(props: {
           {terminal.runningCount > 0 ? <span aria-hidden className="vk-count">{terminal.runningCount}</span> : null}
         </button>
       ) : null}
-      <div className="vk-status-host" data-grow="" ref={props.hosts.runtime} />
+      <div aria-hidden="true" className="vk-status-host" data-grow="" />
       <div className="vk-status-host" ref={props.hosts.account} />
       {props.plugins.length > 0 ? (
         <StatusPeek

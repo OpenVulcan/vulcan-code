@@ -224,9 +224,6 @@ export function WorkbenchLayout(props: {
   // todolistStatusHost stores the footer node immediately following the settings entry.
   // todolistStatusHost 保存紧跟设置入口的底栏 Todo 节点。
   const [todolistStatusHost, setTodolistStatusHost] = React.useState<HTMLDivElement | null>(null);
-  // runtimeStatusHost stores the center footer node for the current API request state.
-  // runtimeStatusHost 保存当前 API 请求状态使用的底栏中央节点。
-  const [runtimeStatusHost, setRuntimeStatusHost] = React.useState<HTMLDivElement | null>(null);
   // liveStreamStore reconciles selection snapshots before the new conversation subtree mounts.
   // liveStreamStore 在新会话子树挂载前对账选择快照。
   const liveStreamStore = useConversationLiveStreamStore();
@@ -639,7 +636,7 @@ export function WorkbenchLayout(props: {
   const statusBar = (
     <WorkbenchStatusBar
       appVersion={props.workbench.appVersion}
-      hosts={{ settings: setSettingsHost, todolist: setTodolistStatusHost, runtime: setRuntimeStatusHost, account: setAccountHost }}
+      hosts={{ settings: setSettingsHost, todolist: setTodolistStatusHost, account: setAccountHost }}
       plugins={workbenchState.plugins}
       startup={props.startup}
       terminal={activeProject ? {
@@ -1336,7 +1333,6 @@ export function WorkbenchLayout(props: {
             onCopyText={copyText}
             resolveMediaSourceUrl={localMediaSourceUrl}
             footer={statusBar}
-            runtimeStatusHost={runtimeStatusHost}
             todolistStatusHost={todolistStatusHost}
             onTrace={webuiClickTrace}
           />

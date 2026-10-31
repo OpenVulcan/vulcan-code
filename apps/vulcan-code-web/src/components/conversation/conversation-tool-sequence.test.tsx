@@ -6,6 +6,7 @@ import { I18nProvider } from "@/i18n";
 import type { ConversationRenderItem } from "./conversation-model";
 import { ConversationToolSequenceGroup, groupVisibleProcessBodyEntries } from "./conversation-render-items";
 import { ConversationMeasuredCollapseProvider } from "./conversation-measured-collapse";
+import { CONVERSATION_AUTOMATIC_FOLD_EVENT } from "./conversation-layout-events";
 
 // All rows and timers are synthetic; production collapse and expansion-memory components remain mounted.
 // 所有记录与计时器均为合成数据；生产折叠组件和展开记忆组件保持真实挂载。
@@ -40,10 +41,10 @@ function row(id: string, status: "running" | "completed" | "failed" | "stopped" 
 /** Renders the first production sequence; enabled controls folding; returns completion.
  * 渲染首个生产序列；enabled 控制折叠；返回渲染完成。
  */
-async function render(items: ConversationRenderItem[], enabled = true) {
+async function render(items: ConversationRenderItem[], enabled = true, running = true) {
   // entry uses production grouping, including the single-tool case.
   // entry 使用生产分组逻辑，包含单工具情况。
-  const entry = groupVisibleProcessBodyEntries("process", items, true)[0];
+  const entry = groupVisibleProcessBodyEntries("process", items, running)[0];
   if (entry.kind !== "tool-sequence") throw new Error("Expected tool group");
   await act(async () => root.render(<I18nProvider initialLocale="zh-CN">
     <ConversationMeasuredCollapseProvider initialMemory={{}} onMemoryChange={() => {}} scopeId="session">
@@ -97,9 +98,74 @@ it("folds a run from its second tool on, showing only the running cards under th
   // 正文收起期间最后一张运行卡片保持挂载，之后分组只剩摘要。
   await render([row("one"), row("two"), row("three", "running")]);
   expect([...host.querySelectorAll("[data-tool]")].map((element) => element.getAttribute("data-tool"))).toEqual(["three"]);
-  await render([row("one"), row("two"), row("three")]);
+  // The run is over only once its process stops; until then the last card waits for the next tool.
+  // 只有过程停止后序列才结束；在此之前最后一张卡片等待下一个工具。
+  await render([row("one"), row("two"), row("three")], true, false);
   expect(host.querySelector(".vk-tool-seq")?.getAttribute("data-running")).toBe("false");
   expect(host.querySelector(".vk-tools-head")?.getAttribute("aria-expanded")).toBe("false");
+});
+
+/** Reads the cards currently laid out in the body, excluding a card that is sliding out.
+ * 读取正文中当前布局的卡片，不含正在滑出的卡片。
+ */
+function shownTools(): (string | null)[] {
+  return [...host.querySelectorAll(".vk-tool-seq-slot:not([data-leaving]) [data-tool]")]
+    .map((element) => element.getAttribute("data-tool"));
+}
+
+it("keeps the last card between serial calls instead of closing and reopening the body", async () => {
+  const folds = vi.fn();
+  window.addEventListener(CONVERSATION_AUTOMATIC_FOLD_EVENT, folds);
+  await render([row("one"), row("two", "running")]);
+  await render([row("one"), row("two")]);
+  expect(shownTools()).toEqual(["two"]);
+  expect(host.querySelector(".vk-collapse")?.getAttribute("aria-hidden")).toBe("false");
+  await render([row("one"), row("two"), row("three", "running")]);
+  expect(shownTools()).toEqual(["three"]);
+  expect(folds).not.toHaveBeenCalled();
+  window.removeEventListener(CONVERSATION_AUTOMATIC_FOLD_EVENT, folds);
+});
+
+it("folds once when the run closes", async () => {
+  const folds = vi.fn();
+  window.addEventListener(CONVERSATION_AUTOMATIC_FOLD_EVENT, folds);
+  await render([row("one"), row("two", "running"), row("three", "running")]);
+  await render([row("one"), row("two"), row("three", "running")]);
+  expect(shownTools()).toEqual(["three"]);
+  await render([row("one"), row("two"), row("three")]);
+  expect(folds).not.toHaveBeenCalled();
+  await render([row("one"), row("two"), row("three")], true, false);
+  expect(folds).toHaveBeenCalledTimes(1);
+  window.removeEventListener(CONVERSATION_AUTOMATIC_FOLD_EVENT, folds);
+});
+
+it("closes a run as soon as another row follows it", () => {
+  const answer: ConversationRenderItem = { id: "answer", role: "assistant", sourceMessages: [], blocks: [
+    { id: "answer-block", kind: "markdown", title: "", body: "Done", summary: "" },
+  ] };
+  expect(groupVisibleProcessBodyEntries("process", [row("one"), row("two")], true)[0]).toMatchObject({ closed: false });
+  expect(groupVisibleProcessBodyEntries("process", [row("one"), row("two"), answer], true)[0]).toMatchObject({ closed: true });
+  expect(groupVisibleProcessBodyEntries("process", [row("one"), row("two")], false)[0]).toMatchObject({ closed: true });
+});
+
+it("slides the replaced card out above its successor during a 1-for-1 swap", async () => {
+  vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
+  await render([row("one"), row("two", "running")]);
+  await render([row("one"), row("two"), row("three", "running")]);
+  expect(host.querySelector('.vk-tool-seq-slot[data-leaving] [data-tool="two"]')).not.toBeNull();
+  expect(host.querySelector('.vk-tool-seq-slot[data-entering] [data-tool="three"]')).not.toBeNull();
+  await act(async () => vi.advanceTimersByTime(1_000));
+  expect(host.querySelector(".vk-tool-seq-slot[data-leaving]")).toBeNull();
+  expect(shownTools()).toEqual(["three"]);
+});
+
+it("closes at once when the user folds a running run they had expanded", async () => {
+  await render([row("one"), row("two", "running")]);
+  await act(async () => host.querySelector<HTMLButtonElement>(".vk-tools-head")!.click());
+  await render([row("one"), row("two")]);
+  await act(async () => host.querySelector<HTMLButtonElement>(".vk-tools-head")!.click());
+  expect(host.querySelector(".vk-tool-seq")?.getAttribute("data-expanded")).toBe("false");
+  expect(host.querySelectorAll("[data-tool]")).toHaveLength(0);
 });
 
 it("keeps every card of a running run visible once the user expands it", async () => {

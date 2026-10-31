@@ -343,6 +343,25 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
  * visible inside the folded group until they finish. */
 .vk-tool-seq { --vk-tool-seq-max-h: min(52.5rem, 78vh); display: grid; grid-template-columns: minmax(0, 1fr); gap: calc(var(--vk-u) * 2); min-width: 0; }
 .vk-tool-seq-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: calc(var(--vk-u) * 3); min-width: 0; }
+.vk-tool-seq-slot { min-width: 0; }
+/* A 1-for-1 replacement in a folded run reads as a ticker: the new card rises from below while the old
+ * one overlays it and slides out upward, taking no layout space so the body height never doubles. */
+/* 折叠序列中的一对一替换呈现为跑马效果：新卡片自下升起，旧卡片覆盖其上并向上滑出；旧卡片不占布局空间，正文高度不会翻倍。 */
+.vk-tool-seq-body:has(> .vk-tool-seq-slot[data-leaving]) { position: relative; }
+.vk-tool-seq-slot[data-leaving] { position: absolute; top: 0; left: 0; right: 0; padding-left: inherit; pointer-events: none; animation: vk-tool-slot-leave var(--vk-tool-swap) ease-in forwards; }
+.vk-tool-seq-slot[data-entering] { animation: vk-tool-slot-enter var(--vk-tool-swap) ease-out; }
+@keyframes vk-tool-slot-leave {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(-60%); }
+}
+@keyframes vk-tool-slot-enter {
+  from { opacity: 0; transform: translateY(40%); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vk-tool-seq-slot[data-entering] { animation: none; }
+}
+:root[data-vk-motion="reduce"] .vk-tool-seq-slot[data-entering] { animation: none; }
 /* Every tool run, running or finished, folded or expanded, shares one bounded viewport, so a run never
  * grows taller than this before folding; tools scroll sideways themselves, and wheel deltas at the edges
  * carry on into the transcript. */
@@ -380,6 +399,8 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-reason-status { display: flex; flex-direction: column; gap: calc(var(--vk-u) * 1); width: min(100%, var(--vk-column-w)); min-width: 0; pointer-events: none; }
 .vk-reason-line { min-width: 0; font-size: var(--vk-fs-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
 .vk-reason-line p { margin: 0; }
+.vk-reason-status[data-runtime-cue] > .vk-reason-line { display: flex; align-items: baseline; gap: calc(var(--vk-u) * 2); }
+.vk-reason-elapsed { flex: none; color: var(--vk-ink-3); font-variant-numeric: tabular-nums; }
 .vk-think-float-head { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); min-height: var(--vk-h-lg); padding: 0 calc(var(--vk-u) * 1.5) 0 calc(var(--vk-u) * 3); border-bottom: var(--vk-bw) solid var(--vk-line); font-size: var(--vk-fs-sm); }
 .vk-think-float-head > .lucide { color: var(--vk-ember); }
 .vk-think-float-head > b { font-weight: 500; background: linear-gradient(90deg, var(--vk-ink-2) 0%, var(--vk-ember) 40%, var(--vk-ink-2) 80%); background-size: 220% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: vk-shimmer 2.4s linear infinite; }

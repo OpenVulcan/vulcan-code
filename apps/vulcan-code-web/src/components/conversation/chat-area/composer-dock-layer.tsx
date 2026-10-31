@@ -33,12 +33,6 @@ export interface ChatAreaComposerDockLayerProps {
   // Whether the transcript is scrolled away from the latest tail.
   // 转录是否已经离开最新尾部。
   showScrollToBottom: boolean;
-  // Runtime cue shown near the composer.
-  // 工作区底部状态栏展示的运行时提示。
-  runtimeCue: ComposerDockProps["runtimeCue"];
-  // Runtime status portal host mounted in the workspace status bar.
-  // 挂载在工作区状态栏中的运行状态 Portal 宿主。
-  runtimeStatusHost: ComposerDockProps["runtimeStatusHost"];
   // Todolist status portal host mounted beside the workspace version.
   // 挂载在工作区版本号旁的 Todo 状态 Portal 宿主。
   todolistStatusHost: ComposerDockProps["todolistStatusHost"];
@@ -158,8 +152,6 @@ export function ChatAreaComposerDockLayer(props: ChatAreaComposerDockLayerProps)
       vmmAvailable={memoryEnabled === true}
       vmmStatus={memoryEnabled === false ? "disabled" : memoryEnabled !== true || memoryReady === undefined ? undefined : memoryReady ? "ready" : "not_ready"}
       onOpenMemorySettings={chatAreaProps.onOpenMemorySettings}
-      runtimeCue={props.isEmptyConversation ? null : props.runtimeCue}
-      runtimeStatusHost={props.runtimeStatusHost}
       todolistStatusHost={props.todolistStatusHost}
       showScrollToBottom={props.showScrollToBottom}
       onEditPendingPrompt={chatAreaProps.onEditPendingPrompt}

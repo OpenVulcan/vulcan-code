@@ -246,8 +246,8 @@
 }
 
 /* ---------- Status bar as the application renders it ----------
- * Session surfaces portal their own items (settings, plan progress, the runtime cue) into hosts between
- * the fixed items; the runtime host also works as the spacer between the left and right groups. */
+ * Session surfaces portal their own items (settings, plan progress, the model account) into hosts between
+ * the fixed items; the growing host is the spacer between the left and right groups. */
 .vk-status-frame { position: relative; z-index: 20; flex: none; height: var(--vk-statusbar-h); padding-bottom: env(safe-area-inset-bottom, 0px); }
 .vk-status-frame > .vk-status { height: 100%; }
 .vk-status-host { display: flex; align-items: center; align-self: stretch; min-width: 0; }

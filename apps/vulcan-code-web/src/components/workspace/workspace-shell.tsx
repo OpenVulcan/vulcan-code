@@ -870,7 +870,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         selectedConversationId={props.selectedConversationId}
         sessionReviewSummary={sessionReviewSummary}
         onOpenReviewChanges={reviewFocus.openReviewChanges}
-        runtimeStatusHost={props.runtimeStatusHost}
         todolistStatusHost={props.todolistStatusHost}
         onSelectWorkbenchModel={props.onSelectWorkbenchModel}
         onListWorkbenchModelSecondaryRoutes={props.onListWorkbenchModelSecondaryRoutes}

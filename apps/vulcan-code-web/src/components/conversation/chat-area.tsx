@@ -16,6 +16,7 @@ import {
   type ConversationGenerationDialogActionV1,
 } from "@/components/conversation/conversation-generation-dialog-v1";
 import {
+  RuntimeCueLine,
   StreamingThinkingOverlay,
   TransientReasoningStatusLine,
 } from "@/components/conversation/conversation-live-reasoning";
@@ -389,9 +390,6 @@ export function ChatArea(props: ChatAreaProps) {
       props.onFirstSubmissionReconciled?.(selectedConversation.id, pending.clientSubmissionId);
     }
   }, [eventWindowOwnerReady, pendingSubmissionVisible, props.onFirstSubmissionReconciled, props.selectedDraftConversation?.pendingSubmission, selectedConversation]);
-  // transientReasoningStatusVisible tracks insertion and removal; the shared ResizeObserver owns node reflow.
-  // transientReasoningStatusVisible 跟踪插入与移除；共享 ResizeObserver 负责节点重排。
-  const transientReasoningStatusVisible = transientReasoningStatus !== null || providerRetryStatus !== null;
   // streamingReasoningBlock is derived only from the latest canonical V1 streaming reasoning event.
   // streamingReasoningBlock 仅从最新 canonical V1 流式思考事件派生。
   const streamingReasoningBlock = React.useMemo(
@@ -426,6 +424,10 @@ export function ChatArea(props: ChatAreaProps) {
   const runtimeCue = visibleStreamingThinkingOverlayBlock || suppressSubagentOnlyMainCue
     ? null
     : conversationRuntimeCue(surfaceConversation, t);
+  // tailStatusVisible tracks insertion and removal of every transcript-tail status line, including the
+  // runtime cue; the shared ResizeObserver owns node reflow.
+  // tailStatusVisible 跟踪全部转录尾部状态行（含运行提示）的插入与移除；共享 ResizeObserver 负责节点重排。
+  const tailStatusVisible = transientReasoningStatus !== null || providerRetryStatus !== null || runtimeCue !== null;
   // isConversationRunning controls only the main composer stop affordance.
   // isConversationRunning 仅控制主输入区的停止操作展示。
   const isConversationRunning = conversationIsRunning(selectedConversation);
@@ -498,7 +500,7 @@ export function ChatArea(props: ChatAreaProps) {
   // 在时间线尾部增删状态行时遵循当前语义滚动所有权。
   React.useLayoutEffect(() => {
     conversationScrollController.scheduleStoredRestore();
-  }, [conversationScrollController, transientReasoningStatusVisible]);
+  }, [conversationScrollController, tailStatusVisible]);
 
   // A thinking-filter or external layout key change is restored from the latest pre-change semantic snapshot.
   // 思考过滤或外部布局键变化会从最近一次变化前语义快照恢复。
@@ -572,8 +574,6 @@ export function ChatArea(props: ChatAreaProps) {
       startProjectName={emptyProjectName}
       isConversationRunning={isConversationRunning}
       showScrollToBottom={!isEmptyConversation && !isAtConversationBottom}
-      runtimeCue={runtimeCue}
-      runtimeStatusHost={props.runtimeStatusHost ?? null}
       todolistStatusHost={props.todolistStatusHost ?? null}
       sessionTodolist={sessionTodolist}
       thinkingDisplayMode={thinkingDisplayMode}
@@ -656,6 +656,8 @@ export function ChatArea(props: ChatAreaProps) {
             <ProviderRetryCountdownLine countdown={providerRetryStatus} />
           ) : transientReasoningStatus ? (
             <TransientReasoningStatusLine status={transientReasoningStatus} />
+          ) : runtimeCue ? (
+            <RuntimeCueLine cue={runtimeCue} key={runtimeCue.text} />
           ) : null}
           workspacePath={selectedProject?.path ?? null}
           onTrace={props.onTrace}

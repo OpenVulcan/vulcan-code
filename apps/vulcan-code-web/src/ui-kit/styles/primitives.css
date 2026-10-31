@@ -708,6 +708,9 @@ label.vk-field,
 }
 .vk-menu-indicator > svg { width: 100%; height: 100%; }
 .vk-menu-sub-chevron { margin-left: auto; }
+/* A trigger that shows its current value keeps that value right-aligned beside the chevron. */
+/* 显示当前值的子菜单触发项让该值靠右紧贴箭头。 */
+.vk-menu-meta + .vk-menu-sub-chevron { margin-left: 0; }
 .vk-menu-sep { height: 1px; margin: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * -1.5); background: var(--vk-line); }
 .vk-menu-title { padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 1); color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-weight: 500; }
 .vk-menu-title[data-inset] { padding-left: calc(var(--vk-u) * 8); }

@@ -326,7 +326,7 @@
   padding: 0 calc(var(--vk-u) * 2);
   border-top: var(--vk-bw) solid var(--vk-line);
   background: var(--vk-ground-2);
-  font-size: var(--vk-fs-xs);
+  font-size: var(--vk-fs-sm);
   color: var(--vk-ink-3);
   overflow: hidden;
   white-space: nowrap;
