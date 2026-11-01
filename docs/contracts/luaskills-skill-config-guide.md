@@ -2,16 +2,16 @@
 
 ## 1. 适用范围
 
-本文说明 Vulcan Code 的 LuaSkills 技能包配置入口，面向技能包作者、宿主维护者和桌面端使用者。当前独立集成采用正式 0.8.0 注册表依赖，其版本和来源以根清单与实际锁为准。
+本文说明 Vulcan Code 的 LuaSkills 技能包配置入口，面向技能包作者、宿主维护者和桌面端使用者。当前独立集成采用正式 0.8.1 注册表依赖，其版本和来源以根清单与实际锁为准。
 
 技能配置声明以当前上游源码及已有生成技能配置契约为准，不执行旧配置探测、迁移、别名兼容、旧文件提示或自动清理。本文后续零点五点九版本引用保留历史契约与验证背景；不能用于证明零点六候选的构建来源。正式插件执行契约另见[插件执行引擎归属](plugin-execution-engine.md)。
 
 ### 1.1 当前正式依赖与本地验证边界
 
-根 `Cargo.toml` 精确声明 `luaskills = "=0.8.0"`，没有 LuaSkills 本地 path patch。实际锁的来源为
+根 `Cargo.toml` 精确声明 `luaskills = "=0.8.1"`，没有 LuaSkills 本地 path patch。实际锁的来源为
 `registry+https://github.com/rust-lang/crates.io-index`，校验和为
-`cf528dc32a207d5d623e539870eb74c3af32cb80e3f37c2ad959112798d5fc61`。该版本在 Core 五平台 GitHub
-发布（标签 `v0.8.0`）全部门禁通过后才发布到 crates.io。`workspace-hack/Cargo.toml` 中的 `luaskills`
+`68938eee4eafa47bab6fb0120815bc7aa721630f3df342b1e214b9bb3bc27dce`。该版本在 Core 五平台 GitHub
+发布（标签 `v0.8.1`）全部门禁通过后才发布到 crates.io。`workspace-hack/Cargo.toml` 中的 `luaskills`
 条目由 `cargo hakari generate` 维护，升级后用 `cargo hakari generate --diff` 确认无差异。
 
 0.7.3 起 LuaSkills 不再拥有数据库存储：SQLite 只经宿主注册的回调承载，LanceDB 能力与

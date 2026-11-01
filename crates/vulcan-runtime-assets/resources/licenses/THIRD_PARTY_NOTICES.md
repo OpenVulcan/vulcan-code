@@ -16470,7 +16470,7 @@ SOFTWARE.
 ### MIT License
 
 Used by:
-- luaskills 0.8.0 - https://github.com/LuaSkills/luaskills
+- luaskills 0.8.1 - https://github.com/LuaSkills/luaskills
 
 ```text
 MIT License
