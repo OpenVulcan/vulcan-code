@@ -2,11 +2,10 @@
 //! Jieba 分词、SQLite FTS5 `jieba` 分词器与伴生自定义词典。
 //!
 //! This module is the **primary** place in this crate that requires `unsafe`, and it is the original
-//! reason the crate relaxes the workspace's `unsafe_code = "forbid"` lint (see `Cargo.toml` and
-//! `docs/reviews/20260910-native-storage-engine-internalization/V1_BASELINE.md` §7.3).
+//! reason the crate relaxes the workspace's `unsafe_code = "forbid"` lint (see `Cargo.toml`).
 //!
 //! 本模块是本 crate 中**主要**需要 `unsafe` 的地方，也是本 crate 放宽工作区
-//! `unsafe_code = "forbid"` lint 的全部原因（见 `Cargo.toml` 与 v1 基线台账 §7.3）。
+//! `unsafe_code = "forbid"` lint 的全部原因（见 `Cargo.toml`）。
 //!
 //! Why `unsafe` is unavoidable here / 此处为何无法避免 `unsafe`:
 //!
