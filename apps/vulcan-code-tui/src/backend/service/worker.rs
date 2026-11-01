@@ -47,7 +47,7 @@ const RETRY_MAX: Duration = Duration::from_secs(5);
 /// state stays in the typed events; this subset is what settings, plugins and skills pages need.
 /// 系统区域读取的工作台字段，即工作台槽位携带的内容。会话状态仍走类型化事件；该子集是设置、
 /// 插件与技能页面所需的部分。
-const WORKBENCH_SLOT_KEYS: [&str; 25] = [
+const WORKBENCH_SLOT_KEYS: [&str; 26] = [
     "appVersion",
     "uiLocale",
     "modules",
@@ -62,6 +62,7 @@ const WORKBENCH_SLOT_KEYS: [&str; 25] = [
     "mcpTools",
     "thinkingDisplayMode",
     "toolCollapseDefaultEnabled",
+    "sessionTitleGenerationEnabled",
     "defaultAnswerMode",
     "gitCommit",
     "providerRetry",
@@ -1257,8 +1258,28 @@ impl Worker {
             api::ServiceEvent::WorkspaceGitChanged(change) => {
                 self.git_changed(&change.workspace_path, &change.repository_keys);
             }
+            api::ServiceEvent::SessionTitleGenerated(generated) => {
+                self.session_title_generated(&generated);
+            }
 
             _ => {}
+        }
+    }
+
+    /// Tells the user the generated session title, or which model failed to write one.
+    /// 告知用户生成的会话标题，或哪个模型未能生成标题。
+    /// `generated` is the outcome of one title request.
+    /// `generated` 为一次标题请求的结果。
+    fn session_title_generated(&self, generated: &api::SessionTitleGeneratedEvent) {
+        match &generated.outcome {
+            api::SessionTitleGenerationOutcome::Renamed { title } => self.toast(
+                NoticeSeverity::Info,
+                crate::tr!("sessionTitle.toast.renamed", title = title),
+            ),
+            api::SessionTitleGenerationOutcome::Failed => self.toast(
+                NoticeSeverity::Warning,
+                crate::tr!("sessionTitle.toast.failed", model = generated.model),
+            ),
         }
     }
 

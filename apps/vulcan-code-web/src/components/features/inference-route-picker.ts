@@ -24,6 +24,27 @@ export function inferenceRouteKey(route: PublicAiInferenceRoute): string {
     binding, route.operation, route.usage_scope].join("\u0000");
 }
 
+// candidateSupportsDisabledReasoning mirrors the backend's strict rule for running with thinking off.
+// candidateSupportsDisabledReasoning 镜像后端关闭思考运行的严格规则。
+// candidate supplies the model capabilities; returns whether thinking can be turned off.
+// candidate 提供模型能力；返回能否关闭思考。
+export function candidateSupportsDisabledReasoning(
+  candidate: PublicAiInternalInferenceCandidate,
+): boolean {
+  const control = candidate.capabilities.reasoning_control ?? "unknown";
+  if (control === "fixed_off") {
+    return true;
+  }
+  if (
+    control !== "toggle"
+    && control !== "effort_selection"
+    && control !== "provider_adaptive"
+  ) {
+    return false;
+  }
+  return (candidate.capabilities.reasoning_efforts ?? []).includes("none");
+}
+
 // Build common searchable options from backend-validated route candidates.
 // 从后端已验证路由候选构建通用可搜索选项。
 // candidates supply model/account/provider metadata; returns exact-identity picker options.

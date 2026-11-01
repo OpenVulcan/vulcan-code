@@ -99,6 +99,7 @@ messages:
   recent.group.decision: "Decision models"
   consumer.name.vulcan-code-permission-judge: "Decision model"
   consumer.name.vulcan-code-permission-review: "Decision review"
+  consumer.name.vulcan-code-session-title: "Session title generation"
   operation.decision_evaluate: "Decision evaluation"
   sections.pricing: Model pricing
   sections.maintenance: Maintenance

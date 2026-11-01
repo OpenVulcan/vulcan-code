@@ -3056,7 +3056,9 @@ async fn service_start_conversation_execution(
     }
     // Resolve the new-session default against the actual selected model before publishing the root.
     // 在发布根输入前，按实际所选模型解析新会话默认窗口。
-    let new_session_context_window_node_id =
+    // The selected model also titles the new session when no title route is saved.
+    // 未保存标题路由时，所选模型同时用于为新会话生成标题。
+    let (new_session_context_window_node_id, new_session_model) =
         if materialized_session.kind == PromptSessionMaterializationKind::Created {
             let runtime = agent_runtime.public_ai_runtime.as_ref();
             let configuration = runtime.configuration_snapshot()?;
@@ -3069,12 +3071,26 @@ async fn service_start_conversation_execution(
             } else {
                 crate::public_ai_workbench_selection(&configuration, runtime, None, None)?
             };
-            configuration.new_session_context_compaction_window_node_for_model(
-                selected_model.and_then(|selected| selected.model.capabilities.context_limit),
-            )?
+            (
+                configuration.new_session_context_compaction_window_node_for_model(
+                    selected_model
+                        .as_ref()
+                        .and_then(|selected| selected.model.capabilities.context_limit),
+                )?,
+                selected_model,
+            )
         } else {
-            None
+            (None, None)
         };
+    let title_generation_request = (materialized_session.kind
+        == PromptSessionMaterializationKind::Created
+        && !prompt.is_empty())
+    .then(|| crate::session_title::SessionTitleGenerationRequest {
+        session_id: materialized_session.session_id,
+        initial_title: materialized_session.session_title.clone(),
+        prompt: prompt.clone(),
+        session_model: new_session_model,
+    });
     // V1 materialization is the first durable session boundary after the old
     // selector has fixed session/project/attachment ownership. It intentionally
     // precedes Goal, Plan, output-style, and pending-model mutations.
@@ -3745,6 +3761,9 @@ async fn service_start_conversation_execution(
             );
         }
     });
+    if let Some(request) = title_generation_request {
+        crate::session_title::spawn_session_title_generation(app, state, request);
+    }
     Ok(acknowledgement)
 }
 

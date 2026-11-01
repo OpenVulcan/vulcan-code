@@ -123,6 +123,10 @@ pub struct WorkbenchSnapshot {
     /// 持久化的工具分组默认折叠偏好；仅旧快照缺省。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_collapse_default_enabled: Option<bool>,
+    /// Whether new sessions are titled by a model from their first prompt.
+    /// 新会话是否由模型根据首个提示词生成标题。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_title_generation_enabled: Option<bool>,
     /// Git commit dialog settings resolved from the shared configuration file.
     /// 从共享配置文件解析出的 Git 提交弹窗设置。
     #[serde(default)]

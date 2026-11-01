@@ -198,10 +198,20 @@ fn vmm_saved_reasoning_effort(
         }
         return Ok(requested);
     }
+    // The session title generator follows the same rule as the permission reviewer.
+    // 会话标题生成器遵循与权限复核器相同的规则。
+    if consumer_profile_id == crate::session_title::SESSION_TITLE_CONSUMER_PROFILE_ID {
+        if route.is_none() && requested.is_some() {
+            return Err(String::from(
+                "A cleared session title route cannot retain a reasoning effort.",
+            ));
+        }
+        return Ok(requested);
+    }
     if consumer_profile_id != VMM_CONSUMER_PROFILE_ID {
         if requested.is_some() {
             return Err(String::from(
-                "Purpose-scoped reasoning settings are currently defined only for the VMM and permission reviewer profiles.",
+                "Purpose-scoped reasoning settings are currently defined only for the VMM, permission reviewer and session title profiles.",
             ));
         }
         return Ok(None);
@@ -429,11 +439,12 @@ pub(crate) async fn service_save_public_ai_internal_model_overrides(
 }
 
 /// Reports whether a consumer profile exists only while the user keeps a saved route in it
-/// (LuaSkills and the permission reviewer).
-/// 判断某消费者 Profile 是否只在用户保留其已保存路由时存在（LuaSkills 与权限复核器）。
+/// (LuaSkills, the permission reviewer and the session title generator).
+/// 判断某消费者 Profile 是否只在用户保留其已保存路由时存在（LuaSkills、权限复核器与会话标题生成器）。
 fn optional_consumer_profile(consumer_profile_id: &str) -> bool {
     consumer_profile_id == crate::luaskills_model::LUASKILLS_CONSUMER_PROFILE_ID
         || consumer_profile_id == crate::permission_judge::PERMISSION_REVIEW_CONSUMER_PROFILE_ID
+        || consumer_profile_id == crate::session_title::SESSION_TITLE_CONSUMER_PROFILE_ID
 }
 
 /// Reports whether an optional consumer's clear must skip creating its consumer profile.
@@ -481,6 +492,34 @@ fn validate_permission_review_inference_route_request(
     {
         return Err(String::from(
             "The permission reviewer route must use the `internal_background` usage scope.",
+        ));
+    }
+    Ok(())
+}
+
+/// Validates the single route the session title generator owns.
+/// 验证会话标题生成器拥有的唯一路由。
+fn validate_session_title_inference_route_request(
+    request: &PublicAiInferenceRouteSaveRequest,
+) -> Result<(), String> {
+    if request.consumer_profile_id != crate::session_title::SESSION_TITLE_CONSUMER_PROFILE_ID {
+        return Ok(());
+    }
+    if request.operation != AiOperation::ConversationRespond
+        || request.purpose_id.as_deref() != Some(crate::session_title::SESSION_TITLE_PURPOSE_ID)
+    {
+        return Err(format!(
+            "The session title generator accepts only the `conversation_respond/{}` inference route.",
+            crate::session_title::SESSION_TITLE_PURPOSE_ID
+        ));
+    }
+    if request
+        .route
+        .as_ref()
+        .is_some_and(|route| route.usage_scope != InferenceUsageScope::InternalBackground)
+    {
+        return Err(String::from(
+            "The session title route must use the `internal_background` usage scope.",
         ));
     }
     Ok(())
@@ -625,6 +664,7 @@ pub(crate) async fn service_save_public_ai_inference_route(
     }
     validate_luaskills_inference_route_request(&request)?;
     validate_permission_review_inference_route_request(&request)?;
+    validate_session_title_inference_route_request(&request)?;
     validate_permission_judge_inference_route_request(&request)?;
     // transaction serializes validation, activation, and Workbench publication.
     // transaction 串行化校验、激活与工作台发布。

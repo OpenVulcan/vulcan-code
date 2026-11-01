@@ -1468,6 +1468,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                 .tool_collapse_default_enabled
                 .unwrap_or(true),
         ),
+        session_title_generation_enabled: Some(provider_configuration.title_generation_enabled()),
         git_commit: git_commit_settings(provider_configuration),
         provider_retry: provider_retry_settings(provider_configuration),
         provider_request_trace_enabled: provider_configuration.provider_request_trace_enabled,

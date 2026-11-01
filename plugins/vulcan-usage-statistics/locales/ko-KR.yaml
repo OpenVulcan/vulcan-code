@@ -99,6 +99,7 @@ messages:
   recent.group.decision: "판정 모델"
   consumer.name.vulcan-code-permission-judge: "판정 모델"
   consumer.name.vulcan-code-permission-review: "판정 2차 검토"
+  consumer.name.vulcan-code-session-title: "세션 제목 생성"
   operation.decision_evaluate: "판정 평가"
   sections.pricing: 모델 가격
   sections.maintenance: 유지 관리

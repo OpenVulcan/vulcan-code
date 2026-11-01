@@ -228,6 +228,9 @@ export interface WorkbenchSnapshot {
   // Persisted default for tool-group folding; older snapshots preserve the enabled default.
   // 工具分组折叠的持久化默认值；旧快照保留默认开启行为。
   toolCollapseDefaultEnabled?: boolean | null;
+  // Whether new sessions get a model-generated title; older snapshots preserve the enabled default.
+  // 新会话是否获得模型生成的标题；旧快照保留默认开启行为。
+  sessionTitleGenerationEnabled?: boolean | null;
   // Git commit dialog settings resolved from the shared service configuration.
   // 从共享服务配置解析出的 Git 提交弹窗设置。
   gitCommit?: GitCommitSettingsSummary;

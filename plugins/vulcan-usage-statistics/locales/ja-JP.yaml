@@ -99,6 +99,7 @@ messages:
   recent.group.decision: "判定モデル"
   consumer.name.vulcan-code-permission-judge: "判定モデル"
   consumer.name.vulcan-code-permission-review: "判定の二次審査"
+  consumer.name.vulcan-code-session-title: "セッションタイトル生成"
   operation.decision_evaluate: "判定評価"
   sections.pricing: モデル料金
   sections.maintenance: メンテナンス

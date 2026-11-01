@@ -660,6 +660,10 @@ impl FakeService {
             "service_save_tool_collapse_default" => {
                 self.workbench["toolCollapseDefaultEnabled"] = required(params, "/enabled")?.clone()
             }
+            "service_save_session_title_generation" => {
+                self.workbench["sessionTitleGenerationEnabled"] =
+                    required(params, "/enabled")?.clone()
+            }
             "service_select_webui_locale" => {
                 self.workbench["uiLocale"] = required(params, "/locale")?.clone()
             }

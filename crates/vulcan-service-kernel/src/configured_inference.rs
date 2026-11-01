@@ -79,6 +79,15 @@ const PROVIDER_MODEL_VALIDATION_CONSUMER_ID: &str = "vulcan-code-provider-valida
 /// 标识原生用量账本中的可计费专职会话提示词起草请求。
 const DEDICATED_PROMPT_DRAFT_CONSUMER_ID: &str = "vulcan-code-dedicated-prompt-draft";
 
+/// Identifies billable session title generation requests in the native usage ledger.
+/// 标识原生用量账本中的可计费会话标题生成请求。
+const SESSION_TITLE_CONSUMER_ID: &str = "vulcan-code-session-title";
+
+/// Output token ceiling of one session title request, shared by its caller budget and request; it
+/// leaves room for a model that thinks before answering.
+/// 单次会话标题请求的输出 Token 上限，由其调用方预算与请求共用；为先思考再作答的模型留出空间。
+pub(crate) const SESSION_TITLE_OUTPUT_TOKEN_LIMIT: u64 = 4_096;
+
 /// Output token ceiling of one dedicated prompt draft, shared by its caller budget and request.
 /// 单次专职提示词起草的输出 Token 上限，由其调用方预算与请求共用。
 pub(crate) const DEDICATED_PROMPT_DRAFT_OUTPUT_TOKEN_LIMIT: u64 = 16_384;
@@ -97,6 +106,9 @@ pub(crate) enum ExactSelectionTextPurpose {
     /// Drafting or revising the base prompt of a dedicated session.
     /// 起草或修订专职会话的基础提示词。
     DedicatedPromptDraft,
+    /// Titling a new session from its first prompt.
+    /// 根据首个提示词为新会话生成标题。
+    SessionTitle,
 }
 
 impl ExactSelectionTextPurpose {
@@ -106,6 +118,7 @@ impl ExactSelectionTextPurpose {
         match self {
             Self::ModelValidation => PROVIDER_MODEL_VALIDATION_CONSUMER_ID,
             Self::DedicatedPromptDraft => DEDICATED_PROMPT_DRAFT_CONSUMER_ID,
+            Self::SessionTitle => SESSION_TITLE_CONSUMER_ID,
         }
     }
 
@@ -115,6 +128,7 @@ impl ExactSelectionTextPurpose {
         match self {
             Self::ModelValidation => "Custom model validation",
             Self::DedicatedPromptDraft => "Dedicated prompt drafting",
+            Self::SessionTitle => "Session title generation",
         }
     }
 }
@@ -4087,6 +4101,19 @@ fn exact_selection_text_caller(purpose: ExactSelectionTextPurpose) -> InferenceC
                 max_execution_duration_ms: Some(300_000),
             }
         }
+        // Titling reads the start of one prompt and writes one short line; several new sessions
+        // may be titled at once.
+        // 生成标题读取一个提示词的开头并写出一行短文本；可能同时为多个新会话生成标题。
+        ExactSelectionTextPurpose::SessionTitle => vulcan_ai_contract::InferenceCallerBudget {
+            max_concurrent_executions: 4,
+            max_input_units_per_request: Some(16 * 1024),
+            max_output_tokens_per_request: Some(SESSION_TITLE_OUTPUT_TOKEN_LIMIT),
+            max_requests_per_minute: Some(30),
+            max_input_units_per_minute: Some(256 * 1024),
+            max_execution_duration_ms: Some(
+                crate::session_title::SESSION_TITLE_TIMEOUT.as_millis() as u64,
+            ),
+        },
     };
     InferenceCallerContext {
         // Exact-selection text keeps the model-validation scheduling behavior.

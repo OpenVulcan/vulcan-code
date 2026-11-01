@@ -292,6 +292,7 @@ Rust 名称列同时标明内部确认构建器，避免将预检确认辅助函
 | `settings_actions::cancel_provider_task` | cancelProviderTask | `service_cancel_provider_task` |
 | `settings_actions::select_workbench_thinking_display_mode` | selectWorkbenchThinkingDisplayMode | `service_select_workbench_thinking_display_mode` |
 | `settings_actions::save_tool_collapse_default` | saveToolCollapseDefault | `service_save_tool_collapse_default` |
+| `settings_actions::save_session_title_generation` | saveSessionTitleGeneration | `service_save_session_title_generation` |
 | `settings_actions::select_webui_locale` | selectWebuiLocale | `service_select_webui_locale` |
 | `settings_actions::save_git_commit_settings` | saveGitCommitSettings | `service_save_git_commit_settings` |
 | `settings_actions::save_provider_retry_settings` | saveProviderRetrySettings | `service_save_provider_retry_settings` |

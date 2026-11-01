@@ -116,7 +116,7 @@ fn component_label(code: &str) -> String {
 
 /// Labels a reasoning effort a model declares.
 /// 为模型声明的思考档位生成标签。
-fn effort_label(code: &str) -> String {
+pub(super) fn effort_label(code: &str) -> String {
     match code {
         "none" => tr!("composer.reasoning.level.none"),
         "adaptive" => tr!("composer.reasoning.level.adaptive"),

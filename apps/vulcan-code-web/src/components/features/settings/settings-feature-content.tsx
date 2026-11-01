@@ -26,6 +26,7 @@ import { PermissionJudgeSettingsArea } from "@/components/features/settings/perm
 import { SubagentModelsSettingsArea } from "@/components/features/subagent-models/subagent-models-settings-area";
 import { McpServiceSettingsArea } from "@/components/features/mcp-service/mcp-service-settings-area";
 import { ToolCollapseSettingsSection } from "./tool-collapse-settings";
+import { SessionTitleSettingsSection } from "./session-title-settings";
 import { ThinkingPopupSettingsSection } from "./thinking-popup-settings";
 import { ConversationLinkSettingsSection } from "./conversation-link-settings";
 import { SystemPromptSettingsCard } from "./system-prompt-settings";
@@ -147,6 +148,7 @@ function SettingsRoutedPage(props: SettingsFeatureContentProps) {
           <OutputStyleSettingsSection actions={props.actions} outputStyleCatalog={props.workbench.outputStyleCatalog} />
           <AnswerModeSettingsSection actions={props.actions} defaultAnswerMode={props.workbench.defaultAnswerMode} />
           <ToolCollapseSettingsSection />
+          <SessionTitleSettingsSection actions={props.actions} enabled={props.workbench.sessionTitleGenerationEnabled ?? true} />
           <ThinkingPopupSettingsSection />
           <ConversationLinkSettingsSection />
         </>}

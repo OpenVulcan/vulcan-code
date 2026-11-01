@@ -655,6 +655,11 @@ pub const PERMISSION_REVIEW_MD: &str =
 pub const DEDICATED_PROMPT_GENERATOR_MD: &str =
     include_str!("../resources/agent-prompts/dedicated-prompt-generator.md");
 
+/// System prompt that titles a new session from its first user prompt.
+/// 根据首个用户提示词为新会话生成标题的系统提示词。
+pub const SESSION_TITLE_GENERATOR_MD: &str =
+    include_str!("../resources/agent-prompts/session-title-generator.md");
+
 /// Self-contained OpenVulcan loopback result page; visible copy comes from the shared catalogs.
 /// 自包含的 OpenVulcan 环回结果页；可见文案来自共享目录。
 pub const OPENVULCAN_CALLBACK_HTML: &str =

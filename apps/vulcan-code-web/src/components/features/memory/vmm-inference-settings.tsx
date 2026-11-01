@@ -37,6 +37,7 @@ import {
   testPublicAiInferenceRoute,
 } from "@/service/settings-actions-service"
 import { renderServiceErrorMessage } from "@/service/browserTransport"
+import { candidateSupportsDisabledReasoning } from "@/components/features/inference-route-picker"
 import type {
   PublicAiInferenceRoute,
   PublicAiInferenceRouteDiagnostic,
@@ -990,25 +991,6 @@ function inferenceRouteKey(route: PublicAiInferenceRoute): string {
     route.operation,
     route.usage_scope,
   ].join("\u0000")
-}
-
-// candidateSupportsDisabledReasoning mirrors the backend's strict VMM eligibility contract.
-// candidateSupportsDisabledReasoning 镜像后端严格的 VMM 候选资格契约。
-function candidateSupportsDisabledReasoning(
-  candidate: PublicAiInternalInferenceCandidate,
-): boolean {
-  const control = candidate.capabilities.reasoning_control ?? "unknown"
-  if (control === "fixed_off") {
-    return true
-  }
-  if (
-    control !== "toggle"
-    && control !== "effort_selection"
-    && control !== "provider_adaptive"
-  ) {
-    return false
-  }
-  return (candidate.capabilities.reasoning_efforts ?? []).includes("none")
 }
 
 // candidateSupportsVmmStructuredOutput consumes the backend-projected model/protocol intersection.

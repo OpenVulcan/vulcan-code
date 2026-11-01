@@ -99,6 +99,7 @@ messages:
   recent.group.decision: "Модели решений"
   consumer.name.vulcan-code-permission-judge: "Модель решений"
   consumer.name.vulcan-code-permission-review: "Повторная проверка решения"
+  consumer.name.vulcan-code-session-title: "Названия сессий"
   operation.decision_evaluate: "Оценка решения"
   sections.pricing: Цены моделей
   sections.maintenance: Обслуживание

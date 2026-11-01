@@ -99,6 +99,7 @@ messages:
   recent.group.decision: "決策模型"
   consumer.name.vulcan-code-permission-judge: "決策模型"
   consumer.name.vulcan-code-permission-review: "決策二審"
+  consumer.name.vulcan-code-session-title: "工作階段標題產生"
   operation.decision_evaluate: "決策評估"
   sections.pricing: 模型定價
   sections.maintenance: 維護

@@ -212,8 +212,189 @@ pub(super) fn context(app: &App) -> Vec<Row> {
             build: |_, value| Some(settings::save_tool_collapse_default(value.as_bool())),
         }),
     ));
+    session_title_rows(&mut rows, wb, ai);
     rows.extend(system_prompt(app));
     rows
+}
+
+/// Consumer profile and purpose of the session title route, owned by the service kernel.
+/// 会话标题路由的消费者配置档与用途，由服务内核持有。
+const SESSION_TITLE_PROFILE: &str = "session_title";
+const SESSION_TITLE_PURPOSE: &str = "session_title_generation";
+
+/// Effort choice that saves no explicit reasoning effort.
+/// 不保存显式思考档位的选项。
+const SESSION_TITLE_MODEL_DEFAULT_EFFORT: &str = "model-default";
+
+/// Mirrors `candidateSupportsDisabledReasoning`: whether a route can run with thinking off.
+/// 镜像 `candidateSupportsDisabledReasoning`：路由能否关闭思考运行。
+fn supports_disabled_reasoning(candidate: &Value) -> bool {
+    match s(candidate, "/capabilities/reasoning_control").as_str() {
+        "fixed_off" => true,
+        "toggle" | "effort_selection" | "provider_adaptive" => declares_effort(candidate, "none"),
+        _ => false,
+    }
+}
+
+/// Whether a candidate model declares one reasoning effort.
+/// 候选模型是否声明某个思考档位。
+fn declares_effort(candidate: &Value, effort: &str) -> bool {
+    a(candidate, "/capabilities/reasoning_efforts")
+        .iter()
+        .any(|declared| declared == effort)
+}
+
+/// Mirrors `sessionTitleCandidates`: internal conversation routes, thinking-off models first.
+/// 镜像 `sessionTitleCandidates`：内部对话路由，可关闭思考的模型在前。
+fn session_title_candidates(ai: &Value) -> Vec<&Value> {
+    let mut candidates: Vec<&Value> = a(ai, "/internalInferenceCandidates")
+        .iter()
+        .filter(|candidate| {
+            b(candidate, "/enabled")
+                && s(candidate, "/route/usage_scope") == "internal_background"
+                && s(candidate, "/route/operation") == "conversation_respond"
+                && s(candidate, "/route/binding/kind") == "protocol"
+        })
+        .collect();
+    candidates.sort_by_key(|candidate| !supports_disabled_reasoning(candidate));
+    candidates
+}
+
+/// Saves the picked title route; a model whose route is listed in `thinking_off` starts with
+/// thinking off, as in the WebUI.
+/// 保存所选标题路由；路由列在 `thinking_off` 中的模型以关闭思考开始，与 WebUI 一致。
+fn select_session_title_route(thinking_off: &Value, value: &SettingValue) -> Option<ServiceCall> {
+    let route: Value = serde_json::from_str(value.as_str()).ok()?;
+    let off = a(thinking_off, "")
+        .iter()
+        .any(|listed| listed == value.as_str());
+    Some(settings::save_public_ai_inference_route(
+        SESSION_TITLE_PROFILE,
+        Some(SESSION_TITLE_PURPOSE),
+        "conversation_respond",
+        route,
+        off.then_some("none"),
+    ))
+}
+
+/// Saves the title route with the chosen effort; the default option saves none.
+/// 以所选档位保存标题路由；默认选项不保存档位。
+fn select_session_title_effort(route: &Value, value: &SettingValue) -> Option<ServiceCall> {
+    let effort = value.as_str();
+    Some(settings::save_public_ai_inference_route(
+        SESSION_TITLE_PROFILE,
+        Some(SESSION_TITLE_PURPOSE),
+        "conversation_respond",
+        route.clone(),
+        (effort != SESSION_TITLE_MODEL_DEFAULT_EFFORT).then_some(effort),
+    ))
+}
+
+/// The session title switch, its model and its thinking level.
+/// 会话标题开关、其模型与思考级别。
+fn session_title_rows(rows: &mut Vec<Row>, wb: &Value, ai: &Value) {
+    // Older snapshots without the field keep the enabled default.
+    // 缺少该字段的旧快照保留默认开启。
+    let enabled = v(wb, "/sessionTitleGenerationEnabled")
+        .as_bool()
+        .unwrap_or(true);
+    rows.push(toggle(
+        tr!("settings.sessionTitle.title"),
+        enabled,
+        Edit::Call(Setter::Build {
+            ctx: Value::Null,
+            build: |_, value| Some(settings::save_session_title_generation(value.as_bool())),
+        }),
+    ));
+    rows.push(note(tr!("settings.sessionTitle.hint"), Tone::Muted));
+    if !enabled {
+        return;
+    }
+    let profile = v(ai, &format!("/inferenceProfiles/{SESSION_TITLE_PROFILE}"));
+    let saved = v(profile, &format!("/llm_routes/{SESSION_TITLE_PURPOSE}"));
+    let effort = v(
+        profile,
+        &format!("/llm_reasoning_efforts/{SESSION_TITLE_PURPOSE}"),
+    );
+    let candidates = session_title_candidates(ai);
+    let selected = candidates
+        .iter()
+        .find(|candidate| v(candidate, "/route") == saved);
+    rows.push(note(
+        tr!("settings.sessionTitle.recommendation"),
+        Tone::Muted,
+    ));
+    if !saved.is_null() && selected.is_none() {
+        rows.push(note(tr!("settings.sessionTitle.unavailable"), Tone::Warn));
+    }
+    let mut options = vec![(
+        "null".to_string(),
+        tr!("settings.sessionTitle.sessionModel"),
+    )];
+    for candidate in &candidates {
+        let mut label = format!(
+            "{} / {} / {}",
+            s(candidate, "/providerDisplayName"),
+            s(candidate, "/connectionDisplayName"),
+            s(candidate, "/modelDisplayName")
+        );
+        if supports_disabled_reasoning(candidate) {
+            label.push_str(&format!(
+                " · {}",
+                tr!("settings.sessionTitle.canTurnOffThinking")
+            ));
+        }
+        options.push((v(candidate, "/route").to_string(), label));
+    }
+    let thinking_off = candidates
+        .iter()
+        .filter(|candidate| declares_effort(candidate, "none"))
+        .map(|candidate| v(candidate, "/route").to_string())
+        .collect::<Vec<_>>();
+    rows.push(choice(
+        tr!("settings.sessionTitle.route"),
+        options,
+        saved.to_string(),
+        Edit::Call(Setter::Build {
+            ctx: json!(thinking_off),
+            build: select_session_title_route,
+        }),
+    ));
+    if selected.is_none() {
+        rows.push(note(
+            tr!("settings.sessionTitle.sessionModelHint"),
+            Tone::Muted,
+        ));
+    }
+    if let Some(candidate) = selected {
+        let mut efforts = vec![(
+            SESSION_TITLE_MODEL_DEFAULT_EFFORT.to_string(),
+            tr!("settings.sessionTitle.reasoningDefault"),
+        )];
+        efforts.extend(
+            a(candidate, "/capabilities/reasoning_efforts")
+                .iter()
+                .filter_map(Value::as_str)
+                .map(|declared| {
+                    (
+                        declared.to_string(),
+                        super::permission_judge::effort_label(declared),
+                    )
+                }),
+        );
+        rows.push(choice(
+            tr!("settings.sessionTitle.reasoning"),
+            efforts,
+            effort
+                .as_str()
+                .unwrap_or(SESSION_TITLE_MODEL_DEFAULT_EFFORT)
+                .to_string(),
+            Edit::Call(Setter::Build {
+                ctx: saved.clone(),
+                build: select_session_title_effort,
+            }),
+        ));
+    }
 }
 
 /// Builds the base system prompt editor for the user layer or one project.
@@ -1365,4 +1546,53 @@ pub(super) fn about(app: &App) -> Vec<Row> {
         ));
     }
     rows
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A picked model that declares `none` saves with thinking off; the session-model choice clears the route.
+    // 所选模型声明 `none` 时以关闭思考保存；选择会话模型时清除路由。
+    #[test]
+    fn title_route_starts_with_thinking_off_when_the_model_allows() {
+        let quiet = json!({"model_id": "quiet"}).to_string();
+        let context = json!([quiet]);
+        let off = select_session_title_route(&context, &SettingValue::Choice(quiet)).unwrap();
+        assert_eq!(off.param("/request/reasoningEffort"), "none");
+        assert_eq!(off.param("/request/purposeId"), SESSION_TITLE_PURPOSE);
+        let thinking = select_session_title_route(
+            &context,
+            &SettingValue::Choice(json!({"model_id": "thinking"}).to_string()),
+        )
+        .unwrap();
+        assert!(thinking.param("/request/reasoningEffort").is_null());
+        let cleared =
+            select_session_title_route(&context, &SettingValue::Choice("null".into())).unwrap();
+        assert!(cleared.param("/request/route").is_null());
+        assert!(cleared.param("/request/reasoningEffort").is_null());
+    }
+
+    // Routes that can turn thinking off are offered first, and only internal routes are offered.
+    // 可关闭思考的路由排在前面，且只提供内部路由。
+    #[test]
+    fn title_candidates_put_thinking_off_models_first() {
+        let route = |model: &str, scope: &str| {
+            json!({"model_id": model, "usage_scope": scope, "operation": "conversation_respond",
+                "binding": {"kind": "protocol"}})
+        };
+        let ai = json!({"internalInferenceCandidates": [
+            {"enabled": true, "route": route("thinking", "internal_background"),
+                "capabilities": {"reasoning_control": "effort_selection", "reasoning_efforts": ["low"]}},
+            {"enabled": true, "route": route("quiet", "internal_background"),
+                "capabilities": {"reasoning_control": "effort_selection", "reasoning_efforts": ["none", "low"]}},
+            {"enabled": true, "route": route("foreground", "foreground"),
+                "capabilities": {"reasoning_control": "fixed_off"}},
+        ]});
+        let models: Vec<String> = session_title_candidates(&ai)
+            .iter()
+            .map(|candidate| s(candidate, "/route/model_id"))
+            .collect();
+        assert_eq!(models, ["quiet", "thinking"]);
+    }
 }

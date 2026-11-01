@@ -13,6 +13,7 @@ pub(super) use collaboration_grants::{
     service_remove_collaboration_grant,
 };
 
+pub(crate) use conversation_services::rename_session_to_generated_title;
 pub(super) use conversation_services::{
     service_archive_conversation, service_delete_archived_conversations,
     service_delete_unsupported_conversation, service_mark_conversation_read,

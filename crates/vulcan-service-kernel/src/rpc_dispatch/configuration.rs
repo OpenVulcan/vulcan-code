@@ -6,7 +6,9 @@ use crate::permission_judge;
 use crate::system_prompt_settings::{
     service_reset_system_prompt, service_save_system_prompt, service_system_prompt_settings,
 };
-use crate::workbench_model_routes::service_save_tool_collapse_default;
+use crate::workbench_model_routes::{
+    service_save_session_title_generation, service_save_tool_collapse_default,
+};
 
 /// Exact public RPC wire names owned by this domain router.
 /// 本领域路由持有的精确公开 RPC 线协议名称。
@@ -17,6 +19,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_select_workbench_model_secondary_route",
     "service_select_workbench_thinking_display_mode",
     "service_save_tool_collapse_default",
+    "service_save_session_title_generation",
     "service_select_webui_locale",
     "service_save_provider_request_trace_settings",
     "service_open_selected_provider_api_trace_directory",
@@ -227,6 +230,14 @@ pub(super) async fn dispatch(
         "service_save_tool_collapse_default" => rpc_json_result(
             service_save_tool_collapse_default(app, state, rpc_required_param(params, "enabled")?)
                 .await,
+        ),
+        "service_save_session_title_generation" => rpc_json_result(
+            service_save_session_title_generation(
+                app,
+                state,
+                rpc_required_param(params, "enabled")?,
+            )
+            .await,
         ),
         "service_select_webui_locale" => rpc_json_result(
             service_select_webui_locale(app, state, rpc_required_param(params, "locale")?).await,

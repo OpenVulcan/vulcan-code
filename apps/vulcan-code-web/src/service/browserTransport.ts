@@ -16,6 +16,10 @@ import {
   DEDICATED_PROMPT_DRAFT_PROGRESS_TOPIC,
   type DedicatedPromptDraftProgressEvent,
 } from "@/service/dedicated-prompt-draft-events";
+import {
+  SESSION_TITLE_GENERATED_TOPIC,
+  type SessionTitleGeneratedEvent,
+} from "@/service/session-title-events";
 import type {
   ServiceEventHandler,
   ServiceParams,
@@ -128,7 +132,8 @@ type BrowserServiceEvent =
   | { kind: "commandSessionDisplayChanged"; payload: CommandSessionDisplayChangedEvent }
   | { kind: "projectTerminalDisplayChanged"; payload: ProjectTerminalDisplayChangedEvent }
   | { kind: "projectTerminalRunningCountChanged"; payload: ProjectTerminalRunningCountChangedEvent }
-  | { kind: "dedicatedPromptDraftProgress"; payload: DedicatedPromptDraftProgressEvent };
+  | { kind: "dedicatedPromptDraftProgress"; payload: DedicatedPromptDraftProgressEvent }
+  | { kind: "sessionTitleGenerated"; payload: SessionTitleGeneratedEvent };
 
 // EVENT_KIND_TO_TOPIC maps service event kinds to protocol topics.
 // EVENT_KIND_TO_TOPIC 将服务事件类型映射为协议主题。
@@ -145,6 +150,7 @@ const EVENT_KIND_TO_TOPIC: Record<BrowserServiceEvent["kind"], string> = {
   projectTerminalDisplayChanged: "project.terminal.display.changed",
   projectTerminalRunningCountChanged: "project.terminal.running-count.changed",
   dedicatedPromptDraftProgress: DEDICATED_PROMPT_DRAFT_PROGRESS_TOPIC,
+  sessionTitleGenerated: SESSION_TITLE_GENERATED_TOPIC,
 };
 
 // closeWebSocketWhenReady closes one socket without aborting its opening handshake.

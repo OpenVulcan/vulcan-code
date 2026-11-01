@@ -194,6 +194,7 @@ messages:
   recent.group.decision: "决策模型"
   consumer.name.vulcan-code-permission-judge: "决策模型"
   consumer.name.vulcan-code-permission-review: "决策二审"
+  consumer.name.vulcan-code-session-title: "会话标题生成"
   operation.decision_evaluate: "决策评估"
   sections.pricing: 模型定价
   sections.maintenance: 维护

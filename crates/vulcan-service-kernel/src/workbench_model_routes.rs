@@ -378,6 +378,36 @@ pub(super) async fn service_save_tool_collapse_default(
     Ok(workbench)
 }
 
+/// Persists whether new sessions are titled by a model from their first prompt.
+/// 持久化新会话是否由模型根据首个提示词生成标题。
+/// Parameters: app publishes the snapshot, state owns configuration, enabled is the explicit choice.
+/// 参数：app 发布快照，state 持有配置，enabled 是明确的选择。
+/// Returns the refreshed workbench or an explicit persistence error.
+/// 返回刷新后的工作台或明确的持久化错误。
+pub(super) async fn service_save_session_title_generation(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    enabled: bool,
+) -> Result<WorkbenchSnapshot, String> {
+    // Persist only on explicit user action; loading never writes the default.
+    // 仅在用户明确操作时持久化；加载时不写入默认值。
+    let workbench = mutate_provider_configuration(
+        &state,
+        "Failed to save the session title generation setting",
+        |configuration| {
+            configuration.session_title_generation_enabled = Some(enabled);
+            Ok(())
+        },
+        |guard, configuration| {
+            refresh_settings_projection_locked(guard, configuration);
+            guard.workbench.clone()
+        },
+    )
+    .await?;
+    emit_workbench_event(&app, &workbench);
+    Ok(workbench)
+}
+
 /// Persists the WebUI locale in the shared Vulcan configuration file.
 /// 将 WebUI 语言持久化到共享 Vulcan 配置文件中。
 ///

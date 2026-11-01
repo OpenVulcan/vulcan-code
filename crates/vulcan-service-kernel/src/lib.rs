@@ -226,6 +226,7 @@ mod session_request_config_v1;
 mod session_request_options_services;
 mod session_runtime_kernel;
 mod session_runtime_registry_v1;
+mod session_title;
 mod session_v1_lifecycle;
 mod settings_provider_projection;
 mod settings_runtime_projection;

@@ -171,6 +171,17 @@ pub(super) fn validate_vmm_llm_reasoning_policy(
             _ => Ok(()),
         };
     }
+    // The session title generator may think too, with the same contract check.
+    // 会话标题生成器同样可以思考，并做相同的契约检查。
+    if consumer_profile_id == crate::session_title::SESSION_TITLE_CONSUMER_PROFILE_ID {
+        return match reasoning_effort {
+            Some(effort) if !reasoning_effort_supported(capabilities, effort) => Err(format!(
+                "The session title generator cannot use reasoning effort `{}` with the selected model contract.",
+                effort.as_str()
+            )),
+            _ => Ok(()),
+        };
+    }
     if consumer_profile_id != VMM_CONSUMER_PROFILE_ID {
         return Ok(());
     }

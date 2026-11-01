@@ -3,7 +3,8 @@
 
 use super::*;
 use crate::session_v1_lifecycle::{
-    archive_session_lifecycle_v1, delete_session_lifecycle_v1, rename_session_lifecycle_v1,
+    archive_session_lifecycle_v1, delete_session_lifecycle_v1,
+    rename_session_if_title_lifecycle_v1, rename_session_lifecycle_v1,
     restore_session_lifecycle_v1,
 };
 use vulcan_workspace_store::workspace_store::{
@@ -77,6 +78,51 @@ pub(crate) async fn service_rename_conversation(
     .await
     .map_err(|error| format!("Failed to rename session: {error}"))?;
     refresh_workbench_snapshot(state).await
+}
+
+/// Gives a session a generated title unless its title is no longer `expected_title`.
+/// 为会话设置生成的标题，除非其标题已不再是 `expected_title`。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the controller runtime; `session_id` is the titled session; `expected_title` is
+/// the title it was created with and `title` the generated one.
+/// `state` 持有控制器运行时；`session_id` 是生成标题的会话；`expected_title` 是其创建时的标题，
+/// `title` 是生成的标题。
+///
+/// # Returns
+/// 返回值
+/// The refreshed workbench when renamed, `None` when the title had changed meanwhile.
+/// 重命名后返回刷新后的工作台；标题已在此期间被修改时返回 `None`。
+pub(crate) async fn rename_session_to_generated_title(
+    state: SharedServiceBridgeState,
+    session_id: SessionId,
+    expected_title: String,
+    title: String,
+) -> Result<Option<WorkbenchSnapshot>, String> {
+    let title = normalize_non_empty_name(&title)?;
+    let updated_at_ms = current_session_lifecycle_unix_millis()?;
+    let controller_runtime = controller_runtime_for_visible_session_from_state(&state, session_id)?;
+    let session_runtime_registry = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        Arc::clone(&guard.session_runtime_registry)
+    };
+    let renamed = rename_session_if_title_lifecycle_v1(
+        &controller_runtime,
+        session_runtime_registry.as_ref(),
+        session_id,
+        expected_title,
+        title,
+        updated_at_ms,
+    )
+    .await
+    .map_err(|error| format!("Failed to rename session: {error}"))?;
+    if !renamed {
+        return Ok(None);
+    }
+    refresh_workbench_snapshot(state).await.map(Some)
 }
 
 /// Archives one authoritative active conversation and reloads the workbench from persistence.

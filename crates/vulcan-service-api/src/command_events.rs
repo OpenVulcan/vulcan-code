@@ -346,6 +346,39 @@ pub struct ProjectTerminalDisplayChangedEvent {
     pub chunks: Vec<TerminalDisplayChunk>,
 }
 
+/// Result of titling one new session with a model; skipped attempts emit nothing.
+/// 用模型为一个新会话生成标题的结果；被跳过的尝试不发出事件。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTitleGeneratedEvent {
+    /// Session that was titled.
+    /// 被生成标题的会话。
+    pub session_id: String,
+    /// Display name of the model that was asked, for the notice.
+    /// 被调用模型的显示名称，用于提示。
+    pub model: String,
+    /// Whether the session was renamed.
+    /// 会话是否已重命名。
+    pub outcome: SessionTitleGenerationOutcome,
+}
+
+/// Outcome carried by [`SessionTitleGeneratedEvent`].
+/// [`SessionTitleGeneratedEvent`] 携带的结果。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SessionTitleGenerationOutcome {
+    /// The session now has the generated title.
+    /// 会话已使用生成的标题。
+    Renamed {
+        /// New session title.
+        /// 新的会话标题。
+        title: String,
+    },
+    /// The model call failed; the title stays as it was and generation is not retried.
+    /// 模型调用失败；标题保持不变，且不再重试生成。
+    Failed,
+}
+
 /// Represents one event emitted from the local service bridge.
 /// 表示本地服务桥接层发出的单个事件。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -387,6 +420,9 @@ pub enum ServiceEvent {
     /// Streamed progress of one dedicated base prompt draft request.
     /// 单次专职基础提示词起草请求的流式进度。
     DedicatedPromptDraftProgress(Box<DedicatedPromptDraftProgressEvent>),
+    /// Result of titling a new session with a model.
+    /// 用模型为新会话生成标题的结果。
+    SessionTitleGenerated(Box<SessionTitleGeneratedEvent>),
 }
 
 /// Receives one service event emitted by the Core Service boundary.

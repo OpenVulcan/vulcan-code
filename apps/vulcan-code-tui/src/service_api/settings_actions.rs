@@ -491,6 +491,21 @@ pub fn save_tool_collapse_default(enabled: bool) -> ServiceCall {
     )
 }
 
+/// Builds the request for `service_save_session_title_generation`.
+/// 构建 `service_save_session_title_generation` 的请求。
+/// `enabled` is whether new sessions get a model-generated title.
+/// `enabled` 为新会话是否获得模型生成的标题。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn save_session_title_generation(enabled: bool) -> ServiceCall {
+    ServiceCall::mutate(
+        "save_session_title_generation",
+        "service_save_session_title_generation",
+        json!({ "enabled": enabled }),
+        WORKBENCH,
+    )
+}
+
 /// Builds the request for `service_select_webui_locale`.
 /// 构建 `service_select_webui_locale` 的请求。
 /// `locale` is the supported locale tag.

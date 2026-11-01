@@ -60,6 +60,7 @@ import { useWorkbenchSessionActions } from "@/components/workspace/workbench-lay
 import { useStopConversationRunDecision } from "@/components/workspace/workbench-layout/use-stop-conversation-run-decision";
 import { useWorkbenchRevisionGates, useWorkbenchServiceSync } from "@/components/workspace/workbench-layout/use-workbench-revision-sync";
 import { useProjectTerminalRunningCounts } from "@/components/workspace/workbench-layout/use-project-terminal-running-counts";
+import { useSessionTitleToasts } from "@/components/workspace/workbench-layout/use-session-title-toasts";
 import { useProjectLifecycleConfirmation } from "@/components/workspace/workbench-layout/use-project-lifecycle-confirmation";
 import { useConversationMenuActions } from "@/components/workspace/workbench-layout/use-conversation-menu-actions";
 import { UnsupportedSessionDeleteDialog } from "@/components/project/unsupported-session-delete-dialog";
@@ -130,6 +131,7 @@ import {
   saveProviderRetrySettings,
   saveMcpServerConfiguration,
   savePromptAnswerMode,
+  saveSessionTitleGeneration,
   savePromptOutputStyle,
   selectWebuiLocale,
 } from "@/service/settings-actions-service";
@@ -361,6 +363,7 @@ export function WorkbenchLayout(props: {
   // projectTerminalRunningCounts stores count-only lifecycle state independently from terminal content.
   // projectTerminalRunningCounts 独立于终端内容保存仅包含数量的生命周期状态。
   const projectTerminalRunningCounts = useProjectTerminalRunningCounts(props.serviceInstanceEpoch, activeProjectId);
+  useSessionTitleToasts(props.serviceInstanceEpoch);
   React.useEffect(() => {
     if (
       isPluginDetailSubArea(activeWorkbenchSkillSubArea)
@@ -1361,6 +1364,7 @@ export function WorkbenchLayout(props: {
                 await savePromptAnswerMode(mode);
                 return (await loadWorkbenchSnapshot()) ?? workbenchStateRef.current;
               }),
+              onSaveSessionTitleGeneration: (enabled) => applySkillWorkbenchAction(async () => await saveSessionTitleGeneration(enabled)),
               onSaveGitCommitSettings: (request) => applySkillWorkbenchAction(async () => (await saveGitCommitSettings(request)) ?? workbenchStateRef.current),
               onSaveDefaultCommandShell: (shellId) => applySkillWorkbenchAction(async () => (await saveDefaultCommandShell(shellId)) ?? workbenchStateRef.current),
               onSaveProviderRequestTraceSettings: (enabled, errorsEnabled) => applySkillWorkbenchAction(async () => (await saveProviderRequestTraceSettings(enabled, errorsEnabled)) ?? workbenchStateRef.current),

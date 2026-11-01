@@ -83,6 +83,16 @@ pub struct ProviderConfigurationFile {
         skip_serializing_if = "Option::is_none"
     )]
     pub tool_collapse_default_enabled: Option<bool>,
+    /// Whether a model titles each new session from its first prompt; absence means enabled.
+    /// 是否由模型根据首个提示词为每个新会话生成标题；缺省表示开启。
+    /// Read through [`ProviderConfigurationFile::title_generation_enabled`], which owns the default.
+    /// 通过持有默认值的 [`ProviderConfigurationFile::title_generation_enabled`] 读取。
+    #[serde(
+        default,
+        rename = "sessionTitleGenerationEnabled",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub session_title_generation_enabled: Option<bool>,
     /// Remembered WebUI locale identifier selected by the user.
     /// 由用户选择并记忆的WebUI语言标识。
     #[serde(rename = "uiLocale", skip_serializing_if = "Option::is_none")]
@@ -194,6 +204,14 @@ pub struct ProviderConfigurationFile {
         skip_serializing_if = "PersistedMcpServiceConfiguration::is_default"
     )]
     pub mcp_service: PersistedMcpServiceConfiguration,
+}
+
+impl ProviderConfigurationFile {
+    /// Whether new sessions are titled by a model; on unless the user turned it off.
+    /// 新会话是否由模型生成标题；除非用户关闭，否则开启。
+    pub fn title_generation_enabled(&self) -> bool {
+        self.session_title_generation_enabled.unwrap_or(true)
+    }
 }
 
 /// Versioned standalone public AI connection configuration.

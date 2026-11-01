@@ -1200,6 +1200,62 @@ pub(crate) async fn rename_session_lifecycle_v1(
         .await
 }
 
+/// Renames one V1 session only while its title still equals `expected_title`, so a title the user
+/// set in the meantime is never replaced.
+/// 仅当 V1 会话标题仍等于 `expected_title` 时才重命名，因此用户在此期间设置的标题绝不会被替换。
+///
+/// # Parameters / 参数
+///
+/// - `controller`, `registry`, `session_id`, `title` and `now_ms`: Same as
+///   [`rename_session_lifecycle_v1`].
+///   `controller`、`registry`、`session_id`、`title` 与 `now_ms`：同
+///   [`rename_session_lifecycle_v1`]。
+/// - `expected_title`: Title the session must still have.
+///   `expected_title`：会话必须仍然具有的标题。
+///
+/// # Returns / 返回值
+///
+/// `true` after the rename is durable and projected; `false` when the title had already changed.
+/// 重命名可靠落盘并完成投影后返回 `true`；标题已被修改时返回 `false`。
+pub(crate) async fn rename_session_if_title_lifecycle_v1(
+    controller: &HostRuntimeHandle,
+    registry: &SessionRuntimeRegistry,
+    session_id: SessionId,
+    expected_title: String,
+    title: String,
+    now_ms: i64,
+) -> Result<bool, SessionV1LifecycleError> {
+    let _lifecycle = registry.acquire_lifecycle_transition(session_id).await?;
+    let handle = get_or_load_session_v1(controller, registry, session_id).await?;
+    let locator = handle.storage_locator()?;
+    let receipt = handle.mutate_durable_if_changed(
+        SessionMutationAdmission::MetadataOnly,
+        SessionFlushReason::MetadataChanged,
+        move |document| {
+            let changed = document.metadata.title == expected_title
+                && document.rename_session(title, now_ms)?;
+            let metadata = document.metadata.clone();
+            Ok(if changed {
+                SessionMutationChange::Changed(metadata)
+            } else {
+                SessionMutationChange::Unchanged(metadata)
+            })
+        },
+    )?;
+    if !receipt.changed {
+        return Ok(false);
+    }
+    project_lifecycle_metadata_or_report(
+        controller,
+        session_id,
+        "rename",
+        &locator,
+        &receipt.value,
+    )
+    .await?;
+    Ok(true)
+}
+
 /// Archives one V1 session without allowing SQLite to lead the metadata authority.
 /// 在不允许 SQLite 领先 metadata 权威的前提下归档一个 V1 会话。
 ///

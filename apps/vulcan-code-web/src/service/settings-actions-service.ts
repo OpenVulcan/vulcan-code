@@ -1002,6 +1002,12 @@ export async function saveToolCollapseDefault(enabled: boolean): Promise<Workben
   return serviceClient.request<WorkbenchSnapshot>("service_save_tool_collapse_default", { enabled });
 }
 
+// Saves whether new sessions get a model-generated title; the returned snapshot is authoritative.
+// 保存新会话是否获得模型生成的标题；返回的快照具有权威性。
+export async function saveSessionTitleGeneration(enabled: boolean): Promise<WorkbenchSnapshot> {
+  return serviceClient.request<WorkbenchSnapshot>("service_save_session_title_generation", { enabled });
+}
+
 // selectWebuiLocale persists one WebUI locale through the desktop service router.
 // selectWebuiLocale 通过桌面服务路由持久化单个 WebUI 语言。
 export async function selectWebuiLocale(locale: string): Promise<WorkbenchSnapshot | null> {

@@ -289,6 +289,10 @@ fn reasoning_effort_wire_value(effort: ReasoningEffortLevel) -> &'static str {
     }
 }
 
+/// Longest automatic session title in characters, whether cut from the prompt or written by a model.
+/// 自动会话标题的最大字符数，无论是从提示词截取还是由模型生成。
+pub(crate) const SESSION_TITLE_MAX_CHARS: usize = 48;
+
 /// Creates a readable generated session title from the submitted prompt.
 /// 根据提交提示词创建可读的自动会话标题。
 pub(crate) fn prompt_to_session_title(prompt: &str) -> String {
@@ -297,7 +301,7 @@ pub(crate) fn prompt_to_session_title(prompt: &str) -> String {
         .map(str::trim)
         .find(|line| !line.is_empty())
         .unwrap_or("New session");
-    title.chars().take(48).collect()
+    title.chars().take(SESSION_TITLE_MAX_CHARS).collect()
 }
 
 /// Describes one cold-path full workbench snapshot refresh request.

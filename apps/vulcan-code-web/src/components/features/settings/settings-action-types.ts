@@ -150,6 +150,9 @@ export interface SettingsActionProps {
   // Saves the global answer mode copied into new conversations.
   // 保存复制到新会话的全局回答模式。
   onSavePromptAnswerMode: (mode: AnswerMode) => Promise<void>
+  // Saves whether new sessions get a model-generated title.
+  // 保存新会话是否获得模型生成的标题。
+  onSaveSessionTitleGeneration: (enabled: boolean) => Promise<void>
   // Saves Git commit dialog settings.
   // 保存 Git 提交弹窗设置。
   onSaveGitCommitSettings: (request: GitCommitSettingsSaveRequest) => Promise<void>
