@@ -183,18 +183,15 @@ describe("custom provider protocol drafts", () => {
       request_headers: {},
       model_discovery: "open_ai",
       responses_features: {
-        remote_compaction: "enabled_with_local_fallback",
         websocket: "unverified_override",
       },
       verified: true,
     })
 
     expect(codexResponsesFeaturePoliciesFromEntry(entry)).toEqual({
-      remoteCompactionPolicy: "enabled_with_local_fallback",
       websocketPolicy: "unverified_override",
     })
     expect(codexResponsesFeaturePoliciesFromEntry(entryFixture())).toEqual({
-      remoteCompactionPolicy: "disabled",
       websocketPolicy: "disabled",
     })
   })

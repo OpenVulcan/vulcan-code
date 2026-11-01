@@ -1,10 +1,14 @@
 //! Prompt-compaction input pruning and retry helpers.
 //! 提示词压缩输入剪枝与重试辅助逻辑。
 
-use vulcan_context::{SessionConversationState, conversation_state_to_compaction_source_messages};
+use vulcan_context::{
+    SessionConversationState, conversation_state_from_session_messages,
+    conversation_state_to_compaction_source_messages,
+};
 use vulcan_context_compaction::{
     CompactionInputBudget, CompactionInputPruneMode, CompactionInputPruneReport, CompactionPlan,
-    ContextCompactionRequestPromptMode, NativeCompactionSources,
+    ContextCompactionRequestPromptMode, estimate_compaction_source_tokens,
+    prepare_compaction_source_for_target_budget,
 };
 
 /// Maximum full-fidelity prompt-compaction attempts before clone-only downgrade is allowed.
@@ -40,7 +44,7 @@ pub(super) fn initial_compaction_prune_mode(
     };
     let input_tokens = match observed_input_tokens.or(estimated_input_tokens) {
         Some(tokens) => tokens,
-        None => NativeCompactionSources::capture(full_context_state)?.estimate_tokens(
+        None => estimate_compaction_source_tokens(
             &conversation_state_to_compaction_source_messages(full_context_state)?,
         ),
     };
@@ -92,12 +96,9 @@ pub(super) fn prepared_compaction_source_for_attempt(
         .source_messages
         .len()
         .saturating_sub(dialogue_source.len());
-    // Native checkpoints remain immutable while ordinary dialogue may shrink.
-    // 普通对话可以缩减，原生检查点保持不可变。
-    let native_sources = NativeCompactionSources::capture(full_context_state)?;
-    let original_token_estimate = native_sources.estimate_tokens(&plan.source_messages);
+    let original_token_estimate = estimate_compaction_source_tokens(&plan.source_messages);
     let Some(input_budget) = input_budget else {
-        let source_token_estimate = native_sources.estimate_tokens(&dialogue_source);
+        let source_token_estimate = estimate_compaction_source_tokens(&dialogue_source);
         return Ok(vulcan_context_compaction::PreparedCompactionSource {
             source_messages: dialogue_source,
             prune_report: CompactionInputPruneReport {
@@ -118,10 +119,14 @@ pub(super) fn prepared_compaction_source_for_attempt(
             },
         });
     };
-    let mut prepared =
-        native_sources.prepare(&dialogue_source, input_budget, plan.policy, prune_mode)?;
-    // Report the actual model input, including host rows omitted before native-dialogue pruning.
-    // 报告真实模型输入，包括原生对话剪枝前已排除的宿主行。
+    let mut prepared = prepare_compaction_source_for_target_budget(
+        &dialogue_source,
+        input_budget,
+        plan.policy,
+        prune_mode,
+    );
+    // Report the actual model input, including host rows omitted before dialogue pruning.
+    // 报告真实模型输入，包括对话剪枝前已排除的宿主行。
     prepared.prune_report.original_token_estimate = original_token_estimate;
     prepared.prune_report.dropped_source_message_count += excluded_host_count;
     if excluded_host_count > 0 {
@@ -137,8 +142,7 @@ fn unpruned_full_context_compaction_source(
     input_budget: Option<CompactionInputBudget>,
 ) -> Result<vulcan_context_compaction::PreparedCompactionSource, String> {
     let source_messages = conversation_state_to_compaction_source_messages(full_context_state)?;
-    let source_token_estimate =
-        NativeCompactionSources::capture(full_context_state)?.estimate_tokens(&source_messages);
+    let source_token_estimate = estimate_compaction_source_tokens(&source_messages);
     Ok(vulcan_context_compaction::PreparedCompactionSource {
         source_messages,
         prune_report: CompactionInputPruneReport {
@@ -170,7 +174,7 @@ pub(super) fn compaction_attempt_conversation_state(
     if prune_mode == CompactionInputPruneMode::None {
         return Ok(full_context_state.clone());
     }
-    NativeCompactionSources::capture(full_context_state)?.restore(source_messages)
+    conversation_state_from_session_messages(source_messages)
 }
 
 /// Selects the next retry mode after a prompt-compaction attempt fails.

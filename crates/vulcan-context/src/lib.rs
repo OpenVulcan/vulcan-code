@@ -548,15 +548,6 @@ pub struct ContextBudgetSnapshot {
     /// Fallback buffer included only when the route supplied a fallback prompt.
     /// 仅当路由提供回退提示词时计入的回退缓冲区。
     pub fallback_buffer_tokens: usize,
-    /// Effective output reserve held back for the provider response.
-    /// 为 Provider 响应预留的生效输出预算。
-    pub reserved_output_tokens: usize,
-    /// Additional reserve held for explicit reasoning or thinking payloads.
-    /// 为显式推理或思考载荷保留的附加预算。
-    pub reserved_reasoning_tokens: usize,
-    /// Additional input reserve held for automatic compaction and the next user turn.
-    /// 为自动压缩与下一轮用户输入保留的附加输入预算。
-    pub reserved_compaction_tokens: usize,
     /// Whether this snapshot allows automatic compaction when the severity crosses the threshold.
     /// 当严重级别越过阈值时，该快照是否允许自动压缩。
     pub compaction_auto_enabled: bool,
@@ -593,9 +584,6 @@ pub struct ContextBudgetSnapshot {
     /// Scope-specific context tokens used only for the automatic-compaction line.
     /// 仅用于自动压缩线的范围专属活动上下文 Token 数。
     pub auto_compact_context_tokens: usize,
-    /// Estimated total end-to-end token footprint including reasoning and output reserves.
-    /// 包含推理与输出预留在内的估算端到端 Token 占用总量。
-    pub estimated_total_tokens: usize,
     /// Final usage ratio derived from the effective input limit.
     /// 根据生效输入上限推导出的最终占用比例。
     pub usage_ratio: f32,
@@ -630,9 +618,6 @@ impl Default for ContextBudgetSnapshot {
             auto_compact_scope: ContextWindowUsageScope::Total,
             auto_compact_prefill_input_tokens: None,
             fallback_buffer_tokens: 0,
-            reserved_output_tokens: 0,
-            reserved_reasoning_tokens: 0,
-            reserved_compaction_tokens: 0,
             compaction_auto_enabled: false,
             baseline_matches_active_runtime: true,
             baseline_budget_fingerprint_matches: true,
@@ -645,7 +630,6 @@ impl Default for ContextBudgetSnapshot {
             estimated_input_tokens: 0,
             active_context_tokens: 0,
             auto_compact_context_tokens: 0,
-            estimated_total_tokens: 0,
             usage_ratio: 0.0,
             observed_usage: None,
             accounting_source: ContextBudgetAccountingSource::CharacterEstimate,
@@ -713,7 +697,7 @@ impl ContextBudgetSnapshot {
             "Estimate breakdown"
         };
         format!(
-            "{severity_label} · {baseline_label}{} · raw window {} · effective window {} · auto-compaction line {} · input source {} · {} · {} system {} / history {} / current {} / tools {} · active context {} · auto-compaction metered {} · end-to-end usage {} · output reserve {} · reasoning reserve {} · legacy compaction reserve {}{}{}",
+            "{severity_label} · {baseline_label}{} · raw window {} · effective window {} · auto-compaction line {} · input source {} · {} · {} system {} / history {} / current {} / tools {} · active context {} · auto-compaction metered {}{}{}",
             baseline_reason_suffix,
             context_limit_label,
             self.effective_context_window
@@ -731,10 +715,6 @@ impl ContextBudgetSnapshot {
             self.estimated_tool_tokens,
             self.active_context_tokens,
             self.auto_compact_context_tokens,
-            self.estimated_total_tokens,
-            self.reserved_output_tokens,
-            self.reserved_reasoning_tokens,
-            self.reserved_compaction_tokens,
             self.observed_usage
                 .as_ref()
                 .map(|usage| format!(" · {}", provider_usage_label(usage)))

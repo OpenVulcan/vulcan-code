@@ -5,7 +5,7 @@ use super::super::test_support::{
     deepseek_route, minimal_request, pinned_openrouter_route, read_test_http_request,
 };
 use super::*;
-use crate::{ResponsesRemoteCompactionPolicy, ResponsesRouteFeatures, ResponsesWebsocketPolicy};
+use crate::{ResponsesRouteFeatures, ResponsesWebsocketPolicy};
 use futures_util::{SinkExt, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -166,7 +166,6 @@ async fn websocket_1013_close_reconnects_instead_of_falling_back() {
     route.protocol_route.protocol_profile_id = String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID);
     route.protocol_route.base_url_override = Some(format!("http://{address}"));
     route.protocol_route.responses_features = Some(ResponsesRouteFeatures {
-        remote_compaction: ResponsesRemoteCompactionPolicy::Disabled,
         websocket: ResponsesWebsocketPolicy::Verified,
         recovery: Default::default(),
     });
@@ -399,7 +398,6 @@ async fn websocket_426_handshake_falls_back_to_full_history_http_attempt() {
     route.protocol_route.protocol_profile_id = String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID);
     route.protocol_route.base_url_override = Some(format!("http://{address}"));
     route.protocol_route.responses_features = Some(ResponsesRouteFeatures {
-        remote_compaction: ResponsesRemoteCompactionPolicy::Disabled,
         websocket: ResponsesWebsocketPolicy::Verified,
         recovery: Default::default(),
     });
@@ -530,7 +528,6 @@ async fn websocket_previous_response_not_found_retries_without_stale_cursor() {
     route.protocol_route.protocol_profile_id = String::from(OPENAI_CODEX_RESPONSES_PROFILE_ID);
     route.protocol_route.base_url_override = Some(format!("http://{address}"));
     route.protocol_route.responses_features = Some(ResponsesRouteFeatures {
-        remote_compaction: ResponsesRemoteCompactionPolicy::Disabled,
         websocket: ResponsesWebsocketPolicy::Verified,
         recovery: Default::default(),
     });

@@ -235,19 +235,6 @@ fn http_server_overloaded_plain_text_is_retryable() {
     );
 }
 
-/// Verifies a compact body transport failure preserves its proven dispatched boundary.
-/// 验证压缩正文传输失败会保留已经证明的已分派边界。
-#[test]
-fn responses_compact_transport_failure_is_dispatched_and_retryable() {
-    let failure = compact_transport_failure("compact body timed out");
-
-    assert_eq!(failure.error.stage, "response_compact");
-    assert_eq!(failure.error.dispatch_outcome, DispatchOutcome::Dispatched);
-    assert!(failure.error.retryable);
-    assert!(!failure.error.semantic_output_observed);
-    assert!(!failure.error.side_effect_observed);
-}
-
 /// Verifies HTTP decoder completion distinguishes transient truncation from malformed payloads.
 /// 验证 HTTP 解码器结束阶段会区分瞬态截断与畸形载荷。
 #[test]

@@ -87,12 +87,6 @@ impl ContextBudgetCapabilities {
     pub fn effective_input_limit(&self) -> Option<usize> {
         self.input_limit.or(self.context_limit)
     }
-
-    /// Returns the effective output reserve limit used by context-budget estimation.
-    /// 返回供上下文预算估算使用的生效输出预留上限。
-    pub fn effective_output_limit(&self) -> Option<usize> {
-        self.output_limit
-    }
 }
 
 /// Returns the observed provider input-token count when the provider reported enough usage data.
@@ -193,12 +187,6 @@ pub fn build_request_context_budget_snapshot_with_options(
         provider_anchor_call_id,
         prefill_input_tokens,
     } = input;
-    let reserved_reasoning_tokens = reasoning_token_reserve(reasoning);
-    let reserved_output_tokens = resolve_output_token_reserve(capabilities);
-    // Codex keeps the raw model window separate from the output ceiling; legacy reserved values
-    // must not silently shrink the active context window.
-    // Codex 将模型原始窗口与输出上限分离；旧版 reserved 不得静默缩小活动上下文窗口。
-    let reserved_compaction_tokens = 0usize;
     let window_policy = options
         .compaction_policy
         .map(|policy| policy.window)
@@ -250,10 +238,6 @@ pub fn build_request_context_budget_snapshot_with_options(
         window_policy.auto_compact_scope,
         prefill_input_tokens,
     );
-    let estimated_total_tokens = active_context_tokens
-        .saturating_add(reserved_reasoning_tokens)
-        .saturating_add(reserved_output_tokens)
-        .saturating_add(reserved_compaction_tokens);
     let raw_context_limit = capabilities.effective_input_limit();
     let planning_context_limit = compression_window_limit.or(raw_context_limit);
     let effective_context_window = planning_context_limit.map(|limit| {
@@ -318,9 +302,6 @@ pub fn build_request_context_budget_snapshot_with_options(
         auto_compact_scope: window_policy.auto_compact_scope,
         auto_compact_prefill_input_tokens: prefill_input_tokens,
         fallback_buffer_tokens: window_policy.fallback_buffer_tokens,
-        reserved_output_tokens,
-        reserved_reasoning_tokens,
-        reserved_compaction_tokens,
         compaction_auto_enabled,
         baseline_matches_active_runtime: true,
         baseline_budget_fingerprint_matches: true,
@@ -333,7 +314,6 @@ pub fn build_request_context_budget_snapshot_with_options(
         estimated_input_tokens: calibrated_input_tokens,
         active_context_tokens,
         auto_compact_context_tokens,
-        estimated_total_tokens,
         usage_ratio,
         observed_usage: observed_usage.cloned(),
         accounting_source,
@@ -514,25 +494,6 @@ pub fn context_budget_severity_for_limits_with_compaction_context(
     // The Codex hard and automatic lines are the only active thresholds for a resolved policy.
     // 已解析策略只使用 Codex 硬窗口线与自动压缩线作为活动阈值。
     ContextBudgetSeverity::Healthy
-}
-
-/// Returns the reasoning-token reserve implied by one coarse reasoning effort bucket.
-/// 返回某个粗粒度推理强度分桶所隐含的推理 Token 预留值。
-fn reasoning_token_reserve(reasoning_effort: ContextReasoningEffort) -> usize {
-    match reasoning_effort {
-        ContextReasoningEffort::None => 0usize,
-        ContextReasoningEffort::Minimal => 1024usize,
-        ContextReasoningEffort::Low => 2048usize,
-        ContextReasoningEffort::Medium => 4096usize,
-        ContextReasoningEffort::High => 8192usize,
-        ContextReasoningEffort::XHigh => 16384usize,
-    }
-}
-
-/// Returns the provider-output reserve used by host-side context budgeting.
-/// 返回宿主侧上下文预算使用的 Provider 输出预留值。
-fn resolve_output_token_reserve(capabilities: &ContextBudgetCapabilities) -> usize {
-    capabilities.effective_output_limit().unwrap_or(384000usize)
 }
 
 /// Estimates one Provider-visible message using the stable character-level fallback.

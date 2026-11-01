@@ -82,10 +82,6 @@ use crate::state::SharedServiceBridgeState;
 
 mod answer_code;
 mod compaction_source;
-mod remote_checkpoint;
-pub(crate) use remote_checkpoint::{
-    compaction_state_from_projection, planning_message_id as remote_compaction_planning_message_id,
-};
 mod context_injection;
 mod host_guidance;
 #[cfg(test)]
@@ -241,9 +237,6 @@ where
         // payload omits system/developer layers because those remain request prompt layers, not controller messages.
         // payload 会跳过 system/developer 层，因为它们属于请求提示词层而非控制器消息。
         let payload = match item {
-            ProjectedItem::RemoteCompactionCheckpoint { checkpoint, .. } => {
-                Some(remote_checkpoint::controller_payload(checkpoint)?)
-            }
             ProjectedItem::SystemText {
                 role: ProjectedSystemRole::HiddenUserShell,
                 text,
@@ -539,9 +532,6 @@ pub(crate) struct ProviderV1StreamSink {
     /// Exact completed assistant semantic of the last physical API.
     /// 最后一次物理 API 的精确已完成 assistant 语义。
     completed_assistant_text: Option<ProviderV1CompletedAssistantText>,
-    /// Native checkpoint accepted by the final successful physical API, without assistant semantics.
-    /// 最终成功物理 API 接受的原生检查点，不含助手语义。
-    completed_remote_compaction: Option<ProviderV1CompletedRemoteCompaction>,
     /// Exact locked baseline used by the last completed physical API.
     /// 最后一次已完成物理 API 使用的精确锁定基线。
     completed_locked_baseline: Option<LockedBaselineProjection>,
@@ -565,18 +555,6 @@ pub(crate) struct ProviderV1CompletedAssistantText {
     pub(crate) text: String,
 }
 
-/// Native output verified against the admitted route and the same successful API terminal.
-/// 针对准入路由及同一次成功 API 终态验证的原生输出。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ProviderV1CompletedRemoteCompaction {
-    /// Exact local API owning the native output.
-    /// 拥有原生输出的精确本地 API。
-    pub(crate) api_call_id: ApiCallId,
-    /// Native checkpoint validated against all five frozen route dimensions.
-    /// 已针对五项冻结路由维度验证的原生检查点。
-    pub(crate) checkpoint: vulcan_session_core::v1::context::RemoteResponsesCheckpoint,
-}
-
 /// Durable V1 facts transferred exactly once from the stream sink to terminal handling.
 /// 从流 sink 向终态处理精确转移一次的可靠 V1 事实。
 #[derive(Debug, Default)]
@@ -593,9 +571,6 @@ pub(crate) struct ProviderV1FinishedDurability {
     /// Exact completed assistant semantic of the final physical API, when present.
     /// 最终物理 API 的精确已完成 assistant 语义（如存在）。
     pub(crate) completed_assistant_text: Option<ProviderV1CompletedAssistantText>,
-    /// Exact remote result, mutually exclusive with completed assistant text.
-    /// 精确远端结果，与已完成助手正文互斥。
-    pub(crate) completed_remote_compaction: Option<ProviderV1CompletedRemoteCompaction>,
     /// Exact locked baseline used by the final physical API, when present.
     /// 最终物理 API 使用的精确锁定基线（如存在）。
     pub(crate) locked_baseline: Option<LockedBaselineProjection>,
@@ -622,9 +597,6 @@ struct ActiveProviderV1Projection {
     /// Immutable typed Provider request facts used for terminal identity validation.
     /// 用于终态身份校验的不可变强类型 Provider 请求事实。
     request_facts: ProviderV1RequestFacts,
-    /// Frozen remote-compaction route; absent for ordinary and local-summary requests.
-    /// 冻结远端压缩路由；普通请求和本地摘要请求不设置。
-    remote_compaction_route: Option<V1ReplayRouteIdentity>,
     /// Exact validated locked baseline used to build this physical request.
     /// 构建当前物理请求所使用的精确已校验锁定基线。
     locked_baseline: LockedBaselineProjection,
@@ -1298,12 +1270,6 @@ fn rebuild_provider_transport_candidate_with_compaction(
     let replay_route = V1ReplayRouteIdentity::from_candidate(&candidate);
     for (index, item) in snapshot.items.iter().enumerate() {
         match item {
-            ProjectedItem::RemoteCompactionCheckpoint { checkpoint, .. } => {
-                request_messages.push(remote_checkpoint::physical_message(
-                    checkpoint,
-                    replay_route.as_ref(),
-                )?);
-            }
             ProjectedItem::SystemText { role, text, .. } => {
                 let message_role = projected_system_message_role(*role);
                 if matches!(message_role, MessageRole::System | MessageRole::Developer) {
@@ -1479,14 +1445,7 @@ fn rebuild_provider_transport_candidate_with_compaction(
 
     // Summary instructions belong to this physical request and never replace business producer state.
     // 摘要指令属于本次物理请求，绝不替换业务生产者状态。
-    // Native compaction sends only its selected original prefix; local summary instructions would change that contract.
-    // 原生压缩只发送选定原始前缀；本地摘要指令会改变此契约。
-    let compaction_controls = if compaction.is_some_and(|source| source.is_remote()) {
-        Vec::new()
-    } else {
-        context_injection::compaction_request_messages(facts, &candidate)?
-    };
-    for message in compaction_controls {
+    for message in context_injection::compaction_request_messages(facts, &candidate)? {
         let vulcan_core::types::ConversationPayload::UserText { text, .. } = &message.payload
         else {
             return Err(provider_projection_runtime_error(
@@ -1796,7 +1755,6 @@ impl ProviderV1StreamSink {
             api_terminal_failure_persisted: false,
             turn_completion: None,
             completed_assistant_text: None,
-            completed_remote_compaction: None,
             completed_locked_baseline: None,
             answer_code_root: None,
         }
@@ -1819,7 +1777,6 @@ impl ProviderV1StreamSink {
             ),
             turn_completion: self.turn_completion.take(),
             completed_assistant_text: self.completed_assistant_text.take(),
-            completed_remote_compaction: self.completed_remote_compaction.take(),
             locked_baseline: self.completed_locked_baseline.take(),
         }
     }
@@ -1865,23 +1822,6 @@ impl ProviderV1StreamSink {
             return Err(ProviderV1SinkError::RequestAlreadyActive);
         }
         validate_provider_transport_candidate(&facts, &candidate)?;
-        // Freeze the actual native route before moving the candidate into durable reconstruction.
-        // 在候选移入可靠重建前冻结实际原生路由。
-        let remote_compaction_route = if self
-            .compaction_source
-            .as_ref()
-            .is_some_and(|source| source.is_remote())
-        {
-            Some(
-                V1ReplayRouteIdentity::from_candidate(&candidate).ok_or_else(|| {
-                    provider_projection_runtime_error(
-                        "Remote compaction admission requires its exact frozen execution route.",
-                    )
-                })?,
-            )
-        } else {
-            None
-        };
         // Compaction summarizes history and must not consume messages addressed to the task execution.
         // 压缩只总结历史，不消费发给任务执行的消息。
         if facts.purpose != vulcan_session_core::v1::event::ApiPurposeKind::Compaction {
@@ -1977,12 +1917,10 @@ impl ProviderV1StreamSink {
         self.api_terminal_failure_persisted = false;
         self.turn_completion = None;
         self.completed_assistant_text = None;
-        self.completed_remote_compaction = None;
         self.completed_locked_baseline = None;
         self.active = Some(ActiveProviderV1Projection {
             api_call_id: core_start.api_call_id,
             request_facts: facts,
-            remote_compaction_route,
             locked_baseline,
             project_directory,
             reasoning_text: String::new(),
@@ -2247,31 +2185,6 @@ impl ProviderV1StreamSink {
         &mut self,
         terminal: ProviderV1ApiTerminalFacts,
     ) -> Result<ProviderV1TerminalOutcome, ProviderV1SinkError> {
-        self.accept_terminal_with_remote(terminal, None).await
-    }
-
-    /// Accepts native `checkpoint` with its exact successful `terminal`; returns only after API durability.
-    /// 将原生`checkpoint`与精确成功`terminal`一同接收；仅在 API 可靠落盘后返回。
-    /// The admitted route, purpose, and absence of assistant/reasoning/tool semantics are mandatory.
-    /// 强制校验准入路由、用途及没有助手、推理、工具语义。
-    pub(crate) async fn accept_remote_compaction_terminal(
-        &mut self,
-        terminal: ProviderV1ApiTerminalFacts,
-        checkpoint: vulcan_session_core::v1::context::RemoteResponsesCheckpoint,
-    ) -> Result<ProviderV1TerminalOutcome, ProviderV1SinkError> {
-        self.accept_terminal_with_remote(terminal, Some(checkpoint))
-            .await
-    }
-
-    /// Settles `terminal` using the admitted output kind and optional native `checkpoint`.
-    /// 按准入输出种类及可选原生`checkpoint`结算`terminal`。
-    /// Returns the durable outcome; rejects kind or route drift before mutating any semantic state.
-    /// 返回可靠结果；在修改任何语义状态前拒绝种类或路由漂移。
-    async fn accept_terminal_with_remote(
-        &mut self,
-        terminal: ProviderV1ApiTerminalFacts,
-        checkpoint: Option<vulcan_session_core::v1::context::RemoteResponsesCheckpoint>,
-    ) -> Result<ProviderV1TerminalOutcome, ProviderV1SinkError> {
         let active = self
             .active
             .as_ref()
@@ -2282,51 +2195,6 @@ impl ProviderV1StreamSink {
         if active.pending_terminal.is_some() {
             return Err(ProviderV1SinkError::TerminalAlreadyPending);
         }
-        // Native failures also cannot introduce a conversational tool batch or replay source.
-        // 原生失败也不能引入对话工具批次或重放来源。
-        if active.remote_compaction_route.is_some()
-            && (terminal.tool_call_count != 0 || terminal.provider_source.is_some())
-        {
-            return Err(provider_projection_runtime_error(
-                "Remote compaction terminal cannot contain conversational tools or a replay source.",
-            ).into());
-        }
-        // Validate mutually exclusive result modes before any semantic sealing or API completion.
-        // 在任何语义封口或 API 完成之前校验互斥结果模式。
-        let completed_remote = match (&active.remote_compaction_route, checkpoint) {
-            (Some(route), Some(checkpoint)) => {
-                if terminal.request_facts.purpose
-                    != vulcan_session_core::v1::event::ApiPurposeKind::Compaction
-                    || terminal.status != ApiCallStatus::Completed
-                    || terminal.error.is_some()
-                    || terminal.provider_source.is_some()
-                    || terminal.tool_call_count != 0
-                    || active.assistant_text_seq.is_some()
-                    || active.reasoning_seq.is_some()
-                    || !active.prepared_tools.is_empty()
-                {
-                    return Err(provider_projection_runtime_error("Remote compaction terminal must contain only a successful native checkpoint.").into());
-                }
-                remote_checkpoint::physical_message(&checkpoint, Some(route))?;
-                Some(ProviderV1CompletedRemoteCompaction {
-                    api_call_id: active.api_call_id,
-                    checkpoint,
-                })
-            }
-            (Some(_), None) if terminal.status == ApiCallStatus::Completed => {
-                return Err(provider_projection_runtime_error(
-                    "Successful remote compaction terminal is missing its native checkpoint.",
-                )
-                .into());
-            }
-            (None, Some(_)) => {
-                return Err(provider_projection_runtime_error(
-                    "Native compaction result does not belong to an admitted remote attempt.",
-                )
-                .into());
-            }
-            (_, None) => None,
-        };
         // Quoted file lines are captured once, as the reply stands when it is sealed.
         // 引用的文件行只抓取一次，即回答封口时的状态。
         let code_snapshots = match self.active.as_ref() {
@@ -2363,7 +2231,6 @@ impl ProviderV1StreamSink {
         let api_terminal = self.complete_api(terminal).await?;
         let has_promoted_in_turn_inputs = !api_terminal.value.promoted_input_seqs.is_empty();
         self.api_terminal_completion = Some(api_terminal);
-        self.completed_remote_compaction = completed_remote;
         if closes_logical_turn && !has_promoted_in_turn_inputs {
             // Settlement atomically chooses closure or child-return continuation, without a read/write gap.
             // 结算原子选择关闭或子任务回流续跑，不留下读写间隙。

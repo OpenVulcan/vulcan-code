@@ -93,13 +93,12 @@ pub(crate) struct RuntimePromptLayers {
     ///
     /// This projection is not a fixed-top input: its `system` carries request-dynamic text, so
     /// handing it to a directly dispatched controller configuration would move dynamic content
-    /// back into the top System/Developer message. The session-owned remote compaction candidate
-    /// is replaced wholesale by the V1 permit owner; the RuntimeOnly candidate instead uses the
+    /// back into the top System/Developer message. The RuntimeOnly candidate instead uses the
     /// stable fallback top and synchronizes dynamic host events into tagged User history.
     /// The fixed-top authority is `fallback_text` plus `locked_baseline`.
     /// 此投影不是固定顶部输入：其 `system` 携带请求动态文本，交给控制器配置会把动态内容重新移回
-    /// 顶部 System/Developer 消息。会话持有的远端压缩候选由 V1 许可所有者整体替换；RuntimeOnly
-    /// 候选则使用稳定回退顶部，并将动态宿主事件同步进带标签 User 历史。
+    /// 顶部 System/Developer 消息。RuntimeOnly 候选则使用稳定回退顶部，并将动态宿主事件同步进
+    /// 带标签 User 历史。
     /// 固定顶部权威是 `fallback_text` 与 `locked_baseline`。
     pub(crate) provider_layers: CoreProviderPromptLayers,
     /// Request-dynamic prompt layers that are not part of the locked context baseline.

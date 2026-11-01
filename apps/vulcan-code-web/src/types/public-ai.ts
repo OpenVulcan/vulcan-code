@@ -100,7 +100,6 @@ export interface PublicAiProtocolRoute {
   model_discovery?: PublicAiModelDiscoveryKind;
   model_discovery_path?: string;
   responses_features?: {
-    remote_compaction: PublicAiResponsesRemoteCompactionPolicy;
     websocket: PublicAiResponsesWebsocketPolicy;
   };
   // Route-owned input declarations determine whether user-added models may enable video input.
@@ -218,12 +217,6 @@ export type PublicAiCustomProviderProtocol =
   | "open_ai_chat"
   | "open_ai_responses"
   | "open_ai_codex_responses";
-// PublicAiResponsesRemoteCompactionPolicy selects the closed remote compaction dialect.
-// PublicAiResponsesRemoteCompactionPolicy 选择封闭的远端压缩方言。
-export type PublicAiResponsesRemoteCompactionPolicy =
-  | "disabled"
-  | "enabled_with_local_fallback"
-  | "inline_v2";
 
 // PublicAiCustomProviderModelDiscoveryMode selects automatic, custom-path, or manual discovery.
 // PublicAiCustomProviderModelDiscoveryMode 选择自动、自定义路径或手工发现。
@@ -281,7 +274,6 @@ export interface PublicAiCustomProviderSaveRequest {
   // Optional regular-conversation session-header name for this provider.
   // 此供应商可选的常规会话请求头名称。
   sessionHeader?: string;
-  remoteCompactionPolicy: PublicAiResponsesRemoteCompactionPolicy;
   websocketPolicy: PublicAiResponsesWebsocketPolicy;
   authentication: "bearer_authorization" | "google_api_key" | "x_api_key";
   credentialDisplayName?: string;

@@ -70,7 +70,7 @@ pub use media::{
     PrepareLocalMediaRequest, PreparedLocalMediaReference, ProviderToolMediaInputProfile,
     ProviderToolMediaInputRouteConstraint,
 };
-pub use model_execution::{ResolvedPublicAiExecution, ResponsesCompactExecution};
+pub use model_execution::ResolvedPublicAiExecution;
 pub use selection::ResolvedPublicAiSelection;
 pub use tool_targets::AvailableProviderToolTarget;
 

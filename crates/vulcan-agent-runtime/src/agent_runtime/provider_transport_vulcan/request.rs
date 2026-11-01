@@ -83,8 +83,8 @@ fn configured_tool_schema_projection_profile(
 /// provider-visible definitions.
 /// `route` 冻结已配置的 Schema 契约；`tools` 包含已经解析�?Provider 可见定义�?///
 /// # Returns
-/// 返回�?/// Route-normalized public tool definitions suitable for ordinary responses and remote compaction.
-/// 返回适用于普�?Responses 与远端压缩的路由正规化公共工具定义�?
+/// 返回�?/// Route-normalized public tool definitions suitable for ordinary responses.
+/// 返回适用于普�?Responses 的路由正规化公共工具定义�?
 pub(crate) fn project_public_tool_definitions(
     route: &ProviderExecutionRoute,
     tools: Vec<ProviderToolDefinition>,

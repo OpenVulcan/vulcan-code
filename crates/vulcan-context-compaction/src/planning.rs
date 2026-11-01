@@ -24,7 +24,6 @@ pub use models::{
     CompactionContinuationPromptOptions, CompactionInputBudget, CompactionInputPruneMode,
     CompactionInputPruneReport, CompactionPlan, CompactionPlanInput, CompactionResult,
     CompactionSummaryRecord, CompactionTailSelectionReport, PreparedCompactionSource,
-    ProviderContextRoute,
 };
 pub use plan::plan_context_compaction;
 pub use summary::{

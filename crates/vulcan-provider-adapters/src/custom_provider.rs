@@ -1031,10 +1031,7 @@ mod tests {
         let features = route
             .responses_features
             .expect("Codex route should declare optional capabilities");
-        assert_eq!(
-            features.remote_compaction,
-            crate::ResponsesRemoteCompactionPolicy::Disabled
-        );
+        assert_eq!(features, crate::ResponsesRouteFeatures::default());
         validate_persisted_custom_provider_descriptor(&descriptor)
             .expect("Codex descriptor with disabled capabilities should persist");
 

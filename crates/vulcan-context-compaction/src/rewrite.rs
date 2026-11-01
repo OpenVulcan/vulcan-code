@@ -1,10 +1,7 @@
 //! Canonical conversation compaction rewrite helpers shared by WebUI state and persistence flows.
 //! 供WebUI状态与持久化流程共享的规范会话压缩改写辅助模块。
 
-use serde_json::{Value, json};
-use vulcan_ai_contract::{
-    canonicalize_codex_responses_replay_items, is_replayable_codex_responses_item,
-};
+use serde_json::Value;
 use vulcan_context::protocol::validate_session_conversation_message_identities;
 use vulcan_context::{
     ContextCompactionPolicy, SessionConversationMessage, SessionConversationPayload,
@@ -183,10 +180,6 @@ fn compact_conversation_with_legacy_inputs(
         created_at: updated_at,
         policy: plan.policy,
         tail_selection: plan.tail_selection,
-        provider_context_items: Vec::new(),
-        provider_context_route: None,
-        provider_context_usage: None,
-        provider_context_response_id: None,
     };
     compact_conversation_with_compaction_result(&mut candidate, summary_message_id, &result)?;
     *state = candidate;
@@ -334,132 +327,6 @@ fn validate_tail_selection_policy(result: &CompactionResult) -> Result<(), Strin
             "Frozen retained message IDs contain duplicates.",
         ));
     }
-    Ok(())
-}
-
-/// Inserts route-bound opaque Responses compaction context immediately after its summary anchor.
-/// 将绑定路由的不透明 Responses 压缩上下文紧接其摘要锚点插入。
-///
-/// # Parameters
-/// 参数
-/// `state` is the rewritten canonical conversation, `summary_message_id` identifies its new anchor,
-/// and `result` carries the validated provider items plus their exact route identity.
-/// `state` 是已改写的规范会话，`summary_message_id` 标识新锚点，`result` 携带已校验的
-/// 供应商项及其精确路由身份。
-///
-/// # Returns
-/// 返回值
-/// Success when local compaction needs no provider envelope or after one atomic validated insertion;
-/// otherwise an explicit invariant error with the conversation unchanged.
-/// 本地压缩无需供应商封装时，或完成一次原子校验插入后返回成功；否则返回显式约束错误且会话保持不变。
-pub fn append_remote_responses_compaction_context(
-    state: &mut SessionConversationState,
-    summary_message_id: &str,
-    result: &CompactionResult,
-) -> Result<(), String> {
-    if result.provider_context_items.is_empty() {
-        if result.provider_context_route.is_none() {
-            return Ok(());
-        }
-        return Err(String::from(
-            "Remote Responses compaction route exists without provider context items.",
-        ));
-    }
-    // route is mandatory because opaque provider items cannot be replayed across accounts or endpoints.
-    // route 是必需项，因为不透明供应商项不得跨账号或端点重放。
-    let route = result.provider_context_route.as_ref().ok_or_else(|| {
-        String::from("Remote Responses compaction items are missing their route identity.")
-    })?;
-    if [
-        route.provider_id.as_str(),
-        route.connection_id.as_str(),
-        route.route_fingerprint.as_str(),
-        route.protocol_profile_id.as_str(),
-        route.model_id.as_str(),
-    ]
-    .iter()
-    .any(|value| value.trim().is_empty())
-    {
-        return Err(String::from(
-            "Remote Responses compaction route identity contains an empty field.",
-        ));
-    }
-    // canonicalItems mirrors the official Codex legacy alias before persistence validation.
-    // canonicalItems 在持久化校验前镜像官方 Codex 旧别名。
-    let mut canonical_items = result.provider_context_items.clone();
-    canonicalize_codex_responses_replay_items(&mut canonical_items);
-    let contains_compaction = canonical_items
-        .iter()
-        .any(|item| item.get("type").and_then(Value::as_str) == Some("compaction"));
-    if !contains_compaction
-        || !canonical_items
-            .iter()
-            .all(is_replayable_codex_responses_item)
-    {
-        return Err(String::from(
-            "Remote Responses compaction context contains an invalid ordered replayable item.",
-        ));
-    }
-    // summaryIndex proves the opaque checkpoint is attached to the exact new anchor.
-    // summaryIndex 证明不透明检查点附着于精确的新锚点。
-    let summary_index = state
-        .messages
-        .iter()
-        .position(|message| message.id == summary_message_id)
-        .ok_or_else(|| {
-            String::from(
-                "Remote Responses compaction summary anchor is missing from the conversation.",
-            )
-        })?;
-    // candidateMessages preserves atomicity when anchor normalization or identity validation fails.
-    // candidateMessages 在锚点规范化或身份校验失败时保持原子性。
-    let mut candidate_messages = state.messages.clone();
-    // anchorPayload must be a synthetic assistant message with no pre-existing provider-visible state.
-    // anchorPayload 必须是尚未携带供应商可见状态的合成助手消息。
-    let anchor_payload = &mut candidate_messages[summary_index].payload;
-    let SessionConversationPayload::Assistant {
-        reasoning: anchor_reasoning,
-        provider_message_id: anchor_provider_message_id,
-        provider_message_state: anchor_provider_state,
-        usage: anchor_usage,
-        tool_calls: anchor_tool_calls,
-        ..
-    } = anchor_payload
-    else {
-        return Err(String::from(
-            "Remote Responses compaction summary anchor must be an assistant message.",
-        ));
-    };
-    if !anchor_reasoning.is_empty()
-        || anchor_provider_message_id.is_some()
-        || anchor_provider_state.is_some()
-        || anchor_usage.is_some()
-        || !anchor_tool_calls.is_empty()
-    {
-        return Err(String::from(
-            "Remote Responses compaction summary anchor contains unexpected provider-visible state.",
-        ));
-    }
-    // anchorProviderState co-locates the checkpoint with its anchor so route-aware projection can suppress diagnostics.
-    // anchorProviderState 将检查点与锚点共置，使路由感知投影能够抑制诊断文本。
-    *anchor_provider_state = Some(json!({
-        "vulcan_ai": {
-            "responses_compaction": {
-                "provider_id": route.provider_id,
-                "connection_id": route.connection_id,
-                "route_fingerprint": route.route_fingerprint,
-                "protocol_profile_id": route.protocol_profile_id,
-                "model_id": route.model_id,
-                "items": canonical_items,
-                "usage": result.provider_context_usage,
-                "response_id": result.provider_context_response_id,
-            }
-        }
-    }));
-    validate_session_conversation_message_identities(&candidate_messages).map_err(|error| {
-        format!("Invalid remote Responses compaction message identity: {error}")
-    })?;
-    state.messages = candidate_messages;
     Ok(())
 }
 
@@ -1264,103 +1131,6 @@ mod tests {
             .map(|message| message.id.as_str())
             .collect::<Vec<_>>();
         assert_eq!(ids, vec!["summary-1", "tail-assistant"]);
-    }
-
-    /// Verifies remote Responses context is canonicalized and inserted directly after its anchor.
-    /// 验证远端 Responses 上下文会被规范化并紧接其锚点插入。
-    #[test]
-    fn remote_responses_context_is_inserted_atomically_after_summary() {
-        // state contains the exact summary anchor followed by one retained tail message.
-        // state 包含精确摘要锚点及其后一条保留尾部消息。
-        let mut state = SessionConversationState {
-            messages: vec![
-                summary_conversation_message(
-                    String::from("summary-1"),
-                    SessionMessageKind::Assistant,
-                    String::from("checkpoint installed"),
-                ),
-                SessionConversationMessage {
-                    id: String::from("retained-user"),
-                    payload: SessionConversationPayload::UserText {
-                        text: String::from("continue"),
-                        attachments: Vec::new(),
-                    },
-                },
-            ],
-            records: Vec::new(),
-            continuation: Default::default(),
-        };
-        // result intentionally uses the official legacy alias to exercise canonical persistence.
-        // result 刻意使用官方旧别名，以覆盖规范持久化路径。
-        let result = CompactionResult {
-            summary_record: crate::planning::CompactionSummaryRecord {
-                kind: SessionMessageKind::Assistant,
-                record_kind: SessionMessageRecordKind::CompactionSummary,
-                title: String::from("Context compaction"),
-                body: String::from("checkpoint installed"),
-                preview: String::from("checkpoint installed"),
-            },
-            source_until_message_id: None,
-            source_until_turn_index: None,
-            retained_tail_start_turn_index: None,
-            compaction_id: String::from("compaction-1"),
-            created_at: String::from("1"),
-            policy: ContextCompactionPolicy::default(),
-            tail_selection: crate::planning::CompactionTailSelectionReport {
-                context_limit: None,
-                policy_source:
-                    vulcan_context::ContextCompactionTailPolicySource::MissingContextLimitMinimum,
-                nominal_token_budget: 5_000,
-                segment_limit: 5,
-                retained_segment_count: 1,
-                retained_message_ids: vec![String::from("retained-user")],
-                retained_token_estimate: 16,
-                previewed_tool_output_count: 0,
-                omitted_tool_output_token_estimate: 0,
-                newest_segment_exceeds_nominal_budget: false,
-            },
-            provider_context_items: vec![json!({
-                "type": "compaction_summary",
-                "encrypted_content": "opaque-checkpoint"
-            })],
-            provider_context_route: Some(crate::planning::ProviderContextRoute {
-                provider_id: String::from("custom:test"),
-                connection_id: String::from("connection-test"),
-                route_fingerprint: String::from("https://proxy.example/v1/responses"),
-                protocol_profile_id: String::from("openai-codex-responses"),
-                model_id: String::from("gpt-test"),
-            }),
-            provider_context_usage: Some(json!({ "input_tokens": 10 })),
-            provider_context_response_id: Some(String::from("response-test")),
-        };
-
-        append_remote_responses_compaction_context(&mut state, "summary-1", &result)
-            .expect("remote context should be inserted");
-
-        assert_eq!(state.messages.len(), 2);
-        assert_eq!(state.messages[0].id, "summary-1");
-        let SessionConversationPayload::Assistant {
-            text,
-            provider_message_state: Some(provider_state),
-            ..
-        } = &state.messages[0].payload
-        else {
-            panic!("remote summary anchor must remain an assistant message");
-        };
-        assert_eq!(text, "checkpoint installed");
-        assert_eq!(state.messages[1].id, "retained-user");
-        assert_eq!(
-            provider_state
-                .pointer("/vulcan_ai/responses_compaction/items/0/type")
-                .and_then(Value::as_str),
-            Some("compaction")
-        );
-        assert_eq!(
-            provider_state
-                .pointer("/vulcan_ai/responses_compaction/connection_id")
-                .and_then(Value::as_str),
-            Some("connection-test")
-        );
     }
 
     /// Verifies compaction keeps the newest tool-call turn structurally replayable even when the result is large.

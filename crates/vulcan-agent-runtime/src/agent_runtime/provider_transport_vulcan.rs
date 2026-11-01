@@ -31,16 +31,10 @@ pub(super) mod streaming;
 mod trace;
 
 pub(super) use accumulator::public_usage_to_core;
-pub(crate) use message_projection::build_responses_compaction_messages;
 pub(crate) use request::{
-    VulcanPublicContractRequest, project_public_tool_definitions, resolve_public_native_tools,
+    VulcanPublicContractRequest, project_public_tool_definitions,
 };
-// The session-owned trace owner is reusable by every physical Provider dispatch, including the
-// native compaction path that owns no controller adapter instance.
-// 会话所属追踪 owner 可被每一次真实 Provider 分派复用，包括没有控制器适配器实例的原生压缩路径。
-pub(crate) use trace::{
-    ProviderApiTraceAttemptCapture, ProviderApiTraceAttemptState, ProviderApiTraceRenderIdentity,
-};
+use trace::ProviderApiTraceAttemptState;
 
 /// Vulcan-owned default output budget used when the provider reports no independent output limit.
 /// 当供应商未报告独立输出上限时使用的 Vulcan 本地默认输出预算。
@@ -266,8 +260,8 @@ impl VulcanPublicContractAdapter {
             .iter()
             .map(|tool| (tool.source_kind.clone(), tool.source_label.clone()))
             .collect();
-        // publicTools applies the same route-bound schema projection used by standalone remote compaction.
-        // publicTools 应用与独立远端压缩相同的路由绑定 Schema 投影。
+        // publicTools applies the route-bound schema projection.
+        // publicTools 应用路由绑定的 Schema 投影。
         let public_tools = project_public_tool_definitions(&route, tools);
         Self {
             media_execution,

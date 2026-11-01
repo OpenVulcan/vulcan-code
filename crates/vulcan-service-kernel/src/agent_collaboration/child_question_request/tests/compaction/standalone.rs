@@ -7,31 +7,17 @@ use vulcan_agent_runtime::agent_runtime::prompt_compaction::{
     PromptCompactionModelTarget, PromptCompactionOwnership,
 };
 
-/// Drives an actual 401 and token refresh through the standalone confirmation owner.
-/// 经独立确认所有者驱动真实 401 及令牌刷新。
+/// Exercises RuntimeOnly compaction without mutating the source V1 ledger.
+/// 验证 RuntimeOnly 压缩，不修改来源 V1 账本。
 #[test]
-fn standalone_native_compaction_drives_real_http_refresh_and_confirmation() {
-    // The refreshed retry uses the same physical producer as ordinary standalone compaction.
-    // 刷新重试使用与普通独立压缩相同的物理生产者。
-    let executor = crate::service_bridge_io::webui_service_runtime_builder()
-        .worker_threads(2)
-        .build()
-        .unwrap();
-    let task = executor.spawn(Box::pin(run_child_maintenance(true, true, true)));
-    executor.block_on(task).unwrap();
-}
-
-/// Exercises RuntimeOnly native compaction without mutating the source V1 ledger.
-/// 验证 RuntimeOnly 原生压缩，不修改来源 V1 账本。
-#[test]
-fn standalone_native_compaction_drives_real_http_and_confirmation() {
+fn standalone_compaction_drives_real_http_and_confirmation() {
     // Keep the production stack contract and repository concurrency limits.
     // 保持生产线程栈契约及仓库并发限制。
     let executor = crate::service_bridge_io::webui_service_runtime_builder()
         .worker_threads(2)
         .build()
         .unwrap();
-    let task = executor.spawn(Box::pin(run_child_maintenance(true, false, true)));
+    let task = executor.spawn(Box::pin(run_child_maintenance(true)));
     executor.block_on(task).unwrap();
 }
 
@@ -46,7 +32,6 @@ pub(super) async fn verify(
     foundation: Arc<RuntimeFoundation>,
     handle: &Arc<SessionHandle>,
     server: &https::Server,
-    refresh: bool,
 ) {
     // Use the real runtime conversation and planner, rather than a fabricated stream or checkpoint.
     // 使用真实运行时会话及规划器，而非伪造流或检查点。
@@ -94,20 +79,18 @@ pub(super) async fn verify(
     .await
     .expect("standalone barriers must settle")
     .expect("real standalone compaction");
-    assert_eq!(result.provider_request_count, if refresh { 2 } else { 1 });
-    assert_eq!(
-        result.compaction_result.provider_context_items,
-        vec![json!({"type":"compaction","encrypted_content":"native-maintenance-checkpoint"})]
+    assert_eq!(result.provider_request_count, 1);
+    assert!(
+        result
+            .compaction_result
+            .summary_record
+            .body
+            .contains("Review complete.")
     );
     // This exact HTTP trace proves that the standalone owner released every real retry barrier.
     // 此精确 HTTP 轨迹证明独立所有者释放了每个真实重试屏障。
     let requests = server.requests.lock().unwrap();
-    assert_eq!(requests.len(), if refresh { 2 } else { 1 });
-    assert_eq!(requests.first(), requests.last());
-    assert_eq!(
-        server.refreshes.load(std::sync::atomic::Ordering::SeqCst),
-        usize::from(refresh)
-    );
+    assert_eq!(requests.len(), 1);
     assert_eq!(
         handle.read(|document| document.memory_revision()).unwrap(),
         before

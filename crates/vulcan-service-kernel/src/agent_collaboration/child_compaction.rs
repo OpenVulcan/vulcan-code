@@ -269,27 +269,6 @@ pub(super) async fn compact_admitted(
     let mut finished = None;
     while let Some(event) = stream.next().await {
         match event {
-            PromptCompactionStreamEvent::RemoteCompleted {
-                event,
-                checkpoint,
-                completion,
-            } => {
-                crate::context_compaction::apply_remote_compaction_completion(
-                    app,
-                    state,
-                    &raw,
-                    &mut sink,
-                    &mut telemetry,
-                    event,
-                    checkpoint,
-                    completion,
-                )
-                .await?;
-            }
-            PromptCompactionStreamEvent::PreparedRemoteSource { source } => {
-                sink.select_remote_compaction_source(&source)?;
-                raw.clear();
-            }
             PromptCompactionStreamEvent::PreparedSource { source, mode } => {
                 sink.select_compaction_source(&source, mode)?;
                 raw.clear();

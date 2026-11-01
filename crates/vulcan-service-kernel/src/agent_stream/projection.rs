@@ -1391,7 +1391,6 @@ fn apply_observed_usage_to_context_budget_with_local_state(
     // 最近一次 Provider 总量是活动上下文基线；累计用量永远不能驱动窗口判断。
     context_budget.active_context_tokens = active_context_tokens;
     context_budget.auto_compact_context_tokens = auto_compact_context_tokens;
-    context_budget.estimated_total_tokens = active_context_tokens;
     context_budget.usage_ratio = context_budget
         .effective_context_window
         .or(context_budget.effective_input_limit)

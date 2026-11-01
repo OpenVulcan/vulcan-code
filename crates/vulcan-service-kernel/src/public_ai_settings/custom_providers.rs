@@ -10,7 +10,7 @@ use vulcan_provider_adapters::{
     CustomProviderAuthentication, CustomProviderDefinition, CustomProviderModelDiscoveryMode,
     CustomProviderProtocol, InferenceRouteBinding, InferenceRouteConfiguration,
     PersistedAiConfiguration, ProviderDescriptor, ProviderKind, ProviderRegistry, PublicAiRuntime,
-    ResponsesRemoteCompactionPolicy, ResponsesRouteFeatures, ResponsesWebsocketPolicy,
+    ResponsesRouteFeatures, ResponsesWebsocketPolicy,
     StagedConnectionCatalogObservation, validate_custom_provider_identifier,
 };
 use vulcan_service_api::ServiceEventEmitter;
@@ -45,10 +45,6 @@ pub(crate) struct PublicAiCustomProviderSaveRequest {
     /// Exact compatible API base URL.
     /// 精确兼容 API 基础 URL。
     base_url: String,
-    /// Explicit remote-compaction policy for Codex Responses.
-    /// Codex Responses 的显式远端压缩策略。
-    #[serde(default)]
-    remote_compaction_policy: ResponsesRemoteCompactionPolicy,
     /// Explicit WebSocket policy for Codex Responses.
     /// Codex Responses 的显式 WebSocket 策略。
     #[serde(default)]
@@ -256,16 +252,12 @@ fn prepare_custom_provider_candidate(
         .any(|route| {
             route.protocol_profile_id == CustomProviderProtocol::OpenAiCodexResponses.profile_id()
         });
-    if !declares_codex
-        && (request.remote_compaction_policy != ResponsesRemoteCompactionPolicy::Disabled
-            || request.websocket_policy != ResponsesWebsocketPolicy::Disabled)
-    {
+    if !declares_codex && request.websocket_policy != ResponsesWebsocketPolicy::Disabled {
         return Err(String::from(
             "Responses capability policies require the Codex Responses protocol.",
         ));
     }
     let route_features = declares_codex.then_some(ResponsesRouteFeatures {
-        remote_compaction: request.remote_compaction_policy,
         websocket: request.websocket_policy,
         recovery: Default::default(),
     });

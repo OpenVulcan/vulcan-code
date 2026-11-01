@@ -211,14 +211,6 @@ export function contextCompactionProgressKey(stage: string): TranslationKey {
   switch (stage) {
     case "prepare_input":
       return "contextCompaction.progress.prepareInput";
-    case "prepare_remote_tooling":
-      return "contextCompaction.progress.prepareRemoteTooling";
-    case "remote_compaction_check":
-      return "contextCompaction.progress.remoteCompactionCheck";
-    case "remote_compaction_complete":
-      return "contextCompaction.progress.remoteCompactionComplete";
-    case "remote_compaction_local_fallback":
-      return "contextCompaction.progress.remoteCompactionLocalFallback";
     case "build_request":
       return "contextCompaction.progress.buildRequest";
     case "prepare_runtime":

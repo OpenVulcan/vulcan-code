@@ -323,12 +323,6 @@ pub(crate) fn context_usage_snapshot_from_runtime_state(
             ));
         }
         tooltip_rows.extend(context_budget_breakdown_rows(context_budget));
-        tooltip_rows.push(format!(
-            "Reserved: output {} · reasoning {} · compaction {}",
-            context_budget.reserved_output_tokens,
-            context_budget.reserved_reasoning_tokens,
-            context_budget.reserved_compaction_tokens
-        ));
         if !context_budget.baseline_matches_active_runtime {
             let reason = context_budget
                 .baseline_mismatch_reason
@@ -626,12 +620,6 @@ pub(crate) fn historical_context_budget_snapshot_from_runtime_state(
         auto_compact_scope: window_policy.auto_compact_scope,
         auto_compact_prefill_input_tokens: runtime_state.auto_compact_prefill_input_tokens,
         fallback_buffer_tokens: window_policy.fallback_buffer_tokens,
-        reserved_output_tokens: model_capabilities
-            .and_then(|capabilities| capabilities.output_limit)
-            .and_then(|limit| usize::try_from(limit).ok())
-            .unwrap_or_default(),
-        reserved_reasoning_tokens: 0,
-        reserved_compaction_tokens: 0,
         compaction_auto_enabled: false,
         baseline_matches_active_runtime: true,
         baseline_budget_fingerprint_matches: true,
@@ -644,7 +632,6 @@ pub(crate) fn historical_context_budget_snapshot_from_runtime_state(
         estimated_input_tokens: input_tokens,
         active_context_tokens,
         auto_compact_context_tokens,
-        estimated_total_tokens: active_context_tokens,
         usage_ratio,
         observed_usage: Some(observed_usage),
         accounting_source: vulcan_context::ContextBudgetAccountingSource::ProviderReported,

@@ -9,7 +9,6 @@ mod native_media;
 mod permission_mode;
 mod provider_tools;
 mod queued_child_returns;
-mod remote_checkpoint;
 use super::*;
 
 /// Proves the real persistence pair retains source once and leaves non-diff metadata intact.
@@ -231,7 +230,6 @@ fn prepare_sink_request_with_facts(
     sink.active = Some(ActiveProviderV1Projection {
         api_call_id: prepared.value.api_call_id,
         request_facts: facts,
-        remote_compaction_route: None,
         locked_baseline: LockedBaselineProjection::empty(),
         project_directory: std::env::temp_dir()
             .join(format!("vulcan-provider-v1-test-{}", handle.session_id())),

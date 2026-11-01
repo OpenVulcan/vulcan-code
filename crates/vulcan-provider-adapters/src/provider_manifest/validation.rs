@@ -1769,15 +1769,6 @@ fn validate_protocol_route(
             "AgentSpace reconciliation recovery is restricted to provider 'agentspace' service entry 'chatgpt-plan'",
         ));
     }
-    if route.responses_features.is_some_and(|features| {
-        features.remote_compaction == crate::ResponsesRemoteCompactionPolicy::InlineV2
-    }) {
-        errors.push(ManifestValidationError::new(
-            "responses_inline_compaction_v2_runtime_unavailable",
-            format!("{path}.responses_features.remote_compaction"),
-            "Responses inline compaction V2 is unavailable because this runtime has no registered streamed compaction-trigger executor",
-        ));
-    }
 }
 
 /// Validates the bounded closed shape of one resource-constraint list.

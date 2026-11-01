@@ -5,42 +5,13 @@ use super::persistence::DirtyFile;
 use super::{IdempotentMutation, SessionDocument, ensure_api_request_field, group_event_api_id};
 use crate::v1::compaction_frontier::{assert_node_order, trim_unpublished_candidates};
 use crate::v1::context::{
-    CompactionContent, CompactionNode, LockedBaselineProjection, RemoteResponsesCheckpoint,
-    RuntimeInitializationState,
+    CompactionContent, CompactionNode, LockedBaselineProjection, RuntimeInitializationState,
 };
 use crate::v1::errors::DomainError;
 use crate::v1::event::{
     ApiCallStatus, ApiPurposeKind, AssistantSemanticStatus, EventBody, ProviderProjectionProof,
 };
 use crate::v1::ids::{ApiCallId, CompactionId, JS_SAFE_INTEGER_MAX, Seq};
-
-/// Checks `checkpoint` against the API's frozen `request`; returns a field-specific error on drift.
-/// 针对 API 冻结的`request`检查`checkpoint`；漂移时返回字段级错误。
-/// The host separately verifies the endpoint against its immutable prepared transport route.
-/// 宿主另行针对不可变的已准备传输路由核对端点。
-fn validate_remote_checkpoint_route(
-    checkpoint: &RemoteResponsesCheckpoint,
-    request: &crate::v1::event::ApiRequestSnapshot,
-) -> Result<(), DomainError> {
-    checkpoint.validate()?;
-    ensure_api_request_field(
-        "compaction.provider",
-        &request.provider,
-        &checkpoint.provider_id,
-    )?;
-    ensure_api_request_field("compaction.model", &request.model, &checkpoint.model_id)?;
-    ensure_api_request_field(
-        "compaction.connection",
-        &request.connection_id,
-        &Some(checkpoint.connection_id.clone()),
-    )?;
-    ensure_api_request_field(
-        "compaction.profile",
-        &request.profile,
-        &Some(checkpoint.protocol_profile_id.clone()),
-    )?;
-    Ok(())
-}
 
 /// Strongly typed atomic input for publishing one context-compaction generation.
 /// 发布一个上下文压缩代际的强类型原子输入。
@@ -49,14 +20,14 @@ pub struct CompactionCommitInput {
     /// Physical compaction API identity.
     /// 物理压缩 API 身份。
     pub api_call_id: ApiCallId,
-    /// Summary semantic seq, or the terminal API seq for a remote checkpoint.
-    /// 摘要语义 seq，或远端检查点的 API 终态 seq。
+    /// Summary semantic seq.
+    /// 摘要语义 seq。
     pub occurred_at_seq: Seq,
     /// Inclusive first event retained by the new Provider window.
     /// 新 Provider 窗口包含的首个保留事件。
     pub retained_from_seq: Seq,
-    /// Exact local summary or canonical opaque remote output.
-    /// 精确本地摘要或规范不透明远端输出。
+    /// Exact local summary.
+    /// 精确本地摘要。
     pub content: CompactionContent,
     /// Exact eight-kind locked baseline segments refreshed for the new generation.
     /// 为新代际刷新的精确八种锁定基线片段。
@@ -84,25 +55,6 @@ impl CompactionCommitInput {
         }
     }
 
-    /// Builds a remote commit from `api_call_id`, its durable `api_stats_seq`, the retained boundary,
-    /// exact provider `checkpoint`, and the admitted `locked_baseline`; validation occurs on commit.
-    /// 根据`api_call_id`、其可靠`api_stats_seq`、保留边界、精确供应商`checkpoint`及准入
-    /// `locked_baseline`构建远端提交；提交时执行校验。
-    pub fn remote_responses(
-        api_call_id: ApiCallId,
-        api_stats_seq: Seq,
-        retained_from_seq: Seq,
-        checkpoint: RemoteResponsesCheckpoint,
-        locked_baseline: LockedBaselineProjection,
-    ) -> Self {
-        Self {
-            api_call_id,
-            occurred_at_seq: api_stats_seq,
-            retained_from_seq,
-            content: CompactionContent::RemoteResponses { checkpoint },
-            locked_baseline,
-        }
-    }
 }
 
 /// Validates exact final locked segments without deriving kind, target, identity, or order.
@@ -290,15 +242,6 @@ impl SessionDocument {
                     });
                 }
             }
-            CompactionContent::RemoteResponses { checkpoint } => {
-                validate_remote_checkpoint_route(checkpoint, &started.request)?;
-                if occurred_at_seq != api_stats_seq || last_provider_event.is_some() {
-                    return Err(DomainError::ImmutableFieldMutation {
-                        entity: "compaction",
-                        field: "remote_source",
-                    });
-                }
-            }
         }
         if retained_from_seq > occurred_at_seq {
             return Err(DomainError::SequenceViolation {
@@ -473,15 +416,9 @@ impl SessionDocument {
             ));
         }
         for node in &self.compactions {
-            // Both payload kinds remain validated even when their API events are in sealed storage.
-            // 即使 API 事件已经进入封存存储，两种载荷仍需验证。
-            let invalid_occurrence = match &node.content {
-                CompactionContent::Summary { .. } => node.occurred_at_seq >= node.api_stats_seq,
-                CompactionContent::RemoteResponses { checkpoint } => {
-                    checkpoint.validate()?;
-                    node.occurred_at_seq != node.api_stats_seq
-                }
-            };
+            // Sequence boundaries remain validated even when their API events are in sealed storage.
+            // 即使 API 事件已经进入封存存储，序号边界仍需验证。
+            let invalid_occurrence = node.occurred_at_seq >= node.api_stats_seq;
             if node.retained_from_seq > node.occurred_at_seq || invalid_occurrence {
                 return Err(DomainError::ImmutableFieldMutation {
                     entity: "compaction",
@@ -529,26 +466,7 @@ impl SessionDocument {
                     field: "api_status",
                 });
             }
-            let CompactionContent::Summary { text: summary } = &node.content else {
-                if let CompactionContent::RemoteResponses { checkpoint } = &node.content {
-                    validate_remote_checkpoint_route(checkpoint, &started.request)?;
-                }
-                if self.events.iter().any(|event| {
-                    group_event_api_id(event) == Some(node.api_call_id.value())
-                        && matches!(
-                            &event.event,
-                            EventBody::AssistantReasoning(_)
-                                | EventBody::AssistantText(_)
-                                | EventBody::ToolCall(_)
-                        )
-                }) {
-                    return Err(DomainError::ImmutableFieldMutation {
-                        entity: "compaction",
-                        field: "remote_source",
-                    });
-                }
-                continue;
-            };
+            let CompactionContent::Summary { text: summary } = &node.content;
             let summary_matches = self.events.iter().any(|event| {
                 if event.seq != node.occurred_at_seq {
                     return false;

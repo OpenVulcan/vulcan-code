@@ -15,7 +15,7 @@ use crate::v1::errors::DomainError;
 use crate::v1::ids::{ApiCallId, CompactionId, Seq};
 
 mod compaction_content;
-pub use compaction_content::{CompactionContent, RemoteResponsesCheckpoint};
+pub use compaction_content::CompactionContent;
 
 /// File contract of the V1 runtime lock document.
 /// V1 运行时锁定文档的文件契约。

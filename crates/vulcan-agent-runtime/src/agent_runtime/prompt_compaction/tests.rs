@@ -4,7 +4,6 @@ use super::pruning::{
     prepared_compaction_source_for_attempt, prompt_compaction_error_is_context_overflow,
 };
 use super::*;
-use vulcan_ai_contract::{ContentItem, MessageRole};
 use vulcan_context::conversation_state_from_session_messages;
 use vulcan_workbench_model::{
     SessionMediaUnderstandingModelSelection, SessionMediaUnderstandingReasoningEffort,
@@ -52,29 +51,6 @@ fn test_plan(source_messages: Vec<vulcan_context::SessionMessageEntry>) -> Compa
             newest_segment_exceeds_nominal_budget: false,
         },
     }
-}
-
-/// Verifies remote compact usage is normalized for turn statistics without discarding raw metadata.
-/// 验证远端 compact 用量会被规范化用于回合统计，同时不丢弃原始元数据。
-#[test]
-fn remote_compact_usage_is_projected_into_turn_accounting() {
-    let raw_usage = serde_json::json!({
-        "input_tokens": 40,
-        "input_tokens_details": {"cached_tokens": 10},
-        "output_tokens": 8,
-        "output_tokens_details": {"reasoning_tokens": 3},
-        "total_tokens": 48
-    });
-
-    let usage = remote_responses_usage_to_core(Some(&raw_usage))
-        .expect("object usage should be normalized");
-    assert_eq!(usage.input_tokens, Some(40));
-    assert_eq!(usage.uncached_input_tokens, Some(30));
-    assert_eq!(usage.cached_input_tokens, Some(10));
-    assert_eq!(usage.output_tokens, Some(8));
-    assert_eq!(usage.reasoning_tokens, Some(3));
-    assert_eq!(usage.total_tokens, Some(48));
-    assert!(remote_responses_usage_to_core(Some(&serde_json::Value::Null)).is_none());
 }
 
 /// Verifies a stale session connection is rejected instead of being replaced during compaction.
@@ -160,7 +136,6 @@ fn compaction_launch_request_preserves_session_model_target() {
             catalog_revision: String::from("catalog-test"),
             route_revision: String::from("route-test"),
         },
-        remote_compaction_enabled: true,
         context_limit: Some(300_000),
         context_compaction_policy: vulcan_context::ContextCompactionPolicy {
             tail_turns: 6,
@@ -325,118 +300,6 @@ fn compaction_launch_request_preserves_ordinary_turn_controls() {
     assert_eq!(
         request.session_prompt_skill_overrides.get("review"),
         Some(&PersistedPromptSkillState::Enabled)
-    );
-}
-
-/// Verifies rendered ordinary instructions are separated from compact input for Codex encoding.
-/// 验证渲染后的普通指令会与压缩输入分离，以供 Codex 编码。
-#[test]
-fn remote_compaction_request_carries_ordinary_base_instructions() {
-    // messages starts with canonical user input before the system instruction is attached.
-    // messages 在附加系统指令前仅包含规范用户输入。
-    let mut messages = vec![AiMessage {
-        role: MessageRole::User,
-        content: vec![ContentItem::Text {
-            text: String::from("canonical user content"),
-        }],
-        provider_context_items: Vec::new(),
-    }];
-    prepend_remote_compaction_instructions(
-        &mut messages,
-        String::from("ordinary Codex base instructions"),
-    );
-
-    let request = build_remote_responses_compaction_request(
-        crate::model::SessionId::from_u128(1),
-        "gpt-test",
-        messages,
-        Vec::new(),
-        Vec::new(),
-        ReasoningEffortLevel::Off,
-    );
-
-    assert_eq!(request.messages[0].role, MessageRole::System);
-    assert_eq!(
-        request.messages[0].content,
-        vec![ContentItem::Text {
-            text: String::from("ordinary Codex base instructions")
-        }]
-    );
-    assert_eq!(request.messages[1].role, MessageRole::User);
-}
-
-/// Verifies remote compaction preserves official Codex identity and current-turn reasoning controls.
-/// 验证远端压缩保留官方 Codex 身份与当前回合推理控制。
-#[test]
-fn remote_compaction_request_preserves_identity_and_turn_reasoning_controls() {
-    // messages contain the lossless route-projected input installed into the compact request.
-    // messages 包含安装到压缩请求中的无损路由投影输入。
-    let messages = vec![AiMessage {
-        role: MessageRole::User,
-        content: vec![ContentItem::Text {
-            text: String::from("canonical user content"),
-        }],
-        provider_context_items: Vec::new(),
-    }];
-    // sessionId is the exact stable identity shared by the root Codex session and thread.
-    // sessionId 是 Codex 根会话与线程共享的精确稳定身份。
-    let session_id = crate::model::SessionId::from_u128(1);
-    // tools proves remote compaction retains the same function schema snapshot as ordinary execution.
-    // tools 证明远端压缩保留与普通执行相同的函数 Schema 快照。
-    let tools = vec![ToolDefinition {
-        name: String::from("lookup"),
-        description: String::from("Looks up one value."),
-        input_schema: serde_json::json!({
-            "type": "object",
-            "properties": {"key": {"type": "string"}},
-            "required": ["key"]
-        }),
-        input_format: Default::default(),
-        strict: false,
-    }];
-    // nativeTools proves provider-native capability declarations also enter the compact request.
-    // nativeTools 证明 Provider 原生能力声明也进入压缩请求。
-    let native_tools = vec![NativeToolKind::WebSearch];
-
-    // enabledRequest must carry both the active effort and automatic reasoning summary control.
-    // enabledRequest 必须同时携带活动推理档位与自动推理摘要控制。
-    let enabled_request = build_remote_responses_compaction_request(
-        session_id,
-        "gpt-test",
-        messages.clone(),
-        tools.clone(),
-        native_tools.clone(),
-        ReasoningEffortLevel::Medium,
-    );
-    assert_eq!(
-        enabled_request.reasoning_effort,
-        Some(vulcan_ai_contract::ReasoningEffort::Medium)
-    );
-    assert_eq!(
-        enabled_request.reasoning_output,
-        ReasoningOutputPolicy::SummaryAuto
-    );
-    assert_eq!(
-        enabled_request.cache_scope_id.as_deref(),
-        Some(session_id.to_string().as_str())
-    );
-    assert_eq!(enabled_request.tools, tools);
-    assert_eq!(enabled_request.native_tools, native_tools);
-
-    // disabledRequest must omit both controls instead of creating an invalid mixed state.
-    // disabledRequest 必须同时省略两个控制，避免形成无效混合状态。
-    let disabled_request = build_remote_responses_compaction_request(
-        session_id,
-        "gpt-test",
-        messages,
-        Vec::new(),
-        Vec::new(),
-        ReasoningEffortLevel::Off,
-    );
-    assert_eq!(disabled_request.reasoning_effort, None);
-    assert_eq!(
-        disabled_request.reasoning_output,
-        ReasoningOutputPolicy::ProviderDefault
     );
 }
 

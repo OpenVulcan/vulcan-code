@@ -15,12 +15,9 @@ enum CompactionSourceSelection {
     /// Local summarization replays the full frozen history.
     /// 本地摘要重放完整冻结历史。
     LocalFull,
-    /// Local summarization uses exact selected text plus protected native checkpoints.
-    /// 本地摘要使用精确选定文字及受保护原生检查点。
+    /// Local summarization uses exact selected text.
+    /// 本地摘要使用精确选定文字。
     LocalPruned(Box<SessionConversationState>),
-    /// Remote compaction replaces only this prefix of the frozen projected items.
-    /// 远端压缩只替换冻结投影项的此前缀。
-    RemoteNative { source_item_count: usize },
 }
 
 /// Planning authority retained across compaction attempts without incorporating retry output into history.
@@ -33,9 +30,6 @@ pub(super) struct CompactionSourceWindow {
     /// Transcript records produced by the same V1 planning conversion.
     /// 同一 V1 规划转换产生的转录记录。
     messages: Vec<SessionMessageEntry>,
-    /// Exclusive projected-item end for each planning row, preserving native item order independently of event seq.
-    /// 每条规划行对应的投影项不包含式结束位置，独立于事件序号保留原生项顺序。
-    source_item_ends: Vec<usize>,
     /// Exact mutually exclusive representation admitted for this attempt.
     /// 本次尝试准入的精确互斥表示。
     selection: CompactionSourceSelection,
@@ -52,22 +46,16 @@ impl CompactionSourceWindow {
     ) -> Result<Self, SessionRuntimeError> {
         // Read planner-owned records from exact durable source ranges.
         // 从精确可靠来源范围读取规划器记录。
-        let planning_rows = snapshot
+        let messages = snapshot
             .sourced_items
             .iter()
-            .enumerate()
-            .filter_map(|(index, item)| {
-                crate::context_compaction::compaction_message_from_v1_projection(item)
-                    .map(|entry| entry.map(|(message, _)| (message, index + 1)))
-            })
+            .filter_map(crate::context_compaction::compaction_message_from_v1_projection)
+            .map(|entry| entry.map(|(message, _)| message))
             .collect::<Result<Vec<_>, _>>()
             .map_err(provider_projection_runtime_error)?;
-        // Keep the source position beside its converted row rather than reverse-mapping sequence numbers.
-        // 在转换行旁保留来源位置，不反向映射序号。
-        let (messages, source_item_ends): (Vec<_>, Vec<_>) = planning_rows.into_iter().unzip();
         // Rebuild the planning representation before accepting its authority.
         // 接纳权威之前重建规划表示。
-        let expected = compaction_state_from_projection(&snapshot, &messages)
+        let expected = vulcan_context::conversation_state_from_session_messages(&messages)
             .map_err(provider_projection_runtime_error)?;
         if serde_json::to_value(&expected).map_err(provider_projection_runtime_error)?
             != serde_json::to_value(state).map_err(provider_projection_runtime_error)?
@@ -79,7 +67,6 @@ impl CompactionSourceWindow {
         Ok(Self {
             snapshot,
             messages,
-            source_item_ends,
             selection: CompactionSourceSelection::Unprepared,
         })
     }
@@ -94,7 +81,7 @@ impl CompactionSourceWindow {
         if mode == CompactionInputPruneMode::None {
             // Full mode uses canonical runtime rows, including normalized historical tools.
             // 完整模式使用规范运行时行，包括规范化后的历史工具。
-            let state = compaction_state_from_projection(&self.snapshot, &self.messages)
+            let state = vulcan_context::conversation_state_from_session_messages(&self.messages)
                 .map_err(provider_projection_runtime_error)?;
             // Derive the same conversion used by the full-fidelity runtime.
             // 派生完整保真运行时使用的同一转换。
@@ -137,45 +124,13 @@ impl CompactionSourceWindow {
         }
         // The runtime's mode chooses the representation even when its pruning report records no reduction.
         // 即使剪枝报告记录未发生删减，仍由运行时模式决定所用表示。
-        let full_state = compaction_state_from_projection(&self.snapshot, &self.messages)
-            .map_err(provider_projection_runtime_error)?;
-        // Restore opaque state from typed durable authority, never from caller-provided row metadata.
-        // 从类型化可靠权威恢复不透明状态，绝不从调用方行元数据恢复。
-        let pruned_state = vulcan_context_compaction::NativeCompactionSources::capture(&full_state)
-            .and_then(|native| native.restore(&source.source_messages))
-            .map_err(provider_projection_runtime_error)?;
+        let pruned_state =
+            vulcan_context::conversation_state_from_session_messages(&source.source_messages)
+                .map_err(provider_projection_runtime_error)?;
         self.selection = CompactionSourceSelection::LocalPruned(Box::new(pruned_state));
         Ok(())
     }
 
-    /// Admits exact `source` as a nonempty frozen planning prefix for remote native compaction.
-    /// 将精确`source`作为远端原生压缩的非空冻结规划前缀准入。
-    /// Rejects changed, skipped, duplicated, or reordered rows without replacing the previous selection.
-    /// 拒绝改写、跳过、重复或乱序行，且不替换此前选择。
-    pub(super) fn select_remote(
-        &mut self,
-        source: &[SessionMessageEntry],
-    ) -> Result<(), SessionRuntimeError> {
-        if source.is_empty() || self.messages.get(..source.len()) != Some(source) {
-            return Err(provider_projection_runtime_error(
-                "Remote compaction source must equal the exact frozen planning prefix.",
-            ));
-        }
-        // A checkpoint's terminal seq can exceed retained history seq; only source positions define this prefix.
-        // 检查点终态序号可以大于保留历史序号；只有来源位置能定义此前缀。
-        let source_item_count = self.source_item_ends[source.len() - 1];
-        self.selection = CompactionSourceSelection::RemoteNative { source_item_count };
-        Ok(())
-    }
-
-    /// Returns whether this attempt owns remote native input rather than local summary controls.
-    /// 返回本次尝试是否持有远端原生输入，而非本地摘要控制。
-    pub(super) fn is_remote(&self) -> bool {
-        matches!(
-            self.selection,
-            CompactionSourceSelection::RemoteNative { .. }
-        )
-    }
 
     /// Borrows the selected local minimal state, returning None for other explicitly selected modes.
     /// 借用选定本地最小状态；其他明确选择的模式返回 None。
@@ -255,7 +210,6 @@ impl CompactionSourceWindow {
             }
             CompactionSourceSelection::LocalPruned(_) => 0,
             CompactionSourceSelection::LocalFull => self.snapshot.items.len(),
-            CompactionSourceSelection::RemoteNative { source_item_count } => source_item_count,
         };
         snapshot.items.truncate(retained_count);
         snapshot.sourced_items.truncate(retained_count);
@@ -337,28 +291,6 @@ impl CompactionSourceWindow {
                         "Compaction candidate source position is invalid.",
                     )
                 })?;
-            // Minimal projection must prove native bytes and route even though the ordinary snapshot is empty.
-            // 即使普通快照为空，最小投影也必须证明原生字节和路由。
-            for item in &self.snapshot.items {
-                // Resolve only the exact typed node owned by this canonical carrier.
-                // 只解析此规范载体持有的精确类型化节点。
-                let ProjectedItem::RemoteCompactionCheckpoint {
-                    compaction_id,
-                    checkpoint,
-                } = item
-                else {
-                    continue;
-                };
-                if expected.id == remote_checkpoint::planning_message_id(*compaction_id) {
-                    // Rebuild native bytes from durable authority and the frozen dispatch route.
-                    // 根据可靠权威和冻结分派路由重建原生字节。
-                    remote_checkpoint::validate_physical_message(
-                        checkpoint,
-                        message,
-                        V1ReplayRouteIdentity::from_candidate(candidate).as_ref(),
-                    )?;
-                }
-            }
             messages.push(message.clone());
             last_position = Some(position);
         }
@@ -430,21 +362,6 @@ impl ProviderV1StreamSink {
             .map_err(|error| error.to_string())
     }
 
-    /// Selects exact remote `source` before physical preparation; returns an ownership error without admitting dispatch.
-    /// 在物理准备前选择精确远端`source`；归属错误返回失败，此选择本身不准入发送。
-    pub(crate) fn select_remote_compaction_source(
-        &mut self,
-        source: &[SessionMessageEntry],
-    ) -> Result<(), String> {
-        if self.active.is_some() {
-            return Err(String::from("Cannot replace an active compaction attempt."));
-        }
-        self.compaction_source
-            .as_mut()
-            .ok_or_else(|| String::from("Compaction source was not bound."))?
-            .select_remote(source)
-            .map_err(|error| error.to_string())
-    }
 }
 
 /// Exercises real pruning and physical rebuild using the caller's complete route/budget fixture; returns any production error.
@@ -608,43 +525,5 @@ pub(super) fn verify_compaction_transport_selection(
     assert!(!full_text.contains("failed-summary-output"));
     assert_eq!(full_result.projection.through_seq, Seq::try_new(3).unwrap());
 
-    // Remote mode selects only the immutable planned prefix, without reusing local summary controls.
-    // 远端模式只选择不可变规划前缀，不复用本地摘要控制。
-    source.select_remote(&messages[..1])?;
-    assert!(source.is_remote());
-    // The production rebuild must remove both the retained tail and all pre-gate summary instructions.
-    // 生产重建必须移除保留尾部及全部闸门前摘要指令。
-    let remote_result = rebuild_provider_transport_candidate_with_compaction(
-        snapshot.clone(),
-        facts,
-        candidate,
-        media::PreparedV1UserMedia::default(),
-        Some(&source),
-    )?;
-    // Physical serialization proves exact selection independently from internal source-mode labels.
-    // 物理序列化独立于内部来源模式标签证明精确选择。
-    let remote_text =
-        serde_json::to_string(&remote_result.transport.exact_request.messages).unwrap();
-    assert!(remote_text.contains("omitted-business-body"));
-    assert!(!remote_text.contains("selected-summary-source"));
-    assert!(!remote_text.contains("local-summary-"));
-    assert!(!remote_text.contains("Summarize"));
-    assert!(!remote_text.contains("pre-gate-"));
-    assert_eq!(
-        remote_result.transport.controller_snapshot.messages.len(),
-        1
-    );
-    assert_eq!(
-        remote_result.transport.request_snapshot.history,
-        remote_result.transport.controller_snapshot.messages
-    );
-    assert_eq!(
-        remote_result
-            .request_budget_evidence
-            .request_text_measurement
-            .history_message_count,
-        1
-    );
-    assert_eq!(remote_result.projection.through_seq, snapshot.through_seq);
     Ok(())
 }

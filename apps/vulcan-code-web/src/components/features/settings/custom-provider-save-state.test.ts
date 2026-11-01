@@ -15,7 +15,6 @@ function requestFixture(providerId?: string): PublicAiCustomProviderSaveRequest 
     baseUrl: "https://example.test/v1",
     protocols: ["open_ai_responses"],
     protocolRoutes: [],
-    remoteCompactionPolicy: "disabled",
     websocketPolicy: "disabled",
     authentication: "bearer_authorization",
     modelDiscoveryMode: "manual",

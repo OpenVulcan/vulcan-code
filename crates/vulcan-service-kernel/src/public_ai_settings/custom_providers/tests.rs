@@ -30,14 +30,13 @@ fn isolated_custom_provider_removal_identity_is_namespace_safe() {
 /// 验证显式 Codex 能力开关可完整通过自定义供应商候选投影。
 #[test]
 fn custom_codex_provider_candidate_preserves_explicit_responses_capabilities() {
-    // request represents a user explicitly enabling both opt-in Codex capabilities.
-    // request 表示用户明确启用两项可选 Codex 能力。
+    // request represents a user explicitly enabling the opt-in Codex WebSocket capability.
+    // request 表示用户明确启用可选的 Codex WebSocket 能力。
     let request = PublicAiCustomProviderSaveRequest {
         provider_id: None,
         display_name: String::from("Codex Proxy"),
         base_url: String::from("https://proxy.example.test/v1"),
         protocols: vec![CustomProviderProtocol::OpenAiCodexResponses],
-        remote_compaction_policy: ResponsesRemoteCompactionPolicy::EnabledWithLocalFallback,
         websocket_policy: ResponsesWebsocketPolicy::UnverifiedOverride,
         authentication: CustomProviderAuthentication::BearerAuthorization,
         credential_display_name: Some(String::from("Test Account")),
@@ -64,10 +63,6 @@ fn custom_codex_provider_candidate_preserves_explicit_responses_capabilities() {
         .responses_features
         .expect("Codex route should preserve explicit capability switches");
 
-    assert_eq!(
-        features.remote_compaction,
-        ResponsesRemoteCompactionPolicy::EnabledWithLocalFallback
-    );
     assert_eq!(
         features.websocket,
         ResponsesWebsocketPolicy::UnverifiedOverride
@@ -118,7 +113,6 @@ fn custom_codex_capability_switch_is_not_a_connection_contract_change() {
         display_name: String::from("Codex Proxy"),
         base_url: String::from("https://proxy.example.test/v1"),
         protocols: vec![CustomProviderProtocol::OpenAiCodexResponses],
-        remote_compaction_policy: ResponsesRemoteCompactionPolicy::EnabledWithLocalFallback,
         websocket_policy: ResponsesWebsocketPolicy::UnverifiedOverride,
         authentication: CustomProviderAuthentication::BearerAuthorization,
         credential_display_name: None,
@@ -208,7 +202,6 @@ fn custom_provider_edit_atomically_migrates_every_existing_credential() {
         display_name: String::from("Renamed Provider"),
         base_url: String::from("https://new.example.test/v1"),
         protocols: vec![CustomProviderProtocol::OpenAiChat],
-        remote_compaction_policy: ResponsesRemoteCompactionPolicy::Disabled,
         websocket_policy: ResponsesWebsocketPolicy::Disabled,
         authentication: CustomProviderAuthentication::BearerAuthorization,
         credential_display_name: None,
@@ -257,7 +250,6 @@ fn custom_provider_edit_atomically_migrates_every_existing_credential() {
         display_name: String::from("Cosmetic Rename"),
         base_url: String::from("https://old.example.test/v1"),
         protocols: vec![CustomProviderProtocol::OpenAiResponses],
-        remote_compaction_policy: ResponsesRemoteCompactionPolicy::Disabled,
         websocket_policy: ResponsesWebsocketPolicy::Disabled,
         authentication: CustomProviderAuthentication::BearerAuthorization,
         credential_display_name: None,
@@ -639,7 +631,6 @@ fn multi_protocol_custom_provider_projects_one_route_per_protocol() {
         provider_id: None,
         display_name: String::from("Multi Protocol"),
         base_url: String::from("https://multi.example.test/v1"),
-        remote_compaction_policy: ResponsesRemoteCompactionPolicy::Disabled,
         websocket_policy: ResponsesWebsocketPolicy::Disabled,
         authentication: CustomProviderAuthentication::BearerAuthorization,
         credential_display_name: Some(String::from("Account")),
@@ -714,9 +705,7 @@ fn connection_contract_comparison_normalizes_every_route() {
         .find(|route| route.protocol_profile_id == "openai-chat-completions.v1")
     {
         route.responses_features = Some(vulcan_provider_adapters::ResponsesRouteFeatures {
-            remote_compaction:
-                vulcan_provider_adapters::ResponsesRemoteCompactionPolicy::EnabledWithLocalFallback,
-            websocket: vulcan_provider_adapters::ResponsesWebsocketPolicy::Disabled,
+            websocket: vulcan_provider_adapters::ResponsesWebsocketPolicy::UnverifiedOverride,
             recovery: Default::default(),
         });
     }
@@ -752,7 +741,6 @@ fn bounded_fixed_headers_survive_prepare_and_registry_revalidation() {
         provider_id: None,
         display_name: String::from("Header Provider"),
         base_url: String::from("https://headers.example.test/v1"),
-        remote_compaction_policy: ResponsesRemoteCompactionPolicy::Disabled,
         websocket_policy: ResponsesWebsocketPolicy::Disabled,
         authentication: CustomProviderAuthentication::BearerAuthorization,
         credential_display_name: Some(String::from("Account")),
@@ -793,8 +781,7 @@ fn secret_fixed_headers_are_rejected_at_service_save_boundary() {
             provider_id: None,
             display_name: String::from("Unsafe Header"),
             base_url: String::from("https://unsafe.example.test/v1"),
-            remote_compaction_policy: ResponsesRemoteCompactionPolicy::Disabled,
-            websocket_policy: ResponsesWebsocketPolicy::Disabled,
+                websocket_policy: ResponsesWebsocketPolicy::Disabled,
             authentication: CustomProviderAuthentication::BearerAuthorization,
             credential_display_name: Some(String::from("Account")),
             secret: Some(String::from("secret")),

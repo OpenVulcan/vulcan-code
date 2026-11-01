@@ -21,7 +21,7 @@ import type { TranslationKey } from "@/i18n-messages"
 import { CUSTOM_PROTOCOL_ROUTE_INHERIT_SELECT_VALUE, codexResponsesFeaturePoliciesFromEntry, customProtocolRouteDraftValue, customProtocolRouteSelectValue, customProtocolProfileId, emptyProtocolRouteDraft, protocolCollectionChanged, protocolCollectionFromEntry, protocolRoutesFromCollection, sortProtocolsByAutoPriority } from "@/components/features/settings/custom-provider-protocol-drafts"
 import type { CustomProtocolRouteDraft, CustomProviderProtocolCollection } from "@/components/features/settings/custom-provider-protocol-drafts"
 import { probePublicAiCustomProvider, savePublicAiCustomProvider } from "@/service/settings-actions-service"
-import type { PublicAiCustomProviderModelDiscoveryMode, PublicAiCustomProviderProbeResult, PublicAiCustomProviderProtocol, PublicAiCustomProviderSaveRequest, PublicAiResponsesRemoteCompactionPolicy, PublicAiResponsesWebsocketPolicy, PublicAiConnection, PublicAiModelCapabilityEvidence, PublicAiProviderDescriptor, PublicAiServiceEntry, PublicAiSettingsSnapshot } from "@/types"
+import type { PublicAiCustomProviderModelDiscoveryMode, PublicAiCustomProviderProbeResult, PublicAiCustomProviderProtocol, PublicAiCustomProviderSaveRequest, PublicAiResponsesWebsocketPolicy, PublicAiConnection, PublicAiModelCapabilityEvidence, PublicAiProviderDescriptor, PublicAiServiceEntry, PublicAiSettingsSnapshot } from "@/types"
 import { formatDateTime, errorMessage } from "@/lib/display-format"
 import { protocolDisplayName } from "./protocol-display-name"
 import "@/ui-kit/styles/features/settings-forms.css"
@@ -135,7 +135,6 @@ export function CustomProviderDialog(props: {
   // （方案 §R6.4/§R6.5）。
   const [protocols, setProtocols] = React.useState<PublicAiCustomProviderProtocol[]>(["open_ai_responses"])
   const [routeDrafts, setRouteDrafts] = React.useState<CustomProviderProtocolCollection["drafts"]>({})
-  const [remoteCompactionPolicy, setRemoteCompactionPolicy] = React.useState<PublicAiResponsesRemoteCompactionPolicy>("disabled")
   const [websocketPolicy, setWebsocketPolicy] = React.useState<PublicAiResponsesWebsocketPolicy>("disabled")
   const [authentication, setAuthentication] = React.useState<"bearer_authorization" | "google_api_key" | "x_api_key">("bearer_authorization")
   const [modelDiscoveryMode, setModelDiscoveryMode] = React.useState<PublicAiCustomProviderModelDiscoveryMode>("standard")
@@ -193,7 +192,6 @@ export function CustomProviderDialog(props: {
     setProtocols(collection.protocols)
     setRouteDrafts(collection.drafts)
     const codexFeatures = codexResponsesFeaturePoliciesFromEntry(entry)
-    setRemoteCompactionPolicy(codexFeatures.remoteCompactionPolicy)
     setWebsocketPolicy(codexFeatures.websocketPolicy)
     // catalog restores only the entry-owned selection, including the shared custom path.
     // catalog 只恢复入口持有的选择，包括共享自定义路径。
@@ -261,7 +259,6 @@ export function CustomProviderDialog(props: {
     // The enabled protocol collection is authoritative and never empty.
     // 启用协议集合是权威事实且绝不为空。
     protocols,
-    remoteCompactionPolicy,
     websocketPolicy,
     authentication,
     ...(props.provider
@@ -282,7 +279,7 @@ export function CustomProviderDialog(props: {
     protocolRoutes: protocolRoutesFromCollection({ protocols, drafts: routeDrafts }),
     allowManualFallback: acceptance === "manual",
     allowPendingValidation: acceptance === "pending",
-  }), [authentication, baseUrl, credentialDisplayName, displayName, modelDiscoveryMode, modelDiscoveryProtocol, modelDiscoveryPath, props.provider, protocols, remoteCompactionPolicy, routeDrafts, secret, sessionHeader, validationConnectionId, websocketPolicy])
+  }), [authentication, baseUrl, credentialDisplayName, displayName, modelDiscoveryMode, modelDiscoveryProtocol, modelDiscoveryPath, props.provider, protocols, routeDrafts, secret, sessionHeader, validationConnectionId, websocketPolicy])
 
   // probe verifies authentication and model discovery without persisting the provider or secret.
   // probe 在不持久化供应商或秘密的情况下验证鉴权与模型发现。
@@ -376,10 +373,7 @@ export function CustomProviderDialog(props: {
   )?.responses_features
   const responsesFeaturesChanged = Boolean(props.provider)
     && protocols.includes("open_ai_codex_responses")
-    && (
-      remoteCompactionPolicy !== (originalResponsesFeatures?.remote_compaction ?? "disabled")
-      || websocketPolicy !== (originalResponsesFeatures?.websocket ?? "disabled")
-    )
+    && websocketPolicy !== (originalResponsesFeatures?.websocket ?? "disabled")
   // credentialFreeEdit identifies an existing provider whose contract cannot be remotely probed yet.
   // credentialFreeEdit 标识当前尚无法远程探测契约的无账号现有供应商。
   const credentialFreeEdit = Boolean(props.provider) && providerConnections.length === 0
@@ -561,16 +555,6 @@ export function CustomProviderDialog(props: {
             {protocols.includes("open_ai_codex_responses") ? (
               <div className="vk-form-box" data-tone="muted">
                 <strong className="vk-form-strong">{t("settings.customProviders.codexCapabilities")}</strong>
-                <label className="vk-form-option">
-                  <Switch
-                    checked={remoteCompactionPolicy === "enabled_with_local_fallback"}
-                    onCheckedChange={(checked) => setRemoteCompactionPolicy(checked ? "enabled_with_local_fallback" : "disabled")}
-                  />
-                  <span>
-                    <b>{t("settings.customProviders.codexRemoteCompaction")}</b>
-                    <span className="vk-form-note">{t("settings.customProviders.codexRemoteCompactionHint")}</span>
-                  </span>
-                </label>
                 <label className="vk-form-option">
                   <Switch
                     checked={websocketPolicy !== "disabled"}

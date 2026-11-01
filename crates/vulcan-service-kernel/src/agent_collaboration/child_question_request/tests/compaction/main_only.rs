@@ -46,10 +46,7 @@ async fn run(executor: Arc<tokio::runtime::Runtime>) {
     let server = https::Server::start_question_answerer().await;
     let public_ai = Arc::new(
         vulcan_provider_adapters::PublicAiRuntime::first_batch_with_http_client_for_testing(
-            Arc::new(https::Secrets {
-                native: false,
-                refreshed: Mutex::new(None),
-            }),
+            Arc::new(https::Secrets),
             server.http.clone(),
         )
         .unwrap(),

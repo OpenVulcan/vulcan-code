@@ -274,7 +274,6 @@ mod tests {
         );
 
         assert!(!budget.compaction_auto_enabled);
-        assert_eq!(budget.reserved_compaction_tokens, 0);
         assert_eq!(budget.effective_input_limit, Some(19_000));
         assert_eq!(budget.auto_compact_limit, Some(18_000));
 

@@ -19,7 +19,6 @@ mod invariants;
 mod modes;
 mod persistence;
 mod provider_source;
-mod remote_compaction;
 mod selection;
 mod subagent;
 mod terminal_settlement;

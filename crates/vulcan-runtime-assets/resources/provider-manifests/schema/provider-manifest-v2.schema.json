@@ -1883,9 +1883,6 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "remote_compaction": {
-          "enum": ["disabled", "enabled_with_local_fallback", "inline_v2"]
-        },
         "websocket": {
           "enum": ["disabled", "verified", "unverified_override"]
         },

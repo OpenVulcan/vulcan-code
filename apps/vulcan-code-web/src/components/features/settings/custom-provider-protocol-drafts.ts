@@ -3,7 +3,6 @@ import type {
   PublicAiCustomProviderProtocolRoute,
   PublicAiCustomModelProtocolPreference,
   PublicAiModelRouteRecord,
-  PublicAiResponsesRemoteCompactionPolicy,
   PublicAiResponsesWebsocketPolicy,
   PublicAiServiceEntry,
 } from "@/types"
@@ -64,9 +63,6 @@ export function customProtocolRouteDraftValue(value: string): string {
 // CodexResponsesFeaturePolicies 是一个自定义供应商中唯一 Codex Responses 路由的
 // 浏览器端单一权威能力状态。
 export interface CodexResponsesFeaturePolicies {
-  // Explicit remote-compaction policy saved onto the exact Codex Responses route.
-  // 保存到精确 Codex Responses 路由的显式远端压缩策略。
-  remoteCompactionPolicy: PublicAiResponsesRemoteCompactionPolicy
   // Explicit WebSocket policy saved onto the exact Codex Responses route.
   // 保存到精确 Codex Responses 路由的显式 WebSocket 策略。
   websocketPolicy: PublicAiResponsesWebsocketPolicy
@@ -156,8 +152,8 @@ export function emptyProtocolRouteDraft(): CustomProtocolRouteDraft {
  *
  * @param entry Persisted custom-provider service entry, when one exists.
  * @param entry 已持久化的自定义供应商服务入口（如果存在）。
- * @returns The exact policies, defaulting both disabled when the route or declaration is absent.
- * @returns 精确策略；当路由或声明缺失时，两项均默认为禁用。
+ * @returns The exact policies, defaulting to disabled when the route or declaration is absent.
+ * @returns 精确策略；当路由或声明缺失时默认为禁用。
  */
 export function codexResponsesFeaturePoliciesFromEntry(
   entry: PublicAiServiceEntry | undefined,
@@ -166,7 +162,6 @@ export function codexResponsesFeaturePoliciesFromEntry(
     (route) => route.protocol_profile_id === "openai-codex-responses.v1",
   )?.responses_features
   return {
-    remoteCompactionPolicy: features?.remote_compaction ?? "disabled",
     websocketPolicy: features?.websocket ?? "disabled",
   }
 }

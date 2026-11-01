@@ -12,7 +12,6 @@ mod request_headers;
 mod resource_download;
 mod response_body;
 mod response_metadata;
-mod responses_compact;
 mod responses_websocket;
 mod route;
 mod stream_state;
@@ -51,9 +50,6 @@ pub(crate) use request_headers::{
 pub use resource_download::ProviderToolResourceDownloadPolicy;
 pub(crate) use response_body::read_bounded_response_text;
 pub(crate) use response_metadata::parse_retry_after_headers;
-pub use responses_compact::{
-    ResponsesCompactEvent, ResponsesCompactResult, ResponsesCompactStream,
-};
 use responses_websocket::{
     ResponsesWebsocketHealth, ResponsesWebsocketSessionCacheEntry, responses_websocket_cache_key,
 };

@@ -12,7 +12,7 @@ use vulcan_core::provider::VulcanProviderAdapter;
 use vulcan_core::types::CoreError as VulcanCoreError;
 use vulcan_provider_adapters::{
     ProviderExecutionRoute, ProviderExecutionStream, ProviderWireRequestCapture,
-    ProviderWireRequestTraceDispatch, ProviderWireResponseCapture,
+    ProviderWireResponseCapture,
 };
 use vulcan_session_core::v1::ApiCallId;
 use vulcan_workspace_store::workspace_store::{
@@ -257,124 +257,6 @@ pub(crate) fn claim_provider_api_trace_attempt(
         )),
     }
 }
-
-/// Owns the reused session trace capture pair for one physical Provider attempt.
-/// 为一次真实 Provider 尝试持有复用的会话追踪捕获对。
-///
-/// The caller hands both endpoints to its physical transport; the detached writer publishes
-/// exactly one complete redacted artifact after the response capture scope ends.
-/// 调用方把两个端点交给自己的真实传输；独立写入器在响应捕获作用域结束后恰好发布一份完整脱敏制品。
-pub(crate) struct ProviderApiTraceAttemptCapture {
-    /// Request endpoint handed to the physical transport.
-    /// 交给真实传输的请求捕获端点。
-    pub(crate) request: tokio::sync::oneshot::Sender<ProviderWireRequestTraceDispatch>,
-    /// Raw response endpoint handed to the physical transport.
-    /// 交给真实传输的原始响应捕获端点。
-    pub(crate) response: tokio::sync::oneshot::Sender<ProviderWireResponseCapture>,
-}
-
-impl ProviderApiTraceAttemptCapture {
-    /// Reserves one durable attempt and starts the detached artifact writer.
-    /// 预留一次可靠尝试并启动独立制品写入任务。
-    ///
-    /// # Parameters
-    /// 参数
-    /// `provider_request_trace_enabled` is the frozen opt-in decision; `trace_store` is the
-    /// session-owned owner carried by the physical permit; `turn_anchor_message_id` preserves
-    /// the same turn anchor used by ordinary requests.
-    /// `provider_request_trace_enabled` 是冻结的可选开关决策；`trace_store` 是物理许可携带的
-    /// 会话所属 owner；`turn_anchor_message_id` 保留与普通请求相同的回合锚点。
-    ///
-    /// # Returns
-    /// 返回值
-    /// Capture endpoints only when tracing is enabled and one sequence was durably reserved.
-    /// 仅在启用追踪且一个序号已可靠预留时返回捕获端点。
-    pub(crate) fn start(
-        provider_request_trace_enabled: bool,
-        attempt_state: &std::sync::Mutex<ProviderApiTraceAttemptState>,
-        trace_store: Option<ProviderApiTraceStore>,
-        api_call_id: ApiCallId,
-        identity: ProviderApiTraceRenderIdentity,
-        turn_anchor_message_id: Option<String>,
-    ) -> Option<Self> {
-        let Some(trace_store) = trace_store else {
-            if provider_request_trace_enabled {
-                eprintln!(
-                    "[provider-api-trace] session={} skipped=no_session_v1_trace_owner",
-                    identity.session_scope_id
-                );
-            }
-            return None;
-        };
-        let reservation = match claim_provider_api_trace_attempt(
-            provider_request_trace_enabled,
-            attempt_state,
-            api_call_id,
-            &trace_store,
-        ) {
-            Ok(Some(reservation)) => reservation,
-            Ok(None) => return None,
-            Err(error) => {
-                eprintln!(
-                    "[provider-api-trace] session={} reservation_failed={error}",
-                    identity.session_scope_id
-                );
-                return None;
-            }
-        };
-        let (request_sender, request_receiver) = tokio::sync::oneshot::channel();
-        let (response_sender, response_receiver) = tokio::sync::oneshot::channel();
-        let execution_id = uuid::Uuid::new_v4().to_string();
-        let trace_execution_id = execution_id;
-        let trace_session_scope_id = identity.session_scope_id.clone();
-        tokio::spawn(async move {
-            let Ok(ProviderWireRequestTraceDispatch {
-                request: captured_request,
-                persistence_result,
-            }) = request_receiver.await
-            else {
-                // A closed capture channel means encoding failed before an API request existed.
-                // 捕获通道关闭表示编码在 API 请求形成前失败，因此没有请求可保存。
-                return;
-            };
-            // The session-owned store already durably reserved trace_sequence before wire
-            // dispatch; complete input/output artifacts publish only after capture finishes.
-            // 会话级存储已在线路分派前可靠预留 trace_sequence；完整 input/output 制品只在捕获
-            // 结束后发布。
-            if persistence_result.send(Ok(())).is_err() {
-                return;
-            }
-            // A closed response channel remains explicit in the trace instead of discarding the request.
-            // 响应通道关闭会在追踪中显式记录，而不是丢弃请求。
-            let response_state = response_receiver.await.map_or(
-                ProviderApiTraceResponseState::CaptureChannelClosed,
-                ProviderApiTraceResponseState::Captured,
-            );
-            if let Err(error) = persist_provider_api_trace_snapshot(
-                identity,
-                trace_store,
-                reservation,
-                trace_execution_id.as_str(),
-                turn_anchor_message_id.as_deref(),
-                captured_request,
-                response_state,
-                None,
-            )
-            .await
-            {
-                eprintln!(
-                    "[provider-api-trace] session={} execution={} failed={error}",
-                    trace_session_scope_id, trace_execution_id
-                );
-            }
-        });
-        Some(Self {
-            request: request_sender,
-            response: response_sender,
-        })
-    }
-}
-
 impl VulcanPublicContractAdapter {
     /// Reserves one physical trace identity from the session-owned V1 trace store.
     /// 从会话所属 V1 追踪存储中预留一个物理追踪身份。

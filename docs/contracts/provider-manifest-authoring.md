@@ -981,14 +981,13 @@ custom 历史只按其原始配对重放，不得借此向无声明的新请求�
 
 `wire_dialect: lite` 使用稳定 UUIDv5 前缀项、`additional_tools` 命名空间目录、
 `reasoning.context: all_turns`、`parallel_tool_calls: false` 和专用内部请求头；顶层
-`instructions` 与 `tools` 省略。HTTP、WebSocket 首包/增量包与独立压缩请求共享同一最终头投影。
+`instructions` 与 `tools` 省略。HTTP 与 WebSocket 首包/增量包共享同一最终头投影。上下文压缩一律走本地摘要，不使用供应商的
+远端压缩端点。
 由 Codex 宿主持久化的
 `configuration_update` 还要求可信的宿主来源和版本化私有历史；没有该宿主时不得伪造普通输入项。
 
 `protocol_routes[].responses_features` 持有传输和恢复契约：
 
-- `remote_compaction: enabled_with_local_fallback` 是现有独立远端压缩 V1；`inline_v2` 表示流内
-  `compaction_trigger` V2，但在宿主没有注册流式 V2 执行器时整条声明校验失败，不会偷用 V1；
 - `websocket` 只在精确路由验证后启用；游标无效时只能按既有安全边界重建同一路由全量请求；
 - `recovery: agent_space_result_and_usage_reconciliation_v1` 只允许 AgentSpace 的
   `chatgpt-plan` 入口声明。它把 `reconciliation_required` 标记为结果与用量待确认，保留请求和

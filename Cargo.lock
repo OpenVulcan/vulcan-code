@@ -9904,7 +9904,6 @@ name = "vulcan-context-compaction"
 version = "0.1.0"
 dependencies = [
  "serde_json",
- "vulcan-ai-contract",
  "vulcan-context",
  "vulcan-prompt-composer",
  "vulcan-runtime-assets",

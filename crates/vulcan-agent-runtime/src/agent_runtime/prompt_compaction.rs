@@ -6,13 +6,6 @@ use crate::agent_runtime::execution_models::{
     ExecutionAgentPromptSnapshot, ExecutionSubagentPromptContext,
 };
 use crate::agent_runtime::execution_preparation::prepare_execution_with_tool_snapshot;
-use crate::agent_runtime::provider_protocol_tool_definition::resolved_tool_definition_to_provider_tool_definition;
-use crate::agent_runtime::provider_reasoning::public_reasoning_effort_from_level;
-use crate::agent_runtime::provider_runtime_context::build_runtime_prompt_layers_for_agent;
-use crate::agent_runtime::provider_transport_vulcan::{
-    build_responses_compaction_messages, project_public_tool_definitions, public_usage_to_core,
-    resolve_public_native_tools,
-};
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::agent_runtime::runtime_stream_bootstrap::bootstrap_runtime_stream;
 use crate::agent_runtime::runtime_stream_driver::drive_runtime_stream_launch;
@@ -36,24 +29,18 @@ use std::{
     path::PathBuf,
     sync::Arc,
 };
-use vulcan_ai_contract::{
-    AiErrorCategory, AiExecutionRequest, AiMessage, AiOperation, ContentItem, MessageRole,
-    NativeToolKind, ReasoningOutputPolicy, ToolDefinition,
-};
 use vulcan_context::{ContextCompactionPolicy, SessionConversationState};
 use vulcan_context_compaction::{
     CompactionInputBudget, CompactionInputPruneMode, CompactionInputPruneReport, CompactionPlan,
-    CompactionResult, ContextCompactionRequestPromptMode, ProviderContextRoute,
+    CompactionResult, ContextCompactionRequestPromptMode,
     build_compaction_request_prompt_for_mode, extract_compaction_model_summary,
 };
 use vulcan_core::types::ProviderUsageSnapshot;
-use vulcan_llm_core::normalize_openai_usage;
 use vulcan_prompt_composer::PromptOutputStyleSnapshot;
-use vulcan_session_core::{CapabilityPolicySnapshot, ExecutionRuntimePolicy, ToolExposureSnapshot};
+use vulcan_session_core::{CapabilityPolicySnapshot, ToolExposureSnapshot};
 use vulcan_workbench_model::SessionProviderToolTargetSelection;
 
 mod pruning;
-mod remote;
 pub(crate) mod standalone_owner;
 
 #[cfg(test)]
@@ -82,9 +69,6 @@ pub struct PromptCompactionModelTarget {
     /// Persisted non-secret identity of the exact session provider-route lease.
     /// 精确会话供应商路由租约的持久化非秘密身份。
     pub provider_route_lease_identity: vulcan_workbench_model::SessionProviderRouteLeaseIdentity,
-    /// Whether the non-secret exact route explicitly enables standalone remote compaction.
-    /// 不含密钥的精确路由是否显式启用独立远端压缩。
-    pub remote_compaction_enabled: bool,
     /// Raw model-declared total context window used by the retained-tail formula.
     /// 尾部保留公式使用的模型原始声明总上下文窗口。
     pub context_limit: Option<usize>,
@@ -120,9 +104,6 @@ pub struct PromptCompactionLaunchContext {
     /// Exact execution mode used to resolve mode-specific tools.
     /// 用于解析模式专属工具的精确执行模式。
     pub execution_mode: String,
-    /// Runtime policy owned by the source turn and reused only for remote tooling preparation.
-    /// 来源回合持有、仅供远端工具准备复用的运行时策略。
-    pub runtime_policy: ExecutionRuntimePolicy,
     /// Optional fixed agent prompt captured by a task session.
     /// 子任务会话捕获的可选固定代理提示词。
     pub agent_prompt_snapshot: Option<ExecutionAgentPromptSnapshot>,
@@ -200,7 +181,6 @@ impl Default for PromptCompactionLaunchContext {
             temperature: None,
             media_projection: None,
             execution_mode: String::from("build"),
-            runtime_policy: ExecutionRuntimePolicy::main_session(),
             agent_prompt_snapshot: None,
             provider_tool_selections_override: None,
             provider_tool_media_understanding_selections_override: None,
@@ -244,7 +224,6 @@ impl PromptCompactionLaunchContext {
             // 普通控制复制后，由压缩规划提供自身精确来源快照。
             media_projection: None,
             execution_mode: request.execution_mode.clone(),
-            runtime_policy: request.runtime_policy,
             agent_prompt_snapshot: request.agent_prompt_snapshot.clone(),
             provider_tool_selections_override: request.provider_tool_selections_override.clone(),
             provider_tool_media_understanding_selections_override: request
@@ -324,11 +303,6 @@ pub fn resolve_prompt_compaction_model_target(
     let selection = blueprint.frozen_selection.as_ref().ok_or_else(|| {
         String::from("Context compaction model resolution did not freeze a provider selection.")
     })?;
-    // remoteCompactionEnabled avoids credential resolution when the selected route opted out.
-    // remoteCompactionEnabled 在所选路由未启用时避免解析凭据。
-    let remote_compaction_enabled = selection.route.protocol_route.protocol_profile_id
-        == vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID
-        && selection.route.protocol_route.remote_compaction_enabled();
     // providerRouteLeaseIdentity persists only the non-secret identity needed for restart validation.
     // providerRouteLeaseIdentity 仅持久化重启校验所需的非秘密身份。
     let provider_route_lease_identity = blueprint
@@ -350,7 +324,6 @@ pub fn resolve_prompt_compaction_model_target(
         connection_id: selection.route.connection.id.clone(),
         model_id: selection.model.id.clone(),
         provider_route_lease_identity,
-        remote_compaction_enabled,
         context_limit,
         context_compaction_policy,
     }))
@@ -387,8 +360,8 @@ pub struct PromptCompactionJobRequest {
     /// Provider configuration already adjusted to the intended provider/model snapshot.
     /// 已经调整到目标供应商/模型快照的 Provider 配置。
     pub provider_configuration: ProviderConfigurationFile,
-    /// Exact session-scoped provider, connection, and model used by both remote and local compaction.
-    /// 远端与本地压缩共同使用的精确会话级供应商、连接与模型。
+    /// Exact session-scoped provider, connection, and model used by compaction.
+    /// 压缩使用的精确会话级供应商、连接与模型。
     pub model_target: Option<PromptCompactionModelTarget>,
     /// Exact session agent whose visible tool catalog must be preserved during compaction.
     /// 压缩期间必须保留其可见工具目录的精确会话代理。
@@ -474,8 +447,8 @@ pub struct PromptCompactionFoundationJobRequest {
     /// Provider configuration already adjusted to the intended provider/model snapshot.
     /// 已经调整到目标供应商/模型快照的 Provider 配置。
     pub provider_configuration: ProviderConfigurationFile,
-    /// Exact task-scoped provider, connection, and model used by both remote and local compaction.
-    /// 远端与本地压缩共同使用的精确任务级供应商、连接与模型。
+    /// Exact task-scoped provider, connection, and model used by compaction.
+    /// 压缩使用的精确任务级供应商、连接与模型。
     pub model_target: Option<PromptCompactionModelTarget>,
     /// Exact task agent whose visible tool catalog must be preserved during compaction.
     /// 压缩期间必须保留其可见工具目录的精确任务代理。
@@ -570,9 +543,6 @@ pub struct PromptCompactionExecution {
 /// 单次提示词压缩尝试选择的 Provider 可见启动配置。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptCompactionExecutionProfile {
-    /// Standalone Codex Responses compact endpoint with route-bound opaque checkpoint items.
-    /// 独立 Codex Responses compact 端点，并保留绑定路由的不透明检查点项。
-    RemoteResponses,
     /// Full-fidelity cache-preserving launch that keeps normal prompt topology and tool schemas.
     /// 保持完整保真缓存的启动方式，保留普通提示词拓扑与工具 schema。
     CachePreservingFullFidelity,
@@ -586,7 +556,6 @@ impl PromptCompactionExecutionProfile {
     /// 返回该执行配置的稳定持久化标签。
     pub const fn label(self) -> &'static str {
         match self {
-            Self::RemoteResponses => "remote_responses",
             Self::CachePreservingFullFidelity => "cache_preserving_full_fidelity",
             Self::PrunedMinimal => "pruned_minimal",
         }
@@ -606,13 +575,6 @@ pub struct PromptCompactionProgressEvent {
 /// 单次提示词压缩请求运行期间发出的增量事件。
 #[derive(Debug, Clone)]
 pub enum PromptCompactionStreamEvent {
-    /// Exact immutable planner prefix selected for a native remote attempt; this event alone grants no dispatch permit.
-    /// 为原生远端尝试选择的精确不可变规划前缀；此事件本身不授予发送许可。
-    PreparedRemoteSource {
-        /// Original ordered source rows, without local summary pruning or diagnostic instructions.
-        /// 原始有序来源行，不含本地摘要剪枝或诊断指令。
-        source: Vec<vulcan_context::SessionMessageEntry>,
-    },
     /// Exact source selected before each local attempt, including retries; never a model-authored event.
     /// 每次本地尝试及重试前选定的精确来源；绝不是模型编写的事件。
     PreparedSource {
@@ -629,19 +591,6 @@ pub enum PromptCompactionStreamEvent {
     /// A normal execution stream event that should be mirrored into transcript UI or task logs.
     /// 应镜像到转录界面或任务日志中的普通执行流事件。
     Stream(ExecutionStreamEvent),
-    /// Native success paired with its own physical terminal durability barrier, never assistant text.
-    /// 与自身物理终态可靠屏障配对的原生成功结果，绝不是助手正文。
-    RemoteCompleted {
-        /// Completed telemetry with typed physical API facts.
-        /// 带强类型物理 API 事实的完成遥测。
-        event: crate::agent_runtime::provider_request_telemetry::ProviderRequestTelemetryEvent,
-        /// Exact validated provider output and route identity.
-        /// 精确且已验证的供应商输出及路由身份。
-        checkpoint: vulcan_session_core::v1::context::RemoteResponsesCheckpoint,
-        /// Single-use host acknowledgement after physical completion is durable.
-        /// 物理完成可靠落盘后使用的一次性宿主确认。
-        completion: crate::agent_runtime::events::ProviderRequestDurabilityCompletion,
-    },
     /// Terminal compaction result after the internal summary request settles.
     /// 内部总结请求收敛后的终态压缩结果。
     Finished(Result<PromptCompactionExecution, String>),
@@ -693,432 +642,6 @@ fn prompt_compaction_progress_for_runtime_event(
     }
 }
 
-/// Converts a provider-reported remote Responses compaction usage object into turn accounting.
-/// 将供应商报告的 Responses 远端压缩用量对象转换为回合用量统计。
-///
-/// # Parameters
-/// 参数
-/// `usage` is the optional raw OpenAI-compatible `usage` object retained by the compact response.
-/// `usage` 是 compact 响应保留的可选 OpenAI 兼容原始 `usage` 对象。
-///
-/// # Returns
-/// 返回值
-/// A normalized core usage snapshot only when the protocol value is an object.
-/// 仅当协议值为对象时返回规范化的核心用量快照。
-fn remote_responses_usage_to_core(
-    usage: Option<&serde_json::Value>,
-) -> Option<ProviderUsageSnapshot> {
-    usage
-        .filter(|value| value.is_object())
-        .map(normalize_openai_usage)
-        .map(|usage| public_usage_to_core(&usage))
-}
-
-/// Attempts the explicitly enabled standalone Codex Responses compaction route before local prompt compaction.
-/// 在本地提示词压缩前，尝试执行显式启用的独立 Codex Responses 远端压缩路由。
-///
-/// # Parameters
-/// 参数
-/// `runtime` owns the current provider routes and credential boundary; `session_id` scopes the
-/// stable cache key; `plan` selects the source window; `full_context_state` preserves its lossless
-/// protocol messages; `model_target` and `reasoning_effort` freeze the owning turn controls.
-/// `runtime` 持有当前供应商路由与凭据边界；`session_id` 限定稳定缓存键；`plan` 选择源窗口；
-/// `full_context_state` 保留其无损协议消息；`model_target` 与 `reasoning_effort` 冻结所属回合控制。
-/// `durable_events` supplies the explicit V1 consumer; absence selects the independent runtime path.
-/// `durable_events`提供明确的 V1 消费方；缺省时选择独立运行时路径。
-///
-/// # Returns
-/// 返回值
-/// A route-bound result or an explicit session-path error. Only the independent runtime retains local fallback.
-/// 返回绑定路由的结果或明确的会话路径错误；仅独立运行时仍保留本地回退。
-async fn try_remote_responses_compaction(
-    runtime: &vulcan_provider_adapters::PublicAiRuntime,
-    foundation: &RuntimeFoundation,
-    provider_configuration: &ProviderConfigurationFile,
-    luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
-    session_id: crate::model::SessionId,
-    session_title: &str,
-    workspace_path: &str,
-    execution_agent_id: Option<&str>,
-    launch_context: &PromptCompactionLaunchContext,
-    plan: &CompactionPlan,
-    full_context_state: &SessionConversationState,
-    model_target: &PromptCompactionModelTarget,
-    reasoning_effort: ReasoningEffortLevel,
-    durable_events: Option<&tokio::sync::mpsc::UnboundedSender<PromptCompactionStreamEvent>>,
-    ownership: PromptCompactionOwnership,
-) -> Result<Option<PromptCompactionExecution>, String> {
-    if plan.source_messages.is_empty() {
-        if durable_events.is_some() {
-            return Err(String::from(
-                "A session remote compaction requires a nonempty planned source.",
-            ));
-        }
-        return Ok(None);
-    }
-    // preparedExecution freezes one route for lossless history projection and the eventual dispatch.
-    // preparedExecution 为无损历史投影与最终分派冻结同一路由。
-    let prepared_execution = Arc::new(
-        match runtime
-            .prepare_responses_compact_execution(
-                model_target.provider_id.as_str(),
-                model_target.connection_id.as_str(),
-                model_target.model_id.as_str(),
-            )
-            .await
-        {
-            Ok(execution) => execution,
-            Err(failure) => {
-                if durable_events.is_some() {
-                    return Err(failure.to_string());
-                }
-                remote_compaction_failure_allows_local_fallback(&failure)?;
-                return Ok(None);
-            }
-        },
-    );
-    // toolingRequest resolves the exact model-visible tool snapshot used by an ordinary cache-preserving turn.
-    // toolingRequest 解析普通缓存保留回合使用的精确模型可见工具快照。
-    let mut tooling_request = build_prompt_compaction_launch_request(
-        session_id,
-        session_title,
-        workspace_path,
-        execution_agent_id,
-        launch_context,
-        Some(model_target),
-        reasoning_effort,
-        full_context_state.clone(),
-        ContextCompactionRequestPromptMode::FullFidelityMerge,
-    );
-    // Remote compaction carries the ordinary model-visible tool catalog and base instructions, not the local summarizer prompt policy.
-    // 远端压缩携带普通回合的模型可见工具目录与基础指令，而不是本地总结器提示策略。
-    tooling_request.prompt_purpose = ExecutionPromptPurpose::UserTurn;
-    tooling_request.runtime_policy = launch_context.runtime_policy;
-    // toolingPreparation freezes tool visibility, schemas, and the independently resolved route for race validation.
-    // toolingPreparation 冻结工具可见性、Schema 与独立解析的路由，用于竞争校验。
-    let tooling_preparation = match prepare_execution_with_tool_snapshot(
-        foundation,
-        luaskills_runtime,
-        provider_configuration,
-        &tooling_request,
-    ) {
-        Ok(preparation) => preparation,
-        // Local tool preparation has not dispatched provider work, so the configured local path remains safe.
-        // 本地工具准备尚未分派 Provider 工作，因此配置的本地路径仍可安全使用。
-        Err(error) => {
-            if durable_events.is_some() {
-                return Err(error);
-            }
-            return Ok(None);
-        }
-    };
-    validate_remote_compaction_tooling_route(
-        &tooling_preparation.preparation.model_blueprint,
-        &prepared_execution,
-    )?;
-    // providerTools retains the canonical host definitions before route-specific schema normalization.
-    // providerTools 在路由专属 Schema 正规化前保留规范宿主定义。
-    let provider_tools: Vec<_> = tooling_preparation
-        .tool_snapshot
-        .resolved_tool_definitions
-        .iter()
-        .map(resolved_tool_definition_to_provider_tool_definition)
-        .collect();
-    if let Some(events) = durable_events {
-        // The session path builds an unprepared candidate; its unique owner materializes media and releases the wire request.
-        // 会话路径构建未准备候选；由唯一所有者物化媒体并放行线路请求。
-        let active_agent = foundation
-            .agent_definition(&tooling_preparation.preparation.agent_id)
-            .ok_or_else(|| String::from("The prepared remote compaction agent is unavailable."))?;
-        let runtime_prompt = build_runtime_prompt_layers_for_agent(
-            &tooling_preparation.preparation,
-            Some(active_agent),
-        )?;
-        let candidate = remote::build_candidate(
-            &prepared_execution,
-            &tooling_preparation.preparation,
-            runtime_prompt,
-            ownership,
-            provider_tools,
-            full_context_state,
-            plan,
-            active_agent
-                .temperature
-                .or(tooling_preparation.preparation.temperature),
-            reasoning_effort,
-        )
-        .await?;
-        let mut telemetry_preparation = tooling_preparation.preparation.clone();
-        // Tool and baseline composition use ordinary visibility; physical accounting remains a compaction API.
-        // 工具与基线组合使用普通可见性；物理记账仍为压缩 API。
-        telemetry_preparation.prompt_purpose =
-            ExecutionPromptPurpose::ContextCompactionCachePreserving;
-        return remote::execute_durable(
-            prepared_execution,
-            telemetry_preparation,
-            candidate,
-            plan,
-            events,
-            // The frozen per-dispatch system-setting decision is the only native compaction trace
-            // opt-in; the permit's session trace owner never substitutes for it.
-            // 逐分派冻结的系统设置决策是原生压缩追踪的唯一开关；许可中的会话追踪 owner 绝不替代它。
-            provider_configuration.provider_request_trace_enabled,
-            provider_configuration.provider_error_trace_enabled,
-            ownership,
-        )
-        .await
-        .map(Some);
-    }
-    // tools uses the identical compatibility projector as ordinary Responses execution.
-    // tools 使用与普通 Responses 执行完全相同的兼容投影器。
-    let tools = project_public_tool_definitions(&prepared_execution.route, provider_tools);
-    // nativeTools mirrors ordinary Codex native-tool capability projection, including image generation.
-    // nativeTools 镜像普通 Codex 原生工具能力投影，包括图片生成。
-    let native_tools = resolve_public_native_tools(
-        prepared_execution
-            .route
-            .protocol_route
-            .protocol_profile_id
-            .as_str(),
-        prepared_execution
-            .model
-            .capabilities
-            .output_resources
-            .as_slice(),
-        prepared_execution
-            .model
-            .capabilities
-            .provider_native_tools
-            .clone(),
-    );
-    // messages use the ordinary route-aware bridge so prior checkpoints, tools, and images survive recompaction.
-    // messages 使用普通路由感知桥接，使既有检查点、工具与图片在再次压缩时得以保留。
-    let compaction_session_scope_id = session_id.to_string();
-    let mut messages = build_responses_compaction_messages(
-        full_context_state,
-        &plan.source_messages,
-        &prepared_execution,
-        Some(compaction_session_scope_id.as_str()),
-        launch_context.media_projection.as_deref(),
-    )
-    .await
-    .map_err(|error| format!("Remote Responses compaction input projection failed: {error}"))?;
-    if messages.is_empty() {
-        return Ok(None);
-    }
-    // activeAgent is the exact definition selected during the already validated tooling preparation.
-    // activeAgent 是已验证工具准备阶段选择的精确代理定义。
-    let active_agent = foundation
-        .agent_definition(&tooling_preparation.preparation.agent_id)
-        .ok_or_else(|| {
-            format!(
-                "Prepared compaction agent `{}` is no longer available in the frozen runtime foundation.",
-                tooling_preparation.preparation.agent_id
-            )
-        })?;
-    // runtimePrompt renders the same ordinary-turn layered instructions used by normal Codex execution.
-    // runtimePrompt 渲染与普通 Codex 执行相同的普通回合分层指令。
-    let runtime_prompt = match build_runtime_prompt_layers_for_agent(
-        &tooling_preparation.preparation,
-        Some(active_agent),
-    ) {
-        Ok(runtime_prompt) => runtime_prompt,
-        // Prompt composition has not dispatched provider work, so local compaction remains safe.
-        // 提示词装配尚未分派 Provider 工作，因此本地压缩仍可安全执行。
-        Err(_) => return Ok(None),
-    };
-    prepend_remote_compaction_instructions(&mut messages, runtime_prompt.fallback_text);
-    let request = build_remote_responses_compaction_request(
-        session_id,
-        model_target.model_id.as_str(),
-        messages,
-        tools,
-        native_tools,
-        reasoning_effort,
-    );
-    let execution = match runtime
-        .execute_prepared_responses_compact(prepared_execution, request)
-        .await
-    {
-        Ok(execution) => execution,
-        Err(failure) => {
-            remote_compaction_failure_allows_local_fallback(&failure)?;
-            return Ok(None);
-        }
-    };
-    let provider_id = execution.provider_id.clone();
-    let connection_id = execution.connection_id.clone();
-    let route_fingerprint = execution.route_fingerprint.clone();
-    let protocol_profile_id = execution.protocol_profile_id.clone();
-    let model_id = execution.model_id.clone();
-    // lastSuccessfulProviderUsage accounts for the physical remote compact request in turn statistics.
-    // lastSuccessfulProviderUsage 将远端 compact 物理请求计入回合统计。
-    let last_successful_provider_usage =
-        remote_responses_usage_to_core(execution.result.usage.as_ref());
-    let compaction_result = CompactionResult::from_remote_responses_with_metadata(
-        plan,
-        ProviderContextRoute {
-            provider_id: provider_id.clone(),
-            connection_id,
-            route_fingerprint,
-            protocol_profile_id,
-            model_id: model_id.clone(),
-        },
-        execution.result.output_items,
-        execution.result.usage,
-        execution.result.response_id,
-    )?;
-    Ok(Some(PromptCompactionExecution {
-        compaction_result,
-        fallback_used: false,
-        provider_request_count: 1,
-        last_successful_provider_usage,
-        provider_id: Some(provider_id),
-        model_id: Some(model_id),
-        execution_profile: PromptCompactionExecutionProfile::RemoteResponses,
-        input_prune_report: None,
-    }))
-}
-
-/// Verifies that tool visibility was resolved against the immutable route used for compact dispatch.
-/// 验证工具可见性是针对压缩分派所用不可变路由解析的。
-///
-/// # Parameters
-/// 参数
-/// `blueprint` is the independent host preparation snapshot and `execution` owns the credential-bearing
-/// public route that will be dispatched.
-/// `blueprint` 是独立宿主准备快照；`execution` 持有即将分派的含凭据公共路由。
-///
-/// # Returns
-/// 返回值
-/// `Ok(())` only when provider, service entry, connection, protocol, secondary route, and model all match.
-/// 仅当供应商、服务入口、连接、协议、二级路由与模型全部一致时返回 `Ok(())`。
-fn validate_remote_compaction_tooling_route(
-    blueprint: &crate::agent_runtime::provider::ProviderRuntimeBlueprint,
-    execution: &vulcan_provider_adapters::ResolvedPublicAiExecution,
-) -> Result<(), String> {
-    let route = &execution.route;
-    if blueprint.provider_id != route.provider.id
-        || blueprint.service_entry_id != route.entry.id
-        || blueprint.connection_id != route.connection.id
-        || blueprint.protocol_profile_id != route.protocol_route.protocol_profile_id
-        || blueprint.secondary_route != route.secondary_route
-        || blueprint.model_id != execution.model.id
-    {
-        return Err(String::from(
-            "Remote Responses compaction tooling route changed during preparation; dispatch was rejected.",
-        ));
-    }
-    Ok(())
-}
-
-/// Determines whether one controlled remote-compaction failure may use local prompt compaction.
-/// 判断一次受控远端压缩失败是否允许改用本地提示词压缩。
-///
-/// # Parameters
-/// 参数
-/// `failure` carries dispatch, semantic-output, side-effect, authentication, and HTTP evidence.
-/// `failure` 携带分派、语义输出、副作用、身份认证与 HTTP 证据。
-///
-/// # Returns
-/// 返回值
-/// Success only when local fallback is safe; otherwise an explicit terminal diagnostic.
-/// 仅在本地回退安全时返回成功，否则返回显式终态诊断。
-fn remote_compaction_failure_allows_local_fallback(
-    failure: &vulcan_provider_adapters::ProviderExecutionFailure,
-) -> Result<(), String> {
-    if failure.error.semantic_output_observed || failure.error.side_effect_observed {
-        return Err(format!(
-            "Remote Responses compaction cannot safely fall back after dispatch: {failure}"
-        ));
-    }
-    if matches!(
-        failure.error.category,
-        AiErrorCategory::Authentication | AiErrorCategory::PermissionDenied
-    ) || matches!(failure.error.http_status, Some(401 | 403))
-    {
-        return Err(format!(
-            "Remote Responses compaction authentication or permission failed: {failure}"
-        ));
-    }
-    Ok(())
-}
-
-/// Prepends ordinary Codex base instructions without changing the canonical compact input order.
-/// 在不改变规范压缩输入顺序的前提下前置普通 Codex 基础指令。
-///
-/// # Parameters
-/// 参数
-/// `messages` owns the route-projected compact input; `instructions` is the rendered ordinary-turn system prompt.
-/// `messages` 持有路由投影后的压缩输入；`instructions` 是渲染后的普通回合系统提示词。
-fn prepend_remote_compaction_instructions(messages: &mut Vec<AiMessage>, instructions: String) {
-    if instructions.is_empty() {
-        return;
-    }
-    messages.insert(
-        0,
-        AiMessage {
-            role: MessageRole::System,
-            content: vec![ContentItem::Text { text: instructions }],
-            provider_context_items: Vec::new(),
-        },
-    );
-}
-
-/// Builds the provider-neutral request sent to the standalone Responses compact endpoint.
-/// 构建发送给独立 Responses compact 端点的供应商无关请求。
-///
-/// # Parameters
-/// 参数
-/// `session_id` creates a stable cache scope; `model_id` is the active model snapshot; `messages`
-/// is the lossless route-projected planner window.
-/// `session_id` 创建稳定缓存作用域；`model_id` 是当前活动模型快照；`messages` 是无损路由投影后的规划窗口。
-///
-/// # Returns
-/// 返回值
-/// A continuation-free conversation request retaining canonical provider items and multimodal content.
-/// 返回不带延续信息且保留规范供应商项与多模态内容的对话请求。
-fn build_remote_responses_compaction_request(
-    session_id: crate::model::SessionId,
-    model_id: &str,
-    messages: Vec<AiMessage>,
-    tools: Vec<ToolDefinition>,
-    native_tools: Vec<NativeToolKind>,
-    reasoning_effort: ReasoningEffortLevel,
-) -> AiExecutionRequest {
-    // publicReasoningEffort carries the same effective turn effort into the official compact payload.
-    // publicReasoningEffort 把同一生效回合推理档位带入官方压缩载荷。
-    let public_reasoning_effort = public_reasoning_effort_from_level(reasoning_effort);
-    // reasoningOutput mirrors Codex's current-turn summary control only when reasoning is active.
-    // reasoningOutput 仅在推理启用时镜像 Codex 当前回合的摘要控制。
-    let reasoning_output = if public_reasoning_effort.is_some() {
-        ReasoningOutputPolicy::SummaryAuto
-    } else {
-        ReasoningOutputPolicy::ProviderDefault
-    };
-    AiExecutionRequest {
-        operation: AiOperation::ConversationRespond,
-        model_id: model_id.to_string(),
-        // The root Vulcan task id is the exact Codex session/thread identity and prompt-cache scope.
-        // Vulcan 根任务标识是精确的 Codex 会话/线程身份与提示缓存作用域。
-        cache_scope_id: Some(session_id.to_string()),
-        continuation: None,
-        messages,
-        tools,
-        native_tools,
-        tool_choice: Default::default(),
-        parallel_tool_calls: Default::default(),
-        structured_output: Default::default(),
-        stop_sequences: Vec::new(),
-        prompt_cache: Default::default(),
-        reasoning_effort: public_reasoning_effort,
-        reasoning_output,
-        model_parameters: Default::default(),
-        resources: Vec::new(),
-        output_token_limit: None,
-    }
-}
-
 /// Streams one prompt-based compaction job and exposes the model's thinking/output before applying the final compaction result.
 /// 以流式方式执行单次提示词压缩任务，并在应用最终压缩结果前暴露模型思考与输出。
 pub fn stream_prompt_compaction_job(
@@ -1127,85 +650,6 @@ pub fn stream_prompt_compaction_job(
     // Boxed so the generator's large state lives on the heap instead of inflating every caller's future.
     // 装箱使生成器的大体积状态位于堆上，而不是撑大每个调用方的 future。
     Box::pin(stream! {
-        // remoteFoundation resolves the exact ordinary-turn tool catalog before optional remote compaction.
-        // remoteFoundation 在可选远端压缩前解析普通回合使用的精确工具目录。
-        let remote_foundation = if request
-            .model_target
-            .as_ref()
-            .is_some_and(|target| target.remote_compaction_enabled)
-        {
-            yield prompt_compaction_progress("prepare_remote_tooling");
-            // foundation reuses the atomically published plugin/MCP generation owned by this queued job.
-            // foundation 复用本排队任务持有的原子发布插件与 MCP 代次。
-            let mut foundation = RuntimeFoundation::build_from_extension_generation_with_runtimes_and_plugins(
-                &request.provider_configuration,
-                &request.agent_profile_catalog,
-                request.luaskills_runtime.clone(),
-                Some(request.vulcan_plugin_runtime.clone()),
-                Arc::clone(&request.extension_generation),
-                Arc::clone(&request.task_runtime),
-                Arc::clone(&request.question_runtime),
-                Arc::clone(&request.command_session_runtime),
-            );
-            foundation.install_public_ai_runtime(Arc::clone(&request.public_ai_runtime));
-            Some(foundation)
-        } else {
-            None
-        };
-        if let (Some(model_target), Some(foundation)) = (
-            request.model_target.as_ref(),
-            remote_foundation.as_ref(),
-        ) {
-            yield prompt_compaction_progress("remote_compaction_check");
-            yield PromptCompactionStreamEvent::PreparedRemoteSource {
-                source: request.plan.source_messages.clone(),
-            };
-            // Relay permits while the producer awaits them; polling only its final result would deadlock.
-            // 在生产者等待许可期间转发屏障；仅轮询其最终结果会造成死锁。
-            let (remote_sender, mut remote_receiver) = tokio::sync::mpsc::unbounded_channel();
-            let remote_execution = try_remote_responses_compaction(
-                request.public_ai_runtime.as_ref(),
-                foundation,
-                &request.provider_configuration,
-                request.luaskills_runtime.clone(),
-                request.session_id,
-                &request.session_title,
-                &request.workspace_path,
-                request.execution_agent_id.as_deref(),
-                &request.launch_context,
-                &request.plan,
-                &request.full_context_state,
-                model_target,
-                request.reasoning_effort,
-                Some(&remote_sender),
-                // This legacy job is consumed by the session compaction stream, which owns a V1
-                // provider sink and confirms every barrier; it is never a standalone owner.
-                // 该遗留任务由会话压缩流消费，后者持有 V1 供应商接收器并确认每个屏障；它绝不是独立所有者。
-                PromptCompactionOwnership::SessionV1,
-            );
-            tokio::pin!(remote_execution);
-            let remote_result = loop {
-                tokio::select! {
-                    biased;
-                    Some(event) = remote_receiver.recv() => yield event,
-                    result = &mut remote_execution => break result,
-                }
-            };
-            match remote_result {
-                Ok(Some(execution)) => {
-                    yield prompt_compaction_progress("remote_compaction_complete");
-                    yield PromptCompactionStreamEvent::Finished(Ok(execution));
-                    return;
-                }
-                Ok(None) => {
-                    yield prompt_compaction_progress("remote_compaction_local_fallback");
-                }
-                Err(error) => {
-                    yield PromptCompactionStreamEvent::Finished(Err(error));
-                    return;
-                }
-            }
-        }
         let mut prune_mode = match initial_compaction_prune_mode(
             &request.full_context_state,
             request.input_budget,
@@ -1405,68 +849,6 @@ pub fn stream_prompt_compaction_foundation_job(
     // Boxed so the generator's large state lives on the heap instead of inflating every caller's future.
     // 装箱使生成器的大体积状态位于堆上，而不是撑大每个调用方的 future。
     Box::pin(stream! {
-        if let (Some(runtime), Some(model_target)) = (
-            request.foundation.public_ai_runtime(),
-            request
-                .model_target
-                .as_ref()
-                .filter(|target| target.remote_compaction_enabled),
-        ) {
-            yield prompt_compaction_progress("remote_compaction_check");
-            yield PromptCompactionStreamEvent::PreparedRemoteSource {
-                source: request.plan.source_messages.clone(),
-            };
-            // The explicit caller mode prevents an unowned standalone consumer from awaiting V1 acknowledgements.
-            // 显式调用方模式避免没有所有者的独立消费方等待 V1 确认。
-            let (remote_sender, mut remote_receiver) = tokio::sync::mpsc::unbounded_channel();
-            // Every physical remote attempt publishes mandatory preparation and durability barriers, and
-            // each ownership declares its own confirmation authority. A standalone RuntimeOnly run has no
-            // V1 ledger, so its standalone owner confirms those barriers; withholding the sender would
-            // dispatch a physical request that no owner could account for.
-            // 每次真实远端尝试都会发布强制准备与可靠性屏障，且每种归属各自声明确认权威。独立的
-            // RuntimeOnly 运行没有 V1 账本，因此由其独立所有者确认这些屏障；若不提供发送端，
-            // 就会派发一次没有任何所有者能记账的真实请求。
-            let durable_events = Some(&remote_sender);
-            let remote_execution = try_remote_responses_compaction(
-                runtime.as_ref(),
-                &request.foundation,
-                &request.provider_configuration,
-                request.luaskills_runtime.clone(),
-                request.session_id,
-                &request.session_title,
-                &request.workspace_path,
-                request.execution_agent_id.as_deref(),
-                &request.launch_context,
-                &request.plan,
-                &request.full_context_state,
-                model_target,
-                request.reasoning_effort,
-                durable_events,
-                request.ownership,
-            );
-            tokio::pin!(remote_execution);
-            let remote_result = loop {
-                tokio::select! {
-                    biased;
-                    Some(event) = remote_receiver.recv() => yield event,
-                    result = &mut remote_execution => break result,
-                }
-            };
-            match remote_result {
-                Ok(Some(execution)) => {
-                    yield prompt_compaction_progress("remote_compaction_complete");
-                    yield PromptCompactionStreamEvent::Finished(Ok(execution));
-                    return;
-                }
-                Ok(None) => {
-                    yield prompt_compaction_progress("remote_compaction_local_fallback");
-                }
-                Err(error) => {
-                    yield PromptCompactionStreamEvent::Finished(Err(error));
-                    return;
-                }
-            }
-        }
         let mut prune_mode = match initial_compaction_prune_mode(
             &request.full_context_state,
             request.input_budget,

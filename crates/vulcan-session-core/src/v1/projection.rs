@@ -78,16 +78,6 @@ pub enum ProjectedSystemRole {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ProjectedItem {
-    /// Published opaque context checkpoint, independent of assistant semantic events.
-    /// 已发布的不透明上下文检查点，独立于助手语义事件。
-    RemoteCompactionCheckpoint {
-        /// Durable node identity, never inferred from an event's display text.
-        /// 可靠节点身份，绝不从事件展示文本推断。
-        compaction_id: crate::v1::ids::CompactionId,
-        /// Exact route-bound provider output owned by this context generation.
-        /// 本上下文代次持有的精确且绑定路由的供应商输出。
-        checkpoint: Box<crate::v1::context::RemoteResponsesCheckpoint>,
-    },
     /// Reserved system-layer item for non-dynamic projections.
     /// 为非动态投影保留的系统层项目。
     SystemText {
@@ -1208,7 +1198,6 @@ mod tests_projection {
                 ProjectedItem::ToolResult { .. } => "tool_result",
                 ProjectedItem::SystemText { .. } => "system",
                 ProjectedItem::SubagentReturnText { .. } => "subagent",
-                ProjectedItem::RemoteCompactionCheckpoint { .. } => "remote_compaction",
             })
             .collect()
     }

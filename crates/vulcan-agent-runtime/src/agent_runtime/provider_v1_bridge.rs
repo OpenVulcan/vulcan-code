@@ -850,30 +850,6 @@ impl ProviderV1RequestTemplate {
 }
 
 impl ProviderV1ApiTerminalFacts {
-    /// Builds a native success from already validated compaction `request_facts`, `usage`, `timing`, and completion time.
-    /// 根据已验证的压缩`request_facts`、`usage`、`timing`及完成时间构建原生成功。
-    /// Returns a tool-free terminal without a conversational replay source; the telemetry owner validates purpose before consumption.
-    /// 返回无工具且不带对话重放来源的终态；遥测所有者在消费前验证用途。
-    pub(crate) fn native_compaction_succeeded(
-        request_facts: ProviderV1RequestFacts,
-        usage: &CoreProviderUsageSnapshot,
-        timing: ApiTimings,
-        completed_at_ms: i64,
-    ) -> Self {
-        Self {
-            request_facts,
-            usage: usage_snapshot(usage),
-            status: ApiCallStatus::Completed,
-            end_reason: Some(ApiEndReason::CompletedSuccessfully),
-            error: None,
-            continuation_eligibility: ContinuationEligibility::Forbidden,
-            timing,
-            provider_source: None,
-            tool_call_count: 0,
-            completed_at_ms,
-        }
-    }
-
     /// Builds one successful terminal fact from typed request, usage, and timing data.
     /// 从强类型请求、用量与时间数据构建一个成功终态事实。
     ///

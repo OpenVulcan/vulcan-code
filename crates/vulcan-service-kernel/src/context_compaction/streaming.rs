@@ -110,35 +110,6 @@ pub(crate) async fn stream_webui_context_compaction_execution(
     let mut stream = Box::pin(stream_prompt_compaction_job(request));
     while let Some(event) = stream.next().await {
         match event {
-            PromptCompactionStreamEvent::RemoteCompleted {
-                event,
-                checkpoint,
-                completion,
-            } => {
-                if let Err(error) = apply_remote_compaction_completion(
-                    app,
-                    state,
-                    &raw_assistant_output,
-                    &mut provider_v1_sink,
-                    &mut provider_telemetry_guard,
-                    event,
-                    checkpoint,
-                    completion,
-                )
-                .await
-                {
-                    projection_error = Some(error);
-                    break;
-                }
-            }
-            PromptCompactionStreamEvent::PreparedRemoteSource { source } => {
-                if let Err(error) = provider_v1_sink.select_remote_compaction_source(&source) {
-                    projection_error = Some(error);
-                    break;
-                }
-                clear_context_compaction_preview(app, state, session_id, &mut preview_api_call_id);
-                raw_assistant_output.clear();
-            }
             PromptCompactionStreamEvent::PreparedSource { source, mode } => {
                 if let Err(error) = provider_v1_sink.select_compaction_source(&source, mode) {
                     projection_error = Some(error);
@@ -293,51 +264,6 @@ fn clear_context_compaction_preview(
     if let Err(error) = emit_context_compaction_preview(app, state, session_id, api_call_id, None) {
         tracing::warn!("[webui-service] context compaction preview clear failed: {error}");
     }
-}
-
-/// Persists native `checkpoint` and `event` through the owning sink, then acknowledges `completion`.
-/// 通过归属接收器持久化原生`checkpoint`及`event`，然后确认`completion`。
-/// `raw_assistant_output` must be empty; app/state forward usage while the telemetry guard owns cancellation.
-/// `raw_assistant_output`必须为空；app/state 转发用量，遥测守卫持有取消责任。
-/// Returns explicit kind, ownership, or durability errors to both caller and waiting producer.
-/// 向调用方和等待中的生产者同时返回明确的种类、归属或持久化错误。
-// Compaction keeps durable identity, UI presentation and borrowed execution owners separate.
-// 压缩流程分别保留持久化身份、界面展示及借用的执行所有者。
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Compaction keeps durable identity, UI presentation and borrowed execution owners separate."
-)]
-pub(crate) async fn apply_remote_compaction_completion(
-    app: &ServiceEventEmitter,
-    state: &SharedServiceBridgeState,
-    raw_assistant_output: &str,
-    sink: &mut ProviderV1StreamSink,
-    telemetry: &mut ProviderTelemetryHookGuard,
-    event: vulcan_agent_runtime::agent_runtime::provider_request_telemetry::ProviderRequestTelemetryEvent,
-    checkpoint: vulcan_session_core::v1::context::RemoteResponsesCheckpoint,
-    completion: vulcan_agent_runtime::agent_runtime::events::ProviderRequestDurabilityCompletion,
-) -> Result<(), String> {
-    // A completed observation releases telemetry cancellation only after its kind has been checked.
-    // 只有核对种类后，完成观测才能释放遥测取消责任。
-    let result = async {
-        if event.kind != ProviderRequestTelemetryEventKind::Completed || !raw_assistant_output.is_empty() {
-            return Err(String::from("Remote compaction terminal cannot contain assistant text or nonterminal telemetry."));
-        }
-        let Some(ProviderV1LifecycleFacts::ApiTerminal(facts)) = event.v1_lifecycle.clone() else {
-            return Err(String::from("Remote compaction terminal is missing typed physical API facts."));
-        };
-        telemetry.observe_durable_boundary(&event);
-        sink.record_telemetry_terminal(&event, app, state).map_err(|error| error.to_string())?;
-        match sink.accept_remote_compaction_terminal(facts, checkpoint).await.map_err(|error| error.to_string())? {
-            ProviderV1TerminalOutcome::Completed => Ok(()),
-            ProviderV1TerminalOutcome::AwaitingTools => Err(String::from("Remote compaction cannot wait for assistant tools.")),
-        }
-    }.await;
-    if result.is_ok() {
-        telemetry.forward(event);
-    }
-    let _ = completion.complete(result.clone());
-    result
 }
 
 /// Spawns the selected-session context-compaction stream and mirrors it into WebUI state.

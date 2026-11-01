@@ -561,11 +561,8 @@ pub(crate) fn webui_context_compaction_plan_from_v1(
             )
         })?;
     let full_context_state =
-        crate::agent_stream::provider_v1_sink::compaction_state_from_projection(
-            &snapshot,
-            &full_session_messages,
-        )
-        .map_err(|error| format!("failed to build V1 compaction conversation state: {error}"))?;
+        vulcan_context::conversation_state_from_session_messages(&full_session_messages)
+            .map_err(|error| format!("failed to build V1 compaction conversation state: {error}"))?;
     // Capture the existing catalog owner without retaining the service mutex during resource preparation.
     // 捕获既有目录所有者，不在资源准备期间持有服务互斥锁。
     let resource_registry = Arc::clone(
@@ -601,21 +598,6 @@ pub(crate) fn compaction_message_from_v1_projection(
 ) -> Option<Result<(SessionMessageEntry, Seq), String>> {
     let created_at = String::new();
     match &projected.item {
-        ProjectedItem::RemoteCompactionCheckpoint { compaction_id, checkpoint } => Some(
-            checkpoint.validate().map_err(|error| error.to_string()).map(|()| (
-                SessionMessageEntry {
-                    id: crate::agent_stream::provider_v1_sink::remote_compaction_planning_message_id(*compaction_id),
-                    kind: SessionMessageKind::Assistant,
-                    record_kind: SessionMessageRecordKind::CompactionSummary,
-                    visible: false,
-                    title: String::from("REMOTE CHECKPOINT"),
-                    body: String::new(),
-                    metadata: None,
-                    created_at,
-                },
-                projected.source_from_seq,
-            )),
-        ),
         ProjectedItem::SystemText { .. } => None,
         ProjectedItem::UserInput { text, resource_ids } => {
             let mut body = text.clone();
@@ -1459,7 +1441,6 @@ mod tests {
                         catalog_revision: String::from("catalog-test"),
                         route_revision: String::from("route-test"),
                     },
-                remote_compaction_enabled: false,
                 context_limit: None,
                 context_compaction_policy: vulcan_context::ContextCompactionPolicy::default(),
             };

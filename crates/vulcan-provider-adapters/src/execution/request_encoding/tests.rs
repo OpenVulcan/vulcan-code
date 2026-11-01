@@ -853,14 +853,14 @@ fn frozen_prefix_hash(body: &Value) -> String {
     ))
 }
 
-/// Verifies a continuation after remote compaction keeps the opaque item and its reasoning.
-/// 验证远端压缩后的续跑保留不透明压缩项与其推理。
+/// Verifies a continuation after a provider-emitted compaction item keeps the item and its reasoning.
+/// 验证供应商输出的压缩项之后的续跑保留该不透明项与其推理。
 ///
 /// # Remarks
 /// 说明
-/// Remote compaction replaces earlier turns with one provider-owned opaque item. Losing it, or
+/// A provider-owned opaque compaction item stands in for earlier turns. Losing it, or
 /// re-encoding it, would silently discard the compacted history the model still needs.
-/// 远端压缩用一项供应商持有的不透明项替代更早的回合。
+/// 供应商持有的不透明压缩项代替更早的回合。
 /// 丢失它或重新编码它，都会静默丢弃模型仍然需要的已压缩历史。
 #[test]
 fn responses_continuation_after_compaction_keeps_the_opaque_item_and_reasoning() {

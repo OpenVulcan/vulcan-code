@@ -845,23 +845,6 @@ impl AccountUsageQueryKind {
     }
 }
 
-/// Selects whether one Responses route may use the standalone remote compact endpoint.
-/// 选择一条 Responses 路由是否可以使用独立远端压缩端点。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum ResponsesRemoteCompactionPolicy {
-    /// Keeps local prompt-based compaction as the only compaction path.
-    /// 仅使用本地提示词压缩路径。
-    #[default]
-    Disabled,
-    /// Uses remote compaction and falls back to local compaction when safe.
-    /// 使用远端压缩，并在安全时回退到本地压缩。
-    EnabledWithLocalFallback,
-    /// Selects inline Responses compaction V2 driven by a streamed compaction trigger.
-    /// 选择由流式压缩触发项驱动的 Responses 内联压缩 V2。
-    InlineV2,
-}
-
 /// Selects the explicitly verified Responses WebSocket capability for one route.
 /// 选择一条路由显式验证的 Responses WebSocket 能力。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -898,10 +881,6 @@ pub enum ResponsesRecoveryPolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct ResponsesRouteFeatures {
-    /// Standalone remote compaction selection.
-    /// 独立远端压缩选择。
-    #[serde(default)]
-    pub remote_compaction: ResponsesRemoteCompactionPolicy,
     /// Responses WebSocket capability for this exact route.
     /// 当前精确路由的 Responses WebSocket 能力。
     #[serde(default)]
@@ -1036,19 +1015,6 @@ impl ProtocolRoute {
                 features.websocket,
                 ResponsesWebsocketPolicy::Verified | ResponsesWebsocketPolicy::UnverifiedOverride
             )
-        })
-    }
-
-    /// Reports whether this exact route explicitly enables standalone remote Responses compaction V1.
-    /// 报告当前精确路由是否显式启用独立远端 Responses 压缩 V1。
-    ///
-    /// # Returns
-    /// 返回值
-    /// `true` only for the standalone V1 policy with safe local fallback.
-    /// 仅在显式选择带安全本地回退的独立 V1 策略时返回 `true`。
-    pub fn remote_compaction_enabled(&self) -> bool {
-        self.responses_features.as_ref().is_some_and(|features| {
-            features.remote_compaction == ResponsesRemoteCompactionPolicy::EnabledWithLocalFallback
         })
     }
 

@@ -141,35 +141,6 @@ fn minimal_manifest_validates() {
     assert_eq!(result, Ok(()), "minimal manifest must validate: {result:?}");
 }
 
-/// Verifies inline Responses compaction V2 cannot be declared before its streamed trigger executor exists.
-/// 验证流式触发执行器存在之前不能声明 Responses 内联压缩 V2。
-#[test]
-fn inline_responses_compaction_v2_fails_closed_without_runtime_primitive() {
-    let mut manifest = minimal_manifest();
-    let profile_id = String::from(vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID);
-    manifest.engine_contract.required_protocol_profiles = vec![profile_id.clone()];
-    manifest.model_defaults.supported_protocols = vec![profile_id.clone()];
-    manifest.model_defaults.selected_protocol = Some(profile_id.clone());
-    let route = manifest.services[0]
-        .protocol_routes
-        .first_mut()
-        .expect("minimal manifest should contain one route");
-    route.protocol_profile_id = profile_id;
-    route.responses_features = Some(crate::ResponsesRouteFeatures {
-        remote_compaction: crate::ResponsesRemoteCompactionPolicy::InlineV2,
-        websocket: Default::default(),
-        recovery: Default::default(),
-    });
-
-    let errors = validate_manifest(&manifest, ManifestOwnership::System, &registry())
-        .expect_err("inline V2 must fail until its runtime primitive is registered");
-    assert!(
-        errors
-            .iter()
-            .any(|error| { error.code == "responses_inline_compaction_v2_runtime_unavailable" })
-    );
-}
-
 /// Verifies every used protocol must be declared by the manifest engine contract.
 /// 验证每个已使用协议都必须由 Manifest 引擎契约声明。
 #[test]

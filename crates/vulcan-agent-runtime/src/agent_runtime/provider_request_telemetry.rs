@@ -41,15 +41,12 @@ pub const HOOK_PROVIDER_REQUEST_COMPLETED: &str = "provider.request.completed";
 /// 传输层在自动重试前等待时触发的 Hook 点。
 pub const HOOK_PROVIDER_REQUEST_RETRYING: &str = "provider.request.retrying";
 
-/// Distinguishes conversational replay authority from native compaction success.
-/// 区分对话重放权威与原生压缩成功。
+/// Typed successful output carried into the V1 terminal projection.
+/// 带入 V1 终态投影的强类型成功输出。
 enum ProviderSuccessfulOutput {
     /// Ordinary completion owns a closed conversational replay source.
     /// 普通完成持有封闭的对话重放来源。
     Conversation(ProviderSourceInput),
-    /// Validated native compaction has no assistant semantic owner or continuation cursor.
-    /// 已验证原生压缩没有助手语义所有者或延续游标。
-    NativeCompaction,
 }
 
 /// Immutable run metadata captured from the unique execution preparation source.
@@ -1150,79 +1147,6 @@ impl ProviderRequestTelemetryTracker {
         ))
     }
 
-    /// Completes one admitted native compact HTTP attempt using optional official `usage`.
-    /// 使用可选官方`usage`完成一次已准入的原生 compact HTTP 尝试。
-    /// Returns one terminal event without assistant replay authority; invalid or unobserved attempts remain active and return an error.
-    /// 返回一条不含助手重放权威的终态事件；无效或未观测尝试保持活动并返回错误。
-    pub(crate) fn complete_native_compaction_success(
-        &mut self,
-        usage: Option<&ProviderUsageSnapshot>,
-    ) -> Result<ProviderRequestTelemetryEvent, String> {
-        // Check the active attempt before consuming it, preserving cancellation and failure ownership on rejection.
-        // 在消费前检查活动尝试，拒绝时保留取消和失败归属。
-        let active = self.active_request.as_ref().ok_or_else(|| {
-            String::from("Native compaction success has no admitted active request.")
-        })?;
-        let context = self.context.as_ref().ok_or_else(|| {
-            String::from("Native compaction success has no frozen telemetry context.")
-        })?;
-        // A native compaction has exactly two declared owners: the session V1 compaction purpose,
-        // or the standalone RuntimeOnly compaction whose V1 projection was explicitly excluded.
-        // 原生压缩仅有两种声明的所有者：会话 V1 压缩用途，或显式排除 V1 投影的独立 RuntimeOnly 压缩。
-        let declared_compaction = match active.v1_request_facts.as_ref() {
-            Some(facts) => {
-                facts.purpose == vulcan_session_core::v1::event::ApiPurposeKind::Compaction
-                    && facts.request.profile.as_deref()
-                        == Some(vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID)
-            }
-            None => {
-                context.v1_request_template.base_purpose.is_none()
-                    && context.owner_kind == "context_compaction"
-                    && context.operation == "compact"
-                    && context.v1_request_template.profile
-                        == vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID
-            }
-        };
-        if self.pending_request.is_some()
-            || !declared_compaction
-            || context.protocol_profile_id != vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID
-            || active.transport != Some(AiTransportKind::Http)
-            || active.dispatched_at_ms.is_none()
-            || active.headers_at_ms.is_none()
-            || !active
-                .http_status
-                .is_some_and(|status| (200..300).contains(&status))
-            || active.first_token_at_ms.is_some()
-        {
-            return Err(String::from(
-                "Native compaction success requires an observed successful Codex HTTP compaction attempt without assistant tokens.",
-            ));
-        }
-        // Opaque native output affects replay safety even though it never produces a visible assistant token.
-        // 不透明原生输出影响重放安全，即使它从不产生可见助手 Token。
-        self.observe_semantic_output();
-        let active = self
-            .active_request
-            .take()
-            .expect("native request was validated before consumption");
-        let context = self
-            .context
-            .as_ref()
-            .expect("native telemetry context was validated before consumption");
-        Ok(build_completed_event(
-            context,
-            active,
-            ProviderRequestTerminalStatus::Succeeded,
-            usage,
-            None,
-            None,
-            None,
-            Some(ProviderSuccessfulOutput::NativeCompaction),
-            0,
-            false,
-        ))
-    }
-
     /// Completes the active request as failed and emits the retry-wait event when applicable.
     /// 将活动请求标记为失败，并在适用时发出重试等待事件。
     ///
@@ -1598,10 +1522,6 @@ fn build_started_event(
                 .context_budget
                 .as_ref()
                 .map(|budget| budget.active_context_tokens),
-            budget_total_tokens: request
-                .context_budget
-                .as_ref()
-                .map(|budget| budget.estimated_total_tokens),
             budget_warning_code: request
                 .context_budget
                 .as_ref()
@@ -1749,14 +1669,6 @@ fn build_completed_event(
                             timing,
                             source,
                             tool_call_count,
-                            completed_at_ms,
-                        )
-                    }
-                    ProviderSuccessfulOutput::NativeCompaction => {
-                        ProviderV1ApiTerminalFacts::native_compaction_succeeded(
-                            request_facts,
-                            &normalized_usage,
-                            timing,
                             completed_at_ms,
                         )
                     }
@@ -2003,9 +1915,6 @@ struct StartedPayload<'a> {
     /// Input tokens used for admission.
     /// 准入使用的输入 Token。
     budget_input_tokens: Option<usize>,
-    /// Total tokens including response reserves.
-    /// 包含响应预留的总 Token。
-    budget_total_tokens: Option<usize>,
     /// Stable warning for non-exact accounting.
     /// 非精确记账的稳定警告。
     budget_warning_code: Option<&'a str>,
@@ -2349,174 +2258,6 @@ mod tests {
         tracker
             .confirm_prepared_request(snapshot, None)
             .expect("durable permit should promote the prepared identity")
-    }
-
-    /// Builds explicit native telemetry ownership while keeping the existing fixture's immutable identities.
-    /// 构建明确原生遥测归属，同时保留既有夹具的不可变身份。
-    /// Returns an idle Codex compaction tracker; no provider or credentials are contacted.
-    /// 返回空闲 Codex 压缩跟踪器；不访问供应商或凭据。
-    fn native_compaction_tracker() -> ProviderRequestTelemetryTracker {
-        // tracker reuses the common physical lifecycle fixture rather than fabricating a completed event.
-        // tracker 复用共用物理生命周期夹具，不伪造已完成事件。
-        let mut tracker = test_tracker();
-        // context explicitly declares native purpose and protocol before preparation starts.
-        // context 在准备开始前明确声明原生用途与协议。
-        let context = tracker.context.as_mut().unwrap();
-        context.protocol_profile_id = vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID.into();
-        context.owner_kind = "context_compaction";
-        context.operation = "compact";
-        context.v1_request_template.base_purpose =
-            Some(vulcan_session_core::v1::event::ApiPurposeKind::Compaction);
-        context.v1_request_template.profile =
-            vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID.into();
-        tracker
-    }
-
-    /// Native success preserves each failed/retried physical identity without manufacturing assistant replay metadata.
-    /// 原生成功保留每次失败及重试的物理身份，不伪造助手重放元数据。
-    #[test]
-    fn native_compaction_success_keeps_distinct_attempts_and_native_terminal() {
-        // tracker owns two explicitly prepared attempts; no automatic replay occurs inside it.
-        // tracker 持有两次明确准备的尝试，内部不进行自动重放。
-        let mut tracker = native_compaction_tracker();
-        let snapshot = test_request_snapshot();
-        let first_prepared = tracker.prepare_request(&snapshot, None).unwrap();
-        assert!(tracker.complete_native_compaction_success(None).is_err());
-        let first_started = tracker.confirm_prepared_request(&snapshot, None).unwrap();
-        let first_id = first_started.provider_call_id().unwrap().to_owned();
-        assert_eq!(first_prepared.provider_call_id().unwrap(), first_id);
-        let first_time = tracker.active_request.as_ref().unwrap().started_at_ms;
-        tracker
-            .observe_transport(
-                AiTransportKind::Http,
-                first_time,
-                Some(first_time),
-                Some(401),
-                Some("first-401".into()),
-                Default::default(),
-            )
-            .unwrap();
-        // Explicit failure settlement precedes creation of the retry identity.
-        // 明确失败结算先于重试身份创建。
-        let failed = tracker.complete_failure(true, 1, 1, 0, "authentication", None, None);
-        assert_eq!(failed[0].provider_call_id().unwrap(), first_id);
-        assert_eq!(failed[0].payload["http_status"], 401);
-        assert_eq!(failed[0].payload["status"], "failed");
-        let second_prepared = tracker.prepare_request(&snapshot, None).unwrap();
-        let second_started = tracker.confirm_prepared_request(&snapshot, None).unwrap();
-        let second_id = second_started.provider_call_id().unwrap().to_owned();
-        assert_eq!(second_prepared.provider_call_id().unwrap(), second_id);
-        assert_ne!(second_id, first_id);
-        let second_time = tracker.active_request.as_ref().unwrap().started_at_ms;
-        tracker
-            .observe_transport(
-                AiTransportKind::Http,
-                second_time,
-                Some(second_time),
-                Some(200),
-                Some("second-200".into()),
-                Default::default(),
-            )
-            .unwrap();
-        // usage is the final native HTTP response's official accounting, independent of the failed attempt.
-        // usage 是最终原生 HTTP 响应的官方记账，独立于失败尝试。
-        let usage = ProviderUsageSnapshot {
-            input_tokens: Some(10),
-            output_tokens: Some(2),
-            total_tokens: Some(12),
-            ..Default::default()
-        };
-        let completed = tracker
-            .complete_native_compaction_success(Some(&usage))
-            .unwrap();
-        assert_eq!(completed.provider_call_id().unwrap(), second_id);
-        assert_eq!(completed.payload["http_status"], 200);
-        assert_eq!(completed.payload["semantic_output_observed"], true);
-        assert!(completed.payload["first_token_at_ms"].is_null());
-        assert_eq!(
-            completed.completed_usage.as_ref().unwrap().input_tokens,
-            Some(10)
-        );
-        let Some(ProviderV1LifecycleFacts::ApiTerminal(terminal)) = completed.v1_lifecycle else {
-            panic!("native success must carry a typed terminal")
-        };
-        assert_eq!(
-            terminal.request_facts.purpose,
-            vulcan_session_core::v1::event::ApiPurposeKind::Compaction
-        );
-        assert_eq!(
-            terminal.status,
-            vulcan_session_core::v1::event::ApiCallStatus::Completed
-        );
-        assert!(terminal.provider_source.is_none());
-        assert_eq!(terminal.tool_call_count, 0);
-        assert_eq!(terminal.usage.input_tokens, Some(10));
-        assert_eq!(
-            terminal.continuation_eligibility,
-            vulcan_session_core::v1::event::ContinuationEligibility::Forbidden
-        );
-        assert!(tracker.complete_native_compaction_success(None).is_err());
-        assert!(tracker.active_request.is_none());
-    }
-
-    /// Invalid purpose, protocol, transport, status or visible tokens cannot consume a native success receipt.
-    /// 无效用途、协议、传输、状态或可见 Token 无法消费原生成功回执。
-    #[test]
-    fn native_compaction_rejection_preserves_active_failure_ownership() {
-        for invalid in 0..6 {
-            // Each case owns a separate admitted identity so rejection cannot be masked by earlier completion.
-            // 每个用例持有独立准入身份，防止先前完成掩盖拒绝行为。
-            let mut tracker = native_compaction_tracker();
-            if invalid == 0 {
-                tracker
-                    .context
-                    .as_mut()
-                    .unwrap()
-                    .v1_request_template
-                    .base_purpose =
-                    Some(vulcan_session_core::v1::event::ApiPurposeKind::MainGeneration);
-            }
-            if invalid == 1 {
-                tracker
-                    .context
-                    .as_mut()
-                    .unwrap()
-                    .v1_request_template
-                    .profile = vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID.into();
-            }
-            let snapshot = test_request_snapshot();
-            tracker.prepare_request(&snapshot, None).unwrap();
-            let started = tracker.confirm_prepared_request(&snapshot, None).unwrap();
-            let request_id = started.provider_call_id().unwrap().to_owned();
-            let timestamp = tracker.active_request.as_ref().unwrap().started_at_ms;
-            if invalid != 2 {
-                tracker
-                    .observe_transport(
-                        AiTransportKind::Http,
-                        timestamp,
-                        Some(timestamp),
-                        Some(if invalid == 3 { 401 } else { 200 }),
-                        None,
-                        Default::default(),
-                    )
-                    .unwrap();
-            }
-            if invalid == 4 {
-                tracker.observe_first_token().unwrap();
-            }
-            if invalid == 5 {
-                tracker.context.as_mut().unwrap().protocol_profile_id =
-                    vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID.into();
-            }
-            assert!(tracker.complete_native_compaction_success(None).is_err());
-            assert_eq!(
-                tracker.active_request.as_ref().unwrap().request_id,
-                request_id
-            );
-            let failed = tracker.complete_failure(false, 0, 0, 0, "validation", None, None);
-            assert_eq!(failed[0].provider_call_id().unwrap(), request_id);
-            assert!(tracker.active_request.is_none());
-        }
     }
 
     /// Verifies one started request emits at most one first-token and one terminal event.
