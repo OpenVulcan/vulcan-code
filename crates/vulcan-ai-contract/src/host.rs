@@ -83,6 +83,9 @@ pub struct HostAiCallContext {
     /// Optional VMM-Core command identifier that owns the effect.
     /// 持有该 effect 的可选 VMM-Core command 标识。
     pub command_id: Option<String>,
+    /// Optional host-proven conversation session that owns this AI call.
+    /// 由宿主证明、持有本次 AI 调用的可选会话标识。
+    pub owner_session_id: Option<String>,
     /// Optional operation-level Unix deadline in milliseconds.
     /// 可选的操作级 Unix 毫秒截止时间。
     pub deadline_unix_ms: Option<u64>,
@@ -106,6 +109,7 @@ impl fmt::Debug for HostAiCallContext {
             .field("operation_id", &self.operation_id)
             .field("effect_id", &self.effect_id)
             .field("command_id", &self.command_id)
+            .field("owner_session_id", &self.owner_session_id)
             .field("deadline_unix_ms", &self.deadline_unix_ms)
             .field("attempt", &self.attempt)
             .field("retry_reason", &self.retry_reason)
@@ -132,6 +136,7 @@ impl HostAiCallContext {
             operation_id: operation_id.into(),
             effect_id: None,
             command_id: None,
+            owner_session_id: None,
             deadline_unix_ms: None,
             attempt: 1,
             retry_reason: None,
@@ -215,6 +220,23 @@ impl HostAiCallContext {
         self
     }
 
+    /// Binds this operation to the conversation session that owns it.
+    /// 将本次操作绑定到持有它的会话。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `owner_session_id` is the host-proven session identity, or `None` when the work has no session.
+    /// `owner_session_id` 是宿主证明的会话标识；工作不属于任何会话时为 `None`。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The same context with the owning session.
+    /// 返回带有所属会话的同一上下文。
+    pub fn with_owner_session(mut self, owner_session_id: Option<String>) -> Self {
+        self.owner_session_id = owner_session_id;
+        self
+    }
+
     /// Computes the effective deadline without allowing a request to exceed the caller budget.
     /// 计算有效截止时间，确保请求不能超过调用方预算。
     ///
@@ -273,6 +295,7 @@ impl HostAiCallContext {
         for (field, value) in [
             ("effect_id", self.effect_id.as_deref()),
             ("command_id", self.command_id.as_deref()),
+            ("owner_session_id", self.owner_session_id.as_deref()),
         ] {
             if value.is_some_and(|value| value.trim().is_empty()) {
                 return Err(HostAiError::new(

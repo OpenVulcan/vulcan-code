@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "opencode-go",
-  "revision": 9,
-  "published_at": "2026-10-20T16:35:59Z",
+  "revision": 10,
+  "published_at": "2026-10-31T16:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -81,14 +81,6 @@
             "display_name": "Claude Haiku 5.5"
           },
           {
-            "model_id": "deepseek-v4-flash",
-            "display_name": "DeepSeek V4 Flash"
-          },
-          {
-            "model_id": "deepseek-v4-flash-vision-exp",
-            "display_name": "DeepSeek V4 Flash Vision Exp"
-          },
-          {
             "model_id": "deepseek-v4-pro",
             "display_name": "DeepSeek V4 Pro (New)"
           },
@@ -117,10 +109,6 @@
             "display_name": "GPT-6 Luna"
           },
           {
-            "model_id": "grok-4.6",
-            "display_name": "Grok 4.6"
-          },
-          {
             "model_id": "grok-4.7",
             "display_name": "Grok 4.7"
           },
@@ -141,20 +129,12 @@
             "display_name": "Kimi K3"
           },
           {
+            "model_id": "kimi-k3.1-pro",
+            "display_name": "Kimi K3.1 Pro"
+          },
+          {
             "model_id": "longcat-2.0",
             "display_name": "LongCat-2.0"
-          },
-          {
-            "model_id": "longcat-2.5-preview-free",
-            "display_name": "LongCat 2.5 Preview Free"
-          },
-          {
-            "model_id": "mimo-v2.5",
-            "display_name": "MiMo V2.5"
-          },
-          {
-            "model_id": "mimo-v2.5-pro",
-            "display_name": "MiMo V2.5 Pro"
           },
           {
             "model_id": "mimo-v2.6-flash",
@@ -165,12 +145,12 @@
             "display_name": "MiMo-V2.6-Pro"
           },
           {
-            "model_id": "minimax-m2.7",
-            "display_name": "MiniMax-M2.7"
-          },
-          {
             "model_id": "minimax-m3",
             "display_name": "MiniMax-M3"
+          },
+          {
+            "model_id": "minimax-m3.1-flash",
+            "display_name": "MiniMax M3.1 Flash"
           },
           {
             "model_id": "muse-spark-1.2-contributor",
@@ -193,12 +173,8 @@
             "display_name": "Qwen3.8 Max"
           },
           {
-            "model_id": "space-bunny",
-            "display_name": "Space Bunny"
-          },
-          {
-            "model_id": "step-5-preview-free",
-            "display_name": "Step 5 Preview Free"
+            "model_id": "step-5-preview",
+            "display_name": "Step 5 Preview"
           }
         ]
       },
@@ -299,30 +275,25 @@
             "anthropic-messages-video.v1"
           ],
           "model_ids": [
-            "deepseek-v4-flash",
-            "deepseek-v4-flash-vision-exp",
             "deepseek-v4-pro",
             "deepseek-v4.1-flash",
             "glm-5.2",
             "glm-5.3",
             "glm-5.3-flash",
-            "grok-4.6",
             "grok-4.7",
             "hy3",
             "hy4-preview",
             "longcat-2.0",
-            "longcat-2.5-preview-free",
-            "mimo-v2.5",
-            "mimo-v2.5-pro",
             "mimo-v2.6-flash",
             "mimo-v2.6-pro",
-            "minimax-m2.7",
             "minimax-m3",
+            "minimax-m3.1-flash",
             "muse-spark-1.2-contributor",
             "muse-spark-1.3-contributor",
             "qwen3.7-plus",
             "qwen3.8-flash",
-            "qwen3.8-max"
+            "qwen3.8-max",
+            "step-5-preview"
           ],
           "dependent_required": [],
           "conflicts": [],
@@ -377,70 +348,6 @@
       ]
     },
     {
-      "rule_id": "deepseek-v4-flash",
-      "display_name": "DeepSeek V4 Flash",
-      "scope": {
-        "service_entry_ids": [
-          "go-api"
-        ],
-        "credential_profile_ids": []
-      },
-      "matcher": {
-        "kind": "exact",
-        "value": "deepseek-v4-flash"
-      },
-      "supported_protocols": [
-        "openai-chat-completions.v1"
-      ],
-      "selected_protocol": "openai-chat-completions.v1",
-      "capabilities": {
-        "input_resources": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "high",
-          "max"
-        ],
-        "context_limit": 1000000,
-        "output_limit": 384000,
-        "evidence_revision": "opencode.v2.4617210822.2026-10-17"
-      },
-      "request_profile_refs": []
-    },
-    {
-      "rule_id": "deepseek-v4-flash-vision-exp",
-      "display_name": "DeepSeek V4 Flash Vision Exp",
-      "scope": {
-        "service_entry_ids": [
-          "go-api"
-        ],
-        "credential_profile_ids": []
-      },
-      "matcher": {
-        "kind": "exact",
-        "value": "deepseek-v4-flash-vision-exp"
-      },
-      "supported_protocols": [
-        "openai-chat-completions.v1"
-      ],
-      "selected_protocol": "openai-chat-completions.v1",
-      "capabilities": {
-        "input_resources": [
-          "image"
-        ],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "high",
-          "max"
-        ],
-        "context_limit": 1000000,
-        "output_limit": 384000,
-        "evidence_revision": "opencode.v2.4617210822.2026-10-17"
-      },
-      "request_profile_refs": []
-    },
-    {
       "rule_id": "deepseek-v4-pro",
       "display_name": "DeepSeek V4 Pro (New)",
       "scope": {
@@ -468,7 +375,13 @@
         "output_limit": 384000,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
-      "request_profile_refs": []
+      "request_profile_refs": [],
+      "protocol_capabilities": {
+        "openai-chat-completions.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "opencode-go.live-catalog.2026-10-31"
+        }
+      }
     },
     {
       "rule_id": "deepseek-v4-1-flash",
@@ -501,7 +414,13 @@
         "output_limit": 384000,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
-      "request_profile_refs": []
+      "request_profile_refs": [],
+      "protocol_capabilities": {
+        "openai-chat-completions.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "opencode-go.live-catalog.2026-10-31"
+        }
+      }
     },
     {
       "rule_id": "glm-5-2",
@@ -531,7 +450,13 @@
         "output_limit": 131072,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
-      "request_profile_refs": []
+      "request_profile_refs": [],
+      "protocol_capabilities": {
+        "openai-chat-completions.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "opencode-go.live-catalog.2026-10-31"
+        }
+      }
     },
     {
       "rule_id": "glm-5-3",
@@ -562,7 +487,13 @@
         "output_limit": 131072,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
-      "request_profile_refs": []
+      "request_profile_refs": [],
+      "protocol_capabilities": {
+        "openai-chat-completions.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "opencode-go.live-catalog.2026-10-31"
+        }
+      }
     },
     {
       "rule_id": "glm-5-3-flash",
@@ -597,7 +528,13 @@
         "output_limit": 131072,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
-      "request_profile_refs": []
+      "request_profile_refs": [],
+      "protocol_capabilities": {
+        "openai-chat-completions.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "opencode-go.live-catalog.2026-10-31"
+        }
+      }
     },
     {
       "rule_id": "gpt-5-6-luna",
@@ -634,7 +571,13 @@
         "output_limit": 128000,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
-      "request_profile_refs": []
+      "request_profile_refs": [],
+      "protocol_capabilities": {
+        "openai-responses.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "opencode-go.live-catalog.2026-10-31"
+        }
+      }
     },
     {
       "rule_id": "gpt-6-luna",
@@ -671,41 +614,13 @@
         "output_limit": 128000,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
-      "request_profile_refs": []
-    },
-    {
-      "rule_id": "grok-4-6",
-      "display_name": "Grok 4.6",
-      "scope": {
-        "service_entry_ids": [
-          "go-api"
-        ],
-        "credential_profile_ids": []
-      },
-      "matcher": {
-        "kind": "exact",
-        "value": "grok-4.6"
-      },
-      "supported_protocols": [
-        "openai-responses.v1"
-      ],
-      "selected_protocol": "openai-responses.v1",
-      "capabilities": {
-        "input_resources": [
-          "image"
-        ],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh"
-        ],
-        "context_limit": 500000,
-        "output_limit": 500000,
-        "evidence_revision": "opencode.v2.4617210822.2026-10-17"
-      },
-      "request_profile_refs": []
+      "request_profile_refs": [],
+      "protocol_capabilities": {
+        "openai-responses.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "opencode-go.live-catalog.2026-10-31"
+        }
+      }
     },
     {
       "rule_id": "grok-4-7",
@@ -740,7 +655,13 @@
         "output_limit": 500000,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
-      "request_profile_refs": []
+      "request_profile_refs": [],
+      "protocol_capabilities": {
+        "openai-responses.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "opencode-go.live-catalog.2026-10-31"
+        }
+      }
     },
     {
       "rule_id": "hy3",
@@ -831,7 +752,13 @@
         "output_limit": 262144,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
-      "request_profile_refs": []
+      "request_profile_refs": [],
+      "protocol_capabilities": {
+        "openai-chat-completions.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "opencode-go.live-catalog.2026-10-31"
+        }
+      }
     },
     {
       "rule_id": "kimi-k3",
@@ -863,7 +790,53 @@
         "output_limit": 131072,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
-      "request_profile_refs": []
+      "request_profile_refs": [],
+      "protocol_capabilities": {
+        "openai-chat-completions.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "opencode-go.live-catalog.2026-10-31"
+        }
+      }
+    },
+    {
+      "rule_id": "kimi-k3-1-pro",
+      "display_name": "Kimi K3.1 Pro",
+      "scope": {
+        "service_entry_ids": [
+          "go-api"
+        ],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "kimi-k3.1-pro"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "input_resources": [
+          "image",
+          "video"
+        ],
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "low",
+          "high",
+          "max"
+        ],
+        "context_limit": 1048576,
+        "output_limit": 131072,
+        "evidence_revision": "opencode-go.live-catalog.2026-10-31"
+      },
+      "request_profile_refs": [],
+      "protocol_capabilities": {
+        "openai-chat-completions.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "opencode-go.live-catalog.2026-10-31"
+        }
+      }
     },
     {
       "rule_id": "longcat-2-0",
@@ -888,93 +861,6 @@
         "reasoning_efforts": [],
         "context_limit": 1000000,
         "output_limit": 131072,
-        "evidence_revision": "opencode.v2.4617210822.2026-10-17"
-      },
-      "request_profile_refs": []
-    },
-    {
-      "rule_id": "longcat-2-5-preview-free",
-      "display_name": "LongCat 2.5 Preview Free",
-      "scope": {
-        "service_entry_ids": [
-          "go-api"
-        ],
-        "credential_profile_ids": []
-      },
-      "matcher": {
-        "kind": "exact",
-        "value": "longcat-2.5-preview-free"
-      },
-      "supported_protocols": [
-        "openai-chat-completions.v1"
-      ],
-      "selected_protocol": "openai-chat-completions.v1",
-      "capabilities": {
-        "input_resources": [
-          "image"
-        ],
-        "reasoning_control": "fixed_on",
-        "reasoning_efforts": [],
-        "context_limit": 1000000,
-        "output_limit": 131072,
-        "evidence_revision": "opencode.v2.4617210822.2026-10-17"
-      },
-      "request_profile_refs": []
-    },
-    {
-      "rule_id": "mimo-v2-5",
-      "display_name": "MiMo V2.5",
-      "scope": {
-        "service_entry_ids": [
-          "go-api"
-        ],
-        "credential_profile_ids": []
-      },
-      "matcher": {
-        "kind": "exact",
-        "value": "mimo-v2.5"
-      },
-      "supported_protocols": [
-        "openai-chat-completions.v1"
-      ],
-      "selected_protocol": "openai-chat-completions.v1",
-      "capabilities": {
-        "input_resources": [
-          "image",
-          "audio",
-          "video"
-        ],
-        "reasoning_control": "fixed_on",
-        "reasoning_efforts": [],
-        "context_limit": 1000000,
-        "output_limit": 128000,
-        "evidence_revision": "opencode.v2.4617210822.2026-10-17"
-      },
-      "request_profile_refs": []
-    },
-    {
-      "rule_id": "mimo-v2-5-pro",
-      "display_name": "MiMo V2.5 Pro",
-      "scope": {
-        "service_entry_ids": [
-          "go-api"
-        ],
-        "credential_profile_ids": []
-      },
-      "matcher": {
-        "kind": "exact",
-        "value": "mimo-v2.5-pro"
-      },
-      "supported_protocols": [
-        "openai-chat-completions.v1"
-      ],
-      "selected_protocol": "openai-chat-completions.v1",
-      "capabilities": {
-        "input_resources": [],
-        "reasoning_control": "fixed_on",
-        "reasoning_efforts": [],
-        "context_limit": 1048576,
-        "output_limit": 128000,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
       "request_profile_refs": []
@@ -1042,33 +928,6 @@
       "request_profile_refs": []
     },
     {
-      "rule_id": "minimax-m2-7",
-      "display_name": "MiniMax-M2.7",
-      "scope": {
-        "service_entry_ids": [
-          "go-api"
-        ],
-        "credential_profile_ids": []
-      },
-      "matcher": {
-        "kind": "exact",
-        "value": "minimax-m2.7"
-      },
-      "supported_protocols": [
-        "anthropic-messages.v1"
-      ],
-      "selected_protocol": "anthropic-messages.v1",
-      "capabilities": {
-        "input_resources": [],
-        "reasoning_control": "fixed_on",
-        "reasoning_efforts": [],
-        "context_limit": 204800,
-        "output_limit": 131072,
-        "evidence_revision": "opencode.v2.4617210822.2026-10-17"
-      },
-      "request_profile_refs": []
-    },
-    {
       "rule_id": "minimax-m3",
       "display_name": "MiniMax-M3",
       "scope": {
@@ -1102,6 +961,42 @@
       "request_profile_refs": [
         "opencode-go.anthropic.toggle.v1"
       ]
+    },
+    {
+      "rule_id": "minimax-m3-1-flash",
+      "display_name": "MiniMax M3.1 Flash",
+      "scope": {
+        "service_entry_ids": [
+          "go-api"
+        ],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "minimax-m3.1-flash"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "input_resources": [
+          "image",
+          "video"
+        ],
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "context_limit": 1000000,
+        "output_limit": 512000,
+        "evidence_revision": "opencode-go.live-catalog.2026-10-31"
+      },
+      "request_profile_refs": []
     },
     {
       "rule_id": "muse-spark-1-2-contributor",
@@ -1139,7 +1034,13 @@
         "output_limit": 131072,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
-      "request_profile_refs": []
+      "request_profile_refs": [],
+      "protocol_capabilities": {
+        "openai-responses.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "opencode-go.live-catalog.2026-10-31"
+        }
+      }
     },
     {
       "rule_id": "muse-spark-1-3-contributor",
@@ -1177,7 +1078,13 @@
         "output_limit": 131072,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
-      "request_profile_refs": []
+      "request_profile_refs": [],
+      "protocol_capabilities": {
+        "openai-responses.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "opencode-go.live-catalog.2026-10-31"
+        }
+      }
     },
     {
       "rule_id": "qwen3-7-plus",
@@ -1290,8 +1197,8 @@
       ]
     },
     {
-      "rule_id": "space-bunny",
-      "display_name": "Space Bunny",
+      "rule_id": "step-5-preview",
+      "display_name": "Step 5 Preview",
       "scope": {
         "service_entry_ids": [
           "go-api"
@@ -1300,43 +1207,7 @@
       },
       "matcher": {
         "kind": "exact",
-        "value": "space-bunny"
-      },
-      "supported_protocols": [
-        "openai-chat-completions.v1"
-      ],
-      "selected_protocol": "openai-chat-completions.v1",
-      "capabilities": {
-        "input_resources": [
-          "image",
-          "video"
-        ],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1048576,
-        "output_limit": 524288,
-        "evidence_revision": "opencode.v2.4617210822.2026-10-17"
-      },
-      "request_profile_refs": []
-    },
-    {
-      "rule_id": "step-5-preview-free",
-      "display_name": "Step 5 Preview Free",
-      "scope": {
-        "service_entry_ids": [
-          "go-api"
-        ],
-        "credential_profile_ids": []
-      },
-      "matcher": {
-        "kind": "exact",
-        "value": "step-5-preview-free"
+        "value": "step-5-preview"
       },
       "supported_protocols": [
         "openai-chat-completions.v1"
@@ -1355,9 +1226,15 @@
         ],
         "context_limit": 1000000,
         "output_limit": 65536,
-        "evidence_revision": "opencode.v2.4617210822.2026-10-17"
+        "evidence_revision": "opencode-go.live-catalog.2026-10-31"
       },
-      "request_profile_refs": []
+      "request_profile_refs": [],
+      "protocol_capabilities": {
+        "openai-chat-completions.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "opencode-go.live-catalog.2026-10-31"
+        }
+      }
     }
   ],
   "usage_profiles": [
@@ -1659,8 +1536,12 @@
       {
         "url": "https://opencode.ai/console/assets/meters-C_9Kv9WT.js",
         "note": "Go status query and published quota money and timestamp codecs; Key mode never requests billing status."
+      },
+      {
+        "url": "https://opencode.ai/inference/go/v1/models",
+        "note": "Key-scoped live Go catalog on 2026-10-31: model membership, reasoning efforts, modalities, limits, and structured_output flags. Free-tier and retired entries are excluded; Gemini 4 Argon is deferred until a generateContent route is verified."
       }
     ],
-    "verified_at": "2026-10-17T00:00:00Z"
+    "verified_at": "2026-10-31T00:00:00Z"
   }
 }

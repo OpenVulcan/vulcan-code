@@ -68,6 +68,7 @@ fn register_embedding(
             ]),
             usage_scope: InferenceUsageScope::InternalBackground,
             interactive_session_id: None,
+            owner_session_id: None,
             deadline_unix_ms: None,
             budget: InferenceCallerBudget {
                 max_concurrent_executions: 1,

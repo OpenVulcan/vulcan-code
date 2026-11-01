@@ -114,6 +114,9 @@ pub struct InferenceCallerContext {
     /// Optional interactive session identity proven by the host.
     /// 由宿主证明的可选交互会话身份。
     pub interactive_session_id: Option<String>,
+    /// Optional conversation session that owns this background call, proven by the host.
+    /// 由宿主证明、持有本次后台调用的可选会话标识。
+    pub owner_session_id: Option<String>,
     /// Optional absolute Unix deadline in milliseconds.
     /// 可选的 Unix 毫秒绝对截止时间。
     pub deadline_unix_ms: Option<u64>,
@@ -173,6 +176,15 @@ impl InferenceCallerContext {
         {
             return Err(String::from(
                 "Interactive inference requires a host-proven session identity.",
+            ));
+        }
+        if self
+            .owner_session_id
+            .as_deref()
+            .is_some_and(|session_id| session_id.trim().is_empty())
+        {
+            return Err(String::from(
+                "Inference owner session identity must not be empty when present.",
             ));
         }
         if self.budget.max_concurrent_executions == 0 {
@@ -2220,6 +2232,7 @@ mod tests {
             permissions: BTreeSet::from([InferencePermission::Embedding]),
             usage_scope: InferenceUsageScope::InternalBackground,
             interactive_session_id: None,
+            owner_session_id: None,
             deadline_unix_ms: None,
             budget: InferenceCallerBudget {
                 max_concurrent_executions: 1,

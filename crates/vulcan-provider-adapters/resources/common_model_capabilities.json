@@ -1442,6 +1442,29 @@
                                              ]
                    },
                    {
+                       "key":  "kimi-k3.1-pro",
+                       "aliases":  [
+
+                                   ],
+                       "context_window":  1048576,
+                       "output_limit":  131072,
+                       "reasoning":  "native",
+                       "reasoning_control":  "effort_selection",
+                       "reasoning_efforts":  [
+                                                  "low",
+                                                  "high",
+                                                  "max"
+                                              ],
+                       "input_modalities":  [
+                                                "image",
+                                                "text",
+                                                "video"
+                                            ],
+                       "output_modalities":  [
+                                                 "text"
+                                             ]
+                   },
+                   {
                        "key":  "kimi/kimi-k3",
                        "aliases":  [
 
@@ -1464,20 +1487,6 @@
                                    ],
                        "context_window":  1000000,
                        "input_modalities":  [
-                                                "text"
-                                            ],
-                       "output_modalities":  [
-                                                 "text"
-                                             ]
-                   },
-                   {
-                       "key":  "longcat-2.5-preview-free",
-                       "aliases":  [
-
-                                   ],
-                       "context_window":  1000000,
-                       "input_modalities":  [
-                                                "image",
                                                 "text"
                                             ],
                        "output_modalities":  [
@@ -1568,22 +1577,6 @@
                        "input_modalities":  [
                                                 "image",
                                                 "text"
-                                            ],
-                       "output_modalities":  [
-                                                 "text"
-                                             ]
-                   },
-                   {
-                       "key":  "mimo-v2.5",
-                       "aliases":  [
-
-                                   ],
-                       "context_window":  1000000,
-                       "input_modalities":  [
-                                                "audio",
-                                                "image",
-                                                "text",
-                                                "video"
                                             ],
                        "output_modalities":  [
                                                  "text"
@@ -2393,21 +2386,6 @@
                                              ]
                    },
                    {
-                       "key":  "space-bunny",
-                       "aliases":  [
-
-                                   ],
-                       "context_window":  1048576,
-                       "input_modalities":  [
-                                                "image",
-                                                "text",
-                                                "video"
-                                            ],
-                       "output_modalities":  [
-                                                 "text"
-                                             ]
-                   },
-                   {
                        "key":  "step-3.5-flash",
                        "aliases":  [
 
@@ -2453,21 +2431,6 @@
                        "aliases":  [
                                        "stepfun/step-5-preview-20261008",
                                        "stepfun: step 5 preview"
-                                   ],
-                       "context_window":  1000000,
-                       "input_modalities":  [
-                                                "image",
-                                                "text",
-                                                "video"
-                                            ],
-                       "output_modalities":  [
-                                                 "text"
-                                             ]
-                   },
-                   {
-                       "key":  "step-5-preview-free",
-                       "aliases":  [
-
                                    ],
                        "context_window":  1000000,
                        "input_modalities":  [

@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "open-design",
-  "revision": 3,
-  "published_at": "2026-10-19T07:42:22Z",
+  "revision": 4,
+  "published_at": "2026-10-31T16:00:00Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -179,7 +179,13 @@
         "output_limit": 32000,
         "evidence_revision": "open-design.gateway.2026-10-14"
       },
-      "provenance_ref": "builtin:open-design.gateway.2026-10-14"
+      "provenance_ref": "builtin:open-design.gateway.2026-10-14",
+      "protocol_capabilities": {
+        "openai-chat-completions.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "open-design.chat-json-schema.2026-10-31"
+        }
+      }
     },
     {
       "rule_id": "deepseek-v4-flash-vision-exp",
@@ -212,7 +218,13 @@
         "output_limit": 32000,
         "evidence_revision": "open-design.gateway.2026-10-14"
       },
-      "provenance_ref": "builtin:open-design.gateway.2026-10-14"
+      "provenance_ref": "builtin:open-design.gateway.2026-10-14",
+      "protocol_capabilities": {
+        "openai-chat-completions.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "open-design.chat-json-schema.2026-10-31"
+        }
+      }
     },
     {
       "rule_id": "deepseek-v4-pro",
@@ -243,7 +255,13 @@
         "output_limit": 32000,
         "evidence_revision": "open-design.gateway.2026-10-14"
       },
-      "provenance_ref": "builtin:open-design.gateway.2026-10-14"
+      "provenance_ref": "builtin:open-design.gateway.2026-10-14",
+      "protocol_capabilities": {
+        "openai-chat-completions.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "open-design.chat-json-schema.2026-10-31"
+        }
+      }
     },
     {
       "rule_id": "deepseek-v4.1-flash",
@@ -276,7 +294,13 @@
         "output_limit": 32000,
         "evidence_revision": "open-design.gateway.2026-10-14"
       },
-      "provenance_ref": "builtin:open-design.gateway.2026-10-14"
+      "provenance_ref": "builtin:open-design.gateway.2026-10-14",
+      "protocol_capabilities": {
+        "openai-chat-completions.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "open-design.chat-json-schema.2026-10-31"
+        }
+      }
     },
     {
       "rule_id": "glm-5.3-flash",
@@ -533,8 +557,12 @@
       {
         "url": "builtin:open-design.gateway.2026-10-14",
         "note": "Sanitized live protocol, reasoning, media and source evidence; unavailable Hunyuan model and ineffective reasoning controls are explicit."
+      },
+      {
+        "url": "https://amr-link.open-design.ai/v1/chat/completions",
+        "note": "2026-10-31 live Chat response_format json_schema probes: an unprompted enum-only marker field was reproduced by every DeepSeek model, and strict schemas with partial required lists were accepted."
       }
     ],
-    "verified_at": "2026-10-14T00:00:00Z"
+    "verified_at": "2026-10-31T00:00:00Z"
   }
 }

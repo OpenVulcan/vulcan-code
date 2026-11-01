@@ -397,6 +397,7 @@ impl NativeVmmCoreRuntime {
                 ai_port,
                 capability: Arc::new(RwLock::new(None)),
                 ai_cancellation: Arc::new(NativeVmmHostAiCancellation::default()),
+                owner_session_id: None,
                 deleted_vector_rows: 0,
                 embedding_fingerprints: Arc::new(RwLock::new(BTreeMap::new())),
                 storage: Arc::new(RwLock::new(storage)),
@@ -525,6 +526,9 @@ impl NativeVmmCoreRuntime {
         let cancellation = Arc::new(NativeVmmHostAiCancellation::default());
         let mut host = self.host.clone();
         host.ai_cancellation = Arc::clone(&cancellation);
+        // Every AI effect of this command is attributed to the conversation that produced the command.
+        // 该命令的全部 AI Effect 都归属产生该命令的会话。
+        host.owner_session_id = command_owner_session_id(&command);
         // This scalar belongs to the worker clone, never to another concurrent command or the runtime template.
         // 此标量归属工作器克隆，绝不归属其他并发命令或运行时模板。
         host.deleted_vector_rows = 0;
@@ -1470,6 +1474,9 @@ struct NativeVmmHostDriver {
     /// Request-scoped cancellation observed by all Host AI effects of one command.
     /// 单个命令全部宿主 AI Effect 观察的请求级取消信号。
     ai_cancellation: Arc<NativeVmmHostAiCancellation>,
+    /// Conversation session that owns the running command, or `None` for session-less commands.
+    /// 持有当前命令的会话；不属于任何会话的命令为 `None`。
+    owner_session_id: Option<String>,
     /// Physical row deletions for this command driver only, excluding recovered earlier operations.
     /// 仅属于此命令驱动的物理删除行数，不含恢复的先前操作。
     deleted_vector_rows: u64,
@@ -1777,7 +1784,7 @@ impl NativeVmmHostDriver {
             resources: Vec::new(),
             output_token_limit: Some(NATIVE_VMM_LLM_OUTPUT_TOKENS),
         };
-        let context = effect_call_context(request, Arc::clone(&self.ai_cancellation));
+        let context = self.effect_call_context(request);
         let execution = match self
             .ai_port
             .start_response_execution(&capability, context, ai_request)
@@ -1834,7 +1841,7 @@ impl NativeVmmHostDriver {
         effect: &vulcan_memorymesh_core::EmbeddingEffect,
     ) -> Result<HostEffectResult, CoreError> {
         self.execute_embedding_with_context(
-            effect_call_context(request, Arc::clone(&self.ai_cancellation)),
+            self.effect_call_context(request),
             format!("vmm-embedding-{}", request.effect_id.as_str()),
             effect,
         )
@@ -1985,7 +1992,7 @@ impl NativeVmmHostDriver {
             .ai_port
             .rerank_documents(
                 &capability,
-                effect_call_context(request, Arc::clone(&self.ai_cancellation)),
+                self.effect_call_context(request),
                 rerank_request,
             )
             .await
@@ -2958,6 +2965,7 @@ fn native_vmm_capability_registration() -> HostAiCapabilityRegistration {
             // 在明确接入前台分流之前保留 VMM 现有后台调度。
             scheduling_class: vulcan_ai_contract::InferenceSchedulingClass::ByUsageScope,
             interactive_session_id: None,
+            owner_session_id: None,
             deadline_unix_ms: None,
             budget: InferenceCallerBudget {
                 max_concurrent_executions: 4,
@@ -3619,11 +3627,53 @@ fn host_ai_core_error(error: HostAiError) -> CoreError {
     .with_retryable(error.retryable)
 }
 
-/// Builds correlation and a stage-specific deadline for one Core effect.
-/// 为一个 Core Effect 构造关联信息与阶段专属截止时间。
+impl NativeVmmHostDriver {
+    /// Builds the Host AI context of one effect from this command driver's cancellation and owning session.
+    /// 使用当前命令驱动的取消信号与所属会话构造一个 Effect 的宿主 AI 上下文。
+    fn effect_call_context(&self, request: &EffectRequest) -> HostAiCallContext {
+        effect_call_context(
+            request,
+            Arc::clone(&self.ai_cancellation),
+            self.owner_session_id.clone(),
+        )
+    }
+}
+
+/// Returns the conversation session that produced one Core command.
+/// 返回产生一个 Core 命令的会话。
+///
+/// # Returns
+/// 返回值
+/// The command's session source ID, or `None` for commands that carry no session.
+/// 返回命令的会话来源 ID；不携带会话的命令返回 `None`。
+fn command_owner_session_id(command: &CoreCommand) -> Option<String> {
+    let session_source_id = match command {
+        CoreCommand::PreCheck(command) => &command.session_source_id,
+        CoreCommand::PostActionIntake(command) => &command.session_source_id,
+        CoreCommand::PostActionAnalyzePendingTurn(command) => &command.session_source_id,
+        CoreCommand::ChatCompact(command) => &command.session_source_id,
+        CoreCommand::MemoryWrite(command) => &command.session_source_id,
+        CoreCommand::MemoryWriteBatch(command) => &command.session_source_id,
+        CoreCommand::MemorySearch(_)
+        | CoreCommand::MemoryDetails(_)
+        | CoreCommand::MemoryDelete(_)
+        | CoreCommand::ProfileQuery(_)
+        | CoreCommand::ProfileInstruction(_)
+        | CoreCommand::Retention(_)
+        | CoreCommand::MemorySearchBatch(_)
+        | CoreCommand::MemoryDetailsBatch(_)
+        | CoreCommand::MemoryDeleteBatch(_)
+        | CoreCommand::Maintenance(_) => return None,
+    };
+    Some(session_source_id.as_str().to_owned())
+}
+
+/// Builds correlation, owning session and a stage-specific deadline for one Core effect.
+/// 为一个 Core Effect 构造关联信息、所属会话与阶段专属截止时间。
 fn effect_call_context(
     request: &EffectRequest,
     cancellation: Arc<NativeVmmHostAiCancellation>,
+    owner_session_id: Option<String>,
 ) -> HostAiCallContext {
     let operation_id = request
         .operation_id
@@ -3634,6 +3684,7 @@ fn effect_call_context(
             Some(request.effect_id.as_str().to_owned()),
             Some(request.command_id.as_str().to_owned()),
         )
+        .with_owner_session(owner_session_id)
         .with_deadline(effect_deadline(request.deadline_class))
         .with_cancellation(cancellation)
 }

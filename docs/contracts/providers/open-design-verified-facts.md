@@ -211,3 +211,12 @@ Logo 原样取自指定仓库 `apps/web/public/logo.svg`，复制为前端
   点击刷新后重新读取真实额度，短周期跨过重置边界后显示新的剩余额度和重置时间。
 - 本次没有数据库结构变更；本地数据库版本仍为 v1，完整性检查通过。未执行收费推理、额度耗尽测试
   或其他套餐账户验收。
+
+### 2026-10-31 Chat 结构化输出
+
+对 `deepseek-v4.1-flash`、`deepseek-v4-flash`、`deepseek-v4-flash-vision-exp`、`deepseek-v4-pro`
+发送 Chat `response_format.type = json_schema` 且 `strict = true` 的真实请求，均返回符合 Schema 的结构，
+并正确回填 Prompt 未提及的枚举探针字段。清单 revision 4 为这 4 条规则在
+`openai-chat-completions.v1` 上声明 `structured_output = json_schema`（证据
+`open-design.chat-json-schema.2026-10-31`）。宿主 strict 投影会把每个对象的 `required` 补全为全部属性。
+其余模型未实测，仍为 JSON Object。

@@ -4097,6 +4097,7 @@ fn exact_selection_text_caller(purpose: ExactSelectionTextPurpose) -> InferenceC
         permissions: BTreeSet::from([InferencePermission::Llm]),
         usage_scope: InferenceUsageScope::InternalBackground,
         interactive_session_id: None,
+        owner_session_id: None,
         deadline_unix_ms: None,
         budget,
     }
@@ -4634,12 +4635,18 @@ fn responses_provider_request(
 ///
 /// # Returns
 /// 返回值
-/// A bounded opaque cache identity that cannot collide across callers or expose caller text upstream.
-/// 返回不会跨调用方碰撞且不会向上游暴露调用方文本的有界不透明缓存身份。
+/// The host-proven owning session ID when the caller has one, so session-bound gateways see the
+/// real conversation; otherwise a bounded opaque cache identity that cannot collide across callers
+/// or expose caller text upstream.
+/// 调用方带有宿主证明的所属会话时返回该真实会话 ID，使按会话计费的网关看到真实会话；否则返回不会跨调用方
+/// 碰撞且不会向上游暴露调用方文本的有界不透明缓存身份。
 fn responses_cache_scope_id(
     caller: &InferenceCallerContext,
     request: &ResponsesExecutionRequest,
 ) -> String {
+    if let Some(owner_session_id) = caller.owner_session_id.as_deref() {
+        return owner_session_id.to_owned();
+    }
     let caller_key = request.prompt_cache_key.as_deref().unwrap_or("default");
     let mut hasher = Sha256::new();
     for value in [
@@ -4799,13 +4806,14 @@ fn resource_kind_label(kind: ResourceKind) -> &'static str {
 ///
 /// # Returns
 /// 返回值
-/// Anthropic keeps the exact JSON Schema contract. OpenAI Responses keeps it only when the model
-/// declares `json_schema`; a strict schema is then sent in the provider form where every object
-/// requires all of its properties. Other protocols whose provider APIs expose a JSON-object switch
+/// Anthropic keeps the exact JSON Schema contract. OpenAI Responses and Chat Completions keep it
+/// only when the model declares `json_schema`; a strict schema is then sent in the provider form
+/// where every object requires all of its properties. Other protocols whose provider APIs expose a JSON-object switch
 /// receive `JsonObject`. The shared host finalizer always enforces the caller-owned schema after
 /// decoding. Unknown profiles receive no native projection. A strict schema whose optional
 /// property rejects `null` is a contract error instead of a silent downgrade.
-/// Anthropic 保留准确 JSON Schema 契约；OpenAI Responses 仅在模型声明 `json_schema` 时保留，
+/// Anthropic 保留准确 JSON Schema 契约；OpenAI Responses 与 Chat Completions 仅在模型声明
+/// `json_schema` 时保留，
 /// 严格 Schema 以每个对象全部属性必填的提供方形态发送；其他暴露 JSON-object 开关的协议接收
 /// `JsonObject`。共享宿主终结器始终在解码后校验调用方拥有的 Schema；未知协议不投影。严格
 /// Schema 中拒绝 `null` 的可选属性按契约错误处理，不静默降级。
@@ -4823,8 +4831,7 @@ fn structured_output_policy_for_protocol(
     ) {
         return Ok(policy.clone());
     }
-    if protocol_id == OPENAI_RESPONSES_PROFILE_ID
-        && capabilities.structured_output == StructuredOutputCapability::JsonSchema
+    if route_projects_provider_json_schema(protocol_id, capabilities)
         && let StructuredOutputPolicy::JsonSchema {
             name,
             description,
@@ -5092,14 +5099,16 @@ fn model_route_supports_structured_output(
 ///
 /// # Returns
 /// 返回值
-/// `true` only for OpenAI Responses routes whose model declares `json_schema`.
-/// 仅当 OpenAI Responses 路由的模型声明 `json_schema` 时返回 `true`。
+/// `true` only for OpenAI Responses or Chat Completions routes whose model declares `json_schema`.
+/// 仅当 OpenAI Responses 或 Chat Completions 路由的模型声明 `json_schema` 时返回 `true`。
 fn route_projects_provider_json_schema(
     protocol_id: &str,
     capabilities: &ModelCapabilities,
 ) -> bool {
-    protocol_id == OPENAI_RESPONSES_PROFILE_ID
-        && capabilities.structured_output == StructuredOutputCapability::JsonSchema
+    matches!(
+        protocol_id,
+        OPENAI_RESPONSES_PROFILE_ID | OPENAI_CHAT_PROFILE_ID
+    ) && capabilities.structured_output == StructuredOutputCapability::JsonSchema
 }
 
 /// Applies the shared restricted-request reasoning policy and removes conflicting provider controls.
@@ -6782,6 +6791,7 @@ mod tests {
             ]),
             usage_scope: InferenceUsageScope::InternalBackground,
             interactive_session_id: None,
+            owner_session_id: None,
             deadline_unix_ms: None,
             budget: InferenceCallerBudget {
                 max_concurrent_executions: 1,
@@ -6997,6 +7007,13 @@ mod tests {
         let mut another_caller = caller;
         another_caller.caller_id = String::from("another-vmm");
         assert_ne!(first, responses_cache_scope_id(&another_caller, &request));
+
+        // A host-proven owning session replaces the opaque scope so session-bound gateways see it.
+        another_caller.owner_session_id = Some(String::from("session-owner-1"));
+        assert_eq!(
+            responses_cache_scope_id(&another_caller, &request),
+            "session-owner-1"
+        );
     }
 
     /// Verifies function-tool semantics do not depend on a model capability declaration.
@@ -8483,8 +8500,8 @@ mod tests {
         );
     }
 
-    /// Verifies only declared Responses routes keep the schema, in the strict provider form.
-    /// 验证只有声明能力的 Responses 路由保留 Schema，并以严格提供方形态发送。
+    /// Verifies only declared Responses and Chat routes keep the schema, in the strict provider form.
+    /// 验证只有声明能力的 Responses 与 Chat 路由保留 Schema，并以严格提供方形态发送。
     #[test]
     fn responses_json_schema_routes_send_strict_provider_schema() {
         let caller_schema = serde_json::json!({
@@ -8519,17 +8536,6 @@ mod tests {
             ..ModelCapabilities::default()
         };
 
-        let StructuredOutputPolicy::JsonSchema { schema, strict, .. } =
-            structured_output_policy_for_protocol(
-                vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
-                &policy(true),
-                &json_schema_model,
-            )
-            .expect("nullable optional properties must project")
-        else {
-            panic!("a declared Responses route must keep the JSON Schema policy");
-        };
-        assert!(strict);
         let required = |node: &serde_json::Value| -> BTreeSet<String> {
             node["required"]
                 .as_array()
@@ -8546,28 +8552,43 @@ mod tests {
                 .cloned()
                 .collect()
         };
-        assert_eq!(required(&schema), properties(&schema));
-        let nested = &schema["properties"]["items"]["items"];
-        assert_eq!(required(nested), properties(nested));
-
+        for protocol_id in [
+            vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
+            vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,
+        ] {
+            let StructuredOutputPolicy::JsonSchema { schema, strict, .. } =
+                structured_output_policy_for_protocol(
+                    protocol_id,
+                    &policy(true),
+                    &json_schema_model,
+                )
+                .expect("nullable optional properties must project")
+            else {
+                panic!("a declared {protocol_id} route must keep the JSON Schema policy");
+            };
+            assert!(strict);
+            assert_eq!(required(&schema), properties(&schema));
+            let nested = &schema["properties"]["items"]["items"];
+            assert_eq!(required(nested), properties(nested));
+            assert_eq!(
+                structured_output_policy_for_protocol(
+                    protocol_id,
+                    &policy(false),
+                    &json_schema_model,
+                )
+                .expect("non-strict schemas project unchanged"),
+                policy(false)
+            );
+        }
         assert_eq!(
             structured_output_policy_for_protocol(
-                vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
-                &policy(false),
-                &json_schema_model,
-            )
-            .expect("non-strict schemas project unchanged"),
-            policy(false)
-        );
-        assert_eq!(
-            structured_output_policy_for_protocol(
-                vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,
+                vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID,
                 &policy(true),
                 &json_schema_model,
             )
-            .expect("chat projection must succeed"),
+            .expect("codex projection must succeed"),
             StructuredOutputPolicy::JsonObject,
-            "only the Responses encoder is enabled for provider-side JSON Schema"
+            "only the Responses and Chat encoders send provider-side JSON Schema"
         );
     }
 

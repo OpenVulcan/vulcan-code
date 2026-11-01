@@ -175,6 +175,7 @@ fn registration() -> HostAiCapabilityRegistration {
             // 智能体回合等待每次复核，因此使用前台容量。
             scheduling_class: InferenceSchedulingClass::InternalQuery,
             interactive_session_id: None,
+            owner_session_id: None,
             deadline_unix_ms: None,
             budget: InferenceCallerBudget {
                 max_concurrent_executions: REVIEW_MAX_CONCURRENT,

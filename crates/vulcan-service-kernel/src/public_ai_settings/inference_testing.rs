@@ -381,6 +381,7 @@ fn settings_inference_test_caller(
         permissions: BTreeSet::from([InferencePermission::Status, permission]),
         usage_scope,
         interactive_session_id: None,
+        owner_session_id: None,
         deadline_unix_ms: Some(now_unix_ms.saturating_add(120_000)),
         budget: InferenceCallerBudget {
             max_concurrent_executions: 1,

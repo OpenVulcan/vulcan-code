@@ -176,6 +176,9 @@ impl ConfiguredInferenceHostAiPort {
             })
             .transpose()?;
         caller.deadline_unix_ms = earliest_deadline(explicit_deadline, duration_deadline);
+        // The owning session is per operation, so it comes from the call context, not the shared handle.
+        // 所属会话按操作区分，因此来自调用上下文而非共享句柄。
+        caller.owner_session_id = context.owner_session_id.clone();
         Ok(caller)
     }
 

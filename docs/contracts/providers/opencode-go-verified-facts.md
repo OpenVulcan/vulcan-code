@@ -144,3 +144,23 @@ OAuth 测试保留双端点读取及余额失败时整体失败的行为。
   资源同步后，72 个相关资源文件与发行目录逐字节一致。
 
 这些检查不增加真实 OAuth 授权或付费模型调用的线上验收范围。
+
+## 2026-10-31 目录同步、结构化输出与会话请求头
+
+证据：使用 API Key 读取 `GET https://opencode.ai/inference/go/v1/models`（`/openai/v1/models`
+返回 404，不是目录入口），并对 Chat 与 Responses 路由发送 strict `json_schema` 真实请求。
+
+- 目录按实时 Go 目录对齐，清单 revision 10，目录与规则各 25 个模型。按用户要求取消 free 系列。
+  删除：`deepseek-v4-flash`、`deepseek-v4-flash-vision-exp`、`grok-4.6`、`longcat-2.5-preview-free`、
+  `mimo-v2.5`、`mimo-v2.5-pro`、`minimax-m2.7`、`space-bunny`、`step-5-preview-free`。
+  新增（Chat，证据修订 `opencode-go.live-catalog.2026-10-31`）：`kimi-k3-1-pro`、`minimax-m3-1-flash`、
+  `step-5-preview`，思考档位取自 Go 目录本身。Gemini 4 Argon 需要 Gemini 协议路由，本次未接入。
+- 结构化输出：以下模型 strict `json_schema` 真实返回正确结构，并能回填 Prompt 未提及的枚举探针字段，
+  因此按所选协议声明 `json_schema`：Chat 上的 `glm-5.2`、`glm-5.3`、`glm-5.3-flash`、`kimi-k2.7-code`、
+  `kimi-k3`、`kimi-k3.1-pro`、`step-5-preview`、`deepseek-v4.1-flash`、`deepseek-v4-pro`；Responses 上的
+  `grok-4.7`、`muse-spark-1.2-contributor`、`muse-spark-1.3-contributor`、`gpt-5.6-luna`、`gpt-6-luna`。
+  muse 与 gpt 在 `required` 只列部分属性时返回 400；宿主 strict 投影会补全为全部属性，不受影响。
+  其余模型未实测，保持原声明。
+- 会话请求头：API Key 请求缺少 `x-opencode-session` 时返回 400 `MissingSessionID`，因此该请求头对两类
+  凭据都是必需的。会话请求的值是会话 ID；VMM 后台请求使用产生该 VMM 命令的会话 ID
+  （`session_source_id`），不属于任何会话的命令（如画像指令、清洗、维护）不发送该请求头。
