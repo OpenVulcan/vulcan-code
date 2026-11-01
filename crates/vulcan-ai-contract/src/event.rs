@@ -114,6 +114,13 @@ pub enum AiStreamEvent {
         /// 解码后的推理增量。
         delta: String,
     },
+    /// Readable reasoning summary text shown and recorded as thinking but never replayed.
+    /// 作为思考展示与记录、但绝不重放给供应商的可读推理摘要文本。
+    ReasoningSummaryDelta {
+        /// Newly decoded summary text appended to the visible thinking.
+        /// 追加到可见思考的新解码摘要文本。
+        delta: String,
+    },
     /// A complete readable reasoning summary update that must remain transient.
     /// 必须保持瞬态的完整可读推理摘要更新。
     ReasoningSummaryUpdated {
@@ -439,6 +446,7 @@ impl AiStreamStateMachine {
             AiStreamEvent::ResourceProgress { .. }
             | AiStreamEvent::ImageGenerationPartial { .. }
             | AiStreamEvent::ProviderContextItemCaptured { .. }
+            | AiStreamEvent::ReasoningSummaryDelta { .. }
             | AiStreamEvent::ReasoningSummaryUpdated { .. }
             | AiStreamEvent::UsageUpdated { .. } => {}
         }
@@ -493,6 +501,7 @@ impl AiStreamEvent {
             Self::ResponseMessagePhaseUpdated { .. } => "response_message_phase_updated",
             Self::ReasoningStarted { .. } => "reasoning_started",
             Self::ReasoningDelta { .. } => "reasoning_delta",
+            Self::ReasoningSummaryDelta { .. } => "reasoning_summary_delta",
             Self::ReasoningSummaryUpdated { .. } => "reasoning_summary_updated",
             Self::ReasoningCompleted { .. } => "reasoning_completed",
             Self::ToolCallStarted { .. } => "tool_call_started",

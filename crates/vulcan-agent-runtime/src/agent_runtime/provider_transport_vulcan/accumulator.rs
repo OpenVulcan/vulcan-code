@@ -608,6 +608,21 @@ impl PublicTurnAccumulator {
                 sink.push_delta(ProviderTurnDelta::Thinking { delta });
                 let _ = live_sender.send(Ok(ProviderStreamDelta::Thinking(live_delta)));
             }
+            AiStreamEvent::ReasoningSummaryDelta { delta } => {
+                // Full readable reasoning outranks the summary, so a summary after it is redundant.
+                // 完整可读思考优先于摘要，因此在其之后出现的摘要是冗余的。
+                if delta.is_empty() || self.durable_reasoning_observed {
+                    return Ok(());
+                }
+                self.clear_transient_reasoning_status(live_sender);
+                // The summary is shown and recorded as thinking but never registers a replay item:
+                // replaying a summary as the model's own reasoning would break its context.
+                // 摘要作为思考展示与记录，但绝不登记重放项：把摘要当作模型自身思考重放会打断其上下文。
+                self.reasoning.push_str(delta.as_str());
+                let live_delta = delta.clone();
+                sink.push_delta(ProviderTurnDelta::Thinking { delta });
+                let _ = live_sender.send(Ok(ProviderStreamDelta::Thinking(live_delta)));
+            }
             AiStreamEvent::ReasoningSummaryUpdated { item_id, text } => {
                 if self.durable_reasoning_observed {
                     return Ok(());

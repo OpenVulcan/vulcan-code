@@ -746,6 +746,82 @@ fn public_turn_deltas_are_forwarded_to_live_workbench_stream() {
     ));
 }
 
+/// Verifies a reasoning summary is shown and recorded as thinking but never enters replay.
+/// 验证推理摘要作为思考展示与记录，但绝不进入重放。
+#[test]
+fn reasoning_summary_delta_is_recorded_thinking_without_replay() {
+    // live_sender and live_receiver observe the request-local live stream.
+    // live_sender 与 live_receiver 观察请求局部实时流。
+    let (live_sender, mut live_receiver) = tokio::sync::mpsc::unbounded_channel();
+    let mut sink = RecordingProviderDeltaSink::default();
+    let mut accumulator = PublicTurnAccumulator::new(
+        "provider",
+        "connection",
+        "https://provider.example/chat/completions",
+        "openai-chat-completions.v1",
+        "model",
+        None,
+    );
+    for event in [
+        AiStreamEvent::ReasoningSummaryDelta {
+            delta: String::from("summary"),
+        },
+        AiStreamEvent::ResponseItemStarted {
+            item_id: String::from("text-1"),
+            item: ContentItem::Text {
+                text: String::new(),
+            },
+        },
+        AiStreamEvent::ResponseTextDelta {
+            item_id: String::from("text-1"),
+            delta: String::from("answer"),
+        },
+        AiStreamEvent::ResponseItemCompleted {
+            item_id: String::from("text-1"),
+        },
+    ] {
+        accumulator
+            .apply_event("provider", &live_sender, &mut sink, event)
+            .expect("summary thinking should accumulate");
+    }
+
+    assert!(matches!(
+        live_receiver.try_recv(),
+        Ok(Ok(ProviderStreamDelta::Thinking(thinking))) if thinking == "summary"
+    ));
+    assert!(sink.deltas.iter().any(|delta| matches!(
+        delta,
+        ProviderTurnDelta::Thinking { delta } if delta == "summary"
+    )));
+    assert!(
+        !accumulator
+            .replay_content()
+            .expect("replay content should materialize")
+            .iter()
+            .any(|item| matches!(item, ContentItem::Reasoning { .. }))
+    );
+    assert_eq!(accumulator.reasoning, "summary");
+}
+
+/// Verifies durable reasoning makes every later summary redundant.
+/// 验证持久化思考会使之后的所有摘要变得冗余。
+#[test]
+fn reasoning_summary_delta_yields_to_durable_reasoning() {
+    let accumulator = accumulated_public_turn(vec![
+        AiStreamEvent::ReasoningStarted {
+            item_id: String::from("reasoning-1"),
+        },
+        AiStreamEvent::ReasoningDelta {
+            item_id: String::from("reasoning-1"),
+            delta: String::from("durable"),
+        },
+        AiStreamEvent::ReasoningSummaryDelta {
+            delta: String::from("summary"),
+        },
+    ]);
+    assert_eq!(accumulator.reasoning, "durable");
+}
+
 /// Verifies summary status replacement and token updates never enter durable reasoning state.
 /// 验证摘要状态替换与 Token 更新绝不进入持久化思考状态。
 #[test]

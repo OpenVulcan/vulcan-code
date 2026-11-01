@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "commandcode",
-  "revision": 11,
-  "published_at": "2026-10-19T07:42:22Z",
+  "revision": 12,
+  "published_at": "2026-11-01T05:48:02Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -2693,17 +2693,16 @@
   "response_profiles": [
     {
       "profile_id": "commandcode.chat.reasoning-summary.v1",
-      "description": "Treat CommandCode Chat reasoning.summary fields as a replace-in-place transient status instead of durable reasoning.",
+      "description": "Drop the CommandCode Chat top-level reasoning mirror so reasoning.summary details stay display-only thinking that is never replayed.",
       "payload": {
         "profile_id": "commandcode.chat.reasoning-summary.v1",
-        "revision": 1,
+        "revision": 2,
         "steps": [
           {
             "op": "delete_json_pointer",
             "path": "/choices/0/delta/reasoning"
           }
-        ],
-        "transient_reasoning_status": "summary"
+        ]
       }
     },
     {

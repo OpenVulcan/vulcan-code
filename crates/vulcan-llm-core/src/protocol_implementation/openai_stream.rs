@@ -60,9 +60,9 @@ struct OpenAiReasoningDetailsDelta {
     /// Newly observed durable reasoning suffix.
     /// 新观测到的持久化推理后缀。
     detail_reasoning: Option<String>,
-    /// Provider-indexed cumulative summary replacements.
-    /// 按供应商索引组织的累计摘要替换值。
-    summary_updates: Vec<(String, String)>,
+    /// Display-only summary text, with a paragraph break where a new summary part begins.
+    /// 仅供展示的摘要文本，在新摘要部分开始处带段落分隔。
+    summary_delta: Option<String>,
     /// Raw summary fragment used only to suppress an identical mirrored reasoning field.
     /// 仅用于抑制同值镜像 reasoning 字段的原始摘要片段。
     raw_summary_delta: Option<String>,
@@ -154,9 +154,12 @@ pub(crate) struct OpenAiChatStreamDecoder {
     /// Last cumulative MiniMax `reasoning_details` text.
     /// 最近一次累计的 MiniMax `reasoning_details` 文本。
     reasoning_details_text: String,
-    /// Cumulative transient `reasoning.summary` text keyed by provider-owned detail index.
-    /// 按供应商持有的详情索引保存的累计瞬态 `reasoning.summary` 文本。
-    reasoning_summary_text: BTreeMap<u32, String>,
+    /// Provider-owned index of the last `reasoning.summary` part, used to separate parts.
+    /// 最近一个 `reasoning.summary` 部分的供应商持有索引，用于分隔各部分。
+    last_summary_index: Option<u32>,
+    /// Whether durable reasoning was emitted, which makes every later summary redundant.
+    /// 是否已经发出持久化思考；一旦发出，后续摘要均为冗余。
+    durable_reasoning_seen: bool,
     /// Tool calls keyed by stable parallel index.
     /// 按稳定并行索引保存的工具调用。
     tools: BTreeMap<u32, OpenAiToolState>,
@@ -192,7 +195,8 @@ impl OpenAiChatStreamDecoder {
             text_open: false,
             reasoning_open: false,
             reasoning_details_text: String::new(),
-            reasoning_summary_text: BTreeMap::new(),
+            last_summary_index: None,
+            durable_reasoning_seen: false,
             tools: BTreeMap::new(),
             registered_tools,
         }
@@ -218,12 +222,12 @@ impl OpenAiChatStreamDecoder {
     ) -> Result<Vec<AiStreamEvent>, ProtocolConversionError> {
         let mut events = Vec::new();
         let delta = choice.get("delta").unwrap_or(&Value::Null);
-        // detailReasoning and summaries keep durable thinking separate from typed summary nodes.
-        // detailReasoning 与 summaries 将持久化思考和类型化摘要节点分离。
+        // detailReasoning and summaryDelta keep replayable thinking separate from display-only summaries.
+        // detailReasoning 与 summaryDelta 将可重放思考和仅供展示的摘要分离。
         let OpenAiReasoningDetailsDelta {
             detail_reasoning,
-            summary_updates: summaries,
-            raw_summary_delta: summary_delta,
+            summary_delta,
+            raw_summary_delta,
         } = self.decode_reasoning_details_delta(delta)?;
         // reasoningContent is an explicit durable field and therefore outranks every mirror.
         // reasoningContent 是显式持久化字段，因此优先于任何镜像字段。
@@ -236,7 +240,7 @@ impl OpenAiChatStreamDecoder {
         let mirrored_reasoning = delta
             .get("reasoning")
             .and_then(Value::as_str)
-            .filter(|reasoning| summary_delta.as_deref() != Some(*reasoning))
+            .filter(|reasoning| raw_summary_delta.as_deref() != Some(*reasoning))
             .map(str::to_string);
         // reasoning prefers explicit direct durable fields while avoiding duplicate detail content.
         // reasoning 优先采用显式直接持久化字段，同时避免重复详情内容。
@@ -250,6 +254,7 @@ impl OpenAiChatStreamDecoder {
         // 「已推理」回合，其文本随后会被已声明的回放契约当作丢失而拒绝。
         if let Some(reasoning) = reasoning.filter(|reasoning| !reasoning.is_empty()) {
             let item_id = format!("openai:{}:reasoning", self.execution_id);
+            self.durable_reasoning_seen = true;
             if !self.reasoning_open {
                 self.reasoning_open = true;
                 events.push(AiStreamEvent::ReasoningStarted {
@@ -261,8 +266,11 @@ impl OpenAiChatStreamDecoder {
                 delta: reasoning,
             });
         }
-        for (item_id, text) in summaries {
-            events.push(AiStreamEvent::ReasoningSummaryUpdated { item_id, text });
+        // A summary means different things across providers, so it is shown as thinking but never
+        // replayed, and it yields to full reasoning whenever the provider also sends that.
+        // 摘要在各供应商间含义不一，因此作为思考展示但绝不重放；供应商同时发送完整思考时让位于完整思考。
+        if let Some(summary) = summary_delta.filter(|_| !self.durable_reasoning_seen) {
+            events.push(AiStreamEvent::ReasoningSummaryDelta { delta: summary });
         }
         // One wire chunk may contain both the last reasoning token and the first answer token.
         // 一个线上分片可能同时包含最后一个思考 token 和第一个回答 token。
@@ -314,8 +322,8 @@ impl OpenAiChatStreamDecoder {
     ///
     /// # Returns
     /// 返回值
-    /// Newly observed full-reasoning suffix, indexed summary replacements, and raw summary delta.
-    /// 返回新观测到的完整推理后缀、带索引的摘要替换值与原始摘要增量。
+    /// Newly observed full-reasoning suffix, display summary delta, and raw summary delta.
+    /// 返回新观测到的完整推理后缀、展示用摘要增量与原始摘要增量。
     fn decode_reasoning_details_delta(
         &mut self,
         delta: &Value,
@@ -334,9 +342,9 @@ impl OpenAiChatStreamDecoder {
                 Some(_) => None,
             })
             .collect::<String>();
-        // summaryUpdates preserve every provider summary node instead of flattening unrelated indexes.
-        // summaryUpdates 保留每个供应商摘要节点，而不是压平无关索引。
-        let mut summary_updates = Vec::new();
+        // summaryDelta separates summary parts with a blank line so part headings never run together.
+        // summaryDelta 用空行分隔各摘要部分，避免部分标题粘连。
+        let mut summary_delta = String::new();
         // rawSummaryDelta proves whether an untyped top-level reasoning field mirrors this chunk.
         // rawSummaryDelta 用于证明无类型顶层 reasoning 字段是否镜像当前分片。
         let mut raw_summary_delta = String::new();
@@ -366,17 +374,22 @@ impl OpenAiChatStreamDecoder {
                 }
                 None => fallback_index,
             };
+            if summary.is_empty() {
+                continue;
+            }
             raw_summary_delta.push_str(summary);
-            let accumulated = self.reasoning_summary_text.entry(index).or_default();
-            accumulated.push_str(summary);
-            summary_updates.push((
-                format!("openai:{}:reasoning-summary:{index}", self.execution_id),
-                accumulated.clone(),
-            ));
+            if self
+                .last_summary_index
+                .is_some_and(|last_index| last_index != index)
+            {
+                summary_delta.push_str("\n\n");
+            }
+            self.last_summary_index = Some(index);
+            summary_delta.push_str(summary);
         }
         Ok(OpenAiReasoningDetailsDelta {
             detail_reasoning: cumulative_suffix(&mut self.reasoning_details_text, reasoning),
-            summary_updates,
+            summary_delta: (!summary_delta.is_empty()).then_some(summary_delta),
             raw_summary_delta: (!raw_summary_delta.is_empty()).then_some(raw_summary_delta),
         })
     }
@@ -2534,8 +2547,20 @@ mod tests {
         )));
     }
 
-    /// Verifies Chat reasoning summaries stay transient while opaque payloads remain hidden.
-    /// 验证 Chat 思考总结保持临时状态，而不透明载荷继续隐藏。
+    /// Collects the display-only summary text emitted by one decoded chunk.
+    /// 收集单个已解码分片发出的仅展示摘要文本。
+    fn summary_text(events: &[AiStreamEvent]) -> String {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                AiStreamEvent::ReasoningSummaryDelta { delta } => Some(delta.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Verifies Chat reasoning summaries become display-only thinking while opaque payloads stay hidden.
+    /// 验证 Chat 思考摘要成为仅展示的思考，而不透明载荷继续隐藏。
     #[test]
     fn chat_reasoning_details_map_summaries_and_drop_opaque_payloads() {
         let mut decoder = OpenAiChatStreamDecoder::with_registered_tools(
@@ -2553,13 +2578,13 @@ mod tests {
                 None,
                 r#"{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","index":0,"summary":"，再核对协议"}]} ,"finish_reason":null}]}"#,
             )
-            .expect("the next reasoning summary fragment should publish accumulated text");
+            .expect("the next reasoning summary fragment should decode");
         let next_summary = decoder
             .push_sse(
                 None,
                 r#"{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","index":1,"summary":"检查工具结果"}]} ,"finish_reason":null}]}"#,
             )
-            .expect("a new reasoning summary index should open an independent node");
+            .expect("a new reasoning summary index should start a new paragraph");
         let encrypted = decoder
             .push_sse(
                 None,
@@ -2573,32 +2598,61 @@ mod tests {
             )
             .expect("signature-only reasoning should be ignored safely");
 
-        assert!(summary.iter().any(|event| matches!(
-            event,
-            AiStreamEvent::ReasoningSummaryUpdated { item_id, text }
-                if item_id == "openai:execution:reasoning-summary:0" && text == "先拆分问题"
-        )));
+        // The mirrored top-level field must not turn the summary into replayable reasoning.
+        // 顶层镜像字段不得把摘要变成可重放思考。
+        assert_eq!(summary_text(&summary), "先拆分问题");
         assert!(!summary.iter().any(|event| matches!(
             event,
             AiStreamEvent::ReasoningStarted { .. } | AiStreamEvent::ReasoningDelta { .. }
         )));
-        assert!(revised_summary.iter().any(|event| matches!(
-            event,
-            AiStreamEvent::ReasoningSummaryUpdated { text, .. } if text == "先拆分问题，再核对协议"
-        )));
-        assert!(next_summary.iter().any(|event| matches!(
-            event,
-            AiStreamEvent::ReasoningSummaryUpdated { item_id, text }
-                if item_id == "openai:execution:reasoning-summary:1" && text == "检查工具结果"
-        )));
+        assert_eq!(summary_text(&revised_summary), "，再核对协议");
+        assert_eq!(summary_text(&next_summary), "\n\n检查工具结果");
         assert!(!encrypted.iter().any(|event| matches!(
             event,
-            AiStreamEvent::ReasoningStarted { .. } | AiStreamEvent::ReasoningDelta { .. }
+            AiStreamEvent::ReasoningStarted { .. }
+                | AiStreamEvent::ReasoningDelta { .. }
+                | AiStreamEvent::ReasoningSummaryDelta { .. }
         )));
         assert!(!signature_only.iter().any(|event| matches!(
             event,
             AiStreamEvent::ReasoningStarted { .. } | AiStreamEvent::ReasoningDelta { .. }
         )));
+    }
+
+    /// Verifies full Chat reasoning suppresses summaries from the same chunk and every later one.
+    /// 验证 Chat 完整思考会抑制同一分片及之后所有分片中的摘要。
+    #[test]
+    fn chat_full_reasoning_supersedes_reasoning_summaries() {
+        let mut decoder = OpenAiChatStreamDecoder::with_registered_tools(
+            String::from("execution"),
+            BTreeSet::new(),
+        );
+        let leading_summary = decoder
+            .push_sse(
+                None,
+                r#"{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","index":0,"summary":"概要"}]},"finish_reason":null}]}"#,
+            )
+            .expect("a summary before full reasoning should decode");
+        let mixed = decoder
+            .push_sse(
+                None,
+                r#"{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"完整思考"},{"type":"reasoning.summary","index":0,"summary":"重复概要"}]},"finish_reason":null}]}"#,
+            )
+            .expect("a chunk with full reasoning and a summary should decode");
+        let trailing_summary = decoder
+            .push_sse(
+                None,
+                r#"{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","index":1,"summary":"后续概要"}]},"finish_reason":null}]}"#,
+            )
+            .expect("a summary after full reasoning should decode");
+
+        assert_eq!(summary_text(&leading_summary), "概要");
+        assert!(mixed.iter().any(|event| matches!(
+            event,
+            AiStreamEvent::ReasoningDelta { delta, .. } if delta == "完整思考"
+        )));
+        assert!(summary_text(&mixed).is_empty());
+        assert!(summary_text(&trailing_summary).is_empty());
     }
 
     /// Verifies Chat Completions usage reads MiniMax reasoning-token details.
@@ -2735,10 +2789,7 @@ mod tests {
                 .count(),
             1
         );
-        assert!(events.iter().any(|event| matches!(
-            event,
-            AiStreamEvent::ReasoningSummaryUpdated { text, .. } if text == "先检查文件"
-        )));
+        assert_eq!(summary_text(&events), "先检查文件");
         assert_eq!(
             events
                 .iter()

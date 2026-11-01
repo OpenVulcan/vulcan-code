@@ -523,7 +523,14 @@ Wire JSON；内部封装不是标准 Responses 请求。媒体载荷保存在请
 这两类状态都不得进入 assistant reasoning、转录记录、Provider replay、重试快照或下一轮上下文，
 并在成功、失败、取消或流结束时清除。若协议本身已有原生 summary 事件，解码器可以直接规范化；若
 供应商使用 Chat 等不具备原生 summary 事件的协议，则必须通过 Response Profile 的精确字段映射和
-模型级 `response_profile_refs` 声明，禁止在运行时按供应商 ID 或模型 ID 写判断。同一冻结请求链最多
+模型级 `response_profile_refs` 声明，禁止在运行时按供应商 ID 或模型 ID 写判断。
+
+Chat 协议的 `reasoning_details[].type == "reasoning.summary"` 不走上述瞬态通道：各供应商放入其中的
+内容含义不一（真摘要或借用该类型的完整思考），解码器统一把它作为**仅展示思考**
+（`ReasoningSummaryDelta`）发出，进入思考弹窗、assistant reasoning 与转录记录，但绝不登记重放项，
+不进入 Provider replay；摘要不是模型自身思考，回放会打断其上下文。新摘要部分（`index` 变化）之前插入
+空行；同一请求一旦出现非空完整思考，同分片及之后的摘要全部丢弃；与摘要逐字节相同的顶层 `reasoning`
+镜像不得当作完整思考，格式不同的镜像必须由 Response Profile 删除。同一冻结请求链最多
 只能解析出一种临时状态模式；多个 Profile 同时声明时必须失败关闭。运行时展示优先级固定为“非空
 完整思考 > 可读 summary > 加密进度”：完整思考一旦出现，必须立即清除全部瞬态节点并屏蔽后续瞬态
 更新；可读 summary 可以取代尚未产生语义内容的加密进度。不得使用 Markdown 标题、正文文本模式或
