@@ -8,10 +8,15 @@ use vulcan_service_api::{
 };
 
 mod local_plugin_uninstall;
+mod luaskills_debug;
 mod local_plugin_update;
 mod plugin_credentials;
 mod plugin_pending_operations;
 pub(crate) use local_plugin_uninstall::LocalPluginUninstallDrainDiagnostics;
+pub(crate) use luaskills_debug::{
+    KernelLuaSkillsDebugHost, service_luaskills_debug_install_status,
+    service_luaskills_debug_status, service_start_luaskills_debug_install,
+};
 pub(crate) use local_plugin_uninstall::LocalPluginUninstallProjection;
 pub(crate) use local_plugin_uninstall::PendingLocalPluginUninstallRegistry;
 pub(crate) use local_plugin_update::LocalPluginUpdateStatus;

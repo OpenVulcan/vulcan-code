@@ -588,7 +588,7 @@ fn validate_config(config: &ManagedRuntimeBootstrapConfig) -> Result<(), String>
 
 /// Return the stable platform key accepted by the upstream scripts.
 /// 返回上游脚本接受的稳定平台键。
-fn managed_runtime_platform_key() -> Result<String, String> {
+pub(crate) fn managed_runtime_platform_key() -> Result<String, String> {
     managed_runtime_platform_key_for(std::env::consts::OS, std::env::consts::ARCH)
 }
 

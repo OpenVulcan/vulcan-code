@@ -37,6 +37,9 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_probe_luaskills_github_mirrors",
     "service_set_luaskills_github_token",
     "service_luaskill_operation_progress",
+    "service_luaskills_debug_status",
+    "service_start_luaskills_debug_install",
+    "service_luaskills_debug_install_status",
     "service_set_luaskill_enabled",
     "service_set_vulcan_plugin_enabled",
     "service_reset_vulcan_plugin_config",
@@ -302,6 +305,15 @@ pub(super) async fn dispatch(
             let correlation_id: String = rpc_required_param(params, "correlationId")?;
             rpc_json_result(luaskill_operation_progress(correlation_id.as_str()))
         }
+        "service_luaskills_debug_status" => {
+            rpc_json_result(service_luaskills_debug_status().await)
+        }
+        "service_start_luaskills_debug_install" => {
+            rpc_json_result(service_start_luaskills_debug_install(state))
+        }
+        "service_luaskills_debug_install_status" => rpc_json_result(
+            service_luaskills_debug_install_status(rpc_required_param(params, "taskId")?),
+        ),
         "service_set_luaskill_enabled" => rpc_json_result(
             service_set_luaskill_enabled(
                 app.clone(),

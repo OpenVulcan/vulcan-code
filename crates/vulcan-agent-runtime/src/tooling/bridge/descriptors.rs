@@ -122,6 +122,15 @@ pub(super) fn native_plan_policy(descriptor: &NativeToolDescriptor) -> VulcanPla
                 crate::tooling::native::CONFIGURATION_LIST_ACTION,
             )],
         }
+    } else if descriptor.id == crate::tooling::native::LUASKILLS_DEBUG_TOOL_ID {
+        // Plan mode only reads the installed state; installing downloads and writes a release.
+        // 计划模式只读取安装状态；安装会下载并写入 release。
+        VulcanPlanToolPolicy::StringArgumentAllowlist {
+            field: String::from("action"),
+            allowed_values: vec![String::from(
+                crate::tooling::native::LUASKILLS_DEBUG_STATUS_ACTION,
+            )],
+        }
     } else if descriptor.id == crate::tooling::native::MCP_CALL_TOOL_ID {
         // Calls use the read-only name heuristic of configured MCP tools, on the called tool.
         // 调用对被调用工具使用已配置 MCP 工具的只读名称启发式。

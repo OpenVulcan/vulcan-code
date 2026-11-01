@@ -11,6 +11,7 @@ impl TaskRuntime {
             tool_permission_host: RwLock::new(None),
             environment_host: RwLock::new(None),
             configuration_host: RwLock::new(None),
+            luaskills_debug_host: RwLock::new(None),
             session_mcp: Arc::new(crate::mcp::session::SessionMcpRegistry::new()),
             durable_return_mailboxes: RwLock::new(HashMap::new()),
             sessions: RwLock::new(HashMap::new()),
@@ -127,6 +128,32 @@ impl TaskRuntime {
             .configuration_host
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(host);
+    }
+
+    /// Installs the service kernel's luaskills-debug host; later tool bridges hand it to the
+    /// `luaskills_debug` tool.
+    /// 安装服务内核的 luaskills-debug 宿主；之后构建的工具桥把它交给 `luaskills_debug` 工具。
+    pub fn set_luaskills_debug_host(
+        &self,
+        host: Arc<dyn crate::tooling::native::NativeLuaSkillsDebugHost>,
+    ) {
+        // The slot only holds an `Arc`, so a poisoned lock still carries a consistent value.
+        // 该槽位只保存 `Arc`，因此锁中毒后其值仍然一致。
+        *self
+            .luaskills_debug_host
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(host);
+    }
+
+    /// Returns the luaskills-debug host handed to native tools, or `None` without one.
+    /// 返回交给原生工具的 luaskills-debug 宿主；没有时返回 `None`。
+    pub(crate) fn luaskills_debug_host(
+        &self,
+    ) -> Option<Arc<dyn crate::tooling::native::NativeLuaSkillsDebugHost>> {
+        self.luaskills_debug_host
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// Returns the configuration host handed to native tools, or `None` without one.

@@ -27,6 +27,7 @@ impl NativeGoalRuntimeFixture {
             environment: None,
             session_mcp: None,
             configuration: None,
+            luaskills_debug: None,
             ..test_native_request(arguments)
         }
     }
@@ -552,6 +553,7 @@ async fn agent_registry_tool_exposes_extended_runtime_fields() {
             environment: None,
             session_mcp: None,
             configuration: None,
+            luaskills_debug: None,
             knowledge_access: None,
             spill_root: None,
             enabled_prompt_skill_names: Vec::new(),
@@ -660,6 +662,7 @@ async fn skill_registry_tool_exposes_extended_runtime_fields() {
             environment: None,
             session_mcp: None,
             configuration: None,
+            luaskills_debug: None,
             knowledge_access: None,
             spill_root: None,
             enabled_prompt_skill_names: Vec::new(),

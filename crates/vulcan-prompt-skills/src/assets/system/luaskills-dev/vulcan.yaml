@@ -1,0 +1,17 @@
+schema_version: 3
+interface:
+  display_name: "LuaSkills Dev"
+  short_description: "Build, debug and package your own LuaSkills with luaskills-debug"
+  emoji: "🧪"
+  color: "#2563EB"
+  locales:
+    zh-CN:
+      display_name: "LuaSkills 开发"
+      short_description: "用 luaskills-debug 构建、调试并打包自己的 LuaSkills"
+catalog:
+  category_id: "engineering"
+  tags: ["lua", "luaskills", "skills", "debug"]
+origin:
+  kind: "builtin"
+  label: "VulcanCode"
+  managed: true

@@ -269,6 +269,9 @@ mod tests {
         assert!(methods.contains("service_start_plugin_environment_install"));
         assert!(methods.contains("service_plugin_environment_install_status"));
         assert!(methods.contains("service_plugin_environment_install_status_for_plugin"));
+        assert!(methods.contains("service_luaskills_debug_status"));
+        assert!(methods.contains("service_start_luaskills_debug_install"));
+        assert!(methods.contains("service_luaskills_debug_install_status"));
         assert!(methods.contains("service_update_local_plugin"));
         assert!(methods.contains("service_set_vulcan_plugin_credentials"));
         assert!(methods.contains("service_reset_vulcan_plugin_config"));

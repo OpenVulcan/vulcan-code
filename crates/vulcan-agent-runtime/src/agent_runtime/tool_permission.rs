@@ -34,7 +34,8 @@ use crate::agent_runtime::question_runtime::{ApprovalAnswer, ToolApprovalPrompt}
 use crate::model::SessionId;
 use crate::tooling::native::{
     APPLY_PATCH_TOOL_ID, CONFIGURATION_LIST_ACTION, DECLARE_INTENT_TOOL_ID, FILE_EDIT_TOOL_ID,
-    FILE_TOOL_ID, FILE_WRITE_TOOL_ID, MAX_PERMISSION_REASON_CHARS, MCP_CALL_TOOL_ID,
+    FILE_TOOL_ID, FILE_WRITE_TOOL_ID, LUASKILLS_DEBUG_STATUS_ACTION, LUASKILLS_DEBUG_TOOL_ID,
+    MAX_PERMISSION_REASON_CHARS, MCP_CALL_TOOL_ID,
     MCP_CONFIG_TOOL_ID, MCP_CONNECT_TOOL_ID, PROVIDER_CONFIG_TOOL_ID, SHELL_COMMAND_TOOL_ID,
     TERMINAL_SESSION_TOOL_ID, declared_intent, session_mcp_command_line,
 };
@@ -641,6 +642,13 @@ fn classify_native(tool_id: &str, args: &Value) -> PermissionSubject {
         MCP_CONFIG_TOOL_ID | PROVIDER_CONFIG_TOOL_ID => match string_arg("action").as_deref() {
             Some(CONFIGURATION_LIST_ACTION) => PermissionSubject::Ungoverned,
             _ => PermissionSubject::Configuration { preview: None },
+        },
+        // Reading the installed state is local; installing downloads and installs an executable,
+        // an extension effect, and so is any malformed call.
+        // 读取安装状态是本地操作；安装会下载并安装可执行文件，属于扩展效果，格式错误的调用同样如此。
+        LUASKILLS_DEBUG_TOOL_ID => match string_arg("action").as_deref() {
+            Some(LUASKILLS_DEBUG_STATUS_ACTION) => PermissionSubject::Ungoverned,
+            _ => PermissionSubject::Opaque,
         },
         _ => PermissionSubject::Ungoverned,
     }

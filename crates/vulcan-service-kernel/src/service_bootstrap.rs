@@ -1626,9 +1626,17 @@ fn run_service_bootstrap(
     // 配置工具经此宿主、通过设置服务列出并修改设置。
     agent_runtime.task_runtime.set_configuration_host(Arc::new(
         crate::ai_configuration::KernelConfigurationHost::new(
-            permission_registry,
+            Arc::clone(&permission_registry),
             Arc::downgrade(state),
             event_emitter.clone(),
+        ),
+    ));
+    // The `luaskills_debug` tool installs through the same task as the LuaSkills settings page.
+    // `luaskills_debug` 工具与 LuaSkills 设置页经同一任务安装。
+    agent_runtime.task_runtime.set_luaskills_debug_host(Arc::new(
+        crate::skills_services::KernelLuaSkillsDebugHost::new(
+            permission_registry,
+            Arc::downgrade(state),
         ),
     ));
     logs.push(String::from(

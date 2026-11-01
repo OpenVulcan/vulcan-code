@@ -1142,7 +1142,7 @@ fn parse_first_sha256(text: &str) -> Result<String, String> {
 
 /// Parse the unique SHA-256 entry paired with one exact archive name.
 /// 解析与一个精确归档名称配对的唯一 SHA-256 条目。
-fn parse_named_sha256(text: &str, asset_name: &str) -> Result<String, String> {
+pub(crate) fn parse_named_sha256(text: &str, asset_name: &str) -> Result<String, String> {
     for line in text.lines() {
         let mut fields = line.split_whitespace();
         let Some(digest) = fields.next() else {
@@ -1249,7 +1249,7 @@ fn hex_text(bytes: &[u8]) -> String {
 
 /// Extract one supported official archive while rejecting paths outside the destination.
 /// 解压一个受支持的官方归档，同时拒绝目标目录外路径。
-fn extract_archive(archive_path: &Path, destination: &Path) -> Result<(), String> {
+pub(crate) fn extract_archive(archive_path: &Path, destination: &Path) -> Result<(), String> {
     // file_name selects the exact decoder from the official asset suffix.
     // file_name 根据官方资产后缀选择精确解码器。
     let file_name = archive_path
@@ -1541,7 +1541,7 @@ fn find_file_named(root: &Path, file_name: &OsStr) -> Result<Option<PathBuf>, St
 
 /// Mark one runtime binary executable on Unix and leave Windows ACL behavior unchanged.
 /// 在 Unix 上把一个运行时二进制标记为可执行，并保持 Windows ACL 行为不变。
-fn mark_executable(path: &Path) -> Result<(), String> {
+pub(crate) fn mark_executable(path: &Path) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

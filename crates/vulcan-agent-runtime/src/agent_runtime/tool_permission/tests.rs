@@ -1907,3 +1907,17 @@ async fn configuration_changes_need_the_user() {
     assert!(unattended.prompts.lock().unwrap().is_empty());
     assert!(unattended.reviewed.lock().unwrap().is_empty());
 }
+
+/// `luaskills_debug` status is local; installing and malformed calls are extension effects.
+/// `luaskills_debug` 的 status 是本地操作；安装与格式错误的调用属于扩展效果。
+#[test]
+fn luaskills_debug_install_is_an_extension_effect() {
+    let tool = native(LUASKILLS_DEBUG_TOOL_ID);
+    assert_eq!(
+        classify_tool_call(&tool, &json!({"action": "status"})),
+        PermissionSubject::Ungoverned
+    );
+    for args in [json!({"action": "install"}), json!({})] {
+        assert_eq!(classify_tool_call(&tool, &args), PermissionSubject::Opaque);
+    }
+}

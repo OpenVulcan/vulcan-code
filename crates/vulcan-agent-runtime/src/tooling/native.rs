@@ -240,6 +240,7 @@ mod file_read;
 mod file_result;
 mod file_write;
 mod knowledge_base;
+mod luaskills_debug;
 mod markdown_memory;
 mod prompt_skill;
 mod registry;
@@ -265,6 +266,11 @@ pub(crate) use file_edit::*;
 pub(crate) use file_read::*;
 pub(crate) use file_write::*;
 pub(crate) use knowledge_base::*;
+pub(crate) use luaskills_debug::build_luaskills_debug_tool;
+pub use luaskills_debug::{
+    LUASKILLS_DEBUG_STATUS_ACTION, LUASKILLS_DEBUG_TOOL_ID, LuaSkillsDebugOutcome,
+    LuaSkillsDebugRequest, NativeLuaSkillsDebugHost,
+};
 pub(crate) use markdown_memory::*;
 pub use markdown_memory::{current_memory_mode, memory_mode_vmm_layer, project_vmm_layer_for_mode};
 pub(crate) use prompt_skill::*;
@@ -411,6 +417,9 @@ pub struct NativeToolExecutionRequest {
     /// Optional configuration host; the configuration tools list and change settings through it.
     /// 可选的配置宿主；配置工具通过它列出并修改设置。
     pub configuration: Option<Arc<dyn NativeConfigurationHost>>,
+    /// Optional luaskills-debug host; the `luaskills_debug` tool reads and installs through it.
+    /// 可选的 luaskills-debug 宿主；`luaskills_debug` 工具通过它读取与安装。
+    pub luaskills_debug: Option<Arc<dyn NativeLuaSkillsDebugHost>>,
     /// Optional project-authorized and session-enabled knowledge-library snapshot.
     /// 可选的项目授权且会话已启用知识库快照。
     pub knowledge_access: Option<ExecutionKnowledgeAccessContext>,
@@ -590,6 +599,7 @@ pub fn build_native_tool_catalog(
     ];
     if let Some(runtime) = luaskills_runtime {
         definitions.push(build_runtime_config_tool(runtime));
+        definitions.push(build_luaskills_debug_tool());
     }
     let mut definition_map = BTreeMap::new();
     let mut descriptors = Vec::new();
