@@ -195,7 +195,7 @@ const BOUNDED_BODY_FOLLOW_SLACK_PX = 8;
 // TOOL_SEQUENCE_SWAP_MS is the duration of the push-up animation when one card replaces another in a
 // folded run; the stylesheet reads it through --vk-tool-swap.
 // TOOL_SEQUENCE_SWAP_MS 是折叠序列中一张卡片替换另一张时上推动画的时长；样式表通过 --vk-tool-swap 读取。
-const TOOL_SEQUENCE_SWAP_MS = 260;
+const TOOL_SEQUENCE_SWAP_MS = 420;
 
 // useToolSequenceHighWaterFloor keeps a folded body at the tallest height it reached while active, so it
 // only ever grows until the run closes. The bounded body's max height still caps it.

@@ -344,19 +344,29 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-tool-seq { --vk-tool-seq-max-h: min(52.5rem, 78vh); display: grid; grid-template-columns: minmax(0, 1fr); gap: calc(var(--vk-u) * 2); min-width: 0; }
 .vk-tool-seq-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: calc(var(--vk-u) * 3); min-width: 0; }
 .vk-tool-seq-slot { min-width: 0; }
-/* A 1-for-1 replacement in a folded run reads as a ticker: the new card rises from below while the old
- * one overlays it and slides out upward, taking no layout space so the body height never doubles. */
-/* 折叠序列中的一对一替换呈现为跑马效果：新卡片自下升起，旧卡片覆盖其上并向上滑出；旧卡片不占布局空间，正文高度不会翻倍。 */
-.vk-tool-seq-body:has(> .vk-tool-seq-slot[data-leaving]) { position: relative; }
-.vk-tool-seq-slot[data-leaving] { position: absolute; top: 0; left: 0; right: 0; padding-left: inherit; pointer-events: none; animation: vk-tool-slot-leave var(--vk-tool-swap) ease-in forwards; }
-.vk-tool-seq-slot[data-entering] { animation: vk-tool-slot-enter var(--vk-tool-swap) ease-out; }
+/* A 1-for-1 replacement in a folded run reads as a ticker: the old card slides out of the top while the
+ * new one rises into place, both on one easing curve so they move together. The old card takes no layout
+ * space, so the body height never doubles. The old card fades out before the new one fades fully in, so
+ * two half-transparent cards never sit on top of each other (the source of the flicker). While the swap
+ * runs, the body clips instead of scrolling: the transformed cards would otherwise count as scrollable
+ * overflow and flash a scrollbar. The stable gutter keeps the width unchanged. */
+/* 折叠序列中的一对一替换呈现为跑马效果：旧卡片从顶部滑出，新卡片升入原位，两者用同一缓动曲线同步移动；旧卡片不占布局空间，
+ * 正文高度不会翻倍。旧卡片先淡出、新卡片后淡入，避免两张半透明卡片叠在一起闪烁。替换期间正文裁剪而不滚动：
+ * 位移中的卡片否则会被计为可滚动溢出并闪出滚动条；稳定槽位使宽度不变。 */
+.vk-tool-seq > .vk-collapse > .vk-collapse-inner > .vk-tool-seq-body:has(> .vk-tool-seq-slot[data-leaving]) { position: relative; overflow-y: hidden; }
+.vk-tool-seq-slot[data-leaving],
+.vk-tool-seq-slot[data-entering] { will-change: transform, opacity; }
+.vk-tool-seq-slot[data-leaving] { position: absolute; top: 0; left: 0; right: 0; padding-left: inherit; pointer-events: none; animation: vk-tool-slot-leave var(--vk-tool-swap) var(--vk-ease) forwards; }
+.vk-tool-seq-slot[data-entering] { animation: vk-tool-slot-enter var(--vk-tool-swap) var(--vk-ease) backwards; }
 @keyframes vk-tool-slot-leave {
-  from { opacity: 1; transform: translateY(0); }
-  to { opacity: 0; transform: translateY(-60%); }
+  0% { opacity: 1; transform: translateY(0); }
+  60% { opacity: 0; }
+  100% { opacity: 0; transform: translateY(-100%); }
 }
 @keyframes vk-tool-slot-enter {
-  from { opacity: 0; transform: translateY(40%); }
-  to { opacity: 1; transform: translateY(0); }
+  0% { opacity: 0; transform: translateY(100%); }
+  35% { opacity: 0; }
+  100% { opacity: 1; transform: translateY(0); }
 }
 @media (prefers-reduced-motion: reduce) {
   .vk-tool-seq-slot[data-entering] { animation: none; }
