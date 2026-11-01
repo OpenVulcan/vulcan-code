@@ -84,6 +84,7 @@ const variableNames = (input: Record<string, unknown>) => {
 const DOCUMENT_TOOLS: Readonly<Record<string, DocumentToolSpec>> = {
   skill: { family: "read", icon: Puzzle, target: field("name"), verb: "toolCard.doc.skill" },
   call_luaskill: { family: "run", icon: Puzzle, target: field("name"), verb: "toolCard.doc.callSkill" },
+  luaskills_debug: { family: "run", icon: Bug, target: field("action"), verb: "toolCard.doc.luaskillsDebug" },
   luaskill_help: {
     family: "read",
     icon: BookOpen,

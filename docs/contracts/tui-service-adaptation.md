@@ -95,6 +95,7 @@ hydration 的 `session_config.unattended`，只在当前为自动审批时出现
 | 子代理定义 | 真实分类导航与数量、状态及跨语言搜索筛选、查看定义元数据（提示词正文不随目录下发，WebUI 经 `service_subagent_definition_prompts` 按需读取）、启用、刷新、用户目录、删除用户覆盖与还原默认 | Workbench.subagentCatalog.categories/definitions |
 | LuaSkills | GitHub 安装、更新、卸载、启用、显式/隐式/禁用工具 | Workbench.luaSkills |
 | LuaSkills 设置 | 完整运行时配置、私有地址允许列表、运行时重试 | Workbench.luaSkills.runtimeSettings |
+| 调试 Lua 技能 | 一键安装 luaskills-debug、路径与运行时设置命令；安装运行期间每秒重读状态 | LuaSkillsDebugStatus |
 | Vulcan 插件 | 检查包、审查权限及指纹、输入安装密钥、安装/更新、启用、卸载 | Workbench.plugins、插件预检 |
 | 插件设置页 | 设置版面标签、字段整份配置写入、凭据状态/设置/删除、操作、数据区块参数与刷新、包内文档阅读 | PluginUi、PluginConfig、PluginCredential(n)、PluginData(n)、PluginAsset |
 | 知识库列表 | 创建空库、明确模式及模型、删除；错误格式只显示原因与删除 | KnowledgeLibraries、PublicAiSettings |
@@ -307,6 +308,8 @@ Rust 名称列同时标明内部确认构建器，避免将预检确认辅助函
 | `skills_actions::install_luaskill` | installLuaSkill | `service_install_luaskill` |
 | `skills_actions::search_luaskills_hub` | searchLuaSkillsHub | `service_search_luaskills_hub` |
 | `skills_actions::get_luaskills_hub_skill` | getLuaSkillsHubSkill | `service_get_luaskills_hub_skill` |
+| `skills_actions::read_luaskills_debug_status` | readLuaSkillsDebugStatus | `service_luaskills_debug_status` |
+| `skills_actions::start_luaskills_debug_install` | startLuaSkillsDebugInstall | `service_start_luaskills_debug_install` |
 | `skills_actions::update_luaskill` | updateLuaSkill | `service_update_luaskill` |
 | `skills_actions::set_luaskill_enabled` | setLuaSkillEnabled | `service_set_luaskill_enabled` |
 | `skills_actions::uninstall_luaskill` | uninstallLuaSkill | `service_uninstall_luaskill` |

@@ -10,6 +10,7 @@ import {
   Puzzle,
   Route,
   Settings,
+  TestTubeDiagonal,
   Variable,
   Wrench,
 } from "lucide-react";
@@ -105,6 +106,7 @@ export function PluginWorkspaceMenu(props: {
     { icon: <Hammer size={15} />, id: "catalog", label: t("skills.navigation.list") },
     { icon: <CloudDownload size={15} />, id: "sources", label: t("skills.navigation.luaSources") },
     { icon: <Settings size={15} />, id: "settings", label: t("skills.navigation.luaSettings") },
+    { icon: <TestTubeDiagonal size={15} />, id: "luaskills-debug", label: t("skills.navigation.luaDebug") },
     { icon: <Plug size={15} />, id: "mcp-servers", label: t("settings.mcpServers") },
     { icon: <BookMarked size={15} />, id: "knowledge", label: t("area.knowledge") },
     { icon: <Variable size={15} />, id: "environment-variables", label: t("environment.area") },
@@ -145,6 +147,9 @@ export function skillSubAreaLabel(
   }
   if (subArea === "plugin-maintenance") {
     return t("skills.navigation.pluginMaintenance");
+  }
+  if (subArea === "luaskills-debug") {
+    return t("skills.navigation.luaDebug");
   }
   if (subArea === "mcp-servers") {
     return t("settings.mcpServers");

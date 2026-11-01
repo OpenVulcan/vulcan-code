@@ -4,6 +4,8 @@ import type {
   AgentSkillCategorySaveRequest,
   AgentSkillSaveRequest,
   LuaSkillsCatalogUpdate,
+  LuaSkillsDebugInstallTask,
+  LuaSkillsDebugStatus,
   LuaSkillsHubSearchPage,
   LuaSkillsHubSkillDetail,
   LuaSkillsGithubMirror,
@@ -293,6 +295,33 @@ export async function installLuaSkill(skillId: string, source: string, sourceTyp
     }));
   }
   return serviceClient.request<LuaSkillsCatalogUpdate>("service_install_luaskill", { skillId: skillId.trim() || null, source, sourceType });
+}
+
+// readLuaSkillsDebugStatus reads the installed luaskills-debug tool and its latest install task.
+// readLuaSkillsDebugStatus 读取已安装的 luaskills-debug 工具及其最近安装任务。
+export async function readLuaSkillsDebugStatus(): Promise<LuaSkillsDebugStatus> {
+  if (!hasServiceRuntime()) {
+    throw new Error("luaskills-debug requires the Core service.");
+  }
+  return serviceClient.request<LuaSkillsDebugStatus>("service_luaskills_debug_status", {});
+}
+
+// startLuaSkillsDebugInstall starts the luaskills-debug install, or returns the one already running.
+// startLuaSkillsDebugInstall 启动 luaskills-debug 安装，或返回已在运行的安装。
+export async function startLuaSkillsDebugInstall(): Promise<LuaSkillsDebugInstallTask> {
+  if (!hasServiceRuntime()) {
+    throw new Error("luaskills-debug requires the Core service.");
+  }
+  return serviceClient.request<LuaSkillsDebugInstallTask>("service_start_luaskills_debug_install", {});
+}
+
+// luaSkillsDebugInstallStatus reads one install task by the id the start call returned.
+// luaSkillsDebugInstallStatus 按启动调用返回的标识读取一个安装任务。
+export async function luaSkillsDebugInstallStatus(taskId: string): Promise<LuaSkillsDebugInstallTask> {
+  if (!hasServiceRuntime()) {
+    throw new Error("luaskills-debug requires the Core service.");
+  }
+  return serviceClient.request<LuaSkillsDebugInstallTask>("service_luaskills_debug_install_status", { taskId });
 }
 
 // searchLuaSkillsHub lists installable skills from the Hub that `official_hub` installs resolve against.

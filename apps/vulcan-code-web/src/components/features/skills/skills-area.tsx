@@ -7,6 +7,7 @@ import { KnowledgeBaseArea } from "@/components/features/knowledge/knowledge-bas
 import { McpSettingsArea } from "@/components/features/settings/mcp-settings-area"
 import { RtkSettingsArea } from "@/components/features/rtk/rtk-settings-area"
 
+import { LuaSkillsDebugPanel } from "./lua-skills-debug-panel"
 import { LuaSkillsPanel, LuaSkillInstallDialog } from "./lua-skills-panel"
 import { LuaSkillsSettingsPanel } from "./lua-skills-settings-panel"
 import { LuaSkillsSourcesPanel } from "./lua-skills-sources-panel"
@@ -81,6 +82,8 @@ export function SkillsArea(props: {
           actions={props.skillActions}
           catalog={props.workbench.luaSkills}
         />
+      ) : props.activeTab === "luaskills-debug" ? (
+        <LuaSkillsDebugPanel />
       ) : props.activeTab === "mcp-servers" ? (
         <McpSettingsArea actions={props.skillActions} servers={props.workbench.mcpServers ?? []} onOpenDiagnostics={props.onOpenDiagnostics} />
       ) : props.activeTab === "knowledge" ? (

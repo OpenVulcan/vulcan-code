@@ -534,3 +534,31 @@ pub fn restore_subagent_definition_default(agent_id: &str) -> ServiceCall {
         json!({ "agentId": agent_id }),
     )
 }
+
+/// Builds the request for `service_luaskills_debug_status`: the installed luaskills-debug and its
+/// latest install task.
+/// 构建 `service_luaskills_debug_status` 的请求：已安装的 luaskills-debug 及其最近安装任务。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn read_luaskills_debug_status() -> ServiceCall {
+    ServiceCall::load(
+        "read_luaskills_debug_status",
+        "service_luaskills_debug_status",
+        json!({}),
+        Slot::LuaSkillsDebugStatus,
+    )
+}
+
+/// Builds the request for `service_start_luaskills_debug_install`; the Core returns the running
+/// install when one already runs, and the refreshed status carries the task.
+/// 构建 `service_start_luaskills_debug_install` 的请求；已有安装运行时 Core 返回该安装，刷新后的状态携带该任务。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn start_luaskills_debug_install() -> ServiceCall {
+    ServiceCall::mutate(
+        "start_luaskills_debug_install",
+        "service_start_luaskills_debug_install",
+        json!({}),
+        &[Slot::LuaSkillsDebugStatus],
+    )
+}

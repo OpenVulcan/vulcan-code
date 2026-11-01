@@ -142,7 +142,7 @@ fn ms(value: &Value) -> String {
 
 /// Renders a size the way the WebUI does: one decimal, trailing `.0` dropped.
 /// 按 WebUI 的方式渲染大小：保留一位小数，去掉末尾的 `.0`。
-fn format_bytes(bytes: f64) -> String {
+pub(super) fn format_bytes(bytes: f64) -> String {
     const UNITS: [&str; 5] = ["KB", "MB", "GB", "TB", "PB"];
     // Non-negative whole bytes, as the WebUI normalizes them.
     // 与 WebUI 一致的非负整数字节数。

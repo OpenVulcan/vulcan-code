@@ -1727,6 +1727,18 @@
       "maxNoteChars": 400,
       "maxModels": 16
     },
+    "service_luaskills_debug_status": {
+      "series": "0.8",
+      "platform": "linux-x64",
+      "installRoot": "/home/demo/.vulcan/code/tools/luaskills-debug",
+      "version": null,
+      "compatible": false,
+      "executable": null,
+      "packageRoot": null,
+      "runtimeRoot": null,
+      "runtimeReady": false,
+      "task": null
+    },
     "service_rtk_settings": {
       "settings": {
         "enabled": true,

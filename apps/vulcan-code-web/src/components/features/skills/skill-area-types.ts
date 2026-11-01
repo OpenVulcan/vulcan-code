@@ -104,7 +104,7 @@ export type PluginSkillSubAreaId = `plugin:${string}:${string}`
 
 // SkillSubAreaId identifies the selected skill management category.
 // SkillSubAreaId 标识当前选中的技能管理分类。
-export type SkillSubAreaId = "catalog" | "sources" | "plugins" | "plugin-maintenance" | "settings" | "mcp-servers" | "knowledge" | "environment-variables" | "rtk" | PluginSkillSubAreaId
+export type SkillSubAreaId = "catalog" | "sources" | "plugins" | "plugin-maintenance" | "settings" | "luaskills-debug" | "mcp-servers" | "knowledge" | "environment-variables" | "rtk" | PluginSkillSubAreaId
 
 // PluginDetailMountSelection binds one enabled plugin to one exact detail mount and navigation id.
 // PluginDetailMountSelection 将一个已启用插件绑定到一个精确详情挂载点及导航标识。

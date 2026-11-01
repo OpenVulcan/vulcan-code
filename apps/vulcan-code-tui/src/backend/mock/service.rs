@@ -1013,6 +1013,31 @@ impl FakeService {
                 self.loads["service_session_subagent_models"]["models"] =
                     required(params, "/request/models")?.clone();
             }
+            "service_start_luaskills_debug_install" => {
+                // The demo installs at once and reports the finished task in the status.
+                // 演示立即完成安装，并在状态中报告已完成的任务。
+                let status = &mut self.loads["service_luaskills_debug_status"];
+                let package_root = format!(
+                    "/home/demo/.vulcan/code/tools/luaskills-debug/{}.0",
+                    status["series"].as_str().ok_or("series")?
+                );
+                let task = json!({
+                    "taskId": "demo-luaskills-debug-install",
+                    "state": "succeeded",
+                    "phase": "completed",
+                    "completedBytes": null,
+                    "totalBytes": null,
+                    "overallPercent": 100
+                });
+                status["version"] =
+                    json!(format!("{}.0", status["series"].as_str().ok_or("series")?));
+                status["compatible"] = json!(true);
+                status["executable"] = json!(format!("{package_root}/bin/luaskills-debug"));
+                status["runtimeRoot"] = json!(format!("{package_root}/runtime"));
+                status["packageRoot"] = json!(package_root);
+                status["task"] = task.clone();
+                return Ok(task);
+            }
             "service_save_rtk_settings" => {
                 self.loads["service_rtk_settings"]["settings"] =
                     required(params, "/request/settings")?.clone();

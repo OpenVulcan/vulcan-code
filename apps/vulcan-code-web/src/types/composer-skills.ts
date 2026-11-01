@@ -1460,6 +1460,47 @@ export interface LuaSkillsHubSearchPage {
   nextCursor: string | null;
 }
 
+// LuaSkillsDebugInstallTask is the Core-owned luaskills-debug install, queried by its stable id.
+// LuaSkillsDebugInstallTask 是 Core 自有的 luaskills-debug 安装任务，按稳定标识查询。
+export interface LuaSkillsDebugInstallTask {
+  taskId: string;
+  state: "running" | "succeeded" | "failed";
+  // Stable installer phase key such as resolving, downloading, verifying or completed.
+  // 稳定的安装阶段键，例如 resolving、downloading、verifying 或 completed。
+  phase: string;
+  completedBytes: number | null;
+  totalBytes: number | null;
+  overallPercent: number | null;
+  // English diagnostic of a failed install.
+  // 失败安装的英文诊断。
+  error?: string;
+}
+
+// LuaSkillsDebugStatus describes the installed luaskills-debug developer tool.
+// LuaSkillsDebugStatus 描述已安装的 luaskills-debug 开发工具。
+export interface LuaSkillsDebugStatus {
+  // major.minor series that matches the embedded LuaSkills runtime.
+  // 与内嵌 LuaSkills 运行时匹配的 major.minor 系列。
+  series: string;
+  // Release platform key of this host; null when luaskills-debug does not support it.
+  // 本宿主的发布平台键；luaskills-debug 不支持时为 null。
+  platform: string | null;
+  installRoot: string | null;
+  // Installed version, null when nothing is installed.
+  // 已安装版本；未安装时为 null。
+  version: string | null;
+  // Whether the installed version belongs to the matching series.
+  // 已安装版本是否属于匹配系列。
+  compatible: boolean;
+  executable: string | null;
+  packageRoot: string | null;
+  runtimeRoot: string | null;
+  // Whether the Lua runtime packages of the debug runtime are set up.
+  // 调试运行时的 Lua 运行时包是否已设置。
+  runtimeReady: boolean;
+  task: LuaSkillsDebugInstallTask | null;
+}
+
 // AgentSkillRecordSummary describes one source-aware prompt Agent Skill record.
 // AgentSkillRecordSummary 描述单个来源感知提示词 Agent Skill 记录。
 export interface AgentSkillRecordSummary {

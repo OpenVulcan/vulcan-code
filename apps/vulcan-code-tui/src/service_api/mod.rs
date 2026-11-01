@@ -278,6 +278,9 @@ pub enum Slot {
     /// `loadRtkStatistics` of the RTK page.
     /// RTK 页的 `loadRtkStatistics`。
     RtkStatistics,
+    /// `readLuaSkillsDebugStatus` of the Debug Lua skills page.
+    /// 调试 Lua 技能页的 `readLuaSkillsDebugStatus`。
+    LuaSkillsDebugStatus,
     /// `loadMcpService`: the endpoint switch, its clients and the grantable media models.
     /// 端点开关、其客户端与可授权媒体模型的 `loadMcpService`。
     McpService,

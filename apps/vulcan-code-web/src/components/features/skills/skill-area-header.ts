@@ -29,6 +29,9 @@ export function activeSkillHeaderSummary(
   if (activeTab === "sources") {
     return { title: t("skills.navigation.luaSources"), detail: t("skills.luaSources.description") }
   }
+  if (activeTab === "luaskills-debug") {
+    return { title: t("skills.navigation.luaDebug"), detail: t("skills.luaDebug.description") }
+  }
   if (activeTab === "mcp-servers") {
     return { title: t("settings.mcpServers"), detail: t("settings.mcpServers.description") }
   }

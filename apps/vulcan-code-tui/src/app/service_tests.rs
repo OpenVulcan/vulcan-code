@@ -134,6 +134,35 @@ fn provider_tasks_are_polled_only_while_live() {
     }
 }
 
+/// The luaskills-debug status is re-read only while the install task it carries runs.
+/// luaskills-debug 状态仅在其携带的安装任务运行期间重读。
+#[test]
+fn luaskills_debug_status_is_polled_only_while_installing() {
+    let (mut app, _commands) = isolated_app();
+    for (task, armed) in [
+        (
+            json!({"taskId": "a", "state": "running", "phase": "downloading"}),
+            true,
+        ),
+        (
+            json!({"taskId": "a", "state": "succeeded", "phase": "completed"}),
+            false,
+        ),
+        (Value::Null, false),
+    ] {
+        app.slots.set(
+            Slot::LuaSkillsDebugStatus,
+            crate::service_api::skills_actions::read_luaskills_debug_status(),
+            json!({"series": "0.8", "platform": "linux-x64", "version": null, "task": task}),
+        );
+        app.arm_live_poll(Slot::LuaSkillsDebugStatus);
+        assert_eq!(
+            app.live_poll_due.contains_key(&Slot::LuaSkillsDebugStatus),
+            armed
+        );
+    }
+}
+
 /// The permission judge status is re-read at the interval the service publishes in it.
 /// 权限判定状态按服务在其中发布的间隔重读。
 #[test]

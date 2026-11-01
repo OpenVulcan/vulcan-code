@@ -12,6 +12,7 @@
 mod catalog;
 mod inference;
 mod knowledge;
+mod luaskills_debug;
 mod markdown_memory;
 mod mcp_service;
 mod memory;
@@ -111,7 +112,10 @@ impl Area {
             Area::Chat => Vec::new(),
             Area::AgentSkills => vec![(None, vec![SkillList])],
             Area::Plugins => vec![
-                (Some("LuaSkills".into()), vec![LuaSkills, LuaSettings]),
+                (
+                    Some("LuaSkills".into()),
+                    vec![LuaSkills, LuaSettings, LuaSkillsDebug],
+                ),
                 (Some(tr!("settings.mcpServers")), vec![Mcp]),
                 (Some(tr!("rtk.area")), vec![Rtk]),
                 (
@@ -301,6 +305,9 @@ pub enum PageId {
     SkillList,
     LuaSkills,
     LuaSettings,
+    /// One-click luaskills-debug install and its paths.
+    /// 一键安装 luaskills-debug 及其路径。
+    LuaSkillsDebug,
     /// Host-native RTK: routing switches, the route checklist and token-saving statistics.
     /// 宿主原生 RTK：路由开关、路由清单与 Token 节省统计。
     Rtk,
@@ -364,6 +371,7 @@ impl PageId {
             PageId::SkillList => tr!("area.agentSkills"),
             PageId::LuaSkills => tr!("skills.navigation.list"),
             PageId::LuaSettings => tr!("skills.navigation.luaSettings"),
+            PageId::LuaSkillsDebug => tr!("skills.navigation.luaDebug"),
             PageId::Rtk => tr!("rtk.area"),
 
             PageId::VulcanPlugins => tr!("skills.navigation.externalPlugins"),
@@ -484,6 +492,7 @@ impl PageId {
                 }
             }
             Self::McpService => calls.push(api::mcp_service::load_mcp_service()),
+            Self::LuaSkillsDebug => calls.push(api::skills_actions::read_luaskills_debug_status()),
             Self::Rtk => calls.extend([
                 api::rtk::load_rtk_settings(),
                 api::rtk::load_rtk_statistics(),
@@ -575,6 +584,7 @@ impl PageId {
                 Slot::PermissionJudgeEdgeEndpoints,
             ],
             Self::SetupGuide => &[Slot::PermissionJudgeStatus],
+            Self::LuaSkillsDebug => &[Slot::LuaSkillsDebugStatus],
             _ => &[],
         }
     }
@@ -1196,6 +1206,7 @@ pub fn rows(app: &App, page: PageId) -> Vec<Row> {
         PageId::SkillList => catalog::skills(app),
         PageId::LuaSkills => plugins::lua_skills(app),
         PageId::LuaSettings => plugins::lua_settings(app),
+        PageId::LuaSkillsDebug => luaskills_debug::rows(app),
         PageId::Rtk => rtk::rows(app),
 
         PageId::VulcanPlugins => plugins::plugins(app),
