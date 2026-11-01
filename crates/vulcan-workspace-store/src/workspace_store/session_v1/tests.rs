@@ -13,6 +13,10 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use vulcan_session_core::v1::collaboration::{
+    CollaborationAfterState, CollaborationEventKind, CollaborationRunControl,
+};
+
 mod fingerprints;
 mod maintenance_runtime;
 mod metadata_access;
@@ -120,6 +124,102 @@ fn build_durable_edit_output(
             now_ms,
         })
         .expect("durable edit source must build one complete Core output")
+}
+
+/// Checks that an edit preserves the source prefix, replaces the target input, and admits its open turn.
+/// 验证编辑保留来源前缀、替换目标输入，并将其开放回合准入为运行中。
+/// `source` is the pre-edit history; `edited` is reloaded storage; `target` and `text` identify the replacement.
+/// `source` 是编辑前历史，`edited` 是重新加载的存储，`target` 与 `text` 指定替换目标及正文。
+/// Returns normally only when the persisted input identity and host-only admission agree with the active turn.
+/// 仅当持久输入身份、仅宿主可见的准入事件与活动回合一致时正常返回。
+fn assert_edited_history(
+    source: &SessionDocument,
+    edited: &SessionDocument,
+    target: Seq,
+    text: &str,
+) {
+    // Compare actual retained facts instead of assuming a fixed event count for earlier turns.
+    // 比较实际保留事实，避免假设此前各回合包含固定数量的事件。
+    assert_eq!(
+        edited
+            .events()
+            .iter()
+            .filter(|event| event.seq() < target)
+            .collect::<Vec<_>>(),
+        source
+            .events()
+            .iter()
+            .filter(|event| event.seq() < target)
+            .collect::<Vec<_>>(),
+        "editing must preserve every event before the target"
+    );
+    // Both input envelopes must refer to the same durable root action and turn.
+    // 两份输入信封必须指向同一持久根动作与回合。
+    let original = source
+        .events()
+        .iter()
+        .find(|event| event.seq() == target)
+        .expect("the source must contain the selected edit target");
+    let replacement = edited
+        .events()
+        .iter()
+        .find(|event| event.seq() == target)
+        .expect("the replacement must retain the selected event identity");
+    let (EventBody::UserInput(original_input), EventBody::UserInput(replaced_input)) =
+        (&original.event, &replacement.event)
+    else {
+        panic!("the edit target and replacement must both be user inputs");
+    };
+    assert_eq!(replaced_input.text, text);
+    assert_eq!(
+        replaced_input.client_action_id,
+        original_input.client_action_id
+    );
+    assert_eq!(replacement.turn_id, original.turn_id);
+
+    // These fixtures carry no execution context to reset: the old suffix is replaced by one admission fact.
+    // 这些夹具没有需要重置的执行上下文：旧后缀应被一条准入事实替换。
+    let suffix = edited
+        .events()
+        .iter()
+        .filter(|event| event.seq() > target)
+        .collect::<Vec<_>>();
+    let [admission] = suffix.as_slice() else {
+        panic!(
+            "the edited suffix must contain only its run-control admission, not discarded history"
+        );
+    };
+    let EventBody::Collaboration(admission_fact) = &admission.event else {
+        panic!("the edited suffix must be a collaboration admission");
+    };
+    let CollaborationAfterState::RunControl { transition } = &admission_fact.after_state else {
+        panic!("the admission must carry its run-control after-state");
+    };
+    assert_eq!(
+        admission_fact.event_kind,
+        CollaborationEventKind::RunControlChanged
+    );
+    assert_eq!(transition.state, CollaborationRunControl::Running);
+    assert_eq!(transition.operation_id, admission_fact.operation_id);
+    // The admission is freshly published with the edit, rather than copied from the removed suffix.
+    // 准入事件必须随本次编辑重新发布，不能从已删除的旧后缀复制。
+    assert_eq!(transition.changed_at_ms, edited.metadata.updated_at_ms);
+    assert_eq!(admission.created_at_ms, transition.changed_at_ms);
+    assert_eq!(admission.visibility, EventVisibility::HostOnly);
+    assert_eq!(admission.turn_id, None);
+    assert_eq!(admission.seq().value(), target.value() + 1);
+    assert_eq!(
+        edited.collaboration_run_control(),
+        CollaborationRunControl::Running
+    );
+    // The control event is session-scoped, while the reopened turn is owned by the retained root input.
+    // 控制事件属于会话，重新开放的回合则由保留的根输入持有。
+    let turn = edited
+        .active_turn()
+        .expect("the edited input must reopen its turn");
+    assert!(!turn.closed);
+    assert_eq!(turn.start_seq, target);
+    assert_eq!(Some(turn.turn_id), replacement.turn_id);
 }
 
 /// Builds one child generation from the exact durable parent currently published on disk.
@@ -1380,10 +1480,15 @@ fn edit_generation_byte_copies_prefix_and_switches() {
     let metadata = read_metadata(&layout.metadata_path()).unwrap();
     assert!(metadata.split_list.len() >= 2);
 
-    // Edit the first user input (seq 1): prefix sealed files before seq 1 do
-    // not exist; the rewrite lands on the first segment.
-    // 编辑第一个用户输入(seq 1)：seq 1 之前没有封口文件；重写落在第一个分片。
-    let output = build_durable_edit_output(&layout, Seq::try_new(1).unwrap(), "edited hello", 12);
+    // Locate the root input by kind so fixture evolution cannot shift the edit to another fact.
+    // 按类型定位根输入，避免夹具演进后把编辑指向其他事实。
+    let target = document
+        .events()
+        .iter()
+        .find(|event| matches!(event.event, EventBody::UserInput(_)))
+        .expect("the fixture must contain a root user input")
+        .seq();
+    let output = build_durable_edit_output(&layout, target, "edited hello", 12);
     let new_metadata = publish_edit_generation(
         &layout,
         PublishEditGenerationRequest {
@@ -1421,9 +1526,7 @@ fn edit_generation_byte_copies_prefix_and_switches() {
         })
         .unwrap();
     assert_eq!(first_input, "edited hello");
-    // Everything after the target was deleted.
-    // 目标之后的内容全部被删除。
-    assert_eq!(loaded.document.events().len(), 1);
+    assert_edited_history(&document, &loaded.document, target, "edited hello");
     drop(root);
 }
 
@@ -1887,7 +1990,15 @@ fn edit_is_retryable_after_stale_candidate() {
     std::fs::create_dir_all(layout.candidate_context_dir(1)).unwrap();
     std::fs::write(layout.runtime_path(2), b"residual").unwrap();
 
-    let output = build_durable_edit_output(&layout, Seq::try_new(1).unwrap(), "edited", 12);
+    // Select the source input by kind, independently of its position in the fixture.
+    // 按类型选择来源输入，不依赖其在夹具中的位置。
+    let target = document
+        .events()
+        .iter()
+        .find(|event| matches!(event.event, EventBody::UserInput(_)))
+        .expect("the fixture must contain a root user input")
+        .seq();
+    let output = build_durable_edit_output(&layout, target, "edited", 12);
     let new_metadata = publish_edit_generation(
         &layout,
         PublishEditGenerationRequest {
@@ -1901,7 +2012,7 @@ fn edit_is_retryable_after_stale_candidate() {
     // The residual file was replaced by the real rewrite.
     // 残留文件已被真实重写替换。
     let loaded = load_session(&layout).unwrap();
-    assert_eq!(loaded.document.events().len(), 1);
+    assert_edited_history(&document, &loaded.document, target, "edited");
     drop(root);
 }
 
@@ -2278,19 +2389,8 @@ fn edit_mid_segments_byte_copies_sealed_prefix() {
             _ => None,
         })
         .expect("edited input must be present");
-    let _ = second_input;
-    // Events after the target were deleted: the edited input is the last
-    // event and the retained stream is exactly 1..=target.
-    // 目标之后的事件被删除：被编辑输入是最后一条事件，保留流精确为 1..=target。
-    assert_eq!(
-        loaded.document.events().len(),
-        target.value() as usize,
-        "the retained prefix ends at the edited input"
-    );
-    assert!(matches!(
-        &loaded.document.events().last().unwrap().event,
-        EventBody::UserInput(input) if input.text == "edited second turn"
-    ));
+    assert_eq!(second_input, target);
+    assert_edited_history(&document, &loaded.document, target, "edited second turn");
     drop(root);
 }
 
@@ -3084,13 +3184,15 @@ fn edit_reselects_compaction_pointer_in_deleted_history() {
     flush_candidate(&mut document, &layout, 5);
     assert_eq!(document.compactions.len(), 1);
 
-    // Edit the very first user input: the compaction at seq 10 lies inside the
-    // deleted history, so the kept node set is empty and the pointer must be
-    // re-selected to None instead of carrying the dangling node over.
-    // 编辑第一个用户输入：seq 10 的压缩位于已删除历史内，保留节点集为空，
-    // 指针必须重选为 None，绝不继承悬空节点。
-    let output =
-        build_durable_edit_output(&layout, Seq::try_new(1).unwrap(), "edited first input", 6);
+    // Editing the first input removes the later compaction and must clear its pointer.
+    // 编辑首条输入会删除后续压缩，因此必须清除压缩指针。
+    let target = document
+        .events()
+        .iter()
+        .find(|event| matches!(event.event, EventBody::UserInput(_)))
+        .expect("the fixture must contain a root user input")
+        .seq();
+    let output = build_durable_edit_output(&layout, target, "edited first input", 6);
     let edited = publish_edit_generation(
         &layout,
         PublishEditGenerationRequest {
@@ -3109,11 +3211,7 @@ fn edit_reselects_compaction_pointer_in_deleted_history() {
         loaded.document.compactions.is_empty(),
         "no compaction node survives outside the retained history"
     );
-    assert_eq!(
-        loaded.document.events().len(),
-        1,
-        "the edit stream retains only the replaced input"
-    );
+    assert_edited_history(&document, &loaded.document, target, "edited first input");
     drop(root);
 }
 
@@ -3849,14 +3947,12 @@ fn sealed_segments_bound_windows_and_edit_io() {
         "sealed prefix segments are copied byte-for-byte"
     );
     let mut edited_loaded = load_session(&layout).unwrap();
-    assert_eq!(
-        edited_loaded.document.events().len(),
-        target_seq.value() as usize
+    assert_edited_history(
+        &document,
+        &edited_loaded.document,
+        target_seq,
+        "edited-target",
     );
-    assert!(matches!(
-        edited_loaded.document.events().last().map(|event| &event.event),
-        Some(EventBody::UserInput(input)) if input.text == "edited-target"
-    ));
     let (edited_tail, edited_tail_report) = load_session_tail_only(&layout).unwrap();
     assert_eq!(edited_tail_report.opened_segment_files, 1);
     assert_eq!(

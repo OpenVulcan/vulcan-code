@@ -2979,10 +2979,12 @@ fn provider_manifest_status_includes_discovered_models_and_available_protocols()
     let http = build_sync_http_client().expect("sync client");
     let service = ProviderManifestSyncService::new(directory.path(), http, Vec::new(), None);
     let runtime = PublicAiRuntime::unavailable().expect("runtime should initialize");
-    // configuration owns one exact OpenAI discovery account.
-    // configuration 持有一个精确 OpenAI 发现账号。
+    // This status API accepts only trusted system providers; FennoAI explicitly admits discovered models.
+    // 此状态 API 只接受可信系统供应商；FennoAI 明确允许发现模型进入目录。
     let mut configuration = PersistedAiConfiguration::default();
-    let connection_id = String::from("openai-discovery-status");
+    // The isolated connection supplies synthetic catalogs without contacting the provider.
+    // 隔离连接提供合成目录，不访问供应商网络。
+    let connection_id = String::from("fennoai-discovery-status");
     configuration
         .connection_graph
         .add_connection(
@@ -2991,23 +2993,23 @@ fn provider_manifest_status_includes_discovered_models_and_available_protocols()
                 .expect("provider registry should resolve"),
             vulcan_provider_adapters::CredentialConnection {
                 id: connection_id.clone(),
-                provider_id: String::from("openai"),
-                service_entry_id: String::from("public-api"),
+                provider_id: String::from("fennoai"),
+                service_entry_id: String::from("gateway"),
                 credential_profile_id: String::from("api-key"),
                 credential_mode: vulcan_provider_adapters::CredentialMode::Token,
-                credential_id: String::from("openai-discovery-credential"),
-                display_name: String::from("OpenAI Discovery Status"),
-                secret_reference: String::from("openai-discovery-secret"),
+                credential_id: String::from("fennoai-discovery-credential"),
+                display_name: String::from("FennoAI Discovery Status"),
+                secret_reference: String::from("fennoai-discovery-secret"),
                 management_secret_reference: None,
                 service_origin_override: None,
             },
         )
-        .expect("OpenAI connection should register");
+        .expect("FennoAI discovery connection should register");
     // readyModel proves an unknown discovered model can use the Manifest default binding.
     // readyModel 证明未知发现模型可使用 Manifest 默认绑定。
     let mut ready_model = vulcan_provider_adapters::ConnectionModel {
-        id: String::from("openai-dynamic-ready"),
-        display_name: String::from("OpenAI Dynamic Ready"),
+        id: String::from("fixture-dynamic-ready"),
+        display_name: String::from("Dynamic Ready"),
         capabilities: vulcan_provider_adapters::ModelCapabilities::default(),
         capability_evidence: Default::default(),
         protocol_variants: BTreeMap::new(),
@@ -3018,26 +3020,26 @@ fn provider_manifest_status_includes_discovered_models_and_available_protocols()
         vulcan_provider_adapters::ProtocolModelVariant {
             capabilities: vulcan_provider_adapters::ModelCapabilities::default(),
             capability_evidence: Default::default(),
-            discovery_signature: String::from("openai-status-chat-signature"),
+            discovery_signature: String::from("status-chat-signature"),
             catalog_generation: 1,
         },
     );
     // missingModel intentionally lacks the Manifest-selected Chat variant.
     // missingModel 有意缺少 Manifest 选择的 Chat 变体。
     let mut missing_model = vulcan_provider_adapters::ConnectionModel {
-        id: String::from("openai-dynamic-missing"),
-        display_name: String::from("OpenAI Dynamic Missing"),
+        id: String::from("fixture-dynamic-missing"),
+        display_name: String::from("Dynamic Missing"),
         capabilities: vulcan_provider_adapters::ModelCapabilities::default(),
         capability_evidence: Default::default(),
         protocol_variants: BTreeMap::new(),
         resolved_protocol_binding: None,
     };
     missing_model.protocol_variants.insert(
-        vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID.to_string(),
+        vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID.to_string(),
         vulcan_provider_adapters::ProtocolModelVariant {
             capabilities: vulcan_provider_adapters::ModelCapabilities::default(),
             capability_evidence: Default::default(),
-            discovery_signature: String::from("openai-status-responses-signature"),
+            discovery_signature: String::from("status-anthropic-signature"),
             catalog_generation: 1,
         },
     );
@@ -3047,7 +3049,7 @@ fn provider_manifest_status_includes_discovered_models_and_available_protocols()
             models: vec![ready_model, missing_model],
             generation: 1,
             page_count: 1,
-            discovery_schema_revision: String::from("openai-status-fixture-v1"),
+            discovery_schema_revision: String::from("status-discovery-fixture-v1"),
         })
         .expect("discovered source catalog should stage");
     runtime
@@ -3058,14 +3060,14 @@ fn provider_manifest_status_includes_discovered_models_and_available_protocols()
         .expect("status configuration should publish");
 
     let status = service
-        .provider_manifest_status(&runtime, "openai")
+        .provider_manifest_status(&runtime, "fennoai")
         .expect("status snapshot should build");
     let ready = status
         .model_bindings
         .iter()
         .find(|binding| {
             binding.connection_id.as_deref() == Some(connection_id.as_str())
-                && binding.model_id == "openai-dynamic-ready"
+                && binding.model_id == "fixture-dynamic-ready"
         })
         .expect("discovery-only ready model must be present");
     assert_eq!(ready.model_source, ManifestModelSourceStatus::Discovery);
@@ -3088,24 +3090,25 @@ fn provider_manifest_status_includes_discovered_models_and_available_protocols()
         .iter()
         .find(|binding| {
             binding.connection_id.as_deref() == Some(connection_id.as_str())
-                && binding.model_id == "openai-dynamic-missing"
+                && binding.model_id == "fixture-dynamic-missing"
         })
         .expect("discovery-only missing-variant model must be present");
     assert_eq!(missing.model_source, ManifestModelSourceStatus::Discovery);
     assert_eq!(
         missing.available_protocols,
-        vec![vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID.to_string()]
+        vec![vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID.to_string()]
     );
     assert!(
         !missing.executable,
         "missing bound variant must block execution"
     );
+    // A missing capability variant blocks execution without changing the manifest-selected protocol.
+    // 缺少能力变体会阻止执行，但不能改变清单选定的协议。
     assert_eq!(
-        missing.unavailable_reason.as_deref(),
-        Some(
-            "Model `openai-dynamic-missing` has no capability variant for its bound protocol `openai-chat-completions.v1`; execution is blocked."
-        )
+        missing.effective_protocol.as_deref(),
+        Some(vulcan_llm_core::OPENAI_CHAT_PROFILE_ID)
     );
+    assert!(missing.unavailable_reason.is_some());
 }
 
 /// Verifies an unconfigured service reports `sync_configured=false` and `bundled` remains

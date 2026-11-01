@@ -1000,8 +1000,10 @@ mod submission_model_selection_tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use vulcan_provider_adapters::{
-        CredentialConnection, CredentialMode, PersistedAiConfiguration, PublicAiRuntime,
-        UnavailableCredentialSecretResolver, parse_openai_model_catalog,
+        CredentialConnection, CredentialMode, CustomProviderAuthentication,
+        CustomProviderDefinition, CustomProviderModelDiscoveryMode,
+        CustomProviderModelDiscoveryProtocol, CustomProviderProtocol, PersistedAiConfiguration,
+        PublicAiRuntime, UnavailableCredentialSecretResolver, parse_openai_model_catalog,
         parse_openrouter_model_catalog,
     };
     use vulcan_workbench_model::SessionSummary;
@@ -1094,75 +1096,110 @@ mod submission_model_selection_tests {
         runtime
     }
 
-    /// Builds one OpenAI discovery catalog listing exactly `model_ids` at `generation`.
-    /// 构建一个在 `generation` 代际中恰好列出 `model_ids` 的 OpenAI 发现目录。
-    /// OpenAI admits undeclared discovery, so dropping an id here really removes it from the
-    /// published catalog; signed OpenRouter declarations cannot be removed by discovery.
-    /// OpenAI 准入未声明的发现模型，因此在此省略 ID 会真正从已发布目录移除；受签名的
-    /// OpenRouter 声明无法通过发现移除。
-    fn openai_discovery_catalog(
+    /// Returns a custom account catalog containing exactly `model_ids` at the supplied `generation`.
+    /// 返回自定义账号在指定 `generation` 代际恰好包含 `model_ids` 的目录。
+    /// The fixture has no declared models, so removing an ID exercises actual discovery removal.
+    /// 夹具没有静态声明模型，因此移除 ID 会覆盖真实的发现目录移除行为。
+    fn lease_discovery_catalog(
         generation: u64,
         model_ids: &[&str],
     ) -> vulcan_provider_adapters::ConnectionModelCatalog {
+        // Standard discovery bytes keep the production OpenAI-compatible decoder in the fixture.
+        // 标准发现报文让夹具继续覆盖生产 OpenAI 兼容解码器。
         let body = serde_json::json!({
             "object": "list",
             "data": model_ids
                 .iter()
-                .map(|id| serde_json::json!({"id": id, "object": "model", "owned_by": "openai"}))
+                .map(|id| serde_json::json!({"id": id, "object": "model", "owned_by": "fixture"}))
                 .collect::<Vec<_>>(),
         });
         with_protocol_variants(
-            parse_openai_model_catalog(OPENAI_DISCOVERY_ACCOUNT, generation, &body.to_string())
-                .expect("OpenAI discovery catalog should parse"),
-            &[
-                vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,
-                vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID,
-            ],
+            parse_openai_model_catalog(LEASE_DISCOVERY_ACCOUNT, generation, &body.to_string())
+                .expect("custom discovery catalog should parse"),
+            &[vulcan_llm_core::OPENAI_CHAT_PROFILE_ID],
         )
     }
 
-    /// Connection id of the OpenAI discovery account fixture.
-    /// OpenAI 发现账号夹具的连接 ID。
-    const OPENAI_DISCOVERY_ACCOUNT: &str = "openai-account";
+    /// Provider identity for the discovery-only lease fixture.
+    /// 仅通过发现构建目录的租约夹具供应商身份。
+    const LEASE_DISCOVERY_PROVIDER: &str = "custom:lease-discovery";
 
-    /// Builds one runtime whose single OpenAI account discovered both fixture models.
-    /// 构建一个运行时，其唯一 OpenAI 账号发现了两个夹具模型。
-    fn openai_discovery_runtime() -> PublicAiRuntime {
+    /// Connection identity for the discovery-only lease fixture.
+    /// 仅通过发现构建目录的租约夹具连接身份。
+    const LEASE_DISCOVERY_ACCOUNT: &str = "lease-discovery-account";
+
+    /// Returns an isolated custom-provider runtime with two discovered models and no network access.
+    /// 返回具有两个发现模型且不访问网络的隔离自定义供应商运行时。
+    fn lease_discovery_runtime() -> PublicAiRuntime {
+        // The unavailable resolver prevents the fixture from reading real credentials.
+        // 不可用的凭据解析器防止夹具读取真实密钥。
         let runtime =
             PublicAiRuntime::first_batch(std::sync::Arc::new(UnavailableCredentialSecretResolver))
                 .expect("runtime should initialize");
+        // An explicit custom discovery policy avoids coupling lease behavior to a vendor's fixed inventory.
+        // 显式自定义发现策略避免将租约行为绑定到供应商的固定模型清单。
+        let descriptor = CustomProviderDefinition {
+            id: String::from(LEASE_DISCOVERY_PROVIDER),
+            display_name: String::from("Lease Discovery Fixture"),
+            base_url: String::from("https://lease-discovery.example.test/v1"),
+            authentication: CustomProviderAuthentication::BearerAuthorization,
+            model_discovery_mode: CustomProviderModelDiscoveryMode::Standard,
+            model_discovery_protocol: CustomProviderModelDiscoveryProtocol::OpenAi,
+            model_discovery_path: None,
+            protocols: vec![CustomProviderProtocol::OpenAiChat],
+            protocol_routes: Vec::new(),
+            request_headers: BTreeMap::new(),
+            session_header: None,
+        }
+        .into_descriptor()
+        .expect("custom discovery provider should compile");
+        // The standalone manifest owns the frozen binding revision, as it does in saved custom settings.
+        // 独立清单与保存后的自定义设置一样，持有冻结绑定的修订身份。
+        let manifest =
+            vulcan_provider_adapters::provider_manifest::project_custom_descriptor_manifest(
+                &descriptor,
+            )
+            .expect("custom discovery manifest should project");
+        // Configuration owns the exact descriptor, manifest and single credential connection.
+        // 配置持有精确描述符、清单及唯一凭据连接。
         let mut configuration = PersistedAiConfiguration::default();
+        configuration
+            .custom_providers
+            .insert(String::from(LEASE_DISCOVERY_PROVIDER), descriptor);
+        configuration
+            .custom_provider_manifests
+            .insert(String::from(LEASE_DISCOVERY_PROVIDER), manifest);
         configuration
             .connection_graph
             .add_connection(
                 &runtime
-                    .providers()
+                    .effective_providers(&configuration)
                     .expect("provider registry should resolve"),
                 CredentialConnection {
-                    id: String::from(OPENAI_DISCOVERY_ACCOUNT),
-                    provider_id: String::from("openai"),
-                    service_entry_id: String::from("public-api"),
+                    id: String::from(LEASE_DISCOVERY_ACCOUNT),
+                    provider_id: String::from(LEASE_DISCOVERY_PROVIDER),
+                    service_entry_id: String::from("default"),
                     credential_profile_id: String::from("api-key"),
                     credential_mode: CredentialMode::Token,
-                    credential_id: String::from("credential-openai-account"),
-                    display_name: String::from("OpenAI account"),
-                    secret_reference: String::from("secret-openai-account"),
+                    credential_id: String::from("credential-lease-discovery"),
+                    display_name: String::from("Lease Discovery Account"),
+                    secret_reference: String::from("secret-lease-discovery"),
                     management_secret_reference: None,
                     service_origin_override: None,
                 },
             )
             .expect("connection should register");
-        configuration.set_model_enabled("openai", "openai-dynamic-terra", true);
-        configuration.set_model_enabled("openai", "openai-dynamic-sol", true);
+        configuration.set_model_enabled(LEASE_DISCOVERY_PROVIDER, "discovered-first", true);
+        configuration.set_model_enabled(LEASE_DISCOVERY_PROVIDER, "discovered-second", true);
         configuration.active = Some(vulcan_provider_adapters::ActiveAiModelSelection {
-            provider_id: String::from("openai"),
-            model_id: String::from("openai-dynamic-terra"),
-            connection_id: String::from(OPENAI_DISCOVERY_ACCOUNT),
+            provider_id: String::from(LEASE_DISCOVERY_PROVIDER),
+            model_id: String::from("discovered-first"),
+            connection_id: String::from(LEASE_DISCOVERY_ACCOUNT),
         });
         runtime
-            .stage_source_catalog_for_testing(openai_discovery_catalog(
+            .stage_source_catalog_for_testing(lease_discovery_catalog(
                 1,
-                &["openai-dynamic-terra", "openai-dynamic-sol"],
+                &["discovered-first", "discovered-second"],
             ))
             .expect("source catalog should stage");
         runtime
@@ -1423,7 +1460,7 @@ mod submission_model_selection_tests {
     /// 验证逐次提交中未变化的模型快照会保留会话路由租约。
     #[test]
     fn repeated_submission_selection_preserves_lease_until_target_changes() {
-        let runtime = openai_discovery_runtime();
+        let runtime = lease_discovery_runtime();
         let session_id = Uuid::new_v4();
         let mut workspace_snapshot = WorkspaceSnapshot {
             task_projects: Vec::new(),
@@ -1449,9 +1486,9 @@ mod submission_model_selection_tests {
         ensure_webui_session_runtime_state(&mut workspace_snapshot, session_id, None)
             .expect("session runtime state should initialize");
         let selection = SubmissionModelSelection {
-            provider_id: String::from("openai"),
-            model_id: String::from("openai-dynamic-sol"),
-            connection_id: String::from(OPENAI_DISCOVERY_ACCOUNT),
+            provider_id: String::from(LEASE_DISCOVERY_PROVIDER),
+            model_id: String::from("discovered-second"),
+            connection_id: String::from(LEASE_DISCOVERY_ACCOUNT),
         };
         apply_submission_model_selection(
             &runtime,
@@ -1517,10 +1554,7 @@ mod submission_model_selection_tests {
         // replacementCatalog simulates a hot catalog generation that removes the leased model.
         // replacementCatalog 模拟移除已租用模型的热更新目录代际。
         runtime
-            .stage_source_catalog_for_testing(openai_discovery_catalog(
-                2,
-                &["openai-dynamic-terra"],
-            ))
+            .stage_source_catalog_for_testing(lease_discovery_catalog(2, &["discovered-first"]))
             .expect("replacement source catalog should stage");
         runtime
             .reapply_model_catalog_overlays(&configuration)
@@ -1530,7 +1564,7 @@ mod submission_model_selection_tests {
             .expect("replacement catalogs should remain readable");
         assert!(
             replacement_catalogs
-                .get(OPENAI_DISCOVERY_ACCOUNT)
+                .get(LEASE_DISCOVERY_ACCOUNT)
                 .is_some_and(|catalog| catalog
                     .models
                     .iter()
@@ -1629,9 +1663,9 @@ mod submission_model_selection_tests {
         );
 
         let replacement = SubmissionModelSelection {
-            provider_id: String::from("openai"),
-            model_id: String::from("openai-dynamic-terra"),
-            connection_id: String::from(OPENAI_DISCOVERY_ACCOUNT),
+            provider_id: String::from(LEASE_DISCOVERY_PROVIDER),
+            model_id: String::from("discovered-first"),
+            connection_id: String::from(LEASE_DISCOVERY_ACCOUNT),
         };
         apply_submission_model_selection(
             &runtime,

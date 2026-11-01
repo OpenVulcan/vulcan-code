@@ -13,6 +13,12 @@
 # 内置供应商清单按精确字节做 SHA-256 校验；在所有平台保持 LF。
 /crates/vulcan-runtime-assets/resources/provider-manifests/**/*.json text eol=lf
 
+# VMM validates embedded text resources against exact manifest lengths and SHA-256 digests.
+# VMM 按清单中的精确长度与 SHA-256 校验嵌入文本资源，检出时必须保持 LF。
+/crates/vulcan-runtime-assets/resources/memory/**/*.json text eol=lf
+/crates/vulcan-runtime-assets/resources/memory/**/*.md text eol=lf
+/crates/vulcan-runtime-assets/resources/memory/*.toml text eol=lf
+
 # The installer is published byte-for-byte as a release asset and run by sh; CRLF would break it.
 # 安装脚本按原字节作为发行资源发布并由 sh 执行；CRLF 会使其失效。
 /scripts/install.sh text eol=lf

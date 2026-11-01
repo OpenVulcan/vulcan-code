@@ -1174,6 +1174,3 @@ export function finalAssistantOutputText(item: ConversationRenderItem): string {
     .filter(Boolean)
     .join("\n\n");
 }
-
-
-

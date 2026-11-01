@@ -276,7 +276,10 @@ fn anthropic_messages_routes_gain_managed_prompt_cache() {
     apply_protocol_prompt_cache_capability("anthropic-messages.v1", &mut anthropic);
     assert!(anthropic.prompt_cache.supports_managed_explicit);
     assert_eq!(
-        anthropic.prompt_cache.profile_default_ttl_option_id.as_deref(),
+        anthropic
+            .prompt_cache
+            .profile_default_ttl_option_id
+            .as_deref(),
         Some("5m")
     );
     let option_ids: Vec<&str> = anthropic
