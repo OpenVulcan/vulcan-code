@@ -437,13 +437,14 @@ function compare(body: string): AnswerComponent | null {
 }
 
 // `path | +added -removed | note` rows; both later cells are optional, totals are summed. Models also write one
-// side only (`+145`) or a change label in place of the counts (`path | new | note`); both are accepted.
+// side only (`+145`), a change label in place of the counts (`path | new | note`), or leave the counts cell empty
+// to keep the columns aligned (`path | | note`); all are accepted.
 // `路径 | +新增 -删除 | 说明` 行；后两个单元格可省略，并汇总合计。模型也会只写一侧（`+145`），或在行数位置写变更标签
-// （`路径 | 新建 | 说明`），两者均被接受。
+// （`路径 | 新建 | 说明`），或为对齐列把行数格留空（`路径 | | 说明`），均被接受。
 function files(body: string): AnswerComponent | null {
   let added = 0;
   let removed = 0;
-  return mapRows(body, 1, 3, ([path, second, third]): AnswerFile | null => {
+  return mapLines(body, fileCells, ([path, second, third]): AnswerFile | null => {
     const delta = second === undefined ? null : lineDelta(second);
     if (delta === null && third !== undefined) return { path, status: second, note: third };
     if (delta === null) return { path, note: second };
@@ -451,6 +452,17 @@ function files(body: string): AnswerComponent | null {
     removed += delta.removed ?? 0;
     return { path, ...delta, note: third };
   }, (rows) => ({ kind: "files", files: rows, added, removed }));
+}
+
+// Cells of one `ui-files` row: 1..=3 nonempty cells, or `path | | note` with an empty counts cell, read as
+// `path | note`. Any other empty cell still makes the row malformed.
+// 单条 `ui-files` 行的单元格：1 到 3 个非空单元格，或行数格为空的 `路径 | | 说明`，按 `路径 | 说明` 读取。
+// 其他位置为空仍属格式错误。
+function fileCells(line: string): string[] | null {
+  const plain = rowCells(line, 1, 3);
+  if (plain !== null) return plain;
+  const [path, counts, note, ...rest] = answerCells(line);
+  return rest.length === 0 && path && counts === "" && note ? [path, note] : null;
 }
 
 // Line counts of `+added -removed`, `+added` or `-removed` (`−` also marks removals); null for other text.

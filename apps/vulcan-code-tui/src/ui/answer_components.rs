@@ -673,39 +673,58 @@ fn line_delta(text: &str) -> Option<(Option<u64>, Option<u64>)> {
 }
 
 /// `path | +added -removed | note` rows under a summed header; later cells are optional. Models also
-/// write one side only (`+145`) or a change label in place of the counts (`path | new | note`), as the
-/// WebUI accepts.
+/// write one side only (`+145`), a change label in place of the counts (`path | new | note`), or an
+/// empty counts cell kept for column alignment (`path | | note`), as the WebUI accepts.
 /// `路径 | +新增 -删除 | 说明` 行并附合计标题；后续单元格可省略。与 WebUI 一致，也接受只写一侧（`+145`）
-/// 或在行数位置写变更标签（`路径 | 新建 | 说明`）。
+/// 、在行数位置写变更标签（`路径 | 新建 | 说明`），或为对齐列留空的行数格（`路径 | | 说明`）。
 fn files(lines: &[&str]) -> Option<String> {
     let (mut count, mut added, mut removed) = (0usize, 0u64, 0u64);
-    let body = rows_markdown(lines, 1, 3, |cell| {
-        let delta = cell.get(1).and_then(|text| line_delta(text));
-        let label = (delta.is_none() && cell.len() == 3).then(|| cell[1]);
-        let note = cell.get(if delta.is_some() || label.is_some() {
-            2
-        } else {
-            1
-        });
-        count += 1;
-        let delta = match (delta, label) {
-            (Some((plus, minus)), _) => {
-                added += plus.unwrap_or(0);
-                removed += minus.unwrap_or(0);
-                let plus = plus.map_or(String::new(), |plus| format!(" +{plus}"));
-                let minus = minus.map_or(String::new(), |minus| format!(" −{minus}"));
-                plus + &minus
-            }
-            (None, Some(label)) => format!(" `{label}`"),
-            (None, None) => String::new(),
-        };
-        let note = note.map_or(String::new(), |note| format!(" — {note}"));
-        Some(format!("- `{}`{delta}{note}\n", cell[0]))
-    })?;
+    let rows = data_rows(lines);
+    if rows.is_empty() || rows.len() > ANSWER_COMPONENT_MAX_ROWS {
+        return None;
+    }
+    let body = rows
+        .iter()
+        .map(|line| {
+            let cell = file_cells(line)?;
+            let delta = cell.get(1).and_then(|text| line_delta(text));
+            let label = (delta.is_none() && cell.len() == 3).then(|| cell[1]);
+            let note = cell.get(if delta.is_some() || label.is_some() {
+                2
+            } else {
+                1
+            });
+            count += 1;
+            let delta = match (delta, label) {
+                (Some((plus, minus)), _) => {
+                    added += plus.unwrap_or(0);
+                    removed += minus.unwrap_or(0);
+                    let plus = plus.map_or(String::new(), |plus| format!(" +{plus}"));
+                    let minus = minus.map_or(String::new(), |minus| format!(" −{minus}"));
+                    plus + &minus
+                }
+                (None, Some(label)) => format!(" `{label}`"),
+                (None, None) => String::new(),
+            };
+            let note = note.map_or(String::new(), |note| format!(" — {note}"));
+            Some(format!("- `{}`{delta}{note}\n", cell[0]))
+        })
+        .collect::<Option<String>>()?;
     Some(format!(
         "**{}** +{added} −{removed}\n\n{body}",
         tr!("answerComponents.fileCount", count = count)
     ))
+}
+
+/// Cells of one `ui-files` row: `1..=3` nonempty cells, or `path | | note` with an empty counts cell,
+/// read as `path | note`, as the WebUI does. Any other empty cell still makes the row malformed.
+/// 单条 `ui-files` 行的单元格：1 到 3 个非空单元格，或行数格为空的 `路径 | | 说明`，与 WebUI 一致按
+/// `路径 | 说明` 读取。其他位置为空仍属格式错误。
+fn file_cells(line: &str) -> Option<Vec<&str>> {
+    row_cells(line, 1, 3).or_else(|| match answer_cells(line, false)[..] {
+        [path, "", note] if !path.is_empty() && !note.is_empty() => Some(vec![path, note]),
+        _ => None,
+    })
 }
 
 /// `status | item | note` rows. Models sometimes add a fourth location cell as in `ui-findings`; it is
@@ -1445,7 +1464,24 @@ fn tree(rows: &[&str]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{flow_mermaid, row_cells, table_cell};
+    use super::{file_cells, flow_mermaid, row_cells, table_cell};
+
+    /// An empty counts cell in `ui-files` reads as a row with only a note; other empty cells stay invalid.
+    /// `ui-files` 中为空的行数格按只有说明的行读取；其他位置为空仍无效。
+    #[test]
+    fn file_rows_accept_an_empty_counts_cell() {
+        assert_eq!(
+            file_cells("a.tsx | | folds cards"),
+            Some(vec!["a.tsx", "folds cards"])
+        );
+        assert_eq!(
+            file_cells("a.tsx | +3 -1 | note"),
+            Some(vec!["a.tsx", "+3 -1", "note"])
+        );
+        assert_eq!(file_cells("| | note"), None);
+        assert_eq!(file_cells("a.tsx | |"), None);
+        assert_eq!(file_cells("a.tsx | | note | extra"), None);
+    }
 
     /// Every closed `ui-*` fence of every release note renders in the terminal, and none quotes
     /// files with `ui-code`, whose lines are only captured when a reply is sealed.

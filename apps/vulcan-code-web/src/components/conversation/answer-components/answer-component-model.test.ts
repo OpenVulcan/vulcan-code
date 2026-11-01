@@ -130,6 +130,14 @@ describe("parseAnswerComponent", () => {
     });
   });
 
+  it("reads an empty file counts cell as a row with only a note", () => {
+    const files = parse("ui-files", "a.tsx | | folds tool cards\nb.css | +3 -1 | keyframes");
+    expect(files).toMatchObject({ kind: "files", added: 3, removed: 1, files: [{ path: "a.tsx", note: "folds tool cards" }, { added: 3 }] });
+    expect(files).not.toHaveProperty("files.0.status");
+    expect(parse("ui-files", "| | note")).toBeNull();
+    expect(parse("ui-files", "a.tsx | | note | extra")).toBeNull();
+  });
+
   it("accepts a fourth checklist cell only when it is a path-shaped location", () => {
     expect(parse("ui-checklist", "no | Sums reasoning twice | double count | crates/a/src/turn_stats.rs:150\nok | Builds")).toMatchObject({
       kind: "checklist", items: [{ status: "no", note: "double count", location: "crates/a/src/turn_stats.rs:150" }, { item: "Builds" }],
