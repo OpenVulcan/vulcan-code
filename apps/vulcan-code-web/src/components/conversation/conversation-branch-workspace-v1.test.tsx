@@ -798,6 +798,29 @@ describe("ConversationBranchWorkspaceV1", () => {
     expect(container.querySelector("[data-collaboration-card-kind]")).toBeNull();
   });
 
+  // Inbox task envelopes resume a child as a root input; only the bound action id makes them a message card.
+  // inbox 任务信封以根输入续跑子会话；只有绑定的动作身份才使其成为消息卡。
+  it("projects inbox task envelopes as one incoming task message, never a human prompt", () => {
+    const envelope = (eventId: string, body: string) => `<vulcan_agent_message version="1" event_id="${eventId}" kind="task_start" source="session-source" target="session-branch-v1" task_id="queued-task-1" scope="task">${body}</vulcan_agent_message>`;
+    const text = `${envelope("event-a", "第一条 `&lt;literal&gt;`")}\n\n${envelope("event-b", "第二条")}`;
+    const rootInput = (actionId: string) => eventSummary(2, { kind: "user_input", input_source: "root", input_id: 2,
+      client_action_id: clientActionId(actionId), text });
+    const container = document.createElement("div");
+    container.innerHTML = renderWorkspace([rootInput("agent-message:event-a:attempt-1")]);
+    const card = container.querySelector('[data-collaboration-card-kind="task-message"]');
+    expect(card?.getAttribute("data-incoming")).toBe("true");
+    expect(card?.querySelector(".vk-prompt")?.textContent).toContain("第一条 <literal>");
+    expect(card?.querySelector(".vk-prompt")?.textContent).toContain("第二条");
+    expect(container.textContent).not.toContain("vulcan_agent_message");
+    // An action id that does not name the first envelope stays an ordinary prompt.
+    // 动作身份未指名首个信封时仍是普通提示词。
+    for (const actionId of ["agent-message:event-b:attempt-1", "agent-message:event-a:", "typed-prompt"]) {
+      container.innerHTML = renderWorkspace([rootInput(actionId)]);
+      expect(container.querySelector("[data-collaboration-card-kind]")).toBeNull();
+      expect(container.textContent).toContain("vulcan_agent_message");
+    }
+  });
+
   // Host question inputs are displayed once while their ordinary protocol mirrors stay hidden.
   // 宿主问题输入只展示一次，其余普通协议镜像仍保持隐藏。
   it("projects a received host question as a collaboration bubble, never a human input", () => {

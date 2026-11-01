@@ -2446,9 +2446,11 @@ async fn inter_agent_message_queue_resumes_idle_agent() {
     let backend_calls = Arc::new(AtomicUsize::new(0));
     let captured_prompt = Arc::new(std::sync::Mutex::new(None::<String>));
     let captured_snapshot = Arc::new(std::sync::Mutex::new(None::<CoreConversationSnapshot>));
+    let captured_execution_id = Arc::new(std::sync::Mutex::new(None::<String>));
     let backend_calls_for_handler = Arc::clone(&backend_calls);
     let captured_prompt_for_handler = Arc::clone(&captured_prompt);
     let captured_snapshot_for_handler = Arc::clone(&captured_snapshot);
+    let captured_execution_id_for_handler = Arc::clone(&captured_execution_id);
     let _guard = task_runtime
         .install_backend(
             parent_session_id,
@@ -2457,6 +2459,9 @@ async fn inter_agent_message_queue_resumes_idle_agent() {
                 *captured_prompt_for_handler
                     .lock()
                     .expect("captured prompt lock") = Some(request.prompt.clone());
+                *captured_execution_id_for_handler
+                    .lock()
+                    .expect("captured execution id lock") = Some(request.execution_id.clone());
                 *captured_snapshot_for_handler
                     .lock()
                     .expect("captured snapshot lock") = Some(request.snapshot.clone());
@@ -2533,6 +2538,22 @@ async fn inter_agent_message_queue_resumes_idle_agent() {
     assert!(prompt.contains("queue this context"));
     assert!(!prompt.contains("[Inter-agent messages]"));
     assert!(!prompt.contains("send_message"));
+    // The child root input action id must name the first envelope so clients can render it as a message.
+    // 子会话根输入动作身份必须指向首个信封，显示端才能将其渲染为消息。
+    let execution_id = captured_execution_id
+        .lock()
+        .expect("captured execution id lock")
+        .clone()
+        .expect("backend should capture execution id");
+    let event_id = prompt
+        .split("event_id=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .expect("prompt envelope should carry event_id");
+    assert!(
+        execution_id.starts_with(&format!("agent-message:{event_id}:")),
+        "execution id {execution_id:?} must bind envelope {event_id:?}"
+    );
     let snapshot = captured_snapshot
         .lock()
         .expect("captured snapshot lock")

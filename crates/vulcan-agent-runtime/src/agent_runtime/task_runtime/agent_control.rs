@@ -926,11 +926,12 @@ impl TaskRuntime {
             public_task_id: target.agent_id.clone(),
             is_resumed: true,
         };
-        let mut invocation = match prepare_task_execution_request(
+        let mut invocation = match prepare_task_execution_request_with_execution_id(
             self,
             current_session_id,
             resolved_identifier,
             parsed_args,
+            inter_agent_execution_id(&messages),
         ) {
             Ok(invocation) => invocation,
             Err(error) => {
@@ -1352,6 +1353,28 @@ fn inter_agent_message_recipient(message: &QueuedInterAgentMessage) -> String {
 /// 基于投递标识派生的消息标识。
 fn inter_agent_message_id(message: &QueuedInterAgentMessage) -> String {
     format!("agent-message-{}", message.delivery_id)
+}
+
+/// Allocates the child execution identity for one inbox resume.
+/// 为一次 inbox 续跑分配子执行身份。
+///
+/// # Parameters
+/// 参数
+/// `messages` are the non-empty delivered messages rendered into the execution prompt.
+/// `messages` 是渲染进执行提示词的非空已投递消息。
+///
+/// # Returns
+/// 返回值
+/// `agent-message:{first envelope event_id}:{attempt uuid}`; the root input action id thereby proves
+/// to display clients that its text is host-rendered envelopes, while every attempt stays unique.
+/// `agent-message:{首个信封 event_id}:{尝试 uuid}`；根输入动作身份借此向显示端证明其正文是宿主
+/// 渲染的信封，同时每次尝试保持唯一。
+fn inter_agent_execution_id(messages: &[QueuedInterAgentMessage]) -> String {
+    let event_id = messages
+        .first()
+        .map(inter_agent_message_id)
+        .unwrap_or_default();
+    format!("agent-message:{event_id}:{}", Uuid::new_v4())
 }
 
 /// Returns the stable hidden transcript record id for one delivered message.

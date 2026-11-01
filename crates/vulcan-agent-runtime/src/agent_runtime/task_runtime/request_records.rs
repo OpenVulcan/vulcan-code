@@ -8,14 +8,33 @@ pub(super) fn prepare_task_execution_request(
     resolved_identifier: ResolvedTaskSessionIdentifier,
     args: TaskToolInvocationArgs,
 ) -> Result<TaskExecutionRequest, String> {
+    prepare_task_execution_request_with_execution_id(
+        task_runtime,
+        current_session_id,
+        resolved_identifier,
+        args,
+        Uuid::new_v4().to_string(),
+    )
+}
+
+/// Prepares one task execution request under a caller-allocated execution identity.
+/// 使用调用方分配的执行身份准备一份任务执行请求。
+/// `execution_id` must be unique per attempt; it also becomes the child root input action id.
+/// `execution_id` 每次尝试必须唯一；它同时成为子会话根输入的动作身份。
+pub(super) fn prepare_task_execution_request_with_execution_id(
+    task_runtime: &Arc<TaskRuntime>,
+    current_session_id: SessionId,
+    resolved_identifier: ResolvedTaskSessionIdentifier,
+    args: TaskToolInvocationArgs,
+    // execution_id establishes record ownership before any mutable preparation state is committed.
+    // execution_id 在提交任何可变准备状态前建立记录所有权。
+    execution_id: String,
+) -> Result<TaskExecutionRequest, String> {
     let ResolvedTaskSessionIdentifier {
         task_id,
         public_task_id,
         is_resumed,
     } = resolved_identifier;
-    // execution_id establishes record ownership before any mutable preparation state is committed.
-    // execution_id 在提交任何可变准备状态前建立记录所有权。
-    let execution_id = Uuid::new_v4().to_string();
     // transaction_locks serialize child admission with both its direct parent tree and its own outcomes.
     // transaction_locks 将子节点准入与其直接父树及自身结果提交串行化。
     let transaction_locks =

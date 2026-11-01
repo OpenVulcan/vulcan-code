@@ -42,3 +42,51 @@ export function decodeAgentQuestionInput(
     || input.client_action_id !== `agent-message:${eventId}`) return null;
   return { eventId, questionId, source, target, body: envelope.textContent ?? "" };
 }
+
+/** Display-only task messages decoded from a child root input rendered by the host inbox.
+ * 从宿主 inbox 渲染的子会话根输入中解码的只读任务消息。 */
+export interface ConversationAgentTaskInput {
+  /** First envelope identity, bound by the root input action id.
+   * 首个信封身份，由根输入动作身份绑定。 */
+  eventId: string;
+  /** Host-declared sender and recipient shared by every envelope.
+   * 所有信封共享的宿主声明收发方。 */
+  source: string;
+  target: string;
+  /** Unescaped literal bodies in delivery order.
+   * 按投递顺序解转义后的原始正文。 */
+  bodies: string[];
+}
+
+/** Decodes a root input whose text is only host task envelopes; anything else returns null.
+ * 解码正文仅由宿主任务信封组成的根输入；其他情况返回空。
+ * The inbox resume names its first envelope in the action id `agent-message:{event_id}:{attempt}`
+ * (inter_agent_execution_id in vulcan-agent-runtime task_runtime/agent_control.rs); typed prompts never match.
+ * inbox 续跑在动作身份 `agent-message:{event_id}:{attempt}` 中指名首个信封
+ * （vulcan-agent-runtime task_runtime/agent_control.rs 的 inter_agent_execution_id）；人工输入不会匹配。 */
+export function decodeAgentTaskInput(
+  input: Extract<ConversationEventBody, { kind: "user_input" }>,
+): ConversationAgentTaskInput | null {
+  if (input.input_source !== "root" || !input.client_action_id.startsWith("agent-message:")
+    || !input.text.startsWith("<vulcan_agent_message ")) return null;
+  // Envelopes are joined by blank lines, so a synthetic root holds them; only whitespace may separate them.
+  // 信封以空行连接，因此用合成根节点承载；信封之间只允许空白。
+  const document = new DOMParser().parseFromString(`<envelopes>${input.text}</envelopes>`, "application/xml");
+  if (document.doctype || document.querySelector("parsererror")) return null;
+  const nodes = [...document.documentElement.childNodes];
+  if (nodes.some((node) => node.nodeType !== Node.ELEMENT_NODE && (node.nodeType !== Node.TEXT_NODE || node.textContent?.trim()))) return null;
+  const envelopes = nodes.filter((node): node is Element => node.nodeType === Node.ELEMENT_NODE);
+  const first = envelopes[0];
+  const eventId = first?.getAttribute("event_id");
+  const source = first?.getAttribute("source");
+  const target = first?.getAttribute("target");
+  if (!first || !eventId?.trim() || !source?.trim() || !target?.trim()) return null;
+  const valid = envelopes.every((envelope) => envelope.tagName === "vulcan_agent_message" && envelope.children.length === 0
+    && envelope.getAttribute("version") === "1" && ["task_start", "task_steer"].includes(envelope.getAttribute("kind") ?? "")
+    && envelope.getAttribute("source") === source && envelope.getAttribute("target") === target);
+  // The attempt suffix keeps retries unique; it must be present but carries no display meaning.
+  // 尝试后缀保证重试唯一；必须存在但不具展示含义。
+  const prefix = `agent-message:${eventId}:`;
+  if (!valid || !input.client_action_id.startsWith(prefix) || input.client_action_id.length === prefix.length) return null;
+  return { eventId, source, target, bodies: envelopes.map((envelope) => envelope.textContent ?? "") };
+}

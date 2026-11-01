@@ -25,7 +25,7 @@ import {
   collaborationEventIsUserVisible, collaborationNotificationId, collaborationTaskMessageId, requestConfigChangeKind,
 } from "@/service/conversation-event-display-projection";
 import { projectCollaborationTurnLayout } from "@/service/conversation-collaboration-turn-layout";
-import { decodeAgentQuestionInput } from "@/service/conversation-agent-question-input";
+import { decodeAgentQuestionInput, decodeAgentTaskInput } from "@/service/conversation-agent-question-input";
 import { projectTurnUsageCoverage, type TurnUsageCoverage } from "@/service/conversation-usage-coverage";
 import { turnChangeSummariesV1, type TurnChangeSummaryV1 } from "@/diff/turn-change-summary-v1";
 import { modelSwitchRouteLabel } from "./conversation-model-switch";
@@ -458,6 +458,12 @@ function conversationMessagesForV1Event(
         const question = decodeAgentQuestionInput(summary.event);
         return question?.target === sessionId ? [{ ...base, role: "system", recordKind: "agent-interaction",
           body: "", agentInteraction: { ...summary, event: summary.event } }] : [];
+      }
+      // A child root input carrying inbox task envelopes is the parent's message, not a human prompt.
+      // 携带 inbox 任务信封的子会话根输入是父代理的消息，不是人类提示词。
+      if (decodeAgentTaskInput(summary.event)?.target === sessionId) {
+        return [{ ...base, role: "system", recordKind: "agent-interaction",
+          body: "", agentInteraction: { ...summary, event: summary.event } }];
       }
       return [userInputMessage(base, summary.event, resources)];
     case "assistant_reasoning":

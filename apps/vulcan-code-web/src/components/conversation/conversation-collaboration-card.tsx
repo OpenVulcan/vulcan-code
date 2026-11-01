@@ -5,7 +5,9 @@ import { USER_PROMPT_COLLAPSE_LINE_LIMIT } from "./conversation-bubble-limits";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { ConversationCollaborationStateContext } from "./conversation-collaboration-state";
 import { collaborationNotificationId, collaborationTaskMessageId } from "@/service/conversation-event-display-projection";
-import { decodeAgentQuestionInput, type ConversationAgentQuestionInput } from "@/service/conversation-agent-question-input";
+import {
+  decodeAgentQuestionInput, decodeAgentTaskInput, type ConversationAgentQuestionInput, type ConversationAgentTaskInput,
+} from "@/service/conversation-agent-question-input";
 import { MarkdownMessage } from "./conversation-markdown";
 import type { ConversationAgentInteraction } from "@/types/conversation";
 import type {
@@ -56,7 +58,9 @@ export function ConversationAgentInteractionView({ interaction }: { interaction:
     // Only the production projection's host-authored question mirror reaches this branch.
     // 仅生产投影中的宿主问题镜像进入此分支。
     const question = decodeAgentQuestionInput(interaction.event);
-    return question ? <ConversationReceivedQuestion {...actions} question={question} seq={interaction.seq} createdAtMs={interaction.created_at_ms} /> : null;
+    if (question) return <ConversationReceivedQuestion {...actions} question={question} seq={interaction.seq} createdAtMs={interaction.created_at_ms} />;
+    const task = decodeAgentTaskInput(interaction.event);
+    return task ? <ConversationReceivedTaskMessage {...actions} task={task} seq={interaction.seq} createdAtMs={interaction.created_at_ms} /> : null;
   }
   if (interaction.event.kind === "collaboration") {
     return <ConversationCollaborationCard key={interaction.event.operation_id} {...actions} event={interaction.event} seq={interaction.seq} createdAtMs={interaction.created_at_ms} />;
@@ -105,6 +109,32 @@ function ConversationReceivedQuestion(props: ConversationAgentInteractionActions
       <time dateTime={new Date(props.createdAtMs).toISOString()}>{new Date(props.createdAtMs).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}</time>
     </footer>}>
     <div className="vk-collab-content"><MarkdownMessage content={props.question.body} eager /></div>
+  </CollaborationToolCard>;
+}
+
+/** Renders inbox task messages from the parent with the same incoming bubble as typed task messages.
+ * 使用与强类型任务消息相同的接收气泡渲染来自父代理的 inbox 任务消息。
+ * Props contain the decoded envelopes, event coordinates and host-owned navigation; returns one card. A single
+ * root input stays one card, so several queued messages appear in delivery order inside it.
+ * 参数包含解码信封、事件坐标和宿主导航；返回一张卡片。一条根输入保持一张卡，多条排队消息按投递顺序置于其中。 */
+function ConversationReceivedTaskMessage(props: ConversationAgentInteractionActions & {
+  task: ConversationAgentTaskInput; seq: number; createdAtMs: number;
+}) {
+  const { locale, t } = useI18n();
+  // Directional sentence only when the host knows the sender's name, matching typed task messages.
+  // 仅当宿主知道发送方名称时使用方向句，与强类型任务消息一致。
+  const named = Boolean(props.subagentNames?.get(props.task.source));
+  return <CollaborationToolCard id={`collaboration:received-task:${props.task.eventId}`} seq={props.seq}
+    eventKind="user_input" cardKind="task-message" incoming title={t("conversation.collaboration.timeline.taskMessage")}
+    titlePrefix={named ? t("conversation.collaboration.message.receivedPrefix") : undefined}
+    titleSuffix={named ? t("conversation.collaboration.message.receivedSuffix") : undefined}
+    participant={<CollaborationSessionButton {...props} sessionId={props.task.source} title={t("conversation.collaboration.openSource")} />}
+    footer={<footer className="vk-prompt-foot vk-collab-time">
+      <time dateTime={new Date(props.createdAtMs).toISOString()}>{new Date(props.createdAtMs).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}</time>
+    </footer>}>
+    {props.task.bodies.map((body, index) => (
+      <div className="vk-collab-content" key={index}><MarkdownMessage content={body} eager /></div>
+    ))}
   </CollaborationToolCard>;
 }
 

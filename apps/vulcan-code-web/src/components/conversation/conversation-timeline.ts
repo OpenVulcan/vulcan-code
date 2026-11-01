@@ -147,10 +147,13 @@ export function projectConversationTimelineItems(
     if (!currentTurn) {
       // A claimed task starts the turn above its work divider; in-turn steering stays inside the process.
       // 已认领任务在工作分隔线上方开启回合；回合内插队仍保留在过程内部。
+      // An inbox task message is a root input, so it always opens its own turn.
+      // inbox 任务消息是根输入，因此总是开启自己的回合。
       const interaction = item.sourceMessage?.agentInteraction?.event;
-      if (itemTurnId !== null && interaction?.kind === "collaboration"
+      if (itemTurnId !== null && (interaction?.kind === "collaboration"
         && interaction.after_state.kind === "inbound_task_message"
-        && interaction.after_state.acceptance.message.kind === "task_start") {
+        && interaction.after_state.acceptance.message.kind === "task_start"
+        || interaction?.kind === "user_input" && interaction.input_source === "root")) {
         timeline.push({ kind: "item", item });
         currentTurn = newProjectedTurn(null, item);
         continue;
