@@ -271,6 +271,7 @@ impl LocalGithubServer {
         let thread_latest_index = Arc::clone(&latest_index);
         let thread_requests = Arc::clone(&requests);
         let thread_shutdown = Arc::clone(&shutdown);
+        let thread_base_url = base_url.clone();
         let releases = vec![
             ReleaseFixture::valid("1.0.0"),
             ReleaseFixture::valid("2.0.0"),
@@ -298,6 +299,7 @@ impl LocalGithubServer {
                             .push(path.clone());
                         let response = response_for_path(
                             &path,
+                            &thread_base_url,
                             &releases,
                             thread_latest_index.load(Ordering::Acquire),
                         );
@@ -448,7 +450,36 @@ fn http_response(status: &str, content_type: &str, body: &[u8]) -> Vec<u8> {
 /// 返回值
 /// Returns a release API document, checksum, archive, or a 404 response.
 /// 返回 release API 文档、校验和、归档或 404 响应。
-fn response_for_path(path: &str, releases: &[ReleaseFixture], latest_index: usize) -> Vec<u8> {
+fn response_for_path(
+    path: &str,
+    base_url: &str,
+    releases: &[ReleaseFixture],
+    latest_index: usize,
+) -> Vec<u8> {
+    // The Hub resolve endpoint advertises the current latest release, served from this fixture.
+    // Hub resolve 端点声明当前最新 release，由本夹具提供下载。
+    if path.starts_with(&format!("/hub/api/v1/skills/{FIXTURE_SKILL_ID}/resolve")) {
+        let Some(release) = releases.get(latest_index) else {
+            return http_response("404 Not Found", "text/plain", b"not found");
+        };
+        let body = serde_json::json!({
+            "schema_version": 1,
+            "skill_id": FIXTURE_SKILL_ID,
+            "version": release.version,
+            "archive": {
+                "type": "zip",
+                "url": format!("{base_url}/hub/archives/{}", release.archive_name()),
+                "sha256": release.sha256,
+            },
+            "update": {
+                "source_type": "official_hub",
+                "locator": FIXTURE_SKILL_ID,
+                "tag": release.version,
+            }
+        })
+        .to_string();
+        return http_response("200 OK", "application/json", body.as_bytes());
+    }
     let release = if path.ends_with("/releases/latest") {
         releases.get(latest_index)
     } else {
@@ -637,6 +668,7 @@ fn isolated_handle(
     runtime_settings.network.allow_downloads = allow_downloads;
     runtime_settings.network.github_base_url = Some(server.base_url.clone());
     runtime_settings.network.github_api_base_url = Some(server.base_url.clone());
+    runtime_settings.network.official_skill_hub_base_url = Some(format!("{}/hub", server.base_url));
     let host_options = build_host_options(
         &runtime_root,
         &managed_runtime_distribution_root,
@@ -673,6 +705,90 @@ fn isolated_handle(
         live_network_settings: Arc::new(Mutex::new(runtime_settings.network.clone())),
         effective_runtime_settings: runtime_settings,
     }
+}
+
+/// Verifies the ROOT bootstrap moves a GitHub-installed ROOT skill onto the configured Hub.
+/// 验证 ROOT 引导会把从 GitHub 安装的 ROOT 技能迁到配置的 Hub。
+///
+/// The first bootstrap installs from GitHub; once the configuration names the Hub, the next
+/// bootstrap rewrites the install record to the Hub and the one after it changes nothing.
+/// 首次引导从 GitHub 安装；配置改为 Hub 后，下一次引导把安装记录改写到 Hub，再下一次不再变动。
+#[test]
+fn root_bootstrap_moves_github_installs_to_the_configured_hub() {
+    let root = TestRoot::new();
+    let server = LocalGithubServer::start();
+    let handle = isolated_handle(&root.path.join("migrate"), &server, true);
+    let root_target = handle.skill_roots[0].clone();
+    let entry = |source: &str, source_type: RootSkillBootstrapSourceType| RootSkillBootstrapEntry {
+        skill_id: String::from(FIXTURE_SKILL_ID),
+        source: String::from(source),
+        source_type,
+    };
+    let bootstrap = |entries: Vec<RootSkillBootstrapEntry>| {
+        let mut engine = handle.engine.write().expect("lock fixture engine");
+        let mut messages = Vec::new();
+        ensure_configured_root_skills_installed(
+            &handle.runtime_root,
+            &handle.skill_roots,
+            entries,
+            &mut engine,
+            &mut |message: &str| messages.push(message.to_string()),
+        )
+        .expect("ROOT bootstrap");
+        messages
+    };
+    let recorded = || {
+        read_only_skill_manager(&handle.runtime_root, root_target.clone())
+            .install_record(FIXTURE_SKILL_ID)
+            .expect("read ROOT install record")
+            .expect("ROOT skill must keep an install record")
+    };
+
+    bootstrap(vec![entry(
+        FIXTURE_REPOSITORY,
+        RootSkillBootstrapSourceType::Github,
+    )]);
+    let installed = recorded();
+    assert_eq!(installed.source.source_type, SkillInstallSourceType::Github);
+    assert_eq!(installed.version, "1.0.0");
+
+    let requests_before_move = server.request_count();
+    let messages = bootstrap(vec![entry(
+        FIXTURE_SKILL_ID,
+        RootSkillBootstrapSourceType::OfficialHub,
+    )]);
+    let moved = recorded();
+    assert_eq!(
+        moved.source.source_type,
+        SkillInstallSourceType::OfficialHub,
+        "{messages:?}"
+    );
+    assert_eq!(moved.source.locator, FIXTURE_SKILL_ID);
+    assert_eq!(
+        moved.version, "1.0.0",
+        "a same-version move keeps the version"
+    );
+    assert!(server.request_count() > requests_before_move);
+
+    // A matching record is left alone: no request reaches the Hub.
+    // 一致的记录保持不动：不会有请求到达 Hub。
+    let requests_after_move = server.request_count();
+    bootstrap(vec![entry(
+        FIXTURE_SKILL_ID,
+        RootSkillBootstrapSourceType::OfficialHub,
+    )]);
+    assert_eq!(server.request_count(), requests_after_move);
+
+    // Later Hub releases arrive through ordinary updates of the moved record.
+    // 之后的 Hub 版本通过对迁移后记录的普通更新到达。
+    server.select_latest(1);
+    let (_, updated) = update_luaskill(&handle, String::from(FIXTURE_SKILL_ID), None)
+        .expect("update from the Hub");
+    assert_eq!(catalog_version(&updated, FIXTURE_SKILL_ID), "2.0.0");
+    assert_eq!(
+        recorded().source.source_type,
+        SkillInstallSourceType::OfficialHub
+    );
 }
 
 /// Proves real typed plugin execution survives an ordinary-engine write lock and catalog reload.

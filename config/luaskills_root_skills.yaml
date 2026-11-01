@@ -1,7 +1,7 @@
 root_skills:
   - skill_id: "vulcan-codekit"
-    source: "LuaSkills/vulcan-codekit"
-    source_type: "github"
+    source: "vulcan-codekit"
+    source_type: "official_hub"
   - skill_id: "vulcan-curl"
-    source: "LuaSkills/vulcan-curl"
-    source_type: "github"
+    source: "vulcan-curl"
+    source_type: "official_hub"

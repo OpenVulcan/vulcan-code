@@ -61,6 +61,9 @@ enum RootSkillBootstrapSourceType {
     /// Install from one GitHub repository source.
     /// 从某个 GitHub 仓库来源安装。
     Github,
+    /// Install from the effective LuaSkills Hub; the source is the Hub skill id.
+    /// 从生效的 LuaSkills Hub 安装；来源为 Hub 技能标识。
+    OfficialHub,
     /// Install from one direct package/source URL.
     /// 从某个直接包地址或 source URL 安装。
     Url,
@@ -80,10 +83,35 @@ impl RootSkillBootstrapSourceType {
     fn into_runtime_source_type(self) -> Result<SkillInstallSourceType, String> {
         match self {
             Self::Github => Ok(SkillInstallSourceType::Github),
+            Self::OfficialHub => Ok(SkillInstallSourceType::OfficialHub),
             Self::Url => Err(String::from(
-                "The `url` source type has been disabled by the upstream source policy and cannot be used; change this skill's source type to `github`.",
+                "The `url` source type has been disabled by the upstream source policy and cannot be used; change this skill's source type to `official_hub` or `github`.",
             )),
         }
+    }
+}
+
+/// Returns whether one recorded install source already matches the configured ROOT source.
+/// 返回某条已记录的安装来源是否已与配置的 ROOT 来源一致。
+///
+/// GitHub `owner/repo` locators are case-insensitive on GitHub itself, so they compare
+/// case-insensitively; Hub locators are skill identifiers and compare exactly.
+/// GitHub 的 `owner/repo` 在 GitHub 上不区分大小写，因此按不区分大小写比较；Hub 定位值是技能标识，
+/// 按精确值比较。
+fn recorded_source_matches(
+    recorded_type: SkillInstallSourceType,
+    recorded_locator: &str,
+    configured_type: SkillInstallSourceType,
+    configured_locator: &str,
+) -> bool {
+    if recorded_type != configured_type {
+        return false;
+    }
+    match configured_type {
+        SkillInstallSourceType::Github => recorded_locator
+            .trim()
+            .eq_ignore_ascii_case(configured_locator.trim()),
+        _ => recorded_locator.trim() == configured_locator.trim(),
     }
 }
 
@@ -417,7 +445,13 @@ where
     );
     let mut engine = LuaEngine::new(LuaEngineOptions::new(pool_config, host_options))
         .map_err(|error| format!("Failed to create the LuaSkills engine: {error}"))?;
-    ensure_configured_root_skills_installed(&skill_roots, &mut engine, &mut progress)?;
+    ensure_configured_root_skills_installed(
+        &runtime_root,
+        &skill_roots,
+        load_root_skill_bootstrap_entries()?,
+        &mut engine,
+        &mut progress,
+    )?;
     progress("Loading the LuaSkills skill catalog");
     engine
         .load_from_roots(&skill_roots)
@@ -1554,13 +1588,21 @@ fn ensure_runtime_root_layout(runtime_root: &Path) -> Result<Vec<RuntimeSkillRoo
 
 /// Ensures configured host-managed ROOT skills exist before catalog loading.
 /// 在加载技能目录前确保配置声明的宿主管理 ROOT 技能已经存在。
+///
+/// An installed ROOT skill whose managed install record names another source is moved to
+/// the configured source through a source-replacing update. A failed move keeps the working
+/// installation and is retried on the next start, because the skill is already usable and
+/// the configured source may be temporarily unreachable or still publish an older version.
+/// 已安装但受管安装记录指向其他来源的 ROOT 技能，会通过替换来源的更新迁到配置来源。迁移失败时保留
+/// 可用的现有安装，并在下次启动重试，因为技能已经可用，而配置来源可能暂时不可达或仍发布更旧版本。
 fn ensure_configured_root_skills_installed(
+    runtime_root: &Path,
     skill_roots: &[RuntimeSkillRoot],
+    configured_skills: Vec<RootSkillBootstrapEntry>,
     engine: &mut LuaEngine,
     progress: &mut impl FnMut(&str),
 ) -> Result<(), String> {
     let root_target = resolve_named_skill_root(skill_roots, "ROOT")?;
-    let configured_skills = load_root_skill_bootstrap_entries()?;
     if configured_skills.is_empty() {
         progress("No LuaSkills ROOT skills are configured for automatic installation");
         return Ok(());
@@ -1572,15 +1614,10 @@ fn ensure_configured_root_skills_installed(
             .into_iter()
             .map(|instance| instance.skill_id)
             .collect::<std::collections::BTreeSet<_>>();
+    let root_manager = read_only_skill_manager(runtime_root, root_target.clone());
 
     let mut installed_any_skill = false;
     for configured_skill in configured_skills {
-        if installed_root_skill_ids.contains(configured_skill.skill_id.as_str()) {
-            continue;
-        }
-
-        let install_message = format!("Installing LuaSkills skill: {}", configured_skill.skill_id);
-        progress(&install_message);
         // The source type is resolved before the install request is built, so a disabled
         // source type fails with the skill identifier attached instead of a bare policy
         // error, and no partially-built request reaches the engine.
@@ -1595,6 +1632,23 @@ fn ensure_configured_root_skills_installed(
                     configured_skill.skill_id
                 )
             })?;
+        if installed_root_skill_ids.contains(configured_skill.skill_id.as_str()) {
+            if migrate_root_skill_source(
+                skill_roots,
+                &root_target,
+                &root_manager,
+                engine,
+                &configured_skill,
+                resolved_source_type,
+                progress,
+            ) {
+                installed_any_skill = true;
+            }
+            continue;
+        }
+
+        let install_message = format!("Installing LuaSkills skill: {}", configured_skill.skill_id);
+        progress(&install_message);
         let install_request = SkillInstallRequest {
             skill_id: Some(configured_skill.skill_id.clone()),
             source: Some(configured_skill.source.clone()),
@@ -1688,6 +1742,80 @@ fn load_root_skill_bootstrap_entries() -> Result<Vec<RootSkillBootstrapEntry>, S
     }
 
     Ok(entries)
+}
+
+/// Moves one installed ROOT skill to its configured source when its install record differs.
+/// 当已安装 ROOT 技能的安装记录与配置来源不同时，将其迁到配置来源。
+///
+/// Returns whether the engine changed the installed package, so the caller reloads the roots.
+/// Every failure is reported through `progress` and leaves the current installation in place.
+/// 返回引擎是否改动了已安装的技能包，供调用方决定是否重载技能根。所有失败都经 `progress` 报告，
+/// 并保留当前安装。
+fn migrate_root_skill_source(
+    skill_roots: &[RuntimeSkillRoot],
+    root_target: &RuntimeSkillRoot,
+    root_manager: &SkillManager,
+    engine: &mut LuaEngine,
+    configured_skill: &RootSkillBootstrapEntry,
+    configured_type: SkillInstallSourceType,
+    progress: &mut impl FnMut(&str),
+) -> bool {
+    let skill_id = configured_skill.skill_id.as_str();
+    let record = match root_manager.install_record(skill_id) {
+        Ok(Some(record)) if record.managed => record,
+        // A ROOT skill without a managed record was placed by hand; moving it would
+        // overwrite content the install workflow does not own.
+        // 没有受管记录的 ROOT 技能是手工放置的；迁移会覆盖不归安装流程管理的内容。
+        Ok(_) => return false,
+        Err(error) => {
+            progress(&format!(
+                "Skipped the source check of ROOT skill `{skill_id}`: reading its install record failed: {error}"
+            ));
+            return false;
+        }
+    };
+    if recorded_source_matches(
+        record.source.source_type,
+        &record.source.locator,
+        configured_type,
+        &configured_skill.source,
+    ) {
+        return false;
+    }
+
+    progress(&format!(
+        "Moving LuaSkills skill `{skill_id}` from {} `{}` to {} `{}`",
+        skill_install_source_type_label(record.source.source_type),
+        record.source.locator,
+        skill_install_source_type_label(configured_type),
+        configured_skill.source
+    ));
+    let request = SkillInstallRequest {
+        skill_id: Some(configured_skill.skill_id.clone()),
+        source: Some(configured_skill.source.clone()),
+        source_type: configured_type,
+        replace_source: true,
+    };
+    match engine.system_update_skill_in_root(
+        skill_roots,
+        root_target,
+        SkillManagementAuthority::System,
+        &request,
+    ) {
+        Ok(result) => {
+            progress(&format!(
+                "Moved LuaSkills skill `{skill_id}` to the configured source ({}): {}",
+                result.status, result.message
+            ));
+            true
+        }
+        Err(error) => {
+            progress(&format!(
+                "Keeping LuaSkills skill `{skill_id}` on its recorded source; moving it to the configured source failed and will be retried on the next start: {error}"
+            ));
+            false
+        }
+    }
 }
 
 /// Resolves one named skill root from the mounted root list.
@@ -1921,6 +2049,12 @@ fn build_skill_manager_for_root(
         .find(|root| root.name == root_name)
         .cloned()
         .ok_or_else(|| format!("Skill root `{root_name}` was not found."))?;
+    Ok(read_only_skill_manager(&handle.runtime_root, skill_root))
+}
+
+/// Builds one metadata-only skill manager for a skill root under the given runtime root.
+/// 为给定运行时根下的某个技能根构建只读元数据技能管理器。
+fn read_only_skill_manager(runtime_root: &Path, skill_root: RuntimeSkillRoot) -> SkillManager {
     let lifecycle_root = skill_root
         .skills_dir
         .parent()
@@ -1928,10 +2062,10 @@ fn build_skill_manager_for_root(
         .unwrap_or_else(|| skill_root.skills_dir.clone())
         .join("state");
 
-    Ok(SkillManager::new(SkillManagerConfig {
+    SkillManager::new(SkillManagerConfig {
         skill_root,
         lifecycle_root,
-        download_cache_root: luaskills_download_cache_root(&handle.runtime_root),
+        download_cache_root: luaskills_download_cache_root(runtime_root),
         // Catalog metadata never downloads, so this manager is built without that
         // capability instead of inheriting a permissive default.
         // 目录元数据从不下载，因此本管理器在构建时就不具备该能力，而不是继承宽松默认值。
@@ -1942,7 +2076,7 @@ fn build_skill_manager_for_root(
         official_skill_hub_base_url: None,
         enable_private_url_skill_install: false,
         private_skill_source_allowlist: Vec::new(),
-    }))
+    })
 }
 
 /// Reads one LuaSkills public manifest from disk.
@@ -2272,4 +2406,56 @@ fn disabled_root_bootstrap_source_type_still_deserializes() {
     let github: RootSkillBootstrapSourceType =
         serde_json::from_str("\"github\"").expect("the supported declaration must parse");
     assert!(matches!(github, RootSkillBootstrapSourceType::Github));
+}
+
+/// Verifies a ROOT bootstrap can declare the official Hub and maps it onto the Hub source type.
+/// 验证 ROOT 引导可以声明官方 Hub，并映射到 Hub 来源类型。
+#[test]
+fn root_bootstrap_accepts_the_official_hub_source_type() {
+    let parsed: RootSkillBootstrapSourceType =
+        serde_json::from_str("\"official_hub\"").expect("the official Hub declaration must parse");
+    assert!(matches!(
+        parsed.into_runtime_source_type(),
+        Ok(SkillInstallSourceType::OfficialHub)
+    ));
+}
+
+/// Verifies which recorded sources trigger a ROOT source migration.
+/// 验证哪些已记录来源会触发 ROOT 来源迁移。
+#[test]
+fn recorded_source_mismatch_drives_root_migration() {
+    use SkillInstallSourceType::{Github, OfficialHub};
+
+    // A GitHub record must move once the configuration names the Hub.
+    // 配置改为 Hub 后，GitHub 记录必须迁移。
+    assert!(!recorded_source_matches(
+        Github,
+        "LuaSkills/vulcan-codekit",
+        OfficialHub,
+        "vulcan-codekit"
+    ));
+    // A record already on the configured Hub skill stays put.
+    // 已在配置 Hub 技能上的记录保持不动。
+    assert!(recorded_source_matches(
+        OfficialHub,
+        "vulcan-codekit",
+        OfficialHub,
+        "vulcan-codekit"
+    ));
+    // GitHub repositories compare without case, matching GitHub's own lookup.
+    // GitHub 仓库按不区分大小写比较，与 GitHub 自身查找一致。
+    assert!(recorded_source_matches(
+        Github,
+        "luaskills/Vulcan-CodeKit",
+        Github,
+        "LuaSkills/vulcan-codekit"
+    ));
+    // Hub skill identifiers compare exactly.
+    // Hub 技能标识按精确值比较。
+    assert!(!recorded_source_matches(
+        OfficialHub,
+        "Vulcan-CodeKit",
+        OfficialHub,
+        "vulcan-codekit"
+    ));
 }
