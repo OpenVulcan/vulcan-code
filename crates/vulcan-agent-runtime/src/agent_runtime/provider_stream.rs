@@ -69,6 +69,9 @@ pub(crate) enum ProviderStreamDelta {
     /// Assistant thinking delta returned by the provider stream.
     /// Provider 流返回的助手思考增量。
     Thinking(String),
+    /// Provider reasoning summary shown and recorded as thinking but never replayed.
+    /// 作为思考展示与记录、但绝不重放的供应商推理摘要。
+    SummaryThinking(String),
     /// Replace-in-place reasoning status that must never become transcript content.
     /// 必须绝不成为转录正文的原地替换式推理状态。
     TransientReasoningStatusChanged(Option<TransientReasoningStatus>),

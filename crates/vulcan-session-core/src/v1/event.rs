@@ -528,6 +528,12 @@ pub struct AssistantReasoningEvent {
     /// 事件上(见顺序规则)。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_source: Option<ProviderSource>,
+    /// Whether the text carries a provider reasoning summary: shown and recorded, never replayed.
+    /// Absent before metadata schema 12, when every recorded reasoning was the model's own.
+    /// 正文是否含供应商推理摘要：可展示与记录，但绝不重放。元数据模式 12 之前没有该字段，
+    /// 当时记录的推理均为模型自身思考。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub display_only: bool,
 }
 
 /// Assistant text semantic of one API.

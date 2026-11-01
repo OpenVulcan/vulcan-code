@@ -527,8 +527,9 @@ Wire JSON；内部封装不是标准 Responses 请求。媒体载荷保存在请
 
 Chat 协议的 `reasoning_details[].type == "reasoning.summary"` 不走上述瞬态通道：各供应商放入其中的
 内容含义不一（真摘要或借用该类型的完整思考），解码器统一把它作为**仅展示思考**
-（`ReasoningSummaryDelta`）发出，进入思考弹窗、assistant reasoning 与转录记录，但绝不登记重放项，
-不进入 Provider replay；摘要不是模型自身思考，回放会打断其上下文。新摘要部分（`index` 变化）之前插入
+（`ReasoningSummaryDelta`）发出，进入思考弹窗、assistant reasoning 与转录记录，但绝不登记重放项；
+会话推理事件同时带 `display_only` 标记（见[会话元数据版本](session-metadata-migrations.md) 12），
+V1 Provider 投影跳过该事件，换路由回退时也不回放；摘要不是模型自身思考，回放会打断其上下文。新摘要部分（`index` 变化）之前插入
 空行；同一请求一旦出现非空完整思考，同分片及之后的摘要全部丢弃；与摘要逐字节相同的顶层 `reasoning`
 镜像不得当作完整思考，格式不同的镜像必须由 Response Profile 删除。同一冻结请求链最多
 只能解析出一种临时状态模式；多个 Profile 同时声明时必须失败关闭。运行时展示优先级固定为“非空

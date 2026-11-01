@@ -1033,6 +1033,8 @@ resolution: "moved_to_draft" | "removed" | "promoted_to_pending_in_turn";
       text: string;
       status: "streaming" | "completed" | "interrupted";
       provider_source?: ProviderSource;
+      /** Provider summary text: displayed like thinking, never replayed. 供应商摘要：按思考展示，绝不重放。 */
+      display_only?: boolean;
     }
   | {
       kind: "assistant_text";

@@ -289,7 +289,7 @@ async fn remote_checkpoint_terminal_rejects_mixed_semantics_and_failed_success()
                     .unwrap();
             }
             1 => {
-                sink.append_reasoning_delta("unexpected reasoning", 4)
+                sink.append_reasoning_delta("unexpected reasoning", false, 4)
                     .unwrap();
             }
             2 => terminal.tool_call_count = 1,

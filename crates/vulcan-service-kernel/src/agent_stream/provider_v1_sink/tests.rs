@@ -237,6 +237,7 @@ fn prepare_sink_request_with_facts(
             .join(format!("vulcan-provider-v1-test-{}", handle.session_id())),
         reasoning_text: String::new(),
         reasoning_sealed: false,
+        reasoning_display_only: false,
         reasoning_seq: None,
         assistant_text: String::new(),
         assistant_text_seq: None,
@@ -1186,6 +1187,36 @@ async fn v1_close_agent_event_rejects_navigation_projection_when_boundary_fails(
     assert_v1_close_agent_navigation(1, false).await;
 }
 
+/// Verifies one summary delta keeps the whole reasoning event out of replay, through completion.
+/// 验证一条摘要增量会使整条思考事件在完成后仍排除在重放之外。
+#[tokio::test]
+async fn summary_reasoning_delta_marks_the_event_display_only() {
+    let handle = published_open_turn();
+    let mut sink = ProviderV1StreamSink::new(
+        Arc::clone(&handle),
+        Arc::new(ProjectResourceCatalogRegistry::default()),
+    );
+    prepare_sink_request(&handle, &mut sink);
+    sink.append_reasoning_delta("summary", true, 4)
+        .expect("summary delta");
+    sink.append_reasoning_delta(" model", false, 5)
+        .expect("model delta");
+    sink.complete_reasoning(6).expect("reasoning complete");
+
+    let reasoning = handle
+        .read(|document| {
+            document.events().iter().find_map(|event| match &event.event {
+                EventBody::AssistantReasoning(reasoning) => Some(reasoning.clone()),
+                _ => None,
+            })
+        })
+        .expect("read reasoning")
+        .expect("reasoning event");
+    assert_eq!(reasoning.text, "summary model");
+    assert_eq!(reasoning.status, AssistantSemanticStatus::Completed);
+    assert!(reasoning.display_only);
+}
+
 /// Verifies api_started is durable before semantic streaming and terminal closure.
 /// 验证 api_started 在语义流与终态闭合前已经可靠落盘。
 #[tokio::test]
@@ -1215,7 +1246,7 @@ async fn tool_free_request_persists_ordered_v1_lifecycle() {
     // 在追加后续宿主专属生命周期事件前捕获真实 API 起点。
     let api_start_index = bodies.len() - 1;
 
-    sink.append_reasoning_delta("reason", 4)
+    sink.append_reasoning_delta("reason", false, 4)
         .expect("reasoning delta");
     sink.complete_reasoning(5).expect("reasoning complete");
     sink.append_assistant_delta("answer", 6)

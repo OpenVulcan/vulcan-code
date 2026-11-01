@@ -657,8 +657,12 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
         ExecutionStreamEvent::RequestStarted { session_id } => {
             apply_session_phase(app, state, session_id, SessionRunPhase::Requesting)
         }
-        ExecutionStreamEvent::ThinkingDelta { delta, .. } => provider_v1_sink
-            .append_reasoning_delta(&delta, current_v1_unix_millis()?)
+        ExecutionStreamEvent::ThinkingDelta {
+            delta,
+            display_only,
+            ..
+        } => provider_v1_sink
+            .append_reasoning_delta(&delta, display_only, current_v1_unix_millis()?)
             .map_err(|error| error.to_string()),
         ExecutionStreamEvent::TransientReasoningStatusChanged { session_id, status } => {
             emit_transient_reasoning_status(app, state, session_id, status)

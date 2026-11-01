@@ -586,6 +586,9 @@ pub enum ExecutionStreamEvent {
         /// Incremental thinking text emitted by the provider.
         /// Provider 发出的增量思考文本。
         delta: String,
+        /// Whether the text is a provider summary that is recorded but never replayed.
+        /// 正文是否为记录但绝不重放的供应商摘要。
+        display_only: bool,
     },
     /// Replaces or clears the non-persistent reasoning status line.
     /// 替换或清除非持久化推理状态行。

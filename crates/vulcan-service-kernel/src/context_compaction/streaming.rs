@@ -836,13 +836,17 @@ pub(crate) async fn apply_context_compaction_stream_event(
                 Ok(())
             }
         }
-        ExecutionStreamEvent::ThinkingDelta { delta, .. } => {
+        ExecutionStreamEvent::ThinkingDelta {
+            delta,
+            display_only,
+            ..
+        } => {
             // nowMs binds the reasoning mutation to the observed stream boundary.
             // nowMs 将思考变更绑定到观测到的流边界。
             let now_ms = i64::try_from(current_unix_millis_value())
                 .map_err(|_| String::from("Current timestamp exceeds the V1 i64 range."))?;
             provider_v1_sink
-                .append_reasoning_delta(&delta, now_ms)
+                .append_reasoning_delta(&delta, display_only, now_ms)
                 .map_err(|error| error.to_string())
         }
         ExecutionStreamEvent::TransientReasoningStatusChanged { status, .. } => {

@@ -640,6 +640,9 @@ struct ActiveProviderV1Projection {
     /// Whether the reasoning semantic already reached a terminal display status.
     /// 思考语义是否已经到达展示终态。
     reasoning_sealed: bool,
+    /// Whether any reasoning delta was a provider summary; sticky so it is never replayed.
+    /// 是否有任一思考增量为供应商摘要；一经置位即保持，使其绝不被重放。
+    reasoning_display_only: bool,
     /// Complete assistant text accumulated from ordered deltas.
     /// 从有序增量累积的完整 assistant 正文。
     assistant_text: String,
@@ -1985,6 +1988,7 @@ impl ProviderV1StreamSink {
             reasoning_text: String::new(),
             reasoning_seq: None,
             reasoning_sealed: false,
+            reasoning_display_only: false,
             assistant_text: String::new(),
             assistant_text_seq: None,
             pending_terminal: None,
@@ -2037,8 +2041,9 @@ impl ProviderV1StreamSink {
     ///
     /// # Parameters
     /// 参数
-    /// `delta` is the exact Provider fragment and `now_ms` is its host observation time.
-    /// `delta` 是精确 Provider 片段，`now_ms` 是宿主观测时间。
+    /// `delta` is the exact Provider fragment, `display_only` marks a provider summary that is
+    /// recorded but never replayed, and `now_ms` is its host observation time.
+    /// `delta` 是精确 Provider 片段，`display_only` 标记记录但绝不重放的供应商摘要，`now_ms` 是宿主观测时间。
     ///
     /// # Returns
     /// 返回值
@@ -2047,6 +2052,7 @@ impl ProviderV1StreamSink {
     pub(crate) fn append_reasoning_delta(
         &mut self,
         delta: &str,
+        display_only: bool,
         now_ms: i64,
     ) -> Result<(), ProviderV1SinkError> {
         let active = self
@@ -2058,14 +2064,19 @@ impl ProviderV1StreamSink {
         }
         let mut next_text = active.reasoning_text.clone();
         next_text.push_str(delta);
-        let receipt = self.handle.update_reasoning(
+        // A summary taints the whole event: its text can no longer be split back into model reasoning.
+        // 摘要会污染整条事件：其正文无法再拆分回模型思考。
+        let next_display_only = active.reasoning_display_only || display_only;
+        let receipt = self.handle.update_reasoning_with_display_only(
             active.api_call_id,
             next_text.clone(),
             AssistantSemanticStatus::Streaming,
+            next_display_only,
             now_ms,
         )?;
         active.reasoning_seq = Some(receipt.value);
         active.reasoning_text = next_text;
+        active.reasoning_display_only = next_display_only;
         active.reasoning_sealed = false;
         Ok(())
     }
@@ -2090,10 +2101,11 @@ impl ProviderV1StreamSink {
         if active.reasoning_text.is_empty() || active.reasoning_sealed {
             return Ok(());
         }
-        let receipt = self.handle.update_reasoning(
+        let receipt = self.handle.update_reasoning_with_display_only(
             active.api_call_id,
             active.reasoning_text.clone(),
             AssistantSemanticStatus::Completed,
+            active.reasoning_display_only,
             now_ms,
         )?;
         active.reasoning_seq = Some(receipt.value);
@@ -2795,10 +2807,11 @@ impl ProviderV1StreamSink {
             .as_mut()
             .ok_or(ProviderV1SinkError::RequestNotActive)?;
         if !active.reasoning_text.is_empty() && !active.reasoning_sealed {
-            let receipt = self.handle.update_reasoning(
+            let receipt = self.handle.update_reasoning_with_display_only(
                 active.api_call_id,
                 active.reasoning_text.clone(),
                 semantic_status,
+                active.reasoning_display_only,
                 now_ms,
             )?;
             active.reasoning_seq = Some(receipt.value);

@@ -1807,6 +1807,7 @@ mod tests {
                 text: text.to_string(),
                 status,
                 provider_source: None,
+                display_only: false,
             })
         } else {
             EventBody::AssistantText(AssistantTextEvent {

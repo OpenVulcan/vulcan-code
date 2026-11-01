@@ -55,6 +55,11 @@
 闭合失去进程所有者的维护及 API，并在向草稿或请求入口发布句柄前可靠写入；不删除历史、不清空草稿，也不要求
 用户手工修复文件。当前格式新建会话、分片滚动、API 启动前后中断和冷草稿读写均由回归测试约束。
 
+12 在推理事件（`assistant_reasoning`）引入可选的 `display_only`：正文含供应商推理摘要（如 Chat 的
+`reasoning.summary`）时为 `true`，照常展示与记录，但 Provider 投影不把它当作可重放思考，换路由回退时
+同样不回放。标记只能在流式期间置位，置位后不可清除。缺省表示模型自身思考，与 12 之前全部推理记录的
+含义一致，因此 11→12 只更新版本号，事件日志不改写；原字节保存为 `metadata.v11.backup.json`。
+
 基线之前的会话无法加载，因此也无法走“先归档再删除”。唯一清理入口是 `service_delete_unsupported_conversation`：
 在会话生命周期守卫内先以 `session_v1_format_is_unsupported` 只读元数据确认其为 `UnsupportedDevelopmentFormat`，
 再经 `delete_session_v1` 删除会话目录与索引记录。可读会话返回 `ERR_SESSION_FORMAT_SUPPORTED`，损坏或缺失仍是

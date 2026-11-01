@@ -160,11 +160,35 @@ fn golden_assistant_reasoning() {
             text: "thinking".to_string(),
             status: AssistantSemanticStatus::Streaming,
             provider_source: None,
+            display_only: false,
         }),
     );
     assert_golden(
         &event,
         r#"{"seq":3,"turn_id":1,"created_at_ms":1700000000000,"updated_at_ms":1700000000000,"event_revision":1,"visibility":"provider","event":{"kind":"assistant_reasoning","api_call_id":4,"text":"thinking","status":"streaming"}}"#,
+    );
+}
+
+/// Display-only summary reasoning golden line, which round-trips the marker exactly.
+/// 仅展示摘要思考的 golden 行，标记可精确往返。
+#[test]
+fn golden_display_only_assistant_reasoning() {
+    let event = turn(
+        3,
+        1,
+        EventBody::AssistantReasoning(AssistantReasoningEvent {
+            api_call_id: ApiCallId::try_new(4).unwrap(),
+            text: "summary".to_string(),
+            status: AssistantSemanticStatus::Completed,
+            provider_source: None,
+            display_only: true,
+        }),
+    );
+    let line = r#"{"seq":3,"turn_id":1,"created_at_ms":1700000000000,"updated_at_ms":1700000000000,"event_revision":1,"visibility":"provider","event":{"kind":"assistant_reasoning","api_call_id":4,"text":"summary","status":"completed","display_only":true}}"#;
+    assert_golden(&event, line);
+    assert_eq!(
+        serde_json::from_str::<ConversationEvent>(line).unwrap(),
+        event
     );
 }
 

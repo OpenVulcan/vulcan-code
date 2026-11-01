@@ -787,7 +787,7 @@ fn reasoning_summary_delta_is_recorded_thinking_without_replay() {
 
     assert!(matches!(
         live_receiver.try_recv(),
-        Ok(Ok(ProviderStreamDelta::Thinking(thinking))) if thinking == "summary"
+        Ok(Ok(ProviderStreamDelta::SummaryThinking(thinking))) if thinking == "summary"
     ));
     assert!(sink.deltas.iter().any(|delta| matches!(
         delta,

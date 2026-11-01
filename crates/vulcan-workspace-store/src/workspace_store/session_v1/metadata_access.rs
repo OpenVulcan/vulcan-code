@@ -172,6 +172,10 @@ fn upgrade_step(
         // 11 permits a null maintenance child identity for explicit root compaction; existing identities remain exact.
         // 11 允许显式主会话压缩使用空子执行身份；已有身份原样保留。
         10 => {}
+        // 12 adds the optional reasoning-event `display_only` marker; every reasoning recorded
+        // before it is the model's own, which is exactly what absence means.
+        // 12 新增可选的推理事件 `display_only` 标记；此前记录的推理均为模型自身思考，正是缺省的含义。
+        11 => {}
         other => {
             return Err(SessionV1Error::unsupported(
                 path,

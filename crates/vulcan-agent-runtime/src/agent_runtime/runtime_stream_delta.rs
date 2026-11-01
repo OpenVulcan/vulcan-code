@@ -45,6 +45,10 @@ pub(crate) struct RuntimeStreamDeltaState {
     /// Marks whether the current thinking phase has already emitted its completion event.
     /// 标记当前思考阶段是否已经发出过完成事件。
     thinking_completed_emitted: bool,
+    /// A provider summary absorbed by normalization before producing visible text; the next
+    /// visible thinking delta carries its never-replay marker.
+    /// 被规范化吸收、尚未产生可见文本的供应商摘要；下一条可见思考增量携带其绝不重放标记。
+    thinking_display_only_pending: bool,
     /// Latest structured request snapshot captured before the most recent provider request.
     /// 最近一次 Provider 请求发出前捕获到的最新结构化请求快照。
     latest_request_snapshot: Option<CoreProviderRequestSnapshot>,
@@ -130,6 +134,7 @@ impl RuntimeStreamDeltaState {
             thinking_visible_output: String::new(),
             assistant_output: String::new(),
             thinking_completed_emitted: false,
+            thinking_display_only_pending: false,
             latest_request_snapshot: None,
             provider_request_count: 0,
             final_conversation_state: None,
@@ -340,15 +345,21 @@ impl RuntimeStreamDeltaState {
             &mut self.thinking_visible_output,
             &mut self.thinking_completed_emitted,
         );
+        self.thinking_display_only_pending = false;
     }
 
     /// Applies one provider thinking delta to controller state and returns one visible event when new normalized text appears.
     /// 将一条 Provider 思考增量应用到控制器状态，并在出现新的规范化可见文本时返回一个可见事件。
+    ///
+    /// `display_only` marks a provider summary that is recorded but never replayed.
+    /// `display_only` 标记记录但绝不重放的供应商摘要。
     fn process_thinking_delta(
         &mut self,
         session_id: SessionId,
         delta: String,
+        display_only: bool,
     ) -> Vec<ExecutionStreamEvent> {
+        let display_only = display_only || std::mem::take(&mut self.thinking_display_only_pending);
         self.core_controller.record_thinking(delta.clone());
         self.thinking_raw_output.push_str(&delta);
         let normalized_visible_output =
@@ -360,6 +371,7 @@ impl RuntimeStreamDeltaState {
         self.thinking_visible_output = normalized_visible_output;
 
         if visible_delta.is_empty() {
+            self.thinking_display_only_pending = display_only;
             self.provider_request_telemetry.observe_first_event();
             return Vec::new();
         }
@@ -374,6 +386,7 @@ impl RuntimeStreamDeltaState {
         events.push(ExecutionStreamEvent::ThinkingDelta {
             session_id,
             delta: visible_delta,
+            display_only,
         });
         events
     }
@@ -589,7 +602,12 @@ pub(crate) fn process_provider_stream_delta(
                 .collect();
             provider_request_events_with_durability_boundary(telemetry_events, completion)
         }
-        Ok(ProviderStreamDelta::Thinking(delta)) => state.process_thinking_delta(session_id, delta),
+        Ok(ProviderStreamDelta::Thinking(delta)) => {
+            state.process_thinking_delta(session_id, delta, false)
+        }
+        Ok(ProviderStreamDelta::SummaryThinking(delta)) => {
+            state.process_thinking_delta(session_id, delta, true)
+        }
         Ok(ProviderStreamDelta::TransientReasoningStatusChanged(status)) => {
             vec![ExecutionStreamEvent::TransientReasoningStatusChanged { session_id, status }]
         }
@@ -1427,6 +1445,37 @@ mod tests {
             records: Vec::new(),
             continuation: Default::default(),
         }
+    }
+
+    /// Summary thinking reaches the visible stream with its never-replay marker; model thinking does not.
+    /// 摘要思考携带绝不重放标记进入可见流；模型思考不携带该标记。
+    #[test]
+    fn summary_thinking_carries_display_only_marker() {
+        let session_id = Uuid::nil();
+        let mut state = build_delta_state();
+
+        let summary_events = process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::SummaryThinking(String::from("summary"))),
+        );
+        assert!(matches!(
+            summary_events.as_slice(),
+            [ExecutionStreamEvent::ThinkingDelta { delta, display_only: true, .. }]
+                if delta == "summary"
+        ));
+        let thinking_events = process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::Thinking(String::from(" model"))),
+        );
+        assert!(matches!(
+            thinking_events.as_slice(),
+            [ExecutionStreamEvent::ThinkingDelta {
+                display_only: false,
+                ..
+            }]
+        ));
     }
 
     /// Emits the pending thinking-completed event before the first visible output delta once reasoning has already become visible.

@@ -357,6 +357,7 @@ fn group_reasoning(seq: u64, turn: u64, api: u64) -> ConversationEvent {
             text: "r".to_string(),
             status: AssistantSemanticStatus::Completed,
             provider_source: None,
+            display_only: false,
         }),
     )
 }

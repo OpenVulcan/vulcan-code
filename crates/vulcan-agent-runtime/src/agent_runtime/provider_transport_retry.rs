@@ -325,6 +325,7 @@ pub(crate) fn provider_delta_makes_retry_unsafe(delta: &ProviderStreamDelta) -> 
     matches!(
         delta,
         ProviderStreamDelta::Thinking(_)
+            | ProviderStreamDelta::SummaryThinking(_)
             | ProviderStreamDelta::Output(_)
             | ProviderStreamDelta::ToolRequestFragment(_)
             | ProviderStreamDelta::RuntimeEvent(_)

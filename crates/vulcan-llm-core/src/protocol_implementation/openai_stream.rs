@@ -2570,19 +2570,19 @@ mod tests {
         let summary = decoder
             .push_sse(
                 None,
-                r#"{"choices":[{"delta":{"reasoning":"先拆分问题","reasoning_details":[{"type":"reasoning.summary","index":0,"summary":"先拆分问题"}]} ,"finish_reason":null}]}"#,
+                r#"{"choices":[{"delta":{"reasoning":"split the problem","reasoning_details":[{"type":"reasoning.summary","index":0,"summary":"split the problem"}]} ,"finish_reason":null}]}"#,
             )
             .expect("mirrored reasoning summary should decode once");
         let revised_summary = decoder
             .push_sse(
                 None,
-                r#"{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","index":0,"summary":"，再核对协议"}]} ,"finish_reason":null}]}"#,
+                r#"{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","index":0,"summary":", then verify the protocol"}]} ,"finish_reason":null}]}"#,
             )
             .expect("the next reasoning summary fragment should decode");
         let next_summary = decoder
             .push_sse(
                 None,
-                r#"{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","index":1,"summary":"检查工具结果"}]} ,"finish_reason":null}]}"#,
+                r#"{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","index":1,"summary":"inspect tool results"}]} ,"finish_reason":null}]}"#,
             )
             .expect("a new reasoning summary index should start a new paragraph");
         let encrypted = decoder
@@ -2600,13 +2600,13 @@ mod tests {
 
         // The mirrored top-level field must not turn the summary into replayable reasoning.
         // 顶层镜像字段不得把摘要变成可重放思考。
-        assert_eq!(summary_text(&summary), "先拆分问题");
+        assert_eq!(summary_text(&summary), "split the problem");
         assert!(!summary.iter().any(|event| matches!(
             event,
             AiStreamEvent::ReasoningStarted { .. } | AiStreamEvent::ReasoningDelta { .. }
         )));
-        assert_eq!(summary_text(&revised_summary), "，再核对协议");
-        assert_eq!(summary_text(&next_summary), "\n\n检查工具结果");
+        assert_eq!(summary_text(&revised_summary), ", then verify the protocol");
+        assert_eq!(summary_text(&next_summary), "\n\ninspect tool results");
         assert!(!encrypted.iter().any(|event| matches!(
             event,
             AiStreamEvent::ReasoningStarted { .. }
@@ -2630,26 +2630,26 @@ mod tests {
         let leading_summary = decoder
             .push_sse(
                 None,
-                r#"{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","index":0,"summary":"概要"}]},"finish_reason":null}]}"#,
+                r#"{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","index":0,"summary":"outline"}]},"finish_reason":null}]}"#,
             )
             .expect("a summary before full reasoning should decode");
         let mixed = decoder
             .push_sse(
                 None,
-                r#"{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"完整思考"},{"type":"reasoning.summary","index":0,"summary":"重复概要"}]},"finish_reason":null}]}"#,
+                r#"{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"full reasoning"},{"type":"reasoning.summary","index":0,"summary":"duplicate outline"}]},"finish_reason":null}]}"#,
             )
             .expect("a chunk with full reasoning and a summary should decode");
         let trailing_summary = decoder
             .push_sse(
                 None,
-                r#"{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","index":1,"summary":"后续概要"}]},"finish_reason":null}]}"#,
+                r#"{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","index":1,"summary":"later outline"}]},"finish_reason":null}]}"#,
             )
             .expect("a summary after full reasoning should decode");
 
-        assert_eq!(summary_text(&leading_summary), "概要");
+        assert_eq!(summary_text(&leading_summary), "outline");
         assert!(mixed.iter().any(|event| matches!(
             event,
-            AiStreamEvent::ReasoningDelta { delta, .. } if delta == "完整思考"
+            AiStreamEvent::ReasoningDelta { delta, .. } if delta == "full reasoning"
         )));
         assert!(summary_text(&mixed).is_empty());
         assert!(summary_text(&trailing_summary).is_empty());
@@ -2731,7 +2731,7 @@ mod tests {
         let first = decoder
             .push_sse(
                 None,
-                r#"{"choices":[{"delta":{"content":"准备调用工具","reasoning_details":[{"type":"reasoning.summary","summary":"先检查文件"}]},"finish_reason":null}]}"#,
+                r#"{"choices":[{"delta":{"content":"准备调用工具","reasoning_details":[{"type":"reasoning.summary","summary":"inspect the files first"}]},"finish_reason":null}]}"#,
             )
             .expect("initial Luna summary and text should decode");
         let finish = decoder
@@ -2789,7 +2789,7 @@ mod tests {
                 .count(),
             1
         );
-        assert_eq!(summary_text(&events), "先检查文件");
+        assert_eq!(summary_text(&events), "inspect the files first");
         assert_eq!(
             events
                 .iter()

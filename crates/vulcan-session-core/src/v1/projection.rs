@@ -744,10 +744,15 @@ fn project_items_with_policy(
             }
             EventBody::AssistantReasoning(reasoning) => {
                 let group = pending_group(&mut pending, reasoning.api_call_id, event.seq);
-                group.reasoning = Some(match group.reasoning.take() {
-                    Some(current) => current + &reasoning.text,
-                    None => reasoning.text.clone(),
-                });
+                // A provider summary is not the model's own reasoning; replaying it to any route
+                // would break the model's context, so it stays display-only.
+                // 供应商摘要不是模型自身思考；向任何路由重放都会打断模型上下文，因此只供展示。
+                if !reasoning.display_only {
+                    group.reasoning = Some(match group.reasoning.take() {
+                        Some(current) => current + &reasoning.text,
+                        None => reasoning.text.clone(),
+                    });
+                }
                 if let Some(provider_source) = &reasoning.provider_source {
                     group.provider_source = Some(provider_source.clone());
                 }
@@ -1267,6 +1272,100 @@ mod tests_projection {
             }
             _ => unreachable!(),
         }
+    }
+
+    /// Display-only summary reasoning stays in the ledger but never reaches the Provider projection.
+    /// 仅展示的摘要思考保留在账本中，但绝不进入 Provider 投影。
+    #[test]
+    fn projection_omits_display_only_reasoning() -> Result<(), DomainError> {
+        let mut document = SessionDocument::new("summary", "project", "title", 1);
+        document.submit_root_input_fixture("hello", Vec::new(), 1)?;
+        let api_call_id = document.start_api(
+            ApiPurposeKind::MainGeneration,
+            ApiRequestSnapshot::new("openai", "gpt-5"),
+            1,
+        )?;
+        document.append_reasoning_with_display_only(
+            api_call_id,
+            "summary",
+            AssistantSemanticStatus::Streaming,
+            true,
+            1,
+        )?;
+        document.append_reasoning_with_display_only(
+            api_call_id,
+            "summary",
+            AssistantSemanticStatus::Completed,
+            true,
+            1,
+        )?;
+        document.append_assistant_text(api_call_id, "hi", AssistantSemanticStatus::Completed, 1)?;
+
+        let items = project_document(&document, None, &[])?;
+        assert!(matches!(
+            items.as_slice(),
+            [
+                ProjectedItem::UserInput { .. },
+                ProjectedItem::AssistantText { reasoning: None, text, .. }
+            ] if text == "hi"
+        ));
+        assert!(document.events().iter().any(|event| matches!(
+            &event.event,
+            EventBody::AssistantReasoning(reasoning)
+                if reasoning.display_only && reasoning.text == "summary"
+        )));
+        Ok(())
+    }
+
+    /// The display-only marker may be raised while streaming but never cleared or raised afterwards.
+    /// 仅展示标记可在流式期间置位，但之后既不能清除也不能再置位。
+    #[test]
+    fn display_only_marker_is_monotonic_while_streaming() -> Result<(), DomainError> {
+        let mut document = SessionDocument::new("marker", "project", "title", 1);
+        document.submit_root_input_fixture("hello", Vec::new(), 1)?;
+        let api_call_id = document.start_api(
+            ApiPurposeKind::MainGeneration,
+            ApiRequestSnapshot::new("openai", "gpt-5"),
+            1,
+        )?;
+        document.append_reasoning(api_call_id, "a", AssistantSemanticStatus::Streaming, 1)?;
+        document.append_reasoning_with_display_only(
+            api_call_id,
+            "ab",
+            AssistantSemanticStatus::Streaming,
+            true,
+            1,
+        )?;
+        assert!(matches!(
+            document.append_reasoning(api_call_id, "abc", AssistantSemanticStatus::Streaming, 1),
+            Err(DomainError::ImmutableFieldMutation {
+                field: "display_only",
+                ..
+            })
+        ));
+
+        let mut sealed = SessionDocument::new("sealed", "project", "title", 1);
+        sealed.submit_root_input_fixture("hello", Vec::new(), 1)?;
+        let sealed_api = sealed.start_api(
+            ApiPurposeKind::MainGeneration,
+            ApiRequestSnapshot::new("openai", "gpt-5"),
+            1,
+        )?;
+        sealed.append_reasoning(sealed_api, "a", AssistantSemanticStatus::Completed, 1)?;
+        assert!(matches!(
+            sealed.append_reasoning_with_display_only(
+                sealed_api,
+                "a",
+                AssistantSemanticStatus::Completed,
+                true,
+                1,
+            ),
+            Err(DomainError::ImmutableFieldMutation {
+                field: "display_only",
+                ..
+            })
+        ));
+        Ok(())
     }
 
     /// An interrupted partial assistant stays visible in the ledger but is absent from the next

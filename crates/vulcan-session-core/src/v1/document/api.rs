@@ -1372,6 +1372,20 @@ impl SessionDocument {
         status: AssistantSemanticStatus,
         now_ms: i64,
     ) -> Result<IdempotentMutation<Seq>, DomainError> {
+        self.append_reasoning_with_display_only(api_call_id, text, status, false, now_ms)
+    }
+
+    /// Appends or updates reasoning; `display_only` marks text carrying a provider summary,
+    /// which is recorded and shown but never replayed.
+    /// 追加或更新推理；`display_only` 标记含供应商摘要的正文：记录并展示，但绝不重放。
+    pub fn append_reasoning_with_display_only(
+        &mut self,
+        api_call_id: ApiCallId,
+        text: impl Into<String>,
+        status: AssistantSemanticStatus,
+        display_only: bool,
+        now_ms: i64,
+    ) -> Result<IdempotentMutation<Seq>, DomainError> {
         let mut api = self.require_active_api(api_call_id)?;
         if api.text_seq.is_some() || !api.tool_seqs.is_empty() || api.stats_seq.is_some() {
             return Err(DomainError::SequenceViolation {
@@ -1389,6 +1403,7 @@ impl SessionDocument {
                     text,
                     status,
                     provider_source: None,
+                    display_only,
                 }),
             )?,
             None => {
@@ -1400,6 +1415,7 @@ impl SessionDocument {
                         text,
                         status,
                         provider_source: None,
+                        display_only,
                     }),
                     now_ms,
                 )?;
@@ -2252,6 +2268,18 @@ impl SessionDocument {
         let changed = match (&event.event, &replacement) {
             (EventBody::AssistantReasoning(current), EventBody::AssistantReasoning(next)) => {
                 ensure_api_event_owner(seq, next.api_call_id, current.api_call_id)?;
+                // A summary marker may only be raised while streaming and never cleared, so a
+                // summary can never become replayable reasoning.
+                // 摘要标记只能在流式期间置位且绝不清除，使摘要永远不会变成可重放思考。
+                if current.display_only != next.display_only
+                    && (current.display_only
+                        || current.status != AssistantSemanticStatus::Streaming)
+                {
+                    return Err(DomainError::ImmutableFieldMutation {
+                        entity: "assistant_semantic",
+                        field: "display_only",
+                    });
+                }
                 validate_provider_semantic_snapshot_transition(
                     &current.text,
                     current.status,
@@ -2259,7 +2287,7 @@ impl SessionDocument {
                     &next.text,
                     next.status,
                     next.provider_source.as_ref(),
-                )?
+                )? || current.display_only != next.display_only
             }
             (EventBody::AssistantText(current), EventBody::AssistantText(next)) => {
                 ensure_api_event_owner(seq, next.api_call_id, current.api_call_id)?;

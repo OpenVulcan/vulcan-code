@@ -131,7 +131,7 @@
   "crates/vulcan-host-tools/src/output_decode.rs": 4,
   "crates/vulcan-host-tools/src/result_format/templates.rs": 1,
   "crates/vulcan-host-tools/src/text_encoding.rs": 1,
-  "crates/vulcan-llm-core/src/protocol_implementation/openai_stream.rs": 7,
+  "crates/vulcan-llm-core/src/protocol_implementation/openai_stream.rs": 3,
   "crates/vulcan-memorymesh-core-config/src/token_budget.rs": 3,
   "crates/vulcan-memorymesh-core-config/tests/noise_semantics.rs": 2,
   "crates/vulcan-memorymesh-core-config/tests/pii_semantics.rs": 2,

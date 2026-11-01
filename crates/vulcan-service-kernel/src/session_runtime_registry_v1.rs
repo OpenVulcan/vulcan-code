@@ -2747,13 +2747,27 @@ impl SessionHandle {
         )
     }
 
-    /// Updates streaming reasoning in memory without forcing per-token I/O.
-    /// 仅在内存中更新流式思考，不强制逐 token I/O。
+    /// Updates streaming model reasoning in memory without forcing per-token I/O.
+    /// 仅在内存中更新流式模型思考，不强制逐 token I/O。
+    #[cfg(test)]
     pub(crate) fn update_reasoning(
         &self,
         api_call_id: ApiCallId,
         text: impl Into<String>,
         status: AssistantSemanticStatus,
+        now_ms: i64,
+    ) -> Result<SessionConditionalMutationReceipt<Seq>, SessionRuntimeError> {
+        self.update_reasoning_with_display_only(api_call_id, text, status, false, now_ms)
+    }
+
+    /// Updates streaming reasoning in memory; `display_only` keeps a provider summary out of replay.
+    /// 仅在内存中更新流式思考；`display_only` 使供应商摘要不进入重放。
+    pub(crate) fn update_reasoning_with_display_only(
+        &self,
+        api_call_id: ApiCallId,
+        text: impl Into<String>,
+        status: AssistantSemanticStatus,
+        display_only: bool,
         now_ms: i64,
     ) -> Result<SessionConditionalMutationReceipt<Seq>, SessionRuntimeError> {
         let text = text.into();
@@ -2762,7 +2776,13 @@ impl SessionHandle {
             SessionFlushReason::ApiCompleted,
             move |document| {
                 document
-                    .append_reasoning(api_call_id, text, status, now_ms)
+                    .append_reasoning_with_display_only(
+                        api_call_id,
+                        text,
+                        status,
+                        display_only,
+                        now_ms,
+                    )
                     .map(session_change_from_idempotent)
             },
         )

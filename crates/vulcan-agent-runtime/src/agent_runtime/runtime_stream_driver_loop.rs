@@ -26,9 +26,9 @@ const RUNTIME_STREAM_WORKBENCH_DELTA_FLUSH_INTERVAL: Duration = Duration::from_m
 /// 在保留非增量事件顺序的同时，合并相邻的可见流式增量。
 #[derive(Default)]
 struct ExecutionStreamDeltaCoalescer {
-    /// Pending visible thinking delta for the current flush window.
-    /// 当前刷新窗口内等待发出的可见思考增量。
-    pending_thinking_delta: Option<(SessionId, String)>,
+    /// Pending visible thinking delta and its never-replay summary marker for the current flush window.
+    /// 当前刷新窗口内等待发出的可见思考增量及其绝不重放摘要标记。
+    pending_thinking_delta: Option<(SessionId, String, bool)>,
     /// Pending visible output delta for the current flush window.
     /// 当前刷新窗口内等待发出的可见输出增量。
     pending_output_delta: Option<(SessionId, String)>,
@@ -67,18 +67,25 @@ impl ExecutionStreamDeltaCoalescer {
     /// 添加一个执行事件，并返回在它之前必须按顺序发出的事件集合。
     fn push_event(&mut self, event: ExecutionStreamEvent) -> Vec<ExecutionStreamEvent> {
         match event {
-            ExecutionStreamEvent::ThinkingDelta { session_id, delta } => {
+            ExecutionStreamEvent::ThinkingDelta {
+                session_id,
+                delta,
+                display_only,
+            } => {
                 if self.pending_output_delta.is_none()
-                    && let Some((pending_session_id, pending_delta)) =
+                    && let Some((pending_session_id, pending_delta, pending_display_only)) =
                         self.pending_thinking_delta.as_mut()
                     && *pending_session_id == session_id
                 {
                     pending_delta.push_str(&delta);
+                    // A merged window holding any summary text must stay out of replay.
+                    // 合并窗口中只要含有摘要文本就必须排除在重放之外。
+                    *pending_display_only |= display_only;
                     return Vec::new();
                 }
 
                 let flushed_events = self.flush();
-                self.pending_thinking_delta = Some((session_id, delta));
+                self.pending_thinking_delta = Some((session_id, delta, display_only));
                 flushed_events
             }
             ExecutionStreamEvent::OutputDelta { session_id, delta } => {
@@ -108,8 +115,12 @@ impl ExecutionStreamDeltaCoalescer {
     fn flush(&mut self) -> Vec<ExecutionStreamEvent> {
         let mut events = Vec::new();
 
-        if let Some((session_id, delta)) = self.pending_thinking_delta.take() {
-            events.push(ExecutionStreamEvent::ThinkingDelta { session_id, delta });
+        if let Some((session_id, delta, display_only)) = self.pending_thinking_delta.take() {
+            events.push(ExecutionStreamEvent::ThinkingDelta {
+                session_id,
+                delta,
+                display_only,
+            });
         }
 
         if let Some((session_id, delta)) = self.pending_output_delta.take() {
@@ -438,6 +449,7 @@ mod tests {
                         .push_event(ExecutionStreamEvent::ThinkingDelta {
                             session_id: Uuid::nil(),
                             delta: String::from("pending reasoning"),
+                            display_only: false,
                         })
                         .is_empty()
                 );
@@ -495,6 +507,31 @@ mod tests {
         assert!(matches!(
             &flushed_events[0],
             ExecutionStreamEvent::OutputDelta { delta, .. } if delta == "hello world"
+        ));
+    }
+
+    /// Verifies a merged thinking window keeps the never-replay marker of any summary inside it.
+    /// 验证合并后的思考窗口保留其中任一摘要的绝不重放标记。
+    #[test]
+    fn coalescer_keeps_display_only_marker_across_merged_thinking() {
+        let session_id = Uuid::nil();
+        let mut coalescer = ExecutionStreamDeltaCoalescer::default();
+        for (delta, display_only) in [("model", false), (" summary", true)] {
+            assert!(
+                coalescer
+                    .push_event(ExecutionStreamEvent::ThinkingDelta {
+                        session_id,
+                        delta: String::from(delta),
+                        display_only,
+                    })
+                    .is_empty()
+            );
+        }
+
+        assert!(matches!(
+            coalescer.flush().as_slice(),
+            [ExecutionStreamEvent::ThinkingDelta { delta, display_only: true, .. }]
+                if delta == "model summary"
         ));
     }
 

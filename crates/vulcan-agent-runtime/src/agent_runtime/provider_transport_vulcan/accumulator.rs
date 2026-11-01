@@ -621,7 +621,7 @@ impl PublicTurnAccumulator {
                 self.reasoning.push_str(delta.as_str());
                 let live_delta = delta.clone();
                 sink.push_delta(ProviderTurnDelta::Thinking { delta });
-                let _ = live_sender.send(Ok(ProviderStreamDelta::Thinking(live_delta)));
+                let _ = live_sender.send(Ok(ProviderStreamDelta::SummaryThinking(live_delta)));
             }
             AiStreamEvent::ReasoningSummaryUpdated { item_id, text } => {
                 if self.durable_reasoning_observed {

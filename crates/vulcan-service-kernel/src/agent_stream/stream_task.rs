@@ -1148,13 +1148,17 @@ fn spawn_agent_stream_task_with_restart_state(
                         RequestPhaseStreamEvent::RequestStarted,
                     );
                 }
-                ExecutionStreamEvent::ThinkingDelta { session_id, delta } => {
+                ExecutionStreamEvent::ThinkingDelta {
+                    session_id,
+                    delta,
+                    display_only,
+                } => {
                     if prepared_retry_checkpoint_error.is_some() {
                         continue;
                     }
                     if let Some(sink) = provider_v1_sink.as_mut() {
                         let v1_update = current_v1_unix_millis().and_then(|now_ms| {
-                            sink.append_reasoning_delta(&delta, now_ms)
+                            sink.append_reasoning_delta(&delta, display_only, now_ms)
                                 .map_err(|error| error.to_string())
                         });
                         if let Err(error) = v1_update {

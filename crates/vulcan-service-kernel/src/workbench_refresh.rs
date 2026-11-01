@@ -892,6 +892,7 @@ pub(crate) fn detached_task_event_trace_detail(event: &DetachedTaskRuntimeEvent)
         DetachedTaskRuntimeEvent::ChildExecution(ExecutionStreamEvent::ThinkingDelta {
             session_id,
             delta,
+            ..
         }) => format!("session={session_id} delta_chars={}", delta.chars().count()),
         DetachedTaskRuntimeEvent::ChildExecution(ExecutionStreamEvent::OutputDelta {
             session_id,
