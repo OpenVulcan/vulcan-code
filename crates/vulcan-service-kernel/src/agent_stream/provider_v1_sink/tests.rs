@@ -8,6 +8,7 @@ mod model_selection;
 mod native_media;
 mod permission_mode;
 mod provider_tools;
+mod queued_child_returns;
 mod remote_checkpoint;
 use super::*;
 

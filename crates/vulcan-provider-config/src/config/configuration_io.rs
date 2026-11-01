@@ -178,6 +178,14 @@ pub struct ProviderConfigurationFile {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub subagent_models: Vec<SubagentModelGrant>,
+    /// Excludes the calling session's model unless it is explicitly granted; absent means included.
+    /// 排除调用会话模型，除非该模型被显式授权；缺省表示包含。
+    #[serde(
+        default,
+        rename = "subagentExcludeSessionModel",
+        skip_serializing_if = "is_false"
+    )]
+    pub subagent_exclude_session_model: bool,
     /// MCP service switch and the external AI clients allowed to call it.
     /// MCP 服务开关以及允许调用它的外部 AI 客户端。
     #[serde(

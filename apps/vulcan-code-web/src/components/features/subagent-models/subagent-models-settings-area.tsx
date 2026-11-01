@@ -15,14 +15,17 @@ import {
   trimmedSubagentModels,
 } from "./subagent-model-editor";
 
-/** Subagent models page: the system default allowlist every session follows unless it keeps its own list.
- * The session model is always allowed on top; the next spawn reads the saved list.
- * 子代理模型页：所有会话默认跟随的系统白名单，除非会话保留了自己的清单。会话模型始终额外允许；下一次派生读取
- * 已保存的清单。 */
+/** Edits the system policy used by sessions without an override; provider props supply model choices.
+ * 编辑未设置覆盖的会话所使用的系统策略；供应商参数提供模型选项。
+ * Returns policy controls; inclusion and grants are read together when the next turn is prepared.
+ * 返回策略控件；下一个回合准备时一并读取包含选择与授权清单。 */
 export function SubagentModelsSettingsArea(props: { providers: ProviderSummary[] }) {
   const { t } = useI18n();
   const [snapshot, setSnapshot] = React.useState<SubagentModelsSnapshot | null>(null);
   const [models, setModels] = React.useState<SubagentModelEntry[]>([]);
+  // The server owns the default; this draft becomes editable only after hydration.
+  // 默认值由服务端持有；此草稿仅在水合后可编辑。
+  const [includeSessionModel, setIncludeSessionModel] = React.useState(false);
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
   const load = React.useCallback(async () => {
@@ -31,6 +34,7 @@ export function SubagentModelsSettingsArea(props: { providers: ProviderSummary[]
       const loaded = await loadSubagentModels();
       setSnapshot(loaded);
       setModels(loaded.models);
+      setIncludeSessionModel(loaded.includeSessionModel);
     } catch (error) {
       setLoadError(errorMessage(error));
     }
@@ -39,9 +43,10 @@ export function SubagentModelsSettingsArea(props: { providers: ProviderSummary[]
   const save = async () => {
     setSaving(true);
     try {
-      const saved = await saveSubagentModels(trimmedSubagentModels(models));
+      const saved = await saveSubagentModels(trimmedSubagentModels(models), includeSessionModel);
       setSnapshot(saved);
       setModels(saved.models);
+      setIncludeSessionModel(saved.includeSessionModel);
       toast.success(t("subagentModels.saved"));
     } catch (error) {
       toast.error(t("subagentModels.saveFailed"), { description: errorMessage(error) });
@@ -49,7 +54,7 @@ export function SubagentModelsSettingsArea(props: { providers: ProviderSummary[]
       setSaving(false);
     }
   };
-  const dirty = snapshot !== null && !sameSubagentModels(models, snapshot.models);
+  const dirty = snapshot !== null && (includeSessionModel !== snapshot.includeSessionModel || !sameSubagentModels(models, snapshot.models));
   const fits = snapshot === null || subagentModelNotesFit(models, snapshot.maxNoteChars);
   return (
     <PageBody>
@@ -73,13 +78,14 @@ export function SubagentModelsSettingsArea(props: { providers: ProviderSummary[]
           <StreamPlaceholder count={3} label={t("subagentModels.loading")} shape="rows" />
         ) : (
           <SubagentModelEditor disabled={saving} maxModels={snapshot.maxModels} maxNoteChars={snapshot.maxNoteChars}
+            includeSessionModel={includeSessionModel} onIncludeSessionModelChange={setIncludeSessionModel}
             models={models} onChange={setModels} providers={props.providers} scope="system" />
         )}
       </PageSection>
       {snapshot ? (
         <PageActionBar
           actions={<>
-            <Button disabled={!dirty || saving} onClick={() => setModels(snapshot.models)} size="sm" type="button" variant="ghost">
+            <Button disabled={!dirty || saving} onClick={() => { setModels(snapshot.models); setIncludeSessionModel(snapshot.includeSessionModel); }} size="sm" type="button" variant="ghost">
               {t("subagentModels.discard")}
             </Button>
             <Button data-subagent-models-save="" disabled={!dirty || !fits || saving} onClick={() => void save()} size="sm" type="button">

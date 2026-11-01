@@ -27,7 +27,7 @@ pub(super) async fn handle_parent_event(
 ) -> Result<(), String> {
     // Recheck the live execution owner at each attempt, never trusting a captured UI flag.
     // 每次尝试重查实时执行所有者，绝不信任捕获的界面标记。
-    let listener_is_current = state
+    let mut listener_is_current = state
         .lock()
         .map_err(|error| error.to_string())?
         .detached_subagent_task_listeners
@@ -41,6 +41,46 @@ pub(super) async fn handle_parent_event(
             event.kind
         ),
     );
+    // Parse the host terminal once, before any child or parent state can be changed.
+    // 在任何子或父状态改变前，一次性解析宿主终态。
+    let mut terminal_mailbox = if listener_is_current && is_finished {
+        Some(non_success::terminal_mailbox(
+            &event,
+            parent_session_id,
+            task_id,
+            execution_id,
+        )?)
+    } else {
+        None
+    };
+    if listener_is_current && is_finished {
+        // Queued successors suppress intermediate runtime feedback, but each owned execution still needs its own receipt.
+        // 排队后继抑制中间运行时反馈，但每次所属执行仍必须有自己的回执。
+        // Repair predecessors before the successor claims their source range, including failed or stopped successors.
+        // 在后继占用其来源区间前修复前驱，也覆盖失败或停止的后继。
+        crate::agent_collaboration::reconcile_child_predecessor_returns(
+            state,
+            parent_session_id,
+            task_id,
+            execution_id,
+        )
+        .await?;
+        // Lifecycle recovery may yield while another queued execution replaces this listener.
+        // 生命周期恢复可能让出执行，此时另一个排队执行可能替换本监听器。
+        // Revalidate before publishing feedback or releasing the newer execution's ownership.
+        // 在发布反馈或释放更新执行归属前重新验证。
+        listener_is_current = state
+            .lock()
+            .map_err(|error| error.to_string())?
+            .detached_subagent_task_listeners
+            .get(&task_id)
+            .is_some_and(|current| current == execution_id);
+        if !listener_is_current {
+            terminal_mailbox = None;
+        }
+    }
+    // Recovery can yield while the user stops the parent; read its current dispatch state afterwards.
+    // 恢复可能在用户停止父会话时让出执行；完成后读取父会话当前分发状态。
     let parent_state_check_started_at = current_unix_millis_value();
     let (parent_is_regular_session, parent_is_stopped) = {
         let guard = state
@@ -65,18 +105,6 @@ pub(super) async fn handle_parent_event(
             event.kind
         ),
     );
-    // Parse the host terminal once, before any child or parent state can be changed.
-    // 在任何子或父状态改变前，一次性解析宿主终态。
-    let terminal_mailbox = if listener_is_current && is_finished {
-        Some(non_success::terminal_mailbox(
-            &event,
-            parent_session_id,
-            task_id,
-            execution_id,
-        )?)
-    } else {
-        None
-    };
     // Successful content and non-success proofs have separate durable publication contracts.
     // 成功正文与非成功凭据使用独立的可靠发布契约。
     let v1_return_result = if listener_is_current && is_finished {

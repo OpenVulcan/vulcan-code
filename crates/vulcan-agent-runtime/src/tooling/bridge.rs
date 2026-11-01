@@ -66,6 +66,7 @@ mod tests;
 /// 根据当前宿主运行时工具面构建独立宿主自有工具管理器。
 pub fn build_vulcan_tools_manager(
     task_runtime: Arc<TaskRuntime>,
+    subagents_enabled: bool,
     question_runtime: Arc<QuestionRuntime>,
     native_catalog: NativeToolCatalog,
     vulcan_plugin_runtime: Option<VulcanPluginRuntimeManager>,
@@ -107,14 +108,20 @@ pub fn build_vulcan_tools_manager(
     let environment_access = task_runtime.native_environment_access();
     let session_mcp_access = task_runtime.native_session_mcp_access();
     let configuration_host = task_runtime.configuration_host();
-    for subagent_candidate in
-        build_subagent_tool_candidates(task_runtime, native_agent_collaboration_runtime.clone())
-    {
-        occupied_public_tool_ids.insert(subagent_candidate.descriptor.id.clone());
-        candidates.push(subagent_candidate);
+    // Do not register child-agent handlers when no permitted model can run.
+    // 没有可运行的获准模型时，不注册子代理处理器。
+    if subagents_enabled {
+        for subagent_candidate in
+            build_subagent_tool_candidates(task_runtime, native_agent_collaboration_runtime.clone())
+        {
+            occupied_public_tool_ids.insert(subagent_candidate.descriptor.id.clone());
+            candidates.push(subagent_candidate);
+        }
     }
     if let Some(runtime) = native_agent_collaboration_runtime {
         for candidate in build_agent_collaboration_tool_candidates(runtime) {
+            // Shared question, session-reading and inbox tools also serve independent sessions.
+            // 共享提问、会话读取和收件工具也服务于独立会话。
             occupied_public_tool_ids.insert(candidate.descriptor.id.clone());
             candidates.push(candidate);
         }

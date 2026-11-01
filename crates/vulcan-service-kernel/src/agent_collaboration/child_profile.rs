@@ -26,6 +26,10 @@ pub(super) async fn capture(
         )
     };
     let session_id = request.task_id;
+    // Activation follows this exact durable profile, never an older child configuration.
+    // 激活跟随本次精确可靠配置，绝不使用更早的子配置。
+    let parent_id = request.parent_session_id;
+    let execution_id = request.execution_id.clone();
     let handle = registry
         .get(session_id)
         .map_err(|error| error.to_string())?;
@@ -68,5 +72,6 @@ pub(super) async fn capture(
         },
     )
     .await?;
-    Ok(())
+    crate::agent_stream::queued_admission::activate(state, parent_id, session_id, &execution_id)
+        .await
 }

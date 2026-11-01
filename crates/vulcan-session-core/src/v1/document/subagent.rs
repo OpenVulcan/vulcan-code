@@ -216,7 +216,8 @@ impl SessionDocument {
         self.apply_atomic_transition(move |staged| {
             // Stage content first; a later terminal conflict must leave no partial publication.
             // 先暂存正文；后续终态冲突不得留下局部发布。
-            let returned = staged.append_subagent_return(input, now_ms)?;
+            let returned =
+                staged.append_subagent_return_with_owned_recovery(input, now_ms, true)?;
             if returned.clone().into_value().parent_turn_id != task.parent_turn_id {
                 return Err(DomainError::CollaborationStateViolation {
                     field: "collaboration.child_task.return_parent_turn",
@@ -248,6 +249,23 @@ impl SessionDocument {
         child_segment_generation: u64,
         final_text_seq: Seq,
     ) -> Option<Seq> {
+        // A late predecessor must not change the immutable coverage of an already published successor on retry.
+        // 迟到前驱不能在重试时改变已发布后继的不可变覆盖范围。
+        if let Some(returned) = self.events.iter().find_map(|event| match &event.event {
+            EventBody::SubagentReturn(returned)
+                if returned.child_session_id == child_session_id
+                    && returned.child_segment_generation == child_segment_generation
+                    && returned.source_assistant_text_seq == final_text_seq =>
+            {
+                Some(returned)
+            }
+            _ => None,
+        }) {
+            return (returned.source_from_seq.value() > 1).then(|| {
+                Seq::try_new(returned.source_from_seq.value() - 1)
+                    .expect("validated source frontier")
+            });
+        }
         self.events
             .iter()
             .filter_map(|event| match &event.event {
@@ -571,15 +589,50 @@ impl SessionDocument {
         input: SubagentReturnInput,
         now_ms: i64,
     ) -> Result<IdempotentMutation<SubagentReturnReceipt>, DomainError> {
+        self.append_subagent_return_with_owned_recovery(input, now_ms, false)
+    }
+
+    /// Appends `input`; `recover_owned` permits only an exact owned predecessor hidden inside later prefix coverage.
+    /// 追加 `input`；`recover_owned` 只允许恢复被后续前缀覆盖的精确所属前驱。
+    /// Returns a durable receipt or a strict conflict; `now_ms` timestamps the new parent observation.
+    /// 返回可靠回执或严格冲突；`now_ms` 记录新的父侧观测时间。
+    /// The owned caller has already verified reservation, root action, generation and parent turn before entering here.
+    /// 所属调用方进入此处前已验证预留、根动作、代次及父回合。
+    fn append_subagent_return_with_owned_recovery(
+        &mut self,
+        input: SubagentReturnInput,
+        now_ms: i64,
+        recover_owned: bool,
+    ) -> Result<IdempotentMutation<SubagentReturnReceipt>, DomainError> {
         if let Some(receipt) = self.existing_subagent_return(&input)? {
             return Ok(IdempotentMutation::Idempotent(receipt));
         }
-        if self.events.iter().any(|event| matches!(&event.event,
-                EventBody::SubagentReturn(returned) if returned.child_session_id == input.child_session_id
-                    && returned.child_segment_generation == input.child_segment_generation
-                    && returned.source_from_seq <= input.source_to_seq && input.source_from_seq <= returned.source_to_seq)) {
-                return Err(DomainError::InvalidStatistics { field: "subagent_return.overlapping_source_range" });
+        for event in &self.events {
+            let EventBody::SubagentReturn(returned) = &event.event else {
+                continue;
+            };
+            if returned.child_session_id != input.child_session_id
+                || returned.child_segment_generation != input.child_segment_generation
+                || returned.source_from_seq > input.source_to_seq
+                || input.source_from_seq > returned.source_to_seq
+            {
+                continue;
             }
+            // Historical prefix coverage never proves delivery of another execution's final text.
+            // 历史前缀覆盖从不证明另一次执行的最终正文已经投递。
+            // Permit only a contained earlier owned result, not crossing/duplicate results or foreign task identities.
+            // 只允许被包含的更早所属结果，不允许交叉、重复结果或外来任务身份。
+            if !(recover_owned
+                && returned.child_task_id == input.child_task_id
+                && returned.child_root_action_id != input.child_root_action_id
+                && returned.source_from_seq <= input.source_from_seq
+                && input.source_to_seq < returned.source_assistant_text_seq)
+            {
+                return Err(DomainError::InvalidStatistics {
+                    field: "subagent_return.overlapping_source_range",
+                });
+            }
+        }
         let needs_turn = self.active_turn.as_ref().is_none_or(|turn| turn.closed);
         self.ensure_transition_capacity(1, u64::from(needs_turn))?;
         let returned = SubagentReturnEvent {

@@ -6,6 +6,107 @@ use vulcan_session_core::v1::collaboration::{
     CollaborationChildTaskRecord, CollaborationChildTaskState,
 };
 
+/// Settles earlier owned executions before publishing a queued successor's terminal result.
+/// 在发布排队后继终态结果前，结算更早的所属执行。
+/// `state`, `parent_id`, `child_id` and `execution_id` identify the current listener; returns repaired receipts.
+/// `state`、`parent_id`、`child_id` 和 `execution_id` 标识当前监听器；返回修复的回执数量。
+/// Reuses exact source recovery without starting providers or treating a later answer as the original result.
+/// 复用精确来源恢复，不启动供应商，也不把后续回答当作原始结果。
+pub(crate) async fn reconcile_child_predecessor_returns(
+    state: &SharedServiceBridgeState,
+    parent_id: Uuid,
+    child_id: Uuid,
+    execution_id: &str,
+) -> Result<usize, String> {
+    // Resolve canonical owners before taking any document lifecycle gate.
+    // 在取得文档生命周期锁前解析规范所有者。
+    let registry = state
+        .lock()
+        .map_err(|error| error.to_string())?
+        .session_runtime_registry
+        .clone();
+    // Only this direct parent's durable reservations authorize predecessor recovery.
+    // 只有该直接父会话的可靠预留能授权前驱恢复。
+    let parent = registry.get(parent_id).map_err(|error| error.to_string())?;
+    // Capture only earlier reservations for this exact physical child, excluding the current terminal owner.
+    // 只捕获该精确物理子会话的先前预留，排除当前终态所有者。
+    let mut records = parent
+        .read(|document| {
+            document
+                .collaboration_state()
+                .child_tasks
+                .values()
+                .filter(|record| {
+                    record.child.session_id == child_id.to_string()
+                        && record.execution_id.as_str() != execution_id
+                        && record.state != CollaborationChildTaskState::Terminal
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .map_err(|error| error.to_string())?;
+    if records.is_empty() {
+        return Ok(0);
+    }
+    // Resolve a child only when owned predecessors exist; ordinary late returns need no recovery owner.
+    // 仅在存在所属前驱时解析子会话；普通迟到回流不需要恢复所有者。
+    let child = registry.get(child_id).map_err(|error| error.to_string())?;
+    // Generation is part of source identity; reused sequence numbers cannot cross it.
+    // 代次属于来源身份；复用的序号不能跨代次处理。
+    let generation = child
+        .read(|document| document.segment_generation())
+        .map_err(|error| error.to_string())?;
+    records.retain(|record| record.child.segment_generation == generation);
+    if records.is_empty() {
+        return Ok(0);
+    }
+    // Source order, rather than wall time or execution UUID order, proves which reservations are predecessors.
+    // 来源顺序而非墙上时间或执行 UUID 顺序证明哪些预留属于前驱。
+    let predecessors = child
+        .read_full_durable(|document| {
+            // The current exact root fences later reservations that may already be preparing concurrently.
+            // 当前精确根隔离可能已经并发准备的后续预留。
+            let current = document.events().iter().find(|event| matches!(&event.event,
+                EventBody::UserInput(input) if input.input_source == vulcan_session_core::v1::event::UserInputSource::Root
+                    && input.client_action_id.as_str() == execution_id))
+                .ok_or_else(|| String::from("Child terminal recovery has no exact execution root."))?;
+            Ok::<_, String>(document.events().iter().filter_map(|event| match &event.event {
+                EventBody::UserInput(input) if event.seq < current.seq
+                    && input.input_source == vulcan_session_core::v1::event::UserInputSource::Root =>
+                    Some((input.client_action_id.as_str().to_owned(), event.seq)),
+                _ => None,
+            }).collect::<std::collections::BTreeMap<_, _>>())
+        })
+        .map_err(|error| error.to_string())??;
+    records.retain(|record| predecessors.contains_key(record.execution_id.as_str()));
+    if records.is_empty() {
+        return Ok(0);
+    }
+    records.sort_by_key(|record| predecessors[record.execution_id.as_str()]);
+    // The reservation supplies storage-root identity; recovery revalidates every record under canonical gates.
+    // 预留提供存储根身份；恢复在规范锁内重新校验每条记录。
+    let root_id =
+        Uuid::parse_str(&records[0].child.root_session_id).map_err(|error| error.to_string())?;
+    // The current storage generation fences concurrent history replacement.
+    // 当前存储代次隔离并发历史替换。
+    let root = registry.get(root_id).map_err(|error| error.to_string())?;
+    // Capture the exact generation passed to the existing guarded recovery transaction.
+    // 捕获传入既有受保护恢复事务的精确代次。
+    let root_generation = root
+        .read(|document| document.segment_generation())
+        .map_err(|error| error.to_string())?;
+    recover_terminal_returns(
+        state,
+        &registry,
+        root,
+        root_generation,
+        parent,
+        child,
+        records,
+    )
+    .await
+}
+
 /// Repairs closed source executions while leaving unfinished work open.
 /// 修复已闭合来源执行，同时保持未完成任务开放。
 /// `state` identifies live owners; `records` are hints revalidated with canonical parents and children under lifecycle gates.
@@ -125,6 +226,14 @@ pub(in crate::agent_collaboration) async fn recover_terminal_returns(
                         if stopped_without_owner {
                             repaired +=
                                 usize::from(recover_explicit_stop(&parent, &child, &current)?);
+                        } else {
+                            // A queued start without its exact captured profile cannot be restarted after process loss.
+                            // 缺少精确捕获配置的排队启动在进程丢失后不能重新启动。
+                            repaired += usize::from(
+                                crate::agent_stream::queued_admission::recover_unprepared(
+                                    &state, &parent, &child, &current,
+                                )?,
+                            );
                         }
                         continue;
                     };

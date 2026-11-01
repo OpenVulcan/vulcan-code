@@ -120,8 +120,8 @@ async fn prepare_child_execution_request(
         root_session_id,
     )
     .await?;
-    request.subagent_model_grants =
-        crate::subagent_models::session_subagent_model_grants(root_handle.as_ref())?;
+    request.subagent_model_policy =
+        crate::subagent_models::session_subagent_model_policy(root_handle.as_ref())?;
     request.controller_runtime = Some(invocation.controller_runtime.clone());
     request.media_resource_runtime = Some(
         crate::session_media_resources_v1::session_v1_media_resource_runtime(&invocation.state)?,
@@ -224,7 +224,7 @@ fn build_child_base_request(
         provider_extension_target_sets_override: None,
         provider_extension_modes_override: None,
         subagent_prompt_context: None,
-        subagent_model_grants: None,
+        subagent_model_policy: None,
         session_storage_directory: Some(locator.session_directory()),
         session_title: title,
         workspace_path: locator

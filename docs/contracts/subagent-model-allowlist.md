@@ -8,33 +8,39 @@
 - 模型列表投影：`task_runtime/invocation_methods.rs`（`agent_orchestration_info_models`）与
   `tool_surface/result_markdown.rs`
 - 会话白名单文件与服务入口：`crates/vulcan-service-kernel/src/subagent_models.rs`、
-  `crates/vulcan-workspace-store/src/workspace_store/session_subagent_models.rs`
+  `crates/vulcan-workspace-store/src/workspace_store/session_sidecars.rs`
 - 界面：`apps/vulcan-code-web/src/components/features/subagent-models/` 与
   `components/composer/composer-subagent-models.tsx`
 
 ## 生效规则
 
-1. **会话模型始终允许。** 当前请求的会话路由（`provider_id_override` / `model_id_override`，缺省时为
-   全局激活模型）不需要也不能出现在白名单中才可用；它永远额外获准。子代理自身再派生时，其会话模型即为
-   该子代理的模型。
-2. **白名单只有两级。** 系统默认清单保存在全局配置 `subagentModels` 字段；会话可以保存自有清单替换系统
-   清单。没有项目级。会话没有自有清单时跟随系统清单；“恢复系统默认”即删除会话自有清单。
-3. **只校验新派生。** 校验只在 `spawn_agent` 建立新子代理时执行；已存在的子代理继续运行、恢复或回答问题时
-   不重新校验。会话更换模型、白名单被修改后，已建立的子代理保留原模型。
-4. **超出范围直接拒绝。** 无论模型由 AI 还是用户指定，不在“会话模型 + 生效清单”内即在子代理创建前拒绝，
-   错误结果用英文告诉 AI：不要换用该模型重试，应请用户先把它加入白名单，或省略 `model` 使用会话模型。
-   不静默替换为其他模型。校验对象是派生参数中显式给出的 `model`；子代理定义自身声明的固定模型属于定义
-   作者的选择，不受白名单约束（列表中以 agent fixed model 标识）。
-5. **AI 只看到生效范围。** `agent_orchestration_info` 的模型列表只包含会话模型（标记为 session model）和
-   生效清单中当前可派生的模型，按用户顺序排列，并逐条附带用户说明。清单中当前不可用的模型不列出。
-6. **恢复的子代理按根会话清单派生。** 子代理问题恢复路径从根会话读取自有清单，不会因恢复而放宽范围。
+1. **调用模型可选包含。** 系统与会话编辑器提供“包含主代理模型”复选框，默认勾选。
+   当前请求的会话路由仅在勾选时额外获准；取消勾选后，只允许显式清单中的模型。
+   子代理自身再派生时，调用模型为该子代理的模型。
+2. **策略只有两级。** 系统默认保存显式模型清单与包含开关；会话自有策略完整替换两项。
+   没有项目级。会话未保存自有策略时跟随系统；恢复系统默认会删除会话策略文件。
+3. **空的有效集合关闭子代理。** 先将策略与当前已启用账号上的可用会话模型求交。
+   交集为空时，请求构建不注册 `spawn_agent`、`agent_orchestration_info`、`send_message`、
+   `interrupt_agent`、`close_agent`、`list_agents`。仅列入不可用模型也视为没有可用模型。
+   `ask` 用户提问及独立会话协作工具保持各自准入；共享 `wait_agents_result` 仍服务于跨会话问题与通知。
+4. **所有新派生统一校验。** 显式选择、继承调用模型、代理定义的固定模型均按最终解析模型校验。
+   省略 `model` 不会绕过未勾选的调用模型限制。超出范围直接拒绝，指引从获准模型中选择或请用户调整设置，
+   不自动挑选清单中的其他模型。已建立的子代理继续运行及回流，不重新选择模型；恢复、续跑不视为新派生。
+5. **AI 模型选择信息只展示生效范围。** 模型列表只包含获准且当前可用的模型及用户说明。
+   取消包含后，调用模型也不能从独立的 session model 区块重新出现。
+6. **恢复路径跟随根会话策略。** 子代理问题恢复从根会话读取完整策略，不混合系统开关与会话清单。
+   下一个回合读取已保存策略；当前回合已冻结的请求不变，也不改写已创建子代理的模型。
 
 ## 存储与边界
 
 - 系统清单：全局 Provider 配置的 `subagentModels` 数组，空数组不写出。
-- 会话清单：会话目录下的 `subagent-models.json`，形如 `{"version":1,"models":[...]}`，字段拒绝未知项。
-  文件缺失表示跟随系统；文件损坏或版本不是 1 时返回错误，绝不回退成更宽的系统清单。
-  该文件独立于会话元数据，不改变 `METADATA_SCHEMA_VERSION`。
+  `subagentExcludeSessionModel` 缺省为 false（包含模型），只在用户取消勾选后写入 true。
+- 会话策略：会话目录下的 `subagent-models.json`，版本唯一来源为 `SESSION_SUBAGENT_MODELS_VERSION`。
+  当前形状为 `{"version":2,"includeSessionModel":true,"models":[...]}`；开关必填，未知字段拒绝。
+  文件缺失表示跟随系统。版本 1 的既有行为是始终包含调用模型，首次读取自动升级为 true：
+  使用稳定文件锁串行读取、保存及删除，先保留原字节 `subagent-models.v1.backup.json`，
+  再原子发布已验证的版本 2。相同备份可复用，冲突备份停止升级；未来版本、损坏文档与无效条目直接报错。
+  该旁置文件独立于会话元数据，不改变 `METADATA_SCHEMA_VERSION`。
 - 条目：`providerId`（不含 `/`）、`modelId`（可含 `/`）、`note`（去除首尾空白后保存）。
 - 边界唯一来源：`MAX_SUBAGENT_MODEL_NOTE_CHARS`（说明字符上限，按 Unicode 标量值计）与
   `MAX_SUBAGENT_MODEL_GRANTS`（条目上限）；服务快照把二者下发给界面，界面不得另写字面量。
@@ -45,9 +51,9 @@
 | 方法 | 参数 | 结果 |
 | --- | --- | --- |
 | `service_subagent_models` | 无 | 系统清单与边界 |
-| `service_save_subagent_models` | `request.models` | 替换系统清单 |
-| `service_session_subagent_models` | `sessionId` | 会话自有清单（`null` 表示跟随系统）、系统清单与边界 |
-| `service_save_session_subagent_models` | `request.sessionId`、`request.models`（`null` 恢复系统默认） | 同上 |
+| `service_save_subagent_models` | `request.models`、`request.includeSessionModel` | 替换完整系统策略 |
+| `service_session_subagent_models` | `sessionId` | 会话清单与 `includeSessionModel`（同时 `null` 表示跟随系统）、系统清单、`systemIncludeSessionModel` 与边界 |
+| `service_save_session_subagent_models` | `request.sessionId`、`request.models`、`request.includeSessionModel`（后两项同时 `null` 恢复系统默认） | 同上 |
 
 会话入口只接受活动普通会话，并与归档、删除串行。保存后下一回合生效。
 

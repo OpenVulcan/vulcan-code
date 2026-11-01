@@ -45,6 +45,7 @@ fn manager(
 ) -> VulcanToolsManager {
     build_vulcan_tools_manager(
         Arc::new(TaskRuntime::new()),
+        true,
         Arc::new(QuestionRuntime::new()),
         catalog,
         None,

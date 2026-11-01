@@ -18,9 +18,23 @@ pub(super) fn saved_conversation(app: &App) -> Option<&ConversationSummary> {
 /// 将 `models` 保存到 `ctx.sessionId` 指明的会话；否则保存到系统清单。
 fn save(ctx: &Value, models: Value) -> ServiceCall {
     match v(ctx, "/sessionId").as_str() {
-        Some(session) => api_models::save_session_subagent_models(session, models),
-        None => api_models::save_subagent_models(models),
+        Some(session) => api_models::save_session_subagent_models(
+            session,
+            models,
+            v(ctx, "/includeSessionModel").clone(),
+        ),
+        None => api_models::save_subagent_models(models, v(ctx, "/includeSessionModel").clone()),
     }
+}
+
+/// Saves a checkbox change with its complete list and owner; returns the unexecuted service call.
+/// 将复选框变更与完整清单及所有者一起保存；返回尚未执行的服务调用。
+fn set_inclusion(ctx: &Value, value: &SettingValue) -> Option<ServiceCall> {
+    // Clone only the hydrated edit context, preserving models and session identity.
+    // 仅复制已水合的编辑上下文，保留模型及会话身份。
+    let mut next = ctx.clone();
+    next["includeSessionModel"] = json!(value.as_bool());
+    Some(save(&next, v(ctx, "/models").clone()))
 }
 
 /// `models` with the entry at `index` moved by `offset`, or `None` past either end.
@@ -78,7 +92,15 @@ fn set_custom(snapshot: &Value, value: &SettingValue) -> Option<ServiceCall> {
     } else {
         Value::Null
     };
-    Some(api_models::save_session_subagent_models(session, models))
+    Some(api_models::save_session_subagent_models(
+        session,
+        models,
+        if value.as_bool() {
+            v(snapshot, "/systemIncludeSessionModel").clone()
+        } else {
+            Value::Null
+        },
+    ))
 }
 
 /// The available models as `[providerId, modelId]` choices, each offered once.
@@ -121,8 +143,25 @@ fn list_rows(app: &App, rows: &mut Vec<Row>, models: &[Value], ctx: &Value, limi
         }
         next
     };
+    // Save the checkbox together with the complete list, including explicit empty policies.
+    // 将复选框与完整清单一起保存，包括显式空策略。
+    rows.push(toggle(
+        tr!("subagentModels.sessionModel.include"),
+        b(ctx, "/includeSessionModel"),
+        Edit::Call(Setter::Build {
+            ctx: base(json!({})),
+            build: set_inclusion,
+        }),
+    ));
     if models.is_empty() {
-        rows.push(note(tr!("subagentModels.empty.detail"), Tone::Muted));
+        rows.push(note(
+            if b(ctx, "/includeSessionModel") {
+                tr!("subagentModels.empty.detail")
+            } else {
+                tr!("subagentModels.disabled.detail")
+            },
+            Tone::Muted,
+        ));
     }
     for (index, entry) in models.iter().enumerate() {
         let (name, available) = model_name(app, entry);
@@ -206,7 +245,13 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
     if system.is_null() {
         rows.push(note(tr!("tui.page.loading"), Tone::Muted));
     } else {
-        list_rows(app, &mut rows, a(system, "/models"), &json!({}), system);
+        list_rows(
+            app,
+            &mut rows,
+            a(system, "/models"),
+            &json!({ "includeSessionModel": v(system, "/includeSessionModel") }),
+            system,
+        );
     }
     rows.push(section(tr!("subagentModels.session.dialogTitle")));
     rows.push(note(
@@ -247,7 +292,7 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
             app,
             &mut rows,
             models,
-            &json!({ "sessionId": conversation.id }),
+            &json!({ "sessionId": conversation.id, "includeSessionModel": v(snapshot, "/includeSessionModel") }),
             snapshot,
         ),
         None => rows.push(note(
@@ -265,20 +310,38 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
 mod tests {
     use super::*;
 
+    /// Checkbox edits preserve the exact owner and empty list in the service request.
+    /// 复选框编辑在服务请求中保留精确所有者和空清单。
+    #[test]
+    fn inclusion_toggle_preserves_empty_session_policy() {
+        // Only inclusion changes; the session identity and complete list remain authoritative.
+        // 仅包含选择变化；会话身份和完整清单保持权威。
+        let context = json!({"sessionId":"s1", "models":[], "includeSessionModel":true});
+        // No real backend is called; inspect the production RPC builder output.
+        // 不调用真实后端；检查生产 RPC 构造器输出。
+        let saved = set_inclusion(&context, &SettingValue::Bool(false)).unwrap();
+        assert_eq!(
+            saved.params["request"],
+            json!({"sessionId":"s1","models":[],"includeSessionModel":false})
+        );
+    }
+
     // Entry edits save the complete list to its owner; adding skips a listed model.
     // 条目编辑将完整清单保存到其所属方；添加会跳过已列出的模型。
     #[test]
     fn list_edits_save_the_complete_list_to_its_owner() {
         let entry = json!({ "providerId": "p", "modelId": "m", "note": "old" });
-        let system = json!({ "models": [entry.clone()], "index": 0 });
+        let system = json!({ "models": [entry.clone()], "index": 0, "includeSessionModel": false });
         let saved = set_note(&system, &SettingValue::Text(" new ".into())).unwrap();
         assert_eq!(saved.method, "service_save_subagent_models");
         assert_eq!(saved.params["request"]["models"][0]["note"], "new");
+        assert_eq!(saved.params["request"]["includeSessionModel"], false);
 
-        let session = json!({ "models": [entry], "sessionId": "s1" });
+        let session = json!({ "models": [entry], "sessionId": "s1", "includeSessionModel": false });
         let added = add(&session, &SettingValue::Choice(r#"["q","n"]"#.into())).unwrap();
         assert_eq!(added.method, "service_save_session_subagent_models");
         assert_eq!(added.params["request"]["sessionId"], "s1");
+        assert_eq!(added.params["request"]["includeSessionModel"], false);
         assert_eq!(
             added.params["request"]["models"].as_array().unwrap().len(),
             2
@@ -296,11 +359,12 @@ mod tests {
     // 会话开关复制系统清单或恢复跟随。
     #[test]
     fn session_switch_copies_or_follows_the_system_list() {
-        let snapshot =
-            json!({ "sessionId": "s1", "models": null, "systemModels": [{ "providerId": "p" }] });
+        let snapshot = json!({ "sessionId": "s1", "models": null, "systemIncludeSessionModel": false, "systemModels": [{ "providerId": "p" }] });
         let on = set_custom(&snapshot, &SettingValue::Bool(true)).unwrap();
         assert_eq!(on.params["request"]["models"][0]["providerId"], "p");
+        assert_eq!(on.params["request"]["includeSessionModel"], false);
         let off = set_custom(&snapshot, &SettingValue::Bool(false)).unwrap();
         assert!(off.params["request"]["models"].is_null());
+        assert!(off.params["request"]["includeSessionModel"].is_null());
     }
 }

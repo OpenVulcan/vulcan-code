@@ -72,6 +72,27 @@ pub(crate) struct PreparedToolSnapshot {
     pub resolved_tool_definitions: Vec<ResolvedToolDefinition>,
 }
 
+/// Determines whether this request has any enabled, permitted conversation model for children.
+/// 判断本请求是否存在已启用且获准供子代理使用的会话模型。
+/// Inputs are the complete policy, current public selectors and the resolved calling route; returns tool admission.
+/// 输入为完整策略、当前公开选择器及已解析调用路由；返回工具准入结果。
+fn subagent_models_enabled(
+    config: &ProviderConfigurationFile,
+    request: &ExecutionPreparationRequest,
+    available: &std::collections::BTreeSet<String>,
+    provider_id: &str,
+    model_id: &str,
+) -> bool {
+    // Inclusion and grants must be resolved as one policy before intersecting available models.
+    // 包含选择与授权清单必须作为同一策略解析，再与可用模型取交集。
+    let (include_session_model, grants) =
+        config.subagent_model_policy(request.subagent_model_policy.as_ref());
+    (include_session_model && available.contains(&format!("{provider_id}/{model_id}")))
+        || grants
+            .iter()
+            .any(|grant| available.contains(&grant.selector()))
+}
+
 /// Builds one validated execution preparation and the matching execution-only tool snapshot.
 /// 构建一份已校验执行准备结果以及与之匹配的仅执行期工具快照。
 pub(crate) fn prepare_execution_with_tool_snapshot(
@@ -316,6 +337,15 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
             "The exact model route uses the provider's native web search, so external web search tools are hidden this turn; the saved external search settings are unchanged.",
         ));
     }
+    // Freeze child-tool admission against the same public configuration used by this request.
+    // 按本请求使用的同一公开配置冻结子代理工具准入。
+    let subagents_enabled = subagent_models_enabled(
+        config,
+        request,
+        &public_ai_runtime.available_model_selectors(&public_ai_configuration)?,
+        &model_blueprint.provider_id,
+        &model_blueprint.model_id,
+    );
     let provider_tool_candidates = build_provider_tool_candidates(
         Arc::clone(&public_ai_runtime),
         public_ai_configuration,
@@ -339,6 +369,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
     );
     let tools_manager = build_vulcan_tools_manager(
         foundation.task_runtime(),
+        subagents_enabled,
         foundation.question_runtime(),
         foundation.native_tool_catalog().clone(),
         foundation.vulcan_plugin_runtime(),

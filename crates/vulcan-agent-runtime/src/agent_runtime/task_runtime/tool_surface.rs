@@ -295,7 +295,7 @@ pub(super) fn spawn_agent_args_schema() -> Value {
             },
             "model": {
                 "type": "string",
-                "description": "Optional model selector returned by agent_orchestration_info. Invalid or unavailable selectors fail the spawn call."
+                "description": "Optional permitted model selector returned by agent_orchestration_info. Omitting it uses the profile model or calling session model only if that model is permitted. Invalid, unavailable or ungranted models fail the spawn call."
             },
             "task_name": {
                 "type": "string",

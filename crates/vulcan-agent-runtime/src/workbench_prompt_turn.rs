@@ -1352,7 +1352,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
         provider_id_override: None,
         model_id_override: None,
         connection_id_override: None,
-        subagent_model_grants: None,
+        subagent_model_policy: None,
         provider_route_lease_identity: runtime_state.provider_route_lease.clone(),
         provider_tool_selections_override: runtime_state.provider_tool_settings_initialized.then(
             || {

@@ -376,11 +376,12 @@ async fn native_compaction_uses_host_history_and_preserves_execution_identity_bo
 /// 不返回值；执行生产入口、投影确认及启动清理。
 #[tokio::test]
 async fn durable_child_preparation_failure_prevents_activation() {
-    for (capture_host_present, valid_preparation, is_resumed) in [
-        (false, false, false),
-        (true, false, false),
-        (true, true, false),
-        (true, true, true),
+    for (capture_host_present, valid_preparation, is_resumed, exclude_inherited) in [
+        (false, false, false, false),
+        (true, false, false, false),
+        (true, true, false, false),
+        (true, true, true, true),
+        (true, true, false, true),
     ] {
         // Each failure owns an independent runtime and exact execution binding.
         // 每种失败持有独立运行时和精确执行绑定。
@@ -389,12 +390,15 @@ async fn durable_child_preparation_failure_prevents_activation() {
         let child = Uuid::new_v4();
         let host = Arc::new(PreparationAdmissionHost::default());
         let mut context = build_task_start_test_runtime_context(parent);
+        // Every admission fixture has a real model catalog; invalid preparation targets the agent, not missing model infrastructure.
+        // 每个准入夹具都具有真实模型目录；无效准备针对代理，而非缺失模型基础设施。
+        context.config.subagent_exclude_session_model = exclude_inherited;
+        context.foundation = Arc::new(
+            crate::agent_runtime::execution_preparation::tests::test_runtime_foundation(
+                &context.config,
+            ),
+        );
         if valid_preparation {
-            context.foundation = Arc::new(
-                crate::agent_runtime::execution_preparation::tests::test_runtime_foundation(
-                    &context.config,
-                ),
-            );
             // Use the fixture's actual built agent identity, not the invalid placeholder from the rejection fixture.
             // 使用夹具实际构建的代理身份，不沿用拒绝夹具中的无效占位身份。
             context.request_template.execution_agent_id = Some(
@@ -472,22 +476,29 @@ async fn durable_child_preparation_failure_prevents_activation() {
         .await
         .unwrap_err();
         assert_eq!(event_reader.await.unwrap(), 0);
-        assert!(
-            error.contains(if valid_preparation {
-                "Initial creation rejected by test host."
-            } else if capture_host_present {
-                "missing-admission-agent"
-            } else {
-                "profile capture host"
-            }),
-            "{error}"
-        );
+        // Policy rejection occurs before host creation; resumed children retain their original admission.
+        // 策略拒绝发生在宿主创建之前；恢复的子代理保留原准入。
+        let policy_rejected = exclude_inherited && !is_resumed;
+        if policy_rejected {
+            assert!(task_execution_error_is_prestart_cancelled(&error));
+        } else {
+            assert!(
+                error.contains(if valid_preparation {
+                    "Initial creation rejected by test host."
+                } else if capture_host_present {
+                    "missing-admission-agent"
+                } else {
+                    "profile capture host"
+                }),
+                "{error}"
+            );
+        }
         assert_eq!(host.reserved.load(Ordering::SeqCst), 0);
         assert_eq!(
             host.created.load(Ordering::SeqCst),
-            usize::from(valid_preparation)
+            usize::from(valid_preparation && !policy_rejected)
         );
-        if valid_preparation {
+        if valid_preparation && !policy_rejected {
             let creation = host.creation.lock().unwrap().clone().unwrap();
             assert_eq!(creation.task_id, child);
             assert_eq!(creation.parent_session_id, parent);

@@ -65,8 +65,8 @@ function button(scope: ParentNode, label: string): HTMLButtonElement {
 // Verifies the system list saves reordered, trimmed entries and refuses a note over the limit.
 // 验证系统清单保存重排并去除首尾空白的条目，且拒绝超出限制的说明。
 it("saves the reordered system list and blocks notes over the limit", async () => {
-  service.loadSubagentModels.mockResolvedValue({ models: [first, second], maxNoteChars: 20, maxModels: 64 });
-  service.saveSubagentModels.mockImplementation(async (models) => ({ models, maxNoteChars: 20, maxModels: 64 }));
+  service.loadSubagentModels.mockResolvedValue({ includeSessionModel: true, models: [first, second], maxNoteChars: 20, maxModels: 64 });
+  service.saveSubagentModels.mockImplementation(async (models, includeSessionModel) => ({ models, includeSessionModel, maxNoteChars: 20, maxModels: 64 }));
   await act(async () => root.render(<SubagentModelsSettingsArea providers={[]} />));
   const save = host.querySelector<HTMLButtonElement>("[data-subagent-models-save]")!;
   expect(save.disabled).toBe(true);
@@ -85,7 +85,7 @@ it("saves the reordered system list and blocks notes over the limit", async () =
   await act(async () => typeInto(note, "  quick reads  "));
   expect(save.disabled).toBe(false);
   await act(async () => save.click());
-  expect(service.saveSubagentModels).toHaveBeenCalledWith([{ ...second, note: "quick reads" }, first]);
+  expect(service.saveSubagentModels).toHaveBeenCalledWith([{ ...second, note: "quick reads" }, first], true);
   expect(save.disabled).toBe(true);
 
   await act(async () => button(host, "subagentModels.remove").click());
@@ -97,7 +97,7 @@ it("saves the reordered system list and blocks notes over the limit", async () =
 it("turns a following session custom on save and restores the system default", async () => {
   const onClose = vi.fn();
   service.loadSessionSubagentModels.mockResolvedValue({
-    sessionId: "s1", models: null, systemModels: [first], maxNoteChars: 400, maxModels: 64,
+    sessionId: "s1", includeSessionModel: null, systemIncludeSessionModel: false, models: null, systemModels: [first], maxNoteChars: 400, maxModels: 64,
   });
   service.saveSessionSubagentModels.mockResolvedValue({});
   await act(async () => root.render(<SubagentModelsSessionDialog conversationId="s1" onClose={onClose} providers={[]} />));
@@ -105,17 +105,48 @@ it("turns a following session custom on save and restores the system default", a
   const save = document.querySelector<HTMLButtonElement>("[data-subagent-models-session-save]")!;
   expect(save.disabled).toBe(false);
   await act(async () => save.click());
-  expect(service.saveSessionSubagentModels).toHaveBeenCalledWith("s1", [first]);
+  expect(service.saveSessionSubagentModels).toHaveBeenCalledWith("s1", [first], false);
   expect(onClose).toHaveBeenCalledTimes(1);
 
   await act(async () => root.unmount());
   root = createRoot(host);
   service.loadSessionSubagentModels.mockResolvedValue({
-    sessionId: "s1", models: [second], systemModels: [first], maxNoteChars: 400, maxModels: 64,
+    sessionId: "s1", includeSessionModel: false, systemIncludeSessionModel: true, models: [second], systemModels: [first], maxNoteChars: 400, maxModels: 64,
   });
   await act(async () => root.render(<SubagentModelsSessionDialog conversationId="s1" onClose={onClose} providers={[]} />));
   expect(document.querySelector("[data-sam-follows]")).toBeNull();
   expect(document.querySelector<HTMLButtonElement>("[data-subagent-models-session-save]")!.disabled).toBe(true);
   await act(async () => button(document, "subagentModels.session.restore").click());
-  expect(service.saveSessionSubagentModels).toHaveBeenLastCalledWith("s1", null);
+  expect(service.saveSessionSubagentModels).toHaveBeenLastCalledWith("s1", null, null);
+});
+
+// Saving only the checkbox persists an explicit empty disabled policy; discarding restores hydration.
+// 仅保存复选框也会持久化显式空的禁用策略；放弃修改会恢复水合值。
+it("saves and discards the inclusion choice independently of an empty list", async () => {
+  service.loadSubagentModels.mockResolvedValue({ includeSessionModel: true, models: [], maxNoteChars: 400, maxModels: 64 });
+  service.saveSubagentModels.mockImplementation(async (models, includeSessionModel) => ({ models, includeSessionModel, maxNoteChars: 400, maxModels: 64 }));
+  await act(async () => root.render(<SubagentModelsSettingsArea providers={[]} />));
+  // Stable control identity avoids coupling to localized labels.
+  // 稳定控件身份避免绑定本地化标签。
+  const inclusion = host.querySelector<HTMLButtonElement>("[data-sam-include-session]")!;
+  expect(inclusion.getAttribute("aria-checked")).toBe("true");
+  await act(async () => inclusion.click());
+  expect(host.textContent).toContain("subagentModels.disabled.detail");
+  await act(async () => button(host, "subagentModels.discard").click());
+  expect(inclusion.getAttribute("aria-checked")).toBe("true");
+  await act(async () => inclusion.click());
+  await act(async () => host.querySelector<HTMLButtonElement>("[data-subagent-models-save]")!.click());
+  expect(service.saveSubagentModels).toHaveBeenLastCalledWith([], false);
+  expect(inclusion.getAttribute("aria-checked")).toBe("false");
+});
+
+// Session checkbox changes create their own full policy even when no model entries change.
+// 即使模型条目不变，会话复选框变更也会创建完整自有策略。
+it("saves an unchecked session policy without inheriting system inclusion", async () => {
+  service.loadSessionSubagentModels.mockResolvedValue({ sessionId: "s2", includeSessionModel: true, systemIncludeSessionModel: true, models: [], systemModels: [first], maxNoteChars: 400, maxModels: 64 });
+  service.saveSessionSubagentModels.mockResolvedValue({});
+  await act(async () => root.render(<SubagentModelsSessionDialog conversationId="s2" onClose={vi.fn()} providers={[]} />));
+  await act(async () => document.querySelector<HTMLButtonElement>("[data-sam-include-session]")!.click());
+  await act(async () => document.querySelector<HTMLButtonElement>("[data-subagent-models-session-save]")!.click());
+  expect(service.saveSessionSubagentModels).toHaveBeenLastCalledWith("s2", [], false);
 });

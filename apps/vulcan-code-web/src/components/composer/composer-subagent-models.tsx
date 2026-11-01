@@ -37,7 +37,7 @@ export function ComposerSubagentModelsBlock(props: { conversationId: string | nu
     if (!props.conversationId || !snapshot) return;
     setSaving(true);
     try {
-      const saved = await saveSessionSubagentModels(props.conversationId, custom ? snapshot.systemModels : null);
+      const saved = await saveSessionSubagentModels(props.conversationId, custom ? snapshot.systemModels : null, custom ? snapshot.systemIncludeSessionModel : null);
       setSnapshot(saved);
       if (!custom) toast.success(t("subagentModels.session.restored"));
     } catch (reason) {

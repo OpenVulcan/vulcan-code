@@ -49,7 +49,7 @@ fn build_task_start_test_runtime_context(
             provider_id_override: None,
             model_id_override: None,
             connection_id_override: None,
-            subagent_model_grants: None,
+            subagent_model_policy: None,
             provider_route_lease_identity: None,
             provider_tool_selections_override: Default::default(),
             provider_tool_media_understanding_selections_override: Default::default(),

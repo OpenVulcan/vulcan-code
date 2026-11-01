@@ -287,6 +287,7 @@ fn native_file_public_ids_are_reserved_and_deduplicated() {
         };
         let manager = build_vulcan_tools_manager(
             Arc::new(crate::agent_runtime::task_runtime::TaskRuntime::new()),
+            true,
             Arc::new(crate::agent_runtime::question_runtime::QuestionRuntime::new()),
             native_catalog,
             None,
@@ -397,6 +398,7 @@ fn vmm_memory_tools_are_filtered_by_effective_config_and_live_runtime() {
 
     let enabled_manager = build_vulcan_tools_manager(
         Arc::new(crate::agent_runtime::task_runtime::TaskRuntime::new()),
+        true,
         Arc::new(crate::agent_runtime::question_runtime::QuestionRuntime::new()),
         native_catalog.clone(),
         None,
@@ -472,6 +474,7 @@ fn vmm_memory_tools_are_filtered_by_effective_config_and_live_runtime() {
 
     let disabled_manager = build_vulcan_tools_manager(
         Arc::new(crate::agent_runtime::task_runtime::TaskRuntime::new()),
+        true,
         Arc::new(crate::agent_runtime::question_runtime::QuestionRuntime::new()),
         native_catalog.clone(),
         None,
@@ -511,6 +514,7 @@ fn vmm_memory_tools_are_filtered_by_effective_config_and_live_runtime() {
 
     let stopped_manager = build_vulcan_tools_manager(
         Arc::new(crate::agent_runtime::task_runtime::TaskRuntime::new()),
+        true,
         Arc::new(crate::agent_runtime::question_runtime::QuestionRuntime::new()),
         native_catalog,
         None,
@@ -569,6 +573,7 @@ fn native_collaboration_candidates_are_registered_by_bridge() {
     );
     let manager = build_vulcan_tools_manager(
         Arc::new(crate::agent_runtime::task_runtime::TaskRuntime::new()),
+        true,
         Arc::new(crate::agent_runtime::question_runtime::QuestionRuntime::new()),
         native_catalog,
         None,
@@ -857,6 +862,7 @@ fn frozen_bridge_tools(
     );
     build_vulcan_tools_manager(
         Arc::new(crate::agent_runtime::task_runtime::TaskRuntime::new()),
+        true,
         Arc::new(crate::agent_runtime::question_runtime::QuestionRuntime::new()),
         native_catalog,
         Some(runtime.clone()),

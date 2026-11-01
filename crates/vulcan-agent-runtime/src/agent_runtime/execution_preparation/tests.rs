@@ -40,6 +40,86 @@ use vulcan_tools_manager::{
 };
 use vulcan_vmm::VmmConfigLayer;
 
+/// Verifies effective model policy controls both advertised definitions and registered handlers.
+/// 验证生效模型策略同时控制对外定义和已注册处理器。
+/// No external requests are issued; all choices come from the fixture catalog.
+/// 不发送外部请求；所有选择均来自夹具目录。
+#[test]
+fn subagent_policy_controls_registration_and_model_availability() {
+    // Exercise inclusion, explicit grants, unavailable grants and complete session replacement.
+    // 覆盖包含、显式授权、不可用授权及完整会话替换。
+    let mut config = test_provider_config();
+    // One foundation supplies the same valid calling route across policy changes.
+    // 同一基础架构在策略变化时提供相同有效调用路由。
+    let foundation = test_runtime_foundation(&config);
+    // Request overrides deliberately replace the whole policy, including an empty list.
+    // 请求覆盖会有意替换完整策略，包括空清单。
+    let mut request = test_execution_preparation_request();
+    for (exclude, grant, session, expected) in [
+        (false, None, None, true),
+        (true, None, None, false),
+        (true, Some("unavailable/model"), None, false),
+        (true, Some("openai/gpt-5.6-sol"), None, true),
+        (false, Some("openai/gpt-5.6-sol"), Some(false), false),
+        (true, None, Some(true), true),
+    ] {
+        config.subagent_exclude_session_model = exclude;
+        config.subagent_models = grant
+            .map(|model_id| crate::provider_config::SubagentModelGrant {
+                provider_id: String::from("openrouter"),
+                model_id: model_id.to_owned(),
+                note: String::new(),
+            })
+            .into_iter()
+            .collect();
+        request.subagent_model_policy =
+            session.map(
+                |include_session_model| crate::provider_config::SubagentModelPolicy {
+                    include_session_model,
+                    models: Vec::new(),
+                },
+            );
+        // Inspect the production tool assembly, not a standalone boolean helper.
+        // 检查生产工具组装，而非孤立布尔辅助函数。
+        let prepared =
+            prepare_execution_with_tool_snapshot(&foundation, None, &config, &request).unwrap();
+        // Handler resolution must agree with the actual request definitions.
+        // 处理器解析必须与真实请求定义一致。
+        let registered = prepared
+            .tool_snapshot
+            .tools_manager
+            .resolve_for_execution_mode("Build");
+        for tool in vulcan_subagent_core::CORE_SUBAGENT_TOOLS {
+            if tool == vulcan_subagent_core::WAIT_AGENTS_RESULT_TOOL {
+                continue;
+            }
+            assert_eq!(
+                registered
+                    .descriptors
+                    .iter()
+                    .any(|descriptor| descriptor.id == tool),
+                expected,
+                "handler {tool}"
+            );
+            assert_eq!(
+                prepared
+                    .tool_snapshot
+                    .resolved_tool_definitions
+                    .iter()
+                    .any(|definition| definition.descriptor.id == tool),
+                expected,
+                "definition {tool}"
+            );
+        }
+        assert!(
+            registered
+                .descriptors
+                .iter()
+                .any(|descriptor| descriptor.id == "ask")
+        );
+    }
+}
+
 /// Verifies visible CodeKit entries inject the package main help with its stable provenance; returns no value.
 /// 验证可见的 CodeKit 入口按稳定来源标识注入包主帮助；无参数与返回值。
 #[test]
@@ -1078,7 +1158,7 @@ fn test_execution_preparation_request() -> ExecutionPreparationRequest {
         provider_id_override: None,
         model_id_override: None,
         connection_id_override: None,
-        subagent_model_grants: None,
+        subagent_model_policy: None,
         provider_route_lease_identity: None,
         provider_tool_selections_override: Default::default(),
         provider_tool_media_understanding_selections_override: Default::default(),

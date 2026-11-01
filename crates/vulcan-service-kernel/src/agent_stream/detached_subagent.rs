@@ -14,6 +14,7 @@ use crate::session_v1_lifecycle::create_or_load_embedded_task_session_v1;
 #[cfg(test)]
 mod admission_tests;
 mod listener_owner;
+pub(crate) mod queued_admission;
 
 pub(crate) mod non_success;
 pub(crate) mod retry;
@@ -23,7 +24,7 @@ mod terminal;
 
 /// Starts one detached child-task listener using the shared task runtime stream.
 /// 使用共享任务运行时流启动单个分离子任务监听器。
-pub(crate) fn maybe_start_webui_detached_subagent_task_listener(
+pub(crate) async fn maybe_start_webui_detached_subagent_task_listener(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     controller_runtime: HostRuntimeHandle,
@@ -77,17 +78,21 @@ pub(crate) fn maybe_start_webui_detached_subagent_task_listener(
         .clone();
     // childHandle owns the deterministic root/TASK child tree before event subscription begins.
     // childHandle 在事件订阅开始前持有确定性的 root/TASK 子目录树。
-    let child_handle = create_or_load_embedded_task_session_v1(&session_registry, execution_facts)
-        .map_err(|error| error.to_string())?;
+    let child_handle =
+        create_or_load_embedded_task_session_v1(&session_registry, execution_facts.clone())
+            .map_err(|error| error.to_string())?;
+    // Install the abort consumer before fallible durable admission, while the start barrier remains closed.
+    // 在可能失败的可靠准入之前安装中止消费者，同时保持启动屏障关闭。
     start_admitted_detached_subagent_listener(
         app,
-        state,
+        state.clone(),
         controller_runtime,
-        agent_runtime,
+        agent_runtime.clone(),
         parent_session_id,
-        child_handle,
+        child_handle.clone(),
         execution_id,
-    )
+    )?;
+    queued_admission::admit(&state, &agent_runtime, &execution_facts, &child_handle).await
 }
 
 /// Attaches the existing event sink and reliable finalizer to an already admitted child document.
@@ -439,6 +444,7 @@ pub(crate) async fn handle_webui_detached_subagent_task_event(
                         task_id,
                         event,
                     )
+                    .await
                 };
                 if let Err(error) = admission {
                     vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::reject_runtime_event_projection_barrier_from_event_with_reason(event, &error)

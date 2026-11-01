@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ArrowDown, ArrowUp, Bot, Lock, Plus, Trash2, TriangleAlert } from "lucide-react";
+import { ArrowDown, ArrowUp, Bot, Plus, Trash2, TriangleAlert } from "lucide-react";
 import "@/ui-kit/styles/features/subagent-models.css";
 import {
   groupModelPickerChoices,
@@ -13,6 +13,7 @@ import { localizedProviderName } from "@/components/features/settings/provider-p
 import { formatMessage, useI18n } from "@/i18n";
 import type { ProviderSummary, SubagentModelEntry } from "@/types";
 import { IconButton } from "@/ui-kit/primitives/button";
+import { Checkbox } from "@/ui-kit/primitives/checkbox";
 import { Textarea } from "@/ui-kit/primitives/textarea";
 import { toast } from "@/ui-kit/primitives/toast";
 
@@ -67,6 +68,10 @@ export interface SubagentModelEditorProps {
   // Current list in display order and its change callback.
   // 按显示顺序排列的当前清单及其变更回调。
   models: SubagentModelEntry[];
+  // Inclusion is editable independently of explicit grants.
+  // 包含选择可独立于显式授权编辑。
+  includeSessionModel: boolean;
+  onIncludeSessionModelChange: (include: boolean) => void;
   onChange: (models: SubagentModelEntry[]) => void;
   // Providers carrying the enabled model rows.
   // 携带已启用模型行的 Provider 列表。
@@ -84,8 +89,8 @@ export interface SubagentModelEditorProps {
   scope: "system" | "session";
 }
 
-// SubagentModelEditor edits an allowlist: a pinned session-model card, one card per granted model with its note, and the add bar.
-// SubagentModelEditor 编辑一份白名单：置顶的会话模型卡片、每个授权模型一张带说明的卡片，以及添加栏。
+// SubagentModelEditor edits inheritance and grants; props supply the policy and callbacks, and returned controls save no data directly.
+// SubagentModelEditor 编辑继承及授权；参数提供策略和回调，返回的控件不直接保存数据。
 export function SubagentModelEditor(props: SubagentModelEditorProps) {
   const { t } = useI18n();
   const directory = useSubagentModelDirectory(props.providers);
@@ -119,20 +124,22 @@ export function SubagentModelEditor(props: SubagentModelEditorProps) {
   return (
     <div className="vk-sam" data-sam-scope={props.scope}>
       <div className="vk-sam-anchor">
-        <span aria-hidden="true" className="vk-sam-glyph"><Lock /></span>
+        <Checkbox aria-label={t("subagentModels.sessionModel.include")} checked={props.includeSessionModel}
+          data-sam-include-session="" disabled={props.disabled} onCheckedChange={(checked) => props.onIncludeSessionModelChange(checked === true)} />
         <div className="vk-sam-anchor-text">
           <div className="vk-sam-anchor-head">
-            <strong>{props.sessionModelLabel
-              ? formatMessage(t("subagentModels.sessionModel.current"), { model: props.sessionModelLabel })
-              : t("subagentModels.sessionModel.title")}</strong>
-            <span className="vk-sam-tag">{t("subagentModels.sessionModel.always")}</span>
+            <strong>{t("subagentModels.sessionModel.include")}</strong>
+            {props.sessionModelLabel ? <span>{formatMessage(t("subagentModels.sessionModel.current"), { model: props.sessionModelLabel })}</span> : null}
           </div>
           <p>{t("subagentModels.sessionModel.detail")}</p>
         </div>
       </div>
+      {!props.includeSessionModel && props.models.length > 0 && !props.models.some((entry) => directory.has(subagentModelEntryKey(entry))) ? (
+        <p role="status">{t("subagentModels.disabled.detail")}</p>
+      ) : null}
       {props.models.length === 0 ? (
-        <PageEmptyState data-sam-empty="" description={t("subagentModels.empty.detail")} icon={<Bot />}
-          title={t("subagentModels.empty.title")} />
+        <PageEmptyState data-sam-empty="" description={t(props.includeSessionModel ? "subagentModels.empty.detail" : "subagentModels.disabled.detail")} icon={<Bot />}
+          title={t(props.includeSessionModel ? "subagentModels.empty.title" : "subagentModels.disabled.title")} />
       ) : (
         <ol className="vk-sam-list" ref={list}>
           {props.models.map((entry, index) => {

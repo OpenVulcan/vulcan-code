@@ -753,8 +753,8 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_for_purpose(
     request.connection_id_override = runtime_state.active_connection_id.clone();
     // Spawns in this turn follow the session's own allowlist when it has one.
     // 本回合的派生在会话拥有自有白名单时遵循之。
-    request.subagent_model_grants =
-        crate::subagent_models::session_subagent_model_grants(handle.as_ref())?;
+    request.subagent_model_policy =
+        crate::subagent_models::session_subagent_model_policy(handle.as_ref())?;
     request.provider_route_lease_identity = runtime_state.provider_route_lease.clone();
     if request.provider_id_override.is_some() {
         request.reasoning_effort = runtime_state

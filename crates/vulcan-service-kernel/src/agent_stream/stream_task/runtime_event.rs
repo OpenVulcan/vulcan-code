@@ -199,7 +199,9 @@ pub(super) async fn handle_runtime_stream_event(
         agent_runtime.clone(),
         session_id,
         &event,
-    ) {
+    )
+    .await
+    {
         tracing::warn!("[webui-service] start detached subagent listener failed: {error}");
         // Provider launch must observe the listener/persistence failure instead of a display acknowledgement.
         // Provider 启动必须观察监听器或持久化失败，不能收到显示确认。

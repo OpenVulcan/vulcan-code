@@ -22,6 +22,9 @@ pub struct SubagentModelEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SubagentModelsSnapshot {
+    /// Whether the calling session model is additionally granted.
+    /// 是否额外授权调用会话模型。
+    pub include_session_model: bool,
     /// Granted models in display order.
     /// 按显示顺序排列的授权模型。
     pub models: Vec<SubagentModelEntry>,
@@ -38,6 +41,9 @@ pub struct SubagentModelsSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SubagentModelsSaveRequest {
+    /// Explicit inclusion choice saved with the complete model list.
+    /// 与完整模型清单一起保存的显式包含选择。
+    pub include_session_model: bool,
     /// Granted models in display order.
     /// 按显示顺序排列的授权模型。
     pub models: Vec<SubagentModelEntry>,
@@ -48,6 +54,12 @@ pub struct SubagentModelsSaveRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionSubagentModelsSnapshot {
+    /// Session inclusion override; absent together with models means following the system.
+    /// 会话包含覆盖；与模型同时为空表示跟随系统。
+    pub include_session_model: Option<bool>,
+    /// System inclusion choice used by following sessions.
+    /// 跟随系统的会话所使用的系统包含选择。
+    pub system_include_session_model: bool,
     /// Session identifier.
     /// 会话标识。
     pub session_id: String,
@@ -70,6 +82,9 @@ pub struct SessionSubagentModelsSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionSubagentModelsSaveRequest {
+    /// Inclusion override; must be present exactly when models is present.
+    /// 包含覆盖；必须与模型清单同时存在。
+    pub include_session_model: Option<bool>,
     /// Session identifier.
     /// 会话标识。
     pub session_id: String,

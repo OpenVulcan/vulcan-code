@@ -37,7 +37,7 @@ fn test_parent_execution_request(session_id: SessionId) -> ExecutionPreparationR
         provider_id_override: Some(String::from("provider")),
         model_id_override: Some(String::from("model")),
         connection_id_override: None,
-        subagent_model_grants: None,
+        subagent_model_policy: None,
         provider_route_lease_identity: None,
         provider_tool_selections_override: Default::default(),
         provider_tool_media_understanding_selections_override: Default::default(),
@@ -2491,7 +2491,11 @@ fn allowlist_test_context(
     let mut request = test_parent_execution_request(Uuid::new_v4());
     request.provider_id_override = Some(String::from("openrouter"));
     request.model_id_override = Some(session_model.to_string());
-    request.subagent_model_grants = session;
+    request.subagent_model_policy =
+        session.map(|models| crate::provider_config::SubagentModelPolicy {
+            include_session_model: true,
+            models,
+        });
     TaskExecutionRuntimeContext::new(provider_config, Arc::new(foundation), None, request)
 }
 
@@ -2562,7 +2566,7 @@ fn spawn_models_outside_the_allowlist_are_rejected() {
         &context,
         &explicit_model("openrouter", "vendor/session-model"),
     )
-    .expect("the session model is always granted");
+    .expect("the default policy includes the session model");
     validate_spawn_model_is_granted(
         &context,
         &explicit_model("openrouter", "openai/gpt-5.6-sol"),
@@ -2572,4 +2576,102 @@ fn spawn_models_outside_the_allowlist_are_rejected() {
         validate_spawn_model_is_granted(&context, &explicit_model("openrouter", "vendor/other"))
             .expect_err("models outside the allowlist are rejected");
     assert!(error.contains("openrouter/vendor/other"), "{error}");
+}
+
+/// Disabling inheritance rejects explicit and omitted calling-model selections without widening session overrides.
+/// 关闭继承会拒绝显式及省略的调用模型选择，不放宽会话覆盖。
+/// Uses the in-memory catalog only; verifies both admission and the model-visible list.
+/// 仅使用内存目录；同时验证准入及模型可见列表。
+#[test]
+fn subagent_policy_rejects_unchecked_inheritance_and_accepts_explicit_grants() {
+    // Explicitly granting another available model must work while calling-model inheritance stays disabled.
+    // 显式授权另一个可用模型必须正常生效，同时调用模型继承保持关闭。
+    let mut separate = allowlist_test_context(
+        "vendor/parent",
+        vec![test_grant(
+            "openrouter",
+            "openai/gpt-5.6-sol",
+            "other model",
+        )],
+        None,
+    );
+    separate.config.subagent_exclude_session_model = true;
+    assert!(
+        validate_spawn_model_is_granted(
+            &separate,
+            &explicit_model("openrouter", "openai/gpt-5.6-sol")
+        )
+        .is_ok()
+    );
+    assert!(validate_spawn_model_is_granted(&separate, &ProviderModelSnapshot::default()).is_err());
+    // The available calling model starts excluded, even though it exists in the public catalog.
+    // 可用调用模型初始被排除，即使它存在于公开目录中。
+    let mut context = allowlist_test_context("openai/gpt-5.6-sol", Vec::new(), None);
+    context.config.subagent_exclude_session_model = true;
+    assert!(validate_spawn_model_is_granted(&context, &ProviderModelSnapshot::default()).is_err());
+    assert!(
+        validate_spawn_model_is_granted(
+            &context,
+            &explicit_model("openrouter", "openai/gpt-5.6-sol")
+        )
+        .is_err()
+    );
+    assert!(
+        super::super::invocation_methods::agent_orchestration_info_models(&context, None)
+            .unwrap()
+            .is_empty()
+    );
+    context
+        .config
+        .subagent_models
+        .push(test_grant("openrouter", "openai/gpt-5.6-sol", "explicit"));
+    assert!(validate_spawn_model_is_granted(&context, &ProviderModelSnapshot::default()).is_ok());
+    assert_eq!(
+        super::super::invocation_methods::agent_orchestration_info_models(&context, None)
+            .unwrap()
+            .len(),
+        1
+    );
+    context.request_template.subagent_model_policy =
+        Some(crate::provider_config::SubagentModelPolicy {
+            include_session_model: false,
+            models: Vec::new(),
+        });
+    assert!(validate_spawn_model_is_granted(&context, &ProviderModelSnapshot::default()).is_err());
+    context.request_template.subagent_model_policy =
+        Some(crate::provider_config::SubagentModelPolicy {
+            include_session_model: true,
+            models: Vec::new(),
+        });
+    assert!(validate_spawn_model_is_granted(&context, &ProviderModelSnapshot::default()).is_ok());
+}
+
+/// The public orchestration response cannot reintroduce an excluded calling model in a separate section.
+/// 公开调度响应不能在独立区块中重新引入被排除的调用模型。
+/// Uses the production tool entry with a synthetic context, without Provider calls.
+/// 使用带合成上下文的生产工具入口，不调用 Provider。
+#[tokio::test]
+async fn subagent_policy_hides_excluded_calling_model_in_orchestration_info() {
+    // Bind the context to the same exact session used by the orchestration tool.
+    // 将上下文绑定到调度工具使用的同一精确会话。
+    let runtime = Arc::new(TaskRuntime::new());
+    let session_id = Uuid::new_v4();
+    let mut context = allowlist_test_context("openai/gpt-5.6-sol", Vec::new(), None);
+    context.request_template.session_id = session_id;
+    context.request_template.subagent_model_policy =
+        Some(crate::provider_config::SubagentModelPolicy {
+            include_session_model: false,
+            models: Vec::new(),
+        });
+    // Keep registration alive for the complete tool invocation.
+    // 在完整工具调用期间保持注册有效。
+    let _registration = runtime
+        .install_execution_context(session_id, context)
+        .unwrap();
+    let result = runtime
+        .invoke_agent_orchestration_info(session_id, json!({"sections":["models"]}))
+        .await
+        .unwrap();
+    assert!(result.model_output["models"].as_array().unwrap().is_empty());
+    assert!(result.model_output["session_model"].is_null());
 }

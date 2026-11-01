@@ -85,6 +85,7 @@ mod task_results;
 pub(crate) mod test_support;
 pub(crate) use projection::project_collaboration_before_api;
 pub(crate) use question_failures::reconcile_stopped_question_deliveries_for_session;
+pub(crate) use startup_recovery::native_results::reconcile_child_predecessor_returns;
 pub(crate) use startup_recovery::start_collaboration_recovery;
 pub(crate) use task_launch::wake_session_tasks_if_idle;
 pub(crate) use task_results::reconcile_task_results_for_session;

@@ -1,5 +1,34 @@
 use super::*;
 
+/// A complete session override of the system subagent model policy.
+/// 系统子代理模型策略的完整会话覆盖。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SubagentModelPolicy {
+    /// Whether the calling session's model is additionally granted.
+    /// 是否额外授权调用会话模型。
+    pub include_session_model: bool,
+    /// Explicit model grants in display order.
+    /// 按显示顺序排列的显式模型授权。
+    pub models: Vec<SubagentModelGrant>,
+}
+
+impl ProviderConfigurationFile {
+    /// Resolves one complete session override or the system policy without mixing their fields.
+    /// 解析完整会话覆盖或系统策略，不混合两个层级的字段。
+    /// `session` is absent when following the system; returns inclusion and the borrowed grants.
+    /// `session` 在跟随系统时为空；返回是否包含会话模型及借用的授权清单。
+    pub fn subagent_model_policy<'a>(
+        &'a self,
+        session: Option<&'a SubagentModelPolicy>,
+    ) -> (bool, &'a [SubagentModelGrant]) {
+        match session {
+            Some(policy) => (policy.include_session_model, &policy.models),
+            None => (!self.subagent_exclude_session_model, &self.subagent_models),
+        }
+    }
+}
+
 /// Maximum characters of one user note attached to a subagent model grant.
 /// 子代理模型授权所附用户备注的最大字符数。
 pub const MAX_SUBAGENT_MODEL_NOTE_CHARS: usize = 400;
@@ -92,4 +121,44 @@ pub fn normalize_subagent_model_grants(
         normalized.push(grant);
     }
     Ok(normalized)
+}
+
+#[cfg(test)]
+mod policy_tests {
+    use super::*;
+
+    /// Default and persisted policies preserve the checkbox without rewriting missing configuration.
+    /// 默认及持久策略保留复选框语义，不改写缺失配置。
+    #[test]
+    fn subagent_policy_defaults_and_disabled_roundtrip() {
+        // Both construction and deserialization must keep the historically enabled default.
+        // 构造及反序列化都必须保留历史默认开启行为。
+        let default = ProviderConfigurationFile::default();
+        assert!(default.subagent_model_policy(None).0);
+        assert!(
+            serde_json::to_value(&default)
+                .unwrap()
+                .get("subagentExcludeSessionModel")
+                .is_none()
+        );
+        // Explicit false in the UI is represented as exclusion in persisted configuration.
+        // 界面显式关闭在持久配置中表示为排除。
+        let disabled = ProviderConfigurationFile {
+            subagent_exclude_session_model: true,
+            ..default
+        };
+        // Reload the real complete configuration format, not a test-specific settings shape.
+        // 重新加载真实完整配置格式，而非测试专用设置形状。
+        let reloaded: ProviderConfigurationFile =
+            serde_json::from_value(serde_json::to_value(disabled).unwrap()).unwrap();
+        assert!(!reloaded.subagent_model_policy(None).0);
+        assert!(reloaded.subagent_model_policy(None).1.is_empty());
+        // A complete session override can re-enable inheritance without any explicit grants.
+        // 完整会话覆盖可以在没有显式授权时重新开启继承。
+        let session = SubagentModelPolicy {
+            include_session_model: true,
+            models: Vec::new(),
+        };
+        assert!(reloaded.subagent_model_policy(Some(&session)).0);
+    }
 }

@@ -1470,11 +1470,22 @@ fn subagent_definition_model_selection(
             "mode": "session",
         }));
     };
-    let available = provider_model_selector_is_available(
-        model_context.foundation.as_ref(),
+    // Profile metadata must report the same policy admission as actual creation.
+    // 定义元数据必须报告与实际创建相同的策略准入。
+    let runtime = model_context
+        .foundation
+        .public_ai_runtime()
+        .ok_or_else(|| String::from("The service has not installed the public AI runtime."))?;
+    let configuration = runtime.configuration_snapshot()?;
+    let calling_route = agent_orchestration_session_route(model_context, &configuration);
+    let granted = subagent_selector_is_granted(
+        model_context,
+        calling_route.as_ref(),
         &provider_id,
         &model_id,
-    )?;
+    );
+    let available =
+        granted && runtime.model_is_available(&configuration, &provider_id, &model_id)?;
     Ok(json!({
         "mode": "fixed",
         "provider_id": provider_id,
@@ -1483,8 +1494,10 @@ fn subagent_definition_model_selection(
         "available": available,
         "unavailable_reason": if available {
             Value::Null
+        } else if !granted {
+            Value::String(String::from("This fixed model is not permitted by the subagent model policy. Choose a permitted explicit model or ask the user to update the policy."))
         } else {
-            Value::String(String::from("The configured fixed model is not present in the current in-memory public AI catalogs; spawn_agent will fall back to the session model when no explicit model is provided."))
+            Value::String(String::from("The configured fixed model is unavailable. Without an explicit model, the calling model can be inherited only if permitted by the subagent policy. Choose an available permitted selector from the models list."))
         },
     }))
 }
@@ -1521,10 +1534,20 @@ pub(super) fn agent_orchestration_info_models(
     let session_route = agent_orchestration_session_route(model_context, &configuration);
     let fixed_selector =
         agent_fixed_model.map(|(provider_id, model_id)| format!("{provider_id}/{model_id}"));
-    // The session model is always granted; the allowlist adds models with the user's notes.
-    // 会话模型始终获准；白名单在其之外追加带用户备注的模型。
+    // Only explicitly enabled inheritance adds the calling model to the granted rows.
+    // 只有显式开启继承时才把调用模型加入授权行。
     let mut wanted: Vec<(String, String, String, bool)> = Vec::new();
-    if let Some((provider_id, model_id, _)) = session_route {
+    if model_context
+        .config
+        .subagent_model_policy(
+            model_context
+                .request_template
+                .subagent_model_policy
+                .as_ref(),
+        )
+        .0
+        && let Some((provider_id, model_id, _)) = session_route
+    {
         wanted.push((provider_id, model_id, String::new(), true));
     }
     for grant in effective_subagent_model_grants(model_context) {
@@ -1607,6 +1630,16 @@ fn agent_orchestration_session_model(
     else {
         return Ok(None);
     };
+    // Excluded calling models must not leak back into the model-selection section.
+    // 被排除的调用模型不得重新进入模型选择区块。
+    if !subagent_selector_is_granted(
+        model_context,
+        Some(&(provider_id.clone(), model_id.clone(), connection_id.clone())),
+        &provider_id,
+        &model_id,
+    ) {
+        return Ok(None);
+    }
     let available = runtime.model_is_available(&configuration, &provider_id, &model_id)?;
     Ok(Some(json!({
         "selector": format!("{provider_id}/{model_id}"),

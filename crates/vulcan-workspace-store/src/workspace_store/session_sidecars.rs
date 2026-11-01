@@ -73,12 +73,90 @@ pub fn save_session_subagent_models<T: Serialize>(
     locator: &SessionV1StorageLocator,
     document: Option<&T>,
 ) -> Result<(), String> {
+    // Serialize explicit saves with automatic policy upgrades on the same stable lock.
+    // 通过同一稳定锁串行显式保存与自动策略升级。
+    let _lock = subagent_policy_lock(locator)?;
     save_sidecar(
         locator,
         SESSION_SUBAGENT_MODELS_FILE,
         "session subagent models",
         document,
     )
+}
+
+/// Locks subagent policy publication across readers, explicit writers and processes.
+/// 跨读取者、显式写入者和进程锁定子代理策略发布。
+/// `locator` identifies existing storage; the returned file releases the lock when dropped.
+/// `locator` 标识已有存储；返回文件在释放时解锁。
+fn subagent_policy_lock(locator: &SessionV1StorageLocator) -> Result<std::fs::File, String> {
+    // Keep the lock separate from the atomically replaced policy file.
+    // 锁与被原子替换的策略文件分离。
+    let path = locator
+        .session_directory()
+        .join("subagent-models.write.lock");
+    // A permanent lock file preserves OS-level ownership across atomic publication.
+    // 永久锁文件在原子发布期间保留操作系统级归属。
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(|error| format!("Open {}: {error}", path.display()))?;
+    file.lock()
+        .map_err(|error| format!("Lock {}: {error}", path.display()))?;
+    Ok(file)
+}
+
+/// Reads a policy with a typed, caller-owned version upgrade and preserves exact original bytes.
+/// 使用调用方拥有的强类型版本升级读取策略，并保留精确原字节。
+/// `decode` returns the validated document and its previous version only when conversion is required.
+/// `decode` 返回已校验文档，仅需要转换时同时返回旧版本。
+/// Returns absence, the current document, or an explicit error without replacing invalid input.
+/// 返回缺失、当前文档或明确错误，不替换无效输入。
+pub fn load_session_subagent_models_with_upgrade<T: Serialize>(
+    locator: &SessionV1StorageLocator,
+    decode: impl FnOnce(&[u8]) -> Result<(T, Option<u32>), String>,
+) -> Result<Option<T>, String> {
+    // Lock before reading so an explicit save cannot be overwritten by an older upgrade candidate.
+    // 读取前加锁，避免显式保存被更早的升级候选覆盖。
+    let _lock = subagent_policy_lock(locator)?;
+    // The policy path is shared with explicit saves and deletes.
+    // 策略路径与显式保存和删除共用。
+    let path = locator
+        .session_directory()
+        .join(SESSION_SUBAGENT_MODELS_FILE);
+    // Preserve absence separately from corruption or I/O failures.
+    // 区分缺失与损坏或输入输出失败。
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("Read {}: {error}", path.display())),
+    };
+    // Validation completes before any backup or policy mutation.
+    // 所有校验在备份和策略修改之前完成。
+    let (document, previous_version) = decode(&bytes)?;
+    if let Some(version) = previous_version {
+        // Never replace a conflicting backup from an earlier upgrade attempt.
+        // 绝不替换与先前升级尝试冲突的备份。
+        let backup = path.with_file_name(format!("subagent-models.v{version}.backup.json"));
+        match std::fs::read(&backup) {
+            Ok(existing) if existing == bytes => {}
+            Ok(_) => return Err(format!("Conflicting policy backup: {}", backup.display())),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                super::session_v1::atomic_io::write_file_atomic(
+                    &backup,
+                    &bytes,
+                    "subagent policy backup",
+                )
+                .map_err(|error| error.to_string())?;
+            }
+            Err(error) => return Err(format!("Read {}: {error}", backup.display())),
+        }
+        write_json_document(&path, &document, "session subagent models")
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(Some(document))
 }
 
 /// Loads the session review prompt document, or `None` when the session follows the system
@@ -108,6 +186,85 @@ pub fn save_session_review_prompt<T: Serialize>(
 mod tests {
     use super::*;
     use crate::workspace_store::session_v1_store::create_session_v1_storage_fixture;
+
+    /// Converts a synthetic v1 policy to v2; returns current bytes unchanged on later reads.
+    /// 将合成 v1 策略转换为 v2；后续读取保持当前数据。
+    fn upgrade_fixture(bytes: &[u8]) -> Result<(serde_json::Value, Option<u32>), String> {
+        // The typed service decoder is tested separately; this fixture tests storage transactions.
+        // 强类型服务解码器另有测试；此夹具测试存储事务。
+        let mut policy: serde_json::Value =
+            serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
+        match policy["version"].as_u64() {
+            Some(1) => {
+                policy["version"] = 2.into();
+                policy["includeSessionModel"] = true.into();
+                Ok((policy, Some(1)))
+            }
+            Some(2) => Ok((policy, None)),
+            _ => Err(String::from("Unsupported policy version")),
+        }
+    }
+
+    /// Concurrent first reads preserve one original backup, while failed publication remains retryable.
+    /// 并发首次读取保留同一原始备份，发布失败后仍可重试。
+    /// Uses isolated session storage and thread-local atomic-write fault injection.
+    /// 使用隔离会话存储和线程局部原子写故障注入。
+    #[test]
+    fn subagent_policy_upgrade_is_atomic_and_serialized() {
+        // Isolated files exercise production publication without touching user sessions.
+        // 隔离文件验证生产发布，不接触用户会话。
+        let temporary = tempfile::tempdir().unwrap();
+        let locator =
+            create_session_v1_storage_fixture(temporary.path(), "policy-upgrade", 1).unwrap();
+        let path = locator
+            .session_directory()
+            .join(SESSION_SUBAGENT_MODELS_FILE);
+        let backup = locator
+            .session_directory()
+            .join("subagent-models.v1.backup.json");
+        let original = b"{\n  \"version\":1, \"models\":[]\n}";
+        std::fs::write(&path, original).unwrap();
+        super::super::session_v1::atomic_io::test_hooks::fail_next_artifact(
+            super::super::session_v1::atomic_io::WriteStage::WriteAll,
+            "session subagent models",
+        );
+        assert!(load_session_subagent_models_with_upgrade(&locator, upgrade_fixture).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(std::fs::read(&backup).unwrap(), original);
+        std::thread::scope(|scope| {
+            // Every reader must observe the same upgraded policy after the stable publication lock.
+            // 每个读取者通过稳定发布锁后都必须看到同一升级策略。
+            let readers = (0..4)
+                .map(|_| {
+                    scope.spawn(|| {
+                        load_session_subagent_models_with_upgrade(&locator, upgrade_fixture)
+                            .unwrap()
+                            .unwrap()
+                    })
+                })
+                .collect::<Vec<_>>();
+            for reader in readers {
+                assert_eq!(reader.join().unwrap()["includeSessionModel"], true);
+            }
+        });
+        assert_eq!(std::fs::read(&backup).unwrap(), original);
+        // Explicit saves after upgrade retain their false flag and cannot trigger another migration.
+        // 升级后的显式保存保留 false 开关，不能再次触发迁移。
+        let disabled = serde_json::json!({"version":2,"models":[],"includeSessionModel":false});
+        save_session_subagent_models(&locator, Some(&disabled)).unwrap();
+        assert_eq!(
+            load_session_subagent_models_with_upgrade(&locator, upgrade_fixture).unwrap(),
+            Some(disabled)
+        );
+        assert_eq!(std::fs::read(&backup).unwrap(), original);
+        // A conflicting prior backup must stop before replacing either document.
+        // 冲突的既有备份必须在替换任何文档之前停止。
+        std::fs::write(&path, b"{\"version\":1,\"models\":[1]}").unwrap();
+        let before = std::fs::read(&path).unwrap();
+        assert!(load_session_subagent_models_with_upgrade(&locator, upgrade_fixture).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(std::fs::read(&backup).unwrap(), original);
+    }
 
     /// An absent file follows the system default; a saved document reloads and removal restores
     /// absence, independently for each sidecar.

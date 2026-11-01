@@ -83,7 +83,8 @@ pub use session_index_v1::SESSION_ASSISTANT_NAME_MAX_CHARS;
 pub(crate) use session_index_v1::SESSION_INDEX_V1_SCHEMA_SQL;
 pub use session_index_v1::{record_session_request_v1, set_project_session_order_v1};
 pub use session_sidecars::{
-    load_session_review_prompt, load_session_subagent_models, save_session_review_prompt,
+    load_session_review_prompt, load_session_subagent_models,
+    load_session_subagent_models_with_upgrade, save_session_review_prompt,
     save_session_subagent_models,
 };
 pub use session_usage::{load_session_lifetime_usage, save_session_lifetime_usage};

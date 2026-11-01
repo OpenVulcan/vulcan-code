@@ -28,11 +28,11 @@ pub fn load_subagent_models() -> ServiceCall {
 /// `models` 为完整的 `[{ providerId, modelId, note }]` 清单。
 /// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
 /// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
-pub fn save_subagent_models(models: Value) -> ServiceCall {
+pub fn save_subagent_models(models: Value, include_session_model: Value) -> ServiceCall {
     ServiceCall::mutate(
         "save_subagent_models",
         "service_save_subagent_models",
-        json!({ "request": { "models": models } }),
+        json!({ "request": { "models": models, "includeSessionModel": include_session_model } }),
         SUBAGENT_MODELS,
     )
 }
@@ -58,11 +58,15 @@ pub fn load_session_subagent_models(session_id: &str) -> ServiceCall {
 /// `models` 为会话完整清单；为 `Value::Null` 时跟随系统清单。
 /// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
 /// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
-pub fn save_session_subagent_models(session_id: &str, models: Value) -> ServiceCall {
+pub fn save_session_subagent_models(
+    session_id: &str,
+    models: Value,
+    include_session_model: Value,
+) -> ServiceCall {
     ServiceCall::mutate(
         "save_session_subagent_models",
         "service_save_session_subagent_models",
-        json!({ "request": { "sessionId": session_id, "models": models } }),
+        json!({ "request": { "sessionId": session_id, "models": models, "includeSessionModel": include_session_model } }),
         &[Slot::SessionSubagentModels],
     )
 }

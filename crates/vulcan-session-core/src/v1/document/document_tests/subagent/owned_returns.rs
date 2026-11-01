@@ -4,6 +4,8 @@
 use super::*;
 use crate::v1::collaboration::*;
 
+mod overlap;
+
 /// A stopped parent accepts new input after its late child return, including after cold reconstruction.
 /// 停止的父会话在迟到子回流后可接纳新输入，包括冷重建之后。
 /// Returns domain errors; pending child ownership must remain intact until the genuine result arrives.

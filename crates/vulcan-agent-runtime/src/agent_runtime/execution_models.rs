@@ -260,7 +260,7 @@ pub struct ExecutionPreparationRequest {
     pub connection_id_override: Option<String>,
     /// Session-level subagent model allowlist; `None` follows the system default list.
     /// 会话级子代理模型白名单；`None` 表示跟随系统默认清单。
-    pub subagent_model_grants: Option<Vec<crate::provider_config::SubagentModelGrant>>,
+    pub subagent_model_policy: Option<crate::provider_config::SubagentModelPolicy>,
     /// Persisted non-secret identity expected for this session's provider-route lease.
     /// 当前会话供应商路由租约预期的持久化非秘密身份。
     pub provider_route_lease_identity:

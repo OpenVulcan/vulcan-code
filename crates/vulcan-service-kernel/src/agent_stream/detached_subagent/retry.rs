@@ -159,7 +159,7 @@ pub(crate) async fn drive<S>(
                 // Each retry re-enters the production idempotent publication and continuation path.
                 // 每次重试重新进入生产幂等发布与续跑路径。
                 let result = if terminal.startup_aborted {
-                    startup_abort::handle_startup_abort(app, state, runtime, parent_id, task_id, execution_id, child, startup_owner, &terminal.event)
+                    queued_admission::settle_startup_abort(app, state, runtime, parent_id, task_id, execution_id, child, startup_owner, &terminal.event).await
                 } else {
                     // Continuation preparation carries a large future; keep it off the listener's stack frame.
                     // 续跑准备携带较大 Future；将其移出监听器栈帧。

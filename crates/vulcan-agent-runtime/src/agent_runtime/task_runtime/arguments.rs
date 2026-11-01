@@ -473,19 +473,41 @@ pub(super) fn effective_subagent_model_grants(
     context: &TaskExecutionRuntimeContext,
 ) -> &[crate::provider_config::SubagentModelGrant] {
     context
-        .request_template
-        .subagent_model_grants
-        .as_deref()
-        .unwrap_or(&context.config.subagent_models)
+        .config
+        .subagent_model_policy(context.request_template.subagent_model_policy.as_ref())
+        .1
 }
 
-/// Rejects a new spawn whose explicit model is neither the session model nor on the allowlist.
-/// 拒绝显式模型既不是会话模型、也不在白名单中的新派生。
+/// Checks one resolved selector against the complete policy and exact calling route.
+/// 按完整策略与精确调用路由检查一个已解析选择器。
+/// Returns authorization only; callers separately validate runtime availability.
+/// 仅返回授权结果；调用方单独校验运行时可用性。
+pub(super) fn subagent_selector_is_granted(
+    context: &TaskExecutionRuntimeContext,
+    calling_route: Option<&(String, String, Option<String>)>,
+    provider_id: &str,
+    model_id: &str,
+) -> bool {
+    // Resolve both policy fields together so a session override never borrows system grants.
+    // 同时解析两个策略字段，避免会话覆盖借用系统授权。
+    let (include, grants) = context
+        .config
+        .subagent_model_policy(context.request_template.subagent_model_policy.as_ref());
+    (include
+        && calling_route
+            .is_some_and(|(provider, model, _)| provider == provider_id && model == model_id))
+        || grants
+            .iter()
+            .any(|grant| grant.provider_id == provider_id && grant.model_id == model_id)
+}
+
+/// Rejects a new spawn whose resolved or inherited model is not granted by the policy.
+/// 拒绝已解析或继承模型未被策略授权的新派生。
 ///
 /// # Parameters
 /// 参数
-/// `context` carries the session route and allowlist; `provider_model` is the spawn's explicit model.
-/// `context` 携带会话路由与白名单；`provider_model` 是派生的显式模型。
+/// `context` carries the session route and policy; `provider_model` is the resolved child model, or empty for inheritance.
+/// `context` 携带会话路由与策略；`provider_model` 是已解析子模型，为空时表示继承。
 ///
 /// # Returns
 /// 返回值
@@ -495,11 +517,6 @@ pub(super) fn validate_spawn_model_is_granted(
     context: &TaskExecutionRuntimeContext,
     provider_model: &ProviderModelSnapshot,
 ) -> Result<(), String> {
-    let Some((provider_id, model_id)) =
-        provider_model_selector_from_snapshot(provider_model, &context.config)
-    else {
-        return Ok(());
-    };
     let runtime = context
         .foundation
         .public_ai_runtime()
@@ -507,20 +524,23 @@ pub(super) fn validate_spawn_model_is_granted(
     let configuration = runtime.configuration_snapshot()?;
     let session_route =
         super::invocation_methods::agent_orchestration_session_route(context, &configuration);
-    let is_session_model =
-        session_route
-            .as_ref()
-            .is_some_and(|(session_provider, session_model, _)| {
-                *session_provider == provider_id && *session_model == model_id
-            });
-    let granted = effective_subagent_model_grants(context)
-        .iter()
-        .any(|grant| grant.provider_id == provider_id && grant.model_id == model_id);
-    if is_session_model || granted {
+    // Resolve omitted models to the exact calling route, then apply the same authorization.
+    // 将省略的模型解析为精确调用路由，再应用相同授权。
+    let (provider_id, model_id) =
+        provider_model_selector_from_snapshot(provider_model, &context.config)
+            .or_else(|| {
+                session_route
+                    .as_ref()
+                    .map(|(provider, model, _)| (provider.clone(), model.clone()))
+            })
+            .ok_or_else(|| {
+                String::from("No calling session model is available for subagent inheritance.")
+            })?;
+    if subagent_selector_is_granted(context, session_route.as_ref(), &provider_id, &model_id) {
         return Ok(());
     }
     Err(format!(
-        "model `{provider_id}/{model_id}` is not enabled for subagents in this session. Subagents may only run the session model and the models the user added to the subagent model allowlist. Do not retry with this model: tell the user that `{provider_id}/{model_id}` must first be added to the subagent model allowlist (system settings or this session's subagent model setting), or omit `model` to run the child on the session model."
+        "model `{provider_id}/{model_id}` is not enabled for subagents in this session. Select an available model from agent_orchestration_info, or ask the user to enable this model in subagent settings. The calling session model is allowed only when its inclusion option is enabled or it is explicitly listed."
     ))
 }
 

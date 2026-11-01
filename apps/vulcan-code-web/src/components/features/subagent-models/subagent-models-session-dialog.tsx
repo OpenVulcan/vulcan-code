@@ -36,6 +36,9 @@ export default function SubagentModelsSessionDialog(props: SubagentModelsSession
   const directory = useSubagentModelDirectory(props.providers);
   const [snapshot, setSnapshot] = React.useState<SessionSubagentModelsSnapshot | null>(null);
   const [models, setModels] = React.useState<SubagentModelEntry[]>([]);
+  // Keep the inclusion draft paired with its list until the whole policy is saved.
+  // 在完整策略保存之前，包含草稿始终与对应清单配对。
+  const [includeSessionModel, setIncludeSessionModel] = React.useState(false);
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
   const load = React.useCallback(async () => {
@@ -44,6 +47,7 @@ export default function SubagentModelsSessionDialog(props: SubagentModelsSession
       const loaded = await loadSessionSubagentModels(props.conversationId);
       setSnapshot(loaded);
       setModels(loaded.models ?? loaded.systemModels);
+      setIncludeSessionModel(loaded.includeSessionModel ?? loaded.systemIncludeSessionModel);
     } catch (error) {
       setLoadError(errorMessage(error));
     }
@@ -52,7 +56,7 @@ export default function SubagentModelsSessionDialog(props: SubagentModelsSession
   const save = async (next: SubagentModelEntry[] | null) => {
     setSaving(true);
     try {
-      await saveSessionSubagentModels(props.conversationId, next === null ? null : trimmedSubagentModels(next));
+      await saveSessionSubagentModels(props.conversationId, next === null ? null : trimmedSubagentModels(next), next === null ? null : includeSessionModel);
       toast.success(t(next === null ? "subagentModels.session.restored" : "subagentModels.saved"));
       props.onClose();
     } catch (error) {
@@ -64,7 +68,7 @@ export default function SubagentModelsSessionDialog(props: SubagentModelsSession
   const following = snapshot !== null && snapshot.models === null;
   // A following session can always be saved, since saving gives it its own list; a custom one only when changed.
   // 跟随系统的会话总可保存，因为保存会赋予其自有清单；自定义会话只在有改动时可保存。
-  const changed = snapshot !== null && (following || !sameSubagentModels(models, snapshot.models ?? []));
+  const changed = snapshot !== null && (following || includeSessionModel !== snapshot.includeSessionModel || !sameSubagentModels(models, snapshot.models ?? []));
   const fits = snapshot === null || subagentModelNotesFit(models, snapshot.maxNoteChars);
   return (
     <Dialog open onOpenChange={(open) => { if (!open) props.onClose(); }}>
@@ -96,6 +100,7 @@ export default function SubagentModelsSessionDialog(props: SubagentModelsSession
               </div>
             ) : null}
             <SubagentModelEditor disabled={saving} maxModels={snapshot.maxModels} maxNoteChars={snapshot.maxNoteChars}
+              includeSessionModel={includeSessionModel} onIncludeSessionModelChange={setIncludeSessionModel}
               models={models} onChange={setModels} providers={props.providers} scope="session" sessionModelLabel={props.sessionModelLabel} />
           </>}
         </div>
