@@ -15,6 +15,20 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+/// Reads a saved choice, treating a value this build does not know (such as one renamed before
+/// release) as not chosen, so the user can choose again instead of the service failing to start.
+/// The file is not rewritten here; the next save writes the user's new choice.
+/// 读取已保存的选择；本版本不认识的值（例如发布前改名的值）视为未选择，使用户可以重新选择而不是
+/// 服务启动失败。此处不改写文件；下次保存时写入用户的新选择。
+fn lenient_choice<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| serde_json::from_value(value).ok()))
+}
+
 /// One registered local model package; the files stay where the user keeps them.
 /// 一条已登记的本机模型包；文件保留在用户存放的位置。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,13 +69,23 @@ pub struct RegisteredJudgeModel {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PersistedPermissionJudgeConfiguration {
-    /// Configured backend; absent until the user finishes setting one up.
-    /// 已配置的后端；用户完成设置前缺省。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Configured backend; absent until the user finishes setting one up. An unknown saved value
+    /// reads as not configured.
+    /// 已配置的后端；用户完成设置前缺省。无法识别的已保存值读取为未配置。
+    #[serde(
+        default,
+        deserialize_with = "lenient_choice",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub backend: Option<JudgeBackend>,
-    /// Device chosen by the user; absent means the recommended device at load time.
-    /// 用户选择的设备；缺省表示加载时使用推荐设备。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Device chosen by the user; absent, or an unknown saved value, means the recommended device
+    /// at load time.
+    /// 用户选择的设备；缺省或无法识别的已保存值表示加载时使用推荐设备。
+    #[serde(
+        default,
+        deserialize_with = "lenient_choice",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub device: Option<JudgeDevice>,
     /// CUDA library directory locked when the user chose CUDA.
     /// 用户选择 CUDA 时锁定的 CUDA 库目录。
@@ -323,6 +347,19 @@ mod tests {
         assert_eq!(json["activeModelId"], "a");
         let parsed: PersistedPermissionJudgeConfiguration = serde_json::from_value(json).unwrap();
         assert_eq!(parsed, settings);
+    }
+
+    #[test]
+    fn unknown_saved_choices_read_as_not_chosen() {
+        let json = serde_json::json!({
+            "backend": "retired-backend",
+            "device": "retired-device",
+            "activeModelId": "a",
+        });
+        let parsed: PersistedPermissionJudgeConfiguration = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed.backend, None);
+        assert_eq!(parsed.device, None);
+        assert_eq!(parsed.active_model_id.as_deref(), Some("a"));
     }
 
     #[test]
