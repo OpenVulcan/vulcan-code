@@ -16,6 +16,10 @@ const TOOL_RESULT_MEDIA_MARKER: &str = "$vulcan_tool_result_media";
 /// 与 MCP 传输边界一致的单张 MCP 图片载荷上限。
 const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
 
+/// Image MIME types admitted in tool-result media envelopes.
+/// 工具结果媒体 envelope 准入的图片 MIME 类型。
+const IMAGE_MIME_TYPES: &[&str] = &["image/png", "image/jpeg", "image/webp"];
+
 /// Holds one validated, ordered MCP tool-result media envelope.
 /// 保存一份经过校验且保留顺序的 MCP 工具结果媒体 envelope。
 #[derive(Debug, Clone, PartialEq)]
@@ -69,6 +73,92 @@ pub(crate) fn canonicalize_tool_model_output(value: Value) -> Result<Value, Stri
 
     let envelope = parse_unmarked_mcp_media_object(object)?;
     Ok(Value::String(serialize_media_envelope(&envelope)?))
+}
+
+/// Compresses image blocks of one unmarked tool `model_output` before canonicalization, as composer attachments are.
+/// 在规范化之前压缩一份未标记工具`model_output`中的图片块，与输入区附件一致。
+///
+/// Only the model-facing copy changes; the upstream tool and its protocol are untouched. Blocks that later
+/// validation rejects stay unchanged so their exact error survives, and each downscaled image is followed by a
+/// text block stating its original and delivered dimensions.
+/// 只改变面向模型的副本，不改动上游工具及其协议。后续校验会拒绝的块保持原样以保留精确错误；
+/// 每张缩小的图片后追加一个文本块，说明原始及交付尺寸。
+///
+/// # Returns
+/// # 返回值
+/// The output with compressed images, the original output when it has no image block, or a compression error.
+/// 返回图片已压缩的输出；无图片块时返回原输出；压缩失败返回错误。
+pub(crate) async fn compress_tool_result_images(mut model_output: Value) -> Result<Value, String> {
+    let Some(content) = model_output
+        .as_object_mut()
+        .and_then(|object| object.get_mut("content"))
+        .and_then(Value::as_array_mut)
+    else {
+        return Ok(model_output);
+    };
+    if !content.iter().any(is_image_block) {
+        return Ok(model_output);
+    }
+    let blocks = std::mem::take(content);
+    *content = tokio::task::spawn_blocking(move || compress_image_blocks(blocks))
+        .await
+        .map_err(|error| format!("tool result image compression worker failed: {error}"))??;
+    Ok(model_output)
+}
+
+/// Compresses each valid image in ordered `blocks`, returning the rewritten blocks or the first compression error.
+/// 压缩有序`blocks`中的每张有效图片，返回重写后的块或首个压缩错误。
+fn compress_image_blocks(blocks: Vec<Value>) -> Result<Vec<Value>, String> {
+    // Both projected protocols accept JPEG and PNG, and the original MIME is already registered.
+    // 两种投影协议均接受JPEG与PNG，原MIME也已注册。
+    let targets = crate::image_conversion::CompressionTargets {
+        original: true,
+        jpeg: true,
+        png: true,
+    };
+    let mut compressed = Vec::with_capacity(blocks.len());
+    for block in blocks {
+        let Some((bytes, mime)) = compressible_image(&block) else {
+            compressed.push(block);
+            continue;
+        };
+        let Some(image) = crate::image_conversion::compress_image_bytes(&bytes, mime, targets)
+            .map_err(|error| format!("Image compression of {mime} failed: {error}"))?
+        else {
+            compressed.push(block);
+            continue;
+        };
+        compressed.push(json!({
+            "type": "image",
+            "data": base64::engine::general_purpose::STANDARD.encode(&image.bytes),
+            "mimeType": image.mime,
+        }));
+        if image.dimensions != image.source_dimensions {
+            let ((from_width, from_height), (width, height)) =
+                (image.source_dimensions, image.dimensions);
+            compressed.push(json!({
+                "type": "text",
+                "text": format!("Image downscaled from {from_width}x{from_height} to {width}x{height} pixels before delivery; scale coordinates accordingly."),
+            }));
+        }
+    }
+    Ok(compressed)
+}
+
+/// Returns decoded bytes and MIME of an image `block` that validation would accept, or none for anything else.
+/// 返回校验会接受的图片`block`的解码字节及MIME；其他情况返回空。
+fn compressible_image(block: &Value) -> Option<(Vec<u8>, &str)> {
+    if !is_image_block(block) {
+        return None;
+    }
+    let mime = block.get("mimeType")?.as_str()?;
+    if !IMAGE_MIME_TYPES.contains(&mime) {
+        return None;
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(block.get("data")?.as_str()?)
+        .ok()?;
+    (!bytes.is_empty() && bytes.len() <= MAX_IMAGE_BYTES).then_some((bytes, mime))
 }
 
 /// Appends a model-facing notice while preserving ordered native media and original business data.
@@ -427,7 +517,7 @@ fn append_structured_content_text(
 /// Validates one image MIME/data pair with the same strict byte limit as the MCP boundary.
 /// 使用与 MCP 边界一致的严格字节上限校验一组图片 MIME/数据。
 fn validate_image_content(data: &str, mime_type: &str) -> Result<(), String> {
-    if !matches!(mime_type, "image/png" | "image/jpeg" | "image/webp") {
+    if !IMAGE_MIME_TYPES.contains(&mime_type) {
         return Err(String::from(
             "MCP image content uses an unsupported MIME type.",
         ));
@@ -492,6 +582,64 @@ mod tests {
         let result =
             append_tool_result_notice(Value::String(literal.into()), "Completed.").unwrap();
         assert_eq!(result.as_str().unwrap(), format!("{literal}\n\nCompleted."));
+    }
+
+    /// Proves oversized images are downscaled with a dimension notice while small and invalid ones stay unchanged.
+    /// 证明超大图片被缩小并附尺寸说明，而小图与无效图保持不变。
+    #[tokio::test]
+    async fn tool_result_images_are_downscaled_before_canonicalization() {
+        let mut wide = Vec::new();
+        // Deterministic noise keeps PNG larger than its downscaled JPEG, so the derivative replaces it.
+        // 确定性噪声使PNG大于其缩小后的JPEG，从而由派生产物替换。
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(
+            crate::image_conversion::COMPRESSION_MAX_EDGE_PX * 2,
+            4,
+            |x, y| {
+                let noise = (x.wrapping_mul(2_654_435_761) ^ y.wrapping_mul(40_503)).to_le_bytes();
+                image::Rgb([noise[0], noise[1], noise[2]])
+            },
+        ))
+        .write_to(
+            &mut std::io::Cursor::new(&mut wide),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+        let wide = base64::engine::general_purpose::STANDARD.encode(wide);
+        let output = compress_tool_result_images(json!({
+            "content": [
+                {"type": "image", "data": wide, "mimeType": "image/png"},
+                {"type": "image", "data": "not-base64=", "mimeType": "image/png"},
+                {"type": "text", "text": "after"}
+            ]
+        }))
+        .await
+        .unwrap();
+        let content = output["content"].as_array().unwrap();
+        assert_eq!(content.len(), 4);
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(content[0]["data"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(
+            image::load_from_memory(&bytes).unwrap().width(),
+            crate::image_conversion::COMPRESSION_MAX_EDGE_PX
+        );
+        assert_eq!(content[1]["type"], "text");
+        assert_eq!(
+            content[2],
+            json!({"type": "image", "data": "not-base64=", "mimeType": "image/png"})
+        );
+        assert_eq!(content[3], json!({"type": "text", "text": "after"}));
+        // The rewritten blocks still pass the strict envelope validation.
+        // 重写后的块仍通过严格封套校验。
+        let mut valid = output.clone();
+        valid["content"].as_array_mut().unwrap().remove(2);
+        assert!(canonicalize_tool_model_output(valid).is_ok());
+
+        let small = mcp_media_result();
+        assert_eq!(
+            compress_tool_result_images(small.clone()).await.unwrap(),
+            small
+        );
     }
 
     /// Builds one small MCP result containing ordered text, image, and structured content.

@@ -206,8 +206,47 @@ async fn native_media_image_conversion_delivers_png_and_reports_decode_errors() 
     let error = tool::read_media(runtime, selection, None, None, "s", json!({"path":path}))
         .await
         .unwrap_err();
-    assert!(error.contains("Image conversion from image/tiff to image/png failed:"));
     assert!(error.contains("No content was attached"));
+}
+
+/// An oversized native image is downscaled to the shared edge bound before it is attached.
+/// 超大的原生图片在附加前缩小到共享边长上限。
+#[tokio::test]
+async fn native_media_image_read_downscales_oversized_images() {
+    let (runtime, _, selection) = fixture(vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("wide.png");
+    image::RgbImage::from_fn(
+        crate::image_conversion::COMPRESSION_MAX_EDGE_PX * 2,
+        8,
+        |x, y| image::Rgb([x as u8, y as u8, (x ^ y) as u8]),
+    )
+    .save(&path)
+    .unwrap();
+    let original = std::fs::read(&path).unwrap();
+    let result = tool::read_media(runtime, selection, None, None, "s", json!({"path":path}))
+        .await
+        .unwrap();
+    let envelope = parse_envelope(result.model_output.as_str().unwrap())
+        .unwrap()
+        .unwrap();
+    let url = envelope.resource.url.unwrap();
+    let (mime, data) = url
+        .strip_prefix("data:")
+        .and_then(|url| url.split_once(";base64,"))
+        .unwrap();
+    assert_eq!(envelope.resource.media_type.as_deref(), Some(mime));
+    let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data).unwrap();
+    assert_eq!(envelope.byte_len, bytes.len() as u64);
+    let (width, height) = image::load_from_memory(&bytes)
+        .unwrap()
+        .into_rgb8()
+        .dimensions();
+    assert_eq!(
+        (width, height),
+        (crate::image_conversion::COMPRESSION_MAX_EDGE_PX, 4)
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), original);
 }
 
 /// Confirms native modalities hide both kinds of configured external backend before validating missing routes.

@@ -1210,7 +1210,7 @@ impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
             controller_tool_call_id: request.tool_call_id.clone(),
             provider_tool_call_id: Some(request.tool_call_id.clone()),
         };
-        let result = match self
+        let mut result = match self
             .invoke_definition(
                 definition,
                 request.arguments.clone(),
@@ -1229,6 +1229,24 @@ impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
                 ));
             }
         };
+        // Image blocks are compressed off the async workers before the synchronous canonicalization.
+        // 图片块在同步规范化之前于异步工作线程之外压缩。
+        result.model_output =
+            match crate::agent_runtime::tool_result_media::compress_tool_result_images(
+                std::mem::take(&mut result.model_output),
+            )
+            .await
+            {
+                Ok(model_output) => model_output,
+                Err(message) => {
+                    return self.redact_sensitive_tool_result(
+                        build_tool_failure_invocation_result(
+                            request,
+                            format!("Tool result image compression failed: {message}"),
+                        ),
+                    );
+                }
+            };
 
         self.redact_sensitive_tool_result(canonicalize_tool_invocation_result(request, result))
     }

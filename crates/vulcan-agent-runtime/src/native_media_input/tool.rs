@@ -76,6 +76,9 @@ fn media_type_guidance(mimes: &[&str]) -> String {
         }
     }
     lines.push(image_conversion::guidance(mimes));
+    if mimes.iter().any(|mime| mime.starts_with("image/")) {
+        lines.push(format!("Image compression: images whose longest edge exceeds {} px are downscaled to it, and large images may be re-encoded as JPEG (opaque) or PNG (transparent); the result states any conversion and the original and delivered dimensions.", image_conversion::COMPRESSION_MAX_EDGE_PX));
+    }
     lines.join("\n")
 }
 
@@ -221,30 +224,56 @@ pub(super) async fn read_media(
             .to_string();
         (local, name, source_mime.to_string(), metadata.len(), None)
     };
-    // Retain converted files through inline reading or physical upload; the original source remains unchanged.
-    // 保留转换文件直至内联读取或真实上传结束；原始来源保持不变。
-    let converted_file;
-    // The receipt discloses local conversion without changing durable envelope schema.
-    // 回执明确本地转换，不改变持久信封结构。
+    // Retain compressed files through inline reading or physical upload; the original source remains unchanged.
+    // 保留压缩文件直至内联读取或真实上传结束；原始来源保持不变。
+    let compressed_file;
+    // The receipt discloses local conversion or downscaling without changing durable envelope schema.
+    // 回执明确本地转换或缩小，不改变持久信封结构。
     let mut conversion_notice = String::new();
-    if !supported_mimes(&selection).contains(&mime.as_str())
-        && let Some(codec) = image_conversion::codec_for_mime(&mime)
-        && supports_mime(&selection, ResourceKind::Image, "image/png")
+    let native = supported_mimes(&selection).contains(&mime.as_str());
+    let targets = image_conversion::CompressionTargets {
+        original: native,
+        jpeg: supports_mime(&selection, ResourceKind::Image, "image/jpeg"),
+        png: supports_mime(&selection, ResourceKind::Image, "image/png"),
+    };
+    // Images are compressed like composer attachments, converting unsupported formats in the same pass;
+    // formats with no converter or output target fall through to the explicit MIME rejection below.
+    // 图片按输入区附件方式压缩，并在同一步转换不受支持的格式；无转换器或无输出目标的格式交给下方明确拒绝。
+    if mime.starts_with("image/")
+        && (native
+            || (image_conversion::codec_for_mime(&mime).is_some() && (targets.jpeg || targets.png)))
+        && let Some(image) = image_conversion::compress_file(
+            &local_path,
+            byte_len,
+            expected_identity.as_ref(),
+            &mime,
+            targets,
+        )
+        .await
+        .map_err(|error| {
+            format!("Image compression of {mime} failed: {error}. No content was attached.")
+        })?
     {
-        converted_file = image_conversion::convert(&local_path, byte_len, expected_identity.as_ref(), codec)
-            .await.map_err(|error| format!("Image conversion from {mime} to image/png failed: {error}. No content was attached."))?;
-        conversion_notice = format!(" Automatically converted from {mime} to image/png.");
-        local_path = converted_file.path().to_path_buf();
+        if image.mime != mime {
+            conversion_notice = format!(" Automatically converted from {mime} to {}.", image.mime);
+        }
+        if image.dimensions != image.source_dimensions {
+            let ((from_width, from_height), (width, height)) =
+                (image.source_dimensions, image.dimensions);
+            conversion_notice.push_str(&format!(
+                " Downscaled from {from_width}x{from_height} to {width}x{height} pixels; scale coordinates accordingly."
+            ));
+        } else if image.mime == mime {
+            conversion_notice = format!(" Re-encoded from {byte_len} bytes to reduce size.");
+        }
+        compressed_file = image.write_temp_file()?;
+        local_path = compressed_file.path().to_path_buf();
         file_name = PathBuf::from(&file_name)
-            .with_extension("png")
+            .with_extension(image.extension)
             .to_string_lossy()
             .into_owned();
-        mime = "image/png".into();
-        byte_len = converted_file
-            .as_file()
-            .metadata()
-            .map_err(|error| error.to_string())?
-            .len();
+        mime = image.mime.into();
+        byte_len = image.bytes.len() as u64;
         expected_identity = None;
     }
     // MIME is authoritative for managed entities whose physical path may have no extension.

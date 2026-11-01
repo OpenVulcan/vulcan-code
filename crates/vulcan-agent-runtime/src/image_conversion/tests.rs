@@ -358,3 +358,50 @@ async fn compression_downscales_once_and_keeps_transparency() {
         .unwrap();
     assert_eq!(converted.attachment.mime_type, "image/jpeg");
 }
+
+/// In-memory compression reports both dimensions and keeps accepted natives it cannot decode.
+/// 内存压缩报告前后尺寸，并保留无法解码的已接受原生图片。
+#[test]
+fn byte_compression_reports_dimensions_and_keeps_undecodable_natives() {
+    let all = CompressionTargets {
+        original: true,
+        jpeg: true,
+        png: true,
+    };
+    // Deterministic noise keeps PNG larger than its downscaled JPEG, so the derivative replaces it.
+    // 确定性噪声使PNG大于其缩小后的JPEG，从而由派生产物替换。
+    let mut source = Vec::new();
+    DynamicImage::ImageRgb8(image::RgbImage::from_fn(
+        COMPRESSION_MAX_EDGE_PX * 2,
+        6,
+        |x, y| {
+            let noise = (x.wrapping_mul(2_654_435_761) ^ y.wrapping_mul(40_503)).to_le_bytes();
+            image::Rgb([noise[0], noise[1], noise[2]])
+        },
+    ))
+    .write_to(&mut Cursor::new(&mut source), ImageFormat::Png)
+    .unwrap();
+    let compressed = compress_image_bytes(&source, "image/png", all)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        compressed.source_dimensions,
+        (COMPRESSION_MAX_EDGE_PX * 2, 6)
+    );
+    assert_eq!(compressed.dimensions, (COMPRESSION_MAX_EDGE_PX, 3));
+    assert_eq!(
+        image::load_from_memory(&compressed.bytes).unwrap().width(),
+        COMPRESSION_MAX_EDGE_PX
+    );
+
+    assert!(
+        compress_image_bytes(b"abc", "image/png", all)
+            .unwrap()
+            .is_none()
+    );
+    let rejected = CompressionTargets {
+        original: false,
+        ..all
+    };
+    assert!(compress_image_bytes(b"abc", "image/png", rejected).is_err());
+}
