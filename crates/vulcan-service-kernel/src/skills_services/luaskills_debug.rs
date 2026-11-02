@@ -146,10 +146,22 @@ fn status_view(
         install_root: status.install_root.as_deref().map(path_text),
         version: status.installed.as_ref().map(|item| item.version.clone()),
         compatible,
-        executable: status.installed.as_ref().map(|item| path_text(&item.executable)),
-        package_root: status.installed.as_ref().map(|item| path_text(&item.package_root)),
-        runtime_root: status.installed.as_ref().map(|item| path_text(&item.runtime_root)),
-        runtime_ready: status.installed.as_ref().is_some_and(|item| item.runtime_ready),
+        executable: status
+            .installed
+            .as_ref()
+            .map(|item| path_text(&item.executable)),
+        package_root: status
+            .installed
+            .as_ref()
+            .map(|item| path_text(&item.package_root)),
+        runtime_root: status
+            .installed
+            .as_ref()
+            .map(|item| path_text(&item.runtime_root)),
+        runtime_ready: status
+            .installed
+            .as_ref()
+            .is_some_and(|item| item.runtime_ready),
         task,
     }
 }

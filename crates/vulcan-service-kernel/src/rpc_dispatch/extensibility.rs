@@ -305,9 +305,7 @@ pub(super) async fn dispatch(
             let correlation_id: String = rpc_required_param(params, "correlationId")?;
             rpc_json_result(luaskill_operation_progress(correlation_id.as_str()))
         }
-        "service_luaskills_debug_status" => {
-            rpc_json_result(service_luaskills_debug_status().await)
-        }
+        "service_luaskills_debug_status" => rpc_json_result(service_luaskills_debug_status().await),
         "service_start_luaskills_debug_install" => {
             rpc_json_result(service_start_luaskills_debug_install(state))
         }

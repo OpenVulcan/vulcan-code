@@ -781,7 +781,7 @@ fn secret_fixed_headers_are_rejected_at_service_save_boundary() {
             provider_id: None,
             display_name: String::from("Unsafe Header"),
             base_url: String::from("https://unsafe.example.test/v1"),
-                websocket_policy: ResponsesWebsocketPolicy::Disabled,
+            websocket_policy: ResponsesWebsocketPolicy::Disabled,
             authentication: CustomProviderAuthentication::BearerAuthorization,
             credential_display_name: Some(String::from("Account")),
             secret: Some(String::from("secret")),

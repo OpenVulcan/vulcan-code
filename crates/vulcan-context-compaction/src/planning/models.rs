@@ -265,4 +265,3 @@ pub struct CompactionResult {
     /// rewrite 必须精确应用的冻结尾部选择。
     pub tail_selection: CompactionTailSelectionReport,
 }
-

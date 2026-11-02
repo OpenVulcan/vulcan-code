@@ -16,7 +16,6 @@ impl CompactionResult {
     pub fn from_model_summary(plan: &CompactionPlan, summary_text: impl Into<String>) -> Self {
         build_compaction_result_from_summary_text(plan, summary_text.into())
     }
-
 }
 
 /// Builds the internal user prompt used to ask the model for one compact continuation summary.

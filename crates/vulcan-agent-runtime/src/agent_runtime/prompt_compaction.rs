@@ -32,8 +32,8 @@ use std::{
 use vulcan_context::{ContextCompactionPolicy, SessionConversationState};
 use vulcan_context_compaction::{
     CompactionInputBudget, CompactionInputPruneMode, CompactionInputPruneReport, CompactionPlan,
-    CompactionResult, ContextCompactionRequestPromptMode,
-    build_compaction_request_prompt_for_mode, extract_compaction_model_summary,
+    CompactionResult, ContextCompactionRequestPromptMode, build_compaction_request_prompt_for_mode,
+    extract_compaction_model_summary,
 };
 use vulcan_core::types::ProviderUsageSnapshot;
 use vulcan_prompt_composer::PromptOutputStyleSnapshot;

@@ -54,7 +54,6 @@ impl CompactionCommitInput {
             locked_baseline,
         }
     }
-
 }
 
 /// Validates exact final locked segments without deriving kind, target, identity, or order.

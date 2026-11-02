@@ -2103,7 +2103,11 @@ impl SessionHandle {
                         .map(|node| {
                             // A committed summary owns a protocol-neutral continuation control.
                             // 已提交的摘要拥有与协议无关的续接控制消息。
-                            (node.retained_from_seq, Some(node.api_stats_seq), Some(node.clone()))
+                            (
+                                node.retained_from_seq,
+                                Some(node.api_stats_seq),
+                                Some(node.clone()),
+                            )
                         })
                         .ok_or_else(|| {
                             SessionRuntimeError::ProviderProjectionInvariant(String::from(

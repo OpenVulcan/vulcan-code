@@ -1203,10 +1203,13 @@ async fn summary_reasoning_delta_marks_the_event_display_only() {
 
     let reasoning = handle
         .read(|document| {
-            document.events().iter().find_map(|event| match &event.event {
-                EventBody::AssistantReasoning(reasoning) => Some(reasoning.clone()),
-                _ => None,
-            })
+            document
+                .events()
+                .iter()
+                .find_map(|event| match &event.event {
+                    EventBody::AssistantReasoning(reasoning) => Some(reasoning.clone()),
+                    _ => None,
+                })
         })
         .expect("read reasoning")
         .expect("reasoning event");

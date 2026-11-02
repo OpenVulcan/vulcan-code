@@ -123,11 +123,9 @@ impl Server {
         let address = listener.local_addr().unwrap();
         // Keep certificate verification active for the declared workspace and standard API host.
         // 为声明的工作空间和标准 API 主机保持证书校验。
-        let parameters = rcgen::CertificateParams::new(vec![
-            HOST.into(),
-            "dashscope.aliyuncs.com".into(),
-        ])
-        .unwrap();
+        let parameters =
+            rcgen::CertificateParams::new(vec![HOST.into(), "dashscope.aliyuncs.com".into()])
+                .unwrap();
         // Generate isolated ephemeral server credentials.
         // 生成隔离的临时服务器凭据。
         let key = rcgen::KeyPair::generate().unwrap();

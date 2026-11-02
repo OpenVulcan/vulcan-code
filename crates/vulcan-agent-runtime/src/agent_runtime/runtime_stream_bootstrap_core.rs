@@ -279,38 +279,39 @@ pub(crate) async fn seed_runtime_request_snapshot(
             let budget_started_at = after_precheck_unix_millis();
             // Native media counts as attachments, never as Base64 prompt characters, exactly like the transport guard.
             // 原生媒体按附件计数，绝不按 Base64 提示词字符计数，与传输守卫完全一致。
-            preparation.context_budget =
-                match crate::native_media_input::budget_snapshot(&request_snapshot) {
-                    Ok(media_snapshot) => Some(build_request_context_compaction_budget_snapshot(
-                        RequestContextCompactionBudgetSnapshotInput {
-                            provider_id: &preparation.model_blueprint.provider_id,
-                            model_id: &preparation.model_blueprint.model_id,
-                            protocol_profile_id: &preparation.model_blueprint.protocol_profile_id,
-                            capabilities: &preparation.model_blueprint.public_capabilities,
-                            reasoning: &preparation.model_blueprint.reasoning,
-                            request_snapshot: media_snapshot.as_ref(),
-                            compaction_policy: preparation.context_compaction_policy,
-                            context_budget_override: preparation.context_budget_override,
-                            observed_usage: None,
-                            accounted_input_tokens: None,
-                            accounting_source:
-                                crate::context_budget::ContextBudgetAccountingSource::CharacterEstimate,
-                            accounting_warning_code: Some(
-                                "provider_usage_baseline_pending_request_assembly",
-                            ),
-                            provider_anchor_call_id: None,
-                            prefill_input_tokens: request.context_window_prefill_input_tokens,
-                        },
-                    )),
-                    // The transport guard rejects the same malformed media before dispatch.
-                    // 传输守卫会在分派前拒绝同一份畸形媒体。
-                    Err(error) => {
-                        warnings.push(format!(
-                            "Failed to project native media for the context budget: {error}"
-                        ));
-                        None
-                    }
-                };
+            preparation.context_budget = match crate::native_media_input::budget_snapshot(
+                &request_snapshot,
+            ) {
+                Ok(media_snapshot) => Some(build_request_context_compaction_budget_snapshot(
+                    RequestContextCompactionBudgetSnapshotInput {
+                        provider_id: &preparation.model_blueprint.provider_id,
+                        model_id: &preparation.model_blueprint.model_id,
+                        protocol_profile_id: &preparation.model_blueprint.protocol_profile_id,
+                        capabilities: &preparation.model_blueprint.public_capabilities,
+                        reasoning: &preparation.model_blueprint.reasoning,
+                        request_snapshot: media_snapshot.as_ref(),
+                        compaction_policy: preparation.context_compaction_policy,
+                        context_budget_override: preparation.context_budget_override,
+                        observed_usage: None,
+                        accounted_input_tokens: None,
+                        accounting_source:
+                            crate::context_budget::ContextBudgetAccountingSource::CharacterEstimate,
+                        accounting_warning_code: Some(
+                            "provider_usage_baseline_pending_request_assembly",
+                        ),
+                        provider_anchor_call_id: None,
+                        prefill_input_tokens: request.context_window_prefill_input_tokens,
+                    },
+                )),
+                // The transport guard rejects the same malformed media before dispatch.
+                // 传输守卫会在分派前拒绝同一份畸形媒体。
+                Err(error) => {
+                    warnings.push(format!(
+                        "Failed to project native media for the context budget: {error}"
+                    ));
+                    None
+                }
+            };
             after_precheck_trace(
                 "after_precheck_29b_context_budget_ready",
                 format!(

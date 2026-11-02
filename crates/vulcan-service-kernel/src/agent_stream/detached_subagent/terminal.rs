@@ -113,7 +113,8 @@ pub(super) async fn handle_parent_event(
         let mailbox = terminal_mailbox
             .as_ref()
             .ok_or("Child terminal feedback is missing.")?;
-        let completed = mailbox.kind == vulcan_session_boundary::SubagentMailboxEventKind::Completed
+        let completed = mailbox.kind
+            == vulcan_session_boundary::SubagentMailboxEventKind::Completed
             || non_success::child_durably_completed(child_handle, task_id, execution_id)?;
         if completed && mailbox.kind != vulcan_session_boundary::SubagentMailboxEventKind::Completed
         {
@@ -127,39 +128,37 @@ pub(super) async fn handle_parent_event(
                 "Child feedback is non-success after a durable completed turn; returning the durable result"
             );
         }
-        Some(
-            if completed {
-                append_exact_v1_subagent_return(
-                    state,
-                    parent_session_id,
-                    task_id,
-                    execution_id,
-                    child_handle,
-                    completed_assistant,
-                )
-            } else {
-                // Resolve the already registered canonical parent without a service lock across I/O.
-                // 解析已经登记的规范父句柄，不让服务锁跨越 I/O。
-                let registry = state
-                    .lock()
-                    .map_err(|error| error.to_string())?
-                    .session_runtime_registry
-                    .clone();
-                // Keep the registered owner alive through its durable result commit.
-                // 在可靠结果提交期间保持已登记所有者存活。
-                let parent = registry
-                    .get(parent_session_id)
-                    .map_err(|error| error.to_string())?;
-                non_success::publish_non_success(
-                    &parent,
-                    child_handle,
-                    execution_id,
-                    mailbox,
-                    current_v1_unix_millis()?,
-                )
-                .map(|()| None)
-            },
-        )
+        Some(if completed {
+            append_exact_v1_subagent_return(
+                state,
+                parent_session_id,
+                task_id,
+                execution_id,
+                child_handle,
+                completed_assistant,
+            )
+        } else {
+            // Resolve the already registered canonical parent without a service lock across I/O.
+            // 解析已经登记的规范父句柄，不让服务锁跨越 I/O。
+            let registry = state
+                .lock()
+                .map_err(|error| error.to_string())?
+                .session_runtime_registry
+                .clone();
+            // Keep the registered owner alive through its durable result commit.
+            // 在可靠结果提交期间保持已登记所有者存活。
+            let parent = registry
+                .get(parent_session_id)
+                .map_err(|error| error.to_string())?;
+            non_success::publish_non_success(
+                &parent,
+                child_handle,
+                execution_id,
+                mailbox,
+                current_v1_unix_millis()?,
+            )
+            .map(|()| None)
+        })
     } else {
         None
     };

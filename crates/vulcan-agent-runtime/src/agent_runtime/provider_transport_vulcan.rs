@@ -31,9 +31,7 @@ pub(super) mod streaming;
 mod trace;
 
 pub(super) use accumulator::public_usage_to_core;
-pub(crate) use request::{
-    VulcanPublicContractRequest, project_public_tool_definitions,
-};
+pub(crate) use request::{VulcanPublicContractRequest, project_public_tool_definitions};
 use trace::ProviderApiTraceAttemptState;
 
 /// Vulcan-owned default output budget used when the provider reports no independent output limit.

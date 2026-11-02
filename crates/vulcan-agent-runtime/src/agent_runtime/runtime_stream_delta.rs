@@ -1467,7 +1467,9 @@ mod tests {
         let summary_events = process_provider_stream_delta(
             session_id,
             &mut state,
-            Ok(ProviderStreamDelta::SummaryThinking(String::from("summary"))),
+            Ok(ProviderStreamDelta::SummaryThinking(String::from(
+                "summary",
+            ))),
         );
         assert!(matches!(
             summary_events.as_slice(),

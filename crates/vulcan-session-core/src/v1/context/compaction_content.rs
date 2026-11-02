@@ -15,5 +15,4 @@ pub enum CompactionContent {
         /// 下一上下文代次使用的未修改语义文本。
         text: String,
     },
-
 }

@@ -474,9 +474,8 @@ async fn run_child_maintenance(standalone: bool) {
     assert_eq!(
         node.content,
         vulcan_session_core::v1::context::CompactionContent::Summary {
-            text:
-                "Review complete. Preserve child ownership and chronological injected messages."
-                    .to_string()
+            text: "Review complete. Preserve child ownership and chronological injected messages."
+                .to_string()
         }
     );
     assert_eq!(reloaded.runtime_lock.current_compaction_id, Some(node_id));

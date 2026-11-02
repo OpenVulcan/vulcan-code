@@ -10,8 +10,8 @@ use vulcan_provider_adapters::{
     CustomProviderAuthentication, CustomProviderDefinition, CustomProviderModelDiscoveryMode,
     CustomProviderProtocol, InferenceRouteBinding, InferenceRouteConfiguration,
     PersistedAiConfiguration, ProviderDescriptor, ProviderKind, ProviderRegistry, PublicAiRuntime,
-    ResponsesRouteFeatures, ResponsesWebsocketPolicy,
-    StagedConnectionCatalogObservation, validate_custom_provider_identifier,
+    ResponsesRouteFeatures, ResponsesWebsocketPolicy, StagedConnectionCatalogObservation,
+    validate_custom_provider_identifier,
 };
 use vulcan_service_api::ServiceEventEmitter;
 

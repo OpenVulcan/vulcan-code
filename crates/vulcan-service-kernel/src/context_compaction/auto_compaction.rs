@@ -560,9 +560,10 @@ pub(crate) fn webui_context_compaction_plan_from_v1(
                 "V1 compaction retained message `{retained_message_id}` has no durable source seq"
             )
         })?;
-    let full_context_state =
-        vulcan_context::conversation_state_from_session_messages(&full_session_messages)
-            .map_err(|error| format!("failed to build V1 compaction conversation state: {error}"))?;
+    let full_context_state = vulcan_context::conversation_state_from_session_messages(
+        &full_session_messages,
+    )
+    .map_err(|error| format!("failed to build V1 compaction conversation state: {error}"))?;
     // Capture the existing catalog owner without retaining the service mutex during resource preparation.
     // 捕获既有目录所有者，不在资源准备期间持有服务互斥锁。
     let resource_registry = Arc::clone(

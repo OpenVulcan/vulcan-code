@@ -1633,12 +1633,14 @@ fn run_service_bootstrap(
     ));
     // The `luaskills_debug` tool installs through the same task as the LuaSkills settings page.
     // `luaskills_debug` 工具与 LuaSkills 设置页经同一任务安装。
-    agent_runtime.task_runtime.set_luaskills_debug_host(Arc::new(
-        crate::skills_services::KernelLuaSkillsDebugHost::new(
-            permission_registry,
-            Arc::downgrade(state),
-        ),
-    ));
+    agent_runtime
+        .task_runtime
+        .set_luaskills_debug_host(Arc::new(
+            crate::skills_services::KernelLuaSkillsDebugHost::new(
+                permission_registry,
+                Arc::downgrade(state),
+            ),
+        ));
     logs.push(String::from(
         "[webui-service] agent runtime bridge ready: provider/LuaSkills/MCP handles are mounted",
     ));

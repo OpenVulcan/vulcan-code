@@ -131,7 +131,6 @@ impl CompactionSourceWindow {
         Ok(())
     }
 
-
     /// Borrows the selected local minimal state, returning None for other explicitly selected modes.
     /// 借用选定本地最小状态；其他明确选择的模式返回 None。
     fn pruned_state(&self) -> Option<&SessionConversationState> {
@@ -361,7 +360,6 @@ impl ProviderV1StreamSink {
             .select(source, mode)
             .map_err(|error| error.to_string())
     }
-
 }
 
 /// Exercises real pruning and physical rebuild using the caller's complete route/budget fixture; returns any production error.

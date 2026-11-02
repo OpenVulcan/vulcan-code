@@ -154,9 +154,8 @@ struct PublishedProviderApiTrace {
 /// 从内置清单构建一条精确 Codex Responses 路由，并重定向到 `base_url`。
 fn trace_fixture_route(base_url: &str) -> ProviderExecutionRoute {
     let directory = vulcan_runtime_assets::resolve_bundled_provider_manifests_directory();
-    let text =
-        std::fs::read_to_string(directory.join(format!("{TRACE_FIXTURE_PROVIDER_ID}.json")))
-            .expect("the bundled openai manifest must exist");
+    let text = std::fs::read_to_string(directory.join(format!("{TRACE_FIXTURE_PROVIDER_ID}.json")))
+        .expect("the bundled openai manifest must exist");
     let manifest = vulcan_provider_adapters::provider_manifest::compile_manifest_text(
         text.as_str(),
         vulcan_provider_adapters::provider_manifest::ManifestOwnership::System,

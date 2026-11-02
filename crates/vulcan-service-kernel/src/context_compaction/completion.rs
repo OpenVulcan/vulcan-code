@@ -41,9 +41,7 @@ pub(crate) fn verified_compaction_commit_input(
     let assistant = durability
         .completed_assistant_text
         .as_ref()
-        .ok_or_else(|| {
-            String::from("Local compaction has no durable assistant receipt.")
-        })?;
+        .ok_or_else(|| String::from("Local compaction has no durable assistant receipt."))?;
     if assistant.api_call_id != terminal.value.api_call_id
         || assistant.seq.value() >= terminal.value.stats_seq.value()
     {
@@ -53,8 +51,7 @@ pub(crate) fn verified_compaction_commit_input(
     }
     // summary retains exact persisted model text after removing only the known display wrapper.
     // summary 仅移除已知展示包装后保留精确持久模型正文。
-    let summary =
-        verified_compaction_summary_body(&result.summary_record.body, &assistant.text)?;
+    let summary = verified_compaction_summary_body(&result.summary_record.body, &assistant.text)?;
     Ok(CompactionCommitInput::new(
         assistant.api_call_id,
         assistant.seq,
