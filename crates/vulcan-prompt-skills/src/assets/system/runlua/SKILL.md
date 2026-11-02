@@ -22,10 +22,10 @@ The tool id is `skill`, singular. It reads prompt Skills. Do not call `luaskill`
 
 ## Runtime Versions
 
-- LuaSkills: `0.5.7`.
-- mlua: `0.12.0-rc.1`.
+- LuaSkills: `0.8.1`.
+- mlua: `0.12.0`.
 - LuaJIT: `LuaJIT 2.1.ROLLING`.
-- LuaJIT source: `luajit-src 210.7.1+18b087c`.
+- LuaJIT source: `luajit-src 210.7.2+b925b3e`.
 - Language baseline: Lua 5.1 VM with Lua 5.2 compatibility enabled.
 
 Do not assume Lua 5.3 or Lua 5.4-only APIs such as the standard `utf8` library.
@@ -54,11 +54,13 @@ local ok, module_or_error = pcall(require, "module_name")
 return { available = ok, detail = tostring(module_or_error) }
 ```
 
-## SQLite and LanceDB
+## SQLite
 
-Anonymous RunLua execution does not receive a Skill-owned SQLite or LanceDB binding. Direct `vulcan.sqlite` and `vulcan.lancedb` operations are unavailable in this anonymous context.
+Anonymous RunLua execution does not receive a Skill-owned SQLite binding. Direct `vulcan.sqlite` operations are unavailable in this anonymous context.
 
-Use a registered LuaSkills entry whose manifest explicitly enables SQLite or LanceDB, and invoke that entry through `vulcan.call`. Do not attempt to bypass database ownership by guessing filesystem database paths.
+Use a registered LuaSkills entry whose manifest explicitly enables SQLite, and invoke that entry through `vulcan.call`. Do not attempt to bypass database ownership by guessing filesystem database paths.
+
+LuaSkills provides no LanceDB or vector-database capability: `vulcan.lancedb` does not exist in any context.
 
 ## One-Shot `runlua`
 

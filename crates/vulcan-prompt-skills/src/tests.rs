@@ -42,7 +42,45 @@ fn packaged_runlua_skill_requires_native_skill_lookup() {
     assert!(content.contains("{\"name\":\"runlua\"}"));
     assert!(content.contains("The tool id is `skill`, singular."));
     assert!(content.contains("Do not call `luaskill`"));
-    assert!(content.contains("LuaSkills: `0.5.7`"));
+    // The stated runtime versions must follow the workspace lock, so an upgrade cannot leave them stale.
+    // 指引写明的运行时版本必须跟随工作区锁文件，升级时不会遗留旧版本。
+    let lock =
+        fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.lock"))
+            .expect("workspace Cargo.lock should be readable");
+    for (package, stated) in [
+        ("luaskills", "LuaSkills: `{}`"),
+        ("mlua", "mlua: `{}`"),
+        ("luajit-src", "luajit-src {}"),
+    ] {
+        let version = locked_version(&lock, package);
+        let stated = stated.replace("{}", version);
+        assert!(
+            content.contains(&stated),
+            "RunLua guide must state `{stated}` from Cargo.lock; update its Runtime Versions section"
+        );
+    }
+}
+
+/// Returns the single locked version of `package`, failing when the lock holds none or several.
+/// 返回 `package` 唯一的锁定版本；锁文件中没有或有多个版本时失败。
+fn locked_version<'a>(lock: &'a str, package: &str) -> &'a str {
+    let name_line = format!("name = \"{package}\"");
+    let versions: Vec<&str> = lock
+        .split("[[package]]")
+        .filter(|entry| entry.lines().any(|line| line.trim() == name_line))
+        .filter_map(|entry| {
+            entry
+                .lines()
+                .find_map(|line| line.trim().strip_prefix("version = \""))
+                .and_then(|rest| rest.strip_suffix('"'))
+        })
+        .collect();
+    assert_eq!(
+        versions.len(),
+        1,
+        "Cargo.lock should lock exactly one `{package}`: {versions:?}"
+    );
+    versions[0]
 }
 
 /// Verifies the packaged terminal skill states the complete current input, wait, and exit-code contract.

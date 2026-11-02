@@ -1,11 +1,11 @@
 //! Bounded host execution channel for synchronous LuaSkills database callbacks.
 //! 面向同步 LuaSkills 数据库回调的有界宿主执行通道。
 //!
-//! LuaSkills installs its SQLite and LanceDB providers as **synchronous** process-global callbacks
-//! (`Arc<dyn Fn(&RuntimeSqliteProviderRequest) -> Result<Value, String> + Send + Sync>` and its LanceDB
-//! counterpart), while every in-process database facility this host owns is asynchronous. Something has to
-//! run a future to completion on behalf of a callback that cannot await, which is what this channel does.
-//! LuaSkills 把它的 SQLite 与 LanceDB provider 安装为**同步**的进程级回调，而本宿主拥有的每个进程内数据库设施
+//! LuaSkills installs its SQLite provider as a **synchronous** process-global callback
+//! (`Arc<dyn Fn(&RuntimeSqliteProviderRequest) -> Result<Value, String> + Send + Sync>`), while every
+//! in-process database facility this host owns is asynchronous. Something has to run a future to completion
+//! on behalf of a callback that cannot await, which is what this channel does.
+//! LuaSkills 把它的 SQLite provider 安装为**同步**的进程级回调，而本宿主拥有的每个进程内数据库设施
 //! 都是异步的。必须有人替无法 await 的回调把 future 运行到完成，这正是本通道的职责。
 //!
 //! The calling-thread question was settled with evidence before this module was written, and the answer
@@ -151,10 +151,9 @@ struct HostExecutionChannelCounters {
 /// 为同步回调运行异步数据库工作的有界可关闭通道。
 ///
 /// The context is cloned into every job, so a channel is parameterised by whatever the callbacks need in
-/// order to reach their databases — for example an `Arc<LocalDatabaseRuntime>`, or a structure holding that
-/// plus a LanceDB engine.
+/// order to reach their databases — for example an `Arc<LocalDatabaseRuntime>`.
 /// 上下文会被克隆进每个作业，因此通道以其回调触达数据库所需之物为参数——例如
-/// `Arc<LocalDatabaseRuntime>`，或持有它并附加 LanceDB 引擎的结构。
+/// `Arc<LocalDatabaseRuntime>`。
 pub struct HostExecutionChannel<C> {
     context: C,
     /// The host runtime handle this channel drives futures on; it is cloned into every job.
@@ -291,10 +290,9 @@ where
     ///
     /// # Returns / 返回值
     /// Returns the job's value, or an explicit error when the channel is closed, saturated, the job panicked,
-    /// the job failed, or the call exceeded its timeout. The value is generic because the SQLite provider
-    /// returns JSON while the LanceDB provider returns metadata beside a byte payload.
-    /// 返回作业的值，或在通道已关闭、饱和、作业 panic、作业失败或调用超过其超时时返回明确错误。该值之所以泛型，
-    /// 是因为 SQLite provider 返回 JSON，而 LanceDB provider 返回元数据并附带字节载荷。
+    /// the job failed, or the call exceeded its timeout. The value is generic so each job keeps its own result type.
+    /// 返回作业的值，或在通道已关闭、饱和、作业 panic、作业失败或调用超过其超时时返回明确错误。该值为泛型，
+    /// 使每个作业保留自己的结果类型。
     ///
     /// The timeout bounds **this caller's wait**, not the job. A submitted job is never cancelled, which is
     /// deliberate — it is the same property `host_database_providers::shutdown` documents, where shutdown must not
