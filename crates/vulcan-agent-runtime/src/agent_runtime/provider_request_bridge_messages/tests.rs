@@ -955,24 +955,6 @@ fn user_message_with_attachments(
     }
 }
 
-/// Builds one host-managed MCP media result through the production envelope producer.
-/// 通过生产 envelope 生产者构建一份宿主管理的 MCP 媒体结果。
-fn matched_media_tool_result_text() -> String {
-    let canonical = crate::agent_runtime::tool_result_media::canonicalize_tool_model_output(
-        serde_json::json!({
-            "content": [
-                { "type": "text", "text": "screenshot captured" },
-                { "type": "image", "data": "aGVsbG8=", "mimeType": "image/png" }
-            ]
-        }),
-    )
-    .expect("valid MCP media result envelope");
-    canonical
-        .as_str()
-        .expect("a validated media result is persisted as a JSON string")
-        .to_string()
-}
-
 /// Returns the exact position of one projected message located by identity rather than by ordinal.
 /// 按身份而不是序号返回一条投影消息的精确位置。
 fn projected_position(projected: &[CoreConversationMessage], message_id: &str) -> usize {
@@ -1262,82 +1244,6 @@ fn provider_visible_history_degrades_tool_pair_split_by_media_and_keeps_media_na
     assert!(attachments.is_empty());
     assert!(text.contains("cannot be replayed"), "{text}");
     assert!(text.contains("file body"), "{text}");
-    validate_provider_visible_tool_topology(&projected).expect("valid provider topology");
-}
-
-/// Verifies a matched tool-result media envelope survives projection byte-for-byte for native transport projection.
-/// 验证已匹配的工具结果媒体 envelope 逐字节保留到原生传输投影。
-#[test]
-fn provider_visible_history_preserves_matched_tool_result_media_envelope() {
-    let media_envelope = matched_media_tool_result_text();
-    let messages = vec![
-        assistant_tool_batch(
-            "assistant-1",
-            vec![canonical_tool_call(
-                "local-1",
-                Some("provider-1"),
-                "screenshot",
-            )],
-        ),
-        tool_result_message("tool-result-1", Some("provider-1"), &media_envelope),
-    ];
-
-    let projected = core_messages_to_provider_visible_history_for_model(
-        &messages,
-        Some(vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID),
-        None,
-    )
-    .expect("a matched media tool result should project");
-
-    let CoreConversationPayload::ToolResult {
-        tool_call_id, text, ..
-    } = &projected[1].payload
-    else {
-        panic!("a matched media result must remain a native tool response");
-    };
-    assert_eq!(tool_call_id.as_deref(), Some("provider-1"));
-    assert_eq!(
-        text, &media_envelope,
-        "transport media projection requires the exact persisted envelope bytes"
-    );
-    validate_provider_visible_tool_topology(&projected).expect("valid provider topology");
-}
-
-/// Verifies an orphaned media tool result becomes explicit non-replayable history text without native structure.
-/// 验证孤立媒体工具结果会变成明确不可回放的历史文本，且不保留原生结构。
-#[test]
-fn provider_visible_history_orphan_media_result_becomes_labelled_plain_text() {
-    let media_envelope = matched_media_tool_result_text();
-    let messages = vec![tool_result_message(
-        "tool-result-orphan",
-        Some("compacted-away-call"),
-        &media_envelope,
-    )];
-
-    let projected = core_messages_to_provider_visible_history_for_model(
-        &messages,
-        Some(vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID),
-        None,
-    )
-    .expect("an orphan tool result must degrade instead of aborting");
-
-    assert_eq!(projected.len(), 1);
-    let CoreConversationPayload::UserText { text, attachments } = &projected[0].payload else {
-        panic!("an orphan tool result cannot stay a native tool response");
-    };
-    assert!(attachments.is_empty());
-    assert!(text.contains("cannot be replayed"), "{text}");
-    assert!(text.contains("compacted-away-call"), "{text}");
-    assert!(
-        text.contains("Treat the following as historical text only"),
-        "{text}"
-    );
-    assert!(
-        !projected
-            .iter()
-            .any(|message| matches!(message.payload, CoreConversationPayload::ToolResult { .. })),
-        "no unmatched native tool response may survive projection"
-    );
     validate_provider_visible_tool_topology(&projected).expect("valid provider topology");
 }
 

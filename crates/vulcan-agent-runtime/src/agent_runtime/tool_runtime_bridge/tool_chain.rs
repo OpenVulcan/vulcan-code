@@ -272,13 +272,7 @@ impl BridgeStepExecutor<'_> {
 /// Whether a structured tool output carries media blocks.
 /// 结构化工具输出是否携带媒体块。
 fn returns_media(model_output: &Value) -> bool {
-    model_output.is_object()
-        && matches!(
-            crate::agent_runtime::tool_result_media::canonicalize_tool_model_output(
-                model_output.clone()
-            ),
-            Ok(Value::String(_)) | Err(_)
-        )
+    crate::agent_runtime::tool_result_media::has_image_blocks(model_output)
 }
 
 /// Converts one canonical step result into the chain's step execution.

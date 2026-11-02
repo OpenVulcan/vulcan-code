@@ -1098,21 +1098,18 @@ pub fn canonicalize_tool_invocation_result(
     } else {
         match result.model_output {
             Value::String(text) => text,
-            other => {
-                match crate::agent_runtime::tool_result_media::canonicalize_tool_model_output(other)
-                {
-                    Ok(Value::String(text)) => text,
-                    Ok(value) => {
-                        serde_json::to_string(&value).unwrap_or_else(|_| value.to_string())
-                    }
-                    Err(message) => {
-                        return build_tool_failure_invocation_result(
-                            request,
-                            format!("Tool result media validation failed: {message}"),
-                        );
-                    }
-                }
+            // Images are saved before canonicalization; raw Base64 must never reach the model as text.
+            // 图片在规范化之前保存；原始 Base64 绝不能以文本形式进入模型。
+            other if crate::agent_runtime::tool_result_media::has_image_blocks(&other) => {
+                return build_tool_failure_invocation_result(
+                    request,
+                    format!(
+                        "Tool `{}` returned unsaved image blocks.",
+                        request.tool_name
+                    ),
+                );
             }
+            other => serde_json::to_string(&other).unwrap_or_else(|_| other.to_string()),
         }
     };
     CoreToolInvocationResult {
@@ -1270,24 +1267,44 @@ impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
                 ));
             }
         };
-        // Image blocks are compressed off the async workers before the synchronous canonicalization.
-        // 图片块在同步规范化之前于异步工作线程之外压缩。
-        result.model_output =
-            match crate::agent_runtime::tool_result_media::compress_tool_result_images(
+        // Image blocks become session-owned generated files; the model receives only their locators.
+        // 图片块成为会话自有的生成文件；模型只收到其定位符。
+        if crate::agent_runtime::tool_result_media::has_image_blocks(&result.model_output) {
+            if result.host_result.is_some() {
+                return self.redact_sensitive_tool_result(build_tool_failure_invocation_result(
+                    request,
+                    format!(
+                        "Tool `{}` returned images together with a host result; images can only be saved from a result without one.",
+                        request.tool_name
+                    ),
+                ));
+            }
+            match crate::agent_runtime::tool_result_media::save_tool_result_images(
                 std::mem::take(&mut result.model_output),
+                self.manager.workspace_root(),
+                &self.session_id.to_string(),
             )
             .await
             {
-                Ok(model_output) => model_output,
+                Ok((model_output, attachments)) => {
+                    result.model_output = model_output;
+                    result.host_result = Some(vulcan_tools_manager::VulcanToolHostResult {
+                        kind: String::from(
+                            crate::provider_tool_bridge::GENERATED_ATTACHMENTS_HOST_RESULT_KIND,
+                        ),
+                        payload: json!({ "outputs": attachments }),
+                    });
+                }
                 Err(message) => {
                     return self.redact_sensitive_tool_result(
                         build_tool_failure_invocation_result(
                             request,
-                            format!("Tool result image compression failed: {message}"),
+                            format!("Tool result images could not be saved: {message}"),
                         ),
                     );
                 }
-            };
+            }
+        }
 
         self.redact_sensitive_tool_result(canonicalize_tool_invocation_result(request, result))
     }

@@ -1780,7 +1780,7 @@ async fn stage_provider_resources(
     }
     .await;
     if let Err(error) = staging_result {
-        return Err(rollback_staged_provider_resources(
+        return Err(rollback_staged_resources(
             workspace_text.as_str(),
             host_resources.as_slice(),
             error,
@@ -1793,7 +1793,7 @@ async fn stage_provider_resources(
         session_id,
         host_resources.as_slice(),
     ) {
-        return Err(rollback_staged_provider_resources(
+        return Err(rollback_staged_resources(
             workspace_text.as_str(),
             host_resources.as_slice(),
             error,
@@ -1805,8 +1805,8 @@ async fn stage_provider_resources(
     })
 }
 
-/// Rolls back every uncommitted resource in one failed provider-output batch.
-/// 回滚一次失败供应商输出批次中的全部未提交资源。
+/// Rolls back every uncommitted resource in one failed provider-output or tool-image batch.
+/// 回滚一次失败供应商输出或工具图片批次中的全部未提交资源。
 ///
 /// # Parameters
 /// 参数
@@ -1819,7 +1819,7 @@ async fn stage_provider_resources(
 /// 返回值
 /// The primary failure, augmented with every rollback failure without hiding the original cause.
 /// 返回原始失败，并在不隐藏根因的前提下附加每项回滚失败。
-fn rollback_staged_provider_resources(
+pub(crate) fn rollback_staged_resources(
     workspace_path: &str,
     attachments: &[ConversationAttachment],
     primary_error: String,
@@ -1841,7 +1841,7 @@ fn rollback_staged_provider_resources(
         primary_error
     } else {
         format!(
-            "{primary_error} Provider resource batch rollback also failed: {}",
+            "{primary_error} Resource batch rollback also failed: {}",
             rollback_errors.join("; ")
         )
     }

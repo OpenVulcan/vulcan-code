@@ -621,6 +621,87 @@ fn managed_tool_runtime_bridge_executes_core_tool_request() {
     );
 }
 
+/// Verifies an image result is saved as a generated attachment and the model sees only its locator.
+/// 验证图片结果保存为生成附件，模型只看到其定位符。
+#[test]
+fn managed_tool_runtime_bridge_saves_result_images_as_generated_attachments() {
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgb8(image::RgbImage::new(4, 3))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .expect("test PNG should encode");
+    let data = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, png);
+    let workspace = tempfile::tempdir().expect("test workspace should be created");
+    let manager = VulcanToolsManager::new(vec![VulcanToolCandidate {
+        descriptor: VulcanToolDescriptor::new(
+            String::from("screenshot"),
+            String::from("screenshot"),
+            String::from("Screenshot tool"),
+            None,
+            VulcanToolOrigin::new(
+                VulcanToolSourceKind::Native,
+                "test",
+                String::from("screenshot"),
+            ),
+        ),
+        parameters_schema: json!({ "type": "object" }),
+        ai_visible: true,
+        plan_policy: VulcanPlanToolPolicy::Visible,
+        request_streaming: None,
+        invoke: Arc::new(move |_args, _context| {
+            let data = data.clone();
+            Box::pin(async move {
+                Ok(VulcanToolInvocationResult::from_model_output(json!({
+                    "content": [
+                        {"type": "text", "text": "captured"},
+                        {"type": "image", "data": data, "mimeType": "image/png"}
+                    ]
+                })))
+            })
+        }),
+    }])
+    .with_workspace_root(Some(workspace.path().to_path_buf()));
+    let definitions = manager.resolve_for_execution_mode("Build").definitions;
+    let runtime_bridge =
+        VulcanManagedToolRuntimeBridge::new(Arc::new(manager), &definitions, Uuid::nil(), "Build");
+    let request = ToolInvocationRequest {
+        request_stream_id: String::from("request-stream-shot"),
+        tool_call_id: String::from("call-shot"),
+        tool_name: String::from("screenshot"),
+        arguments: json!({}),
+        argument_parse_error: None,
+        raw_arguments: Default::default(),
+        user_request: Default::default(),
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime should build");
+    install_test_invocation_identity(&runtime_bridge, &request, 111, 112, 113);
+
+    let result = runtime
+        .block_on(runtime_bridge.execute_tool(&request))
+        .expect("image tool request should execute");
+
+    assert!(!result.is_error, "{}", result.model_output);
+    let attachments =
+        crate::agent_runtime::provider_v1_bridge::provider_v1_generated_attachments_from_tool_result(
+            &result,
+        )
+        .expect("saved images form a valid generated-attachment host result");
+    assert_eq!(attachments.len(), 1);
+    assert!(std::path::Path::new(&attachments[0].local_path).is_file());
+    let locator = format!(
+        "attachment://{}",
+        attachments[0]
+            .asset_id
+            .as_deref()
+            .expect("saved image has an asset id")
+    );
+    assert!(result.model_output.starts_with("captured"));
+    assert!(result.model_output.contains(locator.as_str()));
+    assert!(!result.model_output.contains("\"image\""));
+}
+
 /// Verifies parallel tool bodies receive their own exact Provider identity without cross-talk.
 /// 验证并行工具主体各自收到精确 Provider 身份且不会串线。
 #[test]

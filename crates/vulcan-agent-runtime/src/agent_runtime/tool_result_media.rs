@@ -1,184 +1,191 @@
-//! Strict MCP tool-result media normalization shared by execution and provider projection.
-//! 供执行层与 Provider 投影层共享的严格 MCP 工具结果媒体规范化逻辑。
+//! Saves MCP tool-result images as session-owned files and tells the model where they are.
+//! 将 MCP 工具结果图片保存为会话自有文件，并告知模型其位置。
 
+use crate::attachment_asset_index::retain_generated_attachments_for_session;
+use crate::attachment_assets::{attachment_descriptor_from_mime_type, stage_attachment_bytes};
 use base64::Engine;
-use serde_json::{Map, Value, json};
-
-/// Version marker for the durable tool-result media envelope.
-/// 可持久化工具结果媒体 envelope 的版本标记。
-pub(crate) const TOOL_RESULT_MEDIA_ENVELOPE_VERSION: u64 = 1;
-
-/// Marker field that distinguishes a media envelope from an ordinary tool JSON object.
-/// 区分媒体 envelope 与普通工具 JSON 对象的标记字段。
-const TOOL_RESULT_MEDIA_MARKER: &str = "$vulcan_tool_result_media";
+use serde_json::{Map, Value};
+use std::path::Path;
+use vulcan_core::types::ConversationAttachment;
 
 /// MCP image payload limit shared with the MCP transport boundary.
 /// 与 MCP 传输边界一致的单张 MCP 图片载荷上限。
 const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
 
-/// Image MIME types admitted in tool-result media envelopes.
-/// 工具结果媒体 envelope 准入的图片 MIME 类型。
+/// Image MIME types admitted in MCP tool results.
+/// MCP 工具结果准入的图片 MIME 类型。
 const IMAGE_MIME_TYPES: &[&str] = &["image/png", "image/jpeg", "image/webp"];
 
-/// Holds one validated, ordered MCP tool-result media envelope.
-/// 保存一份经过校验且保留顺序的 MCP 工具结果媒体 envelope。
-#[derive(Debug, Clone, PartialEq)]
-struct ToolResultMediaEnvelope {
-    /// Ordered text and image blocks returned by the MCP server.
-    /// MCP 服务端返回的有序文本与图片块。
-    content: Vec<ToolResultMediaBlock>,
-    /// Optional structured result returned beside the ordered content blocks.
-    /// 伴随有序内容块返回的可选结构化结果。
-    structured_content: Option<Value>,
-}
-
-/// Holds one validated content block from the MCP media envelope.
-/// 保存 MCP 媒体 envelope 中的一份经过校验的内容块。
-#[derive(Debug, Clone, PartialEq)]
+/// One validated content block of an MCP media result.
+/// MCP 媒体结果中的一份经过校验的内容块。
 enum ToolResultMediaBlock {
     /// One textual result block.
     /// 一份文本结果块。
     Text(String),
-    /// One Base64-encoded image result block with an exact registered MIME type.
-    /// 一份带有精确注册 MIME 类型的 Base64 图片结果块。
-    Image { data: String, mime_type: String },
+    /// One decoded image with its exact registered MIME type.
+    /// 一张带精确注册 MIME 类型的已解码图片。
+    Image { bytes: Vec<u8>, mime_type: String },
 }
 
-/// Converts one host-managed MCP media result into a durable, versioned model-output string.
-/// 将一份宿主管理的 MCP 媒体结果转换为可持久化且带版本的模型输出字符串。
+/// Returns whether a structured tool output carries MCP image blocks.
+/// 判断结构化工具输出是否携带 MCP 图片块。
+pub(crate) fn has_image_blocks(model_output: &Value) -> bool {
+    model_output
+        .get("content")
+        .and_then(Value::as_array)
+        .is_some_and(|content| content.iter().any(is_image_block))
+}
+
+/// Saves every image of one MCP media result and replaces it with a text notice naming the saved file.
+/// 保存一份 MCP 媒体结果中的每张图片，并以指明已保存文件的文本说明替换它。
 ///
-/// Ordinary tool values pass through unchanged. A value is treated as an MCP media envelope only
-/// when its content array contains an image block; malformed media is rejected explicitly.
-/// 普通工具值保持原样。只有内容数组包含图片块时才识别为 MCP 媒体 envelope；畸形媒体会明确拒绝。
+/// Images never enter the model input; the model reads one with `read_media` when it needs to see it.
+/// 图片从不进入模型输入；模型需要查看时通过 `read_media` 读取。
 ///
 /// # Parameters
 /// # 参数
-/// `value` is the model output returned by one host tool invocation.
-/// `value` 是一次宿主工具调用返回的模型输出。
+/// `model_output` is the unmarked tool output, `workspace_root` owns the managed attachment store,
+/// and `session_id` is the conversation that receives ownership of the saved images.
+/// `model_output` 是未标记的工具输出，`workspace_root` 持有托管附件存储，`session_id` 是获得已保存图片
+/// 所有权的会话。
 ///
 /// # Returns
 /// # 返回值
-/// The original value for ordinary results, or a marked JSON string for validated media results.
-/// 普通结果返回原值，经过校验的媒体结果返回带标记的 JSON 字符串。
-pub(crate) fn canonicalize_tool_model_output(value: Value) -> Result<Value, String> {
-    let Value::Object(object) = &value else {
-        return Ok(value);
-    };
-    let Some(content) = object.get("content").and_then(Value::as_array) else {
-        return Ok(value);
-    };
-    if !content.iter().any(is_image_block) {
-        return Ok(value);
+/// The output unchanged with no attachments when it has no image block; otherwise the readable text
+/// output and the saved attachments in content order, or the first validation or staging error.
+/// 无图片块时原样返回输出且无附件；否则返回可读文本输出及按内容顺序排列的已保存附件，或首个校验/暂存错误。
+pub(crate) async fn save_tool_result_images(
+    model_output: Value,
+    workspace_root: Option<&Path>,
+    session_id: &str,
+) -> Result<(Value, Vec<ConversationAttachment>), String> {
+    if !has_image_blocks(&model_output) {
+        return Ok((model_output, Vec::new()));
     }
-
-    let envelope = parse_unmarked_mcp_media_object(object)?;
-    Ok(Value::String(serialize_media_envelope(&envelope)?))
+    let Value::Object(object) = model_output else {
+        return Err(String::from("MCP media result must be an object."));
+    };
+    let (blocks, structured_content) = parse_mcp_media_object(object)?;
+    let workspace_root = workspace_root.ok_or_else(|| {
+        String::from("Saving tool result images requires an active workspace root.")
+    })?;
+    let workspace_text = vulcan_runtime_assets::native_host_path_text_from_path(workspace_root);
+    let session_id = session_id.to_owned();
+    tokio::task::spawn_blocking(move || {
+        save_blocks(
+            workspace_text.as_str(),
+            session_id.as_str(),
+            blocks,
+            structured_content,
+        )
+    })
+    .await
+    .map_err(|error| format!("Tool result image saving worker failed: {error}"))?
 }
 
-/// Compresses image blocks of one unmarked tool `model_output` before canonicalization, as composer attachments are.
-/// 在规范化之前压缩一份未标记工具`model_output`中的图片块，与输入区附件一致。
+/// Stages ordered image blocks, binds them to the session, and renders the model-facing text.
+/// 暂存有序图片块、将其绑定到会话，并渲染面向模型的文本。
 ///
-/// Only the model-facing copy changes; the upstream tool and its protocol are untouched. Blocks that later
-/// validation rejects stay unchanged so their exact error survives, and each downscaled image is followed by a
-/// text block stating its original and delivered dimensions.
-/// 只改变面向模型的副本，不改动上游工具及其协议。后续校验会拒绝的块保持原样以保留精确错误；
-/// 每张缩小的图片后追加一个文本块，说明原始及交付尺寸。
-///
-/// # Returns
-/// # 返回值
-/// The output with compressed images, the original output when it has no image block, or a compression error.
-/// 返回图片已压缩的输出；无图片块时返回原输出；压缩失败返回错误。
-pub(crate) async fn compress_tool_result_images(mut model_output: Value) -> Result<Value, String> {
-    let Some(content) = model_output
-        .as_object_mut()
-        .and_then(|object| object.get_mut("content"))
-        .and_then(Value::as_array_mut)
-    else {
-        return Ok(model_output);
-    };
-    if !content.iter().any(is_image_block) {
-        return Ok(model_output);
-    }
-    let blocks = std::mem::take(content);
-    *content = tokio::task::spawn_blocking(move || compress_image_blocks(blocks))
-        .await
-        .map_err(|error| format!("tool result image compression worker failed: {error}"))??;
-    Ok(model_output)
-}
-
-/// Compresses each valid image in ordered `blocks`, returning the rewritten blocks or the first compression error.
-/// 压缩有序`blocks`中的每张有效图片，返回重写后的块或首个压缩错误。
-fn compress_image_blocks(blocks: Vec<Value>) -> Result<Vec<Value>, String> {
-    // Both projected protocols accept JPEG and PNG, and the original MIME is already registered.
-    // 两种投影协议均接受JPEG与PNG，原MIME也已注册。
-    let targets = crate::image_conversion::CompressionTargets {
-        original: true,
-        jpeg: true,
-        png: true,
-    };
-    let mut compressed = Vec::with_capacity(blocks.len());
-    for block in blocks {
-        let Some((bytes, mime)) = compressible_image(&block) else {
-            compressed.push(block);
-            continue;
-        };
-        let Some(image) = crate::image_conversion::compress_image_bytes(&bytes, mime, targets)
-            .map_err(|error| format!("Image compression of {mime} failed: {error}"))?
-        else {
-            compressed.push(block);
-            continue;
-        };
-        compressed.push(json!({
-            "type": "image",
-            "data": base64::engine::general_purpose::STANDARD.encode(&image.bytes),
-            "mimeType": image.mime,
-        }));
-        if image.dimensions != image.source_dimensions {
-            let ((from_width, from_height), (width, height)) =
-                (image.source_dimensions, image.dimensions);
-            compressed.push(json!({
-                "type": "text",
-                "text": format!("Image downscaled from {from_width}x{from_height} to {width}x{height} pixels before delivery; scale coordinates accordingly."),
-            }));
+/// Returns the text output and saved attachments; any failure discards every staged image.
+/// 返回文本输出及已保存附件；任何失败都会丢弃全部已暂存图片。
+fn save_blocks(
+    workspace_path: &str,
+    session_id: &str,
+    blocks: Vec<ToolResultMediaBlock>,
+    structured_content: Option<Value>,
+) -> Result<(Value, Vec<ConversationAttachment>), String> {
+    let mut attachments = Vec::new();
+    let mut parts = Vec::with_capacity(blocks.len() + 1);
+    let saved: Result<(), String> = (|| {
+        for block in blocks {
+            match block {
+                ToolResultMediaBlock::Text(text) => parts.push(text),
+                ToolResultMediaBlock::Image { bytes, mime_type } => {
+                    let descriptor = attachment_descriptor_from_mime_type(mime_type.as_str())
+                        .ok_or_else(|| {
+                            format!("MCP image MIME type `{mime_type}` is unsupported.")
+                        })?;
+                    let file_name = format!(
+                        "tool-image-{}.{}",
+                        attachments.len() + 1,
+                        descriptor.extension
+                    );
+                    let attachment = stage_attachment_bytes(
+                        workspace_path,
+                        &descriptor,
+                        file_name.as_str(),
+                        None,
+                        bytes.as_slice(),
+                    )?;
+                    parts.push(saved_image_notice(&attachment, bytes.as_slice())?);
+                    attachments.push(attachment);
+                }
+            }
         }
+        retain_generated_attachments_for_session(workspace_path, session_id, &attachments)
+    })();
+    if let Err(error) = saved {
+        return Err(crate::provider_tool_bridge::rollback_staged_resources(
+            workspace_path,
+            attachments.as_slice(),
+            error,
+        ));
     }
-    Ok(compressed)
+    if let Some(structured_content) = structured_content {
+        let source = serde_json::to_string_pretty(&structured_content).map_err(|error| {
+            format!("Tool result structured content could not be encoded: {error}")
+        })?;
+        parts.push(format!(
+            "## Structured result\n\n{}",
+            vulcan_tools_manager::result_markdown::fenced_code(&source)
+        ));
+    }
+    Ok((Value::String(parts.join("\n\n")), attachments))
 }
 
-/// Returns decoded bytes and MIME of an image `block` that validation would accept, or none for anything else.
-/// 返回校验会接受的图片`block`的解码字节及MIME；其他情况返回空。
-fn compressible_image(block: &Value) -> Option<(Vec<u8>, &str)> {
-    if !is_image_block(block) {
-        return None;
-    }
-    let mime = block.get("mimeType")?.as_str()?;
-    if !IMAGE_MIME_TYPES.contains(&mime) {
-        return None;
-    }
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(block.get("data")?.as_str()?)
-        .ok()?;
-    (!bytes.is_empty() && bytes.len() <= MAX_IMAGE_BYTES).then_some((bytes, mime))
+/// Describes one saved image to the model without including its bytes.
+/// 向模型描述一张已保存图片，不包含其字节。
+///
+/// Returns the notice naming the locator, file, MIME type, pixel size, and byte size.
+/// 返回指明定位符、文件、MIME 类型、像素尺寸与字节大小的说明。
+fn saved_image_notice(attachment: &ConversationAttachment, bytes: &[u8]) -> Result<String, String> {
+    let asset_id = attachment.asset_id.as_deref().ok_or_else(|| {
+        String::from("Saved tool result image is missing its managed asset identifier.")
+    })?;
+    // An unreadable header only omits the pixel size; the bytes were already validated as Base64.
+    // 无法读取文件头只会省略像素尺寸；字节已通过 Base64 校验。
+    let size = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()
+        .and_then(|reader| reader.into_dimensions().ok())
+        .map(|(width, height)| format!(", {width}x{height} px"))
+        .unwrap_or_default();
+    Ok(format!(
+        "[Image saved as `attachment://{asset_id}` ({}{size}, {} bytes; file `{}`). It is shown to the user but not in your input; call `read_media` with this locator to view it.]",
+        attachment.mime_type,
+        bytes.len(),
+        attachment.local_path
+    ))
 }
 
-/// Appends a model-facing notice while preserving ordered native media and original business data.
-/// 追加面向模型的提示，同时保留有序原生媒体和原始业务数据。
-/// Accepts an upstream result and notice; returns readable text or a validated media envelope.
-/// 接收上游结果和提示，返回可读正文或已校验媒体封套。
+/// Appends a model-facing notice while keeping image blocks for the saving step that follows.
+/// 追加面向模型的提示，同时为随后的保存步骤保留图片块。
+/// Accepts an upstream result and notice; returns readable text or the media object with the notice appended.
+/// 接收上游结果和提示，返回可读正文或已追加提示的媒体对象。
 pub(crate) fn append_tool_result_notice(value: Value, notice: &str) -> Result<Value, String> {
-    let normalized = canonicalize_tool_model_output(value)?;
-    match normalized {
+    match value {
         Value::String(text) => {
             if let Some(updated) = crate::native_media_input::append_notice(&text, notice)? {
                 return Ok(Value::String(updated));
             }
-            if let Some(mut envelope) = parse_marked_media_envelope(&text)? {
-                envelope
-                    .content
-                    .push(ToolResultMediaBlock::Text(notice.to_owned()));
-                return serialize_media_envelope(&envelope).map(Value::String);
-            }
             Ok(Value::String(format!("{text}\n\n{notice}")))
+        }
+        mut media if has_image_blocks(&media) => {
+            media["content"]
+                .as_array_mut()
+                .expect("image blocks live in a content array")
+                .push(serde_json::json!({"type": "text", "text": notice}));
+            Ok(media)
         }
         business_data => {
             let source = serde_json::to_string_pretty(&business_data)
@@ -191,141 +198,20 @@ pub(crate) fn append_tool_result_notice(value: Value, notice: &str) -> Result<Va
     }
 }
 
-/// Projects one durable tool-result string into provider-native tool-result content.
-/// 将一份可持久化工具结果字符串投影为 Provider 原生工具结果内容。
+/// Builds a bounded text preview for request budgeting without copying media bytes into it.
+/// 构建用于请求预算的有界文本预览，避免把媒体字节复制进预算文本。
 ///
-/// # Parameters
-/// # 参数
-/// `text` is the exact Core-persisted model-output string and `protocol_profile_id` identifies
-/// the frozen provider encoder that will receive it.
-/// `text` 是 Core 精确持久化的模型输出字符串，`protocol_profile_id` 标识接收它的冻结 Provider 编码器。
-///
-/// # Returns
-/// # 返回值
-/// Ordinary text for ordinary results, native ordered content for supported image routes, or an
-/// explicit unsupported/malformed-media error before a provider request is sent.
-/// 普通结果返回文本，支持图片的路由返回原生有序内容，不支持或畸形媒体则在发送前返回明确错误。
-pub(crate) fn project_tool_result_content(
-    text: &str,
-    protocol_profile_id: &str,
-) -> Result<Value, String> {
-    let Some(envelope) = parse_marked_media_envelope(text)? else {
-        return Ok(Value::String(text.to_string()));
-    };
-
-    match protocol_profile_id {
-        vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID
-        | vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID => {
-            project_openai_responses_content(&envelope)
-        }
-        vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID
-        | vulcan_llm_core::ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID => {
-            project_anthropic_content(&envelope)
-        }
-        _ => Err(format!(
-            "Tool result image blocks are unsupported by protocol profile `{protocol_profile_id}`; use an OpenAI Responses or Anthropic Messages route."
-        )),
-    }
-}
-
-/// Builds a bounded text preview for request budgeting without copying Base64 image bytes into it.
-/// 构建用于请求预算的有界文本预览，避免把 Base64 图片字节复制进预算文本。
-///
-/// # Parameters
-/// # 参数
-/// `text` is the exact persisted tool-result string.
-/// `text` 是精确持久化的工具结果字符串。
-///
-/// # Returns
-/// # 返回值
-/// A textual preview for media results, or the original text for ordinary results.
-/// 媒体结果返回文本预览，普通结果返回原始文本。
+/// Returns the preview of a `read_media` receipt, or the original text for ordinary results.
+/// 返回 `read_media` 回执的预览；普通结果返回原始文本。
 pub(crate) fn tool_result_text_preview(text: &str) -> Result<String, String> {
-    if let Some(preview) = crate::native_media_input::text_preview(text)? {
-        return Ok(preview);
-    }
-    let Some(envelope) = parse_marked_media_envelope(text)? else {
-        return Ok(text.to_string());
-    };
-    let mut parts = Vec::new();
-    for block in &envelope.content {
-        match block {
-            ToolResultMediaBlock::Text(value) => parts.push(value.clone()),
-            ToolResultMediaBlock::Image { mime_type, .. } => {
-                parts.push(format!("[image content: {mime_type}]"));
-            }
-        }
-    }
-    if let Some(structured_content) = envelope.structured_content.as_ref() {
-        parts.push(serde_json::to_string(structured_content).map_err(|error| {
-            format!("Tool result structured content could not be encoded: {error}")
-        })?);
-    }
-    Ok(parts.join("\n"))
+    Ok(crate::native_media_input::text_preview(text)?.unwrap_or_else(|| text.to_string()))
 }
 
-/// Parses the exact marked envelope and rejects malformed versions instead of silently degrading.
-/// 解析精确的带标记 envelope，发现版本或结构错误时明确拒绝而不是静默降级。
-fn parse_marked_media_envelope(text: &str) -> Result<Option<ToolResultMediaEnvelope>, String> {
-    let Ok(value) = serde_json::from_str::<Value>(text) else {
-        return Ok(None);
-    };
-    let Value::Object(object) = value else {
-        return Ok(None);
-    };
-    if !object.contains_key(TOOL_RESULT_MEDIA_MARKER) {
-        return Ok(None);
-    }
-    parse_marked_media_object(&object).map(Some)
-}
-
-/// Parses one exact marked media object with no compatibility aliases or fallback fields.
-/// 解析一份精确的带标记媒体对象，不接受兼容别名或备用字段。
-fn parse_marked_media_object(
-    object: &Map<String, Value>,
-) -> Result<ToolResultMediaEnvelope, String> {
-    if object.keys().any(|key| {
-        key != TOOL_RESULT_MEDIA_MARKER && key != "content" && key != "structured_content"
-    }) {
-        return Err(String::from(
-            "Tool result media envelope contains an unsupported field.",
-        ));
-    }
-    let version = object
-        .get(TOOL_RESULT_MEDIA_MARKER)
-        .and_then(Value::as_u64)
-        .ok_or_else(|| String::from("Tool result media envelope has an invalid version."))?;
-    if version != TOOL_RESULT_MEDIA_ENVELOPE_VERSION {
-        return Err(format!(
-            "Tool result media envelope version `{version}` is unsupported."
-        ));
-    }
-    let content = object
-        .get("content")
-        .and_then(Value::as_array)
-        .ok_or_else(|| {
-            String::from("Tool result media envelope is missing an ordered content array.")
-        })?;
-    let content = content
-        .iter()
-        .map(parse_media_block)
-        .collect::<Result<Vec<_>, _>>()?;
-    if content.is_empty() {
-        return Err(String::from(
-            "Tool result media envelope content cannot be empty.",
-        ));
-    }
-    Ok(ToolResultMediaEnvelope {
-        content,
-        structured_content: object.get("structured_content").cloned(),
-    })
-}
-
-/// Parses the pre-marker MCP object emitted by the rmcp support boundary.
-/// 解析 rmcp 支持边界生成的带标记前 MCP 对象。
-fn parse_unmarked_mcp_media_object(
-    object: &Map<String, Value>,
-) -> Result<ToolResultMediaEnvelope, String> {
+/// Parses the MCP media object emitted by the rmcp support boundary, decoding every image.
+/// 解析 rmcp 支持边界生成的 MCP 媒体对象，并解码每张图片。
+fn parse_mcp_media_object(
+    mut object: Map<String, Value>,
+) -> Result<(Vec<ToolResultMediaBlock>, Option<Value>), String> {
     if object
         .keys()
         .any(|key| key != "content" && key != "structured_content")
@@ -335,32 +221,21 @@ fn parse_unmarked_mcp_media_object(
         ));
     }
     let content = object
-        .get("content")
-        .and_then(Value::as_array)
+        .remove("content")
+        .and_then(|content| match content {
+            Value::Array(content) => Some(content),
+            _ => None,
+        })
         .ok_or_else(|| String::from("MCP media result is missing its content array."))?;
-    let content = content
+    let blocks = content
         .iter()
         .map(parse_media_block)
         .collect::<Result<Vec<_>, _>>()?;
-    if content.is_empty() {
-        return Err(String::from("MCP media result content cannot be empty."));
-    }
-    if !content
-        .iter()
-        .any(|block| matches!(block, ToolResultMediaBlock::Image { .. }))
-    {
-        return Err(String::from(
-            "MCP media result does not contain an image block.",
-        ));
-    }
-    Ok(ToolResultMediaEnvelope {
-        content,
-        structured_content: object.get("structured_content").cloned(),
-    })
+    Ok((blocks, object.remove("structured_content")))
 }
 
-/// Parses one exact text or image block and validates every image byte before projection.
-/// 解析一份精确的文本或图片块，并在投影前校验每个图片字节。
+/// Parses one exact text or image block and decodes every image byte.
+/// 解析一份精确的文本或图片块，并解码每个图片字节。
 fn parse_media_block(value: &Value) -> Result<ToolResultMediaBlock, String> {
     let object = value
         .as_object()
@@ -399,9 +274,8 @@ fn parse_media_block(value: &Value) -> Result<ToolResultMediaBlock, String> {
                 .get("mimeType")
                 .and_then(Value::as_str)
                 .ok_or_else(|| String::from("MCP image result block is missing its MIME type."))?;
-            validate_image_content(data, mime_type)?;
             Ok(ToolResultMediaBlock::Image {
-                data: data.to_string(),
+                bytes: decode_image_content(data, mime_type)?,
                 mime_type: mime_type.to_string(),
             })
         }
@@ -417,106 +291,9 @@ fn is_image_block(value: &Value) -> bool {
     value.get("type").and_then(Value::as_str) == Some("image")
 }
 
-/// Serializes one validated envelope while retaining its ordered content and structured result.
-/// 序列化一份经过校验的 envelope，同时保留内容顺序与结构化结果。
-fn serialize_media_envelope(envelope: &ToolResultMediaEnvelope) -> Result<String, String> {
-    let content = envelope
-        .content
-        .iter()
-        .map(|block| match block {
-            ToolResultMediaBlock::Text(text) => json!({"type": "text", "text": text}),
-            ToolResultMediaBlock::Image { data, mime_type } => {
-                json!({"type": "image", "data": data, "mimeType": mime_type})
-            }
-        })
-        .collect::<Vec<_>>();
-    let mut object = Map::new();
-    object.insert(
-        String::from(TOOL_RESULT_MEDIA_MARKER),
-        Value::from(TOOL_RESULT_MEDIA_ENVELOPE_VERSION),
-    );
-    object.insert(String::from("content"), Value::Array(content));
-    if let Some(structured_content) = envelope.structured_content.as_ref() {
-        object.insert(
-            String::from("structured_content"),
-            structured_content.clone(),
-        );
-    }
-    serde_json::to_string(&Value::Object(object))
-        .map_err(|error| format!("Tool result media envelope could not be serialized: {error}"))
-}
-
-/// Converts validated content into the OpenAI Responses function-output shape.
-/// 将经过校验的内容转换为 OpenAI Responses 函数输出结构。
-fn project_openai_responses_content(envelope: &ToolResultMediaEnvelope) -> Result<Value, String> {
-    let mut content = Vec::with_capacity(envelope.content.len() + 1);
-    for block in &envelope.content {
-        match block {
-            ToolResultMediaBlock::Text(text) => {
-                content.push(json!({"type": "input_text", "text": text}));
-            }
-            ToolResultMediaBlock::Image { data, mime_type } => {
-                content.push(json!({
-                    "type": "input_image",
-                    "image_url": format!("data:{mime_type};base64,{data}"),
-                }));
-            }
-        }
-    }
-    append_structured_content_text(
-        &mut content,
-        envelope.structured_content.as_ref(),
-        "input_text",
-    )?;
-    Ok(Value::Array(content))
-}
-
-/// Converts validated content into the Anthropic Messages tool-result block shape.
-/// 将经过校验的内容转换为 Anthropic Messages 工具结果块结构。
-fn project_anthropic_content(envelope: &ToolResultMediaEnvelope) -> Result<Value, String> {
-    let mut content = Vec::with_capacity(envelope.content.len() + 1);
-    for block in &envelope.content {
-        match block {
-            ToolResultMediaBlock::Text(text) => {
-                content.push(json!({"type": "text", "text": text}));
-            }
-            ToolResultMediaBlock::Image { data, mime_type } => {
-                content.push(json!({
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": mime_type,
-                        "data": data,
-                    },
-                }));
-            }
-        }
-    }
-    append_structured_content_text(&mut content, envelope.structured_content.as_ref(), "text")?;
-    Ok(Value::Array(content))
-}
-
-/// Appends structured content as an ordered text block without altering its JSON value.
-/// 将结构化内容作为有序文本块追加，同时不改变其 JSON 值。
-fn append_structured_content_text(
-    content: &mut Vec<Value>,
-    structured_content: Option<&Value>,
-    block_type: &str,
-) -> Result<(), String> {
-    if let Some(value) = structured_content {
-        content.push(json!({
-            "type": block_type,
-            "text": serde_json::to_string(value).map_err(|error| {
-                format!("Tool result structured content could not be encoded: {error}")
-            })?,
-        }));
-    }
-    Ok(())
-}
-
-/// Validates one image MIME/data pair with the same strict byte limit as the MCP boundary.
-/// 使用与 MCP 边界一致的严格字节上限校验一组图片 MIME/数据。
-fn validate_image_content(data: &str, mime_type: &str) -> Result<(), String> {
+/// Decodes one image MIME/data pair with the same strict byte limit as the MCP boundary.
+/// 使用与 MCP 边界一致的严格字节上限解码一组图片 MIME/数据。
+fn decode_image_content(data: &str, mime_type: &str) -> Result<Vec<u8>, String> {
     if !IMAGE_MIME_TYPES.contains(&mime_type) {
         return Err(String::from(
             "MCP image content uses an unsupported MIME type.",
@@ -538,234 +315,122 @@ fn validate_image_content(data: &str, mime_type: &str) -> Result<(), String> {
     if decoded.len() > MAX_IMAGE_BYTES {
         return Err(String::from("MCP image content exceeds the 20 MiB limit."));
     }
-    if base64::engine::general_purpose::STANDARD.encode(decoded) != data {
+    if base64::engine::general_purpose::STANDARD.encode(&decoded) != data {
         return Err(String::from("MCP image content has invalid Base64 data."));
     }
-    Ok(())
+    Ok(decoded)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
-    /// Proves post-processing notices preserve media order and a single copy of image bytes.
-    /// 证明后置提示保留媒体顺序和唯一一份图片字节。
-    #[test]
-    fn postprocessing_notice_preserves_native_media_and_literal_json_text() {
-        let original = mcp_media_result();
-        let marked = canonicalize_tool_model_output(original.clone()).unwrap();
-        for input in [original, marked] {
-            let result =
-                append_tool_result_notice(input, "Already completed; do not retry.").unwrap();
-            let text = result.as_str().unwrap();
-            assert_eq!(text.matches("iVBORw0KGgo=").count(), 1);
-            let projected =
-                project_tool_result_content(text, vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID)
-                    .unwrap();
-            let blocks = projected.as_array().unwrap();
-            assert!(blocks.iter().any(|block| block["type"] == "input_image"));
-            let texts: Vec<&str> = blocks
-                .iter()
-                .filter_map(|block| block["text"].as_str())
-                .collect();
-            assert_eq!(
-                texts,
-                vec![
-                    "before",
-                    "after",
-                    "Already completed; do not retry.",
-                    "{\"status\":\"ok\"}"
-                ]
-            );
+    /// Encodes one small real PNG so staging accepts it as an image.
+    /// 编码一张小型真实 PNG，使暂存将其识别为图片。
+    fn png_base64(width: u32, height: u32) -> String {
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgb8(image::RgbImage::new(width, height))
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    }
+
+    /// Proves images are saved for the session and the model gets only ordered text naming them.
+    /// 证明图片为会话保存，模型只获得按顺序指明它们的文本。
+    #[tokio::test]
+    async fn images_are_saved_and_replaced_by_locator_notices() {
+        let workspace = tempfile::tempdir().unwrap();
+        let (output, attachments) = save_tool_result_images(
+            json!({
+                "content": [
+                    {"type": "text", "text": "before"},
+                    {"type": "image", "data": png_base64(3, 2), "mimeType": "image/png"},
+                    {"type": "text", "text": "after"}
+                ],
+                "structured_content": {"status": "ok"}
+            }),
+            Some(workspace.path()),
+            "session-1",
+        )
+        .await
+        .unwrap();
+        assert_eq!(attachments.len(), 1);
+        let attachment = &attachments[0];
+        assert!(Path::new(&attachment.local_path).is_file());
+        let text = output.as_str().unwrap();
+        let locator = format!("attachment://{}", attachment.asset_id.as_deref().unwrap());
+        let (before, rest) = text.split_once(locator.as_str()).unwrap();
+        assert!(before.starts_with("before"));
+        assert!(rest.contains("3x2 px"));
+        assert!(rest.contains("read_media"));
+        assert!(rest.contains("after"));
+        assert!(rest.contains("\"status\": \"ok\""));
+    }
+
+    /// Proves ordinary outputs pass through and malformed images fail before anything is saved.
+    /// 证明普通输出原样通过，畸形图片在保存任何内容之前失败。
+    #[tokio::test]
+    async fn ordinary_outputs_pass_and_invalid_images_fail() {
+        let workspace = tempfile::tempdir().unwrap();
+        let plain = json!({"content": [{"type": "text", "text": "only text"}]});
+        let (output, attachments) =
+            save_tool_result_images(plain.clone(), Some(workspace.path()), "session-1")
+                .await
+                .unwrap();
+        assert_eq!(output, plain);
+        assert!(attachments.is_empty());
+
+        for (image, expected) in [
+            (
+                json!({"type": "image", "data": "not-base64=", "mimeType": "image/png"}),
+                "Base64",
+            ),
+            (
+                json!({"type": "image", "data": png_base64(1, 1), "mimeType": "image/gif"}),
+                "MIME",
+            ),
+            (
+                json!({"type": "image", "data": png_base64(1, 1), "mimeType": "image/png", "x": 1}),
+                "unsupported field",
+            ),
+        ] {
+            let error = save_tool_result_images(
+                json!({"content": [image]}),
+                Some(workspace.path()),
+                "session-1",
+            )
+            .await
+            .unwrap_err();
+            assert!(error.contains(expected), "{error}");
         }
+        let error = save_tool_result_images(
+            json!({"content": [{"type": "image", "data": png_base64(1, 1), "mimeType": "image/png"}]}),
+            None,
+            "session-1",
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("workspace root"), "{error}");
+    }
+
+    /// Proves post-processing notices keep image blocks for saving and append to text results.
+    /// 证明后置提示为保存步骤保留图片块，并追加到文本结果之后。
+    #[test]
+    fn postprocessing_notice_keeps_images_and_literal_json_text() {
+        let image = json!({"type": "image", "data": "iVBORw0KGgo=", "mimeType": "image/png"});
+        let result =
+            append_tool_result_notice(json!({"content": [image.clone()]}), "Completed.").unwrap();
+        assert_eq!(
+            result,
+            json!({"content": [image, {"type": "text", "text": "Completed."}]})
+        );
         let literal = "{\"content\":\"original-source\"}";
         let result =
             append_tool_result_notice(Value::String(literal.into()), "Completed.").unwrap();
         assert_eq!(result.as_str().unwrap(), format!("{literal}\n\nCompleted."));
-    }
-
-    /// Proves oversized images are downscaled with a dimension notice while small and invalid ones stay unchanged.
-    /// 证明超大图片被缩小并附尺寸说明，而小图与无效图保持不变。
-    #[tokio::test]
-    async fn tool_result_images_are_downscaled_before_canonicalization() {
-        let mut wide = Vec::new();
-        // Deterministic noise keeps PNG larger than its downscaled JPEG, so the derivative replaces it.
-        // 确定性噪声使PNG大于其缩小后的JPEG，从而由派生产物替换。
-        image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(
-            crate::image_conversion::COMPRESSION_MAX_EDGE_PX * 2,
-            4,
-            |x, y| {
-                let noise = (x.wrapping_mul(2_654_435_761) ^ y.wrapping_mul(40_503)).to_le_bytes();
-                image::Rgb([noise[0], noise[1], noise[2]])
-            },
-        ))
-        .write_to(
-            &mut std::io::Cursor::new(&mut wide),
-            image::ImageFormat::Png,
-        )
-        .unwrap();
-        let wide = base64::engine::general_purpose::STANDARD.encode(wide);
-        let output = compress_tool_result_images(json!({
-            "content": [
-                {"type": "image", "data": wide, "mimeType": "image/png"},
-                {"type": "image", "data": "not-base64=", "mimeType": "image/png"},
-                {"type": "text", "text": "after"}
-            ]
-        }))
-        .await
-        .unwrap();
-        let content = output["content"].as_array().unwrap();
-        assert_eq!(content.len(), 4);
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(content[0]["data"].as_str().unwrap())
-            .unwrap();
-        assert_eq!(
-            image::load_from_memory(&bytes).unwrap().width(),
-            crate::image_conversion::COMPRESSION_MAX_EDGE_PX
-        );
-        assert_eq!(content[1]["type"], "text");
-        assert_eq!(
-            content[2],
-            json!({"type": "image", "data": "not-base64=", "mimeType": "image/png"})
-        );
-        assert_eq!(content[3], json!({"type": "text", "text": "after"}));
-        // The rewritten blocks still pass the strict envelope validation.
-        // 重写后的块仍通过严格封套校验。
-        let mut valid = output.clone();
-        valid["content"].as_array_mut().unwrap().remove(2);
-        assert!(canonicalize_tool_model_output(valid).is_ok());
-
-        let small = mcp_media_result();
-        assert_eq!(
-            compress_tool_result_images(small.clone()).await.unwrap(),
-            small
-        );
-    }
-
-    /// Builds one small MCP result containing ordered text, image, and structured content.
-    /// 构造一份包含有序文本、图片与结构化内容的小型 MCP 结果。
-    fn mcp_media_result() -> Value {
-        json!({
-            "content": [
-                {"type": "text", "text": "before"},
-                {"type": "image", "data": "iVBORw0KGgo=", "mimeType": "image/png"},
-                {"type": "text", "text": "after"}
-            ],
-            "structured_content": {"status": "ok"}
-        })
-    }
-
-    /// Verifies the durable form is marked and the original block order survives projection.
-    /// 验证可持久化形式带有标记，且原始块顺序在投影后保持不变。
-    #[test]
-    fn media_output_round_trips_to_openai_responses_content() {
-        let output = canonicalize_tool_model_output(mcp_media_result())
-            .expect("valid MCP media should canonicalize");
-        let text = output.as_str().expect("media output should be a string");
-        assert!(text.contains(TOOL_RESULT_MEDIA_MARKER));
-        let projected =
-            project_tool_result_content(text, vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID)
-                .expect("OpenAI Responses media should project");
-        assert_eq!(projected[0], json!({"type":"input_text","text":"before"}));
-        assert_eq!(projected[1]["type"], "input_image");
-        assert_eq!(
-            projected[1]["image_url"],
-            "data:image/png;base64,iVBORw0KGgo="
-        );
-        assert_eq!(projected[2], json!({"type":"input_text","text":"after"}));
-        assert_eq!(projected[3]["text"], "{\"status\":\"ok\"}");
-    }
-
-    /// Verifies Anthropic receives its native base64 image source instead of a JSON envelope.
-    /// 验证 Anthropic 收到原生 Base64 图片 source，而不是 JSON envelope。
-    #[test]
-    fn media_output_projects_to_anthropic_image_source() {
-        let output = canonicalize_tool_model_output(mcp_media_result())
-            .expect("valid MCP media should canonicalize");
-        let projected = project_tool_result_content(
-            output.as_str().expect("media output should be a string"),
-            vulcan_llm_core::ANTHROPIC_MESSAGES_PROFILE_ID,
-        )
-        .expect("Anthropic media should project");
-        assert_eq!(projected[1]["type"], "image");
-        assert_eq!(projected[1]["source"]["type"], "base64");
-        assert_eq!(projected[1]["source"]["media_type"], "image/png");
-        assert_eq!(projected[1]["source"]["data"], "iVBORw0KGgo=");
-    }
-
-    /// Verifies unsupported providers fail before image bytes can be serialized as ordinary text.
-    /// 验证不支持的 Provider 会在图片字节被当作普通文本序列化前失败。
-    #[test]
-    fn media_output_rejects_unsupported_provider_profile() {
-        let output = canonicalize_tool_model_output(mcp_media_result())
-            .expect("valid MCP media should canonicalize");
-        let error = project_tool_result_content(
-            output.as_str().expect("media output should be a string"),
-            vulcan_llm_core::OPENAI_CHAT_PROFILE_ID,
-        )
-        .expect_err("OpenAI Chat has no registered tool-result image projector");
-        assert!(error.contains("unsupported by protocol profile"));
-    }
-
-    /// Verifies malformed image data and unregistered MIME types are rejected.
-    /// 验证畸形图片数据与未注册 MIME 类型会被拒绝。
-    #[test]
-    fn media_output_rejects_invalid_image_payload() {
-        let invalid_mime = json!({
-            "content": [{"type":"image","data":"iVBORw0KGgo=","mimeType":"image/gif"}]
-        });
-        assert!(canonicalize_tool_model_output(invalid_mime).is_err());
-
-        let invalid_base64 = json!({
-            "content": [{"type":"image","data":"not-base64=","mimeType":"image/png"}]
-        });
-        assert!(canonicalize_tool_model_output(invalid_base64).is_err());
-    }
-
-    /// Verifies an envelope from an unknown contract version is refused instead of being reinterpreted.
-    /// 验证来自未知契约版本的信封会被拒绝，而不是被重新解释。
-    ///
-    /// # Notes
-    /// 说明
-    /// The version is read before any content block is parsed, so a future version must fail on the
-    /// version boundary itself and must never be treated as the current shape. A future version is used
-    /// rather than a past one because this contract is unreleased and keeps no historical form.
-    /// 版本在任何内容块被解析之前读取，因此未来版本必须在版本边界本身失败，绝不能被当成当前形态。
-    /// 这里取未来版本而非过去版本，因为本契约尚未发布、不保留历史形态。
-    #[test]
-    fn media_output_rejects_unknown_envelope_version() {
-        let canonical = canonicalize_tool_model_output(mcp_media_result())
-            .expect("valid MCP media should canonicalize");
-        let mut envelope: Value =
-            serde_json::from_str(canonical.as_str().expect("media output should be a string"))
-                .expect("the durable envelope must be JSON");
-        // The declared version of the exact canonical bytes, before any mutation.
-        // 精确规范字节在被修改之前所声明的版本。
-        let declared = envelope[TOOL_RESULT_MEDIA_MARKER].clone();
-        // Control: these exact bytes at their declared version do project, so a later refusal is
-        // attributable to the version and not to the fixture being malformed.
-        // 对照：这些精确字节在其声明版本下确实可以投影，因此后续拒绝可归因于版本而非夹具本身畸形。
-        assert!(
-            project_tool_result_content(
-                envelope.to_string().as_str(),
-                vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID,
-            )
-            .is_ok(),
-            "the unmodified canonical envelope must project"
-        );
-        envelope[TOOL_RESULT_MEDIA_MARKER] = Value::from(TOOL_RESULT_MEDIA_ENVELOPE_VERSION + 1);
-        let error = project_tool_result_content(
-            envelope.to_string().as_str(),
-            vulcan_llm_core::OPENAI_CODEX_RESPONSES_PROFILE_ID,
-        )
-        .expect_err("an unknown envelope version must be refused");
-        assert!(
-            error.contains("unsupported"),
-            "the refusal must name the version boundary: {error}"
-        );
-        assert_ne!(
-            declared, envelope[TOOL_RESULT_MEDIA_MARKER],
-            "the mutation must actually change the declared version"
-        );
     }
 }

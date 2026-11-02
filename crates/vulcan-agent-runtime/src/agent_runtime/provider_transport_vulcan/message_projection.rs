@@ -111,11 +111,7 @@ pub(super) fn core_message_to_public(
                     "Canonical tool result is missing its provider-visible call identifier.",
                 )
             })?;
-            let content = crate::agent_runtime::tool_result_media::project_tool_result_content(
-                text,
-                protocol_profile_id,
-            )
-            .map_err(|error| provider_failure(provider_id, error.as_str()))?;
+            let content = Value::String(text.clone());
             Ok(AiMessage {
                 role: MessageRole::Tool,
                 content: vec![ContentItem::ToolResult {

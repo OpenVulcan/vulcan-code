@@ -1844,12 +1844,12 @@ try {
       assert.ok(['completed', 'failed'].includes(screenshot?.status), JSON.stringify(tools));
       let screenshotImage = false;
       if (screenshot.status === 'completed') {
+        // The image is saved as a generated resource; the model output only names its locator.
+        // 图片保存为生成资源；模型输出只写明其定位符。
         assert.equal(typeof screenshot.output?.model_output, 'string');
-        const media = JSON.parse(screenshot.output.model_output);
-        assert.equal(media.$vulcan_tool_result_media, 1);
-        const image = media.content.find((block) => block.type === 'image');
-        assert.ok(image && typeof image.data === 'string' && image.data.length > 0);
-        assert.ok(['image/png', 'image/jpeg', 'image/webp'].includes(image.mimeType));
+        assert.match(screenshot.output.model_output, /attachment:\/\/\S+/);
+        assert.ok(screenshot.generated_resources?.some((resource) => resource.kind === 'image'),
+          JSON.stringify(screenshot.generated_resources));
         screenshotImage = true;
       }
       assert.ok(clicks >= 2, JSON.stringify({ clicks, tools }));
