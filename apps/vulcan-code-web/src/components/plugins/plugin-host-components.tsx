@@ -454,6 +454,9 @@ export interface TimeSeriesLineChartProps {
   // Optional compact value formatter.
   // 可选紧凑数值格式器。
   formatValue?: (value: number) => string;
+  // Optional y-axis label formatter; defaults to locale compact notation.
+  // 可选纵轴标签格式器；缺省使用当前语言的紧凑记数法。
+  formatAxisValue?: (value: number) => string;
   // Optional empty-state label.
   // 可选空状态标签。
   emptyLabel?: string;
@@ -547,7 +550,7 @@ export function TimeSeriesLineChart(props: TimeSeriesLineChartProps) {
           return (
             <g key={ratio}>
               <line className="plugin-chart-grid-line" x1={TIME_SERIES_AXIS_WIDTH} y1={gridY} x2={TIME_SERIES_WIDTH - TIME_SERIES_PADDING} y2={gridY} />
-              <text aria-hidden="true" className="plugin-chart-axis-label" textAnchor="end" x={TIME_SERIES_AXIS_WIDTH - 8} y={gridY + 4}>{axisFormat.format(maximumValue * (1 - ratio))}</text>
+              <text aria-hidden="true" className="plugin-chart-axis-label" textAnchor="end" x={TIME_SERIES_AXIS_WIDTH - 8} y={gridY + 4}>{(props.formatAxisValue ?? axisFormat.format)(maximumValue * (1 - ratio))}</text>
             </g>
           );
         })}

@@ -16,7 +16,8 @@ describe("formatTokenCount", () => {
     expect(formatTokenCount(950_000)).toBe("950K");
     expect(formatTokenCount(1_234_567)).toBe("1.2M");
     expect(formatTokenCount(3_450_000_000)).toBe("3.5B");
-    expect(formatTokenCount(1_500_000_000_000)).toBe("1500B");
+    expect(formatTokenCount(1_500_000_000_000)).toBe("1.5T");
+    expect(formatTokenCount(2_500_000_000_000_000)).toBe("2500T");
   });
 
   it("carries rounding into the next unit and clamps invalid input", () => {

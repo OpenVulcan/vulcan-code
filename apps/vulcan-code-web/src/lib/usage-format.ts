@@ -4,10 +4,11 @@ const TOKEN_COUNT_UNITS: ReadonlyArray<readonly [number, string]> = [
   [1_000, "K"],
   [1_000_000, "M"],
   [1_000_000_000, "B"],
+  [1_000_000_000_000, "T"],
 ];
 
-// formatTokenCount renders token statistics: exact below 1000, otherwise one decimal with K, M, or B.
-// formatTokenCount 渲染 Token 统计：1000 以下显示精确值，否则以 K、M、B 保留一位小数。
+// formatTokenCount renders token statistics: exact below 1000, otherwise one decimal with K, M, B, or T.
+// formatTokenCount 渲染 Token 统计：1000 以下显示精确值，否则以 K、M、B、T 保留一位小数。
 //
 // Parameters:
 // 参数：value 是 Token 数量；非有限值与负数按 0 处理。

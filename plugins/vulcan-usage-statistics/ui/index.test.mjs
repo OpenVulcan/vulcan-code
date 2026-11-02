@@ -108,6 +108,7 @@ async function mount(invoke, strict = false, locale = "en-US", messages = {}) {
   // sdk 仅提供正式使用的宿主接口。
   const sdk = {
     React, locale, invoke: client.invoke, t: (key, fallback) => messages[key] ?? fallback,
+    formatTokenCount: (value) => `tok:${value}`,
     components: { PageBody: plain, PageToolbar, PageTabs, PageTabPanel, PageSection, PageHint: plain, PageNotice, PageEmptyState: ({ title }) => React.createElement("p", null, title),
       PageFacts, PageTable, MetricCard: plain, MetricGrid: plain, Badge: plain, Button, Input, Checkbox, SelectControl, StatusPill: plain, StreamPlaceholder: plain,
       ActivityHeatmap, ActivityHeatmapLegend: plain, TimeSeriesLineChart: plain, ChartLegend: plain,
@@ -423,9 +424,10 @@ test("overview shows input/output proportions without adding overlapping cache c
         assert.equal(bar.getAttribute("aria-label"), expectedLabel);
         assert.equal(bar.children[0].style.width, "80%");
         assert.equal(bar.children[1].style.width, "20%");
-        assert.match(balance.querySelector(".plugin-statistics-cache-facts").textContent, /400 · 33.3%/);
+        assert.match(balance.querySelector(".plugin-statistics-cache-facts").textContent, /tok:400 · 33.3%/);
       }
       if (inputTokens === null) assert.match(balance.querySelector('[data-token-dimension="inputTokens"]').textContent, /-/);
+      else assert.match(balance.querySelector('[data-token-dimension="inputTokens"]').textContent, new RegExp(`tok:${inputTokens}`));
       assert.doesNotMatch(balance.textContent, /NaN|Infinity/);
     } finally { await panel.close(); }
   }

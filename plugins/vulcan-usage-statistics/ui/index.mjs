@@ -158,15 +158,24 @@ export function createPluginPanel(sdk) {
     return Number.isFinite(number) ? number : 0;
   }
 
-  // formatInteger renders one count through the inherited host locale.
-  // formatInteger 使用继承的宿主语言渲染一个计数。
+  // formatInteger renders one non-token count through the inherited host locale.
+  // formatInteger 使用继承的宿主语言渲染一个非 Token 计数。
   //
-  // value is one count or token total.
-  // value 是一个计数或 Token 合计。
+  // value is one request, row or revision count.
+  // value 是一个请求、行或修订计数。
   // Returns one locale-aware integer string.
   // 返回一个遵循当前语言环境的整数文本。
   function formatInteger(value) {
     return new Intl.NumberFormat(sdk.locale, { maximumFractionDigits: 0 }).format(numeric(value));
+  }
+
+  // formatTokens renders token counts through the host's shared compact token label.
+  // formatTokens 使用宿主共享的紧凑 Token 文本渲染 Token 数量。
+  //
+  // value is one token count; returns exact text below 1000, otherwise one decimal with K, M, B, or T.
+  // value 是一个 Token 数量；1000 以下返回精确值，否则以 K、M、B、T 保留一位小数。
+  function formatTokens(value) {
+    return sdk.formatTokenCount(numeric(value));
   }
 
   // Format measured display numbers without changing their stored values.
@@ -434,7 +443,7 @@ export function createPluginPanel(sdk) {
             model: topModel,
             requests: formatInteger(requests),
             successRate: successRate === null ? "—" : formatPercent(successRate),
-            value: formatInteger(value),
+            value: formatTokens(value),
           },
         ),
       };
@@ -560,7 +569,7 @@ export function createPluginPanel(sdk) {
       ),
       h(HelpTooltip, { ariaLabel: text("tokens.details", "Token details"), content: h("div", { className: "plugin-statistics-detail-tooltip" },
         h("strong", null, text("tokens.details", "Token details")),
-        facts(dimensions.map((key) => [text(`tokens.${key}`, key), formatInteger(record[key])])),
+        facts(dimensions.map((key) => [text(`tokens.${key}`, key), formatTokens(record[key])])),
         h("div", { className: "plugin-statistics-cost-total" }, facts([
           [text(aggregate ? "timing.averageRequest" : "timing.request", "Request duration"), record.requestDurationMs === null ? null : formatInterval(record.requestDurationMs / 1000, "second", 3)],
           [text(aggregate ? "timing.averageFirstToken" : "timing.firstToken", "First-token latency"), !tokenTiming || record.firstTokenLatencyMs === null ? null : formatInterval(record.firstTokenLatencyMs / 1000, "second", 3)],
@@ -640,7 +649,7 @@ export function createPluginPanel(sdk) {
         kind === "input" ? h("path", { d: "M12 3v18m-7-7 7 7 7-7" })
           : kind === "output" ? h("path", { d: "M12 21V3m-7 7 7-7 7 7" })
             : h("path", { d: kind === "write" ? "M4 4h16v5H4zM6 9v11h12V9M12 11v6m-3-3 3 3 3-3" : "M4 4h16v5H4zM6 9v11h12V9M9 13h6" })),
-      h("span", { "aria-label": text(`tokens.${key}`, key) }, formatInteger(value)));
+      h("span", { "aria-label": text(`tokens.${key}`, key) }, formatTokens(value)));
   }
 
   // consumerLabel localizes built-in caller identities; arbitrary agent names retain their exact identity.
@@ -704,7 +713,7 @@ export function createPluginPanel(sdk) {
       h("div", { className: "plugin-statistics-token-values" },
         ...[["inputTokens", inputShare], ["outputTokens", outputShare]].map(([key, share]) => h("div", { key, "data-token-dimension": key },
           h("span", null, text(`tokens.${key}`, key)),
-          h("strong", null, record[key] === null ? "-" : formatInteger(record[key])),
+          h("strong", null, record[key] === null ? "-" : formatTokens(record[key])),
           h("span", { className: "plugin-statistics-token-share" }, share === null ? "-" : formatPercent(share)),
         )),
       ),
@@ -714,9 +723,9 @@ export function createPluginPanel(sdk) {
         }) }, h("span", { style: { width: `${inputShare}%` } }), h("span", { style: { width: `${outputShare}%` } })),
       h(PageFacts, { className: "plugin-statistics-cache-facts", layout: "list", items: [
         { key: "cacheRead", label: text("tokens.cacheReadTokens", "Cache read"),
-          value: `${record.cacheReadTokens === null ? "-" : formatInteger(record.cacheReadTokens)} · ${cacheShare}` },
+          value: `${record.cacheReadTokens === null ? "-" : formatTokens(record.cacheReadTokens)} · ${cacheShare}` },
         { key: "cacheWrite", label: text("tokens.cacheWriteTokens", "Cache write"),
-          value: record.cacheWriteTokens === null ? "-" : formatInteger(record.cacheWriteTokens) },
+          value: record.cacheWriteTokens === null ? "-" : formatTokens(record.cacheWriteTokens) },
       ] }),
       h(PageHint, null, text("tokens.cacheSeparate", "Cache read share uses reported input; cache counts are not added to input/output.")),
     );
@@ -1286,7 +1295,7 @@ export function createPluginPanel(sdk) {
           h(MetricCard, {
             icon: "tokens",
             label: text("summary.tokens", "Known tokens"),
-            value: formatInteger(summary.totalTokens),
+            value: formatTokens(summary.totalTokens),
             detail: text("summary.tokensDetail", "Unknown usage remains absent"),
           }),
           h(MetricCard, {
@@ -1328,7 +1337,8 @@ export function createPluginPanel(sdk) {
           h(TimeSeriesLineChart, {
             ariaLabel: text("trend.aria", "Daily token usage line chart grouped by model"),
             emptyLabel: text("trend.empty", "No trend data in this range"),
-            formatValue: formatInteger,
+            formatValue: formatTokens,
+            formatAxisValue: formatTokens,
             series: visibleSeries,
             tooltipDelayMs: TOOLTIP_DELAY_MS,
           }),
@@ -1368,7 +1378,7 @@ export function createPluginPanel(sdk) {
               h(MetricCard, {
                 icon: "tokens",
                 label: text("summary.tokens", "Known tokens"),
-                value: formatInteger(summary.totalTokens),
+                value: formatTokens(summary.totalTokens),
                 detail: text("summary.tokensDetail", "Unknown usage remains absent"),
               }),
               ...dashboard.summary.costs.map((cost) => h(MetricCard, {

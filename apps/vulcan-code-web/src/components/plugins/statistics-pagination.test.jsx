@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createPluginPanel } from "../../../../../plugins/vulcan-usage-statistics/ui/index.mjs";
 import * as pageKit from "@/components/page";
+import { formatTokenCount } from "@/lib/usage-format";
 
 // Keep the real plugin state machine while replacing only host design-system presentation.
 // 保留真实插件状态机，仅替换宿主设计系统展示。
@@ -56,7 +57,7 @@ beforeEach(async () => {
     if (action === "dashboard-get" && ["overview", "providers", "recent"].includes(args.view)) return Promise.resolve({ ...dashboard, view: args.view, providers: [] });
     return new Promise((resolve, reject) => requests.push({ action, args, resolve, reject }));
   };
-  const Panel = createPluginPanel({ React, components, locale: "en", t: (_, fallback) => fallback, invoke });
+  const Panel = createPluginPanel({ React, components, locale: "en", t: (_, fallback) => fallback, formatTokenCount, invoke });
   await act(async () => root.render(h(Panel)));
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); });

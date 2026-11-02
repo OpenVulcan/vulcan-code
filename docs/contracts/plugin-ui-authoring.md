@@ -185,7 +185,7 @@ Action 完成后宿主只重读凭据校验状态，不重置配置草稿；状�
 | `invoke(actionId, args, { refresh?, signal? })` | 调用本插件声明的 Action；相同读取由宿主合并，`signal` 只取消本视图的结果投递。 |
 | `readTextAsset(path)` | 读取清单声明的 UTF-8 文本资源，例如许可证。 |
 | `openExternalUrl(url)` | 经宿主在系统浏览器中打开外部地址；只接受不含凭据的 `https://` 地址，不设域名白名单。 |
-| `locale`、`t(key, fallback)`、`formatNumber(value)` | 当前语言、插件文案与数值格式化；语言变化时宿主重建组件。 |
+| `locale`、`t(key, fallback)`、`formatNumber(value)`、`formatTokenCount(value)` | 当前语言、插件文案与数值格式化；Token 数量一律用 `formatTokenCount`（1000 以下精确，其后为一位小数的 K/M/B/T），与主界面同源；语言变化时宿主重建组件。 |
 | `events.subscribe(topic, listener)`、`events.latestRevision(topic)` | 仅含修订号的失效通知，用于重新读取。 |
 | `notifications.success/error(message)` | 用户发起操作的结果提示。 |
 | `components` | 下文的宿主组件；不在列表内的组件不可用。 |
@@ -212,7 +212,7 @@ Action 完成后宿主只重读凭据校验状态，不重置配置草稿；状�
 | 数据 | `PageFacts`、`PageDetails`、`MetricCard`、`MetricGrid`、`PageItemList`、`PageItem`、`PageTable` |
 | 控件 | `Badge`、`Button`、`Input`、`Checkbox`、`Switch`、`SelectControl`、`HelpTooltip`、`PluginMetadataLink` |
 | 对话框 | `Dialog`、`DialogContent`、`DialogHeader`、`DialogTitle`、`DialogDescription`、`DialogFooter`、`TextDocumentDialog` |
-| 图表 | `ActivityHeatmap`、`ActivityHeatmapLegend`、`TimeSeriesLineChart`、`BarChart`（`{ ariaLabel, points: [{ key, label, value, title? }], emptyLabel }`）、`ChartLegend` |
+| 图表 | `ActivityHeatmap`、`ActivityHeatmapLegend`、`TimeSeriesLineChart`（可选 `formatValue` 提示格式、`formatAxisValue` 纵轴格式）、`BarChart`（`{ ariaLabel, points: [{ key, label, value, title? }], emptyLabel }`）、`ChartLegend` |
 | 宿主投影 | `CoreBrowserArea`、`ClientBrowserArea`（仅内置浏览器插件） |
 
 `MetricCard.icon` 只能用 `activity`、`agent`、`calendar`、`duration`、`internal`、`model`、`requests`、`success`、`subagent`、`tokens`。

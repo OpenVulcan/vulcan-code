@@ -24,6 +24,7 @@ import {
 } from "@/service/plugin-ui-events";
 import type { PluginSummary } from "@/types";
 import { detectShellHost, type ShellHostMarker } from "@/host-shell/runtime";
+import { formatTokenCount } from "@/lib/usage-format";
 
 // PluginUiSdk is the stable host context exposed to one authorized dynamic plugin module.
 // PluginUiSdk 是暴露给单个已授权动态插件模块的稳定宿主上下文。
@@ -69,6 +70,9 @@ interface PluginUiSdk {
   // Formats one numeric value through the active host locale.
   // 使用当前宿主语言格式化单个数值。
   formatNumber: (value: number) => string;
+  // Formats one token count as the host's compact token label (exact below 1000, then K/M/B/T).
+  // 将一个 Token 数量格式化为宿主紧凑 Token 文本（1000 以下精确，其后为 K/M/B/T）。
+  formatTokenCount: (value: number) => string;
   // Host notifications let plugins report bounded user-initiated action results.
   // 宿主通知允许插件报告有边界的用户发起操作结果。
   notifications: {
@@ -181,6 +185,7 @@ export function DynamicPluginMountPanel(props: DynamicPluginMountPanelProps) {
       latestRevision: (topic) => latestPluginUiInvalidationRevision(props.plugin.id, topic),
     },
     formatNumber: (value: number) => new Intl.NumberFormat(locale).format(value),
+    formatTokenCount,
     notifications: {
       success: (message: string) => toast.success(message),
       error: (message: string) => toast.error(message),
