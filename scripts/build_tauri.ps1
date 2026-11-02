@@ -106,15 +106,21 @@ if (-not $Release) {
 
 # The packaged runtime must always consume desktop JavaScript built from the current source tree.
 # 打包运行时必须始终使用由当前源码树构建的桌面 JavaScript。
+# Electron lifecycle and explicit installer downloads use the same durable cache as the Unix build.
+# Electron 生命周期与显式安装器下载使用与 Unix 构建相同的持久缓存。
+$env:electron_config_cache = (& node (Join-Path $ProjectDir 'scripts/build-input-paths.mjs') electron | Out-String).Trim()
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 if ($Release -or -not (Test-Path -LiteralPath (Join-Path $DesktopAppDir "node_modules"))) {
     Write-Host "==> Installing desktop dependencies..."
-    # Electron lifecycle downloads use the same durable cache as the Unix build.
-    # Electron 生命周期下载使用与 Unix 构建相同的持久缓存。
-    $env:electron_config_cache = (& node (Join-Path $ProjectDir 'scripts/build-input-paths.mjs') electron | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     pnpm --dir $DesktopAppDir install --frozen-lockfile
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
+# The official installer verifies executable/version markers even when node_modules already exists;
+# pnpm may skip the lifecycle download, so a fresh checkout would otherwise lack electron/dist.
+# 即使 node_modules 已存在，官方安装器仍须核验可执行文件和版本标记；pnpm 可能跳过生命周期下载，
+# 否则全新检出会缺少 electron/dist。
+node (Join-Path $DesktopAppDir 'node_modules/electron/install.js')
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Host "==> Building Electron desktop..."
 pnpm --dir $DesktopAppDir run build
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
