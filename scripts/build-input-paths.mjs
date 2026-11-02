@@ -14,6 +14,7 @@ export function buildInputPaths(repositoryRoot) {
     browsers: path.join(thirdParty, 'browser-runtime'),
     electronDownloads: path.join(thirdParty, 'electron-runtime-cache'),
     managedNode: path.join(thirdParty, 'managed-node'),
+    innoSetup: path.join(thirdParty, 'inno-setup'),
   });
 }
 

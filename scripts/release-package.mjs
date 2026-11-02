@@ -105,24 +105,33 @@ export async function requiredGlibc(files) {
   return newest && newest.join('.');
 }
 
-// packageCurrentDistribution verifies the live distribution exactly as a launch would, then archives it.
-// packageCurrentDistribution 按启动时的标准验证当前发行物，再将其归档。
-async function packageCurrentDistribution(outputOverride) {
-  // Only the release distribution is ever archived, and it lives in its own root beside the debug one.
-  // 只归档正式版发行物，它位于与调试版并列的独立目录。
+// inspectReleaseDistribution verifies the live release distribution exactly as a launch would.
+// inspectReleaseDistribution 按启动时的标准验证当前正式版发行物。
+// Returns its root, runtime layout and the version reported by the built service.
+// 返回其根目录、运行时布局以及已构建服务报告的版本。
+export async function inspectReleaseDistribution() {
+  // Only the release distribution is ever packaged, and it lives in its own root beside the debug one.
+  // 只打包正式版发行物，它位于与调试版并列的独立目录。
   const root = execFileSync(process.execPath, [path.join(repository, 'scripts/desktop-runtime.mjs'), 'root', 'release'], { encoding: 'utf8' }).trim();
   const layout = JSON.parse(await readFile(path.join(root, 'runtime-layout.json'), 'utf8'));
   validateRuntimeLayoutIdentity(layout, 'release');
   await verifyPackagedLayout(layout, root);
-  // The version comes from the built service itself, so a stale layout cannot mislabel the archive.
-  // 版本取自已构建服务本身，过期布局无法给归档贴错标签。
+  // The version comes from the built service itself, so a stale layout cannot mislabel the package.
+  // 版本取自已构建服务本身，过期布局无法给安装包贴错标签。
   const service = path.join(root, layout.serviceExecutable);
   const description = JSON.parse((await execFileAsync(service, ['--describe'], { windowsHide: true, timeout: 20_000 })).stdout);
   if (description.profile !== 'release') throw new Error(`The service in ${root} is a ${description.profile} build.`);
-  const outputRoot = outputOverride ?? path.join(repository, 'target', 'release-packages', description.serviceVersion);
+  return { root, layout, version: description.serviceVersion };
+}
+
+// packageCurrentDistribution verifies the live distribution exactly as a launch would, then archives it.
+// packageCurrentDistribution 按启动时的标准验证当前发行物，再将其归档。
+async function packageCurrentDistribution(outputOverride) {
+  const { root, layout, version } = await inspectReleaseDistribution();
+  const outputRoot = outputOverride ?? path.join(repository, 'target', 'release-packages', version);
   await mkdir(outputRoot, { recursive: true });
   await copyFile(path.join(repository, 'scripts', installerFileName), path.join(outputRoot, installerFileName));
-  const archive = await createReleaseArchive(root, outputRoot, description.serviceVersion);
+  const archive = await createReleaseArchive(root, outputRoot, version);
   console.log(`Release archive: ${archive}`);
   console.log(`Checksums: ${path.join(outputRoot, checksumFileName)}`);
   if (layout.platform === 'linux') {
