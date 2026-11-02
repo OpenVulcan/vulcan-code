@@ -74,7 +74,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/install-locked-tools.mjs nextest --offline
       - name: Validate download, publication and layout failure paths
-        run: node --test scripts/ci-scope.test.mjs scripts/locked-download.test.mjs scripts/install-locked-tools.test.mjs scripts/directory-publication.test.mjs scripts/desktop-runtime.test.mjs scripts/managed-node.test.mjs scripts/browser-runtime.test.mjs scripts/release-package.test.mjs scripts/install-script.test.mjs
+        run: node --test scripts/ci-scope.test.mjs scripts/locked-download.test.mjs scripts/install-locked-tools.test.mjs scripts/directory-publication.test.mjs scripts/desktop-runtime.test.mjs scripts/managed-node.test.mjs scripts/browser-runtime.test.mjs scripts/release-package.test.mjs scripts/release-signing.test.mjs scripts/install-script.test.mjs
   frontend:
     name: Frontend gates
     concurrency:

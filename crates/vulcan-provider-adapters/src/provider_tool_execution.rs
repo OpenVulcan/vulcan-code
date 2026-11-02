@@ -4207,10 +4207,10 @@ mod tests {
     #[test]
     fn batch_results_join_with_separator_only_between_items() {
         let mut output = String::new();
-        append_provider_result(&mut output, "a", "中");
+        append_provider_result(&mut output, "a", "|");
         assert_eq!(output, "a", "first item has no separator");
-        append_provider_result(&mut output, "b", "中");
-        assert_eq!(output, "a中b");
+        append_provider_result(&mut output, "b", "|");
+        assert_eq!(output, "a|b");
     }
 
     /// The response ceiling admits its exact size, rejects one more byte and never overflows.

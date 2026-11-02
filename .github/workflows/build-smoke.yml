@@ -1,0 +1,110 @@
+# Build and package the release distribution on every supported platform through the documented entry points.
+# 在每个受支持平台上通过既有入口构建并打包发行物。
+# No secrets and no publishing: this only proves each host can produce an unsigned archive.
+# 不使用密钥、不发布：只证明各宿主都能产出未签名归档。
+name: Build smoke test
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    name: Release build (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: windows-x64, runner: windows-2025 }
+          # Linux builds on 22.04 so the archive runs on glibc 2.35 and newer.
+          # Linux 在 22.04 上构建，使归档可在 glibc 2.35 及以上运行。
+          - { platform: linux-x64, runner: ubuntu-22.04 }
+          - { platform: linux-arm64, runner: ubuntu-22.04-arm }
+          - { platform: macos-x64, runner: macos-15-intel }
+          - { platform: macos-arm64, runner: macos-15 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 300
+    env:
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      # Hosted Linux images keep about 20 GB free; a release build of this workspace needs more.
+      # 托管 Linux 镜像只剩约 20 GB 空间，本工作区的 release 构建需要更多。
+      - name: Free disk space
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+      - id: versions
+        run: node scripts/ci-runtime-versions.mjs
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ steps.versions.outputs.node }}
+      - name: Install declared pnpm
+        run: npm install --global pnpm@${{ steps.versions.outputs.pnpm }}
+      - name: Install the pinned Rust toolchain
+        if: runner.os != 'Windows'
+        run: |
+          set -eu
+          if ! command -v rustup > /dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup toolchain install
+          rustc --version
+      - name: Install the pinned Rust toolchain
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          rustup toolchain install
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustc --version
+      - name: Initialize, synchronize and build (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          set -eu
+          sh ./make.sh init-system
+          sh ./make.sh sync release
+          sh ./make.sh release
+      - name: Initialize, synchronize and build (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          foreach ($step in @(@('init-system'), @('sync', 'release'), @('release'))) {
+            ./make.ps1 @step
+            if ($LASTEXITCODE -ne 0) { throw "make $($step -join ' ') failed with $LASTEXITCODE" }
+          }
+      - name: Package the release distribution
+        shell: bash
+        run: |
+          set -eu
+          node scripts/release-package.mjs package --out "$RUNNER_TEMP/package" | tee "$RUNNER_TEMP/package.log"
+          ls -l "$RUNNER_TEMP/package"
+      - name: Run the packaged service's --describe
+        shell: bash
+        run: |
+          set -eu
+          root=$(node scripts/desktop-runtime.mjs root release)
+          service="$root/bin/vulcan-code-service"
+          [ -f "$service.exe" ] && service="$service.exe"
+          "$service" --describe
+      - name: Report
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### ${{ matrix.platform }} on ${{ matrix.runner }}"
+            if [ -d "$RUNNER_TEMP/package" ]; then
+              echo '```'
+              ls -l "$RUNNER_TEMP/package"
+              [ -f "$RUNNER_TEMP/package.log" ] && cat "$RUNNER_TEMP/package.log"
+              echo '```'
+            else
+              echo 'No package was produced.'
+            fi
+            echo '```'
+            df -h . | tail -1
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

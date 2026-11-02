@@ -3417,13 +3417,8 @@ fn fork_reselects_pointer_and_preserves_kept_nodes() {
     let loaded = load_session(&fork_layout).unwrap();
     assert_eq!(loaded.document.compactions.len(), 1);
     let kept = &loaded.document.compactions[0];
-    // This fork fixture owns a local summary; opaque checkpoints have a separate replay path.
-    // 此分支夹具持有本地摘要；不透明检查点使用独立重放路径。
     let vulcan_session_core::v1::context::CompactionContent::Summary { text: summary } =
-        &kept.content
-    else {
-        panic!("expected local summary");
-    };
+        &kept.content;
     let retained_summary_seq = output
         .events
         .iter()
