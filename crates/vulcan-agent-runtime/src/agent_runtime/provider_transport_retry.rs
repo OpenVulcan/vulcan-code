@@ -321,6 +321,11 @@ struct ProviderRetryClassification {
 
 /// Returns whether one streamed delta makes automatic transparent retry unsafe.
 /// 判断某个已流式发出的增量是否会让透明自动重试变得不安全。
+///
+/// A response identity from `response.created` is metadata only: the next physical request
+/// clears it, so a transport close right after it remains replayable.
+/// 来自 `response.created` 的响应身份只是元数据：下一次真实请求会清除它，因此紧随其后的
+/// 传输关闭仍可重放。
 pub(crate) fn provider_delta_makes_retry_unsafe(delta: &ProviderStreamDelta) -> bool {
     matches!(
         delta,
@@ -330,7 +335,6 @@ pub(crate) fn provider_delta_makes_retry_unsafe(delta: &ProviderStreamDelta) -> 
             | ProviderStreamDelta::ToolRequestFragment(_)
             | ProviderStreamDelta::RuntimeEvent(_)
             | ProviderStreamDelta::UsageUpdated(_)
-            | ProviderStreamDelta::ResponseIdentityObserved(_)
             | ProviderStreamDelta::FinalConversationState(_, _)
     )
 }
@@ -1597,5 +1601,20 @@ mod tests {
                 ..CoreProviderUsageSnapshot::default()
             })
         ));
+    }
+
+    /// Verifies a response identity alone keeps a dispatched transport close replayable.
+    /// 验证仅有响应身份时，已分派的传输关闭仍可重放。
+    #[test]
+    fn response_identity_alone_keeps_transport_close_replayable() {
+        assert!(!provider_delta_makes_retry_unsafe(
+            &ProviderStreamDelta::ResponseIdentityObserved(String::from("resp_1"))
+        ));
+        let decision = policy().next_retry(
+            &structured_provider_error(AiErrorCategory::ProviderUnavailable, true),
+            0,
+            false,
+        );
+        assert!(decision.is_some());
     }
 }
