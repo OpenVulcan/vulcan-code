@@ -1,7 +1,9 @@
-//! Incremental decoder for the existing provider-tool Chat SSE contract.
-//! 既有供应商工具 Chat SSE 契约的增量解码器。
+//! Incremental bounded decoder for the existing provider-tool Chat SSE contract.
+//! 既有供应商工具 Chat SSE 契约的增量有界解码器。
 
-use super::{append_generic_openai_chat_delta, parse_bounded_provider_json};
+use super::{
+    admit_provider_response_bytes, append_generic_openai_chat_delta, parse_bounded_provider_json,
+};
 
 /// Owns framing offsets separately from the accumulated visible text.
 /// 将分帧偏移与累积可见文本分开持有。
@@ -11,6 +13,7 @@ pub(super) struct ChatSseDecoder {
     scan_from: usize,
     output: String,
     terminal: bool,
+    received_bytes: usize,
     #[cfg(test)]
     scanned_bytes: usize,
 }
@@ -18,7 +21,12 @@ pub(super) struct ChatSseDecoder {
 impl ChatSseDecoder {
     /// Consumes one transport chunk, scanning new bytes only and compacting at most once.
     /// 消费一个传输块，仅扫描新字节，且最多整理一次缓冲区。
+    ///
+    /// The whole stream shares one byte ceiling, which also bounds the accumulated text.
+    /// 整条流共享一个字节上限，累积文本因此同样有界。
     pub(super) fn push(&mut self, chunk: &[u8]) -> Result<(), String> {
+        self.received_bytes =
+            admit_provider_response_bytes(self.received_bytes, chunk.len(), "Provider Chat SSE")?;
         self.pending.extend_from_slice(chunk);
         let mut consumed = 0usize;
         while self.scan_from < self.pending.len() {
@@ -173,5 +181,18 @@ mod tests {
                 .expect_err("empty text")
                 .contains("no visible text")
         );
+    }
+
+    /// The stream ceiling is checked before a chunk enters the pending buffer.
+    /// 数据块进入待处理缓冲区之前先检查整条流的上限。
+    #[test]
+    fn stream_bytes_are_bounded_before_buffering() {
+        let mut decoder = ChatSseDecoder {
+            received_bytes: usize::try_from(super::super::PROVIDER_TOOL_RESPONSE_BYTE_LIMIT)
+                .expect("64-bit host"),
+            ..ChatSseDecoder::default()
+        };
+        assert!(decoder.push(b"x").is_err());
+        assert!(decoder.pending.is_empty());
     }
 }

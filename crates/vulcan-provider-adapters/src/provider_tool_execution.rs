@@ -41,11 +41,53 @@ const GENERIC_STRUCTURED_RESULT_COUNT_LIMIT: usize = 256;
 /// 单个声明式资源提取器允许的绝对解码字节上限。
 ///
 /// This is the ceiling for manifest-declared `max_bytes`, binary follow-up downloads streamed outside
-/// the metadata response, and request-side multipart files. Provider responses themselves carry no
-/// byte ceiling, so inline resources reach this per-resource limit directly.
+/// the metadata response, and request-side multipart files. Inline resources are checked against
+/// the declared limit before decoding.
 /// 这是 Manifest 声明的 `max_bytes`、在元数据响应之外流式下载的二进制后续资源，以及请求侧
-/// multipart 文件的上限。供应商响应本身不设字节上限，因此内联资源直接适用本逐资源上限。
+/// multipart 文件的上限。内联资源在解码前即按声明上限校验。
 const GENERIC_RESOURCE_BYTE_LIMIT: u64 = 100 * 1024 * 1024;
+
+/// Ceiling-sized inline resources one provider tool response must be able to carry.
+/// 单次供应商工具响应必须能够承载的满上限内联资源数量。
+const PROVIDER_TOOL_RESPONSE_INLINE_RESOURCE_CAPACITY: u64 = 4;
+
+/// Maximum bytes received from one provider tool response body, SSE stream, or batch aggregate.
+/// 单次供应商工具响应正文、SSE 流或批量聚合允许接收的最大字节数。
+///
+/// Derived from [`GENERIC_RESOURCE_BYTE_LIMIT`] as Base64 text, so ceiling-sized generated
+/// resources always fit while a runaway response cannot exhaust host memory.
+/// 由 [`GENERIC_RESOURCE_BYTE_LIMIT`] 按 Base64 文本推导，满上限的生成资源总能容纳，
+/// 失控响应则不能耗尽宿主内存。
+const PROVIDER_TOOL_RESPONSE_BYTE_LIMIT: u64 =
+    GENERIC_RESOURCE_BYTE_LIMIT.div_ceil(3) * 4 * PROVIDER_TOOL_RESPONSE_INLINE_RESOURCE_CAPACITY;
+
+/// Returns the received total after admitting one more chunk under the response ceiling.
+/// 在响应上限内准入下一块后返回累计接收字节数。
+///
+/// # Parameters
+/// 参数
+/// `received` counts bytes already retained, `chunk` is the next chunk length, and `operation`
+/// scopes diagnostics.
+/// `received` 统计已保留字节，`chunk` 是下一块长度，`operation` 限定诊断范围。
+///
+/// # Returns
+/// 返回值
+/// The new total, or a controlled failure before the chunk is buffered.
+/// 返回新的累计值，或在缓冲该块之前返回受控失败。
+fn admit_provider_response_bytes(
+    received: usize,
+    chunk: usize,
+    operation: &str,
+) -> Result<usize, String> {
+    received
+        .checked_add(chunk)
+        .filter(|total| *total as u64 <= PROVIDER_TOOL_RESPONSE_BYTE_LIMIT)
+        .ok_or_else(|| {
+            format!(
+                "{operation} response exceeds the {PROVIDER_TOOL_RESPONSE_BYTE_LIMIT} byte limit."
+            )
+        })
+}
 
 /// Formats one provider-tool transport failure without retaining request URL material.
 /// 格式化一次供应商工具传输失败，且不保留请求 URL 材料。
@@ -89,8 +131,8 @@ pub(crate) fn provider_tool_url(entry: &ServiceEntry, target: &ProviderToolTarge
     )
 }
 
-/// Reads one complete provider tool response; generated resources make the body size unbounded.
-/// 读取一次完整供应商工具响应；生成的资源使响应体大小不设上限。
+/// Reads one provider tool response through the shared response ceiling.
+/// 通过共享响应上限读取一次供应商工具响应。
 ///
 /// # Parameters
 /// 参数
@@ -99,12 +141,22 @@ pub(crate) fn provider_tool_url(entry: &ServiceEntry, target: &ProviderToolTarge
 ///
 /// # Returns
 /// 返回值
-/// The complete UTF-8 response text.
-/// 返回完整的 UTF-8 响应文本。
-pub(crate) async fn read_provider_response_text(
+/// UTF-8 response text no larger than [`PROVIDER_TOOL_RESPONSE_BYTE_LIMIT`].
+/// 返回不超过 [`PROVIDER_TOOL_RESPONSE_BYTE_LIMIT`] 的 UTF-8 响应文本。
+pub(crate) async fn read_bounded_provider_response(
     response: reqwest::Response,
     operation: &str,
 ) -> Result<String, String> {
+    // Content-Length only rejects early; chunk admission below is authoritative.
+    // Content-Length 只用于提前拒绝；下方的分块准入才是权威检查。
+    if response
+        .content_length()
+        .is_some_and(|length| length > PROVIDER_TOOL_RESPONSE_BYTE_LIMIT)
+    {
+        return Err(format!(
+            "{operation} response exceeds the {PROVIDER_TOOL_RESPONSE_BYTE_LIMIT} byte limit."
+        ));
+    }
     let mut bytes = Vec::new();
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
@@ -114,6 +166,7 @@ pub(crate) async fn read_provider_response_text(
                 error.without_url()
             )
         })?;
+        admit_provider_response_bytes(bytes.len(), chunk.len(), operation)?;
         bytes.extend_from_slice(chunk.as_ref());
     }
     String::from_utf8(bytes).map_err(|_| format!("{operation} response is not valid UTF-8 text."))
@@ -408,7 +461,7 @@ async fn execute_generic_openai_chat_sse_request(
         .map_err(|error| format_provider_tool_transport_error("Provider Chat SSE", error))?;
     let status = response.status();
     if !status.is_success() {
-        let text = read_provider_response_text(response, "Provider Chat SSE").await?;
+        let text = read_bounded_provider_response(response, "Provider Chat SSE").await?;
         return Err(format_http_error(
             "Provider Chat SSE",
             status.as_u16(),
@@ -536,7 +589,7 @@ async fn decode_successful_structured_sse_response(
 ) -> Result<Value, String> {
     let status = response.status();
     if !status.is_success() {
-        let text = read_provider_response_text(response, "Provider structured SSE").await?;
+        let text = read_bounded_provider_response(response, "Provider structured SSE").await?;
         return Err(format_http_error(
             "Provider structured SSE",
             status.as_u16(),
@@ -564,6 +617,9 @@ async fn decode_generic_structured_sse(
     // scan_from 跳过 pending 中已扫描过的前缀，使每个字节只被边界搜索一次。
     let mut scan_from = 0usize;
     let mut terminal = None;
+    // received_bytes bounds the whole stream, so many small valid events cannot accumulate forever.
+    // received_bytes 约束整条流，使大量合规的小事件也不能无限累积。
+    let mut received_bytes = 0usize;
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|error| {
             format!(
@@ -571,6 +627,8 @@ async fn decode_generic_structured_sse(
                 error.without_url()
             )
         })?;
+        received_bytes =
+            admit_provider_response_bytes(received_bytes, chunk.len(), "Provider structured SSE")?;
         pending.extend_from_slice(chunk.as_ref());
         // consumed is the end of the last complete frame; the buffer is compacted once per chunk.
         // consumed 是最后一个完整帧的结束位置；缓冲区每个分块只压缩一次。
@@ -1913,13 +1971,26 @@ where
     let results =
         futures_util::stream::iter(requests).buffer_unordered(PROVIDER_BATCH_FOLLOW_UP_CONCURRENCY);
     futures_util::pin_mut!(results);
-    // Retain successful results by submission index.
-    // 按提交序号保留成功结果。
+    // Retain successful results by submission index under the shared response ceiling.
+    // 按提交序号保留成功结果，并受共享响应上限约束。
     let mut ordered = BTreeMap::new();
+    // Count separators as results are retained, even while earlier requests are pending.
+    // 保留结果时即计入分隔符，即使前序请求尚未完成。
+    let mut retained_bytes = 0usize;
     while let Some(result) = results.next().await {
         // fetch_provider_batch_item guarantees nonempty successful texts.
         // fetch_provider_batch_item 保证成功结果文本非空。
         let (index, text) = result?;
+        let separator_bytes = if ordered.is_empty() {
+            0
+        } else {
+            separator.len()
+        };
+        retained_bytes = admit_provider_response_bytes(
+            retained_bytes,
+            separator_bytes.saturating_add(text.len()),
+            "Provider task batch follow-up",
+        )?;
         ordered.insert(index, text);
     }
     // Assemble only successful batches in the caller's original identity order.
@@ -1947,7 +2018,7 @@ async fn fetch_provider_batch_item(
         format_provider_tool_transport_error("Provider task batch follow-up", error)
     })?;
     let status_code = response.status();
-    let body = read_provider_response_text(response, "Provider task batch follow-up").await?;
+    let body = read_bounded_provider_response(response, "Provider task batch follow-up").await?;
     if !status_code.is_success() {
         return Err(format_http_error(
             "Provider task batch follow-up",
@@ -2121,7 +2192,7 @@ async fn execute_generic_json_async_request(
         .await
         .map_err(|error| format_provider_tool_transport_error(operation, error))?;
     let status = response.status();
-    let text = read_provider_response_text(response, operation).await?;
+    let text = read_bounded_provider_response(response, operation).await?;
     if !status.is_success() {
         return Err(format_http_error(operation, status.as_u16(), text.as_str()));
     }
@@ -2443,7 +2514,7 @@ async fn execute_generic_mcp_http_request(
         .map(str::trim)
         .filter(|value| !value.is_empty() && value.len() <= 1024)
         .map(str::to_string);
-    let response_text = read_provider_response_text(response, operation).await?;
+    let response_text = read_bounded_provider_response(response, operation).await?;
     if !status.is_success() {
         return Err(format_http_error(
             "Provider MCP",
@@ -2713,7 +2784,7 @@ async fn execute_generic_json_sync_request_with_headers<T: Serialize>(
         .await
         .map_err(|error| format_provider_tool_transport_error(operation, error))?;
     let status = response.status();
-    let response_text = read_provider_response_text(response, operation).await?;
+    let response_text = read_bounded_provider_response(response, operation).await?;
     if !status.is_success() {
         return Err(format_http_error(
             operation,
@@ -3228,12 +3299,17 @@ fn decode_declared_generic_resource(
         crate::ProviderToolResourceEncoding::DataUrl => {
             // The decoded pair retains both the embedded MIME authority and exact bytes.
             // 解码结果同时保留内嵌 MIME 权威与精确字节。
-            let (mime_type, decoded) = decode_generic_data_url(carrier, global_index)?;
+            let (mime_type, decoded) = decode_generic_data_url(decoder, carrier, global_index)?;
             enforce_declared_resource_byte_limit(decoder, decoded.len(), global_index)?;
             bytes = Some(decoded);
             Some(mime_type)
         }
         crate::ProviderToolResourceEncoding::Base64 => {
+            reject_oversized_encoded_resource(
+                decoder,
+                base64_minimum_decoded_len(carrier.len()),
+                global_index,
+            )?;
             // Standard Base64 is the only registered raw-Base64 alphabet.
             // 标准 Base64 是唯一已注册的原始 Base64 字母表。
             let decoded = base64::engine::general_purpose::STANDARD
@@ -3246,6 +3322,7 @@ fn decode_declared_generic_resource(
             None
         }
         crate::ProviderToolResourceEncoding::Hex => {
+            reject_oversized_encoded_resource(decoder, carrier.len() / 2, global_index)?;
             // Hexadecimal decoding is provider-neutral and rejects odd or non-hex input.
             // 十六进制解码与供应商无关，并拒绝奇数长度或非十六进制输入。
             let decoded = decode_generic_hexadecimal_bytes(carrier, global_index)?;
@@ -3283,7 +3360,11 @@ fn decode_declared_generic_resource(
 
 /// Decodes one strict Base64 Data URL into its MIME type and bytes.
 /// 把一个严格 Base64 Data URL 解码为 MIME 类型与字节。
-fn decode_generic_data_url(value: &str, index: usize) -> Result<(String, Vec<u8>), String> {
+fn decode_generic_data_url(
+    decoder: &crate::ProviderToolResourceDecoder,
+    value: &str,
+    index: usize,
+) -> Result<(String, Vec<u8>), String> {
     // The prefix must be exact so arbitrary URI schemes cannot enter the byte decoder.
     // 前缀必须精确，避免任意 URI Scheme 进入字节解码器。
     let payload = value
@@ -3303,6 +3384,7 @@ fn decode_generic_data_url(value: &str, index: usize) -> Result<(String, Vec<u8>
             "Provider tool resource {index} data URL must declare a MIME type and base64 encoding."
         ));
     }
+    reject_oversized_encoded_resource(decoder, base64_minimum_decoded_len(encoded.len()), index)?;
     // Standard Base64 produces the exact inline artifact bytes.
     // 标准 Base64 生成精确的内联产物字节。
     let bytes = base64::engine::general_purpose::STANDARD
@@ -3335,13 +3417,43 @@ fn decode_generic_hexadecimal_bytes(value: &str, index: usize) -> Result<Vec<u8>
         .collect()
 }
 
-/// Enforces one manifest-declared byte ceiling within the engine-wide absolute limit.
-/// 在引擎绝对上限内执行一个 Manifest 声明的字节上限。
-fn enforce_declared_resource_byte_limit(
+/// Returns the smallest byte count a valid Base64 text of `encoded_len` characters decodes to.
+/// 返回长度为 `encoded_len` 的有效 Base64 文本解码后的最小字节数。
+///
+/// Padding removes at most two bytes from each full quantum, so this is a safe lower bound for
+/// rejecting oversized payloads before the decoder allocates.
+/// 填充最多使完整分组少两个字节，因此该下界可安全用于在解码器分配前拒绝超限载荷。
+fn base64_minimum_decoded_len(encoded_len: usize) -> usize {
+    (encoded_len / 4).saturating_mul(3).saturating_sub(2)
+}
+
+/// Rejects an encoded resource whose guaranteed decoded size already exceeds its declared limit.
+/// 拒绝保证解码大小已超过声明上限的编码资源。
+///
+/// # Parameters
+/// 参数
+/// `minimum_decoded` is a lower bound derived from the carrier length, never an estimate above it.
+/// `minimum_decoded` 是由载体长度推导的下界，绝不高于实际解码大小。
+fn reject_oversized_encoded_resource(
     decoder: &crate::ProviderToolResourceDecoder,
-    decoded_length: usize,
+    minimum_decoded: usize,
     index: usize,
 ) -> Result<(), String> {
+    let maximum = declared_resource_byte_limit(decoder, index)?;
+    if minimum_decoded as u64 > maximum {
+        return Err(format!(
+            "Provider tool resource {index} must be non-empty and no larger than {maximum} bytes."
+        ));
+    }
+    Ok(())
+}
+
+/// Resolves one manifest-declared byte ceiling within the engine-wide absolute limit.
+/// 在引擎绝对上限内解析一个 Manifest 声明的字节上限。
+fn declared_resource_byte_limit(
+    decoder: &crate::ProviderToolResourceDecoder,
+    index: usize,
+) -> Result<u64, String> {
     // Raw byte carriers must always state a positive bounded ceiling.
     // 原始字节载体必须始终声明正数有界上限。
     let maximum = decoder.max_bytes.ok_or_else(|| {
@@ -3352,6 +3464,17 @@ fn enforce_declared_resource_byte_limit(
             "Provider tool resource decoder for item {index} has an invalid byte limit."
         ));
     }
+    Ok(maximum)
+}
+
+/// Enforces one manifest-declared byte ceiling on the exact decoded length.
+/// 对精确解码长度执行一个 Manifest 声明的字节上限。
+fn enforce_declared_resource_byte_limit(
+    decoder: &crate::ProviderToolResourceDecoder,
+    decoded_length: usize,
+    index: usize,
+) -> Result<(), String> {
+    let maximum = declared_resource_byte_limit(decoder, index)?;
     if decoded_length == 0 || decoded_length as u64 > maximum {
         return Err(format!(
             "Provider tool resource {index} must be non-empty and no larger than {maximum} bytes."
@@ -4088,6 +4211,80 @@ mod tests {
         assert_eq!(output, "a", "first item has no separator");
         append_provider_result(&mut output, "b", "中");
         assert_eq!(output, "a中b");
+    }
+
+    /// The response ceiling admits its exact size, rejects one more byte and never overflows.
+    /// 响应上限准入恰好等于上限的大小，拒绝多出的一个字节，且不会溢出。
+    #[test]
+    fn response_ceiling_admits_exact_size_and_rejects_overflow() {
+        let limit = usize::try_from(PROVIDER_TOOL_RESPONSE_BYTE_LIMIT).expect("64-bit host");
+        assert_eq!(
+            admit_provider_response_bytes(limit - 1, 1, "Fixture"),
+            Ok(limit)
+        );
+        assert!(admit_provider_response_bytes(limit, 1, "Fixture").is_err());
+        assert!(admit_provider_response_bytes(usize::MAX, 1, "Fixture").is_err());
+    }
+
+    /// Oversized inline carriers fail on length alone, before the Base64 or hex decoder runs.
+    /// 超限内联载体仅凭长度即被拒绝，Base64 或十六进制解码器不会运行。
+    #[test]
+    fn oversized_inline_resources_are_rejected_before_decoding() {
+        let contract = crate::ProviderToolOutputContract {
+            kind: ProviderToolOutputKind::Resources,
+            source_path: String::from("/unused"),
+            normalized_result_path: String::from("/resources"),
+            resource_kind: Some(String::from("image")),
+            mime_types: vec![String::from("image/png")],
+            resource_decoders: Vec::new(),
+        };
+        let decoder = |encoding| crate::ProviderToolResourceDecoder {
+            source_path: String::from("/inline"),
+            item_source_path: None,
+            encoding,
+            resource_kind: String::from("image"),
+            mime_type: None,
+            mime_type_request_path: None,
+            mime_types_by_request_value: std::collections::BTreeMap::new(),
+            optional: false,
+            max_bytes: Some(4),
+            output_id_prefix: None,
+        };
+        // Carriers use characters outside each alphabet, so only the length check can reject them by size.
+        // 载体使用各字母表之外的字符，因此只有长度检查能按大小拒绝它们。
+        for (encoding, carrier) in [
+            (crate::ProviderToolResourceEncoding::Base64, "!".repeat(12)),
+            (crate::ProviderToolResourceEncoding::Hex, "zz".repeat(5)),
+            (
+                crate::ProviderToolResourceEncoding::DataUrl,
+                format!("data:image/png;base64,{}", "!".repeat(12)),
+            ),
+        ] {
+            let error = decode_declared_generic_resource(
+                &contract,
+                &decoder(encoding),
+                &Value::String(carrier),
+                None,
+                0,
+                0,
+                0,
+            )
+            .expect_err("oversized carrier");
+            assert!(error.contains("no larger than 4 bytes"), "{error}");
+        }
+        // A carrier within the limit still reaches the decoder and its alphabet validation.
+        // 未超限的载体仍会进入解码器并接受字母表校验。
+        let error = decode_declared_generic_resource(
+            &contract,
+            &decoder(crate::ProviderToolResourceEncoding::Base64),
+            &Value::String("!".repeat(4)),
+            None,
+            0,
+            0,
+            0,
+        )
+        .expect_err("invalid alphabet");
+        assert!(error.contains("base64 is invalid"), "{error}");
     }
 
     /// Length admission handles all padding widths without decoding oversized data.

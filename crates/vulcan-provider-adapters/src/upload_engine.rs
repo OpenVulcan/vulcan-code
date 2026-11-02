@@ -2237,7 +2237,7 @@ async fn read_upload_response(
     tokio::select! {
         biased;
         _ = context.cancellation.wait() => Err(MediaUploadFailure::Cancelled),
-        body = crate::provider_tool_execution::read_provider_response_text(response, "Media upload") => {
+        body = crate::provider_tool_execution::read_bounded_provider_response(response, "Media upload") => {
             body.map_err(|_| MediaUploadFailure::InvalidResponse { stage })
         }
     }
