@@ -167,7 +167,7 @@ make init-system
 
 类 Unix 初始化同样必须实际执行锁定的 `protoc` 安装步骤，成功后才准备受管 Node 并报告完成。`node --test scripts/check-build-environment.test.cjs scripts/install-linux-system-deps.test.cjs` 使用隔离子程序验证真实入口的阶段顺序、失败传递，以及 Linux 系统依赖就绪时跳过安装、权限不足时拒绝、安装后仍未满足依赖时拒绝等行为，不运行真实包管理器或联网；`pwsh -NoProfile -File scripts/test_dependency_archive.ps1` 使用真实离线归档验证共享解压规则与 Lua 安装器的解压、标记及失败保留行为。
 
-Lua 运行时安装器通过 `scripts/dependency-archive.ps1` 使用共享解压规则：Windows 使用系统 `tar.exe` 或 PATH 中的同名应用，Linux/macOS 使用 PATH 中的 `tar`。原生 tar 返回非零退出码时立即失败，不继续发布文件或写入安装标记。RTK 与 sg/rg 一样由 `install-locked-tools.mjs` 按锁文件安装（`make deps tools`）。
+Lua 运行时安装器通过 `scripts/dependency-archive.ps1` 使用共享解压规则：Windows 使用系统 `tar.exe` 或 PATH 中的同名应用，Linux/macOS 使用 PATH 中的 `tar`。原生 tar 返回非零退出码时立即失败，不继续发布文件或写入安装标记。RTK 与 sg/rg 一样由 `install-locked-tools.mjs` 按锁文件安装（`make deps tools`）；Linux arm64 上 RTK 从锁定的源码归档本机编译，需要已安装的固定工具链与 C 编译器（`init-system` 已提供），约增加数分钟。
 
 Rust 工具已存在时会只打印版本并跳过安装，不会重复编译或覆盖现有工具。Windows 通过 `make.ps1` 执行，类 Unix 环境通过 `make.sh` 转发到同一套 PowerShell 依赖入口。
 

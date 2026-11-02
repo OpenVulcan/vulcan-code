@@ -113,20 +113,24 @@
       "targets": {
         "x86_64-pc-windows-msvc": "rtk-oss-x86_64-pc-windows-msvc.zip",
         "x86_64-unknown-linux-gnu": "rtk-oss-x86_64-unknown-linux-musl.tar.gz",
-        "aarch64-unknown-linux-gnu": "rtk-oss-aarch64-unknown-linux-gnu.tar.gz",
         "x86_64-apple-darwin": "rtk-oss-x86_64-apple-darwin.tar.gz",
         "aarch64-apple-darwin": "rtk-oss-aarch64-apple-darwin.tar.gz"
+      },
+      "source_targets": [
+        "aarch64-unknown-linux-gnu"
+      ],
+      "source": {
+        "url": "https://github.com/rtk-ai/rtk/archive/753a3b0e939f2e4490fc24e3a1984010f40a103c.tar.gz",
+        "sha256": "4c5f529d90c5bdf420229f8c7a60a4f1fa47f58f7c9adffed45b1d383d8acaf3",
+        "build_args": [
+          "--no-default-features"
+        ]
       },
       "assets": [
         {
           "name": "rtk-oss-aarch64-apple-darwin.tar.gz",
           "digest": "sha256:1623590dd8d65374f61589c599c764c08ba9ce993ebe6b601312a89a3c874558",
           "browser_download_url": "https://github.com/rtk-ai/rtk/releases/download/v1.1.0/rtk-oss-aarch64-apple-darwin.tar.gz"
-        },
-        {
-          "name": "rtk-oss-aarch64-unknown-linux-gnu.tar.gz",
-          "digest": "sha256:57a4fac13d18da77f0577ea8b68def7934b934bf76d0a6e161f0bfd06b1e1078",
-          "browser_download_url": "https://github.com/rtk-ai/rtk/releases/download/v1.1.0/rtk-oss-aarch64-unknown-linux-gnu.tar.gz"
         },
         {
           "name": "rtk-oss-x86_64-apple-darwin.tar.gz",

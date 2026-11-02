@@ -50,7 +50,11 @@ WebUI 展示时阅读。普通业务任务不需要加载这些细节。
 - RTK 以独立 OSS 可执行文件接入，仅保留 Shell 命令改写与 Git 提交上下文过滤；不注册通用输出压缩
   Hook，不部署完整引擎或 `rtk-proxy`。发行标签、各平台制品名与摘要以 `scripts/build-inputs.lock.json`
   的 `tools.rtk` 为准，与 sg/rg 一同安装到 `third_party/tools/<target>/bin/`，由 `make.ps1 sync`
-  复制到发行目录 `tools/bin/`；锁文件未声明制品的宿主（目前为 Windows arm64）不随包提供 RTK。
+  复制到发行目录 `tools/bin/`。上游二进制无法在产品最低系统上运行的宿主列在 `source_targets` 中，改为
+  按 `source`（固定到标签提交的源码归档及其 SHA-256，构建参数与上游 `rtk-oss` 相同）以仓库固定的 Rust
+  工具链在本机编译，再执行同样的版本检查；目前为 Linux arm64，因为上游 arm64 制品需要 glibc 2.39，
+  而发行版在 Ubuntu 22.04（glibc 2.35）上构建。锁文件既未声明制品也未声明源码构建的宿主（目前为
+  Windows arm64）不随包提供 RTK。
 - Shell 命令改写由宿主原生执行（[`rtk.rs`](../../crates/vulcan-host-tools/src/rtk.rs)），不经插件 Hook：
   `shell_command` 先以隐藏窗口子进程调用 `tools/bin` 中的 `rtk rewrite`（超时唯一定义为
   `RTK_REWRITE_TIMEOUT`），再把结果交给插件 Hook 链；报告中的 `original_command` 始终是模型原命令。

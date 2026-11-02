@@ -90,10 +90,34 @@ export const JUDGE_RUNTIME_MANIFEST = 'judge-runtime.json';
 //
 // Parameters: lock is the parsed build-input lock and target is a resolveToolPlatform target triple.
 // 参数：lock 是已解析的构建输入锁文件，target 是 resolveToolPlatform 给出的目标三元组。
-// Returns: sg and rg always; rtk only where its lock targets name the host, because RTK publishes no build elsewhere.
-// 返回值：始终包含 sg 与 rg；rtk 仅在其锁文件 targets 列出该宿主时包含，因为 RTK 未在其他宿主发布构建。
+// Returns: sg and rg always; rtk only where its lock names an archive or a source build for the host.
+// 返回值：始终包含 sg 与 rg；rtk 仅在其锁文件为该宿主声明归档或源码构建时包含。
 export function bundledToolIds(lock, target) {
-  return ['sg', 'rg', ...(lock.tools.rtk.targets[target] ? ['rtk'] : [])];
+  const rtk = lock.tools.rtk;
+  return ['sg', 'rg', ...(rtk.targets[target] || rtk.source_targets.includes(target) ? ['rtk'] : [])];
+}
+
+// pinnedToolchain returns the repository's Rust channel so source-built tools use the same compiler as the product.
+// pinnedToolchain 返回仓库固定的 Rust 频道，使源码构建的工具与产品使用同一编译器。
+async function pinnedToolchain() {
+  const toml = await readFile(new URL('../rust-toolchain.toml', import.meta.url), 'utf8');
+  const channel = toml.match(/^channel\s*=\s*"([^"]+)"/m)?.[1];
+  if (!channel) throw new Error('rust-toolchain.toml declares no channel.');
+  return channel;
+}
+
+// buildLockedSource compiles the single source tree in extracted with the pinned toolchain and returns the release binary.
+// Building on the release host links against that host's C library, so the result runs wherever the product runs.
+// buildLockedSource 用固定工具链编译 extracted 中唯一的源码树并返回 release 二进制。
+// 在发行宿主上构建会链接该宿主的 C 库，因此产物可在产品能运行的所有系统上运行。
+async function buildLockedSource(extracted, source, binaryName, targetDirectory, offline) {
+  const roots = await readdir(extracted, { withFileTypes: true });
+  if (roots.length !== 1 || !roots[0].isDirectory()) throw new Error(`Expected one source directory in ${extracted}`);
+  const sourceRoot = path.join(extracted, roots[0].name);
+  execFileSync('cargo', [
+    'build', '--release', '--locked', ...(offline ? ['--offline'] : []), ...source.build_args, '--target-dir', targetDirectory,
+  ], { cwd: sourceRoot, env: { ...process.env, RUSTUP_TOOLCHAIN: await pinnedToolchain() }, stdio: 'inherit' });
+  return path.join(targetDirectory, 'release', binaryName);
 }
 
 // prepareJudgeRuntime copies only the declared members of each verified archive into prepared and writes the manifest.
@@ -231,26 +255,31 @@ export async function installLockedTools(group, repositoryRoot, offline = false)
       // version comes exclusively from the reviewed manifest.
       // version 仅来自已评审清单。
       const version = id === 'protoc' || id === 'nextest' ? lock[id].version : lock.tools[id].tag_name;
+      // sourceBuild selects the reviewed source archive where the upstream binary cannot run on the supported floor.
+      // sourceBuild 在上游二进制无法在受支持的最低系统上运行时，改用已评审的源码归档。
+      const sourceBuild = id === 'rtk' && lock.tools.rtk.source_targets.includes(platform.target);
       // archiveName follows the upstream tool-specific platform naming contract.
       // archiveName 遵循各上游工具的平台命名契约。
       const archiveName = id === 'protoc' ? `protoc-${version}-${platform.protoc}.zip`
         : id === 'nextest' ? `cargo-nextest-${version}-${platform.target}.zip`
         : id === 'sg' ? `app-${platform.target}.zip`
+        : sourceBuild ? `rtk-${version}-source.tar.gz`
         : id === 'rtk' ? lock.tools.rtk.targets[platform.target]
         : `ripgrep-${version}-${platform.rgTarget}.${platform.archiveKind}`;
-      // assets is the declared archive list for this tool.
-      // assets 是此工具声明的归档列表。
-      const assets = id === 'protoc' || id === 'nextest' ? lock[id].assets : lock.tools[id].assets;
-      // matches rejects missing and duplicated identities instead of selecting a fallback.
-      // matches 拒绝缺失和重复身份，不选择替代项。
-      const matches = assets.filter(asset => asset.name === archiveName);
-      if (matches.length !== 1) throw new Error(`Expected one locked archive: ${archiveName}`);
-      // asset is the unique manifest member.
-      // asset 是清单中的唯一匹配成员。
-      const asset = matches[0];
-      // identity normalizes the two explicit lock shapes for the shared downloader.
-      // identity 将两种明确的锁结构规范化后交给共用下载器。
-      const identity = id === 'protoc' || id === 'nextest' ? asset : { url: asset.browser_download_url, sha256: asset.digest.replace(/^sha256:/, '') };
+      // identity is the {url, sha256} the shared downloader verifies, normalized from the explicit lock shapes.
+      // identity 是共用下载器校验的 {url, sha256}，由各明确的锁结构规范化而来。
+      let identity = sourceBuild ? lock.tools.rtk.source : undefined;
+      if (!identity) {
+        // assets is the declared archive list for this tool.
+        // assets 是此工具声明的归档列表。
+        const assets = id === 'protoc' || id === 'nextest' ? lock[id].assets : lock.tools[id].assets;
+        // matches rejects missing and duplicated identities instead of selecting a fallback.
+        // matches 拒绝缺失和重复身份，不选择替代项。
+        const matches = assets.filter(asset => asset.name === archiveName);
+        if (matches.length !== 1) throw new Error(`Expected one locked archive: ${archiveName}`);
+        const asset = matches[0];
+        identity = id === 'protoc' || id === 'nextest' ? asset : { url: asset.browser_download_url, sha256: asset.digest.replace(/^sha256:/, '') };
+      }
       // archive holds only digest-verified bytes.
       // archive 仅保存摘要已验证的字节。
       const archive = path.join(temporary, archiveName);
@@ -265,7 +294,9 @@ export async function installLockedTools(group, repositoryRoot, offline = false)
       const sourceName = `${id === 'sg' ? 'ast-grep' : id === 'nextest' ? 'cargo-nextest' : id}${platform.suffix}`;
       // binary is the unique regular executable member.
       // binary 是唯一的普通可执行文件成员。
-      const binary = await locateBinary(extracted, sourceName);
+      const binary = sourceBuild
+        ? await buildLockedSource(extracted, lock.tools.rtk.source, sourceName, path.join(temporary, `${id}-target`), offline)
+        : await locateBinary(extracted, sourceName);
       if (process.platform !== 'win32') await chmod(binary, 0o755);
       // reported captures a real execution check before replacing the old installation.
       // reported 在替换旧安装之前记录真实执行检查结果。

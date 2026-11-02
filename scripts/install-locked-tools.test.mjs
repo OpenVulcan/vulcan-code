@@ -27,9 +27,9 @@ test('all supported hosts have exactly one locked tool archive', async () => {
   assert.match(lock.nextest.assets[0].sha256, /^[a-f0-9]{64}$/);
 });
 
-// RTK ships only where its lock names an archive, and each named archive is one locked asset.
-// RTK 仅在锁文件为其命名归档的宿主随附，且每个命名归档恰好对应一个锁定资产。
-test('rtk targets resolve to exactly one locked archive and join the bundled set only there', async () => {
+// RTK ships only where its lock names an archive or a source build, and each named archive is one locked asset.
+// RTK 仅在锁文件为其命名归档或源码构建的宿主随附，且每个命名归档恰好对应一个锁定资产。
+test('rtk targets resolve to exactly one locked archive or the source build and join the bundled set only there', async () => {
   // lock supplies the declared targets rather than a duplicated host list.
   // lock 提供已声明目标，避免重复宿主清单。
   const lock = JSON.parse(await readFile(new URL('./build-inputs.lock.json', import.meta.url), 'utf8'));
@@ -41,11 +41,21 @@ test('rtk targets resolve to exactly one locked archive and join the bundled set
     assert.match(matches[0].digest, /^sha256:[a-f0-9]{64}$/);
     assert.ok(matches[0].browser_download_url.startsWith('https://'));
   }
+  // A host is either archive-installed or source-built, never both, so the installer has one answer per host.
+  // 宿主要么安装归档、要么源码构建，不会两者兼有，使安装器对每个宿主只有一个答案。
+  for (const target of lock.tools.rtk.source_targets) {
+    assert.ok(supported.has(target), `undeclared source target ${target}`);
+    assert.equal(lock.tools.rtk.targets[target], undefined, `${target} is both archive and source`);
+  }
+  assert.ok(lock.tools.rtk.source.url.startsWith('https://'));
+  assert.match(lock.tools.rtk.source.sha256, /^[a-f0-9]{64}$/);
+  assert.ok(Array.isArray(lock.tools.rtk.source.build_args));
   assert.ok(lock.tools.rtk.licenses.length > 0);
   for (const target of supported) {
     const ids = bundledToolIds(lock, target);
     assert.deepEqual(ids.slice(0, 2), ['sg', 'rg']);
-    assert.equal(ids.includes('rtk'), Boolean(lock.tools.rtk.targets[target]), target);
+    const declared = Boolean(lock.tools.rtk.targets[target]) || lock.tools.rtk.source_targets.includes(target);
+    assert.equal(ids.includes('rtk'), declared, target);
   }
 });
 
