@@ -26,6 +26,7 @@ import {
 } from "@/components/conversation/conversation-detail";
 import { ConversationBlocksView } from "@/components/conversation/conversation-block-renderer";
 import { isMergeableToolBlock } from "@/components/conversation/conversation-classifiers";
+import { ToolSequenceGroupedContext } from "@/components/conversation/conversation-tool-execution";
 import type { ToolExecutionConversationBlock } from "@/components/conversation/conversation-tool-execution-types";
 import { fixedV1ToolEvent } from "@/components/conversation/tool-presentations/presentation-value-readers";
 import { ToolSequenceHead, toolSequenceEntry } from "@/conversation/tools/tool-sequence";
@@ -303,19 +304,19 @@ export function ConversationToolSequenceGroup(props: {
   // toggledRef marks a commit caused by the user's own toggle, which is not an automatic fold.
   // toggledRef 标记由用户自己切换引起的提交，它不属于自动折叠。
   const toggledRef = React.useRef(false);
-  // floorResetRef asks the high-water floor to start over after a user toggle.
-  // floorResetRef 要求高水位下限在用户切换后重新计算。
-  const floorResetRef = React.useRef(0);
+  // toggleCountRef counts user toggles: the high-water floor starts over and the cards remount closed after each.
+  // toggleCountRef 记录用户切换次数：每次切换后高水位下限重新计算，卡片以收起状态重新挂载。
+  const toggleCountRef = React.useRef(0);
   const handleToggle = () => {
     holdArmedRef.current = false;
     toggledRef.current = true;
-    floorResetRef.current += 1;
+    toggleCountRef.current += 1;
     setExpanded(!open);
   };
   // A folded body that shows live cards keeps its tallest height until it closes, so parallel finishes and
   // shorter replacement cards never shrink it.
   // 显示实时卡片的折叠正文在收起前保持其最高高度，使并行结束或更矮的替换卡片都不会让它变矮。
-  useToolSequenceHighWaterFloor(bodyRef, folded && bodyVisible, floorResetRef.current);
+  useToolSequenceHighWaterFloor(bodyRef, folded && bodyVisible, toggleCountRef.current);
   // leaving holds the card a 1-for-1 replacement pushed out, while it slides up over the new one.
   // leaving 保存一对一替换时被顶出的卡片，在其覆盖新卡片向上滑出期间保留。
   const [leaving, setLeaving] = React.useState<ConversationRenderItem | null>(null);
@@ -364,6 +365,7 @@ export function ConversationToolSequenceGroup(props: {
     >
       {grouped ? <ToolSequenceHead entries={entries} expanded={open} onToggle={handleToggle} /> : null}
       <ConversationMeasuredCollapse collapseId={props.collapseId} expanded={bodyVisible}>
+        <ToolSequenceGroupedContext.Provider value={grouped}>
         <div className="vk-tool-seq-body" ref={bodyRef}>
           {leaving && enteringId ? (
             <div
@@ -379,12 +381,13 @@ export function ConversationToolSequenceGroup(props: {
             <div
               className="vk-tool-seq-slot"
               data-entering={item.id === enteringId ? "" : undefined}
-              key={item.id}
+              key={`${toggleCountRef.current}:${item.id}`}
             >
               {props.renderItem(item)}
             </div>
           ))}
         </div>
+        </ToolSequenceGroupedContext.Provider>
       </ConversationMeasuredCollapse>
     </section>
   );

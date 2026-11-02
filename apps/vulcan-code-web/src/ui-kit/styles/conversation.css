@@ -611,7 +611,9 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-tool-elapsed[data-live] { color: var(--vk-ember-ink); }
 .vk-tool-chev { width: 0.9rem; height: 0.9rem; color: var(--vk-ink-3); transition: transform var(--vk-t-fast); }
 .vk-tool[data-open] .vk-tool-chev { transform: rotate(90deg); }
-.vk-tool-body { border-top: var(--vk-bw) solid var(--vk-line-soft); min-width: 0; }
+/* A card body never grows past one bounded viewport, whatever view it holds; views with their own lower cap
+ * (output, code, diffs) scroll first. */
+.vk-tool-body { max-height: min(32rem, 60vh); overflow-y: auto; overscroll-behavior: auto; border-top: var(--vk-bw) solid var(--vk-line-soft); min-width: 0; }
 .vk-tool-body > .vk-facts,
 .vk-tool-body > .vk-steps-list { padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3); font-size: var(--vk-fs-sm); }
 .vk-tool-body > .vk-steps-list > .vk-step { padding: calc(var(--vk-u) * 1.25) 0; }
@@ -719,7 +721,7 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-lines > span:nth-child(odd) { color: var(--vk-ink-3); text-align: right; user-select: none; border-right: var(--vk-bw) solid var(--vk-line-soft); position: sticky; left: 0; background: var(--vk-code-bg); }
 
 /* Diff rows: context | insert | delete | omit. */
-.vk-diff { overflow-x: auto; font-family: var(--vk-font-mono); font-size: var(--vk-fs-sm); line-height: 1.6; background: var(--vk-code-bg); }
+.vk-diff { max-height: 18rem; overflow: auto; font-family: var(--vk-font-mono); font-size: var(--vk-fs-sm); line-height: 1.6; background: var(--vk-code-bg); }
 .vk-diff-row { display: grid; grid-template-columns: 3.2em 3.2em 1.6em minmax(max-content, 1fr); min-width: 100%; width: max-content; }
 .vk-diff-row > span { padding: 0 calc(var(--vk-u) * 1.5); white-space: pre; }
 .vk-diff-row > span:nth-child(-n + 2) { color: var(--vk-ink-3); text-align: right; user-select: none; }
@@ -728,7 +730,6 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-diff-row[data-kind="delete"] { background: var(--vk-diff-del-bg); color: var(--vk-diff-del-ink); }
 .vk-diff-row[data-kind="omit"] { background: var(--vk-signal-soft); color: var(--vk-signal); }
 .vk-diff-row[data-kind="omit"] > span:last-child { font-family: var(--vk-font-ui); font-size: var(--vk-fs-xs); }
-.vk-diff[data-plain] { max-height: 18rem; }
 .vk-diff[data-plain] .vk-diff-row { grid-template-columns: 1.6em minmax(max-content, 1fr); }
 .vk-diff[data-plain] .vk-diff-row > span { color: inherit; text-align: left; }
 .vk-diff[data-plain] .vk-diff-row > span:first-child { text-align: center; user-select: none; }

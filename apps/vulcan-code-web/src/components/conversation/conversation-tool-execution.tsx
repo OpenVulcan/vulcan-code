@@ -24,6 +24,12 @@ export type {
 } from "./conversation-tool-execution-types";
 export { toolExecutionDisplayState } from "./conversation-tool-execution-model";
 
+// ToolSequenceGroupedContext is true inside a tool run folded behind a sequence head. Cards there start closed on
+// every mount and ignore the expansion they had as standalone cards, so opening the run never reopens its cards.
+// ToolSequenceGroupedContext 在折叠到序列标题之后的工具序列内为 true。其中的卡片每次挂载都从收起开始，且不沿用
+// 作为独立卡片时的展开状态，因此展开序列不会重新展开其中的卡片。
+export const ToolSequenceGroupedContext = React.createContext(false);
+
 // ToolExecutionBlock renders one tool row: the card of a durable call, or of a request the model is still writing,
 // followed by any media the call generated.
 // ToolExecutionBlock 渲染单条工具行：可靠调用或模型仍在书写的请求所对应的卡片，以及该调用生成的媒体。
@@ -74,7 +80,8 @@ export function ToolExecutionBlock(props: {
   // localOpen applies a click immediately while the surface memory updates as a transition.
   // localOpen 立即应用点击，界面记忆则以过渡任务更新。
   const [localOpen, setLocalOpen] = React.useState<boolean | null>(null);
-  const open = localOpen ?? (cardKey !== null && props.expandedToolPresentationIds.has(cardKey));
+  const grouped = React.useContext(ToolSequenceGroupedContext);
+  const open = localOpen ?? (!grouped && cardKey !== null && props.expandedToolPresentationIds.has(cardKey));
   const { onToolPresentationExpandedChange } = props;
   const handleOpenChange = React.useCallback((next: boolean) => {
     if (!cardKey) return;

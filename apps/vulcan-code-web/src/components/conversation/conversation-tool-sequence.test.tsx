@@ -7,6 +7,8 @@ import type { ConversationRenderItem } from "./conversation-model";
 import { ConversationToolSequenceGroup, groupVisibleProcessBodyEntries } from "./conversation-render-items";
 import { ConversationMeasuredCollapseProvider } from "./conversation-measured-collapse";
 import { CONVERSATION_AUTOMATIC_FOLD_EVENT } from "./conversation-layout-events";
+import { ToolSequenceGroupedContext } from "./conversation-tool-execution";
+import * as React from "react";
 
 // All rows and timers are synthetic; production collapse and expansion-memory components remain mounted.
 // 所有记录与计时器均为合成数据；生产折叠组件和展开记忆组件保持真实挂载。
@@ -186,6 +188,34 @@ it("folds the entire stable group and preserves explicit manual expansion across
   expect(host.querySelectorAll("[data-tool]")).toHaveLength(2);
   await render([row("one"), row("two"), row("three")]);
   expect(host.querySelectorAll("[data-tool]")).toHaveLength(3);
+});
+
+// OpenableCard stands in for a tool card: it reports whether it sits in a group and keeps a local open state.
+// OpenableCard 代替工具卡：报告是否位于分组内，并保留本地展开状态。
+function OpenableCard(props: { id: string }) {
+  const grouped = React.useContext(ToolSequenceGroupedContext);
+  const [open, setOpen] = React.useState(false);
+  return <button data-grouped-card={grouped ? "true" : "false"} data-open={open ? "true" : "false"} data-tool={props.id}
+    onClick={() => setOpen(true)} type="button" />;
+}
+
+it("reopens a folded run with every card closed again, whatever the user opened inside it before", async () => {
+  const entry = groupVisibleProcessBodyEntries("process", [row("one"), row("two")], false)[0];
+  if (entry.kind !== "tool-sequence") throw new Error("Expected tool group");
+  await act(async () => root.render(<I18nProvider initialLocale="zh-CN">
+    <ConversationMeasuredCollapseProvider initialMemory={{}} onMemoryChange={() => {}} scopeId="session">
+      <ConversationToolSequenceGroup {...entry} collapseEnabled renderItem={(item) => <OpenableCard id={item.id} />} />
+    </ConversationMeasuredCollapseProvider>
+  </I18nProvider>));
+  const head = () => host.querySelector<HTMLButtonElement>(".vk-tools-head")!;
+  await act(async () => head().click());
+  const card = () => host.querySelector<HTMLButtonElement>('[data-tool="one"]')!;
+  expect(card().dataset.groupedCard).toBe("true");
+  await act(async () => card().click());
+  expect(card().dataset.open).toBe("true");
+  await act(async () => head().click());
+  await act(async () => head().click());
+  expect(card().dataset.open).toBe("false");
 });
 
 it("keeps every row open with folding disabled, including a previously manually closed group", async () => {
