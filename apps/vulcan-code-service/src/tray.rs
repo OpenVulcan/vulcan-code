@@ -134,13 +134,16 @@ pub fn run_with_tray() {
         bridge_failure: service.http_bridge_failure_slot(),
         shutdown_in_progress: Arc::new(AtomicBool::new(false)),
     };
-    let mut builder = EventLoopBuilder::<TrayEvent>::with_user_event();
+    let event_loop = EventLoopBuilder::<TrayEvent>::with_user_event().build();
+    // tao sets the macOS activation policy on the built loop; it only takes effect before `run`.
+    // tao 在已构建的事件循环上设置 macOS 激活策略，只在 `run` 之前生效。
     #[cfg(target_os = "macos")]
-    {
-        use tao::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
-        builder.with_activation_policy(ActivationPolicy::Accessory);
-    }
-    let event_loop = builder.build();
+    let event_loop = {
+        use tao::platform::macos::{ActivationPolicy, EventLoopExtMacOS};
+        let mut event_loop = event_loop;
+        event_loop.set_activation_policy(ActivationPolicy::Accessory);
+        event_loop
+    };
     let proxy = event_loop.create_proxy();
     let menu_proxy = proxy.clone();
     MenuEvent::set_event_handler(Some(move |event| {
