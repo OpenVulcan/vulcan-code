@@ -8,8 +8,8 @@ use crate::expr::{EvalContext, evaluate, truthy};
 use crate::plan::ToolChainPlan;
 use crate::template::{ArgNode, resolve_arguments};
 
-/// Largest total size of command streams and structured results one chain keeps for references.
-/// 单个链条为引用而保留的命令流与结构化结果的最大总大小。
+/// Largest total size of command streams one chain keeps for references.
+/// 单个链条为引用而保留的命令流的最大总大小。
 ///
 /// Every command is already capped on its own; this bounds the whole chain, so many compliant
 /// steps cannot together hold an unbounded amount of memory.
@@ -94,9 +94,6 @@ pub enum StepExecution {
         /// Decoded standard output and error of command tools, already redacted like `output`.
         /// 命令类工具解码后的标准输出与标准错误，已与 `output` 同样脱敏。
         streams: Option<(String, String)>,
-        /// Structured value the tool returned to the model instead of text, if any.
-        /// 工具以结构化值而非文本返回给模型的结果（如有）。
-        result: Option<Value>,
         /// Host data needed to render this step as its own tool card; opaque to the chain.
         /// 宿主将本步骤渲染为独立工具卡片所需的数据；对链条不透明。
         display: Option<Value>,
@@ -137,9 +134,6 @@ pub(crate) enum KeptValues {
         /// Command streams, for command tools.
         /// 命令流，仅命令类工具有。
         streams: Option<(String, String)>,
-        /// Structured result, when the tool returned one.
-        /// 结构化结果（如工具返回）。
-        result: Option<Value>,
     },
     /// The chain-wide budget was used up, so nothing was kept.
     /// 链条级预算已用尽，因此未保留任何内容。
@@ -177,8 +171,8 @@ pub struct StepRecord {
     /// Host display data returned with the step's result.
     /// 随步骤结果返回的宿主展示数据。
     pub display: Option<Value>,
-    /// In-memory values for `steps.<id>.stdout`, `.stderr` and `.result`.
-    /// 供 `steps.<id>.stdout`、`.stderr` 与 `.result` 使用的内存取值。
+    /// In-memory values for `steps.<id>.stdout` and `.stderr`.
+    /// 供 `steps.<id>.stdout` 与 `.stderr` 使用的内存取值。
     pub(crate) kept: KeptValues,
 }
 
@@ -263,7 +257,6 @@ pub async fn run_tool_chain(plan: &ToolChainPlan, executor: &impl StepExecutor) 
                 failed,
                 exit_code,
                 streams,
-                result,
                 display,
             } => {
                 record.outcome = if failed {
@@ -276,13 +269,12 @@ pub async fn run_tool_chain(plan: &ToolChainPlan, executor: &impl StepExecutor) 
                 record.display = display;
                 let size = streams
                     .as_ref()
-                    .map_or(0, |(stdout, stderr)| stdout.len() + stderr.len())
-                    + result.as_ref().map_or(0, |value| value.to_string().len());
+                    .map_or(0, |(stdout, stderr)| stdout.len() + stderr.len());
                 record.kept = if kept_bytes + size > MAX_KEPT_VALUE_BYTES {
                     KeptValues::OverBudget
                 } else {
                     kept_bytes += size;
-                    KeptValues::Kept { streams, result }
+                    KeptValues::Kept { streams }
                 };
             }
             StepExecution::Denied { message } => {

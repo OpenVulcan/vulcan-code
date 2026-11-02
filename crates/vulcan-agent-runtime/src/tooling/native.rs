@@ -298,7 +298,7 @@ pub(crate) use goal::*;
 pub(crate) use runtime_config::*;
 pub(crate) use submit_plan::*;
 pub(crate) use todolist::*;
-pub(crate) use tool_chain::build_tool_chain_tool;
+pub(crate) use tool_chain::{CHAINABLE_TOOL_IDS, build_tool_chain_tool};
 mod terminal;
 mod vmm;
 pub(crate) use terminal::*;

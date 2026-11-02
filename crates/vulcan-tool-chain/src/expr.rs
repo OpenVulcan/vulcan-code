@@ -91,9 +91,6 @@ pub(crate) enum StepField {
     /// Raw standard error of command tools without trailing whitespace.
     /// 命令类工具去除尾部空白的原始标准错误。
     Stderr,
-    /// Structured result the tool returned, null when it returned only text.
-    /// 工具返回的结构化结果；只返回文本时为 null。
-    Result,
 }
 
 impl StepField {
@@ -106,15 +103,13 @@ impl StepField {
             Self::ExitCode => "exit_code",
             Self::Stdout => "stdout",
             Self::Stderr => "stderr",
-            Self::Result => "result",
         }
     }
 }
 
 /// Field names listed in reference errors.
 /// 引用错误中列出的字段名。
-const STEP_FIELD_NAMES: &str =
-    "`.outcome`, `.output`, `.exit_code`, `.stdout`, `.stderr` or `.result`";
+const STEP_FIELD_NAMES: &str = "`.outcome`, `.output`, `.exit_code`, `.stdout` or `.stderr`";
 
 /// Key used by member access.
 /// 成员访问使用的键。
@@ -475,7 +470,6 @@ impl Parser {
             "exit_code" => StepField::ExitCode,
             "stdout" => StepField::Stdout,
             "stderr" => StepField::Stderr,
-            "result" => StepField::Result,
             other => {
                 return Err(format!(
                     "`steps.{step}.{other}` is not available; use {STEP_FIELD_NAMES}"
@@ -625,36 +619,33 @@ pub(crate) fn evaluate(expr: &Expr, context: &EvalContext<'_>) -> Result<Value, 
                 )),
                 StepField::Output => Ok(Value::String(record.output.trim().to_string())),
                 StepField::ExitCode => Ok(record.exit_code.map_or(Value::Null, Value::from)),
-                StepField::Stdout | StepField::Stderr | StepField::Result => {
-                    let (streams, result) = match &record.kept {
-                        KeptValues::Kept { streams, result } => (streams.as_ref(), result),
+                StepField::Stdout | StepField::Stderr => {
+                    let streams = match &record.kept {
+                        KeptValues::Kept { streams } => streams.as_ref(),
                         KeptValues::OverBudget => {
                             return Err(format!(
-                                "the chain already keeps {MAX_KEPT_VALUE_BYTES} bytes of command streams and structured results, so `{}` of step `{step}` was not kept; use `.output`, or write the data to a file and read it",
+                                "the chain already keeps {MAX_KEPT_VALUE_BYTES} bytes of command streams, so `{}` of step `{step}` was not kept; use `.output`, or write the data to a file and read it",
                                 field.name()
                             ));
                         }
-                        KeptValues::None => (None, &None),
+                        KeptValues::None => None,
                     };
-                    match field {
-                        StepField::Result => Ok(result.clone().unwrap_or(Value::Null)),
-                        _ => streams
-                            .map(|(stdout, stderr)| {
-                                let text = if *field == StepField::Stdout {
-                                    stdout
-                                } else {
-                                    stderr
-                                };
-                                Value::String(text.trim_end().to_string())
-                            })
-                            .ok_or_else(|| {
-                                format!(
-                                    "step `{step}` ({}) has no `{}`: only a command step that ran its command has one; use `.output`",
-                                    record.tool,
-                                    field.name()
-                                )
-                            }),
-                    }
+                    streams
+                        .map(|(stdout, stderr)| {
+                            let text = if *field == StepField::Stdout {
+                                stdout
+                            } else {
+                                stderr
+                            };
+                            Value::String(text.trim_end().to_string())
+                        })
+                        .ok_or_else(|| {
+                            format!(
+                                "step `{step}` ({}) has no `{}`: only a command step that ran its command has one; use `.output`",
+                                record.tool,
+                                field.name()
+                            )
+                        })
                 }
             }
         }

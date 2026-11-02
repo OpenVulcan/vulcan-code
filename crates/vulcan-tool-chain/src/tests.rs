@@ -53,7 +53,6 @@ fn ok(output: &str) -> StepExecution {
         failed: false,
         exit_code: Some(0),
         streams: None,
-        result: None,
         display: Some(json!({ "model_output": output })),
     }
 }
@@ -64,7 +63,6 @@ fn failed(output: &str) -> StepExecution {
         failed: true,
         exit_code: Some(1),
         streams: None,
-        result: None,
         display: None,
     }
 }
@@ -77,7 +75,6 @@ fn command(stdout: &str, stderr: &str, exit_code: i64) -> StepExecution {
         failed: exit_code != 0,
         exit_code: Some(exit_code),
         streams: Some((stdout.to_string(), stderr.to_string())),
-        result: None,
         display: None,
     }
 }
@@ -388,52 +385,41 @@ async fn command_arguments_take_only_numbers_and_booleans_from_expressions() {
 }
 
 #[tokio::test]
-async fn streams_and_structured_results_are_readable_but_never_reported() {
+async fn streams_are_readable_but_never_reported() {
     let (records, host) = run(
         json!([
             {"id": "run", "tool": "sh", "arguments": {"command": "x"}},
-            {"id": "mcp", "tool": "mcp", "arguments": {}},
             {"id": "plain", "tool": "read", "arguments": {}},
             {"tool": "use", "arguments": {
                 "out": "${{ steps.run.stdout }}",
-                "err": "${{ steps.run.stderr }}",
-                "count": "${{ steps.mcp.result.items[1] }}",
-                "none": "${{ steps.plain.result }}"
+                "err": "${{ steps.run.stderr }}"
             }},
             {"tool": "use", "if": "always()", "arguments": {"x": "${{ steps.plain.stdout }}"}}
         ]),
         |tool, _| match tool {
             "sh" => command("  stdout-marker\n\n", "stderr-marker\n", 0),
-            "mcp" => StepExecution::Completed {
-                output: String::from("rendered"),
-                failed: false,
-                exit_code: None,
-                streams: None,
-                result: Some(json!({"items": [1, 7]})),
-                display: None,
-            },
             _ => ok("plain text"),
         },
     )
     .await;
-    assert_eq!(records[3].outcome, StepOutcome::Success);
+    assert_eq!(records[2].outcome, StepOutcome::Success);
     assert_eq!(
-        host.calls()[3].1,
-        json!({"out": "  stdout-marker", "err": "stderr-marker", "count": 7, "none": null})
+        host.calls()[2].1,
+        json!({"out": "  stdout-marker", "err": "stderr-marker"})
     );
     assert_eq!(
-        records[4].outcome,
+        records[3].outcome,
         StepOutcome::Failure,
         "a non-command step has no stdout"
     );
 
     // Kept values reach the report only through the arguments of the step that referenced them.
     // 保留的取值只通过引用它们的步骤参数进入报告。
-    let report = render_report(&records[..3]);
+    let report = render_report(&records[..2]);
     let rendered = format!("{}{}", report.model_output, report.host_payload);
     assert!(!rendered.contains("stdout-marker") && !rendered.contains("stderr-marker"));
     let report = render_report(&records);
-    assert!(report.host_payload["steps"][3]["arguments"]["out"] == "  stdout-marker");
+    assert!(report.host_payload["steps"][2]["arguments"]["out"] == "  stdout-marker");
 }
 
 #[tokio::test]

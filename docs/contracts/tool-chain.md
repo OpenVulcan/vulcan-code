@@ -18,12 +18,14 @@
 1. 采用 GitHub Actions 步骤写法：参数根对象只有 `steps`；每步只允许 `id`、`tool`、`if`、
    `continue_on_error`、`arguments`，`tool` 与 `arguments`（对象）必填。`id` 匹配
    `^[A-Za-z_][A-Za-z0-9_-]*$` 且唯一。
-2. 表达式写在 `${{ }}` 中，只能引用更早的步骤：`steps.<id>.outcome|output|exit_code|stdout|stderr|result`；
+2. `tool` 只能是可链接清单中的原生工具（见第三节第 7 条）；其他工具名在计划校验时即被拒绝，错误中列出
+   完整清单。
+3. 表达式写在 `${{ }}` 中，只能引用更早的步骤：`steps.<id>.outcome|output|exit_code|stdout|stderr`；
    函数 `success()`、`failure()`、`always()`、`contains`、`startsWith`、`test`（正则是否匹配，返回布尔）、
    `match`（返回第 1 个捕获组或整段匹配，不匹配即错误）、`fromJSON`；运算符 `!`、`&&`、`||`、`==`、`!=`。
    字面正则在解析时校验。所有 `steps.<id>` 引用在执行前静态校验，包括短路分支中不会求值的部分。
-3. 整个字符串只有一个表达式时保留其 JSON 类型；与文本混排时转为文本。
-4. 计划无效时整个链不执行，一次返回全部错误。用法说明只写在工具描述里（英文），不动态注入。
+4. 整个字符串只有一个表达式时保留其 JSON 类型；与文本混排时转为文本。
+5. 计划无效时整个链不执行，一次返回全部错误。用法说明只写在工具描述里（英文），不动态注入。
 
 ## 二、引用取值
 
@@ -31,13 +33,12 @@
 2. `stdout`、`stderr` 是命令步骤解码后的原始流（去尾部空白），即使可见输出已转为分页文件也完整可用；
    非命令步骤或未执行命令的步骤引用即为表达式错误。原始流由 `shell_command` 经
    `VulcanToolInvocationResult.raw_streams` 交给桥，只存在于链条执行期间的内存中，不进入报告与宿主结果。
-3. `result` 只公开工具返回给模型的结构化 JSON（例如只返回结构化内容的 MCP 工具），否则为 null；从不暴露
-   内部宿主载荷。同时返回文本与结构化内容的 MCP 结果，其结构化部分只出现在 `output` 中。失败结果的 JSON
-   不作为 `result`。
-4. 脱敏边界与直接调用一致：每步的规范结果、原始流与 `result` 在进入表达式之前即按已登记的敏感值遮蔽，
+3. 不提供结构化结果引用：可链接工具都返回文本，结构化数据通过 `fromJSON(steps.<id>.output)` 或
+   `fromJSON(steps.<id>.stdout)` 读取；内部宿主载荷从不暴露给表达式。
+4. 脱敏边界与直接调用一致：每步的规范结果与原始流在进入表达式之前即按已登记的敏感值遮蔽，
    链条最终报告再整体遮蔽一次；过滤器不可用时该步失败且不传出任何内容。
-5. 原始取值本身不记录；一旦被插入后续步骤的参数，这些参数随该步骤记录并显示。整条链保留的原始流与
-   `result` 合计不超过 `MAX_KEPT_VALUE_BYTES`，超出后的步骤不再保留，引用即错误；含表达式的步骤解析后
+5. 原始取值本身不记录；一旦被插入后续步骤的参数，这些参数随该步骤记录并显示。整条链保留的原始流
+   合计不超过 `MAX_KEPT_VALUE_BYTES`，超出后的步骤不再保留，引用即错误；含表达式的步骤解析后
    参数不超过 `MAX_STEP_ARGUMENT_BYTES`，超出则该步失败。单条命令仍受 `shell_command` 自身的硬上限约束，
    超限的命令没有输出且步骤失败。
 
@@ -54,10 +55,14 @@
    失败而不调用工具。文本必须通过 `stdin`（或文件）传给命令。不做转义，也不用字符白名单。工具的这类参数由
    桥通过 `StepToolPolicy.command_arguments` 声明。
 6. 不回滚：已执行步骤的效果保留。描述要求模型不要把长串写入、删除或发布操作放进一条链。
-4. 可链接范围：MCP 与 LuaSkills 工具缺省可链接；原生工具只有白名单（`CHAINABLE_HOST_TOOL_IDS`）内的可以。
-   `tool_chain` 自身、提问、意图声明、子代理、`terminal_session`、`mcp_connect`、`mcp_config`、
-   `provider_config`、`env` 永远不可链接。
-5. 返回给模型的是按步骤排列的文本报告，首行写明 `tool_chain SUCCEEDED`、`FAILED`（列出计入失败的步骤）或
+7. 可链接范围只有原生工具清单 `CHAINABLE_TOOL_IDS`（`tooling/native/tool_chain.rs`，唯一定义）：
+   `shell_command`、`file`、`file_read`、`file_write`、`file_edit`、`apply_patch`、`knowledge_search`、
+   `knowledge_list`、`knowledge_read`、`memory_search`、`memory_outline`。工具描述由同一清单逐个列出这些
+   名称，避免模型猜测；清单是静态的，不随会话可用工具变化，以保持描述稳定，清单内但本会话不可用的工具在
+   校验时拒绝。MCP 工具、LuaSkills 工具、会话临时 MCP（`mcp_connect`、`mcp_tools`、`mcp_call`）及其他
+   原生工具（`tool_chain` 自身、提问、意图声明、子代理、`terminal_session`、配置与环境变量工具等）永远
+   不可链接。新增可链接工具必须返回文本且不需要用户交互，只改这一份清单。
+8. 返回给模型的是按步骤排列的文本报告，首行写明 `tool_chain SUCCEEDED`、`FAILED`（列出计入失败的步骤）或
    `STOPPED`（列出被拒绝的步骤）。之后的恢复步骤成功不会撤销失败。工具调用本身始终不是错误（`is_error` 为假）；
    宿主结果 `kind: tool_chain` 携带 `status`（`succeeded`/`failed`/`stopped`）和每步的结果、参数、
    `continue_on_error` 及该步自身的宿主结果，供界面把每一步渲染成直接调用时的卡片，并让卡片头在 `failed`

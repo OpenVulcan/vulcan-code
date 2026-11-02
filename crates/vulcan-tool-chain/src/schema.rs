@@ -9,12 +9,34 @@ use serde_json::{Value, json};
 /// The step limit is deliberately absent: it is a setting that may change mid-session, and the
 /// description must stay stable so the cached request prefix is not broken.
 /// 步骤上限刻意不写入：它是会话中途可能变化的设置，而描述必须保持稳定，避免打破请求前缀缓存。
-pub fn tool_chain_description() -> String {
-    String::from(
-        r#"Run several tool calls in order, where later calls depend on earlier ones. Use it when the next call needs the success, failure or output of a previous call, so you do not have to wait for a round trip; independent calls should still be made in parallel as normal tool calls.
+///
+/// `chainable_tools` is the host's fixed list of step tools, so the model never has to guess
+/// which tools a step may use.
+/// `chainable_tools` 是宿主固定的步骤工具清单，使模型无需猜测步骤可以使用哪些工具。
+pub fn tool_chain_description(chainable_tools: &[&str]) -> String {
+    let tools = chainable_tools
+        .iter()
+        .map(|tool| format!("`{tool}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    [
+        DESCRIPTION_INTRO,
+        &format!(
+            "Steps can only use these tools: {tools}. No other tool can be a step, including MCP tools, skill tools and every tool not listed here; call those directly. A listed tool that is not available in this session is rejected as well."
+        ),
+        DESCRIPTION_USAGE,
+    ]
+    .join("\n\n")
+}
 
-Steps use GitHub Actions syntax:
-- `tool`: the name of the tool to call, exactly as you would call it directly. `arguments`: that tool's normal arguments as a JSON object.
+/// Opening paragraph of the description.
+/// 描述的开篇段落。
+const DESCRIPTION_INTRO: &str = "Run several tool calls in order, where later calls depend on earlier ones. Use it when the next call needs the success, failure or output of a previous call, so you do not have to wait for a round trip; independent calls should still be made in parallel as normal tool calls.";
+
+/// Syntax, behavior and examples, following the list of step tools.
+/// 位于步骤工具清单之后的语法、行为与示例。
+const DESCRIPTION_USAGE: &str = r#"Steps use GitHub Actions syntax:
+- `tool`: one of the tools listed above, by the name you would use for a direct call. `arguments`: that tool's normal arguments as a JSON object.
 - `id` (optional): a name for referring to this step later.
 - `if` (optional): when to run the step. The default is `success()`: run only if no earlier step failed. Use `failure()` to run only after a failure, `always()` to run regardless, or any expression.
 - `continue_on_error` (optional, default false): when true, a failure of this step is still reported as 'failure' but does not make `failure()` true and does not skip later default steps.
@@ -24,7 +46,6 @@ Expressions:
 - `steps.<id>.outcome` is 'success', 'failure' or 'skipped'.
 - `steps.<id>.output` is the text you would see for a direct call (trimmed). For commands it includes headers such as the exit code, and long output may be replaced by a page file notice, so prefer the fields below.
 - `steps.<id>.stdout` and `steps.<id>.stderr` are a command's raw standard output and error without trailing whitespace, available even when the visible output was paged. `steps.<id>.exit_code` is a command's exit code, otherwise null.
-- `steps.<id>.result` is the structured JSON a tool returned instead of text (for example an MCP tool that returns structured content only), otherwise null.
 - Operators: `==`, `!=`, `&&`, `||`, `!`, parentheses. Strings use single quotes ('it''s' escapes a quote).
 - Functions: success(), failure(), always(), contains(text_or_array, value), startsWith(text, prefix), test(text, regex) is true when the regex matches, match(text, regex) returns the first capture group (or the whole match) and fails the step when nothing matches, fromJSON(text) parses JSON so you can read `.field` or `[0]`.
 - Every `steps.<id>` must name an earlier step, even inside a branch that would not be evaluated; the whole plan is checked before anything runs.
@@ -47,9 +68,7 @@ Example: find a file, then read it:
 {"steps":[{"id":"find","tool":"shell_command","arguments":{"command":"rg -l \"fn parse_config\" src"}},{"tool":"file_read","arguments":{"path":"${{ match(steps.find.stdout, '^(.+)') }}"}}]}
 
 Example: pass an earlier command's output to another command through stdin, allowing the lint step to fail:
-{"steps":[{"id":"lint","tool":"shell_command","continue_on_error":true,"arguments":{"command":"cargo clippy -p app --message-format short"}},{"tool":"shell_command","if":"test(steps.lint.stderr, 'warning:')","arguments":{"command":"grep -c warning:","stdin":"${{ steps.lint.stderr }}"}}]}"#,
-    )
-}
+{"steps":[{"id":"lint","tool":"shell_command","continue_on_error":true,"arguments":{"command":"cargo clippy -p app --message-format short"}},{"tool":"shell_command","if":"test(steps.lint.stderr, 'warning:')","arguments":{"command":"grep -c warning:","stdin":"${{ steps.lint.stderr }}"}}]}"#;
 
 /// Builds the JSON Schema advertised for `tool_chain`.
 /// 构建 `tool_chain` 对外声明的 JSON Schema。
@@ -70,7 +89,7 @@ pub fn tool_chain_input_schema() -> Value {
                         },
                         "tool": {
                             "type": "string",
-                            "description": "Tool to call, by the same name used for a direct call."
+                            "description": "Tool to call, by the same name used for a direct call. Only the tools listed in the tool_chain description can be steps."
                         },
                         "if": {
                             "type": "string",

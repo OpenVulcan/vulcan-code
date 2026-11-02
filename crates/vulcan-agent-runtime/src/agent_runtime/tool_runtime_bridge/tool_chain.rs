@@ -8,39 +8,13 @@
 //! 链条容器本身绕过权限闸门，因为闸门会消耗为真实调用声明的意图；改为逐个准入每个步骤。
 
 use super::*;
-use crate::tooling::native::{
-    APPLY_PATCH_TOOL_ID, FILE_EDIT_TOOL_ID, FILE_READ_TOOL_ID, FILE_TOOL_ID, FILE_WRITE_TOOL_ID,
-    KNOWLEDGE_LIST_TOOL_ID, KNOWLEDGE_READ_TOOL_ID, KNOWLEDGE_SEARCH_TOOL_ID, MCP_CALL_TOOL_ID,
-    MCP_TOOLS_TOOL_ID, MEMORY_OUTLINE_TOOL_ID, MEMORY_SEARCH_TOOL_ID, SHELL_COMMAND_TOOL_ID,
-};
+use crate::tooling::native::{CHAINABLE_TOOL_IDS, SHELL_COMMAND_TOOL_ID};
 use std::time::Instant;
 use vulcan_tool_chain::{
     DEFAULT_TOOL_CHAIN_MAX_STEPS, StepExecution, StepExecutor, StepToolPolicy,
     TOOL_CHAIN_HOST_RESULT_KIND, parse_tool_chain_plan, render_report, run_tool_chain,
 };
 use vulcan_tools_manager::{VulcanToolRawStreams, VulcanToolSourceKind};
-
-/// Host tools that may run as chain steps; every other host tool must be called directly.
-/// 可作为链条步骤运行的宿主工具；其他宿主工具都必须直接调用。
-///
-/// Tools that ask the user, spawn or message agents, hold interactive sessions, change
-/// configuration or return media are deliberately absent.
-/// 向用户提问、派生或联络代理、持有交互会话、修改配置或返回媒体的工具刻意不在其中。
-const CHAINABLE_HOST_TOOL_IDS: &[&str] = &[
-    SHELL_COMMAND_TOOL_ID,
-    FILE_TOOL_ID,
-    FILE_READ_TOOL_ID,
-    FILE_WRITE_TOOL_ID,
-    FILE_EDIT_TOOL_ID,
-    APPLY_PATCH_TOOL_ID,
-    KNOWLEDGE_SEARCH_TOOL_ID,
-    KNOWLEDGE_LIST_TOOL_ID,
-    KNOWLEDGE_READ_TOOL_ID,
-    MEMORY_SEARCH_TOOL_ID,
-    MEMORY_OUTLINE_TOOL_ID,
-    MCP_TOOLS_TOOL_ID,
-    MCP_CALL_TOOL_ID,
-];
 
 /// Host result kind of one-shot commands, whose exit code decides step failure.
 /// 一次性命令的宿主结果类型，其退出码决定步骤是否失败。
@@ -81,11 +55,13 @@ pub trait ToolChainHost: Send + Sync {
 /// 已解析工具能否用作链条步骤。
 fn tool_is_chainable(definition: &ResolvedToolDefinition) -> bool {
     match definition.descriptor.source {
-        VulcanToolSourceKind::Mcp | VulcanToolSourceKind::LuaSkills => true,
         VulcanToolSourceKind::Native | VulcanToolSourceKind::VulcanManaged => {
-            CHAINABLE_HOST_TOOL_IDS.contains(&definition.descriptor.id.as_str())
+            CHAINABLE_TOOL_IDS.contains(&definition.descriptor.id.as_str())
         }
-        VulcanToolSourceKind::VulcanPlugin | VulcanToolSourceKind::AiHostBinding => false,
+        VulcanToolSourceKind::Mcp
+        | VulcanToolSourceKind::LuaSkills
+        | VulcanToolSourceKind::VulcanPlugin
+        | VulcanToolSourceKind::AiHostBinding => false,
     }
 }
 
@@ -143,7 +119,8 @@ impl VulcanManagedToolRuntimeBridge {
         match self.definitions_by_id.get(tool) {
             None => Err(format!("`{tool}` is not an available tool")),
             Some(definition) if !tool_is_chainable(definition) => Err(format!(
-                "`{tool}` cannot be used inside tool_chain; call it directly"
+                "`{tool}` cannot be used inside tool_chain; call it directly. Only these tools can be steps: {}",
+                CHAINABLE_TOOL_IDS.join(", ")
             )),
             Some(definition) => Ok(step_tool_policy(definition)),
         }
@@ -166,15 +143,7 @@ impl VulcanManagedToolRuntimeBridge {
             }
             None => None,
         };
-        let mut result = step.result;
-        if let Some(value) = result.as_mut() {
-            self.redact_sensitive_value(value)?;
-        }
-        Ok(RawStep {
-            canonical,
-            streams,
-            result,
-        })
+        Ok(RawStep { canonical, streams })
     }
 }
 
@@ -202,9 +171,6 @@ struct RawStep {
     /// Raw command streams, held in memory only.
     /// 仅在内存中保留的原始命令流。
     streams: Option<VulcanToolRawStreams>,
-    /// Structured value the tool returned to the model instead of text.
-    /// 工具以结构化值而非文本返回给模型的结果。
-    result: Option<Value>,
 }
 
 /// Runs chain steps through the bridge using the chain's invocation identity.
@@ -233,7 +199,6 @@ impl StepExecutor for BridgeStepExecutor<'_> {
             let failure = |message: String| RawStep {
                 canonical: build_tool_failure_invocation_result(&step_request, message),
                 streams: None,
-                result: None,
             };
             let Some(definition) = self.bridge.definitions_by_id.get(&tool) else {
                 return self.finish(
@@ -275,16 +240,9 @@ impl StepExecutor for BridgeStepExecutor<'_> {
                         ));
                     }
                     let streams = result.raw_streams.take();
-                    let structured =
-                        (!result.model_output.is_string()).then(|| result.model_output.clone());
-                    let canonical = canonicalize_tool_invocation_result(&step_request, result);
-                    // A failure's JSON describes the error, not a result later steps should read.
-                    // 失败的 JSON 描述的是错误，而非供后续步骤读取的结果。
-                    let structured = structured.filter(|_| !canonical.is_error);
                     RawStep {
-                        canonical,
+                        canonical: canonicalize_tool_invocation_result(&step_request, result),
                         streams,
-                        result: structured,
                     }
                 }
                 Err(message) => failure(message),
@@ -305,7 +263,6 @@ impl BridgeStepExecutor<'_> {
                 failed: true,
                 exit_code: None,
                 streams: None,
-                result: None,
                 display: None,
             },
         }
@@ -345,7 +302,6 @@ fn completed_step(step: RawStep, started: Instant) -> StepExecution {
         failed: result.is_error || command_failed,
         exit_code,
         streams: step.streams.map(|streams| (streams.stdout, streams.stderr)),
-        result: step.result,
         display: Some(json!({
             "model_output": result.model_output,
             "host_result": result.host_result,

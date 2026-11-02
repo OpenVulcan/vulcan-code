@@ -15,13 +15,23 @@ fn candidate(
     id: &str,
     invoke: vulcan_tools_manager::VulcanToolInvokeHandler,
 ) -> VulcanToolCandidate {
+    candidate_from(VulcanToolSourceKind::Native, id, invoke)
+}
+
+/// Builds one tool candidate from `source`.
+/// 构建一个来自 `source` 的工具候选。
+fn candidate_from(
+    source: VulcanToolSourceKind,
+    id: &str,
+    invoke: vulcan_tools_manager::VulcanToolInvokeHandler,
+) -> VulcanToolCandidate {
     VulcanToolCandidate {
         descriptor: VulcanToolDescriptor::new(
             id.to_string(),
             id.to_string(),
             id.to_string(),
             None,
-            VulcanToolOrigin::new(VulcanToolSourceKind::Native, "test", id.to_string()),
+            VulcanToolOrigin::new(source, "test", id.to_string()),
         ),
         parameters_schema: json!({ "type": "object" }),
         ai_visible: true,
@@ -127,4 +137,74 @@ fn chain_steps_read_full_streams_that_are_already_redacted() {
             .contains(SECRET)
     );
     assert!(result.model_output.starts_with("tool_chain SUCCEEDED"));
+}
+
+/// Only the listed native tools can be steps: MCP, LuaSkills and unlisted native tools reject the
+/// whole plan before any step runs.
+/// 只有列出的原生工具可以作为步骤：MCP、LuaSkills 与未列出的原生工具会在任何步骤运行前拒绝整个计划。
+#[test]
+fn chains_reject_every_tool_outside_the_native_list() {
+    let calls = Arc::new(Mutex::new(0usize));
+    let counting = |source: VulcanToolSourceKind, id: &str| {
+        let calls = Arc::clone(&calls);
+        candidate_from(
+            source,
+            id,
+            Arc::new(move |_args, _context| {
+                let calls = Arc::clone(&calls);
+                Box::pin(async move {
+                    if let Ok(mut calls) = calls.lock() {
+                        *calls += 1;
+                    }
+                    Ok(VulcanToolInvocationResult::from_model_output(json!("ran")))
+                })
+            }),
+        )
+    };
+    let manager = VulcanToolsManager::new(vec![
+        counting(VulcanToolSourceKind::Native, "file_read"),
+        counting(VulcanToolSourceKind::Mcp, "remote_search"),
+        counting(VulcanToolSourceKind::LuaSkills, "skill_lookup"),
+        counting(VulcanToolSourceKind::Native, "todolist"),
+        candidate(
+            vulcan_tool_chain::TOOL_CHAIN_TOOL_ID,
+            Arc::new(|_args, _context| {
+                Box::pin(async { Err(String::from("the bridge runs tool_chain itself")) })
+            }),
+        ),
+    ]);
+    let definitions = manager.resolve_for_execution_mode("Build").definitions;
+    let bridge =
+        VulcanManagedToolRuntimeBridge::new(Arc::new(manager), &definitions, Uuid::nil(), "Build");
+    let request = ToolInvocationRequest {
+        request_stream_id: String::from("request-stream-chain"),
+        tool_call_id: String::from("chain-2"),
+        tool_name: String::from(vulcan_tool_chain::TOOL_CHAIN_TOOL_ID),
+        arguments: json!({ "steps": [
+            { "tool": "file_read", "arguments": { "path": "a.txt" } },
+            { "tool": "remote_search", "arguments": {} },
+            { "tool": "skill_lookup", "arguments": {} },
+            { "tool": "todolist", "arguments": {} }
+        ] }),
+        argument_parse_error: None,
+        raw_arguments: Default::default(),
+        user_request: Default::default(),
+    };
+    install_test_invocation_identity(&bridge, &request, 211, 212, 213);
+    let result = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime should build")
+        .block_on(bridge.execute_tool(&request))
+        .expect("chain should return a result");
+
+    assert!(result.is_error, "{}", result.model_output);
+    for tool in ["remote_search", "skill_lookup", "todolist"] {
+        assert!(
+            result.model_output.contains(&format!("`{tool}`")),
+            "{tool} must be named in: {}",
+            result.model_output
+        );
+    }
+    assert_eq!(calls.lock().map(|calls| *calls).unwrap_or_default(), 0);
 }

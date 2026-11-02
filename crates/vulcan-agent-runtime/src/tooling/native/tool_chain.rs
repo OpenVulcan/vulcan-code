@@ -10,13 +10,35 @@
 use super::*;
 use vulcan_tool_chain::{TOOL_CHAIN_TOOL_ID, tool_chain_description, tool_chain_input_schema};
 
+/// The only tools that may run as chain steps, listed by name in the tool description.
+/// 唯一可作为链条步骤运行的工具，并按名称列在工具描述中。
+///
+/// Only native host tools that return text are listed. MCP and LuaSkills tools, and tools that
+/// ask the user, spawn or message agents, hold interactive sessions, change configuration or
+/// return media, must be called directly.
+/// 只列出返回文本的原生宿主工具。MCP 与 LuaSkills 工具，以及向用户提问、派生或联络代理、持有交互
+/// 会话、修改配置或返回媒体的工具，都必须直接调用。
+pub(crate) const CHAINABLE_TOOL_IDS: &[&str] = &[
+    SHELL_COMMAND_TOOL_ID,
+    FILE_TOOL_ID,
+    FILE_READ_TOOL_ID,
+    FILE_WRITE_TOOL_ID,
+    FILE_EDIT_TOOL_ID,
+    APPLY_PATCH_TOOL_ID,
+    KNOWLEDGE_SEARCH_TOOL_ID,
+    KNOWLEDGE_LIST_TOOL_ID,
+    KNOWLEDGE_READ_TOOL_ID,
+    MEMORY_SEARCH_TOOL_ID,
+    MEMORY_OUTLINE_TOOL_ID,
+];
+
 /// Builds the `tool_chain` tool definition.
 /// 构建 `tool_chain` 工具定义。
 pub(crate) fn build_tool_chain_tool() -> Arc<NativeToolDefinition> {
     let descriptor = NativeToolDescriptor {
         id: String::from(TOOL_CHAIN_TOOL_ID),
         name: String::from(TOOL_CHAIN_TOOL_ID),
-        description: tool_chain_description(),
+        description: tool_chain_description(CHAINABLE_TOOL_IDS),
         help_text: None,
         ai_visible: true,
         // Every step passes the plan-mode gate on its own.
