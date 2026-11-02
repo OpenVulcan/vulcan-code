@@ -213,6 +213,7 @@ pub(super) fn context(app: &App) -> Vec<Row> {
         }),
     ));
     session_title_rows(&mut rows, wb, ai);
+    tool_chain_rows(&mut rows, wb);
     rows.extend(system_prompt(app));
     rows
 }
@@ -288,6 +289,48 @@ fn select_session_title_effort(route: &Value, value: &SettingValue) -> Option<Se
         route.clone(),
         (effort != SESSION_TITLE_MODEL_DEFAULT_EFFORT).then_some(effort),
     ))
+}
+
+/// The system `tool_chain` switch and its step limit; each save sends both values.
+/// 系统 `tool_chain` 开关及其步骤上限；每次保存都发送两个值。
+fn tool_chain_rows(rows: &mut Vec<Row>, wb: &Value) {
+    // Older snapshots without the fields keep the enabled default and the default limit.
+    // 缺少这些字段的旧快照保留默认开启与默认上限。
+    let enabled = v(wb, "/toolChainEnabled").as_bool().unwrap_or(true);
+    let max_steps = v(wb, "/toolChainMaxSteps")
+        .as_i64()
+        .unwrap_or(i64::from(vulcan_tool_chain::DEFAULT_TOOL_CHAIN_MAX_STEPS));
+    rows.push(toggle(
+        tr!("settings.toolChain.title"),
+        enabled,
+        Edit::Call(Setter::Build {
+            ctx: json!(max_steps),
+            build: |ctx, value| {
+                Some(settings::save_tool_chain_settings(
+                    value.as_bool(),
+                    ctx.as_i64()?,
+                ))
+            },
+        }),
+    ));
+    rows.push(note(tr!("settings.toolChain.hint"), Tone::Muted));
+    if !enabled {
+        return;
+    }
+    rows.push(number(
+        tr!("settings.toolChain.maxSteps"),
+        max_steps,
+        (
+            i64::from(vulcan_tool_chain::MIN_TOOL_CHAIN_MAX_STEPS),
+            i64::from(vulcan_tool_chain::MAX_TOOL_CHAIN_MAX_STEPS),
+            1,
+        ),
+        Edit::Call(Setter::Build {
+            ctx: Value::Null,
+            build: |_, value| Some(settings::save_tool_chain_settings(true, value.as_number())),
+        }),
+    ));
+    rows.push(note(tr!("settings.toolChain.maxStepsHint"), Tone::Muted));
 }
 
 /// The session title switch, its model and its thinking level.

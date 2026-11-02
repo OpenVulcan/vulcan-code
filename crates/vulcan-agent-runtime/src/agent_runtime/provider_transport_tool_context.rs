@@ -37,6 +37,13 @@ pub(crate) fn prepare_host_tool_runtime_context(
     task_runtime: Arc<TaskRuntime>,
 ) -> PreparedHostToolRuntimeContext {
     let tools_manager = Arc::new(tools_manager);
+    // The bridge keeps `tool_chain` even when it is hidden, so a chain called after the switch
+    // turned off mid-turn is answered with "disabled" instead of "unknown tool".
+    // 即使 `tool_chain` 被隐藏，桥仍保留它，使回合中途关闭后的调用得到“已禁用”而非“未知工具”。
+    let tool_chain_visible = task_runtime.tool_chain_host().is_none_or(|host| {
+        host.settings(session_id)
+            .is_ok_and(|settings| settings.enabled)
+    });
     PreparedHostToolRuntimeContext {
         session_id,
         runtime_bridge: Arc::new(
@@ -47,11 +54,16 @@ pub(crate) fn prepare_host_tool_runtime_context(
                 execution_mode,
             )
             .with_sensitive_tool_output_values(task_runtime.sensitive_tool_output_values())
-            .with_tool_permission_host(task_runtime.tool_permission_host()),
+            .with_tool_permission_host(task_runtime.tool_permission_host())
+            .with_tool_chain_host(task_runtime.tool_chain_host()),
         ),
         task_runtime,
         provider_tool_definitions: resolved_tools
             .iter()
+            .filter(|definition| {
+                tool_chain_visible
+                    || definition.descriptor.id != vulcan_tool_chain::TOOL_CHAIN_TOOL_ID
+            })
             .map(resolved_tool_definition_to_provider_tool_definition)
             .collect(),
     }

@@ -9799,6 +9799,7 @@ dependencies = [
  "vulcan-session-core",
  "vulcan-subagent-core",
  "vulcan-task-session",
+ "vulcan-tool-chain",
  "vulcan-tools-luaskills-call",
  "vulcan-tools-manager",
  "vulcan-vmm",
@@ -9885,6 +9886,7 @@ dependencies = [
  "vulcan-runtime-assets",
  "vulcan-service-api",
  "vulcan-session-core",
+ "vulcan-tool-chain",
  "workspace-hack",
 ]
 
@@ -10326,6 +10328,7 @@ dependencies = [
  "vulcan-permission-judge",
  "vulcan-provider-adapters",
  "vulcan-runtime-assets",
+ "vulcan-tool-chain",
  "vulcan-vmm",
  "workspace-hack",
 ]
@@ -10457,6 +10460,7 @@ dependencies = [
  "vulcan-sqlite-engine",
  "vulcan-subagent-core",
  "vulcan-task-session",
+ "vulcan-tool-chain",
  "vulcan-tools-manager",
  "vulcan-vmm",
  "vulcan-workbench-model",
@@ -10571,6 +10575,16 @@ name = "vulcan-terminal-host-protocol"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
+ "tokio",
+ "workspace-hack",
+]
+
+[[package]]
+name = "vulcan-tool-chain"
+version = "0.1.0"
+dependencies = [
+ "regex",
  "serde_json",
  "tokio",
  "workspace-hack",

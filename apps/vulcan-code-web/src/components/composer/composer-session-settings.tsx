@@ -17,6 +17,7 @@ import type { ComposerAttachmentMenuProps } from "./composer-attachment-controls
 import { ComposerKnowledgeControl } from "./composer-knowledge-control";
 import { SessionSettingsGroup, SessionSettingsRow } from "./composer-session-settings-parts";
 import { ComposerSubagentModelsBlock } from "./composer-subagent-models";
+import { ComposerToolChainBlock } from "./composer-tool-chain";
 import type { ComposerSettingsSection } from "./composer-settings-request";
 import { useDedicatedComposer } from "./dedicated/dedicated-session-controls";
 import type { ComposerAnswerModeController } from "./composer-panel/use-composer-answer-mode";
@@ -158,6 +159,7 @@ export function ComposerSettingsMenu(props: ComposerAttachmentMenuProps) {
                   </> : null}
                 </SessionSettingsGroup>
               ) : null}
+              <ComposerToolChainBlock conversationId={props.conversationId} />
               <ComposerSubagentModelsBlock conversationId={props.conversationId} onEdit={() => {
                 setOpen(false);
                 setSubagentDialogOpen(true);

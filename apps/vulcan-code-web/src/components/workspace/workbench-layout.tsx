@@ -132,6 +132,7 @@ import {
   saveMcpServerConfiguration,
   savePromptAnswerMode,
   saveSessionTitleGeneration,
+  saveToolChainSettings,
   savePromptOutputStyle,
   selectWebuiLocale,
 } from "@/service/settings-actions-service";
@@ -1365,6 +1366,7 @@ export function WorkbenchLayout(props: {
                 return (await loadWorkbenchSnapshot()) ?? workbenchStateRef.current;
               }),
               onSaveSessionTitleGeneration: (enabled) => applySkillWorkbenchAction(async () => await saveSessionTitleGeneration(enabled)),
+              onSaveToolChainSettings: (enabled, maxSteps) => applySkillWorkbenchAction(async () => await saveToolChainSettings(enabled, maxSteps)),
               onSaveGitCommitSettings: (request) => applySkillWorkbenchAction(async () => (await saveGitCommitSettings(request)) ?? workbenchStateRef.current),
               onSaveDefaultCommandShell: (shellId) => applySkillWorkbenchAction(async () => (await saveDefaultCommandShell(shellId)) ?? workbenchStateRef.current),
               onSaveProviderRequestTraceSettings: (enabled, errorsEnabled) => applySkillWorkbenchAction(async () => (await saveProviderRequestTraceSettings(enabled, errorsEnabled)) ?? workbenchStateRef.current),

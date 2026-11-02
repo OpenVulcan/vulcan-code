@@ -506,6 +506,21 @@ pub fn save_session_title_generation(enabled: bool) -> ServiceCall {
     )
 }
 
+/// Builds the request for `service_save_tool_chain_settings`.
+/// 构建 `service_save_tool_chain_settings` 的请求。
+/// `enabled` is the system switch; `max_steps` is the largest number of steps in one chain.
+/// `enabled` 为系统开关；`max_steps` 为单条链的最大步骤数。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn save_tool_chain_settings(enabled: bool, max_steps: i64) -> ServiceCall {
+    ServiceCall::mutate(
+        "save_tool_chain_settings",
+        "service_save_tool_chain_settings",
+        json!({ "enabled": enabled, "maxSteps": max_steps }),
+        WORKBENCH,
+    )
+}
+
 /// Builds the request for `service_select_webui_locale`.
 /// 构建 `service_select_webui_locale` 的请求。
 /// `locale` is the supported locale tag.

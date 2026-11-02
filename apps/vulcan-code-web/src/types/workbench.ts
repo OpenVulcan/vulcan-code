@@ -231,6 +231,12 @@ export interface WorkbenchSnapshot {
   // Whether new sessions get a model-generated title; older snapshots preserve the enabled default.
   // 新会话是否获得模型生成的标题；旧快照保留默认开启行为。
   sessionTitleGenerationEnabled?: boolean | null;
+  // Whether sessions without their own choice offer the tool_chain tool; older snapshots preserve the enabled default.
+  // 未自行选择的会话是否提供 tool_chain 工具；旧快照保留默认开启行为。
+  toolChainEnabled?: boolean | null;
+  // Largest number of steps in one tool_chain call.
+  // 单次 tool_chain 调用的最大步骤数。
+  toolChainMaxSteps?: number | null;
   // Git commit dialog settings resolved from the shared service configuration.
   // 从共享服务配置解析出的 Git 提交弹窗设置。
   gitCommit?: GitCommitSettingsSummary;

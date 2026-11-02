@@ -1049,6 +1049,8 @@ mod tests {
                         ],
                         extension_modes: Vec::new(),
                         changed_mid_session: false,
+                        tool_chain_enabled: None,
+                        tool_chain_changed_mid_session: false,
                     },
                     6,
                 )

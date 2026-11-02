@@ -814,6 +814,16 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-step[data-state="active"] .vk-step-mark { border-color: var(--vk-ember); color: var(--vk-ember-ink); box-shadow: 0 0 0 3px var(--vk-ember-soft); }
 .vk-step[data-state="done"] .vk-step-text { color: var(--vk-ink-3); text-decoration: line-through; text-decoration-color: var(--vk-line-strong); }
 .vk-step small { display: block; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+/* Tool chain: each step row holds its order mark, then a head line and the step's own tool card. */
+/* 工具链：每个步骤行包含顺序标记，其后为标题行与该步骤自身的工具卡。 */
+.vk-chain-step { grid-template-columns: auto minmax(0, 1fr); gap: calc(var(--vk-u) * 2.5); }
+.vk-step[data-state="failed"] .vk-step-mark { background: var(--vk-bad); border-color: var(--vk-bad); color: var(--vk-ink-inverse); }
+.vk-chain-step-body { display: grid; gap: calc(var(--vk-u) * 1.5); min-width: 0; }
+.vk-chain-step-head { display: flex; align-items: center; gap: calc(var(--vk-u) * 2); font-size: var(--vk-fs-xs); color: var(--vk-ink-3); }
+.vk-chain-step-head code, .vk-chain-step-tool { font-family: var(--vk-font-mono); color: var(--vk-ink-2); }
+.vk-chain-step-note { margin: 0; font-size: var(--vk-fs-xs); color: var(--vk-ink-3); white-space: pre-wrap; overflow-wrap: anywhere; }
+.vk-chain-step[data-state="failed"] .vk-chain-step-head > :last-child { color: var(--vk-bad); }
+.vk-chain-step[data-outcome="skipped"] .vk-chain-step-body, .vk-chain-step[data-outcome="not_run"] .vk-chain-step-body { opacity: 0.65; }
 
 /* The prompt navigator is an edge-pinned comb of ticks beside the transcript; hovering one previews that turn. */
 /* 提示词导航是贴在转录边缘的刻度梳；悬停某个刻度预览该回合。 */

@@ -153,6 +153,9 @@ export interface SettingsActionProps {
   // Saves whether new sessions get a model-generated title.
   // 保存新会话是否获得模型生成的标题。
   onSaveSessionTitleGeneration: (enabled: boolean) => Promise<void>
+  // Saves the system tool_chain switch and its step limit.
+  // 保存系统 tool_chain 开关及其步骤上限。
+  onSaveToolChainSettings: (enabled: boolean, maxSteps: number) => Promise<void>
   // Saves Git commit dialog settings.
   // 保存 Git 提交弹窗设置。
   onSaveGitCommitSettings: (request: GitCommitSettingsSaveRequest) => Promise<void>

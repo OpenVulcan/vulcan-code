@@ -1549,6 +1549,8 @@ mod tests {
             extension_target_sets: Vec::new(),
             extension_modes: Vec::new(),
             changed_mid_session: false,
+            tool_chain_enabled: None,
+            tool_chain_changed_mid_session: false,
         };
 
         assert!(
@@ -1604,6 +1606,8 @@ mod tests {
                 extension_target_sets: Vec::new(),
                 extension_modes: Vec::new(),
                 changed_mid_session: false,
+                tool_chain_enabled: None,
+                tool_chain_changed_mid_session: false,
             },
             knowledge_libraries: KnowledgeLibrarySelectionConfig {
                 mode: vulcan_session_core::v1::config::KnowledgeLibrarySelectionMode::Explicit,

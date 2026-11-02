@@ -93,6 +93,25 @@ pub struct ProviderConfigurationFile {
         skip_serializing_if = "Option::is_none"
     )]
     pub session_title_generation_enabled: Option<bool>,
+    /// Whether sessions offer the `tool_chain` tool unless they choose otherwise; absence means
+    /// enabled. Read through [`ProviderConfigurationFile::tool_chain_enabled`].
+    /// 会话在未自行选择时是否提供 `tool_chain` 工具；缺省表示开启。通过
+    /// [`ProviderConfigurationFile::tool_chain_enabled`] 读取。
+    #[serde(
+        default,
+        rename = "toolChainEnabled",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub tool_chain_enabled: Option<bool>,
+    /// Largest number of steps in one chain; absence means the default. Read through
+    /// [`ProviderConfigurationFile::tool_chain_max_steps`].
+    /// 单个链条的最大步骤数；缺省表示默认值。通过 [`ProviderConfigurationFile::tool_chain_max_steps`] 读取。
+    #[serde(
+        default,
+        rename = "toolChainMaxSteps",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub tool_chain_max_steps: Option<u32>,
     /// Remembered WebUI locale identifier selected by the user.
     /// 由用户选择并记忆的WebUI语言标识。
     #[serde(rename = "uiLocale", skip_serializing_if = "Option::is_none")]
@@ -211,6 +230,23 @@ impl ProviderConfigurationFile {
     /// 新会话是否由模型生成标题；除非用户关闭，否则开启。
     pub fn title_generation_enabled(&self) -> bool {
         self.session_title_generation_enabled.unwrap_or(true)
+    }
+
+    /// Whether sessions without their own choice offer `tool_chain`; on unless turned off.
+    /// 未自行选择的会话是否提供 `tool_chain`；除非关闭，否则开启。
+    pub fn tool_chain_enabled(&self) -> bool {
+        self.tool_chain_enabled.unwrap_or(true)
+    }
+
+    /// Effective chain step limit, kept within the supported range.
+    /// 生效的链条步骤上限，限制在支持范围内。
+    pub fn tool_chain_max_steps(&self) -> u32 {
+        self.tool_chain_max_steps
+            .unwrap_or(vulcan_tool_chain::DEFAULT_TOOL_CHAIN_MAX_STEPS)
+            .clamp(
+                vulcan_tool_chain::MIN_TOOL_CHAIN_MAX_STEPS,
+                vulcan_tool_chain::MAX_TOOL_CHAIN_MAX_STEPS,
+            )
     }
 }
 

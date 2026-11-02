@@ -69,6 +69,7 @@ vulcan-session-core.workspace = true
 vulcan-sqlite-engine.workspace = true
 vulcan-subagent-core.workspace = true
 vulcan-task-session.workspace = true
+vulcan-tool-chain.workspace = true
 vulcan-tools-manager.workspace = true
 vulcan-vmm.workspace = true
 vulcan-workbench-model.workspace = true

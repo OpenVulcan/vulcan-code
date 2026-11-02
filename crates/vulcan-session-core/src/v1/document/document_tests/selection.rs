@@ -432,6 +432,8 @@ fn provider_tool_selection_is_atomic_idempotent_and_strict() -> Result<(), Domai
             single_target: None,
         }],
         changed_mid_session: false,
+        tool_chain_enabled: None,
+        tool_chain_changed_mid_session: false,
     };
 
     assert!(doc.set_provider_tool_selection(selection.clone(), T0 + 1)?);
@@ -605,6 +607,8 @@ fn session_selection_bundle_is_single_revision_idempotent_and_failure_atomic()
             extension_target_sets: Vec::new(),
             extension_modes: Vec::new(),
             changed_mid_session: false,
+            tool_chain_enabled: None,
+            tool_chain_changed_mid_session: false,
         },
         knowledge_libraries: KnowledgeLibrarySelectionConfig {
             mode: KnowledgeLibrarySelectionMode::Explicit,
@@ -813,5 +817,45 @@ fn provider_tool_changes_after_first_request_mark_session() -> Result<(), Domain
             .provider_tools
             .changed_mid_session
     );
+    Ok(())
+}
+
+/// The tool_chain switch survives capability saves, and only its own change after the first
+/// request marks its own notice, never the provider-tool one.
+/// tool_chain 开关在能力保存中保留；只有首次请求后它自身的修改会标记其独立通知，绝不标记供应商工具通知。
+#[test]
+fn tool_chain_switch_is_kept_and_marked_separately() -> Result<(), DomainError> {
+    let mut doc = new_document();
+    let capabilities = ProviderToolSelectionConfig {
+        initialized: true,
+        ..Default::default()
+    };
+    let switched_off = ProviderToolSelectionConfig {
+        tool_chain_enabled: Some(false),
+        ..capabilities.clone()
+    };
+    assert!(doc.set_provider_tool_selection(switched_off, T0 + 1)?);
+    let tools = &doc.metadata.config.selection.provider_tools;
+    assert_eq!(tools.tool_chain_enabled, Some(false));
+    assert!(!tools.tool_chain_changed_mid_session);
+
+    doc.submit_root_input_fixture("hello", Vec::new(), T0 + 2)?;
+    doc.synchronize_context_with_answer_mode(Vec::new(), "on", "off", T0 + 3)?;
+    // A capability save carries no tool_chain choice and keeps the stored one.
+    // 能力保存不携带 tool_chain 选择，并保留已存选择。
+    doc.set_provider_tool_selection(capabilities.clone(), T0 + 4)?;
+    let tools = &doc.metadata.config.selection.provider_tools;
+    assert_eq!(tools.tool_chain_enabled, Some(false));
+    assert!(!tools.tool_chain_changed_mid_session);
+
+    let switched_on = ProviderToolSelectionConfig {
+        tool_chain_enabled: Some(true),
+        ..capabilities
+    };
+    assert!(doc.set_provider_tool_selection(switched_on, T0 + 5)?);
+    let tools = &doc.metadata.config.selection.provider_tools;
+    assert_eq!(tools.tool_chain_enabled, Some(true));
+    assert!(tools.tool_chain_changed_mid_session);
+    assert!(!tools.changed_mid_session);
     Ok(())
 }

@@ -127,6 +127,14 @@ pub struct WorkbenchSnapshot {
     /// 新会话是否由模型根据首个提示词生成标题。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_title_generation_enabled: Option<bool>,
+    /// Whether sessions without their own choice offer the `tool_chain` tool.
+    /// 未自行选择的会话是否提供 `tool_chain` 工具。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_chain_enabled: Option<bool>,
+    /// Effective largest number of steps in one `tool_chain` call.
+    /// 单次 `tool_chain` 调用生效的最大步骤数。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_chain_max_steps: Option<u32>,
     /// Git commit dialog settings resolved from the shared configuration file.
     /// 从共享配置文件解析出的 Git 提交弹窗设置。
     #[serde(default)]

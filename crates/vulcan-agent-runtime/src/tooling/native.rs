@@ -288,6 +288,7 @@ mod goal;
 mod runtime_config;
 mod submit_plan;
 mod todolist;
+mod tool_chain;
 
 pub use browser::*;
 pub(crate) use declare_intent::*;
@@ -295,6 +296,7 @@ pub(crate) use goal::*;
 pub(crate) use runtime_config::*;
 pub(crate) use submit_plan::*;
 pub(crate) use todolist::*;
+pub(crate) use tool_chain::build_tool_chain_tool;
 mod terminal;
 mod vmm;
 pub(crate) use terminal::*;
@@ -562,6 +564,7 @@ pub fn build_native_tool_catalog(
         build_create_goal_tool(),
         build_update_goal_tool(),
         build_declare_intent_tool(),
+        build_tool_chain_tool(),
         build_environment_tool(),
         build_knowledge_search_tool(),
         build_knowledge_list_tool(),

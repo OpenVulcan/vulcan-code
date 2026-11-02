@@ -42,6 +42,7 @@ vulcan-i18n.workspace = true
 # 共享服务 DTO 与 v1 会话事件类型；TUI 通过它们读取传输数据。
 vulcan-service-api.workspace = true
 vulcan-session-core.workspace = true
+vulcan-tool-chain.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [target.'cfg(windows)'.dependencies]

@@ -245,6 +245,10 @@ pub(crate) fn provider_tool_selection_config_from_parts_v1(
         // The marker is carried from stored state by the domain write, never by a browser snapshot.
         // 该标记由领域写入从已存状态带入，绝不来自浏览器快照。
         changed_mid_session: false,
+        // Capability saves never carry the tool_chain choice; the domain write keeps the stored one.
+        // 能力保存从不携带 tool_chain 选择；领域写入保留已存选择。
+        tool_chain_enabled: None,
+        tool_chain_changed_mid_session: false,
     };
     // Enum Ord follows declaration order, while the V1 contract orders final serialized keys.
     // 枚举 Ord 遵循声明顺序，而 V1 契约按最终序列化键排序。

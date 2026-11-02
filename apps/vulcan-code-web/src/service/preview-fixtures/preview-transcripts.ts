@@ -251,6 +251,35 @@ function shellOutput(command: string, exitCode: number, stdout: string, stderr =
   }, exitCode !== 0);
 }
 
+// chainStep is one step of a tool_chain host payload: the step facts plus the step's own result envelope.
+// chainStep 是 tool_chain 宿主载荷中的一步：步骤事实加该步骤自身的结果信封。
+function chainStep(index: number, id: string, input: ToolPayload, outcome: string, result: ToolPayload | null, detail: string | null = null): ToolPayload {
+  const hostResult = result?.host_result as { payload?: { exit_code?: number } } | null | undefined;
+  return {
+    index,
+    id,
+    tool: String(result?.tool_name ?? "file_read"),
+    outcome,
+    exit_code: hostResult?.payload?.exit_code ?? null,
+    detail,
+    arguments: input,
+    result: result ? { model_output: result.model_output, host_result: result.host_result, is_error: result.is_error, duration_ms: 3_000 } : null,
+  };
+}
+
+// verifyChainOutput renders a tool_chain that type-checks, runs the tests and skips the failure log it did not need.
+// verifyChainOutput 渲染一条工具链：类型检查、运行测试，并跳过不需要的失败日志读取。
+function verifyChainOutput(): ToolPayload {
+  const typecheck = shellOutput("pnpm run typecheck", 0, "$ tsc -b --pretty false", "", 6_100);
+  const tests = shellOutput("pnpm vitest run src/components/workspace", 0, " Test Files  24 passed (24)\n      Tests  86 passed (86)\n   Duration  4.21s", "", 4_210);
+  const steps = [
+    chainStep(0, "typecheck", { command: "pnpm run typecheck" }, "success", typecheck),
+    chainStep(1, "test", { command: "pnpm vitest run src/components/workspace" }, "success", tests),
+    chainStep(2, "log", { path: "vitest-report.txt" }, "skipped", null, "Skipped: the `if` condition `failure()` was false."),
+  ];
+  return toolOutput("tool_chain", "tool_chain ran 2 of 3 steps: typecheck success, test success, log skipped.", { kind: "tool_chain", payload: { steps } });
+}
+
 // editOutput summarizes an applied change-set the way the file runtime reports it to the model.
 // editOutput 以文件运行时向模型报告的方式汇总已应用的 change-set。
 function editOutput(changeset: PersistentChangeSet): ToolPayload {
@@ -315,10 +344,16 @@ function migrationPreview(sessionId: string): ConversationEventHydrationV1Respon
     })
     .api({
       tools: [{
-        name: "shell_command",
-        input: { command: "pnpm vitest run src/components/workspace" },
-        output: shellOutput("pnpm vitest run src/components/workspace", 0, " ✓ src/components/workspace/workspace-shell/workspace-panel-layout.test.ts (4 tests) 38ms\n ✓ src/components/workspace/workspace-control-preaudit.test.tsx (12 tests) 412ms\n\n Test Files  24 passed (24)\n      Tests  86 passed (86)\n   Duration  4.21s", "", 4_210),
-        durationMs: 4_210,
+        name: "tool_chain",
+        input: {
+          steps: [
+            { id: "typecheck", tool: "shell_command", arguments: { command: "pnpm run typecheck" } },
+            { id: "test", tool: "shell_command", arguments: { command: "pnpm vitest run src/components/workspace" } },
+            { id: "log", tool: "file_read", if: "${{ failure() }}", arguments: { path: "vitest-report.txt" } },
+          ],
+        },
+        output: verifyChainOutput(),
+        durationMs: 10_310,
       }],
     })
     .api({

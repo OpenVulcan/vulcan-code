@@ -176,6 +176,12 @@ fn upgrade_step(
         // before it is the model's own, which is exactly what absence means.
         // 12 新增可选的推理事件 `display_only` 标记；此前记录的推理均为模型自身思考，正是缺省的含义。
         11 => {}
+        // 13 adds the optional `tool_chain_enabled` and `tool_chain_changed_mid_session` to
+        // `config.selection.provider_tools`; absence means the session follows the system setting
+        // and never changed it mid-session.
+        // 13 在 `config.selection.provider_tools` 中新增可选的 `tool_chain_enabled` 与
+        // `tool_chain_changed_mid_session`；缺省即会话跟随系统设置且从未在中途修改。
+        12 => {}
         other => {
             return Err(SessionV1Error::unsupported(
                 path,

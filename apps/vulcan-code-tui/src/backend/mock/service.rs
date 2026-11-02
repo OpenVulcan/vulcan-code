@@ -664,6 +664,10 @@ impl FakeService {
                 self.workbench["sessionTitleGenerationEnabled"] =
                     required(params, "/enabled")?.clone()
             }
+            "service_save_tool_chain_settings" => {
+                self.workbench["toolChainEnabled"] = required(params, "/enabled")?.clone();
+                self.workbench["toolChainMaxSteps"] = required(params, "/maxSteps")?.clone();
+            }
             "service_select_webui_locale" => {
                 self.workbench["uiLocale"] = required(params, "/locale")?.clone()
             }

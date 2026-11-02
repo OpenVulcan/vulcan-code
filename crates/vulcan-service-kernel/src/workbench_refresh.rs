@@ -1469,6 +1469,8 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                 .unwrap_or(true),
         ),
         session_title_generation_enabled: Some(provider_configuration.title_generation_enabled()),
+        tool_chain_enabled: Some(provider_configuration.tool_chain_enabled()),
+        tool_chain_max_steps: Some(provider_configuration.tool_chain_max_steps()),
         git_commit: git_commit_settings(provider_configuration),
         provider_retry: provider_retry_settings(provider_configuration),
         provider_request_trace_enabled: provider_configuration.provider_request_trace_enabled,

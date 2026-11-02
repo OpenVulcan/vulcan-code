@@ -38,6 +38,7 @@ members = [
     "crates/vulcan-mcp-service",
     "crates/vulcan-plugin-runtime",
     "crates/vulcan-tools-manager",
+    "crates/vulcan-tool-chain",
     "crates/vulcan-core",
     "crates/vulcan-tools-luaskills-call",
     "crates/vulcan-luaskills-prompt",
@@ -84,6 +85,7 @@ vulcan-markdown-memory = { path = "crates/vulcan-markdown-memory" }
 vulcan-mcp-runtime = { path = "crates/vulcan-mcp-runtime" }
 vulcan-plugin-runtime = { path = "crates/vulcan-plugin-runtime" }
 vulcan-tools-manager = { path = "crates/vulcan-tools-manager" }
+vulcan-tool-chain = { path = "crates/vulcan-tool-chain" }
 vulcan-core = { path = "crates/vulcan-core" }
 vulcan-change-set = { path = "crates/vulcan-change-set" }
 vulcan-apply-patch = { path = "crates/vulcan-apply-patch" }

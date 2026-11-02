@@ -13,6 +13,7 @@ import { MemorySearchCard } from "./cards/memory-search-card";
 import { LUA_TOOLS, LuaCard } from "./cards/lua-card";
 import { GoalCard, PlanCard, TodoCard } from "./cards/plan-cards";
 import { ProviderCard, providerToolSpec } from "./cards/provider-card";
+import { ToolChainCard } from "./cards/tool-chain-card";
 import { WebExtractCard, WebSearchCard, webToolKind } from "./cards/web-cards";
 import type { ToolCardProps, ToolFamily } from "./tool-card";
 import { readToolCall, textOf, type ToolCall, type ToolCardState } from "./tool-call";
@@ -44,6 +45,9 @@ const FILE_INSPECT_ACTIONS = new Set(["list", "stat"]);
 /** Resolves the purpose-built card for one call, or null when its tool has none yet.
  * 为一次调用解析专用卡片；其工具尚无专用卡时返回 null。 */
 export function resolvePurposeCard(call: ToolCall): ToolCardDefinition | null {
+  // A chain draws each step with its own card, so its combined change-set never picks the file card.
+  // 链条以各步骤自身的卡片绘制每一步，因此其合并变更集不会选中文件卡。
+  if (call.name === "tool_chain") return { Card: ToolChainCard, family: "run" };
   if (call.event.changeset || FILE_MUTATION_TOOLS.has(call.name)) return { Card: FileChangeCard, family: "edit" };
   if (call.name === "file_read" || call.host?.kind === "file_access") return { Card: FileReadCard, family: "read" };
   if (call.name === "read_media") return { Card: MediaReadCard, family: "read" };

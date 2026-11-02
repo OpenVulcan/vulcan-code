@@ -408,6 +408,47 @@ pub(super) async fn service_save_session_title_generation(
     Ok(workbench)
 }
 
+/// Persists the system `tool_chain` settings chosen by the user.
+/// 持久化用户选择的系统 `tool_chain` 设置。
+/// Parameters: `enabled` is the default for sessions without their own choice; `max_steps` must be
+/// within the supported range. Returns the refreshed workbench or an explicit error.
+/// 参数：`enabled` 是未自行选择的会话的默认值；`max_steps` 必须在支持范围内。返回刷新后的工作台
+/// 或明确的错误。
+pub(super) async fn service_save_tool_chain_settings(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    enabled: bool,
+    max_steps: u32,
+) -> Result<WorkbenchSnapshot, String> {
+    let range =
+        vulcan_tool_chain::MIN_TOOL_CHAIN_MAX_STEPS..=vulcan_tool_chain::MAX_TOOL_CHAIN_MAX_STEPS;
+    if !range.contains(&max_steps) {
+        return Err(format!(
+            "tool_chain max steps must be between {} and {}, got {max_steps}.",
+            range.start(),
+            range.end()
+        ));
+    }
+    // Persist only on explicit user action; loading never writes the defaults.
+    // 仅在用户明确操作时持久化；加载时不写入默认值。
+    let workbench = mutate_provider_configuration(
+        &state,
+        "Failed to save the tool_chain settings",
+        |configuration| {
+            configuration.tool_chain_enabled = Some(enabled);
+            configuration.tool_chain_max_steps = Some(max_steps);
+            Ok(())
+        },
+        |guard, configuration| {
+            refresh_settings_projection_locked(guard, configuration);
+            guard.workbench.clone()
+        },
+    )
+    .await?;
+    emit_workbench_event(&app, &workbench);
+    Ok(workbench)
+}
+
 /// Persists the WebUI locale in the shared Vulcan configuration file.
 /// 将 WebUI 语言持久化到共享 Vulcan 配置文件中。
 ///

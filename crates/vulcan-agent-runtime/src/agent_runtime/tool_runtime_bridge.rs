@@ -71,6 +71,9 @@ pub struct VulcanManagedToolRuntimeBridge {
     /// Permission host consulted before every dispatch; `None` when no policy is configured.
     /// 每次调度前咨询的权限宿主；未配置策略时为 `None`。
     permission_host: Option<Arc<dyn ToolPermissionHost>>,
+    /// Source of live `tool_chain` settings; `None` uses the defaults.
+    /// 实时 `tool_chain` 设置来源；为 `None` 时使用默认值。
+    tool_chain_host: Option<Arc<dyn ToolChainHost>>,
 }
 
 /// Metadata key used to connect one runtime-event projection to its tool-execution barrier.
@@ -204,7 +207,15 @@ impl VulcanManagedToolRuntimeBridge {
             execution_mode: execution_mode.into(),
             prepared_invocation_identities: Arc::new(Mutex::new(HashMap::new())),
             permission_host: None,
+            tool_chain_host: None,
         }
+    }
+
+    /// Installs the source of live `tool_chain` settings read when a chain is called.
+    /// 安装在调用链条时读取的实时 `tool_chain` 设置来源。
+    pub(crate) fn with_tool_chain_host(mut self, host: Option<Arc<dyn ToolChainHost>>) -> Self {
+        self.tool_chain_host = host;
+        self
     }
 
     /// Installs the permission host that admits or denies each call before dispatch.
@@ -362,32 +373,48 @@ impl VulcanManagedToolRuntimeBridge {
         texts: PermissionTexts<'_>,
         context: VulcanToolInvocationContext,
     ) -> Result<VulcanToolInvocationResult, String> {
-        // Plan mode answers first; only calls it lets through reach the permission gate.
-        // 计划模式优先作答；只有它放行的调用才进入权限闸门。
-        if !VulcanToolsManager::plan_mode_blocks(definition, &args, &self.execution_mode) {
-            let verdict = admit_tool_call(
-                self.permission_host.as_ref(),
-                self.session_id,
-                definition,
-                &args,
-                texts,
-                &context,
-                self.manager.workspace_root(),
-            )
-            .await;
-            match verdict {
-                ToolPermissionVerdict::Proceed => {}
-                ToolPermissionVerdict::Deny(message) => {
-                    return Ok(VulcanToolInvocationResult::from_model_output(
-                        Value::String(message),
-                    ));
-                }
-                ToolPermissionVerdict::Fail(error) => return Err(error),
-            }
+        if let Some(message) = self
+            .admit_definition(definition, &args, texts, &context)
+            .await?
+        {
+            return Ok(VulcanToolInvocationResult::from_model_output(
+                Value::String(message),
+            ));
         }
         self.manager
             .invoke_tool(definition, args, context, &self.execution_mode)
             .await
+    }
+
+    /// Runs the plan-mode and permission gates for one call; `Some` carries the denial text.
+    /// 为一次调用运行计划模式与权限闸门；`Some` 携带拒绝文本。
+    async fn admit_definition(
+        &self,
+        definition: &ResolvedToolDefinition,
+        args: &Value,
+        texts: PermissionTexts<'_>,
+        context: &VulcanToolInvocationContext,
+    ) -> Result<Option<String>, String> {
+        // Plan mode answers first; only calls it lets through reach the permission gate.
+        // 计划模式优先作答；只有它放行的调用才进入权限闸门。
+        if VulcanToolsManager::plan_mode_blocks(definition, args, &self.execution_mode) {
+            return Ok(None);
+        }
+        match admit_tool_call(
+            self.permission_host.as_ref(),
+            self.session_id,
+            definition,
+            args,
+            texts,
+            context,
+            self.manager.workspace_root(),
+        )
+        .await
+        {
+            ToolPermissionVerdict::Proceed => Ok(None),
+            ToolPermissionVerdict::Deny(message) => Ok(Some(message)),
+            ToolPermissionVerdict::Fail(error) => Err(error),
+        }
     }
 
     /// Returns the stable fingerprint of the exact resolved or explicitly unregistered binding used by one request.
@@ -1210,6 +1237,10 @@ impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
             controller_tool_call_id: request.tool_call_id.clone(),
             provider_tool_call_id: Some(request.tool_call_id.clone()),
         };
+        if definition.descriptor.id == vulcan_tool_chain::TOOL_CHAIN_TOOL_ID {
+            return self
+                .redact_sensitive_tool_result(self.execute_tool_chain(request, context).await);
+        }
         let mut result = match self
             .invoke_definition(
                 definition,
@@ -1256,6 +1287,9 @@ impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
 mod tests;
 
 mod result_markdown;
+mod tool_chain;
+
+pub use tool_chain::{ToolChainHost, ToolChainSettings};
 
 /// Measures canonical payload bytes for a frozen pre-change fixture and current producer output.
 /// 对冻结的修改前夹具和当前生产者输出计量规范载荷字节数。

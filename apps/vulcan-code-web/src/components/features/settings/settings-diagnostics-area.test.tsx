@@ -13,6 +13,7 @@ const SETTINGS_ACTIONS = {
   onSavePromptOutputStyle: async () => undefined,
   onSavePromptAnswerMode: async () => undefined,
   onSaveSessionTitleGeneration: async () => undefined,
+  onSaveToolChainSettings: async () => undefined,
   onSaveGitCommitSettings: async () => undefined,
   onSaveDefaultCommandShell: async () => undefined,
   onSaveProviderRetrySettings: async () => undefined,

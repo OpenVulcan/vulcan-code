@@ -56,6 +56,7 @@ describe("context settings draft navigation", () => {
         onSavePromptOutputStyle: vi.fn(async () => undefined),
         onSavePromptAnswerMode: vi.fn(async () => undefined),
         onSaveSessionTitleGeneration: vi.fn(async () => undefined),
+        onSaveToolChainSettings: vi.fn(async () => undefined),
         onSaveGitCommitSettings: vi.fn(async () => undefined),
         onSaveDefaultCommandShell: vi.fn(async () => undefined),
         onSaveProviderRetrySettings: vi.fn(async () => undefined),

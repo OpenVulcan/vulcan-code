@@ -6,8 +6,10 @@ use crate::permission_judge;
 use crate::system_prompt_settings::{
     service_reset_system_prompt, service_save_system_prompt, service_system_prompt_settings,
 };
+use crate::tool_chain_settings::{service_save_session_tool_chain, service_session_tool_chain};
 use crate::workbench_model_routes::{
-    service_save_session_title_generation, service_save_tool_collapse_default,
+    service_save_session_title_generation, service_save_tool_chain_settings,
+    service_save_tool_collapse_default,
 };
 
 /// Exact public RPC wire names owned by this domain router.
@@ -20,6 +22,9 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_select_workbench_thinking_display_mode",
     "service_save_tool_collapse_default",
     "service_save_session_title_generation",
+    "service_save_tool_chain_settings",
+    "service_session_tool_chain",
+    "service_save_session_tool_chain",
     "service_select_webui_locale",
     "service_save_provider_request_trace_settings",
     "service_open_selected_provider_api_trace_directory",
@@ -235,6 +240,26 @@ pub(super) async fn dispatch(
             service_save_session_title_generation(
                 app,
                 state,
+                rpc_required_param(params, "enabled")?,
+            )
+            .await,
+        ),
+        "service_save_tool_chain_settings" => rpc_json_result(
+            service_save_tool_chain_settings(
+                app,
+                state,
+                rpc_required_param(params, "enabled")?,
+                rpc_required_param(params, "maxSteps")?,
+            )
+            .await,
+        ),
+        "service_session_tool_chain" => rpc_json_result(
+            service_session_tool_chain(state, rpc_required_param(params, "conversationId")?).await,
+        ),
+        "service_save_session_tool_chain" => rpc_json_result(
+            service_save_session_tool_chain(
+                state,
+                rpc_required_param(params, "conversationId")?,
                 rpc_required_param(params, "enabled")?,
             )
             .await,

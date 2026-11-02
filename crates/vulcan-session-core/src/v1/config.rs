@@ -24,7 +24,7 @@ pub const METADATA_CONTRACT: &str = "vulcan.session.v1";
 /// automatically on first read; older and future versions are rejected (AGENTS.md section 1 rule 12).
 /// 当前元数据模式版本。自 `METADATA_UPGRADE_BASELINE_VERSION` 起的版本在首次读取时自动升级；
 /// 更早与未来的版本一律拒绝（AGENTS.md 第一节第 12 条）。
-pub const METADATA_SCHEMA_VERSION: u32 = 12;
+pub const METADATA_SCHEMA_VERSION: u32 = 13;
 
 /// Oldest metadata schema that can still be upgraded; it was current on 2026-10-29.
 /// 仍可自动升级的最早元数据模式版本；即 2026-10-29 时的当前版本。
@@ -504,6 +504,15 @@ pub struct ProviderToolSelectionConfig {
     /// 选择是否在会话首次 Provider 请求之后被修改，因而需要告知模型当前工具配置。
     #[serde(default, skip_serializing_if = "is_false")]
     pub changed_mid_session: bool,
+    /// Session choice for the `tool_chain` tool; `None` follows the system setting.
+    /// 会话对 `tool_chain` 工具的选择；`None` 表示跟随系统设置。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_chain_enabled: Option<bool>,
+    /// Whether the `tool_chain` choice changed after this session's first provider request, so
+    /// the model must be told the tool appeared or disappeared.
+    /// `tool_chain` 选择是否在会话首次 Provider 请求之后被修改，因而需要告知模型该工具已出现或消失。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub tool_chain_changed_mid_session: bool,
 }
 
 impl ProviderToolSelectionConfig {
@@ -526,6 +535,8 @@ impl ProviderToolSelectionConfig {
             && self.extension_target_sets.is_empty()
             && self.extension_modes.is_empty()
             && !self.changed_mid_session
+            && self.tool_chain_enabled.is_none()
+            && !self.tool_chain_changed_mid_session
     }
 
     /// Carries the mid-session change marker from `previous` into this replacement.
@@ -550,6 +561,15 @@ impl ProviderToolSelectionConfig {
             || self.extension_modes != previous.extension_modes;
         self.changed_mid_session =
             previous.changed_mid_session || (request_prepared && tools_changed);
+        // Capability saves and rebuilds carry no tool_chain choice and keep the stored one; only
+        // the dedicated switch sets it. Its change has its own notice, never the provider-tool one.
+        // 能力保存与重建不携带 tool_chain 选择而保留已存选择；只有专用开关会设置它。它的修改有独立
+        // 提示，绝不标记供应商工具提示。
+        if self.tool_chain_enabled.is_none() {
+            self.tool_chain_enabled = previous.tool_chain_enabled;
+        }
+        self.tool_chain_changed_mid_session = previous.tool_chain_changed_mid_session
+            || (request_prepared && self.tool_chain_enabled != previous.tool_chain_enabled);
         self
     }
 }

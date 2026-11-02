@@ -60,6 +60,10 @@
 同样不回放。标记只能在流式期间置位，置位后不可清除。缺省表示模型自身思考，与 12 之前全部推理记录的
 含义一致，因此 11→12 只更新版本号，事件日志不改写；原字节保存为 `metadata.v11.backup.json`。
 
+13 在 `config.selection.provider_tools` 引入可选的 `tool_chain_enabled`（会话自有的 `tool_chain` 开关，缺省跟随
+系统设置）与 `tool_chain_changed_mid_session`（首次请求后切换过该开关，需追加 `dynamic.tool_chain` 变更消息），
+见[工具链](tool-chain.md)。缺省即 13 之前的行为，因此 12→13 只更新版本号；原字节保存为 `metadata.v12.backup.json`。
+
 基线之前的会话无法加载，因此也无法走“先归档再删除”。唯一清理入口是 `service_delete_unsupported_conversation`：
 在会话生命周期守卫内先以 `session_v1_format_is_unsupported` 只读元数据确认其为 `UnsupportedDevelopmentFormat`，
 再经 `delete_session_v1` 删除会话目录与索引记录。可读会话返回 `ERR_SESSION_FORMAT_SUPPORTED`，损坏或缺失仍是

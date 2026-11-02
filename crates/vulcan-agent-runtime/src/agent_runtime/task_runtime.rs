@@ -1097,6 +1097,10 @@ pub struct TaskRuntime {
     /// 由服务内核安装一次的权限宿主；嵌入式运行时中缺省。
     tool_permission_host:
         RwLock<Option<Arc<dyn crate::agent_runtime::tool_permission::ToolPermissionHost>>>,
+    /// Live `tool_chain` settings host installed by the service kernel; absent in embedded runtimes.
+    /// 由服务内核安装的实时 `tool_chain` 设置宿主；嵌入式运行时中缺省。
+    tool_chain_host:
+        RwLock<Option<Arc<dyn crate::agent_runtime::tool_runtime_bridge::ToolChainHost>>>,
     /// V1-backed executions awaiting durable return publication; completed entries retain exact feedback.
     /// 等待可靠回流发布的 V1 执行；已完成条目保留精确反馈。
     durable_return_mailboxes: RwLock<HashMap<SessionId, (String, Option<SubagentMailboxEvent>)>>,

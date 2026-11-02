@@ -239,6 +239,7 @@ mod subagent_panels;
 mod subagent_workspace_mutation;
 mod system_prompt_settings;
 mod terminal_settlement_service;
+mod tool_chain_settings;
 mod tool_permission_host;
 mod vmm;
 mod vmm_hooks;

@@ -9,6 +9,7 @@ impl TaskRuntime {
         Self {
             sensitive_tool_output_values: Arc::new(RwLock::new(Vec::new())),
             tool_permission_host: RwLock::new(None),
+            tool_chain_host: RwLock::new(None),
             environment_host: RwLock::new(None),
             configuration_host: RwLock::new(None),
             luaskills_debug_host: RwLock::new(None),
@@ -212,6 +213,31 @@ impl TaskRuntime {
             .tool_permission_host
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(host);
+    }
+
+    /// Installs the service kernel's live `tool_chain` settings host.
+    /// 安装服务内核的实时 `tool_chain` 设置宿主。
+    pub fn set_tool_chain_host(
+        &self,
+        host: Arc<dyn crate::agent_runtime::tool_runtime_bridge::ToolChainHost>,
+    ) {
+        // The slot only holds an `Arc`, so a poisoned lock still carries a consistent value.
+        // 该槽位只保存 `Arc`，因此锁中毒后其值仍然一致。
+        *self
+            .tool_chain_host
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(host);
+    }
+
+    /// Returns the installed `tool_chain` settings host, if any.
+    /// 返回已安装的 `tool_chain` 设置宿主（如有）。
+    pub(crate) fn tool_chain_host(
+        &self,
+    ) -> Option<Arc<dyn crate::agent_runtime::tool_runtime_bridge::ToolChainHost>> {
+        self.tool_chain_host
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// Returns the installed permission host, or `None` when no policy is configured.

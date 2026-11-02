@@ -502,6 +502,8 @@ pub(crate) fn refresh_settings_projection_locked(
     );
     guard.workbench.session_title_generation_enabled =
         Some(provider_configuration.title_generation_enabled());
+    guard.workbench.tool_chain_enabled = Some(provider_configuration.tool_chain_enabled());
+    guard.workbench.tool_chain_max_steps = Some(provider_configuration.tool_chain_max_steps());
     guard.workbench.git_commit = git_commit_settings(provider_configuration);
     guard.workbench.provider_retry = provider_retry_settings(provider_configuration);
     guard.workbench.provider_request_trace_enabled =

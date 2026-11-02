@@ -23,6 +23,10 @@ pub(super) const PERMISSION_MODE_CONTEXT_KEY: &str = "dynamic.permission_mode";
 /// 描述用户在会话中途修改后的供应商工具的稳定生产者。
 pub(super) const PROVIDER_TOOLS_CONTEXT_KEY: &str = "dynamic.provider_tools";
 
+/// Stable producer announcing that the user switched `tool_chain` mid-session.
+/// 通告用户在会话中途切换 `tool_chain` 的稳定生产者。
+pub(super) const TOOL_CHAIN_CONTEXT_KEY: &str = "dynamic.tool_chain";
+
 /// Render the interactive answer mode prompt with the unique Core component limits.
 /// 使用唯一的 Core 组件上限渲染互动回答模式提示词。
 /// No input; returns one trimmed producer body without independently defined limits.
@@ -238,6 +242,33 @@ fn provider_tools_input(
     )
 }
 
+/// Builds the `tool_chain` notice after the user switched the tool on or off mid-session.
+/// 在用户于会话中途开启或关闭 `tool_chain` 后构建其通知。
+/// Usage lives only in the tool's own description, so the notice only says whether the tool is
+/// there; agents follow their root session and receive no notice of their own.
+/// 用法只存在于工具自身的描述中，因此通知只说明工具是否存在；代理跟随根会话，不单独收到通知。
+fn tool_chain_input(
+    document: &vulcan_session_core::v1::document::SessionDocument,
+) -> DynamicContextInput {
+    let tools = &document.metadata.config.selection.provider_tools;
+    let body = (tools.tool_chain_changed_mid_session
+        && document.metadata.child_execution_profile.is_none())
+    .then(|| match tools.tool_chain_enabled {
+        Some(false) => String::from(
+            "Tool update: the user turned off `tool_chain` for this session after the conversation started. It is no longer available; make dependent calls one at a time. Continue the existing task without acknowledging this context update.",
+        ),
+        _ => String::from(
+            "Tool update: the user turned on `tool_chain` for this session after the conversation started. Its definition describes how to run dependent tool calls in one call. Continue the existing task without acknowledging this context update.",
+        ),
+    });
+    DynamicContextInput::new(
+        TOOL_CHAIN_CONTEXT_KEY,
+        body,
+        SystemContextScope::Session,
+        None,
+    )
+}
+
 /// Publishes business producer changes; compaction has no authority to withdraw or replace them.
 /// 发布业务生产者变化；压缩没有撤下或替换这些生产者的权限。
 /// Uses the exact handle and request facts; returns only after the durable mutation succeeds.
@@ -269,6 +300,7 @@ pub(super) fn synchronize_request_dynamic_context(
             inputs.push(model_selection_input(document, &facts.request));
             inputs.push(permission_mode_input(document));
             inputs.push(provider_tools_input(document));
+            inputs.push(tool_chain_input(document));
             // Freeze the answer mode under the same lock as its request-context publication.
             // 在请求上下文发布的同一把锁内冻结回答模式。
             document

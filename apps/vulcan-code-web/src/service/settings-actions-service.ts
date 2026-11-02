@@ -1008,6 +1008,12 @@ export async function saveSessionTitleGeneration(enabled: boolean): Promise<Work
   return serviceClient.request<WorkbenchSnapshot>("service_save_session_title_generation", { enabled });
 }
 
+// Saves the system tool_chain switch and step limit; the returned snapshot is authoritative.
+// 保存系统 tool_chain 开关与步骤上限；返回的快照具有权威性。
+export async function saveToolChainSettings(enabled: boolean, maxSteps: number): Promise<WorkbenchSnapshot> {
+  return serviceClient.request<WorkbenchSnapshot>("service_save_tool_chain_settings", { enabled, maxSteps });
+}
+
 // selectWebuiLocale persists one WebUI locale through the desktop service router.
 // selectWebuiLocale 通过桌面服务路由持久化单个 WebUI 语言。
 export async function selectWebuiLocale(locale: string): Promise<WorkbenchSnapshot | null> {

@@ -1631,6 +1631,14 @@ fn run_service_bootstrap(
             event_emitter.clone(),
         ),
     ));
+    // `tool_chain` reads the system switch and the session's own choice through this host.
+    // `tool_chain` 经此宿主读取系统开关与会话自身的选择。
+    agent_runtime.task_runtime.set_tool_chain_host(Arc::new(
+        crate::tool_chain_settings::KernelToolChainHost::new(
+            Arc::clone(&permission_registry),
+            Arc::downgrade(state),
+        ),
+    ));
     // The `luaskills_debug` tool installs through the same task as the LuaSkills settings page.
     // `luaskills_debug` 工具与 LuaSkills 设置页经同一任务安装。
     agent_runtime
