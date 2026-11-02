@@ -1,0 +1,104 @@
+# Prove the release signing credentials on disposable runners by signing a harmless probe; nothing is published.
+# 在一次性 Runner 上对无副作用的探针签名，以验证发行签名凭据；不发布任何内容。
+name: Signing smoke test
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  linux-gpg:
+    name: GPG sign and verify against the published key
+    # Secrets exist only in the release environment, which requires reviewer approval.
+    # 密钥只存在于需要审批的 release 环境中。
+    environment: release
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - id: versions
+        run: node scripts/ci-runtime-versions.mjs
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ steps.versions.outputs.node }}
+      - name: Signing helper behavior
+        run: node --test scripts/release-signing.test.mjs
+      - name: Build the harmless probe with the pinned toolchain
+        run: |
+          set -eu
+          rustup toolchain install
+          mkdir -p "$RUNNER_TEMP/signing-evidence"
+          rustc -O -o "$RUNNER_TEMP/signing-evidence/signing-probe" scripts/signing-probe.rs
+          "$RUNNER_TEMP/signing-evidence/signing-probe"
+      - name: Sign with the secret key and verify with RELEASE-SIGNING-KEY.asc only
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: node scripts/release-signing.mjs gpg "$RUNNER_TEMP/signing-evidence/signing-probe" "$RUNNER_TEMP/signing-evidence"
+      - name: Report
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/signing-evidence/gpg-result.json" ]; then
+            { echo '```json'; cat "$RUNNER_TEMP/signing-evidence/gpg-result.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  windows-authenticode:
+    name: Certum sign, verify and reject tampering
+    environment: release
+    runs-on: windows-2025
+    timeout-minutes: 20
+    # One cloud signing session at a time across every workflow that logs in to Certum.
+    # 所有登录 Certum 的工作流同一时间只有一个云签名会话。
+    concurrency:
+      group: certum-signing
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - id: versions
+        run: node scripts/ci-runtime-versions.mjs
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ steps.versions.outputs.node }}
+      - name: Signing helper behavior
+        run: node --test scripts/release-signing.test.mjs
+      - name: Build the harmless probe with the pinned toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Path "$env:RUNNER_TEMP/signing-evidence" -Force | Out-Null
+          rustc -O -o "$env:RUNNER_TEMP/signing-evidence/signing-probe.exe" scripts/signing-probe.rs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$env:RUNNER_TEMP/signing-evidence/signing-probe.exe"
+      - name: Install the pinned official SimplySign Desktop
+        shell: pwsh
+        run: ./scripts/certum-signing.ps1 -Phase Install -EvidenceDirectory "$env:RUNNER_TEMP/signing-evidence"
+      - name: Log in once, sign with retries and verify signer and timestamp
+        shell: pwsh
+        env:
+          CERTUM_TOTP_EMAIL: ${{ secrets.CERTUM_TOTP_EMAIL }}
+          CERTUM_TOTP_SECRET: ${{ secrets.CERTUM_TOTP_SECRET }}
+          CERTUM_CERT_SHA1: ${{ vars.CERTUM_CERT_SHA1 }}
+        run: ./scripts/certum-signing.ps1 -Phase Sign -EvidenceDirectory "$env:RUNNER_TEMP/signing-evidence" -Files "$env:RUNNER_TEMP/signing-evidence/signing-probe.exe" -Description 'Vulcan Code CI signing probe'
+      - name: Re-verify without credentials and reject a tampered copy
+        shell: pwsh
+        env:
+          CERTUM_CERT_SHA1: ${{ vars.CERTUM_CERT_SHA1 }}
+        run: |
+          $probe = "$env:RUNNER_TEMP/signing-evidence/signing-probe.exe"
+          ./scripts/certum-signing.ps1 -Phase Verify -EvidenceDirectory "$env:RUNNER_TEMP/signing-evidence" -Files $probe
+          $tampered = "$env:RUNNER_TEMP/tampered-signing-probe.exe"
+          node scripts/release-signing.mjs tamper-pe $probe $tampered
+          if ($LASTEXITCODE -ne 0) { throw 'tamper_fixture_creation_failed' }
+          $status = (Get-AuthenticodeSignature -LiteralPath $tampered).Status
+          if ($status -ne 'HashMismatch') { throw "tampered_probe_not_rejected_$status" }
+          Write-Output 'Tampered probe rejected with HashMismatch'
+      - name: Report
+        if: always()
+        shell: pwsh
+        run: |
+          foreach ($report in @(Get-ChildItem "$env:RUNNER_TEMP/signing-evidence" -Filter '*.json' -ErrorAction SilentlyContinue)) {
+            "### $($report.Name)", '```json', (Get-Content -Raw -LiteralPath $report.FullName), '```' >> $env:GITHUB_STEP_SUMMARY
+          }

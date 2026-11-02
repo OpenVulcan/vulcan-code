@@ -1,0 +1,124 @@
+# Prove the update distribution path: R2 upload, CDN range and cache behavior, and pointer purge.
+# 验证更新分发链路：R2 上传、CDN 的范围请求与缓存行为，以及指针缓存清除。
+# Objects live under <prefix>/_probe/<run> only and are removed at the end, whatever the outcome.
+# 对象只写在 <prefix>/_probe/<run> 之下，无论结果如何最后都会删除。
+name: Distribution smoke test
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  r2-cdn:
+    name: R2 upload, CDN cache and purge
+    environment: release
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      # R2 rejects the optional checksums newer AWS CLI releases send by default.
+      # R2 不接受新版 AWS CLI 默认附带的可选校验和。
+      AWS_REQUEST_CHECKSUM_CALCULATION: WHEN_REQUIRED
+      AWS_RESPONSE_CHECKSUM_VALIDATION: WHEN_REQUIRED
+      R2_ENDPOINT: https://${{ vars.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+      R2_BUCKET: ${{ vars.R2_BUCKET }}
+      UPDATE_BASE_URL: ${{ vars.UPDATE_BASE_URL }}
+      CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - name: Derive the probe location from UPDATE_BASE_URL
+        run: |
+          set -eu
+          case "$UPDATE_BASE_URL" in https://*/*) ;; *) echo 'UPDATE_BASE_URL must be https://<host>/<prefix>' >&2; exit 1 ;; esac
+          # The public path below the host is also the object key prefix in the bucket.
+          # 主机之后的公开路径同时也是 bucket 中的对象键前缀。
+          prefix="${UPDATE_BASE_URL#https://*/}"
+          probe="_probe/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "KEY_PREFIX=${prefix%/}/$probe" >> "$GITHUB_ENV"
+          echo "PROBE_URL=${UPDATE_BASE_URL%/}/$probe" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/probe"
+          head -c $((20 * 1024 * 1024)) /dev/urandom > "$RUNNER_TEMP/probe/pack.bin"
+          printf '{"probe":"first","run":"%s"}\n' "$GITHUB_RUN_ID" > "$RUNNER_TEMP/probe/pointer-1.json"
+          printf '{"probe":"second","run":"%s"}\n' "$GITHUB_RUN_ID" > "$RUNNER_TEMP/probe/pointer-2.json"
+      - name: Upload an immutable pack and a short-lived pointer
+        run: |
+          set -eu
+          aws s3api put-object --endpoint-url "$R2_ENDPOINT" --bucket "$R2_BUCKET" --key "$KEY_PREFIX/pack.bin" \
+            --body "$RUNNER_TEMP/probe/pack.bin" --content-type application/octet-stream \
+            --cache-control 'public, max-age=31536000, immutable' > /dev/null
+          aws s3api put-object --endpoint-url "$R2_ENDPOINT" --bucket "$R2_BUCKET" --key "$KEY_PREFIX/pointer.json" \
+            --body "$RUNNER_TEMP/probe/pointer-1.json" --content-type application/json \
+            --cache-control 'public, max-age=60' > /dev/null
+          echo "Uploaded under $PROBE_URL"
+      - name: Pack serves exact bytes, ranges, and from cache
+        run: |
+          set -eu
+          # header prints one response header value (lowercase name) from a saved header file.
+          # header 从已保存的响应头文件中输出一个响应头的值（名称为小写）。
+          header() { tr -d '\r' < "$1" | awk -v name="$2:" 'tolower($1) == name { $1 = ""; sub(/^ /, ""); value = $0 } END { print value }'; }
+          cd "$RUNNER_TEMP/probe"
+          hit=''
+          for attempt in 1 2 3 4 5; do
+            curl -fsS -D full.h -o full.bin "$PROBE_URL/pack.bin"
+            cmp -s full.bin pack.bin || { echo 'downloaded pack differs from the upload' >&2; exit 1; }
+            status=$(header full.h cf-cache-status)
+            echo "full GET attempt $attempt: cf-cache-status=$status cache-control=$(header full.h cache-control)"
+            if [ "$status" = HIT ]; then hit=yes; break; fi
+            sleep 2
+          done
+          [ "$hit" = yes ] || { echo 'pack never served from the CDN cache; check the cache rule' >&2; exit 1; }
+          code=$(curl -sS -D range.h -o range.bin -r 1048576-2097151 -w '%{http_code}' "$PROBE_URL/pack.bin")
+          echo "range GET: http=$code cf-cache-status=$(header range.h cf-cache-status) content-range=$(header range.h content-range)"
+          [ "$code" = 206 ] || { echo "range request returned $code, expected 206" >&2; exit 1; }
+          tail -c +1048577 pack.bin | head -c 1048576 | cmp -s - range.bin || { echo 'range bytes differ' >&2; exit 1; }
+          {
+            echo '### Pack'
+            echo "- full GET reached \`cf-cache-status: HIT\` after $attempt request(s)"
+            echo "- range GET: HTTP $code, \`$(header range.h content-range)\`, cache $(header range.h cf-cache-status)"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Pointer purge makes a replacement visible immediately
+        run: |
+          set -eu
+          header() { tr -d '\r' < "$1" | awk -v name="$2:" 'tolower($1) == name { $1 = ""; sub(/^ /, ""); value = $0 } END { print value }'; }
+          cd "$RUNNER_TEMP/probe"
+          for attempt in 1 2 3 4 5; do
+            curl -fsS -D pointer.h -o pointer.json "$PROBE_URL/pointer.json"
+            [ "$(header pointer.h cf-cache-status)" = HIT ] && break
+            sleep 2
+          done
+          cmp -s pointer.json pointer-1.json || { echo 'first pointer content differs' >&2; exit 1; }
+          echo "pointer cached: cf-cache-status=$(header pointer.h cf-cache-status) cache-control=$(header pointer.h cache-control)"
+          aws s3api put-object --endpoint-url "$R2_ENDPOINT" --bucket "$R2_BUCKET" --key "$KEY_PREFIX/pointer.json" \
+            --body pointer-2.json --content-type application/json --cache-control 'public, max-age=60' > /dev/null
+          jq -n --arg url "$PROBE_URL/pointer.json" '{files: [$url]}' > purge.json
+          curl -fsS -X POST "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/purge_cache" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H 'Content-Type: application/json' \
+            --data @purge.json | jq -e '.success == true' > /dev/null
+          # Purge propagates within seconds; poll briefly rather than waiting out the 60 s max-age.
+          # 清除在数秒内生效；短暂轮询，而不是等待 60 秒的 max-age 过期。
+          seen=''
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            curl -fsS -D pointer.h -o pointer.json "$PROBE_URL/pointer.json"
+            if cmp -s pointer.json pointer-2.json; then seen=yes; break; fi
+            sleep 2
+          done
+          [ "$seen" = yes ] || { echo 'replacement pointer not visible after purge' >&2; exit 1; }
+          {
+            echo '### Pointer'
+            echo "- \`cache-control: $(header pointer.h cache-control)\`"
+            echo "- replacement visible $((attempt * 2 - 2))–$((attempt * 2)) s after purge"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove probe objects
+        if: always()
+        run: |
+          set -u
+          for name in pack.bin pointer.json; do
+            aws s3api delete-object --endpoint-url "$R2_ENDPOINT" --bucket "$R2_BUCKET" --key "$KEY_PREFIX/$name" > /dev/null || true
+          done
+          jq -n --arg pack "$PROBE_URL/pack.bin" --arg pointer "$PROBE_URL/pointer.json" '{files: [$pack, $pointer]}' |
+            curl -sS -X POST "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/purge_cache" \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H 'Content-Type: application/json' --data @- | jq -c '{success}'
+          remaining=$(aws s3api list-objects-v2 --endpoint-url "$R2_ENDPOINT" --bucket "$R2_BUCKET" --prefix "$KEY_PREFIX/" --query 'KeyCount' --output text)
+          echo "objects left under the probe prefix: $remaining"
+          [ "$remaining" = 0 ]
