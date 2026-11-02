@@ -4,7 +4,7 @@
 use super::failure::{
     ProviderExecutionFailure, llm_core_protocol_failure, pre_dispatch_failure,
     stream_completion_failure_for_transport, stream_protocol_failure_for_transport,
-    stream_transport_failure_with_websocket_close_code,
+    stream_transport_failure_with_websocket_close_code, websocket_stream_loss_failure,
 };
 use super::projection_profiles::apply_response_projection_profiles;
 use super::request_encoding::{
@@ -386,7 +386,7 @@ impl ProviderExecutionClient {
                         let failure = trace_provider_transport_failure(
                             execution_id.as_str(),
                             "responses_websocket",
-                            stream_transport_failure_with_websocket_close_code(
+                            websocket_stream_loss_failure(
                                 "Responses WebSocket closed without a terminal event.",
                                 semantic_output_observed,
                                 None,
@@ -408,7 +408,7 @@ impl ProviderExecutionClient {
                         let failure = trace_provider_transport_failure(
                             execution_id.as_str(),
                             "responses_websocket",
-                            stream_transport_failure_with_websocket_close_code(
+                            websocket_stream_loss_failure(
                                 error.message,
                                 semantic_output_observed,
                                 error.websocket_close_code,

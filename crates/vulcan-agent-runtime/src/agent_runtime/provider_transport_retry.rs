@@ -7,7 +7,7 @@ use crate::provider_config::{
     normalize_provider_rate_limit_retry_max_retries,
 };
 use std::time::Duration;
-use vulcan_ai_contract::{AiErrorCategory, AiExecutionError, DispatchOutcome};
+use vulcan_ai_contract::{AiErrorCategory, AiExecutionError, AiTransportKind, DispatchOutcome};
 use vulcan_core::types::CoreError as VulcanCoreError;
 
 /// Hard safety ceiling for every backend-configured rate-limit retry wait.
@@ -534,6 +534,20 @@ fn structured_error_is_known_stream_error(error: &AiExecutionError) -> bool {
         && !error.side_effect_observed
 }
 
+/// Returns whether a Responses WebSocket lost mid-stream permits replay on a fresh socket.
+/// 判断流中途丢失的 Responses WebSocket 是否允许在新 Socket 上重放。
+/// The adapter counts each loss and pins the session to HTTP after its consecutive limit.
+/// 适配层记录每次丢失，达到连续上限后将会话固定改走 HTTP。
+fn structured_error_is_replayable_websocket_loss(error: &AiExecutionError) -> bool {
+    error.transport == Some(AiTransportKind::ResponsesWebsocket)
+        && error.category == AiErrorCategory::ProviderUnavailable
+        && error.subcategory.as_deref() == Some("transport")
+        && error.stage == "response_stream"
+        && error.dispatch_outcome == DispatchOutcome::Dispatched
+        && error.retryable
+        && !error.side_effect_observed
+}
+
 /// Returns whether one structured failure is an explicitly replayable stream failure.
 /// 判断一项结构化失败是否属于明确可重放的流失败。
 fn structured_error_is_replayable_stream_failure(
@@ -542,6 +556,7 @@ fn structured_error_is_replayable_stream_failure(
 ) -> bool {
     structured_error_is_replayable_stream_idle_timeout(error)
         || structured_error_is_known_stream_error(error)
+        || structured_error_is_replayable_websocket_loss(error)
         || (error.dispatch_outcome == DispatchOutcome::Dispatched
             && !error.side_effect_observed
             && structured_error_matches_retry_keyword(error, retry_keywords))
@@ -827,7 +842,8 @@ mod tests {
     };
     use std::time::Duration;
     use vulcan_ai_contract::{
-        AiErrorCategory, AiExecutionError, DispatchOutcome, RetryAfterHint, RetryAfterSource,
+        AiErrorCategory, AiExecutionError, AiTransportKind, DispatchOutcome, RetryAfterHint,
+        RetryAfterSource,
     };
     use vulcan_core::types::{
         CoreError as VulcanCoreError, ProviderUsageSnapshot as CoreProviderUsageSnapshot,
@@ -1605,6 +1621,30 @@ mod tests {
 
     /// Verifies a response identity alone keeps a dispatched transport close replayable.
     /// 验证仅有响应身份时，已分派的传输关闭仍可重放。
+    #[test]
+    fn websocket_loss_after_semantic_output_replays_but_respects_side_effects() {
+        let mut loss = structured_provider_error(AiErrorCategory::ProviderUnavailable, true);
+        if let VulcanCoreError::ProviderFailure {
+            details: Some(details),
+            ..
+        } = &mut loss
+        {
+            details.transport = Some(AiTransportKind::ResponsesWebsocket);
+            details.subcategory = Some(String::from("transport"));
+            details.stage = String::from("response_stream");
+            details.semantic_output_observed = true;
+        }
+        assert!(policy().next_retry(&loss, 0, true).is_some());
+        if let VulcanCoreError::ProviderFailure {
+            details: Some(details),
+            ..
+        } = &mut loss
+        {
+            details.transport = Some(AiTransportKind::Http);
+        }
+        assert!(policy().next_retry(&loss, 0, true).is_none());
+    }
+
     #[test]
     fn response_identity_alone_keeps_transport_close_replayable() {
         assert!(!provider_delta_makes_retry_unsafe(

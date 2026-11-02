@@ -400,6 +400,29 @@ pub(super) fn stream_transport_failure_with_websocket_close_code(
     )
 }
 
+/// Creates one failure for a Responses WebSocket lost before its terminal event.
+/// 为终态事件之前丢失的 Responses WebSocket 创建一项失败。
+///
+/// Like a stream idle timeout, the loss stays retryable after partial output: the host replays
+/// from its retained checkpoint on a fresh socket, and consecutive losses pin the session to HTTP.
+/// 与流空闲超时一致，局部输出之后该丢失仍可重试：宿主在新 Socket 上从保留检查点重放，
+/// 连续丢失会使会话固定改走 HTTP。
+pub(super) fn websocket_stream_loss_failure(
+    message: impl Into<String>,
+    semantic_output_observed: bool,
+    websocket_close_code: Option<u16>,
+) -> ProviderExecutionFailure {
+    dispatched_stream_failure(
+        message,
+        semantic_output_observed,
+        AiTransportKind::ResponsesWebsocket,
+        websocket_close_code,
+        AiErrorCategory::ProviderUnavailable,
+        "transport",
+        true,
+    )
+}
+
 /// Creates one dispatched stream failure for the exact observed transport.
 /// 为精确观察到的传输创建一项已分派流失败。
 ///

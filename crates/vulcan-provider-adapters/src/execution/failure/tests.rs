@@ -22,6 +22,27 @@ fn stream_idle_timeout_remains_retryable_after_semantic_output() {
     assert!(failure.error.retryable);
 }
 
+/// Verifies a WebSocket lost after partial output stays retryable, unlike a plain HTTP loss.
+/// 验证局部输出后丢失的 WebSocket 仍可重试，与普通 HTTP 丢失不同。
+#[test]
+fn websocket_stream_loss_remains_retryable_after_semantic_output() {
+    let failure = websocket_stream_loss_failure("socket closed", true, Some(1012));
+
+    assert_eq!(
+        failure.error.transport,
+        Some(AiTransportKind::ResponsesWebsocket)
+    );
+    assert_eq!(failure.error.subcategory.as_deref(), Some("transport"));
+    assert_eq!(failure.error.websocket_close_code, Some(1012));
+    assert!(failure.error.semantic_output_observed);
+    assert!(failure.error.retryable);
+    assert!(
+        !stream_transport_failure("stream lost", true)
+            .error
+            .retryable
+    );
+}
+
 /// Verifies an exact upstream context code is distinct from generic invalid requests.
 /// 验证精确上游上下文代码与通用无效请求具有不同类别。
 #[test]
