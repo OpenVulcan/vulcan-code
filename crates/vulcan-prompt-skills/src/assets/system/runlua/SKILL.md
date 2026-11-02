@@ -67,7 +67,7 @@ count	3
 Reading the result:
 
 - Check `## Status` first. `FAILED` with an `## Error` section means your Lua failed, even though the tool call itself completed. Printed output before the failure is still shown.
-- Error locations name an internal wrapper file, not your code. Use the message text, such as `attempt to index local 't' (a nil value)`, to find the problem.
+- Error locations point at your own code: `runlua:3:` is line 3 of `code`, and `runtime_session:3:` is line 3 of a session `eval`.
 - Each returned value is listed separately. Strings appear as text; numbers, booleans, and tables appear as JSON. No `return` shows `null`.
 - Return tables instead of printing them: `print` shows a table only as an opaque reference.
 - An empty table returns as `[]`. Use `vulcan.json.object()` when an empty object is meant.
@@ -136,7 +136,7 @@ return { available = ok, detail = tostring(module_or_error) }
 
 ## Timeouts and Limits
 
-- Keep every loop bounded. Do not rely on `timeout_ms` to stop runaway Lua; an endless loop may never return.
+- `timeout_ms` stops runaway Lua: the run ends with `FAILED` and a timeout error. Keep loops bounded anyway; a timed-out run returns no values.
 - Give `vulcan.process.exec`, Python, and Node calls their own `timeout_ms`; the Lua timeout cannot interrupt them.
 - Lua source is limited to 128 KiB per call.
 - Tool output is limited to 64 KiB inline. Larger output is written to a project `.vulcan/temp/` page file with bounded read instructions; return a summary instead of large raw data.
@@ -173,7 +173,7 @@ Start a session, evaluate code in it, and close it when finished:
 
 ## Runtime Versions
 
-- LuaSkills: `0.8.1`.
+- LuaSkills: `0.8.2`.
 - mlua: `0.12.0`.
 - LuaJIT: `LuaJIT 2.1.ROLLING`.
 - LuaJIT source: `luajit-src 210.7.2+b925b3e`.

@@ -30,7 +30,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - id: package
-        uses: LuaSkills/luaskills-debug@v0.8.1
+        uses: LuaSkills/luaskills-debug@v0.8.2
         with:
           layout: standard
           expect-tag: ${{ github.ref_name }}

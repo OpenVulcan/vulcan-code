@@ -6,7 +6,7 @@ This file is generated from Cargo dependency metadata by `cargo-about`.
 ## License Overview
 
 - Apache License 2.0 (527)
-- MIT License (292)
+- MIT License (295)
 - Unicode License v3 (23)
 - BSD 3-Clause "New" or "Revised" License (13)
 - ISC License (9)
@@ -16470,7 +16470,7 @@ SOFTWARE.
 ### MIT License
 
 Used by:
-- luaskills 0.8.1 - https://github.com/LuaSkills/luaskills
+- luaskills 0.8.2 - https://github.com/LuaSkills/luaskills
 
 ```text
 MIT License
@@ -16515,7 +16515,9 @@ Used by:
 - vulcan-host-tools 0.1.0 - https://crates.io/crates/vulcan-host-tools
 - vulcan-i18n 0.1.0 - https://crates.io/crates/vulcan-i18n
 - vulcan-judge-host 0.1.0 - https://crates.io/crates/vulcan-judge-host
+- vulcan-lancedb-contract 0.1.0 - https://crates.io/crates/vulcan-lancedb-contract
 - vulcan-lancedb-engine 0.1.0 - https://crates.io/crates/vulcan-lancedb-engine
+- vulcan-lancedb-native 0.1.0 - https://crates.io/crates/vulcan-lancedb-native
 - vulcan-llm-core 0.1.0 - https://crates.io/crates/vulcan-llm-core
 - vulcan-luaskills-config 0.1.0 - https://crates.io/crates/vulcan-luaskills-config
 - vulcan-luaskills-prompt 0.1.0 - https://crates.io/crates/vulcan-luaskills-prompt
@@ -16546,6 +16548,7 @@ Used by:
 - vulcan-task-session 0.1.0 - https://crates.io/crates/vulcan-task-session
 - vulcan-terminal-host 0.1.0 - https://crates.io/crates/vulcan-terminal-host
 - vulcan-terminal-host-protocol 0.1.0 - https://crates.io/crates/vulcan-terminal-host-protocol
+- vulcan-tool-chain 0.1.0 - https://crates.io/crates/vulcan-tool-chain
 - vulcan-tools-luaskills-call 0.1.0 - https://crates.io/crates/vulcan-tools-luaskills-call
 - vulcan-tools-manager 0.1.0 - https://crates.io/crates/vulcan-tools-manager
 - vulcan-vmm 0.1.0 - https://crates.io/crates/vulcan-vmm

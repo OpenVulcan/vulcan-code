@@ -5392,9 +5392,9 @@ dependencies = [
 
 [[package]]
 name = "luaskills"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68938eee4eafa47bab6fb0120815bc7aa721630f3df342b1e214b9bb3bc27dce"
+checksum = "765f9bf4222f66626ae378a45e865fb1f3129234db37e30269d3285c15ed47dd"
 dependencies = [
  "base64 0.22.1",
  "encoding_rs",
