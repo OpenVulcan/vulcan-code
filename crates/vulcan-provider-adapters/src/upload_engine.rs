@@ -819,9 +819,12 @@ pub async fn resolve_provider_tool_local_path(
             .map_err(|_| String::from("Provider-tool workspace root cannot be resolved."))?;
         canonical_root.join(source)
     };
-    tokio::fs::canonicalize(&resolved)
-        .await
-        .map_err(|_| String::from("Provider tool resource cannot be resolved."))
+    tokio::fs::canonicalize(&resolved).await.map_err(|error| {
+        format!(
+            "Local file `{}` cannot be opened: {error}",
+            resolved.display()
+        )
+    })
 }
 
 /// Resolves one exact MIME type from binding-owned literal or extension rules.
