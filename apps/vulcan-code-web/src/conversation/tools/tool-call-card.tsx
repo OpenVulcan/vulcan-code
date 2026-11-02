@@ -13,6 +13,7 @@ import { MemorySearchCard } from "./cards/memory-search-card";
 import { LUA_TOOLS, LuaCard } from "./cards/lua-card";
 import { GoalCard, PlanCard, TodoCard } from "./cards/plan-cards";
 import { ProviderCard, providerToolSpec } from "./cards/provider-card";
+import { WebExtractCard, WebSearchCard, webToolKind } from "./cards/web-cards";
 import type { ToolCardProps, ToolFamily } from "./tool-card";
 import { readToolCall, textOf, type ToolCall, type ToolCardState } from "./tool-call";
 import { readRequestPreview, requestToolCall, type ToolRequestPhase } from "./tool-request";
@@ -63,6 +64,8 @@ export function resolvePurposeCard(call: ToolCall): ToolCardDefinition | null {
   if (agentToolSpec(call)) return { Card: AgentCard, family: "agent" };
   if (call.name === "knowledge_write") return { Card: KnowledgeWriteCard, family: "edit" };
   if (call.name === "vmm_memory_search") return { Card: MemorySearchCard, family: "search" };
+  const web = webToolKind(call);
+  if (web) return { Card: web === "search" ? WebSearchCard : WebExtractCard, family: "web" };
   const provider = providerToolSpec(call);
   if (provider) return { Card: ProviderCard, family: provider.family };
   const document = documentToolSpec(call);
