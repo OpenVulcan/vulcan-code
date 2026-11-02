@@ -93,7 +93,12 @@ pub(crate) async fn handle_question_finished_report(
     // 辅助交互框保留独立可靠结果；恢复旧任务阶段不代表答疑已经结算。
     let phase = registered_session_v1_handle_from_state(state, session_id).and_then(|handle| {
         handle
-            .read(|document| question_phase_after_finish(document.collaboration_run_control()))
+            .read(|document| {
+                question_phase_after_finish(
+                    document.collaboration_run_control(),
+                    document.open_turn_awaits_continue(),
+                )
+            })
             .map_err(|error| error.to_string())
     });
     match phase {
@@ -135,9 +140,15 @@ pub(crate) async fn handle_question_finished_report(
 /// 从可靠业务运行控制恢复阶段，不改变该控制或恢复 Goal。
 /// `control` is read before releasing ownership; the returned preparing phase represents the retained unfinished task.
 /// `control` 在释放所有权前读取；返回的准备阶段表示保留的未完成任务。
-fn question_phase_after_finish(control: CollaborationRunControl) -> SessionRunPhase {
+/// `awaits_continue` marks a retained task whose business request already failed: it shows the failure, not a request.
+/// `awaits_continue` 标记业务请求已失败的保留任务：展示失败而非请求中。
+fn question_phase_after_finish(
+    control: CollaborationRunControl,
+    awaits_continue: bool,
+) -> SessionRunPhase {
     match control {
         CollaborationRunControl::NaturallyIdle => SessionRunPhase::Ready,
+        CollaborationRunControl::Running if awaits_continue => SessionRunPhase::Failed,
         CollaborationRunControl::Running => SessionRunPhase::Preparing,
         CollaborationRunControl::MainOnly
         | CollaborationRunControl::Stopped
@@ -464,4 +475,25 @@ async fn retire_auxiliary_browser_connection(
         manager.retire_ai_connection_after_turn(session_id).await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retained_task_after_failed_request_shows_failure() {
+        assert_eq!(
+            question_phase_after_finish(CollaborationRunControl::Running, true),
+            SessionRunPhase::Failed
+        );
+        assert_eq!(
+            question_phase_after_finish(CollaborationRunControl::Running, false),
+            SessionRunPhase::Preparing
+        );
+        assert_eq!(
+            question_phase_after_finish(CollaborationRunControl::NaturallyIdle, true),
+            SessionRunPhase::Ready
+        );
+    }
 }

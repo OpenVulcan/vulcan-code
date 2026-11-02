@@ -725,9 +725,14 @@ pub(crate) fn continue_webui_prompt_turn_after_preparation_for_purpose(
         }
     }
     let mut request = continuation.request;
-    if request.continuation_action_id.is_some() {
-        // Continue never mixes retained legacy state with V1 history; V1 owns the complete controller window.
-        // Continue 绝不混合保留的旧状态与 V1 历史；完整控制器窗口由 V1 持有。
+    if request.continuation_action_id.is_some()
+        || purpose == PromptContinuationPurpose::QuestionExecution
+    {
+        // Continue and in-turn questions never mix retained in-memory state with V1 history: a failed
+        // business request can leave that state behind, so V1 owns the complete controller window,
+        // as it already does for child questions.
+        // Continue 与回合内答疑绝不混合保留的内存状态与 V1 历史：失败的业务请求可能遗留该状态，
+        // 因此完整控制器窗口由 V1 持有，与子会话答疑一致。
         synchronize_continue_controller_state_from_v1(state, session_id, &mut request)?;
     }
     // Live VMM readiness is captured at turn admission so model-visible memory tools cannot outlive

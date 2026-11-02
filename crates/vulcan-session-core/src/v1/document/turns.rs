@@ -550,6 +550,17 @@ impl SessionDocument {
         }))
     }
 
+    /// Returns whether the open Turn has no API in flight and is parked on a business terminal
+    /// that permits an explicit Continue (for example a failed request whose child tasks still run).
+    /// 判断开放回合没有在途 API，且停在允许显式继续的业务终态上（例如子任务仍在运行时的失败请求）。
+    pub fn open_turn_awaits_continue(&self) -> bool {
+        self.active_api.is_none()
+            && self
+                .active_turn
+                .as_ref()
+                .is_some_and(|turn| self.validate_continuation_eligibility(turn.turn_id).is_ok())
+    }
+
     /// Validates that the latest business API terminal permits an explicit Continue.
     /// 校验最近一次业务 API 终态允许显式继续。
     fn validate_continuation_eligibility(&self, turn_id: TurnId) -> Result<(), DomainError> {
