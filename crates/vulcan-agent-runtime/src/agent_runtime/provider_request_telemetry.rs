@@ -1070,24 +1070,16 @@ impl ProviderRequestTelemetryTracker {
         Some(build_dispatched_event(context, active_request))
     }
 
-    /// Records that the active request exposed replay-relevant semantic output.
-    /// 记录活动请求已经暴露与重放相关的语义输出。
-    pub(crate) fn observe_semantic_output(&mut self) {
-        if let Some(active_request) = self.active_request.as_mut() {
-            active_request.semantic_output_observed = true;
-            if active_request.first_event_at_ms.is_none() {
-                active_request.first_event_at_ms = Some(current_unix_millis());
-            }
-        }
-    }
-
-    /// Records and emits the first visible token event at most once.
-    /// 最多一次记录并发出首个可见 Token 事件。
+    /// Records and emits the first generated token event at most once.
+    /// 最多一次记录并发出首个生成 Token 事件。
+    ///
+    /// Visible text, visible thinking and tool-call arguments all count; it also marks semantic output.
+    /// 可见正文、可见思考与工具调用参数都计入；同时标记已产生语义输出。
     ///
     /// # Returns
     /// 返回值
-    /// Returns the event only for the first visible token of an active request.
-    /// 仅对活动请求的首个可见 Token 返回事件。
+    /// Returns the event only for the first generated token of an active request.
+    /// 仅对活动请求的首个生成 Token 返回事件。
     pub(crate) fn observe_first_token(&mut self) -> Option<ProviderRequestTelemetryEvent> {
         let context = self.context.as_ref()?;
         let active_request = self.active_request.as_mut()?;

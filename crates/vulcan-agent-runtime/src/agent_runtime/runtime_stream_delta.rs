@@ -614,14 +614,23 @@ pub(crate) fn process_provider_stream_delta(
         Ok(ProviderStreamDelta::Output(delta)) => state.process_output_delta(session_id, delta),
         Ok(ProviderStreamDelta::ToolRequestFragment(fragment)) => {
             state.observed_tool_request = true;
-            state.provider_request_telemetry.observe_semantic_output();
+            // Tool-call arguments are generated tokens, so a tool-only reply still records its first token.
+            // 工具调用参数也是生成的 Token，因此仅含工具调用的回复同样记录首 Token。
+            let mut events = state
+                .provider_request_telemetry
+                .observe_first_token()
+                .map(ExecutionStreamEvent::ProviderRequestTelemetry)
+                .into_iter()
+                .collect::<Vec<_>>();
             // runtimeEvents are safe low-frequency projections produced without raw arguments.
             // runtimeEvents 是在不包含原始参数的前提下生成的安全低频投影。
             let runtime_events = state.tool_request_stream.apply(fragment);
-            runtime_events
-                .into_iter()
-                .flat_map(|event| state.process_runtime_event(session_id, event))
-                .collect()
+            events.extend(
+                runtime_events
+                    .into_iter()
+                    .flat_map(|event| state.process_runtime_event(session_id, event)),
+            );
+            events
         }
         Ok(ProviderStreamDelta::RuntimeEvent(event)) => {
             if event.kind == RuntimeEventKind::Retrying {
@@ -997,6 +1006,7 @@ mod tests {
     use super::*;
     use crate::agent_runtime::events::RuntimeEventKind;
     use crate::agent_runtime::provider_request_telemetry::ProviderRequestCompletedUsage;
+    use crate::agent_runtime::tool_request_stream::ToolRequestFragment;
     use serde_json::{Value, json};
     use uuid::Uuid;
     use vulcan_core::types::{ControllerConfig, ConversationSnapshot};
@@ -1601,6 +1611,52 @@ mod tests {
             [ExecutionStreamEvent::RuntimeEvent { event, .. }]
                 if event.kind == RuntimeEventKind::ToolRequestProgress
         ));
+    }
+
+    /// Verifies a tool-call-only reply records its first token exactly once.
+    /// 验证仅含工具调用的回复恰好记录一次首 Token。
+    #[test]
+    fn tool_only_reply_records_first_token_once() {
+        let session_id = Uuid::nil();
+        let mut state = build_delta_state_with_telemetry();
+        test_start_durable_request(session_id, &mut state, build_request_snapshot());
+        let count_first_tokens = |events: &[ExecutionStreamEvent]| {
+            events
+                .iter()
+                .filter(|event| {
+                    matches!(
+                        event,
+                        ExecutionStreamEvent::ProviderRequestTelemetry(event)
+                            if event.kind == ProviderRequestTelemetryEventKind::FirstToken
+                    )
+                })
+                .count()
+        };
+        let detected_events = process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::ToolRequestFragment(
+                ToolRequestFragment::Detected {
+                    request_stream_id: String::from("request-1"),
+                    tool_call_id: String::from("call-1"),
+                    tool_name: String::from("submit_plan"),
+                    initial_arguments: String::new(),
+                    argument_assembler: None,
+                },
+            )),
+        );
+        assert_eq!(count_first_tokens(&detected_events), 1);
+        let delta_events = process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::ToolRequestFragment(
+                ToolRequestFragment::ArgumentsDelta {
+                    request_stream_id: String::from("request-1"),
+                    delta: String::from("{}"),
+                },
+            )),
+        );
+        assert_eq!(count_first_tokens(&delta_events), 0);
     }
 
     /// Accumulates successful provider usage across provider turns without double-counting duplicate checkpoints.
