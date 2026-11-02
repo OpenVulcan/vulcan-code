@@ -36,6 +36,7 @@ use vulcan_tools_manager::{
 };
 
 mod file_durability;
+mod tool_chain_steps;
 
 /// Verifies a host credential never reaches model text or structured durable tool details.
 /// 验证宿主凭据不会到达模型文本或结构化可靠工具详情。

@@ -9,7 +9,7 @@
 use regex::Regex;
 use serde_json::{Number, Value};
 
-use crate::run::{StepOutcome, StepRecord};
+use crate::run::{KeptValues, MAX_KEPT_VALUE_BYTES, StepRecord};
 
 /// One parsed expression node.
 /// 一个已解析的表达式节点。
@@ -85,7 +85,36 @@ pub(crate) enum StepField {
     /// Exit code of command tools, null otherwise.
     /// 命令类工具的退出码，其余为 null。
     ExitCode,
+    /// Raw standard output of command tools without trailing whitespace.
+    /// 命令类工具去除尾部空白的原始标准输出。
+    Stdout,
+    /// Raw standard error of command tools without trailing whitespace.
+    /// 命令类工具去除尾部空白的原始标准错误。
+    Stderr,
+    /// Structured result the tool returned, null when it returned only text.
+    /// 工具返回的结构化结果；只返回文本时为 null。
+    Result,
 }
+
+impl StepField {
+    /// Name used after `steps.<id>.`.
+    /// `steps.<id>.` 之后使用的名称。
+    fn name(self) -> &'static str {
+        match self {
+            Self::Outcome => "outcome",
+            Self::Output => "output",
+            Self::ExitCode => "exit_code",
+            Self::Stdout => "stdout",
+            Self::Stderr => "stderr",
+            Self::Result => "result",
+        }
+    }
+}
+
+/// Field names listed in reference errors.
+/// 引用错误中列出的字段名。
+const STEP_FIELD_NAMES: &str =
+    "`.outcome`, `.output`, `.exit_code`, `.stdout`, `.stderr` or `.result`";
 
 /// Key used by member access.
 /// 成员访问使用的键。
@@ -121,6 +150,9 @@ pub(crate) enum Function {
     /// `match(text, regex)`: first capture group or whole match.
     /// `match(text, regex)`：第一个捕获组或整段匹配。
     Match,
+    /// `test(text, regex)`: whether the regex matches.
+    /// `test(text, regex)`：正则是否匹配。
+    Test,
     /// `fromJSON(text)`.
     /// `fromJSON(text)`。
     FromJson,
@@ -137,6 +169,7 @@ impl Function {
             "contains" => (Self::Contains, 2),
             "startsWith" => (Self::StartsWith, 2),
             "match" => (Self::Match, 2),
+            "test" => (Self::Test, 2),
             "fromJSON" => (Self::FromJson, 1),
             _ => return None,
         })
@@ -146,7 +179,7 @@ impl Function {
 /// Names listed in parse errors for unknown functions.
 /// 未知函数解析错误中列出的名称。
 const FUNCTION_NAMES: &str =
-    "success(), failure(), always(), contains(), startsWith(), match(), fromJSON()";
+    "success(), failure(), always(), contains(), startsWith(), match(), test(), fromJSON()";
 
 /// Lexical token.
 /// 词法记号。
@@ -413,7 +446,7 @@ impl Parser {
                 "steps" => self.parse_step_field(),
                 _ if self.peek() == Some(&Token::LParen) => self.parse_call(&name),
                 _ => Err(format!(
-                    "unknown name `{name}`; use steps.<id>.outcome, steps.<id>.output, steps.<id>.exit_code or a function: {FUNCTION_NAMES}"
+                    "unknown name `{name}`; use steps.<id> followed by {STEP_FIELD_NAMES}, or a function: {FUNCTION_NAMES}"
                 )),
             },
             Some(other) => Err(format!("unexpected {}", describe(&other))),
@@ -432,7 +465,7 @@ impl Parser {
             (Some(Token::Dot), Some(Token::Ident(field))) => field,
             _ => {
                 return Err(format!(
-                    "`steps.{step}` must be followed by `.outcome`, `.output` or `.exit_code`"
+                    "`steps.{step}` must be followed by {STEP_FIELD_NAMES}"
                 ));
             }
         };
@@ -440,9 +473,12 @@ impl Parser {
             "outcome" => StepField::Outcome,
             "output" => StepField::Output,
             "exit_code" => StepField::ExitCode,
+            "stdout" => StepField::Stdout,
+            "stderr" => StepField::Stderr,
+            "result" => StepField::Result,
             other => {
                 return Err(format!(
-                    "`steps.{step}.{other}` is not available; use `.outcome`, `.output` or `.exit_code`"
+                    "`steps.{step}.{other}` is not available; use {STEP_FIELD_NAMES}"
                 ));
             }
         };
@@ -477,10 +513,10 @@ impl Parser {
                 args.len()
             ));
         }
-        if function == Function::Match
+        if matches!(function, Function::Match | Function::Test)
             && let Some(Expr::Literal(Value::String(pattern))) = args.get(1)
         {
-            Regex::new(pattern).map_err(|error| format!("invalid regex in match(): {error}"))?;
+            Regex::new(pattern).map_err(|error| format!("invalid regex in {name}(): {error}"))?;
         }
         Ok(Expr::Call { function, args })
     }
@@ -556,12 +592,10 @@ pub(crate) struct EvalContext<'a> {
 }
 
 impl EvalContext<'_> {
-    /// Whether any earlier step failed.
-    /// 是否有更早的步骤失败。
-    fn any_failed(&self) -> bool {
-        self.earlier
-            .iter()
-            .any(|record| record.outcome == StepOutcome::Failure)
+    /// Whether any earlier step failed without `continue_on_error`.
+    /// 是否有未设置 `continue_on_error` 的更早步骤失败。
+    pub(crate) fn any_failed(&self) -> bool {
+        self.earlier.iter().any(StepRecord::counts_as_failure)
     }
 
     /// Finds an earlier step by id; validation guarantees it exists.
@@ -585,16 +619,43 @@ pub(crate) fn evaluate(expr: &Expr, context: &EvalContext<'_>) -> Result<Value, 
                 StepField::Outcome => {
                     Ok(Value::String(record.outcome.expression_name().to_string()))
                 }
-                StepField::Output | StepField::ExitCode if !record.outcome.ran() => Err(format!(
-                    "step `{step}` did not run, so it has no {}",
-                    if *field == StepField::Output {
-                        "output"
-                    } else {
-                        "exit code"
-                    }
+                _ if !record.outcome.ran() => Err(format!(
+                    "step `{step}` did not run, so it has no `{}`",
+                    field.name()
                 )),
                 StepField::Output => Ok(Value::String(record.output.trim().to_string())),
                 StepField::ExitCode => Ok(record.exit_code.map_or(Value::Null, Value::from)),
+                StepField::Stdout | StepField::Stderr | StepField::Result => {
+                    let (streams, result) = match &record.kept {
+                        KeptValues::Kept { streams, result } => (streams.as_ref(), result),
+                        KeptValues::OverBudget => {
+                            return Err(format!(
+                                "the chain already keeps {MAX_KEPT_VALUE_BYTES} bytes of command streams and structured results, so `{}` of step `{step}` was not kept; use `.output`, or write the data to a file and read it",
+                                field.name()
+                            ));
+                        }
+                        KeptValues::None => (None, &None),
+                    };
+                    match field {
+                        StepField::Result => Ok(result.clone().unwrap_or(Value::Null)),
+                        _ => streams
+                            .map(|(stdout, stderr)| {
+                                let text = if *field == StepField::Stdout {
+                                    stdout
+                                } else {
+                                    stderr
+                                };
+                                Value::String(text.trim_end().to_string())
+                            })
+                            .ok_or_else(|| {
+                                format!(
+                                    "step `{step}` ({}) has no `{}`: only a command step that ran its command has one; use `.output`",
+                                    record.tool,
+                                    field.name()
+                                )
+                            }),
+                    }
+                }
             }
         }
         Expr::Call { function, args } => call(*function, args, context),
@@ -676,6 +737,11 @@ fn call(function: Function, args: &[Expr], context: &EvalContext<'_>) -> Result<
             Ok(Value::String(
                 matched.map_or("", |m| m.as_str()).to_string(),
             ))
+        }
+        Function::Test => {
+            let regex = Regex::new(&to_text(&values[1]))
+                .map_err(|error| format!("invalid regex in test(): {error}"))?;
+            Ok(Value::Bool(regex.is_match(&to_text(&values[0]))))
         }
         Function::FromJson => serde_json::from_str(&to_text(&values[0]))
             .map_err(|error| format!("fromJSON() could not parse the text as JSON: {error}")),

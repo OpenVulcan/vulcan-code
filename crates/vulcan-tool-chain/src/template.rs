@@ -185,19 +185,56 @@ pub(crate) fn argument_references<'a>(node: &'a ArgNode, out: &mut Vec<&'a str>)
 
 /// Resolves an argument tree into concrete JSON.
 /// 将参数树解析为具体 JSON。
+///
+/// `command_arguments` names the top-level arguments that run as shell syntax.
+/// `command_arguments` 指明作为 shell 语法运行的顶层参数。
 pub(crate) fn resolve_arguments(
     node: &ArgNode,
     context: &EvalContext<'_>,
+    command_arguments: &[&str],
 ) -> Result<Value, String> {
     match node {
+        ArgNode::Object(fields) => {
+            let mut map = Map::with_capacity(fields.len());
+            for (key, item) in fields {
+                let guard = command_arguments
+                    .contains(&key.as_str())
+                    .then_some(key.as_str());
+                map.insert(key.clone(), resolve(item, context, guard)?);
+            }
+            Ok(Value::Object(map))
+        }
+        other => resolve(other, context, None),
+    }
+}
+
+/// Resolves one node; inside a command argument named by `guard`, every expression value must be
+/// a number or a boolean.
+/// 解析一个节点；在 `guard` 指明的命令参数内，每个表达式的值都必须是数字或布尔值。
+fn resolve(
+    node: &ArgNode,
+    context: &EvalContext<'_>,
+    guard: Option<&str>,
+) -> Result<Value, String> {
+    let value_of = |expr: &Expr| {
+        let value = evaluate(expr, context)?;
+        match guard {
+            Some(argument) if !matches!(value, Value::Number(_) | Value::Bool(_)) => Err(format!(
+                "`{argument}` only accepts numbers and booleans from `${{{{ }}}}`, but the value is {}. Text inserted into a command would run as shell syntax; pass it through `stdin` (or a file) and read it in the command instead",
+                value_kind(&value)
+            )),
+            _ => Ok(value),
+        }
+    };
+    match node {
         ArgNode::Static(value) => Ok(value.clone()),
-        ArgNode::Single(expr) => evaluate(expr, context),
+        ArgNode::Single(expr) => value_of(expr),
         ArgNode::Interpolated(parts) => {
             let mut text = String::new();
             for part in parts {
                 match part {
                     Part::Text(literal) => text.push_str(literal),
-                    Part::Expr(expr) => text.push_str(&to_text(&evaluate(expr, context)?)),
+                    Part::Expr(expr) => text.push_str(&to_text(&value_of(expr)?)),
                 }
             }
             Ok(Value::String(text))
@@ -205,14 +242,26 @@ pub(crate) fn resolve_arguments(
         ArgNode::Object(fields) => {
             let mut map = Map::with_capacity(fields.len());
             for (key, item) in fields {
-                map.insert(key.clone(), resolve_arguments(item, context)?);
+                map.insert(key.clone(), resolve(item, context, guard)?);
             }
             Ok(Value::Object(map))
         }
         ArgNode::Array(items) => items
             .iter()
-            .map(|item| resolve_arguments(item, context))
+            .map(|item| resolve(item, context, guard))
             .collect::<Result<Vec<_>, _>>()
             .map(Value::Array),
+    }
+}
+
+/// Names a rejected value's kind for the command-argument error.
+/// 为命令参数错误命名被拒绝值的种类。
+fn value_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::String(_) => "a string",
+        Value::Array(_) => "an array",
+        Value::Object(_) => "an object",
+        Value::Bool(_) | Value::Number(_) => "a number or boolean",
     }
 }

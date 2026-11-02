@@ -2378,6 +2378,7 @@
   "toolCard.chain.step": "{index}단계",
   "toolCard.chain.success": "성공",
   "toolCard.chain.failure": "실패",
+  "toolCard.chain.failureAllowed": "실패(허용됨)",
   "toolCard.chain.skipped": "건너뜀",
   "toolCard.chain.denied": "거부됨",
   "toolCard.chain.notRun": "실행 안 됨",

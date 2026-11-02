@@ -853,6 +853,7 @@ fn completed_with_post_hook_failure(
     VulcanToolInvocationResult {
         model_output,
         host_result: result.host_result,
+        raw_streams: result.raw_streams,
     }
 }
 
@@ -956,6 +957,7 @@ fn wrap_candidate_with_tool_hooks(
             Ok(VulcanToolInvocationResult {
                 model_output,
                 host_result: result.host_result,
+                raw_streams: result.raw_streams,
             })
         })
     });

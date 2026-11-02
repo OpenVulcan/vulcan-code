@@ -35,7 +35,9 @@ use tokio::process::Command as TokioCommand;
 use tokio::time::{Duration, Instant, timeout};
 use uuid::Uuid;
 use vulcan_prompt_skills::{PromptSkill, render_skill_tool_output};
-use vulcan_tools_manager::{VulcanToolHostResult, VulcanToolInvocationResult};
+use vulcan_tools_manager::{
+    VulcanToolHostResult, VulcanToolInvocationResult, VulcanToolRawStreams,
+};
 use vulcan_vmm::{
     DeleteMemoriesRequest, GetTurnDetailsRequest, SearchMemoryEventsRequest, TonicVmmClient,
     VmmBackendMode, VmmClient, VmmConfigDiagnostic, VmmConfigLayer, VmmEffectiveConfig,

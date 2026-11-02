@@ -32,8 +32,8 @@ pub use types::{
     ResolvedToolDefinition, ResolvedToolSet, VULCAN_TOOL_ERROR_DETAIL_KIND, VulcanPlanToolPolicy,
     VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult, VulcanToolInvocationContext,
     VulcanToolInvocationResult, VulcanToolInvokeFuture, VulcanToolInvokeHandler, VulcanToolMode,
-    VulcanToolOrigin, VulcanToolSchemaProjectionProfile, VulcanToolSourceIdentity,
-    VulcanToolSourceKind,
+    VulcanToolOrigin, VulcanToolRawStreams, VulcanToolSchemaProjectionProfile,
+    VulcanToolSourceIdentity, VulcanToolSourceKind,
 };
 
 #[cfg(test)]

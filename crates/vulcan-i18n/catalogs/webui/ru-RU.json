@@ -2378,6 +2378,7 @@
   "toolCard.chain.step": "Шаг {index}",
   "toolCard.chain.success": "Успешно",
   "toolCard.chain.failure": "Ошибка",
+  "toolCard.chain.failureAllowed": "Ошибка (допустимо)",
   "toolCard.chain.skipped": "Пропущен",
   "toolCard.chain.denied": "Отклонён",
   "toolCard.chain.notRun": "Не выполнен",

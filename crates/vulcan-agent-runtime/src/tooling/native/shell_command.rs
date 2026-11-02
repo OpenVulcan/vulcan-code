@@ -1413,11 +1413,17 @@ pub(crate) async fn execute_shell_command_tool(
     }
     .map_err(NativeToolError::new)?;
 
+    // The raw streams stay in memory so a chain step can read them even when the text spilled.
+    // 原始流仅保留在内存中，使链条步骤在文本已溢出时仍可读取。
     Ok(
         VulcanToolInvocationResult::from_model_output(Value::String(model_output))
             .with_host_result(VulcanToolHostResult {
                 kind: String::from("command_run"),
                 payload: host_payload,
+            })
+            .with_raw_streams(VulcanToolRawStreams {
+                stdout: execution_report.stdout_text,
+                stderr: execution_report.stderr_text,
             }),
     )
 }

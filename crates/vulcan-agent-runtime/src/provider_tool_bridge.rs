@@ -1625,6 +1625,7 @@ async fn render_provider_tool_result(
             Ok(VulcanToolInvocationResult {
                 model_output: model_payload,
                 host_result,
+                raw_streams: None,
             })
         }
     }

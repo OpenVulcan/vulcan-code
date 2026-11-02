@@ -15,27 +15,55 @@
 
 ## 一、语法
 
-1. 采用 GitHub Actions 步骤写法：参数根对象只有 `steps`；每步只允许 `id`、`tool`、`if`、`arguments`，
-   `tool` 与 `arguments`（对象）必填。`id` 匹配 `^[A-Za-z_][A-Za-z0-9_-]*$` 且唯一。
-2. 表达式写在 `${{ }}` 中，只能引用更早的步骤：`steps.<id>.outcome|output|exit_code`；函数
-   `success()`、`failure()`、`always()`、`contains`、`startsWith`、`match`（返回第 1 个捕获组或整段匹配，
-   不匹配即错误）、`fromJSON`；运算符 `!`、`&&`、`||`、`==`、`!=`。字面正则在解析时校验。
+1. 采用 GitHub Actions 步骤写法：参数根对象只有 `steps`；每步只允许 `id`、`tool`、`if`、
+   `continue_on_error`、`arguments`，`tool` 与 `arguments`（对象）必填。`id` 匹配
+   `^[A-Za-z_][A-Za-z0-9_-]*$` 且唯一。
+2. 表达式写在 `${{ }}` 中，只能引用更早的步骤：`steps.<id>.outcome|output|exit_code|stdout|stderr|result`；
+   函数 `success()`、`failure()`、`always()`、`contains`、`startsWith`、`test`（正则是否匹配，返回布尔）、
+   `match`（返回第 1 个捕获组或整段匹配，不匹配即错误）、`fromJSON`；运算符 `!`、`&&`、`||`、`==`、`!=`。
+   字面正则在解析时校验。所有 `steps.<id>` 引用在执行前静态校验，包括短路分支中不会求值的部分。
 3. 整个字符串只有一个表达式时保留其 JSON 类型；与文本混排时转为文本。
 4. 计划无效时整个链不执行，一次返回全部错误。用法说明只写在工具描述里（英文），不动态注入。
 
-## 二、执行
+## 二、引用取值
 
-1. 步骤缺省条件等同 `success()`：前面有步骤失败即跳过。表达式出错时该步失败且不调用工具。
-2. 链本身不经过权限判定；每一步按普通工具调用单独经过计划模式闸门与权限管线。任一步被拒绝即停止，
-   剩余步骤记为未运行，报告要求模型改为直接调用该步。
-3. 失败判定：工具结果 `is_error`，或命令结果退出码非 0 / 状态不是 `completed`。
+1. `output` 是直接调用时模型看到的文本（去首尾空白），命令结果含头部信息，超限时为分页文件提示。
+2. `stdout`、`stderr` 是命令步骤解码后的原始流（去尾部空白），即使可见输出已转为分页文件也完整可用；
+   非命令步骤或未执行命令的步骤引用即为表达式错误。原始流由 `shell_command` 经
+   `VulcanToolInvocationResult.raw_streams` 交给桥，只存在于链条执行期间的内存中，不进入报告与宿主结果。
+3. `result` 只公开工具返回给模型的结构化 JSON（例如只返回结构化内容的 MCP 工具），否则为 null；从不暴露
+   内部宿主载荷。同时返回文本与结构化内容的 MCP 结果，其结构化部分只出现在 `output` 中。失败结果的 JSON
+   不作为 `result`。
+4. 脱敏边界与直接调用一致：每步的规范结果、原始流与 `result` 在进入表达式之前即按已登记的敏感值遮蔽，
+   链条最终报告再整体遮蔽一次；过滤器不可用时该步失败且不传出任何内容。
+5. 原始取值本身不记录；一旦被插入后续步骤的参数，这些参数随该步骤记录并显示。整条链保留的原始流与
+   `result` 合计不超过 `MAX_KEPT_VALUE_BYTES`，超出后的步骤不再保留，引用即错误；含表达式的步骤解析后
+   参数不超过 `MAX_STEP_ARGUMENT_BYTES`，超出则该步失败。单条命令仍受 `shell_command` 自身的硬上限约束，
+   超限的命令没有输出且步骤失败。
+
+## 三、执行
+
+1. 步骤缺省条件等同 `success()`：前面有计入失败的步骤即跳过。表达式出错时该步失败且不调用工具。
+2. `continue_on_error: true` 的步骤失败时仍记为 `failure`（`steps.<id>.outcome` 也是 `failure`），但不计入
+   `failure()`/`success()`、缺省跳过与链条状态。
+3. 链本身不经过权限判定；每一步按普通工具调用单独经过计划模式闸门与权限管线。任一步被拒绝即停止，
+   剩余步骤记为未运行，`if` 与 `continue_on_error` 都不能让后续步骤继续；报告要求模型改为直接调用该步。
+   用户停止会中止整个运行并丢弃链条的执行，之后的步骤同样不会开始。
+4. 失败判定：工具结果 `is_error`，或命令结果退出码非 0 / 状态不是 `completed`。
+5. `shell_command` 的 `command` 参数中，表达式只能得到数字或布尔值；任何字符串、null、数组或对象都使该步
+   失败而不调用工具。文本必须通过 `stdin`（或文件）传给命令。不做转义，也不用字符白名单。工具的这类参数由
+   桥通过 `StepToolPolicy.command_arguments` 声明。
+6. 不回滚：已执行步骤的效果保留。描述要求模型不要把长串写入、删除或发布操作放进一条链。
 4. 可链接范围：MCP 与 LuaSkills 工具缺省可链接；原生工具只有白名单（`CHAINABLE_HOST_TOOL_IDS`）内的可以。
    `tool_chain` 自身、提问、意图声明、子代理、`terminal_session`、`mcp_connect`、`mcp_config`、
    `provider_config`、`env` 永远不可链接。
-5. 返回给模型的是按步骤排列的文本报告；宿主结果 `kind: tool_chain` 携带每步的结果、参数及该步自身的
-   宿主结果，供界面把每一步渲染成直接调用时的卡片。图片输出替换为文字说明。
+5. 返回给模型的是按步骤排列的文本报告，首行写明 `tool_chain SUCCEEDED`、`FAILED`（列出计入失败的步骤）或
+   `STOPPED`（列出被拒绝的步骤）。之后的恢复步骤成功不会撤销失败。工具调用本身始终不是错误（`is_error` 为假）；
+   宿主结果 `kind: tool_chain` 携带 `status`（`succeeded`/`failed`/`stopped`）和每步的结果、参数、
+   `continue_on_error` 及该步自身的宿主结果，供界面把每一步渲染成直接调用时的卡片，并让卡片头在 `failed`
+   或 `stopped` 时显示失败状态。图片输出替换为文字说明。
 
-## 三、设置
+## 四、设置
 
 1. 系统设置在 `vulcan-code.json`：`toolChainEnabled`（缺省开启）与 `toolChainMaxSteps`（缺省
    `DEFAULT_TOOL_CHAIN_MAX_STEPS`，范围 `MIN_TOOL_CHAIN_MAX_STEPS`..=`MAX_TOOL_CHAIN_MAX_STEPS`）。缺省只在内存中

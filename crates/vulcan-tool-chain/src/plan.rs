@@ -17,7 +17,18 @@ static STEP_ID_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
 
 /// Keys allowed on one step object.
 /// 单个步骤对象允许的键。
-const STEP_KEYS: [&str; 4] = ["id", "tool", "if", "arguments"];
+const STEP_KEYS: [&str; 5] = ["id", "tool", "if", "continue_on_error", "arguments"];
+
+/// What the host says about one tool used as a step.
+/// 宿主对用作步骤的某个工具的说明。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StepToolPolicy {
+    /// Top-level arguments run as shell syntax; expressions inside them may only yield numbers
+    /// or booleans, so text from earlier steps cannot become part of a command.
+    /// 作为 shell 语法运行的顶层参数；其中的表达式只能得到数字或布尔值，使更早步骤的文本无法
+    /// 成为命令的一部分。
+    pub command_arguments: &'static [&'static str],
+}
 
 /// Validated chain ready to run.
 /// 已校验、可运行的链条。
@@ -59,6 +70,12 @@ pub(crate) struct PlannedStep {
     /// Parsed `if` condition; `None` means `success()`.
     /// 已解析的 `if` 条件；`None` 表示 `success()`。
     pub(crate) condition: Option<Expr>,
+    /// Whether a failure of this step leaves `success()` and the default condition untouched.
+    /// 本步骤失败时是否不影响 `success()` 与默认条件。
+    pub(crate) continue_on_error: bool,
+    /// Host policy of the step's tool.
+    /// 步骤工具的宿主策略。
+    pub(crate) policy: StepToolPolicy,
     /// Arguments with parsed templates.
     /// 已解析模板的参数。
     pub(crate) arguments: ArgNode,
@@ -67,12 +84,13 @@ pub(crate) struct PlannedStep {
 /// Validates raw `tool_chain` arguments; every problem is reported in one message.
 /// 校验原始 `tool_chain` 参数；所有问题在一条消息中一并报告。
 ///
-/// `check_tool` decides whether a tool name may be used as a step and explains why not.
-/// `check_tool` 判定工具名能否用作步骤，并说明不能的原因。
+/// `check_tool` decides whether a tool name may be used as a step, returning its policy, and
+/// explains why not.
+/// `check_tool` 判定工具名能否用作步骤并返回其策略，或说明不能的原因。
 pub fn parse_tool_chain_plan(
     arguments: &Value,
     max_steps: usize,
-    check_tool: impl Fn(&str) -> Result<(), String>,
+    check_tool: impl Fn(&str) -> Result<StepToolPolicy, String>,
 ) -> Result<ToolChainPlan, String> {
     let root = arguments.as_object().ok_or_else(|| {
         String::from("tool_chain arguments must be an object with a `steps` array")
@@ -119,7 +137,7 @@ pub fn parse_tool_chain_plan(
         };
         for key in step.keys().filter(|key| !STEP_KEYS.contains(&key.as_str())) {
             errors.push(format!(
-                "{label}: unknown field `{key}`; allowed fields are id, tool, if, arguments"
+                "{label}: unknown field `{key}`; allowed fields are id, tool, if, continue_on_error, arguments"
             ));
         }
 
@@ -144,16 +162,29 @@ pub fn parse_tool_chain_plan(
             }
         };
 
+        let mut policy = StepToolPolicy::default();
         let tool = match step.get("tool") {
             Some(Value::String(tool)) if !tool.trim().is_empty() => {
-                if let Err(reason) = check_tool(tool) {
-                    errors.push(format!("{label}: {reason}"));
+                match check_tool(tool) {
+                    Ok(checked) => policy = checked,
+                    Err(reason) => errors.push(format!("{label}: {reason}")),
                 }
                 tool.clone()
             }
             _ => {
                 errors.push(format!("{label}: `tool` must be a non-empty tool name"));
                 String::new()
+            }
+        };
+
+        let continue_on_error = match step.get("continue_on_error") {
+            None | Some(Value::Null) => false,
+            Some(Value::Bool(flag)) => *flag,
+            Some(_) => {
+                errors.push(format!(
+                    "{label}: `continue_on_error` must be true or false"
+                ));
+                false
             }
         };
 
@@ -232,6 +263,8 @@ pub fn parse_tool_chain_plan(
             id,
             tool,
             condition,
+            continue_on_error,
+            policy,
             arguments,
         });
     }

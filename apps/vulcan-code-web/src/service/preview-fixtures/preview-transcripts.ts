@@ -277,7 +277,7 @@ function verifyChainOutput(): ToolPayload {
     chainStep(1, "test", { command: "pnpm vitest run src/components/workspace" }, "success", tests),
     chainStep(2, "log", { path: "vitest-report.txt" }, "skipped", null, "Skipped: the `if` condition `failure()` was false."),
   ];
-  return toolOutput("tool_chain", "tool_chain ran 2 of 3 steps: typecheck success, test success, log skipped.", { kind: "tool_chain", payload: { steps } });
+  return toolOutput("tool_chain", "tool_chain SUCCEEDED. Ran 2 of 3 steps: 2 succeeded, 0 failed, 1 skipped.", { kind: "tool_chain", payload: { status: "succeeded", steps } });
 }
 
 // editOutput summarizes an applied change-set the way the file runtime reports it to the model.

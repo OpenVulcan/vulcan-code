@@ -49,6 +49,7 @@ function chainEvent(payload: Record<string, unknown> | null): ToolCallEvent {
 }
 
 const PAYLOAD = {
+  status: "failed",
   steps: [
     {
       index: 0, id: "build", tool: "shell_command", outcome: "success", exit_code: 0, detail: null,
@@ -109,5 +110,19 @@ describe("tool chain card", () => {
     expect(rows[1].querySelector(".vk-tool")).not.toBeNull();
     expect(rows[2].querySelector(".vk-tool")).toBeNull();
     expect(rows[2].querySelector(".vk-chain-step-tool")?.textContent).toBe("file_read");
+  });
+
+  it("marks the head failed when the chain failed, although the call itself succeeded", () => {
+    render(chainEvent(PAYLOAD));
+    expect(host.querySelector<HTMLElement>(".vk-tool")?.dataset.state).toBe("failed");
+  });
+
+  it("keeps an allowed failure out of the failed state", () => {
+    const steps = PAYLOAD.steps.map((step) => (step.outcome === "failure" ? { ...step, continue_on_error: true } : step));
+    render(chainEvent({ status: "succeeded", steps }));
+    expect(host.querySelector<HTMLElement>(".vk-tool")?.dataset.state).toBe("done");
+    const failed = host.querySelector<HTMLElement>(".vk-chain-step[data-outcome='failure']");
+    expect(failed?.dataset.state).toBeUndefined();
+    expect(failed?.dataset.allowed).toBe("");
   });
 });

@@ -19,9 +19,12 @@ mod template;
 #[cfg(test)]
 mod tests;
 
-pub use plan::{ToolChainPlan, parse_tool_chain_plan};
-pub use render::{ToolChainReport, render_report};
-pub use run::{StepExecution, StepExecutor, StepOutcome, StepRecord, run_tool_chain};
+pub use plan::{StepToolPolicy, ToolChainPlan, parse_tool_chain_plan};
+pub use render::{ChainStatus, ToolChainReport, render_report};
+pub use run::{
+    MAX_KEPT_VALUE_BYTES, MAX_STEP_ARGUMENT_BYTES, StepExecution, StepExecutor, StepOutcome,
+    StepRecord, run_tool_chain,
+};
 pub use schema::{tool_chain_description, tool_chain_input_schema};
 
 /// Stable tool id and model-visible name.

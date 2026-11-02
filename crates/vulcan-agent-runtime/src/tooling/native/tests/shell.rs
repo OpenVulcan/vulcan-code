@@ -363,9 +363,10 @@ async fn shell_command_tool_executes_simple_command() {
     assert_eq!(host_result.payload["status"], "completed");
 }
 
-/// Oversized shell-command output must still spill to exactly one page file under the spill root.
-/// 超出内联预算的 shell-command 输出仍须在超限目录下写入恰好一个分页文件。
-#[cfg(unix)]
+/// Oversized shell-command output must still spill to exactly one page file under the spill root,
+/// while the complete raw streams stay available in memory for `tool_chain` references.
+/// 超出内联预算的 shell-command 输出仍须在超限目录下写入恰好一个分页文件，同时完整原始流仍在
+/// 内存中供 `tool_chain` 引用。
 #[tokio::test]
 async fn shell_command_tool_spills_oversized_output_to_page_file() {
     let spill_root = tempfile::tempdir().expect("create shell spill root");
@@ -374,12 +375,18 @@ async fn shell_command_tool_spills_oversized_output_to_page_file() {
         None,
         test_rtk_disabled(),
     );
+    let arguments = if cfg!(windows) {
+        json!({
+            "command": "1..20000 | ForEach-Object { '0123456789abcdefghij' }",
+            "shell": "powershell"
+        })
+    } else {
+        json!({ "command": "yes 0123456789abcdefghij | head -n 20000" })
+    };
     let result = tool
         .invoke(NativeToolExecutionRequest {
             invocation_context: None,
-            arguments: json!({
-                "command": "yes 0123456789abcdefghij | head -n 20000"
-            }),
+            arguments,
             session_id: None,
             native_browser_runtime: None,
             workspace_root: None,
@@ -419,4 +426,10 @@ async fn shell_command_tool_spills_oversized_output_to_page_file() {
     assert!(
         (model_output.len() as u64) < crate::tool_result_format::DEFAULT_INLINE_TOOL_RESULT_BYTES
     );
+    let streams = result
+        .raw_streams
+        .expect("shell command must keep its raw streams");
+    let lines = streams.stdout.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 20000, "every stdout line must be kept");
+    assert!(lines.iter().all(|line| *line == "0123456789abcdefghij"));
 }

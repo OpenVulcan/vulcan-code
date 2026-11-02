@@ -2378,6 +2378,7 @@
   "toolCard.chain.step": "Paso {index}",
   "toolCard.chain.success": "Correcto",
   "toolCard.chain.failure": "Fallido",
+  "toolCard.chain.failureAllowed": "Fallido (permitido)",
   "toolCard.chain.skipped": "Omitido",
   "toolCard.chain.denied": "Denegado",
   "toolCard.chain.notRun": "No ejecutado",

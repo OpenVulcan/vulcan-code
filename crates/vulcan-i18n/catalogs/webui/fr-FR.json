@@ -2378,6 +2378,7 @@
   "toolCard.chain.step": "Étape {index}",
   "toolCard.chain.success": "Réussie",
   "toolCard.chain.failure": "Échec",
+  "toolCard.chain.failureAllowed": "Échec (autorisé)",
   "toolCard.chain.skipped": "Ignorée",
   "toolCard.chain.denied": "Refusée",
   "toolCard.chain.notRun": "Non exécutée",

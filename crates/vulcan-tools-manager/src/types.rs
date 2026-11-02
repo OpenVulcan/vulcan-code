@@ -217,6 +217,21 @@ pub struct VulcanToolInvocationResult {
     /// Optional host-only structured result reserved for transcript metadata and richer UI projections.
     /// 为转录元数据与更丰富界面投影保留的可选宿主专用结构化结果。
     pub host_result: Option<VulcanToolHostResult>,
+    /// Raw output streams of a command, kept in memory for `tool_chain` references and never persisted.
+    /// 命令的原始输出流，仅在内存中保留供 `tool_chain` 引用，从不持久化。
+    pub raw_streams: Option<VulcanToolRawStreams>,
+}
+
+/// Raw decoded stdout and stderr of one command, independent of any inline budget or spill file.
+/// 单条命令解码后的原始 stdout 与 stderr，与内联预算或溢出文件无关。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct VulcanToolRawStreams {
+    /// Decoded standard output.
+    /// 解码后的标准输出。
+    pub stdout: String,
+    /// Decoded standard error.
+    /// 解码后的标准错误。
+    pub stderr: String,
 }
 
 impl VulcanToolInvocationResult {
@@ -226,6 +241,7 @@ impl VulcanToolInvocationResult {
         Self {
             model_output,
             host_result: None,
+            raw_streams: None,
         }
     }
 
@@ -258,6 +274,7 @@ impl VulcanToolInvocationResult {
                 kind: String::from(VULCAN_TOOL_ERROR_DETAIL_KIND),
                 payload,
             }),
+            raw_streams: None,
         }
     }
 
@@ -265,6 +282,13 @@ impl VulcanToolInvocationResult {
     /// 在保留模型可见载荷的同时附着一条宿主专用结构化结果。
     pub fn with_host_result(mut self, host_result: VulcanToolHostResult) -> Self {
         self.host_result = Some(host_result);
+        self
+    }
+
+    /// Attaches the raw command streams that `tool_chain` steps may reference.
+    /// 附着 `tool_chain` 步骤可以引用的原始命令流。
+    pub fn with_raw_streams(mut self, raw_streams: VulcanToolRawStreams) -> Self {
+        self.raw_streams = Some(raw_streams);
         self
     }
 }

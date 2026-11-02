@@ -2378,6 +2378,7 @@
   "toolCard.chain.step": "ステップ {index}",
   "toolCard.chain.success": "成功",
   "toolCard.chain.failure": "失敗",
+  "toolCard.chain.failureAllowed": "失敗（許容）",
   "toolCard.chain.skipped": "スキップ",
   "toolCard.chain.denied": "拒否",
   "toolCard.chain.notRun": "未実行",

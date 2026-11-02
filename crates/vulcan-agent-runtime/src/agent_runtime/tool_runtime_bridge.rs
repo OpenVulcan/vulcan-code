@@ -250,21 +250,31 @@ impl VulcanManagedToolRuntimeBridge {
         &self,
         mut result: CoreToolInvocationResult,
     ) -> Result<CoreToolInvocationResult, VulcanCoreError> {
+        let mut model_output = Value::String(std::mem::take(&mut result.model_output));
+        self.redact_sensitive_value(&mut model_output)?;
+        if let Value::String(text) = model_output {
+            result.model_output = text;
+        }
+        if let Some(host_result) = result.host_result.as_mut() {
+            self.redact_sensitive_value(host_result)?;
+        }
+        Ok(result)
+    }
+
+    /// Removes exact host credentials from every string leaf of `value` in place.
+    /// 就地从 `value` 的每个字符串叶节点移除精确宿主凭据。
+    ///
+    /// A poisoned filter fails closed, so nothing unfiltered is passed on.
+    /// 过滤器损坏时闭锁失败，不传出任何未过滤内容。
+    fn redact_sensitive_value(&self, value: &mut Value) -> Result<(), VulcanCoreError> {
         let Some(values) = self.sensitive_tool_output_values.as_ref() else {
-            return Ok(result);
+            return Ok(());
         };
         let values = values.read().map_err(|_| VulcanCoreError::InvalidState {
             message: String::from("Sensitive tool-output filter is unavailable."),
         })?;
-        for secret in values.iter() {
-            result.model_output = result
-                .model_output
-                .replace(&secret.value, &secret.replacement);
-        }
-        if let Some(host_result) = result.host_result.as_mut() {
-            redact_sensitive_json_strings(host_result, &values);
-        }
-        Ok(result)
+        redact_sensitive_json_strings(value, &values);
+        Ok(())
     }
 
     /// Installs one complete durable tool-batch identity receipt before any tool body starts.

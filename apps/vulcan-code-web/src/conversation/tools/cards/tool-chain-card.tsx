@@ -31,6 +31,9 @@ export interface ChainStep {
   // Final state.
   // 最终状态。
   outcome: ChainOutcome;
+  // Whether a failure was allowed by continue_on_error, so it did not fail the chain.
+  // 失败是否由 continue_on_error 允许，因而未使链条失败。
+  allowed: boolean;
   // Why the step was skipped, denied or failed before calling its tool.
   // 步骤被跳过、拒绝或在调用工具前失败的原因。
   detail: string | null;
@@ -57,6 +60,7 @@ export function chainSteps(call: ToolCall): ChainStep[] {
       const outcome = textOf(step?.outcome) as ChainOutcome | null;
       if (!step || !tool || !outcome || !OUTCOMES.has(outcome)) return [];
       return [{
+        allowed: outcome === "failure" && step.continue_on_error === true,
         detail: textOf(step.detail),
         id: textOf(step.id),
         index: numberOf(step.index) ?? position,
@@ -71,7 +75,7 @@ export function chainSteps(call: ToolCall): ChainStep[] {
     const step = objectOf(entry);
     const tool = textOf(step?.tool);
     if (!step || !tool) return [];
-    return [{ detail: null, id: textOf(step.id), index, input: objectOf(step.arguments) ?? {}, outcome: "pending" as const, result: null, tool }];
+    return [{ allowed: false, detail: null, id: textOf(step.id), index, input: objectOf(step.arguments) ?? {}, outcome: "pending" as const, result: null, tool }];
   });
 }
 
@@ -164,10 +168,13 @@ function ChainStepRow(props: { parent: ToolCall; step: ChainStep }) {
   const call = React.useMemo(() => stepCall(parent, step), [parent, step]);
   const { Card, family } = resolveToolCard(call);
   const ran = step.result !== null || step.outcome === "pending";
-  const label = t(OUTCOME_LABEL_KEYS[step.outcome]);
+  const label = t(step.allowed ? "toolCard.chain.failureAllowed" : OUTCOME_LABEL_KEYS[step.outcome]);
   const Icon = step.outcome === "pending" ? null : OUTCOME_ICONS[step.outcome];
+  // An allowed failure keeps its mark but not the failed colour: the plan expected it.
+  // 被允许的失败保留其标记但不使用失败颜色：计划已预期它。
+  const state = step.allowed ? undefined : STEP_STATES[step.outcome];
   return (
-    <li className="vk-step vk-chain-step" data-outcome={step.outcome} data-state={STEP_STATES[step.outcome]}>
+    <li className="vk-step vk-chain-step" data-allowed={step.allowed ? "" : undefined} data-outcome={step.outcome} data-state={state}>
       <span aria-label={label} className="vk-step-mark" role="img" title={label}>
         {Icon ? <Icon aria-hidden="true" /> : step.index + 1}
       </span>
@@ -180,7 +187,7 @@ function ChainStepRow(props: { parent: ToolCall; step: ChainStep }) {
         {ran ? <Card call={call} family={family} onOpenChange={setOpen} open={open} /> : <code className="vk-chain-step-tool">{step.tool}</code>}
         {/* Only a failed or denied step reads as an error; a skip is the plan working as written. */}
         {/* 只有失败或被拒绝的步骤显示为错误；跳过是计划按写法运行的结果。 */}
-        {!step.detail ? null : STEP_STATES[step.outcome] === "failed"
+        {!step.detail ? null : state === "failed"
           ? <ErrorNote text={step.detail} />
           : <p className="vk-chain-step-note">{step.detail}</p>}
       </div>
@@ -197,12 +204,16 @@ export function ToolChainCard(props: ToolCardProps) {
   const ran = steps.filter((step) => step.outcome === "success" || step.outcome === "failure").length;
   const target = steps.map((step) => step.tool).join(" → ");
   const reported = call.host?.kind === "tool_chain";
+  // The tool call itself succeeds even when a step fails; the host's chain status decides the head.
+  // 即使步骤失败，工具调用本身也成功；由宿主的链条状态决定标题状态。
+  const status = reported ? textOf(call.host?.payload.status) : null;
+  const state = status === "failed" || status === "stopped" ? "failed" : call.state;
   return (
     <ToolFrame
       {...props}
       icon={Workflow}
       meta={reported && steps.length > 0 ? <span>{formatMessage(t("toolCard.chain.progress"), { ran, total: steps.length })}</span> : null}
-      state={call.state}
+      state={state}
       target={target}
       targetTitle={target}
       verb={t("toolCard.chain.verb")}
