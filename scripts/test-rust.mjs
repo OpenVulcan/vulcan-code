@@ -11,13 +11,19 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 // mode 选择测试集；nextest 配置与线程上限保留在 .config/nextest.toml 中。
 const mode = process.argv[2] ?? 'fast';
 
+// Test binaries load the native LanceDB library from the profile directory, and test builds never produce it.
+// 测试二进制从 profile 目录加载原生 LanceDB 库，而测试构建不会生成它。
+const library = ['cargo', ['build', '--locked', '-p', 'vulcan-lancedb-native']];
+
 // Each step is one command; the first failing step stops the run with its exit status.
 // 每个步骤是一条命令；首个失败步骤以其退出码终止运行。
 const steps = {
   fast: [
+    library,
     ['cargo', ['nextest', 'run', '--locked', '--workspace', '--profile', 'fast', '--no-fail-fast']],
   ],
   full: [
+    library,
     ['cargo', ['nextest', 'run', '--locked', '--workspace', '--no-fail-fast']],
     // Process-global LuaSkills callback tests need one fresh process each.
     // 进程全局 LuaSkills 回调测试需要各自独立的进程。

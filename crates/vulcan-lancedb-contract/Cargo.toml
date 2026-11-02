@@ -1,0 +1,20 @@
+[package]
+name = "vulcan-lancedb-contract"
+description = "Types, failures and the framed wire protocol shared by the LanceDB client and its native library for Vulcan Code."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+vulcan-file-ownership.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

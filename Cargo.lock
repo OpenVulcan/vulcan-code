@@ -9942,7 +9942,6 @@ dependencies = [
  "fs4",
  "tempfile",
  "thiserror 2.0.20",
- "workspace-hack",
 ]
 
 [[package]]
@@ -10017,7 +10016,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "vulcan-lancedb-contract"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "vulcan-file-ownership",
+]
+
+[[package]]
 name = "vulcan-lancedb-engine"
+version = "0.1.0"
+dependencies = [
+ "libloading 0.9.0",
+ "tokio",
+ "vulcan-lancedb-contract",
+ "workspace-hack",
+]
+
+[[package]]
+name = "vulcan-lancedb-native"
 version = "0.1.0"
 dependencies = [
  "arrow-array",
@@ -10026,13 +10046,10 @@ dependencies = [
  "futures",
  "lance",
  "lancedb",
- "serde",
  "serde_json",
  "tempfile",
- "thiserror 2.0.20",
  "tokio",
- "vulcan-file-ownership",
- "workspace-hack",
+ "vulcan-lancedb-contract",
 ]
 
 [[package]]
@@ -11422,34 +11439,20 @@ version = "0.1.0"
 dependencies = [
  "ahash",
  "aho-corasick",
- "arrow",
- "arrow-array",
- "arrow-cast",
- "arrow-data",
- "arrow-ipc",
- "arrow-schema",
- "async-compression",
  "bitflags 2.13.1",
- "bytemuck",
  "bytes",
  "cc",
  "chrono",
  "compact_str",
- "compression-codecs",
- "concurrent-queue",
  "crc32fast",
- "crossbeam-epoch",
  "crossbeam-utils",
  "dary_heap",
  "deranged",
  "digest 0.10.7",
  "either",
  "errno",
- "event-listener",
- "event-listener-strategy",
  "fastrand",
  "flate2",
- "foldhash 0.2.0",
  "form_urlencoded",
  "futures-channel",
  "futures-io",
@@ -11460,20 +11463,15 @@ dependencies = [
  "getrandom 0.3.4",
  "getrandom 0.4.3",
  "half",
- "hashbrown 0.16.1",
  "hashbrown 0.17.1",
  "hyper",
  "hyper-rustls",
  "hyper-util",
- "icu_locale_core",
- "icu_provider",
  "idna",
  "indexmap 2.14.0",
  "itertools",
- "jieba-rs",
  "libc",
  "linux-raw-sys",
- "litemap",
  "lock_api",
  "luaskills",
  "memchr",
@@ -11484,19 +11482,14 @@ dependencies = [
  "num-traits",
  "once_cell",
  "parking_lot",
- "petgraph",
  "phf_shared 0.13.1",
- "potential_utf",
  "proc-macro2",
  "prost",
- "prost-build",
- "prost-types",
  "pulldown-cmark",
  "quote",
  "regex",
  "regex-automata",
  "regex-syntax",
- "reqwest 0.12.28",
  "reqwest 0.13.4",
  "rustix",
  "rustls",
@@ -11508,16 +11501,13 @@ dependencies = [
  "simd-adler32",
  "slab",
  "smallvec",
- "stable_deref_trait",
  "strum",
  "subtle",
  "syn 2.0.119",
  "syn 3.0.3",
  "sync_wrapper",
- "tempfile",
  "time",
  "time-macros",
- "tinystr",
  "tokio",
  "tokio-rustls",
  "tokio-stream",
@@ -11529,7 +11519,6 @@ dependencies = [
  "tower-http 0.6.11",
  "tracing",
  "tungstenite",
- "twox-hash",
  "typenum",
  "url",
  "uuid",
@@ -11537,12 +11526,7 @@ dependencies = [
  "windows-core 0.62.2",
  "windows-sys 0.61.2",
  "winnow 1.0.4",
- "writeable",
- "yoke",
  "zerocopy",
- "zerofrom",
- "zerotrie",
- "zerovec",
  "zstd",
  "zstd-safe",
  "zstd-sys",

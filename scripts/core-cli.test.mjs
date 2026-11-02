@@ -8,6 +8,7 @@ import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
 import { buildCore, ensureHeadlessCore, stopLinuxCore } from './core-cli.mjs';
+import { shippedFileName, shippedRustPackages } from './shipped-rust-packages.mjs';
 import { checkBuildEnvironment } from './check-build-environment.cjs';
 import { createRequire } from 'node:module';
 
@@ -38,15 +39,19 @@ test('Unix Core-only routes need neither pnpm nor PowerShell; bt retains full-bu
   }
 });
 
-for (const scenario of ['valid', 'failed', 'missing-artifact', 'malformed']) {
+for (const scenario of ['valid', 'failed', 'missing-artifact', 'missing-library', 'malformed']) {
   test(`Cargo artifact stream: ${scenario}`, { skip: process.platform !== 'linux' }, async t => {
     // The fake Cargo never compiles or downloads; it emits the real message protocol shape.
     // 假 Cargo 不编译或下载；它仅输出真实消息协议形状。
     const root = await directory(t);
     const artifact = path.join(root, 'reported-core');
     await writeFile(artifact, 'artifact');
+    const lanceLibrary = shippedRustPackages.find(item => item.package === 'vulcan-lancedb-native');
+    const library = path.join(root, shippedFileName(lanceLibrary));
+    await writeFile(library, 'library');
     const messages = [];
     if (scenario !== 'missing-artifact') messages.push({ reason: 'compiler-artifact', target: { name: 'vulcan-code-service', kind: ['bin'] }, executable: artifact });
+    if (scenario !== 'missing-library') messages.push({ reason: 'compiler-artifact', target: { name: lanceLibrary.library, kind: ['cdylib'] }, executable: null, filenames: [library] });
     messages.push({ reason: 'build-finished', success: scenario !== 'failed' });
     await writeFile(path.join(root, 'cargo'), `#!/usr/bin/env node\n${scenario === 'malformed' ? "console.log('invalid-json');" : messages.map(message => `console.log(${JSON.stringify(JSON.stringify(message))});`).join('\n')}\n`, { mode: 0o755 });
     // PATH changes are restored even when protocol parsing fails.
@@ -54,7 +59,7 @@ for (const scenario of ['valid', 'failed', 'missing-artifact', 'malformed']) {
     const previous = process.env.PATH;
     process.env.PATH = `${root}${path.delimiter}${previous}`;
     try {
-      if (scenario === 'valid') assert.equal(await buildCore(root), await realpath(artifact));
+      if (scenario === 'valid') assert.deepEqual(await buildCore(root), { service: await realpath(artifact), library: await realpath(library) });
       else await assert.rejects(buildCore(root));
     } finally { process.env.PATH = previous; }
   });

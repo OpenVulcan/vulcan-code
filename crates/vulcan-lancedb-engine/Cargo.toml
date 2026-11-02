@@ -1,30 +1,35 @@
 [package]
 name = "vulcan-lancedb-engine"
-description = "In-process LanceDB engine with shared per-database reuse, table-level concurrency gates and physical maintenance for Vulcan Code."
+description = "LanceDB client that drives the run-time loaded native LanceDB library for Vulcan Code."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 
-# This crate has no FFI requirement, so it inherits the full workspace lint set normally.
-# 本 crate 没有 FFI 需求，因此正常继承完整的工作区 lint 集合。
-[lints]
-workspace = true
+# This crate deliberately does not inherit workspace lints.
+# 本 crate 刻意不继承工作区 lint。
+#
+# `unsafe_code` is relaxed to "allow" because loading the native library and calling its three C
+# exports is FFI, which `forbid` rejects and which cannot be relaxed inside the crate. Scope limit:
+# `src/library.rs` only — loading the library, resolving and calling its exports, and reading the
+# response frame before releasing it. Nothing else is authorized. The remaining lint entries are
+# identical to the workspace set.
+#
+# `unsafe_code` 放宽为 "allow"，因为加载原生库并调用其三个 C 导出属于 FFI，而 `forbid` 会拒绝且无法在 crate
+# 内放宽。范围限制：仅 `src/library.rs`——加载库、解析并调用其导出，以及在释放前读取响应帧。其他位置一律不授权。
+# 其余 lint 项与工作区集合完全一致。
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "allow"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unwrap_used = "warn"
 
 [dependencies]
-arrow-array.workspace = true
-arrow-ipc.workspace = true
-arrow-schema.workspace = true
-vulcan-file-ownership.workspace = true
-futures.workspace = true
-lance.workspace = true
-lancedb.workspace = true
-serde_json.workspace = true
-serde.workspace = true
-thiserror.workspace = true
+libloading.workspace = true
 tokio.workspace = true
+vulcan-lancedb-contract.workspace = true
 workspace-hack = { version = "0.1", path = "../../workspace-hack" }
-
-[dev-dependencies]
-tempfile.workspace = true

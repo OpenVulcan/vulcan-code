@@ -26,21 +26,23 @@ function Get-CargoUnitHash {
     return $null
 }
 
-# Return the unit hash of the binary compilation that produced Executable, or $null when none matches.
-# 返回产生 Executable 的二进制编译单元哈希；无匹配时返回 $null。
+# Return the unit hash of the binary or C dynamic library compilation that produced Output, or $null when
+# none matches. Kind is the fingerprint prefix: bin for executables, lib for C dynamic libraries.
+# 返回产生 Output 的二进制或 C 动态库编译单元哈希；无匹配时返回 $null。Kind 是指纹前缀：可执行文件为 bin，
+# C 动态库为 lib。
 # Each compilation stamps invoked.timestamp before rustc starts; Cargo's profile lock keeps compilations
-# of one binary apart, so the latest stamp no later than the executable's write time is its unit.
-# 每次编译在 rustc 启动前写入 invoked.timestamp；Cargo 模式锁使同一二进制的编译互不重叠，因此不晚于
-# 可执行文件写入时间的最新时间戳即为其单元。
-function Find-CargoBinaryUnit {
-    param([string]$FingerprintRoot, [string]$Target, [string]$Executable)
-    $Written = [IO.File]::GetLastWriteTimeUtc($Executable)
+# of one target apart, so the latest stamp no later than the output's write time is its unit.
+# 每次编译在 rustc 启动前写入 invoked.timestamp；Cargo 模式锁使同一目标的编译互不重叠，因此不晚于
+# 输出文件写入时间的最新时间戳即为其单元。
+function Find-CargoLinkedUnit {
+    param([string]$FingerprintRoot, [string]$Kind, [string]$Target, [string]$Output)
+    $Written = [IO.File]::GetLastWriteTimeUtc($Output)
     $Best = $null
     $BestStarted = [DateTime]::MinValue
     foreach ($Directory in [IO.Directory]::EnumerateDirectories($FingerprintRoot)) {
         $Hash = Get-CargoUnitHash ([IO.Path]::GetFileName($Directory))
         $Stamp = Join-Path $Directory 'invoked.timestamp'
-        if ($null -eq $Hash -or -not [IO.File]::Exists((Join-Path $Directory "bin-$Target")) -or -not [IO.File]::Exists($Stamp)) { continue }
+        if ($null -eq $Hash -or -not [IO.File]::Exists((Join-Path $Directory "$Kind-$Target")) -or -not [IO.File]::Exists($Stamp)) { continue }
         $Started = [IO.File]::GetLastWriteTimeUtc($Stamp)
         if ($Started -le $Written -and $Started -gt $BestStarted) { $Best = $Hash; $BestStarted = $Started }
     }
@@ -153,12 +155,14 @@ function Invoke-CargoArtifactSweep {
                 $Hash = Get-CargoUnitHash ([IO.Path]::GetFileName($Parent))
                 if ($null -ne $Hash) { [void]$Live.Add($Hash); continue }
             }
-            if ([string]$Filename -ne [string]$Artifact.executable) { continue }
-            # Cargo names binaries without a unit hash on some targets, so the unit is found through its
-            # fingerprint: the latest compilation of this binary that started before the executable was written.
-            # Cargo 在部分目标上为二进制命名时不带单元哈希，因此通过指纹找到单元：即在可执行文件写入前开始的、
-            # 该二进制最近一次编译。
-            $Unit = Find-CargoBinaryUnit -FingerprintRoot $FingerprintRoot -Target ([string]$Artifact.target.name) -Executable ([string]$Filename)
+            # Cargo names binaries and C dynamic libraries without a unit hash, so the unit is found through its
+            # fingerprint: the latest compilation of this target that started before the output was written.
+            # Cargo 为二进制与 C 动态库命名时不带单元哈希，因此通过指纹找到单元：即在输出文件写入前开始的、
+            # 该目标最近一次编译。
+            if ([string]$Filename -eq [string]$Artifact.executable) { $Kind = 'bin' }
+            elseif ($Artifact.target.kind -contains 'cdylib' -and [IO.Path]::GetExtension([string]$Filename) -in @('.dll', '.so', '.dylib')) { $Kind = 'lib' }
+            else { continue }
+            $Unit = Find-CargoLinkedUnit -FingerprintRoot $FingerprintRoot -Kind $Kind -Target ([string]$Artifact.target.name) -Output ([string]$Filename)
             if ($null -eq $Unit) {
                 Write-Warning "Artifact cleanup skipped: cannot identify the unit behind $Filename."
                 return
@@ -226,8 +230,11 @@ function Invoke-CargoArtifactSweep {
 # 使用结构化输出执行 Cargo，成功后将模式目录清理到本次用到的单元。
 # BuildArguments is the existing make build argument list; returns ExitCode and compiler Artifacts.
 # BuildArguments 是现有 make 构建参数列表；返回 ExitCode 和编译器 Artifacts。
+# SeparateBuildArguments holds further argument lists, each run as its own Cargo invocation under the same lock;
+# the sweep runs once afterwards over the units every invocation used.
+# SeparateBuildArguments 保存更多参数列表，各自在同一把锁下作为独立 Cargo 调用执行；之后只清理一次，保留全部调用用到的单元。
 function Invoke-TrackedCargoBuild {
-    param([string[]]$BuildArguments)
+    param([string[]]$BuildArguments, [object[]]$SeparateBuildArguments = @())
     # Metadata supplies the authoritative target directory, including environment overrides.
     # Metadata 提供权威 target 目录，包括环境变量覆盖。
     $MetadataJson = & cargo metadata --format-version 1 --no-deps
@@ -247,36 +254,39 @@ function Invoke-TrackedCargoBuild {
         # OutDirs marks the build-script run units, which compile nothing of their own.
         # OutDirs 标记构建脚本运行单元，它们自身不产生编译制品。
         $OutDirs = [Collections.Generic.List[string]]::new()
-        # BuildFinished requires Cargo's explicit successful completion before cleanup.
-        # BuildFinished 要求 Cargo 明确成功结束后才能清理。
-        $BuildFinished = $false
         # ProtocolValid prevents a partially parsed output stream from authorizing deletion.
         # ProtocolValid 防止仅部分解析成功的输出流授权删除。
         $ProtocolValid = $true
         # BuildStartedUtc separates incremental directories written by this build from older ones.
         # BuildStartedUtc 区分本次构建写入的增量目录与更早的目录。
         $BuildStartedUtc = [DateTime]::UtcNow
-        & cargo @BuildArguments --message-format=json | ForEach-Object {
-            # Line is one stdout record; Cargo permits non-JSON output from procedural macros.
-            # Line 是一条标准输出记录；Cargo 允许过程宏输出非 JSON 文本。
-            $Line = [string]$_
-            if (-not $Line.StartsWith('{')) { Write-Host $Line; return }
-            # Message follows Cargo's documented reason-tagged JSON protocol.
-            # Message 遵循 Cargo 文档规定的 reason 标签 JSON 协议。
-            $Message = $null
-            try { $Message = $Line | ConvertFrom-Json -ErrorAction Stop }
-            catch { $ProtocolValid = $false; Write-Host $Line; return }
-            switch ($Message.reason) {
-                'compiler-artifact' { $Artifacts.Add($Message) }
-                'compiler-message' { Write-Host $Message.message.rendered }
-                'build-finished' { $BuildFinished = [bool]$Message.success }
-                'build-script-executed' { $OutDirs.Add([string]$Message.out_dir) }
-                default { Write-Host $Line }
+        foreach ($InvocationArguments in @(,$BuildArguments) + $SeparateBuildArguments) {
+            # BuildFinished requires Cargo's explicit successful completion of this invocation before cleanup.
+            # BuildFinished 要求本次调用由 Cargo 明确成功结束后才能清理。
+            $BuildFinished = $false
+            & cargo @InvocationArguments --message-format=json | ForEach-Object {
+                # Line is one stdout record; Cargo permits non-JSON output from procedural macros.
+                # Line 是一条标准输出记录；Cargo 允许过程宏输出非 JSON 文本。
+                $Line = [string]$_
+                if (-not $Line.StartsWith('{')) { Write-Host $Line; return }
+                # Message follows Cargo's documented reason-tagged JSON protocol.
+                # Message 遵循 Cargo 文档规定的 reason 标签 JSON 协议。
+                $Message = $null
+                try { $Message = $Line | ConvertFrom-Json -ErrorAction Stop }
+                catch { $ProtocolValid = $false; Write-Host $Line; return }
+                switch ($Message.reason) {
+                    'compiler-artifact' { $Artifacts.Add($Message) }
+                    'compiler-message' { Write-Host $Message.message.rendered }
+                    'build-finished' { $BuildFinished = [bool]$Message.success }
+                    'build-script-executed' { $OutDirs.Add([string]$Message.out_dir) }
+                    default { Write-Host $Line }
+                }
             }
+            # BuildExitCode is captured before any subsequent command can replace it.
+            # BuildExitCode 在后续命令可能覆盖退出码之前进行捕获。
+            $BuildExitCode = $LASTEXITCODE
+            if ($BuildExitCode -ne 0 -or -not $BuildFinished) { break }
         }
-        # BuildExitCode is captured before any subsequent command can replace it.
-        # BuildExitCode 在后续命令可能覆盖退出码之前进行捕获。
-        $BuildExitCode = $LASTEXITCODE
         if ($BuildExitCode -eq 0 -and $BuildFinished) {
             # ShellArtifacts identifies the exact main executable through Cargo target metadata.
             # ShellArtifacts 通过 Cargo 目标元数据识别精确的主程序可执行文件。

@@ -1261,7 +1261,10 @@ fn lance_failure_is_unavailability(
     use vulcan_lancedb_engine::error::LanceDbEngineError as Failure;
 
     match error {
-        Failure::Open { .. } | Failure::LockHeld { .. } | Failure::LockIo { .. } => true,
+        Failure::Open { .. }
+        | Failure::LockHeld { .. }
+        | Failure::LockIo { .. }
+        | Failure::LibraryUnavailable { .. } => true,
         Failure::InvalidArgument { .. }
         | Failure::PathNotAuthorized { .. }
         | Failure::TableNotFound { .. }

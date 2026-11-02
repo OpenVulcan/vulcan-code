@@ -60,6 +60,7 @@ edition = "2021"
 cleanup-dependency = { path = "dependency" }
 
 [workspace]
+members = ["library"]
 '@ | Set-Content -LiteralPath 'Cargo.toml'
     New-Item -ItemType Directory -Path 'dependency/src' -Force | Out-Null
     @'
@@ -82,6 +83,24 @@ fn main() {
 include!(concat!(env!("OUT_DIR"), "/value.rs"));
 pub fn value() -> u8 { VALUE }
 '@ | Set-Content -LiteralPath 'dependency/src/lib.rs'
+    # The library member is a C dynamic library only, named without a unit hash like the shipped LanceDB library.
+    # library 成员只是 C 动态库，与随包分发的 LanceDB 库一样，其文件名不含单元哈希。
+    New-Item -ItemType Directory -Path 'library/src' -Force | Out-Null
+    @'
+[package]
+name = "cleanup-library"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+'@ | Set-Content -LiteralPath 'library/Cargo.toml'
+    @'
+// Export one C function so the fixture owns a linked dynamic library.
+// 导出一个 C 函数，使测试工程拥有链接后的动态库。
+#[no_mangle]
+pub extern "C" fn cleanup_library_value() -> u8 { 1 }
+'@ | Set-Content -LiteralPath 'library/src/lib.rs'
     @'
 // Return a stable fixture value without external dependencies.
 // 返回稳定的测试值，不使用外部依赖。
@@ -96,11 +115,14 @@ fn value_is_one() { assert_eq!(value(), 1); }
 fn main() { println!("{}", vulcan_code_service::value()); }
 '@ | Set-Content -LiteralPath 'src/main.rs'
     $env:CARGO_TARGET_DIR = Join-Path $FixtureRoot 'custom-target'
-    $Build = @('build', '-j', '4')
+    $Build = @('build', '-p', 'vulcan-code-service', '-j', '4')
+    # LibraryBuild runs the C dynamic library in its own invocation, as the distribution build does.
+    # LibraryBuild 与发行构建一样，在独立调用中构建 C 动态库。
+    $LibraryBuild = @(,@('build', '-p', 'cleanup-library', '-j', '4'))
 
     # FirstBuild produces every unit kind: libraries, a binary, a build script and its run.
     # FirstBuild 产生全部单元类型：库、二进制、构建脚本及其运行。
-    $FirstBuild = Invoke-TrackedCargoBuild -BuildArguments $Build
+    $FirstBuild = Invoke-TrackedCargoBuild -BuildArguments $Build -SeparateBuildArguments $LibraryBuild
     Assert-CleanupCondition ($FirstBuild.ExitCode -eq 0) 'Initial debug build failed.'
     $OldLibrary = @($FirstBuild.Artifacts.filenames | Where-Object { $_ -match '[/\\]deps[/\\].+\.rlib$' })[0]
     $OldFingerprints = Get-UnitEntries 'debug' '.fingerprint'
@@ -112,10 +134,10 @@ fn main() { println!("{}", vulcan_code_service::value()); }
     $UnhashedFile = Join-Path $env:CARGO_TARGET_DIR 'debug/deps/unhashed-note.txt'
     Set-Content -LiteralPath $UnhashedFile 'preserve'
 
-    # FreshBuild must keep every live unit, including the binary behind the uplifted executable.
-    # FreshBuild 必须保留全部在用单元，包括提升后可执行文件对应的二进制。
+    # FreshBuild must keep every live unit, including the binary and the C dynamic library behind their uplifted outputs.
+    # FreshBuild 必须保留全部在用单元，包括提升后可执行文件与 C 动态库对应的单元。
     $Before = Get-ProfileSnapshot 'debug'
-    $FreshBuild = Invoke-TrackedCargoBuild -BuildArguments $Build
+    $FreshBuild = Invoke-TrackedCargoBuild -BuildArguments $Build -SeparateBuildArguments $LibraryBuild
     Assert-CleanupCondition (@($FreshBuild.Artifacts | Where-Object { -not $_.fresh }).Count -eq 0) 'Expected a fully fresh Cargo build.'
     Assert-CleanupCondition ((Get-ProfileSnapshot 'debug') -eq $Before) 'Fresh build removed a live unit.'
 
@@ -130,24 +152,24 @@ fn main() { println!("{}", vulcan_code_service::value()); }
     Assert-CleanupCondition ($LASTEXITCODE -eq 0) 'Fixture test build failed.'
     $WithTests = Get-ProfileSnapshot 'debug' $UnitAreas
     Assert-CleanupCondition ($WithTests -ne $Before) 'Test build added no units.'
-    $KeptBuild = Invoke-TrackedCargoBuild -BuildArguments $Build
+    $KeptBuild = Invoke-TrackedCargoBuild -BuildArguments $Build -SeparateBuildArguments $LibraryBuild
     Assert-CleanupCondition ($KeptBuild.ExitCode -eq 0 -and (Get-ProfileSnapshot 'debug' $UnitAreas) -eq $WithTests) 'Recent test-only units were swept within the retention period.'
     # A zero retention period ages every unit out the moment a build starts; the remaining steps rely on it.
     # 保留期为零时，每个未使用单元在构建开始时即已超期；后续步骤依赖此设置。
     $script:UnusedUnitRetention = [TimeSpan]::Zero
-    $SweptBuild = Invoke-TrackedCargoBuild -BuildArguments $Build
+    $SweptBuild = Invoke-TrackedCargoBuild -BuildArguments $Build -SeparateBuildArguments $LibraryBuild
     Assert-CleanupCondition ($SweptBuild.ExitCode -eq 0 -and (Get-ProfileSnapshot 'debug' $UnitAreas) -eq $Before) 'Test-only units were not swept.'
     Assert-CleanupCondition (Test-Path -LiteralPath $UnhashedFile) 'Unhashed file was deleted.'
     # A build after the sweep must stay fully fresh, proving no live fingerprint or output was removed.
     # 清理后的构建必须保持完全复用，证明未删除在用指纹或输出。
-    $AfterSweep = Invoke-TrackedCargoBuild -BuildArguments $Build
+    $AfterSweep = Invoke-TrackedCargoBuild -BuildArguments $Build -SeparateBuildArguments $LibraryBuild
     Assert-CleanupCondition (@($AfterSweep.Artifacts | Where-Object { -not $_.fresh }).Count -eq 0) 'Sweep removed state a later build needed.'
 
     # HashBuild changes every unit hash; the previous units retire from every area.
     # HashBuild 改变全部单元哈希；旧单元从各区域退役。
     $env:RUSTFLAGS = '--cfg cleanup_fixture_second'
     $HashStartedUtc = [DateTime]::UtcNow
-    $HashBuild = Invoke-TrackedCargoBuild -BuildArguments $Build
+    $HashBuild = Invoke-TrackedCargoBuild -BuildArguments $Build -SeparateBuildArguments $LibraryBuild
     Assert-CleanupCondition ($HashBuild.ExitCode -eq 0 -and -not (Test-Path -LiteralPath $OldLibrary)) 'Retired library was not deleted.'
     # Units whose hash ignores the flags stay live, so each area must keep exactly one entry per unit.
     # 哈希不受该标志影响的单元仍在使用，因此各区域必须保持每个单元恰好一个条目。
@@ -163,7 +185,7 @@ fn main() { println!("{}", vulcan_code_service::value()); }
     # ReleaseBuild sweeps only its own profile.
     # ReleaseBuild 只清理自身模式目录。
     $DebugBefore = Get-ProfileSnapshot 'debug'
-    $ReleaseBuild = Invoke-TrackedCargoBuild -BuildArguments @('build', '--release', '-j', '4')
+    $ReleaseBuild = Invoke-TrackedCargoBuild -BuildArguments @('build', '-p', 'vulcan-code-service', '--release', '-j', '4') -SeparateBuildArguments @(,@('build', '-p', 'cleanup-library', '--release', '-j', '4'))
     Assert-CleanupCondition ($ReleaseBuild.ExitCode -eq 0 -and (Get-ProfileSnapshot 'debug') -eq $DebugBefore) 'Release cleanup touched debug units.'
 
     # StaleUnit stands in for an unused unit; a failed build must not sweep it, the next success must.
@@ -172,7 +194,7 @@ fn main() { println!("{}", vulcan_code_service::value()); }
     Set-Content -LiteralPath $StaleUnit 'stale'
     $Source = Get-Content -LiteralPath 'src/lib.rs' -Raw
     Set-Content -LiteralPath 'src/lib.rs' 'compile_error!("intentional cleanup test failure");'
-    $FailedBuild = Invoke-TrackedCargoBuild -BuildArguments $Build
+    $FailedBuild = Invoke-TrackedCargoBuild -BuildArguments $Build -SeparateBuildArguments $LibraryBuild
     Assert-CleanupCondition ($FailedBuild.ExitCode -ne 0 -and (Test-Path -LiteralPath $StaleUnit)) 'Failed build swept artifacts.'
     Set-Content -LiteralPath 'src/lib.rs' $Source -NoNewline
 
@@ -188,7 +210,7 @@ fn main() { println!("{}", vulcan_code_service::value()); }
         Assert-CleanupCondition $Waiting 'Cleanup did not wait for a held Cargo lock.'
     }
     finally { $HeldLock.Dispose() }
-    $RecoveredBuild = Invoke-TrackedCargoBuild -BuildArguments $Build
+    $RecoveredBuild = Invoke-TrackedCargoBuild -BuildArguments $Build -SeparateBuildArguments $LibraryBuild
     Assert-CleanupCondition ($RecoveredBuild.ExitCode -eq 0 -and -not (Test-Path -LiteralPath $StaleUnit)) 'Stale unit survived a successful build.'
     Write-Host 'PASS: syntax, fresh reuse, test-unit retention and sweep, deps/fingerprint/build/incremental retirement, unhashed preservation, profile isolation, failed-build preservation, Cargo lock wait.'
 }

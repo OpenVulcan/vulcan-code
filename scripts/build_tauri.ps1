@@ -82,12 +82,16 @@ if ($Release) {
 
     # CargoBuildArguments selects every shipped Rust package in release mode from the locked registry graph.
     # CargoBuildArguments 从锁定的注册表依赖图以 release 模式选择全部分发 Rust 包。
-    $CargoBuildArguments = @('build', '--locked') + @(Get-ShippedRustPackageArguments) + @('--release')
+    $CargoBuildArguments = @('build', '--locked') + @(Get-ShippedRustPackageArguments -Kind binary) + @('--release')
+    $CargoLibraryBuildArguments = @('build', '--locked') + @(Get-ShippedRustPackageArguments -Kind library) + @('--release')
 }
 else {
     # CargoBuildArguments selects every shipped Rust package in debug mode from the locked registry graph.
     # CargoBuildArguments 从锁定的注册表依赖图以 debug 模式选择全部分发 Rust 包。
-    $CargoBuildArguments = @('build', '--locked') + @(Get-ShippedRustPackageArguments)
+    $CargoBuildArguments = @('build', '--locked') + @(Get-ShippedRustPackageArguments -Kind binary)
+    # CargoLibraryBuildArguments builds the shipped libraries alone, so they never take the service's features.
+    # CargoLibraryBuildArguments 单独构建分发库，使其绝不沾染服务的特性。
+    $CargoLibraryBuildArguments = @('build', '--locked') + @(Get-ShippedRustPackageArguments -Kind library)
 }
 
 # BuildProfileName names the selected artifact profile in diagnostics.
@@ -118,7 +122,7 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Host "==> Building Vulcan Core $BuildProfileName..."
 # CargoBuildResult retains the exit status and authoritative artifact paths for cleanup and publishing.
 # CargoBuildResult 保留退出状态及权威制品路径，供清理和发布使用。
-$CargoBuildResult = Invoke-TrackedCargoBuild -BuildArguments $CargoBuildArguments
+$CargoBuildResult = Invoke-TrackedCargoBuild -BuildArguments $CargoBuildArguments -SeparateBuildArguments @(,$CargoLibraryBuildArguments)
 if ($CargoBuildResult.ExitCode -ne 0) {
     exit $CargoBuildResult.ExitCode
 }
@@ -167,6 +171,15 @@ if ($IsWindowsPlatform) {
 # BuiltTuiPath 保存与桌面壳 Cargo profile 一致的终端客户端制品路径。
 $BuiltTuiPath = [string]($CargoBuildResult.Artifacts | Where-Object { $_.target.name -eq 'vulcan-tui' -and $_.target.kind -contains 'bin' }).executable
 
+# LanceLibraryFileName stores the native LanceDB library name the service loads from its own directory.
+# LanceLibraryFileName 保存服务从自身目录加载的原生 LanceDB 库文件名。
+$LanceLibraryFileName = (& node (Join-Path $PSScriptRoot 'shipped-rust-packages.mjs') file-name vulcan-lancedb-native | Out-String).Trim()
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+# BuiltLanceLibraryPath stores the C dynamic library Cargo reported, never a guessed file.
+# BuiltLanceLibraryPath 保存 Cargo 报告的 C 动态库，绝不猜测文件。
+$BuiltLanceLibraryPath = [string](@($CargoBuildResult.Artifacts | Where-Object { $_.target.name -eq 'vulcan_lancedb_native' -and $_.target.kind -contains 'cdylib' }).filenames | Where-Object { [IO.Path]::GetFileName($_) -eq $LanceLibraryFileName })
+
 # DistributionRoot selects the same validated output boundary as sync and desktop packaging.
 # DistributionRoot 选择与同步和桌面打包相同的已验证输出边界。
 $DistributionRoot = (& node (Join-Path $PSScriptRoot "desktop-runtime.mjs") root $BuildProfileName | Out-String).Trim()
@@ -205,6 +218,9 @@ if (-not (Test-Path -LiteralPath $BuiltJudgeHostPath)) {
 if (-not (Test-Path -LiteralPath $BuiltTuiPath)) {
     throw "Built terminal client was not found: $BuiltTuiPath"
 }
+if ([string]::IsNullOrWhiteSpace($BuiltLanceLibraryPath) -or -not (Test-Path -LiteralPath $BuiltLanceLibraryPath)) {
+    throw "Built LanceDB library was not found: $BuiltLanceLibraryPath"
+}
 
 # Publish compiled executables into the stable output directory used by make run.
 # 把已编译可执行文件发布到 make run 使用的稳定 output 目录。
@@ -226,6 +242,7 @@ Copy-Item -LiteralPath $BuiltBinaryPath -Destination $OutputBinaryPath -Force -E
 Copy-Item -LiteralPath $BuiltTerminalHostPath -Destination $OutputTerminalHostPath -Force -ErrorAction Stop
 Copy-Item -LiteralPath $BuiltJudgeHostPath -Destination $OutputJudgeHostPath -Force -ErrorAction Stop
 Copy-Item -LiteralPath $BuiltTuiPath -Destination $OutputTuiPath -Force -ErrorAction Stop
+Copy-Item -LiteralPath $BuiltLanceLibraryPath -Destination (Join-Path $OutputBinDir $LanceLibraryFileName) -Force -ErrorAction Stop
 & node (Join-Path $PSScriptRoot 'desktop-runtime.mjs') package $BuildProfileName
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Host "==> Distribution published: $DistributionRoot"

@@ -1,14 +1,12 @@
-//! Column, payload-format and operation payload types for the in-process LanceDB engine.
-//! 进程内 LanceDB 引擎的列、载荷格式与操作载荷类型。
+//! Column, payload-format and operation payload types shared by the LanceDB client and native library.
+//! LanceDB 客户端与原生库共用的列、载荷格式与操作载荷类型。
 //!
-//! Every type here is owned by this crate. The migrated source already had local types at this
-//! layer, so this module is a near-verbatim port; the substantive change is that
-//! [`LanceDbOutputFormat::as_str`] replaces the upstream `as_wire_name` now that no wire protocol
-//! exists to name.
+//! Every type crosses the library boundary as JSON inside one [`crate::wire`] frame. Encoded row
+//! bytes (`data`) are skipped by serde and travel as the frame payload instead, so a large batch is
+//! never expanded into a JSON number array.
 //!
-//! 此处的每个类型都由本 crate 拥有。迁入源码在该层本就使用本地类型，因此本模块基本为原样迁入；
-//! 实质变化是 [`LanceDbOutputFormat::as_str`] 取代了上游的 `as_wire_name` —— 既然已不存在传输协议，
-//! 也就没有"wire"需要命名。
+//! 每个类型都以 JSON 形式放在一个 [`crate::wire`] 帧中跨越库边界。已编码行字节（`data`）被 serde
+//! 跳过，改作帧载荷传输，使大批量数据不会被展开为 JSON 数字数组。
 
 /// Supported column types.
 /// 支持的列类型。
@@ -20,7 +18,7 @@
 /// 该集合刻意封闭。其中没有二进制、Blob 或结构体成员，这正是 v1 Lance 格式基线得以保持的原因：
 /// 当表 Schema 带有 `lance.blob.v2` 列时，`lancedb` 会强制把表提升到 Lance 文件版本 `V2_2`，
 /// 而此处禁止该升级。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum LanceDbColumnType {
     /// No declared type; the caller must specify one.
     /// 未声明类型；调用方必须指定。
@@ -57,7 +55,7 @@ pub enum LanceDbColumnType {
 
 /// Definition of one column when creating a table.
 /// 建表时一个列的定义。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct LanceDbColumnDef {
     /// Column name.
     /// 列名。
@@ -75,7 +73,7 @@ pub struct LanceDbColumnDef {
 
 /// Payload format accepted for incoming data.
 /// 接受的数据载荷格式。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum LanceDbInputFormat {
     /// No format declared; the caller must specify one.
     /// 未声明格式；调用方必须指定。
@@ -91,7 +89,7 @@ pub enum LanceDbInputFormat {
 
 /// Encoding applied to returned rows.
 /// 返回行的编码方式。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum LanceDbOutputFormat {
     /// No format declared; resolves to Arrow IPC, matching upstream behaviour.
     /// 未声明格式；解析为 Arrow IPC，与上游行为一致。
@@ -118,7 +116,7 @@ impl LanceDbOutputFormat {
 
 /// Input for creating one table.
 /// 建一张表的输入。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LanceDbCreateTableInput {
     /// Target table name.
     /// 目标表名。
@@ -133,7 +131,7 @@ pub struct LanceDbCreateTableInput {
 
 /// Result of creating one table.
 /// 建表结果。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LanceDbCreateTableResult {
     /// Human-readable outcome message.
     /// 可读结果消息。
@@ -142,7 +140,7 @@ pub struct LanceDbCreateTableResult {
 
 /// Input for upserting rows into one table.
 /// 向一张表写入行的输入。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LanceDbUpsertInput {
     /// Target table name.
     /// 目标表名。
@@ -150,8 +148,9 @@ pub struct LanceDbUpsertInput {
     /// Encoding of `data`.
     /// `data` 的编码格式。
     pub input_format: LanceDbInputFormat,
-    /// Encoded rows.
-    /// 已编码的行数据。
+    /// Encoded rows, carried as the wire frame payload rather than in the JSON header.
+    /// 已编码的行数据，作为传输帧载荷携带，而不放在 JSON 头部。
+    #[serde(skip)]
     pub data: Vec<u8>,
     /// Columns forming the row identity used to decide insert versus update.
     /// 构成行身份、用于判断插入或更新的列。
@@ -160,7 +159,7 @@ pub struct LanceDbUpsertInput {
 
 /// Result of upserting rows.
 /// 写入行结果。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LanceDbUpsertResult {
     /// Human-readable outcome message.
     /// 可读结果消息。
@@ -200,7 +199,7 @@ pub enum LanceDbDistanceMetric {
 
 /// Input for one vector search.
 /// 一次向量检索的输入。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LanceDbSearchInput {
     /// Target table name.
     /// 目标表名。
@@ -224,7 +223,7 @@ pub struct LanceDbSearchInput {
 
 /// Result of one vector search.
 /// 一次向量检索的结果。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LanceDbSearchResult {
     /// Human-readable outcome message.
     /// 可读结果消息。
@@ -235,14 +234,15 @@ pub struct LanceDbSearchResult {
     /// Number of rows returned.
     /// 返回行数。
     pub rows: u64,
-    /// Encoded rows.
-    /// 已编码的行数据。
+    /// Encoded rows, carried as the wire frame payload rather than in the JSON header.
+    /// 已编码的行数据，作为传输帧载荷携带，而不放在 JSON 头部。
+    #[serde(skip)]
     pub data: Vec<u8>,
 }
 
 /// Input for deleting rows.
 /// 删除行的输入。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LanceDbDeleteInput {
     /// Target table name.
     /// 目标表名。
@@ -254,7 +254,7 @@ pub struct LanceDbDeleteInput {
 
 /// Result of deleting rows.
 /// 删除行结果。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LanceDbDeleteResult {
     /// Human-readable outcome message.
     /// 可读结果消息。
@@ -269,7 +269,7 @@ pub struct LanceDbDeleteResult {
 
 /// Input for dropping one table.
 /// 删除一张表的输入。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LanceDbDropTableInput {
     /// Target table name.
     /// 目标表名。
@@ -278,7 +278,7 @@ pub struct LanceDbDropTableInput {
 
 /// Result of dropping one table.
 /// 删表结果。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LanceDbDropTableResult {
     /// Human-readable outcome message.
     /// 可读结果消息。
@@ -287,7 +287,7 @@ pub struct LanceDbDropTableResult {
 
 /// Input identifying the table to inspect.
 /// 标识待检查表的输入。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LanceDbTableStatisticsInput {
     /// Stable table name to inspect.
     /// 需要检查的稳定表名。
@@ -299,7 +299,7 @@ pub struct LanceDbTableStatisticsInput {
 
 /// Fragment row-count summary reported by LanceDB.
 /// LanceDB 返回的片段行数摘要。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct LanceDbFragmentSummary {
     /// Minimum row count among current fragments.
     /// 当前片段中的最小行数。
@@ -326,7 +326,7 @@ pub struct LanceDbFragmentSummary {
 
 /// Physical table statistics used to decide whether compaction is beneficial.
 /// 用于判断物理整理是否有收益的表统计信息。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct LanceDbTableStatisticsResult {
     /// Stable table name represented by these statistics.
     /// 这些统计信息对应的稳定表名。
@@ -360,7 +360,7 @@ pub struct LanceDbTableStatisticsResult {
 
 /// Bounded native compaction options shared by planning and execution.
 /// 计划与执行共用的有界原生整理参数。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct LanceDbCompactionOptions {
     /// Optional desired row count for each output fragment.
     /// 可选的每个输出片段目标行数。
@@ -384,7 +384,7 @@ pub struct LanceDbCompactionOptions {
 
 /// Safe file-compaction input with optional bounded LanceDB overrides.
 /// 安全文件合并输入，包含可选且有界的 LanceDB 参数覆盖。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LanceDbCompactTableInput {
     /// Stable table name to compact.
     /// 需要整理的稳定表名。
@@ -399,7 +399,7 @@ pub struct LanceDbCompactTableInput {
 
 /// Physical file-compaction metrics returned by LanceDB.
 /// LanceDB 返回的物理文件合并指标。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct LanceDbCompactionMetrics {
     /// Number of source fragments removed from the new table version.
     /// 新表版本中移除的源片段数量。
@@ -417,7 +417,7 @@ pub struct LanceDbCompactionMetrics {
 
 /// File-compaction result including authoritative before-and-after statistics.
 /// 文件合并结果，包含权威的整理前后统计信息。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct LanceDbCompactTableResult {
     /// Human-readable operation outcome.
     /// 可读的操作结果说明。

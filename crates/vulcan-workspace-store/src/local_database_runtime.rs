@@ -2214,7 +2214,7 @@ mod tests {
         // Reuse is the point: two engines over one directory would hold two sets of per-table locks.
         // 复用是关键：同一目录上的两个引擎会持有两套表级锁。
         assert!(
-            std::sync::Arc::ptr_eq(&first.connection(), &second.connection()),
+            first.shares_database_with(&second),
             "one directory must yield exactly one engine"
         );
         assert_eq!(runtime.lance_directories(), vec![binding.directory.clone()]);
@@ -2262,11 +2262,10 @@ mod tests {
             );
         }
 
-        let first_connection = engines[0].connection();
         assert!(
             engines
                 .iter()
-                .all(|engine| Arc::ptr_eq(&first_connection, &engine.connection())),
+                .all(|engine| engines[0].shares_database_with(engine)),
             "all concurrent first opens must share one connection and table-lock set"
         );
         assert_eq!(runtime.lance_directories(), vec![binding.directory]);
@@ -2324,7 +2323,7 @@ mod tests {
             .expect("lexical alias should reuse the open directory");
 
         assert!(
-            Arc::ptr_eq(&physical_engine.connection(), &alias_engine.connection()),
+            physical_engine.shares_database_with(&alias_engine),
             "lexical aliases must share one connection and one table-lock set"
         );
         assert_eq!(

@@ -2,5 +2,6 @@
   { "package": "vulcan-code-service", "binary": "vulcan-code-service" },
   { "package": "vulcan-terminal-host", "binary": "vulcan-terminal-host" },
   { "package": "vulcan-judge-host", "binary": "vulcan-judge-host" },
-  { "package": "vulcan-code-tui", "binary": "vulcan-tui" }
+  { "package": "vulcan-code-tui", "binary": "vulcan-tui" },
+  { "package": "vulcan-lancedb-native", "library": "vulcan_lancedb_native" }
 ]

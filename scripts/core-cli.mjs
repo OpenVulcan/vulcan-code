@@ -11,6 +11,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDeepStrictEqual, promisify } from 'node:util';
 import { validateRuntimeLayoutIdentity, verifyPackagedLayout } from './desktop-runtime.mjs';
 import { acquirePublicationGuard } from './publish-distribution.mjs';
+import { shippedFileName, shippedRustPackages } from './shipped-rust-packages.mjs';
 
 // One deadline bounds each terminal launch or graceful shutdown operation.
 // 每次终端启动或优雅关闭操作均受此唯一截止时长约束。
@@ -24,6 +25,9 @@ const repository = fileURLToPath(new URL('..', import.meta.url));
 // Capture bounded read-only commands without invoking a shell.
 // 不经 shell 捕获有界的只读命令结果。
 const execFileAsync = promisify(execFile);
+// The service loads this native LanceDB library from its own directory, so both are built and replaced together.
+// 服务从自身目录加载此原生 LanceDB 库，因此两者一同构建、一同替换。
+const lanceLibrary = shippedRustPackages.find(item => item.package === 'vulcan-lancedb-native');
 
 // Validate a complete distribution and reuse its packaged launch-description and health readers.
 // 校验完整发行物，并复用其中已打包的启动描述及健康身份读取器。
@@ -127,18 +131,42 @@ export async function ensureHeadlessCore(context) {
   }
 }
 
-// Compile only Core, using Cargo's declared artifact stream rather than a guessed target directory.
-// 只编译 Core，使用 Cargo 声明的制品流，不猜测 target 目录。
-// root selects the source checkout; return the unique successful service executable path.
-// root 选择源码检出；返回唯一成功生成的服务可执行路径。
+// Compile only Core and its LanceDB library, using Cargo's declared artifact stream rather than a guessed target directory.
+// 只编译 Core 及其 LanceDB 库，使用 Cargo 声明的制品流，不猜测 target 目录。
+// The library builds in its own invocation; shipped-rust-packages.mjs `shippedCargoArgs` explains why.
+// 库在独立调用中构建；原因见 shipped-rust-packages.mjs 的 `shippedCargoArgs`。
+// root selects the source checkout; return the unique successful service executable and library paths.
+// root 选择源码检出；返回唯一成功生成的服务可执行路径与库路径。
 export async function buildCore(root) {
-  // Store every reported service artifact and the explicit final success record.
-  // 保存每个报告的服务制品，以及显式的最终成功记录。
   const artifacts = new Set();
+  for (const message of await cargoArtifacts(root, 'vulcan-code-service')) {
+    if (message.target.name === 'vulcan-code-service' && message.target.kind.includes('bin') && message.executable) artifacts.add(message.executable);
+  }
+  const libraries = new Set();
+  for (const message of await cargoArtifacts(root, lanceLibrary.package)) {
+    if (message.target.name !== lanceLibrary.library || !message.target.kind.includes('cdylib')) continue;
+    for (const filename of message.filenames) if (path.basename(filename) === shippedFileName(lanceLibrary)) libraries.add(filename);
+  }
+  if (artifacts.size !== 1 || libraries.size !== 1) {
+    throw new Error('Core compilation failed or Cargo did not report exactly one service artifact and one LanceDB library.');
+  }
+  // realpath also rejects a reported artifact that was never created.
+  // realpath 也会拒绝未实际创建的已报告制品。
+  return { service: await realpath([...artifacts][0]), library: await realpath([...libraries][0]) };
+}
+
+// Build one package and return its compiler-artifact messages once Cargo reports success.
+// 构建单个包，在 Cargo 报告成功后返回其 compiler-artifact 消息。
+// root selects the source checkout and pkg the Cargo package; failure or malformed output throws.
+// root 选择源码检出，pkg 选择 Cargo 包；失败或输出畸形时抛出异常。
+async function cargoArtifacts(root, pkg) {
+  // Store every reported artifact and the explicit final success record.
+  // 保存每个报告的制品，以及显式的最终成功记录。
+  const artifacts = [];
   let succeeded = false;
   // Cargo inherits the repository's concurrency limits; no jobs/test settings are overridden.
   // Cargo 继承仓库并发限制，不覆盖 jobs 或测试设置。
-  const cargo = spawn('cargo', ['build', '--locked', '-p', 'vulcan-code-service', '--message-format=json'], {
+  const cargo = spawn('cargo', ['build', '--locked', '-p', pkg, '--message-format=json'], {
     cwd: root, stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true,
   });
   // Observe process failure immediately, including executable-not-found errors.
@@ -152,8 +180,7 @@ export async function buildCore(root) {
       // Cargo JSON is a declared protocol; malformed output must fail instead of selecting stale files.
       // Cargo JSON 是声明的协议；输出畸形必须失败，不能改选旧文件。
       const message = JSON.parse(line);
-      if (message.reason === 'compiler-artifact' && message.target.name === 'vulcan-code-service'
-          && message.target.kind.includes('bin') && message.executable) artifacts.add(message.executable);
+      if (message.reason === 'compiler-artifact') artifacts.push(message);
       if (message.reason === 'compiler-message') process.stderr.write(message.message.rendered);
       if (message.reason === 'build-finished') succeeded = message.success === true;
     }
@@ -162,15 +189,11 @@ export async function buildCore(root) {
     await completion;
     throw error;
   }
-  // A successful process alone does not prove that Cargo published the requested executable.
-  // 进程成功本身不能证明 Cargo 已发布请求的可执行文件。
+  // A successful process alone does not prove that Cargo published the requested artifact; the caller checks that.
+  // 进程成功本身不能证明 Cargo 已发布请求的制品；由调用方检查。
   const result = await completion;
-  if (result.error || result.code !== 0 || !succeeded || artifacts.size !== 1) {
-    throw new Error('Core compilation failed or Cargo did not report exactly one successful service artifact.');
-  }
-  // realpath also rejects a reported artifact that was never created.
-  // realpath 也会拒绝未实际创建的已报告制品。
-  return realpath([...artifacts][0]);
+  if (result.error || result.code !== 0 || !succeeded) throw new Error(`Cargo build of ${pkg} failed.`);
+  return artifacts;
 }
 
 // Resolve a Linux process executable; only an absent process is treated as already stopped.
@@ -243,8 +266,8 @@ export async function restartLinuxCore(root) {
   try {
     const layout = JSON.parse((await execFileAsync(process.execPath, [resolver, 'layout', 'debug'])).stdout);
     const context = await createCoreContext(selectedRoot, layout, 'debug');
-    const builtPath = await buildCore(root);
-    const candidate = await context.launcher.readServiceLaunchDescription(builtPath, []);
+    const built = await buildCore(root);
+    const candidate = await context.launcher.readServiceLaunchDescription(built.service, []);
     // Executable location changes during publication; every other described launch field must stay equal.
     // 发布时可执行位置会变化；其余已描述启动字段必须保持一致。
     const { executablePath: oldExecutable, ...oldContract } = context.description;
@@ -252,35 +275,47 @@ export async function restartLinuxCore(root) {
     if (!isDeepStrictEqual(oldContract, newContract)) throw new Error('The Core launch contract changed; use a full make build instead.');
     await access(oldExecutable);
     await access(newExecutable);
-    // Unique same-directory files allow an atomic Unix rename and retain the old binary until readiness.
-    // 同目录唯一文件支持 Unix 原子改名，并将旧二进制保留到就绪确认之后。
-    const attempt = `${context.servicePath}.${randomUUID()}`;
-    const staged = `${attempt}.next`;
-    const backup = `${attempt}.previous`;
+    // Unique same-directory files allow an atomic Unix rename and retain the old files until readiness.
+    // 同目录唯一文件支持 Unix 原子改名，并将旧文件保留到就绪确认之后。
+    // A distribution published before the library split has no library yet; restoring it then removes the new one.
+    // 库拆分之前发布的发行物尚无该库；此时恢复即删除新库。
+    const attempt = randomUUID();
+    const replacements = [
+      { built: built.service, output: context.servicePath },
+      { built: built.library, output: path.join(path.dirname(context.servicePath), shippedFileName(lanceLibrary)) },
+    ].map(item => ({ ...item, staged: `${item.output}.${attempt}.next`, backup: `${item.output}.${attempt}.previous`, existed: false }));
     try {
-      await copyFile(builtPath, staged, constants.COPYFILE_EXCL);
-      if (await artifactDigest(builtPath) !== await artifactDigest(staged)) throw new Error('The staged Core differs from the Cargo artifact.');
-      await copyFile(context.servicePath, backup, constants.COPYFILE_EXCL);
+      for (const item of replacements) {
+        await copyFile(item.built, item.staged, constants.COPYFILE_EXCL);
+        if (await artifactDigest(item.built) !== await artifactDigest(item.staged)) throw new Error(`The staged ${path.basename(item.output)} differs from the Cargo artifact.`);
+        try {
+          await copyFile(item.output, item.backup, constants.COPYFILE_EXCL);
+          item.existed = true;
+        } catch (error) { if (error.code !== 'ENOENT' || item.output === context.servicePath) throw error; }
+      }
       await stopLinuxCore(context);
-      await rename(staged, context.servicePath);
+      for (const item of replacements) await rename(item.staged, item.output);
       try {
         await ensureHeadlessCore(context);
       } catch (error) {
         // Restore only after the failed owner has stopped; do not overwrite a still-running replacement.
         // 仅在失败持有者停止后恢复；不覆盖仍在运行的替换程序。
         await stopLinuxCore(context);
-        await rename(backup, context.servicePath);
+        for (const item of replacements) {
+          if (item.existed) await rename(item.backup, item.output);
+          else await rm(item.output);
+        }
         await ensureHeadlessCore(context);
         throw new Error('New Core failed; the previous Core was restored and restarted.', { cause: error });
       }
-      await rm(backup);
+      for (const item of replacements) if (item.existed) await rm(item.backup);
       console.log('Debug Core restarted. Electron, Vite, TUI, and synchronized resources were not rebuilt.');
     } catch (error) {
-      // If any later stage fails, the uniquely named backup is preserved for explicit recovery.
+      // If any later stage fails, the uniquely named backups are preserved for explicit recovery.
       // 后续任一阶段失败时，保留唯一命名备份供显式恢复。
-      throw new Error(`${error.message} Recovery copy, when created: ${backup}`, { cause: error });
+      throw new Error(`${error.message} Recovery copies, when created: ${replacements.map(item => item.backup).join(', ')}`, { cause: error });
     } finally {
-      await rm(staged, { force: true });
+      for (const item of replacements) await rm(item.staged, { force: true });
     }
   } finally {
     // Release only the two exact entries owned by this invocation, without recursive cleanup.
@@ -296,7 +331,10 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const [command, ...extra] = process.argv.slice(2);
   try {
     if (extra.length || !['build', 'restart'].includes(command)) throw new Error('Usage: node scripts/core-cli.mjs build|restart');
-    if (command === 'build') console.log(`Debug Core compiled: ${await buildCore(repository)}`);
+    if (command === 'build') {
+      const built = await buildCore(repository);
+      console.log(`Debug Core compiled: ${built.service} (LanceDB library: ${built.library})`);
+    }
     else await restartLinuxCore(repository);
   } catch (error) {
     console.error(error.message);

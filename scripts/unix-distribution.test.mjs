@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
-import { shippedRustPackages } from './shipped-rust-packages.mjs';
+import { shippedFileName, shippedRustPackages } from './shipped-rust-packages.mjs';
 
 // cargoFixture creates only binaries selected by actual Cargo arguments; an omitted artifact simulates a broken build.
 // cargoFixture 只创建实际 Cargo 参数选中的二进制；缺失制品模拟损坏构建。
@@ -26,8 +26,9 @@ if (args[0] === 'metadata') {
   fs.mkdirSync(path.join(target, profile), { recursive: true });
   for (const item of inventory) {
     const selected = args.some((arg, index) => arg === '-p' && args[index + 1] === item.package);
-    if (selected && item.binary !== process.env.VULCAN_OMIT_ARTIFACT) {
-      fs.writeFileSync(path.join(target, profile, item.binary), 'new:' + item.package);
+    const name = item.binary ?? 'lib' + item.library + (process.platform === 'darwin' ? '.dylib' : '.so');
+    if (selected && name !== process.env.VULCAN_OMIT_ARTIFACT) {
+      fs.writeFileSync(path.join(target, profile, name), 'new:' + item.package);
     }
   }
 }
@@ -40,7 +41,7 @@ import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { shippedRustPackages } from './shipped-rust-packages.mjs';
+import { shippedFileName, shippedRustPackages } from './shipped-rust-packages.mjs';
 // Validate the fixture layout against the requested profile; throw on mismatch and return no value.
 // 按请求模式验证夹具布局；不一致时抛出异常，无返回值。
 export function validateRuntimeLayoutIdentity(layout, profile) { assert.equal(layout.profile, profile); }
@@ -48,7 +49,7 @@ export function validateRuntimeLayoutIdentity(layout, profile) { assert.equal(la
 // 验证 root 下全部当前制品内容；成功时完成且无值，不完整时拒绝夹具。
 export async function verifyPackagedLayout(layout, root) {
   for (const item of shippedRustPackages) {
-    assert.equal(await readFile(path.join(root, 'bin', item.binary), 'utf8'), 'new:' + item.package);
+    assert.equal(await readFile(path.join(root, 'bin', shippedFileName(item)), 'utf8'), 'new:' + item.package);
   }
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -72,7 +73,7 @@ for (const scenario of [
   { profile: 'debug', omit: 'vulcan-tui' },
   { profile: 'debug', omit: '', electronFailure: true },
 ]) {
-  test(`Unix ${scenario.profile} publication ${scenario.electronFailure ? 'stops before Cargo when Electron preparation fails' : scenario.omit ? 'rejects missing TUI despite stale output' : 'includes every shipped executable'}`,
+  test(`Unix ${scenario.profile} publication ${scenario.electronFailure ? 'stops before Cargo when Electron preparation fails' : scenario.omit ? 'rejects missing TUI despite stale output' : 'includes every shipped artifact'}`,
     { skip: process.platform !== 'linux' && process.platform !== 'darwin' }, async t => {
       // root owns all artifacts; sourceScripts selects only the real entry points under test.
       // root 拥有全部制品；sourceScripts 仅选择被测真实入口。
@@ -96,8 +97,8 @@ for (const scenario of [
       await writeFile(path.join(root, 'fake-bin/cargo'), '#!' + process.execPath + '\n' + cargoFixture, { mode: 0o755 });
       await writeFile(path.join(root, 'fake-bin/pnpm'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
       for (const item of shippedRustPackages) {
-        await writeFile(path.join(root, 'output/bin', item.binary), 'old:' + item.package);
-        await writeFile(path.join(root, 'output-release/bin', item.binary), 'old:' + item.package);
+        await writeFile(path.join(root, 'output/bin', shippedFileName(item)), 'old:' + item.package);
+        await writeFile(path.join(root, 'output-release/bin', shippedFileName(item)), 'old:' + item.package);
       }
       const result = spawnSync('sh', [path.join(root, 'scripts/build_tauri.sh'), ...(scenario.profile === 'release' ? ['--release'] : [])], {
         cwd: root, encoding: 'utf8', timeout: 30000,
@@ -107,9 +108,9 @@ for (const scenario of [
       assert.equal(result.error, undefined);
       assert.equal(result.status, scenario.electronFailure ? 23 : scenario.omit ? 1 : 0, result.stdout + result.stderr);
       for (const item of shippedRustPackages) {
-        assert.equal(await readFile(path.join(root, owned, 'bin', item.binary), 'utf8'),
+        assert.equal(await readFile(path.join(root, owned, 'bin', shippedFileName(item)), 'utf8'),
           (scenario.omit || scenario.electronFailure ? 'old:' : 'new:') + item.package);
-        assert.equal(await readFile(path.join(root, other, 'bin', item.binary), 'utf8'), 'old:' + item.package);
+        assert.equal(await readFile(path.join(root, other, 'bin', shippedFileName(item)), 'utf8'), 'old:' + item.package);
       }
     });
 }

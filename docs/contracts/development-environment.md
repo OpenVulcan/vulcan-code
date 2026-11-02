@@ -64,6 +64,32 @@ Debug 与 Release 各自拥有独立的同级发行目录，使两个版本可�
 
 下载的构建输入统一保存在 `third_party/`，具体目录由 `scripts/build-input-paths.mjs` 定义。`output/` 与 `output-release/` 仅保存运行与分发副本，可以重新同步及打包恢复。直接运行无参数 `cargo clean` 仍会清空整个 Cargo 目标目录，但不会删除这些持久输入。旧的 `target/browser-runtime/`、`target/build-input-cache/` 与 `target/electron-runtime-cache/` 不再作为下载源；切换入口前可显式复制到对应的新目录并核对完整性，脚本不会探测或静默回退到旧路径。
 
+### LanceDB 原生库
+
+LanceDB 及其依赖闭包（lance、datafusion、arrow）只编译进 C 动态库 `vulcan-lancedb-native`
+（Windows `vulcan_lancedb_native.dll`，Linux `libvulcan_lancedb_native.so`，macOS
+`libvulcan_lancedb_native.dylib`）。服务通过 `vulcan-lancedb-engine` 在首次使用时从自身可执行文件所在目录
+加载它；可执行文件位于 Cargo 的 `deps/` 时（测试二进制）改从上一级 profile 目录加载。三个 crate 的分工：
+
+| crate | 内容 |
+| --- | --- |
+| `vulcan-lancedb-contract` | 公开类型、错误、配置、库锁与线协议，不依赖 LanceDB |
+| `vulcan-lancedb-native` | `cdylib`，持有引擎、运行时与存储格式，导出 C ABI |
+| `vulcan-lancedb-engine` | 客户端，加载库并保留原有公开路径 |
+
+线协议版本由 `vulcan-lancedb-contract` 的 `wire::PROTOCOL_VERSION` 唯一定义，库与客户端版本不一致时
+直接报 `LibraryUnavailable`，不降级。依赖不变时修改服务代码不会重新编译或链接 LanceDB。
+
+- 分发清单 `scripts/shipped-rust-packages.json` 以 `library` 条目登记该库；完整构建、Unix 发布与
+  `make core-build`/`make core-restart` 都把它放进服务所在的 `bin/`。
+- 该库始终在独立的 Cargo 调用中构建（`shipped-rust-packages.mjs cargo-args library`），绝不与服务同批。
+  服务被排除在 Hakari 遍历之外，其托盘等私有特性会改变共享依赖（如 `windows-sys`、`tracing-core`）的特性集；
+  同批构建会编译出另一份 LanceDB 变体，使完整构建与 `make test` 各自重编 LanceDB。
+- 测试构建不会生成 `cdylib`，`make test` 因此先执行 `cargo build --locked -p vulcan-lancedb-native`。
+  直接使用 `cargo test`/`cargo nextest` 跑依赖知识库或插件存储的测试时，需要先执行同一命令，否则这些测试按
+  库不可用失败。
+- 编译产物清理把该库的指纹单元视为本次构建使用过，不会扫除未变化的库。
+
 ## Windows Debug 下只更新 Core
 
 应用 SQLite 结构变动后，在启动新 Core 前独立执行 Debug 数据库检查与同步，应用数据库版本保持 v1。
@@ -93,7 +119,7 @@ Windows 下需要完整重建并重新启动时使用 `make br`（发布模式�
 make core-restart
 ```
 
-只想验证编译而暂不重启时，使用 `make core-build`；它只把 `vulcan-code-service` 编译到 Cargo 的 Debug 目录，不替换正在运行的服务。`make core-restart` 自带增量编译，使用桌面运行入口共用的布局校验；编译和启动契约校验成功后，自动强制停止精确路径匹配的当前 Debug Core，原子替换 `output/bin/vulcan-code-service.exe` 并启动新 Core，无需手动退出托盘。其他发行目录或 Release 进程不在停止范围内；如果其他程序占有同一 Debug 数据目录，则拒绝重启。桌面壳与 Vite 保持运行，WebUI 断线后按新 Core 的发现信息重连。重启期间正在执行的 AI 请求会中断，应在重连后重新发起；需要优雅排空时可先自行从托盘退出服务。
+只想验证编译而暂不重启时，使用 `make core-build`；它只把 `vulcan-code-service` 与 LanceDB 原生库编译到 Cargo 的 Debug 目录，不替换正在运行的服务。`make core-restart` 自带增量编译，使用桌面运行入口共用的布局校验；编译和启动契约校验成功后，自动强制停止精确路径匹配的当前 Debug Core，替换 `output/bin/vulcan-code-service.exe` 及同目录的 `vulcan_lancedb_native.dll`（两者一同备份、一同恢复，不混用不同代次）并启动新 Core，无需手动退出托盘。其他发行目录或 Release 进程不在停止范围内；如果其他程序占有同一 Debug 数据目录，则拒绝重启。桌面壳与 Vite 保持运行，WebUI 断线后按新 Core 的发现信息重连。重启期间正在执行的 AI 请求会中断，应在重连后重新发起；需要优雅排空时可先自行从托盘退出服务。
 
 上述托盘及可见调试控制台行为属于 Windows Debug。修改 `vulcan-terminal-host`、Electron、运行布局或 Core 与壳之间的启动协议时，使用完整 `make build`；修改权威运行资源时，先显式执行 `make sync`。`make core-restart` 不会同步资源；新 Core 退出且尚未健康就绪时，恢复原可执行文件备份。运行布局架构版本由 `scripts/desktop-runtime.mjs` 定义并校验，核心脚本不再维护独立版本数字。
 
@@ -101,11 +127,11 @@ make core-restart
 
 ### Linux / WSL 的 Core 增量更新
 
-Linux 的 `make core-build` 直接使用 Node 启动 `cargo build --locked -p vulcan-code-service --message-format=json`，只接受本轮 Cargo 报告且成功生成的唯一制品，不从固定 target 路径挑选旧文件，不要求 PowerShell 或 pnpm。
+Linux 的 `make core-build` 直接使用 Node 启动 `cargo build --locked -p vulcan-code-service --message-format=json`，再以独立调用构建 `vulcan-lancedb-native`，只接受本轮 Cargo 报告且成功生成的唯一服务制品与唯一库制品，不从固定 target 路径挑选旧文件，不要求 PowerShell 或 pnpm。
 
 `make core-restart` 要求已有匹配宿主、架构及 Debug 模式的完整发行物。它先编译并比较新旧 `--describe` 启动契约，复制并核验新制品摘要，再通过发现 PID、Linux `/proc/<pid>/exe` 和进程用户核对现有持有者。只向当前发行物的 Core 发送 `SIGTERM`；外部目录的实例或无法确认归属的进程不会被终止。旧持有者未能在限定时间内退出时，不替换程序。
 
-同目录暂存及原子改名用于发布新 Core，旧程序保留为独立 `.previous` 文件直到无头服务就绪。新服务启动失败且已安全退出时，恢复并重新启动旧程序；无法安全关闭或恢复时保留备份并明确报告路径。Electron、Vite、TUI 和同步资源不重建。该原生重启入口目前明确支持 Linux，Windows 保持既有托盘重启入口，macOS 不冒称已支持增量重启。
+同目录暂存及原子改名用于发布新 Core 及其 LanceDB 库，旧文件各自保留为独立 `.previous` 文件直到无头服务就绪。新服务启动失败且已安全退出时，恢复并重新启动旧程序；无法安全关闭或恢复时保留备份并明确报告路径。Electron、Vite、TUI 和同步资源不重建。该原生重启入口目前明确支持 Linux，Windows 保持既有托盘重启入口，macOS 不冒称已支持增量重启。
 
 ## Core 原生托盘边界
 
@@ -181,6 +207,11 @@ cargo hakari manage-deps
 cargo hakari verify
 ```
 
+`.config/hakari.toml` 把服务与 `vulcan-lancedb-native` 排除在遍历之外：前者的托盘依赖不得扩散，后者的
+LanceDB 专属特性（arrow 压缩、csv、json、ffi 等）不得统一进工作区。`vulcan-lancedb-native` 及其链接的
+`vulcan-lancedb-contract`、`vulcan-file-ownership` 列在 `final-excludes` 中、不依赖 `workspace-hack`，
+使工作区其他位置的特性变化不改变原生库的构建输入；`cargo hakari manage-deps` 不会把依赖加回。
+
 `workspace-hack` 只能合并兼容的同版本依赖特性；不同主版本或无法安全统一的依赖仍会保留为多个版本。它不能替代 Cargo.lock，也不会把语义上不同的依赖强行改成同一版本。当前生成平台覆盖 Windows x86_64、Linux x86_64、Linux ARM64、macOS x86_64 与 macOS ARM64。
 
 ## 默认资源限制
@@ -217,7 +248,7 @@ cargo test --doc
 | `make test` | 以 nextest `fast` 配置运行全工作区测试，跳过成本来自真实流逝时间、真实 VMM 控制器或完整插件生命周期的测试。 |
 | `make test full` | 运行全部 nextest 测试、`scripts/test-isolated-callbacks.mjs` 中的进程隔离回调测试，以及 `cargo test --doc`。 |
 
-两者都由 `scripts/test-rust.mjs` 执行，并继承 `.config/nextest.toml` 的线程上限与串行组。`fast` 的排除名单只在 `.config/nextest.toml` 的 `[profile.fast]` 中维护；新增长耗时测试时更新该过滤器，并用 `cargo nextest list --profile fast` 核对实际排除结果。合并或发布前执行 `make test full`。
+两者都由 `scripts/test-rust.mjs` 执行，先构建 LanceDB 原生库（见上文），并继承 `.config/nextest.toml` 的线程上限与串行组。`fast` 的排除名单只在 `.config/nextest.toml` 的 `[profile.fast]` 中维护；新增长耗时测试时更新该过滤器，并用 `cargo nextest list --profile fast` 核对实际排除结果。合并或发布前执行 `make test full`。
 
 ### 手动验证夹具
 

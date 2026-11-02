@@ -72,9 +72,12 @@ fi
 # 运行时下载或解压失败必须在耗时的 Cargo 编译前终止。
 node "$ProjectDir/apps/vulcan-code-desktop/node_modules/electron/install.js"
 
-# CargoPackageArguments derives all shipped packages from the same inventory used by Windows and notices.
-# CargoPackageArguments 从 Windows 与声明生成共用的清单派生全部分发包。
-CargoPackageArguments=$(node "$ProjectDir/scripts/shipped-rust-packages.mjs" cargo-args)
+# CargoPackageArguments derives the shipped executables from the same inventory used by Windows and notices.
+# CargoPackageArguments 从 Windows 与声明生成共用的清单派生分发可执行文件。
+CargoPackageArguments=$(node "$ProjectDir/scripts/shipped-rust-packages.mjs" cargo-args binary)
+# CargoLibraryArguments selects the shipped libraries, built in their own invocation so they never take the service's features.
+# CargoLibraryArguments 选择分发库，在独立调用中构建，绝不沾染服务的特性。
+CargoLibraryArguments=$(node "$ProjectDir/scripts/shipped-rust-packages.mjs" cargo-args library)
 
 if [ "$Release" = "1" ]; then
 
@@ -85,9 +88,11 @@ if [ "$Release" = "1" ]; then
     # Split only the fixed -p selectors and Cargo package names emitted by the inventory.
     # 仅拆分清单输出的固定 -p 选择项和 Cargo 包名。
     cargo build --locked $CargoPackageArguments --release
+    cargo build --locked $CargoLibraryArguments --release
 else
     echo "==> Building Vulcan Core debug..."
     cargo build --locked $CargoPackageArguments
+    cargo build --locked $CargoLibraryArguments
 fi
 
 # CargoTargetDir stores Cargo's effective artifact root, including environment and config overrides.
@@ -130,6 +135,9 @@ if [ "$IsWindowsPlatform" = "1" ]; then
 fi
 BuiltJudgeHostPath="$CargoTargetDir/$ProfileName/vulcan-judge-host$ExecutableSuffix"
 BuiltTuiPath="$CargoTargetDir/$ProfileName/vulcan-tui$ExecutableSuffix"
+# BuiltLanceLibraryPath stores the native LanceDB library the service loads from its own directory.
+# BuiltLanceLibraryPath 保存服务从自身目录加载的原生 LanceDB 库。
+BuiltLanceLibraryPath="$CargoTargetDir/$ProfileName/$(node "$ProjectDir/scripts/shipped-rust-packages.mjs" file-name vulcan-lancedb-native)"
 
 # OutputBinDir stores runtime executables beneath the selected distribution root.
 # OutputBinDir 保存选定发行根目录下的运行时可执行文件。
@@ -153,7 +161,7 @@ if [ ! -f "$BuiltTerminalHostPath" ]; then
 fi
 # RequiredBinaryPath checks the current build before packaging can observe any stale output files.
 # RequiredBinaryPath 在打包读取任何旧发行文件之前，检查本轮构建制品。
-for RequiredBinaryPath in "$BuiltJudgeHostPath" "$BuiltTuiPath"; do
+for RequiredBinaryPath in "$BuiltJudgeHostPath" "$BuiltTuiPath" "$BuiltLanceLibraryPath"; do
     if [ ! -f "$RequiredBinaryPath" ]; then
         echo "Built distribution binary was not found: $RequiredBinaryPath" >&2
         exit 1
@@ -167,4 +175,4 @@ if [ "$Release" = "0" ]; then
 fi
 # Stage and validate a complete generation before switching the published directory.
 # 切换正式目录之前，暂存并验证完整一代。
-node "$ProjectDir/scripts/publish-distribution.mjs" "$ProfileName" "$BuiltBinaryPath" "$BuiltTerminalHostPath" "$BuiltJudgeHostPath" "$BuiltTuiPath"
+node "$ProjectDir/scripts/publish-distribution.mjs" "$ProfileName" "$BuiltBinaryPath" "$BuiltTerminalHostPath" "$BuiltJudgeHostPath" "$BuiltTuiPath" "$BuiltLanceLibraryPath"

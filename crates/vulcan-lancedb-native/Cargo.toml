@@ -1,0 +1,48 @@
+[package]
+name = "vulcan-lancedb-native"
+description = "Native LanceDB library with shared per-database reuse, table-level concurrency gates and physical maintenance, loaded by Vulcan Code at run time."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+# The library is loaded at run time, so the host executable neither carries nor relinks LanceDB.
+# 本库在运行时加载，因此宿主可执行文件既不携带也不重新链接 LanceDB。
+[lib]
+crate-type = ["cdylib"]
+
+# This crate deliberately does not inherit workspace lints.
+# 本 crate 刻意不继承工作区 lint。
+#
+# `unsafe_code` is relaxed to "allow" because a `cdylib` must export unmangled C functions, which
+# `forbid` rejects and which cannot be relaxed inside the crate. Scope limit: `src/exports.rs` only —
+# the three `#[unsafe(no_mangle)]` entry points and the `unsafe` blocks that read the request slice,
+# write the two output pointers and rebuild the boxed response for release. Nothing else is
+# authorized. The remaining lint entries are identical to the workspace set.
+#
+# `unsafe_code` 放宽为 "allow"，因为 `cdylib` 必须导出未修饰名称的 C 函数，而 `forbid` 会拒绝它们且无法在
+# crate 内放宽。范围限制：仅 `src/exports.rs`——三个 `#[unsafe(no_mangle)]` 入口，以及读取请求切片、写入两个
+# 输出指针、重建待释放响应盒的 `unsafe` 块。其他位置一律不授权。其余 lint 项与工作区集合完全一致。
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "allow"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unwrap_used = "warn"
+
+[dependencies]
+arrow-array.workspace = true
+arrow-ipc.workspace = true
+arrow-schema.workspace = true
+futures.workspace = true
+lance.workspace = true
+lancedb.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+vulcan-lancedb-contract.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

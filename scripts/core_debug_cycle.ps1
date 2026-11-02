@@ -63,51 +63,74 @@ if ($LASTEXITCODE -ne 0 -or $ExistingDescription.profile -ne 'debug') {
     throw "Existing Core is not a valid Debug executable: $OutputCorePath"
 }
 
-# Invoke-CoreCargoBuild compiles only the service package and returns Cargo's exact executable path.
-# Invoke-CoreCargoBuild 只编译服务包，并返回 Cargo 报告的精确可执行文件路径。
+# LanceLibraryFileName is the native LanceDB library the service loads from its own directory.
+# LanceLibraryFileName 是服务从自身目录加载的原生 LanceDB 库。
+$LanceLibraryFileName = (& node (Join-Path $PSScriptRoot 'shipped-rust-packages.mjs') file-name vulcan-lancedb-native | Out-String).Trim()
+if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the LanceDB library file name.' }
+
+# OutputLibraryPath is the library beside the output Core; it is replaced together with the executable.
+# OutputLibraryPath 是输出 Core 旁的库；它与可执行文件一同替换。
+$OutputLibraryPath = Join-Path (Split-Path $OutputCorePath -Parent) $LanceLibraryFileName
+
+# Invoke-CoreCargoBuild compiles only the service and LanceDB library packages and returns Cargo's exact paths.
+# Invoke-CoreCargoBuild 只编译服务包与 LanceDB 库包，并返回 Cargo 报告的精确路径。
+# The library builds in its own invocation; shipped-rust-packages.mjs `shippedCargoArgs` explains why.
+# 库在独立调用中构建；原因见 shipped-rust-packages.mjs 的 `shippedCargoArgs`。
 # It never updates the shared full-build artifact baseline, whose dependency set includes Electron's terminal host.
 # 它不更新全量构建共用的制品基线，因为该基线还包含 Electron 所需的终端宿主依赖。
 function Invoke-CoreCargoBuild {
-    # BuildState retains the reported binary and terminal success record across pipeline callbacks.
-    # BuildState 在管道回调之间保留 Cargo 报告的二进制路径与终态。
-    $BuildState = @{ executable = $null; finished = $false; protocolValid = $true }
-    & cargo build -p vulcan-code-service --message-format=json | ForEach-Object {
-        # Line is one Cargo JSON message or diagnostic line.
-        # Line 是一条 Cargo JSON 消息或诊断文本。
-        $Line = [string]$_
-        if (-not $Line.StartsWith('{')) {
-            Write-Host $Line
-            return
-        }
-        try {
-            # Message is parsed only from Cargo's declared JSON output.
-            # Message 仅从 Cargo 声明的 JSON 输出中解析。
-            $Message = $Line | ConvertFrom-Json -ErrorAction Stop
-        }
-        catch {
-            $BuildState.protocolValid = $false
-            Write-Host $Line
-            return
-        }
-        switch ($Message.reason) {
-            'compiler-artifact' {
-                if ($Message.target.name -eq 'vulcan-code-service' -and $Message.target.kind -contains 'bin') {
-                    $BuildState.executable = [string]$Message.executable
-                }
+    # BuildState retains the reported binary, library and terminal success record across pipeline callbacks.
+    # BuildState 在管道回调之间保留 Cargo 报告的二进制路径、库路径与终态。
+    $BuildState = @{ executable = $null; library = $null; finished = $false; protocolValid = $true }
+    foreach ($Package in @('vulcan-code-service', 'vulcan-lancedb-native')) {
+        $BuildState.finished = $false
+        & cargo build -p $Package --message-format=json | ForEach-Object {
+            # Line is one Cargo JSON message or diagnostic line.
+            # Line 是一条 Cargo JSON 消息或诊断文本。
+            $Line = [string]$_
+            if (-not $Line.StartsWith('{')) {
+                Write-Host $Line
+                return
             }
-            'compiler-message' { Write-Host $Message.message.rendered }
-            'build-finished' { $BuildState.finished = [bool]$Message.success }
+            try {
+                # Message is parsed only from Cargo's declared JSON output.
+                # Message 仅从 Cargo 声明的 JSON 输出中解析。
+                $Message = $Line | ConvertFrom-Json -ErrorAction Stop
+            }
+            catch {
+                $BuildState.protocolValid = $false
+                Write-Host $Line
+                return
+            }
+            switch ($Message.reason) {
+                'compiler-artifact' {
+                    if ($Message.target.name -eq 'vulcan-code-service' -and $Message.target.kind -contains 'bin') {
+                        $BuildState.executable = [string]$Message.executable
+                    }
+                    if ($Message.target.name -eq 'vulcan_lancedb_native' -and $Message.target.kind -contains 'cdylib') {
+                        $BuildState.library = [string]($Message.filenames | Where-Object { [IO.Path]::GetFileName($_) -eq $LanceLibraryFileName })
+                    }
+                }
+                'compiler-message' { Write-Host $Message.message.rendered }
+                'build-finished' { $BuildState.finished = [bool]$Message.success }
+            }
         }
+        # BuildExitCode must be captured before another native command changes LASTEXITCODE.
+        # BuildExitCode 必须在其他原生命令改变 LASTEXITCODE 前取得。
+        $BuildExitCode = $LASTEXITCODE
+        if ($BuildExitCode -ne 0 -or -not $BuildState.finished) { break }
     }
-    # BuildExitCode must be captured before another native command changes LASTEXITCODE.
-    # BuildExitCode 必须在其他原生命令改变 LASTEXITCODE 前取得。
-    $BuildExitCode = $LASTEXITCODE
     if ($BuildExitCode -ne 0 -or -not $BuildState.finished -or -not $BuildState.protocolValid -or
         [string]::IsNullOrWhiteSpace($BuildState.executable) -or
-        -not (Test-Path -LiteralPath $BuildState.executable -PathType Leaf)) {
-        throw "Core-only Cargo build failed or did not report one valid executable (exit=$BuildExitCode)."
+        -not (Test-Path -LiteralPath $BuildState.executable -PathType Leaf) -or
+        [string]::IsNullOrWhiteSpace($BuildState.library) -or
+        -not (Test-Path -LiteralPath $BuildState.library -PathType Leaf)) {
+        throw "Core-only Cargo build failed or did not report one valid executable and LanceDB library (exit=$BuildExitCode)."
     }
-    return [IO.Path]::GetFullPath($BuildState.executable)
+    return [pscustomobject]@{
+        Core = [IO.Path]::GetFullPath($BuildState.executable)
+        Library = [IO.Path]::GetFullPath($BuildState.library)
+    }
 }
 
 # Get-RunningOutputCore returns only processes executing this layout's exact Core binary.
@@ -170,7 +193,9 @@ function Assert-NoForeignCoreOwner {
 
 # BuiltCorePath is the fresh Cargo artifact; Core-only build does not publish it while an owner is running.
 # BuiltCorePath 是最新 Cargo 制品；仅构建模式不会在持有者运行时发布它。
-$BuiltCorePath = Invoke-CoreCargoBuild
+$BuiltArtifacts = Invoke-CoreCargoBuild
+$BuiltCorePath = $BuiltArtifacts.Core
+$BuiltLibraryPath = $BuiltArtifacts.Library
 
 # BuiltDescription confirms the new binary still implements the GUI's frozen launch protocol.
 # BuiltDescription 确认新二进制仍实现 GUI 已冻结的启动协议。
@@ -218,18 +243,61 @@ $BackupPath = "$OutputCorePath.$ReplacementId.previous"
 # FailedPath temporarily retains the failed replacement while restoring the previous Core.
 # FailedPath 在恢复旧 Core 时暂存失败的新制品。
 $FailedPath = "$OutputCorePath.$ReplacementId.failed"
-Copy-Item -LiteralPath $BuiltCorePath -Destination $StagedPath -ErrorAction Stop
-if ((Get-FileHash -LiteralPath $BuiltCorePath -Algorithm SHA256).Hash -ne
-    (Get-FileHash -LiteralPath $StagedPath -Algorithm SHA256).Hash) {
-    Remove-Item -LiteralPath $StagedPath -Force
-    throw 'The staged Core binary differs from the Cargo artifact; output was not replaced.'
+
+# The library uses the same staging, rollback and failure paths beside its own output file.
+# 库在自身输出文件旁使用相同的暂存、回退与失败路径。
+$LibraryStagedPath = "$OutputLibraryPath.$ReplacementId.next"
+$LibraryBackupPath = "$OutputLibraryPath.$ReplacementId.previous"
+$LibraryFailedPath = "$OutputLibraryPath.$ReplacementId.failed"
+
+# LibraryExisted is false only for a distribution published before the library split; restoring it removes the new library.
+# LibraryExisted 仅对库拆分之前发布的发行物为 false；恢复时删除新库。
+$LibraryExisted = Test-Path -LiteralPath $OutputLibraryPath -PathType Leaf
+
+# Restore-PreviousCore puts back the previous executable and library once no new owner holds them.
+# Restore-PreviousCore 在没有新持有者占用时放回旧可执行文件与旧库。
+function Restore-PreviousCore {
+    [IO.File]::Replace($BackupPath, $OutputCorePath, $FailedPath, $true)
+    Remove-Item -LiteralPath $FailedPath -Force
+    if ($LibraryExisted) {
+        [IO.File]::Replace($LibraryBackupPath, $OutputLibraryPath, $LibraryFailedPath, $true)
+        Remove-Item -LiteralPath $LibraryFailedPath -Force
+    }
+    else {
+        Remove-Item -LiteralPath $OutputLibraryPath -Force
+    }
 }
+
 try {
+    foreach ($Pair in @(@($BuiltCorePath, $StagedPath), @($BuiltLibraryPath, $LibraryStagedPath))) {
+        Copy-Item -LiteralPath $Pair[0] -Destination $Pair[1] -ErrorAction Stop
+        if ((Get-FileHash -LiteralPath $Pair[0] -Algorithm SHA256).Hash -ne
+            (Get-FileHash -LiteralPath $Pair[1] -Algorithm SHA256).Hash) {
+            throw "The staged $([IO.Path]::GetFileName($Pair[0])) differs from the Cargo artifact; output was not replaced."
+        }
+    }
     [IO.File]::Replace($StagedPath, $OutputCorePath, $BackupPath, $true)
+    try {
+        if ($LibraryExisted) {
+            [IO.File]::Replace($LibraryStagedPath, $OutputLibraryPath, $LibraryBackupPath, $true)
+        }
+        else {
+            Move-Item -LiteralPath $LibraryStagedPath -Destination $OutputLibraryPath -ErrorAction Stop
+        }
+    }
+    catch {
+        # The executable alone was replaced; put it back so the pair never mixes generations.
+        # 只替换了可执行文件；将其放回，避免两者混用不同代次。
+        [IO.File]::Replace($BackupPath, $OutputCorePath, $FailedPath, $true)
+        Remove-Item -LiteralPath $FailedPath -Force
+        throw
+    }
 }
 finally {
-    if (Test-Path -LiteralPath $StagedPath -PathType Leaf) {
-        Remove-Item -LiteralPath $StagedPath -Force
+    foreach ($Staged in @($StagedPath, $LibraryStagedPath)) {
+        if (Test-Path -LiteralPath $Staged -PathType Leaf) {
+            Remove-Item -LiteralPath $Staged -Force
+        }
     }
 }
 
@@ -251,8 +319,7 @@ try {
 catch {
     # No child was started, so restoring the previous binary cannot interrupt a live owner.
     # 子进程未能启动，因此恢复旧二进制不会打断活动持有者。
-    [IO.File]::Replace($BackupPath, $OutputCorePath, $FailedPath, $true)
-    Remove-Item -LiteralPath $FailedPath -Force
+    Restore-PreviousCore
     throw
 }
 finally {
@@ -302,12 +369,14 @@ if (-not $Ready) {
     if ($StartedCore.HasExited) {
         # A failed new process no longer holds the file; restore the previous known startup artifact.
         # 新进程失败退出后不再持有文件；恢复此前已知可启动的制品。
-        [IO.File]::Replace($BackupPath, $OutputCorePath, $FailedPath, $true)
-        Remove-Item -LiteralPath $FailedPath -Force
+        Restore-PreviousCore
         throw "New Debug Core exited before becoming ready; the previous binary was restored (exit=$($StartedCore.ExitCode)). Startup report: $StartupReportPath"
     }
-    throw "New Debug Core did not confirm both HTTP and tray readiness. Previous binary retained at $BackupPath. Inspect the Debug console and startup report: $StartupReportPath"
+    throw "New Debug Core did not confirm both HTTP and tray readiness. Previous binary retained at $BackupPath (library: $LibraryBackupPath, when it existed). Inspect the Debug console and startup report: $StartupReportPath"
 }
 
 Remove-Item -LiteralPath $BackupPath -Force
+if ($LibraryExisted) {
+    Remove-Item -LiteralPath $LibraryBackupPath -Force
+}
 Write-Host "Debug Core and tray ready: pid=$($StartedCore.Id), url=$($Discovery.baseUrl). Debug console opened. Electron GUI and Vite were not restarted."

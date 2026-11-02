@@ -226,9 +226,15 @@ jobs:
           node scripts/managed-node.mjs output
       # This is the actual first regression target, not a second artificial LanceDB build with different features.
       # 预编译真实的首个回归目标，不以不同特性额外构建一份人工 LanceDB 目标。
+      # LanceDB now compiles only into the native library that database tests load beside their binaries.
+      # LanceDB 现在只编译进数据库测试在其二进制旁加载的原生库。
       - name: Compile database tests and heavy dependencies
         if: steps.rust-cache.outputs.cache-hit != 'true'
-        run: cargo test --locked -p vulcan-workspace-store --lib --no-run
+        shell: pwsh
+        run: |
+          cargo build --locked -p vulcan-lancedb-native
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p vulcan-workspace-store --lib --no-run
       # Save before later compilation/tests so cancellation or a downstream failure does not erase this expensive stage.
       # 在后续编译、测试前保存，避免取消或下游失败丢失这一昂贵阶段。
       - name: Save database dependency checkpoint
@@ -265,8 +271,14 @@ jobs:
         with:
           path: ${{ steps.rust-identity.outputs.paths }}
           key: ${{ steps.rust-cache.outputs.cache-primary-key }}
+      # A restored cache may predate the library, so build it unconditionally; it is a no-op when current.
+      # 恢复的缓存可能早于该库，因此无条件构建；已是最新时不做任何事。
       - name: Database boundary regression tests
-        run: cargo test --locked -p vulcan-workspace-store --lib local_sql -- --test-threads=1
+        shell: pwsh
+        run: |
+          cargo build --locked -p vulcan-lancedb-native
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p vulcan-workspace-store --lib local_sql -- --test-threads=1
       - name: Isolated offline LuaSkills callback regressions
         run: node scripts/test-isolated-callbacks.mjs
       # Check the full Rust-derived manifest contract and explicit authoring boundaries.

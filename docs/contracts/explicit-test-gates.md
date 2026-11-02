@@ -47,7 +47,7 @@ cargo nextest run --locked --lib -p <crate> --run-ignored only --test-threads=1 
 
 | crate | 测试 | 前置条件 |
 | --- | --- | --- |
-| vulcan-lancedb-engine | `performance_lancedb_operations_report_p50_p95` | 显式性能测量 |
+| vulcan-lancedb-native | `performance_lancedb_operations_report_p50_p95` | 显式性能测量 |
 | vulcan-sqlite-engine | `performance_batch_write_and_query_stream_report_p50_p95`、`performance_concurrent_reads_report_p50_p95`、`performance_connection_open_cost_breakdown`、`performance_fts_search_reports_p50_p95` | 显式性能测量 |
 | vulcan-workspace-store | `shared_storage_scale_baseline`、`performance_active_tail_sizes_report_p50_p95`、`performance_completed_turn_phase_costs` | 完整性能矩阵或 Release 基线 |
 | vulcan-agent-runtime | `vm_pool_startup_resource_probe` | `VULCAN_VM_PROBE_PROFILE` 选择 `old` 或 `new`，分别使用独立进程 |

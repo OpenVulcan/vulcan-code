@@ -107,6 +107,18 @@ pub enum LanceDbEngineError {
         /// 内部失败的可读描述。
         detail: String,
     },
+
+    /// The native LanceDB library could not be loaded or speaks another protocol version.
+    /// 无法加载原生 LanceDB 库，或其协议版本不同。
+    #[error("LanceDB native library is unavailable at {path}: {detail}")]
+    LibraryUnavailable {
+        /// Library path the client resolved.
+        /// 客户端解析出的库路径。
+        path: PathBuf,
+        /// Human-readable load or version failure description.
+        /// 加载或版本失败的可读描述。
+        detail: String,
+    },
 }
 
 impl LanceDbEngineError {

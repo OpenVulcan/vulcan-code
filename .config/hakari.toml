@@ -26,8 +26,19 @@ platforms = [
 
 # The service owns optional native tray dependencies; headless libraries must not inherit GUI dependencies.
 # 服务持有可选原生托盘依赖，无界面库不得继承 GUI 依赖。
+# The native LanceDB library is loaded at run time; its LanceDB-only features (arrow compression, csv, json,
+# ffi) must not be unified into the workspace, and workspace changes must not alter its build inputs.
+# 原生 LanceDB 库在运行时加载；其 LanceDB 专属特性（arrow 压缩、csv、json、ffi）不得统一进工作区，
+# 工作区的变化也不得改变其构建输入。
 [traversal-excludes]
-workspace-members = ["vulcan-code-service"]
+workspace-members = ["vulcan-code-service", "vulcan-lancedb-native"]
+
+# The native library and the workspace crates it links never depend on workspace-hack, so `cargo hakari
+# manage-deps` must not add it back; otherwise the library would still reach workspace-hack transitively.
+# 原生库及其链接的工作区 crate 从不依赖 workspace-hack，因此 `cargo hakari manage-deps` 不得将其加回；
+# 否则原生库仍会间接依赖 workspace-hack。
+[final-excludes]
+workspace-members = ["vulcan-lancedb-native", "vulcan-lancedb-contract", "vulcan-file-ownership"]
 
 # Write out exact versions rather than a semver range. (Defaults to false.)
 # exact-versions = true

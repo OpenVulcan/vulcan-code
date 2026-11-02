@@ -100,7 +100,7 @@ function Assert-RustThirdPartyNoticeScope {
     # filters targets per edge, which keeps it a superset of the generated output.
     # 工作区扫描也会看到非分发成员；仅由它们或开发依赖边引入的 crate 不得出现。
     # 构建依赖边与 about.toml 一致保持允许；cargo-about 逐边过滤目标平台，因此允许集合覆盖全部目标，以保持为生成输出的超集。
-    $TreeArguments = @('cargo', 'tree', '--locked', '-e', 'normal,build', '--target', 'all', '--prefix', 'none', '--format', '{p}') + @(Get-ShippedRustPackageArguments)
+    $TreeArguments = @('cargo', 'tree', '--locked', '-e', 'normal,build', '--target', 'all', '--prefix', 'none', '--format', '{p}') + @(Get-ShippedRustPackageArguments -Kind binary) + @(Get-ShippedRustPackageArguments -Kind library)
     $TreeOutput = & $RtkPath @TreeArguments
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE

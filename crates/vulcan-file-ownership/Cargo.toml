@@ -13,7 +13,6 @@ workspace = true
 [dependencies]
 fs4.workspace = true
 thiserror.workspace = true
-workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]
 tempfile.workspace = true

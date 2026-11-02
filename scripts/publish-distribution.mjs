@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateRuntimeLayoutIdentity, verifyPackagedLayout } from './desktop-runtime.mjs';
 import { publishPreparedDirectory, recoverPublication } from './directory-publication.mjs';
-import { shippedBinaryNames } from './shipped-rust-packages.mjs';
+import { shippedArtifactNames } from './shipped-rust-packages.mjs';
 
 // acquirePublicationGuard serializes publishers; a dead process can be reclaimed under a separate recovery lock.
 // acquirePublicationGuard 将发布串行化；退出进程的所有权可在独立恢复锁下回收。
@@ -65,10 +65,10 @@ export async function publishDistribution(repository, destination, binaryPaths, 
   if (!['debug', 'release'].includes(profile)) throw new Error('Expected debug or release profile.');
   // expected and supplied prevent stale output files from masking a missing or duplicated current Cargo artifact.
   // expected 与 supplied 防止旧发行文件掩盖当前 Cargo 制品的缺失或重复。
-  const expected = shippedBinaryNames().sort();
+  const expected = shippedArtifactNames().sort();
   const supplied = binaryPaths.map(binary => path.basename(binary)).sort();
   if (expected.length !== supplied.length || expected.some((name, index) => name !== supplied[index])) {
-    throw new Error('Publication requires exactly the complete shipped Rust executable inventory.');
+    throw new Error('Publication requires exactly the complete shipped Rust artifact inventory.');
   }
   // targetRoot is the only staging boundary accepted by the desktop packager.
   // targetRoot 是桌面打包器接受的唯一暂存边界。

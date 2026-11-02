@@ -52,7 +52,9 @@ members = [
     "crates/vulcan-provider-adapters",
     "crates/vulcan-provider-manifest-cli",
     "crates/vulcan-sqlite-engine",
+    "crates/vulcan-lancedb-contract",
     "crates/vulcan-lancedb-engine",
+    "crates/vulcan-lancedb-native",
     "workspace-hack",
 ]
 exclude = [
@@ -123,11 +125,16 @@ vulcan-provider-adapters = { path = "crates/vulcan-provider-adapters" }
 # In-process database engines migrated from vldb-sqlite and vldb-lancedb.
 # 从 vldb-sqlite 与 vldb-lancedb 迁入的进程内数据库引擎。
 vulcan-sqlite-engine = { path = "crates/vulcan-sqlite-engine" }
+vulcan-lancedb-contract = { path = "crates/vulcan-lancedb-contract" }
 vulcan-lancedb-engine = { path = "crates/vulcan-lancedb-engine" }
 # Unified database dependency generation. These are declared once here; the two engine crates
 # inherit them and must not pin an alternative version locally.
 # 统一数据库依赖代际：只在此声明一次，两个引擎 crate 继承声明，不得自行固定其他版本。
-arrow = { version = "58.1.0", features = ["ipc"] }
+# vulcan-sqlite-engine, the only `arrow` user, needs arrays, record batches and IPC streams; arrow's default
+# csv and json readers would otherwise be compiled into the service.
+# vulcan-sqlite-engine 是唯一的 `arrow` 使用者，只需要数组、记录批次与 IPC 流；否则 arrow 默认的 csv 与 json
+# 读写器会被编译进服务。
+arrow = { version = "58.1.0", default-features = false, features = ["ipc"] }
 arrow-array = "58.1.0"
 arrow-ipc = "58.1.0"
 arrow-schema = "58.1.0"
@@ -140,6 +147,7 @@ unicode-normalization = "0.1.25"
 # 只打开本地路径，但 lancedb 0.38.0 在未启用 `remote` 时无法编译：其 job 模块引用了仅在该
 # 特性下存在的 `Error::Http` 变体。待上游为该代码加上门控后移除；它同时引入了重复的 axum 0.7 依赖栈。
 lancedb = { version = "0.38.0", features = ["remote"] }
+libloading = "0.9.0"
 # The native compaction planner is reachable only through lance itself; it stays on the exact
 # generation lancedb pins and adds no features of its own.
 # 原生整理计划器只能经由 lance 本身访问；它保持 lancedb 固定的精确代际，且不额外启用任何特性。

@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { publishPreparedDirectory, recoverPublication } from './directory-publication.mjs';
 import { acquirePublicationGuard, publishDistribution } from './publish-distribution.mjs';
-import { shippedBinaryNames } from './shipped-rust-packages.mjs';
+import { shippedArtifactNames } from './shipped-rust-packages.mjs';
 
 // withFixture provides isolated old/new generations to action and always removes its own temporary root.
 // withFixture 向 action 提供隔离的新旧版本，并始终移除自身临时根目录。
@@ -53,7 +53,7 @@ test('validation failure preserves the old output', async () => withFixture(asyn
 // A real preparation-copy failure cannot replace the published files or leave an active guard.
 // 真实准备复制失败不能替换正式文件，也不能遗留活跃保护目录。
 test('missing compiled artifact fails during staging without changing output', async () => withFixture(async ({ root, destination }) => {
-  await assert.rejects(publishDistribution(root, destination, shippedBinaryNames().map(name => path.join(root, name)), 'debug'), { code: 'ENOENT' });
+  await assert.rejects(publishDistribution(root, destination, shippedArtifactNames().map(name => path.join(root, name)), 'debug'), { code: 'ENOENT' });
   assert.equal(await readFile(path.join(destination, 'version'), 'utf8'), 'old');
   assert.deepEqual(await readdir(path.join(root, 'target')), []);
   await assert.rejects(readFile(path.join(destination + '.publishing', 'owner.json')), { code: 'ENOENT' });
