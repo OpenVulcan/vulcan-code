@@ -113,8 +113,22 @@ pub(super) async fn handle_parent_event(
         let mailbox = terminal_mailbox
             .as_ref()
             .ok_or("Child terminal feedback is missing.")?;
+        let completed = mailbox.kind == vulcan_session_boundary::SubagentMailboxEventKind::Completed
+            || non_success::child_durably_completed(child_handle, task_id, execution_id)?;
+        if completed && mailbox.kind != vulcan_session_boundary::SubagentMailboxEventKind::Completed
+        {
+            // Keep the host failure visible: its text is otherwise only on the runtime's stderr.
+            // 保留宿主失败的可见性：否则其文本只存在于运行时 stderr。
+            tracing::warn!(
+                task_id = %task_id,
+                execution_id,
+                kind = ?mailbox.kind,
+                error = mailbox.payload.get("error_text").and_then(serde_json::Value::as_str),
+                "Child feedback is non-success after a durable completed turn; returning the durable result"
+            );
+        }
         Some(
-            if mailbox.kind == vulcan_session_boundary::SubagentMailboxEventKind::Completed {
+            if completed {
                 append_exact_v1_subagent_return(
                     state,
                     parent_session_id,

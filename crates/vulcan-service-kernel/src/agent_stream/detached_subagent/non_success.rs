@@ -12,6 +12,29 @@ use vulcan_session_core::v1::collaboration::{
     CollaborationRunControl, SetRunControlInput,
 };
 use vulcan_session_core::v1::event::{TurnOutcome, UserInputSource};
+use vulcan_session_core::v1::ids::SubagentTaskId;
+
+/// Returns whether the durable child already closed this execution as a completed business turn.
+/// 返回可靠子会话是否已将此执行闭合为已完成业务回合。
+/// The durable child is the authority, as in startup recovery: a host failure raised after that
+/// closure (for example while recording the outcome) cannot relabel it as non-success.
+/// 与启动恢复一致，以可靠子会话为权威：闭合之后的宿主失败（例如记录结果时）不能将其改标为非成功。
+pub(super) fn child_durably_completed(
+    child: &SessionHandle,
+    child_id: SessionId,
+    execution_id: &str,
+) -> Result<bool, String> {
+    let execution =
+        CollaborationExecutionId::try_new(execution_id).map_err(|error| error.to_string())?;
+    let task = SubagentTaskId::try_new(child_id.to_string()).map_err(|error| error.to_string())?;
+    child
+        .read_full_durable(|document| {
+            document.recover_completed_child_return_request(&execution, task)
+        })
+        .map_err(|error| error.to_string())?
+        .map(|request| request.is_some())
+        .map_err(|error| error.to_string())
+}
 
 /// Reads the exact host-produced mailbox and rejects another execution or nonterminal event.
 /// 读取精确宿主邮箱，拒绝其他执行或非终态事件。
