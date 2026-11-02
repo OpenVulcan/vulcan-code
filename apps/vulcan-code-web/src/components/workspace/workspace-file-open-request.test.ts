@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findRequestedFileEntry, markdownLinkFileTarget, parseFilePathMention, resolveWorkspaceFileTarget } from "./workspace-file-open-request";
+import { findRequestedFileEntry, markdownLinkFileTarget, opensAsWebPage, parseFilePathMention, resolveWorkspaceFileTarget } from "./workspace-file-open-request";
 import { emptyWorkspaceContextTabState, focusWorkspaceFilesTab, openWorkspaceContextTab } from "./workspace-shell/context-tabs";
 import type { WorkspaceFileDirectoryListing, WorkspaceFileEntrySummary } from "@/types";
 
@@ -84,5 +84,12 @@ describe("focusWorkspaceFilesTab", () => {
 
     const opened = focusWorkspaceFilesTab(openWorkspaceContextTab(emptyWorkspaceContextTabState(), "review", t), t);
     expect(opened.tabs.find((tab) => tab.id === opened.activeTabId)?.kind).toBe("files");
+  });
+});
+
+describe("opensAsWebPage", () => {
+  it("picks web pages, with or without lines or fragments, and leaves other files alone", () => {
+    expect(["out/a.html", "a.HTM:3-5", "D:/x/b.xhtml#top", "c.html:4:2"].every(opensAsWebPage)).toBe(true);
+    expect(["notes.txt", "src/app.ts:12", "page.html.md", "html/readme"].some(opensAsWebPage)).toBe(false);
   });
 });

@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
 import { WorkspaceFileOpenContext } from "@/components/workspace/workspace-file-open-request";
-import { MarkdownMessage } from "./conversation-markdown";
+import { MarkdownImageWorkspacePathProvider, MarkdownMessage } from "./conversation-markdown";
 
 let host: HTMLDivElement;
 let root: Root;
@@ -30,4 +30,22 @@ it("turns inline file paths into file panel controls only where the workbench of
 
   await act(async () => root.render(<I18nProvider initialLocale="en-US"><MarkdownMessage content={content} eager /></I18nProvider>));
   expect(host.querySelectorAll("code[role=button]")).toHaveLength(0);
+});
+
+it("keeps web page references as file links for the built-in browser and other files for the files panel", async () => {
+  const open = vi.fn();
+  const pages = "Open [report](out/report.html), `out/page.htm` or [notes](notes.txt).";
+  await act(async () => root.render(
+    <I18nProvider initialLocale="en-US">
+      <WorkspaceFileOpenContext.Provider value={open}>
+        <MarkdownImageWorkspacePathProvider value="D:/repo"><MarkdownMessage content={pages} eager /></MarkdownImageWorkspacePathProvider>
+      </WorkspaceFileOpenContext.Provider>
+    </I18nProvider>,
+  ));
+  expect(Array.from(host.querySelectorAll("a")).map((link) => link.getAttribute("href")))
+    .toEqual(["file:///D:/repo/out/report.html", "file:///D:/repo/out/page.htm"]);
+  const buttons = Array.from(host.querySelectorAll<HTMLButtonElement>("button.vk-md-file-link"));
+  expect(buttons).toHaveLength(1);
+  await act(async () => buttons[0].click());
+  expect(open).toHaveBeenCalledWith("notes.txt", null);
 });

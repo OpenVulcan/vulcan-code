@@ -5,8 +5,9 @@ import { MediaPathContextMenu } from "@/components/media/media-path-context-menu
 import { formatMessage, useI18n } from "@/i18n";
 import "@/ui-kit/styles/answer.css";
 import type { AnswerCodeSnapshotState } from "@/components/conversation/conversation-markdown";
-import { parseFilePathMention, type WorkspaceFileOpener } from "@/components/workspace/workspace-file-open-request";
+import { markdownLinkFileTarget, opensAsWebPage, parseFilePathMention, type WorkspaceFileOpener } from "@/components/workspace/workspace-file-open-request";
 import { AnswerChartView, formatChartNumber } from "./answer-chart";
+import { answerLocationPath } from "./answer-file-location";
 import { AnswerCodeView } from "./answer-code";
 import { parseAnswerComponent, type AnswerComponent, type AnswerSeverity, type AnswerTonedText, type AnswerTreeNode } from "./answer-component-model";
 import { AnswerFrame, AnswerFrameActionContext, CopyAction, type AnswerCopyHost } from "./answer-frame";
@@ -365,7 +366,11 @@ function LineDelta({ added, removed }: { added?: number; removed?: number }) {
 // 以路径标签显示的工作区文件引用；仅当宿主可解析时才成为链接。
 function FileLink({ host, location }: { host: AnswerComponentHost; location: string }) {
   const { t } = useI18n();
-  const mention = host.openFile ? parseFilePathMention(location) : null;
+  // A bare root file name such as `notes.txt` is still a file in a location cell; web pages stay links for the
+  // built-in browser.
+  // 位置单元格中的项目根目录文件名（如 `notes.txt`）同样是文件；网页保持为链接，交给内置浏览器。
+  const mention = host.openFile && answerLocationPath(location) !== null && !opensAsWebPage(location)
+    ? parseFilePathMention(location) ?? markdownLinkFileTarget(location.trim().replace(/(:\d+):\d+$/u, "$1")) : null;
   if (mention && host.openFile) {
     const open = host.openFile;
     const show = () => open(mention.path, mention.lines);

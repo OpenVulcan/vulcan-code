@@ -1,5 +1,6 @@
 import React from "react";
 import { FileTypeIcon, resolveFileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
+import { opensAsWebPage } from "@/components/workspace/workspace-file-open-request";
 import { ANSWER_CODE_MAX_EXCERPTS } from "@/generated/protocol-limits";
 import { formatMessage, useI18n } from "@/i18n";
 import type { AnswerCodeUnavailableReason } from "@/service/conversation-event-window-store";
@@ -47,7 +48,7 @@ function AnswerCodeExcerptView({ excerpt, host }: { excerpt: AnswerCodeExcerpt; 
   const header = (
     <span className="vk-a-code-title" title={text === null ? excerpt.path : `${excerpt.path} · ${t("answerComponents.code.snapshot")}`}>
       <FileTypeIcon icon={icon} />
-      {host.openFile ? (
+      {host.openFile && !opensAsWebPage(excerpt.path) ? (
         <button
           onClick={() => host.openFile?.(excerpt.path, { start: excerpt.startLine, end: lastLine })}
           title={t("workspaceFiles.showInFilesPanel")}

@@ -195,4 +195,27 @@ describe("file references inside the workbench", () => {
     await act(async () => root.unmount());
     host.remove();
   });
+
+  it("show root files in the files panel and keep web pages as file links", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const open = vi.fn();
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    await act(async () => root.render(
+      <WorkspaceFileOpenContext.Provider value={open}>
+        <MarkdownImageWorkspacePathProvider value="D:/repo">
+          <MarkdownMessage content={"```ui-files\nnotes.txt | +2 | Log\nout/report.html | new | Page\n```"} eager />
+        </MarkdownImageWorkspacePathProvider>
+      </WorkspaceFileOpenContext.Provider>,
+    ));
+    for (const deadline = Date.now() + 5000; Date.now() < deadline && !host.querySelector(".vk-a-path");) {
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 10)));
+    }
+    expect(host.querySelector("a.vk-a-path")?.getAttribute("href")).toBe("file:///D:/repo/out/report.html");
+    await act(async () => host.querySelector<HTMLElement>("code.vk-a-path[role='button']")?.click());
+    expect(open).toHaveBeenLastCalledWith("notes.txt", null);
+    await act(async () => root.unmount());
+    host.remove();
+  });
 });

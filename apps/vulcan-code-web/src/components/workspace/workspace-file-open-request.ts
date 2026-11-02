@@ -162,6 +162,14 @@ export function parseFilePathMention(text: string): { path: string; lines: Works
   return { path: match[1], lines: start !== null && end !== null && start > 0 && end >= start ? { start, end } : null };
 }
 
+// opensAsWebPage tells whether a file reference names a page to view rendered rather than as source: such references
+// stay file links, which the desktop routes to the built-in browser, instead of showing the file in the files panel.
+// opensAsWebPage 判断文件引用是否指向应渲染查看而非查看源码的网页：此类引用保持为文件链接，由桌面交给内置浏览器，
+// 而不是在文件面板中显示。
+export function opensAsWebPage(path: string): boolean {
+  return /\.(?:html?|xhtml)$/i.test(path.replace(/[?#].*$/, "").replace(/:\d+(?:[-–:]\d+)?$/, ""));
+}
+
 // TOP_LEVEL_FILE_LINE_LINK matches a link to a file in the project root with a line suffix, such as "make.ps1:3-5",
 // whose name before the colon reads like a URL scheme.
 // TOP_LEVEL_FILE_LINE_LINK 匹配带行后缀的项目根目录文件链接（如 "make.ps1:3-5"），其冒号前的名称看起来像 URL 协议。

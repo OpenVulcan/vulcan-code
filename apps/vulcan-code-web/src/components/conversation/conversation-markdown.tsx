@@ -29,6 +29,7 @@ import {
 import { useI18n } from "@/i18n";
 import {
   markdownLinkFileTarget,
+  opensAsWebPage,
   parseFilePathMention,
   TOP_LEVEL_FILE_LINE_LINK,
   useWorkspaceFileOpener,
@@ -328,12 +329,17 @@ function MarkdownContentRenderer(props: {
   const openFile = useWorkspaceFileOpener();
   const components = React.useMemo(() => ({
     a: ({ children, href }: { children?: React.ReactNode; href?: string }) => {
-      // Links to project files show the file in the files panel instead of opening a browser tab.
-      // 指向项目文件的链接在文件面板中显示该文件，而不是打开浏览器标签页。
+      // Links to project files show the file in the files panel instead of opening a browser tab; links to web pages
+      // become file URLs so the desktop opens them in the built-in browser.
+      // 指向项目文件的链接在文件面板中显示该文件，而不是打开浏览器标签页；指向网页的链接转为文件 URL，由桌面在内置
+      // 浏览器中打开。
       const file = openFile && href ? markdownLinkFileTarget(href) : null;
-      if (file && openFile) return <MarkdownFileLink lines={file.lines} open={openFile} path={file.path}>{children}</MarkdownFileLink>;
+      const pageHref = file && opensAsWebPage(file.path) ? answerFileHref(file.path, props.workspacePath) : null;
+      if (file && openFile && !pageHref) {
+        return <MarkdownFileLink lines={file.lines} open={openFile} path={file.path}>{children}</MarkdownFileLink>;
+      }
       return (
-        <a href={href} rel="noreferrer" target="_blank">
+        <a href={pageHref ?? href} rel="noreferrer" target="_blank">
           {href ? <Globe aria-hidden="true" className="vk-md-link-icon" /> : null}{children}
         </a>
       );
@@ -350,6 +356,8 @@ function MarkdownContentRenderer(props: {
       }
       const inline = !className;
       const mention = inline && openFile && typeof children === "string" ? parseFilePathMention(children) : null;
+      const pageHref = mention && opensAsWebPage(mention.path) ? answerFileHref(mention.path, props.workspacePath) : null;
+      if (pageHref) return <a href={pageHref} rel="noreferrer" target="_blank"><code className="vk-md-code">{children}</code></a>;
       if (mention && openFile) return <MarkdownFilePath lines={mention.lines} open={openFile} path={mention.path} text={children as string} />;
       return inline ? <code className="vk-md-code">{children}</code> : <code className={className}>{children}</code>;
     },
