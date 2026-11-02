@@ -187,11 +187,6 @@ export function groupVisibleProcessBodyEntries(
   return entries;
 }
 
-// BOUNDED_BODY_FOLLOW_SLACK_PX is how close to its bottom a bounded tool body must sit to keep following
-// new cards; a reader who scrolled further up inside it keeps that position.
-// BOUNDED_BODY_FOLLOW_SLACK_PX 是限高工具正文距底部多近才继续跟随新卡片；在其中向上滚得更远的阅读者保持原位。
-const BOUNDED_BODY_FOLLOW_SLACK_PX = 8;
-
 // TOOL_SEQUENCE_SWAP_MS is the duration of the push-up animation when one card replaces another in a
 // folded run; the stylesheet reads it through --vk-tool-swap.
 // TOOL_SEQUENCE_SWAP_MS 是折叠序列中一张卡片替换另一张时上推动画的时长；样式表通过 --vk-tool-swap 读取。
@@ -234,43 +229,6 @@ function useToolSequenceHighWaterFloor(
       body.style.minHeight = "";
     };
   }, [active, bodyRef, resetKey]);
-}
-
-// useBoundedBodyFollow keeps a height-limited tool body pinned to its newest card while it was already at
-// its bottom, so a growing run shows the running tool instead of the first ones.
-// useBoundedBodyFollow 在限高工具正文原本已位于底部时让其贴住最新卡片，使增长中的序列显示运行中的工具而不是最早的那些。
-// Parameters: bodyRef is the bounded viewport, shownItems are the rows it renders. Returns nothing.
-// 参数：bodyRef 是限高视口，shownItems 是其渲染的记录。无返回值。
-function useBoundedBodyFollow(
-  bodyRef: React.RefObject<HTMLDivElement | null>,
-  shownItems: readonly ConversationRenderItem[],
-): void {
-  // pinnedRef records whether the body sat at its bottom before the latest change.
-  // pinnedRef 记录正文在最近一次变化前是否位于底部。
-  const pinnedRef = React.useRef(true);
-  React.useLayoutEffect(() => {
-    const body = bodyRef.current;
-    if (!body) return;
-    const onScroll = () => {
-      pinnedRef.current = body.scrollHeight - body.scrollTop - body.clientHeight <= BOUNDED_BODY_FOLLOW_SLACK_PX;
-    };
-    body.addEventListener("scroll", onScroll, { passive: true });
-    return () => body.removeEventListener("scroll", onScroll);
-  }, [bodyRef]);
-  React.useLayoutEffect(() => {
-    const body = bodyRef.current;
-    if (!body || typeof ResizeObserver === "undefined") return;
-    // Card content keeps growing after mount (streamed output), so follow every size change, not only new rows.
-    // 卡片挂载后内容仍会增长（流式输出），因此跟随每次尺寸变化，而不只是新增记录。
-    const follow = () => {
-      if (pinnedRef.current && body.scrollHeight > body.clientHeight) body.scrollTop = body.scrollHeight;
-    };
-    follow();
-    const observer = new ResizeObserver(follow);
-    for (const child of body.children) observer.observe(child);
-    observer.observe(body);
-    return () => observer.disconnect();
-  }, [bodyRef, shownItems]);
 }
 
 // ConversationToolSequenceGroup renders one pure display-only fold for consecutive tool rows.
@@ -339,8 +297,8 @@ export function ConversationToolSequenceGroup(props: {
   // sectionRef locates this group's transcript when announcing an automatic fold.
   // sectionRef 用于在通告自动折叠时定位本分组所属的转录。
   const sectionRef = React.useRef<HTMLElement | null>(null);
-  // bodyRef is the bounded scroll viewport shared by every group state.
-  // bodyRef 是所有分组状态共用的限高滚动视口。
+  // bodyRef is the body, a bounded scroll viewport only while folded.
+  // bodyRef 是正文，仅在折叠时为限高滚动视口。
   const bodyRef = React.useRef<HTMLDivElement | null>(null);
   // toggledRef marks a commit caused by the user's own toggle, which is not an automatic fold.
   // toggledRef 标记由用户自己切换引起的提交，它不属于自动折叠。
@@ -391,7 +349,6 @@ export function ConversationToolSequenceGroup(props: {
     const timer = window.setTimeout(() => setLeaving(null), TOOL_SEQUENCE_SWAP_MS);
     return () => window.clearTimeout(timer);
   }, [leaving]);
-  useBoundedBodyFollow(bodyRef, shownItems);
   // enteringId names the card that just replaced the leaving one.
   // enteringId 指明刚替换掉离场卡片的新卡片。
   const enteringId = leaving && shownItems.length === 1 ? shownItems[0].id : null;

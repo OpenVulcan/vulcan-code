@@ -372,10 +372,10 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
   .vk-tool-seq-slot[data-entering] { animation: none; }
 }
 :root[data-vk-motion="reduce"] .vk-tool-seq-slot[data-entering] { animation: none; }
-/* Every tool run, running or finished, folded or expanded, shares one bounded viewport, so a run never
- * grows taller than this before folding; tools scroll sideways themselves, and wheel deltas at the edges
- * carry on into the transcript. */
-.vk-tool-seq > .vk-collapse > .vk-collapse-inner > .vk-tool-seq-body { max-height: var(--vk-tool-seq-max-h); overflow-x: hidden; overflow-y: auto; overscroll-behavior: auto; scrollbar-gutter: stable; }
+/* A folded run shows its running cards in a bounded viewport that never follows its own bottom; an expanded
+ * run flows at full height, so only the transcript follows the tail. Tools scroll sideways themselves, and
+ * wheel deltas at the edges carry on into the transcript. */
+.vk-tool-seq[data-expanded="false"] > .vk-collapse > .vk-collapse-inner > .vk-tool-seq-body { max-height: var(--vk-tool-seq-max-h); overflow-x: hidden; overflow-y: auto; overscroll-behavior: auto; scrollbar-gutter: stable; }
 /* Clipping surfaces reach into the gutter, then pad back, so gutter tags inside them stay visible. */
 .vk-process > .vk-collapse,
 .vk-tool-seq > .vk-collapse,
