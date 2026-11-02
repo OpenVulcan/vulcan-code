@@ -60,8 +60,6 @@ Anonymous RunLua execution does not receive a Skill-owned SQLite binding. Direct
 
 Use a registered LuaSkills entry whose manifest explicitly enables SQLite, and invoke that entry through `vulcan.call`. Do not attempt to bypass database ownership by guessing filesystem database paths.
 
-LuaSkills provides no LanceDB or vector-database capability: `vulcan.lancedb` does not exist in any context.
-
 ## One-Shot `runlua`
 
 Required arguments:
