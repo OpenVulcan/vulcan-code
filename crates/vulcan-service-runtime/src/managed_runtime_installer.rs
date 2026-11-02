@@ -903,6 +903,9 @@ where
     // pnpm_entry is the CommonJS executable recorded in the runtime manifest.
     // pnpm_entry 是运行时清单记录的 CommonJS 可执行入口。
     let pnpm_entry = staging.join("bin/pnpm.cjs");
+    // The npm tarball ships the entry as 0644, but the manifest validator requires an executable target on Unix.
+    // npm 包中的入口权限为 0644，而清单校验在 Unix 上要求目标可执行。
+    mark_executable(&pnpm_entry)?;
     verify_binary_version(
         &node_executable,
         &[pnpm_entry.as_os_str(), OsStr::new("--version")],
