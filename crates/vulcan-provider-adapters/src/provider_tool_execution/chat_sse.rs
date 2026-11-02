@@ -1,10 +1,7 @@
-//! Incremental bounded decoder for the existing provider-tool Chat SSE contract.
-//! 既有供应商工具 Chat SSE 契约的增量有界解码器。
+//! Incremental decoder for the existing provider-tool Chat SSE contract.
+//! 既有供应商工具 Chat SSE 契约的增量解码器。
 
-use super::{
-    PROVIDER_TOOL_RESPONSE_BYTE_LIMIT, append_generic_openai_chat_delta,
-    parse_bounded_provider_json,
-};
+use super::{append_generic_openai_chat_delta, parse_bounded_provider_json};
 
 /// Owns framing offsets separately from the accumulated visible text.
 /// 将分帧偏移与累积可见文本分开持有。
@@ -14,7 +11,6 @@ pub(super) struct ChatSseDecoder {
     scan_from: usize,
     output: String,
     terminal: bool,
-    received_bytes: usize,
     #[cfg(test)]
     scanned_bytes: usize,
 }
@@ -23,12 +19,6 @@ impl ChatSseDecoder {
     /// Consumes one transport chunk, scanning new bytes only and compacting at most once.
     /// 消费一个传输块，仅扫描新字节，且最多整理一次缓冲区。
     pub(super) fn push(&mut self, chunk: &[u8]) -> Result<(), String> {
-        self.received_bytes = self.received_bytes.saturating_add(chunk.len());
-        if self.received_bytes > PROVIDER_TOOL_RESPONSE_BYTE_LIMIT {
-            return Err(format!(
-                "Provider Chat SSE exceeds the {PROVIDER_TOOL_RESPONSE_BYTE_LIMIT} byte limit."
-            ));
-        }
         self.pending.extend_from_slice(chunk);
         let mut consumed = 0usize;
         while self.scan_from < self.pending.len() {
@@ -100,11 +90,6 @@ fn consume_line(mut line: &[u8], output: &mut String, terminal: &mut bool) -> Re
     }
     let value = parse_bounded_provider_json(data, "Provider Chat SSE")?;
     append_generic_openai_chat_delta(output, &value)?;
-    if output.len() > PROVIDER_TOOL_RESPONSE_BYTE_LIMIT {
-        return Err(format!(
-            "Provider Chat SSE text exceeds the {PROVIDER_TOOL_RESPONSE_BYTE_LIMIT} byte limit."
-        ));
-    }
     Ok(())
 }
 
@@ -188,15 +173,5 @@ mod tests {
                 .expect_err("empty text")
                 .contains("no visible text")
         );
-    }
-
-    /// The byte ceiling is checked before an oversized chunk enters the pending buffer.
-    /// 超大块进入待处理缓冲区前先检查字节上限。
-    #[test]
-    fn total_transport_bytes_are_bounded_before_buffering() {
-        let mut decoder = ChatSseDecoder::default();
-        let chunk = vec![b'x'; PROVIDER_TOOL_RESPONSE_BYTE_LIMIT + 1];
-        assert!(decoder.push(&chunk).is_err());
-        assert!(decoder.pending.is_empty());
     }
 }

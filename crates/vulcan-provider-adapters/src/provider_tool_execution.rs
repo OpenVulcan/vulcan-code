@@ -21,15 +21,6 @@ use std::collections::BTreeMap;
 
 mod chat_sse;
 
-/// Maximum provider tool metadata response accepted before typed decoding.
-/// 强类型解码前允许接收的供应商工具元数据响应上限。
-///
-/// Applies to JSON bodies, SSE streams, and their accumulated text. Resources embedded inline in
-/// such a response are therefore bounded by this limit before [`GENERIC_RESOURCE_BYTE_LIMIT`] applies.
-/// 适用于 JSON 响应体、SSE 流及其累积文本。内嵌于此类响应中的资源因此在
-/// [`GENERIC_RESOURCE_BYTE_LIMIT`] 生效之前已受本上限约束。
-const PROVIDER_TOOL_RESPONSE_BYTE_LIMIT: usize = 8 * 1024 * 1024;
-
 /// Maximum Unicode characters retained from one provider diagnostic field.
 /// 单个供应商诊断字段允许保留的最大 Unicode 字符数。
 const PROVIDER_TOOL_DIAGNOSTIC_FIELD_MAX_CHARACTERS: usize = 2_048;
@@ -50,12 +41,10 @@ const GENERIC_STRUCTURED_RESULT_COUNT_LIMIT: usize = 256;
 /// 单个声明式资源提取器允许的绝对解码字节上限。
 ///
 /// This is the ceiling for manifest-declared `max_bytes`, binary follow-up downloads streamed outside
-/// the metadata response, and request-side multipart files. It is intentionally larger than
-/// [`PROVIDER_TOOL_RESPONSE_BYTE_LIMIT`]: only binary carriers can reach it, while inline resources
-/// stay bounded by the smaller response limit.
+/// the metadata response, and request-side multipart files. Provider responses themselves carry no
+/// byte ceiling, so inline resources reach this per-resource limit directly.
 /// 这是 Manifest 声明的 `max_bytes`、在元数据响应之外流式下载的二进制后续资源，以及请求侧
-/// multipart 文件的上限。它刻意大于 [`PROVIDER_TOOL_RESPONSE_BYTE_LIMIT`]：只有二进制载体能触及它，
-/// 内联资源仍受较小的响应上限约束。
+/// multipart 文件的上限。供应商响应本身不设字节上限，因此内联资源直接适用本逐资源上限。
 const GENERIC_RESOURCE_BYTE_LIMIT: u64 = 100 * 1024 * 1024;
 
 /// Formats one provider-tool transport failure without retaining request URL material.
@@ -100,8 +89,8 @@ pub(crate) fn provider_tool_url(entry: &ServiceEntry, target: &ProviderToolTarge
     )
 }
 
-/// Reads one provider tool response through a shared bounded stream.
-/// 通过共享有界流读取一次供应商工具响应。
+/// Reads one complete provider tool response; generated resources make the body size unbounded.
+/// 读取一次完整供应商工具响应；生成的资源使响应体大小不设上限。
 ///
 /// # Parameters
 /// 参数
@@ -110,20 +99,12 @@ pub(crate) fn provider_tool_url(entry: &ServiceEntry, target: &ProviderToolTarge
 ///
 /// # Returns
 /// 返回值
-/// UTF-8 response text no larger than the provider-tool metadata limit.
-/// 返回不超过供应商工具元数据上限的 UTF-8 响应文本。
-pub(crate) async fn read_bounded_provider_response(
+/// The complete UTF-8 response text.
+/// 返回完整的 UTF-8 响应文本。
+pub(crate) async fn read_provider_response_text(
     response: reqwest::Response,
     operation: &str,
 ) -> Result<String, String> {
-    if response
-        .content_length()
-        .is_some_and(|length| length > PROVIDER_TOOL_RESPONSE_BYTE_LIMIT as u64)
-    {
-        return Err(format!(
-            "{operation} response exceeds the 8 MiB metadata limit."
-        ));
-    }
     let mut bytes = Vec::new();
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
@@ -133,18 +114,13 @@ pub(crate) async fn read_bounded_provider_response(
                 error.without_url()
             )
         })?;
-        if bytes.len().saturating_add(chunk.len()) > PROVIDER_TOOL_RESPONSE_BYTE_LIMIT {
-            return Err(format!(
-                "{operation} response exceeds the 8 MiB metadata limit."
-            ));
-        }
         bytes.extend_from_slice(chunk.as_ref());
     }
     String::from_utf8(bytes).map_err(|_| format!("{operation} response is not valid UTF-8 text."))
 }
 
-/// Parses one provider JSON document through the shared byte, depth, and node-count bounds.
-/// 通过共享字节、深度与节点数量上限解析一份供应商 JSON 文档。
+/// Parses one provider JSON document through the shared depth and node-count bounds.
+/// 通过共享深度与节点数量上限解析一份供应商 JSON 文档。
 ///
 /// # Parameters
 /// 参数
@@ -153,14 +129,9 @@ pub(crate) async fn read_bounded_provider_response(
 ///
 /// # Returns
 /// 返回值
-/// The bounded JSON tree or a controlled size, syntax, depth, or node-count failure.
-/// 返回有界 JSON 树，或受控的大小、语法、深度或节点数量失败。
+/// The bounded JSON tree or a controlled syntax, depth, or node-count failure.
+/// 返回有界 JSON 树，或受控的语法、深度或节点数量失败。
 pub(crate) fn parse_bounded_provider_json(text: &str, operation: &str) -> Result<Value, String> {
-    if text.len() > PROVIDER_TOOL_RESPONSE_BYTE_LIMIT {
-        return Err(format!(
-            "{operation} response exceeds the {PROVIDER_TOOL_RESPONSE_BYTE_LIMIT} byte limit."
-        ));
-    }
     let value: Value = serde_json::from_str(text)
         .map_err(|error| format!("{operation} JSON is invalid: {error}"))?;
     crate::provider_manifest::validate_runtime_json_bounds(&value, operation)?;
@@ -437,7 +408,7 @@ async fn execute_generic_openai_chat_sse_request(
         .map_err(|error| format_provider_tool_transport_error("Provider Chat SSE", error))?;
     let status = response.status();
     if !status.is_success() {
-        let text = read_bounded_provider_response(response, "Provider Chat SSE").await?;
+        let text = read_provider_response_text(response, "Provider Chat SSE").await?;
         return Err(format_http_error(
             "Provider Chat SSE",
             status.as_u16(),
@@ -565,7 +536,7 @@ async fn decode_successful_structured_sse_response(
 ) -> Result<Value, String> {
     let status = response.status();
     if !status.is_success() {
-        let text = read_bounded_provider_response(response, "Provider structured SSE").await?;
+        let text = read_provider_response_text(response, "Provider structured SSE").await?;
         return Err(format_http_error(
             "Provider structured SSE",
             status.as_u16(),
@@ -593,7 +564,6 @@ async fn decode_generic_structured_sse(
     // scan_from 跳过 pending 中已扫描过的前缀，使每个字节只被边界搜索一次。
     let mut scan_from = 0usize;
     let mut terminal = None;
-    let mut received_bytes = 0usize;
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|error| {
             format!(
@@ -601,12 +571,6 @@ async fn decode_generic_structured_sse(
                 error.without_url()
             )
         })?;
-        received_bytes = received_bytes.saturating_add(chunk.len());
-        if received_bytes > PROVIDER_TOOL_RESPONSE_BYTE_LIMIT {
-            return Err(format!(
-                "Provider structured SSE exceeds the {PROVIDER_TOOL_RESPONSE_BYTE_LIMIT} byte limit."
-            ));
-        }
         pending.extend_from_slice(chunk.as_ref());
         // consumed is the end of the last complete frame; the buffer is compacted once per chunk.
         // consumed 是最后一个完整帧的结束位置；缓冲区每个分块只压缩一次。
@@ -1790,26 +1754,13 @@ fn failed_provider_async_task_completed_result(error: String) -> ProviderAsyncTa
     ))
 }
 
-/// Appends one non-empty provider result with its separator only after the final size is admitted.
-/// 先验证最终大小，再追加一个非空供应商结果及其分隔符。
-fn append_bounded_provider_result(
-    output: &mut String,
-    text: &str,
-    separator: &str,
-) -> Result<(), String> {
-    let separator = if output.is_empty() { "" } else { separator };
-    let next_size = output
-        .len()
-        .checked_add(separator.len())
-        .and_then(|size| size.checked_add(text.len()));
-    if next_size.is_none_or(|size| size > PROVIDER_TOOL_RESPONSE_BYTE_LIMIT) {
-        return Err(String::from(
-            "Provider task batch follow-up text exceeds the 8 MiB output limit.",
-        ));
+/// Appends one non-empty provider result, preceded by its separator when output is non-empty.
+/// 追加一个非空供应商结果；输出非空时先追加分隔符。
+fn append_provider_result(output: &mut String, text: &str, separator: &str) {
+    if !output.is_empty() {
+        output.push_str(separator);
     }
-    output.push_str(separator);
     output.push_str(text);
-    Ok(())
 }
 
 /// Fetches one bounded public JSON document per terminal item in submitted identity order.
@@ -1824,8 +1775,8 @@ fn append_bounded_provider_result(
 ///
 /// # Returns
 /// 返回值
-/// Joined text no larger than the shared 8 MiB metadata ceiling.
-/// 返回不超过共享 8 MiB 元数据上限的拼接文本。
+/// Joined text of every item in submitted identity order.
+/// 返回按提交身份顺序拼接的全部项目文本。
 async fn execute_generic_json_async_batch_follow_up(
     http: &reqwest::Client,
     terminal: &Value,
@@ -1962,30 +1913,20 @@ where
     let results =
         futures_util::stream::iter(requests).buffer_unordered(PROVIDER_BATCH_FOLLOW_UP_CONCURRENCY);
     futures_util::pin_mut!(results);
-    // Retain successful results by submission index under the aggregate output ceiling.
-    // 按提交序号保留成功结果，并统一限制累计输出上限。
+    // Retain successful results by submission index.
+    // 按提交序号保留成功结果。
     let mut ordered = BTreeMap::new();
-    // Include separators before retaining results, even while earlier requests are pending.
-    // 即使前序请求尚未完成，也在保留结果之前计入分隔符。
-    let mut retained_bytes = 0usize;
     while let Some(result) = results.next().await {
         // fetch_provider_batch_item guarantees nonempty successful texts.
         // fetch_provider_batch_item 保证成功结果文本非空。
         let (index, text) = result?;
-        retained_bytes = retained_bytes
-            .checked_add(if ordered.is_empty() { 0 } else { separator.len() })
-            .and_then(|size| size.checked_add(text.len()))
-            .filter(|size| *size <= PROVIDER_TOOL_RESPONSE_BYTE_LIMIT)
-            .ok_or_else(|| format!(
-                "Provider task batch follow-up text exceeds the {PROVIDER_TOOL_RESPONSE_BYTE_LIMIT} byte limit."
-            ))?;
         ordered.insert(index, text);
     }
     // Assemble only successful batches in the caller's original identity order.
     // 仅对全部成功的批次按调用方原始身份顺序组装正文。
-    let mut output = String::with_capacity(retained_bytes);
+    let mut output = String::new();
     for text in ordered.into_values() {
-        append_bounded_provider_result(&mut output, &text, separator)?;
+        append_provider_result(&mut output, &text, separator);
     }
     if output.is_empty() {
         return Err(String::from(
@@ -2006,7 +1947,7 @@ async fn fetch_provider_batch_item(
         format_provider_tool_transport_error("Provider task batch follow-up", error)
     })?;
     let status_code = response.status();
-    let body = read_bounded_provider_response(response, "Provider task batch follow-up").await?;
+    let body = read_provider_response_text(response, "Provider task batch follow-up").await?;
     if !status_code.is_success() {
         return Err(format_http_error(
             "Provider task batch follow-up",
@@ -2042,11 +1983,11 @@ async fn fetch_provider_batch_item(
         .collect::<Result<Vec<_>, String>>()?;
     let mut fetched = String::new();
     for text in texts {
-        append_bounded_provider_result(
+        append_provider_result(
             &mut fetched,
             text,
             follow_up.response_item_separator.as_str(),
-        )?;
+        );
     }
     Ok(fetched)
 }
@@ -2180,7 +2121,7 @@ async fn execute_generic_json_async_request(
         .await
         .map_err(|error| format_provider_tool_transport_error(operation, error))?;
     let status = response.status();
-    let text = read_bounded_provider_response(response, operation).await?;
+    let text = read_provider_response_text(response, operation).await?;
     if !status.is_success() {
         return Err(format_http_error(operation, status.as_u16(), text.as_str()));
     }
@@ -2502,7 +2443,7 @@ async fn execute_generic_mcp_http_request(
         .map(str::trim)
         .filter(|value| !value.is_empty() && value.len() <= 1024)
         .map(str::to_string);
-    let response_text = read_bounded_provider_response(response, operation).await?;
+    let response_text = read_provider_response_text(response, operation).await?;
     if !status.is_success() {
         return Err(format_http_error(
             "Provider MCP",
@@ -2772,7 +2713,7 @@ async fn execute_generic_json_sync_request_with_headers<T: Serialize>(
         .await
         .map_err(|error| format_provider_tool_transport_error(operation, error))?;
     let status = response.status();
-    let response_text = read_bounded_provider_response(response, operation).await?;
+    let response_text = read_provider_response_text(response, operation).await?;
     if !status.is_success() {
         return Err(format_http_error(
             operation,
@@ -2812,47 +2753,21 @@ fn decode_generic_json_sync_output_with_request(
     decode_generic_json_value_output(contract, &response, request_arguments)
 }
 
-/// Decodes a projected tree after validating its byte, depth and node budgets without allocating JSON text.
-/// 校验投影树的字节、深度与节点预算后直接解码，不分配 JSON 文本。
+/// Decodes a projected tree after validating its depth and node budgets.
+/// 校验投影树的深度与节点预算后直接解码。
 fn decode_projected_generic_json_output(
     contract: &crate::ProviderToolOutputContract,
     response: &Value,
     request_arguments: Option<&Value>,
 ) -> Result<ProviderToolExecutionResult, String> {
-    validate_projected_provider_json(response)?;
+    // Bound recursion, including trees expanded by projection profiles.
+    // 限制递归，包括由投影 Profile 扩展的树。
+    crate::provider_manifest::validate_runtime_json_bounds(response, "Provider tool response")?;
     decode_generic_json_value_output(contract, response, request_arguments)
 }
 
-/// Counts canonical UTF-8 JSON bytes into a bounded sink; no second tree or serialized string is retained.
-/// 通过有界接收器计数规范 UTF-8 JSON 字节，不保留第二棵树或序列化字符串。
-fn validate_projected_provider_json(value: &Value) -> Result<(), String> {
-    // Bound recursion before serialization, including trees expanded by projection profiles.
-    // 序列化前限制递归，包括由投影 Profile 扩展的树。
-    crate::provider_manifest::validate_runtime_json_bounds(value, "Provider tool response")?;
-    struct ByteCounter(usize);
-    impl std::io::Write for ByteCounter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            let next = self
-                .0
-                .checked_add(bytes.len())
-                .filter(|size| *size <= PROVIDER_TOOL_RESPONSE_BYTE_LIMIT)
-                .ok_or_else(|| {
-                    std::io::Error::other("projected provider JSON exceeds its byte limit")
-                })?;
-            self.0 = next;
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    serde_json::to_writer(ByteCounter(0), value).map_err(|error| {
-        format!("Provider tool response serialization/byte limit check failed: {error}")
-    })
-}
-
-/// Normalizes an already-admitted JSON tree; transport and projection boundaries own size validation.
-/// 归一化已准入的 JSON 树；大小校验由传输与投影边界负责。
+/// Normalizes an already-admitted JSON tree; parsing and projection boundaries own structural validation.
+/// 归一化已准入的 JSON 树；结构校验由解析与投影边界负责。
 fn decode_generic_json_value_output(
     contract: &crate::ProviderToolOutputContract,
     response: &Value,
@@ -4105,30 +4020,6 @@ mod tests {
         assert_eq!(active.load(Ordering::SeqCst), 0);
     }
 
-    /// Out-of-order results share the byte ceiling even when the first request never finishes.
-    /// 即使首个请求永不结束，乱序返回结果仍共享字节上限。
-    #[tokio::test]
-    async fn out_of_order_follow_up_results_enforce_aggregate_budget() {
-        // Later results exceed the budget including their separator before index zero completes.
-        // 后续结果连同分隔符在首项完成前就超过预算。
-        let requests = (0..3).map(|index| async move {
-            if index == 0 {
-                std::future::pending::<()>().await;
-            }
-            Ok("x".repeat(PROVIDER_TOOL_RESPONSE_BYTE_LIMIT / 2))
-        });
-        // A deadline distinguishes prompt budget rejection from waiting for the stalled request.
-        // 截止时间用于区分及时拒绝超额预算与等待停滞请求。
-        let error = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            collect_ordered_provider_results(requests, "|"),
-        )
-        .await
-        .expect("oversized retained results must not wait for earlier requests")
-        .expect_err("aggregate result exceeds byte budget");
-        assert!(error.contains("byte limit"), "{error}");
-    }
-
     /// Direct Value normalization preserves raw decoder results, Unicode and error envelopes.
     /// 直接 Value 归一化保留原解码结果、Unicode 与错误信封。
     #[test]
@@ -4154,50 +4045,49 @@ mod tests {
         }
     }
 
-    /// Escaping and structure expansion remain subject to the old post-projection limits.
-    /// 转义与结构扩展仍受原有投影后上限约束。
+    /// Projected trees carry no byte ceiling but keep the structural depth and node bounds.
+    /// 投影树不设字节上限，但保留结构深度与节点上限。
     #[test]
-    fn projected_json_limits_include_escaping_depth_and_nodes() {
-        let exact = Value::String("x".repeat(PROVIDER_TOOL_RESPONSE_BYTE_LIMIT - 2));
-        validate_projected_provider_json(&exact).expect("JSON quotes fit exactly");
-        let oversized = Value::String("x".repeat(PROVIDER_TOOL_RESPONSE_BYTE_LIMIT - 1));
-        assert!(validate_projected_provider_json(&oversized).is_err());
-        let escaped = Value::String("\n".repeat(PROVIDER_TOOL_RESPONSE_BYTE_LIMIT / 2));
-        assert!(
-            validate_projected_provider_json(&escaped).is_err(),
-            "JSON escaping counts as bytes"
-        );
+    fn projected_json_has_no_byte_ceiling_but_keeps_depth_and_node_bounds() {
+        let contract = crate::ProviderToolOutputContract {
+            kind: ProviderToolOutputKind::Text,
+            source_path: "/answer".to_string(),
+            normalized_result_path: "/text".to_string(),
+            resource_kind: None,
+            mime_types: Vec::new(),
+            resource_decoders: Vec::new(),
+        };
+        // 16 MiB exceeds every former response ceiling, as a generated 4K image payload does.
+        // 16 MiB 超过以往所有响应上限，与生成 4K 图片的载荷相当。
+        let large = serde_json::json!({"answer": "x".repeat(16 * 1024 * 1024)});
+        decode_projected_generic_json_output(&contract, &large, None)
+            .expect("large provider payloads must not be rejected by size");
         let mut nested = Value::Null;
         for _ in 0..=crate::provider_manifest::MAX_JSON_DEPTH {
             nested = Value::Array(vec![nested]);
         }
         assert!(
-            validate_projected_provider_json(&nested)
+            decode_projected_generic_json_output(&contract, &nested, None)
                 .expect_err("depth bound")
                 .contains("depth")
         );
         let wide = Value::Array(vec![Value::Null; crate::provider_manifest::MAX_JSON_NODES]);
         assert!(
-            validate_projected_provider_json(&wide)
+            decode_projected_generic_json_output(&contract, &wide, None)
                 .expect_err("node bound")
                 .contains("node")
         );
     }
 
-    /// Separators count as UTF-8 bytes and failed admission leaves the previous result intact.
-    /// 分隔符按 UTF-8 字节计入限制，准入失败保留此前结果不变。
+    /// The batch separator is placed between items and never before the first one.
+    /// 批量分隔符只位于项目之间，不出现在首项之前。
     #[test]
-    fn batch_result_budget_includes_all_separator_bytes() {
-        let mut output = "x".repeat(PROVIDER_TOOL_RESPONSE_BYTE_LIMIT - 4);
-        append_bounded_provider_result(&mut output, "z", "中").expect("exact byte bound");
-        assert_eq!(output.len(), PROVIDER_TOOL_RESPONSE_BYTE_LIMIT);
-        let before = output.clone();
-        assert!(append_bounded_provider_result(&mut output, "x", "|").is_err());
-        assert_eq!(output, before);
-        let mut first = String::new();
-        append_bounded_provider_result(&mut first, "a", "ignored")
-            .expect("first item has no separator");
-        assert_eq!(first, "a");
+    fn batch_results_join_with_separator_only_between_items() {
+        let mut output = String::new();
+        append_provider_result(&mut output, "a", "中");
+        assert_eq!(output, "a", "first item has no separator");
+        append_provider_result(&mut output, "b", "中");
+        assert_eq!(output, "a中b");
     }
 
     /// Length admission handles all padding widths without decoding oversized data.

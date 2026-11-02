@@ -487,5 +487,4 @@ impl PublicAiRuntime {
                 .execute(selection.route.clone(), request, secret, execution_id)
         })
     }
-
 }
