@@ -687,7 +687,10 @@ Upload 在任何网络副作用之前完成全部资源预检。网络通道必�
 网络通道必须声明 `timeout_ms`，其截止时间覆盖签名握手、文件传输与响应解码的完整生命周期。
 `remote_url_passthrough` 固定只允许不含凭据和 fragment 的 HTTPS URL，不限制宿主或端口：供应商
 既已配置，就不再要求清单另列宿主白名单。资源上限不能由远端更新放宽。签名上传
-没有已注册签名原语时必须失败，不能猜签名算法。Multipart/File Create 的 method、file field、
+没有已注册签名原语时必须失败，不能猜签名算法。已注册签名原语只有两种：`temporary_oss_policy`
+（`GET` 取临时 OSS 策略）和 `open_ai_codex_files`（`POST` 创建 Codex 订阅文件，按返回的签名 Blob
+地址以 `PUT` 上传原始字节，且不携带凭据，再 `POST /{file_id}/uploaded` 完成登记，结果为
+`retry` 时有界等待，引用为文件 ID）。签名 Blob 地址不保存、不记录。Multipart/File Create 的 method、file field、
 响应 JSON Pointer、引用模板、固定字段冲突和缓存时长均在激活前闭合验证，不留到请求期猜测。
 `response_id_pointer` 默认只接受非空 JSON 字符串；当上游真实返回非负整数 ID 时，通道必须显式声明
 `response_id_encoding: unsigned_integer`，宿主才会将该整数规范化为十进制文本。负数、浮点数、布尔值、
@@ -989,6 +992,8 @@ custom 历史只按其原始配对重放，不得借此向无声明的新请求�
 `protocol_routes[].responses_features` 持有传输和恢复契约：
 
 - `websocket` 只在精确路由验证后启用；游标无效时只能按既有安全边界重建同一路由全量请求；
+  终态事件之前的 Socket 丢失（含已有局部输出、任意关闭码）按通用重试设置在新 Socket 上从检查点
+  重放，同一会话连续 5 次连接或 Socket 失败（或握手 426）后在进程剩余期间固定改走 HTTP；
 - `recovery: agent_space_result_and_usage_reconciliation_v1` 只允许 AgentSpace 的
   `chatgpt-plan` 入口声明。它把 `reconciliation_required` 标记为结果与用量待确认，保留请求和
   response 身份并禁止盲重放；没有供应商查询/幂等契约前不能称为自动重试。

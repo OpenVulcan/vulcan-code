@@ -3233,6 +3233,10 @@ fn validate_upload_channel(
             super::UploadPrimitiveKind::SignedObjectUpload,
             Some(super::UploadSigningPrimitiveKind::TemporaryOssPolicy),
         ) => Some("GET"),
+        (
+            super::UploadPrimitiveKind::SignedObjectUpload,
+            Some(super::UploadSigningPrimitiveKind::OpenAiCodexFiles),
+        ) => Some("POST"),
         _ => None,
     };
     match (expected_method, declaration.method.as_deref()) {

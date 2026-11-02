@@ -28,6 +28,7 @@ use std::collections::BTreeMap;
 mod delivery_policy;
 mod file_create_body;
 mod inputs;
+mod openai_codex;
 use delivery_policy::resolve_operation_delivery_channel;
 pub(crate) use delivery_policy::{
     UploadChannelDeliveryKind, resolve_real_upload_channel, upload_channel_delivery_kind,
@@ -1280,6 +1281,12 @@ async fn materialize_upload_inner(
                 response_url: None,
             })
         }
+        Some(UploadPrimitiveKind::SignedObjectUpload)
+            if channel.signing_primitive
+                == Some(crate::UploadSigningPrimitiveKind::OpenAiCodexFiles) =>
+        {
+            openai_codex::upload_openai_codex_file(&context, channel, resource).await
+        }
         Some(UploadPrimitiveKind::PresignedFormUpload)
         | Some(UploadPrimitiveKind::SignedObjectUpload) => {
             Err(MediaUploadFailure::MissingSigningPrimitive)
@@ -2477,14 +2484,27 @@ fn upload_headers(
                 value,
             );
         }
-        crate::AuthenticationProjection::OpenAiCodexBearer
-        | crate::AuthenticationProjection::OpenVulcanAuth
+        crate::AuthenticationProjection::OpenAiCodexBearer => {
+            // Codex credentials project the account identity exactly as conversation execution does.
+            let token = secret.expose_value();
+            let value = HeaderValue::from_str(&format!("Bearer {token}"))
+                .map_err(|_| String::from("Upload bearer token is not a valid header value."))?;
+            headers.insert(reqwest::header::AUTHORIZATION, value);
+            let account_id = secret.account_id().ok_or_else(|| {
+                String::from("Codex credential does not contain an account identity.")
+            })?;
+            let account_id = HeaderValue::from_str(account_id).map_err(|_| {
+                String::from("Codex account identity contains invalid header characters.")
+            })?;
+            headers.insert(HeaderName::from_static("chatgpt-account-id"), account_id);
+        }
+        crate::AuthenticationProjection::OpenVulcanAuth
         | crate::AuthenticationProjection::GoogleCodeAssistBearer
         | crate::AuthenticationProjection::GoogleGeminiBearer
         | crate::AuthenticationProjection::GoogleApiKey => {
-            // OAuth and project-scoped projections are resolved by the conversation route; a
-            // generic upload channel must declare an explicit bearer or API-key credential role.
-            // OAuth 与项目作用域投影由会话路由解析；通用上传通道必须声明显式 Bearer 或
+            // Project-scoped projections are resolved by the conversation route; a generic upload
+            // channel must declare an explicit bearer or API-key credential role.
+            // 项目作用域投影由会话路由解析；通用上传通道必须声明显式 Bearer 或
             // API Key 凭据角色。
             return Err(String::from(
                 "Upload channel requires an explicit bearer or API-key authentication projection.",
@@ -2505,6 +2525,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     mod http_failures;
+    mod openai_codex;
     mod policy;
 
     /// Verifies direct local paths remain globally readable before filesystem permissions exist.

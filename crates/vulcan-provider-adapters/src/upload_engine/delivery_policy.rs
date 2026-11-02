@@ -30,9 +30,15 @@ pub(crate) fn upload_channel_delivery_kind(
         Some(UploadPrimitiveKind::MultipartFile | UploadPrimitiveKind::ProviderFileCreate) => {
             Ok(UploadChannelDeliveryKind::ProviderUpload)
         }
+        // Only registered signing handshakes are executable uploads; the rest fail closed below.
         Some(UploadPrimitiveKind::SignedObjectUpload)
-            if channel.signing_primitive
-                == Some(crate::UploadSigningPrimitiveKind::TemporaryOssPolicy) =>
+            if matches!(
+                channel.signing_primitive,
+                Some(
+                    crate::UploadSigningPrimitiveKind::TemporaryOssPolicy
+                        | crate::UploadSigningPrimitiveKind::OpenAiCodexFiles
+                )
+            ) =>
         {
             Ok(UploadChannelDeliveryKind::ProviderUpload)
         }

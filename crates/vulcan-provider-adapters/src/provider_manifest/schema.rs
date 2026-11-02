@@ -1689,6 +1689,10 @@ pub enum UploadSigningPrimitiveKind {
     /// Obtains a bounded temporary OSS policy and uploads the object through that policy.
     /// 获取有界临时 OSS 策略并通过该策略上传对象。
     TemporaryOssPolicy,
+    /// Creates a Codex subscription file, streams it to the returned signed blob URL, then
+    /// finalizes it and references the resulting file ID.
+    /// 创建 Codex 订阅文件，将其流式上传到返回的签名 Blob 地址，再完成登记并引用所得文件 ID。
+    OpenAiCodexFiles,
 }
 
 /// Defines the smallest non-secret identity boundary for reusing one uploaded provider object.
