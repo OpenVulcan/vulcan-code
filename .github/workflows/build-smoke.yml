@@ -61,8 +61,12 @@ jobs:
           rustup toolchain install
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           rustc --version
+      # The read-only job token lifts GitHub API lookups off the anonymous per-address limit.
+      # 只读作业令牌让 GitHub API 查询不受按地址的匿名配额限制。
       - name: Initialize, synchronize and build (Unix)
         if: runner.os != 'Windows'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -eu
           sh ./make.sh init-system
@@ -71,6 +75,8 @@ jobs:
       - name: Initialize, synchronize and build (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           foreach ($step in @(@('init-system'), @('sync', 'release'), @('release'))) {
             ./make.ps1 @step

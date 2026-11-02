@@ -128,6 +128,19 @@ function Convert-TagToSemVer {
     return [System.Version]$Normalized
 }
 
+function Get-GitHubApiHeaders {
+    <#
+    .SYNOPSIS
+    Authenticate GitHub API lookups when a token is present; shared CI runner addresses exhaust the anonymous limit.
+    存在令牌时为 GitHub API 查询附加认证；共享 CI 运行器地址会耗尽匿名配额。
+    #>
+    $Headers = @{}
+    if ($env:GITHUB_TOKEN) {
+        $Headers['Authorization'] = "Bearer $env:GITHUB_TOKEN"
+    }
+    return $Headers
+}
+
 function Resolve-ReleaseTagForSeries {
     <#
     .SYNOPSIS
@@ -152,7 +165,7 @@ function Resolve-ReleaseTagForSeries {
     }
 
     $ApiUrl = "https://api.github.com/repos/$Repo/releases?per_page=100"
-    $Releases = Invoke-RestMethod -Uri $ApiUrl -UseBasicParsing
+    $Releases = Invoke-RestMethod -Uri $ApiUrl -UseBasicParsing -Headers (Get-GitHubApiHeaders)
     $Matches = @()
 
     foreach ($Release in $Releases) {
@@ -303,7 +316,7 @@ function Get-ReleaseAssetInfo {
     )
 
     $ApiUrl = "https://api.github.com/repos/$Repo/releases/tags/$Tag"
-    $Release = Invoke-RestMethod -Uri $ApiUrl -UseBasicParsing
+    $Release = Invoke-RestMethod -Uri $ApiUrl -UseBasicParsing -Headers (Get-GitHubApiHeaders)
     $Asset = $Release.assets | Where-Object { $_.name -eq $AssetName } | Select-Object -First 1
     if (-not $Asset) {
         $Available = ($Release.assets | ForEach-Object { $_.name }) -join ", "
