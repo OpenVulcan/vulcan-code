@@ -71,7 +71,7 @@ jobs:
           code=$(curl -sS -D range.h -o range.bin -r 1048576-2097151 -w '%{http_code}' "$PROBE_URL/pack.bin")
           echo "range GET: http=$code cf-cache-status=$(header range.h cf-cache-status) content-range=$(header range.h content-range)"
           [ "$code" = 206 ] || { echo "range request returned $code, expected 206" >&2; exit 1; }
-          tail -c +1048577 pack.bin | head -c 1048576 | cmp -s - range.bin || { echo 'range bytes differ' >&2; exit 1; }
+          cmp -s -n 1048576 -i 1048576:0 pack.bin range.bin || { echo 'range bytes differ' >&2; exit 1; }
           {
             echo '### Pack'
             echo "- full GET reached \`cf-cache-status: HIT\` after $attempt request(s)"
@@ -119,6 +119,8 @@ jobs:
           jq -n --arg pack "$PROBE_URL/pack.bin" --arg pointer "$PROBE_URL/pointer.json" '{files: [$pack, $pointer]}' |
             curl -sS -X POST "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/purge_cache" \
               -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H 'Content-Type: application/json' --data @- | jq -c '{success}'
-          remaining=$(aws s3api list-objects-v2 --endpoint-url "$R2_ENDPOINT" --bucket "$R2_BUCKET" --prefix "$KEY_PREFIX/" --query 'KeyCount' --output text)
+          # R2 omits KeyCount from an empty listing, so count the returned objects instead.
+          # R2 在空列表中省略 KeyCount，因此改为统计返回的对象数。
+          remaining=$(aws s3api list-objects-v2 --endpoint-url "$R2_ENDPOINT" --bucket "$R2_BUCKET" --prefix "$KEY_PREFIX/" --query 'length(Contents || `[]`)' --output text)
           echo "objects left under the probe prefix: $remaining"
           [ "$remaining" = 0 ]
