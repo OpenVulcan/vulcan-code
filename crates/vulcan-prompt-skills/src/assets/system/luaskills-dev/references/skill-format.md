@@ -1,7 +1,7 @@
 # LuaSkill source format
 
 This is a working summary. The authority is the developer manual of the LuaSkills version luaskills-debug embeds:
-<https://github.com/LuaSkills/luaskills/blob/v0.8.2/docs/development/skill-development.md> (replace `v0.8.2` with
+<https://github.com/LuaSkills/luaskills/blob/v0.9.0/docs/development/skill-development.md> (replace `v0.9.0` with
 the `luaskills_version` that the `luaskills_debug` tool reports). Read it for any API or field not covered here.
 LuaSkills rejects unknown manifest fields, so never add a field you have not seen there or in validate output.
 

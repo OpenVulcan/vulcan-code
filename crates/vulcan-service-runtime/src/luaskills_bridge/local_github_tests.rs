@@ -732,7 +732,6 @@ fn root_bootstrap_moves_github_installs_to_the_configured_hub() {
         let mut engine = handle.engine.write().expect("lock fixture engine");
         let mut messages = Vec::new();
         ensure_configured_root_skills_installed(
-            &handle.runtime_root,
             &handle.skill_roots,
             entries,
             &mut engine,
@@ -742,7 +741,7 @@ fn root_bootstrap_moves_github_installs_to_the_configured_hub() {
         messages
     };
     let recorded = || {
-        read_only_skill_manager(&handle.runtime_root, root_target.clone())
+        read_only_skill_manager(root_target.clone())
             .install_record(FIXTURE_SKILL_ID)
             .expect("read ROOT install record")
             .expect("ROOT skill must keep an install record")

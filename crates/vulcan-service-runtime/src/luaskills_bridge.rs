@@ -418,7 +418,7 @@ where
             )
         })?,
     );
-    let skill_roots = ensure_skill_root_layout(&runtime_root)?;
+    let skill_roots = ensure_skill_root_layout()?;
     // skill_config_root is the single host-owned package configuration root shared by every LuaSkills engine.
     // skill_config_root 是所有 LuaSkills 引擎共享的唯一宿主持有技能包配置根目录。
     let skill_config_root =
@@ -460,7 +460,6 @@ where
     let mut engine = LuaEngine::new(LuaEngineOptions::new(pool_config, host_options))
         .map_err(|error| format!("Failed to create the LuaSkills engine: {error}"))?;
     ensure_configured_root_skills_installed(
-        &runtime_root,
         &skill_roots,
         load_root_skill_bootstrap_entries()?,
         &mut engine,
@@ -1543,21 +1542,19 @@ fn build_luaskills_catalog(
     })
 }
 
-/// Ensures the user-owned ROOT and USER skill directories exist and returns them as skill roots.
-/// 确保用户级 ROOT 与 USER 技能目录存在，并以技能根形式返回。
+/// Ensures the user-owned ROOT and USER skill directories and the LuaSkills temp directory exist,
+/// and returns the skill directories as skill roots.
+/// 确保用户级 ROOT 与 USER 技能目录及 LuaSkills 临时目录存在，并以技能根形式返回技能目录。
 ///
-/// The runtime root belongs to the read-only release tree, with one exception: LuaSkills 0.8
-/// always places `temp` (exposed to skills as `temp_dir`, and the parent of the download cache)
-/// below the runtime root, so it is still created there until LuaSkills accepts a host-owned
-/// writable layout.
-/// 运行时根属于只读发行树，只有一个例外：LuaSkills 0.8 总是把 `temp`（以 `temp_dir` 暴露给技能，
-/// 也是下载缓存的父目录）放在运行时根下，因此在 LuaSkills 接受宿主持有的可写布局之前仍在此创建。
-fn ensure_skill_root_layout(runtime_root: &Path) -> Result<Vec<RuntimeSkillRoot>, String> {
+/// The runtime root belongs to the read-only release tree. LuaSkills creates the download cache
+/// itself but expects the host to create `temp_dir`, so that is created here.
+/// 运行时根属于只读发行树。LuaSkills 自行创建下载缓存，但要求宿主创建 `temp_dir`，因此在此创建。
+fn ensure_skill_root_layout() -> Result<Vec<RuntimeSkillRoot>, String> {
     // Both skill directories are normalized before they become LuaSkills RuntimeSkillRoot values.
     // 两个技能目录都在成为 LuaSkills RuntimeSkillRoot 前完成原生路径规范化。
     let root_skills_dir = vulcan_runtime_assets::native_host_path(&default_root_skill_root());
     let user_skills_dir = vulcan_runtime_assets::native_host_path(&default_user_skill_root());
-    let temp_dir = runtime_root.join("temp");
+    let temp_dir = vulcan_runtime_assets::native_host_path(&luaskills_temp_root());
     for directory in [
         root_skills_dir.as_path(),
         user_skills_dir.as_path(),
@@ -1593,7 +1590,6 @@ fn ensure_skill_root_layout(runtime_root: &Path) -> Result<Vec<RuntimeSkillRoot>
 /// 已安装但受管安装记录指向其他来源的 ROOT 技能，会通过替换来源的更新迁到配置来源。迁移失败时保留
 /// 可用的现有安装，并在下次启动重试，因为技能已经可用，而配置来源可能暂时不可达或仍发布更旧版本。
 fn ensure_configured_root_skills_installed(
-    runtime_root: &Path,
     skill_roots: &[RuntimeSkillRoot],
     configured_skills: Vec<RootSkillBootstrapEntry>,
     engine: &mut LuaEngine,
@@ -1611,7 +1607,7 @@ fn ensure_configured_root_skills_installed(
             .into_iter()
             .map(|instance| instance.skill_id)
             .collect::<std::collections::BTreeSet<_>>();
-    let root_manager = read_only_skill_manager(runtime_root, root_target.clone());
+    let root_manager = read_only_skill_manager(root_target.clone());
 
     let mut installed_any_skill = false;
     for configured_skill in configured_skills {
@@ -1941,6 +1937,16 @@ fn build_host_options(
     let lua_managed_runtime_distribution_root =
         vulcan_runtime_assets::native_host_path(managed_runtime_distribution_root);
     let mut host_options = LuaRuntimeHostOptions::with_runtime_root(lua_runtime_root.clone());
+    // The runtime root is part of the read-only release tree, so the writable temp directory and
+    // download cache live in the user cache and LuaSkills is told to keep them.
+    // 运行时根属于只读发行树，因此可写的临时目录与下载缓存放在用户缓存中，并要求 LuaSkills 保留它们。
+    host_options.temp_dir = Some(vulcan_runtime_assets::native_host_path(
+        &luaskills_temp_root(),
+    ));
+    host_options.download_cache_root = Some(vulcan_runtime_assets::native_host_path(
+        &luaskills_download_cache_root(),
+    ));
+    host_options.preserve_host_writable_dirs = true;
     // The service runs behind a GUI shell with no console of its own, so runtime-owned console children
     // (skill `exec`, managed runtimes) must not open a visible console window on Windows.
     // 服务运行于无自身控制台的 GUI 外壳之后，因此运行时拥有的控制台子进程（技能 `exec`、托管运行时）
@@ -2028,8 +2034,16 @@ fn default_user_skill_root() -> PathBuf {
         .join("skills")
 }
 
-/// Returns the LuaSkills skill download cache root beneath one runtime root.
-/// 返回某个运行时根之下的 LuaSkills 技能下载缓存根。
+/// Returns the user-owned LuaSkills temp directory, exposed to skills as `temp_dir`.
+/// 返回用户级 LuaSkills 临时目录，以 `temp_dir` 暴露给技能。
+fn luaskills_temp_root() -> PathBuf {
+    vulcan_workspace_store::data_plane::application_cache_root()
+        .join("luaskills")
+        .join("temp")
+}
+
+/// Returns the user-owned LuaSkills skill download cache root.
+/// 返回用户级 LuaSkills 技能下载缓存根。
 ///
 /// Vulcan owns only this root: LuaSkills owns the file layout inside it, so no caller
 /// may enumerate, prune, or assume a particular cache file path. It is deliberately a
@@ -2038,8 +2052,10 @@ fn default_user_skill_root() -> PathBuf {
 /// Vulcan 只持有这个根：其内部文件布局由 LuaSkills 持有，因此任何调用方都不得枚举、清理或
 /// 假定某个具体缓存文件路径。它刻意与受管运行时暂存目录**平级**而非其父目录，因为受管运行时
 /// 安装器在每次修复前会清空它自己的暂存目录。
-pub fn luaskills_download_cache_root(runtime_root: &Path) -> PathBuf {
-    runtime_root.join("temp").join("downloads")
+pub fn luaskills_download_cache_root() -> PathBuf {
+    vulcan_workspace_store::data_plane::application_cache_root()
+        .join("luaskills")
+        .join("downloads")
 }
 
 /// Builds a skill manager for one mounted root.
@@ -2068,12 +2084,12 @@ fn build_skill_manager_for_root(
         .find(|root| root.name == root_name)
         .cloned()
         .ok_or_else(|| format!("Skill root `{root_name}` was not found."))?;
-    Ok(read_only_skill_manager(&handle.runtime_root, skill_root))
+    Ok(read_only_skill_manager(skill_root))
 }
 
-/// Builds one metadata-only skill manager for a skill root under the given runtime root.
-/// 为给定运行时根下的某个技能根构建只读元数据技能管理器。
-fn read_only_skill_manager(runtime_root: &Path, skill_root: RuntimeSkillRoot) -> SkillManager {
+/// Builds one metadata-only skill manager for a skill root.
+/// 为某个技能根构建只读元数据技能管理器。
+fn read_only_skill_manager(skill_root: RuntimeSkillRoot) -> SkillManager {
     let lifecycle_root = skill_root
         .skills_dir
         .parent()
@@ -2084,7 +2100,7 @@ fn read_only_skill_manager(runtime_root: &Path, skill_root: RuntimeSkillRoot) ->
     SkillManager::new(SkillManagerConfig {
         skill_root,
         lifecycle_root,
-        download_cache_root: luaskills_download_cache_root(runtime_root),
+        download_cache_root: luaskills_download_cache_root(),
         // Catalog metadata never downloads, so this manager is built without that
         // capability instead of inheriting a permissive default.
         // 目录元数据从不下载，因此本管理器在构建时就不具备该能力，而不是继承宽松默认值。

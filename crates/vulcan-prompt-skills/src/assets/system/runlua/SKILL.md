@@ -173,7 +173,7 @@ Start a session, evaluate code in it, and close it when finished:
 
 ## Runtime Versions
 
-- LuaSkills: `0.8.2`.
+- LuaSkills: `0.9.0`.
 - mlua: `0.12.0`.
 - LuaJIT: `LuaJIT 2.1.ROLLING`.
 - LuaJIT source: `luajit-src 210.7.2+b925b3e`.

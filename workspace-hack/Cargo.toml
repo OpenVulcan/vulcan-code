@@ -42,7 +42,7 @@ indexmap = { version = "2", features = ["serde"] }
 itertools = { version = "0.14" }
 libc = { version = "0.2", features = ["extra_traits"] }
 lock_api = { version = "0.4", features = ["arc_lock"] }
-luaskills = { version = "0.8", default-features = false, features = ["contract-generation"] }
+luaskills = { version = "0.9", default-features = false, features = ["contract-generation"] }
 memchr = { version = "2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
 num-traits = { version = "0.2", features = ["i128", "libm"] }
