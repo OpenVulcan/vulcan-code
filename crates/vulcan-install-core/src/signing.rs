@@ -136,9 +136,96 @@ pub fn public_key_of(secret_key: &[u8; 32]) -> [u8; 32] {
         .to_bytes()
 }
 
+/// DER prefix of an unencrypted PKCS#8 v1 Ed25519 private key; the 32-byte seed follows.
+/// 未加密 PKCS#8 v1 Ed25519 私钥的 DER 前缀；其后紧跟 32 字节种子。
+const PKCS8_ED25519_PREFIX: [u8; 16] = [
+    0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
+];
+
+/// Reads the raw secret key of an unencrypted PKCS#8 PEM (`-----BEGIN PRIVATE KEY-----`), the form
+/// `openssl genpkey -algorithm ed25519` writes; errors never echo key material.
+/// 读取未加密 PKCS#8 PEM（`-----BEGIN PRIVATE KEY-----`）中的原始私钥，即
+/// `openssl genpkey -algorithm ed25519` 写出的形式；错误信息绝不包含密钥内容。
+pub fn secret_key_from_pkcs8_pem(pem: &str) -> FormatResult<[u8; 32]> {
+    use base64::Engine as _;
+    let invalid = |reason: &str| Err(FormatError::invalid("signing key", reason));
+    let mut lines = pem.lines().map(str::trim).filter(|line| !line.is_empty());
+    if lines.next() != Some("-----BEGIN PRIVATE KEY-----") {
+        return invalid("must start with `-----BEGIN PRIVATE KEY-----`");
+    }
+    let mut body = String::new();
+    let mut ended = false;
+    for line in lines.by_ref() {
+        if line == "-----END PRIVATE KEY-----" {
+            ended = true;
+            break;
+        }
+        body.push_str(line);
+    }
+    if !ended || lines.next().is_some() {
+        return invalid("must hold exactly one private key block");
+    }
+    let Ok(der) = base64::engine::general_purpose::STANDARD.decode(body) else {
+        return invalid("the key block is not valid base64");
+    };
+    match der.strip_prefix(PKCS8_ED25519_PREFIX.as_slice()) {
+        Some(seed) if seed.len() == 32 => {
+            let mut secret = [0_u8; 32];
+            secret.copy_from_slice(seed);
+            Ok(secret)
+        }
+        _ => invalid("is not an unencrypted PKCS#8 Ed25519 private key"),
+    }
+}
+
+/// The trusted key whose public half belongs to `secret_key`; signing with any other key would
+/// publish documents no client accepts.
+/// 公钥部分属于 `secret_key` 的受信公钥；用其他私钥签名只会发布任何客户端都不接受的文档。
+pub fn trusted_key_of<'k>(
+    secret_key: &[u8; 32],
+    keys: &'k [TrustedKey],
+) -> FormatResult<&'k TrustedKey> {
+    let public_key = public_key_of(secret_key);
+    keys.iter()
+        .find(|key| key.public_key == public_key)
+        .ok_or_else(|| {
+            FormatError::invalid("signing key", "its public key is not a trusted release key")
+        })
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn pkcs8_pem_keys_are_read_and_matched_to_trusted_keys() {
+        use base64::Engine as _;
+        let der: Vec<u8> = PKCS8_ED25519_PREFIX
+            .iter()
+            .chain(&TEST_SECRET)
+            .copied()
+            .collect();
+        let pem = format!(
+            "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
+            base64::engine::general_purpose::STANDARD.encode(&der)
+        );
+        let secret = secret_key_from_pkcs8_pem(&pem).expect("pem");
+        assert_eq!(secret, TEST_SECRET);
+        assert_eq!(
+            trusted_key_of(&secret, &test_keys())
+                .expect("trusted")
+                .key_id,
+            "test-key"
+        );
+        assert!(trusted_key_of(&secret, BUILT_IN_KEYS).is_err());
+        assert!(secret_key_from_pkcs8_pem(&pem.replace("PRIVATE KEY", "PUBLIC KEY")).is_err());
+        assert!(secret_key_from_pkcs8_pem(&format!("{pem}{pem}")).is_err());
+        let short = format!(
+            "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
+            base64::engine::general_purpose::STANDARD.encode(&der[..47])
+        );
+        assert!(secret_key_from_pkcs8_pem(&short).is_err());
+    }
 
     /// A throwaway secret key for tests.
     /// 测试用的一次性私钥。

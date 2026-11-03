@@ -34,6 +34,7 @@ members = [
     "crates/vulcan-file-watcher",
     "crates/vulcan-file-ownership",
     "crates/vulcan-install-core",
+    "crates/vulcan-release-tool",
     "crates/vulcan-markdown-memory",
     "crates/vulcan-mcp-runtime",
     "crates/vulcan-mcp-service",

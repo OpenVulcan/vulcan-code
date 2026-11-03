@@ -114,6 +114,21 @@ pub enum FormatError {
         /// 违反的规则。
         reason: String,
     },
+    /// Another process is installing or updating the same root.
+    /// 另一个进程正在安装或更新同一根目录。
+    #[error("another install or update is running in this install root")]
+    InstallBusy,
+    /// Not enough free disk space to assemble the version.
+    /// 磁盘剩余空间不足以组装该版本。
+    #[error("assembling needs about {needed} free bytes but only {available} are available")]
+    InsufficientSpace {
+        /// Bytes needed, with headroom.
+        /// 所需字节数（含余量）。
+        needed: u64,
+        /// Bytes available.
+        /// 可用字节数。
+        available: u64,
+    },
     /// Reading, writing or (de)compressing failed.
     /// 读取、写入或压缩解压失败。
     #[error("{what}: {source}")]

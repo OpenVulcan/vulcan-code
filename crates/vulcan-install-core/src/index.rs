@@ -14,6 +14,7 @@ use crate::limits::{COMPRESSION_LEVEL, MAX_EXPANDED_INDEX_BYTES, MAX_INDEX_BYTES
 use crate::names::{ComponentName, SCHEMA_VERSION};
 use crate::pack::{FileLocation, compress_frame, decompress_bounded};
 use crate::path::RelativePath;
+use crate::record::RECORD_FILE_NAME;
 
 /// Largest permission value an entry may carry; only the Unix permission bits are recorded.
 /// 条目可携带的最大权限值；只记录 Unix 权限位。
@@ -129,6 +130,47 @@ impl IndexEntry {
     }
 }
 
+/// Checks entries already in path order as one tree: each entry valid, paths unique and distinct on
+/// case-insensitive file systems, none reserved, and none below a file or symbolic link.
+/// 将已按路径排序的条目作为一棵树校验：每个条目有效，路径唯一且在大小写不敏感的文件系统上互不相同，
+/// 不使用保留路径，且没有条目位于文件或符号链接之下。
+pub(crate) fn check_entry_set(entries: &[&IndexEntry]) -> FormatResult<()> {
+    let invalid = |reason: String| Err(FormatError::invalid("component index", reason));
+    let mut folded = HashSet::with_capacity(entries.len());
+    let mut leaves = HashSet::new();
+    for (position, entry) in entries.iter().enumerate() {
+        entry.validate()?;
+        let path = entry.path();
+        if path.as_str() == RECORD_FILE_NAME {
+            return invalid(format!("`{path}` is reserved for the install record"));
+        }
+        if position > 0 && entries[position - 1].path() >= path {
+            return invalid(format!("`{path}` is out of order or repeated"));
+        }
+        if !folded.insert(path.case_folded()) {
+            return invalid(format!(
+                "`{path}` collides with another path on case-insensitive file systems"
+            ));
+        }
+        if !matches!(entry, IndexEntry::Directory { .. }) {
+            leaves.insert(path.as_str());
+        }
+    }
+    for entry in entries {
+        if let Some(parent) = entry
+            .path()
+            .ancestors()
+            .find(|ancestor| leaves.contains(ancestor))
+        {
+            return invalid(format!(
+                "`{}` lies below the file or link `{parent}`",
+                entry.path()
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Every path of one component.
 /// 某组件的全部路径。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -167,36 +209,7 @@ impl ComponentIndex {
         if self.schema != SCHEMA_VERSION {
             return invalid(format!("unsupported schema {}", self.schema));
         }
-        let mut folded = HashSet::with_capacity(self.entries.len());
-        let mut leaves = HashSet::new();
-        for (position, entry) in self.entries.iter().enumerate() {
-            entry.validate()?;
-            let path = entry.path();
-            if position > 0 && self.entries[position - 1].path() >= path {
-                return invalid(format!("`{path}` is out of order or repeated"));
-            }
-            if !folded.insert(path.case_folded()) {
-                return invalid(format!(
-                    "`{path}` collides with another path on case-insensitive file systems"
-                ));
-            }
-            if !matches!(entry, IndexEntry::Directory { .. }) {
-                leaves.insert(path.as_str());
-            }
-        }
-        for entry in &self.entries {
-            if let Some(parent) = entry
-                .path()
-                .ancestors()
-                .find(|ancestor| leaves.contains(ancestor))
-            {
-                return invalid(format!(
-                    "`{}` lies below the file or link `{parent}`",
-                    entry.path()
-                ));
-            }
-        }
-        Ok(())
+        check_entry_set(&self.entries.iter().collect::<Vec<_>>())
     }
 
     /// Total size of the component's files.
@@ -242,6 +255,20 @@ impl ComponentIndex {
         digest: Sha256Digest,
         component: &ComponentName,
     ) -> FormatResult<Self> {
+        let index = Self::read_object(object, digest)?;
+        if &index.component != component {
+            return Err(FormatError::invalid(
+                "component index",
+                format!("describes `{}` instead of `{component}`", index.component),
+            ));
+        }
+        Ok(index)
+    }
+
+    /// Verifies and reads an index object of any component, as the release tooling does with every
+    /// published index.
+    /// 校验并读取任意组件的索引对象，发布工具以此读取每个已发布索引。
+    pub fn read_object(object: &[u8], digest: Sha256Digest) -> FormatResult<Self> {
         if object.len() as u64 > MAX_INDEX_BYTES {
             return Err(FormatError::TooLarge {
                 what: "component index",
@@ -255,12 +282,6 @@ impl ComponentIndex {
             source,
         })?;
         index.validate()?;
-        if &index.component != component {
-            return Err(FormatError::invalid(
-                "component index",
-                format!("describes `{}` instead of `{component}`", index.component),
-            ));
-        }
         Ok(index)
     }
 }

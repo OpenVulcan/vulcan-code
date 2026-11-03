@@ -103,6 +103,19 @@ impl fmt::Display for Platform {
     }
 }
 
+impl FromStr for Platform {
+    type Err = FormatError;
+
+    fn from_str(text: &str) -> FormatResult<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|platform| platform.as_str() == text)
+            .ok_or_else(|| {
+                FormatError::invalid("platform", format!("`{text}` is not a release platform"))
+            })
+    }
+}
+
 /// A release channel (plan section 18.2).
 /// 发布通道（方案第 18.2 节）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -130,6 +143,19 @@ impl Channel {
 impl fmt::Display for Channel {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.as_str())
+    }
+}
+
+impl FromStr for Channel {
+    type Err = FormatError;
+
+    fn from_str(text: &str) -> FormatResult<Self> {
+        [Self::Stable, Self::Preview]
+            .into_iter()
+            .find(|channel| channel.as_str() == text)
+            .ok_or_else(|| {
+                FormatError::invalid("channel", format!("`{text}` is not a release channel"))
+            })
     }
 }
 

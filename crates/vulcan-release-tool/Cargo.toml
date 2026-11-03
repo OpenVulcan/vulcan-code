@@ -1,0 +1,22 @@
+[package]
+name = "vulcan-release-tool"
+description = "Release workflow tool that packs a release tree into incremental update objects, signs manifests and channel pointers, and verifies a local object tree by installing from it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+vulcan-install-core.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

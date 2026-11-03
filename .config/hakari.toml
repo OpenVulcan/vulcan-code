@@ -39,10 +39,12 @@ workspace-members = ["vulcan-code-service", "vulcan-lancedb-native"]
 # 否则原生库仍会间接依赖 workspace-hack。
 #
 # The install core is also linked by the static setup program, which must not compile the workspace-wide
-# feature set; it keeps only its own small dependency list.
-# 安装核心同样链接进静态安装器，安装器不得编译整个工作区的特性集合；它只保留自己的少量依赖。
+# feature set; it keeps only its own small dependency list. The release tool runs in release jobs that
+# should not compile it either.
+# 安装核心同样链接进静态安装器，安装器不得编译整个工作区的特性集合；它只保留自己的少量依赖。发布工具运行在
+# 同样不应编译该集合的发布作业中。
 [final-excludes]
-workspace-members = ["vulcan-lancedb-native", "vulcan-lancedb-contract", "vulcan-file-ownership", "vulcan-install-core"]
+workspace-members = ["vulcan-lancedb-native", "vulcan-lancedb-contract", "vulcan-file-ownership", "vulcan-install-core", "vulcan-release-tool"]
 
 # Write out exact versions rather than a semver range. (Defaults to false.)
 # exact-versions = true

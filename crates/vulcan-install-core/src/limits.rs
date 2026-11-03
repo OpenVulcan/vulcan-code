@@ -57,6 +57,14 @@ pub const MAX_WINDOW_LOG: u32 = 27;
 /// 大于此值的文件启用长距离匹配，窗口按文件大小设置。
 pub const LONG_MODE_THRESHOLD_BYTES: u64 = 8 << 20;
 
+/// Frames of one pack separated by at most this many unneeded bytes are fetched in one request.
+/// 同一文件包中间隔不超过此字节数的帧合并为一个请求获取。
+pub const RANGE_MERGE_GAP_BYTES: u64 = 64 << 10;
+
+/// Free space required beyond the bytes to write, in percent (plan section 8).
+/// 除待写入字节外要求的剩余空间余量百分比（方案第八节）。
+pub const DISK_HEADROOM_PERCENT: u64 = 10;
+
 /// Longest relative path accepted in a component index, in bytes.
 /// 组件索引接受的相对路径最大字节数。
 pub const MAX_PATH_BYTES: usize = 1024;

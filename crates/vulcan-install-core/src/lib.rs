@@ -15,9 +15,11 @@
 
 #![warn(missing_docs)]
 
+pub mod assemble;
 pub mod digest;
 pub mod error;
 pub mod index;
+pub mod install_root;
 pub mod layout;
 pub mod limits;
 pub mod manifest;
@@ -25,6 +27,7 @@ pub mod names;
 pub mod pack;
 pub mod path;
 pub mod pointer;
+pub mod record;
 pub mod signing;
 
 pub use digest::Sha256Digest;

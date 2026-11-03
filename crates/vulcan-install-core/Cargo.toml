@@ -12,7 +12,9 @@ publish = false
 workspace = true
 
 [dependencies]
+base64.workspace = true
 ed25519-dalek.workspace = true
+fs4.workspace = true
 hex.workspace = true
 semver.workspace = true
 serde.workspace = true

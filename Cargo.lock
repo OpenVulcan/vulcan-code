@@ -10062,7 +10062,9 @@ dependencies = [
 name = "vulcan-install-core"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "ed25519-dalek",
+ "fs4",
  "hex",
  "semver",
  "serde",
@@ -10414,6 +10416,18 @@ dependencies = [
  "vulcan-provider-config",
  "vulcan-runtime-assets",
  "workspace-hack",
+]
+
+[[package]]
+name = "vulcan-release-tool"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "vulcan-install-core",
 ]
 
 [[package]]
