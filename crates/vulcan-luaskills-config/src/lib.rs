@@ -1,5 +1,8 @@
-//! Vulcan-owned LuaSkills runtime settings stored under the output configuration directory.
-//! 存储在 output 配置目录下、由 Vulcan 持有的 LuaSkills 运行时设置。
+//! Vulcan-owned LuaSkills runtime settings stored under the user's configuration directory.
+//! 存储在用户配置目录下、由 Vulcan 持有的 LuaSkills 运行时设置。
+//!
+//! No template ships with the distribution: an absent file means the compiled defaults.
+//! 发行物不附带模板：文件不存在即表示编译默认值。
 
 mod atomic_file;
 
@@ -530,11 +533,11 @@ impl LuaSkillsRuntimeSettings {
     }
 }
 
-/// Return the LuaSkills runtime settings file path below one output configuration directory.
-/// 返回单个 output 配置目录下的 LuaSkills 运行时设置文件路径。
+/// Return the LuaSkills runtime settings file path below one user configuration directory.
+/// 返回单个用户配置目录下的 LuaSkills 运行时设置文件路径。
 ///
-/// `config_directory` is the exact Vulcan `output/config` directory selected by the host.
-/// `config_directory` 是宿主选定的精确 Vulcan `output/config` 目录。
+/// `config_directory` is the user-owned Vulcan Code `config` directory selected by the host.
+/// `config_directory` 是宿主选定的用户级 Vulcan Code `config` 目录。
 pub fn runtime_settings_file_path(config_directory: &Path) -> PathBuf {
     config_directory.join(LUASKILLS_RUNTIME_SETTINGS_FILE_NAME)
 }
@@ -602,23 +605,6 @@ fn normalized_optional_text(value: Option<&str>) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::{Value, json};
-
-    /// Verify the repository template synchronized into output matches the compiled defaults.
-    /// 验证同步到 output 的仓库模板与编译默认值一致。
-    #[test]
-    fn repository_template_matches_compiled_defaults() {
-        let template_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..")
-            .join("config")
-            .join(LUASKILLS_RUNTIME_SETTINGS_FILE_NAME);
-        let template_text = fs::read_to_string(&template_path).expect("read settings template");
-        let template = serde_json::from_str::<LuaSkillsRuntimeSettings>(&template_text)
-            .expect("parse settings template")
-            .normalized()
-            .expect("validate settings template");
-        assert_eq!(template, LuaSkillsRuntimeSettings::default());
-    }
 
     /// Verify missing settings use the exact embedded defaults.
     /// 验证设置缺失时使用精确的内嵌默认值。

@@ -50,9 +50,9 @@ const DIRECTORY_RENAME_RETRY_INTERVAL: Duration = Duration::from_millis(250);
 /// Immutable native installation request for one managed runtime bootstrap.
 /// 单次受管运行时初始化使用的不可变原生安装请求。
 pub(crate) struct NativeManagedRuntimeInstallRequest<'a> {
-    /// Writable LuaSkills runtime root used for caches and downloaded archives.
-    /// 用于缓存与下载归档的可写 LuaSkills 运行时根。
-    pub(crate) runtime_root: &'a Path,
+    /// User-owned writable work root used for caches and downloaded archives.
+    /// 用于缓存与下载归档的用户级可写工作根。
+    pub(crate) work_root: &'a Path,
     /// Host-owned root that directly contains Python and Node distributions.
     /// 直接包含 Python 与 Node 发行包的宿主自有根目录。
     pub(crate) distribution_root: &'a Path,
@@ -203,7 +203,7 @@ pub(crate) fn official_download_client(purpose: &str) -> Result<Client, String> 
         .timeout(HTTP_REQUEST_TIMEOUT)
         .user_agent(format!(
             "Vulcan-Code/{} {purpose}",
-            env!("CARGO_PKG_VERSION")
+            vulcan_product_info::version()
         ))
         .build()
         .map_err(|error| format!("failed to create {purpose} HTTP client: {error}"))
@@ -259,16 +259,14 @@ impl PlatformAssets {
     }
 }
 
-/// Returns the managed-runtime download staging root beneath one runtime root.
-/// 返回某个运行时根之下的受管运行时下载暂存根。
+/// Returns the download staging root beneath one installer work root.
+/// 返回某个安装器工作根之下的下载暂存根。
 ///
-/// Every managed component stages under a versioned child of this root and wipes only
-/// that child before installing, so the LuaSkills skill download cache at
-/// `temp/downloads` is never touched by a runtime repair.
-/// 每个受管组件都在本根之下的版本化子目录中暂存，且安装前只清空该子目录，因此
-/// `temp/downloads` 处的 LuaSkills 技能下载缓存绝不会被运行时修复触碰。
-pub(crate) fn managed_runtime_download_root(runtime_root: &Path) -> PathBuf {
-    runtime_root.join("temp").join("managed-runtimes")
+/// Every managed component stages under a versioned child of this root and wipes only that child
+/// before installing.
+/// 每个受管组件都在本根之下的版本化子目录中暂存，且安装前只清空该子目录。
+pub(crate) fn managed_runtime_download_root(work_root: &Path) -> PathBuf {
+    work_root.join("downloads")
 }
 
 /// Download, verify, extract, and atomically install the managed uv executable.
@@ -290,7 +288,7 @@ where
     );
     // download_root isolates reusable archives from final installations.
     // download_root 将可复用归档与最终安装隔离。
-    let download_root = managed_runtime_download_root(request.runtime_root)
+    let download_root = managed_runtime_download_root(request.work_root)
         .join(format!("uv-{}-{}", request.uv_version, request.platform));
     prepare_clean_directory(&download_root)?;
     // archive_path stores the complete verified uv archive.
@@ -432,7 +430,7 @@ where
     prepare_clean_directory(&staging)?;
     // cache_root isolates uv downloads from user-level uv state.
     // cache_root 将 uv 下载与用户级 uv 状态隔离。
-    let cache_root = request.runtime_root.join("temp/managed-runtimes/uv-cache");
+    let cache_root = request.work_root.join("uv-cache");
     fs::create_dir_all(&cache_root).map_err(|error| {
         format!(
             "failed to create uv cache {}: {error}",
@@ -654,7 +652,7 @@ where
     let asset_url = format!("{base_url}/{}", assets.node_asset);
     // download_root isolates Node.js archives from final installations.
     // download_root 将 Node.js 归档与最终安装隔离。
-    let download_root = managed_runtime_download_root(request.runtime_root).join(format!(
+    let download_root = managed_runtime_download_root(request.work_root).join(format!(
         "node-{}-{}",
         request.node_version, request.platform
     ));
@@ -824,7 +822,7 @@ where
         })?;
     // download_root isolates the package tarball from its final installation.
     // download_root 将包 tarball 与最终安装隔离。
-    let download_root = managed_runtime_download_root(request.runtime_root)
+    let download_root = managed_runtime_download_root(request.work_root)
         .join(format!("pnpm-{}", request.pnpm_version));
     prepare_clean_directory(&download_root)?;
     // tarball_path stores the exact verified pnpm package tarball.

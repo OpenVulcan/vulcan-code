@@ -639,7 +639,8 @@ fn isolated_handle(
     let runtime_root = root.join("runtime");
     let managed_runtime_distribution_root = root.join("managed-distributions");
     let managed_runtime_environment_root = root.join("managed-environments");
-    let output_config_directory = root.join("output-config");
+    let managed_runtime_work_root = root.join("managed-work");
+    let runtime_settings_directory = root.join("settings");
     let skill_config_root = root.join("skill-config");
     let root_skills = root.join("root-skills");
     let user_skills = root.join("user-skills");
@@ -647,7 +648,8 @@ fn isolated_handle(
         runtime_root.as_path(),
         managed_runtime_distribution_root.as_path(),
         managed_runtime_environment_root.as_path(),
-        output_config_directory.as_path(),
+        managed_runtime_work_root.as_path(),
+        runtime_settings_directory.as_path(),
         skill_config_root.as_path(),
         root_skills.as_path(),
         user_skills.as_path(),
@@ -672,6 +674,7 @@ fn isolated_handle(
     let host_options = build_host_options(
         &runtime_root,
         &managed_runtime_distribution_root,
+        &managed_runtime_environment_root,
         &skill_config_root,
         &runtime_settings,
     );
@@ -697,7 +700,8 @@ fn isolated_handle(
         runtime_root,
         managed_runtime_distribution_root,
         managed_runtime_environment_root,
-        output_config_directory,
+        managed_runtime_work_root,
+        runtime_settings_directory,
         skill_roots,
         managed_runtime_report: Arc::new(Mutex::new(ManagedRuntimeBootstrapReport::default())),
         managed_runtime_progress: Arc::new(Mutex::new(None)),

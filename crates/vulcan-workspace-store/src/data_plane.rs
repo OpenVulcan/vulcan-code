@@ -357,6 +357,29 @@ pub fn application_data_root() -> PathBuf {
     }
 }
 
+/// Returns the parent of the host-managed ROOT skill layer, shared by every installed version.
+/// 返回宿主管理的 ROOT 技能层的父目录，由所有已安装版本共用。
+///
+/// LuaSkills keeps the layer's `skills`, `dependencies`, `state` and `databases` side by side
+/// below it, so skills and their FFI dependencies never enter a version directory.
+/// LuaSkills 在其下并列保存该层的 `skills`、`dependencies`、`state` 与 `databases`，因此技能及其
+/// FFI 依赖从不进入版本目录。
+pub fn application_luaskills_root_layer() -> PathBuf {
+    application_data_root().join("luaskills-root")
+}
+
+/// Returns the user-owned cache root for rebuildable downloads and staging areas.
+/// 返回用于可重建下载与暂存区的用户级缓存根目录。
+pub fn application_cache_root() -> PathBuf {
+    application_data_root().join("cache")
+}
+
+/// Returns the user-owned configuration root for settings documents that outlive every version.
+/// 返回用户级配置根目录，保存跨越所有版本的设置文档。
+pub fn application_config_root() -> PathBuf {
+    application_data_root().join("config")
+}
+
 /// Derive the application SQLite path shared by bootstrap and explicit maintenance.
 /// 派生引导与显式维护共用的应用 SQLite 路径。
 /// No arguments; returns the path under the build-profile-specific application data root.

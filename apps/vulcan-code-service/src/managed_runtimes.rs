@@ -24,15 +24,15 @@ pub const ARG_PREPARE_MANAGED_RUNTIMES: &str = "--prepare-managed-runtimes";
 /// The prepared directory, or the installer's diagnostic when any runtime is still unusable.
 /// 返回已准备的目录；任一运行时仍不可用时返回安装器诊断。
 pub fn prepare_managed_runtimes() -> Result<String, String> {
-    let runtime_root =
-        vulcan_runtime_assets::resolve_luaskills_runtime_root().ok_or_else(|| {
-            String::from("no synchronized lua_runtime directory was found beside this executable")
-        })?;
+    // The installer's lock, downloads and caches stay in the user cache, so the prepared
+    // distribution holds nothing but the runtimes themselves.
+    // 安装器的锁、下载与缓存留在用户缓存中，因此准备好的发行物只包含运行时本身。
+    let work_root = vulcan_service_runtime::luaskills_bridge::managed_runtime_work_root();
     let distribution_root = vulcan_runtime_assets::resolve_managed_runtime_distribution_root()
         .ok_or_else(|| String::from("no distribution root was found beside this executable"))?;
     std::fs::create_dir_all(&distribution_root)
         .map_err(|error| format!("failed to create {}: {error}", distribution_root.display()))?;
-    let report = bootstrap_managed_runtimes(&runtime_root, &distribution_root, |event| {
+    let report = bootstrap_managed_runtimes(&work_root, &distribution_root, |event| {
         eprintln!("{}", event.message);
     });
     match report.status {

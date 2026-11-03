@@ -188,9 +188,12 @@ pub struct TauriLuaSkillsHandle {
     /// LuaSkills-owned writable root containing reusable managed environments.
     /// LuaSkills 持有的可写根目录，包含可复用受管环境。
     pub managed_runtime_environment_root: PathBuf,
-    /// Output-owned Vulcan configuration directory shared by host LuaSkills engines.
-    /// 宿主 LuaSkills 引擎共享的 output 自有 Vulcan 配置目录。
-    pub output_config_directory: PathBuf,
+    /// User-owned writable root holding the managed-runtime installer lock, downloads and caches.
+    /// 用户级可写根目录，保存受管运行时安装器的锁、下载与缓存。
+    pub managed_runtime_work_root: PathBuf,
+    /// User-owned directory holding the LuaSkills runtime settings document.
+    /// 保存 LuaSkills 运行时设置文档的用户级目录。
+    pub runtime_settings_directory: PathBuf,
     /// Mounted ROOT and USER skill roots.
     /// 已挂载的 ROOT 与 USER 技能根目录。
     pub skill_roots: Vec<RuntimeSkillRoot>,
@@ -226,7 +229,11 @@ impl std::fmt::Debug for TauriLuaSkillsHandle {
                 "managed_runtime_environment_root",
                 &self.managed_runtime_environment_root,
             )
-            .field("output_config_directory", &self.output_config_directory)
+            .field("managed_runtime_work_root", &self.managed_runtime_work_root)
+            .field(
+                "runtime_settings_directory",
+                &self.runtime_settings_directory,
+            )
             .field("skill_roots", &self.skill_roots)
             .field("managed_runtime_report", &self.managed_runtime_report)
             .field("managed_runtime_progress", &self.managed_runtime_progress)
@@ -379,13 +386,16 @@ where
         })?,
     );
     progress("Preparing the LuaSkills runtime directories");
-    // output_config_directory is the only runtime configuration root accepted by Vulcan Code.
-    // output_config_directory 是 Vulcan Code 唯一接受的运行时配置根目录。
-    let output_config_directory = vulcan_runtime_assets::resolve_output_config_directory()
-        .ok_or_else(|| String::from("The Vulcan output/config directory was not found."))?;
+    // The release tree is read-only at run time: settings, the ROOT skill layer, managed
+    // environments and installer work areas all live below the user's Vulcan Code root, so every
+    // installed version shares them and an update never carries or loses them.
+    // 发行树在运行时只读：设置、ROOT 技能层、受管环境与安装器工作区都位于用户 Vulcan Code 根下，
+    // 因此所有已安装版本共用它们，更新既不携带也不丢失它们。
+    let runtime_settings_directory = vulcan_workspace_store::data_plane::application_config_root();
     // runtime_settings is the Vulcan-owned source of truth shared by both host engines.
     // runtime_settings 是两个宿主引擎共享的 Vulcan 自有事实来源。
-    let runtime_settings = load_runtime_settings(&output_config_directory)?;
+    let runtime_settings = load_runtime_settings(&runtime_settings_directory)?;
+    let managed_runtime_work_root = managed_runtime_work_root();
     // managed_runtime_distribution_root is the canonical host-owned public runtime directory.
     // managed_runtime_distribution_root 是宿主持有的规范公共运行时目录。
     let managed_runtime_distribution_root =
@@ -408,13 +418,13 @@ where
             )
         })?,
     );
-    let skill_roots = ensure_runtime_root_layout(&runtime_root)?;
+    let skill_roots = ensure_skill_root_layout(&runtime_root)?;
     // skill_config_root is the single host-owned package configuration root shared by every LuaSkills engine.
     // skill_config_root 是所有 LuaSkills 引擎共享的唯一宿主持有技能包配置根目录。
     let skill_config_root =
         vulcan_workspace_store::data_plane::application_luaskills_config_root()?;
     let managed_runtime_report = bootstrap_managed_runtimes(
-        &runtime_root,
+        &managed_runtime_work_root,
         &managed_runtime_distribution_root,
         |event: &ManagedRuntimeBootstrapProgress| {
             progress(&event.message);
@@ -425,9 +435,13 @@ where
         "Managed Python/Node runtime: {}",
         managed_runtime_report.diagnostic
     ));
+    // managed_runtime_environment_root keeps writable environments beside the ROOT skill layer.
+    // managed_runtime_environment_root 将可写环境保存在 ROOT 技能层旁。
+    let managed_runtime_environment_root = managed_runtime_environment_root();
     let mut host_options = build_host_options(
         &runtime_root,
         &managed_runtime_distribution_root,
+        &managed_runtime_environment_root,
         &skill_config_root,
         &runtime_settings,
     );
@@ -457,16 +471,14 @@ where
         .load_from_roots(&skill_roots)
         .map_err(|error| format!("Failed to load the LuaSkills skill roots: {error}"))?;
 
-    // managed_runtime_environment_root keeps writable environments inside LuaSkills-owned data.
-    // managed_runtime_environment_root 将可写环境保留在 LuaSkills 自有数据目录内。
-    let managed_runtime_environment_root = runtime_root.join("dependencies").join("envs");
     Ok(TauriLuaSkillsHandle {
         engine: Arc::new(RwLock::new(engine)),
         plugin_engine,
         runtime_root,
         managed_runtime_distribution_root,
         managed_runtime_environment_root,
-        output_config_directory,
+        managed_runtime_work_root,
+        runtime_settings_directory,
         skill_roots,
         managed_runtime_report: Arc::new(Mutex::new(managed_runtime_report)),
         managed_runtime_progress: Arc::new(Mutex::new(None)),
@@ -850,10 +862,10 @@ pub fn save_luaskills_runtime_settings(
         crate::luaskills_network::validated_custom_github_mirrors(
             &settings.network.custom_github_mirrors,
         )?;
-    save_runtime_settings(&handle.output_config_directory, &settings)?;
+    save_runtime_settings(&handle.runtime_settings_directory, &settings)?;
     // The saved file is re-read so the engine receives exactly what normalization persisted.
     // 重新读取已保存文件，使引擎收到的正是规范化后持久化的内容。
-    let saved = load_runtime_settings(&handle.output_config_directory)?;
+    let saved = load_runtime_settings(&handle.runtime_settings_directory)?;
     let mut engine = handle.engine.write().map_err(|_| {
         String::from(
             "The LuaSkills engine write lock is poisoned; the network settings cannot be applied.",
@@ -940,7 +952,7 @@ where
     // report contains the exact outcome produced by the same bootstrap path used during startup.
     // report 包含与启动阶段相同初始化路径产生的精确结果。
     let report = bootstrap_managed_runtimes_for_target(
-        &handle.runtime_root,
+        &handle.managed_runtime_work_root,
         &handle.managed_runtime_distribution_root,
         target,
         |event: &ManagedRuntimeBootstrapProgress| {
@@ -1487,7 +1499,7 @@ fn build_luaskills_catalog(
     });
     // runtime_settings is loaded once so the projected values and restart flag share one file image.
     // runtime_settings 仅加载一次，使投影值与重启标志共享同一文件镜像。
-    let runtime_settings = load_runtime_settings(&handle.output_config_directory)?;
+    let runtime_settings = load_runtime_settings(&handle.runtime_settings_directory)?;
     // restart_required compares persisted startup inputs with the immutable running-engine baseline.
     // restart_required 比较持久化启动输入与不可变的运行中引擎基线。
     let restart_required =
@@ -1524,47 +1536,32 @@ fn build_luaskills_catalog(
         skills,
         runtime_settings,
         runtime_settings_file: vulcan_runtime_assets::native_host_path(
-            &runtime_settings_file_path(&handle.output_config_directory),
+            &runtime_settings_file_path(&handle.runtime_settings_directory),
         ),
         restart_required,
         github_token_configured: engine.network_options().github_token.is_some(),
     })
 }
 
-/// Ensures the required LuaSkills runtime directory layout exists.
-/// 确保 LuaSkills 运行时所需目录布局存在。
-fn ensure_runtime_root_layout(runtime_root: &Path) -> Result<Vec<RuntimeSkillRoot>, String> {
-    let temp_dir = runtime_root.join("temp");
-    let resources_dir = runtime_root.join("resources");
-    let lua_packages_dir = runtime_root.join("lua_packages");
-    let libs_root = runtime_root.join("libs");
-    let bin_root = runtime_root.join("bin");
-    let dependencies_dir = runtime_root.join("dependencies");
-    let databases_dir = runtime_root.join("databases");
-    let config_dir = runtime_root.join("config");
-    let state_dir = runtime_root.join("state");
-    let download_root = luaskills_download_cache_root(runtime_root);
-    let root_skills_dir = runtime_root.join("skills");
-    // user_skills_dir is normalized before it becomes a LuaSkills RuntimeSkillRoot.
-    // user_skills_dir 在成为 LuaSkills RuntimeSkillRoot 前完成原生路径规范化。
+/// Ensures the user-owned ROOT and USER skill directories exist and returns them as skill roots.
+/// 确保用户级 ROOT 与 USER 技能目录存在，并以技能根形式返回。
+///
+/// The runtime root belongs to the read-only release tree, with one exception: LuaSkills 0.8
+/// always places `temp` (exposed to skills as `temp_dir`, and the parent of the download cache)
+/// below the runtime root, so it is still created there until LuaSkills accepts a host-owned
+/// writable layout.
+/// 运行时根属于只读发行树，只有一个例外：LuaSkills 0.8 总是把 `temp`（以 `temp_dir` 暴露给技能，
+/// 也是下载缓存的父目录）放在运行时根下，因此在 LuaSkills 接受宿主持有的可写布局之前仍在此创建。
+fn ensure_skill_root_layout(runtime_root: &Path) -> Result<Vec<RuntimeSkillRoot>, String> {
+    // Both skill directories are normalized before they become LuaSkills RuntimeSkillRoot values.
+    // 两个技能目录都在成为 LuaSkills RuntimeSkillRoot 前完成原生路径规范化。
+    let root_skills_dir = vulcan_runtime_assets::native_host_path(&default_root_skill_root());
     let user_skills_dir = vulcan_runtime_assets::native_host_path(&default_user_skill_root());
-    let system_lua_lib_dir = runtime_root.join("system_lua_lib");
-
+    let temp_dir = runtime_root.join("temp");
     for directory in [
-        runtime_root,
-        temp_dir.as_path(),
-        resources_dir.as_path(),
-        lua_packages_dir.as_path(),
-        libs_root.as_path(),
-        bin_root.as_path(),
-        dependencies_dir.as_path(),
-        databases_dir.as_path(),
-        config_dir.as_path(),
-        state_dir.as_path(),
-        download_root.as_path(),
         root_skills_dir.as_path(),
         user_skills_dir.as_path(),
-        system_lua_lib_dir.as_path(),
+        temp_dir.as_path(),
     ] {
         fs::create_dir_all(directory).map_err(|error| {
             format!(
@@ -1932,6 +1929,7 @@ fn ordinary_uninstall_target_root_for_skill(
 fn build_host_options(
     runtime_root: &Path,
     managed_runtime_distribution_root: &Path,
+    managed_runtime_environment_root: &Path,
     skill_config_root: &Path,
     runtime_settings: &LuaSkillsRuntimeSettings,
 ) -> LuaRuntimeHostOptions {
@@ -1951,8 +1949,9 @@ fn build_host_options(
     host_options.skill_config_root =
         Some(vulcan_runtime_assets::native_host_path(skill_config_root));
     host_options.managed_runtime_distribution_root = Some(lua_managed_runtime_distribution_root);
-    host_options.managed_runtime_environment_root =
-        Some(lua_runtime_root.join("dependencies").join("envs"));
+    host_options.managed_runtime_environment_root = Some(vulcan_runtime_assets::native_host_path(
+        managed_runtime_environment_root,
+    ));
     host_options.managed_runtime_config = LuaRuntimeManagedRuntimeConfig {
         worker_pool_max_size_per_environment: runtime_settings
             .managed_runtime
@@ -1999,6 +1998,26 @@ fn build_host_options(
         enable_managed_io_compat: runtime_settings.capabilities.enable_managed_io_compat,
     };
     host_options
+}
+
+/// Returns the host-managed ROOT skill directory shared by every installed version.
+/// 返回由所有已安装版本共用的宿主管理 ROOT 技能目录。
+fn default_root_skill_root() -> PathBuf {
+    vulcan_workspace_store::data_plane::application_luaskills_root_layer().join("skills")
+}
+
+/// Returns the writable managed Python and Node environment root beside the ROOT skill layer.
+/// 返回位于 ROOT 技能层旁的可写受管 Python 与 Node 环境根目录。
+fn managed_runtime_environment_root() -> PathBuf {
+    vulcan_workspace_store::data_plane::application_luaskills_root_layer()
+        .join("dependencies")
+        .join("envs")
+}
+
+/// Returns the user-owned work root of the managed-runtime installer: its lock, downloads and caches.
+/// 返回受管运行时安装器的用户级工作根：其锁、下载与缓存。
+pub fn managed_runtime_work_root() -> PathBuf {
+    vulcan_workspace_store::data_plane::application_cache_root().join("managed-runtimes")
 }
 
 /// Returns the mutable user skill root shared by Vulcan Code hosts.
@@ -2236,40 +2255,6 @@ mod tests {
 #[cfg(test)]
 #[path = "luaskills_bridge/local_github_tests.rs"]
 mod local_github_tests;
-
-/// Verifies the skill download cache and the managed-runtime staging root never overlap.
-/// 验证技能下载缓存与受管运行时暂存根绝不相交。
-///
-/// A managed-runtime repair wipes its own staging directory before installing, so any
-/// overlap with the skill download cache would destroy cached skill archives. The
-/// two roots are siblings under `temp` precisely so this cannot happen.
-/// 受管运行时修复在安装前会清空它自己的暂存目录，因此与技能下载缓存的重叠会摧毁已缓存的
-/// 技能归档。两个根刻意是 `temp` 下的**平级**目录，正是为了杜绝这种情况。
-#[test]
-fn download_cache_and_managed_runtime_staging_never_overlap() {
-    let runtime_root = PathBuf::from("runtime-root");
-    let skill_cache = luaskills_download_cache_root(&runtime_root);
-    let staging = crate::managed_runtime_installer::managed_runtime_download_root(&runtime_root);
-
-    assert_ne!(skill_cache, staging);
-    // Containment is asserted in both directions, because either nesting order would
-    // let one wipe reach the other.
-    // 双向断言包含关系，因为任一嵌套顺序都会让一次清空波及另一方。
-    assert!(
-        !skill_cache.starts_with(&staging),
-        "the skill cache must not live inside managed-runtime staging"
-    );
-    assert!(
-        !staging.starts_with(&skill_cache),
-        "managed-runtime staging must not live inside the skill cache"
-    );
-    // The versioned component directory is what a repair actually wipes, so it is
-    // asserted separately from the staging root.
-    // 修复实际清空的是版本化组件目录，因此它要与暂存根分开断言。
-    let component = staging.join("uv-1.2.3-x86_64-pc-windows-msvc");
-    assert!(component.starts_with(&staging));
-    assert!(!component.starts_with(&skill_cache));
-}
 
 /// Verifies a post-commit failure names the mutation that already completed.
 /// 验证后置失败会点名已经完成的变更。

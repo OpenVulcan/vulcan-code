@@ -221,9 +221,9 @@ WebUI. Do not request or relay sensitive values.
 LuaSkills VM 池的宿主默认值由 `vulcan-luaskills-config::LuaSkillsRuntimeSettings::default()`
 定义：主 VM 池最小 4、最大 8，多余空闲 VM 在 60 秒后可回收；隔离 runLua 池最小 1、最大 4，
 多余空闲 VM 在 30 秒后可回收。缺少 `luaskills-runtime-setting.json` 时使用这些内存默认值，
-不会自动创建用户配置文件。新安装配置模板 `config/luaskills-runtime-setting.json` 与编译默认值
-通过测试保持一致；默认值变更时必须同步模板和本段说明。已有配置仍按用户保存值加载，
-资源同步仅在目标文件缺失时播种，不覆盖已有配置；已有文件缺少必填池字段仍显式报错。
+不会自动创建用户配置文件。该文件位于用户数据根的 `config/` 目录（`~/.vulcan/code/config/`），发行物不附带模板，
+安装目录在运行时从不写入；默认值变更时同步本段说明。已有配置仍按用户保存值加载；已有文件缺少必填池字段
+仍显式报错。
 
 服务端先读取不含值的声明，只为 `sensitive=false` 且当前合法的配置项读取和规范化有效值。写入结果同样会删除敏感项的规范值，再跨越 RPC 边界。
 
