@@ -15,6 +15,28 @@ mod embedded_tree;
 mod main_business;
 mod notification_stop;
 
+/// Waits for the wakeup that question acceptance scheduled on `target` to release its dispatch owner.
+/// 等待提问接纳在 `target` 上调度的唤醒释放其分发所有权。
+///
+/// The wakeup settles revocations and copies target failures on its own, so tests that drive a
+/// later boundary by hand let it finish against the unchanged accepted state first.
+/// 唤醒会自行结算撤权并复制目标失败，因此手动驱动后续边界的测试先让它在未改变的已接纳状态上结束。
+async fn finish_acceptance_wakeup(invocation: &ValidatedInvocation, target: &SessionHandle) {
+    tokio::time::timeout(std::time::Duration::from_secs(8), async {
+        while invocation
+            .state
+            .lock()
+            .unwrap()
+            .collaboration_dispatch_owners
+            .contains_key(&target.session_id())
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the question wakeup scheduled by acceptance must finish");
+}
+
 /// Full stop returns an unprojected accepted question as a queryable target-stopped failure.
 /// 全停将尚未投影的已接纳问题回传为可查询的目标停止失败。
 #[tokio::test]
@@ -29,6 +51,7 @@ async fn stopped_target_returns_accepted_question_failure_to_source() {
     )
     .await
     .unwrap();
+    finish_acceptance_wakeup(&invocation, &target).await;
     let question_id =
         CollaborationQuestionId::try_new(asked["question_id"].as_str().unwrap()).unwrap();
     let delivery_id = source
@@ -135,6 +158,7 @@ async fn accepted_question_revoked_before_projection_settles_both_sides() {
     .await
     .unwrap();
     assert_eq!(asked["status"], "ok");
+    finish_acceptance_wakeup(&invocation, &target).await;
     let question_id =
         CollaborationQuestionId::try_new(asked["question_id"].as_str().unwrap()).unwrap();
     let delivery_id = source
@@ -243,6 +267,7 @@ async fn revoked_accepted_question_wakeup_settles_without_provider_boundary() {
     )
     .await
     .unwrap();
+    finish_acceptance_wakeup(&invocation, &target).await;
     let question_id =
         CollaborationQuestionId::try_new(asked["question_id"].as_str().unwrap()).unwrap();
     let delivery_id = source
@@ -327,6 +352,7 @@ async fn failed_accepted_question_repairs_missing_source_progress() {
     )
     .await
     .unwrap();
+    finish_acceptance_wakeup(&invocation, &target).await;
     let question_id =
         CollaborationQuestionId::try_new(asked["question_id"].as_str().unwrap()).unwrap();
     let delivery_id = source
@@ -422,6 +448,7 @@ async fn answered_question_revoked_before_model_delivery_redacts_failure() {
     )
     .await
     .unwrap();
+    finish_acceptance_wakeup(&invocation, &target).await;
     let question_id =
         CollaborationQuestionId::try_new(asked["question_id"].as_str().unwrap()).unwrap();
     let (question, delivery, _) = read_question_source(&source, &question_id).unwrap();
