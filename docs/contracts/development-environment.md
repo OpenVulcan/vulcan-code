@@ -181,9 +181,9 @@ make deps-rust-tools
 
 ### 持续集成中的精简准备
 
-开发机继续使用 `make init-system`。GitHub Actions 的 Rust 作业运行在已有编译器的 Windows 镜像中，只准备当前检查实际使用的依赖：由 `install-locked-tools.mjs` 安装 protoc、nextest 与内置 sg/rg/rtk，执行 `make.ps1 deps lua` 和 `managed-node.mjs output`（该作业只验证 Debug 发行目录），在运行时回归前显式 `make.ps1 sync`。不为这些测试编译安装未使用的 hakari、deny 或 about。
+开发机继续使用 `make init-system`。GitHub Actions 的 Rust 作业（必过项在 Ubuntu，另有 Windows 检查与夜间完整测试）只准备当前检查实际使用的依赖：`.github/actions/rust-setup` 安装 Linux 原生包、固定工具链与 protoc；测试作业再由 `install-locked-tools.mjs` 安装 nextest 与内置 sg/rg/rtk，执行 `make deps lua` 和 `managed-node.mjs output`（只验证 Debug 发行目录），夜间在运行时回归前显式 `make sync`。不为这些测试编译安装未使用的 hakari、deny 或 about。
 
-nextest 的 CI 二进制仅支持该作业使用的 Windows x64，安装到忽略目录 `target/ci-tools/bin/`，不覆盖开发机全局 Cargo 工具。唯一版本与归档 SHA-256 来源为 `scripts/build-inputs.lock.json`；下载器检查缓存摘要，安装器检查实际版本，不使用 latest 或未校验的归档。开发机其他平台仍使用原初始化入口。分类与缓存规则见 [仓库检查](repository-quality-gates.md)。
+nextest 的 CI 二进制只锁定 CI 使用的 Windows x64 与 Linux x64，安装到忽略目录 `target/ci-tools/bin/`，不覆盖开发机全局 Cargo 工具。唯一版本与归档 SHA-256 来源为 `scripts/build-inputs.lock.json`；下载器检查缓存摘要，安装器检查实际版本，不使用 latest 或未校验的归档。开发机其他平台仍使用原初始化入口。分类与缓存规则见 [仓库检查](repository-quality-gates.md)。
 
 ### 依赖治理入口
 
@@ -241,14 +241,15 @@ cargo test --doc
 
 ### 本地测试入口
 
-仓库尚未启用 CI，整套 Rust 测试只能由本地入口定期执行：
+本地与 CI 使用同一入口：CI 必过项运行 `fast`，夜间运行 `full`（见 [仓库检查](repository-quality-gates.md)）。
 
 | 命令 | 内容 |
 | --- | --- |
 | `make test` | 以 nextest `fast` 配置运行全工作区测试，跳过成本来自真实流逝时间、真实 VMM 控制器或完整插件生命周期的测试。 |
 | `make test full` | 运行全部 nextest 测试、`scripts/test-isolated-callbacks.mjs` 中的进程隔离回调测试，以及 `cargo test --doc`。 |
+| `node scripts/test-rust.mjs quarantine` | 只运行 `.config/ci-quarantine.json` 中已隔离的不稳定测试；前两项都排除这些测试。 |
 
-两者都由 `scripts/test-rust.mjs` 执行，先构建 LanceDB 原生库（见上文），并继承 `.config/nextest.toml` 的线程上限与串行组。`fast` 的排除名单只在 `.config/nextest.toml` 的 `[profile.fast]` 中维护；新增长耗时测试时更新该过滤器，并用 `cargo nextest list --profile fast` 核对实际排除结果。合并或发布前执行 `make test full`。
+三者都由 `scripts/test-rust.mjs` 执行，先构建 LanceDB 原生库（见上文），并继承 `.config/nextest.toml` 的线程上限与串行组。`fast` 的排除名单只在 `.config/nextest.toml` 的 `[profile.fast]` 中维护；新增长耗时测试时更新该过滤器，并用 `cargo nextest list --profile fast` 核对实际排除结果。合并或发布前执行 `make test full`。
 
 ### 手动验证夹具
 

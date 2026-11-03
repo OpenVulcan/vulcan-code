@@ -1,7 +1,10 @@
-// Run the Rust test suite locally: `fast` for the inner loop, `full` before merging or releasing.
-// 在本地运行 Rust 测试：`fast` 用于内循环，`full` 用于合并或发布前。
+// Run the Rust test suite: `fast` for the inner loop and the required CI set, `full` before merging or
+// releasing and nightly, `quarantine` for the known-unstable tests that the other two leave out.
+// 运行 Rust 测试：`fast` 用于内循环与 CI 必过集，`full` 用于合并、发布前与夜间，`quarantine` 运行另两者
+// 排除的已知不稳定测试。
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { loadQuarantine, quarantinedFilter } from './ci-quarantine.mjs';
 
 // Repository root keeps invocation independent of the caller's working directory.
 // 仓库根目录确保入口不依赖调用者当前工作目录。
@@ -15,16 +18,22 @@ const mode = process.argv[2] ?? 'fast';
 // 测试二进制从 profile 目录加载原生 LanceDB 库，而测试构建不会生成它。
 const library = ['cargo', ['build', '--locked', '-p', 'vulcan-lancedb-native']];
 
+// quarantined selects the known-unstable tests of .config/ci-quarantine.json; fast and full leave them out.
+// quarantined 选中 .config/ci-quarantine.json 中已知不稳定的测试；fast 与 full 不运行它们。
+const quarantine = loadQuarantine();
+const quarantined = quarantinedFilter(quarantine);
+const stable = ['-E', `not (${quarantined})`];
+
 // Each step is one command; the first failing step stops the run with its exit status.
 // 每个步骤是一条命令；首个失败步骤以其退出码终止运行。
 const steps = {
   fast: [
     library,
-    ['cargo', ['nextest', 'run', '--locked', '--workspace', '--profile', 'fast', '--no-fail-fast']],
+    ['cargo', ['nextest', 'run', '--locked', '--workspace', '--profile', 'fast', '--no-fail-fast', ...stable]],
   ],
   full: [
     library,
-    ['cargo', ['nextest', 'run', '--locked', '--workspace', '--no-fail-fast']],
+    ['cargo', ['nextest', 'run', '--locked', '--workspace', '--no-fail-fast', ...stable]],
     // Process-global LuaSkills callback tests need one fresh process each.
     // 进程全局 LuaSkills 回调测试需要各自独立的进程。
     ['node', ['scripts/test-isolated-callbacks.mjs']],
@@ -32,12 +41,19 @@ const steps = {
     // nextest 不运行文档测试。
     ['cargo', ['test', '--locked', '--workspace', '--doc']],
   ],
+  // Only the quarantined tests, outside any profile filter, so nightly keeps collecting their results.
+  // 只运行被隔离的测试且不受任何配置过滤，使夜间持续收集其结果。
+  quarantine: quarantine.length === 0 ? [] : [
+    library,
+    ['cargo', ['nextest', 'run', '--locked', '--workspace', '--no-fail-fast', '-E', quarantined]],
+  ],
 }[mode];
 
 if (!steps) {
-  console.error(`Unsupported test mode '${mode}'; use 'fast' or 'full'.`);
+  console.error(`Unsupported test mode '${mode}'; use 'fast', 'full' or 'quarantine'.`);
   process.exit(1);
 }
+if (steps.length === 0) console.log('The CI quarantine list is empty; no tests to run.');
 for (const [command, args] of steps) {
   const result = spawnSync(command, args, { cwd: root, stdio: 'inherit' });
   if (result.error) throw result.error;

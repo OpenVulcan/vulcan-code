@@ -1,8 +1,8 @@
 // Run the static quality gates locally; tests stay in `make test`.
 // 在本地运行静态质量门禁；测试仍由 `make test` 负责。
 //
-// Every warning is an error here, so a clean tree stays clean while hosted CI is paused.
-// 此处所有警告都视为错误，使托管 CI 暂停期间干净的代码树保持干净。
+// Every warning is an error here; hosted CI runs the same groups (`node scripts/check.mjs <group>...`).
+// 此处所有警告都视为错误；托管 CI 运行同样的分组（`node scripts/check.mjs <分组>...`）。
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -10,19 +10,33 @@ import { fileURLToPath } from 'node:url';
 // 仓库根目录确保入口不依赖调用者当前工作目录。
 const root = fileURLToPath(new URL('..', import.meta.url));
 
-// Each step is one command; every step runs and the run fails if any of them failed.
-// 每个步骤是一条命令；全部步骤都会执行，任一失败则整体失败。
-const steps = [
-  ['cargo', ['fmt', '--all', '--', '--check']],
-  ['cargo', ['clippy', '--locked', '--workspace', '--all-targets', '--', '-D', 'warnings']],
-  ['pnpm', ['--dir', 'apps/vulcan-code-web', 'run', 'lint']],
-  ['pnpm', ['--dir', 'apps/vulcan-code-web', 'run', 'typecheck']],
-  ['pnpm', ['--dir', 'apps/vulcan-code-web', 'run', 'check:ui-architecture']],
-  ['pnpm', ['--dir', 'apps/vulcan-code-desktop', 'run', 'typecheck']],
-  ['node', ['scripts/wording-assertions.mjs']],
-  ['node', ['scripts/backend-cjk-literals.mjs']],
-  ['node', ['scripts/test-home-isolation.mjs']],
-];
+// Each group lists one-command steps; CI runs single groups, so every gate is defined only here.
+// 每个分组列出单条命令步骤；CI 按分组运行，使每项门禁只在此处定义。
+const groups = {
+  rustfmt: [['cargo', ['fmt', '--all', '--', '--check']]],
+  clippy: [['cargo', ['clippy', '--locked', '--workspace', '--all-targets', '--', '-D', 'warnings']]],
+  web: [
+    ['pnpm', ['--dir', 'apps/vulcan-code-web', 'run', 'lint']],
+    ['pnpm', ['--dir', 'apps/vulcan-code-web', 'run', 'typecheck']],
+    ['pnpm', ['--dir', 'apps/vulcan-code-web', 'run', 'check:ui-architecture']],
+  ],
+  desktop: [['pnpm', ['--dir', 'apps/vulcan-code-desktop', 'run', 'typecheck']]],
+  repository: [
+    ['node', ['scripts/wording-assertions.mjs']],
+    ['node', ['scripts/backend-cjk-literals.mjs']],
+    ['node', ['scripts/test-home-isolation.mjs']],
+  ],
+};
+
+// selected names the groups to run; no argument runs every group in declaration order.
+// selected 指定要运行的分组；不带参数时按声明顺序运行全部分组。
+const selected = process.argv.length > 2 ? process.argv.slice(2) : Object.keys(groups);
+const unknown = selected.filter((name) => !Object.hasOwn(groups, name));
+if (unknown.length > 0) {
+  console.error(`Unknown check groups: ${unknown.join(', ')}; expected ${Object.keys(groups).join(', ')}.`);
+  process.exit(1);
+}
+const steps = selected.flatMap((name) => groups[name]);
 
 // pnpm is a .cmd shim on Windows, which only a shell can launch. The shell receives one command line (the
 // fixed step arguments contain no spaces or quotes), since passing an argument list with a shell is deprecated.

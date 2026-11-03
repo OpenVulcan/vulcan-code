@@ -1,0 +1,52 @@
+# Prepare a hosted runner for Cargo: declared Node, pinned toolchain, native Linux packages, locked protoc
+# and the dependency cache. Each Rust job calls this once, right after checkout.
+# 为 Cargo 准备托管运行器：声明的 Node、固定工具链、Linux 原生包、锁定的 protoc 与依赖缓存。
+# 每个 Rust 作业在检出后调用一次。
+name: Rust setup
+description: Prepare the pinned Rust toolchain, native packages, protoc and the Cargo dependency cache.
+inputs:
+  shared-key:
+    description: Cache identity shared by jobs that compile the same graph; empty keys the cache by job.
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    # Hosted Linux images keep about 20 GB free; debug test builds of this workspace need more.
+    # 托管 Linux 镜像只剩约 20 GB 空间，本工作区的调试测试构建需要更多。
+    - name: Free disk space
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+        df -h /
+    - id: versions
+      shell: bash
+      run: node scripts/ci-runtime-versions.mjs
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      with:
+        node-version: ${{ steps.versions.outputs.node }}
+    - name: Native Linux packages
+      if: runner.os == 'Linux'
+      shell: bash
+      run: sh scripts/install_linux_system_deps.sh
+    - name: Pinned Rust toolchain
+      shell: bash
+      run: |
+        rustup toolchain install
+        rustc --version
+    - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+      with:
+        path: third_party/build-input-cache
+        key: build-inputs-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-inputs.lock.json') }}
+    - name: Locked protoc
+      shell: bash
+      run: node scripts/install-locked-tools.mjs protoc
+    # Only third-party build products are cached, since a fresh checkout rebuilds workspace crates anyway;
+    # only main writes, so pull requests read the shared cache and never replace it.
+    # 只缓存第三方构建产物，因为新检出总会重新编译工作区 crate；只有 main 写入，PR 只读共享缓存，绝不替换。
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      with:
+        shared-key: ${{ inputs.shared-key }}
+        save-if: ${{ github.ref == 'refs/heads/main' }}
+        cache-on-failure: 'true'

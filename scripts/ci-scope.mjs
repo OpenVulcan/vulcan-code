@@ -7,7 +7,13 @@ import { fileURLToPath } from 'node:url';
 
 // JOBS is the shared identity authority for selection and required-result validation.
 // JOBS 是选择作业与验证必需结果共用的身份权威。
-export const JOBS = ['scripts', 'frontend', 'desktop', 'rustfmt', 'rust'];
+export const JOBS = ['scripts', 'frontend', 'desktop', 'static', 'rust'];
+
+// GATES maps every workflow job the required summary waits for to the selection flag that decides whether it runs.
+// GATES 将必需汇总等待的每个工作流作业映射到决定其是否运行的选择标记。
+export const GATES = {
+  scripts: 'scripts', frontend: 'frontend', desktop: 'desktop', static: 'static', 'rust-check': 'rust', 'rust-tests': 'rust',
+};
 
 /** Select jobs for repository-relative files; full explicitly selects every gate.
  * 根据仓库相对文件路径选择作业；full 显式选择全部检查。
@@ -37,12 +43,12 @@ export function classifyChanges(files, full = false) {
     } else if (/^plugins\/[^/]+\/(?:ui|locales)\//.test(file)) {
       select(['frontend'], `plugin UI: ${file}`);
     } else if (file.startsWith('plugins/')) {
-      select(['frontend', 'rustfmt', 'rust'], `plugin runtime: ${file}`);
+      select(['frontend', 'rust'], `plugin runtime: ${file}`);
     } else if (/^crates\/(?:vulcan-service-api|vulcan-ai-contract|vulcan-workbench-model|vulcan-provider-config|vulcan-terminal-host-protocol|vulcan-plugin-runtime|vulcan-i18n)\//.test(file)
       || /^docs\/contracts\/.*\.(?:json|yaml|yml|proto)$/.test(file)) {
-      select(['frontend', 'desktop', 'rustfmt', 'rust'], `shared contract: ${file}`);
-    } else if (/^(?:crates\/|apps\/vulcan-code-service\/|apps\/vulcan-code-tui\/|Cargo\.(?:toml|lock)$|rust-toolchain\.toml$|\.cargo\/|\.config\/nextest\.toml$)/.test(file)) {
-      select(['rustfmt', 'rust'], `rust: ${file}`);
+      select(['frontend', 'desktop', 'rust'], `shared contract: ${file}`);
+    } else if (/^(?:crates\/|apps\/vulcan-code-service\/|apps\/vulcan-code-tui\/|Cargo\.(?:toml|lock)$|rust-toolchain\.toml$|\.cargo\/|\.config\/(?:nextest\.toml|ci-quarantine\.json)$)/.test(file)) {
+      select(['rust'], `rust: ${file}`);
     } else if (/^docs\/.*\.md$/.test(file) || /^(?:README(?:[.-].*)?\.md|AGENTS\.md|LICENSE(?:[.-].*)?|CHANGELOG\.md)$/.test(file)) {
       scope.reasons.push(`documentation: ${file}`);
     } else {
@@ -51,6 +57,9 @@ export function classifyChanges(files, full = false) {
       select([...JOBS, 'fixtures'], `unclassified; all gates required: ${file}`);
     }
   }
+  // Static checks span Rust and TypeScript sources and cost seconds, so any selected gate also selects them.
+  // 静态检查覆盖 Rust 与 TypeScript 源码且只需数秒，因此任一检查被选中时都同时选中它们。
+  if (JOBS.some(job => job !== 'static' && scope[job])) scope.static = true;
   return scope;
 }
 
@@ -95,13 +104,13 @@ export function eventChanges(eventName, event, cwd = process.cwd()) {
  */
 export function verifyRequired(needs) {
   if (needs.changes?.result !== 'success') throw new Error('Change classification did not succeed.');
-  if (Object.keys(needs).sort().join() !== ['changes', ...JOBS].sort().join()) throw new Error('Unexpected or missing required job identity.');
+  if (Object.keys(needs).sort().join() !== ['changes', ...Object.keys(GATES)].sort().join()) throw new Error('Unexpected or missing required job identity.');
   // job checks the output as a string because GitHub exposes all job outputs as strings.
   // job 按字符串检查输出，因为 GitHub 的全部作业输出都是字符串。
-  for (const job of JOBS) {
+  for (const [job, flag] of Object.entries(GATES)) {
     // selected is validated before interpreting intentional skips.
     // selected 在解释有意跳过之前先进行合法性校验。
-    const selected = needs.changes.outputs[job];
+    const selected = needs.changes.outputs[flag];
     if (!['true', 'false'].includes(selected)) throw new Error(`Invalid selection for ${job}: ${selected}`);
     // expected permits skipped only when the classifier explicitly excluded this job.
     // expected 仅允许分类器明确排除的作业跳过。

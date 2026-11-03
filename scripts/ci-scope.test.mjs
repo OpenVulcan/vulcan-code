@@ -6,31 +6,33 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, renameSync } from 'node:
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { JOBS, classifyChanges, eventChanges, verifyRequired } from './ci-scope.mjs';
+import { GATES, JOBS, classifyChanges, eventChanges, verifyRequired } from './ci-scope.mjs';
 
 // cases map meaningful ownership boundaries to exactly the required jobs.
 // cases 将有意义的归属边界映射到精确的必需作业集合。
 const cases = [
-  ['apps/vulcan-code-web/src/view.tsx', ['frontend']],
-  ['apps/vulcan-code-web/src/i18n-catalogs.ts', ['frontend']],
-  ['crates/vulcan-i18n/catalogs/webui/zh-CN.json', ['frontend', 'desktop', 'rustfmt', 'rust']],
-  ['apps/vulcan-code-tui/src/ui/theme.rs', ['rustfmt', 'rust']],
-  ['apps/vulcan-code-desktop/src/gui/main.ts', ['desktop']],
+  ['apps/vulcan-code-web/src/view.tsx', ['frontend', 'static']],
+  ['apps/vulcan-code-web/src/i18n-catalogs.ts', ['frontend', 'static']],
+  ['crates/vulcan-i18n/catalogs/webui/zh-CN.json', ['frontend', 'desktop', 'static', 'rust']],
+  ['apps/vulcan-code-tui/src/ui/theme.rs', ['static', 'rust']],
+  ['apps/vulcan-code-desktop/src/gui/main.ts', ['desktop', 'static']],
   ['docs/contracts/plugin-execution-engine.md', []],
   ['README.md', []],
-  ['plugins/context7/ui/index.js', ['frontend']],
-  ['plugins/context7/locales/ja-JP.yaml', ['frontend']],
-  ['plugins/context7/plugin.yaml', ['frontend', 'rustfmt', 'rust']],
-  ['plugins/context7/runtime/plugin.bundle.lua', ['frontend', 'rustfmt', 'rust']],
-  ['plugins/context7/prompts/example.md', ['frontend', 'rustfmt', 'rust']],
-  ['crates/vulcan-runtime-assets/resources/skills/example.md', ['rustfmt', 'rust']],
-  ['crates/vulcan-service-api/src/service.rs', ['frontend', 'desktop', 'rustfmt', 'rust']],
-  ['docs/contracts/plugin.schema.json', ['frontend', 'desktop', 'rustfmt', 'rust']],
-  ['Cargo.lock', ['rustfmt', 'rust']],
-  ['.cargo/config.toml', ['rustfmt', 'rust']],
-  ['crates/vulcan-llm-core/src/lib.rs', ['rustfmt', 'rust']],
+  ['plugins/context7/ui/index.js', ['frontend', 'static']],
+  ['plugins/context7/locales/ja-JP.yaml', ['frontend', 'static']],
+  ['plugins/context7/plugin.yaml', ['frontend', 'static', 'rust']],
+  ['plugins/context7/runtime/plugin.bundle.lua', ['frontend', 'static', 'rust']],
+  ['plugins/context7/prompts/example.md', ['frontend', 'static', 'rust']],
+  ['crates/vulcan-runtime-assets/resources/skills/example.md', ['static', 'rust']],
+  ['crates/vulcan-service-api/src/service.rs', ['frontend', 'desktop', 'static', 'rust']],
+  ['docs/contracts/plugin.schema.json', ['frontend', 'desktop', 'static', 'rust']],
+  ['Cargo.lock', ['static', 'rust']],
+  ['.cargo/config.toml', ['static', 'rust']],
+  ['.config/ci-quarantine.json', ['static', 'rust']],
+  ['crates/vulcan-llm-core/src/lib.rs', ['static', 'rust']],
   ['scripts/install_lua_deps.ps1', JOBS],
-  ['.github/workflows/quality-gates.yml', JOBS],
+  ['.github/workflows/ci.yml', JOBS],
+  ['.github/workflows/nightly.yml', JOBS],
   ['crates/vulcan-service-runtime/managed-runtimes.json', JOBS],
   ['new-runtime/input.dat', JOBS],
 ];
@@ -63,7 +65,7 @@ function resultsFor(files) {
   const scope = classifyChanges(files);
   return {
     changes: { result: 'success', outputs: Object.fromEntries(JOBS.map(job => [job, String(scope[job])])) },
-    ...Object.fromEntries(JOBS.map(job => [job, { result: scope[job] ? 'success' : 'skipped' }])),
+    ...Object.fromEntries(Object.entries(GATES).map(([job, flag]) => [job, { result: scope[flag] ? 'success' : 'skipped' }])),
   };
 }
 
@@ -73,19 +75,23 @@ test('required summary accepts intentional skips and refuses every non-success s
   for (const state of ['failure', 'cancelled', 'skipped', 'timed_out', undefined]) {
     // needs models an upstream selected gate that failed to complete successfully.
     // needs 模拟未能成功完成的已选中上游检查。
-    const needs = resultsFor(['Cargo.toml']);
-    needs.rust.result = state;
-    assert.throws(() => verifyRequired(needs), /rust:/);
+    // Each Rust gate fails on its own, since both share one selection flag.
+    // 两个 Rust 检查共用一个选择标记，因此各自单独失败。
+    for (const job of ['rust-check', 'rust-tests']) {
+      const needs = resultsFor(['Cargo.toml']);
+      needs[job].result = state;
+      assert.throws(() => verifyRequired(needs), new RegExp(`${job}:`));
+    }
   }
 });
 
 test('required summary refuses invalid classification, missing jobs and unexpected jobs', () => {
   for (const mutate of [
     needs => { needs.changes.result = 'failure'; },
-    needs => { delete needs.rust; },
+    needs => { delete needs['rust-tests']; },
     needs => { needs.extra = { result: 'success' }; },
     needs => { delete needs.changes.outputs.rust; },
-    needs => { needs.rust.result = 'success'; },
+    needs => { needs['rust-check'].result = 'success'; },
   ]) {
     // needs starts from an otherwise valid documentation-only result.
     // needs 从原本有效的纯文档结果开始。

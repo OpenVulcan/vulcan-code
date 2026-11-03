@@ -1,0 +1,241 @@
+# Required checks for every pull request and every push to main; `Required checks` is the single status
+# that branch protection asks for. Heavy suites run in nightly.yml and never block merging.
+# 每个合并请求与每次推送 main 的必过检查；分支保护只要求 `Required checks` 这一项状态。
+# 重型测试集在 nightly.yml 中运行，从不阻塞合并。
+name: CI
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+# A newer pull request commit cancels the older run; main runs finish so they can write the shared cache.
+# 合并请求的新提交会取消旧运行；main 的运行跑完，以便写入共享缓存。
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+env:
+  CARGO_INCREMENTAL: '0'
+  # Tests inherit dev; dropping workspace debug info shrinks the target directory without disabling assertions.
+  # 测试继承 dev；去掉工作区调试信息可缩小目标目录，不关闭断言。
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  # Hosted runners have 4 vCPUs and 16 GB; the repository's 16 jobs are sized for a 32-thread workstation.
+  # 托管运行器只有 4 个 vCPU 与 16 GB；仓库的 16 并发按 32 线程工作站设定。
+  CARGO_BUILD_JOBS: '4'
+  CARGO_TERM_COLOR: always
+jobs:
+  changes:
+    name: Classify changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      scripts: ${{ steps.scope.outputs.scripts }}
+      frontend: ${{ steps.scope.outputs.frontend }}
+      desktop: ${{ steps.scope.outputs.desktop }}
+      static: ${{ steps.scope.outputs.static }}
+      rust: ${{ steps.scope.outputs.rust }}
+      fixtures: ${{ steps.scope.outputs.fixtures }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: versions
+        run: node scripts/ci-runtime-versions.mjs
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ steps.versions.outputs.node }}
+      - name: Verify classification and required-result failure paths
+        run: node --test scripts/ci-scope.test.mjs
+      - id: scope
+        run: node scripts/ci-scope.mjs --from-event
+  scripts:
+    name: Build scripts (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.scripts == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - id: versions
+        run: node scripts/ci-runtime-versions.mjs
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ steps.versions.outputs.node }}
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: third_party/build-input-cache
+          key: build-inputs-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-inputs.lock.json') }}
+      - name: Download and verify locked tools, then reinstall them without network
+        run: |
+          set -eu
+          tools='bundled protoc'
+          if [ "$RUNNER_OS" != macOS ]; then tools="$tools nextest"; fi
+          for group in $tools; do node scripts/install-locked-tools.mjs "$group"; done
+          for group in $tools; do node scripts/install-locked-tools.mjs "$group" --offline; done
+      - name: Build script tests
+        run: node --test scripts/*.test.mjs scripts/*.test.cjs
+  frontend:
+    name: Frontend
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - id: versions
+        run: node scripts/ci-runtime-versions.mjs
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ steps.versions.outputs.node }}
+      - name: Install declared pnpm
+        run: npm install --global pnpm@${{ steps.versions.outputs.pnpm }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ steps.versions.outputs.node }}
+          cache: pnpm
+          cache-dependency-path: apps/vulcan-code-web/pnpm-lock.yaml
+      - name: Install frozen frontend dependencies
+        run: pnpm --dir apps/vulcan-code-web install --frozen-lockfile
+      - name: Prove invalid lint and architecture fixtures are rejected
+        if: needs.changes.outputs.fixtures == 'true'
+        run: |
+          pnpm --dir apps/vulcan-code-web run test:lint
+          pnpm --dir apps/vulcan-code-web run test:architecture
+      - name: Frontend behavior regressions
+        run: pnpm --dir apps/vulcan-code-web exec vitest run --maxWorkers=4
+      - name: Bundled plugin UI and locale regressions
+        run: node --test plugins/context7/ui/settings.test.mjs plugins/vulcan-usage-statistics/ui/index.test.mjs
+      - name: Lint, typecheck, architecture, production build and size budgets
+        run: pnpm --dir apps/vulcan-code-web run build
+  desktop:
+    name: Desktop
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
+    runs-on: windows-2025
+    timeout-minutes: 15
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - id: versions
+        run: node scripts/ci-runtime-versions.mjs
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ steps.versions.outputs.node }}
+      - name: Install declared pnpm
+        run: npm install --global pnpm@${{ steps.versions.outputs.pnpm }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ steps.versions.outputs.node }}
+          cache: pnpm
+          cache-dependency-path: apps/vulcan-code-desktop/pnpm-lock.yaml
+      - name: Install frozen desktop dependencies
+        run: pnpm --dir apps/vulcan-code-desktop install --frozen-lockfile
+      - name: Compile desktop and its test targets
+        run: pnpm --dir apps/vulcan-code-desktop run build
+      - name: Desktop unit regressions
+        run: pnpm --dir apps/vulcan-code-desktop run test:unit
+  static:
+    name: Static checks
+    needs: changes
+    if: needs.changes.outputs.static == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - id: versions
+        run: node scripts/ci-runtime-versions.mjs
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ steps.versions.outputs.node }}
+      - name: Pinned Rust toolchain
+        run: rustup toolchain install
+      - name: Rust formatting and repository ratchets
+        run: node scripts/check.mjs rustfmt repository
+  rust-check:
+    name: Rust clippy
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/rust-setup
+      - name: Clippy on every target with warnings denied
+        run: node scripts/check.mjs clippy
+  rust-tests:
+    name: Rust fast tests
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/rust-setup
+        with:
+          shared-key: tests
+      # The read-only job token lifts the LuaSkills release lookup off the anonymous per-address limit.
+      # 只读作业令牌让 LuaSkills 发布查询不受按地址的匿名配额限制。
+      - name: Test runner, bundled tools, Lua payload and managed Node
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          node scripts/install-locked-tools.mjs nextest
+          echo "$PWD/target/ci-tools/bin" >> "$GITHUB_PATH"
+          node scripts/install-locked-tools.mjs bundled
+          sh ./make.sh deps lua
+          node scripts/managed-node.mjs output
+      - name: Fast nextest set without quarantined tests
+        run: node scripts/test-rust.mjs fast
+  # Not yet required: it joins `Required checks` after two weeks of consecutive green runs.
+  # 暂不必过：连续两周全绿后再加入 `Required checks`。
+  windows-check:
+    name: Windows service check (advisory)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/rust-setup
+      - name: Check the service on Windows
+        run: cargo check --locked -p vulcan-code-service
+  required:
+    name: Required checks
+    if: always()
+    needs: [changes, scripts, frontend, desktop, static, rust-check, rust-tests]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Require success for selected jobs and intentional skips for all others
+        env:
+          CI_NEEDS: ${{ toJSON(needs) }}
+        run: node scripts/ci-scope.mjs --verify-required
