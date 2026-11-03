@@ -30,8 +30,8 @@
 .vk-md strong { font-weight: 600; }
 .vk-md a { color: var(--vk-signal); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--vk-signal) 40%, transparent); text-underline-offset: 0.18em; }
 .vk-md a:hover { text-decoration-color: currentColor; }
-/* A link to a project file is a button that reads as a link. */
-.vk-md-file-link { display: inline; padding: 0; border: 0; background: transparent; color: var(--vk-signal); font: inherit; text-align: inherit; cursor: pointer; text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--vk-signal) 40%, transparent); text-underline-offset: 0.18em; }
+/* A link to a project file is a button that reads as a link; a dotted underline tells it from a web link. */
+.vk-md-file-link { display: inline; padding: 0; border: 0; background: transparent; color: var(--vk-signal); font: inherit; text-align: inherit; cursor: pointer; text-decoration: underline dotted; text-decoration-color: color-mix(in srgb, var(--vk-signal) 40%, transparent); text-underline-offset: 0.18em; }
 .vk-md-file-link:hover { text-decoration-color: currentColor; }
 .vk-md-file-link:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: 1px; }
 /* Inline-block keeps long wrapped links in the text flow. */

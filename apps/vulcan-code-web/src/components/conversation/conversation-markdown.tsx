@@ -5,6 +5,7 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { Check, Copy, FileText, Globe, Text, TextWrap } from "lucide-react";
 import { FileTypeIcon, resolveFileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
+import { remarkLinkLiterals } from "@/components/conversation/conversation-link-literals";
 import { MermaidDiagram } from "@/components/conversation/conversation-mermaid";
 import { SvgPreview } from "@/components/conversation/conversation-svg-preview";
 import type { AnswerComponentHost } from "@/components/conversation/answer-components/answer-component-view";
@@ -54,9 +55,10 @@ const LazyAnswerFenceView = React.lazy(async () => {
   return { default: module.AnswerFenceView };
 });
 
-// markdownPlugins stores the Markdown extension set shared by inline and modal renderers.
-// markdownPlugins 保存内联与弹窗渲染器共享的 Markdown 扩展集合。
-const markdownPlugins = [remarkGfm];
+// markdownPlugins stores the Markdown extension set shared by inline and modal renderers; link literals follow GFM
+// so they replace its plain-text links.
+// markdownPlugins 保存内联与弹窗渲染器共享的 Markdown 扩展集合；链接字面量处理位于 GFM 之后，以取代其普通文本链接。
+const markdownPlugins = [remarkGfm, remarkLinkLiterals];
 
 // LazyInlineMath typesets inline `` $`…`$ `` math with KaTeX, which loads only when a reply contains math.
 // LazyInlineMath 以 KaTeX 排版行内 `` $`…`$ `` 公式；KaTeX 仅在回答含公式时加载。

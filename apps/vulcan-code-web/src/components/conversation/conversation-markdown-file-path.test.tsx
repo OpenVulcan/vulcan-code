@@ -49,3 +49,32 @@ it("keeps web page references as file links for the built-in browser and other f
   await act(async () => buttons[0].click());
   expect(open).toHaveBeenCalledWith("notes.txt", null);
 });
+
+it("links addresses and absolute paths written as plain text where they end, leaving code and written links alone", async () => {
+  const open = vi.fn();
+  const prose = [
+    "访问 https://example.com/a。然后继续，或 www.example.com/docs，再看",
+    "",
+    "文件在D:\\docs\\report.docx里面，页面 C:/out/page.html。",
+    "",
+    "Mail ops@example.com, see [the site](https://a.com/x) and `C:/code/a.ts`.",
+    "",
+    "```\nhttps://fenced.example.com\n```\n",
+  ].join("\n");
+  await act(async () => root.render(
+    <I18nProvider initialLocale="en-US">
+      <WorkspaceFileOpenContext.Provider value={open}><MarkdownMessage content={prose} eager /></WorkspaceFileOpenContext.Provider>
+    </I18nProvider>,
+  ));
+  expect(Array.from(host.querySelectorAll("a")).map((link) => [link.textContent, link.getAttribute("href")])).toEqual([
+    ["https://example.com/a", "https://example.com/a"],
+    ["www.example.com/docs", "https://www.example.com/docs"],
+    ["C:/out/page.html", "file:///C:/out/page.html"],
+    ["ops@example.com", "mailto:ops@example.com"],
+    ["the site", "https://a.com/x"],
+  ]);
+  const buttons = Array.from(host.querySelectorAll<HTMLButtonElement>("button.vk-md-file-link"));
+  expect(buttons.map((button) => button.textContent)).toEqual(["D:\\docs\\report.docx"]);
+  await act(async () => buttons[0].click());
+  expect(open).toHaveBeenCalledWith("D:/docs/report.docx", null);
+});
