@@ -36,19 +36,19 @@ describe("resolveWorkspaceFileTarget", () => {
 });
 
 describe("routeWorkspaceFileOpen", () => {
-  it("opens files a viewer reads in a window by their absolute path, inside the project or not", () => {
+  it("opens project files a viewer reads in a window by their absolute path", () => {
     expect(routeWorkspaceFileOpen("/home/u/repo", "/home/u/repo/docs/report.pdf")).toEqual({ kind: "window", path: "/home/u/repo/docs/report.pdf" });
     expect(routeWorkspaceFileOpen("D:\\work\\repo", "docs/chart.png")).toEqual({ kind: "window", path: "D:\\work\\repo\\docs\\chart.png" });
-    expect(routeWorkspaceFileOpen("/home/u/repo", " /home/u/Downloads/report.pdf ")).toEqual({ kind: "window", path: "/home/u/Downloads/report.pdf" });
-    expect(routeWorkspaceFileOpen(null, "D:/docs/budget.xlsx")).toEqual({ kind: "window", path: "D:/docs/budget.xlsx" });
   });
 
-  it("shows other project files in the files panel and prompts for other files outside it", () => {
+  it("shows other project files in the files panel and checks access for every file outside it", () => {
     expect(routeWorkspaceFileOpen("/home/u/repo", "/home/u/repo/assets/logo.psd")).toEqual({ kind: "files" });
     expect(routeWorkspaceFileOpen("/home/u/repo", "src/main.ts")).toEqual({ kind: "files" });
     expect(routeWorkspaceFileOpen(null, "docs/report.pdf")).toEqual({ kind: "files" });
-    expect(routeWorkspaceFileOpen("/home/u/repo", "/home/u/notes.txt")).toEqual({ kind: "action", path: "/home/u/notes.txt", action: "prompt" });
-    expect(routeWorkspaceFileOpen(null, "C:\\tools\\setup.exe")).toEqual({ kind: "action", path: "C:\\tools\\setup.exe", action: "prompt" });
+    expect(routeWorkspaceFileOpen("/home/u/repo", " /home/u/Downloads/report.pdf ")).toEqual({ kind: "outside", path: "/home/u/Downloads/report.pdf" });
+    expect(routeWorkspaceFileOpen(null, "D:/docs/budget.xlsx")).toEqual({ kind: "outside", path: "D:/docs/budget.xlsx" });
+    expect(routeWorkspaceFileOpen("/home/u/repo", "/home/u/notes.txt")).toEqual({ kind: "outside", path: "/home/u/notes.txt" });
+    expect(routeWorkspaceFileOpen(null, "C:\\tools\\setup.exe")).toEqual({ kind: "outside", path: "C:\\tools\\setup.exe" });
   });
 
   it("acts on the absolute path for explicit actions, placing project-relative paths in the project", () => {
@@ -56,6 +56,7 @@ describe("routeWorkspaceFileOpen", () => {
     expect(routeWorkspaceFileOpen("/home/u/repo/", "README.md", "reveal")).toEqual({ kind: "action", path: "/home/u/repo/README.md", action: "reveal" });
     expect(routeWorkspaceFileOpen(null, "/home/u/notes.txt", "open")).toEqual({ kind: "action", path: "/home/u/notes.txt", action: "open" });
     expect(routeWorkspaceFileOpen("/home/u/repo", "docs/report.pdf", "dock")).toEqual({ kind: "viewer", path: "/home/u/repo/docs/report.pdf" });
+    expect(routeWorkspaceFileOpen("/home/u/repo", "/home/u/Downloads/notes.txt", "window")).toEqual({ kind: "window", path: "/home/u/Downloads/notes.txt" });
     expect(routeWorkspaceFileOpen(null, "docs/a.md", "open")).toEqual({ kind: "files" });
   });
 });

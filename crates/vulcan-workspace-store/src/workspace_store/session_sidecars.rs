@@ -1,6 +1,6 @@
 //! Single-file session settings kept beside the session document: the session's own subagent
-//! model allowlist and its own additional review prompt.
-//! 保存在会话文档旁的单文件会话设置：会话自有子代理模型白名单与会话自有附加复核提示词。
+//! model allowlist, its own additional review prompt and its own outside-workspace file access.
+//! 保存在会话文档旁的单文件会话设置：会话自有子代理模型白名单、会话自有附加复核提示词与会话自有工作区外文件访问方式。
 //!
 //! Each file exists only while the session replaces the system default; removing it returns the
 //! session to the system default. The caller owns each document type and its version.
@@ -19,6 +19,10 @@ const SESSION_SUBAGENT_MODELS_FILE: &str = "subagent-models.json";
 /// File name of the session review prompt inside the session directory.
 /// 会话目录中会话复核提示词的文件名。
 const SESSION_REVIEW_PROMPT_FILE: &str = "review-prompt.json";
+
+/// File name of the session outside-workspace file access inside the session directory.
+/// 会话目录中会话工作区外文件访问方式的文件名。
+const SESSION_OUTSIDE_FILE_ACCESS_FILE: &str = "outside-file-access.json";
 
 /// Loads one sidecar document, or `None` when the file is absent.
 /// Malformed files are explicit errors, never treated as absent.
@@ -178,6 +182,30 @@ pub fn save_session_review_prompt<T: Serialize>(
         locator,
         SESSION_REVIEW_PROMPT_FILE,
         "session review prompt",
+        document,
+    )
+}
+
+/// Loads the session outside-workspace file access document, or `None` when the session follows
+/// the system default.
+/// 加载会话工作区外文件访问方式文档；会话跟随系统默认时返回 `None`。
+pub fn load_session_outside_file_access<T: DeserializeOwned>(
+    locator: &SessionV1StorageLocator,
+) -> Result<Option<T>, String> {
+    load_sidecar(locator, SESSION_OUTSIDE_FILE_ACCESS_FILE)
+}
+
+/// Saves the session outside-workspace file access document, or removes it when `document` is
+/// `None`.
+/// 保存会话工作区外文件访问方式文档；`document` 为 `None` 时删除该文件。
+pub fn save_session_outside_file_access<T: Serialize>(
+    locator: &SessionV1StorageLocator,
+    document: Option<&T>,
+) -> Result<(), String> {
+    save_sidecar(
+        locator,
+        SESSION_OUTSIDE_FILE_ACCESS_FILE,
+        "session outside file access",
         document,
     )
 }

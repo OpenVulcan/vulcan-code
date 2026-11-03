@@ -189,6 +189,7 @@ mod media_upload;
 mod native_plugin_shutdown;
 mod native_vmm;
 mod output_style;
+mod outside_file_access;
 mod pending_prompt_services;
 mod pending_prompts;
 mod permission_judge;
@@ -423,7 +424,8 @@ use workbench_surface_projection::{
     subagent_navigation_snapshot_from_cached_state, subagent_navigation_snapshot_from_state,
 };
 use workspace_files::{
-    service_workspace_files_list, service_workspace_files_office_pdf, service_workspace_files_read,
+    service_workspace_files_kind, service_workspace_files_list, service_workspace_files_office_pdf,
+    service_workspace_files_read, service_workspace_files_read_outside,
     service_workspace_files_sheet,
 };
 use workspace_persistence_versions::*;

@@ -6,6 +6,7 @@ import { FloatingWindowHead } from "@/components/workspace/floating-window-head"
 import { usePublishedWorkspaceFileOpener } from "@/components/workspace/workspace-file-open-request";
 import { DocumentViewer } from "@/components/file-viewers/document-viewer";
 import { fileViewerKind } from "@/components/file-viewers/file-viewer-kind";
+import { OutsideTextViewer } from "@/components/file-viewers/outside-text-viewer";
 import { closeFileWindow, fileWindowChip, minimizeFileWindow, useFileWindows, type FileWindow } from "@/components/file-windows/file-window-store";
 import "@/ui-kit/styles/features/workspace-files.css";
 import "@/ui-kit/styles/features/document-viewer.css";
@@ -25,8 +26,9 @@ export default function FileWindowLayer(props: { sessionId: string }) {
   return windows.map((window) => <FileWindowFrame key={window.id} sessionId={props.sessionId} window={window} />);
 }
 
-// FileWindowFrame is one movable window showing one file read-only.
-// FileWindowFrame 是只读显示单个文件的可移动窗口。
+// FileWindowFrame is one movable window showing one file read-only: in its viewer, or as text when no viewer reads it
+// (a text file outside the workspace).
+// FileWindowFrame 是只读显示单个文件的可移动窗口：使用其查看器显示，没有查看器能读取时按文本显示（工作区之外的文本文件）。
 function FileWindowFrame(props: { sessionId: string; window: FileWindow }) {
   const { sessionId, window } = props;
   const openFile = usePublishedWorkspaceFileOpener();
@@ -71,7 +73,7 @@ function FileWindowFrame(props: { sessionId: string; window: FileWindow }) {
       raiseKey={window.raise}
     >
       <div className="vk-file-win workspace-file-preview document">
-        {kind ? <DocumentViewer kind={kind} name={name} path={window.path} /> : null}
+        {kind ? <DocumentViewer kind={kind} name={name} path={window.path} /> : <OutsideTextViewer path={window.path} />}
       </div>
     </ProjectFloatingLayer>
   );

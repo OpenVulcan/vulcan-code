@@ -7,6 +7,9 @@ pub mod child_agent_policy;
 /// Shared session configuration snapshots.
 /// 共享会话配置快照。
 pub mod config;
+/// Shared access policy for files outside the workspace.
+/// 共享的工作区外文件访问策略。
+pub mod file_access;
 /// Shared session identity and tree models.
 /// 共享会话身份与树模型。
 pub mod model;
@@ -46,6 +49,7 @@ pub use config::{
     capability_policy_from_mode_or_selector_lists, capability_policy_from_selector_lists,
     normalize_capability_policy_snapshot, parse_capability_policy_mode_key,
 };
+pub use file_access::OutsideWorkspaceFileAccess;
 pub use model::{ParentSessionRef, RootSessionId, SessionNodeId, SessionNodeKind, SessionTreePath};
 pub use policy::{ExecutionRuntimePolicy, ExecutionRuntimePolicyRequest, ExecutionScope};
 pub use runtime_kernel::{

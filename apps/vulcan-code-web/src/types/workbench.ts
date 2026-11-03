@@ -1,5 +1,6 @@
 import type { AnswerMode } from "@/service/answer-mode";
 import type { JudgeBackend } from "./permission-judge";
+import type { OutsideWorkspaceFileAccess } from "./outside-file-access";
 import type { VoiceInputSummary } from "./voice-input";
 import type {
   AgentSkillsCatalogSummary,
@@ -238,6 +239,9 @@ export interface WorkbenchSnapshot {
   // Largest number of steps in one tool_chain call.
   // 单次 tool_chain 调用的最大步骤数。
   toolChainMaxSteps?: number | null;
+  // How sessions without their own choice open files outside the workspace; older snapshots preserve the prompt default.
+  // 未自行选择的会话如何打开工作区之外的文件；旧快照保留默认提示行为。
+  outsideWorkspaceFileAccess?: OutsideWorkspaceFileAccess | null;
   // Git commit dialog settings resolved from the shared service configuration.
   // 从共享服务配置解析出的 Git 提交弹窗设置。
   gitCommit?: GitCommitSettingsSummary;

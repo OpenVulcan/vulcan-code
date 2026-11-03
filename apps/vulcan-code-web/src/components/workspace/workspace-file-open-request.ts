@@ -26,12 +26,13 @@ export interface WorkspaceFileLines {
 type WorkspaceFileOpenRequest = { tabId: string; path: string; lines: WorkspaceFileLines | null };
 
 // WorkspaceFileOpener shows a file: a document in a file window, any other project file, optionally at some lines,
-// in the files panel. With `action` it instead hands the file to the OS ("open" with its default program, "reveal" in
-// its folder) or, with "dock", shows a document in the viewer tab of the right panel.
-// WorkspaceFileOpener 显示文件：文档在文件窗口中显示，其他项目文件在文件面板中显示，可选定位到指定行。带 `action` 时
-// 改为将文件交给操作系统（"open" 用默认程序打开，"reveal" 在所在文件夹中显示），或以 "dock" 在右侧面板的查看页签中
-// 显示文档。
-export type WorkspaceFileOpener = (path: string, lines?: WorkspaceFileLines | null, action?: "open" | "reveal" | "dock") => void;
+// in the files panel, and a file outside the project after the session's outside-file access allows it. With
+// `action` it instead hands the file to the OS ("open" with its default program, "reveal" in its folder), with "dock"
+// shows a document in the viewer tab of the right panel, or with "window" moves an already opened file into a window.
+// WorkspaceFileOpener 显示文件：文档在文件窗口中显示，其他项目文件在文件面板中显示，可选定位到指定行；项目之外的文件
+// 在会话的工作区外文件访问方式允许后显示。带 `action` 时改为将文件交给操作系统（"open" 用默认程序打开，"reveal" 在
+// 所在文件夹中显示），以 "dock" 在右侧面板的查看页签中显示文档，或以 "window" 将已打开的文件移入窗口。
+export type WorkspaceFileOpener = (path: string, lines?: WorkspaceFileLines | null, action?: "open" | "reveal" | "dock" | "window") => void;
 
 // pendingFileOpen holds the latest request until the files panel of that tab takes it; the tab may still be mounting.
 // pendingFileOpen 保存最近一次请求，直到对应页签的文件面板取走；该页签可能仍在挂载。
@@ -149,32 +150,36 @@ export function resolveWorkspaceFileTarget(workspacePath: string, path: string):
   return { directory: segments.length > 0 ? [root, ...segments].join(separator) : null, name };
 }
 
-// WorkspaceFileRoute is where one file request goes: the files panel, a file window, the viewer tab, or an OS file
-// action.
-// WorkspaceFileRoute 是单个文件请求的去向：文件面板、文件窗口、查看页签或操作系统文件操作。
+// WorkspaceFileRoute is where one file request goes: the files panel, a file window, the viewer tab, an OS file
+// action, or the outside-file access check for a file outside the project.
+// WorkspaceFileRoute 是单个文件请求的去向：文件面板、文件窗口、查看页签、操作系统文件操作，或针对项目之外文件的
+// 工作区外文件访问检查。
 export type WorkspaceFileRoute =
   | { kind: "files" }
   | { kind: "window"; path: string }
+  | { kind: "outside"; path: string }
   | { kind: "viewer"; path: string }
   | { kind: "action"; path: string; action: WorkspaceFileAction };
 
 // routeWorkspaceFileOpen decides where a file request goes, always by the file's absolute path (project-relative
-// paths are placed in the project). An explicit `action` goes to the OS, or with "dock" to the viewer tab. Otherwise a
-// file a viewer reads opens in a file window, other project files go to the files panel, and other absolute paths
-// outside the project (or with no project) go to the "open with the default program?" prompt.
+// paths are placed in the project). An explicit `action` goes to the OS, with "dock" to the viewer tab and with
+// "window" to a file window. Otherwise absolute paths outside the project (or with no project) go to the outside-file
+// access check, a project file a viewer reads opens in a file window, and other project files go to the files panel.
 // routeWorkspaceFileOpen 决定文件请求的去向，始终按文件的绝对路径（项目相对路径定位到项目中）。显式 `action` 交给操作
-// 系统，"dock" 则进入查看页签。否则查看器可读的文件在文件窗口中打开，其他项目文件进入文件面板，项目之外（或没有项目
-// 时）的其他绝对路径进入“是否用默认程序打开”的提示。
-export function routeWorkspaceFileOpen(workspacePath: string | null, path: string, action?: "open" | "reveal" | "dock"): WorkspaceFileRoute {
+// 系统，"dock" 进入查看页签，"window" 进入文件窗口。否则项目之外（或没有项目时）的绝对路径进入工作区外文件访问检查，
+// 查看器可读的项目文件在文件窗口中打开，其他项目文件进入文件面板。
+export function routeWorkspaceFileOpen(workspacePath: string | null, path: string, action?: "open" | "reveal" | "dock" | "window"): WorkspaceFileRoute {
   const requested = path.trim();
   const target = workspacePath ? resolveWorkspaceFileTarget(workspacePath, requested) : null;
   const root = workspacePath?.replace(/[\\/]+$/, "") ?? "";
   const separator = workspacePath?.includes("\\") ? "\\" : "/";
   const full = /^(?:[A-Za-z]:)?[\\/]/.test(requested) ? requested : target ? `${target.directory ?? root}${separator}${target.name}` : null;
   if (!full) return { kind: "files" };
-  if (action) return action === "dock" ? { kind: "viewer", path: full } : { kind: "action", path: full, action };
-  if (fileViewerKind(full)) return { kind: "window", path: full };
-  return target ? { kind: "files" } : { kind: "action", path: full, action: "prompt" };
+  if (action === "dock") return { kind: "viewer", path: full };
+  if (action === "window") return { kind: "window", path: full };
+  if (action) return { kind: "action", path: full, action };
+  if (!target) return { kind: "outside", path: full };
+  return fileViewerKind(full) ? { kind: "window", path: full } : { kind: "files" };
 }
 
 // FILE_PATH_MENTION matches inline text naming a file by path: at least one folder separator, a file name with a

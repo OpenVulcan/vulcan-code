@@ -274,6 +274,56 @@ pub(super) async fn service_workspace_files_read(
     }
 }
 
+/// Classifies one file path by name alone, the way file previews classify it, without touching the
+/// file. Lets the WebUI tell a text file it can show from one it hands to the OS.
+/// 仅按名称对单个文件路径分类，与文件预览的分类方式一致，不访问文件。使 WebUI 能区分可显示的文本文件与交给操作系统的文件。
+pub(super) fn service_workspace_files_kind(file_path: String) -> WorkspaceFileEntryKind {
+    workspace_file_kind_from_path(Path::new(file_path.trim()))
+}
+
+/// Reads one text file outside any workspace for the read-only text viewer, after the user chose
+/// to open it. Uses the same bounded preview as workspace files.
+/// 在用户选择打开后，为只读文本查看器读取任一工作区之外的单个文本文件。使用与工作区文件相同的有界预览。
+///
+/// # Parameters
+/// 参数
+/// `file_path` is the absolute file path.
+/// `file_path` 是文件绝对路径。
+///
+/// # Returns
+/// 返回值
+/// A code content response relative to the file's folder, or an English error.
+/// 返回相对于文件所在文件夹的代码内容响应，或英文错误。
+pub(super) async fn service_workspace_files_read_outside(
+    file_path: String,
+) -> Result<WorkspaceFileReadResponse, String> {
+    let requested = Path::new(file_path.trim());
+    if !requested.is_absolute() {
+        return Err(format!("The file path must be absolute: {file_path}"));
+    }
+    let file = fs::canonicalize(requested)
+        .map_err(|error| format!("Failed to resolve the file path `{file_path}`: {error}"))?;
+    let metadata = fs::metadata(&file).map_err(|error| {
+        format!(
+            "Failed to read file metadata `{}`: {error}",
+            normalized_workspace_path_text_from_path(&file)
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "The path is not a file: {}",
+            normalized_workspace_path_text_from_path(&file)
+        ));
+    }
+    if workspace_file_kind_from_path(&file) != WorkspaceFileEntryKind::Code {
+        return Err(String::from(
+            "Previewing this file type as text is not supported.",
+        ));
+    }
+    let folder = file.parent().unwrap_or(&file).to_path_buf();
+    workspace_file_read_code_response(&folder, &file, &metadata, WorkspaceFileEntryKind::Code)
+}
+
 #[cfg(test)]
 mod tests;
 

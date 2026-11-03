@@ -20,6 +20,8 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "workspace.git.history",
     "workspace.files.list",
     "workspace.files.read",
+    "workspace.files.readOutside",
+    "workspace.files.kind",
     "workspace.files.sheet",
     "workspace.files.officePdf",
 ];
@@ -162,6 +164,12 @@ pub(super) async fn dispatch(
             )
             .await,
         ),
+        "workspace.files.readOutside" => rpc_json_result(
+            service_workspace_files_read_outside(rpc_required_param(params, "filePath")?).await,
+        ),
+        "workspace.files.kind" => rpc_json_result(Ok::<_, String>(service_workspace_files_kind(
+            rpc_required_param(params, "filePath")?,
+        ))),
         "workspace.files.sheet" => rpc_json_result(
             service_workspace_files_sheet(
                 rpc_required_param(params, "filePath")?,

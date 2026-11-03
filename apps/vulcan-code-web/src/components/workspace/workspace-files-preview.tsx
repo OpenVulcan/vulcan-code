@@ -139,7 +139,13 @@ export function WorkspaceFilePreview(props: {
       </div>
     );
   }
-  if (props.entry.extension === "md") {
+  return <WorkspaceTextPreview markdown={props.entry.extension === "md"} preview={props.preview} />;
+}
+
+// WorkspaceTextPreview shows a loaded text preview: Markdown as it reads, anything else as highlighted code.
+// WorkspaceTextPreview 显示已加载的文本预览：Markdown 按阅读形态显示，其他内容按高亮代码显示。
+export function WorkspaceTextPreview(props: { preview: WorkspaceFileReadResponse; markdown: boolean }) {
+  if (props.markdown) {
     return <WorkspaceMarkdownPreview preview={props.preview} />;
   }
   return (

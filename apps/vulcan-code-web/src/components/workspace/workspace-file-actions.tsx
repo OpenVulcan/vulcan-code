@@ -4,10 +4,13 @@ import type { WorkspaceFileLines, WorkspaceFileOpener } from "@/components/works
 
 // WorkspaceFileAction is what to do with a file the side panel does not show: "prompt" asks whether to open it with
 // the default program, "open" opens it at once and "reveal" shows it in its folder. Runnable files are never opened;
-// the dialog then offers only their folder.
+// the dialog then offers only their folder. "outside" opens a file outside the workspace as the session's
+// outside-file access says: never, after asking, or at once in a file window; a file no viewer reads goes on to
+// "prompt".
 // WorkspaceFileAction 是对侧边栏不显示的文件执行的操作："prompt" 询问是否用默认程序打开，"open" 直接打开，"reveal"
-// 在所在文件夹中显示。可运行文件永不打开，此时对话框只提供其所在文件夹。
-export type WorkspaceFileAction = "prompt" | "open" | "reveal";
+// 在所在文件夹中显示。可运行文件永不打开，此时对话框只提供其所在文件夹。"outside" 按会话的工作区外文件访问方式打开
+// 工作区之外的文件：不打开、询问后打开或直接在文件窗口中打开；没有查看器能读取的文件转入 "prompt"。
+export type WorkspaceFileAction = "prompt" | "open" | "reveal" | "outside";
 
 // WorkspaceFileActionRequest is one pending action on an absolute file path.
 // WorkspaceFileActionRequest 是针对单个绝对文件路径的待处理操作。
@@ -21,6 +24,9 @@ export interface WorkspaceFileActionRequest {
   // Requested action.
   // 请求的操作。
   action: WorkspaceFileAction;
+  // Session whose outside-file access and file windows an "outside" action uses.
+  // "outside" 操作所用的工作区外文件访问方式与文件窗口所属的会话。
+  sessionId: string | null;
 }
 
 // WORKSPACE_FILE_ACTION_EVENT tells the mounted host that an action is waiting.
@@ -29,10 +35,10 @@ const WORKSPACE_FILE_ACTION_EVENT = "vulcan:workspace-file-action";
 let pendingAction: WorkspaceFileActionRequest | null = null;
 let lastActionId = 0;
 
-// requestWorkspaceFileAction asks the workbench to run `action` on the file at absolute `path`.
-// requestWorkspaceFileAction 请求工作台对绝对路径 `path` 处的文件执行 `action`。
-export function requestWorkspaceFileAction(path: string, action: WorkspaceFileAction): void {
-  pendingAction = { id: ++lastActionId, path, action };
+// requestWorkspaceFileAction asks the workbench to run `action` on the file at absolute `path`, for session `sessionId`.
+// requestWorkspaceFileAction 请求工作台为会话 `sessionId` 对绝对路径 `path` 处的文件执行 `action`。
+export function requestWorkspaceFileAction(path: string, action: WorkspaceFileAction, sessionId: string | null = null): void {
+  pendingAction = { id: ++lastActionId, path, action, sessionId };
   window.dispatchEvent(new CustomEvent(WORKSPACE_FILE_ACTION_EVENT));
 }
 

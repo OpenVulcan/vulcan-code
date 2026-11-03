@@ -95,6 +95,16 @@
   user-select: text;
 }
 
+/* The "don't ask again in this session" choice of the outside-file prompt. 工作区外文件提示中的“本会话不再提示”选项。 */
+.workspace-file-action-remember {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--vk-u) * 2);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
+  cursor: pointer;
+}
+
 .workspace-file-preview.markdown {
   display: flex;
   flex-direction: column;

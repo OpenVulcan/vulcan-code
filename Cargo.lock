@@ -10430,6 +10430,7 @@ dependencies = [
  "vulcan-permission-judge",
  "vulcan-provider-adapters",
  "vulcan-runtime-assets",
+ "vulcan-session-core",
  "vulcan-tool-chain",
  "vulcan-vmm",
  "workspace-hack",

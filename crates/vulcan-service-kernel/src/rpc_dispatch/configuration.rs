@@ -2,14 +2,17 @@
 //! 配置 RPC 路由。
 
 use super::*;
+use crate::outside_file_access::{
+    service_save_session_outside_file_access, service_session_outside_file_access,
+};
 use crate::permission_judge;
 use crate::system_prompt_settings::{
     service_reset_system_prompt, service_save_system_prompt, service_system_prompt_settings,
 };
 use crate::tool_chain_settings::{service_save_session_tool_chain, service_session_tool_chain};
 use crate::workbench_model_routes::{
-    service_save_session_title_generation, service_save_tool_chain_settings,
-    service_save_tool_collapse_default,
+    service_save_outside_workspace_file_access, service_save_session_title_generation,
+    service_save_tool_chain_settings, service_save_tool_collapse_default,
 };
 
 /// Exact public RPC wire names owned by this domain router.
@@ -25,6 +28,9 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_save_tool_chain_settings",
     "service_session_tool_chain",
     "service_save_session_tool_chain",
+    "service_save_outside_workspace_file_access",
+    "service_session_outside_file_access",
+    "service_save_session_outside_file_access",
     "service_select_webui_locale",
     "service_save_provider_request_trace_settings",
     "service_open_selected_provider_api_trace_directory",
@@ -264,6 +270,29 @@ pub(super) async fn dispatch(
                 state,
                 rpc_required_param(params, "conversationId")?,
                 rpc_required_param(params, "enabled")?,
+            )
+            .await,
+        ),
+        "service_save_outside_workspace_file_access" => rpc_json_result(
+            service_save_outside_workspace_file_access(
+                app,
+                state,
+                rpc_required_param(params, "access")?,
+            )
+            .await,
+        ),
+        "service_session_outside_file_access" => rpc_json_result(
+            service_session_outside_file_access(
+                state,
+                rpc_required_param(params, "conversationId")?,
+            )
+            .await,
+        ),
+        "service_save_session_outside_file_access" => rpc_json_result(
+            service_save_session_outside_file_access(
+                state,
+                rpc_required_param(params, "conversationId")?,
+                rpc_optional_param(params, "access")?,
             )
             .await,
         ),

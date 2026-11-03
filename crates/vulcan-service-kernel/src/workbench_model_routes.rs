@@ -449,6 +449,35 @@ pub(super) async fn service_save_tool_chain_settings(
     Ok(workbench)
 }
 
+/// Persists how sessions without their own choice open files outside the workspace.
+/// 持久化未自行选择的会话如何打开工作区之外的文件。
+/// Parameters: `access` is the system default chosen by the user. Returns the refreshed workbench
+/// or an explicit error.
+/// 参数：`access` 是用户选择的系统默认值。返回刷新后的工作台或明确的错误。
+pub(super) async fn service_save_outside_workspace_file_access(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    access: vulcan_session_core::OutsideWorkspaceFileAccess,
+) -> Result<WorkbenchSnapshot, String> {
+    // Persist only on explicit user action; loading never writes the default.
+    // 仅在用户明确操作时持久化；加载时不写入默认值。
+    let workbench = mutate_provider_configuration(
+        &state,
+        "Failed to save the outside workspace file access setting",
+        |configuration| {
+            configuration.outside_workspace_file_access = Some(access);
+            Ok(())
+        },
+        |guard, configuration| {
+            refresh_settings_projection_locked(guard, configuration);
+            guard.workbench.clone()
+        },
+    )
+    .await?;
+    emit_workbench_event(&app, &workbench);
+    Ok(workbench)
+}
+
 /// Persists the WebUI locale in the shared Vulcan configuration file.
 /// 将 WebUI 语言持久化到共享 Vulcan 配置文件中。
 ///

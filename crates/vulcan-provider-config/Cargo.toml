@@ -20,6 +20,7 @@ toml.workspace = true
 vulcan-runtime-assets.workspace = true
 vulcan-permission-judge.workspace = true
 vulcan-provider-adapters.workspace = true
+vulcan-session-core.workspace = true
 vulcan-tool-chain.workspace = true
 vulcan-vmm.workspace = true
 ed25519-dalek = { workspace = true, features = ["fast"] }

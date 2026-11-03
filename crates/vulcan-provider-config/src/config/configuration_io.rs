@@ -112,6 +112,16 @@ pub struct ProviderConfigurationFile {
         skip_serializing_if = "Option::is_none"
     )]
     pub tool_chain_max_steps: Option<u32>,
+    /// How sessions without their own choice open files outside the workspace; absence means
+    /// prompt. Read through [`ProviderConfigurationFile::outside_workspace_file_access`].
+    /// 未自行选择的会话如何打开工作区之外的文件；缺省表示提示。通过
+    /// [`ProviderConfigurationFile::outside_workspace_file_access`] 读取。
+    #[serde(
+        default,
+        rename = "outsideWorkspaceFileAccess",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub outside_workspace_file_access: Option<vulcan_session_core::OutsideWorkspaceFileAccess>,
     /// Remembered WebUI locale identifier selected by the user.
     /// 由用户选择并记忆的WebUI语言标识。
     #[serde(rename = "uiLocale", skip_serializing_if = "Option::is_none")]
@@ -236,6 +246,12 @@ impl ProviderConfigurationFile {
     /// 未自行选择的会话是否提供 `tool_chain`；除非关闭，否则开启。
     pub fn tool_chain_enabled(&self) -> bool {
         self.tool_chain_enabled.unwrap_or(true)
+    }
+
+    /// How sessions without their own choice open outside files; prompt unless chosen otherwise.
+    /// 未自行选择的会话如何打开工作区之外的文件；除非另行选择，否则提示。
+    pub fn outside_workspace_file_access(&self) -> vulcan_session_core::OutsideWorkspaceFileAccess {
+        self.outside_workspace_file_access.unwrap_or_default()
     }
 
     /// Effective chain step limit, kept within the supported range.

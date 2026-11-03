@@ -483,16 +483,17 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     }));
   }, []);
   // openWorkspaceFile opens a viewable file in a file window of the session, shows another project file in a files tab
-  // of the open right panel and a docked file in the viewer tab; other files, and explicit OS actions, go to the file
-  // action host. Transcript cards reach it through WorkspaceFileOpenContext. Its identity never changes, so tab
-  // changes do not re-render every transcript card.
+  // of the open right panel and a docked file in the viewer tab; files outside the project, which first pass the
+  // session's outside-file access, and explicit OS actions go to the file action host. Transcript cards reach it
+  // through WorkspaceFileOpenContext. Its identity never changes, so tab changes do not re-render every transcript card.
   // openWorkspaceFile 在会话的文件窗口中打开可查看文件，在展开的右侧面板的文件页签中显示其他项目文件，在查看页签中显示
-  // 挂到右侧的文件；其他文件及显式的操作系统操作交给文件操作宿主。转录卡片通过 WorkspaceFileOpenContext 调用它。其引用
-  // 恒定不变，页签变化不会使每张转录卡片重新渲染。
+  // 挂到右侧的文件；项目之外的文件（先经会话的工作区外文件访问方式检查）及显式的操作系统操作交给文件操作宿主。转录卡片
+  // 通过 WorkspaceFileOpenContext 调用它。其引用恒定不变，页签变化不会使每张转录卡片重新渲染。
   const openWorkspaceFileLatest = React.useRef<WorkspaceFileOpener>(() => undefined);
   openWorkspaceFileLatest.current = (path, lines, action) => {
     const route = routeWorkspaceFileOpen(selectedChatProject?.path ?? null, path, action);
     if (route.kind === "action") return requestWorkspaceFileAction(route.path, route.action);
+    if (route.kind === "outside") return requestWorkspaceFileAction(route.path, "outside", props.selectedConversationId ?? null);
     if (route.kind === "window") return void import("@/components/file-windows/file-window-store").then((store) => store.openFileWindow(props.selectedConversationId ?? "", route.path));
     const next = route.kind === "viewer" ? openWorkspaceViewerContextTab(contextTabState, route.path, t) : focusWorkspaceFilesTab(contextTabState, t);
     setContextTabStateEntry((current) => ({ ...current, state: next }));

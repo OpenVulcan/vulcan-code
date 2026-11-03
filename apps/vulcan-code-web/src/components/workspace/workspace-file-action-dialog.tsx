@@ -13,15 +13,26 @@ import {
 import { toast } from "@/ui-kit/primitives/toast";
 import { readElectronLocalFileBridge, type ElectronLocalFileInspection } from "@/host-shell/electron-bridge";
 import type { WorkspaceFileActionRequest } from "@/components/workspace/workspace-file-actions";
+import { OutsideFileDialog } from "@/components/workspace/outside-file-dialog";
 
-// WorkspaceFileActionDialog runs one file action. The desktop first checks the file: a missing file is reported,
-// "open" and "reveal" act at once when allowed, and otherwise a dialog offers the default program (never for
-// runnable files) and the file's folder. The web client cannot reach the OS, so it explains that and offers to copy
-// the path.
-// WorkspaceFileActionDialog 执行单个文件操作。桌面端先检查文件：文件不存在时提示；"open" 与 "reveal" 在允许时立即执行；
+// WorkspaceFileActionDialog runs one file action; an "outside" request that ends with the default program continues
+// as "prompt".
+// WorkspaceFileActionDialog 执行单个文件操作；以默认程序结束的 "outside" 请求以 "prompt" 继续。
+export default function WorkspaceFileActionDialog(props: { request: WorkspaceFileActionRequest; onDone: () => void }) {
+  const [request, setRequest] = React.useState(props.request);
+  if (request.action === "outside") {
+    return <OutsideFileDialog onDefaultProgram={() => setRequest({ ...request, action: "prompt" })} onDone={props.onDone} request={request} />;
+  }
+  return <FileActionDialog onDone={props.onDone} request={request} />;
+}
+
+// FileActionDialog hands one file to the OS. The desktop first checks the file: a missing file is reported, "open"
+// and "reveal" act at once when allowed, and otherwise a dialog offers the default program (never for runnable
+// files) and the file's folder. The web client cannot reach the OS, so it explains that and offers to copy the path.
+// FileActionDialog 将单个文件交给操作系统。桌面端先检查文件：文件不存在时提示；"open" 与 "reveal" 在允许时立即执行；
 // 其余情况弹出对话框，提供默认程序打开（可运行文件永不提供）与所在文件夹。网页客户端无法访问操作系统，因此说明原因并
 // 提供复制路径。
-export default function WorkspaceFileActionDialog(props: { request: WorkspaceFileActionRequest; onDone: () => void }) {
+function FileActionDialog(props: { request: WorkspaceFileActionRequest; onDone: () => void }) {
   const { t } = useI18n();
   const { path, action } = props.request;
   const [inspection, setInspection] = React.useState<ElectronLocalFileInspection | null>(null);

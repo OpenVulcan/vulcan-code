@@ -135,6 +135,10 @@ pub struct WorkbenchSnapshot {
     /// 单次 `tool_chain` 调用生效的最大步骤数。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_chain_max_steps: Option<u32>,
+    /// How sessions without their own choice open files outside the workspace.
+    /// 未自行选择的会话如何打开工作区之外的文件。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outside_workspace_file_access: Option<vulcan_session_core::OutsideWorkspaceFileAccess>,
     /// Git commit dialog settings resolved from the shared configuration file.
     /// 从共享配置文件解析出的 Git 提交弹窗设置。
     #[serde(default)]

@@ -27,6 +27,7 @@ import { SubagentModelsSettingsArea } from "@/components/features/subagent-model
 import { McpServiceSettingsArea } from "@/components/features/mcp-service/mcp-service-settings-area";
 import { ToolCollapseSettingsSection } from "./tool-collapse-settings";
 import { SessionTitleSettingsSection } from "./session-title-settings";
+import { OutsideFileAccessSettingsSection } from "./outside-file-access-settings";
 import { VoiceInputSettingsSection } from "./voice-input-settings";
 import { ToolChainSettingsSection } from "./tool-chain-settings";
 import { ThinkingPopupSettingsSection } from "./thinking-popup-settings";
@@ -155,6 +156,7 @@ function SettingsRoutedPage(props: SettingsFeatureContentProps) {
           <ToolChainSettingsSection actions={props.actions} enabled={props.workbench.toolChainEnabled ?? true} maxSteps={props.workbench.toolChainMaxSteps ?? null} />
           <ThinkingPopupSettingsSection />
           <ConversationLinkSettingsSection />
+          <OutsideFileAccessSettingsSection access={props.workbench.outsideWorkspaceFileAccess ?? "prompt"} />
         </>}
         systemPromptSettings={<SystemPromptSettingsCard projects={props.workbench.projects} />}
       />
