@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "openai",
-  "revision": 24,
-  "published_at": "2026-11-02T06:44:17Z",
+  "revision": 25,
+  "published_at": "2026-11-03T06:08:20Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -683,7 +683,7 @@
       },
       "capabilities": {
         "operations": ["conversation_respond"],
-        "input_resources": ["file", "image"],
+        "input_resources": ["image"],
         "output_resources": [],
         "reasoning": "native",
         "provider_native_tools": [],
@@ -725,7 +725,7 @@
       },
       "capabilities": {
         "operations": ["conversation_respond"],
-        "input_resources": ["file", "image"],
+        "input_resources": ["image"],
         "output_resources": [],
         "reasoning": "native",
         "provider_native_tools": [],
@@ -767,7 +767,7 @@
       },
       "capabilities": {
         "operations": ["conversation_respond"],
-        "input_resources": ["file", "image"],
+        "input_resources": ["image"],
         "output_resources": [],
         "reasoning": "native",
         "provider_native_tools": [],
@@ -810,7 +810,7 @@
       },
       "capabilities": {
         "operations": ["conversation_respond"],
-        "input_resources": ["file", "image"],
+        "input_resources": ["image"],
         "output_resources": [],
         "reasoning": "native",
         "provider_native_tools": [],
@@ -853,7 +853,7 @@
       },
       "capabilities": {
         "operations": ["conversation_respond"],
-        "input_resources": ["file", "image"],
+        "input_resources": ["image"],
         "output_resources": [],
         "reasoning": "native",
         "provider_native_tools": [],
@@ -895,7 +895,7 @@
       },
       "capabilities": {
         "operations": ["conversation_respond"],
-        "input_resources": ["file", "image"],
+        "input_resources": ["image"],
         "output_resources": [],
         "reasoning": "native",
         "provider_native_tools": [],
@@ -937,7 +937,7 @@
       },
       "capabilities": {
         "operations": ["conversation_respond"],
-        "input_resources": ["file", "image"],
+        "input_resources": ["image"],
         "output_resources": [],
         "reasoning": "native",
         "provider_native_tools": [],

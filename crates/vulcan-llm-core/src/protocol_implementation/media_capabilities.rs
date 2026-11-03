@@ -34,9 +34,10 @@ pub fn protocol_profile_supports_media_source(
         return false;
     }
     match profile_id {
-        OPENAI_RESPONSES_PROFILE_ID | OPENAI_CODEX_RESPONSES_PROFILE_ID => {
-            matches!(kind, ResourceKind::Image | ResourceKind::File)
-        }
+        OPENAI_RESPONSES_PROFILE_ID => matches!(kind, ResourceKind::Image | ResourceKind::File),
+        // The Codex dialect carries images only; its backend rejects `input_file` parts.
+        // Codex 方言只承载图片；其后端拒绝 `input_file` 内容块。
+        OPENAI_CODEX_RESPONSES_PROFILE_ID => kind == ResourceKind::Image,
         OPENAI_CHAT_PROFILE_ID => match kind {
             ResourceKind::Image | ResourceKind::Video => {
                 source != ResourceSourceKind::ProviderFileId

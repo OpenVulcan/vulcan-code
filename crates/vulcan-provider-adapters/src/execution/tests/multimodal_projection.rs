@@ -188,6 +188,7 @@ fn production_multimodal_projection_covers_all_target_families() {
             let result = client().encode_request(&route, &request);
             if (kind == ResourceKind::Audio && !audio_supported)
                 || (kind == ResourceKind::Video && !video_supported)
+                || (kind == ResourceKind::File && profile == OPENAI_CODEX_RESPONSES_PROFILE_ID)
             {
                 assert_eq!(
                     result

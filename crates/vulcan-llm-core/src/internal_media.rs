@@ -115,7 +115,18 @@ impl<'a> InternalMediaProjector<'a> {
     fn project_resource(self, resource: &ResourceReference) -> Result<Value, LlmCoreError> {
         validate_resource_source(resource)?;
         match self.profile_id {
-            OPENAI_RESPONSES_PROFILE_ID | OPENAI_CODEX_RESPONSES_PROFILE_ID => {
+            OPENAI_RESPONSES_PROFILE_ID => {
+                crate::openai::encode_responses_resource(resource).map_err(protocol_error)
+            }
+            OPENAI_CODEX_RESPONSES_PROFILE_ID => {
+                // The Codex backend accepts image parts only and rejects `input_file`.
+                // Codex 后端只接受图片内容块并拒绝 `input_file`。
+                if resource.kind != ResourceKind::Image {
+                    return Err(LlmCoreError::new(format!(
+                        "Protocol `{}` has no registered {:?} input projector.",
+                        self.profile_id, resource.kind
+                    )));
+                }
                 crate::openai::encode_responses_resource(resource).map_err(protocol_error)
             }
             OPENAI_CHAT_PROFILE_ID => {

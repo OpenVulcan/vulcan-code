@@ -227,5 +227,20 @@ mod signature_provenance_tests {
             ResourceKind::Video,
             "video/x-matroska"
         ));
+        assert!(protocol_profile_supports_local_media_type(
+            OPENAI_RESPONSES_PROFILE_ID,
+            ResourceKind::File,
+            "application/pdf"
+        ));
+        assert!(!protocol_profile_supports_local_media_type(
+            OPENAI_CODEX_RESPONSES_PROFILE_ID,
+            ResourceKind::File,
+            "application/pdf"
+        ));
+        assert!(protocol_profile_supports_local_media_type(
+            OPENAI_CODEX_RESPONSES_PROFILE_ID,
+            ResourceKind::Image,
+            "image/png"
+        ));
     }
 }
