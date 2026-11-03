@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { findRequestedFileEntry, markdownLinkFileTarget, opensAsWebPage, parseFilePathMention, resolveWorkspaceFileTarget } from "./workspace-file-open-request";
+import {
+  findRequestedFileEntry,
+  markdownLinkFileTarget,
+  opensAsWebPage,
+  outsideProjectViewerPath,
+  parseFilePathMention,
+  resolveWorkspaceFileTarget,
+} from "./workspace-file-open-request";
 import { emptyWorkspaceContextTabState, focusWorkspaceFilesTab, openWorkspaceContextTab } from "./workspace-shell/context-tabs";
 import type { WorkspaceFileDirectoryListing, WorkspaceFileEntrySummary } from "@/types";
 
@@ -25,6 +32,19 @@ describe("resolveWorkspaceFileTarget", () => {
     expect(resolveWorkspaceFileTarget("/home/u/repo", "/Home/u/repo/x.ts")).toBeNull();
     expect(resolveWorkspaceFileTarget("D:\\work\\repo", "src/../../secret.txt")).toBeNull();
     expect(resolveWorkspaceFileTarget("D:\\work\\repo", "D:\\work\\repo")).toBeNull();
+  });
+});
+
+describe("outsideProjectViewerPath", () => {
+  it("sends viewable files outside the project, or with no project, to the viewer", () => {
+    expect(outsideProjectViewerPath("/home/u/repo", " /home/u/Downloads/report.pdf ")).toBe("/home/u/Downloads/report.pdf");
+    expect(outsideProjectViewerPath(null, "D:/docs/budget.xlsx")).toBe("D:/docs/budget.xlsx");
+  });
+
+  it("keeps project files, relative paths and unviewable files with the files panel", () => {
+    expect(outsideProjectViewerPath("/home/u/repo", "/home/u/repo/docs/report.pdf")).toBeNull();
+    expect(outsideProjectViewerPath(null, "docs/report.pdf")).toBeNull();
+    expect(outsideProjectViewerPath("/home/u/repo", "/home/u/notes.txt")).toBeNull();
   });
 });
 

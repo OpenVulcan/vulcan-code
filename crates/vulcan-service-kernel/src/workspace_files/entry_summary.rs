@@ -83,6 +83,7 @@ fn workspace_file_kind_is_previewable(kind: &WorkspaceFileEntryKind) -> bool {
         WorkspaceFileEntryKind::Code
             | WorkspaceFileEntryKind::Image
             | WorkspaceFileEntryKind::Video
+            | WorkspaceFileEntryKind::Document
     )
 }
 

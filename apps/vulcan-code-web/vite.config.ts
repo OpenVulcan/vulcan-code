@@ -5,6 +5,7 @@ import os from "node:os";
 import fs from "node:fs/promises";
 import { configDefaults } from "vitest/config";
 import { VULCAN_DEV_WEBUI_ORIGIN } from "./src/service/vite-service-discovery-origin";
+import { PDFJS_DATA_BASE_PATH, PDFJS_DATA_FOLDERS } from "./src/components/file-viewers/pdfjs-data-path";
 
 // catalogsDir holds the language registry and catalogs shared with the TUI, the desktop shell and Core.
 // catalogsDir 保存与 TUI、桌面壳及 Core 共用的语言注册表与目录。
@@ -29,7 +30,7 @@ export default defineConfig(({ mode }) => {
     // Unit tests also own a separate cache so their module graph cannot replace the browser's React singleton.
     // 单元测试也拥有独立缓存，避免其模块图替换浏览器中的 React 单例。
     cacheDir: path.resolve(__dirname, "node_modules", mode === "test" ? ".vite-workbench-test" : ".vite-workbench"),
-    plugins: [react(), vulcanServiceDiscoveryPlugin(userVulcanRootName)],
+    plugins: [react(), vulcanServiceDiscoveryPlugin(userVulcanRootName), pdfjsDataPlugin()],
     resolve: {
       alias: {
         "@": path.resolve(__dirname, "./src"),
@@ -111,6 +112,44 @@ function vulcanServiceDiscoveryPlugin(userVulcanRootName: string) {
             response.end(JSON.stringify({ status: "missing" }));
           });
       });
+    },
+  };
+}
+
+// pdfjsDataPlugin serves the pdf.js data folders (CMaps for CJK text, standard fonts, wasm image decoders and ICC
+// profiles) under PDFJS_DATA_BASE_PATH in development and copies them into the build output, since pdf.js loads
+// them by folder URL rather than through imports.
+// pdfjsDataPlugin 在开发时于 PDFJS_DATA_BASE_PATH 下提供 pdf.js 数据文件夹（用于中日韩文字的 CMap、标准字体、wasm 图像
+// 解码器与 ICC 配置），并将其复制到构建输出，因为 pdf.js 按文件夹 URL 而非导入加载它们。
+function pdfjsDataPlugin() {
+  const packageDir = path.resolve(__dirname, "node_modules", "pdfjs-dist");
+  let outDir = "";
+  let base = "/";
+  return {
+    name: "vulcan-pdfjs-data",
+    configResolved(config: { base: string; root: string; build: { outDir: string } }) {
+      base = config.base;
+      outDir = path.resolve(config.root, config.build.outDir);
+    },
+    configureServer(server: { middlewares: { use: (handler: (request: import("node:http").IncomingMessage, response: import("node:http").ServerResponse, next: () => void) => void) => void } }) {
+      server.middlewares.use((request, response, next) => {
+        const url = (request.url ?? "").split("?")[0];
+        const prefix = `${base}${PDFJS_DATA_BASE_PATH}/`;
+        const [folder, file, ...extra] = url.startsWith(prefix) ? decodeURIComponent(url.slice(prefix.length)).split("/") : [];
+        if (!folder || !file || extra.length > 0 || file.includes("..") || !(PDFJS_DATA_FOLDERS as readonly string[]).includes(folder)) {
+          next();
+          return;
+        }
+        void fs.readFile(path.join(packageDir, folder, file)).then((body) => {
+          response.setHeader("content-type", file.endsWith(".wasm") ? "application/wasm" : "application/octet-stream");
+          response.end(body);
+        }, () => next());
+      });
+    },
+    async writeBundle() {
+      await Promise.all(PDFJS_DATA_FOLDERS.map((folder) => (
+        fs.cp(path.join(packageDir, folder), path.join(outDir, PDFJS_DATA_BASE_PATH, folder), { recursive: true })
+      )));
     },
   };
 }

@@ -320,6 +320,7 @@ fn has_supported_service_media_asset_extension(path: &Path) -> bool {
             | Some("flac")
             | Some("ogg")
             | Some("pdf")
+            | Some("docx")
     )
 }
 
@@ -408,6 +409,9 @@ fn infer_service_media_asset_mime_type(path: &Path) -> String {
         Some("flac") => String::from("audio/flac"),
         Some("ogg") => String::from("audio/ogg"),
         Some("pdf") => String::from("application/pdf"),
+        Some("docx") => {
+            String::from("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        }
         _ => String::from("application/octet-stream"),
     }
 }

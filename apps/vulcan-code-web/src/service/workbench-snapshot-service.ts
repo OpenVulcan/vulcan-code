@@ -3,6 +3,7 @@ import type {
   WorkspaceFileDirectoryListing,
   WorkspaceFileFilterOptions,
   WorkspaceFileReadResponse,
+  WorkspaceSheetPreview,
   WorkbenchSnapshot,
 } from "@/types";
 import type {
@@ -296,6 +297,13 @@ export async function loadWorkspaceFilePreview(
     filePath,
     filters,
   });
+}
+
+// loadWorkspaceSheetPreview reads the leading cells of one sheet of the spreadsheet at an absolute path; a null
+// sheetName reads the first sheet.
+// loadWorkspaceSheetPreview 读取绝对路径处电子表格某个工作表的前部单元格；sheetName 为 null 时读取第一个工作表。
+export async function loadWorkspaceSheetPreview(filePath: string, sheetName: string | null): Promise<WorkspaceSheetPreview> {
+  return serviceClient.request<WorkspaceSheetPreview>("workspace.files.sheet", { filePath, sheetName });
 }
 
 // loadBrowserFallbackWorkspaceFileDirectory returns a compact demo tree for browser-only previews.

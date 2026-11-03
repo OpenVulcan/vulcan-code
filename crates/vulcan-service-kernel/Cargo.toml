@@ -16,6 +16,7 @@ test-support = []
 [dependencies]
 async-trait.workspace = true
 base64.workspace = true
+calamine.workspace = true
 encoding_rs.workspace = true
 futures-util.workspace = true
 ignore.workspace = true
@@ -83,6 +84,9 @@ vulcan-process-lifecycle.workspace = true
 # Generates real portable image fixtures for composer conversion tests.
 # 为输入区转换测试生成真实可移植图片夹具。
 image.workspace = true
+# Writes small spreadsheet fixtures for the sheet preview tests.
+# 为工作表预览测试写入小型电子表格夹具。
+zip.workspace = true
 # Isolates full startup and restart tests without changing user-profile environment variables.
 # 隔离完整启动和重启测试，不修改用户主目录环境变量。
 vulcan-runtime-assets = { workspace = true, features = ["test-support"] }

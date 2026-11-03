@@ -27,6 +27,8 @@ import {
 import { useI18n, type TranslationKey } from "@/i18n";
 import type { WorkspaceFileEntrySummary, WorkspaceFileReadResponse } from "@/types";
 import { useWorkspaceFileWrapLines } from "@/components/workspace/workspace-file-wrap-lines";
+import { DocumentViewer } from "@/components/file-viewers/document-viewer";
+import { fileViewerKind } from "@/components/file-viewers/file-viewer-kind";
 
 // workspaceFilePreviewMaxHighlightRows caps Shiki preview work inside the right rail.
 // workspaceFilePreviewMaxHighlightRows 限制右侧栏内 Shiki 预览工作量。
@@ -126,6 +128,14 @@ export function WorkspaceFilePreview(props: {
         <MediaPathContextMenu locator={props.preview.path}>
           <video aria-label={props.preview.relativePath} controls preload="metadata" src={props.resolveMediaSourceUrl(props.preview.path)} />
         </MediaPathContextMenu>
+      </div>
+    );
+  }
+  const documentKind = props.preview.kind === "document" ? fileViewerKind(props.preview.path) : null;
+  if (documentKind) {
+    return (
+      <div className="workspace-file-preview document">
+        <DocumentViewer kind={documentKind} name={props.preview.relativePath} path={props.preview.path} />
       </div>
     );
   }

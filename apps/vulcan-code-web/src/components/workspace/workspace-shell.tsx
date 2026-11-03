@@ -43,7 +43,13 @@ import { readElectronLocalBrowserBridge } from "@/host-shell/electron-bridge";
 import { LocalBrowserCloseDialog } from "@/components/features/browser/local-browser-close-dialog";
 import { readConversationLinkPreference } from "@/components/conversation/conversation-link-preference";
 import { resolveConversationLinkTarget } from "@/components/conversation/conversation-link-navigation";
-import { requestWorkspaceFileOpen, usePublishWorkspaceFileOpener, WorkspaceFileOpenContext, type WorkspaceFileOpener } from "@/components/workspace/workspace-file-open-request";
+import {
+  outsideProjectViewerPath,
+  requestWorkspaceFileOpen,
+  usePublishWorkspaceFileOpener,
+  WorkspaceFileOpenContext,
+  type WorkspaceFileOpener,
+} from "@/components/workspace/workspace-file-open-request";
 import {
   type WorkspaceContextTabKind,
 } from "@/components/workspace/workspace-context-panel";
@@ -74,6 +80,7 @@ import {
   normalizeWorkspaceContextTabState,
   openWorkspaceContextTab,
   openWorkspaceSubagentContextTab,
+  openWorkspaceViewerContextTab,
   renameWorkspaceFileContextTab,
   trimWorkspaceContextTabStateCache,
   workspaceSubagentTabId,
@@ -474,15 +481,17 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       state: activateWorkspaceContextTab(current.state, tabId),
     }));
   }, []);
-  // openWorkspaceFile shows a project file in a files tab of the open right panel; transcript cards reach it through
-  // WorkspaceFileOpenContext. Its identity never changes, so tab changes do not re-render every transcript card.
-  // openWorkspaceFile 在展开的右侧面板的文件页签中显示项目文件；转录卡片通过 WorkspaceFileOpenContext 调用它。
-  // 其引用恒定不变，页签变化不会使每张转录卡片重新渲染。
+  // openWorkspaceFile shows a project file in a files tab of the open right panel, and a viewable file outside the
+  // project in the viewer tab; transcript cards reach it through WorkspaceFileOpenContext. Its identity never changes,
+  // so tab changes do not re-render every transcript card.
+  // openWorkspaceFile 在展开的右侧面板的文件页签中显示项目文件，项目之外的可查看文件则显示在查看页签中；转录卡片通过
+  // WorkspaceFileOpenContext 调用它。其引用恒定不变，页签变化不会使每张转录卡片重新渲染。
   const openWorkspaceFileLatest = React.useRef<WorkspaceFileOpener>(() => undefined);
   openWorkspaceFileLatest.current = (path, lines) => {
-    const next = focusWorkspaceFilesTab(contextTabState, t);
+    const viewerPath = outsideProjectViewerPath(selectedChatProject?.path ?? null, path);
+    const next = viewerPath ? openWorkspaceViewerContextTab(contextTabState, viewerPath, t) : focusWorkspaceFilesTab(contextTabState, t);
     setContextTabStateEntry((current) => ({ ...current, state: next }));
-    if (next.activeTabId) requestWorkspaceFileOpen(next.activeTabId, path, lines);
+    if (next.activeTabId && !viewerPath) requestWorkspaceFileOpen(next.activeTabId, path, lines);
     openRightContextPanel();
   };
   const openWorkspaceFile = React.useCallback<WorkspaceFileOpener>((path, lines) => openWorkspaceFileLatest.current(path, lines), []);

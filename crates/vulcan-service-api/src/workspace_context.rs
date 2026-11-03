@@ -409,6 +409,9 @@ pub enum WorkspaceFileEntryKind {
     /// Video file that can be displayed through the local media route.
     /// 可通过本地媒体路由显示的视频文件。
     Video,
+    /// Read-only document (PDF, Word or spreadsheet) shown by a WebUI document viewer.
+    /// 由 WebUI 文档查看器显示的只读文档（PDF、Word 或电子表格）。
+    Document,
     /// Other file type that is not previewed by the first workspace file panel.
     /// 首版工作区文件面板不预览的其他文件类型。
     Other,
@@ -567,5 +570,39 @@ pub struct WorkspaceFileReadResponse {
     pub line_count: Option<usize>,
     /// Whether textual content was truncated by the backend read limit.
     /// 文本内容是否因后端读取上限被截断。
+    pub truncated: bool,
+}
+
+/// Describes the leading cells of one spreadsheet sheet, read for a read-only viewer.
+/// 描述单个电子表格工作表的前部单元格，供只读查看器读取。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceSheetPreview {
+    /// Absolute spreadsheet path on the service host.
+    /// 服务宿主上的电子表格绝对路径。
+    pub path: String,
+    /// Names of every sheet in workbook order.
+    /// 按工作簿顺序排列的全部工作表名称。
+    pub sheet_names: Vec<String>,
+    /// Name of the sheet these rows belong to.
+    /// 这些行所属的工作表名称。
+    pub sheet_name: String,
+    /// Zero-based row index of the first returned row in the sheet.
+    /// 首个返回行在工作表中从 0 开始的行索引。
+    pub first_row: u32,
+    /// Zero-based column index of the first returned column in the sheet.
+    /// 首个返回列在工作表中从 0 开始的列索引。
+    pub first_column: u32,
+    /// Cell text by row, as the cells display their values; empty cells are empty strings.
+    /// 按行排列的单元格文本，按单元格显示的值给出；空单元格为空字符串。
+    pub rows: Vec<Vec<String>>,
+    /// Number of rows the used range of the sheet spans.
+    /// 工作表已用区域跨越的行数。
+    pub total_rows: usize,
+    /// Number of columns the used range of the sheet spans.
+    /// 工作表已用区域跨越的列数。
+    pub total_columns: usize,
+    /// Whether rows or columns beyond the preview limits were left out.
+    /// 是否省略了超出预览上限的行或列。
     pub truncated: bool,
 }

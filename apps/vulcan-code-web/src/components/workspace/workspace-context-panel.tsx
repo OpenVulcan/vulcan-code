@@ -7,6 +7,7 @@ import {
   Bot,
   Brain,
   ChevronsDown,
+  FileText,
   Folder,
   Globe2,
   GitPullRequest,
@@ -91,6 +92,10 @@ const LazyWorkspaceFilesPanelHost = React.lazy(async () => {
 
 // LazyClientBrowserArea mounts this window's conversation-scoped page only while its right tab is active.
 // LazyClientBrowserArea 仅在当前会话的右侧页签激活时挂载此窗口的本地网页。
+// LazyFileViewerTab loads the file viewers only when a viewer tab shows.
+// LazyFileViewerTab 仅在显示查看页签时加载文件查看器。
+const LazyFileViewerTab = React.lazy(() => import("@/components/file-viewers/file-viewer-tab"));
+
 const LazyClientBrowserArea = React.lazy(async () => {
   const module = await import("@/components/features/browser/client-browser-area");
   return { default: module.ClientBrowserArea };
@@ -98,7 +103,7 @@ const LazyClientBrowserArea = React.lazy(async () => {
 
 // WorkspaceContextPanelTab identifies one registered right context panel page.
 // WorkspaceContextPanelTab 标识一个已注册的右侧上下文面板页面。
-export type WorkspaceContextPanelTab = "review" | "memory" | "files" | "subagent" | "browser" | "local-browser";
+export type WorkspaceContextPanelTab = "review" | "memory" | "files" | "subagent" | "browser" | "local-browser" | "viewer";
 
 // WorkspaceContextTabKind identifies one dynamic right context tab type.
 // WorkspaceContextTabKind 标识一个动态右侧上下文页签类型。
@@ -119,6 +124,9 @@ export interface WorkspaceContextTabItem {
   // Optional selected file name for file tabs.
   // 文件页签可选的已选中文件名。
   selectedFileName?: string | null;
+  // Absolute path of the file a viewer tab shows, which may lie outside the project.
+  // 查看页签显示的文件绝对路径，可位于项目之外。
+  viewerPath?: string | null;
   // Optional subagent child task conversation id for subagent tabs.
   // 子代理页签可选的子任务会话标识。
   subagentTaskId?: string | null;
@@ -811,6 +819,14 @@ function WorkspaceContextTabContent(args: {
     return <div className="vk-panel-body" data-fill="">{args.props.aiBrowserPanel}</div>;
   }
 
+  if (args.activeTab.kind === "viewer") {
+    return <div className="vk-panel-body" data-fill="">
+      {args.activeTab.viewerPath ? <React.Suspense fallback={null}>
+        <LazyFileViewerTab key={args.activeTab.viewerPath} path={args.activeTab.viewerPath} />
+      </React.Suspense> : null}
+    </div>;
+  }
+
   if (args.activeTab.kind === "local-browser") {
     return <div className="vk-panel-body" data-fill="">
       {args.props.selectedConversationId ? <React.Suspense fallback={null}>
@@ -1258,6 +1274,9 @@ function workspaceContextTabIcon(kind: WorkspaceContextTabKind, size: number): R
   if (kind === "files") {
     return <Folder size={size} />;
   }
+  if (kind === "viewer") {
+    return <FileText size={size} />;
+  }
   if (kind === "memory") {
     return <Brain size={size} />;
   }
@@ -1267,7 +1286,7 @@ function workspaceContextTabIcon(kind: WorkspaceContextTabKind, size: number): R
 // workspaceContextTabDisplayTitle returns the locale-aware visible title for one opened tab.
 // workspaceContextTabDisplayTitle 返回单个已打开页签按当前语言显示的标题。
 function workspaceContextTabDisplayTitle(tab: WorkspaceContextTabItem, t: (key: TranslationKey) => string): string {
-  if (tab.kind === "files" || tab.kind === "subagent") {
+  if (tab.kind === "files" || tab.kind === "subagent" || tab.kind === "viewer") {
     return tab.title || workspaceContextTabDefaultTitle(tab.kind, t);
   }
   return workspaceContextTabDefaultTitle(tab.kind, t);

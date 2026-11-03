@@ -17,6 +17,9 @@ export function workspaceContextTabDefaultTitle(kind: WorkspaceContextTabKind, t
   if (kind === "subagent") {
     return t ? t("conversation.subagent.schedule") : "Subagent";
   }
+  if (kind === "viewer") {
+    return t ? t("documentViewer.tab") : "Viewer";
+  }
   if (kind === "files") {
     return t ? t("workspaceFilePreview.openFile") : "Open file";
   }

@@ -1,0 +1,171 @@
+/* Read-only document viewers (PDF, Word, spreadsheets); loaded with the first viewer that opens. */
+/* 只读文档查看器（PDF、Word、电子表格）；随首个打开的查看器加载。 */
+.vk-docview {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--vk-sunken);
+}
+
+.vk-docview-tab {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.vk-docview-path {
+  flex: 0 0 auto;
+  padding: calc(var(--vk-u) * 1) calc(var(--vk-u) * 3);
+  border-bottom: var(--vk-bw) solid var(--vk-line-soft);
+  color: var(--vk-ink-3);
+  font-family: var(--vk-font-mono);
+  font-size: var(--vk-fs-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+  user-select: text;
+}
+
+.vk-docview-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: calc(var(--vk-u) * 1);
+  min-height: var(--vk-h-md);
+  padding: calc(var(--vk-u) * 1) calc(var(--vk-u) * 2);
+  border-bottom: var(--vk-bw) solid var(--vk-line-soft);
+  background: var(--vk-panel);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
+}
+
+.vk-docview-pages,
+.vk-docview-matches {
+  min-width: 5ch;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.vk-docview-fit {
+  padding: 0 calc(var(--vk-u) * 1.5);
+  height: var(--vk-h-sm);
+  border: var(--vk-bw) solid var(--vk-line-soft);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.vk-docview-fit:hover:not(:disabled) { border-color: var(--vk-line-strong); color: var(--vk-ink); }
+.vk-docview-fit:disabled { opacity: 0.5; cursor: default; }
+.vk-docview-find { flex: 1 1 8rem; min-width: 6rem; max-width: 16rem; margin-left: auto; }
+
+.vk-docview-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.vk-docview-scroll {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+}
+
+/* pdf.js requires an absolutely positioned scroll container. pdf.js 要求滚动容器绝对定位。 */
+.vk-docview-pdf {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+}
+
+.vk-docview-pdf .pdfViewer { padding: calc(var(--vk-u) * 2) 0; }
+
+.vk-docview-docx .docx-wrapper { padding: calc(var(--vk-u) * 3); background: transparent; }
+.vk-docview-docx .docx-wrapper > section.docx { margin-bottom: calc(var(--vk-u) * 3); box-shadow: var(--vk-shadow-1); }
+
+.vk-docview-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: calc(var(--vk-u) * 2);
+  padding: calc(var(--vk-u) * 4);
+  background: var(--vk-sunken);
+  color: var(--vk-ink-2);
+  text-align: center;
+  font-size: var(--vk-fs-md);
+  overflow-wrap: anywhere;
+}
+
+.vk-docview-overlay.failed { color: var(--vk-bad); }
+.vk-docview-overlay.failed strong { color: var(--vk-ink); }
+
+.vk-docview-sheets {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0;
+  overflow-x: auto;
+  border-bottom: var(--vk-bw) solid var(--vk-line-soft);
+  background: var(--vk-panel);
+}
+
+.vk-docview-sheet {
+  flex: 0 0 auto;
+  padding: calc(var(--vk-u) * 1) calc(var(--vk-u) * 3);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--vk-ink-2);
+  font: inherit;
+  font-size: var(--vk-fs-sm);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.vk-docview-sheet:hover { color: var(--vk-ink); }
+.vk-docview-sheet[aria-selected="true"] { border-bottom-color: var(--vk-ember); color: var(--vk-ink); }
+
+.vk-docview > .vk-page-notice { flex: 0 0 auto; margin: calc(var(--vk-u) * 2); }
+.vk-docview-scroll > .vk-page-empty { width: auto; margin: calc(var(--vk-u) * 4); }
+.vk-docview-tab > .vk-page-empty { flex: 1 1 auto; width: auto; height: auto; min-height: 0; margin: calc(var(--vk-u) * 4); }
+
+.vk-docview-grid {
+  border-collapse: separate;
+  border-spacing: 0;
+  background: var(--vk-ground);
+  color: var(--vk-ink);
+  font-size: var(--vk-fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.vk-docview-grid :where(th, td) {
+  max-width: 28rem;
+  padding: calc(var(--vk-u) * 0.5) calc(var(--vk-u) * 1.5);
+  border-right: var(--vk-bw) solid var(--vk-line-soft);
+  border-bottom: var(--vk-bw) solid var(--vk-line-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  vertical-align: top;
+}
+
+.vk-docview-grid th {
+  background: var(--vk-raised);
+  color: var(--vk-ink-3);
+  font-weight: 500;
+}
+
+.vk-docview-grid thead th { position: sticky; top: 0; z-index: 1; text-align: center; }
+.vk-docview-grid tbody th { position: sticky; left: 0; text-align: right; }
+.vk-docview-grid thead th:first-child { left: 0; z-index: 2; }

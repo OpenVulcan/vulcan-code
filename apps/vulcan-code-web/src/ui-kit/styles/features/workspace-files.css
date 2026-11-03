@@ -71,6 +71,13 @@
   overflow: hidden;
 }
 
+.workspace-file-preview.document {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .workspace-file-preview.markdown {
   display: flex;
   flex-direction: column;

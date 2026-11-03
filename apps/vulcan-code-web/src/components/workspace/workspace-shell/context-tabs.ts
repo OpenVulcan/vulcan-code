@@ -117,6 +117,28 @@ export function openWorkspaceSubagentContextTab(
   };
 }
 
+// openWorkspaceViewerContextTab shows a file in the single viewer tab, opening it when needed; the tab is named
+// after the file.
+// openWorkspaceViewerContextTab 在唯一的查看页签中显示文件，需要时打开该页签；页签以文件名命名。
+export function openWorkspaceViewerContextTab(
+  // Current tab state.
+  // 当前页签状态。
+  state: WorkspaceContextTabState,
+  // Absolute path of the file to show.
+  // 需要显示的文件绝对路径。
+  path: string,
+  // Translation helper for default tab titles.
+  // 默认页签标题的翻译辅助函数。
+  t: (key: TranslationKey) => string,
+): WorkspaceContextTabState {
+  const opened = openWorkspaceContextTab(state, "viewer", t);
+  const title = path.split(/[\\/]/).pop() || workspaceContextTabDefaultTitle("viewer", t);
+  return {
+    ...opened,
+    tabs: opened.tabs.map((tab) => (tab.id === opened.activeTabId ? { ...tab, title, viewerPath: path } : tab)),
+  };
+}
+
 // normalizeWorkspaceContextTabState removes stale active ids from a tab state.
 // normalizeWorkspaceContextTabState 从页签状态中移除失效的活动标识。
 export function normalizeWorkspaceContextTabState(

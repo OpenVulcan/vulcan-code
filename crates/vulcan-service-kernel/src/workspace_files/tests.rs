@@ -76,12 +76,12 @@ fn workspace_file_relative_path_text_projects_root_and_children() {
     let root = test_workspace_file_temp_dir("relative-path");
     // Nested child path that exercises multi-component slash joining.
     // 用于覆盖多级组件斜杠拼接的嵌套子路径。
-    let nested = root.join("DATA").join("yycfg").join("中文配置.xls");
+    let nested = root.join("DATA").join("yycfg").join("中文配置.bin");
 
     assert_eq!(workspace_file_relative_path_text(&root, &root), "");
     assert_eq!(
         workspace_file_relative_path_text(&root, &nested),
-        String::from("DATA/yycfg/中文配置.xls")
+        String::from("DATA/yycfg/中文配置.bin")
     );
     let _ = std::fs::remove_dir_all(root);
 }
@@ -138,6 +138,19 @@ fn workspace_file_kind_classifies_code_media_and_other_files() {
         workspace_file_kind_from_path(Path::new("AGENTS.md")),
         WorkspaceFileEntryKind::Code
     );
+    for document in [
+        "manual.pdf",
+        "notes.docx",
+        "budget.xlsx",
+        "legacy.xls",
+        "sheet.ods",
+    ] {
+        assert_eq!(
+            workspace_file_kind_from_path(Path::new(document)),
+            WorkspaceFileEntryKind::Document,
+            "{document}"
+        );
+    }
     assert_eq!(
         workspace_file_kind_from_path(Path::new("capture.raw")),
         WorkspaceFileEntryKind::Other
@@ -228,11 +241,11 @@ fn workspace_file_entry_summary_filters_non_preview_files_only_when_requested() 
     let root = test_workspace_file_temp_dir("non-preview-filter");
     let data_directory = root.join("DATA").join("yycfg");
     std::fs::create_dir_all(&data_directory).expect("create data directory");
-    let spreadsheet = data_directory.join("中文配置.xls");
-    std::fs::write(&spreadsheet, "spreadsheet placeholder").expect("write spreadsheet");
+    let binary_file = data_directory.join("中文配置.bin");
+    std::fs::write(&binary_file, "binary placeholder").expect("write binary file");
 
     let default_file_summary =
-        workspace_file_entry_summary(&root, &spreadsheet, &WorkspaceFileFilterOptions::default())
+        workspace_file_entry_summary(&root, &binary_file, &WorkspaceFileFilterOptions::default())
             .expect("non-preview file should be visible by default");
     let default_directory_summary = workspace_file_entry_summary(
         &root,
@@ -248,13 +261,13 @@ fn workspace_file_entry_summary_filters_non_preview_files_only_when_requested() 
     assert_eq!(default_file_summary.kind, WorkspaceFileEntryKind::Other);
     assert_eq!(
         default_file_summary.relative_path,
-        String::from("DATA/yycfg/中文配置.xls")
+        String::from("DATA/yycfg/中文配置.bin")
     );
     assert_eq!(
         default_directory_summary.kind,
         WorkspaceFileEntryKind::Directory
     );
-    assert!(workspace_file_entry_summary(&root, &spreadsheet, &filters).is_none());
+    assert!(workspace_file_entry_summary(&root, &binary_file, &filters).is_none());
     assert!(workspace_file_entry_summary(&root, &root.join("DATA"), &filters).is_none());
     let _ = std::fs::remove_dir_all(root);
 }

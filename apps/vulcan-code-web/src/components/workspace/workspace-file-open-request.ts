@@ -2,6 +2,7 @@ import React from "react";
 import { toast } from "@/ui-kit/primitives/toast";
 import { useI18n } from "@/i18n";
 import { relativeToWorkspace } from "@/components/workspace/workspace-path-actions";
+import { fileViewerKind } from "@/components/file-viewers/file-viewer-kind";
 import type { WorkspaceFileDirectoryListing, WorkspaceFileEntrySummary } from "@/types";
 
 // WORKSPACE_FILE_OPEN_EVENT tells the mounted files panel that a file open request is waiting for it.
@@ -141,6 +142,17 @@ export function resolveWorkspaceFileTarget(workspacePath: string, path: string):
   const name = segments.pop();
   if (!name || name === ".." || segments.includes("..")) return null;
   return { directory: segments.length > 0 ? [root, ...segments].join(separator) : null, name };
+}
+
+// outsideProjectViewerPath returns the trimmed path when it names, by absolute path, a file outside the project
+// (or with no project at all) that a read-only viewer shows; such files open in the viewer tab instead of the files
+// panel. Returns null for every other path.
+// outsideProjectViewerPath 在路径以绝对路径指向项目之外（或根本没有项目时）且只读查看器能显示的文件时返回去除首尾空白的
+// 路径；此类文件在查看页签而非文件面板中打开。其他路径返回 null。
+export function outsideProjectViewerPath(workspacePath: string | null, path: string): string | null {
+  const requested = path.trim();
+  if (!/^(?:[A-Za-z]:)?[\\/]/.test(requested) || !fileViewerKind(requested)) return null;
+  return workspacePath && resolveWorkspaceFileTarget(workspacePath, requested) ? null : requested;
 }
 
 // FILE_PATH_MENTION matches inline text naming a file by path: at least one folder separator, a file name with a

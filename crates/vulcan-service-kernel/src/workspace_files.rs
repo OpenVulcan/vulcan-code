@@ -12,7 +12,7 @@ use ignore::WalkBuilder;
 use vulcan_host_tools::output_decode::decode_complete_user_text;
 use vulcan_service_api::{
     WorkspaceFileDirectoryListing, WorkspaceFileEntryKind, WorkspaceFileEntrySummary,
-    WorkspaceFileFilterOptions, WorkspaceFileReadResponse,
+    WorkspaceFileFilterOptions, WorkspaceFileReadResponse, WorkspaceSheetPreview,
 };
 
 use crate::normalized_workspace_path_text_from_path;
@@ -30,12 +30,14 @@ mod file_kind;
 mod path_metadata;
 mod path_security;
 mod read_response;
+mod sheet_preview;
 
 use entry_summary::*;
 use file_kind::*;
 use path_metadata::*;
 pub(crate) use path_security::*;
 use read_response::*;
+use sheet_preview::workspace_sheet_preview;
 
 /// Builds a workspace file walker with the shared ignore and symlink policy.
 /// 使用共享忽略规则和符号链接策略构建工作区文件遍历器。
@@ -94,6 +96,7 @@ fn workspace_file_media_kind_allowed(
         WorkspaceFileEntryKind::Video => filters.allow_videos,
         WorkspaceFileEntryKind::Code
         | WorkspaceFileEntryKind::Directory
+        | WorkspaceFileEntryKind::Document
         | WorkspaceFileEntryKind::Other => false,
     }
 }
@@ -254,6 +257,14 @@ pub(super) async fn service_workspace_files_read(
                 ))
             }
         }
+        // Document viewers fetch the file themselves, so the response carries metadata only.
+        // 文档查看器自行获取文件，因此响应只携带元数据。
+        WorkspaceFileEntryKind::Document => Ok(workspace_file_media_response(
+            &workspace_root,
+            &file,
+            &metadata,
+            kind,
+        )),
         WorkspaceFileEntryKind::Directory | WorkspaceFileEntryKind::Other => {
             Err(String::from("Previewing this file type is not supported."))
         }
@@ -262,3 +273,26 @@ pub(super) async fn service_workspace_files_read(
 
 #[cfg(test)]
 mod tests;
+
+/// Reads the leading cells of one spreadsheet sheet for the read-only sheet viewer.
+/// 为只读表格查看器读取电子表格中某个工作表的前部单元格。
+///
+/// # Parameters
+/// 参数
+/// `file_path` is the absolute spreadsheet path, inside or outside any project.
+/// `file_path` 是电子表格绝对路径，可在任何项目之内或之外。
+/// `sheet_name` picks a sheet; `None` reads the first one.
+/// `sheet_name` 选择工作表；`None` 读取第一个。
+///
+/// # Returns
+/// 返回值
+/// The bounded sheet preview, or an English error.
+/// 返回受限的工作表预览，或英文错误。
+pub(super) async fn service_workspace_files_sheet(
+    file_path: String,
+    sheet_name: Option<String>,
+) -> Result<WorkspaceSheetPreview, String> {
+    tokio::task::spawn_blocking(move || workspace_sheet_preview(&file_path, sheet_name.as_deref()))
+        .await
+        .map_err(|error| format!("The spreadsheet reader stopped unexpectedly: {error}"))?
+}

@@ -222,6 +222,30 @@ pub(crate) fn workspace_file_extension_metadata(
             kind: WorkspaceFileEntryKind::Video,
             mime_type: "video/3gpp",
         },
+        "pdf" => WorkspaceFileExtensionMetadata {
+            kind: WorkspaceFileEntryKind::Document,
+            mime_type: "application/pdf",
+        },
+        "docx" => WorkspaceFileExtensionMetadata {
+            kind: WorkspaceFileEntryKind::Document,
+            mime_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        },
+        "xlsx" | "xlsm" => WorkspaceFileExtensionMetadata {
+            kind: WorkspaceFileEntryKind::Document,
+            mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        },
+        "xlsb" => WorkspaceFileExtensionMetadata {
+            kind: WorkspaceFileEntryKind::Document,
+            mime_type: "application/vnd.ms-excel.sheet.binary.macroenabled.12",
+        },
+        "xls" => WorkspaceFileExtensionMetadata {
+            kind: WorkspaceFileEntryKind::Document,
+            mime_type: "application/vnd.ms-excel",
+        },
+        "ods" => WorkspaceFileExtensionMetadata {
+            kind: WorkspaceFileEntryKind::Document,
+            mime_type: "application/vnd.oasis.opendocument.spreadsheet",
+        },
         "html" | "htm" => WorkspaceFileExtensionMetadata {
             kind: WorkspaceFileEntryKind::Code,
             mime_type: "text/html",

@@ -153,9 +153,42 @@ export interface PackageFileListing {
   packages: PackageFileSummary[];
 }
 
-// WorkspaceFileEntryKind describes the file families rendered by the workspace file panel.
-// WorkspaceFileEntryKind 描述工作区文件面板渲染的文件类别。
-export type WorkspaceFileEntryKind = "directory" | "code" | "image" | "video" | "other";
+// WorkspaceFileEntryKind describes the file families rendered by the workspace file panel; "document" files (PDF, Word
+// and spreadsheets) open in a read-only document viewer.
+// WorkspaceFileEntryKind 描述工作区文件面板渲染的文件类别；"document" 文件（PDF、Word 与电子表格）在只读文档查看器中打开。
+export type WorkspaceFileEntryKind = "directory" | "code" | "image" | "video" | "document" | "other";
+
+// WorkspaceSheetPreview is the leading part of one spreadsheet sheet, read for the read-only sheet viewer.
+// WorkspaceSheetPreview 是为只读表格查看器读取的单个电子表格工作表前部。
+export interface WorkspaceSheetPreview {
+  // Absolute spreadsheet path.
+  // 电子表格绝对路径。
+  path: string;
+  // Every sheet name in workbook order.
+  // 按工作簿顺序排列的全部工作表名称。
+  sheetNames: string[];
+  // Sheet these rows belong to.
+  // 这些行所属的工作表。
+  sheetName: string;
+  // Zero-based sheet row of the first returned row.
+  // 首个返回行在工作表中从 0 开始的行号。
+  firstRow: number;
+  // Zero-based sheet column of the first returned column.
+  // 首个返回列在工作表中从 0 开始的列号。
+  firstColumn: number;
+  // Cell text by row; empty cells are empty strings.
+  // 按行排列的单元格文本；空单元格为空字符串。
+  rows: string[][];
+  // Rows the used range spans.
+  // 已用区域跨越的行数。
+  totalRows: number;
+  // Columns the used range spans.
+  // 已用区域跨越的列数。
+  totalColumns: number;
+  // Whether rows or columns beyond the service's preview limits were left out.
+  // 是否省略了超出服务预览上限的行或列。
+  truncated: boolean;
+}
 
 // WorkspaceFileFilterOptions stores the active workspace file tree filters.
 // WorkspaceFileFilterOptions 保存当前工作区文件树过滤器。

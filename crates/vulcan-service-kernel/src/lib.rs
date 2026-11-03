@@ -422,7 +422,9 @@ use workbench_surface_projection::{
     subagent_navigation_snapshot_for_parent_from_cached_state,
     subagent_navigation_snapshot_from_cached_state, subagent_navigation_snapshot_from_state,
 };
-use workspace_files::{service_workspace_files_list, service_workspace_files_read};
+use workspace_files::{
+    service_workspace_files_list, service_workspace_files_read, service_workspace_files_sheet,
+};
 use workspace_persistence_versions::*;
 use workspace_session_queries::*;
 

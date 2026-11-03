@@ -20,6 +20,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "workspace.git.history",
     "workspace.files.list",
     "workspace.files.read",
+    "workspace.files.sheet",
 ];
 
 /// Dispatches one RPC method owned by this domain.
@@ -157,6 +158,13 @@ pub(super) async fn dispatch(
                 rpc_optional_param(params, "conversationId")?,
                 rpc_required_param(params, "filePath")?,
                 rpc_optional_param(params, "filters")?,
+            )
+            .await,
+        ),
+        "workspace.files.sheet" => rpc_json_result(
+            service_workspace_files_sheet(
+                rpc_required_param(params, "filePath")?,
+                rpc_optional_param(params, "sheetName")?,
             )
             .await,
         ),
