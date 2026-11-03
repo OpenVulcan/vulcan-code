@@ -654,6 +654,13 @@ signed_object_upload
 声明，再处理同名中转记录；供应商清单仍持有逐入口协议和 Provider Tool 参数，公共表不授予模型
 目录成员权限。
 
+该资源完全由 `scripts/sync-common-model-capabilities.mjs` 生成，不得手工编辑；需要修正的能力事实
+写进拥有该模型的清单。脚本默认以 OpenRouter 公共模型列表为交叉参照（`--source <文件>` 可改用
+本地副本），`--offline` 改以已发布目录为参照，保留其中已有的上游别名与窗口，新增模型只增加自己
+那条记录。`provider-manifests-refresh.mjs` 刷新清单后会离线重新生成；`node scripts/check.mjs
+repository` 以 `--offline --check` 校验目录与清单一致，漂移即失败。输出为两空格缩进、LF 换行的
+JSON，与执行宿主无关。
+
 图片、视频、音频理解使用额外的固定宿主外壳。`image_understand`、`video_understand`、
 `audio_understand` 暴露给 AI 的参数永远分别只有一个媒体路径或 URL 和 `prompt`；Manifest 中的
 `tool_targets[].input_schema` 只描述供应商内部规范参数。每个媒体理解目标必须声明
@@ -1104,7 +1111,8 @@ node scripts/provider-manifests-refresh.mjs            # 加 --dry-run 只列计
 
 脚本按 `bundled-index.json` 固定的摘要找出改动的清单；作者未提高 `revision` 的清单自动递增
 `revision` 并刷新 `published_at`（只改这两行，保留手工排版）；随后以下一个 Index 修订重建
-`bundled-index.json`、执行 `validate-all`，最后执行 `make.ps1 sync`。任一步失败即停止。
+`bundled-index.json`、执行 `validate-all`，再离线重新生成公共模型能力目录，最后执行
+`make.ps1 sync`。任一步失败即停止。
 
 `display.directory_rank` 决定供应商在设置目录「可添加」区的默认顺序（数字小者在前，未设置者排在
 最后）；用户已配置的供应商始终在前，并按用户自己的排序显示。`display.promotion.signup_url` 是

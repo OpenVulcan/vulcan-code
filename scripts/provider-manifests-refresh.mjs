@@ -5,7 +5,8 @@
 // 1. Compares every manifest file with the digest pinned by bundled-index.json.
 // 2. Bumps `revision` and `published_at` of each changed manifest whose revision was not raised yet.
 // 3. Rebuilds bundled-index.json with the next index revision, then runs `validate-all`.
-// 4. Runs `make.ps1 sync` so `output/` serves the new baseline (skip with --no-sync).
+// 4. Regenerates the common model capability catalog offline from the refreshed manifests.
+// 5. Runs `make.ps1 sync` so `output/` serves the new baseline (skip with --no-sync).
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
@@ -105,6 +106,9 @@ function main() {
     '--out', path.relative(repositoryRoot, indexFile).replaceAll('\\', '/'),
   ]);
   run('cargo', [...cli, 'validate-all']);
+  // Offline keeps the published upstream aliases and windows, so a new model adds just its own record.
+  // 离线模式保留已发布的上游别名与窗口，新增模型只增加它自己的记录。
+  run(process.execPath, ['scripts/sync-common-model-capabilities.mjs', '--offline']);
   if (sync) run('pwsh', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'make.ps1', 'sync']);
 }
 

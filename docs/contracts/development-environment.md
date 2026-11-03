@@ -264,7 +264,7 @@ cargo test --doc
 | `scripts/test_context7_plugin.lua` | 修改 Context7 插件 Bundle | 在 Vulcan Lua 运行时中执行，传入 `plugin_path`；`online` 可选开启在线冒烟 |
 | `scripts/test_statistics_cost_pagination.lua`、`scripts/test_statistics_page_projections.lua` | 修改用量统计插件的费用累加或分页视图 | 在 Vulcan Lua 运行时中执行，传入 `plugin_path`，`change_revision` 可选 |
 | `scripts/test_vulcan_plugin_lua_modules.lua` | 修改 Vulcan Plugin 白名单 Lua 模块桥 | 在 Vulcan Lua 运行时中执行，传入 `bridge_path` 与 `workspace_root` |
-| `scripts/sync_common_model_capabilities.ps1` | 同步公共模型能力目录与 Provider Manifest | `pwsh -File`；会改写 `common_model_capabilities.json`，执行后审阅差异 |
+| `scripts/sync-common-model-capabilities.mjs` | 由 Provider Manifest 重新生成公共模型能力目录 | `node`；默认联网取 OpenRouter 交叉参照，`--offline` 以已发布目录为参照，`--check` 只校验不写入；改写 `common_model_capabilities.json`，执行后审阅差异 |
 | `scripts/audit_cliproxy_protocol_changes.ps1` | 审计 CLIProxyAPI 协议兼容差异 | `pwsh -File`；参数默认指向本机 CLIProxyAPI 检出与最近审核基线，可用 `-RepositoryPath`、`-BaselineCommit` 覆盖；只读上游仓库，改写 `docs/protocol-compatibility/cliproxy-audit-latest.md` |
 | `scripts/plugin-runtime-validation/` | 历史证据：LuaSkills 0.5.9 → 0.6 迁移的性能对照，迁移已完成，不作为当前验证入口 | 见目录内 `README.md` |
 
