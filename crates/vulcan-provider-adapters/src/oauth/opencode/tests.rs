@@ -124,7 +124,7 @@ async fn opencode_device_authorization_preserves_workspace_and_identity() {
     for request in &requests {
         assert!(request.contains(&format!(
             "user-agent: {}\r\n",
-            crate::execution::VULCAN_CODE_USER_AGENT
+            crate::execution::vulcan_code_user_agent()
         )));
         if request.starts_with("POST /auth/device/token ") {
             // body is the private synthetic token poll, which uses the identical public client ID.

@@ -497,7 +497,7 @@ async fn discover_google_code_assist_models(
         .timeout(PROVIDER_METADATA_REQUEST_TIMEOUT)
         .bearer_auth(secret.expose_value())
         .header("content-type", "application/json")
-        .header("user-agent", crate::execution::VULCAN_CODE_USER_AGENT)
+        .header("user-agent", crate::execution::vulcan_code_user_agent())
         .json(&serde_json::json!({ "project": project_id }));
     if let Some(quota_project_id) = secret.quota_project_id() {
         request = request.header("x-goog-user-project", quota_project_id);

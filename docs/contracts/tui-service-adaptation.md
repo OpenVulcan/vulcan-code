@@ -89,7 +89,7 @@ hydration 的 `session_config.unattended`，只在当前为自动审批时出现
 | MCP 服务 | 端点开关与地址、审批与视图说明；每个客户端的授权摘要、令牌末位与最近使用，可切换启用及读取/发送/新建/停止/回答（遵守读取依赖），以项目选择器加入或移除授权项目（移除最后一个项目被拒绝，扩大范围须显式选择全部项目），以媒体选择器切换媒体授权（含已不可用项），重命名与确认后删除；新建客户端与轮换令牌只在 WebUI 进行，因为终端从不显示令牌 | McpService |
 | 已归档会话 | 恢复与删除 | Workbench.archivedConversations |
 | 诊断 | 重试配置、完整请求追踪和会话错误独立记录开关、打开及清理追踪目录、模块与日志 | Workbench |
-| 更新记录 | 镜像 WebUI 更新记录：首先打开运行版本，每页一个发布，较新/较早翻页与版本选择，正文按界面语言以回答组件渲染；内容来自编译期内嵌的 `vulcan_i18n::RELEASES`，不经服务 | Workbench.appVersion |
+| 更新记录 | 镜像 WebUI 更新记录：首先打开运行版本，每页一个发布，较新/较早翻页与版本选择，正文按界面语言以回答组件渲染；内容由 `vulcan_product_info` 从发行资源 `resources/changelog/` 读取，不经服务 | Workbench.appVersion |
 | 关于 | 应用版本、许可证目录与按哈希读取正文 | Workbench、Licenses、LicenseBody |
 | 代理技能 | 真实分类导航与生效数量、状态/来源/覆盖/跨语言搜索筛选、查看正文、启用、刷新、用户目录、删除用户覆盖与还原默认 | Workbench.agentSkills.categories/records/errors |
 | 子代理定义 | 真实分类导航与数量、状态及跨语言搜索筛选、查看定义元数据（提示词正文不随目录下发，WebUI 经 `service_subagent_definition_prompts` 按需读取）、启用、刷新、用户目录、删除用户覆盖与还原默认 | Workbench.subagentCatalog.categories/definitions |

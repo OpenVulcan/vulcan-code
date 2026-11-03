@@ -13,6 +13,7 @@ description = "Strongly typed provider connection graphs and request projectors 
 test-support = []
 
 [dependencies]
+vulcan-product-info.workspace = true
 async-trait.workspace = true
 async-stream.workspace = true
 base64.workspace = true

@@ -9843,6 +9843,7 @@ dependencies = [
  "vulcan-mcp-runtime",
  "vulcan-permission-judge",
  "vulcan-plugin-runtime",
+ "vulcan-product-info",
  "vulcan-prompt-composer",
  "vulcan-prompt-skills",
  "vulcan-provider-adapters",
@@ -9906,6 +9907,7 @@ dependencies = [
  "uuid",
  "vulcan-host-tools",
  "vulcan-i18n",
+ "vulcan-product-info",
  "vulcan-provider-adapters",
  "vulcan-runtime-assets",
  "vulcan-service-api",
@@ -9936,6 +9938,7 @@ dependencies = [
  "url",
  "uuid",
  "vulcan-i18n",
+ "vulcan-product-info",
  "vulcan-runtime-assets",
  "vulcan-service-api",
  "vulcan-session-core",
@@ -10118,6 +10121,8 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "vulcan-ai-contract",
+ "vulcan-product-info",
+ "vulcan-runtime-assets",
  "workspace-hack",
 ]
 
@@ -10176,6 +10181,7 @@ dependencies = [
  "tokio-util",
  "vulcan-host-tools",
  "vulcan-process-lifecycle",
+ "vulcan-product-info",
  "vulcan-runtime-assets",
  "vulcan-tools-manager",
  "workspace-hack",
@@ -10212,6 +10218,7 @@ dependencies = [
  "vulcan-memorymesh-core-contracts",
  "vulcan-memorymesh-core-engine",
  "vulcan-memorymesh-core-storage",
+ "vulcan-runtime-assets",
  "workspace-hack",
 ]
 
@@ -10228,6 +10235,8 @@ dependencies = [
  "sha2 0.11.0",
  "toml 1.1.4+spec-1.1.0",
  "vulcan-memorymesh-core-contracts",
+ "vulcan-product-info",
+ "vulcan-runtime-assets",
  "workspace-hack",
 ]
 
@@ -10256,6 +10265,7 @@ dependencies = [
  "sha2 0.11.0",
  "vulcan-memorymesh-core-config",
  "vulcan-memorymesh-core-contracts",
+ "vulcan-runtime-assets",
  "workspace-hack",
 ]
 
@@ -10316,6 +10326,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "vulcan-product-info"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "vulcan-runtime-assets",
+ "workspace-hack",
+]
+
+[[package]]
 name = "vulcan-prompt-composer"
 version = "0.1.0"
 dependencies = [
@@ -10362,6 +10382,7 @@ dependencies = [
  "vulcan-context",
  "vulcan-i18n",
  "vulcan-llm-core",
+ "vulcan-product-info",
  "vulcan-runtime-assets",
  "workspace-hack",
 ]
@@ -10501,6 +10522,7 @@ dependencies = [
  "vulcan-permission-judge",
  "vulcan-plugin-runtime",
  "vulcan-process-lifecycle",
+ "vulcan-product-info",
  "vulcan-prompt-composer",
  "vulcan-prompt-skills",
  "vulcan-provider-adapters",
@@ -10544,6 +10566,7 @@ dependencies = [
  "vulcan-host-tools",
  "vulcan-luaskills-config",
  "vulcan-permission-judge",
+ "vulcan-product-info",
  "vulcan-runtime-assets",
  "vulcan-vmm",
  "vulcan-workspace-store",

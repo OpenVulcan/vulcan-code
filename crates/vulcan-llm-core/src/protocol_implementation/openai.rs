@@ -1537,7 +1537,7 @@ mod tests {
         );
         assert_eq!(
             encoded.headers.get("user-agent").map(String::as_str),
-            Some(crate::VULCAN_CODE_USER_AGENT)
+            Some(crate::vulcan_code_user_agent())
         );
         assert!(
             encoded.body["input"]

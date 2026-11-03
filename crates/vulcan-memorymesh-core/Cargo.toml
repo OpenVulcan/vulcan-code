@@ -22,6 +22,7 @@ postcard.workspace = true
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+vulcan-runtime-assets = { workspace = true, features = ["test-support"] }
 
 [lints]
 workspace = true

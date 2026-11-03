@@ -1,7 +1,7 @@
 import releaseIndex from "@changelog/releases.json"
 
-// ChangelogRelease is one entry of `changelog/releases.json` in the vulcan-i18n crate.
-// ChangelogRelease 是 vulcan-i18n crate 中 `changelog/releases.json` 的一个条目。
+// ChangelogRelease is one entry of `resources/changelog/releases.json` in the vulcan-runtime-assets crate.
+// ChangelogRelease 是 vulcan-runtime-assets crate 中 `resources/changelog/releases.json` 的一个条目。
 export interface ChangelogRelease {
   // Exact `x.y.z` version.
   // 精确的 `x.y.z` 版本。
@@ -11,8 +11,8 @@ export interface ChangelogRelease {
   date: string | null
 }
 
-// CHANGELOG_RELEASES lists releases newest first; the crate build script validates order, dates and languages.
-// CHANGELOG_RELEASES 按从新到旧列出发布；crate 构建脚本校验顺序、日期与语言。
+// CHANGELOG_RELEASES lists releases newest first; scripts/release-notes-check.mjs validates order, dates and languages.
+// CHANGELOG_RELEASES 按从新到旧列出发布；scripts/release-notes-check.mjs 校验顺序、日期与语言。
 export const CHANGELOG_RELEASES: readonly ChangelogRelease[] = releaseIndex.releases
 
 // noteLoaders fetches each release and language from its own chunk, so the page downloads only what it shows.

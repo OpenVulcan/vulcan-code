@@ -25,7 +25,7 @@ pub(crate) fn client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(OAUTH_HTTP_REQUEST_TIMEOUT)
-        .user_agent(crate::execution::VULCAN_CODE_USER_AGENT)
+        .user_agent(crate::execution::vulcan_code_user_agent())
         .build()
         .map_err(|_| String::from("Failed to initialize the OpenCode Console client."))
 }

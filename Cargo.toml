@@ -22,6 +22,7 @@ members = [
     "crates/vulcan-judge-host",
     "crates/vulcan-provider-config",
     "crates/vulcan-runtime-assets",
+    "crates/vulcan-product-info",
     "crates/vulcan-workbench-model",
     "crates/vulcan-workspace-store",
     "crates/vulcan-context",
@@ -98,6 +99,7 @@ vulcan-mcp-service = { path = "crates/vulcan-mcp-service" }
 vulcan-workbench-model = { path = "crates/vulcan-workbench-model" }
 vulcan-workspace-store = { path = "crates/vulcan-workspace-store" }
 vulcan-runtime-assets = { path = "crates/vulcan-runtime-assets" }
+vulcan-product-info = { path = "crates/vulcan-product-info" }
 vulcan-service-api = { path = "crates/vulcan-service-api" }
 vulcan-service-host = { path = "crates/vulcan-service-host" }
 vulcan-service-kernel = { path = "crates/vulcan-service-kernel" }

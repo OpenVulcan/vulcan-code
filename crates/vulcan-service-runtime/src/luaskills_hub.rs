@@ -338,7 +338,7 @@ fn fetch_hub(url: Url, max_bytes: u64, operation: &str) -> Result<Vec<u8>, Strin
         .redirect(reqwest::redirect::Policy::none())
         .user_agent(format!(
             "Vulcan-Code/{} luaskills-hub",
-            env!("CARGO_PKG_VERSION")
+            vulcan_product_info::version()
         ))
         .build()
         .map_err(|error| format!("failed to create LuaSkills Hub HTTP client: {error}"))?;

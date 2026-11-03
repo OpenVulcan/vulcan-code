@@ -240,8 +240,8 @@ pub enum PageId {
     McpService,
     Archived,
     Diagnostics,
-    /// Release notes from `vulcan_i18n::RELEASES`, one release per page.
-    /// 来自 `vulcan_i18n::RELEASES` 的更新记录，每页一个发布。
+    /// Release notes from the distribution changelog, one release per page.
+    /// 来自发行更新记录的说明，每页一个发布。
     Changelog,
     About,
     MemoryOverview,

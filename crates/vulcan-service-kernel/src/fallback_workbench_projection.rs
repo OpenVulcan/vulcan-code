@@ -10,7 +10,7 @@ pub(crate) fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot 
     let provider_configuration = ProviderConfigurationFile::default();
     WorkbenchSnapshot {
         revision: 0,
-        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        app_version: vulcan_product_info::version().to_string(),
         ui_locale: provider_configuration.ui_locale.clone(),
         modules: vec![
             runtime_module(

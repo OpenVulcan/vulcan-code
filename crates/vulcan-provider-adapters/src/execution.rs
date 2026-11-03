@@ -44,8 +44,8 @@ pub(crate) use projection_profiles::{
     project_response_record_text,
 };
 pub(crate) use request_headers::{
-    VULCAN_CODE_USER_AGENT, coding_device_identity_headers, execution_headers,
-    insert_coding_device_identity_headers,
+    coding_device_identity_headers, execution_headers, insert_coding_device_identity_headers,
+    vulcan_code_user_agent,
 };
 pub use resource_download::ProviderToolResourceDownloadPolicy;
 pub(crate) use response_body::read_bounded_response_text;

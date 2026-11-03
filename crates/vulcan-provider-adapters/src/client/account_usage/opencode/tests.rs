@@ -177,7 +177,7 @@ async fn opencode_go_queries_use_exact_authenticated_scope() {
         assert!(request.contains("x-org-id: org_demo\r\n"));
         assert!(request.contains(&format!(
             "user-agent: {}\r\n",
-            crate::execution::VULCAN_CODE_USER_AGENT
+            crate::execution::vulcan_code_user_agent()
         )));
         assert!(!request.contains("chatgpt-account-id"));
     }
@@ -216,7 +216,7 @@ async fn opencode_go_api_key_reads_only_subscription() {
         assert!(request.contains("authorization: Bearer oc_sk_synthetic\r\n"));
         assert!(request.contains(&format!(
             "user-agent: {}\r\n",
-            crate::execution::VULCAN_CODE_USER_AGENT
+            crate::execution::vulcan_code_user_agent()
         )));
         assert!(!request.contains("x-org-id:"));
         assert!(!request.contains("chatgpt-account-id:"));

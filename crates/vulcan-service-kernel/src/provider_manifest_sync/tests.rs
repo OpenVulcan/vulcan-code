@@ -749,7 +749,7 @@ async fn signed_https_sync_service(
             let lower_head = head_text.to_ascii_lowercase();
             assert!(lower_head.contains(&format!(
                 "{SYNC_CLIENT_VERSION_HEADER}: {}",
-                env!("CARGO_PKG_VERSION")
+                vulcan_product_info::version()
             )));
             assert!(lower_head.contains(&format!(
                 "{SYNC_MANIFEST_SCHEMA_HEADER}: {}",

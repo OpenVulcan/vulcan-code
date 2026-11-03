@@ -46,12 +46,18 @@ pub use usage::{
 /// VulcanCode's own client name, sent wherever a protocol carries a client or platform label.
 /// VulcanCode 自身的客户端名称，用于协议携带客户端或平台标签的位置。
 pub const VULCAN_CODE_CLIENT_NAME: &str = "vulcan_code";
-/// VulcanCode release version, shared by every client identity field.
-/// VulcanCode 发行版本，由所有客户端身份字段共用。
-pub const VULCAN_CODE_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// VulcanCode product version from the distribution resources, shared by every client identity field.
+/// 来自发行资源的 VulcanCode 产品版本，由所有客户端身份字段共用。
+pub fn vulcan_code_version() -> &'static str {
+    vulcan_product_info::version()
+}
+
 /// VulcanCode's own user agent, sent to every upstream service.
 /// VulcanCode 自身的用户代理，发送给所有上游服务。
-pub const VULCAN_CODE_USER_AGENT: &str = concat!("vulcan-code/", env!("CARGO_PKG_VERSION"));
+pub fn vulcan_code_user_agent() -> &'static str {
+    static USER_AGENT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    USER_AGENT.get_or_init(|| format!("vulcan-code/{}", vulcan_code_version()))
+}
 
 /// Selects the provider-side wire protocol reached from the Responses baseline.
 /// 选择从 Responses 基线到达的供应商侧 Wire 协议。

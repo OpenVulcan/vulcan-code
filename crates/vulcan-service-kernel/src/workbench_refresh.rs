@@ -1320,7 +1320,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
     let projected_command_sessions = command_sessions(command_session_runtime);
     WorkbenchSnapshot {
         revision: 0,
-        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        app_version: vulcan_product_info::version().to_string(),
         ui_locale: provider_configuration.ui_locale.clone(),
         modules: runtime_modules(controller, luaskills_catalog, mcp_catalog),
         projects: workspace

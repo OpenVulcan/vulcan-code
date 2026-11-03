@@ -12,7 +12,7 @@ import { PDFJS_DATA_BASE_PATH, PDFJS_DATA_FOLDERS } from "./src/components/file-
 const catalogsDir = path.resolve(__dirname, "../../crates/vulcan-i18n/catalogs");
 // changelogDir holds the per-language release notes shown in About, shared with the TUI.
 // changelogDir 保存“关于”中展示的分语言更新记录，与 TUI 共用。
-const changelogDir = path.resolve(__dirname, "../../crates/vulcan-i18n/changelog");
+const changelogDir = path.resolve(__dirname, "../../crates/vulcan-runtime-assets/resources/changelog");
 
 // Configure the Vite app served by Core and loaded by the desktop shell.
 // 配置由 Core 提供页面并供桌面壳加载的 Vite 应用。
