@@ -126,6 +126,19 @@ fn process_thread_count() -> usize {
         .expect("parse thread count")
 }
 
+/// Waits until every admission permit is back; a worker delivers its result before its thread ends
+/// and drops the permit, so a joined waiter does not yet imply a returned permit.
+/// 等待全部入场许可归还；工作线程先投递结果、线程结束时才释放许可，因此等待方返回并不意味着许可已归还。
+async fn wait_for_available_permits(admission: &tokio::sync::Semaphore, expected: usize) {
+    tokio::time::timeout(OBSERVATION_TIMEOUT, async {
+        while admission.available_permits() != expected {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("finished workers must return their admission permits");
+}
+
 /// Verifies host admission queues before spawning workers and survives async waiter cancellation.
 /// 验证宿主入场会在线程创建前排队，并在异步等待方取消后继续约束工作线程。
 #[tokio::test]
@@ -209,7 +222,7 @@ async fn host_admission_bounds_workers_and_preserves_worker_owned_permits() {
     assert_eq!(second.await.expect("join second async waiter").unwrap(), 2);
     assert_eq!(peak_workers.load(Ordering::Acquire), 2);
     assert_eq!(active_workers.load(Ordering::Acquire), 0);
-    assert_eq!(admission.available_permits(), 2);
+    wait_for_available_permits(&admission, 2).await;
 
     // A cancelled receiver cannot release one permit still owned by its running worker.
     // 已取消的接收方不能释放仍由运行中工作线程持有的许可。
@@ -256,7 +269,7 @@ async fn host_admission_bounds_workers_and_preserves_worker_owned_permits() {
         6
     );
     assert_eq!(active_workers.load(Ordering::Acquire), 0);
-    assert_eq!(admission.available_permits(), 2);
+    wait_for_available_permits(&admission, 2).await;
 }
 
 /// Verify that independent host read guards overlap on one shared engine.
