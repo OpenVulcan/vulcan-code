@@ -78,6 +78,23 @@
   overflow: hidden;
 }
 
+/* The path a file action dialog acts on. 文件操作对话框所操作的路径。 */
+.workspace-file-action-path {
+  display: block;
+  max-height: 120px;
+  overflow: auto;
+  padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3);
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-code-bg);
+  color: var(--vk-ink);
+  font-family: var(--vk-font-mono);
+  font-size: var(--vk-fs-sm);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
 .workspace-file-preview.markdown {
   display: flex;
   flex-direction: column;

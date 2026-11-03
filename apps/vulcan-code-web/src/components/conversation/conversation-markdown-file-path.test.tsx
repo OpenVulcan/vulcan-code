@@ -78,3 +78,20 @@ it("links addresses and absolute paths written as plain text where they end, lea
   await act(async () => buttons[0].click());
   expect(open).toHaveBeenCalledWith("D:/docs/report.docx", null);
 });
+
+it("opens a file reference with the default program on Ctrl-click only on the desktop", async () => {
+  const open = vi.fn();
+  await act(async () => root.render(
+    <I18nProvider initialLocale="en-US">
+      <WorkspaceFileOpenContext.Provider value={open}><MarkdownMessage content={content} eager /></WorkspaceFileOpenContext.Provider>
+    </I18nProvider>,
+  ));
+  const control = host.querySelector<HTMLElement>("code[role=button]")!;
+  const ctrlClick = () => control.dispatchEvent(new MouseEvent("click", { bubbles: true, ctrlKey: true }));
+  await act(async () => ctrlClick());
+  expect(open).toHaveBeenLastCalledWith("src/app.ts", { start: 4, end: 6 });
+
+  vi.stubGlobal("vulcanDesktop", { localFile: { inspect: vi.fn(), openWithDefaultApp: vi.fn(), showInFolder: vi.fn() } });
+  await act(async () => ctrlClick());
+  expect(open).toHaveBeenLastCalledWith("src/app.ts", { start: 4, end: 6 }, "open");
+});

@@ -44,12 +44,13 @@ import { LocalBrowserCloseDialog } from "@/components/features/browser/local-bro
 import { readConversationLinkPreference } from "@/components/conversation/conversation-link-preference";
 import { resolveConversationLinkTarget } from "@/components/conversation/conversation-link-navigation";
 import {
-  outsideProjectViewerPath,
   requestWorkspaceFileOpen,
+  routeWorkspaceFileOpen,
   usePublishWorkspaceFileOpener,
   WorkspaceFileOpenContext,
   type WorkspaceFileOpener,
 } from "@/components/workspace/workspace-file-open-request";
+import { requestWorkspaceFileAction, WorkspaceFileActionHost } from "@/components/workspace/workspace-file-actions";
 import {
   type WorkspaceContextTabKind,
 } from "@/components/workspace/workspace-context-panel";
@@ -481,20 +482,23 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       state: activateWorkspaceContextTab(current.state, tabId),
     }));
   }, []);
-  // openWorkspaceFile shows a project file in a files tab of the open right panel, and a viewable file outside the
-  // project in the viewer tab; transcript cards reach it through WorkspaceFileOpenContext. Its identity never changes,
-  // so tab changes do not re-render every transcript card.
-  // openWorkspaceFile 在展开的右侧面板的文件页签中显示项目文件，项目之外的可查看文件则显示在查看页签中；转录卡片通过
-  // WorkspaceFileOpenContext 调用它。其引用恒定不变，页签变化不会使每张转录卡片重新渲染。
+  // openWorkspaceFile shows a project file in a files tab of the open right panel and a viewable file outside the
+  // project in the viewer tab; other files, and explicit OS actions, go to the file action host. Transcript cards
+  // reach it through WorkspaceFileOpenContext. Its identity never changes, so tab changes do not re-render every
+  // transcript card.
+  // openWorkspaceFile 在展开的右侧面板的文件页签中显示项目文件，项目之外的可查看文件则显示在查看页签中；其他文件及显式
+  // 的操作系统操作交给文件操作宿主。转录卡片通过 WorkspaceFileOpenContext 调用它。其引用恒定不变，页签变化不会使每张
+  // 转录卡片重新渲染。
   const openWorkspaceFileLatest = React.useRef<WorkspaceFileOpener>(() => undefined);
-  openWorkspaceFileLatest.current = (path, lines) => {
-    const viewerPath = outsideProjectViewerPath(selectedChatProject?.path ?? null, path);
-    const next = viewerPath ? openWorkspaceViewerContextTab(contextTabState, viewerPath, t) : focusWorkspaceFilesTab(contextTabState, t);
+  openWorkspaceFileLatest.current = (path, lines, action) => {
+    const route = routeWorkspaceFileOpen(selectedChatProject?.path ?? null, path, action);
+    if (route.kind === "action") return requestWorkspaceFileAction(route.path, route.action);
+    const next = route.kind === "viewer" ? openWorkspaceViewerContextTab(contextTabState, route.path, t) : focusWorkspaceFilesTab(contextTabState, t);
     setContextTabStateEntry((current) => ({ ...current, state: next }));
-    if (next.activeTabId && !viewerPath) requestWorkspaceFileOpen(next.activeTabId, path, lines);
+    if (next.activeTabId && route.kind === "files") requestWorkspaceFileOpen(next.activeTabId, path, lines);
     openRightContextPanel();
   };
-  const openWorkspaceFile = React.useCallback<WorkspaceFileOpener>((path, lines) => openWorkspaceFileLatest.current(path, lines), []);
+  const openWorkspaceFile = React.useCallback<WorkspaceFileOpener>((...request) => openWorkspaceFileLatest.current(...request), []);
   // The floating project terminals render outside this shell, so they reach the same action through publication.
   // 浮动项目终端渲染在本外壳之外，因此通过发布取得同一动作。
   usePublishWorkspaceFileOpener(hasSelectedChatConversation ? openWorkspaceFile : null);
@@ -1115,6 +1119,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           />
         ) : null}
       </div>
+      <WorkspaceFileActionHost />
     </WorkspaceFileOpenContext.Provider>
   );
 }

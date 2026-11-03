@@ -214,6 +214,31 @@ export interface ElectronLocalBrowserBridge {
   subscribeChanged: (handler: (snapshot: ElectronLocalBrowserSnapshot) => void) => () => void;
 }
 
+// ElectronLocalFileInspection reports a path's state before the workbench offers OS actions for it.
+// ElectronLocalFileInspection 在工作台为路径提供操作系统操作前报告其状态。
+export interface ElectronLocalFileInspection {
+  // Whether a file or folder exists at the path.
+  // 路径处是否存在文件或文件夹。
+  exists: boolean;
+  // Whether the default program may open it; false for programs, scripts and folders.
+  // 能否交给默认程序打开；程序、脚本与文件夹为 false。
+  opensWithDefaultApp: boolean;
+}
+
+// ElectronLocalFileBridge hands one absolute path to the OS; the main process rechecks every request.
+// ElectronLocalFileBridge 将单个绝对路径交给操作系统；主进程复核每个请求。
+export interface ElectronLocalFileBridge {
+  // inspect resolves with the path's state.
+  // inspect 返回路径状态。
+  inspect: (path: string) => Promise<ElectronLocalFileInspection>;
+  // openWithDefaultApp opens a non-runnable file with its default program; rejects for runnable files.
+  // openWithDefaultApp 用默认程序打开非可运行文件；可运行文件被拒绝。
+  openWithDefaultApp: (path: string) => Promise<void>;
+  // showInFolder selects the file in the system file manager.
+  // showInFolder 在系统文件管理器中选中该文件。
+  showInFolder: (path: string) => Promise<void>;
+}
+
 // ElectronDesktopApi narrows the trusted preload surface mounted on window.
 // ElectronDesktopApi 收窄挂载在 window 上的受信预加载界面。
 interface ElectronDesktopApi {
@@ -226,6 +251,9 @@ interface ElectronDesktopApi {
   // localBrowser is the optional isolated temporary-page surface of this GUI.
   // localBrowser 是此 GUI 可选的隔离临时页面界面。
   localBrowser?: ElectronLocalBrowserBridge;
+  // localFile opens conversation file references with the OS; absent on older preloads.
+  // localFile 通过操作系统打开会话文件引用；旧预加载没有此项。
+  localFile?: ElectronLocalFileBridge;
 }
 
 // ElectronServiceConnection carries one authenticated instance in memory, never in navigation URLs.
@@ -312,4 +340,12 @@ export function readElectronLocalBrowserBridge(): ElectronLocalBrowserBridge | n
   const methods = ["initialize", "setOwner", "snapshot", "open", "navigate", "history", "move", "openDeveloperTools", "openExternal", "openExternalUrl", "select", "close", "closeOwner", "viewport", "subscribeChanged"];
   return methods.every((method) => typeof (bridge as unknown as Record<string, unknown>)[method] === "function")
     ? bridge : null;
+}
+
+// readElectronLocalFileBridge returns the local file bridge, or null for web clients and older preloads; the preload
+// exposes its methods together, so one of them stands for all.
+// readElectronLocalFileBridge 返回本地文件桥；网页客户端与旧预加载返回 null。预加载同时暴露全部方法，因此检查其一即可。
+export function readElectronLocalFileBridge(): ElectronLocalFileBridge | null {
+  const bridge = typeof window === "undefined" ? undefined : (window as unknown as { vulcanDesktop?: ElectronDesktopApi }).vulcanDesktop?.localFile;
+  return typeof bridge?.inspect === "function" ? bridge : null;
 }

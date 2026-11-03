@@ -3,6 +3,8 @@ import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ConversationTextContextMenu } from "./conversation-text-context-menu";
+import { WorkspaceFileOpenContext } from "@/components/workspace/workspace-file-open-request";
+import { fileReferenceData } from "@/components/workspace/workspace-file-actions";
 
 vi.mock("@/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 
@@ -141,4 +143,54 @@ it("leaves the web client's native link context menu untouched", async () => {
   await act(async () => timelineRef.current!.querySelector('[data-link="web"]')!.dispatchEvent(event));
   expect(event.defaultPrevented).toBe(false);
   expect(document.querySelector('[role="menu"]')).toBeNull();
+});
+
+// mountFileReference renders one file reference inside the workbench's file opener, with or without the desktop's
+// local file bridge.
+// mountFileReference 在工作台文件打开动作中渲染一个文件引用，可选择是否提供桌面本地文件桥。
+async function mountFileReference(open: (...request: unknown[]) => void, copy: (text: string) => void, desktop: boolean): Promise<void> {
+  if (desktop) {
+    const bridge = { inspect: vi.fn(), openWithDefaultApp: vi.fn(), showInFolder: vi.fn() };
+    vi.stubGlobal("vulcanDesktop", { localFile: bridge });
+  }
+  await act(async () => root.render(
+    <WorkspaceFileOpenContext.Provider value={open}>
+      <ConversationTextContextMenu enabled timelineRef={timelineRef} onCopyText={copy} onQuoteText={() => {}}>
+        <div ref={timelineRef}>
+          <code {...fileReferenceData("docs/design.psd", { start: 3, end: 4 })}>docs/design.psd:3-4</code>
+        </div>
+      </ConversationTextContextMenu>
+    </WorkspaceFileOpenContext.Provider>,
+  ));
+  await act(async () => timelineRef.current!.querySelector("code")!.dispatchEvent(
+    new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 }),
+  ));
+}
+
+// menuItem finds one open menu item by its label key.
+// menuItem 按文案键查找已打开菜单中的一项。
+function menuItem(label: string): HTMLElement | undefined {
+  return [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((entry) => entry.textContent === label);
+}
+
+it("offers file actions on a file reference and hands OS actions to the file opener", async () => {
+  const open = vi.fn();
+  const copy = vi.fn();
+  await mountFileReference(open, copy, true);
+  await act(async () => menuItem("fileActions.openWithDefaultApp")!.click());
+  expect(open).toHaveBeenCalledExactlyOnceWith("docs/design.psd", { start: 3, end: 4 }, "open");
+
+  await act(async () => timelineRef.current!.querySelector("code")!.dispatchEvent(
+    new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 }),
+  ));
+  await act(async () => menuItem("fileActions.copyPath")!.click());
+  expect(copy).toHaveBeenCalledExactlyOnceWith("docs/design.psd");
+});
+
+it("offers no OS file actions without the desktop bridge", async () => {
+  await mountFileReference(vi.fn(), vi.fn(), false);
+  expect(menuItem("fileActions.openInSidePanel")).toBeDefined();
+  expect(menuItem("fileActions.copyPath")).toBeDefined();
+  expect(menuItem("fileActions.openWithDefaultApp")).toBeUndefined();
+  expect(menuItem("fileActions.showInFolder")).toBeUndefined();
 });

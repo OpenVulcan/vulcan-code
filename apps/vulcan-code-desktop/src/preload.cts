@@ -61,6 +61,14 @@ const LOCAL_BROWSER_CHANNELS = {
   changed: 'vulcan:local-browser:changed',
 } as const;
 
+// Local file channels mirror the main-process handlers that recheck every path.
+// 本地文件通道与逐一复核路径的主进程处理器一致。
+const LOCAL_FILE_CHANNELS = {
+  inspect: 'vulcan:local-file:inspect',
+  openWithDefaultApp: 'vulcan:local-file:open-default',
+  showInFolder: 'vulcan:local-file:show-in-folder',
+} as const;
+
 const WINDOW_EVENT_CHANNELS = {
   resized: 'vulcan:window:resized',
   focusChanged: 'vulcan:window:focus-changed',
@@ -190,4 +198,17 @@ const localBrowser = {
     return () => ipcRenderer.removeListener(LOCAL_BROWSER_CHANNELS.changed, listener);
   },
 };
-contextBridge.exposeInMainWorld('vulcanDesktop', { desktop, service, localBrowser });
+// localFile passes one absolute path per call; the main process decides what the OS may do with it.
+// localFile 每次调用传递一个绝对路径；由主进程决定操作系统可对其执行的操作。
+const localFile = {
+  // inspect resolves with whether the path exists and whether its default program may open it.
+  // inspect 返回路径是否存在，以及能否交给默认程序打开。
+  inspect: (filePath: string): Promise<unknown> => ipcRenderer.invoke(LOCAL_FILE_CHANNELS.inspect, filePath),
+  // openWithDefaultApp resolves after the OS opened a non-runnable file, and rejects otherwise.
+  // openWithDefaultApp 在操作系统打开非可运行文件后完成，否则拒绝。
+  openWithDefaultApp: (filePath: string): Promise<void> => ipcRenderer.invoke(LOCAL_FILE_CHANNELS.openWithDefaultApp, filePath),
+  // showInFolder resolves after the file manager was asked to select the path.
+  // showInFolder 在请求文件管理器选中该路径后完成。
+  showInFolder: (filePath: string): Promise<void> => ipcRenderer.invoke(LOCAL_FILE_CHANNELS.showInFolder, filePath),
+};
+contextBridge.exposeInMainWorld('vulcanDesktop', { desktop, service, localBrowser, localFile });

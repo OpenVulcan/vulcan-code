@@ -5,8 +5,11 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/ui-kit/primitives/context-menu";
+import { useWorkspaceFileOpener, type WorkspaceFileLines } from "@/components/workspace/workspace-file-open-request";
+import { localFileActionsAvailable, readFileReference } from "@/components/workspace/workspace-file-actions";
 
 // ConversationTextContextMenuProps binds text actions to the visible transcript, not the whole page.
 // ConversationTextContextMenuProps 将文本操作限定在可见会话转录，而不是整个页面。
@@ -29,8 +32,10 @@ interface ConversationTextContextMenuProps {
 }
 
 // ConversationTextContextMenu adds text/link copying, quoting into the composer and transcript-scoped Select
-// All to the conversation.
-// ConversationTextContextMenu 为会话增加文本与链接复制、引用到输入区，以及仅限转录内容的“全选”。
+// All to the conversation; on a file reference it also offers to show the file in the side panel, open it with the
+// default program, show it in its folder or copy its path.
+// ConversationTextContextMenu 为会话增加文本与链接复制、引用到输入区，以及仅限转录内容的“全选”；在文件引用上还提供
+// 在侧边栏显示、用默认程序打开、在文件夹中显示与复制路径。
 export function ConversationTextContextMenu(props: ConversationTextContextMenuProps) {
   // t resolves the current client's menu labels and clipboard failure message.
   // t 解析当前客户端的菜单文案与剪贴板失败提示。
@@ -41,6 +46,10 @@ export function ConversationTextContextMenu(props: ConversationTextContextMenuPr
   // linkAddress captures the clicked anchor before menu focus changes the DOM selection.
   // linkAddress 在菜单焦点改变 DOM 选区前保存被点击链接的地址。
   const [linkAddress, setLinkAddress] = React.useState("");
+  // fileReference captures the clicked file reference; file actions need the workbench's file opener.
+  // fileReference 保存被点击的文件引用；文件操作需要工作台的文件打开动作。
+  const [fileReference, setFileReference] = React.useState<{ path: string; lines: WorkspaceFileLines | null } | null>(null);
+  const openFile = useWorkspaceFileOpener();
 
   // captureSelection accepts only a selection fully owned by the visible timeline.
   // captureSelection 只接收完全属于当前可见时间线的文本选区。
@@ -53,6 +62,8 @@ export function ConversationTextContextMenu(props: ConversationTextContextMenuPr
     // Empty sanitized hrefs are not links to the current page and must not be offered for copying.
     // 清理后的空 href 不表示当前页面链接，不应提供复制。
     setLinkAddress(anchor && anchor.getAttribute("href")?.trim() ? anchor.href : "");
+    setFileReference(timeline && event.target instanceof Element && timeline.contains(event.target)
+      ? readFileReference(event.target) : null);
     const selection = window.getSelection();
     const anchoredInside = timeline && selection?.anchorNode && selection.focusNode
       && timeline.contains(selection.anchorNode) && timeline.contains(selection.focusNode);
@@ -95,6 +106,23 @@ export function ConversationTextContextMenu(props: ConversationTextContextMenuPr
         {props.children}
       </ContextMenuTrigger>
       <ContextMenuContent onCloseAutoFocus={(event) => event.preventDefault()}>
+        {fileReference && openFile ? <>
+          <ContextMenuItem onSelect={() => openFile(fileReference.path, fileReference.lines)}>
+            {t("fileActions.openInSidePanel")}
+          </ContextMenuItem>
+          {localFileActionsAvailable() ? <>
+            <ContextMenuItem onSelect={() => openFile(fileReference.path, fileReference.lines, "open")}>
+              {t("fileActions.openWithDefaultApp")}
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={() => openFile(fileReference.path, fileReference.lines, "reveal")}>
+              {t("fileActions.showInFolder")}
+            </ContextMenuItem>
+          </> : null}
+          <ContextMenuItem onSelect={() => void copyText(fileReference.path)}>
+            {t("fileActions.copyPath")}
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+        </> : null}
         {linkAddress ? <ContextMenuItem onSelect={() => void copyText(linkAddress)}>
           {t("conversation.contextMenu.copyLinkAddress")}
         </ContextMenuItem> : null}

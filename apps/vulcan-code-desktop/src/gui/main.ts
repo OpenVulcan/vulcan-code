@@ -13,12 +13,14 @@ import {
   SERVICE_CHANNELS,
   CLIPBOARD_CHANNELS,
   LOCAL_BROWSER_CHANNELS,
+  LOCAL_FILE_CHANNELS,
   NOTIFICATION_CHANNELS,
   NOTIFICATION_EVENT_CHANNELS,
   WINDOW_COMMAND_CHANNELS,
   WINDOW_EVENT_CHANNELS,
 } from './ipc-channels.cjs';
 import { LocalBrowserManager, type LocalBrowserViewport } from './local-browser.js';
+import { inspectLocalFile, openLocalFileWithDefaultApp, showLocalFileInFolder } from './local-file-actions.js';
 import {
   ensureServiceInstance,
   readServiceLaunchDescription,
@@ -353,6 +355,13 @@ function registerWindowIpcHandlers(window: BrowserWindow, webUiUrl: string, disc
   });
   handle(LOCAL_BROWSER_CHANNELS.viewport, (_event, viewport: LocalBrowserViewport | null) =>
     localBrowser.setViewport(viewport));
+  // File references reach the OS only after the main process rechecks the path and refuses runnable files.
+  // 文件引用只有在主进程复核路径并拒绝可运行文件后才交给操作系统。
+  handle(LOCAL_FILE_CHANNELS.inspect, (_event, filePath: unknown) => inspectLocalFile(filePath));
+  handle(LOCAL_FILE_CHANNELS.openWithDefaultApp, (_event, filePath: unknown) =>
+    openLocalFileWithDefaultApp(filePath, (target) => shell.openPath(target)));
+  handle(LOCAL_FILE_CHANNELS.showInFolder, (_event, filePath: unknown) =>
+    showLocalFileInFolder(filePath, (target) => shell.showItemInFolder(target)));
   // The shared handler guard limits DevTools activation to this workbench's trusted main frame.
   // 共用处理器校验将开发者工具的打开权限限定于此工作台的可信主框架。
   handle(WINDOW_COMMAND_CHANNELS.openDeveloperTools, () => {

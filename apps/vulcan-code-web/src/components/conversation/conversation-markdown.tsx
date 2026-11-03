@@ -37,6 +37,7 @@ import {
   type WorkspaceFileLines,
   type WorkspaceFileOpener,
 } from "@/components/workspace/workspace-file-open-request";
+import { fileReferenceData, openFileReference } from "@/components/workspace/workspace-file-actions";
 import { localMediaSourceUrl } from "@/resources/localMedia";
 import { IconButton } from "@/ui-kit/primitives/button";
 
@@ -438,9 +439,10 @@ function MarkdownContentRenderer(props: {
 // 选择与复制仍按文本处理。
 function MarkdownFilePath(props: { text: string; path: string; lines: WorkspaceFileLines | null; open: WorkspaceFileOpener }) {
   const { t } = useI18n();
-  const open = () => props.open(props.path, props.lines);
+  const open = (event?: React.MouseEvent) => openFileReference(props.open, props.path, props.lines, event);
   return (
     <code
+      {...fileReferenceData(props.path, props.lines)}
       className="vk-md-code vk-md-path"
       onClick={open}
       onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); } }}
@@ -462,8 +464,9 @@ function MarkdownFileLink(props: { children?: React.ReactNode; path: string; lin
   const { t } = useI18n();
   return (
     <button
+      {...fileReferenceData(props.path, props.lines)}
       className="vk-md-file-link"
-      onClick={() => props.open(props.path, props.lines)}
+      onClick={(event) => openFileReference(props.open, props.path, props.lines, event)}
       title={props.path + " · " + t("workspaceFiles.showInFilesPanel")}
       type="button"
     >

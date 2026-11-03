@@ -65,6 +65,20 @@ export const LOCAL_BROWSER_CHANNELS = {
   changed: 'vulcan:local-browser:changed',
 } as const;
 
+// Local file channels hand one conversation file reference to the OS after main-process validation.
+// 本地文件通道在主进程校验后，将单个会话文件引用交给操作系统。
+export const LOCAL_FILE_CHANNELS = {
+  // Reports whether a path exists and whether its default program may open it.
+  // 报告路径是否存在，以及能否交给默认程序打开。
+  inspect: 'vulcan:local-file:inspect',
+  // Opens a non-runnable file with its default program.
+  // 用默认程序打开非可运行文件。
+  openWithDefaultApp: 'vulcan:local-file:open-default',
+  // Selects a file or folder in the system file manager.
+  // 在系统文件管理器中选中文件或文件夹。
+  showInFolder: 'vulcan:local-file:show-in-folder',
+} as const;
+
 /** Renderer-to-main window command channels. */
 /** 渲染进程到主进程的窗口命令通道。 */
 export const WINDOW_COMMAND_CHANNELS = {
