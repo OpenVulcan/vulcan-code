@@ -409,8 +409,8 @@ pub enum WorkspaceFileEntryKind {
     /// Video file that can be displayed through the local media route.
     /// 可通过本地媒体路由显示的视频文件。
     Video,
-    /// Read-only document (PDF, Word or spreadsheet) shown by a WebUI document viewer.
-    /// 由 WebUI 文档查看器显示的只读文档（PDF、Word 或电子表格）。
+    /// Read-only document (PDF, Word, spreadsheet or presentation) shown by a WebUI document viewer.
+    /// 由 WebUI 文档查看器显示的只读文档（PDF、Word、电子表格或演示文稿）。
     Document,
     /// Other file type that is not previewed by the first workspace file panel.
     /// 首版工作区文件面板不预览的其他文件类型。
@@ -605,4 +605,25 @@ pub struct WorkspaceSheetPreview {
     /// Whether rows or columns beyond the preview limits were left out.
     /// 是否省略了超出预览上限的行或列。
     pub truncated: bool,
+}
+
+/// Result of turning one Office document into a PDF for the read-only PDF viewer.
+/// 将单个 Office 文档转换为 PDF 供只读 PDF 查看器显示的结果。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(
+    tag = "status",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum WorkspaceOfficePdf {
+    /// The PDF is ready in the service's conversion cache, which the local media route serves.
+    /// PDF 已在服务的转换缓存中就绪，可由本地媒体路由提供。
+    Converted {
+        /// Absolute path of the cached PDF on the service host.
+        /// 服务宿主上已缓存 PDF 的绝对路径。
+        pdf_path: String,
+    },
+    /// No LibreOffice installation was found on the service host.
+    /// 服务宿主上未找到 LibreOffice 安装。
+    ConverterMissing,
 }

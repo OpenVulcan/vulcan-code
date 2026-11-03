@@ -153,9 +153,10 @@ export interface PackageFileListing {
   packages: PackageFileSummary[];
 }
 
-// WorkspaceFileEntryKind describes the file families rendered by the workspace file panel; "document" files (PDF, Word
-// and spreadsheets) open in a read-only document viewer.
-// WorkspaceFileEntryKind 描述工作区文件面板渲染的文件类别；"document" 文件（PDF、Word 与电子表格）在只读文档查看器中打开。
+// WorkspaceFileEntryKind describes the file families rendered by the workspace file panel; "document" files (PDF, Word,
+// spreadsheets and presentations) open in a read-only document viewer.
+// WorkspaceFileEntryKind 描述工作区文件面板渲染的文件类别；"document" 文件（PDF、Word、电子表格与演示文稿）在只读文档
+// 查看器中打开。
 export type WorkspaceFileEntryKind = "directory" | "code" | "image" | "video" | "document" | "other";
 
 // WorkspaceSheetPreview is the leading part of one spreadsheet sheet, read for the read-only sheet viewer.
@@ -189,6 +190,11 @@ export interface WorkspaceSheetPreview {
   // 是否省略了超出服务预览上限的行或列。
   truncated: boolean;
 }
+
+// WorkspaceOfficePdf is the service's PDF conversion of one Office document: the cached PDF, or word that the service
+// host has no LibreOffice to convert it with.
+// WorkspaceOfficePdf 是服务对单个 Office 文档的 PDF 转换结果：缓存的 PDF，或服务宿主没有可用于转换的 LibreOffice。
+export type WorkspaceOfficePdf = { status: "converted"; pdfPath: string } | { status: "converterMissing" };
 
 // WorkspaceFileFilterOptions stores the active workspace file tree filters.
 // WorkspaceFileFilterOptions 保存当前工作区文件树过滤器。

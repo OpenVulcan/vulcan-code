@@ -246,6 +246,18 @@ pub(crate) fn workspace_file_extension_metadata(
             kind: WorkspaceFileEntryKind::Document,
             mime_type: "application/vnd.oasis.opendocument.spreadsheet",
         },
+        "doc" => WorkspaceFileExtensionMetadata {
+            kind: WorkspaceFileEntryKind::Document,
+            mime_type: "application/msword",
+        },
+        "ppt" => WorkspaceFileExtensionMetadata {
+            kind: WorkspaceFileEntryKind::Document,
+            mime_type: "application/vnd.ms-powerpoint",
+        },
+        "pptx" => WorkspaceFileExtensionMetadata {
+            kind: WorkspaceFileEntryKind::Document,
+            mime_type: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        },
         "html" | "htm" => WorkspaceFileExtensionMetadata {
             kind: WorkspaceFileEntryKind::Code,
             mime_type: "text/html",

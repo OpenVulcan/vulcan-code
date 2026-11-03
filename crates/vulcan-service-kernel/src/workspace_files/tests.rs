@@ -144,6 +144,9 @@ fn workspace_file_kind_classifies_code_media_and_other_files() {
         "budget.xlsx",
         "legacy.xls",
         "sheet.ods",
+        "legacy.doc",
+        "slides.ppt",
+        "deck.pptx",
     ] {
         assert_eq!(
             workspace_file_kind_from_path(Path::new(document)),

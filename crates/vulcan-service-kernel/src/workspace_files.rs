@@ -12,7 +12,8 @@ use ignore::WalkBuilder;
 use vulcan_host_tools::output_decode::decode_complete_user_text;
 use vulcan_service_api::{
     WorkspaceFileDirectoryListing, WorkspaceFileEntryKind, WorkspaceFileEntrySummary,
-    WorkspaceFileFilterOptions, WorkspaceFileReadResponse, WorkspaceSheetPreview,
+    WorkspaceFileFilterOptions, WorkspaceFileReadResponse, WorkspaceOfficePdf,
+    WorkspaceSheetPreview,
 };
 
 use crate::normalized_workspace_path_text_from_path;
@@ -27,6 +28,7 @@ const WORKSPACE_FILE_READ_LIMIT_BYTES: usize = 1_048_576;
 
 mod entry_summary;
 mod file_kind;
+mod office_pdf;
 mod path_metadata;
 mod path_security;
 mod read_response;
@@ -34,6 +36,7 @@ mod sheet_preview;
 
 use entry_summary::*;
 use file_kind::*;
+use office_pdf::workspace_office_pdf;
 use path_metadata::*;
 pub(crate) use path_security::*;
 use read_response::*;
@@ -295,4 +298,22 @@ pub(super) async fn service_workspace_files_sheet(
     tokio::task::spawn_blocking(move || workspace_sheet_preview(&file_path, sheet_name.as_deref()))
         .await
         .map_err(|error| format!("The spreadsheet reader stopped unexpectedly: {error}"))?
+}
+
+/// Converts one Office document to a cached PDF for the read-only PDF viewer.
+/// 将单个 Office 文档转换为缓存的 PDF，供只读 PDF 查看器显示。
+///
+/// # Parameters
+/// 参数
+/// `file_path` is the absolute document path, inside or outside any project.
+/// `file_path` 是文档绝对路径，可在任何项目之内或之外。
+///
+/// # Returns
+/// 返回值
+/// The cached PDF, the missing-converter status, or an English error.
+/// 返回缓存的 PDF、缺少转换器的状态，或英文错误。
+pub(super) async fn service_workspace_files_office_pdf(
+    file_path: String,
+) -> Result<WorkspaceOfficePdf, String> {
+    workspace_office_pdf(&file_path).await
 }

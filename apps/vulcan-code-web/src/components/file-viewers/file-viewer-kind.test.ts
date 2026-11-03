@@ -10,11 +10,13 @@ describe("fileViewerKind", () => {
     expect(fileViewerKind("C:/data/legacy.xls")).toBe("sheet");
     expect(fileViewerKind("/tmp/shot.png")).toBe("image");
     expect(fileViewerKind("/tmp/clip.webm")).toBe("video");
+    expect(fileViewerKind("/home/u/Slides.PPTX")).toBe("office");
+    expect(fileViewerKind("/home/u/old.doc")).toBe("office");
   });
 
   it("returns null for files no viewer reads", () => {
-    expect(fileViewerKind("/home/u/slides.pptx")).toBeNull();
-    expect(fileViewerKind("/home/u/old.doc")).toBeNull();
+    expect(fileViewerKind("/home/u/archive.zip")).toBeNull();
+    expect(fileViewerKind("/home/u/xls")).toBeNull();
     expect(fileViewerKind("/home/u/Makefile")).toBeNull();
     expect(fileViewerKind("/home/u/constructor")).toBeNull();
     expect(fileViewerKind("/home/u/x.toString")).toBeNull();

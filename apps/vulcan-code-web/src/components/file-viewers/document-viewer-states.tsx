@@ -2,13 +2,13 @@ import { FileWarning } from "lucide-react";
 import { useI18n } from "@/i18n";
 import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder";
 
-// DocumentViewerLoading covers a document viewer while its file loads.
-// DocumentViewerLoading 在文件加载期间覆盖文档查看器。
-export function DocumentViewerLoading() {
+// DocumentViewerLoading covers a document viewer while its file loads, announcing `label` when given.
+// DocumentViewerLoading 在文件加载期间覆盖文档查看器；给出 `label` 时播报该文案。
+export function DocumentViewerLoading(props: { label?: string }) {
   const { t } = useI18n();
   return (
     <div className="vk-docview-overlay">
-      <StreamPlaceholder className="vk-stream-inset" count={8} label={t("workspaceFilePreview.loading")} />
+      <StreamPlaceholder className="vk-stream-inset" count={8} label={props.label ?? t("workspaceFilePreview.loading")} />
     </div>
   );
 }

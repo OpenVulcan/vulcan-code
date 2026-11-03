@@ -21,6 +21,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "workspace.files.list",
     "workspace.files.read",
     "workspace.files.sheet",
+    "workspace.files.officePdf",
 ];
 
 /// Dispatches one RPC method owned by this domain.
@@ -167,6 +168,9 @@ pub(super) async fn dispatch(
                 rpc_optional_param(params, "sheetName")?,
             )
             .await,
+        ),
+        "workspace.files.officePdf" => rpc_json_result(
+            service_workspace_files_office_pdf(rpc_required_param(params, "filePath")?).await,
         ),
         _ => return Ok(ServiceRpcDispatch::Unknown),
     };
