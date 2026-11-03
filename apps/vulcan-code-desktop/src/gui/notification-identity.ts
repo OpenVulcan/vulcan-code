@@ -1,7 +1,9 @@
 // Configure the desktop GUI's native notification identity before Electron becomes ready.
 // 在 Electron 就绪前配置桌面 GUI 的原生通知身份。
 import { app } from 'electron';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { INSTALL_SHORTCUT_NAME, resolveInstalledLauncher } from './installed-launcher.js';
 import { resolveGuiNotificationIdentity } from './notification-identity-values.js';
 
 // configured prevents packaged and direct development entries from changing identity twice.
@@ -29,6 +31,28 @@ export function configureGuiNotificationIdentity(): void {
   if (identity.appUserModelId !== null && identity.toastActivatorClsid !== null) {
     app.setAppUserModelId(identity.appUserModelId);
     app.setToastActivatorCLSID(identity.toastActivatorClsid);
+    pinWindowsToInstalledLauncher(identity.appUserModelId);
   }
   configured = true;
+}
+
+// pinWindowsToInstalledLauncher makes a taskbar pin of any window start the install launcher.
+// pinWindowsToInstalledLauncher 使任意窗口的任务栏固定项启动安装启动器。
+// Electron rewrites its own Start menu shortcut to the running versioned executable, which a later update
+// removes; the window relaunch command keeps pins on the stable launcher instead. appUserModelId is the
+// AUMID the installer's shortcuts carry. It does nothing outside an installed layout.
+// Electron 会把自己的开始菜单快捷方式改写为正在运行的版本目录程序，而之后的更新会删除该目录；窗口的重新启动
+// 命令使固定项保持指向稳定启动器。appUserModelId 是安装程序快捷方式携带的 AUMID。不在安装布局中时不做任何事。
+function pinWindowsToInstalledLauncher(appUserModelId: string): void {
+  const launcher = resolveInstalledLauncher(process.execPath, existsSync);
+  if (launcher === null) return;
+  app.on('browser-window-created', (_event, window) => {
+    window.setAppDetails({
+      appId: appUserModelId,
+      appIconPath: launcher,
+      appIconIndex: 0,
+      relaunchCommand: `"${launcher}"`,
+      relaunchDisplayName: INSTALL_SHORTCUT_NAME,
+    });
+  });
 }
