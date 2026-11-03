@@ -53,7 +53,8 @@
 4. 失败判定：工具结果 `is_error`，或命令结果退出码非 0 / 状态不是 `completed`。
 5. `shell_command` 的 `command` 参数中，表达式只能得到数字或布尔值；任何字符串、null、数组或对象都使该步
    失败而不调用工具。文本必须通过 `stdin`（或文件）传给命令。不做转义，也不用字符白名单。工具的这类参数由
-   桥通过 `StepToolPolicy.command_arguments` 声明。
+   桥通过 `StepToolPolicy.command_arguments` 声明。`stdin` 以 UTF-8 写入；Windows PowerShell 的读取方式见
+   [`tooling-and-terminal-runtime.md`](tooling-and-terminal-runtime.md)，描述要求用 `[Console]::In.ReadToEnd()`。
 6. 不回滚：已执行步骤的效果保留。描述要求模型不要把长串写入、删除或发布操作放进一条链。
 7. 可链接范围只有原生工具清单 `CHAINABLE_TOOL_IDS`（`tooling/native/tool_chain.rs`，唯一定义）：
    `shell_command`、`file`、`file_read`、`file_write`、`file_edit`、`apply_patch`、`knowledge_search`、

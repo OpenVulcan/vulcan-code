@@ -24,7 +24,14 @@ WebUI 展示时阅读。普通业务任务不需要加载这些细节。
 ## 二、`shell_command`
 
 - `timeout_ms` 省略表示无限等待，直到进程自然退出；显式传入时必须 ≥ 1，传 `0` 返回参数错误。
-- 省略 `stdin` 表示空输入（立即 EOF），不继承服务进程的标准输入；提供时一次写入后关闭。
+- 省略 `stdin` 表示空输入（立即 EOF），不继承服务进程的标准输入；提供时以 UTF-8 字节一次写入后关闭。
+  Windows 上的 PowerShell 默认按控制台代码页（如 936）解码 `[Console]::In`，并按 `$OutputEncoding`
+  编码管道给原生程序的文本，非 ASCII 内容会乱码。因此提供 `stdin` 且 Shell 为 `pwsh`/`powershell` 时，
+  宿主只在启动参数中于命令前加一条受 `try` 保护的语句，把 `[Console]::InputEncoding` 与
+  `$OutputEncoding` 设为 UTF-8（`HostCommandShell::command_text_for_utf8_stdin`），不改输出编码，报告与
+  权限判定仍使用原命令；以 `using`、`#requires`、`param` 或 `[CmdletBinding()]` 开头的命令不加。`$input`
+  在命令的第一条语句之前已被解码，无法由此修正，工具描述要求改用 `[Console]::In.ReadToEnd()`。直接读取
+  stdin 的原生程序收到的就是原始 UTF-8 字节。`terminal_session` 不受影响。
 - 子进程在独立进程树中启动（Unix 为新进程组，Windows 依赖 `taskkill /T`）。超时或工具调用被
   取消时终止整棵进程树；超时返回 `timed_out` 状态并附带截至超时已产生的 stdout/stderr。
 - 自然退出后，输出排空最多再等待 `CHILD_OUTPUT_DRAIN_GRACE`（唯一定义在

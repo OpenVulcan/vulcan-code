@@ -77,7 +77,7 @@ fn shell_command_working_directory_accepts_absolute_cwd_without_workspace_root()
 #[test]
 fn shell_command_launcher_rejects_unknown_shell() {
     let shell_support = test_shell_support();
-    let error = resolve_shell_command_launcher(&shell_support, Some("fish"), "echo hello")
+    let error = resolve_shell_command_launcher(&shell_support, Some("fish"), "echo hello", false)
         .expect_err("unsupported shell should fail");
     assert!(error.message.to_ascii_lowercase().contains("support"));
 }

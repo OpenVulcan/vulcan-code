@@ -398,7 +398,7 @@ pub(crate) fn shell_command_args_schema(shell_support: &HostCommandShellSupport)
             },
             "stdin": {
                 "type": "string",
-                "description": "Optional stdin text written once to the process; stdin is closed afterwards. When omitted, stdin is empty. No newline is added automatically."
+                "description": "Optional stdin text written once to the process as UTF-8; stdin is closed afterwards. When omitted, stdin is empty. No newline is added automatically. In PowerShell read it with `[Console]::In.ReadToEnd()`, not `$input`, which garbles non-ASCII text on Windows."
             },
             "purpose": {
                 "type": "string",
@@ -506,14 +506,24 @@ pub(crate) fn resolve_shell_command_spill_root(
 
 /// Resolves the concrete shell executable, argument vector, and host-visible shell label.
 /// 解析具体 shell 可执行文件、参数向量以及宿主可见 shell 标签。
+///
+/// `utf8_stdin` marks a command whose stdin the host fills with UTF-8 text.
+/// `utf8_stdin` 标记宿主会以 UTF-8 文本填充其 stdin 的命令。
 pub(crate) fn resolve_shell_command_launcher(
     shell_support: &HostCommandShellSupport,
     shell_name: Option<&str>,
     command_text: &str,
+    utf8_stdin: bool,
 ) -> Result<(String, Vec<String>, String), NativeToolError> {
     let resolved_shell = shell_support
         .resolve_requested_shell(shell_name)
         .map_err(NativeToolError::new)?;
+    if utf8_stdin {
+        let command_text = resolved_shell
+            .shell
+            .command_text_for_utf8_stdin(command_text);
+        return Ok(resolved_shell.build_launcher(&command_text));
+    }
     Ok(resolved_shell.build_launcher(command_text))
 }
 
@@ -782,6 +792,7 @@ pub(crate) async fn execute_shell_command_process(
         shell_support,
         parsed_args.shell.as_deref(),
         &parsed_args.command,
+        parsed_args.stdin.is_some(),
     ) {
         Ok(resolved) => resolved,
         Err(error) => {
@@ -1545,6 +1556,59 @@ mod process_option_tests {
         .await;
         assert_eq!(report.status, ShellCommandExecutionStatus::Completed);
         assert!(report.stdout_text.trim_end().ends_with("done"));
+    }
+
+    /// PowerShell reads non-ASCII stdin unchanged through `[Console]::In`, whatever the console code
+    /// page; the command prints the UTF-8 bytes it decoded as hex so output decoding cannot interfere.
+    /// PowerShell 无论控制台代码页如何都能通过 `[Console]::In` 原样读取非 ASCII 的 stdin；命令以十六进制
+    /// 打印其解码得到的 UTF-8 字节，使输出解码无法干扰结果。
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn powershell_reads_utf8_stdin_unchanged() {
+        let temp = tempfile::tempdir().expect("create shell stdin test directory");
+        let stdin_text = "\u{4e2d}\u{6587} \u{2713} \u{e9}\nline two\n";
+        let expected = stdin_text
+            .bytes()
+            .map(|byte| format!("{byte:02X}"))
+            .collect::<Vec<_>>()
+            .join("-");
+        let shell_support = HostCommandShellSupport::from_configured_default_id(None);
+        let powershells = shell_support
+            .supported_shells()
+            .iter()
+            .filter(|shell| {
+                matches!(
+                    shell.shell,
+                    HostCommandShell::Pwsh | HostCommandShell::Powershell
+                )
+            })
+            .map(|shell| shell.shell.id())
+            .collect::<Vec<_>>();
+        for shell in powershells {
+            let parsed_args = ShellCommandToolArgs {
+                command: String::from(
+                    "[BitConverter]::ToString([Text.Encoding]::UTF8.GetBytes([Console]::In.ReadToEnd()))",
+                ),
+                cwd: None,
+                timeout_ms: Some(60_000),
+                stdin: Some(stdin_text.to_string()),
+                shell: Some(shell.to_string()),
+                _purpose: None,
+            };
+            let report = execute_shell_command_process(
+                &parsed_args,
+                temp.path(),
+                &shell_support,
+                &ShellCommandProcessOptions::default(),
+            )
+            .await;
+            assert_eq!(
+                report.status,
+                ShellCommandExecutionStatus::Completed,
+                "{shell}"
+            );
+            assert_eq!(report.stdout_text.trim(), expected, "{shell}");
+        }
     }
 
     /// Timeouts must kill descendants holding the pipes and still return output produced so far.

@@ -51,7 +51,7 @@ Expressions:
 - Every `steps.<id>` must name an earlier step, even inside a branch that would not be evaluated; the whole plan is checked before anything runs.
 
 Commands:
-- A `shell_command` `command` only accepts numbers and booleans from `${{ }}`. Text from an earlier step must not become shell syntax, so pass it through `stdin` and read standard input in the command.
+- A `shell_command` `command` only accepts numbers and booleans from `${{ }}`. Text from an earlier step must not become shell syntax, so pass it through `stdin` and read standard input in the command. `stdin` is UTF-8; in PowerShell read it with `[Console]::In.ReadToEnd()`, not `$input`.
 
 Behavior:
 - Each step goes through the same permission checks as a direct call. If a step is denied, the chain stops, whatever `if` or `continue_on_error` say; retry that step on its own as a normal tool call if it is still needed.

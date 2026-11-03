@@ -1,9 +1,27 @@
 //! Host shell detection and resolution helpers shared by settings surfaces and native command tools.
 //! 原生命令工具与设置界面共享的宿主 shell 检测与解析辅助逻辑。
 
+use std::borrow::Cow;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+
+/// PowerShell statement that reads stdin and pipes to native programs as UTF-8.
+/// 让 PowerShell 以 UTF-8 读取 stdin 并向原生程序管道传输的语句。
+const POWERSHELL_UTF8_STDIN_PRELUDE: &str = "try { [Console]::InputEncoding = $OutputEncoding = [System.Text.UTF8Encoding]::new($false) } catch {}";
+
+/// Whether a PowerShell command starts with a statement that no other statement may precede.
+/// PowerShell 命令是否以不允许任何语句前置的语句开头。
+fn must_lead_powershell_script(command_text: &str) -> bool {
+    let start = command_text.trim_start().to_ascii_lowercase();
+    start.starts_with("#requires")
+        || start.starts_with("[cmdletbinding")
+        || ["using", "param"].iter().any(|keyword| {
+            start.strip_prefix(keyword).is_some_and(|rest| {
+                rest.starts_with(|character: char| character.is_whitespace() || character == '(')
+            })
+        })
+}
 
 /// One supported host shell family that may be exposed to AI tools and WebUI settings.
 /// 一种可暴露给 AI 工具与WebUI设置的宿主 shell 族。
@@ -99,6 +117,26 @@ impl HostCommandShell {
                 vec![String::from("-lc"), command_text.to_string()]
             }
         }
+    }
+
+    /// Returns the command text to launch when the host writes UTF-8 text to the command's stdin.
+    /// 返回宿主向命令 stdin 写入 UTF-8 文本时应启动的命令文本。
+    ///
+    /// Windows PowerShell decodes `[Console]::In` with the console code page and encodes text piped
+    /// to native programs with `$OutputEncoding`, so non-ASCII stdin arrives garbled. A guarded
+    /// statement switches both to UTF-8 first. `$input` is decoded before any statement runs and
+    /// cannot be fixed this way. Commands that must start with `using`, `#requires`, `param` or
+    /// `[CmdletBinding()]` are left unchanged.
+    /// Windows PowerShell 用控制台代码页解码 `[Console]::In`，并用 `$OutputEncoding` 编码管道给原生
+    /// 程序的文本，因此非 ASCII 的 stdin 会乱码。先用一条受保护的语句把两者切换为 UTF-8。`$input`
+    /// 在任何语句运行前已被解码，无法以此修正。必须以 `using`、`#requires`、`param` 或
+    /// `[CmdletBinding()]` 开头的命令保持不变。
+    pub fn command_text_for_utf8_stdin(self, command_text: &str) -> Cow<'_, str> {
+        let powershell = matches!(self, Self::Pwsh | Self::Powershell);
+        if !cfg!(windows) || !powershell || must_lead_powershell_script(command_text) {
+            return Cow::Borrowed(command_text);
+        }
+        Cow::Owned(format!("{POWERSHELL_UTF8_STDIN_PRELUDE}\n{command_text}"))
     }
 
     /// Returns the candidate executable names searched on the host `PATH`.
@@ -626,5 +664,37 @@ mod tests {
             .resolve_requested_shell(Some("powershell"))
             .expect_err("unsupported explicit shell should fail");
         assert!(error.contains("No available launcher for shell `powershell` was detected"));
+    }
+
+    /// Only Windows PowerShell commands that may start with another statement get the UTF-8 stdin
+    /// prelude; the original command always follows unchanged.
+    /// 只有允许前置其他语句的 Windows PowerShell 命令会加上 UTF-8 stdin 前导语句；原命令始终原样跟在后面。
+    #[test]
+    fn utf8_stdin_prelude_applies_only_where_it_can_lead() {
+        let command = "[Console]::In.ReadToEnd()";
+        for shell in [HostCommandShell::Pwsh, HostCommandShell::Powershell] {
+            let prepared = shell.command_text_for_utf8_stdin(command);
+            assert_eq!(cfg!(windows), prepared != command, "{}", shell.id());
+            assert!(prepared.ends_with(command));
+            for leading in [
+                "using namespace System.Text\n[Console]::In.ReadToEnd()",
+                "  #Requires -Version 7\n$x",
+                "param($a)\n$a",
+                "[CmdletBinding()]\nparam()",
+            ] {
+                assert_eq!(shell.command_text_for_utf8_stdin(leading), leading);
+            }
+        }
+        for shell in [
+            HostCommandShell::Cmd,
+            HostCommandShell::Bash,
+            HostCommandShell::Sh,
+        ] {
+            assert_eq!(shell.command_text_for_utf8_stdin(command), command);
+        }
+        assert_ne!(
+            cfg!(windows),
+            HostCommandShell::Pwsh.command_text_for_utf8_stdin("usingFoo") == "usingFoo"
+        );
     }
 }

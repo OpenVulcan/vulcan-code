@@ -127,8 +127,12 @@ pub(crate) async fn execute_terminal_session_start_action(
         request.workspace_root.as_deref(),
         &effective_cwd,
     );
-    let (launcher_program, launcher_args, launcher_shell_label) =
-        resolve_shell_command_launcher(shell_support, parsed_args.shell.as_deref(), command_text)?;
+    let (launcher_program, launcher_args, launcher_shell_label) = resolve_shell_command_launcher(
+        shell_support,
+        parsed_args.shell.as_deref(),
+        command_text,
+        false,
+    )?;
     let shell_behavior = resolve_session_shell_behavior(command_text, &launcher_shell_label);
     let requested_shell_selector = normalize_shell_selector(parsed_args.shell.as_deref());
     validate_terminal_session_start_shell_policy(parsed_args.shell.as_deref(), &shell_behavior)?;
