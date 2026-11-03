@@ -263,12 +263,13 @@ pub(crate) async fn service_transcribe_voice_input(
         .voice_input_selection
         .clone()
         .ok_or_else(|| String::from("No voice input target is selected."))?;
-    let extension = voice_input_recording_extension(request.mime_type.as_str()).ok_or_else(|| {
-        format!(
-            "Voice input recording type `{}` is not supported.",
-            request.mime_type
-        )
-    })?;
+    let extension =
+        voice_input_recording_extension(request.mime_type.as_str()).ok_or_else(|| {
+            format!(
+                "Voice input recording type `{}` is not supported.",
+                request.mime_type
+            )
+        })?;
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(request.data_base64.as_bytes())
         .map_err(|error| format!("Voice input recording is not valid base64: {error}"))?;

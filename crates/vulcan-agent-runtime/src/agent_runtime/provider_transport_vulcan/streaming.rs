@@ -137,11 +137,7 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
                         crate::agent_runtime::events::ProviderRequestMediaContext {
                             execution: std::sync::Arc::clone(&self.media_execution),
                             session_scope_id: self.cache_scope_id.clone(),
-                            tool_names: public
-                                .tools
-                                .iter()
-                                .map(|tool| tool.name.clone())
-                                .collect(),
+                            tool_names: public.tools.iter().map(|tool| tool.name.clone()).collect(),
                         },
                     ),
                     exact_request: public,

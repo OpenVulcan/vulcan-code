@@ -268,12 +268,12 @@ pub(super) use session_tools::{
     service_rebuild_public_ai_session_provider_tool_selections,
     service_save_public_ai_session_provider_tool_selections,
 };
+use std::sync::Arc;
 pub(crate) use voice_input::voice_input_summary;
 pub(super) use voice_input::{
     service_save_voice_input_selection, service_transcribe_voice_input,
     service_voice_input_settings,
 };
-use std::sync::Arc;
 use vulcan_provider_adapters::{PersistedAiConfiguration, PublicAiRuntime};
 
 use crate::SharedServiceBridgeState;

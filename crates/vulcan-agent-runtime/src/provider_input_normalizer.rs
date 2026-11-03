@@ -223,12 +223,14 @@ fn media_understanding_bridge_for_attachment<'a>(
     attachment: &ConversationAttachment,
     bridge_tool_ids: &'a [String],
 ) -> Option<(&'a str, &'static str)> {
-    media_understanding_tool_for_kind(&attachment.kind).and_then(|(expected_tool_id, path_argument)| {
-        bridge_tool_ids
-            .iter()
-            .find(|tool_id| tool_id.as_str() == expected_tool_id)
-            .map(|tool_id| (tool_id.as_str(), path_argument))
-    })
+    media_understanding_tool_for_kind(&attachment.kind).and_then(
+        |(expected_tool_id, path_argument)| {
+            bridge_tool_ids
+                .iter()
+                .find(|tool_id| tool_id.as_str() == expected_tool_id)
+                .map(|tool_id| (tool_id.as_str(), path_argument))
+        },
+    )
 }
 
 /// Reports whether a protocol profile has a real encoder for one attachment kind.
@@ -710,10 +712,16 @@ mod tests {
         use super::metadata_only_discloses_stored_path as discloses;
         let tools = |ids: &[&str]| ids.iter().map(|id| id.to_string()).collect::<Vec<_>>();
         let image = ConversationAttachmentKind::Image;
-        assert!(discloses(&ConversationAttachmentKind::Pdf, &tools(&["read_media"]), |_| true));
+        assert!(discloses(
+            &ConversationAttachmentKind::Pdf,
+            &tools(&["read_media"]),
+            |_| true
+        ));
         assert!(discloses(&image, &tools(&[]), |_| true));
         assert!(!discloses(&image, &tools(&["image_understand"]), |_| false));
-        assert!(!discloses(&image, &tools(&["read_media"]), |kind| kind == ResourceKind::Image));
-        assert!(discloses(&image, &tools(&["read_media"]), |kind| kind != ResourceKind::Image));
+        assert!(!discloses(&image, &tools(&["read_media"]), |kind| kind
+            == ResourceKind::Image));
+        assert!(discloses(&image, &tools(&["read_media"]), |kind| kind
+            != ResourceKind::Image));
     }
 }
