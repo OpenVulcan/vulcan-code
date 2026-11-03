@@ -197,7 +197,7 @@ export async function verifyJudgeRuntime(repositoryRoot) {
 // installLockedTools 使用已验证缓存字节将 group 安装到 repositoryRoot；offline 禁止下载。
 export async function installLockedTools(group, repositoryRoot, offline = false) {
   if (!['bundled', 'protoc', 'nextest', 'judge-runtime'].includes(group)) throw new Error('Expected bundled, protoc, nextest or judge-runtime.');
-  if (group === 'nextest' && (process.platform !== 'win32' || process.arch !== 'x64')) throw new Error('The CI nextest input supports Windows x64 only.');
+  if (group === 'nextest' && (!['win32', 'linux'].includes(process.platform) || process.arch !== 'x64')) throw new Error('The CI nextest input supports Windows and Linux x64 only.');
   // lock is the sole version/digest authority shared by every host installer.
   // lock 是所有宿主安装器共享的唯一版本与摘要权威。
   const lock = JSON.parse(await readFile(new URL('./build-inputs.lock.json', import.meta.url), 'utf8'));
@@ -261,7 +261,7 @@ export async function installLockedTools(group, repositoryRoot, offline = false)
       // archiveName follows the upstream tool-specific platform naming contract.
       // archiveName 遵循各上游工具的平台命名契约。
       const archiveName = id === 'protoc' ? `protoc-${version}-${platform.protoc}.zip`
-        : id === 'nextest' ? `cargo-nextest-${version}-${platform.target}.zip`
+        : id === 'nextest' ? `cargo-nextest-${version}-${platform.target}.${platform.archiveKind}`
         : id === 'sg' ? `app-${platform.target}.zip`
         : sourceBuild ? `rtk-${version}-source.tar.gz`
         : id === 'rtk' ? lock.tools.rtk.targets[platform.target]

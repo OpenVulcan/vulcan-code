@@ -22,9 +22,14 @@ test('all supported hosts have exactly one locked tool archive', async () => {
   }
   assert.throws(() => resolveToolPlatform('linux', 'ia32'), /Unsupported/);
   assert.throws(() => resolveToolPlatform('freebsd', 'x64'), /Unsupported/);
-  assert.equal(lock.nextest.assets.length, 1);
-  assert.equal(lock.nextest.assets[0].name, `cargo-nextest-${lock.nextest.version}-x86_64-pc-windows-msvc.zip`);
-  assert.match(lock.nextest.assets[0].sha256, /^[a-f0-9]{64}$/);
+  // The CI test runner is locked for exactly the Windows and Linux x64 runners.
+  // CI 测试运行器只为 Windows 与 Linux x64 运行器锁定。
+  for (const os of ['win32', 'linux']) {
+    const host = resolveToolPlatform(os, 'x64');
+    const matches = lock.nextest.assets.filter(asset => asset.name === `cargo-nextest-${lock.nextest.version}-${host.target}.${host.archiveKind}`);
+    assert.equal(matches.length, 1);
+    assert.match(matches[0].sha256, /^[a-f0-9]{64}$/);
+  }
 });
 
 // RTK ships only where its lock names an archive or a source build, and each named archive is one locked asset.
