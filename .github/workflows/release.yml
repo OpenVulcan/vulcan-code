@@ -1,0 +1,368 @@
+# Build, sign and publish one release to the preview channel, plus a draft GitHub Release.
+# 构建、签名并发布一个版本到 preview 通道，另建一个 GitHub Release 草稿。
+#
+# The version comes from product.json; the input only confirms it. The builds run beside the
+# cross-platform check (ci.yml) and nothing is published unless both pass. Two jobs hold the release
+# environment's secrets, each after approval: the Windows build signs its files and installer, and the
+# publish job signs the manifests and pointers, uploads to R2 and creates the draft. Publishing the draft
+# runs promote.yml, which moves the stable channel to the same build.
+# 版本取自 product.json，输入只用于确认。构建与跨平台检查（ci.yml）同时运行，两者都通过才发布。只有两个作业
+# 持有 release 环境的密钥，各需审批：Windows 构建为文件与安装包签名；发布作业签署版本清单与指针、上传到 R2 并
+# 创建草稿。发布草稿时运行 promote.yml，将 stable 通道指向同一份构建。
+name: Release
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release; must equal product.json
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: release
+  cancel-in-progress: false
+jobs:
+  plan:
+    name: Plan the release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      install_epoch: ${{ steps.plan.outputs.install_epoch }}
+    steps:
+      - name: Release from main only
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "Releases are built from main, not $GITHUB_REF." >&2
+          exit 1
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - id: versions
+        run: node scripts/ci-runtime-versions.mjs
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ steps.versions.outputs.node }}
+      - id: plan
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: node scripts/release-plan.mjs check --version "$REQUESTED_VERSION"
+
+  ci:
+    name: Cross-platform check
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    name: Build (${{ matrix.platform }})
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux builds on 22.04 so the archive runs on glibc 2.35 and newer.
+          # Linux 在 22.04 上构建，使归档可在 glibc 2.35 及以上运行。
+          - { platform: linux-x64, runner: ubuntu-22.04 }
+          - { platform: linux-arm64, runner: ubuntu-22.04-arm }
+          - { platform: macos-intel, runner: macos-15-intel }
+          - { platform: macos-arm64, runner: macos-15 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 360
+    env:
+      CARGO_INCREMENTAL: '0'
+      VERSION: ${{ needs.plan.outputs.version }}
+      INSTALL_EPOCH: ${{ needs.plan.outputs.install_epoch }}
+      PLATFORM: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      # Hosted Linux images keep about 20 GB free; a release build of this workspace needs more.
+      # 托管 Linux 镜像只剩约 20 GB 空间，本工作区的 release 构建需要更多。
+      - name: Free disk space
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+      - id: versions
+        run: node scripts/ci-runtime-versions.mjs
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ steps.versions.outputs.node }}
+      - name: Install declared pnpm
+        run: npm install --global pnpm@${{ steps.versions.outputs.pnpm }}
+      - name: Install the pinned Rust toolchain
+        run: |
+          set -eu
+          if ! command -v rustup > /dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup toolchain install
+      # The read-only job token lifts GitHub API lookups off the anonymous per-address limit.
+      # 只读作业令牌让 GitHub API 查询不受按地址的匿名配额限制。
+      - name: Initialize, synchronize and build
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          sh ./make.sh init-system
+          sh ./make.sh sync release
+          sh ./make.sh release
+          cargo build --locked --release -p vulcan-release-tool
+      - name: Pack the incremental objects and record the tree
+        run: |
+          set -eu
+          root=$(node scripts/desktop-runtime.mjs root release)
+          out="$RUNNER_TEMP/release"
+          mkdir -p "$out"
+          target/release/vulcan-release-tool pack --tree "$root" --rules scripts/release-components.json \
+            --objects "$out/objects" --components-out "$out/components.json"
+          target/release/vulcan-release-tool record --objects "$out/objects" --components "$out/components.json" \
+            --version "$VERSION" --platform "$PLATFORM" --install-epoch "$INSTALL_EPOCH" --tree "$root"
+      - name: Archive for the GitHub Release
+        run: node scripts/release-package.mjs package --out "$RUNNER_TEMP/release/archive"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-${{ matrix.platform }}
+          path: ${{ runner.temp }}/release
+          retention-days: 3
+          compression-level: 0
+          if-no-files-found: error
+
+  build-windows:
+    name: Build and sign (windows-x64)
+    needs: plan
+    # The signing secrets exist only in the release environment, which requires approval.
+    # 签名密钥只存在于需要审批的 release 环境中。
+    environment: release
+    runs-on: windows-2025
+    timeout-minutes: 360
+    # One cloud signing session at a time across every workflow that logs in to Certum.
+    # 所有登录 Certum 的工作流同一时间只有一个云签名会话。
+    concurrency:
+      group: certum-signing
+      cancel-in-progress: false
+    env:
+      CARGO_INCREMENTAL: '0'
+      VERSION: ${{ needs.plan.outputs.version }}
+      INSTALL_EPOCH: ${{ needs.plan.outputs.install_epoch }}
+      PLATFORM: windows-x64
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      # The runner context is not available to job-level env, so the evidence directory is set here.
+      # 作业级 env 无法使用 runner 上下文，因此在此设置签名证据目录。
+      - name: Signing evidence directory
+        run: |
+          "EVIDENCE=$env:RUNNER_TEMP\signing-evidence" >> $env:GITHUB_ENV
+      - id: versions
+        run: node scripts/ci-runtime-versions.mjs
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ steps.versions.outputs.node }}
+      - name: Install declared pnpm
+        run: npm install --global pnpm@${{ steps.versions.outputs.pnpm }}
+      - name: Install the pinned Rust toolchain
+        run: |
+          rustup toolchain install
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Initialize, synchronize and build
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          foreach ($step in @(@('init-system'), @('sync', 'release'), @('release'))) {
+            ./make.ps1 @step
+            if ($LASTEXITCODE -ne 0) { throw "make $($step -join ' ') failed with $LASTEXITCODE" }
+          }
+          cargo build --locked --release -p vulcan-release-tool
+          if ($LASTEXITCODE -ne 0) { throw 'building the release tool failed' }
+      - name: Install the pinned official SimplySign Desktop
+        run: ./scripts/certum-signing.ps1 -Phase Install -EvidenceDirectory $env:EVIDENCE
+      # Our own programs are signed before packing, so the indexes and the installer carry signed bytes;
+      # third-party programs keep their vendors' signatures.
+      # 自研程序在打包前签名，使索引与安装包包含签名后的字节；第三方程序保留原厂签名。
+      - name: Sign the program files
+        env:
+          CERTUM_TOTP_EMAIL: ${{ secrets.CERTUM_TOTP_EMAIL }}
+          CERTUM_TOTP_SECRET: ${{ secrets.CERTUM_TOTP_SECRET }}
+          CERTUM_CERT_SHA1: ${{ vars.CERTUM_CERT_SHA1 }}
+        run: |
+          $root = node scripts/desktop-runtime.mjs root release
+          $layout = Get-Content -Raw -LiteralPath (Join-Path $root 'runtime-layout.json') | ConvertFrom-Json
+          $files = @(Get-ChildItem -LiteralPath (Join-Path $root 'bin') -File |
+            Where-Object Extension -in '.exe', '.dll' | ForEach-Object FullName)
+          $files += (Join-Path $root $layout.desktopExecutable)
+          ./scripts/certum-signing.ps1 -Phase Login -EvidenceDirectory $env:EVIDENCE
+          try {
+            ./scripts/certum-signing.ps1 -Phase Sign -EvidenceDirectory $env:EVIDENCE -Files $files
+          } finally {
+            ./scripts/certum-signing.ps1 -Phase Logout -EvidenceDirectory $env:EVIDENCE
+          }
+      - name: Pack the incremental objects and record the tree
+        run: |
+          $root = node scripts/desktop-runtime.mjs root release
+          $out = "$env:RUNNER_TEMP/release"
+          ./target/release/vulcan-release-tool pack --tree $root --rules scripts/release-components.json `
+            --objects "$out/objects" --components-out "$out/components.json"
+          if ($LASTEXITCODE -ne 0) { throw 'pack failed' }
+          ./target/release/vulcan-release-tool record --objects "$out/objects" --components "$out/components.json" `
+            --version $env:VERSION --platform $env:PLATFORM --install-epoch $env:INSTALL_EPOCH --tree $root
+          if ($LASTEXITCODE -ne 0) { throw 'record failed' }
+      # Inno Setup signs the setup program and its uninstaller through the sign command, file by file.
+      # Inno Setup 通过签名命令逐个为安装程序及其卸载程序签名。
+      - name: Compile and sign the installer
+        env:
+          CERTUM_TOTP_EMAIL: ${{ secrets.CERTUM_TOTP_EMAIL }}
+          CERTUM_TOTP_SECRET: ${{ secrets.CERTUM_TOTP_SECRET }}
+          CERTUM_CERT_SHA1: ${{ vars.CERTUM_CERT_SHA1 }}
+        run: |
+          $downloads = "$env:RUNNER_TEMP/release/downloads"
+          $sign = "pwsh -NoProfile -File $PWD\scripts\certum-signing.ps1 -Phase Sign -EvidenceDirectory $env:EVIDENCE -Files `$f"
+          ./scripts/certum-signing.ps1 -Phase Login -EvidenceDirectory $env:EVIDENCE
+          try {
+            node scripts/windows-installer.mjs package --out $downloads --sign $sign
+            if ($LASTEXITCODE -ne 0) { throw 'compiling the installer failed' }
+          } finally {
+            ./scripts/certum-signing.ps1 -Phase Logout -EvidenceDirectory $env:EVIDENCE
+          }
+          Remove-Item -Path "$downloads/*.iss"
+          ./scripts/certum-signing.ps1 -Phase Verify -EvidenceDirectory $env:EVIDENCE -Files (Get-ChildItem "$downloads/*.exe").FullName
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-windows-x64
+          path: ${{ runner.temp }}/release
+          retention-days: 3
+          compression-level: 0
+          if-no-files-found: error
+      - name: Report
+        if: always()
+        run: |
+          foreach ($report in @(Get-ChildItem $env:EVIDENCE -Filter '*.json' -ErrorAction SilentlyContinue)) {
+            "### $($report.Name)", '```json', (Get-Content -Raw -LiteralPath $report.FullName), '```' >> $env:GITHUB_STEP_SUMMARY
+          }
+
+  publish:
+    name: Publish to preview
+    needs: [plan, ci, build, build-windows]
+    environment: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      INSTALL_EPOCH: ${{ needs.plan.outputs.install_epoch }}
+      PLATFORMS: windows-x64 linux-x64 linux-arm64 macos-intel macos-arm64
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      # R2 rejects the optional checksums newer AWS CLI releases send by default.
+      # R2 不接受新版 AWS CLI 默认附带的可选校验和。
+      AWS_REQUEST_CHECKSUM_CALCULATION: WHEN_REQUIRED
+      AWS_RESPONSE_CHECKSUM_VALIDATION: WHEN_REQUIRED
+      R2_ENDPOINT: https://${{ vars.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+      R2_BUCKET: ${{ vars.R2_BUCKET }}
+      UPDATE_BASE_URL: ${{ vars.UPDATE_BASE_URL }}
+      CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+      - id: versions
+        run: node scripts/ci-runtime-versions.mjs
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ steps.versions.outputs.node }}
+      - name: Refuse a version that is already published
+        run: sh scripts/release-r2.sh unpublished "$VERSION" $PLATFORMS
+      - name: Build the release tool
+        run: |
+          set -eu
+          rustup toolchain install
+          cargo build --locked --release -p vulcan-release-tool
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: release-*
+          path: ${{ runner.temp }}/artifacts
+      # Packs and indexes are named by their content, so every platform's objects merge into one tree.
+      # 文件包与索引按内容命名，因此各平台的对象可合并为一棵树。
+      - name: Sign the manifests and preview pointers, then install each platform from them
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          set -eu
+          artifacts="$RUNNER_TEMP/artifacts"
+          objects="$RUNNER_TEMP/objects"
+          mkdir -p "$objects"
+          node scripts/release-plan.mjs notes --out "$RUNNER_TEMP/notes.json"
+          released_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          tool=target/release/vulcan-release-tool
+          for platform in $PLATFORMS; do
+            cp -Rn "$artifacts/release-$platform/objects/." "$objects/"
+            set -- --objects "$objects" --components "$artifacts/release-$platform/components.json" \
+              --version "$VERSION" --platform "$platform" --install-epoch "$INSTALL_EPOCH" \
+              --released-at "$released_at" --key-env UPDATE_SIGNING_KEY --notes "$RUNNER_TEMP/notes.json"
+            for installer in "$artifacts/release-$platform/downloads/"*.exe; do
+              [ -e "$installer" ] && set -- "$@" --download "inno=$installer"
+            done
+            "$tool" manifest "$@"
+            "$tool" pointer --objects "$objects" --channel preview --platform "$platform" --version "$VERSION" \
+              --key-env UPDATE_SIGNING_KEY
+          done
+          unset UPDATE_SIGNING_KEY
+          for platform in $PLATFORMS; do
+            "$tool" verify --objects "$objects" --platform "$platform" --version "$VERSION" --channel preview \
+              --install-root "$RUNNER_TEMP/verify"
+            rm -rf "$RUNNER_TEMP/verify"
+          done
+          df -h /
+      - name: Upload the objects, then point preview at them
+        run: |
+          set -eu
+          sh scripts/release-r2.sh upload "$RUNNER_TEMP/objects"
+          sh scripts/release-r2.sh pointers "$RUNNER_TEMP/objects" preview
+      - name: Checksums and their GPG signature for the GitHub Release
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          set -eu
+          assets="$RUNNER_TEMP/assets"
+          mkdir -p "$assets"
+          cp "$RUNNER_TEMP"/artifacts/release-*/archive/*.tar.gz "$assets/"
+          cp scripts/install.sh "$assets/"
+          node scripts/release-package.mjs checksums "$assets"
+          node scripts/release-signing.mjs gpg "$assets/SHA256SUMS" "$RUNNER_TEMP/gpg-evidence"
+          cp "$RUNNER_TEMP/gpg-evidence/SHA256SUMS.asc" "$assets/"
+          cp "$RUNNER_TEMP"/artifacts/release-windows-x64/downloads/*.exe "$assets/"
+          ls -l "$assets"
+      - name: Draft the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          tag="v$VERSION"
+          notes="crates/vulcan-runtime-assets/resources/changelog/$VERSION/en-US.md"
+          # A re-run after a failure replaces the assets of the draft it created.
+          # 失败后重新运行时，替换它先前创建的草稿中的附件。
+          if gh release view "$tag" > /dev/null 2>&1; then
+            gh release upload "$tag" "$RUNNER_TEMP"/assets/* --clobber
+          else
+            gh release create "$tag" "$RUNNER_TEMP"/assets/* --draft --target "$GITHUB_SHA" \
+              --title "Vulcan Code $VERSION" --notes-file "$notes"
+          fi
+          {
+            echo "### Vulcan Code $VERSION"
+            echo "- preview pointers: \`$UPDATE_BASE_URL/channels/preview/\`"
+            echo "- draft release \`$tag\`: publishing it moves the stable channel to this build"
+          } >> "$GITHUB_STEP_SUMMARY"

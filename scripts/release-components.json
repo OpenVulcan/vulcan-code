@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "components": {
+    "core": [
+      "bin",
+      "config",
+      "dependencies",
+      "judge-runtime",
+      "lua_runtime",
+      "plugins",
+      "resources",
+      "runtime-layout.json",
+      "tools",
+      "webui"
+    ],
+    "tui": [
+      "bin/vulcan-tui",
+      "bin/vulcan-tui.exe",
+      "bin/vulcan-tui-forwarder.exe"
+    ],
+    "gui": [
+      "desktop",
+      "bin/vulcan-code-launcher.exe"
+    ],
+    "browser": [
+      "browser"
+    ]
+  }
+}

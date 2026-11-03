@@ -2,7 +2,7 @@
 // 基于合成布局验证 Windows 安装程序脚本的生成。
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { installLayout, installerAssetName, innoSetupScript } from './windows-installer.mjs';
+import { innoSignToolName, installLayout, installerAssetName, innoSetupScript } from './windows-installer.mjs';
 
 // windowsLayout is the minimal release layout the installer reads.
 // windowsLayout 是安装程序读取的最小正式版布局。
@@ -40,8 +40,13 @@ function parameters(line) {
   }));
 }
 
-test('installer name follows the release asset naming for the same version and platform', () => {
-  assert.equal(installerAssetName(windowsLayout, '1.2.3'), 'vulcan-code-1.2.3-windows-x64-setup');
+test('installer name is the one the release manifest accepts for its inno download', () => {
+  assert.equal(installerAssetName(windowsLayout, '1.2.3'), 'VulcanCode-1.2.3-windows-x64-setup');
+});
+
+test('only a signed build names the sign tool', () => {
+  assert.ok(!sectionLines(innoSetupScript(options()), 'Setup').some(line => line.startsWith('SignTool=')));
+  assert.ok(sectionLines(innoSetupScript(options(windowsLayout, { signed: true })), 'Setup').includes(`SignTool=${innoSignToolName}`));
 });
 
 test('the release tree is installed as its own version directory beside the launchers', () => {

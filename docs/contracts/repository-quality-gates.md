@@ -7,10 +7,12 @@
 | `.github/workflows/ci.yml` | 发布工作流调用（`workflow_call`）、手动 | 发布前的跨平台检查，每次检查全部内容 |
 | `.github/workflows/full-tests.yml` | 手动、可被调用 | 完整测试集，发布需要比快速集更多的验证时使用 |
 | `build-smoke`、`signing-smoke`、`distribution-smoke` | 手动 | 发布前的构建、签名与分发实测，见发布计划 |
+| `.github/workflows/release.yml` | 手动（输入版本） | 构建五个平台、签名、上传到 R2 并指向 preview 通道，另建 GitHub Release 草稿 |
+| `.github/workflows/promote.yml` | 发布 GitHub Release、手动 | 将 stable（或 preview）通道指向已上传的版本，不重新构建 |
 
 本仓库由单人维护，自 2026-11-03 起 CI 只作为发布前的跨平台检查：推送与合并不触发任何运行，也不使用合并请求
 流程或分支保护。日常提交由本地检查负责（见下文“本地验证与故障归属”）；CI 回答的是“被发布的提交能否在每个
-系统上构建并通过测试”。发布工作流在构建、签名与上传之前调用 `ci.yml`，任一作业失败即停止发布；也可手动启动。
+系统上构建并通过测试”。发布工作流与构建同时调用 `ci.yml`，任一作业失败则不签署版本清单、不上传；也可手动启动。
 `ci.yml` 不按变更分类，每次运行全部作业，整次运行的结论即检查结果，没有单独的汇总作业。
 Actions 引用固定提交；Node 与 pnpm 版本取自受管运行时清单
 `crates/vulcan-service-runtime/managed-runtimes.json`，不增加第二份版本常量。

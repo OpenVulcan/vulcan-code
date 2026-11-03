@@ -81,7 +81,14 @@ jobs:
           CERTUM_TOTP_EMAIL: ${{ secrets.CERTUM_TOTP_EMAIL }}
           CERTUM_TOTP_SECRET: ${{ secrets.CERTUM_TOTP_SECRET }}
           CERTUM_CERT_SHA1: ${{ vars.CERTUM_CERT_SHA1 }}
-        run: ./scripts/certum-signing.ps1 -Phase Sign -EvidenceDirectory "$env:RUNNER_TEMP/signing-evidence" -Files "$env:RUNNER_TEMP/signing-evidence/signing-probe.exe" -Description 'Vulcan Code CI signing probe'
+        run: |
+          $evidence = "$env:RUNNER_TEMP/signing-evidence"
+          ./scripts/certum-signing.ps1 -Phase Login -EvidenceDirectory $evidence
+          try {
+            ./scripts/certum-signing.ps1 -Phase Sign -EvidenceDirectory $evidence -Files "$evidence/signing-probe.exe" -Description 'Vulcan Code CI signing probe'
+          } finally {
+            ./scripts/certum-signing.ps1 -Phase Logout -EvidenceDirectory $evidence
+          }
       - name: Re-verify without credentials and reject a tampered copy
         shell: pwsh
         env:

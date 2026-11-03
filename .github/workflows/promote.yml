@@ -1,0 +1,81 @@
+# Point a channel at a version that release.yml already published; no files are rebuilt or re-signed.
+# 将某个通道指向 release.yml 已发布的版本；不重新构建或重新签名任何文件。
+#
+# Publishing the draft GitHub Release moves the stable channel. A manual run moves either channel, which
+# also repairs a release whose upload finished but whose preview pointers did not.
+# 发布 GitHub Release 草稿时推进 stable 通道。手动运行可推进任一通道，也可修复已上传完成但 preview 指针未更新的发布。
+name: Promote
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Published version, for example 0.1.0
+        required: true
+      channel:
+        description: Channel to point at it
+        required: true
+        type: choice
+        options: [stable, preview]
+permissions:
+  contents: read
+concurrency:
+  group: release
+  cancel-in-progress: false
+jobs:
+  promote:
+    name: Point ${{ inputs.channel || 'stable' }} at ${{ inputs.version || github.event.release.tag_name }}
+    environment: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PLATFORMS: windows-x64 linux-x64 linux-arm64 macos-intel macos-arm64
+      CHANNEL: ${{ inputs.channel || 'stable' }}
+      TAG_OR_VERSION: ${{ inputs.version || github.event.release.tag_name }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      # R2 rejects the optional checksums newer AWS CLI releases send by default.
+      # R2 不接受新版 AWS CLI 默认附带的可选校验和。
+      AWS_REQUEST_CHECKSUM_CALCULATION: WHEN_REQUIRED
+      AWS_RESPONSE_CHECKSUM_VALIDATION: WHEN_REQUIRED
+      R2_ENDPOINT: https://${{ vars.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+      R2_BUCKET: ${{ vars.R2_BUCKET }}
+      UPDATE_BASE_URL: ${{ vars.UPDATE_BASE_URL }}
+      CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Resolve the version
+        run: |
+          set -eu
+          version=${TAG_OR_VERSION#v}
+          case "$version" in
+            *[!0-9.]* | '' | .* | *. | *..*) echo "not a plain release version: $TAG_OR_VERSION" >&2; exit 1 ;;
+          esac
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Build the release tool
+        run: |
+          set -eu
+          rustup toolchain install
+          cargo build --locked --release -p vulcan-release-tool
+      # The pointer is signed over the published manifest, so the manifests are fetched rather than rebuilt.
+      # 指针签署的是已发布的版本清单，因此下载版本清单而不是重新生成。
+      - name: Sign the pointers
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          set -eu
+          objects="$RUNNER_TEMP/objects"
+          sh scripts/release-r2.sh manifests "$objects" "$VERSION" $PLATFORMS
+          for platform in $PLATFORMS; do
+            target/release/vulcan-release-tool pointer --objects "$objects" --channel "$CHANNEL" \
+              --platform "$platform" --version "$VERSION" --key-env UPDATE_SIGNING_KEY
+          done
+      - name: Upload the pointers and read them back through the CDN
+        run: sh scripts/release-r2.sh pointers "$RUNNER_TEMP/objects" "$CHANNEL"
+      - name: Report
+        run: echo "### $CHANNEL now points at $VERSION" >> "$GITHUB_STEP_SUMMARY"

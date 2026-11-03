@@ -17,11 +17,19 @@ const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '.
 // installerAppId 标识每一次 Vulcan Code 安装，用于升级与卸载；不得修改。
 const installerAppId = '4AA6A407-B39F-4AF7-9F9B-167D14D64368';
 
-// installerAssetName names the setup program beside the release archive of the same version and platform.
-// installerAssetName 为安装程序命名，与同版本、同平台的发行归档并列。
+// installerAssetName names the setup program as the release manifest's `inno` download must
+// (`DownloadKind::Inno` in vulcan-install-core); the compiler appends `.exe`.
+// installerAssetName 按版本清单 `inno` 下载项要求的名称（vulcan-install-core 的 `DownloadKind::Inno`）
+// 为安装程序命名；编译器会追加 `.exe`。
 export function installerAssetName(layout, version) {
-  return `vulcan-code-${version}-${managedRuntimePlatformKey(layout)}-setup`;
+  return `VulcanCode-${version}-${managedRuntimePlatformKey(layout)}-setup`;
 }
+
+// innoSignToolName names the sign tool a signed build passes to the compiler with `/S<name>=<command>`;
+// Inno Setup then signs the setup program and the uninstaller it embeds.
+// innoSignToolName 是签名构建通过 `/S<名称>=<命令>` 传给编译器的签名工具名；Inno Setup 随后为安装程序及
+// 其内嵌的卸载程序签名。
+export const innoSignToolName = 'vulcan';
 
 // The multi-version layout below the install directory (plan section 4); `vulcan-install-core`
 // (`install_root.rs`) and the launcher (`apps/vulcan-code-launcher`) read the same names.
@@ -85,11 +93,11 @@ function desktopShortcutIdentity(identity) {
 // The distribution is installed as versions\<version>; the launcher, the PATH forwarder and current.json sit
 // beside it. entries are the distribution's top-level names, which are also the top-level release files of
 // the former single-directory layout, so installing over that layout removes exactly those, never user data.
-// identity is the desktop executable's release notification identity.
+// identity is the desktop executable's release notification identity. signed adds the sign tool directive.
 // 发行物安装为 versions\<版本>；启动器、PATH 转发器与 current.json 位于其旁。entries 是发行物的顶层名称，
 // 同时也是旧单目录布局的顶层发行文件，因此覆盖安装旧布局时只删除这些条目，绝不删除用户数据。identity 是
-// 桌面可执行文件的正式版通知身份。
-export function innoSetupScript({ root, layout, version, entries, outputDir, icon, identity }) {
+// 桌面可执行文件的正式版通知身份。signed 加入签名工具指令。
+export function innoSetupScript({ root, layout, version, entries, outputDir, icon, identity, signed = false }) {
   if (layout.platform !== 'win32' || layout.architecture !== 'x64') {
     throw new Error(`Only a Windows x64 distribution can be packaged; found ${layout.platform}-${layout.architecture}.`);
   }
@@ -134,7 +142,7 @@ SetupIconFile=${issValue(icon)}
 UninstallDisplayIcon={app}\\${launcher}
 OutputDir=${issValue(outputDir)}
 OutputBaseFilename=${issValue(installerAssetName(layout, version))}
-
+${signed ? `SignTool=${innoSignToolName}\n` : ''}
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 Name: "addtopath"; Description: "Add vulcan-tui to PATH for the current user"; GroupDescription: "Command line:"
@@ -408,8 +416,8 @@ begin
   if CurStep = ssPostInstall then
   begin
     Previous := CurrentVersion;
-    // INSTALL RECORD HOOK: write versions\\<version>\\.vulcan-install.json here, after the files and
-    // before current.json points at the version, in the format vulcan-install-core defines.
+    // The install record .vulcan-install.json arrived with the version's files: the release tool wrote it
+    // into the tree before compiling, so current.json only ever points at a recorded version.
     SwitchCurrentVersion;
     Installed := True;
     // Repairing the current version does not know which version it replaced, so it keeps them all.
@@ -483,8 +491,10 @@ async function ensureInnoSetup() {
 }
 
 // packageWindowsInstaller verifies the release distribution, then compiles the setup program from it as is.
-// packageWindowsInstaller 验证正式版发行物，然后按其现状编译安装程序。
-async function packageWindowsInstaller(outputOverride) {
+// signCommand, when given, is the command Inno Setup runs for each file it signs, with `$f` for the file.
+// packageWindowsInstaller 验证正式版发行物，然后按其现状编译安装程序。若给出 signCommand，Inno Setup 对每个
+// 待签名文件运行该命令，`$f` 代表文件。
+async function packageWindowsInstaller(outputOverride, signCommand) {
   if (process.platform !== 'win32' || process.arch !== 'x64') throw new Error('The Windows installer is built on Windows x64 only.');
   const { root, layout, version } = await inspectReleaseDistribution();
   const outputDir = outputOverride ?? path.join(repository, 'target', 'release-packages', version);
@@ -503,21 +513,30 @@ async function packageWindowsInstaller(outputOverride) {
     entries: (await readdir(root)).sort(),
     icon: path.join(repository, 'apps', 'vulcan-code-service', 'icons', 'icon.ico'),
     identity: resolveGuiNotificationIdentity(path.join(root, layout.desktopExecutable), 'win32'),
+    signed: Boolean(signCommand),
   });
   // The generated script lives beside the setup program so a failed build can be inspected.
   // 生成的脚本与安装程序放在一起，便于检查失败的构建。
   const scriptPath = path.join(outputDir, `${installerAssetName(layout, version)}.iss`);
   await writeFile(scriptPath, script);
-  console.log(`==> Compiling ${path.basename(scriptPath)} (unsigned)`);
-  await runInherited(compiler, ['/Qp', scriptPath]);
+  console.log(`==> Compiling ${path.basename(scriptPath)} (${signCommand ? 'signed' : 'unsigned'})`);
+  await runInherited(compiler, ['/Qp', ...(signCommand ? [`/S${innoSignToolName}=${signCommand}`] : []), scriptPath]);
   console.log(`Windows installer: ${path.join(outputDir, `${installerAssetName(layout, version)}.exe`)}`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [command, ...rest] = process.argv.slice(2);
-  if (command === 'package' && (rest.length === 0 || (rest.length === 2 && rest[0] === '--out'))) {
-    await packageWindowsInstaller(rest[1] && path.resolve(rest[1]));
+  // options holds each `--name value` pair; a repeated, unknown or valueless flag is rejected.
+  // options 保存每个 `--名称 值` 对；重复、未知或缺少值的参数一律拒绝。
+  const options = new Map();
+  for (let index = 0; index < rest.length; index += 2) {
+    const [flag, value] = [rest[index], rest[index + 1]];
+    if (!['--out', '--sign'].includes(flag) || value === undefined || options.has(flag)) options.set('invalid', true);
+    else options.set(flag, value);
+  }
+  if (command === 'package' && !options.has('invalid')) {
+    await packageWindowsInstaller(options.has('--out') ? path.resolve(options.get('--out')) : undefined, options.get('--sign'));
   } else {
-    throw new Error('Usage: node scripts/windows-installer.mjs package [--out <dir>]');
+    throw new Error('Usage: node scripts/windows-installer.mjs package [--out <dir>] [--sign <command with $f>]');
   }
 }
