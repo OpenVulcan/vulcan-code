@@ -9891,6 +9891,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "vulcan-code-launcher"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tempfile",
+ "windows-sys 0.61.2",
+ "winresource",
+]
+
+[[package]]
 name = "vulcan-code-service"
 version = "0.1.0"
 dependencies = [

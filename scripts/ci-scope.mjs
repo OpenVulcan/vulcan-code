@@ -47,7 +47,7 @@ export function classifyChanges(files, full = false) {
     } else if (/^crates\/(?:vulcan-service-api|vulcan-ai-contract|vulcan-workbench-model|vulcan-provider-config|vulcan-terminal-host-protocol|vulcan-plugin-runtime|vulcan-i18n)\//.test(file)
       || /^docs\/contracts\/.*\.(?:json|yaml|yml|proto)$/.test(file)) {
       select(['frontend', 'desktop', 'rust'], `shared contract: ${file}`);
-    } else if (/^(?:crates\/|apps\/vulcan-code-service\/|apps\/vulcan-code-tui\/|Cargo\.(?:toml|lock)$|rust-toolchain\.toml$|\.cargo\/|\.config\/(?:nextest\.toml|ci-quarantine\.json)$)/.test(file)) {
+    } else if (/^(?:crates\/|apps\/vulcan-code-service\/|apps\/vulcan-code-tui\/|apps\/vulcan-code-launcher\/|Cargo\.(?:toml|lock)$|rust-toolchain\.toml$|\.cargo\/|\.config\/(?:nextest\.toml|ci-quarantine\.json)$)/.test(file)) {
       select(['rust'], `rust: ${file}`);
     } else if (/^docs\/.*\.md$/.test(file) || /^(?:README(?:[.-].*)?\.md|AGENTS\.md|LICENSE(?:[.-].*)?|CHANGELOG\.md)$/.test(file)) {
       scope.reasons.push(`documentation: ${file}`);

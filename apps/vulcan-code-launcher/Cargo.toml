@@ -1,0 +1,56 @@
+[package]
+name = "vulcan-code-launcher"
+description = "Stable Windows launcher that starts the desktop app or the terminal client from the current installed version."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+build = "build.rs"
+
+# Only the Windows console and message-box calls in `src/windows.rs` may use unsafe code.
+# 只有 `src/windows.rs` 中的 Windows 控制台与消息框调用可以使用 unsafe 代码。
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unwrap_used = "warn"
+
+[lib]
+path = "src/lib.rs"
+
+# The desktop launcher is a GUI program, so starting it from a shortcut opens no console window.
+# 桌面启动器是 GUI 程序，从快捷方式启动时不会打开控制台窗口。
+[[bin]]
+name = "vulcan-code-launcher"
+path = "src/bin/launcher.rs"
+
+# The PATH forwarder is a console program, so shells wait for it and share their console with the client.
+# PATH 转发器是控制台程序，Shell 会等待它结束，并与终端客户端共用控制台。
+[[bin]]
+name = "vulcan-tui-forwarder"
+path = "src/bin/tui_forwarder.rs"
+
+# The launcher changes only with an install epoch, so it keeps a deliberately small dependency list
+# and stays outside workspace-hack (see `.config/hakari.toml`).
+# 启动器只随安装纪元变化，因此刻意保持很少的依赖，并且不使用 workspace-hack（见 `.config/hakari.toml`）。
+[dependencies]
+serde_json.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+    "Win32_System_Environment",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[build-dependencies]
+winresource.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

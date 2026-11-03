@@ -30,8 +30,10 @@ platforms = [
 # ffi) must not be unified into the workspace, and workspace changes must not alter its build inputs.
 # 原生 LanceDB 库在运行时加载；其 LanceDB 专属特性（arrow 压缩、csv、json、ffi）不得统一进工作区，
 # 工作区的变化也不得改变其构建输入。
+# The Windows launcher changes only with an install epoch, so the same rule keeps its build inputs apart.
+# Windows 启动器只随安装纪元变化，同一规则使其构建输入与工作区分离。
 [traversal-excludes]
-workspace-members = ["vulcan-code-service", "vulcan-lancedb-native"]
+workspace-members = ["vulcan-code-service", "vulcan-lancedb-native", "vulcan-code-launcher"]
 
 # The native library and the workspace crates it links never depend on workspace-hack, so `cargo hakari
 # manage-deps` must not add it back; otherwise the library would still reach workspace-hack transitively.
@@ -44,7 +46,7 @@ workspace-members = ["vulcan-code-service", "vulcan-lancedb-native"]
 # 安装核心同样链接进静态安装器，安装器不得编译整个工作区的特性集合；它只保留自己的少量依赖。发布工具运行在
 # 同样不应编译该集合的发布作业中。
 [final-excludes]
-workspace-members = ["vulcan-lancedb-native", "vulcan-lancedb-contract", "vulcan-file-ownership", "vulcan-install-core", "vulcan-release-tool"]
+workspace-members = ["vulcan-lancedb-native", "vulcan-lancedb-contract", "vulcan-file-ownership", "vulcan-install-core", "vulcan-release-tool", "vulcan-code-launcher"]
 
 # Write out exact versions rather than a semver range. (Defaults to false.)
 # exact-versions = true
