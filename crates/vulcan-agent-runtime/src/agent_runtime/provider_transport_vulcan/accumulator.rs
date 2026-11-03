@@ -2,9 +2,7 @@
 //! 有序公共响应累积、重放语义及用量投影。
 
 use super::{provider_failure, public_execution_failure};
-use crate::agent_runtime::events::{
-    TransientReasoningStatus, TransientReasoningStatusKind, TransientReasoningSummaryItem,
-};
+use crate::agent_runtime::events::{TransientReasoningStatus, TransientReasoningStatusKind};
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
 use crate::agent_runtime::tool_request_stream::ToolRequestFragment;
@@ -622,35 +620,6 @@ impl PublicTurnAccumulator {
                 let live_delta = delta.clone();
                 sink.push_delta(ProviderTurnDelta::Thinking { delta });
                 let _ = live_sender.send(Ok(ProviderStreamDelta::SummaryThinking(live_delta)));
-            }
-            AiStreamEvent::ReasoningSummaryUpdated { item_id, text } => {
-                if self.durable_reasoning_observed {
-                    return Ok(());
-                }
-                let reasoning_tokens = self
-                    .transient_reasoning_status
-                    .as_ref()
-                    .and_then(|status| status.reasoning_tokens);
-                let status = self.transient_reasoning_status.get_or_insert_with(|| {
-                    TransientReasoningStatus {
-                        kind: TransientReasoningStatusKind::Summary,
-                        summaries: Vec::new(),
-                        reasoning_tokens,
-                    }
-                });
-                status.kind = TransientReasoningStatusKind::Summary;
-                if let Some(summary) = status
-                    .summaries
-                    .iter_mut()
-                    .find(|summary| summary.item_id == item_id)
-                {
-                    summary.text = text;
-                } else {
-                    status
-                        .summaries
-                        .push(TransientReasoningSummaryItem { item_id, text });
-                }
-                self.emit_transient_reasoning_status(live_sender);
             }
             AiStreamEvent::ReasoningCompleted { item_id, signature } => {
                 let ReplayAccumulatorItemState::Reasoning {

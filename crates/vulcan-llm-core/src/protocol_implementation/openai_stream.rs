@@ -628,6 +628,9 @@ pub(crate) struct OpenAiResponsesStreamDecoder {
     /// Reasoning keys that already received their dedicated text completion event.
     /// 已收到专用文本完成事件的推理键。
     completed_reasoning_items: BTreeSet<String>,
+    /// Summary block that emitted the latest display-only summary text, used to separate parts.
+    /// 最近发出仅展示摘要文本的摘要块，用于分隔各部分。
+    last_summary_key: Option<String>,
     /// Tool calls keyed by output index.
     /// 按输出索引保存的工具调用。
     tools: BTreeMap<u32, OpenAiToolState>,
@@ -697,6 +700,7 @@ impl OpenAiResponsesStreamDecoder {
             reasoning_scopes: BTreeMap::new(),
             reasoning_text: BTreeMap::new(),
             completed_reasoning_items: BTreeSet::new(),
+            last_summary_key: None,
             tools: BTreeMap::new(),
             registered_tool_inputs,
             image_items: BTreeMap::new(),
@@ -1463,7 +1467,7 @@ impl OpenAiResponsesStreamDecoder {
         item_id: &str,
         full_text: &str,
         is_new: bool,
-        transient_summary: bool,
+        summary: bool,
         events: &mut Vec<AiStreamEvent>,
     ) -> Result<(), ProtocolConversionError> {
         // currentText is the exact prefix already emitted for this semantic block.
@@ -1486,32 +1490,61 @@ impl OpenAiResponsesStreamDecoder {
                 "OpenAI Responses reasoning completion for `{reasoning_key}` does not extend its streamed prefix."
             )));
         }
-        if is_new && !transient_summary {
+        if is_new && !summary {
             events.push(AiStreamEvent::ReasoningStarted {
                 item_id: item_id.to_string(),
             });
         }
         // suffix is the part not already emitted by earlier delta events.
         // suffix 是前序增量事件尚未发送的部分。
-        let suffix = &full_text[current_text.len()..];
-        if !suffix.is_empty() {
-            if !transient_summary {
-                events.push(AiStreamEvent::ReasoningDelta {
-                    item_id: item_id.to_string(),
-                    delta: suffix.to_string(),
-                });
-            }
-            current_text.push_str(suffix);
-            if transient_summary {
-                events.push(AiStreamEvent::ReasoningSummaryUpdated {
-                    item_id: item_id.to_string(),
-                    text: current_text.clone(),
-                });
-            }
-        }
+        let suffix = full_text[current_text.len()..].to_string();
+        current_text.push_str(suffix.as_str());
         self.completed_reasoning_items
             .insert(reasoning_key.to_string());
+        if summary {
+            self.push_summary_delta(reasoning_key, suffix.as_str(), events);
+        } else if !suffix.is_empty() {
+            events.push(AiStreamEvent::ReasoningDelta {
+                item_id: item_id.to_string(),
+                delta: suffix,
+            });
+        }
         Ok(())
+    }
+
+    /// Emits display-only summary text, separating a new summary block from the previous one.
+    /// 发出仅展示的摘要文本，并在新摘要块与前一块之间插入分隔。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `reasoning_key` identifies the summary block, `delta` is its newly observed text, and
+    /// `events` receives the summary event.
+    /// `reasoning_key` 标识摘要块，`delta` 是其新观测到的文本，`events` 接收摘要事件。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Nothing; empty text emits no event and does not claim the separator position.
+    /// 无返回值；空文本不发出事件，也不占用分隔位置。
+    fn push_summary_delta(
+        &mut self,
+        reasoning_key: &str,
+        delta: &str,
+        events: &mut Vec<AiStreamEvent>,
+    ) {
+        if delta.is_empty() {
+            return;
+        }
+        // Summaries vary in meaning across providers, so they are shown as thinking but never
+        // replayed; a new part starts a new paragraph so part headings do not run together.
+        // 摘要在各供应商间含义不一，因此作为思考展示但绝不重放；新部分另起段落，避免部分标题粘连。
+        let separator = match self.last_summary_key.as_deref() {
+            Some(previous) if previous != reasoning_key => "\n\n",
+            _ => "",
+        };
+        self.last_summary_key = Some(reasoning_key.to_string());
+        events.push(AiStreamEvent::ReasoningSummaryDelta {
+            delta: format!("{separator}{delta}"),
+        });
     }
 
     /// Decodes a complete reasoning item when a provider buffers part or all of its stream.
@@ -1897,8 +1930,8 @@ impl ProtocolStreamDecoder for OpenAiResponsesStreamDecoder {
                         "OpenAI Responses reasoning item `{reasoning_key}` emitted a delta after completion."
                     )));
                 }
-                let transient_summary = wire_type == "response.reasoning_summary_text.delta";
-                if is_new && !transient_summary {
+                let summary = wire_type == "response.reasoning_summary_text.delta";
+                if is_new && !summary {
                     events.push(AiStreamEvent::ReasoningStarted {
                         item_id: item_id.clone(),
                     });
@@ -1908,19 +1941,12 @@ impl ProtocolStreamDecoder for OpenAiResponsesStreamDecoder {
                 })?;
                 // accumulatedText makes the later full-text completion authoritative without duplication.
                 // accumulatedText 让后续完整文本完成事件可作为权威值且不会重复输出。
-                let summary_text = {
-                    let accumulated_text = self
-                        .reasoning_text
-                        .get_mut(reasoning_key.as_str())
-                        .expect("registered reasoning key must own accumulated text");
-                    accumulated_text.push_str(delta);
-                    transient_summary.then(|| accumulated_text.clone())
-                };
-                if transient_summary {
-                    events.push(AiStreamEvent::ReasoningSummaryUpdated {
-                        item_id,
-                        text: summary_text.expect("transient summary text should be assembled"),
-                    });
+                self.reasoning_text
+                    .get_mut(reasoning_key.as_str())
+                    .expect("registered reasoning key must own accumulated text")
+                    .push_str(delta);
+                if summary {
+                    self.push_summary_delta(reasoning_key.as_str(), delta, &mut events);
                 } else {
                     events.push(AiStreamEvent::ReasoningDelta {
                         item_id,
@@ -3516,8 +3542,8 @@ mod tests {
         assert!(error.to_string().contains("not registered"));
     }
 
-    /// Verifies summary-only Responses reasoning stays transient and never enters replay.
-    /// 验证仅含摘要的 Responses 推理保持临时状态且绝不进入重放。
+    /// Verifies summary-only Responses reasoning is display-only thinking and never enters replay.
+    /// 验证仅含摘要的 Responses 推理只作为展示思考且绝不进入重放。
     #[test]
     fn responses_unsigned_summary_stays_out_of_provider_context() {
         // decoder receives the completed reasoning shape currently returned by DeepSeek Responses.
@@ -3542,10 +3568,7 @@ mod tests {
             )
             .expect("unsigned reasoning should decode");
 
-        assert!(events.iter().any(|event| matches!(
-            event,
-            AiStreamEvent::ReasoningSummaryUpdated { text, .. } if text == "inspect the workspace"
-        )));
+        assert_eq!(summary_text(&events), "inspect the workspace");
         assert!(!events.iter().any(|event| matches!(
             event,
             AiStreamEvent::ProviderContextItemCaptured { .. }
@@ -3983,10 +4006,7 @@ mod tests {
             )
             .expect("buffered reasoning summary should decode");
 
-        assert!(events.iter().any(|event| matches!(
-            event,
-            AiStreamEvent::ReasoningSummaryUpdated { text, .. } if text == "buffered reasoning"
-        )));
+        assert_eq!(summary_text(&events), "buffered reasoning");
         assert!(!events.iter().any(|event| matches!(
             event,
             AiStreamEvent::ReasoningStarted { .. } | AiStreamEvent::ReasoningDelta { .. }
@@ -4114,16 +4134,9 @@ mod tests {
             AiStreamEvent::ReasoningDelta { item_id, delta }
                 if item_id == "responses:execution:reasoning:1" && delta == "second"
         )));
-        assert!(events.iter().any(|event| matches!(
-            event,
-            AiStreamEvent::ReasoningSummaryUpdated { item_id, text }
-                if item_id == "responses:execution:reasoning:2" && text == "summary"
-        )));
-        assert!(events.iter().any(|event| matches!(
-            event,
-            AiStreamEvent::ReasoningSummaryUpdated { item_id, text }
-                if item_id == "responses:execution:reasoning:3" && text == "other summary"
-        )));
+        // Each summary block starts a new paragraph of display-only thinking.
+        // 每个摘要块都在仅展示思考中另起一段。
+        assert_eq!(summary_text(&events), "summary\n\nother summary");
     }
 
     /// Verifies encrypted Responses reasoning stays private while remaining replayable.
@@ -4163,8 +4176,8 @@ mod tests {
         )));
     }
 
-    /// Verifies output-item completion separates transient summaries from full reasoning.
-    /// 验证输出项完成事件会分离临时摘要与完整思考。
+    /// Verifies output-item completion separates display-only summaries from full reasoning.
+    /// 验证输出项完成事件会分离仅展示摘要与完整思考。
     #[test]
     fn responses_output_item_done_emits_buffered_reasoning() {
         // decoder owns one reasoning item delivered without any preceding delta event.
@@ -4178,10 +4191,7 @@ mod tests {
                 r#"{"type":"response.output_item.done","output_index":0,"item":{"id":"rs_buffered","type":"reasoning","summary":[{"type":"summary_text","text":"summary"}],"content":[{"type":"reasoning_text","text":"raw"}],"encrypted_content":"opaque-buffered"}}"#,
             )
             .expect("buffered reasoning item should decode");
-        assert!(buffered.iter().any(|event| matches!(
-            event,
-            AiStreamEvent::ReasoningSummaryUpdated { text, .. } if text == "summary"
-        )));
+        assert_eq!(summary_text(&buffered), "summary");
         assert!(buffered.iter().any(|event| matches!(
             event,
             AiStreamEvent::ReasoningDelta { item_id, delta }
@@ -4245,10 +4255,7 @@ mod tests {
                 r#"{"type":"response.reasoning_summary_text.delta","item_id":"rs_partial","summary_index":0,"delta":"part"}"#,
             )
             .expect("partial reasoning delta should decode");
-        assert!(partial.iter().any(|event| matches!(
-            event,
-            AiStreamEvent::ReasoningSummaryUpdated { text, .. } if text == "part"
-        )));
+        assert_eq!(summary_text(&partial), "part");
         // completed contains only the missing suffix in its public delta projection.
         // completed 的公共增量投影只包含缺失后缀。
         let completed = decoder
@@ -4257,10 +4264,7 @@ mod tests {
                 r#"{"type":"response.reasoning_summary_text.done","item_id":"rs_partial","summary_index":0,"text":"partial"}"#,
             )
             .expect("full reasoning value should extend the prefix");
-        assert!(completed.iter().any(|event| matches!(
-            event,
-            AiStreamEvent::ReasoningSummaryUpdated { text, .. } if text == "partial"
-        )));
+        assert_eq!(summary_text(&completed), "ial");
     }
 
     /// Verifies encrypted reasoning from multiple upstream items keeps exact private identity.

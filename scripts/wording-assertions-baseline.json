@@ -100,7 +100,7 @@
   "crates/vulcan-agent-runtime/src/agent_runtime/prompt_compaction/tests.rs": 1,
   "crates/vulcan-agent-runtime/src/agent_runtime/provider_request_bridge_messages/tests.rs": 4,
   "crates/vulcan-agent-runtime/src/agent_runtime/provider_request_snapshot_builder.rs": 2,
-  "crates/vulcan-agent-runtime/src/agent_runtime/provider_transport_vulcan/accumulator/tests.rs": 9,
+  "crates/vulcan-agent-runtime/src/agent_runtime/provider_transport_vulcan/accumulator/tests.rs": 3,
   "crates/vulcan-agent-runtime/src/agent_runtime/question_runtime.rs": 1,
   "crates/vulcan-agent-runtime/src/agent_runtime/runtime_stream_delta.rs": 3,
   "crates/vulcan-agent-runtime/src/agent_runtime/runtime_stream_finalize.rs": 1,

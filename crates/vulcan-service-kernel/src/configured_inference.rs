@@ -5705,7 +5705,6 @@ fn aggregate_restricted_llm_event(
         | AiStreamEvent::ToolCallArgumentsDelta { .. }
         | AiStreamEvent::ResourceProgress { .. }
         | AiStreamEvent::ReasoningSummaryDelta { .. }
-        | AiStreamEvent::ReasoningSummaryUpdated { .. }
         | AiStreamEvent::ImageGenerationPartial { .. } => {}
         AiStreamEvent::ReasoningCompleted { item_id, signature } => {
             complete_reasoning_output(output_items, item_id, signature);

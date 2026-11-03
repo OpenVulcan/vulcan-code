@@ -61,14 +61,13 @@ fn successful_empty_or_transient_only_response_is_rejected() {
             )
     );
 
-    let transient = accumulated_public_turn(vec![
-        AiStreamEvent::ReasoningSummaryUpdated {
-            item_id: String::from("summary-1"),
-            text: String::from("temporary"),
+    let summary_only = accumulated_public_turn(vec![
+        AiStreamEvent::ReasoningSummaryDelta {
+            delta: String::from("display only"),
         },
         AiStreamEvent::ResponseCompleted,
     ]);
-    assert!(transient.finish().is_err());
+    assert!(summary_only.finish().is_err());
 
     let mut context_only = accumulated_public_turn(vec![AiStreamEvent::ResponseCompleted]);
     context_only.provider_message_id = Some(String::from("provider-message-only"));
@@ -822,8 +821,8 @@ fn reasoning_summary_delta_yields_to_durable_reasoning() {
     assert_eq!(accumulator.reasoning, "durable");
 }
 
-/// Verifies summary status replacement and token updates never enter durable reasoning state.
-/// 验证摘要状态替换与 Token 更新绝不进入持久化思考状态。
+/// Verifies a profile-declared summary status and its token updates stay live-only.
+/// 验证 Profile 声明的摘要状态及其 Token 更新只存在于实时流。
 #[test]
 fn transient_reasoning_summary_is_live_only_and_clears_at_terminal() {
     // live_sender and live_receiver observe the request-local status stream.
@@ -846,18 +845,6 @@ fn transient_reasoning_summary_is_live_only_and_clears_at_terminal() {
     for event in [
         AiStreamEvent::ResponseStarted {
             execution_id: String::from("response-1"),
-        },
-        AiStreamEvent::ReasoningSummaryUpdated {
-            item_id: String::from("summary-0"),
-            text: String::from("正在检查协议"),
-        },
-        AiStreamEvent::ReasoningSummaryUpdated {
-            item_id: String::from("summary-0"),
-            text: String::from("正在检查协议响应"),
-        },
-        AiStreamEvent::ReasoningSummaryUpdated {
-            item_id: String::from("summary-1"),
-            text: String::from("正在核对清单"),
         },
         AiStreamEvent::UsageUpdated {
             usage: Box::new(RequestUsage {
@@ -887,34 +874,7 @@ fn transient_reasoning_summary_is_live_only_and_clears_at_terminal() {
         live_receiver.try_recv(),
         Ok(Ok(ProviderStreamDelta::TransientReasoningStatusChanged(Some(status))))
             if status.kind == TransientReasoningStatusKind::Summary
-                && matches!(status.summaries.as_slice(), [summary]
-                    if summary.item_id == "summary-0" && summary.text == "正在检查协议")
-                && status.reasoning_tokens.is_none()
-    ));
-    assert!(matches!(
-        live_receiver.try_recv(),
-        Ok(Ok(ProviderStreamDelta::TransientReasoningStatusChanged(Some(status))))
-            if status.kind == TransientReasoningStatusKind::Summary
-                && matches!(status.summaries.as_slice(), [summary]
-                    if summary.item_id == "summary-0" && summary.text == "正在检查协议响应")
-                && status.reasoning_tokens.is_none()
-    ));
-    assert!(matches!(
-        live_receiver.try_recv(),
-        Ok(Ok(ProviderStreamDelta::TransientReasoningStatusChanged(Some(status))))
-            if status.kind == TransientReasoningStatusKind::Summary
-                && matches!(status.summaries.as_slice(), [first, second]
-                    if first.item_id == "summary-0"
-                        && first.text == "正在检查协议响应"
-                        && second.item_id == "summary-1"
-                        && second.text == "正在核对清单")
-                && status.reasoning_tokens.is_none()
-    ));
-    assert!(matches!(
-        live_receiver.try_recv(),
-        Ok(Ok(ProviderStreamDelta::TransientReasoningStatusChanged(Some(status))))
-            if status.kind == TransientReasoningStatusKind::Summary
-                && status.summaries.len() == 2
+                && status.summaries.is_empty()
                 && status.reasoning_tokens == Some(321)
     ));
     assert!(matches!(
@@ -934,8 +894,8 @@ fn transient_reasoning_summary_is_live_only_and_clears_at_terminal() {
     );
 }
 
-/// Verifies non-empty full reasoning permanently supersedes summary and encrypted fallbacks.
-/// 验证非空完整思考会永久取代摘要与加密回退状态。
+/// Verifies readable summaries clear the encrypted fallback and full reasoning supersedes both.
+/// 验证可读摘要会清除加密回退状态，而完整思考会取代二者。
 #[test]
 fn durable_reasoning_supersedes_transient_fallbacks() {
     // liveSender and liveReceiver observe the exact fallback-clear ordering.
@@ -958,20 +918,18 @@ fn durable_reasoning_supersedes_transient_fallbacks() {
         AiStreamEvent::ResponseStarted {
             execution_id: String::from("response-priority"),
         },
-        AiStreamEvent::ReasoningSummaryUpdated {
-            item_id: String::from("summary-0"),
-            text: String::from("正在分析"),
+        AiStreamEvent::ReasoningSummaryDelta {
+            delta: String::from("summary "),
         },
         AiStreamEvent::ReasoningStarted {
             item_id: String::from("reasoning-0"),
         },
         AiStreamEvent::ReasoningDelta {
             item_id: String::from("reasoning-0"),
-            delta: String::from("完整思考"),
+            delta: String::from("full reasoning"),
         },
-        AiStreamEvent::ReasoningSummaryUpdated {
-            item_id: String::from("summary-1"),
-            text: String::from("不得重新出现"),
+        AiStreamEvent::ReasoningSummaryDelta {
+            delta: String::from("must not reappear"),
         },
         AiStreamEvent::ReasoningCompleted {
             item_id: String::from("reasoning-0"),
@@ -991,31 +949,32 @@ fn durable_reasoning_supersedes_transient_fallbacks() {
     ));
     assert!(matches!(
         live_receiver.try_recv(),
-        Ok(Ok(ProviderStreamDelta::TransientReasoningStatusChanged(Some(status))))
-            if status.kind == TransientReasoningStatusKind::Summary
-                && status.summaries.len() == 1
-    ));
-    assert!(matches!(
-        live_receiver.try_recv(),
         Ok(Ok(ProviderStreamDelta::TransientReasoningStatusChanged(
             None
         )))
     ));
     assert!(matches!(
         live_receiver.try_recv(),
-        Ok(Ok(ProviderStreamDelta::Thinking(reasoning))) if reasoning == "完整思考"
+        Ok(Ok(ProviderStreamDelta::SummaryThinking(summary))) if summary == "summary "
+    ));
+    assert!(matches!(
+        live_receiver.try_recv(),
+        Ok(Ok(ProviderStreamDelta::Thinking(reasoning))) if reasoning == "full reasoning"
     ));
     assert!(live_receiver.try_recv().is_err());
     assert!(matches!(
         sink.deltas.as_slice(),
-        [ProviderTurnDelta::Thinking { delta }] if delta == "完整思考"
+        [
+            ProviderTurnDelta::Thinking { delta: summary },
+            ProviderTurnDelta::Thinking { delta: reasoning },
+        ] if summary == "summary " && reasoning == "full reasoning"
     ));
     assert_eq!(
         accumulator
             .finish()
             .expect("completed priority turn should finish")
             .assistant_reasoning,
-        "完整思考"
+        "summary full reasoning"
     );
 }
 
