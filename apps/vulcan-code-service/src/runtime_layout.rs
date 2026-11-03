@@ -353,10 +353,16 @@ mod tests {
         );
         assert!(explicit_runtime_layout_path_from(Some("")).is_err());
         assert!(explicit_runtime_layout_path_from(Some("relative/layout.json")).is_err());
+        // absolute uses the host's own absolute form; a drive path is relative on Unix.
+        // absolute 使用宿主自身的绝对路径形式；盘符路径在 Unix 上是相对路径。
+        let absolute = if cfg!(windows) {
+            "C:/release/runtime-layout.json"
+        } else {
+            "/release/runtime-layout.json"
+        };
         assert_eq!(
-            explicit_runtime_layout_path_from(Some("C:/release/runtime-layout.json"))
-                .expect("absolute override"),
-            Some(PathBuf::from("C:/release/runtime-layout.json"))
+            explicit_runtime_layout_path_from(Some(absolute)).expect("absolute override"),
+            Some(PathBuf::from(absolute))
         );
     }
 }

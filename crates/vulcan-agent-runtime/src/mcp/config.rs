@@ -1005,15 +1005,23 @@ mod tests {
 
         // stdio proves arguments, working-directory parents, and environment values are also absent.
         // stdio 证明参数、工作目录父路径与环境变量值同样不会出现。
+        // root is a private absolute directory in the host's own path form.
+        // root 是宿主自身路径形式的私有绝对目录。
+        let root = if cfg!(windows) {
+            r"C:\private"
+        } else {
+            "/private"
+        };
+        let separator = std::path::MAIN_SEPARATOR;
         let stdio = McpServerConfig {
             source: McpServerSource::UserConfigured,
             id: String::from("stdio-redacted"),
             name: String::from("Stdio Redacted"),
             enabled: true,
             transport: McpServerTransportConfig::Stdio {
-                command: String::from(r"C:\private\bin\server.exe"),
+                command: format!("{root}{separator}bin{separator}server.exe"),
                 args: vec![String::from("secret")],
-                cwd: Some(String::from(r"C:\private\workspace")),
+                cwd: Some(format!("{root}{separator}workspace")),
                 env: BTreeMap::from([(
                     String::from("ACCESS_TOKEN"),
                     String::from("environment-secret"),

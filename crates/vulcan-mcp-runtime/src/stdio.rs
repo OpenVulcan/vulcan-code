@@ -513,7 +513,13 @@ mod tests {
 
     #[test]
     fn child_command_builder_preserves_args_cwd_and_env() {
-        let cwd = PathBuf::from("D:/mock/mcp");
+        // cwd is absolute in the host's own form, since Linux compares path text literally.
+        // cwd 采用宿主自身形式的绝对路径，因为 Linux 按字面比较路径文本。
+        let cwd = PathBuf::from(if cfg!(windows) {
+            "D:/mock/mcp"
+        } else {
+            "/mock/mcp"
+        });
         let argv = vec![String::from("--flag"), String::from("value")];
         let mut env = BTreeMap::new();
         env.insert(String::from("VULCAN_MCP_MODE"), String::from("stdio"));

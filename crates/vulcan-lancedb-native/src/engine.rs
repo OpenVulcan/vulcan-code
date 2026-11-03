@@ -1673,6 +1673,12 @@ mod tests {
     /// 本引擎的契约是按表协调读取、普通变更与整理，且 `compaction_gate` 是"防止两个原生整理作用于同一张表的独占闸门"。
     /// 若锁身份比表身份更细，这两条都不成立，因此本测试钉住这一关系的两侧：LanceDB 折叠大小写这一前提，以及锁也必须
     /// 折叠它的这一后果。
+    ///
+    /// The premise holds only on case-insensitive filesystems (Windows, default macOS). Linux filesystems keep
+    /// `CaseProbe` and `caseprobe` as two tables, where the folded lock only serializes them, as `lock_identity` explains.
+    /// 该前提只在不区分大小写的文件系统（Windows、默认 macOS）上成立。Linux 文件系统把 `CaseProbe` 与 `caseprobe`
+    /// 保留为两张表，此时折叠后的锁只会使它们串行化，见 `lock_identity` 的说明。
+    #[cfg(any(windows, target_os = "macos"))]
     #[tokio::test]
     async fn one_physical_table_keeps_one_lock_across_every_name_casing() {
         let (_directory, engine) = isolated_engine(4).await;
