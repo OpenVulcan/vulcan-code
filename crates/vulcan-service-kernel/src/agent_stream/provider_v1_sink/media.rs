@@ -1411,7 +1411,8 @@ fn attachment_text(
     // JSON转义使文件名保持纯数据，同时只披露安全元数据。
     let metadata = serde_json::json!({"resource_id": planned.id.value(), "resource_path": locator, "file_name": planned.entry.as_ref().map(|entry| &entry.original_name), "mime_type": planned.entry.as_ref().and_then(|entry| entry.mime.as_deref()), "byte_len": planned.entry.as_ref().map(|entry| entry.size), "native_delivery": "metadata_only", "reason": reason.explanation(), "upload_failure": upload_failure.map(ToString::to_string)});
     format!(
-        "ATTACHMENT: {metadata}. CONTENT_VISIBILITY: resource bytes were not provided; do not infer or guess the attachment contents."
+        "ATTACHMENT: {metadata}. CONTENT_VISIBILITY: resource bytes were not provided; do not infer or guess the attachment contents. {}",
+        vulcan_agent_runtime::attachment_export::metadata_only_export_hint()
     )
 }
 

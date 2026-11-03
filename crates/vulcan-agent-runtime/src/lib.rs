@@ -25,6 +25,7 @@ pub const AGENT_STREAM_WORKER_STACK_BYTES: usize = 8 * 1024 * 1024;
 pub mod agent_profile;
 pub mod agent_runtime;
 pub mod attachment_asset_index;
+pub mod attachment_export;
 pub mod attachment_assets;
 pub mod context_budget;
 pub mod conversation_protocol;

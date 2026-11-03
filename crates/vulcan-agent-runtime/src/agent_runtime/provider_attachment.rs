@@ -42,9 +42,10 @@ pub(crate) fn build_attachment_transport_error_text(
     let mime_type = model_visible_attachment_field(&attachment.mime_type);
     let scope = model_visible_attachment_field(scope.trim());
     format!(
-        "ATTACHMENT: id={attachment_id}; resource_path={resource_path}; file_name={file_name}; mime_type={mime_type}; byte_len={}. NATIVE_DELIVERY: metadata_only (route {scope} cannot consume {} input). CONTENT_VISIBILITY: resource bytes were not provided; do not infer or guess the attachment contents. No eligible understanding tool is registered for this attachment, so explain that the content cannot be read if the user asks about it.",
+        "ATTACHMENT: id={attachment_id}; resource_path={resource_path}; file_name={file_name}; mime_type={mime_type}; byte_len={}. NATIVE_DELIVERY: metadata_only (route {scope} cannot consume {} input). CONTENT_VISIBILITY: resource bytes were not provided; do not infer or guess the attachment contents. {}",
         attachment.byte_len.unwrap_or_default(),
         attachment.kind.modality_name(),
+        crate::attachment_export::metadata_only_export_hint(),
     )
 }
 
@@ -123,6 +124,7 @@ mod tests {
             build_attachment_transport_error_text(&test_attachment(), "anthropic-messages.v1");
         assert!(message.contains("screen.png"));
         assert!(message.contains("anthropic-messages.v1"));
+        assert!(message.contains(crate::attachment_export::ATTACHMENT_EXPORT_TOOL_ID));
     }
 
     /// Verifies host-tool hints name the actual media modality instead of a fixed image label.

@@ -1319,7 +1319,7 @@
   "composer.attachment.remove": "Quitar el adjunto",
   "composer.attachment.processing": "Confirmando el recurso subido",
   "composer.attachment.preparationBlocked": "Todavía se están preparando {count} adjuntos. Espera a que terminen antes de enviar.",
-  "composer.attachment.metadataOnly": "Este adjunto solo se comunicará como metadatos y no se enviará para que el modelo lo interprete directamente.",
+  "composer.attachment.metadataOnly": "Este adjunto solo se comunica como metadatos y no se envía para que el modelo lo interprete directamente; si hace falta, el modelo puede exportar una copia al espacio de trabajo y abrirla con otras herramientas.",
   "composer.attachment.details": "Ver los detalles del adjunto",
   "composer.attachment.failed": "No se pudo preparar el adjunto",
   "composer.attachment.retry": "Reintentar la subida",

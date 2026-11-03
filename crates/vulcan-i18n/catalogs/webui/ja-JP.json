@@ -1319,7 +1319,7 @@
   "composer.attachment.remove": "添付ファイルを削除",
   "composer.attachment.processing": "アップロードしたリソースを確認しています",
   "composer.attachment.preparationBlocked": "{count} 個の添付ファイルをまだ準備中です。完了してから送信してください。",
-  "composer.attachment.metadataOnly": "この添付ファイルはメタデータとしてのみ開示され、モデルが直接理解するためには送信されません。",
+  "composer.attachment.metadataOnly": "この添付ファイルはメタデータとしてのみ開示され、モデルが直接理解するためには送信されません。必要に応じて、モデルはコピーをワークスペースに書き出し、他のツールで開けます。",
   "composer.attachment.details": "添付ファイルの詳細を表示",
   "composer.attachment.failed": "添付ファイルの準備に失敗しました",
   "composer.attachment.retry": "アップロードを再試行",

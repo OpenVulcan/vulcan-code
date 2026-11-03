@@ -1319,7 +1319,7 @@
   "composer.attachment.remove": "Remove attachment",
   "composer.attachment.processing": "Confirming uploaded resource",
   "composer.attachment.preparationBlocked": "{count} attachment(s) are still being prepared. Wait for completion before sending.",
-  "composer.attachment.metadataOnly": "This attachment will be disclosed as metadata only and will not be sent for direct model understanding.",
+  "composer.attachment.metadataOnly": "This attachment is disclosed as metadata only and not sent for direct model understanding; the model can export a copy to the workspace and open it with other tools when needed.",
   "composer.attachment.details": "View attachment details",
   "composer.attachment.failed": "Attachment preparation failed",
   "composer.attachment.retry": "Retry upload",

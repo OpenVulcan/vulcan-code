@@ -1319,7 +1319,7 @@
   "composer.attachment.remove": "Retirer la pièce jointe",
   "composer.attachment.processing": "Confirmation de la ressource envoyée",
   "composer.attachment.preparationBlocked": "{count} pièce(s) jointe(s) en cours de préparation. Attendez la fin avant d’envoyer.",
-  "composer.attachment.metadataOnly": "Cette pièce jointe sera signalée uniquement sous forme de métadonnées et ne sera pas envoyée au modèle pour qu’il l’interprète directement.",
+  "composer.attachment.metadataOnly": "Cette pièce jointe est signalée uniquement sous forme de métadonnées et n’est pas envoyée au modèle pour qu’il l’interprète directement ; au besoin, le modèle peut en exporter une copie dans l’espace de travail et l’ouvrir avec d’autres outils.",
   "composer.attachment.details": "Voir les détails de la pièce jointe",
   "composer.attachment.failed": "Échec de la préparation de la pièce jointe",
   "composer.attachment.retry": "Réessayer l’envoi",

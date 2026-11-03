@@ -1319,7 +1319,7 @@
   "composer.attachment.remove": "移除附件",
   "composer.attachment.processing": "正在確認上載的資源",
   "composer.attachment.preparationBlocked": "仍有 {count} 個附件正在準備，完成後才能傳送。",
-  "composer.attachment.metadataOnly": "此附件不會直接交給模型理解，只會以附件清單告知模型。",
+  "composer.attachment.metadataOnly": "此附件不會直接交給模型理解，只會以附件清單告知模型；模型可按需把副本匯出到工作區，再用其他工具讀取。",
   "composer.attachment.details": "檢視附件詳細資訊",
   "composer.attachment.failed": "附件處理失敗",
   "composer.attachment.retry": "重試上載",
