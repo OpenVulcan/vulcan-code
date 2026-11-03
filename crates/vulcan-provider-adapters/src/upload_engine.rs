@@ -1455,7 +1455,7 @@ async fn upload_temporary_oss_object(
     let file_name = format!(
         "resource-{}{}",
         &digest[..16],
-        temporary_upload_extension(resource.mime_type.as_str())
+        upload_file_extension(resource.mime_type.as_str())
     );
     let object_key = format!(
         "{}/{}",
@@ -1683,8 +1683,10 @@ async fn hash_signed_upload_source(
     Ok(hex::encode(hash.finalize()))
 }
 
-/// Maps one trusted MIME type to a safe temporary object extension.
-/// 将一个受信任 MIME 类型映射为安全临时对象扩展名。
+/// Maps one trusted MIME type to a safe uploaded file extension, for temporary objects and
+/// multipart file parts whose upstream infers the format from the file name.
+/// 将一个受信任 MIME 类型映射为安全的上传文件扩展名，用于临时对象及上游按文件名推断格式的
+/// Multipart 文件部分。
 ///
 /// # Parameters
 /// 参数
@@ -1695,7 +1697,7 @@ async fn hash_signed_upload_source(
 /// 返回值
 /// A fixed non-user-controlled extension.
 /// 返回固定且不受用户控制的扩展名。
-fn temporary_upload_extension(mime_type: &str) -> &'static str {
+pub(crate) fn upload_file_extension(mime_type: &str) -> &'static str {
     match mime_type {
         "image/jpeg" => ".jpg",
         "image/png" => ".png",
@@ -1704,6 +1706,8 @@ fn temporary_upload_extension(mime_type: &str) -> &'static str {
         "audio/wav" | "audio/x-wav" => ".wav",
         "audio/aac" => ".aac",
         "audio/flac" => ".flac",
+        "audio/mp4" => ".m4a",
+        "audio/webm" => ".webm",
         "video/mp4" => ".mp4",
         "video/quicktime" => ".mov",
         _ => ".bin",

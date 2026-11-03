@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "openai",
-  "revision": 25,
-  "published_at": "2026-11-03T06:08:20Z",
+  "revision": 26,
+  "published_at": "2026-11-03T06:48:28Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -10,9 +10,9 @@
       "openai-responses.v1",
       "openai-codex-responses.v1"
     ],
-    "required_execution_primitives": ["http_json_sync"],
-    "required_upload_primitives": ["multipart_file", "signed_object_upload"],
-    "required_transformers": ["copy_request_field"]
+    "required_execution_primitives": ["http_json_sync", "http_multipart_sse"],
+    "required_upload_primitives": ["inline_data_url", "multipart_file", "signed_object_upload"],
+    "required_transformers": ["copy_request_field", "rebuild_json_template"]
   },
   "display": {
     "name": "OpenAI",
@@ -653,6 +653,47 @@
       "provenance_ref": "https://developers.openai.com/api/reference/resources/images/methods/generate"
     },
     {
+      "rule_id": "public-api-gpt-transcribe",
+      "display_name": "GPT Transcribe",
+      "scope": {
+        "service_entry_ids": [
+          "public-api"
+        ],
+        "credential_profile_ids": [
+          "api-key"
+        ]
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "gpt-transcribe"
+      },
+      "supported_protocols": [
+        "openai-responses.v1"
+      ],
+      "selected_protocol": "openai-responses.v1",
+      "default_enabled": false,
+      "capabilities": {
+        "operations": [
+          "speech_transcribe"
+        ],
+        "input_resources": [
+          "audio"
+        ],
+        "output_resources": [],
+        "reasoning": "unsupported",
+        "reasoning_control": "fixed_off",
+        "reasoning_efforts": [],
+        "provider_native_tools": [],
+        "context_limit": null,
+        "output_limit": null,
+        "evidence_revision": "openai.public-api.transcriptions.20261103"
+      },
+      "operation_refs": [
+        "public-api.gpt-transcribe.speech-transcribe"
+      ],
+      "provenance_ref": "https://developers.openai.com/api/docs/guides/speech-to-text"
+    },
+    {
       "rule_id": "codex-gpt-5-6-luna",
       "display_name": "GPT-5.6 Luna",
       "matcher": {"kind": "exact", "value": "gpt-5.6-luna"},
@@ -965,6 +1006,25 @@
           }
         ]
       }
+    },
+    {
+      "profile_id": "openai.audio.transcriptions.request.v1",
+      "description": "Build the streamed OpenAI Audio transcriptions form fields.",
+      "payload": {
+        "profile_id": "openai.audio.transcriptions.request.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "file": {"$vulcan_ref": {"path": "/file"}},
+              "model": {"$vulcan_model_id": true},
+              "stream": true,
+              "prompt": {"$vulcan_ref": {"path": "/prompt", "optional": true}}
+            }
+          }
+        ]
+      }
     }
   ],
   "response_profiles": [],
@@ -1202,6 +1262,17 @@
       "cancellation_supported": true,
       "reference_encoding": "provider_file_id",
       "reference_scope": "credential"
+    },
+    {
+      "upload_channel_id": "public-api.audio-data-url",
+      "description": "Materialize one local audio file as an inline Data URL for the multipart transcription request; the Audio API caps files at 25 MB.",
+      "primitive": "inline_data_url",
+      "accepted_mime_types": ["audio/mpeg", "audio/mp4", "audio/wav", "audio/webm"],
+      "max_bytes": 26214400,
+      "max_count": 1,
+      "progress_supported": false,
+      "cancellation_supported": false,
+      "reference_encoding": "response_url"
     }
   ],
   "operations": [
@@ -1236,6 +1307,37 @@
       "response_profile_refs": [],
       "upload_channel_refs": [],
       "upload_bindings": [],
+      "timeout_ms": 300000,
+      "idempotent": false
+    },
+    {
+      "operation_id": "public-api.gpt-transcribe.speech-transcribe",
+      "operation": "speech_transcribe",
+      "carrier": "provider_tool",
+      "input_resources": ["audio"],
+      "output_resources": [],
+      "tool_target_refs": ["public-api.gpt-transcribe.speech-transcribe"],
+      "request_profile_refs": ["openai.audio.transcriptions.request.v1"],
+      "response_profile_refs": [],
+      "upload_channel_refs": ["public-api.audio-data-url"],
+      "upload_bindings": [
+        {
+          "source_path": "/audio_path",
+          "target_path": "/file",
+          "upload_channel_refs": ["public-api.audio-data-url"],
+          "mime_types_by_extension": {
+            "mp3": "audio/mpeg",
+            "mpeg": "audio/mpeg",
+            "mpga": "audio/mpeg",
+            "mp4": "audio/mp4",
+            "m4a": "audio/mp4",
+            "wav": "audio/wav",
+            "webm": "audio/webm"
+          },
+          "required": true,
+          "remove_source": true
+        }
+      ],
       "timeout_ms": 300000,
       "idempotent": false
     }
@@ -1950,6 +2052,65 @@
         "adapter": "generic_json",
         "execution_kind": "http_json_sync"
       }
+    },
+    {
+      "target_id": "public-api.gpt-transcribe.speech-transcribe",
+      "description": "Transcribe one local audio file in its original language with gpt-transcribe through the official OpenAI Audio API. Accepts mp3, mp4, mpeg, mpga, m4a, wav and webm files up to 25 MB; split longer recordings before calling.",
+      "service_entry_id": "public-api",
+      "credential_profile_ids": [
+        "api-key"
+      ],
+      "upstream_target_id": "gpt-transcribe",
+      "availability_model_ids_any": [
+        "gpt-transcribe"
+      ],
+      "display_name": "GPT Transcribe",
+      "tool_id": "vulcan_speech_transcribe",
+      "capability": "speech_transcribe",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "audio_path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Local audio file path."
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional context such as names, terms or the preceding transcript; it guides spelling and is not an instruction."
+          }
+        },
+        "required": [
+          "audio_path"
+        ]
+      },
+      "output": {
+        "kind": "text",
+        "source_path": "/text",
+        "normalized_result_path": "text"
+      },
+      "execution": {
+        "endpoint_path": "/audio/transcriptions",
+        "authentication": "bearer_authorization",
+        "adapter": "generic_json",
+        "execution_kind": "http_multipart_sse",
+        "multipart_request": {
+          "fields": [
+            {"argument_path": "/file", "field_name": "file", "file": true, "required": true},
+            {"argument_path": "/model", "field_name": "model", "required": true},
+            {"argument_path": "/stream", "field_name": "stream", "required": true},
+            {"argument_path": "/prompt", "field_name": "prompt"}
+          ]
+        },
+        "sse_events": {
+          "event_type_path": "/type",
+          "nonterminal_event_types": ["transcript.text.delta"],
+          "terminal_event_types": ["transcript.text.done"],
+          "allow_done_record": true
+        }
+      }
     }
   ],
   "provenance": {
@@ -1986,6 +2147,14 @@
       {
         "url": "builtin:openai.codex.context.user-declaration.20261031",
         "note": "On 2026-10-31 the user explicitly aligned the context declaration of all seven registered Codex subscription conversation models with the public API at 1050000 tokens. The previous 272000-token default must not be used as their model context ceiling. Session-level dynamic context-window selection and compaction remain independent and unchanged. Model inventory, output declarations and reasoning settings are unchanged. This supersedes the earlier unchanged-Codex scope note for context limits only; no live capacity test was performed."
+      },
+      {
+        "url": "https://developers.openai.com/api/docs/guides/speech-to-text",
+        "note": "Official guidance on 2026-11-03 recommends gpt-transcribe for recorded files on POST /audio/transcriptions: mp3, mp4, mpeg, mpga, m4a, wav and webm up to 25 MB, optional prompt, and stream=true emitting transcript.text.delta then transcript.text.done with text. whisper-1 and the gpt-4o transcribe models shut down on 2027-02-26 and are not registered."
+      },
+      {
+        "url": "https://developers.openai.com/api/docs/models/gpt-transcribe",
+        "note": "The model page lists v1/audio/transcriptions as supported at 0.0045 USD per minute. The languages and keywords array fields are not projected because the multipart executor only sends scalar fields. Authenticated discovery on 2026-11-03 listed gpt-transcribe; no paid transcription was run for this declaration."
       }
     ],
     "verified_at": "2026-10-29T13:36:33Z"

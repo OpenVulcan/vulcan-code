@@ -538,8 +538,9 @@ async fn execute_generic_multipart_sse_request(
                 )
             })?;
             let (mime_type, bytes) = decode_bounded_multipart_data_url(data_url)?;
+            let extension = crate::upload_engine::upload_file_extension(mime_type.as_str());
             let part = reqwest::multipart::Part::bytes(bytes)
-                .file_name(format!("{}.bin", field.field_name))
+                .file_name(format!("{}{extension}", field.field_name))
                 .mime_str(mime_type.as_str())
                 .map_err(|error| {
                     format!(

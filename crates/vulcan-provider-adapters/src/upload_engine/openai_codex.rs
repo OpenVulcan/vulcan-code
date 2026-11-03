@@ -178,7 +178,7 @@ fn openai_codex_file_name(resource: &UploadResource) -> Result<String, MediaUplo
         .unwrap_or_else(|| {
             format!(
                 "resource{}",
-                temporary_upload_extension(resource.mime_type.as_str())
+                upload_file_extension(resource.mime_type.as_str())
             )
         });
     let valid = candidate.len() <= 255

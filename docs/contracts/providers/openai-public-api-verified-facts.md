@@ -64,6 +64,34 @@
 - [官方图片参数与尺寸约束](https://developers.openai.com/api/docs/guides/image-prompting)
 - [官方图片生成指南](https://developers.openai.com/api/docs/guides/image-generation)
 
+## 音频文件转写
+
+核对日期：2026-11-03。媒体入口只注册 `gpt-transcribe` 一个转写模型，声明为 `speech_transcribe`
+操作，默认不启用，由用户在模型列表中开启；工具目标按凭据目录中存在该模型门控。它是 AI 调用的
+文件转写工具，与面向用户的实时语音输入无关；实时转写模型 `gpt-live-transcribe` 只支持 Realtime
+会话、不支持 `/audio/transcriptions`，不在本目标中注册。
+
+| 项目 | 注册范围 |
+| --- | --- |
+| 接口 | `POST /audio/transcriptions`，Multipart 表单，Bearer API Key |
+| 文件 | mp3、mp4、mpeg、mpga、m4a、wav、webm，单文件不超过 25 MB；超限直接报错，不自动切分 |
+| 参数 | `model` 固定为目标模型；`stream` 固定为 `true`；可选 `prompt` 作为拼写与上下文提示 |
+| 响应 | SSE：`transcript.text.delta` 为中间事件，`transcript.text.done` 为终止事件，取其 `text` |
+
+上游按文件名推断音频格式，因此 Multipart 文件部分按 MIME 使用对应扩展名（如 `file.mp3`），
+不再使用 `.bin`。`languages` 与 `keywords` 是数组字段，当前 Multipart 执行器只发送标量字段，
+所以暂不开放，由模型自动识别语言。
+
+`whisper-1`、`gpt-4o-transcribe`、`gpt-4o-mini-transcribe`、`gpt-4o-transcribe-diarize` 已被官方
+弃用并将于 2027-02-26 停服；`gpt-realtime-whisper` 是官方迁移指南中的旧实时路径。这些模型均不注册。
+
+- [官方语音转文字指南](https://developers.openai.com/api/docs/guides/speech-to-text)
+- [GPT-Transcribe 模型资料](https://developers.openai.com/api/docs/models/gpt-transcribe)
+- [从 Whisper 迁移](https://developers.openai.com/cookbook/examples/migrating_from_whisper_to_gpt_transcribe)
+
+本次只用本地回环 fixture 校验请求表单（文件名、MIME、模型、流式与提示字段）和流式解码，未执行
+线上付费转写。
+
 ## 公共能力配置与执行边界
 
 这十一条记录同步进入公共模型能力表。八个对话模型同步窗口、输出上限、输入输出模态、思考支持、

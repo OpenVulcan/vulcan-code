@@ -1,0 +1,144 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "openai-gpt-transcribe-multipart-sse",
+  "base_manifest": "openai.json",
+  "production_target_refs": [
+    "openai::public-api.gpt-transcribe.speech-transcribe"
+  ],
+  "tool_target": {
+    "target_id": "public-api.fixture-gpt-transcribe-multipart-sse",
+    "description": "Streamed multipart transcription fixture mirroring the official Audio API target.",
+    "service_entry_id": "public-api",
+    "credential_profile_ids": ["api-key"],
+    "upstream_target_id": "gpt-transcribe",
+    "display_name": "GPT Transcribe Multipart SSE Fixture",
+    "tool_id": "fixture_openai_gpt_transcribe_multipart_sse",
+    "capability": "speech_transcribe",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "audio_path": {"type": "string", "minLength": 1},
+        "prompt": {"type": "string", "minLength": 1}
+      },
+      "required": ["audio_path"]
+    },
+    "output": {
+      "kind": "text",
+      "source_path": "/text",
+      "normalized_result_path": "text"
+    },
+    "execution": {
+      "endpoint_path": "/fixtures/audio/transcriptions",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "http_multipart_sse",
+      "multipart_request": {
+        "fields": [
+          {"argument_path": "/file", "field_name": "file", "file": true, "required": true},
+          {"argument_path": "/model", "field_name": "model", "required": true},
+          {"argument_path": "/stream", "field_name": "stream", "required": true},
+          {"argument_path": "/prompt", "field_name": "prompt"}
+        ]
+      },
+      "sse_events": {
+        "event_type_path": "/type",
+        "nonterminal_event_types": ["transcript.text.delta"],
+        "terminal_event_types": ["transcript.text.done"],
+        "allow_done_record": true
+      }
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.openai-gpt-transcribe-multipart-sse",
+    "operation": "speech_transcribe",
+    "carrier": "provider_tool",
+    "input_resources": ["audio"],
+    "output_resources": [],
+    "tool_target_refs": ["public-api.fixture-gpt-transcribe-multipart-sse"],
+    "request_profile_refs": ["fixture.openai.audio.transcriptions.request.v1"],
+    "response_profile_refs": [],
+    "upload_channel_refs": ["fixture.openai-audio-data-url"],
+    "upload_bindings": [
+      {
+        "source_path": "/audio_path",
+        "target_path": "/file",
+        "upload_channel_refs": ["fixture.openai-audio-data-url"],
+        "mime_types_by_extension": {
+          "mp3": "audio/mpeg",
+          "m4a": "audio/mp4",
+          "wav": "audio/wav",
+          "webm": "audio/webm"
+        },
+        "required": true,
+        "remove_source": true
+      }
+    ],
+    "timeout_ms": 60000,
+    "idempotent": false
+  },
+  "upload_channels": [
+    {
+      "upload_channel_id": "fixture.openai-audio-data-url",
+      "description": "Fixture audio Data URL channel.",
+      "primitive": "inline_data_url",
+      "accepted_mime_types": ["audio/mpeg", "audio/mp4", "audio/wav", "audio/webm"],
+      "max_bytes": 1024,
+      "max_count": 1,
+      "progress_supported": false,
+      "cancellation_supported": false,
+      "reference_encoding": "response_url"
+    }
+  ],
+  "request_profiles": [
+    {
+      "profile_id": "fixture.openai.audio.transcriptions.request.v1",
+      "description": "Fixture copy of the streamed Audio transcriptions form fields.",
+      "payload": {
+        "profile_id": "fixture.openai.audio.transcriptions.request.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "file": {"$vulcan_ref": {"path": "/file"}},
+              "model": {"$vulcan_model_id": true},
+              "stream": true,
+              "prompt": {"$vulcan_ref": {"path": "/prompt", "optional": true}}
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "response_profiles": [],
+  "required_execution_primitives": ["http_multipart_sse"],
+  "required_upload_primitives": ["inline_data_url"],
+  "required_transformers": ["rebuild_json_template"],
+  "arguments": {
+    "audio_path": "openai-transcribe-fixture.mp3",
+    "prompt": "Vulcan Code, LuaSkills"
+  },
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/fixtures/audio/transcriptions",
+      "expected_headers": {
+        "accept": "text/event-stream"
+      },
+      "expected_body_contains": [
+        "name=\"file\"; filename=\"file.mp3\"",
+        "Content-Type: audio/mpeg",
+        "openai-transcribe-fixture-audio-bytes",
+        "name=\"model\"\r\n\r\ngpt-transcribe\r\n",
+        "name=\"stream\"\r\n\r\ntrue\r\n",
+        "name=\"prompt\"\r\n\r\nVulcan Code, LuaSkills\r\n"
+      ],
+      "response_status": 200,
+      "response_text_body": "data: {\"type\":\"transcript.text.delta\",\"delta\":\"Hello\"}\n\ndata: {\"type\":\"transcript.text.delta\",\"delta\":\" world.\"}\n\ndata: {\"type\":\"transcript.text.done\",\"text\":\"Hello world.\",\"languages\":[\"en\"]}\n\ndata: [DONE]\n\n",
+      "response_content_type": "text/event-stream"
+    }
+  ],
+  "expected_output_kind": "text",
+  "expected_text_output": "Hello world."
+}
