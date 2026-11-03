@@ -139,9 +139,10 @@ for (const failure of ['', 'linux-system', 'protoc']) {
       });
       assert.equal(result.error, undefined);
       assert.equal(result.status, failure ? 17 : 0, result.stdout + result.stderr);
-      // steps describes successful dispatch; a failing prerequisite remains the last recorded step.
-      // steps 描述成功分发顺序；失败的前置项必须成为最后一个被记录的步骤。
-      const steps = ['linux-system', 'rust-tools', 'host', 'tools', 'lua', 'protoc', 'managed-node'];
+      // steps describes successful dispatch, with managed Node once per distribution profile (debug, release);
+      // a failing prerequisite remains the last recorded step.
+      // steps 描述成功分发顺序，受管 Node 按发行模式（debug、release）各一次；失败的前置项必须成为最后一个被记录的步骤。
+      const steps = ['linux-system', 'rust-tools', 'tools', 'lua', 'protoc', 'managed-node', 'managed-node'];
       assert.deepEqual(readFileSync(log, 'utf8').trim().split('\n'), failure ? steps.slice(0, steps.indexOf(failure) + 1) : steps);
     });
 }

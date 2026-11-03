@@ -22,6 +22,12 @@ const service = vi.hoisted(() => ({
   saveProjectReviewRules: vi.fn(),
 }));
 vi.mock("@/service/permission-judge-service", () => service);
+// The page also hosts the review prompt section, whose service is synthetic as well.
+// 页面同时包含复核提示词区块，其服务同样为合成。
+vi.mock("@/service/review-prompt-service", () => ({
+  loadReviewPromptSystemDefault: vi.fn().mockResolvedValue({ prompt: "", maxChars: 4000 }),
+  saveReviewPromptSystemDefault: vi.fn(),
+}));
 
 const { PermissionJudgeReviewRulesPage } = await import("./permission-judge-review-rules-page");
 

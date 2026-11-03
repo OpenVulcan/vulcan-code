@@ -136,10 +136,16 @@ int main(int argc, char **argv) {
 }\n`);
   execFileSync('cc', ['-DGENERATION=0', nativeSource, '-o', core]);
   execFileSync('cc', [`-DGENERATION=${generation}`, nativeSource, '-o', candidate]);
-  // Cargo's executable protocol points only to the candidate compiled above.
-  // Cargo 可执行制品协议仅指向上面已编译的候选。
+  // Cargo's artifact protocol points only to the candidate compiled above, or, for the separate library
+  // invocation, to a stand-in LanceDB library that the restart publishes beside the service.
+  // Cargo 制品协议仅指向上面已编译的候选；独立的库调用则指向一个替身 LanceDB 库，重启时将其发布到服务旁。
+  const library = path.join(root, 'libvulcan_lancedb_native.so');
+  await writeFile(library, 'library');
   await writeFile(path.join(root, 'cargo'), '#!/usr/bin/env node\n'
-    + `console.log(${JSON.stringify(JSON.stringify({ reason: 'compiler-artifact', target: { name: 'vulcan-code-service', kind: ['bin'] }, executable: candidate }))});\n`
+    + `const artifact = process.argv.includes('vulcan-lancedb-native')\n`
+    + `  ? ${JSON.stringify({ reason: 'compiler-artifact', target: { name: 'vulcan_lancedb_native', kind: ['cdylib'] }, filenames: [library] })}\n`
+    + `  : ${JSON.stringify({ reason: 'compiler-artifact', target: { name: 'vulcan-code-service', kind: ['bin'] }, executable: candidate })};\n`
+    + `console.log(JSON.stringify(artifact));\n`
     + `console.log(${JSON.stringify(JSON.stringify({ reason: 'build-finished', success: true }))});\n`, { mode: 0o755 });
   const owner = spawn(core, ['--headless'], { stdio: 'ignore' });
   await new Promise((resolve, reject) => { owner.once('spawn', resolve); owner.once('error', reject); });
