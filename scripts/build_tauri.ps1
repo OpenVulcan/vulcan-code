@@ -84,6 +84,7 @@ if ($Release) {
     # CargoBuildArguments 从锁定的注册表依赖图以 release 模式选择全部分发 Rust 包。
     $CargoBuildArguments = @('build', '--locked') + @(Get-ShippedRustPackageArguments -Kind binary) + @('--release')
     $CargoLibraryBuildArguments = @('build', '--locked') + @(Get-ShippedRustPackageArguments -Kind library) + @('--release')
+    $CargoIsolatedBuildArguments = @('build', '--locked') + @(Get-ShippedRustPackageArguments -Kind isolated) + @('--release')
 }
 else {
     # CargoBuildArguments selects every shipped Rust package in debug mode from the locked registry graph.
@@ -92,7 +93,14 @@ else {
     # CargoLibraryBuildArguments builds the shipped libraries alone, so they never take the service's features.
     # CargoLibraryBuildArguments 单独构建分发库，使其绝不沾染服务的特性。
     $CargoLibraryBuildArguments = @('build', '--locked') + @(Get-ShippedRustPackageArguments -Kind library)
+    # CargoIsolatedBuildArguments builds the Windows launcher alone, so other packages never change its bytes.
+    # CargoIsolatedBuildArguments 单独构建 Windows 启动器，使其他包绝不改变其字节。
+    $CargoIsolatedBuildArguments = @('build', '--locked') + @(Get-ShippedRustPackageArguments -Kind isolated)
 }
+# SeparateBuildArguments lists the invocations besides the binaries; isolated items exist only on some platforms.
+# SeparateBuildArguments 列出可执行文件之外的独立调用；isolated 项只存在于部分平台。
+$SeparateBuildArguments = @(,$CargoLibraryBuildArguments)
+if (@(Get-ShippedRustPackageArguments -Kind isolated).Count -gt 0) { $SeparateBuildArguments += ,$CargoIsolatedBuildArguments }
 
 # BuildProfileName names the selected artifact profile in diagnostics.
 # BuildProfileName 在诊断中标识所选制品 profile。
@@ -128,7 +136,7 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Host "==> Building Vulcan Core $BuildProfileName..."
 # CargoBuildResult retains the exit status and authoritative artifact paths for cleanup and publishing.
 # CargoBuildResult 保留退出状态及权威制品路径，供清理和发布使用。
-$CargoBuildResult = Invoke-TrackedCargoBuild -BuildArguments $CargoBuildArguments -SeparateBuildArguments @(,$CargoLibraryBuildArguments)
+$CargoBuildResult = Invoke-TrackedCargoBuild -BuildArguments $CargoBuildArguments -SeparateBuildArguments $SeparateBuildArguments
 if ($CargoBuildResult.ExitCode -ne 0) {
     exit $CargoBuildResult.ExitCode
 }
@@ -185,6 +193,20 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 # BuiltLanceLibraryPath stores the C dynamic library Cargo reported, never a guessed file.
 # BuiltLanceLibraryPath 保存 Cargo 报告的 C 动态库，绝不猜测文件。
 $BuiltLanceLibraryPath = [string](@($CargoBuildResult.Artifacts | Where-Object { $_.target.name -eq 'vulcan_lancedb_native' -and $_.target.kind -contains 'cdylib' }).filenames | Where-Object { [IO.Path]::GetFileName($_) -eq $LanceLibraryFileName })
+
+# BuiltIsolatedPaths stores the isolated programs Cargo reported (the Windows launcher and PATH forwarder);
+# the installer copies them out of the version tree.
+# BuiltIsolatedPaths 保存 Cargo 报告的独立构建程序（Windows 启动器与 PATH 转发器）；安装程序从版本目录中复制它们。
+$BuiltIsolatedPaths = @(
+    foreach ($Item in @(Get-Content -LiteralPath (Join-Path $PSScriptRoot 'shipped-rust-packages.json') -Raw -Encoding UTF8 | ConvertFrom-Json)) {
+        if (-not $Item.isolated -or ($Item.platforms -and -not ($IsWindowsPlatform -and $Item.platforms -contains 'win32'))) { continue }
+        $BuiltPath = [string]($CargoBuildResult.Artifacts | Where-Object { $_.target.name -eq $Item.binary -and $_.target.kind -contains 'bin' }).executable
+        if ([string]::IsNullOrWhiteSpace($BuiltPath) -or -not (Test-Path -LiteralPath $BuiltPath)) {
+            throw "Built $($Item.binary) was not found: $BuiltPath"
+        }
+        $BuiltPath
+    }
+)
 
 # DistributionRoot selects the same validated output boundary as sync and desktop packaging.
 # DistributionRoot 选择与同步和桌面打包相同的已验证输出边界。
@@ -249,6 +271,9 @@ Copy-Item -LiteralPath $BuiltTerminalHostPath -Destination $OutputTerminalHostPa
 Copy-Item -LiteralPath $BuiltJudgeHostPath -Destination $OutputJudgeHostPath -Force -ErrorAction Stop
 Copy-Item -LiteralPath $BuiltTuiPath -Destination $OutputTuiPath -Force -ErrorAction Stop
 Copy-Item -LiteralPath $BuiltLanceLibraryPath -Destination (Join-Path $OutputBinDir $LanceLibraryFileName) -Force -ErrorAction Stop
+foreach ($BuiltPath in $BuiltIsolatedPaths) {
+    Copy-Item -LiteralPath $BuiltPath -Destination (Join-Path $OutputBinDir ([IO.Path]::GetFileName($BuiltPath))) -Force -ErrorAction Stop
+}
 & node (Join-Path $PSScriptRoot 'desktop-runtime.mjs') package $BuildProfileName
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Host "==> Distribution published: $DistributionRoot"

@@ -8,7 +8,19 @@ import path from 'node:path';
 // shippedRustPackages 同时供 PowerShell 构建和第三方声明清单使用。
 // Each item names either an executable (`binary`) or a C dynamic library (`library`) shipped in `bin`.
 // 每项要么指名一个可执行文件（`binary`），要么指名一个 C 动态库（`library`），均分发在 `bin` 中。
-export const shippedRustPackages = JSON.parse(readFileSync(new URL('./shipped-rust-packages.json', import.meta.url), 'utf8'));
+// `platforms` limits an item to the listed Node platforms; `isolated` builds it in its own Cargo invocation.
+// `platforms` 把某项限定在所列 Node 平台；`isolated` 使其在独立的 Cargo 调用中构建。
+const inventory = JSON.parse(readFileSync(new URL('./shipped-rust-packages.json', import.meta.url), 'utf8'));
+
+// shippedRustPackagesFor returns the items shipped on platform.
+// shippedRustPackagesFor 返回在 platform 上分发的清单项。
+export function shippedRustPackagesFor(platform) {
+  return inventory.filter(item => !item.platforms || item.platforms.includes(platform));
+}
+
+// shippedRustPackages holds the items shipped on the current platform.
+// shippedRustPackages 保存在当前平台上分发的清单项。
+export const shippedRustPackages = shippedRustPackagesFor(process.platform);
 
 // shippedFileName returns the Cargo output file name of one inventory item on platform.
 // shippedFileName 返回某清单项在 platform 上的 Cargo 输出文件名。
@@ -21,21 +33,28 @@ export function shippedFileName(item, platform = process.platform) {
 // shippedArtifactNames returns every required file name for platform; package/target aliases come from Cargo declarations.
 // shippedArtifactNames 返回 platform 对应的全部必需文件名；包与目标别名来自 Cargo 声明。
 export function shippedArtifactNames(platform = process.platform) {
-  return shippedRustPackages.map(item => shippedFileName(item, platform));
+  return shippedRustPackagesFor(platform).map(item => shippedFileName(item, platform));
 }
 
-// shippedCargoArgs returns `-p` selectors for one kind; libraries build in their own Cargo invocation.
-// shippedCargoArgs 返回某一类的 `-p` 选择参数；库在独立的 Cargo 调用中构建。
+// shippedCargoArgs returns `-p` selectors for one kind (`binary`, `library` or `isolated`) on platform; each
+// kind builds in its own Cargo invocation, and `isolated` items never join the other two.
+// shippedCargoArgs 返回 platform 上某一类（`binary`、`library` 或 `isolated`）的 `-p` 选择参数；每类在独立的
+// Cargo 调用中构建，`isolated` 项从不加入另外两类。
 // The service is outside Hakari traversal, so building a library beside it would compile LanceDB with the
 // service's private dependency features, a second variant distinct from every other library build.
 // 服务不在 Hakari 遍历范围内，与其同批构建库会以服务私有的依赖特性编译 LanceDB，产生与其他库构建不同的第二个变体。
-export function shippedCargoArgs(kind) {
-  return shippedRustPackages.filter(item => kind in item).flatMap(item => ['-p', item.package]);
+// The Windows launcher changes only with an install epoch, so features unified from other packages must not
+// change its bytes either.
+// Windows 启动器只随安装纪元变化，因此其他包统一进来的特性同样不得改变其字节。
+export function shippedCargoArgs(kind, platform = process.platform) {
+  const selected = shippedRustPackagesFor(platform)
+    .filter(item => (kind === 'isolated' ? item.isolated === true : kind in item && item.isolated !== true));
+  return [...new Set(selected.map(item => item.package))].flatMap(name => ['-p', name]);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [command, ...rest] = process.argv.slice(2);
-  if (command === 'cargo-args' && rest.length === 1 && ['binary', 'library'].includes(rest[0])) {
+  if (command === 'cargo-args' && rest.length === 1 && ['binary', 'library', 'isolated'].includes(rest[0])) {
     process.stdout.write(shippedCargoArgs(rest[0]).join(' '));
   } else if (command === 'file-name' && rest.length === 1) {
     // Shell builds resolve a package's output name here instead of repeating the platform rules.
@@ -44,6 +63,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     if (!item) throw new Error(`Package ${rest[0]} is not shipped.`);
     process.stdout.write(shippedFileName(item));
   } else {
-    throw new Error('Usage: shipped-rust-packages cargo-args binary|library | file-name <package>');
+    throw new Error('Usage: shipped-rust-packages cargo-args binary|library|isolated | file-name <package>');
   }
 }
