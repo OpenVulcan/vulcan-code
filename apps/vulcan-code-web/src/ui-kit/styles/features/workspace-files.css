@@ -60,6 +60,15 @@
   color: var(--vk-ink);
 }
 
+/* What can still be done with a file the panel cannot show. 面板无法显示的文件仍可执行的操作。 */
+.workspace-file-os-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: calc(var(--vk-u) * 2);
+  margin-top: calc(var(--vk-u) * 2);
+}
+
 .workspace-file-preview.empty.error {
   color: var(--vk-bad);
 }

@@ -29,6 +29,7 @@ import type { WorkspaceFileEntrySummary, WorkspaceFileReadResponse } from "@/typ
 import { useWorkspaceFileWrapLines } from "@/components/workspace/workspace-file-wrap-lines";
 import { DocumentViewer } from "@/components/file-viewers/document-viewer";
 import { fileViewerKind } from "@/components/file-viewers/file-viewer-kind";
+import { WorkspaceFileOsActions } from "@/components/workspace/workspace-file-os-actions";
 
 // workspaceFilePreviewMaxHighlightRows caps Shiki preview work inside the right rail.
 // workspaceFilePreviewMaxHighlightRows 限制右侧栏内 Shiki 预览工作量。
@@ -108,6 +109,7 @@ export function WorkspaceFilePreview(props: {
           <FileText size={24} />
           <strong>{t("workspaceFilePreview.unsupportedTitle")}</strong>
           <span>{t("workspaceFilePreview.unsupportedHint")}</span>
+          <WorkspaceFileOsActions path={props.entry.path} />
         </div>
       );
     }

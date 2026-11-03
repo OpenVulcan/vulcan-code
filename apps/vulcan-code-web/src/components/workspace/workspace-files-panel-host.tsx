@@ -1,6 +1,6 @@
 import React from "react";
 import "@/ui-kit/styles/features/workspace-files.css";
-import { ChevronsUpDown, FileText, Folder, FolderX, Info, ListFilter, MoreHorizontal, WrapText, X } from "lucide-react";
+import { ChevronsUpDown, ExternalLink, FileText, Folder, FolderX, Info, ListFilter, MoreHorizontal, WrapText, X } from "lucide-react";
 import { toast } from "@/ui-kit/primitives/toast";
 import {
   activeWorkbenchSurfaceId,
@@ -24,6 +24,7 @@ import { useWorkspaceFileWrapLines } from "@/components/workspace/workspace-file
 import { useWorkspaceFilesRequestOwnership } from "@/components/workspace/workspace-files-panel-request-ownership";
 import { useWorkspaceFilesRefresh, WorkspaceFilesRefreshButton } from "@/components/workspace/workspace-files-panel-refresh";
 import { workspacePathActions, type WorkspacePathAction } from "@/components/workspace/workspace-path-actions";
+import { localFileActionsAvailable, requestWorkspaceFileAction } from "@/components/workspace/workspace-file-actions";
 import { Button, IconButton } from "@/ui-kit/primitives/button";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/ui-kit/primitives/empty";
 import {
@@ -829,10 +830,15 @@ function workspaceFileActions(
 ): WorkspacePathAction[] {
   const actions = workspacePathActions(entry, onCopyText, t);
   if (entry.isDirectory) return actions;
-  // A file adds its content copy before the system-folder entry.
-  // 文件在系统文件夹项之前加入内容复制。
+  // A file adds its content copy and, on the desktop, its default program before the system-folder entry. The file
+  // action host checks the file first, so a runnable file only gets its folder.
+  // 文件在系统文件夹项之前加入内容复制，桌面端另加默认程序打开。文件操作宿主会先检查文件，因此可运行文件只提供所在文件夹。
   actions.splice(actions.length - 1, 0, { key: "content", icon: <FileText size={14} />, label: t("workspaceFiles.copyFileContent"),
     disabled: entry.kind !== "code", run: () => onCopyFileContent(entry) });
+  if (localFileActionsAvailable()) {
+    actions.splice(actions.length - 1, 0, { key: "default-app", icon: <ExternalLink size={14} />, label: t("fileActions.openWithDefaultApp"),
+      run: () => requestWorkspaceFileAction(entry.path, "open") });
+  }
   return actions;
 }
 
