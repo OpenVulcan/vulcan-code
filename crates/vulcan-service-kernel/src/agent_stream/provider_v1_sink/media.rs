@@ -1184,6 +1184,7 @@ async fn materialize_resource(
             text: attachment_text(
                 &planned,
                 &locator,
+                context,
                 project_directory,
                 reason,
                 upload_failure.as_ref(),
@@ -1407,23 +1408,35 @@ pub(super) fn attachment_kind(
 /// `reason`是策略结果；可选`upload_failure`仅包含本次出现观测到的强类型失败。
 /// Returns escaped model-visible text without modifying the original user prompt or exposing private upload responses.
 /// 返回转义后的模型可见文本，不修改原用户提示词，也不暴露私有上传响应。
-/// Documents also disclose their stored path under `project_directory`, derived without filesystem access so replays stay identical.
-/// 文档另外披露其在`project_directory`下的已保存路径，该路径不经文件系统访问推出，使回放保持一致。
+/// Documents, and media no visible tool in `context` can take, also disclose their stored path under `project_directory`,
+/// derived without filesystem access so replays stay identical.
+/// 文档及`context`中无可见工具能处理的媒体另外披露其在`project_directory`下的已保存路径，该路径不经文件系统访问推出，
+/// 使回放保持一致。
 fn attachment_text(
     planned: &PlannedResource,
     locator: &str,
+    context: &ProviderRequestMediaContext,
     project_directory: &std::path::Path,
     reason: MediaDeliveryRejection,
     upload_failure: Option<&MediaUploadFailure>,
 ) -> String {
-    // Only document kinds disclose a path; media keep their context-managing tool routes.
-    // 只有文档类披露路径；媒体保留控制上下文的工具路线。
+    // Media keep their context-managing tool routes whenever one is visible this turn.
+    // 本回合可见控制上下文的工具路线时，媒体保留该路线。
     let stored_path = planned
         .entry
         .as_ref()
         .filter(|entry| {
             vulcan_agent_runtime::provider_input_normalizer::metadata_only_discloses_stored_path(
                 &attachment_kind(planned.kind, entry.mime.as_deref()),
+                &context.tool_names,
+                |kind| {
+                    context
+                        .execution
+                        .model
+                        .capabilities
+                        .input_resources
+                        .contains(&kind)
+                },
             )
         })
         .map(|entry| {

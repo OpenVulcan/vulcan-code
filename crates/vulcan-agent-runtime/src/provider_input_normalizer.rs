@@ -13,19 +13,42 @@ use vulcan_core::types::{
     ConversationAttachment, ConversationAttachmentDeliveryMode, ConversationAttachmentKind,
 };
 
-/// Instruction following the stored path that a document-type metadata-only listing discloses.
-/// 文档类仅元数据清单披露已保存路径后附带的说明。
-pub const METADATA_ONLY_STORED_PATH_NOTICE: &str = "The stored copy of this attachment is at `path`; read it with other available tools such as file reads, shell commands or scripts. The stored copy may have no file extension: use file_name and mime_type to choose a parser, and copy it to a name with the extension if a tool needs one. Do not modify the stored copy.";
+/// Instruction following the stored path that a metadata-only listing discloses.
+/// 仅元数据清单披露已保存路径后附带的说明。
+pub const METADATA_ONLY_STORED_PATH_NOTICE: &str = "The stored copy of this attachment is at `path`; read or process it with other available tools such as file reads, shell commands or scripts. The stored copy may have no file extension: use file_name and mime_type to choose a parser, and copy it to a name with the extension if a tool needs one. Do not modify the stored copy.";
 
 /// Reports whether a metadata-only listing of `kind` discloses the stored file path.
 /// 报告`kind`类的仅元数据清单是否披露已保存文件路径。
-/// Documents are read by ordinary tools; images, audio and video keep their understanding and `read_media` routes, which manage context size.
-/// 文档由普通工具读取；图片、音频与视频保留理解工具及`read_media`路线，由其控制上下文大小。
-pub fn metadata_only_discloses_stored_path(kind: &ConversationAttachmentKind) -> bool {
-    matches!(
-        kind,
-        ConversationAttachmentKind::File | ConversationAttachmentKind::Pdf
-    )
+/// `tool_ids` are the tools visible this turn; `model_accepts` tells whether the model takes a resource kind natively.
+/// `tool_ids`是本回合可见工具；`model_accepts`说明模型是否原生接受某资源类型。
+/// Documents always disclose it. Images, audio and video disclose it only when neither their understanding tool
+/// nor `read_media` can take them, because those routes manage context size.
+/// 文档总是披露。图片、音频与视频仅在其理解工具及`read_media`都不能处理时披露，因为这些路线负责控制上下文大小。
+pub fn metadata_only_discloses_stored_path(
+    kind: &ConversationAttachmentKind,
+    tool_ids: &[String],
+    model_accepts: impl Fn(ResourceKind) -> bool,
+) -> bool {
+    let Some((understanding_tool, _)) = media_understanding_tool_for_kind(kind) else {
+        return true;
+    };
+    let visible = |id: &str| tool_ids.iter().any(|tool| tool == id);
+    let read_media = visible(crate::native_media_input::READ_MEDIA_TOOL_ID)
+        && model_accepts(attachment_resource_kind(kind.clone()));
+    !visible(understanding_tool) && !read_media
+}
+
+/// Returns the fixed understanding tool id and its path argument for a media `kind`, or `None` for documents.
+/// 返回媒体`kind`对应的固定理解工具标识及其路径参数；文档返回`None`。
+fn media_understanding_tool_for_kind(
+    kind: &ConversationAttachmentKind,
+) -> Option<(&'static str, &'static str)> {
+    match kind {
+        ConversationAttachmentKind::Image => Some(("image_understand", "image_path")),
+        ConversationAttachmentKind::Video => Some(("video_understand", "video_path")),
+        ConversationAttachmentKind::Audio => Some(("audio_understand", "audio_path")),
+        ConversationAttachmentKind::File | ConversationAttachmentKind::Pdf => None,
+    }
 }
 
 /// Holds the exact user payload that remains valid after protocol and model capability checks.
@@ -130,6 +153,14 @@ pub fn normalize_provider_user_input_for_model_with_tool_bridges(
         if replayable && protocol_supported && model_supported && !metadata_only {
             supported_attachments.push(attachment);
         } else {
+            // Unknown capabilities count as native acceptance, matching model_supported above.
+            // 未知能力按原生接受处理，与上方model_supported一致。
+            let disclose_path =
+                metadata_only_discloses_stored_path(&attachment.kind, bridge_tool_ids, |kind| {
+                    capabilities
+                        .map(|value| value.input_resources.contains(&kind))
+                        .unwrap_or(true)
+                });
             let diagnostic = if !replayable {
                 build_missing_attachment_replay_text(&attachment)
             } else if let Some((tool_id, path_argument)) =
@@ -139,11 +170,23 @@ pub fn normalize_provider_user_input_for_model_with_tool_bridges(
                 // 宿主桥接同时替代缺失的模型输入能力与 Wire 编码能力。
                 build_attachment_provider_tool_hint(&attachment, tool_id, path_argument)
             } else if metadata_only {
-                build_attachment_transport_error_text(&attachment, "the host delivery plan")
+                build_attachment_transport_error_text(
+                    &attachment,
+                    "the host delivery plan",
+                    disclose_path,
+                )
             } else if !protocol_supported {
-                build_attachment_transport_error_text(&attachment, "the selected protocol profile")
+                build_attachment_transport_error_text(
+                    &attachment,
+                    "the selected protocol profile",
+                    disclose_path,
+                )
             } else {
-                build_attachment_transport_error_text(&attachment, "the selected model")
+                build_attachment_transport_error_text(
+                    &attachment,
+                    "the selected model",
+                    disclose_path,
+                )
             };
             diagnostic_lines.push(diagnostic);
             downgraded_attachments.push(attachment);
@@ -180,15 +223,7 @@ fn media_understanding_bridge_for_attachment<'a>(
     attachment: &ConversationAttachment,
     bridge_tool_ids: &'a [String],
 ) -> Option<(&'a str, &'static str)> {
-    // bridge identifies the one fixed tool id and path argument for the attachment kind.
-    // bridge 标识当前附件类型唯一固定的工具标识与路径参数。
-    let bridge = match attachment.kind {
-        ConversationAttachmentKind::Image => Some(("image_understand", "image_path")),
-        ConversationAttachmentKind::Video => Some(("video_understand", "video_path")),
-        ConversationAttachmentKind::Audio => Some(("audio_understand", "audio_path")),
-        ConversationAttachmentKind::File | ConversationAttachmentKind::Pdf => None,
-    };
-    bridge.and_then(|(expected_tool_id, path_argument)| {
+    media_understanding_tool_for_kind(&attachment.kind).and_then(|(expected_tool_id, path_argument)| {
         bridge_tool_ids
             .iter()
             .find(|tool_id| tool_id.as_str() == expected_tool_id)
@@ -666,5 +701,19 @@ mod tests {
 
         assert!(normalized.attachments.is_empty());
         assert!(normalized.text.contains("selected protocol profile"));
+    }
+
+    /// Documents always disclose their path; media disclose it only without an understanding or read_media route.
+    /// 文档总是披露路径；媒体仅在没有理解工具或read_media路线时披露。
+    #[test]
+    fn stored_path_disclosure_follows_available_tool_routes() {
+        use super::metadata_only_discloses_stored_path as discloses;
+        let tools = |ids: &[&str]| ids.iter().map(|id| id.to_string()).collect::<Vec<_>>();
+        let image = ConversationAttachmentKind::Image;
+        assert!(discloses(&ConversationAttachmentKind::Pdf, &tools(&["read_media"]), |_| true));
+        assert!(discloses(&image, &tools(&[]), |_| true));
+        assert!(!discloses(&image, &tools(&["image_understand"]), |_| false));
+        assert!(!discloses(&image, &tools(&["read_media"]), |kind| kind == ResourceKind::Image));
+        assert!(discloses(&image, &tools(&["read_media"]), |kind| kind != ResourceKind::Image));
     }
 }

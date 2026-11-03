@@ -540,9 +540,13 @@ Schema 注册给同一 endpoint 下的所有模型。
    普通工具直接读取，不复制、不额外调用工具。项目资源的路径由项目资源目录与 SHA-256 推出
    （`project_resource_entity_path`），不访问文件系统，回放文本保持一致；副本可能没有扩展名，清单
    说明要求模型按 `file_name`／`mime_type` 选择解析方式、需要扩展名时自行复制，且不得修改副本。
-   读取工作区外路径由文件权限决定，将来的权限功能在读取前提示授权。图片、音频与视频不给路径，
-   仍走理解工具与 `read_media`（后者负责压缩与上下文控制）。判断哪些类型给路径只在
-   `provider_input_normalizer::metadata_only_discloses_stored_path` 定义。
+   读取工作区外路径由文件权限决定，将来的权限功能在读取前提示授权。图片、音频与视频在本回合
+   存在工具路线时不给路径，仍走理解工具与 `read_media`（后者负责压缩与上下文控制）；工具路线指
+   本请求可见对应理解工具（`image_understand`／`video_understand`／`audio_understand`），或可见
+   `read_media` 且所选模型原生接受该资源类别。没有任何工具路线时，媒体清单同样给出 `path`，
+   避免模型只知其存在而无从读取。判断是否给路径只在
+   `provider_input_normalizer::metadata_only_discloses_stored_path` 定义，V1 物化与旧标准化链路
+   都以本请求实际暴露的工具名调用它。
 
 `file_id`、供应商上传 URL 和上传任务 ID 只存在于最终 Provider 物化边界，禁止进入规范历史、AI
 附件清单、工具参数、工具结果和模型可见错误。媒体理解及声明了资源绑定的扩展工具接受安全

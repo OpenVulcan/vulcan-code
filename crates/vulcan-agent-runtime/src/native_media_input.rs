@@ -20,6 +20,10 @@ pub(crate) use budget::budget_snapshot;
 pub use projection::project_native_media_messages;
 pub(crate) use tool::build_read_media_candidate;
 
+/// Stable identifier of the native media reader tool.
+/// 原生媒体读取工具的稳定标识。
+pub const READ_MEDIA_TOOL_ID: &str = "read_media";
+
 /// Durable marker owned by the host; model text is never parsed as a media instruction.
 /// 宿主持有的持久标记；绝不把模型正文解析为媒体指令。
 const MARKER: &str = "$vulcan_native_media_input";

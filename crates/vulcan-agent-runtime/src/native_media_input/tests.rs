@@ -612,6 +612,7 @@ async fn native_media_reads_reach_protocol_input_without_external_understanding(
                     .unwrap(),
             ),
             session_scope_id: "native-session".into(),
+            tool_names: Vec::new(),
         };
         // Capture and compaction consume controller text containing the full V1 completion wrapper.
         // 捕获及压缩消费包含完整V1完成包装器的控制器正文。
@@ -711,6 +712,7 @@ async fn native_media_replay_respects_current_model_and_user_budget() {
                 .unwrap(),
         ),
         session_scope_id: "s".into(),
+        tool_names: Vec::new(),
     };
     let mut messages = vec![
         AiMessage {
@@ -741,6 +743,7 @@ async fn native_media_replay_respects_current_model_and_user_budget() {
                 .unwrap(),
         ),
         session_scope_id: "s".into(),
+        tool_names: Vec::new(),
     };
     let mut messages = vec![result_message("read", output)];
     project_native_media_messages(&mut messages, Some(&context)).unwrap();
@@ -788,6 +791,7 @@ async fn native_media_uploaded_history_is_bound_to_original_route_and_lifetime()
     let context = ProviderRequestMediaContext {
         execution,
         session_scope_id: "original-session".into(),
+        tool_names: Vec::new(),
     };
     // Seed a previously completed receipt rather than performing an actual upload.
     // 写入一份此前已完成回执，不执行实际上传。

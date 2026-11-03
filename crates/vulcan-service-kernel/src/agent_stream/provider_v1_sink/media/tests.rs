@@ -235,6 +235,7 @@ async fn context_with_http(
         ProviderRequestMediaContext {
             execution: Arc::new(execution),
             session_scope_id: "v1-media-session".into(),
+            tool_names: Vec::new(),
         },
         secrets,
     ))

@@ -100,8 +100,8 @@ pub(crate) fn build_read_media_candidate(
     }
     Some(VulcanToolCandidate {
         descriptor: VulcanToolDescriptor::new(
-            "read_media",
-            "read_media",
+            READ_MEDIA_TOOL_ID,
+            READ_MEDIA_TOOL_ID,
             format!(
                 "Read only the media types listed below from a local file or an owned project-resource/attachment locator, and attach content to your next model input for your own understanding. No external AI understanding is called. Current model: {}; provider: {}; protocol: {}. Exact capabilities:\n{}\nImage support does not imply video support. Choose the tool for the source media type before calling it; never use read_media to probe an unsupported type. Subject to configured conversation delivery limits; errors mean the content was not attached. Use file for ordinary text files.",
                 selection.model.id,
@@ -110,7 +110,11 @@ pub(crate) fn build_read_media_candidate(
                 media_type_guidance(&mimes)
             ),
             None,
-            VulcanToolOrigin::new(VulcanToolSourceKind::AiHostBinding, "vulcan", "read_media"),
+            VulcanToolOrigin::new(
+                VulcanToolSourceKind::AiHostBinding,
+                "vulcan",
+                READ_MEDIA_TOOL_ID,
+            ),
         ),
         parameters_schema: json!({"type":"object","additionalProperties":false,"properties":{"path":{"type":"string","minLength":1,"description":format!("One readable local path or canonical project-resource/attachment locator. Native MIME types ONLY: {}. {} Relative paths use the current workspace.", mimes.join(", "), image_conversion::guidance(&mimes))}},"required":["path"]}),
         ai_visible: true,

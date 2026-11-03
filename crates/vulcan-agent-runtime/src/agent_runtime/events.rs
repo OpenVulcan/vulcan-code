@@ -46,6 +46,9 @@ pub struct ProviderRequestMediaContext {
     /// Original session scope retained for upload contracts without reading mutable global selection.
     /// 上传契约保留的原会话作用域，不读取可变全局选择。
     pub session_scope_id: String,
+    /// Names of the tools this request exposes; a metadata-only media listing discloses its path only when none can take it.
+    /// 本请求暴露的工具名称；仅元数据媒体清单仅在没有工具能处理时披露路径。
+    pub tool_names: Vec<String>,
 }
 
 impl std::fmt::Debug for ProviderRequestMediaContext {

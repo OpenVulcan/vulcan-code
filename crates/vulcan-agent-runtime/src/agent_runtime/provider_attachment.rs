@@ -31,9 +31,12 @@ pub(crate) fn attachment_resource_locator(attachment: &ConversationAttachment) -
 
 /// Builds fallback text when the selected public protocol cannot carry an attachment modality.
 /// 当选中的公共协议无法承载某种附件模态时构建回退文本。
+/// `disclose_path` comes from `metadata_only_discloses_stored_path` for the turn's visible tools.
+/// `disclose_path` 由 `metadata_only_discloses_stored_path` 按本回合可见工具得出。
 pub(crate) fn build_attachment_transport_error_text(
     attachment: &ConversationAttachment,
     scope: &str,
+    disclose_path: bool,
 ) -> String {
     let attachment_id =
         model_visible_attachment_field(attachment.asset_id.as_deref().unwrap_or("unavailable"));
@@ -41,12 +44,9 @@ pub(crate) fn build_attachment_transport_error_text(
     let file_name = model_visible_attachment_field(&attachment.file_name);
     let mime_type = model_visible_attachment_field(&attachment.mime_type);
     let scope = model_visible_attachment_field(scope.trim());
-    // Documents disclose their stored copy so ordinary tools can read them; media keep the tool routes.
-    // 文档披露已保存副本供普通工具读取；媒体保留工具路线。
-    let (path, follow_up) = if crate::provider_input_normalizer::metadata_only_discloses_stored_path(
-        &attachment.kind,
-    ) && !attachment.local_path.trim().is_empty()
-    {
+    // The stored copy is disclosed only when no tool route that manages context size can take it.
+    // 仅当没有控制上下文大小的工具路线能处理时才披露已保存副本。
+    let (path, follow_up) = if disclose_path && !attachment.local_path.trim().is_empty() {
         (
             format!(
                 "; path={}",
@@ -138,23 +138,23 @@ mod tests {
     /// 验证不支持模态的诊断会保留文件与协议范围。
     #[test]
     fn transport_error_names_attachment_and_scope() {
-        let message =
-            build_attachment_transport_error_text(&test_attachment(), "anthropic-messages.v1");
+        let message = build_attachment_transport_error_text(
+            &test_attachment(),
+            "anthropic-messages.v1",
+            false,
+        );
         assert!(message.contains("screen.png"));
         assert!(message.contains("anthropic-messages.v1"));
         assert!(!message.contains("C:/attachments/screen.png"));
     }
 
-    /// Verifies document listings disclose the stored path while media listings do not.
-    /// 验证文档清单披露已保存路径，而媒体清单不披露。
+    /// Verifies a disclosed listing carries the stored path.
+    /// 验证披露的清单携带已保存路径。
     #[test]
-    fn transport_error_discloses_path_only_for_documents() {
-        let mut attachment = test_attachment();
-        attachment.kind = ConversationAttachmentKind::File;
-        attachment.file_name = String::from("report.docx");
-        attachment.local_path = String::from("C:/attachments/report.docx");
-        let message = build_attachment_transport_error_text(&attachment, "openai-codex");
-        assert!(message.contains("path=\"C:/attachments/report.docx\""));
+    fn transport_error_carries_path_when_disclosed() {
+        let message =
+            build_attachment_transport_error_text(&test_attachment(), "openai-codex", true);
+        assert!(message.contains("path=\"C:/attachments/screen.png\""));
     }
 
     /// Verifies host-tool hints name the actual media modality instead of a fixed image label.
