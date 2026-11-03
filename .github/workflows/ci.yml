@@ -1,13 +1,16 @@
-# Required checks for every pull request and every push to main; `Required checks` is the single status
-# that branch protection asks for. Heavy suites run in nightly.yml and never block merging.
-# 每个合并请求与每次推送 main 的必过检查；分支保护只要求 `Required checks` 这一项状态。
-# 重型测试集在 nightly.yml 中运行，从不阻塞合并。
+# Required checks for pull requests, manual runs and once a day for a new main commit; `Required checks` is the
+# single status that branch protection asks for. Pushes to main trigger nothing: a run takes longer than the
+# interval between pushes, so per-push runs would only queue. Heavy suites run in nightly.yml.
+# 合并请求、手动运行及每日一次（main 有新提交时）的必过检查；分支保护只要求 `Required checks` 这一项状态。
+# 推送 main 不触发任何运行：一次运行比推送间隔更长，逐次触发只会排队。重型测试集在 nightly.yml 中运行。
 name: CI
 on:
   pull_request:
     branches: [main]
-  push:
-    branches: [main]
+  schedule:
+    # 02:47 Taiwan time, ahead of the nightly suites.
+    # 台湾时间 02:47，早于夜间测试集。
+    - cron: '47 18 * * *'
   workflow_dispatch:
 permissions:
   contents: read
@@ -30,6 +33,9 @@ jobs:
     name: Classify changes
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
     outputs:
       scripts: ${{ steps.scope.outputs.scripts }}
       frontend: ${{ steps.scope.outputs.frontend }}
@@ -49,7 +55,19 @@ jobs:
           node-version: ${{ steps.versions.outputs.node }}
       - name: Verify classification and required-result failure paths
         run: node --test scripts/ci-scope.test.mjs
+      # A scheduled run reads the commit of the last successful run on main, so an unchanged main runs no gate.
+      # 定时运行读取 main 上最近一次成功运行的提交，main 未变化时不运行任何检查。
+      - id: passed
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=main&status=success&per_page=1" --jq '.workflow_runs[0].head_sha // ""')
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
       - id: scope
+        env:
+          CI_LAST_PASSED_SHA: ${{ steps.passed.outputs.sha }}
         run: node scripts/ci-scope.mjs --from-event
   scripts:
     name: Build scripts (${{ matrix.os }})

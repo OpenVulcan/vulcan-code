@@ -142,8 +142,16 @@ test('real Git covers multi-commit pushes, cross-boundary renames, deletion and 
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('manual and scheduled runs select all while malformed events fail explicitly', () => {
-  for (const event of ['workflow_dispatch', 'schedule']) assert.equal(eventChanges(event, {}).full, true);
+test('manual runs select all, scheduled runs select all once per new main commit, malformed events fail', () => {
+  const head = 'a'.repeat(40);
+  assert.equal(eventChanges('workflow_dispatch', {}).full, true);
+  assert.equal(eventChanges('schedule', {}, undefined, { head, tested: 'b'.repeat(40) }).full, true);
+  assert.equal(eventChanges('schedule', {}, undefined, { head, tested: '' }).full, true);
+  // A scheduled run on an already passed commit selects no gate, which the required summary accepts as intentional skips.
+  // 已通过提交上的定时运行不选择任何检查，必需汇总将其视为有意跳过。
+  const passed = classifyChanges(eventChanges('schedule', {}, undefined, { head, tested: head }).files);
+  assert.equal(JOBS.some(job => passed[job]), false);
+  assert.throws(() => eventChanges('schedule', {}, undefined, {}), /scheduled commit SHA/);
   assert.throws(() => eventChanges('push', { before: 'bad', after: 'bad' }), /SHA/);
   assert.throws(() => eventChanges('unknown', {}), /Unsupported/);
 });

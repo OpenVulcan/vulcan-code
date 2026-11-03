@@ -1,8 +1,10 @@
 # Full suites that are too slow for every pull request: all nextest tests, isolated callbacks and doctests on
 # Windows and Linux, the plugin manifest contract, and the quarantined tests on their own. Nothing here blocks
-# merging; a failure opens or updates one tracking issue with the run link.
+# merging; a failure opens or updates one tracking issue with the run link. The schedule runs only when main
+# has a commit the last successful run did not test.
 # 对每个合并请求而言过慢的完整测试集：Windows 与 Linux 上的全部 nextest、隔离回调与文档测试，插件清单契约，
 # 以及单独运行的被隔离测试。这里的结果不阻塞合并；失败时创建或更新一个带运行链接的跟踪 issue。
+# 定时运行只在 main 有最近一次成功运行未测试过的提交时执行。
 name: Nightly
 on:
   schedule:
@@ -21,8 +23,33 @@ env:
   CARGO_BUILD_JOBS: '4'
   CARGO_TERM_COLOR: always
 jobs:
+  # Manual runs always proceed; a scheduled run skips a main commit the last successful run already tested.
+  # 手动运行总是执行；定时运行跳过最近一次成功运行已测试过的 main 提交。
+  pending:
+    name: Check for an untested commit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      run: ${{ steps.compare.outputs.run }}
+    steps:
+      - id: compare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          passed=''
+          if [ "$GITHUB_EVENT_NAME" = schedule ]; then
+            passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/nightly.yml/runs?branch=main&status=success&per_page=1" --jq '.workflow_runs[0].head_sha // ""')
+          fi
+          if [ "$passed" = "$GITHUB_SHA" ]; then run=false; else run=true; fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "Last passed: ${passed:-none}; this commit: $GITHUB_SHA; run: $run"
   rust-full:
     name: Full Rust suite (${{ matrix.os }})
+    needs: pending
+    if: needs.pending.outputs.run == 'true'
     strategy:
       fail-fast: false
       matrix:

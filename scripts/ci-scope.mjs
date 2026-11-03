@@ -68,10 +68,20 @@ export function classifyChanges(files, full = false) {
  * @param {string} eventName GitHub event name. GitHub 事件名称。
  * @param {object} event Parsed GitHub event. 已解析的 GitHub 事件。
  * @param {string} cwd Repository working directory. 仓库工作目录。
+ * @param {object} schedule Scheduled commit `head` and the commit `tested` by the last successful run on main.
+ * 定时运行的提交 `head`，以及 main 上最近一次成功运行所测试的提交 `tested`。
  * @returns {object} Changed files, full flag and reason. 变更文件、完整标记及原因。
  */
-export function eventChanges(eventName, event, cwd = process.cwd()) {
-  if (['schedule', 'workflow_dispatch'].includes(eventName)) return { files: [], full: true, reason: eventName };
+export function eventChanges(eventName, event, cwd = process.cwd(), schedule = {}) {
+  if (eventName === 'workflow_dispatch') return { files: [], full: true, reason: eventName };
+  // A scheduled run validates everything once per new main commit and selects nothing for an already passed one.
+  // 定时运行对每个新的 main 提交完整验证一次；已通过的提交不选择任何检查。
+  if (eventName === 'schedule') {
+    if (!/^[a-f0-9]{40}$/.test(schedule.head ?? '')) throw new Error('Missing or invalid scheduled commit SHA.');
+    return schedule.head === schedule.tested
+      ? { files: [], full: false, reason: `schedule: ${schedule.head} already passed` }
+      : { files: [], full: true, reason: eventName };
+  }
   if (!['push', 'pull_request'].includes(eventName)) throw new Error(`Unsupported event: ${eventName}`);
   // base/head come from documented event fields, never a truncated webhook commits array.
   // base/head 来自规定的事件字段，绝不读取可能截断的 webhook commits 数组。
@@ -127,7 +137,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     // changes supports explicit local filenames or the documented workflow event input.
     // changes 支持显式本地文件名或规定的工作流事件输入。
     const changes = process.argv[2] === '--from-event'
-      ? eventChanges(process.env.GITHUB_EVENT_NAME, JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8')))
+      ? eventChanges(process.env.GITHUB_EVENT_NAME, JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8')), process.cwd(),
+        { head: process.env.GITHUB_SHA, tested: process.env.CI_LAST_PASSED_SHA })
       : { files: process.argv.slice(2), full: false, reason: 'explicit local paths' };
     // scope is emitted once, before any dependent job starts.
     // scope 在任何依赖作业启动之前一次性输出。

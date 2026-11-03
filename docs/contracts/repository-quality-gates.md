@@ -4,11 +4,15 @@
 
 | 工作流 | 触发 | 作用 |
 | --- | --- | --- |
-| `.github/workflows/ci.yml` | 合并请求（目标 main）、推送 main、手动 | 必过检查，分支保护只要求 `Required checks` 一项 |
-| `.github/workflows/nightly.yml` | 每天台湾时间 03:17、手动 | 完整测试集，不阻塞合并；失败时创建或更新跟踪 issue |
+| `.github/workflows/ci.yml` | 合并请求（目标 main）、每天台湾时间 02:47（main 有新提交时）、手动 | 必过检查，分支保护只要求 `Required checks` 一项 |
+| `.github/workflows/nightly.yml` | 每天台湾时间 03:17（main 有新提交时）、手动 | 完整测试集，不阻塞合并；失败时创建或更新跟踪 issue |
 | `build-smoke`、`signing-smoke`、`distribution-smoke` | 手动 | 发布前的构建、签名与分发实测，见发布计划 |
 
-仓库自 2026-11-02 起公开，CI 于 2026-11-03 恢复自动触发。Actions 引用固定提交；Node 与 pnpm 版本取自受管运行时清单
+仓库自 2026-11-02 起公开，CI 于 2026-11-03 恢复自动触发。推送 main 不触发任何运行：一次运行长于推送间隔，逐次触发
+只会排队且跳过中间提交。定时运行先查询同一工作流在 main 上最近一次成功运行的提交，与当前提交相同即不运行任何检查
+（`ci.yml` 由分类器输出全部跳过，`nightly.yml` 由 `pending` 作业跳过完整测试），因此 main 没有新提交时不消耗运行器；
+上次失败的提交会在下一次定时运行时重试。发布前手动触发一次 CI，确认被发布提交的必过检查为绿色。
+Actions 引用固定提交；Node 与 pnpm 版本取自受管运行时清单
 `crates/vulcan-service-runtime/managed-runtimes.json`，不增加第二份版本常量。
 
 ### 变更分类
@@ -25,7 +29,8 @@
 | 普通 `crates/**`、服务与 TUI 应用、Cargo 清单/锁、工具链、Cargo/nextest 配置、隔离清单 | Rust |
 | service-api、ai-contract、workbench-model、provider-config、terminal-host-protocol、plugin-runtime、i18n，以及契约目录 JSON/YAML/proto | 前端、桌面与 Rust |
 | 工作流、构建脚本、make 入口、顶层 schemas、受管运行时版本清单 | 全部 |
-| 未归类路径、首次推送、无法取得的旧推送基准、手动执行 | 全部，并在日志说明原因 |
+| 未归类路径、首次推送、无法取得的旧推送基准、手动执行、定时执行的新提交 | 全部，并在日志说明原因 |
+| 定时执行且提交已在上次成功运行中通过 | 无 |
 
 任一检查被选中时，静态检查同时被选中：它覆盖 Rust 与 TypeScript 源码，只需数秒。多个路径取并集。运行资源中的 Markdown、插件提示词属于产品输入，不能按扩展名当成普通文档。上表只是概述，规则权威为 `ci-scope.mjs`，新增目录必须补充规则及正反回归。
 
@@ -102,7 +107,7 @@ node scripts/install-locked-tools.mjs nextest --offline
 
 ## 平台能力具备后的配置
 
-1. 先推送工作流，让三个类别的检查至少成功运行一次，确认检查名称出现。
+1. 先手动触发或通过合并请求运行工作流，让检查至少成功运行一次，确认检查名称出现。
 2. 在仓库 Settings → Rules → Rulesets 为默认分支 main 建立活动规则。
 3. 要求通过合并请求更新，至少一名审核者批准；新提交使旧审核失效，要求解决会话讨论。
 4. 开启必需状态检查，选择 Required checks，并要求合并前分支保持最新。
