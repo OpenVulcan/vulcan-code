@@ -49,7 +49,6 @@
       ],
       "context_window": 1000000,
       "input_modalities": [
-        "file",
         "image",
         "text"
       ],
@@ -58,7 +57,7 @@
       ],
       "output_limit": 128000,
       "reasoning": "native",
-      "reasoning_control": "fixed_on",
+      "reasoning_control": "effort_selection",
       "reasoning_efforts": [
         "low",
         "medium",
@@ -78,6 +77,7 @@
       "output_modalities": [
         "text"
       ],
+      "output_limit": 128000,
       "reasoning": "native",
       "reasoning_control": "effort_selection",
       "reasoning_efforts": [

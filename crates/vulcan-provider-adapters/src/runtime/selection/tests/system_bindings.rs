@@ -345,6 +345,12 @@ fn anthropic_official_models_project_their_declared_thinking_mode() {
         // 默认开启的模型在未显式选择强度时也保持思考文本可见。
         ("claude-opus-5-5", None, Some(adaptive.clone()), None),
         (
+            "claude-fable-5-1",
+            Some(ReasoningEffort::Max),
+            Some(adaptive.clone()),
+            Some("max"),
+        ),
+        (
             "claude-opus-4-7",
             Some(ReasoningEffort::XHigh),
             Some(adaptive.clone()),

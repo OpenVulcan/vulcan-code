@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "anthropic",
-  "revision": 11,
-  "published_at": "2026-10-21T12:18:42Z",
+  "revision": 12,
+  "published_at": "2026-11-03T10:03:11Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -302,6 +302,86 @@
           "supports_managed_explicit": false
         },
         "evidence_revision": "anthropic-thinking-docs-2026-10-21"
+      },
+      "scope": {
+        "service_entry_ids": [
+          "public-api"
+        ]
+      },
+      "request_profile_refs": [
+        "anthropic.default-adaptive-effort.v1"
+      ]
+    },
+    {
+      "rule_id": "claude-fable-5-1",
+      "matcher": {
+        "kind": "exact",
+        "value": "claude-fable-5-1"
+      },
+      "supported_protocols": [
+        "anthropic-messages.v1"
+      ],
+      "capabilities": {
+        "operations": ["conversation_respond"],
+        "input_resources": ["image"],
+        "output_resources": [],
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "context_limit": 1000000,
+        "output_limit": 128000,
+        "prompt_cache": {
+          "provider_default_behavior": "host-managed prompt cache injection is not available",
+          "supports_managed_explicit": false
+        },
+        "evidence_revision": "anthropic-model-overviews-2026-11-03"
+      },
+      "scope": {
+        "service_entry_ids": [
+          "public-api"
+        ]
+      },
+      "request_profile_refs": [
+        "anthropic.default-adaptive-effort.v1"
+      ]
+    },
+    {
+      "rule_id": "claude-fable-5",
+      "matcher": {
+        "kind": "exact",
+        "value": "claude-fable-5"
+      },
+      "supported_protocols": [
+        "anthropic-messages.v1"
+      ],
+      "capabilities": {
+        "operations": ["conversation_respond"],
+        "input_resources": ["image"],
+        "output_resources": [],
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "context_limit": 1000000,
+        "output_limit": 128000,
+        "prompt_cache": {
+          "provider_default_behavior": "host-managed prompt cache injection is not available",
+          "supports_managed_explicit": false
+        },
+        "evidence_revision": "anthropic-model-overviews-2026-11-03"
       },
       "scope": {
         "service_entry_ids": [
