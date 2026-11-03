@@ -189,7 +189,7 @@ it("offers file actions on a file reference and hands OS actions to the file ope
 
 it("offers no OS file actions without the desktop bridge", async () => {
   await mountFileReference(vi.fn(), vi.fn(), false);
-  expect(menuItem("fileActions.openInSidePanel")).toBeDefined();
+  expect(menuItem("fileActions.open")).toBeDefined();
   expect(menuItem("fileActions.copyPath")).toBeDefined();
   expect(menuItem("fileActions.openWithDefaultApp")).toBeUndefined();
   expect(menuItem("fileActions.showInFolder")).toBeUndefined();

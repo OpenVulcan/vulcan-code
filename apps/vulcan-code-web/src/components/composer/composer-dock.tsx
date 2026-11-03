@@ -57,6 +57,9 @@ import { DedicatedComposerContext, DedicatedMemoryLockBar } from "@/components/c
 const LazyDedicatedSessionWizard = React.lazy(() => import("@/components/composer/dedicated/dedicated-session-wizard").then((module) => ({
   default: module.DedicatedSessionWizard,
 })));
+// LazyFileWindowTaskbar lists the session's file windows above the composer.
+// LazyFileWindowTaskbar 在输入区上方列出会话的文件窗口。
+const LazyFileWindowTaskbar = React.lazy(() => import("@/components/file-windows/file-window-taskbar"));
 
 export { composerAttachmentMedia } from "@/components/composer/composer-attachment-media";
 
@@ -344,6 +347,7 @@ export function ComposerDock(props: {
         />
       ) : null}
       {persistedDedicated ? <DedicatedMemoryLockBar memory={persistedDedicated} running={props.isConversationRunning} /> : null}
+      {props.conversationId ? <React.Suspense fallback={null}><LazyFileWindowTaskbar sessionId={props.conversationId} /></React.Suspense> : null}
       {draftOwner && dedicatedWizardShown ? (
         <React.Suspense fallback={null}>
         <LazyDedicatedSessionWizard

@@ -84,6 +84,9 @@ export interface ProjectFloatingLayerProps {
   // Preferred first-open size; omitted surfaces use the desktop terminal default.
   // 首次打开的期望尺寸；省略时使用桌面终端默认尺寸。
   defaultSize?: FloatingLayerPreferredSize;
+  // Any change brings the window to the front, as a click on it does.
+  // 任何变化都会将窗口置于最前，与点击窗口相同。
+  raiseKey?: number;
 }
 
 // FloatingLayerPreferredSize caps the first-open surface size in CSS pixels.
@@ -95,7 +98,14 @@ export interface FloatingLayerPreferredSize {
   // Maximum first-open height.
   // 首次打开的最大高度。
   height: number;
+  // Extra first-open distance from the lower-right corner, so windows opened one after another cascade.
+  // 首次打开时距右下角的额外距离，使先后打开的窗口层叠错开。
+  inset?: number;
 }
+
+// DEFAULT_FLOATING_LAYER_SIZE is the first-open size of a window that names none.
+// DEFAULT_FLOATING_LAYER_SIZE 是未指定尺寸的窗口首次打开时的尺寸。
+export const DEFAULT_FLOATING_LAYER_SIZE: FloatingLayerPreferredSize = { width: 760, height: 620 };
 
 // FloatingLayerGenieDirection identifies whether the surface is entering or leaving the top-bar anchor.
 // FloatingLayerGenieDirection 标识表面正在进入还是离开顶部栏锚点。
@@ -346,7 +356,7 @@ export function ProjectFloatingLayer(props: ProjectFloatingLayerProps) {
   React.useLayoutEffect(() => {
     raiseFloatingLayer(layerId);
     return () => dropFloatingLayer(layerId);
-  }, [layerId]);
+  }, [layerId, props.raiseKey]);
   // stackRank keeps independently mounted windows selectable in activation order when their rectangles overlap.
   // stackRank 使独立挂载的窗口在矩形重叠时仍可按激活顺序选择。
   const stackRank = React.useSyncExternalStore(subscribeFloatingLayers, () => floatingLayerRank(layerId));
@@ -507,6 +517,9 @@ export function ProjectFloatingLayer(props: ProjectFloatingLayerProps) {
     if (transitionDirection) {
       previousExpandedRef.current = props.expanded;
       genieDirectionRef.current = transitionDirection;
+      // A restored window comes back in front of the windows opened while it was minimized.
+      // 还原的窗口回到其最小化期间打开的窗口之前。
+      if (transitionDirection === "restore") raiseFloatingLayer(layerId);
     }
     // requestedDirection remains pending across the extra mount required by a restore transition.
     // requestedDirection 在还原过程额外需要的一次挂载之间保持待处理状态。
@@ -601,7 +614,7 @@ export function ProjectFloatingLayer(props: ProjectFloatingLayerProps) {
       setAnimationState(settledState);
       if (settledState === "closed") setSurfaceMounted(false);
     };
-  }, [props.expanded, props.minimizeAnchorRef, surfaceMounted]);
+  }, [layerId, props.expanded, props.minimizeAnchorRef, surfaceMounted]);
 
   // toggleMaximized switches between the workspace rectangle and the last exact normal geometry.
   // toggleMaximized 在工作区矩形与最近一次精确普通几何之间切换。
@@ -946,7 +959,7 @@ function measuredFloatingLayout(surface: HTMLDivElement): FloatingLayerLayout {
 export function createDefaultProjectFloatingLayout(
   boundaryWidth: number,
   boundaryHeight: number,
-  preferredSize: FloatingLayerPreferredSize = { width: 760, height: 620 },
+  preferredSize: FloatingLayerPreferredSize = DEFAULT_FLOATING_LAYER_SIZE,
 ): FloatingLayerLayout {
   // preferredWidth matches the requested default while leaving a compact outer margin when space permits.
   // preferredWidth 匹配请求的默认宽度，并在空间允许时保留紧凑外边距。
@@ -958,8 +971,8 @@ export function createDefaultProjectFloatingLayout(
     Math.max(Math.min(340, boundaryHeight), Math.round(boundaryHeight * 0.58)),
   );
   return clampFloatingLayout({
-    x: Math.max(0, boundaryWidth - preferredWidth - 16),
-    y: Math.max(0, boundaryHeight - preferredHeight - 26),
+    x: Math.max(0, boundaryWidth - preferredWidth - 16 - (preferredSize.inset ?? 0)),
+    y: Math.max(0, boundaryHeight - preferredHeight - 26 - (preferredSize.inset ?? 0)),
     width: preferredWidth,
     height: preferredHeight,
   }, boundaryWidth, boundaryHeight);

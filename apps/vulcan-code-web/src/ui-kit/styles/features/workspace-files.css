@@ -158,6 +158,9 @@
 
 .workspace-file-preview.media {
   display: grid;
+  /* One fixed cell, so a large image or video scales down to fit instead of growing the cell. */
+  /* 单个固定单元格，使大图片或视频缩小以适应，而不是撑大单元格。 */
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
   place-items: center;
   padding: calc(var(--vk-u) * 3);
   background: color-mix(in srgb, var(--vk-sunken) 28%, var(--vk-ground));

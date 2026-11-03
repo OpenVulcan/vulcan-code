@@ -482,17 +482,18 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       state: activateWorkspaceContextTab(current.state, tabId),
     }));
   }, []);
-  // openWorkspaceFile shows a project file in a files tab of the open right panel and a viewable file outside the
-  // project in the viewer tab; other files, and explicit OS actions, go to the file action host. Transcript cards
-  // reach it through WorkspaceFileOpenContext. Its identity never changes, so tab changes do not re-render every
-  // transcript card.
-  // openWorkspaceFile 在展开的右侧面板的文件页签中显示项目文件，项目之外的可查看文件则显示在查看页签中；其他文件及显式
-  // 的操作系统操作交给文件操作宿主。转录卡片通过 WorkspaceFileOpenContext 调用它。其引用恒定不变，页签变化不会使每张
-  // 转录卡片重新渲染。
+  // openWorkspaceFile opens a viewable file in a file window of the session, shows another project file in a files tab
+  // of the open right panel and a docked file in the viewer tab; other files, and explicit OS actions, go to the file
+  // action host. Transcript cards reach it through WorkspaceFileOpenContext. Its identity never changes, so tab
+  // changes do not re-render every transcript card.
+  // openWorkspaceFile 在会话的文件窗口中打开可查看文件，在展开的右侧面板的文件页签中显示其他项目文件，在查看页签中显示
+  // 挂到右侧的文件；其他文件及显式的操作系统操作交给文件操作宿主。转录卡片通过 WorkspaceFileOpenContext 调用它。其引用
+  // 恒定不变，页签变化不会使每张转录卡片重新渲染。
   const openWorkspaceFileLatest = React.useRef<WorkspaceFileOpener>(() => undefined);
   openWorkspaceFileLatest.current = (path, lines, action) => {
     const route = routeWorkspaceFileOpen(selectedChatProject?.path ?? null, path, action);
     if (route.kind === "action") return requestWorkspaceFileAction(route.path, route.action);
+    if (route.kind === "window") return void import("@/components/file-windows/file-window-store").then((store) => store.openFileWindow(props.selectedConversationId ?? "", route.path));
     const next = route.kind === "viewer" ? openWorkspaceViewerContextTab(contextTabState, route.path, t) : focusWorkspaceFilesTab(contextTabState, t);
     setContextTabStateEntry((current) => ({ ...current, state: next }));
     if (next.activeTabId && route.kind === "files") requestWorkspaceFileOpen(next.activeTabId, path, lines);

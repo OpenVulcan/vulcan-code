@@ -1,0 +1,46 @@
+/* File windows: the taskbar above the composer and the read-only windows it restores; loaded with the first open file.
+ * 文件窗口：输入区上方的任务栏及其还原的只读窗口；随首个打开的文件加载。 */
+.vk-file-taskbar {
+  display: flex;
+  gap: calc(var(--vk-u) * 1.5);
+  width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  pointer-events: auto;
+}
+.vk-file-chip {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  min-width: 0;
+  max-width: calc(var(--vk-u) * 56);
+  height: var(--vk-h-sm);
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-panel);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
+}
+.vk-file-chip:hover { border-color: var(--vk-line-strong); color: var(--vk-ink); }
+/* A minimized window's chip stays, dimmed, until the window is restored or closed. */
+/* 最小化窗口的条目以较暗样式保留，直到窗口被还原或关闭。 */
+.vk-file-chip[data-minimized="true"] { border-style: dashed; color: var(--vk-ink-3); }
+.vk-file-chip > button {
+  display: inline-flex;
+  align-items: center;
+  height: 100%;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.vk-file-chip > button:first-child { gap: calc(var(--vk-u) * 1.5); min-width: 0; padding: 0 calc(var(--vk-u) * 1) 0 calc(var(--vk-u) * 2); }
+.vk-file-chip > button:first-child > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-file-chip-close { padding: 0 calc(var(--vk-u) * 1.5); color: var(--vk-ink-3); }
+.vk-file-chip-close:hover { color: var(--vk-ink); }
+.vk-file-chip-close > .lucide { width: 0.75rem; height: 0.75rem; }
+
+/* The window body holds one viewer filling it. */
+/* 窗口主体容纳一个占满其空间的查看器。 */
+.vk-file-win { position: absolute; inset: 0; display: flex; flex-direction: column; min-height: 0; }
+.vk-file-win-head { min-width: 0; }

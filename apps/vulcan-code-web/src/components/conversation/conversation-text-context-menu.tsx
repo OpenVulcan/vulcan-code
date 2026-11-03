@@ -108,7 +108,7 @@ export function ConversationTextContextMenu(props: ConversationTextContextMenuPr
       <ContextMenuContent onCloseAutoFocus={(event) => event.preventDefault()}>
         {fileReference && openFile ? <>
           <ContextMenuItem onSelect={() => openFile(fileReference.path, fileReference.lines)}>
-            {t("fileActions.openInSidePanel")}
+            {t("fileActions.open")}
           </ContextMenuItem>
           {localFileActionsAvailable() ? <>
             <ContextMenuItem onSelect={() => openFile(fileReference.path, fileReference.lines, "open")}>

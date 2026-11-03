@@ -822,7 +822,7 @@ function WorkspaceContextTabContent(args: {
   if (args.activeTab.kind === "viewer") {
     return <div className="vk-panel-body" data-fill="">
       {args.activeTab.viewerPath ? <React.Suspense fallback={null}>
-        <LazyFileViewerTab key={args.activeTab.viewerPath} path={args.activeTab.viewerPath} />
+        <LazyFileViewerTab key={args.activeTab.viewerPath} onUndock={() => args.props.onCloseContextTab(activeTabId)} path={args.activeTab.viewerPath} />
       </React.Suspense> : null}
     </div>;
   }

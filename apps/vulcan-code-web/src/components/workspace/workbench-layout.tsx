@@ -32,10 +32,7 @@ import {
   type ProjectSettingsDialogTarget,
 } from "@/components/project/project-settings-types";
 import { NavigationPanelBody, SidebarFlowSwitch } from "@/components/project/project-sidebar";
-import {
-  ProjectFloatingTerminalLayer,
-  type ProjectTerminalVisibilityRequest,
-} from "@/components/project/terminal/project-floating-terminal-layer";
+import type { ProjectTerminalVisibilityRequest } from "@/components/project/terminal/project-floating-terminal-layer";
 import {
   type DraftConversationSelection,
 } from "@/components/workspace/workspace-resizable-body";
@@ -169,6 +166,14 @@ import { useAssistantDockController } from "@/components/assistant/use-assistant
 // AssistantFloatingLayer loads only once at least one session floats as an assistant.
 // AssistantFloatingLayer 仅在至少一个会话作为助手浮动后加载。
 const AssistantFloatingLayer = React.lazy(() => import("@/components/assistant/assistant-floating-layer"));
+// ProjectFloatingTerminalLayer stays mounted but loads after the first screen; an open request made before it loads
+// is applied when it mounts.
+// ProjectFloatingTerminalLayer 始终挂载，但在首屏之后加载；加载前发出的打开请求在其挂载时生效。
+const ProjectFloatingTerminalLayer = React.lazy(() => import("@/components/project/terminal/project-floating-terminal-layer")
+  .then((module) => ({ default: module.ProjectFloatingTerminalLayer })));
+// FileWindowLayer shows the file windows of the selected session.
+// FileWindowLayer 显示所选会话的文件窗口。
+const FileWindowLayer = React.lazy(() => import("@/components/file-windows/file-window-layer"));
 
 // WorkbenchDialogs loads project and question dialogs only after one actually opens.
 // WorkbenchDialogs 仅在项目或提问对话框真正打开后加载其界面。
@@ -1385,16 +1390,19 @@ export function WorkbenchLayout(props: {
             onTitlebarDoubleClick={handleTitlebarDoubleClick}
           />
         )}
-        <ProjectFloatingTerminalLayer
-          minimizeAnchorRef={projectTerminalButtonRef}
-          onExpandedChange={setProjectTerminalExpanded}
-          openRequest={projectTerminalOpenRequest}
-          project={activeProject}
-          projects={workbenchState.projects}
-        />
+        <React.Suspense fallback={null}>
+          <ProjectFloatingTerminalLayer
+            minimizeAnchorRef={projectTerminalButtonRef}
+            onExpandedChange={setProjectTerminalExpanded}
+            openRequest={projectTerminalOpenRequest}
+            project={activeProject}
+            projects={workbenchState.projects}
+          />
+        </React.Suspense>
         {assistantDock.assistants.length > 0 ? (
           <React.Suspense fallback={null}><AssistantFloatingLayer /></React.Suspense>
         ) : null}
+        {selectedConversationId ? <React.Suspense fallback={null}><FileWindowLayer sessionId={selectedConversationId} /></React.Suspense> : null}
         <UnsupportedSessionDeleteDialog {...unsupportedDelete} />
         {showStartupOverlay ? <StartupOverlay startup={props.startup} /> : null}
       </main>
