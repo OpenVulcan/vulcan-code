@@ -1,24 +1,14 @@
-# Required checks for pull requests, manual runs and once a day for a new main commit; `Required checks` is the
-# single status that branch protection asks for. Pushes to main trigger nothing: a run takes longer than the
-# interval between pushes, so per-push runs would only queue. Heavy suites run in nightly.yml.
-# 合并请求、手动运行及每日一次（main 有新提交时）的必过检查；分支保护只要求 `Required checks` 这一项状态。
-# 推送 main 不触发任何运行：一次运行比推送间隔更长，逐次触发只会排队。重型测试集在 nightly.yml 中运行。
+# Cross-platform check before a release: the release workflow calls it before building, and it can be started by
+# hand. Pushes and merges trigger nothing; local checks (`make check`, targeted tests) cover the day-to-day work.
+# Every run checks everything, and the run fails when any job fails.
+# 发布前的跨平台检查：发布工作流在构建前调用它，也可以手动启动。推送与合并不触发任何运行；日常工作由本地检查
+# （`make check`、定向测试）负责。每次运行检查全部内容，任一作业失败即整次运行失败。
 name: CI
 on:
-  pull_request:
-    branches: [main]
-  schedule:
-    # 02:47 Taiwan time, ahead of the nightly suites.
-    # 台湾时间 02:47，早于夜间测试集。
-    - cron: '47 18 * * *'
+  workflow_call:
   workflow_dispatch:
 permissions:
   contents: read
-# A newer pull request commit cancels the older run; main runs finish so they can write the shared cache.
-# 合并请求的新提交会取消旧运行；main 的运行跑完，以便写入共享缓存。
-concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 env:
   CARGO_INCREMENTAL: '0'
   # Tests inherit dev; dropping workspace debug info shrinks the target directory without disabling assertions.
@@ -29,50 +19,8 @@ env:
   CARGO_BUILD_JOBS: '4'
   CARGO_TERM_COLOR: always
 jobs:
-  changes:
-    name: Classify changes
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      actions: read
-    outputs:
-      scripts: ${{ steps.scope.outputs.scripts }}
-      frontend: ${{ steps.scope.outputs.frontend }}
-      desktop: ${{ steps.scope.outputs.desktop }}
-      static: ${{ steps.scope.outputs.static }}
-      rust: ${{ steps.scope.outputs.rust }}
-      fixtures: ${{ steps.scope.outputs.fixtures }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - id: versions
-        run: node scripts/ci-runtime-versions.mjs
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: ${{ steps.versions.outputs.node }}
-      - name: Verify classification and required-result failure paths
-        run: node --test scripts/ci-scope.test.mjs
-      # A scheduled run reads the commit of the last successful run on main, so an unchanged main runs no gate.
-      # 定时运行读取 main 上最近一次成功运行的提交，main 未变化时不运行任何检查。
-      - id: passed
-        if: github.event_name == 'schedule'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -eu
-          sha=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=main&status=success&per_page=1" --jq '.workflow_runs[0].head_sha // ""')
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-      - id: scope
-        env:
-          CI_LAST_PASSED_SHA: ${{ steps.passed.outputs.sha }}
-        run: node scripts/ci-scope.mjs --from-event
   scripts:
     name: Build scripts (${{ matrix.os }})
-    needs: changes
-    if: needs.changes.outputs.scripts == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -106,8 +54,6 @@ jobs:
         run: node --test scripts/*.test.mjs scripts/*.test.cjs
   frontend:
     name: Frontend
-    needs: changes
-    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -129,7 +75,6 @@ jobs:
       - name: Install frozen frontend dependencies
         run: pnpm --dir apps/vulcan-code-web install --frozen-lockfile
       - name: Prove invalid lint and architecture fixtures are rejected
-        if: needs.changes.outputs.fixtures == 'true'
         run: |
           pnpm --dir apps/vulcan-code-web run test:lint
           pnpm --dir apps/vulcan-code-web run test:architecture
@@ -141,8 +86,6 @@ jobs:
         run: pnpm --dir apps/vulcan-code-web run build
   desktop:
     name: Desktop
-    needs: changes
-    if: needs.changes.outputs.desktop == 'true'
     runs-on: windows-2025
     timeout-minutes: 15
     env:
@@ -171,8 +114,6 @@ jobs:
         run: pnpm --dir apps/vulcan-code-desktop run test:unit
   static:
     name: Static checks
-    needs: changes
-    if: needs.changes.outputs.static == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -190,8 +131,6 @@ jobs:
         run: node scripts/check.mjs rustfmt repository
   rust-check:
     name: Rust clippy
-    needs: changes
-    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -203,8 +142,6 @@ jobs:
         run: node scripts/check.mjs clippy
   rust-tests:
     name: Rust fast tests
-    needs: changes
-    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-24.04
     # A cold cache compiles two dependency graphs (the isolated LanceDB library and the workspace tests),
     # at least half an hour each on this runner. A timeout leaves compilers writing `target/`, so the cache is not
@@ -233,32 +170,20 @@ jobs:
           node scripts/managed-node.mjs output
       - name: Fast nextest set without quarantined tests
         run: node scripts/test-rust.mjs fast
-  # Not yet required: it joins `Required checks` after two weeks of consecutive green runs.
-  # 暂不必过：连续两周全绿后再加入 `Required checks`。
-  windows-check:
-    name: Windows service check (advisory)
-    needs: changes
-    if: needs.changes.outputs.rust == 'true'
-    runs-on: windows-2025
+  # Rust tests run on Linux; Windows and macOS compile the service so platform-specific code is checked there too.
+  # Rust 测试在 Linux 上运行；Windows 与 macOS 编译服务，使平台专属代码在这两个系统上也得到检查。
+  platform-check:
+    name: Service check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
       - uses: ./.github/actions/rust-setup
-      - name: Check the service on Windows
+      - name: Check the service
         run: cargo check --locked -p vulcan-code-service
-  required:
-    name: Required checks
-    if: always()
-    needs: [changes, scripts, frontend, desktop, static, rust-check, rust-tests]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          persist-credentials: false
-      - name: Require success for selected jobs and intentional skips for all others
-        env:
-          CI_NEEDS: ${{ toJSON(needs) }}
-        run: node scripts/ci-scope.mjs --verify-required

@@ -1,6 +1,6 @@
-// Run the Rust test suite: `fast` for the inner loop and the required CI set, `full` before merging or
-// releasing and nightly, `quarantine` for the known-unstable tests that the other two leave out.
-// 运行 Rust 测试：`fast` 用于内循环与 CI 必过集，`full` 用于合并、发布前与夜间，`quarantine` 运行另两者
+// Run the Rust test suite: `fast` for the inner loop and the CI set, `full` before merging, before releasing
+// and in the full-tests workflow, `quarantine` for the known-unstable tests that the other two leave out.
+// 运行 Rust 测试：`fast` 用于内循环与 CI，`full` 用于合并、发布前与完整测试工作流，`quarantine` 运行另两者
 // 排除的已知不稳定测试。
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -41,8 +41,8 @@ const steps = {
     // nextest 不运行文档测试。
     ['cargo', ['test', '--locked', '--workspace', '--doc']],
   ],
-  // Only the quarantined tests, outside any profile filter, so nightly keeps collecting their results.
-  // 只运行被隔离的测试且不受任何配置过滤，使夜间持续收集其结果。
+  // Only the quarantined tests, outside any profile filter, so full-test runs keep collecting their results.
+  // 只运行被隔离的测试且不受任何配置过滤，使完整测试运行持续收集其结果。
   quarantine: quarantine.length === 0 ? [] : [
     library,
     ['cargo', ['nextest', 'run', '--locked', '--workspace', '--no-fail-fast', '-E', quarantined]],

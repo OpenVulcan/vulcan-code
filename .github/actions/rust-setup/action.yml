@@ -43,8 +43,8 @@ runs:
       shell: bash
       run: node scripts/install-locked-tools.mjs protoc
     # Only third-party build products are cached, since a fresh checkout rebuilds workspace crates anyway;
-    # only main writes, so pull requests read the shared cache and never replace it.
-    # 只缓存第三方构建产物，因为新检出总会重新编译工作区 crate；只有 main 写入，PR 只读共享缓存，绝不替换。
+    # only runs on main write, so runs from other refs read the shared cache and never replace it.
+    # 只缓存第三方构建产物，因为新检出总会重新编译工作区 crate；只有 main 上的运行写入，其他引用的运行只读共享缓存，绝不替换。
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
       with:
         shared-key: ${{ inputs.shared-key }}

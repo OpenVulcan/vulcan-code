@@ -181,7 +181,7 @@ make deps-rust-tools
 
 ### 持续集成中的精简准备
 
-开发机继续使用 `make init-system`。GitHub Actions 的 Rust 作业（必过项在 Ubuntu，另有 Windows 检查与夜间完整测试）只准备当前检查实际使用的依赖：`.github/actions/rust-setup` 安装 Linux 原生包、固定工具链与 protoc；测试作业再由 `install-locked-tools.mjs` 安装 nextest 与内置 sg/rg/rtk，执行 `make deps lua` 和 `managed-node.mjs output`（只验证 Debug 发行目录），夜间在运行时回归前显式 `make sync`。不为这些测试编译安装未使用的 hakari、deny 或 about。
+开发机继续使用 `make init-system`。GitHub Actions 的 Rust 作业（测试在 Ubuntu，另有 Windows 与 macOS 编译检查和手动的完整测试）只准备当前检查实际使用的依赖：`.github/actions/rust-setup` 安装 Linux 原生包、固定工具链与 protoc；测试作业再由 `install-locked-tools.mjs` 安装 nextest 与内置 sg/rg/rtk，执行 `make deps lua` 和 `managed-node.mjs output`（只验证 Debug 发行目录），完整测试在运行时回归前显式 `make sync`。不为这些测试编译安装未使用的 hakari、deny 或 about。
 
 nextest 的 CI 二进制只锁定 CI 使用的 Windows x64 与 Linux x64，安装到忽略目录 `target/ci-tools/bin/`，不覆盖开发机全局 Cargo 工具。唯一版本与归档 SHA-256 来源为 `scripts/build-inputs.lock.json`；下载器检查缓存摘要，安装器检查实际版本，不使用 latest 或未校验的归档。开发机其他平台仍使用原初始化入口。分类与缓存规则见 [仓库检查](repository-quality-gates.md)。
 
@@ -241,7 +241,7 @@ cargo test --doc
 
 ### 本地测试入口
 
-本地与 CI 使用同一入口：CI 必过项运行 `fast`，夜间运行 `full`（见 [仓库检查](repository-quality-gates.md)）。
+本地与 CI 使用同一入口：CI 运行 `fast`，完整测试工作流运行 `full`（见 [仓库检查](repository-quality-gates.md)）。
 
 | 命令 | 内容 |
 | --- | --- |

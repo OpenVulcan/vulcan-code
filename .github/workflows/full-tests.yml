@@ -1,0 +1,63 @@
+# Full suites, started by hand when a release needs more than the fast set in ci.yml: all nextest tests, isolated
+# callbacks and doctests on Windows and Linux, the plugin manifest contract, and the quarantined tests on their own.
+# 完整测试集，在发布需要比 ci.yml 快速集更多的验证时手动启动：Windows 与 Linux 上的全部 nextest、隔离回调与
+# 文档测试，插件清单契约，以及单独运行的被隔离测试。
+name: Full tests
+on:
+  workflow_call:
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_BUILD_JOBS: '4'
+  CARGO_TERM_COLOR: always
+jobs:
+  rust-full:
+    name: Full Rust suite (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      # The CI fast tests compile the same graph, so both reuse one dependency cache per platform.
+      # CI 快速测试编译相同的依赖图，因此两者在每个平台上共用一份依赖缓存。
+      - uses: ./.github/actions/rust-setup
+        with:
+          shared-key: tests
+      - name: Test runner, bundled tools, Lua payload, managed Node and synced resources
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          node scripts/install-locked-tools.mjs nextest
+          echo "$PWD/target/ci-tools/bin" >> "$GITHUB_PATH"
+          node scripts/install-locked-tools.mjs bundled
+          if [ "$RUNNER_OS" = Windows ]; then make_entry='pwsh ./make.ps1'; else make_entry='sh ./make.sh'; fi
+          $make_entry deps lua
+          node scripts/managed-node.mjs output
+          $make_entry sync
+      - name: Full nextest set, isolated callbacks and doctests
+        run: node scripts/test-rust.mjs full
+      # Quarantined tests report results without failing the run; their outcomes decide when they leave the list.
+      # 被隔离的测试只报告结果，不使本次运行失败；其结果决定何时移出清单。
+      - name: Quarantined tests
+        continue-on-error: true
+        run: node scripts/test-rust.mjs quarantine
+      - name: Plugin manifest contract and bundled plugin runtime
+        if: runner.os == 'Linux'
+        run: |
+          set -eu
+          cargo run --locked -p vulcan-plugin-runtime --features manifest-schema --bin vulcan-plugin-manifest -- schema-check docs/contracts
+          cargo test --locked -p vulcan-plugin-runtime --features manifest-schema -- manifest_authoring --test-threads=1
+          cargo test --locked -p vulcan-plugin-runtime --features manifest-schema runtime::tests::bundled -- --test-threads=1 --include-ignored
+          node --test plugins/vulcan-debug-runtime/node/sidecar.test.mjs

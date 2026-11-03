@@ -1,16 +1,16 @@
 // Read the CI quarantine list and turn it into nextest filtersets.
 // 读取 CI 隔离清单，并转换为 nextest 过滤表达式。
 //
-// The required fast set excludes quarantined tests; nightly runs them on their own to collect data.
+// The CI fast set excludes quarantined tests; the full-tests workflow runs them on their own to collect data.
 // Each entry names one exact test with its reason, date and owner, and leaves the list once fixed.
-// 必过快速集排除被隔离的测试；夜间单独运行它们以收集数据。每项精确指定一个测试及其原因、日期和负责人，
+// CI 快速集排除被隔离的测试；完整测试工作流单独运行它们以收集数据。每项精确指定一个测试及其原因、日期和负责人，
 // 修好后移出清单。
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// QUARANTINE_PATH is the single list shared by CI, nightly and local runs.
-// QUARANTINE_PATH 是 CI、夜间与本地运行共用的唯一清单。
+// QUARANTINE_PATH is the single list shared by CI, full-test and local runs.
+// QUARANTINE_PATH 是 CI、完整测试与本地运行共用的唯一清单。
 export const QUARANTINE_PATH = fileURLToPath(new URL('../.config/ci-quarantine.json', import.meta.url));
 
 // NAME admits Cargo package names and Rust test paths, which never need filterset quoting.
