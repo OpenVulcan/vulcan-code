@@ -1181,7 +1181,13 @@ async fn materialize_resource(
             }
         };
         ContentItem::Text {
-            text: attachment_text(&planned, &locator, reason, upload_failure.as_ref()),
+            text: attachment_text(
+                &planned,
+                &locator,
+                project_directory,
+                reason,
+                upload_failure.as_ref(),
+            ),
         }
     };
     Ok((
@@ -1401,18 +1407,48 @@ pub(super) fn attachment_kind(
 /// `reason`是策略结果；可选`upload_failure`仅包含本次出现观测到的强类型失败。
 /// Returns escaped model-visible text without modifying the original user prompt or exposing private upload responses.
 /// 返回转义后的模型可见文本，不修改原用户提示词，也不暴露私有上传响应。
+/// Documents also disclose their stored path under `project_directory`, derived without filesystem access so replays stay identical.
+/// 文档另外披露其在`project_directory`下的已保存路径，该路径不经文件系统访问推出，使回放保持一致。
 fn attachment_text(
     planned: &PlannedResource,
     locator: &str,
+    project_directory: &std::path::Path,
     reason: MediaDeliveryRejection,
     upload_failure: Option<&MediaUploadFailure>,
 ) -> String {
+    // Only document kinds disclose a path; media keep their context-managing tool routes.
+    // 只有文档类披露路径；媒体保留控制上下文的工具路线。
+    let stored_path = planned
+        .entry
+        .as_ref()
+        .filter(|entry| {
+            vulcan_agent_runtime::provider_input_normalizer::metadata_only_discloses_stored_path(
+                &attachment_kind(planned.kind, entry.mime.as_deref()),
+            )
+        })
+        .map(|entry| {
+            vulcan_runtime_assets::native_host_path_text_from_path(
+                &vulcan_workspace_store::workspace_store::project_resource_entity_path(
+                    project_directory,
+                    &entry.sha256,
+                ),
+            )
+        });
     // JSON escaping keeps filenames inert while disclosing only safe metadata.
     // JSON转义使文件名保持纯数据，同时只披露安全元数据。
-    let metadata = serde_json::json!({"resource_id": planned.id.value(), "resource_path": locator, "file_name": planned.entry.as_ref().map(|entry| &entry.original_name), "mime_type": planned.entry.as_ref().and_then(|entry| entry.mime.as_deref()), "byte_len": planned.entry.as_ref().map(|entry| entry.size), "native_delivery": "metadata_only", "reason": reason.explanation(), "upload_failure": upload_failure.map(ToString::to_string)});
+    let mut metadata = serde_json::json!({"resource_id": planned.id.value(), "resource_path": locator, "file_name": planned.entry.as_ref().map(|entry| &entry.original_name), "mime_type": planned.entry.as_ref().and_then(|entry| entry.mime.as_deref()), "byte_len": planned.entry.as_ref().map(|entry| entry.size), "native_delivery": "metadata_only", "reason": reason.explanation(), "upload_failure": upload_failure.map(ToString::to_string)});
+    let follow_up = match stored_path {
+        Some(path) => {
+            metadata["path"] = serde_json::Value::String(path);
+            format!(
+                " {}",
+                vulcan_agent_runtime::provider_input_normalizer::METADATA_ONLY_STORED_PATH_NOTICE
+            )
+        }
+        None => String::new(),
+    };
     format!(
-        "ATTACHMENT: {metadata}. CONTENT_VISIBILITY: resource bytes were not provided; do not infer or guess the attachment contents. {}",
-        vulcan_agent_runtime::attachment_export::metadata_only_export_hint()
+        "ATTACHMENT: {metadata}. CONTENT_VISIBILITY: resource bytes were not provided; do not infer or guess the attachment contents.{follow_up}"
     )
 }
 

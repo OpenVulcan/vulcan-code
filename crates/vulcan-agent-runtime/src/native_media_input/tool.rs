@@ -72,7 +72,7 @@ fn media_type_guidance(mimes: &[&str]) -> String {
                 .expect("explicit media-understanding capability");
             lines.push(format!("{label}: NOT SUPPORTED by read_media. Do not pass this media type to read_media. For understanding, call {tool} if it is in your available tools; otherwise report that no suitable understanding tool is available."));
         } else {
-            lines.push(format!("{label}: NOT SUPPORTED by read_media. Do not pass PDF files to read_media. To use a PDF's content, extract its text with another available tool, such as a shell command; a PDF given as a project-resource/attachment locator must first be copied into the workspace with {} if it is in your available tools. Report that the PDF cannot be read only when no such tool works.", crate::attachment_export::ATTACHMENT_EXPORT_TOOL_ID));
+            lines.push(format!("{label}: NOT SUPPORTED by read_media. Do not pass PDF files to read_media. To use a PDF's content, extract its text with another available tool, such as a shell command; a PDF attachment listing gives its stored file `path` for this. Report that the PDF cannot be read only when no such tool works."));
         }
     }
     lines.push(image_conversion::guidance(mimes));

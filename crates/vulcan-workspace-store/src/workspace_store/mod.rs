@@ -75,8 +75,8 @@ pub use resource_catalog::{
     ProjectResourceCatalogRegistry, ProjectResourceRegistration, ProjectResourceResolution,
     ProjectResourceSource, ProjectResourceUploadReceipt, ProviderBinding, ResourceCatalogEntry,
     add_project_resource, load_project_resource_catalog, parse_project_resource_locator,
-    project_resource_catalog_path, project_resource_locator, resolve_project_resource,
-    resolve_project_resource_source,
+    project_resource_catalog_path, project_resource_entity_path, project_resource_locator,
+    resolve_project_resource, resolve_project_resource_source,
 };
 pub use session_index_v1::SESSION_ASSISTANT_NAME_MAX_CHARS;
 #[cfg(test)]

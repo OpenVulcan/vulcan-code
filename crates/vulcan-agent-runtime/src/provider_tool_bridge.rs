@@ -207,12 +207,6 @@ pub(crate) fn build_provider_tool_candidates(
     validate_enabled_media_understanding_backends(&configuration)?;
     let available = runtime.available_provider_tool_targets(&configuration)?;
     let mut candidates = Vec::new();
-    // Attachment export does not depend on the model, so every execution with a workspace gets it.
-    // 附件导出不依赖模型，因此每个具有工作区的执行都会获得它。
-    candidates.extend(crate::attachment_export::build_attachment_export_candidate(
-        workspace_root.clone(),
-        media_resource_runtime.clone(),
-    ));
     if let Some(selection) = native_media_selection
         && let Some(candidate) = crate::native_media_input::build_read_media_candidate(
             Arc::clone(&runtime),

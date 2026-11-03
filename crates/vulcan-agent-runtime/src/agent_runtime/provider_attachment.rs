@@ -41,11 +41,29 @@ pub(crate) fn build_attachment_transport_error_text(
     let file_name = model_visible_attachment_field(&attachment.file_name);
     let mime_type = model_visible_attachment_field(&attachment.mime_type);
     let scope = model_visible_attachment_field(scope.trim());
+    // Documents disclose their stored copy so ordinary tools can read them; media keep the tool routes.
+    // 文档披露已保存副本供普通工具读取；媒体保留工具路线。
+    let (path, follow_up) = if crate::provider_input_normalizer::metadata_only_discloses_stored_path(
+        &attachment.kind,
+    ) && !attachment.local_path.trim().is_empty()
+    {
+        (
+            format!(
+                "; path={}",
+                model_visible_attachment_field(&attachment.local_path)
+            ),
+            crate::provider_input_normalizer::METADATA_ONLY_STORED_PATH_NOTICE,
+        )
+    } else {
+        (
+            String::new(),
+            "No eligible understanding tool is registered for this attachment, so explain that the content cannot be read if the user asks about it.",
+        )
+    };
     format!(
-        "ATTACHMENT: id={attachment_id}; resource_path={resource_path}; file_name={file_name}; mime_type={mime_type}; byte_len={}. NATIVE_DELIVERY: metadata_only (route {scope} cannot consume {} input). CONTENT_VISIBILITY: resource bytes were not provided; do not infer or guess the attachment contents. {}",
+        "ATTACHMENT: id={attachment_id}; resource_path={resource_path}{path}; file_name={file_name}; mime_type={mime_type}; byte_len={}. NATIVE_DELIVERY: metadata_only (route {scope} cannot consume {} input). CONTENT_VISIBILITY: resource bytes were not provided; do not infer or guess the attachment contents. {follow_up}",
         attachment.byte_len.unwrap_or_default(),
         attachment.kind.modality_name(),
-        crate::attachment_export::metadata_only_export_hint(),
     )
 }
 
@@ -124,7 +142,19 @@ mod tests {
             build_attachment_transport_error_text(&test_attachment(), "anthropic-messages.v1");
         assert!(message.contains("screen.png"));
         assert!(message.contains("anthropic-messages.v1"));
-        assert!(message.contains(crate::attachment_export::ATTACHMENT_EXPORT_TOOL_ID));
+        assert!(!message.contains("C:/attachments/screen.png"));
+    }
+
+    /// Verifies document listings disclose the stored path while media listings do not.
+    /// 验证文档清单披露已保存路径，而媒体清单不披露。
+    #[test]
+    fn transport_error_discloses_path_only_for_documents() {
+        let mut attachment = test_attachment();
+        attachment.kind = ConversationAttachmentKind::File;
+        attachment.file_name = String::from("report.docx");
+        attachment.local_path = String::from("C:/attachments/report.docx");
+        let message = build_attachment_transport_error_text(&attachment, "openai-codex");
+        assert!(message.contains("path=\"C:/attachments/report.docx\""));
     }
 
     /// Verifies host-tool hints name the actual media modality instead of a fixed image label.

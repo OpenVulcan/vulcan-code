@@ -23,8 +23,8 @@ mod source;
 mod upload_receipt;
 
 pub use source::{
-    ProjectResourceSource, parse_project_resource_locator, project_resource_locator,
-    resolve_project_resource_source,
+    ProjectResourceSource, parse_project_resource_locator, project_resource_entity_path,
+    project_resource_locator, resolve_project_resource_source,
 };
 pub use upload_receipt::ProjectResourceUploadReceipt;
 

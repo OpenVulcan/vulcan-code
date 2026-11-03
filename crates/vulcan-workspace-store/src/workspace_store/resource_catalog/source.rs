@@ -11,6 +11,14 @@ pub fn project_resource_locator(resource_id: ResourceId) -> String {
     format!("project-resource://{}", resource_id.value())
 }
 
+/// Returns the stored entity path of the resource with `sha256` under `project_dir`, without any filesystem access.
+/// 不访问文件系统，返回`project_dir`下摘要为`sha256`的资源实体存储路径。
+/// Document-type attachment listings disclose this path so ordinary tools can read the stored copy.
+/// 文档类附件清单披露该路径，供普通工具读取已保存副本。
+pub fn project_resource_entity_path(project_dir: &Path, sha256: &str) -> PathBuf {
+    canonical_entity_path(project_dir, sha256)
+}
+
 /// Parses a canonical project-resource `reference`, distinguishing other declared locator families from malformed project locators.
 /// 解析规范项目资源`reference`，区分其他已声明定位符族与损坏的项目定位符。
 /// Returns an exact bounded id, absence for another family, or a safe syntax error without echoing the input.
@@ -35,8 +43,8 @@ pub fn parse_project_resource_locator(reference: &str) -> Result<Option<Resource
         .map_err(|_| String::from("Invalid project resource locator."))
 }
 
-/// One metadata-checked source; the private path never belongs in model-visible attachment text.
-/// 一份通过元数据检查的来源；私有路径绝不能进入模型可见附件文本。
+/// One metadata-checked source; only document-type listings disclose the entity path, never media listings.
+/// 一份通过元数据检查的来源；只有文档类清单披露实体路径，媒体类清单绝不披露。
 #[derive(Debug, Clone)]
 pub struct ProjectResourceSource {
     /// Immutable catalog identity and display metadata.

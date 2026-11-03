@@ -13,6 +13,21 @@ use vulcan_core::types::{
     ConversationAttachment, ConversationAttachmentDeliveryMode, ConversationAttachmentKind,
 };
 
+/// Instruction following the stored path that a document-type metadata-only listing discloses.
+/// 文档类仅元数据清单披露已保存路径后附带的说明。
+pub const METADATA_ONLY_STORED_PATH_NOTICE: &str = "The stored copy of this attachment is at `path`; read it with other available tools such as file reads, shell commands or scripts. The stored copy may have no file extension: use file_name and mime_type to choose a parser, and copy it to a name with the extension if a tool needs one. Do not modify the stored copy.";
+
+/// Reports whether a metadata-only listing of `kind` discloses the stored file path.
+/// 报告`kind`类的仅元数据清单是否披露已保存文件路径。
+/// Documents are read by ordinary tools; images, audio and video keep their understanding and `read_media` routes, which manage context size.
+/// 文档由普通工具读取；图片、音频与视频保留理解工具及`read_media`路线，由其控制上下文大小。
+pub fn metadata_only_discloses_stored_path(kind: &ConversationAttachmentKind) -> bool {
+    matches!(
+        kind,
+        ConversationAttachmentKind::File | ConversationAttachmentKind::Pdf
+    )
+}
+
 /// Holds the exact user payload that remains valid after protocol and model capability checks.
 /// 保存经过协议与模型能力检查后仍然有效的精确用户载荷。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
