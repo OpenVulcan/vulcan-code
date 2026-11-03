@@ -22,4 +22,4 @@ tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt", "time", "sync"] }
 
 [patch.crates-io]
-lance-bitpacking = { path = "@MAIN_ROOT@/vendor/lance-bitpacking" }
+lance-bitpacking = { git = "https://github.com/OpenVulcan/lance-bitpacking", rev = "b5d55514a2d84cbaa7cc8ce1ab9e260cbd598827" }

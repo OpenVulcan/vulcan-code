@@ -4605,6 +4605,7 @@ dependencies = [
 [[package]]
 name = "lance-bitpacking"
 version = "11.0.0"
+source = "git+https://github.com/OpenVulcan/lance-bitpacking?rev=b5d55514a2d84cbaa7cc8ce1ab9e260cbd598827#b5d55514a2d84cbaa7cc8ce1ab9e260cbd598827"
 dependencies = [
  "arrayref",
  "crunchy",

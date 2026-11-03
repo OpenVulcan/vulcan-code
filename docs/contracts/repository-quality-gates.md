@@ -55,7 +55,7 @@ Rust 作业的准备集中在 `.github/actions/rust-setup`：释放 Linux 磁盘
 
 ### Rust 缓存
 
-使用固定提交的 `Swatinem/rust-cache`：只缓存 Cargo 下载与第三方构建产物，工作区 crate 在保存前清除，因为新检出的源文件时间戳总会触发重新编译。`vendor/` 下的补丁 crate 位于仓库根目录内，rust-cache 保存前按清单路径把它当作工作区包清除，它与其上全部 LanceDB crate 因此每轮在两个依赖图中重编（热缓存下约 7–11 分钟）；修改文件时间或缓存键都无法保留这些产物。只有 main 写入，合并请求只读。CI 快速测试与夜间完整测试编译相同的依赖图，通过 `shared-key: tests` 在每个平台共用一份缓存；Clippy 与 Windows 检查按作业各自一份。GitHub 按容量与访问策略淘汰归档，不能宣称永久命中，也不能把本地热构建当成远程缓存验收。
+使用固定提交的 `Swatinem/rust-cache`：只缓存 Cargo 下载与第三方构建产物，工作区 crate 在保存前清除，因为新检出的源文件时间戳总会触发重新编译。rust-cache 保存前会清除清单位于仓库根目录内的所有包，因此第三方补丁不能放在仓库内：`lance-bitpacking` 补丁放在独立仓库 `OpenVulcan/lance-bitpacking`，根清单的 `[patch.crates-io]` 按提交固定引用，`deny.toml` 只允许该 Git 来源。补丁曾放在 `vendor/` 时，它与其上全部 LanceDB crate 每轮在两个依赖图中重编，热缓存下约多 7–11 分钟。只有 main 写入，合并请求只读。CI 快速测试与夜间完整测试编译相同的依赖图，通过 `shared-key: tests` 在每个平台共用一份缓存；Clippy 与 Windows 检查按作业各自一份。GitHub 按容量与访问策略淘汰归档，不能宣称永久命中，也不能把本地热构建当成远程缓存验收。
 
 ### 夜间与隔离清单
 

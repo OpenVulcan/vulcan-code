@@ -79,4 +79,6 @@ skip-tree = []
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = []
+# Reviewed: lance-bitpacking 11.0.0 with paste replaced by pastey, pinned by commit in the root manifest.
+# 已审查：lance-bitpacking 11.0.0 将 paste 替换为 pastey，根清单按提交固定。
+allow-git = ["https://github.com/OpenVulcan/lance-bitpacking"]

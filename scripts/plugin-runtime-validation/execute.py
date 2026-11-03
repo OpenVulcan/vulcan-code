@@ -51,7 +51,7 @@ def evidence(roots, configs, records):
     """
     # Retain the exact local input or evidence for this finite phase.
     # 为此有限阶段保留精确本地输入或证据。
-    scoped = ["Cargo.toml", "Cargo.lock", "crates", "workspace-hack", "plugin-bridge", "vendor/lance-bitpacking", ".cargo/config.toml"]
+    scoped = ["Cargo.toml", "Cargo.lock", "crates", "workspace-hack", "plugin-bridge", ".cargo/config.toml"]
     # Freeze the exact ignored native protoc installation consumed by both builds, including its import files.
     # 冻结两个构建消费的精确被忽略原生 protoc 安装，包含其导入文件。
     native_root = roots["main"] / ".cargo/protoc"

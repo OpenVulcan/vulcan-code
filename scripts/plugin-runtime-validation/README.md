@@ -2,7 +2,7 @@
 
 该目录落实原计划第 13.3、22.146.65 节的有限消费者及后述真实生产 Action 分支。两个独立消费者通过相同名称的 `vulcan-plugin-runtime` path 依赖，分别消费显式指定的旧主树与新宿主树；旧消费者固定使用已发布注册表 LuaSkills 0.5.9，不应用 LuaSkills 本地补丁；新消费者固定使用显式 UPSTREAM 的本地 LuaSkills 0.6.0 候选。原七种合成负载均调用公开 `VulcanPluginRuntimeManager::invoke`；真实 Action 分支调用同一管理器的公开 `invoke_action`。旧合成组执行完整租约创建、桥分发、shutdown、close；新合成组执行公开 SingleCall／公共复用／专用复用。没有裸核心 submit 对照，没有生产接口改动。
 
-`Cargo.toml` 是包含路径占位符的模板。脚本只在源码树之外的全新运行目录展开两个独立工作区，不改源仓库 Cargo、锁或版本。`prepare` 冻结三棵树的当前修订、完整脏范围、指定构建源码的逐文件 SHA-256，以及驱动、配置的字节哈希；明确包含实际 vendor/lance-bitpacking 补丁及 Cargo 配置。两组共用 MAIN 已安装的原生 protoc 和 include，逐文件记录该被忽略安装的哈希，并显式传入构建环境。旧 MAIN 是当前脏基线，不是历史正式产品的干净提交。调用方必须在首次测量之前另外冻结机器、绝对时延/容量及原相对门槛；本目录不提供结果后可修改的测量默认值。
+`Cargo.toml` 是包含路径占位符的模板。脚本只在源码树之外的全新运行目录展开两个独立工作区，不改源仓库 Cargo、锁或版本。`prepare` 冻结三棵树的当前修订、完整脏范围、指定构建源码的逐文件 SHA-256，以及驱动、配置的字节哈希；明确包含 Cargo 配置；lance-bitpacking 补丁由模板按提交固定。两组共用 MAIN 已安装的原生 protoc 和 include，逐文件记录该被忽略安装的哈希，并显式传入构建环境。旧 MAIN 是当前脏基线，不是历史正式产品的干净提交。调用方必须在首次测量之前另外冻结机器、绝对时延/容量及原相对门槛；本目录不提供结果后可修改的测量默认值。
 
 ```powershell
 rtk proxy python -X utf8 execute.py prepare --main-root MAIN --host-root HOST --upstream-root UPSTREAM --run-dir RUN --config CONFIG
