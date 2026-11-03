@@ -32,7 +32,8 @@
 10. **按需文档是条件性强制要求。** 任务命中下列领域时，必须先阅读对应链接，再开始修改。
 11. **同一边界值只允许一处定义。** 同一语义的上限、超时、容量等边界值必须有唯一来源，其余位置
     一律派生或引用；发现同一概念存在多个独立字面量时按缺陷处理，无论当前取值是否巧合一致。
-12. **应用数据库运行时逐版本升级。** 当前版本以根 `Cargo.toml` `[workspace.package].version` 为准。
+12. **应用数据库运行时逐版本升级。** 当前产品版本以 `crates/vulcan-runtime-assets/resources/product.json` 为准（运行时读取，不编译进二进制；
+    工作区 crate 版本冻结，不随发布变化）。
     应用 SQLite 数据库版本由 `app_schema_migrations.rs` 的升级链长度派生（基线 v1）；结构变化必须同时修改
     当前 DDL 并追加一步升级（已有步骤冻结不改），启动时先备份、在单一事务中逐版本升级并校验完整性，
     失败回滚；低于基线或未知的未来版本明确拒绝，不降级。不得删除数据库重建，不得猜测字段映射或补默认值。
@@ -72,7 +73,7 @@
 | 修改 `tool_chain` 工具、其可链接范围、系统/会话开关或工具链卡 | 链本身不审批，每一步单独走计划模式闸门与权限管线，任一步被拒或用户停止即停止，`continue_on_error` 不能放行；`shell_command` 的 `command` 只接受数字与布尔表达式值，文本走 `stdin`；步骤取值进入表达式前按直接调用同样脱敏，原始流只在内存中；只有 `CHAINABLE_TOOL_IDS` 列出的原生工具可链接且须逐个列在工具描述中，MCP、LuaSkills 与其他工具永不可链接；用法只写在工具描述中，中途切换须用户确认打破上下文，之后只追加 `dynamic.tool_chain` 变更消息；步数范围只在 `vulcan-tool-chain` 定义 | [`tool-chain.md`](docs/contracts/tool-chain.md) |
 | 修改会话临时 MCP（`mcp_connect`、`mcp_tools`、`mcp_call`、会话连接注册表）或其权限分类 | 只有三个固定工具，被连接服务器的工具不进入工具清单；连接属于根会话，子代理可用不可开关；绝不写配置、绝不自动重连，Core 重启后明确报错；归档即关闭；stdio 连接按执行命令审批，http/sse 为 Opaque，调用按工具名只读启发式；密钥只经环境变量名取值，不接受字面令牌或请求头；调用前按输入 Schema 校验；启动边界复用已配置服务器的常量 | [`session-mcp.md`](docs/contracts/session-mcp.md) |
 | 修改界面文案、语言清单或语言匹配规则 | 唯一权威是 `crates/vulcan-i18n/catalogs/`；任何界面不得另建语言列表、匹配规则或文案表副本；默认语言补全一切，非默认语言不得有额外键，占位符必须一致 | [`shared-language-catalogs.md`](docs/contracts/shared-language-catalogs.md) |
-| 提升工作区版本号或编写更新记录（`crates/vulcan-i18n/changelog/`） | 新版本加在 `releases.json` 顶部且等于工作区版本，每种注册语言各写一份说明，缺一种即构建失败、不回退；说明可用 `ui-*` 组件但禁用 `ui-code`；未发布时日期为 `null`，发布当天填写 | [`shared-language-catalogs.md`](docs/contracts/shared-language-catalogs.md) |
+| 提升产品版本号或编写更新记录（`crates/vulcan-runtime-assets/resources/changelog/`） | 新版本加在 `releases.json` 顶部且等于 `product.json` 的版本，每种注册语言各写一份说明，缺一种即 `make check` 失败、不回退；说明可用 `ui-*` 组件但禁用 `ui-code`；未发布时日期为 `null`，发布当天填写 | [`shared-language-catalogs.md`](docs/contracts/shared-language-catalogs.md) |
 | 修改终端客户端 TUI（`apps/vulcan-code-tui`） | 先读该目录的 `AGENTS.md`；服务调用一对一镜像 WebUI 函数、方法与参数；服务发现令牌不得出现在日志、错误、`Debug` 或命令输出中；验证只用模拟后端或本地合成服务，不对真实服务执行有副作用或付费的操作 | [`tui-design.md`](docs/contracts/tui-design.md)、[`tui-service-adaptation.md`](docs/contracts/tui-service-adaptation.md) |
 | 修改 LuaSkills 版本、技能配置、Schema、宿主注入或管理链路 | 版本以根 `Cargo.toml` 与 `Cargo.lock` 为准；实现以 `luaskills_runtime/` 与 `tooling/bridge/` 当前源码为准 | [`luaskills-skill-config-guide.md`](docs/contracts/luaskills-skill-config-guide.md) |
 | 修改 luaskills-debug 安装器、`luaskills_debug` 工具、调试 Lua 技能页面或 `luaskills-dev` 技能 | 只有一个安装器，页面、TUI 与工具共享同一 Core 任务；系列派生自内嵌 `luaskills` 版本，不匹配直接报错；校验和不符即失败；`install` 为 `Opaque`、计划模式只允许 `status`、派生代理不得安装 | [`luaskills-debug-tool.md`](docs/contracts/luaskills-debug-tool.md) |

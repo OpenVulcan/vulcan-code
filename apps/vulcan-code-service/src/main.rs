@@ -33,6 +33,14 @@ fn main() {
     // 在托盘或后台服务构造任何 TLS 客户端之前安装加密实现。
     vulcan_provider_adapters::install_process_rustls_crypto_provider()
         .expect("the process-wide Rustls CryptoProvider must install before service startup");
+    // The product version is read from the distribution, never compiled in; a missing or damaged
+    // `resources/product.json` stops every command here instead of surfacing later.
+    // 产品版本从发行物读取而非编译进来；`resources/product.json` 缺失或损坏时所有命令都在此停止，
+    // 而不是在之后才暴露。
+    if let Err(error) = vulcan_product_info::product() {
+        eprintln!("[vulcan-code-service] {error}");
+        std::process::exit(1);
+    }
     let args: Vec<String> = std::env::args().collect();
     // Service registration is a one-shot management command that never starts the Core itself.
     // 服务注册是一次性管理命令，本身从不启动 Core。

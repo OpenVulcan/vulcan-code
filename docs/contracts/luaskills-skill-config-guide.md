@@ -2,22 +2,25 @@
 
 ## 1. 适用范围
 
-本文说明 Vulcan Code 的 LuaSkills 技能包配置入口，面向技能包作者、宿主维护者和桌面端使用者。当前独立集成采用正式 0.8.2 注册表依赖，其版本和来源以根清单与实际锁为准。
+本文说明 Vulcan Code 的 LuaSkills 技能包配置入口，面向技能包作者、宿主维护者和桌面端使用者。当前独立集成采用正式 0.9.0 注册表依赖，其版本和来源以根清单与实际锁为准。
 
 技能配置声明以当前上游源码及已有生成技能配置契约为准，不执行旧配置探测、迁移、别名兼容、旧文件提示或自动清理。本文后续零点五点九版本引用保留历史契约与验证背景；不能用于证明零点六候选的构建来源。正式插件执行契约另见[插件执行引擎归属](plugin-execution-engine.md)。
 
 ### 1.1 当前正式依赖与本地验证边界
 
-根 `Cargo.toml` 精确声明 `luaskills = "=0.8.2"`，没有 LuaSkills 本地 path patch。实际锁的来源为
+根 `Cargo.toml` 精确声明 `luaskills = "=0.9.0"`，没有 LuaSkills 本地 path patch。实际锁的来源为
 `registry+https://github.com/rust-lang/crates.io-index`，校验和为
-`765f9bf4222f66626ae378a45e865fb1f3129234db37e30269d3285c15ed47dd`。该版本在 Core 五平台 GitHub
-发布（标签 `v0.8.2`）全部门禁通过后才发布到 crates.io。`workspace-hack/Cargo.toml` 中的 `luaskills`
+`3993b8ff5960b80f3bef2f7c923b2b1c0c1963b4b9499331a0d5450c7a5c9ce0`。该版本在 Core 五平台 GitHub
+发布（标签 `v0.9.0`）全部门禁通过后才发布到 crates.io。`workspace-hack/Cargo.toml` 中的 `luaskills`
 条目由 `cargo hakari generate` 维护，升级后用 `cargo hakari generate --diff` 确认无差异。
 
 0.7.3 起 LuaSkills 不再拥有数据库存储：SQLite 只经宿主注册的回调承载，LanceDB 能力与
 `vldb-controller-client` 依赖均已移除。宿主在创建引擎前通过
 `host_database_providers::install` 注册 SQLite 回调；`build_host_options` 设置
 `host_mode = LuaRuntimeHostMode::Desktop`，使 Windows 上运行时拥有的控制台子进程不弹出窗口。
+运行时根属于只读发行树：`build_host_options` 把 `temp_dir` 与 `download_cache_root` 设为用户缓存下的
+`cache/luaskills/temp` 与 `cache/luaskills/downloads`，并设置 `preserve_host_writable_dirs = true`
+（LuaSkills 0.9 起），因此 LuaSkills 不再在运行时根下创建 `temp`；`temp_dir` 由宿主创建，下载缓存由引擎创建。
 `crates/vulcan-service-runtime/managed-runtimes.json` 的 `luaskills_version` 必须与根清单版本一致，
 否则构建脚本拒绝构建。
 
@@ -221,9 +224,9 @@ WebUI. Do not request or relay sensitive values.
 LuaSkills VM 池的宿主默认值由 `vulcan-luaskills-config::LuaSkillsRuntimeSettings::default()`
 定义：主 VM 池最小 4、最大 8，多余空闲 VM 在 60 秒后可回收；隔离 runLua 池最小 1、最大 4，
 多余空闲 VM 在 30 秒后可回收。缺少 `luaskills-runtime-setting.json` 时使用这些内存默认值，
-不会自动创建用户配置文件。新安装配置模板 `config/luaskills-runtime-setting.json` 与编译默认值
-通过测试保持一致；默认值变更时必须同步模板和本段说明。已有配置仍按用户保存值加载，
-资源同步仅在目标文件缺失时播种，不覆盖已有配置；已有文件缺少必填池字段仍显式报错。
+不会自动创建用户配置文件。该文件位于用户数据根的 `config/` 目录（`~/.vulcan/code/config/`），发行物不附带模板，
+安装目录在运行时从不写入；默认值变更时同步本段说明。已有配置仍按用户保存值加载；已有文件缺少必填池字段
+仍显式报错。
 
 服务端先读取不含值的声明，只为 `sensitive=false` 且当前合法的配置项读取和规范化有效值。写入结果同样会删除敏感项的规范值，再跨越 RPC 边界。
 

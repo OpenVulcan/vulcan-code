@@ -16,7 +16,7 @@
     "paths": {
       "@/*": ["./src/*"],
       "@catalogs/*": ["../../crates/vulcan-i18n/catalogs/*"],
-      "@changelog/*": ["../../crates/vulcan-i18n/changelog/*"]
+      "@changelog/*": ["../../crates/vulcan-runtime-assets/resources/changelog/*"]
     },
     "resolveJsonModule": true,
     "isolatedModules": true,

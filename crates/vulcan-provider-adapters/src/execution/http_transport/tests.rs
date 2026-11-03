@@ -2,7 +2,7 @@
 //! 真实 HTTP 执行与线路捕获生命周期的环回集成覆盖。
 
 use super::super::ProviderWireRequestTraceDispatch;
-use super::super::request_headers::VULCAN_CODE_USER_AGENT;
+use super::super::request_headers::vulcan_code_user_agent;
 use super::super::test_support::{
     minimal_request, pinned_openrouter_route, read_test_http_request,
 };
@@ -152,7 +152,7 @@ async fn http_wire_request_capture_matches_dispatched_api_body() {
     );
     assert_eq!(
         captured.headers.get("user-agent").map(String::as_str),
-        Some(VULCAN_CODE_USER_AGENT)
+        Some(vulcan_code_user_agent())
     );
     assert_eq!(
         captured

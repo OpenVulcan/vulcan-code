@@ -51,7 +51,10 @@ pub(crate) fn install_mcp_server(
         return Ok(Arc::clone(server));
     }
     let backend = KernelMcpBackend::new(app, Arc::downgrade(state));
-    let server = Arc::new(McpServer::new(Arc::new(backend), env!("CARGO_PKG_VERSION")));
+    let server = Arc::new(McpServer::new(
+        Arc::new(backend),
+        vulcan_product_info::version(),
+    ));
     guard.mcp_server = Some(Arc::clone(&server));
     Ok(server)
 }

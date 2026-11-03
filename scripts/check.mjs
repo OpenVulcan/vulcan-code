@@ -25,6 +25,7 @@ const groups = {
     ['node', ['scripts/wording-assertions.mjs']],
     ['node', ['scripts/backend-cjk-literals.mjs']],
     ['node', ['scripts/test-home-isolation.mjs']],
+    ['node', ['scripts/release-notes-check.mjs']],
     ['node', ['scripts/sync-common-model-capabilities.mjs', '--offline', '--check']],
   ],
 };

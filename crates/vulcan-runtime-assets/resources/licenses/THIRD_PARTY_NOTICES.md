@@ -5,8 +5,8 @@ This file is generated from Cargo dependency metadata by `cargo-about`.
 
 ## License Overview
 
-- Apache License 2.0 (532)
-- MIT License (296)
+- Apache License 2.0 (528)
+- MIT License (297)
 - Unicode License v3 (23)
 - BSD 3-Clause "New" or "Revised" License (16)
 - ISC License (9)
@@ -1824,19 +1824,15 @@ Used by:
 - windows-result 0.4.1 - https://github.com/microsoft/windows-rs
 - windows-strings 0.4.2 - https://github.com/microsoft/windows-rs
 - windows-strings 0.5.1 - https://github.com/microsoft/windows-rs
-- windows-sys 0.52.0 - https://github.com/microsoft/windows-rs
 - windows-sys 0.60.2 - https://github.com/microsoft/windows-rs
 - windows-sys 0.61.2 - https://github.com/microsoft/windows-rs
-- windows-targets 0.52.6 - https://github.com/microsoft/windows-rs
 - windows-targets 0.53.5 - https://github.com/microsoft/windows-rs
 - windows-threading 0.1.0 - https://github.com/microsoft/windows-rs
 - windows-threading 0.2.1 - https://github.com/microsoft/windows-rs
 - windows-version 0.1.7 - https://github.com/microsoft/windows-rs
 - windows 0.61.3 - https://github.com/microsoft/windows-rs
 - windows 0.62.2 - https://github.com/microsoft/windows-rs
-- windows_x86_64_gnu 0.52.6 - https://github.com/microsoft/windows-rs
 - windows_x86_64_gnu 0.53.1 - https://github.com/microsoft/windows-rs
-- windows_x86_64_msvc 0.52.6 - https://github.com/microsoft/windows-rs
 - windows_x86_64_msvc 0.53.1 - https://github.com/microsoft/windows-rs
 
 ```text
@@ -16932,7 +16928,7 @@ SOFTWARE.
 ### MIT License
 
 Used by:
-- luaskills 0.8.2 - https://github.com/LuaSkills/luaskills
+- luaskills 0.9.0 - https://github.com/LuaSkills/luaskills
 
 ```text
 MIT License
@@ -16994,6 +16990,7 @@ Used by:
 - vulcan-permission-judge 0.1.0 - https://crates.io/crates/vulcan-permission-judge
 - vulcan-plugin-runtime 0.1.0 - https://crates.io/crates/vulcan-plugin-runtime
 - vulcan-process-lifecycle 0.1.0 - https://crates.io/crates/vulcan-process-lifecycle
+- vulcan-product-info 0.1.0 - https://crates.io/crates/vulcan-product-info
 - vulcan-prompt-composer 0.1.0 - https://crates.io/crates/vulcan-prompt-composer
 - vulcan-prompt-skills 0.1.0 - https://crates.io/crates/vulcan-prompt-skills
 - vulcan-provider-adapters 0.1.0 - https://crates.io/crates/vulcan-provider-adapters

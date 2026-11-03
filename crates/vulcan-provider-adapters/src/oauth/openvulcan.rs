@@ -193,7 +193,7 @@ impl OAuthAuthorizationRuntime {
         // response freezes device metadata without relying on machine-specific personal information.
         // response 固定设备元数据，不依赖机器特定个人信息。
         let response = http.post(format!("{}/api/v1/vulcancode/authorize", region.auth_origin()))
-            .json(&serde_json::json!({"callback_uri": callback_uri, "state": state, "code_challenge": build_pkce_challenge(&verifier), "code_challenge_method": "S256", "device": {"display_name": "Vulcan Code", "operating_system": std::env::consts::OS, "architecture": std::env::consts::ARCH, "client_version": env!("CARGO_PKG_VERSION")}}))
+            .json(&serde_json::json!({"callback_uri": callback_uri, "state": state, "code_challenge": build_pkce_challenge(&verifier), "code_challenge_method": "S256", "device": {"display_name": "Vulcan Code", "operating_system": std::env::consts::OS, "architecture": std::env::consts::ARCH, "client_version": vulcan_product_info::version()}}))
             .send().await.map_err(|_| String::from("OpenVulcan authorization request failed."))?;
         // begin supplies the authoritative deadline and browser destination.
         // begin 提供权威截止时间及浏览器目的地。

@@ -116,7 +116,7 @@ impl OAuthAuthorizationRuntime {
         let response = http
             .post(format!("{origin}{DEVICE_PATH}"))
             .json(&serde_json::json!({
-                "cliVersion": env!("CARGO_PKG_VERSION"),
+                "cliVersion": vulcan_product_info::version(),
                 "host": "Vulcan Code",
                 "profile": "prod"
             }))

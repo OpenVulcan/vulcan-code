@@ -23,6 +23,7 @@ members = [
     "crates/vulcan-judge-host",
     "crates/vulcan-provider-config",
     "crates/vulcan-runtime-assets",
+    "crates/vulcan-product-info",
     "crates/vulcan-workbench-model",
     "crates/vulcan-workspace-store",
     "crates/vulcan-context",
@@ -100,6 +101,7 @@ vulcan-mcp-service = { path = "crates/vulcan-mcp-service" }
 vulcan-workbench-model = { path = "crates/vulcan-workbench-model" }
 vulcan-workspace-store = { path = "crates/vulcan-workspace-store" }
 vulcan-runtime-assets = { path = "crates/vulcan-runtime-assets" }
+vulcan-product-info = { path = "crates/vulcan-product-info" }
 vulcan-service-api = { path = "crates/vulcan-service-api" }
 vulcan-service-host = { path = "crates/vulcan-service-host" }
 vulcan-service-kernel = { path = "crates/vulcan-service-kernel" }
@@ -191,7 +193,7 @@ include_dir = "0.7.4"
 jsonschema = { version = "=0.49.9", default-features = false }
 keyring = { version = "4.1.6", default-features = false, features = ["v1"] }
 libc = "0.2"
-luaskills = "=0.8.2"
+luaskills = "=0.9.0"
 notify = "8.2.0"
 notify-rust = "=4.18.0"
 png = "0.18.1"

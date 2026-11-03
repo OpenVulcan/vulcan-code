@@ -133,9 +133,9 @@ pub struct ManagedRuntimeBootstrapReport {
     /// Final bootstrap status.
     /// 最终初始化状态。
     pub status: ManagedRuntimeBootstrapStatus,
-    /// Active LuaSkills runtime root.
-    /// 活动 LuaSkills 运行时根目录。
-    pub runtime_root: PathBuf,
+    /// User-owned work root holding the installer lock, downloads and caches.
+    /// 保存安装器锁、下载与缓存的用户级工作根目录。
+    pub work_root: PathBuf,
     /// Stable platform key when the target is supported.
     /// 目标受支持时使用的稳定平台键。
     pub platform: Option<String>,
@@ -245,8 +245,9 @@ struct RuntimeExpectation {
 /// Bootstrap managed Python and Node runtimes for one active LuaSkills root.
 /// 为一个活动 LuaSkills 根目录初始化受管 Python 与 Node 运行时。
 ///
-/// `runtime_root` is the exact root passed to `LuaRuntimeHostOptions`.
-/// `runtime_root` 是传入 `LuaRuntimeHostOptions` 的同一个精确根目录。
+/// `work_root` is the user-owned writable root for the cross-process lock, downloads and caches;
+/// it never lies inside the release tree.
+/// `work_root` 是用于跨进程锁、下载与缓存的用户级可写根目录；它从不位于发行树内。
 /// `distribution_root` is the host-owned shared directory containing Python and Node distributions.
 /// `distribution_root` 是包含 Python 与 Node 发行包的宿主共享目录。
 /// `progress` receives concise startup messages and must not block.
@@ -254,7 +255,7 @@ struct RuntimeExpectation {
 /// The function always returns a report so ordinary Lua skills can remain available when downloads fail.
 /// 此函数始终返回报告，使下载失败时普通 Lua 技能仍可继续使用。
 pub fn bootstrap_managed_runtimes<F>(
-    runtime_root: &Path,
+    work_root: &Path,
     distribution_root: &Path,
     progress: F,
 ) -> ManagedRuntimeBootstrapReport
@@ -262,7 +263,7 @@ where
     F: FnMut(&ManagedRuntimeBootstrapProgress),
 {
     bootstrap_managed_runtimes_for_target(
-        runtime_root,
+        work_root,
         distribution_root,
         ManagedRuntimeInstallTarget::Missing,
         progress,
@@ -272,7 +273,7 @@ where
 /// Bootstraps or explicitly reinstalls one managed runtime group.
 /// 初始化或显式重新安装一个受管运行时组。
 pub fn bootstrap_managed_runtimes_for_target<F>(
-    runtime_root: &Path,
+    work_root: &Path,
     distribution_root: &Path,
     target: ManagedRuntimeInstallTarget,
     mut progress: F,
@@ -285,7 +286,7 @@ where
         Ok(platform) => platform,
         Err(reason) => {
             return report(
-                runtime_root,
+                work_root,
                 distribution_root,
                 &config,
                 ManagedRuntimeBootstrapStatus::Unsupported,
@@ -302,7 +303,7 @@ where
         .any(|item| item == &platform)
     {
         return report(
-            runtime_root,
+            work_root,
             distribution_root,
             &config,
             ManagedRuntimeBootstrapStatus::Unsupported,
@@ -314,7 +315,7 @@ where
 
     if let Err(error) = validate_config(&config) {
         return report(
-            runtime_root,
+            work_root,
             distribution_root,
             &config,
             ManagedRuntimeBootstrapStatus::Unavailable,
@@ -327,7 +328,7 @@ where
         && validate_runtime_layout(distribution_root, &platform, &config).is_ok()
     {
         return report(
-            runtime_root,
+            work_root,
             distribution_root,
             &config,
             ManagedRuntimeBootstrapStatus::Ready,
@@ -343,11 +344,11 @@ where
         overall_percent: Some(2),
         ..ManagedRuntimeBootstrapProgress::default()
     });
-    let lock_file = match acquire_bootstrap_lock(runtime_root) {
+    let lock_file = match acquire_bootstrap_lock(work_root) {
         Ok(file) => file,
         Err(error) => {
             return report(
-                runtime_root,
+                work_root,
                 distribution_root,
                 &config,
                 ManagedRuntimeBootstrapStatus::Unavailable,
@@ -363,7 +364,7 @@ where
     {
         let _ = FileExt::unlock(&lock_file);
         return report(
-            runtime_root,
+            work_root,
             distribution_root,
             &config,
             ManagedRuntimeBootstrapStatus::Ready,
@@ -385,7 +386,7 @@ where
         .collect::<std::collections::HashMap<_, _>>();
     let (install_uv, install_python, install_node, install_pnpm) = install_flags(target, &invalid);
     let request = NativeManagedRuntimeInstallRequest {
-        runtime_root,
+        work_root,
         distribution_root,
         platform: &platform,
         python_version: &config.python_version,
@@ -402,7 +403,7 @@ where
     match install_result {
         Ok(()) => match validate_runtime_layout(distribution_root, &platform, &config) {
             Ok(()) => report(
-                runtime_root,
+                work_root,
                 distribution_root,
                 &config,
                 ManagedRuntimeBootstrapStatus::Installed,
@@ -411,7 +412,7 @@ where
                 "managed Python and Node runtimes were installed successfully".to_string(),
             ),
             Err(error) => report(
-                runtime_root,
+                work_root,
                 distribution_root,
                 &config,
                 ManagedRuntimeBootstrapStatus::Unavailable,
@@ -421,7 +422,7 @@ where
             ),
         },
         Err(error) => report(
-            runtime_root,
+            work_root,
             distribution_root,
             &config,
             ManagedRuntimeBootstrapStatus::Unavailable,
@@ -435,7 +436,7 @@ where
 /// Build one bootstrap report without duplicating field initialization.
 /// 构造单个初始化报告，避免重复字段初始化。
 fn report(
-    runtime_root: &Path,
+    work_root: &Path,
     distribution_root: &Path,
     config: &ManagedRuntimeBootstrapConfig,
     status: ManagedRuntimeBootstrapStatus,
@@ -446,7 +447,7 @@ fn report(
     let (python, node) = component_reports(distribution_root, platform.as_deref(), config);
     ManagedRuntimeBootstrapReport {
         status,
-        runtime_root: runtime_root.to_path_buf(),
+        work_root: work_root.to_path_buf(),
         platform,
         install_attempted,
         diagnostic,
@@ -727,11 +728,10 @@ fn runtime_executable_is_usable(path: &Path) -> bool {
 
 /// Acquire the cross-process bootstrap lock with a bounded wait.
 /// 通过有界等待获取跨进程初始化锁。
-fn acquire_bootstrap_lock(runtime_root: &Path) -> Result<File, String> {
-    let state_dir = runtime_root.join("state");
-    fs::create_dir_all(&state_dir)
-        .map_err(|error| format!("failed to create {}: {error}", state_dir.display()))?;
-    let lock_path = state_dir.join("managed-runtime-bootstrap.lock");
+fn acquire_bootstrap_lock(work_root: &Path) -> Result<File, String> {
+    fs::create_dir_all(work_root)
+        .map_err(|error| format!("failed to create {}: {error}", work_root.display()))?;
+    let lock_path = work_root.join("managed-runtime-bootstrap.lock");
     let file = OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -1000,14 +1000,14 @@ mod tests {
     #[test]
     #[ignore = "requires internet access and downloads complete native runtimes"]
     fn native_installer_downloads_complete_runtime_layout() {
-        let runtime_root = std::env::var_os("VULCAN_MANAGED_RUNTIME_SMOKE_ROOT")
+        let work_root = std::env::var_os("VULCAN_MANAGED_RUNTIME_SMOKE_ROOT")
             .map(PathBuf::from)
             .expect("VULCAN_MANAGED_RUNTIME_SMOKE_ROOT must be set");
         let distribution_root = std::env::var_os("VULCAN_MANAGED_RUNTIME_DISTRIBUTION_ROOT")
             .map(PathBuf::from)
             .expect("VULCAN_MANAGED_RUNTIME_DISTRIBUTION_ROOT must be set");
         let mut progress_events = Vec::new();
-        let report = bootstrap_managed_runtimes(&runtime_root, &distribution_root, |progress| {
+        let report = bootstrap_managed_runtimes(&work_root, &distribution_root, |progress| {
             progress_events.push(progress.clone());
         });
         let platform = managed_runtime_platform_key().expect("supported smoke-test platform");
@@ -1023,13 +1023,13 @@ mod tests {
     #[test]
     #[ignore = "requires the native smoke test runtime layout"]
     fn native_bootstrap_is_idempotent() {
-        let runtime_root = std::env::var_os("VULCAN_MANAGED_RUNTIME_SMOKE_ROOT")
+        let work_root = std::env::var_os("VULCAN_MANAGED_RUNTIME_SMOKE_ROOT")
             .map(PathBuf::from)
             .expect("VULCAN_MANAGED_RUNTIME_SMOKE_ROOT must be set");
         let distribution_root = std::env::var_os("VULCAN_MANAGED_RUNTIME_DISTRIBUTION_ROOT")
             .map(PathBuf::from)
             .expect("VULCAN_MANAGED_RUNTIME_DISTRIBUTION_ROOT must be set");
-        let report = bootstrap_managed_runtimes(&runtime_root, &distribution_root, |_| {});
+        let report = bootstrap_managed_runtimes(&work_root, &distribution_root, |_| {});
         assert_eq!(report.status, ManagedRuntimeBootstrapStatus::Ready);
         assert!(!report.install_attempted);
     }

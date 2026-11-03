@@ -291,7 +291,7 @@ pub fn service_launch_description(
     ServiceLaunchDescription {
         protocol_version: 1,
         service_name: String::from(SERVICE_NAME),
-        service_version: String::from(env!("CARGO_PKG_VERSION")),
+        service_version: String::from(vulcan_product_info::version()),
         profile: String::from(profile),
         executable_path,
         discovery_path: data_root.join("webui-service.json"),

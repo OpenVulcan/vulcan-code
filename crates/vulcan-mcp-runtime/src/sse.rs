@@ -192,7 +192,7 @@ impl SseTransport {
         let request_id = self.next_request_id();
         let initialize_request = InitializeRequest::new(InitializeRequestParams::new(
             ClientCapabilities::default(),
-            Implementation::new(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")),
+            Implementation::new(env!("CARGO_PKG_NAME"), vulcan_product_info::version()),
         ));
         let response = self
             .send_request_and_wait(

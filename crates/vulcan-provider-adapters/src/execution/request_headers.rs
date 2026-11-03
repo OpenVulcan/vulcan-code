@@ -9,8 +9,8 @@ use crate::{
 };
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use std::collections::BTreeMap;
-pub(crate) use vulcan_llm_core::VULCAN_CODE_USER_AGENT;
-use vulcan_llm_core::{VULCAN_CODE_CLIENT_NAME, VULCAN_CODE_VERSION};
+pub(crate) use vulcan_llm_core::vulcan_code_user_agent;
+use vulcan_llm_core::{VULCAN_CODE_CLIENT_NAME, vulcan_code_version};
 
 /// Host-owned marker that selects the Responses Lite wire contract.
 /// 由宿主持有、用于选择 Responses Lite 线路契约的标记。
@@ -279,7 +279,9 @@ pub(crate) fn execution_headers(
     // 所有协议都使用 VulcanCode 自身身份，任何路由都不借用其他客户端身份。
     headers.insert(
         reqwest::header::USER_AGENT,
-        HeaderValue::from_static(VULCAN_CODE_USER_AGENT),
+        HeaderValue::from_str(vulcan_code_user_agent()).map_err(|_| {
+            pre_dispatch_failure("The VulcanCode user agent contains invalid header characters.")
+        })?,
     );
     // Lite is an exact frozen native-model behavior. The host emits its selector after all
     // provider declarations have been validated so no manifest or profile may spoof it.
@@ -387,9 +389,9 @@ pub(crate) fn coding_device_identity_headers(device_id: Option<&str>) -> Result<
     let device_model = coding_device_model();
     let mut headers = HeaderMap::new();
     for (name, value) in [
-        ("user-agent", VULCAN_CODE_USER_AGENT),
+        ("user-agent", vulcan_code_user_agent()),
         ("x-msh-platform", VULCAN_CODE_CLIENT_NAME),
-        ("x-msh-version", VULCAN_CODE_VERSION),
+        ("x-msh-version", vulcan_code_version()),
         ("x-msh-device-name", device_name.as_str()),
         ("x-msh-device-model", device_model.as_str()),
         ("x-msh-device-id", device_id.unwrap_or("vulcan-code-device")),

@@ -123,7 +123,7 @@ async fn open_design_device_flow_keeps_credential_roles_separate() {
         serde_json::from_str(create.split_once("\r\n\r\n").unwrap().1).unwrap();
     assert_eq!(
         create_body,
-        json!({"cliVersion":env!("CARGO_PKG_VERSION"),"host":"Vulcan Code","profile":"prod"})
+        json!({"cliVersion":vulcan_product_info::version(),"host":"Vulcan Code","profile":"prod"})
     );
     let polls: Vec<_> = requests
         .iter()

@@ -1480,7 +1480,9 @@ pub(super) fn diagnostics(app: &App) -> Vec<Row> {
 /// the running version, as the WebUI changelog area does.
 /// 以界面语言逐个发布翻阅更新记录，首先打开正在运行的版本，与 WebUI 更新记录区域一致。
 pub(super) fn changelog(app: &App) -> Vec<Row> {
-    let releases = vulcan_i18n::RELEASES;
+    let Ok(releases) = vulcan_product_info::releases() else {
+        return vec![note(tr!("settings.changelog.loadError"), Tone::Bad)];
+    };
     let running = s(app.slots.value(Slot::Workbench), "/appVersion");
     // at is the shown release: the picked one, else the running version, else the newest.
     // at 为显示的发布：已选的发布，否则为运行版本，否则为最新发布。
@@ -1513,19 +1515,20 @@ pub(super) fn changelog(app: &App) -> Vec<Row> {
                 edit: Edit::Local(LocalSetting::ChangelogRelease),
                 options: releases
                     .iter()
-                    .map(|release| (release.version.to_string(), release.version.to_string()))
+                    .map(|release| (release.version.clone(), release.version.clone()))
                     .collect(),
-                current: release.version.to_string(),
+                current: release.version.clone(),
             },
             Tone::Normal,
         ),
     ];
     let date = release
         .date
-        .map_or_else(|| tr!("settings.changelog.unreleased"), str::to_string);
+        .clone()
+        .unwrap_or_else(|| tr!("settings.changelog.unreleased"));
     let mut heading = item(
         "changelog-release",
-        release.version,
+        release.version.as_str(),
         format!("{date} · {} / {}", at + 1, releases.len()),
     )
     .actions(pager.clone());
@@ -1533,16 +1536,13 @@ pub(super) fn changelog(app: &App) -> Vec<Row> {
         heading = heading.badge(tr!("settings.changelog.current"), Tone::Good);
     }
     let mut rows = vec![heading];
-    // Every registered language ships notes (vulcan-i18n's build script requires it).
-    // 每种注册语言都附有说明（vulcan-i18n 构建脚本强制要求）。
-    match release.notes(crate::i18n::active_locale()) {
-        Some(notes) => rows.push(Row::new(
-            RowKind::Markdown {
-                content: notes.to_string(),
-            },
-            "",
-        )),
-        None => rows.push(note(tr!("settings.changelog.loadError"), Tone::Bad)),
+    // Every registered language ships notes (`scripts/release-notes-check.mjs` requires it); the
+    // files are read from the distribution resources, so a damaged install shows the load error.
+    // 每种注册语言都附有说明（`scripts/release-notes-check.mjs` 强制要求）；文件从发行资源读取，
+    // 因此安装损坏时显示加载错误。
+    match vulcan_product_info::release_notes(&release.version, crate::i18n::active_locale()) {
+        Ok(notes) => rows.push(Row::new(RowKind::Markdown { content: notes }, "")),
+        Err(_) => rows.push(note(tr!("settings.changelog.loadError"), Tone::Bad)),
     }
     if releases.len() > 1 {
         rows.push(item("changelog-pager", "", "").actions(pager));

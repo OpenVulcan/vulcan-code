@@ -465,7 +465,7 @@ pub fn build_luaskills_tool_invocation_context(
         client_info: Some(RuntimeClientInfo {
             kind: Some(String::from("desktop")),
             name: Some(String::from("VulcanCode")),
-            version: Some(env!("CARGO_PKG_VERSION").to_string()),
+            version: Some(vulcan_product_info::version().to_string()),
         }),
         client_capabilities: luaskills_change_set_host_result_capabilities(),
     };

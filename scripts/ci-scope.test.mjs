@@ -14,6 +14,7 @@ const cases = [
   ['apps/vulcan-code-web/src/view.tsx', ['frontend', 'static']],
   ['apps/vulcan-code-web/src/i18n-catalogs.ts', ['frontend', 'static']],
   ['crates/vulcan-i18n/catalogs/webui/zh-CN.json', ['frontend', 'desktop', 'static', 'rust']],
+  ['crates/vulcan-runtime-assets/resources/changelog/0.1.0/en-US.md', ['frontend', 'desktop', 'static', 'rust']],
   ['apps/vulcan-code-tui/src/ui/theme.rs', ['static', 'rust']],
   ['apps/vulcan-code-desktop/src/gui/main.ts', ['desktop', 'static']],
   ['docs/contracts/plugin-execution-engine.md', []],

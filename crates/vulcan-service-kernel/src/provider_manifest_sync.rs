@@ -4297,7 +4297,7 @@ impl ProviderManifestSyncService {
         let mut request = self
             .http
             .get(requested_url.clone())
-            .header(SYNC_CLIENT_VERSION_HEADER, env!("CARGO_PKG_VERSION"))
+            .header(SYNC_CLIENT_VERSION_HEADER, vulcan_product_info::version())
             .header(
                 SYNC_MANIFEST_SCHEMA_HEADER,
                 vulcan_provider_adapters::provider_manifest::MANIFEST_SCHEMA_VERSION,

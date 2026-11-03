@@ -260,7 +260,7 @@ pub(super) fn encode_request_envelope(
         ),
         (
             String::from("user-agent"),
-            String::from(crate::VULCAN_CODE_USER_AGENT),
+            String::from(crate::vulcan_code_user_agent()),
         ),
     ]);
     if let Some(cache_scope_id) = request.cache_scope_id.as_deref() {

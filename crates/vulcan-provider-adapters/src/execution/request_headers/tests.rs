@@ -62,7 +62,7 @@ fn opencode_oauth_headers_preserve_client_and_workspace_identity() {
         assert_eq!(route.request_url(encoded.path.as_str()), expected_url);
         let headers =
             execution_headers(&route, &encoded.headers, &secret, Some("vulcan-session")).unwrap();
-        assert_eq!(headers["user-agent"], VULCAN_CODE_USER_AGENT);
+        assert_eq!(headers["user-agent"], vulcan_code_user_agent());
         assert_eq!(headers["x-opencode-session"], "vulcan-session");
         assert_eq!(headers["x-org-id"], "org_demo");
         assert_eq!(headers["authorization"], "Bearer synthetic-access");
@@ -131,7 +131,7 @@ fn opencode_api_key_headers_preserve_client_identity_without_workspace() {
         // headers 必须使用密钥及公开应用和会话身份，不猜测组织。
         let headers =
             execution_headers(&route, &encoded.headers, &secret, Some("vulcan-session")).unwrap();
-        assert_eq!(headers["user-agent"], VULCAN_CODE_USER_AGENT);
+        assert_eq!(headers["user-agent"], vulcan_code_user_agent());
         assert_eq!(headers["x-opencode-session"], "vulcan-session");
         assert_eq!(headers["authorization"], "Bearer oc_sk_synthetic");
         assert!(!headers.contains_key("x-org-id"));
@@ -179,7 +179,7 @@ fn execution_headers_merge_protocol_headers_and_reject_credential_overrides() {
         headers
             .get(reqwest::header::USER_AGENT)
             .and_then(|value| value.to_str().ok()),
-        Some(VULCAN_CODE_USER_AGENT)
+        Some(vulcan_code_user_agent())
     );
     assert_eq!(
         headers
@@ -313,7 +313,7 @@ fn session_header_never_overrides_existing_or_host_owned_headers() {
         host_owned_headers
             .get(reqwest::header::USER_AGENT)
             .and_then(|value| value.to_str().ok()),
-        Some(VULCAN_CODE_USER_AGENT)
+        Some(vulcan_code_user_agent())
     );
 
     // A defensive runtime route-kind check keeps malformed provider-tool routes from receiving session scope.
@@ -384,7 +384,7 @@ fn native_codex_protocol_owns_exact_codex_user_agent() {
         headers
             .get(reqwest::header::USER_AGENT)
             .and_then(|value| value.to_str().ok()),
-        Some(VULCAN_CODE_USER_AGENT)
+        Some(vulcan_code_user_agent())
     );
     assert_eq!(
         headers

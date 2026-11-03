@@ -39,8 +39,10 @@
 
 ## 更新记录
 
-“关于”分组中的更新记录同样属于该 crate，按同一份语言注册表分语言维护，但它是逐版本的正文而非键值文案，
-因此不放在 `catalogs/`，也不是分面：
+“关于”分组中的更新记录按同一份语言注册表分语言维护，但它是逐版本的正文而非键值文案，因此不放在
+`catalogs/`，也不是分面。它与产品身份 `product.json` 一起作为发行资源放在
+`crates/vulcan-runtime-assets/resources/changelog/`，运行时读取，不编译进任何 Rust 二进制，因此只改版本或说明
+不会改变服务与原生库的指纹：
 
 | 文件 | 内容 |
 | --- | --- |
@@ -49,16 +51,15 @@
 
 规则：
 
-1. **每个发布覆盖全部语言。** `build.rs` 要求每个已列出的发布恰好拥有每种注册语言一个非空文件，缺失、多余的
-   文件或未列出的版本目录都使构建失败；没有语言回退。
-2. **版本号变化必须先写说明。** crate 测试要求 `releases[0].version` 等于工作区版本
-   （根 `Cargo.toml` `[workspace.package].version`）；提升版本时在清单顶部加入新发布并为全部语言写好说明，
+1. **每个发布覆盖全部语言。** `make check` 中的 `scripts/release-notes-check.mjs` 要求每个已列出的发布恰好拥有
+   每种注册语言一个非空文件，缺失、多余的文件或未列出的版本目录都使检查失败；没有语言回退。
+2. **版本号变化必须先写说明。** 同一检查要求 `releases[0].version` 等于 `product.json` 的 `version`；提升版本时在清单顶部加入新发布并为全部语言写好说明，
    发布当天把 `null` 换成实际日期。
 3. **组件必须有效且不使用 `ui-code`。** WebUI（`src/service/changelog.test.ts`）与 TUI
    （`ui/answer_components.rs` 测试）分别用自身解析器检查全部说明的每个 `ui-*` 围栏；`ui-code` 只在回答封口时
    抓取文件行，更新记录没有这一步，因此禁止使用。说明页没有输入区，`ui-decision` 只读显示。
 4. **消费方。** WebUI 经 `@changelog` 别名按发布与语言分块懒加载（`src/service/changelog.ts`），设置 → 关于 →
-   更新记录页每页一个发布并可翻页；TUI 读取编译期内嵌的 `vulcan_i18n::RELEASES`，在同名页面镜像该行为。
+   更新记录页每页一个发布并可翻页；TUI 经 `vulcan_product_info::releases()` 与 `release_notes()` 从发行资源读取，在同名页面镜像该行为。
    两者都不经服务调用。
 
 ## 服务错误消息

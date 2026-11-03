@@ -3001,7 +3001,7 @@ async fn load_google_code_assist_project(
         .post(GOOGLE_CODE_ASSIST_LOAD_URL)
         .bearer_auth(access_token)
         .header("accept", "*/*")
-        .header("user-agent", crate::execution::VULCAN_CODE_USER_AGENT)
+        .header("user-agent", crate::execution::vulcan_code_user_agent())
         .json(&serde_json::json!({
             "metadata": {
                 "ideType": "IDE_UNSPECIFIED"

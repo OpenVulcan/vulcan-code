@@ -16,6 +16,7 @@ workspace = true
 test-support = []
 
 [dependencies]
+vulcan-product-info.workspace = true
 async-stream.workspace = true
 async-trait.workspace = true
 base64.workspace = true

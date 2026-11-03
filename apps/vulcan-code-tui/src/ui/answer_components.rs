@@ -1523,12 +1523,11 @@ mod tests {
                 index = close + 1;
             }
         }
-        for release in vulcan_i18n::RELEASES {
+        for release in vulcan_product_info::releases().unwrap() {
             for locale in vulcan_i18n::LOCALES {
-                let notes = release
-                    .notes(locale.code)
+                let notes = vulcan_product_info::release_notes(&release.version, locale.code)
                     .expect("every language ships notes");
-                check(notes, &format!("{}/{}", release.version, locale.code));
+                check(&notes, &format!("{}/{}", release.version, locale.code));
             }
         }
     }

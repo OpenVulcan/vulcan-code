@@ -801,10 +801,20 @@ fn load_manifest() -> Result<ResourceManifest, CoreError> {
             "embedded manifest version does not match Core",
         ));
     }
-    if manifest.minimum_core_version != env!("CARGO_PKG_VERSION") {
+    // The product version comes from the distribution, so the manifest states a floor rather than
+    // the exact release and stays unchanged across releases that do not touch these resources.
+    // 产品版本来自发行物，因此清单声明下限而非精确版本，不涉及这些资源的发版无需修改它。
+    let core_is_new_enough = vulcan_product_info::version_at_least(&manifest.minimum_core_version)
+        .map_err(|error| {
+            config_error(
+                ErrorCode::InvalidConfiguration,
+                format!("embedded manifest minimum Core version is invalid: {error}"),
+            )
+        })?;
+    if !core_is_new_enough {
         return Err(config_error(
             ErrorCode::InvalidConfiguration,
-            "embedded manifest minimum Core version does not match this artifact",
+            "embedded manifest requires a newer Core than this artifact",
         ));
     }
     if manifest.schema_versions.prompts != 1
