@@ -1147,6 +1147,21 @@
                        "reasoning_control":  "fixed_off"
                    },
                    {
+                       "key":  "gpt-transcribe",
+                       "aliases":  [
+
+                                   ],
+                       "input_modalities":  [
+                           "audio",
+                           "text"
+                       ],
+                       "output_modalities":  [
+
+                                             ],
+                       "reasoning":  "unsupported",
+                       "reasoning_control":  "fixed_off"
+                   },
+                   {
                        "key":  "grok-4.5",
                        "aliases":  [
 
