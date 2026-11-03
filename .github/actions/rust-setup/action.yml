@@ -42,11 +42,23 @@ runs:
     - name: Locked protoc
       shell: bash
       run: node scripts/install-locked-tools.mjs protoc
+    # Cargo judges path dependencies by file times, and a fresh checkout stamps the vendored crates with the current
+    # time, so they and every LanceDB crate above them rebuilt on each run. Their sources get one fixed old time, and
+    # the cache key carries the vendor tree hash instead: changed vendored sources never restore an older cache.
+    # Cargo 按文件时间判断路径依赖是否过期，新检出会把内置 crate 标为当前时间，使它们及其上的全部 LanceDB crate
+    # 每轮重编。这里把其源文件设为固定的旧时间，改由缓存键携带 vendor 树哈希：内置源码变化时绝不恢复旧缓存。
+    - id: vendor
+      shell: bash
+      run: |
+        set -eu
+        echo "tree=$(git rev-parse HEAD:vendor)" >> "$GITHUB_OUTPUT"
+        find vendor -exec touch -h -d '@315532800' {} +
     # Only third-party build products are cached, since a fresh checkout rebuilds workspace crates anyway;
     # only main writes, so pull requests read the shared cache and never replace it.
     # 只缓存第三方构建产物，因为新检出总会重新编译工作区 crate；只有 main 写入，PR 只读共享缓存，绝不替换。
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
       with:
         shared-key: ${{ inputs.shared-key }}
+        key: vendor-${{ steps.vendor.outputs.tree }}
         save-if: ${{ github.ref == 'refs/heads/main' }}
         cache-on-failure: 'true'
