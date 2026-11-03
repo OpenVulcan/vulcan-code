@@ -54,7 +54,6 @@ pub(super) fn transient_reasoning_status_kind(
         ));
     }
     Ok(Some(match mode {
-        TransientReasoningStatusMode::Summary => TransientReasoningStatusKind::Summary,
         TransientReasoningStatusMode::Encrypted => TransientReasoningStatusKind::Encrypted,
     }))
 }
@@ -294,7 +293,6 @@ impl PublicTurnAccumulator {
             transient_reasoning_status: transient_reasoning_kind.map(|kind| {
                 TransientReasoningStatus {
                     kind,
-                    summaries: Vec::new(),
                     reasoning_tokens: None,
                 }
             }),

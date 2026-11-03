@@ -311,17 +311,20 @@ fn transient_reasoning_mode_fails_closed_on_multiple_profile_claims() {
     assert_eq!(
         transient_reasoning_status_kind(
             "provider",
-            &[profile("summary", TransientReasoningStatusMode::Summary,)],
+            &[profile(
+                "encrypted",
+                TransientReasoningStatusMode::Encrypted
+            )],
         )
         .expect("one transient profile should resolve"),
-        Some(TransientReasoningStatusKind::Summary)
+        Some(TransientReasoningStatusKind::Encrypted)
     );
     assert!(
         transient_reasoning_status_kind(
             "provider",
             &[
-                profile("summary", TransientReasoningStatusMode::Summary),
-                profile("encrypted", TransientReasoningStatusMode::Encrypted),
+                profile("first", TransientReasoningStatusMode::Encrypted),
+                profile("second", TransientReasoningStatusMode::Encrypted),
             ],
         )
         .expect_err("multiple transient profiles must fail closed")
@@ -821,25 +824,25 @@ fn reasoning_summary_delta_yields_to_durable_reasoning() {
     assert_eq!(accumulator.reasoning, "durable");
 }
 
-/// Verifies a profile-declared summary status and its token updates stay live-only.
-/// 验证 Profile 声明的摘要状态及其 Token 更新只存在于实时流。
+/// Verifies a profile-declared encrypted status and its token updates stay live-only.
+/// 验证 Profile 声明的加密状态及其 Token 更新只存在于实时流。
 #[test]
-fn transient_reasoning_summary_is_live_only_and_clears_at_terminal() {
+fn transient_reasoning_status_is_live_only_and_clears_at_terminal() {
     // live_sender and live_receiver observe the request-local status stream.
     // live_sender 与 live_receiver 观察请求局部状态流。
     let (live_sender, mut live_receiver) = tokio::sync::mpsc::unbounded_channel();
     // sink proves no transient content enters canonical Core deltas.
     // sink 证明没有瞬态内容进入规范 Core 增量。
     let mut sink = RecordingProviderDeltaSink::default();
-    // accumulator owns a profile-configured summary status for one physical request.
-    // accumulator 为单次物理请求持有 Profile 配置的摘要状态。
+    // accumulator owns a profile-configured encrypted status for one physical request.
+    // accumulator 为单次物理请求持有 Profile 配置的加密状态。
     let mut accumulator = PublicTurnAccumulator::new(
         "commandcode",
         "connection-commandcode",
         "https://api.commandcode.ai/provider/v1/chat/completions",
         "openai-chat-completions.v1",
         "gpt-5.6-luna",
-        Some(TransientReasoningStatusKind::Summary),
+        Some(TransientReasoningStatusKind::Encrypted),
     );
 
     for event in [
@@ -859,22 +862,20 @@ fn transient_reasoning_summary_is_live_only_and_clears_at_terminal() {
     ] {
         accumulator
             .apply_event("commandcode", &live_sender, &mut sink, event)
-            .expect("transient summary lifecycle should accumulate");
+            .expect("transient status lifecycle should accumulate");
     }
 
     assert!(sink.deltas.is_empty());
     assert!(matches!(
         live_receiver.try_recv(),
         Ok(Ok(ProviderStreamDelta::TransientReasoningStatusChanged(Some(status))))
-            if status.kind == TransientReasoningStatusKind::Summary
-                && status.summaries.is_empty()
+            if status.kind == TransientReasoningStatusKind::Encrypted
                 && status.reasoning_tokens.is_none()
     ));
     assert!(matches!(
         live_receiver.try_recv(),
         Ok(Ok(ProviderStreamDelta::TransientReasoningStatusChanged(Some(status))))
-            if status.kind == TransientReasoningStatusKind::Summary
-                && status.summaries.is_empty()
+            if status.kind == TransientReasoningStatusKind::Encrypted
                 && status.reasoning_tokens == Some(321)
     ));
     assert!(matches!(

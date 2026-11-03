@@ -1288,9 +1288,6 @@ pub struct ResponseProjectionProfile {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TransientReasoningStatusMode {
-    /// Provider emits readable reasoning summaries that replace one transient line.
-    /// 供应商发出可读推理摘要，并替换同一条瞬态状态行。
-    Summary,
     /// Provider emits opaque encrypted reasoning and only exposes token progress.
     /// 供应商发出不透明加密推理，仅公开 Token 进度。
     Encrypted,

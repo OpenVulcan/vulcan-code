@@ -89,13 +89,12 @@ describe("ConversationLiveStreamStore", () => {
       payload: {
         conversationId: "session-1",
         status: {
-          kind: "summary",
-          summaries: [{ itemId: "summary-1", text: "first" }],
+          kind: "encrypted",
           reasoningTokens: 12,
         },
       },
     }))).toBe(true);
-    expect(store.getTransientReasoningStatus("session-1")?.summaries?.[0]?.text).toBe("first");
+    expect(store.getTransientReasoningStatus("session-1")?.reasoningTokens).toBe(12);
     expect(store.flushNotifications()).toBe(1);
     expect(listener).toHaveBeenCalledTimes(1);
 

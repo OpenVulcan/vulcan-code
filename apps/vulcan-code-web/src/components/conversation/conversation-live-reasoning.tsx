@@ -1,5 +1,4 @@
 import React from "react";
-import ReactMarkdown from "react-markdown";
 import { Brain, Columns2, PanelRightOpen } from "lucide-react";
 import {
   Tooltip,
@@ -74,19 +73,6 @@ export function TransientReasoningStatusLine(props: {
         formatTokenCount(props.status.reasoningTokens),
       )
     : "";
-  // summaries preserves provider node order and discards empty transport fragments.
-  // summaries 保留供应商节点顺序，并排除空传输片段。
-  const summaries = props.status.kind === "summary"
-    ? (props.status.summaries ?? []).filter((summary) => summary.text.trim().length > 0)
-    : [];
-  // rows shows one node per standard summary part, or one encrypted fallback before any summary exists.
-  // rows 为每个标准摘要部分显示一个节点；在摘要出现前则显示一个加密回退节点。
-  const rows = summaries.length > 0
-    ? summaries.map((summary, index) => ({
-        id: summary.itemId,
-        text: `${summary.text}${index === summaries.length - 1 ? tokenSuffix : ""}`,
-      }))
-    : [{ id: "encrypted-progress", text: `${t("runtime.thinking")}${tokenSuffix}` }];
   return (
     <div
       aria-busy="true"
@@ -94,16 +80,9 @@ export function TransientReasoningStatusLine(props: {
       className="vk-reason-status"
       data-reasoning-status-kind={props.status.kind}
     >
-      {rows.map((row) => (
-        <div className="vk-reason-line vk-shimmer-text" key={row.id}>
-          <ReactMarkdown
-            allowedElements={["p", "strong", "em", "br", "code"]}
-            unwrapDisallowed
-          >
-            {row.text}
-          </ReactMarkdown>
-        </div>
-      ))}
+      <div className="vk-reason-line vk-shimmer-text">
+        {`${t("runtime.thinking")}${tokenSuffix}`}
+      </div>
     </div>
   );
 }

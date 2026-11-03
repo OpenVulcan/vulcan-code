@@ -2103,7 +2103,7 @@
           "items": {"$ref": "#/$defs/mapping_step"}
         },
         "transient_reasoning_status": {
-          "enum": ["summary", "encrypted"]
+          "enum": ["encrypted"]
         }
       }
     },

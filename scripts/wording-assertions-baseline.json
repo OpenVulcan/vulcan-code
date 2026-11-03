@@ -147,7 +147,6 @@
   "crates/vulcan-provider-adapters/src/upload_engine/file_create_body/tests.rs": 1,
   "crates/vulcan-provider-adapters/src/upload_engine/tests/http_failures.rs": 1,
   "crates/vulcan-runtime-assets/src/text_decode.rs": 3,
-  "crates/vulcan-service-api/src/conversation.rs": 1,
   "crates/vulcan-service-kernel/src/agent_collaboration/session_wait/tests/task_messages.rs": 1,
   "crates/vulcan-service-kernel/src/agent_collaboration/startup_recovery.rs": 1,
   "crates/vulcan-service-kernel/src/agent_stream/projection.rs": 2,

@@ -396,25 +396,9 @@ pub enum WorkbenchDelta {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum TransientReasoningStatusKind {
-    /// Readable provider-generated reasoning summary.
-    /// 供应商生成的可读推理摘要。
-    Summary,
     /// Opaque encrypted reasoning represented by progress only.
     /// 仅通过进度表示的不透明加密推理。
     Encrypted,
-}
-
-/// Carries one readable transient reasoning summary node.
-/// 携带一个可读瞬态推理摘要节点。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct TransientReasoningSummaryItemSnapshot {
-    /// Stable summary identity used for in-place updates.
-    /// 用于原地更新的稳定摘要标识。
-    pub item_id: String,
-    /// Latest complete text for this summary node.
-    /// 当前摘要节点的最新完整文本。
-    pub text: String,
 }
 
 /// Carries one transient reasoning status value displayed outside the transcript.
@@ -425,10 +409,6 @@ pub struct TransientReasoningStatusSnapshot {
     /// Presentation kind selected by the response profile.
     /// 由响应 Profile 选择的展示类型。
     pub kind: TransientReasoningStatusKind,
-    /// Ordered readable summary nodes when available.
-    /// 可用时的有序可读摘要节点。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub summaries: Vec<TransientReasoningSummaryItemSnapshot>,
     /// Latest cumulative reasoning-token count when available.
     /// 可用时的最新累计推理 Token 数。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1148,11 +1128,7 @@ mod tests {
                 TransientReasoningStatusChangedDelta {
                     conversation_id: String::from("conversation"),
                     status: Some(TransientReasoningStatusSnapshot {
-                        kind: TransientReasoningStatusKind::Summary,
-                        summaries: vec![TransientReasoningSummaryItemSnapshot {
-                            item_id: String::from("summary-0"),
-                            text: String::from("正在核对清单"),
-                        }],
+                        kind: TransientReasoningStatusKind::Encrypted,
                         reasoning_tokens: Some(321),
                     }),
                 },
@@ -1168,11 +1144,7 @@ mod tests {
                     "payload": {
                         "conversationId": "conversation",
                         "status": {
-                            "kind": "summary",
-                            "summaries": [{
-                                "itemId": "summary-0",
-                                "text": "正在核对清单"
-                            }],
+                            "kind": "encrypted",
                             "reasoningTokens": 321
                         }
                     }

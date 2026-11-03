@@ -170,10 +170,7 @@ export class ConversationLiveStreamStore {
       const { conversationId, status } = envelope.delta.payload;
       const key = transientReasoningStatusKey(conversationId);
       if (status) {
-        this.#transientReasoningStatuses.set(conversationId, {
-          ...status,
-          summaries: status.summaries?.map((summary) => ({ ...summary })),
-        });
+        this.#transientReasoningStatuses.set(conversationId, { ...status });
       } else {
         this.#transientReasoningStatuses.delete(conversationId);
       }

@@ -515,13 +515,11 @@ Wire JSON；内部封装不是标准 Responses 请求。媒体载荷保存在请
 删除、显式枚举映射、单元素数组包裹/解包、受限模板、受限宿主字段复制、条件写入/删除、空容器
 清理和显式拒绝。禁止 JavaScript、Lua、表达式求值、反射字段轮询和任意 deep merge。
 
-`response_profiles[].payload.transient_reasoning_status` 用于声明非持久化思考状态，当前只接受：
+`response_profiles[].payload.transient_reasoning_status` 用于声明非持久化思考状态，只接受
+`encrypted`：上游只提供不透明思考块或思考 Token，宿主只在底部显示通用“正在思考（可选 Token）”状态。
+原先的 `summary` 模式已删除：可读摘要全部改走下述仅展示思考，Schema 拒绝该取值。
 
-- `summary`：在底部显示摘要状态节点；可读摘要已全部改走下述仅展示思考，当前没有解码器再向该节点
-  填充摘要文本，只剩通用状态与思考 Token；
-- `encrypted`：上游只提供不透明思考块或思考 Token；宿主只显示通用“正在思考”状态。
-
-这两类状态都不得进入 assistant reasoning、转录记录、Provider replay、重试快照或下一轮上下文，
+该状态不得进入 assistant reasoning、转录记录、Provider replay、重试快照或下一轮上下文，
 并在成功、失败、取消或流结束时清除。供应商需要时必须通过 Response Profile 的精确字段映射和
 模型级 `response_profile_refs` 声明，禁止在运行时按供应商 ID 或模型 ID 写判断。
 
@@ -534,10 +532,10 @@ V1 Provider 投影跳过该事件，换路由回退时也不回放；摘要不�
 Responses 同路由重放的是供应商原样输出项（含加密内容），不受此影响。新摘要部分（Chat `index` 或
 Responses 摘要块变化）之前插入空行；同一请求一旦出现非空完整思考，同分片及之后的摘要全部丢弃；与摘要逐字节相同的顶层 `reasoning`
 镜像不得当作完整思考，格式不同的镜像必须由 Response Profile 删除。同一冻结请求链最多
-只能解析出一种临时状态模式；多个 Profile 同时声明时必须失败关闭。运行时展示优先级固定为“非空
-完整思考 > 可读 summary > 加密进度”：完整思考一旦出现，必须立即清除全部瞬态节点并屏蔽后续瞬态
-更新；可读 summary 可以取代尚未产生语义内容的加密进度。不得使用 Markdown 标题、正文文本模式或
-供应商/模型身份猜测 summary 节点边界，节点身份只能来自协议事件或精确响应映射。
+只能声明一次临时状态；多个 Profile 同时声明时必须失败关闭。运行时展示优先级固定为“非空
+完整思考 > 可读 summary > 加密进度”：首段可读 summary 清除加密进度状态，完整思考一旦出现，必须立即
+清除瞬态状态并丢弃后续摘要。不得使用 Markdown 标题、正文文本模式或供应商/模型身份猜测 summary
+部分边界，部分边界只能来自协议事件的索引或摘要块身份。
 
 请求 Profile 不得写宿主保护根：`model`、`messages`、`input`、`tools`、`stream`。如真实供应商
 需要改变协议核心形状，应新增并审核协议/请求 projector，而不是用 Profile 越权重写。

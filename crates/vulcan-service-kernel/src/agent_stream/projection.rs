@@ -99,21 +99,10 @@ pub(crate) fn emit_transient_reasoning_status(
                     conversation_id: session_id.to_string(),
                     status: status.map(|status| TransientReasoningStatusSnapshot {
                         kind: match status.kind {
-                            RuntimeTransientReasoningStatusKind::Summary => {
-                                TransientReasoningStatusKind::Summary
-                            }
                             RuntimeTransientReasoningStatusKind::Encrypted => {
                                 TransientReasoningStatusKind::Encrypted
                             }
                         },
-                        summaries: status
-                            .summaries
-                            .into_iter()
-                            .map(|summary| TransientReasoningSummaryItemSnapshot {
-                                item_id: summary.item_id,
-                                text: summary.text,
-                            })
-                            .collect(),
                         reasoning_tokens: status.reasoning_tokens,
                     }),
                 },
