@@ -37,8 +37,12 @@ workspace-members = ["vulcan-code-service", "vulcan-lancedb-native"]
 # manage-deps` must not add it back; otherwise the library would still reach workspace-hack transitively.
 # 原生库及其链接的工作区 crate 从不依赖 workspace-hack，因此 `cargo hakari manage-deps` 不得将其加回；
 # 否则原生库仍会间接依赖 workspace-hack。
+#
+# The install core is also linked by the static setup program, which must not compile the workspace-wide
+# feature set; it keeps only its own small dependency list.
+# 安装核心同样链接进静态安装器，安装器不得编译整个工作区的特性集合；它只保留自己的少量依赖。
 [final-excludes]
-workspace-members = ["vulcan-lancedb-native", "vulcan-lancedb-contract", "vulcan-file-ownership"]
+workspace-members = ["vulcan-lancedb-native", "vulcan-lancedb-contract", "vulcan-file-ownership", "vulcan-install-core"]
 
 # Write out exact versions rather than a semver range. (Defaults to false.)
 # exact-versions = true

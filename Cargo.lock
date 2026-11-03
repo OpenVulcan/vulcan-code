@@ -10059,6 +10059,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "vulcan-install-core"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "hex",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.20",
+ "zstd",
+]
+
+[[package]]
 name = "vulcan-judge-host"
 version = "0.1.0"
 dependencies = [
@@ -11599,6 +11614,7 @@ dependencies = [
  "windows-sys 0.61.2",
  "winnow 1.0.4",
  "zerocopy",
+ "zeroize",
  "zstd",
  "zstd-safe",
  "zstd-sys",
