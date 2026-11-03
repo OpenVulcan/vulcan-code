@@ -130,11 +130,12 @@ impl IndexEntry {
     }
 }
 
-/// Checks entries already in path order as one tree: each entry valid, paths unique and distinct on
-/// case-insensitive file systems, none reserved, and none below a file or symbolic link.
-/// 将已按路径排序的条目作为一棵树校验：每个条目有效，路径唯一且在大小写不敏感的文件系统上互不相同，
-/// 不使用保留路径，且没有条目位于文件或符号链接之下。
-pub(crate) fn check_entry_set(entries: &[&IndexEntry]) -> FormatResult<()> {
+/// Checks entries already in path order as one tree: each entry valid, paths unique (and distinct
+/// on case-insensitive file systems when `case_insensitive`), none reserved, and none below a file
+/// or symbolic link.
+/// 将已按路径排序的条目作为一棵树校验：每个条目有效，路径唯一（`case_insensitive` 时在大小写不敏感的
+/// 文件系统上也互不相同），不使用保留路径，且没有条目位于文件或符号链接之下。
+pub(crate) fn check_entry_set(entries: &[&IndexEntry], case_insensitive: bool) -> FormatResult<()> {
     let invalid = |reason: String| Err(FormatError::invalid("component index", reason));
     let mut folded = HashSet::with_capacity(entries.len());
     let mut leaves = HashSet::new();
@@ -147,7 +148,7 @@ pub(crate) fn check_entry_set(entries: &[&IndexEntry]) -> FormatResult<()> {
         if position > 0 && entries[position - 1].path() >= path {
             return invalid(format!("`{path}` is out of order or repeated"));
         }
-        if !folded.insert(path.case_folded()) {
+        if case_insensitive && !folded.insert(path.case_folded()) {
             return invalid(format!(
                 "`{path}` collides with another path on case-insensitive file systems"
             ));
@@ -200,16 +201,17 @@ impl ComponentIndex {
         Ok(index)
     }
 
-    /// Checks the index rules: sorted unique paths that stay distinct on case-insensitive file
-    /// systems, and no entry below a file or symbolic link.
-    /// 校验索引规则：路径有序且唯一，在大小写不敏感的文件系统上仍互不相同，且没有条目位于文件或符号链接
-    /// 之下。
+    /// Checks the index rules: sorted unique paths and no entry below a file or symbolic link. An
+    /// index names no platform, so paths that differ only in case are checked when assembling for a
+    /// platform whose file systems are case-insensitive.
+    /// 校验索引规则：路径有序且唯一，且没有条目位于文件或符号链接之下。索引不含平台，因此仅大小写不同的
+    /// 路径在为大小写不敏感的平台组装时检查。
     pub fn validate(&self) -> FormatResult<()> {
         let invalid = |reason: String| Err(FormatError::invalid("component index", reason));
         if self.schema != SCHEMA_VERSION {
             return invalid(format!("unsupported schema {}", self.schema));
         }
-        check_entry_set(&self.entries.iter().collect::<Vec<_>>())
+        check_entry_set(&self.entries.iter().collect::<Vec<_>>(), false)
     }
 
     /// Total size of the component's files.
@@ -343,9 +345,9 @@ mod tests {
     }
 
     #[test]
-    fn repeated_and_case_colliding_paths_are_rejected() {
+    fn repeated_paths_are_rejected_and_case_variants_left_to_the_platform() {
         assert!(ComponentIndex::new(component(), vec![file("a"), file("a")]).is_err());
-        assert!(ComponentIndex::new(component(), vec![file("Readme"), file("README")]).is_err());
+        assert!(ComponentIndex::new(component(), vec![file("Readme"), file("README")]).is_ok());
     }
 
     #[test]

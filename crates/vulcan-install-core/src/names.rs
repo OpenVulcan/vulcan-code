@@ -95,6 +95,13 @@ impl Platform {
     pub const fn is_macos(self) -> bool {
         matches!(self, Self::MacosIntel | Self::MacosArm64)
     }
+
+    /// Whether installs land on a case-insensitive file system (Windows, default macOS), where
+    /// paths that differ only in case are one file.
+    /// 安装是否落在大小写不敏感的文件系统上（Windows、默认的 macOS），此时仅大小写不同的路径是同一个文件。
+    pub const fn has_case_insensitive_paths(self) -> bool {
+        self.is_windows() || self.is_macos()
+    }
 }
 
 impl fmt::Display for Platform {

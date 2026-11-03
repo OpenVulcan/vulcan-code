@@ -211,7 +211,10 @@ impl<'r> Assembly<'r> {
         entries.dedup_by(|later, earlier| {
             later == earlier && matches!(later, IndexEntry::Directory { .. })
         });
-        check_entry_set(&entries.iter().collect::<Vec<_>>())?;
+        check_entry_set(
+            &entries.iter().collect::<Vec<_>>(),
+            manifest.platform.has_case_insensitive_paths(),
+        )?;
         if cfg!(windows)
             && let Some(link) = entries
                 .iter()
@@ -1019,7 +1022,21 @@ mod tests {
             "0.1.3",
             &[("core", "bin/tool", b"one"), ("tools", "bin/TOOL", b"two")],
         );
-        assert!(Assembly::new(&root, &lock, &release.manifest, release.indexes.clone()).is_err());
+        // Case variants are one file only where file systems ignore case.
+        // 只有在忽略大小写的文件系统上，大小写变体才是同一个文件。
+        for platform in [
+            Platform::WindowsX64,
+            Platform::MacosArm64,
+            Platform::LinuxX64,
+        ] {
+            let mut manifest = release.manifest.clone();
+            manifest.platform = platform;
+            assert_eq!(
+                Assembly::new(&root, &lock, &manifest, release.indexes.clone()).is_err(),
+                platform.has_case_insensitive_paths(),
+                "{platform}"
+            );
+        }
         let mut foreign = release.manifest.clone();
         foreign.components.clear();
         assert!(Assembly::new(&root, &lock, &foreign, release.indexes[..1].to_vec()).is_err());
