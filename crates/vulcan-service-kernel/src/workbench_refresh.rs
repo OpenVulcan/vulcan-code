@@ -1485,6 +1485,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                 .map(|selection| &selection.model.capabilities),
             &bridged_media_kinds,
         ),
+        voice_input: public_ai_configuration.as_ref().map(voice_input_summary),
         output_style_catalog: output_style_catalog_summary(provider_configuration),
         default_answer_mode: crate::answer_mode::global_answer_mode(provider_configuration),
         permission_judge_backend: provider_configuration.permission_judge.backend,

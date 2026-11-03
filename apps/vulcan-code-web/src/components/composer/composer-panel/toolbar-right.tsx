@@ -53,6 +53,9 @@ export interface ComposerPanelToolbarRightProps {
   // Model, account and reasoning controls placed between the context orb and the send button.
   // 放在上下文圆环与发送按钮之间的模型、账号与思考控件。
   modelControls?: ReactNode;
+  // Push-to-talk microphone placed directly before the send button.
+  // 紧挨发送按钮左侧的按住说话麦克风。
+  voiceInputControl?: ReactNode;
   // Persists or clears one session context-compaction window node.
   // 持久化或清除一个会话上下文压缩窗口节点。
   onSetSessionContextCompactionWindow: (nodeId: ContextCompactionWindowNodeId | null) => Promise<boolean>;
@@ -79,6 +82,7 @@ export function ComposerPanelToolbarRight(props: ComposerPanelToolbarRightProps)
         sessionProviderUsage={props.sessionProviderUsage}
       />
       {props.modelControls}
+      {props.voiceInputControl}
       <button
         aria-label={stopOnly ? props.stopAriaLabel : props.sendAriaLabel}
         className="vk-send"

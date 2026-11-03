@@ -6655,7 +6655,6 @@
   "composer.voice.hold": "Hold to talk (up to {seconds} s)",
   "composer.voice.notConfigured": "Voice input is off. Choose a transcription model in Settings.",
   "composer.voice.recording": "Recording. Release to transcribe.",
-  "composer.voice.recordingHint": "Press Esc to cancel.",
   "composer.voice.transcribing": "Transcribing…",
   "composer.voice.tooShort": "Hold the microphone button while you speak.",
   "composer.voice.noSpeech": "No speech was recognized.",
@@ -6670,5 +6669,18 @@
   "settings.voiceInput.unavailable": "The saved model is no longer available. Choose another one.",
   "settings.voiceInput.loadFailed": "Could not load voice input settings",
   "settings.voiceInput.saveFailed": "Could not save the voice input model",
-  "settings.voiceInput.saved": "Voice input model saved"
+  "settings.voiceInput.saved": "Voice input model saved",
+  "composer.voice.title": "Voice input",
+  "composer.voice.limit": "Up to {seconds} s",
+  "composer.voice.usage": "Hold the button to talk and release to transcribe. Esc cancels.",
+  "composer.voice.model": "Transcription model",
+  "composer.voice.modelNone": "Not selected",
+  "composer.voice.loading": "Loading…",
+  "composer.voice.microphone": "Microphone",
+  "composer.voice.systemDefault": "System default",
+  "composer.voice.micFallback": "Microphone {index}",
+  "composer.voice.micMissing": "Saved microphone (not connected)",
+  "composer.voice.micNamesHidden": "Microphone names appear after the first recording grants access.",
+  "composer.voice.configure": "Set up voice input",
+  "composer.voice.changeModel": "Change transcription model"
 }

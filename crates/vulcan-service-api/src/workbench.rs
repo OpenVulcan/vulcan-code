@@ -159,6 +159,10 @@ pub struct WorkbenchSnapshot {
     /// 由共享运行时解析出的输入区附件能力门控。
     #[serde(default)]
     pub composer_attachment_capabilities: Vec<ComposerAttachmentCapabilitySummary>,
+    /// Composer voice-input state; absent before the AI configuration is loaded.
+    /// 输入区语音输入状态；AI 配置加载前缺失。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice_input: Option<VoiceInputSummary>,
     /// Output-style catalog and the persisted global selection used by new sessions.
     /// 新会话使用的输出风格目录与已持久化全局选择。
     #[serde(default)]

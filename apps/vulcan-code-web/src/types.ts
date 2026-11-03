@@ -18,3 +18,4 @@ export * from "./types/rtk";
 export * from "./types/mcp-service";
 export * from "./types/environment-variables";
 export * from "./types/review-prompt";
+export * from "./types/voice-input";

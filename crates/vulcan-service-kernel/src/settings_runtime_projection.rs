@@ -656,6 +656,11 @@ pub(crate) fn sync_workbench_runtime_control_fields_locked(
     {
         guard.workbench.providers = rows;
     }
+    if let Some(agent_runtime) = guard.agent_runtime.as_ref()
+        && let Ok(configuration) = agent_runtime.public_ai_runtime.configuration_snapshot()
+    {
+        guard.workbench.voice_input = Some(voice_input_summary(&configuration));
+    }
     guard.workbench.reasoning_selection =
         reasoning_selection(provider_configuration, public_model_capabilities.as_ref());
     guard.workbench.composer_attachment_capabilities = composer_attachment_capabilities(

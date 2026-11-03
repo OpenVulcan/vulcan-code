@@ -1955,6 +1955,13 @@ pub(super) fn remove_connection_from_configuration(
     configuration
         .provider_tool_selections
         .retain(|_, selection| selection.connection_id != connection_id);
+    if configuration
+        .voice_input_selection
+        .as_ref()
+        .is_some_and(|selection| selection.connection_id == connection_id)
+    {
+        configuration.voice_input_selection = None;
+    }
     // Media backends and native extension sets freeze exact accounts; deleting an account clears
     // only those references and deliberately leaves the independent capability switches unchanged.
     // 媒体后端与原生扩展集合冻结精确账号；删除账号时仅清理这些引用，并有意保留独立能力开关不变。

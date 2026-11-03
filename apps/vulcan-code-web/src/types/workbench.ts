@@ -1,5 +1,6 @@
 import type { AnswerMode } from "@/service/answer-mode";
 import type { JudgeBackend } from "./permission-judge";
+import type { VoiceInputSummary } from "./voice-input";
 import type {
   AgentSkillsCatalogSummary,
   ComposerAttachmentCapabilitySummary,
@@ -255,6 +256,9 @@ export interface WorkbenchSnapshot {
   // Attachment capability gates for the composer attachment controls.
   // 输入区附件控件使用的附件能力门控。
   composerAttachmentCapabilities?: ComposerAttachmentCapabilitySummary[];
+  // Composer voice-input state; absent before the AI configuration is loaded.
+  // 输入区语音输入状态；AI 配置加载前缺失。
+  voiceInput?: VoiceInputSummary | null;
   // Output-style catalog and the persisted global selection.
   // 输出风格目录与已持久化全局选择。
   outputStyleCatalog: OutputStyleCatalogSummary;

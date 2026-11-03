@@ -6655,7 +6655,6 @@
   "composer.voice.hold": "Mantén pulsado para hablar (hasta {seconds} s)",
   "composer.voice.notConfigured": "La entrada de voz está desactivada. Elige un modelo de transcripción en Ajustes.",
   "composer.voice.recording": "Grabando. Suelta para transcribir.",
-  "composer.voice.recordingHint": "Pulsa Esc para cancelar.",
   "composer.voice.transcribing": "Transcribiendo…",
   "composer.voice.tooShort": "Mantén pulsado el botón del micrófono mientras hablas.",
   "composer.voice.noSpeech": "No se reconoció ninguna voz.",
@@ -6670,5 +6669,18 @@
   "settings.voiceInput.unavailable": "El modelo guardado ya no está disponible. Elige otro.",
   "settings.voiceInput.loadFailed": "No se pudieron cargar los ajustes de entrada de voz",
   "settings.voiceInput.saveFailed": "No se pudo guardar el modelo de entrada de voz",
-  "settings.voiceInput.saved": "Modelo de entrada de voz guardado"
+  "settings.voiceInput.saved": "Modelo de entrada de voz guardado",
+  "composer.voice.title": "Entrada de voz",
+  "composer.voice.limit": "Hasta {seconds} s",
+  "composer.voice.usage": "Mantén pulsado el botón para hablar y suéltalo para transcribir. Esc cancela.",
+  "composer.voice.model": "Modelo de transcripción",
+  "composer.voice.modelNone": "No seleccionado",
+  "composer.voice.loading": "Cargando…",
+  "composer.voice.microphone": "Micrófono",
+  "composer.voice.systemDefault": "Predeterminado del sistema",
+  "composer.voice.micFallback": "Micrófono {index}",
+  "composer.voice.micMissing": "Micrófono guardado (no conectado)",
+  "composer.voice.micNamesHidden": "Los nombres de los micrófonos aparecen cuando la primera grabación concede el acceso.",
+  "composer.voice.configure": "Configurar la entrada de voz",
+  "composer.voice.changeModel": "Cambiar el modelo de transcripción"
 }

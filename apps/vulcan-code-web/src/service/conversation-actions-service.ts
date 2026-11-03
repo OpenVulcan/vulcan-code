@@ -840,7 +840,7 @@ export async function stageComposerAttachmentBytes(
   if (!hasServiceRuntime()) {
     throw new Error("Browser service is unavailable, so the attachment cannot be staged.");
   }
-  const dataBase64 = await fileToBase64(file);
+  const dataBase64 = await blobToBase64(file);
   return serviceClient.request<ComposerAttachmentSummary>("service_stage_composer_attachment_bytes", {
     projectId,
     conversationId,
@@ -878,7 +878,7 @@ export async function stageComposerAttachmentPreviewBytes(
   if (!hasServiceRuntime()) {
     throw new Error("Browser service is unavailable, so the attachment preview cannot be staged.");
   }
-  const dataBase64 = await fileToBase64(file);
+  const dataBase64 = await blobToBase64(file);
   return serviceClient.request<string>("service_stage_composer_attachment_preview_bytes", {
     projectId,
     conversationId,
@@ -887,9 +887,9 @@ export async function stageComposerAttachmentPreviewBytes(
   });
 }
 
-// fileToBase64 converts a browser File into a standard base64 payload.
-// fileToBase64 将浏览器 File 转换为标准 base64 载荷。
-async function fileToBase64(file: File): Promise<string> {
+// blobToBase64 converts a browser Blob or File into a standard base64 payload.
+// blobToBase64 将浏览器 Blob 或 File 转换为标准 base64 载荷。
+export async function blobToBase64(file: Blob): Promise<string> {
   const buffer = await file.arrayBuffer();
   const bytes = new Uint8Array(buffer);
   let binary = "";

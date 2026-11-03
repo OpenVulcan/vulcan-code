@@ -27,6 +27,7 @@ import { SubagentModelsSettingsArea } from "@/components/features/subagent-model
 import { McpServiceSettingsArea } from "@/components/features/mcp-service/mcp-service-settings-area";
 import { ToolCollapseSettingsSection } from "./tool-collapse-settings";
 import { SessionTitleSettingsSection } from "./session-title-settings";
+import { VoiceInputSettingsSection } from "./voice-input-settings";
 import { ToolChainSettingsSection } from "./tool-chain-settings";
 import { ThinkingPopupSettingsSection } from "./thinking-popup-settings";
 import { ConversationLinkSettingsSection } from "./conversation-link-settings";
@@ -150,6 +151,7 @@ function SettingsRoutedPage(props: SettingsFeatureContentProps) {
           <AnswerModeSettingsSection actions={props.actions} defaultAnswerMode={props.workbench.defaultAnswerMode} />
           <ToolCollapseSettingsSection />
           <SessionTitleSettingsSection actions={props.actions} enabled={props.workbench.sessionTitleGenerationEnabled ?? true} />
+          <VoiceInputSettingsSection />
           <ToolChainSettingsSection actions={props.actions} enabled={props.workbench.toolChainEnabled ?? true} maxSteps={props.workbench.toolChainMaxSteps ?? null} />
           <ThinkingPopupSettingsSection />
           <ConversationLinkSettingsSection />

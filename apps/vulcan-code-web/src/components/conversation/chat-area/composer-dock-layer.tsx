@@ -82,6 +82,7 @@ export function ChatAreaComposerDockLayer(props: ChatAreaComposerDockLayerProps)
   return (
     <ComposerDock
       attachmentCapabilities={workbench.composerAttachmentCapabilities ?? []}
+      voiceInput={workbench.voiceInput ?? null}
       projectId={props.projectId}
       conversationId={props.conversationId}
       workspacePath={workbench.projects.find((project) => project.id === props.projectId)?.path ?? null}

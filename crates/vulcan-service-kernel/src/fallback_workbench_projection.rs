@@ -95,6 +95,7 @@ pub(crate) fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot 
             None,
             &BTreeSet::new(),
         ),
+        voice_input: None,
         output_style_catalog: output_style_catalog_summary(&provider_configuration),
         default_answer_mode: crate::answer_mode::global_answer_mode(&provider_configuration),
         permission_judge_backend: provider_configuration.permission_judge.backend,

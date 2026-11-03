@@ -211,6 +211,26 @@
 .vk-send:disabled:not([data-state="stop"]) { background: var(--vk-sunken); color: var(--vk-ink-3); box-shadow: none; cursor: default; }
 .vk-send:disabled { cursor: not-allowed; }
 
+/* Push-to-talk stays quiet beside send; while held it takes the ember tint and shows the seconds left. */
+/* 按住说话在发送旁保持安静；按住时转为余烬底色并显示剩余秒数。 */
+.vk-voice {
+  flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  min-width: var(--vk-h-lg); height: var(--vk-h-lg); padding: 0 6px; border: 0;
+  background: transparent; color: var(--vk-ink-2); cursor: pointer; touch-action: none; user-select: none;
+  transition: background var(--vk-t-fast), color var(--vk-t-fast);
+}
+.vk-voice:hover { background: var(--vk-hover); color: var(--vk-ink); }
+.vk-voice:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: 2px; }
+.vk-voice[aria-disabled="true"] { color: var(--vk-ink-3); background: transparent; cursor: not-allowed; }
+.vk-voice[data-state="recording"] { background: var(--vk-ember-soft); color: var(--vk-ember-ink); }
+.vk-voice[data-warning] { color: var(--vk-warn); }
+.vk-voice-time { font-size: var(--vk-fs-xs); font-variant-numeric: tabular-nums; }
+/* The hover card's microphone list reuses menu rows, pulled flush with the card edge like the summary list. */
+/* 悬停卡片的麦克风列表复用菜单行，并像摘要列表一样贴齐卡片边缘。 */
+.vk-voice-mics { display: grid; margin: 0 calc(var(--vk-u) * -1.5); }
+.vk-voice-mics > .vk-menu-item { min-height: 28px; font-size: var(--vk-fs-xs); cursor: pointer; }
+.vk-voice-mic-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* Plan mode shows as a closable chip among the toolbar triggers. */
 /* 计划模式显示为工具栏触发器之间可关闭的标签。 */
 .vk-composer-chip {

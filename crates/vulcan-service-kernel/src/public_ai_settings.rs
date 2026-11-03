@@ -23,6 +23,7 @@ mod provider_tools;
 mod publication;
 mod session_tools;
 mod snapshot;
+mod voice_input;
 
 // Preserve original browser contract paths while their projection owners remain private.
 // 保留原浏览器契约路径，同时投影实现模块保持私有。
@@ -266,6 +267,11 @@ pub(super) use session_tools::{
     service_public_ai_session_provider_tool_selections,
     service_rebuild_public_ai_session_provider_tool_selections,
     service_save_public_ai_session_provider_tool_selections,
+};
+pub(crate) use voice_input::voice_input_summary;
+pub(super) use voice_input::{
+    service_save_voice_input_selection, service_transcribe_voice_input,
+    service_voice_input_settings,
 };
 use std::sync::Arc;
 use vulcan_provider_adapters::{PersistedAiConfiguration, PublicAiRuntime};

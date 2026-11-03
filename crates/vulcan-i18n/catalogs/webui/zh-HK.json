@@ -6655,7 +6655,6 @@
   "composer.voice.hold": "按住說話（最長 {seconds} 秒）",
   "composer.voice.notConfigured": "語音輸入未開啟，請在設定中選擇轉寫模型。",
   "composer.voice.recording": "正在錄音，放開即轉寫。",
-  "composer.voice.recordingHint": "按 Esc 取消。",
   "composer.voice.transcribing": "正在轉寫…",
   "composer.voice.tooShort": "說話時請按住咪高峰按鈕。",
   "composer.voice.noSpeech": "沒有識別到語音。",
@@ -6670,5 +6669,18 @@
   "settings.voiceInput.unavailable": "已儲存的模型不再可用，請重新選擇。",
   "settings.voiceInput.loadFailed": "無法載入語音輸入設定",
   "settings.voiceInput.saveFailed": "無法儲存語音輸入模型",
-  "settings.voiceInput.saved": "語音輸入模型已儲存"
+  "settings.voiceInput.saved": "語音輸入模型已儲存",
+  "composer.voice.title": "語音輸入",
+  "composer.voice.limit": "最長 {seconds} 秒",
+  "composer.voice.usage": "按住按鈕說話，放開即轉寫。按 Esc 取消。",
+  "composer.voice.model": "轉寫模型",
+  "composer.voice.modelNone": "未選擇",
+  "composer.voice.loading": "正在載入…",
+  "composer.voice.microphone": "咪高峰",
+  "composer.voice.systemDefault": "系統預設",
+  "composer.voice.micFallback": "咪高峰 {index}",
+  "composer.voice.micMissing": "已儲存的咪高峰（未連接）",
+  "composer.voice.micNamesHidden": "首次錄音取得授權後才會顯示咪高峰名稱。",
+  "composer.voice.configure": "設定語音輸入",
+  "composer.voice.changeModel": "更換轉寫模型"
 }

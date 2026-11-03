@@ -895,6 +895,7 @@ where
                     &bridged_media_kinds,
                 );
         }
+        planned_workbench.voice_input = Some(super::voice_input_summary(configuration));
         // leaseScopeIds materializes the exact sessions proven unleased during planning.
         // leaseScopeIds 物化规划期间被证明未租用的精确会话。
         let revoked_lease_scope_ids = revoked_session_ids

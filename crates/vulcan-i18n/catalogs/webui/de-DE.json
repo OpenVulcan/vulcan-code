@@ -6655,7 +6655,6 @@
   "composer.voice.hold": "Zum Sprechen gedrückt halten (bis zu {seconds} s)",
   "composer.voice.notConfigured": "Spracheingabe ist aus. Wählen Sie in den Einstellungen ein Transkriptionsmodell.",
   "composer.voice.recording": "Aufnahme läuft. Zum Transkribieren loslassen.",
-  "composer.voice.recordingHint": "Mit Esc abbrechen.",
   "composer.voice.transcribing": "Wird transkribiert…",
   "composer.voice.tooShort": "Halten Sie die Mikrofontaste gedrückt, während Sie sprechen.",
   "composer.voice.noSpeech": "Es wurde keine Sprache erkannt.",
@@ -6670,5 +6669,18 @@
   "settings.voiceInput.unavailable": "Das gespeicherte Modell ist nicht mehr verfügbar. Wählen Sie ein anderes.",
   "settings.voiceInput.loadFailed": "Einstellungen für Spracheingabe konnten nicht geladen werden",
   "settings.voiceInput.saveFailed": "Modell für Spracheingabe konnte nicht gespeichert werden",
-  "settings.voiceInput.saved": "Modell für Spracheingabe gespeichert"
+  "settings.voiceInput.saved": "Modell für Spracheingabe gespeichert",
+  "composer.voice.title": "Spracheingabe",
+  "composer.voice.limit": "Bis zu {seconds} s",
+  "composer.voice.usage": "Taste gedrückt halten und sprechen, zum Transkribieren loslassen. Esc bricht ab.",
+  "composer.voice.model": "Transkriptionsmodell",
+  "composer.voice.modelNone": "Nicht ausgewählt",
+  "composer.voice.loading": "Wird geladen…",
+  "composer.voice.microphone": "Mikrofon",
+  "composer.voice.systemDefault": "Systemstandard",
+  "composer.voice.micFallback": "Mikrofon {index}",
+  "composer.voice.micMissing": "Gespeichertes Mikrofon (nicht verbunden)",
+  "composer.voice.micNamesHidden": "Mikrofonnamen erscheinen, sobald die erste Aufnahme den Zugriff erlaubt.",
+  "composer.voice.configure": "Spracheingabe einrichten",
+  "composer.voice.changeModel": "Transkriptionsmodell ändern"
 }

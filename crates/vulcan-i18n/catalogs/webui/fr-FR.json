@@ -6655,7 +6655,6 @@
   "composer.voice.hold": "Maintenir pour parler (jusqu’à {seconds} s)",
   "composer.voice.notConfigured": "La saisie vocale est désactivée. Choisissez un modèle de transcription dans les paramètres.",
   "composer.voice.recording": "Enregistrement en cours. Relâchez pour transcrire.",
-  "composer.voice.recordingHint": "Appuyez sur Échap pour annuler.",
   "composer.voice.transcribing": "Transcription…",
   "composer.voice.tooShort": "Maintenez le bouton du micro pendant que vous parlez.",
   "composer.voice.noSpeech": "Aucune parole n’a été reconnue.",
@@ -6670,5 +6669,18 @@
   "settings.voiceInput.unavailable": "Le modèle enregistré n’est plus disponible. Choisissez-en un autre.",
   "settings.voiceInput.loadFailed": "Impossible de charger les paramètres de saisie vocale",
   "settings.voiceInput.saveFailed": "Impossible d’enregistrer le modèle de saisie vocale",
-  "settings.voiceInput.saved": "Modèle de saisie vocale enregistré"
+  "settings.voiceInput.saved": "Modèle de saisie vocale enregistré",
+  "composer.voice.title": "Saisie vocale",
+  "composer.voice.limit": "Jusqu’à {seconds} s",
+  "composer.voice.usage": "Maintenez le bouton pour parler, relâchez pour transcrire. Échap annule.",
+  "composer.voice.model": "Modèle de transcription",
+  "composer.voice.modelNone": "Non sélectionné",
+  "composer.voice.loading": "Chargement…",
+  "composer.voice.microphone": "Micro",
+  "composer.voice.systemDefault": "Valeur par défaut du système",
+  "composer.voice.micFallback": "Micro {index}",
+  "composer.voice.micMissing": "Micro enregistré (non connecté)",
+  "composer.voice.micNamesHidden": "Les noms des micros apparaissent une fois l’accès accordé lors du premier enregistrement.",
+  "composer.voice.configure": "Configurer la saisie vocale",
+  "composer.voice.changeModel": "Changer de modèle de transcription"
 }

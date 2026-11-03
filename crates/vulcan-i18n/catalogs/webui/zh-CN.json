@@ -6655,7 +6655,6 @@
   "composer.voice.hold": "按住说话（最长 {seconds} 秒）",
   "composer.voice.notConfigured": "语音输入未开启，请在设置中选择转写模型。",
   "composer.voice.recording": "正在录音，松开即转写。",
-  "composer.voice.recordingHint": "按 Esc 取消。",
   "composer.voice.transcribing": "正在转写…",
   "composer.voice.tooShort": "说话时请按住麦克风按钮。",
   "composer.voice.noSpeech": "没有识别到语音。",
@@ -6670,5 +6669,18 @@
   "settings.voiceInput.unavailable": "已保存的模型不再可用，请重新选择。",
   "settings.voiceInput.loadFailed": "无法加载语音输入设置",
   "settings.voiceInput.saveFailed": "无法保存语音输入模型",
-  "settings.voiceInput.saved": "语音输入模型已保存"
+  "settings.voiceInput.saved": "语音输入模型已保存",
+  "composer.voice.title": "语音输入",
+  "composer.voice.limit": "最长 {seconds} 秒",
+  "composer.voice.usage": "按住按钮说话，松开即转写。按 Esc 取消。",
+  "composer.voice.model": "转写模型",
+  "composer.voice.modelNone": "未选择",
+  "composer.voice.loading": "正在加载…",
+  "composer.voice.microphone": "麦克风",
+  "composer.voice.systemDefault": "系统默认",
+  "composer.voice.micFallback": "麦克风 {index}",
+  "composer.voice.micMissing": "已保存的麦克风（未连接）",
+  "composer.voice.micNamesHidden": "首次录音获得授权后才会显示麦克风名称。",
+  "composer.voice.configure": "设置语音输入",
+  "composer.voice.changeModel": "更换转写模型"
 }

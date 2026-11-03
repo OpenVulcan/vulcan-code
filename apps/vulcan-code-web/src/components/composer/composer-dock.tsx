@@ -43,6 +43,7 @@ import type {
   SessionTodolistSummary,
   SessionVmmPolicySummary,
   OutputStyleCatalogSummary,
+  VoiceInputSummary,
 } from "@/types";
 
 import { selectDedicatedMemory } from "@/service/dedicated-memory";
@@ -84,6 +85,9 @@ export function ComposerDock(props: {
   // Attachment capability gates used by composer attachment controls.
   // 输入区附件控件使用的附件能力门控。
   attachmentCapabilities: ComposerAttachmentCapabilitySummary[];
+  // Published voice-input state for the composer microphone.
+  // 输入区麦克风使用的已发布语音输入状态。
+  voiceInput?: VoiceInputSummary | null;
   // Owning project id used for attachment staging.
   // 附件暂存使用的所属项目标识。
   projectId: string | null;
@@ -360,6 +364,7 @@ export function ComposerDock(props: {
         defaultAnswerMode={props.defaultAnswerMode}
         permissionModeState={permissionModeState}
         attachmentCapabilities={props.attachmentCapabilities}
+        voiceInput={props.voiceInput ?? null}
         projectId={props.projectId}
         conversationId={props.conversationId}
         workspacePath={props.workspacePath}

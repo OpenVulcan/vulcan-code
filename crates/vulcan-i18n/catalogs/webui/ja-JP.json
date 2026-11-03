@@ -6655,7 +6655,6 @@
   "composer.voice.hold": "押して話す（最長 {seconds} 秒）",
   "composer.voice.notConfigured": "音声入力はオフです。設定で文字起こしモデルを選択してください。",
   "composer.voice.recording": "録音中です。離すと文字起こしします。",
-  "composer.voice.recordingHint": "Esc でキャンセルします。",
   "composer.voice.transcribing": "文字起こし中…",
   "composer.voice.tooShort": "話している間はマイクボタンを押し続けてください。",
   "composer.voice.noSpeech": "音声を認識できませんでした。",
@@ -6670,5 +6669,18 @@
   "settings.voiceInput.unavailable": "保存されたモデルは利用できなくなりました。別のモデルを選択してください。",
   "settings.voiceInput.loadFailed": "音声入力の設定を読み込めませんでした",
   "settings.voiceInput.saveFailed": "音声入力モデルを保存できませんでした",
-  "settings.voiceInput.saved": "音声入力モデルを保存しました"
+  "settings.voiceInput.saved": "音声入力モデルを保存しました",
+  "composer.voice.title": "音声入力",
+  "composer.voice.limit": "最長 {seconds} 秒",
+  "composer.voice.usage": "ボタンを押している間に話し、離すと文字起こしします。Esc でキャンセルします。",
+  "composer.voice.model": "文字起こしモデル",
+  "composer.voice.modelNone": "未選択",
+  "composer.voice.loading": "読み込み中…",
+  "composer.voice.microphone": "マイク",
+  "composer.voice.systemDefault": "システムの既定",
+  "composer.voice.micFallback": "マイク {index}",
+  "composer.voice.micMissing": "保存済みのマイク（未接続）",
+  "composer.voice.micNamesHidden": "最初の録音でアクセスを許可すると、マイク名が表示されます。",
+  "composer.voice.configure": "音声入力を設定",
+  "composer.voice.changeModel": "文字起こしモデルを変更"
 }

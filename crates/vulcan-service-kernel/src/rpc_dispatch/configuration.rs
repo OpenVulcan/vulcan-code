@@ -105,6 +105,9 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_save_public_ai_provider_extension_target_set",
     "service_save_public_ai_provider_extension_mode",
     "service_test_public_ai_provider_tool",
+    "service_voice_input_settings",
+    "service_save_voice_input_selection",
+    "service_transcribe_voice_input",
     "service_list_provider_tasks",
     "service_cancel_provider_task",
     "service_save_public_ai_provider_tool_capability_enabled",
@@ -750,6 +753,14 @@ pub(super) async fn dispatch(
         "service_test_public_ai_provider_tool" => rpc_json_result(
             service_test_public_ai_provider_tool(state, rpc_required_param(params, "request")?)
                 .await,
+        ),
+        "service_voice_input_settings" => rpc_json_result(service_voice_input_settings(state)),
+        "service_save_voice_input_selection" => rpc_json_result(
+            service_save_voice_input_selection(app, state, rpc_required_param(params, "request")?)
+                .await,
+        ),
+        "service_transcribe_voice_input" => rpc_json_result(
+            service_transcribe_voice_input(state, rpc_required_param(params, "request")?).await,
         ),
         "service_list_provider_tasks" => rpc_json_result(service_list_provider_tasks(state)),
         "service_cancel_provider_task" => rpc_json_result(

@@ -957,6 +957,11 @@ pub struct PersistedAiConfiguration {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub provider_extension_modes:
         BTreeMap<ProviderToolCapabilityKind, ProviderExtensionModeSelection>,
+    /// Speech-transcription target used by user voice input, chosen independently of AI tools;
+    /// absent until the user selects one.
+    /// 用户语音输入使用的语音转写目标，与 AI 工具选择相互独立；用户选择前缺失。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice_input_selection: Option<ProviderToolTargetSelection>,
 }
 
 /// Returns the default thirty-minute account-usage refresh interval.
@@ -1032,6 +1037,7 @@ impl Default for PersistedAiConfiguration {
             media_understanding_backend_options: BTreeMap::new(),
             provider_extension_target_sets: BTreeMap::new(),
             provider_extension_modes: BTreeMap::new(),
+            voice_input_selection: None,
         }
     }
 }

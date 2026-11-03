@@ -6655,7 +6655,6 @@
   "composer.voice.hold": "Удерживайте, чтобы говорить (до {seconds} с)",
   "composer.voice.notConfigured": "Голосовой ввод выключен. Выберите модель распознавания в настройках.",
   "composer.voice.recording": "Идёт запись. Отпустите, чтобы распознать.",
-  "composer.voice.recordingHint": "Нажмите Esc для отмены.",
   "composer.voice.transcribing": "Распознавание…",
   "composer.voice.tooShort": "Удерживайте кнопку микрофона, пока говорите.",
   "composer.voice.noSpeech": "Речь не распознана.",
@@ -6670,5 +6669,18 @@
   "settings.voiceInput.unavailable": "Сохранённая модель больше недоступна. Выберите другую.",
   "settings.voiceInput.loadFailed": "Не удалось загрузить настройки голосового ввода",
   "settings.voiceInput.saveFailed": "Не удалось сохранить модель голосового ввода",
-  "settings.voiceInput.saved": "Модель голосового ввода сохранена"
+  "settings.voiceInput.saved": "Модель голосового ввода сохранена",
+  "composer.voice.title": "Голосовой ввод",
+  "composer.voice.limit": "До {seconds} с",
+  "composer.voice.usage": "Удерживайте кнопку, чтобы говорить, и отпустите для распознавания. Esc отменяет.",
+  "composer.voice.model": "Модель распознавания",
+  "composer.voice.modelNone": "Не выбрана",
+  "composer.voice.loading": "Загрузка…",
+  "composer.voice.microphone": "Микрофон",
+  "composer.voice.systemDefault": "Системный по умолчанию",
+  "composer.voice.micFallback": "Микрофон {index}",
+  "composer.voice.micMissing": "Сохранённый микрофон (не подключён)",
+  "composer.voice.micNamesHidden": "Названия микрофонов появятся после того, как первая запись получит доступ.",
+  "composer.voice.configure": "Настроить голосовой ввод",
+  "composer.voice.changeModel": "Сменить модель распознавания"
 }

@@ -41,6 +41,7 @@ import type {
   SessionTodolistSummary,
   SessionVmmPolicySummary,
   OutputStyleCatalogSummary,
+  VoiceInputSummary,
 } from "@/types";
 import type { ComposerTraceCallback } from "@/components/composer/composer-control-types";
 
@@ -52,6 +53,8 @@ import { usePendingPromptQueueGuards } from "@/components/composer/composer-pane
 import { ComposerPanelAttachmentPreviewStrip } from "@/components/composer/composer-panel/attachment-preview-strip";
 import { ComposerGoalDialog } from "@/components/composer/composer-panel/goal-dialog";
 import { ComposerPanelToolbarRight } from "@/components/composer/composer-panel/toolbar-right";
+import { useComposerVoiceInput } from "@/components/composer/composer-panel/use-composer-voice-input";
+import { usePendingPromptRecovery } from "@/components/composer/composer-panel/use-pending-prompt-recovery";
 import { useComposerGoalController } from "@/components/composer/composer-panel/use-composer-goal-controller";
 import {
   useComposerSessionDraft,
@@ -92,6 +95,9 @@ export function ComposerPanel(props: {
   // Attachment capability gates used by add/drop/paste.
   // 添加、拖拽与粘贴使用的附件能力门控。
   attachmentCapabilities: ComposerAttachmentCapabilitySummary[];
+  // Published voice-input state for the microphone button; null until the AI configuration is loaded.
+  // 麦克风按钮使用的已发布语音输入状态；AI 配置加载前为 null。
+  voiceInput?: VoiceInputSummary | null;
   // Owning project id used for attachment staging.
   // 附件暂存使用的所属项目标识。
   projectId: string | null;
@@ -306,55 +312,13 @@ export function ComposerPanel(props: {
     pendingPromptEditRef.current = false;
     setIsPendingPromptEditing(false);
   }, []);
-
-  React.useEffect(() => {
-    if (!pendingPromptRecoveryToken) {
-      return;
-    }
-    // disposed prevents a recovery result from releasing a later component owner.
-    // disposed 防止恢复结果释放较晚的组件owner。
-    let disposed = false;
-    // retryTimer owns only the next bounded reconnect attempt.
-    // retryTimer 仅持有下一次有界重连尝试。
-    let retryTimer: number | null = null;
-    // retryDelayMs backs off repeated local-service outages without allowing stale draft writes.
-    // retryDelayMs 对重复本地服务中断进行退避，同时不允许陈旧草稿写入。
-    let retryDelayMs = 250;
-    // recover reloads the exact captured owner and releases the gate only after an authoritative response.
-    // recover 重新加载精确捕获owner，并仅在获得权威响应后释放门控。
-    const recover = async () => {
-      try {
-        await recoverQueuedDraftReplacement(pendingPromptRecoveryToken);
-        if (disposed) {
-          return;
-        }
-        setPendingPromptRecoveryToken(null);
-        releasePendingPromptEditGate();
-      } catch (error) {
-        if (disposed) {
-          return;
-        }
-        props.onTrace?.("pending_prompt.edit_recovery_waiting", {
-          draftSlotKey: pendingPromptRecoveryToken.owner.draftSlotKey,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        retryTimer = window.setTimeout(() => { void recover(); }, retryDelayMs);
-        retryDelayMs = Math.min(retryDelayMs * 2, 5_000);
-      }
-    };
-    void recover();
-    return () => {
-      disposed = true;
-      if (retryTimer !== null) {
-        window.clearTimeout(retryTimer);
-      }
-    };
-  }, [
-    pendingPromptRecoveryToken,
-    props.onTrace,
-    recoverQueuedDraftReplacement,
-    releasePendingPromptEditGate,
-  ]);
+  usePendingPromptRecovery({
+    token: pendingPromptRecoveryToken,
+    setToken: setPendingPromptRecoveryToken,
+    recover: recoverQueuedDraftReplacement,
+    releaseEditGate: releasePendingPromptEditGate,
+    onTrace: props.onTrace,
+  });
   // draftSessionSettings owns overrides that cannot be persisted until a new conversation materializes.
   // draftSessionSettings 持有新会话物化前无法持久化的覆盖项。
   const { draftSessionSettings, answerMode, permissionMode } = useComposerSessionSettings(draftSlotKey,
@@ -362,6 +326,9 @@ export function ComposerPanel(props: {
   // providerToolSettingsBlocked mirrors explicit session conflicts into the send boundary.
   // providerToolSettingsBlocked 将显式会话冲突映射到发送边界。
   const [providerToolSettingsBlocked, setProviderToolSettingsBlocked] = React.useState(false);
+  // voice holds sending while a recording or its transcription is still in progress.
+  // voice 在录音或其转写仍在进行时暂缓发送。
+  const voice = useComposerVoiceInput({ voiceInput: props.voiceInput ?? null, disabled: isPendingPromptEditing, textareaRef: composerTextareaRef, setDraftInput });
 
   // visibleSessionGoal hides completed goals from the composer-level control strip.
   // visibleSessionGoal 从输入区控制条中隐藏已完成目标。
@@ -636,7 +603,7 @@ export function ComposerPanel(props: {
       toast.info(t("composer.attachment.stagingPending"));
       return;
     }
-    if (providerToolSettingsBlocked) return;
+    if (providerToolSettingsBlocked || voice.busy) return;
     if (!admitAttachments()) return;
     await sendDraft();
   }, [
@@ -648,6 +615,7 @@ export function ComposerPanel(props: {
     sendDraft,
     hasPendingAttachmentStaging,
     t,
+    voice.busy,
   ]);
 
   // handleOutputStyleChange keeps draft changes local and routes persisted-session changes through the safe boundary API.
@@ -973,7 +941,8 @@ export function ComposerPanel(props: {
             modelContextLimit={activeProviderModelSummary?.model.contextLimit ?? null}
             draftInput={draftInput}
             isConversationRunning={props.isConversationRunning}
-            sendBlocked={isPendingPromptEditing || pendingAttachmentCount > 0 || providerToolSettingsBlocked || attachmentPreparation.blocksSubmission}
+            sendBlocked={isPendingPromptEditing || pendingAttachmentCount > 0 || providerToolSettingsBlocked || voice.busy || attachmentPreparation.blocksSubmission}
+            voiceInputControl={voice.control}
             stopPending={isStopping}
             onSetSessionContextCompactionWindow={props.onSetSessionContextCompactionWindow}
             onSend={() => void handleComposerSend()}

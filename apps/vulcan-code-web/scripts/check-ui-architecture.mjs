@@ -26,7 +26,7 @@ const componentCodeLineLimit = 400
 // 键格式为 "<src 相对路径>#<组件名>"。
 const oversizedComponentCeilings = new Map([
   ["app/workbench-app.tsx#WorkbenchApp", 627],
-  ["components/composer/composer-panel.tsx#ComposerPanel", 708],
+  ["components/composer/composer-panel.tsx#ComposerPanel", 679],
   ["components/conversation/chat-area.tsx#ChatArea", 496],
   ["components/conversation/conversation-workspace.tsx#ConversationWorkspace", 471],
   ["components/features/browser/browser-area.tsx#BrowserArea", 753],
