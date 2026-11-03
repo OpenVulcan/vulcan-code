@@ -188,7 +188,12 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # A cold cache compiles two dependency graphs (the isolated LanceDB library and the workspace tests),
+    # at least half an hour each on this runner. A timeout leaves compilers writing `target/`, so the cache is not
+    # saved and every later run stays cold; the limit therefore covers a complete cold run.
+    # 冷缓存需要编译两套依赖图（隔离的 LanceDB 库与工作区测试），在此运行器上各需半小时以上。超时会让编译器仍在
+    # 写入 `target/`，缓存因此无法保存，之后每轮都是冷编译；所以上限必须覆盖一次完整的冷运行。
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:

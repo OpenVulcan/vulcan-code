@@ -46,7 +46,7 @@
 
 Rust 作业的准备集中在 `.github/actions/rust-setup`：释放 Linux 磁盘、声明的 Node、`install_linux_system_deps.sh`、固定工具链、锁定的 protoc 与依赖缓存。测试作业另外安装 nextest、内置 sg/rg/rtk、Lua 载荷与受管 Node；不执行整个开发机 `init-system`。LuaSkills 发布查询带只读作业令牌，避免共享出口地址触发匿名限流。
 
-合并请求的新提交取消旧运行；main 的运行不取消，排队的推送合并为最新一项，以保证缓存写入完成。CI 统一设置 `CARGO_INCREMENTAL=0`、`CARGO_PROFILE_DEV_DEBUG=0`（测试继承 dev，不关闭断言）与 `CARGO_BUILD_JOBS=4`（托管运行器为 4 vCPU、16 GB；仓库默认的 16 按 32 线程工作站设定）。nextest 线程数与串行组仍取自 `.config/nextest.toml`。Rust 作业超时为 60 分钟，留出冷缓存首轮的余量；验收目标是热缓存下必过项总耗时不超过 30 分钟。
+合并请求的新提交取消旧运行；main 的运行不取消，排队的推送合并为最新一项，以保证缓存写入完成。CI 统一设置 `CARGO_INCREMENTAL=0`、`CARGO_PROFILE_DEV_DEBUG=0`（测试继承 dev，不关闭断言）与 `CARGO_BUILD_JOBS=4`（托管运行器为 4 vCPU、16 GB；仓库默认的 16 按 32 线程工作站设定）。nextest 线程数与串行组仍取自 `.config/nextest.toml`。clippy 与 Windows 检查作业超时为 60 分钟；测试作业冷缓存要编译隔离 LanceDB 库与工作区测试两套依赖图，超时为 150 分钟——超时会让编译器仍在写入 `target/`，缓存保存失败，之后每轮都会保持冷编译；验收目标是热缓存下必过项总耗时不超过 30 分钟。
 
 ### Rust 缓存
 
