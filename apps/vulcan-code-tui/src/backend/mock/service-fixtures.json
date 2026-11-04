@@ -1739,6 +1739,20 @@
       "runtimeReady": false,
       "task": null
     },
+    "service_app_update_status": {
+      "currentVersion": "0.0.0-demo",
+      "unavailableReason": null,
+      "settings": { "preview": false, "route": "auto" },
+      "activity": "idle",
+      "progress": null,
+      "lastCheckedAt": null,
+      "offer": null,
+      "readyVersion": null,
+      "repairedFiles": null,
+      "error": null,
+      "rollback": null,
+      "downloadPageUrl": "https://example.invalid/download"
+    },
     "service_rtk_settings": {
       "settings": {
         "enabled": true,

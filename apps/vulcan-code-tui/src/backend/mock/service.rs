@@ -1042,6 +1042,46 @@ impl FakeService {
                 status["task"] = task.clone();
                 return Ok(task);
             }
+            // The demo updater answers instantly: a check offers one synthetic version, a download
+            // makes it ready, and restart, repair and cancel only settle the snapshot.
+            // 演示更新器即时应答：检查提供一个合成版本，下载使其就绪；重启、修复与取消只整理快照。
+            "service_check_app_update" => {
+                let status = &mut self.loads["service_app_update_status"];
+                status["lastCheckedAt"] = json!(now_ms());
+                status["offer"] = json!({
+                    "version": "0.0.1-demo", "channel": "stable", "kind": "incremental",
+                    "downloadBytes": 1_048_576, "releasedAt": "2026-01-01T00:00:00Z",
+                    "notes": { "en-US": "Synthetic demo release." },
+                    "installable": true, "previouslyFailed": false
+                });
+                return Ok(status.clone());
+            }
+            "service_download_app_update" => {
+                let status = &mut self.loads["service_app_update_status"];
+                let version = status["offer"]["version"].clone();
+                if version.is_null() {
+                    return Err("No update to download".into());
+                }
+                status["readyVersion"] = version;
+                status["offer"] = Value::Null;
+                return Ok(status.clone());
+            }
+            "service_repair_app_install" => {
+                self.loads["service_app_update_status"]["repairedFiles"] = json!(0);
+                return Ok(self.loads["service_app_update_status"].clone());
+            }
+            "service_dismiss_app_update_notice" => {
+                self.loads["service_app_update_status"]["rollback"] = Value::Null;
+                return Ok(self.loads["service_app_update_status"].clone());
+            }
+            "service_cancel_app_update" | "service_restart_to_update" => {
+                return Ok(self.loads["service_app_update_status"].clone());
+            }
+            "service_save_app_update_settings" => {
+                self.loads["service_app_update_status"]["settings"] =
+                    required(params, "/settings")?.clone();
+                return Ok(self.loads["service_app_update_status"].clone());
+            }
             "service_save_rtk_settings" => {
                 self.loads["service_rtk_settings"]["settings"] =
                     required(params, "/request/settings")?.clone();

@@ -9,6 +9,7 @@
 // 处理器服务所有页面。行只描述显示内容与触发的 `Edit` 或 `UiAction`；此处不直接访问后端。
 // 页面构建函数按区域拆分为子模块；本模块只保存共用的行词汇。
 
+mod app_update;
 mod catalog;
 mod inference;
 mod knowledge;
@@ -191,7 +192,7 @@ impl Area {
                 (Some(tr!("settings.group.data")), vec![Archived]),
                 (
                     Some(tr!("settings.group.about")),
-                    vec![Diagnostics, Changelog, About],
+                    vec![Diagnostics, AppUpdate, Changelog, About],
                 ),
             ],
         }
@@ -240,6 +241,9 @@ pub enum PageId {
     McpService,
     Archived,
     Diagnostics,
+    /// The in-app updater: check, download, restart, repair and the update settings.
+    /// 应用内更新器：检查、下载、重启、修复与更新设置。
+    AppUpdate,
     /// Release notes from the distribution changelog, one release per page.
     /// 来自发行更新记录的说明，每页一个发布。
     Changelog,
@@ -338,6 +342,7 @@ impl PageId {
             PageId::McpService => tr!("settings.mcpService"),
             PageId::Archived => tr!("settings.misc.archivedConversations"),
             PageId::Diagnostics => tr!("settings.diagnostics"),
+            PageId::AppUpdate => tr!("settings.appUpdate"),
             PageId::Changelog => tr!("settings.changelog"),
             PageId::About => tr!("settings.group.about"),
             PageId::MemoryOverview => tr!("tui.memory.overview"),
@@ -464,6 +469,7 @@ impl PageId {
                 }
             }
             Self::About => calls.push(api::licenses::load_license_catalog()),
+            Self::AppUpdate => calls.push(api::app_update::load_app_update_status()),
             Self::ProjectPermissionJudge => {
                 if let Some(project) = &app.judge_policy_project {
                     calls.push(api::permission_judge::load_project_permission_judge_policy(
@@ -1173,6 +1179,7 @@ pub fn rows(app: &App, page: PageId) -> Vec<Row> {
         PageId::McpService => mcp_service::rows(app),
         PageId::Archived => settings::archived(app),
         PageId::Diagnostics => settings::diagnostics(app),
+        PageId::AppUpdate => app_update::rows(app),
         PageId::Changelog => settings::changelog(app),
         PageId::About => settings::about(app),
         PageId::MemoryOverview => memory::overview(app),

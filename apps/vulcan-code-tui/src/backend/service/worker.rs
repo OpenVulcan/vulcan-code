@@ -8,7 +8,7 @@
 // 此处修改。快速 RPC 内联执行；可能耗时较长的调用（依赖模型或网络）在短生命周期线程中执行，结果以
 // `Input::Done` 交回。
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::thread;
@@ -255,6 +255,10 @@ pub struct Worker {
     /// Whether a full authoritative snapshot permits publishing editable workbench settings.
     /// 是否已有完整权威快照，允许发布可编辑的工作台设置。
     workbench_slot_valid: bool,
+    /// Update prompts already shown, as `offer:<version>` and `ready:<version>`, once each per
+    /// process like the WebUI prompts.
+    /// 已显示的更新提示，形如 `offer:<version>` 与 `ready:<version>`；与 WebUI 一样每个进程各提示一次。
+    app_update_prompted: HashSet<String>,
 }
 
 /// Owns the worker event loop and stops transport readers when the UI closes.
@@ -333,6 +337,7 @@ impl Worker {
 
             workbench_slot: Value::Null,
             workbench_slot_valid: false,
+            app_update_prompted: HashSet::new(),
         }
     }
 
@@ -1263,6 +1268,16 @@ impl Worker {
             api::ServiceEvent::SessionTitleGenerated(generated) => {
                 self.session_title_generated(&generated);
             }
+            api::ServiceEvent::AppUpdateChanged(snapshot) => self.app_update_changed(&snapshot),
+            api::ServiceEvent::ServiceRestarting(restarting) => self.toast(
+                NoticeSeverity::Info,
+                match restarting.reason {
+                    api::ServiceRestartReason::Update => crate::tr!("appUpdate.toast.restarting"),
+                    api::ServiceRestartReason::Installer => {
+                        crate::tr!("appUpdate.toast.installing")
+                    }
+                },
+            ),
 
             _ => {}
         }
@@ -1282,6 +1297,38 @@ impl Worker {
                 NoticeSeverity::Warning,
                 crate::tr!("sessionTitle.toast.failed", model = generated.model),
             ),
+        }
+    }
+
+    /// Publishes a changed update snapshot and announces a newer or ready version once.
+    /// 发布变化的更新快照，并对更新版本或已就绪版本各提示一次。
+    /// `snapshot` is the updater state the service just published.
+    /// `snapshot` 为服务刚发布的更新器状态。
+    fn app_update_changed(&mut self, snapshot: &api::AppUpdateSnapshot) {
+        if let Some(offer) = &snapshot.offer
+            && self
+                .app_update_prompted
+                .insert(format!("offer:{}", offer.version))
+        {
+            self.toast(
+                NoticeSeverity::Info,
+                crate::tr!("settings.appUpdate.available", version = offer.version),
+            );
+        }
+        if let Some(ready) = &snapshot.ready_version
+            && self.app_update_prompted.insert(format!("ready:{ready}"))
+        {
+            self.toast(
+                NoticeSeverity::Info,
+                crate::tr!("settings.appUpdate.ready", version = ready),
+            );
+        }
+        if let Ok(value) = serde_json::to_value(snapshot) {
+            self.emit(BackendEvent::Slot {
+                slot: Slot::AppUpdate,
+                call: crate::service_api::app_update::load_app_update_status(),
+                value,
+            });
         }
     }
 

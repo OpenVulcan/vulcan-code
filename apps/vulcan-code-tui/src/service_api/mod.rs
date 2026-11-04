@@ -11,6 +11,7 @@
 // 原样发送得到的 `ServiceCall`，模拟后端响应同样的方法名。WebUI 新增或修改函数时，应先在此处同步。
 
 pub mod answer_mode;
+pub mod app_update;
 #[cfg(test)]
 mod contracts_tests;
 
@@ -201,6 +202,9 @@ pub enum Slot {
     /// `loadLicenseCatalog`
     /// 许可证目录。
     Licenses,
+    /// `loadAppUpdateStatus`; every updater call and `app.update.changed` refresh it.
+    /// 应用更新器快照；每个更新器调用与 `app.update.changed` 都会刷新它。
+    AppUpdate,
     /// `loadLicenseBody` of the open section.
     /// 当前打开章节的许可证正文。
     LicenseBody,
