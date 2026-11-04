@@ -705,27 +705,34 @@ fn write_file(path: &Path, content: &str, executable: bool) -> Result<(), String
 ///
 /// The output goes to files, not pipes: on Windows the service that `--install-user-service`
 /// starts inherits the output handles of its parent, so a pipe would stay open until that service
-/// exits and reading it to the end would never finish. For the same reason this program's own
-/// standard handles stop being inheritable first, or a pipe the caller reads this program's
-/// output through (`| Tee-Object`, a CI log) would stay open in the service.
+/// exits and reading it to the end would never finish. For the same reason the service program
+/// receives no other handle of this program on Windows: a shell such as Windows PowerShell hands
+/// this program extra inheritable copies of its own output, and a pipe the caller reads it
+/// through (`| Tee-Object`, a CI log) would otherwise stay open in the service.
 /// 以 `args` 运行服务程序 `program`，并返回其报告的内容。
 ///
 /// 输出写入文件而不是管道：Windows 上 `--install-user-service` 启动的服务会继承其父进程的输出句柄，
-/// 管道因此在该服务退出前一直保持打开，读到末尾永远无法完成。出于同样原因，先让本程序自己的标准
-/// 句柄不可继承，否则调用方读取本程序输出的管道（`| Tee-Object`、CI 日志）会一直被服务保持打开。
+/// 管道因此在该服务退出前一直保持打开，读到末尾永远无法完成。出于同样原因，Windows 上服务程序不
+/// 得到本程序的任何其他句柄：Windows PowerShell 等 Shell 会把其输出的额外可继承副本交给本程序，
+/// 否则调用方读取输出所用的管道（`| Tee-Object`、CI 日志）会一直被服务保持打开。
 fn run_service(program: &Path, args: &[&str]) -> Result<String, String> {
-    #[cfg(windows)]
-    crate::windows::keep_standard_handles_private();
     let stdout = Capture::create("out")?;
     let stderr = Capture::create("err")?;
+    #[cfg(windows)]
+    let status = crate::windows::run_with_only(program, args, &stdout.file, &stderr.file)
+        .map(|code| (code == 0, format!("exit code {code}")));
+    #[cfg(not(windows))]
     let status = Command::new(program)
         .args(args)
         .stdin(std::process::Stdio::null())
         .stdout(stdout.handle()?)
         .stderr(stderr.handle()?)
         .status()
-        .map_err(|error| format!("cannot run {}: {error}", program.display()))?;
-    if status.success() {
+        .map(|status| (status.success(), status.to_string()))
+        .map_err(|error| error.to_string());
+    let (success, status) =
+        status.map_err(|error| format!("cannot run {}: {error}", program.display()))?;
+    if success {
         Ok(stdout.text())
     } else {
         Err(format!(
@@ -771,6 +778,7 @@ impl Capture {
 
     /// A handle to the file for the child's standard stream.
     /// 供子进程标准流使用的文件句柄。
+    #[cfg(not(windows))]
     fn handle(&self) -> Result<std::fs::File, String> {
         self.file
             .try_clone()

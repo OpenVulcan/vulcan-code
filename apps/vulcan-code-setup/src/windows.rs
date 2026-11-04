@@ -5,16 +5,14 @@
 
 use std::ffi::{OsStr, OsString};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
+use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
 use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, HANDLE, HANDLE_FLAG_INHERIT,
-    INVALID_HANDLE_VALUE, SetHandleInformation,
-};
-use windows_sys::Win32::System::Console::{
-    GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+    CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_FILE_NOT_FOUND, ERROR_SUCCESS,
+    HANDLE, INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
@@ -25,8 +23,12 @@ use windows_sys::Win32::System::Registry::{
     RegSetValueExW,
 };
 use windows_sys::Win32::System::Threading::{
-    OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
-    PROCESS_TERMINATE, QueryFullProcessImageNameW, TerminateProcess, WaitForSingleObject,
+    CreateProcessW, DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess,
+    GetExitCodeProcess, INFINITE, InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
+    OpenProcess, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROCESS_INFORMATION, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+    QueryFullProcessImageNameW, STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess,
+    UpdateProcThreadAttribute, WaitForSingleObject,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     HWND_BROADCAST, SMTO_ABORTIFHUNG, SendMessageTimeoutW, WM_SETTINGCHANGE,
@@ -305,24 +307,193 @@ pub fn end_process(pid: u32, wait: Duration) {
     }
 }
 
-/// Makes this process's standard input, output and error handles non-inheritable, so a
-/// long-running process started below this one cannot keep them open. Children that are given
-/// `Stdio::inherit` still get them: the standard library duplicates them for each child.
-/// 使本进程的标准输入、输出与错误句柄不可继承，从而其下启动的长期运行进程无法使其保持打开。
-/// 以 `Stdio::inherit` 启动的子进程仍会得到它们：标准库为每个子进程复制这些句柄。
-pub fn keep_standard_handles_private() {
-    for id in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
-        // SAFETY: GetStdHandle takes a plain value; SetHandleInformation only changes the flag of
-        // a handle this process owns, and fails harmlessly for a missing or invalid one.
-        // SAFETY：GetStdHandle 接收普通值；SetHandleInformation 只修改本进程所拥有句柄的标志，
-        // 对缺失或无效的句柄无害地失败。
-        unsafe {
-            let handle = GetStdHandle(id);
-            if !handle.is_null() && handle != INVALID_HANDLE_VALUE {
-                SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0);
-            }
-        }
+/// Appends `arg` to the command line `line` so that the program's argument parser reads it back
+/// unchanged (the rules of `CommandLineToArgvW`).
+/// 把 `arg` 追加到命令行 `line`，使程序的参数解析原样读回（`CommandLineToArgvW` 的规则）。
+fn push_argument(line: &mut Vec<u16>, arg: &OsStr) {
+    const QUOTE: u16 = b'"' as u16;
+    const BACKSLASH: u16 = b'\\' as u16;
+    let wide: Vec<u16> = arg.encode_wide().collect();
+    if !line.is_empty() {
+        line.push(u16::from(b' '));
     }
+    let plain = !wide.is_empty()
+        && !wide
+            .iter()
+            .any(|&unit| unit == QUOTE || unit == u16::from(b' ') || unit == u16::from(b'\t'));
+    if plain {
+        line.extend(wide);
+        return;
+    }
+    line.push(QUOTE);
+    let mut backslashes = 0;
+    for unit in wide {
+        if unit == BACKSLASH {
+            backslashes += 1;
+        } else {
+            if unit == QUOTE {
+                line.extend(std::iter::repeat_n(BACKSLASH, backslashes + 1));
+            }
+            backslashes = 0;
+        }
+        line.push(unit);
+    }
+    line.extend(std::iter::repeat_n(BACKSLASH, backslashes));
+    line.push(QUOTE);
+}
+
+/// An initialized process attribute list, deleted when dropped.
+/// 已初始化的进程属性列表，释放时删除。
+struct Attributes(LPPROC_THREAD_ATTRIBUTE_LIST);
+
+impl Drop for Attributes {
+    fn drop(&mut self) {
+        // SAFETY: the list was initialized by InitializeProcThreadAttributeList and is deleted
+        // exactly once, before its buffer is freed.
+        // SAFETY：列表由 InitializeProcThreadAttributeList 初始化，并在其缓冲区释放前只删除一次。
+        unsafe { DeleteProcThreadAttributeList(self.0) }
+    }
+}
+
+/// Duplicates `file`'s handle as an inheritable one.
+/// 把 `file` 的句柄复制为可继承句柄。
+fn inheritable(file: &std::fs::File) -> Result<Handle, String> {
+    let mut copy: HANDLE = null_mut();
+    // SAFETY: the source handle is open for the lifetime of `file`; the copy is written on
+    // success and owned by the returned value.
+    // SAFETY：源句柄在 `file` 的生命周期内保持打开；成功时写入副本，并由返回值拥有。
+    let copied = unsafe {
+        DuplicateHandle(
+            GetCurrentProcess(),
+            file.as_raw_handle() as HANDLE,
+            GetCurrentProcess(),
+            &mut copy,
+            0,
+            1,
+            DUPLICATE_SAME_ACCESS,
+        )
+    };
+    if copied == 0 {
+        return Err(format!(
+            "cannot pass a handle: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(Handle(copy))
+}
+
+/// Runs `program` with `args`, waits for it and returns its exit code. The program receives NUL
+/// as its input, `stdout` and `stderr` as its output, and no other handle of this process, so
+/// nothing it starts in turn can keep a handle of this program's caller open.
+/// 以 `args` 运行 `program`，等待其结束并返回退出码。该程序以 NUL 为输入、以 `stdout` 与
+/// `stderr` 为输出，不得到本进程的任何其他句柄，因此它随后启动的任何程序都无法使本程序调用方的
+/// 句柄保持打开。
+pub fn run_with_only(
+    program: &Path,
+    args: &[&str],
+    stdout: &std::fs::File,
+    stderr: &std::fs::File,
+) -> Result<u32, String> {
+    let input = std::fs::File::open("NUL").map_err(|error| format!("cannot open NUL: {error}"))?;
+    let passed = [
+        inheritable(&input)?,
+        inheritable(stdout)?,
+        inheritable(stderr)?,
+    ];
+    let list: [HANDLE; 3] = [passed[0].0, passed[1].0, passed[2].0];
+
+    let mut size = 0usize;
+    // SAFETY: a null list with a size pointer only reports the size the list needs.
+    // SAFETY：传入空列表与大小指针时只报告列表所需的大小。
+    unsafe { InitializeProcThreadAttributeList(null_mut(), 1, 0, &mut size) };
+    let mut buffer = vec![0u64; size.div_ceil(std::mem::size_of::<u64>()).max(1)];
+    let raw: LPPROC_THREAD_ATTRIBUTE_LIST = buffer.as_mut_ptr().cast();
+    // SAFETY: the buffer is at least `size` bytes, aligned, and outlives the list.
+    // SAFETY：缓冲区至少 `size` 字节、已对齐，且生命周期长于列表。
+    if unsafe { InitializeProcThreadAttributeList(raw, 1, 0, &mut size) } == 0 {
+        return Err(format!(
+            "cannot prepare the process attributes: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let attributes = Attributes(raw);
+    // SAFETY: `list` stays alive and unchanged until CreateProcessW below has returned.
+    // SAFETY：`list` 在下方 CreateProcessW 返回之前保持存活且不变。
+    let updated = unsafe {
+        UpdateProcThreadAttribute(
+            attributes.0,
+            0,
+            PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
+            list.as_ptr().cast(),
+            std::mem::size_of_val(&list),
+            null_mut(),
+            null(),
+        )
+    };
+    if updated == 0 {
+        return Err(format!(
+            "cannot limit the passed handles: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+
+    // SAFETY: STARTUPINFOEXW is a plain C structure for which all zeroes is a valid value.
+    // SAFETY：STARTUPINFOEXW 是普通 C 结构，全零是有效值。
+    let mut startup: STARTUPINFOEXW = unsafe { std::mem::zeroed() };
+    startup.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
+    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    startup.StartupInfo.hStdInput = list[0];
+    startup.StartupInfo.hStdOutput = list[1];
+    startup.StartupInfo.hStdError = list[2];
+    startup.lpAttributeList = attributes.0;
+
+    let mut line = Vec::new();
+    push_argument(&mut line, program.as_os_str());
+    for arg in args {
+        push_argument(&mut line, OsStr::new(arg));
+    }
+    line.push(0);
+    // SAFETY: PROCESS_INFORMATION is a plain C structure for which all zeroes is a valid value.
+    // SAFETY：PROCESS_INFORMATION 是普通 C 结构，全零是有效值。
+    let mut started: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: the command line is a writable NUL-terminated buffer, the startup information and
+    // its attribute list are initialized, and the process information is written on success.
+    // SAFETY：命令行是可写且以 NUL 结尾的缓冲区，启动信息及其属性列表已初始化，成功时写入进程信息。
+    let created = unsafe {
+        CreateProcessW(
+            null(),
+            line.as_mut_ptr(),
+            null(),
+            null(),
+            1,
+            EXTENDED_STARTUPINFO_PRESENT,
+            null(),
+            null(),
+            &startup.StartupInfo,
+            &mut started,
+        )
+    };
+    if created == 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    let process = Handle(started.hProcess);
+    drop(Handle(started.hThread));
+    drop(attributes);
+    drop(passed);
+    let mut code = 0u32;
+    // SAFETY: the process handle is open with full access, as CreateProcessW returns it.
+    // SAFETY：进程句柄由 CreateProcessW 以完全权限返回并保持打开。
+    let finished = unsafe {
+        WaitForSingleObject(process.0, INFINITE);
+        GetExitCodeProcess(process.0, &mut code)
+    };
+    if finished == 0 {
+        return Err(format!(
+            "cannot read its exit code: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(code)
 }
 
 /// Whether two PATH entries name the same directory.
@@ -537,6 +708,46 @@ fn broadcast_environment() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn arguments_survive_the_command_line() {
+        let mut line = Vec::new();
+        for arg in [
+            r"C:\Program Files\x.exe",
+            "plain",
+            "",
+            r#"a"b"#,
+            r"tail\ ",
+            r"end\",
+        ] {
+            push_argument(&mut line, OsStr::new(arg));
+        }
+        let text = String::from_utf16(&line).expect("ASCII stays UTF-16");
+        assert_eq!(
+            text,
+            r#""C:\Program Files\x.exe" plain "" "a\"b" "tail\ " end\"#
+        );
+    }
+
+    #[test]
+    fn a_program_gets_only_the_given_output() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let out = std::fs::File::create(dir.path().join("out")).expect("output file");
+        let err = std::fs::File::create(dir.path().join("err")).expect("error file");
+        let cmd = Path::new(&std::env::var_os("SystemRoot").expect("SystemRoot"))
+            .join(r"System32\cmd.exe");
+        let code = run_with_only(
+            &cmd,
+            &["/d", "/c", "echo out& echo err 1>&2& exit 3"],
+            &out,
+            &err,
+        )
+        .expect("cmd runs");
+        assert_eq!(code, 3);
+        let read = |name| std::fs::read_to_string(dir.path().join(name)).expect("readable");
+        assert_eq!(read("out").trim(), "out");
+        assert_eq!(read("err").trim(), "err");
+    }
 
     #[test]
     fn path_entries_compare_without_case_or_trailing_separator() {
