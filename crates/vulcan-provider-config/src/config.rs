@@ -8,6 +8,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use vulcan_vmm::VmmConfigLayer;
 
+mod app_update;
+pub use app_update::*;
+
 mod configuration_io;
 pub use configuration_io::*;
 

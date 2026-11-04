@@ -326,6 +326,9 @@ pub fn spawn_service_bootstrap(
     std::thread::Builder::new()
         .name(String::from("vulcan-webui-service-bootstrap"))
         .spawn(move || {
+            // The updater runs beside the business startup, so a failed startup can still be repaired.
+            // 更新器与业务启动并行运行，使启动失败时仍可修复。
+            crate::app_update_services::install_app_updater(&state, &event_emitter);
             // Hold the already-published starting phase only in test-support builds so two
             // real GUI launchers can prove they reuse one Core before business readiness.
             // 仅在测试构建中保持已发布的 starting 阶段，让两个真实 GUI 启动器证明业务就绪前复用同一 Core。

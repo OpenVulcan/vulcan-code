@@ -129,6 +129,21 @@ pub enum FormatError {
         /// 可用字节数。
         available: u64,
     },
+    /// No download origin served an object.
+    /// 没有任何下载源提供某对象。
+    #[error("downloading {key} failed: {reason}")]
+    Download {
+        /// The object key below the origin.
+        /// 下载源之下的对象键。
+        key: String,
+        /// What each origin answered.
+        /// 各下载源的回应。
+        reason: String,
+    },
+    /// The caller cancelled the operation.
+    /// 调用方取消了操作。
+    #[error("the operation was cancelled")]
+    Cancelled,
     /// Reading, writing or (de)compressing failed.
     /// 读取、写入或压缩解压失败。
     #[error("{what}: {source}")]

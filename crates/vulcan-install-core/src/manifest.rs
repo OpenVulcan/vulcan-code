@@ -189,6 +189,37 @@ impl ReleaseManifest {
         Ok(manifest)
     }
 
+    /// Verifies the manifest of an already known version without a pointer, as a repair of the
+    /// installed version reads it; the signature alone establishes trust.
+    /// 不经指针校验某个已知版本的版本清单，修复已安装版本时如此读取；仅凭签名建立信任。
+    pub fn verify_release(
+        document: &[u8],
+        signature: &[u8],
+        keys: &[TrustedKey],
+        version: &ReleaseVersion,
+        platform: Platform,
+    ) -> FormatResult<Self> {
+        let (manifest, key): (Self, _) = parse_signed(
+            "release manifest",
+            MAX_MANIFEST_BYTES,
+            document,
+            signature,
+            keys,
+        )?;
+        expect_key_id(&manifest.key_id, key)?;
+        manifest.validate()?;
+        if &manifest.version != version || manifest.platform != platform {
+            return Err(FormatError::invalid(
+                "release manifest",
+                format!(
+                    "describes {} {} instead of {version} {platform}",
+                    manifest.version, manifest.platform
+                ),
+            ));
+        }
+        Ok(manifest)
+    }
+
     /// Checks the rules that hold for every manifest.
     /// 校验对每份清单都成立的规则。
     pub fn validate(&self) -> FormatResult<()> {

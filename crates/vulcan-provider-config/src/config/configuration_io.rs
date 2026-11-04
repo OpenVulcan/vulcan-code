@@ -233,6 +233,14 @@ pub struct ProviderConfigurationFile {
         skip_serializing_if = "PersistedMcpServiceConfiguration::is_default"
     )]
     pub mcp_service: PersistedMcpServiceConfiguration,
+    /// In-app update settings chosen by the user.
+    /// 用户选择的应用内更新设置。
+    #[serde(
+        default,
+        rename = "appUpdate",
+        skip_serializing_if = "PersistedAppUpdateConfiguration::is_default"
+    )]
+    pub app_update: PersistedAppUpdateConfiguration,
 }
 
 impl ProviderConfigurationFile {

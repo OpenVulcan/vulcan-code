@@ -91,6 +91,7 @@ pub const WEBUI_SERVICE_LOOPBACK_HOST: &str = "127.0.0.1";
 pub const WEBUI_STATIC_DIR_ENV: &str = "VULCAN_WEBUI_STATIC_DIR";
 
 mod answer_mode;
+mod app_update;
 mod attachments;
 mod command_events;
 mod conversation;
@@ -126,6 +127,7 @@ mod workbench;
 mod workspace_context;
 
 pub use answer_mode::*;
+pub use app_update::*;
 pub use attachments::*;
 pub use command_events::*;
 pub use conversation::*;

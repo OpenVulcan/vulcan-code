@@ -11,6 +11,11 @@ publish = false
 [lints]
 workspace = true
 
+# `http` downloads release objects; the release tool reads local copies and leaves it off.
+# `http` 下载发布对象；发布工具读取本地副本，不启用它。
+[features]
+http = ["dep:ureq"]
+
 [dependencies]
 base64.workspace = true
 ed25519-dalek.workspace = true
@@ -21,6 +26,7 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+ureq = { workspace = true, optional = true, features = ["rustls", "platform-verifier"] }
 zstd.workspace = true
 
 [dev-dependencies]

@@ -9661,8 +9661,12 @@ dependencies = [
  "base64 0.23.1",
  "log",
  "percent-encoding",
+ "rustls",
+ "rustls-pki-types",
+ "rustls-platform-verifier",
  "ureq-proto",
  "utf8-zero",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -9876,6 +9880,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "vulcan-app-update"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "vulcan-install-core",
+ "vulcan-product-info",
+ "vulcan-runtime-assets",
+ "vulcan-service-api",
+ "workspace-hack",
+]
+
+[[package]]
 name = "vulcan-apply-patch"
 version = "0.1.0"
 dependencies = [
@@ -9916,6 +9935,7 @@ dependencies = [
  "tracing-subscriber",
  "tray-icon",
  "uuid",
+ "vulcan-app-update",
  "vulcan-host-tools",
  "vulcan-i18n",
  "vulcan-product-info",
@@ -10085,6 +10105,7 @@ dependencies = [
  "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.20",
+ "ureq",
  "zstd",
 ]
 
@@ -10545,6 +10566,7 @@ dependencies = [
  "uuid",
  "vulcan-agent-runtime",
  "vulcan-ai-contract",
+ "vulcan-app-update",
  "vulcan-change-set",
  "vulcan-context",
  "vulcan-context-compaction",
@@ -11572,6 +11594,7 @@ version = "0.1.0"
 dependencies = [
  "ahash",
  "aho-corasick",
+ "base64 0.23.1",
  "bitflags 2.13.1",
  "bytes",
  "cc",
@@ -11597,6 +11620,8 @@ dependencies = [
  "getrandom 0.4.3",
  "half",
  "hashbrown 0.17.1",
+ "http",
+ "httparse",
  "hyper",
  "hyper-rustls",
  "hyper-util",
@@ -11653,6 +11678,7 @@ dependencies = [
  "tracing",
  "tungstenite",
  "typenum",
+ "ureq",
  "url",
  "uuid",
  "winapi",

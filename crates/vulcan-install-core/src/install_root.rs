@@ -198,6 +198,154 @@ impl InstallRoot {
     }
 }
 
+/// Marker below [`UPDATES_DIR`] for a version that has not yet started successfully.
+/// [`UPDATES_DIR`] 下标记尚未成功启动的版本的文件。
+///
+/// The Windows launcher (`apps/vulcan-code-launcher/src/trial.rs`) counts its attempts and
+/// switches back once the marker's `max_attempts` were made; the new service removes it once it is
+/// ready. The launcher mirrors this file name and the fields of [`StartupTrial`] and [`Rollback`];
+/// change both together.
+/// Windows 启动器（`apps/vulcan-code-launcher/src/trial.rs`）统计尝试次数，达到标记中的
+/// `max_attempts` 后切换回去；新服务就绪后删除它。启动器镜像此文件名以及 [`StartupTrial`] 与
+/// [`Rollback`] 的字段，两处须同时修改。
+pub const STARTUP_TRIAL_FILE: &str = "startup-trial.json";
+
+/// Marker below [`UPDATES_DIR`] left by the launcher after it switched back to the previous version.
+/// 启动器切换回上一版本后留在 [`UPDATES_DIR`] 下的标记。
+pub const ROLLBACK_FILE: &str = "rollback.json";
+
+/// Launches of a new version that may fail to start before the launcher switches back; written
+/// into each [`StartupTrial`], so the launcher reads it instead of keeping a copy.
+/// 启动器切换回去之前新版本允许启动失败的次数；写入每个 [`StartupTrial`]，启动器读取它而不保留副本。
+pub const MAX_STARTUP_ATTEMPTS: u32 = 2;
+
+/// Content of [`STARTUP_TRIAL_FILE`].
+/// [`STARTUP_TRIAL_FILE`] 的内容。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartupTrial {
+    /// The version on trial.
+    /// 试运行的版本。
+    pub version: ReleaseVersion,
+    /// The version to switch back to.
+    /// 要切换回去的版本。
+    pub previous: ReleaseVersion,
+    /// Launches made so far.
+    /// 至今的启动次数。
+    pub attempts: u32,
+    /// Launches allowed before switching back, [`MAX_STARTUP_ATTEMPTS`] when written.
+    /// 切换回去前允许的启动次数，写入时为 [`MAX_STARTUP_ATTEMPTS`]。
+    pub max_attempts: u32,
+}
+
+/// Content of [`ROLLBACK_FILE`].
+/// [`ROLLBACK_FILE`] 的内容。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Rollback {
+    /// The version that did not start.
+    /// 未能启动的版本。
+    pub failed: ReleaseVersion,
+    /// The version restored.
+    /// 已恢复的版本。
+    pub restored: ReleaseVersion,
+}
+
+impl InstallRoot {
+    /// Every installed version, in ascending order; other entries of the versions directory are
+    /// ignored.
+    /// 全部已安装版本，按升序排列；versions 目录中的其他条目被忽略。
+    pub fn installed_versions(&self) -> FormatResult<Vec<ReleaseVersion>> {
+        let dir = self.path.join(VERSIONS_DIR);
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(source) => return Err(FormatError::io("listing installed versions", source)),
+        };
+        let mut versions = Vec::new();
+        for entry in entries {
+            let entry =
+                entry.map_err(|source| FormatError::io("listing installed versions", source))?;
+            let is_dir = entry.file_type().is_ok_and(|kind| kind.is_dir());
+            if let (true, Some(version)) = (
+                is_dir,
+                entry
+                    .file_name()
+                    .to_str()
+                    .and_then(|name| name.parse::<ReleaseVersion>().ok()),
+            ) {
+                versions.push(version);
+            }
+        }
+        versions.sort();
+        Ok(versions)
+    }
+
+    /// Removes every installed version except `current` and the newest one below it (plan section
+    /// 8); a version still in use stays and is retried next time. Returns the versions removed.
+    /// 删除除 `current` 及其下最新一个版本以外的全部已安装版本（方案第八节）；仍在使用的版本保留，下次
+    /// 再试。返回已删除的版本。
+    pub fn prune_versions(
+        &self,
+        _lock: &InstallLock,
+        current: &ReleaseVersion,
+    ) -> FormatResult<Vec<ReleaseVersion>> {
+        let installed = self.installed_versions()?;
+        let previous = installed.iter().rev().find(|version| *version < current);
+        let mut removed = Vec::new();
+        for version in &installed {
+            if version == current || Some(version) == previous {
+                continue;
+            }
+            if std::fs::remove_dir_all(self.version_dir(version)).is_ok() {
+                removed.push(version.clone());
+            }
+        }
+        Ok(removed)
+    }
+
+    /// Reads a marker document below [`UPDATES_DIR`], if present.
+    /// 读取 [`UPDATES_DIR`] 下的标记文档（若存在）。
+    pub fn read_marker<T: serde::de::DeserializeOwned>(
+        &self,
+        name: &'static str,
+    ) -> FormatResult<Option<T>> {
+        match std::fs::read(self.path.join(UPDATES_DIR).join(name)) {
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .map(Some)
+                .map_err(|source| FormatError::Json { what: name, source }),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(source) => Err(FormatError::io("reading an update marker", source)),
+        }
+    }
+
+    /// Replaces a marker document below [`UPDATES_DIR`] atomically.
+    /// 原子替换 [`UPDATES_DIR`] 下的标记文档。
+    pub fn write_marker<T: Serialize>(
+        &self,
+        _lock: &InstallLock,
+        name: &'static str,
+        value: &T,
+    ) -> FormatResult<()> {
+        let fail = |source| FormatError::io("writing an update marker", source);
+        let bytes =
+            serde_json::to_vec(value).map_err(|source| FormatError::Json { what: name, source })?;
+        let dir = self.path.join(UPDATES_DIR);
+        std::fs::create_dir_all(&dir).map_err(fail)?;
+        let partial = dir.join(format!("{name}{PARTIAL_SUFFIX}"));
+        std::fs::write(&partial, bytes).map_err(fail)?;
+        std::fs::rename(&partial, dir.join(name)).map_err(fail)
+    }
+
+    /// Removes a marker document below [`UPDATES_DIR`]; a missing one is not an error.
+    /// 删除 [`UPDATES_DIR`] 下的标记文档；不存在不算错误。
+    pub fn remove_marker(&self, _lock: &InstallLock, name: &'static str) -> FormatResult<()> {
+        match std::fs::remove_file(self.path.join(UPDATES_DIR).join(name)) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(source) => Err(FormatError::io("removing an update marker", source)),
+        }
+    }
+}
+
 /// Creates a symbolic link; Windows release trees never contain one.
 /// 创建符号链接；Windows 发行树中从不包含符号链接。
 pub(crate) fn create_symlink(target: &str, link: &Path) -> std::io::Result<()> {

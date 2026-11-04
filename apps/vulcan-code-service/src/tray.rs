@@ -221,6 +221,15 @@ pub fn run_with_tray() {
                             bridge_reported = true;
                         }
                     }
+                    // An update restart asks for the same drain as the quit menu item.
+                    // 更新重启请求与退出菜单项相同的排空。
+                    if handles
+                        .service
+                        .shutdown_signal()
+                        .swap(false, Ordering::AcqRel)
+                    {
+                        quit_service(&handles, &proxy, &text);
+                    }
                     next_status_refresh = std::time::Instant::now() + TRAY_STATUS_INTERVAL;
                 }
                 *control_flow = ControlFlow::WaitUntil(next_status_refresh);

@@ -431,7 +431,11 @@ fn spawn_browser_host_reaper(state: SharedServiceBridgeState) {
 
 /// Desktop implementation of host shell capabilities shared by tray and headless modes.
 /// 托盘与无头模式共享的宿主 shell 桌面实现。
-struct ServiceShellHostImpl;
+struct ServiceShellHostImpl {
+    /// Shutdown request flag of the owning service, watched by the headless loop and the tray.
+    /// 所属服务的关闭请求标志，由无头循环与托盘监视。
+    shutdown_requested: Arc<AtomicBool>,
+}
 
 impl ServiceShellHost for ServiceShellHostImpl {
     /// Opens one local path with the system file manager.
@@ -444,6 +448,12 @@ impl ServiceShellHost for ServiceShellHostImpl {
     /// 使用系统默认浏览器打开单个 URL。
     fn open_url(&self, url: &str) -> Result<(), String> {
         crate::desktop_integration::open_url_in_system_browser(url)
+    }
+
+    /// Records what starts after the drain and asks the owner loop to drain.
+    /// 记录排空后启动的内容，并请求所有者循环排空。
+    fn restart_service(&self, plan: vulcan_app_update::RestartPlan) -> Result<(), String> {
+        crate::restart::request(plan, &self.shutdown_requested)
     }
 }
 
@@ -503,8 +513,21 @@ impl HeadlessService {
     /// 非竞争类启动失败返回诊断。
     pub fn start() -> Result<Option<Self>, String> {
         let data_root = authoritative_data_root()?;
-        let guard = vulcan_service_host::instance::ServiceInstanceGuard::acquire(&data_root)
-            .map_err(|error| format!("failed to acquire service lock: {error}"))?;
+        let args: Vec<String> = std::env::args().collect();
+        // A replacement started by an update keeps trying while the old owner drains and exits.
+        // 由更新启动的替代进程在旧所有者排空并退出期间持续尝试。
+        let deadline = crate::launch::await_owner_exit_requested(&args)
+            .then(|| std::time::Instant::now() + crate::launch::OWNER_EXIT_WAIT);
+        let guard = loop {
+            let guard = vulcan_service_host::instance::ServiceInstanceGuard::acquire(&data_root)
+                .map_err(|error| format!("failed to acquire service lock: {error}"))?;
+            match deadline {
+                Some(deadline) if guard.is_none() && std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                }
+                _ => break guard,
+            }
+        };
         let Some(guard) = guard else {
             // A concurrent launcher lost the race: the launcher treats this as "already running",
             // so this process must exit successfully without touching the live instance.
@@ -520,7 +543,10 @@ impl HeadlessService {
         let native_diagnostics = crate::native_diagnostics::NativeDiagnosticCapture::install()?;
         let (service_event_bus, _) =
             broadcast::channel(vulcan_service_host::WEBUI_SERVICE_EVENT_BUS_CAPACITY);
-        let state = create_service_bridge_state(Arc::new(ServiceShellHostImpl));
+        let shutdown_requested = Arc::new(AtomicBool::new(false));
+        let state = create_service_bridge_state(Arc::new(ServiceShellHostImpl {
+            shutdown_requested: Arc::clone(&shutdown_requested),
+        }));
         let event_emitter = ServiceEventEmitter::new(vec![webui_service_event_bus_sink(
             service_event_bus.clone(),
         )]);
@@ -584,7 +610,7 @@ impl HeadlessService {
             _guard: guard,
             state,
             _http_bridge: http_bridge,
-            shutdown_requested: Arc::new(AtomicBool::new(false)),
+            shutdown_requested,
             native_diagnostics,
             #[cfg(feature = "test-support")]
             test_fail_shutdown_once: AtomicBool::new(
@@ -611,6 +637,9 @@ impl HeadlessService {
         }
         match service_prepare_for_app_shutdown(&self.state) {
             Ok(stopped) => {
+                // A requested update starts only after every session was drained.
+                // 请求的更新只在所有会话排空之后启动。
+                crate::restart::launch_pending();
                 // Kernel success includes the original manager's real execution and retirement joins.
                 // 内核成功结果包含原管理器真实执行与退役 join。
                 // Telemetry failures cannot reopen native resources already closed.

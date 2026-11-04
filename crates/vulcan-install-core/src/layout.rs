@@ -11,6 +11,12 @@ use crate::names::{Channel, Platform, ReleaseVersion};
 /// 主下载源；其路径即提供它的存储桶中的对象键前缀。
 pub const PRIMARY_ORIGIN: &str = "https://static.openvulcan.com/vulcancode";
 
+/// The mainland China mirror that openvulcan-web fills from [`PRIMARY_ORIGIN`]; objects arrive there
+/// first and pointers last, and nothing it serves is trusted beyond the signatures and digests.
+/// openvulcan-web 从 [`PRIMARY_ORIGIN`] 同步的中国大陆镜像；对象先到、指针最后到，其提供的内容除签名与
+/// 摘要外不受信任。
+pub const CHINA_ORIGIN: &str = "https://static.openvulcan.cn/vulcancode";
+
 /// The mutable signed pointer of a channel and platform.
 /// 某通道与平台的可变已签名指针。
 pub fn pointer_key(channel: Channel, platform: Platform) -> String {

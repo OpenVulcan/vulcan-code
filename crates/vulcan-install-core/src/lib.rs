@@ -18,6 +18,8 @@
 pub mod assemble;
 pub mod digest;
 pub mod error;
+#[cfg(feature = "http")]
+pub mod fetch;
 pub mod index;
 pub mod install_root;
 pub mod layout;
@@ -28,7 +30,10 @@ pub mod pack;
 pub mod path;
 pub mod pointer;
 pub mod record;
+pub mod repair;
 pub mod signing;
+#[cfg(feature = "http")]
+pub mod update;
 
 pub use digest::Sha256Digest;
 pub use error::{FormatError, FormatResult};

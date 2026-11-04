@@ -1191,6 +1191,13 @@ pub trait ServiceShellHost: Send + Sync {
     /// Opens one URL with the host default browser.
     /// 使用宿主默认浏览器打开单个 URL。
     fn open_url(&self, url: &str) -> Result<(), String>;
+
+    /// Stops this service so that `plan` starts once it exited; returns once the stop is under way.
+    /// 停止本服务，使 `plan` 在其退出后启动；停止开始进行后返回。
+    fn restart_service(&self, plan: vulcan_app_update::RestartPlan) -> Result<(), String> {
+        let _ = plan;
+        Err(String::from("this host cannot restart the service"))
+    }
 }
 
 /// Join handle type used by service-owned asynchronous tasks.

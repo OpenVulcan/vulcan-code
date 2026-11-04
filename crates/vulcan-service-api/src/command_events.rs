@@ -423,6 +423,12 @@ pub enum ServiceEvent {
     /// Result of titling a new session with a model.
     /// 用模型为新会话生成标题的结果。
     SessionTitleGenerated(Box<SessionTitleGeneratedEvent>),
+    /// Update state change, sent whenever the update snapshot changes.
+    /// 更新状态变化，每当更新快照变化时发送。
+    AppUpdateChanged(Box<AppUpdateSnapshot>),
+    /// The service stops for an update; clients reconnect or restart themselves.
+    /// 服务因更新而停止；客户端重新连接或自行重启。
+    ServiceRestarting(Box<ServiceRestartingEvent>),
 }
 
 /// Receives one service event emitted by the Core Service boundary.

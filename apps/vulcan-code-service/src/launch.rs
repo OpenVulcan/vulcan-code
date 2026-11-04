@@ -31,6 +31,21 @@ pub const ARG_TEST_ROOT: &str = "--test-root";
 /// 外部终端或测试宿主持有诊断输出时，屏蔽 Debug Core 的单一控制台。
 pub const ARG_NO_DEBUG_CONSOLE: &str = "--no-debug-console";
 
+/// Set by a service that restarts into an updated version: the replacement waits for the old
+/// owner to release the data-root lock instead of exiting as a losing concurrent launcher.
+/// 由重启到更新版本的服务设置：替代进程等待旧所有者释放数据根锁，而不是作为竞争失败的并发启动器退出。
+pub const ARG_AWAIT_OWNER_EXIT: &str = "--await-owner-exit";
+
+/// How long a replacement service waits for the old owner to exit.
+/// 替代服务等待旧所有者退出的时长。
+pub const OWNER_EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Whether `args` ask to wait for the old owner (see [`ARG_AWAIT_OWNER_EXIT`]).
+/// `args` 是否要求等待旧所有者（见 [`ARG_AWAIT_OWNER_EXIT`]）。
+pub fn await_owner_exit_requested(args: &[String]) -> bool {
+    args.iter().skip(1).any(|arg| arg == ARG_AWAIT_OWNER_EXIT)
+}
+
 /// Selected service launch mode parsed from process arguments.
 /// 从进程参数解析出的服务启动模式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,7 +155,7 @@ pub(crate) fn parse_service_launch_args_impl(
             }
             continue;
         }
-        if arg == ARG_NO_DEBUG_CONSOLE {
+        if arg == ARG_NO_DEBUG_CONSOLE || arg == ARG_AWAIT_OWNER_EXIT {
             continue;
         }
         let mode = match arg.as_str() {

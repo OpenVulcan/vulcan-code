@@ -289,6 +289,10 @@ mod systemd {
         let executable = std::env::current_exe()
             .and_then(|path| path.canonicalize())
             .map_err(|error| format!("failed to resolve the service executable: {error}"))?;
+        // An installed release runs from its version directory; the unit names the path that
+        // follows updates.
+        // 已安装的发行版从其版本目录运行；单元使用随更新变化的路径。
+        let executable = vulcan_app_update::stable_executable(&executable).unwrap_or(executable);
         let unit_path = unit_path()?;
         // Reinstalling replaces a running registration, so release its lock before checking it.
         // 重新安装会替换正在运行的注册，因此检查锁之前先让其释放。

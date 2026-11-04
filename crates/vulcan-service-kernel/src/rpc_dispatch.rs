@@ -4,6 +4,7 @@
 use super::*;
 use vulcan_service_api::WebuiServiceRpcError;
 
+mod app_update;
 mod browser;
 mod configuration;
 mod conversation_events_v1;
@@ -104,6 +105,10 @@ async fn dispatch_known_service_rpc(
         return Ok(outcome);
     }
     let outcome = environment::dispatch(state.clone(), method, params).await?;
+    if outcome.is_handled() {
+        return Ok(outcome);
+    }
+    let outcome = app_update::dispatch(state.clone(), method, params).await?;
     if outcome.is_handled() {
         return Ok(outcome);
     }
@@ -230,6 +235,7 @@ pub(crate) fn service_rpc_method_names() -> BTreeSet<&'static str> {
         markdown_memory::RPC_METHODS,
         browser::RPC_METHODS,
         environment::RPC_METHODS,
+        app_update::RPC_METHODS,
     ]
     .into_iter()
     .flatten()
@@ -261,7 +267,8 @@ mod tests {
             + knowledge_base::RPC_METHODS.len()
             + markdown_memory::RPC_METHODS.len()
             + browser::RPC_METHODS.len()
-            + environment::RPC_METHODS.len();
+            + environment::RPC_METHODS.len()
+            + app_update::RPC_METHODS.len();
         assert_eq!(methods.len(), declared_method_count);
         assert!(methods.contains("service_submit_conversation_prompt"));
         assert!(methods.contains("service_continue_conversation"));

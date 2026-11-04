@@ -16,6 +16,7 @@ mod launch;
 mod logging;
 mod managed_runtimes;
 mod native_diagnostics;
+mod restart;
 mod runtime_layout;
 mod service_runtime;
 #[cfg(feature = "desktop-tray")]

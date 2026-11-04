@@ -1,0 +1,72 @@
+# 应用内更新
+
+本文记录已安装 Vulcan Code 的应用内更新契约。实现权威是 `crates/vulcan-app-update/`（流程）、
+`crates/vulcan-install-core/`（布局、标记、校验、组装、修复）、`crates/vulcan-service-api/src/app_update.rs`
+（线协议）与 `apps/vulcan-code-launcher/src/trial.rs`（启动试运行）。设计依据见发布方案第八、九节；
+方案只记录决策，当前行为以源码为准。
+
+## 职责划分
+
+- **Core 独占更新逻辑**：检查、下载、校验、组装、切换、修复、清理都在服务进程内，经
+  `service_app_update_*` 等 8 个 RPC 方法暴露。客户端（WebUI、桌面、TUI）只显示快照、发起确认，
+  不自行下载或改写安装目录。
+- **一次只运行一个操作**：检查、下载、修复、重启互斥；进行中的下载或修复每 500 毫秒报告一次进度。
+  取消保留已下载的 `.partial` 文件，下次继续。
+- **快照即状态**：每个 RPC 都以完整 `AppUpdateSnapshot` 应答；状态每次变化都发布
+  `app.update.changed`。客户端不缓存派生状态，以最近快照为准。
+- **不可更新时如实说明**：调试构建、不在 `versions/<版本>` 布局中、缺少或无效的
+  `.vulcan-install.json`、不支持的平台，均在 `unavailableReason` 中给出原因，客户端不提供任何更新操作。
+  目前 `scripts/install.sh` 以摘要命名代际目录，因此 Linux/macOS 经该脚本安装的副本显示“未安装布局”；
+  方案 18.6 的 TUI 安装器接管后改为 `versions/<版本>`。
+
+## 检查与提议
+
+- 服务启动约 60 秒后检查一次，之后每 6 小时一次，另有手动检查。
+- 顺序固定：指针 → 版本 → 清单 → 发布说明；全部经内置 Ed25519 公钥校验。只接受高于当前版本的版本。
+- 稳定版始终检查；预览通道开启时同时检查预览版并取较高者。
+- 下载源：`auto` 先国际源再中国镜像，`international`、`china` 只用对应源。
+- 安装纪元升高或缺少已安装组件时为完整更新：Windows 下载 Inno 安装包（SHA-256 来自签名清单，
+  Authenticode 签名者须为发布证书），Linux/macOS 只提供下载页 `https://openvulcan.com/download`。
+  其余情况为增量更新，只下载摘要不在本地安装记录中的文件。
+- 回退提示仍在时，提议的版本若正是启动失败的版本，仍可提议但标记 `previouslyFailed`；用户关闭提示后不再标记。
+
+## 设置
+
+- 只有 `preview`（默认关闭）与 `route`（默认 `auto`）两项。默认值只在内存中补全；只有用户显式保存时才写入
+  `appUpdate`，值等于默认时不写出（第一节第 5 条）。
+- 保存始终提交完整设置文档。
+
+## 切换、重启与试运行
+
+1. 增量更新在运行版本旁组装 `versions/<新版本>`，然后原子切换当前版本（Windows `current.json`，
+   其他平台 `current` 符号链接），并写入 `updates/startup-trial.json`：`version`、`previous`、
+   `attempts: 0` 与 `max_attempts`（取自 `MAX_STARTUP_ATTEMPTS`，当前为 2）。
+2. 用户确认重启后，服务发布 `service.restarting`（`reason` 为 `update` 或 `installer`），正常排空后
+   以相同参数加 `--await-owner-exit` 分离启动新服务；新服务最多等待 120 秒取得实例锁。在 systemd 用户
+   服务中改用 `systemd-run --user` 重新安装用户单元，单元的 `ExecStart` 使用稳定路径 `<root>/current/<rel>`。
+3. 桌面端等待旧 Core 进程退出后，经稳定入口重新启动（Windows 为根目录启动器 `VulcanCode.exe`，
+   其他平台为 `<root>/current/<rel>`）。完整安装时桌面端只退出，安装包以
+   `/SILENT /SUPPRESSMSGBOXES /NORESTART /RELAUNCH=1` 运行，结束后由 `[Run]` 中的
+   `RelaunchRequested` 启动应用。TUI 与浏览器自动重连。
+4. Windows 启动器每次桌面启动计一次尝试；`attempts` 达到 `max_attempts` 而标记仍在时，把
+   `current.json` 指回 `previous`，写入 `updates/rollback.json`（`failed`、`restored`）并删除试运行标记。
+   试运行版本已不是当前版本时（例如随后运行了完整安装包）直接删除标记。服务正持有安装锁时本次不处理。
+   上一版本目录已不存在时启动器报错，不猜测其他版本。
+5. 新服务启动时：删除属于自己的试运行标记；回退标记的 `restored` 等于自身版本时保留并在快照中提示，
+   否则删除；当前版本等于自身时清理旧版本（只保留当前版本与比它低的最新一个版本）；当前版本高于自身时
+   标记为已就绪。
+
+## 修复
+
+修复按签名清单与组件索引核对安装记录中的每个文件，只重新下载缺失或摘要不符的文件，结果以
+`repairedFiles` 报告。
+
+## 同步触发点
+
+- 试运行与回退标记的文件名、字段在 `install_root.rs` 与启动器 `trial.rs` 中各写一次（启动器只依赖
+  `serde_json`），修改时两处同时改；尝试上限只在 `MAX_STARTUP_ATTEMPTS` 定义并随标记写出。
+- `/RELAUNCH=1` 在 `INSTALLER_ARGUMENTS` 与 `scripts/windows-installer.mjs` 的 `RelaunchRequested` 中成对出现。
+- 启动器、安装器模板、注册表、PATH、快捷方式或安装布局变化时递增 `product.json` 的 `installEpoch`
+  （方案第九节），旧安装由此走完整更新。
+- TUI 调用一对一镜像 `apps/vulcan-code-web/src/service/app-update-service.ts`，见
+  [`tui-service-adaptation.md`](tui-service-adaptation.md)。

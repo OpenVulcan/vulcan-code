@@ -123,40 +123,40 @@ pub struct PreparedAssembly<'r> {
 /// One range request covering one or more frames of a pack.
 /// 覆盖某文件包一个或多个帧的一次 Range 请求。
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct RangePlan {
+pub(crate) struct RangePlan {
     /// The pack.
     /// 文件包。
-    pack: Sha256Digest,
+    pub(crate) pack: Sha256Digest,
     /// First byte requested.
     /// 请求的首字节。
-    offset: u64,
+    pub(crate) offset: u64,
     /// Bytes requested.
     /// 请求的字节数。
-    length: u64,
+    pub(crate) length: u64,
     /// Frames inside the range, in offset order.
     /// 范围内的帧，按偏移排序。
-    frames: Vec<FrameTarget>,
+    pub(crate) frames: Vec<FrameTarget>,
 }
 
 /// One frame to extract and the staged paths that receive its content.
 /// 一个待解压的帧及接收其内容的暂存路径。
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct FrameTarget {
+pub(crate) struct FrameTarget {
     /// Offset of the frame in its pack.
     /// 帧在文件包中的偏移。
-    offset: u64,
+    pub(crate) offset: u64,
     /// Length of the frame.
     /// 帧的长度。
-    length: u64,
+    pub(crate) length: u64,
     /// Size of the file.
     /// 文件大小。
-    size: u64,
+    pub(crate) size: u64,
     /// Digest of the file.
     /// 文件摘要。
-    sha256: Sha256Digest,
+    pub(crate) sha256: Sha256Digest,
     /// Staged paths and their modes; the first is extracted, the rest linked or copied from it.
     /// 暂存路径及其权限；第一个由解压得到，其余从它链接或复制。
-    paths: Vec<(PathBuf, u32)>,
+    pub(crate) paths: Vec<(PathBuf, u32)>,
 }
 
 /// What a staging path is expected to be.
@@ -441,7 +441,7 @@ impl<'r> PreparedAssembly<'r> {
 /// [`RANGE_MERGE_GAP_BYTES`] share a request.
 /// 将所需帧分组为 Range 请求：某文件包所需字节超过其覆盖跨度的一半时整段获取；否则间隔不超过
 /// [`RANGE_MERGE_GAP_BYTES`] 的帧共用一个请求。
-fn plan_ranges(pending: BTreeMap<(Sha256Digest, u64), FrameTarget>) -> Vec<RangePlan> {
+pub(crate) fn plan_ranges(pending: BTreeMap<(Sha256Digest, u64), FrameTarget>) -> Vec<RangePlan> {
     let mut by_pack: BTreeMap<Sha256Digest, Vec<FrameTarget>> = BTreeMap::new();
     for ((pack, _), frame) in pending {
         by_pack.entry(pack).or_default().push(frame);
@@ -487,7 +487,7 @@ fn plan_ranges(pending: BTreeMap<(Sha256Digest, u64), FrameTarget>) -> Vec<Range
 
 /// Fetches one range and places every frame inside it.
 /// 获取一个范围并放置其中的每个帧。
-fn fetch_range(source: &mut dyn PackSource, range: &RangePlan) -> FormatResult<()> {
+pub(crate) fn fetch_range(source: &mut dyn PackSource, range: &RangePlan) -> FormatResult<()> {
     let mut reader = source.open_range(range.pack, range.offset, range.length)?;
     let mut position = range.offset;
     for frame in &range.frames {
@@ -573,7 +573,7 @@ fn remove_unexpected(
 
 /// The native path of `path` below `base`.
 /// `path` 在 `base` 之下的本地路径。
-fn native(base: &Path, path: &RelativePath) -> PathBuf {
+pub(crate) fn native(base: &Path, path: &RelativePath) -> PathBuf {
     let mut native = base.to_path_buf();
     native.extend(path.segments());
     native
@@ -581,7 +581,7 @@ fn native(base: &Path, path: &RelativePath) -> PathBuf {
 
 /// Creates the parent directory of `path`.
 /// 创建 `path` 的父目录。
-fn create_parent(path: &Path) -> FormatResult<()> {
+pub(crate) fn create_parent(path: &Path) -> FormatResult<()> {
     match path.parent() {
         Some(parent) => std::fs::create_dir_all(parent)
             .map_err(|source| FormatError::io("creating a staged directory", source)),
@@ -591,7 +591,7 @@ fn create_parent(path: &Path) -> FormatResult<()> {
 
 /// Makes `path` a symbolic link to `target`, replacing a link that points elsewhere.
 /// 使 `path` 成为指向 `target` 的符号链接，替换指向其他位置的链接。
-fn place_symlink(target: &str, path: &Path) -> FormatResult<()> {
+pub(crate) fn place_symlink(target: &str, path: &Path) -> FormatResult<()> {
     let fail = |source| FormatError::io("creating a staged link", source);
     match std::fs::read_link(path) {
         Ok(existing) if existing.as_os_str() == target => return Ok(()),
@@ -643,7 +643,7 @@ fn trusted_mode(
 
 /// SHA-256 of a file.
 /// 文件的 SHA-256。
-fn hash_file(path: &Path) -> FormatResult<Sha256Digest> {
+pub(crate) fn hash_file(path: &Path) -> FormatResult<Sha256Digest> {
     let fail = |source| FormatError::io("hashing a file", source);
     let mut file = File::open(path).map_err(fail)?;
     let mut hasher = Sha256::new();
@@ -659,7 +659,12 @@ fn hash_file(path: &Path) -> FormatResult<Sha256Digest> {
 
 /// Places `target` with the content of `source`: a hard link when the modes agree, else a copy.
 /// 以 `source` 的内容放置 `target`：权限一致时用硬链接，否则复制。
-fn link_or_copy(source: &Path, source_mode: u32, target: &Path, mode: u32) -> FormatResult<()> {
+pub(crate) fn link_or_copy(
+    source: &Path,
+    source_mode: u32,
+    target: &Path,
+    mode: u32,
+) -> FormatResult<()> {
     let fail = |source| FormatError::io("placing a reused file", source);
     if (cfg!(windows) || source_mode == mode) && std::fs::hard_link(source, target).is_ok() {
         return Ok(());
@@ -670,7 +675,7 @@ fn link_or_copy(source: &Path, source_mode: u32, target: &Path, mode: u32) -> Fo
 
 /// The Unix permission bits of file metadata; 0 elsewhere.
 /// 文件元数据的 Unix 权限位；其他平台为 0。
-fn mode_of(metadata: &std::fs::Metadata) -> u32 {
+pub(crate) fn mode_of(metadata: &std::fs::Metadata) -> u32 {
     #[cfg(unix)]
     {
         std::os::unix::fs::PermissionsExt::mode(&metadata.permissions()) & 0o777
@@ -684,7 +689,7 @@ fn mode_of(metadata: &std::fs::Metadata) -> u32 {
 
 /// Applies the index mode on Unix; Windows has no permission bits to apply.
 /// 在 Unix 上应用索引中的权限；Windows 没有可应用的权限位。
-fn apply_mode(path: &Path, mode: u32) -> FormatResult<()> {
+pub(crate) fn apply_mode(path: &Path, mode: u32) -> FormatResult<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -1082,6 +1087,93 @@ mod tests {
         assert_eq!(
             spans(&[(0, 4 * gap), (6 * gap, 4 * gap)]),
             vec![(0, 10 * gap)]
+        );
+    }
+
+    #[test]
+    fn a_repair_restores_only_missing_and_changed_files() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let objects = temp.path().join("objects");
+        let root = InstallRoot::new(temp.path().join("install"));
+        let mut published = HashMap::new();
+        let core = noise(1, 3_000);
+        let tool = noise(2, 3_000);
+        let kept = noise(3, 3_000);
+        let release = publish(
+            &objects,
+            &mut published,
+            "0.1.3",
+            &[
+                ("core", "bin/core", &core),
+                ("core", "bin/kept", &kept),
+                ("tools", "tools/tool", &tool),
+            ],
+        );
+        let dir = install(&root, &release, &mut CountingSource::new(&objects)).expect("install");
+        std::fs::write(
+            native(&dir, &RelativePath::new("bin/core").expect("path")),
+            b"bad",
+        )
+        .expect("corrupt");
+        std::fs::remove_file(native(
+            &dir,
+            &RelativePath::new("tools/tool").expect("path"),
+        ))
+        .expect("remove");
+
+        let lock = root.lock().expect("lock");
+        let missing_component = crate::repair::prepare_repair(
+            &root,
+            &lock,
+            &release.manifest,
+            release.indexes[..1].to_vec(),
+        );
+        assert!(
+            missing_component.is_err(),
+            "a repair keeps the installed components"
+        );
+        let prepared =
+            crate::repair::prepare_repair(&root, &lock, &release.manifest, release.indexes.clone())
+                .expect("prepare");
+        assert_eq!(prepared.damaged_count(), 2);
+        let mut source = CountingSource::new(&objects);
+        assert_eq!(prepared.complete(&mut source).expect("repair"), 2);
+        assert_eq!(read(&dir, "bin/core"), core);
+        assert_eq!(read(&dir, "tools/tool"), tool);
+        assert_eq!(read(&dir, "bin/kept"), kept);
+
+        let again =
+            crate::repair::prepare_repair(&root, &lock, &release.manifest, release.indexes.clone())
+                .expect("prepare again");
+        assert_eq!(again.damaged_count(), 0);
+        assert_eq!(again.download_bytes(), 0);
+    }
+
+    #[test]
+    fn pruning_keeps_the_current_and_the_previous_version() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let root = InstallRoot::new(temp.path());
+        let lock = root.lock().expect("lock");
+        let versions: Vec<ReleaseVersion> = ["0.1.1", "0.1.2", "0.1.3", "0.1.4"]
+            .iter()
+            .map(|text| text.parse().expect("version"))
+            .collect();
+        for version in &versions {
+            std::fs::create_dir_all(root.version_dir(version)).expect("version dir");
+        }
+        std::fs::create_dir_all(root.path().join(VERSIONS_DIR).join("not-a-version"))
+            .expect("foreign dir");
+        let removed = root.prune_versions(&lock, &versions[2]).expect("prune");
+        assert_eq!(removed, vec![versions[0].clone(), versions[3].clone()]);
+        assert_eq!(
+            root.installed_versions().expect("list"),
+            vec![versions[1].clone(), versions[2].clone()]
+        );
+        assert!(
+            root.path()
+                .join(VERSIONS_DIR)
+                .join("not-a-version")
+                .is_dir()
         );
     }
 }

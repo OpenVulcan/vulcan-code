@@ -152,6 +152,7 @@ mod agent_stream;
 mod ai_configuration;
 mod ai_credential_secret_store;
 mod answer_mode;
+mod app_update_services;
 mod attachments;
 pub mod browser;
 mod command_sessions;
