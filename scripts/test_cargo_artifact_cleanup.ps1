@@ -5,7 +5,7 @@ $ErrorActionPreference = 'Stop'
 
 # ScriptName enumerates the changed executable scripts for syntax validation.
 # ScriptName 枚举发生变化的可执行脚本，用于语法校验。
-foreach ($ScriptName in @('build_tauri.ps1', 'cargo_artifact_cleanup.ps1', 'test_cargo_artifact_cleanup.ps1')) {
+foreach ($ScriptName in @('build_tauri.ps1', 'cargo_artifact_cleanup.ps1', 'prune_cargo_artifacts.ps1', 'test_cargo_artifact_cleanup.ps1')) {
     # ParseTokens and ParseErrors receive the PowerShell parser's structured results.
     # ParseTokens 和 ParseErrors 接收 PowerShell 解析器的结构化结果。
     $ParseTokens = $null
@@ -141,11 +141,45 @@ fn main() { println!("{}", vulcan_code_service::value()); }
     Assert-CleanupCondition (@($FreshBuild.Artifacts | Where-Object { -not $_.fresh }).Count -eq 0) 'Expected a fully fresh Cargo build.'
     Assert-CleanupCondition ((Get-ProfileSnapshot 'debug') -eq $Before) 'Fresh build removed a live unit.'
 
+    # CapBuild: a workspace crate keeps at most KeptUnitsPerCrate unused units even within the retention period,
+    # and a reused crate keeps at most that many incremental directories however old; third-party units are not capped.
+    # CapBuild：工作区 crate 即使在保留期内也最多保留 KeptUnitsPerCrate 个未用单元，复用的 crate 无论新旧最多保留
+    # 同样数量的增量目录；第三方单元不受上限约束。
+    $Kept = $script:KeptUnitsPerCrate
+    $DepsRoot = Join-Path $env:CARGO_TARGET_DIR 'debug/deps'
+    $IncrementalRoot = Join-Path $env:CARGO_TARGET_DIR 'debug/incremental'
+    New-Item -ItemType Directory -Path $IncrementalRoot -Force | Out-Null
+    $Now = [DateTime]::UtcNow
+    $WorkspaceFakes = @()
+    $ThirdPartyFakes = @()
+    $IncrementalFakes = @()
+    for ($Index = 0; $Index -lt $Kept + 2; $Index++) {
+        # Index 0 is the newest fake; hashes are 16 hex digits like Cargo's.
+        # Index 0 为最新的伪造条目；哈希与 Cargo 一样为 16 位十六进制。
+        $Hash = ('f' * 12) + ('{0:x4}' -f $Index)
+        $WorkspaceFakes += Join-Path $DepsRoot "libcleanup_dependency-$Hash.rlib"
+        $ThirdPartyFakes += Join-Path $DepsRoot ("libcapfixture_external-" + $Hash.Replace("f", "d").Replace("e", "c") + ".rlib")
+        $IncrementalFakes += Join-Path $IncrementalRoot "cleanup_dependency-capfixture$Index"
+        foreach ($Fake in @($WorkspaceFakes[-1], $ThirdPartyFakes[-1])) {
+            Set-Content -LiteralPath $Fake 'fake'
+            [IO.File]::SetLastWriteTimeUtc($Fake, $Now.AddMinutes(-($Index + 1)))
+        }
+        New-Item -ItemType Directory -Path $IncrementalFakes[-1] | Out-Null
+        [IO.Directory]::SetLastWriteTimeUtc($IncrementalFakes[-1], $Now.AddDays(-2).AddMinutes(-$Index))
+    }
+    $CapBuild = Invoke-TrackedCargoBuild -BuildArguments $Build -SeparateBuildArguments $LibraryBuild
+    Assert-CleanupCondition ($CapBuild.ExitCode -eq 0) 'Cap build failed.'
+    Assert-CleanupCondition (@($WorkspaceFakes | Where-Object { Test-Path -LiteralPath $_ }).Count -eq $Kept -and -not (Test-Path -LiteralPath $WorkspaceFakes[-1])) "A workspace crate kept other than its newest $Kept unused units (the cap may have changed)."
+    Assert-CleanupCondition (@($ThirdPartyFakes | Where-Object { Test-Path -LiteralPath $_ }).Count -eq $ThirdPartyFakes.Count) 'Third-party units were capped.'
+    Assert-CleanupCondition (@(Get-ChildItem -LiteralPath $IncrementalRoot -Directory -Filter 'cleanup_dependency-*').Count -eq $Kept -and -not (Test-Path -LiteralPath $IncrementalFakes[-1])) "A reused crate kept other than its newest $Kept incremental directories."
+    foreach ($Fake in $WorkspaceFakes + $ThirdPartyFakes + $IncrementalFakes) { if (Test-Path -LiteralPath $Fake) { Remove-Item -LiteralPath $Fake -Recurse -Force } }
+    Assert-CleanupCondition (@($CapBuild.Artifacts | Where-Object { -not $_.fresh }).Count -eq 0 -and (Get-ProfileSnapshot 'debug') -eq $Before) 'The capped sweep removed a live unit.'
+
     # TestBuild leaves units the tracked build never uses; they stay within the retention period and a tracked
-    # build sweeps them once they are older. Incremental caches of a crate the tracked build reused stay until
-    # it recompiles that crate.
-    # TestBuild 留下受跟踪构建不使用的单元；保留期内保留，超过后由受跟踪构建清理。受跟踪构建复用的 crate 的
-    # 增量缓存保留到该 crate 重新编译为止。
+    # build sweeps them once they are older. A crate the tracked build reused keeps its newest incremental caches
+    # whatever their age.
+    # TestBuild 留下受跟踪构建不使用的单元；保留期内保留，超过后由受跟踪构建清理。受跟踪构建复用的 crate 不论新旧
+    # 保留其最新的增量缓存。
     $UnitAreas = @('deps', '.fingerprint', 'build')
     $Before = Get-ProfileSnapshot 'debug' $UnitAreas
     & cargo test --no-run -j 4 --quiet
@@ -212,7 +246,37 @@ fn main() { println!("{}", vulcan_code_service::value()); }
     finally { $HeldLock.Dispose() }
     $RecoveredBuild = Invoke-TrackedCargoBuild -BuildArguments $Build -SeparateBuildArguments $LibraryBuild
     Assert-CleanupCondition ($RecoveredBuild.ExitCode -eq 0 -and -not (Test-Path -LiteralPath $StaleUnit)) 'Stale unit survived a successful build.'
-    Write-Host 'PASS: syntax, fresh reuse, test-unit retention and sweep, deps/fingerprint/build/incremental retirement, unhashed preservation, profile isolation, failed-build preservation, Cargo lock wait.'
+
+    # Prune without a build: older workspace units beyond the cap go, the live units written last stay, third-party
+    # and unhashed files stay, and a held Cargo lock makes a no-wait prune skip without removing anything.
+    # 不经构建清理：超出上限的较旧工作区单元删除，最近写入的在用单元保留，第三方与不带哈希的文件保留；Cargo 锁
+    # 被占用时不等待的清理直接跳过、不删除任何内容。
+    $Aged = [DateTime]::UtcNow.AddDays(-2)
+    $WorkspaceFakes = @()
+    $ThirdPartyFakes = @()
+    for ($Index = 0; $Index -lt $Kept + 2; $Index++) {
+        $Hash = ('e' * 12) + ('{0:x4}' -f $Index)
+        $WorkspaceFakes += Join-Path $DepsRoot "libcleanup_dependency-$Hash.rlib"
+        $ThirdPartyFakes += Join-Path $DepsRoot ("libcapfixture_external-" + $Hash.Replace("f", "d").Replace("e", "c") + ".rlib")
+        foreach ($Fake in @($WorkspaceFakes[-1], $ThirdPartyFakes[-1])) {
+            Set-Content -LiteralPath $Fake 'fake'
+            [IO.File]::SetLastWriteTimeUtc($Fake, $Aged.AddMinutes(-$Index))
+        }
+    }
+    $HeldLock = [IO.File]::Open((Join-Path $env:CARGO_TARGET_DIR 'debug/.cargo-lock'), [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+    try {
+        $HeldLock.Lock(0, [long]::MaxValue)
+        Invoke-CargoProfilePrune -ProfileName debug -LockTimeout ([TimeSpan]::Zero)
+        Assert-CleanupCondition (Test-Path -LiteralPath $WorkspaceFakes[-1]) 'A no-wait prune removed units while Cargo held the profile.'
+    }
+    finally { $HeldLock.Dispose() }
+    Invoke-CargoProfilePrune -ProfileName debug -LockTimeout ([TimeSpan]::Zero)
+    Assert-CleanupCondition (-not (Test-Path -LiteralPath $WorkspaceFakes[-1])) 'Prune kept workspace units beyond the per-crate cap.'
+    Assert-CleanupCondition (@($ThirdPartyFakes | Where-Object { Test-Path -LiteralPath $_ }).Count -eq $ThirdPartyFakes.Count) 'Prune removed third-party units.'
+    Assert-CleanupCondition (Test-Path -LiteralPath $UnhashedFile) 'Prune removed an unhashed file.'
+    $AfterPrune = Invoke-TrackedCargoBuild -BuildArguments $Build -SeparateBuildArguments $LibraryBuild
+    Assert-CleanupCondition ($AfterPrune.ExitCode -eq 0 -and @($AfterPrune.Artifacts | Where-Object { -not $_.fresh }).Count -eq 0) 'Prune removed a live unit.'
+    Write-Host 'PASS: syntax, fresh reuse, per-crate cap, test-unit retention and sweep, deps/fingerprint/build/incremental retirement, unhashed preservation, profile isolation, failed-build preservation, Cargo lock wait, prune.'
 }
 finally {
     Pop-Location

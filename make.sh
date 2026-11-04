@@ -211,6 +211,8 @@ show_usage() {
     echo "  ./make.sh release     # Core/Electron/WebUI release build"
     echo "  ./make.sh clean       # clean Debug Cargo artifacts; preserve output and downloads"
     echo "  ./make.sh clean release # clean Release Cargo artifacts only"
+    echo "  ./make.sh prune       # keep the newest Debug units of each workspace crate (PowerShell)"
+    echo "  ./make.sh prune release # keep the newest Release units of each workspace crate (PowerShell)"
     echo "  ./make.sh licenses    # generate Rust third-party notices for the About page"
     echo "  ./make.sh check-deps  # verify Rust dependency policy without changing manifests or the lockfile"
     echo "  ./make.sh check       # static gates: fmt, clippy -D warnings, lint, typecheck"
@@ -239,7 +241,7 @@ NormalizedVariant=$(normalize_command "$CommandVariant")
 
 # Validate host tools before any routed module imports newer Node APIs; Rust-only setup stays independent.
 # 在分发模块导入新版Node API之前验证宿主工具；纯Rust工具安装保持独立。
-if [ "$NormalizedMode" != "clean" ] && [ "$NormalizedMode:$NormalizedVariant" != "deps:rust-tools" ]; then
+if [ "$NormalizedMode" != "clean" ] && [ "$NormalizedMode" != "prune" ] && [ "$NormalizedMode:$NormalizedVariant" != "deps:rust-tools" ]; then
     if ! command -v node >/dev/null 2>&1; then
         echo "Node.js is required to check build prerequisites. Install Node.js, then run make init-system." >&2
         exit 1
@@ -257,6 +259,11 @@ case "$NormalizedMode" in
             *) echo "Unsupported clean profile: $CommandVariant" >&2; exit 1 ;;
         esac
         (cd "$ScriptDir" && cargo clean --profile "$CleanProfile")
+        ;;
+    prune)
+        # The prune shares the PowerShell implementation of the Windows build sweep.
+        # 清理与 Windows 构建后清理共用 PowerShell 实现。
+        invoke_powershell_route prune "$NormalizedVariant"
         ;;
     "")
         invoke_tauri_build 0

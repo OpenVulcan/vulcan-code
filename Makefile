@@ -42,7 +42,7 @@ define route-command
 endef
 endif
 
-.PHONY: help sync sync-release vite start stop status build build-release release clean run run-release service core-build core-restart br br-release bt licenses check test full deps deps-all deps-vldb deps-tools deps-lua init-system deps-rust-tools vldb tools lua rust-tools all
+.PHONY: help sync sync-release vite start stop status build build-release release clean prune run run-release service core-build core-restart br br-release bt licenses check test full deps deps-all deps-vldb deps-tools deps-lua init-system deps-rust-tools vldb tools lua rust-tools all
 
 # VITE_ACTION captures the required lifecycle action from `make vite start`, `stop`, or `status`.
 # VITE_ACTION 从 `make vite start`、`stop` 或 `status` 中捕获必需的生命周期操作。
@@ -70,6 +70,8 @@ help:
 	@echo "  make release       # Core/Electron/WebUI release build"
 	@echo "  make clean         # clean Debug Cargo artifacts; preserve output and downloads"
 	@echo "  make clean release # clean Release Cargo artifacts; preserve output and downloads"
+	@echo "  make prune         # keep the newest Debug units of each workspace crate; also runs after test and check"
+	@echo "  make prune release # keep the newest Release units of each workspace crate"
 	@echo "  make run           # run Electron desktop; start Vite when needed"
 	@echo "  make run-release   # run Core/Electron/WebUI release build"
 	@echo "  make service       # run Core without a tray or desktop"
@@ -147,7 +149,7 @@ build-release:
 # release routes the short release build command or becomes a companion no-op for paired goals.
 # release 路由短形式 release 构建命令，或在组合目标中作为伴随空操作。
 release:
-ifneq ($(filter sync build build-release run run-release service br br-release bt clean,$(MAKECMDGOALS)),)
+ifneq ($(filter sync build build-release run run-release service br br-release bt clean prune,$(MAKECMDGOALS)),)
 	@:
 else
 	$(call route-command,release)
@@ -157,6 +159,11 @@ endif
 # clean 仅选择一个 Cargo 模式，不清理共享发行目录或已下载输入。
 clean:
 	$(call route-command,$(if $(filter release,$(MAKECMDGOALS)),clean release,clean))
+
+# prune keeps the newest units of each workspace crate in one Cargo profile without building.
+# prune 不经构建，在一个 Cargo 模式目录中保留每个工作区 crate 的最新单元。
+prune:
+	$(call route-command,$(if $(filter release,$(MAKECMDGOALS)),prune release,prune))
 
 # run routes debug by default, or release when the release companion goal is present.
 # run 默认路由 debug，存在 release 伴随目标时路由 release。

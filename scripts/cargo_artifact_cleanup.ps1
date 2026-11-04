@@ -17,6 +17,15 @@ $script:CargoLockTimeout = [TimeSpan]::FromMinutes(10)
 # UnusedUnitRetention 让本次构建未用到的单元（如 cargo test、nextest、clippy 的单元）保留到连续这么久无写入
 # 为止。Cargo 不会改动复用的单元，因此时长从单元最近一次编译起算，只被其他命令复用的单元每个周期最多重编一次。
 $script:UnusedUnitRetention = [TimeSpan]::FromDays(1)
+# KeptUnitsPerCrate caps what one workspace crate may keep beyond the units a build used: the newest unused
+# units by last write, and the newest incremental directories. Every `-p` selection unifies features
+# differently and gives each workspace crate a new unit hash, so within one retention period a crate can
+# otherwise pile up dozens of gigabyte-sized units. Third-party units are never capped: several versions of
+# one dependency are all live at once.
+# KeptUnitsPerCrate 限定单个工作区 crate 在构建用到的单元之外最多保留的数量：按最近写入排序的最新未用单元，
+# 以及最新的增量目录。每种 `-p` 组合的 feature 合并结果不同，会为每个工作区 crate 产生新的单元哈希，
+# 否则一个保留期内一个 crate 就可能堆积数十个 GB 级单元。第三方单元不设上限：同一依赖的多个版本会同时在用。
+$script:KeptUnitsPerCrate = 12
 
 # Return the unit hash in a deps file or unit directory name, or $null when the name carries none.
 # 返回 deps 文件或单元目录名中的单元哈希；名称不含哈希时返回 $null。
@@ -53,11 +62,11 @@ function Find-CargoLinkedUnit {
 # 持有全部 Cargo 模式锁，使清理期间没有 Cargo 命令读写该模式目录。
 # Locks are taken without blocking and all released on any miss, so cleanup never deadlocks with Cargo.
 # 锁以非阻塞方式获取，任一失败即全部释放，因此清理不会与 Cargo 互相死锁。
-# Returns the open lock streams; the caller disposes them. Throws when the timeout passes.
-# 返回已打开的锁流，由调用方释放；超时抛出异常。
+# Returns the open lock streams; the caller disposes them. Throws when Timeout passes; a zero Timeout tries once.
+# 返回已打开的锁流，由调用方释放；超过 Timeout 抛出异常；Timeout 为零时只尝试一次。
 function Lock-CargoProfile {
-    param([string]$ProfileRoot)
-    $Deadline = [DateTime]::UtcNow + $script:CargoLockTimeout
+    param([string]$ProfileRoot, [TimeSpan]$Timeout = $script:CargoLockTimeout)
+    $Deadline = [DateTime]::UtcNow + $Timeout
     while ($true) {
         $Streams = [Collections.Generic.List[IO.FileStream]]::new()
         try {
@@ -120,10 +129,12 @@ function Get-CargoUnitWriteTime {
 # 将一个 Cargo 模式目录清理到最近一次成功构建用到的单元及保留期内写入过的单元。
 # ProfileDirectory is the executable's parent; Artifacts holds every compiler-artifact, fresh ones included;
 # ProfileDirectory 是可执行文件的父目录；Artifacts 包含全部 compiler-artifact，含复用制品；
-# OutDirs holds every build-script-executed out_dir; BuildStartedUtc is when Cargo started. Returns no value.
-# OutDirs 包含全部 build-script-executed 的 out_dir；BuildStartedUtc 为 Cargo 启动时间。无返回值。
+# OutDirs holds every build-script-executed out_dir; BuildStartedUtc is when Cargo started; WorkspaceCrates
+# names the crates whose unused units are capped. Returns no value.
+# OutDirs 包含全部 build-script-executed 的 out_dir；BuildStartedUtc 为 Cargo 启动时间；WorkspaceCrates 列出
+# 未用单元受数量上限约束的 crate。无返回值。
 function Invoke-CargoArtifactSweep {
-    param([string]$ProfileDirectory, [object[]]$Artifacts, [string[]]$OutDirs, [DateTime]$BuildStartedUtc)
+    param([string]$ProfileDirectory, [object[]]$Artifacts, [string[]]$OutDirs, [DateTime]$BuildStartedUtc, [Collections.Generic.HashSet[string]]$WorkspaceCrates)
 
     $ProfileRoot = [IO.Path]::GetFullPath($ProfileDirectory)
     $DepsRoot = Join-Path $ProfileRoot 'deps'
@@ -175,55 +186,184 @@ function Invoke-CargoArtifactSweep {
         if ($null -ne $Hash) { [void]$Live.Add($Hash) }
     }
 
-    # Removed counts entries and bytes per area for the summary line.
-    # Removed 按区域统计条目数与字节数，用于汇总输出。
     $Removed = [ordered]@{}
-    $Account = {
-        param([string]$Area, [string]$Path)
-        if (-not $Removed.Contains($Area)) { $Removed[$Area] = @(0, 0L) }
-        $Removed[$Area] = @(($Removed[$Area][0] + 1), ($Removed[$Area][1] + (Remove-CargoUnitPath $Path)))
+    # Units is every hashed entry with each unit's latest write across deps, .fingerprint and build, so all
+    # entries of one unit stay or go together. An unused unit goes once it is older than the retention period,
+    # or earlier when its workspace crate already keeps KeptUnitsPerCrate newer unused units.
+    # Units 是全部带哈希条目及每个单元在 deps、.fingerprint、build 中的最近写入时间，使同一单元的全部条目
+    # 一起保留或一起删除。未用单元超过保留期后删除；所属工作区 crate 已保留 KeptUnitsPerCrate 个更新的未用单元时提前删除。
+    $Units = Get-CargoProfileUnits -ProfileRoot $ProfileRoot -WorkspaceCrates $WorkspaceCrates
+    $Unused = @($Units.LastWritten.Keys | Where-Object { -not $Live.Contains($_) })
+    $Overflow = Get-CargoUnitOverflow -Hashes $Unused -LastWritten $Units.LastWritten -Crates $Units.Crates
+    foreach ($Entry in $Units.Entries) {
+        if ($Live.Contains($Entry.Hash)) { continue }
+        if ($Units.LastWritten[$Entry.Hash] -lt $Cutoff -or $Overflow.Contains($Entry.Hash)) { Add-CargoCleanupRemoval $Removed $Entry.Area $Entry.Path }
     }
-    # Candidates are the hashed entries of units this build did not use; LastWritten is each unit's latest
-    # write across deps, .fingerprint and build, so all entries of one unit stay or go together.
-    # Candidates 是本次构建未用到单元的带哈希条目；LastWritten 是每个单元在 deps、.fingerprint、build 中的
-    # 最近写入时间，使同一单元的全部条目一起保留或一起删除。
-    $Candidates = [Collections.Generic.List[object]]::new()
+    # Rustc names incremental directories by crate with its own hash, so they are kept by crate: a crate name
+    # shared by a reused unit, such as a fresh library beside a rebuilt binary, keeps its newest directories
+    # whatever their age; any other directory goes once nothing has written it for the retention period.
+    # rustc 以 crate 名加自有哈希命名增量目录，因此按 crate 保留：与复用单元同名的 crate（如重建的二进制旁未变的
+    # 库）不论新旧保留其最新目录；其他目录在保留期内无写入后删除。
+    Remove-CargoIncrementalOverflow -ProfileRoot $ProfileRoot -Cutoff $Cutoff -KeepAged $Reused -Removed $Removed
+
+    $Recent = @($Unused | Where-Object { $Units.LastWritten[$_] -ge $Cutoff -and -not $Overflow.Contains($_) }).Count
+    Write-Host "==> Artifact cleanup ($([IO.Path]::GetFileName($ProfileRoot))): $(Format-CargoCleanupSummary $Removed); kept $Recent unused units written within $($script:UnusedUnitRetention.TotalHours) h."
+}
+
+# Remove one path and add its count and bytes to Removed under an area name. Returns no value.
+# 删除一个路径，并按区域名把条目数与字节数计入 Removed。无返回值。
+function Add-CargoCleanupRemoval {
+    param([Collections.Specialized.OrderedDictionary]$Removed, [string]$Area, [string]$Path)
+    if (-not $Removed.Contains($Area)) { $Removed[$Area] = @(0, 0L) }
+    $Removed[$Area] = @(($Removed[$Area][0] + 1), ($Removed[$Area][1] + (Remove-CargoUnitPath $Path)))
+}
+
+# Return the summary text for the entries and bytes recorded in Removed.
+# 返回 Removed 中记录的条目数与字节数的汇总文本。
+function Format-CargoCleanupSummary {
+    param([Collections.Specialized.OrderedDictionary]$Removed)
+    if ($Removed.Count -eq 0) { return 'nothing removed' }
+    return ($Removed.Keys | ForEach-Object { '{0} {1} ({2:N1} GB)' -f $_, $Removed[$_][0], ($Removed[$_][1] / 1GB) }) -join ', '
+}
+
+# Return the workspace crate names, hyphens written as underscores: every package and target name in the
+# `cargo metadata --no-deps` document Metadata.
+# 返回工作区 crate 名称（连字符写作下划线）：`cargo metadata --no-deps` 文档 Metadata 中的全部包名与目标名。
+function Get-WorkspaceCrateNames {
+    param([object]$Metadata)
+    $Names = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($Package in $Metadata.packages) {
+        [void]$Names.Add(([string]$Package.name).Replace('-', '_'))
+        foreach ($Target in $Package.targets) { [void]$Names.Add(([string]$Target.name).Replace('-', '_')) }
+    }
+    return ,$Names
+}
+
+# Return the workspace crate a hashed entry name belongs to, or $null for third-party and unhashed entries.
+# 返回带哈希条目名所属的工作区 crate；第三方或不带哈希的条目返回 $null。
+function Get-CargoUnitCrate {
+    param([string]$Name, [Collections.Generic.HashSet[string]]$WorkspaceCrates)
+    if ($Name -notmatch $script:UnitPattern) { return $null }
+    $Crate = $Matches.name.Replace('-', '_')
+    if ($WorkspaceCrates.Contains($Crate)) { return $Crate }
+    # Libraries are written as lib<crate>-<hash>.rlib and .rmeta.
+    # 库文件写作 lib<crate>-<哈希>.rlib 与 .rmeta。
+    if ($Crate.StartsWith('lib') -and $WorkspaceCrates.Contains($Crate.Substring(3))) { return $Crate.Substring(3) }
+    return $null
+}
+
+# Return the hashed unit entries of a profile: Entries lists Area, Hash and Path; LastWritten maps each hash to
+# its latest write across deps, .fingerprint and build; Crates maps a hash to its workspace crate when it has one.
+# 返回模式目录中带哈希的单元条目：Entries 列出 Area、Hash 与 Path；LastWritten 给出每个哈希在 deps、
+# .fingerprint、build 中的最近写入时间；Crates 给出属于工作区 crate 的哈希所属 crate。
+function Get-CargoProfileUnits {
+    param([string]$ProfileRoot, [Collections.Generic.HashSet[string]]$WorkspaceCrates)
+    $Entries = [Collections.Generic.List[object]]::new()
     $LastWritten = @{}
+    $Crates = @{}
     $Areas = [ordered]@{ 'deps' = $false; '.fingerprint' = $true; 'build' = $true }
     foreach ($Area in $Areas.Keys) {
         $AreaRoot = Join-Path $ProfileRoot $Area
         if (-not (Test-Path -LiteralPath $AreaRoot)) { continue }
-        $Entries = if ($Areas[$Area]) { [IO.DirectoryInfo]::new($AreaRoot).EnumerateDirectories() } else { [IO.DirectoryInfo]::new($AreaRoot).EnumerateFiles() }
-        foreach ($Entry in $Entries) {
-            $Hash = Get-CargoUnitHash $Entry.Name
-            if ($null -eq $Hash -or $Live.Contains($Hash)) { continue }
-            $Candidates.Add([pscustomobject]@{ Area = $Area; Hash = $Hash; Path = $Entry.FullName })
-            $Written = Get-CargoUnitWriteTime $Entry
+        $Items = if ($Areas[$Area]) { [IO.DirectoryInfo]::new($AreaRoot).EnumerateDirectories() } else { [IO.DirectoryInfo]::new($AreaRoot).EnumerateFiles() }
+        foreach ($Item in $Items) {
+            $Hash = Get-CargoUnitHash $Item.Name
+            if ($null -eq $Hash) { continue }
+            $Entries.Add([pscustomobject]@{ Area = $Area; Hash = $Hash; Path = $Item.FullName })
+            $Written = Get-CargoUnitWriteTime $Item
             if (-not $LastWritten.ContainsKey($Hash) -or $Written -gt $LastWritten[$Hash]) { $LastWritten[$Hash] = $Written }
+            if (-not $Crates.ContainsKey($Hash)) {
+                $Crate = Get-CargoUnitCrate -Name $Item.Name -WorkspaceCrates $WorkspaceCrates
+                if ($null -ne $Crate) { $Crates[$Hash] = $Crate }
+            }
         }
     }
-    foreach ($Candidate in $Candidates) {
-        if ($LastWritten[$Candidate.Hash] -lt $Cutoff) { & $Account $Candidate.Area $Candidate.Path }
-    }
-    # Rustc names incremental directories by crate with its own hash, so they are kept by crate: a crate name
-    # shared by a reused unit, such as a fresh library beside a rebuilt binary, keeps all of its directories;
-    # any other directory goes once nothing has written it for the retention period.
-    # rustc 以 crate 名加自有哈希命名增量目录，因此按 crate 保留：与复用单元同名的 crate（如重建的二进制旁未变的
-    # 库）保留全部目录；其他目录在保留期内无写入后删除。
-    $IncrementalRoot = Join-Path $ProfileRoot 'incremental'
-    if (Test-Path -LiteralPath $IncrementalRoot) {
-        foreach ($Entry in [IO.DirectoryInfo]::new($IncrementalRoot).EnumerateDirectories()) {
-            $Separator = $Entry.Name.LastIndexOf('-')
-            if ($Separator -le 0) { continue }
-            if ($Reused.Contains($Entry.Name.Substring(0, $Separator))) { continue }
-            if ((Get-CargoUnitWriteTime $Entry) -lt $Cutoff) { & $Account 'incremental' $Entry.FullName }
-        }
-    }
+    return [pscustomobject]@{ Entries = $Entries; LastWritten = $LastWritten; Crates = $Crates }
+}
 
-    $Summary = if ($Removed.Count -eq 0) { 'nothing removed' }
-    else { ($Removed.Keys | ForEach-Object { '{0} {1} ({2:N1} GB)' -f $_, $Removed[$_][0], ($Removed[$_][1] / 1GB) }) -join ', ' }
-    $Recent = @($LastWritten.Keys | Where-Object { $LastWritten[$_] -ge $Cutoff }).Count
-    Write-Host "==> Artifact cleanup ($([IO.Path]::GetFileName($ProfileRoot))): $Summary; kept $Recent unused units written within $($script:UnusedUnitRetention.TotalHours) h."
+# Return the hashes among Hashes that fall beyond the newest KeptUnitsPerCrate units of their workspace crate.
+# 返回 Hashes 中超出所属工作区 crate 最新 KeptUnitsPerCrate 个单元的哈希。
+function Get-CargoUnitOverflow {
+    param([string[]]$Hashes, [hashtable]$LastWritten, [hashtable]$Crates)
+    $Overflow = [Collections.Generic.HashSet[string]]::new()
+    $ByCrate = @{}
+    foreach ($Hash in $Hashes) {
+        if (-not $Crates.ContainsKey($Hash)) { continue }
+        if (-not $ByCrate.ContainsKey($Crates[$Hash])) { $ByCrate[$Crates[$Hash]] = [Collections.Generic.List[string]]::new() }
+        $ByCrate[$Crates[$Hash]].Add($Hash)
+    }
+    foreach ($Group in $ByCrate.Values) {
+        $Sorted = @($Group | Sort-Object { $LastWritten[$_] } -Descending)
+        for ($Index = $script:KeptUnitsPerCrate; $Index -lt $Sorted.Count; $Index++) { [void]$Overflow.Add($Sorted[$Index]) }
+    }
+    return ,$Overflow
+}
+
+# Remove incremental directories, counted in Removed: each crate keeps at most its newest KeptUnitsPerCrate
+# directories, and of those a directory written before Cutoff goes unless its crate is in KeepAged.
+# 删除增量目录并计入 Removed：每个 crate 最多保留最新的 KeptUnitsPerCrate 个目录，其中早于 Cutoff 写入的目录
+# 除非其 crate 在 KeepAged 中，否则删除。
+function Remove-CargoIncrementalOverflow {
+    param([string]$ProfileRoot, [DateTime]$Cutoff, [Collections.Generic.HashSet[string]]$KeepAged, [Collections.Specialized.OrderedDictionary]$Removed)
+    $IncrementalRoot = Join-Path $ProfileRoot 'incremental'
+    if (-not (Test-Path -LiteralPath $IncrementalRoot)) { return }
+    $ByCrate = @{}
+    foreach ($Entry in [IO.DirectoryInfo]::new($IncrementalRoot).EnumerateDirectories()) {
+        $Separator = $Entry.Name.LastIndexOf('-')
+        if ($Separator -le 0) { continue }
+        $Crate = $Entry.Name.Substring(0, $Separator)
+        if (-not $ByCrate.ContainsKey($Crate)) { $ByCrate[$Crate] = [Collections.Generic.List[object]]::new() }
+        $ByCrate[$Crate].Add([pscustomobject]@{ Path = $Entry.FullName; Written = (Get-CargoUnitWriteTime $Entry) })
+    }
+    foreach ($Crate in $ByCrate.Keys) {
+        $Sorted = @($ByCrate[$Crate] | Sort-Object Written -Descending)
+        for ($Index = 0; $Index -lt $Sorted.Count; $Index++) {
+            $Aged = $Sorted[$Index].Written -lt $Cutoff -and -not $KeepAged.Contains($Crate)
+            if ($Index -ge $script:KeptUnitsPerCrate -or $Aged) { Add-CargoCleanupRemoval $Removed 'incremental' $Sorted[$Index].Path }
+        }
+    }
+}
+
+# Prune one Cargo profile without a build: each workspace crate keeps its newest KeptUnitsPerCrate units and
+# incremental directories; third-party units, unhashed files and other directories stay. ProfileName is debug or
+# release. LockTimeout bounds the wait for running Cargo commands; when it passes, or another make build holds
+# the target, the prune is skipped with a message. Returns no value.
+# 不经构建清理一个 Cargo 模式目录：每个工作区 crate 保留最新的 KeptUnitsPerCrate 个单元与增量目录；第三方单元、
+# 不带哈希的文件及其他目录不动。ProfileName 为 debug 或 release。LockTimeout 限定等待正在运行的 Cargo 命令的时长；
+# 超时或另一个 make 构建占用 target 时跳过并说明。无返回值。
+function Invoke-CargoProfilePrune {
+    param([ValidateSet('debug', 'release')][string]$ProfileName, [TimeSpan]$LockTimeout = $script:CargoLockTimeout)
+    $MetadataJson = & cargo metadata --format-version 1 --no-deps
+    if ($LASTEXITCODE -ne 0) { throw 'Cargo metadata failed before pruning.' }
+    $Metadata = $MetadataJson | ConvertFrom-Json
+    $TargetRoot = [IO.Path]::GetFullPath([string]$Metadata.target_directory)
+    $ProfileRoot = Join-Path $TargetRoot $ProfileName
+    if (-not (Test-Path -LiteralPath $ProfileRoot)) { Write-Host "==> Artifact prune ($ProfileName): no profile directory."; return }
+    foreach ($Root in @($ProfileRoot, (Join-Path $ProfileRoot 'deps'), (Join-Path $ProfileRoot '.fingerprint'), (Join-Path $ProfileRoot 'build'), (Join-Path $ProfileRoot 'incremental'))) {
+        if ((Test-Path -LiteralPath $Root) -and ((Get-Item -LiteralPath $Root -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw "Refusing artifact prune through a reparse point: $Root"
+        }
+    }
+    try { $BuildLock = [IO.File]::Open((Join-Path $TargetRoot '.vulcan-make.lock'), [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None) }
+    catch [IO.IOException] { Write-Host "==> Artifact prune ($ProfileName) skipped: another make build is running."; return }
+    try {
+        try { $CargoLocks = Lock-CargoProfile -ProfileRoot $ProfileRoot -Timeout $LockTimeout }
+        catch { Write-Host "==> Artifact prune ($ProfileName) skipped: other Cargo commands are using the profile."; return }
+        try {
+            $WorkspaceCrates = Get-WorkspaceCrateNames $Metadata
+            $Removed = [ordered]@{}
+            $Units = Get-CargoProfileUnits -ProfileRoot $ProfileRoot -WorkspaceCrates $WorkspaceCrates
+            $Overflow = Get-CargoUnitOverflow -Hashes @($Units.LastWritten.Keys) -LastWritten $Units.LastWritten -Crates $Units.Crates
+            foreach ($Entry in $Units.Entries) {
+                if ($Overflow.Contains($Entry.Hash)) { Add-CargoCleanupRemoval $Removed $Entry.Area $Entry.Path }
+            }
+            $None = [Collections.Generic.HashSet[string]]::new()
+            Remove-CargoIncrementalOverflow -ProfileRoot $ProfileRoot -Cutoff ([DateTime]::MinValue) -KeepAged $None -Removed $Removed
+            Write-Host "==> Artifact prune ($ProfileName): $(Format-CargoCleanupSummary $Removed); each workspace crate keeps its newest $($script:KeptUnitsPerCrate) units."
+        }
+        finally { foreach ($Lock in $CargoLocks) { $Lock.Dispose() } }
+    }
+    finally { $BuildLock.Dispose() }
 }
 
 # Execute Cargo with structured output and, after success, sweep the profile down to the units it used.
@@ -301,7 +441,7 @@ function Invoke-TrackedCargoBuild {
                 if (-not $ProtocolValid) { throw 'Cargo output contained malformed JSON; nothing was removed.' }
                 $ProfileDirectory = [IO.Path]::GetDirectoryName($ShellArtifacts[0].executable)
                 $CargoLocks = Lock-CargoProfile -ProfileRoot $ProfileDirectory
-                try { Invoke-CargoArtifactSweep -ProfileDirectory $ProfileDirectory -Artifacts $Artifacts.ToArray() -OutDirs $OutDirs.ToArray() -BuildStartedUtc $BuildStartedUtc }
+                try { Invoke-CargoArtifactSweep -ProfileDirectory $ProfileDirectory -Artifacts $Artifacts.ToArray() -OutDirs $OutDirs.ToArray() -BuildStartedUtc $BuildStartedUtc -WorkspaceCrates (Get-WorkspaceCrateNames $Metadata) }
                 finally { foreach ($Lock in $CargoLocks) { $Lock.Dispose() } }
             }
             catch { Write-Warning "Build succeeded, but artifact cleanup was skipped or incomplete: $_" }

@@ -86,6 +86,10 @@ $RustNoticesScriptPath = Join-Path $ScriptDir "scripts\generate_rust_third_party
 # RustDependencyCheckScriptPath 指向只读的 Rust 依赖治理验证脚本。
 $RustDependencyCheckScriptPath = Join-Path $ScriptDir "scripts\check_rust_dependency_policy.ps1"
 
+# PruneScriptPath points at the Cargo profile prune that keeps the newest units of each workspace crate.
+# PruneScriptPath 指向保留每个工作区 crate 最新单元的 Cargo 模式目录清理脚本。
+$PruneScriptPath = Join-Path $ScriptDir "scripts\prune_cargo_artifacts.ps1"
+
 # Normalize-Command converts nullable command text into a trimmed lower-case token so dispatch rules remain predictable.
 # Normalize-Command 用于把可空命令文本转换成去空白的小写标记，确保分发规则稳定可预测。
 # Value is the raw command-line token to normalize before dispatch.
@@ -372,6 +376,8 @@ function Show-Usage {
     Write-Host "  ./make core-restart # Windows: compile and restart Debug Core; keep GUI running"
     Write-Host "  ./make clean       # clean Debug Cargo artifacts; preserve output and downloads"
     Write-Host "  ./make clean release # clean Release Cargo artifacts only"
+    Write-Host "  ./make prune       # keep the newest Debug units of each workspace crate; also runs after test and check"
+    Write-Host "  ./make prune release # keep the newest Release units of each workspace crate"
     Write-Host "  ./make deps        # install bundled tools (sg, rg, rtk) and LuaSkills dependencies"
     Write-Host "  ./make deps rust-tools # install cargo-hakari, cargo-nextest, and cargo-deny"
     Write-Host "  ./make init-system # bootstrap Rust tools and all repository dependencies"
@@ -405,7 +411,7 @@ if (-not [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([Syst
 
 # Run the same prerequisite policy as Unix before loading modules with modern Node APIs.
 # 在加载新版Node模块之前，执行与Unix相同的前置条件策略。
-if ($NormalizedMode -ne 'clean' -and -not ($NormalizedMode -eq 'deps' -and $NormalizedVariant -eq 'rust-tools')) {
+if ($NormalizedMode -notin @('clean', 'prune') -and -not ($NormalizedMode -eq 'deps' -and $NormalizedVariant -eq 'rust-tools')) {
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
         throw 'Node.js is required to check build prerequisites. Install Node.js, then run make init-system.'
     }
@@ -430,6 +436,14 @@ switch ($NormalizedMode) {
         }
         finally { Pop-Location }
         exit $CleanExitCode
+    }
+    'prune' {
+        if ($NormalizedVariant -ne '' -and $NormalizedVariant -ne 'release') {
+            throw "Unsupported prune profile: $CommandVariant"
+        }
+        $PruneProfile = if ($NormalizedVariant -eq 'release') { 'release' } else { 'debug' }
+        & $PruneScriptPath -ProfileName $PruneProfile
+        exit 0
     }
     "" {
         Invoke-TauriBuild -IsRelease $false
@@ -506,7 +520,11 @@ switch ($NormalizedMode) {
             exit 1
         }
         & node (Join-Path $ScriptDir 'scripts/check.mjs')
-        exit $LASTEXITCODE
+        # CheckExitCode is kept across the prune of the clippy units the gates just wrote.
+        # CheckExitCode 在清理检查刚写入的 clippy 单元期间保留。
+        $CheckExitCode = $LASTEXITCODE
+        try { & $PruneScriptPath -ProfileName debug -NoWait } catch { Write-Warning "Artifact prune failed: $_" }
+        exit $CheckExitCode
     }
     "test" {
         if ($NormalizedVariant -ne "" -and $NormalizedVariant -ne "full") {
@@ -516,7 +534,11 @@ switch ($NormalizedMode) {
         }
         $TestMode = if ($NormalizedVariant -eq "full") { "full" } else { "fast" }
         & node (Join-Path $ScriptDir 'scripts/test-rust.mjs') $TestMode
-        exit $LASTEXITCODE
+        # TestExitCode is kept across the prune of the test units the run just wrote.
+        # TestExitCode 在清理测试刚写入的单元期间保留。
+        $TestExitCode = $LASTEXITCODE
+        try { & $PruneScriptPath -ProfileName debug -NoWait } catch { Write-Warning "Artifact prune failed: $_" }
+        exit $TestExitCode
     }
     "run" {
         if ($NormalizedVariant -eq "" -or $NormalizedVariant -eq "release") {

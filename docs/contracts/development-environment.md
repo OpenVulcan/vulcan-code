@@ -62,6 +62,8 @@ Debug 与 Release 各自拥有独立的同级发行目录，使两个版本可�
 
 `make clean` 仅执行 `cargo clean --profile dev`，清理 Debug 编译产物；`make clean release` 仅执行 `cargo clean --profile release`，清理 Release 编译产物。`release` 在此是模式参数，不会触发构建。Windows、Linux、macOS 共用相同语义；目标目录与目标三元组由 Cargo 根据环境变量及 `.cargo/config.toml` 解析，不手工猜测目录。清理不依赖 Node、pnpm 或下载依赖，不触碰 `output/`、`output-release/`、`third_party/`、用户数据及另一模式的编译产物；它不会停止运行中的应用，文件被占用时保留 Cargo 的错误并退出。
 
+`make prune` 与 `make prune release` 不经构建，把对应模式目录清理到每个工作区 crate 最新的若干单元与增量目录，第三方单元不动；`make test`、`make check` 结束后自动对 Debug 执行一次，其他 Cargo 命令正占用模式目录时直接跳过。规则与上限 `KeptUnitsPerCrate` 定义在 `scripts/cargo_artifact_cleanup.ps1`；实现为 PowerShell，Unix 上需要 `pwsh`。make 构建后的清理同样受这一上限约束：每个工作区 crate 在保留期内也只保留最新的若干个未用单元与增量目录。
+
 下载的构建输入统一保存在 `third_party/`，具体目录由 `scripts/build-input-paths.mjs` 定义。`output/` 与 `output-release/` 仅保存运行与分发副本，可以重新同步及打包恢复。直接运行无参数 `cargo clean` 仍会清空整个 Cargo 目标目录，但不会删除这些持久输入。旧的 `target/browser-runtime/`、`target/build-input-cache/` 与 `target/electron-runtime-cache/` 不再作为下载源；切换入口前可显式复制到对应的新目录并核对完整性，脚本不会探测或静默回退到旧路径。
 
 ### LanceDB 原生库
