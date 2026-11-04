@@ -63,8 +63,10 @@ jobs:
           # Linux 程序静态链接 musl，可在任何发行版上运行。
           - { platform: linux-x64, runner: ubuntu-22.04, target: x86_64-unknown-linux-musl }
           - { platform: linux-arm64, runner: ubuntu-22.04-arm, target: aarch64-unknown-linux-musl }
-          - { platform: macos-x64, runner: macos-15-intel, target: x86_64-apple-darwin }
-          - { platform: macos-arm64, runner: macos-15, target: aarch64-apple-darwin }
+          # Apple silicon compiles the x64 program as well; it is faster than the Intel runners.
+          # Apple 芯片同样编译 x64 程序，比 Intel Runner 更快。
+          - { platform: macos-x64, runner: macos-15, target: x86_64-apple-darwin, arch: x86_64 }
+          - { platform: macos-arm64, runner: macos-15, target: aarch64-apple-darwin, arch: arm64 }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     env:
@@ -72,6 +74,7 @@ jobs:
       VERSION: ${{ needs.plan.outputs.version }}
       PLATFORM: ${{ matrix.platform }}
       TARGET: ${{ matrix.target }}
+      ARCH: ${{ matrix.arch }}
       # The C parts of ring and zstd are compiled against musl, not the runner's glibc.
       # ring 与 zstd 的 C 部分针对 musl 编译，而非 Runner 的 glibc。
       CC_x86_64_unknown_linux_musl: musl-gcc
@@ -104,6 +107,14 @@ jobs:
           mkdir -p "$out"
           program="$out/vulcan-code-setup-$VERSION-$PLATFORM"
           cp "target/$TARGET/release/vulcan-code-setup" "$program"
+          if [ "$RUNNER_OS" = macOS ]; then
+            [ "$(lipo -archs "$program")" = "$ARCH" ] || { echo "the macOS program is not $ARCH only" >&2; exit 1; }
+            # The x64 program runs on the Apple silicon runner through Rosetta.
+            # x64 程序经 Rosetta 在 Apple 芯片 Runner 上运行。
+            if [ "$ARCH" = x86_64 ] && ! arch -x86_64 /usr/bin/true 2> /dev/null; then
+              sudo softwareupdate --install-rosetta --agree-to-license
+            fi
+          fi
           [ "$("$program" --version)" = "vulcan-code-setup $VERSION" ] || { echo "the program reports another version" >&2; exit 1; }
           if [ "$RUNNER_OS" = Linux ]; then
             file "$program"
