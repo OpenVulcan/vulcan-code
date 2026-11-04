@@ -12,6 +12,7 @@ use std::path::Path;
 
 /// SHA-1 thumbprint of the certificate that signs Vulcan Code installers.
 /// 签署 Vulcan Code 安装包的证书的 SHA-1 指纹。
+#[cfg(windows)]
 pub(crate) const INSTALLER_SIGNER_THUMBPRINT: &str = "19E4E2A3EFAECB6BE966D4C89B28C2C6F5C8DEA9";
 
 /// Fails unless `path` carries a valid Authenticode signature by [`INSTALLER_SIGNER_THUMBPRINT`].
