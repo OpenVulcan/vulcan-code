@@ -3,6 +3,7 @@ members = [
     "apps/vulcan-code-service",
     "apps/vulcan-code-tui",
     "apps/vulcan-code-launcher",
+    "apps/vulcan-code-setup",
     "crates/vulcan-agent-runtime",
     "crates/vulcan-subagent-core",
     "crates/vulcan-session-core",

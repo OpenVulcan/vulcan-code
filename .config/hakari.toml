@@ -32,8 +32,11 @@ platforms = [
 # 工作区的变化也不得改变其构建输入。
 # The Windows launcher changes only with an install epoch, so the same rule keeps its build inputs apart.
 # Windows 启动器只随安装纪元变化，同一规则使其构建输入与工作区分离。
+# The setup program is linked statically and downloaded before anything else, so it keeps its own small
+# dependency list in the same way.
+# 安装器静态链接且先于其他内容下载，因此以同样方式保持自己的少量依赖。
 [traversal-excludes]
-workspace-members = ["vulcan-code-service", "vulcan-lancedb-native", "vulcan-code-launcher"]
+workspace-members = ["vulcan-code-service", "vulcan-lancedb-native", "vulcan-code-launcher", "vulcan-code-setup"]
 
 # The native library and the workspace crates it links never depend on workspace-hack, so `cargo hakari
 # manage-deps` must not add it back; otherwise the library would still reach workspace-hack transitively.
@@ -46,7 +49,7 @@ workspace-members = ["vulcan-code-service", "vulcan-lancedb-native", "vulcan-cod
 # 安装核心同样链接进静态安装器，安装器不得编译整个工作区的特性集合；它只保留自己的少量依赖。发布工具运行在
 # 同样不应编译该集合的发布作业中。
 [final-excludes]
-workspace-members = ["vulcan-lancedb-native", "vulcan-lancedb-contract", "vulcan-file-ownership", "vulcan-install-core", "vulcan-release-tool", "vulcan-code-launcher"]
+workspace-members = ["vulcan-lancedb-native", "vulcan-lancedb-contract", "vulcan-file-ownership", "vulcan-install-core", "vulcan-release-tool", "vulcan-code-launcher", "vulcan-code-setup"]
 
 # Write out exact versions rather than a semver range. (Defaults to false.)
 # exact-versions = true

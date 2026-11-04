@@ -1,0 +1,48 @@
+[package]
+name = "vulcan-code-setup"
+description = "Setup program that installs, updates, modifies and removes a per-user Vulcan Code from the signed release objects."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+# Only the Windows registry and message calls in `src/windows.rs` may use unsafe code.
+# 只有 `src/windows.rs` 中的 Windows 注册表与消息调用可以使用 unsafe 代码。
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unwrap_used = "warn"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "vulcan-code-setup"
+path = "src/main.rs"
+
+# The setup program is linked statically on Linux and downloaded before anything else, so it keeps a
+# deliberately small dependency list and stays outside workspace-hack (see `.config/hakari.toml`).
+# 安装器在 Linux 上静态链接，且先于其他内容下载，因此刻意保持很少的依赖，并且不使用 workspace-hack
+# （见 `.config/hakari.toml`）。
+[dependencies]
+dirs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+vulcan-install-core = { workspace = true, features = ["http"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+tempfile.workspace = true
