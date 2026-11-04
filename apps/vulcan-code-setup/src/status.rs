@@ -5,7 +5,7 @@ use vulcan_install_core::install_root::InstallRoot;
 use vulcan_install_core::names::Platform;
 
 use crate::args::CommonOptions;
-use crate::install::resolve_root;
+use crate::install::{resolve_root, uninstall_hint};
 use crate::root::{self, Current, Ownership};
 use crate::state::Item;
 
@@ -63,7 +63,17 @@ pub fn status(options: &CommonOptions) -> Result<(), String> {
     let Some(state) = state else {
         return Ok(());
     };
-    println!("mode: {}", state.mode);
+    let yes_no = |value: bool| if value { "yes" } else { "no" };
+    println!("desktop app: {}", yes_no(state.gui));
+    println!(
+        "service with the login session: {}{}",
+        yes_no(state.service),
+        if state.linger {
+            ", kept running after logout"
+        } else {
+            ""
+        }
+    );
     println!("channel: {}", state.channel.as_str());
     if !state.with.is_empty() {
         println!(
@@ -82,9 +92,15 @@ pub fn status(options: &CommonOptions) -> Result<(), String> {
             Item::Directory { .. } => continue,
             Item::UserPath { dir } => format!("user PATH entry {}", dir.display()),
             Item::UninstallEntry { key } => format!("uninstall entry {key}"),
-            Item::UserService => String::from("systemd user unit vulcan-code.service"),
+            Item::Shortcut { path } => format!("shortcut {}", path.display()),
+            Item::ToastActivator { clsid } => format!("notification activator {clsid}"),
+            Item::UserService => String::from(
+                "the user service (vulcan-code-service --uninstall-user-service removes it)",
+            ),
+            Item::Linger { user } => format!("lingering of {user}"),
         };
         println!("  {line}");
     }
+    println!("{}", uninstall_hint(&root_path, state.path));
     Ok(())
 }

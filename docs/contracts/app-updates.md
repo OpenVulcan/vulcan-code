@@ -44,6 +44,8 @@
 2. 用户确认重启后，服务发布 `service.restarting`（`reason` 为 `update` 或 `installer`），正常排空后
    以相同参数加 `--await-owner-exit` 分离启动新服务；新服务最多等待 120 秒取得实例锁。在 systemd 用户
    服务中改用 `systemd-run --user` 重新安装用户单元，单元的 `ExecStart` 使用稳定路径 `<root>/current/<rel>`。
+   用户服务只有用户级一种（`--install-user-service`，Linux root 同样用自己的 systemd 用户实例）：Windows 为
+   HKCU `Run` 值（Core 每次启动刷新为当前版本路径），macOS 为指向稳定路径的 LaunchAgent。
 3. 桌面端等待旧 Core 进程退出后，经稳定入口重新启动（Windows 为根目录启动器 `VulcanCode.exe`，
    其他平台为 `<root>/current/<rel>`）。完整安装时桌面端只退出，安装包以
    `/SILENT /SUPPRESSMSGBOXES /NORESTART /RELAUNCH=1` 运行，结束后由 `[Run]` 中的
@@ -83,6 +85,17 @@
 - **Inno 安装包**：产品发布在构建前下载 stable 安装器指针与 Windows 程序，经 `vulcan-release-tool setup-check`
   校验后按原样装入 `{app}\setup\vulcan-code-setup.exe`（不再签名），卸载时删除；stable 安装器指针缺失或校验
   失败时产品发布停止。
+- **安装选项**（实现权威 `args.rs`、`integrate.rs`）：所有平台都可选 GUI（`--gui`，Linux 无桌面环境时仍可安装，
+  只是无法运行）、开始菜单/应用菜单（`--menu`）、桌面快捷方式（`--desktop-shortcut`）、PATH（`--path`）、用户服务
+  （`--service`，调用 Core `--install-user-service`）与 Linux linger（`--linger`，经 `loginctl enable-linger`，
+  失败时提示 sudo；只在本程序启用时记录并在卸载时撤销）。端口范围（`--port-range`）调用 Core
+  `--set-port-range` 写入 Core 拥有的 `service-settings.json`，安装器不保存副本。旧的 `--mode`、`--no-shortcut`
+  继续接受。root 安装与无 systemd 用户实例时给出说明，不注册系统级服务。
+- **Windows 桌面集成**：GUI 安装时把 `bin/vulcan-code-launcher.exe` 复制为 `<root>\VulcanCode.exe`，快捷方式用
+  运行布局（schema 4）的 `desktopIdentity` 写入 AppUserModelID 与通知激活 CLSID，与 Inno 安装包一致；同时把
+  安装器放入 PATH 并作为卸载入口的 `DisplayIcon`/卸载命令。完成与 `status` 时告知卸载命令。
+- **安装记录**：`installation.json` 为 v2；读取 v1 时先把原字节保存为 `installation.json.v1`，再升级写回。
+  只记录本程序创建的文件、目录与系统集成，卸载时只撤销这些项。
 
 ## 同步触发点
 
@@ -94,6 +107,9 @@
   `serde_json`），修改时两处同时改；尝试上限只在 `MAX_STARTUP_ATTEMPTS` 定义并随标记写出。
 - `/RELAUNCH=1` 在 `INSTALLER_ARGUMENTS` 与 `scripts/windows-installer.mjs` 的 `RelaunchRequested` 中成对出现。
 - 启动器、安装器模板、注册表、PATH、快捷方式或安装布局变化时递增 `product.json` 的 `installEpoch`
-  （方案第九节），旧安装由此走完整更新。
+  （方案第九节），旧安装由此走完整更新。安装器自身写入的快捷方式与注册表项随安装器版本发布，不触发
+  `installEpoch`；运行布局新增可选字段（如 `desktopIdentity`）而启动器不校验其版本时同样不触发。
+- 运行布局的 `desktopIdentity` 由 `scripts/desktop-runtime.mjs` 从桌面端的通知身份常量写出，是安装器读取 AUMID 与
+  通知 CLSID 的唯一来源；修改身份值时只改桌面端常量。
 - TUI 调用一对一镜像 `apps/vulcan-code-web/src/service/app-update-service.ts`，见
   [`tui-service-adaptation.md`](tui-service-adaptation.md)。

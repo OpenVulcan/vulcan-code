@@ -6,35 +6,52 @@ use std::path::PathBuf;
 use vulcan_install_core::fetch::Route;
 use vulcan_install_core::names::{Channel, ComponentName};
 
-use crate::state::Mode;
-
 /// Usage text printed by `--help` and after an argument error.
 /// `--help` 及参数错误后打印的用法说明。
 pub const USAGE: &str = "\
-usage: vulcan-code-setup [install] [--yes] [--mode desktop|terminal|service] [--with browser]
+usage: vulcan-code-setup [install] [--yes] [--gui | --no-gui] [--with browser]
+                         [--menu | --no-menu] [--desktop-shortcut | --no-desktop-shortcut]
+                         [--path | --no-path] [--service | --no-service] [--linger | --no-linger]
+                         [--port-range <first>-<last> | --port-range default]
                          [--channel stable|preview] [--route auto|international|china]
-                         [--prefix <dir>] [--no-shortcut] [--no-path]
-                         [--self-update | --no-self-update]
+                         [--prefix <dir>] [--self-update | --no-self-update]
        vulcan-code-setup update [--yes] [--prefix <dir>] [--self-update | --no-self-update]
        vulcan-code-setup uninstall [--yes] [--purge] [--prefix <dir>]
        vulcan-code-setup status [--prefix <dir>]
        vulcan-code-setup --version
 
-install    installs Vulcan Code, or refreshes and updates an existing installation
+install    installs Vulcan Code, or refreshes and updates an existing installation; choices not
+           given keep the ones recorded at installation
 update     installs the newest version with the choices recorded at installation
 uninstall  removes everything the setup program created; --purge also removes ~/.vulcan
-status     shows what is installed
+status     shows what is installed and how to uninstall it
 
---yes      runs without asking; required when there is no terminal
---mode     desktop (desktop app and terminal client), terminal (terminal client only), or
-           service (Linux only: the WebUI service as a systemd user unit, plus the terminal client)
---with     adds an optional component; `browser` provides the built-in browser
---channel  stable (default) or preview
---route    download origins: auto (default), international, or china
---prefix   installation directory; the platform default is used when omitted
+--yes        runs without asking; required when there is no terminal
+--gui        also installs the desktop app (on Linux it needs a desktop environment); --no-gui
+             installs the terminal client and the service only. The default is the desktop app
+             where a graphical session runs
+--with       adds an optional component; `browser` provides the built-in browser
+--menu       a Start menu or application menu entry for the desktop app (default with --gui)
+--desktop-shortcut
+             a desktop shortcut for the desktop app (Windows and Linux; off by default)
+--path       puts vulcan-tui and vulcan-code-setup on PATH (default)
+--service    starts the Core service with your login session, as your own user, so no
+             administrator rights are needed (off by default)
+--linger     Linux: keeps the service running after you log out (loginctl enable-linger)
+--port-range ports the service may listen on, such as 18000-18029; `default` restores the
+             built-in range; the service uses them from its next start
+--channel    stable (default) or preview
+--route      download origins: auto (default), international, or china
+--prefix     installation directory; the platform default is used when omitted
 --self-update     updates this setup program first when a newer one is published, without asking
 --no-self-update  skips looking for a newer setup program; by default a terminal run asks, and a
-                  run with --yes keeps the current one unless the release requires a newer one";
+                  run with --yes keeps the current one unless the release requires a newer one
+--mode, --no-shortcut
+             kept from setup 0.1: --mode desktop, terminal or service means --gui, --no-gui, or
+             --no-gui --service; --no-shortcut means --no-menu
+
+To uninstall, run `vulcan-code-setup uninstall`, which is also in <install directory>/setup;
+on Windows, Settings > Apps > Vulcan Code does the same.";
 
 /// What the setup program was asked to do.
 /// 安装器被要求执行的操作。
@@ -98,9 +115,9 @@ pub struct InstallOptions {
     /// Options every command accepts.
     /// 每个命令都接受的选项。
     pub common: CommonOptions,
-    /// Installation mode.
-    /// 安装模式。
-    pub mode: Option<Mode>,
+    /// Whether to install the desktop app.
+    /// 是否安装桌面应用。
+    pub gui: Option<bool>,
     /// Optional components to add.
     /// 要添加的可选组件。
     pub with: Vec<ComponentName>,
@@ -110,12 +127,24 @@ pub struct InstallOptions {
     /// Download origins.
     /// 下载源。
     pub route: Option<Route>,
-    /// Skip the desktop shortcut.
-    /// 不创建桌面快捷方式。
-    pub no_shortcut: bool,
-    /// Skip putting `vulcan-tui` on PATH.
-    /// 不把 `vulcan-tui` 加入 PATH。
-    pub no_path: bool,
+    /// Whether to create the menu entry or application bundle.
+    /// 是否创建菜单项或应用程序包。
+    pub menu: Option<bool>,
+    /// Whether to create the desktop shortcut.
+    /// 是否创建桌面快捷方式。
+    pub desktop_shortcut: Option<bool>,
+    /// Whether to put the commands on PATH.
+    /// 是否把命令加入 PATH。
+    pub path: Option<bool>,
+    /// Whether to start the Core service with the login session.
+    /// 是否让 Core 服务随登录会话启动。
+    pub service: Option<bool>,
+    /// Whether the service keeps running after logout (Linux).
+    /// 服务是否在注销后继续运行（Linux）。
+    pub linger: Option<bool>,
+    /// The port range to set, or `default`; checked by the Core service.
+    /// 要设置的端口范围或 `default`；由 Core 服务校验。
+    pub port_range: Option<String>,
 }
 
 /// Options of `uninstall`.
@@ -134,9 +163,42 @@ pub struct UninstallOptions {
 /// 内置浏览器组件（`scripts/release-components.json`）。
 pub const BROWSER_COMPONENT: &str = "browser";
 
-/// Components that `--with` may add; the others follow from the mode.
-/// `--with` 可以添加的组件；其余组件由模式决定。
+/// Components that `--with` may add; the desktop app has `--gui`, the others are always installed.
+/// `--with` 可以添加的组件；桌面应用使用 `--gui`，其余组件总是安装。
 pub const OPTIONAL_COMPONENTS: [&str; 1] = [BROWSER_COMPONENT];
+
+/// Value of `--port-range` that restores the built-in range.
+/// 恢复内置范围的 `--port-range` 值。
+pub const DEFAULT_PORT_RANGE: &str = "default";
+
+/// Sets a choice once; a second flag for the same choice is refused.
+/// 只设置一次选择；同一选择的第二个参数被拒绝。
+fn choose(slot: &mut Option<bool>, value: bool, flag: &str) -> Result<(), String> {
+    if slot.is_some() {
+        return Err(format!("{flag} repeats or contradicts an earlier option"));
+    }
+    *slot = Some(value);
+    Ok(())
+}
+
+/// Checks the form of a `--port-range` value: `default`, one port, or `<first>-<last>`; the
+/// Core service checks the numbers.
+/// 检查 `--port-range` 值的形式：`default`、单个端口或 `<first>-<last>`；数值由 Core 服务检查。
+pub fn check_port_range(value: &str) -> Result<(), String> {
+    let digits = |text: &str| !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit());
+    let valid = value == DEFAULT_PORT_RANGE
+        || match value.split_once('-') {
+            Some((first, last)) => digits(first) && digits(last),
+            None => digits(value),
+        };
+    if valid {
+        Ok(())
+    } else {
+        Err(format!(
+            "--port-range accepts <first>-<last>, one port, or {DEFAULT_PORT_RANGE}, not {value}"
+        ))
+    }
+}
 
 /// Parses the arguments after the program name.
 /// 解析程序名之后的参数。
@@ -170,6 +232,9 @@ pub fn parse(arguments: &[String]) -> Result<Command, String> {
             Some(_) => Err(format!("{flag} takes no value")),
             None => Ok(()),
         };
+        // A switch pair: `--name` turns the choice on and `--no-name` turns it off.
+        // 开关对：`--name` 打开选择，`--no-name` 关闭选择。
+        let on = !flag.starts_with("--no-");
         match flag {
             "-h" | "--help" => return Ok(Command::Help),
             "-V" | "--version" => return Ok(Command::Version),
@@ -180,7 +245,7 @@ pub fn parse(arguments: &[String]) -> Result<Command, String> {
                         "--self-update and --no-self-update are given more than once",
                     ));
                 }
-                install.common.self_update = if flag == "--self-update" {
+                install.common.self_update = if on {
                     SelfUpdate::Always
                 } else {
                     SelfUpdate::Never
@@ -191,12 +256,56 @@ pub fn parse(arguments: &[String]) -> Result<Command, String> {
                 install.common.yes = true;
             }
             "--prefix" => install.common.prefix = Some(PathBuf::from(value(flag)?)),
-            "--mode" => install.mode = Some(value(flag)?.parse()?),
+            "--gui" | "--no-gui" => {
+                switch_only(flag)?;
+                choose(&mut install.gui, on, flag)?;
+            }
+            "--menu" | "--no-menu" => {
+                switch_only(flag)?;
+                choose(&mut install.menu, on, flag)?;
+            }
+            "--no-shortcut" => {
+                switch_only(flag)?;
+                choose(&mut install.menu, false, flag)?;
+            }
+            "--desktop-shortcut" | "--no-desktop-shortcut" => {
+                switch_only(flag)?;
+                choose(&mut install.desktop_shortcut, on, flag)?;
+            }
+            "--path" | "--no-path" => {
+                switch_only(flag)?;
+                choose(&mut install.path, on, flag)?;
+            }
+            "--service" | "--no-service" => {
+                switch_only(flag)?;
+                choose(&mut install.service, on, flag)?;
+            }
+            "--linger" | "--no-linger" => {
+                switch_only(flag)?;
+                choose(&mut install.linger, on, flag)?;
+            }
+            "--mode" => match value(flag)?.as_str() {
+                "desktop" => choose(&mut install.gui, true, flag)?,
+                "terminal" => choose(&mut install.gui, false, flag)?,
+                "service" => {
+                    choose(&mut install.gui, false, flag)?;
+                    choose(&mut install.service, true, flag)?;
+                }
+                _ => return Err(String::from("--mode accepts desktop, terminal or service")),
+            },
+            "--port-range" => {
+                if install.port_range.is_some() {
+                    return Err(String::from("--port-range is given more than once"));
+                }
+                let range = value(flag)?;
+                check_port_range(&range)?;
+                install.port_range = Some(range);
+            }
             "--with" => {
                 let name = value(flag)?;
                 if !OPTIONAL_COMPONENTS.contains(&name.as_str()) {
                     return Err(format!(
-                        "--with accepts {}, not {name}",
+                        "--with accepts {}, not {name}; the desktop app is chosen with --gui",
                         OPTIONAL_COMPONENTS.join(", ")
                     ));
                 }
@@ -213,14 +322,6 @@ pub fn parse(arguments: &[String]) -> Result<Command, String> {
                 );
             }
             "--route" => install.route = Some(parse_route(&value(flag)?)?),
-            "--no-shortcut" => {
-                switch_only(flag)?;
-                install.no_shortcut = true;
-            }
-            "--no-path" => {
-                switch_only(flag)?;
-                install.no_path = true;
-            }
             "--purge" => {
                 switch_only(flag)?;
                 purge = true;
@@ -228,12 +329,16 @@ pub fn parse(arguments: &[String]) -> Result<Command, String> {
             other => return Err(format!("unknown argument {other}")),
         }
     }
-    let install_only = install.mode.is_some()
+    let install_only = install.gui.is_some()
         || !install.with.is_empty()
         || install.channel.is_some()
         || install.route.is_some()
-        || install.no_shortcut
-        || install.no_path;
+        || install.menu.is_some()
+        || install.desktop_shortcut.is_some()
+        || install.path.is_some()
+        || install.service.is_some()
+        || install.linger.is_some()
+        || install.port_range.is_some();
     let self_update = install.common.self_update != SelfUpdate::Ask;
     match verb {
         "install" if !purge => Ok(Command::Install(install)),
@@ -276,28 +381,68 @@ mod tests {
         )
     }
 
+    /// The install options of `line`.
+    /// `line` 的安装选项。
+    fn install(line: &str) -> InstallOptions {
+        match parse_words(line) {
+            Ok(Command::Install(options)) => options,
+            other => panic!("install expected, got {other:?}"),
+        }
+    }
+
     #[test]
     fn install_is_the_default_command_and_values_may_be_inline() {
-        let Ok(Command::Install(options)) =
-            parse_words("--yes --mode=terminal --with browser --channel preview --prefix /opt/v")
-        else {
-            panic!("install expected");
-        };
+        let options = install(
+            "--yes --gui --with browser --channel preview --prefix /opt/v --service \
+             --no-menu --desktop-shortcut --port-range=18000-18029",
+        );
         assert!(options.common.yes);
-        assert_eq!(options.mode, Some(Mode::Terminal));
+        assert_eq!(options.gui, Some(true));
         assert_eq!(options.with.len(), 1);
         assert_eq!(options.channel, Some(Channel::Preview));
         assert_eq!(options.common.prefix, Some(PathBuf::from("/opt/v")));
+        assert_eq!(options.service, Some(true));
+        assert_eq!(options.menu, Some(false));
+        assert_eq!(options.desktop_shortcut, Some(true));
+        assert_eq!(options.port_range.as_deref(), Some("18000-18029"));
+        assert_eq!(options.path, None);
+    }
+
+    #[test]
+    fn options_of_setup_0_1_keep_their_meaning() {
+        let service = install("--mode service --no-shortcut");
+        assert_eq!(
+            (service.gui, service.service, service.menu),
+            (Some(false), Some(true), Some(false))
+        );
+        assert_eq!(install("--mode=desktop").gui, Some(true));
+        assert_eq!(install("--mode terminal").gui, Some(false));
+        assert!(parse_words("--mode desktop --no-gui").is_err());
+        assert!(parse_words("--mode cloud").is_err());
+    }
+
+    #[test]
+    fn port_ranges_are_checked_for_form_only() {
+        assert!(check_port_range("18000-18029").is_ok());
+        assert!(check_port_range("18000").is_ok());
+        assert!(check_port_range(DEFAULT_PORT_RANGE).is_ok());
+        assert!(check_port_range("18000-").is_err());
+        assert!(check_port_range("a-b").is_err());
+        assert!(parse_words("--port-range 1-2 --port-range 3-4").is_err());
     }
 
     #[test]
     fn options_of_another_command_are_refused() {
-        assert!(parse_words("uninstall --mode desktop").is_err());
+        assert!(parse_words("uninstall --gui").is_err());
+        assert!(parse_words("update --service").is_err());
         assert!(parse_words("status --purge").is_err());
         assert!(parse_words("install --purge").is_err());
         assert!(parse_words("--with core").is_err());
+        assert!(parse_words("--with gui").is_err());
         assert!(parse_words("--yes=1").is_err());
+        assert!(parse_words("--gui=1").is_err());
         assert!(parse_words("--mode").is_err());
+        assert!(parse_words("--gui --no-gui").is_err());
         assert!(parse_words("repair").is_err());
         assert!(parse_words("status --self-update").is_err());
         assert!(parse_words("--self-update --no-self-update").is_err());

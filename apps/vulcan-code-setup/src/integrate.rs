@@ -1,6 +1,8 @@
-//! Everything outside the version directories: commands, menu entries, PATH, the uninstall entry
-//! and the user service. Each created thing is recorded so that removal never guesses.
-//! 版本目录之外的一切：命令、菜单项、PATH、卸载项与用户服务。每项创建的内容都被记录，移除时从不猜测。
+//! Everything outside the version directories: commands, menu entries and shortcuts, PATH, the
+//! uninstall entry, the service settings and the user service. Each created thing is recorded so
+//! that removal never guesses.
+//! 版本目录之外的一切：命令、菜单项与快捷方式、PATH、卸载项、服务设置与用户服务。每项创建的内容都被
+//! 记录，移除时从不猜测。
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -8,8 +10,8 @@ use std::process::Command;
 use vulcan_install_core::names::Platform;
 
 use crate::paths;
-use crate::root::Layout;
-use crate::state::{Item, Mode, SETUP_DIR};
+use crate::root::{Description, Layout, Version};
+use crate::state::{Item, SETUP_DIR};
 
 /// Line that marks the launcher scripts, menu entries and bundles this program writes; the same
 /// line as `scripts/install.sh`, so its launchers are refreshed instead of being skipped.
@@ -31,6 +33,18 @@ pub const SETUP_PROGRAM: &str = if cfg!(windows) {
 #[cfg(windows)]
 const FORWARDER: &str = "bin/vulcan-tui-forwarder.exe";
 
+/// The desktop launcher inside a Windows version, part of the `gui` component
+/// (`scripts/release-components.json`).
+/// Windows 版本中的桌面启动器，属于 `gui` 组件（`scripts/release-components.json`）。
+#[cfg(windows)]
+const DESKTOP_LAUNCHER: &str = "bin/vulcan-code-launcher.exe";
+
+/// The desktop launcher at the top of a Windows root, where the Inno installer puts it too;
+/// `vulcan-code-launcher` finds the root from it.
+/// Windows 根目录顶层的桌面启动器，Inno 安装程序也放在此处；`vulcan-code-launcher` 据此找到根目录。
+#[cfg(windows)]
+const ROOT_LAUNCHER: &str = "VulcanCode.exe";
+
 /// Directory of the PATH forwarder below a Windows root; `vulcan-code-launcher` finds the root
 /// from it.
 /// Windows 根目录下 PATH 转发器所在的目录；`vulcan-code-launcher` 据此找到根目录。
@@ -41,21 +55,38 @@ pub const CLI_DIR: &str = "cli";
 #[cfg(windows)]
 const UNINSTALL_ENTRY: &str = "VulcanCode.Setup";
 
-/// Name of the application bundle and menu entry.
-/// 应用程序包与菜单项的名称。
+/// Name of the application bundle, menu entry and shortcuts.
+/// 应用程序包、菜单项与快捷方式的名称。
 const APP_NAME: &str = "Vulcan Code";
+
+/// File name of the Windows shortcuts, the same as the Inno installer's.
+/// Windows 快捷方式的文件名，与 Inno 安装程序相同。
+const WINDOWS_SHORTCUT: &str = "Vulcan Code.lnk";
+
+/// File name of the Linux menu entry and desktop shortcut.
+/// Linux 菜单项与桌面快捷方式的文件名。
+const DESKTOP_ENTRY_FILE: &str = "vulcan-code.desktop";
 
 /// Icon inside a version, part of the `core` component.
 /// 版本中的图标，属于 `core` 组件。
 const ICON: &str = "webui/vulcan-logo.png";
 
-/// Service flag that registers the systemd user unit.
-/// 注册 systemd 用户单元的服务参数。
+/// Service flag that registers the user service.
+/// 注册用户服务的服务参数。
 const INSTALL_USER_SERVICE: &str = "--install-user-service";
 
-/// Service flag that removes the systemd user unit.
-/// 移除 systemd 用户单元的服务参数。
+/// Service flag that removes the user service.
+/// 移除用户服务的服务参数。
 const UNINSTALL_USER_SERVICE: &str = "--uninstall-user-service";
+
+/// Service flag that sets the port range in the service settings.
+/// 在服务设置中设置端口范围的服务参数。
+const SET_PORT_RANGE: &str = "--set-port-range";
+
+/// Directory in which systemd keeps one file per lingering user.
+/// systemd 为每个驻留用户保存一个文件的目录。
+#[cfg(unix)]
+const LINGER_DIR: &str = "/var/lib/systemd/linger";
 
 /// What the integration is built from.
 /// 构建集成所依据的内容。
@@ -70,15 +101,27 @@ pub struct Plan<'a> {
     /// 已安装的版本，显示在卸载项中。
     #[cfg_attr(not(windows), allow(dead_code))]
     pub version: &'a str,
-    /// The chosen mode.
-    /// 所选模式。
-    pub mode: Mode,
-    /// Whether a menu entry or application bundle is wanted.
-    /// 是否需要菜单项或应用程序包。
-    pub shortcut: bool,
+    /// Whether the desktop app is installed.
+    /// 是否安装桌面应用。
+    pub gui: bool,
+    /// Whether a menu entry or application bundle is wanted for the desktop app.
+    /// 是否需要桌面应用的菜单项或应用程序包。
+    pub menu: bool,
+    /// Whether a desktop shortcut is wanted for the desktop app.
+    /// 是否需要桌面应用的桌面快捷方式。
+    pub desktop_shortcut: bool,
     /// Whether commands are wanted on PATH.
     /// 是否需要把命令加入 PATH。
     pub path: bool,
+    /// Whether the Core service starts with the login session.
+    /// Core 服务是否随登录会话启动。
+    pub service: bool,
+    /// Whether the service keeps running after logout (Linux).
+    /// 服务是否在注销后继续运行（Linux）。
+    pub linger: bool,
+    /// The port range to set, when one was given.
+    /// 要设置的端口范围（给出时）。
+    pub port_range: Option<&'a str>,
 }
 
 impl Plan<'_> {
@@ -91,7 +134,7 @@ impl Plan<'_> {
         if let Some(tui) = &layout.tui_executable {
             launchers.push(("vulcan-tui", current(tui)));
         }
-        if self.mode == Mode::Desktop
+        if self.gui
             && let Some(desktop) = &layout.desktop_executable
         {
             launchers.push(("vulcan-code", current(desktop)));
@@ -106,22 +149,44 @@ impl Plan<'_> {
         if self.platform.is_windows() {
             if self.path {
                 locations.push(Location::UserPath(self.root.join(CLI_DIR)));
+                locations.push(Location::UserPath(self.root.join(SETUP_DIR)));
+            }
+            if self.gui && self.menu {
+                locations.push(Location::MenuEntry(
+                    paths::start_menu_dir()?.join(WINDOWS_SHORTCUT),
+                ));
+            }
+            if self.gui
+                && self.desktop_shortcut
+                && let Some(desktop) = paths::desktop_dir()
+            {
+                locations.push(Location::DesktopShortcut(desktop.join(WINDOWS_SHORTCUT)));
             }
             locations.push(Location::UninstallEntry);
         } else {
             if self.path {
                 locations.push(Location::Commands(paths::bin_dir()?));
             }
-            if self.mode == Mode::Desktop && self.shortcut {
+            if self.gui && self.menu {
                 locations.push(if self.platform.is_macos() {
                     Location::AppBundle(app_bundle()?)
                 } else {
                     Location::MenuEntry(desktop_entry()?)
                 });
             }
-            if self.mode == Mode::Service {
-                locations.push(Location::UserService);
+            if self.gui
+                && self.desktop_shortcut
+                && !self.platform.is_macos()
+                && let Some(desktop) = paths::desktop_dir()
+            {
+                locations.push(Location::DesktopShortcut(desktop.join(DESKTOP_ENTRY_FILE)));
             }
+        }
+        if self.service {
+            locations.push(Location::UserService);
+        }
+        if self.linger {
+            locations.push(Location::Linger);
         }
         Ok(locations)
     }
@@ -134,9 +199,12 @@ pub enum Location {
     /// Command launchers in this directory.
     /// 此目录中的命令启动器。
     Commands(PathBuf),
-    /// The Linux menu entry.
-    /// Linux 菜单项。
+    /// The Linux menu entry or the Windows Start menu shortcut.
+    /// Linux 菜单项或 Windows 开始菜单快捷方式。
     MenuEntry(PathBuf),
+    /// The desktop shortcut.
+    /// 桌面快捷方式。
+    DesktopShortcut(PathBuf),
     /// The macOS application bundle.
     /// macOS 应用程序包。
     AppBundle(PathBuf),
@@ -146,9 +214,12 @@ pub enum Location {
     /// The Windows uninstall entry.
     /// Windows 卸载项。
     UninstallEntry,
-    /// The systemd user unit.
-    /// systemd 用户单元。
+    /// The user service of this platform.
+    /// 本平台的用户服务。
     UserService,
+    /// Lingering of the user (Linux).
+    /// 用户驻留（Linux）。
+    Linger,
 }
 
 impl std::fmt::Display for Location {
@@ -158,11 +229,16 @@ impl std::fmt::Display for Location {
             Self::MenuEntry(path) | Self::AppBundle(path) => {
                 write!(formatter, "{}", path.display())
             }
+            Self::DesktopShortcut(path) => write!(formatter, "desktop shortcut {}", path.display()),
             Self::UserPath(dir) => write!(formatter, "user PATH: {}", dir.display()),
             Self::UninstallEntry => {
                 formatter.write_str("an entry in Settings > Apps for uninstalling")
             }
-            Self::UserService => formatter.write_str("a systemd user unit (vulcan-code.service)"),
+            Self::UserService => formatter.write_str(
+                "the service, started with your login session as your own user (no administrator \
+                 rights)",
+            ),
+            Self::Linger => formatter.write_str("lingering for your user (loginctl enable-linger)"),
         }
     }
 }
@@ -232,44 +308,96 @@ impl<'a> Recorder<'a> {
     }
 }
 
-/// Creates the integration of `plan` for the version whose layout is `layout`; `switched` tells
-/// whether the current version changed in this run.
-/// 为布局为 `layout` 的版本创建 `plan` 的集成；`switched` 表示本次运行是否切换了当前版本。
+/// Creates the integration of `plan` for `version`; `switched` tells whether the current version
+/// changed in this run.
+/// 为 `version` 创建 `plan` 的集成；`switched` 表示本次运行是否切换了当前版本。
 pub fn integrate(
     plan: &Plan<'_>,
-    layout: &Layout,
+    version: &Version,
     switched: bool,
     recorder: &mut Recorder<'_>,
 ) -> Result<(), String> {
     if plan.platform.is_windows() {
-        integrate_windows(plan, recorder)
+        integrate_windows(plan, version, recorder)?;
     } else {
-        integrate_unix(plan, layout, switched, recorder)
+        integrate_unix(plan, &version.layout, recorder)?;
     }
+    // The ports are set before the service is registered, so a service started now uses them.
+    // 端口先于服务注册设置，因此此时启动的服务即使用这些端口。
+    if let Some(range) = plan.port_range {
+        set_port_range(version, range, recorder)?;
+    }
+    if plan.service {
+        if switched || !recorder.had(&Item::UserService) {
+            println!("Registering the service...");
+            let report = run_service(&version.service(), &[INSTALL_USER_SERVICE])?;
+            recorder.notes.push(report);
+        }
+        recorder.add(Item::UserService);
+    }
+    #[cfg(unix)]
+    {
+        if plan.linger {
+            enable_linger(recorder)?;
+        }
+        if running_as_root() {
+            recorder.notes.push(String::from(
+                "Installed as root: the service and the agents it runs have root privileges.",
+            ));
+        }
+    }
+    Ok(())
 }
 
-/// The Windows integration: the PATH forwarder, the user PATH and the uninstall entry.
-/// Windows 集成：PATH 转发器、用户 PATH 与卸载项。
+/// Sets the port range through the service of `version`, which owns the service settings.
+/// 通过 `version` 的服务设置端口范围；服务设置归该服务所有。
+fn set_port_range(
+    version: &Version,
+    range: &str,
+    recorder: &mut Recorder<'_>,
+) -> Result<(), String> {
+    if Description::read(&version.dir)?.settings_path.is_none() {
+        return Err(format!(
+            "the installed version in {} has no port settings; --port-range needs a newer version",
+            version.dir.display()
+        ));
+    }
+    let report = run_service(&version.service(), &[SET_PORT_RANGE, range])?;
+    recorder.notes.push(report);
+    Ok(())
+}
+
+/// The Windows integration: the PATH forwarder, the user PATH, the desktop launcher and its
+/// shortcuts, and the uninstall entry.
+/// Windows 集成：PATH 转发器、用户 PATH、桌面启动器及其快捷方式，以及卸载项。
 #[cfg(windows)]
-fn integrate_windows(plan: &Plan<'_>, recorder: &mut Recorder<'_>) -> Result<(), String> {
+fn integrate_windows(
+    plan: &Plan<'_>,
+    version: &Version,
+    recorder: &mut Recorder<'_>,
+) -> Result<(), String> {
     let cli = plan.root.join(CLI_DIR);
     recorder.ensure_dir(&cli)?;
     let forwarder = cli.join("vulcan-tui.exe");
-    // Windows has no current link; the forwarder is copied from the version directory.
-    // Windows 没有 current 链接；转发器从版本目录复制。
-    let version_dir = plan
-        .root
-        .join(vulcan_install_core::install_root::VERSIONS_DIR)
-        .join(plan.version);
-    replace_running_file(&version_dir.join(FORWARDER), &forwarder)?;
+    // Windows has no current link; programs outside the versions are copied from the version.
+    // Windows 没有 current 链接；版本之外的程序从版本目录复制。
+    replace_running_file(&version.dir.join(FORWARDER), &forwarder)?;
     recorder.add(Item::File { path: forwarder });
     if plan.path {
-        if crate::windows::add_user_path(&cli)? {
-            recorder
-                .notes
-                .push(String::from("Open a new terminal to use vulcan-tui."));
+        let mut added = false;
+        for dir in [cli, plan.root.join(SETUP_DIR)] {
+            added |= crate::windows::add_user_path(&dir)?;
+            recorder.add(Item::UserPath { dir });
         }
-        recorder.add(Item::UserPath { dir: cli });
+        if added {
+            recorder.notes.push(String::from(
+                "Open a new terminal to use vulcan-tui and vulcan-code-setup.",
+            ));
+        }
+    }
+    let launcher = plan.root.join(ROOT_LAUNCHER);
+    if plan.gui {
+        integrate_desktop_windows(plan, version, &launcher, recorder)?;
     }
     let setup = plan.root.join(SETUP_DIR).join(SETUP_PROGRAM);
     crate::windows::write_uninstall_entry(
@@ -277,6 +405,7 @@ fn integrate_windows(plan: &Plan<'_>, recorder: &mut Recorder<'_>) -> Result<(),
         plan.version,
         plan.root,
         &format!("\"{}\" uninstall", setup.display()),
+        plan.gui.then_some(launcher.as_path()),
     )?;
     recorder.add(Item::UninstallEntry {
         key: String::from(UNINSTALL_ENTRY),
@@ -284,10 +413,78 @@ fn integrate_windows(plan: &Plan<'_>, recorder: &mut Recorder<'_>) -> Result<(),
     Ok(())
 }
 
+/// The desktop launcher at the top of the root and its shortcuts, which carry the notification
+/// identity of the version's layout as the Inno installer's shortcuts do.
+/// 根目录顶层的桌面启动器及其快捷方式；快捷方式与 Inno 安装程序的一样携带版本布局中的通知身份。
+#[cfg(windows)]
+fn integrate_desktop_windows(
+    plan: &Plan<'_>,
+    version: &Version,
+    launcher: &Path,
+    recorder: &mut Recorder<'_>,
+) -> Result<(), String> {
+    replace_running_file(&version.dir.join(DESKTOP_LAUNCHER), launcher)?;
+    recorder.add(Item::File {
+        path: launcher.to_path_buf(),
+    });
+    let identity = version.layout.desktop_identity.as_ref();
+    let mut shortcuts = Vec::new();
+    if plan.menu {
+        shortcuts.push(paths::start_menu_dir()?.join(WINDOWS_SHORTCUT));
+    }
+    if plan.desktop_shortcut {
+        match paths::desktop_dir() {
+            Some(desktop) => shortcuts.push(desktop.join(WINDOWS_SHORTCUT)),
+            None => recorder.notes.push(String::from(
+                "No desktop folder was found, so no desktop shortcut was created.",
+            )),
+        }
+    }
+    for path in shortcuts {
+        let item = Item::Shortcut { path: path.clone() };
+        if path.exists() && !recorder.had(&item) {
+            recorder.notes.push(format!(
+                "Skipped {}: a shortcut not created by the setup program already exists.",
+                path.display()
+            ));
+            continue;
+        }
+        if let Some(parent) = path.parent() {
+            recorder.ensure_dir(parent)?;
+        }
+        crate::windows::write_shortcut(
+            &path,
+            launcher,
+            plan.root,
+            identity.map(|identity| crate::windows::ShortcutIdentity {
+                app_user_model_id: &identity.app_user_model_id,
+                toast_activator_clsid: &identity.toast_activator_clsid,
+            }),
+        )?;
+        recorder.add(item);
+    }
+    // The desktop app registers its notification activator and its own Start menu shortcut at its
+    // first start; the Inno uninstaller removes both, and so does this program.
+    // 桌面应用在首次启动时注册其通知激活器和自己的开始菜单快捷方式；Inno 卸载程序会移除两者，本程序同样如此。
+    if let Some(identity) = identity {
+        recorder.add(Item::Shortcut {
+            path: paths::start_menu_dir()?.join(format!("{}.lnk", identity.name)),
+        });
+        recorder.add(Item::ToastActivator {
+            clsid: identity.toast_activator_clsid.clone(),
+        });
+    }
+    Ok(())
+}
+
 /// Windows integration is not built on other platforms.
 /// 其他平台不构建 Windows 集成。
 #[cfg(not(windows))]
-fn integrate_windows(_plan: &Plan<'_>, _recorder: &mut Recorder<'_>) -> Result<(), String> {
+fn integrate_windows(
+    _plan: &Plan<'_>,
+    _version: &Version,
+    _recorder: &mut Recorder<'_>,
+) -> Result<(), String> {
     Err(String::from("this setup program was not built for Windows"))
 }
 
@@ -309,13 +506,12 @@ fn replace_running_file(source: &Path, target: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// The Linux and macOS integration: command launchers, the menu entry or application bundle, and
-/// the user service.
-/// Linux 与 macOS 集成：命令启动器、菜单项或应用程序包，以及用户服务。
+/// The Linux and macOS integration: command launchers, and the menu entry, application bundle
+/// or desktop shortcut of the desktop app.
+/// Linux 与 macOS 集成：命令启动器，以及桌面应用的菜单项、应用程序包或桌面快捷方式。
 fn integrate_unix(
     plan: &Plan<'_>,
     layout: &Layout,
-    switched: bool,
     recorder: &mut Recorder<'_>,
 ) -> Result<(), String> {
     if plan.path {
@@ -345,38 +541,57 @@ fn integrate_unix(
             ));
         }
     }
-    if plan.mode == Mode::Desktop
-        && plan.shortcut
-        && let Some(desktop) = &layout.desktop_executable
-    {
-        let program = plan.root.join("current").join(desktop);
-        if plan.platform.is_macos() {
+    let Some(desktop) = layout.desktop_executable.as_ref().filter(|_| plan.gui) else {
+        return Ok(());
+    };
+    let program = plan.root.join("current").join(desktop);
+    if plan.platform.is_macos() {
+        if plan.menu {
             write_app_bundle(&program, recorder)?;
-        } else {
-            let path = desktop_entry()?;
-            if let Some(parent) = path.parent() {
-                recorder.ensure_dir(parent)?;
-            }
-            let entry = format!(
-                "[Desktop Entry]\n{LAUNCHER_MARKER}\nType=Application\nName={APP_NAME}\n\
-                 Comment=AI coding and work platform\nExec=\"{}\" %U\nIcon={}\nTerminal=false\n\
-                 Categories=Development;\n",
-                program.display(),
-                plan.root.join("current").join(ICON).display()
-            );
-            if write_marked(&path, &entry)? {
-                recorder.add(Item::File { path });
-            }
+        }
+        return Ok(());
+    }
+    let entry = format!(
+        "[Desktop Entry]\n{LAUNCHER_MARKER}\nType=Application\nName={APP_NAME}\n\
+         Comment=AI coding and work platform\nExec=\"{}\" %U\nIcon={}\nTerminal=false\n\
+         Categories=Development;\n",
+        program.display(),
+        plan.root.join("current").join(ICON).display()
+    );
+    if plan.menu {
+        let path = desktop_entry()?;
+        if let Some(parent) = path.parent() {
+            recorder.ensure_dir(parent)?;
+        }
+        if write_marked(&path, &entry)? {
+            recorder.add(Item::File { path });
         }
     }
-    if plan.mode == Mode::Service {
-        if switched || !recorder.had(&Item::UserService) {
-            run_service(plan.root, layout, INSTALL_USER_SERVICE)?;
+    if plan.desktop_shortcut {
+        match paths::desktop_dir().filter(|dir| dir.is_dir()) {
+            Some(dir) => {
+                let path = dir.join(DESKTOP_ENTRY_FILE);
+                if write_marked(&path, &entry)? {
+                    // GNOME starts a desktop file only once it is trusted; other desktops ignore
+                    // the attribute, and a missing `gio` only leaves the question to the user.
+                    // GNOME 只启动受信任的桌面文件；其他桌面忽略该属性，缺少 `gio` 只会把确认留给用户。
+                    let _ = Command::new("gio")
+                        .arg("set")
+                        .arg(&path)
+                        .args(["metadata::trusted", "true"])
+                        .output();
+                    recorder.add(Item::File { path });
+                } else {
+                    recorder.notes.push(format!(
+                        "Skipped {}: a file not created by the setup program already exists.",
+                        path.display()
+                    ));
+                }
+            }
+            None => recorder.notes.push(String::from(
+                "No desktop folder was found, so no desktop shortcut was created.",
+            )),
         }
-        recorder.add(Item::UserService);
-        recorder.notes.push(String::from(
-            "To keep the service running after you log out: sudo loginctl enable-linger $USER",
-        ));
     }
     Ok(())
 }
@@ -384,7 +599,7 @@ fn integrate_unix(
 /// Path of the Linux menu entry.
 /// Linux 菜单项的路径。
 fn desktop_entry() -> Result<PathBuf, String> {
-    Ok(paths::applications_dir()?.join("vulcan-code.desktop"))
+    Ok(paths::applications_dir()?.join(DESKTOP_ENTRY_FILE))
 }
 
 /// Path of the macOS application bundle.
@@ -474,37 +689,122 @@ fn write_file(path: &Path, content: &str, executable: bool) -> Result<(), String
     std::fs::rename(&partial, path).map_err(fail)
 }
 
-/// Runs the current service with `flag`.
-/// 以 `flag` 运行当前服务。
-fn run_service(root: &Path, layout: &Layout, flag: &str) -> Result<(), String> {
-    let program = root.join("current").join(&layout.service_executable);
-    let status = Command::new(&program)
-        .arg(flag)
-        .status()
+/// Runs the service `program` with `args` and returns what it reported.
+/// 以 `args` 运行服务程序 `program`，并返回其报告的内容。
+fn run_service(program: &Path, args: &[&str]) -> Result<String, String> {
+    let output = Command::new(program)
+        .args(args)
+        .output()
         .map_err(|error| format!("cannot run {}: {error}", program.display()))?;
-    if status.success() {
-        Ok(())
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
     } else {
-        Err(format!("{} {flag} failed ({status})", program.display()))
+        Err(format!(
+            "{} {} failed ({}): {}",
+            program.display(),
+            args.join(" "),
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
     }
 }
 
-/// Removes one recorded item; `layout` is the current version's, when it still exists.
-/// 移除一个已记录的条目；`layout` 为当前版本的布局（若仍存在）。
-pub fn remove(item: &Item, root: &Path, layout: Option<&Layout>) -> Result<(), String> {
+/// Keeps the user's service running after logout. Lingering that was on before is left alone and
+/// not recorded, so removing the installation never turns off what the user turned on.
+/// 使用户的服务在注销后继续运行。此前已开启的驻留保持不变且不记录，因此移除安装绝不会关闭用户自己开启的驻留。
+#[cfg(unix)]
+fn enable_linger(recorder: &mut Recorder<'_>) -> Result<(), String> {
+    let user = unix::user_name()?;
+    let item = Item::Linger { user: user.clone() };
+    if Path::new(LINGER_DIR).join(&user).exists() {
+        if recorder.had(&item) {
+            recorder.add(item);
+        }
+        return Ok(());
+    }
+    let enabled = Command::new("loginctl")
+        .args(["enable-linger", &user])
+        .output()
+        .is_ok_and(|output| output.status.success());
+    if enabled {
+        recorder.add(item);
+    } else {
+        recorder.notes.push(format!(
+            "Lingering could not be turned on without administrator rights; to keep the service \
+             running after you log out, run: sudo loginctl enable-linger {user}"
+        ));
+    }
+    Ok(())
+}
+
+/// Queries about the user running the setup program on Linux and macOS.
+/// Linux 与 macOS 上关于运行安装器之用户的查询。
+#[cfg(unix)]
+mod unix {
+    use std::process::Command;
+
+    /// The output of `id` with `flag`.
+    /// 以 `flag` 运行 `id` 的输出。
+    fn id(flag: &str) -> Option<String> {
+        let output = Command::new("id").arg(flag).output().ok()?;
+        let text = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        (output.status.success() && !text.is_empty()).then_some(text)
+    }
+
+    /// The name of the user.
+    /// 用户名。
+    pub(super) fn user_name() -> Result<String, String> {
+        id("-un").ok_or_else(|| String::from("cannot read the user name with `id -un`"))
+    }
+
+    /// Whether the user is root.
+    /// 用户是否为 root。
+    pub(super) fn is_root() -> bool {
+        id("-u").as_deref() == Some("0")
+    }
+}
+
+/// Whether the setup program runs as root, whose service and agents then have root privileges.
+/// 安装器是否以 root 运行；此时其服务与代理拥有 root 权限。
+pub fn running_as_root() -> bool {
+    #[cfg(unix)]
+    return unix::is_root();
+    #[cfg(not(unix))]
+    return false;
+}
+
+/// How to unregister the user service by hand, when the current version is missing.
+/// 当前版本缺失时手动注销用户服务的方法。
+fn unregister_by_hand() -> &'static str {
+    if cfg!(windows) {
+        "reg delete HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v \"Vulcan Code\" /f"
+    } else if cfg!(target_os = "macos") {
+        "launchctl bootout gui/$(id -u)/com.openvulcan.vulcancode.service, then delete \
+         ~/Library/LaunchAgents/com.openvulcan.vulcancode.service.plist"
+    } else {
+        "systemctl --user disable --now vulcan-code.service, then delete \
+         ~/.config/systemd/user/vulcan-code.service"
+    }
+}
+
+/// Removes one recorded item; `version` is the current version, when it still exists.
+/// 移除一个已记录的条目；`version` 为当前版本（若仍存在）。
+pub fn remove(item: &Item, root: &Path, version: Option<&Version>) -> Result<(), String> {
     let fail =
         |path: &Path, error: std::io::Error| format!("cannot remove {}: {error}", path.display());
+    let remove_file = |path: &Path| match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(fail(path, error)),
+    };
     match item {
         Item::File { path } => {
             if path.starts_with(root) || carries_marker(path) {
-                match std::fs::remove_file(path) {
-                    Ok(()) => {}
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => return Err(fail(path, error)),
-                }
+                remove_file(path)?;
             }
             Ok(())
         }
+        Item::Shortcut { path } => remove_file(path),
         Item::Bundle { path } => {
             if carries_marker(&path.join("Contents/MacOS").join(BUNDLE_EXECUTABLE)) {
                 std::fs::remove_dir_all(path).map_err(|error| fail(path, error))?;
@@ -519,13 +819,29 @@ pub fn remove(item: &Item, root: &Path, layout: Option<&Layout>) -> Result<(), S
         }
         Item::UserPath { dir } => remove_user_path(dir),
         Item::UninstallEntry { key } => remove_uninstall_entry(key),
-        Item::UserService => match layout {
-            Some(layout) => run_service(root, layout, UNINSTALL_USER_SERVICE),
-            None => Err(String::from(
+        Item::ToastActivator { clsid } => remove_toast_activator(clsid),
+        Item::UserService => match version {
+            Some(version) => run_service(&version.service(), &[UNINSTALL_USER_SERVICE]).map(|_| ()),
+            None => Err(format!(
                 "the current version is missing, so the user service cannot be unregistered; \
-                 run `systemctl --user disable --now vulcan-code.service`",
+                 remove it by hand: {}",
+                unregister_by_hand()
             )),
         },
+        Item::Linger { user } => {
+            let disabled = Command::new("loginctl")
+                .args(["disable-linger", user])
+                .output()
+                .is_ok_and(|output| output.status.success());
+            if disabled {
+                Ok(())
+            } else {
+                Err(format!(
+                    "lingering of {user} could not be turned off; run: sudo loginctl \
+                     disable-linger {user}"
+                ))
+            }
+        }
     }
 }
 
@@ -557,9 +873,30 @@ fn remove_uninstall_entry(_key: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Removes the COM registration of the notification activator `clsid`.
+/// 移除通知激活器 `clsid` 的 COM 注册。
+#[cfg(windows)]
+fn remove_toast_activator(clsid: &str) -> Result<(), String> {
+    crate::windows::delete_toast_activator(clsid)
+}
+
+/// Notification activators only exist on Windows.
+/// 只有 Windows 有通知激活器。
+#[cfg(not(windows))]
+fn remove_toast_activator(_clsid: &str) -> Result<(), String> {
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn platform(name: &str) -> Platform {
+        Platform::ALL
+            .into_iter()
+            .find(|platform| platform.as_str() == name)
+            .expect("platform")
+    }
 
     #[test]
     fn foreign_files_are_neither_overwritten_nor_removed() {
@@ -607,6 +944,44 @@ mod tests {
                 Item::Directory { path: nested },
                 Item::Directory { path: existing },
             ]
+        );
+    }
+
+    #[test]
+    fn locations_follow_the_choices_on_every_platform() {
+        let root = PathBuf::from("/opt/vulcan");
+        let plan = |name: &str, gui: bool| Plan {
+            platform: platform(name),
+            root: &root,
+            version: "1.0.0",
+            gui,
+            menu: true,
+            desktop_shortcut: false,
+            path: true,
+            service: true,
+            linger: false,
+            port_range: None,
+        };
+        let windows = plan("windows-x64", true).locations().expect("windows");
+        assert!(windows.contains(&Location::UserPath(root.join(SETUP_DIR))));
+        assert!(
+            windows
+                .iter()
+                .any(|location| matches!(location, Location::MenuEntry(_)))
+        );
+        assert!(windows.contains(&Location::UserService));
+        let terminal = plan("linux-x64", false).locations().expect("linux");
+        assert!(
+            !terminal
+                .iter()
+                .any(|location| matches!(location, Location::MenuEntry(_)))
+        );
+        assert!(terminal.contains(&Location::UserService));
+        let macos = plan("macos-arm64", true).locations().expect("macos");
+        assert!(
+            macos
+                .iter()
+                .any(|location| matches!(location, Location::AppBundle(_)))
         );
     }
 }

@@ -48,6 +48,23 @@ pub fn applications_dir() -> Result<PathBuf, String> {
         .join("applications"))
 }
 
+/// The user's Start menu programs folder on Windows, `{userprograms}` of the Inno installer.
+/// Windows 上用户的开始菜单程序文件夹，即 Inno 安装程序的 `{userprograms}`。
+pub fn start_menu_dir() -> Result<PathBuf, String> {
+    Ok(dirs::data_dir()
+        .ok_or_else(|| String::from("cannot find the user's roaming data directory"))?
+        .join("Microsoft")
+        .join("Windows")
+        .join("Start Menu")
+        .join("Programs"))
+}
+
+/// The user's desktop folder, when the system names one.
+/// 用户的桌面文件夹（系统给出时）。
+pub fn desktop_dir() -> Option<PathBuf> {
+    dirs::desktop_dir()
+}
+
 /// Directory of the user's applications on macOS.
 /// macOS 上用户应用程序所在的目录。
 pub fn user_applications_dir() -> Result<PathBuf, String> {

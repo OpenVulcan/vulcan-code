@@ -13,7 +13,7 @@ use crate::install::resolve_root;
 use crate::integrate::{self, CLI_DIR};
 use crate::paths;
 use crate::prompt::confirm;
-use crate::root::{self, Current, Description, LEGACY_MARKER, Layout, Ownership};
+use crate::root::{self, Current, Description, LEGACY_MARKER, Ownership, Version};
 use crate::state::{Item, SETUP_DIR};
 
 /// Launchers `scripts/install.sh` wrote into `~/.local/bin`.
@@ -38,9 +38,9 @@ pub fn uninstall(options: &UninstallOptions) -> Result<(), String> {
     };
     let root = InstallRoot::new(&root_path);
     let version_dir = current_version_dir(&root_path)?;
-    let layout = version_dir
+    let version = version_dir
         .as_deref()
-        .and_then(|dir| Layout::read(dir).ok());
+        .and_then(|dir| Version::read(dir).ok());
     let user_data = purge_target(version_dir.as_deref(), options.purge)?;
     println!("Remove Vulcan Code from {}", root_path.display());
     for item in &items {
@@ -61,14 +61,14 @@ pub fn uninstall(options: &UninstallOptions) -> Result<(), String> {
     // The service runs from the version directory, so it goes first.
     // 服务从版本目录运行，因此最先移除。
     if items.contains(&Item::UserService)
-        && let Err(error) = integrate::remove(&Item::UserService, &root_path, layout.as_ref())
+        && let Err(error) = integrate::remove(&Item::UserService, &root_path, version.as_ref())
     {
         problems.push(error);
     }
     remove_programs(&root_path)?;
     for item in items.iter().rev() {
         if *item != Item::UserService
-            && let Err(error) = integrate::remove(item, &root_path, layout.as_ref())
+            && let Err(error) = integrate::remove(item, &root_path, version.as_ref())
         {
             problems.push(error);
         }
@@ -210,7 +210,12 @@ fn describe(item: &Item) -> Option<String> {
         Item::Directory { .. } => None,
         Item::UserPath { dir } => Some(format!("{} from the user PATH", dir.display())),
         Item::UninstallEntry { .. } => Some(String::from("the entry in Settings > Apps")),
-        Item::UserService => Some(String::from("the systemd user unit vulcan-code.service")),
+        Item::Shortcut { path } => Some(format!("the shortcut {}", path.display())),
+        Item::ToastActivator { .. } => None,
+        Item::UserService => Some(String::from(
+            "the user service started with your login session",
+        )),
+        Item::Linger { user } => Some(format!("lingering of {user}")),
     }
 }
 

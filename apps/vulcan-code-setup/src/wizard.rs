@@ -14,10 +14,10 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use vulcan_i18n::{SETUP, Translator, format_template};
 use vulcan_install_core::names::{Channel, Platform};
 
+use crate::args::check_port_range;
 use crate::install::resolve_root;
-use crate::integrate::{Location, Plan};
+use crate::integrate::{self, Location, Plan};
 use crate::root;
-use crate::state::Mode;
 
 /// Accent colour, the primary colour of `vulcan-code-tui`'s themes; only foreground colours are
 /// set, so the terminal's own background shows through in light and dark terminals alike.
@@ -28,17 +28,17 @@ const ACCENT: Color = Color::Rgb(0xf8, 0x73, 0x31);
 /// 次要文字颜色。
 const MUTED: Color = Color::Rgb(0x9a, 0xa0, 0xa8);
 
-/// Error text colour.
-/// 错误文字颜色。
+/// Error and warning text colour.
+/// 错误与警告文字颜色。
 const DANGER: Color = Color::Rgb(0xf8, 0x51, 0x49);
 
 /// The choices being edited.
 /// 正在编辑的选择。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Draft {
-    /// Installation mode.
-    /// 安装模式。
-    pub mode: Mode,
+    /// Whether the desktop app is wanted.
+    /// 是否需要桌面应用。
+    pub gui: bool,
     /// Whether the browser component is wanted.
     /// 是否需要浏览器组件。
     pub browser: bool,
@@ -47,74 +47,109 @@ pub struct Draft {
     pub root: String,
     /// Whether a menu entry or application bundle is wanted.
     /// 是否需要菜单项或应用程序包。
-    pub shortcut: bool,
+    pub menu: bool,
+    /// Whether a desktop shortcut is wanted.
+    /// 是否需要桌面快捷方式。
+    pub desktop_shortcut: bool,
     /// Whether commands are wanted on PATH.
     /// 是否需要把命令加入 PATH。
     pub path: bool,
+    /// Whether the Core service starts with the login session.
+    /// Core 服务是否随登录会话启动。
+    pub service: bool,
+    /// Whether the service keeps running after logout (Linux).
+    /// 服务是否在注销后继续运行（Linux）。
+    pub linger: bool,
     /// Release channel.
     /// 发布通道。
     pub channel: Channel,
-}
-
-/// The modes `platform` offers, in display order.
-/// `platform` 提供的模式，按显示顺序排列。
-pub fn modes(platform: Platform) -> Vec<Mode> {
-    if platform.is_windows() {
-        vec![Mode::Terminal]
-    } else if platform.is_macos() {
-        vec![Mode::Desktop, Mode::Terminal]
-    } else {
-        vec![Mode::Desktop, Mode::Terminal, Mode::Service]
-    }
-}
-
-/// The mode preselected when none was recorded: desktop where a graphical session runs.
-/// 未记录模式时预选的模式：有图形会话时为桌面模式。
-pub fn default_mode(platform: Platform) -> Mode {
-    let graphical = platform.is_macos()
-        || std::env::var_os("DISPLAY").is_some()
-        || std::env::var_os("WAYLAND_DISPLAY").is_some();
-    if graphical && modes(platform).contains(&Mode::Desktop) {
-        Mode::Desktop
-    } else {
-        Mode::Terminal
-    }
+    /// Port range as typed; empty keeps the current setting.
+    /// 输入的端口范围；为空时保持当前设置。
+    pub port_range: String,
 }
 
 /// One screen of the wizard.
 /// 向导的一屏。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Step {
-    /// Installation mode.
-    /// 安装模式。
-    Mode,
-    /// Optional components.
-    /// 可选组件。
+    /// Components.
+    /// 组件。
     Components,
     /// Installation directory.
     /// 安装目录。
     Location,
-    /// Shortcut and PATH.
-    /// 快捷方式与 PATH。
+    /// Shortcuts, PATH and the service.
+    /// 快捷方式、PATH 与服务。
     Integration,
     /// Release channel.
     /// 发布通道。
     Channel,
+    /// Port range.
+    /// 端口范围。
+    Advanced,
     /// Everything chosen, and every location written.
     /// 全部选择以及将写入的每个位置。
     Summary,
 }
 
-/// One toggle of the integration screen.
-/// 集成屏中的一个开关。
+/// The screens, in order.
+/// 各屏，按顺序排列。
+const STEPS: [Step; 6] = [
+    Step::Components,
+    Step::Location,
+    Step::Integration,
+    Step::Channel,
+    Step::Advanced,
+    Step::Summary,
+];
+
+/// One toggle of the components and integration screens.
+/// 组件屏与集成屏中的一个开关。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Toggle {
+    /// The desktop app.
+    /// 桌面应用。
+    Gui,
+    /// The built-in browser.
+    /// 内置浏览器。
+    Browser,
     /// The menu entry or application bundle.
     /// 菜单项或应用程序包。
-    Shortcut,
+    Menu,
+    /// The desktop shortcut.
+    /// 桌面快捷方式。
+    DesktopShortcut,
     /// Commands on PATH.
     /// 命令加入 PATH。
     Path,
+    /// The service with the login session.
+    /// 随登录会话启动的服务。
+    Service,
+    /// Keeping the service running after logout.
+    /// 注销后继续运行服务。
+    Linger,
+}
+
+impl Toggle {
+    /// Catalog keys of the label and the detail line.
+    /// 标签与说明行的目录键。
+    fn keys(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Gui => ("setup.component.gui", "setup.components.guiDetail"),
+            Self::Browser => ("setup.components.browser", "setup.components.browserDetail"),
+            Self::Menu => ("setup.integration.menu", "setup.integration.menuDetail"),
+            Self::DesktopShortcut => (
+                "setup.integration.desktopShortcut",
+                "setup.integration.desktopShortcutDetail",
+            ),
+            Self::Path => ("setup.integration.path", "setup.integration.pathDetail"),
+            Self::Service => (
+                "setup.integration.service",
+                "setup.integration.serviceDetail",
+            ),
+            Self::Linger => ("setup.integration.linger", "setup.integration.lingerDetail"),
+        }
+    }
 }
 
 /// What a key press leads to.
@@ -138,17 +173,20 @@ struct Wizard {
     /// The platform.
     /// 平台。
     platform: Platform,
+    /// Whether the setup program runs as root.
+    /// 安装器是否以 root 运行。
+    root_user: bool,
     /// The choices.
     /// 选择。
     draft: Draft,
-    /// Index into [`Wizard::steps`].
-    /// [`Wizard::steps`] 中的下标。
+    /// Index into [`STEPS`].
+    /// [`STEPS`] 中的下标。
     step: usize,
     /// Highlighted row of a list screen.
     /// 列表屏中高亮的行。
     row: usize,
-    /// Cursor of the directory input, in characters.
-    /// 目录输入的光标位置，以字符计。
+    /// Cursor of the text input, in characters.
+    /// 文本输入的光标位置，以字符计。
     cursor: usize,
     /// Why the last attempt to continue was refused.
     /// 上一次继续被拒绝的原因。
@@ -158,83 +196,97 @@ struct Wizard {
 impl Wizard {
     /// Starts at the first screen.
     /// 从第一屏开始。
-    fn new(platform: Platform, draft: Draft) -> Self {
-        let cursor = draft.root.chars().count();
+    fn new(platform: Platform, root_user: bool, draft: Draft) -> Self {
         let mut wizard = Self {
             platform,
+            root_user,
             draft,
             step: 0,
             row: 0,
-            cursor,
+            cursor: 0,
             error: None,
         };
         wizard.enter();
         wizard
     }
 
-    /// The screens for the current choices; the mode screen is left out when there is no choice.
-    /// 当前选择下的各屏；没有可选模式时省略模式屏。
-    fn steps(&self) -> Vec<Step> {
-        let mut steps = Vec::new();
-        if modes(self.platform).len() > 1 {
-            steps.push(Step::Mode);
-        }
-        steps.extend([
-            Step::Components,
-            Step::Location,
-            Step::Integration,
-            Step::Channel,
-            Step::Summary,
-        ]);
-        steps
-    }
-
     /// The current screen.
     /// 当前屏。
     fn current(&self) -> Step {
-        let steps = self.steps();
-        steps[self.step.min(steps.len() - 1)]
+        STEPS[self.step.min(STEPS.len() - 1)]
     }
 
-    /// The toggles of the integration screen.
-    /// 集成屏的开关。
+    /// The toggles of the current screen.
+    /// 当前屏的开关。
     fn toggles(&self) -> Vec<Toggle> {
-        let mut toggles = Vec::new();
-        if self.draft.mode == Mode::Desktop && !self.platform.is_windows() {
-            toggles.push(Toggle::Shortcut);
+        match self.current() {
+            Step::Components => vec![Toggle::Gui, Toggle::Browser],
+            Step::Integration => {
+                let mut toggles = Vec::new();
+                if self.draft.gui {
+                    toggles.push(Toggle::Menu);
+                    if !self.platform.is_macos() {
+                        toggles.push(Toggle::DesktopShortcut);
+                    }
+                }
+                toggles.extend([Toggle::Path, Toggle::Service]);
+                if self.draft.service && !self.platform.is_windows() && !self.platform.is_macos() {
+                    toggles.push(Toggle::Linger);
+                }
+                toggles
+            }
+            _ => Vec::new(),
         }
-        toggles.push(Toggle::Path);
-        toggles
+    }
+
+    /// The state of `toggle` in the draft.
+    /// 草稿中 `toggle` 的状态。
+    fn state(&self, toggle: Toggle) -> bool {
+        match toggle {
+            Toggle::Gui => self.draft.gui,
+            Toggle::Browser => self.draft.browser,
+            Toggle::Menu => self.draft.menu,
+            Toggle::DesktopShortcut => self.draft.desktop_shortcut,
+            Toggle::Path => self.draft.path,
+            Toggle::Service => self.draft.service,
+            Toggle::Linger => self.draft.linger,
+        }
     }
 
     /// Number of rows of the current list screen.
     /// 当前列表屏的行数。
     fn rows(&self) -> usize {
         match self.current() {
-            Step::Mode => modes(self.platform).len(),
-            Step::Components => 1,
-            Step::Integration => self.toggles().len(),
+            Step::Components | Step::Integration => self.toggles().len(),
             Step::Channel => 2,
-            Step::Location | Step::Summary => 0,
+            Step::Location | Step::Advanced | Step::Summary => 0,
         }
     }
 
-    /// Highlights the current choice when a screen is entered.
-    /// 进入某屏时高亮当前选择。
+    /// The text field of the current screen, when it has one.
+    /// 当前屏的文本字段（若有）。
+    fn field(&mut self) -> Option<&mut String> {
+        match self.current() {
+            Step::Location => Some(&mut self.draft.root),
+            Step::Advanced => Some(&mut self.draft.port_range),
+            _ => None,
+        }
+    }
+
+    /// Highlights the current choice, or puts the cursor at the end of the text, when a screen
+    /// is entered.
+    /// 进入某屏时高亮当前选择，或把光标放到文本末尾。
     fn enter(&mut self) {
         self.error = None;
         self.row = match self.current() {
-            Step::Mode => modes(self.platform)
-                .iter()
-                .position(|mode| *mode == self.draft.mode)
-                .unwrap_or(0),
             Step::Channel => usize::from(self.draft.channel == Channel::Preview),
             _ => 0,
         };
+        self.cursor = self.field().map_or(0, |field| field.chars().count());
     }
 
-    /// Moves the highlight; on a single-choice screen it also selects.
-    /// 移动高亮；在单选屏中同时选中。
+    /// Moves the highlight; on the channel screen it also selects.
+    /// 移动高亮；在通道屏中同时选中。
     fn move_row(&mut self, down: bool) {
         let rows = self.rows();
         if rows == 0 {
@@ -245,44 +297,51 @@ impl Wizard {
         } else {
             (self.row + rows - 1) % rows
         };
-        match self.current() {
-            Step::Mode => self.draft.mode = modes(self.platform)[self.row],
-            Step::Channel => {
-                self.draft.channel = if self.row == 0 {
-                    Channel::Stable
-                } else {
-                    Channel::Preview
-                };
-            }
-            _ => {}
+        if self.current() == Step::Channel {
+            self.draft.channel = if self.row == 0 {
+                Channel::Stable
+            } else {
+                Channel::Preview
+            };
         }
     }
 
-    /// Flips the highlighted toggle.
-    /// 切换高亮的开关。
+    /// Flips the highlighted toggle; turning the service off also turns lingering off.
+    /// 切换高亮的开关；关闭服务时同时关闭驻留。
     fn toggle(&mut self) {
-        match self.current() {
-            Step::Components => self.draft.browser = !self.draft.browser,
-            Step::Integration => match self.toggles().get(self.row) {
-                Some(Toggle::Shortcut) => self.draft.shortcut = !self.draft.shortcut,
-                Some(Toggle::Path) => self.draft.path = !self.draft.path,
-                None => {}
-            },
-            _ => {}
+        let Some(toggle) = self.toggles().get(self.row).copied() else {
+            return;
+        };
+        let draft = &mut self.draft;
+        match toggle {
+            Toggle::Gui => draft.gui = !draft.gui,
+            Toggle::Browser => draft.browser = !draft.browser,
+            Toggle::Menu => draft.menu = !draft.menu,
+            Toggle::DesktopShortcut => draft.desktop_shortcut = !draft.desktop_shortcut,
+            Toggle::Path => draft.path = !draft.path,
+            Toggle::Service => {
+                draft.service = !draft.service;
+                draft.linger &= draft.service;
+            }
+            Toggle::Linger => draft.linger = !draft.linger,
         }
     }
 
     /// Continues to the next screen after checking the current one.
     /// 检查当前屏后继续到下一屏。
     fn advance(&mut self) -> Flow {
-        if self.current() == Step::Location
-            && let Err(error) = check_location(self.platform, &self.draft.root)
-        {
+        let checked = match self.current() {
+            Step::Location => check_location(self.platform, &self.draft.root).map(|_| ()),
+            Step::Advanced => match self.draft.port_range.trim() {
+                "" => Ok(()),
+                range => check_port_range(range),
+            },
+            Step::Summary => return Flow::Finish,
+            _ => Ok(()),
+        };
+        if let Err(error) = checked {
             self.error = Some(error);
             return Flow::Stay;
-        }
-        if self.current() == Step::Summary {
-            return Flow::Finish;
         }
         self.step += 1;
         self.enter();
@@ -306,7 +365,7 @@ impl Wizard {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             return Flow::Cancel;
         }
-        if self.current() == Step::Location {
+        if matches!(self.current(), Step::Location | Step::Advanced) {
             return self.edit(key);
         }
         match key.code {
@@ -321,31 +380,39 @@ impl Wizard {
         Flow::Stay
     }
 
-    /// Edits the directory input.
-    /// 编辑目录输入。
+    /// Edits the text field of the current screen.
+    /// 编辑当前屏的文本字段。
     fn edit(&mut self, key: KeyEvent) -> Flow {
-        let mut chars: Vec<char> = self.draft.root.chars().collect();
         match key.code {
             KeyCode::Enter => return self.advance(),
             KeyCode::Esc => return self.back(),
-            KeyCode::Left => self.cursor = self.cursor.saturating_sub(1),
-            KeyCode::Right => self.cursor = (self.cursor + 1).min(chars.len()),
-            KeyCode::Home => self.cursor = 0,
-            KeyCode::End => self.cursor = chars.len(),
-            KeyCode::Backspace if self.cursor > 0 => {
-                self.cursor -= 1;
-                chars.remove(self.cursor);
+            _ => {}
+        }
+        let mut cursor = self.cursor;
+        let Some(field) = self.field() else {
+            return Flow::Stay;
+        };
+        let mut chars: Vec<char> = field.chars().collect();
+        match key.code {
+            KeyCode::Left => cursor = cursor.saturating_sub(1),
+            KeyCode::Right => cursor = (cursor + 1).min(chars.len()),
+            KeyCode::Home => cursor = 0,
+            KeyCode::End => cursor = chars.len(),
+            KeyCode::Backspace if cursor > 0 => {
+                cursor -= 1;
+                chars.remove(cursor);
             }
-            KeyCode::Delete if self.cursor < chars.len() => {
-                chars.remove(self.cursor);
+            KeyCode::Delete if cursor < chars.len() => {
+                chars.remove(cursor);
             }
             KeyCode::Char(character) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                chars.insert(self.cursor, character);
-                self.cursor += 1;
+                chars.insert(cursor, character);
+                cursor += 1;
             }
             _ => return Flow::Stay,
         }
-        self.draft.root = chars.into_iter().collect();
+        *field = chars.into_iter().collect();
+        self.cursor = cursor;
         self.error = None;
         Flow::Stay
     }
@@ -368,7 +435,7 @@ fn check_location(platform: Platform, text: &str) -> Result<PathBuf, String> {
 pub fn run(platform: Platform, draft: Draft) -> Result<Option<Draft>, String> {
     let mut translator = Translator::new(&[&SETUP]);
     translator.set_locale(vulcan_i18n::system_locale());
-    let mut wizard = Wizard::new(platform, draft);
+    let mut wizard = Wizard::new(platform, integrate::running_as_root(), draft);
     let mut terminal = ratatui::try_init()
         .map_err(|error| format!("cannot start the interactive installer: {error}"))?;
     let result = loop {
@@ -417,21 +484,20 @@ fn render(frame: &mut Frame<'_>, wizard: &Wizard, translator: &Translator) {
     ])
     .areas(inner.inner(Margin::new(2, 1)));
 
-    let steps = wizard.steps();
     let step = wizard.current();
     let title = match step {
-        Step::Mode => "setup.mode.title",
         Step::Components => "setup.components.title",
         Step::Location => "setup.location.title",
         Step::Integration => "setup.integration.title",
         Step::Channel => "setup.channel.title",
+        Step::Advanced => "setup.advanced.title",
         Step::Summary => "setup.summary.title",
     };
     let counter = format_template(
         t("setup.step"),
         &[
             ("current", &(wizard.step + 1).to_string()),
-            ("total", &steps.len().to_string()),
+            ("total", &STEPS.len().to_string()),
         ],
     );
     frame.render_widget(
@@ -443,42 +509,10 @@ fn render(frame: &mut Frame<'_>, wizard: &Wizard, translator: &Translator) {
     );
 
     let mut lines = match step {
-        Step::Mode => {
-            let options = modes(wizard.platform)
-                .into_iter()
-                .map(|mode| match mode {
-                    Mode::Desktop => ("setup.mode.desktop", "setup.mode.desktopDetail"),
-                    Mode::Terminal => ("setup.mode.terminal", "setup.mode.terminalDetail"),
-                    Mode::Service => ("setup.mode.service", "setup.mode.serviceDetail"),
-                })
-                .collect::<Vec<_>>();
-            choice_lines(translator, &options, wizard.row, None)
-        }
-        Step::Components => choice_lines(
-            translator,
-            &[("setup.components.browser", "setup.components.browserDetail")],
-            wizard.row,
-            Some(&[wizard.draft.browser]),
-        ),
-        Step::Integration => {
+        Step::Components | Step::Integration => {
             let toggles = wizard.toggles();
-            let options: Vec<_> = toggles
-                .iter()
-                .map(|toggle| match toggle {
-                    Toggle::Shortcut => (
-                        "setup.integration.shortcut",
-                        "setup.integration.shortcutDetail",
-                    ),
-                    Toggle::Path => ("setup.integration.path", "setup.integration.pathDetail"),
-                })
-                .collect();
-            let states: Vec<bool> = toggles
-                .iter()
-                .map(|toggle| match toggle {
-                    Toggle::Shortcut => wizard.draft.shortcut,
-                    Toggle::Path => wizard.draft.path,
-                })
-                .collect();
+            let options: Vec<_> = toggles.iter().map(|toggle| toggle.keys()).collect();
+            let states: Vec<bool> = toggles.iter().map(|toggle| wizard.state(*toggle)).collect();
             choice_lines(translator, &options, wizard.row, Some(&states))
         }
         Step::Channel => choice_lines(
@@ -490,7 +524,23 @@ fn render(frame: &mut Frame<'_>, wizard: &Wizard, translator: &Translator) {
             wizard.row,
             None,
         ),
-        Step::Location => location_lines(translator, wizard),
+        Step::Location => input_lines(
+            t("setup.location.detail"),
+            &wizard.draft.root,
+            wizard.cursor,
+        ),
+        Step::Advanced => {
+            let mut lines = vec![Line::styled(
+                t("setup.advanced.ports"),
+                Style::default().add_modifier(Modifier::BOLD),
+            )];
+            lines.extend(input_lines(
+                t("setup.advanced.portsDetail"),
+                &wizard.draft.port_range,
+                wizard.cursor,
+            ));
+            lines
+        }
         Step::Summary => summary_lines(translator, wizard),
     };
     if let Some(error) = &wizard.error {
@@ -500,9 +550,10 @@ fn render(frame: &mut Frame<'_>, wizard: &Wizard, translator: &Translator) {
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
 
     let hint = match step {
-        Step::Mode | Step::Channel => "setup.hint.choose",
+        Step::Channel => "setup.hint.choose",
         Step::Components | Step::Integration => "setup.hint.toggle",
         Step::Location => "setup.hint.input",
+        Step::Advanced => "setup.hint.ports",
         Step::Summary => "setup.hint.summary",
     };
     frame.render_widget(
@@ -548,20 +599,17 @@ fn choice_lines<'a>(
     lines
 }
 
-/// Lines of the directory screen, with the cursor shown as a reversed cell.
-/// 目录屏的各行，光标以反色单元显示。
-fn location_lines<'a>(translator: &'a Translator, wizard: &Wizard) -> Vec<Line<'a>> {
-    let chars: Vec<char> = wizard.draft.root.chars().collect();
-    let before: String = chars[..wizard.cursor.min(chars.len())].iter().collect();
+/// Lines of a text input, with the cursor shown as a reversed cell.
+/// 文本输入的各行，光标以反色单元显示。
+fn input_lines<'a>(detail: &'a str, value: &str, cursor: usize) -> Vec<Line<'a>> {
+    let chars: Vec<char> = value.chars().collect();
+    let before: String = chars[..cursor.min(chars.len())].iter().collect();
     let at: String = chars
-        .get(wizard.cursor)
+        .get(cursor)
         .map_or_else(|| String::from(" "), |character| character.to_string());
-    let after: String = chars.iter().skip(wizard.cursor + 1).collect();
+    let after: String = chars.iter().skip(cursor + 1).collect();
     vec![
-        Line::styled(
-            text(translator, "setup.location.detail"),
-            Style::default().fg(MUTED),
-        ),
+        Line::styled(detail, Style::default().fg(MUTED)),
         Line::default(),
         Line::from(vec![
             Span::styled("› ", Style::default().fg(ACCENT)),
@@ -578,28 +626,27 @@ fn summary_lines<'a>(translator: &'a Translator, wizard: &Wizard) -> Vec<Line<'a
     let t = |key| text(translator, key);
     let draft = &wizard.draft;
     let mut components = vec![t("setup.component.core"), t("setup.component.tui")];
-    if draft.mode == Mode::Desktop {
+    if draft.gui {
         components.push(t("setup.component.gui"));
     }
     if draft.browser {
         components.push(t("setup.components.browser"));
     }
-    let mode = match draft.mode {
-        Mode::Desktop => t("setup.mode.desktop"),
-        Mode::Terminal => t("setup.mode.terminal"),
-        Mode::Service => t("setup.mode.service"),
-    };
     let channel = match draft.channel {
         Channel::Stable => t("setup.channel.stable"),
         Channel::Preview => t("setup.channel.preview"),
     };
+    let ports = match draft.port_range.trim() {
+        "" => t("setup.summary.portsKeep").to_owned(),
+        range => range.to_owned(),
+    };
     let root = check_location(wizard.platform, &draft.root)
         .unwrap_or_else(|_| PathBuf::from(draft.root.trim()));
     let labels = [
-        "setup.summary.mode",
         "setup.summary.components",
         "setup.summary.directory",
         "setup.summary.channel",
+        "setup.summary.ports",
     ];
     let label_width = labels
         .iter()
@@ -617,10 +664,10 @@ fn summary_lines<'a>(translator: &'a Translator, wizard: &Wizard) -> Vec<Line<'a
         ])
     };
     let mut lines = vec![
-        field(t("setup.summary.mode"), mode.to_owned()),
         field(t("setup.summary.components"), components.join(", ")),
         field(t("setup.summary.directory"), root.display().to_string()),
         field(t("setup.summary.channel"), channel.to_owned()),
+        field(t("setup.summary.ports"), ports),
         Line::default(),
         Line::styled(t("setup.summary.writes"), Style::default().fg(MUTED)),
     ];
@@ -629,22 +676,35 @@ fn summary_lines<'a>(translator: &'a Translator, wizard: &Wizard) -> Vec<Line<'a
         platform: wizard.platform,
         root: &root,
         version: &version,
-        mode: draft.mode,
-        shortcut: draft.shortcut,
+        gui: draft.gui,
+        menu: draft.menu,
+        desktop_shortcut: draft.desktop_shortcut,
         path: draft.path,
+        service: draft.service,
+        linger: draft.linger,
+        port_range: None,
     };
     let locations = plan.locations().unwrap_or_default();
     if locations.is_empty() {
         lines.push(Line::raw(format!("  {}", t("setup.summary.writesNone"))));
     }
+    let service = if wizard.platform.is_windows() {
+        "setup.writes.serviceLoginRun"
+    } else if wizard.platform.is_macos() {
+        "setup.writes.serviceLaunchAgent"
+    } else {
+        "setup.writes.userService"
+    };
     for location in locations {
         let (key, path) = match &location {
             Location::Commands(path) => ("setup.writes.commands", Some(path)),
             Location::MenuEntry(path) => ("setup.writes.menuEntry", Some(path)),
+            Location::DesktopShortcut(path) => ("setup.writes.desktopShortcut", Some(path)),
             Location::AppBundle(path) => ("setup.writes.appBundle", Some(path)),
             Location::UserPath(path) => ("setup.writes.userPath", Some(path)),
             Location::UninstallEntry => ("setup.writes.uninstallEntry", None),
-            Location::UserService => ("setup.writes.userService", None),
+            Location::UserService => (service, None),
+            Location::Linger => ("setup.writes.linger", None),
         };
         let path = path
             .map(|path| path.display().to_string())
@@ -653,6 +713,13 @@ fn summary_lines<'a>(translator: &'a Translator, wizard: &Wizard) -> Vec<Line<'a
             "  {}",
             format_template(t(key), &[("path", &path)])
         )));
+    }
+    if wizard.root_user {
+        lines.push(Line::default());
+        lines.push(Line::styled(
+            t("setup.summary.root"),
+            Style::default().fg(DANGER),
+        ));
     }
     lines.push(Line::default());
     lines.push(Line::styled(
@@ -688,28 +755,60 @@ mod tests {
 
     fn draft(root: &str) -> Draft {
         Draft {
-            mode: Mode::Desktop,
+            gui: true,
             browser: false,
             root: root.to_owned(),
-            shortcut: true,
+            menu: true,
+            desktop_shortcut: false,
             path: true,
+            service: false,
+            linger: false,
             channel: Channel::Stable,
+            port_range: String::new(),
+        }
+    }
+
+    /// Types `text` into the current text field.
+    /// 在当前文本字段中输入 `text`。
+    fn type_text(wizard: &mut Wizard, text: &str) {
+        for character in text.chars() {
+            wizard.handle(key(KeyCode::Char(character)));
         }
     }
 
     #[test]
-    fn moving_on_the_mode_screen_selects_and_wraps() {
-        let mut wizard = Wizard::new(platform("linux-x64"), draft("/opt/vulcan"));
-        assert_eq!(wizard.current(), Step::Mode);
-        wizard.handle(key(KeyCode::Down));
-        assert_eq!(wizard.draft.mode, Mode::Terminal);
-        wizard.handle(key(KeyCode::Down));
-        assert_eq!(wizard.draft.mode, Mode::Service);
-        wizard.handle(key(KeyCode::Down));
-        assert_eq!(wizard.draft.mode, Mode::Desktop);
-        assert_eq!(wizard.toggles(), [Toggle::Shortcut, Toggle::Path]);
-        let windows = Wizard::new(platform("windows-x64"), draft("C:\\Vulcan"));
-        assert_eq!(windows.current(), Step::Components);
+    fn integration_toggles_follow_the_desktop_app_and_the_service() {
+        let mut linux = Wizard::new(platform("linux-x64"), false, draft("/opt/vulcan"));
+        linux.step = 2;
+        assert_eq!(
+            linux.toggles(),
+            [
+                Toggle::Menu,
+                Toggle::DesktopShortcut,
+                Toggle::Path,
+                Toggle::Service
+            ]
+        );
+        linux.row = 3;
+        linux.toggle();
+        assert_eq!(linux.toggles().last(), Some(&Toggle::Linger));
+        linux.row = 4;
+        linux.toggle();
+        assert!(linux.draft.linger);
+        // Turning the service off also turns lingering off.
+        // 关闭服务时同时关闭驻留。
+        linux.row = 3;
+        linux.toggle();
+        assert!(!linux.draft.service && !linux.draft.linger);
+        let mut macos = Wizard::new(platform("macos-arm64"), false, draft("/Users/a/Vulcan"));
+        macos.step = 2;
+        macos.draft.service = true;
+        assert_eq!(
+            macos.toggles(),
+            [Toggle::Menu, Toggle::Path, Toggle::Service]
+        );
+        macos.draft.gui = false;
+        assert_eq!(macos.toggles(), [Toggle::Path, Toggle::Service]);
     }
 
     #[test]
@@ -719,13 +818,11 @@ mod tests {
         let host = Platform::current().expect("supported host");
         let temp = tempfile::tempdir().expect("temp dir");
         let root = temp.path().join("vulcan").display().to_string();
-        let mut start = draft(&root);
-        start.mode = Mode::Terminal;
-        let mut wizard = Wizard::new(host, start);
-        if wizard.current() == Step::Mode {
-            assert_eq!(wizard.handle(key(KeyCode::Enter)), Flow::Stay);
-        }
+        let mut wizard = Wizard::new(host, false, draft(&root));
         assert_eq!(wizard.current(), Step::Components);
+        wizard.handle(key(KeyCode::Char(' ')));
+        assert!(!wizard.draft.gui);
+        wizard.handle(key(KeyCode::Down));
         wizard.handle(key(KeyCode::Char(' ')));
         assert!(wizard.draft.browser);
         wizard.handle(key(KeyCode::Enter));
@@ -737,15 +834,22 @@ mod tests {
         wizard.handle(key(KeyCode::Backspace));
         assert_eq!(wizard.draft.root, root);
         wizard.handle(key(KeyCode::Enter));
-        // Terminal mode has no shortcut, so the only toggle is PATH.
-        // 终端模式没有快捷方式，因此唯一的开关是 PATH。
-        assert_eq!(wizard.toggles(), [Toggle::Path]);
+        // Without the desktop app there is no shortcut, so the first toggle is PATH.
+        // 没有桌面应用就没有快捷方式，因此第一个开关是 PATH。
+        assert_eq!(wizard.toggles().first(), Some(&Toggle::Path));
         wizard.handle(key(KeyCode::Char(' ')));
         assert!(!wizard.draft.path);
         wizard.handle(key(KeyCode::Enter));
         wizard.handle(key(KeyCode::Down));
         assert_eq!(wizard.draft.channel, Channel::Preview);
         wizard.handle(key(KeyCode::Enter));
+        assert_eq!(wizard.current(), Step::Advanced);
+        type_text(&mut wizard, "18000-");
+        assert_eq!(wizard.handle(key(KeyCode::Enter)), Flow::Stay);
+        assert!(wizard.error.is_some());
+        type_text(&mut wizard, "18029");
+        wizard.handle(key(KeyCode::Enter));
+        assert_eq!(wizard.draft.port_range, "18000-18029");
         assert_eq!(wizard.current(), Step::Summary);
         assert_eq!(wizard.handle(key(KeyCode::Enter)), Flow::Finish);
     }
@@ -756,6 +860,7 @@ mod tests {
         std::fs::write(temp.path().join("notes.txt"), "mine").expect("foreign file");
         let mut wizard = Wizard::new(
             platform("windows-x64"),
+            false,
             draft(&temp.path().display().to_string()),
         );
         assert_eq!(wizard.current(), Step::Components);
@@ -779,12 +884,12 @@ mod tests {
                 let mut translator = Translator::new(&[&SETUP]);
                 assert!(translator.set_locale(locale.code));
                 let mut start = draft(&root);
-                if name.starts_with("windows") {
-                    start.mode = Mode::Terminal;
-                }
-                let mut wizard = Wizard::new(platform(name), start);
-                let mut terminal = Terminal::new(TestBackend::new(60, 30)).expect("terminal");
-                for _ in 0..wizard.steps().len() {
+                start.service = true;
+                start.linger = !name.starts_with("windows") && !name.starts_with("macos");
+                start.desktop_shortcut = true;
+                let mut wizard = Wizard::new(platform(name), true, start);
+                let mut terminal = Terminal::new(TestBackend::new(60, 40)).expect("terminal");
+                for _ in 0..STEPS.len() {
                     terminal
                         .draw(|frame| render(frame, &wizard, &translator))
                         .expect("draw");

@@ -194,13 +194,14 @@ pub fn remove_user_path(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Writes the per-user uninstall entry `key`.
-/// 写入每用户卸载项 `key`。
+/// Writes the per-user uninstall entry `key`; `icon` is the program whose icon Settings shows.
+/// 写入每用户卸载项 `key`；`icon` 是“设置”中显示其图标的程序。
 pub fn write_uninstall_entry(
     key: &str,
     display_version: &str,
     install_location: &Path,
     uninstall: &str,
+    icon: Option<&Path>,
 ) -> Result<(), String> {
     let entry = Key::open(&format!("{UNINSTALL_KEY}\\{key}"))?;
     entry.set_string("DisplayName", "Vulcan Code", REG_SZ)?;
@@ -211,22 +212,128 @@ pub fn write_uninstall_entry(
         &install_location.display().to_string(),
         REG_SZ,
     )?;
+    if let Some(icon) = icon {
+        entry.set_string("DisplayIcon", &icon.display().to_string(), REG_SZ)?;
+    }
     entry.set_string("UninstallString", uninstall, REG_SZ)
+}
+
+/// Deletes `HKCU\<path>` with its subkeys; a missing key is not an error.
+/// 删除 `HKCU\<path>` 及其子键；键不存在不算错误。
+fn delete_tree(path: &str) -> Result<(), String> {
+    let name = wide(path);
+    // SAFETY: the subkey name is a valid NUL-terminated string.
+    // SAFETY：子键名为有效的以 NUL 结尾的字符串。
+    let status = unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, name.as_ptr()) };
+    if status == ERROR_SUCCESS || status == ERROR_FILE_NOT_FOUND {
+        Ok(())
+    } else {
+        Err(format!("cannot delete HKCU\\{path} (error {status})"))
+    }
 }
 
 /// Deletes the per-user uninstall entry `key`; a missing one is not an error.
 /// 删除每用户卸载项 `key`；不存在不算错误。
 pub fn delete_uninstall_entry(key: &str) -> Result<(), String> {
-    let path = wide(format!("{UNINSTALL_KEY}\\{key}"));
-    // SAFETY: the subkey name is a valid NUL-terminated string.
-    // SAFETY：子键名为有效的以 NUL 结尾的字符串。
-    let status = unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, path.as_ptr()) };
-    if status == ERROR_SUCCESS || status == ERROR_FILE_NOT_FOUND {
-        Ok(())
-    } else {
-        Err(format!(
-            "cannot delete the uninstall entry {key} (error {status})"
-        ))
+    delete_tree(&format!("{UNINSTALL_KEY}\\{key}"))
+}
+
+/// Deletes the COM registration of the notification activator `clsid` (in braces), which the
+/// desktop app writes at its first start; a missing one is not an error.
+/// 删除通知激活器 `clsid`（带花括号）的 COM 注册，该注册由桌面应用在首次启动时写入；不存在不算错误。
+pub fn delete_toast_activator(clsid: &str) -> Result<(), String> {
+    let valid = clsid.len() == 38
+        && clsid.starts_with('{')
+        && clsid.ends_with('}')
+        && clsid[1..37]
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() || byte == b'-');
+    if !valid {
+        return Err(format!("{clsid} is not a CLSID"));
+    }
+    delete_tree(&format!(r"Software\Classes\CLSID\{clsid}"))
+}
+
+/// Notification identity a shortcut carries.
+/// 快捷方式携带的通知身份。
+pub struct ShortcutIdentity<'a> {
+    /// Application user model ID.
+    /// 应用用户模型 ID。
+    pub app_user_model_id: &'a str,
+    /// CLSID of the notification activator, in braces.
+    /// 通知激活器的 CLSID，带花括号。
+    pub toast_activator_clsid: &'a str,
+}
+
+/// Writes the shortcut `path` that starts `target` in `working_dir`, carrying `identity` so that
+/// Windows groups the window and its notifications with it.
+/// 写入在 `working_dir` 中启动 `target` 的快捷方式 `path`，并携带 `identity`，使 Windows 将窗口及其
+/// 通知与它归为一组。
+pub fn write_shortcut(
+    path: &Path,
+    target: &Path,
+    working_dir: &Path,
+    identity: Option<ShortcutIdentity<'_>>,
+) -> Result<(), String> {
+    use windows::Win32::Storage::EnhancedStorage::{
+        PKEY_AppUserModel_ID, PKEY_AppUserModel_ToastActivatorCLSID,
+    };
+    use windows::Win32::System::Com::StructuredStorage::{
+        InitPropVariantFromCLSID, PROPVARIANT, PropVariantClear,
+    };
+    use windows::Win32::System::Com::{
+        CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+        CoUninitialize, IPersistFile,
+    };
+    use windows::Win32::System::Variant::VT_LPWSTR;
+    use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
+    use windows::Win32::UI::Shell::{IShellLinkW, SHStrDupW, ShellLink};
+    use windows::core::{GUID, Interface, PCWSTR};
+
+    let target_name = wide(target);
+    let working_name = wide(working_dir);
+    let path_name = wide(path);
+    // SAFETY: every string passed to COM is a NUL-terminated buffer that outlives the call; both
+    // property values are allocated by COM (`SHStrDupW`, `InitPropVariantFromCLSID`), as the
+    // property store expects, and each is cleared exactly once.
+    // SAFETY：传给 COM 的每个字符串都是在调用期间有效、以 NUL 结尾的缓冲区；两个属性值都按属性存储的要求由
+    // COM 分配（`SHStrDupW`、`InitPropVariantFromCLSID`），且各自只清除一次。
+    unsafe {
+        // COM may already be initialized on this thread, in which mode does not matter here.
+        // 本线程可能已初始化 COM，此处对其模式没有要求。
+        let initialized = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
+        let result = (|| -> windows::core::Result<()> {
+            let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
+            link.SetPath(PCWSTR(target_name.as_ptr()))?;
+            link.SetWorkingDirectory(PCWSTR(working_name.as_ptr()))?;
+            if let Some(identity) = identity {
+                let store: IPropertyStore = link.cast()?;
+                let id = wide(identity.app_user_model_id);
+                let mut value = PROPVARIANT::default();
+                (*value.Anonymous.Anonymous).Anonymous.pwszVal = SHStrDupW(PCWSTR(id.as_ptr()))?;
+                (*value.Anonymous.Anonymous).vt = VT_LPWSTR;
+                let set = store.SetValue(&PKEY_AppUserModel_ID, &value);
+                let _ = PropVariantClear(&mut value);
+                set?;
+                let clsid = GUID::try_from(
+                    identity
+                        .toast_activator_clsid
+                        .trim_start_matches('{')
+                        .trim_end_matches('}'),
+                )?;
+                let mut activator = InitPropVariantFromCLSID(&clsid)?;
+                let set = store.SetValue(&PKEY_AppUserModel_ToastActivatorCLSID, &activator);
+                let _ = PropVariantClear(&mut activator);
+                set?;
+                store.Commit()?;
+            }
+            let file: IPersistFile = link.cast()?;
+            file.Save(PCWSTR(path_name.as_ptr()), true)
+        })();
+        if initialized {
+            CoUninitialize();
+        }
+        result.map_err(|error| format!("cannot write the shortcut {}: {error}", path.display()))
     }
 }
 

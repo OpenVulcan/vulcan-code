@@ -20,13 +20,13 @@ use vulcan_install_core::record::RECORD_FILE_NAME;
 use vulcan_install_core::signing::BUILT_IN_KEYS;
 use vulcan_install_core::update::{find_update, read_indexes};
 
-use crate::args::{BROWSER_COMPONENT, CommonOptions, InstallOptions};
+use crate::args::{BROWSER_COMPONENT, CommonOptions, InstallOptions, check_port_range};
 use crate::integrate::{self, Plan, Recorder, SETUP_PROGRAM};
 use crate::paths;
 use crate::prompt::{confirm, megabytes};
-use crate::root::{self, Current, Description, LEGACY_MARKER, Layout, Ownership};
+use crate::root::{self, Current, Description, LEGACY_MARKER, Ownership, Version};
 use crate::selfupdate;
-use crate::state::{Item, Mode, SETUP_DIR, STATE_SCHEMA, SetupState};
+use crate::state::{Item, SETUP_DIR, STATE_SCHEMA, SetupState};
 use crate::wizard::{self, Draft};
 
 /// User agent of every request.
@@ -39,21 +39,21 @@ pub const USER_AGENT: &str = "vulcan-code-setup";
 /// 该系统的 glibc 为 2.35。
 const MIN_GLIBC: (u32, u32) = (2, 35);
 
-/// Components every mode installs, as named in `scripts/release-components.json`.
-/// 每种模式都安装的组件，名称见 `scripts/release-components.json`。
+/// Components every installation has, as named in `scripts/release-components.json`.
+/// 每个安装都有的组件，名称见 `scripts/release-components.json`。
 const BASE_COMPONENTS: [&str; 2] = ["core", "tui"];
 
-/// The desktop component, installed in desktop mode.
-/// 桌面组件，在桌面模式下安装。
+/// The desktop app component, installed with `--gui`.
+/// 桌面应用组件，以 `--gui` 安装。
 const DESKTOP_COMPONENT: &str = "gui";
 
 /// The choices an installation is made with.
 /// 安装所依据的选择。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Choices {
-    /// Installation mode.
-    /// 安装模式。
-    pub mode: Mode,
+    /// Whether the desktop app is installed.
+    /// 是否安装桌面应用。
+    pub gui: bool,
     /// Release channel.
     /// 发布通道。
     pub channel: Channel,
@@ -63,34 +63,72 @@ pub struct Choices {
     /// Optional components.
     /// 可选组件。
     pub with: Vec<ComponentName>,
-    /// Whether a menu entry or application bundle is wanted.
-    /// 是否需要菜单项或应用程序包。
-    pub shortcut: bool,
+    /// Whether a menu entry or application bundle is wanted for the desktop app.
+    /// 是否需要桌面应用的菜单项或应用程序包。
+    pub menu: bool,
+    /// Whether a desktop shortcut is wanted for the desktop app.
+    /// 是否需要桌面应用的桌面快捷方式。
+    pub desktop_shortcut: bool,
     /// Whether commands are wanted on PATH.
     /// 是否需要把命令加入 PATH。
     pub path: bool,
+    /// Whether the Core service starts with the login session.
+    /// Core 服务是否随登录会话启动。
+    pub service: bool,
+    /// Whether the service keeps running after logout (Linux).
+    /// 服务是否在注销后继续运行（Linux）。
+    pub linger: bool,
+    /// The port range to set in this run; not recorded, the service settings hold it.
+    /// 本次要设置的端口范围；不记录，由服务设置保存。
+    pub port_range: Option<String>,
+}
+
+/// Whether a graphical session runs, which decides whether the desktop app is preselected.
+/// 是否有图形会话在运行，决定是否预选桌面应用。
+pub fn graphical(platform: Platform) -> bool {
+    platform.is_windows()
+        || platform.is_macos()
+        || std::env::var_os("DISPLAY").is_some()
+        || std::env::var_os("WAYLAND_DISPLAY").is_some()
 }
 
 impl Choices {
-    /// Combines the options given with the choices recorded at the last installation.
-    /// 将给出的选项与上次安装记录的选择合并。
+    /// Combines the options given with the choices recorded at the last installation, then the
+    /// defaults; `graphical` preselects the desktop app.
+    /// 将给出的选项与上次安装记录的选择合并，再取默认值；`graphical` 决定是否预选桌面应用。
     pub fn resolve(
         options: &InstallOptions,
         recorded: Option<&SetupState>,
         platform: Platform,
+        graphical: bool,
     ) -> Result<Self, String> {
-        let mode = options
-            .mode
-            .or(recorded.map(|state| state.mode))
-            .ok_or_else(|| String::from("choose --mode desktop, terminal or service"))?;
-        if mode == Mode::Desktop && platform.is_windows() {
+        let pick = |given: Option<bool>, recorded_value: fn(&SetupState) -> bool, default: bool| {
+            given.or(recorded.map(recorded_value)).unwrap_or(default)
+        };
+        let gui = pick(options.gui, |state| state.gui, graphical);
+        if platform.is_macos() && options.desktop_shortcut == Some(true) {
             return Err(String::from(
-                "on Windows the desktop app is installed with VulcanCode-Setup.exe; this program \
-                 installs --mode terminal",
+                "--desktop-shortcut is not available on macOS; the app is placed in Applications",
             ));
         }
-        if mode == Mode::Service && (platform.is_windows() || platform.is_macos()) {
-            return Err(String::from("--mode service is available on Linux only"));
+        let desktop_shortcut = !platform.is_macos()
+            && pick(
+                options.desktop_shortcut,
+                |state| state.desktop_shortcut,
+                false,
+            );
+        let service = pick(options.service, |state| state.service, false);
+        let linger = pick(options.linger, |state| state.linger, false);
+        if linger && (platform.is_windows() || platform.is_macos()) {
+            return Err(String::from("--linger is available on Linux only"));
+        }
+        if linger && !service {
+            return Err(String::from(
+                "--linger keeps the service running, so it needs --service",
+            ));
+        }
+        if let Some(range) = &options.port_range {
+            check_port_range(range)?;
         }
         let mut with = recorded.map(|state| state.with.clone()).unwrap_or_default();
         for component in &options.with {
@@ -99,7 +137,7 @@ impl Choices {
             }
         }
         Ok(Self {
-            mode,
+            gui,
             channel: options
                 .channel
                 .or(recorded.map(|state| state.channel))
@@ -109,8 +147,12 @@ impl Choices {
                 .or(recorded.map(|state| state.route))
                 .unwrap_or_default(),
             with,
-            shortcut: !options.no_shortcut && recorded.is_none_or(|state| state.shortcut),
-            path: !options.no_path && recorded.is_none_or(|state| state.path),
+            menu: pick(options.menu, |state| state.menu, true),
+            desktop_shortcut,
+            path: pick(options.path, |state| state.path, true),
+            service,
+            linger,
+            port_range: options.port_range.clone(),
         })
     }
 
@@ -118,7 +160,7 @@ impl Choices {
     /// 此选择安装的组件。
     pub fn components(&self) -> Result<BTreeSet<ComponentName>, String> {
         let mut names: Vec<&str> = BASE_COMPONENTS.to_vec();
-        if self.mode == Mode::Desktop {
+        if self.gui {
             names.push(DESKTOP_COMPONENT);
         }
         let mut components = BTreeSet::new();
@@ -180,27 +222,24 @@ pub fn install(options: &InstallOptions) -> Result<(), String> {
         Ownership::Owned(state) => Some(state),
         _ => None,
     };
+    let start = Choices::resolve(options, recorded, platform, graphical(platform))?;
     if !wizard::wanted(options.common.yes) {
-        let choices = Choices::resolve(options, recorded, platform)?;
-        return apply(platform, &root, &ownership, &choices, options.common.yes);
+        return apply(platform, &root, &ownership, &start, options.common.yes);
     }
     // The wizard starts from the options given, then the recorded choices, then the defaults.
     // 向导依次以给出的选项、记录的选择与默认值为起点。
     let browser = ComponentName::new(BROWSER_COMPONENT).map_err(|error| error.to_string())?;
     let draft = Draft {
-        mode: options
-            .mode
-            .or(recorded.map(|state| state.mode))
-            .unwrap_or_else(|| wizard::default_mode(platform)),
-        browser: options.with.contains(&browser)
-            || recorded.is_some_and(|state| state.with.contains(&browser)),
+        gui: start.gui,
+        browser: start.with.contains(&browser),
         root: root.display().to_string(),
-        shortcut: !options.no_shortcut && recorded.is_none_or(|state| state.shortcut),
-        path: !options.no_path && recorded.is_none_or(|state| state.path),
-        channel: options
-            .channel
-            .or(recorded.map(|state| state.channel))
-            .unwrap_or(Channel::Stable),
+        menu: start.menu,
+        desktop_shortcut: start.desktop_shortcut,
+        path: start.path,
+        service: start.service,
+        linger: start.linger,
+        channel: start.channel,
+        port_range: start.port_range.clone().unwrap_or_default(),
     };
     let Some(draft) = wizard::run(platform, draft)? else {
         return Err(String::from("cancelled"));
@@ -211,8 +250,9 @@ pub fn install(options: &InstallOptions) -> Result<(), String> {
         Ownership::Owned(state) => options.route.unwrap_or(state.route),
         _ => options.route.unwrap_or_default(),
     };
+    let port_range = Some(draft.port_range.trim().to_owned()).filter(|range| !range.is_empty());
     let choices = Choices {
-        mode: draft.mode,
+        gui: draft.gui,
         channel: draft.channel,
         route,
         with: if draft.browser {
@@ -220,8 +260,12 @@ pub fn install(options: &InstallOptions) -> Result<(), String> {
         } else {
             Vec::new()
         },
-        shortcut: draft.shortcut,
+        menu: draft.menu,
+        desktop_shortcut: draft.desktop_shortcut,
         path: draft.path,
+        service: draft.service,
+        linger: draft.linger,
+        port_range,
     };
     apply(platform, &root, &ownership, &choices, false)
 }
@@ -246,6 +290,7 @@ pub fn update(options: &CommonOptions) -> Result<(), String> {
         },
         Some(state),
         platform,
+        false,
     )?;
     apply(platform, &root, &ownership, &choices, options.yes)
 }
@@ -423,9 +468,13 @@ fn apply(
         platform,
         root: root_path,
         version: &version_text,
-        mode: choices.mode,
-        shortcut: choices.shortcut,
+        gui: choices.gui,
+        menu: choices.menu,
+        desktop_shortcut: choices.desktop_shortcut,
         path: choices.path,
+        service: choices.service,
+        linger: choices.linger,
+        port_range: choices.port_range.as_deref(),
     };
     println!();
     match &work {
@@ -445,6 +494,9 @@ fn apply(
     println!("  directory: {}", root_path.display());
     for line in plan.locations()? {
         println!("  {line}");
+    }
+    if let Some(range) = &choices.port_range {
+        println!("  service ports: {range}");
     }
     if !confirm("Continue?", yes)? {
         return Err(String::from("cancelled"));
@@ -501,22 +553,27 @@ fn apply(
         let _ = std::fs::remove_file(root_path.join(LEGACY_MARKER));
     }
 
-    let layout = Layout::read(&root.version_dir(&version))?;
+    let installed_version = Version::read(&root.version_dir(&version))?;
     let previous_items: &[Item] = match ownership {
         Ownership::Owned(state) => &state.items,
         _ => &[],
     };
     let mut recorder = Recorder::new(previous_items);
-    let integrated = integrate::integrate(&plan, &layout, switched, &mut recorder)
-        .and_then(|()| copy_self(root_path));
+    // The setup program is copied first, so the service registered below never outlives it.
+    // 先复制安装器，使下面注册的服务绝不会比安装器存在得更久。
+    let integrated = copy_self(root_path)
+        .and_then(|()| integrate::integrate(&plan, &installed_version, switched, &mut recorder));
     let mut state = SetupState {
         schema: STATE_SCHEMA,
-        mode: choices.mode,
         channel: choices.channel,
         route: choices.route,
+        gui: choices.gui,
         with: choices.with.clone(),
-        shortcut: choices.shortcut,
+        menu: choices.menu,
+        desktop_shortcut: choices.desktop_shortcut,
         path: choices.path,
+        service: choices.service,
+        linger: choices.linger,
         items: Vec::new(),
     };
     // Items of an earlier run that this run did not create are removed; when this run failed they
@@ -537,7 +594,7 @@ fn apply(
     }
     let mut problems = Vec::new();
     for item in leftovers.iter().rev() {
-        if let Err(error) = integrate::remove(item, root_path, Some(&layout)) {
+        if let Err(error) = integrate::remove(item, root_path, Some(&installed_version)) {
             problems.push(error);
             state.add(item.clone());
         }
@@ -592,7 +649,26 @@ fn apply(
     for note in recorder.notes.iter().chain(&problems) {
         println!("{note}");
     }
+    println!("{}", uninstall_hint(root_path, choices.path));
     Ok(())
+}
+
+/// How to uninstall: the command on PATH when it was put there, the full path otherwise.
+/// 如何卸载：命令已加入 PATH 时给出命令，否则给出完整路径。
+pub fn uninstall_hint(root: &Path, on_path: bool) -> String {
+    let program = root.join(SETUP_DIR).join(SETUP_PROGRAM);
+    let command = if on_path {
+        String::from("vulcan-code-setup")
+    } else {
+        format!("\"{}\"", program.display())
+    };
+    let mut hint = format!(
+        "To uninstall: {command} uninstall (add --purge to also delete your sessions and settings)"
+    );
+    if cfg!(windows) {
+        hint.push_str(", or Settings > Apps > Vulcan Code");
+    }
+    hint
 }
 
 /// Requires the assembled version to be a release build that loads here.
@@ -647,6 +723,7 @@ fn join(components: &BTreeSet<ComponentName>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::tests::plain_state;
 
     fn platform(name: &str) -> Platform {
         Platform::ALL
@@ -655,60 +732,107 @@ mod tests {
             .expect("platform")
     }
 
-    #[test]
-    fn choices_follow_the_options_then_the_recorded_state() {
-        let linux = platform("linux-x64");
-        assert!(Choices::resolve(&InstallOptions::default(), None, linux).is_err());
-        let options = InstallOptions {
-            mode: Some(Mode::Service),
-            no_shortcut: true,
-            ..InstallOptions::default()
-        };
-        let choices = Choices::resolve(&options, None, linux).expect("choices");
-        assert_eq!(choices.channel, Channel::Stable);
-        assert!(!choices.shortcut);
-        assert!(choices.path);
-        let recorded = SetupState {
-            schema: STATE_SCHEMA,
-            mode: choices.mode,
-            channel: Channel::Preview,
-            route: Route::China,
-            with: vec![ComponentName::new("browser").expect("name")],
-            shortcut: choices.shortcut,
-            path: choices.path,
-            items: Vec::new(),
-        };
-        let again =
-            Choices::resolve(&InstallOptions::default(), Some(&recorded), linux).expect("again");
-        assert_eq!(again.mode, Mode::Service);
-        assert_eq!(again.channel, Channel::Preview);
-        assert_eq!(again.route, Route::China);
-        assert!(!again.shortcut);
-        let names: Vec<String> = again
+    /// Component names of `choices`.
+    /// `choices` 的组件名。
+    fn names(choices: &Choices) -> Vec<String> {
+        choices
             .components()
             .expect("components")
             .iter()
             .map(|name| name.as_str().to_owned())
-            .collect();
-        assert_eq!(names, ["browser", "core", "tui"]);
+            .collect()
     }
 
     #[test]
-    fn modes_are_refused_where_they_do_not_exist() {
-        let mode = |mode| InstallOptions {
-            mode: Some(mode),
+    fn choices_follow_the_options_then_the_recorded_state_then_the_defaults() {
+        let linux = platform("linux-x64");
+        let headless =
+            Choices::resolve(&InstallOptions::default(), None, linux, false).expect("headless");
+        assert!(!headless.gui && headless.menu && headless.path && !headless.service);
+        assert_eq!(names(&headless), ["core", "tui"]);
+        let desktop =
+            Choices::resolve(&InstallOptions::default(), None, linux, true).expect("desktop");
+        assert_eq!(names(&desktop), ["core", "gui", "tui"]);
+        let options = InstallOptions {
+            service: Some(true),
+            menu: Some(false),
+            port_range: Some(String::from("18000-18029")),
             ..InstallOptions::default()
         };
-        assert!(Choices::resolve(&mode(Mode::Desktop), None, platform("windows-x64")).is_err());
-        assert!(Choices::resolve(&mode(Mode::Service), None, platform("macos-arm64")).is_err());
-        let desktop =
-            Choices::resolve(&mode(Mode::Desktop), None, platform("macos-arm64")).expect("desktop");
+        let choices = Choices::resolve(&options, None, linux, true).expect("choices");
+        assert_eq!(choices.channel, Channel::Stable);
+        assert!(choices.gui && choices.service && !choices.menu && choices.path);
+        let recorded = SetupState {
+            channel: Channel::Preview,
+            route: Route::China,
+            gui: false,
+            with: vec![ComponentName::new("browser").expect("name")],
+            service: true,
+            ..plain_state()
+        };
+        // A recorded installation keeps its choices whatever session runs the setup program.
+        // 已记录的安装保持其选择，与运行安装器的会话无关。
+        let again = Choices::resolve(&InstallOptions::default(), Some(&recorded), linux, true)
+            .expect("again");
+        assert!(!again.gui && again.service && !again.path);
+        assert_eq!(again.channel, Channel::Preview);
+        assert_eq!(again.route, Route::China);
+        assert_eq!(again.port_range, None);
+        assert_eq!(names(&again), ["browser", "core", "tui"]);
+    }
+
+    #[test]
+    fn choices_are_refused_where_they_do_not_exist() {
+        let given = |options: InstallOptions, name: &str| {
+            Choices::resolve(&options, None, platform(name), true)
+        };
+        let linger = InstallOptions {
+            service: Some(true),
+            linger: Some(true),
+            ..InstallOptions::default()
+        };
+        assert!(given(linger.clone(), "linux-x64").is_ok());
+        assert!(given(linger.clone(), "macos-arm64").is_err());
         assert!(
-            desktop
-                .components()
-                .expect("components")
-                .iter()
-                .any(|name| name.as_str() == DESKTOP_COMPONENT)
+            given(
+                InstallOptions {
+                    service: Some(false),
+                    ..linger
+                },
+                "linux-x64"
+            )
+            .is_err()
+        );
+        let shortcut = InstallOptions {
+            desktop_shortcut: Some(true),
+            ..InstallOptions::default()
+        };
+        assert!(given(shortcut.clone(), "windows-x64").is_ok());
+        assert!(given(shortcut, "macos-arm64").is_err());
+        // The desktop app and the service are offered on every platform.
+        // 每个平台都提供桌面应用与服务。
+        for name in ["windows-x64", "macos-arm64", "linux-x64"] {
+            let both = InstallOptions {
+                gui: Some(true),
+                service: Some(true),
+                ..InstallOptions::default()
+            };
+            assert!(names(&given(both, name).expect(name)).contains(&String::from("gui")));
+        }
+    }
+
+    #[test]
+    fn the_uninstall_hint_names_the_program_when_it_is_not_on_path() {
+        let root = Path::new("/opt/vulcan");
+        assert!(uninstall_hint(root, true).contains("vulcan-code-setup uninstall"));
+        assert!(
+            uninstall_hint(root, false).contains(
+                &root
+                    .join(SETUP_DIR)
+                    .join(SETUP_PROGRAM)
+                    .display()
+                    .to_string()
+            )
         );
     }
 

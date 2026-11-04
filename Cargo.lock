@@ -9952,7 +9952,7 @@ dependencies = [
 
 [[package]]
 name = "vulcan-code-setup"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "dirs",
  "ratatui",
@@ -9961,6 +9961,7 @@ dependencies = [
  "tempfile",
  "vulcan-i18n",
  "vulcan-install-core",
+ "windows 0.62.2",
  "windows-sys 0.61.2",
 ]
 

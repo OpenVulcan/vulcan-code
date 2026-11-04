@@ -240,6 +240,57 @@ pub struct Layout {
     /// The terminal client.
     /// 终端客户端。
     pub tui_executable: Option<String>,
+    /// Notification identity Windows shortcuts of the desktop app carry; written by layout
+    /// format 4 on Windows.
+    /// 桌面应用的 Windows 快捷方式携带的通知身份；由布局格式 4 在 Windows 上写出。
+    #[serde(default)]
+    pub desktop_identity: Option<DesktopIdentity>,
+}
+
+/// Notification identity of the Windows desktop app (`runtime-layout.json`, `desktopIdentity`).
+/// Windows 桌面应用的通知身份（`runtime-layout.json` 的 `desktopIdentity`）。
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub struct DesktopIdentity {
+    /// Name of the Start menu shortcut the desktop app creates for itself.
+    /// 桌面应用为自身创建的开始菜单快捷方式的名称。
+    pub name: String,
+    /// Application user model ID.
+    /// 应用用户模型 ID。
+    pub app_user_model_id: String,
+    /// CLSID of the notification activator, in braces.
+    /// 通知激活器的 CLSID，带花括号。
+    pub toast_activator_clsid: String,
+}
+
+/// An installed version and its layout.
+/// 一个已安装版本及其布局。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Version {
+    /// The version directory.
+    /// 版本目录。
+    pub dir: PathBuf,
+    /// Its layout.
+    /// 其布局。
+    pub layout: Layout,
+}
+
+impl Version {
+    /// Reads the version in `dir`.
+    /// 读取 `dir` 中的版本。
+    pub fn read(dir: &Path) -> Result<Self, String> {
+        Ok(Self {
+            dir: dir.to_path_buf(),
+            layout: Layout::read(dir)?,
+        })
+    }
+
+    /// The Core service program of this version.
+    /// 本版本的 Core 服务程序。
+    pub fn service(&self) -> PathBuf {
+        self.dir.join(&self.layout.service_executable)
+    }
 }
 
 impl Layout {
@@ -277,6 +328,10 @@ pub struct Description {
     /// The service's data directory, below the Vulcan user directory.
     /// 服务的数据目录，位于 Vulcan 用户目录之下。
     pub data_root: PathBuf,
+    /// The service settings file; reported by versions that accept `--set-port-range`.
+    /// 服务设置文件；由接受 `--set-port-range` 的版本报告。
+    #[serde(default)]
+    pub settings_path: Option<PathBuf>,
 }
 
 impl Description {
@@ -322,9 +377,7 @@ fn check_relative(entry: &str) -> Result<(), &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{Mode, STATE_SCHEMA};
-    use vulcan_install_core::fetch::Route;
-    use vulcan_install_core::names::Channel;
+    use crate::state::tests::plain_state;
 
     #[test]
     fn only_empty_leftover_owned_or_legacy_roots_are_accepted() {
@@ -339,16 +392,7 @@ mod tests {
         assert_eq!(ownership(&root), Ok(Ownership::Legacy));
         std::fs::write(root.join(LEGACY_MARKER), "someone-else").expect("marker");
         assert!(ownership(&root).is_err());
-        let state = SetupState {
-            schema: STATE_SCHEMA,
-            mode: Mode::Terminal,
-            channel: Channel::Stable,
-            route: Route::Auto,
-            with: Vec::new(),
-            shortcut: true,
-            path: true,
-            items: Vec::new(),
-        };
+        let state = plain_state();
         state.write(&root).expect("state");
         assert_eq!(ownership(&root), Ok(Ownership::Owned(state)));
     }
