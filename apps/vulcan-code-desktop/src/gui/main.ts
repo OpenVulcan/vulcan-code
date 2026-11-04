@@ -7,6 +7,7 @@
 // 绝不停止该服务。
 
 import { BrowserWindow, Notification, app, clipboard, ipcMain, shell } from 'electron';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 
 import {
@@ -31,6 +32,7 @@ import {
   type ServiceStartupProgress,
 } from './service-launcher.js';
 import { renderStartupDocument } from './startup-page.js';
+import { resolveStableDesktopEntry } from './installed-launcher.js';
 import {
   desktopText,
   detectDesktopLocale,
@@ -289,6 +291,33 @@ function createWorkbenchWindow(webUiUrl: string): BrowserWindow {
 // 快速连续的切换命令必须收敛到单一明确状态，而不是让两次原生最大化转换互相竞争。
 let maximizeQueue: Promise<void> = Promise.resolve();
 
+// RESTART_WAIT_MS bounds how long the client waits for the old Core to exit (the service's `OWNER_EXIT_WAIT`).
+// RESTART_WAIT_MS 限定客户端等待旧 Core 退出的时长（服务端 `OWNER_EXIT_WAIT`）。
+const RESTART_WAIT_MS = 120_000;
+
+// restartForUpdate ends this client once the Core that announced the restart exited. An update
+// relaunches the client from the stable entry, so the new version starts; an installer starts the
+// app itself when it finishes, so the client only quits.
+// restartForUpdate 在宣布重启的 Core 退出后结束本客户端。更新会从稳定入口重新启动客户端以运行新版本；
+// 安装包结束时会自行启动应用，因此客户端只退出。
+// Parameters: reason comes from the service event, discoveryPath names the authoritative discovery file.
+// 参数：reason 来自服务事件，discoveryPath 指明权威发现文件。
+async function restartForUpdate(reason: 'update' | 'installer', discoveryPath: string): Promise<void> {
+  const announcing = guiState.instance;
+  const deadline = Date.now() + RESTART_WAIT_MS;
+  while (announcing && Date.now() < deadline) {
+    const live = await readLiveServiceInstance(discoveryPath).catch(() => null);
+    if (!live || live.pid !== announcing.pid) break;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  if (reason === 'update') {
+    const entry = resolveStableDesktopEntry(process.execPath, process.platform, existsSync);
+    if (entry) app.relaunch({ execPath: entry, args: [] });
+    else app.relaunch();
+  }
+  app.exit(0);
+}
+
 /** Registers every main-process handler for one window. */
 function registerWindowIpcHandlers(window: BrowserWindow, webUiUrl: string, discoveryPath: string, serviceBaseUrl: string): void {
   // blockedBrowserOrigins grows with confirmed Core generations so a restarted Core cannot be
@@ -324,6 +353,10 @@ function registerWindowIpcHandlers(window: BrowserWindow, webUiUrl: string, disc
     blockedBrowserOrigins.add(new URL(instance.baseUrl).origin);
     guiState.instance = instance;
     return instance;
+  });
+  handle(SERVICE_CHANNELS.restartForUpdate, (_event, reason: unknown) => {
+    if (reason !== 'update' && reason !== 'installer') throw new TypeError('Unknown restart reason.');
+    void restartForUpdate(reason, discoveryPath);
   });
   // Temporary browser pages run in a separate in-memory partition with no workbench preload.
   // 临时浏览页面运行在独立的内存分区中，不带工作台预加载桥。

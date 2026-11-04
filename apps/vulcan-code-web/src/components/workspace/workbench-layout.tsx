@@ -58,6 +58,7 @@ import { useStopConversationRunDecision } from "@/components/workspace/workbench
 import { useWorkbenchRevisionGates, useWorkbenchServiceSync } from "@/components/workspace/workbench-layout/use-workbench-revision-sync";
 import { useProjectTerminalRunningCounts } from "@/components/workspace/workbench-layout/use-project-terminal-running-counts";
 import { useSessionTitleToasts } from "@/components/workspace/workbench-layout/use-session-title-toasts";
+import { useAppUpdatePrompts } from "@/components/workspace/workbench-layout/use-app-update-prompts";
 import { useProjectLifecycleConfirmation } from "@/components/workspace/workbench-layout/use-project-lifecycle-confirmation";
 import { useConversationMenuActions } from "@/components/workspace/workbench-layout/use-conversation-menu-actions";
 import { UnsupportedSessionDeleteDialog } from "@/components/project/unsupported-session-delete-dialog";
@@ -543,6 +544,13 @@ export function WorkbenchLayout(props: {
       handleSelectTopFeatureArea("settings");
     },
   }), [accountHost, handleSelectTopFeatureArea]);
+  // handleOpenAppUpdateSettings opens the update settings page from an update prompt.
+  // handleOpenAppUpdateSettings 从更新提示打开更新设置页。
+  const handleOpenAppUpdateSettings = React.useCallback(() => {
+    setActiveSettingsSubArea("app-update");
+    handleSelectTopFeatureArea("settings");
+  }, [handleSelectTopFeatureArea]);
+  useAppUpdatePrompts(props.serviceInstanceEpoch, handleOpenAppUpdateSettings);
   // handleOpenPermissionJudgeSettings opens the application-wide permission judge settings page.
   // handleOpenPermissionJudgeSettings 打开应用全局的权限判定设置页。
   const handleOpenPermissionJudgeSettings = React.useCallback(() => {

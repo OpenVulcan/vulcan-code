@@ -7,6 +7,9 @@ export const SERVICE_CHANNELS = {
   // Returns the ready Core connection after validating its discovery identity.
   // 校验发现身份后返回就绪 Core 的连接。
   connection: 'vulcan:service:connection',
+  // Ends this client once the Core announced an update restart, relaunching it for a new version.
+  // 在 Core 宣布更新重启后结束本客户端；新版本时重新启动客户端。
+  restartForUpdate: 'vulcan:service:restart-for-update',
 } as const;
 
 // Local browser channels are scoped to the current GUI and never address a Core browser session.

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { INSTALL_LAUNCHER_NAME, resolveInstalledLauncher } from './installed-launcher.js';
+import { INSTALL_LAUNCHER_NAME, resolveInstalledLauncher, resolveStableDesktopEntry } from './installed-launcher.js';
 
 // installedFiles models one install root with its pointer and launcher.
 // installedFiles 模拟一个带有指针文件与启动器的安装根目录。
@@ -31,4 +31,14 @@ test('executables outside an installed layout have no launcher', () => {
   ]) {
     assert.equal(resolveInstalledLauncher(executable, exists), null, executable);
   }
+});
+
+test('outside Windows the stable entry is the same executable below the current link', () => {
+  const entry = resolveStableDesktopEntry(
+    '/home/me/.local/share/vulcan-code/versions/0.1.4/desktop/runtime/vulcan-code-desktop',
+    'linux',
+    (file) => file === '/home/me/.local/share/vulcan-code/current',
+  );
+  assert.equal(entry, '/home/me/.local/share/vulcan-code/current/desktop/runtime/vulcan-code-desktop');
+  assert.equal(resolveStableDesktopEntry('/opt/other/vulcan-code-desktop', 'linux', () => true), null);
 });

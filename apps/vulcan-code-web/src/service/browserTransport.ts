@@ -20,6 +20,12 @@ import {
   SESSION_TITLE_GENERATED_TOPIC,
   type SessionTitleGeneratedEvent,
 } from "@/service/session-title-events";
+import {
+  APP_UPDATE_CHANGED_TOPIC,
+  SERVICE_RESTARTING_TOPIC,
+  type AppUpdateSnapshot,
+  type ServiceRestartingEvent,
+} from "@/service/app-update-events";
 import type {
   ServiceEventHandler,
   ServiceParams,
@@ -133,7 +139,9 @@ type BrowserServiceEvent =
   | { kind: "projectTerminalDisplayChanged"; payload: ProjectTerminalDisplayChangedEvent }
   | { kind: "projectTerminalRunningCountChanged"; payload: ProjectTerminalRunningCountChangedEvent }
   | { kind: "dedicatedPromptDraftProgress"; payload: DedicatedPromptDraftProgressEvent }
-  | { kind: "sessionTitleGenerated"; payload: SessionTitleGeneratedEvent };
+  | { kind: "sessionTitleGenerated"; payload: SessionTitleGeneratedEvent }
+  | { kind: "appUpdateChanged"; payload: AppUpdateSnapshot }
+  | { kind: "serviceRestarting"; payload: ServiceRestartingEvent };
 
 // EVENT_KIND_TO_TOPIC maps service event kinds to protocol topics.
 // EVENT_KIND_TO_TOPIC 将服务事件类型映射为协议主题。
@@ -151,6 +159,8 @@ const EVENT_KIND_TO_TOPIC: Record<BrowserServiceEvent["kind"], string> = {
   projectTerminalRunningCountChanged: "project.terminal.running-count.changed",
   dedicatedPromptDraftProgress: DEDICATED_PROMPT_DRAFT_PROGRESS_TOPIC,
   sessionTitleGenerated: SESSION_TITLE_GENERATED_TOPIC,
+  appUpdateChanged: APP_UPDATE_CHANGED_TOPIC,
+  serviceRestarting: SERVICE_RESTARTING_TOPIC,
 };
 
 // closeWebSocketWhenReady closes one socket without aborting its opening handshake.

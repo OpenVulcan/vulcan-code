@@ -16,6 +16,7 @@ import {
 } from "@/components/features/settings/misc-settings-areas";
 import { AboutLicensesSettingsArea } from "@/components/features/settings/about-licenses-settings-area";
 import { ChangelogSettingsArea } from "@/components/features/settings/changelog-settings-area";
+import { AppUpdateSettingsArea } from "@/components/features/settings/app-update-settings-area";
 import { ModelServicesArea } from "@/components/features/settings/model-services/model-services-area";
 import { OpenVulcanAccountArea } from "@/components/features/account/openvulcan-account-area";
 import { ContextBasicsSettingsArea } from "@/components/features/settings/context-basics-settings";
@@ -72,7 +73,7 @@ export interface SettingsFeatureContentProps {
 
 // READABLE_SETTINGS_PAGES are preference pages that read as one centred column; work surfaces fill the pane.
 // READABLE_SETTINGS_PAGES 是以居中单列阅读的偏好类页面；工作界面铺满面板。
-const READABLE_SETTINGS_PAGES: ReadonlySet<SettingsSubAreaId> = new Set(["context-basics", "appearance", "notifications", "git-commit", "permission-judge", "subagent-models", "mcp-service", "changelog", "about-licenses"]);
+const READABLE_SETTINGS_PAGES: ReadonlySet<SettingsSubAreaId> = new Set(["context-basics", "appearance", "notifications", "git-commit", "permission-judge", "subagent-models", "mcp-service", "app-update", "changelog", "about-licenses"]);
 
 // SettingsFeatureContent frames every settings page; the feature header shows its title and navigation stays in the sidebar.
 // SettingsFeatureContent 包裹每个设置页面；功能页头显示其标题，导航保留在侧栏。
@@ -161,6 +162,9 @@ function SettingsRoutedPage(props: SettingsFeatureContentProps) {
         systemPromptSettings={<SystemPromptSettingsCard projects={props.workbench.projects} />}
       />
     );
+  }
+  if (props.activeSettingsSubArea === "app-update") {
+    return <AppUpdateSettingsArea />;
   }
   if (props.activeSettingsSubArea === "changelog") {
     return <ChangelogSettingsArea appVersion={props.workbench.appVersion} />;

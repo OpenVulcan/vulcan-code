@@ -151,6 +151,10 @@ const service = {
   // Returns the current ready instance selected by the owning GUI.
   // 返回所属 GUI 选中的当前就绪实例。
   getConnection: (): Promise<unknown> => ipcRenderer.invoke('vulcan:service:connection'),
+  // Ends this client after an update restart of the Core (see the main-process handler).
+  // 在 Core 更新重启后结束本客户端（见主进程处理器）。
+  restartForUpdate: (reason: 'update' | 'installer'): Promise<void> =>
+    ipcRenderer.invoke('vulcan:service:restart-for-update', reason),
 };
 
 // localBrowser exposes only tab operations and sidebar geometry, never native WebContents objects.

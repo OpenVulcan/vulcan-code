@@ -37,6 +37,7 @@ export type SettingsSubAreaId =
   | "git-commit"
   | "permission-judge"
   | "prompt-composer"
+  | "app-update"
   | "changelog"
   | "about-licenses"
   | "archived-restore"

@@ -247,7 +247,12 @@ interface ElectronDesktopApi {
   desktop: ElectronDesktopBridge;
   // service resolves the exact ready Core selected by the GUI owner.
   // service 解析 GUI 所有者选中的精确就绪 Core。
-  service: { getConnection: () => Promise<ElectronServiceConnection> };
+  // restartForUpdate exists on preloads that can relaunch the client after an update restart.
+  // restartForUpdate 存在于能在更新重启后重新启动客户端的预加载中。
+  service: {
+    getConnection: () => Promise<ElectronServiceConnection>;
+    restartForUpdate?: (reason: "update" | "installer") => Promise<void>;
+  };
   // localBrowser is the optional isolated temporary-page surface of this GUI.
   // localBrowser 是此 GUI 可选的隔离临时页面界面。
   localBrowser?: ElectronLocalBrowserBridge;
@@ -286,6 +291,19 @@ export async function readElectronServiceConnection(): Promise<ElectronServiceCo
     throw new Error("The desktop service connection bridge is unavailable.");
   }
   return api.service.getConnection();
+}
+
+// restartElectronClientForUpdate hands an announced Core restart to the desktop client, which ends
+// itself once the old Core exited; returns false outside Electron or on an older preload.
+// restartElectronClientForUpdate 将已宣布的 Core 重启交给桌面客户端，客户端在旧 Core 退出后结束自身；
+// 在 Electron 之外或旧预加载上返回 false。
+export async function restartElectronClientForUpdate(reason: "update" | "installer"): Promise<boolean> {
+  if (typeof window === "undefined") return false;
+  const api = (window as unknown as { vulcanDesktop?: ElectronDesktopApi }).vulcanDesktop;
+  const restart = api?.service?.restartForUpdate;
+  if (typeof restart !== "function") return false;
+  await restart(reason);
+  return true;
 }
 
 // electronDesktopBridgeMethodNames lists every method the contract requires at runtime.
