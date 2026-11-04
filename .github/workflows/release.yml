@@ -5,10 +5,12 @@
 # cross-platform check (ci.yml) and nothing is published unless both pass. Two jobs hold the release
 # environment's secrets, each after approval: the Windows build signs its files and installer, and the
 # publish job signs the manifests and pointers, uploads to R2 and creates the draft. Publishing the draft
-# runs promote.yml, which moves the stable channel to the same build.
+# runs promote.yml, which moves the stable channel to the same build. The setup program is released on its own
+# (release-setup.yml); the Windows installer bundles the one the stable setup channel names.
 # 版本取自 product.json，输入只用于确认。构建与跨平台检查（ci.yml）同时运行，两者都通过才发布。只有两个作业
 # 持有 release 环境的密钥，各需审批：Windows 构建为文件与安装包签名；发布作业签署版本清单与指针、上传到 R2 并
-# 创建草稿。发布草稿时运行 promote.yml，将 stable 通道指向同一份构建。
+# 创建草稿。发布草稿时运行 promote.yml，将 stable 通道指向同一份构建。安装器独立发布（release-setup.yml）；
+# Windows 安装包内置 stable 安装器通道所指的版本。
 #
 # Program files whose inputs did not change since they were last built are taken from that published,
 # signed release instead of being compiled and signed again, and every file already published is stored
@@ -200,11 +202,36 @@ jobs:
         run: |
           rustup toolchain install
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Reuse unchanged programs from a published release
-        if: ${{ !inputs.rebuild }}
+      # The installer bundles the stable setup program exactly as release-setup.yml published it; a missing or
+      # unverifiable one stops the release before anything is built.
+      # 安装包按 release-setup.yml 发布的原样内置 stable 安装器；缺失或校验不通过时，在构建任何内容之前停止发布。
+      - name: Fetch and verify the stable setup program
         run: |
           cargo build --locked --release -p vulcan-release-tool
           if ($LASTEXITCODE -ne 0) { throw 'building the release tool failed' }
+          $origin = ./target/release/vulcan-release-tool.exe origin
+          $dir = "$env:RUNNER_TEMP/setup"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          foreach ($name in 'stable.json', 'stable.json.sig') {
+            Invoke-WebRequest -UseBasicParsing -Uri "$origin/setup/channels/$name" -OutFile "$dir/$name"
+          }
+          # The names are checked before they become paths; setup-check then verifies the signature and digest.
+          # 名称在用作路径之前先检查；之后由 setup-check 校验签名与摘要。
+          $pointer = Get-Content -Raw -LiteralPath "$dir/stable.json" | ConvertFrom-Json
+          $version = [string]$pointer.version
+          $file = [string]$pointer.programs.'windows-x64'.file
+          if ($version -notmatch '^\d+\.\d+\.\d+$' -or $file -ne "vulcan-code-setup-$version-windows-x64.exe") {
+            throw "the stable setup pointer names $file for $version"
+          }
+          Invoke-WebRequest -UseBasicParsing -Uri "$origin/setup/$version/$file" -OutFile "$dir/$file"
+          ./target/release/vulcan-release-tool.exe setup-check --pointer "$dir/stable.json" --channel stable `
+            --platform windows-x64 --program "$dir/$file"
+          if ($LASTEXITCODE -ne 0) { throw 'the stable setup program does not verify' }
+          "SETUP_PROGRAM=$dir/$file" >> $env:GITHUB_ENV
+          "### Bundled setup program $version" >> $env:GITHUB_STEP_SUMMARY
+      - name: Reuse unchanged programs from a published release
+        if: ${{ !inputs.rebuild }}
+        run: |
           $origin = ./target/release/vulcan-release-tool.exe origin
           $line = node scripts/release-reuse.mjs lookup --platform $env:PLATFORM --origin $origin `
             --tool ./target/release/vulcan-release-tool.exe --work "$env:RUNNER_TEMP/reuse" --target target/release `
@@ -290,7 +317,7 @@ jobs:
           $sign = "pwsh -NoProfile -File $PWD\scripts\certum-signing.ps1 -Phase Sign -EvidenceDirectory $env:EVIDENCE -Files `$f"
           ./scripts/certum-signing.ps1 -Phase Login -EvidenceDirectory $env:EVIDENCE
           try {
-            node scripts/windows-installer.mjs package --out $downloads --sign $sign
+            node scripts/windows-installer.mjs package --out $downloads --sign $sign --setup $env:SETUP_PROGRAM
             if ($LASTEXITCODE -ne 0) { throw 'compiling the installer failed' }
           } finally {
             ./scripts/certum-signing.ps1 -Phase Logout -EvidenceDirectory $env:EVIDENCE
@@ -411,7 +438,6 @@ jobs:
           assets="$RUNNER_TEMP/assets"
           mkdir -p "$assets"
           cp "$RUNNER_TEMP"/artifacts/release-*/archive/*.tar.gz "$assets/"
-          cp scripts/install.sh "$assets/"
           node scripts/release-package.mjs checksums "$assets"
           node scripts/release-signing.mjs gpg "$assets/SHA256SUMS" "$RUNNER_TEMP/gpg-evidence"
           cp "$RUNNER_TEMP/gpg-evidence/SHA256SUMS.asc" "$assets/"

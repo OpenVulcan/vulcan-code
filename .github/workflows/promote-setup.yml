@@ -1,0 +1,63 @@
+# Point the stable setup channel at the setup version the preview setup channel names; no file is rebuilt
+# or re-signed, only the new pointer is signed after the preview one verifies (plan section 18.6).
+# 将 stable 安装器通道指向 preview 安装器通道所指的版本；不重新构建或签名任何文件，只在 preview 指针通过校验后
+# 签署新指针（方案 18.6 节）。
+#
+# The next product release bundles this setup program in its Windows installer, and openvulcan-web serves the
+# install scripts this pointer names at the top level.
+# 下一次产品发布会把此安装器内置进 Windows 安装包，openvulcan-web 在顶层提供此指针所列的安装脚本。
+name: Promote setup
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Setup version the preview setup channel names, for example 0.1.0
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: release
+  cancel-in-progress: false
+jobs:
+  promote:
+    name: Point the stable setup channel at ${{ inputs.version }}
+    environment: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ inputs.version }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      # R2 rejects the optional checksums newer AWS CLI releases send by default.
+      # R2 不接受新版 AWS CLI 默认附带的可选校验和。
+      AWS_REQUEST_CHECKSUM_CALCULATION: WHEN_REQUIRED
+      AWS_RESPONSE_CHECKSUM_VALIDATION: WHEN_REQUIRED
+      R2_ENDPOINT: https://${{ vars.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+      R2_BUCKET: ${{ vars.R2_BUCKET }}
+      CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Build the release tool
+        run: |
+          set -eu
+          rustup toolchain install
+          cargo build --locked --release -p vulcan-release-tool
+          origin=$(target/release/vulcan-release-tool origin)
+          echo "UPDATE_BASE_URL=$origin" >> "$GITHUB_ENV"
+      - name: Sign the stable setup pointer
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          set -eu
+          objects="$RUNNER_TEMP/objects"
+          sh scripts/release-r2.sh setup-pointer-get "$objects" preview
+          target/release/vulcan-release-tool setup-promote --objects "$objects" --version "$VERSION" \
+            --from preview --to stable --key-env UPDATE_SIGNING_KEY
+      - name: Upload the pointer and read it back through the CDN
+        run: sh scripts/release-r2.sh setup-pointer "$RUNNER_TEMP/objects" stable
+      - name: Report
+        run: echo "### The stable setup channel now points at $VERSION" >> "$GITHUB_STEP_SUMMARY"

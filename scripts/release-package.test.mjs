@@ -83,17 +83,16 @@ test('a Unix archive holds the distribution at its root with links and executabl
   assert.equal(index, `${await sha256(archive)}  ${path.basename(archive)}\n`);
 }));
 
-test('the index covers every platform archive and the installer of one version, and refuses mixed versions', () => withRoot(async root => {
+test('the index covers every platform archive of one version, and refuses mixed versions', () => withRoot(async root => {
   const out = path.join(root, 'out');
   for (const [platform, architecture] of targets.filter(([platform]) => platform !== 'win32')) {
     const dist = path.join(root, `${platform}-${architecture}`);
     await writeDistribution(dist, platform, architecture);
     await createReleaseArchive(dist, out, '0.2.0-rc.1');
   }
-  await writeFile(path.join(out, 'install.sh'), '#!/bin/sh\n');
   await writeFile(path.join(out, 'notes.txt'), 'not indexed');
   const indexed = await writeChecksums(out);
-  assert.equal(indexed.length, 5);
+  assert.equal(indexed.length, 4);
   const lines = (await readFile(path.join(out, checksumFileName), 'utf8')).trim().split('\n');
   for (const line of lines) {
     const [digest, name] = line.split('  ');

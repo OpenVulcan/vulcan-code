@@ -1,0 +1,168 @@
+// Fill the entry script templates with synthetic setup programs and run the real scripts against them.
+// 以合成的安装器填写入口脚本模板，并针对它们运行真实脚本。
+import assert from 'node:assert/strict';
+import { spawn, spawnSync } from 'node:child_process';
+import { createServer } from 'node:http';
+import { copyFile, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import { pathToFileURL } from 'node:url';
+import { releasePlatforms } from './desktop-runtime.mjs';
+import { entryScripts, generateEntryScripts, renderTemplate, setupProgramName } from './entry-scripts.mjs';
+
+const version = '1.2.3';
+
+// withRoot runs action with a temporary directory that is removed afterwards.
+// withRoot 以一个临时目录运行 action，结束后删除该目录。
+async function withRoot(action) {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'vulcan-entry-'));
+  try {
+    return await action(root);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+// writeSetups lays out an origin holding one setup program per platform; program(platform) gives its bytes.
+// writeSetups 布置一个下载源，每个平台一个安装器；program(platform) 给出其字节。
+async function writeSetups(origin, program) {
+  const dir = path.join(origin, 'setup', version);
+  await mkdir(dir, { recursive: true });
+  for (const platform of releasePlatforms) {
+    const file = path.join(dir, setupProgramName(version, platform));
+    await writeFile(file, await program(platform));
+    await chmod(file, 0o755);
+  }
+  return dir;
+}
+
+test('templates and values must match exactly', () => {
+  assert.equal(renderTemplate('a @@X@@ b', { X: '1' }), 'a 1 b');
+  assert.throws(() => renderTemplate('a @@X@@ @@Y@@', { X: '1' }), /value for Y/);
+  assert.throws(() => renderTemplate('a @@X@@', { X: '1', Z: '2' }), /no place for Z/);
+  assert.throws(() => renderTemplate('a @@x@@', {}), /malformed/);
+  assert.throws(() => setupProgramName(version, 'windows-arm64'), /Unknown release platform/);
+  assert.equal(setupProgramName(version, 'windows-x64'), `vulcan-code-setup-${version}-windows-x64.exe`);
+});
+
+test('generation needs every platform, a valid signer and plain origins', () => withRoot(async root => {
+  const setups = await writeSetups(root, async platform => platform);
+  const out = path.join(root, 'out');
+  const base = { version, setups, origins: ['https://example.test/vc'], signer: null, out };
+  const written = await generateEntryScripts(base);
+  assert.deepEqual(written.map(file => path.basename(file)), [...entryScripts]);
+  for (const file of written) assert.doesNotMatch(await readFile(file, 'utf8'), /@@/);
+  await assert.rejects(generateEntryScripts({ ...base, signer: 'not-a-thumbprint' }), /thumbprint/);
+  await assert.rejects(generateEntryScripts({ ...base, origins: ["https://x.test/'"] }), /origin/);
+  await assert.rejects(generateEntryScripts({ ...base, origins: ['https://x.test/'] }), /origin/);
+  await rm(path.join(setups, setupProgramName(version, 'macos-arm64')));
+  await assert.rejects(generateEntryScripts(base), /ENOENT/);
+}));
+
+// install.sh is a POSIX shell script for Linux and macOS.
+// install.sh 是面向 Linux 与 macOS 的 POSIX shell 脚本。
+const noShell = process.platform === 'win32' || spawnSync('curl', ['--version']).status !== 0;
+
+test('install.sh picks the platform, falls back between origins, verifies and passes everything on', { skip: noShell }, () => withRoot(async root => {
+  const origin = path.join(root, 'origin');
+  // Each fake setup program reports its platform, its arguments and whether input is a terminal.
+  // 每个伪造的安装器报告其平台、参数以及输入是否为终端。
+  const setups = await writeSetups(origin, async platform => `#!/bin/sh\necho "${platform} $*"\nexit 7\n`);
+  const out = path.join(root, 'out');
+  const missing = pathToFileURL(path.join(root, 'missing')).href;
+  await generateEntryScripts({ version, setups, origins: [missing, pathToFileURL(origin).href], signer: null, out });
+  const fakes = path.join(root, 'fakes');
+  await mkdir(fakes);
+  await writeFile(path.join(fakes, 'uname'), '#!/bin/sh\ncase "$1" in -s) echo "$FAKE_OS" ;; -m) echo "$FAKE_MACHINE" ;; *) exit 64 ;; esac\n');
+  await writeFile(path.join(fakes, 'sysctl'), '#!/bin/sh\necho "$FAKE_TRANSLATED"\n');
+  await chmod(path.join(fakes, 'uname'), 0o755);
+  await chmod(path.join(fakes, 'sysctl'), 0o755);
+  const run = (env, args = ['--mode', 'terminal', '--yes']) => spawnSync('sh', [path.join(out, 'install.sh'), ...args], {
+    encoding: 'utf8',
+    input: '',
+    env: { ...process.env, FAKE_TRANSLATED: '0', ...env, PATH: `${fakes}:${process.env.PATH}`, TMPDIR: root },
+  });
+
+  const linux = run({ FAKE_OS: 'Linux', FAKE_MACHINE: 'aarch64' });
+  assert.equal(linux.status, 7, linux.stderr);
+  assert.equal(linux.stdout.trim(), 'linux-arm64 --mode terminal --yes');
+  assert.match(linux.stderr, /trying the next origin/);
+  const rosetta = run({ FAKE_OS: 'Darwin', FAKE_MACHINE: 'x86_64', FAKE_TRANSLATED: '1' }, []);
+  assert.equal(rosetta.stdout.trim(), 'macos-arm64');
+  assert.equal(run({ FAKE_OS: 'Darwin', FAKE_MACHINE: 'x86_64' }, []).stdout.trim(), 'macos-x64');
+  assert.match(run({ FAKE_OS: 'Linux', FAKE_MACHINE: 'riscv64' }).stderr, /unsupported architecture/);
+  assert.match(run({ FAKE_OS: 'FreeBSD', FAKE_MACHINE: 'x86_64' }).stderr, /unsupported operating system/);
+
+  // A program that differs from its published digest never runs.
+  // 与公布摘要不符的程序绝不运行。
+  await writeFile(path.join(setups, setupProgramName(version, 'linux-x64')), '#!/bin/sh\necho tampered\n');
+  const tampered = run({ FAKE_OS: 'Linux', FAKE_MACHINE: 'x86_64' });
+  assert.equal(tampered.status, 1);
+  assert.doesNotMatch(tampered.stdout, /tampered/);
+  assert.match(tampered.stderr, /does not match its published SHA-256/);
+}));
+
+// The Windows script is checked in every PowerShell this machine has; 5.1 is the one that matters most.
+// Windows 脚本在本机已有的每种 PowerShell 中检查；5.1 最为关键。
+const powerShells = process.platform === 'win32'
+  ? ['powershell.exe', 'pwsh.exe'].filter(shell => spawnSync(shell, ['-NoProfile', '-Command', 'exit 0']).status === 0)
+  : [];
+
+// runAsync runs a command without blocking the event loop, so the local server can answer it.
+// runAsync 运行命令而不阻塞事件循环，使本地服务器能够应答。
+function runAsync(command, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { windowsHide: true });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    child.on('error', reject);
+    child.on('close', status => resolve({ status, stdout, stderr }));
+  });
+}
+
+test('install.ps1 verifies the setup program and passes its arguments and exit code on', { skip: powerShells.length === 0 }, () => withRoot(async root => {
+  const origin = path.join(root, 'origin');
+  // cmd.exe stands in for the setup program: `/d /c` runs whatever the test passes.
+  // cmd.exe 代替安装器：`/d /c` 运行测试传入的任何内容。
+  const cmd = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'cmd.exe');
+  const setups = await writeSetups(origin, async platform => (platform === 'windows-x64' ? readFile(cmd) : platform));
+  const server = createServer((request, response) => {
+    const file = path.join(origin, ...decodeURIComponent(new URL(request.url, 'http://local').pathname).split('/'));
+    const stream = createReadStream(file);
+    stream.on('error', () => { response.statusCode = 404; response.end(); });
+    stream.pipe(response);
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const live = `http://127.0.0.1:${server.address().port}`;
+    const generate = (out, signer) => generateEntryScripts({
+      version, setups, origins: [`${live}/missing`, live], signer, out,
+    });
+    const [, unsigned] = await generate(path.join(root, 'unsigned'), null);
+    const [, wrongSigner] = await generate(path.join(root, 'signed'), '0'.repeat(40));
+    for (const shell of powerShells) {
+      const run = (script, ...args) => runAsync(shell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, ...args]);
+      const passed = await run(unsigned, '/d', '/c', 'echo', 'hello');
+      assert.equal(passed.status, 0, `${shell}: ${passed.stderr}`);
+      assert.match(passed.stdout, /hello/);
+      assert.match(passed.stdout + passed.stderr, /trying the next origin/);
+      const failed = await run(unsigned, '/d', '/c', 'exit', '5');
+      assert.notEqual(failed.status, 0, shell);
+      assert.match(failed.stderr + failed.stdout, /exited with 5/);
+      const refused = await run(wrongSigner, '/d', '/c', 'echo', 'hello');
+      assert.notEqual(refused.status, 0, shell);
+      assert.doesNotMatch(refused.stdout, /hello/);
+      assert.match(refused.stderr + refused.stdout, /not signed by the Vulcan Code certificate/);
+    }
+    await copyFile(path.join(setups, setupProgramName(version, 'linux-x64')), path.join(setups, setupProgramName(version, 'windows-x64')));
+    const tampered = await runAsync(powerShells[0], ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', unsigned, '/d', '/c', 'echo', 'hello']);
+    assert.notEqual(tampered.status, 0);
+    assert.match(tampered.stderr + tampered.stdout, /does not match its published SHA-256/);
+  } finally {
+    server.close();
+  }
+}));

@@ -57,6 +57,18 @@ test('the release tree is installed as its own version directory beside the laun
   for (const file of files.filter(file => file.DestName)) assert.ok(file.Source.startsWith('D:\\dist\\bin\\'));
 });
 
+test('a given setup program is bundled into its own directory and removed on uninstall', () => {
+  const bundled = path => sectionLines(innoSetupScript(options(windowsLayout, { setupProgram: path })), 'Files')
+    .map(parameters).filter(file => file.DestDir === `{app}\\${installLayout.setup}`);
+  assert.deepEqual(bundled(null), []);
+  assert.deepEqual(bundled('D:\\setup\\vulcan-code-setup-0.1.0-windows-x64.exe').map(file => [file.Source, file.DestName]), [
+    ['D:\\setup\\vulcan-code-setup-0.1.0-windows-x64.exe', installLayout.setupProgram],
+  ]);
+  assert.throws(() => innoSetupScript(options(windowsLayout, { setupProgram: 'D:\\a"b.exe' })), /Inno Setup script/);
+  const removed = sectionLines(innoSetupScript(options()), 'UninstallDelete').map(parameters).map(entry => entry.Name);
+  assert.ok(removed.includes(`{app}\\${installLayout.setup}`));
+});
+
 test('installing over the single-directory layout removes exactly its top-level release entries', () => {
   const removed = sectionLines(innoSetupScript(options()), 'InstallDelete').map(parameters).map(entry => entry.Name);
   assert.ok(removed.includes('{app}\\bin'));

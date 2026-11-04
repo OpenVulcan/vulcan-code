@@ -16,8 +16,8 @@
   `app.update.changed`。客户端不缓存派生状态，以最近快照为准。
 - **不可更新时如实说明**：调试构建、不在 `versions/<版本>` 布局中、缺少或无效的
   `.vulcan-install.json`、不支持的平台，均在 `unavailableReason` 中给出原因，客户端不提供任何更新操作。
-  目前 `scripts/install.sh` 以摘要命名代际目录，因此 Linux/macOS 经该脚本安装的副本显示“未安装布局”；
-  方案 18.6 的 TUI 安装器接管后改为 `versions/<版本>`。
+  旧版 `install.sh` 以摘要命名代际目录，经它安装的 Linux/macOS 副本显示“未安装布局”，由安装器
+  `vulcan-code-setup` 接管后改为 `versions/<版本>`。
 
 ## 检查与提议
 
@@ -61,7 +61,33 @@
 修复按签名清单与组件索引核对安装记录中的每个文件，只重新下载缺失或摘要不符的文件，结果以
 `repairedFiles` 报告。
 
+## 安装器的独立发布与自更新
+
+安装器 `apps/vulcan-code-setup` 独立于产品发布（方案 18.6），实现权威是 `vulcan-install-core` 的
+`setup.rs`、`layout.rs`，发布工具的 `setup.rs`，以及 `release-setup.yml`、`promote-setup.yml`。
+
+- **版本**：只在 `apps/vulcan-code-setup/Cargo.toml` 中定义（不跟随工作区版本），只有安装器本身变化时递增；
+  产品发布不构建安装器。
+- **文件与指针**：某安装器版本的各平台程序 `vulcan-code-setup-<版本>-<平台>[.exe]` 与填好的 `install.sh`、
+  `install.ps1` 位于 `setup/<版本>/`，不可变；已签名指针 `setup/channels/<通道>.json`（与产品指针同一把 Ed25519
+  密钥）列出版本及每个文件的 SHA-256 与大小，必须恰好覆盖五个平台与两个脚本，stable 不得指向预发布版本。
+  `release-setup.yml` 先发布到 preview，`promote-setup.yml` 校验 preview 指针后为同一组文件签署 stable 指针。
+- **入口脚本**：两个脚本在安装器发布时由 `scripts/entry-scripts.mjs` 填入版本、下载源（`AUTO_ORIGINS`）、各平台
+  摘要与 Windows 签名证书指纹；它们只下载并校验安装器，再把全部参数原样交给它。openvulcan-web 在顶层提供
+  stable 安装器指针所列的脚本，并把 `setup/` 同步到中国镜像。
+- **自更新**：`install`、`update` 之前读取所选通道（preview 同时读 stable）的安装器指针，只与自身版本比较；
+  产品更新不改变安装器字节，也不提示更新安装器。交互时询问，`--self-update` 直接更新，`--yes` 或无终端时只在
+  最新产品版本的 `minSetupVersion` 高于自身时更新，`--no-self-update` 跳过。替换后以相同参数加
+  `--no-self-update` 重新运行。组装前仍按所装版本的 `minSetupVersion` 检查，不满足即停止。
+- **Inno 安装包**：产品发布在构建前下载 stable 安装器指针与 Windows 程序，经 `vulcan-release-tool setup-check`
+  校验后按原样装入 `{app}\setup\vulcan-code-setup.exe`（不再签名），卸载时删除；stable 安装器指针缺失或校验
+  失败时产品发布停止。
+
 ## 同步触发点
+
+- 安装器对象键（`setup_pointer_key`、`setup_file_key`）与产品对象键一样，在 `layout.rs` 与 openvulcan-web 的
+  `server/internal/staticsync/format.go` 中各写一次，修改时两处同时改。
+- 入口脚本在安装器发布时内嵌下载源；修改 `AUTO_ORIGINS` 后须发布新的安装器版本，脚本才会使用新下载源。
 
 - 试运行与回退标记的文件名、字段在 `install_root.rs` 与启动器 `trial.rs` 中各写一次（启动器只依赖
   `serde_json`），修改时两处同时改；尝试上限只在 `MAX_STARTUP_ATTEMPTS` 定义并随标记写出。

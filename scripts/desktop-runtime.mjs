@@ -209,15 +209,22 @@ async function verifyPackageEntry(name, relative, kind, distributionRoot) {
 // Release archives reuse this key as their platform suffix, so it is also the supported release target list.
 // 将运行时布局身份映射为 LuaSkills 使用的受管运行时平台键。
 // 发行归档复用该键作为平台后缀，因此它也是受支持的发行目标清单。
+const platformKeys = Object.freeze({
+  'win32-x64': 'windows-x64',
+  'linux-x64': 'linux-x64',
+  'linux-arm64': 'linux-arm64',
+  'darwin-x64': 'macos-x64',
+  'darwin-arm64': 'macos-arm64',
+});
+
+// releasePlatforms lists every release platform key, in the order above.
+// releasePlatforms 按上面的顺序列出全部发行平台键。
+export const releasePlatforms = Object.freeze(Object.values(platformKeys));
+
+// managedRuntimePlatformKey returns the release platform key of a runtime layout.
+// managedRuntimePlatformKey 返回运行时布局的发行平台键。
 export function managedRuntimePlatformKey(layout) {
   const key = `${layout.platform}-${layout.architecture}`;
-  const platformKeys = {
-    'win32-x64': 'windows-x64',
-    'linux-x64': 'linux-x64',
-    'linux-arm64': 'linux-arm64',
-    'darwin-x64': 'macos-x64',
-    'darwin-arm64': 'macos-arm64',
-  };
   const platform = platformKeys[key];
   if (!platform) throw new Error(`Unsupported release managed-runtime platform: ${key}.`);
   return platform;

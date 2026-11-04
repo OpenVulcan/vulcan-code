@@ -2,7 +2,7 @@
 // 将一份已验证的发行物打包为平台归档，并生成安装脚本信任的校验和。
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { copyFile, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
@@ -14,12 +14,9 @@ const execFileAsync = promisify(execFile);
 // 仓库由脚本位置确定，不依赖调用方工作目录。
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-// checksumFileName is the one index install.sh downloads before choosing and verifying an archive.
-// checksumFileName 是 install.sh 在选择并校验归档前下载的唯一索引。
+// checksumFileName is the index published beside the archives of a GitHub Release, signed with GPG there.
+// checksumFileName 是与 GitHub Release 归档一同发布的索引，在那里以 GPG 签名。
 export const checksumFileName = 'SHA256SUMS';
-// installerFileName is published beside the archives so `curl .../install.sh | sh` finds them by relative name.
-// installerFileName 与归档一同发布，使 `curl .../install.sh | sh` 能按相对名称找到归档。
-export const installerFileName = 'install.sh';
 // releaseAssetPattern matches every archive this script names: version, platform key, then format.
 // releaseAssetPattern 匹配本脚本命名的全部归档：版本、平台键与格式。
 const releaseAssetPattern = /^vulcan-code-(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)-([a-z]+-[a-z0-9]+)\.(?:tar\.gz|zip)$/;
@@ -48,12 +45,12 @@ async function sha256File(file) {
   return hash.digest('hex');
 }
 
-// writeChecksums rewrites the index over every archive and installer in root; mixed versions are rejected
-// so an installer can never face two candidates for one platform.
-// writeChecksums 基于 root 中全部归档与安装脚本重写索引；拒绝混合版本，使安装脚本不会面对同一平台的两个候选。
+// writeChecksums rewrites the index over every archive in root; mixed versions are rejected so a reader can
+// never face two candidates for one platform.
+// writeChecksums 基于 root 中全部归档重写索引；拒绝混合版本，使读取方不会面对同一平台的两个候选。
 export async function writeChecksums(root) {
-  const names = (await readdir(root)).filter(name => releaseAssetPattern.test(name) || name === installerFileName).sort();
-  const versions = new Set(names.filter(name => name !== installerFileName).map(name => releaseAssetPattern.exec(name)[1]));
+  const names = (await readdir(root)).filter(name => releaseAssetPattern.test(name)).sort();
+  const versions = new Set(names.map(name => releaseAssetPattern.exec(name)[1]));
   if (versions.size > 1) throw new Error(`One release directory must hold one version; found ${[...versions].join(', ')}.`);
   if (versions.size === 0) throw new Error(`No release archive was found in ${root}.`);
   // Two spaces keep the file readable by `sha256sum -c` and `shasum -a 256 -c`.
@@ -130,7 +127,6 @@ async function packageCurrentDistribution(outputOverride) {
   const { root, layout, version } = await inspectReleaseDistribution();
   const outputRoot = outputOverride ?? path.join(repository, 'target', 'release-packages', version);
   await mkdir(outputRoot, { recursive: true });
-  await copyFile(path.join(repository, 'scripts', installerFileName), path.join(outputRoot, installerFileName));
   const archive = await createReleaseArchive(root, outputRoot, version);
   console.log(`Release archive: ${archive}`);
   console.log(`Checksums: ${path.join(outputRoot, checksumFileName)}`);

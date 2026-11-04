@@ -1,0 +1,272 @@
+# Build, sign and publish one version of the setup program to the preview setup channel (plan section 18.6).
+# 构建、签名并发布安装器的一个版本到 preview 安装器通道（方案 18.6 节）。
+#
+# The setup program is released apart from the product and keeps its own version, defined only in
+# apps/vulcan-code-setup/Cargo.toml; the input only confirms it. Every platform's program and the filled
+# install.sh and install.ps1 go to setup/<version>/, and the signed setup pointer setup/channels/preview.json
+# names them with their digests. promote-setup.yml then moves the stable setup channel to the same files;
+# product releases bundle the stable setup program in the Windows installer, and openvulcan-web serves the
+# scripts the stable setup pointer names at the top level.
+# 安装器独立于产品发布，版本只在 apps/vulcan-code-setup/Cargo.toml 中定义；输入只用于确认。各平台程序与填好的
+# install.sh、install.ps1 发布到 setup/<版本>/，已签名的安装器指针 setup/channels/preview.json 连同摘要列出它们。
+# 之后由 promote-setup.yml 把 stable 安装器通道指向同一组文件；产品发布把 stable 安装器内置进 Windows 安装包，
+# openvulcan-web 在顶层提供 stable 安装器指针所列的脚本。
+name: Release setup
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Setup version to release; must equal apps/vulcan-code-setup/Cargo.toml
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: release
+  cancel-in-progress: false
+jobs:
+  plan:
+    name: Plan the setup release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      - name: Release from main only
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "Releases are built from main, not $GITHUB_REF." >&2
+          exit 1
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - id: plan
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          set -eu
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' apps/vulcan-code-setup/Cargo.toml)
+          [ -n "$version" ] || { echo 'apps/vulcan-code-setup/Cargo.toml has no version of its own' >&2; exit 1; }
+          [ "$version" = "$REQUESTED_VERSION" ] || {
+            echo "apps/vulcan-code-setup/Cargo.toml is at $version, not $REQUESTED_VERSION" >&2
+            exit 1
+          }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (${{ matrix.platform }})
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux programs link musl statically, so they run on any distribution.
+          # Linux 程序静态链接 musl，可在任何发行版上运行。
+          - { platform: linux-x64, runner: ubuntu-22.04, target: x86_64-unknown-linux-musl }
+          - { platform: linux-arm64, runner: ubuntu-22.04-arm, target: aarch64-unknown-linux-musl }
+          - { platform: macos-x64, runner: macos-15-intel, target: x86_64-apple-darwin }
+          - { platform: macos-arm64, runner: macos-15, target: aarch64-apple-darwin }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: '0'
+      VERSION: ${{ needs.plan.outputs.version }}
+      PLATFORM: ${{ matrix.platform }}
+      TARGET: ${{ matrix.target }}
+      # The C parts of ring and zstd are compiled against musl, not the runner's glibc.
+      # ring 与 zstd 的 C 部分针对 musl 编译，而非 Runner 的 glibc。
+      CC_x86_64_unknown_linux_musl: musl-gcc
+      CC_aarch64_unknown_linux_musl: musl-gcc
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install musl
+        if: runner.os == 'Linux'
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+      - name: Install the pinned Rust toolchain
+        run: |
+          set -eu
+          if ! command -v rustup > /dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup toolchain install
+          rustup target add "$TARGET"
+      - name: Build and check the setup program
+        run: |
+          set -eu
+          cargo build --locked --release -p vulcan-code-setup --target "$TARGET"
+          out="$RUNNER_TEMP/setup"
+          mkdir -p "$out"
+          program="$out/vulcan-code-setup-$VERSION-$PLATFORM"
+          cp "target/$TARGET/release/vulcan-code-setup" "$program"
+          [ "$("$program" --version)" = "vulcan-code-setup $VERSION" ] || { echo "the program reports another version" >&2; exit 1; }
+          if [ "$RUNNER_OS" = Linux ]; then
+            file "$program"
+            file "$program" | grep -q 'statically linked' || { echo "the Linux program is not statically linked" >&2; exit 1; }
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: setup-${{ matrix.platform }}
+          path: ${{ runner.temp }}/setup
+          retention-days: 3
+          if-no-files-found: error
+
+  build-windows:
+    name: Build and sign (windows-x64)
+    needs: plan
+    # The signing secrets exist only in the release environment, which requires approval.
+    # 签名密钥只存在于需要审批的 release 环境中。
+    environment: release
+    runs-on: windows-2025
+    timeout-minutes: 60
+    # One cloud signing session at a time across every workflow that logs in to Certum.
+    # 所有登录 Certum 的工作流同一时间只有一个云签名会话。
+    concurrency:
+      group: certum-signing
+      cancel-in-progress: false
+    env:
+      CARGO_INCREMENTAL: '0'
+      VERSION: ${{ needs.plan.outputs.version }}
+      # The program is downloaded on its own, so it carries the C runtime instead of needing the VC++ one.
+      # 程序单独下载，因此自带 C 运行时，而不依赖 VC++ 运行库。
+      RUSTFLAGS: -C target-feature=+crt-static
+      CL: /MT
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Signing evidence directory
+        run: |
+          "EVIDENCE=$env:RUNNER_TEMP\signing-evidence" >> $env:GITHUB_ENV
+      - id: versions
+        run: node scripts/ci-runtime-versions.mjs
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ steps.versions.outputs.node }}
+      - name: Build and check the setup program
+        run: |
+          rustup toolchain install
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --locked --release -p vulcan-code-setup
+          if ($LASTEXITCODE -ne 0) { throw 'building the setup program failed' }
+          $out = "$env:RUNNER_TEMP/setup"
+          New-Item -ItemType Directory -Force $out | Out-Null
+          $program = "$out/vulcan-code-setup-$env:VERSION-windows-x64.exe"
+          Copy-Item target/release/vulcan-code-setup.exe $program
+          $reported = & $program --version
+          if ($reported -ne "vulcan-code-setup $env:VERSION") { throw "the program reports $reported" }
+          "PROGRAM=$program" >> $env:GITHUB_ENV
+      - name: Install the pinned official SimplySign Desktop
+        run: ./scripts/certum-signing.ps1 -Phase Install -EvidenceDirectory $env:EVIDENCE
+      - name: Sign the setup program
+        env:
+          CERTUM_TOTP_EMAIL: ${{ secrets.CERTUM_TOTP_EMAIL }}
+          CERTUM_TOTP_SECRET: ${{ secrets.CERTUM_TOTP_SECRET }}
+          CERTUM_CERT_SHA1: ${{ vars.CERTUM_CERT_SHA1 }}
+        run: |
+          ./scripts/certum-signing.ps1 -Phase Login -EvidenceDirectory $env:EVIDENCE
+          try {
+            ./scripts/certum-signing.ps1 -Phase Sign -EvidenceDirectory $env:EVIDENCE -Files $env:PROGRAM `
+              -Description 'Vulcan Code Setup'
+          } finally {
+            ./scripts/certum-signing.ps1 -Phase Logout -EvidenceDirectory $env:EVIDENCE
+          }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: setup-windows-x64
+          path: ${{ runner.temp }}/setup
+          retention-days: 3
+          if-no-files-found: error
+      - name: Report
+        if: always()
+        run: |
+          foreach ($report in @(Get-ChildItem $env:EVIDENCE -Filter '*.json' -ErrorAction SilentlyContinue)) {
+            "### $($report.Name)", '```json', (Get-Content -Raw -LiteralPath $report.FullName), '```' >> $env:GITHUB_STEP_SUMMARY
+          }
+
+  publish:
+    name: Publish to the preview setup channel
+    needs: [plan, build, build-windows]
+    environment: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      # R2 rejects the optional checksums newer AWS CLI releases send by default.
+      # R2 不接受新版 AWS CLI 默认附带的可选校验和。
+      AWS_REQUEST_CHECKSUM_CALCULATION: WHEN_REQUIRED
+      AWS_RESPONSE_CHECKSUM_VALIDATION: WHEN_REQUIRED
+      R2_ENDPOINT: https://${{ vars.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+      R2_BUCKET: ${{ vars.R2_BUCKET }}
+      CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - id: versions
+        run: node scripts/ci-runtime-versions.mjs
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ steps.versions.outputs.node }}
+      # The download origins are defined once, in vulcan-install-core, and read from the tool.
+      # 下载源只在 vulcan-install-core 中定义一次，并从工具读取。
+      - name: Build the release tool
+        run: |
+          set -eu
+          rustup toolchain install
+          cargo build --locked --release -p vulcan-release-tool
+          origin=$(target/release/vulcan-release-tool origin)
+          echo "UPDATE_BASE_URL=$origin" >> "$GITHUB_ENV"
+      - name: Refuse a setup version that is already published
+        run: sh scripts/release-r2.sh setup-unpublished "$VERSION"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: setup-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/programs
+      - name: Fill the install scripts and sign the preview setup pointer
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+          CERTUM_CERT_SHA1: ${{ vars.CERTUM_CERT_SHA1 }}
+        run: |
+          set -eu
+          tool=target/release/vulcan-release-tool
+          programs="$RUNNER_TEMP/programs"
+          scripts="$RUNNER_TEMP/scripts"
+          set --
+          for origin in $("$tool" origins); do set -- "$@" --origin "$origin"; done
+          node scripts/entry-scripts.mjs generate --version "$VERSION" --setups "$programs" "$@" \
+            --signer "$CERTUM_CERT_SHA1" --out "$scripts"
+          "$tool" setup-publish --objects "$RUNNER_TEMP/objects" --version "$VERSION" --channel preview \
+            --programs "$programs" --scripts "$scripts" --released-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --key-env UPDATE_SIGNING_KEY
+          unset UPDATE_SIGNING_KEY
+          # The published pair must verify the way a client reads it.
+          # 已发布的这对文件必须能按客户端的方式通过校验。
+          chmod +x "$programs/vulcan-code-setup-$VERSION-linux-x64"
+          "$tool" setup-check --pointer "$RUNNER_TEMP/objects/setup/channels/preview.json" --channel preview \
+            --platform linux-x64 --program "$programs/vulcan-code-setup-$VERSION-linux-x64"
+          "$programs/vulcan-code-setup-$VERSION-linux-x64" --version
+      - name: Upload the files, then point the preview setup channel at them
+        run: |
+          set -eu
+          sh scripts/release-r2.sh setup-upload "$RUNNER_TEMP/objects" "$VERSION"
+          sh scripts/release-r2.sh setup-pointer "$RUNNER_TEMP/objects" preview
+          {
+            echo "### Vulcan Code setup $VERSION"
+            echo "- preview setup pointer: \`$UPDATE_BASE_URL/setup/channels/preview.json\`"
+            echo "- files: \`$UPDATE_BASE_URL/setup/$VERSION/\`"
+            echo "- run promote-setup.yml to move the stable setup channel to this version"
+          } >> "$GITHUB_STEP_SUMMARY"

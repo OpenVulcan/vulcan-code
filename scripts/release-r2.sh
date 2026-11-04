@@ -1,6 +1,6 @@
 #!/bin/sh
-# R2 and CDN steps shared by the release and promote workflows.
-# 发布与推进工作流共用的 R2 与 CDN 步骤。
+# R2 and CDN steps shared by the release, promote and setup release workflows.
+# 发布、推进与安装器发布工作流共用的 R2 与 CDN 步骤。
 #
 # Environment: UPDATE_BASE_URL (https://<host>/<prefix>, whose path is also the object key prefix; the
 # workflows take it from `vulcan-release-tool origin`), R2_ENDPOINT, R2_BUCKET, the AWS_* credentials,
@@ -15,6 +15,10 @@
 #   release-r2.sh pointers <objects> <channel>          upload the channel's pointers, purge and read back
 #   release-r2.sh manifests <objects> <version> <platform>...   download signed manifests for new pointers
 #   release-r2.sh records <artifacts>                   upload the reuse records of the build artifacts and purge
+#   release-r2.sh setup-unpublished <version>           fail when the setup version is already published
+#   release-r2.sh setup-upload <objects> <version>      upload the immutable files of a setup version
+#   release-r2.sh setup-pointer <objects> <channel>     upload the channel's setup pointer, purge and read back
+#   release-r2.sh setup-pointer-get <objects> <channel> download the channel's setup pointer for a promotion
 set -eu
 
 case "${UPDATE_BASE_URL:-}" in https://*/*) ;; *) echo 'UPDATE_BASE_URL must be https://<host>/<prefix>' >&2; exit 1 ;; esac
@@ -24,6 +28,39 @@ prefix=${base#https://*/}
 # s3 runs one AWS CLI s3api call against R2.
 # s3 对 R2 执行一次 AWS CLI s3api 调用。
 s3() { aws s3api "$@" --endpoint-url "$R2_ENDPOINT" --bucket "$R2_BUCKET"; }
+
+# put_pointers uploads the pointers at the given keys below <objects> with their signatures, purges them and
+# reads each back through the CDN.
+# put_pointers 上传 <objects> 之下给定键的指针及其签名，清除 CDN 缓存，并经 CDN 逐个读回。
+put_pointers() {
+  objects=$1
+  shift
+  [ "$#" -gt 0 ] || { echo "no pointers below $objects" >&2; exit 1; }
+  urls=''
+  for name in "$@"; do
+    # Pointers change in place: a short max-age, and the purge below makes the change visible at once.
+    # 指针原地更新：缓存时间短，并由下面的清除使变化立即可见。
+    s3 put-object --key "$prefix/$name.sig" --body "$objects/$name.sig" --content-type application/octet-stream \
+      --cache-control 'public, max-age=60' > /dev/null
+    s3 put-object --key "$prefix/$name" --body "$objects/$name" --content-type application/json \
+      --cache-control 'public, max-age=60' > /dev/null
+    urls="$urls $base/$name $base/$name.sig"
+  done
+  # shellcheck disable=SC2086 # urls is a space-separated list of URLs without spaces.
+  purge $urls
+  # A purge propagates within seconds; each pointer must read back through the CDN unchanged.
+  # 清除在数秒内生效；每个指针都必须经 CDN 原样读回。
+  for name in "$@"; do
+    seen=''
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      if curl -fsS "$base/$name" | cmp -s - "$objects/$name" &&
+         curl -fsS "$base/$name.sig" | cmp -s - "$objects/$name.sig"; then seen=yes; break; fi
+      sleep 2
+    done
+    [ "$seen" = yes ] || { echo "the CDN does not serve the new $name" >&2; exit 1; }
+    echo "$name is live"
+  done
+}
 
 # purge drops the given public URLs from the CDN cache.
 # purge 从 CDN 缓存中清除给定的公开网址。
@@ -58,7 +95,7 @@ case "$command" in
     # 先上传按内容寻址的对象，再上传引用它们的版本清单，使版本清单不会先于其对象可见；桶中已有且大小相同的对象跳过。
     immutable='public, max-age=31536000, immutable'
     aws s3 sync "$objects/" "s3://$R2_BUCKET/$prefix/" --endpoint-url "$R2_ENDPOINT" --size-only --only-show-errors \
-      --exclude 'channels/*' --exclude 'releases/*' --cache-control "$immutable"
+      --exclude 'channels/*' --exclude 'releases/*' --exclude 'setup/channels/*' --cache-control "$immutable"
     aws s3 sync "$objects/releases/" "s3://$R2_BUCKET/$prefix/releases/" --endpoint-url "$R2_ENDPOINT" --size-only \
       --only-show-errors --cache-control "$immutable"
     echo "uploaded the objects below $objects"
@@ -66,34 +103,11 @@ case "$command" in
   pointers)
     objects=$1
     channel=$2
-    urls=''
+    set --
     for pointer in "$objects/channels/$channel"/*.json; do
-      name=${pointer##*/}
-      key="$prefix/channels/$channel/$name"
-      # Pointers change in place: a short max-age, and the purge below makes the change visible at once.
-      # 指针原地更新：缓存时间短，并由下面的清除使变化立即可见。
-      s3 put-object --key "$key.sig" --body "$pointer.sig" --content-type application/octet-stream \
-        --cache-control 'public, max-age=60' > /dev/null
-      s3 put-object --key "$key" --body "$pointer" --content-type application/json \
-        --cache-control 'public, max-age=60' > /dev/null
-      urls="$urls $base/channels/$channel/$name $base/channels/$channel/$name.sig"
+      if [ -e "$pointer" ]; then set -- "$@" "channels/$channel/${pointer##*/}"; fi
     done
-    [ -n "$urls" ] || { echo "no $channel pointers below $objects" >&2; exit 1; }
-    # shellcheck disable=SC2086 # urls is a space-separated list of URLs without spaces.
-    purge $urls
-    # A purge propagates within seconds; each pointer must read back through the CDN unchanged.
-    # 清除在数秒内生效；每个指针都必须经 CDN 原样读回。
-    for pointer in "$objects/channels/$channel"/*.json; do
-      name=${pointer##*/}
-      seen=''
-      for attempt in 1 2 3 4 5 6 7 8 9 10; do
-        if curl -fsS "$base/channels/$channel/$name" | cmp -s - "$pointer" &&
-           curl -fsS "$base/channels/$channel/$name.sig" | cmp -s - "$pointer.sig"; then seen=yes; break; fi
-        sleep 2
-      done
-      [ "$seen" = yes ] || { echo "the CDN does not serve the new $channel/$name" >&2; exit 1; }
-      echo "$channel/$name is live"
-    done
+    put_pointers "$objects" "$@"
     ;;
   manifests)
     objects=$1
@@ -126,6 +140,36 @@ case "$command" in
     done
     # shellcheck disable=SC2086 # urls is a space-separated list of URLs without spaces.
     [ -z "$urls" ] || purge $urls
+    ;;
+  setup-unpublished)
+    version=$1
+    # Every setup version publishes install.sh; its files are immutable like a product release's.
+    # 每个安装器版本都发布 install.sh；其文件与产品版本一样不可变。
+    key="$prefix/setup/$version/install.sh"
+    if s3 head-object --key "$key" > /dev/null 2>&1; then
+      echo "setup $version is already published ($key)" >&2
+      exit 1
+    fi
+    echo "setup $version is not published yet"
+    ;;
+  setup-upload)
+    objects=$1
+    version=$2
+    aws s3 sync "$objects/setup/$version/" "s3://$R2_BUCKET/$prefix/setup/$version/" --endpoint-url "$R2_ENDPOINT" \
+      --only-show-errors --cache-control 'public, max-age=31536000, immutable'
+    echo "uploaded setup $version"
+    ;;
+  setup-pointer)
+    put_pointers "$1" "setup/channels/$2.json"
+    ;;
+  setup-pointer-get)
+    objects=$1
+    name="setup/channels/$2.json"
+    mkdir -p "$objects/setup/channels"
+    for key in "$name" "$name.sig"; do
+      s3 get-object --key "$prefix/$key" "$objects/$key" > /dev/null
+    done
+    echo "downloaded $name"
     ;;
   *)
     echo "unknown command: $command" >&2
