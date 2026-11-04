@@ -428,6 +428,12 @@ pub enum Notice {
     /// The service could not be reached; carries the technical cause.
     /// 无法连接服务；携带技术原因。
     ServiceUnavailable(String),
+    /// No service ran, so the TUI started the installed one and waits for it.
+    /// 没有运行中的服务，TUI 已启动已安装的服务并等待其就绪。
+    StartingService,
+    /// The service the TUI started could not start or exited early; carries the technical cause.
+    /// TUI 启动的服务无法启动或提前退出；携带技术原因。
+    ServiceStartFailed(String),
     /// An action needs the service but the connection is not up yet.
     /// 操作需要服务，但连接尚未建立。
     NotConnected,

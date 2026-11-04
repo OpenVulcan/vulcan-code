@@ -328,6 +328,8 @@
   "tui.notice.projectRemoved": "已移除项目“{name}”",
   "tui.notice.renamed": "已重命名",
   "tui.notice.serviceUnavailable": "无法连接 Vulcan Code 服务：{detail}",
+  "tui.notice.startingService": "正在启动 Vulcan Code 服务…",
+  "tui.notice.serviceStartFailed": "Vulcan Code 服务未能启动：{detail}",
   "tui.notice.settingsSaved": "设置已保存",
   "tui.notice.submitted": "任务已提交。",
   "tui.notice.testPassed": "连接测试通过。",

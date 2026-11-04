@@ -1843,6 +1843,11 @@ impl App {
                 NoticeSeverity::Warning,
                 tr!("tui.notice.serviceUnavailable", detail = detail),
             ),
+            Notice::StartingService => (NoticeSeverity::Info, tr!("tui.notice.startingService")),
+            Notice::ServiceStartFailed(detail) => (
+                NoticeSeverity::Error,
+                tr!("tui.notice.serviceStartFailed", detail = detail),
+            ),
             Notice::NotConnected => (NoticeSeverity::Warning, tr!("tui.notice.notConnected")),
             Notice::Unreadable { source, detail } => (
                 NoticeSeverity::Error,

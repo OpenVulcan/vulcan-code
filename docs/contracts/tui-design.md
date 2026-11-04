@@ -146,6 +146,12 @@ WebUI 区块一样仅在判定启用时出现在导航中。
   `/events?token=&clientId=`（`clientId` 为本进程 UUID，重连期间不变）并拉取 `workbench.snapshot`。传输失败
   或事件流关闭时以 0.5 s 起、翻倍至 5 s 的退避重新发现并重连。令牌只存在于请求头与 WebSocket URL 中，
   不写入日志、提示、错误或 `Debug` 输出。
+- **启动 Core**：与桌面 GUI 一样，有可连接的 Core 就连接，没有就启动。只有已安装版本的 TUI 会启动 Core：
+  它位于 `<版本>/bin/`，按 `<版本>/runtime-layout.json` 的 `serviceExecutable` 找到同一版本的 Core（只接受根目录内的
+  相对路径）；工作区构建与以 `--service-root` 绑定的 TUI（托盘启动）只连接。首次连接失败时分离启动一次 Core
+  （有桌面会话时 `--service`，Linux 没有 `DISPLAY`/`WAYLAND_DISPLAY` 时 `--headless`），工作目录为版本根，TUI
+  退出后 Core 继续运行；并发启动由 Core 的数据根锁裁决。启动后提示“正在启动”，等待期（`STARTUP_WAIT`，与 GUI
+  的就绪等待一致）内不显示连接失败；Core 在可连接前退出或无法启动时报告原因。实现见 `backend/service/launch.rs`。
 - **共享 DTO**：TUI 链接 `vulcan-service-api` 与 `vulcan-session-core`，事件帧、工作台快照、增量、会话事件窗口
   及各 RPC 响应都按共享类型严格解析，事件状态枚举直接复用共享类型；不符合类型的数据以“无法读取”提示报告来源
   与期望类型，不回显取值（serde 错误可能引用凭据）。只有 Git 载荷（DTO 位于服务内核、未共享）仍由

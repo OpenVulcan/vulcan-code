@@ -328,6 +328,8 @@
   "tui.notice.projectRemoved": "Removed project “{name}”",
   "tui.notice.renamed": "Renamed",
   "tui.notice.serviceUnavailable": "Cannot reach the Vulcan Code service: {detail}",
+  "tui.notice.startingService": "Starting the Vulcan Code service…",
+  "tui.notice.serviceStartFailed": "The Vulcan Code service did not start: {detail}",
   "tui.notice.settingsSaved": "Settings saved",
   "tui.notice.submitted": "Job submitted.",
   "tui.notice.testPassed": "Connection test passed.",

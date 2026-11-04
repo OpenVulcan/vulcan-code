@@ -11,6 +11,7 @@ mod discovery;
 mod events;
 mod files;
 mod git;
+mod launch;
 mod map;
 mod rpc;
 #[cfg(test)]

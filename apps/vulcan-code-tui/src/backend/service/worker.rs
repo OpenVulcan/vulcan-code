@@ -23,6 +23,7 @@ use vulcan_session_core::v1::service_dto::ConversationEventSummary;
 use super::discovery;
 use super::events::{self, EventStream};
 use super::git::GitState;
+use super::launch;
 use super::map::{self, ModelRoute};
 use super::rpc::{RpcClient, RpcError, parse_failure};
 use crate::backend::{BackendEvent, Command, ConnectionState, Notice};
@@ -212,6 +213,9 @@ pub struct Worker {
     /// Last connect failure shown, so retries do not repeat the same toast.
     /// 最近一次已显示的连接失败，避免重试时重复提示。
     connect_error: Option<String>,
+    /// The installed Core this TUI starts when none runs; absent for a bound root or a workspace build.
+    /// 没有运行中的服务时本 TUI 启动的已安装 Core；绑定发现根或工作区构建时为空。
+    launcher: Option<launch::Launcher>,
     /// Latest workbench snapshot with deltas folded in; absent until the first snapshot.
     /// 折叠了增量的最新工作台快照；首份快照到达前为空。
     pub(super) wb: Option<api::WorkbenchSnapshot>,
@@ -271,7 +275,13 @@ pub fn run(
 ) {
     // Worker.
     // 串行服务工作线程状态。
+    // A root given on the command line binds the TUI to a Core that already runs (the tray starts it that way).
+    // 命令行给出的发现根把 TUI 绑定到已在运行的 Core（托盘即以此方式启动）。
+    let bound = root.is_some();
     let mut worker = Worker::new(out, inbox, root);
+    if !bound {
+        worker.launcher = launch::Launcher::installed();
+    }
     worker.emit(BackendEvent::Connection(ConnectionState::Connecting));
     loop {
         // Current input.
@@ -322,6 +332,7 @@ impl Worker {
             retry_at: Some(Instant::now()),
             backoff: RETRY_MIN,
             connect_error: None,
+            launcher: None,
             wb: None,
             navigations: HashMap::new(),
             revision: 0,
@@ -406,6 +417,9 @@ impl Worker {
             Ok(()) => {
                 self.backoff = RETRY_MIN;
                 self.connect_error = None;
+                if let Some(launcher) = self.launcher.as_mut() {
+                    launcher.connected();
+                }
                 self.emit(BackendEvent::Connection(ConnectionState::Connected));
             }
             Err(message) => {
@@ -413,7 +427,27 @@ impl Worker {
                 if let Some(stream) = self.stream.take() {
                     stream.stop();
                 }
-                if self.connect_error.as_ref() != Some(&message) {
+                // No reachable Core: start the installed one once, and report it if it exits before it is reachable.
+                // 没有可连接的 Core：启动一次已安装的 Core，若它在可连接之前退出则报告。
+                let mut starting = false;
+                if let Some(launcher) = self.launcher.as_mut() {
+                    let exited = launcher.exited();
+                    let started = launcher.start();
+                    starting = launcher.starting();
+                    if let Some(status) = exited {
+                        self.emit(BackendEvent::Notice(Notice::ServiceStartFailed(status)));
+                    }
+                    match started {
+                        Ok(true) => self.emit(BackendEvent::Notice(Notice::StartingService)),
+                        Ok(false) => {}
+                        Err(error) => {
+                            self.emit(BackendEvent::Notice(Notice::ServiceStartFailed(error)))
+                        }
+                    }
+                }
+                // A Core still starting is expected to be unreachable; the retry loop connects once it is ready.
+                // 仍在启动的 Core 本就无法连接；重试循环会在其就绪后连上。
+                if !starting && self.connect_error.as_ref() != Some(&message) {
                     self.emit(BackendEvent::Notice(Notice::ServiceUnavailable(
                         message.clone(),
                     )));
