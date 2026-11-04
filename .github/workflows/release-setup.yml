@@ -107,7 +107,10 @@ jobs:
           [ "$("$program" --version)" = "vulcan-code-setup $VERSION" ] || { echo "the program reports another version" >&2; exit 1; }
           if [ "$RUNNER_OS" = Linux ]; then
             file "$program"
-            file "$program" | grep -q 'statically linked' || { echo "the Linux program is not statically linked" >&2; exit 1; }
+            # x86-64 musl links a static PIE, which `file` reports as "static-pie linked".
+            # x86-64 musl 链接为静态 PIE，`file` 将其报告为 "static-pie linked"。
+            file "$program" | grep -Eq 'statically linked|static-pie linked' ||
+              { echo "the Linux program is not statically linked" >&2; exit 1; }
           fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
