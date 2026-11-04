@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      PLATFORMS: windows-x64 linux-x64 linux-arm64 macos-intel macos-arm64
+      PLATFORMS: windows-x64 linux-x64 linux-arm64 macos-x64 macos-arm64
       CHANNEL: ${{ inputs.channel || 'stable' }}
       TAG_OR_VERSION: ${{ inputs.version || github.event.release.tag_name }}
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}

@@ -63,7 +63,7 @@ jobs:
           # Linux 在 22.04 上构建，使归档可在 glibc 2.35 及以上运行。
           - { platform: linux-x64, runner: ubuntu-22.04 }
           - { platform: linux-arm64, runner: ubuntu-22.04-arm }
-          - { platform: macos-intel, runner: macos-15-intel }
+          - { platform: macos-x64, runner: macos-15-intel }
           - { platform: macos-arm64, runner: macos-15 }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 360
@@ -114,6 +114,8 @@ jobs:
         run: |
           set -eu
           root=$(node scripts/desktop-runtime.mjs root release)
+          built=$(node scripts/release-plan.mjs platform --tree "$root")
+          [ "$built" = "$PLATFORM" ] || { echo "the tree was built for $built, not $PLATFORM" >&2; exit 1; }
           out="$RUNNER_TEMP/release"
           mkdir -p "$out"
           target/release/vulcan-release-tool pack --tree "$root" --rules scripts/release-components.json \
@@ -206,6 +208,8 @@ jobs:
       - name: Pack the incremental objects and record the tree
         run: |
           $root = node scripts/desktop-runtime.mjs root release
+          $built = node scripts/release-plan.mjs platform --tree $root
+          if ($built -ne $env:PLATFORM) { throw "the tree was built for $built, not $env:PLATFORM" }
           $out = "$env:RUNNER_TEMP/release"
           ./target/release/vulcan-release-tool pack --tree $root --rules scripts/release-components.json `
             --objects "$out/objects" --components-out "$out/components.json"
@@ -257,7 +261,7 @@ jobs:
     env:
       VERSION: ${{ needs.plan.outputs.version }}
       INSTALL_EPOCH: ${{ needs.plan.outputs.install_epoch }}
-      PLATFORMS: windows-x64 linux-x64 linux-arm64 macos-intel macos-arm64
+      PLATFORMS: windows-x64 linux-x64 linux-arm64 macos-x64 macos-arm64
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: auto

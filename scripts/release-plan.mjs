@@ -8,9 +8,14 @@
 // `check --version V` 是发布工作流的第一步：V 必须等于 `product.json`，更新记录必须通过发行检查，且最新
 // 发布必须已填写日期，避免误发未发布的版本。`notes --out FILE` 写出版本清单引用的更新说明文档：
 // `{"schema":1,"version":V,"date":"YYYY-MM-DD","notes":{"<语言>":"<markdown>"}}`。
+// `platform --tree DIR` prints the release platform of a built tree, from `managedRuntimePlatformKey`, the one
+// definition of the platform names; the build jobs compare it with the platform they publish.
+// `platform --tree DIR` 输出已构建目录的发布平台，取自平台名称的唯一定义 `managedRuntimePlatformKey`；构建作业
+// 用它核对自己发布的平台。
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { managedRuntimePlatformKey } from './desktop-runtime.mjs';
 import { LOCALES_PATH, RESOURCES_DIR, checkReleaseNotes, readProductVersion } from './release-notes-check.mjs';
 
 // NOTES_SCHEMA versions the notes document; clients reject other values.
@@ -55,12 +60,14 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
     if (process.env.GITHUB_OUTPUT) {
       appendFileSync(process.env.GITHUB_OUTPUT, `version=${plan.version}\ninstall_epoch=${plan.installEpoch}\n`);
     }
+  } else if (command === 'platform' && flag === '--tree' && value) {
+    console.log(managedRuntimePlatformKey(JSON.parse(readFileSync(path.join(value, 'runtime-layout.json'), 'utf8'))));
   } else if (command === 'notes' && flag === '--out' && value) {
     const product = JSON.parse(readFileSync(path.join(RESOURCES_DIR, 'product.json'), 'utf8'));
     const document = notesDocument(RESOURCES_DIR, codes, releasePlan(RESOURCES_DIR, codes, product.version));
     writeFileSync(value, `${JSON.stringify(document, null, 2)}\n`);
     console.log(`Release notes of ${document.version}: ${value}`);
   } else {
-    throw new Error('Usage: node scripts/release-plan.mjs check --version <version> | notes --out <file>');
+    throw new Error('Usage: node scripts/release-plan.mjs check --version <version> | notes --out <file> | platform --tree <dir>');
   }
 }

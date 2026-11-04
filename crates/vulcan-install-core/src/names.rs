@@ -35,8 +35,8 @@ pub enum Platform {
     LinuxArm64,
     /// macOS on Intel.
     /// Intel 上的 macOS。
-    #[serde(rename = "macos-intel")]
-    MacosIntel,
+    #[serde(rename = "macos-x64")]
+    MacosX64,
     /// macOS on Apple silicon.
     /// Apple 芯片上的 macOS。
     #[serde(rename = "macos-arm64")]
@@ -50,7 +50,7 @@ impl Platform {
         Self::WindowsX64,
         Self::LinuxX64,
         Self::LinuxArm64,
-        Self::MacosIntel,
+        Self::MacosX64,
         Self::MacosArm64,
     ];
 
@@ -61,7 +61,7 @@ impl Platform {
             Self::WindowsX64 => "windows-x64",
             Self::LinuxX64 => "linux-x64",
             Self::LinuxArm64 => "linux-arm64",
-            Self::MacosIntel => "macos-intel",
+            Self::MacosX64 => "macos-x64",
             Self::MacosArm64 => "macos-arm64",
         }
     }
@@ -76,7 +76,7 @@ impl Platform {
         } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
             Some(Self::LinuxArm64)
         } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
-            Some(Self::MacosIntel)
+            Some(Self::MacosX64)
         } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
             Some(Self::MacosArm64)
         } else {
@@ -93,7 +93,7 @@ impl Platform {
     /// Whether this is a macOS platform.
     /// 是否为 macOS 平台。
     pub const fn is_macos(self) -> bool {
-        matches!(self, Self::MacosIntel | Self::MacosArm64)
+        matches!(self, Self::MacosX64 | Self::MacosArm64)
     }
 
     /// Whether installs land on a case-insensitive file system (Windows, default macOS), where
