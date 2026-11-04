@@ -102,6 +102,22 @@ else {
 $SeparateBuildArguments = @(,$CargoLibraryBuildArguments)
 if (@(Get-ShippedRustPackageArguments -Kind isolated).Count -gt 0) { $SeparateBuildArguments += ,$CargoIsolatedBuildArguments }
 
+# PrebuiltKinds lists the invocations whose release files the release workflow already restored into the
+# Cargo profile directory from a published release (release-reuse.mjs); they are not built again.
+# PrebuiltKinds 列出发布工作流已从已发布版本还原到 Cargo 配置目录的调用（release-reuse.mjs），不再重新构建。
+$PrebuiltKinds = @((& node (Join-Path $PSScriptRoot 'shipped-rust-packages.mjs') prebuilt-kinds | Out-String).Trim() -split ' ' | Where-Object { $_ })
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+if ($PrebuiltKinds.Count -gt 0 -and -not $Release) { throw 'Restored release files cannot stand in for a debug build.' }
+# CargoInvocations keeps the invocations still to build, in their fixed order.
+# CargoInvocations 按固定顺序保留仍需构建的调用。
+$CargoInvocations = @(
+    foreach ($Invocation in @(@('binary', $CargoBuildArguments), @('library', $CargoLibraryBuildArguments), @('isolated', $CargoIsolatedBuildArguments))) {
+        if ($Invocation[0] -eq 'isolated' -and @(Get-ShippedRustPackageArguments -Kind isolated).Count -eq 0) { continue }
+        if ($PrebuiltKinds -contains $Invocation[0]) { Write-Host "==> Using the $($Invocation[0]) files restored from a published release"; continue }
+        ,$Invocation[1]
+    }
+)
+
 # BuildProfileName names the selected artifact profile in diagnostics.
 # BuildProfileName 在诊断中标识所选制品 profile。
 $BuildProfileName = if ($Release) { 'release' } else { 'debug' }
@@ -136,9 +152,30 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Host "==> Building Vulcan Core $BuildProfileName..."
 # CargoBuildResult retains the exit status and authoritative artifact paths for cleanup and publishing.
 # CargoBuildResult 保留退出状态及权威制品路径，供清理和发布使用。
-$CargoBuildResult = Invoke-TrackedCargoBuild -BuildArguments $CargoBuildArguments -SeparateBuildArguments $SeparateBuildArguments
+if ($PrebuiltKinds.Count -eq 0) {
+    $CargoBuildResult = Invoke-TrackedCargoBuild -BuildArguments $CargoBuildArguments -SeparateBuildArguments $SeparateBuildArguments
+}
+elseif ($CargoInvocations.Count -gt 0) {
+    # Restored units leave no Cargo records, so the profile sweep would remove their units; it is skipped.
+    # 已还原的单元没有 Cargo 记录，模式目录清理会删除它们的单元，因此跳过清理。
+    $RemainingInvocations = [object[]]@()
+    for ($Index = 1; $Index -lt $CargoInvocations.Count; $Index++) { $RemainingInvocations += ,$CargoInvocations[$Index] }
+    $CargoBuildResult = Invoke-TrackedCargoBuild -BuildArguments $CargoInvocations[0] -SeparateBuildArguments $RemainingInvocations -SkipSweep
+}
+else {
+    $CargoBuildResult = @{ ExitCode = 0; Artifacts = @() }
+}
 if ($CargoBuildResult.ExitCode -ne 0) {
     exit $CargoBuildResult.ExitCode
+}
+if ($PrebuiltKinds.Count -gt 0) {
+    # The restored files stand in the profile directory under their Cargo names, described like built ones.
+    # 已还原文件以 Cargo 名称位于配置目录中，并按已构建文件的形式描述。
+    $CargoTargetDirectory = [string]((& cargo metadata --locked --format-version 1 --no-deps | Out-String) | ConvertFrom-Json).target_directory
+    if ($LASTEXITCODE -ne 0) { throw 'Cargo metadata failed before taking the restored files.' }
+    $PrebuiltArtifactsJson = (& node (Join-Path $PSScriptRoot 'shipped-rust-packages.mjs') prebuilt-artifacts (Join-Path $CargoTargetDirectory 'release') | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    $CargoBuildResult.Artifacts = @($CargoBuildResult.Artifacts) + @($PrebuiltArtifactsJson | ConvertFrom-Json)
 }
 
 # BinaryFileName stores the platform-specific Tauri shell binary name.

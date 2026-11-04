@@ -42,7 +42,6 @@ jobs:
       AWS_RESPONSE_CHECKSUM_VALIDATION: WHEN_REQUIRED
       R2_ENDPOINT: https://${{ vars.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
       R2_BUCKET: ${{ vars.R2_BUCKET }}
-      UPDATE_BASE_URL: ${{ vars.UPDATE_BASE_URL }}
       CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     steps:
@@ -62,6 +61,8 @@ jobs:
           set -eu
           rustup toolchain install
           cargo build --locked --release -p vulcan-release-tool
+          origin=$(target/release/vulcan-release-tool origin)
+          echo "UPDATE_BASE_URL=$origin" >> "$GITHUB_ENV"
       # The pointer is signed over the published manifest, so the manifests are fetched rather than rebuilt.
       # 指针签署的是已发布的版本清单，因此下载版本清单而不是重新生成。
       - name: Sign the pointers

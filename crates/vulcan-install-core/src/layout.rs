@@ -7,6 +7,10 @@
 use crate::digest::Sha256Digest;
 use crate::names::{Channel, Platform, ReleaseVersion};
 
+/// The primary download origin; its path is the object key prefix in the bucket that serves it.
+/// 主下载源；其路径即提供它的存储桶中的对象键前缀。
+pub const PRIMARY_ORIGIN: &str = "https://static.openvulcan.com/vulcancode";
+
 /// The mutable signed pointer of a channel and platform.
 /// 某通道与平台的可变已签名指针。
 pub fn pointer_key(channel: Channel, platform: Platform) -> String {

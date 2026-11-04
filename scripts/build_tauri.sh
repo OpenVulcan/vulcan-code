@@ -78,6 +78,24 @@ CargoPackageArguments=$(node "$ProjectDir/scripts/shipped-rust-packages.mjs" car
 # CargoLibraryArguments selects the shipped libraries, built in their own invocation so they never take the service's features.
 # CargoLibraryArguments 选择分发库，在独立调用中构建，绝不沾染服务的特性。
 CargoLibraryArguments=$(node "$ProjectDir/scripts/shipped-rust-packages.mjs" cargo-args library)
+# PrebuiltKinds lists the invocations whose release files the release workflow already restored into the
+# Cargo profile directory from a published release (release-reuse.mjs); they are not built again.
+# PrebuiltKinds 列出发布工作流已从已发布版本还原到 Cargo 配置目录的调用（release-reuse.mjs），不再重新构建。
+PrebuiltKinds=$(node "$ProjectDir/scripts/shipped-rust-packages.mjs" prebuilt-kinds)
+
+# cargo_release_build runs the release invocation of one kind unless its files were restored.
+# cargo_release_build 执行某一类的 release 调用，除非其文件已被还原。
+cargo_release_build() {
+    Kind=$1
+    shift
+    case " $PrebuiltKinds " in
+        *" $Kind "*)
+            echo "==> Using the $Kind files restored from a published release"
+            return 0
+            ;;
+    esac
+    cargo build --locked "$@" --release
+}
 
 if [ "$Release" = "1" ]; then
 
@@ -87,9 +105,13 @@ if [ "$Release" = "1" ]; then
     echo "==> Building Vulcan Core release..."
     # Split only the fixed -p selectors and Cargo package names emitted by the inventory.
     # 仅拆分清单输出的固定 -p 选择项和 Cargo 包名。
-    cargo build --locked $CargoPackageArguments --release
-    cargo build --locked $CargoLibraryArguments --release
+    cargo_release_build binary $CargoPackageArguments
+    cargo_release_build library $CargoLibraryArguments
 else
+    if [ -n "$PrebuiltKinds" ]; then
+        echo "Restored release files cannot stand in for a debug build." >&2
+        exit 1
+    fi
     echo "==> Building Vulcan Core debug..."
     cargo build --locked $CargoPackageArguments
     cargo build --locked $CargoLibraryArguments

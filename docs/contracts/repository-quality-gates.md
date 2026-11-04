@@ -7,7 +7,7 @@
 | `.github/workflows/ci.yml` | 发布工作流调用（`workflow_call`）、手动 | 发布前的跨平台检查，每次检查全部内容 |
 | `.github/workflows/full-tests.yml` | 手动、可被调用 | 完整测试集，发布需要比快速集更多的验证时使用 |
 | `build-smoke`、`signing-smoke`、`distribution-smoke` | 手动 | 发布前的构建、签名与分发实测，见发布计划 |
-| `.github/workflows/release.yml` | 手动（输入版本） | 构建五个平台、签名、上传到 R2 并指向 preview 通道，另建 GitHub Release 草稿 |
+| `.github/workflows/release.yml` | 手动（输入版本，可选 `rebuild`） | 构建五个平台、签名、上传到 R2 并指向 preview 通道，另建 GitHub Release 草稿；输入未变的程序取自上次已发布、已签名的版本，不重新编译（`scripts/release-reuse.mjs`），`rebuild` 强制全部编译 |
 | `.github/workflows/promote.yml` | 发布 GitHub Release、手动 | 将 stable（或 preview）通道指向已上传的版本，不重新构建 |
 
 本仓库由单人维护，自 2026-11-03 起 CI 只作为发布前的跨平台检查：推送与合并不触发任何运行，也不使用合并请求

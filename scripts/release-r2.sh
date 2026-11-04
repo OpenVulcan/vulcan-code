@@ -2,16 +2,19 @@
 # R2 and CDN steps shared by the release and promote workflows.
 # 发布与推进工作流共用的 R2 与 CDN 步骤。
 #
-# Environment: UPDATE_BASE_URL (https://<host>/<prefix>, whose path is also the object key prefix),
-# R2_ENDPOINT, R2_BUCKET, the AWS_* credentials, CLOUDFLARE_ZONE_ID and CLOUDFLARE_API_TOKEN.
+# Environment: UPDATE_BASE_URL (https://<host>/<prefix>, whose path is also the object key prefix; the
+# workflows take it from `vulcan-release-tool origin`), R2_ENDPOINT, R2_BUCKET, the AWS_* credentials,
+# CLOUDFLARE_ZONE_ID and CLOUDFLARE_API_TOKEN.
 # Objects below <objects> use the layout of vulcan-install-core `layout.rs`.
-# 环境变量：UPDATE_BASE_URL（https://<主机>/<前缀>，其路径同时是对象键前缀）、R2_ENDPOINT、R2_BUCKET、AWS_*
-# 凭据、CLOUDFLARE_ZONE_ID 与 CLOUDFLARE_API_TOKEN。<objects> 之下的对象采用 vulcan-install-core `layout.rs` 的布局。
+# 环境变量：UPDATE_BASE_URL（https://<主机>/<前缀>，其路径同时是对象键前缀；工作流取自
+# `vulcan-release-tool origin`）、R2_ENDPOINT、R2_BUCKET、AWS_* 凭据、CLOUDFLARE_ZONE_ID 与 CLOUDFLARE_API_TOKEN。
+# <objects> 之下的对象采用 vulcan-install-core `layout.rs` 的布局。
 #
 #   release-r2.sh unpublished <version> <platform>...   fail when any manifest of the version exists
 #   release-r2.sh upload <objects>                      upload every immutable object, manifests last
 #   release-r2.sh pointers <objects> <channel>          upload the channel's pointers, purge and read back
 #   release-r2.sh manifests <objects> <version> <platform>...   download signed manifests for new pointers
+#   release-r2.sh records <artifacts>                   upload the reuse records of the build artifacts and purge
 set -eu
 
 case "${UPDATE_BASE_URL:-}" in https://*/*) ;; *) echo 'UPDATE_BASE_URL must be https://<host>/<prefix>' >&2; exit 1 ;; esac
@@ -104,6 +107,25 @@ case "$command" in
       done
     done
     echo "downloaded the $version manifests"
+    ;;
+  records)
+    artifacts=$1
+    urls=''
+    # Reuse records change in place like pointers and are written only once the version they name is live;
+    # a release that rebuilt nothing has none. Each record names a published version and nothing else
+    # (release-reuse.mjs), so a stale cached record only costs a rebuild.
+    # 复用记录像指针一样原地更新，只在其指明的版本上线后写入；什么都未重新构建的发版没有记录。每条记录只指明一个
+    # 已发布版本（release-reuse.mjs），因此缓存中的旧记录只会多一次重新构建。
+    for record in "$artifacts"/release-*/records/fingerprints/*/*.json; do
+      [ -e "$record" ] || continue
+      name=${record#*/records/}
+      s3 put-object --key "$prefix/$name" --body "$record" --content-type application/json \
+        --cache-control 'public, max-age=60' > /dev/null
+      urls="$urls $base/$name"
+      echo "recorded $name"
+    done
+    # shellcheck disable=SC2086 # urls is a space-separated list of URLs without spaces.
+    [ -z "$urls" ] || purge $urls
     ;;
   *)
     echo "unknown command: $command" >&2

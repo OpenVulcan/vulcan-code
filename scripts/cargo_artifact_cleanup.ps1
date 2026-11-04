@@ -233,8 +233,10 @@ function Invoke-CargoArtifactSweep {
 # SeparateBuildArguments holds further argument lists, each run as its own Cargo invocation under the same lock;
 # the sweep runs once afterwards over the units every invocation used.
 # SeparateBuildArguments 保存更多参数列表，各自在同一把锁下作为独立 Cargo 调用执行；之后只清理一次，保留全部调用用到的单元。
+# SkipSweep keeps the profile as it is, for a build that runs only some invocations and so cannot tell which units are used.
+# SkipSweep 保持模式目录不变，用于只执行部分调用、因而无法判断哪些单元仍被使用的构建。
 function Invoke-TrackedCargoBuild {
-    param([string[]]$BuildArguments, [object[]]$SeparateBuildArguments = @())
+    param([string[]]$BuildArguments, [object[]]$SeparateBuildArguments = @(), [switch]$SkipSweep)
     # Metadata supplies the authoritative target directory, including environment overrides.
     # Metadata 提供权威 target 目录，包括环境变量覆盖。
     $MetadataJson = & cargo metadata --format-version 1 --no-deps
@@ -287,7 +289,10 @@ function Invoke-TrackedCargoBuild {
             $BuildExitCode = $LASTEXITCODE
             if ($BuildExitCode -ne 0 -or -not $BuildFinished) { break }
         }
-        if ($BuildExitCode -eq 0 -and $BuildFinished) {
+        if ($BuildExitCode -eq 0 -and $BuildFinished -and $SkipSweep) {
+            Write-Host 'Only some invocations ran, so artifact cleanup is skipped.'
+        }
+        elseif ($BuildExitCode -eq 0 -and $BuildFinished) {
             # ShellArtifacts identifies the exact main executable through Cargo target metadata.
             # ShellArtifacts 通过 Cargo 目标元数据识别精确的主程序可执行文件。
             $ShellArtifacts = @($Artifacts | Where-Object { $_.target.name -eq 'vulcan-code-service' -and $_.target.kind -contains 'bin' })

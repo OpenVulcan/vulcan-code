@@ -69,7 +69,7 @@ pub fn verify_release(
     };
     let manifest = ReleaseManifest::verify(&document, &signature, keys, &pointer)?;
 
-    if let Some(notes) = manifest.notes {
+    if let Some(notes) = &manifest.notes {
         let bytes = read_object(objects, &notes_key(version))?;
         if bytes.len() as u64 > MAX_NOTES_BYTES {
             bail!("the release notes exceed {MAX_NOTES_BYTES} bytes");
@@ -85,16 +85,7 @@ pub fn verify_release(
             bail!("download `{}` differs from the manifest", download.file);
         }
     }
-    let mut indexes = Vec::with_capacity(manifest.components.len());
-    for (component, reference) in &manifest.components {
-        let object = read_object(objects, &index_key(reference.index))?;
-        let index = ComponentIndex::from_object(&object, reference.index, component)
-            .with_context(|| format!("reading the `{component}` index"))?;
-        if index.installed_size() != reference.size {
-            bail!("the `{component}` size differs from its index");
-        }
-        indexes.push(index);
-    }
+    let indexes = read_indexes(objects, &manifest)?;
 
     let root = InstallRoot::new(install_root);
     let lock = root.lock()?;
@@ -105,8 +96,51 @@ pub fn verify_release(
     Ok(installed)
 }
 
+/// Reads the signed manifest of a published `version` and the indexes it names, each checked
+/// against its digest and size; the manifest is checked by its own signature, without a pointer.
+/// 读取已发布 `version` 的签名版本清单及其列出的索引，每个索引按摘要与大小校验；版本清单只按自身签名
+/// 校验，不经指针。
+pub fn published_release(
+    objects: &Path,
+    platform: Platform,
+    version: &ReleaseVersion,
+    keys: &[TrustedKey],
+) -> anyhow::Result<(ReleaseManifest, Vec<ComponentIndex>)> {
+    let document_key = manifest_key(version, platform);
+    let document = read_object(objects, &document_key)?;
+    let signature = read_object(objects, &signature_key(&document_key))?;
+    let pointer = ChannelPointer {
+        schema: SCHEMA_VERSION,
+        product: PRODUCT.to_owned(),
+        channel: Channel::Preview,
+        platform,
+        version: version.clone(),
+        manifest: DocumentRef::of(&document),
+        key_id: String::new(),
+    };
+    let manifest = ReleaseManifest::verify(&document, &signature, keys, &pointer)?;
+    let indexes = read_indexes(objects, &manifest)?;
+    Ok((manifest, indexes))
+}
+
+/// Reads every index `manifest` names, checked against its digest and size.
+/// 读取 `manifest` 列出的每个索引，并按摘要与大小校验。
+fn read_indexes(objects: &Path, manifest: &ReleaseManifest) -> anyhow::Result<Vec<ComponentIndex>> {
+    let mut indexes = Vec::with_capacity(manifest.components.len());
+    for (component, reference) in &manifest.components {
+        let object = read_object(objects, &index_key(reference.index))?;
+        let index = ComponentIndex::from_object(&object, reference.index, component)
+            .with_context(|| format!("reading the `{component}` index"))?;
+        if index.installed_size() != reference.size {
+            bail!("the `{component}` size differs from its index");
+        }
+        indexes.push(index);
+    }
+    Ok(indexes)
+}
+
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::HashMap;
 
     use vulcan_install_core::manifest::DownloadKind;
@@ -119,14 +153,14 @@ mod tests {
 
     const SECRET: [u8; 32] = [9; 32];
 
-    fn keys() -> Vec<TrustedKey> {
+    pub(crate) fn keys() -> Vec<TrustedKey> {
         vec![TrustedKey {
             key_id: "test-key",
             public_key: public_key_of(&SECRET),
         }]
     }
 
-    fn write(root: &Path, path: &str, content: &[u8]) {
+    pub(crate) fn write(root: &Path, path: &str, content: &[u8]) {
         let target = root.join(path);
         std::fs::create_dir_all(target.parent().expect("parent")).expect("dirs");
         std::fs::write(target, content).expect("write");
@@ -134,7 +168,7 @@ mod tests {
 
     /// Packs, signs and promotes one version of `tree`, as the release workflow does.
     /// 像发布工作流那样，对 `tree` 的一个版本打包、签名并推进通道。
-    fn release(temp: &Path, tree: &Path, version: &str) -> ReleaseVersion {
+    pub(crate) fn release(temp: &Path, tree: &Path, version: &str) -> ReleaseVersion {
         let objects = temp.join("objects");
         let platform = Platform::LinuxX64;
         let rules = temp.join("rules.json");

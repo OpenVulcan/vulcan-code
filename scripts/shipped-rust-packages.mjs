@@ -1,6 +1,6 @@
 // Share the shipped Cargo package and artifact inventory with Unix builds and publication.
 // 与 Unix 构建和发布流程共用分发 Cargo 包及制品清单。
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -47,9 +47,41 @@ export function shippedArtifactNames(platform = process.platform) {
 // change its bytes either.
 // Windows 启动器只随安装纪元变化，因此其他包统一进来的特性同样不得改变其字节。
 export function shippedCargoArgs(kind, platform = process.platform) {
-  const selected = shippedRustPackagesFor(platform)
-    .filter(item => (kind === 'isolated' ? item.isolated === true : kind in item && item.isolated !== true));
+  const selected = shippedRustPackagesFor(platform).filter(item => shippedKindOf(item) === kind);
   return [...new Set(selected.map(item => item.package))].flatMap(name => ['-p', name]);
+}
+
+// shippedKindOf returns the Cargo invocation (`binary`, `library` or `isolated`) that builds an item.
+// shippedKindOf 返回构建某清单项的 Cargo 调用（`binary`、`library` 或 `isolated`）。
+export function shippedKindOf(item) {
+  if (item.isolated === true) return 'isolated';
+  return item.binary ? 'binary' : 'library';
+}
+
+// prebuiltKinds reads `VULCAN_PREBUILT_KINDS`: the invocations the release workflow restored from a published
+// release instead of building (release-reuse.mjs), their files already in the Cargo profile directory.
+// prebuiltKinds 读取 `VULCAN_PREBUILT_KINDS`：发布工作流从已发布版本还原而无需构建的调用（release-reuse.mjs），
+// 其文件已位于 Cargo 配置目录中。
+export function prebuiltKinds(value = process.env.VULCAN_PREBUILT_KINDS ?? '') {
+  const kinds = value.split(' ').filter(Boolean);
+  for (const kind of kinds) {
+    if (!['binary', 'library', 'isolated'].includes(kind)) throw new Error(`VULCAN_PREBUILT_KINDS names unknown kind ${kind}`);
+  }
+  return kinds;
+}
+
+// prebuiltArtifacts describes the restored files of `kinds` in `directory` the way Cargo's compiler-artifact
+// messages do, so the Windows build takes them like built ones; a missing file fails here.
+// prebuiltArtifacts 以 Cargo compiler-artifact 消息的形式描述 `directory` 中 `kinds` 的已还原文件，使 Windows
+// 构建像对待已构建文件一样使用它们；文件缺失时在此失败。
+export function prebuiltArtifacts(kinds, directory, platform = process.platform) {
+  return shippedRustPackagesFor(platform).filter(item => kinds.includes(shippedKindOf(item))).map(item => {
+    const file = path.join(directory, shippedFileName(item, platform));
+    if (!existsSync(file)) throw new Error(`the restored ${path.basename(file)} is missing from ${directory}`);
+    return item.binary
+      ? { target: { name: item.binary, kind: ['bin'] }, executable: file, filenames: [file] }
+      : { target: { name: item.library, kind: ['cdylib'] }, executable: null, filenames: [file] };
+  });
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -62,7 +94,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     const item = shippedRustPackages.find(candidate => candidate.package === rest[0]);
     if (!item) throw new Error(`Package ${rest[0]} is not shipped.`);
     process.stdout.write(shippedFileName(item));
+  } else if (command === 'prebuilt-kinds' && rest.length === 0) {
+    process.stdout.write(prebuiltKinds().join(' '));
+  } else if (command === 'prebuilt-artifacts' && rest.length === 1) {
+    process.stdout.write(JSON.stringify(prebuiltArtifacts(prebuiltKinds(), rest[0])));
   } else {
-    throw new Error('Usage: shipped-rust-packages cargo-args binary|library|isolated | file-name <package>');
+    throw new Error('Usage: shipped-rust-packages cargo-args binary|library|isolated | file-name <package> | prebuilt-kinds | prebuilt-artifacts <dir>');
   }
 }

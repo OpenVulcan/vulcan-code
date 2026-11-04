@@ -9,6 +9,12 @@
 # 版本取自 product.json，输入只用于确认。构建与跨平台检查（ci.yml）同时运行，两者都通过才发布。只有两个作业
 # 持有 release 环境的密钥，各需审批：Windows 构建为文件与安装包签名；发布作业签署版本清单与指针、上传到 R2 并
 # 创建草稿。发布草稿时运行 promote.yml，将 stable 通道指向同一份构建。
+#
+# Program files whose inputs did not change since they were last built are taken from that published,
+# signed release instead of being compiled and signed again, and every file already published is stored
+# only once (scripts/release-reuse.mjs); `rebuild` compiles everything regardless.
+# 自上次构建以来输入未变的程序文件直接取自那次已发布、已签名的版本，不再重新编译和签名；已发布过的文件只存储一次
+# （scripts/release-reuse.mjs）；`rebuild` 则无论如何全部重新编译。
 name: Release
 on:
   workflow_dispatch:
@@ -16,6 +22,10 @@ on:
       version:
         description: Version to release; must equal product.json
         required: true
+      rebuild:
+        description: Compile every program even when an unchanged build is published
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -99,6 +109,17 @@ jobs:
             export PATH="$HOME/.cargo/bin:$PATH"
           fi
           rustup toolchain install
+      # The build scripts take the restored kinds from VULCAN_PREBUILT_KINDS instead of compiling them.
+      # 构建脚本从 VULCAN_PREBUILT_KINDS 读取已还原的类别，不再编译它们。
+      - name: Reuse unchanged programs from a published release
+        if: ${{ !inputs.rebuild }}
+        run: |
+          set -eu
+          cargo build --locked --release -p vulcan-release-tool
+          origin=$(target/release/vulcan-release-tool origin)
+          node scripts/release-reuse.mjs lookup --platform "$PLATFORM" --origin "$origin" \
+            --tool target/release/vulcan-release-tool --work "$RUNNER_TEMP/reuse" --target target/release \
+            --report "$RUNNER_TEMP/release/reuse.json" >> "$GITHUB_ENV"
       # The read-only job token lifts GitHub API lookups off the anonymous per-address limit.
       # 只读作业令牌让 GitHub API 查询不受按地址的匿名配额限制。
       - name: Initialize, synchronize and build
@@ -110,6 +131,10 @@ jobs:
           sh ./make.sh sync release
           sh ./make.sh release
           cargo build --locked --release -p vulcan-release-tool
+      - name: Record the inputs of the programs built here
+        run: |
+          node scripts/release-reuse.mjs record --platform "$PLATFORM" --version "$VERSION" --target target/release \
+            --report "$RUNNER_TEMP/release/reuse.json" --records "$RUNNER_TEMP/release/records"
       - name: Pack the incremental objects and record the tree
         run: |
           set -eu
@@ -118,8 +143,10 @@ jobs:
           [ "$built" = "$PLATFORM" ] || { echo "the tree was built for $built, not $PLATFORM" >&2; exit 1; }
           out="$RUNNER_TEMP/release"
           mkdir -p "$out"
+          origin=$(target/release/vulcan-release-tool origin)
+          node scripts/release-reuse.mjs published --platform "$PLATFORM" --origin "$origin" --out "$RUNNER_TEMP/published"
           target/release/vulcan-release-tool pack --tree "$root" --rules scripts/release-components.json \
-            --objects "$out/objects" --components-out "$out/components.json"
+            --objects "$out/objects" --components-out "$out/components.json" --published "$RUNNER_TEMP/published"
           target/release/vulcan-release-tool record --objects "$out/objects" --components "$out/components.json" \
             --version "$VERSION" --platform "$PLATFORM" --install-epoch "$INSTALL_EPOCH" --tree "$root"
       - name: Archive for the GitHub Release
@@ -173,6 +200,17 @@ jobs:
         run: |
           rustup toolchain install
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Reuse unchanged programs from a published release
+        if: ${{ !inputs.rebuild }}
+        run: |
+          cargo build --locked --release -p vulcan-release-tool
+          if ($LASTEXITCODE -ne 0) { throw 'building the release tool failed' }
+          $origin = ./target/release/vulcan-release-tool.exe origin
+          $line = node scripts/release-reuse.mjs lookup --platform $env:PLATFORM --origin $origin `
+            --tool ./target/release/vulcan-release-tool.exe --work "$env:RUNNER_TEMP/reuse" --target target/release `
+            --report "$env:RUNNER_TEMP/release/reuse.json"
+          if ($LASTEXITCODE -ne 0) { throw 'looking up reusable programs failed' }
+          $line >> $env:GITHUB_ENV
       - name: Initialize, synchronize and build
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -183,11 +221,26 @@ jobs:
           }
           cargo build --locked --release -p vulcan-release-tool
           if ($LASTEXITCODE -ne 0) { throw 'building the release tool failed' }
+      # The Electron executable is compared before signing, while its bytes are still the unsigned ones.
+      # Electron 可执行文件在签名前比较，此时其字节仍是未签名的。
+      - name: Reuse the signed desktop executable and record the programs built here
+        run: |
+          $root = node scripts/desktop-runtime.mjs root release
+          $common = @('--platform', $env:PLATFORM, '--report', "$env:RUNNER_TEMP/release/reuse.json",
+            '--records', "$env:RUNNER_TEMP/release/records", '--version', $env:VERSION)
+          $origin = @()
+          if ('${{ inputs.rebuild }}' -ne 'true') { $origin = @('--origin', (./target/release/vulcan-release-tool.exe origin)) }
+          node scripts/release-reuse.mjs desktop @common @origin --tool ./target/release/vulcan-release-tool.exe `
+            --work "$env:RUNNER_TEMP/reuse" --tree $root
+          if ($LASTEXITCODE -ne 0) { throw 'reusing the desktop executable failed' }
+          node scripts/release-reuse.mjs record @common --target target/release
+          if ($LASTEXITCODE -ne 0) { throw 'recording the built programs failed' }
       - name: Install the pinned official SimplySign Desktop
         run: ./scripts/certum-signing.ps1 -Phase Install -EvidenceDirectory $env:EVIDENCE
       # Our own programs are signed before packing, so the indexes and the installer carry signed bytes;
-      # third-party programs keep their vendors' signatures.
-      # 自研程序在打包前签名，使索引与安装包包含签名后的字节；第三方程序保留原厂签名。
+      # third-party programs keep their vendors' signatures, and reused programs keep the signature they
+      # were published with.
+      # 自研程序在打包前签名，使索引与安装包包含签名后的字节；第三方程序保留原厂签名，复用的程序保留其发布时的签名。
       - name: Sign the program files
         env:
           CERTUM_TOTP_EMAIL: ${{ secrets.CERTUM_TOTP_EMAIL }}
@@ -196,9 +249,14 @@ jobs:
         run: |
           $root = node scripts/desktop-runtime.mjs root release
           $layout = Get-Content -Raw -LiteralPath (Join-Path $root 'runtime-layout.json') | ConvertFrom-Json
+          $reused = @((Get-Content -Raw -LiteralPath "$env:RUNNER_TEMP/release/reuse.json" | ConvertFrom-Json).files |
+            ForEach-Object { [IO.Path]::GetFullPath((Join-Path $root $_)) })
           $files = @(Get-ChildItem -LiteralPath (Join-Path $root 'bin') -File |
             Where-Object Extension -in '.exe', '.dll' | ForEach-Object FullName)
           $files += (Join-Path $root $layout.desktopExecutable)
+          $files = @($files | Where-Object { $reused -notcontains [IO.Path]::GetFullPath($_) })
+          "reusing $($reused.Count) signed files, signing $($files.Count)"
+          if ($files.Count -eq 0) { return }
           ./scripts/certum-signing.ps1 -Phase Login -EvidenceDirectory $env:EVIDENCE
           try {
             ./scripts/certum-signing.ps1 -Phase Sign -EvidenceDirectory $env:EVIDENCE -Files $files
@@ -211,8 +269,11 @@ jobs:
           $built = node scripts/release-plan.mjs platform --tree $root
           if ($built -ne $env:PLATFORM) { throw "the tree was built for $built, not $env:PLATFORM" }
           $out = "$env:RUNNER_TEMP/release"
+          $origin = ./target/release/vulcan-release-tool.exe origin
+          node scripts/release-reuse.mjs published --platform $env:PLATFORM --origin $origin --out "$env:RUNNER_TEMP/published"
+          if ($LASTEXITCODE -ne 0) { throw 'reading the published indexes failed' }
           ./target/release/vulcan-release-tool pack --tree $root --rules scripts/release-components.json `
-            --objects "$out/objects" --components-out "$out/components.json"
+            --objects "$out/objects" --components-out "$out/components.json" --published "$env:RUNNER_TEMP/published"
           if ($LASTEXITCODE -ne 0) { throw 'pack failed' }
           ./target/release/vulcan-release-tool record --objects "$out/objects" --components "$out/components.json" `
             --version $env:VERSION --platform $env:PLATFORM --install-epoch $env:INSTALL_EPOCH --tree $root
@@ -271,7 +332,6 @@ jobs:
       AWS_RESPONSE_CHECKSUM_VALIDATION: WHEN_REQUIRED
       R2_ENDPOINT: https://${{ vars.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
       R2_BUCKET: ${{ vars.R2_BUCKET }}
-      UPDATE_BASE_URL: ${{ vars.UPDATE_BASE_URL }}
       CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     steps:
@@ -287,13 +347,17 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: ${{ steps.versions.outputs.node }}
-      - name: Refuse a version that is already published
-        run: sh scripts/release-r2.sh unpublished "$VERSION" $PLATFORMS
+      # The download origin is defined once, in vulcan-install-core, and read from the tool.
+      # 下载源只在 vulcan-install-core 中定义一次，并从工具读取。
       - name: Build the release tool
         run: |
           set -eu
           rustup toolchain install
           cargo build --locked --release -p vulcan-release-tool
+          origin=$(target/release/vulcan-release-tool origin)
+          echo "UPDATE_BASE_URL=$origin" >> "$GITHUB_ENV"
+      - name: Refuse a version that is already published
+        run: sh scripts/release-r2.sh unpublished "$VERSION" $PLATFORMS
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           pattern: release-*
@@ -324,17 +388,21 @@ jobs:
               --key-env UPDATE_SIGNING_KEY
           done
           unset UPDATE_SIGNING_KEY
+          # Indexes may name packs an earlier release published; verify installs from them too.
+          # 索引可能引用较早版本发布的文件包；校验安装同样使用它们。
+          node scripts/release-reuse.mjs packs --objects "$objects" --origin "$UPDATE_BASE_URL"
           for platform in $PLATFORMS; do
             "$tool" verify --objects "$objects" --platform "$platform" --version "$VERSION" --channel preview \
               --install-root "$RUNNER_TEMP/verify"
             rm -rf "$RUNNER_TEMP/verify"
           done
           df -h /
-      - name: Upload the objects, then point preview at them
+      - name: Upload the objects, then point preview at them and record the programs built
         run: |
           set -eu
           sh scripts/release-r2.sh upload "$RUNNER_TEMP/objects"
           sh scripts/release-r2.sh pointers "$RUNNER_TEMP/objects" preview
+          sh scripts/release-r2.sh records "$RUNNER_TEMP/artifacts"
       - name: Checksums and their GPG signature for the GitHub Release
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
