@@ -157,6 +157,22 @@ test('install.ps1 verifies the setup program and passes its arguments and exit c
       assert.notEqual(refused.status, 0, shell);
       assert.doesNotMatch(refused.stdout, /hello/);
       assert.match(refused.stderr + refused.stdout, /not signed by the Vulcan Code certificate/);
+      // After the setup program, the session that ran the script has every user PATH entry; the
+      // user PATH is only read here.
+      // 安装器运行后，运行脚本的会话包含每个用户 PATH 条目；这里只读取用户 PATH。
+      const session = await runAsync(shell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', [
+        `$env:Path = "$env:SystemRoot\\System32"`,
+        `& '${unsigned.replaceAll("'", "''")}' /d /c echo hello`,
+        `$expected = ([Environment]::GetEnvironmentVariable('Path', 'User') -split ';' | Where-Object { $_ } | ForEach-Object { [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\\') }) -join '|'`,
+        `"EXPECTED=$expected"`,
+        `"SESSION=$env:Path"`,
+      ].join('; ')]);
+      assert.equal(session.status, 0, `${shell}: ${session.stderr}`);
+      const line = name => session.stdout.split(/\r?\n/).find(entry => entry.startsWith(`${name}=`))?.slice(name.length + 1) ?? '';
+      const sessionEntries = line('SESSION').split(';').map(entry => entry.replace(/\\+$/, '').toLowerCase());
+      for (const entry of line('EXPECTED').split('|').filter(Boolean)) {
+        assert.ok(sessionEntries.includes(entry.toLowerCase()), `${shell}: ${entry} is missing from the session PATH`);
+      }
     }
     await copyFile(path.join(setups, setupProgramName(version, 'linux-x64')), path.join(setups, setupProgramName(version, 'windows-x64')));
     const tampered = await runAsync(powerShells[0], ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', unsigned, '/d', '/c', 'echo', 'hello']);

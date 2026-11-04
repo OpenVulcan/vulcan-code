@@ -3,13 +3,14 @@
 # the release signing key. Runs in Windows PowerShell 5.1 and PowerShell 7.
 #
 #   irm https://static.openvulcan.com/vulcancode/install.ps1 | iex
-#   & ([scriptblock]::Create((irm https://static.openvulcan.com/vulcancode/install.ps1))) --mode terminal --yes
-#   powershell -ExecutionPolicy Bypass -File install.ps1 --mode terminal --yes
+#   & ([scriptblock]::Create((irm https://static.openvulcan.com/vulcancode/install.ps1))) --no-gui --yes
+#   powershell -ExecutionPolicy Bypass -File install.ps1 --no-gui --yes
 #
 # Every argument goes to vulcan-code-setup unchanged; --help lists them. This file is a template:
 # scripts/entry-scripts.mjs fills in the version, the origins, the digest and the signer when a setup version
 # is published. It stays ASCII so Windows PowerShell 5.1 reads it the same in every code page, and it
-# works in a script block so nothing it sets leaks into the session that ran `iex`.
+# works in a script block so nothing it sets leaks into the session that ran `iex`, except the user PATH
+# entries the setup program added: they are copied into this session so the commands work at once.
 
 & {
     $ErrorActionPreference = 'Stop'
@@ -57,6 +58,19 @@
         }
         & $Program @args
         if ($LASTEXITCODE -ne 0) { throw "vulcan-code-setup exited with $LASTEXITCODE" }
+        # A program cannot change the environment of the shell that started it, so the user PATH
+        # entries missing here are added to this session; under `iex` that is the user's own window.
+        $Session = @($env:Path -split ';' | Where-Object { $_ } | ForEach-Object { $_.TrimEnd('\') })
+        $Added = $false
+        foreach ($Entry in ([Environment]::GetEnvironmentVariable('Path', 'User') -split ';')) {
+            $Entry = [Environment]::ExpandEnvironmentVariables($Entry).TrimEnd('\')
+            if ($Entry -and $Session -notcontains $Entry) {
+                $env:Path = ($env:Path.TrimEnd(';') + ';' + $Entry)
+                $Session += $Entry
+                $Added = $true
+            }
+        }
+        if ($Added) { Write-Host 'vulcan-tui and vulcan-code-setup work in this PowerShell session now.' }
     } finally {
         Remove-Item -LiteralPath $Work -Recurse -Force -ErrorAction SilentlyContinue
     }

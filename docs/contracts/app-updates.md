@@ -75,7 +75,10 @@
   密钥）列出版本及每个文件的 SHA-256 与大小，必须恰好覆盖五个平台与两个脚本，stable 不得指向预发布版本。
   `release-setup.yml` 先发布到 preview，`promote-setup.yml` 校验 preview 指针后为同一组文件签署 stable 指针。
 - **入口脚本**：两个脚本在安装器发布时由 `scripts/entry-scripts.mjs` 填入版本、下载源（`AUTO_ORIGINS`）、各平台
-  摘要与 Windows 签名证书指纹；它们只下载并校验安装器，再把全部参数原样交给它。`promote-setup.yml` 把
+  摘要与 Windows 签名证书指纹；它们只下载并校验安装器，再把全部参数原样交给它。程序无法修改启动它的 Shell
+  的环境，因此 `install.ps1` 在安装器成功后把当前会话缺少的用户 PATH 条目加入会话（`irm | iex` 时即用户自己的
+  窗口，命令立即可用）；Linux 与 macOS 的 `curl | sh` 运行在子 Shell 中，`~/.local/bin` 不在 PATH 时安装器给出
+  本 Shell 可执行的 `export` 命令。`promote-setup.yml` 把
   stable 安装器指针所列的脚本按摘要校验后放到主下载源顶层（缓存 60 秒）；openvulcan-web 把 `setup/` 与顶层
   脚本同步到中国镜像。
 - **自更新**：`install`、`update` 之前读取所选通道（preview 同时读 stable）的安装器指针，只与自身版本比较；
@@ -96,6 +99,10 @@
   安装器放入 PATH 并作为卸载入口的 `DisplayIcon`/卸载命令。完成与 `status` 时告知卸载命令。
 - **安装记录**：`installation.json` 为 v2；读取 v1 时先把原字节保存为 `installation.json.v1`，再升级写回。
   只记录本程序创建的文件、目录与系统集成，卸载时只撤销这些项。
+- **卸载**：Windows 无法删除运行中的程序，因此确认后、任何改动之前先结束程序位于安装根目录下的进程（桌面应用、
+  服务、TUI），结束不了即停止并保持安装完整；当前版本已缺失时直接移除指向本根目录 `versions` 的登录 `Run` 值。
+  安装器以文件而非管道接收 Core 的输出：Windows 上 `--install-user-service` 启动的服务继承父进程的输出句柄，
+  管道会一直保持打开。
 
 ## 同步触发点
 

@@ -389,9 +389,13 @@ fn integrate_windows(
             added |= crate::windows::add_user_path(&dir)?;
             recorder.add(Item::UserPath { dir });
         }
+        // A program cannot change the environment of the shell that started it; install.ps1
+        // copies the new entries into its PowerShell session.
+        // 程序无法修改启动它的 Shell 的环境；install.ps1 会把新条目复制到其 PowerShell 会话中。
         if added {
             recorder.notes.push(String::from(
-                "Open a new terminal to use vulcan-tui and vulcan-code-setup.",
+                "vulcan-tui and vulcan-code-setup are on the user PATH; terminals opened from now on \
+                 find them.",
             ));
         }
     }
@@ -488,6 +492,15 @@ fn integrate_windows(
     Err(String::from("this setup program was not built for Windows"))
 }
 
+/// Where a running `target` is moved aside before it is replaced; removing `target` removes it too.
+/// 正在运行的 `target` 被替换前移开到的位置；移除 `target` 时一并移除。
+#[cfg(windows)]
+fn aside_of(target: &Path) -> PathBuf {
+    let mut aside = target.as_os_str().to_owned();
+    aside.push(".old");
+    PathBuf::from(aside)
+}
+
 /// Replaces `target` with a copy of `source`, moving a running `target` aside first.
 /// 用 `source` 的副本替换 `target`；`target` 正在运行时先将其移开。
 #[cfg(windows)]
@@ -497,8 +510,7 @@ fn replace_running_file(source: &Path, target: &Path) -> Result<(), String> {
         return Err(format!("{} is missing", source.display()));
     }
     if target.exists() {
-        let mut aside = target.as_os_str().to_owned();
-        aside.push(".old");
+        let aside = aside_of(target);
         let _ = std::fs::remove_file(&aside);
         std::fs::rename(target, &aside).map_err(fail)?;
     }
@@ -536,8 +548,8 @@ fn integrate_unix(
             .is_some_and(|value| std::env::split_paths(&value).any(|dir| dir == bin));
         if !on_path {
             recorder.notes.push(format!(
-                "Add {} to PATH to use the commands.",
-                bin.display()
+                "Add {bin} to PATH to use the commands; for this shell: export PATH=\"{bin}:$PATH\"",
+                bin = bin.display()
             ));
         }
     }
@@ -690,22 +702,88 @@ fn write_file(path: &Path, content: &str, executable: bool) -> Result<(), String
 }
 
 /// Runs the service `program` with `args` and returns what it reported.
+///
+/// The output goes to files, not pipes: on Windows the service that `--install-user-service`
+/// starts inherits the output handles of its parent, so a pipe would stay open until that service
+/// exits and reading it to the end would never finish.
 /// 以 `args` 运行服务程序 `program`，并返回其报告的内容。
+///
+/// 输出写入文件而不是管道：Windows 上 `--install-user-service` 启动的服务会继承其父进程的输出句柄，
+/// 管道因此在该服务退出前一直保持打开，读到末尾永远无法完成。
 fn run_service(program: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new(program)
+    let stdout = Capture::create("out")?;
+    let stderr = Capture::create("err")?;
+    let status = Command::new(program)
         .args(args)
-        .output()
+        .stdin(std::process::Stdio::null())
+        .stdout(stdout.handle()?)
+        .stderr(stderr.handle()?)
+        .status()
         .map_err(|error| format!("cannot run {}: {error}", program.display()))?;
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    if status.success() {
+        Ok(stdout.text())
     } else {
         Err(format!(
-            "{} {} failed ({}): {}",
+            "{} {} failed ({status}): {}",
             program.display(),
             args.join(" "),
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
+            stderr.text()
         ))
+    }
+}
+
+/// A temporary file that receives one output stream of a service run; deleted when dropped.
+/// 接收一次服务运行的一路输出的临时文件；释放时删除。
+struct Capture {
+    /// Path of the file.
+    /// 文件路径。
+    path: PathBuf,
+    /// The open file, handed to the service run.
+    /// 已打开的文件，交给服务运行使用。
+    file: std::fs::File,
+}
+
+impl Capture {
+    /// Creates a fresh file for the stream `name` in the temporary directory.
+    /// 在临时目录中为输出流 `name` 新建文件。
+    fn create(name: &str) -> Result<Self, String> {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or_default();
+        let path = std::env::temp_dir().join(format!(
+            "vulcan-code-setup-{}-{stamp}.{name}",
+            std::process::id()
+        ));
+        let file = std::fs::File::options()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|error| format!("cannot create {}: {error}", path.display()))?;
+        Ok(Self { path, file })
+    }
+
+    /// A handle to the file for the child's standard stream.
+    /// 供子进程标准流使用的文件句柄。
+    fn handle(&self) -> Result<std::fs::File, String> {
+        self.file
+            .try_clone()
+            .map_err(|error| format!("cannot use {}: {error}", self.path.display()))
+    }
+
+    /// What the run wrote, trimmed.
+    /// 本次运行写入的内容，已去除首尾空白。
+    fn text(&self) -> String {
+        std::fs::read(&self.path)
+            .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_owned())
+            .unwrap_or_default()
+    }
+}
+
+impl Drop for Capture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
     }
 }
 
@@ -773,12 +851,12 @@ pub fn running_as_root() -> bool {
     return false;
 }
 
-/// How to unregister the user service by hand, when the current version is missing.
-/// 当前版本缺失时手动注销用户服务的方法。
+/// How to unregister the user service by hand, when the current version is missing; Windows
+/// removes its sign-in value directly instead.
+/// 当前版本缺失时手动注销用户服务的方法；Windows 改为直接移除其登录值。
+#[cfg(not(windows))]
 fn unregister_by_hand() -> &'static str {
-    if cfg!(windows) {
-        "reg delete HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v \"Vulcan Code\" /f"
-    } else if cfg!(target_os = "macos") {
+    if cfg!(target_os = "macos") {
         "launchctl bootout gui/$(id -u)/com.openvulcan.vulcancode.service, then delete \
          ~/Library/LaunchAgents/com.openvulcan.vulcancode.service.plist"
     } else {
@@ -801,6 +879,8 @@ pub fn remove(item: &Item, root: &Path, version: Option<&Version>) -> Result<(),
         Item::File { path } => {
             if path.starts_with(root) || carries_marker(path) {
                 remove_file(path)?;
+                #[cfg(windows)]
+                remove_file(&aside_of(path))?;
             }
             Ok(())
         }
@@ -822,6 +902,14 @@ pub fn remove(item: &Item, root: &Path, version: Option<&Version>) -> Result<(),
         Item::ToastActivator { clsid } => remove_toast_activator(clsid),
         Item::UserService => match version {
             Some(version) => run_service(&version.service(), &[UNINSTALL_USER_SERVICE]).map(|_| ()),
+            // Without a version to ask, the sign-in value that starts a program of this root is
+            // removed directly.
+            // 没有可调用的版本时，直接移除启动本根目录程序的登录值。
+            #[cfg(windows)]
+            None => crate::windows::remove_login_run(
+                &root.join(vulcan_install_core::install_root::VERSIONS_DIR),
+            ),
+            #[cfg(not(windows))]
             None => Err(format!(
                 "the current version is missing, so the user service cannot be unregistered; \
                  remove it by hand: {}",

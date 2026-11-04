@@ -3,15 +3,26 @@
 //! 安装器所需的少量 Windows 注册表与消息调用；本 crate 中唯一的 unsafe 代码。
 #![allow(unsafe_code)]
 
-use std::ffi::OsStr;
-use std::os::windows::ffi::OsStrExt;
-use std::path::Path;
+use std::ffi::{OsStr, OsString};
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
+use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
+use std::time::Duration;
 
-use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, HANDLE, INVALID_HANDLE_VALUE,
+};
+use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+};
 use windows_sys::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_EXPAND_SZ, REG_OPTION_NON_VOLATILE, REG_SZ,
-    RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegQueryValueExW, RegSetValueExW,
+    RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegDeleteValueW, RegQueryValueExW,
+    RegSetValueExW,
+};
+use windows_sys::Win32::System::Threading::{
+    OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+    PROCESS_TERMINATE, QueryFullProcessImageNameW, TerminateProcess, WaitForSingleObject,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     HWND_BROADCAST, SMTO_ABORTIFHUNG, SendMessageTimeoutW, WM_SETTINGCHANGE,
@@ -24,6 +35,15 @@ const ENVIRONMENT_KEY: &str = "Environment";
 /// Parent key of the per-user uninstall entries.
 /// 每用户卸载项的父键。
 const UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall";
+
+/// Per-user key of the programs Windows starts at sign-in.
+/// Windows 在登录时启动的程序所在的每用户键。
+const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+
+/// The value the release service writes under [`RUN_KEY`] (`login_run::value_name` of
+/// `vulcan-code-service`).
+/// 发行版服务在 [`RUN_KEY`] 下写入的值（`vulcan-code-service` 的 `login_run::value_name`）。
+const RUN_VALUE: &str = "Vulcan Code";
 
 /// Encodes `text` as a NUL-terminated UTF-16 string.
 /// 将 `text` 编码为以 NUL 结尾的 UTF-16 字符串。
@@ -145,6 +165,139 @@ impl Key {
         } else {
             Err(format!("cannot write {value} (error {status})"))
         }
+    }
+
+    /// Deletes a value; a missing one is not an error.
+    /// 删除一个值；值不存在不算错误。
+    fn delete_value(&self, value: &str) -> Result<(), String> {
+        let name = wide(value);
+        // SAFETY: the value name is a valid NUL-terminated string.
+        // SAFETY：值名为有效的以 NUL 结尾的字符串。
+        let status = unsafe { RegDeleteValueW(self.0, name.as_ptr()) };
+        if status == ERROR_SUCCESS || status == ERROR_FILE_NOT_FOUND {
+            Ok(())
+        } else {
+            Err(format!("cannot delete {value} (error {status})"))
+        }
+    }
+}
+
+/// Whether `path` lies below the directory `dir`, compared as Windows compares names.
+/// `path` 是否位于目录 `dir` 之下，按 Windows 比较名称的方式比较。
+fn below(path: &str, dir: &Path) -> bool {
+    let prefix = format!("{}\\", dir.display().to_string().trim_end_matches('\\'));
+    path.get(..prefix.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(&prefix))
+}
+
+/// Removes the sign-in value of the service when it starts a program below `versions`; a missing
+/// value, or one that starts another installation, is left alone.
+/// 登录值启动的是 `versions` 之下的程序时将其移除；值不存在或启动的是其他安装时保持不变。
+pub fn remove_login_run(versions: &Path) -> Result<(), String> {
+    let key = Key::open(RUN_KEY)?;
+    let Some(command) = key.string(RUN_VALUE)? else {
+        return Ok(());
+    };
+    if below(command.trim().trim_start_matches('"'), versions) {
+        key.delete_value(RUN_VALUE)?;
+    }
+    Ok(())
+}
+
+/// An open kernel handle, closed when dropped.
+/// 已打开的内核句柄，释放时关闭。
+struct Handle(HANDLE);
+
+impl Drop for Handle {
+    fn drop(&mut self) {
+        // SAFETY: the handle was opened by this module and is closed exactly once.
+        // SAFETY：句柄由本模块打开，且只关闭一次。
+        unsafe {
+            CloseHandle(self.0);
+        }
+    }
+}
+
+/// The program of the process `pid`, when this user may query it.
+/// 进程 `pid` 的程序路径（当本用户有权查询时）。
+fn program_of(pid: u32) -> Option<String> {
+    // SAFETY: OpenProcess takes plain values and returns null on failure.
+    // SAFETY：OpenProcess 接收普通值，失败时返回空。
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if process.is_null() {
+        return None;
+    }
+    let process = Handle(process);
+    let mut buffer = vec![0u16; 32_768];
+    let mut size = buffer.len() as u32;
+    // SAFETY: the buffer holds `size` UTF-16 units; `size` receives the length written.
+    // SAFETY：缓冲区可容纳 `size` 个 UTF-16 单元；`size` 接收写入的长度。
+    let queried = unsafe {
+        QueryFullProcessImageNameW(
+            process.0,
+            PROCESS_NAME_WIN32,
+            buffer.as_mut_ptr(),
+            &mut size,
+        )
+    };
+    (queried != 0).then(|| {
+        OsString::from_wide(&buffer[..size as usize])
+            .to_string_lossy()
+            .into_owned()
+    })
+}
+
+/// Processes other than this one whose program lies below `root`, as process id and program.
+/// 程序位于 `root` 之下的其他进程，以进程号与程序路径表示。
+pub fn processes_below(root: &Path) -> Vec<(u32, PathBuf)> {
+    // SAFETY: the snapshot call takes plain values and returns INVALID_HANDLE_VALUE on failure.
+    // SAFETY：快照调用接收普通值，失败时返回 INVALID_HANDLE_VALUE。
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if snapshot == INVALID_HANDLE_VALUE {
+        return Vec::new();
+    }
+    let snapshot = Handle(snapshot);
+    // SAFETY: PROCESSENTRY32W is plain data, valid when zeroed.
+    // SAFETY：PROCESSENTRY32W 为普通数据，全零时有效。
+    let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+    entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
+    let own = std::process::id();
+    let mut found = Vec::new();
+    // SAFETY: `entry` is a valid PROCESSENTRY32W whose size field is set.
+    // SAFETY：`entry` 是已设置大小字段的有效 PROCESSENTRY32W。
+    let mut more = unsafe { Process32FirstW(snapshot.0, &mut entry) } != 0;
+    while more {
+        let pid = entry.th32ProcessID;
+        if pid != 0
+            && pid != own
+            && let Some(program) = program_of(pid).filter(|program| below(program, root))
+        {
+            found.push((pid, PathBuf::from(program)));
+        }
+        // SAFETY: as for Process32FirstW above.
+        // SAFETY：与上面的 Process32FirstW 相同。
+        more = unsafe { Process32NextW(snapshot.0, &mut entry) } != 0;
+    }
+    found
+}
+
+/// Ends the process `pid` and waits up to `wait` for it to exit; a process that is gone or cannot
+/// be opened is left to the caller's next scan.
+/// 结束进程 `pid` 并最多等待 `wait` 让其退出；已退出或无法打开的进程留给调用方的下一次扫描。
+pub fn end_process(pid: u32, wait: Duration) {
+    // SAFETY: OpenProcess takes plain values and returns null on failure.
+    // SAFETY：OpenProcess 接收普通值，失败时返回空。
+    let process = unsafe { OpenProcess(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, 0, pid) };
+    if process.is_null() {
+        return;
+    }
+    let process = Handle(process);
+    let millis = u32::try_from(wait.as_millis()).unwrap_or(u32::MAX);
+    // SAFETY: the handle is open with the terminate and synchronize rights.
+    // SAFETY：句柄以终止与同步权限打开。
+    unsafe {
+        TerminateProcess(process.0, 1);
+        WaitForSingleObject(process.0, millis);
     }
 }
 
@@ -368,5 +521,17 @@ mod tests {
             r"c:\users\A\vulcancode\CLI"
         ));
         assert!(!same_dir(r"C:\a\cli", r"C:\a\cli2"));
+    }
+
+    #[test]
+    fn programs_below_a_root_compare_without_case_and_whole_names_only() {
+        let root = Path::new(r"C:\Users\a\VulcanCode");
+        assert!(below(
+            r"c:\users\A\vulcancode\versions\0.1.1\bin\x.exe",
+            root
+        ));
+        assert!(below(r"C:\Users\a\VulcanCode\VulcanCode.exe", root));
+        assert!(!below(r"C:\Users\a\VulcanCode2\VulcanCode.exe", root));
+        assert!(!below(r"C:\Users\a\VulcanCode", root));
     }
 }

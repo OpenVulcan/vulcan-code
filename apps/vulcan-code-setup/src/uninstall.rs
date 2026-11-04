@@ -43,6 +43,10 @@ pub fn uninstall(options: &UninstallOptions) -> Result<(), String> {
         .and_then(|dir| Version::read(dir).ok());
     let user_data = purge_target(version_dir.as_deref(), options.purge)?;
     println!("Remove Vulcan Code from {}", root_path.display());
+    let running = running_programs(&root_path);
+    if !running.is_empty() {
+        println!("  first closing the running {}", running.join(", "));
+    }
     for item in &items {
         if let Some(line) = describe(item) {
             println!("  {line}");
@@ -55,6 +59,10 @@ pub fn uninstall(options: &UninstallOptions) -> Result<(), String> {
     if !confirm("Continue?", options.common.yes)? {
         return Err(String::from("cancelled"));
     }
+    // Nothing is changed while a program of this root still runs, so a failure leaves the
+    // installation whole.
+    // 本根目录的程序仍在运行时不做任何改动，因此失败时安装保持完整。
+    close_programs(&root_path)?;
 
     let lock = root.lock().map_err(|error| error.to_string())?;
     let mut problems = Vec::new();
@@ -85,6 +93,68 @@ pub fn uninstall(options: &UninstallOptions) -> Result<(), String> {
     }
     println!("Vulcan Code was removed from {}.", root_path.display());
     Ok(())
+}
+
+/// How many times the running programs are looked for and ended; the desktop app may start the
+/// service again while it is being closed.
+/// 查找并结束运行中程序的次数；桌面应用可能在关闭过程中再次启动服务。
+#[cfg(windows)]
+const CLOSE_ROUNDS: usize = 3;
+
+/// How long one program may take to exit after it was ended.
+/// 单个程序被结束后退出可用的最长时间。
+#[cfg(windows)]
+const CLOSE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// File names of the programs of this root that are running; Windows cannot remove a running
+/// program, while Linux and macOS can and stop the service through the user service removal.
+/// 本根目录中正在运行的程序文件名；Windows 无法删除运行中的程序，Linux 与 macOS 可以，并通过移除用户
+/// 服务停止服务。
+fn running_programs(root: &Path) -> Vec<String> {
+    #[cfg(windows)]
+    {
+        let mut names: Vec<String> = crate::windows::processes_below(root)
+            .into_iter()
+            .filter_map(|(_, program)| {
+                program
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = root;
+        Vec::new()
+    }
+}
+
+/// Ends every running program of this root, or fails without having changed anything.
+/// 结束本根目录中所有正在运行的程序；失败时不做任何改动。
+fn close_programs(root: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    for _ in 0..CLOSE_ROUNDS {
+        let running = crate::windows::processes_below(root);
+        if running.is_empty() {
+            return Ok(());
+        }
+        for (pid, _) in running {
+            crate::windows::end_process(pid, CLOSE_WAIT);
+        }
+    }
+    let left = running_programs(root);
+    if left.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "cannot close {}; quit Vulcan Code, including the service in the notification area, \
+             and run the uninstall again",
+            left.join(", ")
+        ))
+    }
 }
 
 /// The directory of the current version, when one is installed.
@@ -274,7 +344,19 @@ fn remove_setup(root: &Path) -> Result<(), String> {
         .zip(setup.canonicalize().ok())
         .is_some_and(|(running, setup)| running.starts_with(setup));
     if cfg!(windows) && running_from_setup {
-        return remove_after_exit(&setup, root);
+        // Anything besides the setup directory belongs to the user and keeps the root.
+        // 安装器目录之外的任何内容都属于用户，根目录因此保留。
+        let others = std::fs::read_dir(root)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .any(|entry| entry.file_name() != std::ffi::OsStr::new(SETUP_DIR))
+            })
+            .unwrap_or(true);
+        if others {
+            println!("Kept {} and its remaining contents.", root.display());
+        }
+        return remove_after_exit(&setup, (!others).then_some(root));
     }
     if setup.exists() {
         std::fs::remove_dir_all(&setup)
@@ -289,19 +371,22 @@ fn remove_setup(root: &Path) -> Result<(), String> {
 }
 
 /// A running program cannot delete itself on Windows, so a detached `cmd` removes the setup
-/// directory and the empty root once this process has exited.
-/// Windows 上运行中的程序无法删除自身，因此由分离的 `cmd` 在本进程退出后删除安装器目录与空的根目录。
+/// directory, and the root when it is given, once this process has exited.
+/// Windows 上运行中的程序无法删除自身，因此由分离的 `cmd` 在本进程退出后删除安装器目录，以及给出时的
+/// 根目录。
 #[cfg(windows)]
-fn remove_after_exit(setup: &Path, root: &Path) -> Result<(), String> {
+fn remove_after_exit(setup: &Path, root: Option<&Path>) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, DETACHED_PROCESS};
     // `ping` waits about two seconds without needing a console, unlike `timeout`.
     // `ping` 无需控制台即可等待约两秒，`timeout` 则需要。
-    let script = format!(
-        "ping -n 3 127.0.0.1 >nul & rmdir /s /q \"{}\" & rmdir \"{}\"",
-        setup.display(),
-        root.display()
+    let mut script = format!(
+        "ping -n 3 127.0.0.1 >nul & rmdir /s /q \"{}\"",
+        setup.display()
     );
+    if let Some(root) = root {
+        script.push_str(&format!(" & rmdir \"{}\" 2>nul", root.display()));
+    }
     std::process::Command::new("cmd")
         .args(["/d", "/c"])
         .raw_arg(script)
@@ -315,7 +400,7 @@ fn remove_after_exit(setup: &Path, root: &Path) -> Result<(), String> {
 /// Only Windows cannot delete a running program.
 /// 只有 Windows 无法删除正在运行的程序。
 #[cfg(not(windows))]
-fn remove_after_exit(_setup: &Path, _root: &Path) -> Result<(), String> {
+fn remove_after_exit(_setup: &Path, _root: Option<&Path>) -> Result<(), String> {
     Ok(())
 }
 

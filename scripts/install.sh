@@ -5,7 +5,7 @@
 # 它安装的全部内容。
 #
 #   curl -fsSL https://static.openvulcan.com/vulcancode/install.sh | sh
-#   curl -fsSL https://static.openvulcan.com/vulcancode/install.sh | sh -s -- --mode terminal --yes
+#   curl -fsSL https://static.openvulcan.com/vulcancode/install.sh | sh -s -- --no-gui --yes
 #
 # Every argument goes to vulcan-code-setup unchanged; `--help` lists them. This file is a template:
 # scripts/entry-scripts.mjs fills in the version, the origins and the digests when a setup version is
