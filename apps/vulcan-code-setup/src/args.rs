@@ -14,9 +14,11 @@ pub const USAGE: &str = "\
 usage: vulcan-code-setup [install] [--yes] [--mode desktop|terminal|service] [--with browser]
                          [--channel stable|preview] [--route auto|international|china]
                          [--prefix <dir>] [--no-shortcut] [--no-path]
-       vulcan-code-setup update [--yes] [--prefix <dir>]
+                         [--self-update | --no-self-update]
+       vulcan-code-setup update [--yes] [--prefix <dir>] [--self-update | --no-self-update]
        vulcan-code-setup uninstall [--yes] [--purge] [--prefix <dir>]
        vulcan-code-setup status [--prefix <dir>]
+       vulcan-code-setup --version
 
 install    installs Vulcan Code, or refreshes and updates an existing installation
 update     installs the newest version with the choices recorded at installation
@@ -29,7 +31,10 @@ status     shows what is installed
 --with     adds an optional component; `browser` provides the built-in browser
 --channel  stable (default) or preview
 --route    download origins: auto (default), international, or china
---prefix   installation directory; the platform default is used when omitted";
+--prefix   installation directory; the platform default is used when omitted
+--self-update     updates this setup program first when a newer one is published, without asking
+--no-self-update  skips looking for a newer setup program; by default a terminal run asks, and a
+                  run with --yes keeps the current one unless the release requires a newer one";
 
 /// What the setup program was asked to do.
 /// 安装器被要求执行的操作。
@@ -50,6 +55,25 @@ pub enum Command {
     /// Print the usage.
     /// 打印用法。
     Help,
+    /// Print the version of the setup program.
+    /// 打印安装器的版本。
+    Version,
+}
+
+/// Whether `install` and `update` first replace the setup program with a newer published one.
+/// `install` 与 `update` 是否先把安装器替换为已发布的更新版本。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SelfUpdate {
+    /// Ask on a terminal; with `--yes`, update only when the release requires it.
+    /// 在终端中询问；带 `--yes` 时只在版本要求时更新。
+    #[default]
+    Ask,
+    /// Update without asking.
+    /// 不询问直接更新。
+    Always,
+    /// Do not look for a newer setup program.
+    /// 不查找更新的安装器。
+    Never,
 }
 
 /// Options every command accepts.
@@ -62,6 +86,9 @@ pub struct CommonOptions {
     /// Installation directory, when not the platform default.
     /// 安装目录（不使用平台默认值时）。
     pub prefix: Option<PathBuf>,
+    /// Whether to update the setup program first; only `install` and `update` accept a choice.
+    /// 是否先更新安装器；只有 `install` 与 `update` 接受此选择。
+    pub self_update: SelfUpdate,
 }
 
 /// Options of `install`; `None` keeps the recorded choice or the default.
@@ -145,6 +172,20 @@ pub fn parse(arguments: &[String]) -> Result<Command, String> {
         };
         match flag {
             "-h" | "--help" => return Ok(Command::Help),
+            "-V" | "--version" => return Ok(Command::Version),
+            "--self-update" | "--no-self-update" => {
+                switch_only(flag)?;
+                if install.common.self_update != SelfUpdate::Ask {
+                    return Err(String::from(
+                        "--self-update and --no-self-update are given more than once",
+                    ));
+                }
+                install.common.self_update = if flag == "--self-update" {
+                    SelfUpdate::Always
+                } else {
+                    SelfUpdate::Never
+                };
+            }
             "-y" | "--yes" => {
                 switch_only(flag)?;
                 install.common.yes = true;
@@ -193,14 +234,12 @@ pub fn parse(arguments: &[String]) -> Result<Command, String> {
         || install.route.is_some()
         || install.no_shortcut
         || install.no_path;
+    let self_update = install.common.self_update != SelfUpdate::Ask;
     match verb {
         "install" if !purge => Ok(Command::Install(install)),
-        "update" | "status" if !install_only && !purge => Ok(if verb == "update" {
-            Command::Update(install.common)
-        } else {
-            Command::Status(install.common)
-        }),
-        "uninstall" if !install_only => Ok(Command::Uninstall(UninstallOptions {
+        "update" if !install_only && !purge => Ok(Command::Update(install.common)),
+        "status" if !install_only && !purge && !self_update => Ok(Command::Status(install.common)),
+        "uninstall" if !install_only && !self_update => Ok(Command::Uninstall(UninstallOptions {
             common: install.common,
             purge,
         })),
@@ -260,12 +299,19 @@ mod tests {
         assert!(parse_words("--yes=1").is_err());
         assert!(parse_words("--mode").is_err());
         assert!(parse_words("repair").is_err());
+        assert!(parse_words("status --self-update").is_err());
+        assert!(parse_words("--self-update --no-self-update").is_err());
+        let Ok(Command::Update(options)) = parse_words("update --no-self-update") else {
+            panic!("update expected");
+        };
+        assert_eq!(options.self_update, SelfUpdate::Never);
         assert_eq!(
             parse_words("uninstall --purge --yes"),
             Ok(Command::Uninstall(UninstallOptions {
                 common: CommonOptions {
                     yes: true,
-                    prefix: None
+                    prefix: None,
+                    self_update: SelfUpdate::Ask,
                 },
                 purge: true
             }))

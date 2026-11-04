@@ -25,12 +25,13 @@ use crate::integrate::{self, Plan, Recorder, SETUP_PROGRAM};
 use crate::paths;
 use crate::prompt::{confirm, megabytes};
 use crate::root::{self, Current, Description, LEGACY_MARKER, Layout, Ownership};
+use crate::selfupdate;
 use crate::state::{Item, Mode, SETUP_DIR, STATE_SCHEMA, SetupState};
 use crate::wizard::{self, Draft};
 
 /// User agent of every request.
 /// 每个请求的用户代理。
-const USER_AGENT: &str = "vulcan-code-setup";
+pub const USER_AGENT: &str = "vulcan-code-setup";
 
 /// Oldest glibc the Linux release runs on: it is built on the `ubuntu-22.04` runner
 /// (`.github/workflows/release.yml`), whose glibc is 2.35.
@@ -131,11 +132,41 @@ impl Choices {
     /// The channels whose pointers are read.
     /// 读取其指针的通道。
     fn channels(&self) -> &'static [Channel] {
-        match self.channel {
-            Channel::Stable => &[Channel::Stable],
-            Channel::Preview => &[Channel::Stable, Channel::Preview],
-        }
+        channels(self.channel)
     }
+}
+
+/// The channels whose pointers are read for `channel`: preview also follows a newer stable release.
+/// 为 `channel` 读取其指针的通道：preview 同时跟随更新的 stable 版本。
+pub fn channels(channel: Channel) -> &'static [Channel] {
+    match channel {
+        Channel::Stable => &[Channel::Stable],
+        Channel::Preview => &[Channel::Stable, Channel::Preview],
+    }
+}
+
+/// The channel and origins `install` or `update` will use, for looking up a newer setup program
+/// before anything else: the options given, then the recorded choices, then the defaults.
+/// `install` 或 `update` 将使用的通道与下载源，用于在其他步骤之前查找更新的安装器：依次取给出的选项、
+/// 记录的选择与默认值。
+pub fn preferences(options: &InstallOptions, platform: Platform) -> (Channel, Route) {
+    let recorded = resolve_root(options.common.prefix.as_deref(), platform)
+        .and_then(|root| root::ownership(&root))
+        .ok()
+        .and_then(|ownership| match ownership {
+            Ownership::Owned(state) => Some(state),
+            _ => None,
+        });
+    (
+        options
+            .channel
+            .or(recorded.as_ref().map(|state| state.channel))
+            .unwrap_or(Channel::Stable),
+        options
+            .route
+            .or(recorded.as_ref().map(|state| state.route))
+            .unwrap_or_default(),
+    )
 }
 
 /// `vulcan-code-setup install`.
@@ -144,7 +175,7 @@ pub fn install(options: &InstallOptions) -> Result<(), String> {
     let platform = Platform::current().ok_or("this platform is not supported")?;
     check_system(platform)?;
     let root = resolve_root(options.common.prefix.as_deref(), platform)?;
-    let ownership = root::ownership(&root)?;
+    let ownership = root::installable(&root)?;
     let recorded = match &ownership {
         Ownership::Owned(state) => Some(state),
         _ => None,
@@ -175,7 +206,7 @@ pub fn install(options: &InstallOptions) -> Result<(), String> {
         return Err(String::from("cancelled"));
     };
     let root = resolve_root(Some(Path::new(draft.root.trim())), platform)?;
-    let ownership = root::ownership(&root)?;
+    let ownership = root::installable(&root)?;
     let route = match &ownership {
         Ownership::Owned(state) => options.route.unwrap_or(state.route),
         _ => options.route.unwrap_or_default(),
@@ -201,7 +232,7 @@ pub fn update(options: &CommonOptions) -> Result<(), String> {
     let platform = Platform::current().ok_or("this platform is not supported")?;
     check_system(platform)?;
     let root = resolve_root(options.prefix.as_deref(), platform)?;
-    let ownership = root::ownership(&root)?;
+    let ownership = root::installable(&root)?;
     let Ownership::Owned(state) = &ownership else {
         return Err(format!(
             "{} was not installed by the setup program; run `vulcan-code-setup install`",
@@ -343,9 +374,16 @@ fn apply(
     .map_err(|error| error.to_string())?;
     let work = match (offer, &installed) {
         (Some(offer), _) => {
-            if let Some(minimum) = &offer.manifest.min_setup_version {
+            let own = selfupdate::version()?;
+            if let Some(minimum) = offer
+                .manifest
+                .min_setup_version
+                .as_ref()
+                .filter(|minimum| **minimum > own)
+            {
                 return Err(format!(
-                    "{} needs setup program {minimum} or newer; download the newest setup program",
+                    "{} needs setup program {minimum} or newer, and this one is {own}; run again \
+                     without --no-self-update to update it first",
                     offer.manifest.version
                 ));
             }

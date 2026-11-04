@@ -45,6 +45,54 @@ pub enum Ownership {
     /// Installed by the archive-based `scripts/install.sh`.
     /// 由基于归档的 `scripts/install.sh` 安装。
     Legacy,
+    /// Installed by the Windows installer (`scripts/windows-installer.mjs`), whose uninstaller is
+    /// this file; it updates through the app and uninstalls through that uninstaller.
+    /// 由 Windows 安装程序（`scripts/windows-installer.mjs`）安装，其卸载程序为此文件；它通过应用更新，
+    /// 通过该卸载程序卸载。
+    Inno(PathBuf),
+}
+
+/// Like [`ownership`], but refuses a root the Windows installer owns, which this program does not
+/// install into.
+/// 与 [`ownership`] 相同，但拒绝 Windows 安装程序所属的根目录，本程序不向其中安装。
+pub fn installable(root: &Path) -> Result<Ownership, String> {
+    match ownership(root)? {
+        Ownership::Inno(_) => Err(format!(
+            "{} was installed by the Windows installer (VulcanCode-Setup.exe), which the app keeps \
+             up to date; uninstall it first to install here with this program",
+            root.display()
+        )),
+        ownership => Ok(ownership),
+    }
+}
+
+/// The uninstaller Inno Setup writes at the top of the root it installed: `unins000.exe`, or a
+/// higher number when that name was taken.
+/// Inno Setup 在其安装的根目录顶层写出的卸载程序：`unins000.exe`，名称被占用时编号更大。
+fn inno_uninstaller(root: &Path) -> Result<Option<PathBuf>, String> {
+    let entries = std::fs::read_dir(root)
+        .map_err(|error| format!("cannot read {}: {error}", root.display()))?;
+    let mut found = None;
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("cannot read {}: {error}", root.display()))?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let is_uninstaller = name
+            .to_ascii_lowercase()
+            .strip_prefix("unins")
+            .and_then(|rest| rest.strip_suffix(".exe"))
+            .is_some_and(|number| number.len() == 3 && number.bytes().all(|b| b.is_ascii_digit()));
+        if is_uninstaller
+            && found
+                .as_ref()
+                .is_none_or(|known: &PathBuf| entry.path() > *known)
+        {
+            found = Some(entry.path());
+        }
+    }
+    Ok(found)
 }
 
 /// Decides who owns `root`; a directory with foreign content is refused, never taken over.
@@ -75,6 +123,9 @@ pub fn ownership(root: &Path) -> Result<Ownership, String> {
             return Ok(Ownership::Legacy);
         }
         return Err(format!("{} is not recognized", legacy.display()));
+    }
+    if let Some(uninstaller) = inno_uninstaller(root)? {
+        return Ok(Ownership::Inno(uninstaller));
     }
     let entries = std::fs::read_dir(root)
         .map_err(|error| format!("cannot read {}: {error}", root.display()))?;
@@ -300,6 +351,25 @@ mod tests {
         };
         state.write(&root).expect("state");
         assert_eq!(ownership(&root), Ok(Ownership::Owned(state)));
+    }
+
+    #[test]
+    fn a_root_with_an_inno_uninstaller_belongs_to_the_windows_installer() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let root = temp.path();
+        for name in [
+            "unins000.exe",
+            "unins000.dat",
+            "unins001.exe",
+            "uninstall.exe",
+        ] {
+            std::fs::write(root.join(name), "").expect("file");
+        }
+        assert_eq!(
+            ownership(root),
+            Ok(Ownership::Inno(root.join("unins001.exe")))
+        );
+        assert!(installable(root).is_err());
     }
 
     #[test]

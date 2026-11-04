@@ -28,6 +28,7 @@ pub fn uninstall(options: &UninstallOptions) -> Result<(), String> {
     let items = match root::ownership(&root_path)? {
         Ownership::Owned(state) => state.items,
         Ownership::Legacy => legacy_items(&root_path)?,
+        Ownership::Inno(uninstaller) => return uninstall_inno(&root_path, &uninstaller, options),
         Ownership::Fresh => {
             return Err(format!(
                 "Vulcan Code is not installed in {}",
@@ -36,26 +37,11 @@ pub fn uninstall(options: &UninstallOptions) -> Result<(), String> {
         }
     };
     let root = InstallRoot::new(&root_path);
-    let version_dir = match root::current(&root)? {
-        Current::Version(version) => Some(root.version_dir(&version)),
-        Current::Legacy(name) => Some(root_path.join(VERSIONS_DIR).join(name)),
-        Current::None => None,
-    };
+    let version_dir = current_version_dir(&root_path)?;
     let layout = version_dir
         .as_deref()
         .and_then(|dir| Layout::read(dir).ok());
-    // The installed service names its data directory, so the setup program never guesses it.
-    // 已安装的服务给出其数据目录，因此安装器从不猜测。
-    let user_data = match (options.purge, &version_dir) {
-        (false, _) => None,
-        (true, Some(dir)) => Some(user_directory(dir)?),
-        (true, None) => {
-            return Err(String::from(
-                "the current version is missing, so its data directory cannot be found; uninstall \
-                 without --purge and remove the data yourself",
-            ));
-        }
-    };
+    let user_data = purge_target(version_dir.as_deref(), options.purge)?;
     println!("Remove Vulcan Code from {}", root_path.display());
     for item in &items {
         if let Some(line) = describe(item) {
@@ -97,6 +83,89 @@ pub fn uninstall(options: &UninstallOptions) -> Result<(), String> {
     for problem in &problems {
         eprintln!("{problem}");
     }
+    println!("Vulcan Code was removed from {}.", root_path.display());
+    Ok(())
+}
+
+/// The directory of the current version, when one is installed.
+/// 当前版本所在的目录（若已安装）。
+fn current_version_dir(root_path: &Path) -> Result<Option<PathBuf>, String> {
+    let root = InstallRoot::new(root_path);
+    Ok(match root::current(&root)? {
+        Current::Version(version) => Some(root.version_dir(&version)),
+        Current::Legacy(name) => Some(root_path.join(VERSIONS_DIR).join(name)),
+        Current::None => None,
+    })
+}
+
+/// The user data `--purge` removes; the installed service names its data directory, so the setup
+/// program never guesses it.
+/// `--purge` 删除的用户数据；已安装的服务给出其数据目录，因此安装器从不猜测。
+fn purge_target(version_dir: Option<&Path>, purge: bool) -> Result<Option<PathBuf>, String> {
+    match (purge, version_dir) {
+        (false, _) => Ok(None),
+        (true, Some(dir)) => user_directory(dir).map(Some),
+        (true, None) => Err(String::from(
+            "the current version is missing, so its data directory cannot be found; uninstall \
+             without --purge and remove the data yourself",
+        )),
+    }
+}
+
+/// How long the Windows uninstaller may take to remove itself after its first process has exited.
+/// Windows 卸载程序在其第一个进程退出后删除自身可用的最长时间。
+const INNO_UNINSTALL_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Uninstalls a root the Windows installer owns by running its uninstaller, then purges the data.
+/// 运行 Windows 安装程序的卸载程序来卸载其所属的根目录，然后删除数据。
+fn uninstall_inno(
+    root_path: &Path,
+    uninstaller: &Path,
+    options: &UninstallOptions,
+) -> Result<(), String> {
+    let version_dir = current_version_dir(root_path)?;
+    let user_data = purge_target(version_dir.as_deref(), options.purge)?;
+    println!(
+        "Remove Vulcan Code from {} with the Windows uninstaller",
+        root_path.display()
+    );
+    match &user_data {
+        Some(dir) => println!("  your data in {}", dir.display()),
+        None => println!("Your sessions, settings and memory are kept; --purge removes them."),
+    }
+    if !confirm("Continue?", options.common.yes)? {
+        return Err(String::from("cancelled"));
+    }
+    // The confirmation above is the only question; the uninstaller shows no dialogs of its own.
+    // 上面的确认是唯一的提问；卸载程序不再显示自己的对话框。
+    let status = std::process::Command::new(uninstaller)
+        .args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"])
+        .current_dir(std::env::temp_dir())
+        .status()
+        .map_err(|error| format!("cannot run {}: {error}", uninstaller.display()))?;
+    if !status.success() {
+        return Err(format!(
+            "{} failed with {status}; close Vulcan Code and run the uninstall again",
+            uninstaller.display()
+        ));
+    }
+    // The uninstaller continues from a copy in the temporary directory and removes itself last.
+    // 卸载程序从临时目录中的副本继续运行，最后删除自身。
+    let deadline = std::time::Instant::now() + INNO_UNINSTALL_WAIT;
+    while uninstaller.exists() {
+        if std::time::Instant::now() > deadline {
+            return Err(format!(
+                "{} did not finish within {} seconds",
+                uninstaller.display(),
+                INNO_UNINSTALL_WAIT.as_secs()
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    if let Some(dir) = user_data.filter(|dir| dir.exists()) {
+        purge(&dir, options.common.yes)?;
+    }
+    remove_setup(root_path)?;
     println!("Vulcan Code was removed from {}.", root_path.display());
     Ok(())
 }

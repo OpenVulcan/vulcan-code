@@ -24,6 +24,13 @@ pub fn status(options: &CommonOptions) -> Result<(), String> {
             println!("installed by: the archive installer (install.sh); `install` takes it over");
             None
         }
+        Ownership::Inno(_) => {
+            println!(
+                "installed by: the Windows installer (VulcanCode-Setup.exe); the app keeps it up to \
+                 date, and `uninstall` runs its uninstaller"
+            );
+            None
+        }
         Ownership::Owned(state) => Some(state),
     };
     let root = InstallRoot::new(&root_path);

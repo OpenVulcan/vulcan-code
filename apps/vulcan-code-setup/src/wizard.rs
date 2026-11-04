@@ -359,7 +359,7 @@ fn check_location(platform: Platform, text: &str) -> Result<PathBuf, String> {
         return Err(String::from("enter a directory"));
     }
     let root = resolve_root(Some(&PathBuf::from(text)), platform)?;
-    root::ownership(&root)?;
+    root::installable(&root)?;
     Ok(root)
 }
 
