@@ -705,12 +705,17 @@ fn write_file(path: &Path, content: &str, executable: bool) -> Result<(), String
 ///
 /// The output goes to files, not pipes: on Windows the service that `--install-user-service`
 /// starts inherits the output handles of its parent, so a pipe would stay open until that service
-/// exits and reading it to the end would never finish.
+/// exits and reading it to the end would never finish. For the same reason this program's own
+/// standard handles stop being inheritable first, or a pipe the caller reads this program's
+/// output through (`| Tee-Object`, a CI log) would stay open in the service.
 /// 以 `args` 运行服务程序 `program`，并返回其报告的内容。
 ///
 /// 输出写入文件而不是管道：Windows 上 `--install-user-service` 启动的服务会继承其父进程的输出句柄，
-/// 管道因此在该服务退出前一直保持打开，读到末尾永远无法完成。
+/// 管道因此在该服务退出前一直保持打开，读到末尾永远无法完成。出于同样原因，先让本程序自己的标准
+/// 句柄不可继承，否则调用方读取本程序输出的管道（`| Tee-Object`、CI 日志）会一直被服务保持打开。
 fn run_service(program: &Path, args: &[&str]) -> Result<String, String> {
+    #[cfg(windows)]
+    crate::windows::keep_standard_handles_private();
     let stdout = Capture::create("out")?;
     let stderr = Capture::create("err")?;
     let status = Command::new(program)

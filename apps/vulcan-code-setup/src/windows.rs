@@ -10,7 +10,11 @@ use std::ptr::{null, null_mut};
 use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, HANDLE, INVALID_HANDLE_VALUE,
+    CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, HANDLE, HANDLE_FLAG_INHERIT,
+    INVALID_HANDLE_VALUE, SetHandleInformation,
+};
+use windows_sys::Win32::System::Console::{
+    GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
 };
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
@@ -298,6 +302,26 @@ pub fn end_process(pid: u32, wait: Duration) {
     unsafe {
         TerminateProcess(process.0, 1);
         WaitForSingleObject(process.0, millis);
+    }
+}
+
+/// Makes this process's standard input, output and error handles non-inheritable, so a
+/// long-running process started below this one cannot keep them open. Children that are given
+/// `Stdio::inherit` still get them: the standard library duplicates them for each child.
+/// 使本进程的标准输入、输出与错误句柄不可继承，从而其下启动的长期运行进程无法使其保持打开。
+/// 以 `Stdio::inherit` 启动的子进程仍会得到它们：标准库为每个子进程复制这些句柄。
+pub fn keep_standard_handles_private() {
+    for id in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        // SAFETY: GetStdHandle takes a plain value; SetHandleInformation only changes the flag of
+        // a handle this process owns, and fails harmlessly for a missing or invalid one.
+        // SAFETY：GetStdHandle 接收普通值；SetHandleInformation 只修改本进程所拥有句柄的标志，
+        // 对缺失或无效的句柄无害地失败。
+        unsafe {
+            let handle = GetStdHandle(id);
+            if !handle.is_null() && handle != INVALID_HANDLE_VALUE {
+                SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0);
+            }
+        }
     }
 }
 
