@@ -103,9 +103,13 @@ pub struct UninstallOptions {
     pub purge: bool,
 }
 
+/// The built-in browser component (`scripts/release-components.json`).
+/// 内置浏览器组件（`scripts/release-components.json`）。
+pub const BROWSER_COMPONENT: &str = "browser";
+
 /// Components that `--with` may add; the others follow from the mode.
 /// `--with` 可以添加的组件；其余组件由模式决定。
-pub const OPTIONAL_COMPONENTS: [&str; 1] = ["browser"];
+pub const OPTIONAL_COMPONENTS: [&str; 1] = [BROWSER_COMPONENT];
 
 /// Parses the arguments after the program name.
 /// 解析程序名之后的参数。

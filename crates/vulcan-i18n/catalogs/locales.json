@@ -17,6 +17,7 @@
     "boot": { "complete": true },
     "desktop": { "complete": true },
     "oauth": { "complete": true },
+    "setup": { "complete": true },
     "tray": { "complete": true },
     "webui": { "complete": true },
     "tui": { "complete": false }

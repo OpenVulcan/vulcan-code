@@ -32,8 +32,10 @@ path = "src/main.rs"
 # （见 `.config/hakari.toml`）。
 [dependencies]
 dirs.workspace = true
+ratatui.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+vulcan-i18n.workspace = true
 vulcan-install-core = { workspace = true, features = ["http"] }
 
 [target.'cfg(windows)'.dependencies]

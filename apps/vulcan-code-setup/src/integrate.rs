@@ -99,31 +99,71 @@ impl Plan<'_> {
         launchers
     }
 
-    /// Lines naming every location outside the root that installing will write.
-    /// 列出安装将在根目录之外写入的每个位置。
-    pub fn describe(&self) -> Result<Vec<String>, String> {
-        let mut lines = Vec::new();
+    /// Every location outside the root that installing will write.
+    /// 安装将在根目录之外写入的每个位置。
+    pub fn locations(&self) -> Result<Vec<Location>, String> {
+        let mut locations = Vec::new();
         if self.platform.is_windows() {
             if self.path {
-                lines.push(format!("user PATH: {}", self.root.join(CLI_DIR).display()));
+                locations.push(Location::UserPath(self.root.join(CLI_DIR)));
             }
-            lines.push(String::from("an entry in Settings > Apps for uninstalling"));
+            locations.push(Location::UninstallEntry);
         } else {
             if self.path {
-                lines.push(format!("commands in {}", paths::bin_dir()?.display()));
+                locations.push(Location::Commands(paths::bin_dir()?));
             }
             if self.mode == Mode::Desktop && self.shortcut {
-                if self.platform.is_macos() {
-                    lines.push(format!("{}", app_bundle()?.display()));
+                locations.push(if self.platform.is_macos() {
+                    Location::AppBundle(app_bundle()?)
                 } else {
-                    lines.push(format!("{}", desktop_entry()?.display()));
-                }
+                    Location::MenuEntry(desktop_entry()?)
+                });
             }
             if self.mode == Mode::Service {
-                lines.push(String::from("a systemd user unit (vulcan-code.service)"));
+                locations.push(Location::UserService);
             }
         }
-        Ok(lines)
+        Ok(locations)
+    }
+}
+
+/// A location outside the root that installing writes.
+/// 安装在根目录之外写入的一个位置。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Location {
+    /// Command launchers in this directory.
+    /// 此目录中的命令启动器。
+    Commands(PathBuf),
+    /// The Linux menu entry.
+    /// Linux 菜单项。
+    MenuEntry(PathBuf),
+    /// The macOS application bundle.
+    /// macOS 应用程序包。
+    AppBundle(PathBuf),
+    /// This directory on the Windows user PATH.
+    /// Windows 用户 PATH 中的此目录。
+    UserPath(PathBuf),
+    /// The Windows uninstall entry.
+    /// Windows 卸载项。
+    UninstallEntry,
+    /// The systemd user unit.
+    /// systemd 用户单元。
+    UserService,
+}
+
+impl std::fmt::Display for Location {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Commands(dir) => write!(formatter, "commands in {}", dir.display()),
+            Self::MenuEntry(path) | Self::AppBundle(path) => {
+                write!(formatter, "{}", path.display())
+            }
+            Self::UserPath(dir) => write!(formatter, "user PATH: {}", dir.display()),
+            Self::UninstallEntry => {
+                formatter.write_str("an entry in Settings > Apps for uninstalling")
+            }
+            Self::UserService => formatter.write_str("a systemd user unit (vulcan-code.service)"),
+        }
     }
 }
 

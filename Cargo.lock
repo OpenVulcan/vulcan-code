@@ -9954,9 +9954,11 @@ name = "vulcan-code-setup"
 version = "0.1.0"
 dependencies = [
  "dirs",
+ "ratatui",
  "serde",
  "serde_json",
  "tempfile",
+ "vulcan-i18n",
  "vulcan-install-core",
  "windows-sys 0.61.2",
 ]
@@ -10100,7 +10102,6 @@ version = "0.1.0"
 dependencies = [
  "serde_json",
  "sys-locale",
- "workspace-hack",
 ]
 
 [[package]]

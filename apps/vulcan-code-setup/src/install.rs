@@ -20,12 +20,13 @@ use vulcan_install_core::record::RECORD_FILE_NAME;
 use vulcan_install_core::signing::BUILT_IN_KEYS;
 use vulcan_install_core::update::{find_update, read_indexes};
 
-use crate::args::{CommonOptions, InstallOptions};
+use crate::args::{BROWSER_COMPONENT, CommonOptions, InstallOptions};
 use crate::integrate::{self, Plan, Recorder, SETUP_PROGRAM};
 use crate::paths;
 use crate::prompt::{confirm, megabytes};
 use crate::root::{self, Current, Description, LEGACY_MARKER, Layout, Ownership};
 use crate::state::{Item, Mode, SETUP_DIR, STATE_SCHEMA, SetupState};
+use crate::wizard::{self, Draft};
 
 /// User agent of every request.
 /// 每个请求的用户代理。
@@ -148,8 +149,50 @@ pub fn install(options: &InstallOptions) -> Result<(), String> {
         Ownership::Owned(state) => Some(state),
         _ => None,
     };
-    let choices = Choices::resolve(options, recorded, platform)?;
-    apply(platform, &root, &ownership, &choices, options.common.yes)
+    if !wizard::wanted(options.common.yes) {
+        let choices = Choices::resolve(options, recorded, platform)?;
+        return apply(platform, &root, &ownership, &choices, options.common.yes);
+    }
+    // The wizard starts from the options given, then the recorded choices, then the defaults.
+    // 向导依次以给出的选项、记录的选择与默认值为起点。
+    let browser = ComponentName::new(BROWSER_COMPONENT).map_err(|error| error.to_string())?;
+    let draft = Draft {
+        mode: options
+            .mode
+            .or(recorded.map(|state| state.mode))
+            .unwrap_or_else(|| wizard::default_mode(platform)),
+        browser: options.with.contains(&browser)
+            || recorded.is_some_and(|state| state.with.contains(&browser)),
+        root: root.display().to_string(),
+        shortcut: !options.no_shortcut && recorded.is_none_or(|state| state.shortcut),
+        path: !options.no_path && recorded.is_none_or(|state| state.path),
+        channel: options
+            .channel
+            .or(recorded.map(|state| state.channel))
+            .unwrap_or(Channel::Stable),
+    };
+    let Some(draft) = wizard::run(platform, draft)? else {
+        return Err(String::from("cancelled"));
+    };
+    let root = resolve_root(Some(Path::new(draft.root.trim())), platform)?;
+    let ownership = root::ownership(&root)?;
+    let route = match &ownership {
+        Ownership::Owned(state) => options.route.unwrap_or(state.route),
+        _ => options.route.unwrap_or_default(),
+    };
+    let choices = Choices {
+        mode: draft.mode,
+        channel: draft.channel,
+        route,
+        with: if draft.browser {
+            vec![browser]
+        } else {
+            Vec::new()
+        },
+        shortcut: draft.shortcut,
+        path: draft.path,
+    };
+    apply(platform, &root, &ownership, &choices, false)
 }
 
 /// `vulcan-code-setup update`.
@@ -362,7 +405,7 @@ fn apply(
         }
     }
     println!("  directory: {}", root_path.display());
-    for line in plan.describe()? {
+    for line in plan.locations()? {
         println!("  {line}");
     }
     if !confirm("Continue?", yes)? {
@@ -496,7 +539,10 @@ fn apply(
                 .join(", ")
         );
     }
-    if choices.with.iter().any(|name| name.as_str() == "browser")
+    if choices
+        .with
+        .iter()
+        .any(|name| name.as_str() == BROWSER_COMPONENT)
         && !platform.is_windows()
         && !platform.is_macos()
     {

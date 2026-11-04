@@ -13,7 +13,10 @@ workspace = true
 [dependencies]
 serde_json.workspace = true
 sys-locale.workspace = true
-workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+# The setup program links the catalogs and stays outside workspace-hack, so this crate does too (see
+# `.config/hakari.toml`).
+# 安装器链接这些目录且不使用 workspace-hack，因此本 crate 同样不使用（见 `.config/hakari.toml`）。
 
 [build-dependencies]
 serde_json.workspace = true

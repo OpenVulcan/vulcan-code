@@ -15,6 +15,7 @@ mod status;
 mod uninstall;
 #[cfg(windows)]
 mod windows;
+mod wizard;
 
 use args::{Command, USAGE};
 
