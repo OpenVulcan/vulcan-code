@@ -3,9 +3,10 @@
 # 将 stable 安装器通道指向 preview 安装器通道所指的版本；不重新构建或签名任何文件，只在 preview 指针通过校验后
 # 签署新指针（方案 18.6 节）。
 #
-# The next product release bundles this setup program in its Windows installer, and openvulcan-web serves the
-# install scripts this pointer names at the top level.
-# 下一次产品发布会把此安装器内置进 Windows 安装包，openvulcan-web 在顶层提供此指针所列的安装脚本。
+# The next product release bundles this setup program in its Windows installer. This workflow serves the install
+# scripts this pointer names at the top level of the primary origin; openvulcan-web copies them to the China mirror.
+# 下一次产品发布会把此安装器内置进 Windows 安装包。本工作流在主下载源顶层提供此指针所列的安装脚本；openvulcan-web
+# 把它们复制到中国镜像。
 name: Promote setup
 on:
   workflow_dispatch:
@@ -59,5 +60,9 @@ jobs:
             --from preview --to stable --key-env UPDATE_SIGNING_KEY
       - name: Upload the pointer and read it back through the CDN
         run: sh scripts/release-r2.sh setup-pointer "$RUNNER_TEMP/objects" stable
+      # `curl -fsSL .../vulcancode/install.sh | sh` and `irm .../vulcancode/install.ps1 | iex` fetch these copies.
+      # `curl -fsSL .../vulcancode/install.sh | sh` 与 `irm .../vulcancode/install.ps1 | iex` 获取的就是这两个副本。
+      - name: Serve the stable install scripts at the top level
+        run: sh scripts/release-r2.sh setup-scripts "$RUNNER_TEMP/objects" stable
       - name: Report
         run: echo "### The stable setup channel now points at $VERSION" >> "$GITHUB_STEP_SUMMARY"

@@ -73,8 +73,9 @@
   密钥）列出版本及每个文件的 SHA-256 与大小，必须恰好覆盖五个平台与两个脚本，stable 不得指向预发布版本。
   `release-setup.yml` 先发布到 preview，`promote-setup.yml` 校验 preview 指针后为同一组文件签署 stable 指针。
 - **入口脚本**：两个脚本在安装器发布时由 `scripts/entry-scripts.mjs` 填入版本、下载源（`AUTO_ORIGINS`）、各平台
-  摘要与 Windows 签名证书指纹；它们只下载并校验安装器，再把全部参数原样交给它。openvulcan-web 在顶层提供
-  stable 安装器指针所列的脚本，并把 `setup/` 同步到中国镜像。
+  摘要与 Windows 签名证书指纹；它们只下载并校验安装器，再把全部参数原样交给它。`promote-setup.yml` 把
+  stable 安装器指针所列的脚本按摘要校验后放到主下载源顶层（缓存 60 秒）；openvulcan-web 把 `setup/` 与顶层
+  脚本同步到中国镜像。
 - **自更新**：`install`、`update` 之前读取所选通道（preview 同时读 stable）的安装器指针，只与自身版本比较；
   产品更新不改变安装器字节，也不提示更新安装器。交互时询问，`--self-update` 直接更新，`--yes` 或无终端时只在
   最新产品版本的 `minSetupVersion` 高于自身时更新，`--no-self-update` 跳过。替换后以相同参数加

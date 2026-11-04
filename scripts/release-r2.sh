@@ -19,6 +19,7 @@
 #   release-r2.sh setup-upload <objects> <version>      upload the immutable files of a setup version
 #   release-r2.sh setup-pointer <objects> <channel>     upload the channel's setup pointer, purge and read back
 #   release-r2.sh setup-pointer-get <objects> <channel> download the channel's setup pointer for a promotion
+#   release-r2.sh setup-scripts <objects> <channel>     serve the scripts the setup pointer names at the top level
 set -eu
 
 case "${UPDATE_BASE_URL:-}" in https://*/*) ;; *) echo 'UPDATE_BASE_URL must be https://<host>/<prefix>' >&2; exit 1 ;; esac
@@ -170,6 +171,40 @@ case "$command" in
       s3 get-object --key "$prefix/$key" "$objects/$key" > /dev/null
     done
     echo "downloaded $name"
+    ;;
+  setup-scripts)
+    # The pointer below <objects> was verified by `vulcan-release-tool setup-promote` just before; each script
+    # must match the digest it lists before it replaces the top-level copy that `curl | sh` users fetch.
+    # <objects> 之下的指针刚由 `vulcan-release-tool setup-promote` 校验过；每个脚本必须与其中列出的摘要一致，
+    # 才能替换 `curl | sh` 用户获取的顶层副本。
+    objects=$1
+    pointer="$objects/setup/channels/$2.json"
+    version=$(jq -er .version "$pointer")
+    urls=''
+    for name in $(jq -r '.scripts[].file' "$pointer"); do
+      case "$name" in install.sh | install.ps1) ;; *) echo "unexpected script $name" >&2; exit 1 ;; esac
+      file="$objects/setup/$version/$name"
+      mkdir -p "${file%/*}"
+      s3 get-object --key "$prefix/setup/$version/$name" "$file" > /dev/null
+      expected=$(jq -er --arg name "$name" '.scripts[] | select(.file == $name) | .sha256' "$pointer")
+      actual=$(sha256sum "$file" | cut -d ' ' -f 1)
+      [ "$actual" = "$expected" ] || { echo "setup/$version/$name does not match the pointer" >&2; exit 1; }
+      s3 put-object --key "$prefix/$name" --body "$file" --content-type text/plain \
+        --cache-control 'public, max-age=60' > /dev/null
+      urls="$urls $base/$name"
+    done
+    [ -n "$urls" ] || { echo "the pointer lists no scripts" >&2; exit 1; }
+    # shellcheck disable=SC2086 # urls is a space-separated list of URLs without spaces.
+    purge $urls
+    for name in $(jq -r '.scripts[].file' "$pointer"); do
+      seen=''
+      for attempt in 1 2 3 4 5 6 7 8 9 10; do
+        if curl -fsS "$base/$name" | cmp -s - "$objects/setup/$version/$name"; then seen=yes; break; fi
+        sleep 2
+      done
+      [ "$seen" = yes ] || { echo "the CDN does not serve the new top-level $name" >&2; exit 1; }
+      echo "top-level $name is setup $version"
+    done
     ;;
   *)
     echo "unknown command: $command" >&2
