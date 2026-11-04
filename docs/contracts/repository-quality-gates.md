@@ -27,7 +27,7 @@ Actions 引用固定提交；Node 与 pnpm 版本取自受管运行时清单
 | Static checks | ubuntu | `node scripts/check.mjs rustfmt repository`：格式、文案断言与后端 CJK 棘轮、测试主目录隔离 |
 | Rust clippy | ubuntu | `node scripts/check.mjs clippy`：全工作区全目标，警告即错误 |
 | Rust fast tests | ubuntu | `node scripts/test-rust.mjs fast`：nextest `fast` 配置，排除隔离清单 |
-| Service check | windows、macos | `cargo check -p vulcan-code-service`：Rust 测试只在 Linux 运行，这里检查其余两个系统的平台专属代码 |
+| Service and setup check | windows、macos | `cargo check -p vulcan-code-service` 与 `cargo check -p vulcan-code-setup --all-targets`：Rust 测试只在 Linux 运行，这里检查其余两个系统的平台专属代码 |
 
 Rust 作业的准备集中在 `.github/actions/rust-setup`：释放 Linux 磁盘、声明的 Node、`install_linux_system_deps.sh`、固定工具链、锁定的 protoc 与依赖缓存。测试作业另外安装 nextest、内置 sg/rg/rtk、Lua 载荷与受管 Node；不执行整个开发机 `init-system`。LuaSkills 发布查询带只读作业令牌，避免共享出口地址触发匿名限流。
 

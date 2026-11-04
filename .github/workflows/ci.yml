@@ -170,10 +170,10 @@ jobs:
           node scripts/managed-node.mjs output
       - name: Fast nextest set without quarantined tests
         run: node scripts/test-rust.mjs fast
-  # Rust tests run on Linux; Windows and macOS compile the service so platform-specific code is checked there too.
-  # Rust 测试在 Linux 上运行；Windows 与 macOS 编译服务，使平台专属代码在这两个系统上也得到检查。
+  # Rust tests run on Linux; Windows and macOS compile the service and the setup program so platform-specific code is checked there too.
+  # Rust 测试在 Linux 上运行；Windows 与 macOS 编译服务与安装器，使平台专属代码在这两个系统上也得到检查。
   platform-check:
-    name: Service check (${{ matrix.os }})
+    name: Service and setup check (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -187,3 +187,5 @@ jobs:
       - uses: ./.github/actions/rust-setup
       - name: Check the service
         run: cargo check --locked -p vulcan-code-service
+      - name: Check the setup program and its tests
+        run: cargo check --locked -p vulcan-code-setup --all-targets
