@@ -31,6 +31,7 @@ pub mod path;
 pub mod pointer;
 pub mod record;
 pub mod repair;
+pub mod setup;
 pub mod signing;
 #[cfg(feature = "http")]
 pub mod update;

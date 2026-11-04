@@ -37,6 +37,10 @@ pub const MAX_INSTALLER_BYTES: u64 = 2 << 30;
 /// 接受的终端安装脚本最大字节数。
 pub const MAX_SCRIPT_BYTES: u64 = 1 << 20;
 
+/// Largest setup program a setup pointer may name.
+/// 安装器指针可指向的最大安装器。
+pub const MAX_SETUP_PROGRAM_BYTES: u64 = 64 << 20;
+
 /// Length of a raw Ed25519 detached signature.
 /// 原始 Ed25519 分离签名的长度。
 pub const SIGNATURE_BYTES: usize = 64;

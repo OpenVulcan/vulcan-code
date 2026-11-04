@@ -23,7 +23,7 @@ use sha2::{Digest as _, Sha256};
 use crate::assemble::PackSource;
 use crate::digest::Sha256Digest;
 use crate::error::{FormatError, FormatResult};
-use crate::layout::{CHINA_ORIGIN, PRIMARY_ORIGIN, pack_key};
+use crate::layout::{AUTO_ORIGINS, CHINA_ORIGIN, PRIMARY_ORIGIN, pack_key};
 
 /// How long connecting to one origin may take before the next one is tried.
 /// 连接某个下载源的最长时间，超时后尝试下一个。
@@ -64,7 +64,7 @@ impl Route {
     /// 此线路的下载源，按尝试顺序排列。
     pub fn origins(self) -> Vec<String> {
         let origins: &[&str] = match self {
-            Self::Auto => &[PRIMARY_ORIGIN, CHINA_ORIGIN],
+            Self::Auto => &AUTO_ORIGINS,
             Self::International => &[PRIMARY_ORIGIN],
             Self::China => &[CHINA_ORIGIN],
         };

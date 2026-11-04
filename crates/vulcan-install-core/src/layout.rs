@@ -17,6 +17,11 @@ pub const PRIMARY_ORIGIN: &str = "https://static.openvulcan.com/vulcancode";
 /// 摘要外不受信任。
 pub const CHINA_ORIGIN: &str = "https://static.openvulcan.cn/vulcancode";
 
+/// The origins tried by default, in order; the install scripts embed the same list
+/// (`vulcan-release-tool origins`).
+/// 默认按顺序尝试的下载源；安装脚本内嵌同一列表（`vulcan-release-tool origins`）。
+pub const AUTO_ORIGINS: [&str; 2] = [PRIMARY_ORIGIN, CHINA_ORIGIN];
+
 /// The mutable signed pointer of a channel and platform.
 /// 某通道与平台的可变已签名指针。
 pub fn pointer_key(channel: Channel, platform: Platform) -> String {
@@ -47,10 +52,22 @@ pub fn pack_key(digest: Sha256Digest) -> String {
     format!("packs/{digest}.pack")
 }
 
-/// A full installer or install script of a version.
-/// 某版本的完整安装包或安装脚本。
+/// A full installer of a product version.
+/// 某产品版本的完整安装包。
 pub fn installer_key(version: &ReleaseVersion, file: &str) -> String {
     format!("installers/{version}/{file}")
+}
+
+/// The signed pointer of a setup program channel, covering every platform (`crate::setup`).
+/// 安装器某通道的已签名指针，覆盖全部平台（`crate::setup`）。
+pub fn setup_pointer_key(channel: Channel) -> String {
+    format!("setup/channels/{channel}.json")
+}
+
+/// A setup program or install script of a setup version.
+/// 某安装器版本的安装器或安装脚本。
+pub fn setup_file_key(version: &ReleaseVersion, file: &str) -> String {
+    format!("setup/{version}/{file}")
 }
 
 /// The detached signature next to a signed document.

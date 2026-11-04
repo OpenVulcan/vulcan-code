@@ -1,27 +1,28 @@
-//! Updating the setup program itself before `install` or `update` (plan section 18.6): the newest
-//! release on the channel publishes its own setup program, which replaces this one and runs again
-//! with the same arguments.
-//! 在 `install` 或 `update` 之前更新安装器自身（方案 18.6 节）：通道上的最新版本发布了自己的安装器，
-//! 它替换当前安装器，并以相同参数再次运行。
+//! Updating the setup program itself before `install` or `update` (plan section 18.6): the setup
+//! program is released on its own, and a newer one named by the signed setup pointer of the channel
+//! replaces this one and runs again with the same arguments. A product release only asks for it
+//! through `minSetupVersion`.
+//! 在 `install` 或 `update` 之前更新安装器自身（方案 18.6 节）：安装器独立发布，通道的已签名安装器
+//! 指针所指的更新版本替换当前安装器，并以相同参数再次运行。产品版本只通过 `minSetupVersion` 提出要求。
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use vulcan_install_core::fetch::{Downloader, Route};
-use vulcan_install_core::layout::installer_key;
-use vulcan_install_core::manifest::{Download, DownloadKind};
+use vulcan_install_core::layout::setup_file_key;
 use vulcan_install_core::names::{Channel, Platform, ReleaseVersion};
+use vulcan_install_core::setup::{SetupFile, SetupPointer};
 use vulcan_install_core::signing::BUILT_IN_KEYS;
-use vulcan_install_core::update::{Offer, find_update};
+use vulcan_install_core::update::{find_setup_update, find_update};
 
 use crate::args::SelfUpdate;
 use crate::install::{USER_AGENT, channels};
 use crate::prompt::{confirm, megabytes};
 
-/// The product version this setup program was built with (`build.rs`).
-/// 构建本安装器时的产品版本（`build.rs`）。
-pub const SETUP_VERSION: &str = env!("VULCAN_SETUP_VERSION");
+/// The version of this setup program, defined only in its `Cargo.toml`.
+/// 本安装器的版本，只在其 `Cargo.toml` 中定义。
+pub const SETUP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The argument that keeps the restarted program from updating again.
 /// 让重新启动的程序不再更新的参数。
@@ -68,72 +69,73 @@ pub fn check(
     let own = version()?;
     let mut downloader =
         Downloader::new(route.origins(), USER_AGENT).map_err(|error| error.to_string())?;
-    let offer = match find_update(
-        &mut downloader,
-        BUILT_IN_KEYS,
-        platform,
-        channels(channel),
-        &own,
-    ) {
-        Ok(Some(offer)) => offer,
+    let pointer = match find_setup_update(&mut downloader, BUILT_IN_KEYS, channels(channel), &own) {
+        Ok(Some(pointer)) => pointer,
         Ok(None) => return Ok(Outcome::Continue),
-        // The release itself is checked again before anything is installed.
-        // 安装任何内容之前，还会再次检查版本本身。
+        // The release itself still checks `minSetupVersion` before anything is installed.
+        // 安装任何内容之前，版本本身仍会检查 `minSetupVersion`。
         Err(error) => {
             println!("Could not look for a newer setup program: {error}");
             return Ok(Outcome::Continue);
         }
     };
-    let release = offer.manifest.version.clone();
-    let required = offer
-        .manifest
-        .min_setup_version
-        .as_ref()
-        .filter(|minimum| **minimum > own)
-        .cloned();
-    let refuse = |minimum: &ReleaseVersion| {
-        format!("{release} needs setup program {minimum} or newer, and this one is {own}")
-    };
-    let Some(download) = setup_download(&offer) else {
-        return match &required {
-            Some(minimum) => Err(format!("{}; it publishes none", refuse(minimum))),
-            None => Ok(Outcome::Continue),
-        };
-    };
+    let newer = &pointer.version;
     let wanted = match choice {
         SelfUpdate::Always => true,
         SelfUpdate::Never => false,
-        SelfUpdate::Ask if yes || !std::io::stdin().is_terminal() => required.is_some(),
+        SelfUpdate::Ask if yes || !std::io::stdin().is_terminal() => {
+            required(&mut downloader, platform, channel, &own).is_some()
+        }
         SelfUpdate::Ask => confirm(
             &format!(
-                "A newer setup program {release} is available (this one is {own}). Update it and \
+                "A newer setup program {newer} is available (this one is {own}). Update it and \
                  continue?"
             ),
             false,
         )?,
     };
     if !wanted {
-        return match &required {
-            Some(minimum) => Err(refuse(minimum)),
+        return match required(&mut downloader, platform, channel, &own) {
+            Some((release, minimum)) => Err(format!(
+                "{release} needs setup program {minimum} or newer, and this one is {own}"
+            )),
             None => Ok(Outcome::Continue),
         };
     }
+    let file = pointer
+        .program(platform)
+        .map_err(|error| error.to_string())?;
     println!(
-        "Downloading setup program {release} ({})...",
-        megabytes(download.size)
+        "Downloading setup program {newer} ({})...",
+        megabytes(file.size)
     );
-    replace(&mut downloader, &program, &release, download)?;
+    replace(&mut downloader, &program, &pointer, file)?;
     restart(&program, arguments)
 }
 
-/// The setup program the offered release publishes.
-/// 所提供版本发布的安装器。
-fn setup_download(offer: &Offer) -> Option<&Download> {
-    offer
-        .manifest
-        .downloads
-        .iter()
-        .find(|download| download.kind == DownloadKind::Setup)
+/// The newest product release on `channel` and the setup version it requires, when that is newer
+/// than `own`; a lookup that fails requires nothing here, since the release is checked again
+/// before anything is installed.
+/// `channel` 上的最新产品版本及其要求的安装器版本（当它比 `own` 更新时）；查找失败时这里不作要求，
+/// 因为安装任何内容之前还会再次检查该版本。
+fn required(
+    downloader: &mut Downloader,
+    platform: Platform,
+    channel: Channel,
+    own: &ReleaseVersion,
+) -> Option<(ReleaseVersion, ReleaseVersion)> {
+    let floor: ReleaseVersion = "0.0.0".parse().ok()?;
+    let offer = find_update(
+        downloader,
+        BUILT_IN_KEYS,
+        platform,
+        channels(channel),
+        &floor,
+    )
+    .ok()
+    .flatten()?;
+    let minimum = offer.manifest.min_setup_version?;
+    (minimum > *own).then_some((offer.manifest.version, minimum))
 }
 
 /// Where the running program is moved before it is replaced on Windows.
@@ -155,16 +157,16 @@ fn remove_aside(program: &Path) {
 fn replace(
     downloader: &mut Downloader,
     program: &Path,
-    release: &ReleaseVersion,
-    download: &Download,
+    pointer: &SetupPointer,
+    file: &SetupFile,
 ) -> Result<(), String> {
-    let staged = program.with_file_name(format!(".{}.download", download.file));
+    let staged = program.with_file_name(format!(".{}.download", file.file));
     downloader
         .download_file(
-            &installer_key(release, &download.file),
+            &setup_file_key(&pointer.version, &file.file),
             &staged,
-            download.size,
-            download.sha256,
+            file.size,
+            file.sha256,
         )
         .map_err(|error| format!("cannot download the setup program: {error}"))?;
     let fail = |error: std::io::Error| format!("cannot replace {}: {error}", program.display());

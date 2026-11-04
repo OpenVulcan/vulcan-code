@@ -143,7 +143,6 @@ fn read_indexes(objects: &Path, manifest: &ReleaseManifest) -> anyhow::Result<Ve
 pub(crate) mod tests {
     use std::collections::HashMap;
 
-    use vulcan_install_core::manifest::DownloadKind;
     use vulcan_install_core::record::InstallRecord;
     use vulcan_install_core::signing::public_key_of;
 
@@ -151,7 +150,7 @@ pub(crate) mod tests {
     use crate::pack::{ComponentRules, pack_tree, published_locations};
     use crate::publish::{ManifestInput, write_manifest, write_pointer};
 
-    const SECRET: [u8; 32] = [9; 32];
+    pub(crate) const SECRET: [u8; 32] = [9; 32];
 
     pub(crate) fn keys() -> Vec<TrustedKey> {
         vec![TrustedKey {
@@ -189,8 +188,6 @@ pub(crate) mod tests {
             &objects,
         )
         .expect("pack");
-        let setup = temp.join(format!("vulcan-code-setup-{version}-linux-x64"));
-        std::fs::write(&setup, b"setup program").expect("setup");
         let notes = temp.join("notes.json");
         std::fs::write(&notes, br#"{"en":"Fixes."}"#).expect("notes");
         let version: ReleaseVersion = version.parse().expect("version");
@@ -203,7 +200,7 @@ pub(crate) mod tests {
                 released_at: "2026-11-03T08:00:00Z".to_owned(),
                 components: report.components,
                 notes: Some(notes),
-                downloads: vec![(DownloadKind::Setup, setup)],
+                downloads: Vec::new(),
                 min_setup_version: None,
             },
             &SECRET,

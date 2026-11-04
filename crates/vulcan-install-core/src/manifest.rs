@@ -7,14 +7,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::digest::Sha256Digest;
 use crate::error::{FormatError, FormatResult};
-use crate::limits::{MAX_INSTALLER_BYTES, MAX_MANIFEST_BYTES, MAX_SCRIPT_BYTES};
+use crate::limits::{MAX_INSTALLER_BYTES, MAX_MANIFEST_BYTES};
 use crate::names::{ComponentName, PRODUCT, Platform, ReleaseVersion, SCHEMA_VERSION};
 use crate::pointer::ChannelPointer;
 use crate::signing::{TrustedKey, expect_key_id, parse_signed};
-
-/// The terminal install scripts every platform's manifest lists with identical bytes.
-/// 每个平台的版本清单都以相同字节列出的终端安装脚本。
-pub const ENTRY_SCRIPTS: [&str; 2] = ["install.sh", "install.ps1"];
 
 /// The release notes of the version.
 /// 该版本的更新说明。
@@ -41,8 +37,9 @@ pub struct ComponentRef {
     pub fingerprint: Option<Sha256Digest>,
 }
 
-/// What a separately downloadable file is.
-/// 可单独下载文件的类型。
+/// What a separately downloadable file is. The setup program and the install scripts are released
+/// on their own (`crate::setup`), so a product release never lists them.
+/// 可单独下载文件的类型。安装器与安装脚本单独发布（`crate::setup`），因此产品版本从不列出它们。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DownloadKind {
@@ -52,12 +49,6 @@ pub enum DownloadKind {
     /// The disk image for browser downloads, on macOS only.
     /// 供浏览器下载的磁盘映像，仅 macOS。
     Dmg,
-    /// The terminal setup program `vulcan-code-setup`, on every platform.
-    /// 终端安装器 `vulcan-code-setup`，所有平台都有。
-    Setup,
-    /// One of [`ENTRY_SCRIPTS`].
-    /// [`ENTRY_SCRIPTS`] 之一。
-    Script,
 }
 
 impl DownloadKind {
@@ -73,14 +64,6 @@ impl DownloadKind {
             Self::Dmg if platform.is_macos() => {
                 vec![format!("VulcanCode-{version}-{platform}.dmg")]
             }
-            Self::Setup if platform.is_windows() => {
-                vec![format!("vulcan-code-setup-{version}-{platform}.exe")]
-            }
-            Self::Setup => vec![format!("vulcan-code-setup-{version}-{platform}")],
-            Self::Script => ENTRY_SCRIPTS
-                .iter()
-                .map(|name| (*name).to_owned())
-                .collect(),
             Self::Inno | Self::Dmg => Vec::new(),
         }
     }
@@ -89,8 +72,7 @@ impl DownloadKind {
     /// 此类型文件的最大字节数。
     pub const fn size_limit(self) -> u64 {
         match self {
-            Self::Script => MAX_SCRIPT_BYTES,
-            Self::Inno | Self::Dmg | Self::Setup => MAX_INSTALLER_BYTES,
+            Self::Inno | Self::Dmg => MAX_INSTALLER_BYTES,
         }
     }
 }
@@ -294,7 +276,7 @@ impl ReleaseManifest {
 
 /// Whether `text` is exactly `YYYY-MM-DDTHH:MM:SSZ` with digits in every numeric place.
 /// `text` 是否恰为 `YYYY-MM-DDTHH:MM:SSZ` 且数字位都是数字。
-fn is_utc_timestamp(text: &str) -> bool {
+pub(crate) fn is_utc_timestamp(text: &str) -> bool {
     const SHAPE: &[u8] = b"dddd-dd-ddTdd:dd:ddZ";
     text.len() == SHAPE.len()
         && text.bytes().zip(SHAPE).all(|(byte, shape)| match shape {
@@ -313,20 +295,19 @@ mod tests {
 
     fn manifest(platform: Platform) -> ReleaseManifest {
         let version: ReleaseVersion = "0.1.3".parse().expect("version");
-        let mut downloads = vec![Download {
-            kind: DownloadKind::Setup,
-            file: DownloadKind::Setup.allowed_files(&version, platform)[0].clone(),
-            sha256: Sha256Digest::of(b"setup"),
-            size: 5,
-        }];
-        for script in ENTRY_SCRIPTS {
-            downloads.push(Download {
-                kind: DownloadKind::Script,
-                file: script.to_owned(),
-                sha256: Sha256Digest::of(script.as_bytes()),
-                size: 10,
-            });
-        }
+        let downloads = [DownloadKind::Inno, DownloadKind::Dmg]
+            .into_iter()
+            .flat_map(|kind| {
+                kind.allowed_files(&version, platform)
+                    .into_iter()
+                    .map(move |file| Download {
+                        kind,
+                        file,
+                        sha256: Sha256Digest::of(b"installer"),
+                        size: 5,
+                    })
+            })
+            .collect();
         ReleaseManifest {
             schema: SCHEMA_VERSION,
             product: PRODUCT.to_owned(),
@@ -405,19 +386,19 @@ mod tests {
         });
         assert!(dmg_on_windows.validate().is_err());
 
-        let mut wrong_version = manifest(Platform::LinuxX64);
-        wrong_version.downloads[0].file = "vulcan-code-setup-0.1.2-linux-x64".to_owned();
+        let mut wrong_version = manifest(Platform::WindowsX64);
+        wrong_version.downloads[0].file = "VulcanCode-0.1.2-windows-x64-setup.exe".to_owned();
         assert!(wrong_version.validate().is_err());
 
-        let mut duplicated = manifest(Platform::LinuxX64);
-        duplicated.downloads.push(duplicated.downloads[1].clone());
+        let mut duplicated = manifest(Platform::MacosArm64);
+        duplicated.downloads.push(duplicated.downloads[0].clone());
         assert!(duplicated.validate().is_err());
 
-        let mut oversized_script = manifest(Platform::LinuxX64);
-        oversized_script.downloads[1].size = MAX_SCRIPT_BYTES + 1;
-        assert!(oversized_script.validate().is_err());
+        let mut oversized = manifest(Platform::WindowsX64);
+        oversized.downloads[0].size = MAX_INSTALLER_BYTES + 1;
+        assert!(oversized.validate().is_err());
 
-        let mut empty = manifest(Platform::LinuxX64);
+        let mut empty = manifest(Platform::MacosX64);
         empty.downloads[0].size = 0;
         assert!(empty.validate().is_err());
     }

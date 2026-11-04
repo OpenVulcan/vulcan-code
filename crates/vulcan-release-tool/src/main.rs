@@ -6,14 +6,17 @@
 //! copy it as is; `manifest` writes and signs the release manifest; `pointer` signs a channel pointer;
 //! `verify` checks a local object tree the way a client does and installs from it; `restore` takes
 //! files out of a published release whose signed manifest it checks, so a release reuses built and
-//! signed bytes instead of building them again. Every command
+//! signed bytes instead of building them again. `setup-publish`, `setup-promote` and `setup-check`
+//! release the setup program on its own (`setup.rs`); `origin` and `origins` print the download
+//! origins. Every command
 //! writes the object layout below `--objects`, which the workflow uploads unchanged. The signing key
 //! is read from the environment variable named by `--key-env` and never printed.
 //!
 //! `pack` 将构建好的发行树转为组件索引与文件包，只存储已发布索引中没有的内容；`record` 向已打包的发行树
 //! 写入安装记录，供原样复制发行树的安装包使用；`manifest` 写入并签署版本清单；`pointer` 签署通道指针；
 //! `verify` 按客户端的方式校验本地对象树并从中安装；`restore` 从已发布版本中取出文件并校验其签名版本
-//! 清单，使新版本复用已构建、已签名的字节而不再重新构建。每个命令都在 `--objects` 之下写出对象布局，工作流
+//! 清单，使新版本复用已构建、已签名的字节而不再重新构建。`setup-publish`、`setup-promote` 与 `setup-check`
+//! 独立发布安装器（`setup.rs`）；`origin` 与 `origins` 输出下载源。每个命令都在 `--objects` 之下写出对象布局，工作流
 //! 原样上传。签名私钥从 `--key-env` 指名的环境变量读取，绝不输出。
 
 mod args;
@@ -21,6 +24,7 @@ mod pack;
 mod publish;
 mod record;
 mod restore;
+mod setup;
 mod verify;
 
 use std::collections::BTreeMap;
@@ -47,7 +51,12 @@ usage:
   vulcan-release-tool pointer --objects DIR --channel C --platform P --version V --key-env NAME
   vulcan-release-tool verify --objects DIR --platform P --version V --install-root DIR [--channel C]
   vulcan-release-tool restore --mirror DIR --platform P --version V --path PATH... --out DIR
-  vulcan-release-tool origin";
+  vulcan-release-tool setup-publish --objects DIR --version V --channel C --programs DIR --scripts DIR
+      --released-at YYYY-MM-DDTHH:MM:SSZ --key-env NAME
+  vulcan-release-tool setup-promote --objects DIR --version V --from C --to C --key-env NAME
+  vulcan-release-tool setup-check --pointer FILE --channel C --platform P --program FILE
+  vulcan-release-tool origin
+  vulcan-release-tool origins";
 
 fn main() -> ExitCode {
     let mut arguments = std::env::args().skip(1);
@@ -62,8 +71,17 @@ fn main() -> ExitCode {
         "pointer" => run_pointer(arguments),
         "verify" => run_verify(arguments),
         "restore" => run_restore(arguments),
+        "setup-publish" => run_setup_publish(arguments),
+        "setup-promote" => run_setup_promote(arguments),
+        "setup-check" => run_setup_check(arguments),
         "origin" => {
             println!("{}", vulcan_install_core::layout::PRIMARY_ORIGIN);
+            Ok(())
+        }
+        "origins" => {
+            for origin in vulcan_install_core::layout::AUTO_ORIGINS {
+                println!("{origin}");
+            }
             Ok(())
         }
         _ => {
@@ -238,6 +256,78 @@ fn run_verify(arguments: impl Iterator<Item = String>) -> anyhow::Result<()> {
         BUILT_IN_KEYS,
     )?;
     println!("verified and installed into {}", installed.display());
+    Ok(())
+}
+
+/// Runs `setup-publish`.
+/// 执行 `setup-publish`。
+fn run_setup_publish(arguments: impl Iterator<Item = String>) -> anyhow::Result<()> {
+    let args = Args::parse(
+        arguments,
+        &[
+            "objects",
+            "version",
+            "channel",
+            "programs",
+            "scripts",
+            "released-at",
+            "key-env",
+        ],
+    )?;
+    let programs = args.path("programs")?;
+    let scripts = args.path("scripts")?;
+    let secret = signing_secret(args.required("key-env")?)?;
+    let pointer = setup::publish_setup(
+        &args.path("objects")?,
+        setup::SetupInput {
+            version: args.required("version")?.parse()?,
+            channel: args.required("channel")?.parse()?,
+            released_at: args.required("released-at")?.to_owned(),
+            programs: &programs,
+            scripts: &scripts,
+        },
+        &secret,
+        BUILT_IN_KEYS,
+    )?;
+    println!(
+        "signed the {} setup pointer to {} with {}",
+        pointer.channel, pointer.version, pointer.key_id
+    );
+    Ok(())
+}
+
+/// Runs `setup-promote`.
+/// 执行 `setup-promote`。
+fn run_setup_promote(arguments: impl Iterator<Item = String>) -> anyhow::Result<()> {
+    let args = Args::parse(arguments, &["objects", "version", "from", "to", "key-env"])?;
+    let secret = signing_secret(args.required("key-env")?)?;
+    let pointer = setup::promote_setup(
+        &args.path("objects")?,
+        args.required("from")?.parse()?,
+        args.required("to")?.parse()?,
+        &args.required("version")?.parse()?,
+        &secret,
+        BUILT_IN_KEYS,
+    )?;
+    println!(
+        "signed the {} setup pointer to {}",
+        pointer.channel, pointer.version
+    );
+    Ok(())
+}
+
+/// Runs `setup-check`; prints the verified setup version alone so a workflow can read it.
+/// 执行 `setup-check`；只输出已校验的安装器版本，便于工作流读取。
+fn run_setup_check(arguments: impl Iterator<Item = String>) -> anyhow::Result<()> {
+    let args = Args::parse(arguments, &["pointer", "channel", "platform", "program"])?;
+    let pointer = setup::check_setup(
+        &args.path("pointer")?,
+        args.required("channel")?.parse()?,
+        args.required("platform")?.parse()?,
+        &args.path("program")?,
+        BUILT_IN_KEYS,
+    )?;
+    println!("{}", pointer.version);
     Ok(())
 }
 

@@ -382,8 +382,8 @@ fn apply(
                 .filter(|minimum| **minimum > own)
             {
                 return Err(format!(
-                    "{} needs setup program {minimum} or newer, and this one is {own}; run again \
-                     without --no-self-update to update it first",
+                    "{} needs setup program {minimum} or newer, and this one is {own}; update the \
+                     setup program first (it updates itself unless --no-self-update is given)",
                     offer.manifest.version
                 ));
             }

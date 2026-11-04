@@ -13,13 +13,16 @@ use serde::{Deserialize, Serialize};
 use crate::error::{FormatError, FormatResult};
 use crate::fetch::Downloader;
 use crate::index::ComponentIndex;
-use crate::layout::{index_key, manifest_key, notes_key, pointer_key, signature_key};
+use crate::layout::{
+    index_key, manifest_key, notes_key, pointer_key, setup_pointer_key, signature_key,
+};
 use crate::limits::{
     MAX_INDEX_BYTES, MAX_MANIFEST_BYTES, MAX_NOTES_BYTES, MAX_POINTER_BYTES, SIGNATURE_BYTES,
 };
 use crate::manifest::ReleaseManifest;
 use crate::names::{Channel, ComponentName, Platform, ReleaseVersion};
 use crate::pointer::ChannelPointer;
+use crate::setup::SetupPointer;
 use crate::signing::TrustedKey;
 
 /// Format version of the notes document; `scripts/release-plan.mjs` (`NOTES_SCHEMA`) writes it.
@@ -153,6 +156,49 @@ fn read_pointer(
         let document = downloader.fetch(&key, MAX_POINTER_BYTES)?;
         let signature = downloader.fetch(&signature_key(&key), SIGNATURE_BYTES as u64)?;
         ChannelPointer::verify(&document, &signature, keys, channel, platform)
+    };
+    match attempt() {
+        Err(FormatError::SignatureRejected | FormatError::SignatureLength { .. }) => attempt(),
+        other => other,
+    }
+}
+
+/// Reads the setup pointers of `channels` and returns the newest one above `running`, if any; as
+/// with [`find_update`], a newer version on any channel wins.
+/// 读取 `channels` 的安装器指针，返回高于 `running` 的最新指针（若有）；与 [`find_update`] 相同，任一
+/// 通道上更新的版本胜出。
+pub fn find_setup_update(
+    downloader: &mut Downloader,
+    keys: &[TrustedKey],
+    channels: &[Channel],
+    running: &ReleaseVersion,
+) -> FormatResult<Option<SetupPointer>> {
+    let mut newest: Option<SetupPointer> = None;
+    for channel in channels {
+        let pointer = read_setup_pointer(downloader, keys, *channel)?;
+        if newest
+            .as_ref()
+            .is_none_or(|known| pointer.version > known.version)
+        {
+            newest = Some(pointer);
+        }
+    }
+    Ok(newest.filter(|pointer| &pointer.version > running))
+}
+
+/// Downloads and verifies the setup pointer of `channel`, fetching it once more when the pair was
+/// caught mid-replacement (`setup.rs`).
+/// 下载并校验 `channel` 的安装器指针；若取到的是替换中途的一对文件，再获取一次（见 `setup.rs`）。
+pub fn read_setup_pointer(
+    downloader: &mut Downloader,
+    keys: &[TrustedKey],
+    channel: Channel,
+) -> FormatResult<SetupPointer> {
+    let key = setup_pointer_key(channel);
+    let mut attempt = || -> FormatResult<SetupPointer> {
+        let document = downloader.fetch(&key, MAX_POINTER_BYTES)?;
+        let signature = downloader.fetch(&signature_key(&key), SIGNATURE_BYTES as u64)?;
+        SetupPointer::verify(&document, &signature, keys, channel)
     };
     match attempt() {
         Err(FormatError::SignatureRejected | FormatError::SignatureLength { .. }) => attempt(),
