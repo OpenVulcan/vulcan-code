@@ -42,7 +42,7 @@ if (path.resolve(output) === repository) {
 }
 // One schema authority is shared by packaging, launching, and the Core restart layout reader.
 // 打包、启动与核心重启布局读取器共享唯一的架构版本权威。
-export const runtimeLayoutSchemaVersion = 3;
+export const runtimeLayoutSchemaVersion = 4;
 // The service describes its compiled profile without starting user services or touching settings.
 // 服务描述自身编译模式，不启动用户服务或修改配置。
 const execFileAsync = promisify(execFile);
@@ -569,6 +569,16 @@ async function main() {
     webuiRoot: 'webui', runtimeVersion: electronPackage.version,
     platform: process.platform, architecture: process.arch,
     capabilities: chromiumExecutable ? ['desktop', 'browser-host', 'webui'] : ['desktop', 'webui'],
+    // Shortcuts made outside the packaging (the setup program) carry the same notification identity
+    // as the Inno shortcuts; only Windows has one.
+    // 打包之外创建的快捷方式（安装器）携带与 Inno 快捷方式相同的通知身份；只有 Windows 有该身份。
+    ...(desktopNotificationIdentity.appUserModelId ? {
+      desktopIdentity: {
+        name: desktopNotificationIdentity.name,
+        appUserModelId: desktopNotificationIdentity.appUserModelId,
+        toastActivatorClsid: desktopNotificationIdentity.toastActivatorClsid,
+      },
+    } : {}),
   };
   await verifyPackagedLayout(layout);
   await verifyServiceProfile(entry(layout.serviceExecutable));

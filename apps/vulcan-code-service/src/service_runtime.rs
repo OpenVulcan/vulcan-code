@@ -538,6 +538,9 @@ impl HeadlessService {
         // Only the data-root owner may rotate its logs; install before any service workers start.
         // 仅数据根所有者可以轮转日志，在任何服务线程启动前安装日志接收器。
         crate::logging::initialize(&data_root)?;
+        // A login registration follows the version that owns the data root after an update.
+        // 更新后，登录注册跟随拥有数据根的版本。
+        crate::user_service::refresh_registration();
         // Install once before state construction or any native worker can admit an operation.
         // state 构造或任何原生工作线程准入操作前一次性安装。
         let native_diagnostics = crate::native_diagnostics::NativeDiagnosticCapture::install()?;

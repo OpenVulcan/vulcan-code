@@ -31,7 +31,7 @@ async function withRoot(action) {
 async function writeDistribution(root, platform, architecture, profile = 'release') {
   await mkdir(path.join(root, 'bin'), { recursive: true });
   await mkdir(path.join(root, 'desktop/runtime'), { recursive: true });
-  await writeFile(path.join(root, 'runtime-layout.json'), JSON.stringify({ schemaVersion: 3, profile, platform, architecture }, null, 2));
+  await writeFile(path.join(root, 'runtime-layout.json'), JSON.stringify({ schemaVersion: 4, profile, platform, architecture }, null, 2));
   await writeFile(path.join(root, 'bin/vulcan-code-service'), '#!/bin/sh\necho service\n');
   await chmod(path.join(root, 'bin/vulcan-code-service'), 0o755);
   await writeFile(path.join(root, 'desktop/runtime/payload.txt'), 'payload');

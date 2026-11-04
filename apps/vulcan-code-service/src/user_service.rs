@@ -1,8 +1,16 @@
 //! Per-user service registration that keeps the headless Core running in the background.
 //! 为当前用户注册服务，使无头 Core 在后台持续运行。
 //!
-//! Linux registers a systemd user unit; other platforms report that registration is unsupported.
-//! Linux 注册 systemd 用户单元；其他平台报告暂不支持注册。
+//! Linux registers a systemd user unit, macOS a launchd agent, and Windows a value under the
+//! per-user `Run` key. Every registration belongs to the current user and needs no elevated rights;
+//! nothing registers a system-wide service.
+//! Linux 注册 systemd 用户单元，macOS 注册 launchd 代理，Windows 在每用户 `Run` 键下写入一个值。每种注册
+//! 都属于当前用户，不需要提升权限；不注册任何系统级服务。
+
+#[cfg(any(target_os = "macos", test))]
+mod launch_agent;
+#[cfg(windows)]
+mod login_run;
 
 /// Registers the headless Core as a per-user service, then starts it and waits for readiness.
 /// 将无头 Core 注册为当前用户服务，随后启动并等待就绪。
@@ -70,12 +78,138 @@ pub fn run_user_service_action(action: UserServiceAction) -> Result<String, Stri
             UserServiceAction::Uninstall => systemd::uninstall(),
         }
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    {
+        match action {
+            UserServiceAction::Install => launch_agent::install(),
+            UserServiceAction::Uninstall => launch_agent::uninstall(),
+        }
+    }
+    #[cfg(windows)]
+    {
+        match action {
+            UserServiceAction::Install => login_run::install(),
+            UserServiceAction::Uninstall => login_run::uninstall(),
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         let _ = action;
         Err(String::from(
-            "registering Vulcan Code as a user service is supported only on Linux with systemd",
+            "registering Vulcan Code as a user service is not supported on this system",
         ))
+    }
+}
+
+/// Points an existing registration at this process when it belongs to the current version of the
+/// same installation; Windows registrations name a version directory, so each update moves them.
+/// Other platforms register the stable `current` path and have nothing to refresh.
+/// 当本进程属于同一安装的当前版本时，让已有注册指向本进程；Windows 注册指向版本目录，因此每次更新都要
+/// 移动它。其他平台注册稳定的 `current` 路径，无需刷新。
+pub fn refresh_registration() {
+    #[cfg(windows)]
+    if let Err(error) = login_run::refresh() {
+        tracing::warn!("[vulcan-code-service] could not refresh the login registration: {error}");
+    }
+}
+
+/// Requires the executable to belong to a distribution whose runtime layout matches this build.
+/// 要求可执行文件属于运行时布局与本构建配置一致的发行目录。
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+fn require_distribution() -> Result<(), String> {
+    let (manifest, path) = crate::runtime_layout::read_runtime_layout_manifest_with_path()
+        .map_err(|error| format!("only a built distribution can be registered: {error}"))?;
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+    if manifest.profile != profile {
+        return Err(format!(
+            "runtime layout {} declares profile `{}` but this build is `{profile}`",
+            path.display(),
+            manifest.profile
+        ));
+    }
+    Ok(())
+}
+
+/// Whether no other process owns the data root right now.
+/// 当前是否没有其他进程拥有数据根。
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+fn data_root_is_free(data_root: &std::path::Path) -> Result<bool, String> {
+    vulcan_service_host::instance::ServiceInstanceGuard::acquire(data_root)
+        .map(|guard| guard.is_some())
+        .map_err(|error| format!("failed to check the service lock: {error}"))
+}
+
+/// Fails when another process already owns the data root, so a started service would exit at once.
+/// 若已有其他进程拥有数据根则失败，否则启动的服务会立即退出。
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn require_free_data_root(data_root: &std::path::Path) -> Result<(), String> {
+    if data_root_is_free(data_root)? {
+        Ok(())
+    } else {
+        Err(String::from(
+            "another Vulcan Code service already owns this data directory; quit it (desktop tray, TUI-started Core, or a terminal service) and install again",
+        ))
+    }
+}
+
+/// The executable a registration runs: the path that follows updates where the platform has one.
+/// 注册所运行的可执行文件：平台有随更新变化的路径时使用该路径。
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+fn registered_executable() -> Result<std::path::PathBuf, String> {
+    let executable = std::env::current_exe()
+        .and_then(|path| path.canonicalize())
+        .map_err(|error| format!("failed to resolve the service executable: {error}"))?;
+    // An installed release runs from its version directory; Linux and macOS name the path that
+    // follows updates.
+    // 已安装的发行版从其版本目录运行；Linux 与 macOS 使用随更新变化的路径。
+    Ok(vulcan_app_update::stable_executable(&executable).unwrap_or(executable))
+}
+
+/// Waits until the service whose process id `pid` reports (any process for `Ok(None)`) publishes a
+/// ready discovery document; `pid` fails once the started service stopped.
+/// 等待 `pid` 报告其进程号的服务（`Ok(None)` 时为任意进程）发布就绪的发现文档；已启动的服务停止后
+/// `pid` 返回错误。
+///
+/// # Returns
+/// 返回值
+/// The browser-facing base URL of the ready service.
+/// 返回已就绪服务面向浏览器的基础 URL。
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+fn wait_until_ready(
+    discovery_path: &std::path::Path,
+    mut pid: impl FnMut() -> Result<Option<u32>, String>,
+) -> Result<String, String> {
+    use std::time::{Duration, Instant};
+    /// Bounds the wait for a started service to publish its ready discovery document.
+    /// 限定等待已启动服务发布就绪发现文档的时长。
+    const READY_TIMEOUT: Duration = Duration::from_secs(30);
+    /// Interval between readiness checks of the discovery document.
+    /// 两次检查发现文档就绪状态之间的间隔。
+    const READY_POLL: Duration = Duration::from_millis(200);
+    let deadline = Instant::now() + READY_TIMEOUT;
+    loop {
+        let expected = pid()?;
+        // A stale document from an earlier owner is ignored until the started process replaces it.
+        // 早先所有者遗留的旧文档会被忽略，直到已启动的进程替换它。
+        if let Ok(text) = std::fs::read_to_string(discovery_path)
+            && let Ok(discovery) =
+                serde_json::from_str::<vulcan_service_api::WebuiServiceDiscoverySnapshot>(&text)
+            && expected.is_none_or(|pid| discovery.pid == pid)
+            && discovery.status == "ready"
+        {
+            return Ok(discovery.base_url);
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "the service did not become ready within {} s",
+                READY_TIMEOUT.as_secs()
+            ));
+        }
+        std::thread::sleep(READY_POLL);
     }
 }
 
@@ -146,17 +280,14 @@ fn render_unit(executable: &std::path::Path, path: Option<&str>) -> String {
 mod systemd {
     use std::path::PathBuf;
     use std::process::{Command, Output};
-    use std::time::{Duration, Instant};
 
-    use super::{render_unit, unit_name};
+    use super::{
+        registered_executable, render_unit, require_distribution, require_free_data_root, unit_name,
+    };
 
-    /// Bounds the wait for a started unit to publish its ready discovery document.
-    /// 限定等待已启动单元发布就绪发现文档的时长。
-    const READY_TIMEOUT: Duration = Duration::from_secs(30);
-
-    /// Interval between readiness checks of the discovery document.
-    /// 两次检查发现文档就绪状态之间的间隔。
-    const READY_POLL: Duration = Duration::from_millis(200);
+    /// Directory that exists only while systemd is the running service manager.
+    /// 仅当 systemd 是正在运行的服务管理器时才存在的目录。
+    const SYSTEMD_RUNTIME_DIR: &str = "/run/systemd/system";
 
     /// Runs `systemctl --user` with `args` and returns its raw output.
     /// 以 `args` 运行 `systemctl --user` 并返回原始输出。
@@ -198,42 +329,17 @@ mod systemd {
     /// Requires a reachable systemd user manager before touching any registration.
     /// 修改任何注册前，要求 systemd 用户管理器可用。
     fn require_user_manager() -> Result<(), String> {
-        systemctl_checked(&["show-environment"]).map(|_| ()).map_err(|error| {
-            format!("no systemd user manager is reachable ({error}); enable systemd for this session first")
-        })
-    }
-
-    /// Requires the executable to belong to a distribution whose runtime layout matches this build.
-    /// 要求可执行文件属于运行时布局与本构建配置一致的发行目录。
-    fn require_distribution() -> Result<(), String> {
-        let (manifest, path) = crate::runtime_layout::read_runtime_layout_manifest_with_path()
-            .map_err(|error| format!("only a built distribution can be registered: {error}"))?;
-        let profile = if cfg!(debug_assertions) {
-            "debug"
-        } else {
-            "release"
-        };
-        if manifest.profile != profile {
-            return Err(format!(
-                "runtime layout {} declares profile `{}` but this build is `{profile}`",
-                path.display(),
-                manifest.profile
-            ));
-        }
-        Ok(())
-    }
-
-    /// Fails when another process already owns the data root, so the unit would exit at once.
-    /// 若已有其他进程拥有数据根则失败，否则单元启动后会立即退出。
-    fn require_free_data_root(data_root: &std::path::Path) -> Result<(), String> {
-        let guard = vulcan_service_host::instance::ServiceInstanceGuard::acquire(data_root)
-            .map_err(|error| format!("failed to check the service lock: {error}"))?;
-        if guard.is_none() {
+        if !std::path::Path::new(SYSTEMD_RUNTIME_DIR).is_dir() {
             return Err(String::from(
-                "another Vulcan Code service already owns this data directory; quit it (desktop tray, TUI-started Core, or a terminal service) and install again",
+                "this system does not run systemd (for example inside a container), so no user service can be registered; run `vulcan-code-service --headless` under the system's own process manager instead",
             ));
         }
-        Ok(())
+        systemctl_checked(&["show-environment"]).map(|_| ()).map_err(|error| {
+            let user = std::env::var("USER").unwrap_or_else(|_| String::from("<user>"));
+            format!(
+                "systemd runs, but this login has no systemd user manager ({error}); this is common after `su` or `sudo -i`. Log in as {user} directly (SSH or the console) or open a full session with `machinectl shell {user}@`, then install again; `loginctl enable-linger {user}` also keeps a user manager running"
+            )
+        })
     }
 
     /// Waits until the unit's main process publishes a ready discovery document.
@@ -244,8 +350,7 @@ mod systemd {
     /// The browser-facing base URL of the ready service.
     /// 返回已就绪服务面向浏览器的基础 URL。
     fn wait_until_ready(discovery_path: &std::path::Path) -> Result<String, String> {
-        let deadline = Instant::now() + READY_TIMEOUT;
-        loop {
+        super::wait_until_ready(discovery_path, || {
             let main_pid = String::from_utf8_lossy(
                 &systemctl_checked(&["show", "--property=MainPID", "--value", unit_name()])?.stdout,
             )
@@ -253,32 +358,11 @@ mod systemd {
             .parse::<u32>()
             .unwrap_or(0);
             if main_pid == 0 {
-                return Err(format!(
-                    "{} stopped during startup; inspect `journalctl --user -u {}`",
-                    unit_name(),
-                    unit_name()
-                ));
+                return Err(format!("{} stopped during startup", unit_name()));
             }
-            // A stale document from an earlier owner is ignored until this unit's process replaces it.
-            // 早先所有者遗留的旧文档会被忽略，直到本单元的进程替换它。
-            if let Ok(text) = std::fs::read_to_string(discovery_path)
-                && let Ok(discovery) =
-                    serde_json::from_str::<vulcan_service_api::WebuiServiceDiscoverySnapshot>(&text)
-                && discovery.pid == main_pid
-                && discovery.status == "ready"
-            {
-                return Ok(discovery.base_url);
-            }
-            if Instant::now() >= deadline {
-                return Err(format!(
-                    "{} did not become ready within {} s; inspect `journalctl --user -u {}`",
-                    unit_name(),
-                    READY_TIMEOUT.as_secs(),
-                    unit_name()
-                ));
-            }
-            std::thread::sleep(READY_POLL);
-        }
+            Ok(Some(main_pid))
+        })
+        .map_err(|error| format!("{error}; inspect `journalctl --user -u {}`", unit_name()))
     }
 
     /// Writes the unit, enables it at login, starts it, and waits for readiness.
@@ -286,13 +370,7 @@ mod systemd {
     pub(super) fn install() -> Result<String, String> {
         require_user_manager()?;
         require_distribution()?;
-        let executable = std::env::current_exe()
-            .and_then(|path| path.canonicalize())
-            .map_err(|error| format!("failed to resolve the service executable: {error}"))?;
-        // An installed release runs from its version directory; the unit names the path that
-        // follows updates.
-        // 已安装的发行版从其版本目录运行；单元使用随更新变化的路径。
-        let executable = vulcan_app_update::stable_executable(&executable).unwrap_or(executable);
+        let executable = registered_executable()?;
         let unit_path = unit_path()?;
         // Reinstalling replaces a running registration, so release its lock before checking it.
         // 重新安装会替换正在运行的注册，因此检查锁之前先让其释放。

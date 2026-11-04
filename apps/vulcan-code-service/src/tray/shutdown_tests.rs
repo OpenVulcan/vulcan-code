@@ -165,6 +165,7 @@ fn prepare_layout(root: &Path) -> PathBuf {
         platform: std::env::consts::OS.into(),
         architecture: std::env::consts::ARCH.into(),
         capabilities: Vec::new(),
+        desktop_identity: None,
     };
     // One explicit manifest path avoids the normal executable/repository candidate selection.
     // 唯一显式清单路径避免正常程序及仓库候选选择。

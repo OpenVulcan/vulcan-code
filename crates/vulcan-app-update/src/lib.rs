@@ -79,6 +79,20 @@ pub fn stable_executable(executable: &Path) -> Option<PathBuf> {
     })
 }
 
+/// The install root holding `executable`, and whether `executable` belongs to its current version;
+/// `None` outside an installed layout.
+/// 包含 `executable` 的安装根目录，以及 `executable` 是否属于其当前版本；在已安装布局之外为 `None`。
+pub fn installed_root(executable: &Path) -> Option<(PathBuf, bool)> {
+    let installed = installed::detect(executable, vulcan_product_info::version()).ok()?;
+    let current = installed
+        .root
+        .current_version()
+        .ok()
+        .flatten()
+        .is_some_and(|current| current == installed.version);
+    Some((installed.root.path().to_path_buf(), current))
+}
+
 /// What the service process does for the updater.
 /// 服务进程为更新器所做的事。
 pub trait UpdateHost: Send + Sync + 'static {

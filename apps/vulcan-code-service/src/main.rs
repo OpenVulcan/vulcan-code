@@ -19,6 +19,7 @@ mod native_diagnostics;
 mod restart;
 mod runtime_layout;
 mod service_runtime;
+mod service_settings;
 #[cfg(feature = "desktop-tray")]
 mod tray;
 mod user_service;
@@ -47,6 +48,25 @@ fn main() {
     // 服务注册是一次性管理命令，本身从不启动 Core。
     match user_service::user_service_action(&args) {
         Ok(Some(action)) => match user_service::run_user_service_action(action) {
+            Ok(summary) => {
+                println!("{summary}");
+                return;
+            }
+            Err(error) => {
+                eprintln!("[vulcan-code-service] {error}");
+                std::process::exit(1);
+            }
+        },
+        Ok(None) => {}
+        Err(error) => {
+            eprintln!("[vulcan-code-service] {error}");
+            std::process::exit(2);
+        }
+    }
+    // The port range is likewise a one-shot setting that takes effect at the next start.
+    // 端口范围同样是一次性设置，在下次启动时生效。
+    match service_settings::requested(&args) {
+        Ok(Some(value)) => match service_settings::set_port_range(&value) {
             Ok(summary) => {
                 println!("{summary}");
                 return;
@@ -132,6 +152,7 @@ fn main() {
             eprintln!(
                 "usage: vulcan-code-service (--gui-launch | --service | --headless | --describe) [--no-debug-console]
        vulcan-code-service (--install-user-service | --uninstall-user-service)
+       vulcan-code-service --set-port-range (<first>-<last> | default)
        vulcan-code-service --install-browser-dependencies
        vulcan-code-service --prepare-managed-runtimes"
             );

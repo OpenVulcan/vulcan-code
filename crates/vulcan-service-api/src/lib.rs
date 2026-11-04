@@ -122,6 +122,7 @@ mod vmm;
 mod voice_input;
 mod webui_rpc;
 mod webui_service;
+mod webui_service_settings;
 mod webui_static;
 mod workbench;
 mod workspace_context;
@@ -158,6 +159,7 @@ pub use vmm::*;
 pub use voice_input::*;
 pub use webui_rpc::*;
 pub use webui_service::*;
+pub use webui_service_settings::*;
 pub use webui_static::*;
 pub use workbench::*;
 pub use workspace_context::*;
@@ -165,12 +167,10 @@ pub use workspace_context::*;
 #[cfg(test)]
 mod tests {
     use super::{
-        WEBUI_REDACTED_SECRET_PLACEHOLDER, WEBUI_SERVICE_HTTP_PORT, WEBUI_SERVICE_HTTP_PORT_END,
-        WEBUI_SERVICE_LOOPBACK_HOST, WEBUI_STATIC_DIR_ENV, build_webui_static_response,
-        redact_webui_service_rpc_secrets, webui_service_discovery_snapshot_path,
-        webui_service_http_bind_ports_from_override, webui_service_http_default_bind_ports,
-        webui_service_origin_text_is_allowed, webui_service_ready_discovery_snapshot,
-        webui_service_request_token_values_are_valid,
+        WEBUI_REDACTED_SECRET_PLACEHOLDER, WEBUI_SERVICE_HTTP_PORT, WEBUI_SERVICE_LOOPBACK_HOST,
+        WEBUI_STATIC_DIR_ENV, build_webui_static_response, redact_webui_service_rpc_secrets,
+        webui_service_discovery_snapshot_path, webui_service_origin_text_is_allowed,
+        webui_service_ready_discovery_snapshot, webui_service_request_token_values_are_valid,
         webui_service_required_origin_text_is_allowed,
         webui_service_rpc_secret_key_should_be_redacted, webui_service_token_from_query,
         webui_static_file_path_for_request, webui_static_mime_type, webui_static_relative_path,
@@ -472,38 +472,6 @@ mod tests {
             Some(String::from("abc+123"))
         );
         assert_eq!(webui_service_token_from_query("x=1"), None);
-    }
-
-    /// Verifies default browser service port discovery keeps the documented range.
-    /// 验证默认浏览器服务端口发现保持文档约定范围。
-    #[test]
-    fn webui_service_default_bind_ports_cover_discovery_range() {
-        let ports = webui_service_http_default_bind_ports();
-
-        assert_eq!(ports.first(), Some(&WEBUI_SERVICE_HTTP_PORT));
-        assert_eq!(ports.last(), Some(&WEBUI_SERVICE_HTTP_PORT_END));
-        assert_eq!(
-            ports.len(),
-            usize::from(WEBUI_SERVICE_HTTP_PORT_END - WEBUI_SERVICE_HTTP_PORT + 1)
-        );
-    }
-
-    /// Verifies browser service port override accepts only valid nonzero ports.
-    /// 验证浏览器服务端口覆盖只接受有效的非零端口。
-    #[test]
-    fn webui_service_bind_ports_accept_valid_override_only() {
-        assert_eq!(
-            webui_service_http_bind_ports_from_override(Some(" 19000 ")),
-            vec![19000]
-        );
-        assert_eq!(
-            webui_service_http_bind_ports_from_override(Some("0")),
-            webui_service_http_default_bind_ports()
-        );
-        assert_eq!(
-            webui_service_http_bind_ports_from_override(Some("not-a-port")),
-            webui_service_http_default_bind_ports()
-        );
     }
 
     /// Verifies browser service discovery path prefers home and falls back to temp.

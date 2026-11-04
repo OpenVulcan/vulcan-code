@@ -99,6 +99,13 @@ pub struct ServiceLaunchDescription {
     /// Launch modes supported by this compiled artifact.
     /// 本编译产物支持的启动模式。
     pub modes: Vec<String>,
+    /// Service settings file below the authoritative data root.
+    /// 权威数据根下的服务设置文件。
+    pub settings_path: PathBuf,
+    /// Port range the next start tries; `None` when the settings file cannot be read, which the
+    /// next start reports as its error.
+    /// 下次启动尝试的端口范围；设置文件无法读取时为 `None`，由下次启动报告该错误。
+    pub port_range: Option<vulcan_service_api::WebuiServicePortRange>,
 }
 
 /// Parses one service launch mode from explicit process arguments.
@@ -310,6 +317,12 @@ pub fn service_launch_description(
         profile: String::from(profile),
         executable_path,
         discovery_path: data_root.join("webui-service.json"),
+        settings_path: data_root.join(vulcan_service_api::WEBUI_SERVICE_SETTINGS_FILE),
+        port_range: vulcan_service_api::WebuiServiceSettings::read(
+            &data_root.join(vulcan_service_api::WEBUI_SERVICE_SETTINGS_FILE),
+        )
+        .ok()
+        .map(|settings| settings.effective_port_range()),
         lock_path: data_root.join("service.lock"),
         data_root,
         default_web_ui_mode: if cfg!(debug_assertions) {

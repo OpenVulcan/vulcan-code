@@ -324,7 +324,14 @@ pub(crate) async fn run_webui_service_http_bridge(
     let port_override = env::var(WEBUI_SERVICE_PORT_ENV).ok();
     // Binding and publication finish before bootstrap is admitted.
     // 绑定和发布完成后才允许启动引导，避免就绪状态被初始状态覆盖。
-    let (listener, address) = bind_webui_service_http_listener(port_override.as_deref()).await?;
+    // The configured port range is read once per start; a damaged settings file stops the start.
+    // 每次启动读取一次配置的端口范围；设置文件损坏时停止启动。
+    let settings = WebuiServiceSettings::read(&webui_service_settings_path(
+        vulcan_runtime_assets::user_home_dir(),
+        std::env::temp_dir(),
+    ))?;
+    let (listener, address) =
+        bind_webui_service_http_listener(port_override.as_deref(), &settings).await?;
     let port = address.port();
     let service_token = SessionId::new_v4().to_string();
     let discovery = webui_service_starting_discovery_snapshot(

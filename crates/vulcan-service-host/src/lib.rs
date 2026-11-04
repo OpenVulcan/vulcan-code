@@ -36,10 +36,10 @@ use uuid::Uuid;
 use vulcan_service_api::{
     ConversationEventLiveDeltaAccumulatorV1, ServiceEvent, ServiceEventSink, ServiceMediaResponse,
     ServiceStaticResponse, ServiceStatusSnapshot, SessionResourceContentV1Request,
-    WebuiServiceDiscoverySnapshot, WebuiServiceRpcHttpRequest, build_service_media_file_response,
-    build_webui_static_response, service_media_error_response,
+    WebuiServiceDiscoverySnapshot, WebuiServiceRpcHttpRequest, WebuiServiceSettings,
+    build_service_media_file_response, build_webui_static_response, service_media_error_response,
     service_media_path_from_encoded_route_segment, webui_service_discovery_snapshot_path,
-    webui_service_http_bind_ports_from_override, webui_service_origin_text_is_allowed,
+    webui_service_http_bind_ports, webui_service_origin_text_is_allowed,
     webui_service_request_token_values_are_valid, webui_service_required_origin_text_is_allowed,
     webui_service_rpc_error_envelope, webui_service_rpc_failure_envelope,
     webui_service_rpc_success_envelope,
@@ -207,8 +207,10 @@ pub fn webui_service_event_bus_sink(
 ///
 /// # Parameters
 /// 参数
-/// `port_override` is an optional environment override such as `VULCAN_WEBUI_SERVICE_PORT`.
-/// `port_override` 是可选环境覆盖值，例如 `VULCAN_WEBUI_SERVICE_PORT`。
+/// `port_override` is an optional environment override such as `VULCAN_WEBUI_SERVICE_PORT`, and
+/// `settings` holds the configured port range tried otherwise.
+/// `port_override` 是可选环境覆盖值，例如 `VULCAN_WEBUI_SERVICE_PORT`；`settings` 保存未覆盖时尝试的
+/// 已配置端口范围。
 ///
 /// # Returns
 /// 返回值
@@ -216,9 +218,10 @@ pub fn webui_service_event_bus_sink(
 /// 返回已绑定监听器及其解析后的套接字地址，或组合后的绑定诊断信息。
 pub async fn bind_webui_service_http_listener(
     port_override: Option<&str>,
+    settings: &WebuiServiceSettings,
 ) -> Result<(TcpListener, SocketAddr), String> {
     let mut errors = Vec::new();
-    for port in webui_service_http_bind_ports_from_override(port_override) {
+    for port in webui_service_http_bind_ports(port_override, settings) {
         let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
         match TcpListener::bind(address).await {
             Ok(listener) => {

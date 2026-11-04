@@ -113,8 +113,9 @@ use vulcan_service_api::{
     TransientReasoningStatusKind, TransientReasoningStatusSnapshot,
     UpdateConversationRunPhaseDelta, VmmMemorySnapshot, WEBUI_SERVICE_DISCOVERY_STATUS_FAILED,
     WEBUI_SERVICE_DISCOVERY_STATUS_READY, WEBUI_SERVICE_PORT_ENV, WEBUI_STATIC_DIR_ENV,
-    WorkbenchDelta, WorkbenchDeltaEnvelope, WorkbenchSnapshot, WorkspaceGitChangedEvent,
-    webui_service_discovery_snapshot_with_status, webui_service_starting_discovery_snapshot,
+    WebuiServiceSettings, WorkbenchDelta, WorkbenchDeltaEnvelope, WorkbenchSnapshot,
+    WorkspaceGitChangedEvent, webui_service_discovery_snapshot_with_status,
+    webui_service_settings_path, webui_service_starting_discovery_snapshot,
     webui_static_root_from_candidates,
 };
 use vulcan_service_host::{

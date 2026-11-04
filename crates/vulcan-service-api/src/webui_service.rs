@@ -78,35 +78,6 @@ pub fn webui_service_token_matches(actual: &str, expected: &str) -> bool {
             == 0
 }
 
-/// Resolves candidate browser-facing local service ports from an optional override value.
-/// 根据可选覆盖值解析浏览器侧本地服务候选端口。
-///
-/// # Parameters
-/// 参数
-/// `port_override` is the raw configured port value, usually read from `WEBUI_SERVICE_PORT_ENV`.
-/// `port_override` 是原始配置端口值，通常来自 `WEBUI_SERVICE_PORT_ENV`。
-///
-/// # Returns
-/// 返回值
-/// A single override port when valid, otherwise the default discovery range.
-/// 覆盖值有效时返回单个端口，否则返回默认发现端口范围。
-pub fn webui_service_http_bind_ports_from_override(port_override: Option<&str>) -> Vec<u16> {
-    if let Some(port) = port_override
-        .map(str::trim)
-        .and_then(|value| value.parse::<u16>().ok())
-        .filter(|port| *port > 0)
-    {
-        return vec![port];
-    }
-    webui_service_http_default_bind_ports()
-}
-
-/// Returns the default browser-facing local service discovery port range.
-/// 返回浏览器侧本地服务默认发现端口范围。
-pub fn webui_service_http_default_bind_ports() -> Vec<u16> {
-    (WEBUI_SERVICE_HTTP_PORT..=WEBUI_SERVICE_HTTP_PORT_END).collect()
-}
-
 /// Resolves the shared browser service discovery file path.
 /// 解析共享浏览器服务发现文件路径。
 ///

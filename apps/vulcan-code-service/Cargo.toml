@@ -23,6 +23,7 @@ notify-rust = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "signal"] }
 uuid.workspace = true
 vulcan-app-update.workspace = true
+vulcan-install-core.workspace = true
 vulcan-host-tools.workspace = true
 vulcan-i18n = { workspace = true, optional = true }
 vulcan-provider-adapters.workspace = true
