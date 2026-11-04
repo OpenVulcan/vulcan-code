@@ -125,3 +125,15 @@ test('values that would break out of a quoted script value are rejected', () => 
   assert.throws(() => innoSetupScript(options(windowsLayout, { entries: ['bad"name'] })));
   assert.throws(() => innoSetupScript(options(windowsLayout, { version: '1.2.3"' })));
 });
+
+test('an interactive install offers a launch and a relaunch-requesting silent install starts the app', () => {
+  const run = sectionLines(innoSetupScript(options()), 'Run').map(parameters);
+  const launcher = `{app}\\${installLayout.launcher}`;
+  const offered = run.find(entry => entry.Flags.split(' ').includes('postinstall'));
+  assert.equal(offered.Filename, launcher);
+  assert.ok(offered.Flags.split(' ').includes('skipifsilent'));
+  const relaunch = run.find(entry => entry.Flags.split(' ').includes('skipifnotsilent'));
+  assert.equal(relaunch.Filename, launcher);
+  assert.equal(relaunch.Check, 'RelaunchRequested');
+  assert.match(innoSetupScript(options()), /function RelaunchRequested: Boolean;/);
+});

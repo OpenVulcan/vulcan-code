@@ -170,6 +170,8 @@ Root: HKCU; Subkey: "Software\\Classes\\CLSID\\{{${clsid}}"; Flags: uninsdeletek
 
 [Run]
 Filename: "{app}\\${launcher}"; Description: "{cm:LaunchProgram,Vulcan Code}"; Flags: nowait postinstall skipifsilent
+; An update started from the app (vulcan-app-update INSTALLER_ARGUMENTS) runs silently and asks for a relaunch.
+Filename: "{app}\\${launcher}"; Flags: nowait skipifnotsilent; Check: RelaunchRequested
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\\${versions}"
@@ -302,6 +304,13 @@ begin
     else if not WriteUserPath(Remaining, Existed) then
       Log('Could not remove ' + CliDir + ' from the user PATH.');
   end;
+end;
+
+// True when the app started this run and asked to be started again (/RELAUNCH=1, mirrored by
+// INSTALLER_ARGUMENTS in crates/vulcan-app-update/src/lib.rs).
+function RelaunchRequested: Boolean;
+begin
+  Result := ExpandConstant('{param:RELAUNCH|0}') = '1';
 end;
 
 // Reads the "version" string of current.json; the writers (this installer and vulcan-install-core)

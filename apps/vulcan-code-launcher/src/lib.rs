@@ -23,6 +23,7 @@ use std::fmt;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
+mod trial;
 #[cfg(windows)]
 mod windows;
 
@@ -198,7 +199,13 @@ pub fn run(role: Role) -> i32 {
 fn launch(role: Role) -> Result<i32, LaunchError> {
     let executable = std::env::current_exe()
         .map_err(|error| LaunchError(format!("cannot locate the launcher: {error}")))?;
-    let target = resolve_target(&install_root(role, &executable)?, role)?;
+    let root = install_root(role, &executable)?;
+    if role == Role::Desktop {
+        // Only the desktop launch counts startup attempts of a freshly updated version.
+        // 只有桌面启动统计刚更新版本的启动尝试。
+        trial::advance(&root)?;
+    }
+    let target = resolve_target(&root, role)?;
     let mut command = Command::new(&target);
     forward_arguments(&mut command);
     if role == Role::Terminal {

@@ -91,3 +91,83 @@ fn a_missing_pointer_layout_or_executable_is_an_error() {
     std::fs::write(version_dir.join(RUNTIME_LAYOUT_FILE), "{}").expect("layout");
     assert!(resolve_target(temp.path(), Role::Desktop).is_err());
 }
+
+/// Installs 0.1.3 and 0.1.4, makes 0.1.4 current and puts it on trial.
+/// 安装 0.1.3 与 0.1.4，将 0.1.4 设为当前版本并进入试运行。
+fn on_trial(root: &Path, attempts: u64) {
+    let separator = std::path::MAIN_SEPARATOR;
+    installed(root, &format!("versions{separator}0.1.3"));
+    std::fs::create_dir_all(root.join("versions").join("0.1.4")).expect("new version");
+    let current =
+        serde_json::json!({ "version": "0.1.4", "path": format!("versions{separator}0.1.4") });
+    std::fs::write(root.join(CURRENT_FILE), current.to_string()).expect("current");
+    std::fs::create_dir_all(root.join("updates")).expect("updates");
+    let trial = serde_json::json!({
+        "version": "0.1.4", "previous": "0.1.3", "attempts": attempts, "max_attempts": 2
+    });
+    std::fs::write(
+        root.join("updates").join("startup-trial.json"),
+        trial.to_string(),
+    )
+    .expect("trial");
+}
+
+/// Reads one JSON file of the install root.
+/// 读取安装根目录中的一个 JSON 文件。
+fn json_at(path: PathBuf) -> serde_json::Value {
+    serde_json::from_slice(&std::fs::read(path).expect("read")).expect("json")
+}
+
+#[test]
+fn launches_without_a_trial_change_nothing() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    installed(temp.path(), "versions/0.1.3");
+    assert_eq!(trial::advance(temp.path()), Ok(trial::TrialOutcome::Idle));
+    assert!(!temp.path().join("updates").exists());
+}
+
+#[test]
+fn a_version_on_trial_gets_its_attempts_then_the_previous_version_returns() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let root = temp.path();
+    on_trial(root, 0);
+    for expected in [1, 2] {
+        assert_eq!(trial::advance(root), Ok(trial::TrialOutcome::Counted));
+        let trial = json_at(root.join("updates").join("startup-trial.json"));
+        assert_eq!(trial["attempts"], expected);
+        assert_eq!(json_at(root.join(CURRENT_FILE))["version"], "0.1.4");
+    }
+    assert_eq!(trial::advance(root), Ok(trial::TrialOutcome::RolledBack));
+    assert_eq!(json_at(root.join(CURRENT_FILE))["version"], "0.1.3");
+    assert_eq!(
+        json_at(root.join("updates").join("rollback.json")),
+        serde_json::json!({ "failed": "0.1.4", "restored": "0.1.3" })
+    );
+    assert!(!root.join("updates").join("startup-trial.json").exists());
+    assert!(resolve_target(root, Role::Desktop).is_ok());
+}
+
+#[test]
+fn a_trial_without_its_previous_version_is_an_error() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    on_trial(temp.path(), 2);
+    std::fs::remove_dir_all(temp.path().join("versions").join("0.1.3")).expect("remove previous");
+    assert!(trial::advance(temp.path()).is_err());
+    assert_eq!(json_at(temp.path().join(CURRENT_FILE))["version"], "0.1.4");
+}
+
+#[test]
+fn a_trial_of_a_version_that_is_no_longer_current_is_dropped() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    on_trial(temp.path(), 2);
+    installed(temp.path(), "versions/0.1.3");
+    assert_eq!(trial::advance(temp.path()), Ok(trial::TrialOutcome::Idle));
+    assert!(
+        !temp
+            .path()
+            .join("updates")
+            .join("startup-trial.json")
+            .exists()
+    );
+    assert!(!temp.path().join("updates").join("rollback.json").exists());
+}
