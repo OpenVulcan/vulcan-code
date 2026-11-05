@@ -83,8 +83,16 @@ if ($Phase -eq 'Install') {
     # the client executable carries a file version of its own (7.6.92.0 in package 9.4.4.92).
     # 自托管机器在多次运行之间保留客户端：Windows 将固定版本的安装包列为已安装且客户端签名有效时直接沿用。安装包
     # 版本从卸载登记项读取，因为客户端可执行文件有自己的文件版本（9.4.4.92 安装包中为 7.6.92.0）。
+    # Many uninstall entries have no DisplayName or DisplayVersion, which strict mode rejects as a missing
+    # property, so both are read through PSObject.Properties.
+    # 许多卸载登记项没有 DisplayName 或 DisplayVersion，严格模式会将其视为缺失属性而报错，因此通过
+    # PSObject.Properties 读取。
     $registered = @(Get-ItemProperty -Path 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
-        Where-Object { $_.DisplayName -eq 'proCertum SmartSign SimplySign Desktop' -and $_.DisplayVersion -eq $installerVersion })
+        Where-Object {
+            $name = $_.PSObject.Properties['DisplayName']
+            $version = $_.PSObject.Properties['DisplayVersion']
+            $name -and $version -and $name.Value -eq 'proCertum SmartSign SimplySign Desktop' -and $version.Value -eq $installerVersion
+        })
     $kept = $registered.Count -gt 0 -and (Test-Path -LiteralPath $desktop -PathType Leaf) -and
         (Get-AuthenticodeSignature -LiteralPath $desktop).Status -eq 'Valid'
     if ($kept) {
