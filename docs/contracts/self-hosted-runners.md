@@ -70,11 +70,15 @@
 ## 添加或移除机器
 
 前置条件（需要管理员权限，由机器使用者执行）：
+- 所有机器：运行器的 PATH 上要有 Node。作业在 `setup-node` 之前用 `node` 读取声明的运行时版本，因此
+  运行器自身缺少的工具在机器上补齐，不由工作流代替安装。
 - macOS：安装 Xcode 命令行工具（`xcode-select --install`），接电源时不休眠
   （`sudo pmset -c sleep 0 disksleep 0`），并开启"远程登录"以便维护者经 SSH 操作；运行器以 LaunchAgent
-  运行，机器重启后需要该用户登录（或开启自动登录）才会上线。
+  运行，机器重启后需要该用户登录（或开启自动登录）才会上线。服务的 PATH 取自注册时写出的 `.path`
+  （含 `~/.local/bin`），登录 shell 中的 Node 不一定在其中，可把它链接到 `~/.local/bin`。
 - Linux（含 WSL 发行版）：Ubuntu 22.04，以 root 执行一次 `sh scripts/install_linux_system_deps.sh` 并安装
-  `git curl unzip xz-utils zstd`；作业不使用 sudo，依赖齐全时该脚本不再调用包管理器。
+  `git curl unzip xz-utils zstd`，并把 Node 官方 Linux 归档（按其 `SHASUMS256.txt` 校验）解压后链接到
+  `/usr/local/bin`；作业不使用 sudo，依赖齐全时该脚本不再调用包管理器。
 - Windows：已安装 Git for Windows、PowerShell 7、Node 与 Rust 工具链，并完成本仓库的 `make init-system`。
   `shell: bash` 的步骤必须得到 Git Bash，而 Windows 可能把 WSL 启动器 `bash.exe` 排在前面，所以注册时
   写出 `start.cmd`，由它把 Git Bash 放在 PATH 最前再启动运行器。工作区为 `<目录>\w`，路径较短。
