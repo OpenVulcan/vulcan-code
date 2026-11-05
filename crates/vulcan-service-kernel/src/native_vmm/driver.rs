@@ -3427,15 +3427,7 @@ fn native_vmm_embedding_contract(
                 .flatten()
         })
         .ok_or(NativeVmmEmbeddingRouteIssue::UndeterminedDimension)?;
-    if dimension == 0
-        || (!capabilities.dimensions.is_empty() && !capabilities.dimensions.contains(&dimension))
-        || capabilities
-            .minimum_dimensions
-            .is_some_and(|minimum| dimension < minimum)
-        || capabilities
-            .maximum_dimensions
-            .is_some_and(|maximum| dimension > maximum)
-    {
+    if !capabilities.supports_dimensions(dimension) {
         return Err(NativeVmmEmbeddingRouteIssue::InvalidDimension);
     }
     Ok((tasks, dimension))

@@ -320,8 +320,7 @@ fn decode_embeddings(
         || wire.model_id != model.id
         || wire.output_kind != request.output_kind
         || wire.encoding != request.encoding
-        || wire.dimensions == 0
-        || !capabilities.dimensions.contains(&wire.dimensions)
+        || !capabilities.supports_dimensions(wire.dimensions)
         || wire.dimensions != expected_dimensions
         || wire.data.len() != request.inputs.len()
     {
@@ -515,6 +514,33 @@ mod tests {
         body["data"] =
             json!([{"index":0,"dense":[0.0,0.0,0.0,0.0]},{"index":1,"dense":[0.0,0.0,0.0,0.0]}]);
         assert!(decode_embeddings(&body.to_string(), "dispatch", &model, &request).is_err());
+    }
+
+    /// A model publishing an unbroken width run accepts in-range responses and rejects widths outside it.
+    /// 发布连续宽度区间的模型接受区间内的响应，并拒绝区间外的宽度。
+    #[test]
+    fn openvulcan_range_dimensions_accept_in_range_responses() {
+        let catalog = crate::openvulcan::parse_catalog("fixture", 1, &json!({"contract_version":CONTRACT_VERSION,"models":[{"kind":"embedding","model_id":"vector","display_name":"Vector","capabilities":{"max_input_tokens_per_item":8,"max_batch_size":2,"default_dimensions":2,"allowed_dimensions":[1,2,3],"allowed_tasks":["document"],"allowed_output_kinds":["dense"],"allowed_encodings":["float"]}}]}).to_string()).unwrap();
+        let model = catalog
+            .models
+            .into_iter()
+            .find(|model| model.id == "vector")
+            .unwrap();
+        let embedding = model.capabilities.embedding.as_ref().unwrap();
+        assert!(
+            embedding.dimensions.is_empty() && embedding.maximum_dimensions == Some(3),
+            "fixture must project to a range; the catalog projection may have changed"
+        );
+        let (_, mut request, body) = embedding_fixture();
+        assert!(decode_embeddings(&body.to_string(), "dispatch", &model, &request).is_ok());
+        request.dimensions = None;
+        assert!(decode_embeddings(&body.to_string(), "dispatch", &model, &request).is_ok());
+        let mut outside = body.clone();
+        request.dimensions = Some(4);
+        outside["dimensions"] = json!(4);
+        outside["data"] =
+            json!([{"index":0,"dense":[0.0,0.0,0.0,0.0]},{"index":1,"dense":[0.0,0.0,0.0,0.0]}]);
+        assert!(decode_embeddings(&outside.to_string(), "dispatch", &model, &request).is_err());
     }
 
     /// Decision normalization retains reported confidence and usage and rejects cross-request answers.

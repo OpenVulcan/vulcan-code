@@ -62,15 +62,7 @@ pub(super) fn validate_internal_model_overrides(
                 ));
             }
             if let Some(dimensions) = overrides.embedding_dimensions {
-                let in_discrete_set =
-                    embedding.dimensions.is_empty() || embedding.dimensions.contains(&dimensions);
-                let above_minimum = embedding
-                    .minimum_dimensions
-                    .is_none_or(|minimum| dimensions >= minimum);
-                let below_maximum = embedding
-                    .maximum_dimensions
-                    .is_none_or(|maximum| dimensions <= maximum);
-                if dimensions == 0 || !in_discrete_set || !above_minimum || !below_maximum {
+                if !embedding.supports_dimensions(dimensions) {
                     return Err(format!(
                         "Embedding dimensions {dimensions} are not supported by the selected model."
                     ));

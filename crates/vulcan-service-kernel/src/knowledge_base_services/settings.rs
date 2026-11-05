@@ -98,19 +98,12 @@ pub(super) fn validate_embedding_shape(
     dimensions: u32,
     batch: u32,
 ) -> Result<(), String> {
-    if dimensions == 0
-        || batch == 0
+    if batch == 0
         || batch > MAX_KNOWLEDGE_EMBEDDING_BATCH_SIZE
         || capabilities
             .maximum_inputs
             .is_some_and(|maximum| batch > maximum)
-        || (!capabilities.dimensions.is_empty() && !capabilities.dimensions.contains(&dimensions))
-        || capabilities
-            .minimum_dimensions
-            .is_some_and(|minimum| dimensions < minimum)
-        || capabilities
-            .maximum_dimensions
-            .is_some_and(|maximum| dimensions > maximum)
+        || !capabilities.supports_dimensions(dimensions)
     {
         return Err("ERR_KNOWLEDGE_EMBEDDING_SHAPE_UNSUPPORTED".into());
     }

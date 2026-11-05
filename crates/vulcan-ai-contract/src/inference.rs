@@ -1596,6 +1596,23 @@ pub struct EmbeddingCapabilities {
 pub const EMBEDDING_INPUT_TEMPLATE_PLACEHOLDER: &str = "{input}";
 
 impl EmbeddingCapabilities {
+    /// Reports whether `dimensions` is a width this route accepts.
+    /// 判断 `dimensions` 是否为该路由接受的宽度。
+    ///
+    /// A non-empty discrete set must contain the width, and any declared inclusive minimum or maximum must bound it;
+    /// a contiguous range is published as bounds with an empty set. Zero is never a valid width.
+    /// 非空离散集合必须包含该宽度，且已声明的包含式最小、最大值必须限定它；连续区间以边界加空集合发布。零永远不是有效宽度。
+    pub fn supports_dimensions(&self, dimensions: u32) -> bool {
+        dimensions > 0
+            && (self.dimensions.is_empty() || self.dimensions.contains(&dimensions))
+            && self
+                .minimum_dimensions
+                .is_none_or(|minimum| dimensions >= minimum)
+            && self
+                .maximum_dimensions
+                .is_none_or(|maximum| dimensions <= maximum)
+    }
+
     /// Validates that every input template names a declared task and holds one placeholder.
     /// 校验每个输入模板都指向已声明任务且只包含一个占位符。
     ///
@@ -1709,15 +1726,7 @@ impl EmbeddingCapabilities {
             ));
         }
         if let Some(dimensions) = request.dimensions {
-            let in_discrete_set =
-                self.dimensions.is_empty() || self.dimensions.contains(&dimensions);
-            let above_minimum = self
-                .minimum_dimensions
-                .is_none_or(|minimum| dimensions >= minimum);
-            let below_maximum = self
-                .maximum_dimensions
-                .is_none_or(|maximum| dimensions <= maximum);
-            if !in_discrete_set || !above_minimum || !below_maximum {
+            if !self.supports_dimensions(dimensions) {
                 return Err(format!(
                     "Embedding dimensions {dimensions} are not supported by the selected model route."
                 ));
