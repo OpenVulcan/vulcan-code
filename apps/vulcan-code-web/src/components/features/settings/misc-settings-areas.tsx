@@ -35,16 +35,12 @@ import type {
   ProjectSummary,
   WorkbenchSnapshot,
 } from "@/types"
-import type { GitCommitSummaryModelSelectionSaveRequest } from "@/components/features/settings/settings-action-types"
+import {
+  DEFAULT_COMMIT_BRANCH_PREFIX,
+  gitCommitSettingsDraft,
+  gitCommitSettingsDraftKey,
+} from "@/components/features/settings/git-commit-settings-draft"
 import "@/ui-kit/styles/features/settings-forms.css"
-
-// DEFAULT_COMMIT_BRANCH_PREFIX mirrors the service default for empty Git commit settings.
-// DEFAULT_COMMIT_BRANCH_PREFIX 对齐服务端空 Git 提交设置的默认值。
-const DEFAULT_COMMIT_BRANCH_PREFIX = "vulcan/"
-
-// DEFAULT_COMMIT_SUMMARY_MODEL follows the owning conversation session model.
-// DEFAULT_COMMIT_SUMMARY_MODEL 跟随所属会话模型。
-const DEFAULT_COMMIT_SUMMARY_MODEL: GitCommitSummaryModelSelectionSaveRequest = { mode: "session" }
 
 // ARCHIVED_CONVERSATION_PAGE_SIZE keeps the archive recovery surface readable while selection spans pages.
 // ARCHIVED_CONVERSATION_PAGE_SIZE 在跨分页保留选择的同时保持归档恢复页面可读。
@@ -67,16 +63,12 @@ export function GitCommitSettingsArea(props: {
   // Localized copy follows the active interface language.
   // 本地化文案跟随当前界面语言。
   const { t } = useI18n()
-  // persistedDraft records only fields accepted by the save contract.
-  // persistedDraft 仅记录保存契约接受的字段。
-  const persistedDraft = {
-    newBranchPrefix: props.workbench.gitCommit?.newBranchPrefix ?? DEFAULT_COMMIT_BRANCH_PREFIX,
-    summaryModel: props.workbench.gitCommit?.summaryModel ?? DEFAULT_COMMIT_SUMMARY_MODEL,
-    summaryExtraPrompt: props.workbench.gitCommit?.summaryExtraPrompt ?? "",
-  }
-  // persistedKey detects changes without depending on snapshot object identity.
-  // persistedKey 检测变化，不依赖快照对象身份。
-  const persistedKey = JSON.stringify(persistedDraft)
+  // persistedDraft records only fields accepted by the save contract, in canonical field order.
+  // persistedDraft 仅记录保存契约接受的字段，字段顺序规范化。
+  const persistedDraft = gitCommitSettingsDraft(props.workbench.gitCommit)
+  // persistedKey detects changes by value, independent of snapshot identity and key order.
+  // persistedKey 按值检测变化，不依赖快照对象身份与键顺序。
+  const persistedKey = gitCommitSettingsDraftKey(persistedDraft)
   // baselineRef preserves unsaved input when a background snapshot changes.
   // baselineRef 在后台快照变化时保护未保存输入。
   const baselineRef = React.useRef(persistedKey)
@@ -97,7 +89,7 @@ export function GitCommitSettingsArea(props: {
     // previousBaseline identifies whether the user has edited the previous snapshot.
     // previousBaseline 用于判断用户是否已编辑此前快照。
     const previousBaseline = baselineRef.current
-    setDraft((current) => JSON.stringify(current) === previousBaseline ? nextDraft : current)
+    setDraft((current) => gitCommitSettingsDraftKey(current) === previousBaseline ? nextDraft : current)
     baselineRef.current = persistedKey
   }, [persistedKey])
   // fixedModelValue intentionally contains no connection identifier.
@@ -112,7 +104,7 @@ export function GitCommitSettingsArea(props: {
     : undefined
   // dirty describes the current payload against the latest persisted snapshot.
   // dirty 描述当前载荷相对最新持久化快照的变化。
-  const dirty = JSON.stringify(draft) !== persistedKey
+  const dirty = gitCommitSettingsDraftKey(draft) !== persistedKey
   // saveDraft submits one immutable form snapshot and retains input on failure.
   // saveDraft 提交一个不可变表单快照，失败时保留输入。
   // Parameters: none. Returns after the explicit save attempt settles.
