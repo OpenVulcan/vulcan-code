@@ -194,7 +194,14 @@
      窄布局下文件列表独占一行，恢复按内容计算高度。 */
   .vmm-resource-file-groups { contain: none; max-height: 240px; }
 }
+/* Medium widths, such as the setup dialog, keep one row per purpose with a narrower purpose column. */
+/* 中等宽度（如快速配置对话框）每个用途仍占一行，用途列收窄。 */
 @container memory-inference (max-width: 680px) {
+  .vmm-inference-route, .vmm-inference-columns { grid-template-columns: minmax(6rem, 7.5rem) minmax(0, 1fr) 68px; column-gap: 10px; padding-block: 8px; }
+  .vmm-inference-columns { padding-block: 4px 6px; }
+  .vmm-inference-controls { gap: 8px; }
+}
+@container memory-inference (max-width: 520px) {
   .vmm-inference-route { grid-template-columns: minmax(0, 1fr) auto; }
   .vmm-inference-heading { grid-column: 1; grid-row: 1; }
   .vmm-inference-actions { grid-column: 2; grid-row: 1; }
