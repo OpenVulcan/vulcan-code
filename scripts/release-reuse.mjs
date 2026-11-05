@@ -268,11 +268,14 @@ async function mirrorRelease(origin, mirror, platform, version, paths) {
 }
 
 // restore takes `paths` out of a published version into `out` through the release tool's signed checks.
-// restore 经发布工具的签名校验，把 `paths` 从已发布版本取出到 `out`。
+// The tool's report goes to stderr: lookup's stdout carries only the line the workflow appends to
+// GITHUB_ENV.
+// restore 经发布工具的签名校验，把 `paths` 从已发布版本取出到 `out`。工具的报告写到 stderr：lookup
+// 的 stdout 只携带工作流追加到 GITHUB_ENV 的那一行。
 export async function restore({ origin, tool, mirror, platform, version, paths, out }) {
   await mirrorRelease(origin, mirror, platform, version, paths);
   execFileSync(tool, ['restore', '--mirror', mirror, '--platform', platform, '--version', version,
-    ...paths.flatMap(file => ['--path', file]), '--out', out], { stdio: ['ignore', 'inherit', 'inherit'] });
+    ...paths.flatMap(file => ['--path', file]), '--out', out], { stdio: ['ignore', process.stderr.fd, 'inherit'] });
 }
 
 // matchingRecord fetches a unit's record and returns it only when `current` reproduces its fingerprint.
