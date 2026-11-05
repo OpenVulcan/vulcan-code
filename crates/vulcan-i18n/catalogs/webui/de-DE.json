@@ -6775,5 +6775,11 @@
   "settings.appUpdate.repairAction": "Reparieren",
   "appUpdate.toast.view": "Anzeigen",
   "appUpdate.toast.restarting": "Vulcan Code wird neu gestartet, um das Update abzuschließen…",
-  "appUpdate.toast.installing": "Vulcan Code wird geschlossen, um den Installer auszuführen…"
+  "appUpdate.toast.installing": "Vulcan Code wird geschlossen, um den Installer auszuführen…",
+  "appUpdate.header.button": "Update",
+  "appUpdate.dialog.title": "Auf Vulcan Code {version} aktualisieren",
+  "appUpdate.dialog.description": "Version {current} läuft. Sehen Sie sich die Neuerungen in {version} an und laden Sie sie hier herunter und starten Sie neu.",
+  "appUpdate.dialog.notesTitle": "Neu in {version}",
+  "appUpdate.dialog.noNotes": "Für diese Version gibt es keine Versionshinweise.",
+  "appUpdate.dialog.openSettings": "Update-Einstellungen"
 }

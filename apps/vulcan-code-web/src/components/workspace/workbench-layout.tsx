@@ -59,6 +59,8 @@ import { useWorkbenchRevisionGates, useWorkbenchServiceSync } from "@/components
 import { useProjectTerminalRunningCounts } from "@/components/workspace/workbench-layout/use-project-terminal-running-counts";
 import { useSessionTitleToasts } from "@/components/workspace/workbench-layout/use-session-title-toasts";
 import { useAppUpdatePrompts } from "@/components/workspace/workbench-layout/use-app-update-prompts";
+import { useAppUpdate } from "@/components/features/app-update/use-app-update";
+import { AppUpdateContext, type AppUpdateHost } from "@/components/features/app-update/app-update-context";
 import { useProjectLifecycleConfirmation } from "@/components/workspace/workbench-layout/use-project-lifecycle-confirmation";
 import { useConversationMenuActions } from "@/components/workspace/workbench-layout/use-conversation-menu-actions";
 import { UnsupportedSessionDeleteDialog } from "@/components/project/unsupported-session-delete-dialog";
@@ -550,7 +552,15 @@ export function WorkbenchLayout(props: {
     setActiveSettingsSubArea("app-update");
     handleSelectTopFeatureArea("settings");
   }, [handleSelectTopFeatureArea]);
-  useAppUpdatePrompts(props.serviceInstanceEpoch, handleOpenAppUpdateSettings);
+  // appUpdate is the one updater state shared by the update prompts and the sidebar update entry.
+  // appUpdate 是更新提示与侧栏更新入口共用的唯一更新器状态。
+  const appUpdate = useAppUpdate(props.serviceInstanceEpoch);
+  useAppUpdatePrompts(appUpdate.snapshot, props.serviceInstanceEpoch, handleOpenAppUpdateSettings);
+  const appUpdateHost = React.useMemo<AppUpdateHost>(() => ({
+    snapshot: appUpdate.snapshot,
+    setSnapshot: appUpdate.setSnapshot,
+    openSettings: handleOpenAppUpdateSettings,
+  }), [appUpdate.snapshot, appUpdate.setSnapshot, handleOpenAppUpdateSettings]);
   // handleOpenPermissionJudgeSettings opens the application-wide permission judge settings page.
   // handleOpenPermissionJudgeSettings 打开应用全局的权限判定设置页。
   const handleOpenPermissionJudgeSettings = React.useCallback(() => {
@@ -1231,6 +1241,7 @@ export function WorkbenchLayout(props: {
 
   return (
     <OpenVulcanAccountContext.Provider value={account}>
+    <AppUpdateContext.Provider value={appUpdateHost}>
     {account.open ? <React.Suspense fallback={null}><OpenVulcanAccountDialog /></React.Suspense> : null}
     <ThinkingDisplaySystemContext.Provider value={{
       mode: workbenchState.thinkingDisplayMode,
@@ -1484,6 +1495,7 @@ export function WorkbenchLayout(props: {
     </ComposerSettingsHostContext.Provider>
     </ToolCollapsePreferencesContext.Provider>
     </ThinkingDisplaySystemContext.Provider>
+    </AppUpdateContext.Provider>
     </OpenVulcanAccountContext.Provider>
   );
 }

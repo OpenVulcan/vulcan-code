@@ -33,6 +33,7 @@ import {
   useSidebarNavigation,
 } from "@/ui-kit/shell/sidebar";
 import { SidebarBrandMenu } from "@/components/sidebar/sidebar-profile-menus";
+import { AppUpdateHeaderButton } from "@/components/features/app-update/app-update-header-button";
 import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
 import type { ConversationSummary, ProjectSessionSortMode, ProjectSummary, ProjectTreeSummary } from "@/types";
 import { ConversationTreeRow, type ConversationRowVariant } from "./project-sidebar-conversation-row";
@@ -110,6 +111,7 @@ export function ProjectSidebar(props: ProjectSessionTreeProps & {
       <SidebarHeader>
         <SidebarBrandMenu
           actions={<SidebarFlowSwitch />}
+          afterWordmark={<AppUpdateHeaderButton />}
           titlebarDragRegion={titlebarDragRegion}
           onTitlebarDoubleClick={onTitlebarDoubleClick}
         />

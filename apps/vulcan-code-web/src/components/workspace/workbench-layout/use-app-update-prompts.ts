@@ -1,10 +1,9 @@
 import React from "react";
 
-import { useAppUpdate } from "@/components/features/app-update/use-app-update";
 import { restartElectronClientForUpdate } from "@/host-shell/electron-bridge";
 import { formatMessage, translateActive } from "@/i18n";
 import { errorMessage } from "@/lib/display-format";
-import { SERVICE_RESTARTING_TOPIC, type ServiceRestartingEvent } from "@/service/app-update-events";
+import { SERVICE_RESTARTING_TOPIC, type AppUpdateSnapshot, type ServiceRestartingEvent } from "@/service/app-update-events";
 import { restartToUpdate } from "@/service/app-update-service";
 import { hasServiceRuntime, serviceClient } from "@/service/webui-service-runtime";
 import { toast } from "@/ui-kit/primitives/toast";
@@ -18,11 +17,15 @@ const RESTARTING_TOAST_ID = "app-update-restarting";
 // useAppUpdatePrompts announces a newer version and a version ready to start, once per version
 // and page, and hands an announced Core restart to the desktop client.
 // useAppUpdatePrompts 按版本与页面各提示一次更新版本与已就绪版本，并把已宣布的 Core 重启交给桌面客户端。
-// Parameters: serviceInstanceEpoch resets the subscriptions after a reconnect; openUpdateSettings
-// shows the update settings page.
-// 参数：serviceInstanceEpoch 在重连后重置订阅；openUpdateSettings 打开更新设置页。
-export function useAppUpdatePrompts(serviceInstanceEpoch: number, openUpdateSettings: () => void): void {
-  const { snapshot } = useAppUpdate(serviceInstanceEpoch);
+// Parameters: snapshot is the workbench's updater state (from useAppUpdate); serviceInstanceEpoch
+// resets the restart subscription after a reconnect; openUpdateSettings shows the update settings page.
+// 参数：snapshot 为工作台的更新器状态（来自 useAppUpdate）；serviceInstanceEpoch 在重连后重置重启订阅；
+// openUpdateSettings 打开更新设置页。
+export function useAppUpdatePrompts(
+  snapshot: AppUpdateSnapshot | null,
+  serviceInstanceEpoch: number,
+  openUpdateSettings: () => void,
+): void {
   const prompted = React.useRef(new Set<string>());
 
   React.useEffect(() => {

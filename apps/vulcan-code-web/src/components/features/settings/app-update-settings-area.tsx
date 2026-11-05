@@ -1,31 +1,11 @@
-import * as React from "react";
-
-import { useAppUpdate, releaseNotesFor } from "@/components/features/app-update/use-app-update";
-import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
+import { useAppUpdate } from "@/components/features/app-update/use-app-update";
+import { AppUpdateStatusSections, useAppUpdateCalls } from "@/components/features/app-update/app-update-sections";
 import { PageNotice } from "@/components/page";
 import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice";
 import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
-import { errorMessage, formatBytes } from "@/lib/display-format";
-import type {
-  AppUpdateOperation,
-  AppUpdateRoute,
-  AppUpdateSettings,
-  AppUpdateSnapshot,
-  AppUpdateUnavailableReason,
-} from "@/service/app-update-events";
-import {
-  cancelAppUpdate,
-  checkAppUpdate,
-  dismissAppUpdateNotice,
-  downloadAppUpdate,
-  repairAppInstall,
-  restartToUpdate,
-  saveAppUpdateSettings,
-} from "@/service/app-update-service";
-import { openExternalUrl } from "@/service/project-actions-service";
-import { Badge } from "@/ui-kit/primitives/badge";
+import type { AppUpdateRoute, AppUpdateSettings, AppUpdateUnavailableReason } from "@/service/app-update-events";
+import { checkAppUpdate, dismissAppUpdateNotice, repairAppInstall, saveAppUpdateSettings } from "@/service/app-update-service";
 import { Button } from "@/ui-kit/primitives/button";
-import { Progress } from "@/ui-kit/primitives/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select";
 import { Switch } from "@/ui-kit/primitives/switch";
 import "@/ui-kit/styles/features/settings-forms.css";
@@ -37,15 +17,6 @@ const UNAVAILABLE_KEYS: Record<AppUpdateUnavailableReason, TranslationKey> = {
   notInstalled: "settings.appUpdate.unavailable.notInstalled",
   installRecordMissing: "settings.appUpdate.unavailable.installRecordMissing",
   unsupportedPlatform: "settings.appUpdate.unavailable.unsupportedPlatform",
-};
-
-// Outcome lines of failed operations.
-// 失败操作的结果说明。
-const FAILURE_KEYS: Record<AppUpdateOperation, TranslationKey> = {
-  check: "settings.appUpdate.failed.check",
-  download: "settings.appUpdate.failed.download",
-  repair: "settings.appUpdate.failed.repair",
-  restart: "settings.appUpdate.failed.restart",
 };
 
 // Labels of the download routes.
@@ -65,18 +36,8 @@ const ROUTE_KEYS: Record<AppUpdateRoute, TranslationKey> = {
 export function AppUpdateSettingsArea(props: { serviceInstanceEpoch: number }) {
   const { t, locale } = useI18n();
   const { snapshot, loadError, setSnapshot } = useAppUpdate(props.serviceInstanceEpoch);
-  const [callError, setCallError] = React.useState("");
-
-  // run sends one updater call and shows its accepted snapshot; failures stay on the page.
-  // run 发送一个更新器调用并显示其已接受的快照；失败信息保留在页面上。
-  const run = async (call: () => Promise<AppUpdateSnapshot>) => {
-    setCallError("");
-    try {
-      setSnapshot(await call());
-    } catch (cause) {
-      setCallError(errorMessage(cause));
-    }
-  };
+  const calls = useAppUpdateCalls(setSnapshot);
+  const { run } = calls;
 
   if (!snapshot) {
     return loadError
@@ -85,7 +46,6 @@ export function AppUpdateSettingsArea(props: { serviceInstanceEpoch: number }) {
   }
 
   const busy = snapshot.activity !== "idle";
-  const offer = snapshot.offer;
   const saveSettings = (settings: AppUpdateSettings) => void run(() => saveAppUpdateSettings(settings));
   const lastChecked = snapshot.lastCheckedAt === null
     ? t("settings.appUpdate.neverChecked")
@@ -113,58 +73,7 @@ export function AppUpdateSettingsArea(props: { serviceInstanceEpoch: number }) {
       </PageNotice>
     ) : null}
 
-    {snapshot.error ? <SettingsErrorNotice detail={snapshot.error.message} message={t(FAILURE_KEYS[snapshot.error.operation])} /> : null}
-    {callError ? <SettingsErrorNotice detail={callError} message={t("settings.appUpdate.requestFailed")} /> : null}
-
-    {snapshot.readyVersion ? (
-      <section className="vk-form-pref" data-app-update-ready>
-        <div className="vk-form-pref-text">
-          <strong>{formatMessage(t("settings.appUpdate.ready"), { version: snapshot.readyVersion })}</strong>
-          <p className="vk-form-note">{t("settings.appUpdate.readyHint")}</p>
-        </div>
-        <Button disabled={busy} onClick={() => void run(restartToUpdate)} size="sm">
-          {snapshot.activity === "restarting" ? t("settings.appUpdate.restarting") : t("settings.appUpdate.restart")}
-        </Button>
-      </section>
-    ) : null}
-
-    {offer ? (
-      <section className="vk-form-pref" data-app-update-offer>
-        <div className="vk-form-pref-text">
-          <strong>
-            {formatMessage(t("settings.appUpdate.available"), { version: offer.version })}{" "}
-            {offer.channel === "preview" ? <Badge variant="warning">{t("settings.appUpdate.preview")}</Badge> : null}
-          </strong>
-          <p className="vk-form-note">
-            {offer.kind === "incremental"
-              ? formatMessage(t("settings.appUpdate.incremental"), { size: formatBytes(offer.downloadBytes) })
-              : offer.installable
-                ? formatMessage(t("settings.appUpdate.full"), { size: formatBytes(offer.downloadBytes) })
-                : t("settings.appUpdate.fullManual")}
-          </p>
-          {offer.previouslyFailed ? <p role="alert" className="vk-field-error">{t("settings.appUpdate.previouslyFailed")}</p> : null}
-        </div>
-        {offer.installable ? (
-          <Button disabled={busy} onClick={() => void run(downloadAppUpdate)} size="sm">{t("settings.appUpdate.download")}</Button>
-        ) : (
-          <Button onClick={() => void openExternalUrl(snapshot.downloadPageUrl).catch((cause: unknown) => setCallError(errorMessage(cause)))} size="sm" variant="outline">
-            {t("settings.appUpdate.openDownloadPage")}
-          </Button>
-        )}
-        {releaseNotesFor(offer.notes, locale) ? <MarkdownMessage content={releaseNotesFor(offer.notes, locale)} eager /> : null}
-      </section>
-    ) : null}
-
-    {snapshot.progress ? (
-      <section className="vk-form-pref" data-app-update-progress>
-        <div className="vk-form-pref-text">
-          <strong>{snapshot.activity === "repairing" ? t("settings.appUpdate.repairing") : t("settings.appUpdate.downloading")}</strong>
-          <p className="vk-form-note">{formatBytes(snapshot.progress.receivedBytes)} / {formatBytes(snapshot.progress.totalBytes)}</p>
-          <Progress max={Math.max(snapshot.progress.totalBytes, 1)} value={snapshot.progress.receivedBytes} />
-        </div>
-        <Button onClick={() => void run(cancelAppUpdate)} size="sm" variant="ghost">{t("settings.appUpdate.cancel")}</Button>
-      </section>
-    ) : null}
+    <AppUpdateStatusSections calls={calls} showNotes snapshot={snapshot} />
 
     {snapshot.unavailableReason ? null : <>
       <section className="vk-form-pref">

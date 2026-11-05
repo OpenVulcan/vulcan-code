@@ -72,6 +72,13 @@
 /* The master viewBox is glyph-tight and the box lands on fractional pixels; the default SVG clip snaps to whole
  * pixels and shaves the round letters' edges, so the antialiased fringe is allowed to bleed past the box. */
 .vk-wordmark { height: calc(var(--vk-u) * 4.2); width: auto; max-width: 100%; overflow: visible; }
+/* The update entry follows the wordmark only while an update waits. It takes no reserved space: its label gives
+ * way first, and the whole entry hides when the row cannot hold the wordmark plus a readable label. */
+.vk-brand-drag:has(> .vk-brand-update) { container: vk-brand / inline-size; }
+.vk-brand > .vk-brand-drag > .vk-brand-update { display: inline-flex; flex: 0 1 auto; min-width: 0; margin-left: var(--vk-u); pointer-events: auto; }
+.vk-brand-update > .vk-btn[data-size] { flex: 0 1 auto; min-width: 0; padding: 0 var(--vk-u); }
+.vk-brand-update > .vk-btn > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+@container vk-brand (max-width: 12.25rem) { .vk-brand > .vk-brand-drag > .vk-brand-update { display: none; } }
 .vk-flow-switch { display: inline-flex; padding: 2px; gap: 2px; background: var(--vk-sunken); border: var(--vk-bw) solid var(--vk-line); }
 .vk-flow-switch > button { display: grid; place-items: center; width: calc(var(--vk-u) * 7); height: calc(var(--vk-u) * 6); border: 0; background: transparent; color: var(--vk-ink-3); cursor: pointer; transition: background var(--vk-t-fast), color var(--vk-t-fast); }
 .vk-flow-switch > button:hover { color: var(--vk-ink); }

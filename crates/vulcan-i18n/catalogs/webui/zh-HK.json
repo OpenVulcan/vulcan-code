@@ -6775,5 +6775,11 @@
   "settings.appUpdate.repairAction": "修復",
   "appUpdate.toast.view": "查看",
   "appUpdate.toast.restarting": "正在重新啟動 Vulcan Code 以完成更新…",
-  "appUpdate.toast.installing": "正在關閉 Vulcan Code 以運行安裝程式…"
+  "appUpdate.toast.installing": "正在關閉 Vulcan Code 以運行安裝程式…",
+  "appUpdate.header.button": "更新",
+  "appUpdate.dialog.title": "更新至 Vulcan Code {version}",
+  "appUpdate.dialog.description": "目前運行的是 {current} 版本。先查看 {version} 的更新內容，再於此下載並重新啟動。",
+  "appUpdate.dialog.notesTitle": "{version} 更新內容",
+  "appUpdate.dialog.noNotes": "此版本沒有發布說明。",
+  "appUpdate.dialog.openSettings": "更新設定"
 }

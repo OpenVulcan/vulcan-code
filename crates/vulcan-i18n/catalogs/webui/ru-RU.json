@@ -6775,5 +6775,11 @@
   "settings.appUpdate.repairAction": "Восстановить",
   "appUpdate.toast.view": "Открыть",
   "appUpdate.toast.restarting": "Перезапуск Vulcan Code для завершения обновления…",
-  "appUpdate.toast.installing": "Закрытие Vulcan Code для запуска установщика…"
+  "appUpdate.toast.installing": "Закрытие Vulcan Code для запуска установщика…",
+  "appUpdate.header.button": "Обновить",
+  "appUpdate.dialog.title": "Обновление до Vulcan Code {version}",
+  "appUpdate.dialog.description": "Сейчас запущена версия {current}. Посмотрите, что нового в {version}, затем загрузите и перезапустите отсюда.",
+  "appUpdate.dialog.notesTitle": "Что нового в {version}",
+  "appUpdate.dialog.noNotes": "У этой версии нет примечаний к выпуску.",
+  "appUpdate.dialog.openSettings": "Настройки обновления"
 }

@@ -6775,5 +6775,11 @@
   "settings.appUpdate.repairAction": "修復",
   "appUpdate.toast.view": "表示",
   "appUpdate.toast.restarting": "更新を完了するため Vulcan Code を再起動しています…",
-  "appUpdate.toast.installing": "インストーラーを実行するため Vulcan Code を終了しています…"
+  "appUpdate.toast.installing": "インストーラーを実行するため Vulcan Code を終了しています…",
+  "appUpdate.header.button": "更新",
+  "appUpdate.dialog.title": "Vulcan Code {version} に更新",
+  "appUpdate.dialog.description": "現在のバージョンは {current} です。{version} の変更内容を確認し、ここでダウンロードして再起動できます。",
+  "appUpdate.dialog.notesTitle": "{version} の新機能",
+  "appUpdate.dialog.noNotes": "このバージョンにはリリースノートがありません。",
+  "appUpdate.dialog.openSettings": "更新設定"
 }

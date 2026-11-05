@@ -6775,5 +6775,11 @@
   "settings.appUpdate.repairAction": "복구",
   "appUpdate.toast.view": "보기",
   "appUpdate.toast.restarting": "업데이트를 마치기 위해 Vulcan Code를 다시 시작하는 중…",
-  "appUpdate.toast.installing": "설치 프로그램을 실행하기 위해 Vulcan Code를 닫는 중…"
+  "appUpdate.toast.installing": "설치 프로그램을 실행하기 위해 Vulcan Code를 닫는 중…",
+  "appUpdate.header.button": "업데이트",
+  "appUpdate.dialog.title": "Vulcan Code {version}(으)로 업데이트",
+  "appUpdate.dialog.description": "현재 {current} 버전을 실행 중입니다. {version}의 변경 사항을 확인한 뒤 여기서 다운로드하고 다시 시작하세요.",
+  "appUpdate.dialog.notesTitle": "{version}의 새로운 기능",
+  "appUpdate.dialog.noNotes": "이 버전에는 릴리스 노트가 없습니다.",
+  "appUpdate.dialog.openSettings": "업데이트 설정"
 }

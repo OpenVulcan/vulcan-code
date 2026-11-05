@@ -28,6 +28,10 @@ export function SidebarBrandMenu(props: {
   // Handles title bar double-click maximize or restore behavior.
   // 处理标题栏双击最大化或还原行为。
   onTitlebarDoubleClick?: (event: React.MouseEvent<HTMLElement>) => void;
+  // Compact entry placed right after the wordmark, such as the update entry; it must stop its own
+  // double clicks so they do not reach the title strip.
+  // 紧跟字标放置的紧凑入口，例如更新入口；它必须自行截止双击，避免传到标题条。
+  afterWordmark?: React.ReactNode;
   // Controls placed after the drag area, such as the panel flow switch.
   // 放在拖动区域之后的控件，例如面板流切换。
   actions?: React.ReactNode;
@@ -40,6 +44,7 @@ export function SidebarBrandMenu(props: {
         onDoubleClick={props.titlebarDragRegion ? undefined : props.onTitlebarDoubleClick}
       >
         <VulcanWordmark className="vk-wordmark" label="Vulcan Code" />
+        {props.afterWordmark}
         {props.currentLabel ? <small>{props.currentLabel}</small> : null}
       </div>
       {props.actions}
