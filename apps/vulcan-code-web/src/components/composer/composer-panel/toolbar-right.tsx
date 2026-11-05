@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { LoaderCircle, Send, Square } from "lucide-react";
 import { ContextUsageOrb } from "@/components/composer/composer-controls";
 import type {
-  ContextCompactionWindowNodeId,
+  ContextWindowSelection,
   ContextUsageSnapshot,
   PublicAiContextCompactionWindowNode,
   SessionProviderUsageSummary,
@@ -31,7 +31,10 @@ export interface ComposerPanelToolbarRightProps {
   contextCompactionWindowNodes: PublicAiContextCompactionWindowNode[];
   // Stable node selected by the current session.
   // 当前会话选择的稳定节点。
-  sessionContextCompactionWindowNodeId: ContextCompactionWindowNodeId | null;
+  sessionContextWindowSelection: ContextWindowSelection | null;
+  // Smallest custom window the backend accepts; null hides custom entry.
+  // 后端接受的最小自定义窗口；为空时隐藏自定义输入。
+  customContextWindowMinTokens: number | null;
   // Hard context limit declared by the active model.
   // 当前模型声明的硬上下文窗口。
   modelContextLimit: number | null;
@@ -58,7 +61,7 @@ export interface ComposerPanelToolbarRightProps {
   voiceInputControl?: ReactNode;
   // Persists or clears one session context-compaction window node.
   // 持久化或清除一个会话上下文压缩窗口节点。
-  onSetSessionContextCompactionWindow: (nodeId: ContextCompactionWindowNodeId | null) => Promise<boolean>;
+  onSetSessionContextCompactionWindow: (selection: ContextWindowSelection | null) => Promise<boolean>;
   // Handler that sends or stops according to current composer state.
   // 根据当前输入区状态发送或停止的处理器。
   onSend: () => void;
@@ -66,6 +69,27 @@ export interface ComposerPanelToolbarRightProps {
 
 // ComposerPanelToolbarRight renders the right side of the composer toolbar.
 // ComposerPanelToolbarRight 渲染输入区工具栏右侧区域。
+// ContextWindowPropKeys are the session context-window inputs the composer forwards unchanged.
+// ContextWindowPropKeys 是输入区原样转交的会话上下文窗口输入。
+type ContextWindowPropKeys =
+  | "contextCompactionWindowNodes"
+  | "sessionContextWindowSelection"
+  | "customContextWindowMinTokens"
+  | "onSetSessionContextCompactionWindow";
+
+// pickContextWindowProps copies exactly the context-window props from a wider props object.
+// pickContextWindowProps 从更大的参数对象中精确复制上下文窗口参数。
+export function pickContextWindowProps(
+  props: Pick<ComposerPanelToolbarRightProps, ContextWindowPropKeys>,
+): Pick<ComposerPanelToolbarRightProps, ContextWindowPropKeys> {
+  return {
+    contextCompactionWindowNodes: props.contextCompactionWindowNodes,
+    sessionContextWindowSelection: props.sessionContextWindowSelection,
+    customContextWindowMinTokens: props.customContextWindowMinTokens,
+    onSetSessionContextCompactionWindow: props.onSetSessionContextCompactionWindow,
+  };
+}
+
 export function ComposerPanelToolbarRight(props: ComposerPanelToolbarRightProps) {
   const draftHasContent = props.draftInput.trim().length > 0;
   const hasAttachments = props.attachmentCount > 0;
@@ -76,8 +100,9 @@ export function ComposerPanelToolbarRight(props: ComposerPanelToolbarRightProps)
         key={`context:${props.draftSlotKey}`}
         contextCompactionWindowNodes={props.contextCompactionWindowNodes}
         modelContextLimit={props.modelContextLimit}
-        onNodeChange={props.onSetSessionContextCompactionWindow}
-        selectedNodeId={props.sessionContextCompactionWindowNodeId}
+        customMinTokens={props.customContextWindowMinTokens}
+        onSelectionChange={props.onSetSessionContextCompactionWindow}
+        selection={props.sessionContextWindowSelection}
         snapshot={props.contextUsage}
         sessionProviderUsage={props.sessionProviderUsage}
       />

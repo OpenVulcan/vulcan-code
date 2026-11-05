@@ -1168,7 +1168,7 @@ impl Worker {
             || entry.session_todolist.is_some()
             || entry.session_plan_mode.is_some()
             || entry.session_output_style.is_some()
-            || entry.session_context_compaction_window_node_id.is_some()
+            || entry.session_context_window_selection.is_some()
             || entry.session_provider_usage.is_some();
         if let Some(wb) = self.wb.as_mut() {
             wb.session_addons_by_conversation
@@ -1194,8 +1194,7 @@ impl Worker {
             session_plan_mode: response.session_plan_mode,
             session_vmm_policy: response.session_vmm_policy,
             session_output_style: response.session_output_style,
-            session_context_compaction_window_node_id: response
-                .session_context_compaction_window_node_id,
+            session_context_window_selection: response.session_context_window_selection,
             session_provider_usage: response.session_provider_usage.map(Box::new),
         });
     }

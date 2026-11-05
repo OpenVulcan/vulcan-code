@@ -5,6 +5,7 @@ import { toast } from "@/ui-kit/primitives/toast"
 
 import { PageActionBar } from "@/components/page"
 import { ContextWindowPolicyEditor } from "@/components/features/settings/context-window-policy-editor"
+import { ModelContextWindowDefaultsList } from "@/components/features/settings/model-context-window-defaults"
 import { ProviderRetrySettingsArea } from "@/components/features/settings/provider-retry-settings"
 import { MediaDeliveryPolicyCard } from "@/components/features/settings/media-delivery-policy-card"
 import { TerminalShellSettingsCard } from "@/components/features/settings/terminal-shell-settings"
@@ -518,6 +519,9 @@ export function ContextBasicsSettingsArea(props: {
               <ContextCompactionWindowNodesCard nodes={snapshot.contextCompactionWindowNodes} onSaved={(next) => setSnapshot((current) => current ? { ...current, contextCompactionWindowNodes: next.contextCompactionWindowNodes } : next)}>
                 <NewSessionContextWindowDefaultRow nodeId={snapshot.newSessionContextCompactionWindowNodeId} nodes={snapshot.contextCompactionWindowNodes} onSaved={(next) => setSnapshot((current) => current ? { ...current, newSessionContextCompactionWindowNodeId: next.newSessionContextCompactionWindowNodeId } : next)} />
               </ContextCompactionWindowNodesCard>
+              <div className="context-basics-rows">
+                <ModelContextWindowDefaultsList candidates={snapshot.modelContextWindowCandidates} customMinTokens={snapshot.customContextWindowMinTokens} defaults={snapshot.modelContextWindowDefaults} nodeLabel={(id) => t(CONTEXT_COMPACTION_NODE_LABEL_KEYS[id])} nodes={snapshot.contextCompactionWindowNodes} onSaved={(next) => setSnapshot((current) => current ? { ...current, modelContextWindowDefaults: next.modelContextWindowDefaults, modelContextWindowCandidates: next.modelContextWindowCandidates } : next)} />
+              </div>
             </section>
             <section hidden={activeSection !== "media"}>
               <MediaDeliveryPolicyCard settings={snapshot.mediaDelivery} onSaved={(next) => setSnapshot((current) => current ? { ...current, mediaDelivery: next.mediaDelivery } : next)} />

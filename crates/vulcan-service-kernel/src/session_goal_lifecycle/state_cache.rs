@@ -39,7 +39,7 @@ struct SessionV1RuntimeProjection {
     goal_summary: Option<SessionGoalSummary>,
     /// Persisted context-compaction window node.
     /// 持久化的上下文压缩窗口节点。
-    context_compaction_window_node_id: Option<vulcan_context::ContextCompactionWindowNodeId>,
+    context_window_selection: Option<vulcan_context::ContextWindowSelection>,
     /// Persisted output-style override.
     /// 持久化的输出风格覆盖。
     output_style_id: Option<String>,
@@ -95,10 +95,7 @@ fn session_v1_runtime_projection(
 ) -> SessionV1RuntimeProjection {
     SessionV1RuntimeProjection {
         goal_summary: session_goal_summary_from_document(document, session_id, None),
-        context_compaction_window_node_id: document
-            .metadata
-            .config
-            .context_compaction_window_node_id,
+        context_window_selection: document.metadata.config.context_window_selection,
         output_style_id: document.metadata.config.selection.output_style.clone(),
         plan_enabled: document.metadata.mode.plan.enabled,
         active_provider_id: document.metadata.config.active_request.provider.clone(),
@@ -176,7 +173,7 @@ fn apply_session_v1_runtime_projection(
     runtime_state: &mut vulcan_workbench_model::SessionRuntimeStateEntry,
     projection: &SessionV1RuntimeProjection,
 ) {
-    runtime_state.context_compaction_window_node_id = projection.context_compaction_window_node_id;
+    runtime_state.context_window_selection = projection.context_window_selection;
     runtime_state.output_style.override_style_id = projection.output_style_id.clone();
     if projection.plan_enabled {
         runtime_state.active_work_mode = Some(String::from("plan"));
@@ -965,10 +962,12 @@ mod tests {
     fn restart_projection_restores_stage_six_request_and_mode_facts_from_v1() {
         let session_id = SessionId::from_u128(0x9e);
         let mut document = SessionDocument::new(session_id.to_string(), "project", "title", 1);
-        let node_id = "compression-window-4"
-            .parse::<vulcan_context::ContextCompactionWindowNodeId>()
-            .expect("valid compaction node id");
-        assert!(document.set_context_compaction_window_node_id(Some(node_id), 2));
+        let node_id = vulcan_context::ContextWindowSelection::Node(
+            "compression-window-4"
+                .parse::<vulcan_context::ContextCompactionWindowNodeId>()
+                .expect("valid compaction node id"),
+        );
+        assert!(document.set_context_window_selection(Some(node_id), 2));
         assert!(
             document
                 .set_output_style(Some(String::from("concise")), 3)
@@ -1083,10 +1082,7 @@ mod tests {
         let mut runtime_state = vulcan_workbench_model::SessionRuntimeStateEntry::default();
         apply_session_v1_runtime_projection(&mut runtime_state, &projection);
 
-        assert_eq!(
-            runtime_state.context_compaction_window_node_id,
-            Some(node_id)
-        );
+        assert_eq!(runtime_state.context_window_selection, Some(node_id));
         assert_eq!(
             runtime_state.output_style.override_style_id.as_deref(),
             Some("concise")

@@ -276,7 +276,7 @@ pub fn resolve_prompt_compaction_model_target(
     provider_id_override: Option<&str>,
     connection_id_override: Option<&str>,
     model_id_override: Option<&str>,
-    context_compaction_window_node_id: Option<vulcan_context::ContextCompactionWindowNodeId>,
+    context_window_selection: Option<vulcan_context::ContextWindowSelection>,
     context_compaction_policy_seed: Option<ContextCompactionPolicy>,
 ) -> Result<Option<PromptCompactionModelTarget>, String> {
     let configuration = runtime.configuration_snapshot()?;
@@ -316,7 +316,7 @@ pub fn resolve_prompt_compaction_model_target(
         selection.route.provider.id.as_str(),
         selection.model.id.as_str(),
         context_limit,
-        context_compaction_window_node_id,
+        context_window_selection,
         context_compaction_policy_seed,
     )?;
     Ok(Some(PromptCompactionModelTarget {
@@ -1161,8 +1161,11 @@ fn build_prompt_compaction_launch_request(
             auto: false,
             ..target.context_compaction_policy
         }),
-        context_compaction_window_node_id: model_target
-            .and_then(|target| target.context_compaction_policy.compression_window_node_id),
+        context_window_selection: model_target.and_then(|target| {
+            target
+                .context_compaction_policy
+                .compression_window_selection
+        }),
         context_budget_override: None,
         context_window_prefill_input_tokens: None,
         execution_mode: launch_context.execution_mode.clone(),

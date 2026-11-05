@@ -951,13 +951,10 @@ pub(crate) async fn service_set_session_context_compaction_window(
 ) -> Result<SessionAddonsChangedResponse, String> {
     let session_id = parse_session_id(&request.conversation_id)
         .ok_or_else(|| String::from("The current draft session has not been created yet; the context compaction window cannot be switched for now."))?;
-    let node_id = request
-        .node_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::parse::<vulcan_context::ContextCompactionWindowNodeId>)
-        .transpose()?;
+    let node_id = request.selection;
+    if let Some(selection) = node_id {
+        selection.validate()?;
+    }
     let updated_at = current_unix_millis_text();
     let updated_at_ms = updated_at
         .parse::<i64>()
@@ -978,7 +975,7 @@ pub(crate) async fn service_set_session_context_compaction_window(
             ));
         }
         let runtime_state = workspace_snapshot.session_runtime_state.get(&session_id);
-        if let Some(node_id) = node_id {
+        if let Some(window) = node_id {
             let agent_runtime = guard.agent_runtime.as_ref().ok_or_else(|| {
                 String::from("service is still starting; agent runtime is not ready")
             })?;
@@ -986,7 +983,7 @@ pub(crate) async fn service_set_session_context_compaction_window(
             let configuration = public_ai_runtime.configuration_snapshot()?;
             let node_tokens = configuration
                 .context_compaction_window_nodes
-                .tokens_for(node_id)?;
+                .tokens_for_selection(window)?;
             let selection = public_ai_workbench_selection(
                 &configuration,
                 public_ai_runtime,
@@ -998,12 +995,12 @@ pub(crate) async fn service_set_session_context_compaction_window(
             })?;
             let model_context_limit =
                 selection.model.capabilities.context_limit.ok_or_else(|| {
-                    String::from("The current model does not declare a context window, so the context compaction node cannot be locked.")
+                    String::from("The current model does not declare a context window, so the context compaction window cannot be locked.")
                 })?;
-            if node_tokens >= model_context_limit {
+            if !vulcan_ai_contract::context_window_fits_model(node_tokens, model_context_limit) {
                 return Err(format!(
-                    "Context compaction node `{}` is currently {} tokens and must be strictly smaller than the model context window of {} tokens.",
-                    node_id.as_str(),
+                    "Context compaction window `{}` is {} tokens, which exceeds the model context window of {} tokens.",
+                    window.label(),
                     node_tokens,
                     model_context_limit
                 ));
@@ -1016,8 +1013,7 @@ pub(crate) async fn service_set_session_context_compaction_window(
             SessionMutationAdmission::MetadataOnly,
             SessionFlushReason::MetadataChanged,
             move |document| {
-                let changed =
-                    document.set_context_compaction_window_node_id(node_id, updated_at_ms);
+                let changed = document.set_context_window_selection(node_id, updated_at_ms);
                 Ok(if changed {
                     SessionMutationChange::Changed(())
                 } else {
@@ -1045,9 +1041,8 @@ pub(crate) async fn service_set_session_context_compaction_window(
                 });
             // Invalidate derived usage only when durable or mirrored policy actually changes.
             // 仅在持久策略或镜像策略实际变化时，使派生用量失效。
-            let changed =
-                mutation.changed || runtime_state.context_compaction_window_node_id != node_id;
-            runtime_state.context_compaction_window_node_id = node_id;
+            let changed = mutation.changed || runtime_state.context_window_selection != node_id;
+            runtime_state.context_window_selection = node_id;
             if changed {
                 runtime_state.live_context_budget_fingerprint = None;
                 runtime_state.anchor_context_budget_fingerprint = None;

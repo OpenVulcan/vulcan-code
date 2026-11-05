@@ -236,8 +236,8 @@ pub(crate) fn session_output_style_summary_from_runtime_state(
 /// `session_plan_mode` 是该会话的可选计划模式摘要。
 /// `session_vmm_policy` is the optional non-empty session VMM policy list projection.
 /// `session_vmm_policy` 是可选的非空会话 VMM 策略列表投影。
-/// `session_context_compaction_window_node_id` is the optional stable session node identifier.
-/// `session_context_compaction_window_node_id` 是可选的会话稳定节点标识。
+/// `session_context_window_selection` is the optional stable session node identifier.
+/// `session_context_window_selection` 是可选的会话稳定节点标识。
 ///
 /// # Returns
 /// 返回值
@@ -256,7 +256,7 @@ pub(crate) fn session_addons_changed_delta_for_retained_list(
     session_plan_mode: Option<SessionPlanModeSummary>,
     session_vmm_policy: Option<SessionVmmPolicySummary>,
     session_output_style: Option<SessionOutputStyleSummary>,
-    session_context_compaction_window_node_id: Option<String>,
+    session_context_window_selection: Option<vulcan_context::ContextWindowSelection>,
     session_provider_usage: Option<SessionProviderUsageSummary>,
 ) -> Option<SessionAddonsChangedDelta> {
     if session_goal.is_none()
@@ -264,7 +264,7 @@ pub(crate) fn session_addons_changed_delta_for_retained_list(
         && session_plan_mode.is_none()
         && session_vmm_policy.is_none()
         && session_output_style.is_none()
-        && session_context_compaction_window_node_id.is_none()
+        && session_context_window_selection.is_none()
         && session_provider_usage.is_none()
     {
         return None;
@@ -276,7 +276,7 @@ pub(crate) fn session_addons_changed_delta_for_retained_list(
         session_plan_mode,
         session_vmm_policy,
         session_output_style,
-        session_context_compaction_window_node_id,
+        session_context_window_selection,
         session_provider_usage: session_provider_usage.map(Box::new),
     })
 }
@@ -1116,14 +1116,14 @@ mod tests {
             None,
             None,
             None,
-            Some(String::from("compression-window-2")),
+            Some(vulcan_context::ContextWindowSelection::Custom(235_000)),
             None,
         )
-        .expect("context window node should retain the addon entry");
+        .expect("context window selection should retain the addon entry");
 
         assert_eq!(
-            entry.session_context_compaction_window_node_id.as_deref(),
-            Some("compression-window-2")
+            entry.session_context_window_selection,
+            Some(vulcan_context::ContextWindowSelection::Custom(235_000))
         );
     }
 

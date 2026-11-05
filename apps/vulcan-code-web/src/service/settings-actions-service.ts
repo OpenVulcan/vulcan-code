@@ -1,5 +1,6 @@
 import type {
   ContextCompactionWindowNodeId,
+  ContextWindowSelection,
   PublicAiAccountUsage,
   PublicAiConnectionAddRequest,
   PublicAiConnectionUpdateRequest,
@@ -806,6 +807,21 @@ export async function savePublicAiNewSessionContextWindowDefault(
   );
 }
 
+// savePublicAiModelContextWindowDefault saves or clears one model's new-session window default.
+// savePublicAiModelContextWindowDefault 保存或清除一个模型的新会话窗口默认值。
+// defaultValue null removes the entry so the model inherits the system default; { selection: null } follows the model.
+// defaultValue 为 null 时删除条目使模型继承系统默认值；{ selection: null } 表示跟随模型。
+export async function savePublicAiModelContextWindowDefault(
+  providerId: string,
+  modelId: string,
+  defaultValue: { selection: ContextWindowSelection | null } | null,
+): Promise<PublicAiSettingsSnapshot> {
+  return serviceClient.request<PublicAiSettingsSnapshot>(
+    "service_save_public_ai_model_context_window_default",
+    { request: { providerId, modelId, default: defaultValue } },
+  );
+}
+
 // loadPublicAiSessionProviderToolSelections loads direct and extension targets for one session.
 // loadPublicAiSessionProviderToolSelections 加载单个会话生效的直连与扩展目标。
 export async function loadPublicAiSessionProviderToolSelections(
@@ -913,23 +929,25 @@ export interface WorkbenchModelChoice {
 
 // selectWorkbenchModel persists one model account for a session or the new-session default.
 // selectWorkbenchModel 为会话或新会话默认值持久化一个模型账号。
+// Returns the refreshed workbench together with the settings snapshot the selection RPC answered with.
+// 返回刷新后的工作台，以及选择 RPC 应答的设置快照。
 export async function selectWorkbenchModel(
   choice: WorkbenchModelChoice,
   conversationId: string | null,
-): Promise<WorkbenchSnapshot | null> {
+): Promise<{ workbench: WorkbenchSnapshot; settings: PublicAiSettingsSnapshot } | null> {
   if (!hasServiceRuntime()) {
     return null;
   }
   if (!choice.connectionId) {
     throw new Error("The selected model does not identify a public AI credential connection.");
   }
-  await selectPublicAiModel({
+  const settings = await selectPublicAiModel({
     providerId: choice.providerId,
     modelId: choice.modelId,
     connectionId: choice.connectionId,
     conversationId,
   });
-  return loadWorkbenchSnapshot();
+  return { workbench: await loadWorkbenchSnapshot(), settings };
 }
 
 // listWorkbenchModelSecondaryRoutes loads secondary route choices for one provider/model pair.

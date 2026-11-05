@@ -20,7 +20,7 @@ function configuredSnapshot(): WorkbenchSnapshot {
   const workbench = browserFallbackSnapshot();
   workbench.sessionVmmPolicy = { memoryEnabled: true, precheckMode: "disabled", precheckEnabled: false, memoryWritebackMode: "enabled", memoryWritebackEnabled: true };
   workbench.sessionPlanMode = { executionMode: "plan", promptInjected: false };
-  workbench.sessionContextCompactionWindowNodeId = "compression-window-3";
+  workbench.sessionContextWindowSelection = { node: "compression-window-3" };
   workbench.sessionGoal = { sessionId: "preview", goalId: "audit", objective: "Saved before the first message", status: "paused",
     tokensUsed: 0, usageTokens: 0, apiCallCount: 0, toolCallCount: 0, inputTokens: 0, cachedInputTokens: 0,
     outputTokens: 0, reasoningTokens: 0, totalTokens: 0, timeUsedSeconds: 0, createdAtMs: 1, updatedAtMs: 1 };
@@ -53,14 +53,14 @@ describe("composer dock authoritative settings", () => {
     expect(props.sessionVmmPolicy).toBe(workbench.sessionVmmPolicy);
     expect(props.sessionGoal).toBe(workbench.sessionGoal);
     expect(props.sessionPlanMode).toBe(workbench.sessionPlanMode);
-    expect(props.sessionContextCompactionWindowNodeId).toBe("compression-window-3");
+    expect(props.sessionContextWindowSelection).toEqual({ node: "compression-window-3" });
   });
   it("does not project persisted configuration into an ownerless materialization frame", () => {
     const props = project(configuredSnapshot(), null, false);
     expect(props.sessionVmmPolicy).toBeNull();
     expect(props.sessionGoal).toBeNull();
     expect(props.sessionPlanMode).toBeNull();
-    expect(props.sessionContextCompactionWindowNodeId).toBeNull();
+    expect(props.sessionContextWindowSelection).toBeNull();
   });
   it("keeps native readiness process-wide and external health scoped to its exact selection", () => {
     const workbench = configuredSnapshot();

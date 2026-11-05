@@ -110,11 +110,11 @@ describe("applySessionAddonsChangedResponse context window", () => {
       conversationId: "root", revision: 100, sessionProviderUsage: usage,
     });
     const next = applySessionAddonsChangedResponse(current, {
-      conversationId: "root", revision: 101, sessionContextCompactionWindowNodeId: "compression-window-2",
+      conversationId: "root", revision: 101, sessionContextWindowSelection: { custom: 235000 },
       sessionProviderUsage: { ...usage, usageRevision: 7, lifetime: { ...usage.lifetime!, revision: 7 } },
     });
     expect(next.sessionAddonsByConversation?.[0].sessionProviderUsage?.lifetime?.revision).toBe(8);
-    expect(next.sessionAddonsByConversation?.[0].sessionContextCompactionWindowNodeId).toBe("compression-window-2");
+    expect(next.sessionAddonsByConversation?.[0].sessionContextWindowSelection).toEqual({ custom: 235000 });
     const staleSnapshot = { ...current, revision: 102, sessionAddonsByConversation: [{
       conversationId: "root", sessionProviderUsage: { ...usage, usageRevision: 6, lifetime: { ...usage.lifetime!, revision: 6 } },
     }] };
@@ -123,18 +123,18 @@ describe("applySessionAddonsChangedResponse context window", () => {
       .sessionAddonsByConversation?.[0].sessionProviderUsage?.lifetime?.revision).toBe(6);
   });
 
-  it("retains a node-id-only session addon response", () => {
+  it("retains a window-selection-only session addon response", () => {
     const current = browserFallbackSnapshot();
     const next = applySessionAddonsChangedResponse(current, {
       conversationId: "conversation-a",
       revision: (current.revision ?? 0) + 1,
-      sessionContextCompactionWindowNodeId: "compression-window-2",
+      sessionContextWindowSelection: { custom: 235000 },
     });
 
     expect(next.sessionAddonsByConversation).toEqual([{
       conversationId: "conversation-a",
       revision: (current.revision ?? 0) + 1,
-      sessionContextCompactionWindowNodeId: "compression-window-2",
+      sessionContextWindowSelection: { custom: 235000 },
     }]);
   });
 });

@@ -24,7 +24,7 @@ use vulcan_core::controller::VulcanCoreController;
 /// 返回一个从不修改控制器、在节点变化时请求策略刷新的回调。
 pub(super) fn context_compaction_node_change_intervention(
     state: SharedServiceBridgeState,
-    frozen_node_id: Option<vulcan_context::ContextCompactionWindowNodeId>,
+    frozen_node_id: Option<vulcan_context::ContextWindowSelection>,
 ) -> RuntimePromptIntervention {
     Arc::new(move |session_id, _controller: &mut VulcanCoreController| {
         let retained_node_id = {
@@ -42,7 +42,7 @@ pub(super) fn context_compaction_node_change_intervention(
             workspace
                 .session_runtime_state
                 .get(&session_id)
-                .and_then(|runtime_state| runtime_state.context_compaction_window_node_id)
+                .and_then(|runtime_state| runtime_state.context_window_selection)
         };
         ensure_context_compaction_node_unchanged(session_id, frozen_node_id, retained_node_id)?;
         Ok(false)
@@ -63,16 +63,17 @@ pub(super) fn context_compaction_node_change_intervention(
 /// 未变化时成功；否则返回在此边界重启请求的策略刷新错误。
 fn ensure_context_compaction_node_unchanged(
     session_id: SessionId,
-    frozen_node_id: Option<vulcan_context::ContextCompactionWindowNodeId>,
-    retained_node_id: Option<vulcan_context::ContextCompactionWindowNodeId>,
+    frozen_node_id: Option<vulcan_context::ContextWindowSelection>,
+    retained_node_id: Option<vulcan_context::ContextWindowSelection>,
 ) -> Result<(), RuntimePromptInterventionError> {
     if retained_node_id == frozen_node_id {
         return Ok(());
     }
-    let label = |node_id: Option<vulcan_context::ContextCompactionWindowNodeId>| {
-        node_id
-            .map_or("model default", |node_id| node_id.as_str())
-            .to_owned()
+    let label = |selection: Option<vulcan_context::ContextWindowSelection>| {
+        selection.map_or_else(
+            || String::from("model default"),
+            vulcan_context::ContextWindowSelection::label,
+        )
     };
     Err(
         RuntimePromptInterventionError::ContextCompactionPolicyRefreshRequired {
@@ -122,12 +123,12 @@ pub(super) fn refreshed_execution_request_after_context_compaction_policy_change
         .get(request.session_id)
         .map_err(|error| format!("Context compaction policy refresh has no V1 owner: {error}"))?;
     let retained_node_id = handle
-        .read(|document| document.metadata.config.context_compaction_window_node_id)
+        .read(|document| document.metadata.config.context_window_selection)
         .map_err(|error| {
             format!("Context compaction policy refresh cannot read V1 metadata: {error}")
         })?;
     let next_node_id = next_context_compaction_window_node_at_safe_boundary(
-        request.context_compaction_window_node_id,
+        request.context_window_selection,
         retained_node_id,
     )?;
 
@@ -141,7 +142,7 @@ pub(super) fn refreshed_execution_request_after_context_compaction_policy_change
         vulcan_agent_runtime::agent_runtime::execution_models::ExecutionTurnStartMode::RestoredCheckpoint,
     );
     refreshed.provider_visible_agent_messages.clear();
-    refreshed.context_compaction_window_node_id = next_node_id;
+    refreshed.context_window_selection = next_node_id;
     refreshed.context_compaction_policy = None;
     refreshed.context_budget_override = None;
     refreshed.context_window_prefill_input_tokens = None;
@@ -162,9 +163,9 @@ pub(super) fn refreshed_execution_request_after_context_compaction_policy_change
 /// Returns the node for the next request, or fails when no boundary change exists.
 /// 返回下一次请求使用的节点；不存在边界变化时返回失败。
 fn next_context_compaction_window_node_at_safe_boundary(
-    frozen_node_id: Option<vulcan_context::ContextCompactionWindowNodeId>,
-    retained_node_id: Option<vulcan_context::ContextCompactionWindowNodeId>,
-) -> Result<Option<vulcan_context::ContextCompactionWindowNodeId>, String> {
+    frozen_node_id: Option<vulcan_context::ContextWindowSelection>,
+    retained_node_id: Option<vulcan_context::ContextWindowSelection>,
+) -> Result<Option<vulcan_context::ContextWindowSelection>, String> {
     if retained_node_id == frozen_node_id {
         return Err(String::from(
             "Context compaction policy refresh reached the boundary without a node change.",
@@ -176,57 +177,59 @@ fn next_context_compaction_window_node_at_safe_boundary(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vulcan_context::ContextWindowSelection;
 
-    /// A live request keeps its frozen node while the replacement request receives the new node.
-    /// 活动请求保留冻结节点，替代请求取得新节点。
-    #[test]
-    fn context_window_change_applies_only_to_the_next_safe_request_boundary() {
-        let frozen_node_id = "compression-window-1"
-            .parse::<vulcan_context::ContextCompactionWindowNodeId>()
-            .expect("valid frozen node");
-        let retained_node_id = Some(
-            "compression-window-4"
-                .parse::<vulcan_context::ContextCompactionWindowNodeId>()
-                .expect("valid retained node"),
-        );
-
-        let next_node_id = next_context_compaction_window_node_at_safe_boundary(
-            Some(frozen_node_id),
-            retained_node_id,
+    /// Parses one stable node id into a node selection for these tests.
+    /// 为这些测试将一个稳定节点标识解析为节点选择。
+    fn node(id: &str) -> ContextWindowSelection {
+        ContextWindowSelection::Node(
+            id.parse::<vulcan_context::ContextCompactionWindowNodeId>()
+                .expect("valid node id"),
         )
-        .expect("changed node should be admitted at the safe boundary");
-
-        assert_eq!(frozen_node_id.as_str(), "compression-window-1");
-        assert_eq!(
-            next_node_id.expect("next node").as_str(),
-            "compression-window-4"
-        );
     }
 
-    /// A node chosen during the run stops the active request, while an unchanged node lets it continue.
-    /// 运行中选定的新节点会停止当前请求，未变化的节点允许继续。
+    /// A live request keeps its frozen window while the replacement request receives the new one.
+    /// 活动请求保留冻结窗口，替代请求取得新窗口。
+    #[test]
+    fn context_window_change_applies_only_to_the_next_safe_request_boundary() {
+        for retained in [
+            node("compression-window-4"),
+            ContextWindowSelection::Custom(235_000),
+        ] {
+            let next = next_context_compaction_window_node_at_safe_boundary(
+                Some(node("compression-window-1")),
+                Some(retained),
+            )
+            .expect("changed window should be admitted at the safe boundary");
+            assert_eq!(next, Some(retained));
+        }
+    }
+
+    /// A window chosen during the run stops the active request, while an unchanged one lets it continue.
+    /// 运行中选定的新窗口会停止当前请求，未变化的窗口允许继续。
     #[test]
     fn node_change_during_run_requests_policy_refresh() {
         let session_id = SessionId::from_u128(9_441);
-        let default_node = "compression-window-5"
-            .parse::<vulcan_context::ContextCompactionWindowNodeId>()
-            .expect("valid default node");
-        let locked_node = "compression-window-3"
-            .parse::<vulcan_context::ContextCompactionWindowNodeId>()
-            .expect("valid locked node");
+        let default_node = node("compression-window-5");
+        let locked_node = node("compression-window-3");
+        let custom = ContextWindowSelection::Custom(235_000);
 
-        assert!(
-            ensure_context_compaction_node_unchanged(
-                session_id,
-                Some(locked_node),
-                Some(locked_node)
-            )
-            .is_ok()
-        );
+        for unchanged in [locked_node, custom] {
+            assert!(
+                ensure_context_compaction_node_unchanged(
+                    session_id,
+                    Some(unchanged),
+                    Some(unchanged)
+                )
+                .is_ok()
+            );
+        }
         for (frozen, retained) in [
             (None, Some(locked_node)),
             (Some(default_node), Some(locked_node)),
             (Some(locked_node), None),
+            (Some(locked_node), Some(custom)),
+            (Some(custom), Some(ContextWindowSelection::Custom(236_000))),
         ] {
             assert!(matches!(
                 ensure_context_compaction_node_unchanged(session_id, frozen, retained),
@@ -235,18 +238,14 @@ mod tests {
         }
     }
 
-    /// Reaching the boundary without a node change is rejected explicitly.
-    /// 未发生节点变化却到达刷新边界时会被显式拒绝。
+    /// Reaching the boundary without a window change is rejected explicitly.
+    /// 未发生窗口变化却到达刷新边界时会被显式拒绝。
     #[test]
     fn unchanged_context_window_does_not_restart_the_request() {
-        let node_id = Some(
-            "compression-window-4"
-                .parse::<vulcan_context::ContextCompactionWindowNodeId>()
-                .expect("valid context-window node"),
-        );
+        let selection = Some(node("compression-window-4"));
 
-        let error = next_context_compaction_window_node_at_safe_boundary(node_id, node_id)
-            .expect_err("unchanged node must not restart the request");
+        let error = next_context_compaction_window_node_at_safe_boundary(selection, selection)
+            .expect_err("unchanged window must not restart the request");
 
         assert!(error.contains("without a node change"));
     }

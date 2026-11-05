@@ -6,6 +6,7 @@ import type {
 import type { ServiceClient } from "@/service/client";
 import type { AnswerModePreference } from "@/service/answer-mode";
 import type { PermissionMode, UnattendedConfig } from "@/service/permission-mode";
+import type { ContextWindowSelection } from "@/types/public-ai";
 import type {
   ConversationEventPatchDurability,
   ConversationEventLivePatch,
@@ -67,7 +68,7 @@ export interface ConversationSessionConfigV1 {
   unattended?: UnattendedConfig;
   current_request: ConversationRequestConfigV1;
   next_request: ConversationRequestConfigV1 | null;
-  context_compaction_window_node_id: string | null;
+  context_window_selection: ContextWindowSelection | null;
   /** Dedicated-session profile from Core metadata; null for regular sessions.
    * 来自 Core 元数据的专职会话配置；普通会话为 null。 */
   dedicated: DedicatedSessionProfileV1 | null;

@@ -17,7 +17,7 @@ import type {
 } from "./planning-questions";
 import type { CommandSessionSummary, ContextInjectionSnapshot, ContextUsageSnapshot } from "./runtime-context";
 import type { ProjectSummary } from "./projects-files";
-import type { ContextCompactionWindowNodeId } from "./public-ai";
+import type { ContextWindowSelection } from "./public-ai";
 import type { AnswerCodeSnapshot, ConversationEventBody, ConversationEventSummary } from "@/service/conversation-event-window-store";
 
 // ConversationAgentInteraction retains exact collaboration, authenticated question input or child-result facts for display only.
@@ -398,9 +398,9 @@ export interface SessionAddonsChangedDelta {
   // Current output-style override and the last safely applied snapshot.
   // 当前会话输出风格覆盖与最近一次安全应用的快照。
   sessionOutputStyle?: SessionOutputStyleSummary | null;
-  // Stable context-compaction window node selected by this session.
-  // 当前会话选择的稳定上下文压缩窗口节点。
-  sessionContextCompactionWindowNodeId?: ContextCompactionWindowNodeId | null;
+  // Context window (node or custom value) selected by this session; null follows the model.
+  // 当前会话选择的上下文窗口（节点或自定义值）；null 表示跟随模型。
+  sessionContextWindowSelection?: ContextWindowSelection | null;
   // Live physical Provider request counts and token usage.
   // 实时物理 Provider 请求计数与 Token 用量。
   sessionProviderUsage?: SessionProviderUsageSummary | null;

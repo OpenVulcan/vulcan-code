@@ -239,7 +239,7 @@ fn build_child_base_request(
         turn_start_mode: Some(ExecutionTurnStartMode::RestoredCheckpoint),
         conversation_state,
         context_compaction_policy: None,
-        context_compaction_window_node_id: None,
+        context_window_selection: None,
         context_budget_override: None,
         context_window_prefill_input_tokens: None,
         execution_mode: String::new(),

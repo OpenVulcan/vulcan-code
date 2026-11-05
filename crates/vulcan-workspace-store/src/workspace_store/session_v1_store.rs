@@ -279,7 +279,7 @@ impl SessionV1StorageLocator {
         (
             vulcan_session_core::v1::config::ActiveRequestConfig,
             Option<vulcan_session_core::v1::config::PendingRequestConfig>,
-            Option<vulcan_context::ContextCompactionWindowNodeId>,
+            Option<vulcan_context::ContextWindowSelection>,
         ),
         SessionV1StoreError,
     > {
@@ -289,7 +289,7 @@ impl SessionV1StorageLocator {
         Ok((
             metadata.config.active_request,
             metadata.config.pending_request,
-            metadata.config.context_compaction_window_node_id,
+            metadata.config.context_window_selection,
         ))
     }
 
@@ -1850,8 +1850,10 @@ mod tests {
             thinking_level: Some("max".into()),
             ..Default::default()
         };
-        metadata.config.context_compaction_window_node_id =
-            Some(vulcan_context::ContextCompactionWindowNodeId::CompressionWindow4);
+        metadata.config.context_window_selection =
+            Some(vulcan_context::ContextWindowSelection::Node(
+                vulcan_context::ContextCompactionWindowNodeId::CompressionWindow4,
+            ));
         metadata.config.pending_request = Some(PendingRequestConfig {
             provider: Some("other-provider".into()),
             connection_id: Some("other-account".into()),
@@ -1882,7 +1884,7 @@ mod tests {
             (
                 metadata.config.active_request.clone(),
                 metadata.config.pending_request.clone(),
-                metadata.config.context_compaction_window_node_id,
+                metadata.config.context_window_selection,
             )
         );
         assert_eq!(

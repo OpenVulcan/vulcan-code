@@ -259,6 +259,26 @@ pub fn save_public_ai_new_session_context_window_default(node_id: Option<&str>) 
     )
 }
 
+/// Builds the request for `service_save_public_ai_model_context_window_default`.
+/// 构建 `service_save_public_ai_model_context_window_default` 的请求。
+/// `default` is `{ "selection": … }` for an explicit default (null selection follows the model),
+/// or None so the model inherits the system new-session default.
+/// `default` 为显式默认值 `{ "selection": … }`（selection 为空表示跟随模型）；为 None 时模型继承系统新会话默认值。
+/// Returns an unexecuted ServiceCall; the backend owns transport and state refresh.
+/// 返回尚未执行的 ServiceCall；传输与状态刷新由后端负责。
+pub fn save_public_ai_model_context_window_default(
+    provider_id: &str,
+    model_id: &str,
+    default: Option<Value>,
+) -> ServiceCall {
+    ServiceCall::mutate(
+        "save_public_ai_model_context_window_default",
+        "service_save_public_ai_model_context_window_default",
+        json!({ "request": { "providerId": provider_id, "modelId": model_id, "default": default } }),
+        PUBLIC_AI,
+    )
+}
+
 /// Builds the request for `service_save_public_ai_model_enabled`.
 /// 构建 `service_save_public_ai_model_enabled` 的请求。
 /// `provider_id` is the provider ID from the public AI catalog.

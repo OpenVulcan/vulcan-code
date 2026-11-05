@@ -14,6 +14,24 @@ fn model_switch_rejects_context_above_target_real_limit() {
     assert!(!model_switch_exceeds_target_context_limit(249_999, 250_000));
 }
 
+/// Verifies a model switch keeps fitting windows and releases ones the target cannot hold.
+/// 验证模型切换保留能放下的窗口，并释放目标模型放不下的窗口。
+#[test]
+fn model_switch_releases_only_windows_that_do_not_fit_the_target() {
+    use vulcan_ai_contract::{ContextCompactionWindowNodeId, ContextWindowSelection};
+    let nodes = vulcan_provider_adapters::ContextCompactionWindowConfiguration::default();
+    let custom = Some(ContextWindowSelection::Custom(300_000));
+    assert!(!model_switch_releases_window_selection(&nodes, None, Some(128_000)).unwrap());
+    assert!(!model_switch_releases_window_selection(&nodes, custom, Some(300_000)).unwrap());
+    assert!(model_switch_releases_window_selection(&nodes, custom, Some(299_999)).unwrap());
+    assert!(model_switch_releases_window_selection(&nodes, custom, None).unwrap());
+    let first_node = ContextCompactionWindowNodeId::ALL[0];
+    let first_tokens = nodes.tokens_for(first_node).unwrap();
+    let node = Some(ContextWindowSelection::Node(first_node));
+    assert!(!model_switch_releases_window_selection(&nodes, node, Some(first_tokens)).unwrap());
+    assert!(model_switch_releases_window_selection(&nodes, node, Some(first_tokens - 1)).unwrap());
+}
+
 /// Verifies an invalid global account rebinds to the same model on its preferred account.
 /// 验证失效的全局账号会重新绑定到首选账号上的同一模型。
 #[test]

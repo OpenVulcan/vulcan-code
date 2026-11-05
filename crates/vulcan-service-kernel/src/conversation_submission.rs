@@ -9,7 +9,6 @@ use vulcan_agent_runtime::attachment_asset_index::promote_staged_attachment_to_m
 use vulcan_agent_runtime::workbench_prompt_turn::{
     SharedPromptPrecheckPlan, SharedPromptTurnBeginInput, begin_shared_prompt_turn,
 };
-use vulcan_context::ContextCompactionWindowNodeId;
 use vulcan_service_api::{
     ComposerAttachmentSummary, ServiceEvent, ServiceEventEmitter, SubmitConversationPromptAck,
     UpdateConversationRunPhaseDelta, WorkbenchDelta, WorkbenchDeltaEnvelope,
@@ -2341,7 +2340,7 @@ async fn materialize_submission_session_v1(
     existing_authority: Option<&ExistingSubmissionV1Authority>,
     turn_admission: &SubmissionTurnAdmission,
     bound_request_config: Option<&ActiveRequestConfig>,
-    new_session_context_window_node_id: Option<ContextCompactionWindowNodeId>,
+    new_session_context_window_node_id: Option<vulcan_context::ContextWindowSelection>,
     dedicated: Option<crate::session_v1_lifecycle::DedicatedSessionCreation>,
     now_ms: i64,
 ) -> Result<Option<vulcan_session_core::v1::document::ContinueTurnReceipt>, String> {
@@ -3071,14 +3070,15 @@ async fn service_start_conversation_execution(
             } else {
                 crate::public_ai_workbench_selection(&configuration, runtime, None, None)?
             };
-            (
-                configuration.new_session_context_compaction_window_node_for_model(
-                    selected_model
-                        .as_ref()
-                        .and_then(|selected| selected.model.capabilities.context_limit),
+            let window = match selected_model.as_ref() {
+                Some(selected) => configuration.new_session_context_window_for_model(
+                    selected.route.connection.provider_id.as_str(),
+                    selected.model.id.as_str(),
+                    selected.model.capabilities.context_limit,
                 )?,
-                selected_model,
-            )
+                None => None,
+            };
+            (window, selected_model)
         } else {
             (None, None)
         };
@@ -3157,7 +3157,7 @@ async fn service_start_conversation_execution(
                 .session_runtime_state
                 .get_mut(&materialized_session.session_id)
                 .ok_or_else(|| String::from("New conversation has no runtime state."))?;
-            runtime_state.context_compaction_window_node_id = new_session_context_window_node_id;
+            runtime_state.context_window_selection = new_session_context_window_node_id;
         }
         if submission_mode.is_continuation() {
             validate_recovery_submission_model_selection(

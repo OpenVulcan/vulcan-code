@@ -3456,8 +3456,10 @@ fn context_compaction_node_does_not_control_physical_rollover() {
     let (root, layout) = fresh_layout("compaction-window");
     let mut document = filled_document(&layout.session_id, 0);
     document.metadata = publish_initial(&layout, &document);
-    document.set_context_compaction_window_node_id(
-        Some(vulcan_ai_contract::ContextCompactionWindowNodeId::CompressionWindow2),
+    document.set_context_window_selection(
+        Some(vulcan_ai_contract::ContextWindowSelection::Node(
+            vulcan_ai_contract::ContextCompactionWindowNodeId::CompressionWindow2,
+        )),
         2,
     );
     // Extend the tail, then use an explicit large physical limit. The context
@@ -3513,8 +3515,10 @@ fn context_compaction_window_node_persists_across_reload() {
     let (root, layout) = fresh_layout("window-persist");
     let mut document = filled_document(&layout.session_id, 0);
     document.metadata = publish_initial(&layout, &document);
-    document.set_context_compaction_window_node_id(
-        Some(vulcan_ai_contract::ContextCompactionWindowNodeId::CompressionWindow4),
+    document.set_context_window_selection(
+        Some(vulcan_ai_contract::ContextWindowSelection::Node(
+            vulcan_ai_contract::ContextCompactionWindowNodeId::CompressionWindow4,
+        )),
         1,
     );
     let dirty = BTreeSet::from([DirtyFile::Metadata]);
@@ -3530,12 +3534,10 @@ fn context_compaction_window_node_persists_across_reload() {
     flush_session(&layout, &request).unwrap();
     let loaded = load_session(&layout).unwrap();
     assert_eq!(
-        loaded
-            .document
-            .metadata
-            .config
-            .context_compaction_window_node_id,
-        Some(vulcan_ai_contract::ContextCompactionWindowNodeId::CompressionWindow4)
+        loaded.document.metadata.config.context_window_selection,
+        Some(vulcan_ai_contract::ContextWindowSelection::Node(
+            vulcan_ai_contract::ContextCompactionWindowNodeId::CompressionWindow4
+        ))
     );
     drop(root);
 }

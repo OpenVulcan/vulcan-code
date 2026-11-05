@@ -824,7 +824,7 @@ fn spawn_agent_stream_task_with_restart_state(
             request.clone(),
             Some(context_compaction_node_change_intervention(
                 task_state.clone(),
-                request.context_compaction_window_node_id,
+                request.context_window_selection,
             )),
         ));
 

@@ -47,7 +47,7 @@ function composerProps(overrides: Partial<React.ComponentProps<typeof ComposerPa
     slashCommands: [], pendingPrompts: [], sessionGoal: null, sessionTodolist: null, sessionReviewSummary: null,
     sessionPlanMode: null, sessionVmmPolicy: null, sessionOutputStyle: null,
     outputStyleCatalog: { defaultId: "default", selectedId: "default", entries: [] },
-    contextCompactionWindowNodes: [], sessionContextCompactionWindowNodeId: null,
+    contextCompactionWindowNodes: [], sessionContextWindowSelection: null, customContextWindowMinTokens: 100_000,
     vmmAvailable: false, isConversationRunning: true, thinkingDisplayMode: DEFAULT_THINKING_DISPLAY_MODE,
     providers: [], reasoningSelection: null,
     onSelectWorkbenchModel: vi.fn().mockResolvedValue(true),

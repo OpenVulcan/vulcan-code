@@ -4,7 +4,7 @@
 use serde::Deserialize;
 use std::collections::BTreeSet;
 use vulcan_context::{ContextCompactionWindowNodeId, ContextWindowPolicyOverrides};
-use vulcan_provider_adapters::ContextCompactionWindowConfiguration;
+use vulcan_provider_adapters::{ContextCompactionWindowConfiguration, ModelContextWindowDefault};
 use vulcan_service_api::ServiceEventEmitter;
 use vulcan_service_api::StartupModelReconciliationNotice;
 
@@ -13,6 +13,7 @@ use super::publication::{
     mutate_public_ai_configuration_and_publish_using_in_transaction,
     publish_public_ai_workbench_after_context_compaction_window_nodes_change,
 };
+use super::snapshot::enabled_conversation_model_windows;
 use super::{
     PublicAiSettingsSnapshot, build_public_ai_settings_snapshot,
     public_ai_runtime_and_configuration,
@@ -70,6 +71,22 @@ pub(crate) struct PublicAiNewSessionContextWindowDefaultSaveRequest {
     /// A fixed node identity, or None to follow the selected model's window.
     /// 固定节点身份，或空值表示遵循所选模型窗口。
     node_id: Option<ContextCompactionWindowNodeId>,
+}
+
+/// Saves or clears one model's new-session window default.
+/// 保存或清除一个模型的新会话窗口默认值。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct PublicAiModelContextWindowDefaultSaveRequest {
+    /// Provider that owns the model.
+    /// 拥有该模型的供应商。
+    provider_id: String,
+    /// Exact model identifier.
+    /// 精确模型标识。
+    model_id: String,
+    /// The model's default, or None so the model inherits the system new-session default.
+    /// 模型默认值；为空时模型继承系统新会话默认值。
+    default: Option<ModelContextWindowDefault>,
 }
 
 /// Acknowledges signed model takeovers after their startup notice is closed.
@@ -298,6 +315,75 @@ pub(crate) async fn service_save_public_ai_new_session_context_window_default(
     )?;
     drop(transaction);
     Ok(snapshot)
+}
+
+/// Persists one model's new-session window default after checking it against the model's window.
+/// 按模型窗口校验后持久化一个模型的新会话窗口默认值。
+///
+/// Only an enabled conversation model can receive a default; existing sessions never change.
+/// 只有已启用的会话模型才能设置默认值；已有会话不受影响。
+pub(crate) async fn service_save_public_ai_model_context_window_default(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: PublicAiModelContextWindowDefaultSaveRequest,
+) -> Result<PublicAiSettingsSnapshot, String> {
+    let transaction = begin_public_ai_configuration_transaction().await;
+    let (runtime, current_configuration) = public_ai_runtime_and_configuration(&state)?;
+    // Removing a default needs no model lookup, so a stale entry of a disabled model can still be cleared.
+    // 删除默认值无需查找模型，因此已停用模型的陈旧条目仍可清除。
+    let model_context_limit = if request.default.is_some() {
+        enabled_model_context_limit(
+            runtime.as_ref(),
+            &current_configuration,
+            request.provider_id.as_str(),
+            request.model_id.as_str(),
+        )?
+    } else {
+        None
+    };
+    let (_configuration, snapshot) = mutate_public_ai_configuration_and_publish_in_transaction(
+        &app,
+        &state,
+        runtime.as_ref(),
+        &current_configuration,
+        "Failed to save the model context window default",
+        |configuration| {
+            configuration.set_model_context_window_default(
+                request.provider_id.as_str(),
+                request.model_id.as_str(),
+                model_context_limit,
+                request.default,
+            )
+        },
+        |configuration| build_public_ai_settings_snapshot(runtime.as_ref(), configuration),
+    )?;
+    drop(transaction);
+    Ok(snapshot)
+}
+
+/// Returns the declared context window of one enabled conversation model.
+/// 返回一个已启用会话模型声明的上下文窗口。
+///
+/// # Returns
+/// 返回值
+/// `None` when no enabled account declares a window; an error when no enabled account offers the model.
+/// 没有已启用账号声明窗口时返回 `None`；没有已启用账号提供该模型时返回错误。
+fn enabled_model_context_limit(
+    runtime: &vulcan_provider_adapters::PublicAiRuntime,
+    configuration: &vulcan_provider_adapters::PersistedAiConfiguration,
+    provider_id: &str,
+    model_id: &str,
+) -> Result<Option<u64>, String> {
+    let catalogs = runtime.catalog_snapshot()?;
+    enabled_conversation_model_windows(runtime, configuration, &catalogs)?
+        .into_iter()
+        .find(|candidate| candidate.provider_id == provider_id && candidate.model_id == model_id)
+        .map(|candidate| candidate.context_limit)
+        .ok_or_else(|| {
+            format!(
+                "Provider `{provider_id}` model `{model_id}` is not an enabled conversation model."
+            )
+        })
 }
 
 /// Clears only displayed takeover notices after persisting the acknowledgement.

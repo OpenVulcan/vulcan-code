@@ -1261,15 +1261,17 @@ fn idempotent_durable_mutation_does_not_fabricate_revision_or_flush() {
 #[test]
 fn context_compaction_window_change_is_durable_and_idempotent() {
     let (recording, handle) = recording_handle();
-    let node_id = "compression-window-4"
-        .parse::<vulcan_context::ContextCompactionWindowNodeId>()
-        .expect("valid context-window node");
+    let node_id = vulcan_context::ContextWindowSelection::Node(
+        "compression-window-4"
+            .parse::<vulcan_context::ContextCompactionWindowNodeId>()
+            .expect("valid context-window node"),
+    );
     let first = handle
         .mutate_durable_if_changed(
             SessionMutationAdmission::MetadataOnly,
             SessionFlushReason::MetadataChanged,
             move |document| {
-                let changed = document.set_context_compaction_window_node_id(Some(node_id), 2);
+                let changed = document.set_context_window_selection(Some(node_id), 2);
                 Ok(if changed {
                     SessionMutationChange::Changed(())
                 } else {
@@ -1287,7 +1289,7 @@ fn context_compaction_window_change_is_durable_and_idempotent() {
             SessionMutationAdmission::MetadataOnly,
             SessionFlushReason::MetadataChanged,
             move |document| {
-                let changed = document.set_context_compaction_window_node_id(Some(node_id), 3);
+                let changed = document.set_context_window_selection(Some(node_id), 3);
                 Ok(if changed {
                     SessionMutationChange::Changed(())
                 } else {
@@ -1302,7 +1304,7 @@ fn context_compaction_window_change_is_durable_and_idempotent() {
     assert_eq!(recording.flush_count(), 1);
     assert_eq!(
         handle
-            .read(|document| document.metadata.config.context_compaction_window_node_id)
+            .read(|document| document.metadata.config.context_window_selection)
             .expect("read context-window node"),
         Some(node_id)
     );

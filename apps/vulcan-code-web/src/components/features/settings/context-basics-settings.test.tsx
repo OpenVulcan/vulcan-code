@@ -21,6 +21,7 @@ const service = vi.hoisted(() => {
       { id: "compression-window-5", tokens: 50000 },
     ] },
     newSessionContextCompactionWindowNodeId: null,
+    modelContextWindowDefaults: [], modelContextWindowCandidates: [], customContextWindowMinTokens: 100_000,
     usageRefreshIntervalSeconds: 300,
   }
   return { snapshot, load: vi.fn(async () => snapshot), savePolicy: vi.fn(async (policy: unknown) => ({ ...snapshot, contextWindowPolicyOverrides: policy })) }
@@ -31,6 +32,7 @@ vi.mock("@/service/settings-actions-service", () => ({
   savePublicAiContextWindowPolicyOverrides: service.savePolicy,
   savePublicAiContextCompactionWindowNodes: vi.fn(),
   savePublicAiNewSessionContextWindowDefault: vi.fn(),
+  savePublicAiModelContextWindowDefault: vi.fn(),
   savePublicAiUsageRefreshSettings: vi.fn(),
 }))
 vi.mock("./provider-retry-settings", () => ({ ProviderRetrySettingsArea: () => <span>retry editor</span> }))

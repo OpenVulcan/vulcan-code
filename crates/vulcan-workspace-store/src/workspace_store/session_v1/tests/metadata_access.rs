@@ -146,6 +146,43 @@ fn metadata_access_upgrade_preserves_child_maintenance_identity() {
     assert_eq!(std::fs::read(backup_path(&layout, 10)).unwrap(), original);
 }
 
+/// The v13 window node id string becomes the v14 tagged selection; a malformed one is corrupt.
+/// v13 窗口节点标识字符串转为 v14 带标签选择；格式错误的值视为损坏。
+#[test]
+fn metadata_access_upgrade_moves_window_node_into_selection() {
+    let (_root, layout, metadata) = fixture();
+    let mut raw = serde_json::to_value(&metadata).unwrap();
+    raw["schema_version"] = 13.into();
+    raw["config"]["context_compaction_window_node_id"] = "compression-window-4".into();
+    let original = serde_json::to_vec(&raw).unwrap();
+    std::fs::write(layout.metadata_path(), &original).unwrap();
+
+    let upgraded = read_metadata(&layout.metadata_path()).unwrap();
+    assert_eq!(
+        upgraded.config.context_window_selection,
+        Some(vulcan_ai_contract::ContextWindowSelection::Node(
+            vulcan_ai_contract::ContextCompactionWindowNodeId::CompressionWindow4
+        ))
+    );
+    assert_eq!(std::fs::read(backup_path(&layout, 13)).unwrap(), original);
+    let written: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(layout.metadata_path()).unwrap()).unwrap();
+    assert!(
+        written["config"]
+            .get("context_compaction_window_node_id")
+            .is_none()
+    );
+
+    let (_root, layout, metadata) = fixture();
+    let mut raw = serde_json::to_value(&metadata).unwrap();
+    raw["schema_version"] = 13.into();
+    raw["config"]["context_compaction_window_node_id"] = "compression-window-9".into();
+    let original = serde_json::to_vec(&raw).unwrap();
+    std::fs::write(layout.metadata_path(), &original).unwrap();
+    assert!(read_metadata(&layout.metadata_path()).is_err());
+    assert_eq!(std::fs::read(layout.metadata_path()).unwrap(), original);
+}
+
 /// A different existing backup stops the upgrade; an identical one is reused.
 /// 已存在的不同备份会中止升级；相同备份则复用。
 #[test]

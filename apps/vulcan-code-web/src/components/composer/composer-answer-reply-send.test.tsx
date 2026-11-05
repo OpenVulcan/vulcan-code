@@ -55,7 +55,7 @@ it("sends an answer reply through the normal send path, appended to the existing
     defaultAnswerMode: "standard", slashCommands: [], pendingPrompts: [], sessionGoal: null, sessionTodolist: null,
     sessionReviewSummary: null, sessionPlanMode: null, sessionVmmPolicy: null, sessionOutputStyle: null,
     outputStyleCatalog: { defaultId: "default", selectedId: "default", entries: [] },
-    contextCompactionWindowNodes: [], sessionContextCompactionWindowNodeId: null,
+    contextCompactionWindowNodes: [], sessionContextWindowSelection: null, customContextWindowMinTokens: 100_000,
     vmmAvailable: false, isConversationRunning: false, thinkingDisplayMode: DEFAULT_THINKING_DISPLAY_MODE,
     providers: [], reasoningSelection: null,
     onSelectWorkbenchModel: vi.fn().mockResolvedValue(true),

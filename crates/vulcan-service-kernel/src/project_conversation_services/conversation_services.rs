@@ -738,16 +738,14 @@ fn select_conversation_in_retained_state(
     if let Some(runtime) = selected_runtime_state {
         // An explicit None clears the node; an absent runtime supplies no new projection authority.
         // 显式 None 清除节点；缺失运行态则不提供新的投影权威。
-        let node_id = runtime
-            .context_compaction_window_node_id
-            .map(|node| node.as_str().to_string());
+        let node_id = runtime.context_window_selection;
         if let Some(addons) = guard
             .workbench
             .session_addons_by_conversation
             .iter_mut()
             .find(|entry| entry.conversation_id == conversation_id)
         {
-            addons.session_context_compaction_window_node_id = node_id;
+            addons.session_context_window_selection = node_id;
         } else if let Some(addons) = session_addons_changed_delta_for_retained_list(
             conversation_id.to_string(),
             None,
@@ -802,8 +800,8 @@ pub(crate) fn sync_selected_conversation_fields_for_retained_workbench(
     workbench.session_goal = selected_addons.and_then(|entry| entry.session_goal.clone());
     workbench.session_todolist = selected_addons.and_then(|entry| entry.session_todolist.clone());
     workbench.session_plan_mode = selected_addons.and_then(|entry| entry.session_plan_mode.clone());
-    workbench.session_context_compaction_window_node_id =
-        selected_addons.and_then(|entry| entry.session_context_compaction_window_node_id.clone());
+    workbench.session_context_window_selection =
+        selected_addons.and_then(|entry| entry.session_context_window_selection);
     workbench.session_vmm_policy = workbench
         .session_vmm_policies_by_conversation
         .iter()

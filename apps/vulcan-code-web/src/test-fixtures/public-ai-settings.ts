@@ -50,7 +50,7 @@ export function publicAiSettingsWithInvalidDefaultFixture(): PublicAiSettingsSna
   // value 携带全部必需字段，避免在生产页面输入中使用不安全的局部类型断言。
   const value: PublicAiSettingsSnapshot = {
     usageRefreshIntervalSeconds: 300, mediaDelivery: mediaDeliverySettingsFixture(), contextWindowPolicyOverrides: {}, contextWindowPolicyDefaults: { effective_context_window_percent: 95, auto_compact_percent: 90, auto_compact_token_limit: null, auto_compact_scope: "total", fallback_buffer_tokens: 0 },
-    manualModelDefaults: { contextLimit: 200000, outputLimit: 32768 }, newSessionContextCompactionWindowNodeId: null,
+    manualModelDefaults: { contextLimit: 200000, outputLimit: 32768 }, newSessionContextCompactionWindowNodeId: null, modelContextWindowDefaults: [], modelContextWindowCandidates: [], customContextWindowMinTokens: 100000,
     contextCompactionWindowNodes: { nodes: [
       { id: "compression-window-1", tokens: 200000 }, { id: "compression-window-2", tokens: 256000 },
       { id: "compression-window-3", tokens: 272000 }, { id: "compression-window-4", tokens: 373000 }, { id: "compression-window-5", tokens: 500000 },

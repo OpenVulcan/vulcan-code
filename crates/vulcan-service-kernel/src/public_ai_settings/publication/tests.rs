@@ -22,7 +22,9 @@ fn changed_node_values_invalidate_locked_session_budgets_only() {
     // lockedState carries both budget and assembly fingerprints to prove only budget identity changes.
     // lockedState 同时携带预算与组装指纹，用于证明只有预算身份发生变化。
     let locked_state = SessionRuntimeStateEntry {
-        context_compaction_window_node_id: Some(ContextCompactionWindowNodeId::CompressionWindow2),
+        context_window_selection: Some(vulcan_context::ContextWindowSelection::Node(
+            ContextCompactionWindowNodeId::CompressionWindow2,
+        )),
         live_context_budget_fingerprint: Some(String::from("live-budget")),
         live_context_assembly_fingerprint: Some(String::from("live-assembly")),
         anchor_context_budget_fingerprint: Some(String::from("anchor-budget")),

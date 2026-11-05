@@ -112,7 +112,7 @@ function snapshotFixture(): PublicAiSettingsSnapshot {
         { id: "compression-window-5", tokens: 500_000 },
       ],
     },
-    newSessionContextCompactionWindowNodeId: null,
+    newSessionContextCompactionWindowNodeId: null, modelContextWindowDefaults: [], modelContextWindowCandidates: [], customContextWindowMinTokens: 100000,
     providerPriorities: {},
     usageCache: {},
     providers: [],

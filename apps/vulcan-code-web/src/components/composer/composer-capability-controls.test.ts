@@ -13,7 +13,6 @@ import type {
 import {
   availableContextCompactionWindowNodes,
   composerCapabilityIsEnabled,
-  formatContextWindowNodeTokens,
   orderProviderToolCapabilities,
   orderedProviderToolCapabilities,
   providerToolCapabilitySwitchDisabled,
@@ -49,7 +48,7 @@ function settingsFixture(): PublicAiSettingsSnapshot {
         { id: "compression-window-5", tokens: 500_000 },
       ],
     },
-    newSessionContextCompactionWindowNodeId: null,
+    newSessionContextCompactionWindowNodeId: null, modelContextWindowDefaults: [], modelContextWindowCandidates: [], customContextWindowMinTokens: 100000,
     providerPriorities: {},
     usageCache: {},
     connections: [],
@@ -581,7 +580,7 @@ describe("orderProviderToolCapabilities", () => {
 });
 
 describe("availableContextCompactionWindowNodes", () => {
-  it("shows only nodes strictly below the current model hard window", () => {
+  it("offers nodes below the model window and keeps an equal node only while selected", () => {
     // nodes is the complete fixed-node catalog used by the boundary assertions.
     // nodes 是边界断言使用的完整固定节点目录。
     const nodes = contextCompactionWindowNodesFixture();
@@ -590,15 +589,10 @@ describe("availableContextCompactionWindowNodes", () => {
       .toEqual([200_000, 256_000, 272_000, 373_000]);
     expect(availableContextCompactionWindowNodes(nodes, 500_000).map((node) => node.tokens))
       .toEqual([200_000, 256_000, 272_000, 373_000]);
-    expect(availableContextCompactionWindowNodes(nodes, 500_001).map((node) => node.tokens))
+    const equalNode = nodes.find((node) => node.tokens === 500_000)!;
+    expect(availableContextCompactionWindowNodes(nodes, 500_000, { node: equalNode.id }).map((node) => node.tokens))
       .toEqual([200_000, 256_000, 272_000, 373_000, 500_000]);
-  });
-});
-
-describe("formatContextWindowNodeTokens", () => {
-  it("formats original model windows as integer K or M labels", () => {
-    expect(formatContextWindowNodeTokens(400_000)).toBe("400K");
-    expect(formatContextWindowNodeTokens(1_000_000)).toBe("1M");
-    expect(formatContextWindowNodeTokens(1_500_000)).toBe("1500K");
+    expect(availableContextCompactionWindowNodes(nodes, 499_999).map((node) => node.tokens))
+      .toEqual([200_000, 256_000, 272_000, 373_000]);
   });
 });

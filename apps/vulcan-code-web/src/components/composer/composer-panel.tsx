@@ -25,7 +25,7 @@ import type {
   ComposerAttachmentCapabilitySummary,
   ComposerAttachmentSummary,
   ComposerSlashCommandSummary,
-  ContextCompactionWindowNodeId,
+  ContextWindowSelection,
   ContextUsageSnapshot,
   SessionProviderUsageSummary,
   PendingPromptSummary,
@@ -52,7 +52,7 @@ import { ComposerAnswerReplySlot } from "@/components/composer/composer-panel/an
 import { usePendingPromptQueueGuards } from "@/components/composer/composer-panel/use-pending-prompt-queue-guards";
 import { ComposerPanelAttachmentPreviewStrip } from "@/components/composer/composer-panel/attachment-preview-strip";
 import { ComposerGoalDialog } from "@/components/composer/composer-panel/goal-dialog";
-import { ComposerPanelToolbarRight } from "@/components/composer/composer-panel/toolbar-right";
+import { ComposerPanelToolbarRight, pickContextWindowProps } from "@/components/composer/composer-panel/toolbar-right";
 import { useComposerVoiceInput } from "@/components/composer/composer-panel/use-composer-voice-input";
 import { usePendingPromptRecovery } from "@/components/composer/composer-panel/use-pending-prompt-recovery";
 import { useComposerGoalController } from "@/components/composer/composer-panel/use-composer-goal-controller";
@@ -145,7 +145,10 @@ export function ComposerPanel(props: {
   contextCompactionWindowNodes: PublicAiContextCompactionWindowNode[];
   // Stable context-compaction node selected by the current session.
   // 当前会话选择的稳定上下文压缩节点。
-  sessionContextCompactionWindowNodeId: ContextCompactionWindowNodeId | null;
+  sessionContextWindowSelection: ContextWindowSelection | null;
+  // Smallest custom window the backend accepts; null hides custom entry.
+  // 后端接受的最小自定义窗口；为空时隐藏自定义输入。
+  customContextWindowMinTokens: number | null;
   // Whether the effective project configuration makes VMM available to this composer.
   // 当前项目最终生效配置是否允许输入区使用 VMM。
   vmmAvailable: boolean;
@@ -214,7 +217,7 @@ export function ComposerPanel(props: {
   onSetSessionOutputStyle: (styleId: string | null) => Promise<boolean>;
   // Persists or clears the selected session context-compaction window node.
   // 持久化或清除当前会话的上下文压缩窗口节点。
-  onSetSessionContextCompactionWindow: (nodeId: ContextCompactionWindowNodeId | null) => Promise<boolean>;
+  onSetSessionContextCompactionWindow: (selection: ContextWindowSelection | null) => Promise<boolean>;
   // Stops the selected backend conversation stream.
   // 停止当前选中的后端会话流。
   onStopConversationRun: () => Promise<boolean>;
@@ -936,15 +939,13 @@ export function ComposerPanel(props: {
             contextUsage={props.contextUsage}
             draftSlotKey={draftSlotKey}
             sessionProviderUsage={props.sessionProviderUsage}
-            contextCompactionWindowNodes={props.contextCompactionWindowNodes}
-            sessionContextCompactionWindowNodeId={props.sessionContextCompactionWindowNodeId}
+            {...pickContextWindowProps(props)}
             modelContextLimit={activeProviderModelSummary?.model.contextLimit ?? null}
             draftInput={draftInput}
             isConversationRunning={props.isConversationRunning}
             sendBlocked={isPendingPromptEditing || pendingAttachmentCount > 0 || providerToolSettingsBlocked || voice.busy || attachmentPreparation.blocksSubmission}
             voiceInputControl={voice.control}
             stopPending={isStopping}
-            onSetSessionContextCompactionWindow={props.onSetSessionContextCompactionWindow}
             onSend={() => void handleComposerSend()}
             modelControls={(
               <>

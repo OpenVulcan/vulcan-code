@@ -224,10 +224,14 @@ pub struct WorkbenchSnapshot {
     /// 按不可变从低到高顺序排列的固定系统上下文压缩窗口节点。
     #[serde(default)]
     pub context_compaction_window_nodes: Vec<ContextCompactionWindowNodeSummary>,
-    /// Stable context-compaction window node selected by the current session.
-    /// 当前会话选择的稳定上下文压缩窗口节点。
+    /// Smallest token count a custom session context window accepts.
+    /// 自定义会话上下文窗口接受的最小 Token 数。
+    #[serde(default = "custom_context_window_min_tokens")]
+    pub custom_context_window_min_tokens: u64,
+    /// Context window (node or custom value) selected by the current session; absence follows the model.
+    /// 当前会话选择的上下文窗口（节点或自定义值）；缺省即跟随模型。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_context_compaction_window_node_id: Option<String>,
+    pub session_context_window_selection: Option<vulcan_ai_contract::ContextWindowSelection>,
     /// Current selected-session physical Provider request counts and token usage.
     /// 当前选中会话的物理 Provider 请求计数与 Token 用量。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -265,4 +269,10 @@ pub struct WorkbenchSnapshot {
     /// 从最近一次执行准备投影出的上下文 Token 占用快照。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_usage: Option<ContextUsageSnapshot>,
+}
+
+/// Returns the single contract minimum for custom context windows.
+/// 返回自定义上下文窗口的唯一契约最小值。
+fn custom_context_window_min_tokens() -> u64 {
+    vulcan_ai_contract::CUSTOM_CONTEXT_WINDOW_MIN_TOKENS
 }

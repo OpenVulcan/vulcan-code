@@ -657,10 +657,10 @@ pub(crate) fn context_compaction_window_limit_from_configuration(
     runtime_state: Option<&SessionRuntimeStateEntry>,
     configuration: Option<&vulcan_provider_adapters::PersistedAiConfiguration>,
 ) -> Option<usize> {
-    let node_id = runtime_state?.context_compaction_window_node_id?;
+    let node_id = runtime_state?.context_window_selection?;
     let tokens = configuration?
         .context_compaction_window_nodes
-        .tokens_for(node_id)
+        .tokens_for_selection(node_id)
         .ok()?;
     usize::try_from(tokens).ok()
 }

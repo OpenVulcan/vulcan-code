@@ -9,9 +9,9 @@
 - 普通发布仍经 `write_json_document`；精确 `metadata.json` 写入与显式能力重建共用 `metadata.write.lock`。
 - 元数据版本与 `runtime.json`、`compactions.json` 的版本独立，不一起递增。
 - 冷启动及导航通过索引定位器的 `read_request_configuration` 从同一元数据修订读取活动路由、待生效路由与
-  `config.context_compaction_window_node_id`，同时投影运行态及按会话保留的界面控件，不加载交互历史或写回默认值。
+  `config.context_window_selection`，同时投影运行态及按会话保留的界面控件，不加载交互历史或写回默认值。
   提交时先保留易失执行状态，再以 V1 水合覆盖持久配置；普通输入及 Continue 的分派边界再次读取所有者配置。
-  重选相同节点只修复陈旧投影及派生预算，不追加元数据修订。本规则不改变持久格式，不递增版本。
+  重选相同窗口只修复陈旧投影及派生预算，不追加元数据修订。本规则不改变持久格式，不递增版本。
 
 ## 自动升级门槛（`AGENTS.md` 第一节第 12 条）
 
@@ -63,6 +63,12 @@
 13 在 `config.selection.provider_tools` 引入可选的 `tool_chain_enabled`（会话自有的 `tool_chain` 开关，缺省跟随
 系统设置）与 `tool_chain_changed_mid_session`（首次请求后切换过该开关，需追加 `dynamic.tool_chain` 变更消息），
 见[工具链](tool-chain.md)。缺省即 13 之前的行为，因此 12→13 只更新版本号；原字节保存为 `metadata.v12.backup.json`。
+
+14 将 `config.context_compaction_window_node_id`（固定节点标识或 `null`）替换为 `config.context_window_selection`：
+`{"node": "<节点标识>"}` 表示锁定一个固定节点，`{"custom": <Token 数>}` 表示锁定一个自定义窗口（下限为
+`CUSTOM_CONTEXT_WINDOW_MIN_TOKENS`，上限为模型窗口，规则见 `vulcan-ai-contract::context_window`），`null` 或缺省表示
+跟随模型。13→14 删除旧字段，字符串转换为 `{"node": …}`，`null` 或缺省不写新字段，其他类型及未知节点标识按损坏
+处理且不写入；原字节保存为 `metadata.v13.backup.json`。
 
 基线之前的会话无法加载，因此也无法走“先归档再删除”。唯一清理入口是 `service_delete_unsupported_conversation`：
 在会话生命周期守卫内先以 `session_v1_format_is_unsupported` 只读元数据确认其为 `UnsupportedDevelopmentFormat`，

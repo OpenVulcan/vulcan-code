@@ -54,7 +54,7 @@ fn test_parent_execution_request(session_id: SessionId) -> ExecutionPreparationR
         turn_start_mode: None,
         conversation_state: SessionConversationState::default(),
         context_compaction_policy: None,
-        context_compaction_window_node_id: None,
+        context_window_selection: None,
         context_budget_override: None,
         context_window_prefill_input_tokens: None,
         execution_mode: String::from("build"),

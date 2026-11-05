@@ -2,7 +2,7 @@ import React from "react";
 import type { DraftConversationSelection } from "@/components/workspace/workspace-resizable-body";
 import type {
   ConversationSummary,
-  ContextCompactionWindowNodeId,
+  ContextWindowSelection,
   PendingPromptSummary,
   SessionGoalUserStatusUpdate,
   WorkbenchSnapshot,
@@ -216,7 +216,7 @@ export function useWorkbenchSessionActions(options: WorkbenchSessionActionsOptio
   // handleSetSessionContextCompactionWindow persists one session-only compression-window lock.
   // handleSetSessionContextCompactionWindow 持久化一个仅限当前会话的压缩窗口锁定。
   const handleSetSessionContextCompactionWindow = React.useCallback(async (
-    nodeId: ContextCompactionWindowNodeId | null,
+    selection: ContextWindowSelection | null,
   ): Promise<boolean> => {
     const activeConversationId = selectedDraftConversation ? null : selectedConversation?.id ?? null;
     if (!activeConversationId) {
@@ -224,13 +224,13 @@ export function useWorkbenchSessionActions(options: WorkbenchSessionActionsOptio
       return false;
     }
     try {
-      const response = await setSessionContextCompactionWindow(activeConversationId, nodeId);
+      const response = await setSessionContextCompactionWindow(activeConversationId, selection);
       if (!response) {
         toast.info(t("composer.contextWindow.previewUnavailable"));
         return false;
       }
       setWorkbenchState((current) => applySessionAddonsChangedResponse(current, response));
-      toast.success(nodeId
+      toast.success(selection
         ? t("composer.contextWindow.locked")
         : t("composer.contextWindow.defaultRestored"));
       return true;

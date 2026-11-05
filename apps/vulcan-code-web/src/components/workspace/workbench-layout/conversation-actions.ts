@@ -15,6 +15,7 @@ import {
   openSubagentPanel,
   removePendingPrompt,
   reorderPendingPrompts,
+  setSessionContextCompactionWindow,
   continueConversation,
   editConversationGenerationV1,
   forkConversationGenerationV1,
@@ -34,7 +35,9 @@ import {
   saveToolCollapseDefault,
 } from "@/service/settings-actions-service";
 import { loadWorkbenchSnapshot } from "@/service/workbench-snapshot-service";
+import { modelContextWindowOffer, showModelContextWindowOffer } from "./model-context-window-offer";
 import {
+  applySessionAddonsChangedResponse,
   applySubagentPanelRouteResponse,
   reorderPendingPromptSummaries,
   type WorkbenchMergeOptions,
@@ -686,13 +689,34 @@ const handleSelectWorkbenchModel = React.useCallback(async (choice: ModelPickerC
     // conversationId scopes model persistence to an existing session; drafts update the global new-session default.
     // conversationId 将模型持久化限定到既有会话；草稿则更新新会话使用的全局默认值。
     const conversationId = selectedDraftConversation ? null : selectedConversationId;
-    const snapshot = await selectWorkbenchModel(choice, conversationId);
-    if (snapshot) {
-      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
+    const selected = await selectWorkbenchModel(choice, conversationId);
+    if (selected) {
+      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, selected.workbench));
       toast.success(formatConversationActionTranslation(translate, "conversationActions.modelSwitched", {
         model: choice.modelName,
         provider: choice.providerName,
       }));
+      // A session switching to a model with its own window default is asked whether to adopt it; drafts already
+      // receive the model default when the session is created.
+      // 会话切换到带有窗口默认值的模型时询问是否采用；草稿在创建会话时已自动获得模型默认值。
+      const offer = conversationId
+        ? modelContextWindowOffer(selected.settings, selected.workbench, choice.providerId, choice.modelId)
+        : null;
+      if (conversationId && offer) {
+        showModelContextWindowOffer({
+          offer,
+          modelName: choice.modelName,
+          nodes: selected.settings.contextCompactionWindowNodes.nodes,
+          translate,
+          onSwitch: (selection) => {
+            void setSessionContextCompactionWindow(conversationId, selection).then((response) => {
+              if (response) setWorkbenchState((current) => applySessionAddonsChangedResponse(current, response));
+            }).catch((reason: unknown) => {
+              toast.error(reason instanceof Error ? reason.message : String(reason));
+            });
+          },
+        });
+      }
     }
     return true;
   } catch (nextError) {

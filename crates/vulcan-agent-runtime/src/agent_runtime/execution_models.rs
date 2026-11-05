@@ -334,9 +334,9 @@ pub struct ExecutionPreparationRequest {
     /// Optional context-compaction policy resolved for this execution request.
     /// 为本次执行请求解析出的可选上下文压缩策略。
     pub context_compaction_policy: Option<ContextCompactionPolicy>,
-    /// Optional stable context-compaction window node selected by the owning session.
-    /// 所属会话选择的可选稳定上下文压缩窗口节点。
-    pub context_compaction_window_node_id: Option<vulcan_context::ContextCompactionWindowNodeId>,
+    /// Optional context window (node or custom value) selected by the owning session.
+    /// 所属会话选择的可选上下文窗口（节点或自定义值）。
+    pub context_window_selection: Option<vulcan_context::ContextWindowSelection>,
     /// Optional request-level input-token budget limit resolved for this execution request.
     /// 为本次执行请求解析出的可选输入 Token 预算上限。
     pub context_budget_override: Option<usize>,

@@ -189,7 +189,7 @@ function previewWindow(
       permission_mode: "workspace_write",
       current_request: { provider: PREVIEW_MODEL.provider, connection_id: null, model: PREVIEW_MODEL.model, thinking_level: PREVIEW_MODEL.thinking_level, temperature: null, set_at_ms: null },
       next_request: null,
-      context_compaction_window_node_id: null,
+      context_window_selection: null,
       dedicated: null,
       ...config,
     },

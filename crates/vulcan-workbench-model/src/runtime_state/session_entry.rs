@@ -369,9 +369,9 @@ pub struct SessionRuntimeStateEntry {
     /// Fully resolved context-window policy frozen at the latest accepted turn boundary.
     /// 最近一次接受的回合边界所冻结的完整上下文窗口策略。
     pub active_context_window_policy: Option<ContextWindowPolicy>,
-    /// Stable context-compaction window node selected only for this session.
-    /// 仅为当前会话选择的稳定上下文压缩窗口节点。
-    pub context_compaction_window_node_id: Option<ContextCompactionWindowNodeId>,
+    /// Context window (node or custom value) selected only for this session.
+    /// 仅为当前会话选择的上下文窗口（节点或自定义值）。
+    pub context_window_selection: Option<ContextWindowSelection>,
     /// Last reasoning-effort preset selected while this session was active.
     /// 最近一次该会话激活时选择的推理档位预设。
     pub active_reasoning_effort: Option<ReasoningEffortLevel>,

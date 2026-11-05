@@ -32,6 +32,7 @@ function renderToolbar(options: {
           draftSlotKey="conversation:toolbar-test"
           attachmentCount={options.attachmentCount}
           contextCompactionWindowNodes={[]}
+          customContextWindowMinTokens={null}
           contextUsage={options.contextUsage ?? null}
           draftInput={options.draftInput}
           isConversationRunning={options.isConversationRunning}
@@ -42,7 +43,7 @@ function renderToolbar(options: {
           sendBlocked={false}
           stopPending={false}
           sessionProviderUsage={options.sessionProviderUsage ?? null}
-          sessionContextCompactionWindowNodeId={null}
+          sessionContextWindowSelection={null}
           stopAriaLabel="Stop"
         />
       </I18nProvider>

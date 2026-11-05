@@ -320,9 +320,8 @@ pub(crate) fn emit_session_addons_changed_delta(
             .unwrap_or(default_output_style_id());
         let session_output_style =
             session_output_style_summary_from_runtime_state(runtime_state, global_output_style_id);
-        let session_context_compaction_window_node_id = runtime_state
-            .and_then(|runtime_state| runtime_state.context_compaction_window_node_id)
-            .map(|node_id| node_id.as_str().to_string());
+        let session_context_window_selection =
+            runtime_state.and_then(|runtime_state| runtime_state.context_window_selection);
         let session_goal =
             session_goal_summary_with_provider_usage(session_goal, session_provider_usage.as_ref());
         let session_addons_list_entry = session_addons_changed_delta_for_retained_list(
@@ -332,7 +331,7 @@ pub(crate) fn emit_session_addons_changed_delta(
             session_plan_mode.clone(),
             session_vmm_policy_for_list,
             session_output_style.clone(),
-            session_context_compaction_window_node_id.clone(),
+            session_context_window_selection,
             session_provider_usage.clone(),
         );
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
@@ -344,8 +343,7 @@ pub(crate) fn emit_session_addons_changed_delta(
             guard.workbench.session_plan_mode = session_plan_mode.clone();
             guard.workbench.session_vmm_policy = session_vmm_policy.clone();
             guard.workbench.session_output_style = session_output_style.clone();
-            guard.workbench.session_context_compaction_window_node_id =
-                session_context_compaction_window_node_id.clone();
+            guard.workbench.session_context_window_selection = session_context_window_selection;
             guard.workbench.session_provider_usage = session_provider_usage.clone();
         }
         let pending_questions =
@@ -396,8 +394,7 @@ pub(crate) fn emit_session_addons_changed_delta(
             session_plan_mode: session_plan_mode.clone(),
             session_vmm_policy: session_vmm_policy.clone(),
             session_output_style: session_output_style.clone(),
-            session_context_compaction_window_node_id: session_context_compaction_window_node_id
-                .clone(),
+            session_context_window_selection,
             session_provider_usage: session_provider_usage.clone().map(Box::new),
         };
         (
@@ -412,7 +409,7 @@ pub(crate) fn emit_session_addons_changed_delta(
                 session_plan_mode,
                 session_vmm_policy,
                 session_output_style,
-                session_context_compaction_window_node_id,
+                session_context_window_selection,
                 session_provider_usage,
                 revision: generation,
             },

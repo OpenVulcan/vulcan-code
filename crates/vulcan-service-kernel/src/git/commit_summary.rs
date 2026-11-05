@@ -708,7 +708,7 @@ fn build_git_commit_summary_execution_request(
         turn_start_mode: None,
         conversation_state: SessionConversationState::default(),
         context_compaction_policy: None,
-        context_compaction_window_node_id: None,
+        context_window_selection: None,
         context_budget_override: None,
         context_window_prefill_input_tokens: None,
         execution_mode: String::from("GitCommitSummary"),

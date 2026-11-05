@@ -166,9 +166,9 @@ pub struct ConversationSessionConfigV1 {
     /// Requested configuration for the next safe boundary, when present.
     /// 下一安全边界待生效的请求配置（如有）。
     pub next_request: Option<ConversationRequestConfigV1>,
-    /// Stable compaction-window node selected for the next boundary.
-    /// 为下一边界选择的稳定压缩窗口节点。
-    pub context_compaction_window_node_id: Option<String>,
+    /// Context window (node or custom value) selected for the next boundary.
+    /// 为下一边界选择的上下文窗口（节点或自定义值）。
+    pub context_window_selection: Option<vulcan_ai_contract::ContextWindowSelection>,
     /// Dedicated-session profile read from `metadata.dedicated`; `None` for regular sessions.
     /// 从 `metadata.dedicated` 读取的专职会话配置；普通会话为 `None`。
     pub dedicated: Option<DedicatedSessionProfile>,
@@ -202,9 +202,7 @@ impl ConversationSessionConfigV1 {
                 .pending_request
                 .as_ref()
                 .map(ConversationRequestConfigV1::from_pending),
-            context_compaction_window_node_id: config
-                .context_compaction_window_node_id
-                .map(|node_id| node_id.as_str().to_string()),
+            context_window_selection: config.context_window_selection,
             dedicated: dedicated.cloned(),
         }
     }
@@ -1210,7 +1208,7 @@ fn validate_reconnect_frontiers(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vulcan_ai_contract::ContextCompactionWindowNodeId;
+    use vulcan_ai_contract::{ContextCompactionWindowNodeId, ContextWindowSelection};
     use vulcan_session_core::v1::config::QueuedInputIdentity;
     use vulcan_session_core::v1::document::{
         ApiCompletion, ClientInputSubmission, PrepareAndStartApiInput, SessionDocument,
@@ -1448,9 +1446,9 @@ mod tests {
                 temperature: Some(0.4),
                 set_at_ms: 99,
             }),
-            context_compaction_window_node_id: Some(
+            context_window_selection: Some(ContextWindowSelection::Node(
                 ContextCompactionWindowNodeId::CompressionWindow4,
-            ),
+            )),
             ..SessionConfig::default()
         };
 
@@ -1486,8 +1484,10 @@ mod tests {
             Some("xhigh")
         );
         assert_eq!(
-            projected.context_compaction_window_node_id.as_deref(),
-            Some(ContextCompactionWindowNodeId::CompressionWindow4.as_str())
+            projected.context_window_selection,
+            Some(ContextWindowSelection::Node(
+                ContextCompactionWindowNodeId::CompressionWindow4
+            ))
         );
         assert_eq!(projected.permission_mode, PermissionMode::ReadOnly);
     }

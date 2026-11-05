@@ -1726,34 +1726,115 @@ fn context_compaction_window_nodes_default_to_the_fixed_contract() {
     );
 }
 
-/// Verifies new conversations inherit the configured node only below the real model limit.
-/// 验证新会话仅在节点低于模型真实上限时继承所配节点。
+/// Verifies new conversations inherit the configured node only when it fits the real model limit.
+/// 验证新会话仅在节点放得进模型真实上限时继承所配节点。
 #[test]
 fn new_session_window_default_respects_model_hard_limit() {
     let mut configuration = PersistedAiConfiguration::default();
-    assert_eq!(
+    let resolve = |configuration: &PersistedAiConfiguration, limit| {
         configuration
-            .new_session_context_compaction_window_node_for_model(Some(1_000_000))
-            .expect("follow-model default should resolve"),
-        None
-    );
+            .new_session_context_window_for_model("provider", "model", limit)
+            .expect("new-session window should resolve")
+    };
+    assert_eq!(resolve(&configuration, Some(1_000_000)), None);
     configuration.set_new_session_context_compaction_window_node_id(Some(
         ContextCompactionWindowNodeId::CompressionWindow3,
     ));
-    assert_eq!(
+    let node3 = Some(ContextWindowSelection::Node(
+        ContextCompactionWindowNodeId::CompressionWindow3,
+    ));
+    assert_eq!(resolve(&configuration, Some(1_000_000)), node3);
+    assert_eq!(resolve(&configuration, Some(272_000)), node3);
+    for limit in [Some(250_000), None] {
+        assert_eq!(resolve(&configuration, limit), None);
+    }
+}
+
+/// Verifies a model default wins over the system default, including an explicit follow-model.
+/// 验证模型默认值优先于系统默认值，包括显式的跟随模型。
+#[test]
+fn model_window_default_overrides_system_default() {
+    let mut configuration = PersistedAiConfiguration::default();
+    configuration.set_new_session_context_compaction_window_node_id(Some(
+        ContextCompactionWindowNodeId::CompressionWindow1,
+    ));
+    let custom = ContextWindowSelection::Custom(235_000);
+    configuration
+        .set_model_context_window_default(
+            "provider",
+            "model",
+            Some(400_000),
+            Some(ModelContextWindowDefault {
+                selection: Some(custom),
+            }),
+        )
+        .expect("235K fits a 400K model");
+    configuration
+        .set_model_context_window_default(
+            "provider",
+            "follow",
+            Some(400_000),
+            Some(ModelContextWindowDefault { selection: None }),
+        )
+        .expect("follow-model always fits");
+    let resolve = |model: &str, limit| {
         configuration
-            .new_session_context_compaction_window_node_for_model(Some(1_000_000))
-            .expect("node should fit a 1M model"),
-        Some(ContextCompactionWindowNodeId::CompressionWindow3)
+            .new_session_context_window_for_model("provider", model, limit)
+            .expect("new-session window should resolve")
+    };
+    assert_eq!(resolve("model", Some(400_000)), Some(custom));
+    assert_eq!(resolve("model", Some(200_000)), None);
+    assert_eq!(resolve("follow", Some(400_000)), None);
+    assert_eq!(
+        resolve("other", Some(400_000)),
+        Some(ContextWindowSelection::Node(
+            ContextCompactionWindowNodeId::CompressionWindow1
+        ))
     );
-    for limit in [Some(272_000), Some(250_000), None] {
-        assert_eq!(
+    configuration
+        .set_model_context_window_default("provider", "model", Some(400_000), None)
+        .expect("clearing always succeeds");
+    assert!(
+        configuration
+            .model_context_window_default("provider", "model")
+            .is_none()
+    );
+}
+
+/// Verifies saving a model default checks the minimum, the model window, and a declared limit.
+/// 验证保存模型默认值时校验最小值、模型窗口与是否声明上限。
+#[test]
+fn model_window_default_rejects_values_that_do_not_fit() {
+    let mut configuration = PersistedAiConfiguration::default();
+    let custom = |tokens| {
+        Some(ModelContextWindowDefault {
+            selection: Some(ContextWindowSelection::Custom(tokens)),
+        })
+    };
+    for (limit, default) in [
+        (Some(400_000), custom(99_999)),
+        (Some(400_000), custom(400_001)),
+        (None, custom(200_000)),
+        (
+            Some(300_000),
+            Some(ModelContextWindowDefault {
+                selection: Some(ContextWindowSelection::Node(
+                    ContextCompactionWindowNodeId::CompressionWindow4,
+                )),
+            }),
+        ),
+    ] {
+        assert!(
             configuration
-                .new_session_context_compaction_window_node_for_model(limit)
-                .expect("unsupported node should follow the model"),
-            None
+                .set_model_context_window_default("provider", "model", limit, default)
+                .is_err(),
+            "{limit:?} {default:?}"
         );
     }
+    configuration
+        .set_model_context_window_default("provider", "model", Some(400_000), custom(400_000))
+        .expect("a custom value equal to the model window fits");
+    assert!(configuration.validate_current_schema().is_ok());
 }
 
 /// Verifies fixed nodes reject id reassignment and non-ascending token values.
@@ -1779,47 +1860,51 @@ fn context_compaction_window_nodes_reject_identity_and_order_changes() {
     );
 }
 
-/// Verifies a session node changes only the resolved compaction base and retained-tail policy.
-/// 验证会话节点只改变已解析压缩基准与尾部保留策略。
+/// Verifies node and custom selections change only the resolved compaction base and retained tail.
+/// 验证节点与自定义选择只改变已解析压缩基准与尾部保留策略。
 #[test]
-fn context_compaction_window_node_resolves_below_the_model_hard_window() {
+fn context_compaction_window_selection_resolves_within_the_model_hard_window() {
     let configuration = PersistedAiConfiguration::default();
-
-    let policy = configuration
-        .resolve_context_compaction_policy(
-            "provider",
-            "model",
-            Some(1_000_000),
-            Some(ContextCompactionWindowNodeId::CompressionWindow2),
-            None,
-        )
-        .expect("256K node should resolve below a 1M model");
-
-    assert_eq!(
-        policy.compression_window_node_id,
-        Some(ContextCompactionWindowNodeId::CompressionWindow2)
-    );
-    assert_eq!(policy.compression_window_limit, Some(256_000));
-    assert_eq!(policy.tail_context_limit, Some(256_000));
+    for (selection, tokens) in [
+        (
+            ContextWindowSelection::Node(ContextCompactionWindowNodeId::CompressionWindow2),
+            256_000,
+        ),
+        (ContextWindowSelection::Custom(235_000), 235_000),
+    ] {
+        let policy = configuration
+            .resolve_context_compaction_policy(
+                "provider",
+                "model",
+                Some(1_000_000),
+                Some(selection),
+                None,
+            )
+            .expect("selection should resolve below a 1M model");
+        assert_eq!(policy.compression_window_selection, Some(selection));
+        assert_eq!(policy.compression_window_limit, Some(tokens));
+        assert_eq!(policy.tail_context_limit, Some(tokens));
+    }
 }
 
-/// Verifies equal or larger node values are rejected for the selected model.
-/// 验证等于或大于所选模型窗口的节点值会被拒绝。
+/// Verifies a window larger than the selected model is rejected; an equal one is accepted.
+/// 验证大于所选模型窗口的窗口会被拒绝，相等的窗口被接受。
 #[test]
-fn context_compaction_window_node_must_be_strictly_lower_than_model_window() {
+fn context_compaction_window_selection_must_fit_the_model_window() {
     let configuration = PersistedAiConfiguration::default();
-
-    let error = configuration
-        .resolve_context_compaction_policy(
-            "provider",
-            "model",
-            Some(256_000),
-            Some(ContextCompactionWindowNodeId::CompressionWindow2),
-            None,
-        )
-        .expect_err("equal node and model windows must fail");
-
-    assert!(error.contains("must be lower than model context limit"));
+    let node2 = Some(ContextWindowSelection::Node(
+        ContextCompactionWindowNodeId::CompressionWindow2,
+    ));
+    assert!(
+        configuration
+            .resolve_context_compaction_policy("provider", "model", Some(255_999), node2, None)
+            .is_err()
+    );
+    assert!(
+        configuration
+            .resolve_context_compaction_policy("provider", "model", Some(256_000), node2, None)
+            .is_ok()
+    );
 }
 
 /// Verifies a child-task behavior override keeps the selected route window policy.

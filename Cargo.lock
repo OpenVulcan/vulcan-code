@@ -9986,6 +9986,7 @@ dependencies = [
  "ureq",
  "url",
  "uuid",
+ "vulcan-ai-contract",
  "vulcan-i18n",
  "vulcan-product-info",
  "vulcan-runtime-assets",

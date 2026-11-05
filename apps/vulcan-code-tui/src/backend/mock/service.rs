@@ -679,6 +679,31 @@ impl FakeService {
                 self.loads["service_public_ai_settings_snapshot"]["newSessionContextCompactionWindowNodeId"] =
                     required(params, "/request/nodeId")?.clone()
             }
+            // Replaces or removes the one entry of the named model, as the service does.
+            // 与服务一致，替换或删除指定模型的唯一条目。
+            "service_save_public_ai_model_context_window_default" => {
+                let request = required(params, "/request")?;
+                let provider_id = string(request, "/providerId")?.to_string();
+                let model_id = string(request, "/modelId")?.to_string();
+                let snapshot = &mut self.loads["service_public_ai_settings_snapshot"];
+                let mut entries: Vec<Value> = snapshot["modelContextWindowDefaults"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|entry| {
+                        entry["providerId"] != provider_id.as_str()
+                            || entry["modelId"] != model_id.as_str()
+                    })
+                    .collect();
+                if let Some(selection) = request
+                    .get("default")
+                    .and_then(|default| default.get("selection"))
+                {
+                    entries.push(json!({ "providerId": provider_id, "modelId": model_id, "selection": selection }));
+                }
+                snapshot["modelContextWindowDefaults"] = Value::Array(entries);
+            }
             "service_save_public_ai_usage_refresh_settings" => {
                 self.loads["service_public_ai_settings_snapshot"]["usageRefreshIntervalSeconds"] =
                     required(params, "/request/intervalSeconds")?.clone()

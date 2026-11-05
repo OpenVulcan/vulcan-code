@@ -353,11 +353,11 @@ it("opens context controls with a real popover and preserves node selection on r
   const change = vi.fn(() => new Promise<boolean>((_, fail) => { reject = fail; }));
   await render(<ContextUsageOrb snapshot={{ baselineMatchesActiveRuntime: true, breakdown: [], cacheHitBasisPoints: null,
     maxTokens: 950_000, percent: 8, severity: "normal", tooltipRows: [], usageBasisPoints: 800, usedTokens: 76_000 }}
-    contextCompactionWindowNodes={settings().contextCompactionWindowNodes.nodes} selectedNodeId={null} modelContextLimit={950_000} onNodeChange={change} />);
+    contextCompactionWindowNodes={settings().contextCompactionWindowNodes.nodes} selection={null} customMinTokens={100_000} modelContextLimit={950_000} onSelectionChange={change} />);
   await click("contextUsage.title");
   const node = document.querySelector<HTMLButtonElement>('[role="radio"][value="compression-window-1"]')!;
   await act(async () => { node.click(); node.click(); });
-  expect(change).toHaveBeenCalledExactlyOnceWith("compression-window-1");
+  expect(change).toHaveBeenCalledExactlyOnceWith({ node: "compression-window-1" });
   await act(async () => reject(new Error("node write failed")));
   expect(document.querySelector('[role="alert"]')?.textContent).toBe("composer.contextWindow.saveFailed");
   expect(document.querySelector("details")?.open).toBe(false);
@@ -367,7 +367,7 @@ it("opens context controls with a real popover and preserves node selection on r
 
 // Repeated explicit selection must reach the service even when the controlled value is unchanged.
 // 即使受控值不变，重复显式选择也必须到达服务。
-it.each([null, "compression-window-1"] as const)("resubmits the selected compaction node %s and coalesces only pending writes", async (selectedNodeId) => {
+it.each([null, { node: "compression-window-1" }] as const)("resubmits the selected compaction window %o and coalesces only pending writes", async (selection) => {
   // finishWrite settles the current service acknowledgement without changing the selected value.
   // finishWrite 结束当前服务确认，而不改变已选值。
   let finishWrite!: (saved: boolean) => void;
@@ -376,21 +376,21 @@ it.each([null, "compression-window-1"] as const)("resubmits the selected compact
   const change = vi.fn(() => new Promise<boolean>((resolve) => { finishWrite = resolve; }));
   await render(<ContextUsageOrb snapshot={{ baselineMatchesActiveRuntime: true, breakdown: [], cacheHitBasisPoints: null,
     maxTokens: 950_000, percent: 8, severity: "normal", tooltipRows: [], usageBasisPoints: 800, usedTokens: 76_000 }}
-    contextCompactionWindowNodes={settings().contextCompactionWindowNodes.nodes} selectedNodeId={selectedNodeId}
-    modelContextLimit={950_000} onNodeChange={change} />);
+    contextCompactionWindowNodes={settings().contextCompactionWindowNodes.nodes} selection={selection} customMinTokens={100_000}
+    modelContextLimit={950_000} onSelectionChange={change} />);
   await act(async () => host.querySelector<HTMLButtonElement>(".vk-ctx-button")!.click());
   expect(change).not.toHaveBeenCalled();
   // selected resolves by state, so catalog insertion or reordering does not change the test target.
   // selected 按状态定位，因此目录插入或重排不会改变测试对象。
   const selected = document.querySelector<HTMLButtonElement>('[role="radio"][aria-checked="true"]')!;
   await act(async () => { selected.click(); selected.click(); });
-  expect(change).toHaveBeenCalledExactlyOnceWith(selectedNodeId);
+  expect(change).toHaveBeenCalledExactlyOnceWith(selection);
   expect(selected.disabled).toBe(true);
   await act(async () => finishWrite(true));
   expect(selected.disabled).toBe(false);
   await act(async () => selected.click());
   expect(change).toHaveBeenCalledTimes(2);
-  expect(change).toHaveBeenLastCalledWith(selectedNodeId);
+  expect(change).toHaveBeenLastCalledWith(selection);
   await act(async () => finishWrite(true));
   expect(selected.getAttribute("aria-checked")).toBe("true");
   expect(document.querySelector('[role="alert"]')).toBeNull();
@@ -402,7 +402,7 @@ function CapacityToolbar({ owner, change }: { owner: string; change: React.Compo
   return <ComposerPanelToolbarRight draftSlotKey={owner} attachmentCount={0} draftInput="" isConversationRunning={false} sendBlocked={false} stopPending={false}
     contextUsage={{ baselineMatchesActiveRuntime: true, breakdown: [], cacheHitBasisPoints: null, maxTokens: 950_000,
       percent: 8, severity: "normal", tooltipRows: [], usageBasisPoints: 800, usedTokens: 76_000 }}
-    contextCompactionWindowNodes={settings().contextCompactionWindowNodes.nodes} sessionContextCompactionWindowNodeId={null} modelContextLimit={950_000}
+    contextCompactionWindowNodes={settings().contextCompactionWindowNodes.nodes} sessionContextWindowSelection={null} customContextWindowMinTokens={100_000} modelContextLimit={950_000}
     onSetSessionContextCompactionWindow={change} onSend={vi.fn()} sendAriaLabel="Send" stopAriaLabel="Stop" />;
 }
 
@@ -430,8 +430,8 @@ it("isolates pending capacity writes and open popovers by the actual toolbar dra
   expect(document.querySelector('[role="alert"]')).toBeNull();
   await act(async () => resolveNew(true));
   expect(node.disabled).toBe(false);
-  expect(oldChange).toHaveBeenCalledExactlyOnceWith("compression-window-1");
-  expect(newChange).toHaveBeenCalledExactlyOnceWith("compression-window-1");
+  expect(oldChange).toHaveBeenCalledExactlyOnceWith({ node: "compression-window-1" });
+  expect(newChange).toHaveBeenCalledExactlyOnceWith({ node: "compression-window-1" });
 });
 
 it("shows a concise failed-save status for a false acknowledgement and allows retry", async () => {
@@ -458,14 +458,48 @@ it("retains an invalid saved node and lets the user restore the exact model defa
   const change = vi.fn().mockResolvedValue(true);
   await render(<ContextUsageOrb snapshot={{ baselineMatchesActiveRuntime: true, breakdown: [], cacheHitBasisPoints: 0,
     maxTokens: 256_000, percent: 0, severity: "normal", tooltipRows: [], usageBasisPoints: 0, usedTokens: 0 }}
-    contextCompactionWindowNodes={settings().contextCompactionWindowNodes.nodes} selectedNodeId="compression-window-5" modelContextLimit={256_000} onNodeChange={change} />);
+    contextCompactionWindowNodes={settings().contextCompactionWindowNodes.nodes} selection={{ node: "compression-window-5" }} customMinTokens={100_000} modelContextLimit={256_000} onSelectionChange={change} />);
   await act(async () => host.querySelector<HTMLButtonElement>('.vk-ctx-button')!.click());
   expect(change).not.toHaveBeenCalled();
-  expect(document.querySelector<HTMLButtonElement>('[role="radio"][value="compression-window-5"]')?.disabled).toBe(true);
+  expect(document.querySelector<HTMLButtonElement>('[role="radio"][value="invalid"]')?.disabled).toBe(true);
+  // A node equal to the model window duplicates the default item; a larger one does not fit.
+  // 等于模型窗口的节点与默认项重复；更大的节点放不下。
+  expect(document.querySelector('[role="radio"][value="compression-window-1"]')).not.toBeNull();
   expect(document.querySelector('[role="radio"][value="compression-window-2"]')).toBeNull();
+  expect(document.querySelector('[role="radio"][value="compression-window-3"]')).toBeNull();
   expect(document.querySelector('[data-ctx-cache] strong')?.textContent).toBe("0.0%");
   await act(async () => document.querySelector<HTMLButtonElement>('[role="radio"][value="default"]')!.click());
   expect(change).toHaveBeenCalledExactlyOnceWith(null);
+});
+
+it("validates a typed custom window before saving it", async () => {
+  const change = vi.fn().mockResolvedValue(true);
+  await render(<ContextUsageOrb snapshot={{ baselineMatchesActiveRuntime: true, breakdown: [], cacheHitBasisPoints: null,
+    maxTokens: 400_000, percent: 0, severity: "normal", tooltipRows: [], usageBasisPoints: 0, usedTokens: 0 }}
+    contextCompactionWindowNodes={settings().contextCompactionWindowNodes.nodes} selection={null} customMinTokens={100_000}
+    modelContextLimit={400_000} onSelectionChange={change} />);
+  await act(async () => host.querySelector<HTMLButtonElement>(".vk-ctx-button")!.click());
+  await act(async () => document.querySelector<HTMLButtonElement>('[role="radio"][value="custom"]')!.click());
+  expect(change).not.toHaveBeenCalled();
+  const input = document.querySelector<HTMLInputElement>(".vk-window-custom input")!;
+  const form = document.querySelector<HTMLFormElement>(".vk-window-custom")!;
+  // typeInto drives the controlled input through React's value tracker.
+  // typeInto 通过 React 的值跟踪器驱动受控输入框。
+  const typeInto = async (value: string) => act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await typeInto("50K");
+  await act(async () => form.requestSubmit());
+  expect(change).not.toHaveBeenCalled();
+  expect(document.querySelector(".vk-window-custom [role=\"alert\"]")).not.toBeNull();
+  await typeInto("401K");
+  await act(async () => form.requestSubmit());
+  expect(change).not.toHaveBeenCalled();
+  await typeInto("235k");
+  await act(async () => form.requestSubmit());
+  expect(change).toHaveBeenCalledExactlyOnceWith({ custom: 235_000 });
+  expect(document.querySelector(".vk-window-custom")).toBeNull();
 });
 
 // settings returns a complete synthetic catalog with one exact image-understanding target.
@@ -477,7 +511,7 @@ function settings(): PublicAiSettingsSnapshot {
       { id: "compression-window-1", tokens: 200_000 }, { id: "compression-window-2", tokens: 256_000 },
       { id: "compression-window-3", tokens: 272_000 }, { id: "compression-window-4", tokens: 373_000 }, { id: "compression-window-5", tokens: 500_000 },
     ] },
-    newSessionContextCompactionWindowNodeId: null,
+    newSessionContextCompactionWindowNodeId: null, modelContextWindowDefaults: [], modelContextWindowCandidates: [], customContextWindowMinTokens: 100000,
     providerPriorities: {}, usageCache: {}, connections: [], providers: [], providerDefaults: {}, catalogs: {}, modelSupportCatalogs: {},
     catalogErrors: {}, sourceCatalogs: {}, catalogStatuses: {}, modelAccessRecords: [],
     providerToolTemplateModels: [], connectionModelAccessPolicyRecords: [], customModels: {},

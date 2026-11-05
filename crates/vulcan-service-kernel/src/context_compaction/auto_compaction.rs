@@ -781,10 +781,10 @@ pub(crate) fn resolve_webui_context_compaction_model_target(
             Arc::clone(&guard.session_runtime_registry),
         )
     };
-    let context_compaction_window_node_id = session_runtime_registry
+    let context_window_selection = session_runtime_registry
         .get(session_id)
         .map_err(|error| format!("Context compaction has no V1 session owner: {error}"))?
-        .read(|document| document.metadata.config.context_compaction_window_node_id)
+        .read(|document| document.metadata.config.context_window_selection)
         .map_err(|error| format!("Context compaction cannot read V1 metadata: {error}"))?;
     let route_lease_identity = source_execution
         .and_then(|(_, preparation)| {
@@ -802,7 +802,7 @@ pub(crate) fn resolve_webui_context_compaction_model_target(
             Some(preparation.model_blueprint.provider_id.as_str()),
             Some(preparation.model_blueprint.connection_id.as_str()),
             Some(preparation.model_blueprint.model_id.as_str()),
-            source_execution.and_then(|(request, _)| request.context_compaction_window_node_id),
+            source_execution.and_then(|(request, _)| request.context_window_selection),
             preparation.context_compaction_policy,
         )?,
         None => resolve_prompt_compaction_model_target(
@@ -812,7 +812,7 @@ pub(crate) fn resolve_webui_context_compaction_model_target(
             active_provider_id.as_deref(),
             active_connection_id.as_deref(),
             active_model_id.as_deref(),
-            context_compaction_window_node_id,
+            context_window_selection,
             None,
         )?,
     };

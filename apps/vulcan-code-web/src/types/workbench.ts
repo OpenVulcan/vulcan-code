@@ -22,7 +22,7 @@ import type {
   SessionVmmPolicySummary,
 } from "./conversation";
 import type {
-  ContextCompactionWindowNodeId,
+  ContextWindowSelection,
   PublicAiContextCompactionWindowNode,
 } from "./public-ai";
 import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
@@ -309,9 +309,12 @@ export interface WorkbenchSnapshot {
   // Fixed system context-compaction window nodes in immutable low-to-high order.
   // 按不可变从低到高顺序排列的固定系统上下文压缩窗口节点。
   contextCompactionWindowNodes?: PublicAiContextCompactionWindowNode[];
-  // Stable context-compaction window node selected by the current session.
-  // 当前会话选择的稳定上下文压缩窗口节点。
-  sessionContextCompactionWindowNodeId?: ContextCompactionWindowNodeId | null;
+  // Smallest token count a custom session window accepts.
+  // 自定义会话窗口接受的最小 Token 数。
+  customContextWindowMinTokens?: number;
+  // Context window (node or custom value) selected by the current session; null follows the model.
+  // 当前会话选择的上下文窗口（节点或自定义值）；null 表示跟随模型。
+  sessionContextWindowSelection?: ContextWindowSelection | null;
   // Current selected-session physical Provider request counts and token usage.
   // 当前选中会话的物理 Provider 请求计数与 Token 用量。
   sessionProviderUsage?: SessionProviderUsageSummary | null;

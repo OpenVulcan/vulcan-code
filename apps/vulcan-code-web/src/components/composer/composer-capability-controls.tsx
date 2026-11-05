@@ -65,9 +65,20 @@ import {
   isDirectProviderToolCapability,
   isModelExtensionCapability,
 } from "@/lib/provider-tool-capabilities";
+import {
+  contextWindowFitsModel,
+  offeredContextWindowNodes,
+  contextWindowSelectionTokens,
+  formatContextWindowSelectionLabel,
+  formatContextWindowTokens,
+  formatCustomContextWindowInput,
+  validateCustomContextWindowInput,
+  type CustomContextWindowInputError,
+} from "@/lib/context-window-selection";
+import { CustomContextWindowEditor } from "@/components/shared/custom-context-window-editor";
 import type {
   ContextUsageBreakdownItem,
-  ContextCompactionWindowNodeId,
+  ContextWindowSelection,
   ContextUsageSnapshot,
   PublicAiContextCompactionWindowNode,
   PublicAiProviderToolCapabilityKind,
@@ -90,8 +101,8 @@ export {
 
 // ContextUsageOrb renders a compact context budget indicator beside the composer.
 // ContextUsageOrb 在输入区旁渲染紧凑的上下文预算指示器。
-// Parameters: props supplies measured usage, context nodes and the node mutation callback; returns a compact indicator and keyboard-accessible policy popover.
-// 参数：props 提供实测用量、上下文节点及节点变更回调；返回紧凑指示器与可键盘访问的策略浮层。
+// Parameters: props supplies measured usage, context nodes and the window mutation callback; returns a compact indicator and keyboard-accessible policy popover.
+// 参数：props 提供实测用量、上下文节点及窗口变更回调；返回紧凑指示器与可键盘访问的策略浮层。
 export function ContextUsageOrb(props: {
   // Context usage snapshot projected by the service.
   // 服务投影出的上下文占用快照。
@@ -102,24 +113,32 @@ export function ContextUsageOrb(props: {
   // Fixed backend-owned compression-window nodes.
   // 后端持有的固定压缩窗口节点。
   contextCompactionWindowNodes: PublicAiContextCompactionWindowNode[];
-  // Stable node id selected by the current session.
-  // 当前会话选择的稳定节点标识。
-  selectedNodeId: ContextCompactionWindowNodeId | null;
+  // Window selected by the current session: a fixed node, a custom value, or null to follow the model.
+  // 当前会话选择的窗口：固定节点、自定义值，或为空表示跟随模型。
+  selection: ContextWindowSelection | null;
+  // Smallest custom window the backend accepts; null hides the custom entry.
+  // 后端接受的最小自定义窗口；为空时隐藏自定义入口。
+  customMinTokens: number | null;
   // Unchanged hard context limit declared by the active model.
   // 当前模型声明且保持不变的硬上下文窗口。
   modelContextLimit: number | null;
   // Persists or clears one session-only compression-window lock.
   // 持久化或清除一个仅限当前会话的压缩窗口锁定。
-  onNodeChange: (nodeId: ContextCompactionWindowNodeId | null) => Promise<boolean>;
+  onSelectionChange: (selection: ContextWindowSelection | null) => Promise<boolean>;
 }) {
   // t resolves stable copy for the active WebUI language.
   // t 为当前 WebUI 语言解析稳定文案。
   const { locale, t } = useI18n();
-  // nodeMutation prevents concurrent node writes while retaining the last authoritative selection.
-  // nodeMutation 防止并发节点写入，同时保留最后的权威选择。
-  const nodeMutation = React.useRef(false);
-  const [nodeSaving, setNodeSaving] = React.useState(false);
-  const [nodeError, setNodeError] = React.useState<string | null>(null);
+  // windowMutation prevents concurrent window writes while retaining the last authoritative selection.
+  // windowMutation 防止并发窗口写入，同时保留最后的权威选择。
+  const windowMutation = React.useRef(false);
+  const [windowSaving, setWindowSaving] = React.useState(false);
+  const [windowError, setWindowError] = React.useState<string | null>(null);
+  // customEditing shows the inline custom-value editor; customText and customError belong to it.
+  // customEditing 显示内联自定义值编辑器；customText 与 customError 属于该编辑器。
+  const [customEditing, setCustomEditing] = React.useState(false);
+  const [customText, setCustomText] = React.useState("");
+  const [customError, setCustomError] = React.useState<CustomContextWindowInputError | null>(null);
   // contentRef receives initial focus so opening the metrics does not immediately show a missing-value tooltip.
   // contentRef 接收初始焦点，避免打开指标时立即弹出缺失值提示并遮挡数值。
   const contentRef = React.useRef<HTMLDivElement>(null);
@@ -162,52 +181,103 @@ export function ContextUsageOrb(props: {
   // providerUsage keeps session-level accounting out of repeated process headers.
   // providerUsage 将会话级统计从重复的过程标题中移出。
   const providerUsage = props.sessionProviderUsage;
-  // selectedNode resolves the persisted id against the current backend projection.
-  // selectedNode 根据当前后端投影解析持久化标识。
-  const selectedNode = props.contextCompactionWindowNodes.find((node) => node.id === props.selectedNodeId) ?? null;
-  // availableNodes applies the strict node-window-smaller-than-model contract.
-  // availableNodes 应用节点窗口必须严格小于模型窗口的契约。
+  const selection = props.selection;
+  // selectedTokens resolves the persisted selection against the current backend projection.
+  // selectedTokens 根据当前后端投影解析持久化选择。
+  const selectedTokens = contextWindowSelectionTokens(selection, props.contextCompactionWindowNodes);
+  const selectedLabel = selection && selectedTokens != null
+    ? formatContextWindowSelectionLabel(selection, selectedTokens)
+    : null;
+  // availableNodes applies the window-fits-the-model contract.
+  // availableNodes 应用窗口不得超过模型窗口的契约。
   const modelContextLimit = props.modelContextLimit;
   const availableNodes = availableContextCompactionWindowNodes(
     props.contextCompactionWindowNodes,
     modelContextLimit,
+    selection,
   );
+  // customAvailable offers custom values only when the model window leaves room above the backend minimum.
+  // customAvailable 仅在模型窗口不低于后端下限时提供自定义值。
+  const customMinTokens = props.customMinTokens;
+  const customAvailable = customMinTokens != null
+    && modelContextLimit != null
+    && contextWindowFitsModel(customMinTokens, modelContextLimit);
   // defaultContextWindowLabel exposes the active model's original hard window on the restore-default item.
   // defaultContextWindowLabel 在恢复默认选项上直接展示当前模型的原始硬窗口。
   const defaultContextWindowLabel = modelContextLimit == null
     ? t("composer.contextWindow.default")
-    : formatContextWindowNodeTokens(modelContextLimit);
-  // selectedNodeIsInvalid keeps a changed global node visible until the user restores Default.
-  // selectedNodeIsInvalid 在全局节点变化失效后仍保持可见，直到用户恢复默认。
-  const selectedNodeIsInvalid = selectedNode != null
-    && !availableNodes.some((node) => node.id === selectedNode.id);
-  // Persists a validated switch value, including explicit reselection to repair a stale service mirror.
-  // 持久化已校验的开关值，包括用于修复陈旧服务镜像的显式重选。
-  // value is the node id or default sentinel; returns immediately while one acknowledged mutation runs.
-  // value 是节点标识或默认哨兵；在一个等待确认的修改执行期间立即返回。
-  const handleNodeSelection = (value: string): void => {
-    // nextNodeId comes only from the current backend-owned node catalog.
-    // nextNodeId 仅来自当前后端持有的节点目录。
-    const nextNodeId = contextWindowNodeIdFromSwitchValue(value, props.contextCompactionWindowNodes);
-    if (nextNodeId === undefined || nodeMutation.current) return;
-    nodeMutation.current = true;
-    setNodeSaving(true);
-    setNodeError(null);
-    void props.onNodeChange(nextNodeId).then((saved) => {
-      if (!saved) setNodeError("");
-    }).catch((reason: unknown) => {
-      setNodeError(errorMessage(reason));
-    }).finally(() => {
-      nodeMutation.current = false;
-      setNodeSaving(false);
+    : formatContextWindowTokens(modelContextLimit);
+  // selectionIsInvalid keeps a window that no longer fits visible until the user picks another one.
+  // selectionIsInvalid 在窗口不再适配时保持可见，直到用户另选。
+  const selectionIsInvalid = selection != null
+    && selectedTokens != null
+    && (modelContextLimit == null || !contextWindowFitsModel(selectedTokens, modelContextLimit));
+  const customSelected = selection != null && "custom" in selection && !selectionIsInvalid;
+  const switchValue = customEditing || customSelected
+    ? "custom"
+    : selection == null
+      ? "default"
+      : selectionIsInvalid
+        ? "invalid"
+        : "node" in selection ? selection.node : "default";
+  // Persists one selection, including explicit reselection to repair a stale service mirror.
+  // 持久化一个选择，包括用于修复陈旧服务镜像的显式重选。
+  // Returns whether the service acknowledged it; a running mutation makes it return false immediately.
+  // 返回服务是否确认；已有修改在执行时立即返回 false。
+  const commitSelection = async (next: ContextWindowSelection | null): Promise<boolean> => {
+    if (windowMutation.current) return false;
+    windowMutation.current = true;
+    setWindowSaving(true);
+    setWindowError(null);
+    try {
+      const saved = await props.onSelectionChange(next);
+      if (!saved) setWindowError("");
+      return saved;
+    } catch (reason: unknown) {
+      setWindowError(errorMessage(reason));
+      return false;
+    } finally {
+      windowMutation.current = false;
+      setWindowSaving(false);
+    }
+  };
+  // Opens the custom editor prefilled with the current custom value.
+  // 打开自定义编辑器，并预填当前自定义值。
+  const openCustomEditor = (): void => {
+    setCustomText(selection && "custom" in selection ? formatCustomContextWindowInput(selection.custom) : "");
+    setCustomError(null);
+    setCustomEditing(true);
+  };
+  // Handles one switch value: custom opens the editor, every other value is saved at once.
+  // 处理一个切换值：自定义打开编辑器，其余值立即保存。
+  const handleSwitchValue = (value: string): void => {
+    if (value === "custom") {
+      openCustomEditor();
+      return;
+    }
+    const next = contextWindowSelectionFromSwitchValue(value, props.contextCompactionWindowNodes);
+    if (next === undefined) return;
+    setCustomEditing(false);
+    void commitSelection(next);
+  };
+  // Validates and saves the typed custom value; the editor closes only after the service accepts it.
+  // 校验并保存输入的自定义值；仅在服务接受后关闭编辑器。
+  const submitCustom = (): void => {
+    if (!customAvailable || customMinTokens == null || modelContextLimit == null) return;
+    const result = validateCustomContextWindowInput(customText, customMinTokens, modelContextLimit);
+    if ("error" in result) {
+      setCustomError(result.error);
+      return;
+    }
+    setCustomError(null);
+    void commitSelection({ custom: result.tokens }).then((saved) => {
+      if (saved) setCustomEditing(false);
     });
   };
   // contextUsageAriaLabel exposes the same session-level summary through the capacity control.
   // contextUsageAriaLabel 通过上下文容量控件公开同一份会话级统计摘要。
-  const contextUsageAriaLabel = [
-    title,
-    selectedNode ? formatContextWindowNodeTokens(selectedNode.tokens) : null,
-  ].filter((value): value is string => Boolean(value)).join(" · ");
+  const contextUsageAriaLabel = [title, selectedLabel]
+    .filter((value): value is string => Boolean(value)).join(" · ");
   const thresholdState = percent >= 100
     ? "full"
     : percent >= 95
@@ -223,7 +293,7 @@ export function ContextUsageOrb(props: {
         <button
           aria-label={contextUsageAriaLabel}
           className="vk-ctx-button"
-          data-locked={selectedNode ? "true" : undefined}
+          data-locked={selectedLabel ? "true" : undefined}
           type="button"
           onPointerEnter={(event) => {
             if (event.pointerType !== "mouse") return;
@@ -248,10 +318,10 @@ export function ContextUsageOrb(props: {
             data-threshold={thresholdState}
             style={style}
           />
-          {selectedNode ? (
+          {selectedLabel ? (
             <span className="vk-ctx-lock">
               <LockKeyhole aria-hidden="true" size={11} strokeWidth={2} />
-              {formatContextWindowNodeTokens(selectedNode.tokens)}
+              {selectedLabel}
             </span>
           ) : null}
         </button>
@@ -300,43 +370,64 @@ export function ContextUsageOrb(props: {
         <div className="vk-ctx-window">
           <div className="vk-sum-title">
             <strong>{t("composer.contextWindow.title")}</strong>
-            <span>{selectedNode ? t("composer.capabilities.lockedForThisSession") : t("composer.capabilities.followsTheModel")}</span>
+            <span>{selectedLabel ? t("composer.capabilities.lockedForThisSession") : t("composer.capabilities.followsTheModel")}</span>
           </div>
           <SegmentedControl
             aria-label={t("composer.contextWindow.title")}
-            disabled={nodeSaving}
-            onValueChange={handleNodeSelection}
-            value={props.selectedNodeId ?? "default"}
+            disabled={windowSaving}
+            onValueChange={handleSwitchValue}
+            value={switchValue}
           >
             {availableNodes.map((node) => (
               <SegmentedControlItem key={node.id} value={node.id}
                 // Shared radio state intentionally suppresses unchanged values; only this control resubmits explicit clicks.
                 // 共享单选状态有意忽略同值；仅此控件重新提交显式点击。
-                onClick={() => { if (props.selectedNodeId === node.id) handleNodeSelection(node.id); }}>
-                {formatContextWindowNodeTokens(node.tokens)}
+                onClick={() => { if (switchValue === node.id) handleSwitchValue(node.id); }}>
+                {formatContextWindowTokens(node.tokens)}
               </SegmentedControlItem>
             ))}
-            {selectedNodeIsInvalid ? (
-              <SegmentedControlItem disabled value={selectedNode.id}
-                aria-label={`${formatContextWindowNodeTokens(selectedNode.tokens)} · ${t("composer.contextWindow.invalid")}`}>
+            {selectionIsInvalid && selectedLabel ? (
+              <SegmentedControlItem disabled value="invalid"
+                aria-label={`${selectedLabel} · ${t("composer.contextWindow.invalid")}`}>
                 <AlertTriangle aria-hidden="true" size={13} />
-                {formatContextWindowNodeTokens(selectedNode.tokens)}
+                {selectedLabel}
+              </SegmentedControlItem>
+            ) : null}
+            {customAvailable ? (
+              <SegmentedControlItem value="custom"
+                aria-label={customSelected && selectedLabel
+                  ? `${t("contextWindowCustom.label")} · ${selectedLabel}`
+                  : t("contextWindowCustom.label")}
+                onClick={() => { if (switchValue === "custom" && !customEditing) openCustomEditor(); }}>
+                {customSelected && selectedLabel ? selectedLabel : t("contextWindowCustom.label")}
               </SegmentedControlItem>
             ) : null}
             <SegmentedControlItem
               aria-label={`${t("composer.contextWindow.default")} · ${defaultContextWindowLabel}`}
               value="default"
-              onClick={() => { if (props.selectedNodeId === null) handleNodeSelection("default"); }}
+              onClick={() => { if (switchValue === "default") handleSwitchValue("default"); }}
             >
               {defaultContextWindowLabel}
             </SegmentedControlItem>
           </SegmentedControl>
-          {selectedNodeIsInvalid ? <p className="vk-stats-note">{formatContextWindowNodeTokens(selectedNode.tokens)} · {t("composer.contextWindow.invalid")}</p> : null}
-          {nodeError !== null ? <div className="vk-ctx-failure">
+          {customEditing && customAvailable && customMinTokens != null && modelContextLimit != null ? (
+            <CustomContextWindowEditor
+              disabled={windowSaving}
+              error={customError}
+              maxTokens={modelContextLimit}
+              minTokens={customMinTokens}
+              onCancel={() => { setCustomEditing(false); setCustomError(null); }}
+              onChange={(value) => { setCustomText(value); setCustomError(null); }}
+              onSubmit={submitCustom}
+              value={customText}
+            />
+          ) : null}
+          {selectionIsInvalid && selectedLabel ? <p className="vk-stats-note">{selectedLabel} · {t("composer.contextWindow.invalid")}</p> : null}
+          {windowError !== null ? <div className="vk-ctx-failure">
             <p role="alert">{t("composer.contextWindow.saveFailed")}</p>
-            {nodeError ? <details>
+            {windowError ? <details>
               <summary>{t("composer.capability.errorDetails")}</summary>
-              <pre tabIndex={0}>{nodeError}</pre>
+              <pre tabIndex={0}>{windowError}</pre>
             </details> : null}
           </div> : null}
         </div>
@@ -345,37 +436,29 @@ export function ContextUsageOrb(props: {
   );
 }
 
-// contextWindowNodeIdFromSwitchValue validates one switch value against the authoritative node list.
-// contextWindowNodeIdFromSwitchValue 根据权威节点列表校验一个切换值。
-function contextWindowNodeIdFromSwitchValue(
+// contextWindowSelectionFromSwitchValue validates one switch value against the authoritative node list.
+// contextWindowSelectionFromSwitchValue 根据权威节点列表校验一个切换值。
+// Returns null for the default item and undefined for values that are not a selectable node.
+// 默认项返回 null，非可选节点的值返回 undefined。
+function contextWindowSelectionFromSwitchValue(
   value: string,
   nodes: PublicAiContextCompactionWindowNode[],
-): ContextCompactionWindowNodeId | null | undefined {
+): ContextWindowSelection | null | undefined {
   if (value === "default") {
     return null;
   }
-  return nodes.find((node) => node.id === value)?.id;
+  const node = nodes.find((candidate) => candidate.id === value);
+  return node ? { node: node.id } : undefined;
 }
 
-// formatContextWindowNodeTokens renders node and model windows as integer K/M labels.
-// formatContextWindowNodeTokens 把节点与模型窗口渲染为不带小数的 K/M 标签。
-export function formatContextWindowNodeTokens(tokens: number): string {
-  if (tokens >= 1_000_000 && tokens % 1_000_000 === 0) {
-    return `${tokens / 1_000_000}M`;
-  }
-  return `${Math.round(tokens / 1_000)}K`;
-}
-
-// availableContextCompactionWindowNodes returns fixed nodes strictly below one model hard window.
-// availableContextCompactionWindowNodes 返回严格小于模型硬窗口的固定节点。
+// availableContextCompactionWindowNodes returns the fixed nodes offered for one model hard window.
+// availableContextCompactionWindowNodes 返回针对模型硬窗口提供的固定节点。
 export function availableContextCompactionWindowNodes(
   nodes: PublicAiContextCompactionWindowNode[],
   modelContextLimit: number | null,
+  selection: ContextWindowSelection | null = null,
 ): PublicAiContextCompactionWindowNode[] {
-  if (modelContextLimit == null) {
-    return [];
-  }
-  return nodes.filter((node) => node.tokens < modelContextLimit);
+  return offeredContextWindowNodes(nodes, modelContextLimit, selection && "node" in selection ? selection.node : null);
 }
 
 // ContextUsageProgressBar renders used, unused, category, and threshold states in one track.

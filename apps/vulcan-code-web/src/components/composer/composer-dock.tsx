@@ -27,7 +27,7 @@ import type {
   ComposerAttachmentCapabilitySummary,
   ComposerAttachmentSummary,
   ComposerSlashCommandSummary,
-  ContextCompactionWindowNodeId,
+  ContextWindowSelection,
   ContextUsageSnapshot,
   SessionProviderUsageSummary,
   PublicAiContextCompactionWindowNode,
@@ -111,7 +111,10 @@ export function ComposerDock(props: {
   contextCompactionWindowNodes: PublicAiContextCompactionWindowNode[];
   // Stable context-compaction node selected by the current session.
   // 当前会话选择的稳定上下文压缩节点。
-  sessionContextCompactionWindowNodeId: ContextCompactionWindowNodeId | null;
+  sessionContextWindowSelection: ContextWindowSelection | null;
+  // Smallest custom window the backend accepts; null hides custom entry.
+  // 后端接受的最小自定义窗口；为空时隐藏自定义输入。
+  customContextWindowMinTokens: number | null;
   // Whether the dock is visually centered for an empty conversation.
   // 输入区浮层是否在空会话中居中显示。
   emptyMode: boolean;
@@ -209,7 +212,7 @@ export function ComposerDock(props: {
   onSetSessionOutputStyle: (styleId: string | null) => Promise<boolean>;
   // Persists or clears the selected session context-compaction window node.
   // 持久化或清除当前会话的上下文压缩窗口节点。
-  onSetSessionContextCompactionWindow: (nodeId: ContextCompactionWindowNodeId | null) => Promise<boolean>;
+  onSetSessionContextCompactionWindow: (selection: ContextWindowSelection | null) => Promise<boolean>;
   // onStopConversationRun stops the selected backend conversation stream.
   // onStopConversationRun 停止当前选中的后端会话流。
   onStopConversationRun: () => Promise<boolean>;
@@ -380,7 +383,8 @@ export function ComposerDock(props: {
         contextUsage={props.contextUsage}
         sessionProviderUsage={props.sessionProviderUsage}
         contextCompactionWindowNodes={props.contextCompactionWindowNodes}
-        sessionContextCompactionWindowNodeId={props.sessionContextCompactionWindowNodeId}
+        sessionContextWindowSelection={props.sessionContextWindowSelection}
+        customContextWindowMinTokens={props.customContextWindowMinTokens}
         slashCommands={props.slashCommands}
         pendingPrompts={visiblePendingPrompts}
         sessionGoal={props.sessionGoal}

@@ -4,7 +4,7 @@ import type {
   ComposerAttachmentPreparationSummary,
   ComposerAttachmentSummary,
   PendingPromptEditOutcome,
-  ContextCompactionWindowNodeId,
+  ContextWindowSelection,
   EnvironmentValuesSubmitRequest,
   SessionAddonsChangedResponse,
   SessionGoalUserStatusUpdate,
@@ -710,11 +710,11 @@ export async function reconcileComposerAttachmentDraftLease(
   });
 }
 
-// setSessionContextCompactionWindow persists one stable node id or clears the session lock.
-// setSessionContextCompactionWindow 持久化一个稳定节点标识，或清除会话锁定。
+// setSessionContextCompactionWindow persists one window selection (fixed node or custom value) or clears the session lock.
+// setSessionContextCompactionWindow 持久化一个窗口选择（固定节点或自定义值），或清除会话锁定。
 export async function setSessionContextCompactionWindow(
   conversationId: string | null,
-  nodeId: ContextCompactionWindowNodeId | null,
+  selection: ContextWindowSelection | null,
 ): Promise<SessionAddonsChangedResponse | null> {
   if (!hasServiceRuntime() || !conversationId) {
     return null;
@@ -722,7 +722,7 @@ export async function setSessionContextCompactionWindow(
   return serviceClient.request<SessionAddonsChangedResponse>("service_set_session_context_compaction_window", {
     request: {
       conversationId,
-      nodeId,
+      selection,
     },
   });
 }

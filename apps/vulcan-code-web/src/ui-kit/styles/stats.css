@@ -163,3 +163,7 @@ details[open] > .vk-lifetime-head .vk-lifetime-total > svg { transform: rotate(1
   .vk-stats-bar > span,
   .vk-lifetime-total > svg { transition: none; }
 }
+.vk-window-custom { display: grid; gap: calc(var(--vk-u) * 1.5); }
+.vk-window-custom-row { display: flex; gap: calc(var(--vk-u) * 2); align-items: center; }
+.vk-window-custom-row > .vk-input { flex: 1 1 auto; min-width: 0; }
+.vk-window-custom-error { margin: 0; color: var(--vk-bad); font-size: var(--vk-fs-xs); line-height: 1.5; }

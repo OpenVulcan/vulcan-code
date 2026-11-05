@@ -125,9 +125,9 @@ pub(crate) async fn service_select_public_ai_model(
                 .map_err(|error| format!("Invalid conversation id `{value}`: {error}"))
         })
         .transpose()?;
-    // session_context_compaction_window_node_id preserves the current session lock across models.
-    // session_context_compaction_window_node_id 在模型之间保留当前会话锁定节点。
-    let (session_context_compaction_window_node_id, session_request_fallback) =
+    // session_context_window_selection preserves the current session lock across models.
+    // session_context_window_selection 在模型之间保留当前会话锁定节点。
+    let (session_context_window_selection, session_request_fallback) =
         if let Some(session_id) = conversation_id {
             let guard = state
                 .lock()
@@ -147,7 +147,7 @@ pub(crate) async fn service_select_public_ai_model(
                 .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
                 .ok_or_else(|| format!("Conversation `{session_id}` has no runtime state."))?;
             (
-                runtime_state.context_compaction_window_node_id,
+                runtime_state.context_window_selection,
                 crate::session_request_config_v1::SessionRequestFallback {
                     provider: runtime_state.active_provider_id.clone(),
                     connection_id: runtime_state.active_connection_id.clone(),
@@ -249,31 +249,14 @@ pub(crate) async fn service_select_public_ai_model(
             current_budget.active_context_tokens, request.model_id, target_context_limit
         ));
     }
-    if let Some(node_id) = session_context_compaction_window_node_id {
-        // node_tokens resolves the stable persisted id against the current global configuration.
-        // node_tokens 根据当前全局配置解析持久化的稳定标识。
-        let node_tokens = current_configuration
-            .context_compaction_window_nodes
-            .tokens_for(node_id)?;
-        // model_context_limit is the unchanged hard window declared by the selected model.
-        // model_context_limit 是所选模型声明且保持不变的硬窗口。
-        let model_context_limit =
-            selected_model
-                .model
-                .capabilities
-                .context_limit
-                .ok_or_else(|| {
-                    String::from("The target model does not declare a context window, so the context compaction lock of the current session cannot be kept.")
-                })?;
-        if node_tokens >= model_context_limit {
-            return Err(format!(
-                "The context compaction node `{}` locked by the current session is {} tokens and must be strictly smaller than the target model context window of {} tokens. Switch back to the default window first.",
-                node_id.as_str(),
-                node_tokens,
-                model_context_limit
-            ));
-        }
-    }
+    // A session window that does not fit the target model falls back to following the model
+    // together with this switch; a model without a declared window cannot hold any lock.
+    // 放不进目标模型的会话窗口随本次切换回退为跟随模型；未声明窗口的模型不能保留任何锁定。
+    let release_window_selection = model_switch_releases_window_selection(
+        &current_configuration.context_compaction_window_nodes,
+        session_context_window_selection,
+        target_context_limit,
+    )?;
     // A model-picker action is the only model-change boundary allowed to replace an incompatible
     // reasoning level. Supported levels remain byte-for-byte session authority.
     // 模型选择器动作是模型变化时唯一允许替换不兼容思考档位的边界；受支持档位逐字保持会话权威。
@@ -360,11 +343,21 @@ pub(crate) async fn service_select_public_ai_model(
                     configuration,
                     |workspace| {
                         if let Some(session_id) = conversation_id {
-                            plan_session_model_selection_for_next_provider_request(
-                                workspace,
-                                session_id,
-                                &pending_target,
-                            )
+                            let reconciliation =
+                                plan_session_model_selection_for_next_provider_request(
+                                    workspace,
+                                    session_id,
+                                    &pending_target,
+                                )?;
+                            if release_window_selection
+                                && let Some(runtime_state) =
+                                    workspace.session_runtime_state.get_mut(&session_id)
+                            {
+                                runtime_state.context_window_selection = None;
+                                runtime_state.live_context_budget_fingerprint = None;
+                                runtime_state.anchor_context_budget_fingerprint = None;
+                            }
+                            Ok(reconciliation)
                         } else {
                             Ok(PublicAiWorkspaceReconciliation::default())
                         }
@@ -391,6 +384,9 @@ pub(crate) async fn service_select_public_ai_model(
                                 fallback,
                                 now_ms,
                             )?;
+                            if release_window_selection {
+                                release_session_window_selection_v1(handle.as_ref(), now_ms)?;
+                            }
                         }
                         Ok(())
                     },
@@ -399,7 +395,63 @@ pub(crate) async fn service_select_public_ai_model(
             },
         )?;
     drop(transaction);
+    if release_window_selection && let Some(session_id) = conversation_id {
+        state
+            .lock()
+            .map_err(|error| format!("Failed to lock service state: {error}"))?
+            .live_context_budgets
+            .remove(&session_id);
+        // The usage orb and the composer window control re-read the released selection.
+        // 用量圈与输入区窗口控件重新读取已释放的选择。
+        crate::emit_session_context_usage_changed(&app, &state, session_id)?;
+        crate::emit_session_addons_changed_delta(&app, &state, session_id)?;
+    }
     Ok(snapshot)
+}
+
+/// Durably clears a session window selection so the session follows its (new) model.
+/// 持久清除会话窗口选择，使会话跟随其（新）模型。
+fn release_session_window_selection_v1(
+    handle: &crate::session_runtime_registry_v1::SessionHandle,
+    now_ms: i64,
+) -> Result<(), String> {
+    use crate::session_runtime_registry_v1::{
+        SessionFlushReason, SessionMutationAdmission, SessionMutationChange,
+    };
+    handle
+        .mutate_durable_if_changed(
+            SessionMutationAdmission::MetadataOnly,
+            SessionFlushReason::MetadataChanged,
+            move |document| {
+                Ok(if document.set_context_window_selection(None, now_ms) {
+                    SessionMutationChange::Changed(())
+                } else {
+                    SessionMutationChange::Unchanged(())
+                })
+            },
+        )
+        .map(|_| ())
+        .map_err(|error| format!("Failed to release the V1 context compaction window: {error}"))
+}
+
+/// Reports whether a model switch must release the session window back to following the model.
+/// 报告一次模型切换是否必须把会话窗口释放回跟随模型。
+///
+/// `nodes` resolves node selections to tokens; `selection` is the session's current window;
+/// `target_limit` is the target model's declared window, where `None` cannot hold any lock.
+/// `nodes` 把节点选择解析为 Token；`selection` 是会话当前窗口；`target_limit` 是目标模型声明的窗口，
+/// 为 `None` 时不能保留任何锁定。
+fn model_switch_releases_window_selection(
+    nodes: &vulcan_provider_adapters::ContextCompactionWindowConfiguration,
+    selection: Option<vulcan_ai_contract::ContextWindowSelection>,
+    target_limit: Option<u64>,
+) -> Result<bool, String> {
+    let Some(selection) = selection else {
+        return Ok(false);
+    };
+    let tokens = nodes.tokens_for_selection(selection)?;
+    Ok(!target_limit
+        .is_some_and(|limit| vulcan_ai_contract::context_window_fits_model(tokens, limit)))
 }
 
 /// Reports whether current session context cannot fit the target model's real maximum window.

@@ -180,13 +180,17 @@ fn set_context_compaction_window_node_dirts_metadata_only() {
     doc.append_assistant_text(api, "x", AssistantSemanticStatus::Streaming, T0 + 1)
         .unwrap();
     let dirty_before: Vec<DirtyFile> = doc.dirty_files().collect();
-    doc.set_context_compaction_window_node_id(
-        Some(vulcan_ai_contract::ContextCompactionWindowNodeId::CompressionWindow2),
+    doc.set_context_window_selection(
+        Some(vulcan_ai_contract::ContextWindowSelection::Node(
+            vulcan_ai_contract::ContextCompactionWindowNodeId::CompressionWindow2,
+        )),
         T0,
     );
     assert_eq!(
-        doc.metadata.config.context_compaction_window_node_id,
-        Some(vulcan_ai_contract::ContextCompactionWindowNodeId::CompressionWindow2)
+        doc.metadata.config.context_window_selection,
+        Some(vulcan_ai_contract::ContextWindowSelection::Node(
+            vulcan_ai_contract::ContextCompactionWindowNodeId::CompressionWindow2
+        ))
     );
     assert!(doc.dirty_files().any(|file| file == DirtyFile::Metadata));
     assert!(
@@ -203,8 +207,8 @@ fn set_context_compaction_window_node_dirts_metadata_only() {
         doc.active_api().is_some(),
         "the running API must keep working"
     );
-    doc.set_context_compaction_window_node_id(None, T0 + 1);
-    assert_eq!(doc.metadata.config.context_compaction_window_node_id, None);
+    doc.set_context_window_selection(None, T0 + 1);
+    assert_eq!(doc.metadata.config.context_window_selection, None);
 }
 
 /// A failed compaction API cannot publish a context node even when it returned

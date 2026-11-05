@@ -3,7 +3,12 @@
 
 use super::*;
 use crate::session_goal_lifecycle::session_v1_handle_from_state;
-use vulcan_context::ContextCompactionWindowNodeId;
+use vulcan_context::{ContextCompactionWindowNodeId, ContextWindowSelection};
+
+/// The fourth fixed node as a session window selection.
+/// 作为会话窗口选择的第四个固定节点。
+const NODE4: ContextWindowSelection =
+    ContextWindowSelection::Node(ContextCompactionWindowNodeId::CompressionWindow4);
 use vulcan_provider_adapters::{PersistedAiConfiguration, PublicAiRuntime};
 
 /// Builds an isolated configured runtime with a one-million-token model; returns no network activity.
@@ -169,7 +174,7 @@ async fn compaction_window_survives_cold_navigation_submission_and_same_value_re
         state.clone(),
         SessionContextCompactionWindowUpdateRequest {
             conversation_id: session_id.to_string(),
-            node_id: Some("compression-window-4".into()),
+            selection: Some(NODE4),
         },
     )
     .await
@@ -189,21 +194,15 @@ async fn compaction_window_survives_cold_navigation_submission_and_same_value_re
     let selected = service_select_conversation(state.clone(), session_id.to_string())
         .await
         .unwrap();
-    assert_eq!(
-        selected
-            .session_context_compaction_window_node_id
-            .as_deref(),
-        Some("compression-window-4")
-    );
+    assert_eq!(selected.session_context_window_selection, Some(NODE4));
     assert_eq!(
         selected
             .session_addons_by_conversation
             .iter()
             .find(|row| row.conversation_id == session_id.to_string())
             .unwrap()
-            .session_context_compaction_window_node_id
-            .as_deref(),
-        Some("compression-window-4")
+            .session_context_window_selection,
+        Some(NODE4)
     );
     assert!(
         state
@@ -222,7 +221,7 @@ async fn compaction_window_survives_cold_navigation_submission_and_same_value_re
         .session_runtime_state
         .get_mut(&session_id)
         .unwrap()
-        .context_compaction_window_node_id = None;
+        .context_window_selection = None;
     workspace
         .session_runtime_state
         .get_mut(&session_id)
@@ -242,8 +241,8 @@ async fn compaction_window_survives_cold_navigation_submission_and_same_value_re
     .await
     .unwrap();
     assert_eq!(
-        workspace.session_runtime_state[&session_id].context_compaction_window_node_id,
-        Some(ContextCompactionWindowNodeId::CompressionWindow4)
+        workspace.session_runtime_state[&session_id].context_window_selection,
+        Some(NODE4)
     );
     assert_eq!(
         workspace.session_runtime_state[&session_id]
@@ -273,7 +272,7 @@ async fn compaction_window_survives_cold_navigation_submission_and_same_value_re
         .session_runtime_state
         .get_mut(&session_id)
         .unwrap()
-        .context_compaction_window_node_id = None;
+        .context_window_selection = None;
     crate::session_request_config_v1::synchronize_v1_dispatch_model_selection(
         &handle,
         &runtime,
@@ -292,10 +291,7 @@ async fn compaction_window_survives_cold_navigation_submission_and_same_value_re
     );
     state.lock().unwrap().workspace_snapshot = Some(workspace);
 
-    for node in [
-        Some(ContextCompactionWindowNodeId::CompressionWindow4),
-        None,
-    ] {
+    for node in [Some(NODE4), None] {
         // First establish the desired durable choice; None explicitly restores the default policy.
         // 先建立目标持久选择；None 显式恢复默认策略。
         service_set_session_context_compaction_window(
@@ -303,7 +299,7 @@ async fn compaction_window_survives_cold_navigation_submission_and_same_value_re
             state.clone(),
             SessionContextCompactionWindowUpdateRequest {
                 conversation_id: session_id.to_string(),
-                node_id: node.map(|node| node.as_str().into()),
+                selection: node,
             },
         )
         .await
@@ -327,11 +323,7 @@ async fn compaction_window_survives_cold_navigation_submission_and_same_value_re
                 .session_runtime_state
                 .get_mut(&session_id)
                 .unwrap();
-            mirror.context_compaction_window_node_id = if node.is_some() {
-                None
-            } else {
-                Some(ContextCompactionWindowNodeId::CompressionWindow4)
-            };
+            mirror.context_window_selection = if node.is_some() { None } else { Some(NODE4) };
             mirror.live_context_budget_fingerprint = Some("stale-live".into());
             mirror.anchor_context_budget_fingerprint = Some("stale-anchor".into());
         }
@@ -342,15 +334,12 @@ async fn compaction_window_survives_cold_navigation_submission_and_same_value_re
             state.clone(),
             SessionContextCompactionWindowUpdateRequest {
                 conversation_id: session_id.to_string(),
-                node_id: node.map(|node| node.as_str().into()),
+                selection: node,
             },
         )
         .await
         .unwrap();
-        assert_eq!(
-            response.session_context_compaction_window_node_id,
-            node.map(|node| node.as_str().into())
-        );
+        assert_eq!(response.session_context_window_selection, node);
         assert_eq!(fs::read(&metadata_path).unwrap(), before);
         assert_eq!(
             handle.read(|document| document.memory_revision()).unwrap(),
@@ -366,7 +355,7 @@ async fn compaction_window_survives_cold_navigation_submission_and_same_value_re
             .as_ref()
             .unwrap()
             .session_runtime_state[&session_id];
-        assert_eq!(mirror.context_compaction_window_node_id, node);
+        assert_eq!(mirror.context_window_selection, node);
         assert!(mirror.live_context_budget_fingerprint.is_none());
         assert!(mirror.anchor_context_budget_fingerprint.is_none());
     }
@@ -377,7 +366,7 @@ async fn compaction_window_survives_cold_navigation_submission_and_same_value_re
         service_select_conversation(reopened, session_id.to_string())
             .await
             .unwrap()
-            .session_context_compaction_window_node_id
+            .session_context_window_selection
             .is_none()
     );
 }

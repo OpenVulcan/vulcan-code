@@ -492,6 +492,13 @@
         ]
       },
       "newSessionContextCompactionWindowNodeId": null,
+      "modelContextWindowDefaults": [
+        { "providerId": "demo-provider", "modelId": "demo-model", "selection": { "custom": 150000 } }
+      ],
+      "modelContextWindowCandidates": [
+        { "providerId": "demo-provider", "modelId": "demo-model", "displayName": "Demo Model", "contextLimit": 200000 }
+      ],
+      "customContextWindowMinTokens": 100000,
       "usageRefreshIntervalSeconds": 60,
       "internalInferenceCandidates": [
         {

@@ -384,9 +384,8 @@ pub fn build_context_budget_fingerprint(
                 policy.tail_context_limit,
                 policy.tail_policy_source.label(),
                 policy
-                    .compression_window_node_id
-                    .map(vulcan_context_node_label)
-                    .unwrap_or("none"),
+                    .compression_window_selection
+                    .map_or_else(|| String::from("none"), crate::ContextWindowSelection::label),
                 policy.compression_window_limit,
                 policy.reserved,
                 policy.window.effective_context_window_percent,
@@ -427,12 +426,6 @@ pub fn build_context_budget_fingerprint(
         ai_tools_label,
         compaction_policy_label,
     )
-}
-
-/// Returns the stable label for one frozen context-compaction window node.
-/// 返回一个冻结上下文压缩窗口节点的稳定标签。
-fn vulcan_context_node_label(node_id: crate::ContextCompactionWindowNodeId) -> &'static str {
-    node_id.as_str()
 }
 
 /// Returns the coarse budget severity bucket that corresponds to one usage ratio.
@@ -658,9 +651,9 @@ mod tests {
         };
         let request_snapshot = test_request_snapshot();
         let policy = ContextCompactionPolicy {
-            compression_window_node_id: Some(
+            compression_window_selection: Some(crate::ContextWindowSelection::Node(
                 crate::ContextCompactionWindowNodeId::CompressionWindow3,
-            ),
+            )),
             compression_window_limit: Some(272_000),
             ..ContextCompactionPolicy::default()
         };

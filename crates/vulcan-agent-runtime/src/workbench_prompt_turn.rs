@@ -1392,7 +1392,7 @@ pub fn continue_shared_prompt_turn_after_preparation_with_runtime_state(
             .then_some(ExecutionTurnStartMode::RestoredCheckpoint),
         conversation_state: provider_conversation_state,
         context_compaction_policy: None,
-        context_compaction_window_node_id: runtime_state.context_compaction_window_node_id,
+        context_window_selection: runtime_state.context_window_selection,
         context_budget_override: None,
         context_window_prefill_input_tokens: runtime_state.auto_compact_prefill_input_tokens,
         execution_mode: input.start.execution_mode,

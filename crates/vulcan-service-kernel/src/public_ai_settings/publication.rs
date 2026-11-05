@@ -402,7 +402,7 @@ fn invalidate_context_compaction_window_budget_fingerprints(
         .iter_mut()
         .chain(workspace.archived_session_runtime_state.iter_mut())
     {
-        if runtime_state.context_compaction_window_node_id.is_none() {
+        if runtime_state.context_window_selection.is_none() {
             continue;
         }
         runtime_state.live_context_budget_fingerprint = None;
@@ -835,9 +835,8 @@ where
             .collect();
         // selectedNodeId remains session-owned and is never replaced by the global token values.
         // selectedNodeId 始终由会话持有，绝不会被全局 Token 数值替代。
-        planned_workbench.session_context_compaction_window_node_id = selected_runtime_state
-            .and_then(|runtime_state| runtime_state.context_compaction_window_node_id)
-            .map(|node_id| node_id.as_str().to_string());
+        planned_workbench.session_context_window_selection =
+            selected_runtime_state.and_then(|runtime_state| runtime_state.context_window_selection);
         if selected_session_id
             .is_some_and(|session_id| invalidated_context_budget_session_ids.contains(&session_id))
         {

@@ -50,6 +50,87 @@ pub(crate) struct PublicAiManualModelDefaults {
     output_limit: u64,
 }
 
+/// One explicit per-model new-session window default.
+/// 一个显式的逐模型新会话窗口默认值。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PublicAiModelContextWindowDefault {
+    /// Provider that owns the model.
+    /// 拥有该模型的供应商。
+    provider_id: String,
+    /// Exact model identifier.
+    /// 精确模型标识。
+    model_id: String,
+    /// Selected window; null follows the model's own window.
+    /// 所选窗口；为空表示跟随模型自身窗口。
+    selection: Option<vulcan_ai_contract::ContextWindowSelection>,
+}
+
+/// One enabled conversation model that can receive a new-session window default.
+/// 一个可设置新会话窗口默认值的已启用会话模型。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PublicAiModelContextWindowCandidate {
+    /// Provider that owns the model.
+    /// 拥有该模型的供应商。
+    pub(super) provider_id: String,
+    /// Exact model identifier.
+    /// 精确模型标识。
+    pub(super) model_id: String,
+    /// Catalog display name from the first enabled account that offers the model.
+    /// 来自首个提供该模型的已启用账号的目录显示名称。
+    pub(super) display_name: String,
+    /// Smallest window declared across the enabled accounts; null when none declares one.
+    /// 各已启用账号声明的最小窗口；均未声明时为空。
+    pub(super) context_limit: Option<u64>,
+}
+
+/// Lists every enabled conversation model with the smallest window its enabled accounts declare.
+/// 列出每个已启用会话模型，以及其已启用账号声明的最小窗口。
+///
+/// This is the single membership rule for model window defaults: the settings list shows exactly
+/// these models and saving a default accepts only them.
+/// 这是模型窗口默认值的唯一成员规则：设置列表只显示这些模型，保存默认值也只接受它们。
+pub(super) fn enabled_conversation_model_windows(
+    runtime: &PublicAiRuntime,
+    configuration: &PersistedAiConfiguration,
+    catalogs: &BTreeMap<String, vulcan_provider_adapters::ConnectionModelCatalog>,
+) -> Result<Vec<PublicAiModelContextWindowCandidate>, String> {
+    let mut candidates: BTreeMap<(String, String), PublicAiModelContextWindowCandidate> =
+        BTreeMap::new();
+    for (connection_id, connection) in &configuration.connection_graph.connections {
+        if !configuration.connection_is_enabled(connection_id)
+            || configuration.connection_is_pending_validation(connection_id)
+        {
+            continue;
+        }
+        let Some(catalog) = catalogs.get(connection_id.as_str()) else {
+            continue;
+        };
+        for model in &catalog.models {
+            if !runtime.model_is_enabled_for_connection(configuration, connection_id, &model.id)? {
+                continue;
+            }
+            let candidate = candidates
+                .entry((connection.provider_id.clone(), model.id.clone()))
+                .or_insert_with(|| PublicAiModelContextWindowCandidate {
+                    provider_id: connection.provider_id.clone(),
+                    model_id: model.id.clone(),
+                    display_name: model.display_name.clone(),
+                    context_limit: None,
+                });
+            if let Some(limit) = model.capabilities.context_limit {
+                candidate.context_limit = Some(
+                    candidate
+                        .context_limit
+                        .map_or(limit, |current| current.min(limit)),
+                );
+            }
+        }
+    }
+    Ok(candidates.into_values().collect())
+}
+
 /// Browser-facing public AI settings snapshot.
 /// 面向浏览器的公共 AI 设置快照。
 #[derive(Debug, Clone, Serialize)]
@@ -73,6 +154,16 @@ pub(crate) struct PublicAiSettingsSnapshot {
     /// Default window node applied only when a new conversation is created.
     /// 仅在新建会话时应用的默认窗口节点。
     new_session_context_compaction_window_node_id: Option<ContextCompactionWindowNodeId>,
+    /// Explicit per-model new-session window defaults; a model without an entry inherits the
+    /// system default above.
+    /// 显式的逐模型新会话窗口默认值；没有条目的模型继承上面的系统默认值。
+    model_context_window_defaults: Vec<PublicAiModelContextWindowDefault>,
+    /// Enabled conversation models that can receive a per-model window default.
+    /// 可设置逐模型窗口默认值的已启用会话模型。
+    model_context_window_candidates: Vec<PublicAiModelContextWindowCandidate>,
+    /// Smallest token count a custom window accepts.
+    /// 自定义窗口接受的最小 Token 数。
+    custom_context_window_min_tokens: u64,
     /// Persisted background account-usage refresh interval.
     /// 持久化的后台账号用量刷新间隔。
     usage_refresh_interval_seconds: u64,
@@ -720,6 +811,25 @@ pub(super) fn build_public_ai_settings_snapshot(
         context_compaction_window_nodes: configuration.context_compaction_window_nodes.clone(),
         new_session_context_compaction_window_node_id: configuration
             .new_session_context_compaction_window_node_id,
+        model_context_window_defaults: configuration
+            .model_context_window_defaults
+            .iter()
+            .filter_map(|(key, default)| {
+                let (provider_id, model_id) =
+                    PersistedAiConfiguration::provider_model_key_parts(key)?;
+                Some(PublicAiModelContextWindowDefault {
+                    provider_id: provider_id.to_owned(),
+                    model_id: model_id.to_owned(),
+                    selection: default.selection,
+                })
+            })
+            .collect(),
+        model_context_window_candidates: enabled_conversation_model_windows(
+            runtime,
+            configuration,
+            &catalogs,
+        )?,
+        custom_context_window_min_tokens: vulcan_ai_contract::CUSTOM_CONTEXT_WINDOW_MIN_TOKENS,
         usage_refresh_interval_seconds: configuration.usage_refresh_interval_seconds,
         provider_priorities: configuration.provider_priority_overrides.clone(),
         usage_cache,

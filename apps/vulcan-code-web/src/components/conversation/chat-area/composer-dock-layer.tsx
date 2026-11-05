@@ -93,9 +93,10 @@ export function ChatAreaComposerDockLayer(props: ChatAreaComposerDockLayerProps)
       contextUsage={props.isEmptyConversation ? null : workbench.contextUsage ?? null}
       sessionProviderUsage={props.isEmptyConversation ? null : workbench.sessionProviderUsage ?? null}
       contextCompactionWindowNodes={workbench.contextCompactionWindowNodes ?? []}
-      sessionContextCompactionWindowNodeId={
-        props.conversationId ? workbench.sessionContextCompactionWindowNodeId ?? null : null
+      sessionContextWindowSelection={
+        props.conversationId ? workbench.sessionContextWindowSelection ?? null : null
       }
+      customContextWindowMinTokens={workbench.customContextWindowMinTokens ?? null}
       emptyMode={props.isEmptyConversation}
       startHero={props.isEmptyConversation ? (
         <ConversationStartHero

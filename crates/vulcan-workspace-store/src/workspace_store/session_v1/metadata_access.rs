@@ -182,6 +182,12 @@ fn upgrade_step(
         // 13 在 `config.selection.provider_tools` 中新增可选的 `tool_chain_enabled` 与
         // `tool_chain_changed_mid_session`；缺省即会话跟随系统设置且从未在中途修改。
         12 => {}
+        // 14 replaces `config.context_compaction_window_node_id` (a node id string) with
+        // `config.context_window_selection` (`{"node": id}` or `{"custom": tokens}`); an absent
+        // field still follows the model.
+        // 14 将 `config.context_compaction_window_node_id`（节点标识字符串）替换为
+        // `config.context_window_selection`（`{"node": id}` 或 `{"custom": tokens}`）；缺省仍跟随模型。
+        13 => upgrade_context_window_selection(path, raw)?,
         other => {
             return Err(SessionV1Error::unsupported(
                 path,
@@ -193,6 +199,38 @@ fn upgrade_step(
         .as_object_mut()
         .ok_or_else(|| corrupt(path, "metadata root must be an object"))?;
     object.insert(String::from("schema_version"), (version + 1).into());
+    Ok(())
+}
+
+/// Moves a version-13 node id string into the version-14 tagged window selection.
+/// 将版本 13 的节点标识字符串迁入版本 14 的带标签窗口选择。
+///
+/// The node id is carried over byte for byte; whether it names a known node is checked by the
+/// final typed validation of the upgraded document, never guessed here.
+/// 节点标识逐字迁移；其是否为已知节点由升级后文档的最终强类型校验判断，此处不做猜测。
+fn upgrade_context_window_selection(
+    path: &Path,
+    raw: &mut serde_json::Value,
+) -> Result<(), SessionV1Error> {
+    let config = raw
+        .get_mut("config")
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or_else(|| corrupt(path, "metadata config must be an object"))?;
+    match config.remove("context_compaction_window_node_id") {
+        None | Some(serde_json::Value::Null) => {}
+        Some(serde_json::Value::String(node_id)) => {
+            config.insert(
+                String::from("context_window_selection"),
+                serde_json::json!({ "node": node_id }),
+            );
+        }
+        Some(_) => {
+            return Err(corrupt(
+                path,
+                "config.context_compaction_window_node_id must be a string",
+            ));
+        }
+    }
     Ok(())
 }
 

@@ -728,7 +728,7 @@ pub(crate) async fn create_and_register_root_session_v1_with_context_window(
     controller: &HostRuntimeHandle,
     registry: &SessionRuntimeRegistry,
     request: CreateRootSessionV1Request,
-    node_id: Option<vulcan_context::ContextCompactionWindowNodeId>,
+    node_id: Option<vulcan_context::ContextWindowSelection>,
 ) -> Result<Arc<SessionHandle>, SessionV1LifecycleError> {
     let CreateRootSessionV1Request {
         session_id,
@@ -752,7 +752,7 @@ pub(crate) async fn create_and_register_root_session_v1_with_context_window(
         title.as_str(),
         now_ms,
     );
-    document.set_context_compaction_window_node_id(node_id, now_ms);
+    document.set_context_window_selection(node_id, now_ms);
     // The dedicated profile and an immediate lock note precede the root input in the stream.
     // 专职配置与立即锁定通知在事件流中位于根输入之前。
     if let Some(creation) = dedicated {
@@ -2402,7 +2402,7 @@ mod tests {
         let fixture = LifecycleStorageFixture::start().await;
         let session_id = SessionId::new_v4();
         let registry = SessionRuntimeRegistry::default();
-        let node_id = vulcan_context::ContextCompactionWindowNodeId::CompressionWindow3;
+        let node_id = vulcan_context::ContextWindowSelection::Custom(235_000);
         let handle = create_and_register_root_session_v1_with_context_window(
             &fixture.controller,
             &registry,
@@ -2425,7 +2425,7 @@ mod tests {
         .expect("create root with planning node");
         assert_eq!(
             handle
-                .read(|document| document.metadata.config.context_compaction_window_node_id)
+                .read(|document| document.metadata.config.context_window_selection)
                 .expect("read initial metadata"),
             Some(node_id)
         );
@@ -2438,7 +2438,7 @@ mod tests {
         .expect("reload root metadata");
         assert_eq!(
             reloaded
-                .read(|document| document.metadata.config.context_compaction_window_node_id)
+                .read(|document| document.metadata.config.context_window_selection)
                 .expect("read persisted metadata"),
             Some(node_id)
         );

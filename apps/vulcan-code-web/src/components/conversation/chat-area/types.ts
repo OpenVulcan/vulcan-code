@@ -8,7 +8,7 @@ import type { DraftConversationSelection } from "@/components/workspace/workspac
 import type {
   ComposerAttachmentSummary,
   ComposerSlashCommandSummary,
-  ContextCompactionWindowNodeId,
+  ContextWindowSelection,
   PendingPromptSummary,
   ProviderModelSecondaryRouteSelection,
   ProviderModelSecondaryRouteSummary,
@@ -99,7 +99,7 @@ export interface ChatAreaProps {
   onSetSessionOutputStyle: (styleId: string | null) => Promise<boolean>;
   // Persists or clears the selected session context-compaction window node.
   // 持久化或清除当前会话的上下文压缩窗口节点。
-  onSetSessionContextCompactionWindow: (nodeId: ContextCompactionWindowNodeId | null) => Promise<boolean>;
+  onSetSessionContextCompactionWindow: (selection: ContextWindowSelection | null) => Promise<boolean>;
   // Stops the currently running conversation.
   // 停止当前运行中的会话。
   onStopConversationRun: () => Promise<boolean>;

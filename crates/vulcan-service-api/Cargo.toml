@@ -17,6 +17,7 @@ serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
 time = { workspace = true, features = ["formatting", "local-offset", "macros", "serde"] }
+vulcan-ai-contract.workspace = true
 vulcan-i18n.workspace = true
 vulcan-luaskills-config.workspace = true
 vulcan-permission-judge.workspace = true
@@ -28,5 +29,4 @@ workspace-hack = { version = "0.1", path = "../../workspace-hack" }
 
 [dev-dependencies]
 vulcan-runtime-assets = { workspace = true, features = ["test-support"] }
-vulcan-ai-contract.workspace = true
 tempfile.workspace = true

@@ -1284,9 +1284,8 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                 runtime_state,
                 provider_configuration.prompt.output_style.id(),
             );
-            let session_context_compaction_window_node_id = runtime_state
-                .and_then(|runtime_state| runtime_state.context_compaction_window_node_id)
-                .map(|node_id| node_id.as_str().to_string());
+            let session_context_window_selection =
+                runtime_state.and_then(|runtime_state| runtime_state.context_window_selection);
             session_addons_changed_delta_for_retained_list(
                 session.id.to_string(),
                 session_goal,
@@ -1294,7 +1293,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
                 session_plan_mode,
                 session_vmm_policy,
                 session_output_style,
-                session_context_compaction_window_node_id,
+                session_context_window_selection,
                 session_provider_usage,
             )
         })
@@ -1516,9 +1515,9 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
             provider_configuration.prompt.output_style.id(),
         ),
         context_compaction_window_nodes,
-        session_context_compaction_window_node_id: selected_runtime_state
-            .and_then(|runtime_state| runtime_state.context_compaction_window_node_id)
-            .map(|node_id| node_id.as_str().to_string()),
+        custom_context_window_min_tokens: vulcan_ai_contract::CUSTOM_CONTEXT_WINDOW_MIN_TOKENS,
+        session_context_window_selection: selected_runtime_state
+            .and_then(|runtime_state| runtime_state.context_window_selection),
         session_provider_usage: selected_session_provider_usage,
         session_addons_by_conversation,
         session_vmm_policies_by_conversation,

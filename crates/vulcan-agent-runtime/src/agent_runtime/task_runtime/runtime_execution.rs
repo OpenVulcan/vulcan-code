@@ -1753,7 +1753,7 @@ fn task_compaction_launch_inputs(
         preparation.provider_id_override.as_deref(),
         preparation.connection_id_override.as_deref(),
         preparation.model_id_override.as_deref(),
-        preparation.context_compaction_window_node_id,
+        preparation.context_window_selection,
         Some(behavior_seed),
     )?
     .ok_or_else(|| {

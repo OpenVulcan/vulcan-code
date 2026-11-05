@@ -135,7 +135,7 @@ function sessionConfig(
       set_at_ms: null,
     },
     next_request: null,
-    context_compaction_window_node_id: null,
+    context_window_selection: null,
     dedicated: null,
     permission_mode: "workspace_write",
     ...overrides,
@@ -541,7 +541,7 @@ describe("V1 conversation event window controller", () => {
         temperature: 0.4,
         set_at_ms: 99,
       },
-      context_compaction_window_node_id: "compression-window-4",
+      context_window_selection: { node: "compression-window-4" },
     });
     const controller = new ConversationEventWindowController(
       rpcMock({

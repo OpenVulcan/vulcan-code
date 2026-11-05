@@ -55,6 +55,7 @@ pub(super) use general_settings::{
     service_ack_public_ai_model_takeover_notices,
     service_save_public_ai_context_compaction_window_nodes,
     service_save_public_ai_context_window_policy_overrides,
+    service_save_public_ai_model_context_window_default,
     service_save_public_ai_new_session_context_window_default,
     service_save_public_ai_provider_priority, service_save_public_ai_usage_refresh_settings,
 };

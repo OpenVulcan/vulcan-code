@@ -71,6 +71,159 @@ pub(super) fn appearance(app: &App) -> Vec<Row> {
     ]
 }
 
+/// Choice value of a model that inherits the system new-session default.
+/// 继承系统新会话默认值的模型所用的选项值。
+const MODEL_WINDOW_INHERIT: &str = "inherit";
+/// Choice value of a model whose default follows its own window.
+/// 默认跟随模型自身窗口的选项值。
+const MODEL_WINDOW_FOLLOW: &str = "follow-model";
+/// Choice value standing for the saved custom window; picking it changes nothing.
+/// 代表已保存自定义窗口的选项值；选择它不做任何修改。
+const MODEL_WINDOW_CUSTOM: &str = "custom";
+
+/// Builds one choice row and, where custom values fit, one custom-value row per enabled conversation model.
+/// 为每个已启用会话模型构建一个选项行，并在自定义值可用时构建一个自定义值行。
+///
+/// Mirrors the WebUI defaults-by-model list and saves through the same service call.
+/// 镜像 WebUI 的按模型默认列表，并通过同一服务调用保存。
+fn model_window_default_rows(ai: &Value) -> Vec<Row> {
+    let candidates = a(ai, "/modelContextWindowCandidates");
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+    let nodes = a(ai, "/contextCompactionWindowNodes/nodes");
+    let defaults = a(ai, "/modelContextWindowDefaults");
+    let min_tokens = v(ai, "/customContextWindowMinTokens").as_u64();
+    let mut rows = vec![section(tr!("settings.modelContextWindowDefaults.title"))];
+    for candidate in candidates {
+        let provider_id = s(candidate, "/providerId");
+        let model_id = s(candidate, "/modelId");
+        let limit = v(candidate, "/contextLimit").as_u64();
+        let saved = defaults.iter().find(|entry| {
+            s(entry, "/providerId") == provider_id && s(entry, "/modelId") == model_id
+        });
+        let saved_custom = saved.and_then(|entry| v(entry, "/selection/custom").as_u64());
+        let current = match saved {
+            None => MODEL_WINDOW_INHERIT.to_string(),
+            Some(entry) if v(entry, "/selection").is_null() => MODEL_WINDOW_FOLLOW.to_string(),
+            Some(_) if saved_custom.is_some() => MODEL_WINDOW_CUSTOM.to_string(),
+            Some(entry) => s(entry, "/selection/node"),
+        };
+        let mut options = vec![
+            (
+                MODEL_WINDOW_INHERIT.to_string(),
+                tr!("settings.modelContextWindowDefaults.inherit"),
+            ),
+            (
+                MODEL_WINDOW_FOLLOW.to_string(),
+                tr!("settings.contextCompactionNodes.followModel"),
+            ),
+        ];
+        // A node equal to the model window duplicates "follow model" and stays listed only while saved.
+        // 等于模型窗口的节点与“跟随模型”重复，仅在已保存时保留。
+        options.extend(
+            nodes
+                .iter()
+                .filter(|node| {
+                    let tokens = v(node, "/tokens").as_u64();
+                    let selected = s(node, "/id") == current;
+                    matches!((tokens, limit), (Some(tokens), Some(limit))
+                        if tokens < limit || (selected && vulcan_ai_contract::context_window_fits_model(tokens, limit)))
+                })
+                .map(|node| (s(node, "/id"), s(node, "/id"))),
+        );
+        if let Some(custom) = saved_custom {
+            options.push((
+                MODEL_WINDOW_CUSTOM.to_string(),
+                format!(
+                    "{} · {}",
+                    tr!("contextWindowCustom.label"),
+                    custom_window_text(custom)
+                ),
+            ));
+        }
+        let ctx = json!({ "providerId": provider_id, "modelId": model_id });
+        let detail = format!(
+            "{provider_id} · {model_id} · {}",
+            limit.map_or_else(
+                || tr!("settings.modelContextWindowDefaults.limitUnknown"),
+                |limit| tr!(
+                    "settings.modelContextWindowDefaults.limit",
+                    limit = custom_window_text(limit)
+                ),
+            )
+        );
+        let label = s(candidate, "/displayName");
+        rows.push(
+            choice(
+                label.clone(),
+                options,
+                current,
+                Edit::Call(Setter::Build {
+                    ctx: ctx.clone(),
+                    build: |ctx, value| {
+                        let default = match value.as_str() {
+                            MODEL_WINDOW_INHERIT => None,
+                            MODEL_WINDOW_FOLLOW => Some(json!({ "selection": null })),
+                            MODEL_WINDOW_CUSTOM => return None,
+                            node => Some(json!({ "selection": { "node": node } })),
+                        };
+                        Some(settings::save_public_ai_model_context_window_default(
+                            ctx["providerId"].as_str()?,
+                            ctx["modelId"].as_str()?,
+                            default,
+                        ))
+                    },
+                }),
+            )
+            .detail(detail),
+        );
+        // Custom values need a declared window that leaves room above the service minimum.
+        // 自定义值需要已声明且不低于服务下限的模型窗口。
+        if let (Some(min), Some(limit)) = (min_tokens, limit)
+            && vulcan_ai_contract::context_window_fits_model(min, limit)
+        {
+            rows.push(
+                text(
+                    format!("{label} · {}", tr!("contextWindowCustom.label")),
+                    saved_custom.map(custom_window_text).unwrap_or_default(),
+                    Edit::Call(Setter::Build {
+                        ctx: json!({ "providerId": ctx["providerId"], "modelId": ctx["modelId"], "min": min, "limit": limit }),
+                        build: |ctx, value| {
+                            let tokens = vulcan_ai_contract::parse_custom_context_window_tokens(value.as_str())?;
+                            let fits = tokens >= ctx["min"].as_u64()?
+                                && vulcan_ai_contract::context_window_fits_model(tokens, ctx["limit"].as_u64()?);
+                            fits.then(|| {
+                                settings::save_public_ai_model_context_window_default(
+                                    ctx["providerId"].as_str().unwrap_or_default(),
+                                    ctx["modelId"].as_str().unwrap_or_default(),
+                                    Some(json!({ "selection": { "custom": tokens } })),
+                                )
+                            })
+                        },
+                    }),
+                )
+                .detail(tr!(
+                    "contextWindowCustom.hint",
+                    min = custom_window_text(min),
+                    max = custom_window_text(limit)
+                )),
+            );
+        }
+    }
+    rows
+}
+
+/// Renders a window in the accepted input shape without rounding: whole thousands as K, otherwise digits.
+/// 以可接受的输入形状无舍入地渲染窗口：整千写作 K，否则写数字。
+fn custom_window_text(tokens: u64) -> String {
+    if tokens.is_multiple_of(1_000) {
+        format!("{}K", tokens / 1_000)
+    } else {
+        tokens.to_string()
+    }
+}
+
 /// Builds context controls from the public AI settings and output-style catalogs.
 /// 根据公共 AI 设置与输出风格目录构建上下文控件。
 pub(super) fn context(app: &App) -> Vec<Row> {
@@ -116,6 +269,7 @@ pub(super) fn context(app: &App) -> Vec<Row> {
             },
         }),
     ));
+    rows.extend(model_window_default_rows(ai));
     rows.push(number(
         tr!("tui.field.usageRefresh"),
         n(ai, "/usageRefreshIntervalSeconds"),

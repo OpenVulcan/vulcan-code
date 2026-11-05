@@ -40,7 +40,7 @@ pub use system_update::{
 pub use transcript::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
 
 use serde::{Deserialize, Serialize};
-pub use vulcan_ai_contract::ContextCompactionWindowNodeId;
+pub use vulcan_ai_contract::{ContextCompactionWindowNodeId, ContextWindowSelection};
 use vulcan_core::types::ProviderUsageSnapshot;
 
 /// Ratio above which the host should proactively compact history before the next run.
@@ -262,9 +262,9 @@ pub struct ContextCompactionPolicy {
     /// Provenance describing how the retained-tail policy was resolved.
     /// 描述尾部保留策略解析方式的来源。
     pub tail_policy_source: ContextCompactionTailPolicySource,
-    /// Optional fixed node selected by the owning session for this frozen execution.
-    /// 所属会话为本次冻结执行选择的可选固定节点。
-    pub compression_window_node_id: Option<ContextCompactionWindowNodeId>,
+    /// Optional window (fixed node or custom value) selected by the owning session for this frozen execution.
+    /// 所属会话为本次冻结执行选择的可选窗口（固定节点或自定义值）。
+    pub compression_window_selection: Option<ContextWindowSelection>,
     /// Resolved node token limit used only by compaction calculations for this execution.
     /// 本次执行中仅供压缩计算使用的已解析节点 Token 上限。
     pub compression_window_limit: Option<usize>,
@@ -290,7 +290,7 @@ impl Default for ContextCompactionPolicy {
             preserve_recent_tokens: CONTEXT_COMPACTION_MIN_TAIL_TOKENS,
             tail_context_limit: None,
             tail_policy_source: ContextCompactionTailPolicySource::MissingContextLimitMinimum,
-            compression_window_node_id: None,
+            compression_window_selection: None,
             compression_window_limit: None,
             reserved: 0,
             window: ContextWindowPolicy::default(),

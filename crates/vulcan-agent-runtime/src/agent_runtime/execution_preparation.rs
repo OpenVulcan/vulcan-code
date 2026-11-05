@@ -199,7 +199,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
             model_blueprint.provider_id.as_str(),
             model_blueprint.model_id.as_str(),
             model_declared_context_limit(&model_blueprint.public_capabilities),
-            request.context_compaction_window_node_id,
+            request.context_window_selection,
             request.context_compaction_policy,
         )?;
     after_precheck_trace(

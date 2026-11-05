@@ -494,18 +494,18 @@ impl SessionDocument {
         Ok(())
     }
 
-    /// Selects the persisted context-compaction node for the next safe request
+    /// Selects the persisted context window (node or custom value) for the next safe request
     /// boundary without changing physical segment rollover thresholds.
-    /// 为下一个安全请求边界选择持久化上下文压缩节点，不改变物理分片滚段阈值。
-    pub fn set_context_compaction_window_node_id(
+    /// 为下一个安全请求边界选择持久化上下文窗口（节点或自定义值），不改变物理分片滚段阈值。
+    pub fn set_context_window_selection(
         &mut self,
-        node_id: Option<vulcan_ai_contract::ContextCompactionWindowNodeId>,
+        selection: Option<vulcan_ai_contract::ContextWindowSelection>,
         now_ms: i64,
     ) -> bool {
-        if self.metadata.config.context_compaction_window_node_id == node_id {
+        if self.metadata.config.context_window_selection == selection {
             return false;
         }
-        self.metadata.config.context_compaction_window_node_id = node_id;
+        self.metadata.config.context_window_selection = selection;
         self.bump_revision(&[DirtyFile::Metadata], now_ms, &[]);
         true
     }

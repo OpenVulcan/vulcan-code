@@ -936,10 +936,10 @@ pub struct SessionAddonsChangedDelta {
     /// 当前输出风格覆盖与最近一次安全应用的快照。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_output_style: Option<SessionOutputStyleSummary>,
-    /// Stable context-compaction window node selected by this session.
-    /// 当前会话选择的稳定上下文压缩窗口节点。
+    /// Context window (node or custom value) selected by this session; absence follows the model.
+    /// 当前会话选择的上下文窗口（节点或自定义值）；缺省即跟随模型。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_context_compaction_window_node_id: Option<String>,
+    pub session_context_window_selection: Option<vulcan_ai_contract::ContextWindowSelection>,
     /// Live physical Provider request counts and token usage for this session.
     /// 当前会话实时物理 Provider 请求计数与 Token 用量。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1000,10 +1000,10 @@ pub struct SessionContextCompactionWindowUpdateRequest {
     /// Target conversation identifier.
     /// 目标会话标识。
     pub conversation_id: String,
-    /// Stable fixed node identifier; null clears the selection and restores the model default.
-    /// 稳定固定节点标识；为空时清除选择并恢复模型默认值。
+    /// Fixed node or custom window; null clears the selection so the session follows the model.
+    /// 固定节点或自定义窗口；为空时清除选择，会话跟随模型。
     #[serde(default)]
-    pub node_id: Option<String>,
+    pub selection: Option<vulcan_ai_contract::ContextWindowSelection>,
 }
 
 /// Describes the selected session's VMM memory policy override and effective state.
@@ -1069,10 +1069,10 @@ pub struct SessionAddonsChangedResponse {
     /// 当前输出风格覆盖与最近一次安全应用的快照。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_output_style: Option<SessionOutputStyleSummary>,
-    /// Stable context-compaction window node selected by this session.
-    /// 当前会话选择的稳定上下文压缩窗口节点。
+    /// Context window (node or custom value) selected by this session; absence follows the model.
+    /// 当前会话选择的上下文窗口（节点或自定义值）；缺省即跟随模型。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_context_compaction_window_node_id: Option<String>,
+    pub session_context_window_selection: Option<vulcan_ai_contract::ContextWindowSelection>,
     /// Live physical Provider request counts and token usage for this session.
     /// 当前会话实时物理 Provider 请求计数与 Token 用量。
     #[serde(default, skip_serializing_if = "Option::is_none")]

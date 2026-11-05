@@ -393,6 +393,33 @@ export type ContextCompactionWindowNodeId =
   | "compression-window-4"
   | "compression-window-5";
 
+// ContextWindowSelection is one explicit window choice: a fixed node or a custom token count.
+// ContextWindowSelection 是一个显式窗口选择：固定节点或自定义 Token 数。
+export type ContextWindowSelection =
+  | { node: ContextCompactionWindowNodeId }
+  | { custom: number };
+
+// PublicAiModelContextWindowDefault is one explicit per-model new-session window default.
+// PublicAiModelContextWindowDefault 是一个显式的逐模型新会话窗口默认值。
+export interface PublicAiModelContextWindowDefault {
+  providerId: string;
+  modelId: string;
+  // selection null follows the model's own window.
+  // selection 为 null 表示跟随模型自身窗口。
+  selection: ContextWindowSelection | null;
+}
+
+// PublicAiModelContextWindowCandidate is one enabled conversation model that can receive a window default.
+// PublicAiModelContextWindowCandidate 是一个可设置窗口默认值的已启用会话模型。
+export interface PublicAiModelContextWindowCandidate {
+  providerId: string;
+  modelId: string;
+  displayName: string;
+  // contextLimit is the smallest window its enabled accounts declare; null when none declares one.
+  // contextLimit 是其已启用账号声明的最小窗口；均未声明时为 null。
+  contextLimit: number | null;
+}
+
 // PublicAiContextCompactionWindowNode exposes one fixed node and its editable token value.
 // PublicAiContextCompactionWindowNode 公开一个固定节点及其可编辑 Token 值。
 export interface PublicAiContextCompactionWindowNode {
@@ -1374,6 +1401,15 @@ export interface PublicAiSettingsSnapshot {
   // newSessionContextCompactionWindowNodeId applies only to newly created conversations.
   // newSessionContextCompactionWindowNodeId 仅应用于新建会话。
   newSessionContextCompactionWindowNodeId: ContextCompactionWindowNodeId | null;
+  // modelContextWindowDefaults lists explicit per-model defaults; other models inherit the system default.
+  // modelContextWindowDefaults 列出显式逐模型默认值；其他模型继承系统默认值。
+  modelContextWindowDefaults: PublicAiModelContextWindowDefault[];
+  // modelContextWindowCandidates lists the enabled conversation models the defaults list offers.
+  // modelContextWindowCandidates 列出默认值列表提供的已启用会话模型。
+  modelContextWindowCandidates: PublicAiModelContextWindowCandidate[];
+  // customContextWindowMinTokens is the smallest custom window the backend accepts.
+  // customContextWindowMinTokens 是后端接受的最小自定义窗口。
+  customContextWindowMinTokens: number;
   usageRefreshIntervalSeconds: number;
   // providerPriorities stores sparse provider ordering values; missing entries inherit zero.
   // providerPriorities 保存稀疏供应商排序值；缺失项继承零。

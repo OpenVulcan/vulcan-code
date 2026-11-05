@@ -574,13 +574,13 @@ pub(crate) fn synchronize_v1_dispatch_model_selection(
     // One document read selects only the complete active route. A pending picker change must not
     // alter another physical API inside the currently running node.
     // 单次文档读取只选择完整活动路由。待生效选择器变更不得改变当前运行节点内的另一物理 API。
-    let (session_id, route, context_compaction_window_node_id) = handle
+    let (session_id, route, context_window_selection) = handle
         .read(|document| {
             let route = document.metadata.config.active_request.clone();
             (
                 document.metadata.session_id.clone(),
                 route,
-                document.metadata.config.context_compaction_window_node_id,
+                document.metadata.config.context_window_selection,
             )
         })
         .map_err(|error| format!("Read V1 dispatch model selection failed: {error}"))?;
@@ -643,7 +643,7 @@ pub(crate) fn synchronize_v1_dispatch_model_selection(
     runtime_state.pending_model_selection = None;
     // Every user/Continue dispatch reads the node from its owner, including retained retries.
     // 每次用户或 Continue 分派均从所有者读取节点，包括保留态重试。
-    runtime_state.context_compaction_window_node_id = context_compaction_window_node_id;
+    runtime_state.context_window_selection = context_window_selection;
     Ok(())
 }
 

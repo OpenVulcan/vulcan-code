@@ -18,6 +18,7 @@ use vulcan_ai_contract::{
 };
 use vulcan_context::{
     ContextCompactionPolicy, ContextCompactionWindowNodeId, ContextWindowPolicyOverrides,
+    ContextWindowSelection,
 };
 
 /// Identifies the current persisted AI configuration schema.
@@ -26,7 +27,7 @@ pub const PERSISTED_AI_CONFIGURATION_SCHEMA_VERSION: u32 = 20;
 
 /// Largest integer that can cross the JSON-to-JavaScript settings boundary without precision loss.
 /// 可在 JSON 到 JavaScript 设置边界间无精度损失传递的最大整数。
-const JAVASCRIPT_MAX_SAFE_INTEGER_U64: u64 = 9_007_199_254_740_991;
+const JAVASCRIPT_MAX_SAFE_INTEGER_U64: u64 = vulcan_ai_contract::CONTEXT_WINDOW_MAX_SAFE_TOKENS;
 
 /// Stores only user-declared differences from immutable model capability sources.
 /// 仅保存用户相对于不可变模型能力来源声明的差异。
@@ -769,6 +770,34 @@ impl ContextCompactionWindowConfiguration {
         }
         Ok(node.tokens)
     }
+
+    /// Resolves one node or custom selection to its current token value.
+    /// 将一个节点或自定义选择解析为当前 Token 值。
+    pub fn tokens_for_selection(&self, selection: ContextWindowSelection) -> Result<u64, String> {
+        match selection {
+            ContextWindowSelection::Node(node_id) => self.tokens_for(node_id),
+            ContextWindowSelection::Custom(tokens) => Ok(tokens),
+        }
+    }
+}
+
+/// One explicit per-model new-session window default.
+/// 一个显式的逐模型新会话窗口默认值。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModelContextWindowDefault {
+    /// Window selected for new sessions of this model; `None` follows the model's own window.
+    /// 该模型新会话选用的窗口；`None` 表示跟随模型自身窗口。
+    pub selection: Option<ContextWindowSelection>,
+}
+
+impl ModelContextWindowDefault {
+    /// Validates the value range of a custom selection.
+    /// 校验自定义选择的取值范围。
+    pub fn validate(self) -> Result<(), String> {
+        self.selection
+            .map_or(Ok(()), ContextWindowSelection::validate)
+    }
 }
 
 /// Stores all new AI configuration while excluding runtime-discovered model catalogs.
@@ -908,6 +937,11 @@ pub struct PersistedAiConfiguration {
     /// 新建会话默认使用的固定窗口节点；空值表示遵循所选模型。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub new_session_context_compaction_window_node_id: Option<ContextCompactionWindowNodeId>,
+    /// Per-model new-session window defaults keyed by `provider_model_key`; a missing entry inherits
+    /// the system new-session default.
+    /// 按 `provider_model_key` 索引的逐模型新会话窗口默认值；没有条目即继承系统新会话默认值。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub model_context_window_defaults: BTreeMap<String, ModelContextWindowDefault>,
     /// Explicit non-conversation internal-use choices scoped by provider and model.
     /// 按供应商与模型限定作用域的显式非会话内部使用选择。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -1023,6 +1057,7 @@ impl Default for PersistedAiConfiguration {
             context_window_policy_overrides: ContextWindowPolicyOverrides::default(),
             context_compaction_window_nodes: ContextCompactionWindowConfiguration::default(),
             new_session_context_compaction_window_node_id: None,
+            model_context_window_defaults: BTreeMap::new(),
             internal_model_enabled_overrides: BTreeMap::new(),
             inference_profiles: BTreeMap::from([(
                 String::from("vmm"),
@@ -1268,6 +1303,12 @@ impl PersistedAiConfiguration {
         }
         for (provider_id, overrides) in &self.provider_capability_overrides {
             overrides.validate_for_provider(provider_id)?;
+        }
+        for (key, default) in &self.model_context_window_defaults {
+            Self::provider_model_key_parts(key).ok_or_else(|| {
+                format!("Persisted model context window default key `{key}` is malformed.")
+            })?;
+            default.validate()?;
         }
         self.context_compaction_window_nodes.validate()?;
         self.validate_context_window_policy()?;
@@ -1544,22 +1585,87 @@ impl PersistedAiConfiguration {
         self.new_session_context_compaction_window_node_id = node_id;
     }
 
-    /// Resolves the new-session planning node against the selected model's real context limit.
-    /// 根据所选模型的真实上下文上限解析新建会话规划节点。
-    ///
-    /// A node at or above the model limit falls back to the model limit; missing limits do too.
-    /// 节点达到或超过模型上限时遵循模型；模型上限未知时也遵循模型。
-    pub fn new_session_context_compaction_window_node_for_model(
+    /// Returns the explicit new-session window default of one exact model, if any.
+    /// 返回一个精确模型的显式新会话窗口默认值（如有）。
+    pub fn model_context_window_default(
         &self,
+        provider_id: &str,
+        model_id: &str,
+    ) -> Option<ModelContextWindowDefault> {
+        self.model_context_window_defaults
+            .get(Self::provider_model_key(provider_id, model_id).as_str())
+            .copied()
+    }
+
+    /// Saves or clears one model's new-session window default after validating it against the model.
+    /// 按模型校验后保存或清除一个模型的新会话窗口默认值。
+    ///
+    /// `model_context_limit` is the model's declared window. A selection that does not fit it is
+    /// rejected, and a custom value needs a declared window to be checked against.
+    /// `model_context_limit` 是模型声明的窗口。放不下的选择被拒绝；自定义值必须有声明窗口才能校验。
+    /// `default` of `None` removes the entry so the model inherits the system default again.
+    /// `default` 为 `None` 时删除条目，模型重新继承系统默认值。
+    pub fn set_model_context_window_default(
+        &mut self,
+        provider_id: &str,
+        model_id: &str,
         model_context_limit: Option<u64>,
-    ) -> Result<Option<ContextCompactionWindowNodeId>, String> {
-        let Some(node_id) = self.new_session_context_compaction_window_node_id else {
+        default: Option<ModelContextWindowDefault>,
+    ) -> Result<(), String> {
+        let key = Self::provider_model_key(provider_id, model_id);
+        let Some(default) = default else {
+            self.model_context_window_defaults.remove(key.as_str());
+            return Ok(());
+        };
+        default.validate()?;
+        if let Some(selection) = default.selection {
+            let tokens = self
+                .context_compaction_window_nodes
+                .tokens_for_selection(selection)?;
+            let model_limit = model_context_limit.ok_or_else(|| {
+                format!(
+                    "Model `{model_id}` does not declare a context window, so window `{}` cannot be checked against it.",
+                    selection.label()
+                )
+            })?;
+            if !vulcan_ai_contract::context_window_fits_model(tokens, model_limit) {
+                return Err(format!(
+                    "Window `{}` is {tokens} tokens, which exceeds the {model_limit}-token context window of model `{model_id}`.",
+                    selection.label()
+                ));
+            }
+        }
+        self.model_context_window_defaults.insert(key, default);
+        Ok(())
+    }
+
+    /// Resolves the new-session window for one model against its real context limit.
+    /// 按一个模型的真实上下文上限解析其新建会话窗口。
+    ///
+    /// The model's own default wins over the system default. A window that does not fit the model,
+    /// or any window for a model without a declared limit, falls back to following the model.
+    /// 模型自身默认值优先于系统默认值。放不下的窗口，或模型未声明上限时的任何窗口，均回退为跟随模型。
+    pub fn new_session_context_window_for_model(
+        &self,
+        provider_id: &str,
+        model_id: &str,
+        model_context_limit: Option<u64>,
+    ) -> Result<Option<ContextWindowSelection>, String> {
+        let selection = match self.model_context_window_default(provider_id, model_id) {
+            Some(default) => default.selection,
+            None => self
+                .new_session_context_compaction_window_node_id
+                .map(ContextWindowSelection::Node),
+        };
+        let Some(selection) = selection else {
             return Ok(None);
         };
-        let node_tokens = self.context_compaction_window_nodes.tokens_for(node_id)?;
+        let tokens = self
+            .context_compaction_window_nodes
+            .tokens_for_selection(selection)?;
         Ok(model_context_limit
-            .filter(|limit| node_tokens < *limit)
-            .map(|_| node_id))
+            .filter(|limit| vulcan_ai_contract::context_window_fits_model(tokens, *limit))
+            .map(|_| selection))
     }
 
     /// Resolves one complete Codex-compatible compaction policy for one execution turn.
@@ -1583,7 +1689,7 @@ impl PersistedAiConfiguration {
         _provider_id: &str,
         _model_id: &str,
         context_limit: Option<usize>,
-        compression_window_node_id: Option<ContextCompactionWindowNodeId>,
+        compression_window_selection: Option<ContextWindowSelection>,
         session_policy: Option<ContextCompactionPolicy>,
     ) -> Result<ContextCompactionPolicy, String> {
         let sparse = self.context_window_policy_overrides;
@@ -1594,22 +1700,24 @@ impl PersistedAiConfiguration {
             .filter(|policy| policy.window_policy_is_explicit)
             .map(|policy| {
                 (
-                    policy.compression_window_node_id,
+                    policy.compression_window_selection,
                     policy.compression_window_limit,
                 )
             });
         let (resolved_node_id, resolved_node_limit) = match frozen_selection {
             Some(selection) => selection,
-            None => match compression_window_node_id {
-                Some(node_id) => {
-                    let tokens = self.context_compaction_window_nodes.tokens_for(node_id)?;
+            None => match compression_window_selection {
+                Some(selection) => {
+                    let tokens = self
+                        .context_compaction_window_nodes
+                        .tokens_for_selection(selection)?;
                     let tokens = usize::try_from(tokens).map_err(|_| {
                         format!(
-                            "Context compaction window node `{}` exceeds this platform's token range.",
-                            node_id.as_str()
+                            "Context compaction window `{}` exceeds this platform's token range.",
+                            selection.label()
                         )
                     })?;
-                    (Some(node_id), Some(tokens))
+                    (Some(selection), Some(tokens))
                 }
                 None => (None, None),
             },
@@ -1619,17 +1727,20 @@ impl PersistedAiConfiguration {
                 "A frozen context compaction window must contain both node id and resolved token limit.",
             ));
         }
-        if let (Some(node_id), Some(node_limit)) = (resolved_node_id, resolved_node_limit) {
+        if let (Some(selection), Some(node_limit)) = (resolved_node_id, resolved_node_limit) {
             let model_limit = context_limit.ok_or_else(|| {
                 format!(
-                    "Context compaction window node `{}` requires a model-declared context limit.",
-                    node_id.as_str()
+                    "Context compaction window `{}` requires a model-declared context limit.",
+                    selection.label()
                 )
             })?;
-            if node_limit >= model_limit {
+            if !vulcan_ai_contract::context_window_fits_model(
+                u64::try_from(node_limit).unwrap_or(u64::MAX),
+                u64::try_from(model_limit).unwrap_or(u64::MAX),
+            ) {
                 return Err(format!(
-                    "Context compaction window node `{}` resolves to {} tokens, which must be lower than model context limit {}.",
-                    node_id.as_str(),
+                    "Context compaction window `{}` resolves to {} tokens, which exceeds model context limit {}.",
+                    selection.label(),
                     node_limit,
                     model_limit
                 ));
@@ -1645,7 +1756,7 @@ impl PersistedAiConfiguration {
                     preserve_recent_tokens: resolved_tail.preserve_recent_tokens,
                     tail_context_limit: resolved_tail.context_limit,
                     tail_policy_source: resolved_tail.source,
-                    compression_window_node_id: resolved_node_id,
+                    compression_window_selection: resolved_node_id,
                     compression_window_limit: resolved_node_limit,
                     ..session_policy
                 });
@@ -1655,7 +1766,7 @@ impl PersistedAiConfiguration {
                 preserve_recent_tokens: resolved_tail.preserve_recent_tokens,
                 tail_context_limit: resolved_tail.context_limit,
                 tail_policy_source: resolved_tail.source,
-                compression_window_node_id: resolved_node_id,
+                compression_window_selection: resolved_node_id,
                 compression_window_limit: resolved_node_limit,
                 window: resolved_window,
                 window_policy_is_explicit: true,
@@ -1667,7 +1778,7 @@ impl PersistedAiConfiguration {
             preserve_recent_tokens: resolved_tail.preserve_recent_tokens,
             tail_context_limit: resolved_tail.context_limit,
             tail_policy_source: resolved_tail.source,
-            compression_window_node_id: resolved_node_id,
+            compression_window_selection: resolved_node_id,
             compression_window_limit: resolved_node_limit,
             window: resolved_window,
             window_policy_is_explicit: true,
