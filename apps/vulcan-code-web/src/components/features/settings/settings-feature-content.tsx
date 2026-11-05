@@ -63,6 +63,9 @@ export interface SettingsFeatureContentProps {
   // Service-backed settings page actions.
   // 服务端支持的设置页面动作。
   actions: SettingsActionProps;
+  // Local service generation; pages that follow service state read it again when it changes.
+  // 本地服务代次；跟随服务状态的页面在其变化时重新读取。
+  serviceInstanceEpoch: number;
   // Workbench snapshot used by settings pages.
   // 设置页面使用的工作台快照。
   workbench: WorkbenchSnapshot;
@@ -164,7 +167,7 @@ function SettingsRoutedPage(props: SettingsFeatureContentProps) {
     );
   }
   if (props.activeSettingsSubArea === "app-update") {
-    return <AppUpdateSettingsArea />;
+    return <AppUpdateSettingsArea serviceInstanceEpoch={props.serviceInstanceEpoch} />;
   }
   if (props.activeSettingsSubArea === "changelog") {
     return <ChangelogSettingsArea appVersion={props.workbench.appVersion} />;

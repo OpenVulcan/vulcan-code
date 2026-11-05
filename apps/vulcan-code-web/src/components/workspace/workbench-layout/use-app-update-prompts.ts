@@ -55,6 +55,9 @@ export function useAppUpdatePrompts(serviceInstanceEpoch: number, openUpdateSett
   }, [snapshot, openUpdateSettings]);
 
   React.useEffect(() => {
+    // A new service generation means the announced restart has finished.
+    // 新的服务代次表示已宣布的重启已经完成。
+    toast.dismiss(RESTARTING_TOAST_ID);
     if (!hasServiceRuntime()) return undefined;
     let cancelled = false;
     let unsubscribe: (() => void) | null = null;

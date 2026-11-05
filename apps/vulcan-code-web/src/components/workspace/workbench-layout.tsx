@@ -1355,6 +1355,7 @@ export function WorkbenchLayout(props: {
           />
         ) : (
           <ExtractedFeatureShell
+            serviceInstanceEpoch={props.serviceInstanceEpoch}
             onOpenUsageStatistics={usageStatisticsMount ? () => {
               setActiveWorkbenchSkillSubArea(usageStatisticsMount.subAreaId);
               handleSelectTopFeatureArea("skills");

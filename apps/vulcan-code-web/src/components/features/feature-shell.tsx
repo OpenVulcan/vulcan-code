@@ -48,6 +48,9 @@ function FeatureShell(props: {
   // Service-backed settings page actions.
   // 服务端支持的设置页面动作。
   settingsActions: SettingsActionProps
+  // Local service generation; settings pages that follow service state read it again when it changes.
+  // 本地服务代次；跟随服务状态的设置页面在其变化时重新读取。
+  serviceInstanceEpoch: number
   // Workbench snapshot used by feature pages.
   // 功能页面使用的工作台快照。
   workbench: WorkbenchSnapshot
@@ -88,6 +91,7 @@ function FeatureShell(props: {
         activeSettingsSubArea={props.activeSettingsSubArea}
         onOpenUsageStatistics={props.onOpenUsageStatistics}
         settingsActions={props.settingsActions}
+        serviceInstanceEpoch={props.serviceInstanceEpoch}
         workbench={props.workbench}
       />
     ),

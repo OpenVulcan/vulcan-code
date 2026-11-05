@@ -66,9 +66,9 @@ afterEach(async () => {
 
 // render mounts the page and settles its status read.
 // render 挂载页面并完成其状态读取。
-async function render(initial: AppUpdateSnapshot): Promise<void> {
+async function render(initial: AppUpdateSnapshot, serviceInstanceEpoch = 0): Promise<void> {
   service.loadAppUpdateStatus.mockResolvedValue(initial);
-  await act(async () => { root.render(<AppUpdateSettingsArea />); });
+  await act(async () => { root.render(<AppUpdateSettingsArea serviceInstanceEpoch={serviceInstanceEpoch} />); });
 }
 
 // button finds the button whose label is the given catalog key.
@@ -78,6 +78,14 @@ function button(key: string): HTMLButtonElement | undefined {
 }
 
 describe("AppUpdateSettingsArea", () => {
+  it("reads the state of the new service after it reconnects", async () => {
+    await render(snapshot({ currentVersion: "0.1.4", readyVersion: "0.1.5", activity: "restarting" }));
+    await render(snapshot({ currentVersion: "0.1.5" }), 1);
+    expect(service.loadAppUpdateStatus).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain("0.1.5");
+    expect(button("settings.appUpdate.restart")).toBeUndefined();
+  });
+
   it("offers no update actions when this copy cannot update itself", async () => {
     await render(snapshot({ unavailableReason: "notInstalled" }));
     expect(container.textContent).toContain("settings.appUpdate.unavailable.notInstalled");

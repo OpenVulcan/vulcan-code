@@ -59,9 +59,12 @@ const ROUTE_KEYS: Record<AppUpdateRoute, TranslationKey> = {
 // AppUpdateSettingsArea shows the running version and every update action: check, download,
 // restart, repair, the rollback notice and the update settings.
 // AppUpdateSettingsArea 显示正在运行的版本及全部更新操作：检查、下载、重启、修复、回退提示与更新设置。
-export function AppUpdateSettingsArea() {
+// Parameters: serviceInstanceEpoch reads the state again after a reconnect, such as the restart into a
+// new version.
+// 参数：serviceInstanceEpoch 在重连（例如重启进入新版本）后重新读取状态。
+export function AppUpdateSettingsArea(props: { serviceInstanceEpoch: number }) {
   const { t, locale } = useI18n();
-  const { snapshot, loadError, setSnapshot } = useAppUpdate();
+  const { snapshot, loadError, setSnapshot } = useAppUpdate(props.serviceInstanceEpoch);
   const [callError, setCallError] = React.useState("");
 
   // run sends one updater call and shows its accepted snapshot; failures stay on the page.
