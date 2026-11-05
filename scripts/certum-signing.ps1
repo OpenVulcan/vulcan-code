@@ -78,10 +78,14 @@ New-Item -ItemType Directory -Path $evidence -Force | Out-Null
 if ($Phase -eq 'Install') {
     # Install only the exact official binary whose hash and Authenticode signature were checked.
     # 仅安装哈希与 Authenticode 签名均通过校验的指定官方安装包。
-    # A self-hosted machine keeps the client between runs; the pinned version with a valid signature is kept.
-    # 自托管机器在多次运行之间保留客户端；签名有效的固定版本直接沿用。
-    $kept = (Test-Path -LiteralPath $desktop -PathType Leaf) -and
-        (Get-Item -LiteralPath $desktop).VersionInfo.FileVersion -eq $installerVersion -and
+    # A self-hosted machine keeps the client between runs: when Windows lists the pinned package as installed and
+    # the client keeps a valid signature, it is kept. The package version is read from the uninstall entry, since
+    # the client executable carries a file version of its own (7.6.92.0 in package 9.4.4.92).
+    # 自托管机器在多次运行之间保留客户端：Windows 将固定版本的安装包列为已安装且客户端签名有效时直接沿用。安装包
+    # 版本从卸载登记项读取，因为客户端可执行文件有自己的文件版本（9.4.4.92 安装包中为 7.6.92.0）。
+    $registered = @(Get-ItemProperty -Path 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -eq 'proCertum SmartSign SimplySign Desktop' -and $_.DisplayVersion -eq $installerVersion })
+    $kept = $registered.Count -gt 0 -and (Test-Path -LiteralPath $desktop -PathType Leaf) -and
         (Get-AuthenticodeSignature -LiteralPath $desktop).Status -eq 'Valid'
     if ($kept) {
         $installed = [pscustomobject]@{ ExitCode = 'kept' }
