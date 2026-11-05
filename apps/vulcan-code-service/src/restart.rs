@@ -26,9 +26,11 @@ static PENDING: Mutex<Option<RestartPlan>> = Mutex::new(None);
 /// Records `plan` and asks the owner loop to drain through `shutdown_requested`.
 /// 记录 `plan`，并通过 `shutdown_requested` 请求所有者循环排空。
 pub(crate) fn request(plan: RestartPlan, shutdown_requested: &AtomicBool) -> Result<(), String> {
+    // Only the unit's own process restarts through systemd; any other Core drains and exits.
+    // 只有单元自身的进程经 systemd 重启；其他 Core 一律排空后退出。
     #[cfg(target_os = "linux")]
     if let RestartPlan::Service { executable } = &plan
-        && std::env::var_os("INVOCATION_ID").is_some()
+        && crate::user_service::running_in_user_unit()
     {
         return reinstall_user_unit(executable);
     }

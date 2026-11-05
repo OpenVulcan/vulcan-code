@@ -224,6 +224,34 @@ fn unit_name() -> &'static str {
     }
 }
 
+/// Whether this process runs inside the Vulcan Code user unit, read from its own cgroup.
+///
+/// `INVOCATION_ID` cannot answer this: desktop shells that run as systemd services (GNOME Shell,
+/// plasmashell) pass it to every application they launch, so a desktop-started Core inherits it.
+/// 本进程是否运行在 Vulcan Code 用户单元中，按其自身 cgroup 判断。
+///
+/// `INVOCATION_ID` 无法回答这个问题：以 systemd 服务运行的桌面外壳（GNOME Shell、plasmashell）会把它
+/// 传给所启动的每个应用，因此由桌面端启动的 Core 也会继承它。
+#[cfg(target_os = "linux")]
+pub(crate) fn running_in_user_unit() -> bool {
+    std::fs::read_to_string("/proc/self/cgroup")
+        .is_ok_and(|cgroup| cgroup_names_unit(&cgroup, unit_name()))
+}
+
+/// Whether any hierarchy in `/proc/self/cgroup` text places the process directly in `unit`.
+/// `/proc/self/cgroup` 文本中是否有任一层级把进程直接放在 `unit` 中。
+#[cfg(any(target_os = "linux", test))]
+fn cgroup_names_unit(cgroup: &str, unit: &str) -> bool {
+    cgroup.lines().any(|line| {
+        // Each line is `hierarchy-id:controllers:path`; the path may itself contain `:`.
+        // 每行为 `层级编号:控制器:路径`；路径本身可能包含 `:`。
+        line.splitn(3, ':')
+            .nth(2)
+            .and_then(|path| path.rsplit('/').next())
+            .is_some_and(|leaf| leaf == unit)
+    })
+}
+
 /// Quotes one value for a systemd unit line, escaping specifier and variable expansion.
 /// 为 systemd 单元行引用一个值，并转义说明符与变量展开。
 #[cfg(any(target_os = "linux", test))]
@@ -482,6 +510,30 @@ mod tests {
         assert!(lines.contains(&"Restart=on-failure"));
         assert!(lines.contains(&"WantedBy=default.target"));
         assert!(unit_name().ends_with(".service"));
+    }
+
+    /// Verifies only a process placed in the unit's own cgroup counts as running in the unit.
+    /// 验证只有位于单元自身 cgroup 的进程才算运行在单元中。
+    #[test]
+    fn only_the_unit_cgroup_counts_as_the_unit() {
+        let unit = "vulcan-code.service";
+        let in_unit =
+            "0::/user.slice/user-1000.slice/user@1000.service/app.slice/vulcan-code.service\n";
+        assert!(cgroup_names_unit(in_unit, unit));
+        let hybrid = "12:cpu,cpuacct:/\n1:name=systemd:/user.slice/user-1000.slice/user@1000.service/app.slice/vulcan-code.service\n0::/\n";
+        assert!(cgroup_names_unit(hybrid, unit));
+        // A desktop-launched Core sits in the launcher's scope or the shell's service.
+        // 由桌面端启动的 Core 位于启动器的 scope 或桌面外壳的服务中。
+        let desktop = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-gnome-vulcan\\x2dcode-4242.scope\n";
+        assert!(!cgroup_names_unit(desktop, unit));
+        let shell = "0::/user.slice/user-1000.slice/user@1000.service/session.slice/org.gnome.Shell@wayland.service\n";
+        assert!(!cgroup_names_unit(shell, unit));
+        // The transient unit that reinstalls the service is not the service.
+        // 重新安装服务的临时单元不是该服务本身。
+        let transient =
+            "0::/user.slice/user-1000.slice/user@1000.service/app.slice/run-u42.service\n";
+        assert!(!cgroup_names_unit(transient, unit));
+        assert!(!cgroup_names_unit("", unit));
     }
 
     /// Verifies a missing PATH leaves the unit to the user manager's environment.
