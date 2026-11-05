@@ -624,6 +624,18 @@ fn apply(
             root_path.display()
         );
     }
+    // The app goes to the Applications folder of the user's home, which Finder does not show by
+    // default, so the way to it is named.
+    // 应用放在用户主目录的「应用程序」文件夹中，Finder 默认不显示它，因此说明打开方式。
+    if let Some(bundle) = recorder.items.iter().find_map(|item| match item {
+        Item::Bundle { path } => Some(path),
+        _ => None,
+    }) {
+        println!(
+            "Open the desktop app with Spotlight (search \"Vulcan Code\") or from {}.",
+            bundle.display()
+        );
+    }
     if !removed.is_empty() {
         println!(
             "Removed older versions: {}.",

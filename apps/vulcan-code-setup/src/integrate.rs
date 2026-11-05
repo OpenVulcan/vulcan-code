@@ -633,6 +633,19 @@ fn app_bundle() -> Result<PathBuf, String> {
 /// 应用程序包的可执行文件，位于 `Contents/MacOS` 下。
 const BUNDLE_EXECUTABLE: &str = "vulcan-code";
 
+/// Icon file of the application bundle, below `Contents/Resources`.
+/// 应用程序包的图标文件，位于 `Contents/Resources` 下。
+const BUNDLE_ICON: &str = "AppIcon.icns";
+
+/// The application icon of a macOS desktop program `.../Electron.app/Contents/MacOS/Electron`:
+/// `scripts/desktop-runtime.mjs` copies it beside `gui/` in `Contents/Resources/app`, where the
+/// desktop app reads it for the Dock (`app-icon.ts`).
+/// macOS 桌面程序 `.../Electron.app/Contents/MacOS/Electron` 的应用图标：`scripts/desktop-runtime.mjs`
+/// 将其复制到 `Contents/Resources/app` 中 `gui/` 旁，桌面应用从此处读取程序坞图标（`app-icon.ts`）。
+fn desktop_icon(program: &Path) -> Option<PathBuf> {
+    Some(program.parent()?.parent()?.join("Resources/app/icon.png"))
+}
+
 /// Writes the macOS application bundle that starts `program`.
 /// 写入启动 `program` 的 macOS 应用程序包。
 fn write_app_bundle(program: &Path, recorder: &mut Recorder<'_>) -> Result<(), String> {
@@ -648,9 +661,49 @@ fn write_app_bundle(program: &Path, recorder: &mut Recorder<'_>) -> Result<(), S
     if let Some(parent) = bundle.parent() {
         recorder.ensure_dir(parent)?;
     }
-    let macos = bundle.join("Contents/MacOS");
+    write_bundle_files(&bundle, program)?;
+    // Finder and Spotlight cache bundle icons; a new modification time and a registration make
+    // them read the new one. Both are best effort: the bundle works without them.
+    // Finder 与 Spotlight 会缓存应用包图标；更新修改时间并重新注册使其读取新图标。两者都尽力而为：
+    // 没有它们应用包照样可用。
+    if let Ok(dir) = std::fs::File::open(&bundle) {
+        let _ = dir.set_modified(std::time::SystemTime::now());
+    }
+    let _ = Command::new(
+        "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/\
+         Support/lsregister",
+    )
+    .arg("-f")
+    .arg(&bundle)
+    .output();
+    recorder.add(Item::Bundle { path: bundle });
+    Ok(())
+}
+
+/// Writes the files of the application `bundle` that starts `program`: the launcher script, the
+/// property list and, when `program` carries the application icon, the bundle icon.
+/// 写入启动 `program` 的应用程序包 `bundle` 中的文件：启动脚本、属性列表，以及 `program` 带有应用图标
+/// 时的应用包图标。
+fn write_bundle_files(bundle: &Path, program: &Path) -> Result<(), String> {
+    let contents = bundle.join("Contents");
+    let macos = contents.join("MacOS");
     std::fs::create_dir_all(&macos)
         .map_err(|error| format!("cannot create {}: {error}", macos.display()))?;
+    // A version from before the icon was packaged has none; the bundle then keeps the generic one.
+    // 打包图标之前的版本没有图标；此时应用包保留通用图标。
+    let icon = desktop_icon(program)
+        .and_then(|path| std::fs::read(path).ok())
+        .and_then(|png| icns_from_png(&png));
+    let icon_key = match icon {
+        Some(icns) => {
+            let resources = contents.join("Resources");
+            std::fs::create_dir_all(&resources)
+                .map_err(|error| format!("cannot create {}: {error}", resources.display()))?;
+            write_file(&resources.join(BUNDLE_ICON), &icns, false)?;
+            format!("<key>CFBundleIconFile</key><string>{BUNDLE_ICON}</string>\n")
+        }
+        None => String::new(),
+    };
     let plist = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
@@ -660,16 +713,50 @@ fn write_app_bundle(program: &Path, recorder: &mut Recorder<'_>) -> Result<(), S
          <key>CFBundleIdentifier</key><string>com.openvulcan.vulcancode.launcher</string>\n\
          <key>CFBundleName</key><string>{APP_NAME}</string>\n\
          <key>CFBundlePackageType</key><string>APPL</string>\n\
-         </dict></plist>\n"
+         {icon_key}</dict></plist>\n"
     );
-    write_file(&bundle.join("Contents/Info.plist"), &plist, false)?;
+    write_file(&contents.join("Info.plist"), &plist, false)?;
     let script = format!(
         "#!/bin/sh\n{LAUNCHER_MARKER}\nexec \"{}\" \"$@\"\n",
         program.display()
     );
-    write_file(&launcher, &script, true)?;
-    recorder.add(Item::Bundle { path: bundle });
-    Ok(())
+    write_file(&macos.join(BUNDLE_EXECUTABLE), &script, true)
+}
+
+/// Wraps a square PNG in an Apple icon image (`.icns`), whose entries may hold PNG data as is;
+/// `None` when `png` is not a PNG of a size an icon entry takes.
+/// 将正方形 PNG 包装为 Apple 图标文件（`.icns`），其条目可以直接存放 PNG 数据；`png` 不是 PNG 或其尺寸
+/// 没有对应的图标条目时为 `None`。
+fn icns_from_png(png: &[u8]) -> Option<Vec<u8>> {
+    const SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
+    if png.len() < 24 || !png.starts_with(SIGNATURE) || &png[12..16] != b"IHDR" {
+        return None;
+    }
+    let width = u32::from_be_bytes(png[16..20].try_into().ok()?);
+    let height = u32::from_be_bytes(png[20..24].try_into().ok()?);
+    // Each pixel size serves its point size, and the point size of half of it on Retina screens.
+    // 每种像素尺寸用于同等点数尺寸，以及 Retina 屏幕上一半的点数尺寸。
+    let types: &[&[u8; 4]] = match (width, height) {
+        (16, 16) => &[b"icp4"],
+        (32, 32) => &[b"icp5", b"ic11"],
+        (64, 64) => &[b"icp6", b"ic12"],
+        (128, 128) => &[b"ic07"],
+        (256, 256) => &[b"ic08", b"ic13"],
+        (512, 512) => &[b"ic09", b"ic14"],
+        (1024, 1024) => &[b"ic10"],
+        _ => return None,
+    };
+    let entry = u32::try_from(png.len() + 8).ok()?;
+    let total = u32::try_from(8 + types.len() * (png.len() + 8)).ok()?;
+    let mut icns = Vec::with_capacity(total as usize);
+    icns.extend_from_slice(b"icns");
+    icns.extend_from_slice(&total.to_be_bytes());
+    for kind in types {
+        icns.extend_from_slice(*kind);
+        icns.extend_from_slice(&entry.to_be_bytes());
+        icns.extend_from_slice(png);
+    }
+    Some(icns)
 }
 
 /// Writes `content` to `path` unless a file without the setup marker is there; returns whether
@@ -695,7 +782,7 @@ fn carries_marker(path: &Path) -> bool {
 
 /// Replaces `path` atomically with `content`, executable when asked.
 /// 以 `content` 原子替换 `path`，按需设为可执行。
-fn write_file(path: &Path, content: &str, executable: bool) -> Result<(), String> {
+fn write_file(path: &Path, content: impl AsRef<[u8]>, executable: bool) -> Result<(), String> {
     let fail = |error: std::io::Error| format!("cannot write {}: {error}", path.display());
     let mut partial = path.as_os_str().to_owned();
     partial.push(".partial");
@@ -1006,6 +1093,73 @@ mod tests {
             .into_iter()
             .find(|platform| platform.as_str() == name)
             .expect("platform")
+    }
+
+    /// A PNG header of `size` pixels square, followed by a few body bytes.
+    fn png(size: u32) -> Vec<u8> {
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+        png.extend_from_slice(&size.to_be_bytes());
+        png.extend_from_slice(&size.to_be_bytes());
+        png.extend_from_slice(b"body");
+        png
+    }
+
+    #[test]
+    fn icns_wraps_the_png_in_entries_of_its_size() {
+        let image = png(512);
+        let icns = icns_from_png(&image).expect("icns");
+        assert_eq!(&icns[..4], b"icns");
+        assert_eq!(
+            u32::from_be_bytes(icns[4..8].try_into().expect("length")) as usize,
+            icns.len()
+        );
+        let mut entries = Vec::new();
+        let mut offset = 8;
+        while offset < icns.len() {
+            let length = u32::from_be_bytes(icns[offset + 4..offset + 8].try_into().expect("entry"))
+                as usize;
+            assert_eq!(&icns[offset + 8..offset + length], image.as_slice());
+            entries.push(icns[offset..offset + 4].to_vec());
+            offset += length;
+        }
+        assert_eq!(offset, icns.len());
+        assert_eq!(entries, [b"ic09".to_vec(), b"ic14".to_vec()]);
+        assert_eq!(icns_from_png(&png(500)), None);
+        assert_eq!(icns_from_png(b"not a png at all, just text"), None);
+    }
+
+    #[test]
+    fn the_bundle_carries_the_icon_of_its_program() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let app = temp.path().join("Electron.app/Contents");
+        let program = app.join("MacOS/Electron");
+        let bundle = temp.path().join("Vulcan Code.app");
+        let plist = bundle.join("Contents/Info.plist");
+        let icon = bundle.join("Contents/Resources").join(BUNDLE_ICON);
+
+        write_bundle_files(&bundle, &program).expect("bundle without icon");
+        assert!(carries_marker(
+            &bundle.join("Contents/MacOS").join(BUNDLE_EXECUTABLE)
+        ));
+        assert!(!icon.exists());
+        assert!(
+            !std::fs::read_to_string(&plist)
+                .expect("plist")
+                .contains("CFBundleIconFile")
+        );
+
+        std::fs::create_dir_all(app.join("Resources/app")).expect("app dir");
+        std::fs::write(app.join("Resources/app/icon.png"), png(512)).expect("icon");
+        write_bundle_files(&bundle, &program).expect("bundle with icon");
+        assert_eq!(
+            std::fs::read(&icon).expect("icns"),
+            icns_from_png(&png(512)).expect("icns")
+        );
+        assert!(
+            std::fs::read_to_string(&plist)
+                .expect("plist")
+                .contains(&format!("<string>{BUNDLE_ICON}</string>"))
+        );
     }
 
     #[test]
