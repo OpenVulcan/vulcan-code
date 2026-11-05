@@ -164,14 +164,7 @@ pub(crate) async fn service_save_app_update_settings(
         &state,
         "Failed to save the update settings",
         |configuration| {
-            configuration.app_update = PersistedAppUpdateConfiguration {
-                preview: Some(settings.preview),
-                route: Some(match settings.route {
-                    AppUpdateRouteSetting::Auto => PersistedAppUpdateRoute::Auto,
-                    AppUpdateRouteSetting::International => PersistedAppUpdateRoute::International,
-                    AppUpdateRouteSetting::China => PersistedAppUpdateRoute::China,
-                }),
-            };
+            configuration.app_update = persisted_settings(&settings);
             Ok(())
         },
         |_, _| (),
@@ -180,9 +173,40 @@ pub(crate) async fn service_save_app_update_settings(
     Ok(updater.set_settings(settings))
 }
 
+/// The saved form of `settings`: a value equal to its default is left out, so turning a choice
+/// back removes it from the file instead of writing the default.
+/// `settings` 的保存形式：等于默认值的值不写出，因此改回某项选择时会将其从文件中移除，而不是写入默认值。
+fn persisted_settings(settings: &AppUpdateSettings) -> PersistedAppUpdateConfiguration {
+    let defaults = AppUpdateSettings::default();
+    PersistedAppUpdateConfiguration {
+        preview: (settings.preview != defaults.preview).then_some(settings.preview),
+        route: (settings.route != defaults.route).then(|| match settings.route {
+            AppUpdateRouteSetting::Auto => PersistedAppUpdateRoute::Auto,
+            AppUpdateRouteSetting::International => PersistedAppUpdateRoute::International,
+            AppUpdateRouteSetting::China => PersistedAppUpdateRoute::China,
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Saving the defaults leaves nothing in the file; a changed choice is saved and read back.
+    /// 保存默认值不会在文件中留下任何内容；改变的选择会被保存并读回。
+    #[test]
+    fn saved_settings_leave_defaults_out_and_keep_choices() {
+        assert!(persisted_settings(&AppUpdateSettings::default()).is_default());
+        let chosen = AppUpdateSettings {
+            preview: true,
+            route: AppUpdateRouteSetting::International,
+        };
+        let configuration = ProviderConfigurationFile {
+            app_update: persisted_settings(&chosen),
+            ..ProviderConfigurationFile::default()
+        };
+        assert_eq!(app_update_settings(&configuration), chosen);
+    }
 
     /// Unsaved settings stay at their defaults and saved ones are read back exactly.
     /// 未保存的设置保持默认值，已保存的设置被准确读回。
