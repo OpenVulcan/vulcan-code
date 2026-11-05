@@ -9,9 +9,9 @@
 #   self-hosted-runner.sh status [--dir <directory>]
 #   self-hosted-runner.sh run [--dir <directory>]
 #
-# --manual installs no service: the runner is online only while `run` (its run.sh) runs in a terminal, and offline
+# --manual installs no service: the runner is online only while `run` (its start.sh) runs in a terminal, and offline
 # otherwise, so CI and release use the hosted images. The directory defaults to ~/actions-runner/vulcan-code.
-# --manual 不安装服务：运行器只在终端中运行 `run`（即其 run.sh）期间在线，其余时间离线，CI 与发布随之使用托管
+# --manual 不安装服务：运行器只在终端中运行 `run`（即其 start.sh）期间在线，其余时间离线，CI 与发布随之使用托管
 # 镜像。目录默认为 ~/actions-runner/vulcan-code。
 #
 # The token comes on standard input so it never appears in a typed command or a log; `node scripts/ci-runners.mjs
@@ -92,6 +92,23 @@ service() {
     if [ "$(uname -s)" = Darwin ]; then (cd "$RunnerDir" && ./svc.sh "$@"); else (cd "$RunnerDir" && sudo ./svc.sh "$@"); fi
 }
 
+# write_start writes start.sh, which a manual runner is started with. run.sh keeps the PATH of the terminal that
+# starts it, where ~/.local/bin and ~/.cargo/bin may be missing; only the service loads .path. start.sh loads .path
+# first, so a manual runner gives its jobs the same PATH as a service.
+# write_start 写出手动运行器的启动脚本 start.sh。run.sh 沿用启动它的终端的 PATH，其中可能没有 ~/.local/bin 与
+# ~/.cargo/bin；只有服务会载入 .path。start.sh 先载入 .path，使手动运行器的作业与服务得到相同的 PATH。
+write_start() {
+    cat > "$RunnerDir/start.sh" <<'EOF'
+#!/bin/sh
+# Start this runner with the PATH config.sh recorded in .path, as its service would (self-hosted-runner.sh).
+cd "$(dirname "$0")" || exit 1
+PATH=$(cat .path)
+export PATH
+exec ./run.sh "$@"
+EOF
+    chmod +x "$RunnerDir/start.sh"
+}
+
 command=${1:-}
 [ $# = 0 ] || shift
 Repository= Label= Name=$(hostname -s) Manual=false
@@ -121,7 +138,8 @@ case "$command" in
         (cd "$RunnerDir" && ./config.sh --unattended --url "https://github.com/$Repository" --token "$Token" \
             --name "$Name" --labels "$Label" --work _work --replace)
         if [ "$Manual" = true ]; then
-            echo "Runner $Name ($Label) is installed in $RunnerDir; start it with: $RunnerDir/run.sh"
+            write_start
+            echo "Runner $Name ($Label) is installed in $RunnerDir; start it with: $RunnerDir/start.sh"
         else
             service install
             service start
@@ -144,7 +162,8 @@ case "$command" in
         ;;
     run)
         [ -e "$RunnerDir/.runner" ] || fail "no runner is configured in $RunnerDir"
-        exec "$RunnerDir/run.sh"
+        [ -e "$RunnerDir/start.sh" ] || write_start
+        exec "$RunnerDir/start.sh"
         ;;
     *)
         fail "usage: self-hosted-runner.sh install --repository <owner/name> --label <label> [--name <name>] [--dir <dir>] [--manual] | remove | status | run"

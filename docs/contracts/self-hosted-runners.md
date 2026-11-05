@@ -94,8 +94,10 @@ node scripts/ci-runners.mjs unregister <位置> [--dir <目录>]
 `register` 用维护者的 `gh` 取得一次性注册令牌，经标准输入交给目标机器上的
 `scripts/self-hosted-runner.sh install`（本机为 Windows 时是 `self-hosted-runner.ps1`）：安装 PowerShell
 （若缺少）与最新运行器（均按 GitHub 公布的 SHA-256 校验），以池标签注册到本仓库，并安装为服务；带
-`--manual` 时不安装服务。手动运行器的启动方式：Windows 在管理员终端运行 `<目录>\start.cmd`；WSL 运行
-`wsl -d <发行版> -- ~/actions-runner/vulcan-code/run.sh`。令牌不打印、不写入命令行历史。无法 SSH 时，
+`--manual` 时不安装服务，而是写出启动脚本：Windows 在终端运行 `<目录>\start.cmd`；Linux（含 WSL）运行
+`<目录>/start.sh`，WSL 即 `wsl -d <发行版> -- ~/actions-runner/vulcan-code/start.sh`。不要直接运行 `run.sh`：
+它沿用启动终端的 PATH，`~/.local/bin` 与 `~/.cargo/bin` 可能不在其中，只有服务与 `start.sh` 会载入注册时
+记录的 `.path`。令牌不打印、不写入命令行历史。无法 SSH 时，
 可在机器上直接运行该脚本，并从标准输入提供在仓库 Settings → Actions → Runners 页面取得的令牌。
 
 用 Apple 芯片机器服务 `macos-x64` 池时须让整个作业在 Rosetta 下运行（x86_64 的 Node 与 Rust 工具链）；
