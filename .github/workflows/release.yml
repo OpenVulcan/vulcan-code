@@ -89,10 +89,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux builds on 22.04 so the archive runs on glibc 2.35 and newer.
-          # Linux 在 22.04 上构建，使归档可在 glibc 2.35 及以上运行。
-          - { platform: linux-x64, runner: ubuntu-22.04 }
-          - { platform: linux-arm64, runner: ubuntu-22.04-arm }
+          # Linux builds on 22.04 so the archive runs on glibc 2.35 and newer; `glibc` is what a self-hosted
+          # machine of the pool must have.
+          # Linux 在 22.04 上构建，使归档可在 glibc 2.35 及以上运行；`glibc` 是该池自托管机器必须具备的版本。
+          - { platform: linux-x64, runner: ubuntu-22.04, glibc: '2.35' }
+          - { platform: linux-arm64, runner: ubuntu-22.04-arm, glibc: '2.35' }
           - { platform: macos-x64, runner: macos-15-intel }
           - { platform: macos-arm64, runner: macos-15 }
     # A self-hosted pool of this platform takes the job when runners.yml chose it; the hosted image otherwise.
@@ -118,10 +119,20 @@ jobs:
       # Hosted Linux images keep about 20 GB free; a release build of this workspace needs more.
       # 托管 Linux 镜像只剩约 20 GB 空间，本工作区的 release 构建需要更多。
       - name: Free disk space
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && runner.environment != 'self-hosted'
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
           df -h /
+      # The archive links against the glibc of the machine that builds it, so an own machine must match the hosted one.
+      # 归档链接构建机器的 glibc，因此自有机器必须与托管镜像一致。
+      - name: Check the glibc of a self-hosted machine
+        if: runner.os == 'Linux' && runner.environment == 'self-hosted'
+        env:
+          GLIBC: ${{ matrix.glibc }}
+        run: |
+          set -eu
+          found=$(getconf GNU_LIBC_VERSION | cut -d ' ' -f 2)
+          [ "$found" = "$GLIBC" ] || { echo "::error::this machine has glibc $found; the $PLATFORM release needs $GLIBC (Ubuntu 22.04)"; exit 1; }
       - id: versions
         run: node scripts/ci-runtime-versions.mjs
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
@@ -195,11 +206,13 @@ jobs:
 
   build-windows:
     name: Build and sign (windows-x64)
-    needs: plan
-    # The signing secrets exist only in the release environment, which requires approval.
-    # 签名密钥只存在于需要审批的 release 环境中。
+    needs: [plan, runners]
+    # The signing secrets exist only in the release environment, which requires approval. An own machine of the
+    # pool runs its runner from an elevated terminal, since signing installs SimplySign Desktop when it is missing.
+    # 签名密钥只存在于需要审批的 release 环境中。该池的自有机器须在管理员终端中运行其运行器，因为缺少
+    # SimplySign Desktop 时签名会安装它。
     environment: release
-    runs-on: windows-2025
+    runs-on: ${{ fromJSON(needs.runners.outputs.pools)['windows-x64'] || 'windows-2025' }}
     timeout-minutes: 360
     # One cloud signing session at a time across every workflow that logs in to Certum.
     # 所有登录 Certum 的工作流同一时间只有一个云签名会话。
@@ -218,6 +231,11 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+          clean: ${{ runner.environment != 'self-hosted' }}
+      - uses: ./.github/actions/self-hosted-workspace
+        with:
+          step: prepare
+          rebuild: ${{ inputs.rebuild }}
       # The runner context is not available to job-level env, so the evidence directory is set here.
       # 作业级 env 无法使用 runner 上下文，因此在此设置签名证据目录。
       - name: Signing evidence directory
@@ -369,6 +387,11 @@ jobs:
           foreach ($report in @(Get-ChildItem $env:EVIDENCE -Filter '*.json' -ErrorAction SilentlyContinue)) {
             "### $($report.Name)", '```json', (Get-Content -Raw -LiteralPath $report.FullName), '```' >> $env:GITHUB_STEP_SUMMARY
           }
+      - uses: ./.github/actions/self-hosted-workspace
+        if: ${{ !cancelled() }}
+        with:
+          step: tidy
+          profile: release
 
   publish:
     name: Publish to preview

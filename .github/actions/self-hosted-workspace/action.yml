@@ -50,7 +50,8 @@ runs:
         # `make prune` prunes the debug profile; `make prune release` the release one.
         # `make prune` 清理 debug 模式目录；`make prune release` 清理 release 模式目录。
         if [ "$PROFILE" = release ]; then set -- release; else set --; fi
-        sh ./make.sh prune "$@" || echo "::warning::make prune $PROFILE failed; target/ is kept as it is."
+        if [ "$RUNNER_OS" = Windows ]; then prune='pwsh -NoProfile -File ./make.ps1'; else prune='sh ./make.sh'; fi
+        $prune prune "$@" || echo "::warning::make prune $PROFILE failed; target/ is kept as it is."
         used_kb=$(du -sk target | cut -f1)
         echo "target/ after pruning: $((used_kb / 1048576)) GB (cap ${CAP_GB} GB)"
         if [ "$used_kb" -gt $((CAP_GB * 1048576)) ]; then

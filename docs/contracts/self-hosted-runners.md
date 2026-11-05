@@ -2,21 +2,31 @@
 
 本文记录 CI（`ci.yml`）与发布（`release.yml`）如何使用维护者自有的机器。实现权威是
 `scripts/ci-runners.mjs`（池、标签、选择与远程注册）、`.github/workflows/runners.yml`（每次运行选择一次）、
-`.github/actions/self-hosted-workspace/`（保留编译结果与清理）和 `scripts/self-hosted-runner.sh`
-（在机器上安装或移除运行器）。
+`.github/actions/self-hosted-workspace/`（保留编译结果与清理）以及 `scripts/self-hosted-runner.sh`、
+`scripts/self-hosted-runner.ps1`（在 macOS/Linux 与 Windows 机器上安装或移除运行器）。
 
 ## 池与标签
 
-- **池是一个构建平台**，目前只有 `macos-x64` 与 `macos-arm64`（`ci-runners.mjs` 的 `POOLS`）。机器以
+- **池是一个构建平台**：`macos-x64`、`macos-arm64`、`linux-x64`、`windows-x64`（`ci-runners.mjs` 的 `POOLS`）。机器以
   `vulcan-<池>` 标签注册到本仓库，例如 `vulcan-macos-x64`；标签只由 `poolLabel` 生成。
 - **只有 `ci.yml` 与 `release.yml` 使用池。** 它们调用 `runners.yml` 得到 `pools`，作业运行于
   `fromJSON(pools)[<池>] || <托管镜像>`。其他工作流（`release-setup.yml`、`build-smoke.yml` 等）不写池标签，
   始终使用托管镜像。组织为 GitHub 免费版，无法按工作流限制运行器组，因此"只给这两个工作流用"由标签保证。
-- **当前使用池的作业**：发布的 `Build (macos-x64)`、`Build (macos-arm64)` 各用同名池；CI 的
-  `Build scripts (macos-15)`、`Service and setup check (macos-15)` 使用别名 `macos`（`ALIASES`），
-  取 `macos-arm64`、`macos-x64` 中第一个有运行器在线的池。这些检查编译 macOS 平台代码，两种架构效果相同。
-- **Linux 与 Windows 不进入池。** Linux 发布构建须在 Ubuntu 22.04 上编译，以保持 glibc 2.35 兼容；
-  Windows 构建持有 release 环境的签名密钥。新增池前必须先解决这些约束，再修改 `POOLS` 与作业。
+- **当前使用池的作业**：
+  - 发布：`Build (macos-x64)`、`Build (macos-arm64)`、`Build (linux-x64)` 各用同名池；
+    `Build and sign (windows-x64)` 用 `windows-x64`。
+  - CI：`Rust clippy`、`Rust fast tests` 用 `linux-x64`；`Service and setup check (windows-2025)` 用
+    `windows-x64`；`Build scripts (macos-15)`、`Service and setup check (macos-15)` 用别名 `macos`
+    （`ALIASES`），取 `macos-arm64`、`macos-x64` 中第一个有运行器在线的池。
+  - 其余较轻的作业保留托管镜像，与池作业并行，不在同一台机器上排队。
+- **`linux-x64` 机器必须是 Ubuntu 22.04。** 发布归档链接构建机器的 glibc，须保持 2.35 以支持旧发行版；
+  发布作业在自托管 Linux 机器上先检查 `getconf GNU_LIBC_VERSION` 等于矩阵的 `glibc`，不符即失败。
+  在 Windows 上用独立的 WSL 发行版提供（`wsl --install Ubuntu-22.04 --name <名称> --location <目录>`），
+  不使用日常开发的发行版：后者会随系统升级改变 glibc，且作业的清理与依赖安装不应触及它。
+- **`linux-arm64` 不进入池。** 构建脚本只产出其所在机器的平台（Node、Electron、浏览器、LuaJIT 与运行时
+  布局均取宿主架构），交叉编译不受支持。
+- **`windows-x64` 机器运行发布的签名作业。** 该作业属于需审批的 release 环境，签名密钥只在该作业中出现；
+  缺少固定版本的 SimplySign Desktop 时签名步骤会安装它，因此运行器须在管理员终端中启动。
 
 ## 选择与回退
 
@@ -34,34 +44,48 @@
 - 选择发生在运行开始时。之后运行器离线、或运行器正忙，作业会排队等待；需要立即完成时取消该运行，
   以 `runners: hosted` 重新运行。
 - 一台机器一次只运行一个作业；同一次运行中分到同一池的多个作业依次执行。
+- **手动启动的运行器**（`--manual`，Windows 上始终如此）不安装服务，只在其启动脚本运行期间在线，关闭终端即
+  离线，`auto` 随之回到托管镜像。用 Ctrl+C 停止，运行器会立即报告离线；强行结束进程时 GitHub 需要几分钟
+  才判定离线，期间开始的运行会排队，按上面的方法取消重跑。
 
 ## 编译结果的保留
 
+- 同一台运行器上本仓库的所有作业共用一个工作目录，因此**每个可能分到池的作业**都必须以 `clean: false`
+  检出并执行 `prepare`；任何一个以默认方式检出的作业都会删除其他作业保留的 `target/`。
 - 自托管作业检出时 `clean: false`，随后 `self-hosted-workspace` 的 `prepare` 删除 `target/` 与
   `third_party/build-input-cache/` 之外的全部未跟踪文件。发行目录 `output-release/` 等每次重新生成，
   不会把上一版的旧文件打进新包。
 - `target/` 跨运行保留，Cargo 按指纹只重编输入变化的 crate；发布的 `rebuild` 输入为真时先删除 `target/`。
-- 作业末尾的 `tidy` 执行 `make prune`（发布为 `make prune release`），每个工作区 crate 保留最新单元，
+- 编译 Rust 的作业末尾的 `tidy` 执行 `make prune`（发布为 `make prune release`；Windows 上为 `make.ps1`），每个工作区 crate 保留最新单元，
   第三方单元不动；随后 `target/` 超过 150 GB（`target-cap-gb`）时整个删除，下次完整编译。
   `make prune` 由 PowerShell 实现，机器上需要 `pwsh`（注册脚本会安装）。
 - 自托管时不使用 `Swatinem/rust-cache`，它会裁剪保留的 `target/`。
 
 ## 添加或移除机器
 
-前置条件（需要管理员权限，由机器使用者执行）：macOS 安装 Xcode 命令行工具（`xcode-select --install`），
-接电源时不休眠（`sudo pmset -c sleep 0 disksleep 0`），并开启"远程登录"以便维护者经 SSH 操作；
-运行器以 LaunchAgent 运行，机器重启后需要该用户登录（或开启自动登录）才会上线。
+前置条件（需要管理员权限，由机器使用者执行）：
+- macOS：安装 Xcode 命令行工具（`xcode-select --install`），接电源时不休眠
+  （`sudo pmset -c sleep 0 disksleep 0`），并开启"远程登录"以便维护者经 SSH 操作；运行器以 LaunchAgent
+  运行，机器重启后需要该用户登录（或开启自动登录）才会上线。
+- Linux（含 WSL 发行版）：Ubuntu 22.04，以 root 执行一次 `sh scripts/install_linux_system_deps.sh` 并安装
+  `git curl unzip xz-utils zstd`；作业不使用 sudo，依赖齐全时该脚本不再调用包管理器。
+- Windows：已安装 Git for Windows、PowerShell 7、Node 与 Rust 工具链，并完成本仓库的 `make init-system`。
+  `shell: bash` 的步骤必须得到 Git Bash，而 Windows 可能把 WSL 启动器 `bash.exe` 排在前面，所以注册时
+  写出 `start.cmd`，由它把 Git Bash 放在 PATH 最前再启动运行器。工作区为 `<目录>\w`，路径较短。
 
 在维护者机器上（已用 `gh` 登录、可经 SSH 免密登录目标机器）：
 
 ```bash
-node scripts/ci-runners.mjs register <用户@主机> <macos-x64|macos-arm64> [运行器名称]
-node scripts/ci-runners.mjs unregister <用户@主机>
+node scripts/ci-runners.mjs register <位置> <池> [--name <名称>] [--dir <目录>] [--manual]
+node scripts/ci-runners.mjs unregister <位置> [--dir <目录>]
 ```
 
+`<位置>` 为 `用户@主机`（SSH）、`wsl:<发行版>`（本机的 WSL 发行版）或 `local`（本机）。
 `register` 用维护者的 `gh` 取得一次性注册令牌，经标准输入交给目标机器上的
-`scripts/self-hosted-runner.sh install`：安装 PowerShell（若缺少）与最新运行器（均按 GitHub 公布的
-SHA-256 校验），以池标签注册到本仓库，并安装为服务。令牌不打印、不写入命令行历史。无法 SSH 时，
+`scripts/self-hosted-runner.sh install`（本机为 Windows 时是 `self-hosted-runner.ps1`）：安装 PowerShell
+（若缺少）与最新运行器（均按 GitHub 公布的 SHA-256 校验），以池标签注册到本仓库，并安装为服务；带
+`--manual` 时不安装服务。手动运行器的启动方式：Windows 在管理员终端运行 `<目录>\start.cmd`；WSL 运行
+`wsl -d <发行版> -- ~/actions-runner/vulcan-code/run.sh`。令牌不打印、不写入命令行历史。无法 SSH 时，
 可在机器上直接运行该脚本，并从标准输入提供在仓库 Settings → Actions → Runners 页面取得的令牌。
 
 用 Apple 芯片机器服务 `macos-x64` 池时须让整个作业在 Rosetta 下运行（x86_64 的 Node 与 Rust 工具链）；
@@ -72,4 +96,5 @@ SHA-256 校验），以池标签注册到本仓库，并安装为服务。令牌
 - 仓库公开。所有工作流都只能手动或由发布触发，没有 `pull_request` 触发；但外部贡献者的拉取请求可以新增
   工作流并写上池标签。仓库的外部贡献者工作流审批应设为"所有外部贡献者"（Settings → Actions →
   Fork pull request workflows），使这类运行必须先经维护者批准。
-- 池作业不使用任何密钥；签名与发布只在托管机器上的 release 环境作业中进行。机器上只有运行器自身的凭据。
+- 除 `windows-x64` 的签名作业外，池作业不使用任何密钥。签名作业属于需审批的 release 环境，外部贡献者的
+  拉取请求取不到环境密钥；发布（上传、签名索引、GitHub Release）仍只在托管机器上进行。

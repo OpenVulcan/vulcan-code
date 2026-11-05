@@ -63,7 +63,8 @@ function Get-CertumSigningCertificates {
 
 # These pinned values come from the official Certum download page and verified MSI metadata.
 # 以下固定值来自 Certum 官方下载页面和已验证的 MSI 元数据。
-$installerUrl = 'https://files.certum.eu/software/SimplySignDesktop/Windows/9.4.4.92/SimplySignDesktop-9.4.4.92-64-bit-en.msi'
+$installerVersion = '9.4.4.92'
+$installerUrl = "https://files.certum.eu/software/SimplySignDesktop/Windows/$installerVersion/SimplySignDesktop-$installerVersion-64-bit-en.msi"
 $installerSha256 = '8ec420fc27798b86078b7bd02fe7152097e1b3005bab51820eaca8e57df84da3'
 $installerSigner = 'AC9C643063CD501E851A7B6A9762E295FBABB012'
 # The timestamp server is occasionally unavailable; each file gets this many attempts this far apart.
@@ -77,17 +78,26 @@ New-Item -ItemType Directory -Path $evidence -Force | Out-Null
 if ($Phase -eq 'Install') {
     # Install only the exact official binary whose hash and Authenticode signature were checked.
     # 仅安装哈希与 Authenticode 签名均通过校验的指定官方安装包。
-    $installer = Join-Path $env:RUNNER_TEMP 'SimplySignDesktop-9.4.4.92.msi'
-    Invoke-WebRequest -Uri $installerUrl -OutFile $installer
-    if ((Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant() -ne $installerSha256) {
-        throw 'simplysign_installer_hash_mismatch'
+    # A self-hosted machine keeps the client between runs; the pinned version with a valid signature is kept.
+    # 自托管机器在多次运行之间保留客户端；签名有效的固定版本直接沿用。
+    $kept = (Test-Path -LiteralPath $desktop -PathType Leaf) -and
+        (Get-Item -LiteralPath $desktop).VersionInfo.FileVersion -eq $installerVersion -and
+        (Get-AuthenticodeSignature -LiteralPath $desktop).Status -eq 'Valid'
+    if ($kept) {
+        $installed = [pscustomobject]@{ ExitCode = 'kept' }
+    } else {
+        $installer = Join-Path $env:RUNNER_TEMP "SimplySignDesktop-$installerVersion.msi"
+        Invoke-WebRequest -Uri $installerUrl -OutFile $installer
+        if ((Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant() -ne $installerSha256) {
+            throw 'simplysign_installer_hash_mismatch'
+        }
+        $signature = Get-AuthenticodeSignature -LiteralPath $installer
+        if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Thumbprint -ne $installerSigner) {
+            throw 'simplysign_installer_signature_invalid'
+        }
+        $installed = Invoke-BoundedTool -Executable 'msiexec.exe' -Arguments @('/i', $installer, '/qn', '/norestart') -TimeoutSeconds 240
+        if ($installed.ExitCode -notin @(0, 3010)) { throw "simplysign_install_failed_$($installed.ExitCode)" }
     }
-    $signature = Get-AuthenticodeSignature -LiteralPath $installer
-    if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Thumbprint -ne $installerSigner) {
-        throw 'simplysign_installer_signature_invalid'
-    }
-    $installed = Invoke-BoundedTool -Executable 'msiexec.exe' -Arguments @('/i', $installer, '/qn', '/norestart') -TimeoutSeconds 240
-    if ($installed.ExitCode -notin @(0, 3010)) { throw "simplysign_install_failed_$($installed.ExitCode)" }
     if (-not (Test-Path -LiteralPath $desktop -PathType Leaf) -or
         -not (Test-Path -LiteralPath "$env:WINDIR\System32\SimplySignPKCS.dll" -PathType Leaf)) {
         throw 'simplysign_installed_files_missing'

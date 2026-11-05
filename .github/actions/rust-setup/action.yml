@@ -15,7 +15,7 @@ runs:
     # Hosted Linux images keep about 20 GB free; debug test builds of this workspace need more.
     # 托管 Linux 镜像只剩约 20 GB 空间，本工作区的调试测试构建需要更多。
     - name: Free disk space
-      if: runner.os == 'Linux'
+      if: runner.os == 'Linux' && runner.environment != 'self-hosted'
       shell: bash
       run: |
         sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL

@@ -9,21 +9,23 @@
 //
 // Modes: `auto` uses a pool only while one of its runners is online (needs RUNNER_STATUS_TOKEN, a token that may
 // read the repository's runners), `hosted` uses none, `self-hosted` uses every pool even when no runner is online,
-// so its jobs wait for one. On the maintainer's machine, `register` and `unregister` set up a runner over SSH.
+// so its jobs wait for one. On the maintainer's machine, `register` and `unregister` set up a runner on a machine
+// reached over SSH, in a WSL distribution of this machine, or on this machine itself.
 // 模式：`auto` 只在池中有运行器在线时使用该池（需要可读取仓库运行器的 RUNNER_STATUS_TOKEN）；`hosted` 不使用
 // 任何池；`self-hosted` 无论是否在线都使用全部池，其作业将等待运行器上线。在维护者机器上，`register` 与
-// `unregister` 通过 SSH 设置运行器。
+// `unregister` 在经 SSH 访问的机器、本机的 WSL 发行版或本机上设置运行器。
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseArgs } from 'node:util';
 
-// POOLS lists the platforms whose jobs may run on the maintainer's machines. Linux release builds stay hosted
-// because they target the glibc of Ubuntu 22.04, and the Windows build stays hosted because it holds the
-// signing secrets.
-// POOLS 列出作业可以运行在维护者机器上的平台。Linux 发布构建保留托管，因为它面向 Ubuntu 22.04 的 glibc；
-// Windows 构建保留托管，因为它持有签名密钥。
-export const POOLS = ['macos-x64', 'macos-arm64'];
+// POOLS lists the platforms whose jobs may run on the maintainer's machines. A linux-x64 machine must run
+// Ubuntu 22.04, since the release archive links against its glibc 2.35 (release.yml checks it); linux-arm64
+// stays hosted because the build scripts produce the platform of the machine they run on.
+// POOLS 列出作业可以运行在维护者机器上的平台。linux-x64 机器必须运行 Ubuntu 22.04，因为发布归档链接其
+// glibc 2.35（release.yml 会检查）；linux-arm64 保留托管，因为构建脚本只产出其所在机器的平台。
+export const POOLS = ['macos-x64', 'macos-arm64', 'linux-x64', 'windows-x64'];
 
 // MODES are the accepted values of the `runners` input.
 // MODES 是 `runners` 输入接受的取值。
@@ -78,36 +80,64 @@ async function listRunners(repository, token) {
   }
 }
 
-// remoteRunner registers (`register <ssh target> <pool> [name]`) or removes (`unregister <ssh target>`) the
-// runner of a machine reached over SSH. The token comes from the maintainer's gh and goes to
-// scripts/self-hosted-runner.sh on standard input, so it is never printed.
-// remoteRunner 注册（`register <ssh 目标> <池> [名称]`）或移除（`unregister <ssh 目标>`）经 SSH 访问的机器上的
-// 运行器。令牌取自维护者的 gh，经标准输入交给 scripts/self-hosted-runner.sh，因此从不打印。
-function remoteRunner(command, target, pool, name) {
+// USAGE describes the register and unregister commands.
+// USAGE 描述 register 与 unregister 命令。
+const USAGE = `usage: ci-runners.mjs register <where> <${POOLS.join('|')}> [--name <name>] [--dir <directory>] [--manual]
+       ci-runners.mjs unregister <where> [--dir <directory>]
+<where> is <user@host> (SSH), wsl:<distribution> or local; --manual installs no service, so the runner is
+online only while its run script is started by hand.`;
+
+// runnerCommand registers (`register`) or removes (`unregister`) the runner of a machine: `where` is an SSH
+// target, `wsl:<distribution>` or `local`. The token comes from the maintainer's gh and goes to
+// scripts/self-hosted-runner.sh (or .ps1 on Windows) on standard input, so it is never printed.
+// runnerCommand 注册（`register`）或移除（`unregister`）一台机器的运行器：`where` 为 SSH 目标、
+// `wsl:<发行版>` 或 `local`。令牌取自维护者的 gh，经标准输入交给 scripts/self-hosted-runner.sh
+// （Windows 上为 .ps1），因此从不打印。
+function runnerCommand(command, argv) {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: { name: { type: 'string' }, dir: { type: 'string' }, manual: { type: 'boolean', default: false } },
+  });
+  const [where, pool] = positionals;
+  if (!where || (command === 'register' && !POOLS.includes(pool))) throw new Error(USAGE);
   const run = (program, args, input) => {
     const result = spawnSync(program, args, { input, encoding: 'utf8', stdio: ['pipe', 'pipe', 'inherit'] });
-    if (result.status !== 0) throw new Error(`${program} failed with status ${result.status}`);
+    if (result.status !== 0) throw new Error(`${program} failed with status ${result.status ?? result.error?.message}`);
     return result.stdout;
   };
-  if (!target || (command === 'register' && !POOLS.includes(pool))) {
-    throw new Error(`usage: ci-runners.mjs register <ssh target> <${POOLS.join('|')}> [name] | unregister <ssh target>`);
-  }
   const repository = run('gh', ['repo', 'view', '--json', 'nameWithOwner', '-q', '.nameWithOwner']).trim();
   const kind = command === 'register' ? 'registration-token' : 'remove-token';
   const token = run('gh', ['api', '-X', 'POST', `repos/${repository}/actions/runners/${kind}`, '-q', '.token']).trim();
-  const script = '.vulcan-self-hosted-runner.sh';
-  const ssh = ['-o', 'BatchMode=yes', target];
-  run('ssh', [...ssh, `cat > ${script}`], readFileSync(new URL('./self-hosted-runner.sh', import.meta.url), 'utf8'));
-  const args = command === 'register'
-    ? `install --repository ${repository} --label ${poolLabel(pool)}${name ? ` --name '${name.replaceAll("'", '')}'` : ''}`
-    : 'remove';
-  process.stdout.write(run('ssh', [...ssh, `sh ${script} ${args}; code=$?; rm -f ${script}; exit $code`], `${token}\n`));
+  const tokenLine = `${token}\n`;
+  const quote = value => `'${value.replaceAll("'", '')}'`;
+  const options = [
+    ...(command === 'register' ? ['--repository', repository, '--label', poolLabel(pool)] : []),
+    ...(values.name ? ['--name', values.name] : []),
+    ...(values.dir ? ['--dir', values.dir] : []),
+    ...(values.manual ? ['--manual'] : []),
+  ];
+  const action = command === 'register' ? 'install' : 'remove';
+  if (where === 'local' && process.platform === 'win32') {
+    const script = fileURLToPath(new URL('./self-hosted-runner.ps1', import.meta.url));
+    process.stdout.write(run('pwsh', ['-NoProfile', '-File', script, action, ...options], tokenLine));
+    return;
+  }
+  // A POSIX machine gets the script first, then runs it with the token on standard input.
+  // POSIX 机器先收到脚本，再以标准输入上的令牌运行它。
+  const shell = where === 'local' ? ['sh', '-c']
+    : where.startsWith('wsl:') ? ['wsl.exe', '-d', where.slice(4), '--', 'sh', '-c']
+      : ['ssh', '-o', 'BatchMode=yes', where];
+  const script = '"$HOME/.vulcan-self-hosted-runner.sh"';
+  run(shell[0], [...shell.slice(1), `cat > ${script}`], readFileSync(new URL('./self-hosted-runner.sh', import.meta.url), 'utf8'));
+  const args = [action, ...options].map(quote).join(' ');
+  process.stdout.write(run(shell[0], [...shell.slice(1), `sh ${script} ${args}; code=$?; rm -f ${script}; exit $code`], tokenLine));
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
-  const [command, target, pool, name] = process.argv.slice(2);
+  const [command, ...rest] = process.argv.slice(2);
   if (command === 'register' || command === 'unregister') {
-    remoteRunner(command, target, pool, name);
+    runnerCommand(command, rest);
     process.exit(0);
   }
   if (command) throw new Error(`unknown command ${command}; expected register or unregister`);

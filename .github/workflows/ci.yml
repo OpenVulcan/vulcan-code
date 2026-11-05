@@ -166,18 +166,28 @@ jobs:
         run: node scripts/check.mjs rustfmt repository
   rust-check:
     name: Rust clippy
-    runs-on: ubuntu-24.04
+    needs: runners
+    runs-on: ${{ fromJSON(needs.runners.outputs.pools)['linux-x64'] || 'ubuntu-24.04' }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+          clean: ${{ runner.environment != 'self-hosted' }}
+      - uses: ./.github/actions/self-hosted-workspace
+        with:
+          step: prepare
       - uses: ./.github/actions/rust-setup
       - name: Clippy on every target with warnings denied
         run: node scripts/check.mjs clippy
+      - uses: ./.github/actions/self-hosted-workspace
+        if: ${{ !cancelled() }}
+        with:
+          step: tidy
   rust-tests:
     name: Rust fast tests
-    runs-on: ubuntu-24.04
+    needs: runners
+    runs-on: ${{ fromJSON(needs.runners.outputs.pools)['linux-x64'] || 'ubuntu-24.04' }}
     # A cold cache compiles two dependency graphs (the isolated LanceDB library and the workspace tests),
     # at least half an hour each on this runner. A timeout leaves compilers writing `target/`, so the cache is not
     # saved and every later run stays cold; the limit therefore covers a complete cold run.
@@ -188,6 +198,10 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+          clean: ${{ runner.environment != 'self-hosted' }}
+      - uses: ./.github/actions/self-hosted-workspace
+        with:
+          step: prepare
       - uses: ./.github/actions/rust-setup
         with:
           shared-key: tests
@@ -205,6 +219,10 @@ jobs:
           node scripts/managed-node.mjs output
       - name: Fast nextest set without quarantined tests
         run: node scripts/test-rust.mjs fast
+      - uses: ./.github/actions/self-hosted-workspace
+        if: ${{ !cancelled() }}
+        with:
+          step: tidy
   # Rust tests run on Linux; Windows and macOS compile the service and the setup program so platform-specific code is checked there too.
   # Rust 测试在 Linux 上运行；Windows 与 macOS 编译服务与安装器，使平台专属代码在这两个系统上也得到检查。
   platform-check:
@@ -214,7 +232,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: windows-2025 }
+          - { os: windows-2025, pool: windows-x64 }
           - { os: macos-15, pool: macos }
     runs-on: ${{ fromJSON(needs.runners.outputs.pools)[matrix.pool || 'none'] || matrix.os }}
     timeout-minutes: 60
