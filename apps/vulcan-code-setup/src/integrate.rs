@@ -67,6 +67,15 @@ const WINDOWS_SHORTCUT: &str = "Vulcan Code.lnk";
 /// Linux 菜单项与桌面快捷方式的文件名。
 const DESKTOP_ENTRY_FILE: &str = "vulcan-code.desktop";
 
+/// Window class of the desktop app, observed as `WM_CLASS "vulcan-code-desktop", "vulcan-code-desktop"`
+/// on GNOME X11: Electron takes it from the packaged app's `name`, which `scripts/desktop-runtime.mjs`
+/// writes. The menu entry names it so GNOME groups the running window with the entry instead of
+/// showing a separate generic icon; on Wayland GNOME matches the app id against the same key.
+/// 桌面应用的窗口类，在 GNOME X11 上实测为 `WM_CLASS "vulcan-code-desktop", "vulcan-code-desktop"`：
+/// Electron 取自打包应用的 `name`，该值由 `scripts/desktop-runtime.mjs` 写出。菜单项写明它，使 GNOME 把
+/// 运行中的窗口与菜单项归为一组，而不是另显示一个通用图标；Wayland 上 GNOME 以同一键匹配应用 ID。
+const DESKTOP_WINDOW_CLASS: &str = "vulcan-code-desktop";
+
 /// Icon inside a version, part of the `core` component.
 /// 版本中的图标，属于 `core` 组件。
 const ICON: &str = "webui/vulcan-logo.png";
@@ -566,7 +575,7 @@ fn integrate_unix(
     let entry = format!(
         "[Desktop Entry]\n{LAUNCHER_MARKER}\nType=Application\nName={APP_NAME}\n\
          Comment=AI coding and work platform\nExec=\"{}\" %U\nIcon={}\nTerminal=false\n\
-         Categories=Development;\n",
+         StartupWMClass={DESKTOP_WINDOW_CLASS}\nCategories=Development;\n",
         program.display(),
         plan.root.join("current").join(ICON).display()
     );

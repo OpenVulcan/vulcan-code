@@ -505,6 +505,9 @@ async function main() {
   // 即使应用使用 ESM，沙箱 Electron 仍需要位于 gui/ 同级目录的 CommonJS 预加载入口。
   await cp(path.join(desktop, 'dist/preload.cjs'), path.join(appRoot, 'preload.cjs'));
   await writeFile(path.join(appRoot, 'desktop-entry.js'), "import './gui/main.js';\n");
+  // Linux windows and the macOS Dock read the application icon beside gui/ (`app-icon.ts`).
+  // Linux 窗口与 macOS 程序坞从 gui/ 旁读取应用图标（`app-icon.ts`）。
+  await cp(path.join(repository, 'apps/vulcan-code-service/icons/icon.png'), path.join(appRoot, 'icon.png'));
   // Browser code and dependencies live outside Electron's resources and cannot load its Chromium.
   // 浏览器代码与依赖位于 Electron 资源目录之外，不会加载其 Chromium。
   const browserRoot = path.join(output, 'browser/runtime');
@@ -525,11 +528,19 @@ async function main() {
   // 经鉴权的自动化网关在运行时使用锁定版本的 WebSocket 实现。
   await cp(path.join(desktop, 'node_modules/ws'), path.join(appRoot, 'node_modules/ws'), { recursive: true, dereference: true });
   // Keep the packaged JavaScript app identity aligned with the branded executable and no-argument entry.
-  // 保持打包后的 JavaScript 应用身份与品牌化程序及无参数启动入口一致。
+  // On Linux, `name` is also the window class the setup program's menu entry names
+  // (`DESKTOP_WINDOW_CLASS` in its `integrate.rs`).
+  // 保持打包后的 JavaScript 应用身份与品牌化程序及无参数启动入口一致。在 Linux 上，`name` 同时是安装器
+  // 菜单项写明的窗口类（其 `integrate.rs` 中的 `DESKTOP_WINDOW_CLASS`）。
    const desktopPackage = JSON.parse(await readFile(path.join(desktop, 'package.json'), 'utf8'));
    await writeFile(path.join(appRoot, 'package.json'), JSON.stringify({
      name: desktopPackage.name,
      productName: desktopNotificationIdentity.name,
+     // Names the menu entry the setup program writes (`DESKTOP_ENTRY_FILE` in its `integrate.rs`), so
+     // Linux desktops that resolve the app by desktop file name also find its icon.
+     // 指明安装器写入的菜单项（其 `integrate.rs` 中的 `DESKTOP_ENTRY_FILE`），使按桌面文件名识别应用的
+     // Linux 桌面环境也能找到其图标。
+     desktopName: 'vulcan-code.desktop',
      version: desktopPackage.version,
      type: 'module',
      main: 'desktop-entry.js',

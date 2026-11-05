@@ -39,6 +39,7 @@ import {
   formatDesktopText,
   type DesktopLocale,
 } from './desktop-text.js';
+import { applyDockIcon, windowIconOptions } from './app-icon.js';
 import { canUseNativeNotifications, configureGuiNotificationIdentity } from './notification-identity.js';
 import { createWindowsToastXml } from './notification-toast.js';
 import { registerRendererRecovery } from './renderer-recovery.js';
@@ -212,6 +213,7 @@ async function createStartupWindow(locale: DesktopLocale): Promise<BrowserWindow
     frame: false,
     show: true,
     backgroundColor: '#101215',
+    ...windowIconOptions(),
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
   await window.loadURL(
@@ -237,6 +239,7 @@ function createWorkbenchWindow(webUiUrl: string): BrowserWindow {
     autoHideMenuBar: true,
     show: false,
     backgroundColor: '#101215',
+    ...windowIconOptions(),
     webPreferences: {
       // The preload is CommonJS because a sandboxed renderer cannot load an ESM preload.
       // 预加载为 CommonJS，因为沙箱渲染进程无法加载 ESM 预加载。
@@ -548,15 +551,22 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    const window = guiState.window;
-    if (window && !window.isDestroyed()) {
-      if (window.isMinimized()) {
-        window.restore();
-      }
-      window.focus();
+    // Before the workbench is shown the visible window is the startup window, which reports progress
+    // or the startup failure; focus whichever is visible so a relaunch is never silently ignored.
+    // 工作台显示前，可见窗口是报告进度或启动失败的启动窗口；聚焦当前可见的窗口，使再次启动不会被静默忽略。
+    const workbench = guiState.window;
+    const window =
+      workbench && !workbench.isDestroyed() && workbench.isVisible()
+        ? workbench
+        : BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed() && candidate.isVisible());
+    if (!window) return;
+    if (window.isMinimized()) {
+      window.restore();
     }
+    window.focus();
   });
   app.whenReady().then(() => {
+    applyDockIcon();
     if (process.platform === 'win32') {
       // Register before the workbench starts so Electron can replay a pending native activation.
       // 在工作台启动前注册，使 Electron 能重放待处理的原生激活事件。
