@@ -13,18 +13,20 @@
   `fromJSON(pools)[<池>] || <托管镜像>`。其他工作流（`release-setup.yml`、`build-smoke.yml` 等）不写池标签，
   始终使用托管镜像。组织为 GitHub 免费版，无法按工作流限制运行器组，因此"只给这两个工作流用"由标签保证。
 - **当前使用池的作业**：
-  - 发布：`Build (macos-x64)`、`Build (macos-arm64)`、`Build (linux-x64)` 各用同名池；
+  - 发布：`Build (macos-x64)`、`Build (macos-arm64)`、`Build (linux-x64)`、`Build (linux-arm64)` 各用同名池；
     `Build and sign (windows-x64)` 用 `windows-x64`。
   - CI：`Rust clippy`、`Rust fast tests` 用 `linux-x64`；`Service and setup check (windows-2025)` 用
     `windows-x64`；`Build scripts (macos-15)`、`Service and setup check (macos-15)` 用别名 `macos`
     （`ALIASES`），取 `macos-arm64`、`macos-x64` 中第一个有运行器在线的池。
   - 其余较轻的作业保留托管镜像，与池作业并行，不在同一台机器上排队。
-- **`linux-x64` 机器必须是 Ubuntu 22.04。** 发布归档链接构建机器的 glibc，须保持 2.35 以支持旧发行版；
+- **Linux 机器必须是 Ubuntu 22.04。** 发布归档链接构建机器的 glibc，须保持 2.35 以支持旧发行版；
   发布作业在自托管 Linux 机器上先检查 `getconf GNU_LIBC_VERSION` 等于矩阵的 `glibc`，不符即失败。
   在 Windows 上用独立的 WSL 发行版提供（`wsl --install Ubuntu-22.04 --name <名称> --location <目录>`），
   不使用日常开发的发行版：后者会随系统升级改变 glibc，且作业的清理与依赖安装不应触及它。
-- **`linux-arm64` 不进入池。** 构建脚本只产出其所在机器的平台（Node、Electron、浏览器、LuaJIT 与运行时
-  布局均取宿主架构），交叉编译不受支持。
+- **`linux-arm64` 机器必须是原生 arm64。** 构建脚本只产出其所在机器的平台（Node、Electron、浏览器、LuaJIT
+  与运行时布局均取宿主架构），交叉编译不受支持，因此不能由 x64 机器代替。当前由按需启动的云主机提供
+  （阿里云美国硅谷的倚天 g8y 抢占式实例，节省停机模式）：运行器以服务安装，实例启动即上线、停机即离线，
+  `auto` 随之选择该池或托管镜像；运行器用户的家目录（含工具链、cargo 缓存与工作区）在随实例保留的数据盘上。
 - **`windows-x64` 机器运行发布的签名作业。** 该作业属于需审批的 release 环境，签名密钥只在该作业中出现；
   缺少固定版本的 SimplySign Desktop 时签名步骤会安装它，因此运行器须在管理员终端中启动。
 
@@ -89,9 +91,22 @@
 在维护者机器上（已用 `gh` 登录、可经 SSH 免密登录目标机器）：
 
 ```bash
+node scripts/ci-runners.mjs prepare root@<主机> [--data-disk <设备>] [--data-dir <目录>] [--user <名称>]
 node scripts/ci-runners.mjs register <位置> <池> [--name <名称>] [--dir <目录>] [--manual]
 node scripts/ci-runners.mjs unregister <位置> [--dir <目录>]
 ```
+
+`prepare` 以 root 准备一台新的 Ubuntu 22.04 机器（`scripts/self-hosted-machine.sh`），可重复执行：
+- 给出 `--data-disk` 时，设备上没有文件系统才格式化，按 UUID 以 `nofail` 写入 `/etc/fstab` 并挂载到
+  `--data-dir`（默认 `/data`）。系统软件包以外的一切都放在数据盘上：Node 在 `<数据目录>/opt/nodejs`，
+  运行器用户（默认 `runner`）的家目录在 `<数据目录>/<用户>`，其中有 Rust 工具链、Cargo 缓存、PowerShell
+  与运行器及其工作区。
+- 安装作业直接调用的工具与 `install_linux_system_deps.sh` 的原生库；Node 与 Rust 的版本取自
+  `managed-runtimes.json` 与 `rust-toolchain.toml`，Node 按官方 `SHASUMS256.txt` 校验，仓库工具链设为默认。
+- 运行器用户沿用 root 的 SSH 公钥登录，sudo 只允许运行 `~/actions-runner/vulcan-code/svc.sh`，使随后的
+  `register runner@<主机> <池>` 能安装服务（因此注册时不要改 `--dir`）。
+
+在 Windows 的 Git Bash 中执行时加 `MSYS_NO_PATHCONV=1`，否则 `/dev/...` 参数会被改写成 Windows 路径。
 
 `<位置>` 为 `用户@主机`（SSH）、`wsl:<发行版>`（本机的 WSL 发行版）或 `local`（本机）。
 `register` 用维护者的 `gh` 取得一次性注册令牌，经标准输入交给目标机器上的

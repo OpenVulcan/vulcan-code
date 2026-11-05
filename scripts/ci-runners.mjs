@@ -20,12 +20,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
-// POOLS lists the platforms whose jobs may run on the maintainer's machines. A linux-x64 machine must run
-// Ubuntu 22.04, since the release archive links against its glibc 2.35 (release.yml checks it); linux-arm64
-// stays hosted because the build scripts produce the platform of the machine they run on.
-// POOLS 列出作业可以运行在维护者机器上的平台。linux-x64 机器必须运行 Ubuntu 22.04，因为发布归档链接其
-// glibc 2.35（release.yml 会检查）；linux-arm64 保留托管，因为构建脚本只产出其所在机器的平台。
-export const POOLS = ['macos-x64', 'macos-arm64', 'linux-x64', 'windows-x64'];
+// POOLS lists the platforms whose jobs may run on the maintainer's machines. A Linux machine must run Ubuntu
+// 22.04, since the release archive links against its glibc 2.35 (release.yml checks it), and a linux-arm64
+// machine must be a native arm64 one, because the build scripts produce the platform of the machine they run on.
+// POOLS 列出作业可以运行在维护者机器上的平台。Linux 机器必须运行 Ubuntu 22.04，因为发布归档链接其
+// glibc 2.35（release.yml 会检查）；linux-arm64 机器必须是原生 arm64，因为构建脚本只产出其所在机器的平台。
+export const POOLS = ['macos-x64', 'macos-arm64', 'linux-x64', 'linux-arm64', 'windows-x64'];
 
 // MODES are the accepted values of the `runners` input.
 // MODES 是 `runners` 输入接受的取值。
@@ -80,12 +80,64 @@ async function listRunners(repository, token) {
   }
 }
 
-// USAGE describes the register and unregister commands.
-// USAGE 描述 register 与 unregister 命令。
-const USAGE = `usage: ci-runners.mjs register <where> <${POOLS.join('|')}> [--name <name>] [--dir <directory>] [--manual]
+// USAGE describes the prepare, register and unregister commands.
+// USAGE 描述 prepare、register 与 unregister 命令。
+const USAGE = `usage: ci-runners.mjs prepare <root@host|wsl:distribution> [--user <name>] [--data-disk <device>] [--data-dir <dir>]
+       ci-runners.mjs register <where> <${POOLS.join('|')}> [--name <name>] [--dir <directory>] [--manual]
        ci-runners.mjs unregister <where> [--dir <directory>]
 <where> is <user@host> (SSH), wsl:<distribution> or local; --manual installs no service, so the runner is
-online only while its run script is started by hand.`;
+online only while its run script is started by hand. \`prepare\` sets up a fresh Ubuntu 22.04 machine as root
+first: packages, Node, the runner user and its Rust toolchain, on the data disk when one is given.`;
+
+// shellFor returns the command prefix that runs a shell command line on `where`; WSL runs it as `user`.
+// shellFor 返回在 `where` 上运行一条 shell 命令行的命令前缀；WSL 以 `user` 身份运行。
+function shellFor(where, user) {
+  if (where === 'local') return ['sh', '-c'];
+  if (where.startsWith('wsl:')) return ['wsl.exe', '-d', where.slice(4), ...(user ? ['-u', user] : []), '--', 'sh', '-c'];
+  return ['ssh', '-o', 'BatchMode=yes', where];
+}
+
+// run starts a program, feeds it `input`, shows its errors and returns its output; a failure throws.
+// run 启动程序并传入 `input`，显示其错误输出并返回标准输出；失败时抛出异常。
+function run(program, args, input) {
+  const result = spawnSync(program, args, { input, encoding: 'utf8', stdio: ['pipe', 'pipe', 'inherit'] });
+  if (result.status !== 0) throw new Error(`${program} failed with status ${result.status ?? result.error?.message}`);
+  return result.stdout;
+}
+
+// quote single-quotes one shell word; values never contain a quote, which is removed rather than escaped.
+// quote 为一个 shell 单词加单引号；取值中不含引号，若有则删除而不转义。
+const quote = value => `'${String(value).replaceAll("'", '')}'`;
+
+// prepareCommand runs scripts/self-hosted-machine.sh as root on a fresh machine reached over SSH or in a WSL
+// distribution. The Node and Rust versions come from managed-runtimes.json and rust-toolchain.toml.
+// prepareCommand 在经 SSH 访问的新机器或 WSL 发行版上以 root 运行 scripts/self-hosted-machine.sh。Node 与 Rust
+// 版本取自 managed-runtimes.json 与 rust-toolchain.toml。
+function prepareCommand(argv) {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: { user: { type: 'string' }, 'data-disk': { type: 'string' }, 'data-dir': { type: 'string' } },
+  });
+  const [where] = positionals;
+  if (!where || where === 'local') throw new Error(USAGE);
+  const node = JSON.parse(readFileSync(new URL('../crates/vulcan-service-runtime/managed-runtimes.json', import.meta.url), 'utf8')).node_version;
+  const rust = /^channel\s*=\s*"([^"]+)"/m.exec(readFileSync(new URL('../rust-toolchain.toml', import.meta.url), 'utf8'))?.[1];
+  if (!node || !rust) throw new Error('managed-runtimes.json or rust-toolchain.toml does not name a version');
+  const shell = shellFor(where, 'root');
+  const directory = '/tmp/vulcan-self-hosted-machine';
+  run(shell[0], [...shell.slice(1), `rm -rf ${directory} && mkdir -p ${directory}`]);
+  for (const name of ['self-hosted-machine.sh', 'install_linux_system_deps.sh']) {
+    run(shell[0], [...shell.slice(1), `cat > ${directory}/${name}`], readFileSync(new URL(`./${name}`, import.meta.url), 'utf8'));
+  }
+  const options = [
+    '--node', node, '--rust', rust,
+    ...(values.user ? ['--user', values.user] : []),
+    ...(values['data-disk'] ? ['--data-disk', values['data-disk']] : []),
+    ...(values['data-dir'] ? ['--data-dir', values['data-dir']] : []),
+  ].map(quote).join(' ');
+  process.stdout.write(run(shell[0], [...shell.slice(1), `sh ${directory}/self-hosted-machine.sh ${options}; code=$?; rm -rf ${directory}; exit $code`]));
+}
 
 // runnerCommand registers (`register`) or removes (`unregister`) the runner of a machine: `where` is an SSH
 // target, `wsl:<distribution>` or `local`. The token comes from the maintainer's gh and goes to
@@ -101,16 +153,10 @@ function runnerCommand(command, argv) {
   });
   const [where, pool] = positionals;
   if (!where || (command === 'register' && !POOLS.includes(pool))) throw new Error(USAGE);
-  const run = (program, args, input) => {
-    const result = spawnSync(program, args, { input, encoding: 'utf8', stdio: ['pipe', 'pipe', 'inherit'] });
-    if (result.status !== 0) throw new Error(`${program} failed with status ${result.status ?? result.error?.message}`);
-    return result.stdout;
-  };
   const repository = run('gh', ['repo', 'view', '--json', 'nameWithOwner', '-q', '.nameWithOwner']).trim();
   const kind = command === 'register' ? 'registration-token' : 'remove-token';
   const token = run('gh', ['api', '-X', 'POST', `repos/${repository}/actions/runners/${kind}`, '-q', '.token']).trim();
   const tokenLine = `${token}\n`;
-  const quote = value => `'${value.replaceAll("'", '')}'`;
   const options = [
     ...(command === 'register' ? ['--repository', repository, '--label', poolLabel(pool)] : []),
     ...(values.name ? ['--name', values.name] : []),
@@ -125,9 +171,7 @@ function runnerCommand(command, argv) {
   }
   // A POSIX machine gets the script first, then runs it with the token on standard input.
   // POSIX 机器先收到脚本，再以标准输入上的令牌运行它。
-  const shell = where === 'local' ? ['sh', '-c']
-    : where.startsWith('wsl:') ? ['wsl.exe', '-d', where.slice(4), '--', 'sh', '-c']
-      : ['ssh', '-o', 'BatchMode=yes', where];
+  const shell = shellFor(where);
   const script = '"$HOME/.vulcan-self-hosted-runner.sh"';
   run(shell[0], [...shell.slice(1), `cat > ${script}`], readFileSync(new URL('./self-hosted-runner.sh', import.meta.url), 'utf8'));
   const args = [action, ...options].map(quote).join(' ');
@@ -136,11 +180,15 @@ function runnerCommand(command, argv) {
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   const [command, ...rest] = process.argv.slice(2);
+  if (command === 'prepare') {
+    prepareCommand(rest);
+    process.exit(0);
+  }
   if (command === 'register' || command === 'unregister') {
     runnerCommand(command, rest);
     process.exit(0);
   }
-  if (command) throw new Error(`unknown command ${command}; expected register or unregister`);
+  if (command) throw new Error(`unknown command ${command}; expected prepare, register or unregister`);
   const mode = process.env.RUNNERS_MODE || 'auto';
   const { GITHUB_OUTPUT: output, GITHUB_REPOSITORY: repository, RUNNER_STATUS_TOKEN: token } = process.env;
   if (!output || !repository) throw new Error('GITHUB_OUTPUT and GITHUB_REPOSITORY are required.');
