@@ -1,0 +1,59 @@
+# Keep the Cargo build of a self-hosted runner between runs (docs/contracts/self-hosted-runners.md).
+# `prepare`, right after a checkout with `clean: false`, removes every untracked file except `target/` and the
+# verified build-input cache, so each run starts from a clean tree with the previous compilations; `tidy`, at the
+# end of the job, prunes the profile with `make prune` and removes `target/` above the size cap. On a hosted
+# runner both do nothing.
+# 在自托管运行器上于多次运行之间保留 Cargo 构建（docs/contracts/self-hosted-runners.md）。`prepare` 在
+# `clean: false` 的检出之后执行，删除除 `target/` 与已校验构建输入缓存之外的全部未跟踪文件，使每次运行从干净的
+# 目录树开始，同时保留以往的编译结果；`tidy` 在作业末尾用 `make prune` 清理模式目录，并在超过容量上限时删除
+# `target/`。在托管运行器上两者都不做任何事。
+name: Self-hosted workspace
+description: Clean a self-hosted checkout except its Cargo build, and keep that build within bounds.
+inputs:
+  step:
+    description: prepare (after checkout) or tidy (at the end of the job)
+    required: true
+  profile:
+    description: Cargo profile directory `tidy` prunes, debug or release
+    required: false
+    default: debug
+  rebuild:
+    description: When true, `prepare` also removes target/ so everything compiles again
+    required: false
+    default: 'false'
+  target-cap-gb:
+    description: Size of target/ above which `tidy` removes it
+    required: false
+    default: '150'
+runs:
+  using: composite
+  steps:
+    - name: Clean the checkout except the Cargo build
+      if: inputs.step == 'prepare' && runner.environment == 'self-hosted'
+      shell: bash
+      env:
+        REBUILD: ${{ inputs.rebuild }}
+      run: |
+        set -eu
+        git clean -ffdxq -e /target/ -e /third_party/build-input-cache/
+        if [ "$REBUILD" = true ]; then rm -rf target; fi
+        if [ -d target ]; then echo "Kept target/: $(du -sh target | cut -f1)"; else echo 'No earlier target/.'; fi
+    - name: Prune and bound the Cargo build
+      if: inputs.step == 'tidy' && runner.environment == 'self-hosted'
+      shell: bash
+      env:
+        PROFILE: ${{ inputs.profile }}
+        CAP_GB: ${{ inputs.target-cap-gb }}
+      run: |
+        set -eu
+        [ -d target ] || exit 0
+        # `make prune` prunes the debug profile; `make prune release` the release one.
+        # `make prune` 清理 debug 模式目录；`make prune release` 清理 release 模式目录。
+        if [ "$PROFILE" = release ]; then set -- release; else set --; fi
+        sh ./make.sh prune "$@" || echo "::warning::make prune $PROFILE failed; target/ is kept as it is."
+        used_kb=$(du -sk target | cut -f1)
+        echo "target/ after pruning: $((used_kb / 1048576)) GB (cap ${CAP_GB} GB)"
+        if [ "$used_kb" -gt $((CAP_GB * 1048576)) ]; then
+          echo "::notice::target/ exceeds ${CAP_GB} GB; it is removed and the next run compiles everything."
+          rm -rf target
+        fi

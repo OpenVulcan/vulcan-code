@@ -28,6 +28,11 @@ on:
         description: Compile every program even when an unchanged build is published
         type: boolean
         default: false
+      runners:
+        description: Self-hosted pools (auto uses the online ones; see docs/contracts/self-hosted-runners.md)
+        type: choice
+        options: [auto, hosted, self-hosted]
+        default: auto
 permissions:
   contents: read
 concurrency:
@@ -64,10 +69,22 @@ jobs:
   ci:
     name: Cross-platform check
     uses: ./.github/workflows/ci.yml
+    with:
+      runners: ${{ inputs.runners }}
+    secrets:
+      RUNNER_STATUS_TOKEN: ${{ secrets.RUNNER_STATUS_TOKEN }}
+
+  runners:
+    name: Runners
+    uses: ./.github/workflows/runners.yml
+    with:
+      runners: ${{ inputs.runners }}
+    secrets:
+      RUNNER_STATUS_TOKEN: ${{ secrets.RUNNER_STATUS_TOKEN }}
 
   build:
     name: Build (${{ matrix.platform }})
-    needs: plan
+    needs: [plan, runners]
     strategy:
       fail-fast: false
       matrix:
@@ -78,7 +95,9 @@ jobs:
           - { platform: linux-arm64, runner: ubuntu-22.04-arm }
           - { platform: macos-x64, runner: macos-15-intel }
           - { platform: macos-arm64, runner: macos-15 }
-    runs-on: ${{ matrix.runner }}
+    # A self-hosted pool of this platform takes the job when runners.yml chose it; the hosted image otherwise.
+    # runners.yml 选中本平台的自托管池时由其运行；否则使用托管镜像。
+    runs-on: ${{ fromJSON(needs.runners.outputs.pools)[matrix.platform] || matrix.runner }}
     timeout-minutes: 360
     env:
       CARGO_INCREMENTAL: '0'
@@ -89,6 +108,13 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+          # A self-hosted runner keeps target/; self-hosted-workspace cleans everything else.
+          # 自托管运行器保留 target/；其余内容由 self-hosted-workspace 清理。
+          clean: ${{ runner.environment != 'self-hosted' }}
+      - uses: ./.github/actions/self-hosted-workspace
+        with:
+          step: prepare
+          rebuild: ${{ inputs.rebuild }}
       # Hosted Linux images keep about 20 GB free; a release build of this workspace needs more.
       # 托管 Linux 镜像只剩约 20 GB 空间，本工作区的 release 构建需要更多。
       - name: Free disk space
@@ -161,6 +187,11 @@ jobs:
           retention-days: 3
           compression-level: 0
           if-no-files-found: error
+      - uses: ./.github/actions/self-hosted-workspace
+        if: ${{ !cancelled() }}
+        with:
+          step: tidy
+          profile: release
 
   build-windows:
     name: Build and sign (windows-x64)

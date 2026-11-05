@@ -6,7 +6,21 @@
 name: CI
 on:
   workflow_call:
+    inputs:
+      runners:
+        description: auto, hosted or self-hosted
+        type: string
+        default: auto
+    secrets:
+      RUNNER_STATUS_TOKEN:
+        required: false
   workflow_dispatch:
+    inputs:
+      runners:
+        description: Self-hosted pools (auto uses the online ones; see docs/contracts/self-hosted-runners.md)
+        type: choice
+        options: [auto, hosted, self-hosted]
+        default: auto
 permissions:
   contents: read
 env:
@@ -19,13 +33,26 @@ env:
   CARGO_BUILD_JOBS: '4'
   CARGO_TERM_COLOR: always
 jobs:
+  runners:
+    name: Runners
+    uses: ./.github/workflows/runners.yml
+    with:
+      runners: ${{ inputs.runners || 'auto' }}
+    secrets:
+      RUNNER_STATUS_TOKEN: ${{ secrets.RUNNER_STATUS_TOKEN }}
   scripts:
     name: Build scripts (${{ matrix.os }})
+    needs: runners
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2025, macos-15]
-    runs-on: ${{ matrix.os }}
+        # `pool` names the self-hosted pool that may take the job instead of the hosted image (runners.yml).
+        # `pool` 指明可以代替托管镜像运行该作业的自托管池（runners.yml）。
+        include:
+          - { os: ubuntu-24.04 }
+          - { os: windows-2025 }
+          - { os: macos-15, pool: macos }
+    runs-on: ${{ fromJSON(needs.runners.outputs.pools)[matrix.pool || 'none'] || matrix.os }}
     timeout-minutes: 20
     defaults:
       run:
@@ -34,6 +61,10 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+          clean: ${{ runner.environment != 'self-hosted' }}
+      - uses: ./.github/actions/self-hosted-workspace
+        with:
+          step: prepare
       - id: versions
         run: node scripts/ci-runtime-versions.mjs
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
@@ -52,6 +83,10 @@ jobs:
           for group in $tools; do node scripts/install-locked-tools.mjs "$group" --offline; done
       - name: Build script tests
         run: node --test scripts/*.test.mjs scripts/*.test.cjs
+      - uses: ./.github/actions/self-hosted-workspace
+        if: ${{ !cancelled() }}
+        with:
+          step: tidy
   frontend:
     name: Frontend
     runs-on: ubuntu-24.04
@@ -174,18 +209,33 @@ jobs:
   # Rust 测试在 Linux 上运行；Windows 与 macOS 编译服务与安装器，使平台专属代码在这两个系统上也得到检查。
   platform-check:
     name: Service and setup check (${{ matrix.os }})
+    needs: runners
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2025, macos-15]
-    runs-on: ${{ matrix.os }}
+        include:
+          - { os: windows-2025 }
+          - { os: macos-15, pool: macos }
+    runs-on: ${{ fromJSON(needs.runners.outputs.pools)[matrix.pool || 'none'] || matrix.os }}
     timeout-minutes: 60
+    env:
+      # Hosted images have 4 vCPUs; an own machine uses the repository's default of 16.
+      # 托管镜像只有 4 个 vCPU；自有机器使用仓库默认的 16。
+      CARGO_BUILD_JOBS: ${{ fromJSON(needs.runners.outputs.pools)[matrix.pool || 'none'] && '16' || '4' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+          clean: ${{ runner.environment != 'self-hosted' }}
+      - uses: ./.github/actions/self-hosted-workspace
+        with:
+          step: prepare
       - uses: ./.github/actions/rust-setup
       - name: Check the service
         run: cargo check --locked -p vulcan-code-service
       - name: Check the setup program and its tests
         run: cargo check --locked -p vulcan-code-setup --all-targets
+      - uses: ./.github/actions/self-hosted-workspace
+        if: ${{ !cancelled() }}
+        with:
+          step: tidy

@@ -1,0 +1,39 @@
+# Choose, once per run, which self-hosted pools the jobs of ci.yml and release.yml use
+# (scripts/ci-runners.mjs, docs/contracts/self-hosted-runners.md). Only those two workflows call it.
+# 每次运行选择一次 ci.yml 与 release.yml 的作业使用哪些自托管池（scripts/ci-runners.mjs、
+# docs/contracts/self-hosted-runners.md）。只有这两个工作流调用它。
+name: Runners
+on:
+  workflow_call:
+    inputs:
+      runners:
+        description: auto, hosted or self-hosted
+        type: string
+        default: auto
+    secrets:
+      RUNNER_STATUS_TOKEN:
+        required: false
+    outputs:
+      pools:
+        description: JSON map from each pool to use to its runner label
+        value: ${{ jobs.select.outputs.pools }}
+permissions:
+  contents: read
+jobs:
+  select:
+    name: Choose runners
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      pools: ${{ steps.select.outputs.pools }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/ci-runners.mjs
+          sparse-checkout-cone-mode: false
+      - id: select
+        env:
+          RUNNERS_MODE: ${{ inputs.runners }}
+          RUNNER_STATUS_TOKEN: ${{ secrets.RUNNER_STATUS_TOKEN }}
+        run: node scripts/ci-runners.mjs

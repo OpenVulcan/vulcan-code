@@ -1,6 +1,6 @@
-# Prepare a hosted runner for Cargo: declared Node, pinned toolchain, native Linux packages, locked protoc
+# Prepare a runner for Cargo: declared Node, pinned toolchain, native Linux packages, locked protoc
 # and the dependency cache. Each Rust job calls this once, right after checkout.
-# 为 Cargo 准备托管运行器：声明的 Node、固定工具链、Linux 原生包、锁定的 protoc 与依赖缓存。
+# 为 Cargo 准备运行器：声明的 Node、固定工具链、Linux 原生包、锁定的 protoc 与依赖缓存。
 # 每个 Rust 作业在检出后调用一次。
 name: Rust setup
 description: Prepare the pinned Rust toolchain, native packages, protoc and the Cargo dependency cache.
@@ -44,8 +44,11 @@ runs:
       run: node scripts/install-locked-tools.mjs protoc
     # Only third-party build products are cached, since a fresh checkout rebuilds workspace crates anyway;
     # only runs on main write, so runs from other refs read the shared cache and never replace it.
+    # A self-hosted runner keeps its whole target/ (self-hosted-workspace), which this cache would trim.
     # 只缓存第三方构建产物，因为新检出总会重新编译工作区 crate；只有 main 上的运行写入，其他引用的运行只读共享缓存，绝不替换。
+    # 自托管运行器保留整个 target/（self-hosted-workspace），本缓存会将其裁剪，因此不使用。
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      if: runner.environment != 'self-hosted'
       with:
         shared-key: ${{ inputs.shared-key }}
         save-if: ${{ github.ref == 'refs/heads/main' }}
