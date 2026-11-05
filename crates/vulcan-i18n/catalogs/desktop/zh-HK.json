@@ -1,8 +1,5 @@
 {
-  "startupTitle": "Vulcan Code 啟動中",
   "closeWindow": "關閉窗口",
-  "preparing": "正在準備…",
-  "startupFailed": "啟動失敗",
   "checkingInstance": "正在檢查已在運行的服務…",
   "reusingInstance": "已連接至運行中的服務（程序 {pid}）。",
   "startingService": "正在啟動背景服務…",

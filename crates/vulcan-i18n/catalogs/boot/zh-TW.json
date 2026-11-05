@@ -7,5 +7,6 @@
   "errorDetails": "檢視詳細資訊",
   "downloadProgress": "下載進度",
   "completedSteps": "已完成 {completed}/{total} 個步驟",
-  "reloadApplication": "重新載入應用程式"
+  "reloadApplication": "重新載入應用程式",
+  "closeWindow": "關閉視窗"
 }

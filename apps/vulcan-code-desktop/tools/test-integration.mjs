@@ -160,7 +160,8 @@ async function runDesktopSuite(selected, testRoot, record) {
       // application 是 Electron 所有者；返回出现后的启动视图地址。
       const startupPage = (application) => until(async () => {
         const window = application.windows()[0];
-        assert.ok(window?.url().startsWith('data:text/html'), 'GUI did not show its starting window.');
+        assert.ok(window?.url().startsWith('file:') && new URL(window.url()).pathname.endsWith('/desktop-startup.html'),
+          'GUI did not show its startup page.');
         return window.url();
       }, 5_000);
       startingWindows = await Promise.all([startupPage(first), startupPage(second)]);
@@ -228,7 +229,7 @@ async function runDesktopSuite(selected, testRoot, record) {
       record.cases.push({ id: 'STARTUP_SECOND_GUI_REUSES_CORE', status: 'passed', detail: {
         firstPid: connection.pid, secondPid: reused.pid } });
       record.cases.push({ id: 'S03_STARTING_GUI', status: 'passed', detail: {
-        startingWindowUrls: startingWindows.map((url) => url.split(',')[0]),
+        startingWindowUrls: startingWindows.map((url) => url.split('?')[0]),
         firstPid: connection.pid, secondPid: reused.pid, corePid: service.pid,
       } });
     } else if (selected.suite === 'capacity') {

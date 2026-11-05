@@ -1,8 +1,5 @@
 {
-  "startupTitle": "Vulcan Code is starting",
   "closeWindow": "Close window",
-  "preparing": "Preparing…",
-  "startupFailed": "Startup failed",
   "checkingInstance": "Checking for a running service…",
   "reusingInstance": "Connected to the running service (process {pid}).",
   "startingService": "Starting the background service…",

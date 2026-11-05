@@ -1,8 +1,5 @@
 {
-  "startupTitle": "Запуск Vulcan Code",
   "closeWindow": "Закрыть окно",
-  "preparing": "Подготовка…",
-  "startupFailed": "Не удалось запустить",
   "checkingInstance": "Поиск запущенной службы…",
   "reusingInstance": "Подключено к запущенной службе (процесс {pid}).",
   "startingService": "Запуск фоновой службы…",

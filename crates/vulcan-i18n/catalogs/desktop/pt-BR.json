@@ -1,8 +1,5 @@
 {
-  "startupTitle": "Iniciando o Vulcan Code",
   "closeWindow": "Fechar janela",
-  "preparing": "Preparando…",
-  "startupFailed": "Falha ao iniciar",
   "checkingInstance": "Procurando um serviço em execução…",
   "reusingInstance": "Conectado ao serviço em execução (processo {pid}).",
   "startingService": "Iniciando o serviço em segundo plano…",

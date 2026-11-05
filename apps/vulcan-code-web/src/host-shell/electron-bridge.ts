@@ -306,6 +306,47 @@ export async function restartElectronClientForUpdate(reason: "update" | "install
   return true;
 }
 
+// DesktopStartupAppearance is what the desktop startup page needs to look like the WebUI before Core answers.
+// DesktopStartupAppearance 是桌面启动页在 Core 应答前与 WebUI 外观一致所需的信息。
+export interface DesktopStartupAppearance {
+  // Active WebUI language code.
+  // 当前 WebUI 语言代码。
+  locale: string;
+  // Chosen theme; a skin is reported as the light or dark theme it renders.
+  // 所选主题；皮肤按其呈现的明暗主题上报。
+  theme: string;
+  // UI text tier.
+  // 界面字号档位。
+  text: string;
+  // Motion preference.
+  // 动效偏好。
+  motion: string;
+  // Resolved ground color as `#rrggbb`, used as the native window background.
+  // 解析后的底色 `#rrggbb`，用作原生窗口背景。
+  ground: string;
+}
+
+// ElectronStartupBridge connects the WebUI to the desktop startup page shown in the same window.
+// ElectronStartupBridge 连接 WebUI 与同一窗口中显示的桌面启动页。
+export interface ElectronStartupBridge {
+  // True when this window showed the desktop startup page before the WebUI, so the logo intro already played.
+  // 当本窗口在 WebUI 之前显示过桌面启动页时为 true，即标志入场动效已经播放。
+  surfaceShown: boolean;
+  // Remembers the appearance the next desktop startup page uses.
+  // 记住下次桌面启动页使用的外观。
+  reportAppearance: (appearance: DesktopStartupAppearance) => Promise<void>;
+}
+
+// readElectronStartupBridge returns the desktop startup bridge, or null outside Electron or on an incomplete preload.
+// readElectronStartupBridge 返回桌面启动桥；在 Electron 之外或预加载不完整时返回 null。
+export function readElectronStartupBridge(): ElectronStartupBridge | null {
+  if (typeof window === "undefined") return null;
+  const startup = (window as unknown as { vulcanDesktop?: { startup?: Partial<ElectronStartupBridge> } }).vulcanDesktop?.startup;
+  return startup && typeof startup.surfaceShown === "boolean" && typeof startup.reportAppearance === "function"
+    ? (startup as ElectronStartupBridge)
+    : null;
+}
+
 // electronDesktopBridgeMethodNames lists every method the contract requires at runtime.
 // electronDesktopBridgeMethodNames 列出契约在运行时要求的全部方法。
 const electronDesktopBridgeMethodNames = [

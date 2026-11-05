@@ -7,5 +7,6 @@
   "errorDetails": "자세히 보기",
   "downloadProgress": "다운로드 진행률",
   "completedSteps": "{total}단계 중 {completed}단계 완료",
-  "reloadApplication": "앱 다시 불러오기"
+  "reloadApplication": "앱 다시 불러오기",
+  "closeWindow": "창 닫기"
 }

@@ -1,8 +1,5 @@
 {
-  "startupTitle": "Vulcan Code を起動しています",
   "closeWindow": "ウィンドウを閉じる",
-  "preparing": "準備しています…",
-  "startupFailed": "起動に失敗しました",
   "checkingInstance": "実行中のサービスを確認しています…",
   "reusingInstance": "実行中のサービスに接続しました（プロセス {pid}）。",
   "startingService": "バックグラウンドサービスを起動しています…",

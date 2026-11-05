@@ -1,0 +1,37 @@
+/* The desktop startup page shows the WebUI startup surface in the frameless desktop window, so it adds the one piece of
+   window chrome a user needs before the WebUI draws its own: a drag strip with a close button. */
+/* 桌面启动页在无边框桌面窗口中显示 WebUI 启动层，因此补上 WebUI 自绘标题栏之前用户唯一需要的窗口元素：
+   带关闭按钮的拖动条。 */
+.desktop-startup-titlebar {
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 70;
+  display: flex;
+  justify-content: flex-end;
+  height: calc(var(--vk-u) * 9);
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.desktop-startup-close {
+  display: grid;
+  place-items: center;
+  width: calc(var(--vk-u) * 11.5);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--vk-ink-2);
+  cursor: default;
+  -webkit-app-region: no-drag;
+  transition: background var(--vk-t-fast) var(--vk-ease), color var(--vk-t-fast) var(--vk-ease);
+}
+
+.desktop-startup-close:hover { background: var(--vk-bad); color: var(--vk-on-bad); }
+.desktop-startup-close:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: calc(var(--vk-focus-w) * -1); }
+.desktop-startup-close > .lucide { width: 1rem; height: 1rem; stroke-width: 1.5; }
+
+@media (prefers-reduced-motion: reduce) {
+  .desktop-startup-close { transition: none; }
+}
+
+:root[data-vk-motion="reduce"] .desktop-startup-close { transition: none; }

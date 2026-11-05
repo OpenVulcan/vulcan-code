@@ -7,5 +7,6 @@
   "errorDetails": "Подробнее",
   "downloadProgress": "Ход загрузки",
   "completedSteps": "Выполнено шагов: {completed} из {total}",
-  "reloadApplication": "Перезагрузить приложение"
+  "reloadApplication": "Перезагрузить приложение",
+  "closeWindow": "Закрыть окно"
 }

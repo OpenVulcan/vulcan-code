@@ -7,5 +7,6 @@
   "errorDetails": "詳細を表示",
   "downloadProgress": "ダウンロードの進行状況",
   "completedSteps": "{completed}/{total} ステップ完了",
-  "reloadApplication": "アプリを再読み込み"
+  "reloadApplication": "アプリを再読み込み",
+  "closeWindow": "ウィンドウを閉じる"
 }

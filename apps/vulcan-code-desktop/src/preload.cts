@@ -157,6 +157,18 @@ const service = {
     ipcRenderer.invoke('vulcan:service:restart-for-update', reason),
 };
 
+// startup connects the WebUI to the startup page this window showed before it.
+// startup 连接 WebUI 与本窗口在其之前显示的启动页。
+const startup = {
+  // Every workbench window shows the desktop startup page first, so the WebUI continues its intro.
+  // 每个工作台窗口都会先显示桌面启动页，因此 WebUI 直接接续其入场动效。
+  surfaceShown: true,
+  // Remembers the WebUI language and appearance for the next startup page.
+  // 为下一次启动页记住 WebUI 语言与外观。
+  reportAppearance: (appearance: unknown): Promise<void> =>
+    ipcRenderer.invoke('vulcan:startup:report-appearance', appearance),
+};
+
 // localBrowser exposes only tab operations and sidebar geometry, never native WebContents objects.
 // localBrowser 只暴露标签操作与侧栏几何，不暴露原生 WebContents 对象。
 const localBrowser = {
@@ -215,4 +227,4 @@ const localFile = {
   // showInFolder 在请求文件管理器选中该路径后完成。
   showInFolder: (filePath: string): Promise<void> => ipcRenderer.invoke(LOCAL_FILE_CHANNELS.showInFolder, filePath),
 };
-contextBridge.exposeInMainWorld('vulcanDesktop', { desktop, service, localBrowser, localFile });
+contextBridge.exposeInMainWorld('vulcanDesktop', { desktop, service, startup, localBrowser, localFile });

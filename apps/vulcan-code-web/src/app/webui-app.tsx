@@ -8,6 +8,7 @@ import {
 } from "@/service/webui-service-runtime";
 import { loadStartupSnapshot } from "@/service/workbench-snapshot-service";
 import { ensureDisplayCatalog } from "@/i18n";
+import { startDesktopStartupAppearanceReport } from "@/host-shell/desktop-startup-appearance";
 import { resolveAppLocale } from "@/i18n-locales";
 
 // LazyWorkbenchApp loads the full workbench only after the startup gate reports readiness.
@@ -53,6 +54,10 @@ export function WebuiApp() {
   // retireSurface unmounts the startup surface once its fade-out finished.
   // retireSurface 在淡出完成后卸载启动层。
   const retireSurface = React.useCallback(() => setSurfaceRetired(true), []);
+  // workbenchMounted starts the desktop startup appearance report once the workbench owns the language and appearance.
+  // workbenchMounted 在工作台接管语言与外观后开始上报桌面启动页外观。
+  const workbenchMounted = bootResult !== null;
+  React.useEffect(() => (workbenchMounted ? startDesktopStartupAppearanceReport() : undefined), [workbenchMounted]);
 
   // bootFailure is the terminal boot error that replaces the startup surface before the workbench exists.
   // bootFailure 是工作台存在之前取代启动层的终态启动错误。

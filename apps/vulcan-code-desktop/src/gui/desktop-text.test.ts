@@ -40,7 +40,7 @@ test('matches device language tags like every other surface', () => {
 // Every registered language loads, and unknown codes fall back to the default language.
 // 每种已注册语言都能加载，未知代码回退到默认语言。
 test('loads the text of every registered language', () => {
-  for (const locale of DESKTOP_LOCALES) assert.ok(desktopText(locale).startupTitle.trim(), `${locale} startup title`);
+  for (const locale of DESKTOP_LOCALES) assert.ok(desktopText(locale).checkingInstance.trim(), `${locale} checking instance`);
   assert.equal(desktopText('xx-XX'), desktopText(DEFAULT_DESKTOP_LOCALE));
 });
 

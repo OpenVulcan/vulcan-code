@@ -16,18 +16,9 @@ export type DesktopLocale = string;
 
 /** Every piece of desktop-shell text; `{name}` placeholders are filled by `formatDesktopText`. */
 export interface DesktopText {
-  // Startup window document title.
-  // 启动窗口文档标题。
-  startupTitle: string;
-  // Accessible label of the startup window close button.
-  // 启动窗口关闭按钮的无障碍标签。
+  // Native close action of the renderer recovery dialog.
+  // 渲染进程恢复对话框的原生关闭动作。
   closeWindow: string;
-  // Stage text before the first real stage arrives.
-  // 首个真实阶段到达前的阶段文本。
-  preparing: string;
-  // Stage text after a startup failure.
-  // 启动失败后的阶段文本。
-  startupFailed: string;
   // Launcher stage: probing for a running service.
   // 启动器阶段：探测正在运行的服务。
   checkingInstance: string;
@@ -94,7 +85,7 @@ export interface DesktopText {
  * 编译期完整字段清单，加载时与默认目录核对。
  */
 const DESKTOP_TEXT_FIELDS: Readonly<Record<keyof DesktopText, true>> = {
-  startupTitle: true, closeWindow: true, preparing: true, startupFailed: true, checkingInstance: true,
+  closeWindow: true, checkingInstance: true,
   reusingInstance: true, startingService: true, awaitingReady: true, serviceReady: true, launchFailed: true,
   exitedBeforeReady: true, signaledBeforeReady: true, serviceUnavailable: true, readyTimeout: true, workbenchLoadFailed: true,
   rendererFailureTitle: true, rendererFailureMessage: true, rendererFailureDetail: true, reloadWorkbench: true,

@@ -214,6 +214,18 @@
   to { opacity: 1; transform: none; }
 }
 
+/* After the desktop startup page played the intro in the same window, the WebUI startup surface continues it: the flame
+   keeps only its flicker and the wordmark and status appear in place. */
+/* 桌面启动页已在同一窗口播放入场后，WebUI 启动层直接接续：火焰只保留摇曳，字标与状态原位出现。 */
+:root[data-vk-startup-continued] .startup-logo-mark .vulcan-symbol-flame {
+  animation: startup-flame-flicker 2.8s ease-in-out infinite;
+}
+
+:root[data-vk-startup-continued] .startup-logo-mark .vulcan-stacked-wordmark,
+:root[data-vk-startup-continued] .startup-progress-content {
+  animation: none;
+}
+
 /* Status copy: the active step as the title, its live message underneath; each keeps one line so nothing reflows. */
 /* 状态文案：活动步骤为标题，其实时消息在下方；各自保持单行，避免重新排版。 */
 .startup-progress-status {
@@ -333,6 +345,7 @@
    stopping decorative movement and fades. */
 /* 减少动态效果时保留每个状态的可读性（完整标志、实测填充、静止的未知片段），并停止装饰运动与淡入淡出。 */
 @media (prefers-reduced-motion: reduce) {
+  :root[data-vk-startup-continued] .startup-logo-mark .vulcan-symbol-flame,
   .startup-logo-mark .vulcan-symbol-flame,
   .startup-logo-mark .vulcan-flame-stop-start,
   .startup-logo-mark .vulcan-flame-stop-end,

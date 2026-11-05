@@ -12,6 +12,14 @@ export const SERVICE_CHANNELS = {
   restartForUpdate: 'vulcan:service:restart-for-update',
 } as const;
 
+/** Renderer-to-main channels of the desktop startup page. */
+/** 桌面启动页的渲染进程到主进程通道。 */
+export const STARTUP_CHANNELS = {
+  // Remembers the WebUI language and appearance for the next startup page.
+  // 为下一次启动页记住 WebUI 语言与外观。
+  reportAppearance: 'vulcan:startup:report-appearance',
+} as const;
+
 // Local browser channels are scoped to the current GUI and never address a Core browser session.
 // 本地浏览器通道限定于当前 GUI，绝不寻址 Core 浏览器会话。
 export const LOCAL_BROWSER_CHANNELS = {

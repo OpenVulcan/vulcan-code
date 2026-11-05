@@ -1,8 +1,5 @@
 {
-  "startupTitle": "Vulcan Code wird gestartet",
   "closeWindow": "Fenster schließen",
-  "preparing": "Wird vorbereitet…",
-  "startupFailed": "Start fehlgeschlagen",
   "checkingInstance": "Suche nach einem laufenden Dienst…",
   "reusingInstance": "Mit dem laufenden Dienst verbunden (Prozess {pid}).",
   "startingService": "Hintergrunddienst wird gestartet…",

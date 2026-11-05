@@ -424,6 +424,9 @@ async function main() {
   await run(process.execPath, [path.join(desktop, 'node_modules/typescript/bin/tsc'), '-b'], { cwd: desktop });
   await access(path.join(desktop, 'node_modules/electron/dist'));
   await access(path.join(repository, 'apps/vulcan-code-web/dist'));
+  // The WebUI build also emits the desktop startup page (`vite.desktop-startup.config.ts`).
+  // WebUI 构建同时产出桌面启动页（`vite.desktop-startup.config.ts`）。
+  await access(path.join(repository, 'apps/vulcan-code-web/dist/desktop-startup/desktop-startup.html'));
   // Validate the compiled bridge before replacing any existing GUI files.
   // 替换现有 GUI 文件前先验证编译出的桥接文件。
   await access(path.join(desktop, 'dist/preload.cjs'));
@@ -508,6 +511,10 @@ async function main() {
   // Linux windows and the macOS Dock read the application icon beside gui/ (`app-icon.ts`).
   // Linux 窗口与 macOS 程序坞从 gui/ 旁读取应用图标（`app-icon.ts`）。
   await cp(path.join(repository, 'apps/vulcan-code-service/icons/icon.png'), path.join(appRoot, 'icon.png'));
+  // The workbench window shows the startup page from startup/ beside gui/ before Core serves the WebUI
+  // (`startup-surface.ts`).
+  // 工作台窗口在 Core 提供 WebUI 之前，从 gui/ 旁的 startup/ 显示启动页（`startup-surface.ts`）。
+  await cp(path.join(repository, 'apps/vulcan-code-web/dist/desktop-startup'), path.join(appRoot, 'startup'), { recursive: true });
   // Browser code and dependencies live outside Electron's resources and cannot load its Chromium.
   // 浏览器代码与依赖位于 Electron 资源目录之外，不会加载其 Chromium。
   const browserRoot = path.join(output, 'browser/runtime');

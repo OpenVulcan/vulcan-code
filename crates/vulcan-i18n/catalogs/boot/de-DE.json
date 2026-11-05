@@ -7,5 +7,6 @@
   "errorDetails": "Details anzeigen",
   "downloadProgress": "Download-Fortschritt",
   "completedSteps": "{completed}/{total} Schritte abgeschlossen",
-  "reloadApplication": "Anwendung neu laden"
+  "reloadApplication": "Anwendung neu laden",
+  "closeWindow": "Fenster schließen"
 }

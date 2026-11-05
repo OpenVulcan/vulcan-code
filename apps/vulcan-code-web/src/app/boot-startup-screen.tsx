@@ -7,7 +7,7 @@ import defaultBootCatalog from "@catalogs/boot/en-US.json";
 
 // BootText stores the minimal boot-screen labels: the shared progress copy plus the boot failure copy.
 // BootText 保存最小启动屏文案：共用进度文案加上启动失败文案。
-interface BootText extends StartupProgressLabels {
+export interface BootText extends StartupProgressLabels {
   // Startup failure prefix.
   // 启动失败前缀。
   failedPrefix: string;
@@ -17,6 +17,9 @@ interface BootText extends StartupProgressLabels {
   // Explicit recovery action shown after a startup failure.
   // 启动失败后显示的显式恢复操作。
   reloadApplication: string;
+  // Accessible label of the desktop startup page's close button.
+  // 桌面启动页关闭按钮的无障碍标签。
+  closeWindow: string;
 }
 
 // DEFAULT_BOOT_TEXT is the English boot catalog; assigning it proves the shared catalog covers BootText.
@@ -32,7 +35,7 @@ const BOOT_CATALOGS = new Map(
 
 // bootText returns the boot labels of one language, completing missing keys from English.
 // bootText 返回一种语言的启动文案，并用英文补全缺失的键。
-function bootText(locale: LocaleCode): BootText {
+export function bootText(locale: LocaleCode): BootText {
   return { ...DEFAULT_BOOT_TEXT, ...BOOT_CATALOGS.get(locale) };
 }
 
@@ -50,6 +53,12 @@ export function BootLoadingScreen(props: {
   // Startup snapshot received before the workbench bundle is loaded.
   // 工作台包加载前收到的启动快照。
   startup?: StartupSnapshot | null;
+  // Language used while no snapshot carries one, such as the desktop startup page before Core answers.
+  // 尚无快照携带语言时使用的语言，例如 Core 应答前的桌面启动页。
+  uiLocale?: string | null;
+  // Host-reported detail shown while no snapshot exists yet.
+  // 尚无快照时显示的宿主上报详情。
+  detail?: string | null;
   // True once the workbench owns the screen; the surface fades out and stops intercepting input.
   // 工作台接管屏幕后为 true；启动层淡出并停止拦截输入。
   leaving?: boolean;
@@ -60,7 +69,7 @@ export function BootLoadingScreen(props: {
   const { leaving = false, onLeft } = props;
   // text stores localized labels for the boot screen without importing the full translation catalog.
   // text 保存启动屏本地化文案，而不导入完整翻译表。
-  const text = bootText(bootLocale(props.startup?.uiLocale));
+  const text = bootText(bootLocale(props.startup?.uiLocale ?? props.uiLocale));
 
   React.useEffect(() => {
     if (!leaving || !onLeft) {
@@ -77,7 +86,7 @@ export function BootLoadingScreen(props: {
       aria-hidden={leaving ? true : undefined}
       style={{ "--startup-surface-fade": `${STARTUP_SURFACE_FADE_MS}ms` } as React.CSSProperties}
     >
-      <StartupProgressPanel startup={props.startup ?? null} labels={text} />
+      <StartupProgressPanel startup={props.startup ?? null} labels={text} detail={props.detail} />
     </main>
   );
 }

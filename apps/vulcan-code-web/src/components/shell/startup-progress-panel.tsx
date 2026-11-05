@@ -42,6 +42,9 @@ export function StartupProgressPanel(props: {
   // Localized startup copy.
   // 本地化启动文案。
   labels: StartupProgressLabels;
+  // Host-reported detail that replaces the generic connecting text while no snapshot exists.
+  // 尚无快照时替换通用连接文案的宿主上报详情。
+  detail?: string | null;
 }) {
   const { startup, labels } = props;
   // activeStep selects the current startup row for the progress headline.
@@ -58,7 +61,7 @@ export function StartupProgressPanel(props: {
   const heading = activeStep ? labels.loadingStep.replace("{step}", activeStep.label) : labels.loadingWorkspace;
   // message shows the current startup phase without expanding the full step list.
   // message 展示当前启动阶段，而不展开完整步骤列表。
-  const message = activeStep?.message ?? (startup ? labels.loadingProjectIndex : labels.connectingService);
+  const message = activeStep?.message ?? (startup ? labels.loadingProjectIndex : props.detail ?? labels.connectingService);
   // failed marks a step error so the message is announced and styled as the failure it is.
   // failed 标记步骤错误，使消息以失败身份播报并呈现。
   const failed = activeStep?.status === "error";

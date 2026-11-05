@@ -14,10 +14,12 @@
 当前分面：
 
 - `webui`（完整）：WebUI 全部文案；TUI 也复用这些键。
-- `boot`（完整）：WebUI 启动屏文案，在完整目录下载前即可显示，因此单独成面并静态打包。
-- `desktop`（完整）：Electron 桌面壳文案。构建（`pnpm run build`）与打包（`scripts/desktop-runtime.mjs`）通过
-  `apps/vulcan-code-desktop/tools/copy-i18n-catalogs.mjs` 把 `locales.json` 与该分面复制为 `gui/` 旁的 `i18n/`；
-  启动时缺失或默认语言缺字段直接失败。
+- `boot`（完整）：WebUI 启动屏文案，在完整目录下载前即可显示，因此单独成面并静态打包。桌面启动页
+  （`apps/vulcan-code-web/vite.desktop-startup.config.ts` 单独构建的同一启动界面）也只用该分面，语言取自 WebUI
+  最近一次上报，尚无上报时用设备语言。
+- `desktop`（完整）：Electron 桌面壳文案（服务启动阶段、启动失败与原生对话框）。构建（`pnpm run build`）与打包
+  （`scripts/desktop-runtime.mjs`）通过 `apps/vulcan-code-desktop/tools/copy-i18n-catalogs.mjs` 把 `locales.json`
+  与该分面复制为 `gui/` 旁的 `i18n/`；启动时缺失或默认语言缺字段直接失败。
 - `tray`（完整）：服务托盘菜单、状态行与失败通知。托盘以已保存的 `uiLocale` 为准，未保存时使用启动时的系统语言；
   每次状态刷新读取一次，任一客户端切换语言后菜单文字随即更新。
 - `tui`（不完整）：TUI 专属 `tui.*` 键；缺少的语言按键回退到默认语言。

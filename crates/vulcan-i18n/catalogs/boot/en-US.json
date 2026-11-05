@@ -7,5 +7,6 @@
   "errorDetails": "View details",
   "downloadProgress": "Download progress",
   "completedSteps": "Completed {completed}/{total} steps",
-  "reloadApplication": "Reload application"
+  "reloadApplication": "Reload application",
+  "closeWindow": "Close window"
 }

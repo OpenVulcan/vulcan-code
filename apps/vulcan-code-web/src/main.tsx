@@ -2,7 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { WebuiApp } from "@/app/webui-app";
 import { applyShellHostMarker } from "@/host-shell/runtime";
-import { readElectronLocalBrowserBridge } from "@/host-shell/electron-bridge";
+import { readElectronLocalBrowserBridge, readElectronStartupBridge } from "@/host-shell/electron-bridge";
 import { initializeAppearance } from "@/ui-kit/appearance";
 import "./boot-styles.css";
 
@@ -12,6 +12,9 @@ applyShellHostMarker();
 // The persisted theme is applied before the first paint so the startup screen never flashes the light palette.
 // 持久化主题在首帧前套用，使启动界面不会先闪现亮色色板。
 initializeAppearance();
+// The desktop window already played the startup intro on its local startup page, so this startup surface continues it.
+// 桌面窗口已在本地启动页播放过启动入场动效，因此本启动层直接接续。
+if (readElectronStartupBridge()?.surfaceShown) document.documentElement.dataset.vkStartupContinued = "";
 
 // mountWorkbench resets native view ownership before React can open panels in the new document.
 // mountWorkbench 在 React 能打开新文档面板前重置原生视图归属。

@@ -6,12 +6,13 @@
 // GUI 只拥有窗口与原生集成。它启动或复用独立 Core 服务、等待真实业务就绪，并且在关闭窗口时
 // 绝不停止该服务。
 
-import { BrowserWindow, Notification, app, clipboard, ipcMain, shell } from 'electron';
+import { BrowserWindow, Notification, app, clipboard, dialog, ipcMain, shell } from 'electron';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 
 import {
   SERVICE_CHANNELS,
+  STARTUP_CHANNELS,
   CLIPBOARD_CHANNELS,
   LOCAL_BROWSER_CHANNELS,
   LOCAL_FILE_CHANNELS,
@@ -31,7 +32,14 @@ import {
   type LiveServiceInstance,
   type ServiceStartupProgress,
 } from './service-launcher.js';
-import { renderStartupDocument } from './startup-page.js';
+import {
+  loadStartupPage,
+  readStartupAppearance,
+  rememberStartupAppearance,
+  reportStartupStage,
+  showStartupFailure,
+} from './startup-surface.js';
+import { parseStartupAppearance, type StartupAppearance } from './startup-appearance.js';
 import { resolveStableDesktopEntry } from './installed-launcher.js';
 import {
   desktopText,
@@ -188,42 +196,24 @@ function parseWindowsNotificationActivation(details: { type: string; arguments: 
   return tag && /^[A-Za-z0-9:._-]{1,64}$/.test(tag) ? tag : null;
 }
 
-/** Publishes one startup progress stage to the startup window. */
-function reportStartupProgress(window: BrowserWindow, progress: ServiceStartupProgress): void {
-  if (window.isDestroyed()) {
-    return;
-  }
-  void window.webContents.executeJavaScript(
-    `window.vulcanStartup && window.vulcanStartup(${JSON.stringify(progress.stage)}, ${JSON.stringify(progress.message)});`,
-    true,
-  );
+/** Returns the language the WebUI last reported, or the device language before any report. */
+function startupLocale(appearance: StartupAppearance | null): DesktopLocale {
+  return appearance?.locale ?? detectDesktopLocale(app.getPreferredSystemLanguages());
 }
 
-/** Returns the device language; the saved WebUI language is unknown until the service is running. */
-function deviceDesktopLocale(): DesktopLocale {
-  return detectDesktopLocale(app.getPreferredSystemLanguages());
+// DEFAULT_WINDOW_BACKGROUND paints the window before the WebUI ever reported its ground color.
+// DEFAULT_WINDOW_BACKGROUND 在 WebUI 尚未上报底色时绘制窗口背景。
+const DEFAULT_WINDOW_BACKGROUND = '#101215';
+
+/** The workbench window and the origin it may navigate to once the WebUI address is known. */
+interface WorkbenchWindow {
+  window: BrowserWindow;
+  /** Allows navigation to the WebUI origin; before this the window stays on the startup page. */
+  allowWebUi: (webUiUrl: string) => void;
 }
 
-/** Creates the startup window that shows real stages and real errors. */
-async function createStartupWindow(locale: DesktopLocale): Promise<BrowserWindow> {
-  const window = new BrowserWindow({
-    width: 520,
-    height: 320,
-    resizable: false,
-    frame: false,
-    show: true,
-    backgroundColor: '#101215',
-    ...windowIconOptions(),
-    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
-  });
-  await window.loadURL(
-    `data:text/html;charset=utf-8,${encodeURIComponent(renderStartupDocument(locale))}`,
-  );
-  return window;
-}
-
-/** Creates the workbench window hosting the WebUI. */
-function createWorkbenchWindow(webUiUrl: string): BrowserWindow {
+/** Creates the single workbench window: it shows the startup page first and the WebUI once Core is ready. */
+function createWorkbenchWindow(background: string): WorkbenchWindow {
   const window = new BrowserWindow({
     width: INITIAL_WINDOW_WIDTH,
     height: INITIAL_WINDOW_HEIGHT,
@@ -237,8 +227,10 @@ function createWorkbenchWindow(webUiUrl: string): BrowserWindow {
     // Only WebUI provides visible application chrome and controls.
     // 可见应用边框与控件全部由 WebUI 提供。
     autoHideMenuBar: true,
+    // The window appears with the startup page's first paint, so it never shows an empty frame.
+    // 窗口随启动页首帧出现，因此绝不显示空白框架。
     show: false,
-    backgroundColor: '#101215',
+    backgroundColor: background,
     ...windowIconOptions(),
     webPreferences: {
       // The preload is CommonJS because a sandboxed renderer cannot load an ESM preload.
@@ -250,18 +242,17 @@ function createWorkbenchWindow(webUiUrl: string): BrowserWindow {
     },
   });
   window.setMenu(null);
-  // Workbench visibility follows successful navigation, not the first empty renderer paint.
-  // 工作台只在导航成功后显示，不以空白渲染进程的首次绘制作为就绪。
-  window.webContents.on('will-navigate', (event, url) => {
-    if (new URL(url).origin !== new URL(webUiUrl).origin) {
+  window.once('ready-to-show', () => window.show());
+  // Page-initiated navigation stays within the WebUI origin; none is allowed while the startup page is shown.
+  // 页面发起的导航限于 WebUI 源；显示启动页期间不允许任何导航。
+  let webUiOrigin: string | null = null;
+  const restrictNavigation = (event: Electron.Event, url: string) => {
+    if (webUiOrigin === null || new URL(url).origin !== webUiOrigin) {
       event.preventDefault();
     }
-  });
-  window.webContents.on('will-redirect', (event, url) => {
-    if (new URL(url).origin !== new URL(webUiUrl).origin) {
-      event.preventDefault();
-    }
-  });
+  };
+  window.webContents.on('will-navigate', restrictNavigation);
+  window.webContents.on('will-redirect', restrictNavigation);
   window.on('resize', () => {
     if (!window.isDestroyed()) {
       window.webContents.send(WINDOW_EVENT_CHANNELS.resized);
@@ -285,7 +276,7 @@ function createWorkbenchWindow(webUiUrl: string): BrowserWindow {
     }
     return { action: 'deny' };
   });
-  return window;
+  return { window, allowWebUi: (webUiUrl) => { webUiOrigin = new URL(webUiUrl).origin; } };
 }
 
 /** Serializes maximize toggles so rapid mixed clicks cannot interleave. */
@@ -356,6 +347,14 @@ function registerWindowIpcHandlers(window: BrowserWindow, webUiUrl: string, disc
     blockedBrowserOrigins.add(new URL(instance.baseUrl).origin);
     guiState.instance = instance;
     return instance;
+  });
+  // The WebUI reports its language and appearance for the next startup page; the window background follows at once.
+  // WebUI 为下一次启动页上报其语言与外观；窗口背景随即跟随。
+  handle(STARTUP_CHANNELS.reportAppearance, (_event, report: unknown) => {
+    const appearance = parseStartupAppearance(report);
+    if (!appearance) throw new TypeError('Invalid startup appearance.');
+    rememberStartupAppearance(appearance);
+    if (!window.isDestroyed()) window.setBackgroundColor(appearance.ground);
   });
   handle(SERVICE_CHANNELS.restartForUpdate, (_event, reason: unknown) => {
     if (reason !== 'update' && reason !== 'installer') throw new TypeError('Unknown restart reason.');
@@ -500,47 +499,51 @@ function registerWindowIpcHandlers(window: BrowserWindow, webUiUrl: string, disc
 /** Runs the GUI startup sequence and reports real failures to the user. */
 async function runDesktopGui(): Promise<void> {
   const options = parseDesktopGuiOptions(process.argv.slice(1));
-  const locale = deviceDesktopLocale();
+  const appearance = readStartupAppearance();
+  const locale = startupLocale(appearance);
   const text = desktopText(locale);
-  const startupWindow = await createStartupWindow(locale);
+  const { window, allowWebUi } = createWorkbenchWindow(appearance?.ground ?? DEFAULT_WINDOW_BACKGROUND);
+  guiState.window = window;
+  window.once('closed', () => {
+    guiState.window = null;
+  });
+  try {
+    await loadStartupPage(window, locale, appearance);
+  } catch (error) {
+    // Without its startup page the window has nothing to show, so the failure goes to a native dialog.
+    // 缺少启动页时窗口无内容可显示，因此失败改由原生对话框呈现。
+    dialog.showErrorBox('Vulcan Code', error instanceof Error ? error.message : String(error));
+    app.quit();
+    return;
+  }
   try {
     const executable = await resolveServiceExecutable(options.serviceExecutable);
     const description = await readServiceLaunchDescription(executable, options.forwardedArguments);
     const instance = await ensureServiceInstance(
       description,
       options.forwardedArguments,
-      (progress) => reportStartupProgress(startupWindow, progress),
+      (progress: ServiceStartupProgress) => reportStartupStage(window, progress.message),
       text,
     );
     guiState.instance = instance;
     const webUiUrl = resolveWebUiUrl(description, instance, options.webUiUrl);
-    const window = createWorkbenchWindow(webUiUrl);
-    guiState.window = window;
+    allowWebUi(webUiUrl);
     registerWindowIpcHandlers(window, webUiUrl, description.discoveryPath, instance.baseUrl);
-    window.once('closed', () => {
-      guiState.window = null;
-    });
     try {
       await window.loadURL(webUiUrl);
     } catch (error) {
-      window.destroy();
       throw new Error(formatDesktopText(text.workbenchLoadFailed, { url: webUiUrl, error: String(error) }));
     }
-    // Startup failures use the startup surface; subsequent renderer loss uses native recovery.
-    // 启动失败使用启动界面；后续渲染进程退出使用原生恢复入口。
+    // Startup failures use the startup page; subsequent renderer loss uses native recovery.
+    // 启动失败使用启动页；后续渲染进程退出使用原生恢复入口。
     registerRendererRecovery(window, webUiUrl, description.dataRoot, locale);
-    window.show();
-    startupWindow.destroy();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (!startupWindow.isDestroyed()) {
-      void startupWindow.webContents.executeJavaScript(
-        `window.vulcanStartupFailed && window.vulcanStartupFailed(${JSON.stringify(message)});`,
-        true,
-      );
-    }
     // The process stays alive so the user can read the real failure instead of a silent exit.
     // 进程保持存活，使用户能读到真实失败信息，而不是静默退出。
+    await showStartupFailure(window, locale, appearance, message).catch((pageError: unknown) => {
+      dialog.showErrorBox('Vulcan Code', `${message}\n\n${String(pageError)}`);
+    });
     throw error;
   }
 }
@@ -551,18 +554,14 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    // Before the workbench is shown the visible window is the startup window, which reports progress
-    // or the startup failure; focus whichever is visible so a relaunch is never silently ignored.
-    // 工作台显示前，可见窗口是报告进度或启动失败的启动窗口；聚焦当前可见的窗口，使再次启动不会被静默忽略。
-    const workbench = guiState.window;
-    const window =
-      workbench && !workbench.isDestroyed() && workbench.isVisible()
-        ? workbench
-        : BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed() && candidate.isVisible());
-    if (!window) return;
+    // The one window shows the startup page, its failure or the WebUI, so a relaunch always brings it forward.
+    // 唯一的窗口显示启动页、启动失败或 WebUI，因此再次启动总会把它带到前台。
+    const window = guiState.window;
+    if (!window || window.isDestroyed()) return;
     if (window.isMinimized()) {
       window.restore();
     }
+    window.show();
     window.focus();
   });
   app.whenReady().then(() => {
