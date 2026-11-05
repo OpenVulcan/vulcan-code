@@ -6525,6 +6525,7 @@
   "gitCommitDialog.pullUpToDate": "La rama actual ya está al día.",
   "gitCommitDialog.moreActions": "Más acciones de Git",
   "serviceError.gitPull.detachedHead": "HEAD está desacoplado, así que no hay ninguna rama de la que traer cambios.",
+  "serviceError.gitPull.diverged": "La rama `{branch}` y su upstream han divergido ({ahead} commits locales y {behind} del upstream), así que no se puede avanzar rápidamente. Haz merge o rebase en una terminal y vuelve a traer los cambios.",
   "serviceError.gitPull.noUpstream": "La rama `{branch}` no tiene una rama upstream de la que traer cambios.",
   "settings.group.connections": "Conexiones",
   "settings.mcpService": "Servicio MCP",

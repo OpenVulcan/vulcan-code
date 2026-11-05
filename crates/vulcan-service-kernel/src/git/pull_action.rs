@@ -21,8 +21,8 @@ use crate::SharedServiceBridgeState;
 /// Pulls the current branch from its upstream, fast-forward only.
 /// 从上游拉取当前分支，仅允许快进。
 ///
-/// A diverged branch is reported by Git instead of being merged or rebased behind the user's back.
-/// 已分叉的分支由 Git 报告，不会在用户不知情时被合并或变基。
+/// A diverged branch is reported with its commit counts instead of being merged or rebased behind the user's back.
+/// 已分叉的分支连同两侧提交数报告给用户，不会在用户不知情时被合并或变基。
 pub(crate) async fn service_run_git_pull_action(
     state: SharedServiceBridgeState,
     request: GitPullActionRequest,
@@ -74,8 +74,26 @@ fn pull_webui_current_branch(
         );
     }
     let before = load_webui_head_object(repository_root)?;
-    let output = run_webui_git_mutating_command(repository_root, &["pull", "--ff-only"])?;
-    ensure_git_commit_action_command_succeeded("git pull --ff-only", output)?;
+    let output = run_webui_git_mutating_command(repository_root, &["fetch"])?;
+    ensure_git_commit_action_command_succeeded("git fetch", output)?;
+    // A branch with commits on both sides cannot fast-forward; say so plainly instead of passing on
+    // Git's hints, and leave merging or rebasing to the user.
+    // 两侧都有新提交的分支无法快进；直接说明情况而不是转述 Git 的提示，合并或变基交给用户。
+    let (ahead, behind) = load_webui_upstream_divergence(repository_root)?;
+    if ahead > 0 && behind > 0 {
+        return Err(WebuiLocalizedMessage::new("serviceError.gitPull.diverged")
+            .with("branch", branch_name)
+            .with("ahead", ahead.to_string())
+            .with("behind", behind.to_string())
+            .into());
+    }
+    if behind > 0 {
+        let output = run_webui_git_mutating_command(
+            repository_root,
+            &["merge", "--ff-only", "@{upstream}"],
+        )?;
+        ensure_git_commit_action_command_succeeded("git merge --ff-only", output)?;
+    }
     let updated = load_webui_head_object(repository_root)? != before;
     let head_commit = load_webui_head_commit_identity(repository_root)?;
     Ok(GitPullActionResponse {
@@ -89,6 +107,28 @@ fn pull_webui_current_branch(
         commit_hash: head_commit.as_ref().map(|commit| commit.hash.clone()),
         commit_message: head_commit.map(|commit| commit.subject),
     })
+}
+
+/// Returns how many commits the current branch has that its upstream lacks, and the reverse.
+/// 返回当前分支有而上游没有的提交数，以及相反方向的提交数。
+fn load_webui_upstream_divergence(repository_root: &Path) -> Result<(u64, u64), String> {
+    let output = run_webui_git_command(
+        repository_root,
+        &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
+    )?;
+    ensure_git_commit_action_command_succeeded(
+        "git rev-list --left-right --count",
+        output.clone(),
+    )?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut counts = text.split_whitespace().map(str::parse::<u64>);
+    match (counts.next(), counts.next(), counts.next()) {
+        (Some(Ok(ahead)), Some(Ok(behind)), None) => Ok((ahead, behind)),
+        _ => Err(format!(
+            "unexpected git rev-list --count output: {}",
+            text.trim()
+        )),
+    }
 }
 
 /// Returns the full object id HEAD points to, or `None` for a branch without commits.
@@ -138,11 +178,11 @@ mod tests {
         git(repository_root, &["commit", "-q", "-m", body]);
     }
 
-    /// Verifies pull fast-forwards to new upstream commits, reports an up-to-date branch, and refuses a branch
+    /// Verifies pull fast-forwards to new upstream commits, reports an up-to-date branch, refuses a diverged branch and one
     /// without an upstream.
-    /// 验证拉取会快进到上游新提交、报告已是最新的分支，并拒绝没有上游的分支。
+    /// 验证拉取会快进到上游新提交、报告已是最新的分支，并拒绝已分叉的分支和没有上游的分支。
     #[test]
-    fn pull_fast_forwards_reports_up_to_date_and_requires_an_upstream() {
+    fn pull_fast_forwards_reports_up_to_date_and_refuses_diverged_or_untracked_branches() {
         let root = tempfile::tempdir().expect("temp dir");
         let remote = root.path().join("remote.git");
         std::fs::create_dir_all(&remote).expect("remote dir");
@@ -162,6 +202,16 @@ mod tests {
                 .expect("second pull")
                 .updated
         );
+
+        commit(&reader, "local");
+        commit(&author, "remote");
+        git(&author, &["push", "-q"]);
+        match pull_webui_current_branch(&reader) {
+            Err(WebuiServiceRpcError::Localized(message)) => {
+                assert_eq!(message.key, "serviceError.gitPull.diverged");
+            }
+            other => panic!("expected the diverged message, got {other:?}"),
+        }
 
         git(&reader, &["checkout", "-q", "-b", "local-only"]);
         match pull_webui_current_branch(&reader) {

@@ -6525,6 +6525,7 @@
   "gitCommitDialog.pullUpToDate": "현재 브랜치가 이미 최신입니다.",
   "gitCommitDialog.moreActions": "기타 Git 작업",
   "serviceError.gitPull.detachedHead": "HEAD가 분리되어 있어 풀할 브랜치가 없습니다.",
+  "serviceError.gitPull.diverged": "브랜치 `{branch}`와 업스트림이 갈라져서(로컬에 {ahead}개, 업스트림에 {behind}개의 상대에 없는 커밋) 빨리 감기할 수 없습니다. 터미널에서 병합하거나 리베이스한 뒤 다시 풀하세요.",
   "serviceError.gitPull.noUpstream": "브랜치 `{branch}`에 업스트림 브랜치가 없어 풀할 수 없습니다.",
   "settings.group.connections": "외부 연결",
   "settings.mcpService": "MCP 서비스",

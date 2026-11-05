@@ -6525,6 +6525,7 @@
   "gitCommitDialog.pullUpToDate": "A branch atual já está atualizada.",
   "gitCommitDialog.moreActions": "Mais ações do Git",
   "serviceError.gitPull.detachedHead": "O HEAD está desanexado, então não há branch para puxar.",
+  "serviceError.gitPull.diverged": "A branch `{branch}` e o upstream divergiram ({ahead} commits locais e {behind} do upstream), então não é possível avançar rapidamente. Faça merge ou rebase em um terminal e puxe de novo.",
   "serviceError.gitPull.noUpstream": "A branch `{branch}` não tem branch upstream para puxar.",
   "settings.group.connections": "Conexões",
   "settings.mcpService": "Serviço MCP",

@@ -6525,6 +6525,7 @@
   "gitCommitDialog.pullUpToDate": "The current branch is already up to date.",
   "gitCommitDialog.moreActions": "More Git actions",
   "serviceError.gitPull.detachedHead": "HEAD is detached, so there is no branch to pull.",
+  "serviceError.gitPull.diverged": "Branch `{branch}` and its upstream have diverged ({ahead} local and {behind} upstream commits), so it cannot fast-forward. Merge or rebase it in a terminal, then pull again.",
   "serviceError.gitPull.noUpstream": "Branch `{branch}` has no upstream branch to pull from.",
   "settings.group.connections": "Connections",
   "settings.mcpService": "MCP service",

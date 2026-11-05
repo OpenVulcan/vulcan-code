@@ -6525,6 +6525,7 @@
   "gitCommitDialog.pullUpToDate": "Текущая ветка уже актуальна.",
   "gitCommitDialog.moreActions": "Другие действия Git",
   "serviceError.gitPull.detachedHead": "HEAD отсоединён, поэтому нет ветки для получения изменений.",
+  "serviceError.gitPull.diverged": "Ветка `{branch}` и вышестоящая ветка разошлись ({ahead} локальных и {behind} вышестоящих коммитов), поэтому перемотка вперёд невозможна. Выполните слияние или перебазирование в терминале и получите изменения снова.",
   "serviceError.gitPull.noUpstream": "У ветки `{branch}` нет вышестоящей ветки для получения изменений.",
   "settings.group.connections": "Подключения",
   "settings.mcpService": "Служба MCP",

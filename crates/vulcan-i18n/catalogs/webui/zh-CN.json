@@ -6525,6 +6525,7 @@
   "gitCommitDialog.pullUpToDate": "当前分支已是最新。",
   "gitCommitDialog.moreActions": "更多 Git 操作",
   "serviceError.gitPull.detachedHead": "当前处于 detached HEAD，没有可拉取的分支。",
+  "serviceError.gitPull.diverged": "分支 `{branch}` 与上游已分叉（本地有 {ahead} 个、上游有 {behind} 个对方没有的提交），无法快进。请在终端中合并或变基后再拉取。",
   "serviceError.gitPull.noUpstream": "分支 `{branch}` 没有上游分支，无法拉取。",
   "settings.group.connections": "外部连接",
   "settings.mcpService": "MCP 服务",

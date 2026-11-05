@@ -6525,6 +6525,7 @@
   "gitCommitDialog.pullUpToDate": "Der aktuelle Branch ist bereits auf dem neuesten Stand.",
   "gitCommitDialog.moreActions": "Weitere Git-Aktionen",
   "serviceError.gitPull.detachedHead": "HEAD ist losgelöst, daher gibt es keinen Branch zum Pullen.",
+  "serviceError.gitPull.diverged": "Branch `{branch}` und sein Upstream sind auseinandergelaufen ({ahead} lokale und {behind} Upstream-Commits), daher ist kein Fast-Forward möglich. Führen Sie im Terminal einen Merge oder Rebase durch und pullen Sie dann erneut.",
   "serviceError.gitPull.noUpstream": "Branch `{branch}` hat keinen Upstream-Branch zum Pullen.",
   "settings.group.connections": "Verbindungen",
   "settings.mcpService": "MCP-Dienst",

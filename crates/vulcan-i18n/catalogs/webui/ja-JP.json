@@ -6525,6 +6525,7 @@
   "gitCommitDialog.pullUpToDate": "現在のブランチは最新です。",
   "gitCommitDialog.moreActions": "その他の Git 操作",
   "serviceError.gitPull.detachedHead": "HEAD が切り離されているため、プルするブランチがありません。",
+  "serviceError.gitPull.diverged": "ブランチ `{branch}` と上流ブランチが分岐しているため（ローカルに {ahead} 件、上流に {behind} 件の相手にないコミット）、早送りできません。ターミナルでマージまたはリベースしてから、もう一度プルしてください。",
   "serviceError.gitPull.noUpstream": "ブランチ `{branch}` には上流ブランチがないため、プルできません。",
   "settings.group.connections": "外部接続",
   "settings.mcpService": "MCP サービス",

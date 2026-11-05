@@ -6525,6 +6525,7 @@
   "gitCommitDialog.pullUpToDate": "La branche actuelle est déjà à jour.",
   "gitCommitDialog.moreActions": "Autres actions Git",
   "serviceError.gitPull.detachedHead": "HEAD est détachée : il n’y a aucune branche à tirer.",
+  "serviceError.gitPull.diverged": "La branche `{branch}` et sa branche amont ont divergé ({ahead} commits locaux et {behind} en amont) : l’avance rapide est impossible. Fusionnez ou rebasez-la dans un terminal, puis tirez à nouveau.",
   "serviceError.gitPull.noUpstream": "La branche `{branch}` n’a pas de branche amont à tirer.",
   "settings.group.connections": "Connexions",
   "settings.mcpService": "Service MCP",
