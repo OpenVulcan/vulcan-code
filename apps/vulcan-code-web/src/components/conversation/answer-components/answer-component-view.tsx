@@ -135,7 +135,8 @@ export function AnswerComponentView({ component, host, replyKey }: { component: 
     case "findings": {
       const header = ["#", t("answerComponents.column.severity"), t("answerComponents.column.finding"), t("answerComponents.column.location")];
       const severity = (value: AnswerSeverity) => t(SEVERITY_KEYS[value]);
-      const copy = markdownTable(header, component.rows.map((row, index) => [String(index + 1), severity(row.severity), row.text, row.location ?? ""]));
+      const finding = (row: { text: string; note?: string }) => row.note ? `${row.text} — ${row.note}` : row.text;
+      const copy = markdownTable(header, component.rows.map((row, index) => [String(index + 1), severity(row.severity), finding(row), row.location ?? ""]));
       const located = component.rows.some((row) => row.location);
       return (
         <AnswerFrame copy={copy} host={host}>
@@ -147,7 +148,7 @@ export function AnswerComponentView({ component, host, replyKey }: { component: 
                   <tr key={index}>
                     <td className="vk-table-index">{index + 1}</td>
                     <td><span className="vk-badge" data-tone={row.severity}>{severity(row.severity)}</span></td>
-                    <td>{row.text}</td>
+                    <td>{row.text}{row.note ? <small className="vk-a-finding-note">{row.note}</small> : null}</td>
                     {located ? <td>{row.location ? <FileLink host={host} location={row.location} /> : null}</td> : null}
                   </tr>
                 ))}

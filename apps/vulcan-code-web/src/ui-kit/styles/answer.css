@@ -78,6 +78,7 @@
 .vk-a-status[data-status="warn"] { --vk-tone: var(--vk-warn); }
 .vk-a-checklist li[data-status="todo"] > span:nth-child(2) { color: var(--vk-ink-2); }
 .vk-a-checklist small { grid-column: 2; color: var(--vk-ink-3); font-size: var(--vk-fs-md); }
+.vk-a-finding-note { display: block; color: var(--vk-ink-3); font-size: var(--vk-fs-md); }
 
 /* ---------- Steps ---------- */
 /* Numbered squares joined by a rail; finished steps fill in, the current step glows in ember. */

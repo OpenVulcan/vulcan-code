@@ -13,7 +13,7 @@ describe("parseAnswerComponent", () => {
   it("rejects unknown names and blank bodies", () => {
     expect(parse("ui-unknown", "a | b")).toBeNull();
     expect(parse("ui-kv", "  \n ")).toBeNull();
-    expect(parse("ui-callout", "body")).toBeNull();
+    expect(parse("ui-callout", " \n")).toBeNull();
     expect(parse("ui-details", "body")).toBeNull();
   });
 
@@ -136,6 +136,28 @@ describe("parseAnswerComponent", () => {
     expect(files).not.toHaveProperty("files.0.status");
     expect(parse("ui-files", "| | note")).toBeNull();
     expect(parse("ui-files", "a.tsx | | note | extra")).toBeNull();
+  });
+
+  it("reads a callout without a tone as info and maps row tone words", () => {
+    expect(parse("ui-callout", "body")).toEqual({ kind: "callout", tone: "info", title: undefined, body: "body" });
+    expect(parse("ui-callout Mind the gap", "body")).toMatchObject({ tone: "info", title: "Mind the gap" });
+    expect(parse("ui-callout warn Back up", "body")).toMatchObject({ tone: "warning", title: "Back up" });
+    expect(parse("ui-callout no", "body")).toMatchObject({ tone: "danger", title: undefined });
+    expect(parse("ui-callout constructor", "body")).toMatchObject({ tone: "info", title: "constructor" });
+  });
+
+  it("reads a fourth findings cell as a note only after the documented split fails", () => {
+    expect(parse("ui-findings", "high | require() of ESM | src/zip.js:10 | baseline is red too\nmedium | 653 rows unchecked | ledger | add evidence")).toMatchObject({
+      kind: "findings",
+      rows: [
+        { severity: "high", text: "require() of ESM", location: "src/zip.js:10", note: "baseline is red too" },
+        { severity: "medium", location: "ledger", note: "add evidence" },
+      ],
+    });
+    expect(parse("ui-findings", "info | adversarial (fetch|iex) cases | src/a.rs")).toMatchObject({
+      rows: [{ text: "adversarial (fetch|iex) cases", location: "src/a.rs", note: undefined }],
+    });
+    expect(parse("ui-findings", "high | a | b | c | d")).toBeNull();
   });
 
   it("accepts a fourth checklist cell only when it is a path-shaped location", () => {

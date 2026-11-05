@@ -62,13 +62,23 @@ pub fn render(
     }
     match name {
         "callout" => {
-            let (tone, title) = args.split_once(char::is_whitespace).unwrap_or((args, ""));
-            let (symbol, color) = match tone {
-                "info" => ("ℹ", theme.info),
-                "success" => ("✓", theme.success),
-                "warning" => ("!", theme.warning),
-                "danger" => ("✗", theme.danger),
-                _ => return None,
+            // Models sometimes omit the tone or write a row tone word, as the WebUI accepts: a row tone
+            // word maps to its callout tone, and without one the callout is `info` titled by all of `args`.
+            // 模型有时省略色调或写行色调词，与 WebUI 一致：行色调词映射为对应提示框色调；没有色调词时
+            // 提示框为 `info`，以 `args` 全文为标题。
+            let (tone, rest) = args.split_once(char::is_whitespace).unwrap_or((args, ""));
+            let tone = match tone {
+                "ok" => "success",
+                "warn" => "warning",
+                "no" => "danger",
+                other => other,
+            };
+            let (symbol, color, title) = match tone {
+                "info" => ("ℹ", theme.info, rest),
+                "success" => ("✓", theme.success, rest),
+                "warning" => ("!", theme.warning, rest),
+                "danger" => ("✗", theme.danger, rest),
+                _ => ("ℹ", theme.info, args),
             };
             let header = format!("{symbol} {}", title.trim());
             Some(framed(header.trim_end(), color, body, width, theme, code))
@@ -487,17 +497,7 @@ fn component_markdown(
             Some(format!("- **{}**: {}\n", cell[0], cell[1]))
         }),
         "metrics" => metrics(lines),
-        "findings" => rows_markdown(lines, 2, 3, |cell| {
-            let severity = match cell[0] {
-                "high" => tr!("answerComponents.severity.high"),
-                "medium" => tr!("answerComponents.severity.medium"),
-                "low" => tr!("answerComponents.severity.low"),
-                "info" => tr!("answerComponents.severity.info"),
-                _ => return None,
-            };
-            let location = cell.get(2).map_or(String::new(), |at| format!(" — `{at}`"));
-            Some(format!("- **[{severity}]** {}{location}\n", cell[1]))
-        }),
+        "findings" => findings(lines),
         "checklist" => checklist(lines),
         "steps" => {
             let mut number = 0;
@@ -725,6 +725,34 @@ fn file_cells(line: &str) -> Option<Vec<&str>> {
         [path, "", note] if !path.is_empty() && !note.is_empty() => Some(vec![path, note]),
         _ => None,
     })
+}
+
+/// `severity | finding | location` rows. Models sometimes add a fourth note cell as in `ui-checklist`; it
+/// is read only after the documented split, including the lenient one, has failed, as in the WebUI.
+/// `严重度 | 问题 | 位置` 行。模型有时仿照 `ui-checklist` 追加第四格说明；仅当包括宽松拆分在内的
+/// 文档写法都失败后才按四格读取，与 WebUI 一致。
+fn findings(lines: &[&str]) -> Option<String> {
+    let rows = data_rows(lines);
+    if rows.is_empty() || rows.len() > ANSWER_COMPONENT_MAX_ROWS {
+        return None;
+    }
+    rows.iter()
+        .map(|line| {
+            let cell = row_cells(line, 2, 3).or_else(|| row_cells(line, 4, 4))?;
+            let severity = match cell[0] {
+                "high" => tr!("answerComponents.severity.high"),
+                "medium" => tr!("answerComponents.severity.medium"),
+                "low" => tr!("answerComponents.severity.low"),
+                "info" => tr!("answerComponents.severity.info"),
+                _ => return None,
+            };
+            let note = cell
+                .get(3)
+                .map_or(String::new(), |note| format!(" — {note}"));
+            let location = cell.get(2).map_or(String::new(), |at| format!(" — `{at}`"));
+            Some(format!("- **[{severity}]** {}{note}{location}\n", cell[1]))
+        })
+        .collect()
 }
 
 /// `status | item | note` rows. Models sometimes add a fourth location cell as in `ui-findings`; it is

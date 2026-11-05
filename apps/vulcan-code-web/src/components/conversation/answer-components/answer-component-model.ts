@@ -184,7 +184,7 @@ export type AnswerComponent = AnswerComponentBody & { heading?: string };
 export type AnswerComponentBody =
   | { kind: "kv"; rows: { label: string; value: string }[] }
   | { kind: "metrics"; rows: AnswerMetric[] }
-  | { kind: "findings"; rows: { severity: AnswerSeverity; text: string; location?: string }[] }
+  | { kind: "findings"; rows: { severity: AnswerSeverity; text: string; location?: string; note?: string }[] }
   | { kind: "compare"; header: string[]; rows: { criterion: string; cells: AnswerTonedText[] }[] }
   | { kind: "checklist"; items: { status: AnswerStatus; item: string; note?: string; location?: string }[] }
   | { kind: "steps"; steps: { status: AnswerStepStatus; title: string; text?: string }[] }
@@ -229,9 +229,7 @@ export function parseAnswerComponent(language: string, meta: string, body: strin
     case "ui-metrics":
       return titled(args, () => mapLines(body, metricCells, metric, (rows) => ({ kind: "metrics", rows })));
     case "ui-findings":
-      return titled(args, () => mapRows(body, 2, 3, ([severity, text, location]) => (
-        SEVERITIES.has(severity) ? { severity: severity as AnswerSeverity, text, location } : null
-      ), (rows) => ({ kind: "findings", rows })));
+      return titled(args, () => findings(body));
     case "ui-compare":
       return titled(args, () => compare(body));
     case "ui-checklist":
@@ -265,11 +263,8 @@ export function parseAnswerComponent(language: string, meta: string, body: strin
       return math(args, body);
     case "ui-decision":
       return args === "" || args === "multi" ? decision(args === "multi", body) : null;
-    case "ui-callout": {
-      const [tone = "", ...title] = args.split(/\s+/u).filter(Boolean);
-      if (!CALLOUT_TONES.has(tone)) return null;
-      return { kind: "callout", tone: tone as AnswerCalloutTone, title: title.join(" ") || undefined, body };
-    }
+    case "ui-callout":
+      return callout(args, body);
     case "ui-details":
       return args ? { kind: "details", title: args, body } : null;
     case "ui-tabs":
@@ -475,6 +470,32 @@ function lineDelta(cell: string): { added?: number; removed?: number } | null {
     ...(match[1] === undefined ? {} : { added: Number(match[1]) }),
     ...(removed === undefined ? {} : { removed: Number(removed) }),
   };
+}
+
+// `severity | finding | location` rows. Models sometimes add a fourth note cell as in `ui-checklist`; it is read
+// only after the documented split, including the lenient one, has failed, so `fetch|iex` stays in the finding.
+// `严重度 | 问题 | 位置` 行。模型有时仿照 `ui-checklist` 追加第四格说明；仅当包括宽松拆分在内的
+// 文档写法都失败后才按四格读取，因此 `fetch|iex` 仍留在问题文字中。
+function findings(body: string): AnswerComponent | null {
+  const cells = (line: string) => rowCells(line, 2, 3) ?? rowCells(line, 4, 4);
+  return mapLines(body, cells, ([severity, text, location, note]) => (
+    SEVERITIES.has(severity) ? { severity: severity as AnswerSeverity, text, location, note } : null
+  ), (rows) => ({ kind: "findings", rows }));
+}
+
+// Row tone words models reuse as callout tones.
+// 模型挪用为提示框色调的行色调词。
+const CALLOUT_TONE_ALIASES = new Map<string, AnswerCalloutTone>([["ok", "success"], ["warn", "warning"], ["no", "danger"]]);
+
+// `ui-callout <tone> [title]`. Models sometimes omit the tone or write a row tone word: a row tone word maps to its
+// callout tone, and without any tone word the callout is `info` with the whole text after the name as its title.
+// `ui-callout <色调> [标题]`。模型有时省略色调或写行色调词：行色调词映射为对应提示框色调；完全没有色调词时
+// 提示框为 `info`，名称后的全部文字作为标题。
+function callout(args: string, body: string): AnswerComponent {
+  const [word = "", ...rest] = args.split(/\s+/u).filter(Boolean);
+  const tone = CALLOUT_TONES.has(word) ? word as AnswerCalloutTone : CALLOUT_TONE_ALIASES.get(word);
+  const title = (tone === undefined ? args : rest.join(" ")) || undefined;
+  return { kind: "callout", tone: tone ?? "info", title, body };
 }
 
 // `status | item | note` rows. Models sometimes add a fourth location cell as in `ui-findings`; it is accepted only

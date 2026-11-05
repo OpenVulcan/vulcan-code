@@ -795,6 +795,13 @@ A[Plan] --> B[Build]";
         assert!(
             joined("```ui-checklist\nno | item | note | more prose\n```").contains("ui-checklist")
         );
+        let noted = joined("```ui-findings\nhigh | issue | ledger | note-marker\n```");
+        assert!(!noted.contains("ui-findings") && noted.contains("note-marker"));
+        assert!(joined("```ui-findings\nhigh | a | b | c | d\n```").contains("ui-findings"));
+        let untoned = joined("```ui-callout\nbody-marker\n```");
+        assert!(!untoned.contains("ui-callout") && untoned.contains("body-marker"));
+        let aliased = joined("```ui-callout warn Title-marker\nbody\n```");
+        assert!(aliased.contains("Title-marker") && !aliased.contains("warn"));
 
         let decision = joined("```ui-decision\nLifetime?\n* Ten | deploys\n- Hour\n```");
         assert!(!decision.contains("ui-decision") && decision.contains("Lifetime?"));
