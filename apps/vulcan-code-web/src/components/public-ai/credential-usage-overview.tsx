@@ -295,7 +295,7 @@ function CredentialUsageSummary(props: {
 // 通过共享语言目录解析 OpenCode 封闭的额度窗口身份。
 // window supplies one normalized meter and t resolves catalog keys; returns a period or invalid-data label.
 // window 提供一个规范化窗口，t 解析目录键；返回周期或无效数据标签。
-function opencodeUsageWindowLabel(
+export function opencodeUsageWindowLabel(
   window: PublicAiAccountUsageWindow,
   t: (key: TranslationKey) => string,
 ): string {
@@ -707,7 +707,7 @@ const USAGE_WARNING_PERCENT = 30
 
 // usageMeterTone grades a remaining-quota share by the shared thresholds.
 // usageMeterTone 按共享阈值为剩余额度比例分档。
-function usageMeterTone(percentage: number): UsageMeterTone {
+export function usageMeterTone(percentage: number): UsageMeterTone {
   if (percentage <= USAGE_CRITICAL_PERCENT) return "bad"
   if (percentage <= USAGE_WARNING_PERCENT) return "warn"
   return "ok"
@@ -846,7 +846,7 @@ function credentialBillingKindLabel(
 // accountBalanceLabel 渲染精确余额和币种且不进行数值强制转换。
 // Parameters: usage supplies the account balance and currency fields; returns their display label without numeric coercion.
 // 参数：usage 提供账号余额与币种字段；返回不经数值强制转换的展示标签。
-function accountBalanceLabel(usage?: PublicAiAccountUsage): string {
+export function accountBalanceLabel(usage?: PublicAiAccountUsage): string {
   if (!usage?.balance_amount) {
     return "-"
   }

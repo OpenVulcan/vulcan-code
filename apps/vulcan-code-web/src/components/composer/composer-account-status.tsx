@@ -4,12 +4,12 @@ import { ProviderIcon } from "@/components/features/settings/provider-icon";
 import { StatusPeek } from "@/components/shell/status-peek";
 import { useI18n } from "@/i18n";
 import { ComposerAccountHostContext } from "./composer-settings-host";
-import { ModelAccountUsageCard, ModelAccountUsageSummary, type ModelAccountDetails } from "./model-account-details";
+import { ModelAccountStatusUsage, ModelAccountUsageCard, type ModelAccountDetails } from "./model-account-details";
 
-// ComposerAccountStatus puts the active model account and its plan in the status bar. The item reads the
+// ComposerAccountStatus puts the active model account and what it reports (quota gauge, balance) in the status bar. The item reads the
 // locally cached usage once on mount; its card shows the whole plan and offers a manual refresh, and the
 // card's settings button opens the model services page.
-// ComposerAccountStatus 将当前模型账号及其套餐放入状态栏。该项在挂载时读取一次本地缓存的用量；卡片显示完整套餐并提供
+// ComposerAccountStatus 将当前模型账号及其报告的内容（额度仪表、余额）放入状态栏。该项在挂载时读取一次本地缓存的用量；卡片显示完整套餐并提供
 // 手动刷新，卡片中的设置按钮打开模型服务页面。
 export function ComposerAccountStatus(props: { account: ModelAccountDetails }) {
   const { t } = useI18n();
@@ -40,14 +40,12 @@ export function ComposerAccountStatus(props: { account: ModelAccountDetails }) {
         size={14}
       />
       <span>{selected.accountName}</span>
-      {account.connection && account.usage ? (
-        <span className="vk-status-plan">
-          <ModelAccountUsageSummary
-            connection={account.connection}
-            credentialProfile={account.credentialProfile}
-            usage={account.usage}
-          />
-        </span>
+      {account.connection ? (
+        <ModelAccountStatusUsage
+          connection={account.connection}
+          credentialProfile={account.credentialProfile}
+          usage={account.usage}
+        />
       ) : null}
     </StatusPeek>,
     target.host,

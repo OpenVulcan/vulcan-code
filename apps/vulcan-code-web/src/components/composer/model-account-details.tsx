@@ -34,6 +34,11 @@ const LazyCredentialUsageOverview = React.lazy(() => loadCredentialUsageOverview
   .then((module) => ({ default: module.CredentialUsageOverview })));
 const LazyCredentialUsageSummaryLine = React.lazy(() => loadCredentialUsageOverview()
   .then((module) => ({ default: module.CredentialUsageSummaryLine })));
+// loadCredentialUsageStatus fetches the status-bar usage fragment and its stylesheet with the same deferred read.
+// loadCredentialUsageStatus 随同一次延迟读取加载状态栏用量片段及其样式表。
+const loadCredentialUsageStatus = () => import("@/components/public-ai/credential-usage-status");
+const LazyCredentialUsageStatusLine = React.lazy(() => loadCredentialUsageStatus()
+  .then((module) => ({ default: module.CredentialUsageStatusLine })));
 
 // ModelAccountUsageOverview renders the full usage card once its module has loaded.
 // ModelAccountUsageOverview 在模块加载后渲染完整用量卡片。
@@ -141,6 +146,7 @@ export function useModelAccountDetails(accounts: ModelPickerChoice[], value: str
     const current = owner.current;
     const version = ++current.readVersion;
     void loadCredentialUsageOverview();
+    void loadCredentialUsageStatus();
     setLoading(true);
     setError(null);
     try {
@@ -278,6 +284,25 @@ export function ModelAccountUsageSummary(props: {
   return (
     <React.Suspense fallback={null}>
       <LazyCredentialUsageSummaryLine {...props} />
+    </React.Suspense>
+  );
+}
+
+// ModelAccountStatusUsage renders what the account reports for the status bar: a quota gauge, a balance, both, or
+// nothing, so an account without either shows only its name.
+// ModelAccountStatusUsage 渲染账号为状态栏报告的内容：额度仪表、余额、两者兼有或空，使两者皆无的账号只显示名称。
+// Parameters: connection, credentialProfile and usage are the selected account's facts.
+// 参数：connection、credentialProfile 与 usage 为当前账号的事实。
+// Returns: the status fragment; empty until its module loads.
+// 返回值：状态片段；模块加载前为空。
+export function ModelAccountStatusUsage(props: {
+  connection: PublicAiConnection;
+  credentialProfile?: PublicAiCredentialProfile;
+  usage?: PublicAiAccountUsage;
+}) {
+  return (
+    <React.Suspense fallback={null}>
+      <LazyCredentialUsageStatusLine {...props} />
     </React.Suspense>
   );
 }

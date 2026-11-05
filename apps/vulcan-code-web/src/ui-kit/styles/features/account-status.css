@@ -1,0 +1,14 @@
+/* Account status usage: the status-bar fragment after the model account name. A quota gauge keeps its fixed size
+ * so later refreshes never shift the bar; a balance after it is the part that truncates when space runs out. */
+/* 账号状态用量：状态栏中模型账号名之后的片段。额度仪表保持固定尺寸，后续刷新不会挪动状态栏；
+ * 其后的余额在空间不足时优先截断。 */
+.vk-status-item > .vk-status-plan[data-slot="account-status-usage"] {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--vk-u) * 1.5);
+}
+.vk-status-quota { display: inline-flex; flex: none; align-items: center; gap: var(--vk-u); }
+.vk-status-quota > .vk-meter { flex: none; width: 2.5rem; height: 0.4rem; gap: 1px; }
+.vk-status-quota[data-tone="bad"] > span { color: var(--vk-bad); }
+.vk-status-balance { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.vk-status-quota + .vk-status-balance::before { content: "·"; margin-right: calc(var(--vk-u) * 1.5); }

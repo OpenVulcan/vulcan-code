@@ -1,4 +1,4 @@
-import type { ReactNode } from "react"
+import type { CSSProperties, ReactNode } from "react"
 
 import { Badge } from "@/ui-kit/primitives/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/ui-kit/primitives/card"
@@ -182,6 +182,9 @@ export interface UsageMeterProps {
   // tone selects the urgency color; the caller owns its thresholds.
   // tone 选择紧迫程度颜色；阈值由调用方持有。
   tone: UsageMeterTone
+  // cells overrides the cell count for gauges too narrow for the standard resolution, such as status-bar items.
+  // cells 为过窄而无法容纳标准分辨率的仪表（如状态栏项）覆盖格数。
+  cells?: number
 }
 
 // UsageMeter renders a remaining share as discrete instrument cells with synchronized ARIA values.
@@ -190,9 +193,12 @@ export function UsageMeter(props: UsageMeterProps) {
   // percentage prevents invalid geometry while the caller keeps the exact text value.
   // percentage 防止无效几何，精确文本值由调用方保留。
   const percentage = Math.max(0, Math.min(100, props.percentage))
+  // cells is the rendered cell count; the stylesheet's column count follows it through --cells.
+  // cells 是渲染的格数；样式表的列数通过 --cells 跟随该值。
+  const cells = props.cells !== undefined && Number.isSafeInteger(props.cells) && props.cells > 0 ? props.cells : USAGE_METER_CELLS
   // lit is the count of filled cells; any non-zero share keeps at least one cell visible.
   // lit 是点亮格数；任何非零比例至少保留一格可见。
-  const lit = percentage > 0 ? Math.max(1, Math.round((percentage / 100) * USAGE_METER_CELLS)) : 0
+  const lit = percentage > 0 ? Math.max(1, Math.round((percentage / 100) * cells)) : 0
   return (
     <div
       aria-label={props.label}
@@ -202,8 +208,9 @@ export function UsageMeter(props: UsageMeterProps) {
       className="vk-meter"
       data-tone={props.tone}
       role="progressbar"
+      style={cells === USAGE_METER_CELLS ? undefined : { "--cells": cells } as CSSProperties}
     >
-      {Array.from({ length: USAGE_METER_CELLS }, (_, index) => <i data-on={index < lit ? "" : undefined} key={index} />)}
+      {Array.from({ length: cells }, (_, index) => <i data-on={index < lit ? "" : undefined} key={index} />)}
     </div>
   )
 }
