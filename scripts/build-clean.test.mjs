@@ -14,7 +14,9 @@ import { buildInputPaths } from './build-input-paths.mjs';
 function invoke(root, executable, args, env) {
   // result preserves native diagnostics, including permission failures, without any real repository cleanup.
   // result 保留原生诊断，包括权限错误，不清理真实仓库。
-  const result = spawnSync(executable, args, { cwd: root, env, encoding: 'utf8', timeout: 30_000 });
+  // The first pwsh start on a fresh Windows runner can take over 30 seconds; later starts take about one.
+  // 全新 Windows 运行器上首次启动 pwsh 可能超过 30 秒，之后约 1 秒。
+  const result = spawnSync(executable, args, { cwd: root, env, encoding: 'utf8', timeout: 120_000 });
   assert.equal(result.error, undefined);
   return result;
 }
