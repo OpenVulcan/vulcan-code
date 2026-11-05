@@ -5,13 +5,14 @@ import { MarkdownMessage } from "@/components/conversation/conversation-markdown
 import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice";
 import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
 import { errorMessage, formatBytes } from "@/lib/display-format";
-import type { AppUpdateOperation, AppUpdateSnapshot } from "@/service/app-update-events";
+import type { AppUpdateOffer, AppUpdateOperation, AppUpdateSnapshot } from "@/service/app-update-events";
 import { cancelAppUpdate, downloadAppUpdate, restartToUpdate } from "@/service/app-update-service";
 import { openExternalUrl } from "@/service/project-actions-service";
 import { Badge } from "@/ui-kit/primitives/badge";
 import { Button } from "@/ui-kit/primitives/button";
 import { Progress } from "@/ui-kit/primitives/progress";
 import "@/ui-kit/styles/features/settings-forms.css";
+import "@/ui-kit/styles/features/app-update-notes.css";
 
 // Outcome lines of failed operations.
 // 失败操作的结果说明。
@@ -63,21 +64,77 @@ export function AppUpdateReleaseNotes(props: { notes: Record<string, string> }) 
   return content ? <MarkdownMessage content={content} eager /> : null;
 }
 
-// AppUpdateStatusSections shows the update in progress: failures, the version ready to start, the
-// offered version with its download action, and the download progress.
-// AppUpdateStatusSections 显示进行中的更新：失败、已就绪待启动的版本、提议版本及其下载操作，以及下载进度。
-// Parameters: snapshot is the latest updater state; calls sends the actions; showNotes renders the
-// offered version's notes inside its section.
-// 参数：snapshot 为最新的更新器状态；calls 发送操作；showNotes 在提议版本的区块中渲染其说明。
-export function AppUpdateStatusSections(props: { snapshot: AppUpdateSnapshot; calls: AppUpdateCalls; showNotes: boolean }) {
+// AppUpdateReleaseList shows the notes of every version an update brings: the offered version first, then
+// each skipped one, newest first, so an update across several versions reads in order.
+// AppUpdateReleaseList 显示一次更新带来的每个版本的说明：先是提议的版本，再依次是每个被跳过的版本，
+// 从新到旧，使跨越多个版本的更新可以按顺序阅读。
+// Parameters: version is the version updated to; offer holds its notes and the skipped releases, or null
+// once they are no longer known; currentVersion is the running version.
+// 参数：version 为要更新到的版本；offer 含其说明与被跳过的发布，已不可知时为 null；currentVersion 为
+// 正在运行的版本。
+export function AppUpdateReleaseList(props: { version: string; offer: AppUpdateOffer | null; currentVersion: string }) {
+  const { t, locale } = useI18n();
+  const releases = [{ version: props.version, notes: props.offer?.notes ?? {} }, ...(props.offer?.skippedReleases ?? [])];
+  return <>
+    {releases.map((release) => (
+      <section className="vk-app-update-notes" data-app-update-notes={release.version} key={release.version}>
+        <h3>{formatMessage(t("appUpdate.dialog.notesTitle"), { version: release.version })}</h3>
+        {releaseNotesFor(release.notes, locale) !== ""
+          ? <AppUpdateReleaseNotes notes={release.notes} />
+          : <p className="vk-form-note">{t("appUpdate.dialog.noNotes")}</p>}
+      </section>
+    ))}
+    {props.offer && !props.offer.skippedReleasesComplete ? (
+      <p className="vk-form-note" data-app-update-notes-incomplete="">
+        {formatMessage(t("appUpdate.dialog.earlierNotesMissing"), { current: props.currentVersion })}
+      </p>
+    ) : null}
+  </>;
+}
+
+// AppUpdateErrorNotices shows the failure of the last operation and of the last call.
+// AppUpdateErrorNotices 显示最近一次操作与最近一次调用的失败。
+// Parameters: snapshot is the latest updater state; calls holds the call failure.
+// 参数：snapshot 为最新的更新器状态；calls 持有调用失败。
+export function AppUpdateErrorNotices(props: { snapshot: AppUpdateSnapshot; calls: AppUpdateCalls }) {
+  const { t } = useI18n();
+  const { snapshot, calls } = props;
+  return <>
+    {snapshot.error ? <SettingsErrorNotice detail={snapshot.error.message} message={t(FAILURE_KEYS[snapshot.error.operation])} /> : null}
+    {calls.callError ? <SettingsErrorNotice detail={calls.callError} message={t("settings.appUpdate.requestFailed")} /> : null}
+  </>;
+}
+
+// AppUpdateProgressRow shows a running download or repair with its cancel action; nothing otherwise.
+// AppUpdateProgressRow 显示进行中的下载或修复及其取消操作；否则不渲染。
+// Parameters: snapshot is the latest updater state; calls sends the cancel.
+// 参数：snapshot 为最新的更新器状态；calls 发送取消。
+export function AppUpdateProgressRow(props: { snapshot: AppUpdateSnapshot; calls: AppUpdateCalls }) {
+  const { t } = useI18n();
+  const { snapshot, calls } = props;
+  if (!snapshot.progress) return null;
+  return (
+    <section className="vk-form-pref" data-app-update-progress>
+      <div className="vk-form-pref-text">
+        <strong>{snapshot.activity === "repairing" ? t("settings.appUpdate.repairing") : t("settings.appUpdate.downloading")}</strong>
+        <p className="vk-form-note">{formatBytes(snapshot.progress.receivedBytes)} / {formatBytes(snapshot.progress.totalBytes)}</p>
+        <Progress max={Math.max(snapshot.progress.totalBytes, 1)} value={snapshot.progress.receivedBytes} />
+      </div>
+      <Button onClick={() => void calls.run(cancelAppUpdate)} size="sm" variant="ghost">{t("settings.appUpdate.cancel")}</Button>
+    </section>
+  );
+}
+
+// AppUpdateOfferRows shows the version ready to start and the offered version with its download action.
+// AppUpdateOfferRows 显示已就绪待启动的版本，以及提议版本及其下载操作。
+// Parameters: snapshot is the latest updater state; calls sends the actions.
+// 参数：snapshot 为最新的更新器状态；calls 发送操作。
+export function AppUpdateOfferRows(props: { snapshot: AppUpdateSnapshot; calls: AppUpdateCalls }) {
   const { t } = useI18n();
   const { snapshot, calls } = props;
   const busy = snapshot.activity !== "idle";
   const offer = snapshot.offer;
   return <>
-    {snapshot.error ? <SettingsErrorNotice detail={snapshot.error.message} message={t(FAILURE_KEYS[snapshot.error.operation])} /> : null}
-    {calls.callError ? <SettingsErrorNotice detail={calls.callError} message={t("settings.appUpdate.requestFailed")} /> : null}
-
     {snapshot.readyVersion ? (
       <section className="vk-form-pref" data-app-update-ready>
         <div className="vk-form-pref-text">
@@ -113,19 +170,20 @@ export function AppUpdateStatusSections(props: { snapshot: AppUpdateSnapshot; ca
             {t("settings.appUpdate.openDownloadPage")}
           </Button>
         )}
-        {props.showNotes ? <AppUpdateReleaseNotes notes={offer.notes} /> : null}
       </section>
     ) : null}
+  </>;
+}
 
-    {snapshot.progress ? (
-      <section className="vk-form-pref" data-app-update-progress>
-        <div className="vk-form-pref-text">
-          <strong>{snapshot.activity === "repairing" ? t("settings.appUpdate.repairing") : t("settings.appUpdate.downloading")}</strong>
-          <p className="vk-form-note">{formatBytes(snapshot.progress.receivedBytes)} / {formatBytes(snapshot.progress.totalBytes)}</p>
-          <Progress max={Math.max(snapshot.progress.totalBytes, 1)} value={snapshot.progress.receivedBytes} />
-        </div>
-        <Button onClick={() => void calls.run(cancelAppUpdate)} size="sm" variant="ghost">{t("settings.appUpdate.cancel")}</Button>
-      </section>
-    ) : null}
+// AppUpdateStatusSections shows the update in progress: failures, the version ready to start, the
+// offered version with its download action, and the download progress.
+// AppUpdateStatusSections 显示进行中的更新：失败、已就绪待启动的版本、提议版本及其下载操作，以及下载进度。
+// Parameters: snapshot is the latest updater state; calls sends the actions.
+// 参数：snapshot 为最新的更新器状态；calls 发送操作。
+export function AppUpdateStatusSections(props: { snapshot: AppUpdateSnapshot; calls: AppUpdateCalls }) {
+  return <>
+    <AppUpdateErrorNotices calls={props.calls} snapshot={props.snapshot} />
+    <AppUpdateOfferRows calls={props.calls} snapshot={props.snapshot} />
+    <AppUpdateProgressRow calls={props.calls} snapshot={props.snapshot} />
   </>;
 }

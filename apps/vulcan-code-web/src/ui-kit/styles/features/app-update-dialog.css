@@ -1,6 +1,0 @@
-/* Update dialog: the update status and actions shared with Settings → Software update stack as on that page,
- * then the notes of the version being updated to in the shared Markdown and answer component styles. */
-/* 更新对话框：与“设置 → 软件更新”共用的更新状态与操作按该页方式堆叠，其下以共享 Markdown 与回答组件样式
- * 显示目标版本的说明。 */
-.vk-app-update-notes { display: grid; gap: calc(var(--vk-u) * 2); min-width: 0; padding-top: calc(var(--vk-u) * 4); }
-.vk-app-update-notes > h3 { margin: 0; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); font-weight: 600; }

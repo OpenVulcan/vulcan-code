@@ -1,0 +1,8 @@
+/* Release notes of an update, shared by the update dialog and Settings → Software update: one block per
+ * version, newest first, in the shared Markdown and answer component styles. */
+/* 更新的发布说明，由更新对话框与“设置 → 软件更新”共用：每个版本一块，从新到旧，使用共享的 Markdown 与回答
+ * 组件样式。 */
+.vk-app-update-notes { display: grid; gap: calc(var(--vk-u) * 2); min-width: 0; }
+.vk-dialog-body > .vk-form-pref + .vk-app-update-notes { padding-top: calc(var(--vk-u) * 4); }
+.vk-app-update-notes + .vk-app-update-notes { padding-top: calc(var(--vk-u) * 4); border-top: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-app-update-notes > h3 { margin: 0; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); font-weight: 600; }

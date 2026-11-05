@@ -17,6 +17,26 @@ pub enum AppUpdateRouteSetting {
     China,
 }
 
+/// How often the service checks for a newer version on its own.
+/// 服务自行检查更新版本的频率。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AppUpdateCheckInterval {
+    /// Every hour.
+    /// 每小时。
+    OneHour,
+    /// Every six hours.
+    /// 每六小时。
+    #[default]
+    SixHours,
+    /// Every twelve hours.
+    /// 每十二小时。
+    TwelveHours,
+    /// Once a day.
+    /// 每天一次。
+    OneDay,
+}
+
 /// The user's update settings; defaults are applied in memory and never written back.
 /// 用户的更新设置；默认值只在内存中补齐，绝不回写。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,6 +48,9 @@ pub struct AppUpdateSettings {
     /// Download origins.
     /// 下载源。
     pub route: AppUpdateRouteSetting,
+    /// How often the service checks on its own.
+    /// 服务自行检查的频率。
+    pub check_interval: AppUpdateCheckInterval,
 }
 
 /// Why this process cannot update itself.

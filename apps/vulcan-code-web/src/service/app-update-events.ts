@@ -25,10 +25,14 @@ export type AppUpdateActivity = "idle" | "checking" | "downloading" | "repairing
 /** The operation a failure belongs to. / 失败所属的操作。 */
 export type AppUpdateOperation = "check" | "download" | "repair" | "restart";
 
+/** How often the service checks on its own. / 服务自行检查的频率。 */
+export type AppUpdateCheckInterval = "oneHour" | "sixHours" | "twelveHours" | "oneDay";
+
 /** The user's update settings. / 用户的更新设置。 */
 export interface AppUpdateSettings {
   preview: boolean;
   route: AppUpdateRoute;
+  checkInterval: AppUpdateCheckInterval;
 }
 
 /** A verified newer release. / 已校验的更新版本。 */

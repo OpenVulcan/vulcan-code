@@ -1,10 +1,17 @@
 import { useAppUpdate } from "@/components/features/app-update/use-app-update";
-import { AppUpdateStatusSections, useAppUpdateCalls } from "@/components/features/app-update/app-update-sections";
-import { PageNotice } from "@/components/page";
+import {
+  AppUpdateErrorNotices,
+  AppUpdateOfferRows,
+  AppUpdateProgressRow,
+  AppUpdateReleaseList,
+  useAppUpdateCalls,
+} from "@/components/features/app-update/app-update-sections";
+import { PageBody, PageNotice, PageRow, PageSection } from "@/components/page";
 import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice";
 import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
-import type { AppUpdateRoute, AppUpdateSettings, AppUpdateUnavailableReason } from "@/service/app-update-events";
-import { checkAppUpdate, dismissAppUpdateNotice, repairAppInstall, saveAppUpdateSettings } from "@/service/app-update-service";
+import type { AppUpdateCheckInterval, AppUpdateRoute, AppUpdateSettings, AppUpdateUnavailableReason } from "@/service/app-update-events";
+import { formatBytes } from "@/lib/display-format";
+import { cancelAppUpdate, checkAppUpdate, dismissAppUpdateNotice, repairAppInstall, saveAppUpdateSettings } from "@/service/app-update-service";
 import { Button } from "@/ui-kit/primitives/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select";
 import { Switch } from "@/ui-kit/primitives/switch";
@@ -27,9 +34,19 @@ const ROUTE_KEYS: Record<AppUpdateRoute, TranslationKey> = {
   china: "settings.appUpdate.route.china",
 };
 
-// AppUpdateSettingsArea shows the running version and every update action: check, download,
-// restart, repair, the rollback notice and the update settings.
-// AppUpdateSettingsArea 显示正在运行的版本及全部更新操作：检查、下载、重启、修复、回退提示与更新设置。
+// Labels of the automatic check intervals, shortest first.
+// 自动检查间隔的标签，从短到长。
+const CHECK_INTERVAL_KEYS: Record<AppUpdateCheckInterval, TranslationKey> = {
+  oneHour: "settings.appUpdate.checkInterval.oneHour",
+  sixHours: "settings.appUpdate.checkInterval.sixHours",
+  twelveHours: "settings.appUpdate.checkInterval.twelveHours",
+  oneDay: "settings.appUpdate.checkInterval.oneDay",
+};
+
+// AppUpdateSettingsArea shows, top to bottom, the running version with its check and repair actions,
+// the update settings, and last the update found with the notes of every version it brings.
+// AppUpdateSettingsArea 自上而下显示：正在运行的版本及其检查与修复操作、更新设置，最后是找到的更新及其带来
+// 的每个版本的说明。
 // Parameters: serviceInstanceEpoch reads the state again after a reconnect, such as the restart into a
 // new version.
 // 参数：serviceInstanceEpoch 在重连（例如重启进入新版本）后重新读取状态。
@@ -46,25 +63,38 @@ export function AppUpdateSettingsArea(props: { serviceInstanceEpoch: number }) {
   }
 
   const busy = snapshot.activity !== "idle";
+  const available = snapshot.unavailableReason === null;
   const saveSettings = (settings: AppUpdateSettings) => void run(() => saveAppUpdateSettings(settings));
   const lastChecked = snapshot.lastCheckedAt === null
     ? t("settings.appUpdate.neverChecked")
     : new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(snapshot.lastCheckedAt));
+  // A repair reports its progress beside the repair action; a download beside the version it fetches.
+  // 修复在修复操作旁报告进度；下载在其获取的版本旁报告进度。
+  const repairing = snapshot.activity === "repairing";
+  const showsUpdate = snapshot.offer !== null || snapshot.readyVersion !== null || (snapshot.progress !== null && !repairing);
 
-  return <>
-    <section className="vk-form-pref" data-app-update-current>
-      <div className="vk-form-pref-text">
-        <strong>{t("settings.appUpdate.currentVersion")} <span className="vk-mono">{snapshot.currentVersion}</span></strong>
-        <p className="vk-form-note">
-          {snapshot.unavailableReason ? t(UNAVAILABLE_KEYS[snapshot.unavailableReason]) : formatMessage(t("settings.appUpdate.lastChecked"), { time: lastChecked })}
-        </p>
-      </div>
-      {snapshot.unavailableReason ? null : (
+  return <PageBody>
+    <PageSection
+      data-app-update-current
+      layout="rows"
+      title={<>{t("settings.appUpdate.currentVersion")} <span className="vk-mono">{snapshot.currentVersion}</span></>}
+      description={available ? formatMessage(t("settings.appUpdate.lastChecked"), { time: lastChecked }) : t(UNAVAILABLE_KEYS[snapshot.unavailableReason!])}
+      actions={available ? (
         <Button disabled={busy} onClick={() => void run(checkAppUpdate)} size="sm" variant="outline">
           {snapshot.activity === "checking" ? t("settings.appUpdate.checking") : t("settings.appUpdate.check")}
         </Button>
-      )}
-    </section>
+      ) : undefined}
+    >
+      {available ? (
+        <PageRow data-app-update-repair label={t("settings.appUpdate.repair")} description={repairing && snapshot.progress
+          ? `${t("settings.appUpdate.repairing")} · ${formatBytes(snapshot.progress.receivedBytes)} / ${formatBytes(snapshot.progress.totalBytes)}`
+          : snapshot.repairedFiles === null ? t("settings.appUpdate.repairHint") : formatMessage(t("settings.appUpdate.repaired"), { count: snapshot.repairedFiles })}>
+          {repairing
+            ? <Button onClick={() => void run(cancelAppUpdate)} size="sm" variant="ghost">{t("settings.appUpdate.cancel")}</Button>
+            : <Button disabled={busy} onClick={() => void run(repairAppInstall)} size="sm" variant="outline">{t("settings.appUpdate.repairAction")}</Button>}
+        </PageRow>
+      ) : null}
+    </PageSection>
 
     {snapshot.rollback ? (
       <PageNotice tone="warning" title={formatMessage(t("settings.appUpdate.rollback.title"), { version: snapshot.rollback.failed })}
@@ -73,38 +103,42 @@ export function AppUpdateSettingsArea(props: { serviceInstanceEpoch: number }) {
       </PageNotice>
     ) : null}
 
-    <AppUpdateStatusSections calls={calls} showNotes snapshot={snapshot} />
+    <AppUpdateErrorNotices calls={calls} snapshot={snapshot} />
 
-    {snapshot.unavailableReason ? null : <>
-      <section className="vk-form-pref">
-        <div className="vk-form-pref-text">
-          <strong>{t("settings.appUpdate.previewChannel")}</strong>
-          <p className="vk-form-note">{t("settings.appUpdate.previewChannelHint")}</p>
-        </div>
-        <Switch aria-label={t("settings.appUpdate.previewChannel")} checked={snapshot.settings.preview}
-          onCheckedChange={(preview) => saveSettings({ ...snapshot.settings, preview })} />
-      </section>
-      <section className="vk-form-pref">
-        <div className="vk-form-pref-text">
-          <strong>{t("settings.appUpdate.route")}</strong>
-          <p className="vk-form-note">{t("settings.appUpdate.routeHint")}</p>
-        </div>
-        <Select value={snapshot.settings.route} onValueChange={(route) => saveSettings({ ...snapshot.settings, route: route as AppUpdateRoute })}>
-          <SelectTrigger aria-label={t("settings.appUpdate.route")} className="vk-form-w-md"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            {(Object.keys(ROUTE_KEYS) as AppUpdateRoute[]).map((route) => <SelectItem key={route} value={route}>{t(ROUTE_KEYS[route])}</SelectItem>)}
-          </SelectContent>
-        </Select>
-      </section>
-      <section className="vk-form-pref" data-app-update-repair>
-        <div className="vk-form-pref-text">
-          <strong>{t("settings.appUpdate.repair")}</strong>
-          <p className="vk-form-note">
-            {snapshot.repairedFiles === null ? t("settings.appUpdate.repairHint") : formatMessage(t("settings.appUpdate.repaired"), { count: snapshot.repairedFiles })}
-          </p>
-        </div>
-        <Button disabled={busy} onClick={() => void run(repairAppInstall)} size="sm" variant="outline">{t("settings.appUpdate.repairAction")}</Button>
-      </section>
-    </>}
-  </>;
+    {available ? (
+      <PageSection layout="rows" title={t("settings.appUpdate.settingsTitle")}>
+        <PageRow label={t("settings.appUpdate.checkInterval")} description={t("settings.appUpdate.checkIntervalHint")}>
+          <Select value={snapshot.settings.checkInterval}
+            onValueChange={(checkInterval) => saveSettings({ ...snapshot.settings, checkInterval: checkInterval as AppUpdateCheckInterval })}>
+            <SelectTrigger aria-label={t("settings.appUpdate.checkInterval")} className="vk-form-w-md"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {(Object.keys(CHECK_INTERVAL_KEYS) as AppUpdateCheckInterval[]).map((interval) => (
+                <SelectItem key={interval} value={interval}>{t(CHECK_INTERVAL_KEYS[interval])}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </PageRow>
+        <PageRow label={t("settings.appUpdate.previewChannel")} description={t("settings.appUpdate.previewChannelHint")}>
+          <Switch aria-label={t("settings.appUpdate.previewChannel")} checked={snapshot.settings.preview}
+            onCheckedChange={(preview) => saveSettings({ ...snapshot.settings, preview })} />
+        </PageRow>
+        <PageRow label={t("settings.appUpdate.route")} description={t("settings.appUpdate.routeHint")}>
+          <Select value={snapshot.settings.route} onValueChange={(route) => saveSettings({ ...snapshot.settings, route: route as AppUpdateRoute })}>
+            <SelectTrigger aria-label={t("settings.appUpdate.route")} className="vk-form-w-md"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {(Object.keys(ROUTE_KEYS) as AppUpdateRoute[]).map((route) => <SelectItem key={route} value={route}>{t(ROUTE_KEYS[route])}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </PageRow>
+      </PageSection>
+    ) : null}
+
+    {showsUpdate ? (
+      <PageSection data-app-update-found title={t("settings.appUpdate.updateTitle")}>
+        <AppUpdateOfferRows calls={calls} snapshot={snapshot} />
+        {repairing ? null : <AppUpdateProgressRow calls={calls} snapshot={snapshot} />}
+        {snapshot.offer ? <AppUpdateReleaseList currentVersion={snapshot.currentVersion} offer={snapshot.offer} version={snapshot.offer.version} /> : null}
+      </PageSection>
+    ) : null}
+  </PageBody>;
 }

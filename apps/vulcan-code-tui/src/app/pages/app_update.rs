@@ -134,6 +134,36 @@ fn release_notes_rows(rows: &mut Vec<Row>, version: Option<&str>, notes: &Value)
 fn settings_rows(rows: &mut Vec<Row>, snapshot: &Value, busy: bool) {
     let settings = v(snapshot, "/settings");
     rows.push(
+        choice(
+            tr!("settings.appUpdate.checkInterval"),
+            vec![
+                (
+                    "oneHour".into(),
+                    tr!("settings.appUpdate.checkInterval.oneHour"),
+                ),
+                (
+                    "sixHours".into(),
+                    tr!("settings.appUpdate.checkInterval.sixHours"),
+                ),
+                (
+                    "twelveHours".into(),
+                    tr!("settings.appUpdate.checkInterval.twelveHours"),
+                ),
+                (
+                    "oneDay".into(),
+                    tr!("settings.appUpdate.checkInterval.oneDay"),
+                ),
+            ],
+            s(settings, "/checkInterval"),
+            dto(
+                settings.clone(),
+                "/checkInterval",
+                api_update::save_app_update_settings,
+            ),
+        )
+        .detail(tr!("settings.appUpdate.checkIntervalHint")),
+    );
+    rows.push(
         toggle(
             tr!("settings.appUpdate.previewChannel"),
             b(settings, "/preview"),
@@ -335,7 +365,7 @@ mod tests {
     fn snapshot(overrides: Value) -> Value {
         let mut base = json!({
             "currentVersion": "0.1.4", "unavailableReason": null,
-            "settings": { "preview": false, "route": "auto" }, "activity": "idle",
+            "settings": { "preview": false, "route": "auto", "checkInterval": "sixHours" }, "activity": "idle",
             "progress": null, "lastCheckedAt": null, "offer": null, "readyVersion": null,
             "repairedFiles": null, "error": null, "rollback": null,
             "downloadPageUrl": "https://openvulcan.com/download"

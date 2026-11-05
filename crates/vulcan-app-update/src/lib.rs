@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use vulcan_install_core::FormatError;
 use vulcan_install_core::assemble::Assembly;
@@ -32,10 +32,10 @@ use vulcan_install_core::update::{
     find_update, read_indexes, read_manifest, read_skipped_release_notes,
 };
 use vulcan_service_api::{
-    AppUpdateActivity, AppUpdateError, AppUpdateKind, AppUpdateOffer, AppUpdateOperation,
-    AppUpdateProgress, AppUpdateReleaseNotes, AppUpdateRollback, AppUpdateRouteSetting,
-    AppUpdateSettings, AppUpdateSnapshot, AppUpdateUnavailableReason, ServiceRestartReason,
-    ServiceRestartingEvent,
+    AppUpdateActivity, AppUpdateCheckInterval, AppUpdateError, AppUpdateKind, AppUpdateOffer,
+    AppUpdateOperation, AppUpdateProgress, AppUpdateReleaseNotes, AppUpdateRollback,
+    AppUpdateRouteSetting, AppUpdateSettings, AppUpdateSnapshot, AppUpdateUnavailableReason,
+    ServiceRestartReason, ServiceRestartingEvent,
 };
 
 mod installed;
@@ -47,9 +47,22 @@ use installed::Installed;
 /// 服务启动到首次自动检查之间的延迟。
 pub const FIRST_CHECK_DELAY: Duration = Duration::from_secs(60);
 
-/// Interval between automatic checks.
-/// 自动检查的间隔。
-pub const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+/// How often the schedule wakes to see whether an automatic check is due, so a changed interval
+/// applies without a restart.
+/// 调度醒来查看自动检查是否到期的频率，使修改后的间隔无需重启即可生效。
+const SCHEDULE_TICK: Duration = Duration::from_secs(60);
+
+/// Time between automatic checks for each interval setting.
+/// 每种间隔设置对应的自动检查间隔时间。
+pub fn check_interval(setting: AppUpdateCheckInterval) -> Duration {
+    const HOUR: u64 = 60 * 60;
+    Duration::from_secs(match setting {
+        AppUpdateCheckInterval::OneHour => HOUR,
+        AppUpdateCheckInterval::SixHours => 6 * HOUR,
+        AppUpdateCheckInterval::TwelveHours => 12 * HOUR,
+        AppUpdateCheckInterval::OneDay => 24 * HOUR,
+    })
+}
 
 /// How often a running download or repair reports its progress.
 /// 进行中的下载或修复报告进度的频率。
@@ -177,6 +190,9 @@ struct State {
     /// When the last check finished.
     /// 上次检查完成的时间。
     last_checked_at: Option<u64>,
+    /// When the last check, automatic or manual, finished, for scheduling the next one.
+    /// 上次检查（自动或手动）完成的时刻，用于安排下一次检查。
+    last_check_finished: Option<Instant>,
     /// The newer version and what installing it needs.
     /// 更新版本及安装它所需的内容。
     offer: Option<Offer>,
@@ -258,16 +274,16 @@ impl AppUpdater {
             let spawned = std::thread::Builder::new()
                 .name(String::from("vulcan-app-update-schedule"))
                 .spawn(move || {
-                    std::thread::sleep(FIRST_CHECK_DELAY);
+                    let first_check = Instant::now() + FIRST_CHECK_DELAY;
                     loop {
-                        if updater.inner.wants_automatic_check() {
+                        std::thread::sleep(SCHEDULE_TICK);
+                        if updater.inner.wants_automatic_check(first_check) {
                             updater.inner.run(
                                 AppUpdateActivity::Checking,
                                 AppUpdateOperation::Check,
                                 Inner::check,
                             );
                         }
-                        std::thread::sleep(CHECK_INTERVAL);
                     }
                 });
             if let Err(error) = spawned {
@@ -483,11 +499,17 @@ impl Inner {
         }
     }
 
-    /// Whether the schedule should check now.
-    /// 调度此刻是否应检查。
-    fn wants_automatic_check(&self) -> bool {
+    /// Whether the schedule should check now: the updater is idle with nothing waiting for a
+    /// restart, and the chosen interval has passed since the last check, or `first_check` has
+    /// come when there was none.
+    /// 调度此刻是否应检查：更新器空闲且没有等待重启的版本，并且距上次检查已过所选间隔；从未检查时则
+    /// 以到达 `first_check` 为准。
+    fn wants_automatic_check(&self, first_check: Instant) -> bool {
         let state = self.lock();
-        state.activity == AppUpdateActivity::Idle && state.ready.is_none()
+        let due = state.last_check_finished.map_or(first_check, |finished| {
+            finished + check_interval(state.settings.check_interval)
+        });
+        state.activity == AppUpdateActivity::Idle && state.ready.is_none() && Instant::now() >= due
     }
 
     /// Marks `activity` as running, failing when another operation runs.
@@ -553,6 +575,7 @@ impl Inner {
         state.cancel = None;
         if operation == AppUpdateOperation::Check {
             state.last_checked_at = Some(now_ms());
+            state.last_check_finished = Some(Instant::now());
         }
         match result {
             Ok(()) => {}

@@ -33,7 +33,7 @@ function snapshot(overrides: Partial<AppUpdateSnapshot> = {}): AppUpdateSnapshot
   return {
     currentVersion: "0.1.4",
     unavailableReason: null,
-    settings: { preview: false, route: "auto" },
+    settings: { preview: false, route: "auto", checkInterval: "sixHours" },
     activity: "idle",
     progress: null,
     lastCheckedAt: null,

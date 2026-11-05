@@ -5,11 +5,12 @@ use std::sync::{Arc, OnceLock};
 
 use vulcan_app_update::{AppUpdater, RestartPlan, UpdateHost};
 use vulcan_provider_config::config::{
-    PersistedAppUpdateConfiguration, PersistedAppUpdateRoute, ProviderConfigurationFile,
+    PersistedAppUpdateCheckInterval, PersistedAppUpdateConfiguration, PersistedAppUpdateRoute,
+    ProviderConfigurationFile,
 };
 use vulcan_service_api::{
-    AppUpdateRouteSetting, AppUpdateSettings, AppUpdateSnapshot, ServiceEvent, ServiceEventEmitter,
-    ServiceRestartingEvent,
+    AppUpdateCheckInterval, AppUpdateRouteSetting, AppUpdateSettings, AppUpdateSnapshot,
+    ServiceEvent, ServiceEventEmitter, ServiceRestartingEvent,
 };
 
 use crate::{
@@ -63,6 +64,15 @@ pub(crate) fn app_update_settings(configuration: &ProviderConfigurationFile) -> 
             None | Some(PersistedAppUpdateRoute::Auto) => AppUpdateRouteSetting::Auto,
             Some(PersistedAppUpdateRoute::International) => AppUpdateRouteSetting::International,
             Some(PersistedAppUpdateRoute::China) => AppUpdateRouteSetting::China,
+        },
+        check_interval: match saved.check_interval {
+            None => AppUpdateCheckInterval::default(),
+            Some(PersistedAppUpdateCheckInterval::OneHour) => AppUpdateCheckInterval::OneHour,
+            Some(PersistedAppUpdateCheckInterval::SixHours) => AppUpdateCheckInterval::SixHours,
+            Some(PersistedAppUpdateCheckInterval::TwelveHours) => {
+                AppUpdateCheckInterval::TwelveHours
+            }
+            Some(PersistedAppUpdateCheckInterval::OneDay) => AppUpdateCheckInterval::OneDay,
         },
     }
 }
@@ -185,6 +195,14 @@ fn persisted_settings(settings: &AppUpdateSettings) -> PersistedAppUpdateConfigu
             AppUpdateRouteSetting::International => PersistedAppUpdateRoute::International,
             AppUpdateRouteSetting::China => PersistedAppUpdateRoute::China,
         }),
+        check_interval: (settings.check_interval != defaults.check_interval).then_some(
+            match settings.check_interval {
+                AppUpdateCheckInterval::OneHour => PersistedAppUpdateCheckInterval::OneHour,
+                AppUpdateCheckInterval::SixHours => PersistedAppUpdateCheckInterval::SixHours,
+                AppUpdateCheckInterval::TwelveHours => PersistedAppUpdateCheckInterval::TwelveHours,
+                AppUpdateCheckInterval::OneDay => PersistedAppUpdateCheckInterval::OneDay,
+            },
+        ),
     }
 }
 
@@ -200,6 +218,7 @@ mod tests {
         let chosen = AppUpdateSettings {
             preview: true,
             route: AppUpdateRouteSetting::International,
+            check_interval: AppUpdateCheckInterval::OneDay,
         };
         let configuration = ProviderConfigurationFile {
             app_update: persisted_settings(&chosen),
@@ -221,6 +240,7 @@ mod tests {
             app_update: PersistedAppUpdateConfiguration {
                 preview: Some(true),
                 route: Some(PersistedAppUpdateRoute::China),
+                check_interval: Some(PersistedAppUpdateCheckInterval::OneHour),
             },
             ..ProviderConfigurationFile::default()
         };
@@ -229,6 +249,7 @@ mod tests {
             AppUpdateSettings {
                 preview: true,
                 route: AppUpdateRouteSetting::China,
+                check_interval: AppUpdateCheckInterval::OneHour,
             }
         );
     }

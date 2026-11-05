@@ -35,7 +35,7 @@ function snapshot(overrides: Partial<AppUpdateSnapshot> = {}): AppUpdateSnapshot
   return {
     currentVersion: "0.1.4",
     unavailableReason: null,
-    settings: { preview: false, route: "auto" },
+    settings: { preview: false, route: "auto", checkInterval: "sixHours" },
     activity: "idle",
     progress: null,
     lastCheckedAt: null,
@@ -114,10 +114,23 @@ describe("AppUpdateSettingsArea", () => {
     expect(button("settings.appUpdate.openDownloadPage")).toBeDefined();
   });
 
+  it("lists every version an update brings, newest first, below the settings", async () => {
+    await render(snapshot({ offer: {
+      version: "0.1.6", channel: "stable", kind: "incremental", downloadBytes: 1024, releasedAt: "2026-11-04T00:00:00Z",
+      notes: { "en-US": "Six" }, skippedReleases: [{ version: "0.1.5", date: null, notes: { "en-US": "Five" } }],
+      skippedReleasesComplete: true, installable: true, previouslyFailed: false,
+    } }));
+    const notes = [...container.querySelectorAll("[data-app-update-notes]")].map((element) => element.getAttribute("data-app-update-notes"));
+    expect(notes).toEqual(["0.1.6", "0.1.5"]);
+    const settings = container.querySelector("[role=switch]")!;
+    const found = container.querySelector("[data-app-update-found]")!;
+    expect(settings.compareDocumentPosition(found) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("saves a changed setting together with the unchanged one", async () => {
     await render(snapshot());
-    service.saveAppUpdateSettings.mockResolvedValue(snapshot({ settings: { preview: true, route: "auto" } }));
+    service.saveAppUpdateSettings.mockResolvedValue(snapshot({ settings: { preview: true, route: "auto", checkInterval: "sixHours" } }));
     await act(async () => { container.querySelector<HTMLButtonElement>("[role=switch]")?.click(); });
-    expect(service.saveAppUpdateSettings).toHaveBeenCalledWith({ preview: true, route: "auto" });
+    expect(service.saveAppUpdateSettings).toHaveBeenCalledWith({ preview: true, route: "auto", checkInterval: "sixHours" });
   });
 });
