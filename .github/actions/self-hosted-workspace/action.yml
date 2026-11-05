@@ -1,11 +1,14 @@
 # Keep the Cargo build of a self-hosted runner between runs (docs/contracts/self-hosted-runners.md).
-# `prepare`, right after a checkout with `clean: false`, removes every untracked file except `target/` and the
-# verified build-input cache, so each run starts from a clean tree with the previous compilations; `tidy`, at the
+# `prepare`, right after a checkout with `clean: false`, removes every untracked file except `target/`,
+# `third_party/` and `.cargo/protoc/`, so each run starts from a clean tree with the previous compilations and
+# downloads. Every installer under `third_party/` keys what it keeps by the locked version or digest and fetches
+# again only when that changes. `rebuild` removes the kept downloads too, except the digest-keyed cache. `tidy`, at the
 # end of the job, prunes the profile with `make prune` and removes `target/` above the size cap. On a hosted
 # runner both do nothing.
 # 在自托管运行器上于多次运行之间保留 Cargo 构建（docs/contracts/self-hosted-runners.md）。`prepare` 在
-# `clean: false` 的检出之后执行，删除除 `target/` 与已校验构建输入缓存之外的全部未跟踪文件，使每次运行从干净的
-# 目录树开始，同时保留以往的编译结果；`tidy` 在作业末尾用 `make prune` 清理模式目录，并在超过容量上限时删除
+# `clean: false` 的检出之后执行，删除除 `target/`、`third_party/` 与 `.cargo/protoc/` 之外的全部未跟踪文件，
+# 使每次运行从干净的目录树开始，同时保留以往的编译结果与下载内容。`third_party/` 下的每个安装器都按锁定版本或
+# 摘要识别保留的内容，只在其变化时重新获取。`rebuild` 也删除保留的下载内容，只留下按摘要保存的缓存。`tidy` 在作业末尾用 `make prune` 清理模式目录，并在超过容量上限时删除
 # `target/`。在托管运行器上两者都不做任何事。
 name: Self-hosted workspace
 description: Clean a self-hosted checkout except its Cargo build, and keep that build within bounds.
@@ -35,8 +38,11 @@ runs:
         REBUILD: ${{ inputs.rebuild }}
       run: |
         set -eu
-        git clean -ffdxq -e /target/ -e /third_party/build-input-cache/
-        if [ "$REBUILD" = true ]; then rm -rf target; fi
+        git clean -ffdxq -e /target/ -e /third_party/ -e /.cargo/protoc/
+        if [ "$REBUILD" = true ]; then
+          rm -rf target .cargo/protoc
+          [ ! -d third_party ] || find third_party -mindepth 1 -maxdepth 1 ! -name build-input-cache -exec rm -rf {} +
+        fi
         if [ -d target ]; then echo "Kept target/: $(du -sh target | cut -f1)"; else echo 'No earlier target/.'; fi
     - name: Prune and bound the Cargo build
       if: inputs.step == 'tidy' && runner.environment == 'self-hosted'

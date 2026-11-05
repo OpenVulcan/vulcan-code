@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { JUDGE_RUNTIME_MANIFEST, bundledToolIds, resolveToolPlatform, verifyJudgeRuntime } from './install-locked-tools.mjs';
+import { fileURLToPath } from 'node:url';
+import { JUDGE_RUNTIME_MANIFEST, bundledToolIds, installLockedTools, resolveToolPlatform, verifyJudgeRuntime } from './install-locked-tools.mjs';
 
 // Resolve every declared host against the actual lock; missing assets cannot silently choose another host.
 // 将每个声明的宿主与真实锁文件匹配；缺失资产不能静默选择其他宿主。
@@ -121,6 +123,35 @@ test('judge runtime verification rejects missing and altered files', async () =>
     assert.equal(await verifyJudgeRuntime(root), directory);
     await writeFile(path.join(directory, ...target.core_library.split('/')), 'altered');
     await assert.rejects(verifyJudgeRuntime(root), /make deps tools/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('an installation that still matches the lock is kept and an incomplete one is installed again', async t => {
+  // The locked bytes come from this checkout's verified cache, so the test runs offline.
+  // 锁定字节取自本检出已校验的缓存，因此测试离线运行。
+  const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const cache = path.join(repository, 'third_party', 'build-input-cache');
+  const root = await mkdtemp(path.join(tmpdir(), 'vulcan-locked-tools-'));
+  try {
+    if (existsSync(cache)) await cp(cache, path.join(root, 'third_party', 'build-input-cache'), { recursive: true });
+    try {
+      await installLockedTools('protoc', root, true);
+    } catch (error) {
+      if (!/Offline build input is absent/.test(error.message)) throw error;
+      t.skip('the protoc archive is not in this checkout\'s build input cache (CI downloads it before the tests)');
+      return;
+    }
+    const directory = path.join(root, '.cargo', 'protoc');
+    const binary = path.join(directory, 'bin', `protoc${resolveToolPlatform().suffix}`);
+    const installed = (await stat(binary)).mtimeMs;
+    await installLockedTools('protoc', root, true);
+    assert.equal((await stat(binary)).mtimeMs, installed, 'a current installation must not be replaced');
+    const descriptor = path.join(directory, 'include', 'google', 'protobuf', 'descriptor.proto');
+    await rm(descriptor);
+    await installLockedTools('protoc', root, true);
+    assert.ok(existsSync(descriptor), 'an incomplete installation must be installed again');
   } finally {
     await rm(root, { recursive: true, force: true });
   }

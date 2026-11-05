@@ -52,10 +52,16 @@
 
 - 同一台运行器上本仓库的所有作业共用一个工作目录，因此**每个可能分到池的作业**都必须以 `clean: false`
   检出并执行 `prepare`；任何一个以默认方式检出的作业都会删除其他作业保留的 `target/`。
-- 自托管作业检出时 `clean: false`，随后 `self-hosted-workspace` 的 `prepare` 删除 `target/` 与
-  `third_party/build-input-cache/` 之外的全部未跟踪文件。发行目录 `output-release/` 等每次重新生成，
-  不会把上一版的旧文件打进新包。
-- `target/` 跨运行保留，Cargo 按指纹只重编输入变化的 crate；发布的 `rebuild` 输入为真时先删除 `target/`。
+- 自托管作业检出时 `clean: false`，随后 `self-hosted-workspace` 的 `prepare` 删除 `target/`、
+  `third_party/` 与 `.cargo/protoc/` 之外的全部未跟踪文件。发行目录 `output-release/` 与 `node_modules/`
+  等每次重新生成，不会把上一版的旧文件打进新包。
+- `target/` 跨运行保留，Cargo 按指纹只重编输入变化的 crate。
+- `third_party/` 跨运行保留，前提是其中每个安装器都按锁定版本或摘要识别已有内容，只在其变化时重新下载或
+  构建：浏览器组件与 Electron 缓存按版本分目录，受管 Node/pnpm、Inno Setup 按版本目录与身份清单，LuaSkills
+  运行时按版本标记，随附工具、protoc 与判定执行库由 `install-locked-tools.mjs` 核对记录的归档摘要与实际版本
+  输出（判定执行库逐文件核对摘要）。新增 `third_party/` 下的安装器必须同样核对，否则不能依赖此保留。
+- 发布的 `rebuild` 输入为真时，`prepare` 删除 `target/`、`.cargo/protoc/` 与 `third_party/` 中除
+  `build-input-cache/`（按摘要保存）以外的内容，全部重新编译与安装。
 - 编译 Rust 的作业末尾的 `tidy` 执行 `make prune`（发布为 `make prune release`；Windows 上为 `make.ps1`），每个工作区 crate 保留最新单元，
   第三方单元不动；随后 `target/` 超过 150 GB（`target-cap-gb`）时整个删除，下次完整编译。
   `make prune` 由 PowerShell 实现，机器上需要 `pwsh`（注册脚本会安装）。

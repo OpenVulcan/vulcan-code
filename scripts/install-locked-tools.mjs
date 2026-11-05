@@ -62,6 +62,47 @@ async function pathExists(file) {
   catch (error) { if (error.code === 'ENOENT') return false; throw error; }
 }
 
+// expectedVersionLine returns the version line tool `id` at `version` must print; it includes the tool name so
+// unrelated executables cannot pass a version substring check.
+// expectedVersionLine 返回工具 `id` 在 `version` 时必须输出的版本行；其中包含工具名，避免无关程序通过版本子串检查。
+function expectedVersionLine(id, version) {
+  return id === 'protoc' ? `libprotoc ${version}` : id === 'nextest' ? `cargo-nextest ${version}`
+    : id === 'sg' ? `ast-grep ${version}` : id === 'rtk' ? `rtk ${version.replace(/^v/, '')}` : `ripgrep ${version}`;
+}
+
+// versionLine reduces the `--version` output of tool `id` to its first line without documented build metadata
+// (ripgrep's revision suffix, nextest's build details), keeping the complete version token.
+// versionLine 将工具 `id` 的 `--version` 输出化简为去除规定构建元数据（ripgrep 的修订后缀、nextest 的构建
+// 详情）后的首行，同时保留完整版本标记。
+function versionLine(id, reported) {
+  const firstLine = reported.split(/\r?\n/)[0];
+  return id === 'rg' ? firstLine.replace(/ \(rev [a-f0-9]+\)$/, '')
+    : id === 'nextest' ? firstLine.split(' ').slice(0, 2).join(' ') : firstLine;
+}
+
+// installedCurrent reports whether `directory` already holds tool `id` at `version`: its executable runs and
+// prints the locked version, protoc keeps its include files, and a bundled tool's record names the same locked
+// archive (`record` holds its tag, asset and sha256).
+// installedCurrent 判断 `directory` 是否已包含版本为 `version` 的工具 `id`：其可执行文件可运行并输出锁定版本，
+// protoc 保留其 include 文件，随附工具的记录指向同一锁定归档（`record` 含其 tag、asset 与 sha256）。
+async function installedCurrent(directory, id, version, installedName, record) {
+  const binary = path.join(directory, 'bin', installedName);
+  if (!await pathExists(binary)) return false;
+  if (id === 'protoc' && !await pathExists(path.join(directory, 'include', 'google', 'protobuf', 'descriptor.proto'))) return false;
+  if (record) {
+    const file = path.join(directory, `${id}.json`);
+    if (!await pathExists(file)) return false;
+    const installed = JSON.parse(await readFile(file, 'utf8'));
+    if (installed.schema_version !== 2 || installed.tag !== record.tag || installed.asset !== record.asset
+      || installed.sha256 !== record.sha256 || !await pathExists(path.join(directory, 'licenses', id))) return false;
+  }
+  try {
+    return versionLine(id, execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim()) === expectedVersionLine(id, version);
+  } catch {
+    return false;
+  }
+}
+
 // publishInstallation replaces destination only after preparation; failures restore the previous directory.
 // publishInstallation 仅在准备完成后替换 destination；失败时恢复上一版目录。
 async function publishInstallation(prepared, destination) {
@@ -244,11 +285,25 @@ export async function installLockedTools(group, repositoryRoot, offline = false)
     // prepared 在移动任何旧文件之前包含完整替代安装。
     const prepared = path.join(temporary, 'prepared');
     await mkdir(prepared);
-    if (group === 'bundled' && await pathExists(destination)) await cp(destination, prepared, { recursive: true });
+    // A judge runtime that still matches the lock file by file is kept as it is.
+    // 逐文件仍与锁文件一致的判定执行库保持不变。
+    if (judgeTarget && await verifyJudgeRuntime(root).then(Boolean, () => false)) {
+      console.log(`Locked judge runtime for ${platform.target} is already installed: ${destination}`);
+      return;
+    }
+    // The tools of the current installation start the replacement; each one still current is kept below.
+    // 以当前安装中的工具作为替代安装的起点；仍为当前版本的工具在下面保留。
+    if (!judgeTarget && await pathExists(destination)) await cp(destination, prepared, { recursive: true });
     // entries identifies exactly the requested tool set; tools are validated before any installation switch.
     // entries 明确请求的工具集合；所有工具均在安装切换之前验证。
     const entries = group === 'bundled' ? bundledToolIds(lock, platform.target) : group === 'judge-runtime' ? [] : [group];
-    if (judgeTarget) await prepareJudgeRuntime(lock.judge_runtime, judgeTarget, temporary, prepared, cache, offline);
+    // changed records whether anything was installed, so an unchanged installation is not swapped.
+    // changed 记录是否安装了任何内容，使未变化的安装不被替换。
+    let changed = false;
+    if (judgeTarget) {
+      await prepareJudgeRuntime(lock.judge_runtime, judgeTarget, temporary, prepared, cache, offline);
+      changed = true;
+    }
     // id selects the exact declared tool contract.
     // id 选择明确声明的工具契约。
     for (const id of entries) {
@@ -280,6 +335,19 @@ export async function installLockedTools(group, repositoryRoot, offline = false)
         const asset = matches[0];
         identity = id === 'protoc' || id === 'nextest' ? asset : { url: asset.browser_download_url, sha256: asset.digest.replace(/^sha256:/, '') };
       }
+      // sourceName preserves the upstream ast-grep executable name before installing the sg alias.
+      // sourceName 在安装 sg 别名之前保留上游 ast-grep 可执行文件名。
+      const sourceName = `${id === 'sg' ? 'ast-grep' : id === 'nextest' ? 'cargo-nextest' : id}${platform.suffix}`;
+      const installedName = id === 'nextest' ? sourceName : `${id}${platform.suffix}`;
+      // A tool already installed from this exact locked archive is kept: a kept installation (a self-hosted
+      // runner keeps third_party/ and target/) is neither extracted nor rebuilt until the lock changes.
+      // 已由同一锁定归档安装的工具保持不变：保留下来的安装（自托管运行器保留 third_party/ 与 target/）在锁文件
+      // 变化之前既不重新解压也不重新构建。
+      const record = id === 'protoc' || id === 'nextest' ? null : { tag: version, asset: archiveName, sha256: identity.sha256 };
+      if (await installedCurrent(prepared, id, version, installedName, record)) {
+        console.log(`Locked ${id} ${version} is already installed.`);
+        continue;
+      }
       // archive holds only digest-verified bytes.
       // archive 仅保存摘要已验证的字节。
       const archive = path.join(temporary, archiveName);
@@ -289,9 +357,6 @@ export async function installLockedTools(group, repositoryRoot, offline = false)
       const extracted = path.join(temporary, id);
       await mkdir(extracted);
       extractArchive(archive, extracted);
-      // sourceName preserves the upstream ast-grep executable name before installing the sg alias.
-      // sourceName 在安装 sg 别名之前保留上游 ast-grep 可执行文件名。
-      const sourceName = `${id === 'sg' ? 'ast-grep' : id === 'nextest' ? 'cargo-nextest' : id}${platform.suffix}`;
       // binary is the unique regular executable member.
       // binary 是唯一的普通可执行文件成员。
       const binary = sourceBuild
@@ -301,20 +366,10 @@ export async function installLockedTools(group, repositoryRoot, offline = false)
       // reported captures a real execution check before replacing the old installation.
       // reported 在替换旧安装之前记录真实执行检查结果。
       const reported = execFileSync(binary, ['--version'], { encoding: 'utf8' }).trim();
-      // expected includes the tool name so unrelated executables cannot pass a version substring check.
-      // expected 包含工具名，避免无关程序通过版本子串检查。
-      const expected = id === 'protoc' ? `libprotoc ${version}` : id === 'nextest' ? `cargo-nextest ${version}`
-        : id === 'sg' ? `ast-grep ${version}` : id === 'rtk' ? `rtk ${version.replace(/^v/, '')}` : `ripgrep ${version}`;
-      // ripgrep includes a revision suffix in its first line; compare the full version token, not a substring.
-      // ripgrep 首行包含修订后缀；比较完整版本标记，而非子串。
-      const firstLine = reported.split(/\r?\n/)[0];
-      // versionLine removes documented build metadata while preserving the complete version token.
-      // versionLine 去除规定的构建元数据，同时保留完整版本标记。
-      const versionLine = id === 'rg' ? firstLine.replace(/ \(rev [a-f0-9]+\)$/, '')
-        : id === 'nextest' ? firstLine.split(' ').slice(0, 2).join(' ') : firstLine;
-      if (versionLine !== expected) throw new Error(`Unexpected ${id} version: ${reported}`);
+      if (versionLine(id, reported) !== expectedVersionLine(id, version)) throw new Error(`Unexpected ${id} version: ${reported}`);
       await mkdir(path.join(prepared, 'bin'), { recursive: true });
-      await cp(binary, path.join(prepared, 'bin', id === 'nextest' ? sourceName : `${id}${platform.suffix}`));
+      await cp(binary, path.join(prepared, 'bin', installedName));
+      changed = true;
       if (id === 'protoc') {
         await access(path.join(extracted, 'include', 'google', 'protobuf', 'descriptor.proto'));
         await cp(path.join(extracted, 'include'), path.join(prepared, 'include'), { recursive: true });
@@ -331,6 +386,10 @@ export async function installLockedTools(group, repositoryRoot, offline = false)
           asset: archiveName, source_binary: sourceName, sha256: identity.sha256,
         }, null, 2) + '\n');
       }
+    }
+    if (!changed) {
+      console.log(`Locked ${group} is already current: ${destination}`);
+      return;
     }
     await publishInstallation(prepared, destination);
     console.log(`Verified locked ${group} installed: ${destination}`);
