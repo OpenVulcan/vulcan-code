@@ -61,12 +61,12 @@ pub(super) fn validate_internal_model_overrides(
                     task
                 ));
             }
-            if let Some(dimensions) = overrides.embedding_dimensions {
-                if !embedding.supports_dimensions(dimensions) {
-                    return Err(format!(
-                        "Embedding dimensions {dimensions} are not supported by the selected model."
-                    ));
-                }
+            if let Some(dimensions) = overrides.embedding_dimensions
+                && !embedding.supports_dimensions(dimensions)
+            {
+                return Err(format!(
+                    "Embedding dimensions {dimensions} are not supported by the selected model."
+                ));
             }
             if let Some(output_kind) = overrides.embedding_output_kind
                 && !embedding.output_kinds.contains(&output_kind)

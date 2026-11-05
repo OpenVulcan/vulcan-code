@@ -1725,12 +1725,12 @@ impl EmbeddingCapabilities {
                 request.encoding
             ));
         }
-        if let Some(dimensions) = request.dimensions {
-            if !self.supports_dimensions(dimensions) {
-                return Err(format!(
-                    "Embedding dimensions {dimensions} are not supported by the selected model route."
-                ));
-            }
+        if let Some(dimensions) = request.dimensions
+            && !self.supports_dimensions(dimensions)
+        {
+            return Err(format!(
+                "Embedding dimensions {dimensions} are not supported by the selected model route."
+            ));
         }
         for input in &request.inputs {
             if let EmbeddingInputContent::Resource { resource } = &input.content
