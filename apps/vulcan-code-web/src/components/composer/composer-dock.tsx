@@ -179,6 +179,10 @@ export function ComposerDock(props: {
   // Reports the measured floating composer stack height.
   // 上报浮动输入区堆栈的实测高度。
   onComposerDockHeightChange: (height: number) => void;
+  // Session runtime cue floated over the dock's top-left edge; it is out of flow, so it never changes the
+  // measured dock height or the transcript layout.
+  // 悬浮在停靠层左上沿的会话运行提示；它脱离布局流，因此不会改变实测停靠层高度或转录布局。
+  runtimeStatus?: React.ReactNode;
   // onSubmitPrompt sends one composer prompt through the workbench runtime.
   // onSubmitPrompt 通过工作台运行时发送一条输入区提示词。
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
@@ -337,6 +341,7 @@ export function ComposerDock(props: {
           </Tooltip>
         </div>
       ) : null}
+      {props.runtimeStatus ? <div className="vk-dock-status">{props.runtimeStatus}</div> : null}
       {startShown ? props.startHero : null}
       {draftOwner ? (
         <DedicatedDraftStrip

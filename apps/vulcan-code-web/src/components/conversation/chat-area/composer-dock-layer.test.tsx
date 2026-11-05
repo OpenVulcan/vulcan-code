@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
 import { ChatAreaComposerDockLayer, type ChatAreaComposerDockLayerProps } from "./composer-dock-layer";
 import { browserFallbackSnapshot } from "@/service/browser-fallback-workbench";
 import type { WorkbenchSnapshot } from "@/types";
@@ -33,7 +34,7 @@ function configuredSnapshot(): WorkbenchSnapshot {
  * workbench is already locally projected; id selects the persisted owner and empty controls only layout.
  * workbench 已按本地选择投影；id 选择持久归属，empty 仅控制布局。
  */
-function project(workbench: WorkbenchSnapshot, id: string | null, empty: boolean) {
+function project(workbench: WorkbenchSnapshot, id: string | null, empty: boolean, runtimeStatus: ReactNode = null) {
   // Only workbench is inspected here; all parent callbacks are forwarded without invocation.
   // 此处仅检查 workbench；所有父层回调只被转发，不会调用。
   const chatAreaProps = { workbench } as ChatAreaComposerDockLayerProps["chatAreaProps"];
@@ -41,7 +42,7 @@ function project(workbench: WorkbenchSnapshot, id: string | null, empty: boolean
     isEmptyConversation: empty, startProjectName: "project", isConversationRunning: false, showScrollToBottom: false,
     todolistStatusHost: null, sessionTodolist: null,
     thinkingDisplayMode: DEFAULT_THINKING_DISPLAY_MODE, sessionReviewSummary: null, onComposerDockHeightChange: vi.fn(),
-    onScrollToBottom: vi.fn(), onThinkingDisplayModeChange: vi.fn(), onSubmitPrompt: vi.fn(),
+    runtimeStatus, onScrollToBottom: vi.fn(), onThinkingDisplayModeChange: vi.fn(), onSubmitPrompt: vi.fn(),
   }).props;
 }
 
@@ -78,6 +79,13 @@ describe("composer dock authoritative settings", () => {
     const workbench = configuredSnapshot();
     workbench.vmmMemory.runtime.scopeError = "vector rebuild required";
     expect(project(workbench, "preview", false).vmmStatus).toBe("not_ready");
+  });
+  it("hands the session runtime cue to the composer's floating status slot", () => {
+    // cue is an opaque element; the layer must pass the same node through unchanged.
+    // cue 是不透明元素；该层必须原样传递同一节点。
+    const cue = <span data-runtime-cue="" />;
+    expect(project(configuredSnapshot(), "preview", false, cue).runtimeStatus).toBe(cue);
+    expect(project(configuredSnapshot(), "preview", false).runtimeStatus).toBeNull();
   });
   it("does not treat missing session policy as enabled or an explicit disabled state", () => {
     const workbench = configuredSnapshot();

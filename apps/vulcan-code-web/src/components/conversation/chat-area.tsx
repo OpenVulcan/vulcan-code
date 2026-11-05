@@ -424,10 +424,16 @@ export function ChatArea(props: ChatAreaProps) {
   const runtimeCue = visibleStreamingThinkingOverlayBlock || suppressSubagentOnlyMainCue
     ? null
     : conversationRuntimeCue(surfaceConversation, t);
-  // tailStatusVisible tracks insertion and removal of every transcript-tail status line, including the
-  // runtime cue; the shared ResizeObserver owns node reflow.
-  // tailStatusVisible 跟踪全部转录尾部状态行（含运行提示）的插入与移除；共享 ResizeObserver 负责节点重排。
-  const tailStatusVisible = transientReasoningStatus !== null || providerRetryStatus !== null || runtimeCue !== null;
+  // composerRuntimeCue floats over the composer's top-left edge instead of entering the transcript, so its
+  // appearance, phase changes and removal never reflow the conversation; a retry wait or reasoning status still
+  // takes precedence over it exactly as when they shared the transcript tail.
+  // composerRuntimeCue 悬浮在输入区左上沿而不进入转录，其出现、阶段切换与移除都不会让会话重排；
+  // 重试等待或思考状态仍按共用转录尾部时的规则优先于它。
+  const composerRuntimeCue = providerRetryStatus || transientReasoningStatus ? null : runtimeCue;
+  // tailStatusVisible tracks insertion and removal of every transcript-tail status line; the shared
+  // ResizeObserver owns node reflow.
+  // tailStatusVisible 跟踪全部转录尾部状态行的插入与移除；共享 ResizeObserver 负责节点重排。
+  const tailStatusVisible = transientReasoningStatus !== null || providerRetryStatus !== null;
   // isConversationRunning controls only the main composer stop affordance.
   // isConversationRunning 仅控制主输入区的停止操作展示。
   const isConversationRunning = conversationIsRunning(selectedConversation);
@@ -579,6 +585,7 @@ export function ChatArea(props: ChatAreaProps) {
       thinkingDisplayMode={thinkingDisplayMode}
       sessionReviewSummary={props.sessionReviewSummary}
       onComposerDockHeightChange={handleComposerDockHeightChange}
+      runtimeStatus={composerRuntimeCue && <RuntimeCueLine cue={composerRuntimeCue} key={composerRuntimeCue.text} />}
       onScrollToBottom={() => scrollConversationToBottom()}
       onThinkingDisplayModeChange={handleThinkingDisplayModeChange}
       onSubmitPrompt={handleComposerSubmit}
@@ -656,8 +663,6 @@ export function ChatArea(props: ChatAreaProps) {
             <ProviderRetryCountdownLine countdown={providerRetryStatus} />
           ) : transientReasoningStatus ? (
             <TransientReasoningStatusLine status={transientReasoningStatus} />
-          ) : runtimeCue ? (
-            <RuntimeCueLine cue={runtimeCue} key={runtimeCue.text} />
           ) : null}
           workspacePath={selectedProject?.path ?? null}
           onTrace={props.onTrace}

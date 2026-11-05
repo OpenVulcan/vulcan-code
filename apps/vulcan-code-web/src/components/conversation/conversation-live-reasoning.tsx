@@ -29,10 +29,11 @@ import { formatWorkProcessDuration } from "@/components/conversation/conversatio
 // RUNTIME_CUE_TICK_MS 是运行提示旁已等待时长的刷新间隔。
 const RUNTIME_CUE_TICK_MS = 1000;
 
-// RuntimeCueLine renders the session's in-progress cue at the transcript tail with the time spent in it.
+// RuntimeCueLine renders the session's in-progress cue as a compact plate with the time spent in it; the
+// composer dock floats it over its top-left edge so it never takes space in the transcript.
 // The clock starts when the cue mounts; callers key it by the cue text so each phase counts from zero.
-// RuntimeCueLine 在转录尾部渲染会话进行中提示及其已持续时长。
-// 计时从提示挂载开始；调用方以提示文本作为 key，使每个阶段从零计时。
+// RuntimeCueLine 将会话进行中提示及其已持续时长渲染为紧凑底板；输入区停靠层将其悬浮在自身左上沿，
+// 因此它绝不占用转录空间。计时从提示挂载开始；调用方以提示文本作为 key，使每个阶段从零计时。
 export function RuntimeCueLine(props: {
   // Cue resolved from the backend session run phase.
   // 由后端会话运行阶段解析出的提示。
@@ -45,12 +46,14 @@ export function RuntimeCueLine(props: {
     const timer = window.setInterval(() => setNowMs(Date.now()), RUNTIME_CUE_TICK_MS);
     return () => window.clearInterval(timer);
   }, []);
+  // The ticking elapsed time stays out of the live region so assistive technology announces phase changes only.
+  // 每秒变化的时长不进入实时区域，使辅助技术只播报阶段变化。
   return (
-    <div aria-busy="true" aria-live="polite" className="vk-reason-status" data-runtime-cue="">
-      <div className="vk-reason-line">
-        <span className="vk-shimmer-text">{props.cue.text}</span>
-        <span className="vk-reason-elapsed">{formatWorkProcessDuration(nowMs - startedAtMs, locale)}</span>
-      </div>
+    <div aria-busy="true" aria-live="polite" className="vk-runtime-cue" data-runtime-cue="" role="status">
+      <span className="vk-shimmer-text">{props.cue.text}</span>
+      <span aria-hidden="true" className="vk-runtime-cue-elapsed">
+        {formatWorkProcessDuration(nowMs - startedAtMs, locale)}
+      </span>
     </div>
   );
 }

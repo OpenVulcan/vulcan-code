@@ -48,6 +48,9 @@ export interface ChatAreaComposerDockLayerProps {
   // Handler for composer dock measured height changes.
   // 输入区测量高度变化处理器。
   onComposerDockHeightChange: ComposerDockProps["onComposerDockHeightChange"];
+  // Session runtime cue floated over the composer's top-left edge, or null when no cue is active.
+  // 悬浮在输入区左上沿的会话运行提示；没有活动提示时为 null。
+  runtimeStatus: ComposerDockProps["runtimeStatus"];
   // Handler that scrolls the transcript to the newest content.
   // 将转录滚动到最新内容的处理器。
   onScrollToBottom: ComposerDockProps["onScrollToBottom"];
@@ -122,6 +125,7 @@ export function ChatAreaComposerDockLayer(props: ChatAreaComposerDockLayerProps)
       onSlashCommand={chatAreaProps.onSlashCommand}
       onOpenKnowledge={chatAreaProps.onOpenKnowledge}
       onComposerDockHeightChange={props.onComposerDockHeightChange}
+      runtimeStatus={props.runtimeStatus}
       onSubmitPrompt={props.onSubmitPrompt}
       onSaveSessionGoal={chatAreaProps.onSaveSessionGoal}
       onResumeSessionGoal={chatAreaProps.onResumeSessionGoal}
