@@ -70,8 +70,9 @@
 ## 添加或移除机器
 
 前置条件（需要管理员权限，由机器使用者执行）：
-- 所有机器：运行器的 PATH 上要有 Node。作业在 `setup-node` 之前用 `node` 读取声明的运行时版本，因此
-  运行器自身缺少的工具在机器上补齐，不由工作流代替安装。
+- 所有机器：运行器的 PATH 上要有 Node（作业在 `setup-node` 之前用 `node` 读取声明的运行时版本），rustup
+  要设默认工具链（`rustup default <rust-toolchain.toml 的版本>`；脚本测试在仓库之外的临时目录调用 cargo）。
+  与托管镜像的这类差异在机器上补齐，不由工作流代替安装。
 - macOS：安装 Xcode 命令行工具（`xcode-select --install`），接电源时不休眠
   （`sudo pmset -c sleep 0 disksleep 0`），并开启"远程登录"以便维护者经 SSH 操作；运行器以 LaunchAgent
   运行，机器重启后需要该用户登录（或开启自动登录）才会上线。服务的 PATH 取自注册时写出的 `.path`
