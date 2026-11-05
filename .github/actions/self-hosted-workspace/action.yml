@@ -36,6 +36,11 @@ runs:
       shell: bash
       env:
         REBUILD: ${{ inputs.rebuild }}
+        # Git Bash on Windows otherwise rewrites the anchored `/target/` patterns into Windows paths, so they
+        # match nothing and the kept build is removed with the rest.
+        # 否则 Windows 上的 Git Bash 会把锚定的 `/target/` 模式改写为 Windows 路径，使其不匹配任何内容，
+        # 保留的构建随其余文件一起被删除。
+        MSYS_NO_PATHCONV: '1'
       run: |
         set -eu
         git clean -ffdxq -e /target/ -e /third_party/ -e /.cargo/protoc/
