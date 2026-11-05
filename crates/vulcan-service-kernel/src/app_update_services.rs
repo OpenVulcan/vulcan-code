@@ -180,7 +180,7 @@ fn persisted_settings(settings: &AppUpdateSettings) -> PersistedAppUpdateConfigu
     let defaults = AppUpdateSettings::default();
     PersistedAppUpdateConfiguration {
         preview: (settings.preview != defaults.preview).then_some(settings.preview),
-        route: (settings.route != defaults.route).then(|| match settings.route {
+        route: (settings.route != defaults.route).then_some(match settings.route {
             AppUpdateRouteSetting::Auto => PersistedAppUpdateRoute::Auto,
             AppUpdateRouteSetting::International => PersistedAppUpdateRoute::International,
             AppUpdateRouteSetting::China => PersistedAppUpdateRoute::China,
