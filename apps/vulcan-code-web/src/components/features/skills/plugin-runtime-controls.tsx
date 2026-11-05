@@ -191,7 +191,7 @@ export function PluginRuntimeControls(props: PluginRuntimeControlProps) {
           <DialogTitle>{draft ? formatMessage(t("pluginRuntime.editTitle"), { name: nameOf(draft.predecessor.pluginId), purpose: t(capacityPurposeLabels[draft.predecessor.purpose]) }) : ""}</DialogTitle>
           <DialogDescription>{t("pluginRuntime.editDescription")}</DialogDescription>
         </DialogHeader>
-        {draft && <div className="plugin-capacity-form">
+        {draft && <div className="plugin-capacity-form vk-dialog-body">
           {!draftCurrent && <PageNotice tone="warning">{t("pluginRuntime.staleDraft")}</PageNotice>}
           {formError && <PageNotice tone="error"><span className="vk-wrap-pre">{formError}</span></PageNotice>}
           <Field>

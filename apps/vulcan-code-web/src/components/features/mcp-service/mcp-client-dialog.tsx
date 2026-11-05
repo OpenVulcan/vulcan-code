@@ -92,7 +92,7 @@ export function McpClientDialog(props: McpClientDialogProps) {
           <DialogTitle>{props.client ? t("mcpService.dialog.editTitle") : t("mcpService.dialog.createTitle")}</DialogTitle>
           <DialogDescription>{t("mcpService.dialog.detail")}</DialogDescription>
         </DialogHeader>
-        <div className="vk-mcp-form">
+        <div className="vk-mcp-form vk-dialog-body">
           <section className="vk-mcp-block">
             <label className="vk-mcp-block-title" htmlFor="mcp-client-name">{t("mcpService.field.name")}</label>
             <Input aria-invalid={!nameFits} disabled={saving} id="mcp-client-name" maxLength={props.limits.maxNameChars * 2}

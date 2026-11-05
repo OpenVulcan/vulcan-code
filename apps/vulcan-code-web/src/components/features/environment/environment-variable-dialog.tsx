@@ -105,7 +105,7 @@ export function EnvironmentVariableDialog(props: EnvironmentVariableDialogProps)
           <DialogTitle>{existing ? t("environment.dialog.editTitle") : t("environment.dialog.createTitle")}</DialogTitle>
           <DialogDescription>{t("environment.dialog.detail")}</DialogDescription>
         </DialogHeader>
-        <div className="vk-env-form">
+        <div className="vk-env-form vk-dialog-body">
           <section className="vk-env-block">
             <label className="vk-env-block-title" htmlFor="environment-variable-name">{t("environment.field.name")}</label>
             <Input

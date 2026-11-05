@@ -391,10 +391,12 @@ function VmmSetupDialog({
           <DialogDescription>
             {formatSkillText(t("vmm.setup.stepLabel"), { current: step + 1, total: 4 })}
           </DialogDescription>
+          <Progress value={(step + 1) * 25} />
         </DialogHeader>
 
-        <Progress value={(step + 1) * 25} />
-        <fieldset disabled={effectiveBusy} className="vk-form-loose">
+        {/* The fixed-footer grid holds header, this scrolling body and the footer, so the actions stay reachable on short screens. */}
+        {/* fixed-footer 网格只容纳标题区、此滚动正文与底部操作区，矮屏下操作按钮仍可点击。 */}
+        <fieldset disabled={effectiveBusy} className="vk-dialog-body vk-form-loose">
           {step === 0 ? (
             <SetupModeStep
               apiKey={externalApiKey}

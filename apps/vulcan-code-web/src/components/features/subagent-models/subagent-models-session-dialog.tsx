@@ -77,7 +77,7 @@ export default function SubagentModelsSessionDialog(props: SubagentModelsSession
           <DialogTitle>{t("subagentModels.session.dialogTitle")}</DialogTitle>
           <DialogDescription>{t("subagentModels.session.dialogDetail")}</DialogDescription>
         </DialogHeader>
-        <div className="vk-sam-dialog-body">
+        <div className="vk-sam-dialog-body vk-dialog-body">
           {loadError ? (
             <PageNotice actions={<Button onClick={() => void load()} size="sm" type="button" variant="outline">{t("composer.capability.retry")}</Button>}
               details={loadError} detailsLabel={t("settings.errors.showErrorDetails")} tone="error">

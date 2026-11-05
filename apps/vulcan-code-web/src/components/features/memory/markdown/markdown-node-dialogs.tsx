@@ -223,7 +223,7 @@ export function FileEditorDialog(props: {
         <DialogTitle>{t("memory.markdown.file.title")}</DialogTitle>
         <DialogDescription>{t("memory.markdown.file.hint")}</DialogDescription>
       </DialogHeader>
-      <div className="vk-mm-editor">
+      <div className="vk-mm-editor vk-dialog-body">
         <code className="vk-mm-path">{props.file?.path}</code>
         <Textarea className="vk-mm-file-text" density="large" rows={22} spellCheck={false} value={text} disabled={saving}
           aria-label={t("memory.markdown.file.title")} onChange={(event) => setText(event.target.value)} />
