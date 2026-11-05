@@ -838,6 +838,11 @@ label.vk-field,
 .vk-dialog[data-scroll-mode="fixed-footer"] { overflow: hidden; }
 .vk-dialog[data-scroll-mode="content-scroll"] { grid-template-rows: auto minmax(0, 1fr); }
 .vk-dialog[data-scroll-mode="fixed-footer"] { grid-template-rows: auto minmax(0, 1fr) auto; }
+/* Whatever a fixed-footer dialog places after its header lands in the shrinking row and scrolls there, so the footer
+ * stays reachable on short screens without each dialog opting in; a feature body that scrolls inside itself overrides this. */
+/* fixed-footer 对话框标题区之后的元素落在可收缩的行并在其中滚动，矮屏下底部操作区无需各对话框声明即可点击；
+ * 在内部自行滚动的功能正文可覆盖此规则。 */
+.vk-dialog[data-scroll-mode="fixed-footer"] > :nth-child(2),
 .vk-dialog-body { min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .vk-dialog-x { position: absolute; top: calc(var(--vk-u) * 2); right: calc(var(--vk-u) * 2); }
 .vk-dialog-header { display: flex; flex-direction: column; gap: calc(var(--vk-u) * 1.5); min-width: 0; padding-right: calc(var(--vk-u) * 7); }

@@ -201,6 +201,8 @@ export type DialogContentLayout = "form" | "document" | "viewer";
 
 // DialogContentScrollMode chooses which layer owns vertical overflow in bounded-height dialogs.
 // DialogContentScrollMode 选择有界高度对话框中由哪一层负责垂直溢出。
+// fixed-footer expects header, body and footer as the first children; the body scrolls without opting in.
+// fixed-footer 要求前几个子元素依次为标题区、正文与底部操作区；正文无需声明即可滚动。
 export type DialogContentScrollMode = "body-scroll" | "content-scroll" | "fixed-footer";
 
 // DialogContentProps add semantic size, layout and overflow to the surface.
