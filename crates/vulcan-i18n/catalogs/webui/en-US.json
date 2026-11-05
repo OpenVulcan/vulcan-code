@@ -6781,5 +6781,6 @@
   "appUpdate.dialog.description": "Version {current} is running. Review what is new in {version}, then download and restart from here.",
   "appUpdate.dialog.notesTitle": "What's new in {version}",
   "appUpdate.dialog.noNotes": "This version has no release notes.",
+  "appUpdate.dialog.earlierNotesMissing": "Notes of some earlier versions released after {current} could not be shown.",
   "appUpdate.dialog.openSettings": "Update settings"
 }

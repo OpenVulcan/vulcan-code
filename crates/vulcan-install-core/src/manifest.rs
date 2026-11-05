@@ -133,6 +133,13 @@ pub struct ReleaseManifest {
     /// 能安装此版本布局的最旧安装器版本。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_setup_version: Option<ReleaseVersion>,
+    /// The release published before this one, so an updater can walk back and show the notes of
+    /// every skipped version. Optional and ignored by older readers; manifests published before it
+    /// existed end the walk.
+    /// 在此之前发布的版本，使更新器能逐个回溯并显示每个被跳过版本的说明。该字段可选，旧读取方会忽略它；
+    /// 在它出现之前发布的清单使回溯到此为止。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_version: Option<ReleaseVersion>,
     /// The key that signed this manifest.
     /// 签署本清单的公钥。
     pub key_id: String,
@@ -223,6 +230,14 @@ impl ReleaseManifest {
         }
         if self.components.is_empty() {
             return invalid("lists no components".to_owned());
+        }
+        if let Some(previous) = &self.previous_version
+            && previous >= &self.version
+        {
+            return invalid(format!(
+                "previous version {previous} is not older than {}",
+                self.version
+            ));
         }
         let mut files = BTreeSet::new();
         for download in &self.downloads {
@@ -326,6 +341,7 @@ mod tests {
             )]),
             downloads,
             min_setup_version: None,
+            previous_version: None,
             key_id: "test-key".to_owned(),
         }
     }

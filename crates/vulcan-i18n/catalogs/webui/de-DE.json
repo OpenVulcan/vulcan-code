@@ -6781,5 +6781,6 @@
   "appUpdate.dialog.description": "Version {current} läuft. Sehen Sie sich die Neuerungen in {version} an und laden Sie sie hier herunter und starten Sie neu.",
   "appUpdate.dialog.notesTitle": "Neu in {version}",
   "appUpdate.dialog.noNotes": "Für diese Version gibt es keine Versionshinweise.",
+  "appUpdate.dialog.earlierNotesMissing": "Die Hinweise einiger früherer, nach {current} veröffentlichter Versionen konnten nicht angezeigt werden.",
   "appUpdate.dialog.openSettings": "Update-Einstellungen"
 }

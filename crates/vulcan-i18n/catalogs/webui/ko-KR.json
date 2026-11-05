@@ -6781,5 +6781,6 @@
   "appUpdate.dialog.description": "현재 {current} 버전을 실행 중입니다. {version}의 변경 사항을 확인한 뒤 여기서 다운로드하고 다시 시작하세요.",
   "appUpdate.dialog.notesTitle": "{version}의 새로운 기능",
   "appUpdate.dialog.noNotes": "이 버전에는 릴리스 노트가 없습니다.",
+  "appUpdate.dialog.earlierNotesMissing": "{current} 이후 출시된 일부 이전 버전의 업데이트 내용을 표시하지 못했습니다.",
   "appUpdate.dialog.openSettings": "업데이트 설정"
 }

@@ -90,10 +90,43 @@ fn offer_rows(rows: &mut Vec<Row>, snapshot: &Value, offer: &Value, busy: bool) 
     if b(offer, "/previouslyFailed") {
         rows.push(note(tr!("settings.appUpdate.previouslyFailed"), Tone::Bad));
     }
-    let notes = release_notes(v(offer, "/notes"));
-    if !notes.is_empty() {
-        rows.push(Row::new(RowKind::Markdown { content: notes }, ""));
+    // Skipped releases follow the offered one, newest first; once there are any, each version's notes get
+    // a title so the versions stay apart.
+    // 被跳过的版本按从新到旧排在所提供版本之后；一旦存在，每个版本的说明都带标题以便区分。
+    let skipped = v(offer, "/skippedReleases")
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let titled = !skipped.is_empty();
+    release_notes_rows(rows, titled.then_some(version.as_str()), v(offer, "/notes"));
+    for release in &skipped {
+        release_notes_rows(rows, Some(&s(release, "/version")), v(release, "/notes"));
     }
+    if !b(offer, "/skippedReleasesComplete") {
+        rows.push(note(
+            tr!(
+                "appUpdate.dialog.earlierNotesMissing",
+                current = s(snapshot, "/currentVersion")
+            ),
+            Tone::Muted,
+        ));
+    }
+}
+
+/// Appends one release's notes, under a title naming its version when `version` is given.
+/// 追加一个发布的说明；给出 `version` 时在其上加注明版本的标题。
+fn release_notes_rows(rows: &mut Vec<Row>, version: Option<&str>, notes: &Value) {
+    let notes = release_notes(notes);
+    if notes.is_empty() {
+        return;
+    }
+    if let Some(version) = version {
+        rows.push(note(
+            tr!("appUpdate.dialog.notesTitle", version = version),
+            Tone::Normal,
+        ));
+    }
+    rows.push(Row::new(RowKind::Markdown { content: notes }, ""));
 }
 
 /// Builds the settings and repair rows of an installation that can update itself.
@@ -380,6 +413,29 @@ mod tests {
         let manual = methods(&page(snapshot(offer("full", false))));
         assert!(!manual.contains(&"service_download_app_update".to_string()));
         assert!(manual.contains(&"service_open_external_url".to_string()));
+    }
+
+    // Skipped releases follow the offered version's notes, newest first, each under its own title.
+    // 被跳过的版本按从新到旧排在所提供版本的说明之后，各带标题。
+    #[test]
+    fn skipped_releases_follow_the_offered_notes_in_order() {
+        let rows = page(snapshot(json!({ "offer": {
+            "version": "0.1.7", "channel": "stable", "kind": "incremental", "downloadBytes": 1024,
+            "releasedAt": "2026-11-04T00:00:00Z", "notes": { "en-US": "notes-017" },
+            "skippedReleases": [
+                { "version": "0.1.6", "date": null, "notes": { "en-US": "notes-016" } },
+                { "version": "0.1.5", "date": null, "notes": { "en-US": "notes-015" } }
+            ],
+            "skippedReleasesComplete": true, "installable": true, "previouslyFailed": false
+        } })));
+        let markdown: Vec<&str> = rows
+            .iter()
+            .filter_map(|row| match &row.kind {
+                RowKind::Markdown { content } => Some(content.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(markdown, ["notes-017", "notes-016", "notes-015"]);
     }
 
     // While an operation runs only cancel stays available.

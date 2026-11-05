@@ -6781,5 +6781,6 @@
   "appUpdate.dialog.description": "Сейчас запущена версия {current}. Посмотрите, что нового в {version}, затем загрузите и перезапустите отсюда.",
   "appUpdate.dialog.notesTitle": "Что нового в {version}",
   "appUpdate.dialog.noNotes": "У этой версии нет примечаний к выпуску.",
+  "appUpdate.dialog.earlierNotesMissing": "Не удалось показать примечания некоторых более ранних версий, вышедших после {current}.",
   "appUpdate.dialog.openSettings": "Настройки обновления"
 }

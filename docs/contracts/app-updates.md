@@ -29,6 +29,13 @@
   Authenticode 签名者须为发布证书），Linux/macOS 只提供下载页 `https://openvulcan.com/download`。
   其余情况为增量更新，只下载摘要不在本地安装记录中的文件。
 - 回退提示仍在时，提议的版本若正是启动失败的版本，仍可提议但标记 `previouslyFailed`；用户关闭提示后不再标记。
+- **被跳过版本的说明**：版本清单的可选字段 `previousVersion` 写明上一发布（`release-plan.mjs` 取更新记录
+  `releases.json` 中的下一项，`release.yml` 以 `--previous-version` 传给发布工具）。旧客户端与 openvulcan-web
+  静态同步忽略该字段，因此不递增清单格式。Core 从提议版本起沿该字段回溯，逐个按签名读取清单、按摘要读取说明，
+  直到不高于已安装版本，结果以 `skippedReleases`（从新到旧）给出，最多 `MAX_SKIPPED_RELEASES` 个。这些说明只用于
+  介绍更新：缺少链接（在该字段之前发布的清单）、某个发布无法读取或达到上限时，回溯结束并把
+  `skippedReleasesComplete` 设为 false，提议照常给出，界面提示更早的说明未能显示。回溯依赖旧版本对象长期保留在
+  两个下载源中（主源不可变、镜像不删除）。
 
 ## 设置
 

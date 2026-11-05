@@ -52,7 +52,8 @@ function snapshot(overrides: Partial<AppUpdateSnapshot> = {}): AppUpdateSnapshot
 function offer(overrides: Partial<AppUpdateOffer> = {}): AppUpdateOffer {
   return {
     version: "0.1.5", channel: "stable", kind: "incremental", downloadBytes: 1024, releasedAt: "2026-11-04T00:00:00Z",
-    notes: { "en-US": "notes-marker-015" }, installable: true, previouslyFailed: false,
+    notes: { "en-US": "notes-marker-015" }, skippedReleases: [], skippedReleasesComplete: true,
+    installable: true, previouslyFailed: false,
     ...overrides,
   };
 }
@@ -134,6 +135,22 @@ describe("AppUpdateHeaderButton", () => {
     await act(async () => { dialogButton(dialog, "settings.appUpdate.download")?.click(); });
     expect(service.downloadAppUpdate).toHaveBeenCalledOnce();
     expect(host.setSnapshot).toHaveBeenCalledWith(accepted);
+  });
+
+  it("lists every skipped release after the offered one and says when earlier notes are missing", async () => {
+    await render(snapshot({ offer: offer({
+      version: "0.1.7",
+      skippedReleases: [
+        { version: "0.1.6", date: "2026-11-03", notes: { "en-US": "notes-marker-016" } },
+        { version: "0.1.5", date: "2026-11-02", notes: { "en-US": "notes-marker-015" } },
+      ],
+      skippedReleasesComplete: false,
+    }) }));
+    const dialog = await openDialog();
+    const sections = [...dialog.querySelectorAll<HTMLElement>("[data-app-update-notes]")];
+    expect(sections.map((section) => section.dataset.appUpdateNotes)).toEqual(["0.1.7", "0.1.6", "0.1.5"]);
+    expect(sections[1]?.textContent).toContain("notes-marker-016");
+    expect(dialog.querySelector("[data-app-update-notes-incomplete]")).not.toBeNull();
   });
 
   it("keeps the notes after the download is ready and restarts through the shared call", async () => {

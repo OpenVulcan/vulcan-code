@@ -32,8 +32,10 @@ export default function AppUpdateDialog(props: { host: AppUpdateHost; onClose: (
 
   const version = pendingUpdateVersion(snapshot);
   if (!snapshot || !version) return null;
-  const notes = (snapshot.offer ?? (shownOffer?.version === version ? shownOffer : null))?.notes ?? {};
-  const hasNotes = releaseNotesFor(notes, locale) !== "";
+  const offer = snapshot.offer ?? (shownOffer?.version === version ? shownOffer : null);
+  // releases lists the offered version and then every skipped one, newest first, each with its own notes.
+  // releases 先列出所提供的版本，再列出每个被跳过的版本，从新到旧，各带自己的说明。
+  const releases = [{ version, notes: offer?.notes ?? {} }, ...(offer?.skippedReleases ?? [])];
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) props.onClose(); }}>
@@ -46,12 +48,19 @@ export default function AppUpdateDialog(props: { host: AppUpdateHost; onClose: (
         </DialogHeader>
         <div className="vk-dialog-body">
           <AppUpdateStatusSections calls={calls} showNotes={false} snapshot={snapshot} />
-          <section className="vk-app-update-notes" data-app-update-notes="">
-            <h3>{formatMessage(t("appUpdate.dialog.notesTitle"), { version })}</h3>
-            {hasNotes
-              ? <AppUpdateReleaseNotes notes={notes} />
-              : <p className="vk-form-note">{t("appUpdate.dialog.noNotes")}</p>}
-          </section>
+          {releases.map((release) => (
+            <section className="vk-app-update-notes" data-app-update-notes={release.version} key={release.version}>
+              <h3>{formatMessage(t("appUpdate.dialog.notesTitle"), { version: release.version })}</h3>
+              {releaseNotesFor(release.notes, locale) !== ""
+                ? <AppUpdateReleaseNotes notes={release.notes} />
+                : <p className="vk-form-note">{t("appUpdate.dialog.noNotes")}</p>}
+            </section>
+          ))}
+          {offer && !offer.skippedReleasesComplete ? (
+            <p className="vk-form-note" data-app-update-notes-incomplete="">
+              {formatMessage(t("appUpdate.dialog.earlierNotesMissing"), { current: snapshot.currentVersion })}
+            </p>
+          ) : null}
         </div>
         <DialogFooter showCloseButton>
           <Button onClick={() => { props.onClose(); openSettings(); }} variant="ghost">{t("appUpdate.dialog.openSettings")}</Button>

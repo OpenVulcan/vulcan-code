@@ -47,7 +47,7 @@ usage:
       --install-epoch N --tree DIR
   vulcan-release-tool manifest --objects DIR --components FILE --version V --platform P
       --install-epoch N --released-at YYYY-MM-DDTHH:MM:SSZ --key-env NAME
-      [--notes FILE] [--download KIND=FILE]... [--min-setup-version V]
+      [--notes FILE] [--download KIND=FILE]... [--min-setup-version V] [--previous-version V]
   vulcan-release-tool pointer --objects DIR --channel C --platform P --version V --key-env NAME
   vulcan-release-tool verify --objects DIR --platform P --version V --install-root DIR [--channel C]
   vulcan-release-tool restore --mirror DIR --platform P --version V --path PATH... --out DIR
@@ -163,6 +163,7 @@ fn run_manifest(arguments: impl Iterator<Item = String>) -> anyhow::Result<()> {
             "notes",
             "download",
             "min-setup-version",
+            "previous-version",
         ],
     )?;
     let mut downloads = Vec::new();
@@ -184,6 +185,10 @@ fn run_manifest(arguments: impl Iterator<Item = String>) -> anyhow::Result<()> {
         downloads,
         min_setup_version: args
             .optional("min-setup-version")?
+            .map(str::parse)
+            .transpose()?,
+        previous_version: args
+            .optional("previous-version")?
             .map(str::parse)
             .transpose()?,
     };

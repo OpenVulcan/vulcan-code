@@ -41,6 +41,7 @@ jobs:
     outputs:
       version: ${{ steps.plan.outputs.version }}
       install_epoch: ${{ steps.plan.outputs.install_epoch }}
+      previous_version: ${{ steps.plan.outputs.previous_version }}
     steps:
       - name: Release from main only
         if: github.ref != 'refs/heads/main'
@@ -349,6 +350,7 @@ jobs:
     env:
       VERSION: ${{ needs.plan.outputs.version }}
       INSTALL_EPOCH: ${{ needs.plan.outputs.install_epoch }}
+      PREVIOUS_VERSION: ${{ needs.plan.outputs.previous_version }}
       PLATFORMS: windows-x64 linux-x64 linux-arm64 macos-x64 macos-arm64
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -407,6 +409,8 @@ jobs:
             set -- --objects "$objects" --components "$artifacts/release-$platform/components.json" \
               --version "$VERSION" --platform "$platform" --install-epoch "$INSTALL_EPOCH" \
               --released-at "$released_at" --key-env UPDATE_SIGNING_KEY --notes "$RUNNER_TEMP/notes.json"
+            # The previous release lets the in-app updater walk back through every skipped version's notes.
+            [ -n "$PREVIOUS_VERSION" ] && set -- "$@" --previous-version "$PREVIOUS_VERSION"
             for installer in "$artifacts/release-$platform/downloads/"*.exe; do
               [ -e "$installer" ] && set -- "$@" --download "inno=$installer"
             done

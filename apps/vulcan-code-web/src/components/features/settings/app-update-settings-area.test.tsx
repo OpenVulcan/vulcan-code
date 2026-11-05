@@ -96,7 +96,7 @@ describe("AppUpdateSettingsArea", () => {
   it("downloads an installable offer and shows the accepted state", async () => {
     await render(snapshot({ offer: {
       version: "0.1.5", channel: "stable", kind: "incremental", downloadBytes: 1024, releasedAt: "2026-11-04T00:00:00Z",
-      notes: {}, installable: true, previouslyFailed: false,
+      notes: {}, skippedReleases: [], skippedReleasesComplete: true, installable: true, previouslyFailed: false,
     } }));
     service.downloadAppUpdate.mockResolvedValue(snapshot({ activity: "downloading", progress: { receivedBytes: 0, totalBytes: 1024 } }));
     await act(async () => { button("settings.appUpdate.download")?.click(); });
@@ -108,7 +108,7 @@ describe("AppUpdateSettingsArea", () => {
   it("sends a manual full update to the download page instead of downloading", async () => {
     await render(snapshot({ offer: {
       version: "0.2.0", channel: "stable", kind: "full", downloadBytes: 0, releasedAt: "2026-11-04T00:00:00Z",
-      notes: {}, installable: false, previouslyFailed: false,
+      notes: {}, skippedReleases: [], skippedReleasesComplete: true, installable: false, previouslyFailed: false,
     } }));
     expect(button("settings.appUpdate.download")).toBeUndefined();
     expect(button("settings.appUpdate.openDownloadPage")).toBeDefined();

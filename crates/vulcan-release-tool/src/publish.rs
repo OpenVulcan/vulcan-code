@@ -49,6 +49,9 @@ pub struct ManifestInput {
     /// Oldest setup program that can install this version.
     /// 能安装此版本的最旧安装器版本。
     pub min_setup_version: Option<ReleaseVersion>,
+    /// The release published before this one, from the release plan.
+    /// 在此之前发布的版本，取自发布计划。
+    pub previous_version: Option<ReleaseVersion>,
 }
 
 /// Copies the notes and downloads below `objects`, then writes and signs the manifest.
@@ -105,6 +108,7 @@ pub fn write_manifest(
         components: input.components,
         downloads,
         min_setup_version: input.min_setup_version,
+        previous_version: input.previous_version,
         key_id: key.key_id.to_owned(),
     };
     let document = manifest.to_document()?;

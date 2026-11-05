@@ -6781,5 +6781,6 @@
   "appUpdate.dialog.description": "現在のバージョンは {current} です。{version} の変更内容を確認し、ここでダウンロードして再起動できます。",
   "appUpdate.dialog.notesTitle": "{version} の新機能",
   "appUpdate.dialog.noNotes": "このバージョンにはリリースノートがありません。",
+  "appUpdate.dialog.earlierNotesMissing": "{current} 以降にリリースされた一部の以前のバージョンの更新内容は表示できませんでした。",
   "appUpdate.dialog.openSettings": "更新設定"
 }

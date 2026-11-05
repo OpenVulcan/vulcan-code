@@ -35,12 +35,16 @@ export function releasePlan(resourcesDir, codes, requested) {
   if (!Number.isSafeInteger(installEpoch) || installEpoch < 1) problems.push('product.json needs a positive integer `installEpoch`');
   const changelogDir = path.join(resourcesDir, 'changelog');
   problems.push(...checkReleaseNotes(changelogDir, codes, version));
-  const newest = JSON.parse(readFileSync(path.join(changelogDir, 'releases.json'), 'utf8')).releases?.[0];
+  const releases = JSON.parse(readFileSync(path.join(changelogDir, 'releases.json'), 'utf8')).releases ?? [];
+  const newest = releases[0];
   if (newest?.version === version && newest.date === null) {
     problems.push(`changelog: set the release date of ${version} before releasing it`);
   }
   if (problems.length > 0) throw new Error(`The release is not ready:\n${problems.map(problem => `  - ${problem}`).join('\n')}`);
-  return { version, installEpoch, date: newest.date };
+  // previous is the release listed after this one; the manifest names it so an updater can walk back
+  // through every skipped version's notes.
+  // previous 是清单中紧随其后的发布；版本清单写明它，使更新器能逐个回溯每个被跳过版本的说明。
+  return { version, installEpoch, date: newest.date, previous: releases[1]?.version ?? null };
 }
 
 // notesDocument collects the newest release's notes in every registered language.
@@ -56,9 +60,12 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
   const codes = JSON.parse(readFileSync(LOCALES_PATH, 'utf8')).locales.map(locale => locale.code);
   if (command === 'check' && flag === '--version' && value) {
     const plan = releasePlan(RESOURCES_DIR, codes, value);
-    console.log(`Releasing ${plan.version} (install epoch ${plan.installEpoch}, dated ${plan.date}).`);
+    console.log(`Releasing ${plan.version} (install epoch ${plan.installEpoch}, dated ${plan.date}, after ${plan.previous ?? 'none'}).`);
     if (process.env.GITHUB_OUTPUT) {
-      appendFileSync(process.env.GITHUB_OUTPUT, `version=${plan.version}\ninstall_epoch=${plan.installEpoch}\n`);
+      appendFileSync(
+        process.env.GITHUB_OUTPUT,
+        `version=${plan.version}\ninstall_epoch=${plan.installEpoch}\nprevious_version=${plan.previous ?? ''}\n`,
+      );
     }
   } else if (command === 'platform' && flag === '--tree' && value) {
     console.log(managedRuntimePlatformKey(JSON.parse(readFileSync(path.join(value, 'runtime-layout.json'), 'utf8'))));

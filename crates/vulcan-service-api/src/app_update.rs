@@ -85,12 +85,38 @@ pub struct AppUpdateOffer {
     /// Markdown release notes by language code; empty when the release has none.
     /// 按语言代码列出的 Markdown 更新说明；版本没有说明时为空。
     pub notes: std::collections::BTreeMap<String, String>,
+    /// Notes of the releases between the running version and this one that have any, newest first.
+    /// 正在运行版本与此版本之间有说明的各发布的说明，从新到旧排列。
+    #[serde(default)]
+    pub skipped_releases: Vec<AppUpdateReleaseNotes>,
+    /// Whether `skippedReleases` reaches back to the running version; false when older releases name
+    /// no predecessor or one could not be read, so earlier notes may be missing.
+    /// `skippedReleases` 是否回溯到正在运行版本；较早的发布未写明上一版本或某个发布无法读取时为 false，
+    /// 此时更早的说明可能缺失。
+    #[serde(default)]
+    pub skipped_releases_complete: bool,
     /// Whether the app can install it by itself; otherwise the download page is offered.
     /// 应用能否自行安装；不能时提供下载页。
     pub installable: bool,
     /// Whether this version already failed to start here and was switched back.
     /// 此版本是否曾在本机启动失败并被切换回去。
     pub previously_failed: bool,
+}
+
+/// The release notes of one release an update skips.
+/// 一次更新所跳过的某个发布的更新说明。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppUpdateReleaseNotes {
+    /// The release version.
+    /// 发布版本。
+    pub version: String,
+    /// Release date as `YYYY-MM-DD`, when known.
+    /// 发布日期，格式为 `YYYY-MM-DD`（若已知）。
+    pub date: Option<String>,
+    /// Markdown release notes by language code.
+    /// 按语言代码列出的 Markdown 更新说明。
+    pub notes: std::collections::BTreeMap<String, String>,
 }
 
 /// What the updater is doing.

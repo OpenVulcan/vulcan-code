@@ -6781,5 +6781,6 @@
   "appUpdate.dialog.description": "La version {current} est en cours d’exécution. Consultez les nouveautés de {version}, puis téléchargez et redémarrez depuis ici.",
   "appUpdate.dialog.notesTitle": "Nouveautés de {version}",
   "appUpdate.dialog.noNotes": "Cette version n’a pas de notes de version.",
+  "appUpdate.dialog.earlierNotesMissing": "Les notes de certaines versions antérieures publiées après {current} n’ont pas pu être affichées.",
   "appUpdate.dialog.openSettings": "Paramètres de mise à jour"
 }

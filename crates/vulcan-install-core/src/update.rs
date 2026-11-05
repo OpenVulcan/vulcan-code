@@ -206,6 +206,74 @@ pub fn read_setup_pointer(
     }
 }
 
+/// Most skipped releases whose notes an update reads; an older installation sees the newest ones and
+/// learns that earlier notes are missing.
+/// 一次更新最多读取多少个被跳过版本的说明；更旧的安装看到最新的若干个，并得知更早的说明未显示。
+pub const MAX_SKIPPED_RELEASES: usize = 32;
+
+/// The notes of the releases between the installed version and an offered one.
+/// 已安装版本与所提供版本之间各发布的更新说明。
+#[derive(Debug)]
+pub struct SkippedReleaseNotes {
+    /// Notes of the skipped releases that have any, newest first.
+    /// 有说明的被跳过版本的说明，从新到旧排列。
+    pub releases: Vec<ReleaseNotes>,
+    /// Whether the walk reached the installed version, so no skipped release is missing.
+    /// 回溯是否到达已安装版本，即没有遗漏任何被跳过的版本。
+    pub complete: bool,
+    /// The failure that ended the walk early, if one did.
+    /// 使回溯提前结束的错误（若有）。
+    pub error: Option<FormatError>,
+}
+
+/// Walks back from `newest` through each manifest's `previousVersion` and reads the notes of every
+/// release above `installed`, verifying each manifest by its signature and each notes document by
+/// the digest its manifest names.
+/// 从 `newest` 起沿每份清单的 `previousVersion` 回溯，读取高于 `installed` 的每个发布的说明；每份清单
+/// 按签名校验，每份说明按其清单所列摘要校验。
+///
+/// The notes only describe the update, so a missing link, an unreadable release or the
+/// [`MAX_SKIPPED_RELEASES`] bound ends the walk with `complete: false` instead of failing the offer.
+/// 这些说明只用于介绍更新，因此缺少链接、无法读取的发布或达到 [`MAX_SKIPPED_RELEASES`] 上限时，回溯以
+/// `complete: false` 结束，而不使整个提议失败。
+pub fn read_skipped_release_notes(
+    downloader: &mut Downloader,
+    keys: &[TrustedKey],
+    newest: &ReleaseManifest,
+    installed: &ReleaseVersion,
+) -> SkippedReleaseNotes {
+    let mut walk = SkippedReleaseNotes {
+        releases: Vec::new(),
+        complete: false,
+        error: None,
+    };
+    let mut previous = newest.previous_version.clone();
+    let mut visited = 0;
+    while let Some(version) = previous {
+        if &version <= installed {
+            walk.complete = true;
+            break;
+        }
+        if visited == MAX_SKIPPED_RELEASES {
+            break;
+        }
+        visited += 1;
+        let read = read_manifest(downloader, keys, &version, newest.platform)
+            .and_then(|manifest| read_notes(downloader, &manifest).map(|notes| (manifest, notes)));
+        match read {
+            Ok((manifest, notes)) => {
+                walk.releases.extend(notes);
+                previous = manifest.previous_version;
+            }
+            Err(error) => {
+                walk.error = Some(error);
+                break;
+            }
+        }
+    }
+    walk
+}
+
 /// Downloads and verifies the notes a manifest names.
 /// 下载并校验版本清单所指的更新说明。
 fn read_notes(
@@ -234,4 +302,183 @@ fn read_notes(
         ));
     }
     Ok(Some(notes))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::io::{BufRead as _, BufReader, Write as _};
+    use std::net::TcpListener;
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::digest::Sha256Digest;
+    use crate::layout::{manifest_key, notes_key, signature_key};
+    use crate::manifest::{ComponentRef, NotesRef};
+    use crate::names::{PRODUCT, SCHEMA_VERSION};
+    use crate::signing::sign_detached;
+    use crate::signing::tests::{TEST_SECRET, test_keys};
+
+    const PLATFORM: Platform = Platform::LinuxX64;
+
+    /// Serves `objects` by key over plain HTTP and answers 404 for anything else.
+    /// 通过明文 HTTP 按键提供 `objects`，其他路径一律应答 404。
+    fn serve(objects: HashMap<String, Vec<u8>>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let origin = format!("http://{}", listener.local_addr().expect("address"));
+        let objects = Arc::new(objects);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+                let mut request = String::new();
+                let _ = reader.read_line(&mut request);
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                }
+                let key = request
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or("/")
+                    .trim_start_matches('/');
+                let (status, body) = match objects.get(key) {
+                    Some(body) => ("200 OK", body.clone()),
+                    None => ("404 Not Found", Vec::new()),
+                };
+                let head = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(head.as_bytes());
+                let _ = stream.write_all(&body);
+            }
+        });
+        origin
+    }
+
+    /// Publishes one signed release with notes into `objects` and returns its manifest.
+    /// 将一个带说明的已签名发布写入 `objects` 并返回其清单。
+    fn publish(
+        objects: &mut HashMap<String, Vec<u8>>,
+        version: &str,
+        previous: Option<&str>,
+    ) -> ReleaseManifest {
+        let version: ReleaseVersion = version.parse().expect("version");
+        let notes = serde_json::to_vec(&ReleaseNotes {
+            schema: NOTES_SCHEMA,
+            version: version.clone(),
+            date: Some("2026-11-05".to_owned()),
+            notes: BTreeMap::from([("en-US".to_owned(), format!("Notes of {version}."))]),
+        })
+        .expect("notes");
+        let manifest = ReleaseManifest {
+            schema: SCHEMA_VERSION,
+            product: PRODUCT.to_owned(),
+            version: version.clone(),
+            platform: PLATFORM,
+            install_epoch: 1,
+            released_at: "2026-11-05T08:00:00Z".to_owned(),
+            notes: Some(NotesRef {
+                sha256: Sha256Digest::of(&notes),
+            }),
+            components: BTreeMap::from([(
+                ComponentName::new("core").expect("name"),
+                ComponentRef {
+                    index: Sha256Digest::of(b"index"),
+                    size: 1,
+                    fingerprint: None,
+                },
+            )]),
+            downloads: Vec::new(),
+            min_setup_version: None,
+            previous_version: previous.map(|previous| previous.parse().expect("previous")),
+            key_id: "test-key".to_owned(),
+        };
+        let document = manifest.to_document().expect("document");
+        let key = manifest_key(&version, PLATFORM);
+        objects.insert(
+            signature_key(&key),
+            sign_detached(&document, &TEST_SECRET).to_vec(),
+        );
+        objects.insert(key, document);
+        objects.insert(notes_key(&version), notes);
+        manifest
+    }
+
+    /// Versions of the notes a walk returned, newest first.
+    /// 回溯返回的说明所属版本，从新到旧排列。
+    fn versions(walk: &SkippedReleaseNotes) -> Vec<String> {
+        walk.releases
+            .iter()
+            .map(|notes| notes.version.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn the_walk_reads_every_skipped_release_down_to_the_installed_one() {
+        let mut objects = HashMap::new();
+        publish(&mut objects, "0.1.4", None);
+        publish(&mut objects, "0.1.5", Some("0.1.4"));
+        publish(&mut objects, "0.1.6", Some("0.1.5"));
+        let newest = publish(&mut objects, "0.1.7", Some("0.1.6"));
+        let mut downloader = Downloader::new(vec![serve(objects)], "test").expect("downloader");
+        let keys = test_keys();
+
+        let walk = read_skipped_release_notes(
+            &mut downloader,
+            &keys,
+            &newest,
+            &"0.1.4".parse().expect("version"),
+        );
+        assert_eq!(versions(&walk), ["0.1.6", "0.1.5"]);
+        assert!(walk.complete && walk.error.is_none());
+
+        let walk = read_skipped_release_notes(
+            &mut downloader,
+            &keys,
+            &newest,
+            &"0.1.6".parse().expect("version"),
+        );
+        assert!(walk.releases.is_empty() && walk.complete);
+
+        // 0.1.4 names no previous release, so whatever lies below it is unknown.
+        // 0.1.4 未写明上一发布，因此其下是否还有版本无从得知。
+        let walk = read_skipped_release_notes(
+            &mut downloader,
+            &keys,
+            &newest,
+            &"0.1.2".parse().expect("version"),
+        );
+        assert_eq!(versions(&walk), ["0.1.6", "0.1.5", "0.1.4"]);
+        assert!(!walk.complete && walk.error.is_none());
+    }
+
+    #[test]
+    fn an_unreadable_release_ends_the_walk_without_failing_it() {
+        let mut objects = HashMap::new();
+        publish(&mut objects, "0.1.5", Some("0.1.4"));
+        let newest = publish(&mut objects, "0.1.7", Some("0.1.6"));
+        objects.retain(|key, _| !key.contains("0.1.6"));
+        let mut downloader = Downloader::new(vec![serve(objects)], "test").expect("downloader");
+
+        let walk = read_skipped_release_notes(
+            &mut downloader,
+            &test_keys(),
+            &newest,
+            &"0.1.4".parse().expect("version"),
+        );
+        assert!(walk.releases.is_empty());
+        assert!(!walk.complete && walk.error.is_some());
+    }
+
+    #[test]
+    fn a_previous_version_must_be_older_than_its_release() {
+        let mut objects = HashMap::new();
+        let mut manifest = publish(&mut objects, "0.1.5", None);
+        manifest.previous_version = Some("0.1.5".parse().expect("version"));
+        assert!(manifest.validate().is_err());
+    }
 }

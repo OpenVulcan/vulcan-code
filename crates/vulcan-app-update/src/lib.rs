@@ -28,11 +28,14 @@ use vulcan_install_core::names::{Channel, ReleaseVersion};
 use vulcan_install_core::record::{InstallRecord, RECORD_FILE_NAME};
 use vulcan_install_core::repair::prepare_repair;
 use vulcan_install_core::signing::BUILT_IN_KEYS;
-use vulcan_install_core::update::{find_update, read_indexes, read_manifest};
+use vulcan_install_core::update::{
+    find_update, read_indexes, read_manifest, read_skipped_release_notes,
+};
 use vulcan_service_api::{
     AppUpdateActivity, AppUpdateError, AppUpdateKind, AppUpdateOffer, AppUpdateOperation,
-    AppUpdateProgress, AppUpdateRollback, AppUpdateRouteSetting, AppUpdateSettings,
-    AppUpdateSnapshot, AppUpdateUnavailableReason, ServiceRestartReason, ServiceRestartingEvent,
+    AppUpdateProgress, AppUpdateReleaseNotes, AppUpdateRollback, AppUpdateRouteSetting,
+    AppUpdateSettings, AppUpdateSnapshot, AppUpdateUnavailableReason, ServiceRestartReason,
+    ServiceRestartingEvent,
 };
 
 mod installed;
@@ -796,6 +799,14 @@ fn describe(
     found: vulcan_install_core::update::Offer,
 ) -> Result<Offer, FormatError> {
     let manifest = found.manifest;
+    let skipped =
+        read_skipped_release_notes(downloader, BUILT_IN_KEYS, &manifest, &installed.version);
+    if let Some(error) = &skipped.error {
+        tracing::warn!(
+            "[app-update] notes of the releases before {} stopped early: {error}",
+            manifest.version
+        );
+    }
     let incremental = manifest.install_epoch == installed.install_epoch
         && installed
             .components
@@ -826,6 +837,16 @@ fn describe(
             download_bytes,
             released_at: manifest.released_at.clone(),
             notes: found.notes.map(|notes| notes.notes).unwrap_or_default(),
+            skipped_releases: skipped
+                .releases
+                .into_iter()
+                .map(|release| AppUpdateReleaseNotes {
+                    version: release.version.to_string(),
+                    date: release.date,
+                    notes: release.notes,
+                })
+                .collect(),
+            skipped_releases_complete: skipped.complete,
             installable,
             previously_failed: false,
         },

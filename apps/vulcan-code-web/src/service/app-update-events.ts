@@ -32,6 +32,17 @@ export interface AppUpdateSettings {
 }
 
 /** A verified newer release. / 已校验的更新版本。 */
+/** Release notes of one release an update skips. / 一次更新所跳过的某个发布的说明。 */
+export interface AppUpdateReleaseNotes {
+  version: string;
+  // Release date as YYYY-MM-DD, when known.
+  // 发布日期，格式为 YYYY-MM-DD（若已知）。
+  date: string | null;
+  // Release notes by locale code, Markdown.
+  // 按语言代码索引的发布说明，Markdown 格式。
+  notes: Record<string, string>;
+}
+
 export interface AppUpdateOffer {
   version: string;
   channel: string;
@@ -43,6 +54,12 @@ export interface AppUpdateOffer {
   // Release notes by locale code, Markdown.
   // 按语言代码索引的发布说明，Markdown 格式。
   notes: Record<string, string>;
+  // Notes of the releases between the running version and this one, newest first.
+  // 正在运行版本与此版本之间各发布的说明，从新到旧排列。
+  skippedReleases: AppUpdateReleaseNotes[];
+  // False when earlier skipped releases could not be traced, so their notes may be missing.
+  // 无法追溯更早的被跳过版本时为 false，其说明可能缺失。
+  skippedReleasesComplete: boolean;
   // False when this version must be installed from the download page.
   // 此版本必须从下载页面安装时为 false。
   installable: boolean;

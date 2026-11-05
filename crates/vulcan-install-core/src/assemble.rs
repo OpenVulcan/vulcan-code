@@ -828,6 +828,7 @@ mod tests {
                 components,
                 downloads: Vec::new(),
                 min_setup_version: None,
+                previous_version: None,
                 key_id: "test-key".to_owned(),
             },
             indexes,

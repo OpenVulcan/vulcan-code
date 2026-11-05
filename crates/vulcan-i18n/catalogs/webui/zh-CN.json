@@ -6781,5 +6781,6 @@
   "appUpdate.dialog.description": "当前运行的是 {current} 版本。先查看 {version} 的更新内容，再在此下载并重启。",
   "appUpdate.dialog.notesTitle": "{version} 更新内容",
   "appUpdate.dialog.noNotes": "此版本没有发布说明。",
+  "appUpdate.dialog.earlierNotesMissing": "{current} 之后发布的部分较早版本的更新内容未能显示。",
   "appUpdate.dialog.openSettings": "更新设置"
 }
