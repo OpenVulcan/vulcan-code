@@ -109,6 +109,32 @@ EOF
     chmod +x "$RunnerDir/start.sh"
 }
 
+# write_env limits the parallel compilations of this runner's jobs to what the machine's memory carries, about
+# 4 GiB per compilation and never more than its processors: a release build with more ran a 32 GB machine out of
+# memory until it stopped responding. The runner gives the variables of .env to every job; a job that sets
+# CARGO_BUILD_JOBS itself still wins.
+# write_env 按机器内存限制本运行器作业的并行编译数：每个编译约 4 GiB，且不超过处理器数。并行更多时 release 构建
+# 曾耗尽一台 32 GB 机器的内存，使其失去响应。运行器把 .env 中的变量交给每个作业；自行设置 CARGO_BUILD_JOBS 的作业仍以其为准。
+write_env() {
+    if [ "$(uname -s)" = Darwin ]; then
+        memory_kib=$(( $(sysctl -n hw.memsize) / 1024 ))
+        processors=$(sysctl -n hw.ncpu)
+    else
+        memory_kib=$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo)
+        processors=$(nproc)
+    fi
+    jobs=$(( memory_kib / (4 * 1024 * 1024) ))
+    [ "$jobs" -le "$processors" ] || jobs=$processors
+    [ "$jobs" -ge 1 ] || jobs=1
+    # config.sh already wrote .env with the locale it found; the limit is added to it.
+    # config.sh 已将其发现的区域设置写入 .env；此处追加该限制。
+    touch "$RunnerDir/.env"
+    grep -v '^CARGO_BUILD_JOBS=' "$RunnerDir/.env" > "$RunnerDir/.env.tmp" || true
+    printf 'CARGO_BUILD_JOBS=%s\n' "$jobs" >> "$RunnerDir/.env.tmp"
+    mv "$RunnerDir/.env.tmp" "$RunnerDir/.env"
+    echo "Jobs of this runner compile with CARGO_BUILD_JOBS=$jobs."
+}
+
 command=${1:-}
 [ $# = 0 ] || shift
 Repository= Label= Name=$(hostname -s) Manual=false
@@ -137,6 +163,7 @@ case "$command" in
         tar -xzf "$RunnerDir/runner.tar.gz" -C "$RunnerDir" && rm -f "$RunnerDir/runner.tar.gz"
         (cd "$RunnerDir" && ./config.sh --unattended --url "https://github.com/$Repository" --token "$Token" \
             --name "$Name" --labels "$Label" --work _work --replace)
+        write_env
         if [ "$Manual" = true ]; then
             write_start
             echo "Runner $Name ($Label) is installed in $RunnerDir; start it with: $RunnerDir/start.sh"
