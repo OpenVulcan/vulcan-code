@@ -80,7 +80,9 @@
 - Linux（含 WSL 发行版）：Ubuntu 22.04，以 root 执行一次 `sh scripts/install_linux_system_deps.sh` 并安装
   `git curl unzip xz-utils zstd`，并把 Node 官方 Linux 归档（按其 `SHASUMS256.txt` 校验）解压后链接到
   `/usr/local/bin`；作业不使用 sudo，依赖齐全时该脚本不再调用包管理器。
-- Windows：已安装 Git for Windows、PowerShell 7、Node 与 Rust 工具链，并完成本仓库的 `make init-system`。
+- Windows：已安装 Git for Windows、PowerShell 7、Node 与 Rust 工具链，并完成本仓库的 `make init-system`；
+  运行器用户执行 `git config --global core.longPaths true`，否则 `prepare` 的 `git clean` 删不掉
+  `node_modules` 中超过 260 字符的路径。
   `shell: bash` 的步骤必须得到 Git Bash，而 Windows 可能把 WSL 启动器 `bash.exe` 排在前面，所以注册时
   写出 `start.cmd`，由它把 Git Bash 放在 PATH 最前再启动运行器。工作区为 `<目录>\w`，路径较短。
 
