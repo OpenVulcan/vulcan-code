@@ -1509,6 +1509,7 @@ dependencies = [
  "crossterm_winapi",
  "derive_more",
  "document-features",
+ "filedescriptor",
  "mio",
  "parking_lot",
  "rustix",
@@ -9952,8 +9953,9 @@ dependencies = [
 
 [[package]]
 name = "vulcan-code-setup"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
+ "crossterm",
  "dirs",
  "ratatui",
  "serde",

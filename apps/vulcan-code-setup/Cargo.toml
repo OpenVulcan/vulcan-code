@@ -4,7 +4,7 @@ description = "Setup program that installs, updates, modifies and removes a per-
 # The setup program is released apart from the product (`release-setup.yml`) and keeps its own
 # version here; only a change to the setup program itself raises it.
 # 安装器独立于产品发布（`release-setup.yml`），其版本只在此处定义；只有安装器本身变化时才递增。
-version = "0.2.3"
+version = "0.2.4"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -40,6 +40,15 @@ serde.workspace = true
 serde_json.workspace = true
 vulcan-i18n.workspace = true
 vulcan-install-core = { workspace = true, features = ["http"] }
+
+[target.'cfg(unix)'.dependencies]
+# Under `curl | sh` install.sh hands the setup program `/dev/tty` as its input. crossterm's default
+# kqueue input source cannot watch `/dev/tty` on macOS ("Failed to initialize input reader"), so the
+# setup program uses its select/poll-based `/dev/tty` source instead.
+# 在 `curl | sh` 下 install.sh 把 `/dev/tty` 作为安装器的输入。crossterm 默认的 kqueue 输入源在 macOS
+# 上无法监听 `/dev/tty`（"Failed to initialize input reader"），因此安装器改用其基于 select/poll 的
+# `/dev/tty` 输入源。
+crossterm = { workspace = true, features = ["use-dev-tty"] }
 
 [target.'cfg(windows)'.dependencies]
 # COM interfaces for the shortcuts, which `windows-sys` does not wrap.

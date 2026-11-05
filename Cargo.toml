@@ -221,6 +221,9 @@ ratatui-textarea = "0.9.2"
 # Writes TUI frames to the client's own Windows console, matching the version crossterm uses.
 # 将 TUI 画面写入客户端自身的 Windows 控制台，版本与 crossterm 所用一致。
 crossterm_winapi = "0.9.1"
+# The terminal backend ratatui drives; named directly only to pick its input source (see vulcan-code-setup).
+# ratatui 驱动的终端后端；只为选择其输入源而直接引用（见 vulcan-code-setup）。
+crossterm = "0.29.0"
 regex = "1.13.1"
 regex-syntax = "0.8.8"
 rmcp = { version = "3.1", default-features = false }
