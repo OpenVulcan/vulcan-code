@@ -31,6 +31,12 @@ test('rejects a newest release that differs from the product version', () => {
   rmSync(directory, { recursive: true });
 });
 
+test('rejects English notes whose components have no GitHub Release form', () => {
+  const directory = changelog([{ version: '0.1.0', date: null }], ['en-US', 'zh-CN'], '```ui-steps\ndone | Step\n```\n');
+  assert.equal(checkReleaseNotes(directory, ['en-US', 'zh-CN'], '0.1.0').length, 1);
+  rmSync(directory, { recursive: true });
+});
+
 test('rejects unordered versions and a null date below the top', () => {
   const directory = changelog([{ version: '0.1.0', date: '2026-11-01' }, { version: '0.2.0', date: null }], ['en-US']);
   assert.equal(checkReleaseNotes(directory, ['en-US'], '0.1.0').length, 2);

@@ -65,6 +65,10 @@
 4. **消费方。** WebUI 经 `@changelog` 别名按发布与语言分块懒加载（`src/service/changelog.ts`），设置 → 关于 →
    更新记录页每页一个发布并可翻页；TUI 经 `vulcan_product_info::releases()` 与 `release_notes()` 从发行资源读取，在同名页面镜像该行为。
    两者都不经服务调用。
+5. **GitHub Release 正文是英文说明的 Markdown 形式。** GitHub 不渲染 `ui-*` 组件，`release.yml` 创建草稿时用
+   `scripts/release-notes-github.mjs` 把 `en-US.md` 转为纯 Markdown：行组件变为列表，`ui-callout` 变为 GitHub 提示块，
+   `ui-tabs`/`ui-columns` 各节变为标题。没有 GitHub 形式的组件直接报错；`release-notes-check.mjs` 对每个发布执行这一转换，
+   所以英文说明中使用新组件前须先在该脚本中补上其转换。
 
 ## 服务错误消息
 

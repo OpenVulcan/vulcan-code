@@ -450,7 +450,10 @@ jobs:
         run: |
           set -eu
           tag="v$VERSION"
-          notes="crates/vulcan-runtime-assets/resources/changelog/$VERSION/en-US.md"
+          # The in-app notes use answer components GitHub cannot render; publish their Markdown form.
+          # 应用内说明使用 GitHub 无法渲染的回答组件；发布其 Markdown 形式。
+          notes="$RUNNER_TEMP/github-notes.md"
+          node scripts/release-notes-github.mjs "$VERSION" > "$notes"
           # A re-run after a failure replaces the assets of the draft it created.
           # 失败后重新运行时，替换它先前创建的草稿中的附件。
           if gh release view "$tag" > /dev/null 2>&1; then

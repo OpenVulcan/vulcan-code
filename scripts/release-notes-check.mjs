@@ -5,14 +5,17 @@
 // versions and a `YYYY-MM-DD` date, or `null` for the newest release while it is unreleased. The
 // newest release equals the version in `resources/product.json`. Each release owns
 // `<version>/<code>.md` for exactly the languages in `catalogs/locales.json`, none empty; stray
-// directories or files are rejected. Component fences are checked by the WebUI and TUI renderers' tests.
+// directories or files are rejected. Component fences are checked by the WebUI and TUI renderers' tests;
+// the English notes must also convert to the GitHub Release body (`release-notes-github.mjs`).
 // `resources/changelog/releases.json` 按从新到旧列出发布，版本为严格递减的 `x.y.z`，日期为
 // `YYYY-MM-DD`；仅最新发布在未发布时可为 `null`。最新发布等于 `resources/product.json` 中的版本。
 // 每个发布持有与 `catalogs/locales.json` 语言完全一致且非空的 `<version>/<code>.md`；多余的目录或
-// 文件一律拒绝。组件围栏由 WebUI 与 TUI 渲染器的测试检查。
+// 文件一律拒绝。组件围栏由 WebUI 与 TUI 渲染器的测试检查；英文说明还必须能转换为 GitHub Release
+// 正文（`release-notes-github.mjs`）。
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { GITHUB_NOTES_LANGUAGE, githubReleaseNotes } from './release-notes-github.mjs';
 
 // Repository root keeps the check independent of the caller's working directory.
 // 仓库根目录使检查不依赖调用者当前工作目录。
@@ -97,8 +100,15 @@ export function checkReleaseNotes(changelogDir, codes, productVersion) {
       problems.push(`${directory}: needs exactly one Markdown file per registered language; missing [${missing.join(', ')}], unexpected [${unexpected.join(', ')}]`);
     }
     for (const name of [...expected].filter((file) => present.has(file))) {
-      if (readFileSync(path.join(directory, name), 'utf8').trim() === '') {
+      const notes = readFileSync(path.join(directory, name), 'utf8');
+      if (notes.trim() === '') {
         problems.push(`${path.join(directory, name)}: notes must not be empty`);
+      } else if (name === `${GITHUB_NOTES_LANGUAGE}.md`) {
+        try {
+          githubReleaseNotes(notes);
+        } catch (error) {
+          problems.push(`${path.join(directory, name)}: GitHub Release body: ${error.message}`);
+        }
       }
     }
   });
