@@ -1,8 +1,8 @@
 use super::{
-    MAX_EDIT_LINES_PER_ARRAY, MAX_INLINE_LIFECYCLE_BYTES, MAX_READ_LINES, MAX_READ_RESPONSE_BYTES,
-    PreparedChange, ReplacementPlan, apply_patch_write_paths, build_patch_delete_change,
-    commit_changes, commit_validated_changes, display_path, execute_apply_patch, execute_file,
-    execute_file_edit, path_key, path_resolves_inside_workspace,
+    LIFECYCLE_EXCERPT_CHARS, MAX_EDIT_LINES_PER_ARRAY, MAX_INLINE_LIFECYCLE_BYTES, MAX_READ_LINES,
+    MAX_READ_RESPONSE_BYTES, PreparedChange, ReplacementPlan, apply_patch_write_paths,
+    build_patch_delete_change, commit_changes, commit_validated_changes, display_path,
+    execute_apply_patch, execute_file, execute_file_edit, path_key, path_resolves_inside_workspace,
     persistent_change_set_from_host_result, read_edit_snapshot, read_raw_snapshot,
     render_snapshot_replacements, resolve_path, verify_preconditions, whole_file_modify_payload,
 };
@@ -1153,6 +1153,46 @@ async fn exact_edit_change_set_merges_overlapping_newline_matches() {
     );
 }
 
+/// Removing text inside lines does not shift the reported coordinates of later matches.
+/// 删除行内文本不会使后续匹配的报告坐标发生偏移。
+#[tokio::test]
+async fn exact_edit_in_line_removals_keep_their_line_numbers() {
+    let directory = tempdir().expect("create temporary directory");
+    fs::write(
+        directory.path().join("sample.txt"),
+        "x1\nkeep\nx2\nkeep\nx3\n",
+    )
+    .expect("write in-line edit fixture");
+    let response = execute_file_edit(
+        directory.path().to_path_buf(),
+        json!({"path": "sample.txt", "old_string": "x", "new_string": "", "replace_all": true}),
+    )
+    .await
+    .expect("in-line replace-all should succeed");
+    let change_set = response.change_set.expect("in-line edit change set");
+    let hunks = change_set["files"][0]["hunks"]
+        .as_array()
+        .expect("hunks should be an array");
+    let lines = |side: &str| {
+        hunks
+            .iter()
+            .flat_map(|hunk| hunk[side].as_array().expect("line array").clone())
+            .map(|line| (line["line"].as_u64().unwrap(), line["content"].clone()))
+            .collect::<Vec<_>>()
+    };
+    // Each reported line must pair with the same line number on the other side.
+    // 每条报告行都必须与另一侧相同行号的行配对。
+    let expected = lines("delete")
+        .into_iter()
+        .map(|(line, content)| {
+            let text = content.as_str().unwrap().replace('x', "");
+            (line, json!(text))
+        })
+        .collect::<Vec<_>>();
+    assert!(expected.iter().any(|(line, _)| *line == 5));
+    assert_eq!(lines("insert"), expected);
+}
+
 /// Verifies an unrepresentable legacy edit leaves the original bytes untouched.
 /// 验证传统编码无法表示新字符时原始字节保持不变。
 #[tokio::test]
@@ -1328,6 +1368,37 @@ async fn apply_patch_context_only_hunks_do_not_break_the_change_set() {
     .await
     .expect_err("context-only patch changes nothing");
     assert_eq!(error.code, "no_change");
+
+    // A move whose only hunk is context is a pure rename with its body as lifecycle content.
+    // 唯一 hunk 只含上下文的移动是纯重命名，以生命周期正文携带内容。
+    let moved = execute_apply_patch(
+        directory.path().to_path_buf(),
+        String::from(
+            "*** Begin Patch\n*** Update File: sample.txt\n*** Move to: moved.txt\n@@\n beta\n*** End Patch\n",
+        ),
+    )
+    .await
+    .expect("a context-only move is a valid rename");
+    let persistent = persistent_change_set_from_host_result(&json!({
+        "kind": "change_set",
+        "payload": moved.change_set.expect("move returns a ChangeSet"),
+    }))
+    .expect("context-only move must pass durability validation")
+    .expect("move must return a ChangeSet");
+    assert!(persistent.files[0].hunks.is_empty());
+    assert!(persistent.files[0].lifecycle_content.is_some());
+
+    // Context longer than the whole file is reported as missing context, not an internal failure.
+    // 比整个文件更长的上下文报告为找不到上下文，而不是内部失败。
+    let error = execute_apply_patch(
+        directory.path().to_path_buf(),
+        String::from(
+            "*** Begin Patch\n*** Update File: moved.txt\n@@\n alpha\n beta\n delta\n-omega\n+psi\n*** End Patch\n",
+        ),
+    )
+    .await
+    .expect_err("context longer than the file cannot match");
+    assert_eq!(error.code, "patch_context_not_found");
 }
 
 /// Verifies failed patch preflight leaves every file operation unapplied.
@@ -1431,6 +1502,36 @@ async fn apply_patch_end_of_file_marker_is_enforced() {
     assert_eq!(
         fs::read_to_string(directory.path().join("sample.txt")).expect("read unchanged file"),
         "first\nlast\n"
+    );
+}
+
+/// Adding a BOM to an empty file is a format-only modify that satisfies the persistent contract.
+/// 为空文件添加 BOM 属于纯格式修改，并满足持久契约。
+#[tokio::test]
+async fn adding_a_bom_to_an_empty_file_is_a_valid_change() {
+    let directory = tempdir().expect("create temporary directory");
+    let path = directory.path().join("empty.txt");
+    fs::write(&path, b"").expect("write empty fixture");
+    let written = execute_file(
+        directory.path().to_path_buf(),
+        json!({"action": "write", "path": "empty.txt", "content": "", "bom": "present"}),
+    )
+    .await
+    .expect("adding a BOM should succeed");
+    let persistent = persistent_change_set_from_host_result(&json!({
+        "kind": "change_set",
+        "payload": written.change_set.expect("format change returns a ChangeSet"),
+    }))
+    .expect("format-only modify must satisfy the V1 contract")
+    .expect("native write must return a ChangeSet");
+    assert!(persistent.files[0].hunks.is_empty());
+    assert_ne!(
+        persistent.files[0].before_text_format,
+        persistent.files[0].after_text_format
+    );
+    assert_eq!(
+        fs::read(&path).expect("read BOM output"),
+        [0xEF, 0xBB, 0xBF]
     );
 }
 
@@ -1882,8 +1983,8 @@ async fn native_create_lifecycle_content_respects_inline_byte_boundary() {
             ref head,
             ref tail,
             total_line_count: 1,
-        }) if head.chars().count() == 2000
-            && tail.chars().count() == 2000
+        }) if head.chars().count() == LIFECYCLE_EXCERPT_CHARS
+            && tail.chars().count() == LIFECYCLE_EXCERPT_CHARS
             && tail.ends_with('中')
     ));
     assert_eq!(
@@ -2650,4 +2751,59 @@ A
 NEXT
 "
     );
+}
+
+/// Rollback restores every changed path even when another path cannot be restored,
+/// and leaves unchanged paths untouched.
+/// 回滚即使有路径无法恢复也会恢复其他所有已改路径，并保持未改路径不变。
+#[test]
+fn rollback_restores_every_changed_path_despite_one_failure() {
+    let directory = tempdir().expect("create temporary directory");
+    let changed = directory.path().join("a-changed.txt");
+    let unchanged = directory.path().join("b-unchanged.txt");
+    let stuck = directory.path().join("z-stuck");
+    fs::write(&changed, "after\n").expect("write changed fixture");
+    fs::write(&unchanged, "same\n").expect("write unchanged fixture");
+    // A directory where a file must be restored makes that one restore fail.
+    // 需要恢复为文件的位置是目录，使这一次恢复失败。
+    fs::create_dir(&stuck).expect("create stuck fixture");
+    let backup = |bytes: &str| super::FileBackup {
+        bytes: Some(bytes.as_bytes().to_vec()),
+        permissions: None,
+    };
+    let backups = std::collections::BTreeMap::from([
+        (changed.clone(), backup("before\n")),
+        (unchanged.clone(), backup("same\n")),
+        (stuck.clone(), backup("file\n")),
+    ]);
+    let result = super::rollback_paths(
+        &backups,
+        &std::collections::HashSet::new(),
+        &std::collections::BTreeSet::new(),
+    );
+    assert!(result.is_err());
+    assert_eq!(fs::read_to_string(&changed).unwrap(), "before\n");
+    assert_eq!(fs::read_to_string(&unchanged).unwrap(), "same\n");
+}
+
+/// A plan that starts where an earlier insertion starts is shifted by that insertion.
+/// 与前一个插入同起点的计划会被该插入偏移。
+#[test]
+fn same_start_plans_are_shifted_by_earlier_ones() {
+    let plan = |id: &str, end: usize, old: &[&str], new: &[&str]| ReplacementPlan {
+        operation_id: id.to_string(),
+        start: 1,
+        end,
+        old_lines: old.iter().map(|line| line.to_string()).collect(),
+        new_lines: new.iter().map(|line| line.to_string()).collect(),
+        match_mode: String::from("apply_patch"),
+    };
+    let plans = vec![
+        plan("insert", 1, &[], &["new-1", "new-2"]),
+        plan("replace", 2, &["old"], &["changed"]),
+    ];
+    let result = super::operation_result(&plans[1], &plans, false, "resource-1");
+    assert_eq!(result["final_range"]["start_line"], json!(4));
+    let first = super::operation_result(&plans[0], &plans, false, "resource-1");
+    assert_eq!(first["final_range"]["start_line"], json!(2));
 }

@@ -47,7 +47,7 @@ cargo run --release -p vulcan-code-tui --bin vulcan-tui -- --backend mock
 | 参数 | 说明 |
 | --- | --- |
 | `--backend service\|mock` | 默认 `service`，连接本机服务；`mock` 为脚本化演示，数据全部为合成数据 |
-| `--service-root <dir>` | 存放 `webui-service.json` 的目录；省略时依次搜索用户目录下的常用服务根 |
+| `--service-root <dir>` | 服务用户根目录，即包含 `code/webui-service.json` 的上级目录；省略时依次搜索用户目录下的常用服务根 |
 | `--locale <tag>` | 界面语言，例如 `zh-TW`；省略时跟随服务的界面语言，再按系统语言匹配 |
 | `--theme dark\|light` | 配色主题，默认 `dark` |
 
@@ -81,7 +81,7 @@ cargo clippy -p vulcan-code-tui --all-targets -- -D warnings
 cargo nextest run -p vulcan-code-tui
 ```
 
-- 仓库根的 [`.cargo/config.toml`](../../.cargo/config.toml) 将编译并发限制为 4、测试线程限制为 4，请勿在验证命令中绕过。
+- 仓库根的 [`.cargo/config.toml`](../../.cargo/config.toml) 将编译并发限制为 16、测试线程限制为 4，请勿在验证命令中绕过。
 - `src/render_smoke_tests.rs` 以无头后端在宽、窄两种尺寸下渲染全部区域与浮层；需要目视检查时设置
   `VULCAN_TUI_SNAPSHOT_DIR=<目录>` 后运行该测试输出快照。
 

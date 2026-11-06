@@ -344,7 +344,13 @@ fn validate_persistent_file(
         ChangeSetFileChangeKind::Modify => {
             reject_present_path(file.old_path.as_deref(), &format!("{location}.old_path"))?;
             reject_present_path(file.new_path.as_deref(), &format!("{location}.new_path"))?;
-            if file.hunks.is_empty() {
+            // Only a format-only change of a file without lines may carry no hunk.
+            // 只有无行文件的纯格式变化可以不带 hunk。
+            let format_only = matches!(
+                (&file.before_text_format, &file.after_text_format),
+                (Some(before), Some(after)) if before != after
+            );
+            if file.hunks.is_empty() && !format_only {
                 return Err(PersistentChangeSetError::new(
                     format!("{location}.hunks"),
                     "modify changes require at least one non-empty hunk",

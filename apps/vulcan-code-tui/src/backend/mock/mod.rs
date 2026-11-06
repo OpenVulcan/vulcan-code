@@ -188,7 +188,7 @@ struct Run {
 
 enum Timer {
     Connect,
-    CommitMessage(VecDeque<String>),
+    CommitMessage(u64, VecDeque<String>),
     FinishCommit {
         message: String,
         new_branch: Option<String>,
@@ -948,19 +948,21 @@ impl World {
                 script::background_turn(&mut background);
                 self.start_script("c-git", background, ExecutionMode::Build, false);
             }
-            Timer::CommitMessage(mut chunks) => match chunks.pop_front() {
+            Timer::CommitMessage(request, mut chunks) => match chunks.pop_front() {
                 Some(chunk) => {
                     self.emit(BackendEvent::CommitMessage {
+                        request,
                         text: chunk,
                         done: false,
                     });
                     self.timers.push((
                         self.after(Duration::from_millis(35)),
-                        Timer::CommitMessage(chunks),
+                        Timer::CommitMessage(request, chunks),
                     ));
                 }
                 None => {
                     self.emit(BackendEvent::CommitMessage {
+                        request,
                         text: String::new(),
                         done: true,
                     });
@@ -1282,7 +1284,7 @@ impl World {
                     GitNotice::Switched(name)
                 }));
             }
-            Command::GenerateGitCommitMessage => {
+            Command::GenerateGitCommitMessage { request, .. } => {
                 self.emit(BackendEvent::GitBusy(Some(GitBusy::Generating)));
                 let message = "feat(tui): animate the thinking overlay and group tool calls\n\n\
                                - fade the overlay out after reasoning completes\n\
@@ -1292,7 +1294,7 @@ impl World {
                     message.split_inclusive(' ').map(str::to_string).collect();
                 self.timers.push((
                     self.after(Duration::from_millis(500)),
-                    Timer::CommitMessage(chunks),
+                    Timer::CommitMessage(request, chunks),
                 ));
             }
             Command::RunGitPullAction => {

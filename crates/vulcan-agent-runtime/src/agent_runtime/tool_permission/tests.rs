@@ -414,9 +414,15 @@ fn trace() -> JudgeTrace {
 /// Exact coordinates of one synthetic tool call.
 /// 一次合成工具调用的精确坐标。
 fn context() -> VulcanToolInvocationContext {
+    context_in_turn(1)
+}
+
+/// Exact coordinates of one synthetic tool call made in `turn`.
+/// 在 `turn` 中发起的一次合成工具调用的精确坐标。
+fn context_in_turn(turn: u64) -> VulcanToolInvocationContext {
     use vulcan_session_core::v1::ids::{ApiCallId, RequestStreamId, Seq, ToolCallId};
     VulcanToolInvocationContext {
-        turn_id: vulcan_session_core::v1::ids::TurnId::try_new(1).expect("synthetic turn"),
+        turn_id: vulcan_session_core::v1::ids::TurnId::try_new(turn).expect("synthetic turn"),
         session_id: SessionId::nil().to_string(),
         request_stream_id: RequestStreamId::try_new("gate-stream").unwrap(),
         api_call_id: ApiCallId::try_new(1).unwrap(),
@@ -1483,6 +1489,19 @@ async fn admit_call(
     user_request: Option<&str>,
     root: &Path,
 ) -> ToolPermissionVerdict {
+    admit_call_in_turn(host, tool, args, user_request, root, 1).await
+}
+
+/// Runs one call like [`admit_call`], made in `turn`.
+/// 与 [`admit_call`] 相同地运行一次调用，发起于 `turn`。
+async fn admit_call_in_turn(
+    host: &Arc<FixedHost>,
+    tool: &str,
+    args: Value,
+    user_request: Option<&str>,
+    root: &Path,
+    turn: u64,
+) -> ToolPermissionVerdict {
     let host: Arc<dyn ToolPermissionHost> = Arc::clone(host) as Arc<dyn ToolPermissionHost>;
     let raw = args.to_string();
     admit_tool_call(
@@ -1494,7 +1513,7 @@ async fn admit_call(
             raw_arguments: Some(&raw),
             user_request,
         },
-        &context(),
+        &context_in_turn(turn),
         Some(root),
     )
     .await
@@ -1817,6 +1836,88 @@ async fn unattended_mode_stops_reviewing_a_call_denied_twice_in_a_row() {
     )
     .await;
     assert_eq!(reviews(), before + 1);
+}
+
+/// A repeated-denial streak belongs to one turn and one exact call: the same text sent in a later
+/// turn, or the same command in another directory, is reviewed again.
+/// 连续拒绝计数属于一个回合与一个确切调用：后续回合发送的相同文本、或另一目录中的相同命令都会重新复核。
+#[tokio::test]
+async fn unattended_repeat_streak_is_per_turn_and_exact_call() {
+    let workspace = tempfile::tempdir().unwrap();
+    let host = unattended(
+        PermissionMode::AutoApprove,
+        Ok(Some(LlmReview {
+            verdict: ReviewVerdict::Deny,
+            reason: String::from("no"),
+            may_allow_blocked: false,
+        })),
+    );
+    let reviews = || host.reviewed.lock().unwrap().len();
+    let push = json!({"command": "git push"});
+    for _ in 0..UNATTENDED_REVIEWED_REPEATS {
+        admit_call(
+            &host,
+            SHELL_COMMAND_TOOL_ID,
+            push.clone(),
+            Some("continue"),
+            workspace.path(),
+        )
+        .await;
+    }
+    let before = reviews();
+    admit_call(
+        &host,
+        SHELL_COMMAND_TOOL_ID,
+        push.clone(),
+        Some("continue"),
+        workspace.path(),
+    )
+    .await;
+    assert_eq!(reviews(), before, "the streak skips review within the turn");
+
+    for _ in 0..UNATTENDED_REVIEWED_REPEATS {
+        admit_call(
+            &host,
+            SHELL_COMMAND_TOOL_ID,
+            push.clone(),
+            Some("continue"),
+            workspace.path(),
+        )
+        .await;
+    }
+    let before = reviews();
+    let elsewhere = json!({"command": "git push", "cwd": "sub"});
+    admit_call(
+        &host,
+        SHELL_COMMAND_TOOL_ID,
+        elsewhere,
+        Some("continue"),
+        workspace.path(),
+    )
+    .await;
+    assert_eq!(reviews(), before + 1, "another directory is another call");
+
+    for _ in 0..UNATTENDED_REVIEWED_REPEATS {
+        admit_call(
+            &host,
+            SHELL_COMMAND_TOOL_ID,
+            push.clone(),
+            Some("continue"),
+            workspace.path(),
+        )
+        .await;
+    }
+    let before = reviews();
+    admit_call_in_turn(
+        &host,
+        SHELL_COMMAND_TOOL_ID,
+        push,
+        Some("continue"),
+        workspace.path(),
+        2,
+    )
+    .await;
+    assert_eq!(reviews(), before + 1, "a new turn starts over");
 }
 
 /// Configuration changes skip the judge and the reviewer: the user approves a previewed change,

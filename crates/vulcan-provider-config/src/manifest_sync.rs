@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const REMOTE_INDEX_MAX_BYTES: u64 = 1024 * 1024;
 /// Maximum accepted bytes for one remote provider manifest.
 /// 单个远端供应商清单接受的最大字节数。
-pub const REMOTE_PROVIDER_MAX_BYTES: u64 = 4 * 1024 * 1024;
+pub const REMOTE_PROVIDER_MAX_BYTES: u64 = vulcan_provider_adapters::MAX_MANIFEST_BYTES as u64;
 /// Index schema version accepted by this engine.
 /// 本引擎接受的 Index Schema 版本。
 pub const INDEX_SCHEMA_VERSION: &str = "vulcan.provider-index.v1";

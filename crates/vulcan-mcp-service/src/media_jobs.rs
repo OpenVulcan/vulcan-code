@@ -66,9 +66,17 @@ pub(crate) struct MediaJob {
     /// Writer kept so cancellation can publish its state.
     /// 保留的写端，使取消可以发布其状态。
     sender: watch::Sender<MediaJobState>,
-    /// Handle that aborts the running provider future.
-    /// 中止运行中供应商 Future 的句柄。
-    abort: Mutex<Option<AbortHandle>>,
+    /// Handle that aborts the running provider future, and whether an abort came first.
+    /// 中止运行中供应商 Future 的句柄，以及中止是否先于句柄到达。
+    abort: Mutex<AbortSlot>,
+}
+
+/// Abort handle of one job; an abort that arrives before the handle is remembered.
+/// 一个任务的中止句柄；先于句柄到达的中止会被记住。
+#[derive(Default)]
+struct AbortSlot {
+    handle: Option<AbortHandle>,
+    aborted: bool,
 }
 
 impl MediaJob {
@@ -93,18 +101,28 @@ impl MediaJob {
 
     /// Records the task handle that runs this job.
     /// 记录运行该任务的句柄。
+    /// A job aborted before this call is aborted at once, so it never keeps running.
+    /// 在此调用之前已被中止的任务会立即中止，因此不会继续运行。
     pub(crate) fn attach_abort(&self, abort: AbortHandle) {
-        if let Ok(mut slot) = self.abort.lock() {
-            *slot = Some(abort);
+        let mut slot = self
+            .abort
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if slot.aborted {
+            abort.abort();
         }
+        slot.handle = Some(abort);
     }
 
     /// Aborts the running future, if any.
     /// 中止运行中的 Future（若有）。
     pub(crate) fn abort(&self) {
-        if let Ok(slot) = self.abort.lock()
-            && let Some(abort) = slot.as_ref()
-        {
+        let mut slot = self
+            .abort
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        slot.aborted = true;
+        if let Some(abort) = slot.handle.as_ref() {
             abort.abort();
         }
     }
@@ -179,7 +197,7 @@ impl MediaJobRegistry {
             owner_id,
             state,
             sender,
-            abort: Mutex::new(None),
+            abort: Mutex::new(AbortSlot::default()),
         });
         jobs.push_back(Arc::clone(&job));
         Ok(job)
@@ -210,5 +228,31 @@ impl MediaJobRegistry {
             keep
         });
         removed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MediaJobRegistry;
+
+    /// A job cancelled before its task handle is attached must not keep running.
+    /// 在附加任务句柄之前被取消的任务不得继续运行。
+    #[tokio::test]
+    async fn abort_before_attach_stops_the_task() {
+        let registry = MediaJobRegistry::default();
+        let job = registry
+            .register(
+                String::from("job"),
+                "client",
+                String::from("model"),
+                String::from("image"),
+                String::from("owner"),
+            )
+            .expect("register job");
+        job.abort();
+        let handle = tokio::spawn(std::future::pending::<()>());
+        job.attach_abort(handle.abort_handle());
+        let joined = handle.await;
+        assert!(joined.is_err_and(|error| error.is_cancelled()));
     }
 }

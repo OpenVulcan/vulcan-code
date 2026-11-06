@@ -25,6 +25,7 @@ use vulcan_host_tools::file_runtime::{
 use vulcan_host_tools::shell_host::HostCommandShell;
 pub use vulcan_permission_judge::JudgeLabel;
 use vulcan_session_core::v1::config::{AccessConfig, PermissionMode};
+use vulcan_session_core::v1::ids::TurnId;
 use vulcan_tools_manager::{
     ResolvedToolDefinition, VulcanToolInvocationContext, VulcanToolSourceKind,
     text_looks_read_only, tool_is_allowed_in_plan_with_args,
@@ -896,11 +897,45 @@ struct SessionMemory {
     denials: Option<DenialStreak>,
 }
 
+/// User request a call is made under: its turn and text, so a later turn sending the same text
+/// (such as "continue") starts afresh.
+/// 调用所属的用户请求：其回合与文本，因此后续回合发送相同文本（如“继续”）时重新开始。
+#[derive(Debug, Clone, Copy)]
+struct RequestScope<'a> {
+    turn_id: TurnId,
+    user_request: Option<&'a str>,
+}
+
+/// Stored form of a [`RequestScope`].
+/// [`RequestScope`] 的存储形式。
+#[derive(Debug)]
+struct StoredRequestScope {
+    turn_id: TurnId,
+    user_request: Option<String>,
+}
+
+impl StoredRequestScope {
+    /// Copies one scope for storage.
+    /// 复制一个作用域以便存储。
+    fn of(scope: RequestScope<'_>) -> Self {
+        Self {
+            turn_id: scope.turn_id,
+            user_request: scope.user_request.map(str::to_string),
+        }
+    }
+
+    /// Whether `scope` is the same user request.
+    /// `scope` 是否为同一用户请求。
+    fn matches(&self, scope: RequestScope<'_>) -> bool {
+        self.turn_id == scope.turn_id && self.user_request.as_deref() == scope.user_request
+    }
+}
+
 /// User request under which a denial invited `declare_intent`.
 /// 拒绝邀请 `declare_intent` 时所属的用户请求。
 #[derive(Debug)]
 struct IntentInvitation {
-    user_request: Option<String>,
+    scope: StoredRequestScope,
 }
 
 /// Consecutive unattended denials of one identical call under one user request.
@@ -908,7 +943,7 @@ struct IntentInvitation {
 #[derive(Debug)]
 struct DenialStreak {
     fingerprint: String,
-    user_request: Option<String>,
+    scope: StoredRequestScope,
     count: u32,
 }
 
@@ -930,12 +965,12 @@ impl PermissionMemory {
 
     /// Whether the last gated call under `user_request` was denied with an invitation to declare.
     /// `user_request` 下最近一次受管控调用是否以邀请声明的方式被拒绝。
-    fn invited(&self, session_id: SessionId, user_request: Option<&str>) -> bool {
+    fn invited(&self, session_id: SessionId, scope: RequestScope<'_>) -> bool {
         self.with(session_id, |memory| {
             memory
                 .invitation
                 .as_ref()
-                .is_some_and(|invitation| invitation.user_request.as_deref() == user_request)
+                .is_some_and(|invitation| invitation.scope.matches(scope))
         })
     }
 
@@ -952,10 +987,10 @@ impl PermissionMemory {
     /// Records whether the latest gated call ended in an inviting denial; anything else ends the
     /// invitation.
     /// 记录最近一次受管控调用是否以邀请式拒绝结束；其他结果都会结束邀请。
-    fn set_invitation(&self, session_id: SessionId, invited: Option<Option<&str>>) {
+    fn set_invitation(&self, session_id: SessionId, invited: Option<RequestScope<'_>>) {
         self.with(session_id, |memory| {
-            memory.invitation = invited.map(|user_request| IntentInvitation {
-                user_request: user_request.map(str::to_string),
+            memory.invitation = invited.map(|scope| IntentInvitation {
+                scope: StoredRequestScope::of(scope),
             });
         });
     }
@@ -968,12 +1003,9 @@ impl PermissionMemory {
 
     /// Consecutive denials of this identical call under the same user request.
     /// 同一用户请求下本相同调用的连续拒绝次数。
-    fn denials(&self, session_id: SessionId, fingerprint: &str, user_request: Option<&str>) -> u32 {
+    fn denials(&self, session_id: SessionId, fingerprint: &str, scope: RequestScope<'_>) -> u32 {
         self.with(session_id, |memory| match &memory.denials {
-            Some(streak)
-                if streak.fingerprint == fingerprint
-                    && streak.user_request.as_deref() == user_request =>
-            {
+            Some(streak) if streak.fingerprint == fingerprint && streak.scope.matches(scope) => {
                 streak.count
             }
             _ => 0,
@@ -982,12 +1014,12 @@ impl PermissionMemory {
 
     /// Counts one more denial of this call; a different call starts a new streak.
     /// 为本调用多计一次拒绝；不同调用开始新的连续计数。
-    fn note_denial(&self, session_id: SessionId, fingerprint: &str, user_request: Option<&str>) {
-        let count = self.denials(session_id, fingerprint, user_request) + 1;
+    fn note_denial(&self, session_id: SessionId, fingerprint: &str, scope: RequestScope<'_>) {
+        let count = self.denials(session_id, fingerprint, scope) + 1;
         self.with(session_id, |memory| {
             memory.denials = Some(DenialStreak {
                 fingerprint: fingerprint.to_string(),
-                user_request: user_request.map(str::to_string),
+                scope: StoredRequestScope::of(scope),
                 count,
             });
         });
@@ -1000,25 +1032,17 @@ impl PermissionMemory {
     }
 }
 
-/// Identity of one call for repeat counting: the tool and what it affects, without the reasons
-/// the agent attached, so a retry that only adds a `purpose` counts as the same call.
-/// 用于重复计数的调用身份：工具及其影响对象，不含代理附加的理由，因此只补充 `purpose` 的重试视为
-/// 同一调用。
-fn call_fingerprint(tool_name: &str, subject: &PermissionSubject, args: &Value) -> String {
-    let affected = match subject {
-        PermissionSubject::Command { text, shell } => format!("{shell:?}\n{text}"),
-        PermissionSubject::FileWrite { paths } => paths.join("\n"),
-        PermissionSubject::Ungoverned
-        | PermissionSubject::Opaque
-        | PermissionSubject::Configuration { .. } => {
-            let mut args = args.clone();
-            if let Some(object) = args.as_object_mut() {
-                object.remove("purpose");
-            }
-            args.to_string()
-        }
-    };
-    format!("{tool_name}\n{affected}")
+/// Identity of one call for repeat counting: the tool and every argument except the reasons the
+/// agent attached, so a retry that only adds a `purpose` counts as the same call, while new file
+/// content or another working directory is a new call.
+/// 用于重复计数的调用身份：工具及除代理附加理由外的全部参数，因此只补充 `purpose` 的重试视为同一
+/// 调用，而新的文件内容或另一个工作目录则是新调用。
+fn call_fingerprint(tool_name: &str, args: &Value) -> String {
+    let mut args = args.clone();
+    if let Some(object) = args.as_object_mut() {
+        object.remove("purpose");
+    }
+    format!("{tool_name}\n{args}")
 }
 
 /// Non-blank `purpose` of a command tool call, cut to the reviewer's limit.
@@ -1064,10 +1088,14 @@ pub async fn admit_tool_call(
         return ToolPermissionVerdict::Proceed;
     };
     let native = definition.descriptor.source == VulcanToolSourceKind::Native;
+    let scope = RequestScope {
+        turn_id: context.turn_id,
+        user_request: texts.user_request,
+    };
     if native && definition.descriptor.id == DECLARE_INTENT_TOOL_ID {
         let Some(memory) = host
             .memory()
-            .filter(|memory| memory.invited(session_id, texts.user_request))
+            .filter(|memory| memory.invited(session_id, scope))
         else {
             return ToolPermissionVerdict::Deny(String::from(DECLARE_INTENT_UNINVITED));
         };
@@ -1111,15 +1139,13 @@ pub async fn admit_tool_call(
     } else {
         None
     };
-    let fingerprint = call_fingerprint(&definition.descriptor.id, &subject, args);
+    let fingerprint = call_fingerprint(&definition.descriptor.id, args);
     if unattended.is_some() {
         let memory = host.memory();
         if let Some(memory) = memory {
             memory.set_invitation(session_id, None);
         }
-        let repeated = memory.map_or(0, |memory| {
-            memory.denials(session_id, &fingerprint, texts.user_request)
-        });
+        let repeated = memory.map_or(0, |memory| memory.denials(session_id, &fingerprint, scope));
         if repeated >= UNATTENDED_REVIEWED_REPEATS {
             return ToolPermissionVerdict::Deny(format!(
                 "This identical call was already denied {UNATTENDED_REVIEWED_REPEATS} times in a row, so it was denied again without review. Take another approach, or skip this step and leave it for the user's later instructions while you finish the rest of the task."
@@ -1157,15 +1183,12 @@ pub async fn admit_tool_call(
     )
     .await;
     if let Some(memory) = host.memory() {
-        memory.set_invitation(
-            session_id,
-            decision.invites_intent.then_some(texts.user_request),
-        );
+        memory.set_invitation(session_id, decision.invites_intent.then_some(scope));
         if !attended {
             match decision.verdict {
                 ToolPermissionVerdict::Proceed => memory.clear_denials(session_id),
                 ToolPermissionVerdict::Deny(_) | ToolPermissionVerdict::Fail(_) => {
-                    memory.note_denial(session_id, &fingerprint, texts.user_request);
+                    memory.note_denial(session_id, &fingerprint, scope);
                 }
             }
         }

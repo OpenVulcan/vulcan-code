@@ -103,8 +103,12 @@ pub enum Command {
     /// `switchWorkspaceGitBranch`; `create` makes a new branch from HEAD.
     /// `create` 表示从 HEAD 新建分支。
     SwitchWorkspaceGitBranch { name: String, create: bool },
-    /// `generateGitCommitMessage`
-    GenerateGitCommitMessage,
+    /// `generateGitCommitMessage`; `request` is echoed back so only its dialog takes the result.
+    /// `request` 会原样回传，只有发起它的对话框接收结果。
+    GenerateGitCommitMessage {
+        request: u64,
+        include_unstaged: bool,
+    },
     /// `runGitCommitAction`; an empty message with `push` only pushes.
     /// 消息为空且 `push` 时只推送。
     RunGitCommitAction {
@@ -334,6 +338,7 @@ pub enum BackendEvent {
     /// Streaming commit message generation; `done` closes the stream.
     /// 流式生成提交信息；`done` 结束该流。
     CommitMessage {
+        request: u64,
         text: String,
         done: bool,
     },

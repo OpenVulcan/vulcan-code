@@ -63,7 +63,10 @@ impl PtyScreenFrameState {
             return None;
         }
         self.parser.process(text.as_bytes());
-        if self.parser.screen().contents().trim().is_empty() {
+        // A blank screen is only skipped before the first frame; once a frame exists, clearing the
+        // screen is a visible change the checkpoint must follow.
+        // 空白屏幕只在首帧之前跳过；已有帧之后，清屏是检查点必须跟随的可见变化。
+        if self.frame_seq == 0 && self.parser.screen().contents().trim().is_empty() {
             return None;
         }
         let frame_text =

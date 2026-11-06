@@ -614,8 +614,25 @@ fn encode_without_bom(text: &str, encoding: TextEncoding) -> Result<Vec<u8>, Tex
             .flat_map(|character| u32::from(character).to_be_bytes())
             .collect::<Vec<_>>()),
         TextEncoding::Legacy(legacy) => {
-            let (encoded, _actual, had_errors) = legacy.encode(text);
-            if had_errors {
+            let (encoded, actual, had_errors) = legacy.encode(text);
+            // Some labels encode as another encoding (such as UTF-8 for "replacement").
+            // 某些标签实际以其他编码输出（例如 "replacement" 输出 UTF-8）。
+            if actual != legacy {
+                return Err(TextCodecError::new(
+                    "unsupported_encoding",
+                    format!(
+                        "{} cannot be written; it encodes as {}.",
+                        legacy.name(),
+                        actual.name()
+                    ),
+                ));
+            }
+            // Mappings such as Shift_JIS ¥ to 0x5C read back as another character; refuse them.
+            // 诸如 Shift_JIS 把 ¥ 映射为 0x5C 的情况读回后会变成其他字符，因此拒绝。
+            let round_trip = legacy
+                .decode_without_bom_handling_and_without_replacement(&encoded)
+                .is_some_and(|decoded| decoded == text);
+            if had_errors || !round_trip {
                 return Err(TextCodecError::new(
                     "encoding_unrepresentable",
                     format!(
@@ -696,6 +713,23 @@ mod tests {
                 .expect("Unicode BOM should encode");
             assert_eq!(encoded, original);
         }
+    }
+
+    /// Legacy writes that would read back as other text, or encode as another encoding, are refused.
+    /// 读回后会变成其他文本或实际以其他编码输出的传统编码写入会被拒绝。
+    #[test]
+    fn legacy_writes_must_read_back_unchanged() {
+        let shift_jis = parse_encoding_label("shift_jis").expect("Shift_JIS label");
+        let error = encode_text("¥100", shift_jis, TextBom::None).expect_err("¥ maps to 0x5C");
+        assert_eq!(error.code, "encoding_unrepresentable");
+        assert_eq!(
+            encode_text("C:\\path", shift_jis, TextBom::None).expect("backslash round-trips"),
+            b"C:\\path"
+        );
+        let replacement = parse_encoding_label("replacement").expect("replacement label");
+        let error = encode_text("text", replacement, TextBom::None)
+            .expect_err("replacement encodes as UTF-8");
+        assert_eq!(error.code, "unsupported_encoding");
     }
 
     /// Verifies strong BOM-less UTF-16 byte patterns are detected in both byte orders.

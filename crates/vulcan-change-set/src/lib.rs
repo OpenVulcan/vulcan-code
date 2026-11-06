@@ -640,8 +640,25 @@ fn compact_optional_usize(value: Option<&Value>) -> Option<usize> {
 
 /// Normalizes mixed newline sequences into `\n` so textual comparisons stay deterministic across platforms.
 /// 将混合换行序列规范化为 `\n`，使跨平台文本比较保持确定性。
+/// Pairs are read left to right like the host text document, so `\n\r` is one break, as `\r\n` is.
+/// 换行对按与宿主文本文档相同的从左到右方式读取，因此 `\n\r` 与 `\r\n` 一样算一个换行。
 fn normalize_text(text: &str) -> String {
-    text.replace("\r\n", "\n").replace('\r', "\n")
+    let mut normalized = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(current) = chars.next() {
+        match current {
+            '\r' => {
+                chars.next_if_eq(&'\n');
+                normalized.push('\n');
+            }
+            '\n' => {
+                chars.next_if_eq(&'\r');
+                normalized.push('\n');
+            }
+            other => normalized.push(other),
+        }
+    }
+    normalized
 }
 
 /// Splits normalized text into logical lines while preserving empty trailing results when they matter for line counts.

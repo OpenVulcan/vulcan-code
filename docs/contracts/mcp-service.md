@@ -66,7 +66,7 @@ MCP 服务器）是两件事，互不共享配置。实现以下列源码为准�
    `MCP_STATUS_POLL_INTERVAL` 读取实时运行阶段、待回答问题与排队提示词。结果状态为 `running`、
    `waiting_for_answer`、`waiting_for_approval`、`idle`、`failed`、`stopped` 之一，并附 `cursor`；
    仍在运行时用 `wait_for_reply` 以 `after_seq` 带上 `cursor` 继续等待，不会重复读到已返回的内容。
-4. **读取。** `read_messages` 合并已持久化与常驻内存的事件，按 `after_seq` 分页并返回 `next_seq`，单次上限
+4. **读取。** `read_messages` 合并已持久化与常驻内存的事件，按 `after_seq` 分页并返回 `cursor` 与 `has_more`，单次上限
    `MCP_MAX_READ_LIMIT`；工具输出只保留 `MCP_TOOL_OUTPUT_PREVIEW_CHARS` 字符预览，宿主专用事件不投影。
    常驻事件在读取闭包内过滤，状态轮询不复制整段会话。
 

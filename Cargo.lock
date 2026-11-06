@@ -9988,6 +9988,7 @@ dependencies = [
  "url",
  "uuid",
  "vulcan-ai-contract",
+ "vulcan-change-set",
  "vulcan-i18n",
  "vulcan-product-info",
  "vulcan-runtime-assets",

@@ -37,6 +37,10 @@ const PROJECT_TERMINAL_CONTROL_TIMEOUT: Duration = Duration::from_secs(2);
 /// 限制单个终端的排队控制数量，避免卡死宿主导致服务内存无界增长。
 const PROJECT_TERMINAL_CONTROL_QUEUE_LIMIT: usize = 128;
 
+/// Longest project terminal name, in Unicode scalar values, for creation and renaming alike.
+/// 项目终端名称的最大长度（Unicode 标量值），创建与重命名共用。
+const PROJECT_TERMINAL_NAME_MAX_CHARS: usize = 128;
+
 /// Defines the grace period before an unresponsive stopped project terminal host is forcibly reaped.
 /// 定义停止请求后无响应项目终端宿主被强制回收前的宽限时间。
 const PROJECT_TERMINAL_HOST_STOP_GRACE: Duration = Duration::from_secs(2);
@@ -932,9 +936,9 @@ impl ProjectTerminalRuntime {
         if name.is_empty() {
             return Err(String::from("Project terminal name must not be empty."));
         }
-        if name.chars().count() > 128 {
-            return Err(String::from(
-                "Project terminal name must not exceed 128 characters.",
+        if name.chars().count() > PROJECT_TERMINAL_NAME_MAX_CHARS {
+            return Err(format!(
+                "Project terminal name must not exceed {PROJECT_TERMINAL_NAME_MAX_CHARS} characters."
             ));
         }
         let record = self.terminal_for_project(project_id, terminal_id)?;
@@ -1096,9 +1100,9 @@ fn validate_project_terminal_start_request(
     if request.name.trim().is_empty() {
         return Err(String::from("Project terminal name must not be empty."));
     }
-    if request.name.trim().chars().count() > 128 {
-        return Err(String::from(
-            "Project terminal name must not exceed 128 characters.",
+    if request.name.trim().chars().count() > PROJECT_TERMINAL_NAME_MAX_CHARS {
+        return Err(format!(
+            "Project terminal name must not exceed {PROJECT_TERMINAL_NAME_MAX_CHARS} characters."
         ));
     }
     if request.shell_id.trim().is_empty() || request.program.trim().is_empty() {

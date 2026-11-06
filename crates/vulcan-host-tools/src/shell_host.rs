@@ -13,7 +13,7 @@ const POWERSHELL_UTF8_STDIN_PRELUDE: &str = "try { [Console]::InputEncoding = $O
 /// Whether a PowerShell command starts with a statement that no other statement may precede.
 /// PowerShell 命令是否以不允许任何语句前置的语句开头。
 fn must_lead_powershell_script(command_text: &str) -> bool {
-    let start = command_text.trim_start().to_ascii_lowercase();
+    let start = skip_powershell_leading_comments(command_text).to_ascii_lowercase();
     start.starts_with("#requires")
         || start.starts_with("[cmdletbinding")
         || ["using", "param"].iter().any(|keyword| {
@@ -21,6 +21,34 @@ fn must_lead_powershell_script(command_text: &str) -> bool {
                 rest.starts_with(|character: char| character.is_whitespace() || character == '(')
             })
         })
+}
+
+/// Skips the whitespace and comments a PowerShell script may place before its leading statement.
+/// 跳过 PowerShell 脚本在首条语句之前可以放置的空白与注释。
+///
+/// `#requires` is itself a leading statement and stops the scan; an unterminated block comment is
+/// returned as is, so the caller treats it as an ordinary script.
+/// `#requires` 本身就是首条语句并终止扫描；未闭合的块注释原样返回，调用方按普通脚本处理。
+fn skip_powershell_leading_comments(command_text: &str) -> &str {
+    let mut rest = command_text.trim_start();
+    loop {
+        if let Some(block) = rest.strip_prefix("<#") {
+            match block.find("#>") {
+                Some(end) => rest = block[end + 2..].trim_start(),
+                None => return rest,
+            }
+        } else if rest.starts_with('#')
+            && !rest
+                .get(..9)
+                .is_some_and(|head| head.eq_ignore_ascii_case("#requires"))
+        {
+            rest = rest
+                .find('\n')
+                .map_or("", |end| rest[end + 1..].trim_start());
+        } else {
+            return rest;
+        }
+    }
 }
 
 /// One supported host shell family that may be exposed to AI tools and WebUI settings.
@@ -681,6 +709,7 @@ mod tests {
                 "  #Requires -Version 7\n$x",
                 "param($a)\n$a",
                 "[CmdletBinding()]\nparam()",
+                "# reads stdin\n<# block\ncomment #>\nparam($a)\n$a",
             ] {
                 assert_eq!(shell.command_text_for_utf8_stdin(leading), leading);
             }
@@ -695,6 +724,10 @@ mod tests {
         assert_ne!(
             cfg!(windows),
             HostCommandShell::Pwsh.command_text_for_utf8_stdin("usingFoo") == "usingFoo"
+        );
+        assert_ne!(
+            cfg!(windows),
+            HostCommandShell::Pwsh.command_text_for_utf8_stdin("# note\n$x") == "# note\n$x"
         );
     }
 }

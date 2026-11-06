@@ -11,6 +11,10 @@ pub const PROVIDER_RETRY_MAX_RETRIES: u32 = 100;
 /// 初始请求后的限流重试所使用的宿主硬上限。
 pub const PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES: u32 = 100_000;
 
+/// Hard host ceiling for one rate-limit retry wait, shared by the settings page and the runtime.
+/// 单次限流重试等待的宿主硬上限，由设置页与运行时共享。
+pub const PROVIDER_RATE_LIMIT_RETRY_MAX_DELAY_MS: u64 = 1_800_000;
+
 /// Built-in error keywords that mark a dispatched failure as a replayable transient interruption.
 /// 将已分派失败标记为可重放瞬态中断的内置错误关键词。
 ///

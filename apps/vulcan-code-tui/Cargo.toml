@@ -40,6 +40,9 @@ open.workspace = true
 # Context-window input parsing and fit rule shared with the service.
 # 与服务共用的上下文窗口输入解析与适配规则。
 vulcan-ai-contract.workspace = true
+# Change-set kinds decide where create/delete line counts live.
+# 变更集类型决定创建/删除行数所在的位置。
+vulcan-change-set.workspace = true
 vulcan-i18n.workspace = true
 vulcan-product-info.workspace = true
 # Shared service DTOs and v1 conversation event types; the TUI reads the wire through them.

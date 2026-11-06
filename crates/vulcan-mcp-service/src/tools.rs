@@ -271,7 +271,7 @@ pub(crate) fn tool_definitions(client: &McpServiceClient) -> Vec<Value> {
 /// 等待行为的共享说明。
 fn wait_note() -> String {
     format!(
-        "`wait_seconds` (default {MCP_DEFAULT_WAIT_SECONDS}, max {MCP_MAX_WAIT_SECONDS}, 0 = do not wait) bounds how long this call blocks. Keep it below your own tool-call timeout; when the result says `running`, call `wait_for_reply` again with the returned `next_seq`."
+        "`wait_seconds` (default {MCP_DEFAULT_WAIT_SECONDS}, max {MCP_MAX_WAIT_SECONDS}, 0 = do not wait) bounds how long this call blocks. Keep it below your own tool-call timeout; when the result says `running`, call `wait_for_reply` again with the returned `cursor` as `after_seq`."
     )
 }
 
@@ -286,10 +286,10 @@ fn tool_description(name: &str) -> String {
             "List active Vulcan Code conversations (sessions) newest first, with run phase and whether one waits for an answer. Filter by project or by running state.",
         ),
         names::GET_SESSION => String::from(
-            "Get one session's live status: run phase, pending questions (including permission approvals that only the user can decide), queued prompts, and the current `next_seq` event cursor.",
+            "Get one session's live status: run phase, pending questions (including permission approvals that only the user can decide), queued prompts, and the current event `cursor`.",
         ),
         names::READ_MESSAGES => format!(
-            "Read a session's transcript after an event cursor: user messages, assistant replies, tool calls, turn ends, and notices. Omit `after_seq` to read the most recent {MCP_DEFAULT_READ_LIMIT} events; pass the returned `next_seq` to continue."
+            "Read a session's transcript after an event cursor: user messages, assistant replies, tool calls, turn ends, and notices. Omit `after_seq` to read the most recent {MCP_DEFAULT_READ_LIMIT} events; pass the returned `cursor` as `after_seq` to continue while `has_more` is true."
         ),
         names::WAIT_FOR_REPLY => format!(
             "Block until a session finishes its current work, asks a question, or the wait ends, then return the reply and new messages after `after_seq`. {}",

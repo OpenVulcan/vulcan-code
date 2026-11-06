@@ -254,6 +254,18 @@ fn read_source(
     // Its existing raw-file cap still applies; the destination limit measures decoded UTF-8.
     // 其既有原始文件上限仍生效；目标上限衡量解码后的 UTF-8。
     let snapshot = read_snapshot(path)?;
+    // A preview-only legacy guess may be wrong text; it must not be stored as the file's content.
+    // 仅供预览的传统编码猜测可能是错误文本，不能作为文件内容保存。
+    if !snapshot.document.encoding_certain {
+        return Err(FileToolError::new(
+            "encoding_ambiguous",
+            format!(
+                "The automatic encoding candidate {} is unverified for {}. Convert the file to UTF-8 before transferring it.",
+                snapshot.document.encoding.label(),
+                display_path(path),
+            ),
+        ));
+    }
     if snapshot.document.text.len() > limit {
         return Err(FileToolError::new(
             "transfer_file_limit",
@@ -382,5 +394,24 @@ mod tests {
             &["a", "b", "c.md"],
             &["*".into(), "*.md".into()]
         ));
+    }
+
+    /// A short legacy file whose encoding is only a guess is refused instead of stored as guessed text.
+    /// 编码仅为猜测的短传统编码文件会被拒绝，而不是按猜测文本保存。
+    #[test]
+    fn unverified_encodings_are_not_transferred() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("guess.txt"), b"caf\xE9").unwrap();
+        fs::write(root.path().join("plain.txt"), "plain").unwrap();
+        let batch = collect_local_text_sources(
+            root.path(),
+            &["guess.txt".into(), "plain.txt".into()],
+            2,
+            32,
+            64,
+        )
+        .unwrap();
+        assert_eq!(batch.sources.len(), 1);
+        assert_eq!(batch.failures[0].code, "encoding_ambiguous");
     }
 }

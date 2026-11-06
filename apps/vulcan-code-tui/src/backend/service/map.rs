@@ -8,6 +8,9 @@
 // 只有 DTO 位于服务内核的 Git 快照仍从 JSON 读取。只投影 TUI 渲染所需的内容。
 
 use serde_json::{Value, json};
+use vulcan_change_set::{
+    ChangeSetFileChangeKind, PersistentChangeSetFile, PersistentChangeSetHunk,
+};
 use vulcan_service_api as api;
 use vulcan_session_core::v1::lifetime_usage::SessionUsageBucket;
 use vulcan_session_core::v1::service_dto::ConversationEventSummary;
@@ -496,8 +499,18 @@ pub fn goal(goal: &api::SessionGoalSummary) -> Goal {
 /// Leading number of a display label such as a score or a profile priority; 0 when absent.
 /// 分数或画像优先级等显示标签开头的数字；缺失时为 0。
 fn label_number<T: std::str::FromStr + Default>(label: &str) -> T {
-    label.trim().parse().unwrap_or_default()
+    // Profile markers arrive as `P1`, `L2` or `W3`; only the number is kept.
+    // 画像标记以 `P1`、`L2` 或 `W3` 下发，只保留数字部分。
+    label
+        .trim()
+        .trim_start_matches(|c: char| c.is_ascii_alphabetic())
+        .parse()
+        .unwrap_or_default()
 }
+
+/// Dynamic card tag the service uses for VMM memories past their TTL.
+/// 服务用于已超过 TTL 的 VMM 记忆的动态卡片标签。
+const EXPIRED_MEMORY_CARD_TAG: &str = "VMM_MEMORY_EXPIRED";
 
 /// Context injection → dynamic memory cards and the static profile.
 /// 上下文注入 → 动态记忆卡片与静态画像。
@@ -527,9 +540,16 @@ pub fn context_injection(snapshot: &api::ContextInjectionSnapshot) -> ContextInj
         source: item.source_display.clone().unwrap_or_default(),
         dialogue: None,
     };
-    let dynamic = snapshot
+    let (expired_cards, active_cards): (Vec<_>, Vec<_>) = snapshot
         .dynamic_cards
         .iter()
+        .partition(|card| card.tag == EXPIRED_MEMORY_CARD_TAG);
+    let expired = expired_cards
+        .into_iter()
+        .flat_map(|card| card.items.iter().map(memory))
+        .collect();
+    let dynamic = active_cards
+        .into_iter()
         .map(|card| MemoryCard {
             tag: card.tag.clone(),
             description: card.description.clone(),
@@ -565,11 +585,9 @@ pub fn context_injection(snapshot: &api::ContextInjectionSnapshot) -> ContextInj
                 .collect(),
         })
         .collect();
-    // The service drops expired injections from `dynamicCards`, so there is no expired list.
-    // 服务会从 `dynamicCards` 中移除已过期的注入，因此没有过期列表。
     ContextInjection {
         dynamic,
-        expired: Vec::new(),
+        expired,
         profile,
     }
 }
@@ -599,10 +617,37 @@ fn changeset(call: &core::ToolCallEvent) -> Vec<ChangesetFile> {
                 .or_else(|| file.path.clone())
                 .or_else(|| file.old_path.clone())
                 .unwrap_or_default(),
-            additions: file.hunks.iter().map(|h| h.inserted.len() as u32).sum(),
-            deletions: file.hunks.iter().map(|h| h.deleted.len() as u32).sum(),
+            additions: changeset_line_count(file, ChangeSetFileChangeKind::Create, |hunk| {
+                hunk.inserted.len()
+            }),
+            deletions: changeset_line_count(file, ChangeSetFileChangeKind::Delete, |hunk| {
+                hunk.deleted.len()
+            }),
         })
         .collect()
+}
+
+/// Lines one file record adds or removes, matching the WebUI change summary.
+/// 一条文件记录新增或删除的行数，与 WebUI 变更摘要一致。
+/// `whole` is the kind whose lifecycle text counts entirely; the opposite lifecycle kind counts none.
+/// `whole` 为生命周期正文整体计入的类型；相反的生命周期类型不计入。
+fn changeset_line_count(
+    file: &PersistentChangeSetFile,
+    whole: ChangeSetFileChangeKind,
+    hunk_lines: impl Fn(&PersistentChangeSetHunk) -> usize,
+) -> u32 {
+    let lines = match file.change {
+        kind if kind == whole => file
+            .lifecycle_content
+            .as_ref()
+            .and_then(|content| content.total_line_count())
+            .unwrap_or(0),
+        ChangeSetFileChangeKind::Create | ChangeSetFileChangeKind::Delete => 0,
+        ChangeSetFileChangeKind::Modify | ChangeSetFileChangeKind::Rename => {
+            file.hunks.iter().map(hunk_lines).sum()
+        }
+    };
+    u32::try_from(lines).unwrap_or(u32::MAX)
 }
 
 /// Milliseconds since the epoch as a display count; pre-epoch values clamp to zero.
@@ -974,6 +1019,55 @@ mod tests {
         }))
         .expect("turn boundary summary matches the shared DTO");
         assert!(super::event(&boundary).is_none());
+    }
+
+    /// Created and deleted files count their lifecycle text, as the WebUI summary does.
+    /// 创建与删除的文件按生命周期正文计数，与 WebUI 摘要一致。
+    #[test]
+    fn lifecycle_files_count_their_whole_text() {
+        let file = |change: &str| {
+            let tool: ConversationEventSummary = serde_json::from_value(json!({
+                "seq": 4, "turn_id": 2, "created_at_ms": 1, "updated_at_ms": 2, "event_revision": 1,
+                "visibility": "provider",
+                "event": {"kind": "tool_call", "api_call_id": 3, "tool_call_id": 4,
+                    "request_stream_id": "stream-1", "tool_name": "write", "input": {"path": "a"},
+                    "status": "completed", "output": {"model_output": "ok", "is_error": false},
+                    "changeset": {"mode": "applied", "files": [{"change": change, "path": "a.rs",
+                        "hunks": [], "lifecycle_content": {"mode": "full",
+                            "content": "a\nb\nc\n", "total_line_count": 3}}]}}
+            }))
+            .expect("tool call summary matches the shared DTO");
+            let EventBody::ToolCall { changeset, .. } = event(&tool).unwrap().body else {
+                panic!("expected a tool call");
+            };
+            (changeset[0].additions, changeset[0].deletions)
+        };
+        assert_eq!(file("create"), (3, 0));
+        assert_eq!(file("delete"), (0, 3));
+    }
+
+    /// Profile markers keep their numbers, and expired memories leave the active cards.
+    /// 画像标记保留数字，过期记忆不再出现在活动卡片中。
+    #[test]
+    fn context_injection_keeps_profile_numbers_and_expired_memories() {
+        let item = |content: &str| {
+            json!({"content": content, "detail": "", "turnLabel": null, "ttlLabel": "",
+                "sourceDisplay": null})
+        };
+        let snapshot: api::ContextInjectionSnapshot = serde_json::from_value(json!({
+            "dynamicCards": [
+                {"tag": "VMM_MEMORY", "description": "", "items": [item("active")]},
+                {"tag": "VMM_MEMORY_EXPIRED", "description": "", "items": [item("old")]}
+            ],
+            "staticCards": []
+        }))
+        .expect("snapshot matches the shared DTO");
+        let mapped = context_injection(&snapshot);
+        assert_eq!(mapped.dynamic.len(), 1);
+        assert_eq!(mapped.dynamic[0].items.len(), 1);
+        assert_eq!(mapped.expired.len(), 1);
+        assert_eq!(label_number::<u32>("P1"), 1);
+        assert_eq!(label_number::<u32>("W3"), 3);
     }
 
     /// A memory recall record becomes a note carrying its queries; a failed recall warns.

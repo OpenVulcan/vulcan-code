@@ -600,25 +600,28 @@ impl Worker {
 
     /// Asynchronously requests a commit message for the selected workspace.
     /// 异步请求所选工作区的提交信息。
-    pub(super) fn git_generate_message(&mut self) {
+    /// `request` is echoed in the result; `include_unstaged` is the dialog's own choice.
+    /// `request` 随结果回传；`include_unstaged` 为对话框自身的选择。
+    pub(super) fn git_generate_message(&mut self, request: u64, include_unstaged: bool) {
         // Exact protocol request.
         // 协议请求文档。
-        let request = json!({
+        let params = json!({
             "request": {
                 "conversationId": self.selected_real(),
                 "workspacePath": self.git.workspace,
                 "repositoryKey": self.git.repository_key,
-                "includeUnstaged": self.git.staged.is_empty(),
+                "includeUnstaged": include_unstaged,
             },
         });
         self.emit(BackendEvent::GitBusy(Some(GitBusy::Generating)));
         self.spawn_call(
             "service_generate_git_commit_message",
-            request,
-            |worker, result| {
+            params,
+            move |worker, result| {
                 worker.emit(BackendEvent::GitBusy(None));
                 match result {
                     Ok(value) => worker.emit(BackendEvent::CommitMessage {
+                        request,
                         text: str_at(&value, "message"),
                         done: true,
                     }),

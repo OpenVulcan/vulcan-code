@@ -216,6 +216,9 @@ struct Utf16StreamDecoder {
     /// Optional dangling byte retained from the prior chunk until the next chunk arrives.
     /// 从上一分片保留到下一分片的可选悬空字节。
     pending_byte: Option<u8>,
+    /// Trailing high surrogate retained until the next chunk can supply its low half.
+    /// 保留到下一分片提供低位代理之前的尾部高位代理码元。
+    pending_high_surrogate: Option<u16>,
 }
 
 impl Utf16StreamDecoder {
@@ -225,6 +228,7 @@ impl Utf16StreamDecoder {
         Self {
             little_endian,
             pending_byte: None,
+            pending_high_surrogate: None,
         }
     }
 
@@ -232,7 +236,8 @@ impl Utf16StreamDecoder {
     /// 解码一段 UTF-16 字节分片，并在需要时把最终悬空字节刷新为替代字符。
     fn decode_bytes(&mut self, bytes: &[u8], is_last: bool) -> String {
         let mut code_units =
-            Vec::with_capacity((bytes.len() + usize::from(self.pending_byte.is_some())) / 2);
+            Vec::with_capacity((bytes.len() + usize::from(self.pending_byte.is_some())) / 2 + 1);
+        code_units.extend(self.pending_high_surrogate.take());
         for byte in bytes.iter().copied() {
             match self.pending_byte.take() {
                 Some(first_byte) => {
@@ -249,6 +254,15 @@ impl Utf16StreamDecoder {
             }
         }
 
+        // A pair split across chunks waits for its low half instead of decoding as two replacements.
+        // 跨分片的代理对等待其低位一半，而不是被解码为两个替代字符。
+        if !is_last
+            && code_units
+                .last()
+                .is_some_and(|unit| (0xD800..=0xDBFF).contains(unit))
+        {
+            self.pending_high_surrogate = code_units.pop();
+        }
         let mut decoded_text = decode_utf16(code_units)
             .map(|result| result.unwrap_or(char::REPLACEMENT_CHARACTER))
             .collect::<String>();
@@ -470,5 +484,19 @@ mod tests {
     fn preferred_legacy_shell_encoding_from_locale_maps_simplified_chinese_to_gb18030() {
         let encoding = preferred_legacy_shell_encoding_from_locale(Some("zh-CN"));
         assert_eq!(encoding.name(), "gb18030");
+    }
+
+    /// Verifies a UTF-16 surrogate pair split between chunks decodes as one character.
+    /// 验证跨分片拆开的 UTF-16 代理对被解码为一个字符。
+    #[test]
+    fn utf16_stream_decoder_keeps_split_surrogate_pairs() {
+        let bytes: Vec<u8> = "a😀b".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let mut decoder = super::Utf16StreamDecoder::new(true);
+        let first = decoder.decode_bytes(&bytes[..4], false);
+        let second = decoder.decode_bytes(&bytes[4..], true);
+        assert_eq!(format!("{first}{second}"), "a😀b");
+        let mut decoder = super::Utf16StreamDecoder::new(true);
+        let dangling = decoder.decode_bytes(&bytes[..4], true);
+        assert_eq!(dangling, format!("a{}", char::REPLACEMENT_CHARACTER));
     }
 }

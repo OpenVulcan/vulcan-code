@@ -3,6 +3,8 @@ use std::io::Read;
 
 #[cfg(test)]
 mod media_delivery_tests;
+#[cfg(test)]
+mod project_configuration_tests;
 
 /// Maximum bytes accepted for any persisted Vulcan Code configuration document.
 /// 任一持久化 Vulcan Code 配置文档允许接受的最大字节数。

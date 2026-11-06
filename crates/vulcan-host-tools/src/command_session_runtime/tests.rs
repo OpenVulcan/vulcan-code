@@ -220,6 +220,18 @@ fn pty_screen_frame_state_builds_formatted_vt_checkpoint() {
     assert!(second.3.contains("four"));
 }
 
+/// A screen cleared after the first frame must move the checkpoint, while a blank start stays quiet.
+/// 首帧之后清屏必须更新检查点，而空白的初始屏幕不产生帧。
+#[test]
+fn pty_screen_frame_state_follows_a_cleared_screen() {
+    let mut state = PtyScreenFrameState::new(3, 80);
+    assert!(state.push_output("\x1b[2J").is_none());
+    state.push_output("visible").expect("first frame");
+    let cleared = state.push_output("\x1b[2J\x1b[H").expect("cleared frame");
+    assert_eq!(cleared.0, 2);
+    assert!(!cleared.3.contains("visible"));
+}
+
 /// Best-effort live snapshots should expose the latest shared state to synchronous WebUI callers without crossing ownership boundaries.
 /// 尽力而为的实时快照应在不跨越归属边界的前提下，把最新共享状态暴露给同步 WebUI 调用方。
 #[test]

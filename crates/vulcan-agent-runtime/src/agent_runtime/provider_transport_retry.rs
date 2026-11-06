@@ -3,8 +3,8 @@
 
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::provider_config::{
-    PROVIDER_RETRY_MAX_RETRIES, PersistedProviderRetryConfiguration,
-    normalize_provider_rate_limit_retry_max_retries,
+    PROVIDER_RATE_LIMIT_RETRY_MAX_DELAY_MS, PROVIDER_RETRY_MAX_RETRIES,
+    PersistedProviderRetryConfiguration, normalize_provider_rate_limit_retry_max_retries,
 };
 use std::time::Duration;
 use vulcan_ai_contract::{AiErrorCategory, AiExecutionError, AiTransportKind, DispatchOutcome};
@@ -12,7 +12,8 @@ use vulcan_core::types::CoreError as VulcanCoreError;
 
 /// Hard safety ceiling for every backend-configured rate-limit retry wait.
 /// 每次后台配置限流重试等待使用的硬安全上限。
-const MAX_RATE_LIMIT_RETRY_DELAY: Duration = Duration::from_secs(1_800);
+const MAX_RATE_LIMIT_RETRY_DELAY: Duration =
+    Duration::from_millis(PROVIDER_RATE_LIMIT_RETRY_MAX_DELAY_MS);
 /// Legacy terminal subtype for a Provider response whose streamed tool arguments never became valid JSON.
 /// Provider 响应的流式工具参数始终未形成有效 JSON 时使用的旧版终态子类型。
 const TERMINAL_TOOL_CALL_STREAM_FAILURE_SUBCATEGORY: &str = "tool_call_stream_failure";
@@ -254,8 +255,8 @@ impl ProviderRetryPolicy {
     /// `retry_number` 是从一开始的重试序号。
     /// `retry_after` is the optional Provider-requested minimum wait.
     /// `retry_after` 是 Provider 可选要求的最短等待时间。
-    /// Returns a delay that never exceeds 1800 seconds.
-    /// 返回绝不超过 1800 秒的等待时间。
+    /// Returns a delay that never exceeds `MAX_RATE_LIMIT_RETRY_DELAY`.
+    /// 返回绝不超过 `MAX_RATE_LIMIT_RETRY_DELAY` 的等待时间。
     fn rate_limit_delay(&self, retry_number: u32, retry_after: Option<Duration>) -> Duration {
         // exponent is bounded before floating-point exponentiation because the final delay is capped independently.
         // exponent 在浮点指数计算前受限，因为最终等待时间会独立封顶。

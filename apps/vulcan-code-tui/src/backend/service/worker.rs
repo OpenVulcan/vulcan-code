@@ -424,9 +424,7 @@ impl Worker {
             }
             Err(message) => {
                 self.client = None;
-                if let Some(stream) = self.stream.take() {
-                    stream.stop();
-                }
+                self.stop_stream();
                 // No reachable Core: start the installed one once, and report it if it exits before it is reachable.
                 // 没有可连接的 Core：启动一次已安装的 Core，若它在可连接之前退出则报告。
                 let mut starting = false;
@@ -522,13 +520,20 @@ impl Worker {
     /// Drops the active transport and schedules bounded service reconnection.
     /// 释放活动传输并安排有界服务重连。
     fn disconnected(&mut self) {
-        if let Some(stream) = self.stream.take() {
-            stream.stop();
-        }
+        self.stop_stream();
         if self.client.take().is_some() || self.retry_at.is_none() {
             self.emit(BackendEvent::Connection(ConnectionState::Reconnecting));
         }
         self.schedule_retry();
+    }
+
+    /// Stops the event stream and retires its generation, so frames it already queued are dropped.
+    /// 停止事件流并作废其代际，使其已排队的帧被丢弃。
+    fn stop_stream(&mut self) {
+        if let Some(stream) = self.stream.take() {
+            stream.stop();
+        }
+        self.generation += 1;
     }
 
     /// Schedules the next reconnect using the shared exponential-backoff limits.
@@ -1849,7 +1854,10 @@ impl Worker {
             Command::LoadWorkspaceDiffFileDetail { key } => self.git_diff(key),
             Command::LoadWorkspaceGitBranches => self.git_branches(),
             Command::SwitchWorkspaceGitBranch { name, create } => self.git_switch(name, create),
-            Command::GenerateGitCommitMessage => self.git_generate_message(),
+            Command::GenerateGitCommitMessage {
+                request,
+                include_unstaged,
+            } => self.git_generate_message(request, include_unstaged),
             Command::RunGitCommitAction {
                 message,
                 new_branch,
@@ -2254,8 +2262,10 @@ impl Worker {
             "executionMode": execution_mode,
             "reasoningEffort": effort_param,
             "modelSelection": model_selection,
+            // An unchanged draft sends no answer mode, so the service applies the default at creation.
+            // 未修改的草稿不发送回答模式，由服务在创建时采用默认值。
             "sessionSettings": self.drafts.get(&conversation_id).map(|draft| json!({
-                "answerMode": draft.answer_mode.mode,
+                "answerMode": (draft.answer_mode.revision > 0).then_some(draft.answer_mode.mode),
                 "permissionMode": draft.permission_mode,
             })),
         });
@@ -2938,6 +2948,24 @@ mod tests {
         assert_eq!(worker.revision, 42);
         assert!(events.try_recv().is_err());
         assert!(!worker.handle_input(Input::Shutdown));
+        server.thread.join().unwrap();
+    }
+
+    /// Frames queued by a stream that was torn down never reach the retained workbench.
+    /// 已拆除事件流排队的帧绝不会写入保留工作台。
+    #[test]
+    fn frames_of_a_torn_down_stream_are_dropped() {
+        let server = RpcServer::start(0, |_| Value::Null);
+        let (mut worker, events, _) = worker_fixture(server.client.clone());
+        let torn_down = worker.generation;
+        worker.disconnected();
+        let _ = events.try_iter().count();
+        worker.handle_input(Input::Rejected {
+            generation: torn_down,
+            kind: String::from("workbench.delta"),
+            detail: String::from("queued before teardown"),
+        });
+        assert!(events.try_recv().is_err());
         server.thread.join().unwrap();
     }
 

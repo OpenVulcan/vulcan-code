@@ -1469,13 +1469,20 @@ impl App {
                 self.git.branches = branches;
                 input::refresh_branch_picker(self);
             }
-            BackendEvent::CommitMessage { text, done } => {
+            BackendEvent::CommitMessage {
+                request,
+                text,
+                done,
+            } => {
                 let mut commit_now = None;
-                if let Some(Overlay::Commit(dialog)) = &mut self.overlay {
+                if let Some(Overlay::Commit(dialog)) = &mut self.overlay
+                    && dialog.generation == Some(request)
+                {
                     if !text.is_empty() {
                         dialog.message.insert_str(&text);
                     }
                     if done {
+                        dialog.generation = None;
                         dialog.field = overlay::CommitField::Message;
                         commit_now = dialog.commit_after_generate.take();
                     }

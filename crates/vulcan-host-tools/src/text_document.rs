@@ -263,6 +263,8 @@ impl TextDocument {
                 original_start_line: line_number_at_offset(&normalized_source, *start),
                 original_line_count: logical_span_line_count(&normalized_source[*start..*end]),
                 final_line_count: logical_span_line_count(&normalized_new),
+                line_delta: line_break_count(&normalized_new) as isize
+                    - line_break_count(&normalized_source[*start..*end]) as isize,
             })
             .collect::<Vec<_>>();
         Ok(TextReplacement {
@@ -301,6 +303,9 @@ pub struct TextReplacementRange {
     /// Number of final logical lines introduced by the substring.
     /// 子串引入的最终逻辑行数。
     pub final_line_count: usize,
+    /// Change in the document's line count: line breaks inserted minus line breaks removed.
+    /// 文档行数的变化量：插入的换行数减去删除的换行数。
+    pub line_delta: isize,
 }
 
 /// One line-document operation failure.
@@ -595,6 +600,12 @@ fn line_number_at_offset(normalized: &str, offset: usize) -> usize {
         .filter(|byte| *byte == b'\n')
         .count()
         .saturating_add(1)
+}
+
+/// Counts the line breaks in normalized text.
+/// 统计规范化文本中的换行数。
+fn line_break_count(normalized: &str) -> usize {
+    normalized.bytes().filter(|byte| *byte == b'\n').count()
 }
 
 /// Returns the logical-line span represented by normalized text.

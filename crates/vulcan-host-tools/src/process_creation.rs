@@ -181,9 +181,19 @@ pub fn apply_child_path_prefixes(
             paths.push(path_prefix.clone());
         }
     }
-    // existingPath contains the parent search path inherited only by this child.
-    // existingPath 保存仅由当前子进程继承的父进程搜索路径。
-    if let Some(existing_path) = std::env::var_os("PATH") {
+    // existingPath is the PATH this child would otherwise get: one already injected on the command
+    // (such as a user or session variable) wins over the parent's.
+    // existingPath 是子进程原本会得到的 PATH：命令上已注入的值（如用户或会话变量）优先于父进程的值。
+    let configured = command
+        .as_std()
+        .get_envs()
+        .find(|(key, _)| path_variable_name(key))
+        .map(|(_, value)| value.map(std::ffi::OsStr::to_os_string));
+    let existing_path = match configured {
+        Some(value) => value,
+        None => std::env::var_os("PATH"),
+    };
+    if let Some(existing_path) = existing_path {
         paths.extend(std::env::split_paths(&existing_path));
     }
     // joinedPath is the exact child-only PATH value and never mutates the parent environment.
@@ -192,6 +202,16 @@ pub fn apply_child_path_prefixes(
         .map_err(|error| format!("Failed to construct the host-owned child PATH: {error}"))?;
     command.env("PATH", joined_path);
     Ok(())
+}
+
+/// Reports whether one environment key names the search path on this platform.
+/// 判断某个环境变量名在当前平台上是否表示搜索路径。
+fn path_variable_name(key: &OsStr) -> bool {
+    if cfg!(windows) {
+        key.eq_ignore_ascii_case("PATH")
+    } else {
+        key == "PATH"
+    }
 }
 
 #[cfg(test)]
@@ -212,5 +232,26 @@ mod tests {
     #[test]
     fn non_windows_build_keeps_windows_policy_constant_stable() {
         assert_eq!(WINDOWS_CREATE_NO_WINDOW, 0x0800_0000);
+    }
+
+    /// Verifies host prefixes extend a PATH already injected on the command instead of replacing it.
+    /// 验证宿主前缀扩展命令上已注入的 PATH，而不是替换它。
+    #[test]
+    fn prefixes_keep_an_injected_path() {
+        let injected_dir = std::env::temp_dir().join("vulcan-injected-path-entry");
+        let prefix_dir = std::env::temp_dir().join("vulcan-prefix-path-entry");
+        let injected = std::env::join_paths([injected_dir.clone()]).expect("join injected PATH");
+        let mut command = super::new_background_tokio_command("tool");
+        command.env("PATH", &injected);
+        super::apply_child_path_prefixes(&mut command, std::slice::from_ref(&prefix_dir))
+            .expect("apply prefixes");
+        let path = command
+            .as_std()
+            .get_envs()
+            .find(|(key, _)| super::path_variable_name(key))
+            .and_then(|(_, value)| value)
+            .expect("PATH set on the command");
+        let entries: Vec<_> = std::env::split_paths(path).collect();
+        assert_eq!(entries, vec![prefix_dir, injected_dir]);
     }
 }

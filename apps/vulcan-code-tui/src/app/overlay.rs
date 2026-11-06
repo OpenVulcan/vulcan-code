@@ -160,6 +160,9 @@ pub struct CommitDialog {
     /// An empty message was submitted: commit (and push when `true`) once generation finishes.
     /// 提交了空信息：生成完成后提交（为 `true` 时同时推送）。
     pub commit_after_generate: Option<bool>,
+    /// Generation request this dialog waits for; results of any other request are ignored.
+    /// 本对话框等待的生成请求；其他请求的结果一律忽略。
+    pub generation: Option<u64>,
 }
 
 pub struct DiffView {

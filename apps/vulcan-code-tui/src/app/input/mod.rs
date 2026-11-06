@@ -784,7 +784,20 @@ pub fn open_commit(app: &mut App) {
         field: CommitField::Message,
         error: None,
         commit_after_generate: None,
+        generation: None,
     })));
+}
+
+/// Asks for a commit message for exactly this dialog and its include-unstaged choice.
+/// 为此对话框及其“包含未暂存”选择请求提交信息。
+fn request_commit_message(backend: &crate::backend::BackendHandle, dialog: &mut CommitDialog) {
+    static NEXT_REQUEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let request = NEXT_REQUEST.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    dialog.generation = Some(request);
+    backend.send(Command::GenerateGitCommitMessage {
+        request,
+        include_unstaged: dialog.include_unstaged,
+    });
 }
 
 /// Sends the commit from the open dialog, generating a message first when it is empty.
@@ -804,7 +817,7 @@ pub fn submit_commit(app: &mut App, push: bool) {
     let message = dialog.message.lines().join("\n").trim().to_string();
     if message.is_empty() {
         dialog.commit_after_generate = Some(push);
-        app.backend.send(Command::GenerateGitCommitMessage);
+        request_commit_message(&app.backend, dialog);
         return;
     }
     let command = Command::RunGitCommitAction {
@@ -827,7 +840,7 @@ pub fn generate_commit_message(app: &mut App) {
     }
     if let Some(Overlay::Commit(dialog)) = &mut app.overlay {
         dialog.message = TextArea::default();
-        app.backend.send(Command::GenerateGitCommitMessage);
+        request_commit_message(&app.backend, dialog);
     }
 }
 

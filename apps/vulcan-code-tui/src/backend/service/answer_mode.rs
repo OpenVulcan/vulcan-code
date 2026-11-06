@@ -10,7 +10,7 @@ impl Worker {
     pub(super) fn emit_answer_mode(&self, id: &str) {
         let state = if let Some(draft) = self.drafts.get(id) {
             AnswerModeSession {
-                mode: Some(draft.answer_mode.clone()),
+                mode: Some(self.draft_answer_mode(draft)),
             }
         } else if let Some(window) = self.windows.get(id) {
             window.answer_mode.clone()
@@ -36,10 +36,24 @@ impl Worker {
         }
     }
 
+    /// A draft the user has not changed follows the current global default until it is submitted.
+    /// 用户未修改的草稿在提交之前一直跟随当前全局默认值。
+    pub(super) fn draft_answer_mode(&self, draft: &Draft) -> AnswerModePreference {
+        if draft.answer_mode.revision == 0 {
+            self.default_answer_mode()
+        } else {
+            draft.answer_mode.clone()
+        }
+    }
+
     /// Save a durable answer mode or update a local draft; CAS conflicts never overwrite authority.
     /// 保存可靠回答模式或更新本地草稿；比较交换冲突绝不覆盖权威。
     pub(super) fn set_answer_mode(&mut self, request: api::SessionAnswerModeUpdateRequest) {
+        let default = self.default_answer_mode();
         if let Some(draft) = self.drafts.get_mut(&request.session_id) {
+            if draft.answer_mode.revision == 0 {
+                draft.answer_mode.mode = default.mode;
+            }
             let conflict = draft.answer_mode.revision != request.expected_revision;
             if !conflict && draft.answer_mode.mode != request.mode {
                 draft.answer_mode.mode = request.mode;
@@ -151,7 +165,7 @@ mod tests {
             assert!(request.body["params"]["conversationId"].is_null());
             assert_eq!(
                 request.body["params"]["sessionSettings"]["answerMode"],
-                "interactive"
+                "standard"
             );
             json!({"ok":false,"error":{"code":"synthetic","message":"synthetic rejection"}})
         });
@@ -171,7 +185,7 @@ mod tests {
         );
         worker.set_answer_mode(api::SessionAnswerModeUpdateRequest {
             session_id: id.clone(),
-            mode: AnswerMode::Interactive,
+            mode: AnswerMode::Standard,
             expected_revision: 0,
         });
         worker.submit(
@@ -183,7 +197,44 @@ mod tests {
             Vec::new(),
         );
         worker.handle_input(input.recv_timeout(Duration::from_secs(2)).unwrap());
-        assert_eq!(worker.drafts[&id].answer_mode.mode, AnswerMode::Interactive);
+        assert_eq!(worker.drafts[&id].answer_mode.mode, AnswerMode::Standard);
+        server.thread.join().unwrap();
+    }
+
+    /// A draft the user never changed leaves the answer mode to the service default at creation.
+    /// 用户从未修改的草稿把回答模式留给服务在创建时采用默认值。
+    #[test]
+    fn unchanged_draft_submits_no_answer_mode() {
+        let server = RpcServer::start(1, |request| {
+            assert!(request.body["params"]["sessionSettings"]["answerMode"].is_null());
+            json!({"ok":false,"error":{"code":"synthetic","message":"synthetic rejection"}})
+        });
+        let (out, _) = std::sync::mpsc::channel();
+        let (inbox, input) = std::sync::mpsc::channel();
+        let mut worker = Worker::new(out, inbox, None);
+        worker.client = Some(server.client.clone());
+        let id = format!("{DRAFT_PREFIX}synthetic");
+        worker.drafts.insert(
+            id.clone(),
+            Draft {
+                answer_mode: AnswerModePreference {
+                    mode: AnswerMode::Interactive,
+                    ..AnswerModePreference::default()
+                },
+                permission_mode: None,
+                project_id: None,
+                model_key: None,
+            },
+        );
+        worker.submit(
+            id,
+            "synthetic".into(),
+            ExecutionMode::Build,
+            ReasoningEffort::Off,
+            String::new(),
+            Vec::new(),
+        );
+        worker.handle_input(input.recv_timeout(Duration::from_secs(2)).unwrap());
         server.thread.join().unwrap();
     }
 }

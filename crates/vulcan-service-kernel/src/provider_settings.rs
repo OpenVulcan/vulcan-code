@@ -3,11 +3,11 @@
 
 use serde::Deserialize;
 use vulcan_agent_runtime::provider_config::{
-    PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES, PROVIDER_RETRY_KEYWORD_MAX_CHARACTERS,
-    PROVIDER_RETRY_KEYWORD_MAX_COUNT, PROVIDER_RETRY_MAX_RETRIES,
-    PersistedProviderRateLimitRetryConfiguration, PersistedProviderRetryConfiguration,
-    ProviderConfigurationFile, default_provider_retry_keywords,
-    normalize_provider_rate_limit_retry_max_retries,
+    PROVIDER_RATE_LIMIT_RETRY_MAX_DELAY_MS, PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES,
+    PROVIDER_RETRY_KEYWORD_MAX_CHARACTERS, PROVIDER_RETRY_KEYWORD_MAX_COUNT,
+    PROVIDER_RETRY_MAX_RETRIES, PersistedProviderRateLimitRetryConfiguration,
+    PersistedProviderRetryConfiguration, ProviderConfigurationFile,
+    default_provider_retry_keywords, normalize_provider_rate_limit_retry_max_retries,
 };
 use vulcan_service_api::{
     ProviderRateLimitRetrySettingsSummary, ProviderRetrySettingsSummary, ServiceEventEmitter,
@@ -20,10 +20,6 @@ use crate::{
     SharedServiceBridgeState, emit_workbench_event, mutate_provider_configuration,
     refresh_settings_projection_locked, shell_host_from_state,
 };
-
-/// Hard delay ceiling shared by the retry settings page and runtime rate-limit policy.
-/// 重试设置页面与运行时限流策略共享的硬等待上限。
-const PROVIDER_RETRY_SETTINGS_MAX_DELAY_MS: u64 = 1_800_000;
 
 /// Provider retry settings save request sent by the WebUI settings page.
 /// WebUI 设置页发送的 Provider 重试设置保存请求。
@@ -277,10 +273,10 @@ pub(crate) fn provider_retry_settings(
     let rate_limit_initial_delay_ms = retry
         .rate_limit
         .initial_delay_ms
-        .clamp(1, PROVIDER_RETRY_SETTINGS_MAX_DELAY_MS);
+        .clamp(1, PROVIDER_RATE_LIMIT_RETRY_MAX_DELAY_MS);
     let rate_limit_max_delay_ms = retry.rate_limit.max_delay_ms.clamp(
         rate_limit_initial_delay_ms,
-        PROVIDER_RETRY_SETTINGS_MAX_DELAY_MS,
+        PROVIDER_RATE_LIMIT_RETRY_MAX_DELAY_MS,
     );
     ProviderRetrySettingsSummary {
         enabled: retry.enabled,
@@ -336,7 +332,7 @@ fn validate_provider_retry_settings_request(
         "rate-limit retry",
         request.rate_limit.initial_delay_ms,
         request.rate_limit.max_delay_ms,
-        Some(PROVIDER_RETRY_SETTINGS_MAX_DELAY_MS),
+        Some(PROVIDER_RATE_LIMIT_RETRY_MAX_DELAY_MS),
     )?;
     validate_backoff_factor_milli("rate-limit retry", request.rate_limit.backoff_factor_milli)
 }
@@ -411,9 +407,10 @@ fn validate_retry_delay_range(
             "The {label} maximum delay must not be smaller than the initial delay."
         ));
     }
-    if delay_ceiling_ms.is_some_and(|ceiling_ms| max_ms > ceiling_ms) {
+    if let Some(ceiling_ms) = delay_ceiling_ms.filter(|ceiling_ms| max_ms > *ceiling_ms) {
         return Err(format!(
-            "The {label} maximum delay must not exceed 1800 seconds."
+            "The {label} maximum delay must not exceed {} seconds.",
+            ceiling_ms / 1_000
         ));
     }
     Ok(())

@@ -255,7 +255,9 @@ impl JudgeHostClient {
     /// Closes the worker input and waits briefly for it to exit, then kills it.
     /// 关闭 worker 输入并短暂等待其退出，随后结束进程。
     pub async fn shutdown(mut self) {
-        let _ = self.stdin.shutdown().await;
+        // Tokio's pipe shutdown does not close the handle; only dropping it gives the worker EOF.
+        // Tokio 管道的 shutdown 不会关闭句柄；只有丢弃它才能让 worker 读到 EOF。
+        drop(self.stdin);
         if timeout(JUDGE_HOST_EXIT_TIMEOUT, self.child.wait())
             .await
             .is_err()

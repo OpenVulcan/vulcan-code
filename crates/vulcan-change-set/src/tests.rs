@@ -510,3 +510,14 @@ fn persistent_change_set_negative_golden_rejects_root_contract_violations() {
         );
     }
 }
+
+/// Line breaks pair up left to right exactly as the host text document reads them.
+/// 换行对按与宿主文本文档完全相同的从左到右方式配对。
+#[test]
+fn line_breaks_pair_like_the_host_document() {
+    assert_eq!(normalize_text("a\n\rb"), "a\nb");
+    assert_eq!(normalize_text("a\r\nb"), "a\nb");
+    assert_eq!(normalize_text("a\r\n\rb"), "a\n\nb");
+    assert_eq!(normalize_text("a\n\r\nb"), "a\n\nb");
+    assert_eq!(normalize_text("a\rb\n"), "a\nb\n");
+}

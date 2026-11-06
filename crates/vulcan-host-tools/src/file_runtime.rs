@@ -67,9 +67,13 @@ pub const MAX_EDIT_TOTAL_LINES: usize = 65_536;
 /// 单个 replace 操作允许接受的有序锚点最大数量。
 pub const MAX_EDIT_ANCHORS: usize = 8;
 
-/// Maximum UTF-8 file size processed by the first native text runtime.
-/// 第一版原生文本运行时允许处理的 UTF-8 文件最大字节数。
-const MAX_TEXT_BYTES: usize = 16 * 1024 * 1024;
+/// Maximum raw file size processed by the native text runtime; the encoding detector owns it.
+/// 原生文本运行时允许处理的原始文件最大字节数；由编码检测器统一定义。
+const MAX_TEXT_BYTES: usize = crate::text_encoding::MAX_DETECTABLE_TEXT_BYTES;
+
+/// Characters kept at each end of a truncated create/delete lifecycle excerpt.
+/// 截断的创建/删除生命周期摘录在首尾各保留的字符数。
+const LIFECYCLE_EXCERPT_CHARS: usize = 2000;
 
 /// Maximum logical line size accepted by the structured edit schema.
 /// 结构化编辑 Schema 允许的单条逻辑行最大字节数。
@@ -957,9 +961,10 @@ fn native_move_file(
 ///
 /// `path` identifies the modified file, `before_lines` contains the original logical
 /// lines with terminators, and `after_lines` contains the replacement lines and terminators. The returned row
-/// is valid only for the V1 `modify` lifecycle and therefore always carries one hunk.
+/// is valid only for the V1 `modify` lifecycle; it carries one hunk unless both sides have no lines, where only
+/// the text formats differ.
 /// `path` 标识被修改文件，`before_lines` 包含原始行及终止符，`after_lines` 包含替换后的
-/// 行及终止符。返回记录仅用于 V1 `modify` 生命周期，因此始终携带一条 hunk。
+/// 行及终止符。返回记录仅用于 V1 `modify` 生命周期；除前后均无行（只有文本格式不同）外都携带一条 hunk。
 fn whole_file_modify_payload(
     path: &Path,
     before_lines: &[DocumentLine],
@@ -988,6 +993,16 @@ fn whole_file_modify_payload(
             .take_while(|(left, right)| left == right)
             .count()
     };
+    // An empty file whose format alone changed (such as an added BOM) has no line to report.
+    // 仅格式变化的空文件（例如新增 BOM）没有可报告的行。
+    if before_lines.is_empty() && after_lines.is_empty() {
+        return json!({
+            "resource_id": "resource-1",
+            "change": "modify",
+            "path": display_path(path),
+            "hunks": [],
+        });
+    }
     json!({
         "resource_id": "resource-1",
         "change": "modify",
@@ -1970,7 +1985,9 @@ fn exact_edit_line_windows(
         };
         trim_exact_edit_line_window(before_lines, after_lines, &mut window);
         operation_windows.push(window);
-        cumulative_delta += range.final_line_count as isize - range.original_line_count as isize;
+        // Only line breaks move later lines; removing text inside one line shifts nothing.
+        // 只有换行会移动后续行；删除行内文本不会产生偏移。
+        cumulative_delta += range.line_delta;
     }
 
     let mut merged_windows = Vec::<ExactEditLineWindow>::new();
@@ -2337,15 +2354,21 @@ fn build_patch_update_change(
         file_payload.insert(String::from("old_path"), json!(display_path(&source_path)));
         file_payload.insert(String::from("new_path"), json!(display_path(destination)));
     }
-    file_payload.insert(
-        String::from("hunks"),
-        Value::Array(
-            replacements
-                .iter()
-                .map(|replacement| replacement_hunk(snapshot, replacement, &replacements))
-                .collect(),
-        ),
-    );
+    // A pure move (context-only hunks included) carries its body as lifecycle content, like edit moves.
+    // 纯移动（包括只含上下文的 hunk）与编辑移动一样以生命周期正文携带内容。
+    if destination_path.is_some() && replacements.is_empty() {
+        insert_lifecycle_content(&mut file_payload, &snapshot.document.text, &snapshot.lines);
+    } else {
+        file_payload.insert(
+            String::from("hunks"),
+            Value::Array(
+                replacements
+                    .iter()
+                    .map(|replacement| replacement_hunk(snapshot, replacement, &replacements))
+                    .collect(),
+            ),
+        );
+    }
     let mut operation_results = replacements
         .iter()
         .enumerate()
@@ -2443,7 +2466,11 @@ fn plan_patch_replacements(
         } else {
             let candidates = (anchor_start..=working.len().saturating_sub(old_lines.len()))
                 .filter(|start| {
-                    working[*start..*start + old_lines.len()] == old_lines
+                    // Context longer than the file yields no window instead of an out-of-range slice.
+                    // 比文件更长的上下文不产生窗口，而不是越界切片。
+                    working
+                        .get(*start..*start + old_lines.len())
+                        .is_some_and(|window| window == old_lines.as_slice())
                         && (!hunk.end_of_file || *start + old_lines.len() == working.len())
                 })
                 .collect::<Vec<_>>();
@@ -3805,21 +3832,32 @@ fn rollback_paths(
     published_new_paths: &HashSet<PathBuf>,
     created_directories: &BTreeSet<PathBuf>,
 ) -> Result<(), FileToolError> {
+    // Every path is attempted even after a failure, so one stuck file cannot strand the others.
+    // 即使出现失败也尝试每条路径，避免一个无法恢复的文件拖累其他文件。
+    let mut first_error = None;
     for (path, backup) in backups.iter().rev() {
-        match backup.bytes.as_deref() {
-            Some(bytes) => atomic_write(path, bytes, backup.permissions.as_ref(), true)?,
-            None if published_new_paths.contains(path) => remove_file_if_exists(path)?,
-            None => {}
+        let restored = match backup.bytes.as_deref() {
+            // A path the commit never changed (including a read-only one it failed on) is left alone.
+            // 提交从未改动的路径（包括提交失败的只读文件）保持原样。
+            Some(bytes) if fs::read(path).ok().as_deref() == Some(bytes) => Ok(()),
+            Some(bytes) => atomic_write(path, bytes, backup.permissions.as_ref(), true),
+            None if published_new_paths.contains(path) => remove_file_if_exists(path),
+            None => Ok(()),
+        };
+        if let Err(error) = restored {
+            first_error.get_or_insert(error);
         }
     }
     for path in created_directories.iter().rev() {
         match fs::remove_dir(path) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(io_error("write_failed", path, error)),
+            Err(error) => {
+                first_error.get_or_insert(io_error("write_failed", path, error));
+            }
         }
     }
-    Ok(())
+    first_error.map_or(Ok(()), Err)
 }
 
 /// Captures the bytes and permission mode needed to restore one transaction path.
@@ -4105,6 +4143,22 @@ fn sorted_non_overlapping_replacements(
     Ok(replacements)
 }
 
+/// Zero-based final start of `replacement`, which must be an element of the sorted `replacements`.
+/// `replacement` 的零基最终起始行；它必须是已排序 `replacements` 中的元素。
+/// Plans are applied in slice order, so every plan listed earlier, including one at the same
+/// start, shifts it. 计划按切片顺序生效，因此列在前面的每个计划（包括同起点的）都会使其偏移。
+fn final_start_line_index(
+    replacement: &ReplacementPlan,
+    replacements: &[ReplacementPlan],
+) -> usize {
+    let preceding_delta: isize = replacements
+        .iter()
+        .take_while(|other| !std::ptr::eq(*other, replacement))
+        .map(|other| other.new_lines.len() as isize - other.old_lines.len() as isize)
+        .sum();
+    (replacement.start as isize + preceding_delta).max(0) as usize
+}
+
 /// Builds one host hunk from an original range and its replacement arrays.
 /// 根据原始范围和替换数组构建一条宿主 hunk。
 fn replacement_hunk(
@@ -4133,12 +4187,7 @@ fn replacement_hunk(
     let before_start = replacement.start.saturating_sub(2);
     let after_start = old_change_end;
     let after_end = replacement.end.saturating_add(2).min(snapshot.lines.len());
-    let preceding_delta: isize = replacements
-        .iter()
-        .filter(|other| other.start < replacement.start)
-        .map(|other| other.new_lines.len() as isize - other.old_lines.len() as isize)
-        .sum();
-    let final_start = (replacement.start as isize + preceding_delta).max(0) as usize;
+    let final_start = final_start_line_index(replacement, replacements);
     json!({
         "before": snapshot.lines[before_start..old_change_start].join("\n"),
         "delete": actual_old[common_prefix..old_change_end - replacement.start].iter().enumerate().map(|(index, content)| json!({"line": old_change_start + index + 1, "content": content})).collect::<Vec<_>>(),
@@ -4155,12 +4204,7 @@ fn operation_result(
     dry_run: bool,
     resource_id: &str,
 ) -> Value {
-    let preceding_delta: isize = replacements
-        .iter()
-        .filter(|other| other.start < replacement.start)
-        .map(|other| other.new_lines.len() as isize - other.old_lines.len() as isize)
-        .sum();
-    let final_start = (replacement.start as isize + preceding_delta).max(0) as usize;
+    let final_start = final_start_line_index(replacement, replacements);
     json!({
         "operation_id": replacement.operation_id,
         "resource_id": resource_id,
@@ -4183,11 +4227,14 @@ fn insert_lifecycle_content(object: &mut Map<String, Value>, text: &str, lines: 
         );
         return;
     }
-    let head = text.chars().take(2000).collect::<String>();
+    let head = text
+        .chars()
+        .take(LIFECYCLE_EXCERPT_CHARS)
+        .collect::<String>();
     let tail = text
         .chars()
         .rev()
-        .take(2000)
+        .take(LIFECYCLE_EXCERPT_CHARS)
         .collect::<String>()
         .chars()
         .rev()
