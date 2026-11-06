@@ -256,10 +256,8 @@ pub fn embedding_candidate(candidate: &Value) -> bool {
             == Some("internal_background")
         && includes("output_kinds", "dense")
         && includes("encodings", "float")
-        && matches!(
-            capability.get("distance_metric").and_then(Value::as_str),
-            Some("cosine" | "euclidean" | "dot_product")
-        )
+        // Like the WebUI, any declared metric is admitted; the service treats `unknown` as cosine.
+        // 与 WebUI 一致，接受任意声明的度量；服务将 `unknown` 按余弦处理。
         && (includes("tasks", "query") || includes("tasks", "provider_default"))
         && (includes("tasks", "document") || includes("tasks", "provider_default"))
         && capability.get("maximum_inputs").and_then(Value::as_u64) != Some(0)

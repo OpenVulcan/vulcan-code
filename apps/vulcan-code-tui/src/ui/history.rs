@@ -474,11 +474,14 @@ fn event_lines(
         } => {
             out.push(Line::from(Span::styled(
                 format!(
-                    "Σ {} · {} tokens · {} req · {} tools",
+                    "Σ {} · {} · {} · {}",
                     compact_duration(*duration_ms),
-                    compact_count(*total_tokens),
-                    requests,
-                    tool_calls
+                    tr!(
+                        "conversation.stats.totalTokens",
+                        count = compact_count(*total_tokens)
+                    ),
+                    tr!("conversation.stats.providerCalls", count = requests),
+                    tr!("conversation.stats.toolCalls", count = tool_calls)
                 ),
                 theme.muted_text(),
             )));

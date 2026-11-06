@@ -71,7 +71,10 @@ impl TextSelection {
         let Some((start, end)) = self.span() else {
             return String::new();
         };
-        (start.line..=end.line.min(lines.len().saturating_sub(1)))
+        if lines.is_empty() {
+            return String::new();
+        }
+        (start.line..=end.line.min(lines.len() - 1))
             .map(|index| {
                 let text: String = lines[index]
                     .spans

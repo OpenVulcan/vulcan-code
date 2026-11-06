@@ -756,13 +756,27 @@ impl Worker {
                         // 解锁另一份完整文档编辑前发布权威刷新。
                         *self.load_sequences.entry(*slot).or_default() += 1;
                         self.loaders.insert(*slot, loader.clone());
-                        match self.call(loader.method, loader.params.clone()) {
-                            Some(value) => self.call_done(loader, value),
-                            None => self.emit(BackendEvent::Slot {
+                        // A failed refresh is reported as a slot failure, never as an empty load.
+                        // 刷新失败按槽位失败上报，绝不当作空加载。
+                        let Some(client) = self.client.clone() else {
+                            self.emit(BackendEvent::Notice(Notice::NotConnected));
+                            self.emit(BackendEvent::SlotFailed {
                                 slot: *slot,
                                 call: loader,
-                                value: Value::Null,
-                            }),
+                                message: String::from("Not connected to the service."),
+                            });
+                            continue;
+                        };
+                        match client.call(loader.method, loader.params.clone()) {
+                            Ok(value) => self.call_done(loader, value),
+                            Err(error) => {
+                                self.emit(BackendEvent::SlotFailed {
+                                    slot: *slot,
+                                    call: loader,
+                                    message: error.message.clone(),
+                                });
+                                self.failed(error);
+                            }
                         }
                     }
                 }

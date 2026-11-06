@@ -534,6 +534,26 @@ fn on_stats_key(app: &mut App, key: KeyEvent) {
 
 // ---- Ask ----
 
+/// Appends pasted text to the free-form answer being edited in the Ask panel.
+/// 将粘贴文本追加到 Ask 面板中正在编辑的自由作答。
+/// Returns whether the Ask panel consumed the paste.
+/// 返回 Ask 面板是否接收了此次粘贴。
+pub(super) fn paste_into_ask_other(app: &mut App, text: &str) -> bool {
+    if app.focus != Focus::Ask || !app.ask.editing_other || app.ask.confirm_reject {
+        return false;
+    }
+    let Some(pending) = app.session().and_then(|s| s.pending_question.clone()) else {
+        return false;
+    };
+    if pending.environment.is_some() || pending.questions.is_empty() {
+        return false;
+    }
+    let total = pending.questions.len();
+    let multiple = pending.questions[app.ask.index.min(total - 1)].multiple;
+    app.ask.other_mut(multiple).push_str(text);
+    true
+}
+
 pub(super) fn on_ask_key(app: &mut App, key: KeyEvent) {
     let Some(pending) = app.session().and_then(|s| s.pending_question.clone()) else {
         app.focus = Focus::Composer;

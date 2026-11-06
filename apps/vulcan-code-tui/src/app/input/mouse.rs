@@ -423,7 +423,11 @@ fn finish_selection(app: &mut App, at: Position) {
         return;
     }
     selection.dragging = false;
-    if selection.span().is_none() {
+    // A selection made in another conversation or layout width no longer maps onto these lines.
+    // 在其他会话或排版宽度下做出的选择已不再对应当前这些行。
+    let same_layout = app.selected.as_ref() == Some(&selection.conversation)
+        && selection.width == app.hits.transcript_content.width as usize;
+    if !same_layout || selection.span().is_none() {
         app.clipboard.selection = None;
         return;
     }

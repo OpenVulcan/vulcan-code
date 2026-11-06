@@ -247,12 +247,19 @@ pub(super) fn loaders(app: &App, page: PageId) -> Vec<ServiceCall> {
                 calls.push(call);
             }
         }
+        // A search already answered for this library and query is never replayed by a reload,
+        // because vector searches are paid; only a new submission clears the slot and searches again.
+        // 已对本库及本查询作答的检索不会因刷新而重放（向量检索是付费的）；只有新的提交会清空槽位并重新检索。
         PageId::KnowledgeSearch
             if !app.knowledge.query.is_empty()
                 && library
                     .pointer("/settings/indexMode")
                     .and_then(Value::as_str)
-                    != Some("browse") =>
+                    != Some("browse")
+                && !app.slots.loader(Slot::KnowledgeSearch).is_some_and(|call| {
+                    call.param("/request/libraryId") == id.as_str()
+                        && call.param("/request/query") == app.knowledge.query.as_str()
+                }) =>
         {
             calls.push(knowledge::search_managed_knowledge_library(
                 KnowledgeLibrarySearchRequest {

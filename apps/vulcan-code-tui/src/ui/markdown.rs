@@ -22,6 +22,19 @@ pub fn render(source: &str, width: usize, theme: &Theme) -> Vec<Line<'static>> {
     render_with_code(source, width, theme, CodeSnapshots::None)
 }
 
+/// Counts the leading backticks of one left-trimmed line.
+/// 统计一行（已去除左侧空白）开头的反引号数。
+fn fence_tick_count(trimmed: &str) -> usize {
+    trimmed.bytes().take_while(|byte| *byte == b'`').count()
+}
+
+/// Reports whether a left-trimmed line closes a fence opened with `opening_ticks` backticks.
+/// 判断一行（已去除左侧空白）是否关闭以 `opening_ticks` 个反引号开启的围栏。
+fn closes_fence(trimmed: &str, opening_ticks: usize) -> bool {
+    let ticks = fence_tick_count(trimmed);
+    ticks >= 3 && ticks >= opening_ticks && trimmed[ticks..].trim().is_empty()
+}
+
 /// Renders a reply whose `ui-code` excerpts read the captures in `code`.
 /// 渲染一条回答，其 `ui-code` 摘录读取 `code` 中的抓取结果。
 pub fn render_with_code(
@@ -32,6 +45,9 @@ pub fn render_with_code(
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let mut in_code = false;
+    // Backticks of the open code fence; only a bare fence at least this long closes it.
+    // 当前代码围栏的反引号数；只有不短于它的空白围栏才能将其关闭。
+    let mut fence_ticks = 0;
     // Unified diffs color their added and removed rows.
     // 统一差异为新增与删除行着色。
     let mut diff = false;
@@ -42,9 +58,11 @@ pub fn render_with_code(
         let raw = source[index];
         index += 1;
         let trimmed = raw.trim_start();
-        if trimmed.starts_with("```") {
+        let ticks = fence_tick_count(trimmed);
+        if ticks >= 3 && (!in_code || closes_fence(trimmed, fence_ticks)) {
             in_code = !in_code;
             if in_code {
+                fence_ticks = ticks;
                 let lang = trimmed.trim_start_matches('`').trim();
                 // A closed answer component renders natively; its closing fence needs at least as
                 // many backticks as the opening one so nested container fences stay inside. While
@@ -91,7 +109,7 @@ pub fn render_with_code(
                 // 完整的 Mermaid 代码块在同一框内绘制为图表；仍在流式输出或无法绘制时显示源码。
                 let close = source[index..]
                     .iter()
-                    .position(|line| line.trim_start().starts_with("```"));
+                    .position(|line| closes_fence(line.trim_start(), fence_ticks));
                 let diagram = close.filter(|_| lang == "mermaid").and_then(|close| {
                     let body = source[index..index + close].join("\n");
                     Some((

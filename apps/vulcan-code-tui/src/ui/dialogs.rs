@@ -64,8 +64,19 @@ pub fn render_menu(app: &App, menu: &mut Menu, area: Rect, buf: &mut Buffer) {
         )));
     let inner = modal(app, rect, block, buf);
     menu.cursor = menu.cursor.min(menu.items.len().saturating_sub(1));
-    for (index, item) in menu.items.iter().enumerate().take(inner.height as usize) {
-        let y = inner.y + index as u16;
+    // The visible window follows the cursor so the chosen item is always on screen.
+    // 可见窗口跟随光标，使选中项始终可见。
+    let visible = inner.height as usize;
+    let first = (menu.cursor + 1).saturating_sub(visible);
+    for (row, (index, item)) in menu
+        .items
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(visible)
+        .enumerate()
+    {
+        let y = inner.y + row as u16;
         let selected = index == menu.cursor;
         let fg = if item.danger { theme.danger } else { theme.fg };
         let hint = width_of(&item.hint);

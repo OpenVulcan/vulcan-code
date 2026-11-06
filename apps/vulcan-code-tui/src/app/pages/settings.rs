@@ -448,6 +448,11 @@ fn select_session_title_effort(route: &Value, value: &SettingValue) -> Option<Se
 /// The system `tool_chain` switch and its step limit; each save sends both values.
 /// 系统 `tool_chain` 开关及其步骤上限；每次保存都发送两个值。
 fn tool_chain_rows(rows: &mut Vec<Row>, wb: &Value) {
+    // Without a loaded workbench a save would send invented values over the user's settings.
+    // 工作台未载入时保存会用虚构值覆盖用户设置。
+    if wb.is_null() {
+        return;
+    }
     // Older snapshots without the fields keep the enabled default and the default limit.
     // 缺少这些字段的旧快照保留默认开启与默认上限。
     let enabled = v(wb, "/toolChainEnabled").as_bool().unwrap_or(true);

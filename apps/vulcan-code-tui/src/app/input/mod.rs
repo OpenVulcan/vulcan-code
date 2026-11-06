@@ -51,6 +51,11 @@ fn paste(app: &mut App, text: &str) {
     // Single-line continuations intentionally retain only their first source line.
     // 单行后续步骤明确仅保留首条来源行。
     let single_line = || normalized.lines().next().unwrap_or_default().to_string();
+    // The Ask panel is not an overlay, so its free-form answer claims the paste first.
+    // Ask 面板不是浮层，因此其自由作答文本优先接收粘贴。
+    if app.overlay.is_none() && regions::paste_into_ask_other(app, &single_line()) {
+        return;
+    }
     match &mut app.overlay {
         Some(Overlay::Prompt(dialog)) => {
             // The continuation declares multiline semantics; preserve full normalized form text.

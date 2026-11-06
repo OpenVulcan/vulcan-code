@@ -1228,6 +1228,18 @@ impl App {
         match interval {
             Some(interval) => {
                 self.live_poll_due.insert(slot, self.now + interval);
+                // Endpoints that arrived before the status had no interval; the status re-arms them.
+                // 先于状态到达的端点结果没有间隔；由状态重新安排其读取。
+                if slot == Slot::PermissionJudgeStatus
+                    && self
+                        .slots
+                        .loader(Slot::PermissionJudgeEdgeEndpoints)
+                        .is_some()
+                {
+                    self.live_poll_due
+                        .entry(Slot::PermissionJudgeEdgeEndpoints)
+                        .or_insert(self.now + interval);
+                }
             }
             None => {
                 self.live_poll_due.remove(&slot);

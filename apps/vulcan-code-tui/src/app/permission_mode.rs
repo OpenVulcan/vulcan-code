@@ -58,6 +58,9 @@ pub fn open(app: &mut App) {
         return;
     };
     let unattended = session.unattended.clone();
+    let Some(session_id) = app.selected.clone() else {
+        return;
+    };
     let needs_setup = app.permission_judge_backend.is_none();
     let mut items: Vec<PickerItem> = MODES
         .into_iter()
@@ -75,7 +78,7 @@ pub fn open(app: &mut App) {
                 action: if greyed {
                     PickerAction::Page(PageId::PermissionJudge)
                 } else {
-                    PickerAction::PermissionMode(mode)
+                    PickerAction::PermissionMode(session_id.clone(), mode)
                 },
             }
         })
@@ -135,7 +138,12 @@ fn picker(items: Vec<PickerItem>) -> Overlay {
 /// Request one mode; the displayed mode changes only when the backend confirms it. Auto-approve
 /// without a configured judge opens the judge page instead.
 /// 请求一个模式；只有后端确认后显示的模式才会改变。判定器未配置时，自动审批改为打开判定页。
-pub fn select(app: &mut App, mode: PermissionMode) {
+/// A choice made for `session_id` is dropped once another session is selected.
+/// 为 `session_id` 做出的选择在选中其他会话后被丢弃。
+pub fn select(app: &mut App, session_id: &str, mode: PermissionMode) {
+    if app.selected.as_deref() != Some(session_id) {
+        return;
+    }
     if mode == PermissionMode::AutoApprove && app.permission_judge_backend.is_none() {
         super::action::perform(
             app,
@@ -310,7 +318,7 @@ mod tests {
             assert_eq!(
                 actions.iter().any(|a| matches!(
                     a,
-                    PickerAction::PermissionMode(PermissionMode::AutoApprove)
+                    PickerAction::PermissionMode(_, PermissionMode::AutoApprove)
                 )),
                 choosable,
                 "judge backend {judge:?}"
@@ -358,9 +366,11 @@ mod tests {
     #[test]
     fn selecting_requests_without_optimistic_change() {
         let (mut app, commands) = loaded_app(Some(JudgeBackend::Local));
-        select(&mut app, PermissionMode::AutoApprove);
+        select(&mut app, "session-a", PermissionMode::AutoApprove);
         assert!(commands.try_recv().is_err());
-        select(&mut app, PermissionMode::ReadOnly);
+        select(&mut app, "session-b", PermissionMode::ReadOnly);
+        assert!(commands.try_recv().is_err());
+        select(&mut app, "session-a", PermissionMode::ReadOnly);
         assert!(matches!(
             commands.try_recv(),
             Ok(Command::SetSessionPermissionMode(request))

@@ -23,9 +23,9 @@ pub enum PickerAction {
     /// Sets a page choice row to the option id.
     /// 将页面选项行设为该选项 ID。
     Choice(Edit, String),
-    /// Requests one session permission mode.
-    /// 请求一个会话权限模式。
-    PermissionMode(crate::model::PermissionMode),
+    /// Requests one permission mode for the session the picker was opened for.
+    /// 为打开选择器时的会话请求一个权限模式。
+    PermissionMode(crate::model::ConversationId, crate::model::PermissionMode),
     /// Opens the unattended policy prompt of the selected session.
     /// 打开所选会话的无人值守策略输入框。
     Unattended,

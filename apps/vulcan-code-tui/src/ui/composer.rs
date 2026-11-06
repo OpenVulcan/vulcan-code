@@ -390,6 +390,10 @@ pub fn render_slash_popup(app: &App, composer: Rect, buf: &mut Buffer) {
     }
 }
 
+/// Most queued prompts previewed above the composer.
+/// 输入框上方预览的排队提示最大条数。
+const QUEUED_PREVIEW_ROWS: usize = 3;
+
 /// Queued prompts waiting for the current run, listed above the composer.
 /// 等待当前运行结束的排队提示，列在输入框上方。
 pub fn queued_height(app: &App) -> u16 {
@@ -397,7 +401,7 @@ pub fn queued_height(app: &App) -> u16 {
         if s.prompts.is_empty() {
             0
         } else {
-            s.prompts.len().min(3) as u16 + 1
+            s.prompts.len().min(QUEUED_PREVIEW_ROWS) as u16 + 1
         }
     })
 }
@@ -418,7 +422,7 @@ pub fn render_queued(app: &App, area: Rect, buf: &mut Buffer) {
         ),
     ]);
     header.render(Rect { height: 1, ..area }, buf);
-    for (row, prompt) in session.prompts.iter().take(3).enumerate() {
+    for (row, prompt) in session.prompts.iter().take(QUEUED_PREVIEW_ROWS).enumerate() {
         let text = truncate(
             &prompt.preview.replace('\n', " "),
             area.width.saturating_sub(6) as usize,
