@@ -805,7 +805,25 @@ pub(crate) async fn service_set_session_plan_mode(
         }
     }
     let enabled = request.enabled;
+    // Every explicit switch answers the pending plan, including staying in Plan mode to revise or dismiss it.
+    // 每次明确切换都回应待定计划，包括为修改或关闭计划而留在计划模式。
+    session_goal_lifecycle::session_v1_handle_from_state(&state, session_id)
+        .await?
+        .read(|document| record_plan_decision(document, session_id))
+        .map_err(|error| format!("Failed to read the V1 session for the plan decision: {error}"))?;
     let changed = persist_session_plan_mode_v1(&state, session_id, enabled).await?;
+    if !changed {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        if let Some(runtime_state) = guard
+            .workspace_snapshot
+            .as_mut()
+            .and_then(|workspace| workspace.session_runtime_state.get_mut(&session_id))
+        {
+            runtime_state.plan_mode.artifact = None;
+        }
+    }
     if changed {
         let updated_at = current_unix_millis_text();
         let next_plan_mode = SessionPlanModeState {

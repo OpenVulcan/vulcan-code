@@ -563,15 +563,17 @@ pub(crate) fn conversation_attention_summary_for_session(
             updated_at,
         ));
     }
-    if session_plan_mode.is_some_and(|summary| summary.execution_mode.eq_ignore_ascii_case("plan"))
+    // Only a submitted plan awaiting the user's decision is a confirmation; Plan mode alone is not.
+    // 只有等待用户决定的已提交计划才算确认；仅处于计划模式不算。
+    if let Some(artifact) = session_plan_mode
+        .filter(|summary| summary.execution_mode.eq_ignore_ascii_case("plan"))
+        .and_then(|summary| summary.artifact.as_ref())
     {
         return Some(conversation_attention_summary(
             "plan_confirm",
             80,
-            session_plan_mode
-                .and_then(|summary| summary.artifact.as_ref())
-                .map(|artifact| artifact.path.clone()),
-            "Plan mode waiting",
+            Some(artifact.path.clone()),
+            "Plan confirmation waiting",
             updated_at,
         ));
     }
@@ -1177,6 +1179,18 @@ mod tests {
             plan_attention.request_id.as_deref(),
             Some("docs/plan/test.md")
         );
+
+        let mut plan_without_artifact = test_plan_summary("plan");
+        plan_without_artifact.artifact = None;
+        let plan_mode_only = conversation_attention_summary_for_session(
+            session_id,
+            &[],
+            Some(&plan_without_artifact),
+            true,
+            None,
+        )
+        .expect("unread attention should remain");
+        assert_eq!(plan_mode_only.kind, "unread");
 
         let build_summary = test_plan_summary("build");
         let unread_attention = conversation_attention_summary_for_session(

@@ -449,14 +449,19 @@ function applySessionAddonAttention(
     if (conversation.id !== entry.conversationId || conversation.attention?.kind === "ask") {
       return conversation;
     }
-    if (entry.sessionPlanMode?.executionMode?.toLowerCase() === "plan") {
+    // Only a submitted plan awaiting the user's decision is a confirmation; Plan mode alone is not.
+    // 只有等待用户决定的已提交计划才算确认；仅处于计划模式不算。
+    const pendingPlan = entry.sessionPlanMode?.executionMode?.toLowerCase() === "plan"
+      ? entry.sessionPlanMode.artifact
+      : null;
+    if (pendingPlan) {
       return {
         ...conversation,
         attention: {
           kind: "plan_confirm",
           priority: 80,
-          requestId: entry.sessionPlanMode.artifact?.path ?? null,
-          label: "Plan mode waiting",
+          requestId: pendingPlan.path,
+          label: "Plan confirmation waiting",
         },
       };
     }

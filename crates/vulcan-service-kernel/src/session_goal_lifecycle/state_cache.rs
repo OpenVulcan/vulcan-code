@@ -46,6 +46,9 @@ struct SessionV1RuntimeProjection {
     /// Whether Plan mode is active.
     /// Plan 模式是否激活。
     plan_enabled: bool,
+    /// Submitted plan that still awaits the user's decision, read from the transcript.
+    /// 从转录读取的、仍在等待用户决定的已提交计划。
+    pending_plan_artifact: Option<vulcan_workbench_model::SessionPlanArtifactState>,
     /// Provider route currently effective at the last safe API boundary.
     /// 最近安全 API 边界已经生效的 Provider 路由。
     active_provider_id: Option<String>,
@@ -98,6 +101,7 @@ fn session_v1_runtime_projection(
         context_window_selection: document.metadata.config.context_window_selection,
         output_style_id: document.metadata.config.selection.output_style.clone(),
         plan_enabled: document.metadata.mode.plan.enabled,
+        pending_plan_artifact: crate::pending_plan_artifact_from_document(document, session_id),
         active_provider_id: document.metadata.config.active_request.provider.clone(),
         active_connection_id: document
             .metadata
@@ -175,6 +179,10 @@ fn apply_session_v1_runtime_projection(
 ) {
     runtime_state.context_window_selection = projection.context_window_selection;
     runtime_state.output_style.override_style_id = projection.output_style_id.clone();
+    runtime_state
+        .plan_mode
+        .artifact
+        .clone_from(&projection.pending_plan_artifact);
     if projection.plan_enabled {
         runtime_state.active_work_mode = Some(String::from("plan"));
     } else if runtime_state.active_work_mode.as_deref() == Some("plan") {

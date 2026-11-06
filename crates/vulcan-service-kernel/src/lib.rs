@@ -225,6 +225,7 @@ mod session_goals;
 mod session_hydration;
 mod session_media_resources_v1;
 mod session_model_projection_v1;
+mod session_plan_artifact;
 mod session_plan_runtime;
 mod session_request_config_v1;
 mod session_request_options_services;
@@ -379,6 +380,7 @@ use session_hydration::{
     preserve_active_session_run_state, retained_submission_snapshot_has_session_context,
     retained_submission_snapshot_is_usable, sync_hydrated_session_dialogue_ready_marker,
 };
+use session_plan_artifact::*;
 use session_plan_runtime::*;
 use session_request_options_services::{
     service_get_session_request_options, service_set_session_request_options,

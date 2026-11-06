@@ -629,6 +629,11 @@ pub(crate) async fn service_select_conversation(
         // 丢失会话已删除；发布其余工作台，不产生导航错误。
         return refresh_workbench_snapshot(state).await;
     }
+    // Plan mode and its pending plan come from V1, before the model projection holds the lifecycle guard.
+    // 计划模式及待定计划来自 V1，须在模型投影持有生命周期守卫之前恢复。
+    if let Some(controller_runtime) = controller_runtime.as_ref() {
+        crate::restore_selected_session_plan_mode(&state, controller_runtime, session_id).await?;
+    }
     // Resolve metadata before entering the retained navigation path, which deliberately never loads history.
     // 进入保留导航路径前解析 metadata；该路径刻意不加载历史。
     let registry = Arc::clone(

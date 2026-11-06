@@ -1232,6 +1232,13 @@ fn append_runtime_event_projection_with_authority(
     {
         tracing::warn!("[webui-service] runtime event navigation delta emit failed: {error}");
     }
+    // A submitted plan waits for the user's decision; the V1 transcript already holds it, so a restart restores it.
+    // 已提交的计划等待用户决定；V1 转录已保存该计划，因此重启后可恢复。
+    if let Some(artifact) = plan_artifact_from_tool_finished_event(event)
+        && let Err(error) = publish_submitted_plan_artifact(app, state, session_id, artifact)
+    {
+        tracing::warn!("[webui-service] submitted plan publish failed: {error}");
+    }
 
     // Terminal request events clear only the request-local progress cache after the V1 mutation is durable.
     // 请求终态事件仅在 V1 变更持久化后清理请求局部进度缓存。

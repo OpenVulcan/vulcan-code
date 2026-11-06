@@ -415,7 +415,11 @@ describe("child agent pending requests", () => {
       ...subagentLifecycleWorkbench("running"),
       sessionAddonsByConversation: [{
         conversationId: "parent-conversation",
-        sessionPlanMode: { executionMode: "plan", promptInjected: true },
+        sessionPlanMode: {
+          executionMode: "plan",
+          promptInjected: true,
+          artifact: { name: "Plan", path: "docs/plan/a.md", content: "# Plan", updatedAt: "1" },
+        },
       }],
     };
     const asked = applyWorkbenchDelta(planWorkbench, {

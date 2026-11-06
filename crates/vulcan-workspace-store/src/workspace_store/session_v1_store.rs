@@ -293,6 +293,14 @@ impl SessionV1StorageLocator {
         ))
     }
 
+    /// Reports whether the session is in Plan mode, from metadata only.
+    /// 仅从 metadata 报告会话是否处于计划模式。
+    /// Returns the persisted switch without replaying Turns or writing files.
+    /// 返回持久化开关，不重放回合、不写入文件。
+    pub fn read_plan_mode_enabled(&self) -> Result<bool, SessionV1StoreError> {
+        Ok(self.read_indexed_metadata()?.mode.plan.enabled)
+    }
+
     /// Reads session-owned capability settings without constructing a runtime session.
     /// 读取会话自有能力设置，不构建运行时会话。
     /// Returns the persisted selection; inherited defaults are resolved by the caller in memory.
