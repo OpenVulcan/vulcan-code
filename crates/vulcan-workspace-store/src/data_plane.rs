@@ -846,6 +846,7 @@ mod tests {
             ("table", "project_git_review_preferences"),
             ("table", "project_session_preferences"),
             ("table", "projects"),
+            ("table", "session_activity_marks_v1"),
             ("table", "thread_goals"),
             ("table", "workspace_session_index"),
             ("index", "idx_environment_variable_project_bindings_project"),

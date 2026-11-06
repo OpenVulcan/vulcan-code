@@ -126,10 +126,10 @@ fn shell_tool_schema_descriptions_are_present_and_english() {
             Value::Object(map) => {
                 for (key, child) in map {
                     let child_path = format!("{path}/{key}");
-                    if key == "description" {
-                        if let Some(text) = child.as_str() {
-                            out.push((child_path.clone(), text.to_string()));
-                        }
+                    if key == "description"
+                        && let Some(text) = child.as_str()
+                    {
+                        out.push((child_path.clone(), text.to_string()));
                     }
                     collect_descriptions(child, &child_path, out);
                 }

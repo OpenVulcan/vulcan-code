@@ -22,6 +22,9 @@ const { service } = vi.hoisted(() => ({ service: {
   saveAppUpdateSettings: vi.fn(),
 } }));
 vi.mock("@/service/app-update-service", () => service);
+// The restart guard counts running background commands first; none run here, so the restart starts at once.
+// 重启保护先统计运行中的后台命令；此处没有，因此重启立即开始。
+vi.mock("@/service/session-activity-service", () => ({ countRunningShellJobs: vi.fn(async () => 0) }));
 vi.mock("@/i18n", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/i18n")>();
   const t = (key: import("@/i18n").TranslationKey) => key;
@@ -170,7 +173,7 @@ describe("AppUpdateHeaderButton", () => {
     expect(dialog.querySelector("[data-app-update-ready]")).not.toBeNull();
     service.restartToUpdate.mockResolvedValue(snapshot({ readyVersion: "0.1.5", activity: "restarting" }));
     await act(async () => { dialogButton(dialog, "settings.appUpdate.restart")?.click(); });
-    expect(service.restartToUpdate).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(service.restartToUpdate).toHaveBeenCalledOnce());
   });
 
   it("opens the update settings page from the dialog", async () => {

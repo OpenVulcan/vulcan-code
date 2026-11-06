@@ -486,7 +486,7 @@ pub(crate) async fn service_session_activity(
         let task_id = entry.session_id.as_uuid();
         let events = subagent_recent_events(&registry, &mut locators, &parents, task_id)
             .unwrap_or_else(|error| {
-                eprintln!("[session-activity] subagent {task_id} activity is unavailable: {error}");
+                tracing::warn!(%task_id, %error, "Subagent activity is unavailable");
                 Vec::new()
             });
         let (recent_tools, recent_output) = subagent_recent_activity(&events);

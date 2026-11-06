@@ -239,15 +239,14 @@ pub(super) async fn deliver_recorded_notification(
                             &input.target,
                         )
                         .is_err()
+                            || input.target.turn_id.is_some_and(|turn_id| {
+                                // A frozen target turn that closed or was replaced never reopens.
+                                // 已关闭或被替换的冻结目标回合不会重新打开。
+                                document
+                                    .active_turn()
+                                    .is_none_or(|turn| turn.closed || turn.turn_id != turn_id)
+                            })
                         {
-                            Some(CollaborationDeliveryFailureReason::InvalidBinding)
-                        } else if input.target.turn_id.is_some_and(|turn_id| {
-                            // A frozen target turn that closed or was replaced never reopens.
-                            // 已关闭或被替换的冻结目标回合不会重新打开。
-                            document
-                                .active_turn()
-                                .is_none_or(|turn| turn.closed || turn.turn_id != turn_id)
-                        }) {
                             Some(CollaborationDeliveryFailureReason::InvalidBinding)
                         } else {
                             None
