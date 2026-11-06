@@ -29,6 +29,48 @@
     # Windows PowerShell 5.1 may not offer TLS 1.2 by default; it is added, nothing is removed.
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
+    # Show-Received writes how much of the setup program has arrived over the line it wrote last; a console
+    # that is redirected gets only the final size.
+    function Show-Received([long] $Received, [long] $Total, [bool] $Final) {
+        $Text = '  {0:N1} MB' -f ($Received / 1MB)
+        if ($Total -gt 0) { $Text = '  {0:N1} / {1:N1} MB ({2}%)' -f ($Received / 1MB), ($Total / 1MB), [int](100 * $Received / $Total) }
+        if (-not [Console]::IsOutputRedirected) { Write-Host -NoNewline "`r$Text" }
+        if ($Final) { if ([Console]::IsOutputRedirected) { Write-Host $Text } else { Write-Host '' } }
+    }
+
+    # Receive-Program downloads $Uri to $Path with that progress. An origin that does not answer, or stops
+    # sending, for 30 seconds fails, so the next one is tried instead of waiting without end.
+    function Receive-Program([string] $Uri, [string] $Path) {
+        $Request = [Net.WebRequest]::Create($Uri)
+        $Request.Timeout = 30000
+        $Request.ReadWriteTimeout = 30000
+        $Response = $Request.GetResponse()
+        try {
+            $Stream = $Response.GetResponseStream()
+            $Output = [IO.File]::Create($Path)
+            try {
+                $Buffer = New-Object byte[] 65536
+                $Received = 0L
+                Show-Received 0 $Response.ContentLength $false
+                $Clock = [Diagnostics.Stopwatch]::StartNew()
+                while (($Count = $Stream.Read($Buffer, 0, $Buffer.Length)) -gt 0) {
+                    $Output.Write($Buffer, 0, $Count)
+                    $Received += $Count
+                    if ($Clock.ElapsedMilliseconds -ge 200) {
+                        Show-Received $Received $Response.ContentLength $false
+                        $Clock.Restart()
+                    }
+                }
+                Show-Received $Received $Response.ContentLength $true
+            } finally {
+                $Output.Dispose()
+                $Stream.Dispose()
+            }
+        } finally {
+            $Response.Dispose()
+        }
+    }
+
     $File = "vulcan-code-setup-$Version-windows-x64.exe"
     $Work = Join-Path ([IO.Path]::GetTempPath()) ('vulcan-code-setup-' + [Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $Work | Out-Null
@@ -37,12 +79,16 @@
         # The origins are tried in order; the mirror serves the same verified objects.
         $Fetched = $false
         foreach ($Origin in $Origins) {
+            Write-Host "Downloading the Vulcan Code setup program $Version from $Origin"
             try {
-                Invoke-WebRequest -UseBasicParsing -Uri "$Origin/setup/$Version/$File" -OutFile $Program
+                Receive-Program "$Origin/setup/$Version/$File" $Program
                 $Fetched = $true
                 break
             } catch {
-                Write-Warning "Cannot download from $Origin, trying the next origin"
+                if (-not [Console]::IsOutputRedirected) { Write-Host '' }
+                $Reason = $_.Exception
+                while ($Reason.InnerException) { $Reason = $Reason.InnerException }
+                Write-Warning "Cannot download from $Origin ($($Reason.Message)), trying the next origin"
             }
         }
         if (-not $Fetched) { throw "Cannot download $File" }
@@ -56,6 +102,7 @@
                 throw "$File is not signed by the Vulcan Code certificate ($($Signature.Status))"
             }
         }
+        Write-Host "Starting the setup program $Version"
         & $Program @args
         if ($LASTEXITCODE -ne 0) { throw "vulcan-code-setup exited with $LASTEXITCODE" }
         # A program cannot change the environment of the shell that started it, so the user PATH

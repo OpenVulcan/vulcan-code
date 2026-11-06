@@ -48,8 +48,12 @@ case "$Platform" in
 esac
 File="vulcan-code-setup-$Version-$Platform"
 
+# A terminal shows a progress bar. An origin slower than 1 KB/s for 30 seconds fails, so the next one is tried
+# instead of waiting without end.
+# 终端上显示进度条。下载源连续 30 秒低于 1 KB/s 即失败，改试下一个，而不是无限等待。
 if command -v curl > /dev/null 2>&1; then
-    fetch() { curl -fsSL --retry 2 --connect-timeout 10 -o "$2" "$1"; }
+    if [ -t 2 ]; then Progress=--progress-bar; else Progress=--silent; fi
+    fetch() { curl -fL "$Progress" -S --connect-timeout 10 --speed-limit 1024 --speed-time 30 -o "$2" "$1"; }
 elif command -v wget > /dev/null 2>&1; then
     fetch() { wget -q -T 30 -O "$2" "$1"; }
 else
@@ -72,7 +76,8 @@ Program="$Work/vulcan-code-setup"
 # 按顺序尝试各下载源；镜像提供相同的已校验对象。
 Fetched=0
 for Origin in $Origins; do
-    if fetch "$Origin/setup/$Version/$File" "$Program" 2> /dev/null; then
+    printf 'Downloading the Vulcan Code setup program %s (%s) from %s\n' "$Version" "$Platform" "$Origin" >&2
+    if fetch "$Origin/setup/$Version/$File" "$Program"; then
         Fetched=1
         break
     fi
@@ -82,6 +87,7 @@ done
 Actual=$(sha256_of "$Program")
 [ "$Actual" = "$Digest" ] || fail "$File does not match its published SHA-256 (expected $Digest, got $Actual)"
 chmod 755 "$Program"
+printf 'Starting the setup program %s\n' "$Version" >&2
 
 # Under `curl | sh` standard input is this script, so the setup program reads the terminal instead;
 # without a terminal it needs --yes.
