@@ -7,30 +7,16 @@ use std::path::PathBuf;
 
 use ratatui::Frame;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::layout::{Constraint, Layout, Margin};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
-use vulcan_i18n::{SETUP, Translator, format_template};
+use vulcan_i18n::{Translator, format_template};
 use vulcan_install_core::names::{Channel, Platform};
 
 use crate::args::check_port_range;
 use crate::install::resolve_root;
-use crate::integrate::{self, Location, Plan};
+use crate::integrate::{self, Plan};
 use crate::root;
-
-/// Accent colour, the primary colour of `vulcan-code-tui`'s themes; only foreground colours are
-/// set, so the terminal's own background shows through in light and dark terminals alike.
-/// 强调色，即 `vulcan-code-tui` 主题的主色；只设置前景色，因此无论浅色还是深色终端都透出终端自身的背景。
-const ACCENT: Color = Color::Rgb(0xf8, 0x73, 0x31);
-
-/// Secondary text colour.
-/// 次要文字颜色。
-const MUTED: Color = Color::Rgb(0x9a, 0xa0, 0xa8);
-
-/// Error and warning text colour.
-/// 错误与警告文字颜色。
-const DANGER: Color = Color::Rgb(0xf8, 0x51, 0x49);
+use crate::screen::{ACCENT, DANGER, MUTED, Screen, fields, location_lines, page, text};
 
 /// The choices being edited.
 /// 正在编辑的选择。
@@ -430,60 +416,39 @@ fn check_location(platform: Platform, text: &str) -> Result<PathBuf, String> {
     Ok(root)
 }
 
-/// Runs the wizard on the terminal; `None` when the person left without installing.
-/// 在终端上运行向导；用户未安装就离开时为 `None`。
-pub fn run(platform: Platform, draft: Draft) -> Result<Option<Draft>, String> {
-    let mut translator = Translator::new(&[&SETUP]);
-    translator.set_locale(vulcan_i18n::system_locale());
+/// Runs the wizard on `screen`, from the summary when `at_summary`; `None` when the person left
+/// without installing.
+/// 在 `screen` 上运行向导，`at_summary` 时从汇总屏开始；用户未安装就离开时为 `None`。
+pub fn run(
+    screen: &mut Screen,
+    platform: Platform,
+    draft: Draft,
+    at_summary: bool,
+) -> Result<Option<Draft>, String> {
     let mut wizard = Wizard::new(platform, integrate::running_as_root(), draft);
-    let mut terminal = ratatui::try_init()
-        .map_err(|error| format!("cannot start the interactive installer: {error}"))?;
-    let result = loop {
-        if let Err(error) = terminal.draw(|frame| render(frame, &wizard, &translator)) {
-            break Err(format!("cannot draw the interactive installer: {error}"));
-        }
+    if at_summary {
+        wizard.step = STEPS.len() - 1;
+        wizard.enter();
+    }
+    loop {
+        screen.draw(|frame, translator| render(frame, &wizard, translator))?;
         let key = match event::read() {
             Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => key,
             Ok(_) => continue,
-            Err(error) => break Err(format!("cannot read the keyboard: {error}")),
+            Err(error) => return Err(format!("cannot read the keyboard: {error}")),
         };
         match wizard.handle(key) {
             Flow::Stay => {}
-            Flow::Finish => break Ok(Some(wizard.draft.clone())),
-            Flow::Cancel => break Ok(None),
+            Flow::Finish => return Ok(Some(wizard.draft)),
+            Flow::Cancel => return Ok(None),
         }
-    };
-    let _ = ratatui::try_restore();
-    result
-}
-
-/// Text of `key`, or the key itself when the catalog lacks it (a complete surface never does).
-/// `key` 的文案；目录缺少该键时返回键本身（完整分面不会缺少）。
-fn text<'t>(translator: &'t Translator, key: &'t str) -> &'t str {
-    translator.text(key).unwrap_or(key)
+    }
 }
 
 /// Draws the current screen.
 /// 绘制当前屏。
 fn render(frame: &mut Frame<'_>, wizard: &Wizard, translator: &Translator) {
     let t = |key| text(translator, key);
-    let area = frame.area();
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(MUTED))
-        .title(Span::styled(
-            format!(" {} ", t("setup.title")),
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-        ));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    let [header, body, footer] = Layout::vertical([
-        Constraint::Length(3),
-        Constraint::Min(1),
-        Constraint::Length(2),
-    ])
-    .areas(inner.inner(Margin::new(2, 1)));
-
     let step = wizard.current();
     let title = match step {
         Step::Components => "setup.components.title",
@@ -500,14 +465,6 @@ fn render(frame: &mut Frame<'_>, wizard: &Wizard, translator: &Translator) {
             ("total", &STEPS.len().to_string()),
         ],
     );
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::styled(counter, Style::default().fg(MUTED)),
-            Line::styled(t(title), Style::default().add_modifier(Modifier::BOLD)),
-        ]),
-        header,
-    );
-
     let mut lines = match step {
         Step::Components | Step::Integration => {
             let toggles = wizard.toggles();
@@ -547,8 +504,6 @@ fn render(frame: &mut Frame<'_>, wizard: &Wizard, translator: &Translator) {
         lines.push(Line::default());
         lines.push(Line::styled(error.clone(), Style::default().fg(DANGER)));
     }
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
-
     let hint = match step {
         Step::Channel => "setup.hint.choose",
         Step::Components | Step::Integration => "setup.hint.toggle",
@@ -556,11 +511,7 @@ fn render(frame: &mut Frame<'_>, wizard: &Wizard, translator: &Translator) {
         Step::Advanced => "setup.hint.ports",
         Step::Summary => "setup.hint.summary",
     };
-    frame.render_widget(
-        Paragraph::new(Line::styled(t(hint), Style::default().fg(MUTED)))
-            .wrap(Wrap { trim: false }),
-        footer,
-    );
+    page(frame, translator, &counter, t(title), lines, t(hint), 0);
 }
 
 /// Lines of a list screen: radio buttons when `states` is `None`, check boxes otherwise.
@@ -642,35 +593,17 @@ fn summary_lines<'a>(translator: &'a Translator, wizard: &Wizard) -> Vec<Line<'a
     };
     let root = check_location(wizard.platform, &draft.root)
         .unwrap_or_else(|_| PathBuf::from(draft.root.trim()));
-    let labels = [
-        "setup.summary.components",
-        "setup.summary.directory",
-        "setup.summary.channel",
-        "setup.summary.ports",
-    ];
-    let label_width = labels
-        .iter()
-        .map(|key| Span::raw(t(key)).width())
-        .max()
-        .unwrap_or(0);
-    let field = |label: &'a str, value: String| {
-        let padding = label_width.saturating_sub(Span::raw(label).width()) + 2;
-        Line::from(vec![
-            Span::styled(
-                format!("{label}{}", " ".repeat(padding)),
-                Style::default().fg(MUTED),
-            ),
-            Span::raw(value),
-        ])
-    };
-    let mut lines = vec![
-        field(t("setup.summary.components"), components.join(", ")),
-        field(t("setup.summary.directory"), root.display().to_string()),
-        field(t("setup.summary.channel"), channel.to_owned()),
-        field(t("setup.summary.ports"), ports),
-        Line::default(),
-        Line::styled(t("setup.summary.writes"), Style::default().fg(MUTED)),
-    ];
+    let mut lines = fields(vec![
+        (t("setup.summary.components"), components.join(", ")),
+        (t("setup.summary.directory"), root.display().to_string()),
+        (t("setup.summary.channel"), channel.to_owned()),
+        (t("setup.summary.ports"), ports),
+    ]);
+    lines.push(Line::default());
+    lines.push(Line::styled(
+        t("setup.summary.writes"),
+        Style::default().fg(MUTED),
+    ));
     let version = String::new();
     let plan = Plan {
         platform: wizard.platform,
@@ -685,35 +618,7 @@ fn summary_lines<'a>(translator: &'a Translator, wizard: &Wizard) -> Vec<Line<'a
         port_range: None,
     };
     let locations = plan.locations().unwrap_or_default();
-    if locations.is_empty() {
-        lines.push(Line::raw(format!("  {}", t("setup.summary.writesNone"))));
-    }
-    let service = if wizard.platform.is_windows() {
-        "setup.writes.serviceLoginRun"
-    } else if wizard.platform.is_macos() {
-        "setup.writes.serviceLaunchAgent"
-    } else {
-        "setup.writes.userService"
-    };
-    for location in locations {
-        let (key, path) = match &location {
-            Location::Commands(path) => ("setup.writes.commands", Some(path)),
-            Location::MenuEntry(path) => ("setup.writes.menuEntry", Some(path)),
-            Location::DesktopShortcut(path) => ("setup.writes.desktopShortcut", Some(path)),
-            Location::AppBundle(path) => ("setup.writes.appBundle", Some(path)),
-            Location::UserPath(path) => ("setup.writes.userPath", Some(path)),
-            Location::UninstallEntry => ("setup.writes.uninstallEntry", None),
-            Location::UserService => (service, None),
-            Location::Linger => ("setup.writes.linger", None),
-        };
-        let path = path
-            .map(|path| path.display().to_string())
-            .unwrap_or_default();
-        lines.push(Line::raw(format!(
-            "  {}",
-            format_template(t(key), &[("path", &path)])
-        )));
-    }
+    lines.extend(location_lines(translator, wizard.platform, &locations));
     if wizard.root_user {
         lines.push(Line::default());
         lines.push(Line::styled(
@@ -741,6 +646,7 @@ mod tests {
     use super::*;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use vulcan_i18n::SETUP;
 
     fn platform(name: &str) -> Platform {
         Platform::ALL

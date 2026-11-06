@@ -4,16 +4,15 @@
 //! 代码路径（方案 18.6 节）。
 
 use std::collections::BTreeSet;
-use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use vulcan_install_core::assemble::Assembly;
+use vulcan_install_core::assemble::{Assembly, PreparedAssembly};
 use vulcan_install_core::fetch::{Downloader, Route};
 use vulcan_install_core::index::ComponentIndex;
-use vulcan_install_core::install_root::InstallRoot;
+use vulcan_install_core::install_root::{CURRENT_LINK, InstallLock, InstallRoot, UPDATES_DIR};
 use vulcan_install_core::manifest::ReleaseManifest;
 use vulcan_install_core::names::{Channel, ComponentName, Platform, ReleaseVersion};
 use vulcan_install_core::record::RECORD_FILE_NAME;
@@ -21,13 +20,19 @@ use vulcan_install_core::signing::BUILT_IN_KEYS;
 use vulcan_install_core::update::{find_update, read_indexes};
 
 use crate::args::{BROWSER_COMPONENT, CommonOptions, InstallOptions, check_port_range};
-use crate::integrate::{self, Plan, Recorder, SETUP_PROGRAM};
+use crate::integrate::{self, CLI_DIR, Plan, Recorder, SETUP_PROGRAM};
 use crate::paths;
-use crate::prompt::{confirm, megabytes};
+use crate::report::{Action, BACK, Decision, DesktopWay, Outcome, Plain, Reporter, Review, Stage};
 use crate::root::{self, Current, Description, LEGACY_MARKER, Ownership, Version};
+use crate::screen::Screen;
 use crate::selfupdate;
+use crate::session;
 use crate::state::{Item, SETUP_DIR, STATE_SCHEMA, SetupState};
 use crate::wizard::{self, Draft};
+
+/// How often the download progress is reported.
+/// 下载进度的报告间隔。
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(200);
 
 /// User agent of every request.
 /// 每个请求的用户代理。
@@ -224,7 +229,9 @@ pub fn install(options: &InstallOptions) -> Result<(), String> {
     };
     let start = Choices::resolve(options, recorded, platform, graphical(platform))?;
     if !wizard::wanted(options.common.yes) {
-        return apply(platform, &root, &ownership, &start, options.common.yes);
+        let reporter = Plain::new(options.common.yes);
+        return apply(platform, &root, &ownership, &start, &reporter)
+            .map(|outcome| outcome.print());
     }
     // The wizard starts from the options given, then the recorded choices, then the defaults.
     // 向导依次以给出的选项、记录的选择与默认值为起点。
@@ -241,33 +248,61 @@ pub fn install(options: &InstallOptions) -> Result<(), String> {
         channel: start.channel,
         port_range: start.port_range.clone().unwrap_or_default(),
     };
-    let Some(draft) = wizard::run(platform, draft)? else {
-        return Err(String::from(crate::CANCELLED));
-    };
-    let root = resolve_root(Some(Path::new(draft.root.trim())), platform)?;
-    let ownership = root::installable(&root)?;
-    let route = match &ownership {
-        Ownership::Owned(state) => options.route.unwrap_or(state.route),
-        _ => options.route.unwrap_or_default(),
-    };
-    let port_range = Some(draft.port_range.trim().to_owned()).filter(|range| !range.is_empty());
-    let choices = Choices {
-        gui: draft.gui,
-        channel: draft.channel,
-        route,
-        with: if draft.browser {
-            vec![browser]
-        } else {
-            Vec::new()
-        },
-        menu: draft.menu,
-        desktop_shortcut: draft.desktop_shortcut,
-        path: draft.path,
-        service: draft.service,
-        linger: draft.linger,
-        port_range,
-    };
-    apply(platform, &root, &ownership, &choices, false)
+    // The terminal stays in the interactive installer from the wizard to the last page; the outcome
+    // is printed once it is given back.
+    // 终端从向导到最后一页都保持在交互式安装界面中；归还终端后再打印结果。
+    let mut screen = Screen::open()?;
+    let outcome = interactive(&mut screen, platform, options, draft, browser);
+    drop(screen);
+    outcome.map(|outcome| outcome.print())
+}
+
+/// The wizard, then the run with its pages; going back from the review returns to the wizard's
+/// summary.
+/// 先运行向导，再运行带各页的安装；从审阅返回时回到向导的汇总屏。
+fn interactive(
+    screen: &mut Screen,
+    platform: Platform,
+    options: &InstallOptions,
+    mut draft: Draft,
+    browser: ComponentName,
+) -> Result<Outcome, String> {
+    let mut at_summary = false;
+    loop {
+        let Some(chosen) = wizard::run(screen, platform, draft, at_summary)? else {
+            return Err(String::from(crate::CANCELLED));
+        };
+        draft = chosen;
+        let root = resolve_root(Some(Path::new(draft.root.trim())), platform)?;
+        let ownership = root::installable(&root)?;
+        let route = match &ownership {
+            Ownership::Owned(state) => options.route.unwrap_or(state.route),
+            _ => options.route.unwrap_or_default(),
+        };
+        let port_range = Some(draft.port_range.trim().to_owned()).filter(|range| !range.is_empty());
+        let choices = Choices {
+            gui: draft.gui,
+            channel: draft.channel,
+            route,
+            with: if draft.browser {
+                vec![browser.clone()]
+            } else {
+                Vec::new()
+            },
+            menu: draft.menu,
+            desktop_shortcut: draft.desktop_shortcut,
+            path: draft.path,
+            service: draft.service,
+            linger: draft.linger,
+            port_range,
+        };
+        match session::run(screen, true, |reporter| {
+            apply(platform, &root, &ownership, &choices, reporter)
+        }) {
+            Err(error) if error == BACK => at_summary = true,
+            result => return result,
+        }
+    }
 }
 
 /// `vulcan-code-setup update`.
@@ -292,7 +327,17 @@ pub fn update(options: &CommonOptions) -> Result<(), String> {
         platform,
         false,
     )?;
-    apply(platform, &root, &ownership, &choices, options.yes)
+    if !wizard::wanted(options.yes) {
+        let reporter = Plain::new(options.yes);
+        return apply(platform, &root, &ownership, &choices, &reporter)
+            .map(|outcome| outcome.print());
+    }
+    let mut screen = Screen::open()?;
+    let outcome = session::run(&mut screen, false, |reporter| {
+        apply(platform, &root, &ownership, &choices, reporter)
+    });
+    drop(screen);
+    outcome.map(|outcome| outcome.print())
 }
 
 /// The install root: `--prefix` or the platform default, absolute and usable in launchers.
@@ -380,15 +425,18 @@ enum Work {
     Refresh(ReleaseVersion),
 }
 
-/// Installs or refreshes `root` with `choices`.
-/// 以 `choices` 安装或刷新 `root`。
+/// Installs or refreshes `root` with `choices`, reporting to `reporter`. Nothing is downloaded or
+/// switched before the review, which shows the exact download, says to go on; going back or
+/// cancelling leaves the root as it was found.
+/// 以 `choices` 安装或刷新 `root`，并向 `reporter` 报告。审阅（显示确切的下载量）同意继续之前，不下载也
+/// 不切换任何内容；返回或取消时根目录保持原样。
 fn apply(
     platform: Platform,
     root_path: &Path,
     ownership: &Ownership,
     choices: &Choices,
-    yes: bool,
-) -> Result<(), String> {
+    reporter: &dyn Reporter,
+) -> Result<Outcome, String> {
     let root = InstallRoot::new(root_path);
     let current = if root_path.exists() {
         root::current(&root)?
@@ -408,7 +456,9 @@ fn apply(
     };
     let mut downloader =
         Downloader::new(choices.route.origins(), USER_AGENT).map_err(|error| error.to_string())?;
-    println!("Checking the {} channel...", choices.channel.as_str());
+    let cancel = downloader.cancel_flag();
+    reporter.cancel_with(Arc::clone(&cancel));
+    reporter.stage(Stage::Checking(choices.channel));
     let offer = find_update(
         &mut downloader,
         BUILT_IN_KEYS,
@@ -416,7 +466,7 @@ fn apply(
         choices.channels(),
         &floor,
     )
-    .map_err(|error| error.to_string())?;
+    .map_err(|error| failure(&cancel, error))?;
     let work = match (offer, &installed) {
         (Some(offer), _) => {
             let own = selfupdate::version()?;
@@ -433,7 +483,7 @@ fn apply(
                 ));
             }
             let indexes = read_indexes(&mut downloader, &offer.manifest, &components)
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| failure(&cancel, error))?;
             Work::Assemble {
                 manifest: Box::new(offer.manifest),
                 indexes,
@@ -476,83 +526,61 @@ fn apply(
         linger: choices.linger,
         port_range: choices.port_range.as_deref(),
     };
-    println!();
-    match &work {
-        Work::Assemble { indexes, .. } => {
-            let size: u64 = indexes.iter().map(ComponentIndex::installed_size).sum();
-            match &installed {
-                Some(installed) => println!("Update Vulcan Code {installed} to {version}"),
-                None => println!("Install Vulcan Code {version}"),
+    let action = match (&work, &installed) {
+        (Work::Refresh(_), _) => Action::Refresh,
+        (Work::Assemble { .. }, Some(from)) => Action::Update {
+            from: from.to_string(),
+        },
+        (Work::Assemble { .. }, None) => Action::Install,
+    };
+    let review = Review {
+        platform,
+        action: action.clone(),
+        version: version_text.clone(),
+        channel: choices.channel,
+        components: components.iter().cloned().collect(),
+        directory: root_path.to_path_buf(),
+        download: 0,
+        installed_size: match (&work, &installed) {
+            (Work::Assemble { indexes, .. }, None) => {
+                Some(indexes.iter().map(ComponentIndex::installed_size).sum())
             }
-            println!("  components: {}", join(&components));
-            println!("  size: {}", megabytes(size));
-        }
-        Work::Refresh(_) => {
-            println!("Vulcan Code {version} is up to date; refresh its integration")
-        }
-    }
-    println!("  directory: {}", root_path.display());
-    for line in plan.locations()? {
-        println!("  {line}");
-    }
-    if let Some(range) = &choices.port_range {
-        println!("  service ports: {range}");
-    }
-    if !confirm("Continue?", yes)? {
-        return Err(String::from(crate::CANCELLED));
-    }
+            _ => None,
+        },
+        locations: plan.locations()?,
+        port_range: choices.port_range.clone(),
+    };
 
+    // What this run creates before the switch is removed again when the review is declined.
+    // 审阅被拒绝时，移除本次运行在切换之前创建的内容。
+    let undo = Undo::note(&root, &version);
     std::fs::create_dir_all(root_path)
         .map_err(|error| format!("cannot create {}: {error}", root_path.display()))?;
     let lock = root.lock().map_err(|error| error.to_string())?;
-    let switched = match work {
-        Work::Assemble { manifest, indexes } => {
-            let version_dir = root.version_dir(&version);
-            if !version_dir.join(RECORD_FILE_NAME).is_file() {
-                let prepared = Assembly::new(&root, &lock, &manifest, indexes)
-                    .and_then(|assembly| assembly.prepare())
-                    .map_err(|error| error.to_string())?;
-                let total = prepared.download_bytes();
-                let counter = downloader.received_counter();
-                let start = counter.load(Ordering::Relaxed);
-                let done = Arc::new(AtomicBool::new(false));
-                let result = std::thread::scope(|scope| {
-                    if std::io::stderr().is_terminal() {
-                        let done = Arc::clone(&done);
-                        let counter = Arc::clone(&counter);
-                        scope.spawn(move || {
-                            while !done.load(Ordering::Relaxed) {
-                                let received = counter.load(Ordering::Relaxed) - start;
-                                eprint!(
-                                    "\r  downloading {} of {}   ",
-                                    megabytes(received.min(total)),
-                                    megabytes(total)
-                                );
-                                std::thread::sleep(Duration::from_millis(250));
-                            }
-                            eprintln!();
-                        });
-                    }
-                    let result = prepared.complete(&mut downloader);
-                    done.store(true, Ordering::Relaxed);
-                    result
-                });
-                result.map_err(|error| error.to_string())?;
-                if let Err(error) = check_release_build(&version_dir) {
-                    let _ = std::fs::remove_dir_all(&version_dir);
-                    return Err(error);
-                }
+    let switched = match assemble(
+        &root,
+        &lock,
+        work,
+        &version,
+        review,
+        reporter,
+        &mut downloader,
+        &cancel,
+    ) {
+        Ok(switched) => switched,
+        Err(error) => {
+            drop(lock);
+            if error == crate::CANCELLED || error == BACK {
+                undo.run();
             }
-            root.switch_to(&lock, &version)
-                .map_err(|error| error.to_string())?;
-            true
+            return Err(error);
         }
-        Work::Refresh(_) => false,
     };
     if *ownership == Ownership::Legacy {
         let _ = std::fs::remove_file(root_path.join(LEGACY_MARKER));
     }
 
+    reporter.stage(Stage::Integrating);
     let installed_version = Version::read(&root.version_dir(&version))?;
     let previous_items: &[Item] = match ownership {
         Ownership::Owned(state) => &state.items,
@@ -561,8 +589,9 @@ fn apply(
     let mut recorder = Recorder::new(previous_items);
     // The setup program is copied first, so the service registered below never outlives it.
     // 先复制安装器，使下面注册的服务绝不会比安装器存在得更久。
-    let integrated = copy_self(root_path)
-        .and_then(|()| integrate::integrate(&plan, &installed_version, switched, &mut recorder));
+    let integrated = copy_self(root_path).and_then(|()| {
+        integrate::integrate(&plan, &installed_version, switched, &mut recorder, reporter)
+    });
     let mut state = SetupState {
         schema: STATE_SCHEMA,
         channel: choices.channel,
@@ -602,6 +631,7 @@ fn apply(
     state.write(root_path)?;
     integrated?;
 
+    reporter.stage(Stage::Cleaning);
     let removed = root
         .prune_versions(&lock, &version)
         .map_err(|error| error.to_string())?;
@@ -612,68 +642,253 @@ fn apply(
     root::remove_legacy_generations(&root, keep);
     drop(lock);
 
-    println!();
-    if switched {
-        println!(
-            "Installed Vulcan Code {version} into {}.",
-            root_path.display()
-        );
+    Ok(Outcome {
+        platform,
+        action,
+        version: version_text,
+        directory: root_path.to_path_buf(),
+        terminal: terminal_command(platform, root_path, choices.path, &installed_version),
+        desktop: desktop_way(
+            platform,
+            root_path,
+            choices,
+            &recorder.items,
+            &installed_version,
+        ),
+        setup: setup_command(root_path, choices.path),
+        removed: removed.iter().map(ToString::to_string).collect(),
+        browser_dependencies: choices
+            .with
+            .iter()
+            .any(|name| name.as_str() == BROWSER_COMPONENT)
+            && !platform.is_windows()
+            && !platform.is_macos(),
+        notes: recorder.notes.iter().chain(&problems).cloned().collect(),
+    })
+}
+
+/// Prepares the assembly of `work`, asks for `review` with the exact download, then downloads and
+/// switches to `version`; returns whether the current version changed.
+/// 准备 `work` 的组装，以确切的下载量请求 `review`，然后下载并切换到 `version`；返回当前版本是否改变。
+#[allow(clippy::too_many_arguments)]
+fn assemble(
+    root: &InstallRoot,
+    lock: &InstallLock,
+    work: Work,
+    version: &ReleaseVersion,
+    mut review: Review,
+    reporter: &dyn Reporter,
+    downloader: &mut Downloader,
+    cancel: &AtomicBool,
+) -> Result<bool, String> {
+    let (manifest, indexes) = match work {
+        Work::Refresh(_) => {
+            decide(reporter, &review)?;
+            return Ok(false);
+        }
+        Work::Assemble { manifest, indexes } => (manifest, indexes),
+    };
+    let version_dir = root.version_dir(version);
+    // A version assembled by an earlier run that did not switch is complete already.
+    // 更早一次未切换的运行已组装好的版本已经完整。
+    let prepared = if version_dir.join(RECORD_FILE_NAME).is_file() {
+        None
     } else {
-        println!(
-            "Vulcan Code {version} in {} was refreshed.",
-            root_path.display()
-        );
+        reporter.stage(Stage::Preparing);
+        let prepared = Assembly::new(root, lock, &manifest, indexes)
+            .and_then(Assembly::prepare)
+            .map_err(|error| error.to_string())?;
+        Some(prepared)
+    };
+    review.download = prepared
+        .as_ref()
+        .map_or(0, PreparedAssembly::download_bytes);
+    decide(reporter, &review)?;
+    if let Some(prepared) = prepared {
+        reporter.stage(Stage::Downloading);
+        let total = prepared.download_bytes();
+        let counter = downloader.received_counter();
+        let start = counter.load(Ordering::Relaxed);
+        let done = AtomicBool::new(false);
+        let result = std::thread::scope(|scope| {
+            if total > 0 {
+                scope.spawn(|| {
+                    loop {
+                        let finished = done.load(Ordering::Relaxed);
+                        let received = counter.load(Ordering::Relaxed).saturating_sub(start);
+                        reporter.progress(received.min(total), total);
+                        if finished {
+                            break;
+                        }
+                        std::thread::sleep(PROGRESS_INTERVAL);
+                    }
+                });
+            }
+            let result = prepared.complete(downloader);
+            done.store(true, Ordering::Relaxed);
+            result
+        });
+        result.map_err(|error| failure(cancel, error))?;
+        if let Err(error) = check_release_build(&version_dir) {
+            let _ = std::fs::remove_dir_all(&version_dir);
+            return Err(error);
+        }
     }
-    // The app goes to the Applications folder of the user's home, which Finder does not show by
-    // default, so the way to it is named.
-    // 应用放在用户主目录的「应用程序」文件夹中，Finder 默认不显示它，因此说明打开方式。
-    if let Some(bundle) = recorder.items.iter().find_map(|item| match item {
-        Item::Bundle { path } => Some(path),
+    reporter.stage(Stage::Switching);
+    root.switch_to(lock, version)
+        .map_err(|error| error.to_string())?;
+    Ok(true)
+}
+
+/// Asks for `review`; going back and cancelling become their errors.
+/// 请求 `review`；返回与取消转为各自的错误。
+fn decide(reporter: &dyn Reporter, review: &Review) -> Result<(), String> {
+    match reporter.review(review)? {
+        Decision::Continue => Ok(()),
+        Decision::Back => Err(String::from(BACK)),
+        Decision::Cancel => Err(String::from(crate::CANCELLED)),
+    }
+}
+
+/// The error of a transfer: a cancellation once `cancel` is set, `error` otherwise.
+/// 传输的错误：`cancel` 已设置时为取消，否则为 `error`。
+fn failure(cancel: &AtomicBool, error: impl std::fmt::Display) -> String {
+    if cancel.load(Ordering::Relaxed) {
+        String::from(crate::CANCELLED)
+    } else {
+        error.to_string()
+    }
+}
+
+/// What was missing before a run created anything, so that a declined review leaves the root as it
+/// was found. A failed run keeps what it downloaded, so the next run resumes.
+/// 运行创建任何内容之前缺少的部分，使被拒绝的审阅让根目录保持原样。失败的运行保留已下载的内容，以便
+/// 下一次运行续装。
+struct Undo {
+    /// The install root.
+    /// 安装根目录。
+    root: PathBuf,
+    /// Whether the root itself was missing.
+    /// 根目录本身是否缺失。
+    created_root: bool,
+    /// Missing directories inside the root, innermost first.
+    /// 根目录内缺失的目录，最内层在前。
+    created: Vec<PathBuf>,
+}
+
+impl Undo {
+    /// Notes what is missing for assembling `version` in `root`.
+    /// 记下在 `root` 中组装 `version` 所缺少的内容。
+    fn note(root: &InstallRoot, version: &ReleaseVersion) -> Self {
+        let path = root.path().to_path_buf();
+        let created = [root.staging_dir(version), path.join(UPDATES_DIR)]
+            .into_iter()
+            .filter(|dir| !dir.exists())
+            .collect();
+        Self {
+            created_root: !path.exists(),
+            root: path,
+            created,
+        }
+    }
+
+    /// Removes what the run created.
+    /// 移除本次运行创建的内容。
+    fn run(self) {
+        if self.created_root {
+            let _ = std::fs::remove_dir_all(&self.root);
+            return;
+        }
+        for dir in self.created {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+}
+
+/// `path` in double quotes, as a command to type.
+/// 置于双引号中的 `path`，作为要输入的命令。
+fn quoted(path: &Path) -> String {
+    format!("\"{}\"", path.display())
+}
+
+/// The command that starts the terminal client: its name on PATH, its full path otherwise.
+/// 启动终端客户端的命令：已加入 PATH 时为其名称，否则为完整路径。
+fn terminal_command(platform: Platform, root: &Path, on_path: bool, version: &Version) -> String {
+    let program = if on_path {
+        None
+    } else if platform.is_windows() {
+        Some(root.join(CLI_DIR).join(integrate::TUI_FORWARDER))
+    } else {
+        version
+            .layout
+            .tui_executable
+            .as_ref()
+            .map(|tui| root.join(CURRENT_LINK).join(tui))
+    };
+    program.map_or_else(
+        || String::from(integrate::TUI_COMMAND),
+        |path| quoted(&path),
+    )
+}
+
+/// How the desktop app is opened: the entry this run created, or the program itself.
+/// 桌面应用的打开方式：本次运行创建的入口，或程序本身。
+fn desktop_way(
+    platform: Platform,
+    root: &Path,
+    choices: &Choices,
+    items: &[Item],
+    version: &Version,
+) -> Option<DesktopWay> {
+    if !choices.gui {
+        return None;
+    }
+    if let Some(bundle) = items.iter().find_map(|item| match item {
+        Item::Bundle { path } => Some(path.clone()),
         _ => None,
     }) {
-        println!(
-            "Open the desktop app with Spotlight (search \"Vulcan Code\") or from {}.",
-            bundle.display()
-        );
+        return Some(DesktopWay::Bundle(bundle));
     }
-    if !removed.is_empty() {
-        println!(
-            "Removed older versions: {}.",
-            removed
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
+    if choices.menu && !platform.is_macos() {
+        return Some(if platform.is_windows() {
+            DesktopWay::StartMenu
+        } else {
+            DesktopWay::AppMenu
+        });
     }
-    if choices
-        .with
-        .iter()
-        .any(|name| name.as_str() == BROWSER_COMPONENT)
-        && !platform.is_windows()
-        && !platform.is_macos()
-    {
-        println!(
-            "The built-in browser needs system libraries once: vulcan-code-service \
-             --install-browser-dependencies (uses sudo)."
-        );
+    if choices.desktop_shortcut {
+        return Some(DesktopWay::Shortcut);
     }
-    for note in recorder.notes.iter().chain(&problems) {
-        println!("{note}");
+    if platform.is_windows() {
+        return Some(DesktopWay::Program(quoted(
+            &root.join(integrate::ROOT_LAUNCHER),
+        )));
     }
-    println!("{}", uninstall_hint(root_path, choices.path));
-    Ok(())
+    if choices.path {
+        return Some(DesktopWay::Program(String::from(
+            integrate::DESKTOP_COMMAND,
+        )));
+    }
+    let desktop = version.layout.desktop_executable.as_ref()?;
+    Some(DesktopWay::Program(quoted(
+        &root.join(CURRENT_LINK).join(desktop),
+    )))
+}
+
+/// The command that runs the setup program again: its name on PATH, its full path otherwise.
+/// 再次运行安装器的命令：已加入 PATH 时为其名称，否则为完整路径。
+pub fn setup_command(root: &Path, on_path: bool) -> String {
+    if on_path {
+        String::from(integrate::SETUP_COMMAND)
+    } else {
+        quoted(&root.join(SETUP_DIR).join(SETUP_PROGRAM))
+    }
 }
 
 /// How to uninstall: the command on PATH when it was put there, the full path otherwise.
 /// 如何卸载：命令已加入 PATH 时给出命令，否则给出完整路径。
 pub fn uninstall_hint(root: &Path, on_path: bool) -> String {
-    let program = root.join(SETUP_DIR).join(SETUP_PROGRAM);
-    let command = if on_path {
-        String::from("vulcan-code-setup")
-    } else {
-        format!("\"{}\"", program.display())
-    };
+    let command = setup_command(root, on_path);
     let mut hint = format!(
         "To uninstall: {command} uninstall (add --purge to also delete your sessions and settings)"
     );
@@ -846,6 +1061,41 @@ mod tests {
                     .to_string()
             )
         );
+    }
+
+    #[test]
+    fn a_declined_review_leaves_the_root_as_it_was_found() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let version: ReleaseVersion = "1.2.3".parse().expect("version");
+        // A root this run creates goes away completely.
+        // 本次运行创建的根目录会被完全移除。
+        let fresh = InstallRoot::new(temp.path().join("fresh"));
+        let undo = Undo::note(&fresh, &version);
+        std::fs::create_dir_all(fresh.staging_dir(&version)).expect("staging");
+        undo.run();
+        assert!(!fresh.path().exists());
+        // In an existing root only the directories this run created go, not an earlier download.
+        // 在已有的根目录中只移除本次运行创建的目录，不移除更早的下载。
+        let existing = InstallRoot::new(temp.path().join("existing"));
+        std::fs::create_dir_all(existing.path().join("versions")).expect("versions");
+        let undo = Undo::note(&existing, &version);
+        std::fs::create_dir_all(existing.staging_dir(&version)).expect("staging");
+        undo.run();
+        assert!(existing.path().join("versions").is_dir());
+        assert!(!existing.path().join(UPDATES_DIR).exists());
+        std::fs::create_dir_all(existing.staging_dir(&version)).expect("earlier download");
+        let undo = Undo::note(&existing, &version);
+        undo.run();
+        assert!(existing.staging_dir(&version).is_dir());
+    }
+
+    #[test]
+    fn commands_are_named_on_path_and_quoted_otherwise() {
+        let root = Path::new("/opt/vulcan");
+        assert_eq!(setup_command(root, true), integrate::SETUP_COMMAND);
+        let full = setup_command(root, false);
+        assert!(full.starts_with('"') && full.ends_with('"'));
+        assert!(full.contains(SETUP_PROGRAM));
     }
 
     #[test]

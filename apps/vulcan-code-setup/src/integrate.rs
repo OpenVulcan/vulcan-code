@@ -10,6 +10,7 @@ use std::process::Command;
 use vulcan_install_core::names::Platform;
 
 use crate::paths;
+use crate::report::{Reporter, Stage};
 use crate::root::{Description, Layout, Version};
 use crate::state::{Item, SETUP_DIR};
 
@@ -42,8 +43,23 @@ const DESKTOP_LAUNCHER: &str = "bin/vulcan-code-launcher.exe";
 /// The desktop launcher at the top of a Windows root, where the Inno installer puts it too;
 /// `vulcan-code-launcher` finds the root from it.
 /// Windows 根目录顶层的桌面启动器，Inno 安装程序也放在此处；`vulcan-code-launcher` 据此找到根目录。
-#[cfg(windows)]
-const ROOT_LAUNCHER: &str = "VulcanCode.exe";
+pub const ROOT_LAUNCHER: &str = "VulcanCode.exe";
+
+/// File name of the PATH forwarder in [`CLI_DIR`] on Windows.
+/// Windows 上 [`CLI_DIR`] 中 PATH 转发器的文件名。
+pub const TUI_FORWARDER: &str = "vulcan-tui.exe";
+
+/// Command of the terminal client on PATH.
+/// PATH 上终端客户端的命令。
+pub const TUI_COMMAND: &str = "vulcan-tui";
+
+/// Command of the desktop app on PATH (Linux and macOS).
+/// PATH 上桌面应用的命令（Linux 与 macOS）。
+pub const DESKTOP_COMMAND: &str = "vulcan-code";
+
+/// Command of the setup program on PATH.
+/// PATH 上安装器的命令。
+pub const SETUP_COMMAND: &str = "vulcan-code-setup";
 
 /// Directory of the PATH forwarder below a Windows root; `vulcan-code-launcher` finds the root
 /// from it.
@@ -138,15 +154,15 @@ impl Plan<'_> {
     /// Linux 与 macOS 的命令启动器：名称及相对根目录的目标。
     fn launchers(&self, layout: &Layout) -> Vec<(&'static str, String)> {
         let current = |entry: &str| format!("current/{entry}");
-        let mut launchers = vec![("vulcan-code-setup", format!("{SETUP_DIR}/{SETUP_PROGRAM}"))];
+        let mut launchers = vec![(SETUP_COMMAND, format!("{SETUP_DIR}/{SETUP_PROGRAM}"))];
         launchers.push(("vulcan-code-service", current(&layout.service_executable)));
         if let Some(tui) = &layout.tui_executable {
-            launchers.push(("vulcan-tui", current(tui)));
+            launchers.push((TUI_COMMAND, current(tui)));
         }
         if self.gui
             && let Some(desktop) = &layout.desktop_executable
         {
-            launchers.push(("vulcan-code", current(desktop)));
+            launchers.push((DESKTOP_COMMAND, current(desktop)));
         }
         launchers
     }
@@ -325,6 +341,7 @@ pub fn integrate(
     version: &Version,
     switched: bool,
     recorder: &mut Recorder<'_>,
+    reporter: &dyn Reporter,
 ) -> Result<(), String> {
     if plan.platform.is_windows() {
         integrate_windows(plan, version, recorder)?;
@@ -338,7 +355,7 @@ pub fn integrate(
     }
     if plan.service {
         if switched || !recorder.had(&Item::UserService) {
-            println!("Registering the service...");
+            reporter.stage(Stage::Service);
             let report = run_service(&version.service(), &[INSTALL_USER_SERVICE])?;
             recorder.notes.push(report);
         }
@@ -387,7 +404,7 @@ fn integrate_windows(
 ) -> Result<(), String> {
     let cli = plan.root.join(CLI_DIR);
     recorder.ensure_dir(&cli)?;
-    let forwarder = cli.join("vulcan-tui.exe");
+    let forwarder = cli.join(TUI_FORWARDER);
     // Windows has no current link; programs outside the versions are copied from the version.
     // Windows 没有 current 链接；版本之外的程序从版本目录复制。
     replace_running_file(&version.dir.join(FORWARDER), &forwarder)?;

@@ -9953,7 +9953,7 @@ dependencies = [
 
 [[package]]
 name = "vulcan-code-setup"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "crossterm",
  "dirs",
