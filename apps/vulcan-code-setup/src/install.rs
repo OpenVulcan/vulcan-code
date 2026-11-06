@@ -242,7 +242,7 @@ pub fn install(options: &InstallOptions) -> Result<(), String> {
         port_range: start.port_range.clone().unwrap_or_default(),
     };
     let Some(draft) = wizard::run(platform, draft)? else {
-        return Err(String::from("cancelled"));
+        return Err(String::from(crate::CANCELLED));
     };
     let root = resolve_root(Some(Path::new(draft.root.trim())), platform)?;
     let ownership = root::installable(&root)?;
@@ -499,7 +499,7 @@ fn apply(
         println!("  service ports: {range}");
     }
     if !confirm("Continue?", yes)? {
-        return Err(String::from("cancelled"));
+        return Err(String::from(crate::CANCELLED));
     }
 
     std::fs::create_dir_all(root_path)

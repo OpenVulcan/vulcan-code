@@ -104,6 +104,8 @@
         }
         Write-Host "Starting the setup program $Version"
         & $Program @args
+        # 130 is CANCELLED_EXIT_CODE of apps/vulcan-code-setup: the user left it and nothing was changed.
+        if ($LASTEXITCODE -eq 130) { return }
         if ($LASTEXITCODE -ne 0) { throw "vulcan-code-setup exited with $LASTEXITCODE" }
         # A program cannot change the environment of the shell that started it, so the user PATH
         # entries missing here are added to this session; under `iex` that is the user's own window.

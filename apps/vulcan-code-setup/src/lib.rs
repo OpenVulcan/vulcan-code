@@ -19,6 +19,16 @@ mod windows;
 mod wizard;
 
 use args::{Command, InstallOptions, USAGE};
+
+/// The error a command returns when the user declines to continue or leaves the wizard; nothing was
+/// changed, so it is reported as a cancellation, not as a failure.
+/// 用户拒绝继续或离开向导时命令返回的错误；未做任何改动，因此报告为取消而非失败。
+pub(crate) const CANCELLED: &str = "cancelled";
+
+/// The exit code of a cancelled command, as a shell reports an interrupted program. scripts/install.ps1
+/// recognizes it and ends quietly instead of reporting a failure.
+/// 被取消命令的退出码，与 shell 报告被中断程序的方式相同。scripts/install.ps1 识别它并安静结束，而不是报告失败。
+pub const CANCELLED_EXIT_CODE: i32 = 130;
 use vulcan_install_core::names::Platform;
 
 /// Runs the setup program with the arguments after the program name; returns the exit code.
@@ -67,6 +77,10 @@ pub fn run(arguments: &[String]) -> i32 {
     };
     match result {
         Ok(()) => 0,
+        Err(error) if error == CANCELLED => {
+            println!("Cancelled; nothing was changed.");
+            CANCELLED_EXIT_CODE
+        }
         Err(error) => {
             eprintln!("vulcan-code-setup: {error}");
             1

@@ -57,7 +57,7 @@ pub fn uninstall(options: &UninstallOptions) -> Result<(), String> {
         None => println!("Your sessions, settings and memory are kept; --purge removes them."),
     }
     if !confirm("Continue?", options.common.yes)? {
-        return Err(String::from("cancelled"));
+        return Err(String::from(crate::CANCELLED));
     }
     // Nothing is changed while a program of this root still runs, so a failure leaves the
     // installation whole.
@@ -204,7 +204,7 @@ fn uninstall_inno(
         None => println!("Your sessions, settings and memory are kept; --purge removes them."),
     }
     if !confirm("Continue?", options.common.yes)? {
-        return Err(String::from("cancelled"));
+        return Err(String::from(crate::CANCELLED));
     }
     // The confirmation above is the only question; the uninstaller shows no dialogs of its own.
     // 上面的确认是唯一的提问；卸载程序不再显示自己的对话框。

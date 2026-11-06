@@ -153,6 +153,11 @@ test('install.ps1 verifies the setup program and passes its arguments and exit c
       const failed = await run(unsigned, '/d', '/c', 'exit', '5');
       assert.notEqual(failed.status, 0, shell);
       assert.match(failed.stderr + failed.stdout, /exited with 5/);
+      // A cancelled setup program (CANCELLED_EXIT_CODE) changed nothing, so the script ends without a failure.
+      // 被取消的安装器（CANCELLED_EXIT_CODE）未做任何改动，因此脚本结束时不报告失败。
+      const cancelled = await run(unsigned, '/d', '/c', 'exit', '130');
+      assert.equal(cancelled.status, 0, `${shell}: ${cancelled.stderr}`);
+      assert.doesNotMatch(cancelled.stderr + cancelled.stdout, /exited with/);
       const refused = await run(wrongSigner, '/d', '/c', 'echo', 'hello');
       assert.notEqual(refused.status, 0, shell);
       assert.doesNotMatch(refused.stdout, /hello/);
