@@ -12,8 +12,10 @@ ok | Setup-Installationen | Mit dem Setup-Programm erstellte Installationen werd
 ```ui-checklist
 ok | Live-Ausgabe | Eine aufgeklappte Befehlskarte zeigt die neuesten Zeilen eines laufenden Befehls, sodass lange Befehle nicht mehr hängend wirken
 ok | Hintergrund-Jobs | Ein Befehl kann im Hintergrund laufen; eine Nachricht, die während eines Befehls gesendet wird, verschiebt ihn dorthin, und auf der Befehlskarte lässt er sich auch von Hand verschieben
+ok | Beendete Jobs | Endet ein Hintergrundbefehl, nachdem die KI angehalten hat, setzt die Sitzung von selbst fort; das Ende erscheint als Kontextkarte mit Name und Ergebnis des Befehls
 ok | Keine Größengrenze | Die Ausgabe geht in ein rollierendes Protokoll, statt den Befehl bei 8 MiB abzubrechen; die KI erhält die neuesten Zeilen und kann bei Bedarf ältere lesen
 ok | Aktivitätsbereich | Der Sitzungsbereich zählt Subagenten und Hintergrundbefehle und öffnet eine Liste mit ihren Protokollen; ein Neustart für ein Update warnt vor laufenden Jobs
+ok | Immer da | Die Zähler erscheinen in jeder Sitzung, auch ohne Git, Subagenten oder laufende Befehle
 ```
 
 ### Projekte

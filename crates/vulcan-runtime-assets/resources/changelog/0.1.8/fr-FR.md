@@ -12,8 +12,10 @@ ok | Installations par setup | Les installations faites avec le programme d'inst
 ```ui-checklist
 ok | Sortie en direct | Une carte de commande dépliée affiche les dernières lignes d'une commande en cours ; les longues commandes ne semblent plus bloquées
 ok | Tâches en arrière-plan | Une commande peut tourner en arrière-plan ; un message envoyé pendant son exécution l'y fait passer, et la carte de commande permet aussi de l'y déplacer
+ok | Tâches terminées | Quand une commande en arrière-plan se termine après l'arrêt de l'IA, la session reprend d'elle-même ; la fin s'affiche dans une carte de contexte avec le nom et le résultat de la commande
 ok | Plus de limite de taille | La sortie va dans un journal tournant au lieu d'arrêter la commande à 8 Mio ; l'IA reçoit les lignes les plus récentes et peut lire les précédentes au besoin
 ok | Panneau d'activité | Le panneau de session compte les sous-agents et les commandes en arrière-plan et ouvre leur liste avec leurs journaux ; un redémarrage pour mise à jour avertit des tâches en cours
+ok | Toujours présent | Les compteurs s'affichent dans chaque session, même sans Git, sous-agents ni commandes en cours
 ```
 
 ### Projets

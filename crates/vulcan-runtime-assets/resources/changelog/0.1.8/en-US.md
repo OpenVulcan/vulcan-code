@@ -12,8 +12,10 @@ ok | Setup installations | Installations made with the setup program update by r
 ```ui-checklist
 ok | Live output | An expanded command card shows the latest lines of a running command, so long commands no longer look stuck
 ok | Background jobs | A command can run in the background, and a message sent while a command runs moves it there; you can also move it from the command card
+ok | Finished jobs | When a background command finishes after the AI has stopped, the session continues by itself; the finish shows as a context card with the command's name and result
 ok | No size limit | Output goes to a rolling log instead of stopping the command at 8 MiB; the AI gets the newest lines and can read earlier ones when needed
 ok | Activity panel | The session panel counts subagents and background commands and opens a list of them with their logs; restarting for an update warns about running jobs
+ok | Always there | The counts show in every session, even without Git, subagents or running commands
 ```
 
 ### Projects

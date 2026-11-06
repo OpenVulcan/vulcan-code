@@ -12,8 +12,10 @@ ok | Instalações pelo setup | Instalações feitas com o programa de instalaç
 ```ui-checklist
 ok | Saída ao vivo | Um cartão de comando expandido mostra as linhas mais recentes de um comando em execução, então comandos longos não parecem mais travados
 ok | Tarefas em segundo plano | Um comando pode rodar em segundo plano; uma mensagem enviada enquanto ele roda o leva para lá, e também dá para movê-lo pelo cartão do comando
+ok | Tarefas concluídas | Quando um comando em segundo plano termina depois que a IA parou, a sessão continua sozinha; o término aparece como um cartão de contexto com o nome e o resultado do comando
 ok | Sem limite de tamanho | A saída vai para um log rotativo em vez de parar o comando em 8 MiB; a IA recebe as linhas mais recentes e pode ler as anteriores quando precisar
 ok | Painel de atividade | O painel da sessão conta subagentes e comandos em segundo plano e abre uma lista com os logs; reiniciar para atualizar avisa sobre tarefas em execução
+ok | Sempre visível | As contagens aparecem em todas as sessões, mesmo sem Git, subagentes ou comandos em execução
 ```
 
 ### Projetos

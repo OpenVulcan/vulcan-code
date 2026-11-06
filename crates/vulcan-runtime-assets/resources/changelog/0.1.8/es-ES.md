@@ -12,8 +12,10 @@ ok | Instalaciones con setup | Las instalaciones hechas con el programa de insta
 ```ui-checklist
 ok | Salida en directo | Una tarjeta de comando desplegada muestra las últimas líneas de un comando en curso, así que los comandos largos ya no parecen atascados
 ok | Trabajos en segundo plano | Un comando puede ejecutarse en segundo plano; un mensaje enviado mientras se ejecuta lo pasa allí, y también se puede pasar desde la tarjeta del comando
+ok | Trabajos terminados | Si un comando en segundo plano termina después de que la IA se haya detenido, la sesión continúa sola; el final aparece como una tarjeta de contexto con el nombre y el resultado del comando
 ok | Sin límite de tamaño | La salida va a un registro rotativo en lugar de detener el comando a los 8 MiB; la IA recibe las líneas más recientes y puede leer las anteriores cuando las necesita
 ok | Panel de actividad | El panel de sesión cuenta los subagentes y los comandos en segundo plano y abre una lista con sus registros; reiniciar para actualizar avisa de los trabajos en curso
+ok | Siempre visible | Los recuentos aparecen en todas las sesiones, incluso sin Git, subagentes ni comandos en ejecución
 ```
 
 ### Proyectos
