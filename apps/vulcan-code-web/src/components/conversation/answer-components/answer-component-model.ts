@@ -860,19 +860,23 @@ function er(horizontal: boolean, body: string): AnswerComponent | null {
 
 // `ui-math [title]`: formula lines, then after a blank line optional `symbol | meaning` legend rows. Each
 // formula line is one displayed equation unless the formula uses a `\begin` environment.
-// Models also separate equations with blank lines: when no line after the first blank line is a
-// `symbol | meaning` row, those lines are further formulas and there is no legend. A mix of both is invalid.
+// Models also separate groups of equations with blank lines, so only the group after the last blank line can be
+// the legend: it is one when every row is `symbol | meaning`, further formulas when none is, and a mix is invalid.
+// Every earlier group is formulas.
 // `ui-math [标题]`：公式行，空行之后为可选的 `符号 | 含义` 图例行。除非公式使用 `\begin` 环境，每行公式各自独立显示。
-// 模型也会用空行分隔公式：第一个空行之后若没有任何 `符号 | 含义` 行，这些行按公式处理，不再有图例；两者混杂则无效。
+// 模型也会用空行分隔多组公式，因此只有最后一个空行之后的一组可能是图例：全部为 `符号 | 含义` 行时为图例，
+// 都不是时按公式处理，两者混杂则无效。之前的各组都是公式。
 function math(args: string, body: string): AnswerComponent | null {
   const lines = body.split(/\r?\n/u);
   while (lines.length > 0 && !lines[0].trim()) lines.shift();
-  const blank = lines.findIndex((line) => !line.trim());
+  while (lines.length > 0 && !lines[lines.length - 1].trim()) lines.pop();
+  let blank = lines.length - 1;
+  while (blank >= 0 && lines[blank].trim()) blank -= 1;
   const after = blank < 0 ? [] : dataLines(lines.slice(blank + 1).join("\n"));
   const legendRows = after.map((line) => rowCells(line, 2, 2));
   const isLegend = legendRows.every((cells) => cells !== null);
   if (!isLegend && legendRows.some((cells) => cells !== null)) return null;
-  const formula = (blank < 0 ? lines : lines.slice(0, blank)).map((line) => line.trim())
+  const formula = (blank < 0 ? lines : lines.slice(0, blank)).map((line) => line.trim()).filter(Boolean)
     .concat(isLegend ? [] : after.map((line) => line.trim()));
   const legend = isLegend ? legendRows as string[][] : [];
   if (formula.length === 0 || formula.length + legend.length > ANSWER_COMPONENT_MAX_ROWS) return null;

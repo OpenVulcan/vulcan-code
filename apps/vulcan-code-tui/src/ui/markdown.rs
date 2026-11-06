@@ -787,6 +787,15 @@ A[Plan] --> B[Build]";
         // 空行之后没有图例行时，这些行按公式处理。
         let formulas = joined("```ui-math\nr = a\n\nso-marker r = b\n```");
         assert!(!formulas.contains("ui-math") && formulas.contains("so-marker r = b"));
+        // Blank-separated formula groups come before a legend after the last blank line.
+        // 以空行分隔的多组公式位于最后一个空行之后的图例之前。
+        let groups = joined("```ui-math\na = 1\n\nb-marker = 2\n\nb | legend-marker\n```");
+        assert!(
+            !groups.contains("ui-math")
+                && groups.contains("b-marker = 2")
+                && groups.contains("legend-marker")
+        );
+        assert!(joined("```ui-math\na = 1\n\nb = 2\n\nb | ok\nc = 3\n```").contains("ui-math"));
 
         let over = joined("```ui-metrics\nImages | 620 | 500 | KB\n```");
         assert!(!over.contains("ui-metrics") && over.contains("✗") && over.contains("██████████"));

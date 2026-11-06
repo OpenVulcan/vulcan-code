@@ -1342,17 +1342,19 @@ fn entities(args: &str, lines: &[&str]) -> Option<String> {
     Some(tree(&drawn))
 }
 
-/// `ui-math [title]`: formula lines as a TeX code block, then after the first blank line an optional
-/// `symbol | meaning` legend. As in the WebUI, when no line after the first blank line is a legend row,
-/// those lines are further formulas; a mix of both is invalid.
-/// `ui-math [标题]`：公式行以 TeX 代码块显示，第一个空行之后为可选的 `符号 | 含义` 图例。与 WebUI 一致，
-/// 第一个空行之后若没有任何图例行，这些行按公式处理；两者混杂则无效。
+/// `ui-math [title]`: formula lines as a TeX code block, then after a blank line an optional
+/// `symbol | meaning` legend. As in the WebUI, only the group after the last blank line can be the legend:
+/// it is one when every row is a legend row, further formulas when none is, and a mix is invalid. Every
+/// earlier group is formulas.
+/// `ui-math [标题]`：公式行以 TeX 代码块显示，空行之后为可选的 `符号 | 含义` 图例。与 WebUI 一致，只有最后一个
+/// 空行之后的一组可能是图例：全部为图例行时为图例，都不是时按公式处理，两者混杂则无效。之前的各组都是公式。
 fn math(args: &str, lines: &[&str]) -> Option<String> {
     let start = lines.iter().position(|line| !line.trim().is_empty())?;
-    let lines = &lines[start..];
+    let end = lines.iter().rposition(|line| !line.trim().is_empty())? + 1;
+    let lines = &lines[start..end];
     let blank = lines
         .iter()
-        .position(|line| line.trim().is_empty())
+        .rposition(|line| line.trim().is_empty())
         .unwrap_or(lines.len());
     let after = data_rows(&lines[blank..]);
     let legend: Vec<Option<Vec<&str>>> = after.iter().map(|row| row_cells(row, 2, 2)).collect();
@@ -1360,7 +1362,12 @@ fn math(args: &str, lines: &[&str]) -> Option<String> {
     if !is_legend && legend.iter().any(Option::is_some) {
         return None;
     }
-    if blank + after.len() > ANSWER_COMPONENT_MAX_ROWS {
+    let head: Vec<&str> = lines[..blank]
+        .iter()
+        .copied()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    if head.len() + after.len() > ANSWER_COMPONENT_MAX_ROWS {
         return None;
     }
     let mut output = String::new();
@@ -1369,7 +1376,7 @@ fn math(args: &str, lines: &[&str]) -> Option<String> {
     }
     output.push_str("```tex\n");
     let extra: &[&str] = if is_legend { &[] } else { &after };
-    for line in lines[..blank].iter().chain(extra) {
+    for line in head.iter().chain(extra) {
         output.push_str(line.trim());
         output.push('\n');
     }

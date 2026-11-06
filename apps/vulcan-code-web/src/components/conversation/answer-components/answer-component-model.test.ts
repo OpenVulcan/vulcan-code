@@ -108,6 +108,16 @@ describe("parseAnswerComponent", () => {
     expect(parse("ui-math", "x = 1\n\nx | ok\ny")).toBeNull();
   });
 
+  it("reads blank-separated formula groups before a trailing legend", () => {
+    expect(parse("ui-math", "q = n / 86400\ng = q / 24.5\n\nn = 50 \\Rightarrow 0.24\nn = 500 \\Rightarrow 2.4\n\nn | Calls per user per day\n24.5 | QPS of one GPU\n")).toEqual({
+      kind: "math", title: undefined,
+      equations: ["q = n / 86400", "g = q / 24.5", "n = 50 \\Rightarrow 0.24", "n = 500 \\Rightarrow 2.4"],
+      symbols: [{ symbol: "n", meaning: "Calls per user per day" }, { symbol: "24.5", meaning: "QPS of one GPU" }],
+    });
+    expect(parse("ui-math", "a = 1\n\nb = 2\n\nc = 3")).toMatchObject({ equations: ["a = 1", "b = 2", "c = 3"], symbols: [] });
+    expect(parse("ui-math", "a = 1\n\nb = 2\n\nb | ok\nc = 3")).toBeNull();
+  });
+
   it("reads lines after a blank line as further formulas when none is a legend row", () => {
     expect(parse("ui-math Rate", "r = a / b\n\nso: \\quad r = a / c\ns = 1")).toEqual({
       kind: "math", title: "Rate", equations: ["r = a / b", "so: \\quad r = a / c", "s = 1"], symbols: [],
