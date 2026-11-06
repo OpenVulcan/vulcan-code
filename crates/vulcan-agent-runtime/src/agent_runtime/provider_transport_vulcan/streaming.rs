@@ -528,7 +528,22 @@ impl VulcanStreamingProviderAdapter for VulcanPublicContractAdapter {
         };
         let final_response = match response.finish() {
             Ok(response) => response,
-            Err(error) => {
+            Err(mut error) => {
+                // Typed completion failures carry the same exact route as stream failures.
+                // 强类型完成失败携带与流失败相同的精确路由。
+                if let VulcanCoreError::ProviderFailure {
+                    details: Some(details),
+                    ..
+                } = &mut error
+                {
+                    attach_execution_route_context(
+                        details,
+                        self.provider_id(),
+                        self.route.entry.id.as_str(),
+                        self.model_id(),
+                        self.route.protocol_route.responses_recovery_policy(),
+                    );
+                }
                 trace_processing_failure.observe_failure(finish_stage, &error);
                 return Err(error);
             }

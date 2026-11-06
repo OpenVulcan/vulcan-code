@@ -46,19 +46,52 @@ fn accumulated_public_turn(events: Vec<AiStreamEvent>) -> PublicTurnAccumulator 
     accumulator
 }
 
+/// Asserts one finish failure is the typed, replayable no-answer completion.
+/// 断言一次完成失败是强类型且可重放的无回答完成。
+fn assert_no_answer_completion(error: VulcanCoreError) {
+    let VulcanCoreError::ProviderFailure {
+        details: Some(details),
+        ..
+    } = error
+    else {
+        panic!("no-answer completion must carry typed details: {error}");
+    };
+    assert_eq!(
+        details.subcategory.as_deref(),
+        Some(NO_ANSWER_COMPLETION_SUBCATEGORY)
+    );
+    assert_eq!(details.dispatch_outcome, DispatchOutcome::Dispatched);
+    assert!(details.retryable);
+    assert!(!details.side_effect_observed);
+}
+
+/// Builds the event sequence of one completed reasoning item.
+/// 构建一个已完成思考项的事件序列。
+fn completed_reasoning_events() -> Vec<AiStreamEvent> {
+    vec![
+        AiStreamEvent::ReasoningStarted {
+            item_id: String::from("reasoning-1"),
+        },
+        AiStreamEvent::ReasoningDelta {
+            item_id: String::from("reasoning-1"),
+            delta: String::from("durable reasoning"),
+        },
+        AiStreamEvent::ReasoningCompleted {
+            item_id: String::from("reasoning-1"),
+            signature: None,
+        },
+    ]
+}
+
 /// Successful transport completion without normalized durable semantics is rejected.
 /// 没有规范化可靠语义的传输成功终态会被拒绝。
 #[test]
 fn successful_empty_or_transient_only_response_is_rejected() {
     let empty = accumulated_public_turn(vec![AiStreamEvent::ResponseCompleted]);
-    assert!(
+    assert_no_answer_completion(
         empty
             .finish()
-            .expect_err("empty successful response must fail")
-            .to_string()
-            .contains(
-                "Provider returned a successful terminal response without durable semantic output."
-            )
+            .expect_err("empty successful response must fail"),
     );
 
     let summary_only = accumulated_public_turn(vec![
@@ -67,7 +100,7 @@ fn successful_empty_or_transient_only_response_is_rejected() {
         },
         AiStreamEvent::ResponseCompleted,
     ]);
-    assert!(summary_only.finish().is_err());
+    assert_no_answer_completion(summary_only.finish().expect_err("summary-only must fail"));
 
     let mut context_only = accumulated_public_turn(vec![AiStreamEvent::ResponseCompleted]);
     context_only.provider_message_id = Some(String::from("provider-message-only"));
@@ -81,26 +114,53 @@ fn successful_empty_or_transient_only_response_is_rejected() {
     assert!(context_only.finish().is_err());
 }
 
-/// Reasoning, assistant text, and complete tool calls each count as durable semantics.
-/// 思考、assistant 正文与完整工具调用均分别算作可靠语义。
+/// Reasoning alone is no answer, unless the provider declares that the logical turn continues.
+/// 仅有思考不算回答，除非供应商声明逻辑回合仍在继续。
 #[test]
-fn successful_response_requires_one_normalized_durable_semantic_item() {
-    let reasoning = accumulated_public_turn(vec![
-        AiStreamEvent::ReasoningStarted {
-            item_id: String::from("reasoning-1"),
+fn reasoning_only_completion_requires_an_explicit_continuation() {
+    let mut events = completed_reasoning_events();
+    events.push(AiStreamEvent::ResponseCompleted);
+    assert_no_answer_completion(
+        accumulated_public_turn(events)
+            .finish()
+            .expect_err("reasoning-only completion must fail"),
+    );
+
+    let mut blank_text = completed_reasoning_events();
+    blank_text.extend([
+        AiStreamEvent::ResponseItemStarted {
+            item_id: String::from("text-1"),
+            item: ContentItem::Text {
+                text: String::new(),
+            },
         },
-        AiStreamEvent::ReasoningDelta {
-            item_id: String::from("reasoning-1"),
-            delta: String::from("durable reasoning"),
+        AiStreamEvent::ResponseTextDelta {
+            item_id: String::from("text-1"),
+            delta: String::from("\n  "),
         },
-        AiStreamEvent::ReasoningCompleted {
-            item_id: String::from("reasoning-1"),
-            signature: None,
+        AiStreamEvent::ResponseItemCompleted {
+            item_id: String::from("text-1"),
         },
         AiStreamEvent::ResponseCompleted,
     ]);
-    assert!(reasoning.finish().is_ok());
+    assert_no_answer_completion(
+        accumulated_public_turn(blank_text)
+            .finish()
+            .expect_err("whitespace text is no answer"),
+    );
 
+    let mut continuing = completed_reasoning_events();
+    continuing.extend([
+        AiStreamEvent::ResponseTurnBoundary { end_turn: false },
+        AiStreamEvent::ResponseCompleted,
+    ]);
+    assert!(accumulated_public_turn(continuing).finish().is_ok());
+}
+
+/// Assistant text and complete tool calls each count as an answer.
+/// assistant 正文与完整工具调用均分别算作回答。
+#[test]
+fn successful_response_requires_one_normalized_durable_semantic_item() {
     let text = accumulated_public_turn(vec![
         AiStreamEvent::ResponseItemStarted {
             item_id: String::from("text-1"),
@@ -885,13 +945,10 @@ fn transient_reasoning_status_is_live_only_and_clears_at_terminal() {
         )))
     ));
 
-    let error = accumulator
-        .finish()
-        .expect_err("transient-only completion must not create durable Provider semantics");
-    assert!(
-        error
-            .to_string()
-            .contains("without durable semantic output")
+    assert_no_answer_completion(
+        accumulator
+            .finish()
+            .expect_err("transient-only completion must not create durable Provider semantics"),
     );
 }
 
@@ -936,6 +993,9 @@ fn durable_reasoning_supersedes_transient_fallbacks() {
             item_id: String::from("reasoning-0"),
             signature: None,
         },
+        // The explicit continuation keeps this reasoning-only turn valid without adding live output.
+        // 显式续跑使该仅有思考的回合合法，且不增加实时输出。
+        AiStreamEvent::ResponseTurnBoundary { end_turn: false },
         AiStreamEvent::ResponseCompleted,
     ] {
         accumulator

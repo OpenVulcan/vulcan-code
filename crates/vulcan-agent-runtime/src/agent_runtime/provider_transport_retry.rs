@@ -2,6 +2,7 @@
 //! 宿主控制 Provider 传输使用的重试策略与可重试性分类。
 
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
+use crate::agent_runtime::provider_transport_vulcan::NO_ANSWER_COMPLETION_SUBCATEGORY;
 use crate::provider_config::{
     PROVIDER_RATE_LIMIT_RETRY_MAX_DELAY_MS, PROVIDER_RETRY_MAX_RETRIES,
     PersistedProviderRetryConfiguration, normalize_provider_rate_limit_retry_max_retries,
@@ -442,6 +443,12 @@ fn classify_structured_retry_reason(
             reason: String::from("Provider stream error"),
         });
     }
+    if structured_error_is_no_answer_completion(error) {
+        return Some(ProviderRetryClassification {
+            category: ProviderRetryCategory::Transient,
+            reason: String::from("Provider completed without an answer"),
+        });
+    }
     if keyword_match {
         return Some(ProviderRetryClassification {
             category: ProviderRetryCategory::Transient,
@@ -549,6 +556,26 @@ fn structured_error_is_replayable_websocket_loss(error: &AiExecutionError) -> bo
         && !error.side_effect_observed
 }
 
+/// Returns whether a successful terminal without an answer permits replacing its visible reasoning.
+/// 判断没有回答的成功终态是否允许替换其已显示的思考并重放。
+///
+/// # Parameters
+/// 参数
+/// `error` is the normalized public Provider failure.
+/// `error` 是归一化公共 Provider 失败。
+///
+/// # Returns
+/// 返回值
+/// `true` only for the registered dispatched, side-effect-free no-answer completion.
+/// 仅对已注册、已分派且无副作用的无回答完成返回 `true`。
+fn structured_error_is_no_answer_completion(error: &AiExecutionError) -> bool {
+    error.subcategory.as_deref() == Some(NO_ANSWER_COMPLETION_SUBCATEGORY)
+        && error.stage == "response_projection"
+        && error.dispatch_outcome == DispatchOutcome::Dispatched
+        && error.retryable
+        && !error.side_effect_observed
+}
+
 /// Returns whether one structured failure is an explicitly replayable stream failure.
 /// 判断一项结构化失败是否属于明确可重放的流失败。
 fn structured_error_is_replayable_stream_failure(
@@ -558,6 +585,7 @@ fn structured_error_is_replayable_stream_failure(
     structured_error_is_replayable_stream_idle_timeout(error)
         || structured_error_is_known_stream_error(error)
         || structured_error_is_replayable_websocket_loss(error)
+        || structured_error_is_no_answer_completion(error)
         || (error.dispatch_outcome == DispatchOutcome::Dispatched
             && !error.side_effect_observed
             && structured_error_matches_retry_keyword(error, retry_keywords))
@@ -832,7 +860,8 @@ mod tests {
     //! 面向 Provider 传输失败分类的定向重试策略测试。
 
     use super::{
-        ProviderRetryPolicy, TERMINAL_TOOL_CALL_STREAM_FAILURE_SUBCATEGORY, classify_retry_reason,
+        NO_ANSWER_COMPLETION_SUBCATEGORY, ProviderRetryPolicy,
+        TERMINAL_TOOL_CALL_STREAM_FAILURE_SUBCATEGORY, classify_retry_reason,
         provider_delta_makes_retry_unsafe,
     };
     use crate::agent_runtime::provider_stream::ProviderStreamDelta;
@@ -1163,6 +1192,41 @@ mod tests {
             details.side_effect_observed = true;
         }
         assert!(policy().next_retry(&stream_error, 0, true).is_none());
+    }
+
+    /// Verifies a no-answer completion replaces visible reasoning but never side effects.
+    /// 验证无回答完成可以替换已显示的思考，但绝不能替换副作用。
+    #[test]
+    fn no_answer_completion_retries_after_reasoning_but_not_side_effects() {
+        let mut no_answer = structured_provider_error(AiErrorCategory::Unclassified, true);
+        {
+            let VulcanCoreError::ProviderFailure {
+                details: Some(details),
+                ..
+            } = &mut no_answer
+            else {
+                panic!("structured error expected");
+            };
+            details.subcategory = Some(String::from(NO_ANSWER_COMPLETION_SUBCATEGORY));
+            details.stage = String::from("response_projection");
+        }
+
+        let decision = policy()
+            .next_retry(&no_answer, 0, true)
+            .expect("a no-answer completion should replace its reasoning");
+        assert_eq!(decision.reason, "Provider completed without an answer");
+
+        {
+            let VulcanCoreError::ProviderFailure {
+                details: Some(details),
+                ..
+            } = &mut no_answer
+            else {
+                panic!("structured error expected");
+            };
+            details.side_effect_observed = true;
+        }
+        assert!(policy().next_retry(&no_answer, 0, true).is_none());
     }
 
     /// Verifies a configured keyword replays an interrupted stream yet keeps every safety gate.

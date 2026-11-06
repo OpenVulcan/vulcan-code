@@ -42,6 +42,10 @@ const DEFAULT_PUBLIC_OUTPUT_TOKEN_LIMIT: u64 = 32_000;
 /// 仅在精确 OAuth 账号秘密已经刷新后发出的结构化子类别。
 pub(crate) const OAUTH_CREDENTIAL_REFRESHED_SUBCATEGORY: &str = "oauth_credential_refreshed";
 
+/// Structured subcategory for a successful terminal that carries no answer and no tool call.
+/// 成功终态既无回答也无工具调用时使用的结构化子类别。
+pub(crate) const NO_ANSWER_COMPLETION_SUBCATEGORY: &str = "no_answer_completion";
+
 /// Resolves the requested output budget while treating the effective model output limit as an upper bound.
 /// 在将有效模型输出限制视为上限的前提下解析请求输出预算。
 ///

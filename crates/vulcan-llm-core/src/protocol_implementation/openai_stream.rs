@@ -3,7 +3,7 @@
 
 use crate::{
     ProtocolConversionError, ProtocolStreamDecoder, merge_streamed_tool_name,
-    shared::append_bounded_tool_arguments,
+    shared::{append_bounded_tool_arguments, output_limit_before_answer_error},
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -145,6 +145,12 @@ pub(crate) struct OpenAiChatStreamDecoder {
     /// Whether a provider finish reason already established semantic completion.
     /// 供应商结束原因是否已经建立语义完成状态。
     finish_signal_seen: bool,
+    /// Last exact non-null `finish_reason`.
+    /// 最近一个精确的非空 `finish_reason`。
+    finish_reason: Option<String>,
+    /// Whether visible answer text or a tool call has been observed.
+    /// 是否已经观察到可见回答正文或工具调用。
+    answer_observed: bool,
     /// Whether the text item is currently open.
     /// 文本项当前是否打开。
     text_open: bool,
@@ -192,6 +198,8 @@ impl OpenAiChatStreamDecoder {
             started: false,
             terminal: false,
             finish_signal_seen: false,
+            finish_reason: None,
+            answer_observed: false,
             text_open: false,
             reasoning_open: false,
             reasoning_details_text: String::new(),
@@ -289,6 +297,7 @@ impl OpenAiChatStreamDecoder {
                     },
                 });
             }
+            self.answer_observed |= !text.trim().is_empty();
             if !text.is_empty() {
                 events.push(AiStreamEvent::ResponseTextDelta {
                     item_id,
@@ -297,19 +306,38 @@ impl OpenAiChatStreamDecoder {
             }
         }
         if let Some(tool_calls) = delta.get("tool_calls").and_then(Value::as_array) {
+            self.answer_observed |= !tool_calls.is_empty();
             for tool_delta in tool_calls {
                 events.extend(self.decode_tool_delta(tool_delta)?);
             }
         }
-        if choice
-            .get("finish_reason")
-            .is_some_and(|value| !value.is_null())
-        {
+        if let Some(finish_reason) = choice.get("finish_reason").filter(|value| !value.is_null()) {
             // A choice finish reason proves semantic completion but is not the transport boundary.
             // 选择结束原因只证明语义完成，并不是传输边界。
             self.finish_signal_seen = true;
+            if let Some(finish_reason) = finish_reason.as_str() {
+                self.finish_reason = Some(finish_reason.to_string());
+            }
         }
         Ok(events)
+    }
+
+    /// Returns the terminal event for a semantically finished stream.
+    /// 返回语义已结束流的终态事件。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A failure when the output limit cut the response before any answer; otherwise completion.
+    /// 输出上限在任何回答之前截断回复时返回失败，否则返回完成。
+    fn terminal_event(&self) -> AiStreamEvent {
+        match self.finish_reason.as_deref() {
+            Some(finish_reason @ "length") if !self.answer_observed => {
+                AiStreamEvent::ResponseFailed {
+                    error: output_limit_before_answer_error("OpenAI Chat", finish_reason),
+                }
+            }
+            _ => AiStreamEvent::ResponseCompleted,
+        }
     }
 
     /// Decodes MiniMax cumulative `reasoning_details` into one true text delta.
@@ -558,7 +586,7 @@ impl ProtocolStreamDecoder for OpenAiChatStreamDecoder {
             events.extend(self.close_open_items());
             events.extend(self.complete_tools()?);
             self.terminal = true;
-            events.push(AiStreamEvent::ResponseCompleted);
+            events.push(self.terminal_event());
             return Ok(events);
         }
         let value: Value = serde_json::from_str(data).map_err(|error| {
@@ -598,7 +626,7 @@ impl ProtocolStreamDecoder for OpenAiChatStreamDecoder {
             let mut events = self.close_open_items();
             events.extend(self.complete_tools()?);
             self.terminal = true;
-            events.push(AiStreamEvent::ResponseCompleted);
+            events.push(self.terminal_event());
             return Ok(events);
         }
         Err(ProtocolConversionError::new(
@@ -2537,6 +2565,65 @@ mod tests {
                     .iter()
                     .any(|event| matches!(event, AiStreamEvent::ResponseCompleted))
             );
+        }
+    }
+
+    /// `length` before any answer fails with a typed limit error at either terminal boundary;
+    /// a truncated answer still completes.
+    /// 在任何回答前出现 `length` 时，在任一终态边界均以强类型上限错误失败；已有正文的截断回答照常完成。
+    #[test]
+    fn chat_length_finish_fails_only_without_an_answer() {
+        for (content, done_marker, expect_failure) in [
+            (None, true, true),
+            (None, false, true),
+            (Some("partial answer"), true, false),
+        ] {
+            let mut decoder = OpenAiChatStreamDecoder::with_registered_tools(
+                String::from("execution"),
+                BTreeSet::new(),
+            );
+            let mut events = decoder
+                .push_sse(
+                    None,
+                    r#"{"choices":[{"delta":{"reasoning_content":"plan"},"finish_reason":null}]}"#,
+                )
+                .expect("reasoning chunk must decode");
+            let mut delta = serde_json::json!({});
+            if let Some(content) = content {
+                delta["content"] = serde_json::json!(content);
+            }
+            events.extend(
+                decoder
+                    .push_sse(
+                        None,
+                        serde_json::json!({"choices":[{"delta":delta,"finish_reason":"length"}]})
+                            .to_string()
+                            .as_str(),
+                    )
+                    .expect("finish chunk must decode"),
+            );
+            events.extend(if done_marker {
+                decoder
+                    .push_sse(None, "[DONE]")
+                    .expect("terminal must decode")
+            } else {
+                decoder.finish().expect("finish reason must allow EOF")
+            });
+            match events.last() {
+                Some(AiStreamEvent::ResponseFailed { error }) => {
+                    assert!(expect_failure, "a truncated answer must still complete");
+                    assert_eq!(
+                        error.subcategory.as_deref(),
+                        Some(crate::shared::OUTPUT_LIMIT_BEFORE_ANSWER_SUBCATEGORY)
+                    );
+                    assert_eq!(error.upstream_code.as_deref(), Some("length"));
+                    assert!(!error.retryable);
+                }
+                Some(AiStreamEvent::ResponseCompleted) => {
+                    assert!(!expect_failure, "reasoning-only truncation must fail");
+                }
+                other => panic!("unexpected terminal event: {other:?}"),
+            }
         }
     }
 

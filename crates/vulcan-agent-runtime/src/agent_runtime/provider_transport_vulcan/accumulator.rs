@@ -1,7 +1,7 @@
 //! Ordered public response accumulation, replay semantics, and usage projection.
 //! 有序公共响应累积、重放语义及用量投影。
 
-use super::{provider_failure, public_execution_failure};
+use super::{NO_ANSWER_COMPLETION_SUBCATEGORY, provider_failure, public_execution_failure};
 use crate::agent_runtime::events::{TransientReasoningStatus, TransientReasoningStatusKind};
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
@@ -9,9 +9,9 @@ use crate::agent_runtime::tool_request_stream::ToolRequestFragment;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use vulcan_ai_contract::{
-    AiStreamEvent, ContentItem, ProviderMessagePhaseSnapshot, ProviderReplayEnvelope, RequestUsage,
-    ResourceKind, ResourceReference, ToolCall as PublicToolCall, UsageValue,
-    is_replayable_codex_responses_item,
+    AiErrorCategory, AiExecutionError, AiStreamEvent, ContentItem, DispatchOutcome,
+    ProviderMessagePhaseSnapshot, ProviderReplayEnvelope, RequestUsage, ResourceKind,
+    ResourceReference, ToolCall as PublicToolCall, UsageValue, is_replayable_codex_responses_item,
 };
 use vulcan_core::provider::VulcanProviderDeltaSink;
 use vulcan_core::types::{
@@ -385,6 +385,52 @@ impl PublicTurnAccumulator {
                 )
             })?;
         Ok(&mut self.replay_items[index].state)
+    }
+
+    /// Builds the typed, replayable failure for a successful terminal without an answer.
+    /// 为没有回答的成功终态构建强类型且可重放的失败。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `reasoning_observed` reports whether the response carried reasoning items.
+    /// `reasoning_observed` 表示回复是否携带了思考项。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A dispatched, side-effect-free Provider failure that the retry policy may replay.
+    /// 返回已分派、无副作用且重试策略可以重放的 Provider 失败。
+    fn no_answer_completion_failure(&self, reasoning_observed: bool) -> VulcanCoreError {
+        let message = if reasoning_observed {
+            "The provider completed the response with reasoning only, without an answer or a tool call."
+        } else {
+            "The provider completed the response without an answer, reasoning, or a tool call."
+        };
+        public_execution_failure(
+            self.provider_id.as_str(),
+            AiExecutionError {
+                category: AiErrorCategory::Unclassified,
+                subcategory: Some(String::from(NO_ANSWER_COMPLETION_SUBCATEGORY)),
+                stage: String::from("response_projection"),
+                http_status: None,
+                transport: None,
+                websocket_close_code: None,
+                upstream_code: None,
+                upstream_type: None,
+                upstream_parameter: None,
+                upstream_message: None,
+                request_id: None,
+                provider_id: Some(self.provider_id.clone()),
+                entry_id: None,
+                model_id: Some(self.model_id.clone()),
+                message: String::from(message),
+                dispatch_outcome: DispatchOutcome::Dispatched,
+                semantic_output_observed: false,
+                side_effect_observed: false,
+                terminal: true,
+                retryable: true,
+                retry_after: None,
+            },
+        )
     }
 
     /// Materializes all completed assistant items in original stream order.
@@ -803,11 +849,19 @@ impl PublicTurnAccumulator {
             ));
         }
         let replay_content = self.replay_content()?;
-        if replay_content.is_empty() {
-            return Err(provider_failure(
-                self.provider_id.as_str(),
-                "Provider returned a successful terminal response without durable semantic output.",
-            ));
+        // A response with only reasoning (or nothing) gives the session no answer to close the turn
+        // with, unless the provider explicitly declared that the logical turn continues.
+        // 只有思考（或什么都没有）的回复不能让会话以回答结束回合，除非供应商显式声明逻辑回合仍在继续。
+        let answer_missing = self.text.trim().is_empty()
+            && self.tool_calls.is_empty()
+            && replay_content.iter().all(|item| {
+                matches!(
+                    item,
+                    ContentItem::Reasoning { .. } | ContentItem::Text { .. }
+                )
+            });
+        if answer_missing && (replay_content.is_empty() || self.end_turn != Some(false)) {
+            return Err(self.no_answer_completion_failure(!replay_content.is_empty()));
         }
         // providerContextItems are enabled only when they can replace the entire normalized output.
         // providerContextItems 仅在能够替代全部规范输出时启用。

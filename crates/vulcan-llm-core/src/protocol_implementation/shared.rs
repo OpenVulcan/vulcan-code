@@ -4,7 +4,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
-use vulcan_ai_contract::{AiExecutionRequest, AiStreamEvent};
+use vulcan_ai_contract::{
+    AiErrorCategory, AiExecutionError, AiExecutionRequest, AiStreamEvent, DispatchOutcome,
+};
 
 /// Appends one streamed tool-argument fragment under the registered public limit.
 /// 在已注册公共上限内追加一个流式工具参数分片。
@@ -39,6 +41,53 @@ pub(crate) fn append_bounded_tool_arguments(
     }
     arguments.push_str(fragment);
     Ok(())
+}
+
+/// Structured subcategory for a response cut at its output token limit before any answer.
+/// 回复在给出任何回答前就被输出 Token 上限截断时使用的结构化子类别。
+pub(crate) const OUTPUT_LIMIT_BEFORE_ANSWER_SUBCATEGORY: &str = "output_limit_before_answer";
+
+/// Builds the terminal failure for a response cut at its output token limit before any answer.
+/// 为在给出任何回答前就被输出 Token 上限截断的回复构建终态失败。
+///
+/// # Parameters
+/// 参数
+/// `protocol_label` identifies the decoder and `stop_reason` is the exact upstream stop value.
+/// `protocol_label` 标识解码器，`stop_reason` 是精确的上游停止值。
+///
+/// # Returns
+/// 返回值
+/// A dispatched, non-retryable failure; a truncated answer that already has text stays complete.
+/// 返回已分派且不可重试的失败；已有正文的截断回答仍按完成处理。
+pub(crate) fn output_limit_before_answer_error(
+    protocol_label: &str,
+    stop_reason: &str,
+) -> AiExecutionError {
+    AiExecutionError {
+        category: AiErrorCategory::Unclassified,
+        subcategory: Some(String::from(OUTPUT_LIMIT_BEFORE_ANSWER_SUBCATEGORY)),
+        stage: String::from("stream"),
+        http_status: None,
+        transport: None,
+        websocket_close_code: None,
+        upstream_code: Some(stop_reason.to_string()),
+        upstream_type: None,
+        upstream_parameter: None,
+        upstream_message: None,
+        request_id: None,
+        provider_id: None,
+        entry_id: None,
+        model_id: None,
+        message: format!(
+            "{protocol_label} reached the output token limit (`{stop_reason}`) before producing an answer or a tool call."
+        ),
+        dispatch_outcome: DispatchOutcome::Dispatched,
+        semantic_output_observed: false,
+        side_effect_observed: false,
+        terminal: true,
+        retryable: false,
+        retry_after: None,
+    }
 }
 
 /// Rejects provider-native tool semantics for a profile that has not registered them.

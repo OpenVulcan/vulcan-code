@@ -3,7 +3,7 @@
 
 use crate::{
     EncodedWireRequest, ProtocolConversionError, ProtocolProfile, ProtocolStreamDecoder,
-    shared::append_bounded_tool_arguments,
+    shared::{append_bounded_tool_arguments, output_limit_before_answer_error},
 };
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
@@ -419,6 +419,12 @@ struct AnthropicStreamDecoder {
     /// Last reported cache write; a later usage event may repeat input without it.
     /// 最近上报的缓存写入；后续用量事件可能只重复输入而不带它。
     cache_write_tokens: UsageValue,
+    /// Exact `stop_reason` reported by `message_delta`.
+    /// `message_delta` 报告的精确 `stop_reason`。
+    stop_reason: Option<String>,
+    /// Whether visible answer text or a client tool call has been observed.
+    /// 是否已经观察到可见回答正文或客户端工具调用。
+    answer_observed: bool,
 }
 
 /// Tracks one Anthropic content block.
@@ -488,6 +494,8 @@ impl AnthropicStreamDecoder {
             message_id: None,
             blocks: BTreeMap::new(),
             cache_write_tokens: UsageValue::Unknown,
+            stop_reason: None,
+            answer_observed: false,
         }
     }
 
@@ -565,15 +573,15 @@ impl AnthropicStreamDecoder {
                         item_id: item_id.clone(),
                     },
                 );
+                let text = block
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                self.answer_observed |= !text.trim().is_empty();
                 AiStreamEvent::ResponseItemStarted {
                     item_id,
-                    item: ContentItem::Text {
-                        text: block
-                            .get("text")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string(),
-                    },
+                    item: ContentItem::Text { text },
                 }
             }
             "thinking" => {
@@ -592,6 +600,7 @@ impl AnthropicStreamDecoder {
             "tool_use" => {
                 let call_id = required_string_from_map(block, "id")?;
                 let tool_name = required_string_from_map(block, "name")?;
+                self.answer_observed = true;
                 self.blocks.insert(
                     index,
                     AnthropicBlock::Tool {
@@ -648,6 +657,7 @@ impl AnthropicStreamDecoder {
         match (block, delta_type) {
             (AnthropicBlock::Text { item_id }, "text_delta") => {
                 let text = required_string_from_map(delta, "text")?;
+                self.answer_observed |= !text.trim().is_empty();
                 Ok(vec![AiStreamEvent::ResponseTextDelta {
                     item_id: item_id.clone(),
                     delta: text,
@@ -834,6 +844,11 @@ impl ProtocolStreamDecoder for AnthropicStreamDecoder {
             "content_block_delta" => self.decode_block_delta(&value)?,
             "content_block_stop" => self.decode_block_stop(&value)?,
             "message_delta" => {
+                if let Some(stop_reason) =
+                    value.pointer("/delta/stop_reason").and_then(Value::as_str)
+                {
+                    self.stop_reason = Some(stop_reason.to_string());
+                }
                 usage_from_anthropic(value.get("usage"), &mut self.cache_write_tokens)
             }
             "message_stop" => {
@@ -843,7 +858,16 @@ impl ProtocolStreamDecoder for AnthropicStreamDecoder {
                     ));
                 }
                 self.terminal = true;
-                vec![AiStreamEvent::ResponseCompleted]
+                // Truncation before any answer leaves nothing to complete; a truncated answer stays complete.
+                // 在任何回答之前被截断时没有可完成的内容；已有正文的截断回答仍按完成处理。
+                match self.stop_reason.as_deref() {
+                    Some(stop_reason @ "max_tokens") if !self.answer_observed => {
+                        vec![AiStreamEvent::ResponseFailed {
+                            error: output_limit_before_answer_error("Anthropic", stop_reason),
+                        }]
+                    }
+                    _ => vec![AiStreamEvent::ResponseCompleted],
+                }
             }
             "error" => {
                 // A mid-stream error ends every open block first, so the provider error stays the reported one.
@@ -1688,6 +1712,56 @@ mod tests {
                 .iter()
                 .any(|event| matches!(event, AiStreamEvent::ToolCallAborted { .. }))
         );
+    }
+
+    /// `max_tokens` before any answer fails with a typed limit error; a truncated answer completes.
+    /// 在任何回答前出现 `max_tokens` 时以强类型上限错误失败；已有正文的截断回答照常完成。
+    #[test]
+    fn max_tokens_fails_only_without_an_answer() {
+        for (answer, expect_failure) in [(None, true), (Some("partial answer"), false)] {
+            let mut decoder = AnthropicStreamDecoder::new(String::from("execution"));
+            let mut machine = vulcan_ai_contract::AiStreamStateMachine::default();
+            let mut frames = vec![
+                json!({"type":"message_start","message":{"id":"msg_1","usage":{}}}),
+                json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}),
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"plan"}}),
+                json!({"type":"content_block_stop","index":0}),
+            ];
+            if let Some(answer) = answer {
+                frames.extend([
+                    json!({"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}),
+                    json!({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":answer}}),
+                    json!({"type":"content_block_stop","index":1}),
+                ]);
+            }
+            frames.extend([
+                json!({"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":64}}),
+                json!({"type":"message_stop"}),
+            ]);
+            let mut events = Vec::new();
+            for frame in frames {
+                events.extend(decoder.push_sse(None, frame.to_string().as_str()).unwrap());
+            }
+            for event in &events {
+                machine.apply(event).expect("lifecycle must stay balanced");
+            }
+            assert!(machine.is_terminal());
+            match events.last() {
+                Some(AiStreamEvent::ResponseFailed { error }) => {
+                    assert!(expect_failure, "a truncated answer must still complete");
+                    assert_eq!(
+                        error.subcategory.as_deref(),
+                        Some(crate::shared::OUTPUT_LIMIT_BEFORE_ANSWER_SUBCATEGORY)
+                    );
+                    assert_eq!(error.upstream_code.as_deref(), Some("max_tokens"));
+                    assert!(!error.retryable);
+                }
+                Some(AiStreamEvent::ResponseCompleted) => {
+                    assert!(!expect_failure, "reasoning-only truncation must fail");
+                }
+                other => panic!("unexpected terminal event: {other:?}"),
+            }
+        }
     }
 
     /// Verifies fragmented Anthropic tool JSON stays incremental until block completion.
