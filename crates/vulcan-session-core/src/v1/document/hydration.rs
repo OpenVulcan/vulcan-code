@@ -502,6 +502,13 @@ impl SessionDocument {
                         .entry(turn_id.value())
                         .or_insert((event.seq.value(), TurnOrigin::GoalContinuation));
                 }
+                body if super::shell_job_continuation::is_shell_job_continuation_start(body)
+                    && let Some(turn_id) = event.turn_id =>
+                {
+                    turn_state
+                        .entry(turn_id.value())
+                        .or_insert((event.seq.value(), TurnOrigin::ShellJobContinuation));
+                }
                 EventBody::Collaboration(collaboration)
                     if let CollaborationAfterState::TaskMessageEffect { effect } =
                         &collaboration.after_state
@@ -808,7 +815,14 @@ impl SessionDocument {
         // 重启后的活动目标必须由用户显式恢复，即使退出发生在两个物理请求之间。
         let pause_restarted_goal =
             self.metadata.mode.goal.enabled && self.metadata.mode.goal.state == GoalState::Active;
+        // Shell-job notices live only in process memory, so a restarted wake turn has nothing left to deliver.
+        // Shell 任务通知只存在于进程内存中，重启后的唤醒回合已无可送达内容。
+        let close_restarted_shell_job_turn = self
+            .active_turn
+            .as_ref()
+            .is_some_and(|turn| !turn.closed && turn.origin == TurnOrigin::ShellJobContinuation);
         if !pause_restarted_goal
+            && !close_restarted_shell_job_turn
             && let Some(active_api) = self.active_api.as_ref()
             && active_api.purpose == ApiPurposeKind::Continue
             && !self.api_transport_was_observed(active_api.api_call_id)
@@ -851,6 +865,27 @@ impl SessionDocument {
         } else {
             0
         };
+        if let Some(turn) = self
+            .active_turn
+            .as_ref()
+            .filter(|turn| !turn.closed && turn.origin == TurnOrigin::ShellJobContinuation)
+        {
+            let started_at_ms = self
+                .events
+                .iter()
+                .find(|event| event.seq == turn.start_seq)
+                .ok_or(DomainError::ReferenceViolation {
+                    kind: "turn_start_event",
+                    value: turn.start_seq.value(),
+                })?
+                .created_at_ms;
+            self.close_turn(
+                TurnOutcome::Stopped,
+                now_ms.saturating_sub(started_at_ms).max(0),
+                now_ms,
+            )?;
+            projected += 2;
+        }
         if pause_restarted_goal {
             // Pausing automatic Goal work cannot close a distinct user, agent-task or reply owner.
             // 暂停自动 Goal 工作不能关闭独立的用户、代理任务或回流所有者。

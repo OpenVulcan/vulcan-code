@@ -1,9 +1,11 @@
 import type { TranslationKey } from "@/i18n-messages";
+import { shellJobStatusLabel } from "@/components/workspace/session-activity/session-activity-format";
+import type { ShellJobNoticeFacts } from "./shell-job-notice";
 
 // ContextInjectionCategory names the user-facing family of one injected prompt.
 // ContextInjectionCategory 表示一条注入提示词面向用户的类别。
 export type ContextInjectionCategory =
-  | "goal" | "plan" | "tools" | "permission" | "model" | "answer" | "guidance" | "base" | "injection" | "other";
+  | "goal" | "shellJob" | "plan" | "tools" | "permission" | "model" | "answer" | "guidance" | "base" | "injection" | "other";
 
 // ContextInjectionEntry is one injected prompt shown inside a context-injection card.
 // ContextInjectionEntry 是上下文注入卡片中显示的一条注入提示词。
@@ -12,6 +14,9 @@ export interface ContextInjectionEntry {
   category: ContextInjectionCategory;
   operation: "upsert" | "remove";
   content: string;
+  // Optional heading that names what the entry is about, shown instead of the operation.
+  // 可选标题，指明条目的对象，替代操作名显示。
+  label?: string;
 }
 
 // ContextInjectionPage groups a card's entries of one category, in the order the category first appears.
@@ -41,7 +46,18 @@ export function contextInjectionOperationLabel(operation: ContextInjectionEntry[
 export function contextInjectionEntryMarkdown(entry: ContextInjectionEntry, t: Translation): string {
   const longestRun = Math.max(0, ...(entry.content.match(/`{3,}/g) ?? []).map((run) => run.length));
   const fence = "`".repeat(Math.max(3, longestRun + 1));
-  return `**${contextInjectionOperationLabel(entry.operation, t)}**\n\n${fence}text\n${entry.content}\n${fence}`;
+  const heading = entry.label ?? contextInjectionOperationLabel(entry.operation, t);
+  return `**${heading}**\n\n${fence}text\n${entry.content}\n${fence}`;
+}
+
+// shellJobNoticeLabel names a finished background command like its command card: the purpose (or the command's first
+// line), the job id, and how it ended with its exit code.
+// shellJobNoticeLabel 像命令卡一样命名已结束的后台命令：用途（或命令首行）、任务标识，以及结束方式与退出码。
+export function shellJobNoticeLabel(notice: ShellJobNoticeFacts, t: Translation): string {
+  const name = notice.purpose.trim() || notice.command.trim().split("\n")[0]!;
+  const parts = [name, notice.jobId, shellJobStatusLabel(notice.status, t)];
+  if (notice.exitCode !== null) parts.push(t("toolCard.exitCode").replace("{code}", String(notice.exitCode)));
+  return parts.filter((part) => part.length > 0).join(" · ");
 }
 
 // contextInjectionPages splits a card's entries into one page per category.

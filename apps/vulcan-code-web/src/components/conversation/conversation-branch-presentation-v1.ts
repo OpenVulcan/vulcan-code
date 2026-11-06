@@ -26,6 +26,7 @@ import {
 } from "@/service/conversation-event-display-projection";
 import { projectCollaborationTurnLayout } from "@/service/conversation-collaboration-turn-layout";
 import { decodeAgentQuestionInput, decodeAgentTaskInput } from "@/service/conversation-agent-question-input";
+import { decodeShellJobNotice } from "./shell-job-notice";
 import { projectTurnUsageCoverage, type TurnUsageCoverage } from "@/service/conversation-usage-coverage";
 import { turnChangeSummariesV1, type TurnChangeSummaryV1 } from "@/diff/turn-change-summary-v1";
 import { modelSwitchRouteLabel } from "./conversation-model-switch";
@@ -39,6 +40,7 @@ import {
   contextInjectionOperationLabel,
   contextInjectionPages,
   readContextInjectionEntries,
+  shellJobNoticeLabel,
   type ContextInjectionCategory,
   type ContextInjectionEntry,
 } from "./conversation-context-injection";
@@ -453,6 +455,18 @@ function conversationMessagesForV1Event(
       // The typed collaboration event owns the visible card; its provider mirror is not a prompt.
       // 强类型协作事件拥有可见卡片，其供应商镜像不是人类提示词。
       if (summary.event.input_source === "agent_message") {
+        // A background command finish notice is host guidance the model received; it joins the context cards.
+        // 后台命令结束通知是模型收到的宿主指引，归入上下文卡片。
+        const shellJobNotice = decodeShellJobNotice(summary.event.text);
+        if (shellJobNotice) {
+          return [contextInjectionNotice({ ...base, metadata: presentationMetadata(summary, rootInput) }, [{
+            context_key: SHELL_JOB_NOTICE_ENTRY_KEY,
+            category: "shellJob",
+            operation: "upsert",
+            content: summary.event.text,
+            label: shellJobNoticeLabel(shellJobNotice, t),
+          }], t)];
+        }
         // Received questions have no typed body in inbound_delivery; their exact host envelope owns the body.
         // 接收问题的 inbound_delivery 不含强类型正文；其精确宿主信封拥有正文。
         const question = decodeAgentQuestionInput(summary.event);
@@ -965,6 +979,10 @@ function memoryRecallMessage(
   };
 }
 
+// SHELL_JOB_NOTICE_ENTRY_KEY identifies card entries projected from finish notices rather than from system contexts.
+// SHELL_JOB_NOTICE_ENTRY_KEY 标识由结束通知（而非系统上下文）投影出的卡片条目。
+const SHELL_JOB_NOTICE_ENTRY_KEY = "shell_job_notice";
+
 // contextInjectionCategory maps a backend context key to its card category; unknown keys stay visible as other.
 // contextInjectionCategory 将后端上下文键映射为卡片类别；未知键仍以“其他”显示。
 function contextInjectionCategory(contextKey: string): ContextInjectionCategory {
@@ -972,6 +990,8 @@ function contextInjectionCategory(contextKey: string): ContextInjectionCategory 
     case "goal_state":
     case "goal_continuation":
       return "goal";
+    case "shell_job_continuation":
+      return "shellJob";
     case "plan_mode":
       return "plan";
     case "dynamic.provider_tools":

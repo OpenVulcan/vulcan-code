@@ -1,5 +1,5 @@
-//! Canonical Hook ownership for internal Goal and child-return dispatch.
-//! 内部 Goal 与子回流分发的规范 Hook 归属。
+//! Canonical Hook ownership for internal Goal, shell-job wake and child-return dispatch.
+//! 内部 Goal、shell 任务唤醒与子回流分发的规范 Hook 归属。
 
 use super::pending_prepare::{
     SessionSubagentReturnDispatchAuthority, subagent_return_dispatch_authority_from_document,
@@ -9,6 +9,9 @@ use crate::session_goal_lifecycle::{
     SessionGoalDispatchAuthority, session_goal_dispatch_authority_from_document,
 };
 use crate::session_runtime_registry_v1::SessionHandle;
+use crate::shell_job_continuation::{
+    SessionShellJobDispatchAuthority, shell_job_dispatch_authority_from_document,
+};
 use vulcan_session_core::v1::business_hook::{BusinessHookMetadata, InitialBusinessPreparation};
 use vulcan_session_core::v1::document::{SessionDocument, TurnOrigin};
 
@@ -88,6 +91,9 @@ pub(super) enum InternalContinuationHookSource<'a> {
     /// Active Goal identity and its canonical continuation anchor.
     /// 活动 Goal 身份及其规范续跑锚点。
     Goal(&'a SessionGoalDispatchAuthority),
+    /// Open shell-job wake Turn and its canonical start context.
+    /// 开放的 shell 任务唤醒回合及其规范起点上下文。
+    ShellJob(&'a SessionShellJobDispatchAuthority),
     /// Exact published child result and its source receipt.
     /// 精确已发布子结果及其来源回执。
     SubagentReturn(&'a SessionSubagentReturnDispatchAuthority),
@@ -119,6 +125,16 @@ pub(super) fn prepare_internal_continuation_hook_owner(
                         ));
                     }
                     (TurnOrigin::GoalContinuation, expected.context_seq)
+                }
+                InternalContinuationHookSource::ShellJob(expected) => {
+                    if shell_job_dispatch_authority_from_document(document).as_ref()
+                        != Some(expected)
+                    {
+                        return Err(String::from(
+                            "Shell-job wake authority changed before Hook restoration.",
+                        ));
+                    }
+                    (TurnOrigin::ShellJobContinuation, expected.context_seq)
                 }
                 InternalContinuationHookSource::SubagentReturn(expected) => {
                     // Exact fields are verified against the canonical event rather than parsed from its text.

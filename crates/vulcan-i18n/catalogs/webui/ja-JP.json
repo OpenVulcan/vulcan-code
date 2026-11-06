@@ -6679,6 +6679,7 @@
   "composer.capability.contextBreak.confirm": "このまま保存",
   "conversation.contextInjection.title": "コンテキスト注入（{category}）",
   "conversation.contextInjection.category.goal": "目標モード",
+  "conversation.contextInjection.category.shellJob": "バックグラウンドコマンド完了",
   "conversation.contextInjection.category.plan": "計画モード",
   "conversation.contextInjection.category.tools": "ツール",
   "conversation.contextInjection.category.permission": "権限モード",

@@ -421,6 +421,13 @@ pub enum DomainError {
         /// 已经活跃的 goal 回合 id。
         turn_id: u64,
     },
+    /// A shell-job continuation cannot open while another turn is open.
+    /// 已有开放回合时不能开启 shell 任务续跑回合。
+    ShellJobContinuationTurnOpen {
+        /// The still-open turn id.
+        /// 仍然开放的回合 id。
+        turn_id: u64,
+    },
     /// A turn-scoped mutation targets a different open turn.
     /// 回合作用域修改指向了不同的开放回合。
     TurnIdentityMismatch {
@@ -883,6 +890,12 @@ impl fmt::Display for DomainError {
                 write!(
                     formatter,
                     "goal-continuation turn {turn_id} is already active"
+                )
+            }
+            Self::ShellJobContinuationTurnOpen { turn_id } => {
+                write!(
+                    formatter,
+                    "shell-job continuation rejected while turn {turn_id} is open"
                 )
             }
             Self::TurnIdentityMismatch { expected, actual } => write!(

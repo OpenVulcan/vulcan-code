@@ -146,14 +146,15 @@ pub enum EnqueueInputDisposition {
     /// The input remains in the metadata FIFO queue.
     /// 输入继续保留在元数据 FIFO 队列中。
     Queued,
-    /// The input atomically superseded an undispatched Goal continuation and opened a UserRoot Turn.
-    /// 输入原子取代了尚未派发的 Goal 续跑，并开启一个 UserRoot 回合。
-    SupersededGoalAndScheduled {
-        /// Goal-continuation Turn closed by the user input.
-        /// 被用户输入闭合的 Goal 续跑回合。
+    /// The input atomically superseded an undispatched host continuation (Goal or background
+    /// shell-job wake) and opened a UserRoot Turn.
+    /// 输入原子取代了尚未派发的宿主续跑（Goal 或后台 shell 任务唤醒），并开启一个 UserRoot 回合。
+    SupersededContinuationAndScheduled {
+        /// Host-continuation Turn closed by the user input.
+        /// 被用户输入闭合的宿主续跑回合。
         stopped_turn_id: TurnId,
-        /// Unique terminal TurnStats seq of the stopped Goal Turn.
-        /// 被停止 Goal 回合的唯一终态 TurnStats seq。
+        /// Unique terminal TurnStats seq of the stopped continuation Turn.
+        /// 被停止续跑回合的唯一终态 TurnStats seq。
         stopped_turn_stats_seq: Seq,
         /// Newly opened UserRoot Turn.
         /// 新开启的 UserRoot 回合。
@@ -1062,7 +1063,10 @@ impl SessionDocument {
         // 用户优先权仅在业务启动后结束；已结束辅助工作不能消费该优先权。
         let undispatched_goal_turn = self.active_turn.as_ref().filter(|turn| {
             !turn.closed
-                && turn.origin == TurnOrigin::GoalContinuation
+                && matches!(
+                    turn.origin,
+                    TurnOrigin::GoalContinuation | TurnOrigin::ShellJobContinuation
+                )
                 && self.active_api.is_none()
                 && !self.events.iter().any(|event| {
                     event.turn_id == Some(turn.turn_id)
@@ -1152,7 +1156,7 @@ impl SessionDocument {
             return Ok(IdempotentMutation::Committed(EnqueueInputReceipt {
                 client_action_id,
                 input_id,
-                disposition: EnqueueInputDisposition::SupersededGoalAndScheduled {
+                disposition: EnqueueInputDisposition::SupersededContinuationAndScheduled {
                     stopped_turn_id: goal_turn.turn_id,
                     stopped_turn_stats_seq,
                     scheduled_turn_id,
@@ -2310,7 +2314,7 @@ impl SessionDocument {
         if boundary_event.turn_id != Some(stopped_turn_id)
             || stats.outcome != TurnOutcome::Stopped
             || boundary.outcome != TurnOutcome::Stopped
-            || !self.is_goal_continuation_turn(stopped_turn_id)
+            || !self.is_host_continuation_turn(stopped_turn_id)
         {
             return Ok(EnqueueInputDisposition::Queued);
         }
@@ -2320,28 +2324,32 @@ impl SessionDocument {
                 .ok_or(DomainError::InvalidQueuedInputOrder {
                     field: "scheduled_input_turn_id",
                 })?;
-        Ok(EnqueueInputDisposition::SupersededGoalAndScheduled {
-            stopped_turn_id,
-            stopped_turn_stats_seq: stats_event.seq,
-            scheduled_turn_id,
-            input_seq: input_event.seq,
-        })
+        Ok(
+            EnqueueInputDisposition::SupersededContinuationAndScheduled {
+                stopped_turn_id,
+                stopped_turn_stats_seq: stats_event.seq,
+                scheduled_turn_id,
+                input_seq: input_event.seq,
+            },
+        )
     }
 
-    /// Returns whether one Turn was opened by a Goal-continuation context event.
-    /// 返回一个回合是否由 Goal 续跑上下文事件开启。
-    fn is_goal_continuation_turn(&self, turn_id: TurnId) -> bool {
+    /// Returns whether one Turn was opened by a Goal-continuation or shell-job wake context event.
+    /// 返回一个回合是否由 Goal 续跑或 shell 任务唤醒上下文事件开启。
+    fn is_host_continuation_turn(&self, turn_id: TurnId) -> bool {
         self.events.iter().find_map(|event| {
             if event.turn_id != Some(turn_id) {
                 return None;
             }
-            Some(matches!(
-                &event.event,
-                EventBody::SystemContext(context)
-                    if context.context_key == "goal_continuation"
-                        || (context.context_key == "goal_state"
-                            && context.operation == SystemContextOperation::Upsert)
-            ))
+            Some(
+                matches!(
+                    &event.event,
+                    EventBody::SystemContext(context)
+                        if context.context_key == "goal_continuation"
+                            || (context.context_key == "goal_state"
+                                && context.operation == SystemContextOperation::Upsert)
+                ) || super::shell_job_continuation::is_shell_job_continuation_start(&event.event),
+            )
         }) == Some(true)
     }
 

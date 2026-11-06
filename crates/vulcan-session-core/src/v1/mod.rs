@@ -31,6 +31,7 @@ pub mod ids;
 pub mod lifetime_usage;
 pub mod projection;
 pub mod service_dto;
+pub mod shell_job_notice;
 pub mod stats;
 pub mod user_prompt;
 

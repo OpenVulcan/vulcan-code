@@ -338,12 +338,14 @@ impl ConversationHookRuntime {
         // 续跑继承恢复后的来源；新代理任务不能成为用户观察。
         let observes_user = source != PendingSessionPromptSource::AgentTask
             && self.permits_user_observation(session_id);
-        // Host, Goal and child-return continuation prompts are dispatch instructions, never user observations.
-        // 宿主、Goal 和子回流续跑提示属于分发指令，绝不是用户观察。
+        // Host, Goal, shell-job wake and child-return continuation prompts are dispatch instructions,
+        // never user observations.
+        // 宿主、Goal、shell 任务唤醒和子回流续跑提示属于分发指令，绝不是用户观察。
         let is_host_continuation = matches!(
             source,
             PendingSessionPromptSource::AgentContinuation
                 | PendingSessionPromptSource::GoalContinuation
+                | PendingSessionPromptSource::ShellJobContinuation
                 | PendingSessionPromptSource::SubagentReturnContinuation
         );
         let was_recorded_while_queued = !is_question_execution

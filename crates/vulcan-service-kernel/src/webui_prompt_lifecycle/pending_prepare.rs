@@ -22,6 +22,10 @@ use crate::{
         session_goal_dispatch_authority_from_v1_handle,
     },
     session_runtime_registry_v1::SessionHandle,
+    shell_job_continuation::{
+        SHELL_JOB_CONTINUATION_CONTENT, SessionShellJobDispatchAuthority,
+        shell_job_dispatch_authority_from_v1_handle,
+    },
     start_reserved_webui_session_kernel_turn, start_reserved_webui_session_kernel_user_turn,
 };
 
@@ -570,6 +574,16 @@ pub(super) enum ExactPendingPromptDispatch {
         /// 由该权威构建且不持久化的执行适配对象。
         entry: PendingSessionPromptEntry,
     },
+    /// One wake Turn opened after background shell jobs finished while the session was idle.
+    /// 会话空闲时后台 shell 任务结束后开启的一个唤醒回合。
+    ShellJob {
+        /// Exact durable wake Turn identity.
+        /// 精确可靠的唤醒回合身份。
+        authority: SessionShellJobDispatchAuthority,
+        /// Non-persistent execution adapter built from that authority.
+        /// 由该权威构建且不持久化的执行适配对象。
+        entry: PendingSessionPromptEntry,
+    },
     /// One queued user input already promoted into an open Turn.
     /// 已经提升为开放回合的一条排队用户输入。
     Queued {
@@ -618,6 +632,7 @@ impl ExactPendingPromptDispatch {
     fn entry(&self) -> &PendingSessionPromptEntry {
         match self {
             Self::Goal { entry, .. }
+            | Self::ShellJob { entry, .. }
             | Self::Collaboration { entry, .. }
             | Self::AgentTask { entry, .. }
             | Self::Queued { entry, .. }
@@ -632,6 +647,7 @@ impl ExactPendingPromptDispatch {
     fn source(&self) -> PendingSessionPromptSource {
         match self {
             Self::Goal { .. } => PendingSessionPromptSource::GoalContinuation,
+            Self::ShellJob { .. } => PendingSessionPromptSource::ShellJobContinuation,
             Self::Collaboration { .. } => PendingSessionPromptSource::AgentContinuation,
             Self::AgentTask { authority, .. } => authority.prompt_source(),
             Self::Queued { .. } | Self::Root { .. } | Self::PendingInTurn { .. } => {
@@ -649,6 +665,7 @@ impl ExactPendingPromptDispatch {
             Self::AgentTask { authority, .. } => Some(authority.input_seq),
             Self::Root { authority, .. } => Some(authority.input_seq),
             Self::Goal { .. }
+            | Self::ShellJob { .. }
             | Self::Collaboration { .. }
             | Self::SubagentReturn { .. }
             | Self::PendingInTurn { .. } => None,
@@ -772,6 +789,49 @@ pub(crate) async fn maybe_prepare_webui_goal_continuation(
         agent_runtime,
         session_id,
         ExactPendingPromptDispatch::Goal { authority, entry },
+    )
+    .await
+}
+
+/// Starts one shell-job wake Turn directly from its exact durable V1 authority.
+/// 直接从精确可靠的 V1 权威启动一个 shell 任务唤醒回合。
+///
+/// # Returns
+/// 返回值
+/// `true` only when this invocation owns and starts the formal PromptSubmission.
+/// 仅当本次调用取得并启动正式 PromptSubmission 所有权时返回 `true`。
+pub(crate) async fn maybe_prepare_webui_shell_job_continuation(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    controller_runtime: &HostRuntimeHandle,
+    agent_runtime: &AgentRuntimeBridge,
+    session_id: SessionId,
+    authority: SessionShellJobDispatchAuthority,
+) -> Result<bool, String> {
+    let handle = registered_session_v1_handle_from_state(state, session_id)?;
+    let entry = PendingSessionPromptEntry {
+        id: format!(
+            "webui-v1-shell-job-continuation-turn-{}",
+            authority.turn_id.value()
+        ),
+        prompt: String::from(SHELL_JOB_CONTINUATION_CONTENT),
+        hidden_model_guidance: None,
+        preview: String::from(SHELL_JOB_CONTINUATION_CONTENT),
+        attachments: Vec::new(),
+        model_reference: None,
+        runtime_options: exact_v1_dispatch_runtime_options(handle.as_ref())?,
+        source: PendingSessionPromptSource::ShellJobContinuation,
+        task_id: None,
+        panel_entry_id: None,
+        created_at: current_unix_millis_text(),
+    };
+    prepare_webui_pending_prompt(
+        app,
+        state,
+        controller_runtime,
+        agent_runtime,
+        session_id,
+        ExactPendingPromptDispatch::ShellJob { authority, entry },
     )
     .await
 }
@@ -1136,6 +1196,15 @@ pub(super) async fn prepare_webui_pending_prompt(
                 ),
             )?;
         }
+        ExactPendingPromptDispatch::ShellJob { authority, .. } => {
+            super::internal_continuation_prepare::prepare_internal_continuation_hook_owner(
+                &hook_owner_handle,
+                &entry_agent_runtime,
+                super::internal_continuation_prepare::InternalContinuationHookSource::ShellJob(
+                    authority,
+                ),
+            )?;
+        }
         ExactPendingPromptDispatch::SubagentReturn { authority, .. } => {
             super::internal_continuation_prepare::prepare_internal_continuation_hook_owner(
                 &hook_owner_handle, &entry_agent_runtime,
@@ -1229,6 +1298,16 @@ pub(super) async fn prepare_webui_pending_prompt(
             if &current != authority {
                 return Err(String::from(
                     "Agent task authority changed before Hook setup.",
+                ));
+            }
+        }
+        if let ExactPendingPromptDispatch::ShellJob { authority, .. } = &exact_dispatch {
+            let handle = registered_session_v1_handle_from_state(state, session_id)?;
+            if shell_job_dispatch_authority_from_v1_handle(handle.as_ref())?.as_ref()
+                != Some(authority)
+            {
+                return Err(format!(
+                    "Shell-job wake authority changed for session `{session_id}` before Hook setup"
                 ));
             }
         }
@@ -1395,6 +1474,7 @@ pub(super) async fn prepare_webui_pending_prompt(
         if matches!(
             &exact_dispatch,
             ExactPendingPromptDispatch::SubagentReturn { .. }
+                | ExactPendingPromptDispatch::ShellJob { .. }
                 | ExactPendingPromptDispatch::Collaboration { .. }
                 | ExactPendingPromptDispatch::AgentTask { .. }
         ) {

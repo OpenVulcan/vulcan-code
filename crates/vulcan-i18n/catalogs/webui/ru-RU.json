@@ -6679,6 +6679,7 @@
   "composer.capability.contextBreak.confirm": "Всё равно сохранить",
   "conversation.contextInjection.title": "Внедрение контекста ({category})",
   "conversation.contextInjection.category.goal": "режим цели",
+  "conversation.contextInjection.category.shellJob": "фоновая команда завершена",
   "conversation.contextInjection.category.plan": "режим планирования",
   "conversation.contextInjection.category.tools": "инструменты",
   "conversation.contextInjection.category.permission": "режим разрешений",

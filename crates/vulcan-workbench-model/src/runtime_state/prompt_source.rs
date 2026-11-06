@@ -20,6 +20,9 @@ pub enum PendingSessionPromptSource {
     /// Host-created hidden continuation that advances an active session goal while the thread is idle.
     /// 宿主创建的隐藏续跑输入，用于在线程空闲时推进活跃会话目标。
     GoalContinuation,
+    /// Host-created continuation that wakes an idle session after its background shell jobs finished.
+    /// 宿主创建的续跑，在后台 shell 任务结束后唤醒空闲会话。
+    ShellJobContinuation,
     /// Host-created hidden continuation that resumes the parent after one durable subagent return.
     /// 宿主创建的隐藏续跑输入，用于在子代理结果可靠回流后恢复父会话。
     SubagentReturnContinuation,

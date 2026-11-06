@@ -59,7 +59,7 @@ async fn main_business_queued_dispatch_rejects_auxiliary_acknowledgement() {
             .value;
         // Read the source coordinates from the domain receipt, without inventing events.
         // 从领域回执读取来源坐标，不臆造事件。
-        let EnqueueInputDisposition::SupersededGoalAndScheduled {
+        let EnqueueInputDisposition::SupersededContinuationAndScheduled {
             scheduled_turn_id,
             input_seq,
             ..

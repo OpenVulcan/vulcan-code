@@ -161,13 +161,13 @@ pub(crate) fn commit_existing_submission_v1_queue(
             // A no-change receipt may describe an admission that was later moved or removed.
             // 无变化回执可能描述一条后来已被移动或删除的历史准入。
         }
-        (EnqueueInputDisposition::SupersededGoalAndScheduled { .. }, Some(_)) => {
+        (EnqueueInputDisposition::SupersededContinuationAndScheduled { .. }, Some(_)) => {
             return Err(format!(
                 "scheduled V1 admission unexpectedly remains queued as input {}",
                 receipt.value.input_id.value()
             ));
         }
-        (EnqueueInputDisposition::SupersededGoalAndScheduled { .. }, None) => {}
+        (EnqueueInputDisposition::SupersededContinuationAndScheduled { .. }, None) => {}
     }
     Ok(receipt)
 }
@@ -431,7 +431,7 @@ pub(crate) fn queue_existing_submission(
     let currently_queued = v1_admission_is_currently_queued(&v1_handle, &durable_receipt.value)?;
     let scheduled_turn_id = match &durable_receipt.value.disposition {
         EnqueueInputDisposition::Queued => None,
-        EnqueueInputDisposition::SupersededGoalAndScheduled {
+        EnqueueInputDisposition::SupersededContinuationAndScheduled {
             scheduled_turn_id, ..
         } => Some(scheduled_turn_id.value().to_string()),
     };

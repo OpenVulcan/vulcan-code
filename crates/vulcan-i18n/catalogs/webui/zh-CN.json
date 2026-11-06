@@ -6679,6 +6679,7 @@
   "composer.capability.contextBreak.confirm": "仍然保存",
   "conversation.contextInjection.title": "上下文注入（{category}）",
   "conversation.contextInjection.category.goal": "目标模式",
+  "conversation.contextInjection.category.shellJob": "后台命令已结束",
   "conversation.contextInjection.category.plan": "计划模式",
   "conversation.contextInjection.category.tools": "工具",
   "conversation.contextInjection.category.permission": "权限模式",

@@ -694,6 +694,20 @@ pub fn event(summary: &ConversationEventSummary) -> Option<ConversationEvent> {
             },
             message: memory_recall_message(recall),
         },
+        // A host wake after background shell jobs finished marks its turn like the WebUI card.
+        // 后台 shell 任务结束后的宿主唤醒像 WebUI 卡片一样标记其回合。
+        CoreEvent::SystemContext(context)
+            if context.context_key == core::document::SHELL_JOB_CONTINUATION_CONTEXT_KEY
+                && context.operation == core::SystemContextOperation::Upsert =>
+        {
+            EventBody::DisplayNote {
+                severity: NoticeSeverity::Info,
+                message: crate::tr!(
+                    "conversation.contextInjection.title",
+                    category = crate::tr!("conversation.contextInjection.category.shellJob")
+                ),
+            }
+        }
         CoreEvent::TurnStats(stats) => EventBody::TurnStats {
             outcome: stats.outcome,
             duration_ms: stats.duration_ms.map_or(0, millis),
@@ -1084,6 +1098,32 @@ mod tests {
         assert_eq!(severity, NoticeSeverity::Info);
         assert!(message.contains("deploy steps"));
         assert_eq!(recall("failed").0, NoticeSeverity::Warning);
+    }
+
+    /// Only the start of a background command wake turn becomes a note; its expiry and other
+    /// system contexts stay out of the transcript.
+    /// 只有后台命令唤醒回合的起点成为通知；其失效与其他系统上下文不进入记录区。
+    #[test]
+    fn maps_background_command_wake_to_a_note() {
+        let context = |key: &str, operation: &str| {
+            let summary: ConversationEventSummary = serde_json::from_value(json!({
+                "seq": 7, "turn_id": 3, "created_at_ms": 1, "updated_at_ms": 1, "event_revision": 1,
+                "visibility": "provider",
+                "event": {"kind": "system_context", "context_key": key, "operation": operation,
+                    "scope": "turn", "ttl_turns": 1, "content": "Background shell jobs finished."}
+            }))
+            .expect("system context summary matches the shared DTO");
+            event(&summary).map(|event| event.body)
+        };
+        assert!(matches!(
+            context("shell_job_continuation", "upsert"),
+            Some(EventBody::DisplayNote {
+                severity: NoticeSeverity::Info,
+                ..
+            })
+        ));
+        assert!(context("shell_job_continuation", "remove").is_none());
+        assert!(context("plan_mode", "upsert").is_none());
     }
 
     /// Unified diffs parse into numbered hunks without their file headers.

@@ -142,7 +142,7 @@ fn enqueue_preempts_undispatched_goal_and_replays_exact_receipt() -> Result<(), 
     let committed = doc.enqueue_input(submission.clone(), T0 + 2)?;
     assert!(committed.changed());
     let receipt = committed.into_value();
-    let EnqueueInputDisposition::SupersededGoalAndScheduled {
+    let EnqueueInputDisposition::SupersededContinuationAndScheduled {
         stopped_turn_id,
         stopped_turn_stats_seq,
         scheduled_turn_id,

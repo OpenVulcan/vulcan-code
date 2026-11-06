@@ -4,7 +4,7 @@
 import "@/ui-kit/styles/features/session-activity.css";
 import * as React from "react";
 import { Bot, ChevronDown, ChevronRight, Eraser, Square, TerminalSquare } from "lucide-react";
-import { useI18n, type TranslationKey } from "@/i18n";
+import { useI18n } from "@/i18n";
 import { toast } from "@/ui-kit/primitives/toast";
 import { Button, IconButton } from "@/ui-kit/primitives/button";
 import { serviceClient } from "@/service/webui-service-runtime";
@@ -19,7 +19,7 @@ import type {
   SubagentActivity,
 } from "@/types";
 import { ShellJobLogView } from "./shell-job-log-view";
-import { formatActivityDuration } from "./session-activity-format";
+import { formatActivityDuration, shellJobStatusLabel } from "./session-activity-format";
 import {
   conversationSessionSubagentRunStateLabel,
   conversationSessionSubagentRunStateTone,
@@ -468,23 +468,4 @@ function ShellJobRow(props: {
       ) : null}
     </li>
   );
-}
-
-// shellJobStatusLabel maps a job status word to its label.
-// shellJobStatusLabel 将任务状态词映射为其标签。
-export function shellJobStatusLabel(status: string, t: (key: TranslationKey) => string): string {
-  switch (status) {
-    case "running":
-      return t("sessionActivity.status.running");
-    case "completed":
-      return t("sessionActivity.status.completed");
-    case "failed":
-      return t("sessionActivity.status.failed");
-    case "timed_out":
-      return t("sessionActivity.status.timedOut");
-    case "stopped":
-      return t("sessionActivity.status.stopped");
-    default:
-      return t("sessionActivity.status.lost");
-  }
 }

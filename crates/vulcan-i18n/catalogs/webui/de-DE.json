@@ -6679,6 +6679,7 @@
   "composer.capability.contextBreak.confirm": "Trotzdem speichern",
   "conversation.contextInjection.title": "Kontextinjektion ({category})",
   "conversation.contextInjection.category.goal": "Zielmodus",
+  "conversation.contextInjection.category.shellJob": "Hintergrundbefehl beendet",
   "conversation.contextInjection.category.plan": "Planmodus",
   "conversation.contextInjection.category.tools": "Werkzeuge",
   "conversation.contextInjection.category.permission": "Berechtigungsmodus",

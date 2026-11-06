@@ -2915,30 +2915,16 @@ fn running_shell_jobs_context(session_id: &str) -> Option<String> {
 /// Model-facing text of one finished background shell job.
 /// 一个已结束后台 shell 任务面向模型的文本。
 fn shell_job_notice_text(notice: &vulcan_host_tools::shell_job::ShellJobNotice) -> String {
-    let outcome = &notice.outcome;
-    let mut lines = vec![
-        format!(
-            "<vulcan_shell_job_notice version=\"1\" job_id=\"{}\">",
-            notice.job_id
-        ),
-        format!("Background shell job {} finished.", notice.job_id),
-        format!("Purpose: {}", notice.purpose),
-        format!("Command: {}", notice.command),
-        format!("Status: {}", outcome.status.as_str()),
-        format!("Duration: {} ms", outcome.duration_ms),
-    ];
-    if let Some(code) = outcome.exit_code {
-        lines.push(format!("Exit code: {code}"));
+    vulcan_session_core::v1::shell_job_notice::ShellJobNoticeFacts {
+        job_id: notice.job_id.clone(),
+        purpose: notice.purpose.clone(),
+        command: notice.command.clone(),
+        status: notice.outcome.status.as_str().to_string(),
+        duration_ms: notice.outcome.duration_ms,
+        exit_code: notice.outcome.exit_code,
+        failure_reason: notice.outcome.failure_reason.clone(),
     }
-    if let Some(reason) = &outcome.failure_reason {
-        lines.push(format!("Reason: {reason}"));
-    }
-    lines.push(format!(
-        "Read its output with shell_job (action `read` or `search`, job_id `{}`) if you need it.",
-        notice.job_id
-    ));
-    lines.push(String::from("</vulcan_shell_job_notice>"));
-    lines.join("\n")
+    .render()
 }
 
 #[cfg(test)]

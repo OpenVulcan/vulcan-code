@@ -6679,6 +6679,7 @@
   "composer.capability.contextBreak.confirm": "Enregistrer quand même",
   "conversation.contextInjection.title": "Injection de contexte ({category})",
   "conversation.contextInjection.category.goal": "mode objectif",
+  "conversation.contextInjection.category.shellJob": "commande en arrière-plan terminée",
   "conversation.contextInjection.category.plan": "mode plan",
   "conversation.contextInjection.category.tools": "outils",
   "conversation.contextInjection.category.permission": "mode d’autorisation",

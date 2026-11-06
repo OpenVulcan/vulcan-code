@@ -151,7 +151,7 @@ fn auxiliary_history_preserves_user_priority_over_goal() -> Result<(), DomainErr
                 assert_eq!(document.metadata.input_state.queued_inputs.len(), 1);
             } else {
                 assert!(
-                    matches!(receipt.disposition, EnqueueInputDisposition::SupersededGoalAndScheduled { stopped_turn_id, .. } if stopped_turn_id == turn)
+                    matches!(receipt.disposition, EnqueueInputDisposition::SupersededContinuationAndScheduled { stopped_turn_id, .. } if stopped_turn_id == turn)
                 );
                 assert_ne!(document.active_turn().unwrap().turn_id, turn);
                 assert!(document.metadata.input_state.queued_inputs.is_empty());

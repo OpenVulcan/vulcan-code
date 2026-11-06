@@ -437,12 +437,18 @@ fn explicit_turn_start_index(
             ),
             // Match the same Goal start authority as SessionDocument::rebuild_derived_state.
             // 与 SessionDocument::rebuild_derived_state 使用同一 Goal 起点权威。
+            // The shell-job wake start matches SessionDocument::rebuild_derived_state as well.
+            // shell 任务唤醒起点同样与 SessionDocument::rebuild_derived_state 一致。
             EventBody::SystemContext(context) => {
                 context.context_key == "goal_continuation"
                     || (context.context_key == "goal_state"
                         && context.operation
                             == vulcan_session_core::v1::event::SystemContextOperation::Upsert
                         && open_start == Some(event.seq))
+                    || (context.context_key
+                        == vulcan_session_core::v1::document::SHELL_JOB_CONTINUATION_CONTEXT_KEY
+                        && context.operation
+                            == vulcan_session_core::v1::event::SystemContextOperation::Upsert)
             }
             // Maintenance has its own typed start; no synthetic user message is required.
             // 维护回合拥有独立的强类型起点，不需要合成用户消息。

@@ -97,7 +97,7 @@ fn initial_business_preparation_accepts_exact_queued_successor() {
         )
         .unwrap()
         .into_value();
-    let EnqueueInputDisposition::SupersededGoalAndScheduled {
+    let EnqueueInputDisposition::SupersededContinuationAndScheduled {
         scheduled_turn_id,
         input_seq,
         ..

@@ -376,6 +376,38 @@ fn fold_marker(open: bool) -> &'static str {
 const USER_FOLD_LINES: usize = 12;
 const USER_PREVIEW_LINES: usize = 8;
 
+/// Heading of a background command finish notice: the context-injection title, then the command's
+/// purpose (or first line), job id, status and exit code, as in the WebUI context card.
+/// 后台命令结束通知的标题：上下文注入标题，随后是命令用途（或首行）、任务标识、状态与退出码，
+/// 与 WebUI 上下文卡一致。
+fn shell_job_notice_heading(text: &str) -> Option<String> {
+    let notice = vulcan_session_core::v1::shell_job_notice::ShellJobNoticeFacts::parse(text)?;
+    let name = match notice.purpose.trim() {
+        "" => notice
+            .command
+            .trim()
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .to_string(),
+        purpose => purpose.to_string(),
+    };
+    let mut parts = vec![
+        tr!(
+            "conversation.contextInjection.title",
+            category = tr!("conversation.contextInjection.category.shellJob")
+        ),
+        name,
+        notice.job_id,
+        crate::app::activity::job_status_label(&notice.status),
+    ];
+    if let Some(code) = notice.exit_code {
+        parts.push(tr!("toolCard.exitCode", code = code));
+    }
+    parts.retain(|part| !part.is_empty());
+    Some(parts.join(" · "))
+}
+
 fn user(ctx: &Ctx, event: &ConversationEvent) -> Vec<Line<'static>> {
     let EventBody::UserInput {
         text,
@@ -391,7 +423,12 @@ fn user(ctx: &Ctx, event: &ConversationEvent) -> Vec<Line<'static>> {
         UserInputSource::Root => None,
         UserInputSource::PendingInTurn => Some(tr!("pendingPrompt.insertedShort")),
         UserInputSource::QueuedScheduled => Some(tr!("pendingPrompt.queue")),
-        UserInputSource::AgentMessage => Some(tr!("conversation.subagent.detail.feedback")),
+        // A background command finish notice reads as the context entry the WebUI shows for it.
+        // 后台命令结束通知显示为 WebUI 中对应的上下文条目。
+        UserInputSource::AgentMessage => Some(
+            shell_job_notice_heading(text)
+                .unwrap_or_else(|| tr!("conversation.subagent.detail.feedback")),
+        ),
     };
     let mut lines = Vec::new();
     if let Some(tag) = tag {
@@ -847,4 +884,32 @@ fn welcome(theme: &Theme, area: Rect, buf: &mut Buffer, has_conversation: bool) 
     };
     let hint = truncate(&hint, area.width.saturating_sub(4) as usize);
     buf.set_string(centered(width_of(&hint)), y + 2, &hint, theme.muted_text());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vulcan_session_core::v1::shell_job_notice::ShellJobNoticeFacts;
+
+    /// A finish notice gets a heading naming the command, job and outcome; other agent messages get none.
+    /// 结束通知得到指明命令、任务与结果的标题；其他代理消息没有。
+    #[test]
+    fn shell_job_notice_heading_names_the_command() {
+        let text = ShellJobNoticeFacts {
+            job_id: String::from("job-7"),
+            purpose: String::new(),
+            command: String::from("cargo test\n--all"),
+            status: String::from("failed"),
+            duration_ms: 900,
+            exit_code: Some(101),
+            failure_reason: None,
+        }
+        .render();
+        let heading = shell_job_notice_heading(&text).expect("a finish notice has a heading");
+        assert!(heading.contains("cargo test"));
+        assert!(!heading.contains("--all"));
+        assert!(heading.contains("job-7"));
+        assert!(heading.contains("101"));
+        assert_eq!(shell_job_notice_heading("Please review the result."), None);
+    }
 }

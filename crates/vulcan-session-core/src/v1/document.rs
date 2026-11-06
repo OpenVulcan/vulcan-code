@@ -66,6 +66,7 @@ mod provider_source;
 mod recovery;
 mod resident_events;
 mod selection;
+mod shell_job_continuation;
 mod subagent;
 mod terminal_settlement;
 mod tools;
@@ -90,6 +91,7 @@ pub use input::{
 pub use modes::{GoalModeTransition, PlanModeTransitionInput};
 pub use persistence::{DirtyFile, FlushCandidate, MemoryRevisionReceipt};
 pub use selection::SessionSelectionBundleInput;
+pub use shell_job_continuation::{SHELL_JOB_CONTINUATION_CONTEXT_KEY, ShellJobContinuationStart};
 pub use subagent::{SubagentReturnBuildRequest, SubagentReturnInput, SubagentReturnReceipt};
 pub use tools::{
     PreparedToolBatchReceipt, PreparedToolReceipt, ToolCompletion, ToolCompletionReceipt,
@@ -125,6 +127,9 @@ pub enum TurnOrigin {
     /// Goal auto-continue opened the turn.
     /// Goal 自动续跑开启回合。
     GoalContinuation,
+    /// Background shell jobs finished while the session was idle and woke it.
+    /// 会话空闲时后台 shell 任务结束并唤醒了会话。
+    ShellJobContinuation,
     /// A durable child result opened a follow-up turn after the parent had finished.
     /// 父回合结束后，可靠子任务结果开启后续处理回合。
     SubagentReturn,

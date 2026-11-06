@@ -1654,6 +1654,13 @@ fn run_service_bootstrap(
         runtime.handle(),
         event_emitter.clone(),
     );
+    // An idle session wakes once its background jobs finish with undelivered notices.
+    // 后台任务结束且带有未送达通知时唤醒空闲会话。
+    crate::shell_job_continuation::install_shell_job_continuation_wake(
+        runtime.handle(),
+        event_emitter.clone(),
+        Arc::downgrade(state),
+    );
     // The configuration tools list and change settings through the settings services via this host.
     // 配置工具经此宿主、通过设置服务列出并修改设置。
     agent_runtime.task_runtime.set_configuration_host(Arc::new(

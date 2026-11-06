@@ -6679,6 +6679,7 @@
   "composer.capability.contextBreak.confirm": "Save anyway",
   "conversation.contextInjection.title": "Context injection ({category})",
   "conversation.contextInjection.category.goal": "goal mode",
+  "conversation.contextInjection.category.shellJob": "background command finished",
   "conversation.contextInjection.category.plan": "plan mode",
   "conversation.contextInjection.category.tools": "tools",
   "conversation.contextInjection.category.permission": "permission mode",

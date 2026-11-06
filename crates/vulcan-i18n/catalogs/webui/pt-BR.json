@@ -6679,6 +6679,7 @@
   "composer.capability.contextBreak.confirm": "Salvar mesmo assim",
   "conversation.contextInjection.title": "Injeção de contexto ({category})",
   "conversation.contextInjection.category.goal": "modo de objetivo",
+  "conversation.contextInjection.category.shellJob": "comando em segundo plano concluído",
   "conversation.contextInjection.category.plan": "modo de planejamento",
   "conversation.contextInjection.category.tools": "ferramentas",
   "conversation.contextInjection.category.permission": "modo de permissão",

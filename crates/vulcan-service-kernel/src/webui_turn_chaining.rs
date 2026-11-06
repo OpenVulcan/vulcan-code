@@ -97,21 +97,42 @@ pub(super) async fn maybe_start_webui_turn_chain_after_finished(
     receipt: SessionMutationReceipt<TurnCompletionTransition>,
 ) -> bool {
     let receipt_revision = receipt.revision;
-    let started =
-        match receipt.value.successor {
-            TurnSuccessor::None => {
-                crate::agent_collaboration::wake_session_tasks_if_idle(
-                    app,
-                    state,
-                    controller_runtime,
-                    finished_session_id,
-                )
-                .await
+    let started = match receipt.value.successor {
+        TurnSuccessor::None => {
+            match crate::agent_collaboration::wake_session_tasks_if_idle(
+                app,
+                state,
+                controller_runtime,
+                finished_session_id,
+            )
+            .await
+            {
+                Ok(true) => Ok(true),
+                // Background jobs that finished during this turn wake the session only after
+                // every other successor declined it.
+                // 本回合期间结束的后台任务，仅在其他后继都未接手时才唤醒会话。
+                task_wake => {
+                    if let Err(error) = task_wake {
+                        tracing::warn!(
+                            "[webui-service] wake agent tasks failed: session={finished_session_id} error={error}"
+                        );
+                    }
+                    crate::shell_job_continuation::maybe_start_shell_job_continuation_if_idle(
+                        app,
+                        state,
+                        controller_runtime,
+                        agent_runtime,
+                        finished_session_id,
+                    )
+                    .await
+                }
             }
-            TurnSuccessor::GoalContinuation {
-                turn_id,
-                context_seq,
-            } => async {
+        }
+        TurnSuccessor::GoalContinuation {
+            turn_id,
+            context_seq,
+        } => {
+            async {
                 let handle = session_v1_handle_from_state(state, finished_session_id).await?;
                 let authority = session_goal_dispatch_authority_from_v1_handle(
                     handle.as_ref(),
@@ -137,35 +158,36 @@ pub(super) async fn maybe_start_webui_turn_chain_after_finished(
                 )
                 .await
             }
-            .await,
-            TurnSuccessor::QueuedUser {
-                turn_id,
-                input_id,
-                client_action_id,
-                input_seq,
-            } => {
-                async {
-                    let handle = session_v1_handle_from_state(state, finished_session_id).await?;
-                    let authority = queued_dispatch_authority_from_v1_handle(
-                        handle.as_ref(),
-                        turn_id,
-                        input_id,
-                        &client_action_id,
-                        input_seq,
-                    )?;
-                    start_exact_v1_queued_turn(
-                        app,
-                        state,
-                        controller_runtime,
-                        agent_runtime,
-                        finished_session_id,
-                        authority,
-                    )
-                    .await
-                }
+            .await
+        }
+        TurnSuccessor::QueuedUser {
+            turn_id,
+            input_id,
+            client_action_id,
+            input_seq,
+        } => {
+            async {
+                let handle = session_v1_handle_from_state(state, finished_session_id).await?;
+                let authority = queued_dispatch_authority_from_v1_handle(
+                    handle.as_ref(),
+                    turn_id,
+                    input_id,
+                    &client_action_id,
+                    input_seq,
+                )?;
+                start_exact_v1_queued_turn(
+                    app,
+                    state,
+                    controller_runtime,
+                    agent_runtime,
+                    finished_session_id,
+                    authority,
+                )
                 .await
             }
-        };
+            .await
+        }
+    };
     let started = match started {
         Ok(started) => started,
         Err(error) => {

@@ -19,7 +19,10 @@ use crate::v1::event::{
 use crate::v1::ids::{ClientActionId, JS_SAFE_INTEGER_MAX, ResourceId, Seq};
 use crate::v1::projection::derive_active_system_state;
 
-use super::{ANSWER_MODE_CONTEXT_KEY, SessionDocument, validate_timestamp, validate_user_input};
+use super::{
+    ANSWER_MODE_CONTEXT_KEY, SHELL_JOB_CONTINUATION_CONTEXT_KEY, SessionDocument,
+    validate_timestamp, validate_user_input,
+};
 
 /// Stable Goal state semantic key reset by every rewritten generation.
 /// 每个重写 generation 都会重置的稳定 Goal 状态语义键。
@@ -590,6 +593,7 @@ fn active_generation_context_keys(
     for context_key in [
         GOAL_STATE_CONTEXT_KEY,
         GOAL_CONTINUATION_CONTEXT_KEY,
+        SHELL_JOB_CONTINUATION_CONTEXT_KEY,
         PLAN_MODE_CONTEXT_KEY,
         DYNAMIC_CONTEXT_SYSTEM_KEY,
         DYNAMIC_CONTEXT_DEVELOPER_KEY,
@@ -615,6 +619,9 @@ fn generation_reset_content(context_key: &str) -> &'static str {
         }
         GOAL_CONTINUATION_CONTEXT_KEY => {
             "Goal continuation was reset because the conversation history was replaced."
+        }
+        SHELL_JOB_CONTINUATION_CONTEXT_KEY => {
+            "The background command continuation was reset because the conversation history was replaced."
         }
         PLAN_MODE_CONTEXT_KEY => {
             "Plan mode was reset because the conversation history was replaced."

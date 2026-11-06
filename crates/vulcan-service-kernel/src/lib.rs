@@ -236,6 +236,7 @@ mod session_v1_lifecycle;
 mod settings_provider_projection;
 mod settings_runtime_projection;
 mod shell_command_output;
+mod shell_job_continuation;
 mod skill_catalog_projection;
 mod skills_services;
 mod state;

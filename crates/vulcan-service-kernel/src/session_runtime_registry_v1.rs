@@ -1505,7 +1505,7 @@ impl SessionHandle {
                         IdempotentMutation::Committed(receipt) => {
                             if matches!(
                                 receipt.disposition,
-                                vulcan_session_core::v1::document::EnqueueInputDisposition::SupersededGoalAndScheduled { .. }
+                                vulcan_session_core::v1::document::EnqueueInputDisposition::SupersededContinuationAndScheduled { .. }
                             ) {
                                 // Publish the new business turn and its run permission in the same revision.
                                 // 在同一修订发布新业务回合及其运行许可。

@@ -4,7 +4,7 @@ import { parseConversationBlocks } from "./conversation-transcript-parser";
 import { parseSystemProviderError } from "./conversation-system-error-card";
 
 import { projectConversationBranchPresentationV1 } from "./conversation-branch-presentation-v1";
-import type { ConversationEventSummary } from "@/service/conversation-event-window-store";
+import { clientActionId, type ConversationEventSummary } from "@/service/conversation-event-window-store";
 import type { ConversationSessionResourceCatalogV1 } from "@/state/conversation-session-resources-v1";
 
 // EMPTY_RESOURCES is the exact owner-bound empty catalog used by request-configuration tests.
@@ -176,6 +176,44 @@ describe("V1 branch request configuration presentation", () => {
     // The fence outlasts backtick runs inside the content, so the exact text stays one code block.
     // 围栏长于正文中的反引号串，使原文保持为一个代码块。
     expect(notices[0]!.body).toContain("````text\nModel extensions changed: image_generate uses ```fixed```.\n````");
+  });
+  // A host wake after background shell jobs finished shows as its own category; its turn-end expiry stays hidden.
+  // 后台 shell 任务结束后的宿主唤醒显示为独立类别；其回合结束失效保持隐藏。
+  it("shows the background command wake as its own injection category", () => {
+    type SystemContext = Extract<ConversationEventSummary["event"], { kind: "system_context" }>;
+    const context = (seq: number, event: Partial<SystemContext>): ConversationEventSummary => ({
+      seq, turn_id: 3, created_at_ms: seq, updated_at_ms: seq, event_revision: 1, visibility: "provider",
+      event: { kind: "system_context", context_key: "shell_job_continuation", operation: "upsert", scope: "turn",
+        content: "Background shell jobs finished.", ...event },
+    });
+    const notice = [
+      "<vulcan_shell_job_notice version=\"1\" job_id=\"job-7\">",
+      "Background shell job job-7 finished.",
+      "Purpose: Run the tests",
+      "Command: cargo test",
+      "Status: failed",
+      "Duration: 900 ms",
+      "Exit code: 101",
+      "Read its output with shell_job (action `read` or `search`, job_id `job-7`) if you need it.",
+      "</vulcan_shell_job_notice>",
+    ].join("\n");
+    const presentation = projectConversationBranchPresentationV1("session-shell-wake", [
+      context(1, {}),
+      { seq: 2, turn_id: 3, created_at_ms: 2, updated_at_ms: 2, event_revision: 1, visibility: "provider",
+        event: { kind: "user_input", client_action_id: clientActionId("shell-job-notice-job-7"), input_id: 2,
+          input_source: "agent_message", text: notice } },
+      context(3, { operation: "remove", content: "expired" }),
+    ], EMPTY_RESOURCES, (key) => key);
+    const meta = (message: (typeof presentation.messages)[number]) => message.metadata as Record<string, unknown> | undefined;
+    const notices = presentation.messages.filter((message) => meta(message)?.notice_kind === "context_injection");
+    // The wake context and the finish notice share one card; the notice entry names the command and its outcome.
+    // 唤醒上下文与结束通知共用一张卡片；通知条目指明命令及其结果。
+    expect(notices.map((message) => meta(message)?.context_categories)).toEqual([["shellJob"]]);
+    const entries = meta(notices[0]!)?.context_entries as Array<{ label?: string; content: string }>;
+    expect(entries).toHaveLength(2);
+    expect(entries[1]!.label).toBe("Run the tests · job-7 · sessionActivity.status.failed · toolCard.exitCode");
+    expect(entries[1]!.content).toBe(notice);
+    expect(notices[0]!.body).toContain("Command: cargo test");
   });
   // Parameters: none. Returns: none; tests the actual branch adapter's initial suppression and display-name fields.
   // 参数：无。返回值：无；测试真实分支适配器对首次提示的抑制以及展示名称字段。

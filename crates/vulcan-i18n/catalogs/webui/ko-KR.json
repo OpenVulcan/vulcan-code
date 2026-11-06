@@ -6679,6 +6679,7 @@
   "composer.capability.contextBreak.confirm": "그래도 저장",
   "conversation.contextInjection.title": "컨텍스트 주입({category})",
   "conversation.contextInjection.category.goal": "목표 모드",
+  "conversation.contextInjection.category.shellJob": "백그라운드 명령 완료",
   "conversation.contextInjection.category.plan": "계획 모드",
   "conversation.contextInjection.category.tools": "도구",
   "conversation.contextInjection.category.permission": "권한 모드",
