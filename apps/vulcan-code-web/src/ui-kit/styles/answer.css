@@ -66,8 +66,9 @@
 .vk-a-heading { display: block; margin-bottom: var(--vk-u); color: var(--vk-ink-2); font-size: var(--vk-fs-sm); font-weight: 600; }
 
 /* ---------- Key-value ---------- */
-.vk-a-kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0 calc(var(--vk-u) * 4.5); font-size: var(--vk-fs-md); }
-.vk-a-kv :is(dt, dd) { margin: 0; padding: calc(var(--vk-u) * 1.25) 0; border-bottom: var(--vk-bw) solid var(--vk-line-soft); }
+/* Keys fit their text up to 40% of the row, then wrap, so one long key cannot squeeze the values into a sliver. */
+.vk-a-kv { display: grid; grid-template-columns: fit-content(40%) minmax(0, 1fr); gap: 0 calc(var(--vk-u) * 4.5); font-size: var(--vk-fs-md); }
+.vk-a-kv :is(dt, dd) { min-width: 0; margin: 0; padding: calc(var(--vk-u) * 1.25) 0; border-bottom: var(--vk-bw) solid var(--vk-line-soft); overflow-wrap: anywhere; }
 .vk-a-kv dt { color: var(--vk-ink-3); }
 
 /* ---------- Checklist ---------- */
