@@ -25,8 +25,11 @@ use menu_text::{TrayText, keys};
 /// 服务进程持有的稳定托盘图标标识。
 const SERVICE_TRAY_ID: &str = "vulcan-code-service";
 
-/// Refreshes lifecycle state without a background thread or a busy event loop.
-/// 无后台线程或忙循环地刷新生命周期状态。
+/// How often a ticker thread wakes the event loop to refresh lifecycle state. The tick comes
+/// through the loop proxy because `ControlFlow::WaitUntil` never times out on Linux (tao blocks in
+/// GTK until an event arrives), which left an update restart waiting for unrelated input.
+/// 计时线程唤醒事件循环以刷新生命周期状态的间隔。计时经循环代理送达，因为 Linux 上
+/// `ControlFlow::WaitUntil` 永不超时（tao 在 GTK 中阻塞到有事件为止），曾使更新重启等待无关输入。
 const TRAY_STATUS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
 
 /// Main-thread events emitted by native menus and the shutdown coordinator.
@@ -43,6 +46,9 @@ enum TrayEvent {
     /// Carries the raw reason; the event loop words it in the active language.
     /// 携带原始原因；由事件循环以当前语言组织文案。
     ShutdownFailed(String),
+    /// The ticker thread asks for a lifecycle refresh.
+    /// 计时线程请求刷新生命周期状态。
+    Tick,
 }
 
 /// Menu item identifier that opens the desktop client.
@@ -149,6 +155,20 @@ pub fn run_with_tray() {
     MenuEvent::set_event_handler(Some(move |event| {
         let _ = menu_proxy.send_event(TrayEvent::Menu(event));
     }));
+    let tick_proxy = proxy.clone();
+    if let Err(error) = std::thread::Builder::new()
+        .name(String::from("vulcan-tray-tick"))
+        .spawn(move || {
+            while tick_proxy.send_event(TrayEvent::Tick).is_ok() {
+                std::thread::sleep(TRAY_STATUS_INTERVAL);
+            }
+        })
+    {
+        crate::logging::startup_error(&format!(
+            "[vulcan-code-service] tray ticker startup failed: {error}"
+        ));
+        std::process::exit(1);
+    }
     // Native menu objects stay exclusively on this OS event-loop thread.
     // 原生菜单对象只保存在当前操作系统事件循环线程。
     let mut native_tray: Option<(TrayIcon, TrayMenu)> = None;
@@ -159,7 +179,6 @@ pub fn run_with_tray() {
     let mut last_status = String::new();
     let mut bridge_reported = false;
     let mut ready_reported = false;
-    let mut next_status_refresh = std::time::Instant::now();
     event_loop.run(move |event, _, control_flow| {
         // Retain the service owner for the entire native event loop without leaking it manually.
         // 在完整原生事件循环期间保留服务所有者，不再手动泄漏对象。
@@ -190,13 +209,8 @@ pub fn run_with_tray() {
             Event::UserEvent(TrayEvent::ShutdownFailed(reason)) => {
                 report_tray_failure(&text.with_reason(keys::SHUTDOWN_FAILED, &reason));
             }
-            Event::MainEventsCleared => {
-                if matches!(*control_flow, ControlFlow::ExitWithCode(_)) {
-                    return;
-                }
-                if let Some((tray, menu)) = &native_tray
-                    && std::time::Instant::now() >= next_status_refresh
-                {
+            Event::UserEvent(TrayEvent::Tick) => {
+                if let Some((tray, menu)) = &native_tray {
                     if !ready_reported {
                         ready_reported = acknowledge_tray_ready(tray);
                     }
@@ -230,9 +244,12 @@ pub fn run_with_tray() {
                     {
                         quit_service(&handles, &proxy, &text);
                     }
-                    next_status_refresh = std::time::Instant::now() + TRAY_STATUS_INTERVAL;
                 }
-                *control_flow = ControlFlow::WaitUntil(next_status_refresh);
+            }
+            Event::MainEventsCleared => {
+                if !matches!(*control_flow, ControlFlow::ExitWithCode(_)) {
+                    *control_flow = ControlFlow::Wait;
+                }
             }
             Event::LoopDestroyed => {
                 native_tray.take();
