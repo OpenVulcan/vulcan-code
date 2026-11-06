@@ -153,9 +153,14 @@ export function useComposerSlashCommands(options: UseComposerSlashCommandsOption
   // activateCommand 在应用工作台路由结果前处理本地 Plan 指令。
   const activateCommand = React.useCallback((command: ComposerSlashCommandSummary) => {
     if (normalizedComposerSlashCommandId(command) === "plan") {
+      // The input stays editable while the save is pending, so only the command text itself is cleared.
+      // 保存等待期间输入框仍可编辑，因此只清除指令文本本身。
+      const commandInput = options.input;
       void options.onSetPlanMode(!options.planModeEnabled).then((handled) => {
         if (handled) {
-          resetSelection("");
+          options.setInput((current) => current === commandInput ? "" : current);
+          setDismissedInput(null);
+          setHighlightedIndex(0);
         }
       });
       return;
@@ -180,6 +185,7 @@ export function useComposerSlashCommands(options: UseComposerSlashCommandsOption
       options.onOpenSettings(result.settingsSection ?? null);
     }
   }, [
+    options.input,
     options.onOpenGoal,
     options.onOpenModelPicker,
     options.onOpenReasoningPicker,
@@ -187,6 +193,7 @@ export function useComposerSlashCommands(options: UseComposerSlashCommandsOption
     options.onRouteCommand,
     options.onSetPlanMode,
     options.planModeEnabled,
+    options.setInput,
     resetSelection,
   ]);
   // handleKeyDown gives visible slash navigation priority over ordinary Enter-to-send behavior.

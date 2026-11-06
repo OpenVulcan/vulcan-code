@@ -62,14 +62,16 @@ export function ProviderTasksPanel(props: {
     };
   }, [reloadVersion]);
 
-  // hasLiveTask keeps polling only while some task can still change phase.
-  // hasLiveTask 仅在仍有任务可能改变阶段时持续轮询。
+  // hasLiveTask keeps polling only while some task can still change phase. The timer re-arms after
+  // every read attempt, so a failed read keeps the last list and retries on the next tick.
+  // hasLiveTask 仅在仍有任务可能改变阶段时持续轮询。每次读取尝试后都会重新计时，因此读取失败时保留
+  // 上次列表并在下一次计时重试。
   const hasLiveTask = tasks?.some((task) => !task.terminal) ?? false;
   React.useEffect(() => {
     if (!hasLiveTask) return undefined;
     const timer = window.setTimeout(() => setReloadVersion((value) => value + 1), PROVIDER_TASK_REFRESH_INTERVAL_MS);
     return () => window.clearTimeout(timer);
-  }, [hasLiveTask, tasks]);
+  }, [hasLiveTask, reloadVersion]);
 
   const cancel = (task: ProviderTaskSummary) => {
     setCancelling((current) => new Set(current).add(task.executionId));

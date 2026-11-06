@@ -87,6 +87,11 @@ import type {
 import { errorMessage } from "@/lib/display-format";
 import { useDedicatedComposer } from "@/components/composer/dedicated/dedicated-session-controls";
 
+// Context usage percentages where the indicator turns to warning and to critical; the track bands read the same values.
+// 上下文用量指示转为警告与临界的百分比；进度条区段读取同一值。
+const CONTEXT_WARNING_PERCENT = 90;
+const CONTEXT_CRITICAL_PERCENT = 95;
+
 // Settings model helpers remain importable from this module for existing callers and tests.
 // 设置模型辅助函数仍可从本模块导入，供现有调用方与测试使用。
 export {
@@ -280,9 +285,9 @@ export function ContextUsageOrb(props: {
     .filter((value): value is string => Boolean(value)).join(" · ");
   const thresholdState = percent >= 100
     ? "full"
-    : percent >= 95
+    : percent >= CONTEXT_CRITICAL_PERCENT
       ? "critical"
-      : percent >= 90
+      : percent >= CONTEXT_WARNING_PERCENT
         ? "warning"
         : "normal";
   const style = { "--vk-ctx-progress": `${percent * 3.6}deg` } as React.CSSProperties;
@@ -482,8 +487,16 @@ function ContextUsageProgressBar(props: {
       aria-valuemin={0}
       aria-valuenow={percent}
     >
-      <i className="vk-ctx-zone" data-at="90" />
-      <i className="vk-ctx-zone" data-at="95" />
+      <i
+        className="vk-ctx-zone"
+        data-tone="warning"
+        style={{ left: `${CONTEXT_WARNING_PERCENT}%`, width: `${CONTEXT_CRITICAL_PERCENT - CONTEXT_WARNING_PERCENT}%` }}
+      />
+      <i
+        className="vk-ctx-zone"
+        data-tone="critical"
+        style={{ left: `${CONTEXT_CRITICAL_PERCENT}%`, width: `${100 - CONTEXT_CRITICAL_PERCENT}%` }}
+      />
       <div className="vk-ctx-fill" style={{ width: `${percent}%` }}>
         {props.breakdown.length > 0
           ? props.breakdown.map((item) => (
@@ -495,8 +508,8 @@ function ContextUsageProgressBar(props: {
             ))
           : null}
       </div>
-      <i className="vk-ctx-mark" data-at="90" />
-      <i className="vk-ctx-mark" data-at="95" />
+      <i className="vk-ctx-mark" style={{ left: `${CONTEXT_WARNING_PERCENT}%` }} />
+      <i className="vk-ctx-mark" style={{ left: `${CONTEXT_CRITICAL_PERCENT}%` }} />
       <i className="vk-ctx-mark" data-at="100" />
     </div>
   );

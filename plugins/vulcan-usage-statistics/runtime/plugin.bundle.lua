@@ -683,7 +683,11 @@ WITH scoped_attempts AS (
       SUM(CASE WHEN usage_availability IN ('partial', 'final') THEN 1 ELSE 0 END) AS reported_usage_attempt_count,
       SUM(input_tokens) AS input_tokens, SUM(uncached_input_tokens) AS uncached_input_tokens,
       SUM(cache_read_tokens) AS cache_read_tokens, SUM(cache_write_tokens) AS cache_write_tokens,
-      SUM(output_tokens) AS output_tokens, SUM(reasoning_tokens) AS reasoning_tokens, SUM(total_tokens) AS total_tokens
+      SUM(output_tokens) AS output_tokens, SUM(reasoning_tokens) AS reasoning_tokens, SUM(total_tokens) AS total_tokens,
+      COUNT(*) - COUNT(uncached_input_tokens) AS uncached_input_missing,
+      COUNT(*) - COUNT(cache_read_tokens) AS cache_read_missing,
+      COUNT(*) - COUNT(cache_write_tokens) AS cache_write_missing,
+      COUNT(*) - COUNT(output_tokens) AS output_missing
     FROM filtered_attempts
     GROUP BY calendar_date, provider_id, service_entry_id, consumer_id, operation, mapped_model
 ), range_usage AS (
@@ -693,6 +697,8 @@ WITH scoped_attempts AS (
       SUM(input_tokens) AS input_tokens, SUM(uncached_input_tokens) AS uncached_input_tokens,
       SUM(cache_read_tokens) AS cache_read_tokens, SUM(cache_write_tokens) AS cache_write_tokens,
       SUM(output_tokens) AS output_tokens, SUM(reasoning_tokens) AS reasoning_tokens, SUM(total_tokens) AS total_tokens,
+      SUM(uncached_input_missing) AS uncached_input_missing, SUM(cache_read_missing) AS cache_read_missing,
+      SUM(cache_write_missing) AS cache_write_missing, SUM(output_missing) AS output_missing,
       MAX(calendar_date) AS latest_date
     FROM filtered_daily
     GROUP BY provider_id, service_entry_id, consumer_id, operation, model_id
@@ -953,14 +959,25 @@ FROM filtered_daily;
     -- 四个可空维度将此投影限制为每个已定价模型最多十六组。
     -- cost_sql pages bounded groups so maximum configured overrides cannot exceed host row limits.
     -- cost_sql 对有界分组分页，确保最大配置覆盖数不会超过宿主行数限制。
+    -- cost_basis treats a dimension as missing when any attempt in the row lacked it, because SUM
+    -- skips NULL values and would otherwise report a partial total as complete.
+    -- cost_basis 在该行任一尝试缺少某维度时将其视为缺失，因为 SUM 会跳过 NULL，否则会把部分合计报告为完整。
     local cost_sql = [[
+, cost_basis AS (
+    SELECT model_id,
+      CASE WHEN uncached_input_missing = 0 THEN uncached_input_tokens END AS uncached_input_tokens,
+      CASE WHEN cache_read_missing = 0 THEN cache_read_tokens END AS cache_read_tokens,
+      CASE WHEN cache_write_missing = 0 THEN cache_write_tokens END AS cache_write_tokens,
+      CASE WHEN output_missing = 0 THEN output_tokens END AS output_tokens
+    FROM range_usage
+    WHERE model_id IN (SELECT value FROM json_each(?7))
+)
 SELECT model_id AS modelId, COUNT(*) AS rowCount,
        SUM(uncached_input_tokens) AS uncachedInputTokens,
        SUM(cache_read_tokens) AS cacheReadTokens,
        SUM(cache_write_tokens) AS cacheWriteTokens,
        SUM(output_tokens) AS outputTokens
-FROM range_usage
-WHERE model_id IN (SELECT value FROM json_each(?7))
+FROM cost_basis
 GROUP BY model_id, uncached_input_tokens IS NULL, cache_read_tokens IS NULL,
          cache_write_tokens IS NULL, output_tokens IS NULL
 ORDER BY model_id, uncached_input_tokens IS NULL, cache_read_tokens IS NULL,

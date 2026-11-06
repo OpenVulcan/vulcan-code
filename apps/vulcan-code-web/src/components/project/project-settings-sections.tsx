@@ -71,6 +71,10 @@ export function ProjectVmmSection(props: {
   // Bind/create share one synchronous guard, including repeated clicks within one React batch.
   // 绑定与创建共用同步锁，包括同一 React 批次内的重复点击。
   const nativeBindingBusyRef = React.useRef(false);
+  // latestVmmDraftRef follows the newest draft so a remote wait cannot save a draft from before the user's edits.
+  // latestVmmDraftRef 跟随最新草稿，避免远端等待后保存用户编辑之前的草稿。
+  const latestVmmDraftRef = React.useRef(props.vmmDraft);
+  latestVmmDraftRef.current = props.vmmDraft;
   const [nativeBindingNotice, setNativeBindingNotice] = React.useState("");
   // Catalog read failures remain distinct from an empty project list and can be retried explicitly.
   // 目录读取失败与空项目列表保持区分，并允许明确重试。
@@ -230,7 +234,9 @@ export function ProjectVmmSection(props: {
         throw new Error(result.summary);
       }
       const remoteProjectId = String(result.data.value.project.project_id);
-      const boundDraft = externalProjectBindingDraft(props.vmmDraft, remoteProjectId);
+      const latestDraft = latestVmmDraftRef.current;
+      if (!latestDraft) return;
+      const boundDraft = externalProjectBindingDraft(latestDraft, remoteProjectId);
       if (!await props.onSaveDraft(boundDraft)) return;
       const catalogResult = await runVmmMemoryAction({
         action: "load_users_projects",

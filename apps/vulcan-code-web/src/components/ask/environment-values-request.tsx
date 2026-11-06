@@ -88,7 +88,11 @@ export function EnvironmentValuesRequest(props: EnvironmentValuesRequestProps) {
 
   React.useEffect(() => {
     const focusFrame = window.requestAnimationFrame(() => {
-      barRef.current?.querySelector<HTMLInputElement>("input")?.focus() ?? barRef.current?.focus();
+      // focus() returns undefined, so the panel is focused only when no input exists.
+      // focus() 返回 undefined，因此只有不存在输入框时才聚焦面板。
+      const firstInput = barRef.current?.querySelector<HTMLInputElement>("input");
+      if (firstInput) firstInput.focus();
+      else barRef.current?.focus();
     });
     return () => window.cancelAnimationFrame(focusFrame);
   }, [request.id]);

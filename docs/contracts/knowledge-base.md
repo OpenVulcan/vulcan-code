@@ -28,9 +28,9 @@ AI 使用 `knowledge_list`、`knowledge_read`、`knowledge_search`、`knowledge_
 ## 持久格式与原子变更
 
 每库当前格式为 2，套件为 3；不读取、不迁移、不降级旧格式。错误或旧格式库在注册表中保留英文诊断，
-两端只允许查看原因和删除。会话元数据及子执行配置同样按各自当前版本严格拒绝旧字段和未知版本，
-详见 [会话元数据](session-metadata-migrations.md)。应用数据库在预发布期仍为 v1，仅经
-[独立开发库维护入口](debug-database-maintenance.md) 先备份后显式同步，启动不迁移。
+两端只允许查看原因和删除。会话元数据及子执行配置按 [会话元数据](session-metadata-migrations.md) 自动升级上一版本，
+基线之前的版本与未知版本明确拒绝。应用数据库由升级链逐版本升级，见
+[应用数据库升级与本地 Debug 维护](debug-database-maintenance.md)。
 
 正文按内容哈希保存；当前实体与不可变历史共享正文。库级互斥内的一笔事务更新实体、前后镜像、切块、FTS、
 向量待处理状态和内容头。移动保持文档身份，所有已有文档修改验证 `expectedRevision`。路径规范化、来源、

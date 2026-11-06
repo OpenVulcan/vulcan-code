@@ -154,7 +154,13 @@ export function ActivityRail(props: {
             content={props.sessionTree}
             dismissKey={props.selectedConversationId}
             headerActions={props.sessionTreeActions}
-            footer={{ label: t("activityRail.showSessionPanel"), icon: <PanelLeftOpen size={15} />, onSelect: () => sidebar.setOpen(true) }}
+            footer={{
+              label: t("activityRail.showSessionPanel"),
+              icon: <PanelLeftOpen size={15} />,
+              // Feature pages own a non-collapsible panel, so outside the session area the footer navigates there.
+              // 功能页面的面板不可折叠，因此在会话区域之外页脚改为导航到会话区域。
+              onSelect: props.sessionsActive ? () => sidebar.setOpen(true) : navigate(props.onSelectSessions),
+            }}
             title={t("activityRail.conversations")}
           >
             {sessionsButton}

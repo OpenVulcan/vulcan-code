@@ -214,7 +214,10 @@ function MirrorSection(props: {
   const { t } = useI18n()
   const [builtins, setBuiltins] = React.useState<LuaSkillsGithubMirror[]>([])
   const [loadError, setLoadError] = React.useState<string | null>(null)
-  const [results, setResults] = React.useState<ReadonlyMap<string, LuaSkillsGithubMirrorProbeResult>>(new Map())
+  // resultsByUrl keys probe results by the probed address: user mirror ids are reused after deletion, so an id alone
+  // could attach an old result to a different mirror.
+  // resultsByUrl 按测速地址保存结果：用户镜像标识在删除后会被复用，仅凭标识可能把旧结果挂到另一个镜像上。
+  const [resultsByUrl, setResultsByUrl] = React.useState<ReadonlyMap<string, LuaSkillsGithubMirrorProbeResult>>(new Map())
   const [probing, setProbing] = React.useState(false)
   const [probeError, setProbeError] = React.useState<string | null>(null)
   const [newLabel, setNewLabel] = React.useState("")
@@ -230,6 +233,10 @@ function MirrorSection(props: {
 
   const choices = mirrorChoices(builtins, props.network.customGithubMirrors)
   const activeId = activeMirrorId(choices, props.network)
+  const results: ReadonlyMap<string, LuaSkillsGithubMirrorProbeResult> = new Map(choices.flatMap((choice) => {
+    const result = resultsByUrl.get(choice.githubBaseUrl ?? "")
+    return result ? [[choice.id, result] as const] : []
+  }))
   const fastestId = fastestMirror(results)
 
   // probeAll speed-tests every listed mirror in one parallel request.
@@ -238,8 +245,13 @@ function MirrorSection(props: {
     setProbing(true)
     setProbeError(null)
     try {
-      const probed = await probeLuaSkillsGithubMirrors(choices.map((choice) => ({ id: choice.id, githubBaseUrl: choice.githubBaseUrl })))
-      setResults(new Map(probed.map((result) => [result.id, result])))
+      const probedChoices = choices.map((choice) => ({ id: choice.id, githubBaseUrl: choice.githubBaseUrl }))
+      const probed = await probeLuaSkillsGithubMirrors(probedChoices)
+      const urlById = new Map(probedChoices.map((choice) => [choice.id, choice.githubBaseUrl ?? ""]))
+      setResultsByUrl(new Map(probed.flatMap((result) => {
+        const url = urlById.get(result.id)
+        return url === undefined ? [] : [[url, result] as const]
+      })))
     } catch (caught) {
       setProbeError(errorText(caught))
     } finally {

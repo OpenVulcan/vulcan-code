@@ -567,15 +567,16 @@ impl ProjectTerminalRuntime {
     /// Returns the newly assigned process-local revision.
     /// 返回新分配的进程内修订号。
     fn advance_project_running_count_revision(&self, project_id: &str) -> Result<u64, String> {
+        // The revision is allocated under the registry write lock, so concurrent exits publish in
+        // allocation order and a stored revision never moves backwards.
+        // 修订号在注册表写锁内分配，使并发退出按分配顺序发布，已存修订号永不倒退。
+        let mut revisions = self.running_count_revisions.write().map_err(|_| {
+            String::from("Project terminal running-count revision registry is poisoned.")
+        })?;
         let revision = self
             .next_running_count_revision
             .fetch_add(1, Ordering::Relaxed);
-        self.running_count_revisions
-            .write()
-            .map_err(|_| {
-                String::from("Project terminal running-count revision registry is poisoned.")
-            })?
-            .insert(project_id.to_owned(), revision);
+        revisions.insert(project_id.to_owned(), revision);
         Ok(revision)
     }
 

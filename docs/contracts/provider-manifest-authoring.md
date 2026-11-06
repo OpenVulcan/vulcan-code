@@ -440,11 +440,12 @@ LLM 运行时只冻结连接、秘密引用、模型、协议和路由，不把�
 省略继续遵循 presence 继承；全部层均未声明时，运行时基线为 `json_object`。只有官方或真实请求证据
 明确证明精确模型路由不支持稳定 JSON 时才写 `unsupported`，不得把远端目录省略字段解释成不支持。
 `json_schema` 表示请求可以携带精确 Schema，`json_object` 表示只能约束为 JSON 对象；两者都会在宿主
-再次执行固定 Schema 校验。宿主目前只在 Anthropic Messages 与声明 `json_schema` 的 OpenAI Responses
-路由上发送原生 Schema（`configured_inference.rs` 的 `structured_output_policy_for_protocol`）；
-Responses 严格 Schema 以“每个对象全部属性必填”的提供方形态发送，原本可省略的属性必须接受
-`null`，否则请求在分派前以契约错误失败。Chat Completions 等其他协议即使声明 `json_schema` 仍只发送
-JSON Object，宿主校验不变。系统供应商的输入资源、结构化输出、思考支持、思考控制、思考档位与请求
+再次执行固定 Schema 校验。宿主在 Anthropic Messages，以及声明 `json_schema` 的 OpenAI Responses 与
+OpenAI Chat Completions 路由上发送原生 Schema（`configured_inference.rs` 的
+`structured_output_policy_for_protocol` 与 `route_projects_provider_json_schema`）；严格 Schema 以
+“每个对象全部属性必填”的提供方形态发送，原本可省略的属性必须接受 `null`，否则请求在分派前以契约错误
+失败。因此只有确认该 Chat 路由接受严格原生 Schema 时才声明 `json_schema`。Gemini、Cohere 等其他协议
+即使声明 `json_schema` 仍只发送 JSON Object，宿主校验不变。系统供应商的输入资源、结构化输出、思考支持、思考控制、思考档位与请求
 投影都是 Manifest 冻结事实，设置页只能只读展示，不得由用户覆盖；只有自定义供应商允许声明这些能力。
 系统模型的上下文与输出能力上限同样由 Manifest 冻结；用户不能在供应商级或模型级覆盖。
 供应商级手工新增的会话模型以其手工定义为能力来源，可修改手工定义本身。

@@ -4005,8 +4005,13 @@ fn emit_restricted_llm_event(
         *response_started_emitted = true;
     }
     let event_size = serde_json::to_vec(&event).ok().map(|value| value.len());
-    if let (Ok(mut history), Ok(mut history_bytes), Some(event_size)) = (
-        state.event_history.lock(),
+    // History stays locked through the broadcast. A subscriber snapshots history and subscribes
+    // under the same lock, so it receives each event exactly once, either replayed or live.
+    // 历史在广播完成前保持加锁。订阅方在同一锁内获取历史快照并订阅，因此每个事件恰好收到一次，
+    // 要么来自回放，要么来自实时推送。
+    let mut history_guard = state.event_history.lock();
+    if let (Ok(history), Ok(mut history_bytes), Some(event_size)) = (
+        history_guard.as_mut(),
         state.event_history_bytes.lock(),
         event_size,
     ) {
@@ -4036,6 +4041,7 @@ fn emit_restricted_llm_event(
         *truncated = true;
     }
     let _ = state.event_sender.send(event);
+    drop(history_guard);
 }
 
 /// Authorizes one operation and rejects an already expired deadline.

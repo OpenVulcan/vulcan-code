@@ -94,10 +94,11 @@ LanceDB 及其依赖闭包（lance、datafusion、arrow）只编译进 C 动态�
 
 ## Windows Debug 下只更新 Core
 
-应用 SQLite 结构变动后，在启动新 Core 前独立执行 Debug 数据库检查与同步，应用数据库版本保持 v1。
-维护命令直接复用生产 DDL，先备份、事务更新，再校验保留值及完整性；不会随 `make build`、
-`make run`、`make core-restart` 或 Release 启动隐式执行。具体入口和可处理的结构差异见
-[本地 Debug 数据库维护](debug-database-maintenance.md)。
+应用 SQLite 结构变化必须同时修改当前 DDL 并在 `APP_SCHEMA_MIGRATIONS` 末尾追加一步，版本由升级链长度派生，
+启动时逐版本升级。开发期在同一版本内直接改动 DDL 留下的结构漂移，在启动新 Core 前独立执行 Debug 数据库检查
+与同步：维护命令直接复用生产 DDL，先备份、事务更新，再校验保留值及完整性；不会随 `make build`、
+`make run`、`make core-restart` 或 Release 启动隐式执行。升级链、具体入口和可处理的结构差异见
+[应用数据库升级与本地 Debug 维护](debug-database-maintenance.md)。
 
 ### 内置浏览器依赖
 
@@ -301,7 +302,8 @@ Unix 构建在执行 Cargo 前，调用锁定 Electron npm 包自带的 `install
 
 release 发行物必须自带受管 Python 与 Node。刚同步的发行目录从未运行过 Core，因此 release 打包会先执行随包服务的 `vulcan-code-service --prepare-managed-runtimes`（必须单独使用）。它以 Core 启动时相同的目录与锁调用同一安装器补齐缺失运行时，已就绪时不做任何事；失败即停止打包，不依赖先前运行过 Core。
 
-发行目标共五个平台键：`windows-x64`、`macos-x64`、`macos-arm64`、`linux-x64`、`linux-arm64`，唯一定义是 `scripts/desktop-runtime.mjs` 的 `managedRuntimePlatformKey`（同时决定受管运行时与归档后缀）。每个平台都在对应原生机器上执行 `make release`，当前不做交叉编译，也没有托管 CI 构建；GitHub Actions 开源前保持停用。
+发行目标共五个平台键：`windows-x64`、`macos-x64`、`macos-arm64`、`linux-x64`、`linux-arm64`，唯一定义是 `scripts/desktop-runtime.mjs` 的 `managedRuntimePlatformKey`（同时决定受管运行时与归档后缀）。正式发行由 `.github/workflows/release.yml` 在五个平台构建、签名并上传，流程见
+[仓库质量门禁](repository-quality-gates.md)；本地需要发行物时在对应原生机器上执行 `make release`，不做交叉编译。
 
 `node scripts/release-package.mjs package [--out <dir>]` 只打包、不编译：按启动时的标准校验当前 release 发行物（布局身份、全部入口及 release 资源），从随包服务 `--describe` 读取版本，生成 `target/release-packages/<版本>/vulcan-code-<版本>-<平台键>.tar.gz`（Windows 为 `.zip`，用系统自带 bsdtar 生成）。归档根即发行目录内容，不再包一层目录；同时重写 `SHA256SUMS`。Linux 还会打印随包二进制要求的 glibc 下限：归档继承构建机的 glibc，正式发行应在最旧的目标发行版上构建。各平台归档汇集到同一目录后，执行 `node scripts/release-package.mjs checksums <dir>` 重建索引；一个目录只允许一个版本，避免读取方面对同一平台的两个候选。上传到 GitHub Release 是人工步骤，把该目录全部文件作为资源上传即可。
 

@@ -134,6 +134,9 @@ export function useComposerRequestOptions(
 ): ComposerRequestOptions {
   const [snapshot, setSnapshot] = React.useState<PublicAiSettingsSnapshot | null>(null);
   const [stored, setStored] = React.useState<SessionRequestOptions | null>(null);
+  // storedLoaded gates edits: a choice saves the complete record, so it waits until the stored record is known.
+  // storedLoaded 控制编辑：一次选择会保存完整记录，因此须等到已保存记录读取完成。
+  const [storedLoaded, setStoredLoaded] = React.useState(false);
   const [pending, setPending] = React.useState<SessionRequestOptions | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const choiceKey = choice?.connectionId ? `${choice.providerId}\u0000${choice.connectionId}\u0000${choice.modelId}` : "";
@@ -160,6 +163,7 @@ export function useComposerRequestOptions(
       if (current.active && current.readVersion === version) {
         if (nextSnapshot) setSnapshot(nextSnapshot);
         setStored(nextStored);
+        setStoredLoaded(true);
         setError(null);
       }
     } catch (reason) {
@@ -171,6 +175,7 @@ export function useComposerRequestOptions(
     const current = owner.current;
     current.active = true;
     setStored(null);
+    setStoredLoaded(false);
     setPending(null);
     setError(null);
     void load();
@@ -194,7 +199,7 @@ export function useComposerRequestOptions(
 
   const select = React.useCallback(async (change: ComposerRequestOptionChoice) => {
     const current = owner.current;
-    if (!conversationId || pending !== null) {
+    if (!conversationId || pending !== null || !storedLoaded) {
       return;
     }
     const next: SessionRequestOptions = {
@@ -219,7 +224,7 @@ export function useComposerRequestOptions(
     } finally {
       if (current.active) setPending(null);
     }
-  }, [conversationId, pending, stored]);
+  }, [conversationId, pending, stored, storedLoaded]);
 
   // A stored choice the current route does not offer is ignored by the backend, so the default shows.
   // 当前路由未提供的已保存选择会被后端忽略，因此显示默认值。

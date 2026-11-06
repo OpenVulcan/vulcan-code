@@ -45,6 +45,10 @@ import { IconButton } from "@/ui-kit/primitives/button";
 // MARKDOWN_CODE_HIGHLIGHT_LINE_LIMIT 限制单个 Markdown 代码块触发的 Shiki 高亮行数。
 const MARKDOWN_CODE_HIGHLIGHT_LINE_LIMIT = 800;
 
+// MARKDOWN_IMAGE_MAX_WIDTH_PX is the widest explicit Markdown image width, used by clamping and the inline style.
+// MARKDOWN_IMAGE_MAX_WIDTH_PX 是显式 Markdown 图片的最大宽度，裁剪与内联样式共用。
+const MARKDOWN_IMAGE_MAX_WIDTH_PX = 800;
+
 // MARKDOWN_CODE_HIGHLIGHT_BYTE_LIMIT caps large code blocks before worker highlighting.
 // MARKDOWN_CODE_HIGHLIGHT_BYTE_LIMIT 在 Worker 高亮前限制超大代码块体积。
 const MARKDOWN_CODE_HIGHLIGHT_BYTE_LIMIT = 240_000;
@@ -368,7 +372,7 @@ function MarkdownContentRenderer(props: {
       const width = markdownImageWidthFromTitle(title);
       const imageSource = normalizeMarkdownImageSource(src, props.workspacePath) ?? src;
       const imageAttachment = markdownImageAttachment(imageSource, alt);
-      const imageStyle = width ? { width, maxWidth: 800 } : undefined;
+      const imageStyle = width ? { width, maxWidth: MARKDOWN_IMAGE_MAX_WIDTH_PX } : undefined;
       if (imageAttachment && props.onOpenMedia) {
         return (
           <MediaPathContextMenu locator={imageSource}>
@@ -1191,7 +1195,7 @@ function markdownImageWidthFromTitle(title: string | undefined): number | null {
 // clampMarkdownImageWidth caps explicit Markdown image widths to avoid oversized transcript layouts.
 // clampMarkdownImageWidth 限制显式 Markdown 图片宽度，避免转录布局被过大图片撑开。
 function clampMarkdownImageWidth(width: number): number {
-  return Math.min(Math.max(Math.round(width), 1), 800);
+  return Math.min(Math.max(Math.round(width), 1), MARKDOWN_IMAGE_MAX_WIDTH_PX);
 }
 
 // looksLikeAbsoluteLocalFilesystemPath detects absolute Windows and Unix filesystem paths carried in Markdown.
