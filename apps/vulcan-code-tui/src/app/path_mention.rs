@@ -54,7 +54,9 @@ pub fn mention_at(row: usize, line: &str, col: usize) -> Option<Mention> {
     while start > 0 && !chars[start - 1].is_whitespace() {
         start -= 1;
     }
-    if chars.get(start) != Some(&'@') {
+    // A cursor in front of the @ (for example after Home) is not inside the word.
+    // 位于 @ 之前的光标（例如按 Home 之后）不在该词内。
+    if start == col || chars.get(start) != Some(&'@') {
         return None;
     }
     let mut end = col;
@@ -284,6 +286,9 @@ mod tests {
             "@ inside a word is no mention"
         );
         assert_eq!(mention_at(0, "é @ü", 4).map(|m| m.query), Some("ü".into()));
+        assert_eq!(mention_at(0, "@x", 0), None, "cursor before the @");
+        assert_eq!(mention_at(0, "see @x", 4), None, "cursor before a later @");
+        assert_eq!(mention_at(0, "@", 1).map(|m| m.query), Some(String::new()));
         assert_eq!(split_query(r"src\app\ma"), ("src/app".into(), "ma"));
         assert_eq!(split_query("ma"), (String::new(), "ma"));
         assert_eq!(mention_text(r"src\main.rs", false), "@src/main.rs ");

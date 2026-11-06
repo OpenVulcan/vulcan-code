@@ -228,6 +228,34 @@ impl App {
         self.composer = composer;
     }
 
+    /// Puts a refused submission back: its text goes in front of whatever was typed since, and
+    /// its files rejoin the attachment list. Only the conversation it was sent from receives it,
+    /// so text never moves to another conversation.
+    /// 交还被拒绝的提交：其文本放在之后输入内容的前面，其文件重新加入附件列表。只有发送它的会话
+    /// 才会接收，文本绝不会转到其他会话。
+    pub fn restore_rejected_submission(
+        &mut self,
+        conversation_id: &str,
+        prompt: &str,
+        attachments: Vec<String>,
+    ) {
+        if self.selected.as_deref() != Some(conversation_id) {
+            return;
+        }
+        let typed = self.composer_text();
+        let mut composer = super::new_composer();
+        composer.insert_str(prompt);
+        if !typed.trim().is_empty() {
+            composer.insert_newline();
+            composer.insert_str(&typed);
+        }
+        self.composer = composer;
+        let mut restored = attachments;
+        restored.retain(|path| !self.attachments.contains(path));
+        restored.append(&mut self.attachments);
+        self.attachments = restored;
+    }
+
     /// Drops pastes whose token no longer appears in the composer.
     /// 丢弃标记已不在输入框中的粘贴。
     pub fn forget_unused_pastes(&mut self) {
@@ -365,6 +393,37 @@ mod tests {
         let out = coalesce(events.clone());
         assert_eq!(out[..3], events[..3]);
         assert_eq!(out[3], Event::Paste("c\nd".into()));
+    }
+
+    /// A refused prompt returns to its own conversation's composer ahead of newer typing, and
+    /// never to another conversation.
+    /// 被拒绝的提示回到其所属会话的输入框，位于新输入之前，绝不进入其他会话。
+    #[test]
+    fn refused_submission_returns_to_its_own_conversation() {
+        let (commands, _receiver) = std::sync::mpsc::channel();
+        let (_, events) = std::sync::mpsc::channel();
+        let mut app = super::super::App::new(
+            crate::backend::BackendHandle {
+                commands,
+                events,
+                label: "test".into(),
+                is_mock: true,
+            },
+            crate::ui::theme::Theme::dark(),
+            true,
+        );
+        app.selected = Some("a".into());
+        app.composer.insert_str("newer");
+        app.attachments = vec!["kept.png".into()];
+        app.restore_rejected_submission("b", "lost?", vec!["other.png".into()]);
+        assert_eq!(app.composer_text(), "newer", "other conversation untouched");
+        app.restore_rejected_submission(
+            "a",
+            "first line",
+            vec!["sent.png".into(), "kept.png".into()],
+        );
+        assert_eq!(app.composer_text(), "first line\nnewer");
+        assert_eq!(app.attachments, ["sent.png", "kept.png"]);
     }
 
     #[test]

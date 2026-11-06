@@ -189,10 +189,14 @@ pub fn session_route(request: &api::ConversationRequestConfigV1) -> Option<Strin
 pub fn effort(value: &str) -> Option<ReasoningEffort> {
     Some(match normalized(value).as_str() {
         "off" | "none" => ReasoningEffort::Off,
-        "minimal" | "low" => ReasoningEffort::Low,
-        "medium" | "adaptive" => ReasoningEffort::Medium,
+        "adaptive" => ReasoningEffort::Adaptive,
+        "minimal" => ReasoningEffort::Minimal,
+        "low" => ReasoningEffort::Low,
+        "medium" => ReasoningEffort::Medium,
         "high" => ReasoningEffort::High,
-        "xhigh" | "max" | "ultra" => ReasoningEffort::Max,
+        "xhigh" => ReasoningEffort::XHigh,
+        "max" => ReasoningEffort::Max,
+        "ultra" => ReasoningEffort::Ultra,
         _ => return None,
     })
 }

@@ -620,7 +620,17 @@ impl Worker {
         // Client.
         // RPC 传输客户端。
         let Some(client) = self.client.clone() else {
-            self.emit(BackendEvent::Notice(Notice::NotConnected));
+            // The continuation still runs, so whatever it releases (busy markers, kept drafts)
+            // is released; nothing reached the service, so this is not a transport loss.
+            // 后续回调照常执行，使其负责释放的状态（忙碌标记、保留的草稿）得到释放；
+            // 请求未到达服务，因此不算传输丢失。
+            then(
+                self,
+                Err(RpcError {
+                    message: crate::tr!("tui.notice.notConnected"),
+                    transport: false,
+                }),
+            );
             self.emit(BackendEvent::CallFinished);
             return;
         };
@@ -1183,10 +1193,13 @@ impl Worker {
     /// Folds an add-on RPC response in when it is not older than the workbench.
     /// 附加状态 RPC 响应不早于工作台时将其折叠进来。
     fn absorb_addons(&mut self, response: api::SessionAddonsChangedResponse) {
+        // A receipt for one session does not advance the delta order: as in the WebUI, only
+        // snapshots and deltas do, so other sessions' pending deltas are not dropped.
+        // 单个会话的回执不推进增量顺序：与 WebUI 一致，只有快照与增量推进，
+        // 因此其他会话待到达的增量不会被丢弃。
         if response.revision < self.revision {
             return;
         }
-        self.revision = response.revision;
         self.upsert_addons(api::SessionAddonsChangedDelta {
             conversation_id: response.conversation_id,
             session_goal: response.session_goal,
@@ -1202,10 +1215,13 @@ impl Worker {
     /// Folds a subagent route response in when it is not older than the workbench.
     /// 子代理路由响应不早于工作台时将其折叠进来。
     fn absorb_route(&mut self, response: api::SubagentPanelRouteResponse) {
+        // A receipt for one session does not advance the delta order: as in the WebUI, only
+        // snapshots and deltas do, so other sessions' pending deltas are not dropped.
+        // 单个会话的回执不推进增量顺序：与 WebUI 一致，只有快照与增量推进，
+        // 因此其他会话待到达的增量不会被丢弃。
         if response.revision < self.revision {
             return;
         }
-        self.revision = response.revision;
         let parent = response.parent_conversation_id.or_else(|| {
             response
                 .subagent_navigation
@@ -2077,6 +2093,9 @@ impl Worker {
                 self.model_keys.insert(id, key);
             }
             self.emit_effort();
+            // A draft can belong to another project; the Git panel follows it like a session.
+            // 草稿可能属于其他项目；Git 面板与会话一样随之切换。
+            self.git_show();
             return;
         }
         if let Some(snapshot) = self.call_as(
@@ -2177,6 +2196,11 @@ impl Worker {
             .filter_map(|path| self.stage_attachment(path, project_id.as_deref(), &conversation_id))
             .collect();
         if staged.len() != attachments.len() {
+            self.emit(BackendEvent::SubmitRejected {
+                conversation_id,
+                prompt,
+                attachments,
+            });
             return;
         }
         // Execution mode.
@@ -2211,13 +2235,20 @@ impl Worker {
                 Value::Null,
             ),
         };
+        // The service admits a submission only from the slot that owns its target: the
+        // conversation itself once it exists, the project's new-conversation slot before that.
+        // 服务只接受拥有提交目标的草稿槽：会话存在后为会话本身，此前为项目的新会话槽。
+        let draft_slot_key = match is_new {
+            true => format!("new:{}", project_id.as_deref().unwrap_or("workspace")),
+            false => format!("conversation:{conversation_id}"),
+        };
         // Exact RPC parameters.
         // 准确 RPC 参数。
         let params = json!({
             "clientSubmissionId": fresh_id(),
             "projectId": project_id,
             "conversationId": id_param,
-            "draftSlotKey": format!("new:{}", project_id.as_deref().unwrap_or("workspace")),
+            "draftSlotKey": draft_slot_key,
             "prompt": prompt,
             "attachments": staged,
             "executionMode": execution_mode,
@@ -2239,7 +2270,16 @@ impl Worker {
                 // 服务结果。
                 let result = match result {
                     Ok(result) => result,
-                    Err(error) => return worker.failed(error),
+                    Err(error) => {
+                        // A refused submission hands its text and files back to the composer.
+                        // 被拒绝的提交将其文本与文件交还输入框。
+                        worker.emit(BackendEvent::SubmitRejected {
+                            conversation_id: local_id,
+                            prompt,
+                            attachments,
+                        });
+                        return worker.failed(error);
+                    }
                 };
                 let Some(ack) = worker.read::<api::SubmitConversationPromptAck>(
                     "service_submit_conversation_prompt",
@@ -2628,6 +2668,55 @@ mod tests {
             if call.param("/request/libraryId") == "library" && call.param("/request/documentId") == "doc"
                && message == "ERR_TEST_BODY_UNAVAILABLE")));
         server.thread.join().unwrap();
+    }
+
+    /// A prompt to an existing session is submitted from that session's own draft slot, and a
+    /// refused submission hands its text back instead of losing it.
+    /// 对已有会话的提示从该会话自己的草稿槽提交，被拒绝的提交交还其文本而不是丢失。
+    #[test]
+    fn existing_session_submits_from_its_own_slot_and_refusal_returns_the_prompt() {
+        let session_id = "11111111-1111-4111-8111-111111111111";
+        let server = RpcServer::start(1, move |request| {
+            assert_eq!(request.body["method"], "service_submit_conversation_prompt");
+            assert_eq!(
+                request.body["params"]["draftSlotKey"],
+                format!("conversation:{session_id}")
+            );
+            assert_eq!(request.body["params"]["conversationId"], session_id);
+            json!({"ok":false,"error":{"message":"ERR_TEST_REFUSED"}})
+        });
+        let (mut worker, events, input) = worker_fixture(server.client.clone());
+        worker.submit(
+            session_id.to_string(),
+            "follow up".to_string(),
+            ExecutionMode::Build,
+            ReasoningEffort::High,
+            String::new(),
+            Vec::new(),
+        );
+        worker.handle_input(input.recv_timeout(Duration::from_secs(2)).unwrap());
+        server.thread.join().unwrap();
+        assert!(events.try_iter().any(|event| matches!(
+            event,
+            BackendEvent::SubmitRejected { conversation_id, prompt, attachments }
+                if conversation_id == session_id && prompt == "follow up" && attachments.is_empty()
+        )));
+    }
+
+    /// Without a connection the continuation still runs, so what it holds is released.
+    /// 没有连接时后续回调照常执行，使其持有的状态得到释放。
+    #[test]
+    fn spawned_call_without_connection_still_runs_its_continuation() {
+        let (out, _events) = std::sync::mpsc::channel();
+        let (inbox, _input) = std::sync::mpsc::channel();
+        let mut worker = Worker::new(out, inbox, None);
+        let ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = ran.clone();
+        worker.spawn_call("service_test", json!({}), move |_, result| {
+            assert!(result.is_err_and(|error| !error.transport));
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        assert!(ran.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     /// Creates isolated worker channels; no discovery, connection or user state is touched.

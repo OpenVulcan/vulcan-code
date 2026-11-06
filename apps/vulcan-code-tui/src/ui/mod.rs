@@ -99,10 +99,14 @@ fn panel_width(width: u16) -> u16 {
 pub fn effort_label(effort: ReasoningEffort) -> String {
     match effort {
         ReasoningEffort::Off => tr!("composer.reasoning.off"),
+        ReasoningEffort::Adaptive => tr!("composer.reasoning.level.adaptive"),
+        ReasoningEffort::Minimal => tr!("composer.reasoning.level.minimal"),
         ReasoningEffort::Low => tr!("composer.reasoning.low"),
         ReasoningEffort::Medium => tr!("composer.reasoning.medium"),
         ReasoningEffort::High => tr!("composer.reasoning.high"),
+        ReasoningEffort::XHigh => tr!("composer.reasoning.level.xHigh"),
         ReasoningEffort::Max => tr!("composer.reasoning.max"),
+        ReasoningEffort::Ultra => tr!("composer.reasoning.level.ultra"),
     }
 }
 

@@ -773,7 +773,7 @@ impl App {
             model_id: String::new(),
             permission_judge_backend: None,
             effort: ReasoningEffort::High,
-            efforts: ReasoningEffort::ALL.to_vec(),
+            efforts: ReasoningEffort::DEFAULT_CHOICES.to_vec(),
             base_url: String::new(),
             selected: None,
             sessions: HashMap::new(),
@@ -1260,6 +1260,9 @@ impl App {
                 self.connection = state;
                 if state != ConnectionState::Connected {
                     self.call_pending = false;
+                    // Results of the lost connection are discarded, so no reply will clear it.
+                    // 断开连接的结果会被丢弃，因此不会有回复来清除它。
+                    self.git.busy = None;
                     for session in self.sessions.values_mut() {
                         session.answer_mode = AnswerModeSession::default();
                         session.permission_mode = None;
@@ -1303,6 +1306,11 @@ impl App {
                 }
             }
             BackendEvent::Selected(id) => self.select_conversation(id),
+            BackendEvent::SubmitRejected {
+                conversation_id,
+                prompt,
+                attachments,
+            } => self.restore_rejected_submission(&conversation_id, &prompt, attachments),
             BackendEvent::ModelSelection {
                 model_id,
                 effort,

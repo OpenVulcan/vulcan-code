@@ -235,6 +235,13 @@ pub enum BackendEvent {
     /// The backend moved the selection, e.g. to a newly created conversation.
     /// 后端移动了选中项，例如移到新建的会话。
     Selected(ConversationId),
+    /// A submission was not admitted; its prompt and attachments go back to the composer.
+    /// 提交未被接受；其提示与附件交还输入框。
+    SubmitRejected {
+        conversation_id: ConversationId,
+        prompt: String,
+        attachments: Vec<String>,
+    },
     /// Model and reasoning effort of the selected conversation; `efforts` lists what the model
     /// accepts (empty when unknown).
     /// 选中会话的模型与推理强度；`efforts` 列出模型接受的取值（未知时为空）。

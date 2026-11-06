@@ -154,17 +154,26 @@ pub enum ExecutionMode {
     Plan,
 }
 
+/// One level of the service's closed reasoning-effort contract, kept one-to-one so the level
+/// picked is the level submitted.
+/// 服务封闭推理档位契约中的一个档位，一一对应，使所选档位即提交档位。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReasoningEffort {
     Off,
+    Adaptive,
+    Minimal,
     Low,
     Medium,
     High,
+    XHigh,
     Max,
+    Ultra,
 }
 
 impl ReasoningEffort {
-    pub const ALL: [ReasoningEffort; 5] = [
+    /// The choices shown before the selected model reports its own levels.
+    /// 所选模型报告自身档位之前显示的选项。
+    pub const DEFAULT_CHOICES: [ReasoningEffort; 5] = [
         ReasoningEffort::Off,
         ReasoningEffort::Low,
         ReasoningEffort::Medium,

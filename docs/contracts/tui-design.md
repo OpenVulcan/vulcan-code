@@ -162,11 +162,13 @@ WebUI 区块一样仅在判定启用时出现在导航中。
   `workbenchDelta`（独立生命周期类增量不受代际过滤），会话事件按 v1 窗口规则（`service_epoch`、窗口代际、
   `memory_revision` 缺口即重新加载）合并，文本追加按 UTF-16 基准长度截断后拼接，并以完整事件 `EventUpsert`
   交给界面。
-- **耗时调用**：通用 `ServiceCall`、提交、提交信息生成及提交/推送在后台线程执行，结果携带连接代际交回工作线程。槽位读取另有发送序号，较旧响应不能覆盖较新的读取；断线后的结果被丢弃。
+- **耗时调用**：通用 `ServiceCall`、提交、提交信息生成及提交/推送在后台线程执行，结果携带连接代际交回工作线程。槽位读取另有发送序号，较旧响应不能覆盖较新的读取；断线后的结果被丢弃（断线时同时解除 Git 忙碌状态）；未连接时回调仍以错误执行。单个会话的 RPC 回执不推进工作台 `revision`，与 WebUI 一致只由快照与增量推进。
 - **新建会话**：先在本地建立草稿（`draft:` 前缀），首次提交时以 `draftSlotKey = new:<projectId|workspace>`
-  并携带模型与推理强度创建真实会话，确认后以 `Selected` 切到真实 ID 并移除草稿。已有会话的模型与推理强度
-  通过 `service_select_public_ai_model` / `service_select_workbench_reasoning_effort` 单独切换；推理强度只在
-  当前模型接受的取值内循环。
+  并携带模型与推理强度创建真实会话，确认后以 `Selected` 切到真实 ID 并移除草稿。已有会话以
+  `draftSlotKey = conversation:<id>` 提交（Core 按目标校验槽位归属）；提交未被接受（暂存失败、服务拒绝或未连接）
+  时以 `SubmitRejected` 把文本与附件交还发送它的会话输入框，不会丢失。已有会话的模型与推理强度
+  通过 `service_select_public_ai_model` / `service_select_workbench_reasoning_effort` 单独切换；推理强度与服务
+  封闭档位契约一一对应，只在当前模型接受的取值内循环。
 - **附件**：由 TUI 读取本地文件字节，经 `service_stage_composer_attachment_bytes` 暂存后随提交发送；附件
   选择器直接列出本地磁盘，项目文件夹选择器使用服务的 `service_browse_project_directories`。
 - **Git**：工作区为选中会话的项目。首次显示项目、显式刷新（`r`）及新连接时，与 WebUI
