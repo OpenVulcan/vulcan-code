@@ -62,7 +62,20 @@ pub fn build_service_media_file_response(
         .map_err(|error| format!("Failed to read media file metadata: {error}"))?
         .len();
     let mime_type = infer_service_media_asset_mime_type(&media_path);
+    // SVG is an active document: opened in its own tab it would run script at the Core origin.
+    // SVG 是活动文档：在独立标签页打开时会以 Core 来源运行脚本。
+    let active_document = mime_type == "image/svg+xml";
     let mut headers = service_media_base_headers(mime_type);
+    headers.push((
+        String::from("x-content-type-options"),
+        String::from("nosniff"),
+    ));
+    if active_document {
+        headers.push((
+            String::from("content-security-policy"),
+            String::from("sandbox; default-src 'none'; style-src 'unsafe-inline'"),
+        ));
+    }
 
     if is_head {
         headers.push((String::from("content-length"), file_len.to_string()));
@@ -259,6 +272,14 @@ fn is_inline_project_resource_mime_type(mime_type: &str) -> bool {
 /// Returns whether a media path belongs to the generated attachment storage tree.
 /// 返回媒体路径是否属于生成附件存储树。
 fn is_allowed_generated_service_media_path(path: &Path) -> bool {
+    // `..` would leave the attachment tree after the marker components matched.
+    // `..` 会在标记组件匹配后离开附件树。
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return false;
+    }
     let normalized_components = path
         .components()
         .filter_map(|component| match component {
@@ -557,6 +578,63 @@ mod tests {
         assert!(is_allowed_service_media_asset_path(&workspace_attachment));
         assert!(is_allowed_service_media_asset_path(&profile_attachment));
         assert!(!is_allowed_service_media_asset_path(&lookalike_attachment));
+        // EscapingAttachment matches the marker components, then climbs out of the tree.
+        // EscapingAttachment 先匹配标记组件，再爬出附件树。
+        let escaping_attachment = PathBuf::from("workspace")
+            .join(".vulcan")
+            .join("code")
+            .join("attachments")
+            .join("..")
+            .join("..")
+            .join("..")
+            .join("secrets.json");
+        assert!(!is_allowed_service_media_asset_path(&escaping_attachment));
+    }
+
+    /// Verifies served SVG files cannot run script and no media response is MIME-sniffed.
+    /// 验证提供的 SVG 文件无法运行脚本，且任何媒体响应都不会被 MIME 嗅探。
+    #[test]
+    fn svg_media_response_is_sandboxed_and_png_is_not() {
+        let directory = std::env::temp_dir().join(format!(
+            "vulcan-media-svg-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default()
+        ));
+        fs::create_dir_all(&directory).expect("temp directory should be created");
+        let svg_path = directory.join("image.svg");
+        let png_path = directory.join("image.png");
+        fs::write(
+            &svg_path,
+            b"<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script></svg>",
+        )
+        .expect("svg should be written");
+        fs::write(&png_path, b"\x89PNG\r\n\x1a\n").expect("png should be written");
+
+        let svg = build_service_media_file_response(svg_path, false, None)
+            .expect("svg response should build");
+        let png = build_service_media_file_response(png_path, false, None)
+            .expect("png response should build");
+        let _ = fs::remove_dir_all(&directory);
+
+        assert_eq!(svg.status, 200);
+        assert!(
+            response_header(&svg, "content-security-policy")
+                .is_some_and(|policy| policy.contains("sandbox")),
+            "SVG responses must carry a sandboxing CSP"
+        );
+        assert_eq!(
+            response_header(&svg, "x-content-type-options"),
+            Some("nosniff")
+        );
+        assert_eq!(png.status, 200);
+        assert_eq!(response_header(&png, "content-security-policy"), None);
+        assert_eq!(
+            response_header(&png, "x-content-type-options"),
+            Some("nosniff")
+        );
     }
 
     /// Verifies the service media route recognizes every added Kimi video extension and canonical MIME type.

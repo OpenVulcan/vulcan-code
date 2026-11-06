@@ -169,8 +169,9 @@ mod tests {
     use super::{
         WEBUI_REDACTED_SECRET_PLACEHOLDER, WEBUI_SERVICE_HTTP_PORT, WEBUI_SERVICE_LOOPBACK_HOST,
         WEBUI_STATIC_DIR_ENV, build_webui_static_response, redact_webui_service_rpc_secrets,
-        webui_service_discovery_snapshot_path, webui_service_origin_text_is_allowed,
-        webui_service_ready_discovery_snapshot, webui_service_request_token_values_are_valid,
+        webui_service_discovery_snapshot_path, webui_service_host_header_is_allowed,
+        webui_service_origin_text_is_allowed, webui_service_ready_discovery_snapshot,
+        webui_service_request_token_values_are_valid,
         webui_service_required_origin_text_is_allowed,
         webui_service_rpc_secret_key_should_be_redacted, webui_service_token_from_query,
         webui_static_file_path_for_request, webui_static_mime_type, webui_static_relative_path,
@@ -414,6 +415,31 @@ mod tests {
             "http://not-tauri.localhost",
         ] {
             assert!(!webui_service_origin_text_is_allowed(origin));
+        }
+    }
+
+    /// Verifies only loopback Host header values are accepted, with or without a port.
+    /// 验证只接受回环 Host 请求头值，带不带端口均可。
+    #[test]
+    fn webui_service_host_header_accepts_only_loopback_names() {
+        for host in [
+            "127.0.0.1:43110",
+            "localhost:9000",
+            "LOCALHOST",
+            "127.0.0.1",
+            "[::1]:43110",
+            "[::1]",
+        ] {
+            assert!(webui_service_host_header_is_allowed(host), "{host}");
+        }
+        for host in [
+            "evil.example:43110",
+            "localhost.evil.example",
+            "127.0.0.1.nip.io:43110",
+            "[::1]evil",
+            "",
+        ] {
+            assert!(!webui_service_host_header_is_allowed(host), "{host}");
         }
     }
 

@@ -479,7 +479,35 @@ pub fn build_webui_service_router(config: WebuiServiceHttpConfig) -> Router {
         .route("/index.html", get(webui_service_index_http_handler))
         .fallback(get(webui_service_static_http_handler))
         .layer(cors)
+        .layer(axum::middleware::from_fn(
+            webui_service_loopback_host_middleware,
+        ))
         .with_state(service_state)
+}
+
+/// Refuses any request whose `Host` (or absolute-form authority) does not name the loopback
+/// interface, so a page that rebinds its own DNS name to 127.0.0.1 cannot reach any route.
+/// 拒绝 `Host`（或绝对形式的 authority）不指向回环接口的任何请求，使把自身 DNS 名重新绑定到
+/// 127.0.0.1 的页面无法访问任何路由。
+async fn webui_service_loopback_host_middleware(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> AxumResponse {
+    let mut hosts = request.headers().get_all(axum::http::header::HOST).iter();
+    let host_allowed = match (hosts.next(), hosts.next()) {
+        (None, _) => true,
+        (Some(host), None) => host
+            .to_str()
+            .is_ok_and(vulcan_service_api::webui_service_host_header_is_allowed),
+        (Some(_), Some(_)) => false,
+    };
+    let authority_allowed = request.uri().authority().is_none_or(|authority| {
+        vulcan_service_api::webui_service_host_header_is_allowed(authority.as_str())
+    });
+    if !host_allowed || !authority_allowed {
+        return AxumStatusCode::FORBIDDEN.into_response();
+    }
+    next.run(request).await
 }
 
 /// Returns discovery only to the service WebUI, the fixed debug Vite WebUI, or a native client.
@@ -2675,6 +2703,37 @@ mod tests {
             let snapshot: WebuiServiceDiscoverySnapshot =
                 serde_json::from_slice(&body).expect("discovery should parse");
             assert_eq!(snapshot.service_token, "test-token");
+        }
+    }
+
+    /// Verifies a rebound DNS name cannot read discovery while loopback names still can.
+    /// 验证重新绑定的 DNS 名无法读取发现信息，而回环名称仍然可以。
+    #[tokio::test]
+    async fn health_requires_loopback_host() {
+        for (host, expected) in [
+            ("attacker.example:43110", StatusCode::FORBIDDEN),
+            ("127.0.0.1:43110", StatusCode::OK),
+            ("localhost:43110", StatusCode::OK),
+        ] {
+            let response = test_router()
+                .oneshot(
+                    Request::builder()
+                        .uri("/health")
+                        .header("host", host)
+                        .body(Body::empty())
+                        .expect("request should build"),
+                )
+                .await
+                .expect("router should respond");
+            assert_eq!(response.status(), expected, "{host}");
+            let body = to_bytes(response.into_body(), 4096)
+                .await
+                .expect("body should read");
+            assert_eq!(
+                String::from_utf8_lossy(&body).contains("test-token"),
+                expected == StatusCode::OK,
+                "{host}"
+            );
         }
     }
 

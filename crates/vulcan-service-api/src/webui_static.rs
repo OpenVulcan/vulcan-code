@@ -241,10 +241,39 @@ pub fn webui_service_origin_text_is_allowed(origin: &str) -> bool {
     if host.eq_ignore_ascii_case("tauri.localhost") {
         return true;
     }
+    loopback_host_name_is_allowed(host)
+}
+
+/// Returns whether one host name without port names the loopback interface.
+/// 返回一个不含端口的主机名是否指向回环接口。
+fn loopback_host_name_is_allowed(host: &str) -> bool {
     matches!(
         host.to_ascii_lowercase().as_str(),
         "localhost" | "127.0.0.1" | "::1"
     )
+}
+
+/// Returns whether one HTTP `Host` header value names the loopback interface.
+/// 返回一个 HTTP `Host` 请求头值是否指向回环接口。
+///
+/// The Core listens on loopback only, so every genuine client reaches it as `127.0.0.1`,
+/// `localhost` or `[::1]`, with any port (an SSH tunnel keeps the name and changes the port). A
+/// page that rebinds its own DNS name to 127.0.0.1 still sends that name, which this refuses.
+/// Core 只监听回环地址，因此每个真实客户端都以 `127.0.0.1`、`localhost` 或 `[::1]`（端口任意；
+/// SSH 隧道保留名称、改变端口）访问。把自身 DNS 名重新绑定到 127.0.0.1 的页面仍会发送该名称，此处拒绝。
+pub fn webui_service_host_header_is_allowed(host: &str) -> bool {
+    let host = if let Some(rest) = host.strip_prefix('[') {
+        match rest.split_once(']') {
+            Some((name, port)) if port.is_empty() || port.starts_with(':') => name,
+            _ => return false,
+        }
+    } else {
+        match host.split_once(':') {
+            Some((name, _port)) => name,
+            None => host,
+        }
+    };
+    loopback_host_name_is_allowed(host)
 }
 
 /// Returns whether a required browser Origin value is present and allowed.
