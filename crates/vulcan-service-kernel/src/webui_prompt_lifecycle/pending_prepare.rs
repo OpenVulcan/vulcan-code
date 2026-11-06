@@ -656,6 +656,45 @@ impl ExactPendingPromptDispatch {
     }
 }
 
+/// Replaces the session's controller history with the authoritative V1 projection before a new API group.
+/// 在新的 API 组开始前，用权威 V1 投影替换会话的控制器历史。
+///
+/// A settled checkpoint keeps runtime-host messages but not their ledger records, so a launch that reused
+/// that in-memory history would fail ledger validation; V1 holds the complete logical history instead.
+/// 已结算的检查点保留运行时宿主消息但不保留其账本记录，沿用该内存历史的启动会在账本校验时失败；
+/// 完整逻辑历史由 V1 持有。
+///
+/// `canonical_user_input_seq` names the admitted input owning this Turn, when there is one.
+/// `canonical_user_input_seq` 在存在时指明持有本回合的已准入输入。
+/// Returns that input's controller message id, or `None` for a launch without an admitted input.
+/// 返回该输入的控制器消息标识；没有已准入输入的启动返回 `None`。
+fn replace_controller_state_from_v1(
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    handle: &crate::session_runtime_registry_v1::SessionHandle,
+    session_id: SessionId,
+    canonical_user_input_seq: Option<Seq>,
+) -> Result<Option<String>, String> {
+    let projection = handle
+        .capture_controller_projection_snapshot()
+        .map_err(|error| error.to_string())?;
+    let canonical_user_message_id = canonical_user_input_seq
+        .map(|input_seq| {
+            crate::agent_stream::provider_v1_sink::provider_projection_user_message_id_for_source(
+                &projection,
+                input_seq,
+            )
+        })
+        .transpose()?;
+    let projected_state =
+        crate::agent_stream::provider_v1_sink::provider_projection_controller_state(&projection)?;
+    workspace_snapshot
+        .session_runtime_state
+        .entry(session_id)
+        .or_default()
+        .conversation_state = projected_state;
+    Ok(canonical_user_message_id)
+}
+
 /// Starts the claimed agent task using its canonical input and the target's active settings.
 /// 使用规范输入及目标当前设置，启动已认领代理任务。
 /// Returns false while another service execution owns admission; errors preserve the durable claim.
@@ -1139,6 +1178,12 @@ pub(super) async fn prepare_webui_pending_prompt(
                 "Goal dispatch authority changed for session `{session_id}` before Hook setup"
             ));
         }
+        replace_controller_state_from_v1(
+            &mut workspace_snapshot,
+            handle.as_ref(),
+            session_id,
+            None,
+        )?;
         let authorization = pending_prompt_dispatch_authorization;
         // The submission reservation spans Hook preparation, durable capture and kernel registration.
         // 提交预留覆盖 Hook 准备、可靠捕获以及 kernel 注册。
@@ -1294,29 +1339,20 @@ pub(super) async fn prepare_webui_pending_prompt(
                 ));
             }
         }
-        if let Some(canonical_user_input_seq) = exact_dispatch.canonical_user_input_seq() {
+        // Same-Turn continuations keep the open Turn's live state; every other launch starts from V1.
+        // 同回合续跑保留开放回合的实时状态；其他启动一律从 V1 开始。
+        if !matches!(
+            exact_dispatch,
+            ExactPendingPromptDispatch::PendingInTurn { .. }
+        ) {
             let handle = registered_session_v1_handle_from_state(state, session_id)?;
-            let projection = handle
-                .capture_controller_projection_snapshot()
-                .map_err(|error| error.to_string())?;
-            let canonical_user_message_id =
-                crate::agent_stream::provider_v1_sink::provider_projection_user_message_id_for_source(
-                    &projection,
-                    canonical_user_input_seq,
-                )?;
-            let projected_state =
-                crate::agent_stream::provider_v1_sink::provider_projection_controller_state(
-                    &projection,
-                )?;
-            let runtime_state = workspace_snapshot
-                .session_runtime_state
-                .entry(session_id)
-                .or_default();
-            // V1 owns the complete logical history for every newly admitted root or queued successor.
-            // V1 持有每个新准入根输入或排队后继的完整逻辑历史。
-            runtime_state.conversation_state = projected_state;
             prompt_turn_begin_input.existing_canonical_user_message_id =
-                Some(canonical_user_message_id);
+                replace_controller_state_from_v1(
+                    &mut workspace_snapshot,
+                    handle.as_ref(),
+                    session_id,
+                    exact_dispatch.canonical_user_input_seq(),
+                )?;
         }
         // The retained submission reservation serializes this admission without holding outer locks over I/O.
         // 保留的提交预留串行化本次准入，无须跨 I/O 持有外层锁。
@@ -1408,6 +1444,84 @@ mod tests {
 
     use super::*;
     use vulcan_session_core::v1::ids::{Seq, TurnId};
+
+    /// A launch without an admitted input must not reuse checkpoint history whose runtime-host ledger is gone.
+    /// 没有已准入输入的启动不得沿用运行时宿主账本已丢失的检查点历史。
+    #[test]
+    fn launch_without_input_replaces_checkpoint_history_with_v1() {
+        // The Provider projection requires a real storage owner, so the session lives in a temporary directory.
+        // Provider 投影需要真实存储所有者，因此会话位于临时目录。
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let session_id = SessionId::new_v4();
+        let locator = vulcan_workspace_store::workspace_store::create_session_v1_storage_fixture(
+            directory.path(),
+            &session_id.to_string(),
+            1,
+        )
+        .expect("session storage fixture");
+        let document = vulcan_workspace_store::workspace_store::load_session_v1_full(&locator)
+            .expect("load the fixture session")
+            .document;
+        let handle =
+            crate::session_runtime_registry_v1::SessionHandle::new(session_id, locator, document);
+        handle
+            .submit_root_input(
+                vulcan_session_core::v1::document::ClientInputSubmission::new(
+                    ClientActionId::try_new("root-action").expect("action id"),
+                    "root",
+                    Vec::new(),
+                ),
+                2,
+            )
+            .expect("publish the root input");
+        // A settled checkpoint keeps the runtime-host message but drops its hidden ledger record.
+        // 已结算的检查点保留运行时宿主消息，却丢弃其隐藏账本记录。
+        let mut checkpoint_state = vulcan_context::SessionConversationState::default();
+        checkpoint_state
+            .messages
+            .push(vulcan_context::SessionConversationMessage {
+                id: format!(
+                    "{}runtime-host:source:1",
+                    vulcan_context::runtime_host::RUNTIME_HOST_MESSAGE_PREFIX
+                ),
+                payload: vulcan_context::SessionConversationPayload::UserText {
+                    text: String::from("<vulcan_context_update/>"),
+                    attachments: Vec::new(),
+                },
+            });
+        assert!(vulcan_context::runtime_host::read_runtime_host_ledger(&checkpoint_state).is_err());
+        let mut workspace_snapshot = WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: Vec::new(),
+            archived_sessions: Vec::new(),
+            session_runtime_state: std::collections::BTreeMap::new(),
+            archived_session_runtime_state: std::collections::BTreeMap::new(),
+            session_run_phases: std::collections::BTreeMap::new(),
+            expanded_task_projects: std::collections::BTreeSet::new(),
+            selected_session: session_id,
+            hydrated_session_ids: std::collections::BTreeSet::new(),
+        };
+        workspace_snapshot
+            .session_runtime_state
+            .entry(session_id)
+            .or_default()
+            .conversation_state = checkpoint_state;
+
+        let canonical = replace_controller_state_from_v1(
+            &mut workspace_snapshot,
+            handle.as_ref(),
+            session_id,
+            None,
+        )
+        .expect("the V1 projection should replace the checkpoint history");
+
+        assert!(canonical.is_none());
+        let conversation =
+            &workspace_snapshot.session_runtime_state[&session_id].conversation_state;
+        vulcan_context::runtime_host::read_runtime_host_ledger(conversation)
+            .expect("the rebuilt history must pass runtime-host ledger validation");
+    }
 
     /// Verifies two open Turns of the same Goal can never share one dispatch identity.
     /// 验证同一 Goal 的两个开放回合绝不会共享同一个分发身份。
