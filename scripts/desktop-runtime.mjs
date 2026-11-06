@@ -535,18 +535,16 @@ async function main() {
   // 经鉴权的自动化网关在运行时使用锁定版本的 WebSocket 实现。
   await cp(path.join(desktop, 'node_modules/ws'), path.join(appRoot, 'node_modules/ws'), { recursive: true, dereference: true });
   // Keep the packaged JavaScript app identity aligned with the branded executable and no-argument entry.
-  // On Linux, `name` is also the window class the setup program's menu entry names
-  // (`DESKTOP_WINDOW_CLASS` in its `integrate.rs`).
-  // 保持打包后的 JavaScript 应用身份与品牌化程序及无参数启动入口一致。在 Linux 上，`name` 同时是安装器
-  // 菜单项写明的窗口类（其 `integrate.rs` 中的 `DESKTOP_WINDOW_CLASS`）。
+  // 保持打包后的 JavaScript 应用身份与品牌化程序及无参数启动入口一致。
    const desktopPackage = JSON.parse(await readFile(path.join(desktop, 'package.json'), 'utf8'));
    await writeFile(path.join(appRoot, 'package.json'), JSON.stringify({
      name: desktopPackage.name,
      productName: desktopNotificationIdentity.name,
-     // Names the menu entry the setup program writes (`DESKTOP_ENTRY_FILE` in its `integrate.rs`), so
-     // Linux desktops that resolve the app by desktop file name also find its icon.
-     // 指明安装器写入的菜单项（其 `integrate.rs` 中的 `DESKTOP_ENTRY_FILE`），使按桌面文件名识别应用的
-     // Linux 桌面环境也能找到其图标。
+     // Names the menu entry the setup program writes (`desktop_app_id` in its `integrate.rs`). Electron
+     // also takes the Linux window class and Wayland app id from it, which that entry names as
+     // `StartupWMClass`, so a pinned dock icon belongs to the entry.
+     // 指明安装器写入的菜单项（其 `integrate.rs` 中的 `desktop_app_id`）。Electron 还据此得出 Linux 窗口类
+     // 与 Wayland 应用 ID，该菜单项把它写为 `StartupWMClass`，使固定到程序坞的图标归属于该菜单项。
      desktopName: 'vulcan-code.desktop',
      version: desktopPackage.version,
      type: 'module',

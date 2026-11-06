@@ -79,18 +79,28 @@ const APP_NAME: &str = "Vulcan Code";
 /// Windows 快捷方式的文件名，与 Inno 安装程序相同。
 const WINDOWS_SHORTCUT: &str = "Vulcan Code.lnk";
 
+/// Linux application id of the desktop app. The packaged app declares `desktopName` as this id
+/// plus `.desktop` (`scripts/desktop-runtime.mjs`), and Electron then takes the window class
+/// (`WM_CLASS "vulcan-code", "vulcan-code"` on X11) and the Wayland app id from it. The menu entry
+/// is named after it and names it as `StartupWMClass`, so docks group the running window with the
+/// entry and a pinned icon starts the entry's command.
+/// 桌面应用的 Linux 应用 ID。打包应用把 `desktopName` 声明为此 ID 加 `.desktop`
+/// （`scripts/desktop-runtime.mjs`），Electron 由此得出窗口类（X11 上为 `WM_CLASS "vulcan-code",
+/// "vulcan-code"`）与 Wayland 应用 ID。菜单项以它命名并把它写为 `StartupWMClass`，使程序坞把运行中的
+/// 窗口与菜单项归为一组，固定的图标启动菜单项的命令。
+macro_rules! desktop_app_id {
+    () => {
+        "vulcan-code"
+    };
+}
+
 /// File name of the Linux menu entry and desktop shortcut.
 /// Linux 菜单项与桌面快捷方式的文件名。
-const DESKTOP_ENTRY_FILE: &str = "vulcan-code.desktop";
+const DESKTOP_ENTRY_FILE: &str = concat!(desktop_app_id!(), ".desktop");
 
-/// Window class of the desktop app, observed as `WM_CLASS "vulcan-code-desktop", "vulcan-code-desktop"`
-/// on GNOME X11: Electron takes it from the packaged app's `name`, which `scripts/desktop-runtime.mjs`
-/// writes. The menu entry names it so GNOME groups the running window with the entry instead of
-/// showing a separate generic icon; on Wayland GNOME matches the app id against the same key.
-/// 桌面应用的窗口类，在 GNOME X11 上实测为 `WM_CLASS "vulcan-code-desktop", "vulcan-code-desktop"`：
-/// Electron 取自打包应用的 `name`，该值由 `scripts/desktop-runtime.mjs` 写出。菜单项写明它，使 GNOME 把
-/// 运行中的窗口与菜单项归为一组，而不是另显示一个通用图标；Wayland 上 GNOME 以同一键匹配应用 ID。
-const DESKTOP_WINDOW_CLASS: &str = "vulcan-code-desktop";
+/// Window class of the desktop app.
+/// 桌面应用的窗口类。
+const DESKTOP_WINDOW_CLASS: &str = desktop_app_id!();
 
 /// Icon inside a version, part of the `core` component.
 /// 版本中的图标，属于 `core` 组件。

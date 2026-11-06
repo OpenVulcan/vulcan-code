@@ -304,12 +304,17 @@ async function restartForUpdate(reason: 'update' | 'installer', discoveryPath: s
     if (!live || live.pid !== announcing.pid) break;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  if (reason === 'update') {
-    const entry = resolveStableDesktopEntry(process.execPath, process.platform, existsSync);
-    if (entry) app.relaunch({ execPath: entry, args: [] });
-    else app.relaunch();
-  }
+  if (reason === 'update') relaunchFromStableEntry();
   app.exit(0);
+}
+
+// relaunchFromStableEntry starts the client again once this process exits, from the entry that
+// always runs the current version.
+// relaunchFromStableEntry 在本进程退出后再次启动客户端，使用始终运行当前版本的入口。
+function relaunchFromStableEntry(): void {
+  const entry = resolveStableDesktopEntry(process.execPath, process.platform, existsSync);
+  if (entry) app.relaunch({ execPath: entry, args: [] });
+  else app.relaunch();
 }
 
 /** Registers every main-process handler for one window. */
@@ -553,11 +558,24 @@ async function runDesktopGui(): Promise<void> {
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
+  // quitting marks a client that is closing, so a launch arriving meanwhile starts it again.
+  // quitting 标记正在关闭的客户端，使期间到达的启动请求能再次启动它。
+  let quitting = false;
+  app.on('before-quit', () => {
+    quitting = true;
+  });
   app.on('second-instance', () => {
     // The one window shows the startup page, its failure or the WebUI, so a relaunch always brings it forward.
     // 唯一的窗口显示启动页、启动失败或 WebUI，因此再次启动总会把它带到前台。
     const window = guiState.window;
-    if (!window || window.isDestroyed()) return;
+    if (!window || window.isDestroyed()) {
+      // The launching process has already exited with its request handed over, so a client that
+      // is closing starts again from the stable entry instead of dropping the click.
+      // 发起启动的进程已交出请求并退出，因此正在关闭的客户端改为从稳定入口再次启动，而不是丢弃这次点击。
+      process.stderr.write(`[vulcan-code-desktop] launch request without a window (quitting: ${quitting})\n`);
+      if (quitting) relaunchFromStableEntry();
+      return;
+    }
     if (window.isMinimized()) {
       window.restore();
     }
