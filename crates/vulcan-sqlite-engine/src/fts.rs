@@ -793,10 +793,12 @@ mod tests {
         );
     }
 
-    /// Verifies a rebuild whose destructive drop fails rolls back and keeps the existing index.
-    /// 验证重建的破坏性删除失败时会回滚，并保留既有索引。
+    /// Verifies a rebuild that cannot take the write lock fails before its destructive drop and
+    /// keeps the existing index. It never reaches the rollback branch, which needs fault injection.
+    /// 验证无法取得写锁的重建在破坏性删除之前失败，并保留既有索引。它不会进入回滚分支，该分支需要
+    /// 故障注入才能触发。
     #[test]
-    fn rebuild_failure_rolls_back_and_keeps_the_index() {
+    fn rebuild_blocked_by_a_writer_keeps_the_index() {
         let temp = tempfile::tempdir().expect("create temp directory");
         let db_path = temp.path().join("fts-rollback.db");
 
@@ -816,8 +818,8 @@ mod tests {
         )
         .expect("upsert");
 
-        // A second connection holds a write transaction, so the rebuild's DROP TABLE cannot proceed.
-        // 第二个连接持有写事务，因此重建的 DROP TABLE 无法进行。
+        // A second connection holds a write transaction, so the rebuild's BEGIN IMMEDIATE fails.
+        // 第二个连接持有写事务，因此重建的 BEGIN IMMEDIATE 失败。
         let blocker = Connection::open(&db_path).expect("open blocking connection");
         blocker
             .execute_batch("BEGIN IMMEDIATE TRANSACTION;")
@@ -844,7 +846,7 @@ mod tests {
             .expect("count indexed rows");
         assert_eq!(
             rows, 1,
-            "the rollback must keep the pre-existing indexed row"
+            "the failed rebuild must keep the pre-existing indexed row"
         );
     }
     /// Verifies the reserved prefix is refused.

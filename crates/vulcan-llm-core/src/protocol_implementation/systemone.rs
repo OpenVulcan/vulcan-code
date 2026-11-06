@@ -30,6 +30,10 @@ pub const TYPESAFE_SYSTEMONE_PROFILE_ID: &str = "typesafe-systemone.v1";
 /// 编解码 System One 决策契约。
 pub struct TypeSafeSystemOneProfile;
 
+/// Largest System One answer; the single JSON document is both the only frame and the whole buffer.
+/// System One 应答的最大字节数；单个 JSON 文档既是唯一的帧，也是整个缓冲区。
+const SYSTEMONE_MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+
 impl ProtocolProfile for TypeSafeSystemOneProfile {
     /// Returns the stable System One profile identifier.
     /// 返回稳定的 System One Profile 标识。
@@ -45,8 +49,8 @@ impl ProtocolProfile for TypeSafeSystemOneProfile {
             request_content_type: "application/json",
             accepted_response_content_types: &["application/json"],
             framing: ProtocolStreamFraming::SingleJson,
-            max_frame_bytes: 1024 * 1024,
-            max_buffer_bytes: 1024 * 1024,
+            max_frame_bytes: SYSTEMONE_MAX_RESPONSE_BYTES,
+            max_buffer_bytes: SYSTEMONE_MAX_RESPONSE_BYTES,
             max_tool_arguments_bytes: 0,
             max_error_body_bytes: 64 * 1024,
             response_headers_timeout_ms: 30_000,

@@ -151,18 +151,22 @@ pub(crate) fn merge_streamed_tool_name(
     if fragment.is_empty() {
         return current.to_string();
     }
-    if registered_tools.contains(fragment) {
-        return fragment.to_string();
-    }
-    if registered_tools.contains(current) {
-        return current.to_string();
-    }
+    // Appending wins first, so `audit` + `_lookup` reaches `audit_lookup` even though `audit` is
+    // registered too; providers that resend the whole name fall through to the checks below.
+    // 追加优先，因此即使 `audit` 也已注册，`audit` + `_lookup` 仍会得到 `audit_lookup`；重发完整名称的
+    // 供应商会落到下面的检查。
     let combined = format!("{current}{fragment}");
     if registered_tools
         .iter()
         .any(|registered| registered.starts_with(combined.as_str()))
     {
         return combined;
+    }
+    if registered_tools.contains(fragment) {
+        return fragment.to_string();
+    }
+    if registered_tools.contains(current) {
+        return current.to_string();
     }
     if registered_tools
         .iter()
@@ -171,6 +175,30 @@ pub(crate) fn merge_streamed_tool_name(
         return fragment.to_string();
     }
     combined
+}
+
+#[cfg(test)]
+mod streamed_tool_name_tests {
+    use super::merge_streamed_tool_name;
+    use std::collections::BTreeSet;
+
+    /// Verifies split names reach the longer of two prefix-colliding tools, and resent whole names
+    /// stay whole.
+    /// 验证分片名称能到达两个前缀冲突工具中较长的那个，且重发的完整名称保持完整。
+    #[test]
+    fn split_names_reach_prefix_colliding_tools() {
+        let tools: BTreeSet<String> = ["audit", "audit_lookup"].map(String::from).into();
+        let assemble = |fragments: &[&str]| {
+            fragments.iter().fold(String::new(), |current, fragment| {
+                merge_streamed_tool_name(&current, fragment, &tools)
+            })
+        };
+        assert_eq!(assemble(&["aud", "it", "_look", "up"]), "audit_lookup");
+        assert_eq!(assemble(&["audit"]), "audit");
+        assert_eq!(assemble(&["audit", "audit"]), "audit");
+        assert_eq!(assemble(&["audit_lookup", "audit_lookup"]), "audit_lookup");
+        assert_eq!(assemble(&["audit", ""]), "audit");
+    }
 }
 
 #[cfg(test)]

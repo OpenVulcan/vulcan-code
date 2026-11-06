@@ -20,14 +20,6 @@ use crate::transport::{McpToolSchema, McpTransportEvent};
 /// 单个 MCP 图片内容块允许保留的最大解码字节数。
 const MCP_IMAGE_MAX_BYTES: usize = 20 * 1024 * 1024;
 
-/// Stable metadata key used by some MCP servers to declare which input fields should be treated as local file-path uploads.
-/// 某些 MCP 服务器用于声明哪些输入字段应被视为本地文件路径上传的稳定元数据键。
-const OPENAI_FILE_PARAMS_META_KEY: &str = "openai/fileParams";
-
-/// Stable description suffix appended to model-visible file-path parameters so the model prefers passing absolute local paths.
-/// 追加到模型可见文件路径参数上的稳定描述后缀，用于引导模型优先传入绝对本地路径。
-const OPENAI_FILE_PARAM_GUIDANCE: &str = "This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here.";
-
 /// Shared rmcp notification adapter that forwards tool-list changes into the host runtime event stream.
 /// 将工具列表变化转发到宿主运行时事件流的共享 rmcp 通知适配器。
 #[derive(Clone)]
@@ -276,8 +268,11 @@ fn decode_base64_value(byte: u8) -> Result<u8, String> {
 /// Convert one rmcp tool schema into the host-owned MCP tool schema.
 /// 将单个 rmcp 工具 schema 转换为宿主自有 MCP 工具 schema。
 pub(crate) fn rmcp_tool_to_schema(tool: RmcpTool) -> McpToolSchema {
-    let args_schema =
-        build_model_visible_tool_input_schema(tool.input_schema.as_ref(), tool.meta.as_deref());
+    // The server's own input schema is shown unchanged: the host does not upload files, so it does
+    // not rewrite `openai/fileParams` fields into local paths the server could not read.
+    // 原样展示服务器自己的输入 Schema：宿主不上传文件，因此不会把 `openai/fileParams` 字段改写为服务器
+    // 无法读取的本地路径。
+    let args_schema = Value::Object(tool.input_schema.as_ref().clone());
     McpToolSchema {
         name: tool.name.to_string(),
         description: tool
@@ -289,94 +284,6 @@ pub(crate) fn rmcp_tool_to_schema(tool: RmcpTool) -> McpToolSchema {
             .output_schema
             .map(|schema| Value::Object((*schema).clone()))
             .unwrap_or(Value::Null),
-    }
-}
-
-/// Builds the model-visible MCP input schema while preserving the raw transport schema semantics needed by invocation.
-/// 构建模型可见的 MCP 输入 Schema，同时保留调用阶段所需的原始传输语义。
-fn build_model_visible_tool_input_schema(
-    input_schema: &Map<String, Value>,
-    meta: Option<&Map<String, Value>>,
-) -> Value {
-    let file_params = declared_openai_file_input_param_names(meta);
-    let mut visible_schema = Value::Object(input_schema.clone());
-    if file_params.is_empty() {
-        return visible_schema;
-    }
-
-    mask_input_schema_for_file_path_params(&mut visible_schema, &file_params);
-    visible_schema
-}
-
-/// Reads the declared OpenAI-style file parameter names from one optional MCP tool metadata object.
-/// 从可选的 MCP 工具元数据对象中读取声明的 OpenAI 风格文件参数名集合。
-fn declared_openai_file_input_param_names(meta: Option<&Map<String, Value>>) -> Vec<String> {
-    let Some(meta) = meta else {
-        return Vec::new();
-    };
-
-    meta.get(OPENAI_FILE_PARAMS_META_KEY)
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-        .collect()
-}
-
-/// Masks the selected file-path parameters in one model-visible input schema so upstream models see a stable string-or-string-array contract.
-/// 对模型可见输入 Schema 中被选中的文件路径参数执行遮罩，使上游模型看到稳定的字符串或字符串数组契约。
-fn mask_input_schema_for_file_path_params(input_schema: &mut Value, file_params: &[String]) {
-    let Some(properties) = input_schema
-        .as_object_mut()
-        .and_then(|schema| schema.get_mut("properties"))
-        .and_then(Value::as_object_mut)
-    else {
-        return;
-    };
-
-    for field_name in file_params {
-        let Some(property_schema) = properties.get_mut(field_name) else {
-            continue;
-        };
-        mask_input_property_schema(property_schema);
-    }
-}
-
-/// Rewrites one selected input-property schema into a conservative model-visible file-path contract while preserving array-vs-scalar intent.
-/// 将单个被选中的输入属性 Schema 改写为保守的模型可见文件路径契约，同时保留数组或标量语义。
-fn mask_input_property_schema(schema: &mut Value) {
-    let Some(object) = schema.as_object_mut() else {
-        return;
-    };
-
-    let mut description = object
-        .get("description")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-        .unwrap_or_default();
-    if description.is_empty() {
-        description = String::from(OPENAI_FILE_PARAM_GUIDANCE);
-    } else if !description.contains(OPENAI_FILE_PARAM_GUIDANCE) {
-        description = format!("{description} {OPENAI_FILE_PARAM_GUIDANCE}");
-    }
-
-    let is_array = object.get("type").and_then(Value::as_str) == Some("array")
-        || object.get("items").is_some();
-    object.clear();
-    object.insert(String::from("description"), Value::String(description));
-    if is_array {
-        object.insert(String::from("type"), Value::String(String::from("array")));
-        object.insert(
-            String::from("items"),
-            serde_json::json!({ "type": "string" }),
-        );
-    } else {
-        object.insert(String::from("type"), Value::String(String::from("string")));
     }
 }
 
@@ -554,10 +461,8 @@ pub(crate) fn project_rmcp_tool_result(
 #[cfg(test)]
 mod tests {
     use super::{
-        MCP_IMAGE_MAX_BYTES, build_model_visible_tool_input_schema,
-        build_rmcp_call_tool_request_params, declared_openai_file_input_param_names,
-        rmcp_call_tool_result_to_value, rmcp_capabilities_support_prompts,
-        rmcp_capabilities_support_resources,
+        MCP_IMAGE_MAX_BYTES, build_rmcp_call_tool_request_params, rmcp_call_tool_result_to_value,
+        rmcp_capabilities_support_prompts, rmcp_capabilities_support_resources,
     };
     use rmcp::model::{CallToolResult, ServerCapabilities};
     use serde_json::{Value, json};
@@ -706,75 +611,5 @@ mod tests {
         assert!(rmcp_capabilities_support_resources(
             &ServerCapabilities::builder().enable_resources().build()
         ));
-    }
-
-    /// Verifies OpenAI-style file parameter metadata is parsed into a stable ordered field-name list.
-    /// 验证 OpenAI 风格文件参数元数据会被解析为稳定有序的字段名列表。
-    #[test]
-    fn declared_openai_file_input_param_names_reads_non_empty_entries() {
-        let meta = json!({
-            "openai/fileParams": ["document", "attachments", "", 7, null]
-        });
-
-        assert_eq!(
-            declared_openai_file_input_param_names(meta.as_object()),
-            vec![String::from("document"), String::from("attachments")]
-        );
-    }
-
-    /// Verifies model-visible MCP input schemas rewrite declared file-path parameters into scalar or array string contracts with explicit guidance text.
-    /// 验证模型可见 MCP 输入 Schema 会把声明的文件路径参数改写为带明确指引文本的标量或数组字符串契约。
-    #[test]
-    fn model_visible_input_schema_masks_declared_file_path_params() {
-        let input_schema = json!({
-            "type": "object",
-            "properties": {
-                "document": {
-                    "type": "object",
-                    "description": "Upload one source document."
-                },
-                "attachments": {
-                    "type": "array",
-                    "items": {
-                        "type": "object"
-                    }
-                },
-                "query": {
-                    "type": "string"
-                }
-            }
-        });
-        let meta = json!({
-            "openai/fileParams": ["document", "attachments"]
-        });
-
-        let visible_schema = build_model_visible_tool_input_schema(
-            input_schema
-                .as_object()
-                .expect("input schema should stay object"),
-            meta.as_object(),
-        );
-
-        assert_eq!(
-            visible_schema["properties"]["document"]["type"],
-            Value::String(String::from("string"))
-        );
-        assert_eq!(
-            visible_schema["properties"]["attachments"]["type"],
-            Value::String(String::from("array"))
-        );
-        assert_eq!(
-            visible_schema["properties"]["attachments"]["items"]["type"],
-            Value::String(String::from("string"))
-        );
-        assert_eq!(
-            visible_schema["properties"]["query"]["type"],
-            Value::String(String::from("string"))
-        );
-        let document_description = visible_schema["properties"]["document"]["description"]
-            .as_str()
-            .expect("document description should stay string");
-        assert!(document_description.contains("Upload one source document."));
-        assert!(document_description.contains("absolute local file path"));
     }
 }

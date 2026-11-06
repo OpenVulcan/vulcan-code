@@ -17,6 +17,10 @@ pub const LUASKILL_MAIN_HELP_FLOW: &str = "main";
 /// 内联注入的主帮助正文上限；更大的正文改为注入其说明与主题索引。
 pub const LUASKILL_MAIN_HELP_INLINE_LIMIT_BYTES: usize = 4 * 1024;
 
+/// Most schema names listed inline in one compact union branch note before the rest are counted.
+/// 单条紧凑联合分支说明内联列出的 schema 名称上限，其余只计数。
+const COMPACT_SCHEMA_VISIBLE_NAMES: usize = 8;
+
 /// How one enabled LuaSkills entry is registered for the model.
 /// 单个已启用 LuaSkills 入口面向模型的注册方式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -705,7 +709,7 @@ fn render_schema_union_branch_summary(index: usize, branch: &Value) -> String {
         if !required.is_empty() {
             segments.push(format!(
                 "requires {}",
-                render_compact_schema_name_list(&required, 8)
+                render_compact_schema_name_list(&required, COMPACT_SCHEMA_VISIBLE_NAMES)
             ));
         }
     }
@@ -714,7 +718,7 @@ fn render_schema_union_branch_summary(index: usize, branch: &Value) -> String {
         if !fields.is_empty() {
             segments.push(format!(
                 "fields {}",
-                render_compact_schema_name_list(&fields, 8)
+                render_compact_schema_name_list(&fields, COMPACT_SCHEMA_VISIBLE_NAMES)
             ));
         }
     }

@@ -644,6 +644,17 @@ fn build_fts_query(tokens: &[String], search_mode: bool) -> String {
         .join(if search_mode { " OR " } else { " " })
 }
 
+/// Reloads the shared tokenizer dictionary from the committed rows of the connection's database.
+/// 依据该连接所属数据库已提交的行重新加载共享分词词典。
+///
+/// Word mutations refresh the shared tokenizer at once, so a caller whose transaction rolls back
+/// calls this to drop the words that never committed.
+/// 词语变更会立即刷新共享分词器，因此事务回滚的调用方调用本函数以丢弃未提交的词。
+pub fn reload_custom_dictionary(connection: &Connection) -> EngineResult<()> {
+    ensure_jieba_tokenizer_registered(connection)?;
+    refresh_registered_dictionary(connection)
+}
+
 /// Refreshes the shared dictionary state for the connection's database.
 /// 刷新该连接所属数据库的共享词典状态。
 fn refresh_registered_dictionary(connection: &Connection) -> EngineResult<()> {
@@ -760,9 +771,11 @@ fn sqlite_connection_handle(connection: &Connection) -> usize {
 ///
 /// SQLite 通过 `fts5(?)` 虚表调用把指针写入 `p_ret`，返回前已做空值校验。
 fn fetch_fts5_api(connection: &Connection) -> EngineResult<*mut fts5_api> {
-    let p_ret: *mut fts5_api = ptr::null_mut();
+    // p_ret is mutable because SQLite writes the API pointer into it through the bound pointer.
+    // p_ret 必须可变，因为 SQLite 会通过绑定的指针向其写入 API 指针。
+    let mut p_ret: *mut fts5_api = ptr::null_mut();
     let ptr_arg = ToSqlOutput::Pointer((
-        &p_ret as *const *mut fts5_api as _,
+        &mut p_ret as *mut *mut fts5_api as _,
         SQLITE_FTS5_API_PTR_TYPE,
         None,
     ));
@@ -1191,6 +1204,32 @@ mod tests {
 
         let removed = remove_custom_word(&connection, "田-女士").expect("remove custom word");
         assert!(removed.success);
+    }
+
+    /// Verifies a reload after a rolled-back mutation drops the word that never committed.
+    /// 验证变更回滚后的重新加载会丢弃从未提交的词。
+    #[test]
+    fn reload_after_rollback_drops_uncommitted_words() {
+        let mut connection = registered_connection();
+        let has_word = |connection: &Connection| {
+            tokenize_text(
+                Some(connection),
+                TokenizerMode::Jieba,
+                "市民田-女士急匆匆",
+                false,
+            )
+            .expect("tokenize")
+            .tokens
+            .iter()
+            .any(|token| token == "田-女士")
+        };
+        {
+            let transaction = connection.transaction().expect("begin");
+            upsert_custom_word(&transaction, "田-女士", 42).expect("upsert custom word");
+            assert!(has_word(&transaction));
+        }
+        reload_custom_dictionary(&connection).expect("reload dictionary");
+        assert!(!has_word(&connection));
     }
 
     /// Verifies SQLite FTS5 `tokenize='jieba'` is truly registered and active.

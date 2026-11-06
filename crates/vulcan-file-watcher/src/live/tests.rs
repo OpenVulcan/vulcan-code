@@ -345,3 +345,27 @@ async fn raw_overflow_delivers_current_registered_roots() {
             > 0
     );
 }
+
+/// Verify a native rescan flag without paths invalidates every registered root.
+/// 验证不带路径的原生重新扫描标志会让全部注册根失效。
+#[tokio::test]
+async fn native_rescan_without_paths_delivers_registered_roots() {
+    let watcher = Arc::new(LiveFileWatcher::noop());
+    let (subscriber, mut receiver) = watcher.add_subscriber();
+    let root = std::env::temp_dir()
+        .canonicalize()
+        .expect("existing temporary root");
+    let _registration = subscriber.register_path(root.clone(), true);
+    let (sender, raw) = raw_events::channel(Arc::clone(&watcher.health));
+    watcher.spawn_event_loop(raw);
+    sender
+        .send(Ok(
+            Event::new(EventKind::Other).set_flag(notify::event::Flag::Rescan)
+        ))
+        .expect("inject native rescan");
+    let event = timeout(Duration::from_secs(2), receiver.recv())
+        .await
+        .expect("rescan wakes consumer")
+        .expect("root event");
+    assert_eq!(event.paths, vec![root]);
+}

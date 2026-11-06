@@ -703,7 +703,7 @@ pub fn query_json_bounded(
         let mut object = JsonMap::new();
         for (index, column_name) in column_names.iter().enumerate() {
             let value = row.get_ref(index).map_err(SqliteEngineError::sql)?;
-            object.insert(column_name.clone(), sqlite_value_ref_to_json(value));
+            object.insert(column_name.clone(), sqlite_value_ref_to_json(value, index)?);
         }
         if row_count > 1 {
             json_data.push(b',');
@@ -1055,13 +1055,11 @@ pub fn count_sql_statements(sql: &str) -> usize {
     statement_count
 }
 
-/// Converts a driver value reference into a JSON value.
-/// 将驱动值引用转换为 JSON 值。
-fn sqlite_value_ref_to_json(value: ValueRef<'_>) -> JsonValue {
-    match SqliteValue::try_from_value_ref(value, 0) {
-        Ok(value) => value.to_json(),
-        Err(_) => JsonValue::Null,
-    }
+/// Converts a driver value reference into a JSON value; TEXT that is not UTF-8 is an error, as in
+/// the Arrow path, never a silent NULL.
+/// 将驱动值引用转换为 JSON 值；非 UTF-8 的 TEXT 与 Arrow 路径一样报错，绝不静默变为 NULL。
+fn sqlite_value_ref_to_json(value: ValueRef<'_>, column_index: usize) -> EngineResult<JsonValue> {
+    SqliteValue::try_from_value_ref(value, column_index).map(|value| value.to_json())
 }
 
 /// Collects bound parameters as trait objects for rusqlite.
@@ -3056,5 +3054,15 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// Verifies TEXT that is not UTF-8 fails the JSON query instead of reading as NULL.
+    /// 验证非 UTF-8 的 TEXT 会使 JSON 查询失败，而不是读作 NULL。
+    #[test]
+    fn query_json_rejects_text_that_is_not_utf8() {
+        let connection = Connection::open_in_memory().expect("open in-memory database");
+        let error = query_json(&connection, "SELECT CAST(X'FF' AS TEXT) AS value", &[])
+            .expect_err("invalid UTF-8 text must fail");
+        assert!(matches!(error, SqliteEngineError::Sql { .. }));
     }
 }

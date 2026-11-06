@@ -580,8 +580,10 @@ fn validate_tool_arguments(
 }
 
 /// Follows transport events: a tool-list change marks the list stale, and a disconnect or a
-/// closed event stream closes the connection. Ends when the connection is dropped.
-/// 跟随传输事件：工具列表变化将列表标记为过期，断开或事件流关闭则关闭连接。连接释放时结束。
+/// closed event stream closes the connection. A disconnect also shuts the transport down, so a
+/// transport that would reconnect on its own (legacy SSE) stops. Ends when the connection is dropped.
+/// 跟随传输事件：工具列表变化将列表标记为过期，断开或事件流关闭则关闭连接。断开还会关闭传输，使会
+/// 自行重连的传输（旧式 SSE）停止。连接释放时结束。
 async fn follow_transport_events(
     connection: Weak<SessionMcpConnection>,
     mut events: broadcast::Receiver<McpTransportEvent>,
@@ -591,22 +593,35 @@ async fn follow_transport_events(
         let Some(connection) = connection.upgrade() else {
             return;
         };
-        let mut state = lock(&connection.state);
-        match event {
-            Ok(McpTransportEvent::ToolsChanged) | Err(RecvError::Lagged(_)) => {
-                state.tools_stale = true;
+        // The state lock is released before any await.
+        // 状态锁在任何 await 之前释放。
+        let disconnected = {
+            let mut state = lock(&connection.state);
+            match event {
+                Ok(McpTransportEvent::ToolsChanged) | Err(RecvError::Lagged(_)) => {
+                    state.tools_stale = true;
+                    false
+                }
+                Ok(McpTransportEvent::Disconnected { reason }) => {
+                    state.closed = Some(reason);
+                    true
+                }
+                Ok(McpTransportEvent::PromptsChanged | McpTransportEvent::ResourcesChanged) => {
+                    false
+                }
+                Err(RecvError::Closed) => {
+                    state
+                        .closed
+                        .get_or_insert_with(|| String::from("the transport stopped"));
+                    return;
+                }
             }
-            Ok(McpTransportEvent::Disconnected { reason }) => {
-                state.closed = Some(reason);
-                return;
-            }
-            Ok(McpTransportEvent::PromptsChanged | McpTransportEvent::ResourcesChanged) => {}
-            Err(RecvError::Closed) => {
-                state
-                    .closed
-                    .get_or_insert_with(|| String::from("the transport stopped"));
-                return;
-            }
+        };
+        if disconnected {
+            // Session connections never reconnect; a failed shutdown leaves nothing to report to.
+            // 会话连接绝不重连；关闭失败时没有可报告的对象。
+            let _ = connection.transport.shutdown().await;
+            return;
         }
     }
 }

@@ -171,8 +171,9 @@ mod tests {
         assert!(registration.observation_health().is_none());
     }
 
-    /// Verify real raw-loop errors and pathless rescan hints retain evidence without synthesizing events.
-    /// 验证真实原始循环错误和无路径重新扫描提示保留证据，不合成事件。
+    /// Verify raw-loop errors retain evidence without synthesizing events, while a pathless rescan
+    /// hint also invalidates the registered roots.
+    /// 验证原始循环错误保留证据且不合成事件，无路径重新扫描提示还会让注册根失效。
     #[tokio::test]
     async fn raw_loop_reports_gaps_without_new_path_notifications() {
         // Inject into the production raw-loop boundary while keeping OS notifications out of this fixture.
@@ -187,14 +188,22 @@ mod tests {
         sender
             .send(Err(notify::Error::generic("fixture backend error")))
             .expect("open raw loop");
-        sender
-            .send(Ok(Event::new(EventKind::Other).set_flag(Flag::Rescan)))
-            .expect("pathless rescan");
-        wait_health(&registration, 2, true).await;
+        wait_health(&registration, 1, true).await;
         assert!(
             timeout(Duration::from_millis(10), receiver.recv())
                 .await
                 .is_err()
+        );
+        sender
+            .send(Ok(Event::new(EventKind::Other).set_flag(Flag::Rescan)))
+            .expect("pathless rescan");
+        wait_health(&registration, 2, true).await;
+        assert_eq!(
+            timeout(Duration::from_secs(2), receiver.recv())
+                .await
+                .expect("rescan delivery")
+                .map(|event| event.paths),
+            Some(vec![root.clone()])
         );
         sender
             .send(Ok(Event::new(EventKind::Modify(

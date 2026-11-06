@@ -474,3 +474,47 @@ async fn listener_can_be_removed_by_id() {
             .is_empty()
     );
 }
+
+#[tokio::test]
+async fn observe_hook_cannot_replace_payload_or_stop_the_chain() {
+    let mut registry = HookRegistry::new();
+    registry
+        .register(
+            registration("observe", HookMode::Observe),
+            Arc::new(FnHookHandler::new(|_invocation: HookInvocation| async {
+                Ok(HookResult {
+                    payload: Some(
+                        HookPayload::from_serializable(json!({"value": 9}))
+                            .expect("payload should serialize"),
+                    ),
+                    decision: Some(HookDecision::Block),
+                    ..HookResult::default()
+                })
+            })),
+        )
+        .expect("registration should succeed");
+    registry
+        .register(
+            registration("after", HookMode::Observe),
+            Arc::new(FnHookHandler::new(
+                |invocation: HookInvocation| async move {
+                    assert_eq!(invocation.payload.value["value"], json!(1));
+                    Ok(HookResult::default())
+                },
+            )),
+        )
+        .expect("registration should succeed");
+
+    let report = HookDispatcher::new(registry)
+        .dispatch(request())
+        .await
+        .expect("dispatch should succeed");
+
+    assert_eq!(report.payload.value["value"], json!(1));
+    assert_eq!(report.decision, HookDecision::Continue);
+    assert_eq!(report.completed_hooks, vec!["observe", "after"]);
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.severity == HookDiagnosticSeverity::Warning
+            && diagnostic.hook_id.as_deref() == Some("observe")
+    }));
+}

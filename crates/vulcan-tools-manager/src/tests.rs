@@ -916,3 +916,36 @@ fn read_only_heuristic_rejects_keywords_inside_other_words_and_write_verbs() {
         );
     }
 }
+
+/// Verifies Gemini projection keeps the JSON type of integer and boolean enums and lists their
+/// values in the description, while string enums stay enums.
+/// 验证 Gemini 投影保留整数与布尔枚举的 JSON 类型并在描述中列出可选值，字符串枚举仍保持枚举。
+#[test]
+fn gemini_slim_projection_keeps_non_string_enum_types() {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "level": { "type": "integer", "enum": [1, 2, 3], "description": "Depth." },
+            "flag": { "type": "boolean", "enum": [true] },
+            "mode": { "type": "string", "enum": ["fast", "slow"] }
+        }
+    });
+
+    let projected =
+        project_tool_parameters_schema(&schema, VulcanToolSchemaProjectionProfile::GeminiSlim);
+
+    let level = &projected["properties"]["level"];
+    assert_eq!(level["type"], json!("integer"));
+    assert!(level["enum"].is_null());
+    assert_eq!(
+        level["description"],
+        json!("Depth. Allowed values: 1, 2, 3.")
+    );
+    let flag = &projected["properties"]["flag"];
+    assert_eq!(flag["type"], json!("boolean"));
+    assert!(flag["enum"].is_null());
+    assert_eq!(
+        projected["properties"]["mode"]["enum"],
+        json!(["fast", "slow"])
+    );
+}

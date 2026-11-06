@@ -550,33 +550,7 @@ fn interactions_usage_profiles() -> Vec<UsageExtractionProfile> {
 /// Builds standard Responses body and terminal-event profiles.
 /// 构建标准 Responses 正文与终态事件 Profile。
 fn responses_usage_profiles() -> Vec<UsageExtractionProfile> {
-    let bindings = vec![
-        token_binding(UsageField::InputTokens, "/usage/input_tokens"),
-        token_binding(
-            UsageField::CacheReadTokens,
-            "/usage/input_tokens_details/cached_tokens",
-        ),
-        token_binding(
-            UsageField::CacheWriteTokens,
-            "/usage/input_tokens_details/cache_write_tokens",
-        ),
-        token_binding(UsageField::OutputTokens, "/usage/output_tokens"),
-        token_binding(
-            UsageField::ReasoningTokens,
-            "/usage/output_tokens_details/reasoning_tokens",
-        ),
-        token_binding(
-            UsageField::AudioInputTokens,
-            "/usage/input_tokens_details/audio_tokens",
-        ),
-        token_binding(
-            UsageField::AudioOutputTokens,
-            "/usage/output_tokens_details/audio_tokens",
-        ),
-        token_binding(UsageField::TotalTokens, "/usage/total_tokens"),
-        string_binding(UsageField::ResponseModel, "/model"),
-        string_binding(UsageField::ResponseId, "/id"),
-    ];
+    let bindings = responses_usage_bindings();
     vec![
         UsageExtractionProfile {
             profile_id: String::from("openai.responses.body.v1"),
@@ -597,18 +571,18 @@ fn responses_usage_profiles() -> Vec<UsageExtractionProfile> {
             event_type_pointer: Some(String::from("/type")),
             event_type_value: Some(String::from("response.completed")),
             required_pointer: Some(String::from("/response/usage")),
-            bindings: prefix_bindings(bindings, "/response"),
+            bindings: prefix_bindings(bindings.clone(), "/response"),
             derivations: vec![UsageDerivation::UncachedInputFromInputMinusCacheRead],
         },
         UsageExtractionProfile {
             profile_id: String::from("openai.responses.ws.completed.v1"),
-            revision: 2,
+            revision: 3,
             record_kind: UsageRecordKind::WebSocketFrame,
             update_kind: UsageUpdateKind::Final,
             event_type_pointer: Some(String::from("/type")),
             event_type_value: Some(String::from("response.completed")),
             required_pointer: Some(String::from("/response/usage")),
-            bindings: prefix_bindings(responses_usage_bindings(), "/response"),
+            bindings: prefix_bindings(bindings, "/response"),
             derivations: vec![UsageDerivation::UncachedInputFromInputMinusCacheRead],
         },
     ]
@@ -817,8 +791,9 @@ fn code_assist_usage_profiles() -> Vec<UsageExtractionProfile> {
         .collect()
 }
 
-/// Returns canonical Responses usage bindings without an event envelope.
-/// 返回不含事件信封的规范 Responses 用量绑定。
+/// Returns canonical Responses usage bindings without an event envelope; body, SSE and WebSocket
+/// profiles all derive from this one list.
+/// 返回不含事件信封的规范 Responses 用量绑定；正文、SSE 与 WebSocket Profile 都由这一份列表派生。
 fn responses_usage_bindings() -> Vec<UsageFieldBinding> {
     vec![
         token_binding(UsageField::InputTokens, "/usage/input_tokens"),
@@ -834,6 +809,14 @@ fn responses_usage_bindings() -> Vec<UsageFieldBinding> {
         token_binding(
             UsageField::ReasoningTokens,
             "/usage/output_tokens_details/reasoning_tokens",
+        ),
+        token_binding(
+            UsageField::AudioInputTokens,
+            "/usage/input_tokens_details/audio_tokens",
+        ),
+        token_binding(
+            UsageField::AudioOutputTokens,
+            "/usage/output_tokens_details/audio_tokens",
         ),
         token_binding(UsageField::TotalTokens, "/usage/total_tokens"),
         string_binding(UsageField::ResponseModel, "/model"),

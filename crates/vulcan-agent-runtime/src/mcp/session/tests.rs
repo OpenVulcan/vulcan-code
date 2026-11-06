@@ -209,6 +209,9 @@ async fn tool_changes_relist_and_disconnects_close_the_connection() {
         .unwrap();
     let closed = wait_until(|| async { registry.snapshot(root, &id).unwrap().closed }).await;
     assert_eq!(closed, "server exited");
+    // The disconnect also stops the transport, so it cannot reconnect on its own.
+    // 断开同时停止传输，使其无法自行重连。
+    wait_until(|| async { (transport.shutdowns.load(Ordering::SeqCst) == 1).then_some(()) }).await;
     assert!(registry.call(root, &id, "click", json!({})).await.is_err());
 
     registry.disconnect(root, &id).await.unwrap();

@@ -21,9 +21,9 @@ use rmcp::model::{
     GetPromptRequest, GetPromptRequestParams, GetPromptResult, Implementation, InitializeRequest,
     InitializeRequestParams, InitializedNotification, JsonRpcMessage, ListPromptsRequest,
     ListPromptsResult, ListResourcesRequest, ListResourcesResult, ListToolsRequest,
-    ListToolsResult, NumberOrString, Prompt, ReadResourceRequest, ReadResourceRequestParams,
-    ReadResourceResult, RequestId, Resource, ServerCapabilities, ServerJsonRpcMessage,
-    ServerNotification, ServerResult,
+    ListToolsResult, NumberOrString, PaginatedRequestParams, Prompt, ReadResourceRequest,
+    ReadResourceRequestParams, ReadResourceResult, RequestId, Resource, ServerCapabilities,
+    ServerJsonRpcMessage, ServerNotification, ServerResult,
 };
 use serde_json::Value;
 use sse_stream::{Sse, SseStream};
@@ -49,6 +49,66 @@ use crate::transport::{McpToolSchema, McpTransport, McpTransportEvent};
 /// 按 JSON-RPC 请求标识索引的后台响应通道发送端。
 type PendingResponseMap =
     Arc<Mutex<HashMap<String, oneshot::Sender<Result<ServerJsonRpcMessage, McpRuntimeError>>>>>;
+
+/// Cursor state of one paginated list, which follows `nextCursor` like rmcp's `list_all_*`.
+/// 一次分页列表的游标状态，与 rmcp 的 `list_all_*` 一样跟随 `nextCursor`。
+#[derive(Default)]
+struct PageCursors {
+    current: Option<String>,
+    seen: std::collections::HashSet<String>,
+}
+
+impl PageCursors {
+    /// Request parameters for the next page; the first page carries none.
+    /// 下一页的请求参数；第一页不带参数。
+    fn params(&self) -> Option<PaginatedRequestParams> {
+        self.current
+            .as_ref()
+            .map(|cursor| PaginatedRequestParams::default().with_cursor(Some(cursor.clone())))
+    }
+
+    /// Moves to `next`; returns whether another page follows. A repeated cursor is an error, so a
+    /// misbehaving server cannot loop forever.
+    /// 移动到 `next`；返回是否还有下一页。重复的游标是错误，使行为异常的服务器无法无限循环。
+    fn advance(&mut self, next: Option<String>, method: &str) -> Result<bool, McpRuntimeError> {
+        let Some(next) = next else {
+            return Ok(false);
+        };
+        if !self.seen.insert(next.clone()) {
+            return Err(McpRuntimeError::transport(format!(
+                "legacy SSE {method} repeated the page cursor `{next}`"
+            )));
+        }
+        self.current = Some(next);
+        Ok(true)
+    }
+}
+
+/// Removes one pending response entry when its request ends in any way: answered, failed, timed
+/// out or cancelled.
+/// 在请求以任何方式结束时（已应答、失败、超时或被取消）移除其等待响应条目。
+struct PendingResponseGuard {
+    map: PendingResponseMap,
+    key: String,
+}
+
+impl Drop for PendingResponseGuard {
+    fn drop(&mut self) {
+        if let Ok(mut map) = self.map.try_lock() {
+            map.remove(&self.key);
+            return;
+        }
+        // The map is busy; remove the entry once it is free, if a runtime is still running.
+        // 映射正忙；若运行时仍在运行，则在其空闲后移除条目。
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let map = Arc::clone(&self.map);
+            let key = std::mem::take(&mut self.key);
+            runtime.spawn(async move {
+                map.lock().await.remove(&key);
+            });
+        }
+    }
+}
 
 /// Sole reconnect delay for the legacy listener; shutdown interrupts this wait.
 /// 旧式监听器重连延迟的唯一定义；关闭中断此等待。
@@ -253,6 +313,10 @@ impl SseTransport {
             .lock()
             .await
             .insert(request_key.clone(), sender);
+        let _pending = PendingResponseGuard {
+            map: Arc::clone(&self.pending_responses),
+            key: request_key.clone(),
+        };
 
         let message_endpoint = self.resolve_message_endpoint().await?;
         let post_result = post_client_message(
@@ -267,10 +331,7 @@ impl SseTransport {
 
         let response = match post_result {
             Ok(response) => match consume_post_response(response).await {
-                Ok(Some(immediate)) => {
-                    self.pending_responses.lock().await.remove(&request_key);
-                    immediate
-                }
+                Ok(Some(immediate)) => immediate,
                 Ok(None) => timeout(Duration::from_secs(30), receiver)
                     .await
                     .map_err(|_| {
@@ -285,15 +346,9 @@ impl SseTransport {
                             request_key
                         ))
                     })??,
-                Err(error) => {
-                    self.pending_responses.lock().await.remove(&request_key);
-                    return Err(error);
-                }
+                Err(error) => return Err(error),
             },
-            Err(error) => {
-                self.pending_responses.lock().await.remove(&request_key);
-                return Err(error);
-            }
+            Err(error) => return Err(error),
         };
 
         Ok(response)
@@ -384,55 +439,78 @@ impl McpTransport for SseTransport {
     }
 
     async fn list_tools(&self) -> Result<Vec<McpToolSchema>, McpRuntimeError> {
-        let request_id = self.next_request_id();
-        let request = ListToolsRequest {
-            method: Default::default(),
-            params: None,
-            extensions: Default::default(),
-        };
-        let response = self
-            .send_request_and_wait(
-                request_id.clone(),
-                ClientJsonRpcMessage::request(ClientRequest::ListToolsRequest(request), request_id),
-            )
-            .await?;
-        let ServerResult::ListToolsResult(ListToolsResult { tools, .. }) =
-            extract_server_result(response)?
-        else {
-            return Err(McpRuntimeError::transport(
-                "legacy SSE tools/list did not return a listTools result".to_string(),
-            ));
-        };
-        Ok(tools.into_iter().map(rmcp_tool_to_schema).collect())
+        let mut tools = Vec::new();
+        let mut cursors = PageCursors::default();
+        loop {
+            let request_id = self.next_request_id();
+            let request = ListToolsRequest {
+                method: Default::default(),
+                params: cursors.params(),
+                extensions: Default::default(),
+            };
+            let response = self
+                .send_request_and_wait(
+                    request_id.clone(),
+                    ClientJsonRpcMessage::request(
+                        ClientRequest::ListToolsRequest(request),
+                        request_id,
+                    ),
+                )
+                .await?;
+            let ServerResult::ListToolsResult(ListToolsResult {
+                tools: page,
+                next_cursor,
+                ..
+            }) = extract_server_result(response)?
+            else {
+                return Err(McpRuntimeError::transport(
+                    "legacy SSE tools/list did not return a listTools result".to_string(),
+                ));
+            };
+            tools.extend(page.into_iter().map(rmcp_tool_to_schema));
+            if !cursors.advance(next_cursor, "tools/list")? {
+                return Ok(tools);
+            }
+        }
     }
 
     async fn list_prompts(&self) -> Result<Vec<Prompt>, McpRuntimeError> {
         if !self.supports_prompt_capability() {
             return Ok(Vec::new());
         }
-        let request_id = self.next_request_id();
-        let request = ListPromptsRequest {
-            method: Default::default(),
-            params: None,
-            extensions: Default::default(),
-        };
-        let response = self
-            .send_request_and_wait(
-                request_id.clone(),
-                ClientJsonRpcMessage::request(
-                    ClientRequest::ListPromptsRequest(request),
-                    request_id,
-                ),
-            )
-            .await?;
-        let ServerResult::ListPromptsResult(ListPromptsResult { prompts, .. }) =
-            extract_server_result(response)?
-        else {
-            return Err(McpRuntimeError::transport(
-                "legacy SSE prompts/list did not return a listPrompts result".to_string(),
-            ));
-        };
-        Ok(prompts)
+        let mut prompts = Vec::new();
+        let mut cursors = PageCursors::default();
+        loop {
+            let request_id = self.next_request_id();
+            let request = ListPromptsRequest {
+                method: Default::default(),
+                params: cursors.params(),
+                extensions: Default::default(),
+            };
+            let response = self
+                .send_request_and_wait(
+                    request_id.clone(),
+                    ClientJsonRpcMessage::request(
+                        ClientRequest::ListPromptsRequest(request),
+                        request_id,
+                    ),
+                )
+                .await?;
+            let ServerResult::ListPromptsResult(ListPromptsResult {
+                prompts: page,
+                next_cursor,
+                ..
+            }) = extract_server_result(response)?
+            else {
+                return Err(McpRuntimeError::transport(
+                    "legacy SSE prompts/list did not return a listPrompts result".to_string(),
+                ));
+            };
+            prompts.extend(page);
+            if !cursors.advance(next_cursor, "prompts/list")? {
+                return Ok(prompts);
+            }
+        }
     }
 
     async fn get_prompt(
@@ -466,29 +544,39 @@ impl McpTransport for SseTransport {
         if !self.supports_resource_capability() {
             return Ok(Vec::new());
         }
-        let request_id = self.next_request_id();
-        let request = ListResourcesRequest {
-            method: Default::default(),
-            params: None,
-            extensions: Default::default(),
-        };
-        let response = self
-            .send_request_and_wait(
-                request_id.clone(),
-                ClientJsonRpcMessage::request(
-                    ClientRequest::ListResourcesRequest(request),
-                    request_id,
-                ),
-            )
-            .await?;
-        let ServerResult::ListResourcesResult(ListResourcesResult { resources, .. }) =
-            extract_server_result(response)?
-        else {
-            return Err(McpRuntimeError::transport(
-                "legacy SSE resources/list did not return a listResources result".to_string(),
-            ));
-        };
-        Ok(resources)
+        let mut resources = Vec::new();
+        let mut cursors = PageCursors::default();
+        loop {
+            let request_id = self.next_request_id();
+            let request = ListResourcesRequest {
+                method: Default::default(),
+                params: cursors.params(),
+                extensions: Default::default(),
+            };
+            let response = self
+                .send_request_and_wait(
+                    request_id.clone(),
+                    ClientJsonRpcMessage::request(
+                        ClientRequest::ListResourcesRequest(request),
+                        request_id,
+                    ),
+                )
+                .await?;
+            let ServerResult::ListResourcesResult(ListResourcesResult {
+                resources: page,
+                next_cursor,
+                ..
+            }) = extract_server_result(response)?
+            else {
+                return Err(McpRuntimeError::transport(
+                    "legacy SSE resources/list did not return a listResources result".to_string(),
+                ));
+            };
+            resources.extend(page);
+            if !cursors.advance(next_cursor, "resources/list")? {
+                return Ok(resources);
+            }
+        }
     }
 
     async fn read_resource(&self, uri: &str) -> Result<ReadResourceResult, McpRuntimeError> {
@@ -923,4 +1011,32 @@ async fn resolve_effective_bearer_token(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PageCursors;
+
+    /// Verifies list pages follow `nextCursor` and stop on a repeated cursor.
+    /// 验证列表分页跟随 `nextCursor`，并在游标重复时停止。
+    #[test]
+    fn page_cursors_follow_next_cursor_and_refuse_repeats() {
+        let mut cursors = PageCursors::default();
+        assert!(cursors.params().is_none());
+        assert!(
+            cursors
+                .advance(Some(String::from("p2")), "tools/list")
+                .unwrap()
+        );
+        assert_eq!(
+            cursors.params().and_then(|params| params.cursor).as_deref(),
+            Some("p2")
+        );
+        assert!(
+            cursors
+                .advance(Some(String::from("p2")), "tools/list")
+                .is_err()
+        );
+        assert!(!cursors.advance(None, "tools/list").unwrap());
+    }
 }

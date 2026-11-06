@@ -16,7 +16,10 @@ import urllib.error
 import urllib.parse
 import zipfile
 
+from pathlib import Path
+
 from github_utils import github_request
+from skill_identity import SkillIdentityError, align_skill_name
 DEFAULT_REF = "main"
 
 
@@ -296,6 +299,10 @@ def main(argv: list[str]) -> int:
                     raise InstallError(f"Destination already exists: {dest_dir}")
                 skill_src = os.path.join(repo_root, path)
                 _validate_skill(skill_src)
+                # The loader requires SKILL.md `name` to equal the directory name; the checkout is
+                # temporary, so it is aligned before copying.
+                # 加载器要求 SKILL.md 的 `name` 等于目录名；检出目录是临时的，因此复制前先对齐。
+                align_skill_name(Path(skill_src), skill_name)
                 _copy_skill(skill_src, dest_dir)
                 installed.append((skill_name, dest_dir))
         finally:
@@ -304,7 +311,7 @@ def main(argv: list[str]) -> int:
         for skill_name, dest_dir in installed:
             print(f"Installed {skill_name} to {dest_dir}")
         return 0
-    except InstallError as exc:
+    except (InstallError, SkillIdentityError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 

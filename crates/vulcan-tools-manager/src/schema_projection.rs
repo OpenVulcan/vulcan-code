@@ -727,30 +727,26 @@ fn sanitize_gemini_node(schema: &Value) -> Value {
 /// 在 Gemini 投影前清理单个对象形 JSON Schema 节点。
 fn sanitize_gemini_object(object: &Map<String, Value>) -> Value {
     let mut sanitized = Map::new();
+    let mut non_string_enum = None;
     for (key, value) in object {
         if key == "enum"
             && let Value::Array(items) = value
         {
-            sanitized.insert(
-                key.clone(),
-                Value::Array(
-                    items
-                        .iter()
-                        .map(|item| Value::String(enum_value_to_string(item)))
-                        .collect(),
-                ),
-            );
+            // Gemini declarations accept only string enums. A non-string enum keeps its real type
+            // and moves its values into the description, so arguments keep their JSON type.
+            // Gemini 声明只接受字符串枚举。非字符串枚举保留真实类型，并把可选值移入描述，使参数保持其
+            // JSON 类型。
+            if items.iter().all(Value::is_string) {
+                sanitized.insert(key.clone(), value.clone());
+            } else {
+                non_string_enum = Some(items);
+            }
             continue;
         }
         sanitized.insert(key.clone(), sanitize_gemini_node(value));
     }
-
-    if matches!(
-        sanitized.get("type").and_then(Value::as_str),
-        Some("number" | "integer")
-    ) && sanitized.contains_key("enum")
-    {
-        sanitized.insert(String::from("type"), Value::String(String::from("string")));
+    if let Some(items) = non_string_enum {
+        move_gemini_enum_into_description(&mut sanitized, items);
     }
 
     infer_gemini_container_type_without_mode_branch_expansion(&mut sanitized);
@@ -780,13 +776,26 @@ fn infer_gemini_container_type_without_mode_branch_expansion(object: &mut Map<St
     }
 }
 
-/// Converts one enum value into the string form accepted by Gemini function declarations.
-/// 将单个枚举值转换为 Gemini 函数声明可接受的字符串形式。
-fn enum_value_to_string(value: &Value) -> String {
-    match value {
-        Value::String(text) => text.clone(),
-        other => other.to_string(),
+/// Records a non-string enum as allowed values in the description, inferring a missing type from
+/// the first value.
+/// 把非字符串枚举作为可选值记入描述，并在缺少类型时按第一个值推断。
+fn move_gemini_enum_into_description(object: &mut Map<String, Value>, items: &[Value]) {
+    if !object.contains_key("type")
+        && let Some(type_name) = items.first().and_then(lightweight_enum_value_type_name)
+    {
+        object.insert(String::from("type"), Value::String(String::from(type_name)));
     }
+    let allowed = items
+        .iter()
+        .map(Value::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let note = format!("Allowed values: {allowed}.");
+    let description = match object.get("description").and_then(Value::as_str) {
+        Some(existing) if !existing.trim().is_empty() => format!("{} {note}", existing.trim_end()),
+        _ => note,
+    };
+    object.insert(String::from("description"), Value::String(description));
 }
 
 /// Filters `required` entries to names declared in the same `properties` object.

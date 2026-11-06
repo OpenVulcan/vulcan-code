@@ -50,6 +50,14 @@ pub const VULCAN_SKILL_METADATA_SCHEMA_VERSION: u32 = 3;
 /// 宿主管理逻辑目录要求的结构版本。
 pub const VULCAN_SKILL_CATALOG_SCHEMA_VERSION: u32 = 1;
 
+/// Most characters in a skill `description`, checked when writing and loading a package.
+/// 技能 `description` 的最大字符数，写入与加载技能包时都按此校验。
+pub const PROMPT_SKILL_DESCRIPTION_MAX_CHARS: usize = 1024;
+
+/// Most characters in a skill `compatibility` statement, checked when writing and loading a package.
+/// 技能 `compatibility` 说明的最大字符数，写入与加载技能包时都按此校验。
+pub const PROMPT_SKILL_COMPATIBILITY_MAX_CHARS: usize = 500;
+
 /// Monotonic suffix used to isolate concurrent filesystem transactions.
 /// 用于隔离并发文件系统事务的单调递增后缀。
 static PROMPT_SKILL_TRANSACTION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
@@ -1327,6 +1335,11 @@ pub fn save_user_prompt_skill_catalog_assignment(
     category_id: &str,
     tags: Vec<String>,
 ) -> Result<(), String> {
+    if category_id == PLUGIN_CATEGORY_ID {
+        return Err(String::from(
+            "The `plugins` prompt skill category cannot receive manual assignments.",
+        ));
+    }
     validate_prompt_skill_name(Path::new(SKILL_FILE_NAME), name).map_err(|error| error.message)?;
     if let Some(original_name) = original_name {
         validate_prompt_skill_name(Path::new(SKILL_FILE_NAME), original_name)
@@ -1360,18 +1373,20 @@ pub fn save_user_prompt_skill_catalog_assignment(
 /// Validates all package input fields that are not covered by the standard parser.
 /// 校验标准解析器未覆盖的全部技能包输入字段。
 fn validate_prompt_skill_package_input(input: &PromptSkillPackageInput) -> Result<(), String> {
-    if input.description.trim().is_empty() || input.description.chars().count() > 1024 {
-        return Err(String::from(
-            "Agent Skill description must contain 1 to 1024 characters.",
+    if input.description.trim().is_empty()
+        || input.description.chars().count() > PROMPT_SKILL_DESCRIPTION_MAX_CHARS
+    {
+        return Err(format!(
+            "Agent Skill description must contain 1 to {PROMPT_SKILL_DESCRIPTION_MAX_CHARS} characters."
         ));
     }
     if input
         .compatibility
         .as_deref()
-        .is_some_and(|value| value.chars().count() > 500)
+        .is_some_and(|value| value.chars().count() > PROMPT_SKILL_COMPATIBILITY_MAX_CHARS)
     {
-        return Err(String::from(
-            "Agent Skill compatibility must not exceed 500 characters.",
+        return Err(format!(
+            "Agent Skill compatibility must not exceed {PROMPT_SKILL_COMPATIBILITY_MAX_CHARS} characters."
         ));
     }
     if input.origin.kind.trim().is_empty() {
@@ -2129,11 +2144,11 @@ pub fn parse_prompt_skill_text_with_scope(
     // Normalize and validate the model-facing trigger description.
     // 规范化并校验面向模型的触发说明。
     let description = parsed.description.trim().to_string();
-    if description.is_empty() || description.chars().count() > 1024 {
+    if description.is_empty() || description.chars().count() > PROMPT_SKILL_DESCRIPTION_MAX_CHARS {
         return Err(PromptSkillLoadError {
             path: skill_file.to_path_buf(),
-            message: String::from(
-                "Skill frontmatter field `description` must contain 1 to 1024 characters.",
+            message: format!(
+                "Skill frontmatter field `description` must contain 1 to {PROMPT_SKILL_DESCRIPTION_MAX_CHARS} characters."
             ),
         });
     }
@@ -2142,12 +2157,12 @@ pub fn parse_prompt_skill_text_with_scope(
     let compatibility = normalize_optional_string(parsed.compatibility);
     if compatibility
         .as_ref()
-        .is_some_and(|value| value.chars().count() > 500)
+        .is_some_and(|value| value.chars().count() > PROMPT_SKILL_COMPATIBILITY_MAX_CHARS)
     {
         return Err(PromptSkillLoadError {
             path: skill_file.to_path_buf(),
-            message: String::from(
-                "Skill frontmatter field `compatibility` must not exceed 500 characters.",
+            message: format!(
+                "Skill frontmatter field `compatibility` must not exceed {PROMPT_SKILL_COMPATIBILITY_MAX_CHARS} characters."
             ),
         });
     }

@@ -544,9 +544,11 @@ fn custom_segment_cache_preserves_typed_baseline_provenance() {
 #[test]
 fn subagent_clone_mode_adds_identity_without_functional_system_prompt() {
     let engine = PromptComposerEngine::with_builtins();
+    // A functional prompt is supplied so the test can tell that clone mode leaves it out.
+    // 提供功能提示词，使测试能判断分身模式没有使用它。
     let input = subagent_prompt_input(
         PromptAssemblyMode::SubagentClone,
-        Some(String::from("Review the authentication changes.")),
+        Some(String::from("Specialist reviewer mode.")),
     );
 
     let output = engine.compose(&input).expect("compose should succeed");
@@ -561,6 +563,11 @@ fn subagent_clone_mode_adds_identity_without_functional_system_prompt() {
     assert!(
         !output
             .render_system_text()
+            .contains("Specialist reviewer mode")
+    );
+    assert!(
+        !output
+            .render_developer_text()
             .contains("Specialist reviewer mode")
     );
 }

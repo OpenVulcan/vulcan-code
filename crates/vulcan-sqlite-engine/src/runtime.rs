@@ -442,8 +442,13 @@ pub fn apply_sqlite_connection_pragmas(
         .map_err(SqliteEngineError::sql)?;
     conn.pragma_update(None, "trusted_schema", options.hardening.trusted_schema)
         .map_err(SqliteEngineError::sql)?;
-    conn.pragma_update(None, "defensive", options.hardening.defensive)
-        .map_err(SqliteEngineError::sql)?;
+    // SQLite has no `defensive` PRAGMA; the flag is a connection configuration option.
+    // SQLite 没有 `defensive` PRAGMA；该标志是连接配置选项。
+    conn.set_db_config(
+        rusqlite::config::DbConfig::SQLITE_DBCONFIG_DEFENSIVE,
+        options.hardening.defensive,
+    )
+    .map_err(SqliteEngineError::sql)?;
     conn.pragma_update(None, "cache_size", cache_size_pragma)
         .map_err(SqliteEngineError::sql)?;
     conn.pragma_update(None, "mmap_size", mmap_size_bytes)
@@ -709,6 +714,33 @@ mod tests {
         assert!(!hardening.read_only);
         assert!(!hardening.trusted_schema);
         assert!(hardening.defensive);
+    }
+
+    /// Verifies the declared defensive flag reaches the connection configuration.
+    /// 验证声明的 defensive 标志实际写入连接配置。
+    #[test]
+    fn defensive_option_reaches_the_connection() {
+        use rusqlite::config::DbConfig;
+        let temp = tempfile::tempdir().expect("temp dir");
+        for defensive in [true, false] {
+            let options = SqliteOpenOptions {
+                hardening: SqliteHardeningOptions {
+                    defensive,
+                    enforce_db_file_lock: false,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let connection =
+                open_sqlite_connection(&temp.path().join(format!("{defensive}.db")), &options)
+                    .expect("open connection");
+            assert_eq!(
+                connection
+                    .db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE)
+                    .expect("read defensive flag"),
+                defensive
+            );
+        }
     }
 
     /// Verifies read-only mode sets the read-only open flag and omits create.

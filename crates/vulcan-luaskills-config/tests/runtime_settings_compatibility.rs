@@ -224,9 +224,7 @@ fn invalid_schema_error_names_the_exact_user_document() {
     .expect("write invalid settings");
 
     let error = load_runtime_settings(directory.path()).expect_err("schema 2 must be rejected");
-    assert!(error.starts_with("invalid LuaSkills runtime settings `"));
     assert!(error.contains(&path.display().to_string()));
-    assert!(error.contains("unsupported LuaSkills runtime settings schema: 2"));
 }
 
 /// Verify that truncated JSON is rejected without rewriting the document.

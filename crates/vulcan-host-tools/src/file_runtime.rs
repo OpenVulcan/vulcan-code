@@ -2420,12 +2420,15 @@ fn plan_patch_replacements(
     let mut cursor = 0usize;
     let mut cumulative_delta = 0isize;
     for (hunk_index, hunk) in hunks.iter().enumerate() {
+        // The patch parser drops trailing whitespace from `@@` anchors, so source lines are compared
+        // the same way.
+        // 补丁解析器会去掉 `@@` 锚点的行尾空白，因此源码行按相同方式比较。
         let anchor_start = match hunk.context.as_deref() {
             Some(context) => working
                 .iter()
                 .enumerate()
                 .skip(cursor)
-                .find(|(_, line)| line.as_str() == context)
+                .find(|(_, line)| line.trim_end() == context.trim_end())
                 .map(|(index, _)| index + 1)
                 .ok_or_else(|| {
                     FileToolError::new(

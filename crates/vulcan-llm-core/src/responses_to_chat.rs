@@ -31,6 +31,7 @@ pub(crate) fn responses_to_chat_completions_with_media(
     copy_if_present(&body, &mut result, "frequency_penalty");
     copy_if_present(&body, &mut result, "presence_penalty");
     copy_if_present(&body, &mut result, "stop");
+    copy_if_present(&body, &mut result, "parallel_tool_calls");
     if let Some(response_format) = body.get("response_format") {
         result.insert("response_format".to_string(), response_format.clone());
     } else if let Some(text_format) = body.pointer("/text/format") {

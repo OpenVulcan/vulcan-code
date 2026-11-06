@@ -375,6 +375,23 @@ mod tests {
         assert!(result.get("enable_thinking").is_none());
     }
 
+    /// Verifies Chat keeps an explicit parallel tool-call choice while tools are present.
+    /// 验证存在工具时 Chat 保留显式的并行工具调用选择。
+    #[test]
+    fn chat_keeps_parallel_tool_calls_with_tools() {
+        let tool = json!({"type":"function","name":"lookup","parameters":{"type":"object"}});
+        let body = json!({
+            "model":"test-chat", "input":"hi", "tools":[tool], "parallel_tool_calls": false
+        });
+        let converted = responses_to_chat_completions(body).expect("Chat request");
+        assert_eq!(converted["parallel_tool_calls"], json!(false));
+        let without_tools = responses_to_chat_completions(
+            json!({"model":"test-chat", "input":"hi", "parallel_tool_calls": false}),
+        )
+        .expect("Chat request");
+        assert!(without_tools.get("parallel_tool_calls").is_none());
+    }
+
     /// Verifies Chat maps developer instructions to system without losing array content or ordinary roles.
     /// 验证 Chat 将 developer 指令映射到 system，且不丢失数组文本或普通角色。
     #[test]

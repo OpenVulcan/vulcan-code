@@ -103,14 +103,17 @@ impl KnowledgeBaseRuntime {
         local_sql::with_connection_async(&self.host_runtime.local, self.resolve_library_binding(&binding_id)?, move |connection| {
             // Dictionary content, revision and derived index publish together.
             // 词典内容、修订及派生索引共同发布。
-            let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|error|error.to_string())?;
-            match weight {
-                Some(weight) => { tokenizer::upsert_custom_word(&transaction, &word, weight as usize).map_err(|error|error.to_string())?; }
-                None => { tokenizer::remove_custom_word(&transaction, &word).map_err(|error|error.to_string())?; }
-            }
-            transaction.execute("UPDATE knowledge_metadata SET value=CAST(value AS INTEGER)+1 WHERE key='dictionary_revision';", []).map_err(|error|error.to_string())?;
-            rebuild_fts(&transaction, settings.index_mode.has_fts())?;
-            transaction.commit().map_err(|error|error.to_string())
+            let outcome = (|| {
+                let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|error|error.to_string())?;
+                match weight {
+                    Some(weight) => { tokenizer::upsert_custom_word(&transaction, &word, weight as usize).map_err(|error|error.to_string())?; }
+                    None => { tokenizer::remove_custom_word(&transaction, &word).map_err(|error|error.to_string())?; }
+                }
+                transaction.execute("UPDATE knowledge_metadata SET value=CAST(value AS INTEGER)+1 WHERE key='dictionary_revision';", []).map_err(|error|error.to_string())?;
+                rebuild_fts(&transaction, settings.index_mode.has_fts())?;
+                transaction.commit().map_err(|error|error.to_string())
+            })();
+            resync_dictionary_after_rollback(connection, outcome)
         }).await?;
         // Read while still owning the mutation lock so the response describes this publication.
         // 仍持有变更锁时读取，使响应描述本次发布。
@@ -243,17 +246,38 @@ impl KnowledgeBaseRuntime {
         // 将词典行、修订与重建全文索引保持在同一 SQLite 事务。
         let (_, binding_id) = self.ensure_library_binding(library_id).await?;
         local_sql::with_connection_async(&self.host_runtime.local,self.resolve_library_binding(&binding_id)?,move |connection|{
-            let transaction=connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|e|e.to_string())?;
-            for entry in tokenizer::list_custom_words(&transaction).map_err(|e|e.to_string())?.words {
-                tokenizer::remove_custom_word(&transaction,&entry.word).map_err(|e|e.to_string())?;
-            }
-            for entry in words {tokenizer::upsert_custom_word(&transaction,&entry.word,entry.weight as usize).map_err(|e|e.to_string())?;}
-            transaction.execute("UPDATE knowledge_metadata SET value=CAST(value AS INTEGER)+1 WHERE key='dictionary_revision';",[]).map_err(|e|e.to_string())?;
-            rebuild_fts(&transaction,settings.index_mode.has_fts())?;
-            transaction.commit().map_err(|e|e.to_string())
+            let outcome = (|| {
+                let transaction=connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|e|e.to_string())?;
+                for entry in tokenizer::list_custom_words(&transaction).map_err(|e|e.to_string())?.words {
+                    tokenizer::remove_custom_word(&transaction,&entry.word).map_err(|e|e.to_string())?;
+                }
+                for entry in words {tokenizer::upsert_custom_word(&transaction,&entry.word,entry.weight as usize).map_err(|e|e.to_string())?;}
+                transaction.execute("UPDATE knowledge_metadata SET value=CAST(value AS INTEGER)+1 WHERE key='dictionary_revision';",[]).map_err(|e|e.to_string())?;
+                rebuild_fts(&transaction,settings.index_mode.has_fts())?;
+                transaction.commit().map_err(|e|e.to_string())
+            })();
+            resync_dictionary_after_rollback(connection, outcome)
         }).await?;
         drop(guard);
         self.list_custom_words(library_id).await
+    }
+}
+
+/// Returns a dictionary transaction's outcome; after a rollback the shared tokenizer, which word
+/// mutations refresh at once, is reloaded from the committed rows.
+/// 返回词典事务的结果；回滚后，从已提交的行重新加载共享分词器（词语变更会立即刷新它）。
+fn resync_dictionary_after_rollback(
+    connection: &rusqlite::Connection,
+    outcome: Result<(), String>,
+) -> Result<(), String> {
+    let Err(error) = outcome else {
+        return Ok(());
+    };
+    match tokenizer::reload_custom_dictionary(connection) {
+        Ok(()) => Err(error),
+        Err(reload) => Err(format!(
+            "{error}; reloading the committed dictionary also failed: {reload}"
+        )),
     }
 }
 

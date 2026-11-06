@@ -9,7 +9,7 @@ use crate::registry::HookEntry;
 use crate::{
     HookContext, HookDecision, HookDiagnostic, HookDiagnosticSeverity, HookError, HookEvent,
     HookEventKind, HookEventListener, HookFailure, HookFailurePolicy, HookHandler, HookId,
-    HookInvocation, HookListenerId, HookPayload, HookPointDescriptor, HookRegistration,
+    HookInvocation, HookListenerId, HookMode, HookPayload, HookPointDescriptor, HookRegistration,
     HookRegistry, HookResult, SystemPromptHookBlock,
 };
 
@@ -97,7 +97,23 @@ impl HookDispatchReport {
 
     /// Applies one hook result to the accumulated report.
     /// 将单个 hook 结果应用到聚合报告。
-    fn apply_result(&mut self, hook_id: &str, result: HookResult) {
+    fn apply_result(&mut self, hook_id: &str, mode: HookMode, mut result: HookResult) {
+        // An observe hook cannot change the payload or the control flow; a returned replacement or
+        // decision is dropped and reported.
+        // 观察钩子不能修改载荷或控制流；返回的替换或决策被丢弃并报告。
+        if mode == HookMode::Observe {
+            let dropped_payload = result.payload.take().is_some();
+            let dropped_decision = result.decision.take().is_some();
+            if dropped_payload || dropped_decision {
+                self.diagnostics.push(HookDiagnostic {
+                    severity: HookDiagnosticSeverity::Warning,
+                    message: String::from(
+                        "Observe hook returned a payload or decision; it was ignored.",
+                    ),
+                    hook_id: Some(hook_id.to_owned()),
+                });
+            }
+        }
         if let Some(payload) = result.payload {
             self.payload = payload;
         }
@@ -285,7 +301,7 @@ impl HookDispatcher {
             let result = run_entry(entry.clone(), invocation).await;
             match result {
                 Ok(result) => {
-                    report.apply_result(&hook_id, result);
+                    report.apply_result(&hook_id, entry.registration.mode, result);
                     report.completed_hooks.push(hook_id.clone());
                     self.emit_event(
                         HookEvent::new(

@@ -346,12 +346,30 @@ impl Parser {
     /// Parses `and` precedence.
     /// 解析 `and` 优先级。
     fn parse_and(&mut self) -> Result<Expr, String> {
-        let mut left = self.parse_unary()?;
+        let mut left = self.parse_compare()?;
         while self.eat(&Token::AndAnd) {
-            let right = self.parse_unary()?;
+            let right = self.parse_compare()?;
             left = Expr::And(Box::new(left), Box::new(right));
         }
         Ok(left)
+    }
+
+    /// Parses one optional comparison; `!` binds tighter, so `!a == b` is `(!a) == b`.
+    /// 解析一个可选的比较；`!` 绑定更紧，因此 `!a == b` 是 `(!a) == b`。
+    fn parse_compare(&mut self) -> Result<Expr, String> {
+        let left = self.parse_unary()?;
+        let negated = match self.peek() {
+            Some(Token::EqEq) => false,
+            Some(Token::NotEq) => true,
+            _ => return Ok(left),
+        };
+        self.position += 1;
+        let right = self.parse_unary()?;
+        Ok(Expr::Compare {
+            left: Box::new(left),
+            right: Box::new(right),
+            negated,
+        })
     }
 
     /// Parses negation.
@@ -360,25 +378,7 @@ impl Parser {
         if self.eat(&Token::Bang) {
             return Ok(Expr::Not(Box::new(self.parse_unary()?)));
         }
-        self.parse_compare()
-    }
-
-    /// Parses one optional comparison.
-    /// 解析一个可选的比较。
-    fn parse_compare(&mut self) -> Result<Expr, String> {
-        let left = self.parse_postfix()?;
-        let negated = match self.peek() {
-            Some(Token::EqEq) => false,
-            Some(Token::NotEq) => true,
-            _ => return Ok(left),
-        };
-        self.position += 1;
-        let right = self.parse_postfix()?;
-        Ok(Expr::Compare {
-            left: Box::new(left),
-            right: Box::new(right),
-            negated,
-        })
+        self.parse_postfix()
     }
 
     /// Parses a primary expression followed by member accesses.
@@ -797,5 +797,30 @@ fn type_name(value: &Value) -> &'static str {
         Value::String(_) => "a string",
         Value::Array(_) => "an array",
         Value::Object(_) => "an object",
+    }
+}
+
+#[cfg(test)]
+mod precedence_tests {
+    use super::{EvalContext, evaluate, parse_expression};
+    use serde_json::{Value, json};
+
+    /// Evaluates one expression with no earlier steps.
+    /// 在没有更早步骤的情况下求值一个表达式。
+    fn eval(source: &str) -> Value {
+        let expr = parse_expression(source).expect("expression parses");
+        evaluate(&expr, &EvalContext { earlier: &[] }).expect("expression evaluates")
+    }
+
+    /// Verifies `!` binds tighter than comparison and may start a comparison operand.
+    /// 验证 `!` 比比较运算绑定更紧，且可作为比较操作数的开头。
+    #[test]
+    fn negation_binds_tighter_than_comparison() {
+        // `(!'a') == 'b'` compares a boolean with a string; `!('a' == 'b')` would be true.
+        // `(!'a') == 'b'` 比较布尔值与字符串；若解析为 `!('a' == 'b')` 则为真。
+        assert_eq!(eval("!'a' == 'b'"), json!(false));
+        assert_eq!(eval("true == !false"), json!(true));
+        assert_eq!(eval("!(true == false)"), json!(true));
+        assert_eq!(eval("true == true && !false"), json!(true));
     }
 }

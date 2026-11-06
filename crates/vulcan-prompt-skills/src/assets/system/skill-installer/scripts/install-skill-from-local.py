@@ -12,6 +12,9 @@ import shutil
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from skill_identity import SkillIdentityError, align_skill_name  # noqa: E402
+
 
 class InstallError(Exception):
     pass
@@ -50,7 +53,7 @@ def _validate_skill_name(name: str) -> None:
         raise InstallError("Skill name must not contain path separators.")
 
 
-def _copy_skill(source: Path, dest: Path, overwrite: bool) -> bool:
+def _copy_skill(source: Path, dest: Path, skill_name: str, overwrite: bool) -> bool:
     """Copy the skill; returns False when the source already is the destination.
     复制技能；源目录即目标目录时返回 False。
 
@@ -60,6 +63,7 @@ def _copy_skill(source: Path, dest: Path, overwrite: bool) -> bool:
     """
     resolved_dest = dest.resolve()
     if resolved_dest == source:
+        align_skill_name(source, skill_name)
         return False
     if resolved_dest.is_relative_to(source) or source.is_relative_to(resolved_dest):
         raise InstallError("Source and destination skill directories must not contain each other.")
@@ -74,6 +78,9 @@ def _copy_skill(source: Path, dest: Path, overwrite: bool) -> bool:
     shutil.rmtree(staging, ignore_errors=True)
     try:
         shutil.copytree(source, staging)
+        # The loader requires SKILL.md `name` to equal the directory name.
+        # 加载器要求 SKILL.md 的 `name` 等于目录名。
+        align_skill_name(staging, skill_name)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
@@ -111,12 +118,12 @@ def main(argv: list[str]) -> int:
             raise InstallError("Refusing to install into the managed .system skill directory.")
         dest_root = Path(args.dest).expanduser().resolve() if args.dest else _default_dest()
         dest = dest_root / skill_name
-        if _copy_skill(source, dest, args.overwrite):
+        if _copy_skill(source, dest, skill_name, args.overwrite):
             print(f"Installed {skill_name} to {dest}")
         else:
             print(f"{skill_name} is already installed at {dest}; nothing to copy")
         return 0
-    except InstallError as exc:
+    except (InstallError, SkillIdentityError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 

@@ -733,10 +733,17 @@ impl LiveFileWatcher {
                 loop {
                     match raw_rx.recv().await {
                         Some(raw_events::RawWatchMessage::Event(Ok(event))) => {
-                            // A rescan flag may have no paths; retain the gap before ordinary event filtering.
-                            // 重新扫描标志可能没有路径；在普通事件过滤之前保留缺口。
+                            // A native rescan flag (inotify overflow, FSEvents drop) may carry no paths;
+                            // it invalidates every registered root like the internal rescan does.
+                            // 原生重新扫描标志（inotify 溢出、FSEvents 丢失）可能不带路径；它与内部重新
+                            // 扫描一样让全部注册根失效。
                             if event.need_rescan() {
                                 event_loop_health.0.record_gap();
+                                let roots = Self::registered_roots(&state);
+                                let inner = inner.as_ref().and_then(std::sync::Weak::upgrade);
+                                Self::notify_subscribers(&state, inner.as_ref(), &roots, false)
+                                    .await;
+                                continue;
                             }
                             if !is_mutating_event(&event) || event.paths.is_empty() {
                                 continue;
@@ -755,23 +762,7 @@ impl LiveFileWatcher {
                             warn!("file watcher error: {err}");
                         }
                         Some(raw_events::RawWatchMessage::Rescan) => {
-                            let roots = {
-                                let guard = state
-                                    .read()
-                                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                                guard
-                                    .subscribers
-                                    .values()
-                                    .flat_map(|subscriber| {
-                                        subscriber
-                                            .watched_paths
-                                            .keys()
-                                            .map(|key| key.requested.path.clone())
-                                    })
-                                    .collect::<BTreeSet<_>>()
-                                    .into_iter()
-                                    .collect::<Vec<_>>()
-                            };
+                            let roots = Self::registered_roots(&state);
                             let inner = inner.as_ref().and_then(std::sync::Weak::upgrade);
                             // Root delivery both reconciles fallback watches and forces consumer rescan.
                             // 根通知同时重新核对回退监听，并要求消费者重新扫描。
@@ -784,6 +775,26 @@ impl LiveFileWatcher {
         } else {
             warn!("file watcher loop skipped: no Tokio runtime available");
         }
+    }
+
+    /// Returns every registered root once, for a rescan that invalidates them all.
+    /// 返回每个注册根各一次，用于让全部注册根失效的重新扫描。
+    fn registered_roots(state: &Arc<RwLock<WatchState>>) -> Vec<PathBuf> {
+        let guard = state
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard
+            .subscribers
+            .values()
+            .flat_map(|subscriber| {
+                subscriber
+                    .watched_paths
+                    .keys()
+                    .map(|key| key.requested.path.clone())
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
     }
 
     /// Routes and probes on the blocking boundary without retaining shared state across filesystem I/O.

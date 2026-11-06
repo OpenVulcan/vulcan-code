@@ -1306,6 +1306,27 @@ async fn apply_patch_updates_and_adds_atomically() {
     );
 }
 
+/// Verifies an `@@` anchor finds a source line that carries trailing whitespace.
+/// 验证 `@@` 锚点能找到带行尾空白的源码行。
+#[tokio::test]
+async fn apply_patch_anchor_matches_line_with_trailing_whitespace() {
+    let directory = tempdir().expect("create temporary directory");
+    let path = directory.path().join("anchor.txt");
+    fs::write(&path, "section  \nold\n").expect("write anchor fixture");
+    execute_apply_patch(
+        directory.path().to_path_buf(),
+        String::from(
+            "*** Begin Patch\n*** Update File: anchor.txt\n@@ section\n-old\n+new\n*** End Patch\n",
+        ),
+    )
+    .await
+    .expect("anchored patch should succeed");
+    assert_eq!(
+        fs::read_to_string(path).expect("read patched file"),
+        "section  \nnew\n"
+    );
+}
+
 /// Verifies Apply Patch preserves mixed endings on shifted unchanged context lines.
 /// 验证 Apply Patch 会在上下文行发生位移时保留各自的混合行尾。
 #[tokio::test]

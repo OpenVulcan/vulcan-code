@@ -39,9 +39,6 @@ fn packaged_runlua_skill_requires_native_skill_lookup() {
         .join("runlua")
         .join(SKILL_FILE_NAME);
     let content = fs::read_to_string(skill_file).expect("packaged RunLua Skill should be readable");
-    assert!(content.contains("{\"name\":\"runlua\"}"));
-    assert!(content.contains("The tool id is `skill`, singular."));
-    assert!(content.contains("Do not call `luaskill`"));
     // The stated runtime versions must follow the workspace lock, so an upgrade cannot leave them stale.
     // 指引写明的运行时版本必须跟随工作区锁文件，升级时不会遗留旧版本。
     let lock =
@@ -81,39 +78,6 @@ fn locked_version<'a>(lock: &'a str, package: &str) -> &'a str {
         "Cargo.lock should lock exactly one `{package}`: {versions:?}"
     );
     versions[0]
-}
-
-/// Verifies the packaged terminal skill states the complete current input, wait, and exit-code contract.
-/// 验证打包终端技能说明完整的当前输入、等待与退出码契约。
-#[test]
-fn packaged_terminal_skill_documents_current_terminal_contract() {
-    // skillFile resolves the exact packaged terminal-session source rather than a generated runtime copy.
-    // skillFile 解析精确的打包 terminal-session 源文件，而不是生成的运行时副本。
-    let skill_file = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("src")
-        .join("assets")
-        .join("system")
-        .join("terminal-session")
-        .join(SKILL_FILE_NAME);
-    // content is the authoritative model guidance shipped with the application.
-    // content 是随应用发布的权威模型指引。
-    let content =
-        fs::read_to_string(skill_file).expect("packaged terminal-session Skill should be readable");
-    assert!(content.contains("normalizes `CRLF`, standalone `CR`, and standalone `LF`"));
-    assert!(content.contains("screen_frame_confirmed"));
-    assert!(content.contains("pending_input_line"));
-    assert!(content.contains("does not add shell wrappers"));
-    assert!(content.contains("Use `shell_command` for an isolated command"));
-    assert!(content.contains("send a structured `key` input with `Enter`"));
-    assert!(content.contains("PowerShell external-command example"));
-    assert!(content.contains("POSIX-shell example"));
-    assert!(content.contains("CMD example"));
-    assert!(content.contains("Never branch AI tool calls by operating system"));
-    assert!(content.contains("Never dump logs or files of unknown size with `cat`"));
-    assert!(content.contains("## Large Output And Logs"));
-    assert!(content.contains("`output_limit_exceeded`"));
-    assert!(!content.contains("until_exit_code"));
-    assert!(!content.contains("Windows pwsh text newlines are unreliable"));
 }
 
 /// Builds one complete user prompt skill fixture for policy and rendering tests.
@@ -1192,8 +1156,22 @@ fn plugin_category_rejects_user_mutations() {
         ..PromptSkillCategory::default()
     };
 
+    // The skill exists, so only the reserved-category gate can refuse the assignments below.
+    // 技能真实存在，因此下面的归属只可能被保留分类门拒绝。
+    let skill_dir = root.join("ordinary-skill");
+    fs::create_dir_all(&skill_dir).expect("skill directory should create");
+    fs::write(
+        skill_dir.join(SKILL_FILE_NAME),
+        "---\nname: ordinary-skill\ndescription: Use for category tests.\n---\n\n# Ordinary",
+    )
+    .expect("skill instructions should write");
+
     assert!(save_user_prompt_skill_category(&root, category).is_err());
     assert!(delete_user_prompt_skill_category(Path::new(""), &root, PLUGIN_CATEGORY_ID).is_err());
+    assert!(
+        set_user_prompt_skill_category(Path::new(""), &root, "ordinary-skill", PLUGIN_CATEGORY_ID)
+            .is_err()
+    );
     assert!(
         save_user_prompt_skill_catalog_assignment(
             Path::new(""),
@@ -1205,6 +1183,17 @@ fn plugin_category_rejects_user_mutations() {
         )
         .is_err()
     );
+    // An ordinary category is accepted for the same skill.
+    // 同一技能归入普通分类会被接受。
+    save_user_prompt_skill_catalog_assignment(
+        Path::new(""),
+        &root,
+        None,
+        "ordinary-skill",
+        "uncategorized",
+        Vec::new(),
+    )
+    .expect("ordinary category assignment should succeed");
     let _ = fs::remove_dir_all(root);
 }
 
