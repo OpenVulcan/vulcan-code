@@ -2821,6 +2821,26 @@ fn capability_metadata_serializes_cold_save_and_physical_load() {
     assert!(registry.state.lock().unwrap().loading.is_empty());
 }
 
+/// A loader that panics releases its slot, so the next load of the session runs instead of waiting.
+/// 发生 panic 的加载器会释放其槽，使该会话的下一次加载得以运行而不是等待。
+#[test]
+fn a_panicking_loader_releases_its_load_slot() {
+    let (_, handle) = recording_handle();
+    let session_id = handle.session_id();
+    let registry = SessionRuntimeRegistry::default();
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        registry.get_or_load(session_id, || panic!("loader failure"))
+    }));
+    assert!(panicked.is_err());
+    assert!(registry.state.lock().unwrap().loading.is_empty());
+    assert!(Arc::ptr_eq(
+        &registry
+            .get_or_load(session_id, || Ok(handle.clone()))
+            .unwrap(),
+        &handle
+    ));
+}
+
 /// Failed metadata publication releases admission and never poisons the session registry.
 /// 元数据发布失败会释放准入，绝不污染会话注册表。
 #[test]

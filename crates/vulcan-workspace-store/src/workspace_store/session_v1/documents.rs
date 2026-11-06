@@ -50,12 +50,24 @@ pub fn write_json_document<T: Serialize>(
     write_file_atomic(path, &bytes, artifact_kind)
 }
 
-/// Reads and parses one typed document as compact JSON.
-/// 读取并解析一个类型化文档为紧凑 JSON。
-fn read_json_document<T: DeserializeOwned + std::fmt::Debug>(
+/// The contract fields every versioned session document starts with, read before its strict shape.
+/// 每个带版本的会话文档都有的契约字段，在其严格结构之前读取。
+#[derive(serde::Deserialize)]
+struct ContractHeader {
+    contract: String,
+    schema_version: u32,
+}
+
+/// Reads one JSON document of the `expected` contract; a document of another contract or schema
+/// version is reported as unsupported before its strict shape is parsed, so a newer format is never
+/// taken for a corrupt one.
+/// 读取一个 `expected` 契约的 JSON 文档；其他契约或模式版本的文档在解析严格结构之前即报告为不受支持，
+/// 因此较新的格式绝不会被当作损坏。
+fn read_contract_document<T: DeserializeOwned + std::fmt::Debug>(
     path: &Path,
     artifact_kind: &str,
     error_code: ErrorCode,
+    expected: &str,
 ) -> Result<T, SessionV1Error> {
     let bytes = std::fs::read(path).map_err(|error| match error.kind() {
         std::io::ErrorKind::NotFound => SessionV1Error::corrupt(
@@ -65,6 +77,9 @@ fn read_json_document<T: DeserializeOwned + std::fmt::Debug>(
         ),
         _ => SessionV1Error::io(path.to_path_buf(), format!("read {artifact_kind}: {error}")),
     })?;
+    if let Ok(header) = serde_json::from_slice::<ContractHeader>(&bytes) {
+        validate_contract(&header.contract, expected, path, header.schema_version)?;
+    }
     serde_json::from_slice(&bytes).map_err(|error| {
         SessionV1Error::corrupt(error_code, path, format!("parse {artifact_kind}: {error}"))
     })
@@ -151,7 +166,8 @@ pub(crate) fn read_metadata_for_provider_tool_rebuild(
 /// Reads the runtime document and validates its frozen contract.
 /// 读取 runtime 文档并校验其冻结契约。
 pub fn read_runtime(path: &Path) -> Result<RuntimeDocument, SessionV1Error> {
-    let document: RuntimeDocument = read_json_document(path, "runtime", ErrorCode::RuntimeCorrupt)?;
+    let document: RuntimeDocument =
+        read_contract_document(path, "runtime", ErrorCode::RuntimeCorrupt, RUNTIME_CONTRACT)?;
     validate_contract(
         &document.contract,
         RUNTIME_CONTRACT,
@@ -164,8 +180,12 @@ pub fn read_runtime(path: &Path) -> Result<RuntimeDocument, SessionV1Error> {
 /// Reads the compactions document and validates its frozen contract.
 /// 读取 compactions 文档并校验其冻结契约。
 pub fn read_compactions(path: &Path) -> Result<CompactionsDocument, SessionV1Error> {
-    let document: CompactionsDocument =
-        read_json_document(path, "compactions", ErrorCode::CompactionCorrupt)?;
+    let document: CompactionsDocument = read_contract_document(
+        path,
+        "compactions",
+        ErrorCode::CompactionCorrupt,
+        COMPACTIONS_CONTRACT,
+    )?;
     validate_contract(
         &document.contract,
         COMPACTIONS_CONTRACT,

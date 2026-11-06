@@ -2740,17 +2740,25 @@ connection.close()
             unread: 0,
         };
         let locator = storage_locator_from_row(data_root.path(), row).expect("exact locator");
-        fs::create_dir_all(locator.layout.session_dir()).expect("create session directory");
-        let project_resource = data_root.path().join("project-resources/keep.bin");
-        fs::create_dir_all(project_resource.parent().expect("resource parent"))
-            .expect("create resource parent");
-        fs::write(&project_resource, b"keep").expect("write resource fixture");
+        let session_dir = locator.layout.session_dir();
+        fs::create_dir_all(&session_dir).expect("create session directory");
+        // The sentinels sit in the session's own project directory and in a sibling session, the
+        // places a delete of one level too much would take with it.
+        // 哨兵位于本会话所属的项目目录与相邻会话中，即多删一层时会被一并删除的位置。
+        let project_dir = session_dir.parent().expect("project directory");
+        let project_resource = project_dir.join("keep.bin");
+        let sibling_resource = project_dir.join("2026-08-27-session-7").join("keep.bin");
+        for resource in [&project_resource, &sibling_resource] {
+            fs::create_dir_all(resource.parent().expect("resource parent"))
+                .expect("create resource parent");
+            fs::write(resource, b"keep").expect("write resource fixture");
+        }
         assert!(remove_exact_session_directory(&locator).expect("first delete"));
         assert!(!remove_exact_session_directory(&locator).expect("idempotent delete"));
-        assert_eq!(
-            fs::read(project_resource).expect("resource preserved"),
-            b"keep"
-        );
+        assert!(!session_dir.exists());
+        for resource in [project_resource, sibling_resource] {
+            assert_eq!(fs::read(resource).expect("resource preserved"), b"keep");
+        }
     }
 
     /// An unusable database is surfaced as an explicit index schema failure.

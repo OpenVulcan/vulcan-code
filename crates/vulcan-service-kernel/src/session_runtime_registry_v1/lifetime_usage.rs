@@ -17,8 +17,9 @@ pub(super) struct SessionUsageOwner {
     /// Root identity remains available even when persistence fails.
     /// 即使持久化失败仍然可用的根身份。
     root_session_id: SessionId,
-    /// Last usable aggregate or the explicit persistence error.
-    /// 最近可用累计或明确的持久化错误。
+    /// Latest aggregate, ahead of the saved one after a failed save, or the explicit error of a
+    /// change that could not be applied.
+    /// 最新累计（保存失败后领先于已保存的累计），或无法应用的修改的明确错误。
     document: Mutex<Result<SessionLifetimeUsage, String>>,
     /// Root locator; absent only for in-memory test owners.
     /// 根定位器；仅内存测试所有者没有定位器。
@@ -26,8 +27,11 @@ pub(super) struct SessionUsageOwner {
 }
 
 impl SessionUsageOwner {
-    /// Applies a staged change under the root lock; publishes memory only after saving succeeds.
-    /// 在根锁内应用暂存修改；保存成功后才发布内存。
+    /// Applies a staged change under the root lock and saves the whole aggregate. A failed save is
+    /// reported but the change stays in memory, so the next save writes everything counted since
+    /// the last successful one instead of dropping every later change.
+    /// 在根锁内应用暂存修改并保存完整累计。保存失败会被报告，但修改保留在内存中，使下一次保存写入自上次
+    /// 成功保存以来计入的全部内容，而不是丢弃之后的每一次修改。
     fn update(
         &self,
         change: impl FnOnce(&mut SessionLifetimeUsage) -> Result<bool, String>,
@@ -42,14 +46,12 @@ impl SessionUsageOwner {
                 return Err(error);
             }
         }
-        if let Some(locator) = &self.locator
-            && let Err(error) = save_session_lifetime_usage(locator, &next)
-        {
-            *guard = Err(error.clone());
-            return Err(error);
-        }
+        let saved = match &self.locator {
+            Some(locator) => save_session_lifetime_usage(locator, &next),
+            None => Ok(()),
+        };
         *guard = Ok(next);
-        Ok(())
+        saved
     }
 }
 
@@ -202,6 +204,43 @@ mod tests {
     use vulcan_workspace_store::workspace_store::{
         create_session_v1_storage_fixture, locate_embedded_task_session_v1,
     };
+
+    /// Usage counted while saves fail is kept and saved by the first save that succeeds again.
+    /// 保存失败期间计入的用量会被保留，并由重新成功的第一次保存写入。
+    #[test]
+    fn usage_counted_during_failed_saves_is_saved_later() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root_id = SessionId::from_u128(200);
+        let locator =
+            create_session_v1_storage_fixture(temporary.path(), &root_id.to_string(), 1).unwrap();
+        let root = SessionHandle::new(
+            root_id,
+            locator.clone(),
+            load_session_v1_full(&locator).unwrap().document,
+        );
+        root.initialize_root_usage(true, 1);
+        let increment = SessionUsageBucket::from_api(
+            &vulcan_session_core::v1::UsageSnapshot {
+                output_tokens: Some(5),
+                total_tokens: Some(5),
+                ..Default::default()
+            },
+            &vulcan_session_core::v1::ApiTimings::default(),
+        )
+        .unwrap();
+        // A non-empty directory where the usage file belongs makes every save fail.
+        // 在用量文件位置放一个非空目录，使每次保存都失败。
+        let usage_path = locator.session_directory().join("usage.json");
+        std::fs::remove_file(&usage_path).unwrap();
+        std::fs::create_dir_all(usage_path.join("blocker")).unwrap();
+        root.record_lifetime_usage(&increment, 2);
+        root.record_lifetime_usage(&increment, 3);
+        std::fs::remove_dir_all(&usage_path).unwrap();
+        root.record_lifetime_usage(&increment, 4);
+        let stored = load_session_lifetime_usage(&locator).unwrap();
+        assert_eq!(stored.main.request_count, 3);
+        assert_eq!(root.lifetime_usage_snapshot().unwrap(), stored);
+    }
 
     /// Concurrent descendants share one serialized file and retain independent own counters.
     /// 并发后代共享一个串行文件，保留独立自身计数。

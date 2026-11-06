@@ -93,13 +93,38 @@ pub struct ProviderEventRange {
     pub report: EventWindowReadReport,
 }
 
+/// Fresh reads after a read found its tail bank missing. A concurrent save publishes metadata that
+/// names a new tail bank before it deletes the old one, so a read that opened the old metadata may
+/// find its tail gone; reading again starts from the newer metadata.
+/// 读取发现尾段 bank 缺失后的重新读取次数。并发保存会先发布指向新尾段 bank 的元数据，再删除旧 bank，
+/// 因此打开了旧元数据的读取可能发现其尾段已消失；重新读取会从较新的元数据开始。
+const RETIRED_TAIL_RETRIES: usize = 3;
+
+/// Runs `read`, repeating it when a concurrent save retired the tail bank it was reading.
+/// 运行 `read`，在并发保存使其正在读取的尾段 bank 失效时重复读取。
+fn read_across_tail_switch<T>(
+    read: impl Fn() -> Result<T, SessionV1Error>,
+) -> Result<T, SessionV1Error> {
+    let mut retries = 0;
+    loop {
+        match read() {
+            Err(error)
+                if error.code == ErrorCode::SegmentMissing && retries < RETIRED_TAIL_RETRIES =>
+            {
+                retries += 1;
+            }
+            result => return result,
+        }
+    }
+}
+
 /// Loads the latest complete turn window, including an entire open tail turn.
 /// 加载最新完整回合窗口，并包含整个开放尾部回合。
 pub fn load_recent_turn_window(
     layout: &SessionV1Layout,
     turn_limit: usize,
 ) -> Result<TurnEventWindow, SessionV1Error> {
-    load_turn_window(layout, None, turn_limit)
+    read_across_tail_switch(|| load_turn_window(layout, None, turn_limit))
 }
 
 /// Loads complete turns strictly before one cursor returned by a newer window.
@@ -109,12 +134,22 @@ pub fn load_turn_window_before(
     before_seq: Seq,
     turn_limit: usize,
 ) -> Result<TurnEventWindow, SessionV1Error> {
-    load_turn_window(layout, Some(before_seq), turn_limit)
+    read_across_tail_switch(|| load_turn_window(layout, Some(before_seq), turn_limit))
 }
 
 /// Loads one exact inclusive seq range for Provider projection.
 /// 为 Provider 投影加载一个精确的闭区间 seq 范围。
 pub fn load_provider_event_range(
+    layout: &SessionV1Layout,
+    from_seq: Seq,
+    through_seq: Seq,
+) -> Result<ProviderEventRange, SessionV1Error> {
+    read_across_tail_switch(|| read_provider_event_range(layout, from_seq, through_seq))
+}
+
+/// Reads one exact inclusive seq range from one metadata view.
+/// 从一份元数据视图读取一个精确的闭区间 seq 范围。
+fn read_provider_event_range(
     layout: &SessionV1Layout,
     from_seq: Seq,
     through_seq: Seq,

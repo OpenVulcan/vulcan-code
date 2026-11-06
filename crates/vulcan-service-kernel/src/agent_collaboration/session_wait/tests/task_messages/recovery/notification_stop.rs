@@ -3,10 +3,10 @@
 
 use super::*;
 
-/// A volatile stop failure cannot be acknowledged by the sender until its target revision is durable.
-/// 易失停止失败在目标修订可靠落盘前不能被发送方确认。
+/// A volatile stop failure is published on the target before the sender acknowledges it.
+/// 易失停止失败先在目标侧可靠发布，发送方才确认它。
 #[tokio::test]
-async fn notification_stop_return_rejects_unpublished_target_failure() {
+async fn notification_stop_return_publishes_volatile_target_failure_first() {
     // Keep the original source receipt durable while staging only the target stop in memory.
     // 原来源回执保持可靠，仅在内存暂存目标停止。
     let (_root, invocation, target, _) = message_fixture(false).await;
@@ -37,25 +37,27 @@ async fn notification_stop_return_rejects_unpublished_target_failure() {
             },
         )
         .unwrap();
-    assert!(
+    assert_eq!(
         reconcile_stopped_question_deliveries_for_session(&invocation.state, target.session_id())
             .await
-            .unwrap_err()
-            .contains("not durably published")
+            .unwrap(),
+        1
+    );
+    // The acknowledged failure must already be the target's durable state.
+    // 已确认的失败必须已经是目标的可靠状态。
+    let published = load_session_v1_for_runtime(&target.storage_locator().unwrap())
+        .unwrap()
+        .document;
+    assert_eq!(
+        published.collaboration_run_control(),
+        CollaborationRunControl::Stopped
     );
     assert_eq!(
         invocation
             .source_handle
             .read(|document| document.collaboration_state().notifications[&notification_id].state)
             .unwrap(),
-        CollaborationNotificationState::Accepted
-    );
-    target.flush_all().unwrap();
-    assert_eq!(
-        reconcile_stopped_question_deliveries_for_session(&invocation.state, target.session_id())
-            .await
-            .unwrap(),
-        1
+        CollaborationNotificationState::Failed
     );
 }
 

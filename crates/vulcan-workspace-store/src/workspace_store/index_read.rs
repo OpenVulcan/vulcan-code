@@ -59,7 +59,7 @@ fn read_rows(connection: &rusqlite::Connection) -> rusqlite::Result<WorkspaceInd
     // Retain a single SQL snapshot instead of retrying each project after a decode error.
     // 保留单次 SQL 快照，避免解码失败后逐项目重试。
     let mut statement = connection.prepare(
-        "SELECT session_index_v1.session_id AS session_id, project_id, project_tag, storage_partition, relative_path, title, created_at_ms, updated_at_ms, archived_at_ms, unread, EXISTS (SELECT 1 FROM session_dedicated_index_v1 AS marker WHERE marker.session_id = session_index_v1.session_id) AS dedicated, (SELECT assistant.name FROM session_assistant_index_v1 AS assistant WHERE assistant.session_id = session_index_v1.session_id) AS assistant_name, list_state.last_request_at_ms AS last_request_at_ms, list_state.manual_position AS manual_position FROM session_index_v1 JOIN session_list_state_v1 AS list_state ON list_state.session_id = session_index_v1.session_id WHERE project_id IN (SELECT id FROM projects) ORDER BY session_index_v1.session_id"
+        "SELECT session_index_v1.session_id AS session_id, project_id, project_tag, storage_partition, relative_path, title, created_at_ms, updated_at_ms, archived_at_ms, unread, EXISTS (SELECT 1 FROM session_dedicated_index_v1 AS marker WHERE marker.session_id = session_index_v1.session_id) AS dedicated, (SELECT assistant.name FROM session_assistant_index_v1 AS assistant WHERE assistant.session_id = session_index_v1.session_id) AS assistant_name, list_state.session_id IS NOT NULL AS has_list_state, list_state.last_request_at_ms AS last_request_at_ms, list_state.manual_position AS manual_position FROM session_index_v1 LEFT JOIN session_list_state_v1 AS list_state ON list_state.session_id = session_index_v1.session_id WHERE project_id IN (SELECT id FROM projects) ORDER BY session_index_v1.session_id"
     )?;
     // Cursor failures abort the snapshot; only typed decoding failures isolate one row.
     // 游标读取失败终止快照；仅强类型解码失败隔离单条记录。
@@ -74,6 +74,18 @@ fn read_rows(connection: &rusqlite::Connection) -> rusqlite::Result<WorkspaceInd
         issues: Vec::new(),
     };
     while let Some(row) = cursor.next()? {
+        // Every session row is written with its list state in one transaction; a session without it
+        // is reported, never skipped silently.
+        // 每条会话记录都与其列表状态在同一事务中写入；缺少列表状态的会话会被报告，绝不静默略过。
+        if !row.get::<_, bool>("has_list_state")? {
+            report.issues.push(WorkspaceIndexLoadIssue {
+                stage: WorkspaceIndexLoadStage::Index,
+                project_id: row.get::<_, String>("project_id").ok(),
+                session_id: row.get::<_, String>("session_id").ok(),
+                detail: String::from("workspace session index row has no session list state"),
+            });
+            continue;
+        }
         match decode_row(row).and_then(|decoded| {
             Ok((
                 decoded,
@@ -222,6 +234,20 @@ mod tests {
                 manual_position: Some(0)
             })
         );
+    }
+
+    /// A session without its list state is reported as an issue instead of disappearing.
+    /// 缺少列表状态的会话被报告为问题，而不是消失。
+    #[test]
+    fn a_session_without_list_state_is_reported() {
+        let connection = fixture();
+        connection
+            .execute_batch("DELETE FROM session_list_state_v1 WHERE session_id = 'b'")
+            .expect("drop one list state");
+        let report = read_rows(&connection).expect("typed rows");
+        assert_eq!(report.rows.len(), 1);
+        assert_eq!(report.issues.len(), 1);
+        assert_eq!(report.issues[0].session_id.as_deref(), Some("b"));
     }
 
     /// Only marked sessions are reported as dedicated, and pruning a row removes its marker.

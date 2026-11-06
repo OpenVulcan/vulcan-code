@@ -137,6 +137,25 @@ impl ClientActionId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Builds the action identity that applies one agent message, from its delivery or event id.
+    /// Collaboration ids may be longer than an action id, so an id whose readable form does not
+    /// fit is named by its SHA-256 instead; every admitted message can then apply.
+    /// 由智能体消息的投递或事件 id 构建应用该消息的动作身份。协作 id 可能长于动作 id，因此可读形式放不下的
+    /// id 改用其 SHA-256 命名，使每条已接纳的消息都能应用。
+    pub fn for_agent_message(id: &str) -> Result<Self, DomainError> {
+        let readable = format!("agent-message:{id}");
+        if readable.len() <= CLIENT_ACTION_ID_MAX_BYTES {
+            return Self::try_new(readable);
+        }
+        use sha2::Digest;
+        let digest = sha2::Sha256::digest(id.as_bytes());
+        let hex = digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        Self::try_new(format!("agent-message:sha256:{hex}"))
+    }
 }
 
 impl<'de> Deserialize<'de> for ClientActionId {
@@ -359,6 +378,21 @@ impl Default for IdAllocator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every collaboration id up to its own limit yields a valid, distinct agent-message action id.
+    /// 每个不超过自身上限的协作 id 都能得到有效且互不相同的智能体消息动作 id。
+    #[test]
+    fn agent_message_action_ids_fit_every_collaboration_id() {
+        let short = ClientActionId::for_agent_message("delivery-1").unwrap();
+        assert_eq!(short.as_str(), "agent-message:delivery-1");
+        let longest = "a".repeat(crate::v1::COLLABORATION_ID_MAX_BYTES);
+        let other = format!("{}b", &longest[1..]);
+        let first = ClientActionId::for_agent_message(&longest).unwrap();
+        let second = ClientActionId::for_agent_message(&other).unwrap();
+        assert!(first.as_str().len() <= CLIENT_ACTION_ID_MAX_BYTES);
+        assert_ne!(first, second);
+        assert_eq!(first, ClientActionId::for_agent_message(&longest).unwrap());
+    }
 
     /// Seq and every local id accept the legal range and reject zero and
     /// values beyond the JavaScript-safe maximum.

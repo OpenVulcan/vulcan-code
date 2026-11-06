@@ -3292,17 +3292,31 @@ impl NativeVmmEmbeddingRouteIssue {
     /// Returns the catalog message the memory pages show for this issue.
     /// 返回记忆页面为该原因显示的目录消息。
     pub(crate) fn localized(self) -> WebuiLocalizedMessage {
-        WebuiLocalizedMessage::new(match self {
-            Self::Unavailable => "memory.vectorHealth.reason.embeddingUnavailable",
-            Self::MissingLimits => "memory.vectorHealth.reason.embeddingMissingLimits",
-            Self::UnsupportedTasks => "memory.vectorHealth.reason.embeddingUnsupportedTasks",
-            Self::UnsupportedOutput => "memory.vectorHealth.reason.embeddingUnsupportedOutput",
-            Self::UnsupportedEncoding => "memory.vectorHealth.reason.embeddingUnsupportedEncoding",
-            Self::UndeterminedDimension => {
-                "memory.vectorHealth.reason.embeddingUndeterminedDimension"
+        // Each key is a literal argument, so the catalog check sees every one of them.
+        // 每个键都是字面量参数，使目录检查能看到其中每一个。
+        match self {
+            Self::Unavailable => {
+                WebuiLocalizedMessage::new("memory.vectorHealth.reason.embeddingUnavailable")
             }
-            Self::InvalidDimension => "memory.vectorHealth.reason.embeddingInvalidDimension",
-        })
+            Self::MissingLimits => {
+                WebuiLocalizedMessage::new("memory.vectorHealth.reason.embeddingMissingLimits")
+            }
+            Self::UnsupportedTasks => {
+                WebuiLocalizedMessage::new("memory.vectorHealth.reason.embeddingUnsupportedTasks")
+            }
+            Self::UnsupportedOutput => {
+                WebuiLocalizedMessage::new("memory.vectorHealth.reason.embeddingUnsupportedOutput")
+            }
+            Self::UnsupportedEncoding => WebuiLocalizedMessage::new(
+                "memory.vectorHealth.reason.embeddingUnsupportedEncoding",
+            ),
+            Self::UndeterminedDimension => WebuiLocalizedMessage::new(
+                "memory.vectorHealth.reason.embeddingUndeterminedDimension",
+            ),
+            Self::InvalidDimension => {
+                WebuiLocalizedMessage::new("memory.vectorHealth.reason.embeddingInvalidDimension")
+            }
+        }
     }
 
     /// Converts the issue into the Core configuration boundary.

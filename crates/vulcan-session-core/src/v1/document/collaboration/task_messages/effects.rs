@@ -322,8 +322,7 @@ impl SessionDocument {
                 continue;
             }
             let acceptance = self.task_message_acceptance_for_effect(&effect.delivery_id)?;
-            let expected_action =
-                ClientActionId::try_new(format!("agent-message:{}", effect.delivery_id.as_str()))?;
+            let expected_action = ClientActionId::for_agent_message(effect.delivery_id.as_str())?;
             let expected_text = task_message_envelope(&acceptance.message)
                 .render()
                 .map_err(|_| DomainError::CollaborationStateViolation {

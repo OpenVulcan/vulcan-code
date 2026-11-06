@@ -106,6 +106,11 @@ pub(crate) async fn reconcile_stopped_question_deliveries_for_session(
                         && delivery.target_revision == Some(current.target_revision)
                         && delivery.target_event_seq == Some(target_event_seq)
                     {
+                        // The matching return may be in memory only after a failed flush.
+                        // 刷盘失败后，匹配的回传可能只存在于内存中。
+                        source_for_write
+                            .flush_if_dirty()
+                            .map_err(|error| error.to_string())?;
                         Ok(false)
                     } else {
                         Err(String::from("source failure does not match stopped target"))

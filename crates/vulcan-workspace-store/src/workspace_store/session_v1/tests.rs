@@ -2814,6 +2814,42 @@ fn loader_rejects_mismatched_runtime_session() {
     drop(root);
 }
 
+/// A newer runtime or compactions format with fields this build does not know is unsupported,
+/// not corrupt.
+/// 带有本构建未知字段的较新 runtime 或 compactions 格式属于不受支持，而不是损坏。
+#[test]
+fn future_runtime_and_compactions_formats_are_unsupported() {
+    let (root, layout) = fresh_layout("future-context-formats");
+    let document = filled_document(&layout.session_id, 0);
+    publish_initial(&layout, &document);
+    for path in [
+        active_runtime_path(&layout),
+        active_compactions_path(&layout),
+    ] {
+        let mut raw: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        raw["schema_version"] = serde_json::json!(2);
+        raw["field_from_the_future"] = serde_json::json!(true);
+        std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+    }
+    for result in [
+        read_runtime(&active_runtime_path(&layout)).map(|_| ()),
+        read_compactions(&active_compactions_path(&layout)).map(|_| ()),
+    ] {
+        assert!(
+            matches!(
+                result,
+                Err(SessionV1Error {
+                    code: ErrorCode::UnsupportedDevelopmentFormat,
+                    ..
+                })
+            ),
+            "{result:?}"
+        );
+    }
+    drop(root);
+}
+
 /// The compactions document must carry the same session id as metadata.
 /// compactions 文档必须携带与 metadata 相同的会话 id。
 #[test]

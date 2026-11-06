@@ -59,7 +59,7 @@ pub(super) fn append_envelope(
 ) -> Result<(Seq, PendingInputId, TurnId), DomainError> {
     // Rendering is a pure representation boundary; IDs come exclusively from durable records.
     // 渲染是纯表示边界；所有身份仅来自持久记录。
-    let action = ClientActionId::try_new(format!("agent-message:{}", envelope.event_id))?;
+    let action = ClientActionId::for_agent_message(&envelope.event_id)?;
     let text = envelope
         .render()
         .map_err(|_| DomainError::CollaborationStateViolation {

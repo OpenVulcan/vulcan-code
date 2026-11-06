@@ -197,8 +197,7 @@ impl SessionDocument {
                 }
                 // Input action and body are reconstructed from authority rather than trusted from stored text.
                 // 从权威重建输入动作与正文，不直接信任存储文本。
-                let action =
-                    ClientActionId::try_new(format!("agent-message:{}", envelope.event_id))?;
+                let action = ClientActionId::for_agent_message(&envelope.event_id)?;
                 // Shared escaping is identical on first insertion and recovery validation.
                 // 首次插入与恢复校验使用完全相同的共享转义。
                 let text =

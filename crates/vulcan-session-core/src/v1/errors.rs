@@ -9,9 +9,7 @@
 
 use std::fmt;
 
-/// Maximum value for a validated session-local id.
-/// 经过校验的会话本地 id 的最大值。
-pub const LOCAL_ID_MAX: u64 = 9_007_199_254_740_991;
+use super::ids::{JS_SAFE_INTEGER_MAX, LOCAL_ID_MIN};
 
 /// One domain-level invariant violation inside the V1 session model.
 /// V1 会话模型内的一条领域级不变量违反。
@@ -621,8 +619,8 @@ impl DomainError {
         Self::InvalidId {
             entity,
             value,
-            min: 1,
-            max: LOCAL_ID_MAX,
+            min: LOCAL_ID_MIN,
+            max: JS_SAFE_INTEGER_MAX,
         }
     }
 

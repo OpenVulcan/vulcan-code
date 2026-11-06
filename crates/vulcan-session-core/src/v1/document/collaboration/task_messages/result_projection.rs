@@ -208,8 +208,7 @@ impl SessionDocument {
                 if input.input_seq.value() < self.resident_start_seq {
                     continue;
                 }
-                let expected_action =
-                    ClientActionId::try_new(format!("agent-message:{}", envelope.event_id))?;
+                let expected_action = ClientActionId::for_agent_message(&envelope.event_id)?;
                 let expected_text =
                     envelope
                         .render()

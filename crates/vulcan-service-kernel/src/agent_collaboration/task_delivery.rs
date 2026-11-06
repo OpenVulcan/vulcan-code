@@ -36,6 +36,11 @@ pub(super) async fn deliver_recorded_task_message(
             // A failed source publication may leave a staged intent; publish it before any remote effect.
             // 来源发布失败可能留下暂存意图；任何远端效果之前先将其可靠发布。
             source.flush_all().map_err(|error| error.to_string())?;
+            // A target acceptance whose flush failed is republished here instead of blocking retries.
+            // 刷盘失败的目标接纳在此重新发布，而不是让重试一直被拒。
+            receiver
+                .flush_if_dirty()
+                .map_err(|error| error.to_string())?;
             // Recovery can outlive the sending API, but cannot invent or modify its durable intent.
             // 恢复可以晚于发送 API，但不能创建或修改它的可靠意图。
             let recorded = source

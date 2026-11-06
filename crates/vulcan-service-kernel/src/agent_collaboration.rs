@@ -2124,6 +2124,12 @@ async fn reconcile_canonical_collaboration_outbox(
     // Preserve the exact embedded handle instead of looking up its UUID in the root-only index.
     // 保留精确嵌入句柄，不在仅包含根会话的索引中查找其 UUID。
     let source_handle = Arc::clone(&invocation.source_handle);
+    // Progress whose flush failed leaves the filters below, so republish it before taking snapshots.
+    // 刷盘失败的进度已不在下方筛选范围内，因此在读取快照前先重新发布。
+    let source_flush_failure = source_handle
+        .flush_if_dirty()
+        .err()
+        .map(|error| format!("collaboration outbox source flush failed: {error}"));
     let pending = source_handle
         .read(|document| {
             document
@@ -2156,6 +2162,7 @@ async fn reconcile_canonical_collaboration_outbox(
             Ok(count) => (count, Vec::new()),
             Err(error) => (0, vec![error]),
         };
+    failures.extend(source_flush_failure);
     for (question, delivery) in pending {
         let target_session_id = match Uuid::parse_str(&question.target.session_id) {
             Ok(value) => value,

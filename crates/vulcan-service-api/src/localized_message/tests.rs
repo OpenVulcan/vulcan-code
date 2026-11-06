@@ -3,9 +3,11 @@ use std::path::{Path, PathBuf};
 
 use super::WebuiLocalizedMessage;
 
-/// Constructor text that marks one catalog-backed message in Rust sources.
-/// 在 Rust 源码中标记一条目录消息的构造文本。
-const CONSTRUCTOR: &str = "WebuiLocalizedMessage::new(\"";
+/// Constructor text that marks one catalog-backed message in Rust sources; its key must follow as a
+/// string literal, so a constructor whose key the scan cannot read fails instead of passing unseen.
+/// 在 Rust 源码中标记一条目录消息的构造文本；其后必须是字符串字面量键，因此扫描无法读取键的构造会失败，
+/// 而不是未经检查地通过。
+const CONSTRUCTOR: &str = "WebuiLocalizedMessage::new(";
 
 /// Placeholder names declared by one catalog template.
 /// 单个目录模板声明的占位符名称。
@@ -100,8 +102,14 @@ fn localized_messages_match_the_webui_catalog() {
         };
         let mut rest = source.as_str();
         while let Some(start) = rest.find(CONSTRUCTOR) {
-            let Some((key, tail)) = leading_literal(&rest[start + CONSTRUCTOR.len() - 1..]) else {
-                break;
+            let arguments = &rest[start + CONSTRUCTOR.len()..];
+            let Some((key, tail)) = leading_literal(arguments.trim_start()) else {
+                problems.push(format!(
+                    "{}: a WebuiLocalizedMessage::new call has no literal key the catalog check can read",
+                    file.display()
+                ));
+                rest = arguments;
+                continue;
             };
             found += 1;
             let mut names = BTreeSet::new();

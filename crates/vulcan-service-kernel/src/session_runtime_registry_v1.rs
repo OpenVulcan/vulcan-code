@@ -4049,6 +4049,20 @@ impl SessionHandle {
         self.flush_through(target)
     }
 
+    /// Republishes revisions left behind by a failed flush; a clean session is not touched.
+    /// 重新发布刷盘失败遗留的修订；干净会话不受影响。
+    ///
+    /// Unlike `flush_all`, a clean quarantined session succeeds, so readers of durable facts keep
+    /// working. 与 `flush_all` 不同，干净的隔离会话会成功返回，读取可靠事实的调用方不受影响。
+    pub(crate) fn flush_if_dirty(&self) -> Result<(), SessionRuntimeError> {
+        let (memory, durable) =
+            self.read(|document| (document.memory_revision(), document.durable_revision()))?;
+        if durable >= memory {
+            return Ok(());
+        }
+        self.flush_all()
+    }
+
     /// Reserves and completes the final write-side fence before physical lifecycle deletion.
     /// 在物理生命周期删除前预留并完成最终写入侧封存。
     ///
@@ -4732,7 +4746,19 @@ impl SessionRuntimeRegistry {
                 .map_err(|_| SessionRuntimeError::ConcurrentSessionLoadFailed(session_id));
         };
 
-        let loaded = loader().and_then(|handle| {
+        // A loader that unwinds releases its slot through this guard, so waiters and later loads
+        // of the same session never block on a gate nobody completes.
+        // 展开（panic）的加载器通过此守卫释放其槽，使同一会话的等待者与后续加载不会阻塞在无人完成的门上。
+        let mut unwinding = SessionCreationReservation {
+            registry: self,
+            session_id,
+            gate: Arc::clone(&gate),
+            published: false,
+        };
+        let loaded = loader();
+        unwinding.published = true;
+        drop(unwinding);
+        let loaded = loaded.and_then(|handle| {
             let actual = handle.session_id();
             if actual != session_id {
                 return Err(SessionRuntimeError::LoadedSessionIdentityMismatch {

@@ -1308,10 +1308,10 @@ async fn session_collaboration_startup_repairs_cold_outbox_despite_unavailable_p
     ));
 }
 
-/// An unpublished receiver receipt cannot become a durable source acknowledgement.
-/// 尚未发布的接收方回执不能成为可靠来源确认。
+/// An unpublished receiver receipt is published before it becomes a durable source acknowledgement.
+/// 尚未发布的接收方回执先可靠发布，才成为可靠来源确认。
 #[tokio::test]
-async fn session_task_outbox_recovery_rejects_unpublished_acceptance() {
+async fn session_task_outbox_recovery_publishes_volatile_acceptance_first() {
     // Keep both real stores alive while simulating a receiver with an unflushed acceptance.
     // 模拟接收方尚未刷写接纳期间保留双方真实存储。
     let (_root, invocation, target, _) = message_fixture(false).await;
@@ -1338,34 +1338,6 @@ async fn session_task_outbox_recovery_rejects_unpublished_acceptance() {
         )
         .unwrap();
     let app = crate::ServiceEventEmitter::new(vec![]);
-    assert!(
-        reconcile_session_v1_collaboration_outbox(
-            &app,
-            invocation.state.clone(),
-            invocation.source_session_id
-        )
-        .await
-        .unwrap_err()
-        .contains("not durably published")
-    );
-    let source = load_session_v1_for_runtime(&invocation.source_handle.storage_locator().unwrap())
-        .unwrap()
-        .document;
-    assert!(
-        source.collaboration_state().outbound_task_messages[&message.delivery_id]
-            .acceptance
-            .is_none()
-    );
-    let before = load_session_v1_for_runtime(&target.storage_locator().unwrap())
-        .unwrap()
-        .document;
-    assert!(
-        !before
-            .collaboration_state()
-            .inbound_task_messages
-            .contains_key(&message.delivery_id)
-    );
-    target.flush_all().unwrap();
     assert_eq!(
         reconcile_session_v1_collaboration_outbox(
             &app,
@@ -1375,6 +1347,21 @@ async fn session_task_outbox_recovery_rejects_unpublished_acceptance() {
         .await
         .unwrap(),
         1
+    );
+    // Both sides must hold the same durable receipt after recovery.
+    // 恢复后双方必须持有相同的可靠回执。
+    let receiver = load_session_v1_for_runtime(&target.storage_locator().unwrap())
+        .unwrap()
+        .document;
+    let accepted = &receiver.collaboration_state().inbound_task_messages[&message.delivery_id];
+    let source = load_session_v1_for_runtime(&invocation.source_handle.storage_locator().unwrap())
+        .unwrap()
+        .document;
+    assert_eq!(
+        source.collaboration_state().outbound_task_messages[&message.delivery_id]
+            .acceptance
+            .as_ref(),
+        Some(accepted)
     );
 }
 

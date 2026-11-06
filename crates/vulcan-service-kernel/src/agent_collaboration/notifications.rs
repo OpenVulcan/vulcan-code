@@ -241,6 +241,14 @@ pub(super) async fn deliver_recorded_notification(
                         .is_err()
                         {
                             Some(CollaborationDeliveryFailureReason::InvalidBinding)
+                        } else if input.target.turn_id.is_some_and(|turn_id| {
+                            // A frozen target turn that closed or was replaced never reopens.
+                            // 已关闭或被替换的冻结目标回合不会重新打开。
+                            document
+                                .active_turn()
+                                .is_none_or(|turn| turn.closed || turn.turn_id != turn_id)
+                        }) {
+                            Some(CollaborationDeliveryFailureReason::InvalidBinding)
                         } else {
                             None
                         },
@@ -341,6 +349,12 @@ pub(super) async fn recover_existing_notification_progress(
     record: &CollaborationNotificationRecord,
     target: &ResolvedSession,
 ) -> Result<bool, String> {
+    // A target receipt whose flush failed is republished first so recovery does not stall on it.
+    // 先重新发布刷盘失败的目标回执，使恢复不会因此停滞。
+    target
+        .handle
+        .flush_if_dirty()
+        .map_err(|error| format!("failed to publish notification target receipt: {error}"))?;
     let target_progress = target
         .handle
         .read(|document| {

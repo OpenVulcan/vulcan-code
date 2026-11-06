@@ -550,11 +550,16 @@ fn merge_prompt_session_slice_into_retained_workspace(
         .iter()
         .position(|session| session.id == session_id)
         .ok_or_else(|| format!("prompt preparation candidate is missing session `{session_id}`"))?;
-    let session = candidate.sessions.remove(candidate_position);
+    let mut session = candidate.sessions.remove(candidate_position);
     let retained_session = workspace_session_summary_for_session_mut(retained, session_id)
         .ok_or_else(|| {
             format!("prompt preparation owner session `{session_id}` left retained state")
         })?;
+    // Preparation never edits the title or list position, so a rename or reorder made meanwhile wins.
+    // 准备流程从不修改标题或列表位置，因此期间完成的重命名或排序优先保留。
+    session.title = std::mem::take(&mut retained_session.title);
+    session.title_source = retained_session.title_source;
+    session.manual_position = retained_session.manual_position;
     *retained_session = session;
     let runtime_state = candidate
         .session_runtime_state
@@ -1381,6 +1386,57 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use vulcan_context_injection::InjectionInsert;
     use vulcan_subagent_core::STOPPED_SUBAGENT_TASK_IDS_KEY;
+    use vulcan_workbench_model::SessionTitleSource;
+
+    /// A rename or reorder that lands during prompt preparation survives the prepared merge.
+    /// 提示词准备期间完成的重命名或排序在合并准备结果后仍然保留。
+    #[test]
+    fn prepared_merge_keeps_titles_and_positions_changed_meanwhile() {
+        let session_id = SessionId::new_v4();
+        let snapshot = |title: &str| WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: vec![SessionSummary::new(
+                session_id,
+                None,
+                title,
+                "",
+                SessionState::Completed,
+                0,
+                0,
+                "just now",
+            )],
+            archived_sessions: Vec::new(),
+            session_runtime_state: BTreeMap::from([(
+                session_id,
+                SessionRuntimeStateEntry::default(),
+            )]),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: session_id,
+            hydrated_session_ids: BTreeSet::new(),
+        };
+        let mut candidate = snapshot("initial");
+        candidate.sessions[0].status = SessionState::Running;
+        let mut retained = snapshot("renamed");
+        retained.sessions[0].title_source = SessionTitleSource::Manual;
+        retained.sessions[0].manual_position = Some(7);
+
+        merge_prompt_session_slice_into_retained_workspace(
+            &mut retained,
+            candidate,
+            session_id,
+            SessionRunPhase::Preparing,
+        )
+        .unwrap();
+
+        let merged = &retained.sessions[0];
+        assert_eq!(merged.title, "renamed");
+        assert_eq!(merged.title_source, SessionTitleSource::Manual);
+        assert_eq!(merged.manual_position, Some(7));
+        assert_eq!(merged.status, SessionState::Running);
+    }
 
     /// Verifies close-agent UI cleanup reads only the structured host result task ids.
     /// 验证关闭代理的界面清理只读取结构化宿主结果中的任务标识。
