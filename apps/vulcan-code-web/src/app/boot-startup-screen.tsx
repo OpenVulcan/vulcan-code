@@ -1,5 +1,7 @@
 import React from "react";
+import { RotateCw, X } from "lucide-react";
 import { StartupLogoMark } from "@/components/shell/startup-logo-mark";
+import { readElectronDesktopBridge } from "@/host-shell/electron-bridge";
 import { StartupProgressPanel, type StartupProgressLabels } from "@/components/shell/startup-progress-panel";
 import type { StartupSnapshot } from "@/types";
 import { resolveAppLocale, type LocaleCode } from "@/i18n-locales";
@@ -103,12 +105,26 @@ export function BootErrorScreen(props: {
   // onReload explicitly restarts the application only after the user chooses recovery.
   // onReload 仅在用户选择恢复后显式重新加载应用。
   onReload?: () => void;
+  // False when the page already draws its own window bar, such as the desktop startup page.
+  // 页面已自绘窗口条时为 false，例如桌面启动页。
+  windowBar?: boolean;
 }) {
   // text stores localized labels for the boot error.
   // text 保存启动错误的本地化文案。
   const text = bootText(bootLocale(props.uiLocale));
+  // desktop is the frameless desktop window that needs drawn close and reload buttons, or null.
+  // desktop 是需要自绘关闭与刷新按钮的无边框桌面窗口，否则为 null。
+  const desktop = props.windowBar === false ? null : framelessDesktopWindow();
   return (
     <main className="loading-screen error">
+      {desktop ? (
+        <StartupWindowBar
+          closeLabel={text.closeWindow}
+          onClose={() => void desktop.closeWindow().catch(() => window.close())}
+          onReload={props.onReload}
+          reloadLabel={text.reloadApplication}
+        />
+      ) : null}
       <section className="startup-error-panel" aria-live="assertive">
         <StartupLogoMark />
         <div className="startup-error-content">
@@ -123,6 +139,47 @@ export function BootErrorScreen(props: {
         </div>
       </section>
     </main>
+  );
+}
+
+// NATIVE_WINDOW_BUTTONS is true on macOS, whose frameless desktop window keeps its native buttons.
+// NATIVE_WINDOW_BUTTONS 在 macOS 上为 true，其无边框桌面窗口保留原生按钮。
+export const NATIVE_WINDOW_BUTTONS = typeof navigator !== "undefined" && /Mac/u.test(navigator.userAgent);
+
+// framelessDesktopWindow returns the desktop bridge when this page fills a desktop window without native buttons.
+// framelessDesktopWindow 在本页占满无原生按钮的桌面窗口时返回桌面桥。
+function framelessDesktopWindow() {
+  return NATIVE_WINDOW_BUTTONS ? null : readElectronDesktopBridge();
+}
+
+// StartupWindowBar is the drag strip of a frameless desktop window before the workbench draws its own titlebar: an
+// optional reload button and a close button at the right edge.
+// StartupWindowBar 是工作台自绘标题栏之前无边框桌面窗口的拖动条：右端可选的刷新按钮与关闭按钮。
+export function StartupWindowBar(props: {
+  // Accessible label of the close button.
+  // 关闭按钮的无障碍标签。
+  closeLabel: string;
+  // Closes the window.
+  // 关闭窗口。
+  onClose: () => void;
+  // Reloads the page; the reload button is shown only when it is given.
+  // 重新加载页面；仅在提供时显示刷新按钮。
+  onReload?: () => void;
+  // Accessible label of the reload button.
+  // 刷新按钮的无障碍标签。
+  reloadLabel?: string;
+}) {
+  return (
+    <div className="startup-window-bar">
+      {props.onReload ? (
+        <button aria-label={props.reloadLabel} className="startup-window-button" onClick={props.onReload} title={props.reloadLabel} type="button">
+          <RotateCw />
+        </button>
+      ) : null}
+      <button aria-label={props.closeLabel} className="startup-window-button" data-action="close" onClick={props.onClose} title={props.closeLabel} type="button">
+        <X />
+      </button>
+    </div>
   );
 }
 

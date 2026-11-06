@@ -1,7 +1,12 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { X } from "lucide-react";
-import { BootErrorScreen, BootLoadingScreen, bootText } from "@/app/boot-startup-screen";
+import {
+  BootErrorScreen,
+  BootLoadingScreen,
+  bootText,
+  NATIVE_WINDOW_BUTTONS,
+  StartupWindowBar,
+} from "@/app/boot-startup-screen";
 import { resolveAppLocale } from "@/i18n-locales";
 import {
   APPEARANCE_TEXT_TIERS,
@@ -11,7 +16,6 @@ import {
   type AppearanceMotion,
 } from "@/ui-kit/appearance";
 import "../boot-styles.css";
-import "./desktop-startup.css";
 
 // The desktop startup page: the WebUI startup surface shown from local files in the desktop window while the desktop
 // shell starts or reuses Core. The shell drives it through `window.vulcanDesktopStartup` and then loads the WebUI in the
@@ -75,10 +79,6 @@ applyAppearance({
   text: accepted("text", APPEARANCE_TEXT_TIERS, DEFAULT_APPEARANCE.text),
   motion: accepted<AppearanceMotion>("motion", ["system", "reduce"], DEFAULT_APPEARANCE.motion),
 });
-// macOS keeps its native window buttons on the frameless window, so only other systems need a close button.
-// macOS 在无边框窗口上保留原生窗口按钮，因此只有其他系统需要关闭按钮。
-const nativeWindowButtons = /Mac/u.test(navigator.userAgent);
-
 // DesktopStartupPage renders the startup surface or the startup failure under a drag strip.
 // DesktopStartupPage 在拖动条下渲染启动层或启动失败。
 function DesktopStartupPage() {
@@ -94,14 +94,10 @@ function DesktopStartupPage() {
     <>
       {current.failure === null
         ? <BootLoadingScreen uiLocale={locale} detail={current.detail} />
-        : <BootErrorScreen error={current.failure} uiLocale={locale} />}
-      <div className="desktop-startup-titlebar">
-        {nativeWindowButtons ? null : (
-          <button aria-label={closeLabel} className="desktop-startup-close" onClick={() => window.close()} title={closeLabel} type="button">
-            <X />
-          </button>
-        )}
-      </div>
+        : <BootErrorScreen error={current.failure} uiLocale={locale} windowBar={false} />}
+      {/* macOS keeps its native window buttons on the frameless window, so only other systems need a close button. */}
+      {/* macOS 在无边框窗口上保留原生窗口按钮，因此只有其他系统需要关闭按钮。 */}
+      {NATIVE_WINDOW_BUTTONS ? null : <StartupWindowBar closeLabel={closeLabel} onClose={() => window.close()} />}
     </>
   );
 }

@@ -55,6 +55,45 @@
 .startup-reload-button:hover { background: var(--vk-sunken); }
 .startup-reload-button:focus-visible { outline: 2px solid var(--vk-signal); outline-offset: 2px; }
 
+/* A frameless desktop window shows startup pages before the workbench draws its titlebar, so they add a drag strip
+   with the window buttons a user needs there: reload (on a failure) and close. */
+/* 无边框桌面窗口在工作台自绘标题栏之前显示启动页，因此补上拖动条及用户此时需要的窗口按钮：
+   刷新（失败时）与关闭。 */
+.startup-window-bar {
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 70;
+  display: flex;
+  justify-content: flex-end;
+  height: calc(var(--vk-u) * 9);
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.startup-window-button {
+  display: grid;
+  place-items: center;
+  width: calc(var(--vk-u) * 11.5);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--vk-ink-2);
+  cursor: default;
+  -webkit-app-region: no-drag;
+  transition: background var(--vk-t-fast) var(--vk-ease), color var(--vk-t-fast) var(--vk-ease);
+}
+
+.startup-window-button:hover { background: var(--vk-sunken); color: var(--vk-ink); }
+.startup-window-button[data-action="close"]:hover { background: var(--vk-bad); color: var(--vk-on-bad); }
+.startup-window-button:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: calc(var(--vk-focus-w) * -1); }
+.startup-window-button > .lucide { width: 1rem; height: 1rem; stroke-width: 1.5; }
+
+@media (prefers-reduced-motion: reduce) {
+  .startup-window-button { transition: none; }
+}
+
+:root[data-vk-motion="reduce"] .startup-window-button { transition: none; }
+
 .startup-error-panel {
   width: min(520px, 100%);
   min-width: 0;

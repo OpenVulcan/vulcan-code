@@ -32,6 +32,34 @@ describe("startup controls", () => {
     expect(host.querySelector('summary')?.textContent).toBe("View details");
     expect(host.querySelector('button')).toBeNull();
   });
+  // Inside the frameless desktop window the failure page draws reload and close buttons; elsewhere it draws none.
+  // 在无边框桌面窗口中，失败页自绘刷新与关闭按钮；其他环境不绘制。
+  it("draws reload and close window buttons only inside the desktop window", async () => {
+    // desktop is a complete synthetic preload bridge whose close is observed.
+    // desktop 是完整的合成预加载桥，用于观察关闭调用。
+    const desktop = Object.fromEntries([
+      "minimizeWindow", "toggleWindowMaximize", "isWindowMaximized", "closeWindow", "subscribeWindowResize",
+      "isWindowMinimized", "isWindowFocused", "isWindowVisible", "subscribeWindowFocusChange",
+      "getNotificationPermission", "requestNotificationPermission", "showNotification", "subscribeNotificationActivation",
+    ].map((name) => [name, vi.fn(async () => undefined)]));
+    Object.assign(window, { vulcanDesktop: { desktop: { ...desktop, nativeNotificationsAvailable: false } } });
+    try {
+      const reload = vi.fn();
+      await act(async () => root.render(<BootErrorScreen error="Failure" uiLocale="en-US" onReload={reload} />));
+      const windowButtons = host.querySelectorAll<HTMLButtonElement>(".startup-window-bar button");
+      expect(Array.from(windowButtons, (button) => button.getAttribute("aria-label"))).toEqual(["Reload application", "Close window"]);
+      await act(async () => windowButtons[0].click());
+      expect(reload).toHaveBeenCalledOnce();
+      await act(async () => windowButtons[1].click());
+      expect(desktop.closeWindow).toHaveBeenCalledOnce();
+      await act(async () => root.render(<BootErrorScreen error="Failure" uiLocale="en-US" windowBar={false} />));
+      expect(host.querySelector(".startup-window-bar")).toBeNull();
+    } finally {
+      delete (window as { vulcanDesktop?: unknown }).vulcanDesktop;
+    }
+    await act(async () => root.render(<BootErrorScreen error="Failure" uiLocale="en-US" onReload={vi.fn()} />));
+    expect(host.querySelector(".startup-window-bar")).toBeNull();
+  });
   it("uses the same unknown and measured progress contract in the actual boot entry", async () => {
     await act(async () => root.render(<BootLoadingScreen />));
     expect(host.querySelector('[role="progressbar"]')?.hasAttribute("aria-valuenow")).toBe(false);
