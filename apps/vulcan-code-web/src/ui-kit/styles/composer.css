@@ -107,32 +107,51 @@
 }
 .vk-jump:hover { border-color: var(--vk-ink-3); color: var(--vk-ink); }
 .vk-jump:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: 2px; }
-/* The session runtime cue rests on a small plate over the dock's top-left edge. It is out of flow, so its
- * arrival, phase changes and removal never move the transcript or the composer, and it stays clear of the
- * centered jump button and lets clicks through. */
-/* 会话运行提示以小底板悬浮在停靠层左上沿。它脱离布局流，出现、阶段切换与移除都不会移动转录或输入区；
- * 它避开居中的跳转按钮，并让点击穿透。 */
+/* The session runtime cue is a tab growing out of the top edge of the composer stack (the composer, or the strips
+ * docked on it), lined up with those strips' left edge. Its anchor has no height and cancels the dock gap, so the
+ * cue's arrival, phase changes and removal never move the transcript or the composer. The tab overlaps the edge
+ * below by one border width and takes that surface's fill, so the two read as one shape with a lit outer edge. It
+ * stays clear of the centered jump button and lets clicks through. */
+/* 会话运行提示是从输入区堆叠（输入区或停靠其上的条带）上边缘伸出的标签，与这些条带的左边缘对齐。其锚点没有高度并抵消
+ * 停靠层间距，因此提示出现、阶段切换与移除都不会移动转录或输入区。标签向下覆盖一个边框宽度并沿用下方表面的底色，
+ * 使二者成为一个带亮色外沿的整体形状。它避开居中的跳转按钮，并让点击穿透。 */
 .vk-dock-status {
-  position: absolute;
-  left: 0;
-  bottom: calc(100% + var(--vk-u) * 2.5);
-  z-index: 6;
-  max-width: calc(50% - var(--vk-u) * 7);
+  position: relative;
+  z-index: 1;
+  align-self: stretch;
+  height: 0;
+  margin-bottom: calc(var(--vk-u) * -2.5);
   pointer-events: none;
+}
+.vk-dock-status > .vk-runtime-cue {
+  position: absolute;
+  left: 4%;
+  bottom: calc(var(--vk-bw) * -1);
+  max-width: calc(46% - var(--vk-u) * 7);
 }
 .vk-runtime-cue {
   display: flex;
   align-items: baseline;
   gap: calc(var(--vk-u) * 2);
   min-width: 0;
-  padding: calc(var(--vk-u) * 1) calc(var(--vk-u) * 2.5);
-  border: var(--vk-bw) solid var(--vk-line);
+  padding: calc(var(--vk-u) * 1) calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 1 + var(--vk-bw));
+  border: var(--vk-bw) solid var(--vk-line-strong);
+  border-bottom: 0;
   background: var(--vk-raised);
-  box-shadow: var(--vk-shadow-1);
+  box-shadow: inset 0 2px 0 var(--vk-ember);
   font-size: var(--vk-fs-xs);
   line-height: var(--vk-lh-ui);
   white-space: nowrap;
-  animation: vk-rise var(--vk-t-med) var(--vk-ease) backwards;
+  transition: border-color var(--vk-t-med) var(--vk-ease);
+  animation: vk-tab-rise var(--vk-t-med) var(--vk-ease) backwards;
+}
+.vk-dock-status:has(+ :is(.vk-queue, .vk-goal)) > .vk-runtime-cue { border-color: var(--vk-line); background: var(--vk-panel); }
+.vk-dock-status:has(+ .vk-composer:focus-within) > .vk-runtime-cue { border-color: var(--vk-ink-3); }
+/* The tab slides up out of the edge it belongs to. */
+/* 标签从其所属的边缘中向上滑出。 */
+@keyframes vk-tab-rise {
+  from { clip-path: inset(100% 0 0 0); transform: translateY(100%); }
+  to { clip-path: inset(0); transform: none; }
 }
 .vk-runtime-cue > .vk-shimmer-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .vk-runtime-cue-elapsed { flex: none; color: var(--vk-ink-3); font-variant-numeric: tabular-nums; }

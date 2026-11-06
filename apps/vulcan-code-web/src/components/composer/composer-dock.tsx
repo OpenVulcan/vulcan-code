@@ -344,7 +344,6 @@ export function ComposerDock(props: {
           </Tooltip>
         </div>
       ) : null}
-      {props.runtimeStatus ? <div className="vk-dock-status">{props.runtimeStatus}</div> : null}
       {startShown ? props.startHero : null}
       {draftOwner ? (
         <DedicatedDraftStrip
@@ -370,6 +369,10 @@ export function ComposerDock(props: {
         />
         </React.Suspense>
       ) : (
+      <>
+      {/* The runtime cue sits directly above the composer stack so its tab grows out of that stack's top edge. */}
+      {/* 运行提示紧贴输入区堆叠之上，使其标签从该堆叠的上边缘伸出。 */}
+      {props.runtimeStatus ? <div className="vk-dock-status">{props.runtimeStatus}</div> : null}
       <DedicatedComposerContext.Provider value={persistedDedicated}>
       <ComposerPanel
         answerModeState={answerModeState}
@@ -427,6 +430,7 @@ export function ComposerDock(props: {
         onOpenMemorySettings={props.onOpenMemorySettings}
       />
       </DedicatedComposerContext.Provider>
+      </>
       )}
       {startShown ? props.startFooter : null}
       {props.todolistStatusHost && visibleSessionTodolist

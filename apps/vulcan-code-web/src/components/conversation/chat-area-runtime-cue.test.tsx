@@ -147,6 +147,10 @@ it("keeps the floating status out of layout flow and click-through", () => {
     .flatMap((node: { nodes: { prop: string; value: string }[] }) => node.nodes.filter((decl) => decl.prop === property))
     .map((decl: { value: string }) => decl.value)
     .at(-1);
-  expect(declaration(".vk-dock-status", "position")).toBe("absolute");
+  // The anchor takes no room: no height, and a bottom margin that cancels the dock gap it adds.
+  // 锚点不占空间：没有高度，且底部外边距抵消它带来的停靠层间距。
+  expect(declaration(".vk-dock-status", "height")).toBe("0");
+  expect(declaration(".vk-dock-status", "margin-bottom")).toBe(declaration(".vk-dock", "gap")?.replace("* ", "* -"));
+  expect(declaration(".vk-dock-status > .vk-runtime-cue", "position")).toBe("absolute");
   expect(declaration(".vk-dock-status", "pointer-events")).toBe("none");
 });
