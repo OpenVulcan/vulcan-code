@@ -15,6 +15,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_restart_to_update",
     "service_repair_app_install",
     "service_dismiss_app_update_notice",
+    "service_install_desktop_profile",
     "service_save_app_update_settings",
 ];
 
@@ -46,6 +47,9 @@ pub(super) async fn dispatch(
         }
         "service_dismiss_app_update_notice" => {
             rpc_json_result(app_update_services::service_dismiss_app_update_notice())
+        }
+        "service_install_desktop_profile" => {
+            rpc_json_result(app_update_services::service_install_desktop_profile())
         }
         "service_save_app_update_settings" => rpc_json_result(
             app_update_services::service_save_app_update_settings(

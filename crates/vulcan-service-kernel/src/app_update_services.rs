@@ -155,6 +155,12 @@ pub(crate) fn service_repair_app_install() -> Result<AppUpdateSnapshot, String> 
     updater()?.repair()
 }
 
+/// Starts installing the AppArmor profile the Linux desktop app needs.
+/// 开始安装 Linux 桌面应用所需的 AppArmor 配置。
+pub(crate) fn service_install_desktop_profile() -> Result<AppUpdateSnapshot, String> {
+    updater()?.install_desktop_profile()
+}
+
 /// Clears the notice about a version that failed to start.
 /// 清除有关某版本启动失败的提示。
 pub(crate) fn service_dismiss_app_update_notice() -> Result<AppUpdateSnapshot, String> {

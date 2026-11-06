@@ -121,6 +121,29 @@
   管道会一直保持打开；同理，Windows 上安装器以显式句柄列表启动 Core，只交出 NUL 与这两个文件（Windows
   PowerShell 等会把其输出的额外可继承副本交给安装器），调用方经管道读取安装器输出时不会被服务挂住。
 
+## Linux 桌面应用的 AppArmor 配置
+
+- **原因**：Ubuntu 23.10 及以后（`/proc/sys/kernel/apparmor_restrict_unprivileged_userns` 为 `1`）只允许
+  AppArmor 配置许可的程序使用非特权用户命名空间；程序继承启动者的配置，因此桌面应用从桌面图标能启动，
+  从程序坞或应用菜单启动时 Electron 沙箱失败退出。唯一不降级的做法是一次性以 root 安装
+  `/etc/apparmor.d/vulcan-code`（`flags=(unconfined)` 加 `userns,`），它附着到 `<已解析根>/versions/*/<桌面程序>`，
+  因此之后每个版本的应用内更新都无需再次提权。`--no-sandbox` 属于降级，不得使用。
+- **唯一实现**：配置文本、路径常量、比较（`Current`/`Missing`/`Outdated`/`Foreign`）与命令都在
+  `vulcan-install-core` 的 `apparmor.rs`；标记行 `GENERATED_MARKER` 与布局文件名 `RUNTIME_LAYOUT_FILE` 在
+  `install_root.rs`；桌面组件名 `DESKTOP_COMPONENT` 在 `names.rs`。安装器与 Core 写出的字节完全相同。
+- **安装器**：GUI 安装且限制开启时，在终端中经 `sudo` 安装并记录为 `Item::AppArmorProfile`；拒绝密码时
+  只在提示中留下命令。无标记的同名文件属于他人，不覆盖、不删除。卸载时，未被记录但带标记且指向本根目录的
+  配置（由 Core 安装）同样移除。
+- **Core**：只在 Linux、已安装 `gui` 组件、限制开启且配置为 `Missing` 或 `Outdated` 时，快照给出
+  `desktopProfile`（`status`、`installing`、`command`、`error`）；`Current` 与 `Foreign` 不提示。启动时把配置
+  写到 `updates/vulcan-code.apparmor`，使 `command`（`sudo` 命令行）可直接运行。`service_install_desktop_profile`
+  以 `pkexec /bin/sh -c` 一次完成复制与加载（root 下直接运行），密码由桌面会话的 polkit 代理询问；不占用
+  更新器的互斥操作，进行中再次调用被拒绝。失败（未给密码、无认证代理、缺少 `pkexec`）只写入 `error`，
+  不重试、不改用其他方式。以 systemd 用户服务运行的 Core 不在登录会话内，polkit 能否找到代理以真机为准，
+  找不到时用户使用 `command`。
+- **界面**：WebUI 每个页面提示一次（toast，指向更新设置页）；更新设置页与 TUI 更新页显示说明、安装按钮、
+  终端命令与失败原因。
+
 ## 同步触发点
 
 - Linux 菜单项的 `StartupWMClass` 取自安装器 `integrate.rs` 的 `DESKTOP_WINDOW_CLASS`，必须等于

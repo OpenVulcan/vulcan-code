@@ -1099,6 +1099,10 @@ impl FakeService {
                 self.loads["service_app_update_status"]["rollback"] = Value::Null;
                 return Ok(self.loads["service_app_update_status"].clone());
             }
+            "service_install_desktop_profile" => {
+                self.loads["service_app_update_status"]["desktopProfile"] = Value::Null;
+                return Ok(self.loads["service_app_update_status"].clone());
+            }
             "service_cancel_app_update" | "service_restart_to_update" => {
                 return Ok(self.loads["service_app_update_status"].clone());
             }

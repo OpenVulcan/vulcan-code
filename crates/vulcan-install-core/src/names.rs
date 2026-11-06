@@ -166,6 +166,10 @@ impl FromStr for Channel {
     }
 }
 
+/// The desktop app component (`scripts/release-components.json`).
+/// 桌面应用组件（`scripts/release-components.json`）。
+pub const DESKTOP_COMPONENT: &str = "gui";
+
 /// A component name: lowercase ASCII letters, digits and inner hyphens, starting with a letter.
 /// 组件名：小写 ASCII 字母、数字与中间的连字符，以字母开头。
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

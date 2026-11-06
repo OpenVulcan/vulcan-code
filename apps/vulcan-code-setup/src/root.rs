@@ -5,7 +5,9 @@ use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
-use vulcan_install_core::install_root::{InstallRoot, UPDATES_DIR, VERSIONS_DIR};
+use vulcan_install_core::install_root::{
+    InstallRoot, RUNTIME_LAYOUT_FILE as LAYOUT_FILE, UPDATES_DIR, VERSIONS_DIR,
+};
 use vulcan_install_core::names::{ComponentName, ReleaseVersion};
 use vulcan_install_core::record::InstallRecord;
 
@@ -27,10 +29,6 @@ const LEGACY_GENERATION_PREFIX: &str = "vulcan-code-";
 /// Entries an interrupted first installation may leave behind.
 /// 中断的首次安装可能遗留的条目。
 const INSTALL_LEFTOVERS: [&str; 3] = [VERSIONS_DIR, UPDATES_DIR, SETUP_DIR];
-
-/// The release layout file at the top of every version.
-/// 每个版本顶层的发行布局文件。
-const LAYOUT_FILE: &str = "runtime-layout.json";
 
 /// Who an install root belongs to.
 /// 安装根目录的归属。

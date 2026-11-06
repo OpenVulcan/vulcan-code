@@ -16,6 +16,7 @@ const { service } = vi.hoisted(() => ({ service: {
   restartToUpdate: vi.fn(),
   repairAppInstall: vi.fn(),
   dismissAppUpdateNotice: vi.fn(),
+  installDesktopProfile: vi.fn(),
   saveAppUpdateSettings: vi.fn(),
 } }));
 vi.mock("@/service/app-update-service", () => service);
@@ -44,6 +45,7 @@ function snapshot(overrides: Partial<AppUpdateSnapshot> = {}): AppUpdateSnapshot
     repairedFiles: null,
     error: null,
     rollback: null,
+    desktopProfile: null,
     downloadPageUrl: "https://openvulcan.com/download",
     ...overrides,
   };
@@ -123,6 +125,22 @@ describe("AppUpdateSettingsArea", () => {
     expect(button("settings.appUpdate.download")).toBeUndefined();
     expect(button("settings.appUpdate.openDownloadPage")).toBeUndefined();
     expect(container.querySelector("[data-app-update-offer]")?.textContent).toContain("settings.appUpdate.fullSetup");
+  });
+
+  it("installs a missing desktop profile and keeps the button off while the password prompt is open", async () => {
+    const profile = { status: "missing" as const, installing: false, command: "sudo install -m 0644 a b", error: null };
+    await render(snapshot({ desktopProfile: profile }));
+    const notice = container.querySelector("[data-app-update-desktop-profile]");
+    expect(notice?.textContent).toContain("sudo install -m 0644 a b");
+    service.installDesktopProfile.mockResolvedValue(snapshot({ desktopProfile: { ...profile, installing: true } }));
+    await act(async () => { button("settings.appUpdate.desktopProfile.install")?.click(); });
+    expect(service.installDesktopProfile).toHaveBeenCalledOnce();
+    expect(button("settings.appUpdate.desktopProfile.installing")?.disabled).toBe(true);
+  });
+
+  it("shows no desktop profile notice when the system needs none", async () => {
+    await render(snapshot());
+    expect(container.querySelector("[data-app-update-desktop-profile]")).toBeNull();
   });
 
   it("lists every version an update brings, newest first, below the settings", async () => {

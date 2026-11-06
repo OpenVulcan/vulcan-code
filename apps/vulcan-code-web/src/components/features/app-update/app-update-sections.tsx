@@ -2,11 +2,12 @@ import * as React from "react";
 
 import { releaseNotesFor } from "@/components/features/app-update/use-app-update";
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
+import { PageNotice } from "@/components/page";
 import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice";
 import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
 import { errorMessage, formatBytes } from "@/lib/display-format";
 import type { AppUpdateOffer, AppUpdateOperation, AppUpdateSnapshot } from "@/service/app-update-events";
-import { cancelAppUpdate, downloadAppUpdate, restartToUpdate } from "@/service/app-update-service";
+import { cancelAppUpdate, downloadAppUpdate, installDesktopProfile, restartToUpdate } from "@/service/app-update-service";
 import { openExternalUrl } from "@/service/project-actions-service";
 import { Badge } from "@/ui-kit/primitives/badge";
 import { Button } from "@/ui-kit/primitives/button";
@@ -102,6 +103,36 @@ export function AppUpdateErrorNotices(props: { snapshot: AppUpdateSnapshot; call
   return <>
     {snapshot.error ? <SettingsErrorNotice detail={snapshot.error.message} message={t(FAILURE_KEYS[snapshot.error.operation])} /> : null}
     {calls.callError ? <SettingsErrorNotice detail={calls.callError} message={t("settings.appUpdate.requestFailed")} /> : null}
+  </>;
+}
+
+// AppUpdateDesktopProfileNotice explains the AppArmor profile the Linux desktop app still needs and installs
+// it through the system password prompt, with the sudo line for a terminal as the alternative; nothing
+// otherwise.
+// AppUpdateDesktopProfileNotice 说明 Linux 桌面应用仍需要的 AppArmor 配置，并经系统密码框安装它，同时给出
+// 可在终端运行的 sudo 命令作为替代；否则不渲染。
+// Parameters: snapshot is the latest updater state; calls sends the install.
+// 参数：snapshot 为最新的更新器状态；calls 发送安装。
+export function AppUpdateDesktopProfileNotice(props: { snapshot: AppUpdateSnapshot; calls: AppUpdateCalls }) {
+  const { t } = useI18n();
+  const profile = props.snapshot.desktopProfile;
+  if (!profile) return null;
+  return <>
+    <PageNotice
+      data-app-update-desktop-profile=""
+      tone="warning"
+      title={t(profile.status === "outdated" ? "settings.appUpdate.desktopProfile.outdatedTitle" : "settings.appUpdate.desktopProfile.title")}
+      details={profile.command}
+      detailsLabel={t("settings.appUpdate.desktopProfile.manual")}
+      actions={
+        <Button disabled={profile.installing} onClick={() => void props.calls.run(installDesktopProfile)} size="sm">
+          {profile.installing ? t("settings.appUpdate.desktopProfile.installing") : t("settings.appUpdate.desktopProfile.install")}
+        </Button>
+      }
+    >
+      {t("settings.appUpdate.desktopProfile.body")}
+    </PageNotice>
+    {profile.error ? <SettingsErrorNotice detail={profile.error} message={t("settings.appUpdate.desktopProfile.failed")} /> : null}
   </>;
 }
 

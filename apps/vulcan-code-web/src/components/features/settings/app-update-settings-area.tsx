@@ -1,5 +1,6 @@
 import { useAppUpdate } from "@/components/features/app-update/use-app-update";
 import {
+  AppUpdateDesktopProfileNotice,
   AppUpdateErrorNotices,
   AppUpdateOfferRows,
   AppUpdateProgressRow,
@@ -104,6 +105,8 @@ export function AppUpdateSettingsArea(props: { serviceInstanceEpoch: number }) {
     ) : null}
 
     <AppUpdateErrorNotices calls={calls} snapshot={snapshot} />
+
+    <AppUpdateDesktopProfileNotice calls={calls} snapshot={snapshot} />
 
     {available ? (
       <PageSection layout="rows" title={t("settings.appUpdate.settingsTitle")}>

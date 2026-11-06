@@ -76,6 +76,22 @@ export interface AppUpdateOffer {
   previouslyFailed: boolean;
 }
 
+/** The AppArmor profile the Linux desktop app still needs. / Linux 桌面应用仍需要的 AppArmor 配置。 */
+export interface AppUpdateDesktopProfile {
+  // missing: none is installed; outdated: one of Vulcan Code with other content, such as for another location.
+  // missing：未安装；outdated：已安装内容不同的 Vulcan Code 配置，例如属于另一个位置。
+  status: "missing" | "outdated";
+  // True while the system password prompt is open.
+  // 系统密码框打开期间为 true。
+  installing: boolean;
+  // A shell line that installs the profile by hand with sudo.
+  // 以 sudo 手动安装配置的 Shell 命令行。
+  command: string;
+  // Why the last installation failed, in English.
+  // 上次安装失败的原因，英文描述。
+  error: string | null;
+}
+
 /** Complete updater state. / 完整的更新器状态。 */
 export interface AppUpdateSnapshot {
   currentVersion: string;
@@ -89,6 +105,9 @@ export interface AppUpdateSnapshot {
   repairedFiles: number | null;
   error: { operation: AppUpdateOperation; message: string } | null;
   rollback: { failed: string; restored: string } | null;
+  // Null when the desktop app needs no AppArmor profile here.
+  // 桌面应用在此不需要 AppArmor 配置时为 null。
+  desktopProfile: AppUpdateDesktopProfile | null;
   downloadPageUrl: string;
 }
 

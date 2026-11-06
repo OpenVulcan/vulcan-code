@@ -15,6 +15,7 @@
 
 #![warn(missing_docs)]
 
+pub mod apparmor;
 pub mod assemble;
 pub mod digest;
 pub mod error;

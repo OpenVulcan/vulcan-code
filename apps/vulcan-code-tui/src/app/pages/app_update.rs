@@ -1,7 +1,9 @@
 // Application update page, mirroring the WebUI update settings area: the running version, check,
-// download, restart, repair, the rollback notice and the update settings. Every action answers with
+// download, restart, repair, the rollback notice, the AppArmor profile the Linux desktop app needs
+// and the update settings. Every action answers with
 // a fresh updater snapshot; progress arrives through `app.update.changed` events.
-// 应用更新页，镜像 WebUI 更新设置区：正在运行的版本、检查、下载、重启、修复、回退提示与更新设置。
+// 应用更新页，镜像 WebUI 更新设置区：正在运行的版本、检查、下载、重启、修复、回退提示、Linux 桌面应用
+// 所需的 AppArmor 配置与更新设置。
 // 每个操作都以新的更新器快照应答；进度经 `app.update.changed` 事件到达。
 
 use super::permission_judge::format_bytes;
@@ -133,6 +135,49 @@ fn release_notes_rows(rows: &mut Vec<Row>, version: Option<&str>, notes: &Value)
         ));
     }
     rows.push(Row::new(RowKind::Markdown { content: notes }, ""));
+}
+
+/// Builds the rows of the AppArmor profile the Linux desktop app still needs: the explanation,
+/// the install action through the system password prompt and the terminal command.
+/// 构建 Linux 桌面应用仍需要的 AppArmor 配置的行：说明、经系统密码框安装的操作以及终端命令。
+fn desktop_profile_rows(rows: &mut Vec<Row>, profile: &Value) {
+    rows.push(note(
+        if s(profile, "/status") == "outdated" {
+            tr!("settings.appUpdate.desktopProfile.outdatedTitle")
+        } else {
+            tr!("settings.appUpdate.desktopProfile.title")
+        },
+        Tone::Warn,
+    ));
+    rows.push(note(
+        tr!("settings.appUpdate.desktopProfile.body"),
+        Tone::Muted,
+    ));
+    rows.push(if b(profile, "/installing") {
+        note(
+            tr!("settings.appUpdate.desktopProfile.installing"),
+            Tone::Muted,
+        )
+    } else {
+        button(
+            tr!("settings.appUpdate.desktopProfile.install"),
+            call(api_update::install_desktop_profile()),
+            Tone::Accent,
+        )
+    });
+    rows.push(info(
+        tr!("settings.appUpdate.desktopProfile.manual"),
+        s(profile, "/command"),
+        Tone::Normal,
+    ));
+    let error = s(profile, "/error");
+    if !error.is_empty() {
+        rows.push(info(
+            tr!("settings.appUpdate.desktopProfile.failed"),
+            error,
+            Tone::Bad,
+        ));
+    }
 }
 
 /// Builds the settings and repair rows of an installation that can update itself.
@@ -293,6 +338,11 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
         ));
     }
 
+    let desktop_profile = v(snapshot, "/desktopProfile");
+    if !desktop_profile.is_null() {
+        desktop_profile_rows(&mut rows, desktop_profile);
+    }
+
     let error = v(snapshot, "/error");
     if !error.is_null() {
         rows.push(info(
@@ -373,7 +423,7 @@ mod tests {
             "currentVersion": "0.1.4", "unavailableReason": null,
             "settings": { "preview": false, "route": "auto", "checkInterval": "sixHours" }, "activity": "idle",
             "progress": null, "lastCheckedAt": null, "offer": null, "readyVersion": null,
-            "repairedFiles": null, "error": null, "rollback": null,
+            "repairedFiles": null, "error": null, "rollback": null, "desktopProfile": null,
             "downloadPageUrl": "https://openvulcan.com/download"
         });
         for (key, value) in overrides.as_object().unwrap() {
@@ -477,6 +527,20 @@ mod tests {
             })
             .collect();
         assert_eq!(markdown, ["notes-017", "notes-016", "notes-015"]);
+    }
+
+    // A missing desktop profile offers its install until the password prompt is open.
+    // 缺少桌面配置时提供安装，直到密码框打开。
+    #[test]
+    fn a_missing_desktop_profile_offers_its_install_until_the_prompt_opens() {
+        let profile = |installing: bool| {
+            json!({ "desktopProfile": { "status": "missing", "installing": installing,
+                "command": "sudo install -m 0644 a b", "error": null } })
+        };
+        let install = "service_install_desktop_profile".to_string();
+        assert!(!methods(&page(snapshot(json!({})))).contains(&install));
+        assert!(methods(&page(snapshot(profile(false)))).contains(&install));
+        assert!(!methods(&page(snapshot(profile(true)))).contains(&install));
     }
 
     // While an operation runs only cancel stays available.

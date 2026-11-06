@@ -26,7 +26,7 @@ const LEGACY_LAUNCHERS: [&str; 3] = ["vulcan-code", "vulcan-code-service", "vulc
 pub fn uninstall(options: &UninstallOptions) -> Result<(), String> {
     let platform = Platform::current().ok_or("this platform is not supported")?;
     let root_path = resolve_root(options.common.prefix.as_deref(), platform)?;
-    let items = match root::ownership(&root_path)? {
+    let mut items = match root::ownership(&root_path)? {
         Ownership::Owned(state) => state.items,
         Ownership::Legacy => legacy_items(&root_path)?,
         Ownership::Inno(uninstaller) => return uninstall_inno(&root_path, &uninstaller, options),
@@ -37,6 +37,7 @@ pub fn uninstall(options: &UninstallOptions) -> Result<(), String> {
             ));
         }
     };
+    items.extend(integrate::unrecorded_apparmor_profile(&root_path, &items));
     let root = InstallRoot::new(&root_path);
     let version_dir = current_version_dir(&root_path)?;
     let version = version_dir

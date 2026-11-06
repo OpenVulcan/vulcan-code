@@ -63,6 +63,12 @@ pub fn dismiss_app_update_notice() -> ServiceCall {
     )
 }
 
+/// Builds the request for `service_install_desktop_profile`.
+/// 构建 `service_install_desktop_profile` 的请求。
+pub fn install_desktop_profile() -> ServiceCall {
+    updater_call("install_desktop_profile", "service_install_desktop_profile")
+}
+
 /// Builds the request for `service_save_app_update_settings`.
 /// 构建 `service_save_app_update_settings` 的请求。
 /// `settings` is the complete `AppUpdateSettings` document.

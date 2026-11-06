@@ -18,6 +18,7 @@ const { service } = vi.hoisted(() => ({ service: {
   restartToUpdate: vi.fn(),
   repairAppInstall: vi.fn(),
   dismissAppUpdateNotice: vi.fn(),
+  installDesktopProfile: vi.fn(),
   saveAppUpdateSettings: vi.fn(),
 } }));
 vi.mock("@/service/app-update-service", () => service);
@@ -42,6 +43,7 @@ function snapshot(overrides: Partial<AppUpdateSnapshot> = {}): AppUpdateSnapshot
     repairedFiles: null,
     error: null,
     rollback: null,
+    desktopProfile: null,
     downloadPageUrl: "https://openvulcan.com/download",
     ...overrides,
   };

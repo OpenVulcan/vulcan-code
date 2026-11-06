@@ -35,6 +35,10 @@ export function dismissAppUpdateNotice(): Promise<AppUpdateSnapshot> {
   return serviceClient.request<AppUpdateSnapshot>("service_dismiss_app_update_notice", {});
 }
 
+export function installDesktopProfile(): Promise<AppUpdateSnapshot> {
+  return serviceClient.request<AppUpdateSnapshot>("service_install_desktop_profile", {});
+}
+
 export function saveAppUpdateSettings(settings: AppUpdateSettings): Promise<AppUpdateSnapshot> {
   return serviceClient.request<AppUpdateSnapshot>("service_save_app_update_settings", { settings });
 }

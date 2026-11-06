@@ -48,10 +48,6 @@ const MIN_GLIBC: (u32, u32) = (2, 35);
 /// 每个安装都有的组件，名称见 `scripts/release-components.json`。
 const BASE_COMPONENTS: [&str; 2] = ["core", "tui"];
 
-/// The desktop app component, installed with `--gui`.
-/// 桌面应用组件，以 `--gui` 安装。
-const DESKTOP_COMPONENT: &str = "gui";
-
 /// The choices an installation is made with.
 /// 安装所依据的选择。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -166,7 +162,7 @@ impl Choices {
     pub fn components(&self) -> Result<BTreeSet<ComponentName>, String> {
         let mut names: Vec<&str> = BASE_COMPONENTS.to_vec();
         if self.gui {
-            names.push(DESKTOP_COMPONENT);
+            names.push(vulcan_install_core::names::DESKTOP_COMPONENT);
         }
         let mut components = BTreeSet::new();
         for name in names {

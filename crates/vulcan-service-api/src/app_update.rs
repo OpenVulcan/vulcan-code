@@ -229,6 +229,40 @@ pub struct AppUpdateRollback {
     pub restored: String,
 }
 
+/// How the AppArmor profile the Linux desktop app needs differs from what is installed.
+/// Linux 桌面应用所需的 AppArmor 配置与已安装内容的差异。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AppUpdateDesktopProfileStatus {
+    /// No profile is installed.
+    /// 未安装配置。
+    Missing,
+    /// A profile of Vulcan Code with other content is installed, for example for another root.
+    /// 已安装内容不同的 Vulcan Code 配置，例如属于另一个安装根目录。
+    Outdated,
+}
+
+/// The AppArmor profile without which the Linux desktop app stops when started from the dock or
+/// the app menu, on systems that restrict unprivileged user namespaces (Ubuntu 23.10 and later).
+/// 在限制非特权用户命名空间的系统（Ubuntu 23.10 及以后）上，缺少即会导致 Linux 桌面应用从程序坞或应用
+/// 菜单启动时停止的 AppArmor 配置。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppUpdateDesktopProfile {
+    /// What is wrong.
+    /// 问题所在。
+    pub status: AppUpdateDesktopProfileStatus,
+    /// Whether the installation waits for the administrator password.
+    /// 安装是否正在等待管理员密码。
+    pub installing: bool,
+    /// A shell line that installs the profile by hand with `sudo`.
+    /// 以 `sudo` 手动安装配置的 Shell 命令行。
+    pub command: String,
+    /// Why the last installation failed, in English.
+    /// 上次安装失败的原因，英文描述。
+    pub error: Option<String>,
+}
+
 /// Everything the update settings and prompts show.
 /// 更新设置与提示所显示的全部内容。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -267,6 +301,10 @@ pub struct AppUpdateSnapshot {
     /// A failed start the launcher switched back from, until dismissed.
     /// 启动器切换回去的一次启动失败，直到被关闭提示。
     pub rollback: Option<AppUpdateRollback>,
+    /// The AppArmor profile the desktop app still needs on this system; `None` when it needs none.
+    /// 桌面应用在本系统上仍需要的 AppArmor 配置；不需要时为 `None`。
+    #[serde(default)]
+    pub desktop_profile: Option<AppUpdateDesktopProfile>,
     /// Page for downloading an installer by hand.
     /// 手动下载安装包的页面。
     pub download_page_url: String,

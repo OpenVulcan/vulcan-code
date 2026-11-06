@@ -32,15 +32,17 @@ use vulcan_install_core::update::{
     find_update, read_indexes, read_manifest, read_skipped_release_notes,
 };
 use vulcan_service_api::{
-    AppUpdateActivity, AppUpdateCheckInterval, AppUpdateError, AppUpdateKind, AppUpdateOffer,
-    AppUpdateOperation, AppUpdateProgress, AppUpdateReleaseNotes, AppUpdateRollback,
-    AppUpdateRouteSetting, AppUpdateSettings, AppUpdateSnapshot, AppUpdateUnavailableReason,
-    ServiceRestartReason, ServiceRestartingEvent,
+    AppUpdateActivity, AppUpdateCheckInterval, AppUpdateDesktopProfile, AppUpdateError,
+    AppUpdateKind, AppUpdateOffer, AppUpdateOperation, AppUpdateProgress, AppUpdateReleaseNotes,
+    AppUpdateRollback, AppUpdateRouteSetting, AppUpdateSettings, AppUpdateSnapshot,
+    AppUpdateUnavailableReason, ServiceRestartReason, ServiceRestartingEvent,
 };
 
+mod desktop_profile;
 mod installed;
 mod signer;
 
+use desktop_profile::DesktopProfile;
 use installed::Installed;
 
 /// Delay between service start and the first automatic check.
@@ -160,6 +162,9 @@ struct Inner {
     /// The installed layout, or why there is none.
     /// 已安装布局，或没有布局的原因。
     installed: Result<Installed, AppUpdateUnavailableReason>,
+    /// The AppArmor profile the desktop app of this installation needs on Linux.
+    /// 本安装的桌面应用在 Linux 上所需的 AppArmor 配置。
+    desktop_profile: Option<DesktopProfile>,
     /// The service process.
     /// 服务进程。
     host: Box<dyn UpdateHost>,
@@ -211,6 +216,12 @@ struct State {
     /// The origin that answered last.
     /// 最近一次应答的下载源。
     preferred_origin: Option<String>,
+    /// Whether the desktop profile is being installed, waiting for the password.
+    /// 桌面配置是否正在安装（等待密码）。
+    installing_desktop_profile: bool,
+    /// Why the last installation of the desktop profile failed.
+    /// 上次安装桌面配置失败的原因。
+    desktop_profile_error: Option<String>,
 }
 
 /// A newer version found by a check.
@@ -250,9 +261,11 @@ impl AppUpdater {
         host: Box<dyn UpdateHost>,
     ) -> Self {
         let installed = installed::detect(executable, vulcan_product_info::version());
+        let desktop_profile = installed.as_ref().ok().and_then(DesktopProfile::of);
         Self {
             inner: Arc::new(Inner {
                 installed,
+                desktop_profile,
                 host,
                 user_agent,
                 state: Mutex::new(State {
@@ -269,6 +282,14 @@ impl AppUpdater {
         if let Ok(installed) = &self.inner.installed {
             if let Err(error) = self.inner.finish_startup(installed) {
                 tracing::warn!("[app-update] startup bookkeeping failed: {error}");
+            }
+            // The manual command in the snapshot names the prepared profile, so it is written now.
+            // 快照中的手动命令写明已准备的配置，因此现在写出它。
+            if let Some(profile) = &self.inner.desktop_profile
+                && profile.status().is_some()
+                && let Err(error) = profile.stage()
+            {
+                tracing::warn!("[app-update] could not prepare the AppArmor profile: {error}");
             }
             let updater = self.clone();
             let spawned = std::thread::Builder::new()
@@ -359,6 +380,59 @@ impl AppUpdater {
             .remove_marker(&lock, ROLLBACK_FILE)
             .map_err(|error| error.to_string())?;
         self.inner.lock().rollback = None;
+        self.inner.notify();
+        Ok(self.snapshot())
+    }
+
+    /// Starts installing the AppArmor profile the desktop app needs; the administrator password is
+    /// asked through polkit, and the snapshot reports the outcome. Other update work goes on
+    /// meanwhile.
+    /// 开始安装桌面应用所需的 AppArmor 配置；管理员密码经 polkit 询问，快照报告结果。其间其他更新工作照常进行。
+    pub fn install_desktop_profile(&self) -> Result<AppUpdateSnapshot, String> {
+        if self
+            .inner
+            .desktop_profile
+            .as_ref()
+            .and_then(DesktopProfile::status)
+            .is_none()
+        {
+            return Err(String::from(
+                "the desktop app needs no AppArmor profile on this system",
+            ));
+        }
+        {
+            let mut state = self.inner.lock();
+            if state.installing_desktop_profile {
+                return Err(String::from(
+                    "the AppArmor profile is already being installed",
+                ));
+            }
+            state.installing_desktop_profile = true;
+            state.desktop_profile_error = None;
+        }
+        let inner = Arc::clone(&self.inner);
+        let spawned = std::thread::Builder::new()
+            .name(String::from("vulcan-app-update-profile"))
+            .spawn(move || {
+                let result = inner
+                    .desktop_profile
+                    .as_ref()
+                    .map_or(Ok(()), DesktopProfile::install);
+                let mut state = inner.lock();
+                state.installing_desktop_profile = false;
+                if let Err(error) = result {
+                    tracing::warn!("[app-update] installing the AppArmor profile failed: {error}");
+                    state.desktop_profile_error = Some(error);
+                }
+                drop(state);
+                inner.notify();
+            });
+        if let Err(error) = spawned {
+            self.inner.lock().installing_desktop_profile = false;
+            return Err(format!(
+                "could not start installing the AppArmor profile: {error}"
+            ));
+        }
         self.inner.notify();
         Ok(self.snapshot())
     }
@@ -494,6 +568,14 @@ impl Inner {
             rollback: state.rollback.as_ref().map(|rollback| AppUpdateRollback {
                 failed: rollback.failed.to_string(),
                 restored: rollback.restored.to_string(),
+            }),
+            desktop_profile: self.desktop_profile.as_ref().and_then(|profile| {
+                Some(AppUpdateDesktopProfile {
+                    status: profile.status()?,
+                    installing: state.installing_desktop_profile,
+                    command: profile.manual_command(),
+                    error: state.desktop_profile_error.clone(),
+                })
             }),
             download_page_url: DOWNLOAD_PAGE_URL.to_owned(),
         }

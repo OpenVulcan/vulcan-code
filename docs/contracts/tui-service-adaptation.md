@@ -145,6 +145,7 @@ Rust 名称列同时标明内部确认构建器，避免将预检确认辅助函
 | `app_update::restart_to_update` | restartToUpdate | `service_restart_to_update` |
 | `app_update::repair_app_install` | repairAppInstall | `service_repair_app_install` |
 | `app_update::dismiss_app_update_notice` | dismissAppUpdateNotice | `service_dismiss_app_update_notice` |
+| `app_update::install_desktop_profile` | installDesktopProfile | `service_install_desktop_profile` |
 | `app_update::save_app_update_settings` | saveAppUpdateSettings | `service_save_app_update_settings` |
 | `knowledge_base::create_knowledge_library` | createKnowledgeLibrary | `service_create_knowledge_library` |
 | `knowledge_base::update_knowledge_library_settings` | updateKnowledgeLibrarySettings | `service_set_knowledge_library_settings` |
