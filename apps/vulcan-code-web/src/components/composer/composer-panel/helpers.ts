@@ -157,8 +157,8 @@ function composerSessionDraftStorageKey(key: string): string {
 // readPersistedComposerSessionDraft 只解码精确的第一代载荷结构。
 // Parameters: key identifies the draft slot and storage is the already-authorized browser store.
 // 参数：key 标识草稿槽，storage 是已授权的浏览器存储。
-// Returns: a validated draft, or null when no valid payload exists.
-// 返回值：通过校验的草稿；不存在有效载荷时返回 null。
+// Returns: a validated draft, or null when no valid payload exists; rejected bytes stay untouched.
+// 返回值：通过校验的草稿；不存在有效载荷时返回 null；被拒绝的原字节保持不动。
 function readPersistedComposerSessionDraft(
   key: string,
   storage: Storage,
@@ -170,17 +170,14 @@ function readPersistedComposerSessionDraft(
     }
     const decoded = JSON.parse(raw) as unknown;
     if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
-      storage.removeItem(composerSessionDraftStorageKey(key));
       return null;
     }
     const candidate = decoded as Record<string, unknown>;
     if (candidate.version !== 1 || typeof candidate.input !== "string" || !Array.isArray(candidate.attachments)) {
-      storage.removeItem(composerSessionDraftStorageKey(key));
       return null;
     }
     const attachments = candidate.attachments.map(composerSessionAttachmentFromStorage);
     if (attachments.some((attachment) => attachment === null)) {
-      storage.removeItem(composerSessionDraftStorageKey(key));
       return null;
     }
     return {
@@ -188,12 +185,8 @@ function readPersistedComposerSessionDraft(
       attachments: attachments as ComposerAttachmentSummary[],
     };
   } catch {
-    try {
-      storage.removeItem(composerSessionDraftStorageKey(key));
-    } catch {
-      // Browser storage can become unavailable between the read and cleanup attempts.
-      // 浏览器存储可能在读取与清理尝试之间变为不可用。
-    }
+    // Unreadable bytes are rejected without deleting them; only the next explicit draft write replaces them.
+    // 无法读取的字节被拒绝但不删除；只有下一次显式草稿写入才会替换它们。
     return null;
   }
 }

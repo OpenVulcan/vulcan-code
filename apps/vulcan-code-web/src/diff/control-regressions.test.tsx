@@ -3,6 +3,7 @@ import * as React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { readLocaleMessage, type TranslationKey } from "@/i18n";
 import { toast } from "@/ui-kit/primitives/toast";
 import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import { DIFF_TOOLBAR_COMPACT_WIDTH_PX, DiffPanelToolbar } from "./diff-review-toolbar";
@@ -17,6 +18,12 @@ vi.mock("@/i18n", async (importOriginal) => {
   return { ...actual, useI18n: () => ({ locale: "en-US", setLocale: () => undefined, t }) };
 });
 vi.mock("@/ui-kit/primitives/toast", () => ({ toast: { error: vi.fn() } }));
+
+// labelled selects controls by the catalog key of their accessible name, not by its wording.
+// labelled 按可访问名称的目录键选择控件，而不是按其措辞。
+function labelled(key: TranslationKey, element = ""): string {
+  return `${element}[aria-label="${readLocaleMessage("en-US", key)}"]`;
+}
 vi.mock("./diff-highlight", () => ({ diffLanguageForFile: () => null, useHighlightLanguage: () => false, useHighlightedDiffFileRevision: () => 0, useHighlightedDiffWindowRevision: () => 0 }));
 vi.mock("./diff-render-worker-client", async () => {
   const { hunkSeparatorControlsHtml, hunkSeparatorLabelHtml } = await import("./diff-render-hunk-controls");
@@ -64,17 +71,17 @@ it("announces clipboard rejection and permits a later retry through the actual m
 it("restores search focus on Escape and does not route button Enter to the next match", async () => {
   const next = vi.fn();
   await render(<DiffPanelToolbar snapshot={snapshot} selection={{ mode: "unstaged" }} viewMode="split" renderPreferences={preferences} onViewModeChange={vi.fn()} onRenderPreferencesChange={vi.fn()} onSearchQueryChange={vi.fn()} onSearchSubmit={next} onSearchPrevious={vi.fn()} canSearchPrevious canSearchNext />);
-  const trigger = document.querySelector<HTMLButtonElement>('[aria-label="Open diff search"]')!;
+  const trigger = document.querySelector<HTMLButtonElement>(labelled("diff.search.open"))!;
   await act(async () => trigger.click());
   const previous = document.querySelector<HTMLButtonElement>('[title="Previous result"]')!;
   await act(async () => previous.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" })));
   expect(next).not.toHaveBeenCalled();
-  const input = document.querySelector<HTMLInputElement>('[aria-label="Search diff"]')!;
+  const input = document.querySelector<HTMLInputElement>(labelled("diff.search.label"))!;
   await act(async () => { input.focus(); input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" })); });
   expect(next).toHaveBeenCalledOnce();
   await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" })));
   expect(document.activeElement).toBe(trigger);
-  expect(document.querySelector('[aria-label="Search diff"]')).toBeNull();
+  expect(document.querySelector(labelled("diff.search.label"))).toBeNull();
 });
 
 it("folds the view, search, commit and refresh controls into the more menu on a narrow toolbar", async () => {
@@ -84,8 +91,8 @@ it("folds the view, search, commit and refresh controls into the more menu on a 
     await render(<DiffPanelToolbar snapshot={snapshot} selection={{ mode: "unstaged" }} viewMode="unified" renderPreferences={preferences}
       onViewModeChange={viewMode} onRenderPreferencesChange={vi.fn()} onSearchQueryChange={vi.fn()} onRefresh={refresh}
       gitCommitActionLabel="Commit or push" onOpenGitCommitAction={commit} />);
-    expect(document.querySelector('[aria-label="Open diff search"]')).toBeNull();
-    expect(document.querySelector('[aria-label="Refresh diff"]')).toBeNull();
+    expect(document.querySelector(labelled("diff.search.open"))).toBeNull();
+    expect(document.querySelector(labelled("diff.refresh"))).toBeNull();
     const openMenu = async () => act(async () => document.querySelector<HTMLButtonElement>('[title="More diff actions"]')!.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })));
     const item = (role: string, text: string) => [...document.querySelectorAll<HTMLElement>(`[role="${role}"]`)].find((entry) => entry.textContent === text)!;
     await openMenu();
@@ -96,7 +103,7 @@ it("folds the view, search, commit and refresh controls into the more menu on a 
     await openMenu(); await act(async () => item("menuitem", "Commit or push").click());
     expect(commit).toHaveBeenCalledOnce();
     await openMenu(); await act(async () => item("menuitem", "Search diff").click());
-    expect(document.querySelector('input[aria-label="Search diff"]')).not.toBeNull();
+    expect(document.querySelector(labelled("diff.search.label", "input"))).not.toBeNull();
   } finally {
     width.mockRestore();
   }

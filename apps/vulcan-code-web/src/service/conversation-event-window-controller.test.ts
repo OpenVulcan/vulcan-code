@@ -602,6 +602,8 @@ describe("V1 conversation event window controller", () => {
     }));
     expect(controller.snapshot().session_config?.permission_mode).toBe("auto_approve");
     expect(controller.snapshot().session_config).not.toHaveProperty("unattended");
+    controller.applyLive(liveDelta([], { revision: 2, durability: "durable", access: unattended }));
+    expect(controller.snapshot().session_config).not.toHaveProperty("unattended");
     controller.dispose();
   });
 

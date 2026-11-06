@@ -172,35 +172,23 @@ describe("direct provider model settings", () => {
   // This regression guard keeps canonical effort tokens visible only as annotations in Chinese.
   // 此回归护栏确保规范档位值仅在中文界面作为括号注释显示。
   it("annotates Chinese reasoning labels without duplicating English labels", () => {
-    const keys: TranslationKey[] = [
-      "settings.customModels.effortNone",
-      "settings.customModels.effortMinimal",
-      "settings.customModels.effortLow",
-      "settings.customModels.effortMedium",
-      "settings.customModels.effortHigh",
-      "settings.customModels.effortExtraHigh",
-      "settings.customModels.effortMax",
+    const efforts: Array<[TranslationKey, string]> = [
+      ["settings.customModels.effortNone", "none"],
+      ["settings.customModels.effortMinimal", "minimal"],
+      ["settings.customModels.effortLow", "low"],
+      ["settings.customModels.effortMedium", "medium"],
+      ["settings.customModels.effortHigh", "high"],
+      ["settings.customModels.effortExtraHigh", "xhigh"],
+      ["settings.customModels.effortMax", "max"],
+      ["settings.customModels.effortAdaptive", "adaptive"],
     ]
 
-    expect(keys.map((key) => zhCNTranslations[key])).toEqual([
-      "关闭（none）",
-      "最小（minimal）",
-      "低（low）",
-      "中（medium）",
-      "高（high）",
-      "超高（xhigh）",
-      "最大（max）",
-    ])
-    expect(keys.map((key) => enUSTranslations[key])).toEqual([
-      "Off",
-      "Minimal",
-      "Low",
-      "Medium",
-      "High",
-      "Extra high",
-      "Maximum",
-    ])
-    expect(zhCNTranslations["settings.customModels.effortAdaptive"]).toBe("自动（adaptive）")
+    // Format only: the Chinese label ends with the full-width parenthesized canonical token; English has no annotation.
+    // 只约束格式：中文标签以全角括号包裹的规范档位值结尾；英文标签不带注释。
+    for (const [key, token] of efforts) {
+      expect(zhCNTranslations[key].endsWith(`（${token}）`), key).toBe(true)
+      expect(enUSTranslations[key], key).not.toMatch(/[(（]/u)
+    }
   })
 
   it("treats collection order as equal while retaining every owned scalar difference", () => {

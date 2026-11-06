@@ -38,6 +38,10 @@ import "@/ui-kit/styles/features/settings-forms.css"
 import "@/ui-kit/styles/features/provider-manifest.css"
 import { formatDateTime, errorMessage } from "@/lib/display-format"
 
+// RENDERED_MODEL_BINDING_LIMIT bounds how many returned bindings one status card renders.
+// RENDERED_MODEL_BINDING_LIMIT 限制单张状态卡渲染的已返回绑定数量。
+const RENDERED_MODEL_BINDING_LIMIT = 200
+
 
 // activeLayerLabel renders one stable active-layer label.
 // activeLayerLabel 渲染一个稳定的 active 层标签。
@@ -599,7 +603,7 @@ export function ProviderManifestStatusPanel() {
                       </div>
                     ))
                   )}
-                  {status.model_bindings.slice(0, 200).map((binding) => {
+                  {status.model_bindings.slice(0, RENDERED_MODEL_BINDING_LIMIT).map((binding) => {
                     // activeChange is the exact backend delta for this active identity, when present.
                     // activeChange 是当前 active 身份对应的精确后端差异（存在时）。
                     const activeChange = activeChangeByIdentity.get(manifestModelBindingIdentity(binding))
@@ -660,10 +664,10 @@ export function ProviderManifestStatusPanel() {
                       </div>
                     )
                   })}
-                  {status.model_binding_total_count > Math.min(status.model_bindings.length, 200) ? (
+                  {status.model_binding_total_count > Math.min(status.model_bindings.length, RENDERED_MODEL_BINDING_LIMIT) ? (
                     <p className="vk-field-hint">
                       {formatMessage(t("settings.manifest.renderedBindings"), {
-                        shown: Math.min(status.model_bindings.length, 200),
+                        shown: Math.min(status.model_bindings.length, RENDERED_MODEL_BINDING_LIMIT),
                         returned: status.model_bindings.length,
                         total: status.model_binding_total_count,
                         truncated: status.model_bindings_truncated ? t("settings.manifest.responseTruncated") : "",

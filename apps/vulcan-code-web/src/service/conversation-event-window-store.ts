@@ -1552,8 +1552,10 @@ export class ConversationEventWindowStore {
   }
 
   /** Applies one sparse live patch atomically after validating identity and loaded-window gaps.
-   * 在校验身份与已加载窗口缺口后原子应用一份稀疏实时 patch。 */
-  applyLive(patch: ConversationEventLivePatch): void {
+   * Returns false when the patch is older than the current frontier and was ignored.
+   * 在校验身份与已加载窗口缺口后原子应用一份稀疏实时 patch。
+   * patch 早于当前前沿而被忽略时返回 false。 */
+  applyLive(patch: ConversationEventLivePatch): boolean {
     this.assertCurrentOwner(patch);
     const frontier = this.requireFrontier();
     if (patch.service_epoch !== frontier.service_epoch) {
@@ -1577,7 +1579,7 @@ export class ConversationEventWindowStore {
           `volatile event patch must advance its base: base ${patch.base_memory_revision}, target ${patch.revision}`,
         );
       }
-      if (patch.revision < frontier.memory_revision) return;
+      if (patch.revision < frontier.memory_revision) return false;
       const sameRevision = patch.revision === frontier.memory_revision;
       // A merged range may start before the frontier; its events are the state at `revision`.
       // 合并区间可能起始于前沿之前；其事件即 `revision` 处的状态。
@@ -1601,7 +1603,7 @@ export class ConversationEventWindowStore {
         sameRevision ? frontier.memory_revision : patch.revision,
         frontier.durable_revision,
       );
-      return;
+      return true;
     }
 
     if (patch.base_durable_revision === undefined) {
@@ -1622,7 +1624,7 @@ export class ConversationEventWindowStore {
     if (patch.text_appends !== undefined && patch.text_appends.length !== 0) {
       throw new Error("durable acknowledgement must not carry text appends");
     }
-    if (patch.revision <= frontier.durable_revision) return;
+    if (patch.revision <= frontier.durable_revision) return false;
     if (patch.base_durable_revision !== frontier.durable_revision) {
       throw new ConversationEventRevisionGapError(
         "durable",
@@ -1641,6 +1643,7 @@ export class ConversationEventWindowStore {
       frontier.memory_revision,
       patch.revision,
     );
+    return true;
   }
 
   /** Applies one authoritative reconnect range whose explicit base may span multiple revisions.

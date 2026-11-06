@@ -6,6 +6,7 @@ import { Label } from "@/ui-kit/primitives/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
 import { useI18n } from "@/i18n"
 import type { VmmMemoryActionResult, VmmNativeProfileLifetimes, VmmNativeProjectProfilePolicySummary, VmmNativeProjectSummary } from "@/types"
+import { VMM_PROFILE_LIFETIME_MAX_MS } from "./vmm-native-bounds"
 import { VmmNativeDurationInput } from "./vmm-native-duration-input"
 import "@/ui-kit/styles/features/settings-forms.css"
 import "@/ui-kit/styles/features/memory.css"
@@ -34,7 +35,7 @@ export function parseProjectProfileDraft(draft: Draft): VmmNativeProfileLifetime
       const text = draft[level][field]
       if (!/^\d+$/.test(text)) return null
       const value = Number(text)
-      if (!Number.isSafeInteger(value) || value > 315360000000 || (field !== "stepMs" && value === 0)) return null
+      if (!Number.isSafeInteger(value) || value > VMM_PROFILE_LIFETIME_MAX_MS || (field !== "stepMs" && value === 0)) return null
       row[field] = value
     }
     if (row.baseMs > row.maxMs) return null

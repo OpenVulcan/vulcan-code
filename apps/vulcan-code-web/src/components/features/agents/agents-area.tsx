@@ -1349,8 +1349,8 @@ function modelPickerChoiceExists(providers: WorkbenchSnapshot["providers"], valu
   }) === value))
 }
 
-// normalizeAgentFileNameInput keeps the editable value as a file stem without a trailing extension.
-// normalizeAgentFileNameInput 将可编辑值保持为不带尾部扩展名的文件 stem。
+// normalizeAgentFileNameInput keeps the editable value as a file stem without the `.md` extension; it is idempotent.
+// normalizeAgentFileNameInput 将可编辑值保持为不带 `.md` 扩展名的文件 stem；重复调用结果不变。
 function normalizeAgentFileNameInput(value: string): string {
   const normalizedSeparators = value.replace(/\\/g, "/")
   const filtered = normalizedSeparators.replace(/[^A-Za-z0-9._/-]/g, "")
@@ -1370,14 +1370,14 @@ function normalizeAgentPackageIdInput(value: string): string {
   return value.replace(/[^A-Za-z0-9._-]/g, "")
 }
 
-// stripAgentFileSegmentExtension removes the last extension-like suffix from one path segment.
-// stripAgentFileSegmentExtension 从单个路径片段移除最后一个扩展名形式的后缀。
+// stripAgentFileSegmentExtension removes trailing `.md` extensions only, so dotted names such as `research.v2` survive.
+// stripAgentFileSegmentExtension 只移除尾部的 `.md` 扩展名，使 `research.v2` 这类带点名称得以保留。
 function stripAgentFileSegmentExtension(segment: string): string {
-  const dotIndex = segment.lastIndexOf(".")
-  if (dotIndex <= 0) {
-    return segment
+  let stem = segment
+  while (stem.length > 3 && stem.toLowerCase().endsWith(".md")) {
+    stem = stem.slice(0, -3)
   }
-  return segment.slice(0, dotIndex)
+  return stem
 }
 
 // targetAgentIdFromDraft mirrors the service-side package assignment for duplicate checks.

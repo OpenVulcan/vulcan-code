@@ -45,6 +45,9 @@ export function CustomModelTemplateCard(props: CustomModelTemplateCardProps) {
 
   React.useEffect(() => {
     let active = true
+    // Suggestions belong to one model id; a failed read for the next id must not offer the old ones.
+    // 建议属于单个模型 ID；下一个 ID 读取失败时不得继续提供旧建议。
+    setSuggestions([])
     setLoading(true)
     setError(null)
     const timer = window.setTimeout(() => {

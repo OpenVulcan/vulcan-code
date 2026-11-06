@@ -409,4 +409,27 @@ describe("child agent pending requests", () => {
     expect(next.pendingQuestion?.id).toBe("q-parent");
     expect(next.pendingQuestionRequester).toBeNull();
   });
+
+  it("falls back to the Plan marker once an ask in a plan-mode session is answered", () => {
+    const planWorkbench = {
+      ...subagentLifecycleWorkbench("running"),
+      sessionAddonsByConversation: [{
+        conversationId: "parent-conversation",
+        sessionPlanMode: { executionMode: "plan", promptInjected: true },
+      }],
+    };
+    const asked = applyWorkbenchDelta(planWorkbench, {
+      generation: 8,
+      delta: {
+        kind: "pendingQuestionChanged",
+        payload: { conversationId: "parent-conversation", pendingQuestion: question("q-parent", "parent-conversation", 1) },
+      },
+    });
+    expect(asked.conversations[0]?.attention?.kind).toBe("ask");
+    const answered = applyWorkbenchDelta(asked, {
+      generation: 9,
+      delta: { kind: "pendingQuestionChanged", payload: { conversationId: "parent-conversation", pendingQuestion: null } },
+    });
+    expect(answered.conversations[0]?.attention?.kind).toBe("plan_confirm");
+  });
 });

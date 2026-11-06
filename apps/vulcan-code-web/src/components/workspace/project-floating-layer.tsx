@@ -302,6 +302,11 @@ function floatingLayerRect(rect: Pick<DOMRectReadOnly, "left" | "top" | "width" 
 // PROJECT_FLOATING_LAYER_LEGACY_TOP_INSET_PX 在浮层移到 46px 会话标题栏下方后，从 v3 之前的坐标中扣除。
 const PROJECT_FLOATING_LAYER_LEGACY_TOP_INSET_PX = 46;
 
+// FLOATING_LAYER_MIN_WIDTH_PX and FLOATING_LAYER_MIN_HEIGHT_PX are the smallest size of a regular floating surface.
+// FLOATING_LAYER_MIN_WIDTH_PX 与 FLOATING_LAYER_MIN_HEIGHT_PX 是普通浮动表面的最小尺寸。
+const FLOATING_LAYER_MIN_WIDTH_PX = 320;
+const FLOATING_LAYER_MIN_HEIGHT_PX = 240;
+
 // floatingLayerActivation lists the mounted floating windows from back to front; a window's rank is its index, and
 // the stylesheet turns that rank into a z-index inside a fixed band below dialogs and menus.
 // floatingLayerActivation 按从后到前列出已挂载的浮动窗口；窗口的排名即其下标，样式表再把排名换算为位于对话框与菜单
@@ -929,8 +934,8 @@ function validatedFloatingLayout(value: unknown): FloatingLayerLayout | null {
   return {
     x: Math.max(0, Number(value.x)),
     y: Math.max(0, Number(value.y)),
-    width: Math.max(320, Number(value.width)),
-    height: Math.max(240, Number(value.height)),
+    width: Math.max(FLOATING_LAYER_MIN_WIDTH_PX, Number(value.width)),
+    height: Math.max(FLOATING_LAYER_MIN_HEIGHT_PX, Number(value.height)),
   };
 }
 
@@ -996,8 +1001,8 @@ export function clampFloatingLayout(
   boundaryWidth: number,
   boundaryHeight: number,
 ): FloatingLayerLayout {
-  const minimumWidth = Math.min(320, boundaryWidth);
-  const minimumHeight = Math.min(240, boundaryHeight);
+  const minimumWidth = Math.min(FLOATING_LAYER_MIN_WIDTH_PX, boundaryWidth);
+  const minimumHeight = Math.min(FLOATING_LAYER_MIN_HEIGHT_PX, boundaryHeight);
   const width = Math.min(Math.max(minimumWidth, layout.width), boundaryWidth);
   const height = Math.min(Math.max(minimumHeight, layout.height), boundaryHeight);
   return {

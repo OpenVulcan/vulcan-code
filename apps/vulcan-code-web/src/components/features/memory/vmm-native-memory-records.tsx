@@ -40,6 +40,10 @@ import { nativeSessionDisplayName } from "./vmm-native-session-label"
 // SESSION_OVERVIEW_VALUE 是用于项目级会话汇总的非身份选择器值。
 const SESSION_OVERVIEW_VALUE = "__native_session_overview__"
 
+// RECORD_PAGE_SIZE is the number of rows one detail tab renders per page.
+// RECORD_PAGE_SIZE 是单个详情标签每页渲染的行数。
+const RECORD_PAGE_SIZE = 30
+
 // VmmNativeMemoryRecordsProps defines native provenance data and preview-confirmed maintenance actions.
 // VmmNativeMemoryRecordsProps 定义原生来源数据及经预览确认的维护动作。
 interface VmmNativeMemoryRecordsProps {
@@ -383,7 +387,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
   // Current totals come from the received collection, never from the current render page.
   // 当前总数来自接收的集合，绝不来自当前渲染页。
   const recordTotal = records ? (recordView === "turns" ? records.turns.length : recordView === "memories" ? records.memories.length : records.profileNodes.length) : 0
-  const recordPage = Math.min(recordPages[recordView], Math.max(0, Math.ceil(recordTotal / 30) - 1))
+  const recordPage = Math.min(recordPages[recordView], Math.max(0, Math.ceil(recordTotal / RECORD_PAGE_SIZE) - 1))
 
   return (
     <Card>
@@ -540,7 +544,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
               options={([["turns", "memory.nativeRecords.turns", records.turns.length], ["memories", "memory.nativeRecords.memories", records.memories.length], ["profiles", "memory.nativeRecords.profileNodes", records.profileNodes.length]] as const).map(([value, label, count]) => ({ count, label: t(label), value }))}
               value={recordView}
             />
-            {recordTotal > 30 ? <div className="vk-mem-pager"><span>{recordPage * 30 + 1}–{Math.min((recordPage + 1) * 30, recordTotal)} / {recordTotal}</span><div className="vk-form-inline"><Button type="button" variant="outline" disabled={effectiveBusy || recordPage === 0} onClick={() => { setRemovalTurns([]); setRecordPages((current) => ({ ...current, [recordView]: recordPage - 1 })) }}>{t("memory.sessionList.previous")}</Button><Button type="button" variant="outline" disabled={effectiveBusy || (recordPage + 1) * 30 >= recordTotal} onClick={() => { setRemovalTurns([]); setRecordPages((current) => ({ ...current, [recordView]: recordPage + 1 })) }}>{t("memory.sessionList.next")}</Button></div></div> : null}
+            {recordTotal > RECORD_PAGE_SIZE ? <div className="vk-mem-pager"><span>{recordPage * RECORD_PAGE_SIZE + 1}–{Math.min((recordPage + 1) * RECORD_PAGE_SIZE, recordTotal)} / {recordTotal}</span><div className="vk-form-inline"><Button type="button" variant="outline" disabled={effectiveBusy || recordPage === 0} onClick={() => { setRemovalTurns([]); setRecordPages((current) => ({ ...current, [recordView]: recordPage - 1 })) }}>{t("memory.sessionList.previous")}</Button><Button type="button" variant="outline" disabled={effectiveBusy || (recordPage + 1) * RECORD_PAGE_SIZE >= recordTotal} onClick={() => { setRemovalTurns([]); setRecordPages((current) => ({ ...current, [recordView]: recordPage + 1 })) }}>{t("memory.sessionList.next")}</Button></div></div> : null}
             <section hidden={recordView !== "turns"} className="vk-form-stack">
               <h3 className="vk-form-strong">
                 {t(projectOverview
@@ -552,7 +556,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
                 <p className="vk-form-text">{t("memory.nativeRecords.noTurns")}</p>
               ) : (
                 <div className="vk-form-stack">
-                  {records.turns.slice(recordView === "turns" ? recordPage * 30 : 0, recordView === "turns" ? (recordPage + 1) * 30 : 30).map((turn) => (
+                  {records.turns.slice(recordView === "turns" ? recordPage * RECORD_PAGE_SIZE : 0, recordView === "turns" ? (recordPage + 1) * RECORD_PAGE_SIZE : RECORD_PAGE_SIZE).map((turn) => (
                     <div className="vk-mem-pick" key={turn.turnId}>
                     <Checkbox aria-label={`${t("memory.removal.selectTurn")} #${turn.turnId}`} checked={removalTurns.includes(`vmm-turn-${turn.turnId}`)} disabled={effectiveBusy || !Number.isSafeInteger(turn.turnId) || turn.turnId <= 0 || (!removalTurns.includes(`vmm-turn-${turn.turnId}`) && removalTurns.length >= 100)} onCheckedChange={(checked) => setRemovalTurns((current) => checked === true ? [...current, `vmm-turn-${turn.turnId}`] : current.filter((id) => id !== `vmm-turn-${turn.turnId}`))} />
                     <button
@@ -606,7 +610,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
                 <p className="vk-form-text">{t("memory.nativeRecords.noMemories")}</p>
               ) : (
                 <div className="vk-form-grid">
-                  {records.memories.slice(recordView === "memories" ? recordPage * 30 : 0, recordView === "memories" ? (recordPage + 1) * 30 : 30).map((memory) => (
+                  {records.memories.slice(recordView === "memories" ? recordPage * RECORD_PAGE_SIZE : 0, recordView === "memories" ? (recordPage + 1) * RECORD_PAGE_SIZE : RECORD_PAGE_SIZE).map((memory) => (
                     <button
                       className="vk-mem-tile"
                       key={memory.memoryId}
@@ -647,7 +651,7 @@ function VmmNativeMemoryRecords({ busy, snapshot, onRunAction, initialSelection 
                 <p className="vk-form-text">{t("memory.nativeRecords.noProfileNodes")}</p>
               ) : (
                 <div className="vk-form-grid">
-                  {records.profileNodes.slice(recordView === "profiles" ? recordPage * 30 : 0, recordView === "profiles" ? (recordPage + 1) * 30 : 30).map((profile) => (
+                  {records.profileNodes.slice(recordView === "profiles" ? recordPage * RECORD_PAGE_SIZE : 0, recordView === "profiles" ? (recordPage + 1) * RECORD_PAGE_SIZE : RECORD_PAGE_SIZE).map((profile) => (
                     <button
                       className="vk-mem-tile"
                       key={`${profile.target}-${profile.profileNodeId}`}

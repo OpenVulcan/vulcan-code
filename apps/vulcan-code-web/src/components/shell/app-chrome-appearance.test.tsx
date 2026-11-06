@@ -2,7 +2,7 @@
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { I18nProvider } from "@/i18n";
+import { I18nProvider, readLocaleMessage, type TranslationKey } from "@/i18n";
 import { DEFAULT_APPEARANCE, setAppearance } from "@/ui-kit/appearance";
 import { toast } from "@/ui-kit/primitives/toast";
 import { GlobalActions, ReadingWidthMenu } from "./app-chrome";
@@ -43,11 +43,12 @@ async function openTrigger(): Promise<void> {
     .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
 }
 
-// clickItem clicks the open menu row with the given role whose text starts with label.
-// clickItem 点击已打开菜单中指定角色且文本以 label 开头的行。
-async function clickItem(role: string, label: string): Promise<void> {
+// clickItem clicks the open menu row with the given role whose text starts with the catalog message for key.
+// clickItem 点击已打开菜单中指定角色且文本以 key 对应目录文案开头的行。
+async function clickItem(role: string, key: TranslationKey): Promise<void> {
+  const label = readLocaleMessage("en-US", key);
   const item = [...document.querySelectorAll<HTMLElement>(`[role="${role}"]`)].find((row) => row.textContent?.startsWith(label));
-  expect(item, `${role} "${label}"`).toBeDefined();
+  expect(item, `${role} ${key}`).toBeDefined();
   await act(async () => item!.click());
 }
 
@@ -57,8 +58,8 @@ it("applies a theme picked from the app menu even when this client refuses to st
   await render(<GlobalActions startup={{ ready: true, phase: "ready", steps: [], recentLogs: [] }} locale="en-US" onChangeLocale={() => {}} />);
   expect(storage.setItem).not.toHaveBeenCalled();
   await openTrigger();
-  await clickItem("menuitem", "Theme");
-  await clickItem("menuitemradio", "Command");
+  await clickItem("menuitem", "appChrome.theme");
+  await clickItem("menuitemradio", "appChrome.theme.command");
   expect(document.documentElement.dataset.vkTheme).toBe("command");
   expect(document.documentElement.dataset.vkScheme).toBe("dark");
   expect(toast.error).toHaveBeenCalledOnce();
@@ -67,11 +68,11 @@ it("applies a theme picked from the app menu even when this client refuses to st
 it("sets the text tier and the reduced-motion switch from the app menu", async () => {
   await render(<GlobalActions startup={{ ready: true, phase: "ready", steps: [], recentLogs: [] }} locale="en-US" onChangeLocale={() => {}} />);
   await openTrigger();
-  await clickItem("menuitem", "Text size");
-  await clickItem("menuitemradio", "Large");
+  await clickItem("menuitem", "appChrome.text");
+  await clickItem("menuitemradio", "appChrome.text.l");
   expect(document.documentElement.dataset.vkText).toBe("l");
   await openTrigger();
-  await clickItem("menuitemcheckbox", "Reduce motion");
+  await clickItem("menuitemcheckbox", "appChrome.motion.reduce");
   expect(document.documentElement.dataset.vkMotion).toBe("reduce");
 });
 
@@ -98,6 +99,6 @@ it("switches the conversation reading width from the title strip", async () => {
   expect(document.documentElement.dataset.vkWidth).toBe("standard");
   expect(document.querySelectorAll('[role="menuitemradio"]')).toHaveLength(5);
   expect(document.querySelectorAll('[role="menuitemradio"][aria-checked="true"]')).toHaveLength(1);
-  await clickItem("menuitemradio", "Full width");
+  await clickItem("menuitemradio", "appChrome.width.full");
   expect(document.documentElement.dataset.vkWidth).toBe("full");
 });

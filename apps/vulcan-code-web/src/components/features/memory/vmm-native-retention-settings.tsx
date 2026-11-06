@@ -10,6 +10,7 @@ import type { TranslationKey } from "@/i18n-messages"
 import type { VmmMemoryActionResult, VmmNativeRetentionSettingsSummary, VmmNativeRuntimePolicySummary } from "@/types"
 import "@/ui-kit/styles/features/settings-forms.css"
 import "@/ui-kit/styles/features/memory.css"
+import { VMM_RETENTION_BOUNDS } from "./vmm-native-bounds"
 
 // NumericKey names only editable numeric cleanup fields from the exact host contract.
 // NumericKey 仅命名准确宿主契约中的可编辑数值清洗字段。
@@ -32,11 +33,11 @@ const units = [
 const numericFields: { key: NumericKey; label: TranslationKey; min: number; max: number }[] = [
   { key: "scanIntervalMinutes", label: "memory.cleanup.scan", min: 1, max: 4294967295 },
   { key: "profileExpiryIntervalSeconds", label: "memory.cleanup.profileScan", min: 1, max: 4294967295 },
-  { key: "turnHotWindowSize", label: "memory.cleanup.hotWindow", min: 1, max: 4294967295 },
-  { key: "sessionIdleMs", label: "memory.cleanup.idle", min: 1, max: 9223372036854 },
-  { key: "trashRetentionMs", label: "memory.cleanup.trash", min: 1, max: 9223372036854 },
-  { key: "protectedPriorityFloor", label: "memory.cleanup.priority", min: 0, max: 100 },
-  { key: "protectedMemoryLevelFloor", label: "memory.cleanup.level", min: 1, max: 4 },
+  { key: "turnHotWindowSize", label: "memory.cleanup.hotWindow", ...VMM_RETENTION_BOUNDS.turnHotWindowSize },
+  { key: "sessionIdleMs", label: "memory.cleanup.idle", ...VMM_RETENTION_BOUNDS.sessionIdleMs },
+  { key: "trashRetentionMs", label: "memory.cleanup.trash", ...VMM_RETENTION_BOUNDS.trashRetentionMs },
+  { key: "protectedPriorityFloor", label: "memory.cleanup.priority", ...VMM_RETENTION_BOUNDS.protectedPriorityFloor },
+  { key: "protectedMemoryLevelFloor", label: "memory.cleanup.level", ...VMM_RETENTION_BOUNDS.protectedMemoryLevelFloor },
 ]
 
 // retentionDraft chooses the largest exact unit; unusual saved milliseconds are never rounded away.
@@ -167,7 +168,7 @@ export function VmmNativeRetentionSettings({ settings, defaults, busy, onRunActi
           <Switch disabled={disabled} checked={draft.skipProtectedSharedMemories} onCheckedChange={(skipProtectedSharedMemories) => edit({ ...draft, skipProtectedSharedMemories })} /></Label>
         <div className="vk-form-grid vk-mem-gap">
           <div className="vk-form-stack"><Label htmlFor="vmm-cleanup-protectedPriorityFloor">{t("memory.cleanup.priority")}</Label>
-            <Input id="vmm-cleanup-protectedPriorityFloor" type="number" min={0} max={100} step={1} disabled={disabled}
+            <Input id="vmm-cleanup-protectedPriorityFloor" type="number" min={VMM_RETENTION_BOUNDS.protectedPriorityFloor.min} max={VMM_RETENTION_BOUNDS.protectedPriorityFloor.max} step={1} disabled={disabled}
               value={draft.protectedPriorityFloor} onChange={(event) => edit({ ...draft, protectedPriorityFloor: event.target.value })} /></div>
           <div className="vk-form-stack"><Label htmlFor="vmm-cleanup-protectedMemoryLevelFloor">{t("memory.cleanup.level")}</Label>
             <Select disabled={disabled}

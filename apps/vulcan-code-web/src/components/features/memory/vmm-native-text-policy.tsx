@@ -7,6 +7,7 @@ import { Switch } from "@/ui-kit/primitives/switch"
 import { useI18n } from "@/i18n"
 import type { VmmMemoryActionResult, VmmNativeRuntimePolicySummary, VmmNativeTextPolicySummary } from "@/types"
 import "@/ui-kit/styles/features/settings-forms.css"
+import { VMM_FRAGMENT_TOKEN_BOUNDS } from "./vmm-native-bounds"
 
 // TextPolicyProps shares the parent-owned load and native action channel; rendering never performs an action.
 // TextPolicyProps 共用父级加载与原生动作通道；渲染绝不执行动作。
@@ -47,7 +48,7 @@ export function VmmNativeTextPolicy({ settings, defaults, busy, onRunAction, onS
     }
   }, [settings])
   const tokens = Number(budget)
-  const valid = budget.trim() !== "" && Number.isInteger(tokens) && tokens >= 256 && tokens <= 131072
+  const valid = budget.trim() !== "" && Number.isInteger(tokens) && tokens >= VMM_FRAGMENT_TOKEN_BOUNDS.min && tokens <= VMM_FRAGMENT_TOKEN_BOUNDS.max
   const changed = fold !== settings.foldMachineText || tokens !== settings.maxFragmentTokens
   const disabled = busy || pending
   // save sends only the two typed settings and retains failed drafts for correction.
@@ -80,7 +81,7 @@ export function VmmNativeTextPolicy({ settings, defaults, busy, onRunAction, onS
       <Label className="vk-form-switch vk-form-framed">{t("memory.textPolicy.fold")}
         <Switch checked={fold} disabled={disabled} onCheckedChange={(next) => { setFold(next); setSaved(false) }} /></Label>
       <div className="vk-form-stack"><Label htmlFor="vmm-text-budget">{t("memory.textPolicy.budget")}</Label>
-        <Input id="vmm-text-budget" type="number" min={256} max={131072} step={1} value={budget} disabled={disabled}
+        <Input id="vmm-text-budget" type="number" min={VMM_FRAGMENT_TOKEN_BOUNDS.min} max={VMM_FRAGMENT_TOKEN_BOUNDS.max} step={1} value={budget} disabled={disabled}
           onChange={(event) => { setBudget(event.target.value); setSaved(false) }} />
         <p className="vk-form-note">{t("memory.textPolicy.budgetHint")}</p>
       </div>

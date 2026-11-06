@@ -417,8 +417,10 @@ export class ConversationEventWindowController {
   /** Applies one pushed live batch through the same strict store path.
    * 通过同一严格 store 路径应用一批推送实时事件。 */
   applyLive(delta: ConversationEventLiveDeltaV1): void {
-    this.store.applyLive(delta);
-    if (delta.durability === "durable") {
+    // A replayed older acknowledgement is ignored by the store and must not roll back the session config either.
+    // 回放的旧确认会被 store 忽略，也不得回退会话配置。
+    const accepted = this.store.applyLive(delta);
+    if (accepted && delta.durability === "durable") {
       this.commitAnswerMode(delta.answer_mode);
       this.commitAccess(delta.access);
     }
@@ -599,8 +601,8 @@ export class ConversationEventWindowController {
       return;
     }
     try {
-      this.store.applyLive(delta);
-      if (delta.durability === "durable") {
+      const accepted = this.store.applyLive(delta);
+      if (accepted && delta.durability === "durable") {
         this.commitAnswerMode(delta.answer_mode);
         this.commitAccess(delta.access);
       }
@@ -762,8 +764,8 @@ export class ConversationEventWindowController {
           return;
         }
         try {
-          this.store.applyLive(delta);
-          if (delta.durability === "durable") {
+          const accepted = this.store.applyLive(delta);
+          if (accepted && delta.durability === "durable") {
             this.commitAnswerMode(delta.answer_mode);
             this.commitAccess(delta.access);
           }

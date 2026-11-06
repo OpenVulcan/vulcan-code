@@ -8,17 +8,18 @@ import { Label } from "@/ui-kit/primitives/label"
 import { Switch } from "@/ui-kit/primitives/switch"
 import { useI18n, type TranslationKey } from "@/i18n"
 import type { VmmMemoryActionResult, VmmNativeProjectRetentionRules, VmmNativeProjectRetentionSummary, VmmNativeProjectSummary } from "@/types"
+import { VMM_RETENTION_BOUNDS } from "./vmm-native-bounds"
 import { VmmNativeDurationInput } from "./vmm-native-duration-input"
 import "@/ui-kit/styles/features/settings-forms.css"
 
 // Numeric project fields have the same closed bounds as the native data-retention contract.
 // 项目数值字段与原生数据保留契约具有相同封闭范围。
 const fields: Array<{ key: Exclude<keyof VmmNativeProjectRetentionRules, "skipProtectedSharedMemories">; label: TranslationKey; min: number; max: number }> = [
-  { key: "turnHotWindowSize", label: "memory.cleanup.hotWindow", min: 1, max: 4294967295 },
-  { key: "sessionIdleMs", label: "memory.cleanup.idle", min: 1, max: 9223372036854 },
-  { key: "trashRetentionMs", label: "memory.cleanup.trash", min: 1, max: 9223372036854 },
-  { key: "protectedPriorityFloor", label: "memory.cleanup.priority", min: 0, max: 100 },
-  { key: "protectedMemoryLevelFloor", label: "memory.cleanup.level", min: 1, max: 4 },
+  { key: "turnHotWindowSize", label: "memory.cleanup.hotWindow", ...VMM_RETENTION_BOUNDS.turnHotWindowSize },
+  { key: "sessionIdleMs", label: "memory.cleanup.idle", ...VMM_RETENTION_BOUNDS.sessionIdleMs },
+  { key: "trashRetentionMs", label: "memory.cleanup.trash", ...VMM_RETENTION_BOUNDS.trashRetentionMs },
+  { key: "protectedPriorityFloor", label: "memory.cleanup.priority", ...VMM_RETENTION_BOUNDS.protectedPriorityFloor },
+  { key: "protectedMemoryLevelFloor", label: "memory.cleanup.level", ...VMM_RETENTION_BOUNDS.protectedMemoryLevelFloor },
 ]
 // Draft preserves intermediate input text instead of inventing missing numeric values.
 // 草稿保留中间输入文本，不编造缺失数值。

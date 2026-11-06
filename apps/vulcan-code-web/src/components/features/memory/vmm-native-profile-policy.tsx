@@ -8,6 +8,7 @@ import { useI18n } from "@/i18n"
 import type { VmmMemoryActionResult, VmmNativeProfilePolicySummary, VmmNativeRuntimePolicySummary } from "@/types"
 import "@/ui-kit/styles/features/settings-forms.css"
 import "@/ui-kit/styles/features/memory.css"
+import { VMM_PROFILE_LIFETIME_MAX_MS } from "./vmm-native-bounds"
 
 // Exact contract keys determine both the editor and validation traversal.
 // 准确契约键同时决定编辑器与校验遍历。
@@ -48,7 +49,7 @@ export function parseProfileDraft(draft: ProfileDraft): VmmNativeProfilePolicySu
     for (const field of fields) {
       if (!/^\d+$/.test(row[field].trim())) return null
       const value = Number(row[field]) * row.unit
-      if (!Number.isSafeInteger(value) || value < (field === "stepMs" ? 0 : 1) || value > 3650 * 86400000) return null
+      if (!Number.isSafeInteger(value) || value < (field === "stepMs" ? 0 : 1) || value > VMM_PROFILE_LIFETIME_MAX_MS) return null
       rule[field] = value
     }
     if (rule.baseMs > rule.maxMs) return null

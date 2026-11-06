@@ -305,13 +305,15 @@ export function VmmDataPage(props: VmmDataPageProps) {
 
   // openTurnDetail reads bounded user and assistant sections on demand.
   // openTurnDetail 按需读取有界的用户与助手内容区段。
+  // Content reads use the chunk size the management service declares, never a client-side copy.
+  // 内容读取使用管理服务声明的分片大小，绝不使用客户端副本。
   const openTurnDetail = React.useCallback(async (turn: ManagementTurn) => {
     setError("")
     setOpenTurn(turn)
     setTurnContent({ user: null, assistant: null })
     try {
-      const userResult = await props.onRunAction("management_get_turn_content", { turnId: turn.turn_id, filters: { section: "user", offset: 0, limitBytes: 65536 } })
-      const assistantResult = await props.onRunAction("management_get_turn_content", { turnId: turn.turn_id, filters: { section: "assistant", offset: 0, limitBytes: 65536 } })
+      const userResult = await props.onRunAction("management_get_turn_content", { turnId: turn.turn_id, filters: { section: "user", offset: 0, limitBytes: capabilities?.content_chunk_bytes } })
+      const assistantResult = await props.onRunAction("management_get_turn_content", { turnId: turn.turn_id, filters: { section: "assistant", offset: 0, limitBytes: capabilities?.content_chunk_bytes } })
       setTurnContent({
         user: managementValue<ManagementTurnContent>(userResult, t("memory.data.invalidResponse")),
         assistant: managementValue<ManagementTurnContent>(assistantResult, t("memory.data.invalidResponse")),
@@ -319,7 +321,7 @@ export function VmmDataPage(props: VmmDataPageProps) {
     } catch (requestError) {
       setError(managementErrorMessage(requestError))
     }
-  }, [props.onRunAction, t])
+  }, [capabilities?.content_chunk_bytes, props.onRunAction, t])
 
   // loadTurns refreshes or appends turns for one exact selected session.
   // loadTurns 刷新或追加一个准确选中会话的回合。
@@ -697,7 +699,7 @@ export function VmmDataPage(props: VmmDataPageProps) {
         if (!openTurn || !current?.has_more) return
         setError("")
         try {
-          const result = await props.onRunAction("management_get_turn_content", { turnId: openTurn.turn_id, filters: { section, offset: current.next_offset, limitBytes: 65536 } })
+          const result = await props.onRunAction("management_get_turn_content", { turnId: openTurn.turn_id, filters: { section, offset: current.next_offset, limitBytes: capabilities?.content_chunk_bytes } })
           const next = managementValue<ManagementTurnContent>(result, t("memory.data.invalidResponse"))
           if (next) setTurnContent((value) => ({ ...value, [section]: { ...next, chunk: `${current.chunk}${next.chunk}` } }))
         } catch (requestError) {

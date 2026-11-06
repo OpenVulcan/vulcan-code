@@ -115,6 +115,23 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
   // edited stays true after a user touches a control even when values return to the baseline.
   // edited 即使值恢复到基线，也会在用户触碰控件后保持为真。
   const [edited, setEdited] = React.useState(false)
+  // invalidNumbers names number fields whose current text is not a positive integer; saving waits for them.
+  // invalidNumbers 列出当前文本不是正整数的数值字段；保存需等待其修正。
+  const [invalidNumbers, setInvalidNumbers] = React.useState<ReadonlySet<string>>(new Set())
+  // draftRevision remounts the number inputs whenever the draft is reset, discarding rejected text.
+  // draftRevision 在草稿重置时重新挂载数值输入，丢弃被拒绝的文本。
+  const [draftRevision, setDraftRevision] = React.useState(0)
+  // markNumberValidity records whether one number field currently holds acceptable text.
+  // markNumberValidity 记录单个数值字段当前文本是否可接受。
+  const markNumberValidity = React.useCallback((field: string, valid: boolean) => {
+    setInvalidNumbers((current) => {
+      if (current.has(field) !== valid) return current
+      const next = new Set(current)
+      if (valid) next.delete(field)
+      else next.add(field)
+      return next
+    })
+  }, [])
   // saving serializes model-settings writes.
   // saving 串行化模型设置写入。
   const [saving, setSaving] = React.useState(false)
@@ -165,6 +182,8 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
   // resetDraft projects one complete model layer into the simplified direct controls.
   // resetDraft 将一层完整模型设置投影到简化直接控件。
   const resetDraft = React.useCallback((settings: PublicAiModelCapabilityOverrides) => {
+    setInvalidNumbers(new Set())
+    setDraftRevision((revision) => revision + 1)
     setContextLimit(settings.context_limit ?? 200_000)
     setOutputLimit(settings.output_limit ?? 32_768)
     setInputResources(settings.input_resources ?? [])
@@ -297,13 +316,17 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
         <fieldset className="vk-fieldset vk-form-scroll" disabled={saving}>
         <div className="vk-form-grid">
           <DirectModelNumberInput
+            key={`context_limit:${draftRevision}`}
             label={t("settings.modelCapabilities.contextLimit")}
             onChange={(value) => { markField("context_limit"); setContextLimit(value) }}
+            onValidityChange={(valid) => markNumberValidity("context_limit", valid)}
             value={contextLimit}
           />
           <DirectModelNumberInput
+            key={`output_limit:${draftRevision}`}
             label={t("settings.customModels.outputLimit")}
             onChange={(value) => { markField("output_limit"); setOutputLimit(value) }}
+            onValidityChange={(valid) => markNumberValidity("output_limit", valid)}
             value={outputLimit}
           />
         </div>
@@ -396,7 +419,7 @@ export function PublicAiModelCapabilityDialog(props: ModelCapabilityDialogProps)
             <Button disabled={saving} onClick={() => props.onOpenChange(false)} type="button" variant="outline">
               {t("memory.common.cancel")}
             </Button>
-            <Button disabled={saving || (!dirty && !edited)} onClick={() => void persist(false)} type="button">
+            <Button disabled={saving || invalidNumbers.size > 0 || (!dirty && !edited)} onClick={() => void persist(false)} type="button">
               {saving ? <LoaderCircle className="vk-spin" /> : null}
               {t("memory.common.save")}
             </Button>
@@ -661,14 +684,32 @@ export function ReasoningProjectionEditor(props: {
 
 // DirectModelNumberInput renders one directly editable positive-integer model setting.
 // DirectModelNumberInput 渲染一个可直接编辑的正整数模型设置。
-function DirectModelNumberInput(props: { label: string; onChange: (value: number) => void; value: number }) {
+// It keeps the typed text as entered: only a whole positive integer reaches onChange; anything else is marked invalid.
+// 它按输入原样保留文本：只有完整正整数会传给 onChange，其余输入标记为无效。
+function DirectModelNumberInput(props: {
+  label: string
+  onChange: (value: number) => void
+  onValidityChange: (valid: boolean) => void
+  value: number
+}) {
+  const [text, setText] = React.useState(() => (props.value ? String(props.value) : ""))
+  const value = Number(text)
+  const valid = /^\d+$/u.test(text) && Number.isSafeInteger(value) && value > 0
   return (
     <label className="vk-field">
       {props.label}
       <Input
+        aria-invalid={!valid}
         inputMode="numeric"
-        onChange={(event) => props.onChange(Number.parseInt(event.target.value.replace(/\D/g, "") || "0", 10))}
-        value={props.value || ""}
+        onChange={(event) => {
+          const next = event.target.value
+          const parsed = Number(next)
+          const nextValid = /^\d+$/u.test(next) && Number.isSafeInteger(parsed) && parsed > 0
+          setText(next)
+          props.onValidityChange(nextValid)
+          if (nextValid) props.onChange(parsed)
+        }}
+        value={text}
       />
     </label>
   )

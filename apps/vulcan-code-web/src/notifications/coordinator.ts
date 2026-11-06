@@ -6,6 +6,7 @@ import { notificationClientInstanceId } from "@/notifications/client-identity";
 import {
   currentNotificationRouteStorage,
   loadNotificationRoutes,
+  MAX_STORED_ROUTES,
   saveNotificationRoutes,
   type NotificationRouteStorage,
 } from "@/notifications/route-storage";
@@ -222,10 +223,10 @@ export class NotificationCoordinator {
     return true;
   }
 
-  // trimRoutes keeps activation correlation bounded by the same client-lifetime limit.
-  // trimRoutes 使用相同客户端生命周期上限约束激活关联。
+  // trimRoutes keeps activation correlation bounded by the stored route limit.
+  // trimRoutes 使用已存储路由上限约束激活关联。
   private trimRoutes(): void {
-    while (this.routesByNotificationId.size > CONSUMED_EVENT_LIMIT) {
+    while (this.routesByNotificationId.size > MAX_STORED_ROUTES) {
       // oldestNotificationId follows Map insertion order and is present while the map exceeds the limit.
       // oldestNotificationId 遵循 Map 插入顺序，并在映射超限时必然存在。
       const oldestNotificationId = this.routesByNotificationId.keys().next().value;

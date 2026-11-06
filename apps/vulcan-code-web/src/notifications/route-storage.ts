@@ -4,9 +4,9 @@ import type { NotificationRouteV1 } from "@/notifications/types";
 // ROUTE_STORAGE_KEY 在同一客户端页面重载后保留通知点击目标。
 const ROUTE_STORAGE_KEY = "vulcan.notifications.routes.v1";
 
-// MAX_STORED_ROUTES matches the coordinator's bounded in-memory activation map.
-// MAX_STORED_ROUTES 与协调器有界的内存激活映射保持一致。
-const MAX_STORED_ROUTES = 512;
+// MAX_STORED_ROUTES bounds both the stored routes and the coordinator's in-memory activation map.
+// MAX_STORED_ROUTES 同时约束已存储路由与协调器的内存激活映射。
+export const MAX_STORED_ROUTES = 512;
 
 // MAX_ROUTE_DOCUMENT_LENGTH accommodates every bounded route while rejecting oversized data.
 // MAX_ROUTE_DOCUMENT_LENGTH 容纳所有有界路由，同时拒绝过大的存储数据。

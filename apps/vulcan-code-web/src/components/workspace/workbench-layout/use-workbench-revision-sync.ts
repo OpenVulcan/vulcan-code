@@ -709,6 +709,7 @@ export function useWorkbenchServiceSync(gates: WorkbenchRevisionGates, props: Wo
       if (
         envelope.delta.kind === "luaSkillsCatalogChanged"
         || envelope.delta.kind === "luaSkillsManagedRuntimeProgressChanged"
+        || envelope.delta.kind === "luaSkillsOperationProgressChanged"
       ) {
         // Every LuaSkills projection shares one domain gate so unrelated newer deltas cannot hide progress.
         // 所有 LuaSkills 投影共享同一领域闸门，避免无关的较新增量隐藏进度。

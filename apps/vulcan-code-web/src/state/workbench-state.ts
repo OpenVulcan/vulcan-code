@@ -478,15 +478,17 @@ function applySessionAddonAttention(
 
 // applyNormalizedConversationAttention reapplies per-session ask and Plan markers after summary replacement.
 // applyNormalizedConversationAttention 在摘要替换后重新应用按会话归一化的提问与计划标记。
+// Ask markers go first, so a cleared ask falls back to the Plan marker of a session still in plan mode.
+// 先应用提问标记，使清除的提问能回落到仍处于计划模式会话的计划标记。
 function applyNormalizedConversationAttention(
   conversations: ConversationSummary[],
   workbench: WorkbenchSnapshot,
 ): ConversationSummary[] {
-  let nextConversations = conversations;
+  let nextConversations = applyPendingQuestionAttention(conversations, workbench.pendingQuestions ?? []);
   for (const entry of workbench.sessionAddonsByConversation ?? []) {
     nextConversations = applySessionAddonAttention(nextConversations, entry);
   }
-  return applyPendingQuestionAttention(nextConversations, workbench.pendingQuestions ?? []);
+  return nextConversations;
 }
 
 // applyConversationArchivedDelta applies one authoritative conversation archive transition without transcript ownership.
@@ -638,7 +640,7 @@ function applyWorkbenchDeltaPayload(
       return deriveSelectedConversationFields({
         ...workbench,
         pendingQuestions,
-        conversations: applyPendingQuestionAttention(workbench.conversations, pendingQuestions),
+        conversations: applyNormalizedConversationAttention(workbench.conversations, { ...workbench, pendingQuestions }),
       });
     }
     case "commandSessionsChanged":

@@ -84,17 +84,15 @@ describe("composer draft persistence", () => {
     });
   });
 
-  it("rejects an invalid versioned payload instead of guessing attachment fields", async () => {
-    storage.setItem(
-      `${DRAFT_STORAGE_PREFIX}new:project-a`,
-      JSON.stringify({ version: 1, input: "inspect", attachments: [{ assetId: "asset-a" }] }),
-    );
+  it("rejects an invalid versioned payload without guessing fields or deleting its bytes", async () => {
+    const rejected = JSON.stringify({ version: 1, input: "inspect", attachments: [{ assetId: "asset-a" }] });
+    storage.setItem(`${DRAFT_STORAGE_PREFIX}new:project-a`, rejected);
     const runtime = await import("./helpers");
 
     expect(runtime.readComposerSessionMemoryDraft("new:project-a")).toEqual({
       input: "",
       attachments: [],
     });
-    expect(storage.getItem(`${DRAFT_STORAGE_PREFIX}new:project-a`)).toBeNull();
+    expect(storage.getItem(`${DRAFT_STORAGE_PREFIX}new:project-a`)).toBe(rejected);
   });
 });

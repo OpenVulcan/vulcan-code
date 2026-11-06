@@ -95,8 +95,8 @@ export function useComposerPathMention(options: {
   // dismissed is the mention Escape closed, kept until the mention changes.
   // dismissed 是被 Escape 关闭的提及，保留到提及内容变化为止。
   const [dismissed, setDismissed] = React.useState<string | null>(null);
-  // listings caches each folder's entries for the current workspace; a failed folder stays empty.
-  // listings 缓存当前工作区每个文件夹的条目；读取失败的文件夹保持为空。
+  // listings caches each folder's entries for one open mention; a failed folder stays empty until the mention closes.
+  // listings 为一次打开的提及缓存每个文件夹的条目；读取失败的文件夹在提及关闭前保持为空。
   const [listings, setListings] = React.useState<{ workspacePath: string | null; folders: ReadonlyMap<string, readonly WorkspaceFileEntrySummary[] | null> }>(
     { workspacePath, folders: new Map() },
   );
@@ -120,6 +120,12 @@ export function useComposerPathMention(options: {
       .then((listing) => store(listing.entries))
       .catch(() => store([]));
   }, [conversationId, directory, folders, projectId, workspacePath]);
+
+  React.useEffect(() => {
+    // A closed mention forgets every listing, so the next one sees new files and retries failed folders.
+    // 提及关闭时清空全部列表，使下一次提及能看到新文件并重试读取失败的文件夹。
+    if (directory === null) setListings((current) => (current.folders.size === 0 ? current : { ...current, folders: new Map() }));
+  }, [directory]);
 
   const entries = directory === null ? null : folders?.get(directory) ?? null;
   const suggestions = React.useMemo(
