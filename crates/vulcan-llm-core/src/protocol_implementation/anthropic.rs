@@ -762,6 +762,33 @@ impl AnthropicStreamDecoder {
             AnthropicBlock::Ignored => Ok(Vec::new()),
         }
     }
+
+    /// Ends every block still open when the stream fails; an interrupted thinking block keeps no
+    /// signature and an interrupted tool call is aborted.
+    /// 流失败时结束所有仍打开的块；被中断的思考块不保留签名，被中断的工具调用被中止。
+    fn abort_open_blocks(&mut self) -> Vec<AiStreamEvent> {
+        std::mem::take(&mut self.blocks)
+            .into_values()
+            .filter_map(|block| match block {
+                AnthropicBlock::Text { item_id } => {
+                    Some(AiStreamEvent::ResponseItemCompleted { item_id })
+                }
+                AnthropicBlock::Reasoning { item_id, .. } => {
+                    Some(AiStreamEvent::ReasoningCompleted {
+                        item_id,
+                        signature: None,
+                    })
+                }
+                AnthropicBlock::Tool { item_id, .. } => Some(AiStreamEvent::ToolCallAborted {
+                    item_id,
+                    message: String::from(
+                        "Anthropic emitted an error before the tool input completed.",
+                    ),
+                }),
+                AnthropicBlock::Ignored => None,
+            })
+            .collect()
+    }
 }
 
 impl ProtocolStreamDecoder for AnthropicStreamDecoder {
@@ -819,10 +846,14 @@ impl ProtocolStreamDecoder for AnthropicStreamDecoder {
                 vec![AiStreamEvent::ResponseCompleted]
             }
             "error" => {
+                // A mid-stream error ends every open block first, so the provider error stays the reported one.
+                // 流中途的错误先结束所有打开的块，使上报的仍是供应商错误本身。
+                let mut failed = self.abort_open_blocks();
                 self.terminal = true;
-                vec![AiStreamEvent::ResponseFailed {
+                failed.push(AiStreamEvent::ResponseFailed {
                     error: anthropic_error(&value),
-                }]
+                });
+                failed
             }
             "ping" => Vec::new(),
             other => {
@@ -1609,6 +1640,54 @@ mod tests {
             AiStreamEvent::ResponseMetadataUpdated { continuation }
                 if continuation.provider_message_id == "msg_123"
         )));
+    }
+
+    /// A mid-stream error ends open thinking, text and tool blocks so the provider failure survives validation.
+    /// 流中途错误会结束打开的思考、文本与工具块，使供应商失败能通过校验。
+    #[test]
+    fn mid_stream_error_closes_open_blocks_before_failing() {
+        let mut decoder = AnthropicStreamDecoder::new(String::from("execution"));
+        let mut machine = vulcan_ai_contract::AiStreamStateMachine::default();
+        let mut events = Vec::new();
+        for (name, data) in [
+            (
+                "message_start",
+                r#"{"type":"message_start","message":{"id":"msg_1","usage":{}}}"#,
+            ),
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#,
+            ),
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}"#,
+            ),
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu_1","name":"file","input":{}}}"#,
+            ),
+            (
+                "error",
+                r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#,
+            ),
+        ] {
+            events.extend(decoder.push_sse(Some(name), data).unwrap());
+        }
+        for event in &events {
+            machine
+                .apply(event)
+                .expect("a mid-stream error must leave a balanced lifecycle");
+        }
+        assert!(machine.is_terminal());
+        assert!(matches!(
+            events.last(),
+            Some(AiStreamEvent::ResponseFailed { .. })
+        ));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, AiStreamEvent::ToolCallAborted { .. }))
+        );
     }
 
     /// Verifies fragmented Anthropic tool JSON stays incremental until block completion.

@@ -466,6 +466,24 @@ impl OpenAiChatStreamDecoder {
         events
     }
 
+    /// Aborts every started tool call that has not completed; unstarted calls were never announced.
+    /// 中止所有已开始但未完成的工具调用；未开始的调用从未对外公布。
+    fn abort_incomplete_tools(&mut self) -> Vec<AiStreamEvent> {
+        let mut events = Vec::new();
+        for state in self.tools.values_mut().filter(|state| !state.terminal) {
+            state.terminal = true;
+            if state.started {
+                events.push(AiStreamEvent::ToolCallAborted {
+                    item_id: state.item_id.clone(),
+                    message: String::from(
+                        "OpenAI Chat emitted an error before the tool input completed.",
+                    ),
+                });
+            }
+        }
+        events
+    }
+
     /// Finalizes buffered calls at the transport boundary, preserving unknown names for host rejection.
     /// 在传输边界完成缓存调用，保留未知工具名以交由宿主拒绝。
     /// No parameters; returns ordered lifecycle events, or an error for missing wire identity.
@@ -547,6 +565,10 @@ impl ProtocolStreamDecoder for OpenAiChatStreamDecoder {
             ProtocolConversionError::new(format!("OpenAI Chat SSE JSON is invalid: {error}"))
         })?;
         if let Some(error) = value.get("error") {
+            // A mid-stream error ends every open item first, so the provider error stays the reported one.
+            // 流中途的错误先结束所有打开的项，使上报的仍是供应商错误本身。
+            events.extend(self.close_open_items());
+            events.extend(self.abort_incomplete_tools());
             self.terminal = true;
             events.push(AiStreamEvent::ResponseFailed {
                 error: normalize_openai_error(error, value.get("error_type"), None),
@@ -2975,6 +2997,51 @@ mod tests {
                 ));
             }
         }
+    }
+
+    /// A mid-stream error ends open reasoning, text and tool items so the provider failure survives validation.
+    /// 流中途错误会结束打开的推理、文本与工具项，使供应商失败能通过校验。
+    #[test]
+    fn chat_mid_stream_error_closes_open_items_before_failing() {
+        let mut decoder = OpenAiChatStreamDecoder::with_registered_tools(
+            String::from("mid-stream-error"),
+            BTreeSet::from([String::from("file")]),
+        );
+        let mut machine = vulcan_ai_contract::AiStreamStateMachine::default();
+        let mut events = decoder
+            .push_sse(
+                None,
+                r#"{"choices":[{"delta":{"reasoning_content":"thinking","content":"partial"}}]}"#,
+            )
+            .unwrap();
+        // One registered call has started; the unregistered sibling was never announced.
+        // 一个已注册调用已经开始；未注册的同批调用从未公布。
+        events.extend(decoder.push_sse(None, r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-0","function":{"name":"file","arguments":"{"}},{"index":1,"id":"call-1","function":{"name":"unregistered","arguments":"{"}}]}}]}"#).unwrap());
+        events.extend(
+            decoder
+                .push_sse(
+                    None,
+                    r#"{"error":{"message":"upstream overloaded","code":"overloaded"}}"#,
+                )
+                .unwrap(),
+        );
+        for event in &events {
+            machine
+                .apply(event)
+                .expect("a mid-stream error must leave a balanced lifecycle");
+        }
+        assert!(machine.is_terminal());
+        assert!(matches!(
+            events.last(),
+            Some(AiStreamEvent::ResponseFailed { .. })
+        ));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, AiStreamEvent::ToolCallAborted { .. }))
+                .count(),
+            1
+        );
     }
 
     /// Rejects genuinely absent identities without inventing call ids or emitting an unstarted abort.
