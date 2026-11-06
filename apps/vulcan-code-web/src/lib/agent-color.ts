@@ -1,14 +1,27 @@
-// AGENT_COLOR_PALETTE maps the named agent color tokens stored in metadata to CSS colors.
-// AGENT_COLOR_PALETTE 将元数据中保存的具名智能体颜色标识映射为 CSS 颜色。
+// AGENT_COLOR_PALETTE maps the named agent color tokens stored in metadata to CSS colors, covering
+// every name the built-in roles declare.
+// AGENT_COLOR_PALETTE 将元数据中保存的具名智能体颜色标识映射为 CSS 颜色，涵盖内置角色声明的全部名称。
 const AGENT_COLOR_PALETTE: Readonly<Record<string, string>> = {
+  amber: "#f59e0b",
   blue: "#3b82f6",
   cyan: "#06b6d4",
+  fuchsia: "#d946ef",
+  gold: "#ca8a04",
   gray: "#6b7280",
   green: "#22c55e",
+  indigo: "#6366f1",
+  lime: "#84cc16",
+  metallic: "#94a3b8",
+  navy: "#1e3a8a",
+  neon: "#39ff14",
   orange: "#f97316",
   pink: "#ec4899",
   purple: "#8b5cf6",
   red: "#ef4444",
+  rose: "#f43f5e",
+  slate: "#64748b",
+  teal: "#14b8a6",
+  violet: "#7c3aed",
   yellow: "#eab308",
 };
 

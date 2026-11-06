@@ -122,8 +122,11 @@ pub fn webui_static_root_from_candidates(
 ///
 /// # Parameters
 /// 参数
-/// `static_root` is the optional WebUI bundle directory, `request_path` is the browser path, `cache_control` is the response cache policy, and `missing_message` is the 404 text.
-/// `static_root` 是可选 WebUI 包目录，`request_path` 是浏览器路径，`cache_control` 是响应缓存策略，`missing_message` 是 404 文本。
+/// `static_root` is the optional WebUI bundle directory, `request_path` is the browser path, and
+/// `missing_message` is the 404 text. Only files below [`WEBUI_FINGERPRINTED_DIR`] are cached as
+/// immutable; everything else, including the index served for browser routes, is revalidated.
+/// `static_root` 是可选 WebUI 包目录，`request_path` 是浏览器路径，`missing_message` 是 404 文本。只有
+/// [`WEBUI_FINGERPRINTED_DIR`] 下的文件按不可变缓存；其余文件（包括为浏览器路由提供的入口）都要重新验证。
 ///
 /// # Returns
 /// 返回值
@@ -132,16 +135,33 @@ pub fn webui_static_root_from_candidates(
 pub fn build_webui_static_response(
     static_root: Option<&Path>,
     request_path: &str,
-    cache_control: &str,
     missing_message: &str,
 ) -> ServiceStaticResponse {
     let Some(static_root) = static_root else {
         return service_static_text_response(404, missing_message);
     };
     match webui_static_file_path_for_request(static_root, request_path) {
-        Ok(Some(path)) => build_webui_static_file_response(path, cache_control),
+        Ok(Some(path)) => {
+            let cache_control = webui_static_cache_control(static_root, &path);
+            build_webui_static_file_response(path, cache_control)
+        }
         Ok(None) => service_static_text_response(404, missing_message),
         Err(error) => service_static_text_response(400, &error),
+    }
+}
+
+/// Directory of the WebUI bundle whose file names carry a content hash (Vite's `assets`).
+/// WebUI 包中文件名带内容哈希的目录（Vite 的 `assets`）。
+pub const WEBUI_FINGERPRINTED_DIR: &str = "assets";
+
+/// Returns the cache policy of the bundle file at `path`: a name that carries a content hash never
+/// changes its content, while any other file may change with an update.
+/// 返回 `path` 处包文件的缓存策略：带内容哈希的名称内容永不改变，其他文件可能随更新改变。
+fn webui_static_cache_control(static_root: &Path, path: &Path) -> &'static str {
+    if path.starts_with(static_root.join(WEBUI_FINGERPRINTED_DIR)) {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
     }
 }
 

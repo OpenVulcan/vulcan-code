@@ -204,9 +204,10 @@ case "$command" in
     version=$1
     # Every setup version publishes install.sh; its files are immutable like a product release's.
     # 每个安装器版本都发布 install.sh；其文件与产品版本一样不可变。
-    key="$prefix/setup/$version/install.sh"
-    if s3 head-object --key "$key" > /dev/null 2>&1; then
-      echo "setup $version is already published ($key)" >&2
+    name="setup/$version/install.sh"
+    meta=$(object_meta "$name")
+    if [ -n "$meta" ]; then
+      echo "setup $version is already published ($prefix/$name)" >&2
       exit 1
     fi
     echo "setup $version is not published yet"

@@ -13,7 +13,7 @@ use vulcan_install_core::names::Platform;
 use crate::paths;
 use crate::report::{Privileged, Purpose, Reporter, Stage};
 use crate::root::{Description, Layout, Version};
-use crate::state::{Item, SETUP_DIR};
+use crate::state::{Item, SERVICE_PENDING_FILE, SETUP_DIR};
 
 /// Line that marks the launcher scripts, menu entries and bundles this program writes; the same
 /// line as `scripts/install.sh`, so its launchers are refreshed instead of being skipped.
@@ -378,14 +378,21 @@ pub fn integrate(
     if let Some(range) = plan.port_range {
         set_port_range(version, range, recorder)?;
     }
+    // A run that switched versions and then failed leaves this marker, because its state still
+    // lists the service of the earlier version.
+    // 切换了版本后失败的运行留下此标记，因为其状态仍列出更早版本的服务。
+    let pending = plan.root.join(SETUP_DIR).join(SERVICE_PENDING_FILE);
     if plan.service {
-        if switched || !recorder.had(&Item::UserService) {
+        if switched || pending.is_file() || !recorder.had(&Item::UserService) {
             reporter.stage(Stage::Service);
             let report = run_service(&version.service(), &[INSTALL_USER_SERVICE])?;
             recorder.notes.push(report);
         }
         recorder.add(Item::UserService);
     }
+    // Registered now, or no longer wanted.
+    // 已经注册，或不再需要。
+    let _ = std::fs::remove_file(&pending);
     #[cfg(unix)]
     {
         if plan.linger {
@@ -920,11 +927,26 @@ fn write_marked(path: &Path, content: &str) -> Result<bool, String> {
 /// Whether the file at `path` carries the setup marker.
 /// `path` 处的文件是否带有安装器标记。
 fn carries_marker(path: &Path) -> bool {
+    std::fs::read(path).is_ok_and(|bytes| contains(&bytes, LAUNCHER_MARKER.as_bytes()))
+}
+
+/// Whether the file at `path` carries the setup marker and names a path inside `root`. Launchers,
+/// menu entries and bundles sit at fixed places shared by every prefix, so one written for another
+/// root belongs to that installation.
+/// `path` 处的文件是否带有安装器标记并指向 `root` 内的路径。启动器、菜单项与应用程序包位于各前缀共享的
+/// 固定位置，因此为其他根目录写入的文件属于那个安装。
+fn marked_for(path: &Path, root: &Path) -> bool {
+    let mut prefix = root.as_os_str().to_string_lossy().into_owned();
+    prefix.push(std::path::MAIN_SEPARATOR);
     std::fs::read(path).is_ok_and(|bytes| {
-        bytes
-            .windows(LAUNCHER_MARKER.len())
-            .any(|window| window == LAUNCHER_MARKER.as_bytes())
+        contains(&bytes, LAUNCHER_MARKER.as_bytes()) && contains(&bytes, prefix.as_bytes())
     })
+}
+
+/// Whether `bytes` contains `needle`.
+/// `bytes` 是否包含 `needle`。
+fn contains(bytes: &[u8], needle: &[u8]) -> bool {
+    bytes.windows(needle.len()).any(|window| window == needle)
 }
 
 /// Replaces `path` atomically with `content`, executable when asked.
@@ -1139,7 +1161,7 @@ pub fn remove(
     };
     match item {
         Item::File { path } => {
-            if path.starts_with(root) || carries_marker(path) {
+            if path.starts_with(root) || marked_for(path, root) {
                 remove_file(path)?;
                 #[cfg(windows)]
                 remove_file(&aside_of(path))?;
@@ -1148,7 +1170,7 @@ pub fn remove(
         }
         Item::Shortcut { path } => remove_file(path),
         Item::Bundle { path } => {
-            if carries_marker(&path.join("Contents/MacOS").join(BUNDLE_EXECUTABLE)) {
+            if marked_for(&path.join("Contents/MacOS").join(BUNDLE_EXECUTABLE), root) {
                 std::fs::remove_dir_all(path).map_err(|error| fail(path, error))?;
             }
             Ok(())
@@ -1355,9 +1377,27 @@ mod tests {
         assert!(foreign.exists());
 
         let ours = temp.path().join("vulcan-code");
-        let script = format!("#!/bin/sh\n{LAUNCHER_MARKER}\nexec true\n");
-        assert_eq!(write_marked(&ours, &script), Ok(true));
-        assert_eq!(write_marked(&ours, &script), Ok(true));
+        let launcher = |root: &Path| {
+            format!(
+                "#!/bin/sh\n{LAUNCHER_MARKER}\nexec \"{}\" \"$@\"\n",
+                root.join("current").join("vulcan-code").display()
+            )
+        };
+        // A launcher another prefix wrote at the shared place stays with that installation.
+        // 其他前缀写在共享位置的启动器仍归那个安装所有。
+        let other = temp.path().join("other");
+        assert_eq!(write_marked(&ours, &launcher(&other)), Ok(true));
+        remove(
+            &Item::File { path: ours.clone() },
+            &root,
+            None,
+            &Plain::new(true),
+        )
+        .expect("remove");
+        assert!(ours.exists());
+
+        assert_eq!(write_marked(&ours, &launcher(&root)), Ok(true));
+        assert_eq!(write_marked(&ours, &launcher(&root)), Ok(true));
         remove(
             &Item::File { path: ours.clone() },
             &root,

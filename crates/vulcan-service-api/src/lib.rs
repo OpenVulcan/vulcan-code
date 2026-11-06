@@ -326,22 +326,34 @@ mod tests {
         fs::create_dir_all(&root).expect("create static root");
         fs::write(root.join("index.html"), "<html>ok</html>").expect("write index");
 
+        fs::create_dir_all(root.join("assets")).expect("create assets directory");
+        fs::write(root.join("assets").join("app-1a2b.js"), "1;").expect("write js");
+        fs::write(root.join("favicon.svg"), "<svg/>").expect("write icon");
+        let cache_control = |path: &str| {
+            let response = build_webui_static_response(Some(&root), path, "missing");
+            assert_eq!(response.status, 200, "{path}");
+            response
+                .headers
+                .into_iter()
+                .find(|(key, _)| key == "cache-control")
+                .map(|(_, value)| value)
+                .expect("cache-control header")
+        };
+
         let response = build_webui_static_response(
             Some(&root),
             "/",
-            "no-cache",
             "Vulcan WebUI static bundle is not available.",
         );
-        assert_eq!(response.status, 200);
         assert!(response.body.starts_with(b"<html>"));
-        assert!(
-            response
-                .headers
-                .iter()
-                .any(|(key, value)| key == "cache-control" && value == "no-cache")
-        );
+        // Only content-hashed bundle files may be cached without revalidation.
+        // 只有带内容哈希的包文件可以不经重新验证而缓存。
+        assert!(cache_control("/assets/app-1a2b.js").contains("immutable"));
+        for path in ["/", "/conversation/abc", "/favicon.svg"] {
+            assert_eq!(cache_control(path), "no-cache", "{path}");
+        }
 
-        let missing = build_webui_static_response(None, "/", "no-cache", "missing");
+        let missing = build_webui_static_response(None, "/", "missing");
         assert_eq!(missing.status, 404);
         assert_eq!(
             String::from_utf8(missing.body).expect("missing response body should be UTF-8 text"),

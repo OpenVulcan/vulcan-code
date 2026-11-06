@@ -1644,7 +1644,6 @@ async fn webui_service_index_http_handler(
     axum_response_from_service_static_response(build_webui_static_response(
         server_state.static_root.as_deref(),
         "/",
-        "no-cache",
         "Vulcan WebUI static bundle is not available.",
     ))
 }
@@ -1689,7 +1688,6 @@ async fn webui_service_static_http_handler(
     axum_response_from_service_static_response(build_webui_static_response(
         server_state.static_root.as_deref(),
         uri.path(),
-        "public, max-age=31536000, immutable",
         "Not found.",
     ))
 }

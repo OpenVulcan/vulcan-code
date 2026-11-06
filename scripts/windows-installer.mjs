@@ -204,6 +204,8 @@ const
   MOVEFILE_WRITE_THROUGH = 8;
   // TFileStream mode fmOpenWrite or fmShareDenyNone.
   OPEN_WRITE_SHARE_ALL = $41;
+  // Exit code of a run that installed the files but could not switch to them; Setup itself uses 1-8.
+  SWITCH_FAILED_EXIT_CODE = 9;
   CurrentJson = ${pascalString(currentJson)};
   InstalledVersion = ${pascalString(version)};
 
@@ -216,6 +218,9 @@ var
   // Whether {app} holds the former single-directory layout, decided before anything is removed.
   FormerLayout: Boolean;
   Installed: Boolean;
+  // Whether current.json could not be pointed at the installed version; the run then ends with
+  // SWITCH_FAILED_EXIT_CODE.
+  SwitchFailed: Boolean;
 
 function MoveFileEx(ExistingFileName, NewFileName: String; Flags: Cardinal): Boolean;
   external 'MoveFileExW@kernel32.dll stdcall';
@@ -415,16 +420,32 @@ begin
   if P > 0 then Result := Copy(S, 1, P - 1);
 end;
 
-// Replaces current.json atomically: a complete partial file is renamed over the old one.
-procedure SwitchCurrentVersion;
+// Replaces current.json atomically: a complete partial file is renamed over the old one. Returns
+// False with the reason logged and shown; an exception here would only be logged and Setup would
+// still exit with 0.
+function SwitchCurrentVersion: Boolean;
 var
-  Target: String;
+  Target, Problem: String;
 begin
+  Result := False;
   Target := ExpandConstant('{app}\\${current}');
   if not SaveStringToFile(Target + '.partial', CurrentJson, False) then
-    RaiseException('Could not write ' + Target + '.partial.');
-  if not MoveFileEx(Target + '.partial', Target, MOVEFILE_REPLACE_EXISTING or MOVEFILE_WRITE_THROUGH) then
-    RaiseException('Could not replace ' + Target + '.');
+    Problem := 'Could not write ' + Target + '.partial.'
+  else if not MoveFileEx(Target + '.partial', Target, MOVEFILE_REPLACE_EXISTING or MOVEFILE_WRITE_THROUGH) then
+    Problem := 'Could not replace ' + Target + '.'
+  else
+  begin
+    Result := True;
+    Exit;
+  end;
+  Log(Problem);
+  SuppressibleMsgBox(Problem + ' The previous version stays in use.', mbCriticalError, MB_OK, IDOK);
+end;
+
+// A run whose version switch failed reports it to the caller, such as the in-app update.
+function GetCustomSetupExitCode: Integer;
+begin
+  if SwitchFailed then Result := SWITCH_FAILED_EXIT_CODE else Result := 0;
 end;
 
 // True when a program or library under Dir is loaded by a running process: opening a running image
@@ -508,7 +529,14 @@ begin
     Previous := CurrentVersion;
     // The install record .vulcan-install.json arrived with the version's files: the release tool wrote it
     // into the tree before compiling, so current.json only ever points at a recorded version.
-    SwitchCurrentVersion;
+    if not SwitchCurrentVersion then
+    begin
+      // The copied files stay and nothing is cleaned up: the still current version keeps working,
+      // a program relaunched by /RELAUNCH may already run from them, and a repeated run switches.
+      SwitchFailed := True;
+      Installed := True;
+      Exit;
+    end;
     Installed := True;
     // The replaced copies are no longer needed; any still in use are removed by a later install.
     for I := 0 to GetArrayLength(MovedAside) div 2 - 1 do

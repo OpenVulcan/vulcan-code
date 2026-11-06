@@ -522,7 +522,7 @@ async function runDesktopGui(): Promise<void> {
     return;
   }
   try {
-    const executable = await resolveServiceExecutable(options.serviceExecutable);
+    const executable = await resolveServiceExecutable(options.serviceExecutable, app.isPackaged);
     const description = await readServiceLaunchDescription(executable, options.forwardedArguments);
     const instance = await ensureServiceInstance(
       description,

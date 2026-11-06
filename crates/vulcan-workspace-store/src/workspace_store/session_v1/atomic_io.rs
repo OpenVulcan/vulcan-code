@@ -55,6 +55,15 @@ pub fn write_file_atomic(
     maybe_fail(WriteStage::StagingCreate, path, artifact_kind)?;
     let (staged_path, mut staged_file) = create_staging_file(path, artifact_kind)?;
     let staging_result = (|| -> std::io::Result<()> {
+        // The replacement keeps the mode of the file it replaces, so a file the user restricted
+        // stays restricted.
+        // 替换文件保留被替换文件的权限，使用户收紧过的文件保持收紧。
+        #[cfg(unix)]
+        match fs::metadata(path) {
+            Ok(previous) => staged_file.set_permissions(previous.permissions())?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
         if should_fail_io(WriteStage::WriteAll, path, artifact_kind) {
             return Err(std::io::Error::other("injected write_all failure"));
         }

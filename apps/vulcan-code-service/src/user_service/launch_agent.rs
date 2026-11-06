@@ -88,9 +88,10 @@ mod launchd {
     use std::process::{Command, Output, Stdio};
 
     use super::super::{
-        registered_executable, require_distribution, require_free_data_root, wait_until_ready,
+        registered_elsewhere, registered_executable, require_distribution, require_free_data_root,
+        wait_until_ready,
     };
-    use super::{label, render_plist, running_pid};
+    use super::{label, render_plist, running_pid, xml};
 
     /// Path of the agent below `~/Library/LaunchAgents`.
     /// 代理位于 `~/Library/LaunchAgents` 下的路径。
@@ -195,6 +196,9 @@ mod launchd {
         let path = plist_path()?;
         if !path.exists() {
             return Ok(format!("{} is not installed; nothing to remove", label()));
+        }
+        if let Some(summary) = registered_elsewhere(&path, xml) {
+            return Ok(summary);
         }
         let target = format!("{}/{}", domain()?, label());
         // An agent that is not loaded has nothing to stop.

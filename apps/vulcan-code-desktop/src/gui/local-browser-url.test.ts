@@ -66,3 +66,15 @@ test('rejects protected origins and executable schemes at entry and navigation',
   assert.equal(isAllowedLocalBrowserUrl('not a URL', blockedOrigins), false);
   assert.equal(isAllowedLocalBrowserUrl('file:///C:/page.html', blockedOrigins), true);
 });
+
+test('every loopback alias of a protected port is protected, other ports stay open', () => {
+  for (const input of [
+    'http://localhost:17921/', 'http://LOCALHOST:17921/a', 'http://app.localhost:17921/', 'http://127.0.0.2:17921/',
+    'http://127.1:17921/', 'http://[::1]:17921/', 'http://0.0.0.0:17921/', 'http://[::ffff:127.0.0.1]:17921/',
+  ]) {
+    assert.equal(isAllowedLocalBrowserUrl(input, blockedOrigins), false, input);
+  }
+  for (const input of ['http://localhost:5173/', 'https://localhost:17921/', 'http://example.com:17921/']) {
+    assert.equal(isAllowedLocalBrowserUrl(input, blockedOrigins), true, input);
+  }
+});

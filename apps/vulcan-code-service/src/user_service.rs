@@ -169,6 +169,35 @@ fn registered_executable() -> Result<std::path::PathBuf, String> {
     Ok(vulcan_app_update::stable_executable(&executable).unwrap_or(executable))
 }
 
+/// Whether registration text written by `escape` names a path inside `root`.
+/// 以 `escape` 写入的注册文本是否指向 `root` 内的路径。
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
+fn names_root(text: &str, root: &std::path::Path, escape: impl Fn(&str) -> String) -> bool {
+    let mut prefix = root.as_os_str().to_string_lossy().into_owned();
+    prefix.push(std::path::MAIN_SEPARATOR);
+    text.contains(&prefix) || text.contains(&escape(&prefix))
+}
+
+/// The summary of an uninstall that keeps the registration at `path`, when it was written for
+/// another install root: the unit and agent names are fixed, so every prefix shares them and the
+/// last installation to register owns them.
+/// 当 `path` 处的注册是为其他安装根目录写入时，返回保留它的卸载摘要：单元与代理名称固定，各前缀共享，
+/// 最后注册的安装拥有它们。
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn registered_elsewhere(path: &std::path::Path, escape: impl Fn(&str) -> String) -> Option<String> {
+    let executable = std::env::current_exe()
+        .and_then(|path| path.canonicalize())
+        .ok()?;
+    let (root, _) = vulcan_app_update::installed_root(&executable)?;
+    let text = std::fs::read_to_string(path).ok()?;
+    (!names_root(&text, &root, escape)).then(|| {
+        format!(
+            "{} runs another installation; left in place",
+            path.display()
+        )
+    })
+}
+
 /// Waits until the service whose process id `pid` reports (any process for `Ok(None)`) publishes a
 /// ready discovery document; `pid` fails once the started service stopped.
 /// 等待 `pid` 报告其进程号的服务（`Ok(None)` 时为任意进程）发布就绪的发现文档；已启动的服务停止后
@@ -310,7 +339,8 @@ mod systemd {
     use std::process::{Command, Output};
 
     use super::{
-        registered_executable, render_unit, require_distribution, require_free_data_root, unit_name,
+        registered_elsewhere, registered_executable, render_unit, require_distribution,
+        require_free_data_root, systemd_quoted, unit_name,
     };
 
     /// Directory that exists only while systemd is the running service manager.
@@ -442,6 +472,12 @@ mod systemd {
                 unit_name()
             ));
         }
+        if let Some(summary) = registered_elsewhere(&unit_path, |value| {
+            let quoted = systemd_quoted(value);
+            quoted[1..quoted.len() - 1].to_owned()
+        }) {
+            return Ok(summary);
+        }
         require_user_manager()?;
         // `disable --now` stops gracefully: the Core drains its sessions on SIGTERM.
         // `disable --now` 优雅停止：Core 收到 SIGTERM 后排空会话。
@@ -534,6 +570,29 @@ mod tests {
             "0::/user.slice/user-1000.slice/user@1000.service/app.slice/run-u42.service\n";
         assert!(!cgroup_names_unit(transient, unit));
         assert!(!cgroup_names_unit("", unit));
+    }
+
+    /// Verifies a unit names the root it was written for, also when quoting escapes it, and no
+    /// sibling root whose name starts the same.
+    /// 验证单元指向写入它的根目录（即使引用时经过转义），且不指向名称开头相同的相邻根目录。
+    #[test]
+    fn a_unit_names_only_the_root_it_was_written_for() {
+        let unquoted = |value: &str| {
+            let quoted = systemd_quoted(value);
+            quoted[1..quoted.len() - 1].to_owned()
+        };
+        for root in ["vulcan root", "100% vulcan"] {
+            let root = std::path::Path::new(root);
+            let unit = render_unit(&root.join("current").join("vulcan-code-service"), None);
+            assert!(names_root(&unit, root, unquoted), "{unit}");
+        }
+        let unit = render_unit(
+            &std::path::Path::new("vulcan2")
+                .join("current")
+                .join("vulcan-code-service"),
+            None,
+        );
+        assert!(!names_root(&unit, std::path::Path::new("vulcan"), unquoted));
     }
 
     /// Verifies a missing PATH leaves the unit to the user manager's environment.

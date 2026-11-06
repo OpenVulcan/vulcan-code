@@ -13,6 +13,11 @@ use vulcan_install_core::names::{Channel, ComponentName};
 /// 安装器目录及其状态文件；更新器读取同样的名称以识别本程序拥有的根目录。
 pub use vulcan_install_core::install_root::{SETUP_DIR, SETUP_STATE_FILE as STATE_FILE};
 
+/// Marker file inside [`SETUP_DIR`] that a run which switched versions leaves until the service
+/// is registered again, so a run repeated after a failure still registers it.
+/// [`SETUP_DIR`] 中的标记文件：切换了版本的运行在服务重新注册之前留下它，使失败后重跑仍会注册服务。
+pub const SERVICE_PENDING_FILE: &str = "service-pending";
+
 /// Format version of [`STATE_FILE`]; formats 1 and 2 are upgraded when read, other versions are
 /// refused. Format 3 added [`Item::AppArmorProfile`].
 /// [`STATE_FILE`] 的格式版本；格式 1 与 2 在读取时升级，其他版本一律拒绝。格式 3 新增

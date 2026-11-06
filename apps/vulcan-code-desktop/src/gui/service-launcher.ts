@@ -79,9 +79,10 @@ export interface ServiceStartupProgress {
 }
 
 /** Resolves the service executable for this build. */
-// resolveServiceExecutable returns the manifest-declared service path or the debug default.
-// resolveServiceExecutable 返回清单声明的服务路径或调试默认路径。
-export async function resolveServiceExecutable(explicitPath: string | null): Promise<string> {
+// resolveServiceExecutable returns the manifest-declared service path, or the debug default when the app
+// runs unpackaged from the workspace.
+// resolveServiceExecutable 返回清单声明的服务路径；应用在工作区中以未打包方式运行时返回调试默认路径。
+export async function resolveServiceExecutable(explicitPath: string | null, packaged: boolean): Promise<string> {
   if (explicitPath) {
     return explicitPath;
   }
@@ -117,6 +118,11 @@ export async function resolveServiceExecutable(explicitPath: string | null): Pro
     await access(executable);
     process.env.VULCAN_RUNTIME_LAYOUT = path.resolve(manifestPath);
     return executable;
+  }
+  // A packaged app without its layout is a damaged installation, never a workspace build.
+  // 缺少布局的打包应用是损坏的安装，绝不是工作区构建。
+  if (packaged) {
+    throw new Error(`The installation is incomplete: ${adjacentManifest ?? 'runtime-layout.json'} is missing. Reinstall Vulcan Code.`);
   }
   // The desktop application lives at apps/vulcan-code-desktop inside the workspace.
   // 桌面应用位于工作区内的 apps/vulcan-code-desktop。

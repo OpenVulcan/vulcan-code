@@ -58,11 +58,35 @@ export function isAllowedLocalBrowserUrl(target: string, blockedOrigins: Readonl
     // File pages use the same sandbox as web pages and receive no workbench preload or Node access.
     // 文件页面与网页使用相同沙箱，不获得工作台预加载桥或 Node 访问权。
     const parsed = new URL(target);
-    return parsed.href === 'about:blank' || parsed.protocol === 'file:'
-      || (['http:', 'https:'].includes(parsed.protocol) && !blockedOrigins.has(parsed.origin));
+    if (parsed.href === 'about:blank' || parsed.protocol === 'file:') return true;
+    if (!['http:', 'https:'].includes(parsed.protocol)) return false;
+    const destination = serverIdentity(parsed);
+    return ![...blockedOrigins].some((origin) => {
+      try {
+        return serverIdentity(new URL(origin)) === destination;
+      } catch {
+        return false;
+      }
+    });
   } catch {
     return false;
   }
+}
+
+// serverIdentity names the server a URL reaches: every loopback alias of one port is the same server.
+// serverIdentity 给出 URL 所到达的服务器：同一端口的所有回环别名都是同一服务器。
+function serverIdentity(url: URL): string {
+  const port = url.port || (url.protocol === 'https:' ? '443' : '80');
+  return isLoopbackHost(url.hostname) ? `${url.protocol}//loopback:${port}` : url.origin;
+}
+
+// isLoopbackHost covers the names Chromium resolves to this machine without asking DNS.
+// isLoopbackHost 涵盖 Chromium 不经 DNS 即解析到本机的名称。
+function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return host === 'localhost' || host.endsWith('.localhost') || /^127(?:\.\d{1,3}){3}$/.test(host)
+    || host === '0.0.0.0' || host === '[::1]' || host === '[::]'
+    || /^\[::ffff:(?:127(?:\.\d{1,3}){3}|7f[\da-f]{2}:[\da-f]{1,4})\]$/.test(host);
 }
 
 // validateExternalBrowserUrl accepts only explicit website/file URLs outside privileged workbench origins.

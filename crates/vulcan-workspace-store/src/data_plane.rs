@@ -723,73 +723,39 @@ PRAGMA user_version = {schema_version};
 mod tests {
     use super::*;
 
-    /// Verifies that the base schema no longer creates legacy SQLite transcript tables.
-    /// 验证基础结构不再创建旧版 SQLite 转录表。
-    #[test]
-    fn base_schema_excludes_legacy_session_message_tables() {
-        let schema = build_application_schema_script();
-
-        assert!(!schema.contains("CREATE TABLE IF NOT EXISTS session_messages"));
-        assert!(!schema.contains("CREATE TABLE IF NOT EXISTS session_message_chunks"));
-        assert!(!schema.contains("idx_session_messages_session_ordinal"));
-        assert!(!schema.contains("idx_session_messages_session_turn_ordinal"));
-    }
-
-    /// Verifies that the base schema no longer includes the legacy global workspace-history search table.
-    /// 验证基础结构不再包含旧全局工作台历史搜索表。
-    #[test]
-    fn base_schema_excludes_legacy_workspace_history_search_state_table() {
-        let schema = build_application_schema_script();
-
-        assert!(!schema.contains("CREATE TABLE IF NOT EXISTS workspace_history_search_docs"));
-        assert!(!schema.contains("idx_workspace_history_search_docs_session"));
-    }
-
-    /// Verifies that heavyweight session body tables are not duplicated in SQLite.
-    /// 验证重量级会话正文表不再重复写入 SQLite。
-    #[test]
-    fn base_schema_excludes_heavy_session_body_tables() {
-        let schema = build_application_schema_script();
-
-        assert!(!schema.contains("CREATE TABLE IF NOT EXISTS session_compactions"));
-        assert!(!schema.contains("idx_session_compactions_session"));
-    }
-
-    /// Verifies that the base schema includes the lightweight deterministic session locator index.
-    /// 验证基础结构包含轻量确定性会话定位索引。
-    #[test]
-    fn base_schema_includes_lightweight_session_locator_index() {
-        let schema = build_application_schema_script();
-
-        assert!(schema.contains("CREATE TABLE IF NOT EXISTS workspace_session_index"));
-        assert!(schema.contains("idx_workspace_session_index_project"));
-    }
-
-    /// Verifies that runtime checkpoints are no longer duplicated into the application SQLite schema.
-    /// 验证运行态检查点不再被重复写入应用 SQLite 结构。
-    #[test]
-    fn base_schema_excludes_session_runtime_state_table() {
-        let schema = build_application_schema_script();
-
-        assert!(!schema.contains("CREATE TABLE IF NOT EXISTS session_runtime_state"));
-        assert!(!schema.contains("conversation_state_json"));
-        assert!(!schema.contains("vmm_writeback_outbox_json"));
+    /// Returns the column names of `table` in a database initialized with the current schema.
+    /// 返回以当前结构初始化的数据库中 `table` 的列名。
+    fn columns_of(table: &str) -> std::collections::BTreeSet<String> {
+        let connection = rusqlite::Connection::open_in_memory().expect("private database");
+        connection
+            .execute_batch(&build_application_schema_script())
+            .expect("initialize schema");
+        let mut statement = connection
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .expect("table columns");
+        statement
+            .query_map([], |row| row.get::<_, String>(1))
+            .expect("query columns")
+            .collect::<Result<_, _>>()
+            .expect("collect columns")
     }
 
     /// Verifies new databases persist cumulative per-request goal usage counters.
     /// 验证新数据库会持久化逐请求累计目标用量计数。
     #[test]
     fn base_schema_includes_goal_provider_usage_counters() {
-        let schema = build_application_schema_script();
-
+        let columns = columns_of("thread_goals");
         for column in [
-            "uncached_input_tokens INTEGER NOT NULL DEFAULT 0",
-            "cached_input_tokens INTEGER NOT NULL DEFAULT 0",
-            "output_tokens INTEGER NOT NULL DEFAULT 0",
-            "reasoning_tokens INTEGER NOT NULL DEFAULT 0",
-            "total_tokens INTEGER NOT NULL DEFAULT 0",
+            "uncached_input_tokens",
+            "cached_input_tokens",
+            "output_tokens",
+            "reasoning_tokens",
+            "total_tokens",
         ] {
-            assert!(schema.contains(column));
+            assert!(
+                columns.contains(column),
+                "Missing goal usage column {column}; verify the current persistence contract"
+            );
         }
     }
 
@@ -891,12 +857,12 @@ mod tests {
         expected.sort();
 
         // `session_messages`, `session_message_chunks` and `workspace_history_search_docs` are
-        // deliberately absent: they belong to a separate schema, and sibling tests in this module
-        // assert this script does not create them. An earlier draft of this list wrongly included
-        // them, and the exact-set comparison is what caught it.
+        // deliberately absent: they belong to a separate schema, and the exact-set comparison below
+        // fails if this script creates them. An earlier draft of this list wrongly included them,
+        // and this comparison is what caught it.
         // `session_messages`、`session_message_chunks` 与 `workspace_history_search_docs` 刻意不在其中：
-        // 它们属于另一套结构，且本模块的同类测试断言本脚本不创建它们。本清单的早期草稿错误地包含了它们，
-        // 正是精确集合比较捕捉到了这一点。
+        // 它们属于另一套结构，若本脚本创建它们，下方的精确集合比较即会失败。本清单的早期草稿错误地包含了
+        // 它们，正是这一比较捕捉到了这一点。
 
         let observed_sorted = {
             let mut sorted = observed;

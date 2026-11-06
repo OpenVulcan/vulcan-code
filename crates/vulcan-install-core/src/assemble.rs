@@ -215,7 +215,10 @@ impl<'r> Assembly<'r> {
             &entries.iter().collect::<Vec<_>>(),
             manifest.platform.has_case_insensitive_paths(),
         )?;
-        if cfg!(windows)
+        // The package's own platform decides, so a release check on Linux already refuses a Windows
+        // package with links; a Windows host could not create them either.
+        // 由包自身的平台决定，因此在 Linux 上的发布校验即可拒绝带链接的 Windows 包；Windows 宿主同样无法创建链接。
+        if (manifest.platform.is_windows() || cfg!(windows))
             && let Some(link) = entries
                 .iter()
                 .find(|entry| matches!(entry, IndexEntry::Symlink { .. }))

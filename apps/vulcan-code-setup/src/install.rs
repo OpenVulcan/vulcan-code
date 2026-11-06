@@ -27,7 +27,7 @@ use crate::root::{self, Current, Description, LEGACY_MARKER, Ownership, Version}
 use crate::screen::Screen;
 use crate::selfupdate;
 use crate::session;
-use crate::state::{Item, SETUP_DIR, STATE_SCHEMA, SetupState};
+use crate::state::{Item, SERVICE_PENDING_FILE, SETUP_DIR, STATE_SCHEMA, SetupState};
 use crate::wizard::{self, Draft};
 
 /// How often the download progress is reported.
@@ -583,6 +583,14 @@ fn apply(
         _ => &[],
     };
     let mut recorder = Recorder::new(previous_items);
+    if switched && plan.service {
+        // Marked before anything can fail, so that a repeated run registers the new version.
+        // 在任何步骤可能失败之前标记，使重跑会注册新版本。
+        let dir = root_path.join(SETUP_DIR);
+        std::fs::create_dir_all(&dir)
+            .and_then(|()| std::fs::write(dir.join(SERVICE_PENDING_FILE), b""))
+            .map_err(|error| format!("cannot write {}: {error}", dir.display()))?;
+    }
     // The setup program is copied first, so the service registered below never outlives it.
     // 先复制安装器，使下面注册的服务绝不会比安装器存在得更久。
     let integrated = copy_self(root_path).and_then(|()| {
