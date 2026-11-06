@@ -45,7 +45,7 @@ it("keeps current state and drafts across directory failures and stale pin reads
     workbenchState: current, setWorkbenchState: (update) => { current = typeof update === "function" ? update(current) : update; },
     mergeWorkbenchWithLocalCaches: merge, acceptServiceWorkbenchSnapshot: accept,
     applyLocalPreviewWithLocalCaches: vi.fn(), setDraftConversation: drafts, setSelectedConversationId: selected,
-    setRenameTarget: vi.fn(), setProjectIconTarget: vi.fn(), setProjectSettingsTarget: vi.fn(), setProjectFolderPickerOpen: vi.fn(),
+    setRenameTarget: vi.fn(), setProjectIconTarget: vi.fn(), openProjectHome: vi.fn(), setProjectFolderPickerOpen: vi.fn(),
     setArchiveProjectTarget: vi.fn(), setRemoveProjectTarget: vi.fn(), expandedProjectIdsLocallyEditedRef: { current: false },
     applySkillWorkbenchAction: vi.fn(), applyLuaSkillsCatalogUpdate: vi.fn(), applyAgentSkillsCatalogUpdate: vi.fn(),
     applySubagentCatalogUpdate: vi.fn(), handleOpenWorkspaceChat: vi.fn(),

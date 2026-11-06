@@ -141,7 +141,7 @@ describe("ProjectSidebar", () => {
 
     try {
       await act(async () => { root.render(render()); });
-      const button = container.querySelector<HTMLButtonElement>(".vk-tree-row");
+      const button = container.querySelector<HTMLButtonElement>(".vk-tree-fold");
       expect(button).not.toBeNull();
       await act(async () => { button?.click(); button?.click(); });
       expect(onExpandedProjectIdsChange).toHaveBeenNthCalledWith(1, ["project-a"]);

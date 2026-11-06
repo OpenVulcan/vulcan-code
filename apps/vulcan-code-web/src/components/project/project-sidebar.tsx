@@ -5,6 +5,7 @@ import {
   CodeXml,
   Folder,
   FolderPlus,
+  LayoutDashboard,
   MessagesSquare,
   Pin,
   Search,
@@ -89,6 +90,12 @@ export type ProjectSessionTreeProps = {
   // 选择一个项目且不选择会话。
   onSelectProject: (projectId: string) => void;
   onSelectConversation: (conversationId: string) => void;
+  // Opens one project's home page; the project-name and home entries fall back to folding when absent.
+  // 打开单个项目的首页；缺省时项目名称与首页入口退回为折叠。
+  onOpenProjectHome?: (project: ProjectSummary) => void;
+  // Project whose home page is showing in the main stage.
+  // 当前在主舞台显示首页的项目。
+  homeProjectId?: string | null;
 };
 
 // ProjectSidebar renders the session panel: the brand strip with the flow switch above the shared navigation.
@@ -197,6 +204,22 @@ export function NavigationPanelBody(props: ProjectSessionTreeProps) {
               <SquarePen aria-hidden="true" />
               {t("sidebar.newSession")}
             </Button>
+            {flow === "session" && props.onOpenProjectHome ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <IconButton
+                    aria-current={props.homeProjectId === currentProject.id ? "page" : undefined}
+                    aria-label={t("projectHome.title")}
+                    data-action="project-home"
+                    onClick={() => navigate(props.onOpenProjectHome!)(currentProject)}
+                    variant="outline"
+                  >
+                    <LayoutDashboard aria-hidden="true" />
+                  </IconButton>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{t("projectHome.title")}</TooltipContent>
+              </Tooltip>
+            ) : null}
             {props.onCreateDedicatedConversation ? (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -718,6 +741,7 @@ function ProjectSessionTree(props: ProjectSessionTreeProps & {
         conversations={projectConversations}
         hasSelectedConversation={props.selectedConversationId ? allConversations.some((conversation) => conversation.id === props.selectedConversationId) : false}
         isActiveProject={props.activeProjectId === project.id}
+        isHomeOpen={props.homeProjectId === project.id}
         isOpen={filtering || openProjectIds.has(project.id)}
         isConversationListExpanded={filtering || expandedConversationProjectIds.has(project.id)}
         isPinnedConversation={(conversationId) => props.pinnedConversationIds.has(conversationId)}
@@ -734,6 +758,7 @@ function ProjectSessionTree(props: ProjectSessionTreeProps & {
         renderConversationRow={renderConversationRow}
         onSelectConversation={navigate(props.onSelectConversation)}
         onSelectProject={props.onSelectProject}
+        onOpenProjectHome={props.onOpenProjectHome ? navigate(props.onOpenProjectHome) : undefined}
         onToggleConversationList={toggleProjectConversations}
         onToggleOpen={toggleProjectOpen}
         placement={placement}

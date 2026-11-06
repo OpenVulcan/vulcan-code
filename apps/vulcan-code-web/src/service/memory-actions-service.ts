@@ -9,7 +9,7 @@ import type {
   ProjectAttachmentCleanupPreviewSummary,
   ProjectAttachmentCleanupReportSummary,
   ProjectAttachmentCleanupRequest,
-} from "@/components/project/project-settings-dialog";
+} from "@/components/project/project-settings-types";
 import {
   browserFallbackSnapshot,
 } from "@/service/browser-fallback-workbench";

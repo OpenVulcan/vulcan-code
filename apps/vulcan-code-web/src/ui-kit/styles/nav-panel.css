@@ -66,11 +66,13 @@
 
 /* ---------- Row frame: a row button with its actions beside it ---------- */
 .vk-tree-item { position: relative; display: block; min-width: 0; }
+/* The actions sit inside the row's border, so an outlined (active) row keeps its top and bottom edges on hover. */
+/* 操作区位于行边框以内，使带边框的（当前）行在悬停时仍保留上下边线。 */
 .vk-tree-item > .vk-tree-actions {
   position: absolute;
-  top: 0;
+  top: var(--vk-bw);
   right: calc(var(--vk-u) * 0.5);
-  bottom: 0;
+  bottom: var(--vk-bw);
   align-items: center;
   gap: 1px;
   padding-left: calc(var(--vk-u) * 3);
@@ -139,7 +141,36 @@
 /* A project row has no caret: its open or closed folder icon already shows the state, and the child rule runs
  * straight down from that icon's centre. */
 /* 项目行没有展开箭头：打开或关闭的文件夹图标已表明状态，子级竖线从该图标中心垂直向下。 */
-.vk-tree-project .vk-tree-row { grid-template-columns: auto minmax(0, 1fr); }
+.vk-tree-project .vk-tree-row { grid-template-columns: auto minmax(0, 1fr); gap: 0; padding-left: 0; }
+/* A project row holds two buttons: the folder icon folds the list, the name opens the project home. */
+/* 项目行包含两个按钮：文件夹图标折叠列表，名称打开项目首页。 */
+.vk-tree-fold, .vk-tree-name {
+  align-self: stretch;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.vk-tree-fold { position: relative; display: grid; place-items: center; padding: 0 calc(var(--vk-u) * 1) 0 calc(var(--vk-u) * 1); }
+.vk-tree-fold:hover .vk-tree-icon { color: var(--vk-ember); }
+.vk-tree-name { display: flex; align-items: center; padding-left: calc(var(--vk-u) * 1); }
+.vk-tree-fold:focus-visible, .vk-tree-name:focus-visible { outline-offset: -2px; }
+/* A custom icon does not change when the folder opens, so a closed one carries a small corner mark. */
+/* 自定义图标在展开时不会变化，因此关闭状态带一个小角标。 */
+.vk-tree-row:not([data-open]) > .vk-tree-fold[data-custom-icon]::after {
+  content: "";
+  position: absolute;
+  right: calc(var(--vk-u) * 0.5);
+  bottom: 30%;
+  width: 4px;
+  height: 4px;
+  background: var(--vk-ink-3);
+}
+.vk-tree-row[data-home] { box-shadow: inset 2px 0 0 var(--vk-ember); }
 /* Session rows run the full width of the tree: their state mark sits in the folder icon's column and their title
  * under the project name, so the hierarchy reads from alignment instead of a nested, narrower box. */
 /* 会话行占满树的宽度：状态标记位于文件夹图标所在列，标题位于项目名称下方，层级通过对齐表达，而非更窄的嵌套框。 */
@@ -160,7 +191,7 @@
 .vk-tree-icon svg { width: 1rem; height: 1rem; }
 .vk-tree-row[data-active] { background: var(--vk-panel); border-color: var(--vk-line); }
 .vk-tree-row[data-active] .vk-tree-icon { color: var(--vk-ember); }
-.vk-tree-row[data-contains-selection]:not([aria-expanded="true"]) strong { color: var(--vk-ember-ink); }
+.vk-tree-row[data-contains-selection]:not([aria-expanded="true"]):not([data-open]) strong { color: var(--vk-ember-ink); }
 .vk-tree-grip { touch-action: none; }
 .vk-tree-grip:active { cursor: grabbing; }
 .vk-tree-children.vk-side-menu { gap: 0; }

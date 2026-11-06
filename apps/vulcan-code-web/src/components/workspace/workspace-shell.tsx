@@ -17,6 +17,7 @@ import {
   ProjectSidebar,
 } from "@/components/project/project-sidebar";
 import { Button } from "@/ui-kit/primitives/button";
+import { useWorkspaceProjectHome } from "@/components/workspace/workspace-project-home-chrome";
 import {
   PluginWorkspaceMenu,
   skillSubAreaLabel,
@@ -160,6 +161,23 @@ function resolveWorkspaceSubagentTask(
   )) ?? null;
 }
 
+// sidebarNavigationTarget returns the sidebar highlight while a conversation navigation runs.
+// sidebarNavigationTarget 返回会话导航进行期间的侧栏高亮目标。
+function sidebarNavigationTarget(props: WorkspaceShellProps) {
+  // targetId keeps both sidebar highlights on the clicked target until a failed selection reveals the original route.
+  // targetId 使侧栏两处高亮跟随点击目标，选择失败并恢复原路由时一同回退。
+  const navigation = props.conversationNavigation;
+  const targetId = navigation && (navigation.phase !== "entering" || props.selectedConversationId === navigation.targetId)
+    ? navigation.targetId
+    : null;
+  // activeProjectId follows the clicked conversation while project tool ownership stays authoritative.
+  // activeProjectId 在点击时跟随目标会话，同时项目工具归属仍以权威状态为准。
+  const activeProjectId = targetId
+    ? props.workbench.conversations.find((conversation) => conversation.id === targetId)?.projectId ?? props.activeProjectId
+    : props.activeProjectId;
+  return { activeProjectId, targetId };
+}
+
 // WorkspaceShellContent renders the workspace shell after sidebar context is available.
 // WorkspaceShellContent 在侧栏上下文可用后渲染工作台外壳。
 // Parameters: props supplies workspace authorities and page actions. Returns the sidebar, selected page and owned floating panels.
@@ -182,17 +200,10 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // routeDraftConversation ends draft-only chrome once the exact durable summary is present.
   // routeDraftConversation 在精确持久摘要出现后结束仅草稿界面状态。
   const routeDraftConversation = props.selectedConversation ? null : props.selectedDraftConversation;
-  // sidebarNavigationTargetId keeps both sidebar highlights on the clicked target until a failed selection reveals the original route.
-  // sidebarNavigationTargetId 使侧栏两处高亮跟随点击目标，选择失败并恢复原路由时一同回退。
-  const sidebarNavigationTargetId = props.conversationNavigation
-    && (props.conversationNavigation.phase !== "entering" || props.selectedConversationId === props.conversationNavigation.targetId)
-    ? props.conversationNavigation.targetId
-    : null;
-  // sidebarActiveProjectId follows the clicked conversation while project tool ownership stays authoritative.
-  // sidebarActiveProjectId 在点击时跟随目标会话，同时项目工具归属仍以权威状态为准。
-  const sidebarActiveProjectId = sidebarNavigationTargetId
-    ? props.workbench.conversations.find((conversation) => conversation.id === sidebarNavigationTargetId)?.projectId ?? props.activeProjectId
-    : props.activeProjectId;
+  // projectHome covers the chat stage with the project home page and supplies its title crumb and sidebar props.
+  // projectHome 以项目首页覆盖聊天舞台，并提供其标题入口与侧栏属性。
+  const projectHome = useWorkspaceProjectHome(props, routeDraftConversation?.projectId ?? null);
+  const { activeProjectId: sidebarActiveProjectId, targetId: sidebarNavigationTargetId } = sidebarNavigationTarget(props);
   // The selected V1 owner is the reveal gate for a navigated durable session.
   // 选中 V1 归属是持久会话导航入场的显示门槛。
   React.useLayoutEffect(() => {
@@ -876,7 +887,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     headerActions: null,
     title: memoryHeaderMeta.label,
 
-  } : {
+  } : projectHome.page ?? {
     content: (
       <ChatArea
         startup={props.startup}
@@ -1013,6 +1024,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           onCreateConversation={props.onCreateConversation}
           onCreateDedicatedConversation={props.onCreateDedicatedConversation}
           onCreateProject={props.onCreateProject}
+          {...projectHome.sidebar}
           rail={props.rail}
           titlebarDragRegion={props.titlebarDragRegion}
           onTitlebarDoubleClick={props.onTitlebarDoubleClick}
@@ -1027,10 +1039,10 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           <WorkspaceResizableBody
             aiBrowserAvailable={aiBrowserAvailable}
             localBrowserAvailable={localBrowserAvailable}
-            conversationNavigationPhase={props.mainView === "chat" ? props.conversationNavigation?.phase ?? null : null}
-            conversationNavigationShowLoading={props.mainView === "chat" && props.conversationNavigation?.showLoading === true}
-            rightPanelFloating={hasSelectedChatConversation && rightPanelFloating}
-            rightPanelOpen={effectiveRightPanelOpen}
+            conversationNavigationPhase={projectHome.chatStage ? props.conversationNavigation?.phase ?? null : null}
+            conversationNavigationShowLoading={projectHome.chatStage && props.conversationNavigation?.showLoading === true}
+            rightPanelFloating={hasSelectedChatConversation && !projectHome.home && rightPanelFloating}
+            rightPanelOpen={effectiveRightPanelOpen && !projectHome.home}
             contextPanelActiveTabId={contextTabState.activeTabId}
             contextPanelTabs={contextTabState.tabs}
             reviewFocusRequest={reviewFocusRequest}
@@ -1047,6 +1059,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
             onConversationMenuAction={props.onConversationMenuAction}
             headerDetail={pageDescriptor.detail}
             headerTitle={pageDescriptor.title}
+            headerTitlePrefix={projectHome.crumb}
             headerRightActions={pageDescriptor.headerRightActions}
             toolPanels={pageDescriptor.toolPanels}
             onToggleLeftPanel={handleLeftPanelToggle}

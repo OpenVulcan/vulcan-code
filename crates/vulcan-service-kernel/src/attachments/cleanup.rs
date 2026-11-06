@@ -8,8 +8,8 @@ use super::*;
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WebuiProjectAttachmentCleanupRequest {
-    /// Stable project identifier selected in the WebUI project settings dialog.
-    /// WebUI 项目设置弹窗选中的稳定项目标识。
+    /// Stable project identifier of the project open on the WebUI project home.
+    /// WebUI 项目首页当前打开项目的稳定项目标识。
     project_id: String,
     /// Local cutoff date in `YYYY-MM-DD` format.
     /// `YYYY-MM-DD` 格式的本地截止日期。

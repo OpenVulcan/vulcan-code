@@ -200,6 +200,17 @@
 .vk-stage-head:has(.vk-winctl) { padding-right: 0; }
 .vk-stage-head .vk-stage-title { display: flex; align-items: center; align-self: stretch; gap: calc(var(--vk-u) * 1.5); }
 .vk-stage-name { display: flex; align-items: baseline; gap: calc(var(--vk-u) * 2); flex: 0 1 auto; min-width: 0; }
+/* The owning project sits before a conversation title as a crumb that opens the project home. */
+/* 所属项目作为层级入口位于会话标题之前，点击打开项目首页。 */
+.vk-stage-crumb {
+  display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 1.5); flex: 0 1 auto; min-width: 0; max-width: 30%;
+  height: var(--vk-h-sm); padding: 0 calc(var(--vk-u) * 1.5); border: 0; background: transparent;
+  color: var(--vk-ink-3); font: inherit; font-size: var(--vk-fs-sm); cursor: pointer;
+}
+.vk-stage-crumb > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-stage-crumb > svg { flex: none; }
+.vk-stage-crumb:hover { background: var(--vk-hover); color: var(--vk-ink); }
+.vk-stage-crumb::after { content: "/"; margin-left: calc(var(--vk-u) * 1); color: var(--vk-ink-3); }
 .vk-stage-name[data-tauri-drag-region] > * { pointer-events: none; }
 /* The title keeps its full width while room allows; the subtitle gives way first. */
 /* 空间允许时标题保持完整宽度；副标题优先让出空间。 */

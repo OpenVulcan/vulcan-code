@@ -41,7 +41,6 @@ const oversizedComponentCeilings = new Map([
   ["components/features/settings/provider-model-settings.tsx#ProviderModelCatalog", 533],
   ["components/features/skills/lua-skill-config-dialog.tsx#LuaSkillConfigDialog", 507],
   ["components/features/skills/vulcan-plugins-panel.tsx#VulcanPluginsPanel", 699],
-  ["components/project/project-settings-dialog.tsx#ProjectSettingsDialog", 613],
   ["components/project/terminal/project-floating-terminal-layer.tsx#ProjectFloatingTerminalLayer", 550],
   // Workbench orchestration has an explicit larger budget to allow routine shell integrations.
   // 工作台编排层采用明确的较大预算，为常规壳层集成保留空间。

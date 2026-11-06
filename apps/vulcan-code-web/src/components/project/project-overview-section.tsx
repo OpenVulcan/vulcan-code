@@ -30,9 +30,12 @@ export function ProjectOverviewSection(props: {
   // Skill override authority distinguishes successful empty results from failed or pending reads.
   // 技能覆盖权威区分成功空结果与失败或待定读取。
   agentOverrides: Record<string, string>; agentLoaded: boolean; agentLoading: boolean; agentError: string | null;
-  // Selects one existing settings section in the same project dialog.
-  // 在同一项目弹窗中选择一个既有设置分区。
+  // Brings one existing settings section of the same project into view.
+  // 将同一项目的一个既有设置分区带入视野。
   onOpenSection: (section: ProjectSettingsSectionId) => void;
+  // Omits the name and path block where the surrounding page already shows them.
+  // 在外围页面已显示名称与路径时省略该区块。
+  hideIdentity?: boolean;
 }) {
   // t resolves existing user-facing labels.
   // t 解析既有用户文案。
@@ -113,13 +116,13 @@ export function ProjectOverviewSection(props: {
     catch { setCopied("copyFailed"); }
   };
   return <div className="project-overview">
-    <header className="project-overview-identity"><FolderCog size={22} /><div><h3>{props.project.name}</h3>
+    {props.hideIdentity ? null : <header className="project-overview-identity"><FolderCog size={22} /><div><h3>{props.project.name}</h3>
       <span className="project-overview-path-row">
         <span className="project-overview-path" title={props.project.path}>{props.project.path}</span>
         <Button size="icon-xs" variant="ghost" aria-label={t("projectOverview.copyPath")} title={t("projectOverview.copyPath")} onClick={() => void copyPath()}><Copy size={12} /></Button>
         <span className="project-overview-copy-status" role="status">{copied ? t(`projectOverview.${copied}`) : null}</span>
       </span>
-      <span>{t("projectOverview.conversations").replace("{count}", String(props.conversationCount))}{props.project.pinned ? ` · ${t("projectOverview.pinned")}` : ""}</span></div></header>
+      <span>{t("projectOverview.conversations").replace("{count}", String(props.conversationCount))}{props.project.pinned ? ` · ${t("projectOverview.pinned")}` : ""}</span></div></header>}
     {issues.length ? <div className="project-overview-issues" role="alert"><strong>{t("projectOverview.issues")}</strong>{[...new Set(issues)].map((issue) => issue.length > 180 || issue.includes("\n")
       ? <div className="project-overview-issue-long" key={issue}><p>{issue.split("\n", 1)[0].slice(0, 180)}…</p>
         <InlineDisclosure label={t("projectOverview.issueExpand")} openLabel={t("projectOverview.issueCollapse")}><p>{issue}</p></InlineDisclosure></div>

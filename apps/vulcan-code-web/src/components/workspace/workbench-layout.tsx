@@ -28,9 +28,6 @@ import {
 import {
   type ProjectIconDialogTarget,
 } from "@/components/project/project-icons";
-import {
-  type ProjectSettingsDialogTarget,
-} from "@/components/project/project-settings-types";
 import { NavigationPanelBody, SidebarFlowSwitch } from "@/components/project/project-sidebar";
 import type { ProjectTerminalVisibilityRequest } from "@/components/project/terminal/project-floating-terminal-layer";
 import {
@@ -182,6 +179,10 @@ const FileWindowLayer = React.lazy(() => import("@/components/file-windows/file-
 // WorkbenchDialogs 仅在项目或提问对话框真正打开后加载其界面。
 const WorkbenchDialogs = React.lazy(() => import("@/components/workspace/workbench-dialogs")
   .then((module) => ({ default: module.WorkbenchDialogs })));
+// LazyProjectHome loads the project home page and its scoped styles only when a project home opens.
+// LazyProjectHome 仅在打开项目首页时加载该页面及其作用域样式。
+const LazyProjectHome = React.lazy(() => import("@/components/project/project-home")
+  .then((module) => ({ default: module.ProjectHome })));
 const SetupGuideDialog = React.lazy(() => import("@/components/features/onboarding/setup-guide-dialog"));
 // OpenVulcanAccountDialog loads only when onboarding or account management is opened.
 // OpenVulcanAccountDialog 仅在打开引导或账户管理时加载。
@@ -465,9 +466,10 @@ export function WorkbenchLayout(props: {
   // projectIconTarget stores the project currently editing its sidebar icon.
   // projectIconTarget 保存当前正在编辑侧栏图标的项目。
   const [projectIconTarget, setProjectIconTarget] = React.useState<ProjectIconDialogTarget | null>(null);
-  // projectSettingsTarget stores the project currently shown in the settings dialog.
-  // projectSettingsTarget 保存当前显示设置弹窗的项目。
-  const [projectSettingsTarget, setProjectSettingsTarget] = React.useState<ProjectSettingsDialogTarget | null>(null);
+  // projectHome names the project whose home page covers the chat stage and the conversation selection it opened over;
+  // any later selection change closes it.
+  // projectHome 记录其首页覆盖聊天舞台的项目及打开时的会话选择；之后任何选择变化都会关闭首页。
+  const [projectHome, setProjectHome] = React.useState<{ projectId: string; selectionKey: string } | null>(null);
   // projectFolderPickerOpen stores whether the service-backed folder picker is open.
   // projectFolderPickerOpen 保存服务驱动的文件夹选择器是否打开。
   const [projectFolderPickerOpen, setProjectFolderPickerOpen] = React.useState(false);
@@ -623,6 +625,37 @@ export function WorkbenchLayout(props: {
   // actionDraftConversation ends draft-only commands as soon as the durable conversation summary exists.
   // actionDraftConversation 在持久会话摘要出现后立即结束仅草稿命令。
   const actionDraftConversation = selectedConversation ? null : selectedDraftConversation;
+  // projectHomeSelectionKeyRef reads the current selection when a home opens, without re-creating the opener.
+  // projectHomeSelectionKeyRef 在打开首页时读取当前选择，而无需重建打开函数。
+  const projectHomeSelectionKeyRef = React.useRef(selectedConversationId ?? "");
+  projectHomeSelectionKeyRef.current = selectedConversationId ?? "";
+  // openProjectHome shows one project's home page in the chat stage, leaving any embedded page first.
+  // openProjectHome 在聊天舞台显示单个项目的首页，必要时先离开内嵌页面。
+  const openProjectHome = React.useCallback((project: ProjectSummary) => {
+    handleOpenWorkspaceChat();
+    setActiveProjectId(project.id);
+    setProjectHome({ projectId: project.id, selectionKey: projectHomeSelectionKeyRef.current });
+  }, [handleOpenWorkspaceChat]);
+  // closeProjectHome returns the stage to the current conversation.
+  // closeProjectHome 让舞台回到当前会话。
+  const closeProjectHome = React.useCallback(() => setProjectHome(null), []);
+  // projectHomeProject is the visible home's project: it exists, the chat stage is showing, and the selection is unchanged.
+  // projectHomeProject 是可见首页的项目：项目存在、聊天舞台可见且选择未变化。
+  const projectHomeProject = projectHome && activeArea === "chat" && workspaceMainView === "chat"
+    && projectHome.selectionKey === (selectedConversationId ?? "")
+    ? workbenchState.projects.find((project) => project.id === projectHome.projectId) ?? null
+    : null;
+  React.useEffect(() => {
+    // A home hidden by navigation or project removal is closed, so returning later shows the conversation.
+    // 因导航或项目移除而隐藏的首页会被关闭，之后返回时显示会话。
+    if (projectHome && !projectHomeProject) setProjectHome(null);
+  }, [projectHome, projectHomeProject]);
+  // handleSelectConversationLeavingHome opens a conversation, closing the home even when it was already selected.
+  // handleSelectConversationLeavingHome 打开会话；即使该会话已选中也会关闭首页。
+  const handleSelectConversationLeavingHome = React.useCallback((conversationId: string) => {
+    setProjectHome(null);
+    handleSelectConversation(conversationId);
+  }, [handleSelectConversation]);
   // handleChangeDraftProject moves an unsent draft to another project chosen from the composer chip.
   // handleChangeDraftProject 将未发送草稿移动到输入区标签选择的另一个项目。
   const handleChangeDraftProject = React.useCallback((projectId: string) => {
@@ -754,7 +787,7 @@ export function WorkbenchLayout(props: {
     setSelectedConversationId,
     setRenameTarget,
     setProjectIconTarget,
-    setProjectSettingsTarget,
+    openProjectHome,
     setProjectFolderPickerOpen,
     setArchiveProjectTarget,
     setRemoveProjectTarget,
@@ -792,12 +825,14 @@ export function WorkbenchLayout(props: {
   // handleCreateConversationForProject keeps project-level tools bound to the newly selected draft owner.
   // handleCreateConversationForProject 使项目级工具绑定到新选择草稿的归属项目。
   const handleCreateConversationForProject = React.useCallback((project: ProjectSummary) => {
+    setProjectHome(null);
     setActiveProjectId(project.id);
     handleCreateConversation(project);
   }, [handleCreateConversation]);
   // handleCreateDedicatedConversationForProject opens a draft preset to a dedicated assistant in one project.
   // handleCreateDedicatedConversationForProject 在单个项目中打开预设为专职助手的草稿。
   const handleCreateDedicatedConversationForProject = React.useCallback((project: ProjectSummary) => {
+    setProjectHome(null);
     setActiveProjectId(project.id);
     handleCreateConversation(project, "dedicated");
   }, [handleCreateConversation]);
@@ -953,7 +988,7 @@ export function WorkbenchLayout(props: {
     <CommandPalette
       areas={railEntries}
       conversations={paletteConversations}
-      onOpenConversation={handleSelectConversation}
+      onOpenConversation={handleSelectConversationLeavingHome}
       openConversationId={selectedConversationId}
       onNewConversation={activeProject ? () => handleCreateConversationForProject(activeProject) : undefined}
       onOpenChange={setCommandPaletteOpen}
@@ -990,7 +1025,8 @@ export function WorkbenchLayout(props: {
           onExpandedProjectIdsChange={handleExpandedProjectIdsChange}
           onProjectMenuAction={handleWorkbenchProjectMenuAction}
           onProjectGroupAction={handleProjectGroupAction}
-          onSelectConversation={handleSelectConversation}
+          onSelectConversation={handleSelectConversationLeavingHome}
+          onOpenProjectHome={openProjectHome}
           onSelectProject={setActiveProjectId}
           pinnedConversationIds={pinnedConversationIds}
           projectTree={consoleWorkbenchState.projectTree}
@@ -1007,12 +1043,12 @@ export function WorkbenchLayout(props: {
 
   React.useEffect(() => {
     notificationCoordinator.setRouteHandler((route) => {
-      handleSelectConversation(route.conversationId);
+      handleSelectConversationLeavingHome(route.conversationId);
     });
     return () => {
       notificationCoordinator.setRouteHandler(null);
     };
-  }, [handleSelectConversation]);
+  }, [handleSelectConversationLeavingHome]);
 
   // handleRenameConfirm commits the current rename dialog value.
   // handleRenameConfirm 提交当前重命名对话框值。
@@ -1225,10 +1261,47 @@ export function WorkbenchLayout(props: {
     }
   }, [handleCompactSelectedConversationContext, handleOpenWorkspaceSkills]);
 
+  // projectHomeView carries the visible project home into the workspace shell, or null for the conversation stage.
+  // projectHomeView 将可见的项目首页交给工作区外壳；为 null 时显示会话舞台。
+  const projectHomeView = projectHomeProject ? {
+    project: projectHomeProject,
+    onClose: closeProjectHome,
+    content: (
+      <React.Suspense fallback={null}>
+        <LazyProjectHome
+          project={projectHomeProject}
+          workbench={workbenchState}
+          settingsRevision={{
+            vmm: Math.max(
+              globalProjectSettingsRevision.vmm,
+              projectSettingsRevisionById[projectHomeProject.id]?.vmm ?? 0,
+            ),
+            agentSkills: Math.max(
+              globalProjectSettingsRevision.agentSkills,
+              projectSettingsRevisionById[projectHomeProject.id]?.agentSkills ?? 0,
+            ),
+          }}
+          onRename={(name) => handleRenameConfirm({ kind: "project", id: projectHomeProject.id, name: projectHomeProject.name }, name)}
+          onProjectMenuAction={handleWorkbenchProjectMenuAction}
+          onCreateConversation={handleCreateConversationForProject}
+          onCreateDedicatedConversation={handleCreateDedicatedConversationForProject}
+          onSelectConversation={handleSelectConversationLeavingHome}
+          onExecuteAttachmentCleanup={executeProjectAttachmentCleanup}
+          onOpenKnowledge={handleOpenWorkspaceKnowledge}
+          onLoadAgentSkillOverrides={loadProjectAgentSkillOverrides}
+          onLoadVmmDraft={loadProjectVmmConfig}
+          onPreviewAttachmentCleanup={previewProjectAttachmentCleanup}
+          onSaveVmmDraft={handleProjectSettingsVmmSave}
+          onSetAgentSkillState={handleProjectSettingsAgentSkillSave}
+        />
+      </React.Suspense>
+    ),
+  } : null;
+
   // dialogsRequested identifies a visible dialog without loading dialog code for the common workbench path.
   // dialogsRequested 识别可见对话框，避免常规工作台路径加载对话框代码。
   const dialogsRequested = projectFolderPickerOpen || renameTarget !== null || projectIconTarget !== null
-    || projectSettingsTarget !== null || archiveProjectTarget !== null || removeProjectTarget !== null
+    || archiveProjectTarget !== null || removeProjectTarget !== null
     || Boolean(workbenchState.pendingQuestion) || stopConversationAgents !== null;
   // dialogsActivated keeps the dialog host mounted after its first use so close animations can finish.
   // dialogsActivated 在首次使用后保持对话框宿主挂载，以便关闭动画完成。
@@ -1302,6 +1375,8 @@ export function WorkbenchLayout(props: {
             onCreateConversation={handleCreateConversationForProject}
             onCreateDedicatedConversation={handleCreateDedicatedConversationForProject}
             onCreateProject={handleCreateProject}
+            projectHome={projectHomeView}
+            onOpenProjectHome={openProjectHome}
             onOpenCredentialManagement={() => {
               setActiveSettingsSubArea("credential-management")
               handleSelectTopFeatureArea("settings")
@@ -1315,7 +1390,7 @@ export function WorkbenchLayout(props: {
             onProjectMenuAction={handleWorkbenchProjectMenuAction}
               onProjectGroupAction={handleProjectGroupAction}
             onSelectProject={setActiveProjectId}
-            onSelectConversation={handleSelectConversation}
+            onSelectConversation={handleSelectConversationLeavingHome}
             onSelectPluginResourceOwner={handleSelectPluginResourceOwner}
             onSelectWorkbenchModel={handleSelectWorkbenchModel}
             onListWorkbenchModelSecondaryRoutes={handleListWorkbenchModelSecondaryRoutes}
@@ -1441,19 +1516,6 @@ export function WorkbenchLayout(props: {
         pendingQuestionRequester={workbenchState.pendingQuestionRequester ?? null}
         projectFolderPickerOpen={projectFolderPickerOpen}
         projectIconTarget={projectIconTarget}
-        projectSettingsRevision={projectSettingsTarget
-          ? {
-            vmm: Math.max(
-              globalProjectSettingsRevision.vmm,
-              projectSettingsRevisionById[projectSettingsTarget.project.id]?.vmm ?? 0,
-            ),
-            agentSkills: Math.max(
-              globalProjectSettingsRevision.agentSkills,
-              projectSettingsRevisionById[projectSettingsTarget.project.id]?.agentSkills ?? 0,
-            ),
-          }
-          : { vmm: 0, agentSkills: 0 }}
-        projectSettingsTarget={projectSettingsTarget}
         removeProjectSubmitting={removeProjectSubmitting}
         removeProjectTarget={removeProjectTarget}
         renameTarget={renameTarget}
@@ -1462,7 +1524,6 @@ export function WorkbenchLayout(props: {
         onBrowseProjectDirectories={browseProjectDirectories}
         onCancelArchiveProject={handleCancelArchiveProject}
         onCancelProjectIcon={() => setProjectIconTarget(null)}
-        onCancelProjectSettings={() => setProjectSettingsTarget(null)}
         onCancelRemoveProject={handleCancelRemoveProject}
         onCancelRename={() => setRenameTarget(null)}
         onCancelStopConversationRun={() => resolveStopConversationRunChoice(null)}
@@ -1472,19 +1533,9 @@ export function WorkbenchLayout(props: {
         onConfirmRemoveProject={handleRemoveProjectConfirm}
         onConfirmRename={handleRenameConfirm}
         onConfirmStopConversationRun={resolveStopConversationRunChoice}
-        onExecuteAttachmentCleanup={executeProjectAttachmentCleanup}
-        onOpenKnowledge={() => {
-          setProjectSettingsTarget(null);
-          handleOpenWorkspaceKnowledge();
-        }}
-        onLoadAgentSkillOverrides={loadProjectAgentSkillOverrides}
-        onLoadVmmDraft={loadProjectVmmConfig}
-        onPreviewAttachmentCleanup={previewProjectAttachmentCleanup}
         onProjectFolderPickerOpenChange={setProjectFolderPickerOpen}
         onRejectPendingQuestion={handlePendingQuestionReject}
         onResetProjectIcon={handleProjectIconReset}
-        onSaveVmmDraft={handleProjectSettingsVmmSave}
-        onSetAgentSkillState={handleProjectSettingsAgentSkillSave}
         onSubmitPendingQuestion={handlePendingQuestionSubmit}
         onSubmitPendingEnvironment={handlePendingEnvironmentSubmit}
       /></React.Suspense> : null}

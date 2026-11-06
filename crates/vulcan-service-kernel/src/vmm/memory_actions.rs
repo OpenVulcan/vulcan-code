@@ -2625,8 +2625,8 @@ pub(crate) async fn service_save_vmm_memory_config(
     Ok(workbench)
 }
 
-/// Loads one project-scoped VMM configuration draft for the WebUI project settings modal.
-/// 为 WebUI 项目设置弹窗加载单个项目级 VMM 配置草稿。
+/// Loads one project-scoped VMM configuration draft for the WebUI project home.
+/// 为 WebUI 项目首页加载单个项目级 VMM 配置草稿。
 ///
 /// # Parameters
 /// 参数

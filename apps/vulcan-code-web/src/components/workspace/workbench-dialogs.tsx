@@ -18,10 +18,6 @@ import {
   type RenameTarget,
 } from "@/components/project/project-action-dialogs";
 import type { ProjectIconDialogTarget, ProjectIconSelection } from "@/components/project/project-icon-contract";
-import type {
-  ProjectSettingsDialog,
-  ProjectSettingsDialogTarget,
-} from "@/components/project/project-settings-dialog";
 import { projectConversationCount } from "@/components/project/project-settings-utils";
 import type {
   PendingQuestionSnapshot,
@@ -37,9 +33,6 @@ import type {
 // LazyProjectIconDialog prevents the complete icon catalogs from loading before the picker opens.
 // LazyProjectIconDialog 防止完整图标目录在选择器打开前加载。
 const LazyProjectIconDialog = React.lazy(() => import("@/components/project/project-icon-dialog").then((module) => ({ default: module.ProjectIconDialog })));
-// LazyProjectSettingsDialog loads project settings and its scoped styles only when the user opens it.
-// LazyProjectSettingsDialog 仅在用户打开时加载项目设置及其作用域样式。
-const LazyProjectSettingsDialog = React.lazy(() => import("@/components/project/project-settings-dialog").then((module) => ({ default: module.ProjectSettingsDialog })));
 
 /** Loads directory browsing only after opening the picker, retaining a closable recovery dialog on failure.
  * 打开选择器后才加载目录浏览，失败时保留可以关闭及重试的弹窗。
@@ -111,39 +104,9 @@ export interface WorkbenchDialogsProps {
   // Resets one project icon override.
   // 还原一个项目图标覆盖。
   onResetProjectIcon: (project: ProjectSummary) => Promise<void>;
-  // Current project settings dialog target.
-  // 当前项目设置对话框目标。
-  projectSettingsTarget: ProjectSettingsDialogTarget | null;
-  // Latest accepted settings invalidation revisions for the current project target.
-  // 当前项目目标已接收的最新设置失效版本。
-  projectSettingsRevision: React.ComponentProps<typeof ProjectSettingsDialog>["settingsRevision"];
-  // Closes the project settings dialog.
-  // 关闭项目设置对话框。
-  onCancelProjectSettings: () => void;
   // Current workbench snapshot used by settings and counters.
   // 设置与计数使用的当前工作台快照。
   workbench: WorkbenchSnapshot;
-  // Loads project Agent Skill overrides.
-  // 加载项目 Agent Skill 覆盖。
-  onLoadAgentSkillOverrides: React.ComponentProps<typeof ProjectSettingsDialog>["onLoadAgentSkillOverrides"];
-  // Loads a project VMM draft.
-  // 加载项目 VMM 草稿。
-  onLoadVmmDraft: React.ComponentProps<typeof ProjectSettingsDialog>["onLoadVmmDraft"];
-  // Saves a project VMM draft.
-  // 保存项目 VMM 草稿。
-  onSaveVmmDraft: React.ComponentProps<typeof ProjectSettingsDialog>["onSaveVmmDraft"];
-  // Saves one project Agent Skill override.
-  // 保存单个项目 Agent Skill 覆盖。
-  onSetAgentSkillState: React.ComponentProps<typeof ProjectSettingsDialog>["onSetAgentSkillState"];
-  // Loads a project attachment cleanup preview.
-  // 加载项目附件清理预览。
-  onPreviewAttachmentCleanup: React.ComponentProps<typeof ProjectSettingsDialog>["onPreviewAttachmentCleanup"];
-  // Executes a project attachment cleanup.
-  // 执行项目附件清理。
-  onExecuteAttachmentCleanup: React.ComponentProps<typeof ProjectSettingsDialog>["onExecuteAttachmentCleanup"];
-  // Closes project settings and opens knowledge library management.
-  // 关闭项目设置并打开知识库管理。
-  onOpenKnowledge: () => void;
   // Project targeted by archive-all-conversations.
   // 全部归档对话目标项目。
   archiveProjectTarget: ProjectSummary | null;
@@ -224,19 +187,6 @@ export function WorkbenchDialogs(props: WorkbenchDialogsProps) {
           />
         </React.Suspense>
       ) : null}
-      {props.projectSettingsTarget ? <React.Suspense fallback={null}><LazyProjectSettingsDialog
-        target={props.projectSettingsTarget}
-        settingsRevision={props.projectSettingsRevision}
-        workbench={props.workbench}
-        onCancel={props.onCancelProjectSettings}
-        onExecuteAttachmentCleanup={props.onExecuteAttachmentCleanup}
-        onOpenKnowledge={props.onOpenKnowledge}
-        onLoadAgentSkillOverrides={props.onLoadAgentSkillOverrides}
-        onLoadVmmDraft={props.onLoadVmmDraft}
-        onPreviewAttachmentCleanup={props.onPreviewAttachmentCleanup}
-        onSaveVmmDraft={props.onSaveVmmDraft}
-        onSetAgentSkillState={props.onSetAgentSkillState}
-      /></React.Suspense> : null}
       <ArchiveProjectDialog
         busy={props.archiveProjectSubmitting}
         conversationCount={props.archiveProjectTarget ? projectConversationCount(props.workbench, props.archiveProjectTarget.id) : 0}

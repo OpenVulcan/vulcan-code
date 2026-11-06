@@ -3284,8 +3284,8 @@ fn require_existing_agent_skill_name(
     Ok(name.to_string())
 }
 
-/// Loads project-level Agent Skill overrides for the WebUI project settings modal.
-/// 为 WebUI 项目设置弹窗加载项目级 Agent Skill 覆盖。
+/// Loads project-level Agent Skill overrides for the WebUI project home.
+/// 为 WebUI 项目首页加载项目级 Agent Skill 覆盖。
 pub(crate) fn service_load_project_agent_skill_overrides(
     state: SharedServiceBridgeState,
     project_id: String,

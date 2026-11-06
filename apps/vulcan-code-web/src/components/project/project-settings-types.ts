@@ -1,21 +1,9 @@
 import type { ReactNode } from "react";
-import type { ProjectSummary } from "@/types";
-
-// ProjectSettingsDialogTarget stores the project currently shown in the settings dialog.
-// ProjectSettingsDialogTarget 保存当前显示设置弹窗的项目。
-export interface ProjectSettingsDialogTarget {
-  // Project being configured by the settings dialog.
-  // 设置弹窗正在配置的项目。
-  project: ProjectSummary;
-  // Optional explicit navigation target supplied by a project-owned feature entry.
-  // 项目自有功能入口提供的可选明确导航目标。
-  initialSection?: ProjectSettingsSectionId;
-}
 
 export type { ProjectSettingsRevision } from "@/types";
 
-// ProjectSettingsSectionId names the left-side categories in the project settings dialog.
-// ProjectSettingsSectionId 命名项目设置弹窗左侧分类。
+// ProjectSettingsSectionId names the settings cards on the project home page.
+// ProjectSettingsSectionId 命名项目首页上的设置卡片。
 export type ProjectSettingsSectionId = "overview" | "vmm" | "knowledge-bases" | "agent-skills" | "attachments" | "collaboration-grants" | "permission-judge";
 
 // ProjectSettingsSectionSummary describes one navigable settings category.

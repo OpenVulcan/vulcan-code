@@ -181,6 +181,9 @@ export function WorkspaceResizableBody(props: {
   // Optional title overriding the conversation header title.
   // 覆盖会话标题栏标题的可选标题。
   headerTitle?: string;
+  // Optional crumb placed before the title, such as the owning project.
+  // 标题前的可选层级入口，例如所属项目。
+  headerTitlePrefix?: React.ReactNode;
   // Optional detail text shown inline after the override header title.
   // 显示在覆盖标题后方的可选行内详情。
   headerDetail?: string;
@@ -575,6 +578,7 @@ export function WorkspaceResizableBody(props: {
         onTitlebarDoubleClick={props.onTitlebarDoubleClick}
         isConversationPinned={props.isSelectedConversationPinned}
         title={props.headerTitle}
+        titlePrefix={props.headerTitlePrefix}
         onConversationMenuAction={props.onConversationMenuAction}
         onToggleLeftPanel={props.onToggleLeftPanel}
       />
@@ -696,6 +700,9 @@ function ConsoleHeader(props: {
   // Optional override detail used by embedded workspace views.
   // 内嵌工作台视图使用的可选覆盖详情。
   detail?: string;
+  // Optional crumb placed before the title.
+  // 标题前的可选层级入口。
+  titlePrefix?: React.ReactNode;
   // Optional override actions used by embedded workspace views.
   // 内嵌工作台视图使用的可选覆盖操作区。
   headerActions?: React.ReactNode;
@@ -745,6 +752,7 @@ function ConsoleHeader(props: {
       onTitlebarDoubleClick={props.onTitlebarDoubleClick}
       onToggleSidebar={props.onToggleLeftPanel}
       title={headerTitle}
+      titlePrefix={props.titlePrefix}
       titleMenu={(
         <WorkspaceTitleMenu
           conversation={titleMenuConversation}

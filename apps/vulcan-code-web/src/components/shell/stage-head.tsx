@@ -10,6 +10,9 @@ export function StageHead(props: {
   // Visible title of the page or conversation.
   // 页面或会话的可见标题。
   title: string;
+  // Optional crumb placed before the title, such as the owning project.
+  // 标题前的可选层级入口，例如所属项目。
+  titlePrefix?: React.ReactNode;
   // Optional one-line detail shown beside the title.
   // 显示在标题旁的可选单行详情。
   detail?: string;
@@ -42,6 +45,7 @@ export function StageHead(props: {
     <header className="vk-stage-head">
       <SidebarTrigger onClick={props.onToggleSidebar} />
       <div className="vk-stage-title">
+        {props.titlePrefix}
         <div className="vk-stage-name" {...dragProps}>
           <h1>{props.title}</h1>
           {props.detail ? <small>{props.detail}</small> : null}

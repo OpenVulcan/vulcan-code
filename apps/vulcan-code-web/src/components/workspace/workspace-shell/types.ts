@@ -127,6 +127,12 @@ export interface WorkspaceShellProps {
   // Opens the create-project flow.
   // 打开创建项目流程。
   onCreateProject: (groupId?: string) => void;
+  // Project home shown over the chat stage, with its page body and close action; null shows the conversation.
+  // 覆盖在聊天舞台上的项目首页及其页面主体与关闭动作；为 null 时显示会话。
+  projectHome?: { project: ProjectSummary; content: React.ReactNode; onClose: () => void } | null;
+  // Opens one project's home page in the main stage.
+  // 在主舞台打开单个项目的首页。
+  onOpenProjectHome?: (project: ProjectSummary) => void;
   // Opens the memory feature area from conversation prompts.
   // 从会话提示中打开记忆功能区。
   onOpenMemory: () => void;

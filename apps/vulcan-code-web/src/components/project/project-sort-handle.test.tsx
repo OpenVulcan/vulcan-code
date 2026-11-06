@@ -42,7 +42,7 @@ it("sorts with the handle while expansion and new conversation remain independen
       onProjectMenuAction={noop} onProjectGroupAction={groupAction} onSelectConversation={noop} onSelectProject={select}
     /></SidebarProvider></I18nProvider>));
     const row = container.querySelector<HTMLDivElement>('.vk-tree-item[data-kind="project"]')!;
-    const folder = row.querySelector<HTMLButtonElement>(".vk-tree-row")!;
+    const folder = row.querySelector<HTMLButtonElement>(".vk-tree-fold")!;
     const createButton = row.querySelector<HTMLButtonElement>('[data-action="create"]')!;
     const handle = row.querySelector<HTMLButtonElement>(".vk-tree-grip")!;
     expect(row.getAttribute("role")).toBeNull();

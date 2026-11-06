@@ -57,6 +57,12 @@ export function SortableProjectRow(props: {
   // Selects this project without changing the current conversation.
   // 选择当前项目且不改变当前会话。
   onSelectProject: (projectId: string) => void;
+  // Opens the project home page; absent in trees without a home entry.
+  // 打开项目首页；没有首页入口的树中不提供。
+  onOpenProjectHome?: (project: ProjectSummary) => void;
+  // Whether this project's home page is showing in the main stage.
+  // 此项目的首页当前是否显示在主舞台。
+  isHomeOpen?: boolean;
   // Toggles the conversation list overflow rows for this project.
   // 切换当前项目会话列表的溢出行。
   onToggleConversationList: (projectId: string) => void;
@@ -97,26 +103,52 @@ export function SortableProjectRow(props: {
   const conversationOverflowLabel = props.isConversationListExpanded
     ? t("projectRow.collapseConversations")
     : t("projectRow.showMoreConversations");
-  const projectFolderButton = (
-    <button
-      aria-expanded={props.isOpen}
+  // foldLabel names the folder toggle by its effect, since the icon alone carries the open state.
+  // foldLabel 按效果命名文件夹开关，因为仅凭图标表达展开状态。
+  const foldLabel = formatMessage(t(props.isOpen ? "projectRow.collapseProject" : "projectRow.expandProject"), { project: props.project.name });
+  // The row holds two buttons: the folder icon folds the session list, the name opens the project home. Without a
+  // home entry (embedded trees), the name folds as well.
+  // 行内包含两个按钮：文件夹图标折叠会话列表，名称打开项目首页。没有首页入口时（嵌入式树），名称同样用于折叠。
+  const projectFolderRow = (
+    <div
       className="vk-tree-row"
       data-active={props.isActiveProject ? "" : undefined}
       data-contains-selection={props.hasSelectedConversation ? "" : undefined}
-      onClick={() => {
-        props.onSelectProject(props.project.id);
-        props.onToggleOpen(props.project.id);
-      }}
-      title={`${props.project.name}
-${props.project.path}`}
-      type="button"
+      data-home={props.isHomeOpen ? "" : undefined}
+      data-open={props.isOpen ? "" : undefined}
     >
-      <span className="vk-tree-icon"><ProjectIcon isOpen={props.isOpen} project={props.project} size={15} /></span>
-      <strong>
-        {props.project.name}
-        {showOriginalFolderName ? <small>{folderName}</small> : null}
-      </strong>
-    </button>
+      <button
+        aria-expanded={props.isOpen}
+        aria-label={foldLabel}
+        className="vk-tree-fold"
+        data-custom-icon={props.project.iconPack && props.project.iconKey ? "" : undefined}
+        onClick={() => {
+          props.onSelectProject(props.project.id);
+          props.onToggleOpen(props.project.id);
+        }}
+        title={foldLabel}
+        type="button"
+      >
+        <span className="vk-tree-icon"><ProjectIcon isOpen={props.isOpen} project={props.project} size={15} /></span>
+      </button>
+      <button
+        aria-current={props.isHomeOpen ? "page" : undefined}
+        className="vk-tree-name"
+        onClick={() => {
+          props.onSelectProject(props.project.id);
+          if (props.onOpenProjectHome) props.onOpenProjectHome(props.project);
+          else props.onToggleOpen(props.project.id);
+        }}
+        title={`${props.project.name}
+${props.project.path}`}
+        type="button"
+      >
+        <strong>
+          {props.project.name}
+          {showOriginalFolderName ? <small>{folderName}</small> : null}
+        </strong>
+      </button>
+    </div>
   );
   return (
     <SidebarMenuItem
@@ -132,7 +164,7 @@ ${props.project.path}`}
           placement={props.placement}
           project={props.project}
         >
-          {projectFolderButton}
+          {projectFolderRow}
         </ProjectContextMenu>
         <span className="vk-tree-actions">
           <button

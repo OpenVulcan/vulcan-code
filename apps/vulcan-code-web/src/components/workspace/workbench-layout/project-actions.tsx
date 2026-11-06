@@ -5,7 +5,7 @@ import type { SkillCatalogActionProps } from "@/components/features/skills/skill
 import type { AgentSkillActionProps } from "@/components/features/agent-skills/agent-skills-types";
 import type { RenameTarget } from "@/components/project/project-action-dialogs";
 import { normalizeProjectIconSelection, type ProjectIconDialogTarget, type ProjectIconSelection } from "@/components/project/project-icons";
-import { type ProjectAgentSkillState, type ProjectSettingsDialogTarget } from "@/components/project/project-settings-dialog";
+import type { ProjectAgentSkillState } from "@/components/project/project-settings-types";
 import type { ProjectGroupAction, ProjectMenuAction } from "@/components/project/project-sidebar";
 import type { DraftConversationSelection } from "@/components/workspace/workspace-resizable-body";
 import type { AgentSkillsCatalogUpdate, LuaSkillsCatalogUpdate, ProjectSummary, SubagentCatalogUpdate, VmmConfigDraftSummary, WorkbenchSnapshot } from "@/types";
@@ -113,9 +113,9 @@ interface WorkbenchProjectActionsOptions {
   // Opens the project icon dialog target.
   // 打开项目图标弹窗目标。
   setProjectIconTarget: React.Dispatch<React.SetStateAction<ProjectIconDialogTarget | null>>;
-  // Opens the project settings dialog target.
-  // 打开项目设置弹窗目标。
-  setProjectSettingsTarget: React.Dispatch<React.SetStateAction<ProjectSettingsDialogTarget | null>>;
+  // Opens the project home page in the main stage.
+  // 在主舞台打开项目首页。
+  openProjectHome: (project: ProjectSummary) => void;
   // Opens the project folder picker.
   // 打开项目文件夹选择器。
   setProjectFolderPickerOpen: React.Dispatch<React.SetStateAction<boolean>>;
@@ -160,7 +160,7 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     setSelectedConversationId,
     setRenameTarget,
     setProjectIconTarget,
-    setProjectSettingsTarget,
+    openProjectHome,
     setProjectFolderPickerOpen,
     setArchiveProjectTarget,
     setRemoveProjectTarget,
@@ -237,7 +237,7 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
       }
 
       if (action === "settings") {
-        setProjectSettingsTarget({ project });
+        openProjectHome(project);
         return;
       }
 
@@ -264,7 +264,7 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     }
-  }, [acceptServiceWorkbenchSnapshot, locale, mergeWorkbenchWithLocalCaches, setArchiveProjectTarget, setProjectIconTarget, setProjectSettingsTarget, setRemoveProjectTarget, setRenameTarget, setWorkbenchState, t]);
+  }, [acceptServiceWorkbenchSnapshot, locale, mergeWorkbenchWithLocalCaches, setArchiveProjectTarget, setProjectIconTarget, openProjectHome, setRemoveProjectTarget, setRenameTarget, setWorkbenchState, t]);
 
   // handleProjectSettingsVmmSave persists the project-scoped VMM settings draft.
   // handleProjectSettingsVmmSave 持久化项目级 VMM 设置草稿。

@@ -1,114 +1,325 @@
-/* Project settings: a fixed-header two-pane dialog. The section nav follows the directory-row convention */
-/* (panel tile plus ember rule), sections stack headings, quiet panels and divided lists. */
-/* 项目设置：固定标题的双栏对话框。分区导航沿用目录行约定（面板底块加余烬色竖线）， */
-/* 各分区由标题、安静的面板与分隔列表组成。 */
-.project-settings-dialog {
-  width: min(1120px, calc(100vw - 32px));
-  height: min(760px, calc(100dvh - 32px));
-  max-width: min(1120px, calc(100vw - 32px)) !important;
-  max-height: calc(100dvh - 32px);
-  grid-template-rows: auto minmax(0, 1fr);
-  align-content: stretch;
-  overflow: hidden;
+/* Project home: one page per project in the main stage. A header (icon, name, path, actions), a stats strip, a
+ * jump bar, then two columns of cards; each card holds one project settings section. The columns stack when the
+ * page itself is narrow. */
+/* 项目首页：主舞台中每个项目一页。页头（图标、名称、路径、操作）、统计条、跳转条，然后是两栏卡片；
+ * 每张卡片承载一个项目设置分区。页面本身变窄时两栏堆叠。 */
+.project-home {
+  container-type: inline-size;
+  height: 100%;
+  overflow: auto;
+  scrollbar-gutter: stable;
+  display: grid;
+  align-content: start;
+  gap: calc(var(--vk-u) * 4);
+  padding: calc(var(--vk-u) * 5) calc(var(--vk-u) * 6) calc(var(--vk-u) * 8);
 }
 
-.project-settings-dialog-header {
-  padding: 18px 48px 16px 24px;
+.project-home > * {
+  width: 100%;
+  max-width: 1280px;
+  justify-self: center;
+}
+
+.project-home-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: calc(var(--vk-u) * 4);
+  align-items: center;
+  padding-bottom: calc(var(--vk-u) * 4);
   border-bottom: var(--vk-bw) solid var(--vk-line);
 }
 
-.project-settings-dialog [data-slot="dialog-description"] {
-  line-height: 1.55;
-}
-
-.project-settings-layout {
-  min-height: 0;
-  height: 100%;
-  display: grid;
-  grid-template-columns: 196px minmax(0, 1fr);
-  gap: 0;
-}
-
-.project-settings-nav {
-  min-height: 0;
-  height: 100%;
-  display: grid;
-  align-content: start;
-  gap: 2px;
-  overflow: auto;
-  padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 2);
-  border-right: var(--vk-bw) solid var(--vk-line);
-  background: var(--vk-ground-2);
-}
-
-.project-settings-nav-button {
-  width: 100%;
-  min-height: 48px;
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  gap: 9px;
-  align-items: center;
-  border: 0;
-  background: transparent;
-  color: var(--vk-ink-2);
-  padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 2.5);
-  text-align: left;
-  cursor: pointer;
-  transition: background-color var(--vk-t-fast) var(--vk-ease), color var(--vk-t-fast) var(--vk-ease);
-}
-
-.project-settings-nav-button:hover {
-  background: var(--vk-hover);
-  color: var(--vk-ink);
-}
-
-.project-settings-nav-button.active,
-.project-settings-nav-button.active:hover {
-  background: var(--vk-panel);
-  box-shadow: inset 2px 0 0 var(--vk-ember);
-  color: var(--vk-ink);
-}
-
-.project-settings-nav-button svg {
-  color: var(--vk-ink-3);
-}
-
-.project-settings-nav-button.active svg {
+.project-home-head > .project-home-icon {
+  width: calc(var(--vk-u) * 13);
+  height: calc(var(--vk-u) * 13);
   color: var(--vk-ember);
 }
 
-.project-settings-nav-button span,
-.project-settings-nav-button strong,
-.project-settings-nav-button small {
-  min-width: 0;
-  display: block;
+.project-home-head > .project-home-icon:hover {
+  border-color: var(--vk-ember);
 }
 
-.project-settings-nav-button strong {
+.project-home-identity {
+  min-width: 0;
+  display: grid;
+  gap: var(--vk-u);
+}
+
+.project-home-name,
+.project-home-rename,
+.project-home-path {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: calc(var(--vk-u) * 1.5);
+}
+
+.project-home-name h2 {
+  margin: 0;
   overflow: hidden;
-  font-size: var(--vk-fs-md);
+  font-size: var(--vk-fs-xl);
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.project-settings-nav-button small {
-  margin-top: 2px;
+/* The rename pencil appears with the pointer or keyboard focus, and always on touch screens. */
+/* 重命名铅笔随指针或键盘焦点出现，触屏上始终显示。 */
+.project-home-name > button {
+  opacity: 0;
+  transition: opacity var(--vk-t-fast) var(--vk-ease);
+}
+
+.project-home-name:hover > button,
+.project-home-name:focus-within > button {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .project-home-name > button { opacity: 1; }
+}
+
+.project-home-rename {
+  max-width: 480px;
+}
+
+.project-home-path {
+  color: var(--vk-ink-3);
+  font-family: var(--vk-font-mono);
+  font-size: var(--vk-fs-xs);
+}
+
+.project-home-path > span:first-child {
+  min-width: 0;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+}
+
+.project-home-copy-status {
+  font-family: inherit;
+}
+
+.project-home-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: calc(var(--vk-u) * 2);
+}
+
+.project-home-stats {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-panel);
+}
+
+.project-home-stats > div {
+  min-width: 0;
+  padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 4);
+}
+
+.project-home-stats > div + div {
+  border-left: var(--vk-bw) solid var(--vk-line);
+}
+
+.project-home-stats dt {
   color: var(--vk-ink-3);
   font-size: var(--vk-fs-xs);
-  line-height: 1.35;
+}
+
+.project-home-stats dd {
+  margin: var(--vk-u) 0 0;
+  overflow: hidden;
+  font-size: var(--vk-fs-lg);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.project-settings-content {
+.project-home-stats > [data-tone="live"] dd {
+  color: var(--vk-ember);
+}
+
+.project-home-jump {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--vk-u) * 1.5);
+}
+
+.project-home-jump > button {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--vk-u) * 1.5);
+  height: var(--vk-h-sm);
+  padding: 0 calc(var(--vk-u) * 2.5);
+  border: var(--vk-bw) solid var(--vk-line);
+  background: transparent;
+  color: var(--vk-ink-2);
+  font: inherit;
+  font-size: var(--vk-fs-sm);
+  cursor: pointer;
+}
+
+.project-home-jump > button:hover {
+  border-color: var(--vk-line-strong);
+  background: var(--vk-hover);
+  color: var(--vk-ink);
+}
+
+.project-home-jump > button > svg {
+  width: 14px;
+  height: 14px;
+  color: var(--vk-ink-3);
+}
+
+.project-home-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  gap: calc(var(--vk-u) * 4);
+}
+
+.project-home-column {
   min-width: 0;
+  display: grid;
+  gap: calc(var(--vk-u) * 4);
+}
+
+.project-home-card {
+  min-width: 0;
+  padding: calc(var(--vk-u) * 4) calc(var(--vk-u) * 5);
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-panel);
+  scroll-margin-top: calc(var(--vk-u) * 4);
+}
+
+.project-home-card .project-settings-section {
   min-height: 0;
-  height: 100%;
+}
+
+.project-home-restored {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(var(--vk-u) * 2);
+  margin-bottom: calc(var(--vk-u) * 3);
+  padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 3);
+  border-left: 2px solid var(--vk-ember);
+  background: var(--vk-ember-soft);
+  font-size: var(--vk-fs-sm);
+}
+
+.project-home-session-tools {
+  display: grid;
+  gap: calc(var(--vk-u) * 2);
+}
+
+.project-home-session-list {
+  max-height: 420px;
+  margin: 0;
+  padding: 0;
   overflow: auto;
-  padding: 20px 24px 24px;
-  scrollbar-gutter: stable;
+  list-style: none;
+  border-top: var(--vk-bw) solid var(--vk-line);
+}
+
+.project-home-session {
+  width: 100%;
+  min-height: var(--vk-h-md);
+  display: grid;
+  grid-template-columns: 6px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: calc(var(--vk-u) * 2);
+  padding: 0 calc(var(--vk-u) * 2);
+  border: 0;
+  border-bottom: var(--vk-bw) solid var(--vk-line);
+  background: transparent;
+  color: var(--vk-ink-2);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.project-home-session:hover {
+  background: var(--vk-hover);
+  color: var(--vk-ink);
+}
+
+.project-home-session:focus-visible {
+  outline-offset: -2px;
+}
+
+.project-home-session-mark {
+  width: 6px;
+  height: 6px;
+}
+
+.project-home-session[data-unread] .project-home-session-mark {
+  background: var(--vk-ink-2);
+}
+
+.project-home-session[data-running] .project-home-session-mark {
+  background: var(--vk-ember);
+}
+
+.project-home-session-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-home-session[data-unread] .project-home-session-title {
+  color: var(--vk-ink);
+  font-weight: 600;
+}
+
+.project-home-session > svg {
+  color: var(--vk-ink-3);
+}
+
+.project-home-session small {
+  color: var(--vk-ink-3);
+  font-size: var(--vk-fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Narrow pages stack the columns and move the header actions under the name. */
+/* 窄页面将两栏堆叠，并把页头操作移到名称下方。 */
+@container (max-width: 860px) {
+  .project-home-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .project-home-head {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .project-home-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+}
+
+@container (max-width: 520px) {
+  .project-home-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .project-home-stats > div:nth-child(3) {
+    border-left: 0;
+  }
+
+  .project-home-stats > div:nth-child(n + 3) {
+    border-top: var(--vk-bw) solid var(--vk-line);
+  }
+
+  .project-home-card {
+    padding: calc(var(--vk-u) * 3);
+  }
 }
 
 .project-settings-section {
@@ -371,51 +582,11 @@
   line-height: 1.55;
 }
 
-/* Phones: the nav becomes a scrolling strip and grids collapse to one column. */
-/* 手机：导航变为横向滚动条，网格折叠为单列。 */
+/* Phones: tighter page padding, and section grids collapse to one column. */
+/* 手机：页面内边距更紧凑，分区网格折叠为单列。 */
 @media (max-width: 720px) {
-  .project-settings-dialog {
-    width: calc(100vw - 24px);
-    height: calc(100dvh - 24px);
-    max-width: calc(100vw - 24px) !important;
-  }
-
-  .project-settings-dialog-header {
-    padding: 16px 44px 14px 16px;
-  }
-
-  .project-settings-layout {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
-  }
-
-  .project-settings-nav {
-    height: auto;
-    display: flex;
-    overflow-x: auto;
-    padding: 8px;
-    border-right: 0;
-    border-bottom: var(--vk-bw) solid var(--vk-line);
-  }
-
-  .project-settings-nav-button {
-    width: auto;
-    min-height: 36px;
-    flex: 0 0 auto;
-  }
-
-  .project-settings-nav-button.active,
-  .project-settings-nav-button.active:hover {
-    box-shadow: inset 0 -2px 0 var(--vk-ember);
-  }
-
-  .project-settings-nav-button small {
-    display: none;
-  }
-
-  .project-settings-content {
-    max-height: none;
-    padding: 16px;
+  .project-home {
+    padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 3) calc(var(--vk-u) * 6);
   }
 
   .project-settings-form-grid {
