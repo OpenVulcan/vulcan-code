@@ -1,8 +1,11 @@
 //! Plugin process-spec resolution, environment allowlisting, and path containment.
 //! 插件进程规格解析、环境变量白名单与路径包含性。
 
-use super::{build_plugin_process_spec, canonical_plugin_directory, validate_plugin_environment};
+#[cfg(windows)]
+use super::build_plugin_process_spec;
+use super::{canonical_plugin_directory, validate_plugin_environment};
 use serde_json::{Map, Value, json};
+#[cfg(windows)]
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};

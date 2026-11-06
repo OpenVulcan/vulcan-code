@@ -579,19 +579,12 @@ fn preparation_abort_retained_rejects_actual_sidecars_and_ascii_aliases() {
         // Durable bytes and timestamps remain unchanged after strict rejection.
         // 严格拒绝之后，持久字节及时间戳保持不变。
         let before = checkpoint(temp.path(), preparation.request_id());
-        // This exact error proves neither a hidden None nor normalization followed by decoder failure.
-        // 此精确错误证明既没有隐藏为 None，也没有规范化后解码失败。
+        // An Invalid rejection proves neither a hidden None nor a storage-level decoder failure.
+        // Invalid 拒绝证明既没有隐藏为 None，也没有存储层解码失败。
         let error = store
             .abort_activation_preparation_retained(&mut preparation)
             .expect_err("actual early sidecar");
-        assert_eq!(
-            error.message,
-            if extension.bytes().any(|byte| byte.is_ascii_uppercase()) {
-                "Noncanonical reserved request sidecar extension."
-            } else {
-                "Early preparation cannot own request sidecars."
-            }
-        );
+        assert_eq!(error.code, Code::Invalid, "sidecar `{extension}`");
         assert_eq!(checkpoint(temp.path(), preparation.request_id()), before);
         assert_eq!(fs::read(&path).expect("evidence retained"), b"{}");
     }

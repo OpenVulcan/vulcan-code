@@ -292,6 +292,11 @@ pub fn build_vulcan_tools_manager(
             // expected_plugin_generation 将执行绑定到此描述符及其参数 Schema。
             let expected_plugin_generation = tool.plugin_generation;
             let workspace_root = workspace_root.clone();
+            // argument_validator rejects arguments outside the declared schema before they reach Lua.
+            // argument_validator 在参数进入 Lua 前拒绝不符合声明 Schema 的参数。
+            let argument_validator = jsonschema::validator_for(&tool.parameters_schema)
+                .map(Arc::new)
+                .map_err(|error| error.to_string());
             candidates.push(VulcanToolCandidate {
                 descriptor,
                 parameters_schema: tool.parameters_schema,
@@ -309,7 +314,16 @@ pub fn build_vulcan_tools_manager(
                     let runtime = runtime.clone();
                     let tool_id = tool_id.clone();
                     let workspace_root = workspace_root.clone();
+                    let argument_validator = argument_validator.clone();
                     Box::pin(async move {
+                        let validator = argument_validator.map_err(|error| {
+                            format!("Vulcan Plugin tool `{tool_id}` has an invalid parameters schema: {error}")
+                        })?;
+                        if !validator.is_valid(&arguments) {
+                            return Err(format!(
+                                "Arguments for Vulcan Plugin tool `{tool_id}` do not match its parameters schema."
+                            ));
+                        }
                         let runtime = runtime.ok_or_else(|| {
                             format!("Vulcan Plugin runtime is unavailable for tool `{tool_id}`.")
                         })?;

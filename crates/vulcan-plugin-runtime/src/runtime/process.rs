@@ -1145,5 +1145,5 @@ impl VulcanPluginRuntimeManager {
     }
 }
 
-#[cfg(all(test, windows))]
+#[cfg(test)]
 mod tests;

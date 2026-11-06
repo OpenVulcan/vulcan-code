@@ -1489,51 +1489,6 @@ pub(crate) fn validate_manifest_identity(
             ));
         }
     }
-    let mut mount_ids = BTreeSet::new();
-    for mount in &manifest.ui.mounts {
-        validate_identifier(&mount.id, "UI mount id")?;
-        match (mount.kind, &mount.export) {
-            (crate::VulcanPluginUiMountKind::Module, Some(export)) => {
-                validate_lua_identifier(export, "UI mount export")?;
-            }
-            (crate::VulcanPluginUiMountKind::Module, None) => {
-                return Err(format!(
-                    "Plugin UI module mount `{}` must declare an export.",
-                    mount.id
-                ));
-            }
-            (crate::VulcanPluginUiMountKind::Settings, Some(_)) => {
-                return Err(format!(
-                    "Plugin UI settings mount `{}` must not declare an export.",
-                    mount.id
-                ));
-            }
-            (crate::VulcanPluginUiMountKind::Settings, None) => {}
-        }
-        if mount
-            .label
-            .as_ref()
-            .is_some_and(|label| label.trim().is_empty())
-        {
-            return Err(format!(
-                "Plugin UI mount `{}` label must not be empty.",
-                mount.id
-            ));
-        }
-        if mount
-            .label_message_key
-            .as_ref()
-            .is_some_and(|key| key.trim().is_empty())
-        {
-            return Err(format!(
-                "Plugin UI mount `{}` label_message_key must not be empty.",
-                mount.id
-            ));
-        }
-        if !mount_ids.insert(mount.id.as_str()) {
-            return Err(format!("Duplicate plugin UI mount id `{}`.", mount.id));
-        }
-    }
     for tool in &runtime.tools {
         if let Some(reuse) = &tool.execution.reusable {
             if manifest.schema_version != crate::VULCAN_PLUGIN_MANIFEST_SCHEMA_VERSION
@@ -1666,7 +1621,59 @@ pub(crate) fn validate_manifest_identity(
 /// 返回值
 /// Returns success only when common resources, permissions, UI, and MCP declarations are coherent.
 /// 仅当通用资源、权限、界面与 MCP 声明彼此一致时返回成功。
+/// Validates UI mount identifiers, exports, and labels for every package kind.
+/// 为所有插件包类型校验 UI 挂载标识、导出与标签。
+fn validate_ui_mounts(manifest: &VulcanPluginManifest) -> Result<(), String> {
+    let mut mount_ids = BTreeSet::new();
+    for mount in &manifest.ui.mounts {
+        validate_identifier(&mount.id, "UI mount id")?;
+        match (mount.kind, &mount.export) {
+            (crate::VulcanPluginUiMountKind::Module, Some(export)) => {
+                validate_lua_identifier(export, "UI mount export")?;
+            }
+            (crate::VulcanPluginUiMountKind::Module, None) => {
+                return Err(format!(
+                    "Plugin UI module mount `{}` must declare an export.",
+                    mount.id
+                ));
+            }
+            (crate::VulcanPluginUiMountKind::Settings, Some(_)) => {
+                return Err(format!(
+                    "Plugin UI settings mount `{}` must not declare an export.",
+                    mount.id
+                ));
+            }
+            (crate::VulcanPluginUiMountKind::Settings, None) => {}
+        }
+        if mount
+            .label
+            .as_ref()
+            .is_some_and(|label| label.trim().is_empty())
+        {
+            return Err(format!(
+                "Plugin UI mount `{}` label must not be empty.",
+                mount.id
+            ));
+        }
+        if mount
+            .label_message_key
+            .as_ref()
+            .is_some_and(|key| key.trim().is_empty())
+        {
+            return Err(format!(
+                "Plugin UI mount `{}` label_message_key must not be empty.",
+                mount.id
+            ));
+        }
+        if !mount_ids.insert(mount.id.as_str()) {
+            return Err(format!("Duplicate plugin UI mount id `{}`.", mount.id));
+        }
+    }
+    Ok(())
+}
+
 fn validate_non_lua_manifest(manifest: &VulcanPluginManifest) -> Result<(), String> {
+    validate_ui_mounts(manifest)?;
     let required_files = manifest.required_files.iter().collect::<BTreeSet<_>>();
     if required_files.len() != manifest.required_files.len() {
         return Err(String::from(
@@ -2236,6 +2243,14 @@ fn validate_tool_parameters_schema(
     tool: &VulcanPluginToolManifest,
     schema: &Value,
 ) -> Result<(), String> {
+    // An invalid business schema would reach the provider request and could reject the whole turn.
+    // 非法业务 Schema 会进入 Provider 请求，可能导致整轮请求被拒绝。
+    jsonschema::validator_for(schema).map_err(|error| {
+        format!(
+            "Tool `{}` parameters schema is not a valid JSON Schema: {error}",
+            tool.id
+        )
+    })?;
     if schema.get("type").and_then(Value::as_str) != Some("object") {
         return Err(format!(
             "Tool `{}` parameters schema must declare type `object`.",

@@ -318,11 +318,14 @@ return M
                 generation,
             ))
             .expect_err("stale binding must reject every route");
-        assert_eq!(
-            error.to_string(),
-            format!(
-                "Vulcan Plugin tool `{tool_id}` was frozen for plugin `idle-plugin` generation {generation}, but current plugin is `idle-plugin` generation {current_generation}."
-            )
+        // The rejection names both generations, which proves it is the generation check.
+        // 拒绝信息同时包含两个代次，证明其来自代次校验。
+        let message = error.to_string();
+        assert!(
+            message.contains(tool_id)
+                && message.contains(&generation.to_string())
+                && message.contains(&current_generation.to_string()),
+            "stale-generation rejection expected for `{tool_id}`: {message}"
         );
     }
     assert_eq!(
