@@ -783,3 +783,78 @@ fn standard_object_root_projection_strips_advanced_keywords_recursively() {
     );
     assert!(projected["properties"].get("description_only").is_none());
 }
+
+/// Verifies common reading tool names stay read-only under the word-based name heuristic.
+/// 验证常见读取工具名称在按单词的名称启发式下保持只读。
+#[test]
+fn read_only_heuristic_keeps_common_reading_tools() {
+    for name in [
+        "read_file",
+        "read_multiple_files",
+        "list_directory",
+        "list_allowed_directories",
+        "directory_tree",
+        "search_files",
+        "get_file_info",
+        "get-library-docs",
+        "get_me",
+        "get_pull_request_diff",
+        "get_latest_release",
+        "list_issues",
+        "search_repositories",
+        "fetch",
+        "readFile",
+        "getHTTPStatus",
+        "listFiles",
+        "webSearch",
+        "websearch",
+        "webfetch",
+        "ast_grep",
+        "rg",
+        "eslint",
+        "run_tests",
+        "typecheck",
+        "find_references",
+        "describe_table",
+        "query_logs",
+        "get_post",
+        "list_commits",
+        "vulcan-codekit-rg",
+    ] {
+        assert!(
+            super::text_looks_read_only(name),
+            "{name} should be read-only"
+        );
+    }
+}
+
+/// Verifies write tools whose names merely contain a keyword inside another word, or that also
+/// carry a write verb, are not read-only.
+/// 验证名称只在其他单词内部含关键字、或同时带写入动词的写入工具不被视为只读。
+#[test]
+fn read_only_heuristic_rejects_keywords_inside_other_words_and_write_verbs() {
+    for name in [
+        "merge_pull_request",
+        "git_checkout",
+        "create_thread",
+        "update_spreadsheet",
+        "set_target",
+        "paste_text",
+        "publish_latest",
+        "forget_memory",
+        "get_or_create_issue",
+        "search_and_replace",
+        "find_and_replace",
+        "read_and_delete",
+        "list_and_remove_stale",
+        "write_file",
+        "create_issue",
+        "browser_navigate",
+        "vulcan-curl-post",
+    ] {
+        assert!(
+            !super::text_looks_read_only(name),
+            "{name} should not be read-only"
+        );
+    }
+}

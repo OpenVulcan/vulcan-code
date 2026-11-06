@@ -124,20 +124,89 @@ pub fn tool_is_allowed_in_plan_with_args(tool: &ResolvedToolDefinition, args: &V
     }
 }
 
-/// Returns whether a tool name or description `text` contains a read-only heuristic keyword.
-/// 返回工具名称或描述 `text` 是否包含只读启发式关键字。
-/// The permission gate applies the same heuristic to implicit LuaSkills entries named in a dispatch.
-/// 权限闸门对调度中指定的隐式 LuaSkills 入口应用同一启发式。
+/// Returns whether a tool name `text` reads as a read-only operation.
+/// 返回工具名称 `text` 是否表现为只读操作。
+///
+/// The name is split into words at separators and camelCase boundaries, so a keyword inside an
+/// unrelated word (`rg` in `merge`, `read` in `thread`, `get` in `target`) never counts. A name
+/// that also carries an unambiguous write verb (`get_or_create`, `search_and_replace`) is not
+/// read-only. The permission gate applies the same heuristic to implicit LuaSkills entries named in
+/// a dispatch and to session MCP calls.
+/// 名称按分隔符与驼峰边界拆分为单词，因此关键字出现在无关单词内部（`merge` 中的 `rg`、`thread` 中的
+/// `read`、`target` 中的 `get`）时不计。名称同时带有明确写入动词（`get_or_create`、`search_and_replace`）
+/// 时不视为只读。权限闸门对调度中指定的隐式 LuaSkills 入口与会话 MCP 调用应用同一启发式。
 pub fn text_looks_read_only(text: &str) -> bool {
-    let text = text.to_ascii_lowercase();
-    DEFAULT_PLAN_READ_ONLY_KEYWORDS
-        .iter()
-        .any(|keyword| text.contains(keyword))
+    let words = name_words(text);
+    words.iter().any(|word| word_is_read_only_keyword(word))
+        && !words
+            .iter()
+            .any(|word| PLAN_WRITE_VERBS.contains(&word.as_str()))
 }
 
-/// Shared read-only heuristic keywords used by the Plan-mode execution guard.
-/// Plan 模式执行守卫使用的共享只读启发式关键字集合。
-const DEFAULT_PLAN_READ_ONLY_KEYWORDS: &[&str] = &[
+/// Splits one tool name into lowercase words at non-alphanumeric separators, camelCase
+/// boundaries and acronym ends (`getHTTPStatus` → get, http, status).
+/// 将一个工具名称在非字母数字分隔符、驼峰边界与缩写结尾处拆分为小写单词（`getHTTPStatus` → get、http、status）。
+fn name_words(text: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    for part in text.split(|c: char| !c.is_ascii_alphanumeric()) {
+        let chars: Vec<char> = part.chars().collect();
+        let mut current = String::new();
+        for (index, &c) in chars.iter().enumerate() {
+            let boundary = index > 0 && c.is_ascii_uppercase() && {
+                let previous = chars[index - 1];
+                previous.is_ascii_lowercase()
+                    || previous.is_ascii_digit()
+                    || (previous.is_ascii_uppercase()
+                        && chars.get(index + 1).is_some_and(char::is_ascii_lowercase))
+            };
+            if boundary && !current.is_empty() {
+                words.push(std::mem::take(&mut current));
+            }
+            current.push(c.to_ascii_lowercase());
+        }
+        if !current.is_empty() {
+            words.push(current);
+        }
+    }
+    words
+}
+
+/// Returns whether one lowercase word is a read-only keyword or a plain inflection of one.
+/// Keywords in `PLAN_READ_ONLY_AFFIX_KEYWORDS` also count at the start or end of a run-together
+/// word (`websearch`, `prefetch`, `eslint`); the others must stand alone, because they hide inside
+/// unrelated words (`check` in `checkout`, `get` in `target`).
+/// 返回一个小写单词是否为只读关键字或其简单屈折形式。`PLAN_READ_ONLY_AFFIX_KEYWORDS` 中的关键字在连写
+/// 单词的开头或结尾也计入（`websearch`、`prefetch`、`eslint`）；其余关键字必须独立成词，因为它们会藏在
+/// 无关单词中（`checkout` 中的 `check`、`target` 中的 `get`）。
+fn word_is_read_only_keyword(word: &str) -> bool {
+    PLAN_READ_ONLY_KEYWORDS.iter().any(|keyword| {
+        word == *keyword
+            || ["s", "es", "ing", "ed"]
+                .iter()
+                .any(|suffix| word.strip_suffix(suffix) == Some(keyword))
+    }) || PLAN_READ_ONLY_AFFIX_KEYWORDS
+        .iter()
+        .any(|keyword| word.starts_with(keyword) || word.ends_with(keyword))
+}
+
+/// Read-only keywords that stay recognizable inside a run-together word.
+/// 在连写单词中仍可可靠识别的只读关键字。
+const PLAN_READ_ONLY_AFFIX_KEYWORDS: &[&str] = &[
+    "search",
+    "fetch",
+    "query",
+    "grep",
+    "lint",
+    "detail",
+    "symbol",
+    "reference",
+    "describe",
+    "typecheck",
+];
+
+/// Read-only keywords of the shared Plan-mode and permission name heuristic.
+/// 计划模式与权限共享名称启发式的只读关键字。
+const PLAN_READ_ONLY_KEYWORDS: &[&str] = &[
     "read",
     "list",
     "rg",
@@ -159,4 +228,53 @@ const DEFAULT_PLAN_READ_ONLY_KEYWORDS: &[&str] = &[
     "typecheck",
     "test",
     "describe",
+];
+
+/// Unambiguous write verbs that keep a name with a read-only keyword out of the read-only class.
+/// Matched as whole words only; nouns that double as verbs (`post`, `comment`, `commit`) are left
+/// out so reading tools such as `get_post` stay read-only.
+/// 明确的写入动词：名称即使含只读关键字，只要带有其一就不归为只读。只按整词匹配；兼作名词的动词
+/// （`post`、`comment`、`commit`）不列入，使 `get_post` 等读取工具保持只读。
+const PLAN_WRITE_VERBS: &[&str] = &[
+    "create",
+    "update",
+    "delete",
+    "remove",
+    "write",
+    "edit",
+    "modify",
+    "insert",
+    "upsert",
+    "add",
+    "append",
+    "merge",
+    "rename",
+    "replace",
+    "overwrite",
+    "truncate",
+    "purge",
+    "install",
+    "uninstall",
+    "deploy",
+    "publish",
+    "upload",
+    "submit",
+    "send",
+    "revert",
+    "rebase",
+    "checkout",
+    "reset",
+    "kill",
+    "cancel",
+    "set",
+    "apply",
+    "clear",
+    "move",
+    "save",
+    "transfer",
+    "approve",
+    "assign",
+    "restore",
+    "drop",
+    "push",
 ];

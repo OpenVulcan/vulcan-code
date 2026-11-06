@@ -295,24 +295,25 @@ const GIT_READ_ONLY_GLOBAL_OPTIONS: &[&str] = &[
     "--no-replace-objects",
 ];
 
-/// `git branch` flags that modify branches; any of them makes the call a write.
-/// 会修改分支的 `git branch` 参数；出现任意一个即为写入。
-const GIT_BRANCH_WRITE_FLAGS: &[&str] = &[
-    "-d",
-    "-D",
-    "-m",
-    "-M",
-    "-c",
-    "-C",
-    "-f",
-    "-u",
-    "--delete",
-    "--move",
-    "--copy",
-    "--force",
-    "--set-upstream-to",
-    "--unset-upstream",
-    "--edit-description",
+/// `git branch` options that modify branches, as (short letter, long name); any of them makes the
+/// call a write. git's option parser accepts bundled short options (`-df`) and long-option
+/// abbreviations (`--del`, `--set-upstream-to=x`), so each is matched with `git_option_given`.
+/// 会修改分支的 `git branch` 选项，形如（短选项字母，长选项名）；出现任意一个即为写入。git 选项解析器
+/// 接受合并短选项（`-df`）与长选项缩写（`--del`、`--set-upstream-to=x`），因此逐个以 `git_option_given` 匹配。
+const GIT_BRANCH_WRITE_OPTIONS: &[(Option<char>, &str)] = &[
+    (Some('d'), "--delete"),
+    (Some('D'), "--delete"),
+    (Some('m'), "--move"),
+    (Some('M'), "--move"),
+    (Some('c'), "--copy"),
+    (Some('C'), "--copy"),
+    (Some('f'), "--force"),
+    (Some('u'), "--set-upstream-to"),
+    (None, "--unset-upstream"),
+    (None, "--edit-description"),
+    (None, "--track"),
+    (None, "--no-track"),
+    (None, "--create-reflog"),
 ];
 
 /// `find` actions that delete, execute, or write files.
@@ -638,7 +639,11 @@ fn git_high_risk(args: &[String]) -> Option<HighRiskCategory> {
         // Restoring the worktree (the default unless only the index is named) discards edits.
         // 恢复工作区（除非只指定索引，否则默认如此）会丢弃修改。
         "restore" => (!has("--staged") && !has("-S")) || has("--worktree") || has("-W"),
-        "branch" => has("-D") || (has("-d") && has("-f")) || (has("--delete") && has("--force")),
+        "branch" => {
+            short_cluster_has('D')
+                || ((short_cluster_has('d') || has("--delete"))
+                    && (short_cluster_has('f') || has("--force")))
+        }
         "stash" => rest
             .first()
             .is_some_and(|verb| verb == "drop" || verb == "clear"),
@@ -702,9 +707,7 @@ fn segment_is_read_only(words: &[String], shell: HostCommandShell) -> bool {
         "find" => !args
             .iter()
             .any(|arg| FIND_WRITE_ACTIONS.contains(&arg.as_str())),
-        "fd" => !args
-            .iter()
-            .any(|arg| ["-x", "-X", "--exec", "--exec-batch"].contains(&arg.as_str())),
+        "fd" => !args.iter().any(|arg| fd_option_runs_command(arg)),
         "rg" => !args.iter().any(|arg| arg.starts_with("--pre")),
         "date" => date_is_read_only(args),
         // Any operand, or an option outside the reporting set, sets the host name.
@@ -835,9 +838,12 @@ fn git_is_read_only(args: &[String]) -> bool {
         "ls-remote" => !rest
             .iter()
             .any(|arg| git_option_given(arg, 'u', "--upload-pack")),
-        "branch" => rest
-            .iter()
-            .all(|arg| arg.starts_with('-') && !GIT_BRANCH_WRITE_FLAGS.contains(&arg.as_str())),
+        "branch" => rest.iter().all(|arg| {
+            arg.starts_with('-')
+                && !GIT_BRANCH_WRITE_OPTIONS
+                    .iter()
+                    .any(|(short, long)| git_option_given_or_long(arg, *short, long))
+        }),
         "remote" => rest.iter().all(|arg| arg == "-v" || arg == "--verbose"),
         "tag" => rest.iter().all(|arg| arg == "-l" || arg == "--list"),
         "stash" => rest
@@ -866,6 +872,37 @@ fn git_option_given(arg: &str, short: char, long: &str) -> bool {
     }
     arg.strip_prefix('-')
         .is_some_and(|bundle| bundle.contains(short))
+}
+
+/// Returns whether one `fd` argument may pass `-x`/`--exec` or `-X`/`--exec-batch`, which run a
+/// command per match: in a short-option bundle (`-Hx`), with an attached value (`--exec=rm`), or
+/// as a long-option prefix. A bundle counts whenever it holds the letter, so this errs toward
+/// asking; `--extension` and other options are unaffected.
+/// 返回一个 `fd` 参数是否可能传入对每个匹配运行命令的 `-x`/`--exec` 或 `-X`/`--exec-batch`：位于短选项
+/// 合并词中（`-Hx`）、带附加取值（`--exec=rm`）或为长选项前缀。合并词只要含该字母就计入，因此判断偏向
+/// 询问；`--extension` 等其他选项不受影响。
+fn fd_option_runs_command(arg: &str) -> bool {
+    if let Some(name) = arg.strip_prefix("--") {
+        let name = name.split('=').next().unwrap_or(name);
+        return !name.is_empty()
+            && (name.starts_with("exec")
+                || "exec".starts_with(name)
+                || "exec-batch".starts_with(name));
+    }
+    arg.strip_prefix('-')
+        .is_some_and(|bundle| bundle.contains(['x', 'X']))
+}
+
+/// Like `git_option_given`, for an option that may have no short letter.
+/// 与 `git_option_given` 相同，但选项可以没有短选项字母。
+fn git_option_given_or_long(arg: &str, short: Option<char>, long: &str) -> bool {
+    match short {
+        Some(short) => git_option_given(arg, short, long),
+        None => arg.strip_prefix("--").is_some_and(|name| {
+            let name = name.split('=').next().unwrap_or(name);
+            !name.is_empty() && long[2..].starts_with(name)
+        }),
+    }
 }
 
 /// Skips git's global options and returns the subcommand plus its arguments.

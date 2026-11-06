@@ -551,8 +551,16 @@ pub(crate) async fn service_submit_environment_values(
             .storage_locator()
             .map_err(|error| error.to_string())?;
         update_session_environment(&locator, |variables| {
-            for value in session_values {
+            for mut value in session_values {
                 let key = environment_variable_name_key(&value.name);
+                // A plain request never downgrades a secret session variable.
+                // 普通请求绝不降级已有的会话密钥变量。
+                if variables.iter().any(|variable| {
+                    environment_variable_name_key(&variable.name) == key
+                        && variable.kind == EnvironmentVariableKind::Secret
+                }) {
+                    value.kind = EnvironmentVariableKind::Secret;
+                }
                 variables.retain(|variable| environment_variable_name_key(&variable.name) != key);
                 variables.push(value);
             }

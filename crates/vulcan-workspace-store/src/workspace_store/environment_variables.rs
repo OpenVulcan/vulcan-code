@@ -547,22 +547,41 @@ pub async fn store_environment_variable_value(
     local_sql::with_connection_async(
         &host_runtime.local,
         LogicalDatabase::AppState,
-        move |connection| {
-            let transaction = connection.transaction().map_err(sql_error)?;
-            let existing = holder_of_name(&transaction, &draft)?;
-            let now = current_unix_millis();
-            let id = match existing {
-                Some(id) => {
-                    transaction
+        move |connection| store_value_in(connection, &draft, new_id),
+    )
+    .await
+}
+
+/// Stores one validated value in one connection; see `store_environment_variable_value`.
+/// 在一个连接中存入一个已校验值；见 `store_environment_variable_value`。
+fn store_value_in(
+    connection: &mut rusqlite::Connection,
+    draft: &ValidatedDraft,
+    new_id: String,
+) -> Result<EnvironmentVariableRecord, String> {
+    let transaction = connection.transaction().map_err(sql_error)?;
+    let existing = holder_of_name(&transaction, draft)?;
+    let now = current_unix_millis();
+    let id = match existing {
+        Some(id) => {
+            // A secret value makes the variable secret; a plain request never downgrades one.
+            // 密钥值使变量成为密钥；普通请求绝不降级已有密钥。
+            transaction
                         .execute(
-                            "UPDATE environment_variables SET stored_value = ?2, updated_at_ms = ?3 WHERE id = ?1",
-                            rusqlite::params![id, draft.stored_value, now],
+                            "UPDATE environment_variables SET stored_value = ?2, updated_at_ms = ?3, kind = CASE WHEN ?4 = ?5 THEN ?5 ELSE kind END WHERE id = ?1",
+                            rusqlite::params![
+                                id,
+                                draft.stored_value,
+                                now,
+                                draft.kind.key(),
+                                EnvironmentVariableKind::Secret.key()
+                            ],
                         )
                         .map_err(sql_error)?;
-                    id
-                }
-                None => {
-                    transaction
+            id
+        }
+        None => {
+            transaction
                         .execute(
                             "INSERT INTO environment_variables (id, name, name_key, stored_value, kind, scope, description, created_at_ms, updated_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
                             rusqlite::params![
@@ -571,23 +590,20 @@ pub async fn store_environment_variable_value(
                                 draft.name_key,
                                 draft.stored_value,
                                 draft.kind.key(),
-                                scope_key(&draft),
+                                scope_key(draft),
                                 draft.description,
                                 now
                             ],
                         )
                         .map_err(sql_error)?;
-                    write_bindings(&transaction, &new_id, draft.project_ids.as_deref())?;
-                    new_id
-                }
-            };
-            let record = read_record(&transaction, &id)?
-                .ok_or_else(|| String::from("The stored environment variable disappeared."))?;
-            transaction.commit().map_err(sql_error)?;
-            Ok(record)
-        },
-    )
-    .await
+            write_bindings(&transaction, &new_id, draft.project_ids.as_deref())?;
+            new_id
+        }
+    };
+    let record = read_record(&transaction, &id)?
+        .ok_or_else(|| String::from("The stored environment variable disappeared."))?;
+    transaction.commit().map_err(sql_error)?;
+    Ok(record)
 }
 
 /// Storage key of the draft's scope.
@@ -1025,6 +1041,42 @@ mod tests {
 
     fn projects(ids: &[&str]) -> EnvironmentVariableScope {
         EnvironmentVariableScope::Projects(ids.iter().map(|id| id.to_string()).collect())
+    }
+
+    /// Storing a secret value under an existing plain name makes the variable secret, and storing
+    /// a plain value never downgrades a secret one.
+    /// 以已有普通变量的名称存入密钥值会使其成为密钥；存入普通值绝不降级已有密钥。
+    #[test]
+    fn stored_values_upgrade_to_secret_and_never_downgrade() {
+        let mut connection = fixture();
+        insert(
+            &mut connection,
+            draft("API_TOKEN", "old", EnvironmentVariableScope::Global),
+        )
+        .unwrap();
+        let mut secret = draft("API_TOKEN", "new", EnvironmentVariableScope::Global);
+        secret.kind = EnvironmentVariableKind::Secret;
+        let stored = store_value_in(
+            &mut connection,
+            &validate_draft(secret).unwrap(),
+            String::from("unused"),
+        )
+        .unwrap();
+        assert_eq!(stored.kind, EnvironmentVariableKind::Secret);
+        assert_eq!(stored.value, "new");
+        let stored = store_value_in(
+            &mut connection,
+            &validate_draft(draft(
+                "API_TOKEN",
+                "plain",
+                EnvironmentVariableScope::Global,
+            ))
+            .unwrap(),
+            String::from("unused"),
+        )
+        .unwrap();
+        assert_eq!(stored.kind, EnvironmentVariableKind::Secret);
+        assert_eq!(stored.value, "plain");
     }
 
     /// Stored values round-trip and are not stored as plain text.
