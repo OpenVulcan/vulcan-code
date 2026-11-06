@@ -98,6 +98,7 @@ pub fn status(options: &CommonOptions) -> Result<(), String> {
                 "the user service (vulcan-code-service --uninstall-user-service removes it)",
             ),
             Item::Linger { user } => format!("lingering of {user}"),
+            Item::AppArmorProfile { path } => format!("AppArmor profile {}", path.display()),
         };
         println!("  {line}");
     }

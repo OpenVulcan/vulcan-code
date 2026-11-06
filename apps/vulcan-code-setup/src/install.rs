@@ -623,7 +623,7 @@ fn apply(
     }
     let mut problems = Vec::new();
     for item in leftovers.iter().rev() {
-        if let Err(error) = integrate::remove(item, root_path, Some(&installed_version)) {
+        if let Err(error) = integrate::remove(item, root_path, Some(&installed_version), reporter) {
             problems.push(error);
             state.add(item.clone());
         }

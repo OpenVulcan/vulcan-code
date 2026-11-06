@@ -18,8 +18,8 @@ use vulcan_install_core::names::Channel;
 
 use crate::prompt::megabytes;
 use crate::report::{
-    Action, BACK, BROWSER_DEPENDENCIES_COMMAND, Decision, DesktopWay, Outcome, Reporter, Review,
-    Stage,
+    Action, BACK, BROWSER_DEPENDENCIES_COMMAND, Decision, DesktopWay, Outcome, Privileged,
+    Reporter, Review, Stage,
 };
 use crate::screen::{
     ACCENT, DANGER, MUTED, Screen, component_names, fields, filled, location_lines, page, text,
@@ -48,6 +48,9 @@ enum Message {
     /// A review waiting for its answer.
     /// 等待回答的审阅。
     Review(Box<Review>, Sender<Decision>),
+    /// Commands waiting to run with administrator rights, and where their result goes.
+    /// 等待以管理员权限运行的命令，及其结果的去向。
+    Privileged(Box<Privileged>, Sender<bool>),
 }
 
 /// The reporter of the run's thread.
@@ -79,6 +82,14 @@ impl Reporter for Tui {
         answered
             .recv()
             .map_err(|_| String::from("the interactive installer closed"))
+    }
+
+    fn privileged(&self, request: &Privileged) -> bool {
+        let (result, done) = mpsc::channel();
+        self.sender
+            .send(Message::Privileged(Box::new(request.clone()), result))
+            .is_ok()
+            && done.recv().unwrap_or(false)
     }
 }
 
@@ -141,6 +152,9 @@ struct Session {
     /// First line shown of the final page.
     /// 最终页显示的第一行。
     scroll: u16,
+    /// Commands waiting to run with administrator rights outside the pages.
+    /// 等待在各页之外以管理员权限运行的命令。
+    privileged: Option<(Box<Privileged>, Sender<bool>)>,
 }
 
 impl Session {
@@ -157,6 +171,7 @@ impl Session {
             page: Page::Working,
             tick: 0,
             scroll: 0,
+            privileged: None,
         }
     }
 
@@ -189,6 +204,16 @@ impl Session {
                     let _ = answer.send(Decision::Cancel);
                 } else {
                     self.page = Page::Review(review, answer);
+                }
+            }
+            // A person who asked to leave is not asked for a password; the step is reported as
+            // not done.
+            // 已要求离开的用户不会被询问密码；该步骤报告为未完成。
+            Message::Privileged(request, result) => {
+                if self.cancelling {
+                    let _ = result.send(false);
+                } else {
+                    self.privileged = Some((request, result));
                 }
             }
         }
@@ -266,6 +291,21 @@ where
         let mut session = Session::new(back);
         let result = loop {
             drain(&mut session, &receiver);
+            // `sudo` asks for the password in the terminal, so the pages give it back meanwhile.
+            // `sudo` 在终端中询问密码，因此期间各页把终端交还。
+            if let Some((request, result)) = session.privileged.take() {
+                let ran = screen.suspended(|translator| {
+                    println!();
+                    println!("{}", text(translator, request.purpose.catalog_key()));
+                    crate::integrate::run_privileged(&request.commands)
+                });
+                match ran {
+                    Ok(succeeded) => {
+                        let _ = result.send(succeeded);
+                    }
+                    Err(error) => break Err(error),
+                }
+            }
             if worker.as_ref().is_some_and(|handle| handle.is_finished()) {
                 // Everything the run sent before it ended is in the channel now.
                 // 运行结束前发送的全部内容此时都已在通道中。
@@ -741,6 +781,28 @@ mod tests {
         let answered = reviewed(&mut session, host);
         assert_eq!(answered.try_recv(), Ok(Decision::Cancel));
         assert!(matches!(session.page, Page::Working));
+    }
+
+    #[test]
+    fn administrator_commands_wait_for_the_terminal_unless_the_person_is_leaving() {
+        let request = || {
+            Box::new(Privileged {
+                purpose: crate::report::Purpose::InstallAppArmorProfile,
+                commands: vec![vec![String::from("true")]],
+            })
+        };
+        let mut session = Session::new(false);
+        let (result, done) = mpsc::channel();
+        session.receive(Message::Privileged(request(), result));
+        assert!(session.privileged.is_some());
+        assert!(done.try_recv().is_err());
+
+        let mut leaving = Session::new(false);
+        leaving.handle(key(KeyCode::Char('q')));
+        let (result, done) = mpsc::channel();
+        leaving.receive(Message::Privileged(request(), result));
+        assert!(leaving.privileged.is_none());
+        assert_eq!(done.try_recv(), Ok(false));
     }
 
     #[test]

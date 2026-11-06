@@ -13,6 +13,7 @@ use crate::install::resolve_root;
 use crate::integrate::{self, CLI_DIR};
 use crate::paths;
 use crate::prompt::confirm;
+use crate::report::Plain;
 use crate::root::{self, Current, Description, LEGACY_MARKER, Ownership, Version};
 use crate::state::{Item, SETUP_DIR};
 
@@ -65,18 +66,20 @@ pub fn uninstall(options: &UninstallOptions) -> Result<(), String> {
     close_programs(&root_path)?;
 
     let lock = root.lock().map_err(|error| error.to_string())?;
+    let reporter = Plain::new(options.common.yes);
     let mut problems = Vec::new();
     // The service runs from the version directory, so it goes first.
     // 服务从版本目录运行，因此最先移除。
     if items.contains(&Item::UserService)
-        && let Err(error) = integrate::remove(&Item::UserService, &root_path, version.as_ref())
+        && let Err(error) =
+            integrate::remove(&Item::UserService, &root_path, version.as_ref(), &reporter)
     {
         problems.push(error);
     }
     remove_programs(&root_path)?;
     for item in items.iter().rev() {
         if *item != Item::UserService
-            && let Err(error) = integrate::remove(item, &root_path, version.as_ref())
+            && let Err(error) = integrate::remove(item, &root_path, version.as_ref(), &reporter)
         {
             problems.push(error);
         }
@@ -286,6 +289,10 @@ fn describe(item: &Item) -> Option<String> {
             "the user service started with your login session",
         )),
         Item::Linger { user } => Some(format!("lingering of {user}")),
+        Item::AppArmorProfile { path } => Some(format!(
+            "the AppArmor profile {} (asks for administrator rights)",
+            path.display()
+        )),
     }
 }
 

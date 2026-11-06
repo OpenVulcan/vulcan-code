@@ -16,9 +16,11 @@ pub const SETUP_DIR: &str = "setup";
 /// [`SETUP_DIR`] 下的状态文件。
 pub const STATE_FILE: &str = "installation.json";
 
-/// Format version of [`STATE_FILE`]; format 1 is upgraded when read, other versions are refused.
-/// [`STATE_FILE`] 的格式版本；格式 1 在读取时升级，其他版本一律拒绝。
-pub const STATE_SCHEMA: u32 = 2;
+/// Format version of [`STATE_FILE`]; formats 1 and 2 are upgraded when read, other versions are
+/// refused. Format 3 added [`Item::AppArmorProfile`].
+/// [`STATE_FILE`] 的格式版本；格式 1 与 2 在读取时升级，其他版本一律拒绝。格式 3 新增
+/// [`Item::AppArmorProfile`]。
+pub const STATE_SCHEMA: u32 = 3;
 
 /// One thing created outside the version directories.
 /// 在版本目录之外创建的一项内容。
@@ -88,6 +90,14 @@ pub enum Item {
         /// The user name.
         /// 用户名。
         user: String,
+    },
+    /// The AppArmor profile that lets the desktop app use user namespaces (Linux); written and
+    /// removed with administrator rights.
+    /// 允许桌面应用使用用户命名空间的 AppArmor 配置（Linux）；以管理员权限写入与移除。
+    AppArmorProfile {
+        /// Absolute path below `/etc/apparmor.d`.
+        /// `/etc/apparmor.d` 下的绝对路径。
+        path: PathBuf,
     },
 }
 
@@ -216,9 +226,9 @@ impl SetupState {
         root.join(SETUP_DIR).join(STATE_FILE)
     }
 
-    /// Reads the state of `root`; `None` when it has none. Format 1 is upgraded in place after
-    /// its original bytes are kept beside it.
-    /// 读取 `root` 的状态；没有状态时为 `None`。格式 1 先在旁边保留原字节，再原地升级。
+    /// Reads the state of `root`; `None` when it has none. Formats 1 and 2 are upgraded in place
+    /// after their original bytes are kept beside it.
+    /// 读取 `root` 的状态；没有状态时为 `None`。格式 1 与 2 先在旁边保留原字节，再原地升级。
     pub fn read(root: &Path) -> Result<Option<Self>, String> {
         let path = Self::file(root);
         let bytes = match std::fs::read(&path) {
@@ -231,29 +241,36 @@ impl SetupState {
         let schema = serde_json::from_slice::<Schema>(&bytes)
             .map_err(invalid)?
             .schema;
-        match schema {
-            STATE_SCHEMA => serde_json::from_slice(&bytes).map(Some).map_err(invalid),
-            1 => {
-                let state = serde_json::from_slice::<StateV1>(&bytes)
-                    .map_err(invalid)?
-                    .upgrade();
-                let mut backup = path.as_os_str().to_owned();
-                backup.push(".v1");
-                let backup = PathBuf::from(backup);
-                // An earlier backup of the same file is the original; it is never replaced.
-                // 同一文件更早的备份才是原件，绝不替换。
-                if !backup.exists() {
-                    std::fs::write(&backup, &bytes)
-                        .map_err(|error| format!("cannot write {}: {error}", backup.display()))?;
-                }
-                state.write(root)?;
-                Ok(Some(state))
+        let state = match schema {
+            STATE_SCHEMA => return serde_json::from_slice(&bytes).map(Some).map_err(invalid),
+            1 => serde_json::from_slice::<StateV1>(&bytes)
+                .map_err(invalid)?
+                .upgrade(),
+            // Format 2 has the same fields; format 3 only added an item kind.
+            // 格式 2 字段相同；格式 3 只新增了一种条目。
+            2 => SetupState {
+                schema: STATE_SCHEMA,
+                ..serde_json::from_slice::<SetupState>(&bytes).map_err(invalid)?
+            },
+            other => {
+                return Err(format!(
+                    "{} has format {other}, which this setup program does not know; use a newer \
+                     one",
+                    path.display()
+                ));
             }
-            other => Err(format!(
-                "{} has format {other}, which this setup program does not know; use a newer one",
-                path.display()
-            )),
+        };
+        let mut backup = path.as_os_str().to_owned();
+        backup.push(format!(".v{schema}"));
+        let backup = PathBuf::from(backup);
+        // An earlier backup of the same file is the original; it is never replaced.
+        // 同一文件更早的备份才是原件，绝不替换。
+        if !backup.exists() {
+            std::fs::write(&backup, &bytes)
+                .map_err(|error| format!("cannot write {}: {error}", backup.display()))?;
         }
+        state.write(root)?;
+        Ok(Some(state))
     }
 
     /// Replaces the state of `root` atomically.
@@ -345,6 +362,30 @@ pub(crate) mod tests {
         assert_eq!(state.items.first(), Some(&Item::UserService));
         let mut backup = path.as_os_str().to_owned();
         backup.push(".v1");
+        assert_eq!(std::fs::read_to_string(backup).expect("backup"), original);
+        assert_eq!(SetupState::read(temp.path()), Ok(Some(state)));
+    }
+
+    #[test]
+    fn format_2_is_upgraded_and_its_original_bytes_are_kept() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let path = SetupState::file(temp.path());
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("setup dir");
+        let mut format_2 = serde_json::to_value(SetupState {
+            gui: true,
+            items: vec![Item::UserService],
+            ..plain_state()
+        })
+        .expect("value");
+        format_2["schema"] = serde_json::json!(2);
+        let original = format_2.to_string();
+        std::fs::write(&path, &original).expect("format 2");
+        let state = SetupState::read(temp.path()).expect("read").expect("state");
+        assert_eq!(state.schema, STATE_SCHEMA);
+        assert!(state.gui);
+        assert_eq!(state.items, vec![Item::UserService]);
+        let mut backup = path.as_os_str().to_owned();
+        backup.push(".v2");
         assert_eq!(std::fs::read_to_string(backup).expect("backup"), original);
         assert_eq!(SetupState::read(temp.path()), Ok(Some(state)));
     }

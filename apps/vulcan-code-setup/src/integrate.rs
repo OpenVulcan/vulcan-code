@@ -10,7 +10,7 @@ use std::process::Command;
 use vulcan_install_core::names::Platform;
 
 use crate::paths;
-use crate::report::{Reporter, Stage};
+use crate::report::{Privileged, Purpose, Reporter, Stage};
 use crate::root::{Description, Layout, Version};
 use crate::state::{Item, SETUP_DIR};
 
@@ -123,6 +123,28 @@ const SET_PORT_RANGE: &str = "--set-port-range";
 #[cfg(unix)]
 const LINGER_DIR: &str = "/var/lib/systemd/linger";
 
+/// The AppArmor profile that lets the desktop app create user namespaces (Linux).
+///
+/// Ubuntu 23.10 and later restrict unprivileged user namespaces to programs whose AppArmor
+/// profile allows them. Electron then falls back to its setuid sandbox helper, which an
+/// installation without root cannot set up, and stops at start. A program inherits the profile of
+/// what started it, so the app may start from the desktop folder, whose icons run under a
+/// permissive profile, and still fail from the dock or the app menu.
+/// 允许桌面应用创建用户命名空间的 AppArmor 配置（Linux）。
+///
+/// Ubuntu 23.10 及以后只允许 AppArmor 配置许可的程序使用非特权用户命名空间。Electron 此时退回其 setuid
+/// 沙箱助手，而无 root 的安装无法设置它，于是在启动时停止。程序继承启动者的配置，因此应用可能从桌面
+/// 文件夹（其图标在宽松配置下运行）启动成功，却从程序坞或应用菜单启动失败。
+const APPARMOR_PROFILE: &str = "/etc/apparmor.d/vulcan-code";
+
+/// Kernel setting that is `1` while unprivileged user namespaces are restricted by AppArmor.
+/// AppArmor 限制非特权用户命名空间时值为 `1` 的内核设置。
+const USERNS_RESTRICTION: &str = "/proc/sys/kernel/apparmor_restrict_unprivileged_userns";
+
+/// File below [`SETUP_DIR`] in which the profile is prepared before it is copied into place.
+/// [`SETUP_DIR`] 下准备配置的文件，随后复制到位。
+const STAGED_PROFILE: &str = "vulcan-code.apparmor";
+
 /// What the integration is built from.
 /// 构建集成所依据的内容。
 pub struct Plan<'a> {
@@ -216,6 +238,9 @@ impl Plan<'_> {
             {
                 locations.push(Location::DesktopShortcut(desktop.join(DESKTOP_ENTRY_FILE)));
             }
+            if self.gui && !self.platform.is_macos() && userns_restricted() {
+                locations.push(Location::AppArmorProfile(PathBuf::from(APPARMOR_PROFILE)));
+            }
         }
         if self.service {
             locations.push(Location::UserService);
@@ -255,6 +280,9 @@ pub enum Location {
     /// Lingering of the user (Linux).
     /// 用户驻留（Linux）。
     Linger,
+    /// The AppArmor profile of the desktop app, written with administrator rights (Linux).
+    /// 桌面应用的 AppArmor 配置，以管理员权限写入（Linux）。
+    AppArmorProfile(PathBuf),
 }
 
 impl std::fmt::Display for Location {
@@ -274,6 +302,12 @@ impl std::fmt::Display for Location {
                  rights)",
             ),
             Self::Linger => formatter.write_str("lingering for your user (loginctl enable-linger)"),
+            Self::AppArmorProfile(path) => write!(
+                formatter,
+                "the AppArmor profile {} that lets the desktop app start (asks for administrator \
+                 rights)",
+                path.display()
+            ),
         }
     }
 }
@@ -356,7 +390,7 @@ pub fn integrate(
     if plan.platform.is_windows() {
         integrate_windows(plan, version, recorder)?;
     } else {
-        integrate_unix(plan, &version.layout, recorder)?;
+        integrate_unix(plan, &version.layout, recorder, reporter)?;
     }
     // The ports are set before the service is registered, so a service started now uses them.
     // 端口先于服务注册设置，因此此时启动的服务即使用这些端口。
@@ -561,6 +595,7 @@ fn integrate_unix(
     plan: &Plan<'_>,
     layout: &Layout,
     recorder: &mut Recorder<'_>,
+    reporter: &dyn Reporter,
 ) -> Result<(), String> {
     if plan.path {
         let bin = paths::bin_dir()?;
@@ -641,7 +676,164 @@ fn integrate_unix(
             )),
         }
     }
+    if userns_restricted() {
+        install_apparmor_profile(plan.root, desktop, recorder, reporter)?;
+    }
     Ok(())
+}
+
+/// Whether AppArmor restricts unprivileged user namespaces on this system (Ubuntu 23.10 and later).
+/// 本系统的 AppArmor 是否限制非特权用户命名空间（Ubuntu 23.10 及以后）。
+fn userns_restricted() -> bool {
+    std::fs::read_to_string(USERNS_RESTRICTION).is_ok_and(|value| value.trim() == "1")
+        && Path::new(APPARMOR_PROFILE)
+            .parent()
+            .is_some_and(Path::is_dir)
+}
+
+/// The AppArmor profile that attaches to the desktop program `desktop` of every version below
+/// `root` and allows it user namespaces; `None` when `root` holds characters a profile reads as a
+/// pattern or quoting. `root` must be resolved, since AppArmor matches resolved paths.
+/// 附着到 `root` 下每个版本的桌面程序 `desktop` 并允许其使用用户命名空间的 AppArmor 配置；`root` 含有
+/// 配置会解读为模式或引号的字符时为 `None`。`root` 必须已解析，因为 AppArmor 匹配解析后的路径。
+fn apparmor_profile(root: &Path, desktop: &str) -> Option<String> {
+    let target = format!(
+        "{}/{}/*/{desktop}",
+        root.to_str()?,
+        vulcan_install_core::install_root::VERSIONS_DIR
+    );
+    let special = ['"', '\\', '*', '?', '[', ']', '{', '}', '^', '\n'];
+    if root.to_str()?.contains(special) || desktop.contains(special) {
+        return None;
+    }
+    Some(format!(
+        "{LAUNCHER_MARKER}\n# Lets the Vulcan Code desktop app create the user namespaces its sandbox needs.\n\
+         abi <abi/4.0>,\ninclude <tunables/global>\n\n\
+         profile vulcan-code \"{target}\" flags=(unconfined) {{\n  userns,\n\n  \
+         include if exists <local/vulcan-code>\n}}\n"
+    ))
+}
+
+/// Installs and loads the AppArmor profile with administrator rights, unless the same profile is
+/// already there; a declined password leaves the command to run in the notes.
+/// 以管理员权限安装并加载 AppArmor 配置，除非相同配置已存在；拒绝输入密码时把要运行的命令留在提示中。
+fn install_apparmor_profile(
+    root: &Path,
+    desktop: &str,
+    recorder: &mut Recorder<'_>,
+    reporter: &dyn Reporter,
+) -> Result<(), String> {
+    let path = Path::new(APPARMOR_PROFILE);
+    let item = Item::AppArmorProfile {
+        path: path.to_path_buf(),
+    };
+    let resolved = std::fs::canonicalize(root)
+        .map_err(|error| format!("cannot resolve {}: {error}", root.display()))?;
+    let Some(profile) = apparmor_profile(&resolved, desktop) else {
+        recorder.notes.push(format!(
+            "The install path {} has characters an AppArmor profile cannot name, so the desktop \
+             app may not start from the dock or the app menu on this system.",
+            resolved.display()
+        ));
+        return Ok(());
+    };
+    if std::fs::read_to_string(path).is_ok_and(|existing| existing == profile) {
+        recorder.add(item);
+        return Ok(());
+    }
+    if path.exists() && !carries_marker(path) {
+        recorder.notes.push(format!(
+            "Skipped {}: a file not created by the setup program already exists.",
+            path.display()
+        ));
+        return Ok(());
+    }
+    // The profile is prepared where this user can write and copied into place as root.
+    // 配置先在本用户可写的位置准备，再以 root 复制到位。
+    let staged = root.join(SETUP_DIR).join(STAGED_PROFILE);
+    write_file(&staged, &profile, false)?;
+    let commands = vec![
+        vec![
+            String::from("install"),
+            String::from("-m"),
+            String::from("0644"),
+            staged.display().to_string(),
+            String::from(APPARMOR_PROFILE),
+        ],
+        vec![
+            String::from("apparmor_parser"),
+            String::from("-r"),
+            String::from(APPARMOR_PROFILE),
+        ],
+    ];
+    let request = Privileged {
+        purpose: Purpose::InstallAppArmorProfile,
+        commands,
+    };
+    if reporter.privileged(&request) {
+        let _ = std::fs::remove_file(&staged);
+        recorder.add(item);
+    } else {
+        // An earlier profile of this program stays recorded, so uninstalling still removes it.
+        // 本程序更早的配置保持记录，使卸载仍会移除它。
+        if recorder.had(&item) && path.exists() {
+            recorder.add(item);
+        }
+        recorder.notes.push(format!(
+            "The desktop app needs an AppArmor profile to start from the dock or the app menu on \
+             this system; to install it, run: {}",
+            sudo_line(&request.commands)
+        ));
+    }
+    Ok(())
+}
+
+/// Runs `commands` in order with administrator rights: directly as root, through `sudo` otherwise,
+/// in the terminal of this program so that `sudo` can ask for the password.
+/// 以管理员权限按顺序运行 `commands`：root 下直接运行，否则经 `sudo` 运行；使用本程序的终端，使 `sudo`
+/// 可以询问密码。
+pub fn run_privileged(commands: &[Vec<String>]) -> bool {
+    let as_root = running_as_root();
+    commands.iter().all(|command| {
+        let Some((program, args)) = command.split_first() else {
+            return true;
+        };
+        let mut process = if as_root {
+            Command::new(program)
+        } else {
+            let mut sudo = Command::new("sudo");
+            sudo.arg("--").arg(program);
+            sudo
+        };
+        process
+            .args(args)
+            .status()
+            .is_ok_and(|status| status.success())
+    })
+}
+
+/// `commands` as one shell line that runs each with `sudo`.
+/// 以 `sudo` 运行每条 `commands` 的单行 Shell 命令。
+fn sudo_line(commands: &[Vec<String>]) -> String {
+    let quote = |word: &String| {
+        if !word.is_empty()
+            && word
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-_./=:@%+,".contains(c))
+        {
+            word.clone()
+        } else {
+            format!("'{}'", word.replace('\'', r"'\''"))
+        }
+    };
+    commands
+        .iter()
+        .map(|command| {
+            let words: Vec<String> = command.iter().map(quote).collect();
+            format!("sudo {}", words.join(" "))
+        })
+        .collect::<Vec<_>>()
+        .join(" && ")
 }
 
 /// Path of the Linux menu entry.
@@ -1001,9 +1193,15 @@ fn unregister_by_hand() -> &'static str {
     }
 }
 
-/// Removes one recorded item; `version` is the current version, when it still exists.
-/// 移除一个已记录的条目；`version` 为当前版本（若仍存在）。
-pub fn remove(item: &Item, root: &Path, version: Option<&Version>) -> Result<(), String> {
+/// Removes one recorded item; `version` is the current version, when it still exists, and
+/// `reporter` runs what needs administrator rights.
+/// 移除一个已记录的条目；`version` 为当前版本（若仍存在），`reporter` 运行需要管理员权限的内容。
+pub fn remove(
+    item: &Item,
+    root: &Path,
+    version: Option<&Version>,
+    reporter: &dyn Reporter,
+) -> Result<(), String> {
     let fail =
         |path: &Path, error: std::io::Error| format!("cannot remove {}: {error}", path.display());
     let remove_file = |path: &Path| match std::fs::remove_file(path) {
@@ -1066,6 +1264,33 @@ pub fn remove(item: &Item, root: &Path, version: Option<&Version>) -> Result<(),
                 ))
             }
         }
+        Item::AppArmorProfile { path } => {
+            // A profile that no longer carries the marker belongs to the person who replaced it.
+            // 不再带有标记的配置属于替换它的人。
+            if !carries_marker(path) {
+                return Ok(());
+            }
+            let path = path.display().to_string();
+            let request = Privileged {
+                purpose: Purpose::RemoveAppArmorProfile,
+                commands: vec![
+                    vec![
+                        String::from("apparmor_parser"),
+                        String::from("-R"),
+                        path.clone(),
+                    ],
+                    vec![String::from("rm"), String::from("-f"), path.clone()],
+                ],
+            };
+            if reporter.privileged(&request) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "the AppArmor profile {path} could not be removed; run: {}",
+                    sudo_line(&request.commands)
+                ))
+            }
+        }
     }
 }
 
@@ -1114,6 +1339,62 @@ fn remove_toast_activator(_clsid: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::report::Plain;
+
+    #[test]
+    fn the_apparmor_profile_attaches_to_every_version_and_refuses_pattern_characters() {
+        let profile = apparmor_profile(
+            Path::new("/home/a b/.local/share/vulcan-code"),
+            "desktop/runtime/electron",
+        )
+        .expect("profile");
+        assert!(profile.starts_with(LAUNCHER_MARKER));
+        assert!(profile.contains(
+            "profile vulcan-code \"/home/a b/.local/share/vulcan-code/versions/*/desktop/runtime/electron\" flags=(unconfined) {"
+        ));
+        assert!(profile.contains("  userns,\n"));
+        assert!(carries_marker_text(&profile));
+        for root in ["/opt/vulcan*", "/opt/\"q\"", "/opt/[x]", "/opt/{a,b}"] {
+            assert_eq!(
+                apparmor_profile(Path::new(root), "desktop/runtime/electron"),
+                None
+            );
+        }
+    }
+
+    /// Whether `text` carries the setup marker, as [`carries_marker`] reads a file.
+    /// `text` 是否带有安装器标记，与 [`carries_marker`] 读取文件的方式相同。
+    fn carries_marker_text(text: &str) -> bool {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let path = temp.path().join("profile");
+        std::fs::write(&path, text).expect("profile");
+        carries_marker(&path)
+    }
+
+    #[test]
+    fn sudo_lines_quote_words_the_shell_would_split() {
+        let commands = vec![
+            vec![
+                String::from("install"),
+                String::from("-m"),
+                String::from("0644"),
+                String::from("/home/a b/it's"),
+                String::from(APPARMOR_PROFILE),
+            ],
+            vec![
+                String::from("apparmor_parser"),
+                String::from("-r"),
+                String::from(APPARMOR_PROFILE),
+            ],
+        ];
+        assert_eq!(
+            sudo_line(&commands),
+            format!(
+                "sudo install -m 0644 '/home/a b/it'\\''s' {APPARMOR_PROFILE} && sudo \
+                 apparmor_parser -r {APPARMOR_PROFILE}"
+            )
+        );
+    }
 
     fn platform(name: &str) -> Platform {
         Platform::ALL
@@ -1202,6 +1483,7 @@ mod tests {
             },
             &root,
             None,
+            &Plain::new(true),
         )
         .expect("remove");
         assert!(foreign.exists());
@@ -1210,7 +1492,13 @@ mod tests {
         let script = format!("#!/bin/sh\n{LAUNCHER_MARKER}\nexec true\n");
         assert_eq!(write_marked(&ours, &script), Ok(true));
         assert_eq!(write_marked(&ours, &script), Ok(true));
-        remove(&Item::File { path: ours.clone() }, &root, None).expect("remove");
+        remove(
+            &Item::File { path: ours.clone() },
+            &root,
+            None,
+            &Plain::new(true),
+        )
+        .expect("remove");
         assert!(!ours.exists());
     }
 

@@ -63,6 +63,17 @@ impl Screen {
             .map(|_| ())
             .map_err(|error| format!("cannot draw the interactive installer: {error}"))
     }
+
+    /// Gives the terminal back while `work` runs, so a program such as `sudo` can use it, then
+    /// takes it over again.
+    /// 在 `work` 运行期间归还终端，使 `sudo` 等程序可以使用它，随后再次接管。
+    pub fn suspended<T>(&mut self, work: impl FnOnce(&Translator) -> T) -> Result<T, String> {
+        let _ = ratatui::try_restore();
+        let result = work(&self.translator);
+        self.terminal = ratatui::try_init()
+            .map_err(|error| format!("cannot return to the interactive installer: {error}"))?;
+        Ok(result)
+    }
 }
 
 impl Drop for Screen {
@@ -208,6 +219,7 @@ pub fn location_lines<'a>(
                 Location::UninstallEntry => ("setup.writes.uninstallEntry", None),
                 Location::UserService => (service, None),
                 Location::Linger => ("setup.writes.linger", None),
+                Location::AppArmorProfile(path) => ("setup.writes.appArmorProfile", Some(path)),
             };
             let path = path
                 .map(|path| path.display().to_string())

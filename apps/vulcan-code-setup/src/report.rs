@@ -263,6 +263,60 @@ pub trait Reporter: Sync {
     /// Asks whether to go on with `review`.
     /// 询问是否按 `review` 继续。
     fn review(&self, review: &Review) -> Result<Decision, String>;
+    /// Runs `request` with administrator rights, in a terminal where `sudo` can ask for the
+    /// password; returns whether every command succeeded.
+    /// 以管理员权限运行 `request`，所在终端可供 `sudo` 询问密码；返回是否每条命令都成功。
+    fn privileged(&self, request: &Privileged) -> bool;
+}
+
+/// Commands that need administrator rights, and why they run.
+/// 需要管理员权限的命令，以及运行它们的原因。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Privileged {
+    /// Why the commands run, told before the password is asked.
+    /// 运行这些命令的原因，在询问密码之前说明。
+    pub purpose: Purpose,
+    /// Each command with its arguments, run in order until one fails.
+    /// 每条命令及其参数，按顺序运行，直到某条失败。
+    pub commands: Vec<Vec<String>>,
+}
+
+/// Why administrator rights are asked for.
+/// 请求管理员权限的原因。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Purpose {
+    /// Installing the AppArmor profile of the desktop app.
+    /// 安装桌面应用的 AppArmor 配置。
+    InstallAppArmorProfile,
+    /// Removing the AppArmor profile of the desktop app.
+    /// 移除桌面应用的 AppArmor 配置。
+    RemoveAppArmorProfile,
+}
+
+impl Purpose {
+    /// The printed explanation.
+    /// 打印的说明。
+    pub fn explanation(self) -> &'static str {
+        match self {
+            Self::InstallAppArmorProfile => {
+                "Administrator rights are needed once to install the AppArmor profile that lets \
+                 the desktop app start on this system; sudo may ask for your password."
+            }
+            Self::RemoveAppArmorProfile => {
+                "Administrator rights are needed to remove the AppArmor profile of the desktop \
+                 app; sudo may ask for your password."
+            }
+        }
+    }
+
+    /// The catalog key of the interactive installer's explanation.
+    /// 交互式安装界面说明的目录键。
+    pub fn catalog_key(self) -> &'static str {
+        match self {
+            Self::InstallAppArmorProfile => "setup.privileged.installAppArmor",
+            Self::RemoveAppArmorProfile => "setup.privileged.removeAppArmor",
+        }
+    }
 }
 
 /// Reports with printed lines and asks with a `[Y/n]` question.
@@ -357,5 +411,11 @@ impl Reporter for Plain {
         } else {
             Decision::Cancel
         })
+    }
+
+    fn privileged(&self, request: &Privileged) -> bool {
+        self.close_line();
+        println!("{}", request.purpose.explanation());
+        crate::integrate::run_privileged(&request.commands)
     }
 }
