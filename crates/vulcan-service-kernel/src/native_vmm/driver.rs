@@ -2367,7 +2367,7 @@ impl NativeVmmHostDriver {
             .read()
             .map_err(|_| storage_lock_error("read embedding fingerprint"))?
             .get(view.vector_space_id)
-            && observed_fingerprint != &binding.physical_fingerprint_json
+            && !same_physical_embedding(observed_fingerprint, &binding.physical_fingerprint_json)
         {
             return Err(storage_backend_error(format!(
                 "native VMM vector space `{}` was created by a different physical embedding route",
@@ -2622,7 +2622,7 @@ impl NativeVmmHostDriver {
             .write()
             .map_err(|_| storage_lock_error("write embedding fingerprint"))?;
         if let Some(existing) = fingerprints.get(vector_space_id) {
-            if existing != &encoded {
+            if !same_physical_embedding(existing, &encoded) {
                 return Err(core_effect_error(format!(
                     "native VMM logical vector space `{vector_space_id}` received incompatible physical embedding fingerprints"
                 )));
@@ -2635,26 +2635,34 @@ impl NativeVmmHostDriver {
 
     /// Resolves the exact physical fingerprint for a vector write without inventing provider facts.
     /// 在不猜测 Provider 事实的前提下解析向量写入使用的精确物理指纹。
+    /// An existing space keeps its stored spelling, so a revision-only change still matches it exactly.
+    /// 已有空间保留其存储写法，使仅修订号变化时仍能精确匹配。
     async fn vector_space_fingerprint(&self, vector_space_id: &str) -> Result<String, CoreError> {
-        if let Some(fingerprint) = self
+        let observed = self
             .embedding_fingerprints
             .read()
             .map_err(|_| storage_lock_error("read embedding fingerprint"))?
             .get(vector_space_id)
-            .cloned()
-        {
-            return Ok(fingerprint);
-        }
-        self.data_plane
+            .cloned();
+        let binding = self
+            .data_plane
             .resolve_vector_space(vector_space_id)
             .await
-            .map_err(storage_backend_error)?
-            .map(|binding| binding.physical_fingerprint_json)
-            .ok_or_else(|| {
-                storage_backend_error(format!(
-                    "native VMM vector space `{vector_space_id}` has no observed physical embedding fingerprint"
-                ))
-            })
+            .map_err(storage_backend_error)?;
+        match (observed, binding) {
+            (Some(observed), Some(binding))
+                if !same_physical_embedding(&observed, &binding.physical_fingerprint_json) =>
+            {
+                Err(storage_backend_error(format!(
+                    "native VMM vector space `{vector_space_id}` was created by a different physical embedding route"
+                )))
+            }
+            (_, Some(binding)) => Ok(binding.physical_fingerprint_json),
+            (Some(observed), None) => Ok(observed),
+            (None, None) => Err(storage_backend_error(format!(
+                "native VMM vector space `{vector_space_id}` has no observed physical embedding fingerprint"
+            ))),
+        }
     }
 }
 
@@ -3536,6 +3544,34 @@ fn embedding_config_from_capability(
     ))
 }
 
+/// Returns whether two encoded physical fingerprints describe interchangeable stored vectors.
+/// 返回两个已编码物理指纹是否描述可互换的已存向量。
+///
+/// # Parameters
+/// 参数
+/// `left` and `right` are serialized `EmbeddingSpaceFingerprint` values.
+/// `left` 与 `right` 是序列化后的 `EmbeddingSpaceFingerprint` 值。
+///
+/// # Returns
+/// 返回值
+/// `true` when they differ at most in `capability_revision`, which the logical generation also ignores;
+/// unreadable values match only when byte-identical.
+/// 二者最多只在 `capability_revision` 上不同时返回 `true`（逻辑代次同样忽略该字段）；无法解析的值仅在字节相同时匹配。
+fn same_physical_embedding(left: &str, right: &str) -> bool {
+    if left == right {
+        return true;
+    }
+    let vector_identity = |text: &str| {
+        let mut value = serde_json::from_str::<serde_json::Value>(text).ok()?;
+        value.as_object_mut()?.remove("capability_revision");
+        Some(value)
+    };
+    matches!(
+        (vector_identity(left), vector_identity(right)),
+        (Some(left), Some(right)) if left == right
+    )
+}
+
 /// Derives one collision-resistant logical vector generation from the exact embedding capability.
 /// 根据准确 Embedding 能力派生一个抗碰撞的逻辑向量代次。
 ///
@@ -4342,6 +4378,40 @@ mod tests {
             plain,
             generation(&[(EmbeddingTask::Document, "Passage: {input}")])
         );
+    }
+
+    /// Verifies a capability-revision-only change keeps an existing space usable, while a model change does not.
+    /// 验证仅能力修订号变化时已有空间仍可用，而更换模型时不可用。
+    #[test]
+    fn physical_fingerprint_ignores_only_the_capability_revision() {
+        let encoded = |revision: &str, model_id: &str| {
+            serde_json::to_string(&EmbeddingSpaceFingerprint {
+                provider_id: "fixture".to_owned(),
+                service_entry_id: "fixture".to_owned(),
+                deployment_id: None,
+                secondary_route_id: None,
+                model_id: model_id.to_owned(),
+                binding_id: "fixture-embedding".to_owned(),
+                capability_revision: revision.to_owned(),
+                task: EmbeddingTask::Document,
+                dimensions: 1_536,
+                output_kind: EmbeddingOutputKind::Dense,
+                encoding: EmbeddingEncoding::Float,
+                normalization: EmbeddingNormalization::Unknown,
+                distance_metric: DistanceMetric::Unknown,
+            })
+            .expect("fingerprint should encode")
+        };
+        let stored = encoded("revision-1", "model");
+        assert!(same_physical_embedding(
+            &stored,
+            &encoded("revision-2", "model")
+        ));
+        assert!(!same_physical_embedding(
+            &stored,
+            &encoded("revision-1", "other-model")
+        ));
+        assert!(!same_physical_embedding(&stored, "not json"));
     }
 
     /// Verifies query and document calls of one paired route lock the same space fingerprint.

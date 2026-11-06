@@ -1,8 +1,8 @@
 //! Schema drift tests: Rust DTO field sets versus the committed JSON Schema resources.
 //! Schema 漂移测试：Rust DTO 字段集合与已提交 JSON Schema 资源的对比。
 
-use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
 use super::EnginePrimitiveRegistry;
 
@@ -2559,4 +2559,105 @@ fn compiled_manifest_retains_exact_model_source_policy() {
         compiled.model_source_policy("missing-entry").is_err(),
         "missing source authority must fail closed"
     );
+}
+
+/// Lists every bundled manifest as parsed JSON with its file name.
+/// 以解析后的 JSON 及文件名列出全部随包清单。
+fn bundled_manifest_documents() -> Vec<(String, serde_json::Value)> {
+    let directory = schema_resource("provider-manifest-v2.schema.json")
+        .parent()
+        .and_then(Path::parent)
+        .expect("schema directory must have a parent")
+        .join("manifests");
+    let mut documents = std::fs::read_dir(&directory)
+        .expect("bundled manifests directory must be readable")
+        .map(|entry| entry.expect("manifest entry must be readable").path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .map(|path| {
+            let text = std::fs::read_to_string(&path).expect("manifest must be readable");
+            (
+                path.file_name()
+                    .expect("manifest file name")
+                    .to_string_lossy()
+                    .into_owned(),
+                serde_json::from_str(&text).expect("bundled manifest must be valid JSON"),
+            )
+        })
+        .collect::<Vec<_>>();
+    documents.sort_by(|left, right| left.0.cmp(&right.0));
+    documents
+}
+
+/// Verifies bundled tool target schemas agree with their own defaults and result decoders.
+/// 验证随包工具目标 Schema 与其自身默认值及结果解码器一致。
+#[test]
+fn bundled_tool_target_schemas_match_defaults_and_decoders() {
+    let mut violations = Vec::new();
+    for (file_name, manifest) in bundled_manifest_documents() {
+        let mut targets = BTreeMap::new();
+        let mut stack = vec![&manifest];
+        while let Some(node) = stack.pop() {
+            match node {
+                serde_json::Value::Object(object) => {
+                    if let (Some(target_id), Some(schema)) = (
+                        object.get("target_id").and_then(|value| value.as_str()),
+                        object.get("input_schema"),
+                    ) {
+                        targets.insert(target_id.to_owned(), (schema, object.get("output")));
+                    }
+                    stack.extend(object.values());
+                }
+                serde_json::Value::Array(items) => stack.extend(items),
+                _ => {}
+            }
+        }
+        for (target_id, (schema, output)) in &targets {
+            // A default on a dependency trigger makes argument-free calls fail revalidation.
+            // 依赖触发字段上的默认值会使未提供该字段的调用在复验时失败。
+            if let Some(serde_json::Value::Object(dependent)) = schema.get("dependentRequired") {
+                for trigger in dependent.keys() {
+                    if schema
+                        .pointer(&format!("/properties/{trigger}/default"))
+                        .is_some()
+                    {
+                        violations.push(format!(
+                            "{file_name} {target_id}: default on dependentRequired `{trigger}`"
+                        ));
+                    }
+                }
+            }
+            // A decoder that selects MIME by a request value needs that value to be a declared input.
+            // 按请求值选择 MIME 的解码器要求该值是已声明的输入。
+            let mut required = BTreeSet::new();
+            if let Some(serde_json::Value::Array(decoders)) =
+                output.and_then(|output| output.get("resource_decoders"))
+            {
+                for decoder in decoders {
+                    if let Some(path) = decoder
+                        .get("mime_type_request_path")
+                        .and_then(|value| value.as_str())
+                    {
+                        required.insert(path.to_owned());
+                    }
+                }
+            }
+            for path in required {
+                let Some(field) = path
+                    .strip_prefix('/')
+                    .and_then(|path| path.split('/').next())
+                else {
+                    continue;
+                };
+                if schema.pointer(&format!("/properties/{field}")).is_none() {
+                    violations.push(format!(
+                        "{file_name} {target_id}: `{path}` is not an input field"
+                    ));
+                }
+            }
+        }
+    }
+    assert!(violations.is_empty(), "{}", violations.join("\n"));
 }

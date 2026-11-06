@@ -28,7 +28,11 @@ pub fn project_tool_parameters_schema(
 /// Returns an object-root schema containing only basic scalar, object, array, enum, and description declarations.
 /// 返回仅包含基础标量、对象、数组、枚举与描述声明的对象根 Schema。
 fn project_standard_object_root_schema(schema: &Value) -> Value {
-    let mut projected = project_lightweight_schema_node(schema)
+    // Local references carry real parameter shapes (pydantic enums, nested models); inline them first.
+    // 本地引用承载真实参数形状（pydantic 枚举、嵌套模型）；先将其内联。
+    let mut expansions = 0;
+    let resolved = inline_local_schema_refs(schema, schema, &mut Vec::new(), &mut expansions);
+    let mut projected = project_lightweight_schema_node(&resolved)
         .and_then(|schema| schema.as_object().cloned())
         .unwrap_or_default();
 
@@ -51,6 +55,89 @@ fn project_standard_object_root_schema(schema: &Value) -> Value {
         projected.remove("additionalProperties");
     }
     Value::Object(projected)
+}
+
+/// Upper bound on local `$ref` expansions per projected schema, guarding against shared-definition blowup.
+/// 每个投影 Schema 的本地 `$ref` 展开上限，防止共享定义导致膨胀。
+const MAX_LIGHTWEIGHT_REF_EXPANSIONS: usize = 256;
+
+/// Returns a copy of `node` with local `#/...` references replaced by their targets inside `root`.
+/// 返回 `node` 的副本，其中本地 `#/...` 引用被替换为 `root` 内的目标。
+///
+/// # Parameters
+/// 参数
+/// `root` is the canonical document, `stack` holds references being expanded, `expansions` counts work done.
+/// `root` 是规范文档，`stack` 保存正在展开的引用，`expansions` 统计已完成的展开。
+///
+/// # Returns
+/// 返回值
+/// Sibling keywords override the target. A cyclic reference keeps only the target's string `type`;
+/// remote or unresolved references and any reference past the budget stay as-is and are dropped later.
+/// 同级关键字覆盖目标。循环引用只保留目标的字符串 `type`；远程或无法解析的引用以及超出预算的引用保持原样，随后被丢弃。
+fn inline_local_schema_refs(
+    root: &Value,
+    node: &Value,
+    stack: &mut Vec<String>,
+    expansions: &mut usize,
+) -> Value {
+    match node {
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| inline_local_schema_refs(root, item, stack, expansions))
+                .collect(),
+        ),
+        Value::Object(object) => {
+            let target = object
+                .get("$ref")
+                .and_then(Value::as_str)
+                .and_then(|reference| {
+                    let pointer = reference.strip_prefix('#')?;
+                    root.pointer(pointer)
+                        .filter(|target| target.is_object())
+                        .map(|target| (reference.to_owned(), target))
+                });
+            let Some((reference, target)) = target else {
+                // Definition tables are never projected, so they must not spend the expansion budget.
+                // 定义表永不投影，因此不得消耗展开预算。
+                return Value::Object(
+                    object
+                        .iter()
+                        .filter(|(key, _)| !matches!(key.as_str(), "$defs" | "definitions"))
+                        .map(|(key, value)| {
+                            (
+                                key.clone(),
+                                inline_local_schema_refs(root, value, stack, expansions),
+                            )
+                        })
+                        .collect(),
+                );
+            };
+            let mut merged = if stack.contains(&reference) {
+                target
+                    .get("type")
+                    .filter(|type_name| type_name.is_string())
+                    .map(|type_name| Map::from_iter([(String::from("type"), type_name.clone())]))
+                    .unwrap_or_default()
+            } else if *expansions >= MAX_LIGHTWEIGHT_REF_EXPANSIONS {
+                return node.clone();
+            } else {
+                *expansions += 1;
+                stack.push(reference);
+                let expanded = inline_local_schema_refs(root, target, stack, expansions);
+                stack.pop();
+                expanded.as_object().cloned().unwrap_or_default()
+            };
+            for (key, value) in object.iter().filter(|(key, _)| key.as_str() != "$ref") {
+                merged.insert(
+                    key.clone(),
+                    inline_local_schema_refs(root, value, stack, expansions),
+                );
+            }
+            Value::Object(merged)
+        }
+        other => other.clone(),
+    }
 }
 
 /// Recursively projects one schema node into the lightweight provider subset.

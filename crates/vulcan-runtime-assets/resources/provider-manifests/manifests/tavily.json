@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "tavily",
-  "revision": 4,
-  "published_at": "2026-10-19T07:42:22Z",
+  "revision": 5,
+  "published_at": "2026-11-06T08:27:35Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [],
@@ -242,7 +242,6 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 5,
-            "default": 3,
             "description": "Relevant chunks per source; valid only when query is present."
           },
           "extract_depth": {

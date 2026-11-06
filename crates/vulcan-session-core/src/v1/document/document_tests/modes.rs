@@ -738,3 +738,20 @@ fn complete_goal_distinguishes_running_and_undispatched_continuations() -> Resul
     assert_eq!(exhausted, before_failure);
     Ok(())
 }
+
+/// Toggling Plan mode after a turn closed records a session-level change instead of failing.
+/// 回合关闭后切换 Plan 模式记录会话级变更，而不是失败。
+#[test]
+fn set_plan_mode_after_closed_turn_is_session_scoped() -> Result<(), DomainError> {
+    let mut document = new_document();
+    document.submit_root_input_fixture("Original work", vec![], T0)?;
+    document.close_turn(TurnOutcome::Completed, 1, T0 + 1)?;
+    assert!(document.set_plan_mode(
+        PlanModeTransitionInput::try_new(true, "enter plan")?,
+        T0 + 2
+    )?);
+    let last = document.events().last().expect("plan event");
+    assert_eq!(last.turn_id, None);
+    assert!(document.metadata.mode.plan.enabled);
+    Ok(())
+}

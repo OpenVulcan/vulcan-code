@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "alibaba",
-  "revision": 22,
-  "published_at": "2026-10-19T07:42:22Z",
+  "revision": 23,
+  "published_at": "2026-11-06T08:27:35Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -6690,7 +6690,8 @@
           "enable_aigc_watermark": {
             "type": "boolean"
           },
-          "format": {
+          "output_format": {
+            "default": "mp3",
             "enum": [
               "mp3",
               "wav"
@@ -6770,7 +6771,8 @@
           "enable_aigc_watermark": {
             "type": "boolean"
           },
-          "format": {
+          "output_format": {
+            "default": "mp3",
             "enum": [
               "mp3",
               "wav"

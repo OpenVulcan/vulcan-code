@@ -491,7 +491,19 @@ pub(super) fn dynamic_context_inputs(
                 .with_occurrence(occurrence),
             );
         }
+        // A renewed source already replaces its producer state with the new occurrence; its old
+        // occurrence's expiration would reuse the same producer key and fail the whole batch.
+        // 已续期来源会用新发生点替换其生产者状态；旧发生点的失效会复用同一生产者键并使整批失败。
+        let renewed_sources = injection
+            .host_blocks
+            .iter()
+            .filter(|block| block.transient)
+            .map(|block| block.source_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
         for event in &injection.expired_events {
+            if renewed_sources.contains(event.source_id.as_str()) {
+                continue;
+            }
             if event.scope != "turn" {
                 return Err(provider_projection_runtime_error(format!(
                     "expired context event `{}` has scope `{}` instead of `turn`",
@@ -807,6 +819,62 @@ mod tests {
                 .map(|value| value.occurrence_id.as_str()),
             Some("context_injection:profile:hash-1:occurrence:1")
         );
+    }
+
+    /// A source renewed in the same request keeps only its new occurrence, never a second producer key.
+    /// 同一请求内续期的来源只保留新发生点，绝不产生第二个同名生产者键。
+    #[test]
+    fn renewed_source_drops_its_old_expiration() {
+        let source_id = String::from("context_injection:profile:hash-1");
+        let expired = |source_id: &str| vulcan_core::types::ProviderContextExpiredEvent {
+            event_id: format!("context-expired:{source_id}:occurrence:1:turn-1"),
+            source_id: source_id.to_owned(),
+            occurrence_id: format!("{source_id}:occurrence:1"),
+            tag: String::from("profile"),
+            content_hash: String::from("hash-1"),
+            source: String::from("context_injection"),
+            target: String::from("model"),
+            scope: String::from("turn"),
+            turn_id: String::from("turn-1"),
+            body: String::from("Context injection expired after TTL"),
+        };
+        let injection = ProviderContextInjection {
+            host_blocks: vec![vulcan_core::types::ProviderContextHostBlock {
+                source_id: source_id.clone(),
+                occurrence_id: format!("{source_id}:occurrence:2"),
+                source: String::from("context_injection"),
+                tag: Some(String::from("profile")),
+                content_hash: Some(String::from("hash-1")),
+                turn_id: Some(String::from("turn-2")),
+                transient: true,
+                target: String::from("model"),
+                task_id: None,
+                scope: String::from("turn"),
+                body: String::from("recalled again"),
+            }],
+            expired_events: vec![
+                expired(&source_id),
+                expired("context_injection:other:hash-2"),
+            ],
+            ..Default::default()
+        };
+
+        let inputs = dynamic_context_inputs(&ProviderPromptLayers::default(), Some(&injection))
+            .expect("typed inputs");
+        let renewed = inputs
+            .iter()
+            .filter(|input| input.producer_key == source_id)
+            .collect::<Vec<_>>();
+        assert_eq!(renewed.len(), 1);
+        assert_eq!(
+            renewed[0].operation,
+            vulcan_session_core::v1::dynamic_context::DynamicContextOperation::Upsert
+        );
+        assert!(inputs.iter().any(|input| {
+            input.producer_key == "context_injection:other:hash-2"
+                && input.operation
+                    == vulcan_session_core::v1::dynamic_context::DynamicContextOperation::Remove
+        }));
     }
 
     /// Rejects stale memory even when compaction reuses the same canonical position identifier.

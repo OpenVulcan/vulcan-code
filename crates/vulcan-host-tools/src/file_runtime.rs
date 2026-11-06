@@ -5271,11 +5271,30 @@ fn render_snapshot_replacements(
         if has_following_line && !replacement.new_lines.is_empty() {
             normalized_replacement.push('\n');
         }
-        let inserted = parse_document_lines(&rewrite_replacement_line_endings(
+        let mut inserted = parse_document_lines(&rewrite_replacement_line_endings(
             &normalized_replacement,
             &original_text,
             local_ending,
         ));
+        // A trailing empty logical line has no bytes of its own, so parsing the joined text drops it.
+        // 末尾空逻辑行自身没有字节，因此解析拼接文本时会丢失它。
+        if !has_following_line && replacement.new_lines.last().is_some_and(String::is_empty) {
+            inserted.push(DocumentLine {
+                content: String::new(),
+                ending: None,
+            });
+        }
+        // Lines appended after an unterminated last line need a separator, or they merge into it.
+        // 在无终止符的末行之后追加的行需要分隔符，否则会并入该行。
+        if !inserted.is_empty()
+            && let Some(previous) = replacement
+                .start
+                .checked_sub(1)
+                .and_then(|index| lines.get_mut(index))
+            && previous.ending.is_none()
+        {
+            previous.ending = Some(local_ending);
+        }
         lines.splice(replacement.start..replacement.end, inserted);
     }
     if let Some(last) = lines.last_mut() {

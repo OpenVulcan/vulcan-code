@@ -758,6 +758,42 @@ fn validate_decimal_lexeme(value: &str) -> bool {
     digit_count > 0
 }
 
+/// Converts one decimal string into the JSON number a provider receives.
+/// 将一个十进制字符串转换为供应商接收的 JSON 数字。
+///
+/// # Parameters
+/// 参数
+/// `value` is decimal text in any spelling the lexical validator accepts (`+0.5`, `.5`, `5.`, `007`).
+/// `value` 是词法校验器接受的任意写法的十进制文本（`+0.5`、`.5`、`5.`、`007`）。
+///
+/// # Returns
+/// 返回值
+/// The JSON number, or `None` when the text is not a valid decimal or exceeds the JSON number range.
+/// 返回 JSON 数字；文本不是有效十进制或超出 JSON 数字范围时返回 `None`。
+pub fn decimal_json_number(value: &str) -> Option<serde_json::Number> {
+    if !validate_decimal_lexeme(value) {
+        return None;
+    }
+    // Rewrite the accepted lexeme into strict JSON number grammar before parsing.
+    // 解析前把已接受的词法值改写为严格 JSON 数字语法。
+    let (negative, unsigned) = match value.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, value.strip_prefix('+').unwrap_or(value)),
+    };
+    let (integer, fraction) = unsigned.split_once('.').unwrap_or((unsigned, ""));
+    let integer = integer.trim_start_matches('0');
+    let mut canonical = String::with_capacity(value.len() + 2);
+    if negative {
+        canonical.push('-');
+    }
+    canonical.push_str(if integer.is_empty() { "0" } else { integer });
+    if !fraction.is_empty() {
+        canonical.push('.');
+        canonical.push_str(fraction);
+    }
+    serde_json::from_str::<serde_json::Number>(&canonical).ok()
+}
+
 /// Validates one adapter-registered decimal bound before using it.
 /// 在使用前校验一个由适配器注册的十进制边界。
 ///

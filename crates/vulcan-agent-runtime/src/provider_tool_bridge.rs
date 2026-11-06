@@ -1444,80 +1444,84 @@ fn build_direct_provider_tool_candidate(
                     Arc::clone(&runtime),
                     owner_session_id.clone(),
                 );
-                // Resolved sources travel outside JSON while arguments retain only their safe locators.
-                // 解析来源在JSON之外传递，参数只保留其安全定位符。
-                let (resolved_arguments, mut media_sources) =
-                    if media_understanding_tool_id(capability).is_some() {
-                        // Fixed media tools own one explicit resource, including its original filename and digest.
-                        // 固定媒体工具持有一个显式资源，包括其原始文件名及摘要。
-                        let (resolved, sources) = resolve_media_understanding_resource_arguments(
-                            workspace_root.as_deref(),
-                            owner_session_id.as_deref(),
+                // Every normal return, success or error, settles the guard; only an interrupted future cancels.
+                // 每次正常返回（成功或错误）都会结算守卫；只有被中断的 Future 才会取消。
+                let outcome = async {
+                    // Resolved sources travel outside JSON while arguments retain only their safe locators.
+                    // 解析来源在JSON之外传递，参数只保留其安全定位符。
+                    let (resolved_arguments, mut media_sources) =
+                        if media_understanding_tool_id(capability).is_some() {
+                            // Fixed media tools own one explicit resource, including its original filename and digest.
+                            // 固定媒体工具持有一个显式资源，包括其原始文件名及摘要。
+                            let (resolved, sources) = resolve_media_understanding_resource_arguments(
+                                workspace_root.as_deref(),
+                                owner_session_id.as_deref(),
+                                capability,
+                                arguments,
+                                media_resource_runtime.as_deref(),
+                            )
+                            .await?;
+                            (resolved, sources)
+                        } else {
+                            (arguments, Vec::new())
+                        };
+                    // Temporary PNG owners must outlive physical provider upload/materialization.
+                    // 临时PNG所有者必须存活到真实供应商上传或物化完成。
+                    let _converted_images = match &media_profile {
+                        Some(profile) => {
+                            crate::image_conversion::convert_provider_sources(
+                                &mut media_sources,
+                                profile,
+                            )
+                            .await?
+                        }
+                        None => Vec::new(),
+                    };
+                    // projectedArguments maps the fixed facade only through reviewed target metadata.
+                    // projectedArguments 仅通过已审核目标元数据映射固定外壳。
+                    let projected_arguments = if media_understanding_tool_id(capability).is_some() {
+                        project_media_understanding_arguments(
                             capability,
-                            arguments,
-                            media_resource_runtime.as_deref(),
+                            media_input_projection.as_ref().ok_or_else(|| {
+                                format!(
+                                    "Media-understanding target `{}` has no explicit input projection.",
+                                    target_selection.target_id
+                                )
+                            })?,
+                            resolved_arguments,
+                        )?
+                    } else {
+                        resolved_arguments
+                    };
+                    let result = runtime
+                        .execute_provider_tool_target_with_media_sources(
+                            &configuration,
+                            capability,
+                            &target_selection,
+                            projected_arguments,
+                            owner_session_id,
+                            vulcan_provider_adapters::ProviderToolResourceContext {
+                                workspace_root: workspace_root.as_deref(),
+                                media_sources: &media_sources,
+                                source_resolver: None,
+                            },
                         )
                         .await?;
-                        (resolved, sources)
+                    // rendered uses one canonical media result shape for understanding capabilities.
+                    // rendered 为理解能力使用统一规范媒体结果形态。
+                    if media_understanding_tool_id(capability).is_some() {
+                        render_media_understanding_provider_result(capability, result)
                     } else {
-                        (arguments, Vec::new())
-                    };
-                // Temporary PNG owners must outlive physical provider upload/materialization.
-                // 临时PNG所有者必须存活到真实供应商上传或物化完成。
-                let _converted_images = match &media_profile {
-                    Some(profile) => {
-                        crate::image_conversion::convert_provider_sources(
-                            &mut media_sources,
-                            profile,
+                        render_provider_tool_result(
+                            workspace_root.as_deref(),
+                            invoking_session_id.as_str(),
+                            result,
                         )
-                        .await?
+                        .await
                     }
-                    None => Vec::new(),
-                };
-                // projectedArguments maps the fixed facade only through reviewed target metadata.
-                // projectedArguments 仅通过已审核目标元数据映射固定外壳。
-                let projected_arguments = if media_understanding_tool_id(capability).is_some() {
-                    project_media_understanding_arguments(
-                        capability,
-                        media_input_projection.as_ref().ok_or_else(|| {
-                            format!(
-                                "Media-understanding target `{}` has no explicit input projection.",
-                                target_selection.target_id
-                            )
-                        })?,
-                        resolved_arguments,
-                    )?
-                } else {
-                    resolved_arguments
-                };
-                let result = runtime
-                    .execute_provider_tool_target_with_media_sources(
-                        &configuration,
-                        capability,
-                        &target_selection,
-                        projected_arguments,
-                        owner_session_id,
-                        vulcan_provider_adapters::ProviderToolResourceContext {
-                            workspace_root: workspace_root.as_deref(),
-                            media_sources: &media_sources,
-                            source_resolver: None,
-                        },
-                    )
-                    .await?;
-                // rendered uses one canonical media result shape for understanding capabilities.
-                // rendered 为理解能力使用统一规范媒体结果形态。
-                let rendered = if media_understanding_tool_id(capability).is_some() {
-                    render_media_understanding_provider_result(capability, result)
-                } else {
-                    render_provider_tool_result(
-                        workspace_root.as_deref(),
-                        invoking_session_id.as_str(),
-                        result,
-                    )
-                    .await
-                };
-                cancellation_guard.disarm();
-                rendered
+                }
+                .await;
+                cancellation_guard.complete(outcome)
             })
         }),
     })

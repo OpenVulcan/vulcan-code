@@ -849,7 +849,13 @@ impl SessionDocument {
         self.ensure_transition_capacity(1, 0)?;
         let mut staged_allocator = self.id_allocator;
         let mut staged_events = Vec::with_capacity(1);
-        let turn_id = self.active_turn.as_ref().map(|turn| turn.turn_id);
+        // A closed turn no longer owns new events; record a session-level change instead.
+        // 已关闭回合不再拥有新事件；改为记录会话级变更。
+        let turn_id = self
+            .active_turn
+            .as_ref()
+            .filter(|turn| !turn.closed)
+            .map(|turn| turn.turn_id);
         self.stage_event(
             &mut staged_allocator,
             &mut staged_events,

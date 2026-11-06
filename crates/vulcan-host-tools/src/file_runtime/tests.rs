@@ -1,9 +1,10 @@
 use super::{
     MAX_EDIT_LINES_PER_ARRAY, MAX_INLINE_LIFECYCLE_BYTES, MAX_READ_LINES, MAX_READ_RESPONSE_BYTES,
-    PreparedChange, apply_patch_write_paths, build_patch_delete_change, commit_changes,
-    commit_validated_changes, display_path, execute_apply_patch, execute_file, execute_file_edit,
-    path_key, path_resolves_inside_workspace, persistent_change_set_from_host_result,
-    read_raw_snapshot, resolve_path, verify_preconditions, whole_file_modify_payload,
+    PreparedChange, ReplacementPlan, apply_patch_write_paths, build_patch_delete_change,
+    commit_changes, commit_validated_changes, display_path, execute_apply_patch, execute_file,
+    execute_file_edit, path_key, path_resolves_inside_workspace,
+    persistent_change_set_from_host_result, read_edit_snapshot, read_raw_snapshot,
+    render_snapshot_replacements, resolve_path, verify_preconditions, whole_file_modify_payload,
 };
 use crate::text_document::parse_document_lines;
 use serde_json::{Value, json};
@@ -2543,5 +2544,110 @@ fn apply_patch_write_paths_include_move_destinations() {
     assert_eq!(
         apply_patch_write_paths("not a patch").unwrap_err().code,
         "patch_syntax_error"
+    );
+}
+
+/// Verifies end-of-file insertions keep the old last line separate and keep explicit trailing blank lines.
+/// 验证文件末尾插入保持原末行独立，并保留显式尾部空行。
+#[test]
+fn end_of_file_replacements_keep_line_boundaries() {
+    let directory = tempdir().expect("create temporary directory");
+    let render = |content: &str, start: usize, end: usize, new_lines: &[&str]| {
+        let path = directory.path().join("sample.txt");
+        fs::write(&path, content).expect("write fixture");
+        let snapshot = read_edit_snapshot(&path, None).expect("read snapshot");
+        let plan = ReplacementPlan {
+            operation_id: String::from("op"),
+            start,
+            end,
+            old_lines: Vec::new(),
+            new_lines: new_lines.iter().map(|line| (*line).to_owned()).collect(),
+            match_mode: String::from("exact"),
+        };
+        let bytes = render_snapshot_replacements(&snapshot, &[plan], snapshot.final_newline)
+            .expect("render replacement");
+        String::from_utf8(bytes).expect("utf-8 output")
+    };
+
+    assert_eq!(
+        render(
+            "HEAD
+TAIL",
+            2,
+            2,
+            &["A"]
+        ),
+        "HEAD
+TAIL
+A"
+    );
+    assert_eq!(
+        render(
+            "HEAD
+TAIL",
+            2,
+            2,
+            &["A"]
+        ),
+        "HEAD
+TAIL
+A"
+    );
+    assert_eq!(
+        render(
+            "HEAD
+TAIL
+",
+            2,
+            2,
+            &["A"]
+        ),
+        "HEAD
+TAIL
+A
+"
+    );
+    assert_eq!(
+        render(
+            "HEAD
+TAIL
+",
+            1,
+            2,
+            &["A", ""]
+        ),
+        "HEAD
+A
+
+"
+    );
+    assert_eq!(
+        render(
+            "HEAD
+TAIL
+",
+            1,
+            2,
+            &[""]
+        ),
+        "HEAD
+
+"
+    );
+    assert_eq!(
+        render(
+            "HEAD
+TAIL
+NEXT
+",
+            1,
+            2,
+            &["A", ""]
+        ),
+        "HEAD
+A
+
+NEXT
+"
     );
 }

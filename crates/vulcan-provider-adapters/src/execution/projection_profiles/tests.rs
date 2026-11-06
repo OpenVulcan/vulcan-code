@@ -221,3 +221,23 @@ fn projection_scalar_keys_cover_string_number_and_boolean_values() {
     assert_eq!(projection_scalar_key(&Value::Null), None);
     assert_eq!(projection_scalar_key(&json!([32000])), None);
 }
+
+/// Verifies copied decimal parameters reach the wire as JSON numbers for every accepted spelling.
+/// 验证复制的十进制参数对每种可接受写法都以 JSON 数字发送。
+#[test]
+fn copied_decimal_parameters_are_json_numbers() {
+    for (lexeme, expected) in [
+        ("0.5", json!(0.5)),
+        ("+0.5", json!(0.5)),
+        (".5", json!(0.5)),
+        ("5.", json!(5)),
+        ("-0.25", json!(-0.25)),
+        ("007", json!(7)),
+    ] {
+        assert_eq!(
+            model_parameter_to_value(&ModelParameterValue::Decimal(String::from(lexeme))),
+            Some(expected),
+            "decimal `{lexeme}`"
+        );
+    }
+}

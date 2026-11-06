@@ -776,12 +776,70 @@ fn standard_object_root_projection_strips_advanced_keywords_recursively() {
     ] {
         assert!(!projected.to_string().contains(&format!("\"{keyword}\"")));
     }
-    assert!(projected["properties"].get("reference_only").is_none());
+    assert_eq!(
+        projected["properties"]["reference_only"],
+        json!({ "type": "string" })
+    );
     assert_eq!(
         projected["properties"]["const_only"],
         json!({ "type": "string", "enum": ["fixed"] })
     );
     assert!(projected["properties"].get("description_only").is_none());
+}
+
+/// Verifies lightweight projection inlines local references so required enum and model parameters stay visible.
+/// 验证轻量投影会内联本地引用，使必填枚举与模型参数保持可见。
+#[test]
+fn standard_object_root_projection_inlines_local_references() {
+    let schema = json!({
+        "type": "object",
+        "$defs": {
+            "Mode": { "type": "string", "enum": ["fast", "slow"] },
+            "Node": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" },
+                    "child": { "$ref": "#/$defs/Node" }
+                },
+                "required": ["name"]
+            }
+        },
+        "definitions": {
+            "Legacy": { "type": "integer" }
+        },
+        "properties": {
+            "mode": { "$ref": "#/$defs/Mode", "description": "Run mode." },
+            "tree": { "$ref": "#/$defs/Node" },
+            "legacy": { "$ref": "#/definitions/Legacy" },
+            "remote": { "$ref": "https://example.test/schema.json" },
+            "missing": { "$ref": "#/$defs/Missing" }
+        },
+        "required": ["mode", "tree", "remote"]
+    });
+
+    let projected = project_tool_parameters_schema(
+        &schema,
+        VulcanToolSchemaProjectionProfile::StandardObjectRoot,
+    );
+    let properties = &projected["properties"];
+
+    assert_eq!(
+        properties["mode"],
+        json!({ "type": "string", "enum": ["fast", "slow"], "description": "Run mode." })
+    );
+    assert_eq!(
+        properties["tree"]["properties"]["name"],
+        json!({ "type": "string" })
+    );
+    assert_eq!(
+        properties["tree"]["properties"]["child"]["type"],
+        json!("object")
+    );
+    assert_eq!(properties["legacy"], json!({ "type": "integer" }));
+    assert!(properties.get("remote").is_none());
+    assert!(properties.get("missing").is_none());
+    assert_eq!(projected["required"], json!(["mode", "tree"]));
+    assert!(!projected.to_string().contains("\"$ref\""));
 }
 
 /// Verifies common reading tool names stay read-only under the word-based name heuristic.

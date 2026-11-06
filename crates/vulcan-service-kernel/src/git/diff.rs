@@ -652,7 +652,7 @@ pub(crate) fn load_webui_git_branches(
         repository_root,
         &[
             "for-each-ref",
-            "--format=%(refname:short)",
+            "--format=%(refname)",
             "refs/heads",
             "refs/remotes",
         ],
@@ -660,20 +660,46 @@ pub(crate) fn load_webui_git_branches(
     if !output.status.success() {
         return Ok(Vec::new());
     }
+    Ok(webui_git_branches_from_refs(
+        &decode_shell_output_bytes(&output.stdout),
+        current_branch,
+    ))
+}
+
+/// Classifies full ref names by namespace; a slash in a local name such as `feature/x` is not a remote.
+/// 按命名空间分类完整引用名；本地名中的斜杠（如 `feature/x`）不代表远端。
+/// Parameters: refs holds one full ref name per line and current_branch is the checked-out local branch.
+/// 参数：refs 每行一个完整引用名，current_branch 是当前检出的本地分支。
+/// Returns: unique branch summaries in input order, without remote `HEAD` aliases.
+/// 返回：按输入顺序去重的分支摘要，不含远端 `HEAD` 别名。
+fn webui_git_branches_from_refs(
+    refs: &str,
+    current_branch: Option<&str>,
+) -> Vec<WebuiGitBranchSummary> {
     let mut seen = BTreeSet::new();
     let mut branches = Vec::new();
-    for raw_line in decode_shell_output_bytes(&output.stdout).lines() {
-        let branch = raw_line.trim();
-        if branch.is_empty() || branch.ends_with("/HEAD") || !seen.insert(branch.to_string()) {
+    for raw_line in refs.lines() {
+        let reference = raw_line.trim();
+        let (branch, remote) = if let Some(name) = reference.strip_prefix("refs/heads/") {
+            (name, false)
+        } else if let Some(name) = reference.strip_prefix("refs/remotes/") {
+            (name, true)
+        } else {
+            continue;
+        };
+        if branch.is_empty()
+            || (remote && branch.ends_with("/HEAD"))
+            || !seen.insert(branch.to_string())
+        {
             continue;
         }
         branches.push(WebuiGitBranchSummary {
             name: branch.to_string(),
-            current: current_branch == Some(branch),
-            remote: branch.contains('/'),
+            current: !remote && current_branch == Some(branch),
+            remote,
         });
     }
-    Ok(branches)
+    branches
 }
 
 /// Loads every current-branch commit that has not reached the relevant remote view.
@@ -1166,5 +1192,33 @@ mod tests {
         );
         assert_eq!(resolution.repository_root, None);
         let _ = fs::remove_dir_all(path);
+    }
+
+    /// Verifies slash-named local branches stay local while remote refs and their HEAD alias are classified by namespace.
+    /// 验证带斜杠的本地分支保持本地，远端引用及其 HEAD 别名按命名空间分类。
+    #[test]
+    fn branch_namespace_decides_remote_not_the_slash() {
+        let branches = webui_git_branches_from_refs(
+            "refs/heads/main
+refs/heads/feature/x
+refs/remotes/origin/HEAD
+refs/remotes/origin/feature/x
+refs/remotes/origin/main
+",
+            Some("feature/x"),
+        );
+        let summary = branches
+            .iter()
+            .map(|branch| (branch.name.as_str(), branch.remote, branch.current))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            summary,
+            vec![
+                ("main", false, false),
+                ("feature/x", false, true),
+                ("origin/feature/x", true, false),
+                ("origin/main", true, false),
+            ]
+        );
     }
 }

@@ -916,7 +916,9 @@ fn model_parameter_to_value(value: &ModelParameterValue) -> Option<Value> {
     match value {
         ModelParameterValue::Boolean(value) => Some(Value::Bool(*value)),
         ModelParameterValue::Integer(value) => Some(Value::Number((*value).into())),
-        ModelParameterValue::Decimal(value) => Some(Value::String(value.clone())),
+        ModelParameterValue::Decimal(value) => {
+            vulcan_ai_contract::decimal_json_number(value).map(Value::Number)
+        }
         ModelParameterValue::String(value) => Some(Value::String(value.clone())),
         ModelParameterValue::Array(values) => Some(Value::Array(
             values.iter().filter_map(model_parameter_to_value).collect(),

@@ -1641,11 +1641,13 @@ fn model_parameter_json_value(
     match value {
         ModelParameterValue::Boolean(value) => Ok(Value::Bool(*value)),
         ModelParameterValue::Integer(value) => Ok(Value::Number((*value).into())),
-        ModelParameterValue::Decimal(value) => serde_json::from_str(value).map_err(|error| {
-            pre_dispatch_failure(format!(
-                "Custom decimal model parameter `{value}` is invalid JSON: {error}"
-            ))
-        }),
+        ModelParameterValue::Decimal(value) => vulcan_ai_contract::decimal_json_number(value)
+            .map(Value::Number)
+            .ok_or_else(|| {
+                pre_dispatch_failure(format!(
+                    "Custom decimal model parameter `{value}` is not a JSON-representable decimal."
+                ))
+            }),
         ModelParameterValue::String(value) => Ok(Value::String(value.clone())),
         ModelParameterValue::Array(values) => values
             .iter()
@@ -1745,11 +1747,13 @@ fn project_sampling_temperature(
             "The registered sampling temperature value must be a decimal string.",
         ));
     };
-    let temperature = serde_json::from_str::<Value>(decimal).map_err(|error| {
-        pre_dispatch_failure(format!(
-            "Sampling temperature could not be projected as JSON: {error}"
-        ))
-    })?;
+    let temperature = vulcan_ai_contract::decimal_json_number(decimal)
+        .map(Value::Number)
+        .ok_or_else(|| {
+            pre_dispatch_failure(format!(
+                "Sampling temperature `{decimal}` is not a JSON-representable decimal."
+            ))
+        })?;
     let body = request_body_mut(encoded, "Protocol")?;
     if body.contains_key("temperature") {
         return Err(pre_dispatch_failure(
