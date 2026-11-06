@@ -74,7 +74,7 @@ fn rmcp_credentials(client_id: String) -> vulcan_agent_runtime::mcp::McpOAuthSto
 #[test]
 fn large_records_round_trip_across_chunks() {
     let backend = ChunkedMcpOAuthCredentialBackend::new(MemorySlots::default());
-    let stored = record(CHUNK_CHARS * 3);
+    let stored = record(CHUNK_UTF16_UNITS * 3);
 
     backend.save("server", &stored).unwrap();
 
@@ -90,7 +90,9 @@ fn large_records_round_trip_across_chunks() {
 #[test]
 fn shorter_saves_remove_leftover_chunks() {
     let backend = ChunkedMcpOAuthCredentialBackend::new(MemorySlots::default());
-    backend.save("server", &record(CHUNK_CHARS * 3)).unwrap();
+    backend
+        .save("server", &record(CHUNK_UTF16_UNITS * 3))
+        .unwrap();
 
     backend.save("server", &record(10)).unwrap();
 
@@ -103,7 +105,9 @@ fn shorter_saves_remove_leftover_chunks() {
 #[test]
 fn clear_removes_every_slot_and_reads_absent() {
     let backend = ChunkedMcpOAuthCredentialBackend::new(MemorySlots::default());
-    backend.save("server", &record(CHUNK_CHARS * 2)).unwrap();
+    backend
+        .save("server", &record(CHUNK_UTF16_UNITS * 2))
+        .unwrap();
 
     backend.clear("server").unwrap();
     backend.clear("server").unwrap();
@@ -115,13 +119,17 @@ fn clear_removes_every_slot_and_reads_absent() {
 #[test]
 fn tampered_or_missing_chunks_read_as_absent() {
     let backend = ChunkedMcpOAuthCredentialBackend::new(MemorySlots::default());
-    backend.save("server", &record(CHUNK_CHARS * 2)).unwrap();
+    backend
+        .save("server", &record(CHUNK_UTF16_UNITS * 2))
+        .unwrap();
     backend
         .slots()
         .overwrite(&chunk_account("server", 0), "tampered");
     assert!(backend.load("server").unwrap().is_none());
 
-    backend.save("server", &record(CHUNK_CHARS * 2)).unwrap();
+    backend
+        .save("server", &record(CHUNK_UTF16_UNITS * 2))
+        .unwrap();
     backend.slots().remove(&chunk_account("server", 1));
     assert!(backend.load("server").unwrap().is_none());
 }
@@ -134,4 +142,25 @@ fn servers_do_not_share_slots() {
     assert!(backend.load("plugin").unwrap().is_none());
     backend.clear("plugin").unwrap();
     assert!(backend.load("plugin:docs").unwrap().is_some());
+}
+
+#[test]
+fn supplementary_characters_keep_chunks_within_the_unit_limit() {
+    let serialized = char::from_u32(0x1F600)
+        .unwrap()
+        .to_string()
+        .repeat(CHUNK_UTF16_UNITS);
+
+    let chunks = split_chunks(&serialized);
+
+    assert!(
+        chunks.len() > 1,
+        "wide characters should span several chunks"
+    );
+    assert!(
+        chunks
+            .iter()
+            .all(|chunk| chunk.encode_utf16().count() <= CHUNK_UTF16_UNITS)
+    );
+    assert_eq!(chunks.concat(), serialized);
 }

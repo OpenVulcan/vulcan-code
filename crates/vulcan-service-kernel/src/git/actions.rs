@@ -90,7 +90,14 @@ fn run_webui_git_file_action_command(
         .iter()
         .map(|value| value.to_string())
         .collect::<Vec<_>>();
-    args.extend(pathspecs.iter().cloned());
+    // Literal magic keeps names such as `app/[id]/page.tsx` from matching as globs, so
+    // `clean -f` never removes a neighbouring untracked file.
+    // literal 魔术前缀使 `app/[id]/page.tsx` 这类名称不按 glob 匹配，`clean -f` 不会误删相邻未跟踪文件。
+    args.extend(
+        pathspecs
+            .iter()
+            .map(|pathspec| format!(":(literal){pathspec}")),
+    );
     let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
     run_webui_git_action_command(repository_root, &arg_refs)
 }

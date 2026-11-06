@@ -29,13 +29,15 @@ pub(crate) fn vmm_request_project_scope<'a>(
     workspace: &'a vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
     project_id: Option<&str>,
 ) -> Option<&'a TaskProjectSummary> {
-    project_id
+    // An explicit project id is authoritative: a stale one finds nothing instead of falling back to
+    // another project whose VMM configuration would then be read or written.
+    // 显式项目标识具有权威性：陈旧标识找不到项目，而不是回退到另一个项目并读写其 VMM 配置。
+    if let Some(project_id) = project_id.filter(|project_id| !project_id.trim().is_empty()) {
+        return workspace_task_project_for_project_id(workspace, project_id);
+    }
+    selected_workspace_session(workspace)
+        .and_then(session_summary_project_id)
         .and_then(|project_id| workspace_task_project_for_project_id(workspace, project_id))
-        .or_else(|| {
-            selected_workspace_session(workspace)
-                .and_then(session_summary_project_id)
-                .and_then(|project_id| workspace_task_project_for_project_id(workspace, project_id))
-        })
         .or_else(|| workspace.task_projects.first())
 }
 

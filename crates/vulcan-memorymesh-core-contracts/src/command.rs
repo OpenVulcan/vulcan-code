@@ -643,6 +643,10 @@ pub enum MaintenanceAction {
     },
 }
 
+/// Maximum memories rebuilt by one `RebuildVectors` maintenance action.
+/// 单个 `RebuildVectors` 维护操作重建的最大记忆数。
+pub const MAX_REBUILD_VECTORS_BATCH: usize = 256;
+
 /// Requests one host-identity-idempotent atomic maintenance operation.
 /// 请求一次宿主持久身份幂等的原子维护操作。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

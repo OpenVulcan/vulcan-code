@@ -4,8 +4,9 @@
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::agent_runtime::provider_transport_vulcan::NO_ANSWER_COMPLETION_SUBCATEGORY;
 use crate::provider_config::{
-    PROVIDER_RATE_LIMIT_RETRY_MAX_DELAY_MS, PROVIDER_RETRY_MAX_RETRIES,
-    PersistedProviderRetryConfiguration, normalize_provider_rate_limit_retry_max_retries,
+    PROVIDER_RATE_LIMIT_RETRY_MAX_DELAY_MS, PROVIDER_RETRY_MAX_JITTER_PERCENT,
+    PROVIDER_RETRY_MAX_RETRIES, PersistedProviderRetryConfiguration,
+    normalize_provider_rate_limit_retry_max_retries, normalize_provider_retry_backoff_factor,
 };
 use std::time::Duration;
 use vulcan_ai_contract::{AiErrorCategory, AiExecutionError, AiTransportKind, DispatchOutcome};
@@ -82,12 +83,8 @@ impl ProviderRetryPolicy {
             max_delay: Duration::from_millis(
                 config.max_delay_ms.max(config.initial_delay_ms.max(1)),
             ),
-            backoff_factor: if config.backoff_factor.is_finite() {
-                config.backoff_factor.clamp(1.0, 8.0)
-            } else {
-                2.0
-            },
-            jitter_percent: config.jitter_percent.min(80),
+            backoff_factor: normalize_provider_retry_backoff_factor(config.backoff_factor),
+            jitter_percent: config.jitter_percent.min(PROVIDER_RETRY_MAX_JITTER_PERCENT),
             respect_retry_after: config.respect_retry_after,
             retry_429: config.retry_429,
             rate_limit_max_retries: normalize_provider_rate_limit_retry_max_retries(
@@ -101,11 +98,9 @@ impl ProviderRetryPolicy {
                     .max(rate_limit_initial_ms)
                     .min(MAX_RATE_LIMIT_RETRY_DELAY.as_millis() as u64),
             ),
-            rate_limit_backoff_factor: if config.rate_limit.backoff_factor.is_finite() {
-                config.rate_limit.backoff_factor.clamp(1.0, 8.0)
-            } else {
-                2.0
-            },
+            rate_limit_backoff_factor: normalize_provider_retry_backoff_factor(
+                config.rate_limit.backoff_factor,
+            ),
             retry_keywords: config
                 .retry_keywords
                 .iter()

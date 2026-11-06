@@ -600,7 +600,10 @@ pub(crate) fn vmm_config_draft_summary(
         management_bearer_token: vulcan_service_api::redacted_webui_secret(
             layer.management_bearer_token.as_deref(),
         ),
-        management_timeout_ms: layer.management_timeout_ms.unwrap_or(30_000).to_string(),
+        management_timeout_ms: layer
+            .management_timeout_ms
+            .unwrap_or(super::config::DEFAULT_MANAGEMENT_TIMEOUT_MS)
+            .to_string(),
         user_id: layer
             .user_id
             .or(effective.user_id)

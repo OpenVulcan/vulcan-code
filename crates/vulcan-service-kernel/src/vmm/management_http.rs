@@ -61,9 +61,7 @@ fn external_management_target_from_state(
         return None;
     }
     let parsed = Url::parse(&base_url).ok()?;
-    let loopback = parsed
-        .host_str()
-        .is_some_and(|host| matches!(host, "127.0.0.1" | "localhost" | "::1"));
+    let loopback = super::config::management_address_is_loopback(&parsed);
     if parsed.query().is_some()
         || parsed.fragment().is_some()
         || !parsed.username().is_empty()
@@ -71,14 +69,18 @@ fn external_management_target_from_state(
         || (parsed.scheme() != "https" && !(parsed.scheme() == "http" && loopback))
         || layer
             .management_timeout_ms
-            .is_some_and(|value| !(1_000..=120_000).contains(&value))
+            .is_some_and(|value| !super::config::management_timeout_is_valid(value))
     {
         return None;
     }
     Some(ExternalVmmManagementTarget {
         base_url,
         access_token,
-        timeout: Duration::from_millis(layer.management_timeout_ms.unwrap_or(30_000)),
+        timeout: Duration::from_millis(
+            layer
+                .management_timeout_ms
+                .unwrap_or(super::config::DEFAULT_MANAGEMENT_TIMEOUT_MS),
+        ),
     })
 }
 

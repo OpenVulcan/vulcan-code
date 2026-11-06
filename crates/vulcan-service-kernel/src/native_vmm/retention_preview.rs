@@ -6,7 +6,11 @@ use vulcan_service_api::{VmmNativeRetentionPreview, VmmNativeRetentionProjectPre
 
 /// Bounds confirmation lifetime without retaining an unbounded collection of snapshots.
 /// 限制确认有效期，避免保留无界快照集合。
-const PREVIEW_LIFETIME: Duration = Duration::from_secs(300);
+const PREVIEW_LIFETIME_MS: i64 = 300_000;
+
+/// The same confirmation lifetime as a duration for in-memory expiry checks.
+/// 同一确认有效期的时长形式，用于内存中的过期检查。
+const PREVIEW_LIFETIME: Duration = Duration::from_millis(PREVIEW_LIFETIME_MS.unsigned_abs());
 
 /// Holds an immutable step evaluated by the ordinary Core planner.
 /// 保存由常规 Core 规划器评估的不可变步骤。
@@ -310,7 +314,7 @@ async fn prepare_cleanup(
             preview_id,
             storage_version: snapshot.storage_version,
             evaluated_at_unix_ms: unix_ns_to_ms(now_ns),
-            expires_at_unix_ms: unix_ns_to_ms(now_ns) + 300_000,
+            expires_at_unix_ms: unix_ns_to_ms(now_ns) + PREVIEW_LIFETIME_MS,
             projects: Vec::new(),
         },
         created_at: std::time::Instant::now(),

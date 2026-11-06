@@ -4,7 +4,10 @@
 use serde::Deserialize;
 use std::collections::BTreeSet;
 use vulcan_context::{ContextCompactionWindowNodeId, ContextWindowPolicyOverrides};
-use vulcan_provider_adapters::{ContextCompactionWindowConfiguration, ModelContextWindowDefault};
+use vulcan_provider_adapters::{
+    ContextCompactionWindowConfiguration, MAX_USAGE_REFRESH_INTERVAL_SECONDS,
+    MIN_USAGE_REFRESH_INTERVAL_SECONDS, ModelContextWindowDefault,
+};
 use vulcan_service_api::ServiceEventEmitter;
 use vulcan_service_api::StartupModelReconciliationNotice;
 
@@ -116,9 +119,11 @@ pub(crate) async fn service_save_public_ai_usage_refresh_settings(
     state: SharedServiceBridgeState,
     request: PublicAiUsageRefreshSettingsRequest,
 ) -> Result<PublicAiSettingsSnapshot, String> {
-    if !(30..=86_400).contains(&request.interval_seconds) {
-        return Err(String::from(
-            "Account usage refresh interval must be between 30 and 86400 seconds.",
+    if !(MIN_USAGE_REFRESH_INTERVAL_SECONDS..=MAX_USAGE_REFRESH_INTERVAL_SECONDS)
+        .contains(&request.interval_seconds)
+    {
+        return Err(format!(
+            "Account usage refresh interval must be between {MIN_USAGE_REFRESH_INTERVAL_SECONDS} and {MAX_USAGE_REFRESH_INTERVAL_SECONDS} seconds."
         ));
     }
     // transaction keeps the settings writer serialized through Workbench publication.

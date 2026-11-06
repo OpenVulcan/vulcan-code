@@ -7901,13 +7901,7 @@ fn parse_profile_timezone(value: &str) -> Result<chrono_tz::Tz, CoreError> {
 /// Maps Core's frozen normalized priority bands back to VMM's P0/P1/P2 labels.
 /// 将 Core 冻结的规范化优先级档位映射回 VMM 的 P0/P1/P2 标签。
 const fn profile_priority_label(priority: u32) -> &'static str {
-    if priority >= 80 {
-        "P0"
-    } else if priority >= 50 {
-        "P1"
-    } else {
-        "P2"
-    }
+    vulcan_memorymesh_core_contracts::priority_band_label(priority)
 }
 
 /// Maps one typed profile lifetime to VMM's L0/L1/L2/L3 label.
@@ -9640,9 +9634,9 @@ fn checked_expiry_from_millis(base_ns: i64, lifetime_millis: u64) -> Result<i64,
 /// Maps public priority to a deterministic legacy-compatible importance band.
 /// 将公共优先级映射为确定性的旧版兼容重要度档位。
 const fn priority_to_importance(priority: u32) -> f32 {
-    if priority >= 80 {
+    if priority >= vulcan_memorymesh_core_contracts::PRIORITY_P0_FLOOR {
         0.8
-    } else if priority >= 50 {
+    } else if priority >= vulcan_memorymesh_core_contracts::PRIORITY_P1_FLOOR {
         0.5
     } else {
         0.2
@@ -9946,7 +9940,10 @@ fn validate_command(command: &CoreCommand, snapshot: &ConfigSnapshot) -> Result<
                     )
                 }
                 MaintenanceAction::RebuildVectors { memory_ids, .. } => {
-                    if memory_ids.is_empty() || memory_ids.len() > 256 {
+                    if memory_ids.is_empty()
+                        || memory_ids.len()
+                            > vulcan_memorymesh_core_contracts::MAX_REBUILD_VECTORS_BATCH
+                    {
                         return Err(validation_error(
                             "maintenance rebuild batch size is invalid",
                         ));

@@ -998,6 +998,14 @@ pub struct PersistedAiConfiguration {
     pub voice_input_selection: Option<ProviderToolTargetSelection>,
 }
 
+/// Shortest accepted background account-usage refresh interval in seconds.
+/// 允许的后台账号用量刷新间隔最小秒数。
+pub const MIN_USAGE_REFRESH_INTERVAL_SECONDS: u64 = 30;
+
+/// Longest accepted background account-usage refresh interval in seconds.
+/// 允许的后台账号用量刷新间隔最大秒数。
+pub const MAX_USAGE_REFRESH_INTERVAL_SECONDS: u64 = 86_400;
+
 /// Returns the default thirty-minute account-usage refresh interval.
 /// 返回默认三十分钟账号用量刷新间隔。
 fn default_usage_refresh_interval_seconds() -> u64 {

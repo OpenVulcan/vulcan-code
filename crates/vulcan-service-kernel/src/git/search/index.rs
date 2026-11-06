@@ -14,6 +14,9 @@ pub(crate) struct WebuiDiffSearchIndexedFile {
     /// Per-file n-gram inverted index from normalized text to candidate indexes.
     /// 从归一化文本到候选下标的文件级 n-gram 倒排索引。
     ngram_index: BTreeMap<String, Vec<usize>>,
+    /// Ascending indexes of candidates whose text exceeds the indexed preview.
+    /// 文本超出已索引预览的候选下标（升序）。
+    overflow_candidates: Vec<usize>,
 }
 
 /// Precomputed search candidate for one diff row or file path.
@@ -26,6 +29,9 @@ pub(crate) struct WebuiDiffSearchIndexedCandidate {
     /// Lowercase compact preview used for repeated case-insensitive matching.
     /// 用于重复大小写不敏感匹配的小写紧凑预览。
     normalized_preview: String,
+    /// Lowercase full line text, kept only when the preview truncated it.
+    /// 小写完整行文本，仅在预览截断时保留。
+    normalized_overflow: Option<String>,
     /// Optional diff row position for the candidate.
     /// 候选项可选的 diff 行位置。
     position: Option<WebuiDiffSearchLinePosition>,
@@ -112,7 +118,7 @@ pub(crate) fn webui_unified_diff_search_index(
                     current_new_line: 0,
                     seen_hunk_count: 0,
                 };
-                push_webui_diff_search_index_candidate(&mut builder, path_preview, None);
+                push_webui_diff_search_index_candidate(&mut builder, &path_preview, None);
                 builder
             });
             file_index += 1;
@@ -139,7 +145,7 @@ pub(crate) fn webui_unified_diff_search_index(
                     });
             push_webui_diff_search_index_candidate(
                 builder,
-                webui_diff_search_line_preview(line),
+                webui_diff_search_line_body(line),
                 position,
             );
             return;
@@ -147,7 +153,7 @@ pub(crate) fn webui_unified_diff_search_index(
         let position = webui_diff_search_index_line_position(builder, line);
         push_webui_diff_search_index_candidate(
             builder,
-            webui_diff_search_line_preview(line),
+            webui_diff_search_line_body(line),
             position,
         );
         advance_webui_diff_search_index_line_position(builder, line);
@@ -166,22 +172,36 @@ pub(crate) fn flush_webui_diff_search_indexed_file(
         return;
     };
     let ngram_index = webui_diff_search_candidate_ngram_index(&builder.candidates);
+    let overflow_candidates = builder
+        .candidates
+        .iter()
+        .enumerate()
+        .filter(|(_, candidate)| candidate.normalized_overflow.is_some())
+        .map(|(candidate_index, _)| candidate_index)
+        .collect();
     indexed_files.push(WebuiDiffSearchIndexedFile {
         summary: builder.summary,
         candidates: builder.candidates,
         ngram_index,
+        overflow_candidates,
     });
 }
 
-/// Appends one pre-normalized candidate to the current indexed file.
-/// 将单条预归一化候选项追加到当前索引文件。
+/// Appends one candidate to the current indexed file.
+/// 将单条候选项追加到当前索引文件。
+/// The preview is bounded; the full text is kept for matching only when the preview cut it.
+/// 预览有界；仅当预览截断时才额外保留完整文本用于匹配。
 pub(crate) fn push_webui_diff_search_index_candidate(
     builder: &mut WebuiDiffSearchIndexedFileBuilder,
-    preview: String,
+    text: &str,
     position: Option<WebuiDiffSearchLinePosition>,
 ) {
+    let preview =
+        truncate_string_to_char_boundary(text, WEBUI_DIFF_SEARCH_PREVIEW_MAX_BYTES).to_string();
+    let normalized_overflow = (preview.len() < text.len()).then(|| text.to_lowercase());
     builder.candidates.push(WebuiDiffSearchIndexedCandidate {
         normalized_preview: preview.to_lowercase(),
+        normalized_overflow,
         preview,
         position,
     });
@@ -228,6 +248,23 @@ pub(crate) fn webui_diff_search_candidate_indexes(
     if query_ngrams.is_empty() {
         return (0..indexed_file.candidates.len()).collect();
     }
+    // Truncated lines are not fully indexed, so they are always scanned directly.
+    // 被截断的行没有完整索引，因此始终直接扫描。
+    let mut candidate_indexes = webui_diff_search_indexed_hits(indexed_file, query_ngrams);
+    if !indexed_file.overflow_candidates.is_empty() {
+        candidate_indexes.extend(indexed_file.overflow_candidates.iter().copied());
+        candidate_indexes.sort_unstable();
+        candidate_indexes.dedup();
+    }
+    candidate_indexes
+}
+
+/// Intersects the posting lists of every query n-gram.
+/// 求所有查询 n-gram 倒排列表的交集。
+fn webui_diff_search_indexed_hits(
+    indexed_file: &WebuiDiffSearchIndexedFile,
+    query_ngrams: BTreeSet<String>,
+) -> Vec<usize> {
     let mut posting_lists = Vec::new();
     for ngram in query_ngrams {
         let Some(posting_list) = indexed_file.ngram_index.get(&ngram) else {
@@ -271,7 +308,12 @@ pub(crate) fn webui_diff_search_index_file_matches(
             let Some(candidate) = indexed_file.candidates.get(candidate_index) else {
                 continue;
             };
-            if candidate.normalized_preview.contains(&normalized_query) {
+            if candidate.normalized_preview.contains(&normalized_query)
+                || candidate
+                    .normalized_overflow
+                    .as_ref()
+                    .is_some_and(|text| text.contains(&normalized_query))
+            {
                 match_count += 1;
                 if first_preview.is_none() {
                     first_preview = Some(candidate.preview.clone());
@@ -406,9 +448,9 @@ pub(crate) fn webui_diff_search_path_preview(old_path: &str, new_path: &str) -> 
     }
 }
 
-/// Builds a compact preview for one raw diff line search candidate.
-/// 为单条原始 diff 行搜索候选项构建紧凑预览。
-pub(crate) fn webui_diff_search_line_preview(line: &str) -> String {
+/// Returns the searchable text of one raw diff line without its diff marker.
+/// 返回单条原始 diff 行去掉 diff 标记后的可搜索文本。
+pub(crate) fn webui_diff_search_line_body(line: &str) -> &str {
     let body = if (line.starts_with('+') && !line.starts_with("+++"))
         || (line.starts_with('-') && !line.starts_with("---"))
     {
@@ -418,5 +460,5 @@ pub(crate) fn webui_diff_search_line_preview(line: &str) -> String {
     } else {
         line
     };
-    truncate_string_to_char_boundary(body.trim(), WEBUI_DIFF_SEARCH_PREVIEW_MAX_BYTES).to_string()
+    body.trim()
 }

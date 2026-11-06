@@ -609,7 +609,9 @@ pub(crate) async fn sync_selected_session_v1_projection_from_store(
             })?;
         projection.goal_summary =
             session_goal_summary_from_v1_handle(&handle, selected_session_id)?;
-        let process_mirror = if projection.queued_inputs.is_empty() {
+        let process_mirror = if projection.queued_inputs.is_empty()
+            && projection.pending_in_turn_inputs.is_empty()
+        {
             PendingPromptProcessMirror::default()
         } else {
             let selected_session_id_text = selected_session_id.to_string();

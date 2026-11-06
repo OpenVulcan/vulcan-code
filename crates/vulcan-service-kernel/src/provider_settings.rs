@@ -5,9 +5,11 @@ use serde::Deserialize;
 use vulcan_agent_runtime::provider_config::{
     PROVIDER_RATE_LIMIT_RETRY_MAX_DELAY_MS, PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES,
     PROVIDER_RETRY_KEYWORD_MAX_CHARACTERS, PROVIDER_RETRY_KEYWORD_MAX_COUNT,
-    PROVIDER_RETRY_MAX_RETRIES, PersistedProviderRateLimitRetryConfiguration,
-    PersistedProviderRetryConfiguration, ProviderConfigurationFile,
-    default_provider_retry_keywords, normalize_provider_rate_limit_retry_max_retries,
+    PROVIDER_RETRY_MAX_BACKOFF_FACTOR_MILLI, PROVIDER_RETRY_MAX_JITTER_PERCENT,
+    PROVIDER_RETRY_MAX_RETRIES, PROVIDER_RETRY_MIN_BACKOFF_FACTOR_MILLI,
+    PersistedProviderRateLimitRetryConfiguration, PersistedProviderRetryConfiguration,
+    ProviderConfigurationFile, default_provider_retry_keywords,
+    normalize_provider_rate_limit_retry_max_retries, normalize_provider_retry_backoff_factor,
 };
 use vulcan_service_api::{
     ProviderRateLimitRetrySettingsSummary, ProviderRetrySettingsSummary, ServiceEventEmitter,
@@ -284,7 +286,7 @@ pub(crate) fn provider_retry_settings(
         initial_delay_ms: retry.initial_delay_ms.max(1),
         max_delay_ms: retry.max_delay_ms.max(retry.initial_delay_ms.max(1)),
         backoff_factor_milli: normalized_backoff_factor_milli(retry.backoff_factor),
-        jitter_percent: retry.jitter_percent.min(80),
+        jitter_percent: retry.jitter_percent.min(PROVIDER_RETRY_MAX_JITTER_PERCENT),
         respect_retry_after: retry.respect_retry_after,
         retry_429: retry.retry_429,
         retry_keywords: normalized_retry_keywords(&retry.retry_keywords),
@@ -317,9 +319,9 @@ fn validate_provider_retry_settings_request(
         None,
     )?;
     validate_backoff_factor_milli("ordinary retry", request.backoff_factor_milli)?;
-    if request.jitter_percent > 80 {
-        return Err(String::from(
-            "The ordinary retry jitter percentage must be between 0 and 80.",
+    if request.jitter_percent > PROVIDER_RETRY_MAX_JITTER_PERCENT {
+        return Err(format!(
+            "The ordinary retry jitter percentage must be between 0 and {PROVIDER_RETRY_MAX_JITTER_PERCENT}."
         ));
     }
     validate_retry_keywords(&request.retry_keywords)?;
@@ -419,9 +421,13 @@ fn validate_retry_delay_range(
 /// Validates one fixed-point backoff multiplier submitted by the browser.
 /// 校验浏览器提交的定点退避倍数。
 fn validate_backoff_factor_milli(label: &str, factor_milli: u32) -> Result<(), String> {
-    if !(1_000..=8_000).contains(&factor_milli) {
+    if !(PROVIDER_RETRY_MIN_BACKOFF_FACTOR_MILLI..=PROVIDER_RETRY_MAX_BACKOFF_FACTOR_MILLI)
+        .contains(&factor_milli)
+    {
         return Err(format!(
-            "The {label} backoff multiplier must be between 1.0 and 8.0."
+            "The {label} backoff multiplier must be between {:.1} and {:.1}.",
+            f64::from(PROVIDER_RETRY_MIN_BACKOFF_FACTOR_MILLI) / 1_000.0,
+            f64::from(PROVIDER_RETRY_MAX_BACKOFF_FACTOR_MILLI) / 1_000.0,
         ));
     }
     Ok(())
@@ -430,12 +436,7 @@ fn validate_backoff_factor_milli(label: &str, factor_milli: u32) -> Result<(), S
 /// Normalizes one persisted floating-point multiplier into the browser fixed-point contract.
 /// 将一个持久化浮点倍数规范化为浏览器定点契约。
 fn normalized_backoff_factor_milli(factor: f64) -> u32 {
-    let normalized = if factor.is_finite() {
-        factor.clamp(1.0, 8.0)
-    } else {
-        2.0
-    };
-    (normalized * 1_000.0).round() as u32
+    (normalize_provider_retry_backoff_factor(factor) * 1_000.0).round() as u32
 }
 
 #[cfg(test)]

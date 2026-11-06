@@ -313,13 +313,13 @@ impl BrowserManager {
         // handle and the blocked lease until try_wait observes termination.
         // 宿主可能先确认关闭请求再退出；在 try_wait 观察到退出之前保留精确进程句柄和阻塞租约。
         let _ = self.request_host(session_id, "host.shutdown", json!({}));
-        if !self.wait_owned_host_exit(session_id, std::time::Duration::from_secs(7))? {
+        if !self.wait_owned_host_exit(session_id, super::BROWSER_HOST_SHUTDOWN_EXIT_WAIT)? {
             self.owned_host(session_id)?
                 .lock()
                 .map_err(|error| format!("failed to lock browser host: {error}"))?
                 .process
                 .kill();
-            if !self.wait_owned_host_exit(session_id, std::time::Duration::from_secs(2))? {
+            if !self.wait_owned_host_exit(session_id, super::BROWSER_HOST_KILL_EXIT_WAIT)? {
                 return Err(format!(
                     "{}: browser host process did not exit after context closure",
                     super::BROWSER_ERROR_LEASE_BLOCKED

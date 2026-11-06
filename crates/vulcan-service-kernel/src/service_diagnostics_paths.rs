@@ -3,6 +3,10 @@
 
 use super::*;
 
+/// Number of most recent diagnostic lines kept in the startup log buffer.
+/// 启动日志缓冲区保留的最近诊断行数。
+const STARTUP_RECENT_LOGS_CAPACITY: usize = 200;
+
 /// Appends one WebUI-visible service diagnostic message to the retained startup log buffer.
 /// 向保留的启动日志缓冲区追加一条 WebUI 可见的服务诊断消息。
 ///
@@ -25,8 +29,12 @@ pub(crate) fn push_webui_service_diagnostic(
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
     guard.startup.recent_logs.push(message);
-    if guard.startup.recent_logs.len() > 200 {
-        let overflow = guard.startup.recent_logs.len().saturating_sub(200);
+    if guard.startup.recent_logs.len() > STARTUP_RECENT_LOGS_CAPACITY {
+        let overflow = guard
+            .startup
+            .recent_logs
+            .len()
+            .saturating_sub(STARTUP_RECENT_LOGS_CAPACITY);
         guard.startup.recent_logs.drain(0..overflow);
     }
     Ok(())
@@ -87,8 +95,12 @@ pub(crate) fn retain_slow_submission_diagnostic(
         .startup
         .recent_logs
         .push(format!("[submit-slow] {message}"));
-    if guard.startup.recent_logs.len() > 200 {
-        let overflow = guard.startup.recent_logs.len().saturating_sub(200);
+    if guard.startup.recent_logs.len() > STARTUP_RECENT_LOGS_CAPACITY {
+        let overflow = guard
+            .startup
+            .recent_logs
+            .len()
+            .saturating_sub(STARTUP_RECENT_LOGS_CAPACITY);
         guard.startup.recent_logs.drain(0..overflow);
     }
     let entry_id = format!(

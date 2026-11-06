@@ -360,6 +360,10 @@ pub(super) fn configured_inference_service_for_settings(
 /// 返回值
 /// A short-lived caller context constrained to one profile, one operation, and one route scope.
 /// 返回仅限一个配置档、一项操作与一个路由用途范围的短期调用方上下文。
+/// Execution budget and deadline of one settings inference test, in milliseconds.
+/// 一次设置推理测试的执行预算与截止时间（毫秒）。
+const SETTINGS_INFERENCE_TEST_TIMEOUT_MS: u64 = 120_000;
+
 fn settings_inference_test_caller(
     consumer_profile_id: &str,
     permission: InferencePermission,
@@ -382,14 +386,14 @@ fn settings_inference_test_caller(
         usage_scope,
         interactive_session_id: None,
         owner_session_id: None,
-        deadline_unix_ms: Some(now_unix_ms.saturating_add(120_000)),
+        deadline_unix_ms: Some(now_unix_ms.saturating_add(SETTINGS_INFERENCE_TEST_TIMEOUT_MS)),
         budget: InferenceCallerBudget {
             max_concurrent_executions: 1,
             max_input_units_per_request: Some(16_384),
             max_output_tokens_per_request: None,
             max_requests_per_minute: None,
             max_input_units_per_minute: None,
-            max_execution_duration_ms: Some(120_000),
+            max_execution_duration_ms: Some(SETTINGS_INFERENCE_TEST_TIMEOUT_MS),
         },
     })
 }

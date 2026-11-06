@@ -697,16 +697,10 @@ const fn profile_source_label(source: ProfileSourceKind) -> &'static str {
     }
 }
 
-/// Converts a normalized priority into the frozen P0/P1/P2 prompt label.
-/// 将规范化优先级转换为冻结的 P0/P1/P2 提示词标签。
+/// Converts a normalized priority into the P0/P1/P2 prompt label, with Core's bands.
+/// 按 Core 的档位将规范化优先级转换为 P0/P1/P2 提示词标签。
 const fn priority_label(priority: u32) -> &'static str {
-    if priority >= 100 {
-        "P0"
-    } else if priority >= 60 {
-        "P1"
-    } else {
-        "P2"
-    }
+    vulcan_memorymesh_core::priority_band_label(priority)
 }
 
 /// Converts a profile lifecycle into the frozen L0/L1/L2/L3 prompt label.

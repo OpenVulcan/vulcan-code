@@ -65,6 +65,10 @@ const NATIVE_VMM_OWNER_ID: &str = "vmm-native";
 /// 单个 Core Effect 接受的最大 LLM 输出预算。
 const NATIVE_VMM_LLM_OUTPUT_TOKENS: u64 = 8_192;
 
+/// Physical hits read per lexical page; a shorter page is the last one.
+/// 每个词法分页读取的物理命中数；不足一页即为末页。
+const NATIVE_VMM_LEXICAL_PAGE_SIZE: u32 = 128;
+
 /// Stable namespace for route-derived native memory vector generations.
 /// 由路由派生的原生记忆向量代次所使用的稳定命名空间。
 const NATIVE_VMM_VECTOR_SPACE_NAMESPACE: &str = "vmm-native:memory:v1";
@@ -2177,7 +2181,7 @@ impl NativeVmmHostDriver {
                 // hits 是一页有界物理结果，包含随后被 Core 拒绝的身份。
                 let hits = self
                     .data_plane
-                    .search_lexical_page(text, 128, offset)
+                    .search_lexical_page(text, NATIVE_VMM_LEXICAL_PAGE_SIZE, offset)
                     .await
                     .map_err(storage_backend_error)?;
                 // page_len distinguishes a partial last page from a fully filtered intermediate page.
@@ -2230,11 +2234,11 @@ impl NativeVmmHostDriver {
                         .or_insert((candidate.score.raw_value, memory));
                     entry.0 = entry.0.min(candidate.score.raw_value);
                 }
-                if page_len < 128 {
+                if page_len < NATIVE_VMM_LEXICAL_PAGE_SIZE as usize {
                     break;
                 }
                 offset = offset
-                    .checked_add(128)
+                    .checked_add(NATIVE_VMM_LEXICAL_PAGE_SIZE)
                     .ok_or_else(|| core_effect_error("lexical page offset overflow"))?;
             }
         }

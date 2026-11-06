@@ -7,6 +7,27 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
+/// Lowest normalized priority labelled P0.
+/// 标为 P0 的最低规范化优先级。
+pub const PRIORITY_P0_FLOOR: u32 = 80;
+
+/// Lowest normalized priority labelled P1; anything lower is P2.
+/// 标为 P1 的最低规范化优先级；更低的为 P2。
+pub const PRIORITY_P1_FLOOR: u32 = 50;
+
+/// Maps a normalized priority onto the P0/P1/P2 label every surface shows.
+/// 将规范化优先级映射为所有界面共用的 P0/P1/P2 标签。
+#[must_use]
+pub const fn priority_band_label(priority: u32) -> &'static str {
+    if priority >= PRIORITY_P0_FLOOR {
+        "P0"
+    } else if priority >= PRIORITY_P1_FLOOR {
+        "P1"
+    } else {
+        "P2"
+    }
+}
+
 /// Defines the maximum number of visible scopes carried by one public command.
 /// 定义一个公共命令可携带的最大可见作用域数量。
 pub const MAX_VISIBLE_SCOPES: usize = 256;

@@ -18,7 +18,6 @@ mod settings;
 mod snapshot;
 
 pub(super) use actions::run_webui_workspace_git_file_action;
-#[cfg(test)]
 pub(super) use command::run_webui_git_command;
 pub(super) use commit_action::service_run_git_commit_action;
 pub(super) use commit_summary::service_generate_git_commit_message;

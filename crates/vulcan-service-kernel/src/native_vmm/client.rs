@@ -2417,16 +2417,10 @@ pub(super) fn profile_node_entry(node: &ProfileNode) -> Result<ProfileNodeEntry,
     })
 }
 
-/// Maps normalized Core profile priority onto VMM's P0/P1/P2 labels.
-/// 将规范化 Core 画像优先级映射到 VMM 的 P0/P1/P2 标签。
+/// Maps normalized Core profile priority onto VMM's P0/P1/P2 labels, with Core's bands.
+/// 按 Core 的档位将规范化画像优先级映射到 VMM 的 P0/P1/P2 标签。
 const fn profile_priority_label(priority: u32) -> &'static str {
-    if priority >= 90 {
-        "P0"
-    } else if priority >= 60 {
-        "P1"
-    } else {
-        "P2"
-    }
+    vulcan_memorymesh_core::priority_band_label(priority)
 }
 
 /// Maps Core profile lifecycle levels onto VMM's L0-L3 labels.

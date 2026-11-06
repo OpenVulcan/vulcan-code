@@ -10,10 +10,17 @@ pub(crate) fn session_goal_request_session_id(
     state: &SharedServiceBridgeState,
     conversation_id: Option<&str>,
 ) -> Result<SessionId, String> {
-    if let Some(session_id) = conversation_id.and_then(parse_session_id) {
-        return Ok(session_id);
+    // Only an absent or blank id falls back to the selection; a malformed id must never retarget
+    // the goal change to another session.
+    // 只有缺失或空白的标识回退到当前选中会话；格式错误的标识绝不能把目标变更转到另一个会话。
+    match conversation_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(raw) => parse_session_id(raw)
+            .ok_or_else(|| format!("Invalid conversation id for the goal request: {raw}")),
+        None => selected_session_id_from_state(state),
     }
-    selected_session_id_from_state(state)
 }
 
 /// Ensures one regular persisted session exists before mutating goal state.

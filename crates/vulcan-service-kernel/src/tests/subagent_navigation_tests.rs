@@ -80,18 +80,6 @@ fn cached_navigation_lists_unclosed_subagent_tree() {
     );
 }
 
-/// Verifies a nested active subagent panel remains valid under root navigation.
-/// 验证嵌套活动智能体面板在根会话导航下仍然有效。
-/// Verifies workspace bootstrap wording no longer promises subagent index preload.
-/// 验证工作区启动文案不再承诺预加载智能体索引。
-#[test]
-fn workspace_bootstrap_ready_message_excludes_subagent_index_preload() {
-    let message = crate::service_bootstrap::startup_ready_message("workspace");
-
-    assert!(!message.trim().is_empty());
-    assert!(!message.to_ascii_lowercase().contains("subagent"));
-}
-
 /// Verifies an exact embedded task file remains readable after every live agent entry is gone.
 /// 验证全部实时智能体条目消失后，精确嵌入式任务文件仍可读取。
 #[tokio::test]

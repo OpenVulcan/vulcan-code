@@ -15,6 +15,33 @@ pub const PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES: u32 = 100_000;
 /// 单次限流重试等待的宿主硬上限，由设置页与运行时共享。
 pub const PROVIDER_RATE_LIMIT_RETRY_MAX_DELAY_MS: u64 = 1_800_000;
 
+/// Hard host ceiling for the ordinary retry jitter percentage.
+/// 普通重试抖动百分比的宿主硬上限。
+pub const PROVIDER_RETRY_MAX_JITTER_PERCENT: u8 = 80;
+
+/// Smallest accepted retry backoff multiplier, in thousandths.
+/// 允许的最小重试退避倍数（千分之一单位）。
+pub const PROVIDER_RETRY_MIN_BACKOFF_FACTOR_MILLI: u32 = 1_000;
+
+/// Largest accepted retry backoff multiplier, in thousandths.
+/// 允许的最大重试退避倍数（千分之一单位）。
+pub const PROVIDER_RETRY_MAX_BACKOFF_FACTOR_MILLI: u32 = 8_000;
+
+/// Clamps one persisted backoff multiplier into the accepted range.
+/// 将一个持久化退避倍数限制在允许范围内。
+/// A non-finite value falls back to the default multiplier.
+/// 非有限值回退到默认倍数。
+pub fn normalize_provider_retry_backoff_factor(factor: f64) -> f64 {
+    if factor.is_finite() {
+        factor.clamp(
+            f64::from(PROVIDER_RETRY_MIN_BACKOFF_FACTOR_MILLI) / 1_000.0,
+            f64::from(PROVIDER_RETRY_MAX_BACKOFF_FACTOR_MILLI) / 1_000.0,
+        )
+    } else {
+        default_provider_retry_backoff_factor()
+    }
+}
+
 /// Built-in error keywords that mark a dispatched failure as a replayable transient interruption.
 /// 将已分派失败标记为可重放瞬态中断的内置错误关键词。
 ///

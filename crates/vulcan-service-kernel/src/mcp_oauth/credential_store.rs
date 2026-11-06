@@ -19,9 +19,9 @@ use vulcan_agent_runtime::mcp::{McpOAuthCredentialBackend, McpOAuthCredentialRec
 /// Vulcan Code 持有的 MCP OAuth 凭据安全存储命名空间。
 const MCP_OAUTH_CREDENTIAL_SERVICE: &str = "vulcan-code.mcp-oauth.v1";
 
-/// Characters per chunk; UTF-16 encoding keeps every chunk within the smallest platform blob limit.
-/// 每个分片的字符数；按 UTF-16 编码后每个分片仍低于最小平台数据上限。
-const CHUNK_CHARS: usize = 1000;
+/// UTF-16 code units per chunk; 2000 encoded bytes stay within the smallest platform blob limit.
+/// 每个分片的 UTF-16 码元数；编码后 2000 字节仍低于最小平台数据上限。
+const CHUNK_UTF16_UNITS: usize = 1000;
 
 /// Manifest stored under the server's manifest account.
 /// 存储在服务器清单账户下的清单。
@@ -223,14 +223,27 @@ fn chunk_account(server_id: &str, index: usize) -> String {
     format!("chunk:{server_id}#{index}")
 }
 
-/// Splits on character boundaries into chunks of at most [`CHUNK_CHARS`] characters.
-/// 按字符边界拆分为每片最多 [`CHUNK_CHARS`] 个字符。
+/// Splits on character boundaries into chunks of at most [`CHUNK_UTF16_UNITS`] UTF-16 code units.
+/// 按字符边界拆分为每片最多 [`CHUNK_UTF16_UNITS`] 个 UTF-16 码元。
+/// Counting code units keeps supplementary-plane characters from overflowing the blob limit.
+/// 按码元计数可防止辅助平面字符使分片超出数据上限。
 fn split_chunks(serialized: &str) -> Vec<String> {
-    let characters = serialized.chars().collect::<Vec<_>>();
-    characters
-        .chunks(CHUNK_CHARS)
-        .map(|chunk| chunk.iter().collect())
-        .collect()
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    let mut units = 0;
+    for character in serialized.chars() {
+        let width = character.len_utf16();
+        if units + width > CHUNK_UTF16_UNITS {
+            chunks.push(std::mem::take(&mut current));
+            units = 0;
+        }
+        current.push(character);
+        units += width;
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
 }
 
 /// Hex SHA-256 of the serialized record.

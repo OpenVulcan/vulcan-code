@@ -3,7 +3,7 @@
 
 use super::*;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use vulcan_file_watcher::live::{
@@ -266,6 +266,85 @@ fn is_git_temporary_lock_path(git_relative_path: &Path) -> bool {
             .is_some_and(|extension| extension == "lock")
 }
 
+/// Cached ignore rules of one repository plus the tracked files those rules would hide.
+/// 一个仓库的缓存忽略规则，以及这些规则会隐藏的已跟踪文件。
+struct RepositoryIgnoreFilter {
+    /// Matcher built from the repository's root ignore files.
+    /// 由仓库根忽略文件构建的匹配器。
+    matcher: Gitignore,
+    /// Slash-separated relative paths of tracked files that match an ignore rule.
+    /// 匹配忽略规则的已跟踪文件的斜杠分隔相对路径。
+    tracked_ignored: HashSet<String>,
+}
+
+impl RepositoryIgnoreFilter {
+    /// Reports whether a change at `relative_path` is hidden by the ignore rules.
+    /// 判断 `relative_path` 处的变更是否被忽略规则隐藏。
+    /// Tracked files, and directories holding them, stay visible because Git still diffs them.
+    /// 已跟踪文件及包含它们的目录保持可见，因为 Git 仍会比较它们。
+    fn ignores(&self, relative_path: &Path, is_dir: bool) -> bool {
+        if !self
+            .matcher
+            .matched_path_or_any_parents(relative_path, is_dir)
+            .is_ignore()
+        {
+            return false;
+        }
+        if self.tracked_ignored.is_empty() {
+            return true;
+        }
+        let key = relative_path.to_string_lossy().replace('\\', "/");
+        let directory_prefix = format!("{key}/");
+        !self
+            .tracked_ignored
+            .iter()
+            .any(|tracked| *tracked == key || tracked.starts_with(&directory_prefix))
+    }
+}
+
+/// Builds the cached ignore filter of one repository.
+/// 构建一个仓库的缓存忽略过滤器。
+fn build_repository_ignore_filter(repository_root: &Path) -> RepositoryIgnoreFilter {
+    let matcher = build_repository_ignore_matcher(repository_root);
+    let tracked_ignored = if matcher.num_ignores() == 0 {
+        HashSet::new()
+    } else {
+        tracked_ignored_paths(repository_root)
+    };
+    RepositoryIgnoreFilter {
+        matcher,
+        tracked_ignored,
+    }
+}
+
+/// Lists tracked files that match the repository's ignore rules.
+/// 列出匹配仓库忽略规则的已跟踪文件。
+/// A failed listing yields an empty set, which keeps the previous ignore-only filtering.
+/// 列举失败时返回空集合，即保持原有的仅按忽略规则过滤。
+fn tracked_ignored_paths(repository_root: &Path) -> HashSet<String> {
+    let Ok(output) = crate::git::run_webui_git_command(
+        repository_root,
+        &[
+            "ls-files",
+            "-z",
+            "--cached",
+            "--ignored",
+            "--exclude-standard",
+        ],
+    ) else {
+        return HashSet::new();
+    };
+    if !output.status.success() {
+        return HashSet::new();
+    }
+    output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| String::from_utf8_lossy(entry).into_owned())
+        .collect()
+}
+
 /// Builds the ignore matcher from one repository's root `.gitignore` and `.git/info/exclude`.
 /// 根据一个仓库根目录的 `.gitignore` 与 `.git/info/exclude` 构建忽略匹配器。
 ///
@@ -295,7 +374,7 @@ fn repository_ignore_files(repository_root: &Path) -> [PathBuf; 2] {
 /// `modification_only` excludes structural events and root invalidations from directory filtering.
 /// `modification_only` 用于确保目录过滤不会丢弃结构事件和根失效通知。
 fn change_affects_repository(
-    ignore_matchers: &mut HashMap<PathBuf, Gitignore>,
+    ignore_matchers: &mut HashMap<PathBuf, RepositoryIgnoreFilter>,
     repository_root: &Path,
     changed_path: &Path,
     modification_only: bool,
@@ -315,9 +394,8 @@ fn change_affects_repository(
     if !own_git_tree
         && ignore_matchers
             .entry(repository_root.to_path_buf())
-            .or_insert_with(|| build_repository_ignore_matcher(repository_root))
-            .matched_path_or_any_parents(relative_path, changed_path.is_dir())
-            .is_ignore()
+            .or_insert_with(|| build_repository_ignore_filter(repository_root))
+            .ignores(relative_path, changed_path.is_dir())
     {
         return false;
     }
@@ -363,18 +441,22 @@ fn change_affects_repository(
 /// `modification_only_paths` 标识本批次中没有结构变更或重扫的路径。
 fn group_webui_git_watch_events(
     targets: &RwLock<BTreeMap<PathBuf, BTreeSet<GitWatchTarget>>>,
-    ignore_matchers: &mut HashMap<PathBuf, Gitignore>,
+    ignore_matchers: &mut HashMap<PathBuf, RepositoryIgnoreFilter>,
     changed_paths: &[PathBuf],
     modification_only_paths: &BTreeSet<PathBuf>,
 ) -> BTreeMap<(Option<String>, PathBuf), BTreeSet<String>> {
     let targets = targets
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // An index change can track or untrack an ignored file, so it also rebuilds the filter.
+    // 索引变化可能跟踪或取消跟踪被忽略文件，因此同样重建过滤器。
     ignore_matchers.retain(|repository_root, _| {
+        let index_path = repository_root.join(".git").join("index");
         targets.contains_key(repository_root)
-            && !changed_paths
-                .iter()
-                .any(|changed_path| repository_ignore_files(repository_root).contains(changed_path))
+            && !changed_paths.iter().any(|changed_path| {
+                *changed_path == index_path
+                    || repository_ignore_files(repository_root).contains(changed_path)
+            })
     });
     let mut grouped = BTreeMap::new();
     for changed_path in changed_paths {

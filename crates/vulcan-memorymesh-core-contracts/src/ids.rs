@@ -4,6 +4,10 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt::{Display, Formatter};
 
+/// Maximum UTF-8 byte length of every opaque identifier.
+/// 每个不透明标识符的最大 UTF-8 字节长度。
+pub const MAX_OPAQUE_IDENTIFIER_BYTES: usize = 512;
+
 /// Generates a validated UTF-8 opaque identifier type.
 /// 生成经过校验的 UTF-8 不透明标识符类型。
 macro_rules! opaque_id {
@@ -19,8 +23,8 @@ macro_rules! opaque_id {
             /// 在拒绝空值或超长值后创建标识符。
             ///
             /// # Errors
-            /// Returns an error when the identifier is empty, longer than 512 bytes, or contains NUL.
-            /// 当标识符为空、超过 512 字节或包含 NUL 时返回错误。
+            /// Returns an error when the identifier is empty, longer than `MAX_OPAQUE_IDENTIFIER_BYTES`, or contains NUL.
+            /// 当标识符为空、超过 `MAX_OPAQUE_IDENTIFIER_BYTES` 或包含 NUL 时返回错误。
             pub fn new(value: impl Into<String>) -> Result<Self, IdentifierError> {
                 // Materialize the owned value once so validation and storage observe identical bytes.
                 // 仅实例化一次所有权值，确保校验与存储观察到完全相同的字节。
@@ -28,7 +32,7 @@ macro_rules! opaque_id {
                 if value.is_empty() {
                     return Err(IdentifierError::Empty);
                 }
-                if value.len() > 512 {
+                if value.len() > MAX_OPAQUE_IDENTIFIER_BYTES {
                     return Err(IdentifierError::TooLong);
                 }
                 if value.contains('\0') {
@@ -84,7 +88,7 @@ pub enum IdentifierError {
     Empty,
     /// Indicates an identifier exceeding the ABI safety limit.
     /// 表示标识符超过 ABI 安全长度限制。
-    #[error("identifier exceeds 512 UTF-8 bytes")]
+    #[error("identifier exceeds {} UTF-8 bytes", MAX_OPAQUE_IDENTIFIER_BYTES)]
     TooLong,
     /// Indicates an identifier containing a NUL byte.
     /// 表示标识符包含 NUL 字节。

@@ -4827,12 +4827,17 @@ impl ProviderManifestSyncService {
         } else {
             None
         };
-        let retained_telemetry = provider_operational_telemetry_snapshot(
-            provider_id,
-            MANIFEST_STATUS_TELEMETRY_MAX_ITEMS,
-        )
-        .unwrap_or_default();
+        // The full retained list is read so the count and truncation flag match the healthy path.
+        // 读取完整保留列表，使计数与截断标记和健康路径一致。
+        let retained_telemetry =
+            provider_operational_telemetry_snapshot(provider_id, usize::MAX).unwrap_or_default();
         let recent_telemetry_total_count = retained_telemetry.len();
+        let recent_telemetry_events = retained_telemetry
+            .into_iter()
+            .take(MANIFEST_STATUS_TELEMETRY_MAX_ITEMS)
+            .collect::<Vec<_>>();
+        let recent_telemetry_events_truncated =
+            recent_telemetry_events.len() < recent_telemetry_total_count;
         ProviderManifestStatus {
             provider_id: provider_id.to_string(),
             status_error: Some(status_error),
@@ -4843,9 +4848,9 @@ impl ProviderManifestSyncService {
             previous: None,
             sync_state: None,
             sync_check_state: None,
-            recent_telemetry_events: retained_telemetry,
+            recent_telemetry_events,
             recent_telemetry_total_count,
-            recent_telemetry_events_truncated: false,
+            recent_telemetry_events_truncated,
             quarantine: Vec::new(),
             sync_configured: self.remote_index_url.is_some() && !self.trusted_keys.is_empty(),
             model_rules: Vec::new(),

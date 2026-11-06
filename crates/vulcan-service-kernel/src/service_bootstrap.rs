@@ -1318,9 +1318,10 @@ fn run_service_bootstrap(
                 }
             }
             tokio::time::sleep(std::time::Duration::from_secs(
-                configuration
-                    .usage_refresh_interval_seconds
-                    .clamp(30, 86_400),
+                configuration.usage_refresh_interval_seconds.clamp(
+                    vulcan_provider_adapters::MIN_USAGE_REFRESH_INTERVAL_SECONDS,
+                    vulcan_provider_adapters::MAX_USAGE_REFRESH_INTERVAL_SECONDS,
+                ),
             ))
             .await;
         }

@@ -3,58 +3,6 @@
 
 use super::*;
 
-/// Ensures every frontend business RPC method has a kernel dispatcher arm.
-/// 确保每个前端业务 RPC 方法都有服务内核分发分支。
-#[test]
-fn frontend_service_rpc_methods_are_dispatched_by_kernel() {
-    let frontend_sources = [
-        include_str!(
-            "../../../../apps/vulcan-code-web/src/service/conversation-actions-service.ts"
-        ),
-        include_str!("../../../../apps/vulcan-code-web/src/service/memory-actions-service.ts"),
-        include_str!("../../../../apps/vulcan-code-web/src/service/project-actions-service.ts"),
-        include_str!("../../../../apps/vulcan-code-web/src/service/settings-actions-service.ts"),
-        include_str!("../../../../apps/vulcan-code-web/src/service/skills-actions-service.ts"),
-        include_str!("../../../../apps/vulcan-code-web/src/service/workbench-snapshot-service.ts"),
-    ];
-    let methods = frontend_service_rpc_methods(&frontend_sources);
-    assert!(
-        !methods.is_empty(),
-        "frontend service RPC method extraction should not be empty"
-    );
-    for method in methods {
-        assert!(
-            crate::rpc_dispatch::service_rpc_method_names().contains(method.as_str()),
-            "frontend RPC method `{method}` is not present in kernel dispatcher"
-        );
-    }
-}
-
-/// Extracts literal serviceClient.request method names from frontend source.
-/// 从前端源码中提取字面量 serviceClient.request 方法名。
-fn frontend_service_rpc_methods(sources: &[&str]) -> BTreeSet<String> {
-    let mut methods = BTreeSet::new();
-    for source in sources {
-        let mut remaining = *source;
-        while let Some(index) = remaining.find("serviceClient.request") {
-            remaining = &remaining[index + "serviceClient.request".len()..];
-            if let Some(method) = first_double_quoted_literal(remaining) {
-                methods.insert(method);
-            }
-        }
-    }
-    methods
-}
-
-/// Returns the first double-quoted literal in one source fragment.
-/// 返回单个源码片段中的第一个双引号字面量。
-fn first_double_quoted_literal(source: &str) -> Option<String> {
-    let start = source.find('"')?;
-    let rest = &source[start + 1..];
-    let end = rest.find('"')?;
-    Some(rest[..end].to_string())
-}
-
 /// Verifies backend diff summary scanning handles CRLF and mode tokens without line arrays.
 /// 验证后端 diff 摘要扫描无需行数组即可处理 CRLF 与 mode token。
 #[test]

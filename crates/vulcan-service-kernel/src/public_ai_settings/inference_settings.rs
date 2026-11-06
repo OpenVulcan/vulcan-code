@@ -639,6 +639,16 @@ pub(crate) async fn service_save_public_ai_inference_route(
     request: PublicAiInferenceRouteSaveRequest,
 ) -> Result<PublicAiSettingsSnapshot, String> {
     validate_non_empty("consumerProfileId", request.consumer_profile_id.as_str())?;
+    // Knowledge-base profiles are frozen per space and owned by the library sync path only.
+    // 知识库配置档按空间冻结，只由知识库同步路径持有。
+    if request
+        .consumer_profile_id
+        .starts_with(&vulcan_workspace_store::knowledge_base::knowledge_consumer_profile_id(""))
+    {
+        return Err(String::from(
+            "Knowledge base inference profiles are managed by the knowledge base and cannot be edited here.",
+        ));
+    }
     match request.operation {
         AiOperation::ConversationRespond => {
             let purpose_id = request.purpose_id.as_deref().ok_or_else(|| {

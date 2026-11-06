@@ -98,7 +98,6 @@ pub(crate) async fn service_create_mcp_client(
     }
     let client_id = uuid::Uuid::new_v4().to_string();
     let issued = issue_client_token();
-    let current = provider_configuration_from_state(&state)?.mcp_service;
     validate_new_grants(&state, &request, None)?;
     let client = McpServiceClient {
         id: client_id.clone(),
@@ -114,10 +113,11 @@ pub(crate) async fn service_create_mcp_client(
             .map(target_grant_from_entry)
             .collect(),
     };
-    let mut next = current;
-    next.clients.push(client);
-    let normalized = normalize_mcp_service_configuration(next)?;
-    let saved = save_configuration(&state, normalized).await?;
+    let saved = save_configuration(&state, move |mut next| {
+        next.clients.push(client);
+        normalize_mcp_service_configuration(next)
+    })
+    .await?;
     Ok(McpServiceIssuedToken {
         snapshot: snapshot(&state, &saved)?,
         client_id,
@@ -135,20 +135,26 @@ pub(crate) async fn service_update_mcp_client(
         .client_id
         .clone()
         .ok_or_else(|| String::from("Updating an MCP client requires its client id."))?;
-    let mut next = provider_configuration_from_state(&state)?.mcp_service;
-    let position = client_position(&next, &client_id)?;
-    validate_new_grants(&state, &request, Some(&next.clients[position]))?;
-    let client = &mut next.clients[position];
-    client.name = request.name;
-    client.enabled = request.enabled;
-    client.sessions = grant_from_entry(request.sessions);
-    client.media_targets = request
-        .media_targets
-        .into_iter()
-        .map(target_grant_from_entry)
-        .collect();
-    let normalized = normalize_mcp_service_configuration(next)?;
-    let saved = save_configuration(&state, normalized).await?;
+    let current = provider_configuration_from_state(&state)?.mcp_service;
+    validate_new_grants(
+        &state,
+        &request,
+        Some(&current.clients[client_position(&current, &client_id)?]),
+    )?;
+    let saved = save_configuration(&state, move |mut next| {
+        let position = client_position(&next, &client_id)?;
+        let client = &mut next.clients[position];
+        client.name = request.name;
+        client.enabled = request.enabled;
+        client.sessions = grant_from_entry(request.sessions);
+        client.media_targets = request
+            .media_targets
+            .into_iter()
+            .map(target_grant_from_entry)
+            .collect();
+        normalize_mcp_service_configuration(next)
+    })
+    .await?;
     snapshot(&state, &saved)
 }
 
@@ -159,12 +165,14 @@ pub(crate) async fn service_rotate_mcp_client_token(
     client_id: String,
 ) -> Result<McpServiceIssuedToken, String> {
     let issued = issue_client_token();
-    let mut next = provider_configuration_from_state(&state)?.mcp_service;
-    let position = client_position(&next, &client_id)?;
-    next.clients[position].token_sha256 = issued.token_sha256;
-    next.clients[position].token_hint = issued.token_hint;
-    let normalized = normalize_mcp_service_configuration(next)?;
-    let saved = save_configuration(&state, normalized).await?;
+    let rotated_client_id = client_id.clone();
+    let saved = save_configuration(&state, move |mut next| {
+        let position = client_position(&next, &rotated_client_id)?;
+        next.clients[position].token_sha256 = issued.token_sha256;
+        next.clients[position].token_hint = issued.token_hint;
+        normalize_mcp_service_configuration(next)
+    })
+    .await?;
     Ok(McpServiceIssuedToken {
         snapshot: snapshot(&state, &saved)?,
         client_id,
@@ -178,24 +186,34 @@ pub(crate) async fn service_delete_mcp_client(
     state: SharedServiceBridgeState,
     client_id: String,
 ) -> Result<McpServiceSnapshot, String> {
-    let mut next = provider_configuration_from_state(&state)?.mcp_service;
-    let position = client_position(&next, &client_id)?;
-    next.clients.remove(position);
-    let saved = save_configuration(&state, next).await?;
+    let saved = save_configuration(&state, move |mut next| {
+        let position = client_position(&next, &client_id)?;
+        next.clients.remove(position);
+        Ok(next)
+    })
+    .await?;
     snapshot(&state, &saved)
 }
 
-/// Saves the normalized MCP configuration and drops runtime state of removed clients.
-/// 保存归一化的 MCP 配置，并丢弃已移除客户端的运行时状态。
-async fn save_configuration(
+/// Applies one change to the MCP configuration read inside the configuration transaction, saves
+/// it, and drops runtime state of removed clients.
+/// 在配置事务内读取 MCP 配置并应用一次变更后保存，同时丢弃已移除客户端的运行时状态。
+/// Reading inside the transaction keeps concurrent edits from overwriting each other.
+/// 在事务内读取可防止并发编辑互相覆盖。
+async fn save_configuration<Apply>(
     state: &SharedServiceBridgeState,
-    next: PersistedMcpServiceConfiguration,
-) -> Result<PersistedMcpServiceConfiguration, String> {
+    apply: Apply,
+) -> Result<PersistedMcpServiceConfiguration, String>
+where
+    Apply: FnOnce(
+        PersistedMcpServiceConfiguration,
+    ) -> Result<PersistedMcpServiceConfiguration, String>,
+{
     let saved = mutate_provider_configuration(
         state,
         "Failed to save the MCP service clients",
         |configuration| {
-            configuration.mcp_service = next;
+            configuration.mcp_service = apply(configuration.mcp_service.clone())?;
             Ok(())
         },
         |guard, configuration| {

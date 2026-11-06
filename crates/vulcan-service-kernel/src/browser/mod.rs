@@ -73,6 +73,14 @@ const BROWSER_MAX_QUEUED_FRAMES: usize = 2;
 /// 单个浏览器宿主接受的最大二进制帧字节数。
 const BROWSER_MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 
+/// Time a browser host process gets to exit on its own after `host.shutdown`.
+/// 发送 `host.shutdown` 后浏览器宿主进程自行退出的等待时间。
+const BROWSER_HOST_SHUTDOWN_EXIT_WAIT: Duration = Duration::from_secs(7);
+
+/// Time a browser host process gets to exit after it is killed.
+/// 浏览器宿主进程被终止后的退出等待时间。
+const BROWSER_HOST_KILL_EXIT_WAIT: Duration = Duration::from_secs(2);
+
 /// User-held control lease time-to-live.
 /// 用户持有控制租约的存活时间。
 const BROWSER_USER_LEASE_TTL: Duration = Duration::from_secs(15);
@@ -2323,13 +2331,13 @@ impl BrowserManager {
         // rather than that reply, determines when this session may become Closed.
         // 宿主退出时可能来不及应答关闭请求；是否允许会话变为 Closed 由保留的操作系统进程句柄决定。
         let _ = self.request_host(session_id, "host.shutdown", serde_json::json!({}));
-        if !self.wait_owned_host_exit(session_id, Duration::from_secs(7))? {
+        if !self.wait_owned_host_exit(session_id, BROWSER_HOST_SHUTDOWN_EXIT_WAIT)? {
             self.owned_host(session_id)?
                 .lock()
                 .map_err(|error| format!("failed to lock browser host: {error}"))?
                 .process
                 .kill();
-            if !self.wait_owned_host_exit(session_id, Duration::from_secs(2))? {
+            if !self.wait_owned_host_exit(session_id, BROWSER_HOST_KILL_EXIT_WAIT)? {
                 self.mark_operation_unconfirmed(session_id, "host.shutdown")?;
                 return Err(format!(
                     "{BROWSER_ERROR_LEASE_BLOCKED}: browser host process did not exit"

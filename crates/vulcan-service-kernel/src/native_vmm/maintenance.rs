@@ -683,8 +683,8 @@ pub(crate) struct NativeVmmVectorRebuildPreview {
     /// Number of project scopes containing rebuild targets.
     /// 包含重建目标的项目作用域数量。
     pub affected_project_count: u64,
-    /// Exact number of Core rebuild batches required at the 256-record contract limit.
-    /// 按 Core 每批 256 条契约上限计算的准确重建批次数量。
+    /// Exact number of Core rebuild batches required at the rebuild batch contract limit.
+    /// 按 Core 每批重建契约上限计算的准确重建批次数量。
     pub batch_count: u64,
     /// SHA-256 confirmation identity of the exact displayed target set.
     /// 所显示准确目标集合的 SHA-256 确认身份。
@@ -1638,7 +1638,7 @@ impl NativeVmmMaintenance {
         let mut rebuilt_memory_count = 0_u64;
         let mut batch_count = 0_u64;
         for (scope_id, memory_ids) in active_targets {
-            for memory_ids in memory_ids.chunks(256) {
+            for memory_ids in memory_ids.chunks(vulcan_memorymesh_core::MAX_REBUILD_VECTORS_BATCH) {
                 let current = self.runtime.current_vector_space_descriptor().await?;
                 if current.vector_space_id != descriptor.vector_space_id
                     || current.embedding_dimension != descriptor.embedding_dimension
@@ -1702,7 +1702,7 @@ impl NativeVmmMaintenance {
             }
         }
         for (scope_id, memory_ids) in recycle_bin_targets {
-            for memory_ids in memory_ids.chunks(256) {
+            for memory_ids in memory_ids.chunks(vulcan_memorymesh_core::MAX_REBUILD_VECTORS_BATCH) {
                 let current = self.runtime.current_vector_space_descriptor().await?;
                 if current != descriptor {
                     return Err(String::from(
@@ -4527,12 +4527,16 @@ fn vector_rebuild_preview(
         active_rebuild_memory_count.saturating_add(recycle_bin_rebuild_memory_count);
     let batch_count = active_targets
         .values()
-        .map(|memory_ids| memory_ids.len().div_ceil(256))
-        .chain(
-            recycle_bin_targets
-                .values()
-                .map(|memory_ids| memory_ids.len().div_ceil(256)),
-        )
+        .map(|memory_ids| {
+            memory_ids
+                .len()
+                .div_ceil(vulcan_memorymesh_core::MAX_REBUILD_VECTORS_BATCH)
+        })
+        .chain(recycle_bin_targets.values().map(|memory_ids| {
+            memory_ids
+                .len()
+                .div_ceil(vulcan_memorymesh_core::MAX_REBUILD_VECTORS_BATCH)
+        }))
         .sum::<usize>();
     let affected_projects = active_targets
         .keys()
@@ -6226,9 +6230,11 @@ fn all_session_ids(snapshot: &StorageSnapshot) -> BTreeSet<String> {
 /// 构建以指定后缀结尾的合法不透明会话身份。
 fn suffixed_session_id(base: &str, suffix: u64) -> Result<String, String> {
     let suffix = format!("-{suffix}");
-    let max_base_bytes = 512_usize.checked_sub(suffix.len()).ok_or_else(|| {
-        String::from("The migrated session suffix exceeds the identity length limit")
-    })?;
+    let max_base_bytes = vulcan_memorymesh_core::MAX_OPAQUE_IDENTIFIER_BYTES
+        .checked_sub(suffix.len())
+        .ok_or_else(|| {
+            String::from("The migrated session suffix exceeds the identity length limit")
+        })?;
     let mut retained = String::new();
     for character in base.chars() {
         if retained.len() + character.len_utf8() > max_base_bytes {

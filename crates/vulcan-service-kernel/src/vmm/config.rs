@@ -1097,6 +1097,33 @@ fn vmm_external_project_prefix(value: &str) -> Result<String, String> {
 
 /// Validates the optional external management endpoint and secret as one inseparable pair.
 /// 将可选外部管理端点与密钥作为不可分割的一组进行校验。
+/// Shortest accepted external VMM management request timeout.
+/// 外部 VMM 管理请求超时的最小允许值。
+pub(crate) const MIN_MANAGEMENT_TIMEOUT_MS: u64 = 1_000;
+
+/// Longest accepted external VMM management request timeout.
+/// 外部 VMM 管理请求超时的最大允许值。
+pub(crate) const MAX_MANAGEMENT_TIMEOUT_MS: u64 = 120_000;
+
+/// Management request timeout used when the layer leaves it unset.
+/// 配置层未设置时使用的管理请求超时。
+pub(crate) const DEFAULT_MANAGEMENT_TIMEOUT_MS: u64 = 30_000;
+
+/// Returns whether `timeout_ms` is inside the accepted management timeout range.
+/// 返回 `timeout_ms` 是否在允许的管理超时范围内。
+pub(crate) fn management_timeout_is_valid(timeout_ms: u64) -> bool {
+    (MIN_MANAGEMENT_TIMEOUT_MS..=MAX_MANAGEMENT_TIMEOUT_MS).contains(&timeout_ms)
+}
+
+/// Returns whether a management address names this machine's loopback host.
+/// 返回管理地址是否指向本机回环主机。
+/// The parsed host text writes IPv6 in brackets, so loopback IPv6 is `[::1]`.
+/// 解析后的主机文本以方括号书写 IPv6，因此 IPv6 回环为 `[::1]`。
+pub(crate) fn management_address_is_loopback(url: &reqwest::Url) -> bool {
+    url.host_str()
+        .is_some_and(|host| matches!(host, "127.0.0.1" | "localhost" | "[::1]"))
+}
+
 fn validate_external_management_layer(layer: &vulcan_vmm::VmmConfigLayer) -> Result<(), String> {
     let base_url = layer.management_base_url.as_deref().map(str::trim);
     let token = layer.management_bearer_token.as_deref().map(str::trim);
@@ -1129,9 +1156,7 @@ fn validate_external_management_layer(layer: &vulcan_vmm::VmmConfigLayer) -> Res
             "The external VMM management address must not contain query parameters or a fragment.",
         ));
     }
-    let loopback = base_url
-        .host_str()
-        .is_some_and(|host| matches!(host, "127.0.0.1" | "localhost" | "::1"));
+    let loopback = management_address_is_loopback(&base_url);
     if base_url.scheme() != "https" && !(base_url.scheme() == "http" && loopback) {
         return Err(String::from(
             "Non-loopback VMM management addresses must use HTTPS.",
@@ -1139,10 +1164,10 @@ fn validate_external_management_layer(layer: &vulcan_vmm::VmmConfigLayer) -> Res
     }
     if layer
         .management_timeout_ms
-        .is_some_and(|value| !(1_000..=120_000).contains(&value))
+        .is_some_and(|value| !management_timeout_is_valid(value))
     {
-        return Err(String::from(
-            "The VMM management request timeout must be between 1000 and 120000 milliseconds.",
+        return Err(format!(
+            "The VMM management request timeout must be between {MIN_MANAGEMENT_TIMEOUT_MS} and {MAX_MANAGEMENT_TIMEOUT_MS} milliseconds."
         ));
     }
     Ok(())
@@ -1347,6 +1372,18 @@ pub(crate) fn vmm_parse_optional_usize(value: &str, label: &str) -> Result<Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Plain-HTTP management addresses are accepted for every loopback spelling, including IPv6.
+    /// 明文 HTTP 管理地址在所有回环写法（含 IPv6）下都被接受。
+    #[test]
+    fn management_loopback_recognizes_ipv6() {
+        for address in ["http://127.0.0.1:9", "http://localhost:9", "http://[::1]:9"] {
+            let url = reqwest::Url::parse(address).expect("test address parses");
+            assert!(management_address_is_loopback(&url), "{address}");
+        }
+        let remote = reqwest::Url::parse("http://192.0.2.1:9").expect("test address parses");
+        assert!(!management_address_is_loopback(&remote));
+    }
 
     /// Verifies the external review owns exact configuration paths, but not titles or display order.
     /// 验证外置审查归属于准确配置路径，而不依赖标题或显示顺序。

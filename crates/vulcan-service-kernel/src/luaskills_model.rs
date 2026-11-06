@@ -997,15 +997,17 @@ pub(crate) struct LuaSkillsModelAvailability {
     pub(crate) embedding: bool,
 }
 
-/// Returns whether one snapshot exposes an exact operation and purpose.
-/// 返回某个快照是否暴露精确的操作与用途。
+/// Returns whether one snapshot exposes an exact, currently available operation and purpose.
+/// 返回某个快照是否暴露精确且当前可用的操作与用途。
 fn snapshot_exposes(
     snapshot: &InferenceCapabilitySnapshot,
     operation: AiOperation,
     purpose_id: Option<&str>,
 ) -> bool {
     snapshot.operations.iter().any(|capability| {
-        capability.operation == operation && capability.purpose_id.as_deref() == purpose_id
+        capability.available
+            && capability.operation == operation
+            && capability.purpose_id.as_deref() == purpose_id
     })
 }
 
