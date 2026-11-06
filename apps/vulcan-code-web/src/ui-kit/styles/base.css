@@ -103,8 +103,9 @@ button, input:where([type="button"], [type="reset"], [type="submit"]), ::file-se
   line-height: var(--vk-lh-tight);
 }
 
+/* Selection mixes the signal color itself: the soft surface tint is nearly the dark panel color and hid the range. */
 :is(.vk-root, .vk-layer) ::selection {
-  background: var(--vk-signal-soft);
+  background: color-mix(in srgb, var(--vk-signal) 38%, transparent);
   color: var(--vk-ink);
 }
 
