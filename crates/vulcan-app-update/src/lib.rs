@@ -729,12 +729,13 @@ impl Inner {
         downloader: &mut Downloader,
         manifest: &ReleaseManifest,
     ) -> Result<PathBuf, FormatError> {
-        let installer = manifest
-            .downloads
-            .iter()
-            .find(|download| download.kind == DownloadKind::Inno)
-            .filter(|_| installed.platform.is_windows())
-            .ok_or_else(|| invalid("this version must be installed from the download page"))?;
+        let installer = full_installer(installed, manifest).ok_or_else(|| {
+            invalid(if installed.root.setup_owned() {
+                "this installation is managed by vulcan-code-setup; run `vulcan-code-setup update`"
+            } else {
+                "this version must be installed from the download page"
+            })
+        })?;
         let target = installed
             .root
             .path()
@@ -840,11 +841,7 @@ fn describe(
         let bytes = incremental_bytes(installed, &indexes)?;
         (AppUpdateKind::Incremental, bytes, true, indexes)
     } else {
-        let installer = manifest
-            .downloads
-            .iter()
-            .find(|download| download.kind == DownloadKind::Inno)
-            .filter(|_| installed.platform.is_windows());
+        let installer = full_installer(installed, &manifest);
         (
             AppUpdateKind::Full,
             installer.map_or(0, |installer| installer.size),
@@ -871,11 +868,27 @@ fn describe(
                 .collect(),
             skipped_releases_complete: skipped.complete,
             installable,
+            setup_managed: installed.root.setup_owned(),
             previously_failed: false,
         },
         manifest,
         indexes,
     })
+}
+
+/// The full installer the app may run here: the Windows Inno installer, never over a root the setup
+/// program owns, where it would add a second uninstall entry and leave the setup state stale.
+/// 应用在此可运行的完整安装包：Windows 的 Inno 安装包；绝不用于安装器拥有的根目录，否则会产生第二个
+/// 卸载项并使安装器状态失真。
+fn full_installer<'a>(
+    installed: &Installed,
+    manifest: &'a ReleaseManifest,
+) -> Option<&'a vulcan_install_core::manifest::Download> {
+    manifest
+        .downloads
+        .iter()
+        .find(|download| download.kind == DownloadKind::Inno)
+        .filter(|_| installed.platform.is_windows() && !installed.root.setup_owned())
 }
 
 /// Bytes an incremental update downloads: the frames of contents the running version lacks.

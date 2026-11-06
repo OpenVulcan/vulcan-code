@@ -118,7 +118,13 @@ export function innoSetupScript({ root, layout, version, entries, outputDir, ico
   const { name: desktopName, appUserModelId, clsid } = desktopShortcutIdentity(identity);
   const { launcher, cli, forwarder, versions, updates, current, setup } = installLayout;
   const versionDir = `${versions}\\${issValue(version)}`;
-  const legacy = entries.map(entry => `Type: filesandordirs; Name: "{app}\\${issValue(entry)}"`).join('\n');
+  // Former-layout names are removed only where that layout is proven present (FormerLayoutPresent), so an
+  // install into an unrelated non-empty directory never deletes a user's bin, config or tools.
+  // 只有确认存在旧布局（FormerLayoutPresent）时才删除旧布局名称，安装到无关的非空目录时绝不删除用户的
+  // bin、config 或 tools。
+  const legacy = entries
+    .map(entry => `Type: filesandordirs; Name: "{app}\\${issValue(entry)}"; Check: FormerLayoutPresent`)
+    .join('\n');
   const launcherFiles = launcherSources.map(({ binary, destination }) => {
     const slash = destination.lastIndexOf('\\');
     const directory = slash === -1 ? '{app}' : `{app}\\${destination.slice(0, slash)}`;
@@ -158,13 +164,9 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "addtopath"; Description: "Add vulcan-tui to PATH for the current user"; GroupDescription: "Command line:"
 
 [InstallDelete]
-; Top-level release files of the former single-directory layout.
+; Top-level release files of the former single-directory layout. A same-version reinstall and launchers
+; renamed aside are handled in [Code], where an unfinished install can still restore them.
 ${legacy}
-; A reinstall of the same version starts from a clean version directory.
-Type: filesandordirs; Name: "{app}\\${versionDir}"
-; Launchers moved aside while they were running; those still in use stay until the next install.
-Type: files; Name: "{app}\\${launcher}.*.old"
-Type: files; Name: "{app}\\${cli}\\${forwarder}.*.old"
 
 [Files]
 Source: "${issValue(root)}\\*"; DestDir: "{app}\\${versionDir}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -191,6 +193,7 @@ Type: filesandordirs; Name: "{app}\\${setup}"
 Type: files; Name: "{app}\\${current}"
 Type: files; Name: "{app}\\${current}.partial"
 Type: files; Name: "{app}\\${launcher}.*.old"
+Type: files; Name: "{app}\\${cli}\\${forwarder}.*.old"
 ; Electron keeps its own Start menu shortcut pointing at the running desktop executable.
 Type: files; Name: "{userprograms}\\${desktopName}.lnk"
 ${legacy}
@@ -207,6 +210,11 @@ const
 var
   // Launchers renamed by PrepareToInstall, restored when the installation does not finish.
   MovedAside: TArrayOfString;
+  // The installed version's directory moved aside for a same-version reinstall; restored when the
+  // installation does not finish, deleted when it does.
+  RepairAside: String;
+  // Whether {app} holds the former single-directory layout, decided before anything is removed.
+  FormerLayout: Boolean;
   Installed: Boolean;
 
 function MoveFileEx(ExistingFileName, NewFileName: String; Flags: Cardinal): Boolean;
@@ -215,6 +223,48 @@ function MoveFileEx(ExistingFileName, NewFileName: String; Flags: Cardinal): Boo
 function CliDir: String;
 begin
   Result := ExpandConstant('{app}\\${cli}');
+end;
+
+function VersionDir: String;
+begin
+  Result := ExpandConstant('{app}\\${versionDir}');
+end;
+
+// Check of the former-layout entries in [InstallDelete] and [UninstallDelete]; Setup evaluates both
+// while installing, after PrepareToInstall has decided FormerLayout.
+function FormerLayoutPresent: Boolean;
+begin
+  Result := FormerLayout;
+end;
+
+// Deletes the files matching Pattern in Dir; a file still in use stays for a later install.
+procedure DeleteMatchingFiles(Dir, Pattern: String);
+var
+  Search: TFindRec;
+begin
+  if not FindFirst(Dir + '\\' + Pattern, Search) then Exit;
+  try
+    repeat
+      if Search.Attributes and FILE_ATTRIBUTE_DIRECTORY = 0 then DeleteFile(Dir + '\\' + Search.Name);
+    until not FindNext(Search);
+  finally
+    FindClose(Search);
+  end;
+end;
+
+// Deletes the directories matching Pattern in Dir; one still in use stays for a later install.
+procedure DeleteMatchingDirs(Dir, Pattern: String);
+var
+  Search: TFindRec;
+begin
+  if not FindFirst(Dir + '\\' + Pattern, Search) then Exit;
+  try
+    repeat
+      if Search.Attributes and FILE_ATTRIBUTE_DIRECTORY <> 0 then DelTree(Dir + '\\' + Search.Name, True, True, True);
+    until not FindNext(Search);
+  finally
+    FindClose(Search);
+  end;
 end;
 
 // A running launcher cannot be overwritten but can be renamed, so a TUI left open in a terminal never
@@ -226,6 +276,25 @@ var
   I: Integer;
 begin
   Result := '';
+  // Only a directory holding both of these was installed by the former single-directory layout.
+  FormerLayout := FileExists(ExpandConstant('{app}\\runtime-layout.json'))
+    and FileExists(ExpandConstant('{app}\\bin\\vulcan-code-service.exe'));
+  // Leftovers of earlier installs go first, so nothing this run moves aside is deleted before it finishes.
+  DeleteMatchingFiles(ExpandConstant('{app}'), '${launcher}.*.old');
+  DeleteMatchingFiles(CliDir, '${forwarder}.*.old');
+  DeleteMatchingDirs(ExpandConstant('{app}\\${updates}'), '*.reinstalling-*');
+  // A same-version reinstall starts from a clean directory; the old one is kept until the new one is complete.
+  if DirExists(VersionDir) then
+  begin
+    RepairAside := ExpandConstant('{app}\\${updates}\\') + InstalledVersion + '.reinstalling-'
+      + GetDateTimeString('yyyymmddhhnnsszzz', #0, #0);
+    ForceDirectories(ExpandConstant('{app}\\${updates}'));
+    if not RenameFile(VersionDir, RepairAside) then
+    begin
+      Log('Version ' + InstalledVersion + ' could not be moved aside; its files are overwritten in place.');
+      RepairAside := '';
+    end;
+  end;
   SetArrayLength(Targets, 2);
   Targets[0] := ExpandConstant('{app}\\${launcher}');
   Targets[1] := CliDir + '\\${forwarder}';
@@ -432,6 +501,7 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   Previous: String;
+  I: Integer;
 begin
   if CurStep = ssPostInstall then
   begin
@@ -440,6 +510,10 @@ begin
     // into the tree before compiling, so current.json only ever points at a recorded version.
     SwitchCurrentVersion;
     Installed := True;
+    // The replaced copies are no longer needed; any still in use are removed by a later install.
+    for I := 0 to GetArrayLength(MovedAside) div 2 - 1 do
+      DeleteFile(MovedAside[I * 2 + 1]);
+    if RepairAside <> '' then DelTree(RepairAside, True, True, True);
     // Repairing the current version does not know which version it replaced, so it keeps them all.
     if CompareText(Previous, InstalledVersion) <> 0 then RemoveOlderVersions(Previous);
     UpdateUserPath(WizardIsTaskSelected('addtopath'));
@@ -454,6 +528,13 @@ begin
   for I := 0 to GetArrayLength(MovedAside) div 2 - 1 do
     if not FileExists(MovedAside[I * 2]) then
       RenameFile(MovedAside[I * 2 + 1], MovedAside[I * 2]);
+  // A partly copied version directory gives way to the complete one it replaced.
+  if RepairAside <> '' then
+  begin
+    if DirExists(VersionDir) then DelTree(VersionDir, True, True, True);
+    if not RenameFile(RepairAside, VersionDir) then
+      Log('Version ' + InstalledVersion + ' could not be restored from ' + RepairAside + '.');
+  end;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

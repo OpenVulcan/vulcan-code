@@ -6771,6 +6771,7 @@
   "settings.appUpdate.incremental": "변경된 파일만 다운로드합니다: {size}.",
   "settings.appUpdate.full": "이 버전은 전체 설치 프로그램이 필요합니다: {size}.",
   "settings.appUpdate.fullManual": "이 버전은 다운로드 페이지에서 설치해야 합니다.",
+  "settings.appUpdate.fullSetup": "이 설치는 설치 프로그램이 관리합니다. 이 버전을 설치하려면 \"vulcan-code-setup update\"를 실행하세요.",
   "settings.appUpdate.previouslyFailed": "이 버전은 이전에 이 컴퓨터에서 시작하지 못했습니다.",
   "settings.appUpdate.download": "다운로드",
   "settings.appUpdate.openDownloadPage": "다운로드 페이지 열기",

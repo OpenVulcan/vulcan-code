@@ -439,7 +439,9 @@ jobs:
           cargo build --locked --release -p vulcan-release-tool
           origin=$(target/release/vulcan-release-tool origin)
           echo "UPDATE_BASE_URL=$origin" >> "$GITHUB_ENV"
-      - name: Refuse a version that is already published
+      # A re-run of this run may resume after a failure that followed the upload; any other run is refused.
+      # 本次运行的重新运行可在上传之后的失败处继续；其他运行一律拒绝。
+      - name: Refuse a version that another run published
         run: sh scripts/release-r2.sh unpublished "$VERSION" $PLATFORMS
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
@@ -469,6 +471,13 @@ jobs:
               [ -e "$installer" ] && set -- "$@" --download "inno=$installer"
             done
             "$tool" manifest "$@"
+            # A resumed run keeps the manifest it already published, which the CDN caches for a year; the
+            # verification below then proves this build's notes, installers and indexes are the ones it names.
+            # 继续的运行沿用已发布且被 CDN 缓存一年的版本清单；下面的校验随后证明本次构建的说明、安装包与索引
+            # 正是它所引用的那些。
+            if [ "$(sh scripts/release-r2.sh held "$VERSION" "$platform")" = yes ]; then
+              sh scripts/release-r2.sh manifests "$objects" "$VERSION" "$platform"
+            fi
             "$tool" pointer --objects "$objects" --channel preview --platform "$platform" --version "$VERSION" \
               --key-env UPDATE_SIGNING_KEY
           done

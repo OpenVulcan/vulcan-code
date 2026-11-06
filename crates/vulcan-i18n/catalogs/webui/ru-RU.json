@@ -6771,6 +6771,7 @@
   "settings.appUpdate.incremental": "Загружаются только изменённые файлы: {size}.",
   "settings.appUpdate.full": "Для этой версии нужен полный установщик: {size}.",
   "settings.appUpdate.fullManual": "Эту версию нужно установить со страницы загрузки.",
+  "settings.appUpdate.fullSetup": "Эта установка управляется программой установки. Чтобы установить эту версию, выполните «vulcan-code-setup update».",
   "settings.appUpdate.previouslyFailed": "Эта версия уже не запускалась на этом компьютере.",
   "settings.appUpdate.download": "Загрузить",
   "settings.appUpdate.openDownloadPage": "Открыть страницу загрузки",

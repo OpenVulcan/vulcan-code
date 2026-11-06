@@ -67,6 +67,10 @@ export interface AppUpdateOffer {
   // False when this version must be installed from the download page.
   // 此版本必须从下载页面安装时为 false。
   installable: boolean;
+  // True when the setup program owns this installation; an offer it cannot install then points to
+  // `vulcan-code-setup update` and offers no download page.
+  // 此安装由安装器拥有时为 true；无法自行安装的提议改为提示 `vulcan-code-setup update`，不提供下载页。
+  setupManaged: boolean;
   // True when this version already failed to start once and was rolled back.
   // 此版本曾启动失败并被回退时为 true。
   previouslyFailed: boolean;

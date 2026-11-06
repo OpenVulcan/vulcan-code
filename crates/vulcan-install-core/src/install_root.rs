@@ -45,6 +45,16 @@ pub const CURRENT_FILE: &str = "current.json";
 /// Unix 上指向当前版本的符号链接。
 pub const CURRENT_LINK: &str = "current";
 
+/// Directory below the install root that holds the setup program and its state.
+/// 安装根目录下保存安装器及其状态的目录。
+pub const SETUP_DIR: &str = "setup";
+
+/// State file below [`SETUP_DIR`]; only the setup program writes it, so it marks a root the setup
+/// program owns (an Inno installation may carry the setup program but never this file).
+/// [`SETUP_DIR`] 下的状态文件；只有安装器写入它，因此它标记由安装器拥有的根目录（Inno 安装可能附带
+/// 安装器，但绝不会有此文件）。
+pub const SETUP_STATE_FILE: &str = "installation.json";
+
 /// Content of `current.json`.
 /// `current.json` 的内容。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,6 +102,12 @@ impl InstallRoot {
     /// 根目录。
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Whether the setup program owns this root, so only it may replace the installation.
+    /// 此根目录是否由安装器拥有，因而只有安装器可以替换该安装。
+    pub fn setup_owned(&self) -> bool {
+        self.path.join(SETUP_DIR).join(SETUP_STATE_FILE).is_file()
     }
 
     /// Directory of an installed version.
@@ -366,6 +382,24 @@ pub(crate) fn create_symlink(target: &str, link: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_setup_state_marks_a_setup_owned_root() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let root = InstallRoot::new(temp.path());
+        assert!(!root.setup_owned());
+        // An Inno installation carries the setup program in the same directory, without its state.
+        // Inno 安装在同一目录附带安装器，但没有其状态文件。
+        std::fs::create_dir_all(temp.path().join(SETUP_DIR)).expect("setup dir");
+        std::fs::write(
+            temp.path().join(SETUP_DIR).join("vulcan-code-setup.exe"),
+            b"",
+        )
+        .expect("program");
+        assert!(!root.setup_owned());
+        std::fs::write(temp.path().join(SETUP_DIR).join(SETUP_STATE_FILE), b"{}").expect("state");
+        assert!(root.setup_owned());
+    }
 
     #[test]
     fn switching_points_the_root_at_an_installed_version() {

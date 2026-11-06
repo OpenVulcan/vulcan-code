@@ -53,7 +53,7 @@ function offer(overrides: Partial<AppUpdateOffer> = {}): AppUpdateOffer {
   return {
     version: "0.1.5", channel: "stable", kind: "incremental", downloadBytes: 1024, releasedAt: "2026-11-04T00:00:00Z",
     notes: { "en-US": "notes-marker-015" }, skippedReleases: [], skippedReleasesComplete: true,
-    installable: true, previouslyFailed: false,
+    installable: true, setupManaged: false, previouslyFailed: false,
     ...overrides,
   };
 }

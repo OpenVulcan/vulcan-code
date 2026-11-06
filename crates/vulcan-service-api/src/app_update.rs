@@ -121,6 +121,12 @@ pub struct AppUpdateOffer {
     /// Whether the app can install it by itself; otherwise the download page is offered.
     /// 应用能否自行安装；不能时提供下载页。
     pub installable: bool,
+    /// Whether the setup program owns this installation; a full update that the app cannot install
+    /// then comes from `vulcan-code-setup update` instead of the download page.
+    /// 此安装是否由安装器拥有；此时应用无法自行安装的完整更新改由 `vulcan-code-setup update` 完成，
+    /// 不提供下载页。
+    #[serde(default)]
+    pub setup_managed: bool,
     /// Whether this version already failed to start here and was switched back.
     /// 此版本是否曾在本机启动失败并被切换回去。
     pub previously_failed: bool,

@@ -171,3 +171,39 @@ fn a_trial_of_a_version_that_is_no_longer_current_is_dropped() {
     );
     assert!(!temp.path().join("updates").join("rollback.json").exists());
 }
+
+#[cfg(windows)]
+#[test]
+fn a_running_core_of_either_version_defers_the_trial() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let root = temp.path();
+    on_trial(root, 2);
+    let previous = root.join("versions").join("0.1.3");
+    std::fs::write(
+        previous.join(RUNTIME_LAYOUT_FILE),
+        r#"{"desktopExecutable":"desktop/app.exe","tuiExecutable":"bin/vulcan-tui.exe","serviceExecutable":"bin/vulcan-code-service.exe"}"#,
+    )
+    .expect("layout");
+    // A copy of a long-running system program stands in for the previous version's resident Core.
+    // 用一个长时间运行的系统程序副本代替上一版本常驻的 Core。
+    let system = std::path::PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot"));
+    let service = previous.join("bin").join("vulcan-code-service.exe");
+    std::fs::copy(system.join("System32").join("ping.exe"), &service).expect("copy");
+    let mut core = std::process::Command::new(&service)
+        .args(["-n", "60", "127.0.0.1"])
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .expect("start");
+    let deferred = trial::advance(root);
+    core.kill().expect("stop");
+    core.wait().expect("wait");
+    assert_eq!(deferred, Ok(trial::TrialOutcome::CoreRunning));
+    assert_eq!(json_at(root.join(CURRENT_FILE))["version"], "0.1.4");
+    assert_eq!(
+        json_at(root.join("updates").join("startup-trial.json"))["attempts"],
+        2
+    );
+    // Once no Core runs, the used-up trial ends as before.
+    // 没有 Core 运行后，已用尽的试运行照常结束。
+    assert_eq!(trial::advance(root), Ok(trial::TrialOutcome::RolledBack));
+}

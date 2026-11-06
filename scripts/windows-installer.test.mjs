@@ -70,11 +70,21 @@ test('a given setup program is bundled into its own directory and removed on uni
 });
 
 test('installing over the single-directory layout removes exactly its top-level release entries', () => {
+  const entries = sectionLines(innoSetupScript(options()), 'InstallDelete').map(parameters);
+  assert.deepEqual(entries.map(entry => entry.Name).sort(), ['{app}\\bin', '{app}\\runtime-layout.json']);
+  // Only a proven former layout loses these names; any other target directory keeps them.
+  // 只有确认的旧布局才会删除这些名称；其他目标目录保留它们。
+  assert.ok(entries.every(entry => entry.Check === 'FormerLayoutPresent'));
+  const uninstallLegacy = sectionLines(innoSetupScript(options()), 'UninstallDelete').map(parameters)
+    .filter(entry => entry.Name === '{app}\\bin');
+  assert.deepEqual(uninstallLegacy.map(entry => entry.Check), ['FormerLayoutPresent']);
+});
+
+test('the replaced version and launchers stay restorable until the install finishes', () => {
+  // Nothing of the installed version or the renamed launchers is deleted before [Code] knows the outcome.
+  // 在 [Code] 得知结果之前，不删除已安装版本或已改名的启动器。
   const removed = sectionLines(innoSetupScript(options()), 'InstallDelete').map(parameters).map(entry => entry.Name);
-  assert.ok(removed.includes('{app}\\bin'));
-  assert.ok(removed.includes('{app}\\runtime-layout.json'));
-  assert.ok(removed.includes('{app}\\versions\\1.2.3'));
-  assert.ok(!removed.includes('{app}') && !removed.includes('{app}\\versions'));
+  assert.ok(!removed.some(name => name.startsWith('{app}\\versions') || name.endsWith('.old')));
 });
 
 test('uninstall removes the launchers, versions, updates and pointer but no user data', () => {

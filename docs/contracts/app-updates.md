@@ -27,6 +27,10 @@
 - 下载源：`auto` 先国际源再中国镜像，`international`、`china` 只用对应源。
 - 安装纪元升高或缺少已安装组件时为完整更新：Windows 下载 Inno 安装包（SHA-256 来自签名清单，
   Authenticode 签名者须为发布证书），Linux/macOS 只提供下载页 `https://openvulcan.com/download`。
+  安装根含 `setup/installation.json`（`SETUP_DIR`/`SETUP_STATE_FILE`，定义在 `install_root.rs`，只有
+  `vulcan-code-setup` 写入）时该根归安装器所有：完整更新一律不可由应用安装（`installable: false`、
+  `setupManaged: true`），界面只提示运行 `vulcan-code-setup update`，不提供下载页或 Inno 安装包，避免
+  产生第二个卸载项并使安装器状态失真。增量更新不受影响。
   其余情况为增量更新，只下载摘要不在本地安装记录中的文件。
 - 回退提示仍在时，提议的版本若正是启动失败的版本，仍可提议但标记 `previouslyFailed`；用户关闭提示后不再标记。
 - **被跳过版本的说明**：版本清单的可选字段 `previousVersion` 写明上一发布（`release-plan.mjs` 取更新记录
@@ -60,7 +64,9 @@
    其他平台为 `<root>/current/<rel>`）。完整安装时桌面端只退出，安装包以
    `/SILENT /SUPPRESSMSGBOXES /NORESTART /RELAUNCH=1` 运行，结束后由 `[Run]` 中的
    `RelaunchRequested` 启动应用。TUI 与浏览器自动重连。
-4. Windows 启动器每次桌面启动计一次尝试；`attempts` 达到 `max_attempts` 而标记仍在时，把
+4. Windows 启动器每次桌面启动计一次尝试；`previous` 或试运行版本的服务可执行文件（各自 `runtime-layout.json`
+   的 `serviceExecutable`）正在运行时本次既不计数也不回退，因为桌面端会复用该 Core，新版本并未被启动
+   （运行判断依据 Windows 对运行中映像写访问的共享冲突，其他结果按未运行处理）；`attempts` 达到 `max_attempts` 而标记仍在时，把
    `current.json` 指回 `previous`，写入 `updates/rollback.json`（`failed`、`restored`）并删除试运行标记。
    试运行版本已不是当前版本时（例如随后运行了完整安装包）直接删除标记。服务正持有安装锁时本次不处理。
    上一版本目录已不存在时启动器报错，不猜测其他版本。

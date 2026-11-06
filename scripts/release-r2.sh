@@ -4,13 +4,15 @@
 #
 # Environment: UPDATE_BASE_URL (https://<host>/<prefix>, whose path is also the object key prefix; the
 # workflows take it from `vulcan-release-tool origin`), R2_ENDPOINT, R2_BUCKET, the AWS_* credentials,
-# CLOUDFLARE_ZONE_ID and CLOUDFLARE_API_TOKEN.
+# CLOUDFLARE_ZONE_ID and CLOUDFLARE_API_TOKEN; unpublished and upload also read GITHUB_RUN_ID.
 # Objects below <objects> use the layout of vulcan-install-core `layout.rs`.
 # 环境变量：UPDATE_BASE_URL（https://<主机>/<前缀>，其路径同时是对象键前缀；工作流取自
-# `vulcan-release-tool origin`）、R2_ENDPOINT、R2_BUCKET、AWS_* 凭据、CLOUDFLARE_ZONE_ID 与 CLOUDFLARE_API_TOKEN。
+# `vulcan-release-tool origin`）、R2_ENDPOINT、R2_BUCKET、AWS_* 凭据、CLOUDFLARE_ZONE_ID 与 CLOUDFLARE_API_TOKEN；
+# unpublished 与 upload 还读取 GITHUB_RUN_ID。
 # <objects> 之下的对象采用 vulcan-install-core `layout.rs` 的布局。
 #
-#   release-r2.sh unpublished <version> <platform>...   fail when any manifest of the version exists
+#   release-r2.sh unpublished <version> <platform>...   fail when another run published a manifest of the version
+#   release-r2.sh held <version> <platform>             print yes when the platform's manifest is published
 #   release-r2.sh upload <objects>                      upload every immutable object, manifests last
 #   release-r2.sh pointers <objects> <channel>          upload the channel's pointers, purge and read back
 #   release-r2.sh manifests <objects> <version> <platform>...   download signed manifests for new pointers
@@ -29,6 +31,44 @@ prefix=${base#https://*/}
 # s3 runs one AWS CLI s3api call against R2.
 # s3 对 R2 执行一次 AWS CLI s3api 调用。
 s3() { aws s3api "$@" --endpoint-url "$R2_ENDPOINT" --bucket "$R2_BUCKET"; }
+
+# Published objects are immutable and cached for a year.
+# 已发布对象不可变且缓存一年。
+immutable='public, max-age=31536000, immutable'
+
+# object_meta prints the head-object JSON of one key below the prefix, nothing when the bucket does not hold
+# it, and stops on any other failure, so an unreadable bucket is never taken for an empty one.
+# object_meta 输出前缀之下一个键的 head-object JSON；桶中没有该对象时不输出；其他失败一律停止，
+# 绝不把无法读取的桶当作空桶。
+object_meta() {
+  if meta=$(s3 head-object --key "$prefix/$1" 2>&1); then
+    printf '%s\n' "$meta"
+    return 0
+  fi
+  case "$meta" in *'(404)'* | *'Not Found'*) return 0 ;; esac
+  echo "cannot read $1: $meta" >&2
+  exit 1
+}
+
+# put_once uploads one object below <objects> whose name carries a version, recording its SHA-256 and the
+# publishing run. A copy the bucket already holds must carry the same SHA-256 and is kept; any other copy
+# stops the upload, because the CDN keeps a published object for a year.
+# put_once 上传 <objects> 之下名称带版本的一个对象，并记录其 SHA-256 与发布它的运行。桶中已有的副本必须
+# 带有相同的 SHA-256，并予以保留；其他副本一律停止上传，因为 CDN 会将已发布对象保留一年。
+put_once() {
+  name=${2#"$1"/}
+  digest=$(sha256sum "$2" | cut -d ' ' -f 1)
+  meta=$(object_meta "$name")
+  if [ -n "$meta" ]; then
+    held=$(printf '%s' "$meta" | jq -r '.Metadata.sha256 // empty')
+    [ "$held" = "$digest" ] || { echo "$name is already published with other content" >&2; exit 1; }
+    echo "$name is already published"
+    return 0
+  fi
+  case "$name" in *.json) type=application/json ;; *) type=application/octet-stream ;; esac
+  s3 put-object --key "$prefix/$name" --body "$2" --content-type "$type" --cache-control "$immutable" \
+    --metadata "sha256=$digest,run=$GITHUB_RUN_ID" > /dev/null
+}
 
 # put_pointers uploads the pointers at the given keys below <objects> with their signatures, purges them and
 # reads each back through the CDN.
@@ -78,27 +118,45 @@ case "$command" in
   unpublished)
     version=$1
     shift
+    : "${GITHUB_RUN_ID:?GITHUB_RUN_ID names the run that may resume its own publication}"
     for platform in "$@"; do
-      key="$prefix/releases/$version/$platform/manifest.json"
-      # Published objects are immutable and cached for a year, so a version is never published twice.
-      # 已发布对象不可变且缓存一年，因此同一版本绝不发布两次。
-      if s3 head-object --key "$key" > /dev/null 2>&1; then
-        echo "$version is already published for $platform ($key)" >&2
-        exit 1
+      name="releases/$version/$platform/manifest.json"
+      meta=$(object_meta "$name")
+      [ -n "$meta" ] || continue
+      # Published objects are immutable and cached for a year, so a version is never published twice; only a
+      # re-run of the run that published it resumes, keeping the manifests it already published.
+      # 已发布对象不可变且缓存一年，因此同一版本绝不发布两次；只有发布它的那次运行的重新运行可以继续，
+      # 并沿用已发布的版本清单。
+      if [ "$(printf '%s' "$meta" | jq -r '.Metadata.run // empty')" = "$GITHUB_RUN_ID" ]; then
+        echo "$version for $platform was published by this run; resuming"
+        continue
       fi
+      echo "$version is already published for $platform ($prefix/$name)" >&2
+      exit 1
     done
-    echo "$version is not published yet"
+    echo "$version is not published by another run"
+    ;;
+  held)
+    meta=$(object_meta "releases/$1/$2/manifest.json")
+    if [ -n "$meta" ]; then echo yes; else echo no; fi
     ;;
   upload)
     objects=$1
-    # Content-addressed objects first, then the manifests that reference them, so a manifest is never
-    # visible before its objects; an object already in the bucket with the same size is skipped.
-    # 先上传按内容寻址的对象，再上传引用它们的版本清单，使版本清单不会先于其对象可见；桶中已有且大小相同的对象跳过。
-    immutable='public, max-age=31536000, immutable'
+    : "${GITHUB_RUN_ID:?GITHUB_RUN_ID is recorded with every versioned object}"
+    # Objects named by their content go first; one already in the bucket with the same size is the same object.
+    # 先上传按内容命名的对象；桶中已有且大小相同的对象即为同一对象。
     aws s3 sync "$objects/" "s3://$R2_BUCKET/$prefix/" --endpoint-url "$R2_ENDPOINT" --size-only --only-show-errors \
-      --exclude 'channels/*' --exclude 'releases/*' --exclude 'setup/channels/*' --cache-control "$immutable"
-    aws s3 sync "$objects/releases/" "s3://$R2_BUCKET/$prefix/releases/" --endpoint-url "$R2_ENDPOINT" --size-only \
-      --only-show-errors --cache-control "$immutable"
+      --exclude 'channels/*' --exclude 'releases/*' --exclude 'setup/channels/*' --exclude 'notes/*' \
+      --exclude 'installers/*' --cache-control "$immutable"
+    # Objects named by version are compared by content, then the manifests go last, signatures before the
+    # documents they sign, so a manifest is never visible before what it names.
+    # 按版本命名的对象逐件比较内容；版本清单最后上传，签名先于其所签文档，使版本清单不会先于其引用的对象可见。
+    for dir in notes installers; do
+      [ -d "$objects/$dir" ] || continue
+      find "$objects/$dir" -type f | sort | while IFS= read -r file; do put_once "$objects" "$file"; done
+    done
+    find "$objects/releases" -type f -name '*.sig' | sort | while IFS= read -r file; do put_once "$objects" "$file"; done
+    find "$objects/releases" -type f ! -name '*.sig' | sort | while IFS= read -r file; do put_once "$objects" "$file"; done
     echo "uploaded the objects below $objects"
     ;;
   pointers)

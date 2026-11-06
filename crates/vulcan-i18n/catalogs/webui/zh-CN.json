@@ -6771,6 +6771,7 @@
   "settings.appUpdate.incremental": "只下载变化的文件：{size}。",
   "settings.appUpdate.full": "此版本需要完整安装包：{size}。",
   "settings.appUpdate.fullManual": "此版本需要从下载页面安装。",
+  "settings.appUpdate.fullSetup": "此安装由安装器管理。请运行“vulcan-code-setup update”安装此版本。",
   "settings.appUpdate.previouslyFailed": "此版本之前在这台电脑上启动失败过。",
   "settings.appUpdate.download": "下载",
   "settings.appUpdate.openDownloadPage": "打开下载页面",

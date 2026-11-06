@@ -8,13 +8,10 @@ use serde::{Deserialize, Serialize};
 use vulcan_install_core::fetch::Route;
 use vulcan_install_core::names::{Channel, ComponentName};
 
-/// Directory below the install root that holds the setup program and its state.
-/// 安装根目录下保存安装器及其状态的目录。
-pub const SETUP_DIR: &str = "setup";
-
-/// State file below [`SETUP_DIR`].
-/// [`SETUP_DIR`] 下的状态文件。
-pub const STATE_FILE: &str = "installation.json";
+/// The setup directory and its state file; the updater reads the same names to recognize a root
+/// this program owns.
+/// 安装器目录及其状态文件；更新器读取同样的名称以识别本程序拥有的根目录。
+pub use vulcan_install_core::install_root::{SETUP_DIR, SETUP_STATE_FILE as STATE_FILE};
 
 /// Format version of [`STATE_FILE`]; formats 1 and 2 are upgraded when read, other versions are
 /// refused. Format 3 added [`Item::AppArmorProfile`].

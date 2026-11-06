@@ -6771,6 +6771,7 @@
   "settings.appUpdate.incremental": "Solo se descargan los archivos modificados: {size}.",
   "settings.appUpdate.full": "Esta versión necesita el instalador completo: {size}.",
   "settings.appUpdate.fullManual": "Esta versión debe instalarse desde la página de descargas.",
+  "settings.appUpdate.fullSetup": "Esta instalación la gestiona el programa de instalación. Ejecute «vulcan-code-setup update» para instalar esta versión.",
   "settings.appUpdate.previouslyFailed": "Esta versión ya falló al iniciarse en este equipo.",
   "settings.appUpdate.download": "Descargar",
   "settings.appUpdate.openDownloadPage": "Abrir la página de descargas",

@@ -159,13 +159,15 @@ export function AppUpdateOfferRows(props: { snapshot: AppUpdateSnapshot; calls: 
               ? formatMessage(t("settings.appUpdate.incremental"), { size: formatBytes(offer.downloadBytes) })
               : offer.installable
                 ? formatMessage(t("settings.appUpdate.full"), { size: formatBytes(offer.downloadBytes) })
-                : t("settings.appUpdate.fullManual")}
+                : offer.setupManaged
+                  ? t("settings.appUpdate.fullSetup")
+                  : t("settings.appUpdate.fullManual")}
           </p>
           {offer.previouslyFailed ? <p role="alert" className="vk-field-error">{t("settings.appUpdate.previouslyFailed")}</p> : null}
         </div>
         {offer.installable ? (
           <Button disabled={busy} onClick={() => void calls.run(downloadAppUpdate)} size="sm">{t("settings.appUpdate.download")}</Button>
-        ) : (
+        ) : offer.setupManaged ? null : (
           <Button onClick={() => void openExternalUrl(snapshot.downloadPageUrl).catch((cause: unknown) => calls.setCallError(errorMessage(cause)))} size="sm" variant="outline">
             {t("settings.appUpdate.openDownloadPage")}
           </Button>

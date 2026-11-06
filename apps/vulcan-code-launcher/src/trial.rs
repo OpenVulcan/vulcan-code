@@ -3,7 +3,8 @@
 //!
 //! After an incremental update the service makes the new version current and leaves
 //! `updates/startup-trial.json`; the new service removes it once it is ready. Each desktop launch
-//! counts one attempt; once the marker's `max_attempts` were made without the marker going away,
+//! that finds no Core of either version running counts one attempt (a running one is reused, so the
+//! launch starts nothing new); once the marker's `max_attempts` were made without the marker going away,
 //! the launcher points `current.json` back at the previous version and leaves `updates/rollback.json`
 //! for the restored service to announce. The marker owns the bound, so no copy of it lives here.
 //! The file names and fields mirror `crates/vulcan-install-core/src/install_root.rs`
@@ -11,7 +12,8 @@
 //! launcher keeps only `serde_json` as a dependency, so it cannot use that crate.
 //!
 //! 增量更新后，服务将新版本设为当前版本并留下 `updates/startup-trial.json`；新服务就绪后删除它。
-//! 每次桌面启动计一次尝试；标记中的 `max_attempts` 次尝试后标记仍在时，启动器把 `current.json` 指回
+//! 每次未发现两个版本的 Core 正在运行的桌面启动计一次尝试（运行中的 Core 会被复用，本次启动不会启动
+//! 新版本）；标记中的 `max_attempts` 次尝试后标记仍在时，启动器把 `current.json` 指回
 //! 上一版本，并留下 `updates/rollback.json` 供恢复后的服务提示。上限由标记持有，此处不保留副本。
 //! 文件名与字段镜像 `crates/vulcan-install-core/src/install_root.rs`（`STARTUP_TRIAL_FILE`、
 //! `ROLLBACK_FILE`、`StartupTrial`、`Rollback`），两处须同时修改。启动器只依赖 `serde_json`，
@@ -44,6 +46,10 @@ const STARTUP_TRIAL_FILE: &str = "startup-trial.json";
 /// 启动器所做版本切换的标记。
 const ROLLBACK_FILE: &str = "rollback.json";
 
+/// Key of the service executable in a version's runtime layout.
+/// 版本运行时布局中服务可执行文件的键。
+const SERVICE_LAYOUT_KEY: &str = "serviceExecutable";
+
 /// Suffix of a file written before it replaces its destination.
 /// 替换目标前先写入的文件后缀。
 const PARTIAL_SUFFIX: &str = ".partial";
@@ -55,6 +61,9 @@ pub enum TrialOutcome {
     /// No version is on trial, or the service holds the install lock right now.
     /// 没有版本在试运行，或服务此刻持有安装锁。
     Idle,
+    /// A Core of the previous or the new version is running, so this launch counts nothing.
+    /// 上一版本或新版本的 Core 正在运行，本次启动不计数。
+    CoreRunning,
     /// One more attempt of the new version was counted.
     /// 新版本又计入一次尝试。
     Counted,
@@ -105,6 +114,16 @@ pub fn advance(root: &Path) -> Result<TrialOutcome, LaunchError> {
             .map_err(|error| io_error("remove the startup trial", &error))?;
         return Ok(TrialOutcome::Idle);
     }
+    if [version.as_str(), previous.as_str()]
+        .iter()
+        .any(|candidate| core_running(root, candidate))
+    {
+        // The desktop reuses a running Core, so this launch starts no Core of the new version and
+        // proves nothing about it; a Core still starting must not be rolled back underneath either.
+        // 桌面端会复用正在运行的 Core，本次启动不会启动新版本的 Core，也证明不了什么；仍在启动中的
+        // Core 也不能被在其运行时回退。
+        return Ok(TrialOutcome::CoreRunning);
+    }
     if attempts < max_attempts {
         trial["attempts"] = json!(attempts + 1);
         write_atomic(&trial_path, &trial)?;
@@ -128,6 +147,47 @@ pub fn advance(root: &Path) -> Result<TrialOutcome, LaunchError> {
     std::fs::remove_file(&trial_path)
         .map_err(|error| io_error("remove the startup trial", &error))?;
     Ok(TrialOutcome::RolledBack)
+}
+
+/// Whether the service executable of the installed `version` is running. Windows refuses write
+/// access to the image of a running program with a sharing violation; any other outcome, such as a
+/// missing layout or executable, counts as not running, so a launch is counted as before.
+/// 已安装 `version` 的服务可执行文件是否正在运行。Windows 以共享冲突拒绝对运行中程序映像的写访问；
+/// 其他任何结果（例如布局或可执行文件缺失）都视为未运行，启动仍按原方式计数。
+fn core_running(root: &Path, version: &str) -> bool {
+    let version_dir = root.join(VERSIONS_DIR).join(version);
+    let Ok(layout) = crate::read_json(&version_dir.join(crate::RUNTIME_LAYOUT_FILE)) else {
+        return false;
+    };
+    let Some(service) =
+        crate::string_field(&layout, SERVICE_LAYOUT_KEY, crate::RUNTIME_LAYOUT_FILE)
+            .ok()
+            .and_then(|entry| crate::relative_entry(entry, crate::RUNTIME_LAYOUT_FILE).ok())
+    else {
+        return false;
+    };
+    image_in_use(&version_dir.join(service))
+}
+
+/// Whether `path` is the image of a running program.
+/// `path` 是否为运行中程序的映像。
+#[cfg(windows)]
+fn image_in_use(path: &Path) -> bool {
+    /// `ERROR_SHARING_VIOLATION`.
+    const SHARING_VIOLATION: i32 = 32;
+    // Opening for write neither truncates nor changes the file; it only asks for the access.
+    // 以写方式打开既不截断也不修改文件，只请求该访问权限。
+    matches!(
+        File::options().write(true).open(path),
+        Err(error) if error.raw_os_error() == Some(SHARING_VIOLATION)
+    )
+}
+
+/// Whether `path` is the image of a running program; only Windows installs use the launcher.
+/// `path` 是否为运行中程序的映像；只有 Windows 安装使用启动器。
+#[cfg(not(windows))]
+fn image_in_use(_path: &Path) -> bool {
+    false
 }
 
 /// Replaces `path` with `value` atomically.

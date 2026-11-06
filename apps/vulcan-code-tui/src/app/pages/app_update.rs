@@ -57,32 +57,38 @@ fn offer_rows(rows: &mut Vec<Row>, snapshot: &Value, offer: &Value, busy: bool) 
         tr!("settings.appUpdate.incremental", size = size)
     } else if b(offer, "/installable") {
         tr!("settings.appUpdate.full", size = size)
+    } else if b(offer, "/setupManaged") {
+        tr!("settings.appUpdate.fullSetup")
     } else {
         tr!("settings.appUpdate.fullManual")
     };
-    let action = if b(offer, "/installable") {
-        RowAction {
+    // A setup-managed installation is updated by the setup program, so it gets no action here.
+    // 由安装器管理的安装由安装器更新，因此此处不提供操作。
+    let actions = if b(offer, "/installable") {
+        vec![RowAction {
             label: tr!("settings.appUpdate.download"),
             action: (!busy).then(|| call(api_update::download_app_update())),
             tone: Tone::Accent,
             switch: None,
-        }
+        }]
+    } else if b(offer, "/setupManaged") {
+        Vec::new()
     } else {
-        action(
+        vec![action(
             tr!("settings.appUpdate.openDownloadPage"),
             call(api::project_actions::open_external_url(&s(
                 snapshot,
                 "/downloadPageUrl",
             ))),
             Tone::Normal,
-        )
+        )]
     };
     let mut heading = item(
         "app-update-offer",
         tr!("settings.appUpdate.available", version = version),
         detail,
     )
-    .actions(vec![action]);
+    .actions(actions);
     if s(offer, "/channel") == "preview" {
         heading = heading.badge(tr!("settings.appUpdate.preview"), Tone::Warn);
     }
@@ -443,6 +449,11 @@ mod tests {
         let manual = methods(&page(snapshot(offer("full", false))));
         assert!(!manual.contains(&"service_download_app_update".to_string()));
         assert!(manual.contains(&"service_open_external_url".to_string()));
+        let mut managed = offer("full", false);
+        managed["offer"]["setupManaged"] = json!(true);
+        let managed = methods(&page(snapshot(managed)));
+        assert!(!managed.contains(&"service_download_app_update".to_string()));
+        assert!(!managed.contains(&"service_open_external_url".to_string()));
     }
 
     // Skipped releases follow the offered version's notes, newest first, each under its own title.

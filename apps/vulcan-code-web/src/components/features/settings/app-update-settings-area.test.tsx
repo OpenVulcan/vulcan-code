@@ -96,7 +96,7 @@ describe("AppUpdateSettingsArea", () => {
   it("downloads an installable offer and shows the accepted state", async () => {
     await render(snapshot({ offer: {
       version: "0.1.5", channel: "stable", kind: "incremental", downloadBytes: 1024, releasedAt: "2026-11-04T00:00:00Z",
-      notes: {}, skippedReleases: [], skippedReleasesComplete: true, installable: true, previouslyFailed: false,
+      notes: {}, skippedReleases: [], skippedReleasesComplete: true, installable: true, setupManaged: false, previouslyFailed: false,
     } }));
     service.downloadAppUpdate.mockResolvedValue(snapshot({ activity: "downloading", progress: { receivedBytes: 0, totalBytes: 1024 } }));
     await act(async () => { button("settings.appUpdate.download")?.click(); });
@@ -108,17 +108,28 @@ describe("AppUpdateSettingsArea", () => {
   it("sends a manual full update to the download page instead of downloading", async () => {
     await render(snapshot({ offer: {
       version: "0.2.0", channel: "stable", kind: "full", downloadBytes: 0, releasedAt: "2026-11-04T00:00:00Z",
-      notes: {}, skippedReleases: [], skippedReleasesComplete: true, installable: false, previouslyFailed: false,
+      notes: {}, skippedReleases: [], skippedReleasesComplete: true, installable: false, setupManaged: false, previouslyFailed: false,
     } }));
     expect(button("settings.appUpdate.download")).toBeUndefined();
     expect(button("settings.appUpdate.openDownloadPage")).toBeDefined();
+  });
+
+  it("points a setup-managed installation to the setup program and offers no installer", async () => {
+    await render(snapshot({ offer: {
+      version: "0.2.0", channel: "stable", kind: "full", downloadBytes: 0, releasedAt: "2026-11-04T00:00:00Z",
+      notes: {}, skippedReleases: [], skippedReleasesComplete: true, installable: false, setupManaged: true,
+      previouslyFailed: false,
+    } }));
+    expect(button("settings.appUpdate.download")).toBeUndefined();
+    expect(button("settings.appUpdate.openDownloadPage")).toBeUndefined();
+    expect(container.querySelector("[data-app-update-offer]")?.textContent).toContain("settings.appUpdate.fullSetup");
   });
 
   it("lists every version an update brings, newest first, below the settings", async () => {
     await render(snapshot({ offer: {
       version: "0.1.6", channel: "stable", kind: "incremental", downloadBytes: 1024, releasedAt: "2026-11-04T00:00:00Z",
       notes: { "en-US": "Six" }, skippedReleases: [{ version: "0.1.5", date: null, notes: { "en-US": "Five" } }],
-      skippedReleasesComplete: true, installable: true, previouslyFailed: false,
+      skippedReleasesComplete: true, installable: true, setupManaged: false, previouslyFailed: false,
     } }));
     const notes = [...container.querySelectorAll("[data-app-update-notes]")].map((element) => element.getAttribute("data-app-update-notes"));
     expect(notes).toEqual(["0.1.6", "0.1.5"]);
