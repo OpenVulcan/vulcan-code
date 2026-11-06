@@ -63,22 +63,6 @@ else
     Opt=/opt/vulcan Home="/home/$User"
 fi
 
-# A swap file, so a compilation peak above the memory slows the machine instead of stopping it: cloud images
-# come without swap. It lives on the data disk when there is one.
-# 交换文件：使超出内存的编译峰值只拖慢机器而不是让它失去响应；云镜像不带交换空间。有数据盘时放在数据盘上。
-Swap="$DataDir/swapfile"
-[ -n "$DataDisk" ] || Swap=/swapfile
-if [ -z "$(swapon --noheadings --show=NAME)" ]; then
-    if [ ! -e "$Swap" ]; then
-        echo "Creating the 16 GiB swap file $Swap"
-        fallocate -l 16G "$Swap"
-        chmod 600 "$Swap"
-        mkswap -q "$Swap"
-    fi
-    grep -q "^$Swap " /etc/fstab || echo "$Swap none swap sw 0 0" >> /etc/fstab
-    swapon "$Swap"
-fi
-
 # System packages: the tools the jobs call directly, then the native build and Chromium libraries.
 # 系统软件包：作业直接调用的工具，以及原生构建与 Chromium 所需的库。
 export DEBIAN_FRONTEND=noninteractive

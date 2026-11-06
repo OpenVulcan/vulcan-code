@@ -101,8 +101,6 @@ node scripts/ci-runners.mjs unregister <位置> [--dir <目录>]
   `--data-dir`（默认 `/data`）。系统软件包以外的一切都放在数据盘上：Node 在 `<数据目录>/opt/nodejs`，
   运行器用户（默认 `runner`）的家目录在 `<数据目录>/<用户>`，其中有 Rust 工具链、Cargo 缓存、PowerShell
   与运行器及其工作区。
-- 没有交换空间时建立 16 GiB 的交换文件（有数据盘时为 `<数据目录>/swapfile`，否则 `/swapfile`）并写入
-  `/etc/fstab`：云镜像不带交换空间，编译峰值超出内存会让机器失去响应。
 - 安装作业直接调用的工具与 `install_linux_system_deps.sh` 的原生库；Node 与 Rust 的版本取自
   `managed-runtimes.json` 与 `rust-toolchain.toml`，Node 按官方 `SHASUMS256.txt` 校验，仓库工具链设为默认。
 - 运行器用户沿用 root 的 SSH 公钥登录，sudo 只允许运行 `~/actions-runner/vulcan-code/svc.sh`，使随后的
@@ -117,9 +115,7 @@ node scripts/ci-runners.mjs unregister <位置> [--dir <目录>]
 `--manual` 时不安装服务，而是写出启动脚本：Windows 在终端运行 `<目录>\start.cmd`；Linux（含 WSL）运行
 `<目录>/start.sh`，WSL 即 `wsl -d <发行版> -- ~/actions-runner/vulcan-code/start.sh`。不要直接运行 `run.sh`：
 它沿用启动终端的 PATH，`~/.local/bin` 与 `~/.cargo/bin` 可能不在其中，只有服务与 `start.sh` 会载入注册时
-记录的 `.path`。注册时按机器内存在运行器的 `.env` 中写入 `CARGO_BUILD_JOBS`（每个并行编译约 4 GiB，
-不超过处理器数），运行器把它交给每个作业；8 核 32 GB 的机器用仓库默认的 16 个并行编译做 release 构建时曾耗尽
-内存。令牌不打印、不写入命令行历史。无法 SSH 时，
+记录的 `.path`。令牌不打印、不写入命令行历史。无法 SSH 时，
 可在机器上直接运行该脚本，并从标准输入提供在仓库 Settings → Actions → Runners 页面取得的令牌。
 
 用 Apple 芯片机器服务 `macos-x64` 池时须让整个作业在 Rosetta 下运行（x86_64 的 Node 与 Rust 工具链）；
