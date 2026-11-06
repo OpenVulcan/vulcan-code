@@ -3030,6 +3030,10 @@ impl StoragePort for InMemoryStorage {
                             != vulcan_memorymesh_core_contracts::MemoryScopeClass::Session,
                         memory,
                     })
+                    // Protected facts are dropped before the limit so they cannot fill every
+                    // slot and starve recyclable rows forever.
+                    // 受保护事实在截取前剔除，避免其占满全部名额使可回收行永远得不到处理。
+                    .filter(|fact| !policy.protects_terminal_memory(fact))
                     .collect::<Vec<_>>();
                 terminal_memories.sort_by(|left, right| {
                     left.memory

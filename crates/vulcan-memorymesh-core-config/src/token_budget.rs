@@ -131,7 +131,7 @@ pub fn estimate_memory_tokens(text: &str) -> u32 {
 /// Returns unchanged input below budget; dense text retains the external 80/40-character floor.
 /// 预算内返回原文；高密度文本保留外置的头尾 80/40 字符下限。
 pub fn clip_memory_text_to_default_budget(text: &str) -> String {
-    clip_memory_text_to_budget(text, 1200)
+    clip_memory_text_to_budget(text, crate::text_policy::DEFAULT_MAX_FRAGMENT_TOKENS)
 }
 
 /// Applies the selected approximate token target with the source-compatible head/tail shrink algorithm.

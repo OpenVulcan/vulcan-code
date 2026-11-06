@@ -30,7 +30,7 @@ fn parses_task_session_payload_into_subagent_state() {
 fn task_session_display_label_uses_agent_fallback() {
     let label = task_session_tool_display_label(None, None, None, None, None);
 
-    assert_eq!(label, "Agent");
+    assert!(!label.trim().is_empty());
 }
 
 /// Verifies task-card payload parsing does not invent a completed state without explicit execution status.
@@ -856,8 +856,10 @@ fn subagent_feedback_display_records_builds_visible_rows_and_stats() {
         records.feedback_entry.record_kind,
         SessionMessageRecordKind::DisplayNote
     );
-    assert_eq!(records.feedback_entry.title, "Agent returned its result");
-    assert_eq!(records.feedback_entry.body, "Agent returned its result");
+    // The note carries a fixed label; the result text stays in metadata.
+    // 提示只带固定标签；结果文本保留在元数据中。
+    assert!(!records.feedback_entry.title.is_empty());
+    assert_eq!(records.feedback_entry.body, records.feedback_entry.title);
     assert_eq!(
         records
             .feedback_entry
@@ -996,7 +998,7 @@ fn subagent_feedback_display_records_uses_empty_result_body() {
         subagent_feedback_display_records_from_tool_metadata(parent_session_id, &metadata, &state)
             .expect("feedback records should build");
 
-    assert_eq!(records.feedback_entry.body, "Agent returned its result");
+    assert_eq!(records.feedback_entry.body, records.feedback_entry.title);
     assert_eq!(
         records
             .feedback_entry

@@ -627,20 +627,12 @@ impl PublicAiRuntime {
                 protocol_binding.protocol_profile_id
             ));
         }
-        // The protocol variant is the per-route capability authority, but persisted user
-        // capability overrides are the highest layer and must win over the projection
-        // (plan §R5.3); the overlay rebuild folds them into the catalog, so re-applying
-        // them here preserves the exact persisted overrides after the variant swap.
-        // 协议变体是按路由能力权威，但持久化用户能力覆盖是最高层，必须胜过投影
-        // （方案 §R5.3）；覆盖重建已把覆盖并入目录，因此在此重新应用以在变体交换后
-        // 保留精确持久化覆盖。
-        if provider.kind == crate::ProviderKind::System {
-            configuration.apply_model_capability_overrides(
-                provider_id,
-                model.id.as_str(),
-                &mut model.capabilities,
-            );
-        }
+        // The protocol variant is the per-route capability authority. The catalog rebuild already
+        // applied persisted user capability overrides to every variant as the last layer and then
+        // fitted output limits to the context window, so the variant is used as published;
+        // re-applying overrides here would undo that fit.
+        // 协议变体是按路由能力权威。目录重建已把持久化用户能力覆盖作为最后一层应用到每个变体，
+        // 随后把输出上限收敛到上下文窗口内，因此直接使用已发布变体；在此重新应用覆盖会撤销该收敛。
         super::catalog_policy::apply_protocol_prompt_cache_capability(
             protocol_binding.protocol_profile_id.as_str(),
             &mut model.capabilities,

@@ -534,6 +534,7 @@ impl ProviderExecutionClient {
                             wire_response_capture.observe_failure("protocol_decoder", &failure);
                             failure
                         })?;
+                    record_terminal_websocket_success(&client, websocket_key.as_str(), &event);
                     wire_response_capture.observe_normalized_event(&event);
                     let released_usage = profiled_usage_gate.observe(&event);
                     yield event;
@@ -588,6 +589,7 @@ impl ProviderExecutionClient {
                         wire_response_capture.observe_failure("protocol_decoder", &failure);
                         failure
                     })?;
+                record_terminal_websocket_success(&client, websocket_key.as_str(), &event);
                 wire_response_capture.observe_normalized_event(&event);
                 let released_usage = profiled_usage_gate.observe(&event);
                 yield event;
@@ -637,7 +639,6 @@ impl ProviderExecutionClient {
                 wire_response_capture.observe_failure("protocol_decoder", &failure);
                 Err(failure)?;
             }
-            client.record_responses_websocket_success(websocket_key.as_str());
             emit_provider_transport_trace(
                 execution_id.as_str(),
                 "responses_websocket",
@@ -772,6 +773,25 @@ fn retire_failed_responses_websocket(
 ) {
     session.abandon_response();
     client.record_responses_websocket_failure(websocket_key, None);
+}
+
+/// Clears the session's consecutive-loss count once a validated terminal event arrives.
+/// 在收到已校验的终态事件时清除会话的连续丢失计数。
+///
+/// It runs before the event is yielded, because a consumer may drop the stream as soon as it
+/// reads the terminal event and code after that yield would never run.
+/// 它在事件交出之前执行，因为消费方读到终态事件后可能立即丢弃流，交出之后的代码不会再执行。
+fn record_terminal_websocket_success(
+    client: &ProviderExecutionClient,
+    websocket_key: &str,
+    event: &AiStreamEvent,
+) {
+    if matches!(
+        event,
+        AiStreamEvent::ResponseCompleted | AiStreamEvent::ResponseFailed { .. }
+    ) {
+        client.record_responses_websocket_success(websocket_key);
+    }
 }
 
 /// Selects incremental WebSocket input only when the active socket proves cursor ownership.

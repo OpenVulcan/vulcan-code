@@ -1612,28 +1612,36 @@ fn scan_package_roots(
     }
 }
 
-/// Returns whether a user definition is ignored because it would shadow a shipped definition.
-/// 返回用户定义是否因会遮蔽内置定义而被忽略。
+/// Returns whether a user or package definition is ignored because it would shadow a shipped
+/// definition: a user definition never replaces a system or package one, and a package definition
+/// never replaces a system one.
+/// 返回用户或包定义是否因会遮蔽内置定义而被忽略：用户定义绝不替换系统或包定义，包定义绝不替换系统
+/// 定义。
 fn user_definition_conflicts_with_existing_system_or_package(
     definition: &SubagentDefinition,
     by_id: &BTreeMap<String, SubagentDefinition>,
     errors: &mut Vec<SubagentCatalogLoadError>,
 ) -> bool {
-    if definition.source.scope != SubagentDefinitionScope::User {
-        return false;
-    }
     let Some(existing) = by_id.get(&definition.id) else {
         return false;
     };
-    if existing.source.scope == SubagentDefinitionScope::User {
-        return false;
-    }
+    let id = &definition.id;
+    let message = match (definition.source.scope, existing.source.scope) {
+        (SubagentDefinitionScope::User, existing_scope)
+            if existing_scope != SubagentDefinitionScope::User =>
+        {
+            format!(
+                "User subagent definition `{id}` is ignored because it conflicts with an existing system or package definition."
+            )
+        }
+        (SubagentDefinitionScope::Package, SubagentDefinitionScope::System) => format!(
+            "Package subagent definition `{id}` is ignored because it conflicts with an existing system definition."
+        ),
+        _ => return false,
+    };
     errors.push(SubagentCatalogLoadError {
         path: definition.source.file.clone(),
-        message: format!(
-            "User subagent definition `{}` is ignored because it conflicts with an existing system or package definition.",
-            definition.id
-        ),
+        message,
     });
     true
 }
@@ -2418,6 +2426,49 @@ mod tests {
                 .errors
                 .iter()
                 .any(|error| error.message.contains("conflicts with an existing system"))
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Verifies a downloaded package definition cannot replace a system definition with the same id.
+    /// 验证已下载包中的定义不能替换同标识的系统定义。
+    #[test]
+    fn package_definition_conflict_preserves_system_definition() {
+        let root = std::env::temp_dir().join(format!(
+            "vulcan-subagent-package-conflict-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let system_root = root.join("system");
+        let user_root = root.join("user");
+        // A package named like a system category yields the same `<category>/<name>` id.
+        // 与系统分类同名的包会得到相同的 `<分类>/<名称>` 标识。
+        let package_dir = user_root.join("packages").join("engineering");
+        fs::create_dir_all(system_root.join("engineering")).expect("system category");
+        fs::create_dir_all(&package_dir).expect("package root");
+        fs::write(
+            system_root.join("engineering").join("reviewer.md"),
+            "---\nname: System Reviewer\n---\nSystem.",
+        )
+        .expect("system file");
+        let package_file = package_dir.join("reviewer.md");
+        fs::write(&package_file, "---\nname: Package Reviewer\n---\nPackage.")
+            .expect("package file");
+
+        let catalog = load_subagent_catalog_from_roots(system_root, user_root);
+        let definition = catalog
+            .definitions
+            .iter()
+            .find(|definition| definition.id == "engineering/reviewer")
+            .expect("merged definition");
+
+        assert_eq!(definition.source.scope, SubagentDefinitionScope::System);
+        assert!(
+            catalog
+                .errors
+                .iter()
+                .any(|error| error.path == package_file)
         );
 
         let _ = fs::remove_dir_all(root);

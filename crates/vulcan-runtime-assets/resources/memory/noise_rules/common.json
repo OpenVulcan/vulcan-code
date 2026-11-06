@@ -49,7 +49,7 @@
       "targets": ["user", "assistant"],
       "threshold": 0.92,
       "patterns": [
-        "^(hi|hello|hey|good morning|good evening|greetings)",
+        "^(hi|hello|hey|good morning|good evening|greetings)\\b",
         "^fresh session",
         "^new session",
         "^HEARTBEAT"

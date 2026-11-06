@@ -608,6 +608,35 @@ async fn write_provider_usage_schema_revision(
     host_runtime: &HostRuntimeHandle,
     logical: LogicalDatabase,
 ) -> Result<(), String> {
+    // A revision written by a newer build is refused rather than lowered to the current one.
+    // 由更新构建写入的修订号被拒绝，而不是降为当前修订号。
+    let stored = local_sql::query_json_async(
+        &host_runtime.local,
+        logical,
+        "SELECT meta_value FROM provider_usage_meta WHERE meta_key = 'schema_revision';",
+        vec![],
+    )
+    .await
+    .map_err(|error| format!("Failed to read the provider usage schema revision: {error}"))?;
+    let stored_revision = serde_json::from_str::<Vec<serde_json::Value>>(&stored.json_data)
+        .map_err(|error| format!("Failed to parse the provider usage schema revision: {error}"))?
+        .first()
+        .and_then(|row| row.get("meta_value"))
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| value.parse::<i64>().ok());
+    match stored_revision {
+        Some(revision) if revision > PROVIDER_USAGE_SCHEMA_REVISION => {
+            return Err(format!(
+                "Unsupported provider usage schema revision {revision}; this build supports revision {PROVIDER_USAGE_SCHEMA_REVISION}."
+            ));
+        }
+        Some(_) => {}
+        None => {
+            return Err(String::from(
+                "The provider usage schema revision is missing or not a number.",
+            ));
+        }
+    }
     // Derived from the public constant so the persisted value cannot drift from the declared one.
     // 由公开常量生成，使持久化值无法与声明值漂移。
     let revision_update = format!(

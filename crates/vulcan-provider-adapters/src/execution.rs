@@ -28,9 +28,9 @@ pub use failure::{
     REASONING_REPLAY_UNREPLAYABLE_MESSAGE, REASONING_REPLAY_UNREPLAYABLE_SUBCATEGORY,
 };
 pub(crate) use failure::{
-    http_failure, http_send_transport_failure, pre_dispatch_failure,
-    response_headers_protocol_failure, sanitize_provider_execution_failure, transport_failure,
-    unreplayable_history_failure,
+    http_failure, http_send_transport_failure, pre_dispatch_failure, redact_exact_credential,
+    response_headers_protocol_failure, sanitize_ai_execution_error,
+    sanitize_provider_execution_failure, transport_failure, unreplayable_history_failure,
 };
 pub use prepared_media::{
     AdmittedLocalMediaSource, CONVERSATION_MEDIA_INPUT_OPERATION_ID,
@@ -396,9 +396,19 @@ impl ProviderExecutionClient {
         };
         // Every asynchronous error crosses one common secret-safe and bounded public boundary.
         // 每个异步错误都经过同一条不含秘密且有界的公共边界。
-        Box::pin(stream.map(move |result| {
-            result
-                .map_err(|failure| sanitize_provider_execution_failure(failure, &diagnostic_secret))
+        // In-stream failure events carry the same provider-controlled fields, so they cross the
+        // same boundary.
+        // 流内失败事件携带同样的供应商控制字段，因此经过同一边界。
+        Box::pin(stream.map(move |result| match result {
+            Ok(AiStreamEvent::ResponseFailed { mut error }) => {
+                sanitize_ai_execution_error(&mut error, &diagnostic_secret);
+                Ok(AiStreamEvent::ResponseFailed { error })
+            }
+            Ok(event) => Ok(event),
+            Err(failure) => Err(sanitize_provider_execution_failure(
+                failure,
+                &diagnostic_secret,
+            )),
         }))
     }
 }

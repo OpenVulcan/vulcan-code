@@ -25,6 +25,14 @@ pub const RUNTIME_CONTRACT: &str = "vulcan.session-runtime.v1";
 /// V1 压缩节点文档的文件契约。
 pub const COMPACTIONS_CONTRACT: &str = "vulcan.session-compactions.v1";
 
+/// Schema version written into new V1 runtime lock documents.
+/// 写入新 V1 运行时锁定文档的结构版本。
+pub const RUNTIME_SCHEMA_VERSION: u32 = 1;
+
+/// Schema version written into new V1 compactions documents.
+/// 写入新 V1 压缩节点文档的结构版本。
+pub const COMPACTIONS_SCHEMA_VERSION: u32 = 1;
+
 /// Explicit initialization state of the current runtime baseline.
 /// 当前运行时基线的明确初始化状态。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -376,7 +384,7 @@ impl RuntimeDocument {
     pub fn new(session_id: impl Into<String>, updated_at_ms: i64) -> Self {
         Self {
             contract: RUNTIME_CONTRACT.to_string(),
-            schema_version: 1,
+            schema_version: RUNTIME_SCHEMA_VERSION,
             session_id: session_id.into(),
             updated_at_ms,
             initialization_state: RuntimeInitializationState::FreshUninitialized,
@@ -409,12 +417,7 @@ impl CompactionsDocument {
     /// Builds a fresh empty compactions document with the current contract.
     /// 使用当前契约构建一份全新的空压缩文档。
     pub fn new(session_id: impl Into<String>) -> Self {
-        Self {
-            contract: COMPACTIONS_CONTRACT.to_string(),
-            schema_version: 1,
-            session_id: session_id.into(),
-            nodes: Vec::new(),
-        }
+        Self::new_with_nodes(session_id, Vec::new())
     }
 
     /// Builds a compactions document from existing nodes.
@@ -422,7 +425,7 @@ impl CompactionsDocument {
     pub fn new_with_nodes(session_id: impl Into<String>, nodes: Vec<CompactionNode>) -> Self {
         Self {
             contract: COMPACTIONS_CONTRACT.to_string(),
-            schema_version: 1,
+            schema_version: COMPACTIONS_SCHEMA_VERSION,
             session_id: session_id.into(),
             nodes,
         }

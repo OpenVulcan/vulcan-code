@@ -360,15 +360,18 @@ impl SessionDocument {
         if terminals[0].1.outcome != TurnOutcome::Completed {
             return Ok(None);
         }
-        // Match the terminal API explicitly; arbitrary later assistant text is never a recovery receipt.
-        // 显式匹配终态 API；任意后续助手文本都不能作为恢复回执。
+        // Match the terminal business API explicitly, using the same selection as the return builder;
+        // arbitrary later assistant text is never a recovery receipt.
+        // 显式匹配终态业务 API，与回流构造使用相同的选择；任意后续助手文本都不能作为恢复回执。
         let terminal_api = self
             .events
             .iter()
             .rev()
             .find_map(|event| match &event.event {
                 EventBody::ApiStats(stats)
-                    if event.turn_id == Some(turn_id) && event.seq < terminals[0].0.seq =>
+                    if event.turn_id == Some(turn_id)
+                        && event.seq < terminals[0].0.seq
+                        && is_business_api_purpose(stats.purpose) =>
                 {
                     Some(stats.api_call_id)
                 }
@@ -512,13 +515,17 @@ impl SessionDocument {
             .ok_or(DomainError::InvalidStatistics {
                 field: "source_assistant_text",
             })?;
+        // Auxiliary APIs (compaction, question execution) may follow the final answer; the result
+        // comes from the latest business API.
+        // 辅助 API（压缩、答疑）可能在最终回答之后出现；结果来自最近的业务 API。
         let latest_api_stats = self
             .events
             .iter()
             .filter_map(|event| match &event.event {
                 EventBody::ApiStats(api_stats)
                     if event.turn_id == Some(request.final_turn_id)
-                        && event.seq.value() < stats_event.seq.value() =>
+                        && event.seq.value() < stats_event.seq.value()
+                        && is_business_api_purpose(api_stats.purpose) =>
                 {
                     Some((event.seq, api_stats))
                 }
@@ -530,10 +537,6 @@ impl SessionDocument {
                 field: "child_final_api_stats",
             })?;
         if latest_api_stats.status != ApiCallStatus::Completed
-            || matches!(
-                latest_api_stats.purpose,
-                ApiPurposeKind::Compaction | ApiPurposeKind::QuestionExecution
-            )
             || source_text.api_call_id != latest_api_stats.api_call_id
             || self.events.iter().any(|event| {
                 matches!(
@@ -809,4 +812,14 @@ impl SessionDocument {
             source_assistant_text_seq: returned.source_assistant_text_seq,
         }))
     }
+}
+
+/// Returns whether an API purpose is business work rather than auxiliary compaction or question
+/// execution.
+/// 返回 API 用途是否属于业务工作，而非辅助压缩或答疑。
+fn is_business_api_purpose(purpose: ApiPurposeKind) -> bool {
+    !matches!(
+        purpose,
+        ApiPurposeKind::Compaction | ApiPurposeKind::QuestionExecution
+    )
 }

@@ -592,3 +592,61 @@ fn manual_compaction_requires_explicit_nullable_child_identity() {
         .remove("business_execution_id");
     assert!(serde_json::from_value::<ContextMaintenanceExecution>(value).is_err());
 }
+
+/// An edit whose retained history holds a maintenance record from the previous generation succeeds.
+/// 保留历史中含有上一代次维护记录的编辑可以成功。
+#[test]
+fn edit_keeps_earlier_generation_maintenance_history() {
+    let mut document = idle_root();
+    document
+        .begin_manual_context_maintenance(
+            &document
+                .capture_manual_context_maintenance_source()
+                .unwrap(),
+            CollaborationExecutionId::try_new("manual-before-edit").unwrap(),
+            10,
+        )
+        .unwrap();
+    assert!(
+        document
+            .fail_execution_boundary_and_close_turn(
+                "context_compaction_failed",
+                Some("Fixture preparation failure"),
+                11
+            )
+            .unwrap()
+    );
+    let second_turn = document
+        .submit_root_input_fixture("Second task", Vec::new(), 12)
+        .unwrap();
+    let second = document
+        .events()
+        .iter()
+        .find(|event| {
+            event.turn_id == Some(second_turn) && matches!(event.event, EventBody::UserInput(_))
+        })
+        .unwrap()
+        .seq;
+    document
+        .fail_execution_boundary_and_close_turn(
+            "fixture_business_failed",
+            Some("Fixture failure"),
+            13,
+        )
+        .unwrap();
+    publish(&mut document);
+
+    let edited = document
+        .build_edited_generation(crate::v1::EditGenerationInput {
+            target_seq: second,
+            replacement: crate::v1::RootInputReplacement::new("Edited task", Vec::new()),
+            now_ms: 14,
+        })
+        .expect("earlier maintenance history must not block an edit");
+    assert!(
+        edited
+            .events
+            .iter()
+            .any(|event| matches!(event.event, EventBody::ContextMaintenance(_)))
+    );
+}

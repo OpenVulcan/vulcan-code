@@ -110,6 +110,40 @@ fn execution_failure_boundary_redacts_exact_secret_and_provider_urls() {
     );
 }
 
+/// Verifies a credential straddling the diagnostic length bound leaves no fragment behind.
+/// 验证跨越诊断长度上限的凭据不会留下任何片段。
+#[test]
+fn credential_across_the_length_bound_leaves_no_fragment() {
+    let secret = crate::CredentialSecretEnvelope::new_api_key(String::from(
+        "opaque-execution-credential-value",
+    ))
+    .expect("test credential should validate")
+    .execution_secret()
+    .expect("test execution secret should resolve");
+    // The credential starts a few characters before the field bound, so truncating first would
+    // keep its prefix.
+    // 凭据起点位于字段上限之前数个字符，若先截断就会保留其前缀。
+    let message = format!("{}{}", "x".repeat(2_040), secret.expose_value());
+    let body = serde_json::json!({ "error": { "message": message } }).to_string();
+    let failure = http_failure(
+        401,
+        None,
+        redact_exact_credential(body.as_str(), &secret).as_str(),
+    );
+    let upstream_message = failure.error.upstream_message.unwrap_or_default();
+    assert!(!upstream_message.contains("opaque-exec"));
+    let mut event_error =
+        sanitize_provider_execution_failure(http_failure(401, None, body.as_str()), &secret).error;
+    event_error.upstream_message = Some(message);
+    sanitize_ai_execution_error(&mut event_error, &secret);
+    assert!(
+        !event_error
+            .upstream_message
+            .unwrap_or_default()
+            .contains("opaque-exec")
+    );
+}
+
 /// Verifies only a proven connection-establishment failure is safe to replay.
 /// 验证只有已证明的连接建立失败才可安全重放。
 #[tokio::test]

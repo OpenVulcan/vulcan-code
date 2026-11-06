@@ -1,7 +1,9 @@
 //! VMM-aligned retention policy snapshots and strongly typed maintenance plans.
 //! 与 VMM 对齐的保留策略快照与强类型维护计划。
 
-use crate::{MemoryAccessIdentity, MutationIdentity, ProfileNodeId, ScopeId, SubjectId};
+use crate::{
+    MemoryAccessIdentity, MutationIdentity, ProfileNodeId, RetentionMemoryFact, ScopeId, SubjectId,
+};
 use serde::{Deserialize, Serialize};
 
 /// Carries the complete host-agnostic retention policy evaluated by Core.
@@ -235,5 +237,18 @@ impl RetentionPolicy {
             vector_gc_limit: 128,
             trash_purge_limit: 64,
         }
+    }
+
+    /// Returns whether this policy keeps one terminal-memory fact out of recycling.
+    /// 返回本策略是否把一条终态记忆事实排除在回收之外。
+    /// Storage applies it before limiting candidates and Core applies it when planning, so both
+    /// layers share one protection rule.
+    /// 存储层在截取候选前应用它，Core 在规划时应用它，两层共用同一保护规则。
+    #[must_use]
+    pub fn protects_terminal_memory(&self, fact: &RetentionMemoryFact) -> bool {
+        self.skip_protected_shared_memories
+            && fact.protected_shared
+            && (fact.memory.priority >= self.protected_priority_floor
+                || fact.memory.memory_level as u32 >= self.protected_memory_level_floor)
     }
 }

@@ -60,7 +60,15 @@ impl SessionDocument {
             let EventBody::ContextMaintenance(record) = &event.event else {
                 continue;
             };
-            record.validate(self.segment_generation())?;
+            // History copied by an edit or fork keeps records of the generation that wrote them; a
+            // record from a later generation is impossible.
+            // 编辑或分叉复制的历史保留写入它们的代次记录；来自更晚代次的记录不可能存在。
+            if record.segment_generation > self.segment_generation() {
+                return Err(DomainError::CollaborationStateViolation {
+                    field: "context_maintenance.record",
+                });
+            }
+            record.validate(record.segment_generation)?;
             if record.source_revision >= self.metadata.document_revision {
                 return Err(DomainError::CollaborationStateViolation {
                     field: "context_maintenance.source_revision",
@@ -142,7 +150,12 @@ impl SessionDocument {
                 });
             }
             executions.insert(record.execution_id.clone(), record.clone());
-            latest = Some(record);
+            // Only the current generation's journal backs the metadata snapshot; a new generation
+            // starts without one.
+            // 只有当前代次的日志对应元数据快照；新代次开始时没有快照。
+            if record.segment_generation == self.segment_generation() {
+                latest = Some(record);
+            }
         }
         if let Some(record) = &self.metadata.context_maintenance {
             record.validate(self.segment_generation())?;

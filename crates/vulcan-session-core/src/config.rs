@@ -59,16 +59,26 @@ pub fn normalize_capability_policy_snapshot(
 
 /// Builds a capability policy from a mode key, selectors, or fallback allow/deny lists.
 /// 通过模式键、选择器或回退允许/禁止列表构建能力策略。
+///
+/// An absent or blank mode uses the fallback lists; an unknown mode is an error, never a policy.
+/// 缺省或空白模式使用回退列表；未知模式是错误，绝不会成为策略。
 pub fn capability_policy_from_mode_or_selector_lists(
     mode: Option<&str>,
     selectors: Vec<String>,
     fallback_allowed: Vec<String>,
     fallback_disabled: Vec<String>,
-) -> CapabilityPolicySnapshot {
-    if let Some(mode) = mode.and_then(parse_capability_policy_mode_key) {
-        return normalize_capability_policy_snapshot(CapabilityPolicySnapshot { mode, selectors });
+) -> Result<CapabilityPolicySnapshot, String> {
+    if let Some(mode_key) = mode.map(str::trim).filter(|mode_key| !mode_key.is_empty()) {
+        let mode = parse_capability_policy_mode_key(mode_key)
+            .ok_or_else(|| format!("Unknown capability policy mode `{mode_key}`."))?;
+        return Ok(normalize_capability_policy_snapshot(
+            CapabilityPolicySnapshot { mode, selectors },
+        ));
     }
-    capability_policy_from_selector_lists(fallback_allowed, fallback_disabled)
+    Ok(capability_policy_from_selector_lists(
+        fallback_allowed,
+        fallback_disabled,
+    ))
 }
 
 /// Builds a capability policy from allow and deny selector lists.
@@ -412,9 +422,34 @@ mod tests {
             vec![String::from("shell_command")],
             vec![String::from("todolist")],
             vec![String::from("ask")],
-        );
+        )
+        .expect("known mode");
 
         assert_eq!(policy, CapabilityPolicySnapshot::default());
+    }
+
+    /// Verifies an unknown mode is rejected instead of becoming an open policy, while a blank mode
+    /// still uses the fallback lists.
+    /// 验证未知模式被拒绝而不会变成全开放策略，空白模式仍使用回退列表。
+    #[test]
+    fn capability_policy_from_mode_or_selector_lists_rejects_unknown_mode() {
+        assert!(
+            capability_policy_from_mode_or_selector_lists(
+                Some("allow-everything"),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            )
+            .is_err()
+        );
+        let policy = capability_policy_from_mode_or_selector_lists(
+            Some("  "),
+            Vec::new(),
+            vec![String::from("todolist")],
+            Vec::new(),
+        )
+        .expect("blank mode uses fallback lists");
+        assert_eq!(policy.mode, CapabilityPolicyMode::AllowOnly);
     }
 
     /// Verifies applying a tool policy updates the legacy mirror lists consistently.

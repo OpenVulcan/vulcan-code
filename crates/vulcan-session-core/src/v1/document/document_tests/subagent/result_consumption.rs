@@ -75,13 +75,14 @@ fn subagent_return_rejects_auxiliary_final_proofs() -> Result<(), DomainError> {
         ApiPurposeKind::Compaction,
         ApiPurposeKind::QuestionExecution,
     ] {
-        // An auxiliary response stays auxiliary even when its enclosing turn is completed.
-        // 即使外层回合已完成，辅助回复仍然属于辅助工作。
+        // An auxiliary response stays auxiliary even when its enclosing turn is completed, so the
+        // turn has no business API to return.
+        // 即使外层回合已完成，辅助回复仍然属于辅助工作，因此该回合没有可回流的业务 API。
         let (child, request) = closed_child(purpose, TurnOutcome::Completed)?;
         assert!(matches!(
             child.build_subagent_return_input(request),
             Err(DomainError::InvalidStatistics {
-                field: "child_final_assistant"
+                field: "child_final_api_stats"
             })
         ));
     }

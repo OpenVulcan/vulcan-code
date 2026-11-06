@@ -291,10 +291,11 @@ impl ProviderApiTraceStore {
         Ok(self.root.clone())
     }
 
-    /// Removes the exact trace root and resets the in-memory sequence frontier.
-    /// 删除精确追踪根目录并重置内存序号前沿。
+    /// Removes the exact trace root. The in-memory sequence frontier is kept, so a request
+    /// reserved before the clear and the requests after it never share a sequence.
+    /// 删除精确追踪根目录。内存序号前沿保持不变，使清理前已预留的请求与之后的请求绝不共用序号。
     pub fn clear_directory(&self) -> Result<bool, ProviderApiTraceDiagnostic> {
-        let mut owner = self.lock_owner()?;
+        let _owner = self.lock_owner()?;
         let parent = self.root.parent().ok_or_else(|| {
             trace_diagnostic(
                 ProviderApiTraceDiagnosticCode::WriteFailed,
@@ -316,7 +317,6 @@ impl ProviderApiTraceStore {
                 ));
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                owner.sequence_frontier = None;
                 return Ok(false);
             }
             Err(error) => {
@@ -332,7 +332,6 @@ impl ProviderApiTraceStore {
         let metadata = match fs::symlink_metadata(&self.root) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                owner.sequence_frontier = None;
                 return Ok(false);
             }
             Err(error) => {
@@ -363,7 +362,6 @@ impl ProviderApiTraceStore {
                 ),
             )
         })?;
-        owner.sequence_frontier = None;
         Ok(true)
     }
 
@@ -1220,11 +1218,23 @@ mod tests {
             store.prepare_directory().expect("prepare exact trace root"),
             root
         );
-        assert_eq!(reserve(&store, 1, 0).trace_sequence, 1);
+        let in_flight = reserve(&store, 1, 0);
+        assert_eq!(in_flight.trace_sequence, 1);
         assert!(store.clear_directory().expect("clear exact trace root"));
         assert!(!root.exists());
         assert!(!store.clear_directory().expect("clear absent trace root"));
-        assert_eq!(reserve(&store, 2, 0).trace_sequence, 1);
+        // A request reserved before the clear and one reserved after it both publish.
+        // 清理前预留的请求与清理后预留的请求都能发布。
+        let after_clear = reserve(&store, 2, 0);
+        assert_eq!(after_clear.trace_sequence, 2);
+        assert!(matches!(
+            publish(&store, &after_clear),
+            ProviderApiTraceWriteOutcome::Written { .. }
+        ));
+        assert!(matches!(
+            publish(&store, &in_flight),
+            ProviderApiTraceWriteOutcome::Written { .. }
+        ));
     }
 
     /// A symbolic-link parent is rejected before prepare or clear can escape the session owner.

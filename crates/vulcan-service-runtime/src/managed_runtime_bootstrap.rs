@@ -2,7 +2,8 @@
 //! 活动 LuaSkills 根目录的受管 Python 与 Node 运行时初始化器。
 
 use crate::managed_runtime_installer::{
-    NativeManagedRuntimeInstallRequest, install_managed_runtimes,
+    NativeManagedRuntimeInstallRequest, RUNTIME_INSTALL_MANIFEST_SCHEMA_VERSION,
+    install_managed_runtimes,
 };
 use fs2::FileExt;
 use serde::Deserialize;
@@ -665,7 +666,7 @@ fn validate_runtime_installation(expectation: &RuntimeExpectation) -> Result<(),
         .map_err(|error| format!("failed to read {}: {error}", manifest_path.display()))?;
     let manifest: RuntimeInstallManifest = serde_json::from_str(&text)
         .map_err(|error| format!("failed to parse {}: {error}", manifest_path.display()))?;
-    if manifest.schema_version != 1
+    if manifest.schema_version != RUNTIME_INSTALL_MANIFEST_SCHEMA_VERSION
         || manifest.runtime != expectation.runtime
         || manifest.version != expectation.version
         || manifest.platform != expectation.platform

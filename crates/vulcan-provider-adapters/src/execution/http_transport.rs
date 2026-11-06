@@ -3,8 +3,8 @@
 
 use super::failure::{
     http_failure, http_send_transport_failure, llm_core_protocol_failure, protocol_failure,
-    stream_completion_failure, stream_idle_timeout_failure, stream_protocol_failure,
-    stream_transport_failure, transport_failure,
+    redact_exact_credential, stream_completion_failure, stream_idle_timeout_failure,
+    stream_protocol_failure, stream_transport_failure, transport_failure,
 };
 use super::framing::IncrementalFrameParser;
 use super::projection_profiles::{project_response_record, project_response_record_text};
@@ -207,10 +207,13 @@ impl ProviderExecutionClient {
                         failure
                     })?;
                 wire_response_capture.set_outcome("http_error_response");
+                // The exact credential is removed before classification bounds any field, so a
+                // truncated field can never keep a credential fragment.
+                // 在分类限长任何字段之前移除精确凭据，使截断后的字段不会残留凭据片段。
                 let failure = http_failure(
                     status.as_u16(),
                     retry_after,
-                    body.as_str(),
+                    redact_exact_credential(body.as_str(), &secret).as_str(),
                 );
                 wire_response_capture.observe_failure("headers", &failure);
                 Err(failure)?

@@ -13,13 +13,17 @@ pub struct PostActionTextPolicy {
     pub max_fragment_tokens: u32,
 }
 
+/// Default per-fragment token target shared by the PostAction policy and default clipping.
+/// PostAction 策略与默认裁剪共用的默认单片段 Token 目标。
+pub const DEFAULT_MAX_FRAGMENT_TOKENS: u32 = 1200;
+
 impl Default for PostActionTextPolicy {
     /// Returns the already differential-tested external default behavior.
     /// 返回已经差异对照验证的外置默认行为。
     fn default() -> Self {
         Self {
             fold_machine_text: true,
-            max_fragment_tokens: 1200,
+            max_fragment_tokens: DEFAULT_MAX_FRAGMENT_TOKENS,
         }
     }
 }

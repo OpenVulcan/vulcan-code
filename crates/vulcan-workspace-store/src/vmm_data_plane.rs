@@ -48,6 +48,18 @@ pub const DEFAULT_VMM_PROJECT_ID: i64 = 1;
 /// 原生 VMM 关系数据库的当前结构版本。
 pub const VMM_SCHEMA_VERSION: i64 = 1;
 
+/// Most characters in a native VMM project name.
+/// 原生 VMM 项目名称的最大字符数。
+pub const VMM_PROJECT_NAME_MAX_CHARS: usize = 512;
+
+/// Most characters in a native VMM project tag.
+/// 原生 VMM 项目标签的最大字符数。
+pub const VMM_PROJECT_TAG_MAX_CHARS: usize = 256;
+
+/// Most characters in a VulcanCode project ID bound to a native VMM project.
+/// 绑定到原生 VMM 项目的 VulcanCode 项目 ID 的最大字符数。
+pub const VMM_VULCAN_PROJECT_ID_MAX_CHARS: usize = 512;
+
 /// Stable key of the single durable native Core storage snapshot.
 /// 单一持久化原生 Core 存储快照的稳定键。
 pub const VMM_CORE_SNAPSHOT_KEY: &str = "native-core";
@@ -415,8 +427,9 @@ impl VmmDataPlaneHandle {
     /// Returns a validation, uniqueness, storage, or readback error.
     /// 返回校验、唯一性、存储或回读错误。
     pub async fn create_project(&self, name: &str, tag: &str) -> Result<NativeVmmProject, String> {
-        let name = validate_native_project_text(name, "VMM project name", 512)?;
-        let tag = validate_native_project_text(tag, "VMM project tag", 256)?;
+        let name =
+            validate_native_project_text(name, "VMM project name", VMM_PROJECT_NAME_MAX_CHARS)?;
+        let tag = validate_native_project_text(tag, "VMM project tag", VMM_PROJECT_TAG_MAX_CHARS)?;
         let now = current_unix_epoch_millis_i64()?;
         let result = local_sql::execute_script_async(
             &self.local,
@@ -458,7 +471,7 @@ impl VmmDataPlaneHandle {
     /// Returns a storage, validation, or catalog consistency error.
     /// 返回存储、校验或目录一致性错误。
     pub async fn ensure_project(&self, name: &str, tag: &str) -> Result<NativeVmmProject, String> {
-        let tag = validate_native_project_text(tag, "VMM project tag", 256)?;
+        let tag = validate_native_project_text(tag, "VMM project tag", VMM_PROJECT_TAG_MAX_CHARS)?;
         if let Some(project) = self.project_by_tag(tag).await? {
             return Ok(project);
         }
@@ -480,7 +493,8 @@ impl VmmDataPlaneHandle {
         name: &str,
     ) -> Result<NativeVmmProject, String> {
         let project_id_i64 = project_id_i64(project_id)?;
-        let name = validate_native_project_text(name, "VMM project name", 512)?;
+        let name =
+            validate_native_project_text(name, "VMM project name", VMM_PROJECT_NAME_MAX_CHARS)?;
         let result = local_sql::execute_script_async(
             &self.local,
             LogicalDatabase::VmmMetadata,
@@ -659,8 +673,11 @@ impl VmmDataPlaneHandle {
         vulcan_project_id: &str,
         vmm_project_id: u64,
     ) -> Result<NativeVmmProjectBinding, String> {
-        let vulcan_project_id =
-            validate_native_project_text(vulcan_project_id, "VulcanCode project ID", 512)?;
+        let vulcan_project_id = validate_native_project_text(
+            vulcan_project_id,
+            "VulcanCode project ID",
+            VMM_VULCAN_PROJECT_ID_MAX_CHARS,
+        )?;
         if self.project_by_id(vmm_project_id).await?.is_none() {
             return Err(format!(
                 "Native VMM project {vmm_project_id} to bind does not exist"
@@ -714,8 +731,11 @@ COMMIT;"#
         owner_project_id: u64,
         linked_project_ids: &[u64],
     ) -> Result<NativeVmmProjectAccess, String> {
-        let vulcan_project_id =
-            validate_native_project_text(vulcan_project_id, "VulcanCode project ID", 512)?;
+        let vulcan_project_id = validate_native_project_text(
+            vulcan_project_id,
+            "VulcanCode project ID",
+            VMM_VULCAN_PROJECT_ID_MAX_CHARS,
+        )?;
         validate_project_access_ids(owner_project_id, linked_project_ids)?;
         if self.project_by_id(owner_project_id).await?.is_none() {
             return Err(format!(
@@ -761,8 +781,11 @@ COMMIT;"#
     /// Returns a validation or storage error.
     /// 返回校验或存储错误。
     pub async fn unbind_vulcan_project(&self, vulcan_project_id: &str) -> Result<(), String> {
-        let vulcan_project_id =
-            validate_native_project_text(vulcan_project_id, "VulcanCode project ID", 512)?;
+        let vulcan_project_id = validate_native_project_text(
+            vulcan_project_id,
+            "VulcanCode project ID",
+            VMM_VULCAN_PROJECT_ID_MAX_CHARS,
+        )?;
         let result = local_sql::execute_script_async(
             &self.local,
             LogicalDatabase::VmmMetadata,
@@ -790,8 +813,11 @@ COMMIT;"#
         &self,
         vulcan_project_id: &str,
     ) -> Result<NativeVmmProjectAccess, String> {
-        let vulcan_project_id =
-            validate_native_project_text(vulcan_project_id, "VulcanCode project ID", 512)?;
+        let vulcan_project_id = validate_native_project_text(
+            vulcan_project_id,
+            "VulcanCode project ID",
+            VMM_VULCAN_PROJECT_ID_MAX_CHARS,
+        )?;
         let owner_result = local_sql::query_json_async(
             &self.local,
             LogicalDatabase::VmmMetadata,
@@ -867,8 +893,11 @@ ORDER BY l.position ASC, p.id ASC;"#,
                 ));
             }
         }
-        let vulcan_project_id =
-            validate_native_project_text(vulcan_project_id, "VulcanCode project ID", 512)?;
+        let vulcan_project_id = validate_native_project_text(
+            vulcan_project_id,
+            "VulcanCode project ID",
+            VMM_VULCAN_PROJECT_ID_MAX_CHARS,
+        )?;
         let escaped_project_id = sqlite_string_literal(vulcan_project_id);
         let now = current_unix_epoch_millis_i64()?;
         let mut script = format!(
@@ -2383,6 +2412,28 @@ pub async fn bootstrap_vmm_data_plane(
             schema_result.message
         ));
     }
+    // The stored version is never rewritten; a database written by another version is refused.
+    // 已存版本绝不改写；由其他版本写入的数据库被拒绝。
+    let version_result = local_sql::query_json_async(
+        &local,
+        LogicalDatabase::VmmMetadata,
+        "SELECT value FROM vmm_metadata WHERE key = 'schema_version';",
+        vec![],
+    )
+    .await
+    .map_err(|error| format!("Failed to read the native VMM schema version: {error}"))?;
+    let stored_version = serde_json::from_str::<Vec<serde_json::Value>>(&version_result.json_data)
+        .map_err(|error| format!("Failed to parse the native VMM schema version: {error}"))?
+        .first()
+        .and_then(|row| row.get("value"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    if stored_version.as_deref() != Some(VMM_SCHEMA_VERSION.to_string().as_str()) {
+        return Err(format!(
+            "Unsupported native VMM schema version {}; this build supports version {VMM_SCHEMA_VERSION}.",
+            stored_version.as_deref().unwrap_or("(missing)")
+        ));
+    }
 
     let handle = VmmDataPlaneHandle {
         local,
@@ -2410,9 +2461,8 @@ CREATE TABLE IF NOT EXISTS vmm_metadata (
     value TEXT NOT NULL
 );
 
-INSERT INTO vmm_metadata (key, value)
-VALUES ('schema_version', '{schema_version}')
-ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+INSERT OR IGNORE INTO vmm_metadata (key, value)
+VALUES ('schema_version', '{schema_version}');
 
 CREATE TABLE IF NOT EXISTS vmm_projects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2790,8 +2840,16 @@ fn native_project_from_row(row: NativeProjectRow) -> Result<NativeVmmProject, St
             "The default VMM project must stay delete-protected",
         ));
     }
-    validate_native_project_text(row.name.as_str(), "VMM project name", 512)?;
-    validate_native_project_text(row.tag.as_str(), "VMM project tag", 256)?;
+    validate_native_project_text(
+        row.name.as_str(),
+        "VMM project name",
+        VMM_PROJECT_NAME_MAX_CHARS,
+    )?;
+    validate_native_project_text(
+        row.tag.as_str(),
+        "VMM project tag",
+        VMM_PROJECT_TAG_MAX_CHARS,
+    )?;
     Ok(NativeVmmProject {
         id,
         scope_id: row.scope_id,
@@ -2868,17 +2926,74 @@ fn current_unix_epoch_millis_i64() -> Result<i64, String> {
 mod tests {
     use super::*;
 
-    /// Verifies the first-install schema creates and protects fallback project ID one.
-    /// 验证首次安装结构创建并保护 ID 为一的兜底项目。
+    /// Opens an in-memory database with the first-install schema applied.
+    /// 打开一个已应用首次安装结构的内存数据库。
+    fn schema_connection() -> rusqlite::Connection {
+        let connection = rusqlite::Connection::open_in_memory().expect("open in-memory database");
+        connection
+            .execute_batch(&build_vmm_schema_script())
+            .expect("apply VMM schema");
+        connection
+    }
+
+    /// Verifies the first-install schema creates fallback project ID one and refuses to delete or
+    /// re-identify it.
+    /// 验证首次安装结构创建 ID 为一的兜底项目，并拒绝删除或改变其身份。
     #[test]
     fn schema_creates_and_protects_default_project() {
-        let schema = build_vmm_schema_script();
-        assert!(schema.contains("VALUES (\n    1,"));
-        assert!(schema.contains("vmm_project_scope_after_insert"));
-        assert!(schema.contains("vmm_project_stable_identity_guard"));
-        assert!(schema.contains("vmm_default_project_delete_guard"));
-        assert!(schema.contains("vmm_default_project_identity_guard"));
-        assert!(schema.contains("position INTEGER NOT NULL CHECK(position >= 0)"));
+        let connection = schema_connection();
+        let protected: i64 = connection
+            .query_row(
+                "SELECT protected FROM vmm_projects WHERE id = ?1",
+                [DEFAULT_VMM_PROJECT_ID],
+                |row| row.get(0),
+            )
+            .expect("default project exists");
+        assert_eq!(protected, 1);
+        assert!(
+            connection
+                .execute(
+                    "DELETE FROM vmm_projects WHERE id = ?1",
+                    [DEFAULT_VMM_PROJECT_ID]
+                )
+                .is_err()
+        );
+        assert!(
+            connection
+                .execute(
+                    "UPDATE vmm_projects SET tag = 'renamed' WHERE id = ?1",
+                    [DEFAULT_VMM_PROJECT_ID],
+                )
+                .is_err()
+        );
+        let remaining: i64 = connection
+            .query_row("SELECT COUNT(*) FROM vmm_projects", [], |row| row.get(0))
+            .expect("count projects");
+        assert_eq!(remaining, 1);
+    }
+
+    /// Verifies re-running the schema keeps a stored schema version instead of rewriting it.
+    /// 验证重新执行结构脚本会保留已存的结构版本而不改写。
+    #[test]
+    fn schema_rerun_keeps_the_stored_version() {
+        let connection = schema_connection();
+        connection
+            .execute(
+                "UPDATE vmm_metadata SET value = '999' WHERE key = 'schema_version'",
+                [],
+            )
+            .expect("simulate a newer database");
+        connection
+            .execute_batch(&build_vmm_schema_script())
+            .expect("re-apply VMM schema");
+        let stored: String = connection
+            .query_row(
+                "SELECT value FROM vmm_metadata WHERE key = 'schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("stored version");
+        assert_eq!(stored, "999");
     }
 
     /// Verifies vectors are assigned to LanceDB while SQLite stores only vector-space metadata.

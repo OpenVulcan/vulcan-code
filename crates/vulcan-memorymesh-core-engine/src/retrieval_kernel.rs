@@ -573,6 +573,13 @@ pub fn passes_threshold(
     true
 }
 
+/// Hard-deduplication cosine threshold used when no binding matches the contract.
+/// 没有绑定匹配契约时使用的硬去重余弦阈值。
+/// Execution and checkpoint recovery both read it so a recovered result validates against the
+/// same threshold that produced it.
+/// 执行端与检查点恢复都读取它，使恢复的结果按产生它时的同一阈值校验。
+pub(crate) const DEFAULT_HARD_DUPLICATE_SIMILARITY: f64 = 0.99;
+
 /// Reports the hard-deduplication threshold bound to one exact contract identity.
 /// 报告绑定到一个精确契约身份的硬去重阈值。
 #[must_use]

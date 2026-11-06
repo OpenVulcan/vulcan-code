@@ -31,8 +31,8 @@ required_scene_files = [
 
 [[files]]
 path = "noise_rules/common.json"
-length = 2216
-sha256 = "db3d7109c9237144ae054acd19257863fd14061e54c44f4830906c362ab780a0"
+length = 2219
+sha256 = "ebf0be1e8652f09bd330fcd3354903d9845568a7cd518a4e6a44593471ad255a"
 
 [[files]]
 path = "noise_rules/zh-CN.json"
@@ -216,8 +216,8 @@ sha256 = "90df794ffe1f5b3d697440c27123596e183c233530124f9ed65d0820fd92f53a"
 
 [[files]]
 path = "pii_rules/zh-HK.json"
-length = 458
-sha256 = "6816a6d43125d42db86f5e962b3c798665bf4fb55ccc3067a20e2882bfef7d2e"
+length = 455
+sha256 = "7b49569f5b61c35f9ae453f05097afbb5f19f8961ff61c8d353264f62bdbe426"
 
 [[files]]
 path = "pii_rules/zh-TW.json"

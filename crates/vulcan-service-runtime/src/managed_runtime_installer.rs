@@ -105,6 +105,10 @@ struct PlatformAssets {
     node_executable: &'static str,
 }
 
+/// Schema version of `runtime-manifest.json`, written by the installer and checked at startup.
+/// `runtime-manifest.json` 的 schema 版本，由安装器写入并在启动时校验。
+pub(crate) const RUNTIME_INSTALL_MANIFEST_SCHEMA_VERSION: u32 = 1;
+
 /// Stable runtime manifest written after an installation validates successfully.
 /// 安装通过校验后写入的稳定运行时清单。
 #[derive(Serialize)]
@@ -379,7 +383,7 @@ where
     write_runtime_manifest(
         &staging,
         RuntimeManifest {
-            schema_version: 1,
+            schema_version: RUNTIME_INSTALL_MANIFEST_SCHEMA_VERSION,
             runtime: "uv",
             version: request.uv_version,
             platform: request.platform,
@@ -519,7 +523,7 @@ where
     write_runtime_manifest(
         &staging,
         RuntimeManifest {
-            schema_version: 1,
+            schema_version: RUNTIME_INSTALL_MANIFEST_SCHEMA_VERSION,
             runtime: "python",
             version: request.python_version,
             platform: request.platform,
@@ -753,7 +757,7 @@ where
     write_runtime_manifest(
         &staging,
         RuntimeManifest {
-            schema_version: 1,
+            schema_version: RUNTIME_INSTALL_MANIFEST_SCHEMA_VERSION,
             runtime: "node",
             version: request.node_version,
             platform: request.platform,
@@ -912,7 +916,7 @@ where
     write_runtime_manifest(
         &staging,
         RuntimeManifest {
-            schema_version: 1,
+            schema_version: RUNTIME_INSTALL_MANIFEST_SCHEMA_VERSION,
             runtime: "pnpm",
             version: request.pnpm_version,
             platform: "any",

@@ -3931,7 +3931,10 @@ fn validate_one_projection_payload(
 
 /// Maximum object/array entries accepted by one registered JSON-template form.
 /// 单个已注册 JSON 模板形式允许的最大对象/数组项数。
-const JSON_TEMPLATE_COLLECTION_LIMIT: usize = 256;
+/// Rendering reads the same value, so a template accepted at compilation never exceeds the
+/// runtime item limit.
+/// 渲染读取同一值，因此编译时接受的模板不会超出运行时项数上限。
+pub(crate) const JSON_TEMPLATE_COLLECTION_LIMIT: usize = 256;
 
 /// Validates one declarative JSON-template node completely during Manifest compilation.
 /// 在 Manifest 编译期间完整校验一个声明式 JSON 模板节点。
@@ -6155,7 +6158,7 @@ fn validate_provider_tool_output_contract(
     // 提取器与映射上限保持小于全局 JSON 集合上限。
     const MAX_RESOURCE_DECODERS: usize = 16;
     const MAX_REQUEST_MIME_MAPPINGS: usize = 64;
-    const MAX_RESOURCE_BYTES: u64 = 100 * 1024 * 1024;
+    const MAX_RESOURCE_BYTES: u64 = crate::provider_tool_execution::GENERIC_RESOURCE_BYTE_LIMIT;
     // MIME declarations are an exact bounded allowlist shared by every extractor.
     // MIME 声明是由每个提取器共享的精确有界允许列表。
     if output.mime_types.len() > MAX_MIME_TYPES {

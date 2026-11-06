@@ -3,9 +3,11 @@
 
 use serde_json::Value;
 
-/// Maximum array entries emitted by one declarative JSON-template map expression.
-/// 单个声明式 JSON 模板映射表达式允许输出的最大数组项数。
-const JSON_TEMPLATE_MAX_ARRAY_ITEMS: usize = 256;
+/// Maximum array entries emitted by one declarative JSON-template expression, shared with
+/// Manifest compilation.
+/// 单个声明式 JSON 模板表达式允许输出的最大数组项数，与 Manifest 编译共用。
+const JSON_TEMPLATE_MAX_ARRAY_ITEMS: usize =
+    crate::provider_manifest::validation::JSON_TEMPLATE_COLLECTION_LIMIT;
 
 /// Maximum serialized byte size emitted by one declarative JSON template.
 /// 单份声明式 JSON 模板允许输出的最大序列化字节数。

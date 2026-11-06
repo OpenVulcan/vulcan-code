@@ -726,30 +726,61 @@ pub(crate) fn sanitize_provider_execution_failure(
     mut failure: ProviderExecutionFailure,
     secret: &CredentialExecutionSecret,
 ) -> ProviderExecutionFailure {
+    sanitize_ai_execution_error(&mut failure.error, secret);
+    failure
+}
+
+/// Replaces exact credential occurrences in raw provider text before any bounding.
+/// 在任何限长之前替换原始供应商文本中的精确凭据。
+///
+/// # Parameters
+/// 参数
+/// `value` is raw provider-controlled text and `secret` is the credential of its request.
+/// `value` 是原始供应商控制文本，`secret` 是其请求的凭据。
+///
+/// # Returns
+/// 返回值
+/// The text with every exact credential occurrence replaced; length is not bounded here.
+/// 返回所有精确凭据都被替换的文本；此处不限制长度。
+pub(crate) fn redact_exact_credential(value: &str, secret: &CredentialExecutionSecret) -> String {
+    let sensitive_value = secret.expose_value();
+    if sensitive_value.is_empty() {
+        value.to_string()
+    } else {
+        value.replace(sensitive_value, "<redacted>")
+    }
+}
+
+/// Removes secrets from and bounds every diagnostic field of one typed error in place.
+/// 就地移除一个强类型错误中每个诊断字段的秘密并限制其长度。
+///
+/// # Parameters
+/// 参数
+/// `error` is a returned error or an in-stream failure event payload and `secret` is the exact
+/// credential used by its physical request.
+/// `error` 是返回的错误或流内失败事件负载，`secret` 是其物理请求使用的精确凭据。
+pub(crate) fn sanitize_ai_execution_error(
+    error: &mut AiExecutionError,
+    secret: &CredentialExecutionSecret,
+) {
     // sanitize replaces exact credential occurrences before the generic provider-controlled
     // URL and credential-shape filter executes.
     // sanitize 先替换精确凭据，再执行通用供应商 URL 与凭据形态过滤。
     let sanitize = |value: String| {
-        let sensitive_value = secret.expose_value();
-        let redacted = if sensitive_value.is_empty() {
-            value
-        } else {
-            value.replace(sensitive_value, "<redacted>")
-        };
+        let redacted = redact_exact_credential(value.as_str(), secret);
         crate::provider_tool_execution::sanitize_provider_diagnostic_text(redacted.as_str())
     };
-    failure.error.subcategory = failure.error.subcategory.take().map(&sanitize);
-    failure.error.stage = sanitize(std::mem::take(&mut failure.error.stage));
-    failure.error.upstream_code = failure.error.upstream_code.take().map(&sanitize);
-    failure.error.upstream_type = failure.error.upstream_type.take().map(&sanitize);
-    failure.error.upstream_parameter = failure.error.upstream_parameter.take().map(&sanitize);
-    failure.error.upstream_message = failure.error.upstream_message.take().map(&sanitize);
-    failure.error.request_id = failure.error.request_id.take().map(&sanitize);
-    failure.error.provider_id = failure.error.provider_id.take().map(&sanitize);
-    failure.error.entry_id = failure.error.entry_id.take().map(&sanitize);
-    failure.error.model_id = failure.error.model_id.take().map(&sanitize);
-    failure.error.message = sanitize(std::mem::take(&mut failure.error.message));
-    failure
+    error.subcategory = error.subcategory.take().map(&sanitize);
+    error.stage = sanitize(std::mem::take(&mut error.stage));
+    error.upstream_code = error.upstream_code.take().map(&sanitize);
+    error.upstream_type = error.upstream_type.take().map(&sanitize);
+    error.upstream_parameter = error.upstream_parameter.take().map(&sanitize);
+    error.upstream_message = error.upstream_message.take().map(&sanitize);
+    error.request_id = error.request_id.take().map(&sanitize);
+    error.provider_id = error.provider_id.take().map(&sanitize);
+    error.entry_id = error.entry_id.take().map(&sanitize);
+    error.model_id = error.model_id.take().map(&sanitize);
+    error.message = sanitize(std::mem::take(&mut error.message));
 }
 
 #[cfg(test)]

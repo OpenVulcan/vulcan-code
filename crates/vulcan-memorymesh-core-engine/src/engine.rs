@@ -6792,7 +6792,7 @@ fn build_direct_memory_record(
     index: usize,
     embedding: Vec<f32>,
 ) -> Result<MemoryRecord, CoreError> {
-    let priority = item.priority.unwrap_or(20);
+    let priority = item.priority.unwrap_or(DEFAULT_DIRECT_WRITE_PRIORITY);
     Ok(MemoryRecord {
         id: MemoryId::new(format!("direct-memory-{index}"))
             .map_err(|error| command_error(ErrorCode::Internal, error.to_string()))?,
@@ -6898,7 +6898,8 @@ fn same_direct_item(
         && left.category == right.category
         && normalize_hash_text(&left.summary) == normalize_hash_text(&right.summary)
         && normalize_hash_text(&left.details) == normalize_hash_text(&right.details)
-        && left.priority.unwrap_or(20) == right.priority.unwrap_or(20)
+        && left.priority.unwrap_or(DEFAULT_DIRECT_WRITE_PRIORITY)
+            == right.priority.unwrap_or(DEFAULT_DIRECT_WRITE_PRIORITY)
         && direct_memory_level(left.scope_class, left.memory_level)
             == direct_memory_level(right.scope_class, right.memory_level)
         && direct_memory_expiry(
@@ -7549,6 +7550,10 @@ fn finish_direct_write(
     emit_effect(record, HostEffect::StorageMutation(batch))
 }
 
+/// Priority given to a DirectWrite item that omits one, on the normalized zero-to-one-hundred scale.
+/// DirectWrite 条目省略优先级时使用的值，采用零到一百的规范尺度。
+const DEFAULT_DIRECT_WRITE_PRIORITY: u32 = 20;
+
 /// Reports the hard-dedupe cosine threshold from the frozen policy.
 /// 从冻结策略报告硬去重余弦阈值。
 #[allow(clippy::cast_precision_loss, clippy::map_unwrap_or)]
@@ -7557,7 +7562,7 @@ fn hard_dedupe_threshold(policy: &vulcan_memorymesh_core_contracts::RetrievalPol
         &policy.hard_dedupe,
         &policy.vector_contract.contract,
     )
-    .unwrap_or(0.99)
+    .unwrap_or(retrieval_kernel::DEFAULT_HARD_DUPLICATE_SIMILARITY)
 }
 
 /// Validates that one details result belongs to the exact requested identity and visibility boundary.
@@ -8428,11 +8433,7 @@ fn advance_retention_query(
                 "Retention terminal-memory facts violate ownership, state, or identity bounds",
             ));
         }
-        let protected_shared = policy.skip_protected_shared_memories
-            && fact.protected_shared
-            && (memory.priority >= policy.protected_priority_floor
-                || memory.memory_level as u32 >= policy.protected_memory_level_floor);
-        if !protected_shared {
+        if !policy.protects_terminal_memory(&fact) {
             plans.terminal_memory_recycle.push(PlannedMemoryRef {
                 memory_id: memory.id.as_str().to_owned(),
                 expected_version: memory.version,
@@ -9521,7 +9522,7 @@ fn direct_write_dedupe_hash(
     item: &MemoryWriteBatchItem,
     session_source_id: &vulcan_memorymesh_core_contracts::SessionSourceId,
 ) -> String {
-    let priority = item.priority.unwrap_or(20);
+    let priority = item.priority.unwrap_or(DEFAULT_DIRECT_WRITE_PRIORITY);
     let level = direct_memory_level(item.scope_class, item.memory_level);
     let expiry_signature = item.expires_at_ns.map_or_else(
         || {
@@ -9567,7 +9568,7 @@ fn validate_recent_direct_write_hit(
     existing: &MemoryRecord,
 ) -> Result<(), CoreError> {
     validate_host_memory_record(existing, None)?;
-    let expected_priority = item.priority.unwrap_or(20);
+    let expected_priority = item.priority.unwrap_or(DEFAULT_DIRECT_WRITE_PRIORITY);
     let expected_level = direct_memory_level(item.scope_class, item.memory_level);
     let lower_bound = occurred_at_ns.saturating_sub(DIRECT_WRITE_DEDUPE_WINDOW_NS);
     let unexpired = existing

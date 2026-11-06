@@ -2794,8 +2794,8 @@ pub(crate) async fn service_save_subagent_definition(
             ));
         }
         let mut metadata_override = existing_definition.clone();
-        apply_request_tool_policy(&mut metadata_override.tool_exposure, &request);
-        apply_request_prompt_skill_policy(&mut metadata_override.prompt_skills, &request);
+        apply_request_tool_policy(&mut metadata_override.tool_exposure, &request)?;
+        apply_request_prompt_skill_policy(&mut metadata_override.prompt_skills, &request)?;
         metadata_override.provider_model = requested_provider_model;
         metadata_override.system_prompt_append = request
             .system_prompt_append
@@ -2890,8 +2890,8 @@ pub(crate) async fn service_save_subagent_definition(
     let previous_source = definition.source.clone();
     let previous_scope = definition.source.scope;
     definition.id = target_agent_id.clone();
-    apply_request_tool_policy(&mut definition.tool_exposure, &request);
-    apply_request_prompt_skill_policy(&mut definition.prompt_skills, &request);
+    apply_request_tool_policy(&mut definition.tool_exposure, &request)?;
+    apply_request_prompt_skill_policy(&mut definition.prompt_skills, &request)?;
     apply_user_definition_display_metadata(&mut definition, &request, &target_agent_id);
     apply_defaulted_text_patch(request.emoji, &mut definition.emoji, "🤖");
     apply_defaulted_text_patch(request.color, &mut definition.color, "gray");
@@ -3647,17 +3647,18 @@ fn subagent_provider_model_pair_matches(
 fn apply_request_tool_policy(
     snapshot: &mut vulcan_session_core::ToolExposureSnapshot,
     request: &SubagentDefinitionSaveRequest,
-) {
+) -> Result<(), String> {
     let policy = request_capability_policy(
         request.tool_policy_mode.as_deref(),
         request.tool_policy_tools.clone(),
         request.allowed_tools.clone(),
         request.disabled_tools.clone(),
-    );
+    )?;
     vulcan_session_core::apply_tool_capability_policy(snapshot, policy);
     vulcan_session_core::sanitize_child_agent_tool_exposure(snapshot);
     snapshot.allowed_ai_capabilities.clear();
     snapshot.disabled_ai_capabilities.clear();
+    Ok(())
 }
 
 /// Applies the save request's unified prompt-skill policy to one snapshot.
@@ -3665,14 +3666,15 @@ fn apply_request_tool_policy(
 fn apply_request_prompt_skill_policy(
     snapshot: &mut vulcan_session_core::PromptSkillSnapshot,
     request: &SubagentDefinitionSaveRequest,
-) {
+) -> Result<(), String> {
     let policy = request_capability_policy(
         request.prompt_skill_policy_mode.as_deref(),
         request.prompt_skill_policy_skills.clone(),
         request.enabled_prompt_skills.clone(),
         request.disabled_prompt_skills.clone(),
-    );
+    )?;
     vulcan_session_core::apply_prompt_skill_capability_policy(snapshot, policy);
+    Ok(())
 }
 
 /// Builds a capability policy from new request fields or legacy allow/deny lists.
@@ -3682,7 +3684,7 @@ fn request_capability_policy(
     selectors: Vec<String>,
     legacy_allowed: Vec<String>,
     legacy_disabled: Vec<String>,
-) -> vulcan_session_core::CapabilityPolicySnapshot {
+) -> Result<vulcan_session_core::CapabilityPolicySnapshot, String> {
     vulcan_session_core::capability_policy_from_mode_or_selector_lists(
         mode,
         selectors,
@@ -4401,7 +4403,7 @@ mod tests {
         };
         let mut snapshot = vulcan_session_core::ToolExposureSnapshot::default();
 
-        apply_request_tool_policy(&mut snapshot, &request);
+        apply_request_tool_policy(&mut snapshot, &request).expect("known policy mode");
 
         assert_eq!(
             snapshot.policy.mode,

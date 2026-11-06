@@ -5,7 +5,11 @@ use serde::{Deserialize, Serialize};
 
 /// Provider retry settings projected from the shared backend configuration.
 /// 从共享后台配置投影出的 Provider 重试设置。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+///
+/// `Default` is an empty placeholder for a payload without this field; the real defaults live only
+/// in the Provider configuration and always reach clients through the service projection.
+/// `Default` 只是缺少该字段时的空占位；真实默认值只存在于 Provider 配置中，并始终经服务投影送达客户端。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderRetrySettingsSummary {
     /// Whether retryable Provider failures may be retried automatically.
@@ -43,29 +47,9 @@ pub struct ProviderRetrySettingsSummary {
     pub rate_limit: ProviderRateLimitRetrySettingsSummary,
 }
 
-impl Default for ProviderRetrySettingsSummary {
-    /// Builds the browser-facing default that mirrors backend configuration defaults.
-    /// 构建与后台配置默认值一致的浏览器侧默认设置。
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            max_retries: 5,
-            initial_delay_ms: 2_000,
-            max_delay_ms: 30_000,
-            backoff_factor_milli: 2_000,
-            jitter_percent: 20,
-            respect_retry_after: true,
-            retry_429: true,
-            retry_keywords: Vec::new(),
-            default_retry_keywords: Vec::new(),
-            rate_limit: ProviderRateLimitRetrySettingsSummary::default(),
-        }
-    }
-}
-
 /// Dedicated rate-limit retry schedule projected to the settings page.
 /// 投影到设置页面的专用限流重试调度规则。
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderRateLimitRetrySettingsSummary {
     /// Maximum finite retry count after host normalization.
@@ -80,17 +64,4 @@ pub struct ProviderRateLimitRetrySettingsSummary {
     /// Rate-limit backoff multiplier represented in thousandths.
     /// 以千分数表示的限流退避倍数。
     pub backoff_factor_milli: u32,
-}
-
-impl Default for ProviderRateLimitRetrySettingsSummary {
-    /// Builds the default finite rate-limit schedule.
-    /// 构建默认的有限限流调度规则。
-    fn default() -> Self {
-        Self {
-            max_retries: 100_000,
-            initial_delay_ms: 5_000,
-            max_delay_ms: 1_800_000,
-            backoff_factor_milli: 2_000,
-        }
-    }
 }

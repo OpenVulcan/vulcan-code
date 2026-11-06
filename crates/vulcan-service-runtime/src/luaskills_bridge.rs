@@ -167,6 +167,12 @@ impl LuaSkillConfigCapabilityCache {
     fn invalidate(&mut self, skill_id: &str) -> bool {
         self.configless_versions.remove(skill_id).is_some()
     }
+
+    /// Forgets every negative result, for a reload that may have changed packages in place.
+    /// 忘记全部负向结果，用于可能已原地修改技能包的重新加载。
+    fn clear(&mut self) {
+        self.configless_versions.clear();
+    }
 }
 
 /// Long-lived LuaSkills handle retained by the service runtime.
@@ -990,6 +996,13 @@ pub fn refresh_luaskills_catalog(
     engine
         .reload_from_roots(&handle.skill_roots)
         .map_err(|error| format!("Failed to refresh the LuaSkills runtime: {error}"))?;
+    // A package edited in place keeps its version, so a refresh re-probes every package.
+    // 原地编辑的技能包版本不变，因此刷新会重新探测每个技能包。
+    handle
+        .config_capability_cache
+        .lock()
+        .map_err(|_| String::from("The LuaSkills configuration capability cache lock is poisoned; the catalog cannot be refreshed."))?
+        .clear();
     build_luaskills_catalog(handle, &engine)
 }
 
@@ -2190,6 +2203,10 @@ mod tests {
 
         cache.record_probe("fixture", "1.0.0", false);
         assert!(cache.invalidate("fixture"));
+        assert!(!cache.is_known_configless("fixture", "1.0.0"));
+
+        cache.record_probe("fixture", "1.0.0", false);
+        cache.clear();
         assert!(!cache.is_known_configless("fixture", "1.0.0"));
     }
 

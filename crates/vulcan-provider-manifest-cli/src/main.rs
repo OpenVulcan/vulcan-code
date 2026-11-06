@@ -633,12 +633,21 @@ fn cmd_build_index(args: &[String]) -> Result<(), CliError> {
     entries.sort_by(|left, right| left.provider_id.cmp(&right.provider_id));
     let revision = flag_value(args, "--revision").unwrap_or("1");
     let key_id = flag_value(args, "--key-id").unwrap_or("publish-key-1");
-    let now_ms = flag_value(args, "--issued-ms")
-        .and_then(|value| value.parse::<i64>().ok())
-        .unwrap_or_else(current_unix_millis);
-    let expires_ms = flag_value(args, "--expires-ms")
-        .and_then(|value| value.parse::<i64>().ok())
-        .unwrap_or_else(|| now_ms.saturating_add(24 * 60 * 60 * 1_000));
+    // A malformed timestamp is a usage error; only an omitted flag selects its default, so a typo
+    // never publishes an index with silently wrong validity bounds.
+    // 时间戳格式错误属于用法错误；只有省略参数时才使用默认值，避免笔误静默发布有效期错误的索引。
+    let now_ms = match flag_value(args, "--issued-ms") {
+        Some(value) => value
+            .parse::<i64>()
+            .map_err(|_| CliError::Usage("--issued-ms must be an integer".into()))?,
+        None => current_unix_millis(),
+    };
+    let expires_ms = match flag_value(args, "--expires-ms") {
+        Some(value) => value
+            .parse::<i64>()
+            .map_err(|_| CliError::Usage("--expires-ms must be an integer".into()))?,
+        None => now_ms.saturating_add(24 * 60 * 60 * 1_000),
+    };
     let revision: u64 = revision
         .parse()
         .map_err(|_| CliError::Usage("--revision must be a positive integer".into()))?;

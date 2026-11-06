@@ -411,7 +411,7 @@ fn validate_completed(
             &retrieval.hard_dedupe,
             &result.hard_dedupe_contract,
         )
-        .unwrap_or(0.99);
+        .unwrap_or(retrieval_kernel::DEFAULT_HARD_DUPLICATE_SIMILARITY);
         if result.hits.len() > work.limit as usize
             || result.hard_dedupe_pool.len()
                 > snapshot.memory_policy.retrieval_policy.candidate_pool_max as usize

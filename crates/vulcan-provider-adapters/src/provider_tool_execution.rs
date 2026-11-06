@@ -45,7 +45,7 @@ const GENERIC_STRUCTURED_RESULT_COUNT_LIMIT: usize = 256;
 /// the declared limit before decoding.
 /// 这是 Manifest 声明的 `max_bytes`、在元数据响应之外流式下载的二进制后续资源，以及请求侧
 /// multipart 文件的上限。内联资源在解码前即按声明上限校验。
-const GENERIC_RESOURCE_BYTE_LIMIT: u64 = 100 * 1024 * 1024;
+pub(crate) const GENERIC_RESOURCE_BYTE_LIMIT: u64 = 100 * 1024 * 1024;
 
 /// Ceiling-sized inline resources one provider tool response must be able to carry.
 /// 单次供应商工具响应必须能够承载的满上限内联资源数量。

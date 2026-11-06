@@ -563,6 +563,18 @@ pub fn enrich_compatible_model_catalog_with_manifest(
                 &mut model.capabilities,
             ) {
                 model.capabilities = discovered;
+            } else {
+                // Modalities the discovery response declared are evidence about this exact
+                // deployment, so offline common defaults never add resources to them; an empty
+                // declared set means text only.
+                // 发现响应已声明的模态是关于该精确部署的证据，因此离线公共默认值不会向其添加资源；
+                // 已声明的空集合表示仅文本。
+                if model.capability_evidence.input_modalities_declared {
+                    model.capabilities.input_resources = discovered.input_resources;
+                }
+                if model.capability_evidence.output_modalities_declared {
+                    model.capabilities.output_resources = discovered.output_resources;
+                }
             }
         }
         let matched = apply_manifest_model_rule(

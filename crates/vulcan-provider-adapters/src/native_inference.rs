@@ -993,7 +993,12 @@ impl ProviderExecutionClient {
         .await?;
         if !(200..300).contains(&status) {
             return Err(crate::execution::sanitize_provider_execution_failure(
-                http_failure(status, retry_after, response_body.as_str()),
+                http_failure(
+                    status,
+                    retry_after,
+                    crate::execution::redact_exact_credential(response_body.as_str(), secret)
+                        .as_str(),
+                ),
                 secret,
             ));
         }

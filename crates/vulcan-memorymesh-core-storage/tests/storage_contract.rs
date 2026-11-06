@@ -874,6 +874,67 @@ fn retention_scan_includes_direct_memory_only_sessions() {
     assert!(!facts.idle_sessions[0].has_pending_turn);
 }
 
+/// Verifies protected shared terminal memories never fill the recycle limit ahead of recyclable rows.
+/// 验证受保护的共享终态记忆不会抢在可回收行之前占满回收名额。
+#[test]
+fn retention_scan_skips_protected_terminal_memories_before_limit() {
+    let mut storage = InMemoryStorage::new();
+    let mut protected = memory(
+        "protected-shared-memory",
+        "subject-retention",
+        "scope-retention",
+        "protected shared fact",
+    );
+    protected.priority = 100;
+    protected.state = MemoryState::Deleted;
+    protected.updated_at_ns = 1;
+    let mut recyclable = memory(
+        "recyclable-session-memory",
+        "subject-retention",
+        "scope-retention",
+        "recyclable session fact",
+    );
+    recyclable.scope_class = MemoryScopeClass::Session;
+    recyclable.origin_session_source_id =
+        Some(SessionSourceId::new("retention-session").expect("session identity must be valid"));
+    recyclable.priority = 20;
+    recyclable.state = MemoryState::Deleted;
+    recyclable.created_at_ns = 2;
+    recyclable.updated_at_ns = 2;
+    storage
+        .mutate(&batch(
+            "retention-protected-before-limit",
+            vec![put_memory(protected, 0), put_memory(recyclable, 0)],
+        ))
+        .expect("terminal memories must commit");
+
+    let mut policy = RetentionPolicy::v1();
+    policy.memory_recycle_limit = 1;
+    let StorageQueryResult::RetentionScan(facts) = storage
+        .query(&StorageQuery::RetentionScan {
+            subject_id: SubjectId::new("subject-retention")
+                .expect("subject identity must be valid"),
+            scope_access: ScopeAccess {
+                write_scope: ScopeId::new("scope-retention").expect("scope identity must be valid"),
+                visible_scopes: vec![
+                    ScopeId::new("scope-retention").expect("scope identity must be valid"),
+                ],
+            },
+            now_ns: 2_000_000,
+            policy,
+        })
+        .expect("retention scan must succeed")
+    else {
+        panic!("retention scan must return retention facts");
+    };
+
+    assert_eq!(facts.terminal_memories.len(), 1);
+    assert_eq!(
+        facts.terminal_memories[0].memory.id.as_str(),
+        "recyclable-session-memory"
+    );
+}
+
 /// Verifies completed and legacy details-bearing turns become details-only analysis references while invalid terminal states stay excluded.
 /// 验证Completed与保留历史详情的轮次可成为仅详情型分析参考，同时无资格终态仍被排除。
 #[test]
