@@ -1741,6 +1741,32 @@ fn remove_exact_session_directory(
 
 #[cfg(test)]
 mod tests {
+    /// An interrupted child creation's staging tree is not a child, while any other unknown
+    /// entry in the task partition still fails the scan.
+    /// 中断的子会话创建暂存树不是子会话，而任务分区中的其他未知条目仍使扫描失败。
+    #[test]
+    fn task_tree_scan_skips_unpublished_creation_staging() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root =
+            super::create_session_v1_storage_fixture(temporary.path(), "staging-root", 1).unwrap();
+        let partition = root
+            .session_directory()
+            .join(super::EMBEDDED_TASK_PARTITION);
+        std::fs::create_dir_all(
+            partition
+                .join(format!(
+                    "{}{}-0000",
+                    crate::workspace_store::session_v1::writer::CREATION_STAGING_PREFIX,
+                    super::EMBEDDED_TASK_BUCKET
+                ))
+                .join("staging-child"),
+        )
+        .unwrap();
+        assert!(root.embedded_task_tree_locators().unwrap().is_empty());
+        std::fs::create_dir(partition.join("unexpected")).unwrap();
+        assert!(root.embedded_task_tree_locators().is_err());
+    }
+
     /// Recovery distinguishes unpublished storage from an incomplete or corrupt existing directory.
     /// 恢复区分尚未发布的存储与不完整或损坏的已有目录。
     /// Returns nothing; all paths belong to one temporary fixture and no existing data is removed.

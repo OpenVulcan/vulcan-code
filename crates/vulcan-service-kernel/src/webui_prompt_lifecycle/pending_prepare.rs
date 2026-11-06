@@ -1379,65 +1379,26 @@ pub(super) async fn prepare_webui_pending_prompt(
         }
         precheck_start
     };
-    if matches!(
-        &exact_dispatch,
-        ExactPendingPromptDispatch::AgentTask { .. }
-    ) {
-        return finish_target_prompt_preparation(
-            app,
-            state,
-            controller_runtime,
-            &entry_agent_runtime,
-            workspace_snapshot,
-            precheck_start,
-            entry.source,
-        )
-        .await;
-    }
-    if precheck_start.vmm_runtime_ready {
-        refresh_exact_vmm_hook_session_projection(
-            &entry_agent_runtime.vmm_hook_runtime,
-            &workspace_snapshot,
-            session_id,
-        )?;
-    }
-    let precheck_plan = if entry.source.runs_user_prompt_precheck() {
-        webui_shared_prompt_precheck_plan(
-            &entry_agent_runtime,
-            &workspace_snapshot,
-            session_id,
-            &workspace_path,
-            precheck_start.vmm_precheck_ready,
-        )?
-    } else {
-        SharedPromptPrecheckPlan {
-            has_precheck_hooks: false,
-            should_skip_precheck: true,
-            progress_labels: Vec::new(),
-        }
-    };
-    commit_workspace_snapshot_and_emit_session_phase_delta(
-        app,
-        state,
-        workspace_snapshot,
-        session_id,
-        SessionRunPhase::Preparing,
-    )?;
-    // The exact V1 queued, Goal, subagent, or in-turn authority was durable before this process-local dispatch adapter ran.
-    // 精确 V1 队列、Goal、子代理或回合内权威事实已在当前进程内分派适配器运行前可靠落盘。
-    start_webui_precheck_or_continue(
+    // Every source publishes only its own session slice, under the same preparation-owner check
+    // and failure settlement; a whole-workspace write here rolled back other sessions' phases.
+    // 每种来源都只发布自身会话切片，并使用同一准备所有者检查与失败结算；此处整体写回工作区会回滚其他会话的阶段。
+    let started = finish_target_prompt_preparation(
         app,
         state,
         controller_runtime,
         &entry_agent_runtime,
+        workspace_snapshot,
         precheck_start,
-        precheck_plan,
-    )?;
-    webui_trace(
-        "pending_prompt_prepare_started",
-        format!("session={session_id}"),
-    );
-    Ok(true)
+        entry.source,
+    )
+    .await?;
+    if started {
+        webui_trace(
+            "pending_prompt_prepare_started",
+            format!("session={session_id}"),
+        );
+    }
+    Ok(started)
 }
 
 #[cfg(test)]

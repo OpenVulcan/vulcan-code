@@ -420,43 +420,6 @@ fn tool_request_metadata_u64(metadata: &serde_json::Value, field: &str) -> Resul
         .and_then(serde_json::Value::as_u64)
         .ok_or_else(|| format!("tool request metadata field `{field}` must be an unsigned integer"))
 }
-/// Commits one workspace snapshot and emits a phase-only conversation delta.
-/// 提交单个工作区快照，并发出纯会话阶段增量。
-///
-/// # Parameters
-/// 参数
-/// `app` emits the delta event to connected WebUI clients.
-/// `app` 将增量事件发送给已连接的 WebUI 客户端。
-/// `state` owns the retained workbench and workspace snapshots.
-/// `state` 持有保留的工作台与工作区快照。
-/// `workspace_snapshot` is the authoritative workspace state after the phase change.
-/// `workspace_snapshot` 是阶段变化后的权威工作区状态。
-/// `session_id` selects the conversation that owns the phase.
-/// `session_id` 选择拥有该阶段的会话。
-/// `run_phase` is the backend lifecycle phase to expose.
-/// `run_phase` 是需要暴露的后端生命周期阶段。
-///
-/// # Returns
-/// 返回值
-/// `Ok(())` when state was committed and the delta was emitted.
-/// 当状态已提交且增量已发送时返回 `Ok(())`。
-pub(crate) fn commit_workspace_snapshot_and_emit_session_phase_delta(
-    app: &ServiceEventEmitter,
-    state: &SharedServiceBridgeState,
-    workspace_snapshot: WorkspaceSnapshot,
-    session_id: SessionId,
-    run_phase: SessionRunPhase,
-) -> Result<(), String> {
-    commit_workspace_snapshot_and_emit_session_phase_delta_internal(
-        app,
-        state,
-        workspace_snapshot,
-        session_id,
-        run_phase,
-        None,
-    )
-    .map(|_| ())
-}
 
 /// Mutates the latest retained workspace and commits its session phase in one shared-state transaction.
 /// 在同一个共享状态事务中修改最新保留工作区并提交其会话阶段。

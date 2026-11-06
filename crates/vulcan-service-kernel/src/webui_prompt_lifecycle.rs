@@ -24,7 +24,6 @@ use super::{
     AgentRuntimeBridge, SharedServiceBridgeState, active_reasoning_selection_effort,
     cached_project_vmm_layer, capture_webui_prompt_preparation_generation,
     capture_webui_prompt_preparation_workspace,
-    commit_workspace_snapshot_and_emit_session_phase_delta,
     commit_workspace_snapshot_and_emit_session_phase_delta_if_prompt_owner_current,
     current_unix_millis_text, current_unix_millis_value, ensure_webui_session_runtime_entry,
     load_project_configuration, persist_goal_turn_usage_context, push_webui_service_diagnostic,

@@ -261,8 +261,22 @@ async fn collaboration_continuation_dispatch_scenario() {
     .unwrap();
     let directory = root.data_root().join("continuation-project");
     std::fs::create_dir_all(&directory).unwrap();
+    // The project registered here is the one the source session's summary names.
+    // 此处登记的项目即来源会话摘要所指的项目。
+    let source_project_id = invocation
+        .state
+        .lock()
+        .unwrap()
+        .workspace_snapshot
+        .as_ref()
+        .unwrap()
+        .sessions
+        .iter()
+        .find(|session| session.id == invocation.source_session_id)
+        .and_then(|session| session.project_id.clone())
+        .unwrap();
     let project = vulcan_workbench_model::TaskProjectSummary::new(
-        invocation.source_locator.project_id(),
+        source_project_id.as_str(),
         "Continuation",
         directory.display().to_string(),
         false,

@@ -1383,7 +1383,10 @@ fn load_provider_task_snapshot_file(
                 path.display()
             )
         })?;
-    crate::provider_manifest::validate_runtime_json_bounds(
+    // The writer bounds this snapshot by bytes and record count; the manifest node ceiling would
+    // reject a few hundred legitimate media tasks and stop the Core from starting.
+    // 写入方以字节数与记录数约束此快照；Manifest 节点上限会拒绝数百个合法媒体任务并使 Core 无法启动。
+    crate::provider_manifest::validate_local_json_depth(
         &snapshot_value,
         "Provider task recovery snapshot",
     )?;
@@ -2230,6 +2233,47 @@ mod tests {
         assert_eq!(loaded.revision, 7);
         fs::remove_dir_all(&exact_directory)
             .expect("exact temporary directory should be removable");
+    }
+
+    /// Verifies a snapshot holding the full record capacity reloads, even though it exceeds the
+    /// node ceiling meant for documents from outside.
+    /// 验证装满记录容量的快照可以重新加载，即使它超过面向外部文档的节点上限。
+    #[test]
+    fn full_capacity_snapshot_reloads() {
+        let directory =
+            std::env::temp_dir().join(format!("vulcan-provider-task-full-{}", Uuid::new_v4()));
+        fs::create_dir_all(&directory).expect("full directory should create");
+        let snapshot = ProviderTaskRecoverySnapshot {
+            version: PROVIDER_TASK_RECOVERY_VERSION,
+            revision: 1,
+            records: (0..PROVIDER_TASK_MAXIMUM_RECORDS)
+                .map(|index| {
+                    let mut task = record(format!("task-{index:04}").as_str());
+                    // Real media tasks carry far more nodes than the bare fixture.
+                    // 真实媒体任务的节点远多于最简夹具。
+                    task.recovery = ProviderAsyncTaskRecoveryContext::OrderedSha256 {
+                        fingerprints: vec![String::from("0").repeat(64); 128],
+                    };
+                    (task.execution_id.clone(), task)
+                })
+                .collect(),
+        };
+        let value = serde_json::to_value(&snapshot).expect("full snapshot should encode");
+        assert!(
+            crate::provider_manifest::validate_runtime_json_bounds(&value, "full").is_err(),
+            "fixture should exceed the external node ceiling, or this test proves nothing"
+        );
+        fs::write(
+            directory.join(PROVIDER_TASK_CURRENT_SNAPSHOT_FILE),
+            serde_json::to_vec(&value).expect("full snapshot should serialize"),
+        )
+        .expect("full snapshot should write");
+        let loaded = load_latest_snapshot(&directory);
+        fs::remove_dir_all(&directory).expect("full directory should be removable");
+        assert_eq!(
+            loaded.expect("full snapshot should reload").records.len(),
+            PROVIDER_TASK_MAXIMUM_RECORDS
+        );
     }
 
     /// Verifies record-cap exhaustion preserves every already active task.

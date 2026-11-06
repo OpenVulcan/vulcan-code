@@ -1291,6 +1291,7 @@ pub fn write_user_subagent_metadata_override(
         schema_version: SUBAGENT_SIDECAR_SCHEMA_VERSION,
         enabled: Some(definition.enabled),
         system_prompt_append: definition.system_prompt_append.clone(),
+        provider_model: definition.provider_model.clone(),
         tool_exposure: SubagentToolExposureSidecar::from_snapshot(&definition.tool_exposure),
         tool_policy: SubagentToolPolicySidecar::from_snapshot(&definition.tool_exposure.policy),
         prompt_skill_policy: SubagentPromptSkillPolicySidecar::from_snapshot(
@@ -1323,11 +1324,18 @@ pub fn write_user_subagent_enabled_override(
     enabled: bool,
 ) -> Result<PathBuf, SubagentCatalogLoadError> {
     let path = user_subagent_override_path(user_root, id)?;
-    let sidecar = SubagentDefinitionSidecar {
-        schema_version: SUBAGENT_SIDECAR_SCHEMA_VERSION,
-        enabled: Some(enabled),
-        ..SubagentDefinitionSidecar::default()
+    // The override may already hold edited metadata (prompt append, policies, model); only the
+    // enabled state changes.
+    // 覆盖文件可能已包含编辑过的元数据（追加提示词、策略、模型）；只改变启停状态。
+    let mut sidecar = if path.is_file() {
+        read_definition_sidecar(&path)?
+    } else {
+        SubagentDefinitionSidecar {
+            schema_version: SUBAGENT_SIDECAR_SCHEMA_VERSION,
+            ..SubagentDefinitionSidecar::default()
+        }
     };
+    sidecar.enabled = Some(enabled);
     write_yaml_sidecar_atomically(&path, &sidecar, "subagent enabled override")
 }
 
@@ -2722,6 +2730,55 @@ mod tests {
         assert!(catalog.enabled_definition("engineering/reviewer").is_none());
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    /// Verifies a system agent's edited metadata, model pin included, survives toggling it.
+    /// 验证系统智能体编辑过的元数据（含固定模型）在切换启停后仍然保留。
+    #[test]
+    fn enabled_toggle_keeps_system_agent_metadata_override() {
+        let root = std::env::temp_dir().join(format!(
+            "vulcan-subagent-toggle-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after unix epoch")
+                .as_nanos()
+        ));
+        let system_root = root.join("system");
+        let user_root = root.join("user");
+        fs::create_dir_all(system_root.join("engineering")).expect("system category root");
+        fs::write(
+            system_root.join("engineering").join("reviewer.md"),
+            "---\nname: Reviewer\n---\nReview.",
+        )
+        .expect("system file");
+        let catalog = load_subagent_catalog_from_roots(system_root.clone(), user_root.clone());
+        let mut edited = catalog
+            .definitions
+            .iter()
+            .find(|definition| definition.id == "engineering/reviewer")
+            .cloned()
+            .expect("system definition");
+        edited.system_prompt_append = Some(String::from("Be brief."));
+        edited.provider_model.provider_id = Some(String::from("provider-one"));
+        edited.provider_model.model_id = Some(String::from("model-one"));
+        write_user_subagent_metadata_override(&user_root, &edited).expect("metadata override");
+        write_user_subagent_enabled_override(&user_root, "engineering/reviewer", false)
+            .expect("enabled override");
+
+        let reloaded = load_subagent_catalog_from_roots(system_root, user_root);
+        let definition = reloaded
+            .definitions
+            .iter()
+            .find(|definition| definition.id == "engineering/reviewer")
+            .expect("system definition");
+        let _ = fs::remove_dir_all(root);
+        assert!(!definition.enabled);
+        assert_eq!(
+            definition.system_prompt_append.as_deref(),
+            Some("Be brief.")
+        );
+        assert_eq!(definition.provider_model, edited.provider_model);
     }
 
     /// Verifies unique legacy short ids still resolve categorized definitions.

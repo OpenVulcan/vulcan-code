@@ -50,15 +50,45 @@ def _validate_skill_name(name: str) -> None:
         raise InstallError("Skill name must not contain path separators.")
 
 
-def _copy_skill(source: Path, dest: Path, overwrite: bool) -> None:
+def _copy_skill(source: Path, dest: Path, overwrite: bool) -> bool:
+    """Copy the skill; returns False when the source already is the destination.
+    复制技能；源目录即目标目录时返回 False。
+
+    The new copy is staged beside the destination and swapped in only once complete, so a
+    failed copy never removes the installed skill.
+    新副本先在目标旁暂存，完整后才替换，因此复制失败绝不会删除已安装的技能。
+    """
+    resolved_dest = dest.resolve()
+    if resolved_dest == source:
+        return False
+    if resolved_dest.is_relative_to(source) or source.is_relative_to(resolved_dest):
+        raise InstallError("Source and destination skill directories must not contain each other.")
     if dest.exists():
         if not overwrite:
             raise InstallError(f"Destination already exists: {dest}")
         if not dest.is_dir():
             raise InstallError(f"Destination exists but is not a directory: {dest}")
-        shutil.rmtree(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(source, dest)
+    staging = dest.parent / f".{dest.name}.installing-{os.getpid()}"
+    retired = dest.parent / f".{dest.name}.replaced-{os.getpid()}"
+    shutil.rmtree(staging, ignore_errors=True)
+    try:
+        shutil.copytree(source, staging)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    if dest.exists():
+        os.replace(dest, retired)
+        try:
+            os.replace(staging, dest)
+        except BaseException:
+            os.replace(retired, dest)
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
+        shutil.rmtree(retired, ignore_errors=True)
+    else:
+        os.replace(staging, dest)
+    return True
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -81,8 +111,10 @@ def main(argv: list[str]) -> int:
             raise InstallError("Refusing to install into the managed .system skill directory.")
         dest_root = Path(args.dest).expanduser().resolve() if args.dest else _default_dest()
         dest = dest_root / skill_name
-        _copy_skill(source, dest, args.overwrite)
-        print(f"Installed {skill_name} to {dest}")
+        if _copy_skill(source, dest, args.overwrite):
+            print(f"Installed {skill_name} to {dest}")
+        else:
+            print(f"{skill_name} is already installed at {dest}; nothing to copy")
         return 0
     except InstallError as exc:
         print(f"Error: {exc}", file=sys.stderr)

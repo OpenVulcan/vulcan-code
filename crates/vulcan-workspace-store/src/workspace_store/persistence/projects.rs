@@ -661,19 +661,32 @@ pub(super) async fn delete_active_project_row(
     project_id: &str,
 ) -> Result<(), String> {
     validate_project_mutation_id(project_id, "remove the project record")?;
-    // result proves the active project row still existed at deletion time.
-    // result 证明活动项目行在删除时仍然存在。
-    let result = local_sql::query_json_async(
+    let owned_project_id = project_id.to_string();
+    // rows proves the active project row still existed at deletion time; the same transaction
+    // removes project variables whose last binding the deletion cascaded away.
+    // rows 证明活动项目行在删除时仍然存在；同一事务移除因级联删除而失去最后绑定的项目变量。
+    let rows = local_sql::with_connection_async(
         &host_runtime.local,
         LogicalDatabase::AppState,
-        "DELETE FROM projects WHERE id = ?1 AND archived = 0 RETURNING id;",
-        vec![SqliteValue::Text(project_id.to_string())],
+        move |connection| {
+            let failed =
+                |error: rusqlite::Error| format!("Failed to remove the project record: {error}");
+            let transaction = connection.transaction().map_err(failed)?;
+            let rows = transaction
+                .prepare("DELETE FROM projects WHERE id = ?1 AND archived = 0 RETURNING id;")
+                .map_err(failed)?
+                .query_map([owned_project_id.as_str()], |row| {
+                    Ok(ProjectMutationIdentityRow { id: row.get(0)? })
+                })
+                .map_err(failed)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(failed)?;
+            super::super::environment_variables::remove_unbound_project_variables(&transaction)?;
+            transaction.commit().map_err(failed)?;
+            Ok(rows)
+        },
     )
-    .await
-    .map_err(|error| format!("Failed to remove the project record: {error}"))?;
-    // rows must contain the one active identity deleted by SQLite.
-    // rows 必须包含 SQLite 删除的唯一活动身份。
-    let rows = decode_query_rows::<ProjectMutationIdentityRow>(&result.json_data)?;
+    .await?;
     validate_project_mutation_identity_rows(project_id, &rows, "remove the project record")
 }
 

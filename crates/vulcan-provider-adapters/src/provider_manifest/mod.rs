@@ -89,7 +89,20 @@ pub fn validate_runtime_json_bounds(
     subject: &str,
 ) -> Result<(), String> {
     let mut node_count = 0_usize;
-    validate_runtime_json_bounds_inner(value, subject, 0, &mut node_count)
+    validate_runtime_json_bounds_inner(value, subject, 0, &mut node_count, MAX_JSON_NODES)
+}
+
+/// Validates one locally written JSON document against the shared depth ceiling only.
+/// 仅根据共享深度上限校验一份本地写入的 JSON 文档。
+///
+/// The node ceiling guards documents from outside; a document Vulcan writes itself is bounded
+/// by the limits its writer enforces (bytes, records), and a reader must not reject what that
+/// writer accepted.
+/// 节点上限用于防护外部文档；Vulcan 自身写入的文档由其写入方执行的边界（字节、记录数）约束，
+/// 读取方不得拒绝写入方已接受的内容。
+pub fn validate_local_json_depth(value: &serde_json::Value, subject: &str) -> Result<(), String> {
+    let mut node_count = 0_usize;
+    validate_runtime_json_bounds_inner(value, subject, 0, &mut node_count, usize::MAX)
 }
 
 /// Recursively validates one runtime JSON subtree while sharing the document-wide node counter.
@@ -111,6 +124,7 @@ fn validate_runtime_json_bounds_inner(
     subject: &str,
     depth: usize,
     node_count: &mut usize,
+    max_nodes: usize,
 ) -> Result<(), String> {
     if depth > MAX_JSON_DEPTH {
         return Err(format!(
@@ -120,20 +134,32 @@ fn validate_runtime_json_bounds_inner(
     *node_count = node_count
         .checked_add(1)
         .ok_or_else(|| format!("{subject} JSON node count overflowed."))?;
-    if *node_count > MAX_JSON_NODES {
+    if *node_count > max_nodes {
         return Err(format!(
-            "{subject} exceeds the {MAX_JSON_NODES} JSON node limit."
+            "{subject} exceeds the {max_nodes} JSON node limit."
         ));
     }
     match value {
         serde_json::Value::Object(object) => {
             for child in object.values() {
-                validate_runtime_json_bounds_inner(child, subject, depth + 1, node_count)?;
+                validate_runtime_json_bounds_inner(
+                    child,
+                    subject,
+                    depth + 1,
+                    node_count,
+                    max_nodes,
+                )?;
             }
         }
         serde_json::Value::Array(items) => {
             for child in items {
-                validate_runtime_json_bounds_inner(child, subject, depth + 1, node_count)?;
+                validate_runtime_json_bounds_inner(
+                    child,
+                    subject,
+                    depth + 1,
+                    node_count,
+                    max_nodes,
+                )?;
             }
         }
         _ => {}

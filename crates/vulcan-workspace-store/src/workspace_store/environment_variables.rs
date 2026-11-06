@@ -407,7 +407,13 @@ pub async fn list_environment_variables(
     local_sql::with_connection_async(
         &host_runtime.local,
         LogicalDatabase::AppState,
-        |connection| read_all_records(connection),
+        |connection| {
+            // Project deletions made before the deletion cleaned up after itself left such rows;
+            // they apply nowhere, and one would fail every read of the table.
+            // 删除项目尚未自行清理之前留下了这类行；它们不作用于任何地方，而任一行都会使整表读取失败。
+            remove_unbound_project_variables(connection)?;
+            read_all_records(connection)
+        },
     )
     .await
 }
@@ -781,6 +787,21 @@ fn read_record(
         .collect::<Result<Vec<_>, _>>()
         .map_err(sql_error)?;
     record_from_raw(row, projects).map(Some)
+}
+
+/// Removes project variables left without any project, after a project deletion cascaded their
+/// last binding away. Such a variable applies nowhere, so removing it changes no environment.
+/// 移除已没有任何项目的项目变量（项目删除级联移除了其最后一个绑定）。这类变量不作用于任何地方，
+/// 移除它不会改变任何环境。
+pub(super) fn remove_unbound_project_variables(
+    connection: &rusqlite::Connection,
+) -> Result<usize, String> {
+    connection
+        .execute(
+            "DELETE FROM environment_variables WHERE scope = 'project' AND NOT EXISTS (SELECT 1 FROM environment_variable_project_bindings binding WHERE binding.variable_id = environment_variables.id)",
+            [],
+        )
+        .map_err(sql_error)
 }
 
 /// One variable row before decoding.
@@ -1212,21 +1233,31 @@ mod tests {
     }
 
     /// Deleting a project removes its bindings; the variable reads back as damaged rather than
-    /// silently becoming global.
-    /// 删除项目会移除其绑定；变量读回时报告损坏，而不是静默变为全局。
+    /// silently becoming global, and the cleanup run with a project deletion removes it.
+    /// 删除项目会移除其绑定；变量读回时报告损坏，而不是静默变为全局；随项目删除执行的清理会移除它。
     #[test]
     fn project_deletion_never_turns_a_variable_global() {
         let mut connection = fixture();
         insert(&mut connection, draft("A", "x", projects(&["one", "two"]))).unwrap();
+        insert(
+            &mut connection,
+            draft("G", "g", EnvironmentVariableScope::Global),
+        )
+        .unwrap();
         connection
             .execute("DELETE FROM projects WHERE id = 'one'", [])
             .unwrap();
+        assert_eq!(remove_unbound_project_variables(&connection).unwrap(), 0);
         let records = read_all_records(&connection).unwrap();
         assert_eq!(records[0].scope, projects(&["two"]));
         connection
             .execute("DELETE FROM projects WHERE id = 'two'", [])
             .unwrap();
         assert!(read_all_records(&connection).is_err());
+        assert_eq!(remove_unbound_project_variables(&connection).unwrap(), 1);
+        let remaining = read_all_records(&connection).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].scope, EnvironmentVariableScope::Global);
     }
 
     /// The session file round-trips, stores no plain values, refuses duplicates, and an empty

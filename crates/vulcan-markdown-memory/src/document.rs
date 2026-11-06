@@ -548,7 +548,13 @@ fn scan_headings(text: &str) -> Vec<ScannedHeading> {
             Event::Start(Tag::Heading { level, .. }) => {
                 let level = heading_level_number(level);
                 if depth == 0 && level <= MAX_NODE_LEVEL {
-                    let last = range.end.saturating_sub(1).max(range.start);
+                    // The heading's last character may be multibyte (a CJK heading ending the
+                    // file without a newline); step back to its first byte.
+                    // 标题的最后一个字符可能是多字节字符（文件以无换行的中文标题结尾）；退回到其首字节。
+                    let mut last = range.end.saturating_sub(1).max(range.start);
+                    while !text.is_char_boundary(last) {
+                        last -= 1;
+                    }
                     let after = text[last..]
                         .find('\n')
                         .map_or(text.len(), |offset| last + offset + 1);
@@ -750,6 +756,7 @@ mod tests {
             "Title\n=====\n\nsetext body\n\nSub\n---\nmore\n",
             "# A\r\nline\r\n## B\r\nx\r\n",
             "# Tail without newline",
+            "# 记忆\n正文\n## 结尾标题",
             "> # quoted heading\n\n- # list heading\n\n##### deep\n# Real\n",
             "## Starts at two\n# Then one\n### Skips two\n",
         ];

@@ -60,6 +60,17 @@ impl SessionV1StorageLocator {
                 // Decode the exact name produced by the authoritative layout constructor.
                 // 解码权威布局构造器产生的精确名称。
                 let name = entry.file_name();
+                // An interrupted child creation leaves its unpublished staging tree here; it is
+                // no session, and it is removed together with the parent directory.
+                // 中断的子会话创建会在此遗留未发布的暂存树；它不是会话，会随父目录一并移除。
+                if name.to_str().is_some_and(|name| {
+                    name.starts_with(&format!(
+                        "{}{EMBEDDED_TASK_BUCKET}-",
+                        crate::workspace_store::session_v1::writer::CREATION_STAGING_PREFIX
+                    ))
+                }) {
+                    continue;
+                }
                 // Non-UTF8 or malformed names are explicit corruption, not absent sessions.
                 // 非 UTF8 或畸形名称属于明确损坏，不视为会话不存在。
                 let id = name

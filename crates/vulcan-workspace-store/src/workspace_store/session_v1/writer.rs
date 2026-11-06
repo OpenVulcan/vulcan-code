@@ -334,6 +334,11 @@ fn build_initial_metadata(
     filled
 }
 
+/// Name prefix of an unpublished creation staging directory beside the bucket it publishes into.
+/// A crash between staging and publication can leave one behind; it is never a session.
+/// 未发布创建暂存目录的名称前缀，位于其发布目标桶旁。暂存与发布之间崩溃可能遗留此目录；它绝不是会话。
+pub const CREATION_STAGING_PREFIX: &str = ".create-";
+
 /// Creates one exact sibling staging layout without inspecting session siblings.
 /// 在不检查会话同级目录的前提下创建一个精确同级 staging 布局。
 fn create_staging_layout(layout: &SessionV1Layout) -> Result<SessionV1Layout, SessionV1Error> {
@@ -347,7 +352,11 @@ fn create_staging_layout(layout: &SessionV1Layout) -> Result<SessionV1Layout, Se
     let staging_layout = SessionV1Layout::new(
         &layout.root,
         &layout.project_partition,
-        format!(".create-{}-{}", layout.date_bucket, Uuid::new_v4()),
+        format!(
+            "{CREATION_STAGING_PREFIX}{}-{}",
+            layout.date_bucket,
+            Uuid::new_v4()
+        ),
         &layout.session_id,
     );
     let staging_dir = staging_layout.session_dir();
