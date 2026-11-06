@@ -406,8 +406,9 @@ fn create_service_tray(
     );
     let action =
         |id: &str, key: &'static str| (MenuItem::with_id(id, text.get(key), true, None), key);
-    // open_actions opens a client; service_actions act on the service itself.
-    // open_actions 打开客户端；service_actions 作用于服务本身。
+    // open_actions opens a client; service_actions act on the service itself. Only Windows adds the terminal entry.
+    // open_actions 打开客户端；service_actions 作用于服务本身。只有 Windows 追加终端入口。
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut open_actions = vec![
         action(MENU_OPEN_CLIENT, keys::OPEN_DESKTOP_CLIENT),
         action(MENU_OPEN_WEBUI, keys::OPEN_WEBUI),
