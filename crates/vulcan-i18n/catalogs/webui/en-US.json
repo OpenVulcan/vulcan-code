@@ -626,7 +626,7 @@
   "settings.appearance.display": "Display",
   "settings.appearance.display.description": "Every change applies at once.",
   "settings.appearance.text.description": "The whole interface scales with the text size.",
-  "settings.appearance.width.description": "Limits the width of the conversation text; it also decides whether the side panel can dock.",
+  "settings.appearance.width.description": "Limits the width of the conversation text.",
   "settings.appearance.motion.description": "Turns off transitions and animations regardless of the system setting.",
   "settings.appearance.ambience": "Ambience",
   "settings.appearance.ambience.description": "Calm keeps a still ember glow in the background; Live also lights the header edge and the composer area while the AI is working.",

@@ -626,7 +626,7 @@
   "settings.appearance.display": "Visualización",
   "settings.appearance.display.description": "Cada cambio se aplica al instante.",
   "settings.appearance.text.description": "Toda la interfaz se escala con el tamaño del texto.",
-  "settings.appearance.width.description": "Limita el ancho del texto de la conversación; también decide si el panel lateral puede acoplarse.",
+  "settings.appearance.width.description": "Limita el ancho del texto de la conversación.",
   "settings.appearance.motion.description": "Desactiva transiciones y animaciones sin importar la configuración del sistema.",
   "settings.appearance.ambience": "Ambiente",
   "settings.appearance.ambience.description": "Sereno deja un brillo de brasa fijo en el fondo; Vivo además ilumina el borde del encabezado y la zona de escritura mientras la IA trabaja.",

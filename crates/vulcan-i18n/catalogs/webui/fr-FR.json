@@ -626,7 +626,7 @@
   "settings.appearance.display": "Affichage",
   "settings.appearance.display.description": "Chaque changement s’applique immédiatement.",
   "settings.appearance.text.description": "Toute l’interface suit la taille du texte.",
-  "settings.appearance.width.description": "Limite la largeur du texte de la conversation ; détermine aussi si le panneau latéral peut s’ancrer.",
+  "settings.appearance.width.description": "Limite la largeur du texte de la conversation.",
   "settings.appearance.motion.description": "Désactive transitions et animations, quel que soit le réglage du système.",
   "settings.appearance.ambience": "Ambiance",
   "settings.appearance.ambience.description": "Calme garde une lueur de braise fixe en arrière-plan ; Vivant éclaire aussi le bord de l’en-tête et la zone de saisie pendant que l’IA travaille.",

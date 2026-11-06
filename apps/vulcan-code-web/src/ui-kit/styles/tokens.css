@@ -51,7 +51,7 @@
   --vk-feature-sidebar-w: calc(var(--vk-u) * 54);
   --vk-panel-w: calc(var(--vk-u) * 94);
   /* The "standard" reading measure; the width presets below move it. */
-  --vk-read-w: 46rem;
+  --vk-read-w: 72rem;
   /* The conversation column: the reading measure plus its side padding, or the whole stage at "full". */
   --vk-column-pad: calc(var(--vk-u) * 8);
   --vk-read-col: calc(var(--vk-read-w) + var(--vk-column-pad) * 2);
@@ -59,8 +59,9 @@
   /* Margin a full-width column keeps on each side of the stage, outside its own side padding. */
   --vk-full-gutter: calc(var(--vk-u) * 12);
   /* Width the stage keeps for the conversation before the context panel floats and the navigation folds:
-   * the limited column plus the reasoning overhang. "full" keeps the standard measure, so it reserves that. */
-  --vk-reserve-w: calc(var(--vk-read-col) + var(--vk-u) * 10);
+   * a comfortable minimum measure plus padding and the reasoning overhang. It does not follow the width
+   * presets, since a narrower stage only narrows the column, so a wide preset never folds the navigation. */
+  --vk-reserve-w: calc(46rem + var(--vk-column-pad) * 2 + var(--vk-u) * 10);
   --vk-statusbar-h: calc(var(--vk-u) * 7);
   --vk-titlebar-h: calc(var(--vk-u) * 12);
   /* Preference and plugin settings pages read as one centred column of this width. */
@@ -100,9 +101,9 @@
 /* Reading width presets for the conversation column (data-vk-width). "standard" is the :root default.
  * "full" drops the cap (--vk-column-w) but keeps a margin on each side; the others only move the reading
  * measure, so they scale with the text tier. */
-:root[data-vk-width="compact"] { --vk-read-w: 38rem; }
-:root[data-vk-width="wide"] { --vk-read-w: 58rem; }
-:root[data-vk-width="xwide"] { --vk-read-w: 72rem; }
+:root[data-vk-width="compact"] { --vk-read-w: 58rem; }
+:root[data-vk-width="wide"] { --vk-read-w: 86rem; }
+:root[data-vk-width="xwide"] { --vk-read-w: 100rem; }
 :root[data-vk-width="full"] { --vk-column-w: calc(100% - var(--vk-full-gutter) * 2); }
 
 /* ---------- Skin surface: light (default) ---------- */

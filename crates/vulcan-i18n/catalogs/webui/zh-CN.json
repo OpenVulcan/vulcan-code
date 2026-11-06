@@ -626,7 +626,7 @@
   "settings.appearance.display": "显示",
   "settings.appearance.display.description": "每项修改立即生效。",
   "settings.appearance.text.description": "整个界面随字号等比缩放。",
-  "settings.appearance.width.description": "限制会话正文的宽度；右侧面板能否停靠也以此为准。",
+  "settings.appearance.width.description": "限制会话正文的宽度。",
   "settings.appearance.motion.description": "关闭过渡与动画，不受系统设置影响。",
   "settings.appearance.ambience": "氛围",
   "settings.appearance.ambience.description": "静谧在背景保留一层静止的余烬光晕；灵动还会在 AI 工作时点亮标题栏边缘与输入区。",

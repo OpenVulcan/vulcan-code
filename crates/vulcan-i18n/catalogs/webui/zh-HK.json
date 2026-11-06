@@ -626,7 +626,7 @@
   "settings.appearance.display": "顯示",
   "settings.appearance.display.description": "每項修改即時生效。",
   "settings.appearance.text.description": "整個介面隨字級等比縮放。",
-  "settings.appearance.width.description": "限制對話正文的闊度；右側面板能否停靠亦以此為準。",
+  "settings.appearance.width.description": "限制對話正文的闊度。",
   "settings.appearance.motion.description": "關閉轉場與動畫，不受系統設定影響。",
   "settings.appearance.ambience": "氛圍",
   "settings.appearance.ambience.description": "靜謐在背景保留一層靜止的餘燼光暈；靈動還會在 AI 工作時點亮標題列邊緣與輸入區。",

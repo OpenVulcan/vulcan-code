@@ -626,7 +626,7 @@
   "settings.appearance.display": "Exibição",
   "settings.appearance.display.description": "Cada alteração vale na hora.",
   "settings.appearance.text.description": "Toda a interface acompanha o tamanho do texto.",
-  "settings.appearance.width.description": "Limita a largura do texto da conversa; também define se o painel lateral pode ser fixado.",
+  "settings.appearance.width.description": "Limita a largura do texto da conversa.",
   "settings.appearance.motion.description": "Desliga transições e animações, independentemente da configuração do sistema.",
   "settings.appearance.ambience": "Ambiente",
   "settings.appearance.ambience.description": "Calmo mantém um brilho de brasa parado no fundo; Vivo também ilumina a borda do cabeçalho e a área de escrita enquanto a IA trabalha.",
