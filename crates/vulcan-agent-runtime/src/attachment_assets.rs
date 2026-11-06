@@ -518,18 +518,30 @@ pub fn stage_attachment_file_streaming(
             error,
         ));
     }
+    // Every fallible value is resolved before the record exists, so a failure removes the copy.
+    // 每个可能失败的值都在记录建立前解析，失败时删除副本。
+    let resource_path = match managed_attachment_resource_path(workspace_path, &managed_file_path)
+        .and_then(|resource_path| {
+            streaming_file_sha256(&managed_file_path).map(|sha256| (resource_path, sha256))
+        }) {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            return Err(rollback_failed_managed_attachment(
+                &managed_file_path,
+                error,
+            ));
+        }
+    };
+    let (resource_path, source_sha256) = resource_path;
     let attachment = ConversationAttachment {
         kind: descriptor.kind.clone(),
         file_name: sanitized_file_name,
         local_path: vulcan_runtime_assets::native_host_path_text_from_path(&managed_file_path),
-        resource_path: Some(managed_attachment_resource_path(
-            workspace_path,
-            &managed_file_path,
-        )?),
+        resource_path: Some(resource_path),
         source_path: None,
         asset_id: Some(asset_id),
         byte_len: Some(source_metadata.len()),
-        source_sha256: Some(streaming_file_sha256(&managed_file_path)?),
+        source_sha256: Some(source_sha256),
         delivery_mode: None,
         preview_local_path: None,
         mime_type: descriptor.mime_type.to_string(),
@@ -728,14 +740,22 @@ fn stage_attachment_bytes_with_effective_mime_type(
             error,
         ));
     }
+    // The resource path is resolved before the record exists, so a failure removes the file.
+    // 资源路径在记录建立前解析，失败时删除文件。
+    let resource_path = match managed_attachment_resource_path(workspace_path, &managed_file_path) {
+        Ok(resource_path) => resource_path,
+        Err(error) => {
+            return Err(rollback_failed_managed_attachment(
+                &managed_file_path,
+                error,
+            ));
+        }
+    };
     let attachment = ConversationAttachment {
         kind: descriptor.kind.clone(),
         file_name: sanitized_file_name,
         local_path: vulcan_runtime_assets::native_host_path_text_from_path(&managed_file_path),
-        resource_path: Some(managed_attachment_resource_path(
-            workspace_path,
-            &managed_file_path,
-        )?),
+        resource_path: Some(resource_path),
         source_path: source_path
             .map(canonicalize_workspace_path)
             .map(|path| normalized_workspace_path_text_from_path(&path)),

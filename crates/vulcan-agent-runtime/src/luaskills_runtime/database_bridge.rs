@@ -67,10 +67,11 @@ use tokio::runtime::Handle;
 /// Default worker count for one host execution channel.
 /// 单个宿主执行通道的默认工作线程数。
 ///
-/// Four matches the host's already-declared parallel database ceiling, so the channel cannot outrun the
+/// The width is the host's declared parallel database ceiling, so the channel cannot outrun the
 /// database boundary it submits into.
-/// 四与宿主已声明的并行数据库上限一致，因此该通道无法超出它所提交到的数据库边界。
-pub const HOST_EXECUTION_CHANNEL_WORKERS: usize = 4;
+/// 宽度即宿主已声明的并行数据库上限，因此该通道无法超出它所提交到的数据库边界。
+pub const HOST_EXECUTION_CHANNEL_WORKERS: usize =
+    vulcan_workspace_store::local_database_runtime::MAX_CONCURRENT_BLOCKING_DATABASE_OPERATIONS;
 
 /// Default queue capacity for one host execution channel.
 /// 单个宿主执行通道的默认队列容量。

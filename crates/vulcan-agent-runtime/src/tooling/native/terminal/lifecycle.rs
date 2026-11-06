@@ -231,10 +231,19 @@ pub(crate) async fn execute_terminal_session_start_action(
 }
 
 pub(crate) async fn execute_terminal_session_stop_action(
+    request: &NativeToolExecutionRequest,
     parsed_args: TerminalSessionToolArgs,
     owner_session_id: SessionId,
     command_session_runtime: Arc<CommandSessionRuntime>,
 ) -> Result<VulcanToolInvocationResult, NativeToolError> {
+    let spill_root = resolve_shell_command_spill_root(
+        request.spill_root.as_deref(),
+        request.workspace_root.as_deref(),
+        request
+            .workspace_root
+            .as_deref()
+            .unwrap_or_else(|| Path::new(".")),
+    );
     let terminal_session_id =
         parse_terminal_session_id(parsed_args.terminal_session_id.as_deref())?;
     let snapshot = command_session_runtime
@@ -273,8 +282,21 @@ pub(crate) async fn execute_terminal_session_stop_action(
             "stop_wait_ms": DEFAULT_COMMAND_SESSION_STOP_WAIT_MS,
         }),
     );
+    // The final frame follows the same inline limit and paging as every other action.
+    // 最终画面与其他所有动作一样遵循内联上限与分页。
+    let model_output = render_tool_result_text(
+        &render_input,
+        None,
+        &budget,
+        &HostRenderOptions {
+            spill_root,
+            template_skill_roots: Vec::new(),
+            template_resources_root: None,
+        },
+    )
+    .map_err(NativeToolError::new)?;
     Ok(
-        VulcanToolInvocationResult::from_model_output(Value::String(render_input.content))
+        VulcanToolInvocationResult::from_model_output(Value::String(model_output))
             .with_host_result(VulcanToolHostResult {
                 kind: String::from("terminal_session"),
                 payload: host_payload,
@@ -339,6 +361,7 @@ pub(crate) async fn execute_terminal_session_tool(
         }
         TerminalSessionToolAction::Stop => {
             execute_terminal_session_stop_action(
+                &request,
                 parsed_args,
                 owner_session_id,
                 command_session_runtime,

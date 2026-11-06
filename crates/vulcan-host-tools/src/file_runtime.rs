@@ -91,6 +91,10 @@ pub const MAX_SEARCH_FILES: usize = 50_000;
 /// 单个 list 目标最多返回的条目数量。
 pub const MAX_LIST_ENTRIES: usize = 1_000;
 
+/// List entries returned when the request omits `limit`.
+/// 请求省略 `limit` 时 list 返回的条目数量。
+pub const DEFAULT_LIST_ENTRIES: usize = 200;
+
 /// Maximum UTF-8 bytes accepted in one search query or pattern.
 /// 单个搜索查询或文件名模式允许的最大 UTF-8 字节数。
 pub const MAX_SEARCH_QUERY_BYTES: usize = 4_096;
@@ -690,7 +694,7 @@ fn native_list_files(
     object: &Map<String, Value>,
 ) -> Result<FileToolResponse, FileToolError> {
     let recursive = optional_bool(object, "recursive", false)?;
-    let limit = optional_limit(object, "limit", 200, 1, MAX_LIST_ENTRIES)?;
+    let limit = optional_limit(object, "limit", DEFAULT_LIST_ENTRIES, 1, MAX_LIST_ENTRIES)?;
     let mut request = Map::new();
     request.insert(String::from("recursive"), Value::Bool(recursive));
     request.insert(String::from("include_ignored"), Value::Bool(false));

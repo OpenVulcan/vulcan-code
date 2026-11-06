@@ -18,7 +18,7 @@ use crate::transport::{McpToolSchema, McpTransportEvent};
 
 /// Maximum decoded bytes retained for one MCP image content block.
 /// 单个 MCP 图片内容块允许保留的最大解码字节数。
-const MCP_IMAGE_MAX_BYTES: usize = 20 * 1024 * 1024;
+pub const MCP_IMAGE_MAX_BYTES: usize = 20 * 1024 * 1024;
 
 /// Shared rmcp notification adapter that forwards tool-list changes into the host runtime event stream.
 /// 将工具列表变化转发到宿主运行时事件流的共享 rmcp 通知适配器。

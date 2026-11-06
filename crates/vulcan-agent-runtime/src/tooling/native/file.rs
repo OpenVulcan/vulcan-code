@@ -7,7 +7,9 @@ use super::{
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
-use vulcan_host_tools::file_runtime::{FileToolError, MAX_LIST_ENTRIES, execute_file};
+use vulcan_host_tools::file_runtime::{
+    DEFAULT_LIST_ENTRIES, FileToolError, MAX_LIST_ENTRIES, execute_file,
+};
 use vulcan_tools_manager::VulcanToolInvocationResult;
 
 /// Stable public identifier for the native file maintenance tool.
@@ -133,7 +135,7 @@ fn file_args_schema() -> Value {
                 "type": "integer",
                 "minimum": 1,
                 "maximum": MAX_LIST_ENTRIES,
-                "default": 200,
+                "default": DEFAULT_LIST_ENTRIES,
                 "description": "list only. Maximum returned entries."
             },
             "destination": {

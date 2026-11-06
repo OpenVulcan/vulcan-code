@@ -566,6 +566,11 @@ impl TaskRuntime {
             created_at_ms,
             continues_task_turn,
         };
+        // Admission renders the envelope once, so a message the child could never read (for example
+        // one over the envelope limit) is refused to the sender instead of failing a later delivery.
+        // 准入时先渲染一次信封，子代理永远无法读取的消息（例如超出信封上限）直接拒绝给发送方，
+        // 而不是让之后的投递失败。
+        inter_agent_message_model_text(&message)?;
         self.agent_inboxes
             .write()
             .map_err(|_| String::from("The subagent agent-control inbox is locked."))?
@@ -904,7 +909,19 @@ impl TaskRuntime {
         if messages.is_empty() {
             return Ok(false);
         }
-        let prompt = format_inter_agent_messages_for_model(&messages)?;
+        let prompt = match format_inter_agent_messages_for_model(&messages) {
+            Ok(prompt) => prompt,
+            Err(error) => {
+                return Err(self
+                    .restore_inter_agent_messages_front_after_failure(
+                        target_task_id,
+                        messages,
+                        "format_inter_agent_messages_for_model",
+                        error,
+                    )
+                    .to_string());
+            }
+        };
         let parsed_args = match parse_task_tool_arguments(json!({
             "task_id": target.agent_id,
             "prompt": prompt,

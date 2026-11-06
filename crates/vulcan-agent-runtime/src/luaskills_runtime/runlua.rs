@@ -56,6 +56,14 @@ const RUNLUA_MAX_SESSIONS_PER_OWNER: usize = 4;
 /// 两个公开工具允许接收的 AI Lua 源码最大字节数。
 const RUNLUA_MAX_CODE_BYTES: usize = 128 * 1024;
 
+/// Maximum `runlua` task label length in characters, matching the schema `maxLength`.
+/// `runlua` 任务标签的最大字符数，与 Schema `maxLength` 一致。
+const RUNLUA_MAX_TASK_LABEL_CHARS: usize = 120;
+
+/// Maximum `runlua_session` name length in characters, matching the schema `maxLength`.
+/// `runlua_session` 名称的最大字符数，与 Schema `maxLength` 一致。
+const RUNLUA_MAX_SESSION_NAME_CHARS: usize = 64;
+
 /// Concise provider-facing guidance for the isolated RunLua tool.
 /// 面向 Provider 的一次性 RunLua 工具简短指引。
 const RUNLUA_TOOL_DESCRIPTION: &str = "Execute one bounded Lua snippet in the LuaSkills runtime. Before first use, call the native `skill` tool with {\"name\":\"runlua\"}; do not use `luaskill_help` to retrieve this guide.";
@@ -1234,7 +1242,7 @@ fn runlua_args_schema() -> Value {
             "task": {
                 "type": "string",
                 "minLength": 1,
-                "maxLength": 120,
+                "maxLength": RUNLUA_MAX_TASK_LABEL_CHARS,
                 "description": "Short task label shown in the conversation card."
             },
             "code": {
@@ -1275,7 +1283,7 @@ fn runlua_session_args_schema() -> Value {
             "name": {
                 "type": "string",
                 "minLength": 1,
-                "maxLength": 64,
+                "maxLength": RUNLUA_MAX_SESSION_NAME_CHARS,
                 "description": "Task-oriented session name required by `start`."
             },
             "session_id": {
@@ -1341,8 +1349,10 @@ fn validate_task_label(task: &str) -> Result<(), String> {
     if task.is_empty() {
         return Err(String::from("runlua `task` must not be empty."));
     }
-    if task.len() > 120 {
-        return Err(String::from("runlua `task` must not exceed 120 bytes."));
+    if task.chars().count() > RUNLUA_MAX_TASK_LABEL_CHARS {
+        return Err(format!(
+            "runlua `task` must not exceed {RUNLUA_MAX_TASK_LABEL_CHARS} characters."
+        ));
     }
     Ok(())
 }
@@ -1402,9 +1412,9 @@ fn normalize_session_name(name: Option<&str>) -> Result<String, String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| String::from("runlua_session start requires `name`."))?;
-    if name.len() > 64 {
-        return Err(String::from(
-            "runlua_session `name` must not exceed 64 bytes.",
+    if name.chars().count() > RUNLUA_MAX_SESSION_NAME_CHARS {
+        return Err(format!(
+            "runlua_session `name` must not exceed {RUNLUA_MAX_SESSION_NAME_CHARS} characters."
         ));
     }
     if name.contains('\0') {

@@ -595,6 +595,7 @@ fn execution_tool_exposure_keeps_luaskills_dispatcher_with_family_allow() {
         luaskill_help_packages: Vec::new(),
         mcp_tools: Vec::new(),
         selectors,
+        native_tool_warnings: Vec::new(),
     };
 
     filter_resolved_tool_set_by_tool_exposure(&mut resolved, &exposure);
@@ -1115,6 +1116,7 @@ fn test_exposure_with_selectors(
         luaskill_help_packages: Vec::new(),
         mcp_tools: Vec::new(),
         selectors,
+        native_tool_warnings: Vec::new(),
     }
 }
 

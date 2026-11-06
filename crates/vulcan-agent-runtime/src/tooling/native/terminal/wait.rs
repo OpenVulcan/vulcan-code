@@ -1,5 +1,9 @@
 use super::*;
 
+/// Quiet window used when an `until_quiet` wait omits `quiet_ms`.
+/// `until_quiet` 等待省略 `quiet_ms` 时使用的静默窗口。
+const DEFAULT_TERMINAL_WAIT_QUIET_MS: u64 = 300;
+
 pub(crate) fn terminal_wait_mode(
     wait_policy: Option<&TerminalSessionWaitPolicy>,
 ) -> TerminalSessionWaitMode {
@@ -23,7 +27,7 @@ pub(crate) fn terminal_wait_budget_ms(
         TerminalSessionWaitMode::UntilQuiet => policy.max_wait_ms.unwrap_or_else(|| {
             policy
                 .quiet_ms
-                .unwrap_or(300)
+                .unwrap_or(DEFAULT_TERMINAL_WAIT_QUIET_MS)
                 .saturating_mul(10)
                 .clamp(500, 5_000)
         }),
@@ -70,7 +74,7 @@ pub(crate) fn terminal_wait_quiet_window_ms(
 ) -> u64 {
     wait_policy
         .and_then(|policy| policy.quiet_ms)
-        .unwrap_or(300)
+        .unwrap_or(DEFAULT_TERMINAL_WAIT_QUIET_MS)
         .clamp(50, 5_000)
 }
 
@@ -243,13 +247,16 @@ pub(crate) async fn read_terminal_session_output_with_wait(
     let mut returned_chunks = Vec::new();
     let mut has_more = false;
     let mut quiet_observed = false;
+    // read_wait_ms is how long the latest read listened; only a full quiet window proves quiet.
+    // read_wait_ms 是最近一次读取的监听时长；只有完整的静默窗口才能证明已静默。
+    let mut read_wait_ms = quiet_ms.min(wait_budget_ms);
     let mut latest_outcome = read_terminal_session_output_for_ai(
         command_session_runtime,
         owner_session_id,
         terminal_session_id,
         after_seq,
         read_from_start,
-        Some(quiet_ms.min(wait_budget_ms)),
+        Some(read_wait_ms),
         Some(chunk_budget),
     )
     .await?;
@@ -257,7 +264,7 @@ pub(crate) async fn read_terminal_session_output_with_wait(
         has_more |= latest_outcome.has_more;
         let returned_chunk_count = latest_outcome.returned_chunks.len();
         if returned_chunk_count == 0 {
-            quiet_observed = true;
+            quiet_observed = read_wait_ms >= quiet_ms;
             break;
         }
         returned_chunks.append(&mut latest_outcome.returned_chunks);
@@ -275,13 +282,14 @@ pub(crate) async fn read_terminal_session_output_with_wait(
         if remaining_chunks == 0 {
             break;
         }
+        read_wait_ms = quiet_ms.min(remaining_ms);
         latest_outcome = read_terminal_session_output_for_ai(
             command_session_runtime,
             owner_session_id,
             terminal_session_id,
             None,
             false,
-            Some(quiet_ms.min(remaining_ms)),
+            Some(read_wait_ms),
             Some(remaining_chunks),
         )
         .await?;

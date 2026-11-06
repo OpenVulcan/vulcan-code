@@ -78,14 +78,10 @@ fn apply_runtime_temperature_override(
             )
         })?;
     let protocol_id = execution.route.protocol_route.protocol_profile_id.as_str();
-    if !definition.protocol_ids.is_empty()
-        && !definition
-            .protocol_ids
-            .iter()
-            .any(|candidate| candidate == protocol_id)
-    {
+    if !definition.applies_to(protocol_id, &execution.model.id) {
         return Err(format!(
-            "Model parameter `{SAMPLING_TEMPERATURE_PARAMETER_ID}` is not registered for protocol `{protocol_id}`."
+            "Model parameter `{SAMPLING_TEMPERATURE_PARAMETER_ID}` is not registered for protocol `{protocol_id}` and model `{}`.",
+            execution.model.id
         ));
     }
     let value = ModelParameterValue::Decimal(requested_temperature.to_string());

@@ -42,6 +42,7 @@ pub use rmcp::model::{GetPromptResult, Prompt, PromptArgument, ReadResourceResul
 // Stored credential payload carried inside each persisted OAuth record.
 // 每条持久化 OAuth 记录中携带的已存储凭据载荷。
 pub use rmcp::transport::auth::StoredCredentials as McpOAuthStoredCredentials;
+pub use rmcp_support::MCP_IMAGE_MAX_BYTES;
 pub use sse::SseTransport;
 pub use stdio::StdioTransport;
 pub use transport::{

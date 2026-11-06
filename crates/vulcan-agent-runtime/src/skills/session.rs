@@ -91,7 +91,7 @@ impl SummarySkill {
                     .report
                     .assistant_output
                     .as_deref()
-                    .map(|output| truncate_preview_lines(output, 2, 120))
+                    .map(|output| truncate_preview_lines(output, 2, SESSION_SUMMARY_PREVIEW_CHARS))
                     .unwrap_or_else(|| {
                         String::from("The model did not return visible text output for this run.")
                     })
@@ -100,12 +100,16 @@ impl SummarySkill {
                     .report
                     .error
                     .as_deref()
-                    .map(|error| truncate_preview_lines(error, 1, 120))
+                    .map(|error| truncate_preview_lines(error, 1, SESSION_SUMMARY_PREVIEW_CHARS))
                     .unwrap_or_else(|| String::from("Unknown error"))
             },
         }
     }
 }
+
+/// Character limit of the summary record preview for both success and failure.
+/// 成功与失败两种摘要记录预览共用的字符上限。
+const SESSION_SUMMARY_PREVIEW_CHARS: usize = 120;
 
 /// Truncates one multi-line preview into a bounded, ellipsis-terminated single string.
 /// 将多行预览截断为带省略号且受限的单条字符串。

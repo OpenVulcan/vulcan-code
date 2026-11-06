@@ -166,6 +166,10 @@ type RuntimeEventProjectionBarrierRegistry =
 static RUNTIME_EVENT_PROJECTION_BARRIERS: OnceLock<Mutex<RuntimeEventProjectionBarrierRegistry>> =
     OnceLock::new();
 
+/// Schema version of every tool-binding description hashed into the recovery fingerprint.
+/// 进入恢复指纹哈希的每份工具绑定描述的结构版本。
+const TOOL_BINDING_FINGERPRINT_SCHEMA_VERSION: u32 = 1;
+
 /// Maximum time a tool may wait for the UI projection acknowledgement before continuing.
 /// 工具等待界面投影确认后继续执行的最长时间。
 const RUNTIME_EVENT_PROJECTION_BARRIER_TIMEOUT: Duration = Duration::from_secs(8);
@@ -446,7 +450,7 @@ pub(crate) fn resolved_tool_binding_fingerprint(
     definition: &ResolvedToolDefinition,
 ) -> Result<String, String> {
     let binding = json!({
-        "schema_version": 1,
+        "schema_version": TOOL_BINDING_FINGERPRINT_SCHEMA_VERSION,
         "descriptor": {
             "id": definition.descriptor.id,
             "name": definition.descriptor.name,
@@ -469,7 +473,7 @@ pub(crate) fn resolved_tool_binding_fingerprint(
 /// 为 Provider 请求的单个工具绑定明确缺失状态计算稳定指纹。
 fn unregistered_tool_binding_fingerprint(tool_name: &str) -> Result<String, String> {
     let binding = json!({
-        "schema_version": 1,
+        "schema_version": TOOL_BINDING_FINGERPRINT_SCHEMA_VERSION,
         "binding_state": "unregistered",
         "tool_name": tool_name,
     });
@@ -712,6 +716,29 @@ pub(crate) async fn wait_tool_batch_projection_barrier(
     }
 }
 
+/// Removes a barrier's registry entry when its waiter ends, including when the waiter is dropped.
+/// 等待方结束时（包括被丢弃时）移除屏障的注册表条目。
+struct AbandonedProjectionBarrierGuard {
+    /// Stable id of the barrier being waited on.
+    /// 正在等待的屏障稳定标识。
+    barrier_id: String,
+}
+
+impl Drop for AbandonedProjectionBarrierGuard {
+    fn drop(&mut self) {
+        // Removal is idempotent; an acknowledged barrier is already gone, and a destructor cannot
+        // report a poisoned registry.
+        // 移除是幂等的；已确认的屏障早已不在，析构函数也无法上报中毒的注册表。
+        if let Some(registry) = RUNTIME_EVENT_PROJECTION_BARRIERS.get() {
+            let _ = remove_runtime_event_projection_barrier(
+                registry,
+                &self.barrier_id,
+                "remove an abandoned barrier",
+            );
+        }
+    }
+}
+
 /// Waits for one internal runtime-event projection receipt.
 /// 等待一个内部运行时事件投影回执。
 async fn wait_runtime_event_projection_receipt(
@@ -719,6 +746,11 @@ async fn wait_runtime_event_projection_receipt(
 ) -> Result<RuntimeEventProjectionReceipt, RuntimeEventProjectionError> {
     let barrier_id = barrier.id.clone();
     let required_for_execution = barrier.required_for_execution;
+    // A cancelled stream drops this future; the guard removes the pending sender so it never leaks.
+    // 流被取消时本 future 会被丢弃；守卫移除待确认发送端，避免残留。
+    let _abandoned_barrier_guard = AbandonedProjectionBarrierGuard {
+        barrier_id: barrier_id.clone(),
+    };
     match tokio::time::timeout(RUNTIME_EVENT_PROJECTION_BARRIER_TIMEOUT, barrier.receiver).await {
         Ok(Ok(RuntimeEventProjectionReceipt::Rejected(detail))) if required_for_execution => {
             Err(RuntimeEventProjectionError::Rejected { detail })

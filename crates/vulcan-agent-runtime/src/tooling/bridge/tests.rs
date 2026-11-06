@@ -211,6 +211,51 @@ fn implicit_luaskills_expose_help_and_call_tool_pair() {
     assert!(ids.contains(&CALL_LUASKILL_TOOL_NAME));
 }
 
+/// Plan mode admits a dispatch exactly when its target entry would be admitted when called directly.
+/// 计划模式放行一次调度，当且仅当其目标入口被直接调用时也会放行。
+#[test]
+fn plan_mode_admits_dispatch_by_target_entry() {
+    let entry = |canonical_name: &str| RuntimeEntryDescriptor {
+        canonical_name: canonical_name.to_string(),
+        skill_id: String::from("vulcan-codekit"),
+        local_name: canonical_name.to_string(),
+        root_name: String::from("USER"),
+        skill_dir: String::from(r"C:\skills\vulcan-codekit"),
+        description: String::new(),
+        parameters: Vec::new(),
+        input_schema: json!({ "type": "object" }),
+    };
+    let manager = VulcanToolsManager::new(vec![build_luaskills_dispatch_candidate(
+        None,
+        None,
+        vec![
+            entry("vulcan-codekit-ast-tree"),
+            entry("vulcan-codekit-patch"),
+            entry("demo-search-notes"),
+        ],
+    )]);
+    let resolved = manager.resolve_for_execution_mode("Plan");
+    let dispatcher = resolved
+        .definitions
+        .iter()
+        .find(|definition| definition.descriptor.id == CALL_LUASKILL_TOOL_NAME)
+        .expect("the dispatcher should stay visible in Plan mode");
+    let blocks = |name: &str| {
+        VulcanToolsManager::plan_mode_blocks(dispatcher, &json!({ "name": name }), "Plan")
+    };
+
+    assert!(
+        !blocks("vulcan-codekit-ast-tree"),
+        "built-in read-only entry"
+    );
+    assert!(!blocks("demo-search-notes"), "read-only by name");
+    assert!(blocks("vulcan-codekit-patch"), "writing entry");
+    assert!(
+        blocks("unregistered-search"),
+        "entry outside the dispatch set"
+    );
+}
+
 /// Verifies implicit LuaSkills dispatch uses LuaSkills canonical names rather than public tool aliases.
 /// 验证隐式 LuaSkills 调度使用 LuaSkills canonical 名称，而不是 public tool 别名。
 #[test]

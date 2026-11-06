@@ -299,9 +299,16 @@ fn projected_user_prompt_matches_request(projected_prompt: &str, raw_prompt: &st
     if projected_prompt.is_empty() || raw_prompt.is_empty() {
         return false;
     }
+    // A multi-paragraph prompt spans several split pieces, so it must also match as a whole run of
+    // paragraphs.
+    // 多段提示词跨越多个拆分片段，因此还须作为一组完整连续段落匹配。
     projected_prompt
         .split("\n\n")
         .any(|paragraph| paragraph.trim() == raw_prompt)
+        || projected_prompt == raw_prompt
+        || projected_prompt.starts_with(&format!("{raw_prompt}\n\n"))
+        || projected_prompt.ends_with(&format!("\n\n{raw_prompt}"))
+        || projected_prompt.contains(&format!("\n\n{raw_prompt}\n\n"))
 }
 
 #[cfg(test)]
@@ -1884,5 +1891,21 @@ mod tests {
                 "unexpected appended request material: {text}"
             );
         }
+    }
+
+    /// A multi-paragraph request still matches the projected prompt that appends attachment notes.
+    /// 多段请求仍与追加了附件说明的投影提示词匹配。
+    #[test]
+    fn multi_paragraph_request_matches_projected_prompt() {
+        let raw = "first paragraph\n\nsecond paragraph";
+        assert!(projected_user_prompt_matches_request(raw, raw));
+        assert!(projected_user_prompt_matches_request(
+            &format!("{raw}\n\n[attachment note]"),
+            raw
+        ));
+        assert!(!projected_user_prompt_matches_request(
+            "first paragraph\n\nother text",
+            raw
+        ));
     }
 }

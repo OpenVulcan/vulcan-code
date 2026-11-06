@@ -109,14 +109,15 @@ impl ProviderRuntimeBlueprint {
             .unwrap_or_else(|| String::from("resolved automatically by the runtime"))
     }
 
-    /// Returns whether the active model accepts explicit temperature overrides.
-    /// 返回当前激活模型是否接受显式温度覆盖。
+    /// Returns whether the active model accepts explicit temperature overrides on its route.
+    /// 返回当前激活模型在其路由上是否接受显式温度覆盖。
     pub fn supports_temperature(&self) -> bool {
         self.public_capabilities
             .model_parameters
             .iter()
             .any(|definition| {
                 definition.id == vulcan_provider_adapters::SAMPLING_TEMPERATURE_PARAMETER_ID
+                    && definition.applies_to(&self.protocol_profile_id, &self.model_id)
             })
     }
 

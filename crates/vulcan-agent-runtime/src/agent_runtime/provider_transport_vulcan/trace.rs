@@ -20,6 +20,10 @@ use vulcan_workspace_store::workspace_store::{
     ProviderApiTraceReservationOutcome, ProviderApiTraceStore, ProviderApiTraceWriteOutcome,
 };
 
+/// Schema version of the persisted response trace artifact, captured or not.
+/// 持久化响应追踪产物的结构版本，无论是否捕获成功。
+const RESPONSE_TRACE_SCHEMA_VERSION: u32 = 1;
+
 /// Selects the response evidence persisted for one trace-attempt snapshot.
 /// 选择一次追踪尝试快照要持久化的响应证据。
 pub(super) enum ProviderApiTraceResponseState {
@@ -388,7 +392,7 @@ pub(crate) async fn persist_provider_api_trace_snapshot(
         .map(|failure| failure.message.clone());
     let mut output = match response_state {
         ProviderApiTraceResponseState::CaptureChannelClosed => json!({
-            "schema_version": 1,
+            "schema_version": RESPONSE_TRACE_SCHEMA_VERSION,
             "trace_sequence": reservation.trace_sequence,
             "api_call_id": reservation.api_call_id,
             "attempt_index": reservation.attempt_index,
@@ -449,7 +453,7 @@ pub(crate) async fn persist_provider_api_trace_snapshot(
                 })
                 .collect::<Vec<_>>();
             json!({
-                "schema_version": 1,
+                "schema_version": RESPONSE_TRACE_SCHEMA_VERSION,
                 "trace_sequence": reservation.trace_sequence,
                 "api_call_id": reservation.api_call_id,
                 "attempt_index": reservation.attempt_index,

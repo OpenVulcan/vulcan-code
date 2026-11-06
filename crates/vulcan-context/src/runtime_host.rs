@@ -17,6 +17,9 @@ pub const RUNTIME_HOST_RECORD_PREFIX: &str = "runtime-host-record:";
 /// Producer-reserved canonical message namespace.
 /// 生产者保留的规范消息命名空间。
 pub const RUNTIME_HOST_MESSAGE_PREFIX: &str = "runtime-host:";
+/// Current schema version of runtime-host event metadata, written by producers and required by decode.
+/// 运行时宿主事件元数据的当前结构版本，生产者写入、解码时要求一致。
+pub const RUNTIME_HOST_METADATA_VERSION: u32 = 1;
 
 /// Durable identity and exact replay material for one runtime-host event.
 /// 单个运行时宿主事件的可靠身份及精确重放资料。
@@ -76,7 +79,7 @@ impl RuntimeHostEventMetadata {
             value.ok_or_else(|| format!("Runtime host record `{record_id}` has no metadata."))?;
         let metadata: Self = serde_json::from_value(value.clone())
             .map_err(|error| format!("Invalid runtime host metadata: {error}"))?;
-        if metadata.version != 1
+        if metadata.version != RUNTIME_HOST_METADATA_VERSION
             || metadata.record_id() != record_id
             || metadata.occurrence == 0
             || [

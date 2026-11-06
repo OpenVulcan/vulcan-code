@@ -10,7 +10,7 @@ use vulcan_core::types::ConversationAttachment;
 
 /// MCP image payload limit shared with the MCP transport boundary.
 /// 与 MCP 传输边界一致的单张 MCP 图片载荷上限。
-const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
+const MAX_IMAGE_BYTES: usize = vulcan_mcp_runtime::MCP_IMAGE_MAX_BYTES;
 
 /// Image MIME types admitted in MCP tool results.
 /// MCP 工具结果准入的图片 MIME 类型。

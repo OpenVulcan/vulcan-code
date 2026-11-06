@@ -1,5 +1,9 @@
 use super::*;
 
+/// Model-facing answer for a call that Plan mode blocks before it can run.
+/// 计划模式在调用执行前拦截时返回给模型的回答。
+pub const PLAN_MODE_BLOCKED_MESSAGE: &str = "Plan Mode is active. This tool call is not allowed because it may mutate workspace, repository, Git, or external state. Continue by refining the plan and wait for the user to leave Plan Mode before implementing changes.";
+
 /// Host-owned tool manager that normalizes candidates, resolves mode-specific surfaces, and dispatches invocations.
 /// 宿主自有工具管理器，负责归一化候选工具、解析模式化工具面并调度调用。
 #[derive(Clone, Default)]
@@ -73,9 +77,7 @@ impl VulcanToolsManager {
     ) -> Result<VulcanToolInvocationResult, String> {
         if Self::plan_mode_blocks(tool, &args, execution_mode_label) {
             return Ok(VulcanToolInvocationResult::from_model_output(
-                Value::String(String::from(
-                    "Plan Mode is active. This tool call is not allowed because it may mutate workspace, repository, Git, or external state. Continue by refining the plan and wait for the user to leave Plan Mode before implementing changes.",
-                )),
+                Value::String(String::from(PLAN_MODE_BLOCKED_MESSAGE)),
             ));
         }
         (tool.invoke)(args, context).await

@@ -42,6 +42,9 @@ pub(crate) struct ExecutionToolExposureSelection {
     /// Normalized selector state used for final public tool filtering.
     /// 用于最终公开工具过滤的规范化选择器状态。
     pub(crate) selectors: ToolExposureSelectorState,
+    /// Configuration warnings from resolving the agent's native tools.
+    /// 解析代理原生工具时产生的配置警告。
+    pub(crate) native_tool_warnings: Vec<String>,
 }
 
 /// Resolves all request-scoped tool exposure inputs through one shared preparation path.
@@ -52,10 +55,9 @@ pub(crate) fn resolve_execution_tool_exposure(
     request: &ExecutionPreparationRequest,
 ) -> ExecutionToolExposureSelection {
     let selectors = ToolExposureSelectorState::from_snapshot(&request.tool_exposure_override);
-    let mut native_tool_ids = filter_native_tool_ids(
-        foundation.resolved_native_tools_for_agent(agent_id),
-        &selectors,
-    );
+    let (agent_native_tool_ids, native_tool_warnings) =
+        foundation.resolved_native_tools_with_warnings_for_agent(agent_id);
+    let mut native_tool_ids = filter_native_tool_ids(agent_native_tool_ids, &selectors);
     filter_browser_tools_without_runtime(
         &mut native_tool_ids,
         request.native_browser_runtime.is_some(),
@@ -85,6 +87,7 @@ pub(crate) fn resolve_execution_tool_exposure(
         luaskill_help_packages,
         mcp_tools,
         selectors,
+        native_tool_warnings,
     }
 }
 

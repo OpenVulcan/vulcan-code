@@ -71,6 +71,9 @@ struct SkillSqliteStreamEntry {
     /// Shared stream result whose final owner removes the spool file.
     /// 共享的流结果，最后一个持有者负责删除暂存文件。
     stream: Arc<QueryStreamResult>,
+    /// Skill and database that opened the cursor; only the same owner may use or close it.
+    /// 打开该游标的技能与数据库；只有同一所有者可以使用或关闭它。
+    owner: String,
     /// Last successful registry access used by idle reaping.
     /// 空闲回收所依据的最后一次成功注册表访问时间。
     last_accessed_at: Instant,
@@ -109,15 +112,18 @@ impl SkillSqliteProvider {
     /// # Parameters / 参数
     /// `stream_id` is the identifier the host handed out when the cursor was opened.
     /// `stream_id` 是打开游标时宿主发放的标识符。
+    /// `owner` is the caller's skill and database; another owner's cursor reads as not open.
+    /// `owner` 是调用方的技能与数据库；其他所有者的游标视为未打开。
     ///
     /// # Returns / 返回值
     /// Returns the shared stream, or an error naming the identifier when it is not open.
     /// 返回共享的流，或在该标识符未打开时命名它的错误。
-    fn stream(&self, stream_id: u64) -> Result<Arc<QueryStreamResult>, String> {
+    fn stream(&self, stream_id: u64, owner: &str) -> Result<Arc<QueryStreamResult>, String> {
         self.streams
             .lock()
             .map_err(|_| String::from("the query stream registry lock was poisoned"))?
             .get_mut(&stream_id)
+            .filter(|entry| entry.owner == owner)
             .map(|entry| {
                 entry.last_accessed_at = Instant::now();
                 Arc::clone(&entry.stream)
@@ -176,6 +182,7 @@ impl SkillSqliteProvider {
         self.reap_stale_streams(Instant::now())?;
         let input = &request.input;
         let binding = sqlite_binding(&request.binding)?;
+        let owner = query_stream_owner(&request.binding);
         let tokenizer_mode = || parse_tokenizer_mode(input);
         match request.action {
             RuntimeSqliteProviderAction::ExecuteScript => {
@@ -467,6 +474,7 @@ impl SkillSqliteProvider {
                         stream_id,
                         SkillSqliteStreamEntry {
                             stream: Arc::new(stream),
+                            owner,
                             last_accessed_at: Instant::now(),
                         },
                     );
@@ -484,7 +492,7 @@ impl SkillSqliteProvider {
             }
             RuntimeSqliteProviderAction::QueryStreamWaitMetrics => {
                 let stream_id = require_stream_id(input)?;
-                let stream = self.stream(stream_id)?;
+                let stream = self.stream(stream_id, &owner)?;
                 Ok(json!({
                     "success": true,
                     "stream_id": stream_id,
@@ -505,7 +513,7 @@ impl SkillSqliteProvider {
                 // The stream is cloned out of the registry so the bounded file read happens outside the lock,
                 // and so a concurrent close cannot delete the spool file under an in-flight read.
                 // 流被克隆出注册表，使有界的文件读取发生在锁之外，也使并发的关闭不会在读取进行中删除暂存文件。
-                let stream = self.stream(stream_id)?;
+                let stream = self.stream(stream_id, &owner)?;
                 let chunk = stream
                     .read_chunk(index)
                     .map_err(|error| error.to_string())?;
@@ -519,12 +527,16 @@ impl SkillSqliteProvider {
             }
             RuntimeSqliteProviderAction::QueryStreamClose => {
                 let stream_id = require_stream_id(input)?;
-                let removed = self
-                    .streams
-                    .lock()
-                    .map_err(|_| String::from("the query stream registry lock was poisoned"))?
-                    .remove(&stream_id)
-                    .is_some();
+                let removed = {
+                    let mut streams = self
+                        .streams
+                        .lock()
+                        .map_err(|_| String::from("the query stream registry lock was poisoned"))?;
+                    let owned = streams
+                        .get(&stream_id)
+                        .is_some_and(|entry| entry.owner == owner);
+                    owned && streams.remove(&stream_id).is_some()
+                };
                 // The wording mirrors the retired library's, so a skill reading the message sees no change.
                 // 措辞镜像已退役库的措辞，使读取该消息的技能看不到变化。
                 Ok(json!({
@@ -539,6 +551,12 @@ impl SkillSqliteProvider {
             }
         }
     }
+}
+
+/// Returns the cursor owner key for one request: its skill and its database path.
+/// 返回一次请求的游标所有者键：其技能与数据库路径。
+fn query_stream_owner(binding: &RuntimeDatabaseBindingContext) -> String {
+    format!("{}\u{0}{}", binding.skill_id, binding.default_database_path)
 }
 
 /// Builds the host-derived SQLite binding for one skill request.
@@ -867,6 +885,27 @@ mod tests {
         assert_eq!(metrics["metrics_ready"], true);
         assert_eq!(metrics["row_count"], 2);
         assert_eq!(metrics["chunk_count"], chunk_count);
+
+        // Another owner cannot read or close this cursor; it sees no such handle.
+        // 其他所有者无法读取或关闭该游标；它看不到这个句柄。
+        let other_path = harness._directory.path().join("other.sqlite3");
+        let other_path_text = other_path.to_string_lossy().to_string();
+        let foreign_read = provider
+            .dispatch(&request(
+                RuntimeSqliteProviderAction::QueryStreamChunk,
+                &other_path_text,
+                json!({ "stream_id": stream_id, "index": 0 }),
+            ))
+            .expect_err("another owner must not read the cursor");
+        assert!(foreign_read.contains("not found"), "{foreign_read}");
+        let foreign_close = provider
+            .dispatch(&request(
+                RuntimeSqliteProviderAction::QueryStreamClose,
+                &other_path_text,
+                json!({ "stream_id": stream_id }),
+            ))
+            .expect("a foreign close is reported, not raised");
+        assert_eq!(foreign_close["success"], false);
 
         let chunk = provider
             .dispatch(&request(

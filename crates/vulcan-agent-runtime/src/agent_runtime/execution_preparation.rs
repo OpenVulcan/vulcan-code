@@ -50,6 +50,10 @@ use tool_exposure::{
     resolve_execution_tool_exposure,
 };
 
+/// Character limit of the prompt preview shown in execution diagnostics.
+/// 执行诊断中显示的提示词预览字符上限。
+const EXECUTION_PROMPT_PREVIEW_CHARS: usize = 180;
+
 /// Prepared execution plus execution-only tool registration objects resolved from the same snapshot.
 /// 从同一份快照解析得到的执行准备结果与仅执行期使用的工具注册对象。
 pub(crate) struct PreparedExecution {
@@ -206,7 +210,9 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         "after_precheck_25a4_provider_configuration_ready",
         format!("session={}", request.session_id),
     );
-    let mut warnings = Vec::new();
+    // Agent tool-policy problems become visible warnings instead of silently missing tools.
+    // 代理工具策略问题成为可见警告，而不是让工具静默缺失。
+    let mut warnings = tool_exposure.native_tool_warnings.clone();
     if resolved_context_compaction_policy.tail_policy_source
         == vulcan_context::ContextCompactionTailPolicySource::MissingContextLimitMinimum
     {
@@ -833,7 +839,7 @@ fn remove_question_execution_business_tools(
 fn execution_prompt_preview(request: &ExecutionPreparationRequest) -> String {
     let trimmed_prompt = request.prompt.trim();
     if !trimmed_prompt.is_empty() {
-        return truncate_preview(trimmed_prompt, 180);
+        return truncate_preview(trimmed_prompt, EXECUTION_PROMPT_PREVIEW_CHARS);
     }
     request
         .provider_visible_agent_messages
@@ -847,7 +853,7 @@ fn execution_prompt_preview(request: &ExecutionPreparationRequest) -> String {
                 &message.task_id,
                 &message.payload,
             )
-            .map(|preview| truncate_preview(&preview, 180))
+            .map(|preview| truncate_preview(&preview, EXECUTION_PROMPT_PREVIEW_CHARS))
             .unwrap_or_else(|error| format!("Agent message rendering failed: {error}"))
         })
         .unwrap_or_default()

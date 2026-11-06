@@ -116,6 +116,9 @@ struct ConnectionState {
     /// The server announced a tool-list change since the last list.
     /// 自上次列表以来服务宣告了工具列表变化。
     tools_stale: bool,
+    /// Count of tool-list change notices, so a list started before a notice cannot clear it.
+    /// 工具列表变化通知的计数，使在通知之前开始的列表不能清除它。
+    tools_change_generation: u64,
     /// Why the transport closed.
     /// 传输关闭的原因。
     closed: Option<String>,
@@ -193,6 +196,7 @@ impl SessionMcpConnection {
     /// 重新列出服务的工具，列表有效时保存。
     async fn refresh_tools(&self) -> Result<Vec<McpToolSchema>, String> {
         self.ensure_open()?;
+        let started_generation = lock(&self.state).tools_change_generation;
         let schemas = tokio::time::timeout(MCP_TOOLS_LIST_TIMEOUT, self.transport.list_tools())
             .await
             .map_err(|_| {
@@ -211,7 +215,11 @@ impl SessionMcpConnection {
         validate_mcp_tool_schema_list(&self.name, &schemas)?;
         let mut state = lock(&self.state);
         state.tools = schemas.clone();
-        state.tools_stale = false;
+        // A change announced while this list was in flight keeps the cache stale.
+        // 本次列表进行期间宣告的变化会让缓存保持过期。
+        if state.tools_change_generation == started_generation {
+            state.tools_stale = false;
+        }
         Ok(schemas)
     }
 
@@ -600,6 +608,7 @@ async fn follow_transport_events(
             match event {
                 Ok(McpTransportEvent::ToolsChanged) | Err(RecvError::Lagged(_)) => {
                     state.tools_stale = true;
+                    state.tools_change_generation = state.tools_change_generation.wrapping_add(1);
                     false
                 }
                 Ok(McpTransportEvent::Disconnected { reason }) => {

@@ -1154,7 +1154,11 @@ fn managed_tool_runtime_bridge_blocks_disallowed_plan_tool_invocation() {
     assert_eq!(result.tool_call_id, "call-plan-blocked-1");
     assert_eq!(result.tool_name, "failing_tool");
     assert!(!result.is_error);
-    assert!(result.model_output.contains("Plan Mode is active"));
+    assert!(
+        result
+            .model_output
+            .contains(vulcan_tools_manager::PLAN_MODE_BLOCKED_MESSAGE)
+    );
     assert!(!result.model_output.contains("演示错误"));
     assert_eq!(result.host_result, None);
 }

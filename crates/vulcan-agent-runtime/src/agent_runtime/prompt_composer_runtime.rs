@@ -17,6 +17,10 @@ const PROMPT_PERSONALITY_DIR_NAME: &str = "personalities";
 /// 工具帮助资源目录名。
 const PROMPT_TOOL_HELP_DIR_NAME: &str = "tool-help";
 
+/// Number of cache events listed in the composer report before the rest are counted.
+/// 组装报告中逐条列出的缓存事件数，其余只计数。
+const PROMPT_REPORT_LISTED_CACHE_EVENTS: usize = 24;
+
 /// Process-wide prompt composer used by main agents and subagents.
 /// 主代理与子代理共享的进程级提示词组合器。
 static RUNTIME_PROMPT_COMPOSER_ENGINE: OnceLock<RwLock<Arc<PromptComposerEngine>>> =
@@ -506,7 +510,7 @@ fn render_prompt_composer_report_markdown(
     } else {
         cache_events
             .iter()
-            .take(24)
+            .take(PROMPT_REPORT_LISTED_CACHE_EVENTS)
             .map(|event| {
                 format!(
                     "- `{}` · {} · {}",
@@ -518,7 +522,9 @@ fn render_prompt_composer_report_markdown(
             .collect::<Vec<_>>()
             .join("\n")
     };
-    let hidden_cache_event_count = cache_events.len().saturating_sub(24);
+    let hidden_cache_event_count = cache_events
+        .len()
+        .saturating_sub(PROMPT_REPORT_LISTED_CACHE_EVENTS);
     let cache_event_rows = if hidden_cache_event_count > 0 {
         format!("{cache_event_rows}\n- ... {hidden_cache_event_count} more cache events")
     } else {

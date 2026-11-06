@@ -47,6 +47,17 @@ pub(super) fn build_luaskills_dispatch_candidate(
             .then_with(|| left.local_name.cmp(&right.local_name))
             .then_with(|| left.canonical_name.cmp(&right.canonical_name))
     });
+    // Plan mode admits a dispatch exactly when the same entry called directly would be admitted:
+    // built-in read-only entries, plus entries whose names read as read-only.
+    // 计划模式放行一次调度，当且仅当同一入口被直接调用时也会放行：内置只读入口，以及名称表现为只读的入口。
+    let plan_readable_entries = dispatch_entries
+        .iter()
+        .map(|entry| entry.canonical_name.clone())
+        .filter(|name| {
+            crate::agent_runtime::tool_permission::builtin_luaskills::is_read_only_entry(name)
+                || vulcan_tools_manager::text_looks_read_only(name)
+        })
+        .collect::<Vec<_>>();
     let dispatch_entries = Arc::new(dispatch_entries);
     VulcanToolCandidate {
         descriptor: VulcanToolDescriptor::new(
@@ -64,9 +75,10 @@ pub(super) fn build_luaskills_dispatch_candidate(
         ),
         parameters_schema: call_luaskill_args_schema(),
         ai_visible: true,
-        plan_policy: VulcanPlanToolPolicy::HeuristicText(String::from(
-            "call_luaskill LuaSkills implicit entry dispatcher",
-        )),
+        plan_policy: VulcanPlanToolPolicy::StringArgumentAllowlist {
+            field: String::from("name"),
+            allowed_values: plan_readable_entries,
+        },
         request_streaming: None,
         invoke: Arc::new(move |args, context| {
             let runtime = luaskills_runtime.clone();

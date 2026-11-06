@@ -2041,3 +2041,19 @@ fn luaskills_debug_install_is_an_extension_effect() {
         assert_eq!(classify_tool_call(&tool, &args), PermissionSubject::Opaque);
     }
 }
+
+/// The judge and reviewer read the streamed text only when it encodes the arguments that will run.
+/// 判定器与复核者仅在流式文本编码了将运行的参数时读取该文本。
+#[test]
+fn layers_read_the_arguments_that_will_run() {
+    let args = json!({ "command": "ls" });
+    assert_eq!(
+        executed_raw_arguments(Some("{ \"command\": \"ls\" }"), &args).as_deref(),
+        Some("{ \"command\": \"ls\" }")
+    );
+    assert_eq!(
+        executed_raw_arguments(Some("{\"command\":\"rm -rf build\"}"), &args),
+        Some(args.to_string())
+    );
+    assert_eq!(executed_raw_arguments(None, &args), None);
+}

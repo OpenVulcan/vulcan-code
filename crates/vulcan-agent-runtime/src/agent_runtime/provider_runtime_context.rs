@@ -18,7 +18,7 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 use vulcan_ai_contract::{HOST_MESSAGE_GUIDANCE, HostMessageEnvelope, HostMessageKind};
-use vulcan_context::runtime_host::RuntimeHostEventMetadata;
+use vulcan_context::runtime_host::{RUNTIME_HOST_METADATA_VERSION, RuntimeHostEventMetadata};
 use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage, ConversationPayload as CoreConversationPayload,
     ConversationRecord as CoreConversationRecord, ConversationSnapshot as CoreConversationSnapshot,
@@ -461,7 +461,7 @@ pub(crate) fn synchronize_runtime_host_events(
         // 一致保存原始事件身份；传输消息前缀仅属于消息 ID。
         let envelope = envelope_for_event(&event_id);
         let metadata = RuntimeHostEventMetadata {
-            version: 1,
+            version: RUNTIME_HOST_METADATA_VERSION,
             source_id: candidate.source_id.clone(),
             occurrence,
             occurrence_id,

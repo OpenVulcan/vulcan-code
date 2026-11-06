@@ -812,6 +812,21 @@ struct JudgeRun {
     elapsed: Option<Duration>,
 }
 
+/// Returns the argument text the judge and reviewer read for a call that will run with `args`.
+/// 返回将以 `args` 运行的调用供判定器与复核者读取的参数文本。
+/// The streamed text is kept when it encodes exactly `args`; when the final arguments differ, they
+/// replace it so the layers judge what will run. Restored calls without streamed text stay `None`.
+/// 流式文本精确编码 `args` 时保留；最终参数不同时以其替换，使各层判断实际将运行的内容。
+/// 没有流式文本的恢复调用保持 `None`。
+fn executed_raw_arguments(raw_arguments: Option<&str>, args: &Value) -> Option<String> {
+    let raw = raw_arguments?;
+    if serde_json::from_str::<Value>(raw).is_ok_and(|streamed| &streamed == args) {
+        Some(raw.to_string())
+    } else {
+        Some(args.to_string())
+    }
+}
+
 /// Asks the judge about one escalated call.
 /// 就一次升级调用询问判定器。
 async fn judge_layer(
@@ -1153,14 +1168,13 @@ pub async fn admit_tool_call(
         }
     }
     let judged_at = SystemTime::now();
+    let raw_arguments = executed_raw_arguments(texts.raw_arguments, args);
     let judge = if mode == PermissionMode::AutoApprove {
-        judge_layer(host, definition, texts.raw_arguments, workspace_root).await
+        judge_layer(host, definition, raw_arguments.as_deref(), workspace_root).await
     } else {
         JudgeRun::default()
     };
-    let arguments = texts
-        .raw_arguments
-        .map_or_else(|| args.to_string(), str::to_string);
+    let arguments = raw_arguments.unwrap_or_else(|| args.to_string());
     let attended = unattended.is_none();
     let decision = decide_escalated(
         host,

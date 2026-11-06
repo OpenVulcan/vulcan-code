@@ -564,13 +564,24 @@ impl RuntimeFoundation {
     /// Resolves the native tool identifiers currently visible to one agent.
     /// 解析当前对某个代理可见的原生工具标识集合。
     pub fn resolved_native_tools_for_agent(&self, agent_id: &str) -> Vec<String> {
+        self.resolved_native_tools_with_warnings_for_agent(agent_id)
+            .0
+    }
+
+    /// Resolves the native tools visible to one agent plus warnings about the policies or tools
+    /// its configuration names but that do not exist.
+    /// 解析对某个代理可见的原生工具，并返回其配置引用但不存在的策略或工具的警告。
+    pub fn resolved_native_tools_with_warnings_for_agent(
+        &self,
+        agent_id: &str,
+    ) -> (Vec<String>, Vec<String>) {
         let Some(definition) = self
             .config
             .agents
             .iter()
             .find(|definition| definition.id == agent_id)
         else {
-            return Vec::new();
+            return (Vec::new(), Vec::new());
         };
         let available_native_tool_ids = self
             .native_tools
@@ -580,12 +591,13 @@ impl RuntimeFoundation {
             .collect::<BTreeSet<_>>();
         let mut warnings = Vec::new();
 
-        resolve_agent_native_tools(
+        let tools = resolve_agent_native_tools(
             definition,
             &self.config.tool_policies,
             &available_native_tool_ids,
             &mut warnings,
-        )
+        );
+        (tools, warnings)
     }
 
     /// Resolves complete Vulcan Plugin tool groups currently visible to one agent.

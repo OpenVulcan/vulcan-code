@@ -27,6 +27,9 @@ use vulcan_tools_manager::{
     VulcanToolOrigin, VulcanToolSourceKind,
 };
 
+/// Envelope schema version written by both producers and required by the validator.
+/// 两个生产者写入、校验器要求的信封结构版本。
+const MEDIA_UNDERSTANDING_SCHEMA_VERSION: &str = "vulcan.media-understanding.v1";
 /// Maximum UTF-8 byte length accepted for the canonical answer.
 /// 规范回答允许的最大 UTF-8 字节长度。
 const MEDIA_UNDERSTANDING_ANSWER_BYTE_LIMIT: usize = 256 * 1024;
@@ -601,7 +604,7 @@ fn finalize_media_understanding_output(
         ));
     }
     Ok(json!({
-        "schema_version": "vulcan.media-understanding.v1",
+        "schema_version": MEDIA_UNDERSTANDING_SCHEMA_VERSION,
         "media_kind": media_understanding_media_label(capability)?,
         "answer": trimmed_output,
         "segments": [],
@@ -633,7 +636,7 @@ pub(crate) fn render_media_understanding_provider_result(
     // payload is identical across provider-specific and model-replacement modes.
     // payload 在供应商专用与模型代替模式间保持一致。
     let payload = json!({
-        "schema_version": "vulcan.media-understanding.v1",
+        "schema_version": MEDIA_UNDERSTANDING_SCHEMA_VERSION,
         "media_kind": media_understanding_media_label(capability)?,
         "answer": answer,
         "segments": [],
@@ -685,7 +688,8 @@ fn validate_media_understanding_payload(
             "Media-understanding result contains an undeclared field.",
         ));
     }
-    if object.get("schema_version").and_then(Value::as_str) != Some("vulcan.media-understanding.v1")
+    if object.get("schema_version").and_then(Value::as_str)
+        != Some(MEDIA_UNDERSTANDING_SCHEMA_VERSION)
         || object.get("media_kind").and_then(Value::as_str)
             != Some(media_understanding_media_label(capability)?)
     {

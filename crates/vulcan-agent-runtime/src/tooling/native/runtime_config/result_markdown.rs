@@ -2,6 +2,7 @@
 //! 上游配置契约的只读会话投影。
 
 use super::{NativeToolError, RuntimeConfigAction, VulcanToolInvocationResult};
+use crate::tooling::native::RUNTIME_CONFIG_TOOL_ID;
 use luaskills::{
     RuntimeSkillConfigToolResponse, RuntimeSkillPackageConfigDescriptor,
     RuntimeSkillPackageConfigItemDescriptor, RuntimeSkillPackageConfigStatus,
@@ -73,7 +74,7 @@ fn describe(packages: Vec<RuntimeSkillPackageConfigDescriptor>) -> String {
             describe_item(&mut output, &item);
         }
         if package.business_issue_count > 0 {
-            output.push_str(&format!("\n{} cross-field validation issue(s). Call `runtime_config` with `action: validate` and this skill ID for details.\n", package.business_issue_count));
+            output.push_str(&format!("\n{} cross-field validation issue(s). Call `{RUNTIME_CONFIG_TOOL_ID}` with `action: validate` and this skill ID for details.\n", package.business_issue_count));
         }
         if !package.orphaned.is_empty() {
             output.push_str(&format!(

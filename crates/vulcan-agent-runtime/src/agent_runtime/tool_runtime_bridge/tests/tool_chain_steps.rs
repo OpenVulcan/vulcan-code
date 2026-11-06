@@ -208,3 +208,73 @@ fn chains_reject_every_tool_outside_the_native_list() {
     }
     assert_eq!(calls.lock().map(|calls| *calls).unwrap_or_default(), 0);
 }
+
+/// A step that Plan mode blocks is a refused step: the chain stops and later steps never run.
+/// 计划模式拦截的步骤属于被拒步骤：链停止，后续步骤不会运行。
+#[test]
+fn plan_blocked_step_stops_the_chain() {
+    let calls = Arc::new(Mutex::new(0usize));
+    let counting = |id: &str, plan_policy: VulcanPlanToolPolicy| {
+        let calls = Arc::clone(&calls);
+        let mut tool = candidate(
+            id,
+            Arc::new(move |_args, _context| {
+                let calls = Arc::clone(&calls);
+                Box::pin(async move {
+                    if let Ok(mut calls) = calls.lock() {
+                        *calls += 1;
+                    }
+                    Ok(VulcanToolInvocationResult::from_model_output(json!("ran")))
+                })
+            }),
+        );
+        tool.plan_policy = plan_policy;
+        tool
+    };
+    let manager = VulcanToolsManager::new(vec![
+        counting(
+            "shell_command",
+            VulcanPlanToolPolicy::HeuristicStringArgument {
+                field: String::from("command"),
+            },
+        ),
+        counting("file_read", VulcanPlanToolPolicy::Visible),
+        candidate(
+            vulcan_tool_chain::TOOL_CHAIN_TOOL_ID,
+            Arc::new(|_args, _context| {
+                Box::pin(async { Err(String::from("the bridge runs tool_chain itself")) })
+            }),
+        ),
+    ]);
+    let definitions = manager.resolve_for_execution_mode("Plan").definitions;
+    let bridge =
+        VulcanManagedToolRuntimeBridge::new(Arc::new(manager), &definitions, Uuid::nil(), "Plan");
+    let request = ToolInvocationRequest {
+        request_stream_id: String::from("request-stream-chain"),
+        tool_call_id: String::from("chain-3"),
+        tool_name: String::from(vulcan_tool_chain::TOOL_CHAIN_TOOL_ID),
+        arguments: json!({ "steps": [
+            { "tool": "shell_command", "arguments": { "command": "write" } },
+            { "tool": "file_read", "arguments": { "path": "a.txt" } }
+        ] }),
+        argument_parse_error: None,
+        raw_arguments: Default::default(),
+        user_request: Default::default(),
+    };
+    install_test_invocation_identity(&bridge, &request, 221, 222, 223);
+    let result = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime should build")
+        .block_on(bridge.execute_tool(&request))
+        .expect("chain should return a result");
+
+    assert!(
+        result
+            .model_output
+            .contains(vulcan_tools_manager::PLAN_MODE_BLOCKED_MESSAGE),
+        "{}",
+        result.model_output
+    );
+    assert_eq!(calls.lock().map(|calls| *calls).unwrap_or_default(), 0);
+}

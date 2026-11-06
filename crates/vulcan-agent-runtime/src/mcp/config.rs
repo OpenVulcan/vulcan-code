@@ -520,12 +520,17 @@ impl McpServerConfig {
     {
         let mut resolved_headers = explicit_headers.clone();
         for (header_name, env_name) in headers_from_env {
-            if resolved_headers.contains_key(header_name) {
-                continue;
-            }
             let trimmed_header_name = header_name.trim();
             let trimmed_env_name = env_name.trim();
             if trimmed_header_name.is_empty() || trimmed_env_name.is_empty() {
+                continue;
+            }
+            // HTTP header names are case-insensitive, so an explicit header wins in any spelling.
+            // HTTP 请求头名称不区分大小写，因此显式请求头无论何种写法都优先。
+            if resolved_headers
+                .keys()
+                .any(|existing| existing.trim().eq_ignore_ascii_case(trimmed_header_name))
+            {
                 continue;
             }
             if let Some(env_value) = lookup_env(trimmed_env_name) {

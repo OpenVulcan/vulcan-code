@@ -191,6 +191,14 @@ pub struct ModelParameterDefinition {
 }
 
 impl ModelParameterDefinition {
+    /// Returns whether this declaration applies to `protocol_id` and `model_id`; an empty scope list
+    /// means every protocol or model.
+    /// 返回本声明是否适用于 `protocol_id` 与 `model_id`；范围列表为空表示适用于全部协议或模型。
+    pub fn applies_to(&self, protocol_id: &str, model_id: &str) -> bool {
+        (self.protocol_ids.is_empty() || self.protocol_ids.iter().any(|id| id == protocol_id))
+            && (self.model_ids.is_empty() || self.model_ids.iter().any(|id| id == model_id))
+    }
+
     /// Validates the complete parameter declaration before it becomes runtime authority.
     /// 在参数声明成为运行时权威前校验其完整定义。
     ///

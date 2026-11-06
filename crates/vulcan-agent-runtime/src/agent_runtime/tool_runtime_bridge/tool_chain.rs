@@ -14,7 +14,9 @@ use vulcan_tool_chain::{
     DEFAULT_TOOL_CHAIN_MAX_STEPS, StepExecution, StepExecutor, StepToolPolicy,
     TOOL_CHAIN_HOST_RESULT_KIND, parse_tool_chain_plan, render_report, run_tool_chain,
 };
-use vulcan_tools_manager::{VulcanToolRawStreams, VulcanToolSourceKind};
+use vulcan_tools_manager::{
+    PLAN_MODE_BLOCKED_MESSAGE, VulcanToolRawStreams, VulcanToolSourceKind, VulcanToolsManager,
+};
 
 /// Host result kind of one-shot commands, whose exit code decides step failure.
 /// 一次性命令的宿主结果类型，其退出码决定步骤是否失败。
@@ -208,6 +210,17 @@ impl StepExecutor for BridgeStepExecutor<'_> {
                     started,
                 );
             };
+            // A Plan-mode block is a refusal of this step, so the chain stops instead of continuing.
+            // 计划模式拦截即本步被拒，链随之停止而不是继续执行。
+            if VulcanToolsManager::plan_mode_blocks(
+                definition,
+                &arguments,
+                &self.bridge.execution_mode,
+            ) {
+                return StepExecution::Denied {
+                    message: String::from(PLAN_MODE_BLOCKED_MESSAGE),
+                };
+            }
             let raw_arguments = arguments.to_string();
             let texts = PermissionTexts {
                 raw_arguments: Some(raw_arguments.as_str()),

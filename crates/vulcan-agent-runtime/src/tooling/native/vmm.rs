@@ -6,6 +6,14 @@ use super::*;
 /// Hit count per query when the model does not choose one.
 /// 模型未指定时每条查询的命中数量。
 const VMM_MEMORY_SEARCH_DEFAULT_TOP_K: u32 = 5;
+
+/// Maximum distinct memory ids accepted by one `vmm_memory_delete` call.
+/// 单次 `vmm_memory_delete` 接受的最大不重复记忆标识数。
+const VMM_MEMORY_DELETE_MAX_IDS: usize = 256;
+
+/// Maximum `vmm_memory_delete` reason length in characters.
+/// `vmm_memory_delete` 删除理由的最大字符数。
+const VMM_MEMORY_DELETE_REASON_CHARS: usize = 1024;
 /// Largest hit count per query the model may request.
 /// 模型可请求的每条查询最大命中数量。
 const VMM_MEMORY_SEARCH_MAX_TOP_K: u32 = 20;
@@ -343,12 +351,12 @@ fn vmm_memory_delete_args_schema() -> Value {
                 "type": "array",
                 "items": { "type": "integer", "minimum": 1 },
                 "minItems": 1,
-                "maxItems": 256,
+                "maxItems": VMM_MEMORY_DELETE_MAX_IDS,
                 "description": "One or more durable VMM memory ids to delete. Use MEMORY_ID labels from recalled context or memory_id values returned by vmm_memory_search."
             },
             "reason": {
                 "type": "string",
-                "maxLength": 1024,
+                "maxLength": VMM_MEMORY_DELETE_REASON_CHARS,
                 "description": "Concise deletion reason for audit logs."
             }
         },
@@ -455,7 +463,11 @@ fn parse_vmm_memory_delete_arguments(
             "The `reason` argument for vmm_memory_delete cannot be empty.",
         ));
     }
-    parsed.reason = parsed.reason.chars().take(1024).collect();
+    parsed.reason = parsed
+        .reason
+        .chars()
+        .take(VMM_MEMORY_DELETE_REASON_CHARS)
+        .collect();
     Ok(parsed)
 }
 
@@ -468,10 +480,10 @@ fn normalized_vmm_memory_delete_ids(memory_ids: Vec<u64>) -> Result<Vec<u64>, Na
             continue;
         }
         normalized.push(memory_id);
-        if normalized.len() > 256 {
-            return Err(NativeToolError::new(
-                "The `memoryIds` argument for vmm_memory_delete cannot contain more than 256 ids.",
-            ));
+        if normalized.len() > VMM_MEMORY_DELETE_MAX_IDS {
+            return Err(NativeToolError::new(format!(
+                "The `memoryIds` argument for vmm_memory_delete cannot contain more than {VMM_MEMORY_DELETE_MAX_IDS} ids."
+            )));
         }
     }
     if normalized.is_empty() {
