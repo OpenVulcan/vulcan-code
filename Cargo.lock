@@ -9925,6 +9925,7 @@ dependencies = [
 name = "vulcan-code-service"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "notify-rust",
  "png",
  "serde",

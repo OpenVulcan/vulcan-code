@@ -41,6 +41,9 @@ test-support = ["vulcan-runtime-assets/test-support", "vulcan-service-kernel/tes
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, optional = true, features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console"] }
 
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [dev-dependencies]
 vulcan-runtime-assets = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true
