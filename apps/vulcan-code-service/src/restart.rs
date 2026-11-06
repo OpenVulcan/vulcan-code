@@ -41,6 +41,16 @@ pub(crate) fn request(plan: RestartPlan, shutdown_requested: &AtomicBool) -> Res
     Ok(())
 }
 
+/// Drops the recorded replacement after a failed drain, so a later ordinary quit does not start it.
+/// 排空失败后丢弃已记录的替代进程，使之后的普通退出不会启动它。
+pub(crate) fn discard_pending() {
+    if let Ok(mut pending) = PENDING.lock()
+        && let Some(plan) = pending.take()
+    {
+        tracing::warn!("[vulcan-code-service] drain failed; discarded {plan:?}");
+    }
+}
+
 /// Starts the recorded replacement; called once the drain succeeded and before the process exits.
 /// 启动已记录的替代进程；在排空成功后、进程退出前调用。
 pub(crate) fn launch_pending() {

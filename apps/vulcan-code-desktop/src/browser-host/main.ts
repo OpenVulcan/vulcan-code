@@ -17,6 +17,10 @@ import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 
 import {
+  BROWSER_HOST_MAX_DOWNLOAD_BYTES,
+  BROWSER_HOST_MAX_IMAGE_BYTES,
+  BROWSER_HOST_MAX_PAGES,
+  BROWSER_HOST_MAX_VIEWPORT_DIMENSION,
   BROWSER_HOST_PROTOCOL_VERSION,
   ControlFrameDecoder,
   encodeControlFrame,
@@ -54,10 +58,6 @@ const BROWSER_HOST_CAPABILITIES: string[] = [
   'file-chooser.intercept',
 ];
 
-/** Maximum browser download size retained by one Core session. */
-/** 单个 Core 会话保留的浏览器下载最大尺寸。 */
-const BROWSER_HOST_MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024;
-
 /** Bounded wait for the runtime debugging endpoint to appear. */
 /** 等待运行时调试端点出现的有限时长。 */
 const BROWSER_HOST_CDP_DISCOVERY_TIMEOUT_MS = 15_000;
@@ -65,10 +65,6 @@ const BROWSER_HOST_CDP_DISCOVERY_TIMEOUT_MS = 15_000;
 /** Bound on the graceful quit that lets Chromium finish writing profile state. */
 /** 允许 Chromium 完成画像状态写入的优雅退出时限。 */
 const BROWSER_HOST_GRACEFUL_QUIT_TIMEOUT_MS = 4_000;
-
-/** Largest compressed image accepted before its base64 control envelope is built. */
-/** 构建 base64 控制信封前允许的最大压缩图像。 */
-const BROWSER_HOST_MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 
 /** Parsed command-line inputs of one browser-host process. */
 /** 单个浏览器宿主进程解析出的命令行输入。 */
@@ -613,10 +609,6 @@ async function shutdownAndExit(): Promise<void> {
   return;
 }
 
-/** Maximum pages one browser host retains at the same time. */
-/** 单个浏览器宿主同时保留的最大页面数。 */
-const BROWSER_HOST_MAX_PAGES = 8;
-
 /** Content size applied to every owned page, including pages created later. */
 /** 应用于所有自有页面（包括后来创建的页面）的内容尺寸。 */
 let activeViewport = { width: 1280, height: 800 };
@@ -781,11 +773,11 @@ function setOwnedViewport(request: BrowserHostRequest): void {
   const height = request.params?.height;
   if (!Number.isInteger(width) || !Number.isInteger(height)
       || typeof width !== 'number' || typeof height !== 'number'
-      || width < 1 || height < 1 || width > 4096 || height > 4096) {
+      || width < 1 || height < 1 || width > BROWSER_HOST_MAX_VIEWPORT_DIMENSION || height > BROWSER_HOST_MAX_VIEWPORT_DIMENSION) {
     respond({
       requestId: request.requestId,
       ok: false,
-      error: { code: 'invalid_request', message: 'Viewport dimensions must be integers from 1 to 4096.' },
+      error: { code: 'invalid_request', message: `Viewport dimensions must be integers from 1 to ${BROWSER_HOST_MAX_VIEWPORT_DIMENSION}.` },
     });
     return;
   }

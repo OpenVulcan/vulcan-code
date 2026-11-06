@@ -29,6 +29,14 @@ const MAX_DAP_BODY_BYTES = 16 * 1024 * 1024;
 // MAX_DAP_BUFFER_BYTES 限制帧解析追赶前允许保留的全部字节数。
 const MAX_DAP_BUFFER_BYTES = MAX_DAP_HEADER_BYTES + MAX_DAP_BODY_BYTES;
 
+// CONNECT_TIMEOUT_MS bounds opening one CDP or DAP transport.
+// CONNECT_TIMEOUT_MS 限制打开一个 CDP 或 DAP 传输的时长。
+const CONNECT_TIMEOUT_MS = 10000;
+
+// DEFAULT_REQUEST_TIMEOUT_MS is the protocol request wait used when a command omits timeout_ms.
+// DEFAULT_REQUEST_TIMEOUT_MS 是命令省略 timeout_ms 时使用的协议请求等待时长。
+const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
+
 // LOCAL_HOSTS is the exact endpoint allowlist enforced again inside the sidecar.
 // LOCAL_HOSTS 是 sidecar 内再次执行的精确端点白名单。
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
@@ -232,7 +240,7 @@ async function openCdp(target) {
     const timer = setTimeout(() => {
       finish(new Error("CDP connection timed out"));
       socket.close();
-    }, 10000);
+    }, CONNECT_TIMEOUT_MS);
     socket.addEventListener("open", onOpen, { once: true });
     socket.addEventListener("error", onError, { once: true });
   });
@@ -370,7 +378,7 @@ async function openDap(target) {
     const timer = setTimeout(() => {
       finish(new Error("DAP connection timed out"));
       socket.destroy();
-    }, 10000);
+    }, CONNECT_TIMEOUT_MS);
     socket.once("connect", onConnect);
     socket.once("error", onError);
   });
@@ -423,7 +431,7 @@ function requestCdp(command) {
     throw new Error("method is required for CDP requests");
   }
   const id = state.nextSequence++;
-  const timeoutMs = positiveInteger(command.timeout_ms, 30000, "timeout_ms");
+  const timeoutMs = positiveInteger(command.timeout_ms, DEFAULT_REQUEST_TIMEOUT_MS, "timeout_ms");
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       state.pending.delete(id);
@@ -447,7 +455,7 @@ function requestDap(command) {
     throw new Error("command is required for DAP requests");
   }
   const seq = state.nextSequence++;
-  const timeoutMs = positiveInteger(command.timeout_ms, 30000, "timeout_ms");
+  const timeoutMs = positiveInteger(command.timeout_ms, DEFAULT_REQUEST_TIMEOUT_MS, "timeout_ms");
   const message = JSON.stringify({
     seq,
     type: "request",

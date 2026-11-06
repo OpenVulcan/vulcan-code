@@ -14,6 +14,22 @@ import {
 
 export { BROWSER_HOST_LENGTH_PREFIX_BYTES, BROWSER_HOST_MAX_FRAME_BYTES, BROWSER_HOST_PROTOCOL_VERSION };
 
+/** Maximum pages one browser host retains at the same time; shared by the Electron and Chromium hosts. */
+/** 单个浏览器宿主同时保留的最大页面数；Electron 与 Chromium 宿主共用。 */
+export const BROWSER_HOST_MAX_PAGES = 8;
+
+/** Maximum retained bytes for one browser download. */
+/** 一份浏览器下载可保留的最大字节数。 */
+export const BROWSER_HOST_MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024;
+
+/** Largest compressed image accepted before its base64 control envelope is built. */
+/** 构建 base64 控制信封前允许的最大压缩图像。 */
+export const BROWSER_HOST_MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+
+/** Largest accepted viewport width or height; the smallest is 1. */
+/** 可接受的最大视口宽度或高度；最小值为 1。 */
+export const BROWSER_HOST_MAX_VIEWPORT_DIMENSION = 4096;
+
 /** First message written to standard output so Core can reach the host control listener. */
 /** 写入标准输出的首条消息，使 Core 能够连接宿主控制监听器。 */
 export interface BrowserHostEndpointFrame {

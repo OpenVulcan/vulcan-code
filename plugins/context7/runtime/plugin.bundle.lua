@@ -1021,7 +1021,13 @@ local function sanitize_remote_text(value, limit)
     local sanitized = value:gsub("\r\n", "\n"):gsub("\r", "\n")
     sanitized = sanitized:gsub("[%z\1-\8\11\12\14-\31\127]", "")
     if #sanitized > limit then
-        return sanitized:sub(1, limit) .. "\n[truncated by Context7 plugin]"
+        -- cut backs off to a UTF-8 character boundary so the truncated text stays valid for JSON encoding.
+        -- cut 回退到 UTF-8 字符边界，使截断文本仍可被 JSON 编码。
+        local cut = limit
+        while cut > 0 and sanitized:byte(cut + 1) >= 0x80 and sanitized:byte(cut + 1) < 0xC0 do
+            cut = cut - 1
+        end
+        return sanitized:sub(1, cut) .. "\n[truncated by Context7 plugin]"
     end
     return sanitized
 end
@@ -1101,7 +1107,9 @@ local function provider_error_message(category, decoded, status)
             -- redirect_url is retained only when it matches the exact Context7 library-id grammar.
             -- redirect_url 仅在匹配精确 Context7 库 ID 语法时保留。
             local redirect_url = sanitize_remote_text(decoded.redirectUrl, 500)
-            if redirect_url:match("^/[^/]+/[^/]+([/@][^/]+)?$") ~= nil then
+            -- Lua patterns have no optional groups, so the bare and versioned forms are matched separately.
+            -- Lua 模式不支持可选分组，因此分别匹配无版本与带版本两种形式。
+            if redirect_url:match("^/[^/]+/[^/]+$") ~= nil or redirect_url:match("^/[^/]+/[^/]+[/@][^/]+$") ~= nil then
                 details[#details + 1] = "Use libraryId " .. redirect_url .. "."
             end
         end

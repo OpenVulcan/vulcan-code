@@ -962,6 +962,9 @@ FROM filtered_daily;
     -- cost_basis treats a dimension as missing when any attempt in the row lacked it, because SUM
     -- skips NULL values and would otherwise report a partial total as complete.
     -- cost_basis 在该行任一尝试缺少某维度时将其视为缺失，因为 SUM 会跳过 NULL，否则会把部分合计报告为完整。
+    -- cost_page_size is the one page size shared by the SQL LIMIT and the paging loop.
+    -- cost_page_size 是 SQL LIMIT 与分页循环共用的唯一页大小。
+    local cost_page_size = 1000
     local cost_sql = [[
 , cost_basis AS (
     SELECT model_id,
@@ -982,7 +985,7 @@ GROUP BY model_id, uncached_input_tokens IS NULL, cache_read_tokens IS NULL,
          cache_write_tokens IS NULL, output_tokens IS NULL
 ORDER BY model_id, uncached_input_tokens IS NULL, cache_read_tokens IS NULL,
          cache_write_tokens IS NULL, output_tokens IS NULL
-LIMIT 1000 OFFSET (SELECT cost_offset FROM page_offsets);
+LIMIT ]] .. cost_page_size .. [[ OFFSET (SELECT cost_offset FROM page_offsets);
 ]]
     -- cost_digits and cost_scale retain exact decimal arithmetic across the complete filtered range.
     -- cost_digits 与 cost_scale 在完整筛选范围内保持精确十进制运算。
@@ -1007,8 +1010,8 @@ LIMIT 1000 OFFSET (SELECT cost_offset FROM page_offsets);
             priced_rows = priced_rows + row.rowCount
         end
       end
-      if #cost_rows < 1000 then break end
-      filter_params[8].value = filter_params[8].value + 1000
+      if #cost_rows < cost_page_size then break end
+      filter_params[8].value = filter_params[8].value + cost_page_size
     end
     -- Independent host queries do not share a read transaction; never publish mixed aggregate generations.
     -- 独立宿主查询不共享读取事务；绝不发布混合聚合代次。

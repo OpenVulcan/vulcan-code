@@ -664,6 +664,9 @@ impl HeadlessService {
                 Ok(stopped)
             }
             Err(error) => {
+                // The service keeps running, so a requested update must not start on a later quit.
+                // 服务继续运行，因此请求的更新不得在之后的退出时启动。
+                crate::restart::discard_pending();
                 let recovery = service_resume_after_failed_app_shutdown(&self.state).err();
                 match recovery {
                     Some(recovery_error) => Err(format!(

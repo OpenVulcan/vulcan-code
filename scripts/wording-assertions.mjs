@@ -62,7 +62,9 @@ const RUST_RAW = /^b?r(#*)"/u;
 export function tokenize(source, language) {
   const code = [];
   const cjkLiterals = [];
-  const blank = (text) => text.replace(/[^\n]/gu, ' ');
+  // Without the u flag each UTF-16 unit becomes one space, keeping code offsets aligned with cjkLiterals.
+  // 不带 u 标志时每个 UTF-16 单元替换为一个空格，使 code 偏移与 cjkLiterals 对齐。
+  const blank = (text) => text.replace(/[^\n]/g, ' ');
   let index = 0;
   // literal records one string literal of `length` characters and masks its contents.
   // literal 记录一个长度为 `length` 的字符串字面量并遮蔽其内容。

@@ -146,10 +146,11 @@
 
 ## 同步触发点
 
-- Linux 菜单项的 `StartupWMClass` 取自安装器 `integrate.rs` 的 `DESKTOP_WINDOW_CLASS`，必须等于
-  `scripts/desktop-runtime.mjs` 写入打包应用 `package.json` 的 `name`（Electron 的窗口类，GNOME X11 实测为
-  `vulcan-code-desktop`）；不一致时 GNOME 会为窗口另显示一个通用图标。同处写入的 `desktopName` 对应
-  `DESKTOP_ENTRY_FILE`。修改任一侧时两处同时改。
+- 安装器 `integrate.rs` 的 `DESKTOP_WINDOW_CLASS`（菜单项的 `StartupWMClass`）与 `DESKTOP_ENTRY_FILE` 都派生自
+  `desktop_app_id!`（`vulcan-code`）。`scripts/desktop-runtime.mjs` 写入打包应用 `package.json` 的 `desktopName`
+  必须等于该 ID 加 `.desktop`：Electron 由 `desktopName` 得出窗口类（X11 上为 `WM_CLASS "vulcan-code"`）与
+  Wayland 应用 ID，而不是取 `package.json` 的 `name`。不一致时 GNOME 会为窗口另显示一个通用图标。修改任一侧时
+  两处同时改。
 - Linux 窗口与 macOS 程序坞图标来自打包应用 `gui/` 旁的 `icon.png`（`desktop-runtime.mjs` 从
   `apps/vulcan-code-service/icons/icon.png` 复制，桌面端 `app-icon.ts` 读取）；Windows 图标来自程序资源。
 - 安装器对象键（`setup_pointer_key`、`setup_file_key`）与产品对象键一样，在 `layout.rs` 与 openvulcan-web 的

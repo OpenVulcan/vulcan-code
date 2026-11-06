@@ -19,26 +19,22 @@ const runtimeVersion = `chromium-playwright-${createRequire(import.meta.url)('pl
 import { writeControlDiscovery, BROWSER_HOST_CONTROL_DISCOVERY_SCHEMA_VERSION } from '../browser-host/control-discovery.js';
 import { listenForCoreControl, BROWSER_HOST_CONTROL_ACCEPT_TIMEOUT_MS } from '../browser-host/control-server.js';
 import {
+  BROWSER_HOST_MAX_DOWNLOAD_BYTES as MAX_DOWNLOAD_BYTES, BROWSER_HOST_MAX_IMAGE_BYTES as MAX_IMAGE_BYTES,
+  BROWSER_HOST_MAX_PAGES as MAX_PAGES, BROWSER_HOST_MAX_VIEWPORT_DIMENSION as MAX_VIEWPORT_DIMENSION,
   BROWSER_HOST_PROTOCOL_VERSION, ControlFrameDecoder, encodeControlFrame,
   type BrowserHostCoreHello, type BrowserHostEvent,
   type BrowserHostRequest, type BrowserHostResponse,
 } from '../browser-host/host-protocol.js';
 
-/** Maximum simultaneous pages owned by one Core browser session. */
-/** 一个 Core 浏览器会话拥有的最大并存页面数。 */
-const MAX_PAGES = 8;
-/** Maximum retained bytes for one browser download. */
-/** 一份浏览器下载可保留的最大字节数。 */
-const MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024;
 /** Maximum saved and in-flight downloads owned by one Core browser session. */
 /** 单个 Core 浏览器会话最多拥有的已保存与进行中下载数。 */
 const MAX_RETAINED_DOWNLOADS = 16;
 /** Maximum bytes saved beneath one Core browser session's control directory. */
 /** 单个 Core 浏览器会话控制目录内最多保存的下载字节数。 */
 const MAX_RETAINED_DOWNLOAD_BYTES = 128 * 1024 * 1024;
-/** Maximum JPEG bytes before the bounded control envelope is constructed. */
-/** 构造有界控制信封之前允许的最大 JPEG 字节数。 */
-const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+/** Deadline after which shutdown or a failed startup exits even if cleanup stalls. */
+/** 关闭或启动失败时，即使清理卡住也在此期限后退出。 */
+const CLEANUP_EXIT_DEADLINE_MS = 6_000;
 /** Maximum page events retained before the authenticated Core handshake. */
 /** Core 鉴权握手前最多保留的页面事件数。 */
 const MAX_STARTUP_EVENTS = 256;
@@ -702,8 +698,9 @@ class ChromiumHost {
           const width = request.params.width;
           const height = request.params.height;
           if (!Number.isInteger(width) || !Number.isInteger(height)
-              || Number(width) < 1 || Number(height) < 1 || Number(width) > 4096 || Number(height) > 4096)
-            return this.answer(request, 'Viewport dimensions must be integers from 1 to 4096.', 'invalid_request');
+              || Number(width) < 1 || Number(height) < 1
+              || Number(width) > MAX_VIEWPORT_DIMENSION || Number(height) > MAX_VIEWPORT_DIMENSION)
+            return this.answer(request, `Viewport dimensions must be integers from 1 to ${MAX_VIEWPORT_DIMENSION}.`, 'invalid_request');
           // Publish the requested size before awaiting page resizes so concurrently registered
           // popups receive the same viewport rather than the context's launch-time default.
           // 等待页面调整前先发布目标尺寸，使并发登记的弹窗采用相同视口，而非上下文启动时的默认值。
@@ -819,7 +816,7 @@ class ChromiumHost {
     // 中继解绑卡住时不能让 Chromium 在 Core 断开后一直驻留。
     // Start the deadline before asynchronous cleanup while allowing graceful profile flushes.
     // 在异步清理前启动期限，同时允许正常完成时优雅写盘。
-    const forced = setTimeout(() => process.exit(0), 6_000);
+    const forced = setTimeout(() => process.exit(0), CLEANUP_EXIT_DEADLINE_MS);
     // Every cleanup stage runs even when an earlier stage rejects; closing the context is the
     // final browser-process boundary rather than a side effect of successful input release.
     // 即使前一项清理失败也继续执行后续清理；关闭上下文是浏览器进程的最终边界，
@@ -839,7 +836,7 @@ class ChromiumHost {
   async abortStartup(): Promise<void> {
     // A failed Core handshake must not strand a Chromium child while cleanup stalls.
     // Core 握手失败后，即使清理卡住也不能留下 Chromium 子进程。
-    const forced = setTimeout(() => process.exit(1), 6_000);
+    const forced = setTimeout(() => process.exit(1), CLEANUP_EXIT_DEADLINE_MS);
     try { await this.playwrightProxy?.shutdown(); }
     catch (error) { diagnostic(`startup relay cleanup failed: ${String(error)}`); }
     try { await this.context?.close(); }

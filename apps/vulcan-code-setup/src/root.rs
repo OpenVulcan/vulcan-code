@@ -122,7 +122,13 @@ pub fn ownership(root: &Path) -> Result<Ownership, String> {
         }
         return Err(format!("{} is not recognized", legacy.display()));
     }
-    if let Some(uninstaller) = inno_uninstaller(root)? {
+    // An Inno uninstaller alone may belong to any Inno-packaged program; only a root that also
+    // holds the Vulcan Code `versions` directory is treated as this program's Windows install.
+    // 仅有 Inno 卸载程序可能属于任何 Inno 打包的程序；只有同时含有 Vulcan Code `versions` 目录的
+    // 根目录才视为本程序的 Windows 安装。
+    if root.join(VERSIONS_DIR).is_dir()
+        && let Some(uninstaller) = inno_uninstaller(root)?
+    {
         return Ok(Ownership::Inno(uninstaller));
     }
     let entries = std::fs::read_dir(root)
@@ -399,6 +405,7 @@ mod tests {
     fn a_root_with_an_inno_uninstaller_belongs_to_the_windows_installer() {
         let temp = tempfile::tempdir().expect("temp dir");
         let root = temp.path();
+        std::fs::create_dir(root.join(VERSIONS_DIR)).expect("versions");
         for name in [
             "unins000.exe",
             "unins000.dat",
@@ -412,6 +419,16 @@ mod tests {
             Ok(Ownership::Inno(root.join("unins001.exe")))
         );
         assert!(installable(root).is_err());
+    }
+
+    #[test]
+    fn an_inno_uninstaller_without_vulcan_versions_is_foreign() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let root = temp.path();
+        for name in ["unins000.exe", "unins000.dat", "other-program.exe"] {
+            std::fs::write(root.join(name), "").expect("file");
+        }
+        assert!(ownership(root).is_err());
     }
 
     #[test]
