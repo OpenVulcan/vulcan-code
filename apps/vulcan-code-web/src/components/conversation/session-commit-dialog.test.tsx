@@ -3,7 +3,8 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { I18nProvider } from "@/i18n";
-import { ConversationSessionCommitDialog, type ConversationSessionReviewSummary } from "./session-todolist-panel";
+import type { ConversationSessionReviewSummary } from "./session-todolist-panel";
+import { ConversationSessionCommitDialog } from "./session-todolist-panel/commit-dialog";
 
 // Each test owns one real React root so the portal-mounted dialog renders into the document.
 // 每项测试持有一个真实 React 根，使通过 Portal 挂载的弹窗渲染进文档。

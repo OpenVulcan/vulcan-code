@@ -716,14 +716,11 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     () => (sessionSubagentNavigation?.tasks ?? []).length,
     [sessionSubagentNavigation?.tasks],
   );
-  // sessionToolPanelVisible opens the floating chat tool panel only when it has renderable content.
-  // sessionToolPanelVisible 仅在浮动工具面板存在可渲染内容时打开。
-  const sessionToolPanelVisible = (hasSelectedChatConversation && (
-    sessionGitCommitActionVisible
-    || visibleSessionTerminalSessions.length > 0
-    || visibleSessionSubagentTaskCount > 0
-    || sessionActivity.backgroundJobCount > 0
-  ));
+  // sessionToolPanelVisible keeps the floating chat tool panel on every chat session: its activity row is always there,
+  // so the activity panel stays reachable without Git, subagents or running background commands.
+  // sessionToolPanelVisible 让浮动工具面板在每个对话会话中都显示：其活动行始终存在，因此没有 Git、子代理或运行中的
+  // 后台命令时也能打开活动面板。
+  const sessionToolPanelVisible = hasSelectedChatConversation;
 
   // rightPanelLabel describes the page-registered context panel toggle action.
   // rightPanelLabel 描述页面注册的上下文面板切换动作。

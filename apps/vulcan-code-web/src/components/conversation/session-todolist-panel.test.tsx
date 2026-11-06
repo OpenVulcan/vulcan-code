@@ -81,7 +81,12 @@ describe("session tool panel header layout", () => {
     expect(markup).not.toContain('data-row="subagent"');
   });
 
-  it("renders no panel when every resource is absent", () => {
-    expect(renderPanel({})).toBe("");
+  it("keeps both activity rows when every resource is absent", () => {
+    // The activity panel must stay reachable without Git, subagents or running commands.
+    // 没有 Git、子代理或运行中的命令时，活动面板也必须可以打开。
+    const markup = renderPanel({});
+    expect(markup).toContain('data-row="subagents"');
+    expect(markup).toContain('data-row="commands"');
+    expect(renderPanel({ expanded: false })).toContain("vk-stools-row");
   });
 });
