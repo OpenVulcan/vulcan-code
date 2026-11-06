@@ -1,11 +1,13 @@
 // Command cards answer three questions at a glance: what ran, how it ended, how long it took. The body is the
 // terminal transcript, ending with where it ran.
 // 命令卡一眼回答三个问题：运行了什么、如何结束、耗时多久。正文是终端记录，末尾注明运行位置。
+import * as React from "react";
 import { SquareTerminal } from "lucide-react";
 import { useI18n, type TranslationKey } from "@/i18n";
-import { ToolFrame, type ToolCardProps } from "../tool-card";
+import { ToolCardSessionContext, ToolFrame, type ToolCardProps } from "../tool-card";
 import { listOf, numberOf, objectOf, textOf, type ToolCall } from "../tool-call";
 import { TerminalView } from "../views/terminal-view";
+import { useShellCommandLiveOutput, type ShellCommandLiveTarget } from "./use-shell-command-live-output";
 
 /** Renders one shell_command call.
  * 渲染一次 shell_command 调用。 */
@@ -20,6 +22,12 @@ export function ShellCommandCard(props: ToolCardProps) {
   const output = call.modelOutput ? commandOutputFromText(call.modelOutput) : "";
   const failure = textOf(run?.failure_reason);
   const badges = listOf(hook?.contributions).map(objectOf).filter((item) => textOf(item?.badge));
+  // A running call without a result opens onto its recent output, read from Core only while the body is open.
+  // 尚无结果的运行中调用展开后显示其最近输出，仅在正文展开期间从 Core 读取。
+  const sessionId = React.useContext(ToolCardSessionContext);
+  const liveTarget = call.state === "running" && !output && sessionId
+    ? { apiCallId: call.event.api_call_id, sessionId, toolCallId: call.event.tool_call_id }
+    : null;
   return (
     <ToolFrame
       {...props}
@@ -37,7 +45,9 @@ export function ShellCommandCard(props: ToolCardProps) {
       targetTitle={command}
       verb={t("toolCard.verb.runCommand")}
     >
-      {call.state === "running" && !output ? null : (
+      {liveTarget ? (
+        <LiveCommandOutput command={command} cwd={textOf(run?.cwd) ?? textOf(call.input.cwd)} target={liveTarget} />
+      ) : call.state === "running" && !output ? null : (
         <>
           <TerminalView
             cwd={textOf(run?.cwd)}
@@ -50,6 +60,30 @@ export function ShellCommandCard(props: ToolCardProps) {
         </>
       )}
     </ToolFrame>
+  );
+}
+
+// LiveCommandOutput shows the most recent lines of a command that is still running. It mounts only while the card is
+// open, so a closed card never asks Core for anything.
+// LiveCommandOutput 显示仍在运行的命令的最近若干行。它只在卡片展开时挂载，因此收起的卡片不会向 Core 请求任何内容。
+function LiveCommandOutput(props: { command: string; cwd: string | null; target: ShellCommandLiveTarget }) {
+  const { t } = useI18n();
+  const live = useShellCommandLiveOutput(props.target);
+  const note = !live
+    ? null
+    : live.running
+      ? t("toolCard.liveOutput.recent").replace("{count}", String(live.lineLimit))
+      : t("toolCard.liveOutput.ended");
+  return (
+    <>
+      <TerminalView
+        cwd={props.cwd}
+        emptyText={t(live ? "toolCard.liveOutput.none" : "toolCard.liveOutput.reading")}
+        prompt={`$ ${props.command}`}
+        text={live?.lines.join("\n") ?? ""}
+      />
+      {note ? <div className="vk-tool-foot"><span>{note}</span></div> : null}
+    </>
   );
 }
 

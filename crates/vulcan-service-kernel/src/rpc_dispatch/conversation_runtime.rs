@@ -19,6 +19,8 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_refresh_command_sessions",
     "service_attach_command_session_display",
     "service_detach_command_session_display",
+    "service_attach_shell_command_output",
+    "service_detach_shell_command_output",
     "service_send_command_session_input",
     "service_resize_command_session",
     "service_list_project_terminals",
@@ -261,6 +263,18 @@ pub(super) async fn dispatch(
         ),
         "service_detach_command_session_display" => rpc_json_result(
             service_detach_command_session_display(rpc_required_param(params, "subscriptionId")?),
+        ),
+        "service_attach_shell_command_output" => {
+            rpc_json_result(service_attach_shell_command_output(
+                app,
+                rpc_required_param(params, "sessionId")?,
+                rpc_required_param(params, "apiCallId")?,
+                rpc_required_param(params, "toolCallId")?,
+                rpc_required_param(params, "displayClientId")?,
+            ))
+        }
+        "service_detach_shell_command_output" => rpc_json_result(
+            service_detach_shell_command_output(rpc_required_param(params, "subscriptionId")?),
         ),
         "service_send_command_session_input" => rpc_json_result(
             service_send_command_session_input(app, state, rpc_required_param(params, "request")?)

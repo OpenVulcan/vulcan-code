@@ -248,6 +248,7 @@ mod prompt_skill;
 mod registry;
 mod session_mcp;
 mod shell_command;
+mod shell_command_live;
 pub(crate) use apply_patch::*;
 pub use configuration::{
     CONFIGURATION_LIST_ACTION, ConfigurationOutcome, ConfigurationRequest, MCP_CONFIG_TOOL_ID,
@@ -284,6 +285,9 @@ pub(crate) use session_mcp::{
     build_mcp_call_tool, build_mcp_connect_tool, build_mcp_tools_tool, session_mcp_command_line,
 };
 pub(crate) use shell_command::*;
+pub use shell_command_live::{
+    SHELL_COMMAND_LIVE_TAIL_LINES, ShellCommandLiveKey, ShellCommandLiveRun, shell_command_live_run,
+};
 mod browser;
 mod declare_intent;
 mod goal;

@@ -2,6 +2,7 @@ import type {
   CommandSessionDisplayAttachment,
   ProjectTerminalCatalog,
   ProjectTerminalDisplayAttachment,
+  ShellCommandOutputAttachment,
 } from "@/types";
 import { resolveBrowserServiceClientId } from "@/service/browser-service-discovery";
 import { hasServiceRuntime, serviceClient } from "@/service/webui-service-runtime";
@@ -25,6 +26,29 @@ export async function attachCommandSessionDisplay(
 export async function detachCommandSessionDisplay(subscriptionId: string): Promise<boolean> {
   if (!hasServiceRuntime()) return false;
   return serviceClient.request<boolean>("service_detach_command_session_display", { subscriptionId });
+}
+
+// attachShellCommandOutput reads the recent output of a running shell_command call and enables pushes while its card is open.
+// attachShellCommandOutput 读取运行中 shell_command 调用的最近输出，并在其卡片展开期间启用推送。
+export async function attachShellCommandOutput(
+  sessionId: string,
+  apiCallId: number,
+  toolCallId: number,
+): Promise<ShellCommandOutputAttachment | null> {
+  if (!hasServiceRuntime()) return null;
+  return serviceClient.request<ShellCommandOutputAttachment>("service_attach_shell_command_output", {
+    apiCallId,
+    displayClientId: resolveBrowserServiceClientId(),
+    sessionId,
+    toolCallId,
+  });
+}
+
+// detachShellCommandOutput stops the pushes as soon as the card closes.
+// detachShellCommandOutput 在卡片收起后立即停止推送。
+export async function detachShellCommandOutput(subscriptionId: string): Promise<boolean> {
+  if (!hasServiceRuntime()) return false;
+  return serviceClient.request<boolean>("service_detach_shell_command_output", { subscriptionId });
 }
 
 // listProjectTerminals loads shells and terminals for one explicit active project.

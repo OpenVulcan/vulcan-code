@@ -1629,6 +1629,9 @@ fn webui_service_event_is_visible_to_client(event: &ServiceEvent, client_id: Uui
         ServiceEvent::CommandSessionDisplayChanged(event) => {
             event.display_client_id == expected_client_id
         }
+        ServiceEvent::ShellCommandOutputChanged(event) => {
+            event.display_client_id == expected_client_id
+        }
         ServiceEvent::ProjectTerminalDisplayChanged(event) => {
             event.display_client_id == expected_client_id
         }

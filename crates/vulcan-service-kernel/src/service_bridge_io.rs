@@ -362,6 +362,7 @@ pub(crate) async fn run_webui_service_http_bridge(
     let client_disconnected = Arc::new(move |client_id: Uuid| {
         cancel_command_session_displays_for_client(client_id);
         cancel_project_terminal_displays_for_client(client_id);
+        cancel_shell_command_outputs_for_client(client_id);
     });
     // session_resource_state preserves the same kernel authority for opaque content resolution.
     // session_resource_state 为不透明内容解析保留同一内核权威。

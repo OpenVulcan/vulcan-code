@@ -21,6 +21,10 @@ export type ToolFamily = "read" | "search" | "edit" | "run" | "web" | "media" | 
 // TOOL_FAMILIES 固定序列摘要中统计家族的顺序。
 export const TOOL_FAMILIES: readonly ToolFamily[] = ["read", "search", "edit", "run", "web", "media", "agent", "plan", "other"];
 
+// ToolCardSessionContext names the session whose transcript shows the cards, for cards that read live state by call.
+// ToolCardSessionContext 指明展示这些卡片的转录所属会话，供按调用读取实时状态的卡片使用。
+export const ToolCardSessionContext = React.createContext<string | null>(null);
+
 // ToolCardProps is what the dispatcher hands every card.
 // ToolCardProps 是分派器交给每张卡的属性。
 export interface ToolCardProps {

@@ -47,6 +47,16 @@ WebUI 展示时阅读。普通业务任务不需要加载这些细节。
   `terminal_skill_quotes_current_output_hard_limit` 测试与常量比对，修改上限时必须同步技能文本。
 - 未越过硬上限但内联渲染结果超过 `200000` 字节时，切换为项目内 `.vulcan/temp/` 分页文件；文件名
   形如 `tool_output_<exclusive-random-id>.md`，使用独占创建，写入完成后发布；并发调用不共享文件身份。
+- 运行中的实时尾部只用于显示（[`shell_command_live.rs`](../../crates/vulcan-agent-runtime/src/tooling/native/shell_command_live.rs)）：
+  模型发起的调用在运行期间以“会话 + API 调用 + 工具调用”登记，读取任务把每个已接收的数据块按到达顺序
+  另追加到有界的合并尾部；尾部只在内存中，不落盘、不进入转录、不交给模型，完整输出仍只走正常结果。
+  调用以任一路径返回即撤销登记，因此查不到即表示不在运行（含 Core 重启后）。显示行数
+  `SHELL_COMMAND_LIVE_TAIL_LINES` 与尾部字节上限只在该文件定义；推送间隔
+  `SHELL_COMMAND_OUTPUT_PUSH_INTERVAL` 只在服务内核
+  [`shell_command_output.rs`](../../crates/vulcan-service-kernel/src/shell_command_output.rs) 定义。
+  WebUI 命令卡仅在展开且尚无结果时调用 `service_attach_shell_command_output`，收到最近若干行后按
+  `shell.command.output.changed` 整段替换，收起即 `service_detach_shell_command_output`，浏览器断开时订阅
+  随之取消；调用结束后卡片改为显示可靠结果。工具链中的步骤不提供实时尾部显示。
 - `auto` 使用用户已配置且当前可检测的默认 Shell；没有用户配置时按平台稳定优先级选择。
 - Windows 当前检测优先级为 `pwsh`、`powershell`、`cmd`、`bash`、`sh`、`zsh`，但只暴露实际
   检测成功的启动器。

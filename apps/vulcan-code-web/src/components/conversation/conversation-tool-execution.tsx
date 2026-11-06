@@ -16,6 +16,7 @@ import {
 import type { ToolExecutionConversationBlock } from "./conversation-tool-execution-types";
 import { fixedV1ToolEvent } from "./tool-presentations/presentation-value-readers";
 import { ToolCallCard, ToolRequestCard } from "@/conversation/tools/tool-call-card";
+import { ToolCardSessionContext } from "@/conversation/tools/tool-card";
 
 export type {
   ToolExecutionConversationBlock,
@@ -89,7 +90,9 @@ export function ToolExecutionBlock(props: {
     React.startTransition(() => onToolPresentationExpandedChange(cardKey, next));
   }, [cardKey, onToolPresentationExpandedChange]);
   const card = v1ToolEvent && cardKey ? (
-    <ToolCallCard event={v1ToolEvent} onOpenChange={handleOpenChange} open={open} />
+    <ToolCardSessionContext.Provider value={props.conversationId}>
+      <ToolCallCard event={v1ToolEvent} onOpenChange={handleOpenChange} open={open} />
+    </ToolCardSessionContext.Provider>
   ) : requestProgress && requestToolName && cardKey ? (
     <ToolRequestCard
       onOpenChange={handleOpenChange}

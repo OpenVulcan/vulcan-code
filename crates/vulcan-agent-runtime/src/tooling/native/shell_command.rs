@@ -100,6 +100,9 @@ pub(crate) struct ShellCommandProcessOptions {
     /// explicit hook value wins.
     /// 会话的 Vulcan 环境变量，先于 Hook 贡献应用，使显式 Hook 值优先。
     vulcan_environment: Vec<(String, String)>,
+    /// Display-only tail the output readers also append to while the call runs.
+    /// 调用运行期间输出读取任务同时追加到的仅供显示的尾部。
+    live_output: Option<Arc<super::shell_command_live::ShellCommandLiveRun>>,
 }
 
 /// One generic user-visible display contribution returned by a shell transform hook.
@@ -616,6 +619,7 @@ async fn apply_shell_command_plugin_hooks(
                 environment: native.environment,
                 host_environment: Vec::new(),
                 vulcan_environment: Vec::new(),
+                live_output: None,
             },
             ShellCommandHookReport {
                 original_command: parsed_args.command.clone(),
@@ -726,6 +730,7 @@ async fn apply_shell_command_plugin_hooks(
             environment: transformed.environment,
             host_environment: Vec::new(),
             vulcan_environment: Vec::new(),
+            live_output: None,
         },
         ShellCommandHookReport {
             original_command: parsed_args.command.clone(),
@@ -890,10 +895,11 @@ pub(crate) async fn execute_shell_command_process(
         None => None,
     };
     let output_limit = ShellOutputLimit::new(SHELL_COMMAND_OUTPUT_HARD_LIMIT_BYTES);
+    let live_output = process_options.live_output.as_ref();
     let (stdout_buffer, stdout_task) =
-        spawn_shell_output_reader(child.stdout.take(), &output_limit);
+        spawn_shell_output_reader(child.stdout.take(), &output_limit, live_output);
     let (stderr_buffer, stderr_task) =
-        spawn_shell_output_reader(child.stderr.take(), &output_limit);
+        spawn_shell_output_reader(child.stderr.take(), &output_limit, live_output);
 
     let timeout_ms = parsed_args.timeout_ms;
     let wait_result = tokio::select! {
@@ -1165,6 +1171,8 @@ type ShellStdioTask = tokio::task::JoinHandle<std::io::Result<()>>;
 /// `reader` 是捕获到的子进程 stdout 或 stderr 句柄。
 /// `output_limit` is the combined budget; the reader stops and closes its pipe once it is crossed.
 /// `output_limit` 是合并预算；越过后读取任务停止并关闭其管道。
+/// `live_output` is the optional display tail that also receives every admitted chunk.
+/// `live_output` 是同样接收每个已接收数据块的可选显示尾部。
 ///
 /// # Returns
 /// 返回值
@@ -1173,6 +1181,7 @@ type ShellStdioTask = tokio::task::JoinHandle<std::io::Result<()>>;
 fn spawn_shell_output_reader<R>(
     reader: Option<R>,
     output_limit: &Arc<ShellOutputLimit>,
+    live_output: Option<&Arc<super::shell_command_live::ShellCommandLiveRun>>,
 ) -> (ShellOutputBuffer, Option<ShellStdioTask>)
 where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
@@ -1181,6 +1190,7 @@ where
     let task = reader.map(|mut reader| {
         let buffer = Arc::clone(&buffer);
         let output_limit = Arc::clone(output_limit);
+        let live_output = live_output.cloned();
         tokio::spawn(async move {
             use tokio::io::AsyncReadExt;
             let mut chunk = vec![0_u8; 8192];
@@ -1193,6 +1203,9 @@ where
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .extend_from_slice(&chunk[..read_bytes]);
+                if let Some(live_output) = &live_output {
+                    live_output.append(&chunk[..read_bytes]);
+                }
             }
         })
     });
@@ -1385,6 +1398,20 @@ pub(crate) async fn execute_shell_command_tool(
     .await?;
     process_options.host_environment = rtk_host_environment(rtk.telemetry_disabled);
     process_options.vulcan_environment = vulcan_environment;
+    // A call made by the model registers its live tail until this function returns on any path.
+    // 由模型发起的调用登记其实时尾部，直到本函数经任一路径返回。
+    let live_registration = request.invocation_context.as_ref().map(|context| {
+        super::shell_command_live::ShellCommandLiveRegistration::register(
+            super::shell_command_live::ShellCommandLiveKey::new(
+                &context.session_id,
+                context.api_call_id.value(),
+                context.tool_call_id.value(),
+            ),
+        )
+    });
+    process_options.live_output = live_registration
+        .as_ref()
+        .map(super::shell_command_live::ShellCommandLiveRegistration::run);
 
     let execution_report = execute_shell_command_process(
         &effective_args,
@@ -1556,6 +1583,45 @@ mod process_option_tests {
         .await;
         assert_eq!(report.status, ShellCommandExecutionStatus::Completed);
         assert!(report.stdout_text.trim_end().ends_with("done"));
+    }
+
+    /// The display tail receives the same output the result does, without taking it from the result.
+    /// 显示尾部收到与结果相同的输出，且不会从结果中拿走它。
+    #[tokio::test]
+    async fn live_tail_receives_output_while_the_result_keeps_it() {
+        let temp = tempfile::tempdir().expect("create shell live tail test directory");
+        let registration = super::super::shell_command_live::ShellCommandLiveRegistration::register(
+            super::super::shell_command_live::ShellCommandLiveKey {
+                session_id: String::from("live-tail-process-test"),
+                api_call_id: 1,
+                tool_call_id: 1,
+            },
+        );
+        let parsed_args = ShellCommandToolArgs {
+            command: String::from("echo live-tail-check"),
+            cwd: None,
+            timeout_ms: Some(60_000),
+            stdin: None,
+            shell: None,
+            _purpose: None,
+        };
+        let report = execute_shell_command_process(
+            &parsed_args,
+            temp.path(),
+            &HostCommandShellSupport::from_configured_default_id(None),
+            &ShellCommandProcessOptions {
+                live_output: Some(registration.run()),
+                ..ShellCommandProcessOptions::default()
+            },
+        )
+        .await;
+        assert_eq!(report.status, ShellCommandExecutionStatus::Completed);
+        assert!(report.stdout_text.contains("live-tail-check"));
+        let lines = registration.run().recent_lines();
+        assert!(
+            lines.iter().any(|line| line.contains("live-tail-check")),
+            "{lines:?}"
+        );
     }
 
     /// PowerShell reads non-ASCII stdin unchanged through `[Console]::In`, whatever the console code
@@ -1805,6 +1871,7 @@ mod process_option_tests {
             environment: BTreeMap::new(),
             host_environment: Vec::new(),
             vulcan_environment: Vec::new(),
+            live_output: None,
         };
         // report captures the real child-shell lookup result using only the injected PATH prefix.
         // report 捕获仅使用注入 PATH 前缀时真实子 Shell 的查找结果。

@@ -233,6 +233,7 @@ mod session_title;
 mod session_v1_lifecycle;
 mod settings_provider_projection;
 mod settings_runtime_projection;
+mod shell_command_output;
 mod skill_catalog_projection;
 mod skills_services;
 mod state;
@@ -383,6 +384,7 @@ use session_request_options_services::{
 use session_runtime_kernel::*;
 use settings_provider_projection::*;
 use settings_runtime_projection::*;
+use shell_command_output::*;
 use skill_catalog_projection::*;
 use skills_services::*;
 pub use state::ServiceShellHost;

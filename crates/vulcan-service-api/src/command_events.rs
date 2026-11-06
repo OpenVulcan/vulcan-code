@@ -209,6 +209,47 @@ pub struct CommandSessionDisplayChangedEvent {
     pub chunks: Vec<TerminalDisplayChunk>,
 }
 
+/// Returns the recent output of one running `shell_command` call when its card opens.
+/// 在卡片展开时返回一次运行中 `shell_command` 调用的最近输出。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellCommandOutputAttachment {
+    /// Opaque identity routing later changes and detaching; absent when the command is not running.
+    /// 用于路由后续变化与解除挂接的不透明标识；命令不在运行时缺省。
+    pub subscription_id: Option<String>,
+    /// Whether the command is still running in this Core.
+    /// 命令是否仍在本 Core 中运行。
+    pub running: bool,
+    /// Most recent output lines, oldest first.
+    /// 最近的输出行，按从旧到新排列。
+    pub lines: Vec<String>,
+    /// Number of most recent lines shown at most.
+    /// 最多显示的最近行数。
+    pub line_limit: usize,
+}
+
+/// Pushes the latest recent output of one running `shell_command` call to its open card.
+/// 向已展开的卡片推送一次运行中 `shell_command` 调用的最新最近输出。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellCommandOutputChangedEvent {
+    /// Browser/WebView lifetime that owns this display event.
+    /// 持有该显示事件的浏览器或 WebView 生命周期。
+    pub display_client_id: String,
+    /// Opaque subscription receiving this event.
+    /// 接收该事件的不透明订阅。
+    pub subscription_id: String,
+    /// Whether the command is still running; the last event of a subscription reports false.
+    /// 命令是否仍在运行；订阅的最后一个事件报告 false。
+    pub running: bool,
+    /// Most recent output lines, oldest first, replacing the previous ones.
+    /// 最近的输出行，按从旧到新排列，替换之前的行。
+    pub lines: Vec<String>,
+    /// Number of most recent lines shown at most.
+    /// 最多显示的最近行数。
+    pub line_limit: usize,
+}
+
 /// Describes one shell launcher available for project terminal creation.
 /// 描述一个可用于创建项目终端的 Shell 启动器。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -411,6 +452,9 @@ pub enum ServiceEvent {
     /// Visible command-session terminal output event.
     /// 可见命令会话终端输出事件。
     CommandSessionDisplayChanged(Box<CommandSessionDisplayChangedEvent>),
+    /// Recent output of a running `shell_command` call shown by an open card.
+    /// 已展开卡片显示的运行中 `shell_command` 调用的最近输出。
+    ShellCommandOutputChanged(Box<ShellCommandOutputChangedEvent>),
     /// Visible project-terminal output event.
     /// 可见项目终端输出事件。
     ProjectTerminalDisplayChanged(Box<ProjectTerminalDisplayChangedEvent>),

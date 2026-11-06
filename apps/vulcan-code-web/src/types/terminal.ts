@@ -36,6 +36,34 @@ export interface CommandSessionDisplayChangedEvent extends CommandSessionDisplay
   displayClientId: string;
 }
 
+// ShellCommandOutputAttachment returns the recent output of a running shell_command call when its card opens.
+// ShellCommandOutputAttachment 在卡片展开时返回运行中 shell_command 调用的最近输出。
+export interface ShellCommandOutputAttachment {
+  // Subscription for later changes; null when the command is not running in this Core.
+  // 后续变化的订阅；命令不在本 Core 中运行时为 null。
+  subscriptionId: string | null;
+  // Whether the command is still running.
+  // 命令是否仍在运行。
+  running: boolean;
+  // Most recent output lines, oldest first.
+  // 最近的输出行，按从旧到新排列。
+  lines: string[];
+  // Number of most recent lines shown at most.
+  // 最多显示的最近行数。
+  lineLimit: number;
+}
+
+// ShellCommandOutputChangedEvent replaces the recent lines shown by one open command card.
+// ShellCommandOutputChangedEvent 替换一张已展开命令卡显示的最近输出行。
+export interface ShellCommandOutputChangedEvent extends ShellCommandOutputAttachment {
+  // Browser/WebView lifetime selected by the event socket before transport delivery.
+  // 事件套接字在传输交付前选择的浏览器或 WebView 生命周期。
+  displayClientId: string;
+  // Subscription receiving this event.
+  // 接收该事件的订阅。
+  subscriptionId: string;
+}
+
 // ProjectTerminalShellOption describes one detected shell launcher.
 // ProjectTerminalShellOption 描述一个已检测 Shell 启动器。
 export interface ProjectTerminalShellOption {
