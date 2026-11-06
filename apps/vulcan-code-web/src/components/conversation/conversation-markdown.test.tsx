@@ -2,6 +2,7 @@
 
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { I18nProvider } from "@/i18n";
 import { encodeBase64UrlUtf8 } from "@/resources/localMedia";
 import {
   MarkdownImageWorkspacePathProvider,
@@ -94,5 +95,30 @@ describe("MarkdownMessage", () => {
 
     expect(markup).toContain(encodeBase64UrlUtf8(absoluteImagePath));
     expect(markup).not.toContain(encodeBase64UrlUtf8(relativeImagePath));
+  });
+
+  it("leaves image syntax inside fenced and inline code untouched", () => {
+    const browserStorage = { getItem: () => null };
+    Object.defineProperty(window, "localStorage", { configurable: true, value: browserStorage });
+    Object.defineProperty(window, "sessionStorage", { configurable: true, value: browserStorage });
+    // fencedSource is a documentation example whose image syntax must stay literal.
+    // fencedSource 是文档示例，其中的图片语法必须保持字面形式。
+    const fencedSource = "Intro ![demo](./images/demo.png|240)";
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(
+      <I18nProvider initialLocale="en-US">
+      <MarkdownImageWorkspacePathProvider value="D:\\project">
+        <MarkdownMessage
+          content={["Use `![inline](./x.png)` like this.", "", "```markdown", fencedSource, "```", "", "~~~", fencedSource, "~~~", ""].join("\n")}
+          eager
+        />
+      </MarkdownImageWorkspacePathProvider>
+      </I18nProvider>,
+    );
+
+    expect(host.querySelector("p code")?.textContent).toBe("![inline](./x.png)");
+    const blocks = Array.from(host.querySelectorAll("pre code"), (code) => code.textContent?.replace(/\n$/u, ""));
+    expect(blocks).toEqual([fencedSource, fencedSource]);
+    expect(host.querySelectorAll("img")).toHaveLength(0);
   });
 });

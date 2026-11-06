@@ -1054,8 +1054,14 @@ function decodeURIComponentSafe(value: string): string {
 
 // normalizeMarkdownLocalImageLinks rewrites local image links before Markdown sanitization removes them.
 // normalizeMarkdownLocalImageLinks 在 Markdown 清理移除本地路径前重写本地图片链接。
+// Image syntax inside fenced blocks or inline code spans is literal text and stays untouched.
+// 围栏代码块或行内代码中的图片语法是字面文本，保持不变。
 function normalizeMarkdownLocalImageLinks(content: string, workspacePath?: string | null): string {
+  const codeRanges = markdownCodeRanges(content);
   return content.replace(/!\[([^\]\n]*)\]\(([^)\n]+)\)/g, (full, alt: string, destination: string, offset: number) => {
+    if (codeRanges.some(([start, end]) => offset >= start && offset < end)) {
+      return full;
+    }
     const normalized = normalizeMarkdownImageDestination(destination, workspacePath);
     const width = markdownImageWidthFromAlt(alt);
     const cleanAlt = width ? alt.replace(/\|\s*\d+\s*$/u, "").trim() : alt;
@@ -1064,6 +1070,57 @@ function normalizeMarkdownLocalImageLinks(content: string, workspacePath?: strin
     const imageMarkdown = normalized || width ? `![${cleanAlt}](${nextDestination}${widthTitle})` : full;
     return `${markdownImageLeadingBlockPrefix(content, offset)}${imageMarkdown}`;
   });
+}
+
+// markdownCodeRanges returns [start, end) offsets of fenced code blocks and inline code spans.
+// markdownCodeRanges 返回围栏代码块与行内代码的 [start, end) 偏移区间。
+// An unclosed fence runs to the end of the content, matching how CommonMark renders it.
+// 未闭合的围栏延伸到正文末尾，与 CommonMark 的渲染方式一致。
+function markdownCodeRanges(content: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  let fence: { marker: string; length: number; start: number } | null = null;
+  let proseStart = 0;
+  let lineStart = 0;
+  const addInlineSpans = (from: number, to: number) => {
+    const text = content.slice(from, to);
+    const runs = [...text.matchAll(/`+/gu)];
+    for (let index = 0; index < runs.length; index += 1) {
+      const opening = runs[index];
+      const closingIndex = runs.findIndex((run, candidate) => candidate > index && run[0].length === opening[0].length);
+      if (closingIndex < 0) {
+        continue;
+      }
+      const closing = runs[closingIndex];
+      ranges.push([from + (opening.index ?? 0), from + (closing.index ?? 0) + closing[0].length]);
+      index = closingIndex;
+    }
+  };
+  while (lineStart <= content.length) {
+    const newline = content.indexOf("\n", lineStart);
+    const lineEnd = newline < 0 ? content.length : newline + 1;
+    const line = content.slice(lineStart, lineEnd);
+    const marker = /^ {0,3}(`{3,}|~{3,})/u.exec(line)?.[1];
+    if (fence) {
+      if (marker && marker[0] === fence.marker && marker.length >= fence.length && line.trim() === marker) {
+        ranges.push([fence.start, lineEnd]);
+        fence = null;
+        proseStart = lineEnd;
+      }
+    } else if (marker && !(marker[0] === "`" && line.slice(line.indexOf(marker) + marker.length).includes("`"))) {
+      addInlineSpans(proseStart, lineStart);
+      fence = { marker: marker[0], length: marker.length, start: lineStart };
+    }
+    if (newline < 0) {
+      break;
+    }
+    lineStart = lineEnd;
+  }
+  if (fence) {
+    ranges.push([fence.start, content.length]);
+  } else {
+    addInlineSpans(proseStart, content.length);
+  }
+  return ranges;
 }
 
 // markdownImageLeadingBlockPrefix returns the newline prefix needed to render an image as its own block.

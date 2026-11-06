@@ -84,6 +84,12 @@ interface HunkCursor {
   // Current new-file line number.
   // 当前新文件行号。
   newLine: number;
+  // Old-side rows the hunk header still expects.
+  // hunk 头部仍期待的旧文件侧行数。
+  oldRemaining: number;
+  // New-side rows the hunk header still expects.
+  // hunk 头部仍期待的新文件侧行数。
+  newRemaining: number;
 }
 
 // parseUnifiedDiff converts one raw unified diff string into renderer-ready records.
@@ -194,7 +200,11 @@ export function parseUnifiedDiff(rawDiff: string, source: DiffPanelSource = "mes
     if (rawLine.startsWith("@@ ")) {
       flushHunk();
       currentHunk = parseHunkHeader(rawLine);
-      currentCursor = { oldLine: currentHunk.oldStart, newLine: currentHunk.newStart };
+      currentCursor = {
+        oldLine: currentHunk.oldStart,
+        newLine: currentHunk.newStart,
+        ...parseHunkHeaderCounts(rawLine),
+      };
       return;
     }
     if (currentHunk && currentCursor) {
@@ -399,13 +409,25 @@ function parseHunkHeader(header: string): DiffHunk {
   return { header, oldStart, newStart, lines: [] };
 }
 
+// parseHunkHeaderCounts reads the old and new row counts; an omitted count means one row.
+// parseHunkHeaderCounts 读取旧/新行数；省略的行数表示一行。
+function parseHunkHeaderCounts(header: string): Pick<HunkCursor, "oldRemaining" | "newRemaining"> {
+  const match = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/.exec(header);
+  return {
+    oldRemaining: match ? Number(match[1] ?? 1) : 0,
+    newRemaining: match ? Number(match[2] ?? 1) : 0,
+  };
+}
+
 // parseDiffLine converts one raw hunk row into a structured row.
 // parseDiffLine 将单条原始 hunk 行转换为结构化行。
+// A `+++`/`---` row is body content (e.g. a removed `-- comment` or YAML `---`) while the header still expects that side.
+// 当头部仍期待该侧行时，`+++`/`---` 行是正文（如删除的 `-- 注释` 或 YAML `---`）。
 function parseDiffLine(rawLine: string, cursor: HunkCursor): DiffLine {
-  if (rawLine.startsWith("+") && !rawLine.startsWith("+++")) {
+  if (rawLine.startsWith("+") && (!rawLine.startsWith("+++") || cursor.newRemaining > 0)) {
     return { kind: "added", content: rawLine.slice(1), oldLine: null, newLine: cursor.newLine };
   }
-  if (rawLine.startsWith("-") && !rawLine.startsWith("---")) {
+  if (rawLine.startsWith("-") && (!rawLine.startsWith("---") || cursor.oldRemaining > 0)) {
     return { kind: "removed", content: rawLine.slice(1), oldLine: cursor.oldLine, newLine: null };
   }
   if (rawLine.startsWith(" ")) {
@@ -797,9 +819,11 @@ function isWhitespaceOnly(content: string, start: number, end: number): boolean 
 function advanceCursor(cursor: HunkCursor, line: DiffLine): void {
   if (line.kind === "removed" || line.kind === "context") {
     cursor.oldLine += 1;
+    cursor.oldRemaining = Math.max(0, cursor.oldRemaining - 1);
   }
   if (line.kind === "added" || line.kind === "context") {
     cursor.newLine += 1;
+    cursor.newRemaining = Math.max(0, cursor.newRemaining - 1);
   }
 }
 

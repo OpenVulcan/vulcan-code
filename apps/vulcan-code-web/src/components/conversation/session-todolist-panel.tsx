@@ -1394,8 +1394,10 @@ function commitPanelTargetAllowsActionNavigation(target: EventTarget | null): bo
   if (!(target instanceof HTMLElement)) {
     return true;
   }
+  // Multi-line editors own vertical caret movement; single-line inputs still switch actions.
+  // 多行编辑器自行处理光标的上下移动；单行输入框仍可切换动作。
   const tagName = target.tagName.toLowerCase();
-  return tagName !== "select" && !target.isContentEditable;
+  return tagName !== "select" && tagName !== "textarea" && !target.isContentEditable;
 }
 
 // ConversationSessionSubagentSection renders subagent dispatch rows in the session tool panel.
