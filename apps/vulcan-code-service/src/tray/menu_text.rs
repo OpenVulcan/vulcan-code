@@ -68,6 +68,32 @@ pub(super) mod keys {
     /// Notice that the shutdown coordinator could not start; takes `{reason}`.
     /// 关闭协调器无法启动的提示；接收 `{reason}`。
     pub const SHUTDOWN_START_FAILED: &str = "shutdownStartFailed";
+    /// Submenu choosing the client a double click opens.
+    /// 选择双击打开客户端的子菜单。
+    #[cfg(any(windows, test))]
+    pub const DOUBLE_CLICK_OPENS: &str = "doubleClickOpens";
+    /// Double-click choice: the desktop client.
+    /// 双击选项：桌面客户端。
+    #[cfg(any(windows, test))]
+    pub const TARGET_DESKTOP_CLIENT: &str = "targetDesktopClient";
+    /// Double-click choice: the WebUI.
+    /// 双击选项：WebUI。
+    #[cfg(any(windows, test))]
+    pub const TARGET_WEBUI: &str = "targetWebui";
+    /// Double-click choice: the terminal client.
+    /// 双击选项：终端客户端。
+    #[cfg(any(windows, test))]
+    pub const TARGET_TERMINAL_CLIENT: &str = "targetTerminalClient";
+    /// Notice that the double-click choice could not be saved; takes `{reason}`.
+    /// 双击选项无法保存的提示；接收 `{reason}`。
+    #[cfg(any(windows, test))]
+    pub const OPEN_TARGET_SAVE_FAILED: &str = "openTargetSaveFailed";
+    /// Submenu choosing the interface language.
+    /// 选择界面语言的子菜单。
+    pub const LANGUAGE: &str = "language";
+    /// Notice that the chosen language could not be saved; takes `{reason}`.
+    /// 所选语言无法保存的提示；接收 `{reason}`。
+    pub const LANGUAGE_SAVE_FAILED: &str = "languageSaveFailed";
 
     /// Every key above, so tests can prove each one resolves.
     /// 上述全部键，供测试证明每个键都能解析。
@@ -92,6 +118,13 @@ pub(super) mod keys {
         BRIDGE_FAILED,
         SHUTDOWN_FAILED,
         SHUTDOWN_START_FAILED,
+        DOUBLE_CLICK_OPENS,
+        TARGET_DESKTOP_CLIENT,
+        TARGET_WEBUI,
+        TARGET_TERMINAL_CLIENT,
+        OPEN_TARGET_SAVE_FAILED,
+        LANGUAGE,
+        LANGUAGE_SAVE_FAILED,
     ];
 }
 
@@ -135,6 +168,12 @@ impl TrayText {
             .and_then(vulcan_i18n::normalize)
             .unwrap_or(self.system_locale);
         target != self.translator.locale() && self.translator.set_locale(target)
+    }
+
+    /// Returns the code of the active language.
+    /// 返回当前语言的代码。
+    pub(super) fn locale(&self) -> &str {
+        self.translator.locale()
     }
 
     /// Returns the text for one key; the key itself shows only if the catalog lost it.

@@ -466,6 +466,10 @@ pub struct HeadlessService {
     /// Shared service state owned by this process.
     /// 本进程拥有的共享服务状态。
     state: SharedServiceBridgeState,
+    /// Event sender shared with the bridge, kept so the tray can save choices that clients follow.
+    /// 与桥共享的事件发送器，保留以便托盘保存客户端随之更新的选择。
+    #[cfg_attr(not(feature = "desktop-tray"), allow(dead_code))]
+    event_emitter: ServiceEventEmitter,
     /// Owned HTTP bridge thread retained until the service shuts down.
     /// 服务关闭前一直保留的自有 HTTP 桥线程。
     _http_bridge: vulcan_service_kernel::WebuiServiceHttpBridgeHandle,
@@ -487,6 +491,13 @@ impl HeadlessService {
     #[cfg(feature = "desktop-tray")]
     pub fn headless_state(&self) -> SharedServiceBridgeState {
         Arc::clone(&self.state)
+    }
+
+    /// Returns the event sender the tray uses when it saves a choice that clients follow.
+    /// 返回托盘保存客户端随之更新的选择时使用的事件发送器。
+    #[cfg(feature = "desktop-tray")]
+    pub fn event_emitter(&self) -> ServiceEventEmitter {
+        self.event_emitter.clone()
     }
 
     /// Returns the post-acknowledgement HTTP bridge failure observed by the supervisor.
@@ -608,10 +619,11 @@ impl HeadlessService {
             service_webui_root()?,
         )?;
         emit_initial_service_events(&state, &event_emitter);
-        vulcan_service_kernel::spawn_service_bootstrap(Arc::clone(&state), event_emitter);
+        vulcan_service_kernel::spawn_service_bootstrap(Arc::clone(&state), event_emitter.clone());
         Ok(Some(Self {
             _guard: guard,
             state,
+            event_emitter,
             _http_bridge: http_bridge,
             shutdown_requested,
             native_diagnostics,

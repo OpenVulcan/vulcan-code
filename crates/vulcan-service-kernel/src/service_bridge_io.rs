@@ -1057,6 +1057,30 @@ pub fn service_ui_locale_from_state(state: &SharedServiceBridgeState) -> Option<
     guard.startup.ui_locale.clone()
 }
 
+/// Saves the interface language chosen in a native surface such as the tray.
+/// 保存在托盘等原生界面中选择的界面语言。
+///
+/// # Parameters
+/// 参数
+/// `app` broadcasts the refreshed workbench, `state` owns the configuration, and `locale` is a
+/// registered language code.
+/// `app` 广播刷新后的工作台，`state` 持有配置，`locale` 是已注册的语言代码。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` once the choice is saved through the same commit as the WebUI language picker, so
+/// every open client follows it; otherwise the save error.
+/// 经与 WebUI 语言选择器相同的提交保存后返回 `Ok(())`，所有已打开的客户端随之切换；否则返回保存错误。
+pub async fn service_save_ui_locale(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    locale: String,
+) -> Result<(), String> {
+    service_select_webui_locale(app, state, locale)
+        .await
+        .map(drop)
+}
+
 /// Resolves the protected lifecycle and retained failure from shutdown and recovery facts.
 /// 从关闭与恢复事实解析受保护生命周期及保留失败。
 fn service_lifecycle_with_recovery(

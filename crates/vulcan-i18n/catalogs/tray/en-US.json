@@ -17,5 +17,12 @@
   "logLocationFailed": "Could not open the log location: {reason}",
   "bridgeFailed": "The Core HTTP bridge failed: {reason}",
   "shutdownFailed": "Shutdown failed: {reason}",
-  "shutdownStartFailed": "Could not start the shutdown coordinator: {reason}"
+  "shutdownStartFailed": "Could not start the shutdown coordinator: {reason}",
+  "doubleClickOpens": "Double-Click Opens",
+  "targetDesktopClient": "Desktop Client",
+  "targetWebui": "WebUI in Browser",
+  "targetTerminalClient": "Terminal Client",
+  "openTargetSaveFailed": "Could not save the double-click choice: {reason}",
+  "language": "Language",
+  "languageSaveFailed": "Could not switch the language: {reason}"
 }

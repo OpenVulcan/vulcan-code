@@ -17,5 +17,12 @@
   "logLocationFailed": "Não foi possível abrir o local dos logs: {reason}",
   "bridgeFailed": "A ponte HTTP do Core falhou: {reason}",
   "shutdownFailed": "Falha ao encerrar: {reason}",
-  "shutdownStartFailed": "Não foi possível iniciar o coordenador de encerramento: {reason}"
+  "shutdownStartFailed": "Não foi possível iniciar o coordenador de encerramento: {reason}",
+  "doubleClickOpens": "Clique duplo abre",
+  "targetDesktopClient": "Cliente desktop",
+  "targetWebui": "WebUI no navegador",
+  "targetTerminalClient": "Cliente de terminal",
+  "openTargetSaveFailed": "Não foi possível salvar a opção de clique duplo: {reason}",
+  "language": "Idioma",
+  "languageSaveFailed": "Não foi possível trocar o idioma: {reason}"
 }

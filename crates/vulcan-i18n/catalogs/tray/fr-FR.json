@@ -17,5 +17,12 @@
   "logLocationFailed": "Impossible d’ouvrir l’emplacement des journaux : {reason}",
   "bridgeFailed": "Le pont HTTP de Core a échoué : {reason}",
   "shutdownFailed": "Échec de l’arrêt : {reason}",
-  "shutdownStartFailed": "Impossible de démarrer le coordinateur d’arrêt : {reason}"
+  "shutdownStartFailed": "Impossible de démarrer le coordinateur d’arrêt : {reason}",
+  "doubleClickOpens": "Le double-clic ouvre",
+  "targetDesktopClient": "Client de bureau",
+  "targetWebui": "WebUI dans le navigateur",
+  "targetTerminalClient": "Client terminal",
+  "openTargetSaveFailed": "Impossible d’enregistrer le choix du double-clic : {reason}",
+  "language": "Langue",
+  "languageSaveFailed": "Impossible de changer de langue : {reason}"
 }

@@ -17,5 +17,12 @@
   "logLocationFailed": "无法打开日志位置：{reason}",
   "bridgeFailed": "Core HTTP 桥接失败：{reason}",
   "shutdownFailed": "关闭失败：{reason}",
-  "shutdownStartFailed": "无法启动关闭协调器：{reason}"
+  "shutdownStartFailed": "无法启动关闭协调器：{reason}",
+  "doubleClickOpens": "双击打开",
+  "targetDesktopClient": "桌面客户端",
+  "targetWebui": "浏览器中的 WebUI",
+  "targetTerminalClient": "终端客户端",
+  "openTargetSaveFailed": "无法保存双击打开方式：{reason}",
+  "language": "语言",
+  "languageSaveFailed": "无法切换语言：{reason}"
 }

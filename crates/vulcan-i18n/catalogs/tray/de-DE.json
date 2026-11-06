@@ -17,5 +17,12 @@
   "logLocationFailed": "Protokollordner konnte nicht geöffnet werden: {reason}",
   "bridgeFailed": "Core-HTTP-Bridge fehlgeschlagen: {reason}",
   "shutdownFailed": "Beenden fehlgeschlagen: {reason}",
-  "shutdownStartFailed": "Beendigungskoordinator konnte nicht gestartet werden: {reason}"
+  "shutdownStartFailed": "Beendigungskoordinator konnte nicht gestartet werden: {reason}",
+  "doubleClickOpens": "Doppelklick öffnet",
+  "targetDesktopClient": "Desktop-Client",
+  "targetWebui": "WebUI im Browser",
+  "targetTerminalClient": "Terminal-Client",
+  "openTargetSaveFailed": "Doppelklick-Auswahl konnte nicht gespeichert werden: {reason}",
+  "language": "Sprache",
+  "languageSaveFailed": "Sprache konnte nicht gewechselt werden: {reason}"
 }

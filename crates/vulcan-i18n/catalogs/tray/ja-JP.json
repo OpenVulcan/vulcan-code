@@ -17,5 +17,12 @@
   "logLocationFailed": "ログの場所を開けませんでした: {reason}",
   "bridgeFailed": "Core HTTP ブリッジが失敗しました: {reason}",
   "shutdownFailed": "シャットダウンに失敗しました: {reason}",
-  "shutdownStartFailed": "シャットダウン処理を開始できませんでした: {reason}"
+  "shutdownStartFailed": "シャットダウン処理を開始できませんでした: {reason}",
+  "doubleClickOpens": "ダブルクリックで開く",
+  "targetDesktopClient": "デスクトップクライアント",
+  "targetWebui": "ブラウザーの WebUI",
+  "targetTerminalClient": "ターミナルクライアント",
+  "openTargetSaveFailed": "ダブルクリック時の動作を保存できませんでした: {reason}",
+  "language": "言語",
+  "languageSaveFailed": "言語を切り替えられませんでした: {reason}"
 }

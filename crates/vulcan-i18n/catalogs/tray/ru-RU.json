@@ -17,5 +17,12 @@
   "logLocationFailed": "Не удалось открыть папку журналов: {reason}",
   "bridgeFailed": "Сбой HTTP-моста Core: {reason}",
   "shutdownFailed": "Не удалось завершить работу: {reason}",
-  "shutdownStartFailed": "Не удалось запустить координатор завершения: {reason}"
+  "shutdownStartFailed": "Не удалось запустить координатор завершения: {reason}",
+  "doubleClickOpens": "Двойной щелчок открывает",
+  "targetDesktopClient": "Настольный клиент",
+  "targetWebui": "WebUI в браузере",
+  "targetTerminalClient": "Терминальный клиент",
+  "openTargetSaveFailed": "Не удалось сохранить действие двойного щелчка: {reason}",
+  "language": "Язык",
+  "languageSaveFailed": "Не удалось сменить язык: {reason}"
 }

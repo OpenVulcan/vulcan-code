@@ -17,5 +17,12 @@
   "logLocationFailed": "無法開啟日誌位置：{reason}",
   "bridgeFailed": "Core HTTP 橋接失敗：{reason}",
   "shutdownFailed": "關閉失敗：{reason}",
-  "shutdownStartFailed": "無法啟動關閉協調器：{reason}"
+  "shutdownStartFailed": "無法啟動關閉協調器：{reason}",
+  "doubleClickOpens": "按兩下開啟",
+  "targetDesktopClient": "桌面客戶端",
+  "targetWebui": "瀏覽器中的 WebUI",
+  "targetTerminalClient": "終端機客戶端",
+  "openTargetSaveFailed": "無法儲存按兩下開啟方式：{reason}",
+  "language": "語言",
+  "languageSaveFailed": "無法切換語言：{reason}"
 }

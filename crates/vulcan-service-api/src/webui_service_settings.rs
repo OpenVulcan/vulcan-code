@@ -1,5 +1,6 @@
-//! Service settings chosen by the operator before the service starts, such as its port range.
-//! 由操作者在服务启动前选择的服务设置，例如端口范围。
+//! Service settings chosen by the operator, such as the port range read at start and the client a
+//! tray double click opens.
+//! 由操作者选择的服务设置，例如启动时读取的端口范围，以及托盘双击打开的客户端。
 //!
 //! The settings live beside the discovery document in `service-settings.json`; Debug and Release
 //! own separate user roots and therefore separate settings. Only an explicit choice writes the
@@ -107,6 +108,27 @@ pub struct WebuiServiceSettings {
     /// 配置的端口范围。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port_range: Option<WebuiServicePortRange>,
+    /// The client a double click on the tray icon opens.
+    /// 双击托盘图标时打开的客户端。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tray_open_target: Option<TrayOpenTarget>,
+}
+
+/// A client the tray can open; the desktop client is the default.
+/// 托盘可打开的客户端；默认是桌面客户端。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TrayOpenTarget {
+    /// The desktop client (GUI).
+    /// 桌面客户端（GUI）。
+    #[default]
+    Desktop,
+    /// The WebUI in the system browser.
+    /// 系统浏览器中的 WebUI。
+    Webui,
+    /// The terminal client (TUI).
+    /// 终端客户端（TUI）。
+    Terminal,
 }
 
 impl Default for WebuiServiceSettings {
@@ -114,11 +136,24 @@ impl Default for WebuiServiceSettings {
         Self {
             schema: WEBUI_SERVICE_SETTINGS_SCHEMA,
             port_range: None,
+            tray_open_target: None,
         }
     }
 }
 
 impl WebuiServiceSettings {
+    /// The client a tray double click opens: the configured one, or the desktop client.
+    /// 托盘双击打开的客户端：已配置的客户端，或桌面客户端。
+    pub fn effective_tray_open_target(&self) -> TrayOpenTarget {
+        self.tray_open_target.unwrap_or_default()
+    }
+
+    /// Records `target`; the default target is recorded as no entry.
+    /// 记录 `target`；默认客户端记录为无条目。
+    pub fn set_tray_open_target(&mut self, target: TrayOpenTarget) {
+        self.tray_open_target = (target != TrayOpenTarget::default()).then_some(target);
+    }
+
     /// The port range in effect: the configured one, or [`WebuiServicePortRange::DEFAULT`].
     /// 生效的端口范围：已配置的范围，或 [`WebuiServicePortRange::DEFAULT`]。
     pub fn effective_port_range(&self) -> WebuiServicePortRange {
@@ -276,6 +311,31 @@ mod tests {
     }
 
     #[test]
+    fn the_tray_target_keeps_the_port_range_and_writes_only_a_non_default_choice() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let path = temp.path().join(WEBUI_SERVICE_SETTINGS_FILE);
+        let mut settings = WebuiServiceSettings::default();
+        assert_eq!(
+            settings.effective_tray_open_target(),
+            TrayOpenTarget::Desktop
+        );
+        settings.set_tray_open_target(TrayOpenTarget::Desktop);
+        settings.write(&path).expect("write default");
+        assert!(!path.exists());
+        let range = WebuiServicePortRange::new(20000, 20009).expect("range");
+        settings.set_port_range(range);
+        settings.set_tray_open_target(TrayOpenTarget::Terminal);
+        settings.write(&path).expect("write chosen");
+        let mut read = WebuiServiceSettings::read(&path).expect("read");
+        assert_eq!(read.effective_tray_open_target(), TrayOpenTarget::Terminal);
+        assert_eq!(read.effective_port_range(), range);
+        read.set_port_range(WebuiServicePortRange::DEFAULT);
+        read.set_tray_open_target(TrayOpenTarget::Desktop);
+        read.write(&path).expect("reset");
+        assert!(!path.exists());
+    }
+
+    #[test]
     fn unknown_formats_and_invalid_ranges_are_refused() {
         let temp = tempfile::tempdir().expect("temp dir");
         let path = temp.path().join(WEBUI_SERVICE_SETTINGS_FILE);
@@ -284,6 +344,7 @@ mod tests {
             r#"{"schema":1,"portRange":{"first":80,"last":90}}"#,
             r#"{"schema":1,"portRange":{"first":20009,"last":20000}}"#,
             r#"{"schema":1,"other":true}"#,
+            r#"{"schema":1,"trayOpenTarget":"editor"}"#,
         ] {
             std::fs::write(&path, content).expect("write");
             assert!(

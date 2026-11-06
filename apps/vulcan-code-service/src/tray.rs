@@ -12,8 +12,10 @@ use tao::{
 };
 use tray_icon::{
     Icon, TrayIcon, TrayIconBuilder,
-    menu::{Menu, MenuEvent, MenuItem},
+    menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu},
 };
+#[cfg(windows)]
+use vulcan_service_api::TrayOpenTarget;
 
 use crate::service_runtime::HeadlessService;
 
@@ -49,6 +51,13 @@ enum TrayEvent {
     /// The ticker thread asks for a lifecycle refresh.
     /// 计时线程请求刷新生命周期状态。
     Tick,
+    /// The tray icon was double-clicked.
+    /// 托盘图标被双击。
+    #[cfg(windows)]
+    DoubleClick,
+    /// Saving the language chosen in the tray failed; carries the raw reason.
+    /// 保存托盘中选择的语言失败；携带原始原因。
+    LocaleSaveFailed(String),
 }
 
 /// Menu item identifier that opens the desktop client.
@@ -76,6 +85,32 @@ const MENU_SERVICE_STATUS: &str = "service-status";
 /// 经排空协调器退出服务的菜单项标识。
 const MENU_QUIT_SERVICE: &str = "quit-service";
 
+/// Identifier prefix of the items choosing the client a double click opens.
+/// 选择双击打开客户端的菜单项标识前缀。
+#[cfg(windows)]
+const MENU_OPEN_TARGET_PREFIX: &str = "open-target:";
+
+/// Identifier prefix of the items choosing the interface language.
+/// 选择界面语言的菜单项标识前缀。
+const MENU_LOCALE_PREFIX: &str = "locale:";
+
+/// Every client a double click can open, with its stable identifier and catalog key.
+/// 双击可打开的每个客户端，及其稳定标识与目录键。
+#[cfg(windows)]
+const OPEN_TARGETS: [(TrayOpenTarget, &str, &str); 3] = [
+    (
+        TrayOpenTarget::Desktop,
+        "desktop",
+        keys::TARGET_DESKTOP_CLIENT,
+    ),
+    (TrayOpenTarget::Webui, "webui", keys::TARGET_WEBUI),
+    (
+        TrayOpenTarget::Terminal,
+        "terminal",
+        keys::TARGET_TERMINAL_CLIENT,
+    ),
+];
+
 /// Native menu items retained so their text can follow the interface language.
 /// 保留的原生菜单项，使其文字能跟随界面语言。
 struct TrayMenu {
@@ -85,14 +120,48 @@ struct TrayMenu {
     /// Action items paired with their catalog keys.
     /// 与目录键配对的操作菜单项。
     actions: Vec<(MenuItem, &'static str)>,
+    /// Submenus paired with their catalog keys.
+    /// 与目录键配对的子菜单。
+    submenus: Vec<(Submenu, &'static str)>,
+    /// Double-click client choices, one checked.
+    /// 双击打开客户端的选项，仅一项勾选。
+    #[cfg(windows)]
+    targets: Vec<(CheckMenuItem, TrayOpenTarget, &'static str)>,
+    /// Language choices labelled with each language's own name, one checked.
+    /// 以各语言自身名称标注的语言选项，仅一项勾选。
+    locales: Vec<(CheckMenuItem, &'static str)>,
 }
 
 impl TrayMenu {
-    /// Rewrites every action label in the active language.
-    /// 以当前语言重写每个操作标签。
+    /// Rewrites every translated label in the active language.
+    /// 以当前语言重写每个译文标签。
     fn relabel(&self, text: &TrayText) {
         for (item, key) in &self.actions {
             item.set_text(text.get(key));
+        }
+        for (submenu, key) in &self.submenus {
+            submenu.set_text(text.get(key));
+        }
+        #[cfg(windows)]
+        for (item, _, key) in &self.targets {
+            item.set_text(text.get(key));
+        }
+    }
+
+    /// Checks only the item of `target`.
+    /// 只勾选 `target` 对应的菜单项。
+    #[cfg(windows)]
+    fn check_target(&self, target: TrayOpenTarget) {
+        for (item, choice, _) in &self.targets {
+            item.set_checked(*choice == target);
+        }
+    }
+
+    /// Checks only the item of the language `code`.
+    /// 只勾选语言 `code` 对应的菜单项。
+    fn check_locale(&self, code: &str) {
+        for (item, choice) in &self.locales {
+            item.set_checked(*choice == code);
         }
     }
 }
@@ -155,6 +224,17 @@ pub fn run_with_tray() {
     MenuEvent::set_event_handler(Some(move |event| {
         let _ = menu_proxy.send_event(TrayEvent::Menu(event));
     }));
+    // Only double clicks reach the loop; pointer moves and single clicks are dropped here.
+    // 只有双击送入事件循环；指针移动与单击在此丢弃。
+    #[cfg(windows)]
+    {
+        let icon_proxy = proxy.clone();
+        tray_icon::TrayIconEvent::set_event_handler(Some(move |event| {
+            if matches!(event, tray_icon::TrayIconEvent::DoubleClick { .. }) {
+                let _ = icon_proxy.send_event(TrayEvent::DoubleClick);
+            }
+        }));
+    }
     let tick_proxy = proxy.clone();
     if let Err(error) = std::thread::Builder::new()
         .name(String::from("vulcan-tray-tick"))
@@ -176,6 +256,14 @@ pub fn run_with_tray() {
     // text 以已保存语言启动，使首个菜单不会闪现其他语言。
     let mut text = TrayText::new();
     text.follow(vulcan_service_kernel::service_ui_locale_from_state(&handles.state).as_deref());
+    // open_target is the client a double click opens; an unreadable setting opens the default
+    // without rewriting the file.
+    // open_target 是双击打开的客户端；设置无法读取时打开默认客户端，且不改写文件。
+    #[cfg(windows)]
+    let mut open_target = crate::service_settings::tray_open_target().unwrap_or_else(|error| {
+        tracing::error!("[vulcan-code-service] tray open target unreadable: {error}");
+        TrayOpenTarget::default()
+    });
     let mut last_status = String::new();
     let mut bridge_reported = false;
     let mut ready_reported = false;
@@ -185,7 +273,11 @@ pub fn run_with_tray() {
         let _service_owner = &service;
         match event {
             Event::NewEvents(StartCause::Init) => match create_service_tray(&handles, &text) {
-                Ok(tray) => native_tray = Some(tray),
+                Ok(tray) => {
+                    #[cfg(windows)]
+                    tray.1.check_target(open_target);
+                    native_tray = Some(tray);
+                }
                 Err(error) => {
                     tracing::error!("[vulcan-code-service] native tray startup failed: {error}");
                     *control_flow = ControlFlow::ExitWithCode(1);
@@ -198,8 +290,44 @@ pub fn run_with_tray() {
                 MENU_OPEN_TERMINAL => open_terminal_client(&text),
                 MENU_OPEN_LOGS => open_log_location(&text),
                 MENU_QUIT_SERVICE => quit_service(&handles, &proxy, &text),
-                _ => {}
+                id => {
+                    let Some((_, menu)) = &native_tray else {
+                        return;
+                    };
+                    #[cfg(windows)]
+                    if let Some(target) = open_target_for_menu_id(id) {
+                        match crate::service_settings::set_tray_open_target(target) {
+                            Ok(()) => open_target = target,
+                            Err(error) => report_tray_failure(
+                                &text.with_reason(keys::OPEN_TARGET_SAVE_FAILED, &error),
+                            ),
+                        }
+                        // A click toggles the item itself, so every check is restated.
+                        // 点击会切换该项自身的勾选，因此重新设定全部勾选。
+                        menu.check_target(open_target);
+                        return;
+                    }
+                    if let Some(code) = locale_for_menu_id(id) {
+                        // The new language shows as checked at once; the tick relabels the
+                        // menu after the save, and a failure checks the active one again.
+                        // 新语言立即显示为勾选；保存后由刷新重写菜单文字，失败时重新勾选当前语言。
+                        menu.check_locale(code);
+                        save_locale(&handles, &proxy, code);
+                    }
+                }
             },
+            #[cfg(windows)]
+            Event::UserEvent(TrayEvent::DoubleClick) => match open_target {
+                TrayOpenTarget::Desktop => open_desktop_client(&text),
+                TrayOpenTarget::Webui => open_webui_in_browser(&handles, &text),
+                TrayOpenTarget::Terminal => open_terminal_client(&text),
+            },
+            Event::UserEvent(TrayEvent::LocaleSaveFailed(reason)) => {
+                if let Some((_, menu)) = &native_tray {
+                    menu.check_locale(text.locale());
+                }
+                report_tray_failure(&text.with_reason(keys::LANGUAGE_SAVE_FAILED, &reason));
+            }
             Event::UserEvent(TrayEvent::ShutdownComplete) => {
                 // Drop the icon before ending the OS loop so Explorer removes it immediately.
                 // 在结束系统循环之前释放图标，让 Explorer 立即移除它。
@@ -220,6 +348,7 @@ pub fn run_with_tray() {
                         vulcan_service_kernel::service_ui_locale_from_state(&handles.state);
                     if text.follow(saved_locale.as_deref()) {
                         menu.relabel(&text);
+                        menu.check_locale(text.locale());
                     }
                     let current_status = tray_service_status_text(&handles, &text);
                     if current_status != last_status {
@@ -275,26 +404,81 @@ fn create_service_tray(
         false,
         None,
     );
-    // action_ids lists the enabled items in menu order with the catalog key of each label.
-    // action_ids 按菜单顺序列出启用的菜单项及其标签目录键。
-    let mut action_ids = vec![
-        (MENU_OPEN_CLIENT, keys::OPEN_DESKTOP_CLIENT),
-        (MENU_OPEN_WEBUI, keys::OPEN_WEBUI),
+    let action =
+        |id: &str, key: &'static str| (MenuItem::with_id(id, text.get(key), true, None), key);
+    // open_actions opens a client; service_actions act on the service itself.
+    // open_actions 打开客户端；service_actions 作用于服务本身。
+    let mut open_actions = vec![
+        action(MENU_OPEN_CLIENT, keys::OPEN_DESKTOP_CLIENT),
+        action(MENU_OPEN_WEBUI, keys::OPEN_WEBUI),
     ];
     #[cfg(windows)]
-    action_ids.push((MENU_OPEN_TERMINAL, keys::OPEN_TERMINAL_CLIENT));
-    action_ids.extend([
-        (MENU_OPEN_LOGS, keys::OPEN_LOG_LOCATION),
-        (MENU_QUIT_SERVICE, keys::QUIT_SERVICE),
-    ]);
-    let actions: Vec<(MenuItem, &'static str)> = action_ids
-        .into_iter()
-        .map(|(id, key)| (MenuItem::with_id(id, text.get(key), true, None), key))
-        .collect();
-    let menu = Menu::with_items(&[&status]).map_err(|error| error.to_string())?;
-    for (item, _) in &actions {
-        menu.append(item).map_err(|error| error.to_string())?;
+    open_actions.push(action(MENU_OPEN_TERMINAL, keys::OPEN_TERMINAL_CLIENT));
+    let service_actions = [
+        action(MENU_OPEN_LOGS, keys::OPEN_LOG_LOCATION),
+        action(MENU_QUIT_SERVICE, keys::QUIT_SERVICE),
+    ];
+    fn failed(error: impl std::fmt::Display) -> String {
+        error.to_string()
     }
+    let menu = Menu::with_items(&[&status, &PredefinedMenuItem::separator()]).map_err(failed)?;
+    for (item, _) in &open_actions {
+        menu.append(item).map_err(failed)?;
+    }
+    menu.append(&PredefinedMenuItem::separator())
+        .map_err(failed)?;
+    let mut submenus = Vec::new();
+    // The double-click choice exists only where the icon reports double clicks.
+    // 只有图标会报告双击的平台才提供双击选项。
+    #[cfg(windows)]
+    let targets = {
+        let submenu = Submenu::new(text.get(keys::DOUBLE_CLICK_OPENS), true);
+        let targets: Vec<(CheckMenuItem, TrayOpenTarget, &'static str)> = OPEN_TARGETS
+            .iter()
+            .map(|(target, id, key)| {
+                let item = CheckMenuItem::with_id(
+                    format!("{MENU_OPEN_TARGET_PREFIX}{id}"),
+                    text.get(key),
+                    true,
+                    false,
+                    None,
+                );
+                (item, *target, *key)
+            })
+            .collect();
+        for (item, _, _) in &targets {
+            submenu.append(item).map_err(failed)?;
+        }
+        menu.append(&submenu).map_err(failed)?;
+        submenus.push((submenu, keys::DOUBLE_CLICK_OPENS));
+        targets
+    };
+    let language = Submenu::new(text.get(keys::LANGUAGE), true);
+    let locales: Vec<(CheckMenuItem, &'static str)> = vulcan_i18n::LOCALES
+        .iter()
+        .map(|locale| {
+            let item = CheckMenuItem::with_id(
+                format!("{MENU_LOCALE_PREFIX}{}", locale.code),
+                locale.native_name,
+                true,
+                locale.code == text.locale(),
+                None,
+            );
+            (item, locale.code)
+        })
+        .collect();
+    for (item, _) in &locales {
+        language.append(item).map_err(failed)?;
+    }
+    menu.append(&language).map_err(failed)?;
+    submenus.push((language, keys::LANGUAGE));
+    menu.append(&PredefinedMenuItem::separator())
+        .map_err(failed)?;
+    for (item, _) in &service_actions {
+        menu.append(item).map_err(failed)?;
+    }
+    let mut actions = open_actions;
+    actions.extend(service_actions);
     let tooltip = String::from("Vulcan Code Service");
     #[cfg(feature = "test-support")]
     let tooltip =
@@ -310,10 +494,74 @@ fn create_service_tray(
         .with_icon(decode_tray_icon()?)
         .with_menu(Box::new(menu))
         .with_tooltip(tooltip)
-        .with_menu_on_left_click(true)
+        // On Windows a double click opens the chosen client and the menu belongs to the right
+        // button; elsewhere any click opens the menu.
+        // Windows 上双击打开所选客户端，菜单归右键；其他平台任意点击都打开菜单。
+        .with_menu_on_left_click(cfg!(not(windows)))
         .build()
         .map_err(|error| error.to_string())?;
-    Ok((tray, TrayMenu { status, actions }))
+    Ok((
+        tray,
+        TrayMenu {
+            status,
+            actions,
+            submenus,
+            #[cfg(windows)]
+            targets,
+            locales,
+        },
+    ))
+}
+
+/// Returns the client named by a double-click choice identifier.
+/// 返回双击选项标识所指的客户端。
+#[cfg(windows)]
+fn open_target_for_menu_id(id: &str) -> Option<TrayOpenTarget> {
+    let name = id.strip_prefix(MENU_OPEN_TARGET_PREFIX)?;
+    OPEN_TARGETS
+        .iter()
+        .find(|(_, choice, _)| *choice == name)
+        .map(|(target, _, _)| *target)
+}
+
+/// Returns the registered language code named by a language choice identifier.
+/// 返回语言选项标识所指的已注册语言代码。
+fn locale_for_menu_id(id: &str) -> Option<&'static str> {
+    let code = id.strip_prefix(MENU_LOCALE_PREFIX)?;
+    vulcan_i18n::LOCALES
+        .iter()
+        .find(|locale| locale.code == code)
+        .map(|locale| locale.code)
+}
+
+/// Saves the language chosen in the tray on a worker thread so the menu never waits on the
+/// configuration lock; a failure comes back to the event loop.
+/// 在工作线程上保存托盘中选择的语言，使菜单不等待配置锁；失败结果送回事件循环。
+fn save_locale(handles: &TrayServiceHandles, proxy: &EventLoopProxy<TrayEvent>, code: &str) {
+    let emitter = handles.service.event_emitter();
+    let state = Arc::clone(&handles.state);
+    let locale = code.to_owned();
+    let proxy = proxy.clone();
+    let failure_proxy = proxy.clone();
+    let spawned = std::thread::Builder::new()
+        .name(String::from("vulcan-tray-locale"))
+        .spawn(move || {
+            let saved = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|error| error.to_string())
+                .and_then(|runtime| {
+                    runtime.block_on(vulcan_service_kernel::service_save_ui_locale(
+                        emitter, state, locale,
+                    ))
+                });
+            if let Err(reason) = saved {
+                let _ = proxy.send_event(TrayEvent::LocaleSaveFailed(reason));
+            }
+        });
+    if let Err(error) = spawned {
+        let _ = failure_proxy.send_event(TrayEvent::LocaleSaveFailed(error.to_string()));
+    }
 }
 
 /// Decodes the bundled PNG into the RGBA pixels required by the platform tray library.
@@ -744,6 +992,27 @@ mod tests {
         ServiceActiveWorkSummary, ServiceLifecycle, ServiceStatusSnapshot,
         webui_service_ready_discovery_snapshot,
     };
+
+    /// Every language and double-click choice is found again from its menu identifier, and
+    /// identifiers outside the registered sets are ignored.
+    /// 每个语言及双击选项都能从其菜单标识找回，注册集合之外的标识被忽略。
+    #[test]
+    fn choice_identifiers_round_trip() {
+        for locale in vulcan_i18n::LOCALES {
+            let id = format!("{}{}", super::MENU_LOCALE_PREFIX, locale.code);
+            assert_eq!(super::locale_for_menu_id(&id), Some(locale.code));
+        }
+        assert_eq!(super::locale_for_menu_id("locale:xx-XX"), None);
+        assert_eq!(super::locale_for_menu_id(super::MENU_QUIT_SERVICE), None);
+        #[cfg(windows)]
+        {
+            for (target, name, _) in super::OPEN_TARGETS {
+                let id = format!("{}{name}", super::MENU_OPEN_TARGET_PREFIX);
+                assert_eq!(super::open_target_for_menu_id(&id), Some(target));
+            }
+            assert_eq!(super::open_target_for_menu_id("open-target:editor"), None);
+        }
+    }
 
     /// Ensures the tray never opens a stale, failed, or rewritten discovery target.
     /// 确保托盘不会打开过期、失败或被改写的发现目标。

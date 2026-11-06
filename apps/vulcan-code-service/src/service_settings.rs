@@ -62,6 +62,24 @@ pub fn set_port_range(value: &str) -> Result<String, String> {
     ))
 }
 
+/// Reads the client a tray double click opens from this build's service settings.
+/// 从本构建的服务设置读取托盘双击打开的客户端。
+#[cfg(all(feature = "desktop-tray", windows))]
+pub fn tray_open_target() -> Result<vulcan_service_api::TrayOpenTarget, String> {
+    let path = crate::service_runtime::authoritative_data_root()?.join(WEBUI_SERVICE_SETTINGS_FILE);
+    Ok(WebuiServiceSettings::read(&path)?.effective_tray_open_target())
+}
+
+/// Records the client a tray double click opens, keeping every other setting.
+/// 记录托盘双击打开的客户端，保留其他所有设置。
+#[cfg(all(feature = "desktop-tray", windows))]
+pub fn set_tray_open_target(target: vulcan_service_api::TrayOpenTarget) -> Result<(), String> {
+    let path = crate::service_runtime::authoritative_data_root()?.join(WEBUI_SERVICE_SETTINGS_FILE);
+    let mut settings = WebuiServiceSettings::read(&path)?;
+    settings.set_tray_open_target(target);
+    settings.write(&path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

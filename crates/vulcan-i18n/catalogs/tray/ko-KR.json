@@ -17,5 +17,12 @@
   "logLocationFailed": "로그 위치를 열 수 없습니다: {reason}",
   "bridgeFailed": "Core HTTP 브리지 실패: {reason}",
   "shutdownFailed": "종료 실패: {reason}",
-  "shutdownStartFailed": "종료 코디네이터를 시작할 수 없습니다: {reason}"
+  "shutdownStartFailed": "종료 코디네이터를 시작할 수 없습니다: {reason}",
+  "doubleClickOpens": "두 번 클릭 시 열기",
+  "targetDesktopClient": "데스크톱 클라이언트",
+  "targetWebui": "브라우저의 WebUI",
+  "targetTerminalClient": "터미널 클라이언트",
+  "openTargetSaveFailed": "두 번 클릭 동작을 저장할 수 없습니다: {reason}",
+  "language": "언어",
+  "languageSaveFailed": "언어를 전환할 수 없습니다: {reason}"
 }

@@ -17,5 +17,12 @@
   "logLocationFailed": "No se pudo abrir la ubicación de registros: {reason}",
   "bridgeFailed": "El puente HTTP de Core falló: {reason}",
   "shutdownFailed": "El apagado falló: {reason}",
-  "shutdownStartFailed": "No se pudo iniciar el coordinador de apagado: {reason}"
+  "shutdownStartFailed": "No se pudo iniciar el coordinador de apagado: {reason}",
+  "doubleClickOpens": "Doble clic abre",
+  "targetDesktopClient": "Cliente de escritorio",
+  "targetWebui": "WebUI en el navegador",
+  "targetTerminalClient": "Cliente de terminal",
+  "openTargetSaveFailed": "No se pudo guardar la opción de doble clic: {reason}",
+  "language": "Idioma",
+  "languageSaveFailed": "No se pudo cambiar el idioma: {reason}"
 }
