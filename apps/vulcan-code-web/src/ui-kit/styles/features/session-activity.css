@@ -1,0 +1,65 @@
+/* Session activity panel: two pages (subagents, commands) in one card. A tab row stays on top, the list scrolls, */
+/* and a footer holds the clear and show-all controls. Running entries show their latest lines in a quiet mono */
+/* block; an expanded command shows its log in a bounded scroll area. */
+/* 会话活动面板：单张卡片中的两个页面（子代理、命令）。页签行固定在顶部，列表滚动，底部是清理与显示全部控件。 */
+/* 运行中的条目以安静的等宽块显示最近的行；展开的命令在有界滚动区中显示其日志。 */
+.vk-act { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; }
+.vk-act-tabs { display: flex; flex: none; gap: calc(var(--vk-u) * 1); padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 2); border-bottom: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-act-tab { display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 1.5); padding: calc(var(--vk-u) * 1) calc(var(--vk-u) * 2); border: 0; background: transparent; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); cursor: pointer; transition: background-color var(--vk-t-fast) var(--vk-ease), color var(--vk-t-fast) var(--vk-ease); }
+.vk-act-tab:hover { background: var(--vk-hover); color: var(--vk-ink); }
+.vk-act-tab:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: -1px; }
+.vk-act-tab[aria-selected="true"] { color: var(--vk-ink); box-shadow: inset 0 -2px 0 var(--vk-ember); }
+.vk-act-tab > svg { flex: none; color: var(--vk-ink-3); }
+.vk-act-tab > b { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); font-weight: 500; font-variant-numeric: tabular-nums; }
+
+.vk-act-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.vk-act-list { display: grid; margin: 0; padding: 0; list-style: none; }
+.vk-act-item { display: grid; gap: calc(var(--vk-u) * 1); min-width: 0; padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 2.5); border-bottom: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-act-item[data-cleared] { opacity: 0.6; }
+.vk-act-item:has(> .vk-act-agent) { padding: 0; }
+
+.vk-act-row { display: flex; align-items: center; gap: calc(var(--vk-u) * 1.5); min-width: 0; }
+.vk-act-row > svg { flex: none; color: var(--vk-ink-3); }
+.vk-act-row strong,
+.vk-act-row > strong { min-width: 0; overflow: hidden; color: var(--vk-ink); font-size: var(--vk-fs-sm); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.vk-act-row > small { flex: none; margin-left: auto; color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.vk-act-row > small[data-tone="ok"] { color: var(--vk-ok); }
+.vk-act-row > small[data-tone="bad"] { color: var(--vk-bad); }
+
+.vk-act-agent { display: grid; gap: calc(var(--vk-u) * 1); width: 100%; min-width: 0; padding: calc(var(--vk-u) * 2) calc(var(--vk-u) * 2.5); border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background-color var(--vk-t-fast) var(--vk-ease); }
+.vk-act-agent:hover { background: var(--vk-hover); }
+.vk-act-agent:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: -1px; }
+.vk-act-desc { overflow: hidden; color: var(--vk-ink-2); font-size: var(--vk-fs-xs); text-overflow: ellipsis; white-space: nowrap; }
+.vk-act-tools { display: grid; gap: 2px; min-width: 0; }
+.vk-act-tool { display: flex; align-items: baseline; gap: calc(var(--vk-u) * 1.5); min-width: 0; font-size: var(--vk-fs-xs); }
+.vk-act-tool > code { flex: none; color: var(--vk-ink-2); font-family: var(--vk-font-mono); }
+.vk-act-tool > span { min-width: 0; overflow: hidden; color: var(--vk-ink-3); text-overflow: ellipsis; white-space: nowrap; }
+.vk-act-tool[data-status="failed"] > code,
+.vk-act-tool[data-status="error"] > code { color: var(--vk-bad); }
+
+.vk-act-toggle { display: flex; flex: 1 1 auto; align-items: center; gap: calc(var(--vk-u) * 1.5); min-width: 0; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.vk-act-toggle:disabled { cursor: default; }
+.vk-act-toggle:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: 1px; }
+.vk-act-toggle > svg { flex: none; color: var(--vk-ink-3); }
+.vk-act-dot { flex: none; width: 7px; height: 7px; background: var(--vk-ink-3); }
+.vk-act-dot[data-state="running"] { background: var(--vk-ok); }
+.vk-act-dot[data-state="failed"],
+.vk-act-dot[data-state="timed_out"],
+.vk-act-dot[data-state="lost"] { background: var(--vk-bad); }
+.vk-act-dot[data-state="stopped"] { background: var(--vk-warn); }
+
+.vk-act-cmd { display: block; overflow: hidden; color: var(--vk-ink-2); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); text-overflow: ellipsis; white-space: nowrap; }
+.vk-act-meta { display: flex; flex-wrap: wrap; gap: calc(var(--vk-u) * 2); color: var(--vk-ink-3); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); }
+.vk-act-reason { color: var(--vk-bad); font-size: var(--vk-fs-xs); overflow-wrap: anywhere; }
+.vk-act-tail { display: block; margin: 0; padding: calc(var(--vk-u) * 1) calc(var(--vk-u) * 1.5); overflow: hidden; background: var(--vk-sunken); color: var(--vk-ink-2); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); line-height: 1.45; white-space: pre; text-overflow: ellipsis; }
+
+.vk-act-log { height: 280px; overflow: auto; overscroll-behavior: contain; padding: calc(var(--vk-u) * 1) 0; background: var(--vk-sunken); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); line-height: 1.45; }
+.vk-act-log-row { padding: 0 calc(var(--vk-u) * 1.5); color: var(--vk-ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.vk-act-log-row[data-continuation] { padding-left: calc(var(--vk-u) * 4); color: var(--vk-ink-2); }
+.vk-act-log-row[data-kind="gap"] { margin: calc(var(--vk-u) * 1) 0; color: var(--vk-ink-3); font-style: italic; }
+.vk-act-log-more,
+
+.vk-act-foot { display: flex; flex: none; justify-content: space-between; gap: calc(var(--vk-u) * 1); padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 2); border-top: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-act-none,
+.vk-act-error { margin: 0; padding: calc(var(--vk-u) * 3) calc(var(--vk-u) * 2.5); color: var(--vk-ink-3); font-size: var(--vk-fs-sm); }
+.vk-act-error { color: var(--vk-bad); overflow-wrap: anywhere; }

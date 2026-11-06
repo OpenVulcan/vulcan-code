@@ -455,6 +455,9 @@ pub enum ServiceEvent {
     /// Recent output of a running `shell_command` call shown by an open card.
     /// 已展开卡片显示的运行中 `shell_command` 调用的最近输出。
     ShellCommandOutputChanged(Box<ShellCommandOutputChangedEvent>),
+    /// A shell job of a session started, moved to the background or finished.
+    /// 某会话的一个 shell 任务已启动、转到后台或已结束。
+    ShellJobChanged(Box<ShellJobChangedEvent>),
     /// Visible project-terminal output event.
     /// 可见项目终端输出事件。
     ProjectTerminalDisplayChanged(Box<ProjectTerminalDisplayChangedEvent>),

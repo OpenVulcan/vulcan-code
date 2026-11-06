@@ -1,3 +1,4 @@
+use super::shell_command_live::canonical_shell_job_session_id;
 use super::*;
 use crate::agent_runtime::conversation_hooks::HOOK_TOOL_SHELL_COMMAND_BEFORE_EXECUTE;
 use crate::agent_runtime::vulcan_plugin_hooks::dispatch_vulcan_plugin_hook;
@@ -7,13 +8,15 @@ use vulcan_hooks::{HookActor, HookCapabilitySet, HookContext, HookDiagnosticSeve
 use vulcan_host_tools::process_creation::{
     apply_child_path_prefixes, new_background_tokio_command,
 };
-use vulcan_host_tools::process_tree::{
-    CHILD_OUTPUT_DRAIN_GRACE, ChildProcessTreeDropGuard, isolate_child_process_tree,
-    terminate_child_process_tree,
-};
 use vulcan_host_tools::rtk::{
     RTK_PLAIN_OUTPUT_VARIABLE, RtkRewriteOutcome, resolve_rtk_executable, rtk_command_routes,
     rtk_host_environment, rtk_invocation_environment, run_rtk_rewrite,
+};
+use vulcan_host_tools::shell_job::{
+    MAX_RUNNING_BACKGROUND_SHELL_JOBS, SHELL_OUTPUT_LINE_WRAP_BYTES,
+    SHELL_OUTPUT_TAIL_BUDGET_BYTES, ShellJobCapturedStreams, ShellJobFinal, ShellJobForeground,
+    ShellJobOrigin, ShellJobRuntime, ShellJobSpawn, ShellJobTail, ShellJobWaitOutcome,
+    render_plain_rows,
 };
 
 /// Stable identifier of the one-shot shell-command native tool.
@@ -76,10 +79,13 @@ pub(crate) struct ShellCommandToolArgs {
     /// Optional shell family selector such as `auto`, `powershell`, `cmd`, or `bash`.
     /// 可选 shell 类型选择器，例如 `auto`、`powershell`、`cmd` 或 `bash`。
     shell: Option<String>,
-    /// Optional reason read only by the permission gate; never passed to the command.
-    /// 仅由权限闸门读取的可选理由；从不传给命令。
-    #[serde(default, rename = "purpose")]
-    _purpose: Option<String>,
+    /// What the command is for; shown on the card, read by the permission gate and listed with jobs.
+    /// 命令用途；显示在卡片上，由权限闸门读取，并随任务列出。
+    purpose: String,
+    /// Starts the command as a background job and returns at once.
+    /// 以后台任务启动命令并立即返回。
+    #[serde(default)]
+    background: bool,
 }
 
 /// Process execution options derived from generic plugin hooks and host policy.
@@ -100,9 +106,6 @@ pub(crate) struct ShellCommandProcessOptions {
     /// explicit hook value wins.
     /// 会话的 Vulcan 环境变量，先于 Hook 贡献应用，使显式 Hook 值优先。
     vulcan_environment: Vec<(String, String)>,
-    /// Display-only tail the output readers also append to while the call runs.
-    /// 调用运行期间输出读取任务同时追加到的仅供显示的尾部。
-    live_output: Option<Arc<super::shell_command_live::ShellCommandLiveRun>>,
 }
 
 /// One generic user-visible display contribution returned by a shell transform hook.
@@ -303,78 +306,111 @@ async fn apply_native_rtk_rewrite(
     }
 }
 
-/// One internal execution status returned by the host-owned shell-command runner.
-/// 宿主自有 shell 命令执行器返回的一种内部执行状态。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ShellCommandExecutionStatus {
-    Completed,
-    Failed,
-    TimedOut,
-    OutputLimitExceeded,
-}
+/// Status label of a command that moved to the background and keeps running.
+/// 已转到后台并继续运行的命令的状态标签。
+pub(crate) const SHELL_COMMAND_BACKGROUND_STATUS: &str = "running_in_background";
 
-impl ShellCommandExecutionStatus {
-    /// Render the execution status into one stable host-result label.
-    /// 将执行状态渲染为稳定的宿主结果标签。
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Completed => "completed",
-            Self::Failed => "failed",
-            Self::TimedOut => "timed_out",
-            Self::OutputLimitExceeded => "output_limit_exceeded",
-        }
-    }
-}
+/// Status label of a command that could not be started.
+/// 无法启动的命令的状态标签。
+const SHELL_COMMAND_NOT_STARTED_STATUS: &str = "failed";
 
 /// Maximum inline byte budget used before shell tool output switches into page mode spill rendering.
 /// shell 工具输出在切换到分页落盘渲染前使用的最大内联字节预算。
 pub(crate) const SHELL_INLINE_OUTPUT_LIMIT_BYTES: u64 =
     crate::tool_result_format::DEFAULT_INLINE_TOOL_RESULT_BYTES;
 
-/// Hard cap on combined raw stdout+stderr bytes one `shell_command` run may produce.
-/// 单次 `shell_command` 运行允许产生的 stdout+stderr 原始字节总量硬上限。
-///
-/// Crossing it terminates the process tree and discards all captured output, so a runaway
-/// command such as `cat` on a multi-gigabyte log never reaches memory, disk, or the model.
-/// 越过该上限会终止进程树并丢弃全部已捕获输出，使对数 GB 日志执行 `cat` 等失控命令的输出
-/// 不会进入内存、磁盘或模型。
-pub(crate) const SHELL_COMMAND_OUTPUT_HARD_LIMIT_BYTES: usize = 8 * 1024 * 1024;
+/// How one `shell_command` call ended for its caller.
+/// 一次 `shell_command` 调用对调用方而言的结束方式。
+#[derive(Debug, Clone)]
+pub(crate) enum ShellCommandCallEnd {
+    /// The job finished while the call waited.
+    /// 调用等待期间任务已结束。
+    Finished(ShellJobFinal),
+    /// The job keeps running in the background; `reason` says why the call returned first.
+    /// 任务在后台继续运行；`reason` 说明调用为何先返回。
+    Background {
+        /// Why the call returned while the job runs.
+        /// 任务运行期间调用返回的原因。
+        reason: String,
+    },
+    /// The command never started.
+    /// 命令从未启动。
+    NotStarted {
+        /// Why it could not start.
+        /// 无法启动的原因。
+        reason: String,
+    },
+}
 
 /// One normalized shell-command execution report used by both model text and host metadata.
 /// 同时供模型文本与宿主元数据复用的一份规范化 shell 命令执行报告。
 #[derive(Debug, Clone)]
 pub(crate) struct ShellCommandExecutionReport {
-    /// Final execution status observed by the host.
-    /// 宿主观察到的最终执行状态。
-    status: ShellCommandExecutionStatus,
+    /// How the call ended.
+    /// 调用的结束方式。
+    end: ShellCommandCallEnd,
+    /// Job identity, once the command started.
+    /// 命令启动后的任务身份。
+    job_id: Option<String>,
     /// Stable shell label chosen by the host.
     /// 由宿主选定的稳定 shell 标签。
     shell_label: String,
     /// Effective working directory used for the command run.
     /// 本次命令执行使用的实际工作目录。
     cwd: PathBuf,
-    /// Optional process exit code when the child exited normally.
-    /// 子进程正常退出时的可选进程退出码。
-    exit_code: Option<i32>,
-    /// Total wall-clock duration captured by the host in milliseconds.
-    /// 由宿主记录的总耗时，单位为毫秒。
+    /// Run time in milliseconds: total for a finished job, so far for a background one.
+    /// 运行时间（毫秒）：已结束任务为总时长，后台任务为迄今时长。
     duration_ms: u64,
-    /// Decoded standard-output text captured from the child process.
-    /// 从子进程捕获并解码得到的标准输出文本。
-    stdout_text: String,
-    /// Decoded standard-error text captured from the child process.
-    /// 从子进程捕获并解码得到的标准错误文本。
-    stderr_text: String,
-    /// Optional failure reason synthesized by the host for spawn or timeout failures.
-    /// 宿主为启动失败或超时失败综合生成的可选失败原因。
-    failure_reason: Option<String>,
+    /// Bounded end of the output, when the log could be read.
+    /// 输出的有界末尾（日志可读时）。
+    tail: Option<ShellJobTail>,
+    /// Raw stdout and stderr kept for tool-chain steps.
+    /// 为工具链步骤保留的原始 stdout 与 stderr。
+    streams: ShellJobCapturedStreams,
+}
+
+impl ShellCommandExecutionReport {
+    /// Stable status label of the call.
+    /// 调用的稳定状态标签。
+    fn status_label(&self) -> &'static str {
+        match &self.end {
+            ShellCommandCallEnd::Finished(outcome) => outcome.status.as_str(),
+            ShellCommandCallEnd::Background { .. } => SHELL_COMMAND_BACKGROUND_STATUS,
+            ShellCommandCallEnd::NotStarted { .. } => SHELL_COMMAND_NOT_STARTED_STATUS,
+        }
+    }
+
+    /// Process exit code, when the process exited by itself.
+    /// 进程自行退出时的退出码。
+    fn exit_code(&self) -> Option<i32> {
+        match &self.end {
+            ShellCommandCallEnd::Finished(outcome) => outcome.exit_code,
+            _ => None,
+        }
+    }
+
+    /// Host note on failures, stops, timeouts and early returns.
+    /// 宿主关于失败、停止、超时与提前返回的说明。
+    fn failure_reason(&self) -> Option<&str> {
+        match &self.end {
+            ShellCommandCallEnd::Finished(outcome) => outcome.failure_reason.as_deref(),
+            ShellCommandCallEnd::Background { reason }
+            | ShellCommandCallEnd::NotStarted { reason } => Some(reason),
+        }
+    }
+
+    /// True while the job keeps running in the background.
+    /// 任务在后台继续运行时为 true。
+    fn is_background(&self) -> bool {
+        matches!(self.end, ShellCommandCallEnd::Background { .. })
+    }
 }
 
 /// Builds the English AI-facing description for the one-shot shell command tool.
 /// 构建一次性 shell 命令工具面向 AI 的英文描述。
 pub(crate) fn shell_command_tool_description() -> String {
     format!(
-        "Run a one-shot command in the host environment and return the full decoded stdout/stderr plus the exit status, not just a summary. Default `timeout_ms`: unlimited. If `timeout_ms` is omitted, no timeout is applied and the host waits until the process exits. If the combined raw stdout/stderr exceeds {SHELL_COMMAND_OUTPUT_HARD_LIMIT_BYTES} bytes, the host terminates the command's process tree immediately and returns status `output_limit_exceeded` with no output at all; narrow such commands with `head`, `tail`, `grep`, or line ranges, or redirect output to a file and inspect it in slices. When the inline result exceeds {SHELL_INLINE_OUTPUT_LIMIT_BYTES} bytes, the host switches to page-mode spill files under the project-local `.vulcan/temp/` directory using exclusively created names like `tool_output_<random_id>.md`; the result reports the exact file path. After spill, the host preserves the full rendered output instead of truncating it, subject to successful file creation, filesystem limits, and per-line safe-read chunking."
+        "Run a one-shot command in the host environment. Every call runs as a shell job: stdout and stderr are recorded together, in arrival order, in a rolling log, and the result gives the exit status plus the end of the output, the newest whole lines within {SHELL_OUTPUT_TAIL_BUDGET_BYTES} bytes; a line longer than {SHELL_OUTPUT_LINE_WRAP_BYTES} bytes is split into several rows. Shorter output returns in full. When earlier output was left out, read it by line range or search it with `shell_job`. Default `timeout_ms`: unlimited; if omitted the host waits until the process exits. Set `background` to true for commands that run long or never exit (servers, watchers, long builds): the call returns the `job_id` at once and the command keeps running; a session runs at most {MAX_RUNNING_BACKGROUND_SHELL_JOBS} background jobs at a time. If the user sends a message while a command runs in the foreground, the host moves it to the background so you can answer, and it keeps running as a job. You are told when a background job finishes; meanwhile use `shell_job` to list, wait for, read, search or stop jobs. A result that still exceeds {SHELL_INLINE_OUTPUT_LIMIT_BYTES} bytes, such as one with a very long command text, is paged into an exclusively created `.vulcan/temp/tool_output_<random_id>.md` file whose exact path is reported."
     )
 }
 
@@ -386,9 +422,13 @@ pub(crate) fn shell_command_args_schema(shell_support: &HostCommandShellSupport)
         "properties": {
             "command": {
                 "type": "string",
-                "description": format!(
-                    "Raw command text executed by the selected shell. On success, the tool returns the full decoded stdout/stderr plus exit status, not just a summary. If the rendered result exceeds {SHELL_INLINE_OUTPUT_LIMIT_BYTES} bytes, the host spills the full output into an exclusively created `.vulcan/temp/tool_output_<random_id>.md` file and reports its exact path."
-                )
+                "description": "Raw command text executed by the selected shell."
+            },
+            "purpose": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": MAX_PERMISSION_REASON_CHARS,
+                "description": SHELL_COMMAND_PURPOSE_DESCRIPTION
             },
             "cwd": {
                 "type": "string",
@@ -397,16 +437,16 @@ pub(crate) fn shell_command_args_schema(shell_support: &HostCommandShellSupport)
             "timeout_ms": {
                 "type": "integer",
                 "minimum": 1,
-                "description": "Optional hard timeout in milliseconds; must be at least 1 when provided. Default: unlimited. When omitted, no timeout is applied and the host waits until the process exits."
+                "description": "Optional hard timeout in milliseconds; must be at least 1 when provided. Default: unlimited. When omitted, no timeout is applied and the host waits until the process exits. With `background` true it bounds the whole job; a foreground command moved to the background keeps running without it."
+            },
+            "background": {
+                "type": "boolean",
+                "default": false,
+                "description": "Optional, default false. True starts the command as a background job and returns its `job_id` immediately; follow it with `shell_job`."
             },
             "stdin": {
                 "type": "string",
                 "description": "Optional stdin text written once to the process as UTF-8; stdin is closed afterwards. When omitted, stdin is empty. No newline is added automatically. In PowerShell read it with `[Console]::In.ReadToEnd()`, not `$input`, which garbles non-ASCII text on Windows."
-            },
-            "purpose": {
-                "type": "string",
-                "maxLength": MAX_PERMISSION_REASON_CHARS,
-                "description": PURPOSE_ARGUMENT_DESCRIPTION
             },
             "shell": {
                 "type": "string",
@@ -415,10 +455,14 @@ pub(crate) fn shell_command_args_schema(shell_support: &HostCommandShellSupport)
                 "description": shell_support.schema_shell_description()
             }
         },
-        "required": ["command"],
+        "required": ["command", "purpose"],
         "additionalProperties": false
     })
 }
+
+/// Description of the required `purpose` argument of `shell_command`.
+/// `shell_command` 必填参数 `purpose` 的说明。
+const SHELL_COMMAND_PURPOSE_DESCRIPTION: &str = "Required. One short sentence saying what this command is for, such as \"Run the parser unit tests\". It is shown to the user on the command card, given to the permission reviewer, and listed with background jobs so you can tell them apart. It is never passed to the command.";
 
 pub(crate) fn parse_shell_command_tool_arguments(
     arguments: Value,
@@ -429,6 +473,11 @@ pub(crate) fn parse_shell_command_tool_arguments(
     if parsed.command.trim().is_empty() {
         return Err(NativeToolError::new(
             "The `command` argument for shell_command cannot be empty.",
+        ));
+    }
+    if parsed.purpose.trim().is_empty() {
+        return Err(NativeToolError::new(
+            "The `purpose` argument for shell_command cannot be empty; say in one short sentence what the command is for.",
         ));
     }
     // Only omission means unlimited; an explicit zero is rejected instead of silently becoming unlimited.
@@ -619,7 +668,6 @@ async fn apply_shell_command_plugin_hooks(
                 environment: native.environment,
                 host_environment: Vec::new(),
                 vulcan_environment: Vec::new(),
-                live_output: None,
             },
             ShellCommandHookReport {
                 original_command: parsed_args.command.clone(),
@@ -730,7 +778,6 @@ async fn apply_shell_command_plugin_hooks(
             environment: transformed.environment,
             host_environment: Vec::new(),
             vulcan_environment: Vec::new(),
-            live_output: None,
         },
         ShellCommandHookReport {
             original_command: parsed_args.command.clone(),
@@ -784,15 +831,71 @@ fn valid_process_environment_name(name: &str) -> bool {
         && characters.all(|character| character == '_' || character.is_ascii_alphanumeric())
 }
 
-/// Executes one shell command through the selected launcher and returns a normalized execution report.
-/// 通过选定启动器执行单条 shell 命令，并返回规范化执行报告。
+/// Session and tool call a `shell_command` job belongs to.
+/// `shell_command` 任务所属的会话与工具调用。
+#[derive(Debug, Clone)]
+pub(crate) struct ShellCommandJobContext {
+    /// Owning session in canonical text form.
+    /// 规范文本形式的所属会话。
+    owner_session_id: String,
+    /// Tool call that starts the job, when a model call does.
+    /// 启动任务的工具调用（由模型调用启动时）。
+    origin: Option<ShellJobOrigin>,
+}
+
+impl ShellCommandJobContext {
+    /// Owning session in canonical text form.
+    /// 规范文本形式的所属会话。
+    pub(crate) fn owner_session_id(&self) -> &str {
+        &self.owner_session_id
+    }
+
+    /// Context of one native tool request; direct calls without a session share one fallback owner.
+    /// 单个原生工具请求的上下文；没有会话的直接调用共用一个回退所有者。
+    pub(crate) fn of_request(request: &NativeToolExecutionRequest) -> Self {
+        let owner_session_id = request
+            .invocation_context
+            .as_ref()
+            .map(|context| canonical_shell_job_session_id(&context.session_id))
+            .or_else(|| request.session_id.map(|session_id| session_id.to_string()))
+            .unwrap_or_else(|| String::from("direct"));
+        let origin = request
+            .invocation_context
+            .as_ref()
+            .map(|context| ShellJobOrigin {
+                api_call_id: context.api_call_id.value(),
+                tool_call_id: context.tool_call_id.value(),
+            });
+        Self {
+            owner_session_id,
+            origin,
+        }
+    }
+}
+
+/// Executes one shell command as a job and returns how the call ended.
+/// 以任务方式执行单条 shell 命令，并返回调用的结束方式。
+///
+/// A foreground call waits until the job finishes, the user interjects a message, or the job is moved to the
+/// background from elsewhere; dropping the future while it waits stops the job, as a cancelled call did before.
+/// 前台调用等待任务结束、用户插队发送消息，或任务被其他地方转到后台；等待期间丢弃 future 会停止任务，
+/// 与以往取消调用的行为一致。
 pub(crate) async fn execute_shell_command_process(
     parsed_args: &ShellCommandToolArgs,
     effective_cwd: &Path,
     shell_support: &HostCommandShellSupport,
     process_options: &ShellCommandProcessOptions,
+    job_context: &ShellCommandJobContext,
 ) -> ShellCommandExecutionReport {
-    let started_at = std::time::Instant::now();
+    let not_started = |shell_label: String, reason: String| ShellCommandExecutionReport {
+        end: ShellCommandCallEnd::NotStarted { reason },
+        job_id: None,
+        shell_label,
+        cwd: effective_cwd.to_path_buf(),
+        duration_ms: 0,
+        tail: None,
+        streams: ShellJobCapturedStreams::default(),
+    };
     let (program, program_args, shell_label) = match resolve_shell_command_launcher(
         shell_support,
         parsed_args.shell.as_deref(),
@@ -801,451 +904,94 @@ pub(crate) async fn execute_shell_command_process(
     ) {
         Ok(resolved) => resolved,
         Err(error) => {
-            return ShellCommandExecutionReport {
-                status: ShellCommandExecutionStatus::Failed,
-                shell_label: parsed_args
+            return not_started(
+                parsed_args
                     .shell
                     .clone()
                     .unwrap_or_else(|| String::from("auto")),
-                cwd: effective_cwd.to_path_buf(),
-                exit_code: None,
-                duration_ms: 0,
-                stdout_text: String::new(),
-                stderr_text: String::new(),
-                failure_reason: Some(error.to_string()),
-            };
+                error.to_string(),
+            );
         }
     };
 
     let mut command = new_background_tokio_command(&program);
     command.args(&program_args);
     command.current_dir(effective_cwd);
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::piped());
-    command.kill_on_drop(true);
-    // Timeouts and cancellation must also stop background descendants that inherited the pipes.
-    // 超时与取消也必须停止继承了输出管道的后台后代进程。
-    isolate_child_process_tree(&mut command);
     if let Err(error) = apply_shell_command_process_options(&mut command, process_options) {
-        return ShellCommandExecutionReport {
-            status: ShellCommandExecutionStatus::Failed,
-            shell_label,
+        return not_started(shell_label, error.to_string());
+    }
+    let runtime = ShellJobRuntime::global();
+    let owner = &job_context.owner_session_id;
+    let background = parsed_args.background;
+    let job = match runtime.spawn(
+        ShellJobSpawn {
+            owner_session_id: owner.clone(),
+            origin: job_context.origin,
+            command: parsed_args.command.clone(),
+            purpose: parsed_args.purpose.trim().to_string(),
+            shell_label: shell_label.clone(),
             cwd: effective_cwd.to_path_buf(),
-            exit_code: None,
-            duration_ms: started_at.elapsed().as_millis() as u64,
-            stdout_text: String::new(),
-            stderr_text: String::new(),
-            failure_reason: Some(error.to_string()),
+            jobs_dir: runtime.jobs_directory(owner),
+            stdin: parsed_args.stdin.clone(),
+            background,
+            timeout: parsed_args.timeout_ms.map(Duration::from_millis),
+            capture_streams: !background,
+        },
+        command,
+    ) {
+        Ok(job) => job,
+        Err(error) => return not_started(shell_label, error.to_string()),
+    };
+
+    let end = if background {
+        ShellCommandCallEnd::Background {
+            reason: String::from("Started in the background as requested."),
+        }
+    } else {
+        // The attachment stops the job if this future is dropped before the job finishes or detaches.
+        // 若本 future 在任务结束或转后台前被丢弃，附着会停止任务。
+        let foreground = ShellJobForeground::attach(Arc::clone(&job));
+        let mut interjection = runtime.subscribe_interjection(owner);
+        let end = match job.wait_interruptible(None, &mut interjection).await {
+            ShellJobWaitOutcome::Finished(outcome) => ShellCommandCallEnd::Finished(outcome),
+            ShellJobWaitOutcome::Interjected => {
+                if job.detach(false) || (job.is_background() && job.outcome().is_none()) {
+                    ShellCommandCallEnd::Background {
+                        reason: String::from(
+                            "The user sent a message while this command was running, so the host moved it to the background for you to answer. It keeps running without a timeout.",
+                        ),
+                    }
+                } else {
+                    ShellCommandCallEnd::Finished(job.wait().await)
+                }
+            }
+            ShellJobWaitOutcome::Detached | ShellJobWaitOutcome::StillRunning => {
+                ShellCommandCallEnd::Background {
+                    reason: String::from(
+                        "The user moved this command to the background. It keeps running without a timeout.",
+                    ),
+                }
+            }
         };
-    }
-    // stdin is always explicit so a one-shot command never blocks on the service's own input stream.
-    // stdin 始终显式配置，避免一次性命令阻塞在服务自身的输入流上。
-    command.stdin(if parsed_args.stdin.is_some() {
-        Stdio::piped()
-    } else {
-        Stdio::null()
-    });
-
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(error) => {
-            return ShellCommandExecutionReport {
-                status: ShellCommandExecutionStatus::Failed,
-                shell_label,
-                cwd: effective_cwd.to_path_buf(),
-                exit_code: None,
-                duration_ms: started_at.elapsed().as_millis() as u64,
-                stdout_text: String::new(),
-                stderr_text: String::new(),
-                failure_reason: Some(format!("Failed to start the command: {error}")),
-            };
-        }
+        foreground.release();
+        end
     };
-
-    // tree_guard terminates the whole tree if this tool call is cancelled before the child is reaped.
-    // tree_guard 在子进程被回收前工具调用遭取消时终止整棵进程树。
-    let mut tree_guard = ChildProcessTreeDropGuard::arm(&child);
-
-    // stdin_task writes the complete stdin text while output is drained, so full pipes cannot deadlock the child.
-    // stdin_task 在排空输出的同时写入完整 stdin 文本，避免管道写满导致子进程死锁。
-    let stdin_task = match parsed_args.stdin.clone() {
-        Some(stdin_text) => {
-            let Some(mut child_stdin) = child.stdin.take() else {
-                return ShellCommandExecutionReport {
-                    status: ShellCommandExecutionStatus::Failed,
-                    shell_label,
-                    cwd: effective_cwd.to_path_buf(),
-                    exit_code: None,
-                    duration_ms: started_at.elapsed().as_millis() as u64,
-                    stdout_text: String::new(),
-                    stderr_text: String::new(),
-                    failure_reason: Some(String::from(
-                        "The command did not expose a writable stdin channel.",
-                    )),
-                };
-            };
-            Some(tokio::spawn(async move {
-                let write_result = child_stdin.write_all(stdin_text.as_bytes()).await;
-                // Dropping the handle closes stdin so the child observes end-of-input.
-                // 释放句柄会关闭 stdin，使子进程读到输入结束。
-                drop(child_stdin);
-                write_result
-            }))
-        }
-        None => None,
+    let duration_ms = match &end {
+        ShellCommandCallEnd::Finished(outcome) => outcome.duration_ms,
+        _ => job.elapsed_ms(),
     };
-    let output_limit = ShellOutputLimit::new(SHELL_COMMAND_OUTPUT_HARD_LIMIT_BYTES);
-    let live_output = process_options.live_output.as_ref();
-    let (stdout_buffer, stdout_task) =
-        spawn_shell_output_reader(child.stdout.take(), &output_limit, live_output);
-    let (stderr_buffer, stderr_task) =
-        spawn_shell_output_reader(child.stderr.take(), &output_limit, live_output);
-
-    let timeout_ms = parsed_args.timeout_ms;
-    let wait_result = tokio::select! {
-        wait_result = child.wait() => wait_result,
-        () = wait_for_shell_command_timeout(timeout_ms) => {
-            // The whole tree is killed so descendants release the pipes and partial output can be returned.
-            // 终止整棵进程树，使后代进程释放管道，从而返回已产生的部分输出。
-            let terminate_error = terminate_shell_command_process_tree(
-                &mut child,
-                &mut tree_guard,
-                [stdout_task, stderr_task, stdin_task],
-            )
-            .await;
-            if output_limit.is_exceeded() {
-                return output_limit_exceeded_report(
-                    shell_label,
-                    effective_cwd,
-                    None,
-                    started_at,
-                    terminate_error,
-                );
-            }
-            let mut failure_reason = format!(
-                "The command exceeded the timeout limit ({} ms).",
-                timeout_ms.unwrap_or_default()
-            );
-            if let Some(error) = terminate_error {
-                failure_reason.push_str(&format!(" {error}"));
-            }
-            return ShellCommandExecutionReport {
-                status: ShellCommandExecutionStatus::TimedOut,
-                shell_label,
-                cwd: effective_cwd.to_path_buf(),
-                exit_code: None,
-                duration_ms: started_at.elapsed().as_millis() as u64,
-                stdout_text: decode_shell_output_bytes(&take_shell_output_buffer(&stdout_buffer)),
-                stderr_text: decode_shell_output_bytes(&take_shell_output_buffer(&stderr_buffer)),
-                failure_reason: Some(failure_reason),
-            };
-        }
-        () = output_limit.exceeded() => {
-            // Runaway output is blocked, not collected: stop the producer at once and drop everything.
-            // 失控输出直接阻断而非继续收集：立即停止输出方并丢弃全部内容。
-            let terminate_error = terminate_shell_command_process_tree(
-                &mut child,
-                &mut tree_guard,
-                [stdout_task, stderr_task, stdin_task],
-            )
-            .await;
-            return output_limit_exceeded_report(
-                shell_label,
-                effective_cwd,
-                None,
-                started_at,
-                terminate_error,
-            );
-        }
-    };
-    let exit_status = match wait_result {
-        Ok(exit_status) => exit_status,
-        Err(error) => {
-            return ShellCommandExecutionReport {
-                status: ShellCommandExecutionStatus::Failed,
-                shell_label,
-                cwd: effective_cwd.to_path_buf(),
-                exit_code: None,
-                duration_ms: started_at.elapsed().as_millis() as u64,
-                stdout_text: String::new(),
-                stderr_text: String::new(),
-                failure_reason: Some(format!("Failed while waiting for command output: {error}")),
-            };
-        }
-    };
-    // Background descendants left after a natural exit are intentionally not killed.
-    // 自然退出后残留的后台后代进程按设计不被终止。
-    tree_guard.disarm();
-
-    let drain_deadline = tokio::time::Instant::now() + CHILD_OUTPUT_DRAIN_GRACE;
-    let stdout_result = join_shell_output_task(stdout_task, drain_deadline).await;
-    let stderr_result = join_shell_output_task(stderr_task, drain_deadline).await;
-    let stdin_result = join_shell_output_task(stdin_task, drain_deadline).await;
-    // The child may exit before the waiter observes the limit, e.g. a fast `cat` of a huge file.
-    // 子进程可能在等待方观察到上限前就已退出，例如快速 `cat` 一个超大文件。
-    if output_limit.is_exceeded() {
-        return output_limit_exceeded_report(
-            shell_label,
-            effective_cwd,
-            exit_status.code(),
-            started_at,
-            None,
-        );
-    }
-    // io_failure reports the first host-side I/O failure while keeping all collected output.
-    // io_failure 报告第一个宿主侧 I/O 失败，同时保留已收集的全部输出。
-    let io_failure = match (&stdout_result, &stderr_result, &stdin_result) {
-        (Some(Err(error)), _, _) => Some(format!("Failed while reading command stdout: {error}")),
-        (_, Some(Err(error)), _) => Some(format!("Failed while reading command stderr: {error}")),
-        // A child may legitimately exit or close stdin before consuming all provided input.
-        // 子进程可以在消费完全部输入前合法地退出或关闭 stdin。
-        (_, _, Some(Err(error))) if error.kind() != std::io::ErrorKind::BrokenPipe => {
-            Some(format!("Failed to write command stdin: {error}"))
-        }
-        _ => None,
-    };
-    let status = if io_failure.is_none() && exit_status.success() {
-        ShellCommandExecutionStatus::Completed
-    } else {
-        ShellCommandExecutionStatus::Failed
-    };
-    // Pipes still open after the grace mean background processes inherited them; capture stops there.
-    // 宽限期后管道仍未关闭说明后台进程继承了它们；输出捕获到此为止。
-    let failure_reason = io_failure.or_else(|| {
-        (stdout_result.is_none() || stderr_result.is_none()).then(|| {
-            format!(
-                "Output capture stopped {} ms after the command exited because background processes still hold stdout or stderr.",
-                CHILD_OUTPUT_DRAIN_GRACE.as_millis()
-            )
-        })
-    });
-    let stdout_text = decode_shell_output_bytes(&take_shell_output_buffer(&stdout_buffer));
-    let stderr_text = decode_shell_output_bytes(&take_shell_output_buffer(&stderr_buffer));
-
+    let tail = job
+        .log_reader()
+        .and_then(|reader| reader.tail(SHELL_OUTPUT_TAIL_BUDGET_BYTES).ok());
     ShellCommandExecutionReport {
-        status,
+        end,
+        job_id: Some(job.id().to_string()),
         shell_label,
         cwd: effective_cwd.to_path_buf(),
-        exit_code: exit_status.code(),
-        duration_ms: started_at.elapsed().as_millis() as u64,
-        stdout_text,
-        stderr_text,
-        failure_reason,
+        duration_ms,
+        tail,
+        streams: job.captured_streams().unwrap_or_default(),
     }
-}
-
-/// Waits for the optional explicit timeout; an omitted timeout never elapses.
-/// 等待可选的显式超时；省略超时时永不到期。
-async fn wait_for_shell_command_timeout(timeout_ms: Option<u64>) {
-    match timeout_ms {
-        Some(timeout_ms) => tokio::time::sleep(Duration::from_millis(timeout_ms)).await,
-        None => std::future::pending().await,
-    }
-}
-
-/// Terminates the child process tree after an early stop and drains stdio within the shared grace.
-/// 提前停止后终止子进程树，并在共享宽限期内排空标准流。
-///
-/// # Returns
-/// 返回值
-/// Returns the termination error, if the tree could not be signalled.
-/// 进程树无法被终止时返回对应错误。
-async fn terminate_shell_command_process_tree(
-    child: &mut tokio::process::Child,
-    tree_guard: &mut ChildProcessTreeDropGuard,
-    stdio_tasks: [Option<ShellStdioTask>; 3],
-) -> Option<String> {
-    let terminate_error = terminate_child_process_tree(child).await.err();
-    if let Ok(Ok(_)) = timeout(CHILD_OUTPUT_DRAIN_GRACE, child.wait()).await {
-        tree_guard.disarm();
-    }
-    let drain_deadline = tokio::time::Instant::now() + CHILD_OUTPUT_DRAIN_GRACE;
-    for task in stdio_tasks {
-        let _ = join_shell_output_task(task, drain_deadline).await;
-    }
-    terminate_error
-}
-
-/// Builds the report for a run whose output crossed the hard limit; no output is returned.
-/// 为输出越过硬上限的运行构建报告；不返回任何输出内容。
-fn output_limit_exceeded_report(
-    shell_label: String,
-    effective_cwd: &Path,
-    exit_code: Option<i32>,
-    started_at: std::time::Instant,
-    terminate_error: Option<String>,
-) -> ShellCommandExecutionReport {
-    let mut failure_reason = format!(
-        "The command produced more than {SHELL_COMMAND_OUTPUT_HARD_LIMIT_BYTES} bytes of combined stdout/stderr, so the host terminated it and discarded all output. Narrow the output with head, tail, grep, or a line range, or redirect it to a file and inspect that file in slices."
-    );
-    if let Some(error) = terminate_error {
-        failure_reason.push_str(&format!(" {error}"));
-    }
-    ShellCommandExecutionReport {
-        status: ShellCommandExecutionStatus::OutputLimitExceeded,
-        shell_label,
-        cwd: effective_cwd.to_path_buf(),
-        exit_code,
-        duration_ms: started_at.elapsed().as_millis() as u64,
-        stdout_text: String::new(),
-        stderr_text: String::new(),
-        failure_reason: Some(failure_reason),
-    }
-}
-
-/// Combined output budget shared by the stdout and stderr readers of one run.
-/// 单次运行中 stdout 与 stderr 读取任务共享的合并输出预算。
-struct ShellOutputLimit {
-    /// Bytes admitted or attempted so far across both streams.
-    /// 两个输出流迄今已接收或尝试接收的字节数。
-    captured_bytes: std::sync::atomic::AtomicUsize,
-    /// Maximum combined bytes admitted before the run is stopped.
-    /// 运行被停止前允许接收的最大合并字节数。
-    limit_bytes: usize,
-    /// Set once any reader crosses the limit.
-    /// 任一读取任务越过上限后置位。
-    exceeded: std::sync::atomic::AtomicBool,
-    /// Wakes the waiter when the limit is crossed.
-    /// 越过上限时唤醒等待方。
-    notify: tokio::sync::Notify,
-}
-
-impl ShellOutputLimit {
-    /// Creates one shared output budget.
-    /// 创建一份共享输出预算。
-    fn new(limit_bytes: usize) -> Arc<Self> {
-        Arc::new(Self {
-            captured_bytes: std::sync::atomic::AtomicUsize::new(0),
-            limit_bytes,
-            exceeded: std::sync::atomic::AtomicBool::new(false),
-            notify: tokio::sync::Notify::new(),
-        })
-    }
-
-    /// Admits one chunk, or marks the budget exceeded and wakes the waiter.
-    /// 接收一个数据块；超出预算时标记越限并唤醒等待方。
-    fn admit(&self, chunk_bytes: usize) -> bool {
-        let previous = self
-            .captured_bytes
-            .fetch_add(chunk_bytes, std::sync::atomic::Ordering::AcqRel);
-        if previous.saturating_add(chunk_bytes) <= self.limit_bytes {
-            return true;
-        }
-        self.exceeded
-            .store(true, std::sync::atomic::Ordering::Release);
-        // notify_one stores a permit, so a waiter that starts listening later still wakes.
-        // notify_one 会保存许可，稍后开始监听的等待方同样会被唤醒。
-        self.notify.notify_one();
-        false
-    }
-
-    /// Returns whether any reader crossed the limit.
-    /// 返回是否有读取任务越过上限。
-    fn is_exceeded(&self) -> bool {
-        self.exceeded.load(std::sync::atomic::Ordering::Acquire)
-    }
-
-    /// Resolves once the limit has been crossed.
-    /// 在越过上限后完成。
-    async fn exceeded(&self) {
-        if !self.is_exceeded() {
-            self.notify.notified().await;
-        }
-    }
-}
-
-/// Byte buffer filled incrementally by one child output reader and read by the waiter.
-/// 由单个子进程输出读取任务增量填充、并由等待方读取的字节缓冲区。
-type ShellOutputBuffer = Arc<std::sync::Mutex<Vec<u8>>>;
-
-/// Background task handle for one child stdio transfer.
-/// 单个子进程标准流传输的后台任务句柄。
-type ShellStdioTask = tokio::task::JoinHandle<std::io::Result<()>>;
-
-/// Starts draining one optional child output stream into a shared buffer.
-/// 开始把一个可选子进程输出流排空到共享缓冲区。
-///
-/// # Parameters
-/// 参数
-/// `reader` is the captured child stdout or stderr handle.
-/// `reader` 是捕获到的子进程 stdout 或 stderr 句柄。
-/// `output_limit` is the combined budget; the reader stops and closes its pipe once it is crossed.
-/// `output_limit` 是合并预算；越过后读取任务停止并关闭其管道。
-/// `live_output` is the optional display tail that also receives every admitted chunk.
-/// `live_output` 是同样接收每个已接收数据块的可选显示尾部。
-///
-/// # Returns
-/// 返回值
-/// Returns the shared buffer and the reader task when a stream was captured.
-/// 返回共享缓冲区；捕获到输出流时同时返回读取任务。
-fn spawn_shell_output_reader<R>(
-    reader: Option<R>,
-    output_limit: &Arc<ShellOutputLimit>,
-    live_output: Option<&Arc<super::shell_command_live::ShellCommandLiveRun>>,
-) -> (ShellOutputBuffer, Option<ShellStdioTask>)
-where
-    R: tokio::io::AsyncRead + Unpin + Send + 'static,
-{
-    let buffer: ShellOutputBuffer = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let task = reader.map(|mut reader| {
-        let buffer = Arc::clone(&buffer);
-        let output_limit = Arc::clone(output_limit);
-        let live_output = live_output.cloned();
-        tokio::spawn(async move {
-            use tokio::io::AsyncReadExt;
-            let mut chunk = vec![0_u8; 8192];
-            loop {
-                let read_bytes = reader.read(&mut chunk).await?;
-                if read_bytes == 0 || !output_limit.admit(read_bytes) {
-                    return Ok(());
-                }
-                buffer
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .extend_from_slice(&chunk[..read_bytes]);
-                if let Some(live_output) = &live_output {
-                    live_output.append(&chunk[..read_bytes]);
-                }
-            }
-        })
-    });
-    (buffer, task)
-}
-
-/// Waits until a shared deadline for one optional stdio transfer task.
-/// 在共享截止时间前等待一个可选标准流传输任务。
-///
-/// # Returns
-/// 返回值
-/// Returns `Some` with the flattened task result, or `None` after aborting a task still running at the deadline.
-/// 返回展开后的任务结果 `Some`；截止时仍在运行的任务被中止后返回 `None`。
-async fn join_shell_output_task(
-    task: Option<ShellStdioTask>,
-    deadline: tokio::time::Instant,
-) -> Option<std::io::Result<()>> {
-    let Some(task) = task else {
-        return Some(Ok(()));
-    };
-    let abort_handle = task.abort_handle();
-    match tokio::time::timeout_at(deadline, task).await {
-        Ok(join_result) => {
-            Some(join_result.unwrap_or_else(|error| Err(std::io::Error::other(error))))
-        }
-        Err(_) => {
-            abort_handle.abort();
-            None
-        }
-    }
-}
-
-/// Moves all bytes collected so far out of one shared output buffer.
-/// 取出一个共享输出缓冲区中目前收集到的全部字节。
-fn take_shell_output_buffer(buffer: &ShellOutputBuffer) -> Vec<u8> {
-    std::mem::take(
-        &mut *buffer
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner),
-    )
 }
 
 /// Builds the model-visible text render input for one normalized shell-command execution report.
@@ -1257,18 +1003,26 @@ pub(crate) fn build_shell_command_text_render_input(
 ) -> HostTextRenderInput {
     let mut lines = vec![
         format!("Command: {}", parsed_args.command),
+        format!("Purpose: {}", parsed_args.purpose.trim()),
         format!("Shell: {}", execution_report.shell_label),
         format!(
             "Working directory: {}",
             normalized_workspace_path_text_from_path(&execution_report.cwd)
         ),
-        format!("Status: {}", execution_report.status.as_str()),
-        format!("Duration: {} ms", execution_report.duration_ms),
     ];
-    if let Some(exit_code) = execution_report.exit_code {
+    if let Some(job_id) = &execution_report.job_id {
+        lines.push(format!("Job: {job_id}"));
+    }
+    lines.push(format!("Status: {}", execution_report.status_label()));
+    if execution_report.is_background() {
+        lines.push(format!("Running for: {} ms", execution_report.duration_ms));
+    } else {
+        lines.push(format!("Duration: {} ms", execution_report.duration_ms));
+    }
+    if let Some(exit_code) = execution_report.exit_code() {
         lines.push(format!("Exit code: {exit_code}"));
     }
-    if let Some(reason) = execution_report.failure_reason.as_deref() {
+    if let Some(reason) = execution_report.failure_reason() {
         lines.push(format!("Reason: {reason}"));
     }
     if !hook_report.completed_hooks.is_empty()
@@ -1294,23 +1048,36 @@ pub(crate) fn build_shell_command_text_render_input(
             hook_report.failures.len()
         ));
     }
+    let shown = execution_report
+        .tail
+        .as_ref()
+        .filter(|tail| !tail.rows.is_empty());
+    if let (Some(tail), Some(job_id)) = (shown, &execution_report.job_id)
+        && tail.truncated
+    {
+        lines.push(format!(
+            "Output: {} lines, {} bytes in total; only the end is shown. Read earlier lines or search with `shell_job` (`read` or `search`, job_id `{job_id}`).",
+            tail.total_lines, tail.total_bytes
+        ));
+    }
 
     let mut content = lines.join("\n");
-    let trimmed_stdout = execution_report.stdout_text.trim_end();
-    let trimmed_stderr = execution_report.stderr_text.trim_end();
-    if !trimmed_stdout.is_empty() {
-        content.push_str("\n\n[stdout]\n");
-        content.push_str(trimmed_stdout);
+    match shown {
+        Some(tail) => {
+            content.push_str("\n\n[output]\n");
+            content.push_str(render_plain_rows(&tail.rows).trim_end());
+        }
+        None if !execution_report.is_background()
+            && execution_report.failure_reason().is_none() =>
+        {
+            content.push_str("\n\n(no output)");
+        }
+        None => {}
     }
-    if !trimmed_stderr.is_empty() {
-        content.push_str("\n\n[stderr]\n");
-        content.push_str(trimmed_stderr);
-    }
-    if trimmed_stdout.is_empty()
-        && trimmed_stderr.is_empty()
-        && execution_report.failure_reason.is_none()
-    {
-        content.push_str("\n\n(no output)");
+    if let (true, Some(job_id)) = (execution_report.is_background(), &execution_report.job_id) {
+        content.push_str(&format!(
+            "\n\nThe command keeps running as background job `{job_id}`; you will be told when it finishes. Meanwhile use `shell_job` to wait for it, read or search its output, check its processes, or stop it."
+        ));
     }
 
     HostTextRenderInput {
@@ -1350,18 +1117,23 @@ pub(crate) fn build_shell_command_host_payload(
     combined_output_overflowed: bool,
     hook_report: &ShellCommandHookReport,
 ) -> Value {
+    let tail = execution_report.tail.as_ref();
     json!({
         "session_id": session_id.map(|value| value.to_string()),
         "command": parsed_args.command,
+        "purpose": parsed_args.purpose.trim(),
+        "job_id": execution_report.job_id,
+        "background": execution_report.is_background(),
         "cwd": normalized_workspace_path_text_from_path(&execution_report.cwd),
         "shell": execution_report.shell_label,
-        "status": execution_report.status.as_str(),
-        "exit_code": execution_report.exit_code,
+        "status": execution_report.status_label(),
+        "exit_code": execution_report.exit_code(),
         "duration_ms": execution_report.duration_ms,
-        "stdout_bytes": execution_report.stdout_text.len(),
-        "stderr_bytes": execution_report.stderr_text.len(),
+        "output_lines": tail.map(|tail| tail.total_lines),
+        "output_bytes": tail.map(|tail| tail.total_bytes),
+        "output_truncated": tail.is_some_and(|tail| tail.truncated),
         "combined_output_overflowed": combined_output_overflowed,
-        "failure_reason": execution_report.failure_reason,
+        "failure_reason": execution_report.failure_reason(),
         "hook_transform": hook_report,
     })
 }
@@ -1375,6 +1147,7 @@ pub(crate) async fn execute_shell_command_tool(
     rtk: &PersistedRtkConfiguration,
 ) -> Result<VulcanToolInvocationResult, NativeToolError> {
     let vulcan_environment = child_process_environment(&request).await?;
+    let job_context = ShellCommandJobContext::of_request(&request);
     let parsed_args = parse_shell_command_tool_arguments(request.arguments)?;
     let effective_cwd = resolve_shell_command_working_directory(
         request.workspace_root.as_deref(),
@@ -1398,26 +1171,13 @@ pub(crate) async fn execute_shell_command_tool(
     .await?;
     process_options.host_environment = rtk_host_environment(rtk.telemetry_disabled);
     process_options.vulcan_environment = vulcan_environment;
-    // A call made by the model registers its live tail until this function returns on any path.
-    // 由模型发起的调用登记其实时尾部，直到本函数经任一路径返回。
-    let live_registration = request.invocation_context.as_ref().map(|context| {
-        super::shell_command_live::ShellCommandLiveRegistration::register(
-            super::shell_command_live::ShellCommandLiveKey::new(
-                &context.session_id,
-                context.api_call_id.value(),
-                context.tool_call_id.value(),
-            ),
-        )
-    });
-    process_options.live_output = live_registration
-        .as_ref()
-        .map(super::shell_command_live::ShellCommandLiveRegistration::run);
 
     let execution_report = execute_shell_command_process(
         &effective_args,
         &effective_cwd,
         shell_support,
         &process_options,
+        &job_context,
     )
     .await;
     let render_input =
@@ -1453,6 +1213,7 @@ pub(crate) async fn execute_shell_command_tool(
 
     // The raw streams stay in memory so a chain step can read them even when the text spilled.
     // 原始流仅保留在内存中，使链条步骤在文本已溢出时仍可读取。
+    let streams = execution_report.streams;
     Ok(
         VulcanToolInvocationResult::from_model_output(Value::String(model_output))
             .with_host_result(VulcanToolHostResult {
@@ -1460,8 +1221,8 @@ pub(crate) async fn execute_shell_command_tool(
                 payload: host_payload,
             })
             .with_raw_streams(VulcanToolRawStreams {
-                stdout: execution_report.stdout_text,
-                stderr: execution_report.stderr_text,
+                stdout: streams.stdout,
+                stderr: streams.stderr,
             }),
     )
 }
@@ -1469,6 +1230,50 @@ pub(crate) async fn execute_shell_command_tool(
 #[cfg(test)]
 mod process_option_tests {
     use super::*;
+
+    /// Arguments of one test command.
+    /// 一条测试命令的参数。
+    fn args(command: &str, shell: Option<&str>, timeout_ms: Option<u64>) -> ShellCommandToolArgs {
+        ShellCommandToolArgs {
+            command: command.to_string(),
+            cwd: None,
+            timeout_ms,
+            stdin: None,
+            shell: shell.map(str::to_string),
+            purpose: String::from("Test command"),
+            background: false,
+        }
+    }
+
+    /// Job context with a unique owner, so tests never share interjection signals.
+    /// 具有唯一所有者的任务上下文，使测试之间从不共享插队信号。
+    fn job_context() -> ShellCommandJobContext {
+        ShellCommandJobContext {
+            owner_session_id: format!("shell-command-test-{}", Uuid::new_v4()),
+            origin: None,
+        }
+    }
+
+    /// Runs one command with default options.
+    /// 以默认选项运行一条命令。
+    async fn run(
+        parsed_args: &ShellCommandToolArgs,
+        cwd: &Path,
+        context: &ShellCommandJobContext,
+    ) -> ShellCommandExecutionReport {
+        tokio::time::timeout(
+            Duration::from_secs(60),
+            execute_shell_command_process(
+                parsed_args,
+                cwd,
+                &HostCommandShellSupport::from_configured_default_id(None),
+                &ShellCommandProcessOptions::default(),
+                context,
+            ),
+        )
+        .await
+        .expect("test command must return in time")
+    }
 
     /// Empty hook-owned collection fields must remain present in the serialized shell-command payload so Lua plugins can append contributions safely.
     /// 空的 Hook 所有集合字段必须保留在序列化 shell 命令载荷中，确保 Lua 插件能够安全追加贡献项。
@@ -1509,14 +1314,30 @@ mod process_option_tests {
     fn zero_timeout_is_rejected_instead_of_meaning_unlimited() {
         let error = parse_shell_command_tool_arguments(serde_json::json!({
             "command": "echo hi",
+            "purpose": "Say hi",
             "timeout_ms": 0,
         }))
         .expect_err("zero timeout must be rejected");
         assert!(error.message.contains("at least 1"));
-        let parsed =
-            parse_shell_command_tool_arguments(serde_json::json!({ "command": "echo hi" }))
-                .expect("omitted timeout stays valid");
+        let parsed = parse_shell_command_tool_arguments(
+            serde_json::json!({ "command": "echo hi", "purpose": "Say hi" }),
+        )
+        .expect("omitted timeout stays valid");
         assert_eq!(parsed.timeout_ms, None);
+        assert!(!parsed.background);
+    }
+
+    /// The purpose is required and may not be blank.
+    /// 用途必填且不得为空白。
+    #[test]
+    fn purpose_is_required() {
+        parse_shell_command_tool_arguments(serde_json::json!({ "command": "echo hi" }))
+            .expect_err("a missing purpose must be rejected");
+        parse_shell_command_tool_arguments(serde_json::json!({
+            "command": "echo hi",
+            "purpose": "  ",
+        }))
+        .expect_err("a blank purpose must be rejected");
     }
 
     /// A misspelled field is rejected instead of silently running without the intended option.
@@ -1525,6 +1346,7 @@ mod process_option_tests {
     fn unknown_argument_is_rejected() {
         parse_shell_command_tool_arguments(serde_json::json!({
             "command": "echo hi",
+            "purpose": "Say hi",
             "timeout": 1000,
         }))
         .expect_err("an undeclared field must be rejected");
@@ -1536,28 +1358,16 @@ mod process_option_tests {
     #[tokio::test]
     async fn large_stdin_is_written_while_output_is_drained() {
         let temp = tempfile::tempdir().expect("create shell stdin test directory");
-        // stdinText exceeds typical pipe buffers in both directions.
-        // stdinText 在两个方向上都超过常见管道缓冲区容量。
-        let stdin_text = "x".repeat(4 * 1024 * 1024);
-        let parsed_args = ShellCommandToolArgs {
-            command: String::from("cat"),
-            cwd: None,
-            timeout_ms: Some(60_000),
-            stdin: Some(stdin_text.clone()),
-            shell: Some(String::from("sh")),
-            _purpose: None,
-        };
-        let report = execute_shell_command_process(
-            &parsed_args,
-            temp.path(),
-            &HostCommandShellSupport::from_configured_default_id(None),
-            &ShellCommandProcessOptions::default(),
-        )
-        .await;
-        assert_eq!(report.status, ShellCommandExecutionStatus::Completed);
+        // stdinText exceeds typical pipe buffers in both directions but fits the raw stream capture.
+        // stdinText 在两个方向上都超过常见管道缓冲区容量，但不超过原始流保留大小。
+        let stdin_text = "x".repeat(2 * 1024 * 1024);
+        let mut parsed_args = args("cat", Some("sh"), Some(60_000));
+        parsed_args.stdin = Some(stdin_text.clone());
+        let report = run(&parsed_args, temp.path(), &job_context()).await;
+        assert_eq!(report.status_label(), "completed");
         // Login profiles may print banners first, so only the echoed tail is asserted.
         // 登录配置可能先输出横幅，因此只断言回显的尾部内容。
-        assert!(report.stdout_text.ends_with(&stdin_text));
+        assert!(report.streams.stdout.ends_with(&stdin_text));
     }
 
     /// Omitted stdin must be empty instead of inheriting the service input stream.
@@ -1566,62 +1376,141 @@ mod process_option_tests {
     #[tokio::test]
     async fn omitted_stdin_reads_end_of_input() {
         let temp = tempfile::tempdir().expect("create shell stdin test directory");
-        let parsed_args = ShellCommandToolArgs {
-            command: String::from("cat; echo done"),
-            cwd: None,
-            timeout_ms: Some(60_000),
-            stdin: None,
-            shell: Some(String::from("sh")),
-            _purpose: None,
-        };
-        let report = execute_shell_command_process(
-            &parsed_args,
+        let report = run(
+            &args("cat; echo done", Some("sh"), Some(60_000)),
             temp.path(),
-            &HostCommandShellSupport::from_configured_default_id(None),
-            &ShellCommandProcessOptions::default(),
+            &job_context(),
         )
         .await;
-        assert_eq!(report.status, ShellCommandExecutionStatus::Completed);
-        assert!(report.stdout_text.trim_end().ends_with("done"));
+        assert_eq!(report.status_label(), "completed");
+        assert!(report.streams.stdout.trim_end().ends_with("done"));
     }
 
-    /// The display tail receives the same output the result does, without taking it from the result.
-    /// 显示尾部收到与结果相同的输出，且不会从结果中拿走它。
+    /// The card's live view finds the job by its tool call and reads the same output the result holds.
+    /// 卡片实时视图按工具调用找到任务，并读取与结果相同的输出。
     #[tokio::test]
-    async fn live_tail_receives_output_while_the_result_keeps_it() {
+    async fn live_view_reads_the_output_of_the_call_job() {
         let temp = tempfile::tempdir().expect("create shell live tail test directory");
-        let registration = super::super::shell_command_live::ShellCommandLiveRegistration::register(
-            super::super::shell_command_live::ShellCommandLiveKey {
-                session_id: String::from("live-tail-process-test"),
-                api_call_id: 1,
-                tool_call_id: 1,
-            },
-        );
-        let parsed_args = ShellCommandToolArgs {
-            command: String::from("echo live-tail-check"),
-            cwd: None,
-            timeout_ms: Some(60_000),
-            stdin: None,
-            shell: None,
-            _purpose: None,
-        };
-        let report = execute_shell_command_process(
-            &parsed_args,
+        let mut context = job_context();
+        context.origin = Some(ShellJobOrigin {
+            api_call_id: 1,
+            tool_call_id: 1,
+        });
+        let report = run(
+            &args("echo live-tail-check", None, Some(60_000)),
             temp.path(),
-            &HostCommandShellSupport::from_configured_default_id(None),
-            &ShellCommandProcessOptions {
-                live_output: Some(registration.run()),
-                ..ShellCommandProcessOptions::default()
-            },
+            &context,
         )
         .await;
-        assert_eq!(report.status, ShellCommandExecutionStatus::Completed);
-        assert!(report.stdout_text.contains("live-tail-check"));
-        let lines = registration.run().recent_lines();
+        assert_eq!(report.status_label(), "completed");
+        assert!(report.streams.stdout.contains("live-tail-check"));
+        let live = super::super::shell_command_live::shell_command_live_run(
+            &super::super::shell_command_live::ShellCommandLiveKey::new(
+                &context.owner_session_id,
+                1,
+                1,
+            ),
+        )
+        .expect("the finished job is still kept in memory");
+        assert!(!live.is_running());
+        let lines = live.recent_lines();
         assert!(
             lines.iter().any(|line| line.contains("live-tail-check")),
             "{lines:?}"
         );
+    }
+
+    /// Long output is no longer cut off: the call completes and returns a bounded tail of whole lines.
+    /// 长输出不再被截断：调用照常完成，并返回由完整行组成的有界尾部。
+    #[tokio::test]
+    async fn long_output_completes_with_a_bounded_tail() {
+        let temp = tempfile::tempdir().expect("create shell long output test directory");
+        #[cfg(windows)]
+        let command = args(
+            "for /L %i in (1,1,6000) do @echo output line number %i",
+            Some("cmd"),
+            Some(120_000),
+        );
+        #[cfg(not(windows))]
+        let command = args(
+            "i=1; while [ $i -le 6000 ]; do echo output line number $i; i=$((i+1)); done",
+            Some("sh"),
+            Some(120_000),
+        );
+        let report = run(&command, temp.path(), &job_context()).await;
+        assert_eq!(report.status_label(), "completed");
+        let tail = report.tail.as_ref().expect("tail");
+        assert!(tail.truncated);
+        assert!(tail.total_lines >= 6000);
+        let rendered = render_plain_rows(&tail.rows);
+        assert!(
+            rendered.len() <= SHELL_OUTPUT_TAIL_BUDGET_BYTES,
+            "{}",
+            rendered.len()
+        );
+        assert!(rendered.trim_end().ends_with("output line number 6000"));
+        let render_input = build_shell_command_text_render_input(
+            &command,
+            &report,
+            &ShellCommandHookReport::default(),
+        );
+        assert!(render_input.content.contains("shell_job"));
+    }
+
+    /// A background call returns its job at once and the job keeps running.
+    /// 后台调用立即返回其任务，任务继续运行。
+    #[tokio::test]
+    async fn background_call_returns_the_job_at_once() {
+        let temp = tempfile::tempdir().expect("create shell background test directory");
+        let context = job_context();
+        #[cfg(windows)]
+        let mut command = args("ping -n 31 127.0.0.1 >NUL", Some("cmd"), None);
+        #[cfg(not(windows))]
+        let mut command = args("sleep 30", Some("sh"), None);
+        command.background = true;
+        let report = run(&command, temp.path(), &context).await;
+        assert_eq!(report.status_label(), SHELL_COMMAND_BACKGROUND_STATUS);
+        let job_id = report.job_id.clone().expect("job id");
+        let runtime = ShellJobRuntime::global();
+        let job = runtime
+            .job(&context.owner_session_id, &job_id)
+            .expect("job is registered");
+        assert!(job.outcome().is_none() && job.is_background());
+        assert_eq!(
+            runtime.stop_session_jobs(&context.owner_session_id, "cleanup"),
+            1
+        );
+        job.wait().await;
+    }
+
+    /// An interjection moves a running foreground command to the background instead of stopping it.
+    /// 插队把运行中的前台命令转到后台，而不是停止它。
+    #[tokio::test]
+    async fn interjection_moves_a_foreground_command_to_the_background() {
+        let temp = tempfile::tempdir().expect("create shell interjection test directory");
+        let context = job_context();
+        #[cfg(windows)]
+        let command = args("ping -n 31 127.0.0.1 >NUL", Some("cmd"), Some(600_000));
+        #[cfg(not(windows))]
+        let command = args("sleep 30", Some("sh"), Some(600_000));
+        let owner = context.owner_session_id.clone();
+        let signal = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            ShellJobRuntime::global().notify_interjection(&owner);
+        });
+        let report = run(&command, temp.path(), &context).await;
+        signal.await.expect("signal task");
+        assert_eq!(report.status_label(), SHELL_COMMAND_BACKGROUND_STATUS);
+        let runtime = ShellJobRuntime::global();
+        let job = runtime
+            .job(
+                &context.owner_session_id,
+                report.job_id.as_deref().expect("job id"),
+            )
+            .expect("job is registered");
+        assert!(job.outcome().is_none());
+        runtime.stop_session_jobs(&context.owner_session_id, "cleanup");
+        job.wait().await;
     }
 
     /// PowerShell reads non-ASCII stdin unchanged through `[Console]::In`, whatever the console code
@@ -1651,29 +1540,15 @@ mod process_option_tests {
             .map(|shell| shell.shell.id())
             .collect::<Vec<_>>();
         for shell in powershells {
-            let parsed_args = ShellCommandToolArgs {
-                command: String::from(
-                    "[BitConverter]::ToString([Text.Encoding]::UTF8.GetBytes([Console]::In.ReadToEnd()))",
-                ),
-                cwd: None,
-                timeout_ms: Some(60_000),
-                stdin: Some(stdin_text.to_string()),
-                shell: Some(shell.to_string()),
-                _purpose: None,
-            };
-            let report = execute_shell_command_process(
-                &parsed_args,
-                temp.path(),
-                &shell_support,
-                &ShellCommandProcessOptions::default(),
-            )
-            .await;
-            assert_eq!(
-                report.status,
-                ShellCommandExecutionStatus::Completed,
-                "{shell}"
+            let mut parsed_args = args(
+                "[BitConverter]::ToString([Text.Encoding]::UTF8.GetBytes([Console]::In.ReadToEnd()))",
+                Some(shell),
+                Some(60_000),
             );
-            assert_eq!(report.stdout_text.trim(), expected, "{shell}");
+            parsed_args.stdin = Some(stdin_text.to_string());
+            let report = run(&parsed_args, temp.path(), &job_context()).await;
+            assert_eq!(report.status_label(), "completed", "{shell}");
+            assert_eq!(report.streams.stdout.trim(), expected, "{shell}");
         }
     }
 
@@ -1683,127 +1558,14 @@ mod process_option_tests {
     #[tokio::test]
     async fn timeout_kills_descendants_and_keeps_partial_output() {
         let temp = tempfile::tempdir().expect("create shell timeout test directory");
-        let parsed_args = ShellCommandToolArgs {
-            command: String::from("echo partial; sleep 600 & wait"),
-            cwd: None,
-            timeout_ms: Some(500),
-            stdin: None,
-            shell: Some(String::from("sh")),
-            _purpose: None,
-        };
-        let report = tokio::time::timeout(
-            Duration::from_secs(30),
-            execute_shell_command_process(
-                &parsed_args,
-                temp.path(),
-                &HostCommandShellSupport::from_configured_default_id(None),
-                &ShellCommandProcessOptions::default(),
-            ),
+        let report = run(
+            &args("echo partial; sleep 600 & wait", Some("sh"), Some(500)),
+            temp.path(),
+            &job_context(),
         )
-        .await
-        .expect("timed-out command must return once its tree is killed");
-        assert_eq!(report.status, ShellCommandExecutionStatus::TimedOut);
-        assert!(report.stdout_text.contains("partial"));
-    }
-
-    /// Runs one `sh` command through the host runner with a safety deadline for the test itself.
-    /// 通过宿主执行器运行一条 `sh` 命令，并为测试本身设置安全截止时间。
-    #[cfg(unix)]
-    async fn run_sh_for_output_limit_test(command: String) -> ShellCommandExecutionReport {
-        let temp = tempfile::tempdir().expect("create shell output limit test directory");
-        let parsed_args = ShellCommandToolArgs {
-            command,
-            cwd: None,
-            timeout_ms: None,
-            stdin: None,
-            shell: Some(String::from("sh")),
-            _purpose: None,
-        };
-        tokio::time::timeout(
-            Duration::from_secs(60),
-            execute_shell_command_process(
-                &parsed_args,
-                temp.path(),
-                &HostCommandShellSupport::from_configured_default_id(None),
-                &ShellCommandProcessOptions::default(),
-            ),
-        )
-        .await
-        .expect("output-limited command must return once its tree is killed")
-    }
-
-    /// An endless producer must be killed at the hard limit and none of its output returned.
-    /// 无限输出的命令必须在硬上限处被终止，且不返回任何输出。
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn endless_output_is_blocked_at_hard_limit_without_returning_output() {
-        let report = run_sh_for_output_limit_test(String::from("yes 0123456789")).await;
-        assert_eq!(
-            report.status,
-            ShellCommandExecutionStatus::OutputLimitExceeded
-        );
-        assert!(report.stdout_text.is_empty());
-        assert!(report.stderr_text.is_empty());
-        assert!(report.failure_reason.as_deref().is_some_and(|reason| {
-            reason.contains(&SHELL_COMMAND_OUTPUT_HARD_LIMIT_BYTES.to_string())
-        }));
-    }
-
-    /// The hard limit counts stdout and stderr together, including commands that exit on their own.
-    /// 硬上限合并统计 stdout 与 stderr，且覆盖自行退出的命令。
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn output_limit_counts_both_streams_for_naturally_exiting_commands() {
-        let half_plus_one = SHELL_COMMAND_OUTPUT_HARD_LIMIT_BYTES / 2 + 1;
-        let report = run_sh_for_output_limit_test(format!(
-            "head -c {half_plus_one} /dev/zero | tr '\\0' a; head -c {half_plus_one} /dev/zero | tr '\\0' a >&2"
-        ))
         .await;
-        assert_eq!(
-            report.status,
-            ShellCommandExecutionStatus::OutputLimitExceeded
-        );
-        assert!(report.stdout_text.is_empty());
-        assert!(report.stderr_text.is_empty());
-    }
-
-    /// Output exactly at the hard limit is still returned in full.
-    /// 恰好等于硬上限的输出仍完整返回。
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn output_exactly_at_hard_limit_is_kept() {
-        // Login-shell profiles may print a preamble; it counts toward the same combined budget.
-        // 登录 Shell 的 profile 可能打印前导内容；它同样计入合并预算。
-        let baseline = run_sh_for_output_limit_test(String::from(":")).await;
-        let preamble_bytes = baseline.stdout_text.len() + baseline.stderr_text.len();
-        let payload_bytes = SHELL_COMMAND_OUTPUT_HARD_LIMIT_BYTES - preamble_bytes;
-        let report =
-            run_sh_for_output_limit_test(format!("head -c {payload_bytes} /dev/zero | tr '\\0' a"))
-                .await;
-        assert_eq!(report.status, ShellCommandExecutionStatus::Completed);
-        assert_eq!(
-            report.stdout_text.len() + report.stderr_text.len(),
-            SHELL_COMMAND_OUTPUT_HARD_LIMIT_BYTES
-        );
-    }
-
-    /// The bundled terminal-session Skill must quote the current hard limit instead of a stale copy.
-    /// 内置 terminal-session 技能必须引用当前硬上限，而不是过期副本。
-    #[test]
-    fn terminal_skill_quotes_current_output_hard_limit() {
-        let skill_file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../vulcan-prompt-skills/src/assets/system/terminal-session/SKILL.md");
-        let content = std::fs::read_to_string(&skill_file)
-            .expect("bundled terminal-session Skill should be readable");
-        let expected = format!(
-            "{} MiB ({} bytes)",
-            SHELL_COMMAND_OUTPUT_HARD_LIMIT_BYTES / (1024 * 1024),
-            SHELL_COMMAND_OUTPUT_HARD_LIMIT_BYTES
-        );
-        assert!(
-            content.contains(&expected),
-            "terminal-session SKILL.md must state `{expected}`; update the Skill whenever SHELL_COMMAND_OUTPUT_HARD_LIMIT_BYTES changes"
-        );
+        assert_eq!(report.status_label(), "timed_out");
+        assert!(report.streams.stdout.contains("partial"));
     }
 
     /// Background processes inheriting the pipes must not keep a naturally exited command running.
@@ -1812,31 +1574,17 @@ mod process_option_tests {
     #[tokio::test]
     async fn natural_exit_stops_waiting_for_background_pipe_holders() {
         let temp = tempfile::tempdir().expect("create shell background test directory");
-        let parsed_args = ShellCommandToolArgs {
-            command: String::from("sleep 30 & echo done"),
-            cwd: None,
-            timeout_ms: None,
-            stdin: None,
-            shell: Some(String::from("sh")),
-            _purpose: None,
-        };
-        let report = tokio::time::timeout(
-            Duration::from_secs(20),
-            execute_shell_command_process(
-                &parsed_args,
-                temp.path(),
-                &HostCommandShellSupport::from_configured_default_id(None),
-                &ShellCommandProcessOptions::default(),
-            ),
+        let report = run(
+            &args("sleep 30 & echo done", Some("sh"), None),
+            temp.path(),
+            &job_context(),
         )
-        .await
-        .expect("exited command must not wait for background pipe holders");
-        assert_eq!(report.status, ShellCommandExecutionStatus::Completed);
-        assert!(report.stdout_text.trim_end().ends_with("done"));
+        .await;
+        assert_eq!(report.status_label(), "completed");
+        assert!(report.streams.stdout.trim_end().ends_with("done"));
         assert!(
             report
-                .failure_reason
-                .as_deref()
+                .failure_reason()
                 .is_some_and(|reason| reason.contains("background processes"))
         );
     }
@@ -1854,16 +1602,6 @@ mod process_option_tests {
         let binary_path = temp.path().join("rtk.cmd");
         std::fs::write(&binary_path, "@echo plugin-path-ok\r\n")
             .expect("write plugin PATH command shim");
-        // parsedArgs models the command text emitted by the RTK shell transform hook.
-        // parsedArgs 模拟 RTK shell 转换 Hook 产生的命令文本。
-        let parsed_args = ShellCommandToolArgs {
-            command: String::from("rtk"),
-            cwd: None,
-            timeout_ms: Some(5_000),
-            stdin: None,
-            shell: Some(String::from("cmd")),
-            _purpose: None,
-        };
         // processOptions models the canonical directory resolved from registration_id plus binary_id.
         // processOptions 模拟通过 registration_id 与 binary_id 解析出的规范目录。
         let process_options = ShellCommandProcessOptions {
@@ -1871,18 +1609,18 @@ mod process_option_tests {
             environment: BTreeMap::new(),
             host_environment: Vec::new(),
             vulcan_environment: Vec::new(),
-            live_output: None,
         };
         // report captures the real child-shell lookup result using only the injected PATH prefix.
         // report 捕获仅使用注入 PATH 前缀时真实子 Shell 的查找结果。
         let report = execute_shell_command_process(
-            &parsed_args,
+            &args("rtk", Some("cmd"), Some(5_000)),
             temp.path(),
             &HostCommandShellSupport::from_configured_default_id(None),
             &process_options,
+            &job_context(),
         )
         .await;
-        assert_eq!(report.status, ShellCommandExecutionStatus::Completed);
-        assert!(report.stdout_text.contains("plugin-path-ok"));
+        assert_eq!(report.status_label(), "completed");
+        assert!(report.streams.stdout.contains("plugin-path-ok"));
     }
 }

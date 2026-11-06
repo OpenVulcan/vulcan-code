@@ -1205,6 +1205,12 @@ impl TaskRuntime {
                 .remove(task_id)
                 .map(|queue| queue.len())
                 .unwrap_or(0);
+            // A closed agent runs nothing, so its shell jobs end with it.
+            // 已关闭的代理不再运行任何内容，因此其 shell 任务随之结束。
+            vulcan_host_tools::shell_job::ShellJobRuntime::global().stop_session_jobs(
+                &crate::tooling::native::canonical_shell_job_session_id(&task_id.to_string()),
+                "The agent that started this job was closed.",
+            );
         }
         Ok(CommittedCloseAgentRuntimeArchive {
             entries: committed_entries,

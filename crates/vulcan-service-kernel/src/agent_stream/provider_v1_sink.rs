@@ -1728,6 +1728,54 @@ impl ProviderV1StreamSink {
         })
     }
 
+    /// Tells the model, before its next request, which background shell jobs of this session finished.
+    /// 在下一次请求前告知模型本会话哪些后台 shell 任务已结束。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Returns the number of notices recorded; notices that could not be recorded stay pending.
+    /// 返回已记录的通知数量；无法记录的通知保持待送达。
+    pub(crate) fn consume_shell_job_notices(&self) -> Result<usize, String> {
+        let runtime = vulcan_host_tools::shell_job::ShellJobRuntime::global();
+        let owner = vulcan_agent_runtime::tooling::native::canonical_shell_job_session_id(
+            &self.handle.session_id().to_string(),
+        );
+        let mut notices = runtime.take_notices(&owner).into_iter();
+        let mut recorded = 0;
+        while let Some(notice) = notices.next() {
+            let result = (|| {
+                let action = vulcan_session_core::v1::ids::ClientActionId::try_new(format!(
+                    "shell-job-notice-{}",
+                    notice.job_id
+                ))
+                .map_err(|error| error.to_string())?;
+                let text = shell_job_notice_text(&notice);
+                let now_ms = crate::current_v1_unix_millis()?;
+                self.handle
+                    .mutate_durable_if_changed(
+                        SessionMutationAdmission::ExistingTurn,
+                        SessionFlushReason::InputAccepted,
+                        move |document| {
+                            document
+                                .append_in_turn_guidance_before_api(action, text, now_ms)
+                                .map(|result| match result {
+                                    vulcan_session_core::v1::document::IdempotentMutation::Committed(seq) => SessionMutationChange::Changed(seq),
+                                    vulcan_session_core::v1::document::IdempotentMutation::Idempotent(seq) => SessionMutationChange::Unchanged(seq),
+                                })
+                        },
+                    )
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            })();
+            if let Err(error) = result {
+                runtime.requeue_notices(&owner, std::iter::once(notice).chain(notices).collect());
+                return Err(error);
+            }
+            recorded += 1;
+        }
+        Ok(recorded)
+    }
+
     /// Creates one stream-local sink around the exact registered session handle.
     /// 围绕精确注册的会话句柄创建一个流局部 sink。
     ///
@@ -1834,6 +1882,20 @@ impl ProviderV1StreamSink {
             .map_err(provider_projection_runtime_error)?;
         }
         context_injection::synchronize_request_dynamic_context(&self.handle, &facts, &candidate)?;
+        // A summary must keep the jobs that still run, or the model forgets them after compaction. The
+        // list is request-local: it joins the summary controls after the context was published.
+        // 摘要必须保留仍在运行的任务，否则压缩后模型会忘记它们。该列表只属于本次请求：它在上下文发布之后才
+        // 加入摘要控制消息。
+        let mut candidate = candidate;
+        if facts.purpose == vulcan_session_core::v1::event::ApiPurposeKind::Compaction
+            && let Some(jobs) = running_shell_jobs_context(&self.handle.session_id().to_string())
+        {
+            let runtime_context = &mut candidate.dynamic_prompt_layers.runtime_context;
+            if !runtime_context.trim().is_empty() {
+                runtime_context.push_str("\n\n");
+            }
+            runtime_context.push_str(&jobs);
+        }
         let locked_baseline =
             initial_locked_baseline_with_host_guidance(&candidate.locked_baseline)?;
         let purpose = facts.purpose;
@@ -2815,6 +2877,68 @@ fn persistent_tool_completion_payloads(
     }
     .map_err(|error| ProviderV1SinkError::Runtime(SessionRuntimeError::Domain(Box::new(error))))?;
     Ok((output, changeset))
+}
+
+/// Longest command text in the running-jobs list of a summary request, in characters.
+/// 摘要请求中运行中任务列表里命令文本的最大长度（字符数）。
+const RUNNING_SHELL_JOB_COMMAND_CHARS: usize = 200;
+
+/// Lists the shell jobs still running in one session for a summary request; `None` when none run.
+/// 为摘要请求列出某会话仍在运行的 shell 任务；没有运行中的任务时为 `None`。
+fn running_shell_jobs_context(session_id: &str) -> Option<String> {
+    let jobs = vulcan_host_tools::shell_job::ShellJobRuntime::global().running_jobs(
+        &vulcan_agent_runtime::tooling::native::canonical_shell_job_session_id(session_id),
+    );
+    if jobs.is_empty() {
+        return None;
+    }
+    let mut text = String::from(
+        "Shell jobs still running in this session. Keep each job id and purpose in the summary; the \
+         jobs keep running, and `shell_job` reads, waits for or stops them:",
+    );
+    for job in jobs {
+        let command: String = job
+            .command()
+            .chars()
+            .take(RUNNING_SHELL_JOB_COMMAND_CHARS)
+            .collect();
+        text.push_str(&format!(
+            "\n- {}: {} (command: {})",
+            job.id(),
+            job.purpose(),
+            command.split_whitespace().collect::<Vec<_>>().join(" ")
+        ));
+    }
+    Some(text)
+}
+
+/// Model-facing text of one finished background shell job.
+/// 一个已结束后台 shell 任务面向模型的文本。
+fn shell_job_notice_text(notice: &vulcan_host_tools::shell_job::ShellJobNotice) -> String {
+    let outcome = &notice.outcome;
+    let mut lines = vec![
+        format!(
+            "<vulcan_shell_job_notice version=\"1\" job_id=\"{}\">",
+            notice.job_id
+        ),
+        format!("Background shell job {} finished.", notice.job_id),
+        format!("Purpose: {}", notice.purpose),
+        format!("Command: {}", notice.command),
+        format!("Status: {}", outcome.status.as_str()),
+        format!("Duration: {} ms", outcome.duration_ms),
+    ];
+    if let Some(code) = outcome.exit_code {
+        lines.push(format!("Exit code: {code}"));
+    }
+    if let Some(reason) = &outcome.failure_reason {
+        lines.push(format!("Reason: {reason}"));
+    }
+    lines.push(format!(
+        "Read its output with shell_job (action `read` or `search`, job_id `{}`) if you need it.",
+        notice.job_id
+    ));
+    lines.push(String::from("</vulcan_shell_job_notice>"));
+    lines.join("\n")
 }
 
 #[cfg(test)]

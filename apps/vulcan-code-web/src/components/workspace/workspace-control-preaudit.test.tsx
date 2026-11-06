@@ -79,7 +79,7 @@ it("locks monitoring synchronously and keeps a new project visit locked when an 
   const props: React.ComponentProps<typeof ConversationSessionTodolistPanel> = {
     expanded: true, todolist: null, reviewSummary: null, terminalSessions: [], subagentNavigation: null, commitDialogOpen: false, commitBusyState: null,
     reviewRepositories: ["repo", "repo/nested"].map((repositoryKey, index) => ({ repositoryKey, repositoryName: "Audit", relativePath: repositoryKey, isPrimary: index === 0, summary: null, monitoringEnabled: true, loading: false, error: null })),
-    onExpandedChange: vi.fn(), onCommitDialogOpenChange: vi.fn(), onOpenReviewChanges: vi.fn(), onStopCommandSession: async () => undefined, onOpenSubagentPanel: async () => false, onToggleReviewMonitoring: toggle,
+    onExpandedChange: vi.fn(), onCommitDialogOpenChange: vi.fn(), onOpenReviewChanges: vi.fn(), onStopCommandSession: async () => undefined, onOpenActivityPanel: vi.fn(), onToggleReviewMonitoring: toggle,
   };
   // Render the real repository control with an explicit project identity and no service transport.
   // 使用明确项目身份渲染真实仓库控件，不接入服务传输。

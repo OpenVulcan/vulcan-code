@@ -1,11 +1,11 @@
 // Session bar: one fixed row above the composer with the conversation's live numbers — context
 // usage, the turn in progress (or the last one), cache hit rate, session totals, subagents, goal,
-// memory and output speed. Each segment has a full and a compact form and a priority; when the row
-// is too narrow the lowest priorities shrink first, then disappear. Clicking a segment opens the
-// matching panel tab.
+// background commands, memory and output speed. Each segment has a full and a compact form and a
+// priority; when the row is too narrow the lowest priorities shrink first, then disappear.
+// Clicking a segment opens the matching panel tab.
 // 会话栏：输入框上方固定的一行，显示会话的实时数据——上下文用量、进行中（或上一）轮次、缓存命中率、
-// 会话合计、子代理、目标、记忆与输出速度。每段有完整与紧凑两种形式及优先级；行宽不足时最低优先级
-// 的段先收缩、再隐藏。点击某段打开对应的面板标签页。
+// 会话合计、子代理、目标、后台命令、记忆与输出速度。每段有完整与紧凑两种形式及优先级；行宽不足时
+// 最低优先级的段先收缩、再隐藏。点击某段打开对应的面板标签页。
 
 use std::time::Instant;
 
@@ -18,6 +18,7 @@ use ratatui::widgets::Widget;
 use super::chrome::usage_gauge;
 use super::text::{compact_count, compact_duration, spinner, width_of};
 use crate::app::action::UiAction;
+use crate::app::activity::{ActivityAction, ActivityPage};
 use crate::app::hit::Target;
 use crate::app::{App, PanelTab, SessionState, insight};
 use crate::model::{AgentState, SessionGoalStatus};
@@ -42,7 +43,9 @@ struct Segment {
     priority: u8,
     full: Vec<Span<'static>>,
     compact: Option<Vec<Span<'static>>>,
-    tab: PanelTab,
+    /// What a click does: opens the matching panel tab unless set otherwise.
+    /// 点击的效果：除非另行设置，否则打开对应的面板标签页。
+    action: UiAction,
     shrunk: bool,
 }
 
@@ -52,9 +55,14 @@ impl Segment {
             priority,
             full,
             compact: None,
-            tab,
+            action: UiAction::ShowPanel(tab),
             shrunk: false,
         }
+    }
+
+    fn on_click(mut self, action: UiAction) -> Self {
+        self.action = action;
+        self
     }
 
     fn compact(mut self, spans: Vec<Span<'static>>) -> Self {
@@ -100,8 +108,7 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) {
             height: 1,
         };
         Line::from(segment.spans().to_vec()).render(rect, buf);
-        app.hits
-            .add(rect, Target::Do(UiAction::ShowPanel(segment.tab)));
+        app.hits.add(rect, Target::Do(segment.action.clone()));
         x += width;
     }
 }
@@ -290,7 +297,37 @@ fn segments(app: &App, session: &SessionState) -> Vec<Segment> {
                     count.clone(),
                 ],
             )
-            .compact(vec![Span::styled("⧉ ", label), count]),
+            .compact(vec![Span::styled("⧉ ", label), count])
+            .on_click(UiAction::SessionActivity(ActivityAction::Show(
+                ActivityPage::Subagents,
+            ))),
+        );
+    }
+
+    // Background commands still running in this session.
+    // 本会话中仍在运行的后台命令。
+    let background = app
+        .selected
+        .as_deref()
+        .map_or(0, |id| app.activity.background_count(id));
+    if background > 0 {
+        let count = Span::styled(background.to_string(), theme.primary_text());
+        out.push(
+            Segment::new(
+                4,
+                PanelTab::Agents,
+                vec![
+                    Span::styled(
+                        format!("$ {} ", tr!("sessionActivity.backgroundCommands")),
+                        label,
+                    ),
+                    count.clone(),
+                ],
+            )
+            .compact(vec![Span::styled("$ ", label), count])
+            .on_click(UiAction::SessionActivity(ActivityAction::Show(
+                ActivityPage::Commands,
+            ))),
         );
     }
 

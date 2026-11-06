@@ -6,6 +6,7 @@
 use std::time::Instant;
 
 use crate::app::action::UiAction;
+use crate::app::activity::{ActivityAction, ActivityPage};
 use crate::app::hit::Target;
 use crate::app::overlay::{Menu, Overlay};
 use crate::app::pages::Area;
@@ -541,18 +542,22 @@ fn session_panel_memory_stats_and_agents() {
     h.settle();
     assert_eq!(goal(&h.app), Some(SessionGoalStatus::Paused));
 
-    // Agents: select the running reviewer and stop it through the confirmation.
-    // 代理：选中运行中的 reviewer 并经确认后停止。
+    // Activity: select the running reviewer and stop it through the confirmation.
+    // 活动：选中运行中的 reviewer 并经确认后停止。
     input::handle_event(&mut h.app, key(KeyCode::Char('6'), KeyModifiers::ALT));
     h.settle();
+    assert_eq!(h.app.activity.page, ActivityPage::Subagents);
     let running = h
         .app
-        .session()
-        .unwrap()
-        .agents
+        .activity
+        .subagent_entries()
         .iter()
-        .position(|a| a.state == AgentState::Running)
+        .position(|entry| entry.task.is_running)
         .expect("the demo conversation should have a running subagent");
+    let task_id = h.app.activity.subagent_entries()[running]
+        .task
+        .task_id
+        .clone();
     click(
         &mut h.app,
         "agent row",
@@ -565,10 +570,204 @@ fn session_panel_memory_stats_and_agents() {
     assert!(matches!(h.app.overlay, Some(Overlay::Confirm(_))));
     input::handle_event(&mut h.app, key(KeyCode::Char('y'), KeyModifiers::NONE));
     h.settle();
-    assert_eq!(
-        h.app.session().unwrap().agents[running].state,
-        AgentState::Stopped
+    let agent = |app: &App| {
+        app.session()
+            .unwrap()
+            .agents
+            .iter()
+            .find(|agent| agent.id == task_id)
+            .map(|agent| agent.state)
+    };
+    assert_eq!(agent(&h.app), Some(AgentState::Stopped));
+    assert!(
+        h.app
+            .activity
+            .subagent_entries()
+            .iter()
+            .all(|entry| entry.task.task_id != task_id || !entry.task.is_running),
+        "the activity snapshot is read again after the navigation changed"
     );
+
+    // Clearing ended subagents hides them until "show all" lists them again.
+    // 清理已结束的子代理后将其隐藏，直到“显示全部”再次列出。
+    let listed = h.app.activity.subagent_entries().len();
+    click(&mut h.app, "clear ended subagents", |t| {
+        matches!(
+            t,
+            Target::Do(UiAction::SessionActivity(ActivityAction::Clear))
+        )
+    });
+    h.settle();
+    assert!(h.app.activity.subagent_entries().len() < listed);
+    click(&mut h.app, "show all subagents", |t| {
+        matches!(
+            t,
+            Target::Do(UiAction::SessionActivity(ActivityAction::ShowAll(true)))
+        )
+    });
+    h.settle();
+    assert_eq!(h.app.activity.subagent_entries().len(), listed);
+    assert!(
+        h.app
+            .activity
+            .subagent_entries()
+            .iter()
+            .any(|entry| entry.cleared)
+    );
+    assert!(!h.app.should_quit);
+}
+
+#[test]
+fn session_activity_commands_and_job_log() {
+    let _locale = i18n::lock_locale("en-US");
+    let mut h = Harness::connected();
+    let session = h
+        .app
+        .selected
+        .clone()
+        .expect("a selected demo conversation");
+
+    // The session bar counts the running background command and opens the command page.
+    // 会话栏统计运行中的后台命令并打开命令页。
+    assert_eq!(h.app.activity.background_count(&session), 1);
+    click(&mut h.app, "background command segment", |t| {
+        matches!(
+            t,
+            Target::Do(UiAction::SessionActivity(ActivityAction::Show(
+                ActivityPage::Commands
+            )))
+        )
+    });
+    h.settle();
+    assert_eq!(h.app.active_panel_tab(), PanelTab::Agents);
+    assert_eq!(h.app.activity.page, ActivityPage::Commands);
+    let jobs = |app: &App| app.activity.job_entries().to_vec();
+    let recent = jobs(&h.app);
+    assert!(recent[0].running, "running jobs are listed first");
+    let finished = recent.iter().filter(|job| !job.running).count();
+    assert_eq!(finished, crate::app::activity::FINISHED_JOB_LIMIT);
+    assert!(h.app.activity.hidden() > 0);
+    snapshot(&mut h.app, "activity-commands");
+    h.settle();
+
+    // "Show all" lists every finished job; "Show recent" returns to the latest ones.
+    // “显示全部”列出全部已结束任务；“显示最近”回到最近的任务。
+    click(&mut h.app, "show all commands", |t| {
+        matches!(
+            t,
+            Target::Do(UiAction::SessionActivity(ActivityAction::ShowAll(true)))
+        )
+    });
+    h.settle();
+    assert!(jobs(&h.app).len() > recent.len());
+    click(&mut h.app, "show recent commands", |t| {
+        matches!(
+            t,
+            Target::Do(UiAction::SessionActivity(ActivityAction::ShowAll(false)))
+        )
+    });
+    h.settle();
+    assert_eq!(jobs(&h.app).len(), recent.len());
+
+    // The running job's output opens on its newest lines and pages upward to the first line.
+    // 运行中任务的输出从最新的行打开，并向上分页到第一行。
+    click(&mut h.app, "running job row", |t| {
+        matches!(t, Target::PanelItem(PanelTab::Agents, 0))
+    });
+    h.settle();
+    let job_id = recent[0].job_id.clone();
+    click(
+        &mut h.app,
+        "job output chip",
+        |t| matches!(t, Target::Do(UiAction::SessionActivity(ActivityAction::OpenLog(id))) if *id == job_id),
+    );
+    h.settle();
+    let log = |app: &App| match &app.overlay {
+        Some(Overlay::ShellJobLog(log)) => log.as_ref().clone(),
+        _ => panic!("the job log should be open"),
+    };
+    let first = log(&h.app);
+    assert!(first.loaded && first.running && first.follow);
+    assert!(first.has_earlier, "a long log opens on its newest page");
+    assert_eq!(
+        first.rows.last().map(|row| row.line),
+        Some(recent[0].total_lines),
+        "the newest line is shown"
+    );
+    snapshot(&mut h.app, "activity-job-log");
+    h.settle();
+    click(&mut h.app, "earlier lines", |t| {
+        matches!(
+            t,
+            Target::Do(UiAction::SessionActivity(ActivityAction::LogEarlier))
+        )
+    });
+    h.settle();
+    let paged = log(&h.app);
+    assert!(paged.rows.len() > first.rows.len());
+    assert!(paged.rows[0].line < first.rows[0].line);
+    assert!(!paged.follow, "reading upward leaves the newest lines");
+    for _ in 0..10 {
+        if !log(&h.app).has_earlier {
+            break;
+        }
+        input::handle_event(&mut h.app, key(KeyCode::Home, KeyModifiers::NONE));
+        h.settle();
+    }
+    let whole = log(&h.app);
+    assert!(!whole.has_earlier);
+    assert_eq!(whole.rows[0].line, 1);
+    assert!(
+        whole
+            .rows
+            .windows(2)
+            .all(|pair| pair[0].line <= pair[1].line),
+        "pages join in line order"
+    );
+    assert!(
+        whole.rows.iter().any(|row| row.continuation),
+        "a long line continues on following rows"
+    );
+    input::handle_event(&mut h.app, key(KeyCode::End, KeyModifiers::NONE));
+    assert!(log(&h.app).follow);
+
+    // Stopping from the log ends the job; the log, list and session bar count follow.
+    // 从日志中停止任务；日志、列表与会话栏计数随之更新。
+    input::handle_event(&mut h.app, key(KeyCode::Char('s'), KeyModifiers::NONE));
+    h.settle();
+    assert!(!log(&h.app).running);
+    assert_eq!(h.app.activity.background_count(&session), 0);
+    input::handle_event(&mut h.app, key(KeyCode::Esc, KeyModifiers::NONE));
+    h.settle();
+    assert!(h.app.overlay.is_none());
+    assert!(jobs(&h.app).iter().all(|job| !job.running));
+    assert!(
+        h.app
+            .hits
+            .find(|t| matches!(
+                t,
+                Target::Do(UiAction::SessionActivity(ActivityAction::Show(
+                    ActivityPage::Commands
+                )))
+            ))
+            .is_none(),
+        "the session bar drops the segment without running commands"
+    );
+
+    // Clearing ended commands empties the recent list; nothing is deleted.
+    // 清理已结束的命令后最近列表为空；不删除任何内容。
+    click(&mut h.app, "clear ended commands", |t| {
+        matches!(
+            t,
+            Target::Do(UiAction::SessionActivity(ActivityAction::Clear))
+        )
+    });
+    h.settle();
+    assert!(jobs(&h.app).is_empty());
+    input::handle_event(&mut h.app, key(KeyCode::Char('a'), KeyModifiers::NONE));
+    h.settle();
+    assert!(!jobs(&h.app).is_empty());
+    assert!(jobs(&h.app).iter().all(|job| job.cleared));
     assert!(!h.app.should_quit);
 }
 

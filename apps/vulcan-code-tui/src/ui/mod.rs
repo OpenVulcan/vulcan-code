@@ -39,6 +39,7 @@ mod overlays;
 mod pages;
 mod panel;
 mod session_bar;
+mod shell_job_log;
 mod sidebar;
 pub mod text;
 pub mod theme;

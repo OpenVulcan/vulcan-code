@@ -129,6 +129,8 @@ ESM 模块只作元数据展示，TUI 不执行。
 凭据页可以导入服务声明的令牌或已取得的授权凭据，尚未提供浏览器 OAuth 授权流程。
 系统原生记忆按会话/轮次回收，不增加逐条原生记忆删除入口。
 浏览器本地通知设置、会话置顶、手动标记未读、子代理消息、MCP 重启及 VMM 服务启停没有 TUI 虚构入口。
+`backgroundShellCommand`（`service_background_shell_command`）不镜像：WebUI 只在运行中命令卡的实时输出中提供它，
+TUI 会话记录没有该实时视图与工具调用标识。命令任务列表与后台命令数跟随 `shell.job.changed` 事件。
 工作台的项目置顶及服务返回的会话未读状态仍按真实协议处理。
 
 ## 请求构建器与 RPC
@@ -147,6 +149,12 @@ Rust 名称列同时标明内部确认构建器，避免将预检确认辅助函
 | `app_update::dismiss_app_update_notice` | dismissAppUpdateNotice | `service_dismiss_app_update_notice` |
 | `app_update::install_desktop_profile` | installDesktopProfile | `service_install_desktop_profile` |
 | `app_update::save_app_update_settings` | saveAppUpdateSettings | `service_save_app_update_settings` |
+| `session_activity::list_shell_jobs` | listShellJobs | `service_list_shell_jobs` |
+| `session_activity::read_shell_job_output` | readShellJobOutput | `service_read_shell_job_output` |
+| `session_activity::stop_shell_job` | stopShellJob | `service_stop_shell_job` |
+| `session_activity::load_session_activity` | loadSessionActivity | `service_session_activity` |
+| `session_activity::clear_session_activity` | clearSessionActivity | `service_clear_session_activity` |
+| `session_activity::count_running_shell_jobs` | countRunningShellJobs | `service_running_shell_job_count` |
 | `knowledge_base::create_knowledge_library` | createKnowledgeLibrary | `service_create_knowledge_library` |
 | `knowledge_base::update_knowledge_library_settings` | updateKnowledgeLibrarySettings | `service_set_knowledge_library_settings` |
 | `knowledge_base::rename_knowledge_library` | renameKnowledgeLibrary | `service_rename_knowledge_library` |

@@ -5,6 +5,7 @@ import { formatMessage, translateActive } from "@/i18n";
 import { errorMessage } from "@/lib/display-format";
 import { SERVICE_RESTARTING_TOPIC, type AppUpdateSnapshot, type ServiceRestartingEvent } from "@/service/app-update-events";
 import { restartToUpdate } from "@/service/app-update-service";
+import { restartAfterBackgroundJobCheck } from "@/components/features/app-update/restart-guard";
 import { hasServiceRuntime, serviceClient } from "@/service/webui-service-runtime";
 import { toast } from "@/ui-kit/primitives/toast";
 
@@ -51,8 +52,10 @@ export function useAppUpdatePrompts(
         action: {
           label: translateActive("settings.appUpdate.restart"),
           onClick: () => {
-            void restartToUpdate().catch((cause: unknown) => {
-              toast.error(translateActive("settings.appUpdate.failed.restart"), { description: errorMessage(cause) });
+            void restartAfterBackgroundJobCheck(() => {
+              void restartToUpdate().catch((cause: unknown) => {
+                toast.error(translateActive("settings.appUpdate.failed.restart"), { description: errorMessage(cause) });
+              });
             });
           },
         },

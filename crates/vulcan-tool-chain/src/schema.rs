@@ -62,13 +62,13 @@ Behavior:
 - Keep verification steps targeted (one test, one package) rather than whole-project builds.
 
 Example: build, then test only if the build succeeded, then show the log if anything failed:
-{"steps":[{"id":"build","tool":"shell_command","arguments":{"command":"cargo build -p app"}},{"id":"test","tool":"shell_command","arguments":{"command":"cargo test -p app parser"}},{"tool":"file_read","if":"failure()","arguments":{"path":"target/test.log"}}]}
+{"steps":[{"id":"build","tool":"shell_command","arguments":{"command":"cargo build -p app","purpose":"Build the app"}},{"id":"test","tool":"shell_command","arguments":{"command":"cargo test -p app parser","purpose":"Run the parser tests"}},{"tool":"file_read","if":"failure()","arguments":{"path":"target/test.log"}}]}
 
 Example: find a file, then read it:
-{"steps":[{"id":"find","tool":"shell_command","arguments":{"command":"rg -l \"fn parse_config\" src"}},{"tool":"file_read","arguments":{"path":"${{ match(steps.find.stdout, '^(.+)') }}"}}]}
+{"steps":[{"id":"find","tool":"shell_command","arguments":{"command":"rg -l \"fn parse_config\" src","purpose":"Find the parse_config file"}},{"tool":"file_read","arguments":{"path":"${{ match(steps.find.stdout, '^(.+)') }}"}}]}
 
 Example: pass an earlier command's output to another command through stdin, allowing the lint step to fail:
-{"steps":[{"id":"lint","tool":"shell_command","continue_on_error":true,"arguments":{"command":"cargo clippy -p app --message-format short"}},{"tool":"shell_command","if":"test(steps.lint.stderr, 'warning:')","arguments":{"command":"grep -c warning:","stdin":"${{ steps.lint.stderr }}"}}]}"#;
+{"steps":[{"id":"lint","tool":"shell_command","continue_on_error":true,"arguments":{"command":"cargo clippy -p app --message-format short","purpose":"Lint the app"}},{"tool":"shell_command","if":"test(steps.lint.stderr, 'warning:')","arguments":{"command":"grep -c warning:","purpose":"Count the warnings","stdin":"${{ steps.lint.stderr }}"}}]}"#;
 
 /// Builds the JSON Schema advertised for `tool_chain`.
 /// 构建 `tool_chain` 对外声明的 JSON Schema。

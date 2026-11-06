@@ -8,6 +8,9 @@
 // `apply` 把 `BackendEvent` 转换为状态。由此模拟后端与未来的服务后端可以互换。
 
 pub mod action;
+pub mod activity;
+#[cfg(test)]
+mod activity_tests;
 pub mod answer_mode;
 pub mod ask;
 #[cfg(test)]
@@ -735,6 +738,9 @@ pub struct App {
     /// Sidebar search, while open.
     /// 打开期间的侧栏搜索。
     pub sidebar_filter: Option<SidebarFilter>,
+    /// Subagent and command activity of the selected session.
+    /// 所选会话的子代理与命令活动。
+    pub activity: activity::ActivityState,
 }
 
 impl App {
@@ -841,6 +847,7 @@ impl App {
             transcript_find: None,
             path_mention_state: Default::default(),
             sidebar_filter: None,
+            activity: activity::ActivityState::default(),
         }
     }
 
@@ -1160,12 +1167,14 @@ impl App {
             .collect::<Vec<_>>();
         for slot in due {
             self.live_poll_due.remove(&slot);
-            if page.is_some_and(|page| page.live_slots().contains(&slot))
+            if (page.is_some_and(|page| page.live_slots().contains(&slot))
+                || activity::live_slot_visible(self, slot))
                 && let Some(loader) = self.slots.loader(slot).map(|loader| loader.renewed())
             {
                 action::perform(self, action::UiAction::Send(Command::Call(loader)));
             }
         }
+        activity::tick(self);
     }
 
     /// Schedules the next read of a provider-task or sign-in slot while its content can still change.
@@ -1223,6 +1232,9 @@ impl App {
                 .at(Slot::PermissionJudgeStatus, "/pollIntervalMs")
                 .as_u64()
                 .map(Duration::from_millis),
+            // Activity lists refresh while an entry runs and their page is shown.
+            // 活动列表在有条目运行且其页面显示期间刷新。
+            Slot::ShellJobs | Slot::SessionActivity => activity::live_interval(self, slot),
             _ => return,
         };
         match interval {
@@ -1282,6 +1294,7 @@ impl App {
                     }
                 }
                 if state == ConnectionState::Connected {
+                    activity::reconnected(self);
                     self.load_page();
                 }
             }
@@ -1432,7 +1445,11 @@ impl App {
             BackendEvent::Agents {
                 conversation_id,
                 agents,
-            } => self.session_for(&conversation_id).agents = agents,
+            } => {
+                self.session_for(&conversation_id).agents = agents;
+                activity::subagents_changed(self, &conversation_id);
+            }
+            BackendEvent::ShellJobChanged(changed) => activity::job_changed(self, changed),
             BackendEvent::SessionInsight {
                 conversation_id,
                 insight,
@@ -1621,7 +1638,8 @@ impl App {
                 if slot == crate::service_api::Slot::PathMentionDirectory {
                     self.path_mention_loaded(Some(&call));
                 }
-                self.slots.set(slot, call, value);
+                self.slots.set(slot, call.clone(), value);
+                activity::slot_arrived(self, slot, &call);
                 let still_running = running_jobs(self);
                 if was_running
                     .iter()
@@ -1688,6 +1706,7 @@ impl App {
                 if slot == crate::service_api::Slot::PathMentionDirectory {
                     self.path_mention_loaded(None);
                 }
+                activity::slot_failed(self, slot, &message);
                 self.slots.clear(slot);
                 self.slot_errors.insert(slot, message);
                 self.live_poll_due.remove(&slot);
@@ -1720,6 +1739,9 @@ impl App {
         call: &crate::service_api::ServiceCall,
     ) -> bool {
         use crate::service_api::Slot;
+        if let Some(current) = activity::slot_is_current(self, slot, call) {
+            return current;
+        }
         match slot {
             Slot::PathMentionDirectory => self.path_mention_listing_is_current(call),
             Slot::KnowledgeWords | Slot::KnowledgeBindings | Slot::KnowledgeIntegrity => {

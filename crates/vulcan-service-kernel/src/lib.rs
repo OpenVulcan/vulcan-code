@@ -218,6 +218,7 @@ mod service_bootstrap;
 mod service_bridge_io;
 mod service_diagnostics_paths;
 mod service_state_access;
+mod session_activity_services;
 mod session_business_hook;
 mod session_goal_lifecycle;
 mod session_goals;
@@ -356,6 +357,7 @@ pub use service_bridge_io::{
 };
 use service_diagnostics_paths::*;
 use service_state_access::*;
+use session_activity_services::*;
 use session_goal_lifecycle::{
     account_session_goal_from_report, account_session_goal_provider_usage,
     cache_session_goal_summary, ensure_regular_session_exists, normalize_session_goal_objective,
@@ -423,7 +425,7 @@ use workbench_model_routes::{
 use workbench_refresh::*;
 use workbench_session_panels::*;
 use workbench_surface_projection::{
-    open_subagent_registry_entry_for_task,
+    open_subagent_registry_entry_for_task, subagent_activity_rows,
     subagent_navigation_snapshot_for_parent_from_cached_state,
     subagent_navigation_snapshot_from_cached_state, subagent_navigation_snapshot_from_state,
 };

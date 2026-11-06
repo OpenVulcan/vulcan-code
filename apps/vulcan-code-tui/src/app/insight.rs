@@ -46,7 +46,7 @@ pub fn item_count(app: &App, tab: PanelTab) -> usize {
     };
     match tab {
         PanelTab::Memory => memory_entries(&session.insight, app.panel.memory_static).len(),
-        PanelTab::Agents => session.agents.len(),
+        PanelTab::Agents => app.activity.item_count(),
         _ => 0,
     }
 }
@@ -242,7 +242,13 @@ pub fn sheet_for(app: &App, tab: PanelTab, index: usize) -> Option<DetailSheet> 
             let entries = memory_entries(&session.insight, app.panel.memory_static);
             Some(memory_sheet(&conversation_id, entries.get(index)?))
         }
-        PanelTab::Agents => Some(agent_sheet(&conversation_id, session.agents.get(index)?)),
+        PanelTab::Agents => {
+            let entry = app.activity.subagent_entries().get(index)?;
+            (app.activity.page == super::activity::ActivityPage::Subagents)
+                .then(|| super::activity::agent_for(app, entry))
+                .flatten()
+                .map(|agent| agent_sheet(&conversation_id, agent))
+        }
         _ => None,
     }
 }

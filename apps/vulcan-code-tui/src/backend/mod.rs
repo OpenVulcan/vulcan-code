@@ -396,6 +396,9 @@ pub enum BackendEvent {
     /// A finished action; the UI localizes the notice.
     /// 已完成的操作；由界面本地化提示。
     Notice(Notice),
+    /// `shellJobChanged`: a shell job of a session started, moved to the background or finished.
+    /// 某会话的一个 shell 任务已启动、转到后台或已结束。
+    ShellJobChanged(vulcan_service_api::ShellJobChangedEvent),
     /// Free-form message from the backend (service errors arrive already worded).
     /// 后端的自由文本消息（服务错误到达时已带文案）。
     Toast {

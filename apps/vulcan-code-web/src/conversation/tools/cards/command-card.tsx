@@ -1,9 +1,13 @@
-// Command cards answer three questions at a glance: what ran, how it ended, how long it took. The body is the
-// terminal transcript, ending with where it ran.
-// 命令卡一眼回答三个问题：运行了什么、如何结束、耗时多久。正文是终端记录，末尾注明运行位置。
+// Command cards answer three questions at a glance: what ran (the purpose the AI gave, or the command), how it ended,
+// how long it took. The body is the terminal transcript, ending with where it ran.
+// 命令卡一眼回答三个问题：运行了什么（AI 给出的用途，或命令本身）、如何结束、耗时多久。正文是终端记录，末尾注明运行位置。
 import * as React from "react";
 import { SquareTerminal } from "lucide-react";
 import { useI18n, type TranslationKey } from "@/i18n";
+import { errorMessage } from "@/lib/display-format";
+import { backgroundShellCommand } from "@/service/session-activity-service";
+import { Button } from "@/ui-kit/primitives/button";
+import { toast } from "@/ui-kit/primitives/toast";
 import { ToolCardSessionContext, ToolFrame, type ToolCardProps } from "../tool-card";
 import { listOf, numberOf, objectOf, textOf, type ToolCall } from "../tool-call";
 import { TerminalView } from "../views/terminal-view";
@@ -16,6 +20,9 @@ export function ShellCommandCard(props: ToolCardProps) {
   const { call } = props;
   const run = call.host?.kind === "command_run" ? call.host.payload : null;
   const command = textOf(run?.command) ?? textOf(call.input.command) ?? "";
+  const purpose = (textOf(run?.purpose) ?? textOf(call.input.purpose) ?? "").trim();
+  const jobId = textOf(run?.job_id);
+  const backgrounded = textOf(run?.status) === SHELL_COMMAND_BACKGROUND_STATUS;
   const hook = objectOf(run?.hook_transform);
   const effective = textOf(hook?.effective_command);
   const exitCode = numberOf(run?.exit_code) ?? exitCodeFromText(call.modelOutput);
@@ -37,12 +44,13 @@ export function ShellCommandCard(props: ToolCardProps) {
           {badges.map((badge, index) => (
             <span className="vk-badge" key={index} title={`${textOf(badge?.label) ?? ""}: ${textOf(badge?.value) ?? ""}`}>{textOf(badge?.badge)}</span>
           ))}
+          {backgrounded ? <span className="vk-badge" title={jobId ?? undefined}>{t("toolCard.shell.background")}</span> : null}
           {exitCode !== null && exitCode !== 0 ? <span className="vk-del">{t("toolCard.exitCode").replace("{code}", String(exitCode))}</span> : null}
         </>
       )}
       state={call.state}
-      target={command}
-      targetTitle={command}
+      target={purpose || command}
+      targetTitle={purpose ? `${purpose}\n$ ${command}` : command}
       verb={t("toolCard.verb.runCommand")}
     >
       {liveTarget ? (
@@ -55,7 +63,10 @@ export function ShellCommandCard(props: ToolCardProps) {
             prompt={`$ ${command}${effective && effective !== command ? `\n→ ${effective}` : ""}`}
             text={output}
           />
-          {failure ? <div className="vk-tool-note" data-tone="">{failure}</div> : null}
+          {failure && !backgrounded ? <div className="vk-tool-note" data-tone="">{failure}</div> : null}
+          {backgrounded && jobId ? (
+            <div className="vk-tool-note">{t("toolCard.shell.backgroundNote").replace("{job}", jobId)}</div>
+          ) : null}
           <RunLocation cwd={textOf(run?.cwd)} shell={textOf(run?.shell)} />
         </>
       )}
@@ -64,16 +75,29 @@ export function ShellCommandCard(props: ToolCardProps) {
 }
 
 // LiveCommandOutput shows the most recent lines of a command that is still running. It mounts only while the card is
-// open, so a closed card never asks Core for anything.
+// open, so a closed card never asks Core for anything. While the command runs, it can be moved to the background.
 // LiveCommandOutput 显示仍在运行的命令的最近若干行。它只在卡片展开时挂载，因此收起的卡片不会向 Core 请求任何内容。
+// 命令运行期间可将其转到后台。
 function LiveCommandOutput(props: { command: string; cwd: string | null; target: ShellCommandLiveTarget }) {
   const { t } = useI18n();
   const live = useShellCommandLiveOutput(props.target);
+  const [moving, setMoving] = React.useState(false);
   const note = !live
     ? null
     : live.running
       ? t("toolCard.liveOutput.recent").replace("{count}", String(live.lineLimit))
       : t("toolCard.liveOutput.ended");
+  // moveToBackground lets the AI continue while the command keeps running as a background job.
+  // moveToBackground 让 AI 继续工作，命令作为后台任务继续运行。
+  const moveToBackground = () => {
+    setMoving(true);
+    void backgroundShellCommand(props.target.sessionId, props.target.apiCallId, props.target.toolCallId)
+      .then((moved) => {
+        if (!moved) toast.info(t("toolCard.shell.notRunning"));
+      })
+      .catch((error: unknown) => toast.error(errorMessage(error)))
+      .finally(() => setMoving(false));
+  };
   return (
     <>
       <TerminalView
@@ -82,7 +106,16 @@ function LiveCommandOutput(props: { command: string; cwd: string | null; target:
         prompt={`$ ${props.command}`}
         text={live?.lines.join("\n") ?? ""}
       />
-      {note ? <div className="vk-tool-foot"><span>{note}</span></div> : null}
+      {note ? (
+        <div className="vk-tool-foot">
+          <span>{note}</span>
+          {live?.running ? (
+            <Button disabled={moving} onClick={moveToBackground} size="xs" type="button" variant="ghost">
+              {t("toolCard.shell.moveToBackground")}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
     </>
   );
 }
@@ -188,13 +221,18 @@ function exitCodeFromText(text: string | null): number | null {
   return match ? Number(match[1]) : null;
 }
 
-// commandOutputFromText joins the [stdout] and [stderr] sections of the stable shell_command model output.
-// commandOutputFromText 合并稳定 shell_command 模型输出中的 [stdout] 与 [stderr] 区段。
+// SHELL_COMMAND_BACKGROUND_STATUS is the status of a call whose command keeps running as a background job.
+// SHELL_COMMAND_BACKGROUND_STATUS 是命令作为后台任务继续运行时调用的状态。
+const SHELL_COMMAND_BACKGROUND_STATUS = "running_in_background";
+
+// commandOutputFromText joins the output sections of the stable shell_command model output: [output], and the
+// [stdout] and [stderr] sections of older results.
+// commandOutputFromText 合并稳定 shell_command 模型输出中的输出区段：[output]，以及旧结果中的 [stdout] 与 [stderr]。
 export function commandOutputFromText(text: string): string {
   const sections: string[] = [];
   let current: string[] | null = null;
   for (const line of text.replace(/\r\n?/g, "\n").split("\n")) {
-    if (/^\[(stdout|stderr)\]\s*$/.test(line)) {
+    if (/^\[(output|stdout|stderr)\]\s*$/.test(line)) {
       current = [];
       sections.push("");
       continue;

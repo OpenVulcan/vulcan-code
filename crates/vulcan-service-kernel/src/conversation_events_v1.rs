@@ -479,7 +479,7 @@ async fn resolve_exact_locator(
 /// Captures the controller and registry under one short service-state lock,
 /// then resolves storage through SQLite only.
 /// 在一次短服务状态锁内捕获控制器与注册表，随后仅通过 SQLite 解析存储。
-async fn resolve_exact_locator_and_registry(
+pub(crate) async fn resolve_exact_locator_and_registry(
     state: &SharedServiceBridgeState,
     raw_session_id: &str,
 ) -> Result<
@@ -632,7 +632,7 @@ fn tail_read_through(latest: Option<u64>, from: u64, max_events: usize) -> Optio
 /// Returns the unique registered handle, treating only the explicit
 /// not-registered state as an inactive session.
 /// 返回唯一已注册句柄，仅把显式未注册状态视为非活动会话。
-fn optional_registered_handle(
+pub(crate) fn optional_registered_handle(
     registry: &SessionRuntimeRegistry,
     session_id: SessionId,
 ) -> Result<Option<std::sync::Arc<SessionHandle>>, String> {

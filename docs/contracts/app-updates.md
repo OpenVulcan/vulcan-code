@@ -53,7 +53,8 @@
 1. 增量更新在运行版本旁组装 `versions/<新版本>`，然后原子切换当前版本（Windows `current.json`，
    其他平台 `current` 符号链接），并写入 `updates/startup-trial.json`：`version`、`previous`、
    `attempts: 0` 与 `max_attempts`（取自 `MAX_STARTUP_ATTEMPTS`，当前为 2）。
-2. 用户确认重启后，服务发布 `service.restarting`（`reason` 为 `update` 或 `installer`），正常排空后
+2. 重启会停止所有运行中的后台命令任务：WebUI 在重启前以 `service_running_shell_job_count` 读取数量，大于 0 时
+   先给出警告，由用户在警告中选择“仍然重启”；计数失败不阻止更新。用户确认重启后，服务发布 `service.restarting`（`reason` 为 `update` 或 `installer`），正常排空后
    以相同参数加 `--await-owner-exit` 分离启动新服务；新服务最多等待 120 秒取得实例锁。在 systemd 用户
    服务中改用 `systemd-run --user` 重新安装用户单元，单元的 `ExecStart` 使用稳定路径 `<root>/current/<rel>`。
    是否运行在该单元中只按 `/proc/self/cgroup` 的叶节点是否为本单元名判断，不看 `INVOCATION_ID`：GNOME Shell、

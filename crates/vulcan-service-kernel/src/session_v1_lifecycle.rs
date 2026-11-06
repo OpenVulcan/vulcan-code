@@ -1302,6 +1302,14 @@ pub(crate) async fn archive_session_lifecycle_v1(
     )
     .await?;
     registry.unregister_lifecycle_session(session_id)?;
+    // An archived session runs nothing, so its shell jobs end with it.
+    // 已归档会话不再运行任何内容，因此其 shell 任务随之结束。
+    vulcan_host_tools::shell_job::ShellJobRuntime::global().stop_session_jobs(
+        &vulcan_agent_runtime::tooling::native::canonical_shell_job_session_id(
+            &session_id.to_string(),
+        ),
+        "The session was archived.",
+    );
     Ok(())
 }
 

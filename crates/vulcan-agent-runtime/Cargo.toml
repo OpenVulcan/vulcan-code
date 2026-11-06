@@ -33,6 +33,7 @@ image.workspace = true
 # Inspects TIFF page count without silently dropping additional pages.
 # 检查TIFF页数，避免静默丢弃后续页面。
 tiff.workspace = true
+regex.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

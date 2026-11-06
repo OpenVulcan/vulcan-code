@@ -11,6 +11,7 @@ import {
   Folder,
   Globe2,
   GitPullRequest,
+  ListTree,
   Plus,
   Search,
   Square,
@@ -101,9 +102,16 @@ const LazyClientBrowserArea = React.lazy(async () => {
   return { default: module.ClientBrowserArea };
 });
 
+// LazySessionActivityPanel loads the activity panel and its styles only when its tab shows.
+// LazySessionActivityPanel 仅在活动页签显示时加载活动面板及其样式。
+const LazySessionActivityPanel = React.lazy(async () => {
+  const module = await import("@/components/workspace/session-activity/session-activity-panel");
+  return { default: module.SessionActivityPanel };
+});
+
 // WorkspaceContextPanelTab identifies one registered right context panel page.
 // WorkspaceContextPanelTab 标识一个已注册的右侧上下文面板页面。
-export type WorkspaceContextPanelTab = "review" | "memory" | "files" | "subagent" | "browser" | "local-browser" | "viewer";
+export type WorkspaceContextPanelTab = "review" | "memory" | "files" | "subagent" | "browser" | "local-browser" | "viewer" | "activity";
 
 // WorkspaceContextTabKind identifies one dynamic right context tab type.
 // WorkspaceContextTabKind 标识一个动态右侧上下文页签类型。
@@ -133,6 +141,12 @@ export interface WorkspaceContextTabItem {
   // Optional parent conversation id that owns the subagent task.
   // 拥有子代理任务的可选父会话标识。
   subagentParentConversationId?: string | null;
+  // Page an activity tab shows.
+  // 活动页签显示的页面。
+  activityPage?: "subagents" | "commands";
+  // Increases with every request to open the activity tab, so the same page can be requested again.
+  // 每次请求打开活动页签都会递增，使同一页面可再次被请求。
+  activityRequest?: number;
   // Creation timestamp used for stable ordering diagnostics.
   // 用于稳定排序诊断的创建时间戳。
   createdAt: number;
@@ -827,6 +841,20 @@ function WorkspaceContextTabContent(args: {
     </div>;
   }
 
+  if (args.activeTab.kind === "activity") {
+    return <div className="vk-panel-body" data-fill="">
+      <React.Suspense fallback={null}>
+        <LazySessionActivityPanel
+          page={args.activeTab.activityPage ?? "subagents"}
+          pageRequest={args.activeTab.activityRequest ?? 0}
+          sessionId={args.props.selectedConversationId}
+          subagentRevision={subagentNavigationRevision(args.props.workbench, args.props.selectedConversationId)}
+          onOpenSubagent={args.props.onOpenSubagentPanel}
+        />
+      </React.Suspense>
+    </div>;
+  }
+
   if (args.activeTab.kind === "local-browser") {
     return <div className="vk-panel-body" data-fill="">
       {args.props.selectedConversationId ? <React.Suspense fallback={null}>
@@ -1280,7 +1308,18 @@ function workspaceContextTabIcon(kind: WorkspaceContextTabKind, size: number): R
   if (kind === "memory") {
     return <Brain size={size} />;
   }
+  if (kind === "activity") {
+    return <ListTree size={size} />;
+  }
   return <GitPullRequest size={size} />;
+}
+
+// subagentNavigationRevision summarizes the subagent rows of one parent so the activity panel reloads when they change.
+// subagentNavigationRevision 概括一个父会话的子代理行，使活动面板在其变化时重新加载。
+function subagentNavigationRevision(workbench: WorkbenchSnapshot, parentConversationId: string | null): string {
+  const navigation = workbench.subagentNavigation;
+  if (!navigation || navigation.parentConversationId !== parentConversationId) return "";
+  return (navigation.tasks ?? []).map((task) => `${task.taskId}:${task.runState}`).join("|");
 }
 
 // workspaceContextTabDisplayTitle returns the locale-aware visible title for one opened tab.

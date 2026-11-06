@@ -232,19 +232,25 @@ function fileReadOutput(path: string, language: string, lines: string[], startLi
 // shellOutput renders a shell_command result: the text body plus the command_run host payload.
 // shellOutput 渲染 shell_command 结果：正文加 command_run 宿主载荷。
 function shellOutput(command: string, exitCode: number, stdout: string, stderr = "", durationMs = 1_800): ToolPayload {
-  const body = [`Command: ${command}`, `Exit code: ${exitCode}`, ...(stdout ? [`\n[stdout]\n${stdout}`] : []), ...(stderr ? [`\n[stderr]\n${stderr}`] : [])].join("\n");
+  const output = [stdout, stderr].filter(Boolean).join("\n");
+  const purpose = `Run ${command.split(" ")[0]}`;
+  const body = [`Command: ${command}`, `Purpose: ${purpose}`, `Exit code: ${exitCode}`, ...(output ? [`\n[output]\n${output}`] : [])].join("\n");
   return toolOutput("shell_command", body, {
     kind: "command_run",
     payload: {
       session_id: null,
       command,
+      purpose,
+      job_id: null,
+      background: false,
       cwd: "D:/openvulcan/vulcan-code/apps/vulcan-code-web",
       shell: "pwsh",
       status: exitCode === 0 ? "completed" : "failed",
       exit_code: exitCode,
       duration_ms: durationMs,
-      stdout_bytes: stdout.length,
-      stderr_bytes: stderr.length,
+      output_lines: output ? output.split("\n").length : null,
+      output_bytes: output ? output.length : null,
+      output_truncated: false,
       combined_output_overflowed: false,
       failure_reason: null,
     },

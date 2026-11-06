@@ -606,6 +606,11 @@ pub(crate) async fn handle_webui_detached_child_execution_event(
                     candidate.into_excluded_non_session()
                 }
                 Some(ProviderV1LifecycleFacts::RequestPrepared(facts)) => {
+                    // Finished background jobs reach the model before this request.
+                    // 已结束的后台任务在本次请求之前告知模型。
+                    if let Err(error) = provider_v1_sink.consume_shell_job_notices() {
+                        tracing::warn!("[shell-job] completion notices stay pending: {error}");
+                    }
                     match provider_v1_sink.consume_subagent_steering(&agent_runtime.task_runtime) {
                         Ok(consumed) => {
                             if consumed > 0 {

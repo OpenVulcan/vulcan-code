@@ -6,12 +6,14 @@ import type {
   ProjectTerminalRunningCountChangedEvent,
   SessionAddonChangedEvent,
   ShellCommandOutputChangedEvent,
+  ShellJobChangedEvent,
   StartupSnapshot,
   WorkspaceGitChangedEvent,
   WorkbenchDeltaEnvelope,
   WorkbenchSnapshot,
 } from "@/types";
 import { SHELL_COMMAND_OUTPUT_CHANGED_TOPIC } from "@/service/shell-command-output-events";
+import { SHELL_JOB_CHANGED_TOPIC } from "@/service/shell-job-events";
 import { formatMessage, isLoadedTranslationKey, translateActive } from "@/i18n";
 import type { ConversationEventLiveDeltaV1 } from "@/service/conversation-event-window-client";
 import {
@@ -139,6 +141,7 @@ type BrowserServiceEvent =
   | { kind: "workspaceGitChanged"; payload: WorkspaceGitChangedEvent }
   | { kind: "commandSessionDisplayChanged"; payload: CommandSessionDisplayChangedEvent }
   | { kind: "shellCommandOutputChanged"; payload: ShellCommandOutputChangedEvent }
+  | { kind: "shellJobChanged"; payload: ShellJobChangedEvent }
   | { kind: "projectTerminalDisplayChanged"; payload: ProjectTerminalDisplayChangedEvent }
   | { kind: "projectTerminalRunningCountChanged"; payload: ProjectTerminalRunningCountChangedEvent }
   | { kind: "dedicatedPromptDraftProgress"; payload: DedicatedPromptDraftProgressEvent }
@@ -159,6 +162,7 @@ const EVENT_KIND_TO_TOPIC: Record<BrowserServiceEvent["kind"], string> = {
   workspaceGitChanged: "workspace.git.changed",
   commandSessionDisplayChanged: "command.session.display.changed",
   shellCommandOutputChanged: SHELL_COMMAND_OUTPUT_CHANGED_TOPIC,
+  shellJobChanged: SHELL_JOB_CHANGED_TOPIC,
   projectTerminalDisplayChanged: "project.terminal.display.changed",
   projectTerminalRunningCountChanged: "project.terminal.running-count.changed",
   dedicatedPromptDraftProgress: DEDICATED_PROMPT_DRAFT_PROGRESS_TOPIC,

@@ -20,3 +20,4 @@ export * from "./types/environment-variables";
 export * from "./types/review-prompt";
 export * from "./types/outside-file-access";
 export * from "./types/voice-input";
+export * from "./types/session-activity";

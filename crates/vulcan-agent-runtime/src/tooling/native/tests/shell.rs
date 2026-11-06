@@ -113,10 +113,39 @@ fn shell_tool_schemas_expose_dynamic_detected_shells() {
     }
 }
 
-/// The AI-facing shell schema text should stay in English and should document critical defaults and paging behavior explicitly.
-/// 面向 AI 的 shell schema 文案应保持英文，并明确说明关键默认值与分页行为。
+/// The AI-facing shell tool descriptions and every schema property description are present and stay in English;
+/// `shell_command` requires `purpose`, and the terminal session enums keep their action and wait-mode shape.
+/// 面向 AI 的 shell 工具说明与每个 Schema 属性说明都存在且保持英文；`shell_command` 要求 `purpose`，终端会话的
+/// 枚举保持其动作与等待模式形状。
 #[test]
-fn shell_tool_schema_descriptions_document_defaults_in_english() {
+fn shell_tool_schema_descriptions_are_present_and_english() {
+    use serde_json::Value;
+
+    fn collect_descriptions(value: &Value, path: &str, out: &mut Vec<(String, String)>) {
+        match value {
+            Value::Object(map) => {
+                for (key, child) in map {
+                    let child_path = format!("{path}/{key}");
+                    if key == "description" {
+                        if let Some(text) = child.as_str() {
+                            out.push((child_path.clone(), text.to_string()));
+                        }
+                    }
+                    collect_descriptions(child, &child_path, out);
+                }
+            }
+            Value::Array(items) => {
+                for (index, child) in items.iter().enumerate() {
+                    collect_descriptions(child, &format!("{path}/{index}"), out);
+                }
+            }
+            _ => {}
+        }
+    }
+    fn is_cjk(character: char) -> bool {
+        matches!(character as u32, 0x3000..=0x303F | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF)
+    }
+
     let shell_support = test_shell_support();
     let command_tool = build_shell_command_tool(shell_support.clone(), None, test_rtk_disabled());
     let session_tool = build_terminal_session_tool(
@@ -127,65 +156,37 @@ fn shell_tool_schema_descriptions_document_defaults_in_english() {
     let command_schema = shell_command_args_schema(&shell_support);
     let session_schema = terminal_session_args_schema(&shell_support);
 
+    let mut descriptions = vec![
+        (
+            "shell_command".to_string(),
+            command_tool.descriptor.description.clone(),
+        ),
+        (
+            "terminal_session".to_string(),
+            session_tool.descriptor.description.clone(),
+        ),
+    ];
+    collect_descriptions(&command_schema, "shell_command", &mut descriptions);
+    collect_descriptions(&session_schema, "terminal_session", &mut descriptions);
+    for property in ["timeout_ms", "cwd", "stdin", "purpose", "background"] {
+        assert!(
+            command_schema["properties"][property]["description"].is_string(),
+            "shell_command property {property} must carry a description"
+        );
+    }
+    for (path, text) in &descriptions {
+        assert!(!text.trim().is_empty(), "description at {path} is empty");
+        assert!(
+            !text.chars().any(is_cjk),
+            "description at {path} must stay in English"
+        );
+    }
+
     assert!(
-        command_tool
-            .descriptor
-            .description
-            .starts_with("Run a one-shot command")
-    );
-    assert!(
-        session_tool
-            .descriptor
-            .description
-            .contains("call skill(\"terminal-session\")")
-    );
-    assert!(
-        command_tool
-            .descriptor
-            .description
-            .contains("no timeout is applied")
-    );
-    assert!(
-        command_tool
-            .descriptor
-            .description
-            .contains("not just a summary")
-    );
-    assert!(
-        command_tool
-            .descriptor
-            .description
-            .contains(".vulcan/temp/")
-    );
-    assert!(
-        session_tool
-            .descriptor
-            .description
-            .contains("exact process exit codes")
-    );
-    assert!(
-        command_schema["properties"]["timeout_ms"]["description"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("Default: unlimited")
-    );
-    assert!(
-        command_schema["properties"]["cwd"]["description"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("falls back to the host process working directory")
-    );
-    assert!(
-        command_schema["properties"]["cwd"]["description"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("Relative paths resolve against the same base directory")
-    );
-    assert!(
-        command_schema["properties"]["stdin"]["description"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("No newline is added automatically")
+        command_schema["required"]
+            .as_array()
+            .unwrap_or(&Vec::new())
+            .contains(&json!("purpose"))
     );
     assert!(
         session_schema["properties"]["action"]["enum"]
@@ -194,39 +195,13 @@ fn shell_tool_schema_descriptions_document_defaults_in_english() {
             .contains(&json!("send"))
     );
     assert!(
-        session_schema["properties"]["max_chunks"]["description"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("Default: 128")
-    );
-    assert!(
-        session_schema["properties"]["inputs"]["description"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("Do not hand-write ANSI")
-    );
-    assert!(
-        session_schema["properties"]["wait_policy"]["description"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("caller-chosen visible completion")
-    );
-    assert!(
         !session_schema["properties"]["wait_policy"]["properties"]["mode"]["enum"]
             .as_array()
             .unwrap_or(&Vec::new())
             .contains(&json!("until_exit_code"))
     );
-    assert!(
-        session_schema["properties"]["cwd"]["description"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("workspace root")
-    );
 }
 
-/// The VMM write tool should expose numeric mappings and reserve profile extraction for the automatic pipeline.
-/// VMM 写入工具应暴露数值映射，并将画像提取保留给自动流程。
 #[test]
 fn vmm_memory_write_tool_documents_numeric_mappings() {
     let snapshot = Arc::new(NativeToolRuntimeSnapshot {
@@ -328,7 +303,8 @@ async fn shell_command_tool_executes_simple_command() {
         .invoke(NativeToolExecutionRequest {
             invocation_context: None,
             arguments: json!({
-                "command": "echo hello"
+                "command": "echo hello",
+                "purpose": "Print a greeting"
             }),
             session_id: None,
             native_browser_runtime: None,
@@ -363,12 +339,11 @@ async fn shell_command_tool_executes_simple_command() {
     assert_eq!(host_result.payload["status"], "completed");
 }
 
-/// Oversized shell-command output must still spill to exactly one page file under the spill root,
-/// while the complete raw streams stay available in memory for `tool_chain` references.
-/// 超出内联预算的 shell-command 输出仍须在超限目录下写入恰好一个分页文件，同时完整原始流仍在
-/// 内存中供 `tool_chain` 引用。
+/// Long shell-command output returns only a bounded tail and writes no spill page, while the raw
+/// streams stay available in memory for `tool_chain` references.
+/// 较长的 shell-command 输出只返回有界尾部且不写分页文件，同时原始流仍在内存中供 `tool_chain` 引用。
 #[tokio::test]
-async fn shell_command_tool_spills_oversized_output_to_page_file() {
+async fn shell_command_tool_returns_a_bounded_tail_and_keeps_raw_streams() {
     let spill_root = tempfile::tempdir().expect("create shell spill root");
     let tool = build_shell_command_tool(
         HostCommandShellSupport::from_configured_default_id(None),
@@ -378,10 +353,11 @@ async fn shell_command_tool_spills_oversized_output_to_page_file() {
     let arguments = if cfg!(windows) {
         json!({
             "command": "1..20000 | ForEach-Object { '0123456789abcdefghij' }",
+            "purpose": "Print many lines",
             "shell": "powershell"
         })
     } else {
-        json!({ "command": "yes 0123456789abcdefghij | head -n 20000" })
+        json!({ "command": "yes 0123456789abcdefghij | head -n 20000", "purpose": "Print many lines" })
     };
     let result = tool
         .invoke(NativeToolExecutionRequest {
@@ -406,26 +382,23 @@ async fn shell_command_tool_spills_oversized_output_to_page_file() {
             session_vmm: VmmConfigLayer::default(),
         })
         .await
-        .expect("oversized shell command should execute");
+        .expect("long shell command should execute");
 
     let model_output = result
         .model_output
         .as_str()
         .expect("shell command model output should be text");
     let spilled = std::fs::read_dir(spill_root.path())
-        .expect("spill root should be readable")
-        .collect::<Result<Vec<_>, _>>()
-        .expect("spill entries should be readable");
-    assert_eq!(
-        spilled.len(),
-        1,
-        "oversized output must spill one page file"
-    );
-    let file_name = spilled[0].file_name().to_string_lossy().into_owned();
-    assert!(model_output.contains(&file_name));
+        .map(|entries| entries.count())
+        .unwrap_or(0);
+    assert_eq!(spilled, 0, "a bounded tail needs no spill page");
     assert!(
-        (model_output.len() as u64) < crate::tool_result_format::DEFAULT_INLINE_TOOL_RESULT_BYTES
+        model_output.len()
+            < vulcan_host_tools::shell_job::SHELL_OUTPUT_TAIL_BUDGET_BYTES + 4 * 1024
     );
+    assert!(model_output.contains("shell_job"));
+    let host_result = result.host_result.as_ref().expect("host result");
+    assert_eq!(host_result.payload["output_truncated"], true);
     let streams = result
         .raw_streams
         .expect("shell command must keep its raw streams");

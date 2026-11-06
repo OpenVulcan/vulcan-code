@@ -366,7 +366,9 @@ pub(super) fn rows(app: &App) -> Vec<Row> {
                 } else {
                     tr!("settings.appUpdate.restart")
                 },
-                action: (!busy).then(|| call(api_update::restart_to_update())),
+                // Running background commands stop with the restart, so they are counted first.
+                // 运行中的后台命令会随重启停止，因此先统计其数量。
+                action: (!busy).then_some(UiAction::RestartToUpdate),
                 tone: Tone::Accent,
                 switch: None,
             }]),

@@ -15,11 +15,12 @@ WebUI 展示时阅读。普通业务任务不需要加载这些细节。
 - “工具已实现”不等于“工具已对 AI 可见”。新增 Native Tool 时必须同时检查注册、请求构建、模式
   可见性、策略过滤和实际执行链路。
 - 面向 AI 的工具名称、description、Schema 和错误使用英文；面向用户的 WebUI 文案可以使用中文。
-- 不要在工具 description 中把 `shell_command` 的返回称为 summary；它返回完整解码后的
-  `stdout`、`stderr` 和退出状态（输出越过硬上限时除外，见第二节）。
+- 不要在工具 description 中把 `shell_command` 的返回称为 summary；它返回按到达顺序合并的输出末尾与
+  退出状态，较早的行通过 `shell_job` 读取（见第二节）。
 - 不得在启动时静默改写用户持久化的工具策略。系统默认优先保留为运行时内存默认值。
-- `shell_command` 与 `terminal_session` 的可选 `purpose` 参数、以及原生工具 `declare_intent`，只作为权限复核的
-  代理理由，不影响执行；语义见 [`permission-modes-and-judge.md`](permission-modes-and-judge.md) 的“代理理由”。
+- `shell_command` 的必填 `purpose`、`terminal_session` 的可选 `purpose` 以及原生工具 `declare_intent` 不影响执行；
+  它们在权限复核中作为代理理由，语义见 [`permission-modes-and-judge.md`](permission-modes-and-judge.md) 的“代理理由”。
+  `shell_command` 的 `purpose` 另外显示在命令卡与会话活动面板上，并随后台任务保存，供 AI 用 `shell_job list` 辨认任务。
 
 ## 二、`shell_command`
 
@@ -37,20 +38,20 @@ WebUI 展示时阅读。普通业务任务不需要加载这些细节。
 - 自然退出后，输出排空最多再等待 `CHILD_OUTPUT_DRAIN_GRACE`（唯一定义在
   [`process_tree.rs`](../../crates/vulcan-host-tools/src/process_tree.rs)）；后台进程仍持有管道时停止
   捕获并在 `failure_reason` 中说明，状态仍按退出码判定，且不终止这些后台进程。
-- stdout 与 stderr 的原始字节合计超过 `SHELL_COMMAND_OUTPUT_HARD_LIMIT_BYTES`（8 MiB，唯一定义在
-  [`shell_command.rs`](../../crates/vulcan-agent-runtime/src/tooling/native/shell_command.rs)）时直接阻断：
-  立即终止整棵进程树，丢弃全部已捕获输出（不落盘、不分页、不返回给模型），返回
-  `output_limit_exceeded` 状态与提示缩小输出范围的 `failure_reason`。上限按合并字节计数，
-  自然退出后才发现越限的命令同样按此处理；恰好等于上限的输出仍完整返回。
-- 内置 `terminal-session` 技能（[`SKILL.md`](../../crates/vulcan-prompt-skills/src/assets/system/terminal-session/SKILL.md)）
-  向模型复述该上限并禁止用 `cat` 等方式整份读取日志；技能中的数值由
-  `terminal_skill_quotes_current_output_hard_limit` 测试与常量比对，修改上限时必须同步技能文本。
-- 未越过硬上限但内联渲染结果超过 `200000` 字节时，切换为项目内 `.vulcan/temp/` 分页文件；文件名
+- 每次调用都是一个命令任务（[`shell_job`](../../crates/vulcan-host-tools/src/shell_job.rs) 的 `ShellJobRuntime`）：
+  stdout 与 stderr 按到达顺序合并写入会话目录 `shell-jobs/` 下的滚动日志。日志保留开头
+  `SHELL_JOB_LOG_HEAD_BYTES` 与最新输出，总量不超过 `SHELL_JOB_LOG_LIMIT_BYTES`，中间被丢弃的部分以缺口行表示；
+  每个会话的日志总量受 `SHELL_JOB_SESSION_LOG_BUDGET_BYTES` 约束。不因输出量终止命令，也不再有合并输出硬上限。
+  这些边界值只在该文件定义。
+- 结果只返回输出末尾：`SHELL_OUTPUT_TAIL_BUDGET_BYTES` 之内的完整行，超过 `SHELL_OUTPUT_LINE_WRAP_BYTES`
+  的行切分为续行；输出被截断时结果注明总行数、总字节数与 `job_id`，较早的行由 `shell_job` 读取或搜索。
+- 结果与日志交给模型或界面前，按与直接工具结果相同的登记值脱敏。
+- 内联渲染结果超过 `200000` 字节时，切换为项目内 `.vulcan/temp/` 分页文件；文件名
   形如 `tool_output_<exclusive-random-id>.md`，使用独占创建，写入完成后发布；并发调用不共享文件身份。
 - 运行中的实时尾部只用于显示（[`shell_command_live.rs`](../../crates/vulcan-agent-runtime/src/tooling/native/shell_command_live.rs)）：
-  模型发起的调用在运行期间以“会话 + API 调用 + 工具调用”登记，读取任务把每个已接收的数据块按到达顺序
-  另追加到有界的合并尾部；尾部只在内存中，不落盘、不进入转录、不交给模型，完整输出仍只走正常结果。
-  调用以任一路径返回即撤销登记，因此查不到即表示不在运行（含 Core 重启后）。显示行数
+  模型发起的调用在运行期间以“会话 + API 调用 + 工具调用”登记，显示行取自该任务日志的末尾，前台与后台共用
+  同一条输出管线；尾部不进入转录、不交给模型。调用以任一路径返回即撤销登记，因此查不到即表示调用不在运行
+  （含 Core 重启后）；转入后台的任务改由会话活动面板查看。显示行数
   `SHELL_COMMAND_LIVE_TAIL_LINES` 与尾部字节上限只在该文件定义；推送间隔
   `SHELL_COMMAND_OUTPUT_PUSH_INTERVAL` 只在服务内核
   [`shell_command_output.rs`](../../crates/vulcan-service-kernel/src/shell_command_output.rs) 定义。
@@ -113,6 +114,28 @@ WebUI 展示时阅读。普通业务任务不需要加载这些细节。
 即使时间戳被外部还原，也最多复用一秒，之后重新读取。优先模板损坏或不可读时明确报错，不悄悄选用
 另一份模板。缓存互斥锁不跨磁盘读取持有。
 
+## 后台任务与 `shell_job`
+
+- `shell_command` 传 `background: true` 时立即返回 `running_in_background` 状态与 `job_id`；`timeout_ms` 约束整个
+  后台任务。同时运行的后台任务数上限为 `MAX_RUNNING_BACKGROUND_SHELL_JOBS`。
+- 只有插队把运行中的前台命令转到后台：调用返回 `running_in_background`，命令继续运行且不再受该调用的
+  `timeout_ms` 约束。排队消息不影响运行中的命令。用户也可在命令卡上“转到后台”
+  （`service_background_shell_command`）。工具调用被取消时仍终止前台任务的整棵进程树。
+- `shell_job` 的 `list`、`status`、`read`、`search`、`wait`、`stop` 只作用于本会话的任务，权限分类为
+  `Ungoverned`，不经判定模型与复核 LLM。`read` 默认与上限行数、`wait` 默认与上限时长、`search` 的匹配与上下文
+  上限只在 `shell_job.rs` 定义。
+- 后台任务结束时生成通知：回合进行中在下一次 API 请求前作为宿主消息追加；会话空闲时保留到下一回合送达，
+  不自动唤醒 AI。上下文压缩请求附带仍在运行的任务清单，只用于该次请求，不写入会话。
+- 关闭子代理与归档会话会停止其拥有的任务；任务日志与索引保留在会话目录中，不随清理删除。每个会话在内存中
+  只保留有限数量的已结束任务，其余按索引回查。
+- 会话活动面板（WebUI 右侧 `activity` 页签）列出根会话的子代理与命令任务：运行中在前并显示最近若干行，
+  已结束的命令默认只显示最近几条。“清除已结束”只在应用数据库 `session_activity_marks_v1` 记录时间标记，
+  不删除会话、日志或索引。展开的命令日志在有界高度内贴底跟随，向上滚动按 `beforeLine` 逐页加载，内存中只保留
+  有界行数。浮动会话工具面板只显示子代理与后台命令的数量，点击打开活动面板。
+  服务调用：`service_list_shell_jobs`、`service_read_shell_job_output`、`service_stop_shell_job`、
+  `service_background_shell_command`、`service_session_activity`、`service_clear_session_activity`、
+  `service_running_shell_job_count`；任务开始、转入后台与结束发布 `shell.job.changed`。
+
 ## 三、`terminal_session`
 
 旧 `shell_session` 工具已由 `terminal_session` 取代并删除，模型可见的持久命令会话只有 `terminal_session`。
@@ -152,6 +175,7 @@ WebUI 展示时阅读。普通业务任务不需要加载这些细节。
 - 工具描述和 Schema 与解析器默认值一致；
 - Windows 与 POSIX Shell 的 launcher、换行和显式选择测试通过；
 - `start/send/read/snapshot/stop`、游标、等待、分页和实时状态测试通过；
+- 后台任务：转入后台、插队释放、停止杀树、日志滚动与缺口、行切分、末尾预算与脱敏测试通过；
 - WebUI 历史回放不会冒充实时运行状态；
 - 没有静默回写用户工具策略；
 - `cargo fmt --all -- --check` 与目标 crate 测试通过。

@@ -152,8 +152,10 @@
 
 ## 代理理由
 
-- `shell_command` 与 `terminal_session` 提供可选的 `purpose` 参数，说明该命令的目的；执行时忽略，只在升级到
-  复核时作为 `<agent_reason>` 的 `purpose` 交给复核 LLM。
+- `shell_command` 的 `purpose` 必填，`terminal_session` 的 `purpose` 可选，说明该命令的目的；执行时忽略，只在
+  升级到复核时作为 `<agent_reason>` 的 `purpose` 交给复核 LLM。`shell_command` 的 `purpose` 同时显示在命令卡与
+  会话活动面板上；它是代理的自述，不是放行依据。
+- `shell_job` 只查看、等待或停止本会话自己的命令任务，权限分类为 `Ungoverned`，不进入判定模型与复核 LLM。
 - `declare_intent` 是始终可见、计划模式可用的原生工具，只用于说明被拒调用的重试理由，不是备注工具。权限闸门
   只在“最近一次受管控调用被拒、且拒绝文字邀请了 `declare_intent`”时准入，并要求仍在同一用户请求下；其他任何
   时候直接拒绝且不记录（`DECLARE_INTENT_UNINVITED`）。一次邀请只允许一次声明；下一次受管控调用（无论结果）

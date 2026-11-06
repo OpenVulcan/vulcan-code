@@ -16,7 +16,6 @@ use crate::tooling::command_session_runtime::{
     DEFAULT_COMMAND_SESSION_STOP_WAIT_MS, MAX_COMMAND_SESSION_READ_CHUNKS,
     MAX_COMMAND_SESSION_READ_WAIT_MS,
 };
-use crate::tooling::output_decode::decode_shell_output_bytes;
 use crate::tooling::shell_host::{HostCommandShell, HostCommandShellSupport};
 use crate::workspace_path::normalized_workspace_path_text_from_path;
 use futures_util::future::BoxFuture;
@@ -26,13 +25,11 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs as tokio_fs;
-use tokio::io::AsyncWriteExt;
 use tokio::process::Command as TokioCommand;
-use tokio::time::{Duration, Instant, timeout};
+use tokio::time::{Duration, Instant};
 use uuid::Uuid;
 use vulcan_prompt_skills::{PromptSkill, render_skill_tool_output};
 use vulcan_tools_manager::{
@@ -249,6 +246,7 @@ mod registry;
 mod session_mcp;
 mod shell_command;
 mod shell_command_live;
+mod shell_job;
 pub(crate) use apply_patch::*;
 pub use configuration::{
     CONFIGURATION_LIST_ACTION, ConfigurationOutcome, ConfigurationRequest, MCP_CONFIG_TOOL_ID,
@@ -286,8 +284,11 @@ pub(crate) use session_mcp::{
 };
 pub(crate) use shell_command::*;
 pub use shell_command_live::{
-    SHELL_COMMAND_LIVE_TAIL_LINES, ShellCommandLiveKey, ShellCommandLiveRun, shell_command_live_run,
+    SHELL_COMMAND_LIVE_TAIL_LINES, ShellCommandLiveKey, ShellCommandLiveRun,
+    canonical_shell_job_session_id, shell_command_live_run, shell_job_recent_lines,
 };
+pub use shell_job::SHELL_JOB_TOOL_ID;
+pub(crate) use shell_job::build_shell_job_tool;
 mod browser;
 mod declare_intent;
 mod goal;
@@ -581,6 +582,7 @@ pub fn build_native_tool_catalog(
         build_memory_write_tool(),
         build_prompt_skill_detail_tool(),
         build_shell_command_tool(shell_support.clone(), plugin_runtime, rtk.clone()),
+        build_shell_job_tool(),
         build_terminal_session_tool(
             command_session_runtime,
             shell_support,

@@ -41,7 +41,7 @@ async function renderPanel(overrides: Partial<PanelProps> = {}) {
       subagentNavigation={null} commitDialogOpen={false} commitBusyState={null} reviewRepositories={repositories}
       onExpandedChange={() => undefined} onCommitDialogOpenChange={() => undefined}
       onOpenReviewChanges={() => undefined} onStopCommandSession={async () => undefined}
-      onOpenSubagentPanel={async () => true} {...overrides} />
+      onOpenActivityPanel={() => undefined} {...overrides} />
   </TooltipProvider></I18nProvider>));
 }
 // section finds one repository group by its stable key rather than by its position.

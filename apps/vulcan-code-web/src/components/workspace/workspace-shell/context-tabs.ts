@@ -139,6 +139,28 @@ export function openWorkspaceViewerContextTab(
   };
 }
 
+// openWorkspaceActivityContextTab shows one page of the single activity tab, opening the tab when needed.
+// openWorkspaceActivityContextTab 在唯一的活动页签中显示一个页面，需要时打开该页签。
+export function openWorkspaceActivityContextTab(
+  // Current tab state.
+  // 当前页签状态。
+  state: WorkspaceContextTabState,
+  // Page to show.
+  // 要显示的页面。
+  page: "subagents" | "commands",
+  // Translation helper for default tab titles.
+  // 默认页签标题的翻译辅助函数。
+  t: (key: TranslationKey) => string,
+): WorkspaceContextTabState {
+  const opened = openWorkspaceContextTab(state, "activity", t);
+  return {
+    ...opened,
+    tabs: opened.tabs.map((tab) => (tab.id === opened.activeTabId
+      ? { ...tab, activityPage: page, activityRequest: (tab.activityRequest ?? 0) + 1 }
+      : tab)),
+  };
+}
+
 // normalizeWorkspaceContextTabState removes stale active ids from a tab state.
 // normalizeWorkspaceContextTabState 从页签状态中移除失效的活动标识。
 export function normalizeWorkspaceContextTabState(

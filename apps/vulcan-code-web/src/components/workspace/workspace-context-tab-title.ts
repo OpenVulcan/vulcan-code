@@ -26,5 +26,8 @@ export function workspaceContextTabDefaultTitle(kind: WorkspaceContextTabKind, t
   if (kind === "memory") {
     return t ? t("contextPanel.memory") : "Memory";
   }
+  if (kind === "activity") {
+    return t ? t("sessionActivity.title") : "Activity";
+  }
   return t ? t("contextPanel.review") : "Review";
 }

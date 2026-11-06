@@ -33,12 +33,13 @@ Log files and generated output can reach many gigabytes. Dumping them floods the
 - Follow a live log only through a bounded filter, such as `tail -n 50 -f app.log | grep --line-buffered ERROR`, and stop it with `Ctrl+C` when you are done.
 - When a command's output size is unknown, redirect it to a file first (`command > out.log 2>&1`) and inspect that file in slices.
 
-### Hard Output Limit On `shell_command`
+### Output Of `shell_command`
 
-`shell_command` counts stdout and stderr together. When the combined raw output exceeds 8 MiB (8388608 bytes), the host kills the command's whole process tree immediately and returns status `output_limit_exceeded` with no output at all. Nothing is saved, so partial output cannot be recovered afterwards.
+`shell_command` writes stdout and stderr, merged in arrival order, to a rolling log of the job and returns only the end: about 32 KiB of whole lines, with lines longer than 2 KiB split. The log keeps the first 64 KiB and the newest output up to 64 MiB; anything between is dropped and shown as a gap. The command is never killed because of output volume.
 
-- Do not rerun the same command after `output_limit_exceeded`. Narrow it with the techniques above, or redirect it to a file and read slices.
-- The limit is a safety stop, not a budget to aim for. Output above the inline budget is already paged into spill files; keep commands far below the hard limit.
+- When the result says only the end is shown, read earlier lines or search the log with `shell_job` (`read` with `start_line`, or `search` with `pattern`) instead of rerunning the command.
+- A long-running command can run in the background (`background: true`); follow it with `shell_job` (`status`, `wait`, `read`, `search`, `stop`). You are told when a background job finishes.
+- Bounded commands are still better: a huge dump costs time and pushes useful lines out of the returned end.
 
 ### Large Output In `terminal_session`
 

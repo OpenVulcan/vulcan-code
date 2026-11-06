@@ -45,11 +45,18 @@ pub(crate) struct AppSchemaMigration {
 
 /// Ordered upgrade chain; entry `i` upgrades from `APP_SCHEMA_BASELINE_VERSION + i`.
 /// 有序升级链；第 `i` 项从 `APP_SCHEMA_BASELINE_VERSION + i` 开始升级。
-pub(crate) const APP_SCHEMA_MIGRATIONS: &[AppSchemaMigration] = &[AppSchemaMigration {
-    from_version: 1,
-    description: "add project session sort preferences and session list state",
-    apply: migrate_v1_to_v2,
-}];
+pub(crate) const APP_SCHEMA_MIGRATIONS: &[AppSchemaMigration] = &[
+    AppSchemaMigration {
+        from_version: 1,
+        description: "add project session sort preferences and session list state",
+        apply: migrate_v1_to_v2,
+    },
+    AppSchemaMigration {
+        from_version: 2,
+        description: "add session activity clear markers",
+        apply: migrate_v2_to_v3,
+    },
+];
 
 /// Current application schema version, derived from the baseline and the length of the upgrade chain.
 /// 当前应用结构版本，由基线与升级链长度派生。
@@ -96,6 +103,23 @@ SELECT session_id, updated_at_ms, NULL FROM session_index_v1;
         )?;
     }
     Ok(())
+}
+
+/// Version 3: per-session clear markers of the activity panel.
+/// 版本 3：活动面板按会话保存的清理标记。
+///
+/// A new table without rows; sessions never cleared have no marker.
+/// 新表不含任何行；从未清理过的会话没有标记。
+fn migrate_v2_to_v3(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        r#"
+CREATE TABLE IF NOT EXISTS session_activity_marks_v1 (
+    session_id TEXT PRIMARY KEY,
+    subagents_cleared_at_ms INTEGER,
+    commands_cleared_at_ms INTEGER
+);
+"#,
+    )
 }
 
 /// Brings an existing application database to `APP_SCHEMA_VERSION` before the initialization script runs.
@@ -272,13 +296,14 @@ mod tests {
         }
     }
 
-    /// Turns a current database back into version 1 by removing what version 2 added.
-    /// 移除版本 2 新增的对象，把当前数据库还原为版本 1。
+    /// Turns a current database back into version 1 by removing what versions 2 and 3 added.
+    /// 移除版本 2 与版本 3 新增的对象，把当前数据库还原为版本 1。
     fn downgrade_to_v1(connection: &Connection) {
         connection
             .execute_batch(
                 "DROP TABLE IF EXISTS session_list_state_v1;
                  DROP TABLE project_session_preferences;
+                 DROP TABLE session_activity_marks_v1;
                  UPDATE app_metadata SET value = '1' WHERE key = 'schema_version';
                  PRAGMA user_version = 1;",
             )

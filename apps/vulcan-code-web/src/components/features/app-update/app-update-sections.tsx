@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import { releaseNotesFor } from "@/components/features/app-update/use-app-update";
+import { restartAfterBackgroundJobCheck } from "@/components/features/app-update/restart-guard";
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
 import { PageNotice } from "@/components/page";
 import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice";
@@ -172,7 +173,7 @@ export function AppUpdateOfferRows(props: { snapshot: AppUpdateSnapshot; calls: 
           <strong>{formatMessage(t("settings.appUpdate.ready"), { version: snapshot.readyVersion })}</strong>
           <p className="vk-form-note">{t("settings.appUpdate.readyHint")}</p>
         </div>
-        <Button disabled={busy} onClick={() => void calls.run(restartToUpdate)} size="sm">
+        <Button disabled={busy} onClick={() => void restartAfterBackgroundJobCheck(() => void calls.run(restartToUpdate))} size="sm">
           {snapshot.activity === "restarting" ? t("settings.appUpdate.restarting") : t("settings.appUpdate.restart")}
         </Button>
       </section>

@@ -53,6 +53,14 @@ pub(crate) async fn service_insert_pending_prompt(
         .map_err(|error| {
             format!("Failed to insert the V1 pending message into the current turn: {error}")
         })?;
+    // An interjected message moves a running foreground command to the background so the model can answer;
+    // queueing a message, without inserting it, leaves the command in the foreground.
+    // 插队的消息会把运行中的前台命令转到后台，让模型能够回复；仅排队而不插入的消息不影响前台命令。
+    vulcan_host_tools::shell_job::ShellJobRuntime::global().notify_interjection(
+        &vulcan_agent_runtime::tooling::native::canonical_shell_job_session_id(
+            &selected_session_id.to_string(),
+        ),
+    );
     // The V1 promotion is already durable; later panel failures cannot retain its queue lease.
     // V1 提升已可靠提交；后续面板故障不能保留该队列租约。
     reconcile_pending_prompt_attachment_leases(

@@ -390,13 +390,7 @@ pub fn agents(navigation: &api::SubagentNavigationSnapshot) -> Vec<AgentInfo> {
             },
             profile: task.agent_profile_id.clone().unwrap_or_default(),
             task: task.description.clone().unwrap_or_default(),
-            state: match normalized(&task.run_state).as_str() {
-                "completed" => AgentState::Standby,
-                "stopped" => AgentState::Stopped,
-                "failed" => AgentState::Failed,
-                "closed" => AgentState::Closed,
-                _ => AgentState::Running,
-            },
+            state: AgentState::from_run_state(&normalized(&task.run_state)),
             prompt: String::new(),
             pending: task
                 .pending_messages

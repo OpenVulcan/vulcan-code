@@ -1337,6 +1337,9 @@ impl Worker {
                 self.session_title_generated(&generated);
             }
             api::ServiceEvent::AppUpdateChanged(snapshot) => self.app_update_changed(&snapshot),
+            api::ServiceEvent::ShellJobChanged(changed) => {
+                self.emit(BackendEvent::ShellJobChanged(*changed));
+            }
             api::ServiceEvent::ServiceRestarting(restarting) => self.toast(
                 NoticeSeverity::Info,
                 match restarting.reason {

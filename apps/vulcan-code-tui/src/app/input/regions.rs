@@ -5,6 +5,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
 use super::{execute, open_commit, open_diff, stage_all, toggle_stage, typed};
 use crate::app::action::{self, AskStep, UiAction};
+use crate::app::activity::{self, ActivityAction, ActivityPage};
 use crate::app::commands::AppCommand;
 use crate::app::find::{FindJump, TranscriptFind};
 use crate::app::pages::Area;
@@ -475,10 +476,37 @@ fn on_panel_list_key(app: &mut App, key: KeyEvent) {
             let static_view = !app.panel.memory_static;
             action::perform(app, UiAction::MemoryView(static_view));
         }
-        KeyCode::Char(ch @ ('s' | 'x')) if tab == PanelTab::Agents => {
+        KeyCode::Char(ch @ ('v' | 'c' | 'a')) if tab == PanelTab::Agents => {
+            let activity = match ch {
+                'v' => ActivityAction::Page(app.activity.page.other()),
+                'c' => ActivityAction::Clear,
+                _ => ActivityAction::ShowAll(!app.activity.show_all()),
+            };
+            action::perform(app, UiAction::SessionActivity(activity));
+        }
+        KeyCode::Char('s')
+            if tab == PanelTab::Agents && app.activity.page == ActivityPage::Commands =>
+        {
+            if let Some(job) = app
+                .activity
+                .job_entries()
+                .get(cursor)
+                .filter(|job| job.running)
+            {
+                let stop = ActivityAction::StopJob(job.job_id.clone());
+                action::perform(app, UiAction::SessionActivity(stop));
+            }
+        }
+        KeyCode::Char(ch @ ('s' | 'x'))
+            if tab == PanelTab::Agents && app.activity.page == ActivityPage::Subagents =>
+        {
             let (Some(conversation_id), Some(agent)) = (
                 app.selected.clone(),
-                app.session().and_then(|s| s.agents.get(cursor)).cloned(),
+                app.activity
+                    .subagent_entries()
+                    .get(cursor)
+                    .and_then(|entry| activity::agent_for(app, entry))
+                    .cloned(),
             ) else {
                 return;
             };

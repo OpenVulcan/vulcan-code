@@ -5,10 +5,12 @@
 // The Changes tab is the TUI home for the WebUI review sidebar: branch and upstream state, staged
 // and unstaged files, unpushed commits, and key hints for diff, stage, commit, branch and push.
 // Memory mirrors the WebUI dynamic / static context panel, Stats the usage popover and goal bar,
-// and Agents the subagent status list with its stop / end controls.
+// and Activity the WebUI session activity panel: subagents with their stop / end controls and the
+// command jobs of the session with their logs.
 // 变更页是 WebUI 审阅侧栏在 TUI 中的位置：分支与上游状态、已暂存与未暂存文件、未推送提交，
 // 以及 diff、暂存、提交、分支与推送的按键提示。记忆页对应 WebUI 的动态 / 静态上下文面板，
-// 统计页对应用量浮层与目标栏，代理页对应子代理状态列表及其停止 / 结束控制。
+// 统计页对应用量浮层与目标栏，活动页对应 WebUI 会话活动面板：子代理及其停止 / 结束控制，
+// 以及会话的命令任务及其日志。
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -23,6 +25,7 @@ use super::text::{
 };
 use super::theme::{TERMINAL_FG, TERMINAL_SURFACE, Theme, mix};
 use crate::app::action::UiAction;
+use crate::app::activity::{self, ActivityAction, ActivityPage};
 use crate::app::commands::AppCommand;
 use crate::app::hit::{ScrollTarget, Target};
 use crate::app::insight::{self, MemoryEntry};
@@ -30,7 +33,9 @@ use crate::app::overlay::MenuItem;
 use crate::app::{App, Focus, PanelTab};
 use crate::backend::GitBusy;
 use crate::model::*;
+use crate::service_api::Slot;
 use crate::tr;
+use vulcan_service_api::ShellJobView;
 
 pub fn tab_label(tab: PanelTab) -> String {
     match tab {
@@ -39,7 +44,7 @@ pub fn tab_label(tab: PanelTab) -> String {
         PanelTab::Terminal => tr!("sessionTools.terminal"),
         PanelTab::Memory => tr!("contextPanel.memory"),
         PanelTab::Stats => tr!("tui.panel.stats"),
-        PanelTab::Agents => tr!("area.agents"),
+        PanelTab::Agents => tr!("sessionActivity.title"),
     }
 }
 
@@ -79,12 +84,18 @@ fn tab_text(app: &App, tab: PanelTab) -> String {
         PanelTab::Memory => app
             .session()
             .map_or(0, |s| s.insight.memory.dynamic_count()),
-        PanelTab::Agents => app.session().map_or(0, |s| {
-            s.agents
-                .iter()
-                .filter(|a| a.state != AgentState::Closed)
-                .count()
-        }),
+        PanelTab::Agents => {
+            app.session().map_or(0, |s| {
+                s.agents
+                    .iter()
+                    .filter(|a| a.state != AgentState::Closed)
+                    .count()
+            }) + app
+                .activity
+                .jobs
+                .as_ref()
+                .map_or(0, |list| list.running_count)
+        }
         _ => 0,
     };
     if count > 0 {
@@ -196,7 +207,7 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
         PanelTab::Terminal => terminal(app, width, body.height as usize),
         PanelTab::Memory => memory(app, width, focused),
         PanelTab::Stats => stats(app, width),
-        PanelTab::Agents => agents(app, width, focused),
+        PanelTab::Agents => activity(app, width, focused),
     };
     // Changes gets a two-row button bar; other tabs a one-row key hint while focused.
     // 变更页有两行按钮栏；其他标签页在聚焦时有一行按键提示。
@@ -206,7 +217,12 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
         }
         PanelTab::Memory => Some(tr!("tui.panel.memoryHint")),
         PanelTab::Stats => Some(tr!("tui.panel.statsHint")),
-        PanelTab::Agents if !lines.is_empty() => Some(tr!("tui.panel.agentsHint")),
+        PanelTab::Agents if activity::saved_session(app).is_some() => {
+            Some(match app.activity.page {
+                ActivityPage::Subagents => tr!("tui.panel.agentsHint"),
+                ActivityPage::Commands => tr!("tui.panel.commandsHint"),
+            })
+        }
         _ => None,
     }
     .filter(|_| focused);
@@ -1486,58 +1502,147 @@ fn agent_look(app: &App, state: AgentState) -> (&'static str, Color) {
     }
 }
 
-/// Status summary, then one block per agent; the selected agent expands with its queue, usage,
-/// recent activity, result and controls.
-/// 状态汇总，然后每个代理一块；选中的代理展开其队列、用量、最近活动、结果与控制。
-fn agents(app: &App, width: usize, focused: bool) -> Vec<Row> {
+/// Activity tab: the page switch, then the subagents or the command jobs of the session, then the
+/// clear and show-all chips.
+/// 活动页：页面切换，然后是会话的子代理或命令任务，最后是清理与显示全部按钮。
+fn activity(app: &App, width: usize, focused: bool) -> Vec<Row> {
     let theme = &app.theme;
-    let (Some(session), Some(conversation_id)) = (app.session(), app.selected.as_deref()) else {
-        return Vec::new();
-    };
-    let agents = &session.agents;
-    let mut out = Vec::new();
-    if agents.is_empty() {
-        out.push(Row::new(Line::from(Span::styled(
-            tr!("conversation.subagent.detail.noOpenAgents"),
+    let Some(conversation_id) = activity::saved_session(app) else {
+        return vec![Row::new(Line::from(Span::styled(
+            tr!("sessionActivity.noSession"),
             theme.muted_text(),
-        ))));
+        )))];
+    };
+    let state = &app.activity;
+    let page = state.page;
+    let subagents = state.subagents.as_ref().map_or_else(
+        || app.session().map_or(0, |s| s.agents.len()),
+        |snapshot| snapshot.subagents.len(),
+    );
+    let running = state.jobs.as_ref().map_or(0, |list| list.running_count);
+    let mut out = vec![chip_row(
+        app,
+        0,
+        width,
+        vec![
+            (
+                format!("{} {subagents}", tr!("sessionActivity.subagents")),
+                page == ActivityPage::Subagents,
+                false,
+                UiAction::SessionActivity(ActivityAction::Page(ActivityPage::Subagents)),
+            ),
+            (
+                format!("{} {running}", tr!("sessionActivity.commands")),
+                page == ActivityPage::Commands,
+                false,
+                UiAction::SessionActivity(ActivityAction::Page(ActivityPage::Commands)),
+            ),
+        ],
+    )];
+    out.push(Row::new(Line::default()));
+    let slot = match page {
+        ActivityPage::Subagents => Slot::SessionActivity,
+        ActivityPage::Commands => Slot::ShellJobs,
+    };
+    if let Some(error) = app.slot_errors.get(&slot) {
+        out.extend(rows(wrap(
+            &[Span::styled(error.clone(), Style::new().fg(theme.danger))],
+            width,
+            &[],
+            &[],
+        )));
+    }
+    let loaded = match page {
+        ActivityPage::Subagents => state.subagents.is_some(),
+        ActivityPage::Commands => state.jobs.is_some(),
+    };
+    if !loaded {
+        if !app.slot_errors.contains_key(&slot) {
+            out.push(Row::new(Line::from(Span::styled(
+                tr!("tui.page.loading"),
+                theme.muted_text(),
+            ))));
+        }
         return out;
     }
-    let mut summary = Vec::new();
-    for state in AgentState::ALL {
-        let count = agents.iter().filter(|a| a.state == state).count();
-        if count == 0 {
-            continue;
-        }
-        let (_, color) = agent_look(app, state);
-        if !summary.is_empty() {
-            summary.push(Span::raw("  "));
-        }
-        summary.push(Span::styled("● ", Style::new().fg(color)));
-        summary.push(Span::styled(
-            format!("{} {count}", insight::agent_state_label(state)),
-            theme.muted_text(),
+    match page {
+        ActivityPage::Subagents => subagent_rows(app, &conversation_id, width, focused, &mut out),
+        ActivityPage::Commands => job_rows(app, width, focused, &mut out),
+    }
+    let mut chips = Vec::new();
+    if state.clearable() > 0 {
+        chips.push((
+            tr!("sessionActivity.clearEnded"),
+            false,
+            false,
+            UiAction::SessionActivity(ActivityAction::Clear),
         ));
     }
-    out.extend(rows(wrap(&summary, width, &[], &[])));
-    out.push(Row::new(Line::default()));
+    if state.show_all() {
+        chips.push((
+            tr!("sessionActivity.showRecent"),
+            false,
+            false,
+            UiAction::SessionActivity(ActivityAction::ShowAll(false)),
+        ));
+    } else {
+        chips.push((
+            tr!("sessionActivity.showAll", count = state.hidden()),
+            false,
+            false,
+            UiAction::SessionActivity(ActivityAction::ShowAll(true)),
+        ));
+    }
+    if !chips.is_empty() {
+        out.push(chip_row(app, 0, width, chips));
+    }
+    out
+}
 
+/// One block per subagent, running first: label and state, the task, the latest tool calls and
+/// output lines; the selected one expands with its queue, usage, result and controls.
+/// 每个子代理一块，运行中在前：名称与状态、任务、最近的工具调用与输出行；选中的子代理展开其队列、
+/// 用量、结果与控制。
+fn subagent_rows(
+    app: &App,
+    conversation_id: &str,
+    width: usize,
+    focused: bool,
+    out: &mut Vec<Row>,
+) {
+    let theme = &app.theme;
+    let entries = app.activity.subagent_entries();
+    if entries.is_empty() {
+        out.push(Row::new(Line::from(Span::styled(
+            tr!("sessionActivity.noSubagents"),
+            theme.muted_text(),
+        ))));
+        out.push(Row::new(Line::default()));
+        return;
+    }
+    let faint = Style::new().fg(theme.faint_fg(theme.sidebar));
     let cursor = app.panel.cursor(PanelTab::Agents);
-    for (index, agent) in agents.iter().enumerate() {
+    for (index, entry) in entries.iter().enumerate() {
         let selected = index == cursor;
         let target = Target::PanelItem(PanelTab::Agents, index);
-        let (icon, color) = agent_look(app, agent.state);
-        let count = compact_count(agent.usage.total());
-        let state = insight::agent_state_label(agent.state);
+        let agent = activity::agent_for(app, entry);
+        let agent_state = AgentState::from_run_state(&entry.task.run_state);
+        let (icon, color) = agent_look(app, agent_state);
+        let count = agent.map_or_else(String::new, |agent| compact_count(agent.usage.total()));
+        let state = insight::agent_state_label(agent_state);
+        let label = match entry.task.label.trim() {
+            "" => entry.task.public_task_id.clone(),
+            label => label.to_string(),
+        };
         let name_room = width.saturating_sub(width_of(&state) + width_of(&count) + 7);
-        let name = truncate(&agent.name, name_room);
+        let name = truncate(&label, name_room);
         let pad = name_room.saturating_sub(width_of(&name));
         let mut head = Line::from(vec![
             Span::styled(if selected { "›" } else { " " }, theme.primary_text()),
             Span::styled(format!("{icon} "), Style::new().fg(color)),
             Span::styled(
                 name,
-                if agent.state == AgentState::Closed {
+                if entry.cleared || agent_state == AgentState::Closed {
                     theme.muted_text()
                 } else {
                     theme.strong()
@@ -1551,22 +1656,184 @@ fn agents(app: &App, width: usize, focused: bool) -> Vec<Row> {
             head = head.style(Style::new().bg(theme.sidebar_accent));
         }
         out.push(Row::new(head).target(target.clone()));
-        let task_lines = wrap(
-            &[Span::styled(agent.task.clone(), theme.muted_text())],
-            width,
-            &[Span::raw("   ")],
-            &[Span::raw("   ")],
-        );
-        let take = if selected { task_lines.len() } else { 1 };
-        for line in task_lines.into_iter().take(take) {
-            out.push(Row::new(line).target(target.clone()));
+        if let Some(description) = entry.task.description.as_deref() {
+            let task_lines = wrap(
+                &[Span::styled(description.to_string(), theme.muted_text())],
+                width,
+                &[Span::raw("   ")],
+                &[Span::raw("   ")],
+            );
+            let take = if selected { task_lines.len() } else { 1 };
+            for line in task_lines.into_iter().take(take) {
+                out.push(Row::new(line).target(target.clone()));
+            }
         }
-        if selected {
-            agent_detail(app, conversation_id, agent, width, &target, &mut out);
+        for tool in &entry.recent_tools {
+            let style = match tool.status.as_str() {
+                "running" => theme.primary_text(),
+                "failed" | "error" | "denied" | "rejected" => Style::new().fg(theme.danger),
+                _ => faint,
+            };
+            let summary = tool.summary.as_deref().unwrap_or_default();
+            let text = format!("{} {summary}", tool.tool_name);
+            out.push(
+                Row::new(Line::from(vec![
+                    Span::styled("   ⚒ ", style),
+                    Span::styled(truncate(text.trim_end(), width.saturating_sub(5)), faint),
+                ]))
+                .target(target.clone()),
+            );
+        }
+        for line in &entry.recent_output {
+            out.push(
+                Row::new(Line::from(Span::styled(
+                    format!("   │ {}", truncate(line, width.saturating_sub(5))),
+                    faint,
+                )))
+                .target(target.clone()),
+            );
+        }
+        if selected && let Some(agent) = agent {
+            agent_detail(app, conversation_id, agent, width, &target, out);
         }
         out.push(Row::new(Line::default()));
     }
-    out
+}
+
+/// Status glyph and color of one command job.
+/// 一个命令任务的状态符号与颜色。
+fn job_look(app: &App, job: &ShellJobView) -> (&'static str, Color) {
+    let theme = &app.theme;
+    match job.status.as_str() {
+        "running" => (spinner(app.phase()), theme.primary),
+        "completed" => ("●", theme.success),
+        "failed" => ("✗", theme.danger),
+        "timed_out" | "stopped" => ("■", theme.warning),
+        _ => ("○", theme.muted_fg),
+    }
+}
+
+/// One block per command job, running first with their latest lines, then the latest finished
+/// ones; the selected job offers its output and, while running, a stop.
+/// 每个命令任务一块，运行中在前并附最近输出行，其后是最近结束的任务；选中的任务提供输出查看，
+/// 运行中时还可停止。
+fn job_rows(app: &App, width: usize, focused: bool, out: &mut Vec<Row>) {
+    let theme = &app.theme;
+    let jobs = app.activity.job_entries();
+    if jobs.is_empty() {
+        out.push(Row::new(Line::from(Span::styled(
+            tr!("sessionActivity.noCommands"),
+            theme.muted_text(),
+        ))));
+        out.push(Row::new(Line::default()));
+        return;
+    }
+    let faint = Style::new().fg(theme.faint_fg(theme.sidebar));
+    let cursor = app.panel.cursor(PanelTab::Agents);
+    for (index, job) in jobs.iter().enumerate() {
+        let selected = index == cursor;
+        let target = Target::PanelItem(PanelTab::Agents, index);
+        let (icon, color) = job_look(app, job);
+        let status = activity::job_status_label(&job.status);
+        let title = match job.purpose.trim() {
+            "" => job.command.clone(),
+            purpose => purpose.to_string(),
+        };
+        let name_room = width.saturating_sub(width_of(&status) + 5);
+        let name = truncate(&title, name_room);
+        let pad = name_room.saturating_sub(width_of(&name));
+        let mut head = Line::from(vec![
+            Span::styled(if selected { "›" } else { " " }, theme.primary_text()),
+            Span::styled(format!("{icon} "), Style::new().fg(color)),
+            Span::styled(
+                name,
+                if job.cleared {
+                    theme.muted_text()
+                } else {
+                    theme.strong()
+                },
+            ),
+            Span::raw(" ".repeat(pad)),
+            Span::styled(format!(" {status}"), Style::new().fg(color)),
+        ]);
+        if selected && focused {
+            head = head.style(Style::new().bg(theme.sidebar_accent));
+        }
+        out.push(Row::new(head).target(target.clone()));
+        let command = wrap(
+            &[Span::styled(job.command.clone(), theme.muted_text())],
+            width,
+            &[Span::styled("   $ ", faint)],
+            &[Span::raw("     ")],
+        );
+        let take = if selected { command.len() } else { 1 };
+        for line in command.into_iter().take(take) {
+            out.push(Row::new(line).target(target.clone()));
+        }
+        let mut meta = vec![job.job_id.clone()];
+        if let Some(code) = job.exit_code.filter(|_| !job.running) {
+            meta.push(tr!("sessionActivity.exitCode", code = code));
+        }
+        meta.push(compact_duration(job.duration_ms));
+        if job.background {
+            meta.push(tr!("sessionActivity.background"));
+        }
+        meta.push(tr!("sessionActivity.lines", count = job.total_lines));
+        out.push(
+            Row::new(Line::from(Span::styled(
+                format!(
+                    "   {}",
+                    truncate(&meta.join(" · "), width.saturating_sub(3))
+                ),
+                faint,
+            )))
+            .target(target.clone()),
+        );
+        if let Some(reason) = &job.failure_reason {
+            for line in wrap(
+                &[Span::styled(reason.clone(), Style::new().fg(theme.danger))],
+                width,
+                &[Span::raw("   ")],
+                &[Span::raw("   ")],
+            ) {
+                out.push(Row::new(line).target(target.clone()));
+            }
+        }
+        if job.running {
+            for line in &job.recent_lines {
+                out.push(
+                    Row::new(Line::from(Span::styled(
+                        format!("   │ {}", truncate(line, width.saturating_sub(5))),
+                        faint,
+                    )))
+                    .target(target.clone()),
+                );
+            }
+        }
+        if selected {
+            let mut chips = Vec::new();
+            if job.log_available {
+                chips.push((
+                    tr!("sessionActivity.expandLog"),
+                    false,
+                    false,
+                    UiAction::SessionActivity(ActivityAction::OpenLog(job.job_id.clone())),
+                ));
+            }
+            if job.running {
+                chips.push((
+                    tr!("sessionActivity.stop"),
+                    false,
+                    true,
+                    UiAction::SessionActivity(ActivityAction::StopJob(job.job_id.clone())),
+                ));
+            }
+            if !chips.is_empty() {
+                out.push(chip_row(app, 3, width, chips));
+            }
+        }
+        out.push(Row::new(Line::default()));
+    }
 }
 
 fn agent_detail(
@@ -1620,13 +1887,8 @@ fn agent_detail(
             push(line);
         }
     }
-    let recent = agent.activity.len().saturating_sub(3);
-    for activity in &agent.activity[recent..] {
-        push(Line::from(Span::styled(
-            format!("   · {}", truncate(activity, width.saturating_sub(5))),
-            Style::new().fg(theme.faint_fg(theme.sidebar)),
-        )));
-    }
+    // The latest tool calls and output lines come from the activity snapshot above.
+    // 最近的工具调用与输出行来自上方的活动快照。
     if let Some(result) = &agent.result {
         let mut lines = wrap(
             &[Span::styled(result.clone(), Style::new().fg(theme.fg))],

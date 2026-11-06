@@ -132,6 +132,9 @@ describe("output parsing", () => {
   it("joins stdout and stderr sections without the command header", () => {
     const text = "Command: ls\nExit code: 0\n\n[stdout]\none\ntwo\n\n[stderr]\nwarn\n";
     expect(commandOutputFromText(text)).toBe("one\ntwo\nwarn");
+    // The current result carries one merged [output] section.
+    // 当前结果携带一个合并的 [output] 区段。
+    expect(commandOutputFromText("Command: ls\nStatus: completed\n\n[output]\none\ntwo\n")).toBe("one\ntwo");
   });
 
   it("keeps foreground tone and weight and skips extended color arguments", () => {

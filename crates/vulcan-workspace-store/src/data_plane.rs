@@ -712,6 +712,12 @@ CREATE TABLE IF NOT EXISTS environment_variable_project_bindings (
 CREATE INDEX IF NOT EXISTS idx_environment_variable_project_bindings_project
 ON environment_variable_project_bindings(project_id, variable_id);
 
+CREATE TABLE IF NOT EXISTS session_activity_marks_v1 (
+    session_id TEXT PRIMARY KEY,
+    subagents_cleared_at_ms INTEGER,
+    commands_cleared_at_ms INTEGER
+);
+
 PRAGMA user_version = {schema_version};
 "#,
         schema_version = APP_SCHEMA_VERSION,

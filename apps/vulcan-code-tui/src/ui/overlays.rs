@@ -59,6 +59,7 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
         Overlay::History(state) => history::render_history(app, state, area, buf),
         Overlay::Inspector(inspector) => history::render_inspector(app, inspector, area, buf),
         Overlay::Detail(sheet) => dialogs::render_detail(app, sheet, area, buf),
+        Overlay::ShellJobLog(log) => super::shell_job_log::render(app, log, area, buf),
     }
     app.overlay = Some(overlay);
 }

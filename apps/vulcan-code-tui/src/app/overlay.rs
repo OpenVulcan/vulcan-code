@@ -365,7 +365,9 @@ pub enum Overlay {
     // Boxed: the dialog owns a TextArea and is far larger than the other variants.
     // 装箱：对话框持有 TextArea，远大于其他变体。
     Commit(Box<CommitDialog>),
-    Help { scroll: usize },
+    Help {
+        scroll: usize,
+    },
     Menu(Menu),
     Confirm(Box<ConfirmDialog>),
     Prompt(Box<PromptDialog>),
@@ -373,4 +375,7 @@ pub enum Overlay {
     History(History),
     Inspector(Inspector),
     Detail(Box<DetailSheet>),
+    /// The log of one command job of the session activity.
+    /// 会话活动中一个命令任务的日志。
+    ShellJobLog(Box<super::activity::ShellJobLog>),
 }

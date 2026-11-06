@@ -8,6 +8,7 @@ use super::{
     toggle_stage, typed,
 };
 use crate::app::action::{self, UiAction};
+use crate::app::activity::ActivityAction;
 use crate::app::overlay::{CommitField, HistoryFilter, Overlay};
 use crate::app::{App, history};
 
@@ -87,6 +88,38 @@ pub(super) fn on_key(app: &mut App, key: KeyEvent) {
             }
             _ => {}
         },
+        // Job log: arrows and pages scroll, reaching the top reads earlier lines, End follows the
+        // newest ones and `s` stops a running job.
+        // 任务日志：方向键与翻页滚动，到达顶部读取更早的行，End 跟随最新的行，`s` 停止运行中的任务。
+        Overlay::ShellJobLog(log) => {
+            let earlier = match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => {
+                    app.overlay = None;
+                    false
+                }
+                KeyCode::Up | KeyCode::Char('k') => log.scroll_by(-1),
+                KeyCode::Down | KeyCode::Char('j') => log.scroll_by(1),
+                KeyCode::PageUp => log.scroll_by(-10),
+                KeyCode::PageDown => log.scroll_by(10),
+                KeyCode::Home => {
+                    log.jump(true);
+                    true
+                }
+                KeyCode::End => {
+                    log.jump(false);
+                    false
+                }
+                KeyCode::Char('s') if log.running => {
+                    let stop = ActivityAction::StopJob(log.job_id.clone());
+                    action::perform(app, UiAction::SessionActivity(stop));
+                    false
+                }
+                _ => false,
+            };
+            if earlier {
+                action::perform(app, UiAction::SessionActivity(ActivityAction::LogEarlier));
+            }
+        }
         // Detail sheet: arrows scroll, Tab cycles the action buttons, Enter runs the focused one.
         // 详情面板：方向键滚动，Tab 在操作按钮间切换，Enter 执行聚焦的按钮。
         Overlay::Detail(sheet) => match key.code {

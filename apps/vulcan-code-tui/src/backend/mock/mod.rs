@@ -7,6 +7,7 @@
 // 它像服务一样为每个会话维护权威事件日志，并按真实节奏回放脚本化轮次，使所有界面状态
 // （流式思考、运行中工具、等待中的提问、排队提示、停止、Git 操作）无需服务即可演示。
 
+mod activity;
 #[cfg(test)]
 mod answer_mode_tests;
 mod files;
@@ -222,6 +223,9 @@ struct World {
     /// Last loader per slot, so mutations can reload what they invalidate.
     /// 每个槽位最近一次的加载器，供变更重新加载其失效的槽位。
     loaders: HashMap<Slot, ServiceCall>,
+    /// Background shell jobs and subagent activity of the session activity view.
+    /// 会话活动视图的后台 shell 任务与子代理活动。
+    activity: activity::MockActivity,
 }
 
 impl World {
@@ -245,6 +249,7 @@ impl World {
             next_id: 1,
             service: service::FakeService::new(),
             loaders: HashMap::new(),
+            activity: activity::MockActivity::default(),
         }
     }
 
@@ -1483,7 +1488,14 @@ impl World {
                 .sync_knowledge_context(&self.projects, &self.conversations);
         }
         let operation = !matches!(call.kind, CallKind::Load(_));
-        let mut value = match self.service.answer(&call) {
+        let answer = match self.activity.answer(&call, &self.logs) {
+            Some(answer) => answer,
+            None => self.service.answer(&call),
+        };
+        for event in self.activity.take_events() {
+            self.emit(event);
+        }
+        let mut value = match answer {
             Ok(value) => value,
             Err(message) => {
                 if let CallKind::Load(slot) = call.kind {

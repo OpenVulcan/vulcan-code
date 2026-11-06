@@ -28,6 +28,7 @@ pub mod permission_mode;
 pub mod project_actions;
 pub mod review_prompt;
 pub mod rtk;
+pub mod session_activity;
 pub mod setter;
 pub mod settings_actions;
 pub mod skills_actions;
@@ -291,6 +292,21 @@ pub enum Slot {
     /// `loadWorkspaceFileDirectory` of the folder the composer's `@` path mention lists.
     /// 输入框 `@` 路径提及所列文件夹的 `loadWorkspaceFileDirectory`。
     PathMentionDirectory,
+    /// `listShellJobs` of the selected session; its running background count feeds the session bar.
+    /// 所选会话的 `listShellJobs`；其中运行中的后台任务数供会话栏使用。
+    ShellJobs,
+    /// `readShellJobOutput` of the open job log: its tail, then the pages that follow it.
+    /// 当前打开任务日志的 `readShellJobOutput`：其末尾及随后跟随读取的页。
+    ShellJobOutput,
+    /// `readShellJobOutput` with `beforeLine`: the page above the first row shown.
+    /// 带 `beforeLine` 的 `readShellJobOutput`：已显示首行之上的一页。
+    ShellJobOutputEarlier,
+    /// `loadSessionActivity` of the selected session.
+    /// 所选会话的 `loadSessionActivity`。
+    SessionActivity,
+    /// `countRunningShellJobs`, read before a restart to update.
+    /// 重启更新之前读取的 `countRunningShellJobs`。
+    RunningShellJobCount,
 }
 
 impl Slot {

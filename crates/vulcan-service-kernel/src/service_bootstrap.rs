@@ -1626,6 +1626,34 @@ fn run_service_bootstrap(
             Arc::downgrade(state),
         ),
     ));
+    // Shell jobs keep their index and logs inside the owning session directory.
+    // Shell 任务把索引与日志保存在所属会话目录中。
+    {
+        let registry = Arc::clone(&permission_registry);
+        vulcan_host_tools::shell_job::ShellJobRuntime::global().set_directory_resolver(Arc::new(
+            move |session_id: &str| {
+                let session_id = session_id
+                    .parse::<vulcan_agent_runtime::model::SessionId>()
+                    .ok()?;
+                let handle = crate::session_goal_lifecycle::registered_session_v1_handle(
+                    &registry, session_id,
+                )
+                .ok()?;
+                let locator = handle.storage_locator().ok()?;
+                Some(
+                    locator
+                        .session_directory()
+                        .join(vulcan_host_tools::shell_job::SHELL_JOBS_DIRECTORY),
+                )
+            },
+        ));
+    }
+    // Clients refresh job counts and lists from these events.
+    // 客户端依据这些事件刷新任务数量与列表。
+    crate::session_activity_services::install_shell_job_event_forwarding(
+        runtime.handle(),
+        event_emitter.clone(),
+    );
     // The configuration tools list and change settings through the settings services via this host.
     // 配置工具经此宿主、通过设置服务列出并修改设置。
     agent_runtime.task_runtime.set_configuration_host(Arc::new(

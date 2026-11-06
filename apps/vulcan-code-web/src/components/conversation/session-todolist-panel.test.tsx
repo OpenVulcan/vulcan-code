@@ -32,13 +32,14 @@ function renderPanel(overrides: Partial<PanelProps>): string {
       subagentNavigation={null} commitDialogOpen={false} commitBusyState={null}
       onExpandedChange={() => undefined} onCommitDialogOpenChange={() => undefined}
       onOpenReviewChanges={() => undefined} onStopCommandSession={async () => undefined}
-      onOpenSubagentPanel={async () => true} {...overrides} />
+      onOpenActivityPanel={() => undefined} {...overrides} />
   </TooltipProvider></I18nProvider>);
 }
 
 describe("session tool panel header layout", () => {
   it.each<Partial<PanelProps>>([
     { subagentNavigation },
+    { backgroundJobCount: 2 },
     { terminalSessions: [{ id: "terminal", command: "pwsh", status: "running", preview: "" }] },
     { todolist: { items: [{ step: "检查布局", status: "pending" }], completedCount: 0, totalCount: 1 } },
     { subagentNavigation, terminalSessions: [{ id: "terminal", command: "pwsh", status: "running", preview: "" }] },
@@ -69,6 +70,15 @@ describe("session tool panel header layout", () => {
       summary: null, monitoringEnabled: false, loading: false, error: null,
     }] });
     expect(markup).toContain("vk-stools-manage");
+  });
+
+  it("shows counts that open the activity panel instead of listing subagents", () => {
+    // markup holds one count row per list and no per-subagent rows.
+    // markup 每个列表只有一行数量，没有逐个子代理的行。
+    const markup = renderPanel({ subagentNavigation, backgroundJobCount: 3 });
+    expect(markup).toContain('data-row="subagents"');
+    expect(markup).toContain('data-row="commands"');
+    expect(markup).not.toContain('data-row="subagent"');
   });
 
   it("renders no panel when every resource is absent", () => {

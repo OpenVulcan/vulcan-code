@@ -80,6 +80,26 @@ impl TaskRuntime {
         Ok(())
     }
 
+    /// Replaces every registered sensitive value in `text`, as tool results are redacted.
+    /// 替换 `text` 中每个已登记的敏感值，与工具结果的遮蔽方式相同。
+    ///
+    /// Used for output the service hands to clients outside a tool result, such as shell job logs.
+    /// A poisoned registry fails closed and returns an error instead of unfiltered text.
+    /// 用于服务在工具结果之外交给客户端的输出，例如 shell 任务日志。注册表损坏时闭锁失败，返回错误而非未过滤文本。
+    pub fn redact_sensitive_text(&self, text: &str) -> Result<String, String> {
+        let values = self
+            .sensitive_tool_output_values
+            .read()
+            .map_err(|_| String::from("Sensitive tool-output registry is unavailable."))?;
+        let mut redacted = text.to_string();
+        for value in values.iter() {
+            if redacted.contains(&value.value) {
+                redacted = redacted.replace(&value.value, &value.replacement);
+            }
+        }
+        Ok(redacted)
+    }
+
     /// Shares the live redaction registry with the host tool bridge for this runtime generation.
     /// 与当前运行世代的宿主工具桥共享实时遮蔽注册表。
     pub(crate) fn sensitive_tool_output_values(&self) -> SensitiveToolOutputValues {

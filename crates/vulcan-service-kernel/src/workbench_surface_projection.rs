@@ -273,3 +273,32 @@ fn subagent_task_summary_from_state(
         is_active: active_task_id == Some(state.task_id),
     }
 }
+
+/// Lists every subagent of one root session, closed ones included, as navigation summaries with their
+/// registry entries, for the activity panel.
+/// 为活动面板列出某根会话的全部子代理（含已关闭的），即导航摘要及其注册表条目。
+pub(super) fn subagent_activity_rows(
+    guard: &ServiceBridgeState,
+    root_session_id: SessionId,
+) -> Result<Vec<(SubagentTaskSummary, SubagentRegistryEntry)>, String> {
+    let Some(task_runtime) = guard
+        .agent_runtime
+        .as_ref()
+        .map(|runtime| &runtime.task_runtime)
+    else {
+        return Ok(Vec::new());
+    };
+    let entries = task_runtime.subagent_registry_entries_for_parent_tree(root_session_id, true)?;
+    Ok(entries
+        .into_iter()
+        .map(|entry| {
+            let state = subagent_task_panel_state_from_registry_entry(guard, &entry);
+            let summary = subagent_task_summary_from_state(
+                &state,
+                None,
+                subagent_agent_profile_id_from_prompt_source(entry.prompt_source.as_deref()),
+            );
+            (summary, entry)
+        })
+        .collect())
+}

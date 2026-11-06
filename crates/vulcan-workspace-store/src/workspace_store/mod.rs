@@ -25,6 +25,7 @@ mod project_groups;
 mod provider_api_trace;
 mod provider_usage;
 mod resource_catalog;
+mod session_activity_marks;
 mod session_index_v1;
 mod session_sidecars;
 mod session_usage;
@@ -77,6 +78,10 @@ pub use resource_catalog::{
     add_project_resource, load_project_resource_catalog, parse_project_resource_locator,
     project_resource_catalog_path, project_resource_entity_path, project_resource_locator,
     resolve_project_resource, resolve_project_resource_source,
+};
+pub use session_activity_marks::{
+    SessionActivityMarkScope, SessionActivityMarks, load_session_activity_marks,
+    mark_session_activity_cleared,
 };
 pub use session_index_v1::SESSION_ASSISTANT_NAME_MAX_CHARS;
 #[cfg(test)]

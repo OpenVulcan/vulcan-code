@@ -15,6 +15,7 @@ mod knowledge_base;
 mod markdown_memory;
 mod plugin_runtime;
 mod project_conversation;
+mod session_activity;
 mod session_resources_v1;
 mod workspace_io;
 
@@ -88,6 +89,10 @@ async fn dispatch_known_service_rpc(
         return Ok(outcome);
     }
     let outcome = session_resources_v1::dispatch(state.clone(), method, params).await?;
+    if outcome.is_handled() {
+        return Ok(outcome);
+    }
+    let outcome = session_activity::dispatch(state.clone(), method, params).await?;
     if outcome.is_handled() {
         return Ok(outcome);
     }
@@ -228,6 +233,7 @@ pub(crate) fn service_rpc_method_names() -> BTreeSet<&'static str> {
         plugin_runtime::RPC_METHODS,
         conversation_events_v1::RPC_METHODS,
         session_resources_v1::RPC_METHODS,
+        session_activity::RPC_METHODS,
         conversation_runtime::RPC_METHODS,
         configuration::RPC_METHODS,
         project_conversation::RPC_METHODS,
@@ -260,6 +266,7 @@ mod tests {
             + plugin_runtime::RPC_METHODS.len()
             + conversation_events_v1::RPC_METHODS.len()
             + session_resources_v1::RPC_METHODS.len()
+            + session_activity::RPC_METHODS.len()
             + conversation_runtime::RPC_METHODS.len()
             + configuration::RPC_METHODS.len()
             + project_conversation::RPC_METHODS.len();

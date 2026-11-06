@@ -17,6 +17,7 @@ pub mod project_terminal_runtime;
 pub mod result_format;
 pub mod rtk;
 pub mod shell_host;
+pub mod shell_job;
 pub mod terminal_host_client;
 pub mod text_document;
 pub mod text_encoding;

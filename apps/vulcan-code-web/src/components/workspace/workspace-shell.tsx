@@ -93,6 +93,7 @@ import {
   type WorkspaceContextTabStateEntry,
 } from "@/components/workspace/workspace-shell/context-tabs";
 import { useWorkspaceGitState } from "@/components/workspace/workspace-shell/use-workspace-git-state";
+import { useSessionActivityPanel } from "@/components/workspace/workspace-shell/use-session-activity-panel";
 import { AssistantDockButton } from "@/components/assistant/assistant-dock-button";
 import { TurnChangeReviewActionsContext } from "@/components/conversation/turn-change-review-context";
 import { useReviewFocusActions } from "@/components/workspace/workspace-shell/use-review-focus-actions";
@@ -653,6 +654,10 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     return true;
   }, [openRightContextPanel, props.onOpenSubagentPanel, props.workbench.subagentNavigation, t]);
 
+  // The activity wiring counts the selected session's background commands and opens the activity tab.
+  // 活动接线统计选中会话的后台命令并打开活动页签。
+  const sessionActivity = useSessionActivityPanel(hasSelectedChatConversation ? props.selectedConversationId : null, setContextTabStateEntry, openRightContextPanel, t);
+
   // handleSessionToolExpandedChange preserves the transcript viewport before Git panel shape changes.
   // handleSessionToolExpandedChange 在 Git 面板形态变化前保留转录视口。
   const handleSessionToolExpandedChange = React.useCallback((expanded: boolean) => {
@@ -717,6 +722,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     sessionGitCommitActionVisible
     || visibleSessionTerminalSessions.length > 0
     || visibleSessionSubagentTaskCount > 0
+    || sessionActivity.backgroundJobCount > 0
   ));
 
   // rightPanelLabel describes the page-registered context panel toggle action.
@@ -974,6 +980,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
             repositoryName: repository.repositoryName,
             summary: repository.monitoringEnabled ? repository.summary : null,
           }))}
+          backgroundJobCount={sessionActivity.backgroundJobCount}
           subagentNavigation={sessionSubagentNavigation}
           terminalSessions={sessionTerminalSessions}
           todolist={null}
@@ -990,7 +997,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
               toast.error(message);
             });
           }}
-          onOpenSubagentPanel={handleOpenSubagentPanel}
+          onOpenActivityPanel={sessionActivity.openActivityPanel}
           onStopCommandSession={props.onStopCommandSession}
         />
       ) : null,

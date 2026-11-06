@@ -491,13 +491,17 @@ pub enum AgentState {
 }
 
 impl AgentState {
-    pub const ALL: [AgentState; 5] = [
-        AgentState::Running,
-        AgentState::Standby,
-        AgentState::Stopped,
-        AgentState::Failed,
-        AgentState::Closed,
-    ];
+    /// Maps the service's canonical lowercase run state; anything unknown counts as running.
+    /// 映射服务的规范小写运行状态；未知取值视为运行中。
+    pub fn from_run_state(run_state: &str) -> Self {
+        match run_state.trim().to_ascii_lowercase().as_str() {
+            "completed" => AgentState::Standby,
+            "stopped" => AgentState::Stopped,
+            "failed" => AgentState::Failed,
+            "closed" => AgentState::Closed,
+            _ => AgentState::Running,
+        }
+    }
 }
 
 /// A message waiting for a subagent: steering interrupts, follow-ups wait for the current step.

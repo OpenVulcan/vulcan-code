@@ -3,7 +3,6 @@ import {
   ArrowDown,
   ArrowUp,
   Bot,
-  Boxes,
   Check,
   ChevronDown,
   ChevronRight,
@@ -52,8 +51,7 @@ import {
 } from "@/ui-kit/primitives/dialog";
 import { Input } from "@/ui-kit/primitives/input";
 import { Textarea } from "@/ui-kit/primitives/textarea";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui-kit/primitives/tooltip";
-import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
+import { formatMessage, useI18n } from "@/i18n";
 import type { CommandSessionSummary, SessionTodolistItemSummary, SessionTodolistSummary, WorkbenchSnapshot } from "@/types";
 
 // Conversation session tool morph animation duration in milliseconds.
@@ -257,9 +255,12 @@ export function ConversationSessionTodolistPanel(props: {
   // Force-stops one live terminal session.
   // 强制停止单条实时终端会话。
   onStopCommandSession: (commandSessionId: string, ownerSessionId?: string | null) => Promise<void>;
-  // Opens one subagent transcript inside the right context panel.
-  // 在右侧上下文面板中打开单个子代理转录。
-  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
+  // Running background commands of the selected conversation.
+  // 当前选中会话中运行中的后台命令数。
+  backgroundJobCount?: number;
+  // Opens one page of the session activity panel.
+  // 打开会话活动面板的一个页面。
+  onOpenActivityPanel: (page: "subagents" | "commands") => void;
 }) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
@@ -411,6 +412,8 @@ export function ConversationSessionTodolistPanel(props: {
     [props.subagentNavigation?.tasks],
   );
   const hasSubagentTasks = subagentTasks.length > 0;
+  const backgroundJobCount = props.backgroundJobCount ?? 0;
+  const hasActivity = hasSubagentTasks || backgroundJobCount > 0;
   // showReviewRepositoryManager keeps disabled repositories reachable without rendering them as panel nodes.
   // showReviewRepositoryManager 让已关闭仓库仍可从设置进入，同时不把它们渲染为面板节点。
   const showReviewRepositoryManager = orderedReviewRepositories.length > 1
@@ -464,7 +467,7 @@ export function ConversationSessionTodolistPanel(props: {
   // morph 在表面播放短暂的展开或折叠淡入时进行标记。
   const morph = transitionPhase ?? undefined;
 
-  if (!hasReviewSummary && !hasTodolist && !hasTerminalSessions && !hasSubagentTasks) {
+  if (!hasReviewSummary && !hasTodolist && !hasTerminalSessions && !hasActivity) {
     return null;
   }
 
@@ -517,6 +520,13 @@ export function ConversationSessionTodolistPanel(props: {
             <Bot size={14} />
             <span>{t("conversation.subagent.schedule")}</span>
             <b>{subagentTasks.length}</b>
+          </span>
+        ) : null}
+        {backgroundJobCount > 0 ? (
+          <span className="vk-stools-row">
+            <TerminalSquare size={14} />
+            <span>{t("sessionActivity.backgroundCommands")}</span>
+            <b>{backgroundJobCount}</b>
           </span>
         ) : null}
         <Maximize2 className="vk-stools-hint" size={12} />
@@ -599,11 +609,11 @@ export function ConversationSessionTodolistPanel(props: {
           todolist={props.todolist}
         />
       ) : null}
-      {props.subagentNavigation && hasSubagentTasks ? (
-        <ConversationSessionSubagentSection
-          parentConversationId={props.subagentNavigation.parentConversationId}
+      {hasActivity ? (
+        <ConversationSessionActivitySection
+          backgroundJobCount={backgroundJobCount}
           tasks={subagentTasks}
-          onOpenSubagentPanel={props.onOpenSubagentPanel}
+          onOpenActivityPanel={props.onOpenActivityPanel}
         />
       ) : null}
       </div>
@@ -1400,136 +1410,56 @@ function commitPanelTargetAllowsActionNavigation(target: EventTarget | null): bo
   return tagName !== "select" && tagName !== "textarea" && !target.isContentEditable;
 }
 
-// ConversationSessionSubagentSection renders subagent dispatch rows in the session tool panel.
-// ConversationSessionSubagentSection 在会话工具面板中渲染子代理调度行。
-function ConversationSessionSubagentSection(props: {
-  // Parent conversation that owns these subagent tasks.
-  // 当前子代理任务所属的父会话。
-  parentConversationId: string;
-  // Visible active task rows.
-  // 可见的活跃任务行。
+// ConversationSessionActivitySection shows only the subagent and background command counts; each row opens its page
+// of the activity panel, which holds the lists.
+// ConversationSessionActivitySection 只显示子代理与后台命令的数量；每行打开活动面板中对应的页面，列表在该面板中。
+function ConversationSessionActivitySection(props: {
+  // Subagent rows of the parent conversation.
+  // 父会话的子代理行。
   tasks: ConversationSessionSubagentTask[];
-  // Opens one subagent transcript inside the right context panel.
-  // 在右侧上下文面板中打开单个子代理转录。
-  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
+  // Running background commands.
+  // 运行中的后台命令数。
+  backgroundJobCount: number;
+  // Opens one page of the activity panel.
+  // 打开活动面板的一个页面。
+  onOpenActivityPanel: (page: "subagents" | "commands") => void;
 }) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t } = useI18n();
+  const runningTasks = props.tasks.filter((task) => task.isRunning).length;
   return (
-    <section className="vk-stools-sec" data-kind="subagent">
-      <div className="vk-stools-title">
-        <Bot size={13} />
-        <span>{t("conversation.subagent.schedule")}</span>
-        <b>{props.tasks.length}</b>
-        <Button
-          className="vk-stools-title-act"
-          onClick={() => void props.onOpenSubagentPanel(props.parentConversationId, (props.tasks.find((task) => task.isRunning) ?? props.tasks[0]).taskId)}
-          size="xs"
-          type="button"
-          variant="ghost"
-        >
-          {t("sessionTools.openPanel")}
-        </Button>
-      </div>
+    <section className="vk-stools-sec" data-kind="activity">
       <div className="vk-stools-list">
-        {props.tasks.map((task) => (
-          <Tooltip key={task.taskId}>
-            <TooltipTrigger asChild>
-              <button
-                className="vk-stools-item"
-                data-accent={task.isRunning ? conversationSessionSubagentAccent(task.taskId) : undefined}
-                data-row="subagent"
-                onClick={() => void props.onOpenSubagentPanel(props.parentConversationId, task.taskId)}
-                type="button"
-              >
-                <Boxes size={14} />
-                <span>{task.label}</span>
-                <small data-state={task.runState} data-tone={conversationSessionSubagentRunStateTone(task.runState)}>
-                  {conversationSessionSubagentRunStateLabel(task.runState, t)}
-                </small>
-              </button>
-            </TooltipTrigger>
-            <TooltipContent className="vk-stools-tip" side="left" sideOffset={8}>
-              <pre>{conversationSessionSubagentTooltip(task, t)}</pre>
-            </TooltipContent>
-          </Tooltip>
-        ))}
+        {props.tasks.length > 0 ? (
+          <button
+            className="vk-stools-item"
+            data-row="subagents"
+            onClick={() => props.onOpenActivityPanel("subagents")}
+            type="button"
+          >
+            <Bot size={14} />
+            <span>{t("conversation.subagent.schedule")}</span>
+            <small data-tone={runningTasks > 0 ? "ok" : undefined}>
+              {formatMessage(t("sessionActivity.runningOfTotal"), { running: runningTasks, total: props.tasks.length })}
+            </small>
+          </button>
+        ) : null}
+        {props.backgroundJobCount > 0 ? (
+          <button
+            className="vk-stools-item"
+            data-row="commands"
+            onClick={() => props.onOpenActivityPanel("commands")}
+            type="button"
+          >
+            <TerminalSquare size={14} />
+            <span>{t("sessionActivity.backgroundCommands")}</span>
+            <small data-tone="ok">{props.backgroundJobCount}</small>
+          </button>
+        ) : null}
       </div>
     </section>
   );
-}
-
-// conversationSessionSubagentTooltip builds a detailed hover summary for one retained agent row.
-// conversationSessionSubagentTooltip 为单条保留的智能体行构建详细悬浮摘要。
-function conversationSessionSubagentTooltip(
-  // Task row from the backend navigation snapshot.
-  // 后端导航快照中的任务行。
-  task: ConversationSessionSubagentTask,
-  // Translation helper.
-  // 翻译辅助函数。
-  t: (key: TranslationKey) => string,
-): string {
-  return [
-    task.label,
-    `${t("conversation.subagent.detail.status")}: ${conversationSessionSubagentRunStateLabel(task.runState, t)}`,
-    task.agentProfileId ? `${t("conversation.subagent.detail.agent")}: ${task.agentProfileId}` : null,
-  ].filter((line): line is string => Boolean(line)).join("\n");
-}
-
-// SUBAGENT_ACCENT_COUNT is the number of kit chart hues a running subagent row can take.
-// SUBAGENT_ACCENT_COUNT 是运行中子代理行可取的 kit 图表色数量。
-const SUBAGENT_ACCENT_COUNT = 5;
-
-// conversationSessionSubagentAccent maps a task id to one stable chart hue index (1-based) for its running mark.
-// conversationSessionSubagentAccent 将任务标识映射为运行标记使用的稳定图表色序号（从 1 开始）。
-function conversationSessionSubagentAccent(
-  // Stable task id from the backend projection.
-  // 后端投影中的稳定任务标识。
-  taskId: string,
-): string {
-  let hash = 0;
-  for (const char of taskId) {
-    hash = ((hash * 31) + char.charCodeAt(0)) >>> 0;
-  }
-  return String((hash % SUBAGENT_ACCENT_COUNT) + 1);
-}
-
-// conversationSessionSubagentRunStateTone colours a running agent ok and an interrupted one bad.
-// conversationSessionSubagentRunStateTone 将运行中的代理标为成功色，被中断的标为错误色。
-function conversationSessionSubagentRunStateTone(
-  // Backend run-state key.
-  // 后端运行状态键。
-  runState: ConversationSessionSubagentTask["runState"],
-): "ok" | "bad" | undefined {
-  if (runState === "running") return "ok";
-  if (runState === "failed" || runState === "stopped" || runState === "closed") return "bad";
-  return undefined;
-}
-
-// conversationSessionSubagentRunStateLabel maps backend run-state keys onto compact localized labels.
-// conversationSessionSubagentRunStateLabel 将后端运行状态键映射为紧凑本地化标签。
-function conversationSessionSubagentRunStateLabel(
-  // Backend run-state key.
-  // 后端运行状态键。
-  runState: ConversationSessionSubagentTask["runState"],
-  // Translation helper.
-  // 翻译辅助函数。
-  t: (key: TranslationKey) => string,
-): string {
-  switch (runState) {
-    case "running":
-      return t("conversation.subagent.state.running");
-    case "stopped":
-      return t("conversation.subagent.state.stopped");
-    case "failed":
-      return t("conversation.subagent.state.failed");
-    case "closed":
-      return t("conversation.subagent.state.closed");
-    case "completed":
-    default:
-      return t("conversation.subagent.state.completed");
-  }
 }
 
 // ConversationSessionProgressSection renders the model-authored session progress plan.

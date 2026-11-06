@@ -382,6 +382,13 @@ pub enum UiAction {
     /// Shows the session panel on this tab and focuses it (a drawer on narrow terminals).
     /// 在此标签页显示会话面板并聚焦（窄终端上为抽屉）。
     ShowPanel(PanelTab),
+    /// Session activity: pages, clearing, stopping jobs and their logs.
+    /// 会话活动：页面、清理、停止任务及其日志。
+    SessionActivity(super::activity::ActivityAction),
+    /// Restarts to update after the running background commands are counted, asking first when
+    /// some would stop.
+    /// 统计运行中的后台命令后重启以更新；有命令将被停止时先请求确认。
+    RestartToUpdate,
     SidebarMode(SidebarMode),
     /// Expands the sidebar list as a drawer and focuses it (the rail's expand button).
     /// 以抽屉形式展开侧栏列表并聚焦（窄栏的展开按钮）。
@@ -676,6 +683,17 @@ pub fn perform(app: &mut App, action: UiAction) {
         }
         UiAction::PanelOpen(tab, index) => {
             perform(app, UiAction::PanelSelect(tab, index));
+            // A command row opens its log instead of a detail sheet.
+            // 命令行打开其日志而非详情面板。
+            if tab == PanelTab::Agents
+                && app.activity.page == super::activity::ActivityPage::Commands
+            {
+                if let Some(job) = app.activity.job_entries().get(index) {
+                    let job_id = job.job_id.clone();
+                    super::activity::perform(app, super::activity::ActivityAction::OpenLog(job_id));
+                }
+                return;
+            }
             if let Some(sheet) = super::insight::sheet_for(app, tab, index) {
                 app.overlay = Some(Overlay::Detail(Box::new(sheet)));
             }
@@ -693,6 +711,8 @@ pub fn perform(app: &mut App, action: UiAction) {
             app.panel_tab = tab;
             app.focus = Focus::Panel;
         }
+        UiAction::SessionActivity(activity) => super::activity::perform(app, activity),
+        UiAction::RestartToUpdate => super::activity::restart_to_update(app),
         UiAction::SidebarMode(mode) => {
             app.sidebar = mode;
             if mode == SidebarMode::Rail && app.focus == Focus::Sidebar {

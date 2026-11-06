@@ -5,6 +5,7 @@ import type { ToolCallEvent } from "@/service/conversation-event-display-project
 import { AgentCard, agentToolSpec } from "./cards/agent-card";
 import { AskCard } from "./cards/ask-card";
 import { ShellCommandCard, TerminalSessionCard, toolCallIsShellCommand } from "./cards/command-card";
+import { ShellJobCard } from "./cards/shell-job-card";
 import { FileChangeCard, FileInspectCard, FileReadCard, MediaReadCard } from "./cards/file-cards";
 import { DocumentCard, documentToolSpec } from "./cards/document-card";
 import { GenericToolCard } from "./cards/generic-card";
@@ -60,6 +61,7 @@ export function resolvePurposeCard(call: ToolCall): ToolCardDefinition | null {
   }
   if (toolCallIsShellCommand(call)) return { Card: ShellCommandCard, family: "run" };
   if (call.name === "terminal_session" || call.host?.kind === "terminal_session") return { Card: TerminalSessionCard, family: "run" };
+  if (call.name === "shell_job" || call.host?.kind === "shell_job") return { Card: ShellJobCard, family: "run" };
   if (LUA_TOOLS.has(call.name)) return { Card: LuaCard, family: "run" };
   if (call.name === "todolist") return { Card: TodoCard, family: "plan" };
   if (GOAL_TOOLS.has(call.name)) return { Card: GoalCard, family: "plan" };

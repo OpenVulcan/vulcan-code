@@ -165,6 +165,14 @@ fn wheel_overlay(app: &mut App, direction: isize) {
             let max = history_len.saturating_sub(1);
             state.cursor = step(state.cursor.min(max), max);
         }
+        Some(Overlay::ShellJobLog(log)) => {
+            if log.scroll_by(direction * WHEEL_LINES as isize) {
+                action::perform(
+                    app,
+                    UiAction::SessionActivity(crate::app::activity::ActivityAction::LogEarlier),
+                );
+            }
+        }
         Some(Overlay::Commit(_) | Overlay::Confirm(_) | Overlay::Prompt(_)) | None => {}
     }
 }

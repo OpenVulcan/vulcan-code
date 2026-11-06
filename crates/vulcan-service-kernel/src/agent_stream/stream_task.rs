@@ -934,10 +934,18 @@ fn spawn_agent_stream_task_with_restart_state(
                             (
                                 Some(sink),
                                 Some(ProviderV1LifecycleFacts::RequestPrepared(facts)),
-                            ) => sink
-                                .prepare_request(&task_state, facts, candidate)
-                                .await
-                                .map_err(|error| error.to_string()),
+                            ) => {
+                                // Finished background jobs reach the model before this request.
+                                // 已结束的后台任务在本次请求之前告知模型。
+                                if let Err(error) = sink.consume_shell_job_notices() {
+                                    tracing::warn!(
+                                        "[shell-job] completion notices stay pending: {error}"
+                                    );
+                                }
+                                sink.prepare_request(&task_state, facts, candidate)
+                                    .await
+                                    .map_err(|error| error.to_string())
+                            }
                             (Some(_), Some(ProviderV1LifecycleFacts::ExcludedNonSession))
                             | (None, Some(ProviderV1LifecycleFacts::ExcludedNonSession)) => {
                                 candidate.into_excluded_non_session()
