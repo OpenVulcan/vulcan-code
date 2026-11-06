@@ -10,6 +10,7 @@
   "signaledBeforeReady": "Le signal {signal} a arrêté le processus du service avant qu’il soit prêt.",
   "serviceUnavailable": "Le service en arrière-plan n’est pas encore disponible. État actuel : {status}.",
   "readyTimeout": "Le service n’a pas publié son document de découverte en {seconds} secondes : {path}",
+  "ownerUnresponsive": "Un autre processus du service Vulcan Code occupe le répertoire de données, mais n’a pas répondu en {seconds} secondes. Arrêtez tous les processus vulcan-code-service, puis rouvrez l’application.",
   "workbenchLoadFailed": "Impossible de charger l’espace de travail {url} : {error}",
   "closeBrowserTitle": "Fermer le navigateur intégré",
   "closeBrowserMessage": "{count} pages sont ouvertes. Les fermer toutes ?",

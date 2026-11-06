@@ -10,6 +10,7 @@
   "signaledBeforeReady": "La señal {signal} terminó el proceso del servicio antes de que estuviera listo.",
   "serviceUnavailable": "El servicio en segundo plano aún no está disponible. Estado actual: {status}.",
   "readyTimeout": "El servicio no publicó su documento de descubrimiento en {seconds} segundos: {path}",
+  "ownerUnresponsive": "Otro proceso del servicio de Vulcan Code ocupa el directorio de datos, pero no respondió en {seconds} segundos. Finaliza todos los procesos vulcan-code-service y vuelve a abrir la aplicación.",
   "workbenchLoadFailed": "No se puede cargar el área de trabajo {url}: {error}",
   "closeBrowserTitle": "Cerrar el navegador integrado",
   "closeBrowserMessage": "Hay {count} páginas abiertas. ¿Quieres cerrarlas todas?",

@@ -243,6 +243,9 @@ export async function ensureServiceInstance(
   // launched records that this GUI already started its one detached service process.
   // launched 记录本 GUI 已经启动过唯一一个分离服务进程。
   let launched = false;
+  // lostOwnership records that the started Core exited because another process holds the data directory.
+  // lostOwnership 记录已启动的 Core 因另一进程占用数据目录而退出。
+  let lostOwnership = false;
   // launchService starts one detached Core and records its pre-readiness failure.
   // launchService 启动一个分离 Core，并记录其就绪前失败。
   const launchService = (): void => {
@@ -270,6 +273,8 @@ export async function ensureServiceInstance(
         exitDiagnostic = formatDesktopText(text.signaledBeforeReady, { signal: String(signal) });
       } else if (code !== 0) {
         exitDiagnostic = formatDesktopText(text.exitedBeforeReady, { code: String(code) });
+      } else {
+        lostOwnership = true;
       }
     });
   };
@@ -298,6 +303,13 @@ export async function ensureServiceInstance(
       throw new Error(exitDiagnostic);
     }
     if (Date.now() >= deadline) {
+      // An owner that won the lock yet never answered is a stuck process the user has to end.
+      // 抢到锁却始终未应答的所有者是卡住的进程，需要用户结束它。
+      if (lostOwnership && !instance) {
+        throw new Error(formatDesktopText(text.ownerUnresponsive, {
+          seconds: Math.round(READY_TIMEOUT_MS / 1000),
+        }));
+      }
       throw new Error(formatDesktopText(text.readyTimeout, {
         seconds: Math.round(READY_TIMEOUT_MS / 1000),
         path: description.discoveryPath,

@@ -49,6 +49,9 @@ export interface DesktopText {
   // Launcher failure: no ready discovery document in time, `{seconds}` and `{path}`.
   // 启动器失败：未在时限内发布就绪发现文档，`{seconds}` 与 `{path}`。
   readyTimeout: string;
+  // Launcher failure: another process owns the data directory but never answered, `{seconds}`.
+  // 启动器失败：另一个进程占用数据目录却始终未应答，`{seconds}`。
+  ownerUnresponsive: string;
   // Workbench failure: the WebUI could not be loaded, `{url}` and `{error}`.
   // 工作台失败：无法加载 WebUI，`{url}` 与 `{error}`。
   workbenchLoadFailed: string;
@@ -87,7 +90,8 @@ export interface DesktopText {
 const DESKTOP_TEXT_FIELDS: Readonly<Record<keyof DesktopText, true>> = {
   closeWindow: true, checkingInstance: true,
   reusingInstance: true, startingService: true, awaitingReady: true, serviceReady: true, launchFailed: true,
-  exitedBeforeReady: true, signaledBeforeReady: true, serviceUnavailable: true, readyTimeout: true, workbenchLoadFailed: true,
+  exitedBeforeReady: true, signaledBeforeReady: true, serviceUnavailable: true, readyTimeout: true, ownerUnresponsive: true,
+  workbenchLoadFailed: true,
   rendererFailureTitle: true, rendererFailureMessage: true, rendererFailureDetail: true, reloadWorkbench: true,
   closeBrowserTitle: true, closeBrowserMessage: true, closeBrowserDetail: true, cancel: true, closeAll: true,
 };

@@ -10,6 +10,7 @@
   "signaledBeforeReady": "Der Dienstprozess wurde vor der Bereitschaft durch das Signal {signal} beendet.",
   "serviceUnavailable": "Der Hintergrunddienst ist noch nicht verfügbar. Aktueller Status: {status}.",
   "readyTimeout": "Der Dienst hat sein Discovery-Dokument nicht innerhalb von {seconds} Sekunden veröffentlicht: {path}",
+  "ownerUnresponsive": "Ein anderer Vulcan Code-Dienstprozess belegt das Datenverzeichnis, hat aber nicht innerhalb von {seconds} Sekunden geantwortet. Beenden Sie alle vulcan-code-service-Prozesse und öffnen Sie die App erneut.",
   "workbenchLoadFailed": "Die Arbeitsumgebung {url} kann nicht geladen werden: {error}",
   "closeBrowserTitle": "Integrierten Browser schließen",
   "closeBrowserMessage": "{count} Seiten sind geöffnet. Alle schließen?",

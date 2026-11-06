@@ -10,6 +10,7 @@
   "signaledBeforeReady": "Процесс службы был завершён сигналом {signal} до готовности.",
   "serviceUnavailable": "Фоновая служба пока недоступна. Текущее состояние: {status}.",
   "readyTimeout": "Служба не опубликовала документ обнаружения за {seconds} с: {path}",
+  "ownerUnresponsive": "Другой процесс службы Vulcan Code занимает каталог данных, но не ответил за {seconds} с. Завершите все процессы vulcan-code-service и снова откройте приложение.",
   "workbenchLoadFailed": "Не удалось загрузить рабочую среду {url}: {error}",
   "closeBrowserTitle": "Закрыть встроенный браузер",
   "closeBrowserMessage": "Открыто страниц: {count}. Закрыть все?",

@@ -10,6 +10,7 @@
   "signaledBeforeReady": "服務處理程序在就緒前被訊號 {signal} 終止。",
   "serviceUnavailable": "背景服務尚無法使用，目前狀態：{status}。",
   "readyTimeout": "服務未在 {seconds} 秒內發布就緒探索文件：{path}",
+  "ownerUnresponsive": "另一個 Vulcan Code 服務處理程序佔用著資料目錄，但在 {seconds} 秒內沒有回應。請結束所有 vulcan-code-service 處理程序後重新開啟應用程式。",
   "workbenchLoadFailed": "無法載入工作台 {url}：{error}",
   "closeBrowserTitle": "關閉內建瀏覽器",
   "closeBrowserMessage": "目前有 {count} 個開啟中的頁面，要全部關閉嗎？",

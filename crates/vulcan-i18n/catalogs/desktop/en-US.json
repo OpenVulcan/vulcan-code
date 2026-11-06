@@ -10,6 +10,7 @@
   "signaledBeforeReady": "The service process was terminated by signal {signal} before becoming ready.",
   "serviceUnavailable": "The background service is not available yet. Current status: {status}.",
   "readyTimeout": "The service did not publish its ready discovery document within {seconds} seconds: {path}",
+  "ownerUnresponsive": "Another Vulcan Code service process holds the data directory but did not respond within {seconds} seconds. End every vulcan-code-service process, then open the app again.",
   "workbenchLoadFailed": "Unable to load the workbench {url}: {error}",
   "closeBrowserTitle": "Close built-in browser",
   "closeBrowserMessage": "{count} pages are open. Close all of them?",

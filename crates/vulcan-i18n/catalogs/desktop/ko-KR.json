@@ -10,6 +10,7 @@
   "signaledBeforeReady": "서비스 프로세스가 준비되기 전에 신호 {signal}(으)로 종료되었습니다.",
   "serviceUnavailable": "백그라운드 서비스를 아직 사용할 수 없습니다. 현재 상태: {status}.",
   "readyTimeout": "서비스가 {seconds}초 안에 준비 완료 검색 문서를 게시하지 않았습니다: {path}",
+  "ownerUnresponsive": "다른 Vulcan Code 서비스 프로세스가 데이터 디렉터리를 사용 중이지만 {seconds}초 안에 응답하지 않았습니다. 모든 vulcan-code-service 프로세스를 종료한 뒤 앱을 다시 여세요.",
   "workbenchLoadFailed": "워크벤치 {url}을(를) 불러올 수 없습니다: {error}",
   "closeBrowserTitle": "내장 브라우저 닫기",
   "closeBrowserMessage": "{count}개의 페이지가 열려 있습니다. 모두 닫을까요?",

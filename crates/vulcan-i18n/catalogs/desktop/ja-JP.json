@@ -10,6 +10,7 @@
   "signaledBeforeReady": "サービスプロセスが準備完了前にシグナル {signal} で終了しました。",
   "serviceUnavailable": "バックグラウンドサービスはまだ利用できません。現在の状態：{status}。",
   "readyTimeout": "サービスが {seconds} 秒以内に準備完了の検出ドキュメントを公開しませんでした：{path}",
+  "ownerUnresponsive": "別の Vulcan Code サービスプロセスがデータディレクトリを使用していますが、{seconds} 秒以内に応答しませんでした。すべての vulcan-code-service プロセスを終了してから、アプリを再度開いてください。",
   "workbenchLoadFailed": "ワークベンチ {url} を読み込めません：{error}",
   "closeBrowserTitle": "内蔵ブラウザーを閉じる",
   "closeBrowserMessage": "{count} 個のページが開いています。すべて閉じますか？",
