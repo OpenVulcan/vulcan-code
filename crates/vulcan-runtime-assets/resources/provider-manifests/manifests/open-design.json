@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "open-design",
-  "revision": 6,
-  "published_at": "2026-11-07T11:00:51Z",
+  "revision": 7,
+  "published_at": "2026-11-07T11:22:03Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -165,7 +165,7 @@
         ],
         "context_limit": 1000000,
         "output_limit": 128000,
-        "evidence_revision": "open-design.protocol-routes.2026-11-07"
+        "evidence_revision": "open-design.official-efforts.2026-11-07"
       },
       "input_resource_constraints": [
         {
@@ -204,17 +204,13 @@
         "reasoning_control": "effort_selection",
         "reasoning_efforts": [
           "none",
-          "minimal",
           "low",
-          "medium",
           "high",
-          "xhigh",
-          "ultra",
           "max"
         ],
         "context_limit": 1048000,
         "output_limit": 32000,
-        "evidence_revision": "open-design.gateway.2026-10-14"
+        "evidence_revision": "open-design.official-efforts.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.gateway.2026-10-14",
       "protocol_capabilities": {
@@ -243,17 +239,13 @@
         "reasoning_control": "effort_selection",
         "reasoning_efforts": [
           "none",
-          "minimal",
           "low",
-          "medium",
           "high",
-          "xhigh",
-          "ultra",
           "max"
         ],
         "context_limit": 1048000,
         "output_limit": 32000,
-        "evidence_revision": "open-design.gateway.2026-10-14"
+        "evidence_revision": "open-design.official-efforts.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.gateway.2026-10-14",
       "protocol_capabilities": {
@@ -280,17 +272,13 @@
         "reasoning_control": "effort_selection",
         "reasoning_efforts": [
           "none",
-          "minimal",
           "low",
-          "medium",
           "high",
-          "xhigh",
-          "ultra",
           "max"
         ],
         "context_limit": 1048000,
         "output_limit": 128000,
-        "evidence_revision": "open-design.gateway.2026-11-07"
+        "evidence_revision": "open-design.official-efforts.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.gateway.2026-10-14",
       "protocol_capabilities": {
@@ -319,17 +307,13 @@
         "reasoning_control": "effort_selection",
         "reasoning_efforts": [
           "none",
-          "minimal",
           "low",
-          "medium",
           "high",
-          "xhigh",
-          "ultra",
           "max"
         ],
         "context_limit": 1048000,
         "output_limit": 128000,
-        "evidence_revision": "open-design.gateway.2026-11-07"
+        "evidence_revision": "open-design.official-efforts.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.gateway.2026-10-14",
       "protocol_capabilities": {
@@ -356,16 +340,13 @@
         "reasoning_control": "effort_selection",
         "reasoning_efforts": [
           "none",
-          "minimal",
           "low",
-          "medium",
           "high",
-          "xhigh",
           "max"
         ],
         "context_limit": 1048000,
         "output_limit": 128000,
-        "evidence_revision": "open-design.gateway.2026-11-07"
+        "evidence_revision": "open-design.official-efforts.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.gateway.2026-11-07",
       "protocol_capabilities": {
@@ -393,16 +374,13 @@
         "reasoning": "native",
         "reasoning_control": "effort_selection",
         "reasoning_efforts": [
-          "minimal",
           "low",
-          "medium",
           "high",
-          "xhigh",
           "max"
         ],
         "context_limit": 1048000,
         "output_limit": 32000,
-        "evidence_revision": "open-design.gateway.2026-10-14"
+        "evidence_revision": "open-design.official-efforts.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.gateway.2026-10-14",
       "protocol_capabilities": {
@@ -437,7 +415,7 @@
         ],
         "context_limit": 1000000,
         "output_limit": 32000,
-        "evidence_revision": "open-design.gateway.2026-10-14"
+        "evidence_revision": "open-design.official-efforts.2026-11-07"
       },
       "input_resource_constraints": [
         {
@@ -478,11 +456,13 @@
           "none",
           "low",
           "medium",
-          "high"
+          "high",
+          "xhigh",
+          "max"
         ],
         "context_limit": 1050000,
         "output_limit": 128000,
-        "evidence_revision": "open-design.protocol-routes.2026-11-07"
+        "evidence_revision": "open-design.official-efforts.2026-11-07"
       },
       "input_resource_constraints": [
         {
@@ -516,19 +496,14 @@
       "capabilities": {
         "input_resources": [],
         "reasoning": "native",
-        "reasoning_control": "effort_selection",
+        "reasoning_control": "toggle",
         "reasoning_efforts": [
           "none",
-          "minimal",
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
+          "high"
         ],
         "context_limit": 1048000,
         "output_limit": 32000,
-        "evidence_revision": "open-design.gateway.2026-11-07"
+        "evidence_revision": "open-design.official-efforts.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.gateway.2026-11-07"
     },
@@ -548,17 +523,11 @@
           "image"
         ],
         "reasoning": "native",
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "minimal",
-          "low",
-          "medium",
-          "high",
-          "xhigh"
-        ],
+        "reasoning_control": "fixed_on",
+        "reasoning_efforts": [],
         "context_limit": 262000,
         "output_limit": 32000,
-        "evidence_revision": "open-design.gateway.2026-10-14"
+        "evidence_revision": "open-design.official-efforts.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.gateway.2026-10-14",
       "protocol_capabilities": {
@@ -566,7 +535,8 @@
           "structured_output": "json_schema",
           "evidence_revision": "open-design.chat-json-schema.2026-11-07"
         }
-      }
+      },
+      "request_profile_refs": []
     },
     {
       "rule_id": "mimo-v2.6-flash",
@@ -585,19 +555,14 @@
           "audio"
         ],
         "reasoning": "native",
-        "reasoning_control": "effort_selection",
+        "reasoning_control": "toggle",
         "reasoning_efforts": [
           "none",
-          "minimal",
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
+          "high"
         ],
         "context_limit": 1048000,
         "output_limit": 32000,
-        "evidence_revision": "open-design.gateway.2026-10-14"
+        "evidence_revision": "open-design.official-efforts.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.gateway.2026-10-14",
       "protocol_capabilities": {
@@ -624,19 +589,14 @@
           "audio"
         ],
         "reasoning": "native",
-        "reasoning_control": "effort_selection",
+        "reasoning_control": "toggle",
         "reasoning_efforts": [
           "none",
-          "minimal",
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
+          "high"
         ],
         "context_limit": 1048000,
         "output_limit": 32000,
-        "evidence_revision": "open-design.gateway.2026-10-14"
+        "evidence_revision": "open-design.official-efforts.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.gateway.2026-10-14",
       "protocol_capabilities": {
@@ -666,11 +626,13 @@
         "reasoning_efforts": [
           "low",
           "medium",
-          "high"
+          "high",
+          "xhigh",
+          "max"
         ],
         "context_limit": 1000000,
         "output_limit": 32000,
-        "evidence_revision": "open-design.gateway.2026-11-07"
+        "evidence_revision": "open-design.official-efforts.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.gateway.2026-11-07"
     },
@@ -1660,6 +1622,10 @@
       {
         "url": "https://amr-link.open-design.ai/v1/images/generations",
         "note": "2026-11-07 Go-key probes: the route recognises every image model id (request kind image_generations) and answers 403 tier_request_kind_not_entitled before field validation; /v1/images/edits returns 404. The plain /v1/models catalog lists image models only for entitled plans."
+      },
+      {
+        "url": "builtin:open-design.official-efforts.2026-11-07",
+        "note": "Reasoning levels follow each vendor's published levels by user decision instead of every label the gateway accepts: DeepSeek none/low/high/max (official DeepSeek manifest); Z.ai GLM-5.3 low/high/max with thinking always on (docs.z.ai); Xiaomi MiMo V2.6 thinking on or off only (mimo.mi.com deep thinking guide); Tencent Hy4 high or no_think only (tencent/Hy4-preview chat template); Moonshot Kimi K2.7 Code always thinking without effort control; MiniMax M3.1 Flash, GPT-6 Luna and Claude Haiku 5.5 low/medium/high/xhigh/max (official manifests), with none kept where thinking can be disabled."
       }
     ],
     "verified_at": "2026-11-07T00:00:00Z"

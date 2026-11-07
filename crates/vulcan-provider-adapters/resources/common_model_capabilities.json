@@ -536,12 +536,8 @@
       "reasoning_control": "effort_selection",
       "reasoning_efforts": [
         "none",
-        "minimal",
         "low",
-        "medium",
         "high",
-        "xhigh",
-        "ultra",
         "max"
       ]
     },
@@ -620,11 +616,8 @@
       "reasoning_control": "effort_selection",
       "reasoning_efforts": [
         "none",
-        "minimal",
         "low",
-        "medium",
         "high",
-        "xhigh",
         "max"
       ]
     },

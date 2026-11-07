@@ -72,21 +72,34 @@ Go 不含图片生成权益；本接入只提供文本输出的会话模型，�
 | 模型 ID | 额外输入 | 上下文上限 | 输出上限 | 思考档位 |
 | --- | --- | ---: | ---: | --- |
 | `claude-haiku-5.5`（Messages） | 图片、PDF | 1000000 | 128000 | none / low / medium / high / xhigh / max |
-| `gpt-6-luna`（Responses） | 图片、PDF | 1050000 | 128000 | none / low / medium / high |
-| `deepseek-v4.1-flash` | 图片 | 1048000 | 128000 | none / minimal / low / medium / high / xhigh / ultra / max |
-| `deepseek-v4.1-flash-eco` | 无 | 1048000 | 128000 | none / minimal / low / medium / high / xhigh / max |
-| `hy4-preview` | 无 | 1048000 | 32000 | none / minimal / low / medium / high / xhigh / max |
-| `minimax-m3.1-flash` | 图片 | 1000000 | 32000 | low / medium / high |
+| `gpt-6-luna`（Responses） | 图片、PDF | 1050000 | 128000 | none / low / medium / high / xhigh / max |
+| `deepseek-v4.1-flash` | 图片 | 1048000 | 128000 | none / low / high / max |
+| `deepseek-v4.1-flash-eco` | 无 | 1048000 | 128000 | none / low / high / max |
+| `hy4-preview` | 无 | 1048000 | 32000 | none / high（开关） |
+| `minimax-m3.1-flash` | 图片 | 1000000 | 32000 | low / medium / high / xhigh / max |
 | `glm-5.3-flashx` | 图片、PDF | 1000000 | 32000 | low / high / max |
-| `mimo-v2.6-flash` | 图片、音频 | 1048000 | 32000 | none / minimal / low / medium / high / xhigh / max |
-| `mimo-v2.6-pro` | 图片、音频 | 1048000 | 32000 | none / minimal / low / medium / high / xhigh / max |
-| `deepseek-v4-flash` | 无 | 1048000 | 32000 | none / minimal / low / medium / high / xhigh / ultra / max |
-| `deepseek-v4-flash-vision-exp` | 图片 | 1048000 | 32000 | none / minimal / low / medium / high / xhigh / ultra / max |
-| `deepseek-v4-pro` | 无 | 1048000 | 128000 | none / minimal / low / medium / high / xhigh / ultra / max |
-| `glm-5.3-flash` | 图片 | 1048000 | 32000 | minimal / low / medium / high / xhigh / max |
-| `kimi-k2.7-code` | 图片 | 262000 | 32000 | minimal / low / medium / high / xhigh |
+| `mimo-v2.6-flash` | 图片、音频 | 1048000 | 32000 | none / high（开关） |
+| `mimo-v2.6-pro` | 图片、音频 | 1048000 | 32000 | none / high（开关） |
+| `deepseek-v4-flash` | 无 | 1048000 | 32000 | none / low / high / max |
+| `deepseek-v4-flash-vision-exp` | 图片 | 1048000 | 32000 | none / low / high / max |
+| `deepseek-v4-pro` | 无 | 1048000 | 128000 | none / low / high / max |
+| `glm-5.3-flash` | 图片 | 1048000 | 32000 | low / high / max |
+| `kimi-k2.7-code` | 图片 | 262000 | 32000 | 始终思考，无档位 |
 
 ### 思考取证边界
+
+- **档位以原厂公布为准（revision 7，用户决定）。** 网关会接受大量兼容标签，但多出的标签并不对应
+  原厂的独立档位，因此只声明原厂公布的档位，不再按网关是否接受来声明：
+  - DeepSeek（含 Eco 与 Vision Exp）：none / low / high / max，同仓库 DeepSeek 官方清单。
+  - GLM-5.3 Flash 与 FlashX：low / high / max，始终思考（docs.z.ai）。
+  - MiMo V2.6：只能开关深度思考（mimo.mi.com 深度思考指南），声明为 none / high 开关。
+  - Hy4 Preview：官方聊天模板只接受 `high` 与 `no_think`，声明为 none / high 开关。
+  - Kimi K2.7 Code：始终思考、无档位控制，不发送 `reasoning_effort`。
+  - MiniMax M3.1 Flash、GPT-6 Luna、Claude Haiku 5.5：low / medium / high / xhigh / max，
+    同仓库官方清单；可关闭思考的模型保留 `none`。
+  - 与网关实测不一致之处如实保留在下文：GPT-6 Luna 的 xhigh、max 在 Responses 上回报为 medium；
+    MiniMax 的 xhigh、max 在简单问题上未返回思考。用户选择这些档位时由网关自行处理。
+  - 已保存的会话若选择了被移除的档位，宿主在请求时按既有规则回落（优先 medium，否则首个非 none 档位）。
 
 - Claude、DeepSeek、GLM 和 Kimi 的无效档位请求返回 400，并明确列出接受值；
   这是网关线路的档位证据，不等同于原厂全部档位语义。
@@ -97,13 +110,13 @@ Go 不含图片生成权益；本接入只提供文本输出的会话模型，�
   DeepSeek V4.1 Flash Eco 与 Hy4 Preview 拒绝 `ultra`，其余七档成功，`none` 无思考；
   Eco 只返回 `reasoning.summary`。MiniMax M3.1 Flash 拒绝 `none` 与 `ultra`，
   `minimal`、`xhigh`、`max` 及不传档位均无思考，只有 `low`、`medium`、`high` 返回思考，
-  因此只声明这三档。各档位之间的强度差异尚未验证。
+  当时只声明这三档；revision 7 起改按原厂公布档位声明。
 - Kimi 在 `none` 下仍返回 `reasoning.text` 与非零思考 Token，因此从可选档位中排除 `none`。
 - GLM-5.3 Flash 的图片请求在 `none` 下仍返回 `reasoning.summary` 与非零思考 Token，
   同样排除 `none`，避免承诺无法跨输入类型保证的关闭行为。
 - GPT-6 Luna 在 2026-10-14 的 Chat 线路上 `none` 仍可能返回加密思考，当时声明为供应商管理。
   2026-11-07 改走 Responses：`reasoning.effort` 为 none、low、medium、high 时原样回报，
-  `none` 无思考、`high` 有思考；minimal、xhigh、max 与无效值都回报为 medium，因此只声明这四档。
+  `none` 无思考、`high` 有思考；minimal、xhigh、max 与无效值都回报为 medium（revision 7 起按原厂档位声明）。
 - Claude Haiku 5.5 走 Messages，沿用 adaptive 思考加 `output_config.effort` 的形状，`none` 映射为
   `thinking.type = disabled`。high、xhigh、max 返回思考块，low 与 medium 在简单问题上未返回思考块；
   未知档位返回 400。固定预算的 `thinking.type = enabled` 未返回思考块，不使用。
