@@ -132,6 +132,10 @@ fn open_design_projects_reasoning_without_affecting_other_models() {
     }
 }
 
+/// One routing case: model, requested effort, expected route profile and a check of the encoded body.
+/// 一个线路用例：模型、请求的思考档位、期望线路配置以及对已编码请求体的检查。
+type RouteCase = (&'static str, ReasoningEffort, &'static str, fn(&Value));
+
 /// Checks that GPT uses Responses and Claude uses Messages with their own effort shapes; returns unit on success.
 /// 检查 GPT 走 Responses、Claude 走 Messages 且各自使用自身思考形状；验证成功返回单元值。
 #[test]
@@ -140,7 +144,7 @@ fn open_design_routes_gpt_to_responses_and_claude_to_messages() {
     let client = client();
     // Each case names the expected route and a check of the encoded effort projection.
     // 每个用例给出期望线路以及对已编码思考投影的检查。
-    let cases: [(&str, ReasoningEffort, &str, fn(&Value)); 3] = [
+    let cases: [RouteCase; 3] = [
         (
             "gpt-6-luna",
             ReasoningEffort::High,
