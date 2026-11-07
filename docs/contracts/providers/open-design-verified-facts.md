@@ -94,6 +94,8 @@ Go 不含图片生成权益；本接入只提供文本输出的会话模型，�
   - GLM-5.3 Flash 与 FlashX：low / high / max，始终思考（docs.z.ai）。
   - MiMo V2.6：只能开关深度思考（mimo.mi.com 深度思考指南），声明为 none / high 开关。
   - Hy4 Preview：官方聊天模板只接受 `high` 与 `no_think`，声明为 none / high 开关。
+  - 2026-11-07 复测开关：两个 MiMo（文本、图片、带工具）与 Hy4（文本、带工具）在 `none` 下，
+    流式与非流式均无思考内容、无思考 Token；`high` 下均返回思考。
   - Kimi K2.7 Code：始终思考、无档位控制，不发送 `reasoning_effort`。
   - MiniMax M3.1 Flash、GPT-6 Luna、Claude Haiku 5.5：low / medium / high / xhigh / max，
     同仓库官方清单；可关闭思考的模型保留 `none`。
