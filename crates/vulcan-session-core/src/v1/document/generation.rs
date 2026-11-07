@@ -5,7 +5,9 @@ use crate::v1::collaboration::{
     CollaborationMetadata, CollaborationOperationId, CollaborationRunControl, SetRunControlInput,
 };
 use crate::v1::compaction_frontier::select_node_for_seq;
-use crate::v1::config::{ForkOrigin, GoalConfig, InputState, MetadataDocument, PlanModeConfig};
+use crate::v1::config::{
+    ForkOrigin, GoalConfig, InputState, MetadataDocument, PlanModeConfig, SegmentInfo,
+};
 use crate::v1::context::{CompactionNode, RuntimeInitializationState, RuntimeLock};
 use crate::v1::dynamic_context::{
     DYNAMIC_CONTEXT_DEVELOPER_KEY, DYNAMIC_CONTEXT_PERSISTENT_KEY, DYNAMIC_CONTEXT_RUNTIME_KEY,
@@ -17,7 +19,7 @@ use crate::v1::event::{
     SystemContextScope, SystemRoleHint, UserInputSource,
 };
 use crate::v1::ids::{ClientActionId, JS_SAFE_INTEGER_MAX, ResourceId, Seq};
-use crate::v1::projection::derive_active_system_state;
+use crate::v1::projection::{derive_active_system_state, provider_fingerprint_mismatches};
 
 use super::{
     ANSWER_MODE_CONTEXT_KEY, SHELL_JOB_CONTINUATION_CONTEXT_KEY, SessionDocument,
@@ -203,7 +205,22 @@ impl SessionDocument {
         // with the replacement root. Physical dispatch must only consume the admitted active config.
         // 将当前选择器意图带入代次收尾，与替换根输入原子激活。物理分发只消费已准入的活动配置。
         metadata.config.pending_request = self.metadata.config.pending_request.clone();
-        self.finish_generation_build(metadata, retained, input.target_seq, effective_now_ms)
+        // An edit keeps every segment start at or before the target, so retained checkpoints written from a
+        // later segment window still verify against the same windows after publication.
+        // 编辑保留目标及之前的全部分段起点，因此从更晚分段窗口写入的保留检查点在发布后仍按相同窗口校验。
+        let segment_catalog = self
+            .segment_catalog
+            .iter()
+            .filter(|entry| entry.start_seq <= input.target_seq)
+            .cloned()
+            .collect();
+        self.finish_generation_build(
+            metadata,
+            segment_catalog,
+            retained,
+            input.target_seq,
+            effective_now_ms,
+        )
     }
 
     /// Builds one fully validated child generation without mutating the parent document.
@@ -242,6 +259,11 @@ impl SessionDocument {
             input.source_turn_end_seq,
             input.now_ms,
         )?;
+        // The child stores its history as one segment from seq 1, so a copied checkpoint written from a later
+        // source segment window can never verify there; it is dropped exactly as the child's loader would.
+        // 子会话把历史存为从 seq 1 开始的单个分段，从更晚源分段窗口写入的复制检查点在那里永远无法校验；
+        // 按子会话加载器同样的方式移除。
+        drop_unverifiable_provider_sources(&mut retained)?;
         let fork_origin = ForkOrigin {
             source_session_id: self.metadata.session_id.clone(),
             source_segment_generation: self.metadata.segment_generation,
@@ -257,7 +279,13 @@ impl SessionDocument {
             None,
             input.now_ms,
         )?;
-        self.finish_generation_build(metadata, retained, input.source_turn_end_seq, input.now_ms)
+        self.finish_generation_build(
+            metadata,
+            Vec::new(),
+            retained,
+            input.source_turn_end_seq,
+            input.now_ms,
+        )
     }
 
     /// Validates source durability, residency, and API quiescence before any generation work.
@@ -420,9 +448,14 @@ impl SessionDocument {
 
     /// Completes mode reset, compaction selection, allocator rebuild, and strict self-validation.
     /// 完成模式重置、压缩选择、分配器重建与严格自校验。
+    ///
+    /// `segment_catalog` lists the segment starts the published generation keeps, which checkpoint
+    /// verification needs; it is empty when the output is stored as one segment from seq 1.
+    /// `segment_catalog` 列出发布后代次保留的分段起点，检查点校验需要它；输出存为从 seq 1 开始的单个分段时为空。
     fn finish_generation_build(
         &self,
         mut metadata: MetadataDocument,
+        segment_catalog: Vec<SegmentInfo>,
         retained: Vec<ConversationEvent>,
         target_seq: Seq,
         now_ms: i64,
@@ -456,7 +489,7 @@ impl SessionDocument {
             metadata.clone(),
             runtime_lock,
             kept_compactions,
-            Vec::new(),
+            segment_catalog,
             retained,
         )?;
         if !active_mode_keys.is_empty() {
@@ -567,7 +600,7 @@ impl SessionDocument {
             document.metadata.clone(),
             document.runtime_lock.clone(),
             document.compactions.clone(),
-            Vec::new(),
+            document.segment_catalog.clone(),
             document.events.to_vec(),
         )?;
         Ok(GenerationBuildOutput {
@@ -577,6 +610,43 @@ impl SessionDocument {
             events: validated.events.into_vec(),
             history_target_seq: target_seq,
         })
+    }
+}
+
+/// Removes every checkpoint whose digest does not verify against `events` read from its first event.
+/// 移除摘要无法从 `events` 首个事件起校验通过的每个检查点。
+fn drop_unverifiable_provider_sources(events: &mut [ConversationEvent]) -> Result<(), DomainError> {
+    let mismatched: Vec<bool> = {
+        let hosted: Vec<&crate::v1::event::ProviderSource> =
+            events.iter().filter_map(hosted_provider_source).collect();
+        provider_fingerprint_mismatches(events, &[], &hosted)?
+            .into_iter()
+            .map(|mismatch| mismatch.is_some())
+            .collect()
+    };
+    let mut mismatched = mismatched.into_iter();
+    for event in events.iter_mut() {
+        let source = match &mut event.event {
+            EventBody::AssistantReasoning(reasoning) => &mut reasoning.provider_source,
+            EventBody::AssistantText(text) => &mut text.provider_source,
+            EventBody::ToolCall(tool) => &mut tool.provider_source,
+            _ => continue,
+        };
+        if source.is_some() && mismatched.next().unwrap_or(false) {
+            *source = None;
+        }
+    }
+    Ok(())
+}
+
+/// Returns the replay checkpoint one event hosts, if any.
+/// 返回一个事件承载的重放检查点(如有)。
+fn hosted_provider_source(event: &ConversationEvent) -> Option<&crate::v1::event::ProviderSource> {
+    match &event.event {
+        EventBody::AssistantReasoning(reasoning) => reasoning.provider_source.as_ref(),
+        EventBody::AssistantText(text) => text.provider_source.as_ref(),
+        EventBody::ToolCall(tool) => tool.provider_source.as_ref(),
+        _ => None,
     }
 }
 
@@ -1315,6 +1385,122 @@ mod tests {
             })
             .expect("edited generation must persist Turn duration");
         assert_eq!(duration_ms, 5);
+    }
+
+    /// A checkpoint written from a later segment window survives an edit and is dropped by a fork.
+    /// 从更晚分段窗口写入的检查点在编辑后保留，在分叉时被移除。
+    #[test]
+    fn generations_verify_checkpoints_from_their_segment_start() {
+        let mut source = SessionDocument::new("source-session", "project", "source", T0);
+        source
+            .submit_root_input(
+                ClientInputSubmission::new(
+                    ClientActionId::try_new("root-1").unwrap(),
+                    "first",
+                    Vec::new(),
+                ),
+                T0 + 1,
+            )
+            .unwrap();
+        let rollover = source.events().last().unwrap().seq.value() + 1;
+        let segment = |segment_number: u64, start: u64| SegmentInfo {
+            segment_number,
+            file_name: format!("s{segment_number:07}.jsonl"),
+            start_seq: Seq::try_new(start).unwrap(),
+            end_seq: None,
+            event_count: 0,
+            byte_len: 0,
+            next_event_local_id: 1,
+        };
+        source.segment_catalog = vec![segment(1, 1), segment(2, rollover)];
+        let turn_id = source.active_turn().unwrap().turn_id;
+        let request = ApiRequestSnapshot::new("openai", "gpt-5");
+        let api_call_id = source
+            .start_api(ApiPurposeKind::MainGeneration, request.clone(), T0 + 2)
+            .unwrap();
+        source
+            .append_assistant_text(
+                api_call_id,
+                "answer",
+                AssistantSemanticStatus::Completed,
+                T0 + 3,
+            )
+            .unwrap();
+        source
+            .complete_api_group(
+                api_call_id,
+                ApiCompletion {
+                    request,
+                    usage: UsageSnapshot::default(),
+                    status: ApiCallStatus::Completed,
+                    end_reason: Some(ApiEndReason::CompletedSuccessfully),
+                    error: None,
+                    continuation_eligibility: ContinuationEligibility::Forbidden,
+                    timing: ApiTimings::default(),
+                    provider_source: Some(crate::v1::event::ProviderSourceInput {
+                        provider: "openai".to_string(),
+                        profile: None,
+                        model: "gpt-5".to_string(),
+                        connection_id: None,
+                        message_id: Some("m1".to_string()),
+                        response_id: None,
+                        replay: None,
+                    }),
+                    completed_at_ms: T0 + 4,
+                },
+            )
+            .unwrap();
+        source
+            .complete_turn_and_select_successor(turn_id, T0 + 5)
+            .unwrap();
+        let first_turn_end = source.events().last().unwrap().seq;
+        source
+            .submit_root_input(
+                ClientInputSubmission::new(
+                    ClientActionId::try_new("root-2").unwrap(),
+                    "second",
+                    Vec::new(),
+                ),
+                T0 + 6,
+            )
+            .unwrap();
+        let second_root = source.events().last().unwrap().seq;
+        source
+            .close_turn(crate::v1::event::TurnOutcome::Completed, 1, T0 + 7)
+            .unwrap();
+        make_durable(&mut source);
+        let source_of = |events: &[ConversationEvent]| {
+            events
+                .iter()
+                .find_map(hosted_provider_source)
+                .map(|source| (source.covered_until_seq, source.fingerprint_sha256.clone()))
+        };
+        let (coverage, digest) = source_of(source.events()).expect("checkpoint written");
+        // The digest is only reproducible from the later segment start.
+        // 摘要只能从较晚的分段起点复现。
+        assert_ne!(
+            digest,
+            crate::v1::projection::provider_visible_fingerprint(source.events(), coverage).unwrap()
+        );
+
+        let edited = source
+            .build_edited_generation(EditGenerationInput {
+                target_seq: second_root,
+                replacement: RootInputReplacement::new("replacement", Vec::new()),
+                now_ms: T0 + 10,
+            })
+            .expect("edit keeps the segment start its checkpoint was written from");
+        assert_eq!(source_of(&edited.events), Some((coverage, digest)));
+
+        let forked = source
+            .build_fork_generation(ForkGenerationInput {
+                child_session_id: "child-session".to_string(),
+                title: "child".to_string(),
+                source_turn_end_seq: first_turn_end,
+                now_ms: T0 + 10,
+            })
+            .expect("fork drops a checkpoint its single segment cannot verify");
+        assert_eq!(source_of(&forked.events), None);
     }
 
     /// Edit generation rejects unsettled collaboration without mutating the source document.
