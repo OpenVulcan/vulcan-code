@@ -72,7 +72,7 @@ pub const UNATTENDED_REVIEWED_REPEATS: u32 = 2;
 /// `declare_intent`, and only after it may that tool be called.
 /// 无人值守拒绝后、说明理由仍可能改变结论时的指引：调用未说明理由、复核器已读过且复核器可以放行。
 /// 只有这段文字邀请使用 `declare_intent`，也只有在它之后才可调用该工具。
-const UNATTENDED_RETRY_GUIDANCE: &str = "No user is watching this unattended session. If the call is necessary and safe, you may retry it once with your reason: pass `purpose` on `shell_command` or `terminal_session`, or call `declare_intent` right before retrying any other tool. Otherwise take another approach, or skip this step and continue with the rest of the task.";
+const UNATTENDED_RETRY_GUIDANCE: &str = "No user is watching this unattended session. If the call is necessary and safe, you may retry it once with your reason: state it in the `title` of `shell_command` or the `purpose` of `terminal_session`, or call `declare_intent` right before retrying any other tool. Otherwise take another approach, or skip this step and continue with the rest of the task.";
 
 /// Guidance after an unattended denial that no stated reason can change: the reviewer already read
 /// one, could not review, or may not clear the call.
@@ -1047,26 +1047,34 @@ impl PermissionMemory {
     }
 }
 
-/// Identity of one call for repeat counting: the tool and every argument except the reasons the
-/// agent attached, so a retry that only adds a `purpose` counts as the same call, while new file
-/// content or another working directory is a new call.
-/// 用于重复计数的调用身份：工具及除代理附加理由外的全部参数，因此只补充 `purpose` 的重试视为同一
-/// 调用，而新的文件内容或另一个工作目录则是新调用。
+/// Identity of one call for repeat counting: the tool and every argument except the reason the
+/// agent attached, so a retry that only rewords its `title` or `purpose` counts as the same call,
+/// while new file content or another working directory is a new call.
+/// 用于重复计数的调用身份：工具及除代理附加理由外的全部参数，因此只改写 `title` 或 `purpose` 的
+/// 重试视为同一调用，而新的文件内容或另一个工作目录则是新调用。
 fn call_fingerprint(tool_name: &str, args: &Value) -> String {
     let mut args = args.clone();
-    if let Some(object) = args.as_object_mut() {
-        object.remove("purpose");
+    if let (Some(object), Some(field)) = (args.as_object_mut(), command_reason_field(tool_name)) {
+        object.remove(field);
     }
     format!("{tool_name}\n{args}")
 }
 
-/// Non-blank `purpose` of a command tool call, cut to the reviewer's limit.
-/// 命令工具调用中非空白的 `purpose`，截断到复核器上限。
-fn command_purpose(tool_id: &str, args: &Value) -> Option<String> {
-    if !matches!(tool_id, SHELL_COMMAND_TOOL_ID | TERMINAL_SESSION_TOOL_ID) {
-        return None;
+/// Argument that carries the agent's reason on a command tool: the `title` of `shell_command` and
+/// the optional `purpose` of `terminal_session`.
+/// 命令工具中承载代理理由的参数：`shell_command` 的 `title` 与 `terminal_session` 的可选 `purpose`。
+fn command_reason_field(tool_id: &str) -> Option<&'static str> {
+    match tool_id {
+        SHELL_COMMAND_TOOL_ID => Some("title"),
+        TERMINAL_SESSION_TOOL_ID => Some("purpose"),
+        _ => None,
     }
-    let purpose = args.get("purpose")?.as_str()?.trim();
+}
+
+/// Non-blank reason of a command tool call, cut to the reviewer's limit.
+/// 命令工具调用中非空白的理由，截断到复核器上限。
+fn command_purpose(tool_id: &str, args: &Value) -> Option<String> {
+    let purpose = args.get(command_reason_field(tool_id)?)?.as_str()?.trim();
     (!purpose.is_empty()).then(|| purpose.chars().take(MAX_PERMISSION_REASON_CHARS).collect())
 }
 

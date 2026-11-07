@@ -60,6 +60,7 @@ const SUBAGENT_ACTIVITY_TURN_WINDOW: usize = 1;
 /// Tool arguments, in order of preference, that summarize a tool call.
 /// 按优先顺序排列、用于概括一次工具调用的工具参数。
 const SUBAGENT_ACTIVITY_SUMMARY_ARGUMENTS: &[&str] = &[
+    "title",
     "purpose",
     "description",
     "command",

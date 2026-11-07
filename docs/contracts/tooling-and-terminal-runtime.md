@@ -18,9 +18,11 @@ WebUI 展示时阅读。普通业务任务不需要加载这些细节。
 - 不要在工具 description 中把 `shell_command` 的返回称为 summary；它返回按到达顺序合并的输出末尾与
   退出状态，较早的行通过 `shell_job` 读取（见第二节）。
 - 不得在启动时静默改写用户持久化的工具策略。系统默认优先保留为运行时内存默认值。
-- `shell_command` 的必填 `purpose`、`terminal_session` 的可选 `purpose` 以及原生工具 `declare_intent` 不影响执行；
+- `shell_command` 的必填 `title`、`terminal_session` 的可选 `purpose` 以及原生工具 `declare_intent` 不影响执行；
   它们在权限复核中作为代理理由，语义见 [`permission-modes-and-judge.md`](permission-modes-and-judge.md) 的“代理理由”。
-  `shell_command` 的 `purpose` 另外显示在命令卡与会话活动面板上，并随后台任务保存，供 AI 用 `shell_job list` 辨认任务。
+  `shell_command` 的 `title` 是命令的简短标题（上限只在 `MAX_SHELL_COMMAND_TITLE_CHARS` 定义），另外显示在命令卡与
+  会话活动面板上，并作为任务用途随后台任务保存，供 AI 用 `shell_job list` 辨认任务。宿主结果与任务记录中的字段名
+  仍为 `purpose`，只有面向 AI 的参数名是 `title`。
 
 ## 二、`shell_command`
 

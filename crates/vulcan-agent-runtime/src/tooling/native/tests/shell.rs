@@ -168,7 +168,7 @@ fn shell_tool_schema_descriptions_are_present_and_english() {
     ];
     collect_descriptions(&command_schema, "shell_command", &mut descriptions);
     collect_descriptions(&session_schema, "terminal_session", &mut descriptions);
-    for property in ["timeout_ms", "cwd", "stdin", "purpose", "background"] {
+    for property in ["timeout_ms", "cwd", "stdin", "title", "background"] {
         assert!(
             command_schema["properties"][property]["description"].is_string(),
             "shell_command property {property} must carry a description"
@@ -186,7 +186,7 @@ fn shell_tool_schema_descriptions_are_present_and_english() {
         command_schema["required"]
             .as_array()
             .unwrap_or(&Vec::new())
-            .contains(&json!("purpose"))
+            .contains(&json!("title"))
     );
     assert!(
         session_schema["properties"]["action"]["enum"]
@@ -304,7 +304,7 @@ async fn shell_command_tool_executes_simple_command() {
             invocation_context: None,
             arguments: json!({
                 "command": "echo hello",
-                "purpose": "Print a greeting"
+                "title": "Print a greeting"
             }),
             session_id: None,
             native_browser_runtime: None,
@@ -353,11 +353,11 @@ async fn shell_command_tool_returns_a_bounded_tail_and_keeps_raw_streams() {
     let arguments = if cfg!(windows) {
         json!({
             "command": "1..20000 | ForEach-Object { '0123456789abcdefghij' }",
-            "purpose": "Print many lines",
+            "title": "Print many lines",
             "shell": "powershell"
         })
     } else {
-        json!({ "command": "yes 0123456789abcdefghij | head -n 20000", "purpose": "Print many lines" })
+        json!({ "command": "yes 0123456789abcdefghij | head -n 20000", "title": "Print many lines" })
     };
     let result = tool
         .invoke(NativeToolExecutionRequest {

@@ -1675,7 +1675,7 @@ async fn declare_intent_needs_a_denial_that_invites_it() {
     // 未说明理由的无人值守拒绝邀请同一用户请求下的一次声明，该意图只随下一次调用交给复核器。
     let host = unattended(PermissionMode::AutoApprove, denying());
     let build = |purpose: Option<&str>| match purpose {
-        Some(purpose) => json!({"command": "cargo build", "purpose": purpose}),
+        Some(purpose) => json!({"command": "cargo build", "title": purpose}),
         None => json!({"command": "cargo build"}),
     };
     let ToolPermissionVerdict::Deny(first) = admit_call(
@@ -1767,7 +1767,7 @@ async fn unattended_mode_stops_reviewing_a_call_denied_twice_in_a_row() {
         })),
     );
     let push = |purpose: Option<&str>| match purpose {
-        Some(purpose) => json!({"command": "git push", "purpose": purpose}),
+        Some(purpose) => json!({"command": "git push", "title": purpose}),
         None => json!({"command": "git push"}),
     };
     let reviews = || host.reviewed.lock().unwrap().len();

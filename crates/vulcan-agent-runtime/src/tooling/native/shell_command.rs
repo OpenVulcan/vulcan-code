@@ -79,9 +79,9 @@ pub(crate) struct ShellCommandToolArgs {
     /// Optional shell family selector such as `auto`, `powershell`, `cmd`, or `bash`.
     /// 可选 shell 类型选择器，例如 `auto`、`powershell`、`cmd` 或 `bash`。
     shell: Option<String>,
-    /// What the command is for; shown on the card, read by the permission gate and listed with jobs.
-    /// 命令用途；显示在卡片上，由权限闸门读取，并随任务列出。
-    purpose: String,
+    /// Short title of the command; shown on the card, read by the permission gate and listed with jobs.
+    /// 命令的简短标题；显示在卡片上，由权限闸门读取，并随任务列出。
+    title: String,
     /// Starts the command as a background job and returns at once.
     /// 以后台任务启动命令并立即返回。
     #[serde(default)]
@@ -424,11 +424,11 @@ pub(crate) fn shell_command_args_schema(shell_support: &HostCommandShellSupport)
                 "type": "string",
                 "description": "Raw command text executed by the selected shell."
             },
-            "purpose": {
+            "title": {
                 "type": "string",
                 "minLength": 1,
-                "maxLength": MAX_PERMISSION_REASON_CHARS,
-                "description": SHELL_COMMAND_PURPOSE_DESCRIPTION
+                "maxLength": MAX_SHELL_COMMAND_TITLE_CHARS,
+                "description": shell_command_title_description()
             },
             "cwd": {
                 "type": "string",
@@ -455,14 +455,22 @@ pub(crate) fn shell_command_args_schema(shell_support: &HostCommandShellSupport)
                 "description": shell_support.schema_shell_description()
             }
         },
-        "required": ["command", "purpose"],
+        "required": ["command", "title"],
         "additionalProperties": false
     })
 }
 
-/// Description of the required `purpose` argument of `shell_command`.
-/// `shell_command` 必填参数 `purpose` 的说明。
-const SHELL_COMMAND_PURPOSE_DESCRIPTION: &str = "Required. One short sentence saying what this command is for, such as \"Run the parser unit tests\". It is shown to the user on the command card, given to the permission reviewer, and listed with background jobs so you can tell them apart. It is never passed to the command.";
+/// Longest `title` of a `shell_command` call, in Unicode scalar values.
+/// `shell_command` 调用 `title` 的最大长度，按 Unicode 标量值计。
+pub(crate) const MAX_SHELL_COMMAND_TITLE_CHARS: usize = 80;
+
+/// Description of the required `title` argument of `shell_command`.
+/// `shell_command` 必填参数 `title` 的说明。
+fn shell_command_title_description() -> String {
+    format!(
+        "Required. A short title for this command, a few words and at most {MAX_SHELL_COMMAND_TITLE_CHARS} characters, such as \"Run the parser tests\". It titles the command card the user sees, is given to the permission reviewer, and names the job in background job lists so you can tell jobs apart. It is never passed to the command."
+    )
+}
 
 pub(crate) fn parse_shell_command_tool_arguments(
     arguments: Value,
@@ -475,10 +483,16 @@ pub(crate) fn parse_shell_command_tool_arguments(
             "The `command` argument for shell_command cannot be empty.",
         ));
     }
-    if parsed.purpose.trim().is_empty() {
+    let title = parsed.title.trim();
+    if title.is_empty() {
         return Err(NativeToolError::new(
-            "The `purpose` argument for shell_command cannot be empty; say in one short sentence what the command is for.",
+            "The `title` argument for shell_command cannot be empty; give the command a short title such as \"Run the parser tests\".",
         ));
+    }
+    if title.chars().count() > MAX_SHELL_COMMAND_TITLE_CHARS {
+        return Err(NativeToolError::new(format!(
+            "The `title` argument for shell_command is longer than {MAX_SHELL_COMMAND_TITLE_CHARS} characters; give the command a short title of a few words."
+        )));
     }
     // Only omission means unlimited; an explicit zero is rejected instead of silently becoming unlimited.
     // 只有省略表示无限等待；显式传入 0 直接拒绝，而不是静默当作无限。
@@ -928,7 +942,7 @@ pub(crate) async fn execute_shell_command_process(
             owner_session_id: owner.clone(),
             origin: job_context.origin,
             command: parsed_args.command.clone(),
-            purpose: parsed_args.purpose.trim().to_string(),
+            purpose: parsed_args.title.trim().to_string(),
             shell_label: shell_label.clone(),
             cwd: effective_cwd.to_path_buf(),
             jobs_dir: runtime.jobs_directory(owner),
@@ -1003,7 +1017,7 @@ pub(crate) fn build_shell_command_text_render_input(
 ) -> HostTextRenderInput {
     let mut lines = vec![
         format!("Command: {}", parsed_args.command),
-        format!("Purpose: {}", parsed_args.purpose.trim()),
+        format!("Title: {}", parsed_args.title.trim()),
         format!("Shell: {}", execution_report.shell_label),
         format!(
             "Working directory: {}",
@@ -1121,7 +1135,7 @@ pub(crate) fn build_shell_command_host_payload(
     json!({
         "session_id": session_id.map(|value| value.to_string()),
         "command": parsed_args.command,
-        "purpose": parsed_args.purpose.trim(),
+        "purpose": parsed_args.title.trim(),
         "job_id": execution_report.job_id,
         "background": execution_report.is_background(),
         "cwd": normalized_workspace_path_text_from_path(&execution_report.cwd),
@@ -1240,7 +1254,7 @@ mod process_option_tests {
             timeout_ms,
             stdin: None,
             shell: shell.map(str::to_string),
-            purpose: String::from("Test command"),
+            title: String::from("Test command"),
             background: false,
         }
     }
@@ -1314,30 +1328,46 @@ mod process_option_tests {
     fn zero_timeout_is_rejected_instead_of_meaning_unlimited() {
         let error = parse_shell_command_tool_arguments(serde_json::json!({
             "command": "echo hi",
-            "purpose": "Say hi",
+            "title": "Say hi",
             "timeout_ms": 0,
         }))
         .expect_err("zero timeout must be rejected");
         assert!(error.message.contains("at least 1"));
         let parsed = parse_shell_command_tool_arguments(
-            serde_json::json!({ "command": "echo hi", "purpose": "Say hi" }),
+            serde_json::json!({ "command": "echo hi", "title": "Say hi" }),
         )
         .expect("omitted timeout stays valid");
         assert_eq!(parsed.timeout_ms, None);
         assert!(!parsed.background);
     }
 
-    /// The purpose is required and may not be blank.
-    /// 用途必填且不得为空白。
+    /// The title is required, may not be blank and stays within its length limit.
+    /// 标题必填，不得为空白，且不超过长度上限。
     #[test]
-    fn purpose_is_required() {
+    fn title_is_required_and_short() {
         parse_shell_command_tool_arguments(serde_json::json!({ "command": "echo hi" }))
-            .expect_err("a missing purpose must be rejected");
+            .expect_err("a missing title must be rejected");
         parse_shell_command_tool_arguments(serde_json::json!({
             "command": "echo hi",
-            "purpose": "  ",
+            "title": "  ",
         }))
-        .expect_err("a blank purpose must be rejected");
+        .expect_err("a blank title must be rejected");
+        let longest = "标".repeat(MAX_SHELL_COMMAND_TITLE_CHARS);
+        parse_shell_command_tool_arguments(serde_json::json!({
+            "command": "echo hi",
+            "title": longest,
+        }))
+        .expect("a title at the limit is accepted, counted in characters");
+        parse_shell_command_tool_arguments(serde_json::json!({
+            "command": "echo hi",
+            "title": format!("{longest}x"),
+        }))
+        .expect_err("a title over the limit must be rejected");
+        parse_shell_command_tool_arguments(serde_json::json!({
+            "command": "echo hi",
+            "purpose": "Say hi",
+        }))
+        .expect_err("the old `purpose` name is not accepted");
     }
 
     /// A misspelled field is rejected instead of silently running without the intended option.
@@ -1346,7 +1376,7 @@ mod process_option_tests {
     fn unknown_argument_is_rejected() {
         parse_shell_command_tool_arguments(serde_json::json!({
             "command": "echo hi",
-            "purpose": "Say hi",
+            "title": "Say hi",
             "timeout": 1000,
         }))
         .expect_err("an undeclared field must be rejected");

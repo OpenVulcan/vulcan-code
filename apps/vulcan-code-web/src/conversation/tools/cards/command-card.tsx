@@ -1,6 +1,6 @@
-// Command cards answer three questions at a glance: what ran (the purpose the AI gave, or the command), how it ended,
+// Command cards answer three questions at a glance: what ran (the title the AI gave, or the command), how it ended,
 // how long it took. The body is the terminal transcript, ending with where it ran.
-// 命令卡一眼回答三个问题：运行了什么（AI 给出的用途，或命令本身）、如何结束、耗时多久。正文是终端记录，末尾注明运行位置。
+// 命令卡一眼回答三个问题：运行了什么（AI 给出的标题，或命令本身）、如何结束、耗时多久。正文是终端记录，末尾注明运行位置。
 import * as React from "react";
 import { SquareTerminal } from "lucide-react";
 import { useI18n, type TranslationKey } from "@/i18n";
@@ -20,7 +20,7 @@ export function ShellCommandCard(props: ToolCardProps) {
   const { call } = props;
   const run = call.host?.kind === "command_run" ? call.host.payload : null;
   const command = textOf(run?.command) ?? textOf(call.input.command) ?? "";
-  const purpose = (textOf(run?.purpose) ?? textOf(call.input.purpose) ?? "").trim();
+  const purpose = (textOf(run?.purpose) ?? textOf(call.input.title) ?? "").trim();
   const jobId = textOf(run?.job_id);
   const backgrounded = textOf(run?.status) === SHELL_COMMAND_BACKGROUND_STATUS;
   const hook = objectOf(run?.hook_transform);

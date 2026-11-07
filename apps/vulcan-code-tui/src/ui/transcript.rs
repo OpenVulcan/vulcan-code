@@ -653,15 +653,14 @@ fn tool_subject(input: &Value) -> String {
     String::new()
 }
 
-/// The purpose a `shell_command` call is titled by, as the WebUI command card does: the purpose the
-/// AI gave, else the one its host result reports; `None` leaves the command as the subject.
-/// `shell_command` 调用的标题用途，与 WebUI 命令卡一致：AI 给出的用途，否则取宿主结果报告的用途；
-/// `None` 时仍以命令为主题。
+/// The title a `shell_command` row shows, as the WebUI command card does: the host result reports
+/// it once the call finished, the `title` argument gives it while the call runs; `None` leaves the
+/// command as the subject.
+/// `shell_command` 行显示的标题，与 WebUI 命令卡一致：调用结束后取宿主结果报告的值，运行中取 `title`
+/// 参数；`None` 时仍以命令为主题。
 fn shell_command_purpose<'a>(input: &'a Value, host_purpose: Option<&'a str>) -> Option<&'a str> {
-    input
-        .get("purpose")
-        .and_then(Value::as_str)
-        .or(host_purpose)
+    host_purpose
+        .or_else(|| input.get("title").and_then(Value::as_str))
         .map(|purpose| purpose.lines().next().unwrap_or_default().trim())
         .filter(|purpose| !purpose.is_empty())
 }
@@ -1023,10 +1022,11 @@ mod tests {
 
     #[test]
     fn shell_command_rows_are_titled_by_their_purpose() {
-        let call = serde_json::json!({"command": "cargo test", "purpose": "Run the tests"});
+        let call = serde_json::json!({"command": "cargo test", "title": "Run the tests"});
+        assert_eq!(shell_command_purpose(&call, None), Some("Run the tests"));
         assert_eq!(
-            shell_command_purpose(&call, Some("Other")),
-            Some("Run the tests")
+            shell_command_purpose(&call, Some("Reported")),
+            Some("Reported")
         );
         let bare = serde_json::json!({"command": "cargo test"});
         assert_eq!(
@@ -1034,7 +1034,7 @@ mod tests {
             Some("Build the app")
         );
         assert_eq!(shell_command_purpose(&bare, None), None);
-        let blank = serde_json::json!({"command": "cargo test", "purpose": "  "});
+        let blank = serde_json::json!({"command": "cargo test", "title": "  "});
         assert_eq!(shell_command_purpose(&blank, None), None);
     }
 }

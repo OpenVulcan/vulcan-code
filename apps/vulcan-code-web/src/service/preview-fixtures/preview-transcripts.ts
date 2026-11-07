@@ -234,7 +234,7 @@ function fileReadOutput(path: string, language: string, lines: string[], startLi
 function shellOutput(command: string, exitCode: number, stdout: string, stderr = "", durationMs = 1_800): ToolPayload {
   const output = [stdout, stderr].filter(Boolean).join("\n");
   const purpose = `Run ${command.split(" ")[0]}`;
-  const body = [`Command: ${command}`, `Purpose: ${purpose}`, `Exit code: ${exitCode}`, ...(output ? [`\n[output]\n${output}`] : [])].join("\n");
+  const body = [`Command: ${command}`, `Title: ${purpose}`, `Exit code: ${exitCode}`, ...(output ? [`\n[output]\n${output}`] : [])].join("\n");
   return toolOutput("shell_command", body, {
     kind: "command_run",
     payload: {
@@ -505,7 +505,7 @@ function toolCardGallery(sessionId: string): ConversationEventHydrationV1Respons
           input: { action: "wait", job_id: "job_5c75e5de823a", timeout_ms: 60_000 },
           output: toolOutput(
             "shell_job",
-            "The job finished.\nJob: job_5c75e5de823a\nPurpose: Run the full workspace test suite after the tool card migration\nStatus: completed\nExit code: 0",
+            "The job finished.\nJob: job_5c75e5de823a\nTitle: Run the full workspace test suite after the tool card migration\nStatus: completed\nExit code: 0",
             {
               kind: "shell_job",
               payload: {

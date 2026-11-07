@@ -55,7 +55,7 @@ pub(crate) fn build_shell_job_tool() -> Arc<NativeToolDefinition> {
 fn shell_job_tool_description() -> String {
     format!(
         "Inspect and control the shell jobs of this session. Every `shell_command` call is a job; its output (stdout and stderr together, in arrival order) is kept in a rolling log, so long output can be read here even after the command returned only its end.\n\
-- `list`: running jobs first, then the {SHELL_JOB_LIST_FINISHED_LIMIT} most recent finished ones, each with its purpose.\n\
+- `list`: running jobs first, then the {SHELL_JOB_LIST_FINISHED_LIMIT} most recent finished ones, each with its title.\n\
 - `status`: one job's state, run time, output size, time of the latest output and, while it runs, its live processes with CPU time; use it to tell a stuck command from a busy one.\n\
 - `read`: output rows with line numbers. Omit `start_line` for the end of the output; give it to page from that line. `N|` starts line N, `N+|` continues a long line split into rows.\n\
 - `search`: regular-expression search over the whole log, with `context_lines` around each match (`N>|` marks matching rows).\n\
@@ -532,7 +532,7 @@ fn render_job_status(job: &ShellJobSummary) -> String {
         .unwrap_or(0);
     let mut lines = vec![
         format!("Job: {}", job.job_id),
-        format!("Purpose: {}", job.purpose),
+        format!("Title: {}", job.purpose),
         format!("Command: {}", job.command),
         format!("Shell: {}", job.shell),
         format!("Working directory: {}", job.cwd),
