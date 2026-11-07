@@ -316,6 +316,50 @@ fn opencode_credentials_share_model_protocols_and_native_parameter_projection() 
     }
 }
 
+/// Verifies Gemini 4 Argon on OpenCode Go uses the Go Gemini root and native thinking level.
+/// 验证 OpenCode Go 的 Gemini 4 Argon 使用 Go Gemini 根地址与原生思考级别。
+/// No parameters; checks the base URL, model path and thinkingLevel projection for both credentials.
+/// 无参数；为两类凭据检查基地址、模型路径与 thinkingLevel 投影。
+#[test]
+fn opencode_go_gemini_uses_the_go_gemini_root_and_thinking_level() {
+    use vulcan_ai_contract::ReasoningEffort;
+    let client = crate::execution::ProviderExecutionClient::new(
+        reqwest::Client::new(),
+        Arc::new(vulcan_llm_core::ProtocolRegistry::first_batch().unwrap()),
+    );
+    for credential_profile_id in ["account-oauth", "api-key"] {
+        let mut route = crate::execution::test_support::bundled_manifest_route(
+            "opencode-go",
+            "go-api",
+            "google.gemini.generate_content",
+        );
+        let credential_profile = route
+            .entry
+            .credential_profile(credential_profile_id)
+            .unwrap();
+        route.connection.credential_profile_id = credential_profile.id.clone();
+        route.connection.credential_mode = credential_profile.credential_mode;
+        // The Go Gemini root must keep the `/go` plan prefix, never the pay-as-you-go root.
+        // Go Gemini 根地址必须保留 `/go` 套餐前缀，不得使用按量付费根地址。
+        assert!(
+            route
+                .protocol_route
+                .resolved_base_url(&route.entry)
+                .ends_with("/inference/go/google/v1beta"),
+            "{credential_profile_id}"
+        );
+        let mut request = crate::execution::test_support::minimal_request();
+        request.model_id = String::from("gemini-4-argon");
+        request.reasoning_effort = Some(ReasoningEffort::High);
+        let encoded = client.encode_request(&route, &request).unwrap();
+        assert!(encoded.path.contains("gemini-4-argon"), "{}", encoded.path);
+        assert_eq!(
+            encoded.body["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+            "HIGH"
+        );
+    }
+}
+
 /// Verifies official Claude models that reject manual budgets receive adaptive thinking and effort.
 /// 验证拒绝手动预算的官方 Claude 模型收到自适应思考与强度字段。
 /// No parameters; checks opt-in and default-on adaptive families and the manual-budget fallback.

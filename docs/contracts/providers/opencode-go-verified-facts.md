@@ -164,3 +164,24 @@ OAuth 测试保留双端点读取及余额失败时整体失败的行为。
 - 会话请求头：API Key 请求缺少 `x-opencode-session` 时返回 400 `MissingSessionID`，因此该请求头对两类
   凭据都是必需的。会话请求的值是会话 ID；VMM 后台请求使用产生该 VMM 命令的会话 ID
   （`session_source_id`），不属于任何会话的命令（如画像指令、清洗、维护）不发送该请求头。
+
+## 2026-11-07 目录同步与 Gemini 路由
+
+证据：使用 API Key 读取 `GET https://opencode.ai/inference/go/v1/models`（30 个模型），对照
+[Go 套餐说明](https://opencode.ai/docs/console/go/#how-it-works) 的模型清单与逐模型端点表，以及 OpenCode
+官方仓库提交 `c72ce6cf82` 的 `packages/core/src/models-dev/snapshot.txt` 和
+`packages/core/src/plugin/provider/opencode.ts`。清单 revision 12，证据修订
+`opencode-go.live-catalog.2026-11-07`，目录与规则各 27 个模型。
+
+- 新增 `gemini-4-argon`：走 `google.gemini.generate_content`，路由级 `base_url_override` 为
+  `https://opencode.ai/inference/go/google/v1beta`，与说明页端点 `.../google/v1beta/models/gemini-4-argon`
+  一致。输入为图片、音频、视频、文件，思考常开，档位 low/medium/high，上下文 1048576、输出 65536。
+  鉴权与其他 Go 路由相同，使用 `Authorization: Bearer`：OpenCode 的 `credentialHeaders` 对 Console 凭据只
+  发 Bearer 与可选 `x-org-id`。实测 Bearer 流式请求和带 `thinkingLevel` 的请求均返回 200。
+- 新增 `hy4`：Chat，图片输入，档位 none/high，上下文 1048576、输出 65536。
+- `glm-5.3-flash`：实时目录不再列出文件输入，输入改为图片和视频。OpenCode 快照仍写有 `pdf`，这里以实时目录为准。
+- 不登记：`beam-free`、`crouton-alpha-free`、`iceman-contributor-free`，按用户规则不收录免费模型。
+  `mimo-v2.5` 与 `mimo-v2.5-pro` 也不登记：说明页列了它们，但实时目录不返回（2026-10-31 已因此移除）。
+- 说明页的协议表与清单所选协议逐一核对一致：Grok、GPT、Muse 走 Responses，Claude Haiku、MiniMax M3、Qwen
+  走 Messages，Gemini 走 generateContent，其余走 Chat。
+- 新增两个模型的结构化输出未实测，不声明 `json_schema`。

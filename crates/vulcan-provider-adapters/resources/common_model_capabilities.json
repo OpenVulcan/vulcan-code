@@ -944,19 +944,20 @@
     {
       "key": "gemini-4-argon",
       "aliases": [],
-      "context_window": 1048000,
+      "context_window": 1048576,
       "input_modalities": [
         "audio",
         "file",
         "image",
-        "text"
+        "text",
+        "video"
       ],
       "output_modalities": [
         "text"
       ],
-      "output_limit": 64000,
+      "output_limit": 65536,
       "reasoning": "native",
-      "reasoning_control": "effort_selection",
+      "reasoning_control": "fixed_on",
       "reasoning_efforts": [
         "low",
         "medium",
@@ -1057,7 +1058,6 @@
       "aliases": [],
       "context_window": 1000000,
       "input_modalities": [
-        "file",
         "image",
         "text",
         "video"
@@ -1737,7 +1737,7 @@
     {
       "key": "hy4",
       "aliases": [],
-      "context_window": 1048000,
+      "context_window": 1048576,
       "input_modalities": [
         "image",
         "text"
@@ -1745,9 +1745,9 @@
       "output_modalities": [
         "text"
       ],
-      "output_limit": 64000,
+      "output_limit": 65536,
       "reasoning": "native",
-      "reasoning_control": "toggle",
+      "reasoning_control": "effort_selection",
       "reasoning_efforts": [
         "none",
         "high"

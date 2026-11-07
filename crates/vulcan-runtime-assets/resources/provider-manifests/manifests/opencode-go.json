@@ -1,15 +1,16 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "opencode-go",
-  "revision": 11,
-  "published_at": "2026-11-07T08:40:12Z",
+  "revision": 12,
+  "published_at": "2026-11-07T11:37:04Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
       "openai-chat-completions.v1",
       "anthropic-messages.v1",
       "openai-responses.v1",
-      "anthropic-messages-video.v1"
+      "anthropic-messages-video.v1",
+      "google.gemini.generate_content"
     ],
     "required_execution_primitives": [
       "deepseek_chat_reasoning_content_v1"
@@ -175,6 +176,14 @@
           {
             "model_id": "step-5-preview",
             "display_name": "Step 5 Preview"
+          },
+          {
+            "model_id": "gemini-4-argon",
+            "display_name": "Gemini 4 Argon"
+          },
+          {
+            "model_id": "hy4",
+            "display_name": "Hy4"
           }
         ]
       },
@@ -221,6 +230,15 @@
           "request_headers": {
             "anthropic-version": "2023-06-01"
           },
+          "usage_profile_refs": [],
+          "request_profile_refs": [],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
+        },
+        {
+          "protocol_profile_id": "google.gemini.generate_content",
+          "base_url_override": "https://opencode.ai/inference/go/google/v1beta",
           "usage_profile_refs": [],
           "request_profile_refs": [],
           "response_profile_refs": [],
@@ -526,8 +544,7 @@
       "capabilities": {
         "input_resources": [
           "image",
-          "video",
-          "file"
+          "video"
         ],
         "reasoning_control": "effort_selection",
         "reasoning_efforts": [
@@ -537,7 +554,7 @@
         ],
         "context_limit": 1000000,
         "output_limit": 131072,
-        "evidence_revision": "opencode.v2.4617210822.2026-10-17"
+        "evidence_revision": "opencode-go.live-catalog.2026-11-07"
       },
       "request_profile_refs": [],
       "protocol_capabilities": {
@@ -1246,6 +1263,74 @@
           "evidence_revision": "opencode-go.live-catalog.2026-10-31"
         }
       }
+    },
+    {
+      "rule_id": "gemini-4-argon",
+      "display_name": "Gemini 4 Argon",
+      "scope": {
+        "service_entry_ids": [
+          "go-api"
+        ],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "gemini-4-argon"
+      },
+      "supported_protocols": [
+        "google.gemini.generate_content"
+      ],
+      "selected_protocol": "google.gemini.generate_content",
+      "capabilities": {
+        "input_resources": [
+          "image",
+          "audio",
+          "video",
+          "file"
+        ],
+        "reasoning_control": "fixed_on",
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "context_limit": 1048576,
+        "output_limit": 65536,
+        "evidence_revision": "opencode-go.live-catalog.2026-11-07"
+      },
+      "request_profile_refs": []
+    },
+    {
+      "rule_id": "hy4",
+      "display_name": "Hy4",
+      "scope": {
+        "service_entry_ids": [
+          "go-api"
+        ],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "hy4"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "input_resources": [
+          "image"
+        ],
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "none",
+          "high"
+        ],
+        "context_limit": 1048576,
+        "output_limit": 65536,
+        "evidence_revision": "opencode-go.live-catalog.2026-11-07"
+      },
+      "request_profile_refs": []
     }
   ],
   "usage_profiles": [
@@ -1555,6 +1640,10 @@
       {
         "url": "https://opencode.ai/inference/go/openai/v1/chat/completions",
         "note": "Key-scoped probe on 2026-11-07 for deepseek-v4-pro and deepseek-v4.1-flash: reasoning_effort none and thinking disabled both return zero reasoning tokens and no reasoning_content, and response_format json_schema is enforced for field names the prompt never mentions."
+      },
+      {
+        "url": "builtin:opencode-go.live-catalog.2026-11-07",
+        "note": "2026-11-07 API-key read of GET /inference/go/v1/models: 30 models. Added Gemini 4 Argon (Gemini generateContent at /inference/go/google/v1beta; Bearer streaming and thinkingLevel calls returned 200) and Hy4 (Chat, none/high); GLM-5.3 Flash no longer lists file input. beam-free, crouton-alpha-free and iceman-contributor-free stay out under the no-free-models rule. Limits, modalities and effort lists come from the live catalog."
       }
     ],
     "verified_at": "2026-11-07T00:00:00Z"
