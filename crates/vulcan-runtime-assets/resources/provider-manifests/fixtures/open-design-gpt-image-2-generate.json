@@ -1,0 +1,205 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "open-design-gpt-image-2-generate",
+  "base_manifest": "open-design.json",
+  "production_target_refs": [
+    "open-design::gpt-image-2.generate"
+  ],
+  "tool_target": {
+    "target_id": "design-plan.fixture-gpt-image-2-generate",
+    "description": "Generate one image with GPT Image 2 through the OpenDesign Link image endpoint.",
+    "service_entry_id": "design-plan",
+    "credential_profile_ids": [
+      "account-auth",
+      "api-key"
+    ],
+    "upstream_target_id": "gpt-image-2",
+    "availability_model_ids_any": [
+      "gpt-image-2"
+    ],
+    "display_name": "GPT Image 2 Generation",
+    "tool_id": "fixture_open_design_gpt_image_2_generate",
+    "capability": "image_generate",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "type": "string",
+          "const": "gpt-image-2",
+          "default": "gpt-image-2"
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Complete image generation instruction."
+        },
+        "aspect_ratio": {
+          "type": "string",
+          "enum": [
+            "1:1",
+            "16:9",
+            "9:16",
+            "4:3",
+            "3:4"
+          ],
+          "description": "Output aspect ratio. Omit to let the model's default profile decide."
+        },
+        "resolution": {
+          "type": "string",
+          "enum": [
+            "1K",
+            "2K"
+          ],
+          "description": "Output resolution tier; send only together with aspect_ratio and only when the user asked for a size, because tiers are priced differently. Plan caps enforced by OpenDesign: Plus up to 1K, Pro and Max up to 2K; Go has no image entitlement."
+        },
+        "quality": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "description": "Priced quality tier; send only when the user asked for one, otherwise the model's cheapest default tier applies."
+        }
+      },
+      "required": [
+        "prompt"
+      ]
+    },
+    "extension_profile": {
+      "summary": "Generate a new image with GPT Image 2. OpenDesign's default image model; the only one with quality tiers.",
+      "characteristics": [
+        "Parameters follow the OpenDesign media contract: aspect_ratio, resolution and quality.",
+        "Omitted aspect_ratio, resolution and quality leave the server's default profile and price in charge."
+      ],
+      "input_modes": [
+        "text_to_image"
+      ],
+      "resolution_policy": {
+        "mode": "fixed_presets",
+        "presets": [
+          {
+            "value": "1K"
+          },
+          {
+            "value": "2K"
+          }
+        ],
+        "aspect_ratios": [
+          "1:1",
+          "16:9",
+          "9:16",
+          "4:3",
+          "3:4"
+        ]
+      },
+      "format_policy": {
+        "input_formats": [
+          "text"
+        ],
+        "output_formats": [
+          "image/png"
+        ]
+      },
+      "constraints": [
+        "Exactly one image is generated per call.",
+        "Plan caps enforced by OpenDesign: Plus up to 1K, Pro and Max up to 2K; Go has no image entitlement.",
+        "The target is available only while the credential's plan-filtered catalog lists the model.",
+        "quality accepts low, medium or high."
+      ],
+      "limitations": [
+        "Declared from the OpenDesign source and plan rules; no successful generation has been observed yet.",
+        "Reference-image editing is not exposed: the Link host has no /images/edits route."
+      ],
+      "evidence_refs": [
+        "docs/contracts/providers/open-design-verified-facts.md"
+      ]
+    },
+    "output": {
+      "kind": "resources",
+      "source_path": "/",
+      "normalized_result_path": "resources",
+      "resource_kind": "image",
+      "mime_types": [
+        "image/png"
+      ],
+      "resource_decoders": [
+        {
+          "source_path": "/data/0/b64_json",
+          "encoding": "base64",
+          "resource_kind": "image",
+          "mime_type": "image/png",
+          "optional": true,
+          "max_bytes": 104857600,
+          "output_id_prefix": "image"
+        },
+        {
+          "source_path": "/data/0/url",
+          "encoding": "https_url",
+          "resource_kind": "image",
+          "mime_type": "image/png",
+          "optional": true,
+          "output_id_prefix": "url-image"
+        }
+      ]
+    },
+    "execution": {
+      "endpoint_path": "/fixtures/open-design-gpt-image-2-generate",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "http_json_sync"
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.open-design-gpt-image-2-generate",
+    "operation": "image_generate",
+    "carrier": "provider_tool",
+    "input_resources": [],
+    "output_resources": [
+      "image"
+    ],
+    "tool_target_refs": [
+      "design-plan.fixture-gpt-image-2-generate"
+    ],
+    "request_profile_refs": [],
+    "response_profile_refs": [],
+    "upload_channel_refs": [],
+    "upload_bindings": [],
+    "timeout_ms": 300000,
+    "idempotent": false
+  },
+  "upload_channels": [],
+  "required_execution_primitives": [
+    "http_json_sync"
+  ],
+  "required_upload_primitives": [],
+  "arguments": {
+    "prompt": "A lighthouse on a cliff at dawn",
+    "aspect_ratio": "16:9",
+    "resolution": "2K",
+    "quality": "high"
+  },
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/fixtures/open-design-gpt-image-2-generate",
+      "expected_json_body": {
+        "model": "gpt-image-2",
+        "prompt": "A lighthouse on a cliff at dawn",
+        "aspect_ratio": "16:9",
+        "resolution": "2K",
+        "quality": "high"
+      },
+      "response_status": 200,
+      "response_json_body": {
+        "data": [
+          {
+            "b64_json": "aW1hZ2U="
+          }
+        ]
+      }
+    }
+  ],
+  "expected_output_kind": "resources"
+}
