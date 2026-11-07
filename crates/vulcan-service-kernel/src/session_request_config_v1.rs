@@ -1617,6 +1617,7 @@ mod tests {
                 precheck_enabled: Some(true),
                 memory_writeback_enabled: Some(false),
             },
+            prompt_skill_overrides: Vec::new(),
         };
 
         assert!(
@@ -1658,6 +1659,7 @@ mod tests {
             provider_tools: Default::default(),
             knowledge_libraries: Default::default(),
             vmm: Default::default(),
+            prompt_skill_overrides: Vec::new(),
         };
         let before = handle.read(SessionDocument::memory_revision).unwrap();
         assert!(

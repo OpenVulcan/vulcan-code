@@ -115,7 +115,14 @@ export interface ComposerSessionSettingsSnapshot {
   // Present only when the draft creates a dedicated session; it cannot be combined with a goal or Plan mode.
   // 仅当草稿创建专职会话时存在；不能与目标或计划模式同时使用。
   dedicated?: ComposerDedicatedSessionSnapshot;
+  // Session skill switches set by a flow that starts a bundled on-demand skill, such as on-device fixing.
+  // 启动随包按需技能的流程（如本机修复）设置的会话技能开关。
+  promptSkillOverrides?: ComposerPromptSkillOverrides;
 }
+
+// ComposerPromptSkillOverrides switches skills by name for one new conversation.
+// ComposerPromptSkillOverrides 按名称为一个新会话切换技能。
+export type ComposerPromptSkillOverrides = Readonly<Record<string, "enabled" | "disabled">>;
 
 // ComposerDedicatedSessionSnapshot freezes the dedicated-session choices of the creation wizard.
 // ComposerDedicatedSessionSnapshot 固定创建向导的专职会话选择。

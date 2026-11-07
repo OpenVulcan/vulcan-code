@@ -88,6 +88,9 @@ struct SessionV1RuntimeProjection {
     /// Session request options applied by later Provider requests.
     /// 之后的 Provider 请求所应用的会话请求选项。
     request_options: vulcan_session_core::v1::config::RequestOptionsConfig,
+    /// Session prompt-skill switches every later turn applies.
+    /// 之后每个回合应用的会话提示词技能开关。
+    prompt_skill_overrides: Vec<vulcan_session_core::v1::config::PromptSkillOverride>,
 }
 
 /// Projects all Stage 6 restart facts from one immutable V1 document view.
@@ -127,6 +130,12 @@ fn session_v1_runtime_projection(
             .clone(),
         vmm: document.metadata.config.selection.vmm.clone(),
         request_options: document.metadata.config.selection.request_options.clone(),
+        prompt_skill_overrides: document
+            .metadata
+            .config
+            .selection
+            .prompt_skill_overrides
+            .clone(),
     }
 }
 
@@ -222,6 +231,10 @@ fn apply_session_v1_runtime_projection(
     runtime_state
         .request_options
         .clone_from(&projection.request_options);
+    runtime_state.prompt_skill_overrides =
+        crate::conversation_submission::runtime_prompt_skill_overrides(
+            &projection.prompt_skill_overrides,
+        );
     runtime_state.updated_at.clone_from(&projection.updated_at);
 }
 

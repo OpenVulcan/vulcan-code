@@ -1090,6 +1090,10 @@ pub struct TaskRuntime {
     /// luaskills-debug host installed once by the service kernel; absent in embedded runtimes.
     /// 由服务内核安装一次的 luaskills-debug 宿主；嵌入式运行时中缺省。
     luaskills_debug_host: RwLock<Option<Arc<dyn crate::tooling::native::NativeLuaSkillsDebugHost>>>,
+    /// Feedback host installed once by the service kernel; absent in embedded runtimes, which then
+    /// do not register the `feedback` tool.
+    /// 由服务内核安装一次的反馈宿主；嵌入式运行时中缺省，此时不注册 `feedback` 工具。
+    feedback_host: RwLock<Option<Arc<dyn crate::tooling::native::NativeFeedbackHost>>>,
     /// Temporary MCP connections opened by sessions through `mcp_connect`.
     /// 会话通过 `mcp_connect` 打开的临时 MCP 连接。
     session_mcp: Arc<crate::mcp::session::SessionMcpRegistry>,

@@ -7,7 +7,8 @@ import {
 } from "@/components/composer/composer-model";
 import type { ComposerSettingsSection } from "@/components/composer/composer-settings-request";
 import type { ComposerSlashCommandSummary } from "@/types";
-import { useComposerExternalCommands } from "@/components/composer/composer-external-commands";
+import { useComposerExternalCommands, type ComposerOwner } from "@/components/composer/composer-external-commands";
+import type { ComposerPromptSkillOverrides } from "@/components/composer/composer-model";
 
 // UseComposerSlashCommandsOptions defines the input state and routed actions owned outside slash selection.
 // UseComposerSlashCommandsOptions 定义 slash 选择之外持有的输入状态与路由动作。
@@ -51,6 +52,12 @@ export interface UseComposerSlashCommandsOptions {
   // Stages files another surface attached together with its inserted text, under the composer's own checks.
   // 按输入区自身的校验暂存其他界面随插入文本一并附带的文件。
   onAttachFiles: (files: File[]) => void;
+  // Draft this composer shows, so text meant for a new conversation in one project lands only there.
+  // 本输入区显示的草稿，使发给某个项目新会话的文本只落在那里。
+  owner: ComposerOwner;
+  // Applies the skill switches another surface sent with its text to the draft's session settings.
+  // 将其他界面随文本发送的技能开关应用到草稿的会话设置。
+  onSetDraftSkills: (skills: ComposerPromptSkillOverrides) => void;
 }
 
 // ComposerSlashCommandsController exposes slash panel state and keyboard actions to ComposerPanel.
@@ -240,7 +247,8 @@ export function useComposerSlashCommands(options: UseComposerSlashCommandsOption
   }, []);
   // The command palette and Ctrl+M reach the model picker and slash commands through these same handlers.
   // 命令面板与 Ctrl+M 通过这些相同的处理器打开模型选择器并运行 slash 指令。
-  const insertText = React.useCallback((text: string, files: readonly File[]) => {
+  const insertText = React.useCallback((text: string, files: readonly File[], skills: ComposerPromptSkillOverrides | null) => {
+    if (skills) options.onSetDraftSkills(skills);
     options.setInput((current) => (current.trim() === "" ? text : `${current}
 ${text}`));
     if (files.length) options.onAttachFiles([...files]);
@@ -252,8 +260,8 @@ ${text}`));
       textarea.focus({ preventScroll: true });
       textarea.setSelectionRange(textarea.value.length, textarea.value.length);
     });
-  }, [options.setInput, options.onAttachFiles, options.textareaRef]);
-  useComposerExternalCommands(options.onOpenModelPicker, options.commands, activateCommand, insertText);
+  }, [options.setInput, options.onAttachFiles, options.onSetDraftSkills, options.textareaRef]);
+  useComposerExternalCommands(options.onOpenModelPicker, options.commands, activateCommand, insertText, options.owner);
 
   return {
     visibleCommands,

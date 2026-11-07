@@ -17,6 +17,9 @@ pub mod ask;
 mod catalog_tests;
 pub mod commands;
 pub mod composer;
+pub mod feedback;
+#[cfg(test)]
+mod feedback_tests;
 pub mod find;
 pub mod form;
 pub mod history;
@@ -657,6 +660,9 @@ pub struct App {
     /// Read-only knowledge selectors and the explicit unsaved human policy draft.
     /// 只读知识选择器及明确未保存人工策略草稿。
     pub knowledge: knowledge_state::KnowledgeUiState,
+    /// Feedback compose form, its issued draft id and the open report.
+    /// 反馈编写表单、其签发的草稿编号与当前打开的报告。
+    pub feedback: feedback::FeedbackState,
     /// Exact selected knowledge library; None denotes an empty or not-yet-loaded catalog.
     /// 准确所选知识库；None 表示目录为空或尚未加载。
     pub library: Option<String>,
@@ -820,6 +826,7 @@ impl App {
             markdown_memory_project: None,
             memory_query: String::new(),
             knowledge: knowledge_state::KnowledgeUiState::default(),
+            feedback: feedback::FeedbackState::default(),
             library: None,
             knowledge_page: PageId::KnowledgeLibrary,
             plugin_mount: None,
@@ -1640,6 +1647,7 @@ impl App {
                 }
                 self.slots.set(slot, call.clone(), value);
                 activity::slot_arrived(self, slot, &call);
+                feedback::slot_arrived(self, slot);
                 let still_running = running_jobs(self);
                 if was_running
                     .iter()
@@ -1707,6 +1715,7 @@ impl App {
                     self.path_mention_loaded(None);
                 }
                 activity::slot_failed(self, slot, &message);
+                feedback::slot_failed(self, slot);
                 self.slots.clear(slot);
                 self.slot_errors.insert(slot, message);
                 self.live_poll_due.remove(&slot);
@@ -1724,6 +1733,15 @@ impl App {
                     if self.current_page() == Some(PageId::KnowledgePolicy) {
                         self.knowledge_page = PageId::KnowledgeBases;
                         self.load_page();
+                    }
+                }
+                if let Notice::Completed(function) = &notice {
+                    feedback::completed(self, function);
+                    // Viewing announcements records them as seen in the background, as the WebUI
+                    // does, so that mark is not announced.
+                    // 与 WebUI 一致，查看公告会在后台记为已看，因此该标记不发出提示。
+                    if *function == "mark_announcements" {
+                        return;
                     }
                 }
                 self.notice(notice);
@@ -1744,6 +1762,7 @@ impl App {
         }
         match slot {
             Slot::PathMentionDirectory => self.path_mention_listing_is_current(call),
+            Slot::FeedbackDetail => feedback::detail_is_current(self, call),
             Slot::KnowledgeWords | Slot::KnowledgeBindings | Slot::KnowledgeIntegrity => {
                 call.param("/libraryId").as_str() == self.library.as_deref()
             }
@@ -2059,7 +2078,8 @@ fn completed_notice(function: &str) -> String {
         | "uninstall_user_plugin"
         | "delete_agent_skill"
         | "delete_subagent_definition"
-        | "delete_archived_conversations" => tr!("tui.notice.deleted"),
+        | "delete_archived_conversations"
+        | "delete_feedback" => tr!("tui.notice.deleted"),
         "restore_archived_conversations" => tr!("tui.notice.completed"),
         "import_knowledge_directory" => {
             tr!("tui.notice.submitted")

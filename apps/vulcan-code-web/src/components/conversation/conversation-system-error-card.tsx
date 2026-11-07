@@ -2,7 +2,9 @@ import * as React from "react";
 import { ChevronRight, CircleAlert } from "lucide-react";
 
 import { StatusPill } from "@/components/shared/status";
+import { FeedbackCenterContext } from "@/components/features/feedback/feedback-center-context";
 import { useI18n } from "@/i18n";
+import { Button } from "@/ui-kit/primitives/button";
 import { formatDurationSeconds } from "@/lib/usage-format";
 
 // SystemProviderError describes the structured failure emitted by the public provider contract.
@@ -371,6 +373,9 @@ export function formatSystemProviderErrorJson(error: SystemProviderError): strin
 // SystemErrorCard 渲染紧凑错误摘要与可展开的元数据面板。
 export function SystemErrorCard(props: SystemErrorCardProps) {
   const { t } = useI18n();
+  // feedback offers a one-click report where the workbench provides the feedback window.
+  // feedback 在工作台提供反馈窗口时提供一键报告。
+  const feedback = React.useContext(FeedbackCenterContext);
   // reconciliationPending is derived exclusively from the backend-owned closed classification.
   // reconciliationPending 仅从后端持有的封闭分类派生。
   const reconciliationPending = isProviderResultReconciliationPending(props.error);
@@ -462,6 +467,11 @@ export function SystemErrorCard(props: SystemErrorCardProps) {
                 : t("conversation.systemError.status")}
           />
         </div>
+        {feedback ? (
+          <Button className="vk-error-report" size="sm" variant="outline" onClick={() => feedback.openFeedback({ source: "error_card", systemError: props.error })}>
+            {t("feedback.reportError")}
+          </Button>
+        ) : null}
         {reconciliationPending ? (
           <p className="vk-error-pending">
             {t("conversation.systemError.pendingNotice")}

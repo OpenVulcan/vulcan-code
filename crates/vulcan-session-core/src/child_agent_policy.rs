@@ -30,6 +30,9 @@ pub const CHILD_AGENT_FORBIDDEN_TOOL_IDS: &[&str] = &[
     "vmm_memory_write",
     "vmm_memory_delete",
     "memory_write",
+    // Feedback drafts go to the user's own feedback window, which only the root session reaches.
+    // 反馈草稿进入用户自己的反馈窗口，只有根会话能到达该窗口。
+    "feedback",
 ];
 
 /// Returns the stable list of parent-owned tools forbidden in child-agent mode.
@@ -139,6 +142,7 @@ mod tests {
             "read_session",
             "send_session_message",
             "wait_session",
+            "feedback",
         ] {
             assert!(
                 forbidden_tools.contains(&tool_id),

@@ -38,6 +38,7 @@ members = [
     "crates/vulcan-file-ownership",
     "crates/vulcan-install-core",
     "crates/vulcan-app-update",
+    "crates/vulcan-feedback",
     "crates/vulcan-release-tool",
     "crates/vulcan-markdown-memory",
     "crates/vulcan-mcp-runtime",
@@ -121,6 +122,7 @@ vulcan-file-watcher = { path = "crates/vulcan-file-watcher" }
 vulcan-file-ownership = { path = "crates/vulcan-file-ownership" }
 vulcan-install-core = { path = "crates/vulcan-install-core" }
 vulcan-app-update = { path = "crates/vulcan-app-update" }
+vulcan-feedback = { path = "crates/vulcan-feedback" }
 vulcan-tools-luaskills-call = { path = "crates/vulcan-tools-luaskills-call" }
 vulcan-luaskills-prompt = { path = "crates/vulcan-luaskills-prompt" }
 vulcan-luaskills-config = { path = "crates/vulcan-luaskills-config" }

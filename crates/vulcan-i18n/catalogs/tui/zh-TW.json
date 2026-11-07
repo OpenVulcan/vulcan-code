@@ -58,6 +58,8 @@
   "tui.diff.nextFile": "下一個檔案",
   "tui.diff.prevFile": "上一個檔案",
   "tui.empty.hint": "在下方輸入任務並按 Enter。/ 開啟命令，F1 檢視按鍵。",
+  "tui.feedback.newest": "回到最新",
+  "tui.feedback.signInElsewhere": "終端用戶端無法登入。請在 Vulcan Code 桌面應用程式或 WebUI 中登入 OpenVulcan 帳戶；本頁會跟隨該帳戶。",
   "tui.field.addConnection": "新增連線",
   "tui.field.addMcp": "新增 MCP 伺服器",
   "tui.field.arguments": "啟動引數（每行一個完整引數）",

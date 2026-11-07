@@ -11,6 +11,7 @@
 
 mod app_update;
 mod catalog;
+mod feedback_messages;
 mod inference;
 mod knowledge;
 mod luaskills_debug;
@@ -188,7 +189,10 @@ impl Area {
                     Some(tr!("settings.group.models")),
                     vec![Providers, Credentials, Models, Capabilities, SubagentModels],
                 ),
-                (Some(tr!("settings.group.connections")), vec![McpService]),
+                (
+                    Some(tr!("settings.group.connections")),
+                    vec![McpService, FeedbackMessages],
+                ),
                 (Some(tr!("settings.group.data")), vec![Archived]),
                 (
                     Some(tr!("settings.group.about")),
@@ -239,6 +243,10 @@ pub enum PageId {
     /// The MCP service other AI tools connect to: the endpoint switch and each client's grants.
     /// 供其他 AI 工具连接的 MCP 服务：端点开关与各客户端的授权。
     McpService,
+    /// Feedback and the message center: announcements, personal messages, the user's own
+    /// reports and the compose form with its exact preview.
+    /// 反馈与消息中心：公告、个人消息、用户本人的报告，以及带精确预览的编写表单。
+    FeedbackMessages,
     Archived,
     Diagnostics,
     /// The in-app updater: check, download, restart, repair and the update settings.
@@ -340,6 +348,7 @@ impl PageId {
             PageId::SubagentModels => tr!("settings.subagentModels"),
             PageId::Mcp => tr!("tui.settings.mcp"),
             PageId::McpService => tr!("settings.mcpService"),
+            PageId::FeedbackMessages => tr!("settings.feedbackMessages"),
             PageId::Archived => tr!("settings.misc.archivedConversations"),
             PageId::Diagnostics => tr!("settings.diagnostics"),
             PageId::AppUpdate => tr!("settings.appUpdate"),
@@ -407,6 +416,9 @@ impl PageId {
         // 每个指针均来自对应的 WebUI 目录类型。
         // The model list counts the models it offers, as the WebUI provider menu does.
         // 模型清单统计其提供的模型，与 WebUI 供应商菜单一致。
+        if self == Self::FeedbackMessages {
+            return feedback_messages::badge(app);
+        }
         if self == Self::Models {
             let count = models::model_count(app);
             return (count > 0).then(|| (count.to_string(), Tone::Muted));
@@ -498,6 +510,7 @@ impl PageId {
                 }
             }
             Self::McpService => calls.push(api::mcp_service::load_mcp_service()),
+            Self::FeedbackMessages => calls.extend(feedback_messages::loaders(app)),
             Self::LuaSkillsDebug => calls.push(api::skills_actions::read_luaskills_debug_status()),
             Self::Rtk => calls.extend([
                 api::rtk::load_rtk_settings(),
@@ -1177,6 +1190,7 @@ pub fn rows(app: &App, page: PageId) -> Vec<Row> {
         PageId::SubagentModels => subagent_models::rows(app),
         PageId::Mcp => settings::mcp(app),
         PageId::McpService => mcp_service::rows(app),
+        PageId::FeedbackMessages => feedback_messages::rows(app),
         PageId::Archived => settings::archived(app),
         PageId::Diagnostics => settings::diagnostics(app),
         PageId::AppUpdate => app_update::rows(app),

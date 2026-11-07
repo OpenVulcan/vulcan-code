@@ -250,6 +250,84 @@ pub(super) struct SubmissionSessionSettings {
     /// 专职会话选择；仅当草稿创建专职会话时存在。
     #[serde(default)]
     dedicated: Option<SubmissionDedicatedSettings>,
+    /// Session skill switches, keyed by skill name; only bundled on-demand skills are accepted.
+    /// 会话技能开关，按技能名称索引；只接受随包的按需技能。
+    #[serde(default)]
+    prompt_skill_overrides: std::collections::BTreeMap<String, SubmissionPromptSkillState>,
+}
+
+/// One session skill switch a new conversation carries.
+/// 新会话携带的一个会话技能开关。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum SubmissionPromptSkillState {
+    Enabled,
+    Disabled,
+}
+
+/// Resolves the session skill switches of a first submission. Only bundled skills declared
+/// `activation: on_demand` may be switched here, because a dedicated flow such as on-device fixing
+/// starts them; every ordinary skill keeps the switches of the skills settings.
+/// 解析首次提交的会话技能开关。这里只能切换声明 `activation: on_demand` 的随包技能，因为它们由
+/// 本机修复等专门流程启动；普通技能一律沿用技能设置中的开关。
+///
+/// # Parameters
+/// 参数
+/// `requested` is the draft's map; `prompt_skills` is the persisted global skill configuration.
+/// `requested` 是草稿给出的映射；`prompt_skills` 是持久化的全局技能配置。
+///
+/// # Returns
+/// 返回值
+/// Overrides ordered by skill name, or an error naming the first skill that is not an on-demand
+/// bundled skill.
+/// 按技能名称排序的覆盖；遇到第一个不是随包按需技能的名称时返回错误。
+fn submission_prompt_skill_overrides(
+    requested: &std::collections::BTreeMap<String, SubmissionPromptSkillState>,
+    prompt_skills: &vulcan_provider_config::config::PersistedPromptSkillsConfiguration,
+) -> Result<Vec<vulcan_session_core::v1::config::PromptSkillOverride>, String> {
+    if requested.is_empty() {
+        return Ok(Vec::new());
+    }
+    let catalog = vulcan_prompt_skills::load_prompt_skills(
+        &vulcan_agent_runtime::skills::prompt::global_config_from_persisted(prompt_skills),
+    );
+    requested
+        .iter()
+        .map(|(name, state)| {
+            let on_demand = catalog.skills.iter().any(|skill| {
+                skill.name == *name
+                    && skill.scope == vulcan_prompt_skills::PromptSkillScope::System
+                    && skill.activation == vulcan_prompt_skills::PromptSkillActivation::OnDemand
+            });
+            if !on_demand {
+                return Err(format!(
+                    "Prompt skill `{name}` is not a bundled on-demand skill and cannot be switched by a new conversation."
+                ));
+            }
+            Ok(vulcan_session_core::v1::config::PromptSkillOverride {
+                skill_id: name.clone(),
+                enabled: *state == SubmissionPromptSkillState::Enabled,
+            })
+        })
+        .collect()
+}
+
+/// Converts persisted session skill switches into the runtime map every turn reads.
+/// 将持久化的会话技能开关转换为每个回合读取的运行态映射。
+pub(crate) fn runtime_prompt_skill_overrides(
+    overrides: &[vulcan_session_core::v1::config::PromptSkillOverride],
+) -> std::collections::BTreeMap<String, vulcan_provider_config::config::PersistedPromptSkillState> {
+    overrides
+        .iter()
+        .map(|entry| {
+            let state = if entry.enabled {
+                vulcan_provider_config::config::PersistedPromptSkillState::Enabled
+            } else {
+                vulcan_provider_config::config::PersistedPromptSkillState::Disabled
+            };
+            (entry.skill_id.clone(), state)
+        })
+        .collect()
 }
 
 /// Dedicated-session choices captured by the creation wizard.
@@ -378,7 +456,7 @@ async fn apply_submission_session_settings(
         ));
     }
     let configuration = runtime.configuration_snapshot()?;
-    let (global_output_style_selection, global_answer_mode) = {
+    let (global_output_style_selection, global_answer_mode, global_prompt_skills) = {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -390,7 +468,15 @@ async fn apply_submission_session_settings(
         (
             provider_configuration.prompt.output_style,
             crate::answer_mode::global_answer_mode(provider_configuration),
+            provider_configuration.prompt_skills.clone(),
         )
+    };
+    let prompt_skill_overrides_v1 = match settings {
+        Some(settings) => submission_prompt_skill_overrides(
+            &settings.prompt_skill_overrides,
+            &global_prompt_skills,
+        )?,
+        None => Vec::new(),
     };
     let output_style_snapshot = submission_output_style_snapshot(
         settings,
@@ -520,6 +606,7 @@ async fn apply_submission_session_settings(
                 provider_tools,
                 knowledge_libraries: knowledge_selection_v1,
                 vmm: vmm_selection_v1,
+                prompt_skill_overrides: prompt_skill_overrides_v1,
             },
             settings
                 .and_then(|settings| settings.answer_mode)
@@ -548,6 +635,8 @@ async fn apply_submission_session_settings(
     if let Some(selection) = persisted_selection_v1.as_ref() {
         runtime_state.vmm.precheck_enabled = selection.vmm.precheck_enabled;
         runtime_state.vmm.memory_writeback_enabled = selection.vmm.memory_writeback_enabled;
+        runtime_state.prompt_skill_overrides =
+            runtime_prompt_skill_overrides(&selection.prompt_skill_overrides);
     }
     if !preserve_existing_provider_tools {
         runtime_state.provider_tool_selections = provider_tool_selections
@@ -4011,6 +4100,7 @@ mod submission_session_settings_tests {
             knowledge_selection: None,
             initial_goal: None,
             dedicated: None,
+            prompt_skill_overrides: Default::default(),
         };
         assert!(
             submission_output_style_snapshot(

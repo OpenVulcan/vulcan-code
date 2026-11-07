@@ -15,6 +15,7 @@ test-support = []
 
 [dependencies]
 vulcan-product-info.workspace = true
+vulcan-feedback.workspace = true
 async-trait.workspace = true
 base64.workspace = true
 calamine.workspace = true
@@ -27,7 +28,7 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
-time = { workspace = true, features = ["formatting", "local-offset", "macros", "serde"] }
+time = { workspace = true, features = ["formatting", "local-offset", "macros", "parsing", "serde"] }
 tokio = { workspace = true, features = ["process", "rt-multi-thread"] }
 uuid.workspace = true
 vulcan-agent-runtime.workspace = true

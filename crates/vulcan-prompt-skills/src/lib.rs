@@ -154,6 +154,10 @@ pub struct PromptSkill {
     /// Frozen resource summary discovered while loading the skill package.
     /// 加载技能包时发现并冻结的资源摘要。
     pub resources: PromptSkillResourceSummary,
+    /// When the skill applies without an explicit user switch, from `vulcan.yaml`.
+    /// 用户未显式开关时技能是否生效，来自 `vulcan.yaml`。
+    #[serde(default)]
+    pub activation: PromptSkillActivation,
     /// Markdown body without YAML frontmatter.
     /// 去除 YAML frontmatter 后的 Markdown 正文。
     pub body: String,
@@ -202,6 +206,28 @@ impl PromptSkill {
 /// Stable host-owned category identifier for plugin-contributed components.
 /// 插件贡献组件使用的稳定宿主分类标识。
 pub const PLUGIN_CATEGORY_ID: &str = "plugins";
+
+/// When a prompt skill applies if no tier holds an explicit switch for it.
+/// 没有任何层级显式开关时提示词技能何时生效。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PromptSkillActivation {
+    /// The global default decides, like every ordinary skill.
+    /// 由全局默认值决定，与普通技能相同。
+    #[default]
+    Always,
+    /// Off unless the user, a project or a session turns it on, such as a skill a dedicated flow starts.
+    /// 除非用户、项目或会话将其打开，否则关闭，例如由专门流程启动的技能。
+    OnDemand,
+}
+
+impl PromptSkillActivation {
+    /// Returns whether this is the ordinary activation, which metadata files omit.
+    /// 返回是否为普通生效方式；元数据文件省略该值。
+    pub fn is_always(&self) -> bool {
+        *self == Self::Always
+    }
+}
 
 /// Optional UI-facing metadata for one prompt skill.
 /// 单个提示词技能的可选界面展示元数据。
@@ -652,6 +678,9 @@ pub enum PromptSkillStateSource {
     /// The global default decided the state.
     /// 全局默认值决定了该状态。
     GlobalDefault,
+    /// No tier switched an on-demand skill on, so it stays off.
+    /// 没有层级打开按需技能，因此保持关闭。
+    OnDemand,
 }
 
 /// Resolves the default user prompt skill root.
@@ -1445,6 +1474,9 @@ fn write_prompt_skill_package_files(
         },
         catalog: input.catalog.clone(),
         origin: input.origin.clone(),
+        // Authored and copied skills are ordinary; only bundled packages declare on-demand activation.
+        // 创作与复制的技能都是普通技能；只有随包技能声明按需生效。
+        activation: PromptSkillActivation::Always,
     };
     let yaml = serde_yaml::to_string(&metadata)
         .map_err(|error| format!("Failed to serialize Agent Skill metadata: {error}"))?;
@@ -2172,6 +2204,10 @@ pub fn parse_prompt_skill_text_with_scope(
     // Load the single strict Vulcan metadata schema when the package declares it.
     // 在技能包声明时加载唯一严格的 Vulcan 元数据结构。
     let package_metadata = load_prompt_skill_metadata(&base_dir)?;
+    let activation = package_metadata
+        .as_ref()
+        .map(|metadata| metadata.activation)
+        .unwrap_or_default();
     // Resolve the interface metadata without retaining an optional legacy shape.
     // 解析界面元数据，不保留可选旧结构。
     let interface = package_metadata
@@ -2213,6 +2249,7 @@ pub fn parse_prompt_skill_text_with_scope(
         catalog,
         origin,
         resources,
+        activation,
         body: body.trim().to_string(),
     })
 }
@@ -2370,7 +2407,7 @@ pub fn resolve_prompt_skills(
             let (state, source) = if skill.scope == PromptSkillScope::Plugin {
                 (PromptSkillState::Enabled, PromptSkillStateSource::Plugin)
             } else {
-                resolve_prompt_skill_state(&skill.name, global, project, session)
+                resolve_prompt_skill_state(&skill.name, skill.activation, global, project, session)
             };
             ResolvedPromptSkill {
                 skill,
@@ -2381,10 +2418,12 @@ pub fn resolve_prompt_skills(
         .collect()
 }
 
-/// Resolves the effective state of one prompt skill.
-/// 解析单个提示词技能的生效状态。
+/// Resolves the effective state of one prompt skill: the session, project and global switches win in that order;
+/// without any, an on-demand skill is off and every other skill follows the global default.
+/// 解析单个提示词技能的生效状态：会话、项目与全局开关依次优先；都没有时按需技能关闭，其他技能按全局默认值。
 pub fn resolve_prompt_skill_state(
     name: &str,
+    activation: PromptSkillActivation,
     global: &PromptSkillsGlobalConfig,
     project: &PromptSkillsProjectConfig,
     session: &PromptSkillsSessionConfig,
@@ -2397,6 +2436,9 @@ pub fn resolve_prompt_skill_state(
     }
     if let Some(state) = global.skill_overrides.get(name).copied() {
         return (state, PromptSkillStateSource::GlobalOverride);
+    }
+    if activation == PromptSkillActivation::OnDemand {
+        return (PromptSkillState::Disabled, PromptSkillStateSource::OnDemand);
     }
     (
         global.default_skill_state,
@@ -2567,6 +2609,10 @@ struct PromptSkillAgentMetadata {
     /// 可审计来源元数据块。
     #[serde(default)]
     origin: PromptSkillOriginMetadata,
+    /// When the skill applies without an explicit switch; omitted for ordinary skills.
+    /// 没有显式开关时技能何时生效；普通技能省略。
+    #[serde(default, skip_serializing_if = "PromptSkillActivation::is_always")]
+    activation: PromptSkillActivation,
 }
 
 /// Raw optional interface metadata fields from YAML.

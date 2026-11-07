@@ -84,6 +84,13 @@ pub(super) async fn send_metadata_get_with_authentication(
     secret: &CredentialExecutionSecret,
     operation: &str,
 ) -> Result<String, ModelDiscoveryError> {
+    // url follows the Debug user-center override only for OpenVulcan's own credential.
+    // url 只在 OpenVulcan 自有凭据时跟随 Debug 用户中心覆盖。
+    let url = match authentication {
+        AuthenticationProjection::OpenVulcanAuth => crate::openvulcan::debug_redirect_auth_url(url),
+        _ => std::borrow::Cow::Borrowed(url),
+    };
+    let url = url.as_ref();
     let mut request = http.get(url).timeout(PROVIDER_METADATA_REQUEST_TIMEOUT);
     for (name, value) in &entry.request_headers {
         let normalized_name = name.to_ascii_lowercase();

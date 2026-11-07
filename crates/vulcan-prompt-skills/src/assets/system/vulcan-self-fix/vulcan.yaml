@@ -1,0 +1,18 @@
+schema_version: 3
+activation: on_demand
+interface:
+  display_name: "Vulcan Self-Fix"
+  short_description: "Fix a Vulcan Code problem on this device and open a pull request"
+  emoji: "🛠️"
+  color: "#EA580C"
+  locales:
+    zh-CN:
+      display_name: "本机修复 Vulcan Code"
+      short_description: "在本机修复 Vulcan Code 的问题并提交拉取请求"
+catalog:
+  category_id: "engineering"
+  tags: ["vulcan-code", "contributing", "pull-request", "debug"]
+origin:
+  kind: "builtin"
+  label: "VulcanCode"
+  managed: true

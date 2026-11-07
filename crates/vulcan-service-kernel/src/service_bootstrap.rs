@@ -1684,10 +1684,18 @@ fn run_service_bootstrap(
         .task_runtime
         .set_luaskills_debug_host(Arc::new(
             crate::skills_services::KernelLuaSkillsDebugHost::new(
-                permission_registry,
+                Arc::clone(&permission_registry),
                 Arc::downgrade(state),
             ),
         ));
+    // The `feedback` tool links pull requests through the same service as the feedback list.
+    // `feedback` 工具与反馈列表经同一服务关联拉取请求。
+    agent_runtime.task_runtime.set_feedback_host(Arc::new(
+        crate::feedback_tool_host::KernelFeedbackHost::new(
+            permission_registry,
+            Arc::downgrade(state),
+        ),
+    ));
     logs.push(String::from(
         "[webui-service] agent runtime bridge ready: provider/LuaSkills/MCP handles are mounted",
     ));

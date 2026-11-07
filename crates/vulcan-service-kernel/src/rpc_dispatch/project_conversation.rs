@@ -11,6 +11,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_open_project_directory",
     "service_browse_project_directories",
     "service_add_project_from_path",
+    "service_prepare_self_fix_workspace",
     "service_toggle_project_pinned",
     "service_reorder_projects",
     "service_rename_project",
@@ -79,6 +80,16 @@ pub(super) async fn dispatch(
             service_add_project_from_path(
                 state,
                 PathBuf::from(rpc_required_param::<String>(params, "path")?),
+            )
+            .await,
+        )),
+        "service_prepare_self_fix_workspace" => rpc_json_result(broadcast_after_success(
+            &app,
+            &state.clone(),
+            crate::project_directories::service_prepare_self_fix_workspace(
+                state,
+                PathBuf::from(rpc_required_param::<String>(params, "parentDir")?),
+                rpc_required_param(params, "folderName")?,
             )
             .await,
         )),

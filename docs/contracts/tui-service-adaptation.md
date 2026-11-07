@@ -87,6 +87,7 @@ hydration 的 `session_config.unattended`，只在当前为自动审批时出现
 | 子代理模型 | 系统清单与所选已保存会话清单：每个条目可编辑备注、上移、下移、移除，“添加模型”从可用模型中选择（已列出的不重复添加），满额时说明；会话切换“本会话”时以系统清单为起点，关闭时跟随系统清单；草稿与专职会话说明不可用；每次修改保存完整清单 | SubagentModels、SessionSubagentModels |
 | MCP | stdio/http/sse 配置表单（含 OAuth 开关）、移除、运行态与能力检查；启用 OAuth 或等待授权的服务器可登录、打开授权页、手动完成、取消与退出，流程进行中每 2 秒重读 | Workbench.mcpServers、McpRuntime、McpCapabilities、McpOAuth |
 | MCP 服务 | 端点开关与地址、审批与视图说明；每个客户端的授权摘要、令牌末位与最近使用，可切换启用及读取/发送/新建/停止/回答（遵守读取依赖），以项目选择器加入或移除授权项目（移除最后一个项目被拒绝，扩大范围须显式选择全部项目），以媒体选择器切换媒体授权（含已不可用项），重命名与确认后删除；新建客户端与轮换令牌只在 WebUI 进行，因为终端从不显示令牌 | McpService |
+| 反馈与消息 | 镜像 WebUI 反馈与消息页：接收公告开关（保存完整设置）；公告列表（类型、开始时间、Markdown 正文、更新/网址/反馈链接），离线与关闭说明，查看页面时把显示中未看的公告记为已看（`dismissed: false`，不提示）；已登录时的个人消息（逐条已读、以最新编号作 `allBefore` 全部已读）与我的反馈（状态、详情含回复与链接、关联 PR、确认后删除）；编写表单（类型、标题、正文、附带日志与客户端信息默认开、允许联系默认关）：预览调用 prepare 并显示负载、字节数与脱敏命中，发送只在预览仍对应当前表单时提供，且只发送该预览的 `draftId` 与 `digest`，任何编辑都丢弃预览，`draftId` 签发后复用，`source` 固定为 `manual`。终端不能登录 OpenVulcan 账号，登录状态取自消息摘要的 `signedIn`；翻页替换当前页并可回到最新一页，而非 WebUI 的追加 | MessageCenterSettings、Announcements、MessageSummary、Messages、FeedbackList、FeedbackDetail、FeedbackPreview、FeedbackReceipt |
 | 已归档会话 | 恢复与删除 | Workbench.archivedConversations |
 | 诊断 | 重试配置、完整请求追踪和会话错误独立记录开关、打开及清理追踪目录、模块与日志 | Workbench |
 | 应用更新 | 镜像 WebUI 应用更新页：运行版本与最近检查时间（不可更新时显示原因且不提供操作）、检查、更新版本说明与大小、可安装时下载、需手动时打开下载页、进度与取消、已就绪时重启、回退提示与关闭、预览通道开关与下载线路（保存完整设置）、修复安装；`app.update.changed` 事件刷新槽位，并对每个更新版本与已就绪版本各提示一次，`service.restarting` 提示重启或安装，之后由连接自动重连 | AppUpdate |
@@ -306,6 +307,20 @@ Rust 名称列同时标明内部确认构建器，避免将预检确认辅助函
 | `mcp_service::set_mcp_service_enabled` | setMcpServiceEnabled | `service_set_mcp_service_enabled` |
 | `mcp_service::update_mcp_client` | updateMcpClient | `service_update_mcp_client` |
 | `mcp_service::delete_mcp_client` | deleteMcpClient | `service_delete_mcp_client` |
+| `feedback::prepare_feedback` | prepareFeedback | `service_prepare_feedback` |
+| `feedback::submit_feedback` | submitFeedback | `service_submit_feedback` |
+| `feedback::list_feedback` | listFeedback | `service_list_feedback` |
+| `feedback::read_feedback` | readFeedback | `service_feedback_detail` |
+| `feedback::link_feedback_pull_request` | linkFeedbackPullRequest | `service_link_feedback_pr` |
+| `feedback::delete_feedback` | deleteFeedback | `service_delete_feedback` |
+| `feedback::list_announcements` | listAnnouncements | `service_list_announcements` |
+| `feedback::mark_announcements` | markAnnouncements | `service_mark_announcements` |
+| `feedback::load_message_summary` | loadMessageSummary | `service_message_summary` |
+| `feedback::list_messages` | listMessages | `service_list_messages` |
+| `feedback::mark_messages_read` | markMessagesRead | `service_mark_messages_read` |
+| `feedback::mark_all_messages_read` | markAllMessagesRead | `service_mark_messages_read` |
+| `feedback::load_message_center_settings` | loadMessageCenterSettings | `service_message_center_settings` |
+| `feedback::save_message_center_settings` | saveMessageCenterSettings | `service_save_message_center_settings` |
 | `settings_actions::save_public_ai_provider_tool_selection` | savePublicAiProviderToolSelection | `service_save_public_ai_provider_tool_selection` |
 | `settings_actions::save_public_ai_provider_tool_capability_enabled` | savePublicAiProviderToolCapabilityEnabled | `service_save_public_ai_provider_tool_capability_enabled` |
 | `settings_actions::list_provider_tasks` | listProviderTasks | `service_list_provider_tasks` |

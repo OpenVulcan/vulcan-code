@@ -9842,6 +9842,7 @@ dependencies = [
  "vulcan-context-compaction",
  "vulcan-context-injection",
  "vulcan-core",
+ "vulcan-feedback",
  "vulcan-hooks",
  "vulcan-host-tools",
  "vulcan-llm-core",
@@ -10043,6 +10044,21 @@ dependencies = [
  "tokio",
  "uuid",
  "vulcan-ai-contract",
+ "workspace-hack",
+]
+
+[[package]]
+name = "vulcan-feedback"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "vulcan-memorymesh-core-config",
+ "vulcan-runtime-assets",
  "workspace-hack",
 ]
 
@@ -10594,6 +10610,7 @@ dependencies = [
  "vulcan-context-compaction",
  "vulcan-context-injection",
  "vulcan-core",
+ "vulcan-feedback",
  "vulcan-file-watcher",
  "vulcan-hooks",
  "vulcan-host-tools",

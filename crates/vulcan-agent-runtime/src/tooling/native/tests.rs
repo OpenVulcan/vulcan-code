@@ -77,7 +77,7 @@ fn test_rtk_disabled() -> crate::provider_config::PersistedRtkConfiguration {
 
 /// Builds one native-tool execution request with only arguments varied.
 /// 构建一条仅变更参数的原生工具执行请求。
-fn test_native_request(arguments: serde_json::Value) -> NativeToolExecutionRequest {
+pub(super) fn test_native_request(arguments: serde_json::Value) -> NativeToolExecutionRequest {
     NativeToolExecutionRequest {
         invocation_context: None,
         arguments,
@@ -91,6 +91,7 @@ fn test_native_request(arguments: serde_json::Value) -> NativeToolExecutionReque
         session_mcp: None,
         configuration: None,
         luaskills_debug: None,
+        feedback: None,
         knowledge_access: None,
         spill_root: None,
         enabled_prompt_skill_names: Vec::new(),
@@ -185,6 +186,7 @@ async fn prompt_skill_detail_uses_execution_prepared_snapshot() {
             sampled_files: vec![PathBuf::from("scripts").join("review.ps1")],
             ..vulcan_prompt_skills::PromptSkillResourceSummary::default()
         },
+        activation: Default::default(),
         body: String::from("# Prepared snapshot body"),
     };
     // The request contains the immutable turn-level snapshot and no usable user root.

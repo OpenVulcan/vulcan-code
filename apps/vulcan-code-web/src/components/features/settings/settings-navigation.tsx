@@ -8,6 +8,7 @@ import {
   GitCommitHorizontal,
   History,
   Info,
+  MessageSquare,
   Palette,
   Plug,
   RefreshCw,
@@ -161,6 +162,7 @@ export function settingsSubAreaGroups(t: ReturnType<typeof useI18n>["t"]): Setti
       icon: <Plug size={16} />,
       items: [
         { id: "mcp-service", label: t("settings.mcpService"), icon: <Plug size={16} />, description: t("settings.mcpService.description") },
+        { id: "feedback-messages", label: t("settings.feedbackMessages"), icon: <MessageSquare size={16} />, description: t("settings.feedbackMessages.description") },
       ],
     },
     {

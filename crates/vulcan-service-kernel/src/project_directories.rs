@@ -625,6 +625,150 @@ fn slugify_identifier(value: &str) -> String {
     slug.trim_matches('-').to_string()
 }
 
+/// Repository an on-device fix checks out; an existing directory must already point at it.
+/// 本机修复检出的仓库；已有目录必须已经指向它。
+const SELF_FIX_REPOSITORY_PATH: &str = "github.com/openvulcan/vulcan-code";
+
+/// Source directory prepared for an on-device fix.
+/// 为本机修复准备的源码目录。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelfFixWorkspace {
+    /// Project the fix conversation is created in.
+    /// 修复会话所在的项目。
+    pub project_id: String,
+    /// Normalized directory path.
+    /// 规范化后的目录路径。
+    pub path: String,
+    /// Whether the directory already holds a checkout of the repository, which the skill fetches
+    /// instead of cloning.
+    /// 目录是否已有该仓库的检出；技能会改为拉取而不是克隆。
+    pub existing_checkout: bool,
+    /// Version of the running Vulcan Code, whose tag the skill checks out when `main` does not
+    /// reproduce the problem.
+    /// 正在运行的 Vulcan Code 版本；`main` 无法复现问题时技能检出该版本的标签。
+    pub installed_version: String,
+}
+
+/// Prepares the directory an on-device fix works in and adds it as a project. The user chose
+/// `parent_dir`; nothing is cloned here, because the conversation clones under the user's
+/// permission mode where every command stays visible and can be refused.
+/// 准备本机修复的工作目录并将其加为项目。`parent_dir` 由用户选择；这里不克隆，克隆由会话在用户的
+/// 权限模式下执行，每条命令都可见且可被拒绝。
+///
+/// # Parameters
+/// 参数
+/// `parent_dir` must be an existing directory; `folder_name` is one plain path component.
+/// `parent_dir` 必须是已存在的目录；`folder_name` 是一个普通路径分量。
+///
+/// # Returns
+/// 返回值
+/// The project and whether a checkout already exists. A missing target is created empty; an
+/// existing one must be empty or a checkout whose remotes include the repository, and anything
+/// else is refused rather than overwritten.
+/// 返回项目及是否已有检出。目标不存在时创建空目录；已存在时必须为空或其远端包含该仓库，
+/// 其他情况一律拒绝，不覆盖。
+pub async fn service_prepare_self_fix_workspace(
+    state: SharedServiceBridgeState,
+    parent_dir: PathBuf,
+    folder_name: String,
+) -> Result<SelfFixWorkspace, String> {
+    let folder_name = folder_name.trim();
+    let plain_component = matches!(
+        Path::new(folder_name)
+            .components()
+            .collect::<Vec<_>>()
+            .as_slice(),
+        [std::path::Component::Normal(_)]
+    );
+    if !plain_component {
+        return Err(format!(
+            "The folder name must be one plain directory name: {folder_name}"
+        ));
+    }
+    let parent = normalize_task_project_path(&parent_dir);
+    if !parent.is_absolute() || !parent.is_dir() {
+        return Err(format!(
+            "The parent directory does not exist: {}",
+            normalized_workspace_path_text_from_path(&parent)
+        ));
+    }
+    let target = parent.join(folder_name);
+    let existing_checkout = if target.exists() {
+        if !target.is_dir() {
+            return Err(format!(
+                "The target exists and is not a directory: {}",
+                normalized_workspace_path_text_from_path(&target)
+            ));
+        }
+        let empty = std::fs::read_dir(&target)
+            .map_err(|error| format!("Failed to read the target directory: {error}"))?
+            .next()
+            .is_none();
+        if !empty && !checkout_points_at_self_fix_repository(&target) {
+            return Err(format!(
+                "The target directory is not empty and is not a checkout of OpenVulcan/vulcan-code: {}",
+                normalized_workspace_path_text_from_path(&target)
+            ));
+        }
+        !empty
+    } else {
+        std::fs::create_dir(&target)
+            .map_err(|error| format!("Failed to create the target directory: {error}"))?;
+        false
+    };
+    let snapshot = service_add_project_from_path(state, target.clone())
+        .await?
+        .ok_or_else(|| String::from("The source directory was not added as a project."))?;
+    let target_text =
+        normalized_workspace_path_text_from_path(&normalize_task_project_path(&target));
+    let project = snapshot
+        .projects
+        .iter()
+        .find(|project| {
+            normalized_workspace_path_text_from_path(&normalize_task_project_path(Path::new(
+                &project.path,
+            ))) == target_text
+        })
+        .ok_or_else(|| String::from("The added project is missing from the workbench."))?;
+    Ok(SelfFixWorkspace {
+        project_id: project.id.clone(),
+        path: target_text,
+        existing_checkout,
+        installed_version: vulcan_product_info::version().to_string(),
+    })
+}
+
+/// Tells whether a directory is a git checkout with a remote of the self-fix repository, read
+/// from `.git/config` without running git. Forks keep the repository as another remote, so any
+/// remote counts.
+/// 判断目录是否为远端包含自修复仓库的 git 检出；读取 `.git/config`，不运行 git。fork 会把该仓库
+/// 保留为另一个远端，因此任一远端都算数。
+fn checkout_points_at_self_fix_repository(directory: &Path) -> bool {
+    let Ok(config) = std::fs::read_to_string(directory.join(".git").join("config")) else {
+        return false;
+    };
+    config.lines().any(|line| {
+        let Some((key, value)) = line.split_once('=') else {
+            return false;
+        };
+        if key.trim() != "url" {
+            return false;
+        }
+        let normalized = value
+            .trim()
+            .to_ascii_lowercase()
+            .replace("git@github.com:", "github.com/");
+        let normalized = normalized.trim_end_matches('/');
+        let normalized = normalized.strip_suffix(".git").unwrap_or(normalized);
+        normalized
+            .strip_prefix("https://")
+            .or_else(|| normalized.strip_prefix("ssh://git@"))
+            .unwrap_or(normalized)
+            == SELF_FIX_REPOSITORY_PATH
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
@@ -637,6 +781,33 @@ mod tests {
         TestHostRuntimeRoot, test_agent_runtime_bridge, test_service_state_with_parent_session,
     };
     use vulcan_workbench_model::SessionId;
+
+    /// Only checkouts with a remote of the repository count, in https, ssh and scp forms.
+    /// 只有远端包含该仓库的检出才算数，覆盖 https、ssh 与 scp 写法。
+    #[test]
+    fn self_fix_checkout_requires_a_repository_remote() {
+        let root = std::env::temp_dir().join(format!("vulcan-self-fix-{}", uuid::Uuid::new_v4()));
+        let write = |url: &str| {
+            std::fs::create_dir_all(root.join(".git")).expect("git dir");
+            std::fs::write(
+                root.join(".git").join("config"),
+                format!("[remote \"upstream\"]\n\turl = {url}\n"),
+            )
+            .expect("git config");
+        };
+        assert!(!checkout_points_at_self_fix_repository(&root));
+        for url in [
+            "https://github.com/OpenVulcan/vulcan-code.git",
+            "git@github.com:OpenVulcan/vulcan-code.git",
+            "ssh://git@github.com/openvulcan/vulcan-code",
+        ] {
+            write(url);
+            assert!(checkout_points_at_self_fix_repository(&root), "{url}");
+        }
+        write("https://github.com/someone/vulcan-code-tools.git");
+        assert!(!checkout_points_at_self_fix_repository(&root));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     tokio::task_local! {
         /// Holds a deterministic pause at the real project-binding boundary for one test task.

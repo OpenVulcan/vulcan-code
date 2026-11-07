@@ -58,6 +58,8 @@
   "tui.diff.nextFile": "Next file",
   "tui.diff.prevFile": "Previous file",
   "tui.empty.hint": "Type a task below and press Enter. / opens commands, F1 shows keys.",
+  "tui.feedback.newest": "Back to newest",
+  "tui.feedback.signInElsewhere": "The terminal client cannot sign in. Sign in to your OpenVulcan account in the Vulcan Code desktop app or the WebUI; this page follows that account.",
   "tui.field.addConnection": "Add connection",
   "tui.field.addMcp": "Add mcp",
   "tui.field.arguments": "Arguments (one complete argument per line)",

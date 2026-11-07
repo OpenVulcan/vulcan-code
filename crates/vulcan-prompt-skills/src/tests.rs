@@ -102,6 +102,7 @@ fn prompt_skill_fixture(name: &str, description: &str) -> PromptSkill {
             ..PromptSkillOriginMetadata::default()
         },
         resources: PromptSkillResourceSummary::default(),
+        activation: PromptSkillActivation::Always,
         body: String::new(),
     }
 }
@@ -436,6 +437,56 @@ fn loads_root_vulcan_interface_metadata() {
     );
     assert_eq!(interface.emoji.as_deref(), Some("🧭"));
     assert_eq!(interface.color.as_deref(), Some("#2563EB"));
+}
+
+/// Verifies `activation: on_demand` keeps a skill off under an enabled default until a tier switches it on.
+/// 验证 `activation: on_demand` 在默认启用时仍保持关闭，直到某一层将其打开。
+#[test]
+fn on_demand_skill_stays_off_until_switched_on() {
+    let root = temp_dir();
+    let skill_dir = root.join("fixer");
+    fs::create_dir_all(&skill_dir).expect("skill dir should be created");
+    fs::write(
+        skill_dir.join(SKILL_FILE_NAME),
+        "---
+name: fixer
+description: Use for fixing.
+---
+
+# Fixer",
+    )
+    .expect("skill file should be written");
+    fs::write(
+        skill_dir.join(VULCAN_SKILL_METADATA_FILE_NAME),
+        "schema_version: 3
+activation: on_demand
+",
+    )
+    .expect("vulcan metadata should be written");
+    let catalog = load_prompt_skills_from_user_root(root);
+    assert!(catalog.errors.is_empty(), "{:?}", catalog.errors);
+    let global = PromptSkillsGlobalConfig::default();
+    let project = PromptSkillsProjectConfig::default();
+    let mut session = PromptSkillsSessionConfig::default();
+
+    let resolved = resolve_prompt_skills(&catalog, &global, &project, &session);
+    assert_eq!(
+        resolved[0].skill.activation,
+        PromptSkillActivation::OnDemand
+    );
+    assert_eq!(
+        (resolved[0].state, resolved[0].source),
+        (PromptSkillState::Disabled, PromptSkillStateSource::OnDemand)
+    );
+
+    session
+        .skill_overrides
+        .insert(String::from("fixer"), PromptSkillState::Enabled);
+    let resolved = resolve_prompt_skills(&catalog, &global, &project, &session);
+    assert_eq!(
+        (resolved[0].state, resolved[0].source),
+        (PromptSkillState::Enabled, PromptSkillStateSource::Session)
+    );
 }
 
 /// Verifies the canonical frontmatter name must equal the skill package directory name.

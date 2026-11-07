@@ -52,6 +52,26 @@ export async function addProjectFromPath(path: string): Promise<WorkbenchSnapsho
   return serviceClient.request<WorkbenchSnapshot | null>("service_add_project_from_path", { path });
 }
 
+// SelfFixWorkspace is the source directory prepared for an on-device fix, already added as a project.
+// SelfFixWorkspace 是为本机修复准备的源码目录，已作为项目添加。
+export interface SelfFixWorkspace {
+  projectId: string;
+  path: string;
+  // Whether the directory already holds a checkout, which the conversation fetches instead of cloning.
+  // 目录是否已有检出；会话会改为拉取而不是克隆。
+  existingCheckout: boolean;
+  installedVersion: string;
+}
+
+// prepareSelfFixWorkspace creates or checks `folderName` under `parentDir` and adds it as a project; nothing is cloned.
+// prepareSelfFixWorkspace 在 `parentDir` 下创建或检查 `folderName` 并将其加为项目；不进行克隆。
+export async function prepareSelfFixWorkspace(parentDir: string, folderName: string): Promise<SelfFixWorkspace> {
+  if (!hasServiceRuntime()) {
+    throw new Error("Browser service is unavailable, so the source directory cannot be prepared.");
+  }
+  return serviceClient.request<SelfFixWorkspace>("service_prepare_self_fix_workspace", { parentDir, folderName });
+}
+
 // toggleProjectPinned asks the desktop shell to toggle one project pinned state.
 // toggleProjectPinned 请求桌面壳切换单个项目的置顶状态。
 export async function toggleProjectPinned(projectId: string): Promise<void> {

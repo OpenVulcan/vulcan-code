@@ -3,6 +3,7 @@ import React from "react";
 import type {
   ComposerInitialGoalSnapshot,
   ComposerKnowledgeSelectionSnapshot,
+  ComposerPromptSkillOverrides,
   ComposerProviderToolSettingsSnapshot,
   ComposerSessionSettingsSnapshot,
   ComposerVmmPolicySnapshot,
@@ -35,6 +36,9 @@ interface DraftSessionSettingsEntry {
   // Optional initial goal.
   // 可选初始目标。
   initialGoal?: ComposerInitialGoalSnapshot;
+  // Session skill switches set by another surface together with the draft text.
+  // 其他界面随草稿文本一并设置的会话技能开关。
+  promptSkillOverrides?: ComposerPromptSkillOverrides;
 }
 
 // captureDraftSessionSettingsSnapshot returns only the exact unmaterialized slot override.
@@ -123,6 +127,9 @@ export interface ComposerDraftSessionSettingsController {
   // Clears the draft initial goal.
   // 清理草稿初始目标。
   clearInitialGoal: () => void;
+  // Replaces the draft's session skill switches.
+  // 替换草稿的会话技能开关。
+  setPromptSkillOverrides: (overrides: ComposerPromptSkillOverrides) => void;
   // Captures the latest settings synchronously at submission time.
   // 在提交时同步捕获最新设置。
   captureSubmissionSettings: () => ComposerSessionSettingsSnapshot | null;
@@ -235,6 +242,9 @@ export function useComposerDraftSessionSettings(
       return next;
     });
   }, [updateCurrent]);
+  const setPromptSkillOverrides = React.useCallback((overrides: ComposerPromptSkillOverrides) => {
+    updateCurrent((entry) => ({ ...entry, promptSkillOverrides: { ...overrides } }));
+  }, [updateCurrent]);
   const captureSubmissionSettings = React.useCallback(() => {
     // snapshot is the exact object forwarded by the send controller and acknowledged on success.
     // snapshot 是发送控制器转发并在成功时确认的精确对象。
@@ -286,6 +296,7 @@ export function useComposerDraftSessionSettings(
     setKnowledgeSelection,
     setInitialGoal,
     clearInitialGoal,
+    setPromptSkillOverrides,
     captureSubmissionSettings,
     clearSubmissionSettings,
   };

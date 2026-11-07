@@ -131,6 +131,13 @@ pub(super) fn native_plan_policy(descriptor: &NativeToolDescriptor) -> VulcanPla
                 crate::tooling::native::LUASKILLS_DEBUG_STATUS_ACTION,
             )],
         }
+    } else if descriptor.id == crate::tooling::native::FEEDBACK_TOOL_ID {
+        // Plan mode only drafts; linking a pull request writes to the OpenVulcan server.
+        // 计划模式只起草；关联拉取请求会写入 OpenVulcan 服务端。
+        VulcanPlanToolPolicy::StringArgumentAllowlist {
+            field: String::from("action"),
+            allowed_values: vec![String::from(crate::tooling::native::FEEDBACK_DRAFT_ACTION)],
+        }
     } else if descriptor.id == crate::tooling::native::MCP_CALL_TOOL_ID {
         // Calls use the read-only name heuristic of configured MCP tools, on the called tool.
         // 调用对被调用工具使用已配置 MCP 工具的只读名称启发式。
@@ -230,6 +237,22 @@ mod tests {
             native_plan_policy(&build_mcp_call_tool().descriptor),
             VulcanPlanToolPolicy::HeuristicStringArgument { field } if field == "tool"
         ));
+    }
+
+    /// Plan mode drafts feedback but never links a pull request.
+    /// 计划模式可以起草反馈，但从不关联拉取请求。
+    #[test]
+    fn feedback_only_drafts_in_plan_mode() {
+        use crate::tooling::native::{FEEDBACK_DRAFT_ACTION, build_feedback_tool};
+        let VulcanPlanToolPolicy::StringArgumentAllowlist {
+            field,
+            allowed_values,
+        } = native_plan_policy(&build_feedback_tool().descriptor)
+        else {
+            panic!("feedback should use an action-scoped Plan policy");
+        };
+        assert_eq!(field, "action");
+        assert_eq!(allowed_values, [FEEDBACK_DRAFT_ACTION]);
     }
 
     /// Plan mode only lists configuration; every configuration change stays out of it.

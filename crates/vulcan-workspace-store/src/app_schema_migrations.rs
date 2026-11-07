@@ -56,6 +56,11 @@ pub(crate) const APP_SCHEMA_MIGRATIONS: &[AppSchemaMigration] = &[
         description: "add session activity clear markers",
         apply: migrate_v2_to_v3,
     },
+    AppSchemaMigration {
+        from_version: 3,
+        description: "add local announcement marks",
+        apply: migrate_v3_to_v4,
+    },
 ];
 
 /// Current application schema version, derived from the baseline and the length of the upgrade chain.
@@ -117,6 +122,25 @@ CREATE TABLE IF NOT EXISTS session_activity_marks_v1 (
     session_id TEXT PRIMARY KEY,
     subagents_cleared_at_ms INTEGER,
     commands_cleared_at_ms INTEGER
+);
+"#,
+    )
+}
+
+/// Version 4: local marks of OpenVulcan announcements (seen in the message center, banner closed).
+/// 版本 4：OpenVulcan 公告的本地标记（已在消息中心看到、横幅已关闭）。
+///
+/// A new table without rows; announcements never seen or closed have no marks.
+/// 新表不含任何行；从未看过或关闭过的公告没有标记。
+fn migrate_v3_to_v4(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        r#"
+CREATE TABLE IF NOT EXISTS announcement_states_v1 (
+    region TEXT NOT NULL,
+    announcement_id TEXT NOT NULL,
+    seen_at_ms INTEGER,
+    dismissed_at_ms INTEGER,
+    PRIMARY KEY (region, announcement_id)
 );
 "#,
     )
@@ -296,14 +320,15 @@ mod tests {
         }
     }
 
-    /// Turns a current database back into version 1 by removing what versions 2 and 3 added.
-    /// 移除版本 2 与版本 3 新增的对象，把当前数据库还原为版本 1。
+    /// Turns a current database back into version 1 by removing what versions 2 to 4 added.
+    /// 移除版本 2 至版本 4 新增的对象，把当前数据库还原为版本 1。
     fn downgrade_to_v1(connection: &Connection) {
         connection
             .execute_batch(
                 "DROP TABLE IF EXISTS session_list_state_v1;
                  DROP TABLE project_session_preferences;
                  DROP TABLE session_activity_marks_v1;
+                 DROP TABLE announcement_states_v1;
                  UPDATE app_metadata SET value = '1' WHERE key = 'schema_version';
                  PRAGMA user_version = 1;",
             )

@@ -439,6 +439,7 @@ mod tests {
             session_mcp: None,
             configuration: None,
             luaskills_debug: None,
+            feedback: None,
             knowledge_access: None,
             spill_root: None,
             enabled_prompt_skill_names: Vec::new(),

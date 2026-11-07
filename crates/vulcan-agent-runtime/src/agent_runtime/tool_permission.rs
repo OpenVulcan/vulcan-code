@@ -34,11 +34,11 @@ use vulcan_tools_manager::{
 use crate::agent_runtime::question_runtime::{ApprovalAnswer, ToolApprovalPrompt};
 use crate::model::SessionId;
 use crate::tooling::native::{
-    APPLY_PATCH_TOOL_ID, CONFIGURATION_LIST_ACTION, DECLARE_INTENT_TOOL_ID, FILE_EDIT_TOOL_ID,
-    FILE_TOOL_ID, FILE_WRITE_TOOL_ID, LUASKILLS_DEBUG_STATUS_ACTION, LUASKILLS_DEBUG_TOOL_ID,
-    MAX_PERMISSION_REASON_CHARS, MCP_CALL_TOOL_ID, MCP_CONFIG_TOOL_ID, MCP_CONNECT_TOOL_ID,
-    PROVIDER_CONFIG_TOOL_ID, SHELL_COMMAND_TOOL_ID, TERMINAL_SESSION_TOOL_ID, declared_intent,
-    session_mcp_command_line,
+    APPLY_PATCH_TOOL_ID, CONFIGURATION_LIST_ACTION, DECLARE_INTENT_TOOL_ID, FEEDBACK_DRAFT_ACTION,
+    FEEDBACK_TOOL_ID, FILE_EDIT_TOOL_ID, FILE_TOOL_ID, FILE_WRITE_TOOL_ID,
+    LUASKILLS_DEBUG_STATUS_ACTION, LUASKILLS_DEBUG_TOOL_ID, MAX_PERMISSION_REASON_CHARS,
+    MCP_CALL_TOOL_ID, MCP_CONFIG_TOOL_ID, MCP_CONNECT_TOOL_ID, PROVIDER_CONFIG_TOOL_ID,
+    SHELL_COMMAND_TOOL_ID, TERMINAL_SESSION_TOOL_ID, declared_intent, session_mcp_command_line,
 };
 pub use command_rules::HighRiskCategory;
 
@@ -649,6 +649,14 @@ fn classify_native(tool_id: &str, args: &Value) -> PermissionSubject {
         // 读取安装状态是本地操作；安装会下载并安装可执行文件，属于扩展效果，格式错误的调用同样如此。
         LUASKILLS_DEBUG_TOOL_ID => match string_arg("action").as_deref() {
             Some(LUASKILLS_DEBUG_STATUS_ACTION) => PermissionSubject::Ungoverned,
+            _ => PermissionSubject::Opaque,
+        },
+        // A draft only shows the user a report to review and send themself; linking a pull request
+        // writes to the OpenVulcan server, an extension effect, and so is any malformed call.
+        // 草稿只是向用户展示一份供其检查并亲自发送的报告；关联拉取请求会写入 OpenVulcan 服务端，属于
+        // 扩展效果，格式错误的调用同样如此。
+        FEEDBACK_TOOL_ID => match string_arg("action").as_deref() {
+            Some(FEEDBACK_DRAFT_ACTION) => PermissionSubject::Ungoverned,
             _ => PermissionSubject::Opaque,
         },
         _ => PermissionSubject::Ungoverned,

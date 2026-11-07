@@ -13,6 +13,7 @@ impl TaskRuntime {
             environment_host: RwLock::new(None),
             configuration_host: RwLock::new(None),
             luaskills_debug_host: RwLock::new(None),
+            feedback_host: RwLock::new(None),
             session_mcp: Arc::new(crate::mcp::session::SessionMcpRegistry::new()),
             durable_return_mailboxes: RwLock::new(HashMap::new()),
             sessions: RwLock::new(HashMap::new()),
@@ -100,6 +101,29 @@ impl TaskRuntime {
         Ok(redacted)
     }
 
+    /// Returns every registered sensitive value with the label shown in its place, for host-side
+    /// filters outside tool results that must hide the same values, such as feedback reports.
+    /// A poisoned registry fails closed.
+    /// 返回每个已登记的敏感值及其替换处显示的标签，供工具结果之外必须隐藏相同值的宿主过滤器使用，
+    /// 例如反馈报告。注册表损坏时闭锁失败。
+    pub fn sensitive_values_with_labels(&self) -> Result<Vec<(String, String)>, String> {
+        let values = self
+            .sensitive_tool_output_values
+            .read()
+            .map_err(|_| String::from("Sensitive tool-output registry is unavailable."))?;
+        Ok(values
+            .iter()
+            .map(|entry| {
+                let label = entry
+                    .replacement
+                    .strip_prefix("[redacted:")
+                    .and_then(|rest| rest.strip_suffix(']'))
+                    .unwrap_or("secret");
+                (label.to_owned(), entry.value.clone())
+            })
+            .collect())
+    }
+
     /// Shares the live redaction registry with the host tool bridge for this runtime generation.
     /// 与当前运行世代的宿主工具桥共享实时遮蔽注册表。
     pub(crate) fn sensitive_tool_output_values(&self) -> SensitiveToolOutputValues {
@@ -172,6 +196,29 @@ impl TaskRuntime {
         &self,
     ) -> Option<Arc<dyn crate::tooling::native::NativeLuaSkillsDebugHost>> {
         self.luaskills_debug_host
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Installs the service kernel's feedback host; later tool bridges register the `feedback` tool
+    /// and hand it this host.
+    /// 安装服务内核的反馈宿主；之后构建的工具桥注册 `feedback` 工具并把该宿主交给它。
+    pub fn set_feedback_host(&self, host: Arc<dyn crate::tooling::native::NativeFeedbackHost>) {
+        // The slot only holds an `Arc`, so a poisoned lock still carries a consistent value.
+        // 该槽位只保存 `Arc`，因此锁中毒后其值仍然一致。
+        *self
+            .feedback_host
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(host);
+    }
+
+    /// Returns the feedback host handed to native tools, or `None` without one.
+    /// 返回交给原生工具的反馈宿主；没有时返回 `None`。
+    pub(crate) fn feedback_host(
+        &self,
+    ) -> Option<Arc<dyn crate::tooling::native::NativeFeedbackHost>> {
+        self.feedback_host
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()

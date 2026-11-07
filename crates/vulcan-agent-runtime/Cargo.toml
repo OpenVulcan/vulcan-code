@@ -51,6 +51,7 @@ vulcan-context-compaction.workspace = true
 vulcan-context-injection.workspace = true
 vulcan-core.workspace = true
 vulcan-change-set.workspace = true
+vulcan-feedback.workspace = true
 vulcan-session-boundary.workspace = true
 vulcan-host-tools.workspace = true
 vulcan-hooks.workspace = true

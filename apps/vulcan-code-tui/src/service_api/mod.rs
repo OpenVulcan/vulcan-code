@@ -14,6 +14,7 @@ pub mod answer_mode;
 pub mod app_update;
 #[cfg(test)]
 mod contracts_tests;
+pub mod feedback;
 
 pub mod knowledge_base;
 #[cfg(test)]
@@ -289,6 +290,30 @@ pub enum Slot {
     /// `loadMcpService`: the endpoint switch, its clients and the grantable media models.
     /// 端点开关、其客户端与可授权媒体模型的 `loadMcpService`。
     McpService,
+    /// `loadMessageCenterSettings`: whether announcements are received.
+    /// 是否接收公告的 `loadMessageCenterSettings`。
+    MessageCenterSettings,
+    /// `listAnnouncements`: the announcements that target this installation.
+    /// 定向到本安装的公告 `listAnnouncements`。
+    Announcements,
+    /// `loadMessageSummary`: sign-in and unread state of personal messages.
+    /// 个人消息登录与未读状态的 `loadMessageSummary`。
+    MessageSummary,
+    /// The shown page of `listMessages`; its loader carries the cursor.
+    /// `listMessages` 当前显示的一页；其加载器携带游标。
+    Messages,
+    /// The shown page of `listFeedback`; its loader carries the cursor.
+    /// `listFeedback` 当前显示的一页；其加载器携带游标。
+    FeedbackList,
+    /// `readFeedback` of the open report.
+    /// 当前打开报告的 `readFeedback`。
+    FeedbackDetail,
+    /// The latest `prepareFeedback` result: the exact request a send would transmit.
+    /// 最近一次 `prepareFeedback` 结果：发送时将传输的精确请求。
+    FeedbackPreview,
+    /// The latest `submitFeedback` receipt.
+    /// 最近一次 `submitFeedback` 回执。
+    FeedbackReceipt,
     /// `loadWorkspaceFileDirectory` of the folder the composer's `@` path mention lists.
     /// 输入框 `@` 路径提及所列文件夹的 `loadWorkspaceFileDirectory`。
     PathMentionDirectory,

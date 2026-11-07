@@ -85,6 +85,9 @@ pub enum LocalSetting {
     /// Release picked on the changelog page.
     /// 更新记录页选中的发布。
     ChangelogRelease,
+    /// One field of the feedback compose form; editing it drops the shown preview.
+    /// 反馈编写表单的一个字段；编辑它会丢弃显示中的预览。
+    Feedback(super::feedback::FeedbackField),
 }
 
 /// Where an edited value goes.
@@ -304,6 +307,9 @@ pub enum UiAction {
     /// Exact read navigation and explicit human lifecycle draft action.
     /// 精确读取导航及明确人工生命周期草稿动作。
     Knowledge(super::knowledge_actions::KnowledgeAction),
+    /// Feedback preview and send, and the open report of the feedback page.
+    /// 反馈页的预览与发送，以及当前打开的报告。
+    Feedback(super::feedback::FeedbackAction),
     /// Opens the folder picker to install a local plugin directory.
     /// 打开文件夹选择器以安装本地插件目录。
     InstallPlugin,
@@ -508,6 +514,7 @@ pub fn perform(app: &mut App, action: UiAction) {
             perform(app, UiAction::GoPage(PageId::KnowledgeLibrary));
         }
         UiAction::Knowledge(action) => super::knowledge_actions::perform(app, action),
+        UiAction::Feedback(action) => super::feedback::perform_action(app, action),
         UiAction::InstallPlugin => open_folder(app, FolderMode::Plugin, None),
         UiAction::OpenPluginMount { plugin, mount } => {
             let target = Some((plugin, mount));
@@ -869,6 +876,10 @@ pub fn apply_edit(app: &mut App, edit: Edit, value: SettingValue) {
                 }
                 LocalSetting::KnowledgeDraft(field) => {
                     super::knowledge_actions::edit_draft(app, field, &value);
+                    return;
+                }
+                LocalSetting::Feedback(field) => {
+                    super::feedback::edit(app, field, &value);
                     return;
                 }
                 LocalSetting::AgentStatus => {

@@ -123,6 +123,21 @@ pub fn version_at_least(minimum: &str) -> Result<bool, String> {
     Ok(current >= minimum)
 }
 
+/// Returns whether the running product version is at most `maximum`.
+/// 返回运行中的产品版本是否不高于 `maximum`。
+///
+/// # Returns
+/// 返回值
+/// The comparison, or an error when `maximum` is not an exact `x.y.z` version.
+/// 比较结果；`maximum` 不是精确的 `x.y.z` 版本时返回错误。
+pub fn version_at_most(maximum: &str) -> Result<bool, String> {
+    let maximum = parse_version(maximum)
+        .ok_or_else(|| format!("`{maximum}` is not an exact x.y.z version"))?;
+    let current = parse_version(version())
+        .ok_or_else(|| format!("product version `{}` is not x.y.z", version()))?;
+    Ok(current <= maximum)
+}
+
 /// Returns every release, newest first.
 /// 按从新到旧返回全部发布。
 ///

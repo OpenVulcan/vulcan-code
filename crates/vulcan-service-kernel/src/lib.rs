@@ -170,6 +170,8 @@ mod dedicated_session;
 mod environment_variables;
 mod execution_report_memory;
 mod fallback_workbench_projection;
+mod feedback_services;
+mod feedback_tool_host;
 #[cfg(test)]
 mod generated_ts_constants;
 mod git;

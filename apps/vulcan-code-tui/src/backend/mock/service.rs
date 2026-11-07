@@ -11,6 +11,9 @@ mod plugins;
 #[path = "service_knowledge.rs"]
 mod knowledge;
 
+#[path = "service_feedback.rs"]
+mod feedback;
+
 #[cfg(test)]
 #[path = "service_tests.rs"]
 mod tests;
@@ -58,6 +61,9 @@ pub struct FakeService {
     /// Base system prompt layers: built-in text, the user override and per-project overrides.
     /// 基础系统提示词层级：内置正文、用户覆盖及逐项目覆盖。
     system_prompts: Value,
+    /// Feedback, announcements, personal messages and the message-center settings.
+    /// 反馈、公告、个人消息与消息中心设置。
+    inbox: Value,
 }
 
 /// Gets a required request value and reports malformed input explicitly.
@@ -425,6 +431,7 @@ impl FakeService {
                 "builtInText":"You are Vulcan Code, a demo coding assistant.",
                 "userText":null,"projectTexts":{}
             }),
+            inbox: feedback::fixture(),
         }
     }
 
@@ -565,6 +572,9 @@ impl FakeService {
         }
         if Self::is_plugin_method(call.method) {
             return self.plugin(call.method, &call.params);
+        }
+        if Self::is_feedback_method(call.method) {
+            return self.feedback(call.method, &call.params);
         }
         if call.method.contains("knowledge") {
             return self.knowledge.answer(call);

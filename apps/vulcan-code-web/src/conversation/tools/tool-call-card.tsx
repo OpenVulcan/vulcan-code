@@ -9,8 +9,6 @@ import { ShellJobCard } from "./cards/shell-job-card";
 import { FileChangeCard, FileInspectCard, FileReadCard, MediaReadCard } from "./cards/file-cards";
 import { DocumentCard, documentToolSpec } from "./cards/document-card";
 import { GenericToolCard } from "./cards/generic-card";
-import { KnowledgeWriteCard } from "./cards/knowledge-write-card";
-import { MemorySearchCard } from "./cards/memory-search-card";
 import { LUA_TOOLS, LuaCard } from "./cards/lua-card";
 import { GoalCard, PlanCard, TodoCard } from "./cards/plan-cards";
 import { ProviderCard, providerToolSpec } from "./cards/provider-card";
@@ -34,6 +32,23 @@ export interface ToolCardDefinition {
 // FILE_MUTATION_TOOLS change files even when a failed call carries no change-set.
 // FILE_MUTATION_TOOLS 即使失败调用不携带变更集也属于文件修改。
 const FILE_MUTATION_TOOLS = new Set(["file_edit", "file_write", "apply_patch"]);
+
+// lazyCard loads a rarely used card with its first call, keeping it out of the initial bundle; it draws nothing until
+// the card has loaded.
+// lazyCard 随第一次调用加载不常用的卡片，使其不进入首屏包；卡片加载完成前不绘制任何内容。
+function lazyCard(load: () => Promise<{ default: React.ComponentType<ToolCardProps> }>): React.ComponentType<ToolCardProps> {
+  const Card = React.lazy(load);
+  return function LazyToolCard(props: ToolCardProps) {
+    return <React.Suspense fallback={null}><Card {...props} /></React.Suspense>;
+  };
+}
+
+// FeedbackCard reviews AI feedback drafts; MemorySearchCard appears only with VMM memory; KnowledgeWriteCard only when
+// the AI writes a knowledge library.
+// FeedbackCard 检查 AI 反馈草稿；MemorySearchCard 只随 VMM 记忆出现；KnowledgeWriteCard 只在 AI 写入知识库时出现。
+const FeedbackCard = lazyCard(() => import("./cards/feedback-card"));
+const MemorySearchCard = lazyCard(() => import("./cards/memory-search-card").then((module) => ({ default: module.MemorySearchCard })));
+const KnowledgeWriteCard = lazyCard(() => import("./cards/knowledge-write-card").then((module) => ({ default: module.KnowledgeWriteCard })));
 
 // GOAL_TOOLS read or change the session goal.
 // GOAL_TOOLS 读取或修改会话目标。
@@ -66,6 +81,7 @@ export function resolvePurposeCard(call: ToolCall): ToolCardDefinition | null {
   if (call.name === "todolist") return { Card: TodoCard, family: "plan" };
   if (GOAL_TOOLS.has(call.name)) return { Card: GoalCard, family: "plan" };
   if (call.name === "submit_plan") return { Card: PlanCard, family: "plan" };
+  if (call.name === "feedback") return { Card: FeedbackCard, family: "agent" };
   if (call.name === "ask") return { Card: AskCard, family: "agent" };
   if (agentToolSpec(call)) return { Card: AgentCard, family: "agent" };
   if (call.name === "knowledge_write") return { Card: KnowledgeWriteCard, family: "edit" };

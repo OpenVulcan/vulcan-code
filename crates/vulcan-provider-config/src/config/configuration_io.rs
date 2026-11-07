@@ -243,9 +243,25 @@ pub struct ProviderConfigurationFile {
         skip_serializing_if = "PersistedAppUpdateConfiguration::is_default"
     )]
     pub app_update: PersistedAppUpdateConfiguration,
+    /// Whether OpenVulcan announcements are fetched and shown; absence means on.
+    /// Read through [`ProviderConfigurationFile::receives_announcements`], which owns the default.
+    /// 是否获取并显示 OpenVulcan 公告；缺省表示开启。通过持有默认值的
+    /// [`ProviderConfigurationFile::receives_announcements`] 读取。
+    #[serde(
+        default,
+        rename = "announcementsEnabled",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub announcements_enabled: Option<bool>,
 }
 
 impl ProviderConfigurationFile {
+    /// Whether OpenVulcan announcements are fetched and shown; on unless the user turned them off.
+    /// 是否获取并显示 OpenVulcan 公告；除非用户关闭，否则开启。
+    pub fn receives_announcements(&self) -> bool {
+        self.announcements_enabled.unwrap_or(true)
+    }
+
     /// Whether new sessions are titled by a model; on unless the user turned it off.
     /// 新会话是否由模型生成标题；除非用户关闭，否则开启。
     pub fn title_generation_enabled(&self) -> bool {

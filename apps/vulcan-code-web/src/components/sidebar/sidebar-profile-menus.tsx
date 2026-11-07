@@ -1,7 +1,8 @@
 import React from "react";
-import { Settings, UserRound } from "lucide-react";
+import { MessageSquare, Settings, UserRound } from "lucide-react";
 import { AccountAvatar } from "@/components/features/account/account-avatar";
 import { OpenVulcanAccountContext } from "@/components/features/account/openvulcan-account-context";
+import { FeedbackCenterContext } from "@/components/features/feedback/feedback-center-context";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -65,6 +66,9 @@ export function SidebarUserMenu(props: {
   // account supplies the global identity and the reusable sign-in entry.
   // account 提供全局身份及可重复进入的登录入口。
   const account = React.useContext(OpenVulcanAccountContext);
+  // feedback opens the feedback window where the workbench provides it; the message center has its own rail entry.
+  // feedback 在工作台提供时打开反馈窗口；消息中心有自己的轨道入口。
+  const feedback = React.useContext(FeedbackCenterContext);
   // label uses the verified public name when connected, otherwise the existing local-user label.
   // label 在已连接时使用验证过的公开名称，否则使用既有本地用户标签。
   const label = account?.snapshot?.displayName ?? t("sidebar.user.local");
@@ -98,6 +102,10 @@ export function SidebarUserMenu(props: {
             <Settings size={15} />
             <span>{t("area.settings")}</span>
           </DropdownMenuItem>
+          {feedback ? <DropdownMenuItem onSelect={() => feedback.openFeedback()}>
+            <MessageSquare size={15} />
+            <span>{t("feedback.menu")}</span>
+          </DropdownMenuItem> : null}
         </DropdownMenuGroup>
       </DropdownMenuContent>
     </DropdownMenu>

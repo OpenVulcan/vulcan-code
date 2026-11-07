@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::v1::config::{
-    ProviderExtensionModeConfig, ProviderExtensionModeKind,
+    PromptSkillOverride, ProviderExtensionModeConfig, ProviderExtensionModeKind,
     ProviderMediaUnderstandingReasoningEffort, ProviderMediaUnderstandingRouteConfig,
     RequestOptionsConfig,
 };
@@ -618,6 +618,10 @@ fn session_selection_bundle_is_single_revision_idempotent_and_failure_atomic()
             precheck_enabled: Some(true),
             memory_writeback_enabled: Some(false),
         },
+        prompt_skill_overrides: vec![PromptSkillOverride {
+            skill_id: "vulcan-self-fix".to_string(),
+            enabled: true,
+        }],
     };
     let before_revision = doc.memory_revision();
     assert!(doc.set_session_selection_bundle(input.clone(), T0 + 1)?);
@@ -625,6 +629,10 @@ fn session_selection_bundle_is_single_revision_idempotent_and_failure_atomic()
     assert_eq!(
         doc.metadata.config.selection.output_style.as_deref(),
         Some("concise")
+    );
+    assert_eq!(
+        doc.metadata.config.selection.prompt_skill_overrides,
+        input.prompt_skill_overrides
     );
     let committed_revision = doc.memory_revision();
     assert!(!doc.set_session_selection_bundle(input.clone(), T0 + 2)?);

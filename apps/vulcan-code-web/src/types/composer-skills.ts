@@ -1549,6 +1549,9 @@ export interface AgentSkillRecordSummary {
   // Whether this effective Agent Skill is enabled.
   // 当前有效 Agent Skill 是否已启用。
   enabled: boolean;
+  // Whether the skill stays off until a dedicated flow or an explicit switch turns it on; absent means false.
+  // 技能是否在专门流程或显式开关打开前保持关闭；缺省表示否。
+  onDemand?: boolean;
   // Stable primary logical category identifier.
   // 稳定主逻辑分类标识。
   categoryId: string;

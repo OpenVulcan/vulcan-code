@@ -18,6 +18,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use vulcan_sqlite_engine::sql_exec::SqliteValue;
 
 mod ai_credentials;
+mod announcement_states;
 mod environment_variables;
 mod git_preferences;
 mod persistence;
@@ -38,6 +39,10 @@ pub use ai_credentials::{
     AiCredentialSecretRecord, create_ai_credential_secret_record,
     delete_ai_credential_secret_record, load_ai_credential_secret_record,
     replace_ai_credential_secret_record, restore_ai_credential_secret_record,
+};
+pub use announcement_states::{
+    AnnouncementMark, AnnouncementState, load_announcement_states, mark_announcements,
+    prune_announcement_states,
 };
 pub use environment_variables::{
     ENVIRONMENT_VARIABLE_DESCRIPTION_MAX_CHARS, ENVIRONMENT_VARIABLE_NAME_MAX_CHARS,

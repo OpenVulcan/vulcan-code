@@ -233,6 +233,7 @@ const TERMINAL_OUTPUT_CHUNK_COALESCE_SOFT_LIMIT_BYTES: usize = 2_048;
 mod apply_patch;
 mod configuration;
 mod environment;
+mod feedback;
 mod file;
 mod file_edit;
 mod file_read;
@@ -261,6 +262,11 @@ pub use environment::{
 };
 pub(crate) use environment::{
     build_environment_tool, child_process_environment, environment_fingerprint,
+};
+pub(crate) use feedback::build_feedback_tool;
+pub use feedback::{
+    FEEDBACK_DRAFT_ACTION, FEEDBACK_DRAFT_STATUS, FEEDBACK_LINK_PR_ACTION, FEEDBACK_TOOL_ID,
+    FeedbackRequest, NativeFeedbackHost,
 };
 pub(crate) use file::*;
 pub(crate) use file_edit::*;
@@ -429,6 +435,9 @@ pub struct NativeToolExecutionRequest {
     /// Optional luaskills-debug host; the `luaskills_debug` tool reads and installs through it.
     /// 可选的 luaskills-debug 宿主；`luaskills_debug` 工具通过它读取与安装。
     pub luaskills_debug: Option<Arc<dyn NativeLuaSkillsDebugHost>>,
+    /// Optional feedback host; the `feedback` tool links pull requests through it.
+    /// 可选的反馈宿主；`feedback` 工具通过它关联拉取请求。
+    pub feedback: Option<Arc<dyn NativeFeedbackHost>>,
     /// Optional project-authorized and session-enabled knowledge-library snapshot.
     /// 可选的项目授权且会话已启用知识库快照。
     pub knowledge_access: Option<ExecutionKnowledgeAccessContext>,
@@ -594,6 +603,7 @@ pub fn build_native_tool_catalog(
         build_mcp_call_tool(),
         build_mcp_config_tool(),
         build_provider_config_tool(),
+        build_feedback_tool(),
         build_vmm_memory_search_tool(snapshot.clone()),
         build_vmm_turn_details_tool(snapshot.clone()),
         build_vmm_memory_write_tool(snapshot.clone()),

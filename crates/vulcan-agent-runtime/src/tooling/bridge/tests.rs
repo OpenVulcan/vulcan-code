@@ -401,6 +401,85 @@ fn native_file_public_ids_are_reserved_and_deduplicated() {
     }
 }
 
+/// The feedback tool exists only where the host can reach the feedback window and user center.
+/// 反馈工具只在宿主能连接反馈窗口与用户中心时存在。
+#[test]
+fn feedback_tool_is_registered_only_with_a_host() {
+    /// Host that never runs; registration only needs it to exist.
+    /// 从不运行的宿主；注册只要求它存在。
+    #[derive(Debug)]
+    struct IdleFeedbackHost;
+    #[async_trait::async_trait]
+    impl crate::tooling::native::NativeFeedbackHost for IdleFeedbackHost {
+        async fn link_pr(
+            &self,
+            _session_id: crate::model::SessionId,
+            _feedback_id: String,
+            _url: String,
+        ) -> Result<Value, String> {
+            Err(String::from("idle"))
+        }
+    }
+    let runtime_config = crate::agent_runtime::config::AgentRuntimeConfig {
+        active_model: None,
+        active_agent_id: String::from("agent-a"),
+        agents: Vec::new(),
+        skills: Vec::new(),
+        tool_policies: Default::default(),
+        configured_mcp_server_ids: Vec::new(),
+        enabled_mcp_server_ids: Vec::new(),
+    };
+    let native_catalog = build_native_tool_catalog(
+        &runtime_config,
+        None,
+        &Default::default(),
+        Arc::new(crate::tooling::CommandSessionRuntime::new()),
+        VmmConfigLayer::default(),
+        None,
+        None,
+    );
+    let registered = |task_runtime: crate::agent_runtime::task_runtime::TaskRuntime| {
+        build_vulcan_tools_manager(
+            Arc::new(task_runtime),
+            true,
+            Arc::new(crate::agent_runtime::question_runtime::QuestionRuntime::new()),
+            native_catalog.clone(),
+            None,
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            vec![String::from(crate::tooling::native::FEEDBACK_TOOL_ID)],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Default::default(),
+            Vec::new(),
+            None,
+            Vec::new(),
+            VmmConfigLayer::default(),
+            VmmConfigLayer::default(),
+            false,
+            None,
+            None,
+        )
+        .resolve_for_execution_mode("Build")
+        .descriptors
+        .iter()
+        .any(|descriptor| descriptor.id == crate::tooling::native::FEEDBACK_TOOL_ID)
+    };
+    assert!(!registered(
+        crate::agent_runtime::task_runtime::TaskRuntime::new()
+    ));
+    let hosted = crate::agent_runtime::task_runtime::TaskRuntime::new();
+    hosted.set_feedback_host(Arc::new(IdleFeedbackHost));
+    assert!(registered(hosted));
+}
+
 /// Verifies VMM memory tools require ready configuration, enabled AI tools, and one live runtime.
 /// 验证 VMM 记忆工具要求配置就绪、AI 工具启用且运行时实时可用。
 #[test]

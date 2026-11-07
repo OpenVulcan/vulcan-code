@@ -766,6 +766,7 @@ export function ComposerPanel(props: {
     onSend: handleComposerSend,
     textareaRef: composerTextareaRef,
     onAttachFiles: (files) => void stageComposerFiles(files),
+    owner: { scopeKey: draftSlotKey, projectId: props.projectId, isDraft: !props.conversationId }, onSetDraftSkills: draftSessionSettings.setPromptSkillOverrides,
   });
 
   const { pathMention, handleKeyDown: handleTextareaKeyDown, listboxIds, textareaListbox } = useComposerTextareaKeys({

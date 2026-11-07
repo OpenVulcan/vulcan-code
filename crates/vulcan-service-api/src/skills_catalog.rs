@@ -1211,6 +1211,9 @@ pub struct AgentSkillRecordSummary {
     /// Whether this effective Agent Skill is enabled.
     /// 当前有效 Agent Skill 是否启用。
     pub enabled: bool,
+    /// Whether the skill is off until a dedicated flow or an explicit switch turns it on.
+    /// 技能是否在专门流程或显式开关打开前保持关闭。
+    pub on_demand: bool,
     /// Stable primary logical category identifier.
     /// 稳定主逻辑分类标识。
     pub category_id: String,

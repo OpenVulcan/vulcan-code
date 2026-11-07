@@ -1015,6 +1015,35 @@ pub fn embedded_resource_text(path: &str) -> Result<String, CoreError> {
 
 /// Resolves one whole prompt bundle using built-in, product, and user precedence.
 /// 使用内置、产品和用户优先级解析一个完整 Prompt Bundle。
+/// Compiles the bundled PII rules for one language without loading a VMM snapshot.
+/// 不加载 VMM 快照，仅编译某一语言的随包 PII 规则。
+///
+/// # Parameters
+/// 参数
+/// `language` names the locale rule file merged after `common.json`; a language without its own
+/// bundled file falls back to `en-US` so every interface locale gets the common rules.
+/// `language` 指定在 `common.json` 之后合并的区域规则文件；没有随包文件的语言回退到 `en-US`，
+/// 使每种界面语言都能得到通用规则。
+///
+/// # Returns
+/// 返回值
+/// The compiled scrubber and the language whose file was actually merged. User-layer overrides never
+/// apply, so the result is identical on every installation of one build.
+/// 编译好的扫描器以及实际合并的语言。用户层覆盖永不参与，因此同一构建在所有安装上结果一致。
+pub fn embedded_pii_scrubber(language: &str) -> Result<(PiiScrubber, String), CoreError> {
+    let selected = if EMBEDDED_RESOURCES
+        .get_file(format!("pii_rules/{language}.json"))
+        .is_some()
+    {
+        language
+    } else {
+        "en-US"
+    };
+    let empty = ResourceLayer::default();
+    let files = resolve_language_files("pii_rules", selected, &empty, &empty)?;
+    Ok((PiiScrubber::compile(&files)?, selected.to_owned()))
+}
+
 fn resolve_prompt_bundle(
     bundle: &str,
     scenes: &[String],

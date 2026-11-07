@@ -1,0 +1,72 @@
+{
+  "settings": { "receiveAnnouncements": true },
+  "signedIn": true,
+  "region": "global",
+  "announcements": [
+    {
+      "id": "demo-announcement-1",
+      "kind": "update",
+      "priority": "important",
+      "startsAt": "2026-11-01T08:00:00Z",
+      "endsAt": null,
+      "locale": "en-US",
+      "title": "Demo release notes",
+      "body": "A **synthetic** announcement with a list:\n\n- one\n- two",
+      "link": { "kind": "app_update" },
+      "seen": false,
+      "dismissed": false
+    },
+    {
+      "id": "demo-announcement-2",
+      "kind": "maintenance",
+      "priority": "normal",
+      "startsAt": "2026-10-20T00:00:00Z",
+      "endsAt": "2026-10-21T00:00:00Z",
+      "locale": "en-US",
+      "title": "Demo maintenance window",
+      "body": "The synthetic user center pauses briefly.",
+      "link": { "kind": "url", "url": "https://example.invalid/maintenance" },
+      "seen": true,
+      "dismissed": false
+    }
+  ],
+  "messages": [
+    {
+      "id": "demo-message-2",
+      "kind": "feedback_reply",
+      "title": "Reply to your feedback",
+      "body": "Thanks, this is a *synthetic* reply.",
+      "created_at": "2026-11-02T10:00:00Z",
+      "read_at": null,
+      "ref": { "feedback_id": "demo-feedback-1" }
+    },
+    {
+      "id": "demo-message-1",
+      "kind": "direct",
+      "title": "Welcome",
+      "body": "A synthetic direct message.",
+      "created_at": "2026-10-30T10:00:00Z",
+      "read_at": "2026-10-30T11:00:00Z",
+      "ref": {}
+    }
+  ],
+  "feedback": [
+    {
+      "id": "demo-feedback-1",
+      "kind": "bug",
+      "status": "triaged",
+      "title": "Demo crash on start",
+      "created_at": "2026-10-31T09:00:00Z",
+      "updated_at": "2026-11-02T10:00:00Z",
+      "reply_count": 1,
+      "body": "Synthetic report body.",
+      "allow_contact": false,
+      "attachments_purged": false,
+      "replies": [
+        { "body": "Thanks, this is a *synthetic* reply.", "created_at": "2026-11-02T10:00:00Z" }
+      ],
+      "links": []
+    }
+  ],
+  "drafts": {}
+}

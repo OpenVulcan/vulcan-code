@@ -23,7 +23,7 @@ static SHARED_WRITER: OnceLock<LogWriter> = OnceLock::new();
 /// Return the log directory for the already resolved authoritative data root.
 /// 根据已解析的权威数据根返回日志目录。
 pub fn directory(data_root: &Path) -> PathBuf {
-    data_root.join("logs")
+    vulcan_runtime_assets::service_log_directory(data_root)
 }
 
 /// Report startup failure through the installed sink, or stderr before a sink can exist.
@@ -266,7 +266,8 @@ impl RollingLog {
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600);
         }
-        let file = options.open(root.join("service.jsonl"))?;
+        let file =
+            options.open(root.join(vulcan_runtime_assets::service_log_segment_file_name(0)))?;
         let bytes = file.metadata()?.len();
         Ok(Self {
             root,
@@ -311,15 +312,17 @@ impl RollingLog {
         for index in (1..=ARCHIVE_COUNT).rev() {
             // Archive indices identify files, never records or source-code positions.
             // 归档编号标识文件，不代表记录或源码位置。
-            let destination = self.root.join(format!("service.{index}.jsonl"));
+            let destination = self
+                .root
+                .join(vulcan_runtime_assets::service_log_segment_file_name(index));
             if index == ARCHIVE_COUNT && destination.try_exists()? {
                 fs::remove_file(&destination)?;
             }
-            let source = if index == 1 {
-                self.root.join("service.jsonl")
-            } else {
-                self.root.join(format!("service.{}.jsonl", index - 1))
-            };
+            let source = self
+                .root
+                .join(vulcan_runtime_assets::service_log_segment_file_name(
+                    index - 1,
+                ));
             if source.try_exists()? {
                 fs::rename(source, destination)?;
             }

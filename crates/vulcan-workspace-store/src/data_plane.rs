@@ -718,6 +718,14 @@ CREATE TABLE IF NOT EXISTS session_activity_marks_v1 (
     commands_cleared_at_ms INTEGER
 );
 
+CREATE TABLE IF NOT EXISTS announcement_states_v1 (
+    region TEXT NOT NULL,
+    announcement_id TEXT NOT NULL,
+    seen_at_ms INTEGER,
+    dismissed_at_ms INTEGER,
+    PRIMARY KEY (region, announcement_id)
+);
+
 PRAGMA user_version = {schema_version};
 "#,
         schema_version = APP_SCHEMA_VERSION,
@@ -837,6 +845,7 @@ mod tests {
 
         let mut expected: Vec<(String, String)> = [
             ("table", AI_CREDENTIAL_SECRETS_TABLE),
+            ("table", "announcement_states_v1"),
             ("table", "app_metadata"),
             ("table", "environment_variable_project_bindings"),
             ("table", "environment_variables"),

@@ -39,6 +39,7 @@ export type SettingsSubAreaId =
   | "prompt-composer"
   | "app-update"
   | "changelog"
+  | "feedback-messages"
   | "about-licenses"
   | "archived-restore"
   | "subagent-models"

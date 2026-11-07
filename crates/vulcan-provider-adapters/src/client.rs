@@ -22,6 +22,20 @@ pub use openvulcan::{
     query_openvulcan_usage_page, request_openvulcan_edge_access, request_openvulcan_edge_models,
     request_openvulcan_edge_usage,
 };
+mod openvulcan_inbox;
+pub use openvulcan_inbox::{
+    OPENVULCAN_FEEDBACK_PR_URL_PREFIX, OPENVULCAN_MARK_READ_MAX_IDS, OpenVulcanAnnouncement,
+    OpenVulcanAnnouncementContent, OpenVulcanAnnouncementDocument, OpenVulcanAnnouncementLink,
+    OpenVulcanAnnouncementTarget, OpenVulcanAnnouncementsFetch, OpenVulcanFeedbackDetail,
+    OpenVulcanFeedbackLink, OpenVulcanFeedbackLinks, OpenVulcanFeedbackPage,
+    OpenVulcanFeedbackReceipt, OpenVulcanFeedbackReply, OpenVulcanFeedbackSummary,
+    OpenVulcanInboxError, OpenVulcanMarkRead, OpenVulcanMarkReadResult, OpenVulcanMessagePage,
+    OpenVulcanMessageRef, OpenVulcanMessageSummary, OpenVulcanPersonalMessage,
+    create_openvulcan_feedback, delete_openvulcan_feedback, is_openvulcan_feedback_id,
+    is_openvulcan_feedback_pr_url, is_openvulcan_message_id, link_openvulcan_feedback_pr,
+    list_openvulcan_feedback, list_openvulcan_messages, mark_openvulcan_messages_read,
+    read_openvulcan_feedback, request_openvulcan_announcements, request_openvulcan_message_summary,
+};
 mod secondary_routes;
 
 use account_usage::{

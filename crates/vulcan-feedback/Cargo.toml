@@ -1,0 +1,25 @@
+[package]
+name = "vulcan-feedback"
+description = "Feedback payloads sent to the OpenVulcan user center, with on-device filtering and exact previews."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+hex.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+vulcan-memorymesh-core-config.workspace = true
+vulcan-runtime-assets.workspace = true
+workspace-hack = { version = "0.1", path = "../../workspace-hack" }
+
+[dev-dependencies]
+tempfile.workspace = true
+vulcan-runtime-assets = { workspace = true, features = ["test-support"] }

@@ -1004,18 +1004,23 @@ pub(crate) fn agent_skill_record_summary(
     effective: bool,
     override_of: Option<String>,
 ) -> AgentSkillRecordSummary {
-    // Resolve the persisted per-skill state for the standard skill name.
-    // 为标准技能名称解析持久化单技能状态。
+    // Resolve the global state with the same rule the request builder uses, so an on-demand skill
+    // reads as off until it is switched on.
+    // 用与请求构建相同的规则解析全局状态，使按需技能在被打开前显示为关闭。
     let local_enabled = if skill.scope == vulcan_prompt_skills::PromptSkillScope::Plugin {
         true
     } else {
-        provider_configuration
-            .prompt_skills
-            .skill_overrides
-            .get(&skill.name)
-            .copied()
-            .unwrap_or(provider_configuration.prompt_skills.default_skill_state)
-            .is_enabled()
+        vulcan_prompt_skills::resolve_prompt_skill_state(
+            &skill.name,
+            skill.activation,
+            &vulcan_agent_runtime::skills::prompt::global_config_from_persisted(
+                &provider_configuration.prompt_skills,
+            ),
+            &Default::default(),
+            &Default::default(),
+        )
+        .0
+        .is_enabled()
     };
     let plugin_owned = skill.scope == vulcan_prompt_skills::PromptSkillScope::Plugin;
     AgentSkillRecordSummary {
@@ -1048,6 +1053,7 @@ pub(crate) fn agent_skill_record_summary(
         effective,
         override_of,
         enabled: effective && local_enabled,
+        on_demand: skill.activation == vulcan_prompt_skills::PromptSkillActivation::OnDemand,
         category_id: skill.catalog.category_id.clone(),
         tags: skill.catalog.tags.clone(),
         standard: AgentSkillStandardMetadataSummary {

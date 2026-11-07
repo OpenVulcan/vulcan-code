@@ -5,8 +5,8 @@ use super::persistence::DirtyFile;
 use super::{SessionDocument, ensure_api_request_field, validate_timestamp};
 use crate::v1::config::{
     ActiveRequestConfig, KnowledgeLibrarySelectionConfig, KnowledgeLibrarySelectionMode,
-    MetadataDocument, PendingRequestConfig, ProviderExtensionModeConfig, ProviderExtensionModeKind,
-    ProviderExtensionTargetSetConfig, ProviderMediaUnderstandingMode,
+    MetadataDocument, PendingRequestConfig, PromptSkillOverride, ProviderExtensionModeConfig,
+    ProviderExtensionModeKind, ProviderExtensionTargetSetConfig, ProviderMediaUnderstandingMode,
     ProviderMediaUnderstandingRouteConfig, ProviderMediaUnderstandingSelection,
     ProviderToolCapabilitySelection, ProviderToolSelectionConfig, ProviderToolTargetConfig,
     RequestOptionsConfig, VmmSessionPolicyConfig,
@@ -33,6 +33,9 @@ pub struct SessionSelectionBundleInput {
     /// Complete tri-state VMM session policy.
     /// 完整的 VMM 会话三态策略。
     pub vmm: VmmSessionPolicyConfig,
+    /// Session-level prompt-skill switches, ordered by skill id without duplicates.
+    /// 会话级提示词技能开关，按技能 id 排序且不重复。
+    pub prompt_skill_overrides: Vec<PromptSkillOverride>,
 }
 
 /// Normalizes one optional catalog or routing selection.
@@ -269,6 +272,25 @@ pub(super) fn validate_knowledge_library_selection_config(
     if config.library_ids.windows(2).any(|pair| pair[0] >= pair[1]) {
         return Err(DomainError::InvalidSelectionConfiguration {
             field: "knowledge_libraries.library_ids.order",
+        });
+    }
+    Ok(())
+}
+
+/// Validates session prompt-skill switches: canonical ids in strictly ascending order.
+/// 校验会话提示词技能开关：规范 id 且严格升序。
+pub(super) fn validate_prompt_skill_overrides(
+    overrides: &[PromptSkillOverride],
+) -> Result<(), DomainError> {
+    for entry in overrides {
+        validate_required_selection_component("prompt_skill_overrides.skill_id", &entry.skill_id)?;
+    }
+    if overrides
+        .windows(2)
+        .any(|pair| pair[0].skill_id >= pair[1].skill_id)
+    {
+        return Err(DomainError::InvalidSelectionConfiguration {
+            field: "prompt_skill_overrides.order",
         });
     }
     Ok(())
@@ -570,12 +592,14 @@ impl SessionDocument {
         validate_timestamp("updated_at_ms", now_ms)?;
         validate_provider_tool_selection_config(&input.provider_tools)?;
         validate_knowledge_library_selection_config(&input.knowledge_libraries)?;
+        validate_prompt_skill_overrides(&input.prompt_skill_overrides)?;
 
         let mut selection = self.metadata.config.selection.clone();
         selection.output_style = normalize_optional_selection(input.output_style);
         selection.provider_tools = input.provider_tools;
         selection.knowledge_libraries = input.knowledge_libraries;
         selection.vmm = input.vmm;
+        selection.prompt_skill_overrides = input.prompt_skill_overrides;
         if self.metadata.config.selection == selection {
             return Ok(false);
         }

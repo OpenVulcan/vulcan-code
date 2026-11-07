@@ -308,6 +308,7 @@ export function AgentSkillsArea(props: {
                       ? <SourceOriginLink origin={record.origin} />
                       : <Badge variant="outline">{localizedAgentSkillOrigin(record, locale, t)}</Badge>}
                     {record.overrideOf ? <Badge variant="outline">{t("agentSkills.override")}</Badge> : null}
+                    {record.onDemand && !record.enabled ? <Badge variant="outline">{t("agentSkills.onDemand")}</Badge> : null}
                     {record.owningPluginId ? <Badge variant="outline">{record.owningPluginId}</Badge> : null}
                     {record.owningPluginId ? (
                       <Badge variant={record.enabled ? "secondary" : "outline"}>

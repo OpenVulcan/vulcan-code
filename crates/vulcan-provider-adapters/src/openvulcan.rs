@@ -367,10 +367,89 @@ pub(crate) const CONTRACT_VERSION: &str = "2026-08-30";
 /// `DecisionContractVersion`）。
 pub(crate) const DECISION_CONTRACT_VERSION: &str = "2026-10-11";
 
+/// Debug-build variable naming a loopback user center that replaces both regional authorization
+/// origins, for integration tests against a local openvulcan-web; Release builds never read it.
+/// Debug 构建变量，指定一个替换两个区域授权来源的回环用户中心，用于对着本地 openvulcan-web 联调；
+/// Release 构建从不读取。
+pub const DEBUG_AUTH_ORIGIN_VARIABLE: &str = "VULCAN_DEBUG_OPENVULCAN_AUTH_ORIGIN";
+
+/// Returns the validated Debug-only authorization origin override, read once per process.
+/// 返回经校验的仅 Debug 授权来源覆盖，每个进程只读取一次。
+///
+/// # Returns
+/// 返回值
+/// `Some` only in Debug builds when the variable holds an `http(s)` origin on `127.0.0.1`,
+/// `localhost` or `[::1]` without path, userinfo, query or fragment; anything else is ignored with
+/// a warning so a typo can never send credentials elsewhere.
+/// 仅在 Debug 构建且变量是 `127.0.0.1`、`localhost` 或 `[::1]` 上不带路径、用户信息、查询与片段的
+/// `http(s)` 来源时返回 `Some`；其他取值带警告忽略，拼写错误不会把凭据发往别处。
+fn debug_auth_origin_override() -> Option<&'static str> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+    static ORIGIN: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    ORIGIN
+        .get_or_init(|| {
+            let value = std::env::var(DEBUG_AUTH_ORIGIN_VARIABLE).ok()?;
+            let origin = loopback_origin(value.trim());
+            if origin.is_none() {
+                eprintln!(
+                    "[openvulcan] ignoring {DEBUG_AUTH_ORIGIN_VARIABLE}: not a loopback http(s) origin"
+                );
+            }
+            origin
+        })
+        .as_deref()
+}
+
+/// Redirects a manifest-declared production authorization URL to the Debug override origin.
+/// 把清单声明的生产授权 URL 重定向到 Debug 覆盖来源。
+///
+/// # Returns
+/// 返回值
+/// `url` unchanged unless the override is active and `url` starts at a reviewed regional
+/// authorization origin; the signed manifest still names production, so without this the model
+/// catalog would leave the overridden deployment and the binding check would reject it.
+/// 除非覆盖生效且 `url` 以某区域已审核授权来源开头，否则原样返回；签名清单仍声明生产地址，
+/// 不重定向时模型目录会离开被覆盖的部署并被绑定校验拒绝。
+pub(crate) fn debug_redirect_auth_url(url: &str) -> std::borrow::Cow<'_, str> {
+    let Some(origin) = debug_auth_origin_override() else {
+        return std::borrow::Cow::Borrowed(url);
+    };
+    for region in [OpenVulcanRegion::China, OpenVulcanRegion::Global] {
+        if let Some(rest) = url.strip_prefix(region.reviewed_auth_origin())
+            && (rest.is_empty() || rest.starts_with('/'))
+        {
+            return std::borrow::Cow::Owned(format!("{origin}{rest}"));
+        }
+    }
+    std::borrow::Cow::Borrowed(url)
+}
+
+/// Returns `value` as a serialized origin when it is a bare loopback `http(s)` origin.
+/// 当 `value` 是纯回环 `http(s)` 来源时，返回其序列化来源。
+fn loopback_origin(value: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(value).ok()?;
+    let loopback = matches!(parsed.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+    let bare = parsed.username().is_empty()
+        && parsed.password().is_none()
+        && matches!(parsed.path(), "" | "/")
+        && parsed.query().is_none()
+        && parsed.fragment().is_none();
+    (matches!(parsed.scheme(), "http" | "https") && loopback && bare)
+        .then(|| parsed.origin().ascii_serialization())
+}
+
 impl OpenVulcanRegion {
     /// Returns the reviewed authorization origin for this fixed region without discovery.
     /// 返回此固定区域已审核的授权来源，不进行探测。
     pub fn auth_origin(self) -> &'static str {
+        debug_auth_origin_override().unwrap_or_else(|| self.reviewed_auth_origin())
+    }
+
+    /// Returns the production authorization origin that the signed provider manifest also names.
+    /// 返回签名供应商清单同样声明的生产授权来源。
+    fn reviewed_auth_origin(self) -> &'static str {
         match self {
             Self::China => "https://auth.openvulcan.cn",
             Self::Global => "https://auth.openvulcan.com",
@@ -390,6 +469,32 @@ impl OpenVulcanRegion {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies the Debug origin override accepts only bare loopback origins.
+    /// 验证 Debug 来源覆盖只接受纯回环来源。
+    #[test]
+    fn debug_origin_override_accepts_only_bare_loopback_origins() {
+        assert_eq!(
+            loopback_origin("http://127.0.0.1:35101").as_deref(),
+            Some("http://127.0.0.1:35101")
+        );
+        assert_eq!(
+            loopback_origin("http://localhost:35101/").as_deref(),
+            Some("http://localhost:35101")
+        );
+        assert!(loopback_origin("http://[::1]:35101").is_some());
+        for rejected in [
+            "https://auth.openvulcan.cn",
+            "http://127.0.0.2:35101",
+            "http://127.0.0.1:35101/api",
+            "http://user@127.0.0.1:35101",
+            "http://127.0.0.1:35101?x=1",
+            "ftp://127.0.0.1",
+            "127.0.0.1:35101",
+        ] {
+            assert!(loopback_origin(rejected).is_none(), "{rejected}");
+        }
+    }
 
     /// Builds a native descriptor from `tasks` and returns an envelope for projection and schema tests.
     /// 从 `tasks` 构建原生描述符，返回用于投影和结构测试的封装。

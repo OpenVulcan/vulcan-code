@@ -1,5 +1,5 @@
 import React from "react";
-import { Command, Ellipsis, MessagesSquare, PanelLeftOpen, Pin, Settings } from "lucide-react";
+import { Bell, Command, Ellipsis, MessagesSquare, PanelLeftOpen, Pin, Settings } from "lucide-react";
 import { toast } from "@/ui-kit/primitives/toast";
 
 import {
@@ -15,6 +15,7 @@ import {
 import { useSidebar, useSidebarNavigation } from "@/ui-kit/shell/sidebar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui-kit/primitives/tooltip";
 import { SidebarUserMenu } from "@/components/sidebar/sidebar-profile-menus";
+import { FeedbackCenterContext } from "@/components/features/feedback/feedback-center-context";
 import { VulcanSymbol } from "@/components/shell/vulcan-symbol";
 import { formatMessage, useI18n } from "@/i18n";
 import { readActivityRailPins, saveActivityRailPins } from "./activity-rail-preferences";
@@ -234,6 +235,7 @@ export function ActivityRail(props: {
         </DropdownMenu>
       </div>
       <div className="vk-rail-group" data-end="">
+        <MessageCenterRailButton />
         <ActivityRailButton
           active={false}
           icon={<Command size={18} />}
@@ -250,6 +252,28 @@ export function ActivityRail(props: {
         <SidebarUserMenu onOpenSettings={navigate(props.onSelectSettings)} />
       </div>
     </nav>
+  );
+}
+
+// MessageCenterRailButton opens the message center; a dot marks unread messages or announcements not yet seen.
+// MessageCenterRailButton 打开消息中心；圆点表示有未读消息或尚未看过的公告。
+function MessageCenterRailButton() {
+  const { t } = useI18n();
+  const center = React.useContext(FeedbackCenterContext);
+  if (!center) return null;
+  // attention counts unread personal messages plus announcements not yet seen.
+  // attention 统计未读个人消息与尚未看过的公告。
+  const attention = (center.summary?.unread ?? 0) + (center.announcements?.unseen ?? 0);
+  const label = attention > 0
+    ? formatMessage(t("messageCenter.railUnread"), { count: attention })
+    : t("messageCenter.title");
+  return (
+    <ActivityRailButton
+      active={center.messageCenterTab !== null}
+      icon={<><Bell size={18} />{attention > 0 ? <span className="vk-dot" data-tone="ember" data-rail-badge="" aria-hidden="true" /> : null}</>}
+      label={label}
+      onClick={() => center.openMessageCenter()}
+    />
   );
 }
 

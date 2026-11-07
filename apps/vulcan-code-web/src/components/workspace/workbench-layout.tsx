@@ -66,6 +66,8 @@ import { PermissionJudgeEntryContext, type PermissionJudgeEntry } from "@/compon
 import { useSetupGuide } from "@/components/features/onboarding/use-setup-guide";
 import { useOpenVulcanAccount } from "@/components/features/account/use-openvulcan-account";
 import { OpenVulcanAccountContext } from "@/components/features/account/openvulcan-account-context";
+import { useFeedbackCenter } from "@/components/features/feedback/use-feedback-center";
+import { FeedbackCenterContext } from "@/components/features/feedback/feedback-center-context";
 export type { WorkbenchDeltaSignal } from "@/components/workspace/workbench-layout/types";
 import {
   WorkspaceShell,
@@ -187,6 +189,9 @@ const SetupGuideDialog = React.lazy(() => import("@/components/features/onboardi
 // OpenVulcanAccountDialog loads only when onboarding or account management is opened.
 // OpenVulcanAccountDialog 仅在打开引导或账户管理时加载。
 const OpenVulcanAccountDialog = React.lazy(() => import("@/components/features/account/openvulcan-account-dialog"));
+// The feedback window, message center and announcement banner load only when shown.
+// 反馈窗口、消息中心与公告横幅仅在显示时加载。
+const FeedbackSurfaces = React.lazy(() => import("@/components/features/feedback/feedback-surfaces"));
 
 // MediaUploadProgressPanel loads only for an active transfer while preserving the stream-owned progress row.
 // MediaUploadProgressPanel 仅在传输进行时加载，同时保留由事件流管理的进度行。
@@ -582,6 +587,9 @@ export function WorkbenchLayout(props: {
       handleSelectTopFeatureArea("settings");
     },
   }), [accountController, handleSelectTopFeatureArea]);
+  // feedbackCenter opens the feedback window and the message center and reads their badge state.
+  // feedbackCenter 打开反馈窗口与消息中心，并读取其徽标状态。
+  const feedbackCenter = useFeedbackCenter(props.startup.ready, props.serviceInstanceEpoch, accountController.snapshot?.connectionId ?? null);
   const setupGuide = useSetupGuide(workbenchState.permissionJudgeBackend, props.startup.ready && account.initialized && !account.open);
   const permissionJudgeEntry = React.useMemo<PermissionJudgeEntry>(() => ({
     backend: workbenchState.permissionJudgeBackend ?? null,
@@ -964,12 +972,30 @@ export function WorkbenchLayout(props: {
     return [...builtIns, environmentVariables, ...pluginPages];
   }, [activeArea, activeWorkbenchSkillSubArea, handleSelectTopFeatureArea, i18n, workbenchState.plugins, workspaceMainView]);
   // Other surfaces, such as the memory page, open a prefilled conversation in the active project, or the
-  // first project when none is active.
-  // 其他界面（如记忆页）在当前项目（没有当前项目时为第一个项目）中打开预填的会话。
-  useNewConversationRequests(() => {
+  // first project when none is active. A named project, such as one just added for on-device fixing, may
+  // reach the workbench after the request, so the request waits for it.
+  // 其他界面（如记忆页）在当前项目（没有当前项目时为第一个项目）中打开预填的会话。指定的项目（如刚为本机修复
+  // 添加的项目）可能在请求之后才到达工作台，因此请求会等待它。
+  const [requestedProjectId, setRequestedProjectId] = React.useState<string | null>(null);
+  useNewConversationRequests((projectId) => {
+    if (projectId) return setRequestedProjectId(projectId);
     const project = activeProject ?? workbenchState.projects[0];
     if (project) handleCreateConversationForProject(project);
   });
+  // The project usually arrives in a service snapshot, whose later selection effects in the same commit would
+  // still see the previous draft and reselect the backend choice; the draft therefore opens after that commit,
+  // exactly as a click would.
+  // 项目通常随服务快照到达，同一提交中靠后的选择 effect 仍会看到旧草稿并重新选中后端选择；因此草稿在该提交之后
+  // 打开，与点击完全一致。
+  React.useEffect(() => {
+    const project = workbenchState.projects.find((entry) => entry.id === requestedProjectId);
+    if (!project) return;
+    const timer = window.setTimeout(() => {
+      setRequestedProjectId(null);
+      handleCreateConversationForProject(project);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [handleCreateConversationForProject, requestedProjectId, workbenchState.projects]);
   // paletteConversations names every session with its project so the command palette can open it by either.
   // paletteConversations 为每个会话附上项目名称，使命令面板可按两者之一打开会话。
   const paletteConversations = React.useMemo(() => {
@@ -1315,7 +1341,10 @@ export function WorkbenchLayout(props: {
   return (
     <OpenVulcanAccountContext.Provider value={account}>
     <AppUpdateContext.Provider value={appUpdateHost}>
+    <FeedbackCenterContext.Provider value={feedbackCenter}>
     {account.open ? <React.Suspense fallback={null}><OpenVulcanAccountDialog /></React.Suspense> : null}
+    {feedbackCenter.feedbackSeed || feedbackCenter.messageCenterTab || feedbackCenter.announcements
+      ? <React.Suspense fallback={null}><FeedbackSurfaces /></React.Suspense> : null}
     <ThinkingDisplaySystemContext.Provider value={{
       mode: workbenchState.thinkingDisplayMode,
       save: handleSelectWorkbenchThinkingDisplayMode,
@@ -1546,6 +1575,7 @@ export function WorkbenchLayout(props: {
     </ComposerSettingsHostContext.Provider>
     </ToolCollapsePreferencesContext.Provider>
     </ThinkingDisplaySystemContext.Provider>
+    </FeedbackCenterContext.Provider>
     </AppUpdateContext.Provider>
     </OpenVulcanAccountContext.Provider>
   );

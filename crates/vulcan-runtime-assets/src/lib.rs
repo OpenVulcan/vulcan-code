@@ -15,6 +15,22 @@ pub const USER_VULCAN_ROOT_DIRECTORY_NAME: &str = if cfg!(debug_assertions) {
 /// 用户级 Vulcan Code 命名空间目录名。
 pub const USER_VULCAN_CODE_DIRECTORY_NAME: &str = "code";
 
+/// Directory under the authoritative data root that holds the service diagnostic log.
+/// 权威数据根下保存服务诊断日志的目录。
+pub fn service_log_directory(data_root: &Path) -> PathBuf {
+    data_root.join("logs")
+}
+
+/// File name of one service log segment: index 0 is the active segment, 1.. are archives (newest first).
+/// 服务日志分段的文件名：编号 0 为活动分段，1 及以上为归档（越小越新）。
+pub fn service_log_segment_file_name(index: usize) -> String {
+    if index == 0 {
+        String::from("service.jsonl")
+    } else {
+        format!("service.{index}.jsonl")
+    }
+}
+
 /// Release browser-facing service start port.
 /// Release 浏览器侧服务起始端口。
 pub const RELEASE_WEBUI_SERVICE_HTTP_PORT: u16 = 17_891;

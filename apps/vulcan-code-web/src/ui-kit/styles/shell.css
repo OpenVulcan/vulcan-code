@@ -40,6 +40,7 @@
 }
 .vk-rail-btn .lucide { width: 1.38rem; height: 1.38rem; stroke-width: 1.6; }
 .vk-rail-btn:hover { color: var(--vk-ink); background: var(--vk-hover); }
+.vk-rail-btn > .vk-dot[data-rail-badge] { position: absolute; top: 22%; right: 22%; }
 .vk-rail-btn[aria-current="page"] { color: var(--vk-ink); background: var(--vk-panel); box-shadow: 0 0 0 1px var(--vk-line); }
 .vk-rail-btn[aria-current="page"]::before {
   content: "";

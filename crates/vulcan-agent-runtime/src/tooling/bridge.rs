@@ -109,6 +109,7 @@ pub fn build_vulcan_tools_manager(
     let session_mcp_access = task_runtime.native_session_mcp_access();
     let configuration_host = task_runtime.configuration_host();
     let luaskills_debug_host = task_runtime.luaskills_debug_host();
+    let feedback_host = task_runtime.feedback_host();
     // Do not register child-agent handlers when no permitted model can run.
     // 没有可运行的获准模型时，不注册子代理处理器。
     if subagents_enabled {
@@ -151,6 +152,11 @@ pub fn build_vulcan_tools_manager(
         {
             continue;
         }
+        // Feedback exists only where a host reaches the feedback window and the user center.
+        // 反馈工具只在宿主能连接反馈窗口与用户中心时存在。
+        if tool_id == crate::tooling::native::FEEDBACK_TOOL_ID && feedback_host.is_none() {
+            continue;
+        }
         let Some(definition) = native_catalog.definition(&tool_id) else {
             continue;
         };
@@ -168,6 +174,7 @@ pub fn build_vulcan_tools_manager(
         let session_mcp_access_for_context = session_mcp_access.clone();
         let configuration_host_for_context = configuration_host.clone();
         let luaskills_debug_host_for_context = luaskills_debug_host.clone();
+        let feedback_host_for_context = feedback_host.clone();
         let native_browser_runtime_for_context = native_browser_runtime.clone();
         let knowledge_access_for_context = knowledge_access.clone();
         let enabled_prompt_skill_names_for_context = enabled_prompt_skill_names.clone();
@@ -192,6 +199,7 @@ pub fn build_vulcan_tools_manager(
                 let session_mcp = Some(session_mcp_access_for_context.clone());
                 let configuration = configuration_host_for_context.clone();
                 let luaskills_debug = luaskills_debug_host_for_context.clone();
+                let feedback = feedback_host_for_context.clone();
                 let knowledge_access = knowledge_access_for_context.clone();
                 let prompt_skill_user_root = prompt_skill_user_root_for_context.clone();
                 let enabled_prompt_skill_names = enabled_prompt_skill_names_for_context.clone();
@@ -216,6 +224,7 @@ pub fn build_vulcan_tools_manager(
                                 session_mcp,
                                 configuration,
                                 luaskills_debug,
+                                feedback,
                                 native_browser_runtime,
                                 knowledge_access,
                                 enabled_prompt_skill_names,

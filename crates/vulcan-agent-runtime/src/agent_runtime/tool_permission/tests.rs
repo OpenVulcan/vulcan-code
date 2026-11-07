@@ -2042,6 +2042,49 @@ fn luaskills_debug_install_is_an_extension_effect() {
     }
 }
 
+/// A `feedback` draft is local; linking a pull request and malformed calls are extension effects.
+/// `feedback` 草稿是本地操作；关联拉取请求与格式错误的调用属于扩展效果。
+#[test]
+fn feedback_link_is_an_extension_effect() {
+    let tool = native(FEEDBACK_TOOL_ID);
+    assert_eq!(
+        classify_tool_call(
+            &tool,
+            &json!({"action": "draft", "kind": "bug", "title": "t", "body": "b"})
+        ),
+        PermissionSubject::Ungoverned
+    );
+    for args in [
+        json!({"action": "link_pr", "feedback_id": "fb_1", "url": "u"}),
+        json!({}),
+    ] {
+        assert_eq!(classify_tool_call(&tool, &args), PermissionSubject::Opaque);
+    }
+}
+
+/// Outside full access, linking feedback asks the user; full access runs it without asking.
+/// 完全权限之外，关联反馈会询问用户；完全权限直接运行而不询问。
+#[tokio::test]
+async fn feedback_link_needs_approval_outside_full_access() {
+    let tool = FEEDBACK_TOOL_ID;
+    let link = json!({"action": "link_pr", "feedback_id": "fb_1", "url": "u"});
+    let root = Path::new("/workspace");
+    for mode in [PermissionMode::ReadOnly, PermissionMode::WorkspaceWrite] {
+        let host = FixedHost::new(Ok(mode), Ok(false));
+        assert_eq!(
+            admit_call(&host, tool, link.clone(), None, root).await,
+            ToolPermissionVerdict::Deny(String::from(USER_DENIAL))
+        );
+        assert_eq!(host.prompts.lock().unwrap().len(), 1);
+    }
+    let full = FixedHost::new(Ok(PermissionMode::FullAccess), Ok(false));
+    assert_eq!(
+        admit_call(&full, tool, link, None, root).await,
+        ToolPermissionVerdict::Proceed
+    );
+    assert!(full.prompts.lock().unwrap().is_empty());
+}
+
 /// The judge and reviewer read the streamed text only when it encodes the arguments that will run.
 /// 判定器与复核者仅在流式文本编码了将运行的参数时读取该文本。
 #[test]
