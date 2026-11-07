@@ -253,11 +253,19 @@ function createWorkbenchWindow(background: string): WorkbenchWindow {
   };
   window.webContents.on('will-navigate', restrictNavigation);
   window.webContents.on('will-redirect', restrictNavigation);
-  window.on('resize', () => {
+  // Linux window managers apply maximize and restore asynchronously, so isMaximized() can still report the old
+  // state during the resize; the state events fire once the change landed and make the WebUI read it again.
+  // Linux 窗口管理器异步应用最大化与还原，resize 期间 isMaximized() 仍可能返回旧状态；状态事件在变化
+  // 完成后触发，让 WebUI 重新读取。
+  const notifyResized = () => {
     if (!window.isDestroyed()) {
       window.webContents.send(WINDOW_EVENT_CHANNELS.resized);
     }
-  });
+  };
+  window.on('resize', notifyResized);
+  window.on('maximize', notifyResized);
+  window.on('unmaximize', notifyResized);
+  window.on('restore', notifyResized);
   window.on('focus', () => {
     if (!window.isDestroyed()) {
       window.webContents.send(WINDOW_EVENT_CHANNELS.focusChanged);
