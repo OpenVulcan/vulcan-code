@@ -77,21 +77,6 @@ pub enum CoreError {
         /// 失败边界已知工具结果时保留的结构化终态事实。
         details: Option<Box<vulcan_ai_contract::AiExecutionError>>,
     },
-    /// The Provider repeated invalid tool-call arguments after the single automatic correction round.
-    /// Provider 在唯一一次自动纠错轮之后仍重复提交无效工具调用参数。
-    ///
-    /// This variant is the explicit typed terminal: the turn must never be reported as a successful
-    /// or empty final answer when the model cannot produce a well-formed tool call.
-    /// 该变体是显式的类型化终态：模型无法产出格式正确的工具调用时，回合绝不得被报告为
-    /// 成功或空文本结束。
-    ToolProtocolFailure {
-        /// Tool name that repeated the invalid arguments.
-        /// 重复提交无效参数的工具名称。
-        tool_name: String,
-        /// Stable protocol diagnostic retained for host persistence and projection.
-        /// 为宿主持久化与投影保留的稳定协议诊断。
-        message: String,
-    },
 }
 
 impl Display for CoreError {
@@ -122,9 +107,6 @@ impl Display for CoreError {
                     f,
                     "tool `{tool_name}` durability boundary failure: {message}"
                 )
-            }
-            CoreError::ToolProtocolFailure { tool_name, message } => {
-                write!(f, "tool `{tool_name}` protocol failure: {message}")
             }
         }
     }

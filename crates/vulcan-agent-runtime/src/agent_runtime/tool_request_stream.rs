@@ -31,9 +31,6 @@ pub(crate) enum ToolRequestAbortReason {
     /// Context compaction must run before the request can continue.
     /// 请求继续前必须先执行上下文压缩。
     ContextCompactionRequired,
-    /// Repeated tool-argument parse failures exhausted their budget.
-    /// 重复的工具参数解析失败已耗尽预算。
-    ToolArgumentParseFailureExhausted,
     /// The provider rejected the request for exceeding its context length.
     /// Provider 因超出上下文长度拒绝请求。
     ProviderContextLengthExceeded,
@@ -61,7 +58,6 @@ impl ToolRequestAbortReason {
             }
             Self::ProviderRouteSwitchRequired => "provider_route_switch_required",
             Self::ContextCompactionRequired => "context_compaction_required",
-            Self::ToolArgumentParseFailureExhausted => "tool_argument_parse_failure_exhausted",
             Self::ProviderContextLengthExceeded => "provider_context_length_exceeded",
             Self::ProviderRetrySuperseded => "provider_retry_superseded",
             Self::ProviderAttemptFailed => "provider_attempt_failed",
@@ -78,7 +74,6 @@ impl ToolRequestAbortReason {
             | Self::ContextCompactionPolicyRefreshRequired
             | Self::ProviderRouteSwitchRequired
             | Self::ContextCompactionRequired
-            | Self::ToolArgumentParseFailureExhausted
             | Self::ProviderContextLengthExceeded
             | Self::ProviderAttemptFailed => "stopped",
         }

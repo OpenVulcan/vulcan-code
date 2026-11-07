@@ -424,52 +424,76 @@ fn malformed_provider_arguments_return_tool_error_without_executor_dispatch() {
     });
 }
 
-/// Verifies a second malformed tool call ends the user turn with an explicit tool-protocol failure.
-/// 验证第二次格式错误的工具调用以显式工具协议失败结束用户回合。
+/// Builds one Provider response whose only tool call carries arguments that failed to parse.
+/// 构建一条 Provider 响应，其唯一工具调用的参数解析失败。
+fn malformed_edit_response(suffix: &str) -> ProviderTurnResponse {
+    ProviderTurnResponse {
+        assistant_text: String::new(),
+        assistant_reasoning: String::new(),
+        provider_message_id: Some(format!("response-invalid-{suffix}")),
+        provider_message_state: None,
+        tool_calls: vec![ConversationToolCall {
+            id: format!("item-invalid-{suffix}"),
+            tool_call_id: Some(format!("call-invalid-{suffix}")),
+            tool_name: String::from("file_edit"),
+            arguments: Value::Null,
+            argument_parse_error: Some(format!("invalid JSON {suffix}")),
+            raw_arguments: Default::default(),
+        }],
+        continuation: None,
+        usage: None,
+    }
+}
+
+/// Builds the tool-free Provider response that ends the user turn.
+/// 构建结束用户回合的无工具 Provider 响应。
+fn final_answer_response() -> ProviderTurnResponse {
+    ProviderTurnResponse {
+        assistant_text: String::from("done"),
+        assistant_reasoning: String::new(),
+        provider_message_id: Some(String::from("response-final")),
+        provider_message_state: None,
+        tool_calls: Vec::new(),
+        continuation: None,
+        usage: None,
+    }
+}
+
+/// Counts the model-visible argument-parse errors recorded in the snapshot.
+/// 统计快照中记录的模型可见参数解析错误。
+fn argument_parse_error_results(controller: &VulcanCoreController) -> usize {
+    controller
+        .snapshot()
+        .messages
+        .iter()
+        .filter(|message| {
+            matches!(
+                &message.payload,
+                ConversationPayload::ToolResult { is_error: true, text, .. }
+                    if text.starts_with("[tool_argument_parse_error]")
+            )
+        })
+        .count()
+}
+
+/// Verifies repeated malformed tool calls are each answered with a tool error and never end the turn.
+/// 验证重复的非法工具调用每次都以工具错误回应，且绝不结束回合。
 #[test]
-fn malformed_provider_arguments_allow_only_one_model_correction_round() {
+fn repeated_malformed_provider_arguments_are_fed_back_without_ending_the_turn() {
     let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
     runtime.block_on(async {
-        // malformedResponse builds one authoritative non-executable tool call for a physical Provider turn.
-        // malformedResponse 为一次真实 Provider 回合构建一条权威且不可执行的工具调用。
-        let malformed_response = |suffix: &str| ProviderTurnResponse {
-            assistant_text: String::new(),
-            assistant_reasoning: String::new(),
-            provider_message_id: Some(format!("response-invalid-{suffix}")),
-            provider_message_state: None,
-            tool_calls: vec![ConversationToolCall {
-                id: format!("item-invalid-{suffix}"),
-                tool_call_id: Some(format!("call-invalid-{suffix}")),
-                tool_name: String::from("file_edit"),
-                arguments: Value::Null,
-                argument_parse_error: Some(format!("invalid JSON {suffix}")),
-                raw_arguments: Default::default(),
-            }],
-            continuation: None,
-            usage: None,
-        };
-        // thirdResponse would prove an unintended second correction request if it were consumed.
-        // thirdResponse 若被消费即可证明错误地发起了第二次纠错请求。
-        let third_response = ProviderTurnResponse {
-            assistant_text: String::from("unexpected third Provider turn"),
-            assistant_reasoning: String::new(),
-            provider_message_id: Some(String::from("response-unexpected-third")),
-            provider_message_state: None,
-            tool_calls: Vec::new(),
-            continuation: None,
-            usage: None,
-        };
         let adapter = MockStreamingProviderAdapter::new(vec![
-            (Vec::new(), malformed_response("first")),
-            (Vec::new(), malformed_response("second")),
-            (Vec::new(), third_response),
+            (Vec::new(), malformed_edit_response("first")),
+            (Vec::new(), malformed_edit_response("second")),
+            (Vec::new(), malformed_edit_response("third")),
+            (Vec::new(), final_answer_response()),
         ]);
         let executor = MockToolExecutor::new();
         let mut controller =
             VulcanCoreController::new(build_test_config(8), ConversationSnapshot::default())
                 .expect("valid core conversation snapshot");
 
-        let error = controller
+        controller
             .run_user_turn_streaming(
                 &adapter,
                 &executor,
@@ -477,85 +501,32 @@ fn malformed_provider_arguments_allow_only_one_model_correction_round() {
                 "Apply the requested edit.",
             )
             .await
-            .expect_err("a repeated malformed tool call must fail the user turn");
+            .expect("malformed tool calls are tool errors, not turn failures");
 
-        // The failure is typed, carries the repeated tool identity, and marks the controller failed.
-        // 失败是类型化的、携带重复工具身份，并把控制器标记为失败。
-        assert!(matches!(
-            error,
-            CoreError::ToolProtocolFailure { ref tool_name, ref message }
-                if tool_name == "file_edit"
-                    && message.contains("tool_argument_parse_failure_exhausted")
-                    && message.contains("invalid JSON second")
-        ));
-        assert_eq!(controller.phase(), ControllerPhase::Failed);
-        // No successful final event may exist for a turn closed by the tool-protocol failure.
-        // 由工具协议失败结束的回合不得存在任何成功 Final 事件。
-        assert!(
-            controller
-                .events()
-                .iter()
-                .all(|event| !matches!(event.kind, CoreEventKind::Final))
-        );
-        assert_eq!(adapter.built_requests().len(), 2);
+        assert_eq!(controller.phase(), ControllerPhase::Completed);
+        assert_eq!(adapter.built_requests().len(), 4);
         assert!(executor.executed_requests().is_empty());
-        let rejected_results = controller
-            .snapshot()
-            .messages
-            .iter()
-            .filter(|message| {
-                matches!(
-                    &message.payload,
-                    ConversationPayload::ToolResult { is_error: true, text, .. }
-                        if text.starts_with("[tool_argument_parse_error]")
-                )
-            })
-            .count();
-        assert_eq!(rejected_results, 2);
+        assert_eq!(argument_parse_error_results(&controller), 3);
     });
 }
 
-/// Verifies the non-streaming loop reports the same typed tool-protocol failure for repeated malformed arguments.
-/// 验证非流式循环对重复非法参数报告同一类型化工具协议失败。
+/// Verifies the non-streaming loop feeds repeated malformed arguments back the same way.
+/// 验证非流式循环以同样方式反馈重复的非法参数。
 #[test]
-fn malformed_provider_arguments_fail_non_streaming_turn_with_typed_protocol_failure() {
+fn repeated_malformed_provider_arguments_continue_the_non_streaming_turn() {
     let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
     runtime.block_on(async {
-        let malformed_response = |suffix: &str| ProviderTurnResponse {
-            assistant_text: String::new(),
-            assistant_reasoning: String::new(),
-            provider_message_id: Some(format!("response-invalid-{suffix}")),
-            provider_message_state: None,
-            tool_calls: vec![ConversationToolCall {
-                id: format!("item-invalid-{suffix}"),
-                tool_call_id: Some(format!("call-invalid-{suffix}")),
-                tool_name: String::from("file_edit"),
-                arguments: Value::Null,
-                argument_parse_error: Some(format!("invalid JSON {suffix}")),
-                raw_arguments: Default::default(),
-            }],
-            continuation: None,
-            usage: None,
-        };
         let adapter = MockProviderAdapter::new(vec![
-            malformed_response("first"),
-            malformed_response("second"),
-            ProviderTurnResponse {
-                assistant_text: String::from("unexpected third Provider turn"),
-                assistant_reasoning: String::new(),
-                provider_message_id: Some(String::from("response-unexpected-third")),
-                provider_message_state: None,
-                tool_calls: Vec::new(),
-                continuation: None,
-                usage: None,
-            },
+            malformed_edit_response("first"),
+            malformed_edit_response("second"),
+            final_answer_response(),
         ]);
         let executor = MockToolExecutor::new();
         let mut controller =
             VulcanCoreController::new(build_test_config(8), ConversationSnapshot::default())
                 .expect("valid core conversation snapshot");
 
-        let error = controller
+        controller
             .run_user_turn(
                 &adapter,
                 &executor,
@@ -563,15 +534,12 @@ fn malformed_provider_arguments_fail_non_streaming_turn_with_typed_protocol_fail
                 "Apply the requested edit.",
             )
             .await
-            .expect_err("the non-streaming loop must fail the repeated malformed batch");
+            .expect("malformed tool calls are tool errors, not turn failures");
 
-        assert!(matches!(
-            error,
-            CoreError::ToolProtocolFailure { ref tool_name, .. } if tool_name == "file_edit"
-        ));
-        assert_eq!(controller.phase(), ControllerPhase::Failed);
-        assert_eq!(adapter.built_requests().len(), 2);
+        assert_eq!(controller.phase(), ControllerPhase::Completed);
+        assert_eq!(adapter.built_requests().len(), 3);
         assert!(executor.executed_requests().is_empty());
+        assert_eq!(argument_parse_error_results(&controller), 2);
     });
 }
 

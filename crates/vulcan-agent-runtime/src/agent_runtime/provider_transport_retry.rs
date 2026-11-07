@@ -725,7 +725,6 @@ fn classify_legacy_retry_reason(
             | VulcanCoreError::ProviderRouteSwitchRequired { .. }
             | VulcanCoreError::ToolFailure { .. }
             | VulcanCoreError::ToolDurabilityFailure { .. }
-            | VulcanCoreError::ToolProtocolFailure { .. }
     ) {
         return None;
     }
@@ -1599,22 +1598,6 @@ mod tests {
             tool_name: String::from("file"),
             message: String::from("canonical ChangeSet rejection"),
             details: None,
-        };
-        assert!(policy().next_retry(&error, 0, false).is_none());
-        assert!(classify_retry_reason(&error, true, &[]).is_none());
-    }
-
-    /// Verifies repeated malformed tool arguments remain a terminal tool-protocol failure.
-    /// 验证重复的非法工具参数保持为终态工具协议失败。
-    #[test]
-    fn repeated_malformed_tool_arguments_are_terminal() {
-        // error is the exact Core category emitted after the single automatic correction round is exhausted.
-        // error 是唯一一次自动纠错轮耗尽后发出的精确 Core 分类。
-        let error = VulcanCoreError::ToolProtocolFailure {
-            tool_name: String::from("file_edit"),
-            message: String::from(
-                "tool_argument_parse_failure_exhausted: invalid arguments twice in one user turn",
-            ),
         };
         assert!(policy().next_retry(&error, 0, false).is_none());
         assert!(classify_retry_reason(&error, true, &[]).is_none());

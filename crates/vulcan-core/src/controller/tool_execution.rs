@@ -2,7 +2,7 @@ use super::*;
 
 /// Stable model-visible marker for a rejected Provider tool-argument document.
 /// Provider 工具参数文档被拒绝时使用的稳定模型可见标记。
-pub(super) const TOOL_ARGUMENT_PARSE_FAILURE_PREFIX: &str = "[tool_argument_parse_error]";
+const TOOL_ARGUMENT_PARSE_FAILURE_PREFIX: &str = "[tool_argument_parse_error]";
 
 /// Builds one non-executed tool result for Provider arguments that could not be parsed as complete JSON.
 /// 为无法解析为完整 JSON 的 Provider 参数构建一条未执行工具结果。
@@ -24,7 +24,7 @@ fn build_tool_argument_parse_failure_result(
         tool_call_id: request.tool_call_id.clone(),
         tool_name: request.tool_name.clone(),
         model_output: format!(
-            "{TOOL_ARGUMENT_PARSE_FAILURE_PREFIX}\nTool `{}` was not executed because the Provider emitted incomplete or invalid JSON arguments.\nReason: {}\nCreate a new tool call with complete JSON that conforms to the tool schema. This is the only automatic correction attempt for this user turn.",
+            "{TOOL_ARGUMENT_PARSE_FAILURE_PREFIX}\nTool `{}` was not executed because the Provider emitted incomplete or invalid JSON arguments.\nReason: {}\nCreate a new tool call with complete JSON that conforms to the tool schema. When the arguments ended early, the call was most likely cut off for being too long: send shorter arguments, for example by splitting a large write into several smaller edits.",
             request.tool_name, message,
         ),
         host_result: Some(json!({
