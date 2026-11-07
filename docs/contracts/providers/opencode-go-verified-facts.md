@@ -184,4 +184,26 @@ OAuth 测试保留双端点读取及余额失败时整体失败的行为。
   `mimo-v2.5` 与 `mimo-v2.5-pro` 也不登记：说明页列了它们，但实时目录不返回（2026-10-31 已因此移除）。
 - 说明页的协议表与清单所选协议逐一核对一致：Grok、GPT、Muse 走 Responses，Claude Haiku、MiniMax M3、Qwen
   走 Messages，Gemini 走 generateContent，其余走 Chat。
-- 新增两个模型的结构化输出未实测，不声明 `json_schema`。
+
+## 2026-11-07 结构化输出补测
+
+证据：对所有尚无结构化输出证据的 13 个 Go 模型，按宿主编码器的实际请求形状发送真实请求，每种模式 2 次。
+`json_schema` 使用 strict Schema，并带一个 Prompt 未提及的枚举探针字段，回填正确才算通过。Messages 编码器不支持
+无 Schema 的 JSON，只测 `json_schema`。清单 revision 13，证据修订 `opencode-go.structured-output-probe.2026-11-07`。
+
+| 模型 | 协议 | `json_object` | `json_schema` | 声明 |
+| --- | --- | --- | --- | --- |
+| Claude Haiku 5.5 | Messages | 不适用 | 2/2 | `json_schema` |
+| Qwen3.7 Plus、Qwen3.8 Flash、Qwen3.8 Max | Messages | 不适用 | 各 2/2 | `json_schema` |
+| Gemini 4 Argon | generateContent | 2/2 | 2/2 | `json_schema` |
+| Hy3 | Chat | 400（上游错误） | 2/2 | `json_schema` |
+| Hy4 Preview、LongCat-2.0、MiMo-V2.6 Flash、MiMo-V2.6 Pro | Chat | 各 2/2 | 各 2/2 | `json_schema` |
+| Hy4 | Chat | 2/2 | 3/5，2 次 JSON 被截断 | `json_object` |
+| MiniMax M3.1 Flash | Chat | 2/2 | 忽略 Schema，只回答 `42` | `json_object` |
+| MiniMax M3 | Messages | 不适用 | 忽略 Schema，只回答 `42` | `unsupported` |
+
+- 宿主只在 Chat、Responses 与 Messages 路由上把调用方 Schema 发给供应商；Chat 与 Responses 仅限声明了
+  `json_schema` 的模型，否则发 `json_object`。因此 Hy3 的 `json_object` 返回 400 不影响使用。Gemini 路由
+  无论声明什么都只发 `responseMimeType`（JSON 对象），由宿主校验 Schema，Argon 在该模式下通过。
+- Qwen3.8 Max 的输出带多余换行与空白，但都是合法 JSON，结束原因为 `end_turn`。
+- MiniMax M3 在 Messages 上没有可用的结构化模式，声明为 `unsupported`。

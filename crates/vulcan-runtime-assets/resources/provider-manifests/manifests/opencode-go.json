@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "opencode-go",
-  "revision": 12,
-  "published_at": "2026-11-07T11:37:04Z",
+  "revision": 13,
+  "published_at": "2026-11-07T11:51:10Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -363,7 +363,13 @@
       },
       "request_profile_refs": [
         "opencode-go.anthropic.adaptive-effort.v1"
-      ]
+      ],
+      "protocol_capabilities": {
+        "anthropic-messages.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "opencode-go.structured-output-probe.2026-11-07"
+        }
+      }
     },
     {
       "rule_id": "deepseek-v4-pro",
@@ -720,7 +726,13 @@
         "output_limit": 128000,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
-      "request_profile_refs": []
+      "request_profile_refs": [],
+      "protocol_capabilities": {
+        "openai-chat-completions.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "opencode-go.structured-output-probe.2026-11-07"
+        }
+      }
     },
     {
       "rule_id": "hy4-preview",
@@ -750,7 +762,13 @@
         "output_limit": 64000,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
-      "request_profile_refs": []
+      "request_profile_refs": [],
+      "protocol_capabilities": {
+        "openai-chat-completions.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "opencode-go.structured-output-probe.2026-11-07"
+        }
+      }
     },
     {
       "rule_id": "kimi-k2-7-code",
@@ -891,7 +909,13 @@
         "output_limit": 131072,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
-      "request_profile_refs": []
+      "request_profile_refs": [],
+      "protocol_capabilities": {
+        "openai-chat-completions.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "opencode-go.structured-output-probe.2026-11-07"
+        }
+      }
     },
     {
       "rule_id": "mimo-v2-6-flash",
@@ -922,7 +946,13 @@
         "output_limit": 131072,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
-      "request_profile_refs": []
+      "request_profile_refs": [],
+      "protocol_capabilities": {
+        "openai-chat-completions.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "opencode-go.structured-output-probe.2026-11-07"
+        }
+      }
     },
     {
       "rule_id": "mimo-v2-6-pro",
@@ -953,7 +983,13 @@
         "output_limit": 131072,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
-      "request_profile_refs": []
+      "request_profile_refs": [],
+      "protocol_capabilities": {
+        "openai-chat-completions.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "opencode-go.structured-output-probe.2026-11-07"
+        }
+      }
     },
     {
       "rule_id": "minimax-m3",
@@ -988,7 +1024,13 @@
       },
       "request_profile_refs": [
         "opencode-go.anthropic.toggle.v1"
-      ]
+      ],
+      "protocol_capabilities": {
+        "anthropic-messages-video.v1": {
+          "structured_output": "unsupported",
+          "evidence_revision": "opencode-go.structured-output-probe.2026-11-07"
+        }
+      }
     },
     {
       "rule_id": "minimax-m3-1-flash",
@@ -1024,7 +1066,13 @@
         "output_limit": 512000,
         "evidence_revision": "opencode-go.live-catalog.2026-10-31"
       },
-      "request_profile_refs": []
+      "request_profile_refs": [],
+      "protocol_capabilities": {
+        "openai-chat-completions.v1": {
+          "structured_output": "json_object",
+          "evidence_revision": "opencode-go.structured-output-probe.2026-11-07"
+        }
+      }
     },
     {
       "rule_id": "muse-spark-1-2-contributor",
@@ -1148,7 +1196,13 @@
       },
       "request_profile_refs": [
         "opencode-go.anthropic.budget.v1"
-      ]
+      ],
+      "protocol_capabilities": {
+        "anthropic-messages-video.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "opencode-go.structured-output-probe.2026-11-07"
+        }
+      }
     },
     {
       "rule_id": "qwen3-8-flash",
@@ -1185,7 +1239,13 @@
       },
       "request_profile_refs": [
         "opencode-go.anthropic.adaptive-effort.v1"
-      ]
+      ],
+      "protocol_capabilities": {
+        "anthropic-messages-video.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "opencode-go.structured-output-probe.2026-11-07"
+        }
+      }
     },
     {
       "rule_id": "qwen3-8-max",
@@ -1222,7 +1282,13 @@
       },
       "request_profile_refs": [
         "opencode-go.anthropic.adaptive-effort.v1"
-      ]
+      ],
+      "protocol_capabilities": {
+        "anthropic-messages-video.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "opencode-go.structured-output-probe.2026-11-07"
+        }
+      }
     },
     {
       "rule_id": "step-5-preview",
@@ -1298,7 +1364,13 @@
         "output_limit": 65536,
         "evidence_revision": "opencode-go.live-catalog.2026-11-07"
       },
-      "request_profile_refs": []
+      "request_profile_refs": [],
+      "protocol_capabilities": {
+        "google.gemini.generate_content": {
+          "structured_output": "json_schema",
+          "evidence_revision": "opencode-go.structured-output-probe.2026-11-07"
+        }
+      }
     },
     {
       "rule_id": "hy4",
@@ -1330,7 +1402,13 @@
         "output_limit": 65536,
         "evidence_revision": "opencode-go.live-catalog.2026-11-07"
       },
-      "request_profile_refs": []
+      "request_profile_refs": [],
+      "protocol_capabilities": {
+        "openai-chat-completions.v1": {
+          "structured_output": "json_object",
+          "evidence_revision": "opencode-go.structured-output-probe.2026-11-07"
+        }
+      }
     }
   ],
   "usage_profiles": [
@@ -1644,6 +1722,10 @@
       {
         "url": "builtin:opencode-go.live-catalog.2026-11-07",
         "note": "2026-11-07 API-key read of GET /inference/go/v1/models: 30 models. Added Gemini 4 Argon (Gemini generateContent at /inference/go/google/v1beta; Bearer streaming and thinkingLevel calls returned 200) and Hy4 (Chat, none/high); GLM-5.3 Flash no longer lists file input. beam-free, crouton-alpha-free and iceman-contributor-free stay out under the no-free-models rule. Limits, modalities and effort lists come from the live catalog."
+      },
+      {
+        "url": "builtin:opencode-go.structured-output-probe.2026-11-07",
+        "note": "2026-11-07 API-key probe of every Go model without structured-output evidence, using the host wire shapes and an enum probe field the prompt never mentions; two runs per mode. json_schema enforced: Claude Haiku 5.5 and Qwen3.7 Plus, Qwen3.8 Flash, Qwen3.8 Max on Messages; Gemini 4 Argon on generateContent (json_object also passes, which is what the host sends there); Hy3, Hy4 Preview, LongCat-2.0, MiMo-V2.6 Flash and Pro on Chat (Hy3 json_object returns 400 upstream, unused once json_schema is declared). Hy4 json_schema truncated the JSON in 2 of 5 runs, so it stays json_object (2 of 2). MiniMax M3.1 Flash ignores the schema and answers 42, json_object passes: json_object. MiniMax M3 on Messages ignores the schema and has no schema-free mode there: unsupported."
       }
     ],
     "verified_at": "2026-11-07T00:00:00Z"
