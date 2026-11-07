@@ -111,6 +111,29 @@
       ]
     },
     {
+      "key": "claude-fable-5.1",
+      "aliases": [],
+      "context_window": 1000000,
+      "input_modalities": [
+        "file",
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "output_limit": 128000,
+      "reasoning": "native",
+      "reasoning_control": "effort_selection",
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
       "key": "claude-haiku-4-5",
       "aliases": [],
       "context_window": 200000,
@@ -358,6 +381,29 @@
       ]
     },
     {
+      "key": "claude-opus-5.5",
+      "aliases": [],
+      "context_window": 1000000,
+      "input_modalities": [
+        "file",
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "output_limit": 128000,
+      "reasoning": "native",
+      "reasoning_control": "effort_selection",
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
       "key": "claude-sonnet-4-6",
       "aliases": [],
       "context_window": 1000000,
@@ -438,6 +484,29 @@
       "output_limit": 128000,
       "reasoning": "native",
       "reasoning_control": "unknown",
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "key": "claude-sonnet-5.5",
+      "aliases": [],
+      "context_window": 1000000,
+      "input_modalities": [
+        "file",
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "output_limit": 128000,
+      "reasoning": "native",
+      "reasoning_control": "effort_selection",
       "reasoning_efforts": [
         "low",
         "medium",
@@ -852,6 +921,49 @@
       ]
     },
     {
+      "key": "gemini-3.8-flash",
+      "aliases": [],
+      "context_window": 1048000,
+      "input_modalities": [
+        "audio",
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "output_limit": 64000,
+      "reasoning": "native",
+      "reasoning_control": "effort_selection",
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "key": "gemini-4-argon",
+      "aliases": [],
+      "context_window": 1048000,
+      "input_modalities": [
+        "audio",
+        "file",
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "output_limit": 64000,
+      "reasoning": "native",
+      "reasoning_control": "effort_selection",
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
       "key": "glm-5",
       "aliases": [],
       "context_window": 198000,
@@ -1107,7 +1219,6 @@
     {
       "key": "google/gemini-3.8-flash",
       "aliases": [
-        "gemini-3.8-flash",
         "google/gemini-3.8-flash-20260902",
         "google: gemini 3.8 flash"
       ],
@@ -1624,6 +1735,25 @@
       ]
     },
     {
+      "key": "hy4",
+      "aliases": [],
+      "context_window": 1048000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "output_limit": 64000,
+      "reasoning": "native",
+      "reasoning_control": "toggle",
+      "reasoning_efforts": [
+        "none",
+        "high"
+      ]
+    },
+    {
       "key": "hy4-preview",
       "aliases": [],
       "context_window": 1024000,
@@ -1988,8 +2118,7 @@
       "key": "meta/muse-spark-1.3",
       "aliases": [
         "meta/muse-spark-1.3-20260902",
-        "meta: muse spark 1.3",
-        "muse-spark-1.3"
+        "meta: muse spark 1.3"
       ],
       "context_window": 1048576,
       "input_modalities": [
@@ -2444,6 +2573,23 @@
       ]
     },
     {
+      "key": "muse-spark-1.3",
+      "aliases": [],
+      "context_window": 1048000,
+      "input_modalities": [
+        "audio",
+        "file",
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "output_limit": 32000,
+      "reasoning": "native",
+      "reasoning_control": "fixed_on"
+    },
+    {
       "key": "muse-spark-1.3-contributor",
       "aliases": [],
       "context_window": 1048576,
@@ -2467,6 +2613,23 @@
         "high",
         "xhigh"
       ]
+    },
+    {
+      "key": "muse-wonder",
+      "aliases": [],
+      "context_window": 1048000,
+      "input_modalities": [
+        "audio",
+        "file",
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "output_limit": 32000,
+      "reasoning": "native",
+      "reasoning_control": "fixed_on"
     },
     {
       "key": "nano-banana-2",

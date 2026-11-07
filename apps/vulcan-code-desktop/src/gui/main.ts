@@ -29,6 +29,7 @@ import {
   readLiveServiceInstance,
   resolveServiceExecutable,
   resolveWebUiUrl,
+  RUNTIME_LAYOUT_ENV,
   type LiveServiceInstance,
   type ServiceStartupProgress,
 } from './service-launcher.js';
@@ -321,8 +322,16 @@ async function restartForUpdate(reason: 'update' | 'installer', discoveryPath: s
 // relaunchFromStableEntry 在本进程退出后再次启动客户端，使用始终运行当前版本的入口。
 function relaunchFromStableEntry(): void {
   const entry = resolveStableDesktopEntry(process.execPath, process.platform, existsSync);
-  if (entry) app.relaunch({ execPath: entry, args: [] });
-  else app.relaunch();
+  // The relaunched client inherits this environment; the layout this version recorded there would
+  // keep the new version on this version's manifest, so the entry reads the one beside itself.
+  // 重新启动的客户端会继承本进程环境；本版本记录在其中的布局会让新版本沿用本版本的清单，因此改由入口
+  // 读取其自身旁边的清单。
+  if (entry) {
+    delete process.env[RUNTIME_LAYOUT_ENV];
+    app.relaunch({ execPath: entry, args: [] });
+  } else {
+    app.relaunch();
+  }
 }
 
 /** Registers every main-process handler for one window. */

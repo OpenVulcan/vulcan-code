@@ -15,6 +15,10 @@ import { DEFAULT_DESKTOP_LOCALE, desktopText, formatDesktopText, type DesktopTex
 
 const execFileAsync = promisify(execFile);
 
+// RUNTIME_LAYOUT_ENV names the runtime layout manifest Core and this client read (service `RUNTIME_LAYOUT_ENV`).
+// RUNTIME_LAYOUT_ENV 指明 Core 与本客户端读取的运行时布局清单（服务端 `RUNTIME_LAYOUT_ENV`）。
+export const RUNTIME_LAYOUT_ENV = 'VULCAN_RUNTIME_LAYOUT';
+
 /** Startup protocol version this GUI understands. */
 export const DESKTOP_SERVICE_PROTOCOL_VERSION = 1;
 
@@ -92,7 +96,7 @@ export async function resolveServiceExecutable(explicitPath: string | null, pack
   const adjacentManifest = resourcesPath
     ? path.resolve(resourcesPath, process.platform === 'darwin' ? '../../../../..' : '../../..', 'runtime-layout.json')
     : null;
-  let manifestPath = process.env.VULCAN_RUNTIME_LAYOUT;
+  let manifestPath = process.env[RUNTIME_LAYOUT_ENV];
   if (!manifestPath && adjacentManifest) {
     try {
       await access(adjacentManifest);
@@ -116,7 +120,7 @@ export async function resolveServiceExecutable(explicitPath: string | null, pack
       throw new Error('The service executable escapes the runtime layout root.');
     }
     await access(executable);
-    process.env.VULCAN_RUNTIME_LAYOUT = path.resolve(manifestPath);
+    process.env[RUNTIME_LAYOUT_ENV] = path.resolve(manifestPath);
     return executable;
   }
   // A packaged app without its layout is a damaged installation, never a workspace build.

@@ -65,6 +65,8 @@
    其他平台为 `<root>/current/<rel>`）。完整安装时桌面端只退出，安装包以
    `/SILENT /SUPPRESSMSGBOXES /NORESTART /RELAUNCH=1` 运行，结束后由 `[Run]` 中的
    `RelaunchRequested` 启动应用。TUI 与浏览器自动重连。
+   新服务、安装包与重新启动的桌面端都不继承旧进程的 `VULCAN_RUNTIME_LAYOUT`：该变量指向旧版本的布局清单，
+   继承后新版本会报告新版本号却从旧版本目录提供 WebUI 等资源；新进程改为读取自身可执行文件旁的清单。
 4. Windows 启动器每次桌面启动计一次尝试；`previous` 或试运行版本的服务可执行文件（各自 `runtime-layout.json`
    的 `serviceExecutable`）正在运行时本次既不计数也不回退，因为桌面端会复用该 Core，新版本并未被启动
    （运行判断依据 Windows 对运行中映像写访问的共享冲突，其他结果按未运行处理）；`attempts` 达到 `max_attempts` 而标记仍在时，把

@@ -86,6 +86,34 @@ Go 不含图片生成权益；本接入只提供文本输出的会话模型，�
 | `glm-5.3-flash` | 图片 | 1048000 | 32000 | low / high / max |
 | `kimi-k2.7-code` | 图片 | 262000 | 32000 | 始终思考，无档位 |
 
+### Plus / Pro / Max 套餐模型（revision 8，未实测，经用户授权）
+
+Go Key 无法调用以下模型，按用户决定直接声明，**没有任何真实调用证据**：容量与输入类型取自
+2026-11-07 `?all=true` 目录（视频输入与其他 Chat 模型一样不声明），线路按模型族固定，思考档位按原厂公布。
+不带参数的目录只对有权限的套餐列出它们，因此 Go 账号看不到这些模型。结构化输出未声明，沿用默认。
+
+| 模型 ID | 线路 | 额外输入 | 上下文上限 | 输出上限 | 思考档位 |
+| --- | --- | --- | ---: | ---: | --- |
+| `gpt-6-sol` | Responses | 图片、文件 | 1050000 | 32000 | low / medium / high / xhigh / max |
+| `gpt-6.1-terra` | Responses | 图片、文件 | 1050000 | 32000 | low / medium / high / xhigh / max |
+| `gpt-6-astra` | Responses | 图片、文件 | 1050000 | 128000 | low / medium / high / xhigh / max |
+| `claude-sonnet-5.5` | Messages | 图片、文件 | 1000000 | 128000 | low / medium / high / xhigh / max |
+| `claude-opus-5.5` | Messages | 图片、文件 | 1000000 | 128000 | low / medium / high / xhigh / max |
+| `claude-fable-5.1` | Messages | 图片、文件 | 1000000 | 128000 | low / medium / high / xhigh / max |
+| `gemini-3.8-flash` | Chat | 图片、音频 | 1048000 | 64000 | low / medium / high |
+| `gemini-4-argon` | Chat | 图片、文件、音频 | 1048000 | 64000 | low / medium / high |
+| `kimi-k3` | Chat | 图片 | 1048000 | 32000 | low / high / max |
+| `kimi-k3.1-pro` | Chat | 图片 | 1048000 | 32000 | low / high / max |
+| `hy4` | Chat | 图片 | 1048000 | 64000 | none / high（开关） |
+| `grok-4.7` | Chat | 图片、文件 | 500000 | 128000 | 不发送档位 |
+| `muse-spark-1.3` | Chat | 图片、文件、音频 | 1048000 | 32000 | 不发送档位 |
+| `muse-wonder` | Chat | 图片、文件、音频 | 1048000 | 32000 | 不发送档位 |
+
+- 档位来源：GPT 与 Claude 用仓库 OpenAI、Anthropic 官方清单；Kimi K3 用 Kimi 官方清单，K3.1 Pro 按同系列；
+  Gemini 用 Google 的 low / medium / high；Hy4 同 Hy4 Preview 的官方模板。Grok 4.7 与两个 Muse 找不到原厂
+  公布的档位，因此不发送 `reasoning_effort`，由模型自行决定。
+- 首次用高档套餐 Key 调用后，必须按实测修正本表（输入类型、档位、结构化输出与线路）。
+
 ### 思考取证边界
 
 - **档位以原厂公布为准（revision 7，用户决定）。** 网关会接受大量兼容标签，但多出的标签并不对应

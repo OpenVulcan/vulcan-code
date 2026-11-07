@@ -79,9 +79,25 @@ pub(crate) fn launch_pending() {
 /// Starts `program` outside this process's console and process group.
 /// 在本进程的控制台与进程组之外启动 `program`。
 fn spawn_detached(program: &std::path::Path, arguments: &[String]) -> Result<(), String> {
+    replacement_command(program, arguments)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("{}: {error}", program.display()))
+}
+
+/// The command that starts `program` with `arguments`, detached from this process.
+/// 以 `arguments` 启动 `program` 且与本进程分离的命令。
+///
+/// The replacement belongs to another version: the layout override this process inherited from
+/// its launcher names this version's manifest, so it is dropped and the replacement (or the app
+/// an installer starts) reads the manifest beside its own executable.
+/// 替代进程属于另一个版本：本进程从启动者继承的布局覆盖指向本版本的清单，因此将其移除，使替代进程
+/// （或安装包启动的应用）读取其自身可执行文件旁的清单。
+fn replacement_command(program: &std::path::Path, arguments: &[String]) -> Command {
     let mut command = Command::new(program);
     command
         .args(arguments)
+        .env_remove(crate::runtime_layout::RUNTIME_LAYOUT_ENV)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -102,9 +118,6 @@ fn spawn_detached(program: &std::path::Path, arguments: &[String]) -> Result<(),
         command.process_group(0);
     }
     command
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("{}: {error}", program.display()))
 }
 
 /// Reinstalls the systemd user unit from `executable` outside this unit, so stopping the unit does
@@ -125,5 +138,30 @@ fn reinstall_user_unit(executable: &std::path::Path) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("systemd-run failed with {status}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_replacement_does_not_inherit_the_layout_override() {
+        // command is what a restart into another version would start.
+        // command 是重启到另一版本时会启动的命令。
+        let command = replacement_command(
+            std::path::Path::new("vulcan-code-service"),
+            &[String::from(ARG_AWAIT_OWNER_EXIT)],
+        );
+        let layout = command.get_envs().find(|(key, _)| {
+            *key == std::ffi::OsStr::new(crate::runtime_layout::RUNTIME_LAYOUT_ENV)
+        });
+        assert_eq!(
+            layout,
+            Some((
+                std::ffi::OsStr::new(crate::runtime_layout::RUNTIME_LAYOUT_ENV),
+                None
+            ))
+        );
     }
 }
