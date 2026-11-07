@@ -433,6 +433,83 @@ fn minimax_m3_1_flash_projects_reasoning_efforts() {
     assert_eq!(default_encoded.body["output_config"]["effort"], "max");
 }
 
+/// Verifies every TokenRhythm Messages rule on the reasoning profile sends each declared effort.
+/// 验证使用推理 Profile 的每条 TokenRhythm Messages 规则发送每个声明档位。
+///
+/// The compatible projector writes no Messages effort, and TokenRhythm rejects
+/// `output_config.effort: "none"`; so `none` must become `thinking: {"type": "disabled"}` without
+/// `output_config`, and every other declared effort must reach `output_config.effort` unchanged.
+/// 兼容投影器不写 Messages 档位，TokenRhythm 又拒绝 `output_config.effort: "none"`；因此 `none`
+/// 必须变为不带 `output_config` 的 `thinking: {"type": "disabled"}`，其他声明档位原样写入
+/// `output_config.effort`。
+#[test]
+fn tokenrhythm_messages_reasoning_profile_sends_declared_efforts() {
+    const PROFILE_ID: &str = "tokenrhythm.messages.reasoning.toggle.v1";
+    let client = projection_test_client();
+    let manifests = crate::provider_manifest::load_bundled_resolved_manifests();
+    let manifest = manifests
+        .get("tokenrhythm")
+        .expect("TokenRhythm manifest must be bundled");
+    // profileRules are the Messages rules that reference the TokenRhythm reasoning profile.
+    // profileRules 是引用 TokenRhythm 推理 Profile 的 Messages 规则。
+    let profile_rules = manifest
+        .rule_instances
+        .iter()
+        .filter(|rule| rule.selected_protocol.as_deref() == Some(ANTHROPIC_MESSAGES_PROFILE_ID))
+        .filter(|rule| rule.request_profile_refs.iter().any(|id| id == PROFILE_ID))
+        .collect::<Vec<_>>();
+    assert!(
+        !profile_rules.is_empty(),
+        "expected TokenRhythm Messages rules on `{PROFILE_ID}`; the manifest may have changed"
+    );
+    for rule in profile_rules {
+        let mut route =
+            bundled_manifest_route("tokenrhythm", "public-api", ANTHROPIC_MESSAGES_PROFILE_ID);
+        route.request_projection_profiles = rule
+            .request_profile_refs
+            .iter()
+            .map(|profile_id| {
+                manifest
+                    .request_profiles
+                    .iter()
+                    .find(|profile| &profile.profile_id == profile_id)
+                    .and_then(|profile| profile.payload.clone())
+                    .expect("referenced request profile must compile")
+            })
+            .collect();
+        let mut request = minimal_request();
+        request.model_id = rule.rule_id.clone();
+        let efforts = rule
+            .capabilities
+            .as_ref()
+            .map(|capabilities| capabilities.reasoning_efforts.clone())
+            .unwrap_or_default();
+        assert!(
+            !efforts.is_empty(),
+            "rule {} declares no efforts",
+            rule.rule_id
+        );
+        for effort in efforts {
+            request.reasoning_effort = Some(effort);
+            let encoded = client
+                .encode_request(&route, &request)
+                .expect("TokenRhythm Messages reasoning request should encode");
+            let context = format!("rule {} effort {}", rule.rule_id, effort.as_str());
+            if effort == ReasoningEffort::None {
+                assert_eq!(encoded.body["thinking"]["type"], "disabled", "{context}");
+                assert!(encoded.body.get("output_config").is_none(), "{context}");
+            } else {
+                assert!(encoded.body.get("thinking").is_none(), "{context}");
+                assert_eq!(
+                    encoded.body["output_config"]["effort"],
+                    effort.as_str(),
+                    "{context}"
+                );
+            }
+        }
+    }
+}
+
 /// Verifies the projection executor rejects an unsupported MiniMax effort like the legacy fn.
 /// 验证投影执行器像旧版函数一样拒绝不支持的 MiniMax 推理档位。
 #[test]

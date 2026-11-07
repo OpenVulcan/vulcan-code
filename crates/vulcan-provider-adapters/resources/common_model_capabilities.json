@@ -717,6 +717,27 @@
       ]
     },
     {
+      "key": "deepseek-v4.1-flash-1017",
+      "aliases": [],
+      "context_window": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "output_limit": 384000,
+      "reasoning": "native",
+      "reasoning_control": "toggle",
+      "reasoning_efforts": [
+        "none",
+        "high",
+        "low",
+        "max"
+      ]
+    },
+    {
       "key": "deepseek-v4.1-flash-eco",
       "aliases": [],
       "context_window": 1048000,
@@ -825,6 +846,25 @@
         "low",
         "high",
         "max"
+      ]
+    },
+    {
+      "key": "egg-alpha",
+      "aliases": [],
+      "context_window": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "output_limit": 128000,
+      "reasoning": "native",
+      "reasoning_control": "toggle",
+      "reasoning_efforts": [
+        "none",
+        "high"
       ]
     },
     {
@@ -2219,24 +2259,6 @@
       ]
     },
     {
-      "key": "mimo-v2.5-pro",
-      "aliases": [],
-      "context_window": 262144,
-      "input_modalities": [
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "output_limit": 262144,
-      "reasoning": "native",
-      "reasoning_control": "toggle",
-      "reasoning_efforts": [
-        "none",
-        "high"
-      ]
-    },
-    {
       "key": "mimo-v2.6-flash",
       "aliases": [
         "xiaomi/mimo-v2.6-flash-20260921",
@@ -2714,6 +2736,24 @@
       ],
       "reasoning": "unsupported",
       "reasoning_control": "fixed_off"
+    },
+    {
+      "key": "neohorse-1-9b",
+      "aliases": [],
+      "context_window": 262144,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "output_limit": 32768,
+      "reasoning": "native",
+      "reasoning_control": "toggle",
+      "reasoning_efforts": [
+        "none",
+        "high"
+      ]
     },
     {
       "key": "nvidia/nemotron-3-ultra-550b-a55b",
@@ -3659,7 +3699,9 @@
     },
     {
       "key": "xiaomi/mimo-v2.5-pro",
-      "aliases": [],
+      "aliases": [
+        "mimo-v2.5-pro"
+      ],
       "context_window": 1048576,
       "input_modalities": [
         "text"
