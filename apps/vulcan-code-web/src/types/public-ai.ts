@@ -18,7 +18,8 @@ export type OAuthProviderKind =
   | "mini_max_global_token_plan"
   | "mini_max_china_token_plan"
   | "kimi_coding_plan"
-  | "open_design";
+  | "open_design"
+  | "token_rhythm";
 
 // PublicAiCredentialAuthorization declares a registered OAuth primitive or a Manifest browser callback.
 // PublicAiCredentialAuthorization 声明已注册 OAuth 原语或 Manifest 浏览器回调。
@@ -78,6 +79,7 @@ export interface PublicAiCredentialProfile {
     | "kimi_coding_plan"
     | "command_code_usage"
     | "open_design_wallet"
+    | "token_rhythm_wallet"
     | "open_ai_codex_usage";
   authentication?: string;
   key_prefix?: string;
@@ -618,6 +620,7 @@ export interface PublicAiConnection {
     | "kimi_coding_plan"
     | "command_code_usage"
     | "open_design_wallet"
+    | "token_rhythm_wallet"
     | "open_ai_codex_usage";
   // Whether usage refresh needs a separate provider-management credential.
   // 用量刷新是否需要独立的供应商管理凭据。

@@ -42,6 +42,7 @@ use account_usage::{
     query_command_code_usage, query_deepseek_balance, query_kimi_coding_plan,
     query_minimax_token_plan, query_nodeai_balance, query_open_design_wallet,
     query_openai_codex_usage, query_opencode_go, query_openrouter_credits, query_tavily_credits,
+    query_tokenrhythm_wallet,
 };
 pub use minimax_registration::MiniMaxKeyRegistration;
 use model_discovery::{
@@ -549,6 +550,7 @@ impl ProviderMetadataClient for HttpProviderMetadataClient {
         let result = match credential_profile.account_usage_query {
             AccountUsageQueryKind::OpencodeGo => query_opencode_go(secret).await,
             AccountUsageQueryKind::OpenDesignWallet => query_open_design_wallet(secret).await,
+            AccountUsageQueryKind::TokenRhythmWallet => query_tokenrhythm_wallet(secret).await,
             AccountUsageQueryKind::OpenVulcan => {
                 openvulcan::query_usage(&self.http, entry, secret).await
             }

@@ -521,7 +521,8 @@ CREATE TABLE IF NOT EXISTS {credential_table} (
         'claude_code_oauth',
         'google_oauth',
         'mini_max_oauth',
-        'kimi_coding_plan_oauth'
+        'kimi_coding_plan_oauth',
+        'tokenrhythm_auth'
     )),
     secret_value TEXT,
     access_token TEXT,
@@ -576,7 +577,8 @@ CREATE TABLE IF NOT EXISTS {credential_table} (
                 'claude_code_oauth',
                 'google_oauth',
                 'mini_max_oauth',
-                'kimi_coding_plan_oauth'
+                'kimi_coding_plan_oauth',
+                'tokenrhythm_auth'
             )
             AND access_token IS NOT NULL
             AND length(trim(access_token)) > 0
@@ -608,6 +610,17 @@ CREATE TABLE IF NOT EXISTS {credential_table} (
     CHECK(
         material_kind != 'kimi_coding_plan_oauth'
         OR (provider_device_id IS NOT NULL AND length(trim(provider_device_id)) > 0)
+    ),
+    CHECK(
+        material_kind != 'tokenrhythm_auth'
+        OR (
+            secret_value IS NOT NULL
+            AND length(trim(secret_value)) > 0
+            AND provider_device_id IS NOT NULL
+            AND length(trim(provider_device_id)) > 0
+            AND oauth_client_id IS NOT NULL
+            AND length(trim(oauth_client_id)) > 0
+        )
     ),
     CHECK(
         authorization_kind IS NULL

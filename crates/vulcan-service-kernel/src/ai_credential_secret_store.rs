@@ -308,6 +308,20 @@ fn credential_record_from_envelope(
             apply_oauth_tokens(&mut record, tokens)?;
             record.provider_device_id = Some(device_id.clone());
         }
+        CredentialSecretMaterial::TokenRhythmAuth {
+            tokens,
+            session_id,
+            client_id,
+            managed_key,
+        } => {
+            record.material_kind = String::from("tokenrhythm_auth");
+            apply_oauth_tokens(&mut record, tokens)?;
+            // The managed inference key and the account session keep separate typed columns.
+            // 托管推理密钥与账户会话分别保存在各自的类型化列中。
+            record.secret_value = Some(managed_key.clone());
+            record.provider_device_id = Some(session_id.clone());
+            record.oauth_client_id = Some(client_id.clone());
+        }
         CredentialSecretMaterial::BrowserCallbackAuthorization {
             secret,
             projection,
@@ -454,6 +468,12 @@ fn credential_envelope_from_record(
         ("kimi_coding_plan_oauth", None) => CredentialSecretMaterial::KimiCodingPlanOAuth {
             tokens: oauth_tokens_from_record(&record)?,
             device_id: required_record_text(&record.provider_device_id, "Kimi device id")?,
+        },
+        ("tokenrhythm_auth", None) => CredentialSecretMaterial::TokenRhythmAuth {
+            tokens: oauth_tokens_from_record(&record)?,
+            session_id: required_record_text(&record.provider_device_id, "TokenRhythm session id")?,
+            client_id: required_record_text(&record.oauth_client_id, "TokenRhythm client id")?,
+            managed_key: required_record_text(&record.secret_value, "TokenRhythm managed key")?,
         },
         _ => {
             return Err(String::from(
@@ -860,6 +880,13 @@ mod tests {
                 device_id: String::from("12345678-1234-1234-1234-123456789abc"),
             })
             .expect("Kimi fixture should be valid"),
+            CredentialSecretEnvelope::new(CredentialSecretMaterial::TokenRhythmAuth {
+                tokens: oauth_tokens(),
+                session_id: String::from("session-1"),
+                client_id: String::from("client-1"),
+                managed_key: String::from("sk_managed"),
+            })
+            .expect("TokenRhythm fixture should be valid"),
             CredentialSecretEnvelope::new(CredentialSecretMaterial::BrowserCallbackAuthorization {
                 secret: String::from("user_api-key"),
                 projection: BrowserCallbackSecretProjection::ApiKey,

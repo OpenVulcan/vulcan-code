@@ -26,6 +26,7 @@ use uuid::Uuid;
 mod open_design;
 mod opencode;
 mod openvulcan;
+mod tokenrhythm;
 pub use openvulcan::revoke_openvulcan_authorization;
 
 const OPENAI_CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -97,6 +98,9 @@ pub enum OAuthProviderKind {
     /// OpenDesign native device authorization issuing runtime and control credentials.
     /// 签发运行与控制凭据的 OpenDesign 原生设备授权。
     OpenDesign,
+    /// TokenRhythm account login issuing a managed inference key and wallet access.
+    /// 签发托管推理密钥与钱包访问的 TokenRhythm 账户登录。
+    TokenRhythm,
 }
 
 /// Derives one opaque transaction binding from an exact provider authorization scope.
@@ -659,6 +663,9 @@ impl OAuthAuthorizationRuntime {
         if provider_kind == OAuthProviderKind::OpenDesign {
             return self.start_open_design(authorization_binding).await;
         }
+        if provider_kind == OAuthProviderKind::TokenRhythm {
+            return self.start_tokenrhythm(authorization_binding).await;
+        }
         if provider_kind == OAuthProviderKind::OpencodeConsole {
             return self.start_opencode(authorization_binding).await;
         }
@@ -1102,6 +1109,9 @@ impl OAuthAuthorizationRuntime {
                 organization_id,
             } => opencode::refresh(tokens, organization_id).await,
             CredentialSecretMaterial::OpenVulcanAuth { .. } => openvulcan::refresh(material).await,
+            CredentialSecretMaterial::TokenRhythmAuth { .. } => {
+                tokenrhythm::refresh(material).await
+            }
             CredentialSecretMaterial::OpenDesignAuth { .. }
             | CredentialSecretMaterial::ApiKey { .. }
             | CredentialSecretMaterial::StaticBearer { .. }
@@ -2502,6 +2512,7 @@ async fn bind_callback_listener(provider_kind: OAuthProviderKind) -> Result<TcpL
         OAuthProviderKind::OpenVulcanChina
         | OAuthProviderKind::OpenVulcanGlobal
         | OAuthProviderKind::OpenDesign
+        | OAuthProviderKind::TokenRhythm
         | OAuthProviderKind::OpencodeConsole
         | OAuthProviderKind::KimiCodingPlan => {
             return Err(String::from(
@@ -2535,6 +2546,7 @@ fn callback_redirect_uri(
         OAuthProviderKind::OpenVulcanChina
         | OAuthProviderKind::OpenVulcanGlobal
         | OAuthProviderKind::OpenDesign
+        | OAuthProviderKind::TokenRhythm
         | OAuthProviderKind::OpencodeConsole
         | OAuthProviderKind::KimiCodingPlan => Err(String::from(
             "This authorization flow requires its dedicated callback runtime.",
@@ -2599,6 +2611,7 @@ fn build_oauth_flow(
             OAuthProviderKind::OpenVulcanChina
             | OAuthProviderKind::OpenVulcanGlobal
             | OAuthProviderKind::OpenDesign
+            | OAuthProviderKind::TokenRhythm
             | OAuthProviderKind::OpencodeConsole
             | OAuthProviderKind::KimiCodingPlan => {
                 return Err(String::from(
@@ -2647,6 +2660,7 @@ fn build_oauth_flow(
             OAuthProviderKind::OpenVulcanChina
             | OAuthProviderKind::OpenVulcanGlobal
             | OAuthProviderKind::OpenDesign
+            | OAuthProviderKind::TokenRhythm
             | OAuthProviderKind::OpencodeConsole
             | OAuthProviderKind::KimiCodingPlan => {
                 return Err(String::from(
@@ -2972,6 +2986,7 @@ async fn exchange_authorization_code(
         OAuthProviderKind::OpenVulcanChina
         | OAuthProviderKind::OpenVulcanGlobal
         | OAuthProviderKind::OpenDesign
+        | OAuthProviderKind::TokenRhythm
         | OAuthProviderKind::OpencodeConsole
         | OAuthProviderKind::KimiCodingPlan => {
             return Err(String::from(

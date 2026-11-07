@@ -114,7 +114,8 @@ fn account_usage_snapshot_kind(query: AccountUsageQueryKind) -> &'static str {
         | AccountUsageQueryKind::CommandCodeUsage => "quota",
         AccountUsageQueryKind::DeepSeekBalance
         | AccountUsageQueryKind::NodeAiBalance
-        | AccountUsageQueryKind::OpenDesignWallet => "balance",
+        | AccountUsageQueryKind::OpenDesignWallet
+        | AccountUsageQueryKind::TokenRhythmWallet => "balance",
         AccountUsageQueryKind::Unsupported => "unsupported",
     }
 }

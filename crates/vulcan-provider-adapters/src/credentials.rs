@@ -175,6 +175,22 @@ pub enum CredentialSecretMaterial {
         /// 刷新与用量请求所需的稳定供应商可见身份。
         device_id: String,
     },
+    /// TokenRhythm account session plus the managed inference key it obtained.
+    /// TokenRhythm 账户会话及其获取的托管推理密钥。
+    TokenRhythmAuth {
+        /// Rotating account tokens; `account_subject` is the TokenRhythm account id.
+        /// 轮换的账户令牌；`account_subject` 是 TokenRhythm 账户标识。
+        tokens: OAuthTokenSet,
+        /// Login session that every refresh must preserve.
+        /// 每次刷新都必须保持的登录会话。
+        session_id: String,
+        /// Client registration the session was issued to; refresh uses the same one.
+        /// 会话签发所属的客户端注册；刷新使用同一注册。
+        client_id: String,
+        /// Managed key used only for model discovery and inference.
+        /// 只用于模型发现与推理的托管密钥。
+        managed_key: String,
+    },
     /// Host-managed credential delivered by a reviewed browser loopback callback.
     /// 由已审核浏览器回环回调交付并由宿主管理的凭据。
     BrowserCallbackAuthorization {
@@ -242,6 +258,18 @@ pub enum CredentialExecutionSecretKind {
     Bearer,
 }
 
+/// Account credential for TokenRhythm wallet reads, kept apart from the inference key.
+/// 用于 TokenRhythm 钱包读取的账户凭据，与推理密钥分开保存。
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct TokenRhythmAccountAccess {
+    /// Current account access token.
+    /// 当前账户访问令牌。
+    pub(crate) access_token: String,
+    /// Account the wallet response must belong to.
+    /// 钱包响应必须所属的账户。
+    pub(crate) account_id: String,
+}
+
 /// Carries one validated execution secret without implementing debug serialization.
 /// 承载一个已验证的执行秘密，且不实现调试序列化。
 #[derive(Clone, PartialEq, Eq)]
@@ -276,6 +304,9 @@ pub struct CredentialExecutionSecret {
     /// Native credential deployment, preventing cross-region credential forwarding.
     /// 原生凭据部署，防止跨区域转发凭据。
     openvulcan_region: Option<OpenVulcanRegion>,
+    /// Private TokenRhythm account credential; never returned by the inference value accessor.
+    /// 私有 TokenRhythm 账户凭据；绝不由推理值访问器返回。
+    tokenrhythm_account: Option<TokenRhythmAccountAccess>,
 }
 
 impl CredentialSecretEnvelope {
@@ -416,6 +447,7 @@ impl CredentialSecretEnvelope {
             | CredentialSecretMaterial::KimiCodingPlanOAuth { .. }
             | CredentialSecretMaterial::OpenVulcanAuth { .. }
             | CredentialSecretMaterial::OpenDesignAuth { .. }
+            | CredentialSecretMaterial::TokenRhythmAuth { .. }
             | CredentialSecretMaterial::BrowserCallbackAuthorization { .. } => CredentialMode::Auth,
         }
     }
@@ -437,6 +469,7 @@ impl CredentialSecretEnvelope {
                 | CredentialSecretMaterial::MiniMaxOAuth { .. }
                 | CredentialSecretMaterial::KimiCodingPlanOAuth { .. }
                 | CredentialSecretMaterial::OpenVulcanAuth { .. }
+                | CredentialSecretMaterial::TokenRhythmAuth { .. }
         )
     }
 
@@ -465,6 +498,14 @@ impl CredentialSecretEnvelope {
                 CredentialSecretMaterial::OpenDesignAuth { runtime_key, .. } => (
                     CredentialExecutionSecretKind::Bearer,
                     runtime_key.clone(),
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+                CredentialSecretMaterial::TokenRhythmAuth { managed_key, .. } => (
+                    CredentialExecutionSecretKind::Bearer,
+                    managed_key.clone(),
                     None,
                     None,
                     None,
@@ -582,6 +623,15 @@ impl CredentialSecretEnvelope {
                 CredentialSecretMaterial::OpenVulcanAuth { region, .. } => Some(*region),
                 _ => None,
             },
+            tokenrhythm_account: match &self.material {
+                CredentialSecretMaterial::TokenRhythmAuth { tokens, .. } => {
+                    Some(TokenRhythmAccountAccess {
+                        access_token: tokens.access_token.clone(),
+                        account_id: tokens.account_subject.clone().unwrap_or_default(),
+                    })
+                }
+                _ => None,
+            },
             revision: self.revision,
             kind,
             value,
@@ -625,9 +675,8 @@ impl CredentialSecretEnvelope {
             | CredentialSecretMaterial::OpencodeConsoleOAuth { tokens, .. }
             | CredentialSecretMaterial::GoogleOAuth { tokens, .. }
             | CredentialSecretMaterial::MiniMaxOAuth { tokens, .. }
-            | CredentialSecretMaterial::KimiCodingPlanOAuth { tokens, .. } => {
-                tokens.expires_at_unix_ms
-            }
+            | CredentialSecretMaterial::KimiCodingPlanOAuth { tokens, .. }
+            | CredentialSecretMaterial::TokenRhythmAuth { tokens, .. } => tokens.expires_at_unix_ms,
             CredentialSecretMaterial::ApiKey { .. }
             | CredentialSecretMaterial::OpenDesignAuth { .. }
             | CredentialSecretMaterial::StaticBearer { .. }
@@ -680,6 +729,24 @@ impl CredentialSecretEnvelope {
                 validate_non_empty_secret("OpenDesign control key", control_key)?;
                 validate_bounded_identity("OpenDesign user id", user_id)?;
                 validate_bounded_identity("OpenDesign email", email)
+            }
+            CredentialSecretMaterial::TokenRhythmAuth {
+                tokens,
+                session_id,
+                client_id,
+                managed_key,
+            } => {
+                tokens.validate()?;
+                crate::tokenrhythm::validate_identity(
+                    "account id",
+                    tokens
+                        .account_subject
+                        .as_deref()
+                        .ok_or("TokenRhythm account identity is missing.")?,
+                )?;
+                crate::tokenrhythm::validate_identity("session id", session_id)?;
+                crate::tokenrhythm::validate_identity("client id", client_id)?;
+                validate_non_empty_secret("TokenRhythm managed key", managed_key)
             }
             CredentialSecretMaterial::OpenVulcanAuth {
                 access_token,
@@ -843,6 +910,19 @@ impl CredentialExecutionSecret {
     pub(crate) fn open_design_control_key(&self) -> Result<&str, String> {
         self.open_design_control_key.as_deref().ok_or_else(|| {
             String::from("OpenDesign wallet balance requires account authorization.")
+        })
+    }
+
+    /// Resolves the account credential for the registered TokenRhythm wallet primitive.
+    /// 为已注册的 TokenRhythm 钱包原语解析账户凭据。
+    ///
+    /// Returns the account access, or an explicit error for API keys and other credentials.
+    /// 返回账户访问凭据，或针对 API Key 及其他凭据的明确错误。
+    pub(crate) fn tokenrhythm_account(&self) -> Result<&TokenRhythmAccountAccess, String> {
+        self.tokenrhythm_account.as_ref().ok_or_else(|| {
+            String::from(
+                "TokenRhythm wallet balance requires signing in with a TokenRhythm account.",
+            )
         })
     }
     /// Returns the fixed OpenVulcan deployment when this is a native Auth credential.

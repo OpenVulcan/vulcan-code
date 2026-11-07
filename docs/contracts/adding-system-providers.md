@@ -207,7 +207,7 @@ Responses:   /openai/v1/responses
 封闭授权入口：
 
 - `registered_oauth`：选择一个宿主已审核的 OAuth 或 Device Flow 原语。OpenAI、Claude、Google、
-  Kimi、MiniMax、OpenDesign 使用这一类；Manifest 统一声明入口，但网络交换、刷新、设备身份和区域信任边界仍由
+  Kimi、MiniMax、OpenDesign、TokenRhythm 使用这一类；Manifest 统一声明入口，但网络交换、刷新、设备身份和区域信任边界仍由
   各自已注册原语负责。
 - `browser_callback`：系统 Manifest 声明 HTTPS 授权页、有界回环端口、精确路径、超时、正文上限、
   JSON Pointer 与秘密投影。适用于 CommandCode 这种浏览器直接向本地回调交付凭据的流程。

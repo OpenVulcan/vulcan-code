@@ -827,6 +827,9 @@ pub enum AccountUsageQueryKind {
     /// OpenDesign Design Plan windows and separate wallet balance using its account-control credential.
     /// 使用账户控制凭据查询 OpenDesign Design Plan 窗口及独立钱包余额。
     OpenDesignWallet,
+    /// TokenRhythm wallet balance read with the signed-in account session.
+    /// 使用已登录账户会话读取的 TokenRhythm 钱包余额。
+    TokenRhythmWallet,
     /// OpenAI Codex subscription rate-limit windows and credits from the ChatGPT backend.
     /// 来自 ChatGPT 后端的 OpenAI Codex 订阅限额窗口与 Credits。
     OpenAiCodexUsage,

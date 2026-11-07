@@ -23,6 +23,10 @@
 v1→v2：新增 `project_session_preferences`（项目会话排序方式，缺行即默认 `last_request`），并在会话定位
 索引存在时新增 `session_list_state_v1`（最近请求时间与手动位置），以 `updated_at_ms` 回填最近请求时间。
 
+v4→v5：凭据表接受 `tokenrhythm_auth` 材料（托管密钥存 `secret_value`、登录会话存 `provider_device_id`、
+客户端注册存 `oauth_client_id`，令牌沿用通用令牌列）。SQLite 不能原地修改 CHECK，因此按“改名旧表、以原名
+建新表、按列名逐列复制、删除旧表”重建；不增删或转换任何列，该表没有索引、触发器或外部引用。
+
 ## 本地 Debug 离线维护的适用范围与权威来源
 
 运行时升级处理版本递增。离线维护命令只处理同一版本内的结构漂移（开发期直接修改当前 DDL 而未递增版本），
