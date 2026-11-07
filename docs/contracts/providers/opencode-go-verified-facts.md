@@ -180,8 +180,8 @@ OAuth 测试保留双端点读取及余额失败时整体失败的行为。
   发 Bearer 与可选 `x-org-id`。实测 Bearer 流式请求和带 `thinkingLevel` 的请求均返回 200。
 - 新增 `hy4`：Chat，图片输入，档位 none/high，上下文 1048576、输出 65536。
 - `glm-5.3-flash`：实时目录不再列出文件输入，输入改为图片和视频。OpenCode 快照仍写有 `pdf`，这里以实时目录为准。
-- 不登记：`beam-free`、`crouton-alpha-free`、`iceman-contributor-free`，按用户规则不收录免费模型。
-  `mimo-v2.5` 与 `mimo-v2.5-pro` 也不登记：说明页列了它们，但实时目录不返回（2026-10-31 已因此移除）。
+- 本次同步时未登记 `beam-free`、`crouton-alpha-free`、`iceman-contributor-free`（当时不收录免费模型，随后按用户决定加入，见下节）。
+  `mimo-v2.5` 与 `mimo-v2.5-pro` 不登记：说明页列了它们，但实时目录不返回（2026-10-31 已因此移除）。
 - 说明页的协议表与清单所选协议逐一核对一致：Grok、GPT、Muse 走 Responses，Claude Haiku、MiniMax M3、Qwen
   走 Messages，Gemini 走 generateContent，其余走 Chat。
 
@@ -207,3 +207,18 @@ OAuth 测试保留双端点读取及余额失败时整体失败的行为。
   无论声明什么都只发 `responseMimeType`（JSON 对象），由宿主校验 Schema，Argon 在该模式下通过。
 - Qwen3.8 Max 的输出带多余换行与空白，但都是合法 JSON，结束原因为 `end_turn`。
 - MiniMax M3 在 Messages 上没有可用的结构化模式，声明为 `unsupported`。
+
+## 2026-11-07 加入免费模型（用户决定）
+
+用户决定取消“不收录免费模型”的规则，清单 revision 14，目录与规则各 30 个模型，证据修订
+`opencode-go.free-models.2026-11-07`。协议、模态、上下文、输出与档位取自实时 Go 目录，并用 API Key 实测。
+
+| 模型 | 协议 | 输入 | 思考 | 上下文 / 输出 | 结构化输出 |
+| --- | --- | --- | --- | --- | --- |
+| Beam Free | Chat | 文本 | low/medium/high/xhigh/max，均返回 `reasoning_content` | 1048576 / 131072 | `json_schema`（两种模式各 2/2） |
+| Iceman Contributor Free | Chat | 文本 | 常开，目录不公布档位；只返回思考 token 数，不返回内容 | 262144 / 131072 | `unsupported`：任何 `response_format` 都返回 400 “Structured `response_format` is not enabled” |
+| Crouton Alpha Free | Responses | 图片、视频、文件 | minimal/low/medium/high/xhigh/max，均被接受 | 1048576 / 270000 | `json_schema`（两种模式各 2/2） |
+
+- 三个模型都是限时免费。按 Go 说明页，Beam 与 Crouton 有地区限制（含中国大陆、港澳），本次从当前网络调用均成功；
+  Iceman 会用请求与回复训练模型，不属于零数据保留。
+- Crouton 在简单题上各档位都不报告思考 token，档位按目录公布声明，强度差异未验证。

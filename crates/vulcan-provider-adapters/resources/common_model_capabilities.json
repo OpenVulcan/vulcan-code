@@ -42,6 +42,27 @@
       ]
     },
     {
+      "key": "beam-free",
+      "aliases": [],
+      "context_window": 1048576,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "output_limit": 131072,
+      "reasoning": "native",
+      "reasoning_control": "effort_selection",
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
       "key": "claude-fable-5",
       "aliases": [
         "anthropic/claude-5-fable-20260609",
@@ -508,6 +529,31 @@
       "reasoning": "native",
       "reasoning_control": "effort_selection",
       "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "key": "crouton-alpha-free",
+      "aliases": [],
+      "context_window": 1048576,
+      "input_modalities": [
+        "file",
+        "image",
+        "text",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "output_limit": 270000,
+      "reasoning": "native",
+      "reasoning_control": "effort_selection",
+      "reasoning_efforts": [
+        "minimal",
         "low",
         "medium",
         "high",
@@ -1770,6 +1816,20 @@
         "none",
         "high"
       ]
+    },
+    {
+      "key": "iceman-contributor-free",
+      "aliases": [],
+      "context_window": 262144,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "output_limit": 131072,
+      "reasoning": "native",
+      "reasoning_control": "fixed_on"
     },
     {
       "key": "inclusionai/ling-3.0-flash-sante:free",

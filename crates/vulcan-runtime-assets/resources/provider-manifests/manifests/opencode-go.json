@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "opencode-go",
-  "revision": 13,
-  "published_at": "2026-11-07T11:51:10Z",
+  "revision": 14,
+  "published_at": "2026-11-07T12:17:41Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -184,6 +184,18 @@
           {
             "model_id": "hy4",
             "display_name": "Hy4"
+          },
+          {
+            "model_id": "beam-free",
+            "display_name": "Beam Free"
+          },
+          {
+            "model_id": "iceman-contributor-free",
+            "display_name": "Iceman Contributor Free"
+          },
+          {
+            "model_id": "crouton-alpha-free",
+            "display_name": "Crouton Alpha Free"
           }
         ]
       },
@@ -1409,6 +1421,122 @@
           "evidence_revision": "opencode-go.structured-output-probe.2026-11-07"
         }
       }
+    },
+    {
+      "rule_id": "beam-free",
+      "display_name": "Beam Free",
+      "scope": {
+        "service_entry_ids": [
+          "go-api"
+        ],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "beam-free"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "input_resources": [],
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "context_limit": 1048576,
+        "output_limit": 131072,
+        "evidence_revision": "opencode-go.free-models.2026-11-07"
+      },
+      "request_profile_refs": [],
+      "protocol_capabilities": {
+        "openai-chat-completions.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "opencode-go.free-models.2026-11-07"
+        }
+      }
+    },
+    {
+      "rule_id": "iceman-contributor-free",
+      "display_name": "Iceman Contributor Free",
+      "scope": {
+        "service_entry_ids": [
+          "go-api"
+        ],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "iceman-contributor-free"
+      },
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "input_resources": [],
+        "reasoning_control": "fixed_on",
+        "reasoning_efforts": [],
+        "context_limit": 262144,
+        "output_limit": 131072,
+        "evidence_revision": "opencode-go.free-models.2026-11-07"
+      },
+      "request_profile_refs": [],
+      "protocol_capabilities": {
+        "openai-chat-completions.v1": {
+          "structured_output": "unsupported",
+          "evidence_revision": "opencode-go.free-models.2026-11-07"
+        }
+      }
+    },
+    {
+      "rule_id": "crouton-alpha-free",
+      "display_name": "Crouton Alpha Free",
+      "scope": {
+        "service_entry_ids": [
+          "go-api"
+        ],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "crouton-alpha-free"
+      },
+      "supported_protocols": [
+        "openai-responses.v1"
+      ],
+      "selected_protocol": "openai-responses.v1",
+      "capabilities": {
+        "input_resources": [
+          "image",
+          "video",
+          "file"
+        ],
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": [
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "context_limit": 1048576,
+        "output_limit": 270000,
+        "evidence_revision": "opencode-go.free-models.2026-11-07"
+      },
+      "request_profile_refs": [],
+      "protocol_capabilities": {
+        "openai-responses.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "opencode-go.free-models.2026-11-07"
+        }
+      }
     }
   ],
   "usage_profiles": [
@@ -1726,6 +1854,10 @@
       {
         "url": "builtin:opencode-go.structured-output-probe.2026-11-07",
         "note": "2026-11-07 API-key probe of every Go model without structured-output evidence, using the host wire shapes and an enum probe field the prompt never mentions; two runs per mode. json_schema enforced: Claude Haiku 5.5 and Qwen3.7 Plus, Qwen3.8 Flash, Qwen3.8 Max on Messages; Gemini 4 Argon on generateContent (json_object also passes, which is what the host sends there); Hy3, Hy4 Preview, LongCat-2.0, MiMo-V2.6 Flash and Pro on Chat (Hy3 json_object returns 400 upstream, unused once json_schema is declared). Hy4 json_schema truncated the JSON in 2 of 5 runs, so it stays json_object (2 of 2). MiniMax M3.1 Flash ignores the schema and answers 42, json_object passes: json_object. MiniMax M3 on Messages ignores the schema and has no schema-free mode there: unsupported."
+      },
+      {
+        "url": "builtin:opencode-go.free-models.2026-11-07",
+        "note": "Free models added by user decision on 2026-11-07, reversing the earlier no-free-models rule. Protocols, modalities, limits and effort lists come from the live Go catalog. API-key probe: Beam Free answers on Chat at every published effort with reasoning_content and enforces json_schema; Iceman Contributor Free reasons with hidden content (reasoning tokens only) and rejects every response_format with 400 \"Structured response_format is not enabled\", so structured output is unsupported; Crouton Alpha Free answers on Responses at every published effort and enforces json_schema. All three are limited-time; Beam and Crouton are region-restricted and Iceman trains on request data."
       }
     ],
     "verified_at": "2026-11-07T00:00:00Z"
