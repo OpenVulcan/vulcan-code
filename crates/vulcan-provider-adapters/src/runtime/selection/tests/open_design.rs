@@ -310,3 +310,48 @@ fn open_design_encodes_verified_media_without_private_paths() {
         );
     }
 }
+
+/// Returns the sorted OpenDesign image target ids available to one runtime and configuration.
+/// 返回某运行时与配置可用的 OpenDesign 生图目标 ID（已排序）。
+fn open_design_image_targets(
+    runtime: &PublicAiRuntime,
+    configuration: &PersistedAiConfiguration,
+) -> Vec<String> {
+    let mut ids = runtime
+        .available_provider_tool_targets(configuration)
+        .expect("tool target listing")
+        .into_iter()
+        .filter(|available| available.target.provider_id == "open-design")
+        .map(|available| available.target.target_id)
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids
+}
+
+/// Checks that image targets follow the plan-filtered catalog; returns unit on success.
+/// 检查生图目标遵循按套餐过滤的目录；验证成功返回单元值。
+#[test]
+fn open_design_image_targets_follow_the_plan_filtered_catalog() {
+    // A Go catalog lists chat models only, so no image target may be offered.
+    // Go 目录只列出对话模型，因此不得提供任何生图目标。
+    let (runtime, configuration) = open_design_runtime(&["deepseek-v4.1-flash", "gpt-6-luna"]);
+    assert!(open_design_image_targets(&runtime, &configuration).is_empty());
+
+    // An entitled catalog offers its image models, still off until the account opts in.
+    // 有权限的目录提供其生图模型，账号勾选前仍保持关闭。
+    let (runtime, mut configuration) =
+        open_design_runtime(&["deepseek-v4.1-flash", "gpt-image-2", "seedream-5.0"]);
+    assert!(open_design_image_targets(&runtime, &configuration).is_empty());
+    for model_id in ["gpt-image-2", "seedream-5.0", "nano-banana-2"] {
+        configuration.set_connection_model_enabled("open-design-test", model_id, true);
+    }
+    runtime
+        .reapply_model_catalog_overlays(&configuration)
+        .expect("explicit opt-in rebuilds effective catalogs");
+    // Opting into an image model the plan does not list exposes nothing for it.
+    // 勾选套餐目录未列出的生图模型不会为其暴露目标。
+    assert_eq!(
+        open_design_image_targets(&runtime, &configuration),
+        ["gpt-image-2.generate", "seedream-5.0.generate"]
+    );
+}

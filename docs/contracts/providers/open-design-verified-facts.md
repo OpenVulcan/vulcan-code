@@ -253,7 +253,30 @@ Logo 原样取自指定仓库 `apps/web/public/logo.svg`，复制为前端
 - **新模型。** `deepseek-v4.1-flash-eco`、`hy4-preview`、`minimax-m3.1-flash` 进入 Go 目录，
   按目录容量与上文实测档位登记。按用户提供的官方套餐说明，Go Pro 与 Go Max 不含 V4.1 Flash Eco；
   服务端目录按套餐过滤，宿主无需额外名单。
-- **生图。** `POST /v1/images/generations` 存在，Go 套餐返回 403 `tier_request_kind_not_entitled`
-  （`image_generations`），`/v1/images/edits` 返回 404。官方客户端经 `vela image gen|edit` 调用媒体任务接口，
-  分辨率上限由服务端按套餐执行。没有可用套餐的成功证据，**清单不声明任何图片目标**。
+- **生图路由。** `POST /v1/images/generations` 识别全部 5 个生图模型 ID（请求类别 `image_generations`），
+  Go 套餐在字段校验前返回 403 `tier_request_kind_not_entitled`；未知或对话模型返回 404 `model_not_found`；
+  `/v1/images/edits` 返回 404。`?all=true` 目录中的生图模型 `output_modalities` 为 `image`，
+  不带参数的目录只对有权限的套餐列出它们。
+
+## 生图目标（revision 6，按源码声明，经用户授权）
+
+用户授权按 OpenDesign 源码与官方套餐规则直接声明，**尚无成功生成的实测证据**。可用 Go Key 与本机
+`vela media models --json`（返回空目录）都无法取得逐模型发布的比例与分辨率组合。
+
+- 来源：`nexu-io/open-design` 提交 `87a4f91c30` 的 `apps/daemon/src/media/vela.ts`、`media/models.ts`
+  与 `prompts/media-contract.ts`。官方客户端经 `vela image gen|edit` 调用 `amr-api` 的
+  `/api/v1/media/images/generations`（控制密钥、异步任务、`vela media models` 发布能力），请求字段为
+  `model`、`prompt`、`aspect_ratio`、`resolution`、`quality`、参考图（最多 5 张）。宿主使用 Link 上同名字段的
+  `/v1/images/generations` 同步路由，API Key 与账号授权都可用。
+- 模型：`gpt-image-2`、`nano-banana-2`、`nano-banana-2-lite`、`seedream-5.0`、`seedream-5.0-pro`。
+  比例 `1:1`、`16:9`、`9:16`、`4:3`、`3:4`；分辨率 GPT Image 2 为 `1K`/`2K`，其余为 `1K`/`2K`/`4K`；
+  只有 GPT Image 2 有 `quality`（low/medium/high）。三者都可省略，省略即由服务端默认档位与价格决定，
+  与官方提示词“只在用户要求时传入”的约定一致。
+- 套餐上限（官方套餐说明，由服务端执行，宿主不另建名单）：Plus 全部 1K；Pro Seedream/Nano Banana 2K、
+  GPT Image 2 2K；Max Seedream/Nano Banana 4K、GPT Image 2 2K；Go 无生图权限。
+- 可用性：目标以 `availability_model_ids_any` 绑定同名模型，模型规则 `default_enabled = false`。
+  只有套餐目录列出且用户在该连接中勾选的模型才对 AI 可见。
+- 输出按 OpenAI Images 形状解码 `data[0].b64_json` 或 `data[0].url`，均为可选并标为 PNG；
+  实际 MIME 未验证。参考图编辑不开放，因为 Link 没有 `/images/edits`。超时 330 秒，与官方客户端一致。
+- 首次在 Plus 及以上套餐成功生成后，必须回填请求与响应形状并据实修正本节。
 - **未能验证。** Plus 及以上套餐独有的对话模型无法用 Go Key 调用，不创建规则。

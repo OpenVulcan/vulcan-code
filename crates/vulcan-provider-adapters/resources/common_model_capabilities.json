@@ -2476,6 +2476,30 @@
       ]
     },
     {
+      "key": "nano-banana-2",
+      "aliases": [],
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "reasoning": "unsupported",
+      "reasoning_control": "fixed_off"
+    },
+    {
+      "key": "nano-banana-2-lite",
+      "aliases": [],
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "reasoning": "unsupported",
+      "reasoning_control": "fixed_off"
+    },
+    {
       "key": "nvidia/nemotron-3-ultra-550b-a55b",
       "aliases": [
         "nemotron-3-ultra-550b-a55b",
@@ -3058,6 +3082,30 @@
         "none",
         "high"
       ]
+    },
+    {
+      "key": "seedream-5.0",
+      "aliases": [],
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "reasoning": "unsupported",
+      "reasoning_control": "fixed_off"
+    },
+    {
+      "key": "seedream-5.0-pro",
+      "aliases": [],
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "image"
+      ],
+      "reasoning": "unsupported",
+      "reasoning_control": "fixed_off"
     },
     {
       "key": "step-3.5-flash",

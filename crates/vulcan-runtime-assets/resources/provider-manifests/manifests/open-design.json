@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "open-design",
-  "revision": 5,
-  "published_at": "2026-11-07T10:50:30Z",
+  "revision": 6,
+  "published_at": "2026-11-07T11:00:51Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -10,7 +10,9 @@
       "anthropic-messages.v1",
       "openai-responses.v1"
     ],
-    "required_execution_primitives": [],
+    "required_execution_primitives": [
+      "http_json_sync"
+    ],
     "required_upload_primitives": [],
     "required_transformers": [
       "copy_request_field",
@@ -671,6 +673,146 @@
         "evidence_revision": "open-design.gateway.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.gateway.2026-11-07"
+    },
+    {
+      "rule_id": "gpt-image-2",
+      "matcher": {
+        "kind": "exact",
+        "value": "gpt-image-2"
+      },
+      "display_name": "GPT Image 2",
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "default_enabled": false,
+      "capabilities": {
+        "operations": [
+          "image_generate"
+        ],
+        "input_resources": [],
+        "output_resources": [
+          "image"
+        ],
+        "reasoning": "unsupported",
+        "provider_native_tools": [],
+        "reasoning_control": "fixed_off",
+        "reasoning_efforts": [],
+        "evidence_revision": "open-design.image-source.2026-11-07"
+      },
+      "provenance_ref": "https://github.com/nexu-io/open-design/blob/87a4f91c30/apps/daemon/src/media/vela.ts"
+    },
+    {
+      "rule_id": "nano-banana-2",
+      "matcher": {
+        "kind": "exact",
+        "value": "nano-banana-2"
+      },
+      "display_name": "Nano Banana 2",
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "default_enabled": false,
+      "capabilities": {
+        "operations": [
+          "image_generate"
+        ],
+        "input_resources": [],
+        "output_resources": [
+          "image"
+        ],
+        "reasoning": "unsupported",
+        "provider_native_tools": [],
+        "reasoning_control": "fixed_off",
+        "reasoning_efforts": [],
+        "evidence_revision": "open-design.image-source.2026-11-07"
+      },
+      "provenance_ref": "https://github.com/nexu-io/open-design/blob/87a4f91c30/apps/daemon/src/media/vela.ts"
+    },
+    {
+      "rule_id": "nano-banana-2-lite",
+      "matcher": {
+        "kind": "exact",
+        "value": "nano-banana-2-lite"
+      },
+      "display_name": "Nano Banana 2 Lite",
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "default_enabled": false,
+      "capabilities": {
+        "operations": [
+          "image_generate"
+        ],
+        "input_resources": [],
+        "output_resources": [
+          "image"
+        ],
+        "reasoning": "unsupported",
+        "provider_native_tools": [],
+        "reasoning_control": "fixed_off",
+        "reasoning_efforts": [],
+        "evidence_revision": "open-design.image-source.2026-11-07"
+      },
+      "provenance_ref": "https://github.com/nexu-io/open-design/blob/87a4f91c30/apps/daemon/src/media/vela.ts"
+    },
+    {
+      "rule_id": "seedream-5.0",
+      "matcher": {
+        "kind": "exact",
+        "value": "seedream-5.0"
+      },
+      "display_name": "Seedream 5.0",
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "default_enabled": false,
+      "capabilities": {
+        "operations": [
+          "image_generate"
+        ],
+        "input_resources": [],
+        "output_resources": [
+          "image"
+        ],
+        "reasoning": "unsupported",
+        "provider_native_tools": [],
+        "reasoning_control": "fixed_off",
+        "reasoning_efforts": [],
+        "evidence_revision": "open-design.image-source.2026-11-07"
+      },
+      "provenance_ref": "https://github.com/nexu-io/open-design/blob/87a4f91c30/apps/daemon/src/media/vela.ts"
+    },
+    {
+      "rule_id": "seedream-5.0-pro",
+      "matcher": {
+        "kind": "exact",
+        "value": "seedream-5.0-pro"
+      },
+      "display_name": "Seedream 5.0 Pro",
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "default_enabled": false,
+      "capabilities": {
+        "operations": [
+          "image_generate"
+        ],
+        "input_resources": [],
+        "output_resources": [
+          "image"
+        ],
+        "reasoning": "unsupported",
+        "provider_native_tools": [],
+        "reasoning_control": "fixed_off",
+        "reasoning_efforts": [],
+        "evidence_revision": "open-design.image-source.2026-11-07"
+      },
+      "provenance_ref": "https://github.com/nexu-io/open-design/blob/87a4f91c30/apps/daemon/src/media/vela.ts"
     }
   ],
   "usage_profiles": [],
@@ -752,8 +894,738 @@
   ],
   "response_profiles": [],
   "upload_channels": [],
-  "operations": [],
-  "tool_targets": [],
+  "operations": [
+    {
+      "operation_id": "open-design.image.generate",
+      "operation": "image_generate",
+      "carrier": "provider_tool",
+      "input_resources": [],
+      "output_resources": [
+        "image"
+      ],
+      "tool_target_refs": [
+        "gpt-image-2.generate",
+        "nano-banana-2.generate",
+        "nano-banana-2-lite.generate",
+        "seedream-5.0.generate",
+        "seedream-5.0-pro.generate"
+      ],
+      "request_profile_refs": [],
+      "response_profile_refs": [],
+      "upload_channel_refs": [],
+      "upload_bindings": [],
+      "timeout_ms": 330000,
+      "idempotent": false
+    }
+  ],
+  "tool_targets": [
+    {
+      "target_id": "gpt-image-2.generate",
+      "description": "Generate one image with GPT Image 2 through the OpenDesign Link image endpoint.",
+      "service_entry_id": "design-plan",
+      "credential_profile_ids": [
+        "account-auth",
+        "api-key"
+      ],
+      "upstream_target_id": "gpt-image-2",
+      "availability_model_ids_any": [
+        "gpt-image-2"
+      ],
+      "display_name": "GPT Image 2 Generation",
+      "tool_id": "image_generate",
+      "capability": "image_generate",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "type": "string",
+            "const": "gpt-image-2",
+            "default": "gpt-image-2"
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Complete image generation instruction."
+          },
+          "aspect_ratio": {
+            "type": "string",
+            "enum": [
+              "1:1",
+              "16:9",
+              "9:16",
+              "4:3",
+              "3:4"
+            ],
+            "description": "Output aspect ratio. Omit to let the model's default profile decide."
+          },
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "1K",
+              "2K"
+            ],
+            "description": "Output resolution tier; send only together with aspect_ratio and only when the user asked for a size, because tiers are priced differently. Plan caps enforced by OpenDesign: Plus up to 1K, Pro and Max up to 2K; Go has no image entitlement."
+          },
+          "quality": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "description": "Priced quality tier; send only when the user asked for one, otherwise the model's cheapest default tier applies."
+          }
+        },
+        "required": [
+          "prompt"
+        ]
+      },
+      "extension_profile": {
+        "summary": "Generate a new image with GPT Image 2. OpenDesign's default image model; the only one with quality tiers.",
+        "characteristics": [
+          "Parameters follow the OpenDesign media contract: aspect_ratio, resolution and quality.",
+          "Omitted aspect_ratio, resolution and quality leave the server's default profile and price in charge."
+        ],
+        "input_modes": [
+          "text_to_image"
+        ],
+        "resolution_policy": {
+          "mode": "fixed_presets",
+          "presets": [
+            {
+              "value": "1K"
+            },
+            {
+              "value": "2K"
+            }
+          ],
+          "aspect_ratios": [
+            "1:1",
+            "16:9",
+            "9:16",
+            "4:3",
+            "3:4"
+          ]
+        },
+        "format_policy": {
+          "input_formats": [
+            "text"
+          ],
+          "output_formats": [
+            "image/png"
+          ]
+        },
+        "constraints": [
+          "Exactly one image is generated per call.",
+          "Plan caps enforced by OpenDesign: Plus up to 1K, Pro and Max up to 2K; Go has no image entitlement.",
+          "The target is available only while the credential's plan-filtered catalog lists the model.",
+          "quality accepts low, medium or high."
+        ],
+        "limitations": [
+          "Declared from the OpenDesign source and plan rules; no successful generation has been observed yet.",
+          "Reference-image editing is not exposed: the Link host has no /images/edits route."
+        ],
+        "evidence_refs": [
+          "docs/contracts/providers/open-design-verified-facts.md"
+        ]
+      },
+      "output": {
+        "kind": "resources",
+        "source_path": "/",
+        "normalized_result_path": "resources",
+        "resource_kind": "image",
+        "mime_types": [
+          "image/png"
+        ],
+        "resource_decoders": [
+          {
+            "source_path": "/data/0/b64_json",
+            "encoding": "base64",
+            "resource_kind": "image",
+            "mime_type": "image/png",
+            "optional": true,
+            "max_bytes": 104857600,
+            "output_id_prefix": "image"
+          },
+          {
+            "source_path": "/data/0/url",
+            "encoding": "https_url",
+            "resource_kind": "image",
+            "mime_type": "image/png",
+            "optional": true,
+            "output_id_prefix": "url-image"
+          }
+        ]
+      },
+      "execution": {
+        "endpoint_path": "/images/generations",
+        "authentication": "bearer_authorization",
+        "adapter": "generic_json",
+        "execution_kind": "http_json_sync"
+      }
+    },
+    {
+      "target_id": "nano-banana-2.generate",
+      "description": "Generate one image with Nano Banana 2 through the OpenDesign Link image endpoint.",
+      "service_entry_id": "design-plan",
+      "credential_profile_ids": [
+        "account-auth",
+        "api-key"
+      ],
+      "upstream_target_id": "nano-banana-2",
+      "availability_model_ids_any": [
+        "nano-banana-2"
+      ],
+      "display_name": "Nano Banana 2 Generation",
+      "tool_id": "image_generate",
+      "capability": "image_generate",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "type": "string",
+            "const": "nano-banana-2",
+            "default": "nano-banana-2"
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Complete image generation instruction."
+          },
+          "aspect_ratio": {
+            "type": "string",
+            "enum": [
+              "1:1",
+              "16:9",
+              "9:16",
+              "4:3",
+              "3:4"
+            ],
+            "description": "Output aspect ratio. Omit to let the model's default profile decide."
+          },
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "1K",
+              "2K",
+              "4K"
+            ],
+            "description": "Output resolution tier; send only together with aspect_ratio and only when the user asked for a size, because tiers are priced differently. Plan caps enforced by OpenDesign: Plus up to 1K, Pro up to 2K, Max up to 4K; Go has no image entitlement."
+          }
+        },
+        "required": [
+          "prompt"
+        ]
+      },
+      "extension_profile": {
+        "summary": "Generate a new image with Nano Banana 2. Google Nano Banana 2 through the OpenDesign plan.",
+        "characteristics": [
+          "Parameters follow the OpenDesign media contract: aspect_ratio, resolution and quality.",
+          "Omitted aspect_ratio, resolution and quality leave the server's default profile and price in charge."
+        ],
+        "input_modes": [
+          "text_to_image"
+        ],
+        "resolution_policy": {
+          "mode": "fixed_presets",
+          "presets": [
+            {
+              "value": "1K"
+            },
+            {
+              "value": "2K"
+            },
+            {
+              "value": "4K"
+            }
+          ],
+          "aspect_ratios": [
+            "1:1",
+            "16:9",
+            "9:16",
+            "4:3",
+            "3:4"
+          ]
+        },
+        "format_policy": {
+          "input_formats": [
+            "text"
+          ],
+          "output_formats": [
+            "image/png"
+          ]
+        },
+        "constraints": [
+          "Exactly one image is generated per call.",
+          "Plan caps enforced by OpenDesign: Plus up to 1K, Pro up to 2K, Max up to 4K; Go has no image entitlement.",
+          "The target is available only while the credential's plan-filtered catalog lists the model."
+        ],
+        "limitations": [
+          "Declared from the OpenDesign source and plan rules; no successful generation has been observed yet.",
+          "Reference-image editing is not exposed: the Link host has no /images/edits route."
+        ],
+        "evidence_refs": [
+          "docs/contracts/providers/open-design-verified-facts.md"
+        ]
+      },
+      "output": {
+        "kind": "resources",
+        "source_path": "/",
+        "normalized_result_path": "resources",
+        "resource_kind": "image",
+        "mime_types": [
+          "image/png"
+        ],
+        "resource_decoders": [
+          {
+            "source_path": "/data/0/b64_json",
+            "encoding": "base64",
+            "resource_kind": "image",
+            "mime_type": "image/png",
+            "optional": true,
+            "max_bytes": 104857600,
+            "output_id_prefix": "image"
+          },
+          {
+            "source_path": "/data/0/url",
+            "encoding": "https_url",
+            "resource_kind": "image",
+            "mime_type": "image/png",
+            "optional": true,
+            "output_id_prefix": "url-image"
+          }
+        ]
+      },
+      "execution": {
+        "endpoint_path": "/images/generations",
+        "authentication": "bearer_authorization",
+        "adapter": "generic_json",
+        "execution_kind": "http_json_sync"
+      }
+    },
+    {
+      "target_id": "nano-banana-2-lite.generate",
+      "description": "Generate one image with Nano Banana 2 Lite through the OpenDesign Link image endpoint.",
+      "service_entry_id": "design-plan",
+      "credential_profile_ids": [
+        "account-auth",
+        "api-key"
+      ],
+      "upstream_target_id": "nano-banana-2-lite",
+      "availability_model_ids_any": [
+        "nano-banana-2-lite"
+      ],
+      "display_name": "Nano Banana 2 Lite Generation",
+      "tool_id": "image_generate",
+      "capability": "image_generate",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "type": "string",
+            "const": "nano-banana-2-lite",
+            "default": "nano-banana-2-lite"
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Complete image generation instruction."
+          },
+          "aspect_ratio": {
+            "type": "string",
+            "enum": [
+              "1:1",
+              "16:9",
+              "9:16",
+              "4:3",
+              "3:4"
+            ],
+            "description": "Output aspect ratio. Omit to let the model's default profile decide."
+          },
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "1K",
+              "2K",
+              "4K"
+            ],
+            "description": "Output resolution tier; send only together with aspect_ratio and only when the user asked for a size, because tiers are priced differently. Plan caps enforced by OpenDesign: Plus up to 1K, Pro up to 2K, Max up to 4K; Go has no image entitlement."
+          }
+        },
+        "required": [
+          "prompt"
+        ]
+      },
+      "extension_profile": {
+        "summary": "Generate a new image with Nano Banana 2 Lite. Faster, lighter Nano Banana 2 variant.",
+        "characteristics": [
+          "Parameters follow the OpenDesign media contract: aspect_ratio, resolution and quality.",
+          "Omitted aspect_ratio, resolution and quality leave the server's default profile and price in charge."
+        ],
+        "input_modes": [
+          "text_to_image"
+        ],
+        "resolution_policy": {
+          "mode": "fixed_presets",
+          "presets": [
+            {
+              "value": "1K"
+            },
+            {
+              "value": "2K"
+            },
+            {
+              "value": "4K"
+            }
+          ],
+          "aspect_ratios": [
+            "1:1",
+            "16:9",
+            "9:16",
+            "4:3",
+            "3:4"
+          ]
+        },
+        "format_policy": {
+          "input_formats": [
+            "text"
+          ],
+          "output_formats": [
+            "image/png"
+          ]
+        },
+        "constraints": [
+          "Exactly one image is generated per call.",
+          "Plan caps enforced by OpenDesign: Plus up to 1K, Pro up to 2K, Max up to 4K; Go has no image entitlement.",
+          "The target is available only while the credential's plan-filtered catalog lists the model."
+        ],
+        "limitations": [
+          "Declared from the OpenDesign source and plan rules; no successful generation has been observed yet.",
+          "Reference-image editing is not exposed: the Link host has no /images/edits route."
+        ],
+        "evidence_refs": [
+          "docs/contracts/providers/open-design-verified-facts.md"
+        ]
+      },
+      "output": {
+        "kind": "resources",
+        "source_path": "/",
+        "normalized_result_path": "resources",
+        "resource_kind": "image",
+        "mime_types": [
+          "image/png"
+        ],
+        "resource_decoders": [
+          {
+            "source_path": "/data/0/b64_json",
+            "encoding": "base64",
+            "resource_kind": "image",
+            "mime_type": "image/png",
+            "optional": true,
+            "max_bytes": 104857600,
+            "output_id_prefix": "image"
+          },
+          {
+            "source_path": "/data/0/url",
+            "encoding": "https_url",
+            "resource_kind": "image",
+            "mime_type": "image/png",
+            "optional": true,
+            "output_id_prefix": "url-image"
+          }
+        ]
+      },
+      "execution": {
+        "endpoint_path": "/images/generations",
+        "authentication": "bearer_authorization",
+        "adapter": "generic_json",
+        "execution_kind": "http_json_sync"
+      }
+    },
+    {
+      "target_id": "seedream-5.0.generate",
+      "description": "Generate one image with Seedream 5.0 through the OpenDesign Link image endpoint.",
+      "service_entry_id": "design-plan",
+      "credential_profile_ids": [
+        "account-auth",
+        "api-key"
+      ],
+      "upstream_target_id": "seedream-5.0",
+      "availability_model_ids_any": [
+        "seedream-5.0"
+      ],
+      "display_name": "Seedream 5.0 Generation",
+      "tool_id": "image_generate",
+      "capability": "image_generate",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "type": "string",
+            "const": "seedream-5.0",
+            "default": "seedream-5.0"
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Complete image generation instruction."
+          },
+          "aspect_ratio": {
+            "type": "string",
+            "enum": [
+              "1:1",
+              "16:9",
+              "9:16",
+              "4:3",
+              "3:4"
+            ],
+            "description": "Output aspect ratio. Omit to let the model's default profile decide."
+          },
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "1K",
+              "2K",
+              "4K"
+            ],
+            "description": "Output resolution tier; send only together with aspect_ratio and only when the user asked for a size, because tiers are priced differently. Plan caps enforced by OpenDesign: Plus up to 1K, Pro up to 2K, Max up to 4K; Go has no image entitlement."
+          }
+        },
+        "required": [
+          "prompt"
+        ]
+      },
+      "extension_profile": {
+        "summary": "Generate a new image with Seedream 5.0. ByteDance Seedream 5.0 (the plan's Seedream 5 Lite tier).",
+        "characteristics": [
+          "Parameters follow the OpenDesign media contract: aspect_ratio, resolution and quality.",
+          "Omitted aspect_ratio, resolution and quality leave the server's default profile and price in charge."
+        ],
+        "input_modes": [
+          "text_to_image"
+        ],
+        "resolution_policy": {
+          "mode": "fixed_presets",
+          "presets": [
+            {
+              "value": "1K"
+            },
+            {
+              "value": "2K"
+            },
+            {
+              "value": "4K"
+            }
+          ],
+          "aspect_ratios": [
+            "1:1",
+            "16:9",
+            "9:16",
+            "4:3",
+            "3:4"
+          ]
+        },
+        "format_policy": {
+          "input_formats": [
+            "text"
+          ],
+          "output_formats": [
+            "image/png"
+          ]
+        },
+        "constraints": [
+          "Exactly one image is generated per call.",
+          "Plan caps enforced by OpenDesign: Plus up to 1K, Pro up to 2K, Max up to 4K; Go has no image entitlement.",
+          "The target is available only while the credential's plan-filtered catalog lists the model."
+        ],
+        "limitations": [
+          "Declared from the OpenDesign source and plan rules; no successful generation has been observed yet.",
+          "Reference-image editing is not exposed: the Link host has no /images/edits route."
+        ],
+        "evidence_refs": [
+          "docs/contracts/providers/open-design-verified-facts.md"
+        ]
+      },
+      "output": {
+        "kind": "resources",
+        "source_path": "/",
+        "normalized_result_path": "resources",
+        "resource_kind": "image",
+        "mime_types": [
+          "image/png"
+        ],
+        "resource_decoders": [
+          {
+            "source_path": "/data/0/b64_json",
+            "encoding": "base64",
+            "resource_kind": "image",
+            "mime_type": "image/png",
+            "optional": true,
+            "max_bytes": 104857600,
+            "output_id_prefix": "image"
+          },
+          {
+            "source_path": "/data/0/url",
+            "encoding": "https_url",
+            "resource_kind": "image",
+            "mime_type": "image/png",
+            "optional": true,
+            "output_id_prefix": "url-image"
+          }
+        ]
+      },
+      "execution": {
+        "endpoint_path": "/images/generations",
+        "authentication": "bearer_authorization",
+        "adapter": "generic_json",
+        "execution_kind": "http_json_sync"
+      }
+    },
+    {
+      "target_id": "seedream-5.0-pro.generate",
+      "description": "Generate one image with Seedream 5.0 Pro through the OpenDesign Link image endpoint.",
+      "service_entry_id": "design-plan",
+      "credential_profile_ids": [
+        "account-auth",
+        "api-key"
+      ],
+      "upstream_target_id": "seedream-5.0-pro",
+      "availability_model_ids_any": [
+        "seedream-5.0-pro"
+      ],
+      "display_name": "Seedream 5.0 Pro Generation",
+      "tool_id": "image_generate",
+      "capability": "image_generate",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "type": "string",
+            "const": "seedream-5.0-pro",
+            "default": "seedream-5.0-pro"
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Complete image generation instruction."
+          },
+          "aspect_ratio": {
+            "type": "string",
+            "enum": [
+              "1:1",
+              "16:9",
+              "9:16",
+              "4:3",
+              "3:4"
+            ],
+            "description": "Output aspect ratio. Omit to let the model's default profile decide."
+          },
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "1K",
+              "2K",
+              "4K"
+            ],
+            "description": "Output resolution tier; send only together with aspect_ratio and only when the user asked for a size, because tiers are priced differently. Plan caps enforced by OpenDesign: Plus up to 1K, Pro up to 2K, Max up to 4K; Go has no image entitlement."
+          }
+        },
+        "required": [
+          "prompt"
+        ]
+      },
+      "extension_profile": {
+        "summary": "Generate a new image with Seedream 5.0 Pro. Higher-quality ByteDance Seedream 5.0 Pro.",
+        "characteristics": [
+          "Parameters follow the OpenDesign media contract: aspect_ratio, resolution and quality.",
+          "Omitted aspect_ratio, resolution and quality leave the server's default profile and price in charge."
+        ],
+        "input_modes": [
+          "text_to_image"
+        ],
+        "resolution_policy": {
+          "mode": "fixed_presets",
+          "presets": [
+            {
+              "value": "1K"
+            },
+            {
+              "value": "2K"
+            },
+            {
+              "value": "4K"
+            }
+          ],
+          "aspect_ratios": [
+            "1:1",
+            "16:9",
+            "9:16",
+            "4:3",
+            "3:4"
+          ]
+        },
+        "format_policy": {
+          "input_formats": [
+            "text"
+          ],
+          "output_formats": [
+            "image/png"
+          ]
+        },
+        "constraints": [
+          "Exactly one image is generated per call.",
+          "Plan caps enforced by OpenDesign: Plus up to 1K, Pro up to 2K, Max up to 4K; Go has no image entitlement.",
+          "The target is available only while the credential's plan-filtered catalog lists the model."
+        ],
+        "limitations": [
+          "Declared from the OpenDesign source and plan rules; no successful generation has been observed yet.",
+          "Reference-image editing is not exposed: the Link host has no /images/edits route."
+        ],
+        "evidence_refs": [
+          "docs/contracts/providers/open-design-verified-facts.md"
+        ]
+      },
+      "output": {
+        "kind": "resources",
+        "source_path": "/",
+        "normalized_result_path": "resources",
+        "resource_kind": "image",
+        "mime_types": [
+          "image/png"
+        ],
+        "resource_decoders": [
+          {
+            "source_path": "/data/0/b64_json",
+            "encoding": "base64",
+            "resource_kind": "image",
+            "mime_type": "image/png",
+            "optional": true,
+            "max_bytes": 104857600,
+            "output_id_prefix": "image"
+          },
+          {
+            "source_path": "/data/0/url",
+            "encoding": "https_url",
+            "resource_kind": "image",
+            "mime_type": "image/png",
+            "optional": true,
+            "output_id_prefix": "url-image"
+          }
+        ]
+      },
+      "execution": {
+        "endpoint_path": "/images/generations",
+        "authentication": "bearer_authorization",
+        "adapter": "generic_json",
+        "execution_kind": "http_json_sync"
+      }
+    }
+  ],
   "provenance": {
     "status": "verified",
     "sources": [
@@ -780,6 +1652,14 @@
       {
         "url": "https://amr-link.open-design.ai/v1/responses",
         "note": "2026-11-07 live probes: GPT-6 Luna text, streaming, function calls, strict json_schema, image and PDF input on Responses; reasoning.effort none, low, medium and high are echoed, minimal, xhigh and max fall back to medium. Anthropic Messages at /v1/messages accepts Bearer and x-api-key; Claude Haiku 5.5 text, streaming, tool use, output_config json_schema, image and PDF input pass, adaptive thinking with output_config.effort yields thinking blocks and an unknown effort is rejected. Both routes also accept other families, but only GPT uses Responses and only Claude uses Messages."
+      },
+      {
+        "url": "https://github.com/nexu-io/open-design/blob/87a4f91c30/apps/daemon/src/media/vela.ts",
+        "note": "OpenDesign client media contract at commit 87a4f91c30: image models gpt-image-2, nano-banana-2, nano-banana-2-lite, seedream-5.0 and seedream-5.0-pro take aspect_ratio (1:1, 16:9, 9:16, 4:3, 3:4), a published resolution tier and, for gpt-image-2 only, quality low/medium/high; omitted values keep the server default and price. Resolution caps per plan follow the official plan table (Plus 1K, Pro 2K, Max 4K; GPT Image 2 at most 2K). Declared without a successful live generation, by user decision."
+      },
+      {
+        "url": "https://amr-link.open-design.ai/v1/images/generations",
+        "note": "2026-11-07 Go-key probes: the route recognises every image model id (request kind image_generations) and answers 403 tier_request_kind_not_entitled before field validation; /v1/images/edits returns 404. The plain /v1/models catalog lists image models only for entitled plans."
       }
     ],
     "verified_at": "2026-11-07T00:00:00Z"
