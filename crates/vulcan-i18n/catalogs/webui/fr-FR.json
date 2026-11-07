@@ -4627,7 +4627,7 @@
   "settings.models.modality.rerank": "Reclassement",
   "settings.inference.title": "Inférence interne",
   "settings.inference.subtitle": "Sélectionnez des modèles, protocoles et identifiants précis pour VMM et les autres consommateurs internes, indépendamment du modèle de conversation actif.",
-  "settings.inference.vmmReasoningNotice": "Chaque usage LLM de VMM ne propose que des modèles prenant explicitement en charge la désactivation du raisonnement et fixe l’effort sur Désactivé. La sortie de raisonnement reste toujours séparée du corps JSON de VMM.",
+  "settings.inference.vmmReasoningNotice": "Pourquoi seuls les modèles capables de désactiver le raisonnement sont proposés : le rappel de mémoire s’exécute avant chaque réponse et l’organisation de la mémoire après, soit plusieurs appels au modèle par tour. Le raisonnement ajouterait de l’attente et un coût en jetons à chacun d’eux ; les appels de mémoire s’exécutent donc toujours sans raisonnement. Un modèle absent de cette liste raisonne toujours ou son fournisseur ne déclare pas de réglage Désactivé.",
   "settings.inference.profileVmm": "Profil VMM",
   "settings.inference.llm": "LLM restreint",
   "settings.inference.embedding": "Embeddings",

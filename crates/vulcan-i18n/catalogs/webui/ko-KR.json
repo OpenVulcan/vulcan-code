@@ -4627,7 +4627,7 @@
   "settings.models.modality.rerank": "재순위",
   "settings.inference.title": "내부 추론",
   "settings.inference.subtitle": "VMM 등 내부 소비자를 위해 활성 대화 모델과 별도로 정확한 모델, 프로토콜, 자격 증명을 선택합니다.",
-  "settings.inference.vmmReasoningNotice": "모든 VMM LLM 용도에는 추론 비활성화를 명시적으로 지원하는 모델만 표시되며 추론 수준은 끔으로 고정됩니다. 추론 출력은 항상 VMM JSON 본문과 분리됩니다.",
+  "settings.inference.vmmReasoningNotice": "생각을 끌 수 있는 모델만 표시되는 이유: 기억 회상은 매 답변 전에, 기억 정리는 답변 후에 실행되어 턴마다 모델을 여러 번 호출합니다. 생각을 켜면 모든 호출에 대기 시간과 토큰 비용이 더해지므로 기억 호출은 항상 생각을 끈 상태로 실행됩니다. 이 목록에 없는 모델은 항상 생각하거나 제공업체가 끄기 설정을 선언하지 않은 모델입니다.",
   "settings.inference.profileVmm": "VMM 프로필",
   "settings.inference.llm": "제한된 LLM",
   "settings.inference.embedding": "임베딩",

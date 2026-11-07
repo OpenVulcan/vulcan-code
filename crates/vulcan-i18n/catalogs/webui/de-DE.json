@@ -4627,7 +4627,7 @@
   "settings.models.modality.rerank": "Reranking",
   "settings.inference.title": "Interne Inferenz",
   "settings.inference.subtitle": "Wählen Sie für VMM und andere interne Verbraucher exakte Modelle, Protokolle und Zugangsdaten unabhängig vom aktiven Unterhaltungsmodell.",
-  "settings.inference.vmmReasoningNotice": "Jeder VMM-LLM-Zweck listet nur Modelle, die das Deaktivieren von Reasoning ausdrücklich unterstützen, und legt den Aufwand auf Aus fest. Die Reasoning-Ausgabe bleibt immer vom VMM-JSON-Inhalt getrennt.",
+  "settings.inference.vmmReasoningNotice": "Warum nur Modelle, die das Denken abschalten können: Der Gedächtnisabruf läuft vor jeder Antwort und das Ordnen des Gedächtnisses danach, also mehrere Modellaufrufe pro Runde. Denken würde jeden dieser Aufrufe um Wartezeit und Token-Kosten verlängern, deshalb laufen Gedächtnisaufrufe immer ohne Denken. Ein Modell, das hier fehlt, denkt entweder immer oder sein Anbieter deklariert keine Aus-Einstellung.",
   "settings.inference.profileVmm": "VMM-Profil",
   "settings.inference.llm": "Eingeschränktes LLM",
   "settings.inference.embedding": "Embeddings",

@@ -323,8 +323,9 @@ export function VmmInferenceSettings({
       <div className="vk-mem-section-head">
         <Database aria-hidden="true" />
         <div className="vk-form-cell">
-          <div className="vk-form-inline"><strong>{t("settings.inference.title")} · {t("settings.inference.profileVmm")}</strong><Tooltip><TooltipTrigger asChild><button type="button" aria-label={t("settings.inference.vmmReasoningNotice")} className="vk-faint"><Info className="vk-icon" aria-hidden="true" /></button></TooltipTrigger><TooltipContent>{t("settings.inference.vmmReasoningNotice")}</TooltipContent></Tooltip></div>
+          <strong>{t("settings.inference.title")} · {t("settings.inference.profileVmm")}</strong>
           <p className="vk-form-note">{t("settings.inference.subtitle")}</p>
+          <p className="vk-form-note">{t("settings.inference.vmmReasoningNotice")}</p>
         </div>
       </div>
       {error ? <p role="alert" className="vk-field-error">{error}</p> : null}

@@ -4627,7 +4627,7 @@
   "settings.models.modality.rerank": "Rerank",
   "settings.inference.title": "Internal inference",
   "settings.inference.subtitle": "Select exact models, protocols, and credentials for VMM and other internal consumers independently from the active conversation model.",
-  "settings.inference.vmmReasoningNotice": "Every VMM LLM purpose only lists models that explicitly support disabled reasoning and fixes the effort to Off. Reasoning output always remains separate from the VMM JSON body.",
+  "settings.inference.vmmReasoningNotice": "Why only models that can turn thinking off: memory recall runs before every reply and memory organizing runs after it, several model calls each turn. Thinking would add its wait and token cost to every one of them, so memory calls always run with thinking off. A model missing from this list either always thinks or has no Off setting declared by its provider.",
   "settings.inference.profileVmm": "VMM profile",
   "settings.inference.llm": "Restricted LLM",
   "settings.inference.embedding": "Embeddings",

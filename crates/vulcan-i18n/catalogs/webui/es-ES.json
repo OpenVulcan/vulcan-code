@@ -4627,7 +4627,7 @@
   "settings.models.modality.rerank": "Reordenación",
   "settings.inference.title": "Inferencia interna",
   "settings.inference.subtitle": "Selecciona modelos, protocolos y credenciales exactos para VMM y otros consumidores internos, con independencia del modelo de conversación activo.",
-  "settings.inference.vmmReasoningNotice": "Cada propósito LLM de VMM solo muestra modelos que admiten explícitamente desactivar el razonamiento y fija el esfuerzo en Desactivado. La salida de razonamiento siempre se mantiene separada del cuerpo JSON de VMM.",
+  "settings.inference.vmmReasoningNotice": "Por qué solo aparecen modelos que pueden desactivar el razonamiento: la recuperación de memoria se ejecuta antes de cada respuesta y la organización de memoria después, con varias llamadas al modelo por turno. Razonar añadiría espera y coste de tokens a cada una de ellas, por eso las llamadas de memoria siempre se ejecutan sin razonamiento. Un modelo que no aparece aquí siempre razona o su proveedor no declara una opción para desactivarlo.",
   "settings.inference.profileVmm": "Perfil de VMM",
   "settings.inference.llm": "LLM restringido",
   "settings.inference.embedding": "Embeddings",

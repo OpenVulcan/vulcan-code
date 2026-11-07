@@ -4627,7 +4627,7 @@
   "settings.models.modality.rerank": "重排",
   "settings.inference.title": "内部推理",
   "settings.inference.subtitle": "为 VMM 等内部消费者选择精确模型、协议和凭据，不跟随当前会话模型。",
-  "settings.inference.vmmReasoningNotice": "全部 VMM LLM 用途都只显示明确支持关闭思考的模型，并将思考档位固定为关闭。推理输出始终与 VMM JSON 正文分离。",
+  "settings.inference.vmmReasoningNotice": "为何只列出能关闭思考的模型：每次回复前要先召回记忆，回复后还要整理记忆，每轮都会调用多次模型。若开启思考，每次调用都会增加等待时间和 Token 消耗，因此记忆调用一律关闭思考。列表中没有的模型，要么始终思考，要么其供应商未声明可关闭思考。",
   "settings.inference.profileVmm": "VMM 配置档",
   "settings.inference.llm": "受限 LLM",
   "settings.inference.embedding": "向量",

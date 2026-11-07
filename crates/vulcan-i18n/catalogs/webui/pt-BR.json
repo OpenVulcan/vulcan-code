@@ -4627,7 +4627,7 @@
   "settings.models.modality.rerank": "Reordenação",
   "settings.inference.title": "Inferência interna",
   "settings.inference.subtitle": "Selecione modelos, protocolos e credenciais exatos para o VMM e outros consumidores internos, independentemente do modelo de conversa ativo.",
-  "settings.inference.vmmReasoningNotice": "Cada finalidade de LLM do VMM lista apenas modelos que suportam explicitamente desativar o raciocínio e fixa o esforço em Desligado. A saída de raciocínio sempre fica separada do corpo JSON do VMM.",
+  "settings.inference.vmmReasoningNotice": "Por que só aparecem modelos que podem desligar o raciocínio: a recuperação de memória roda antes de cada resposta e a organização da memória depois, com várias chamadas ao modelo por turno. Raciocinar acrescentaria espera e custo de tokens a cada uma delas, por isso as chamadas de memória sempre rodam sem raciocínio. Um modelo ausente desta lista sempre raciocina ou o provedor dele não declara uma opção Desligado.",
   "settings.inference.profileVmm": "Perfil do VMM",
   "settings.inference.llm": "LLM restrito",
   "settings.inference.embedding": "Embeddings",

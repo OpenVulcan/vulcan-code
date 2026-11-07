@@ -4627,7 +4627,7 @@
   "settings.models.modality.rerank": "リランク",
   "settings.inference.title": "内部推論",
   "settings.inference.subtitle": "VMM などの内部利用者向けに、アクティブな会話モデルとは独立して、モデル・プロトコル・認証情報を正確に選択します。",
-  "settings.inference.vmmReasoningNotice": "VMM のすべての LLM 用途では、推論の無効化を明示的にサポートするモデルのみが表示され、推論レベルはオフに固定されます。推論出力は常に VMM の JSON 本文とは分離されます。",
+  "settings.inference.vmmReasoningNotice": "思考をオフにできるモデルだけが表示される理由：記憶の想起は毎回の返信の前に、記憶の整理は返信の後に行われ、1 ターンごとに複数回モデルを呼び出します。思考をオンにすると、そのすべての呼び出しに待ち時間とトークン消費が加わるため、記憶の呼び出しは常に思考オフで実行されます。この一覧にないモデルは、常に思考するか、提供元がオフ設定を宣言していません。",
   "settings.inference.profileVmm": "VMM プロファイル",
   "settings.inference.llm": "制限付き LLM",
   "settings.inference.embedding": "埋め込み",
