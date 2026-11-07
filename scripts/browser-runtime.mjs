@@ -1,6 +1,6 @@
 // Prepare the pinned, offline browser component at build time.
 // 在构建时准备锁定版本、可离线使用的浏览器组件。
-import { access, readFile, readdir, mkdir } from 'node:fs/promises';
+import { access, readFile, readdir, mkdir, rm } from 'node:fs/promises';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -58,6 +58,37 @@ export async function verifyBrowserDependencies(nodeRoot = pluginNode) {
   if (mcp.dependencies.playwright !== browserVersions.playwright || mcp.dependencies['playwright-core'] !== browserVersions.playwright) {
     throw new Error('MCP dependency protocol differs from the adapted Playwright version.');
   }
+  // The plugin loader rejects any link inside a package, so a tree with one would ship a disabled browser.
+  // 插件加载器拒绝包内任何链接，带链接的依赖树会发布出一个不可用的浏览器。
+  const link = await findLink(path.join(nodeRoot, 'node_modules'));
+  if (link) throw new Error(`Browser dependency tree must not contain links: ${link}`);
+}
+
+// Remove the `.bin` shims pnpm writes; on Linux and macOS they are symbolic links, and the plugin
+// launches its MCP server from the package's own `bin` entry instead.
+// 移除 pnpm 写入的 `.bin` 入口；它们在 Linux 与 macOS 上是符号链接，插件改由包自身的 `bin` 条目启动 MCP。
+// directory is a node_modules tree; nested node_modules trees are handled recursively.
+// directory 是一个 node_modules 目录树；嵌套的 node_modules 递归处理。
+async function removeBinShims(directory) {
+  for (const item of await readdir(directory, { withFileTypes: true })) {
+    const itemPath = path.join(directory, item.name);
+    if (item.name === '.bin' && path.basename(directory) === 'node_modules') await rm(itemPath, { recursive: true, force: true });
+    else if (item.isDirectory()) await removeBinShims(itemPath);
+  }
+}
+
+// Return the first symbolic link or junction under directory, or null when there is none.
+// 返回 directory 下第一个符号链接或目录联接；没有时返回 null。
+async function findLink(directory) {
+  for (const item of await readdir(directory, { withFileTypes: true })) {
+    const itemPath = path.join(directory, item.name);
+    if (item.isSymbolicLink()) return itemPath;
+    if (item.isDirectory()) {
+      const nested = await findLink(itemPath);
+      if (nested) return nested;
+    }
+  }
+  return null;
 }
 
 // Read prepared browser inputs for packaging; root selects the distribution's managed Node.
@@ -105,6 +136,7 @@ async function prepare(root) {
   const executable = await browserNodeExecutable(root);
   const pnpm = path.join(root, 'dependencies/runtimes/node', `pnpm-${browserVersions.pnpm}`, 'bin/pnpm.cjs');
   await run(executable, [pnpm, 'install', '--frozen-lockfile', '--ignore-scripts', '--node-linker=hoisted'], { cwd: pluginNode });
+  await removeBinShims(path.join(pluginNode, 'node_modules'));
   await verifyBrowserDependencies();
   await mkdir(browserCacheRoot, { recursive: true });
   await run(executable, [path.join(pluginNode, 'node_modules/playwright-core/cli.js'), 'install', 'chromium', '--no-shell'], {
