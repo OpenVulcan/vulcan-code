@@ -4,7 +4,7 @@ import { useI18n } from "@/i18n";
 import { serializeMermaidSvg } from "./conversation-mermaid-svg";
 
 import { MarkdownDiagramFrame } from "@/components/conversation/conversation-diagram-frame";
-import { GeneratedMediaPlayerWindow } from "@/components/media/generated-media-player";
+import { GeneratedMediaPlayerWindow } from "@/components/media/generated-media";
 import { useDiffShikiTheme } from "@/diff/diff-highlight";
 import {
   DIFF_SHIKI_DARK_THEME,

@@ -14,7 +14,15 @@ import {
 import { useI18n } from "@/i18n";
 import { MediaPathContextMenu } from "./media-path-context-menu";
 
-export { GeneratedMediaPlayerWindow } from "./generated-media-player";
+// PlayerWindow is the media viewer dialog; it loads with its first opening, keeping it out of the initial bundle.
+// PlayerWindow 是媒体查看弹窗；随第一次打开加载，使其不进入首屏包。
+const PlayerWindow = React.lazy(() => import("./generated-media-player").then((module) => ({ default: module.GeneratedMediaPlayerWindow })));
+
+// GeneratedMediaPlayerWindow opens the media viewer dialog; it draws nothing until the viewer has loaded.
+// GeneratedMediaPlayerWindow 打开媒体查看弹窗；查看器加载完成前不绘制任何内容。
+export function GeneratedMediaPlayerWindow(props: React.ComponentProps<typeof PlayerWindow>) {
+  return <React.Suspense fallback={null}><PlayerWindow {...props} /></React.Suspense>;
+}
 export type {
   GeneratedMediaAttachment,
   GeneratedMediaKind,

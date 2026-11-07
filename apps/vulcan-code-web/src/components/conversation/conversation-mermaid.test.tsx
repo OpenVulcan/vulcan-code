@@ -128,6 +128,9 @@ it.each([".vk-diagram-preview", ".vk-codeblock-action[aria-label='展开图表']
   // trigger exercises both actual user entry points without changing internal component state.
   // trigger 覆盖两个真实用户入口，不修改组件内部状态。
   const trigger = host.querySelector<HTMLButtonElement>(selector)!;
+  // The viewer loads with its first opening; loading its module first lets the opening settle within one act.
+  // 查看器随第一次打开加载；先加载其模块，使打开过程在一次 act 内完成。
+  await import("@/components/media/generated-media-player");
   await act(async () => { trigger.focus(); trigger.click(); });
   // dialog verifies that expansion uses the original Blob rather than a service asset request.
   // dialog 验证展开复用原始 Blob，而不是发起服务资源请求。
