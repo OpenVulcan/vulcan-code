@@ -21,12 +21,25 @@ describe("parseAnswerComponent", () => {
     expect(parse("ui-kv Round trip", "a | b")).toEqual({ kind: "kv", heading: "Round trip", rows: [{ label: "a", value: "b" }] });
     expect(parse("ui-kv", "a | b")).not.toHaveProperty("heading");
     expect(parse("ui-checklist Checks", "ok | item")?.heading).toBe("Checks");
-    expect(parse("ui-kv Round trip", "a | b | c")).toBeNull();
+    expect(parse("ui-kv Round trip", "a | b | c | d")).toBeNull();
+  });
+
+  it("reads a third key-value cell as the fact's note", () => {
+    expect(parse("ui-kv", "Run 1 | 415 | inline script\nRun 2 | 681")).toEqual({
+      kind: "kv",
+      rows: [{ label: "Run 1", value: "415", note: "inline script" }, { label: "Run 2", value: "681" }],
+    });
+    expect(parse("ui-kv", "Install | curl x|sh")).toEqual({ kind: "kv", rows: [{ label: "Install", value: "curl x|sh" }] });
+    expect(parse("ui-kv", "Install | curl x|sh | piped")).toEqual({
+      kind: "kv",
+      rows: [{ label: "Install", value: "curl x|sh", note: "piped" }],
+    });
+    expect(parse("ui-kv", "a |  | c")).toBeNull();
   });
 
   it("rejects rows with empty cells, wrong cell counts or unknown status words", () => {
     expect(parse("ui-kv", "a | ")).toBeNull();
-    expect(parse("ui-kv", "a | b | c")).toBeNull();
+    expect(parse("ui-kv", "a | b | c | d")).toBeNull();
     expect(parse("ui-checklist", "done | item")).toBeNull();
     expect(parse("ui-steps", "ok | step")).toBeNull();
     expect(parse("ui-findings", "critical | issue")).toBeNull();
@@ -57,6 +70,17 @@ describe("parseAnswerComponent", () => {
     expect(parse("ui-metrics", "Scan time | 10.9 | s")).not.toHaveProperty("rows.0.maximum");
     // A non-numeric maximum followed by a unit is still a malformed meter.
     expect(parse("ui-metrics", "Coverage | 80 | high | %")).toBeNull();
+  });
+
+  it("reads a lone signed third metric cell as a change, never a maximum", () => {
+    const changes = parse("ui-metrics", "Official | 127 → 604 | +477\nThird party | 166 → 161 | -5\nTests | 37 | +5");
+    expect(changes).toMatchObject({
+      kind: "metrics",
+      rows: [{ value: "127 → 604", unit: "+477" }, { value: "166 → 161", unit: "-5" }, { value: "37", unit: "+5" }],
+    });
+    expect(changes).not.toHaveProperty("rows.2.maximum");
+    // A signed cell followed by a unit is still a malformed meter.
+    expect(parse("ui-metrics", "Coverage | 80 | +100 | %")).toBeNull();
   });
 
   it("treats empty maximum and unit cells as absent, keeping other empty cells malformed", () => {

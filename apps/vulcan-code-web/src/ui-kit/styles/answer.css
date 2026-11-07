@@ -70,6 +70,7 @@
 .vk-a-kv { display: grid; grid-template-columns: fit-content(40%) minmax(0, 1fr); gap: 0 calc(var(--vk-u) * 4.5); font-size: var(--vk-fs-md); }
 .vk-a-kv :is(dt, dd) { min-width: 0; margin: 0; padding: calc(var(--vk-u) * 1.25) 0; border-bottom: var(--vk-bw) solid var(--vk-line-soft); overflow-wrap: anywhere; }
 .vk-a-kv dt { color: var(--vk-ink-3); }
+.vk-a-kv-note { display: block; color: var(--vk-ink-3); font-size: var(--vk-fs-sm); }
 
 /* ---------- Checklist ---------- */
 .vk-md .vk-a-checklist li { display: grid; grid-template-columns: 1.125rem minmax(0, 1fr); gap: 0 calc(var(--vk-u) * 2.5); padding: var(--vk-u) 0; }

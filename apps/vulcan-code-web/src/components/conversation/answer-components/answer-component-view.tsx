@@ -112,7 +112,13 @@ export function AnswerComponentView({ component, host, replyKey }: { component: 
       return (
         <dl className="vk-a-kv">
           {component.rows.map((row, index) => (
-            <React.Fragment key={index}><dt>{row.label}</dt><dd>{row.value}</dd></React.Fragment>
+            <React.Fragment key={index}>
+              <dt>{row.label}</dt>
+              <dd>
+                {row.value}
+                {row.note ? <span className="vk-a-kv-note">{row.note}</span> : null}
+              </dd>
+            </React.Fragment>
           ))}
         </dl>
       );

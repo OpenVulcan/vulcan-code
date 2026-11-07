@@ -493,9 +493,7 @@ fn component_markdown(
         format!("**{args}**\n\n")
     };
     let body = match name {
-        "kv" => rows_markdown(lines, 2, 2, |cell| {
-            Some(format!("- **{}**: {}\n", cell[0], cell[1]))
-        }),
+        "kv" => kv(lines),
         "metrics" => metrics(lines),
         "findings" => findings(lines),
         "checklist" => checklist(lines),
@@ -605,11 +603,18 @@ fn metric(cell: &[&str]) -> Option<String> {
         let unit = unit.map_or(String::new(), |unit| format!(" {unit}"));
         return Some(format!("- {prefix}**{}**: {}{unit}\n", cell[0], cell[1]));
     };
-    let limit: f64 = match maximum.parse() {
+    // A signed third cell such as `+477` is a change, never a maximum, as in the WebUI.
+    // 带符号的第三格（如 `+477`）是变化量而非最大值，与 WebUI 一致。
+    let parsed = if maximum.starts_with(['+', '-']) {
+        Err(())
+    } else {
+        maximum.parse::<f64>().map_err(drop)
+    };
+    let limit: f64 = match parsed {
         Ok(limit) => limit,
         // Models also write `label | value | unit`: a lone non-numeric third cell is the unit, without a meter.
         // 模型也会写 `标签 | 数值 | 单位`：单独的非数字第三格读作单位，不显示进度条。
-        Err(_) if unit.is_none() => {
+        Err(()) if unit.is_none() => {
             return Some(format!(
                 "- {prefix}**{}**: {} {maximum}\n",
                 cell[0], cell[1]
@@ -725,6 +730,27 @@ fn file_cells(line: &str) -> Option<Vec<&str>> {
         [path, "", note] if !path.is_empty() && !note.is_empty() => Some(vec![path, note]),
         _ => None,
     })
+}
+
+/// `label | value` rows. Models sometimes give the facts a note column; a third cell is read only
+/// after the pair split, including the lenient one, has failed, so `curl x|sh` stays one value, as in
+/// the WebUI.
+/// `标签 | 值` 行。模型有时为事实附加说明列；仅当包括宽松拆分在内的两格读法失败后才读取第三格，
+/// 使 `curl x|sh` 保持为一个值，与 WebUI 一致。
+fn kv(lines: &[&str]) -> Option<String> {
+    let rows = data_rows(lines);
+    if rows.is_empty() || rows.len() > ANSWER_COMPONENT_MAX_ROWS {
+        return None;
+    }
+    rows.iter()
+        .map(|line| {
+            let cell = row_cells(line, 2, 2).or_else(|| row_cells(line, 2, 3))?;
+            let note = cell
+                .get(2)
+                .map_or(String::new(), |note| format!(" — {note}"));
+            Some(format!("- **{}**: {}{note}\n", cell[0], cell[1]))
+        })
+        .collect()
 }
 
 /// `severity | finding | location` rows. Models sometimes add a fourth note cell as in `ui-checklist`; it
@@ -1499,7 +1525,7 @@ fn tree(rows: &[&str]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{file_cells, flow_mermaid, row_cells, table_cell};
+    use super::{file_cells, flow_mermaid, kv, row_cells, table_cell};
 
     /// An empty counts cell in `ui-files` reads as a row with only a note; other empty cells stay invalid.
     /// `ui-files` 中为空的行数格按只有说明的行读取；其他位置为空仍无效。
@@ -1585,6 +1611,25 @@ mod tests {
         );
         assert_eq!(row_cells("Cost | ok | no | extra", 3, 3), None);
         assert_eq!(table_cell(r"a|b \| c"), r"a\|b \| c");
+    }
+
+    /// A third key-value cell is the fact's note, read only after the pair split fails.
+    /// 键值行的第三格是该事实的说明，仅在两格读法失败后读取。
+    #[test]
+    fn key_values_read_a_third_cell_as_a_note() {
+        assert_eq!(
+            kv(&["Run 1 | 415 | inline script", "Run 2 | 681"]).as_deref(),
+            Some("- **Run 1**: 415 — inline script\n- **Run 2**: 681\n")
+        );
+        assert_eq!(
+            kv(&["Install | curl x|sh"]).as_deref(),
+            Some("- **Install**: curl x|sh\n")
+        );
+        assert_eq!(
+            kv(&["Install | curl x|sh | piped"]).as_deref(),
+            Some("- **Install**: curl x|sh — piped\n")
+        );
+        assert_eq!(kv(&["a | b | c | d"]), None);
     }
 
     /// A Mermaid node ID names the node its outline labels; call-like labels stay text.

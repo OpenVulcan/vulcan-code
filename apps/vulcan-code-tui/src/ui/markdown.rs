@@ -805,6 +805,15 @@ A[Plan] --> B[Build]";
         // 模型的宽松写法：指标第三格为单位、文件只写一侧行数或变更标签、清单第四格为路径。
         let unit = joined("```ui-metrics\nScan | 10.9 | s\n```");
         assert!(unit.contains("10.9 s") && !unit.contains("ui-metrics") && !unit.contains('░'));
+        // A lone signed third cell is a change, never a maximum.
+        // 单独的带符号第三格是变化量，绝不是最大值。
+        let change = joined("```ui-metrics\nOfficial | 127 → 604 | +477\nTests | 37 | +5\n```");
+        assert!(
+            !change.contains("ui-metrics")
+                && change.contains("127 → 604 +477")
+                && change.contains("37 +5")
+                && !change.contains('✗')
+        );
         // Empty maximum and unit cells keep columns aligned and mean the value is absent.
         // 空的最大值与单位格用于对齐列，表示该项缺省。
         let aligned =

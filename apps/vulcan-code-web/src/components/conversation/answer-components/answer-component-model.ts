@@ -182,7 +182,7 @@ export type AnswerComponent = AnswerComponentBody & { heading?: string };
 // Every renderable component without its heading.
 // 不含标题的所有可渲染组件。
 export type AnswerComponentBody =
-  | { kind: "kv"; rows: { label: string; value: string }[] }
+  | { kind: "kv"; rows: { label: string; value: string; note?: string }[] }
   | { kind: "metrics"; rows: AnswerMetric[] }
   | { kind: "findings"; rows: { severity: AnswerSeverity; text: string; location?: string; note?: string }[] }
   | { kind: "compare"; header: string[]; rows: { criterion: string; cells: AnswerTonedText[] }[] }
@@ -225,7 +225,18 @@ export function parseAnswerComponent(language: string, meta: string, body: strin
   if (!body.trim()) return null;
   switch (language) {
     case "ui-kv":
-      return titled(args, () => mapRows(body, 2, 2, ([label, value]) => ({ label, value }), (rows) => ({ kind: "kv", rows })));
+      // A row that is not a pair, even after the lenient split, may carry a third cell: models give
+      // facts a note column. Reading the pair first keeps a value such as `curl x|sh` whole.
+      // 一行即使经宽松拆分也不是两格时，可带第三格：模型会为事实附加说明列。先按两格读取，使
+      // `curl x|sh` 这样的值保持完整。
+      return titled(args, () =>
+        mapLines(
+          body,
+          (line) => rowCells(line, 2, 2) ?? rowCells(line, 2, 3),
+          ([label, value, note]) => (note === undefined ? { label, value } : { label, value, note }),
+          (rows) => ({ kind: "kv", rows }),
+        ),
+      );
     case "ui-metrics":
       return titled(args, () => mapLines(body, metricCells, metric, (rows) => ({ kind: "metrics", rows })));
     case "ui-findings":
@@ -379,11 +390,12 @@ function number(text: string): number | null {
 
 // `label | value [| maximum [| unit]] [| tone]`; a maximum requires a nonnegative numeric value, and a value
 // above it is an overrun whose tone defaults to `no`. Models also write `label | value | unit`: a lone third cell
-// that is not a number is read as the unit, without a meter. Models also leave the maximum and unit cells empty
-// to keep the columns aligned (`label | value | | | tone`, `label | value | | MB`); an empty cell in those two
-// positions means the value is absent, while an empty label, value or any other cell is still malformed.
+// that is not an unsigned number (a change such as `+477` included) is read as the unit, without a meter.
+// Models also leave the maximum and unit cells empty to keep the columns aligned (`label | value | | | tone`,
+// `label | value | | MB`); an empty cell in those two positions means the value is absent, while an empty label,
+// value or any other cell is still malformed.
 // `标签 | 数值 [| 最大值 [| 单位]] [| 色调]`；提供最大值时数值必须为非负数字，超出最大值即为超限，色调默认 `no`。
-// 模型也会写 `标签 | 数值 | 单位`：单独的第三格不是数字时读作单位，不显示进度条。
+// 模型也会写 `标签 | 数值 | 单位`：单独的第三格不是无符号数字（含 `+477` 这类变化量）时读作单位，不显示进度条。
 // 模型还会把最大值与单位格留空以对齐列（`标签 | 数值 | | | 色调`、`标签 | 数值 | | MB`）：这两个位置的空格表示该项缺省，
 // 标签、数值或其他位置为空仍属格式错误。
 function metric(input: string[]): AnswerMetric | null {
@@ -395,7 +407,9 @@ function metric(input: string[]): AnswerMetric | null {
   const maximum = cells[2] || undefined;
   const unit = cells[3] || undefined;
   if (maximum === undefined) return { label, value, unit, tone };
-  const max = number(maximum);
+  // A signed third cell such as `+477` is a change, never a maximum, so it reads as the unit too.
+  // 带符号的第三格（如 `+477`）是变化量而非最大值，因此同样读作单位。
+  const max = /^[+-]/u.test(maximum) ? null : number(maximum);
   if (max === null && unit === undefined) return { label, value, unit: maximum, tone };
   const numeric = number(value);
   if (numeric === null || max === null || max <= 0 || numeric < 0) return null;
