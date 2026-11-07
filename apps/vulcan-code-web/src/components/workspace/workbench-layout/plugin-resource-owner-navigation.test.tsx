@@ -32,6 +32,10 @@ vi.mock("@/components/shell/activity-rail", () => ({
   ActivityRail: (props: { onSelectSessions: () => void }) => <button onClick={props.onSelectSessions}>Return through session rail</button>,
 }));
 vi.mock("@/components/project/terminal/project-floating-terminal-layer", () => ({ ProjectFloatingTerminalLayer: () => null }));
+// The feedback center reads announcements through the same service client once its module loads, which would add
+// unrelated calls to the navigation requests these tests count.
+// 反馈中心在其模块加载后经同一服务客户端读取公告，会给这些测试统计的导航请求加入无关调用。
+vi.mock("@/components/features/feedback/feedback-center-runtime", () => ({ startFeedbackCenter: () => ({ stop: () => undefined }) }));
 vi.mock("@/components/workspace/workspace-shell", () => ({
   // WorkspaceShell substitutes only presentation; navigation callbacks are supplied by the actual WorkbenchLayout.
   // WorkspaceShell 仅替换展示；导航回调由实际 WorkbenchLayout 提供。
