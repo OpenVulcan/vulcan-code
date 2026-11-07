@@ -13,6 +13,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 use serde_json::Value;
+use vulcan_service_api::ShellJobView;
 
 use super::answer_components::CodeSnapshots;
 use super::brand;
@@ -76,6 +77,9 @@ struct Ctx<'a> {
     width: usize,
     phase: f32,
     session: &'a SessionState,
+    /// Latest command jobs of the session, naming the jobs that running `shell_job` calls wait for.
+    /// 该会话最新的命令任务，用于称呼运行中 `shell_job` 调用所等待的任务。
+    jobs: &'a [ShellJobView],
 }
 
 pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
@@ -133,6 +137,7 @@ pub fn render(app: &mut App, area: Rect, buf: &mut Buffer) {
         width: content_width,
         phase: app.phase(),
         session,
+        jobs: app.activity.job_entries(),
     };
     let content = Rect {
         x: area.x + gutter,
@@ -594,6 +599,7 @@ type ToolParts<'a> = (
     &'a [ChangesetFile],
     ToolCallStatus,
     Option<u64>,
+    Option<&'a str>,
 );
 
 fn tool_parts(event: &ConversationEvent) -> Option<ToolParts<'_>> {
@@ -607,6 +613,7 @@ fn tool_parts(event: &ConversationEvent) -> Option<ToolParts<'_>> {
             started_at_ms,
             finished_at_ms,
             user_wait_ms,
+            host_purpose,
             ..
         } => {
             let duration = started_at_ms
@@ -619,6 +626,7 @@ fn tool_parts(event: &ConversationEvent) -> Option<ToolParts<'_>> {
                 changeset,
                 *status,
                 duration,
+                host_purpose.as_deref(),
             ))
         }
         _ => None,
@@ -643,6 +651,37 @@ fn tool_subject(input: &Value) -> String {
         }
     }
     String::new()
+}
+
+/// The subject of a `shell_job` call, as the WebUI job card names it: the full job id, then the
+/// search pattern and the job's purpose, which are what a narrow row cuts short. The purpose comes
+/// from the finished call's host result, or from the session's job list while the call still runs.
+/// `shell_job` 调用的主题，与 WebUI 任务卡的称呼一致：完整任务标识，其后是搜索模式与任务用途，窄行时
+/// 截短的是后两者。用途取自已结束调用的宿主结果，调用仍在运行时取自会话的任务列表。
+fn shell_job_subject(input: &Value, host_purpose: Option<&str>, jobs: &[ShellJobView]) -> String {
+    let Some(job_id) = input.get("job_id").and_then(Value::as_str) else {
+        return tool_subject(input);
+    };
+    let purpose = host_purpose.or_else(|| {
+        jobs.iter()
+            .find(|job| job.job_id == job_id)
+            .map(|job| job.purpose.as_str())
+            .filter(|purpose| !purpose.trim().is_empty())
+    });
+    let pattern = (input.get("action").and_then(Value::as_str) == Some("search"))
+        .then(|| input.get("pattern").and_then(Value::as_str))
+        .flatten()
+        .map(|pattern| format!("/{pattern}/"));
+    let detail = [pattern.as_deref(), purpose.map(str::trim)]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" · ");
+    if detail.is_empty() {
+        job_id.to_string()
+    } else {
+        format!("{job_id}  {}", detail.lines().next().unwrap_or_default())
+    }
 }
 
 fn status_icon(theme: &Theme, status: ToolCallStatus, phase: f32) -> Span<'static> {
@@ -712,14 +751,18 @@ fn tools(ctx: &Ctx, group: &[&ConversationEvent]) -> Vec<Line<'static>> {
     if !open {
         return lines;
     }
-    for (name, input, output, changeset, status, duration) in parts {
+    for (name, input, output, changeset, status, duration, host_purpose) in parts {
         let mut spans = vec![
             Span::raw("  ".to_string()),
             status_icon(theme, status, ctx.phase),
             Span::raw(" ".to_string()),
         ];
         spans.push(Span::styled(name.to_string(), theme.strong()));
-        let subject = tool_subject(input);
+        let subject = if name == "shell_job" {
+            shell_job_subject(input, host_purpose, ctx.jobs)
+        } else {
+            tool_subject(input)
+        };
         let tail = duration.map(compact_duration).unwrap_or_default();
         let budget = ctx
             .width
@@ -911,5 +954,38 @@ mod tests {
         assert!(heading.contains("job-7"));
         assert!(heading.contains("101"));
         assert_eq!(shell_job_notice_heading("Please review the result."), None);
+    }
+
+    /// A `shell_job` row names the job by its full id, then its purpose from the finished call or,
+    /// while the call runs, from the job list; a narrow row cuts the purpose and keeps the id.
+    /// `shell_job` 行以完整任务标识称呼任务，其后是来自已结束调用或（调用运行时）任务列表的用途；
+    /// 窄行截短用途而保留标识。
+    #[test]
+    fn shell_job_subject_keeps_the_id_and_names_the_purpose() {
+        let job: ShellJobView = serde_json::from_value(serde_json::json!({
+            "jobId": "job_5c75e5de823a", "command": "cargo test", "purpose": "Run the workspace tests",
+            "shell": "pwsh", "cwd": "D:/w", "startedAtMs": 1, "background": true, "running": true,
+            "status": "running", "durationMs": 0, "totalLines": 0, "totalBytes": 0,
+            "logAvailable": true, "recentLines": [], "cleared": false
+        }))
+        .expect("job view matches the shared DTO");
+        let wait = serde_json::json!({"action": "wait", "job_id": "job_5c75e5de823a"});
+
+        let running = shell_job_subject(&wait, None, std::slice::from_ref(&job));
+        assert!(running.starts_with("job_5c75e5de823a"));
+        assert!(running.contains("Run the workspace tests"));
+
+        let finished = shell_job_subject(&wait, Some("Build the app"), &[]);
+        assert!(finished.starts_with("job_5c75e5de823a"));
+        assert!(finished.contains("Build the app"));
+
+        assert_eq!(shell_job_subject(&wait, None, &[]), "job_5c75e5de823a");
+        let narrow = truncate(&running, "job_5c75e5de823a".len() + 6);
+        assert!(narrow.starts_with("job_5c75e5de823a"));
+
+        let search = serde_json::json!({"action": "search", "job_id": "job_5c75e5de823a", "pattern": "error"});
+        assert!(shell_job_subject(&search, Some("Build the app"), &[]).contains("/error/"));
+        let list = serde_json::json!({"action": "list"});
+        assert_eq!(shell_job_subject(&list, None, &[]), "list");
     }
 }

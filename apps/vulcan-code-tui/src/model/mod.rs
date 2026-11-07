@@ -265,6 +265,10 @@ pub enum EventBody {
         /// Milliseconds spent waiting on the user (approvals, Ask answers), excluded from the duration.
         /// 等待用户（审批、Ask 回答）的毫秒数，不计入耗时。
         user_wait_ms: u64,
+        /// Purpose the host result reports for the command job the call ran or named, as the
+        /// WebUI command and job cards read it.
+        /// 宿主结果为该调用运行或指明的命令任务报告的用途，与 WebUI 命令卡和任务卡读取的一致。
+        host_purpose: Option<String>,
     },
     /// Rendered from `display_note`; the service sends a reason code that the client localizes.
     /// 来自 `display_note`；服务发送原因代码，由客户端本地化。

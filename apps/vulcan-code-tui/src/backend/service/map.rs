@@ -598,6 +598,20 @@ fn tool_output(output: &core::ToolPayload) -> String {
     }
 }
 
+/// The non-empty `purpose` of a tool result's host payload, as the WebUI cards read it.
+/// 工具结果宿主载荷中非空的 `purpose`，与 WebUI 卡片的读取方式一致。
+fn tool_host_purpose(output: &core::ToolPayload) -> Option<String> {
+    let value = serde_json::to_value(output).ok()?;
+    value
+        .get("host_result")?
+        .get("payload")?
+        .get("purpose")?
+        .as_str()
+        .map(str::trim)
+        .filter(|purpose| !purpose.is_empty())
+        .map(str::to_string)
+}
+
 /// File-level summaries of a tool call's changeset.
 /// 工具调用变更集的文件级摘要。
 fn changeset(call: &core::ToolCallEvent) -> Vec<ChangesetFile> {
@@ -680,6 +694,7 @@ pub fn event(summary: &ConversationEventSummary) -> Option<ConversationEvent> {
             started_at_ms: call.started_at_ms.map(millis),
             finished_at_ms: call.finished_at_ms.map(millis),
             user_wait_ms: call.user_wait_ms.map(millis).unwrap_or(0),
+            host_purpose: call.output.as_ref().and_then(tool_host_purpose),
         },
         CoreEvent::DisplayNote(note) => EventBody::DisplayNote {
             severity: note.severity,
@@ -1027,6 +1042,36 @@ mod tests {
         }))
         .expect("turn boundary summary matches the shared DTO");
         assert!(super::event(&boundary).is_none());
+    }
+
+    /// A tool result whose host payload names a purpose carries it to the transcript row; a result
+    /// without one carries none.
+    /// 宿主载荷带有用途的工具结果把它带到转录行；没有用途的结果不带。
+    #[test]
+    fn tool_calls_carry_the_host_purpose() {
+        let call = |output: Value| {
+            let tool: ConversationEventSummary = serde_json::from_value(json!({
+                "seq": 4, "turn_id": 2, "created_at_ms": 1, "updated_at_ms": 2, "event_revision": 1,
+                "visibility": "provider",
+                "event": {"kind": "tool_call", "api_call_id": 3, "tool_call_id": 4,
+                    "request_stream_id": "stream-1", "tool_name": "shell_job",
+                    "input": {"action": "wait", "job_id": "job-1"},
+                    "status": "completed", "output": output}
+            }))
+            .expect("tool call summary matches the shared DTO");
+            let EventBody::ToolCall { host_purpose, .. } = event(&tool).unwrap().body else {
+                panic!("expected a tool call");
+            };
+            host_purpose
+        };
+        let reported = call(json!({"model_output": "done", "is_error": false,
+            "host_result": {"kind": "shell_job", "payload": {"action": "wait", "job_id": "job-1",
+                "purpose": "Run the tests"}}}));
+        assert_eq!(reported.as_deref(), Some("Run the tests"));
+        assert_eq!(
+            call(json!({"model_output": "done", "is_error": false})),
+            None
+        );
     }
 
     /// Created and deleted files count their lifecycle text, as the WebUI summary does.
