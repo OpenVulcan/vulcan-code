@@ -524,7 +524,18 @@ impl SessionDocument {
     ) -> Result<(Self, Vec<u64>), DomainError> {
         let mut document =
             Self::assemble_parts(metadata, runtime_lock, compactions, segment_catalog, events);
+        // One batch finds every unverifiable checkpoint, so the rebuild below normally runs once.
+        // Any projection error is left to that strict rebuild, which reports it in its own order.
+        // 一次批量找出全部无法校验的检查点，因此下方重建通常只运行一次。
+        // 投影错误留给严格重建，按其自身顺序报告。
         let mut quarantined = Vec::new();
+        if let Ok(mismatches) = document.resident_fingerprint_mismatches() {
+            for seq in mismatches.into_keys() {
+                if document.drop_resident_provider_source(seq) {
+                    quarantined.push(seq);
+                }
+            }
+        }
         loop {
             match document.rebuild_derived_state() {
                 Ok(()) => break,

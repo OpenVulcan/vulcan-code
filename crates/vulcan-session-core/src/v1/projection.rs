@@ -653,24 +653,63 @@ fn project_items_with_policy(
         .cloned()
         .collect();
     backfill_states.sort_by_key(|state| state.source_seq.value());
-    let mut items: Vec<SourcedProjectedItem> = backfill_states
+    let items: Vec<SourcedProjectedItem> = backfill_states
         .iter()
         .map(project_backfill_context)
         .collect::<Result<_, _>>()?;
-    let mut pending: Vec<(ApiCallId, PendingGroup)> = Vec::new();
-    // Events observed while an API group is open wait for its terminal boundary.
-    // 在 API 组开放期间观察到的事件必须等待该组终态边界。
-    let mut deferred_items: Vec<SourcedProjectedItem> = Vec::new();
-
+    let mut fold = ProjectionFold {
+        boundary,
+        partial_policy,
+        frozen_context,
+        fingerprint: false,
+        items,
+        pending: Vec::new(),
+        deferred_items: Vec::new(),
+    };
     for event in events {
+        fold.push(event)?;
+    }
+    fold.finish()
+}
+
+/// One in-order projection pass; `items` only ever grows, so callers may drain it between events.
+/// 一次按序投影遍历；`items` 只会增长，调用方可以在事件之间取走它。
+struct ProjectionFold<'a> {
+    /// Compaction boundary; earlier events are filtered entirely.
+    /// 压缩边界；更早的事件被整体过滤。
+    boundary: u64,
+    /// Partial assistant inclusion policy.
+    /// 部分 assistant 内容的纳入策略。
+    partial_policy: PartialAssistantPolicy,
+    /// Frozen instruction selection of the current compaction generation.
+    /// 当前压缩代次冻结的指令选择。
+    frozen_context: Option<&'a FrozenContextProjection>,
+    /// Fingerprint form: no `provider_source`, durable input text and no tool results.
+    /// 指纹形态：不含 `provider_source`、使用可靠输入文字且不含工具结果。
+    fingerprint: bool,
+    /// Items already emitted in final order.
+    /// 已按最终顺序发出的项。
+    items: Vec<SourcedProjectedItem>,
+    /// API groups still waiting for their terminal boundary, in first-seen order.
+    /// 仍在等待终态边界的 API 组，按首次出现顺序。
+    pending: Vec<(ApiCallId, PendingGroup)>,
+    /// Events observed while an API group is open wait for its terminal boundary.
+    /// 在 API 组开放期间观察到的事件必须等待该组终态边界。
+    deferred_items: Vec<SourcedProjectedItem>,
+}
+
+impl ProjectionFold<'_> {
+    /// Applies one event in seq order.
+    /// 按 seq 顺序应用一个事件。
+    fn push(&mut self, event: &ConversationEvent) -> Result<(), DomainError> {
         let seq_value = event.seq().value();
-        if seq_value < boundary {
+        if seq_value < self.boundary {
             // Events before the compaction boundary are filtered entirely;
             // still-active system states are restored only through the
             // caller-provided `backfill_system` (plan 7.1.3).
             // 压缩边界前的事件被整体过滤；仍然生效的系统状态只通过调用方提供
             // 的 `backfill_system` 恢复(计划 7.1.3)。
-            continue;
+            return Ok(());
         }
         // ApiStats is UiOnly payload but an authoritative API-group boundary.
         // Flush it before visibility filtering so a later Provider-visible
@@ -680,34 +719,34 @@ fn project_items_with_policy(
         // 越过已完成组。
         if let EventBody::ApiStats(stats) = &event.event {
             flush_group(
-                &mut items,
-                &mut pending,
+                &mut self.items,
+                &mut self.pending,
                 stats.api_call_id,
                 stats.status,
-                partial_policy,
+                self.partial_policy,
             )?;
-            if pending.is_empty() {
-                items.append(&mut deferred_items);
+            if self.pending.is_empty() {
+                self.items.append(&mut self.deferred_items);
             }
-            continue;
+            return Ok(());
         }
         if !event.is_provider_visible() {
-            continue;
+            return Ok(());
         }
         match &event.event {
             EventBody::SystemContext(context) => {
                 validate_system_context_event(context)?;
-                if frozen_context.is_some_and(|frozen| {
+                if self.frozen_context.is_some_and(|frozen| {
                     event.seq() <= frozen.through_seq
                         && !frozen.active_source_seqs.contains(&event.seq())
                 }) {
-                    continue;
+                    return Ok(());
                 }
                 let projected = project_context_event(event, context)?;
-                if pending.is_empty() {
-                    items.push(projected);
+                if self.pending.is_empty() {
+                    self.items.push(projected);
                 } else {
-                    deferred_items.push(projected);
+                    self.deferred_items.push(projected);
                 }
             }
             EventBody::UserInput(input) => {
@@ -716,24 +755,33 @@ fn project_items_with_policy(
                 if let Some(parameters) = &input.parameters {
                     parameters.validate(&input.resource_ids)?;
                 }
+                // The frozen fingerprint format hashes the durable input text. The resource-only note is request
+                // rendering derived from the same facts, so introducing or changing it never invalidates a checkpoint.
+                // 冻结指纹格式哈希可靠输入文字。仅资源说明是由同一事实派生的请求渲染，引入或修改它都不会使检查点失效。
+                let text = if self.fingerprint {
+                    input.text.clone()
+                } else {
+                    provider_visible_user_input_text(&input.text, &input.resource_ids)
+                };
                 let projected = SourcedProjectedItem {
                     user_prompt_parameters: input.parameters.clone(),
                     source_from_seq: event.seq,
                     source_to_seq: event.seq,
                     item: ProjectedItem::UserInput {
-                        text: provider_visible_user_input_text(&input.text, &input.resource_ids),
+                        text,
                         resource_ids: input.resource_ids.clone(),
                     },
                 };
-                let had_open_api_group = !pending.is_empty();
-                flush_pending(&mut items, &mut pending)?;
+                let had_open_api_group = !self.pending.is_empty();
+                flush_pending(&mut self.items, &mut self.pending)?;
                 if !had_open_api_group {
-                    items.append(&mut deferred_items);
+                    self.items.append(&mut self.deferred_items);
                 }
-                items.push(projected);
+                self.items.push(projected);
             }
             EventBody::AssistantReasoning(reasoning) => {
-                let group = pending_group(&mut pending, reasoning.api_call_id, event.seq);
+                let fingerprint = self.fingerprint;
+                let group = pending_group(&mut self.pending, reasoning.api_call_id, event.seq);
                 // A provider summary is not the model's own reasoning; replaying it to any route
                 // would break the model's context, so it stays display-only.
                 // 供应商摘要不是模型自身思考；向任何路由重放都会打断模型上下文，因此只供展示。
@@ -743,26 +791,28 @@ fn project_items_with_policy(
                         None => reasoning.text.clone(),
                     });
                 }
-                if let Some(provider_source) = &reasoning.provider_source {
+                if !fingerprint && let Some(provider_source) = &reasoning.provider_source {
                     group.provider_source = Some(provider_source.clone());
                 }
             }
             EventBody::AssistantText(text) => {
-                let group = pending_group(&mut pending, text.api_call_id, event.seq);
+                let fingerprint = self.fingerprint;
+                let group = pending_group(&mut self.pending, text.api_call_id, event.seq);
                 group.text.push_str(&text.text);
-                if let Some(provider_source) = &text.provider_source {
+                if !fingerprint && let Some(provider_source) = &text.provider_source {
                     group.provider_source = Some(provider_source.clone());
                 }
             }
             EventBody::ToolCall(tool) => {
-                let group = pending_group(&mut pending, tool.api_call_id, event.seq);
+                let fingerprint = self.fingerprint;
+                let group = pending_group(&mut self.pending, tool.api_call_id, event.seq);
                 group.tool_calls.push(ProjectedToolCall {
                     tool_call_id: tool.tool_call_id,
                     provider_tool_call_id: tool.provider_tool_call_id.clone(),
                     tool_name: tool.tool_name.clone(),
                     input: tool.input.clone(),
                 });
-                if let Some(provider_source) = &tool.provider_source {
+                if !fingerprint && let Some(provider_source) = &tool.provider_source {
                     group.provider_source = Some(provider_source.clone());
                 }
                 if matches!(
@@ -775,23 +825,28 @@ fn project_items_with_policy(
                 ) {
                     let output =
                         tool.output
-                            .clone()
+                            .as_ref()
                             .ok_or(DomainError::MissingTerminalToolOutput {
                                 tool_call_id: tool.tool_call_id.value(),
                                 status: projected_tool_status_name(tool.status),
                             })?;
-                    group.results.push(SourcedProjectedItem {
-                        user_prompt_parameters: None,
-                        source_from_seq: event.seq,
-                        source_to_seq: event.seq,
-                        item: ProjectedItem::ToolResult {
-                            tool_call_id: tool.tool_call_id,
-                            provider_tool_call_id: tool.provider_tool_call_id.clone(),
-                            tool_name: tool.tool_name.clone(),
-                            status: tool.status,
-                            output,
-                        },
-                    });
+                    // Tool results are new Provider inputs after the replay checkpoint and
+                    // never enter the checkpoint fingerprint (plan 5.5.10).
+                    // 工具结果是重放检查点之后的新 Provider 输入，绝不进入检查点指纹(计划 5.5.10)。
+                    if !fingerprint {
+                        group.results.push(SourcedProjectedItem {
+                            user_prompt_parameters: None,
+                            source_from_seq: event.seq,
+                            source_to_seq: event.seq,
+                            item: ProjectedItem::ToolResult {
+                                tool_call_id: tool.tool_call_id,
+                                provider_tool_call_id: tool.provider_tool_call_id.clone(),
+                                tool_name: tool.tool_name.clone(),
+                                status: tool.status,
+                                output: output.clone(),
+                            },
+                        });
+                    }
                 }
             }
             EventBody::SubagentReturn(return_event) => {
@@ -808,12 +863,12 @@ fn project_items_with_policy(
                     item: ProjectedItem::SubagentReturnText { text },
                     user_prompt_parameters: None,
                 };
-                let had_open_api_group = !pending.is_empty();
-                flush_pending(&mut items, &mut pending)?;
+                let had_open_api_group = !self.pending.is_empty();
+                flush_pending(&mut self.items, &mut self.pending)?;
                 if !had_open_api_group {
-                    items.append(&mut deferred_items);
+                    self.items.append(&mut self.deferred_items);
                 }
-                items.push(projected);
+                self.items.push(projected);
             }
             EventBody::ApiStats(_) => {}
             EventBody::ApiStarted(_)
@@ -831,13 +886,48 @@ fn project_items_with_policy(
                 // Provider 不可见事实被过滤；序列严格保持原始 seq 顺序。
             }
         }
+        Ok(())
     }
-    let had_open_api_group = !pending.is_empty();
-    flush_pending(&mut items, &mut pending)?;
-    if !had_open_api_group {
-        items.append(&mut deferred_items);
+
+    /// Returns the items the pass would still emit if it ended now, without consuming its state.
+    /// 返回遍历若此刻结束仍会发出的项，不消耗其状态。
+    fn pending_tail(&self) -> Result<Vec<SourcedProjectedItem>, DomainError> {
+        let mut tail = Vec::new();
+        for (_, group) in &self.pending {
+            emit_group(&mut tail, group.clone())?;
+        }
+        if self.pending.is_empty() {
+            tail.extend(self.deferred_items.iter().cloned());
+        }
+        Ok(tail)
     }
-    Ok(items)
+
+    /// Ends the pass: open groups flush in first-seen order, deferred items follow only when none was open.
+    /// 结束遍历：开放组按首次出现顺序 flush，只有不存在开放组时才追加延后项。
+    fn finish(mut self) -> Result<Vec<SourcedProjectedItem>, DomainError> {
+        let had_open_api_group = !self.pending.is_empty();
+        flush_pending(&mut self.items, &mut self.pending)?;
+        if !had_open_api_group {
+            self.items.append(&mut self.deferred_items);
+        }
+        Ok(self.items)
+    }
+}
+
+impl ProjectionFold<'static> {
+    /// Starts a pass in the frozen fingerprint form over the whole given range.
+    /// 以冻结指纹形态开始一次覆盖整个给定范围的遍历。
+    fn fingerprint() -> Self {
+        Self {
+            boundary: 0,
+            partial_policy: PartialAssistantPolicy::Preserve,
+            frozen_context: None,
+            fingerprint: true,
+            items: Vec::new(),
+            pending: Vec::new(),
+            deferred_items: Vec::new(),
+        }
+    }
 }
 
 /// Returns the stable diagnostic name of one projected tool status.
@@ -977,100 +1067,225 @@ pub fn provider_visible_fingerprint(
     events: &[ConversationEvent],
     coverage_until_seq: Seq,
 ) -> Result<String, DomainError> {
-    fingerprint_with_policy(events, coverage_until_seq, PartialAssistantPolicy::Preserve)
+    provider_visible_fingerprint_of(events, coverage_until_seq)
 }
 
-/// Verifies a checkpoint against its declared fingerprint format without rewriting it.
-/// 按检查点声明的指纹格式校验而不重写它。
-/// `events` is the resident ledger and `source` supplies coverage, version and digest; mismatches are errors.
-/// `events` 为常驻账本，`source` 提供覆盖、版本及摘要；不匹配时返回错误。
-pub(crate) fn validate_provider_fingerprint(
+/// Computes one replay fingerprint over borrowed events taken in the given order.
+/// 按给定顺序对借用事件计算一个重放指纹。
+/// Only events at or before `coverage_until_seq` participate; nothing is cloned beyond the projected items.
+/// 只有不晚于 `coverage_until_seq` 的事件参与；除投影项外不复制任何内容。
+pub(crate) fn provider_visible_fingerprint_of<'a>(
+    events: impl IntoIterator<Item = &'a ConversationEvent>,
+    coverage_until_seq: Seq,
+) -> Result<String, DomainError> {
+    let coverage = coverage_until_seq.value();
+    let mut fold = ProjectionFold::fingerprint();
+    let mut digest = FingerprintDigest::new();
+    for event in events
+        .into_iter()
+        .filter(|event| event.seq().value() <= coverage)
+    {
+        fold.push(event)?;
+        digest.absorb(&mut fold.items, coverage)?;
+    }
+    digest.snapshot(&fold, coverage)
+}
+
+/// Computes the fingerprints of several coverage boundaries in one pass over seq-ordered events.
+/// 对按 seq 排序的事件单次遍历，计算多个覆盖边界的指纹。
+/// `coverages` must be ascending; every result equals `provider_visible_fingerprint` of the same slice.
+/// `coverages` 必须升序；每个结果都等于对同一切片调用 `provider_visible_fingerprint`。
+pub(crate) fn provider_visible_fingerprints(
     events: &[ConversationEvent],
-    source: &ProviderSource,
-) -> Result<(), DomainError> {
+    coverages: &[Seq],
+) -> Result<Vec<String>, DomainError> {
+    let ordered = events.windows(2).all(|pair| pair[0].seq() < pair[1].seq())
+        && coverages.windows(2).all(|pair| pair[0] <= pair[1]);
+    if !ordered {
+        // Unordered input keeps the exact filtered semantics, one boundary at a time.
+        // 无序输入逐个边界保持精确的过滤语义。
+        return coverages
+            .iter()
+            .map(|coverage| provider_visible_fingerprint_of(events, *coverage))
+            .collect();
+    }
+    let mut fold = ProjectionFold::fingerprint();
+    let mut digest = FingerprintDigest::new();
+    let mut digests = Vec::with_capacity(coverages.len());
+    let mut next = 0;
+    for coverage in coverages {
+        while let Some(event) = events.get(next)
+            && event.seq() <= *coverage
+        {
+            fold.push(event)?;
+            digest.absorb(&mut fold.items, coverage.value())?;
+            next += 1;
+        }
+        digests.push(digest.snapshot(&fold, coverage.value())?);
+    }
+    Ok(digests)
+}
+
+/// Verifies checkpoints against their declared fingerprint formats without rewriting them.
+/// 按检查点声明的指纹格式校验而不重写它们。
+///
+/// A digest covers the events from the start of the window that was resident when it was written, which is
+/// always the loaded slice start or a later segment start. Each checkpoint is first checked against the whole
+/// slice, then against every later candidate start it covers; matching any of them verifies it.
+/// 摘要覆盖写入时常驻窗口起点之后的事件，该起点总是已加载切片的起点或更晚的分段起点。每个检查点先按整个
+/// 切片校验，再按其覆盖的每个更晚候选起点校验；任一匹配即通过。
+///
+/// # Returns
+/// 返回值
+/// For each source in order, `None` when it verifies or the whole-slice digest when it does not.
+/// 按顺序为每个来源返回：通过时为 `None`，否则为整个切片的摘要。
+pub(crate) fn provider_fingerprint_mismatches(
+    events: &[ConversationEvent],
+    later_window_starts: &[Seq],
+    sources: &[&ProviderSource],
+) -> Result<Vec<Option<String>>, DomainError> {
     // Exhaustive dispatch forces any future format to define its verification behavior.
     // 穷尽分派强制未来格式定义自身的校验行为。
     // This stable contract must not change when request eligibility changes.
     // 请求资格变化时，不得改变此稳定契约。
-    let expected = match source.fingerprint_version {
-        ProviderFingerprintVersion::ImmutableProjectionV1 => {
-            provider_visible_fingerprint(events, source.covered_until_seq)?
-        }
-    };
-    if source.fingerprint_sha256 == expected {
-        return Ok(());
-    }
-    Err(DomainError::ProviderSourceFingerprintMismatch {
-        seq: source.covered_until_seq.value(),
-        stored: source.fingerprint_sha256.clone(),
-        expected,
-    })
-}
-
-/// Hashes the covered event prefix with a frozen partial-content policy and no late host fields.
-/// 使用冻结的部分内容策略哈希覆盖事件前缀，排除宿主后写字段。
-/// Returns the SHA-256 digest or a projection/serialization error; source envelopes never hash themselves.
-/// 返回 SHA-256 摘要或投影、序列化错误；来源封套不参与自身哈希。
-fn fingerprint_with_policy(
-    events: &[ConversationEvent],
-    coverage_until_seq: Seq,
-    partial_policy: PartialAssistantPolicy,
-) -> Result<String, DomainError> {
-    let coverage = coverage_until_seq.value();
-    let mut stripped: Vec<ConversationEvent> = events
-        .iter()
-        .filter(|event| event.seq().value() <= coverage)
-        .cloned()
-        .collect();
-    // Strip provider_source so the hash never includes itself.
-    // 剥除 provider_source，使哈希永不包含其自身。
-    for event in &mut stripped {
-        match &mut event.event {
-            EventBody::AssistantReasoning(reasoning) => {
-                reasoning.provider_source = None;
-            }
-            EventBody::AssistantText(text) => {
-                text.provider_source = None;
-            }
-            EventBody::ToolCall(tool) => {
-                tool.provider_source = None;
-            }
-            _ => {}
+    for source in sources {
+        match source.fingerprint_version {
+            ProviderFingerprintVersion::ImmutableProjectionV1 => {}
         }
     }
-    // The frozen format hashes the durable input text. The resource-only note is request rendering
-    // derived from the same facts, so introducing or changing it never invalidates a checkpoint.
-    // 冻结格式哈希可靠输入文字。仅资源说明是由同一事实派生的请求渲染，引入或修改它都不会使检查点失效。
-    let durable_input_texts: BTreeMap<u64, &str> = stripped
+    let mut order: Vec<usize> = (0..sources.len()).collect();
+    order.sort_by_key(|index| sources[*index].covered_until_seq);
+    let coverages: Vec<Seq> = order
         .iter()
-        .filter_map(|event| match &event.event {
-            EventBody::UserInput(input) => Some((event.seq.value(), input.text.as_str())),
-            _ => None,
-        })
+        .map(|index| sources[*index].covered_until_seq)
         .collect();
-    let mut items: Vec<ProjectedItem> =
-        project_items_with_policy(&stripped, None, &[], partial_policy, None)?
-            .into_iter()
-            .map(|mut sourced| {
-                if let ProjectedItem::UserInput { text, .. } = &mut sourced.item
-                    && let Some(durable) = durable_input_texts.get(&sourced.source_from_seq.value())
-                {
-                    *text = (*durable).to_string();
-                }
-                sourced.item
+    let mut mismatches: Vec<Option<String>> = vec![None; sources.len()];
+    for (index, digest) in order
+        .iter()
+        .zip(provider_visible_fingerprints(events, &coverages)?)
+    {
+        if sources[*index].fingerprint_sha256 != digest {
+            mismatches[*index] = Some(digest);
+        }
+    }
+    let ordered = events.windows(2).all(|pair| pair[0].seq() < pair[1].seq());
+    let mut starts = later_window_starts.to_vec();
+    starts.sort();
+    starts.dedup();
+    for start in starts {
+        if !ordered {
+            break;
+        }
+        let remaining: Vec<usize> = order
+            .iter()
+            .copied()
+            .filter(|index| {
+                mismatches[*index].is_some() && sources[*index].covered_until_seq >= start
             })
             .collect();
-    // Tool results are new Provider inputs after the replay checkpoint and
-    // must never enter the checkpoint fingerprint (plan 5.5.10); the tool call
-    // itself (provider id/name/args) stays part of the immutable projection.
-    // 工具结果是重放检查点之后的新 Provider 输入，绝不能进入检查点指纹
-    // (计划 5.5.10)；工具调用本身(Provider id/名/参数)仍属于不可变投影。
-    items.retain(|item| !matches!(item, ProjectedItem::ToolResult { .. }));
-    let bytes =
-        serde_json::to_vec(&items).map_err(|_| DomainError::reference("fingerprint", coverage))?;
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    Ok(hex_encode(&hasher.finalize()))
+        if remaining.is_empty() {
+            continue;
+        }
+        let from = events.partition_point(|event| event.seq() < start);
+        let coverages: Vec<Seq> = remaining
+            .iter()
+            .map(|index| sources[*index].covered_until_seq)
+            .collect();
+        for (index, digest) in remaining
+            .iter()
+            .zip(provider_visible_fingerprints(&events[from..], &coverages)?)
+        {
+            if sources[*index].fingerprint_sha256 == digest {
+                mismatches[*index] = None;
+            }
+        }
+    }
+    Ok(mismatches)
+}
+
+/// Verifies one checkpoint against its declared fingerprint format without rewriting it.
+/// 按检查点声明的指纹格式校验一个检查点而不重写它。
+/// `events` is the resident ledger, `later_window_starts` the later segment starts it may have been written from.
+/// `events` 为常驻账本，`later_window_starts` 为它可能据以写入的更晚分段起点。
+pub(crate) fn validate_provider_fingerprint(
+    events: &[ConversationEvent],
+    later_window_starts: &[Seq],
+    source: &ProviderSource,
+) -> Result<(), DomainError> {
+    match provider_fingerprint_mismatches(events, later_window_starts, &[source])?
+        .into_iter()
+        .next()
+        .flatten()
+    {
+        None => Ok(()),
+        Some(expected) => Err(DomainError::ProviderSourceFingerprintMismatch {
+            seq: source.covered_until_seq.value(),
+            stored: source.fingerprint_sha256.clone(),
+            expected,
+        }),
+    }
+}
+
+/// Streams the frozen fingerprint bytes: the compact JSON array of projected items.
+/// 流式写入冻结指纹字节：投影项的紧凑 JSON 数组。
+#[derive(Clone)]
+struct FingerprintDigest {
+    /// Hash state after `[` and every item emitted so far.
+    /// 写入 `[` 及迄今全部已发出项后的哈希状态。
+    hasher: Sha256,
+    /// Whether at least one item was written, so the next one needs a separator.
+    /// 是否已写入至少一项，下一项因此需要分隔符。
+    has_items: bool,
+}
+
+impl FingerprintDigest {
+    /// Opens the array.
+    /// 打开数组。
+    fn new() -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(b"[");
+        Self {
+            hasher,
+            has_items: false,
+        }
+    }
+
+    /// Hashes one item exactly as `serde_json` writes it inside a compact array.
+    /// 按 `serde_json` 在紧凑数组中的写法哈希一项。
+    fn write(&mut self, item: &ProjectedItem, coverage: u64) -> Result<(), DomainError> {
+        let bytes = serde_json::to_vec(item)
+            .map_err(|_| DomainError::reference("fingerprint", coverage))?;
+        if self.has_items {
+            self.hasher.update(b",");
+        }
+        self.hasher.update(bytes);
+        self.has_items = true;
+        Ok(())
+    }
+
+    /// Moves every already emitted item into the hash.
+    /// 将全部已发出项移入哈希。
+    fn absorb(
+        &mut self,
+        items: &mut Vec<SourcedProjectedItem>,
+        coverage: u64,
+    ) -> Result<(), DomainError> {
+        for sourced in items.drain(..) {
+            self.write(&sourced.item, coverage)?;
+        }
+        Ok(())
+    }
+
+    /// Finishes a copy as if the pass ended at this boundary; the running state continues unchanged.
+    /// 以遍历在此边界结束的方式完成一份副本；运行中的状态保持不变。
+    fn snapshot(&self, fold: &ProjectionFold<'_>, coverage: u64) -> Result<String, DomainError> {
+        let mut copy = self.clone();
+        for sourced in fold.pending_tail()? {
+            copy.write(&sourced.item, coverage)?;
+        }
+        copy.hasher.update(b"]");
+        Ok(hex_encode(&copy.hasher.finalize()))
+    }
 }
 
 /// Encodes one digest as lowercase hex.

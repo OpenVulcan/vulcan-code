@@ -31,26 +31,51 @@ pub(in crate::context_compaction) fn observed_compaction_budget_before_provider_
         .session_runtime_registry
         .get(session_id)
         .map_err(|error| error.to_string())?;
+    // The resident document answers whenever it holds the latest business sample, without the writer lock.
+    // 常驻文档持有最近业务样本时直接作答，不占用写入锁。
+    let resident = handle
+        .read(|document| observed_compaction_budget_from_document(document, route, budget, false))
+        .map_err(|error| error.to_string())??;
+    if let PreflightObservation::Decided(observed) = resident {
+        return Ok(observed.map(|observed| *observed));
+    }
     // Read sealed segments too: a newly opened turn can be the only resident tail after restart.
     // 同时读取封存分段：重启后新回合可能是内存中唯一保留的尾部。
-    handle
+    match handle
         .read_full_durable(|document| {
-            observed_compaction_budget_from_document(document, route, budget)
+            observed_compaction_budget_from_document(document, route, budget, true)
         })
-        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())??
+    {
+        PreflightObservation::Decided(observed) => Ok(observed.map(|observed| *observed)),
+        PreflightObservation::Exhausted => Ok(None),
+    }
+}
+
+/// Outcome of scanning one document for the latest business usage sample.
+/// 在一份文档中扫描最近业务用量样本的结果。
+enum PreflightObservation {
+    /// The latest business sample was reached and settles the answer.
+    /// 已到达最近业务样本并据此定论。
+    Decided(Option<Box<ContextBudgetSnapshot>>),
+    /// The resident window ended before any decisive sample.
+    /// 常驻窗口在任何定论样本之前结束。
+    Exhausted,
 }
 
 /// Projects the latest usable business observation within the current uncompacted context.
 /// 投影当前尚未压缩上下文中最近一次可用的业务观测。
-/// `document` is complete durable history, `route` is frozen for dispatch, and `budget` owns the current policy.
-/// `document` 是完整可靠历史，`route` 已为分派冻结，`budget` 持有当前策略。
+/// `document` is resident or complete history (`complete_history`), `route` is frozen for dispatch, and `budget`
+/// owns the current policy.
+/// `document` 为常驻或完整历史(`complete_history`)，`route` 已为分派冻结，`budget` 持有当前策略。
 /// Returns a soft-compaction signal only; it never calibrates the final request or changes its hard-limit gate.
 /// 仅返回软压缩信号；绝不校准最终请求，也不修改其硬上限闸门。
 fn observed_compaction_budget_from_document(
     document: &SessionDocument,
     route: &ProviderRuntimeBlueprint,
     budget: &ContextBudgetSnapshot,
-) -> Result<Option<ContextBudgetSnapshot>, String> {
+    complete_history: bool,
+) -> Result<PreflightObservation, String> {
     // A committed summary invalidates all earlier usage, including the summary request's own usage.
     // 已提交摘要会使之前的全部用量失效，包含摘要请求自身的用量。
     let current_compaction = document
@@ -88,7 +113,7 @@ fn observed_compaction_budget_from_document(
         }
         // API identity, rather than neighboring positions or success status, owns the usage sample.
         // 用量样本由 API 身份归属，而非相邻位置或成功状态。
-        let started = document
+        let Some(started) = document
             .events()
             .iter()
             .find_map(|event| match &event.event {
@@ -97,12 +122,15 @@ fn observed_compaction_budget_from_document(
                 }
                 _ => None,
             })
-            .ok_or_else(|| {
-                format!(
-                    "Compaction preflight found no start for API {}.",
-                    stats.api_call_id.value()
-                )
-            })?;
+        else {
+            if !complete_history {
+                return Ok(PreflightObservation::Exhausted);
+            }
+            return Err(format!(
+                "Compaction preflight found no start for API {}.",
+                stats.api_call_id.value()
+            ));
+        };
         if started.projection.segment_generation != document.segment_generation()
             || started.projection.retained_from_seq.value() != retained_from_seq
             || current_compaction
@@ -114,7 +142,7 @@ fn observed_compaction_budget_from_document(
         {
             // Do not search behind an edit, compaction or route transition for an older convenient sample.
             // 不越过编辑、压缩或路由切换寻找更早的便利样本。
-            return Ok(None);
+            return Ok(PreflightObservation::Decided(None));
         }
         if stats.usage.input_tokens.is_none() && stats.usage.total_tokens.is_none() {
             // A failure without input evidence cannot reset the previous known context to zero.
@@ -135,9 +163,13 @@ fn observed_compaction_budget_from_document(
             vulcan_context::ContextBudgetAccountingSource::ProviderReported;
         observed.accounting_warning_code = None;
         observed.provider_anchor_call_id = Some(stats.api_call_id.value().to_string());
-        return Ok(Some(observed));
+        return Ok(PreflightObservation::Decided(Some(Box::new(observed))));
     }
-    Ok(None)
+    Ok(if complete_history {
+        PreflightObservation::Decided(None)
+    } else {
+        PreflightObservation::Exhausted
+    })
 }
 
 #[cfg(test)]

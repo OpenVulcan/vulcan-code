@@ -474,10 +474,15 @@ impl SessionDocument {
                     kind: "provider_tool_batch",
                     value: api_call_id.value(),
                 })?;
-            let mut fingerprint_events = self.events.clone();
-            fingerprint_events.extend(staged_events.iter().cloned());
-            let source =
-                build_provider_source(&fingerprint_events, last_provider_seq, source_input)?;
+            // The staged batch extends the resident window without copying it.
+            // 暂存批次直接接在常驻窗口之后，不复制窗口。
+            let source = build_provider_source(
+                self.fingerprint_window(last_provider_seq)
+                    .iter()
+                    .chain(staged_events.iter()),
+                last_provider_seq,
+                source_input,
+            )?;
             let Some(ConversationEvent {
                 event: EventBody::ToolCall(last_tool),
                 ..

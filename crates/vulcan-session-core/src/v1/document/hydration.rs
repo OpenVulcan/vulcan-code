@@ -30,7 +30,7 @@ use crate::v1::event::{
     ApiEndReason, ApiPurposeKind, EventBody, SystemContextOperation, TurnOutcome,
 };
 use crate::v1::ids::{ApiCallId, IdAllocator, JS_SAFE_INTEGER_MAX, Seq, TurnId};
-use crate::v1::projection::{validate_provider_fingerprint, validate_system_context_event};
+use crate::v1::projection::validate_system_context_event;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// Validates the immutable source boundary of one forked session.
@@ -174,6 +174,9 @@ impl SessionDocument {
         self.validate_context_maintenance_history()?;
         validate_api_dispatch_history(&self.events)?;
 
+        // Every checkpoint digest is verified in one batch; the group loop reports mismatches in group order.
+        // 全部检查点摘要一次批量校验；组循环按组顺序报告不匹配。
+        let fingerprint_mismatches = self.resident_fingerprint_mismatches()?;
         // Validate API-group ordering and provider_source placement.
         let mut group_ranks: BTreeMap<u64, Vec<(usize, usize)>> = BTreeMap::new();
         for (index, event) in self.events.iter().enumerate() {
@@ -229,7 +232,15 @@ impl SessionDocument {
                             actual: source.covered_until_seq.value(),
                         });
                     }
-                    validate_provider_fingerprint(&self.events, &source)?;
+                    if let Some((stored, expected)) =
+                        fingerprint_mismatches.get(&self.events[index].seq.value())
+                    {
+                        return Err(DomainError::ProviderSourceFingerprintMismatch {
+                            seq: source.covered_until_seq.value(),
+                            stored: stored.clone(),
+                            expected: expected.clone(),
+                        });
+                    }
                     if let Some(replay) = &source.replay
                         && !replay.matches_route(
                             &source.provider,

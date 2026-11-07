@@ -184,9 +184,40 @@ fn fingerprint_ignores_host_status_but_detects_partial_text_changes() {
         .unwrap();
     partial.text.push_str(" changed");
     assert!(matches!(
-        validate_provider_fingerprint(&events, &source),
+        validate_provider_fingerprint(&events, &[], &source),
         Err(DomainError::ProviderSourceFingerprintMismatch { .. })
     ));
+}
+
+/// Hashes the request-policy projection, which drops partial assistant facts, in the fingerprint byte form.
+/// 以指纹字节形态哈希会丢弃部分 assistant 事实的请求策略投影。
+fn omitted_partial_digest(events: &[ConversationEvent], coverage: Seq) -> String {
+    let covered: Vec<ConversationEvent> = events
+        .iter()
+        .filter(|event| event.seq() <= coverage)
+        .cloned()
+        .collect();
+    let items: Vec<ProjectedItem> =
+        project_items_with_policy(&covered, None, &[], PartialAssistantPolicy::Omit, None)
+            .unwrap()
+            .into_iter()
+            .map(|sourced| match sourced.item {
+                ProjectedItem::AssistantText {
+                    text,
+                    reasoning,
+                    tool_calls,
+                    ..
+                } => ProjectedItem::AssistantText {
+                    text,
+                    reasoning,
+                    tool_calls,
+                    provider_source: None,
+                },
+                item => item,
+            })
+            .filter(|item| !matches!(item, ProjectedItem::ToolResult { .. }))
+            .collect();
+    hex_encode(&Sha256::digest(serde_json::to_vec(&items).unwrap()))
 }
 
 /// Checkpoints never accept a digest computed with partial assistant facts filtered out.
@@ -196,8 +227,7 @@ fn fingerprint_rejects_filtered_digest() {
     let document = interrupted_history(false);
     let mut events = document.events().to_vec();
     let coverage = source_mut(&mut events).covered_until_seq;
-    let filtered =
-        fingerprint_with_policy(&events, coverage, PartialAssistantPolicy::Omit).unwrap();
+    let filtered = omitted_partial_digest(&events, coverage);
     assert_ne!(filtered, source_mut(&mut events).fingerprint_sha256);
     source_mut(&mut events).fingerprint_sha256 = filtered;
     assert!(
@@ -333,4 +363,22 @@ fn stored_parts_quarantine_unverifiable_checkpoint() {
         EventBody::ToolCall(tool) => tool.provider_source.is_none(),
         _ => true,
     }));
+}
+
+/// One batch pass reproduces the digest of every single boundary, including boundaries inside open groups.
+/// 一次批量遍历复现每个单独边界的摘要，包括位于开放组内部的边界。
+#[test]
+fn fingerprint_batch_matches_single_boundaries() {
+    for with_tool in [false, true] {
+        let events = interrupted_history(with_tool).events().to_vec();
+        let coverages: Vec<Seq> = events.iter().map(ConversationEvent::seq).collect();
+        let single: Vec<String> = coverages
+            .iter()
+            .map(|coverage| provider_visible_fingerprint(&events, *coverage).unwrap())
+            .collect();
+        assert_eq!(
+            provider_visible_fingerprints(&events, &coverages).unwrap(),
+            single
+        );
+    }
 }

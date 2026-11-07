@@ -687,3 +687,83 @@ fn rebuild_rejects_provider_source_before_final_provider_event() -> Result<(), D
     ));
     Ok(())
 }
+
+/// A checkpoint covers events only from its segment start, so any window holding that start verifies it.
+/// 检查点只覆盖其分段起点之后的事件，因此任何包含该起点的窗口都能校验它。
+#[test]
+fn checkpoint_fingerprint_covers_from_its_segment_start() -> Result<(), DomainError> {
+    let mut doc = new_document();
+    doc.submit_root_input_fixture("go", Vec::new(), T0)?;
+    let rollover = doc
+        .events()
+        .last()
+        .map(|event| event.seq.value() + 1)
+        .unwrap();
+    let segment = |segment_number: u64, start: u64| crate::v1::config::SegmentInfo {
+        segment_number,
+        file_name: format!("s{segment_number:07}.jsonl"),
+        start_seq: Seq::try_new(start).unwrap(),
+        end_seq: None,
+        event_count: 0,
+        byte_len: 0,
+        next_event_local_id: 1,
+    };
+    doc.segment_catalog = vec![segment(1, 1), segment(2, rollover)];
+    let api = doc.start_api(
+        ApiPurposeKind::MainGeneration,
+        crate::v1::event::ApiRequestSnapshot::new("openai", "gpt-5"),
+        T0,
+    )?;
+    doc.append_assistant_text(api, "t", AssistantSemanticStatus::Completed, T0)?;
+    let source = ProviderSourceInput {
+        provider: "openai".to_string(),
+        profile: None,
+        model: "gpt-5".to_string(),
+        connection_id: None,
+        message_id: Some("m1".to_string()),
+        response_id: None,
+        replay: None,
+    };
+    complete_ok(&mut doc, api, Some(source), T0 + 1)?;
+    let (coverage, digest) = doc
+        .events()
+        .iter()
+        .find_map(|event| match &event.event {
+            EventBody::AssistantText(text) => text
+                .provider_source
+                .as_ref()
+                .map(|source| (source.covered_until_seq, source.fingerprint_sha256.clone())),
+            _ => None,
+        })
+        .unwrap();
+    let from = doc
+        .events()
+        .iter()
+        .position(|event| event.seq.value() == rollover)
+        .unwrap();
+    assert_eq!(
+        digest,
+        crate::v1::projection::provider_visible_fingerprint(&doc.events()[from..], coverage)?
+    );
+    assert_ne!(
+        digest,
+        crate::v1::projection::provider_visible_fingerprint(doc.events(), coverage)?
+    );
+    let load = |catalog: Vec<crate::v1::config::SegmentInfo>| {
+        SessionDocument::from_stored_parts(
+            doc.metadata.clone(),
+            crate::v1::context::RuntimeLock {
+                initialization_state: crate::v1::context::RuntimeInitializationState::Initialized,
+                ..crate::v1::context::RuntimeLock::default()
+            },
+            vec![],
+            catalog,
+            doc.events().to_vec(),
+        )
+    };
+    // Full history verifies through the later segment start; without that start the digest cannot be reproduced.
+    // 完整历史经由较晚的分段起点校验通过；缺少该起点时摘要无法复现。
+    assert!(load(doc.segment_catalog.clone())?.1.is_empty());
+    assert_eq!(load(Vec::new())?.1, vec![coverage.value()]);
+    Ok(())
+}

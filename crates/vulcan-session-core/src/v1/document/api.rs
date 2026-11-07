@@ -1614,15 +1614,23 @@ impl SessionDocument {
                         kind: "provider_source",
                         value: api_call_id.value(),
                     })?;
-            let expected_source =
-                build_provider_source(&self.events, last_provider_seq, source_input)?;
+            let expected_source = build_provider_source(
+                self.fingerprint_window(last_provider_seq),
+                last_provider_seq,
+                source_input,
+            )?;
             if api.provider_source_placed {
                 let actual_source = provider_source_at_seq(
                     &self.events,
                     self.resident_start_seq,
                     last_provider_seq,
                 )?;
-                ensure_provider_source_matches(&expected_source, &actual_source, &self.events)?;
+                ensure_provider_source_matches(
+                    &expected_source,
+                    &actual_source,
+                    &self.events,
+                    &self.later_fingerprint_window_starts(),
+                )?;
                 None
             } else {
                 Some((last_provider_seq, expected_source))
