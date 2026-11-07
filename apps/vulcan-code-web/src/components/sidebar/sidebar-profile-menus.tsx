@@ -1,5 +1,5 @@
 import React from "react";
-import { MessageSquare, Settings, UserRound } from "lucide-react";
+import { CircleDot, GitPullRequest, MessageSquare, Settings, UserRound } from "lucide-react";
 import { AccountAvatar } from "@/components/features/account/account-avatar";
 import { OpenVulcanAccountContext } from "@/components/features/account/openvulcan-account-context";
 import { FeedbackCenterContext } from "@/components/features/feedback/feedback-center-context";
@@ -15,6 +15,17 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui-kit/primitives/tooltip";
 import { VulcanWordmark } from "@/components/shell/vulcan-wordmark";
 import { useI18n } from "@/i18n";
+import { openExternalUrl } from "@/service/project-actions-service";
+import { toast } from "@/ui-kit/primitives/toast";
+
+// VULCAN_CODE_REPOSITORY is the public repository that takes GitHub suggestions and pull requests.
+// VULCAN_CODE_REPOSITORY 是接收 GitHub 建议与拉取请求的公开仓库。
+const VULCAN_CODE_REPOSITORY = "https://github.com/OpenVulcan/vulcan-code";
+
+// GITHUB_ISSUE_URL opens a new issue; GITHUB_PULL_REQUEST_URL opens the compare page that starts a pull request.
+// GITHUB_ISSUE_URL 打开新建 Issue；GITHUB_PULL_REQUEST_URL 打开用于发起拉取请求的比较页。
+const GITHUB_ISSUE_URL = `${VULCAN_CODE_REPOSITORY}/issues/new`;
+const GITHUB_PULL_REQUEST_URL = `${VULCAN_CODE_REPOSITORY}/compare`;
 
 // SidebarBrandMenu renders the panel title strip as one line: the wordmark on the logo's centre line and the current area on the right.
 // The brand mark and settings entry live on the activity rail.
@@ -72,6 +83,13 @@ export function SidebarUserMenu(props: {
   // label uses the verified public name when connected, otherwise the existing local-user label.
   // label 在已连接时使用验证过的公开名称，否则使用既有本地用户标签。
   const label = account?.snapshot?.displayName ?? t("sidebar.user.local");
+  // openGitHub opens one repository page in the system browser and reports a host failure.
+  // openGitHub 在系统浏览器中打开一个仓库页面，并报告宿主失败。
+  const openGitHub = (url: string) => {
+    void openExternalUrl(url).catch((error: unknown) => {
+      toast.error(`${t("sidebar.user.openLinkFailed")}${error instanceof Error ? error.message : String(error)}`);
+    });
+  };
   return (
     <DropdownMenu>
       <Tooltip>
@@ -106,6 +124,17 @@ export function SidebarUserMenu(props: {
             <MessageSquare size={15} />
             <span>{t("feedback.menu")}</span>
           </DropdownMenuItem> : null}
+        </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuGroup>
+          <DropdownMenuItem onSelect={() => openGitHub(GITHUB_ISSUE_URL)}>
+            <CircleDot size={15} />
+            <span>{t("sidebar.user.githubIssue")}</span>
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => openGitHub(GITHUB_PULL_REQUEST_URL)}>
+            <GitPullRequest size={15} />
+            <span>{t("sidebar.user.githubPullRequest")}</span>
+          </DropdownMenuItem>
         </DropdownMenuGroup>
       </DropdownMenuContent>
     </DropdownMenu>
