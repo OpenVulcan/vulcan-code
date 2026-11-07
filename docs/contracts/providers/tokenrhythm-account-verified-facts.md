@@ -2,8 +2,12 @@
 
 > 文档性质：供应商事实记录，不是修改实施计划。
 >
-> 本文是 `manifests/tokenrhythm.json` 中 `account-auth` 凭据配置、`token_rhythm` 注册 OAuth 与
-> `token_rhythm_wallet` 余额查询的事实依据。证据分层：
+> **当前状态：已实现、未启用。** 账户登录（`token_rhythm` 注册 OAuth、`tokenrhythm_auth` 凭据材料）与
+> 钱包余额（`token_rhythm_wallet`）的代码保留，但 `manifests/tokenrhythm.json` 不声明 `account-auth`
+> 凭据配置，因此界面只提供 API Key 凭据与模型同步。待基元律动登记 Vulcan Code 的客户端后，把
+> `crates/vulcan-provider-adapters/src/tokenrhythm.rs` 的客户端与集成应用名改为登记值，再在清单中加回该配置。
+>
+> 本文记录重新接入所需的事实依据。证据分层：
 >
 > - **官方客户端源码**：TokenRhythm 官方工具 OpenSquilla 的 `desktop/electron/src/tokenrhythm-account.ts`。
 > - **真实调用**：2026-11-07 用 OpenSquilla 的客户端注册在 Debug 应用完成一次真实登录后的结果。
@@ -17,9 +21,8 @@
    `400 {"error":"invalid_client"}`（2026-11-07 用 `vulcan-code` 实测）。
 2. 每个注册绑定一个集成应用名，账户资源路径为 `/api/v1/integrations/{应用名}/…`；OpenSquilla 的注册是
    `opensquilla-desktop` ↔ `opensquilla`，托管密钥响应的 `app_id` 等于该应用名。
-3. 本仓库决策：`crates/vulcan-provider-adapters/src/tokenrhythm.rs` 的 `CLIENT_ID` 与 `INTEGRATION_APP`
-   是唯一定义，二者一起修改。当前值 `vulcan-code` 是向 TokenRhythm 申请的名称，**注册完成前账户登录不可用**；
-   API Key 凭据不受影响。不得以其他产品的注册对外发布。
+3. 本仓库决策：客户端标识与集成应用名只在一处定义且一起修改；申请的名称为 `vulcan-code`，注册完成前
+   不接入账户登录。不得以其他产品的注册对外发布。
 
 ## 二、登录协议（官方客户端源码 + 真实调用）
 
@@ -48,6 +51,27 @@
    `balances{available, recharge, bonus, debt, frozen}`，金额为十进制字符串，`available = recharge + bonus`。
 2. 本仓库决策：余额展示 `available`；`debt` 非零时附加提示；不生成额度窗口。
 
-## 五、未实现
+## 五、启用步骤
+
+模型规则的作用域不限定凭据配置，声明即覆盖全部规则；图片工具目标仍只限 API Key，托管密钥调用图片接口未验证。
+登记完成后：
+
+1. 把 `tokenrhythm.rs` 的 `CLIENT_ID` 与 `INTEGRATION_APP` 改为登记值。
+2. 在 `manifests/tokenrhythm.json` 的 `public-api` 入口 `credential_profiles` 首位加回下列配置，再执行
+   `node scripts/provider-manifests-refresh.mjs`：
+
+```json
+{
+  "credential_profile_id": "account-auth",
+  "display_name": "TokenRhythm Account",
+  "credential_mode": "auth",
+  "authorization": {"kind": "registered_oauth", "provider": "token_rhythm"},
+  "billing_kind": "provider_managed",
+  "account_usage_query": "token_rhythm_wallet",
+  "default_usage_scopes": ["interactive_agent", "internal_background", "external_service"]
+}
+```
+
+## 六、未实现
 
 - 移除凭据时调用 `DELETE /api/v1/integrations/{应用名}/session` 吊销远端登录会话。

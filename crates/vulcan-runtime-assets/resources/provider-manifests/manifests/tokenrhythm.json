@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "tokenrhythm",
-  "revision": 8,
-  "published_at": "2026-11-07T14:09:41Z",
+  "revision": 9,
+  "published_at": "2026-11-07T15:37:45Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -36,22 +36,6 @@
       "kind": "conversation",
       "base_url": "https://tokenrhythm.studio/v1",
       "credential_profiles": [
-        {
-          "credential_profile_id": "account-auth",
-          "display_name": "TokenRhythm Account",
-          "credential_mode": "auth",
-          "authorization": {
-            "kind": "registered_oauth",
-            "provider": "token_rhythm"
-          },
-          "billing_kind": "provider_managed",
-          "account_usage_query": "token_rhythm_wallet",
-          "default_usage_scopes": [
-            "interactive_agent",
-            "internal_background",
-            "external_service"
-          ]
-        },
         {
           "credential_profile_id": "api-key",
           "display_name": "API Key",
@@ -174,7 +158,7 @@
     {
       "rule_id": "deepseek-v4-flash-0731",
       "display_name": "DeepSeek V4 Flash 0731",
-      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["account-auth", "api-key"]},
+      "scope": {"service_entry_ids": ["public-api"]},
       "matcher": {"kind": "exact", "value": "deepseek-v4-flash-0731"},
       "supported_protocols": ["openai-responses.v1"],
       "selected_protocol": "openai-responses.v1",
@@ -190,7 +174,7 @@
     {
       "rule_id": "deepseek-v4-pro-0813",
       "display_name": "DeepSeek V4 Pro 0813",
-      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["account-auth", "api-key"]},
+      "scope": {"service_entry_ids": ["public-api"]},
       "matcher": {"kind": "exact", "value": "deepseek-v4-pro-0813"},
       "supported_protocols": ["anthropic-messages.v1"],
       "selected_protocol": "anthropic-messages.v1",
@@ -206,7 +190,7 @@
     {
       "rule_id": "deepseek-flash",
       "display_name": "DeepSeek V4.1 Flash",
-      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["account-auth", "api-key"]},
+      "scope": {"service_entry_ids": ["public-api"]},
       "matcher": {"kind": "exact", "value": "deepseek-flash"},
       "supported_protocols": ["openai-responses.v1"],
       "selected_protocol": "openai-responses.v1",
@@ -242,7 +226,7 @@
     {
       "rule_id": "glm-5-1",
       "display_name": "GLM-5.1",
-      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["account-auth", "api-key"]},
+      "scope": {"service_entry_ids": ["public-api"]},
       "matcher": {"kind": "exact", "value": "glm-5.1"},
       "supported_protocols": ["anthropic-messages.v1"],
       "selected_protocol": "anthropic-messages.v1",
@@ -258,7 +242,7 @@
     {
       "rule_id": "glm-5-2",
       "display_name": "GLM-5.2",
-      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["account-auth", "api-key"]},
+      "scope": {"service_entry_ids": ["public-api"]},
       "matcher": {"kind": "exact", "value": "glm-5.2"},
       "supported_protocols": ["anthropic-messages.v1"],
       "selected_protocol": "anthropic-messages.v1",
@@ -274,7 +258,7 @@
     {
       "rule_id": "glm-5-3",
       "display_name": "GLM-5.3",
-      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["account-auth", "api-key"]},
+      "scope": {"service_entry_ids": ["public-api"]},
       "matcher": {"kind": "exact", "value": "glm-5.3"},
       "supported_protocols": ["anthropic-messages.v1"],
       "selected_protocol": "anthropic-messages.v1",
@@ -290,7 +274,7 @@
     {
       "rule_id": "glm-5-3-flash",
       "display_name": "GLM-5.3 Flash",
-      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["account-auth", "api-key"]},
+      "scope": {"service_entry_ids": ["public-api"]},
       "matcher": {"kind": "exact", "value": "glm-5.3-flash"},
       "supported_protocols": ["openai-chat-completions.v1"],
       "selected_protocol": "openai-chat-completions.v1",
@@ -307,7 +291,7 @@
     {
       "rule_id": "glm-5-3-flashx",
       "display_name": "GLM-5.3 FlashX",
-      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["account-auth", "api-key"]},
+      "scope": {"service_entry_ids": ["public-api"]},
       "matcher": {"kind": "exact", "value": "glm-5.3-flashx"},
       "supported_protocols": ["openai-chat-completions.v1"],
       "selected_protocol": "openai-chat-completions.v1",
@@ -324,7 +308,7 @@
     {
       "rule_id": "minimax-m2-5",
       "display_name": "MiniMax M2.5",
-      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["account-auth", "api-key"]},
+      "scope": {"service_entry_ids": ["public-api"]},
       "matcher": {"kind": "exact", "value": "minimax-m2.5"},
       "supported_protocols": ["anthropic-messages.v1"],
       "selected_protocol": "anthropic-messages.v1",
@@ -341,7 +325,7 @@
     {
       "rule_id": "minimax-m2-7",
       "display_name": "MiniMax M2.7",
-      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["account-auth", "api-key"]},
+      "scope": {"service_entry_ids": ["public-api"]},
       "matcher": {"kind": "exact", "value": "minimax-m2.7"},
       "supported_protocols": ["anthropic-messages.v1"],
       "selected_protocol": "anthropic-messages.v1",
@@ -358,7 +342,7 @@
     {
       "rule_id": "kimi-k2-6",
       "display_name": "Kimi K2.6",
-      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["account-auth", "api-key"]},
+      "scope": {"service_entry_ids": ["public-api"]},
       "matcher": {"kind": "exact", "value": "kimi-k2.6"},
       "supported_protocols": ["anthropic-messages.v1"],
       "selected_protocol": "anthropic-messages.v1",
@@ -375,7 +359,7 @@
     {
       "rule_id": "kimi-k2-7-code",
       "display_name": "Kimi K2.7 Code",
-      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["account-auth", "api-key"]},
+      "scope": {"service_entry_ids": ["public-api"]},
       "matcher": {"kind": "exact", "value": "kimi-k2.7-code"},
       "supported_protocols": ["openai-chat-completions.v1"],
       "selected_protocol": "openai-chat-completions.v1",
@@ -392,7 +376,7 @@
     {
       "rule_id": "kimi-k3",
       "display_name": "Kimi K3",
-      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["account-auth", "api-key"]},
+      "scope": {"service_entry_ids": ["public-api"]},
       "matcher": {"kind": "exact", "value": "kimi-k3"},
       "supported_protocols": ["openai-chat-completions.v1"],
       "selected_protocol": "openai-chat-completions.v1",
@@ -409,7 +393,7 @@
     {
       "rule_id": "mimo-v2-5-pro",
       "display_name": "MiMo V2.5 Pro",
-      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["account-auth", "api-key"]},
+      "scope": {"service_entry_ids": ["public-api"]},
       "matcher": {"kind": "exact", "value": "mimo-v2.5-pro"},
       "supported_protocols": ["anthropic-messages.v1"],
       "selected_protocol": "anthropic-messages.v1",
@@ -425,7 +409,7 @@
     {
       "rule_id": "mimo-v2-6-pro",
       "display_name": "MiMo V2.6 Pro",
-      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["account-auth", "api-key"]},
+      "scope": {"service_entry_ids": ["public-api"]},
       "matcher": {"kind": "exact", "value": "mimo-v2.6-pro"},
       "supported_protocols": ["openai-chat-completions.v1"],
       "selected_protocol": "openai-chat-completions.v1",
@@ -441,7 +425,7 @@
     {
       "rule_id": "mimo-v2-6-flash",
       "display_name": "MiMo V2.6 Flash",
-      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["account-auth", "api-key"]},
+      "scope": {"service_entry_ids": ["public-api"]},
       "matcher": {"kind": "exact", "value": "mimo-v2.6-flash"},
       "supported_protocols": ["openai-chat-completions.v1"],
       "selected_protocol": "openai-chat-completions.v1",
@@ -457,7 +441,7 @@
     {
       "rule_id": "qwen3-7-max",
       "display_name": "Qwen3.7 Max",
-      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["account-auth", "api-key"]},
+      "scope": {"service_entry_ids": ["public-api"]},
       "matcher": {"kind": "exact", "value": "qwen3.7-max"},
       "supported_protocols": ["openai-responses.v1"],
       "selected_protocol": "openai-responses.v1",
@@ -473,7 +457,7 @@
     {
       "rule_id": "qwen3-8-max",
       "display_name": "Qwen3.8 Max",
-      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["account-auth", "api-key"]},
+      "scope": {"service_entry_ids": ["public-api"]},
       "matcher": {"kind": "exact", "value": "qwen3.8-max"},
       "supported_protocols": ["openai-responses.v1"],
       "selected_protocol": "openai-responses.v1",
@@ -490,7 +474,7 @@
     {
       "rule_id": "qwen3-8-27b",
       "display_name": "Qwen3.8 27B",
-      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["account-auth", "api-key"]},
+      "scope": {"service_entry_ids": ["public-api"]},
       "matcher": {"kind": "exact", "value": "qwen3.8-27b"},
       "supported_protocols": ["openai-responses.v1"],
       "selected_protocol": "openai-responses.v1",
@@ -507,7 +491,7 @@
     {
       "rule_id": "qwen3-8-flash",
       "display_name": "Qwen3.8 Flash",
-      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["account-auth", "api-key"]},
+      "scope": {"service_entry_ids": ["public-api"]},
       "matcher": {"kind": "exact", "value": "qwen3.8-flash"},
       "supported_protocols": ["openai-responses.v1"],
       "selected_protocol": "openai-responses.v1",
@@ -524,7 +508,7 @@
     {
       "rule_id": "qwen3-7-flash",
       "display_name": "Qwen3.7 Flash",
-      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["account-auth", "api-key"]},
+      "scope": {"service_entry_ids": ["public-api"]},
       "matcher": {"kind": "exact", "value": "qwen3.7-flash"},
       "supported_protocols": ["openai-responses.v1"],
       "selected_protocol": "openai-responses.v1",
@@ -541,7 +525,7 @@
     {
       "rule_id": "seed-2-1-turbo",
       "display_name": "Seed 2.1 Turbo",
-      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["account-auth", "api-key"]},
+      "scope": {"service_entry_ids": ["public-api"]},
       "matcher": {"kind": "exact", "value": "seed-2.1-turbo"},
       "supported_protocols": ["openai-responses.v1"],
       "selected_protocol": "openai-responses.v1",
@@ -558,7 +542,7 @@
     {
       "rule_id": "seed-2-1-pro",
       "display_name": "Seed 2.1 Pro",
-      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["account-auth", "api-key"]},
+      "scope": {"service_entry_ids": ["public-api"]},
       "matcher": {"kind": "exact", "value": "seed-2.1-pro"},
       "supported_protocols": ["openai-responses.v1"],
       "selected_protocol": "openai-responses.v1",
@@ -575,7 +559,7 @@
     {
       "rule_id": "qwen-image-2-0",
       "display_name": "Qwen Image 2.0",
-      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["account-auth", "api-key"]},
+      "scope": {"service_entry_ids": ["public-api"]},
       "matcher": {"kind": "exact", "value": "qwen-image-2.0"},
       "supported_protocols": ["openai-chat-completions.v1"],
       "selected_protocol": "openai-chat-completions.v1",
@@ -596,7 +580,7 @@
     {
       "rule_id": "wan2-7-image",
       "display_name": "Wan 2.7 Image",
-      "scope": {"service_entry_ids": ["public-api"], "credential_profile_ids": ["account-auth", "api-key"]},
+      "scope": {"service_entry_ids": ["public-api"]},
       "matcher": {"kind": "exact", "value": "wan2.7-image"},
       "supported_protocols": ["openai-chat-completions.v1"],
       "selected_protocol": "openai-chat-completions.v1",
@@ -767,7 +751,7 @@
       "target_id": "qwen-image-2-0.generate",
       "description": "Generate one image with Qwen Image 2.0 through the verified Token Rhythm synchronous endpoint.",
       "service_entry_id": "public-api",
-      "credential_profile_ids": ["account-auth", "api-key"],
+      "credential_profile_ids": ["api-key"],
       "upstream_target_id": "qwen-image-2.0",
       "availability_model_ids_any": ["qwen-image-2.0"],
       "display_name": "Qwen Image 2.0",
@@ -816,7 +800,7 @@
       "target_id": "wan2-7-image.generate",
       "description": "Generate one image with Wan 2.7 Image through the Token Rhythm synchronous endpoint.",
       "service_entry_id": "public-api",
-      "credential_profile_ids": ["account-auth", "api-key"],
+      "credential_profile_ids": ["api-key"],
       "upstream_target_id": "wan2.7-image",
       "availability_model_ids_any": ["wan2.7-image"],
       "display_name": "Wan 2.7 Image",
