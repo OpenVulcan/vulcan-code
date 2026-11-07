@@ -186,12 +186,11 @@
       "output_modalities": [
         "text"
       ],
-      "output_limit": 32000,
+      "output_limit": 128000,
       "reasoning": "native",
       "reasoning_control": "effort_selection",
       "reasoning_efforts": [
         "none",
-        "minimal",
         "low",
         "medium",
         "high",
@@ -603,6 +602,29 @@
       "reasoning_efforts": [
         "low",
         "high",
+        "max"
+      ]
+    },
+    {
+      "key": "deepseek-v4.1-flash-eco",
+      "aliases": [],
+      "context_window": 1048000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "output_limit": 128000,
+      "reasoning": "native",
+      "reasoning_control": "effort_selection",
+      "reasoning_efforts": [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
         "max"
       ]
     },

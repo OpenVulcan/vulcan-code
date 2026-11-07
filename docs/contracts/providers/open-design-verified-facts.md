@@ -43,17 +43,26 @@ Go 不含图片生成权益；本接入只提供文本输出的会话模型，�
 ## 目录与路由
 
 - 供应商 ID：`open-design`；服务入口：`design-plan`；凭据档：`api-key` 与 `account-auth`。
-- 基地址：`https://amr-link.open-design.ai/v1`；唯一已选协议：OpenAI Chat Completions。
+- 基地址：`https://amr-link.open-design.ai/v1`。三条已验证线路按模型族固定：
+  GPT 走 OpenAI Responses（`/v1/responses`），Claude 走 Anthropic Messages（`/v1/messages`），
+  其余模型走 OpenAI Chat Completions（`/v1/chat/completions`）。两条新线路也接受其他模型族，
+  但按用户确认的规则只给对应模型族使用。
 - 鉴权：`Authorization: Bearer <credential>`；API Key 前缀为 `sk-amr-`，账号授权使用返回的 `runtimeKey`。
+  Messages 线路同时接受 Bearer 与 `x-api-key`，清单使用 Bearer。
 - 目录采用 `discovery_only` 与精确规则交集。没有规则的远端模型不会被猜测启用；
   Key 不再返回的模型不会由本地清单补回。
-- 官方营销目录列出 12 个模型，测试 Key 实际只返回 11 个。
-  **Hunyuan H4 Preview 未返回，未取得精确 ID、容量及可执行协议证据，因此不创建可用规则。**
+- **套餐过滤由服务端目录完成。** 2026-11-07 用 Go 套餐 Key 复核：不带参数的 `GET /v1/models`
+  只返回该套餐有权使用的 14 个模型，与官方 Go 名单一致；`?all=true` 返回全部 46 个，
+  无权模型的调用返回 403 `tier_request_kind_not_entitled`。宿主发现使用前者，因此模型列表随套餐
+  自动收敛，不在清单中另建套餐名单。官方客户端同样以目录 `enabled` 与服务端错误码判定资格。
+- 2026-10-14 时 Hunyuan H4 Preview 未返回；2026-11-07 目录返回 `hy4-preview`，已按实测创建规则。
 - API Key 凭据档的 `account_usage_query` 为 `unsupported`；账号授权凭据档使用
   `open_design_wallet`，以独立 `controlKey` 查询 Design Plan 套餐窗口和美元钱包余额。
   两类额度独立显示，不把钱包金额当作常规模型的套餐剩余额度。
 - `metadata.context_limit` 是本次声明的容量来源；`context_budget` 是上游客户端预算，
-  不将它误当模型硬上限。输出使用该网关明确发布的 `output_budget = 32000`。
+  不将它误当模型硬上限。输出使用该网关明确发布的 `output_budget`：2026-11-07 起
+  Claude Haiku 5.5、GPT-6 Luna、DeepSeek V4 Pro、V4.1 Flash 与 V4.1 Flash Eco 为 128000，其余为 32000。
+  MiniMax M3.1 Flash 目录未发布 `output_budget`，保守声明 32000。
 
 ## 逐模型声明
 
@@ -62,15 +71,18 @@ Go 不含图片生成权益；本接入只提供文本输出的会话模型，�
 
 | 模型 ID | 额外输入 | 上下文上限 | 输出上限 | 思考档位 |
 | --- | --- | ---: | ---: | --- |
-| `claude-haiku-5.5` | 图片、PDF | 1000000 | 32000 | none / minimal / low / medium / high / xhigh / max |
-| `gpt-6-luna` | 图片、PDF | 1050000 | 32000 | 供应商管理 |
-| `deepseek-v4.1-flash` | 图片 | 1048000 | 32000 | none / minimal / low / medium / high / xhigh / ultra / max |
+| `claude-haiku-5.5`（Messages） | 图片、PDF | 1000000 | 128000 | none / low / medium / high / xhigh / max |
+| `gpt-6-luna`（Responses） | 图片、PDF | 1050000 | 128000 | none / low / medium / high |
+| `deepseek-v4.1-flash` | 图片 | 1048000 | 128000 | none / minimal / low / medium / high / xhigh / ultra / max |
+| `deepseek-v4.1-flash-eco` | 无 | 1048000 | 128000 | none / minimal / low / medium / high / xhigh / max |
+| `hy4-preview` | 无 | 1048000 | 32000 | none / minimal / low / medium / high / xhigh / max |
+| `minimax-m3.1-flash` | 图片 | 1000000 | 32000 | low / medium / high |
 | `glm-5.3-flashx` | 图片、PDF | 1000000 | 32000 | low / high / max |
 | `mimo-v2.6-flash` | 图片、音频 | 1048000 | 32000 | none / minimal / low / medium / high / xhigh / max |
 | `mimo-v2.6-pro` | 图片、音频 | 1048000 | 32000 | none / minimal / low / medium / high / xhigh / max |
 | `deepseek-v4-flash` | 无 | 1048000 | 32000 | none / minimal / low / medium / high / xhigh / ultra / max |
 | `deepseek-v4-flash-vision-exp` | 图片 | 1048000 | 32000 | none / minimal / low / medium / high / xhigh / ultra / max |
-| `deepseek-v4-pro` | 无 | 1048000 | 32000 | none / minimal / low / medium / high / xhigh / ultra / max |
+| `deepseek-v4-pro` | 无 | 1048000 | 128000 | none / minimal / low / medium / high / xhigh / ultra / max |
 | `glm-5.3-flash` | 图片 | 1048000 | 32000 | minimal / low / medium / high / xhigh / max |
 | `kimi-k2.7-code` | 图片 | 262000 | 32000 | minimal / low / medium / high / xhigh |
 
@@ -79,14 +91,22 @@ Go 不含图片生成权益；本接入只提供文本输出的会话模型，�
 - Claude、DeepSeek、GLM 和 Kimi 的无效档位请求返回 400，并明确列出接受值；
   这是网关线路的档位证据，不等同于原厂全部档位语义。
 - MiMo 两个模型分别实测上述七档返回成功，无效值被拒绝；`none` 无思考，其他档位返回思考。
-- 可控模型通过请求 Profile 从强类型请求复制 `reasoning_effort`，确保内部协议转换后仍显式发送
-  `none`，不会把用户选择的关闭思考变为供应商默认。GPT 模型规则替换该 Profile，删除此字段。
+- Chat 线路的可控模型通过请求 Profile 从强类型请求复制 `reasoning_effort`，确保内部协议转换后
+  仍显式发送 `none`，不会把用户选择的关闭思考变为供应商默认。GPT 与 Claude 规则替换该 Profile。
+- 2026-11-07 起无效档位不再列出接受值，只返回 400 `upstream_error`；新模型按档位逐一实测。
+  DeepSeek V4.1 Flash Eco 与 Hy4 Preview 拒绝 `ultra`，其余七档成功，`none` 无思考；
+  Eco 只返回 `reasoning.summary`。MiniMax M3.1 Flash 拒绝 `none` 与 `ultra`，
+  `minimal`、`xhigh`、`max` 及不传档位均无思考，只有 `low`、`medium`、`high` 返回思考，
+  因此只声明这三档。各档位之间的强度差异尚未验证。
 - Kimi 在 `none` 下仍返回 `reasoning.text` 与非零思考 Token，因此从可选档位中排除 `none`。
 - GLM-5.3 Flash 的图片请求在 `none` 下仍返回 `reasoning.summary` 与非零思考 Token，
   同样排除 `none`，避免承诺无法跨输入类型保证的关闭行为。
-- GPT-6 Luna 接受无效档位；Chat 的 `none` 仍可能返回加密思考，Responses 对不同输入回报的
-  `reasoning.effort` 均为 medium。没有证据证明固定档位可控，因此声明 `provider_adaptive`，
-  仅开放 adaptive，并通过请求 Profile 删除线路中的 `reasoning_effort`。
+- GPT-6 Luna 在 2026-10-14 的 Chat 线路上 `none` 仍可能返回加密思考，当时声明为供应商管理。
+  2026-11-07 改走 Responses：`reasoning.effort` 为 none、low、medium、high 时原样回报，
+  `none` 无思考、`high` 有思考；minimal、xhigh、max 与无效值都回报为 medium，因此只声明这四档。
+- Claude Haiku 5.5 走 Messages，沿用 adaptive 思考加 `output_config.effort` 的形状，`none` 映射为
+  `thinking.type = disabled`。high、xhigh、max 返回思考块，low 与 medium 在简单问题上未返回思考块；
+  未知档位返回 400。固定预算的 `thinking.type = enabled` 未返回思考块，不使用。
 - DeepSeek 和 Kimi 开启思考时拒绝强制 `tool_choice: required`；默认工具选择可成功调用及续接。
   不通过删除用户要求的强制工具语义掩盖上游错误。
 
@@ -220,3 +240,20 @@ Logo 原样取自指定仓库 `apps/web/public/logo.svg`，复制为前端
 `openai-chat-completions.v1` 上声明 `structured_output = json_schema`（证据
 `open-design.chat-json-schema.2026-10-31`）。宿主 strict 投影会把每个对象的 `required` 补全为全部属性。
 其余模型未实测，仍为 JSON Object。
+
+## 2026-11-07 复核（Go 套餐 Key，清单 revision 5）
+
+- **关闭思考。** `reasoning_effort = none` 在 5 个 DeepSeek 模型（含图片输入与工具调用）、MiMo V2.6
+  Flash/Pro、Hy4 Preview 上成功且无思考；GPT-6 Luna 与 Claude Haiku 5.5 改走各自原生线路后同样可关闭。
+  GLM-5.3 Flash/FlashX 与 Kimi K2.7 Code 仍不支持（维持既有声明），MiniMax M3.1 Flash 返回 400。
+- **结构化输出。** 使用 Prompt 未提及的枚举探针字段验证 strict `json_schema`：除 Hy4 Preview
+  （多次在长度上限截断，无法判定）与 MiniMax M3.1 Flash（忽略 Schema）外全部通过，清单为通过的模型声明
+  `json_schema`，其余保持 JSON Object。`json_object` 全部通过，但 Claude Haiku 5.5 会包裹代码围栏。
+  Responses 使用 `text.format`，Messages 使用 `output_config.format`。
+- **新模型。** `deepseek-v4.1-flash-eco`、`hy4-preview`、`minimax-m3.1-flash` 进入 Go 目录，
+  按目录容量与上文实测档位登记。按用户提供的官方套餐说明，Go Pro 与 Go Max 不含 V4.1 Flash Eco；
+  服务端目录按套餐过滤，宿主无需额外名单。
+- **生图。** `POST /v1/images/generations` 存在，Go 套餐返回 403 `tier_request_kind_not_entitled`
+  （`image_generations`），`/v1/images/edits` 返回 404。官方客户端经 `vela image gen|edit` 调用媒体任务接口，
+  分辨率上限由服务端按套餐执行。没有可用套餐的成功证据，**清单不声明任何图片目标**。
+- **未能验证。** Plus 及以上套餐独有的对话模型无法用 Go Key 调用，不创建规则。

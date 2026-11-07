@@ -1,5 +1,5 @@
-//! Production request regressions for OpenDesign's verified Chat route.
-//! OpenDesign 已验证 Chat 线路的生产请求回归测试。
+//! Production request regressions for OpenDesign's verified Chat, Responses and Messages routes.
+//! OpenDesign 已验证 Chat、Responses 与 Messages 线路的生产请求回归测试。
 
 use crate::execution::ProviderExecutionClient;
 use crate::execution::test_support::minimal_request;
@@ -11,7 +11,10 @@ use std::sync::Arc;
 use vulcan_ai_contract::{
     ContentItem, MessageRole, ReasoningEffort, ResourceKind, ResourceReference, ResourceSourceKind,
 };
-use vulcan_llm_core::{OPENAI_CHAT_PROFILE_ID, ProtocolRegistry};
+use vulcan_llm_core::{
+    ANTHROPIC_MESSAGES_PROFILE_ID, OPENAI_CHAT_PROFILE_ID, OPENAI_RESPONSES_PROFILE_ID,
+    ProtocolRegistry,
+};
 
 /// Returns an offline client using the registered production encoders; takes no parameters.
 /// 返回使用已注册生产编码器的离线客户端；无参数。
@@ -48,12 +51,16 @@ fn open_design_runtime(model_ids: &[&str]) -> (PublicAiRuntime, PersistedAiConfi
     let discovery = json!({
         "data": model_ids.iter().map(|model_id| json!({"id": model_id})).collect::<Vec<_>>()
     });
-    // Discovery records its observed protocol before production overlays add model capabilities.
-    // 发现先记录观测到的协议，随后由生产覆盖链补充模型能力。
+    // Discovery offers every service route; the manifest rules then keep only each model's own protocol.
+    // 发现为每条服务线路提供变体，随后清单规则只保留各模型自身的协议。
     let catalog = with_protocol_variants(
         parse_openai_model_catalog("open-design-test", 1, &discovery.to_string())
             .expect("synthetic discovery catalog"),
-        &[OPENAI_CHAT_PROFILE_ID],
+        &[
+            OPENAI_CHAT_PROFILE_ID,
+            OPENAI_RESPONSES_PROFILE_ID,
+            ANTHROPIC_MESSAGES_PROFILE_ID,
+        ],
     );
     install_source_catalog(&runtime, catalog.clone());
     runtime
@@ -71,15 +78,13 @@ fn open_design_runtime(model_ids: &[&str]) -> (PublicAiRuntime, PersistedAiConfi
 fn open_design_projects_reasoning_without_affecting_other_models() {
     // One account must resolve an independent frozen projection for each model.
     // 同一账号必须为每个模型解析独立冻结的投影。
-    let (runtime, configuration) =
-        open_design_runtime(&["gpt-6-luna", "deepseek-v4.1-flash", "mimo-v2.6-pro"]);
+    let (runtime, configuration) = open_design_runtime(&["deepseek-v4.1-flash", "mimo-v2.6-pro"]);
     // Reuse the production encoder without dispatching any paid requests.
     // 复用生产编码器，不发送任何付费请求。
     let client = client();
     // Each case checks a wire behavior, not a snapshot of the model directory.
     // 每个用例检查线路行为，不锁定模型目录内容快照。
     let cases = [
-        ("gpt-6-luna", ReasoningEffort::Adaptive, None),
         ("deepseek-v4.1-flash", ReasoningEffort::High, Some("high")),
         ("mimo-v2.6-pro", ReasoningEffort::None, Some("none")),
     ];
@@ -127,14 +132,80 @@ fn open_design_projects_reasoning_without_affecting_other_models() {
     }
 }
 
+/// Checks that GPT uses Responses and Claude uses Messages with their own effort shapes; returns unit on success.
+/// 检查 GPT 走 Responses、Claude 走 Messages 且各自使用自身思考形状；验证成功返回单元值。
+#[test]
+fn open_design_routes_gpt_to_responses_and_claude_to_messages() {
+    let (runtime, configuration) = open_design_runtime(&["gpt-6-luna", "claude-haiku-5.5"]);
+    let client = client();
+    // Each case names the expected route and a check of the encoded effort projection.
+    // 每个用例给出期望线路以及对已编码思考投影的检查。
+    let cases: [(&str, ReasoningEffort, &str, fn(&Value)); 3] = [
+        (
+            "gpt-6-luna",
+            ReasoningEffort::High,
+            OPENAI_RESPONSES_PROFILE_ID,
+            |body| {
+                assert_eq!(body.pointer("/reasoning/effort"), Some(&json!("high")));
+                assert!(body.get("reasoning_effort").is_none());
+            },
+        ),
+        (
+            "claude-haiku-5.5",
+            ReasoningEffort::High,
+            ANTHROPIC_MESSAGES_PROFILE_ID,
+            |body| {
+                assert_eq!(body.pointer("/thinking/type"), Some(&json!("adaptive")));
+                assert_eq!(body.pointer("/output_config/effort"), Some(&json!("high")));
+                assert!(body.get("reasoning_effort").is_none());
+            },
+        ),
+        (
+            "claude-haiku-5.5",
+            ReasoningEffort::None,
+            ANTHROPIC_MESSAGES_PROFILE_ID,
+            |body| {
+                assert_eq!(body.pointer("/thinking/type"), Some(&json!("disabled")));
+                assert!(body.pointer("/output_config/effort").is_none());
+            },
+        ),
+    ];
+    for (model_id, effort, protocol, check) in cases {
+        let selection = runtime
+            .resolve_connection_model_selection(
+                &configuration,
+                "open-design-test",
+                "open-design",
+                model_id,
+            )
+            .expect("model selection must resolve from the manifest");
+        assert_eq!(
+            selection.route.protocol_route.protocol_profile_id, protocol,
+            "{model_id}"
+        );
+        let mut request = minimal_request();
+        request.model_id = model_id.to_string();
+        request.reasoning_effort = Some(effort);
+        let encoded = client
+            .encode_request(&selection.route, &request)
+            .unwrap_or_else(|error| panic!("{model_id}: {error:?}"));
+        assert_eq!(encoded.body["model"], model_id);
+        check(&encoded.body);
+    }
+}
+
 /// Checks verified media wire shapes and private-path isolation; returns unit on success.
 /// 检查已验证媒体线路形状与私有路径隔离；验证成功返回单元值。
 #[test]
 fn open_design_encodes_verified_media_without_private_paths() {
     // Production selection freezes the model-specific resource constraints as well as the route.
     // 生产选择链同时冻结模型专属资源约束与线路。
-    let (runtime, configuration) =
-        open_design_runtime(&["deepseek-v4.1-flash", "claude-haiku-5.5", "mimo-v2.6-pro"]);
+    let (runtime, configuration) = open_design_runtime(&[
+        "deepseek-v4.1-flash",
+        "glm-5.3-flashx",
+        "claude-haiku-5.5",
+        "mimo-v2.6-pro",
+    ]);
     // Keep one encoder for all supported media families.
     // 对所有支持的媒体族复用同一编码器。
     let client = client();
@@ -150,12 +221,20 @@ fn open_design_encodes_verified_media_without_private_paths() {
             json!("data:image/png;base64,aGVsbG8="),
         ),
         (
-            "claude-haiku-5.5",
+            "glm-5.3-flashx",
             ResourceKind::File,
             "application/pdf",
             "file",
             "/file/file_data",
             json!("data:application/pdf;base64,aGVsbG8="),
+        ),
+        (
+            "claude-haiku-5.5",
+            ResourceKind::File,
+            "application/pdf",
+            "document",
+            "/source/data",
+            json!("aGVsbG8="),
         ),
         (
             "mimo-v2.6-pro",
@@ -213,7 +292,7 @@ fn open_design_encodes_verified_media_without_private_paths() {
         // 按语义定位媒体内容块，不依赖数组位置。
         let block = encoded.body["messages"]
             .as_array()
-            .expect("Chat messages")
+            .expect("encoded messages")
             .iter()
             .find(|message| message["role"] == "user")
             .expect("encoded user message")["content"]
