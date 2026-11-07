@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "opencode-go",
-  "revision": 10,
-  "published_at": "2026-10-31T16:00:00Z",
+  "revision": 11,
+  "published_at": "2026-11-07T08:40:12Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -378,8 +378,13 @@
       "request_profile_refs": [],
       "protocol_capabilities": {
         "openai-chat-completions.v1": {
+          "reasoning_efforts": [
+            "none",
+            "high",
+            "max"
+          ],
           "structured_output": "json_schema",
-          "evidence_revision": "opencode-go.live-catalog.2026-10-31"
+          "evidence_revision": "opencode-go.live-probe.2026-11-07"
         }
       }
     },
@@ -417,8 +422,14 @@
       "request_profile_refs": [],
       "protocol_capabilities": {
         "openai-chat-completions.v1": {
+          "reasoning_efforts": [
+            "none",
+            "low",
+            "high",
+            "max"
+          ],
           "structured_output": "json_schema",
-          "evidence_revision": "opencode-go.live-catalog.2026-10-31"
+          "evidence_revision": "opencode-go.live-probe.2026-11-07"
         }
       }
     },
@@ -1540,8 +1551,12 @@
       {
         "url": "https://opencode.ai/inference/go/v1/models",
         "note": "Key-scoped live Go catalog on 2026-10-31: model membership, reasoning efforts, modalities, limits, and structured_output flags. Free-tier and retired entries are excluded; Gemini 4 Argon is deferred until a generateContent route is verified."
+      },
+      {
+        "url": "https://opencode.ai/inference/go/openai/v1/chat/completions",
+        "note": "Key-scoped probe on 2026-11-07 for deepseek-v4-pro and deepseek-v4.1-flash: reasoning_effort none and thinking disabled both return zero reasoning tokens and no reasoning_content, and response_format json_schema is enforced for field names the prompt never mentions."
       }
     ],
-    "verified_at": "2026-10-31T00:00:00Z"
+    "verified_at": "2026-11-07T00:00:00Z"
   }
 }
