@@ -102,6 +102,50 @@ const SYSTEM_PROVIDER_ERROR_ROUTE_MARKER = " [provider_route: ";
 const AGENTSPACE_RECONCILIATION_SUBCATEGORY =
   "agentspace_result_reconciliation_required";
 
+// UNREPORTABLE_ERROR_CATEGORIES lists failures caused by the account, the provider, the network or the user, not by
+// Vulcan Code: credentials, permissions, balance, rate limits (429), provider overload, outage or an unreachable
+// endpoint (5xx and transport failures), timeouts, content policy and cancellation.
+// UNREPORTABLE_ERROR_CATEGORIES 列出由账号、供应商、网络或用户造成、而非 Vulcan Code 造成的失败：凭据、权限、余额、
+// 限流（429）、供应商过载、故障或无法访问（5xx 与传输失败）、超时、内容策略与取消。
+const UNREPORTABLE_ERROR_CATEGORIES = new Set([
+  "authentication",
+  "permission_denied",
+  "payment_required",
+  "rate_limited",
+  "provider_overloaded",
+  "provider_unavailable",
+  "timeout",
+  "content_policy",
+  "cancelled",
+]);
+
+// CUSTOM_PROVIDER_PREFIX marks providers the user configured; their endpoint, model and limits are the user's settings.
+// CUSTOM_PROVIDER_PREFIX 标记用户自定义的供应商；其地址、模型与上限都是用户的配置。
+const CUSTOM_PROVIDER_PREFIX = "custom:";
+
+// snakeCase normalizes the PascalCase values of legacy text records to the JSON contract spelling.
+// snakeCase 把旧文本记录的 PascalCase 取值归一为 JSON 契约写法。
+function snakeCase(value: string): string {
+  return value.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
+}
+
+// isReportableSystemError returns whether a failure may point at a Vulcan Code defect worth reporting. Failures in
+// UNREPORTABLE_ERROR_CATEGORIES never are. A custom provider is reportable only when the request failed inside Vulcan
+// Code before it was sent; anything its endpoint answered (bad request, wrong path, context limit) is configuration.
+// Other categories of system providers, including future ones, stay reportable.
+// isReportableSystemError 返回该失败是否可能指向值得报告的 Vulcan Code 缺陷。UNREPORTABLE_ERROR_CATEGORIES 中的失败
+// 一律不报告。自定义供应商只有在请求发出前于 Vulcan Code 内失败时才可报告；其地址返回的任何错误（错误请求、路径
+// 错误、上下文上限）都属于配置问题。系统供应商的其他类别（包括今后新增的）仍可报告。
+export function isReportableSystemError(error: SystemProviderError): boolean {
+  if (UNREPORTABLE_ERROR_CATEGORIES.has(snakeCase(error.category))) {
+    return false;
+  }
+  if (error.provider.startsWith(CUSTOM_PROVIDER_PREFIX)) {
+    return snakeCase(error.dispatchOutcome) === "not_dispatched";
+  }
+  return true;
+}
+
 // SYSTEM_PROVIDER_ERROR_FIELD_NAMES lists fields emitted by the legacy text formatter.
 // SYSTEM_PROVIDER_ERROR_FIELD_NAMES 列出旧文本格式化器发出的字段。
 const SYSTEM_PROVIDER_ERROR_FIELD_NAMES = new Set([
@@ -467,7 +511,7 @@ export function SystemErrorCard(props: SystemErrorCardProps) {
                 : t("conversation.systemError.status")}
           />
         </div>
-        {feedback ? (
+        {feedback && isReportableSystemError(props.error) ? (
           <Button className="vk-error-report" size="sm" variant="outline" onClick={() => feedback.openFeedback({ source: "error_card", systemError: props.error })}>
             {t("feedback.reportError")}
           </Button>

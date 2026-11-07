@@ -21,6 +21,13 @@ openvulcan-web 仓库实现；本文只记录客户端的义务与客户端可�
    登录入口且不丢弃草稿。凭据所属区域决定发送到中国区或国际区，两区用户与数据互相独立。
 4. **入口（`source`）。** `manual`（账户菜单、设置页）、`error_card`（会话错误卡的“报告此问题”，附带
    该错误的结构化事实，HTTP 状态以整数发送）、`ai_draft`（AI `feedback` 工具起草，用户检查后发送）。
+   错误卡只对可能源自 Vulcan Code 的失败提供报告（判断在 WebUI `isReportableSystemError`）：
+   - 类别为 `authentication`、`permission_denied`、`payment_required`、`rate_limited`（429）、`provider_overloaded`、
+     `provider_unavailable`（5xx 与无法访问等传输失败）、`timeout`、`content_policy` 与 `cancelled` 的一律不提供
+     （唯一列表为 `UNREPORTABLE_ERROR_CATEGORIES`）。
+   - 自定义供应商（`custom:` 前缀）只有派发结果为 `not_dispatched`（请求发出前在本机失败）时才提供；其地址返回的
+     任何错误（错误请求、路径错误、上下文上限等）都视为用户配置问题。
+   - 系统供应商的其他类别（含今后新增的）仍可报告。手动反馈不受此限制。
 5. **可选附件。** 客户端信息（版本、系统、界面语言）与最近日志默认勾选；允许联系默认不勾选。日志从
    服务日志最近 `LOG_SCAN_SEGMENTS` 个分段读取，每段最多扫描 `LOG_SCAN_MAX_BYTES_PER_SEGMENT`，只取
    级别为 warn 或 error 的 JSON 行及包含失败调用编号的行，保留最新的 `LOG_EXCERPT_MAX_LINES` 行、`LOG_EXCERPT_MAX_BYTES`。

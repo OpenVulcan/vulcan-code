@@ -1,10 +1,12 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import { FeedbackCenterContext, type FeedbackCenterController } from "@/components/features/feedback/feedback-center-context";
 import { I18nProvider } from "@/i18n";
 import type { ConversationMessage } from "@/types";
 import {
   isProviderResultReconciliationPending,
+  isReportableSystemError,
   parseSystemProviderError,
   SystemErrorCard,
 } from "./conversation-system-error-card";
@@ -238,5 +240,49 @@ describe("system provider error card", () => {
     expect(markup).toContain("vk-error-chev");
     expect(markup).toContain("language-json");
     expect(markup).toContain("Our servers are currently overloaded. Please try again later.");
+  });
+
+  it("offers a report only for failures that may come from Vulcan Code", () => {
+    const CUSTOM = "custom:78958aba28114a6babbe55c4e4b5ef1c";
+    // failure rewrites the canonical body to one provider, category, HTTP status and dispatch outcome.
+    // failure 把规范正文改写为指定供应商、类别、HTTP 状态与派发结果。
+    const failure = (provider: string, category: string, status: number | null, dispatch = "dispatched") => SYSTEM_ERROR_BODY
+      .replaceAll(CUSTOM, provider)
+      .replace('"category":"unclassified"', `"category":"${category}"${status === null ? "" : `,"http_status":${status}`}`)
+      .replace('"dispatch_outcome":"dispatched"', `"dispatch_outcome":"${dispatch}"`);
+    const reportButton = (body: string) => renderToStaticMarkup(
+      <I18nProvider initialLocale="en-US">
+        <FeedbackCenterContext.Provider value={{ openFeedback: () => undefined } as unknown as FeedbackCenterController}>
+          <SystemErrorCard error={parseSystemProviderError(body)!} />
+        </FeedbackCenterContext.Provider>
+      </I18nProvider>,
+    ).includes("vk-error-report");
+
+    // System providers: request-shape and unknown failures stay reportable; account, provider and network ones do not.
+    // 系统供应商：请求形状与未知失败仍可报告；账号、供应商与网络失败不可报告。
+    expect(reportButton(failure("deepseek", "unclassified", null))).toBe(true);
+    expect(reportButton(failure("deepseek", "invalid_request", 400))).toBe(true);
+    expect(reportButton(failure("deepseek", "context_length_exceeded", 400))).toBe(true);
+    expect(reportButton(failure("deepseek", "rate_limited", 429))).toBe(false);
+    expect(reportButton(failure("deepseek", "payment_required", 429))).toBe(false);
+    expect(reportButton(failure("deepseek", "provider_unavailable", null, "unknown"))).toBe(false);
+    expect(reportButton(failure("deepseek", "timeout", null, "unknown"))).toBe(false);
+    expect(reportButton(EMPTY_MESSAGE_502_BODY)).toBe(false);
+
+    // Custom providers: whatever the endpoint answered is configuration; only a failure before sending is reportable.
+    // 自定义供应商：地址返回的任何错误都属于配置；只有发送前的失败可报告。
+    expect(reportButton(SYSTEM_ERROR_BODY)).toBe(false);
+    expect(reportButton(failure(CUSTOM, "invalid_request", 404))).toBe(false);
+    expect(reportButton(failure(CUSTOM, "context_length_exceeded", 400))).toBe(false);
+    expect(reportButton(failure(CUSTOM, "invalid_request", null, "not_dispatched"))).toBe(true);
+    expect(reportButton(failure(CUSTOM, "rate_limited", null, "not_dispatched"))).toBe(false);
+
+    // Legacy text records spell categories and outcomes in PascalCase.
+    // 旧文本记录以 PascalCase 书写类别与派发结果。
+    const legacy = (body: string) => isReportableSystemError(parseSystemProviderError(body)!);
+    expect(legacy(LEGACY_SYSTEM_ERROR_BODY.replace("category=Unclassified", "category=RateLimited"))).toBe(false);
+    expect(legacy(LEGACY_SYSTEM_ERROR_BODY)).toBe(false);
+    expect(legacy(LEGACY_SYSTEM_ERROR_BODY.replace("dispatch_outcome=Dispatched", "dispatch_outcome=NotDispatched"))).toBe(true);
+    expect(legacy(LEGACY_SYSTEM_ERROR_BODY.replace(CUSTOM, "deepseek"))).toBe(true);
   });
 });
