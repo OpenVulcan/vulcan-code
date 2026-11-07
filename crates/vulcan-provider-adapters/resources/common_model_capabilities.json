@@ -1450,6 +1450,7 @@
       "reasoning": "native",
       "reasoning_control": "effort_selection",
       "reasoning_efforts": [
+        "none",
         "low",
         "medium",
         "high",
@@ -1473,6 +1474,7 @@
       "reasoning": "native",
       "reasoning_control": "effort_selection",
       "reasoning_efforts": [
+        "none",
         "low",
         "medium",
         "high",
@@ -1496,6 +1498,7 @@
       "reasoning": "native",
       "reasoning_control": "effort_selection",
       "reasoning_efforts": [
+        "none",
         "low",
         "medium",
         "high",
@@ -1546,6 +1549,7 @@
       "reasoning": "native",
       "reasoning_control": "effort_selection",
       "reasoning_efforts": [
+        "none",
         "low",
         "medium",
         "high",
@@ -1569,6 +1573,7 @@
       "reasoning": "native",
       "reasoning_control": "effort_selection",
       "reasoning_efforts": [
+        "none",
         "low",
         "medium",
         "high",
@@ -1615,6 +1620,7 @@
       "reasoning": "native",
       "reasoning_control": "effort_selection",
       "reasoning_efforts": [
+        "none",
         "low",
         "medium",
         "high",

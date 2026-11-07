@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "openai",
-  "revision": 26,
-  "published_at": "2026-11-03T06:48:28Z",
+  "revision": 27,
+  "published_at": "2026-11-07T17:16:21Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -209,6 +209,7 @@
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
         "reasoning_efforts": [
+          "none",
           "low",
           "medium",
           "high",
@@ -217,7 +218,13 @@
         ],
         "context_limit": 1050000,
         "output_limit": 128000,
-        "evidence_revision": "openai.public-api.models.20261029"
+        "evidence_revision": "openai.public-api.reasoning-none.20261108"
+      },
+      "protocol_capabilities": {
+        "openai-responses.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "openai.public-api.structured-output.20261108"
+        }
       },
       "provenance_ref": "builtin:openai.public-api.user-declaration.20261029"
     },
@@ -253,6 +260,7 @@
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
         "reasoning_efforts": [
+          "none",
           "low",
           "medium",
           "high",
@@ -261,7 +269,13 @@
         ],
         "context_limit": 1050000,
         "output_limit": 128000,
-        "evidence_revision": "openai.public-api.models.20261029"
+        "evidence_revision": "openai.public-api.reasoning-none.20261108"
+      },
+      "protocol_capabilities": {
+        "openai-responses.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "openai.public-api.structured-output.20261108"
+        }
       },
       "provenance_ref": "builtin:openai.public-api.user-declaration.20261029"
     },
@@ -297,6 +311,7 @@
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
         "reasoning_efforts": [
+          "none",
           "low",
           "medium",
           "high",
@@ -305,7 +320,13 @@
         ],
         "context_limit": 1050000,
         "output_limit": 128000,
-        "evidence_revision": "openai.public-api.models.20261029"
+        "evidence_revision": "openai.public-api.reasoning-none.20261108"
+      },
+      "protocol_capabilities": {
+        "openai-responses.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "openai.public-api.structured-output.20261108"
+        }
       },
       "provenance_ref": "builtin:openai.public-api.user-declaration.20261029"
     },
@@ -351,6 +372,12 @@
         "output_limit": 128000,
         "evidence_revision": "openai.public-api.models.20261029"
       },
+      "protocol_capabilities": {
+        "openai-responses.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "openai.public-api.structured-output.20261108"
+        }
+      },
       "provenance_ref": "builtin:openai.public-api.user-declaration.20261029"
     },
     {
@@ -385,6 +412,7 @@
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
         "reasoning_efforts": [
+          "none",
           "low",
           "medium",
           "high",
@@ -393,7 +421,13 @@
         ],
         "context_limit": 1050000,
         "output_limit": 128000,
-        "evidence_revision": "openai.public-api.models.20261029"
+        "evidence_revision": "openai.public-api.reasoning-none.20261108"
+      },
+      "protocol_capabilities": {
+        "openai-responses.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "openai.public-api.structured-output.20261108"
+        }
       },
       "provenance_ref": "builtin:openai.public-api.user-declaration.20261029"
     },
@@ -429,6 +463,7 @@
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
         "reasoning_efforts": [
+          "none",
           "low",
           "medium",
           "high",
@@ -437,7 +472,13 @@
         ],
         "context_limit": 1050000,
         "output_limit": 128000,
-        "evidence_revision": "openai.public-api.models.20261029"
+        "evidence_revision": "openai.public-api.reasoning-none.20261108"
+      },
+      "protocol_capabilities": {
+        "openai-responses.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "openai.public-api.structured-output.20261108"
+        }
       },
       "provenance_ref": "builtin:openai.public-api.user-declaration.20261029"
     },
@@ -483,6 +524,12 @@
         "output_limit": 128000,
         "evidence_revision": "openai.public-api.models.20261029"
       },
+      "protocol_capabilities": {
+        "openai-responses.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "openai.public-api.structured-output.20261108"
+        }
+      },
       "provenance_ref": "builtin:openai.public-api.user-declaration.20261029"
     },
     {
@@ -517,6 +564,7 @@
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
         "reasoning_efforts": [
+          "none",
           "low",
           "medium",
           "high",
@@ -525,7 +573,13 @@
         ],
         "context_limit": 1050000,
         "output_limit": 128000,
-        "evidence_revision": "openai.public-api.models.20261029"
+        "evidence_revision": "openai.public-api.reasoning-none.20261108"
+      },
+      "protocol_capabilities": {
+        "openai-responses.v1": {
+          "structured_output": "json_schema",
+          "evidence_revision": "openai.public-api.structured-output.20261108"
+        }
       },
       "provenance_ref": "builtin:openai.public-api.user-declaration.20261029"
     },
@@ -2127,6 +2181,14 @@
       {
         "url": "builtin:openai.public-api.user-declaration.20261029",
         "note": "The user explicitly fixes the public API inventory to eight undated GPT-5.6, GPT-6 and GPT-6.1 conversation models. All use Responses, file/image input, low/medium/high/xhigh/max reasoning, 1050000 context and 128000 maximum output. API filtering is entry-scoped; Codex subscription declarations remain unchanged."
+      },
+      {
+        "url": "builtin:openai.public-api.reasoning-none.20261108",
+        "note": "On 2026-11-08 the official model pages state that reasoning.effort supports none, low, medium (default), high, xhigh and max for GPT-5.6 Sol/Terra/Luna, GPT-6 Sol/Luna and GPT-6.1 Terra, so those Responses rules add none. GPT-6 Astra and GPT-6.1 Sol list only low, medium, high, xhigh and max and stay unchanged. The Codex subscription rules are not covered by these pages and stay unchanged; no inference was tested."
+      },
+      {
+        "url": "https://developers.openai.com/api/docs/guides/structured-outputs",
+        "note": "On 2026-11-08 the official model pages of all eight public API conversation models (GPT-5.6 Sol/Terra/Luna, GPT-6 Astra/Sol/Luna, GPT-6.1 Sol/Terra) list Structured outputs as Supported, and the guide states Structured Outputs (strict json_schema) and JSON mode work in both the Responses and Chat Completions APIs, recommending Structured Outputs over JSON mode. The Responses rules therefore declare json_schema. The Codex subscription endpoint is not covered by these documents and stays undeclared; no inference was tested."
       },
       {
         "url": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
