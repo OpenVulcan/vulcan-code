@@ -45,8 +45,9 @@ pub struct ProviderRetryPolicy {
     /// Whether provider retry-after hints should be honored.
     /// 是否遵守 Provider 的 retry-after 提示。
     respect_retry_after: bool,
-    /// Whether a statusless typed rate-limit failure may be retried; observed HTTP 4xx is terminal.
-    /// 是否允许重试不带状态码的强类型限流失败；已观察到的 HTTP 4xx 保持终态。
+    /// Whether a rate-limit failure (HTTP 429 or a statusless typed rate limit) may be retried;
+    /// every other observed HTTP 4xx is terminal.
+    /// 是否允许重试限流失败（HTTP 429 或不带状态码的强类型限流）；其他已观察到的 HTTP 4xx 保持终态。
     retry_429: bool,
     /// Maximum finite rate-limit retry count after legacy-value normalization.
     /// 旧值规范化后的最大有限限流重试次数。
@@ -390,13 +391,12 @@ fn classify_structured_retry_reason(
     }
     // An observed 4xx response is an authoritative request/application rejection. It remains
     // terminal even when an adapter supplied an overly broad retryable category or overload
-    // marker (original plan §13.5).
+    // marker (original plan §13.5). HTTP 429 asks the client to come back later, so its typed
+    // category decides below: a rate limit follows `retry_429`, an exhausted balance stays terminal.
     // 已观察到的 4xx 响应是权威的请求/应用拒绝。即使适配器错误提供了宽泛可重试类别或过载
-    // 标记，它仍保持终态（原始方案 §13.5）。
-    if error
-        .http_status
-        .is_some_and(|status| (400..=499).contains(&status))
-    {
+    // 标记，它仍保持终态（原始方案 §13.5）。HTTP 429 要求客户端稍后再来，因此交由下方的强类型
+    // 类别决定：限流遵循 `retry_429`，余额耗尽仍为终态。
+    if error.http_status.is_some_and(is_terminal_client_status) {
         return None;
     }
     if structured_error_is_deterministic_terminal(error) {
@@ -731,10 +731,16 @@ fn classify_legacy_retry_reason(
     if contains_non_retryable_marker(&lower) {
         return None;
     }
-    if (400..=499).any(|status| contains_status(&lower, status)) {
+    if (400..=499)
+        .filter(|status| is_terminal_client_status(*status))
+        .any(|status| contains_status(&lower, status))
+    {
         return None;
     }
-    if retry_429 && (contains_status(&lower, 429) || contains_provider_rate_limit_marker(&lower)) {
+    if retry_429
+        && (contains_status(&lower, HTTP_TOO_MANY_REQUESTS)
+            || contains_provider_rate_limit_marker(&lower))
+    {
         return Some(ProviderRetryClassification {
             category: ProviderRetryCategory::RateLimit,
             reason: String::from("Provider rate limit"),
@@ -813,6 +819,19 @@ fn contains_transport_marker(lower: &str) -> bool {
     ]
     .iter()
     .any(|marker| lower.contains(marker))
+}
+
+/// HTTP status a Provider returns when the client should slow down and try again later.
+/// Provider 要求客户端放慢并稍后重试时返回的 HTTP 状态码。
+const HTTP_TOO_MANY_REQUESTS: u16 = 429;
+
+/// Reports whether an observed HTTP status is a client rejection that replay cannot fix.
+/// 报告已观察到的 HTTP 状态码是否为重放无法修复的客户端拒绝。
+///
+/// Every 4xx qualifies except 429, which is a request to retry later.
+/// 除表示稍后重试的 429 外，所有 4xx 均属此类。
+fn is_terminal_client_status(status: u16) -> bool {
+    (400..=499).contains(&status) && status != HTTP_TOO_MANY_REQUESTS
 }
 
 /// Returns whether an error string contains one concrete HTTP status.
@@ -1047,12 +1066,61 @@ mod tests {
         assert!(policy().next_retry(&decoder, 0, false).is_none());
     }
 
+    /// Builds one typed HTTP 429 failure with the given category.
+    /// 构建一个带指定类别的强类型 HTTP 429 失败。
+    fn http_429_error(category: AiErrorCategory, retryable: bool) -> VulcanCoreError {
+        let mut error = structured_provider_error(category, retryable);
+        let VulcanCoreError::ProviderFailure {
+            details: Some(details),
+            ..
+        } = &mut error
+        else {
+            panic!("structured error expected");
+        };
+        details.http_status = Some(429);
+        error
+    }
+
+    /// Verifies an observed HTTP 429 rate limit follows the rate-limit schedule and `retry_429`.
+    /// 验证已观察到的 HTTP 429 限流遵循限流调度与 `retry_429`。
+    #[test]
+    fn http_429_rate_limit_retries_on_the_rate_limit_schedule() {
+        let error = http_429_error(AiErrorCategory::RateLimited, true);
+        let decision = policy()
+            .next_retry(&error, 0, false)
+            .expect("HTTP 429 rate limit should retry");
+        assert_eq!(decision.max_retries, PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES);
+        assert_eq!(decision.delay, Duration::from_millis(100));
+
+        let mut disabled = policy();
+        disabled.retry_429 = false;
+        assert!(disabled.next_retry(&error, 0, false).is_none());
+    }
+
+    /// Verifies an exhausted balance reported as HTTP 429 stays terminal.
+    /// 验证以 HTTP 429 报告的余额耗尽保持终态。
+    #[test]
+    fn http_429_payment_required_stays_terminal() {
+        let error = http_429_error(AiErrorCategory::PaymentRequired, true);
+        assert!(policy().next_retry(&error, 0, false).is_none());
+    }
+
+    /// Verifies a legacy HTTP 429 display text is classified as a rate limit.
+    /// 验证旧兼容 HTTP 429 展示文本被归类为限流。
+    #[test]
+    fn legacy_http_429_is_a_rate_limit() {
+        let decision = policy()
+            .next_retry(&provider_error("HTTP 429 Too Many Requests"), 0, false)
+            .expect("legacy HTTP 429 should retry");
+        assert_eq!(decision.max_retries, PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES);
+    }
+
     /// Verifies legacy schema, unsupported-feature, and decoder diagnostics never retry.
     /// 验证旧兼容 Schema、不支持能力与解码诊断绝不重试。
     #[test]
     fn legacy_deterministic_failures_are_terminal() {
         for message in [
-            "HTTP 429 Too Many Requests",
+            "HTTP 400 Bad Request",
             "Provider schema validation failed",
             "Provider feature is unsupported",
             "SSE 解码失败: invalid event payload",
