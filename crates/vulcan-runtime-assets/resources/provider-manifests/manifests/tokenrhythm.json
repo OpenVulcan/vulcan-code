@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "tokenrhythm",
-  "revision": 10,
-  "published_at": "2026-11-07T16:24:30Z",
+  "revision": 11,
+  "published_at": "2026-11-07T16:48:49Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -184,18 +184,18 @@
       "display_name": "DeepSeek V4 Pro 0813",
       "scope": {"service_entry_ids": ["public-api"]},
       "matcher": {"kind": "exact", "value": "deepseek-v4-pro-0813"},
-      "supported_protocols": ["anthropic-messages.v1"],
-      "selected_protocol": "anthropic-messages.v1",
+      "supported_protocols": ["openai-responses.v1"],
+      "selected_protocol": "openai-responses.v1",
       "capabilities": {
         "reasoning_control": "effort_selection",
         "reasoning_efforts": ["none", "low", "high", "max"],
         "context_limit": 1000000,
         "output_limit": 384000,
-        "evidence_revision": "tokenrhythm.reasoning-matrix.2026-08-19"
+        "evidence_revision": "tokenrhythm.protocol-switch-probe.2026-11-08"
       },
-      "request_profile_refs": ["tokenrhythm.messages.reasoning.toggle.v1"],
+      "request_profile_refs": [],
       "protocol_capabilities": {
-        "anthropic-messages.v1": {"structured_output": "unsupported", "evidence_revision": "tokenrhythm.structured-output-probe.2026-11-08"}
+        "openai-responses.v1": {"structured_output": "json_schema", "evidence_revision": "tokenrhythm.structured-output-probe.2026-11-08"}
       }
     },
     {
@@ -290,18 +290,18 @@
       "display_name": "GLM-5.2",
       "scope": {"service_entry_ids": ["public-api"]},
       "matcher": {"kind": "exact", "value": "glm-5.2"},
-      "supported_protocols": ["anthropic-messages.v1"],
-      "selected_protocol": "anthropic-messages.v1",
+      "supported_protocols": ["openai-responses.v1"],
+      "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "reasoning_control": "fixed_on",
-        "reasoning_efforts": ["high", "max"],
+        "reasoning_control": "toggle",
+        "reasoning_efforts": ["none", "high", "max"],
         "context_limit": 1000000,
         "output_limit": 128000,
-        "evidence_revision": "tokenrhythm.reasoning-matrix.2026-08-19"
+        "evidence_revision": "tokenrhythm.protocol-switch-probe.2026-11-08"
       },
       "request_profile_refs": [],
       "protocol_capabilities": {
-        "anthropic-messages.v1": {"structured_output": "unsupported", "evidence_revision": "tokenrhythm.structured-output-probe.2026-11-08"}
+        "openai-responses.v1": {"structured_output": "json_schema", "evidence_revision": "tokenrhythm.structured-output-probe.2026-11-08"}
       }
     },
     {
@@ -408,19 +408,19 @@
       "display_name": "Kimi K2.6",
       "scope": {"service_entry_ids": ["public-api"]},
       "matcher": {"kind": "exact", "value": "kimi-k2.6"},
-      "supported_protocols": ["anthropic-messages.v1"],
-      "selected_protocol": "anthropic-messages.v1",
+      "supported_protocols": ["openai-chat-completions.v1"],
+      "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
         "input_resources": ["image"],
         "reasoning_control": "fixed_on",
         "reasoning_efforts": [],
         "context_limit": 262144,
         "output_limit": 131072,
-        "evidence_revision": "tokenrhythm.reasoning-matrix.2026-08-19"
+        "evidence_revision": "tokenrhythm.protocol-switch-probe.2026-11-08"
       },
-      "request_profile_refs": [],
+      "request_profile_refs": ["tokenrhythm.chat.reasoning.fixed.v1"],
       "protocol_capabilities": {
-        "anthropic-messages.v1": {"structured_output": "json_schema", "evidence_revision": "tokenrhythm.structured-output-probe.2026-11-08"}
+        "openai-chat-completions.v1": {"structured_output": "json_schema", "evidence_revision": "tokenrhythm.structured-output-probe.2026-11-08"}
       }
     },
     {
@@ -1025,7 +1025,8 @@
       {"url": "https://tokenrhythm.studio/v1/models", "note": "Authenticated inventory confirmed the 17 Chat model identities on 2026-08-19."},
       {"url": "https://tokenrhythm.studio/v1/images/generations", "note": "Qwen Image 2.0 request and signed PNG response were verified; Wan 2.7 parity was confirmed by the user."},
       {"url": "builtin:tokenrhythm.model-sync-probe.2026-11-08", "note": "2026-11-08 API-key probe of every Chat model on its selected protocol plus every live protocol of the new models. Removed minimax-m2.5 and mimo-v2.5-pro (no longer listed). Added DeepSeek V4.1 Flash 1017, LongCat 2.0 and MiniMax M3.1 Flash, and the provider's status=testing models Egg-Alpha and Neohorse 1 9B with a (Testing) name suffix; NeoHorse JEV 4B (decision endpoint only) and Wan 3.0 Video (unverified video generation) are left out. Messages rejects output_config.effort none for every model, so none maps to thinking disabled (DeepSeek V4 Pro 0813, GLM-5.1); the compatible projector sends no Messages effort by itself, so the same profile writes output_config.effort for DeepSeek V4 Pro 0813, GLM-5.1 and GLM-5.3, each verified to think at its declared levels. GLM-5.2 and Kimi K2.6 show no thinking on Messages at any level and are left unchanged. MiniMax M3.1 Flash takes raw reasoning_effort low..max on Chat. Kimi K3 accepts reasoning_effort none and high on Chat. LongCat 2.0 only turns reasoning off with Responses effort none; MiniMax M3.1 Flash rejects every off switch; Neohorse 1 9B ignores reasoning_effort none and needs thinking disabled."},
-      {"url": "builtin:tokenrhythm.structured-output-probe.2026-11-08", "note": "2026-11-08 json_object and strict json_schema probe with the host wire shapes and an enum field the prompt never mentions, two runs each; Messages has no json_object in the host. json_schema only where both runs passed; json_object where the schema was ignored or truncated but json_object passed; unsupported on Messages where the schema was ignored (DeepSeek V4 Pro 0813, GLM-5.1, MiniMax M2.7) or passed once (GLM-5.2). MiniMax M3.1 Flash rejects text.format on Responses and output_config.format on Messages, so it uses Chat."}
+      {"url": "builtin:tokenrhythm.structured-output-probe.2026-11-08", "note": "2026-11-08 json_object and strict json_schema probe with the host wire shapes and an enum field the prompt never mentions, two runs each; Messages has no json_object in the host. json_schema only where both runs passed; json_object where the schema was ignored or truncated but json_object passed; unsupported on Messages where the schema was ignored (DeepSeek V4 Pro 0813, GLM-5.1, MiniMax M2.7) or passed once (GLM-5.2). MiniMax M3.1 Flash rejects text.format on Responses and output_config.format on Messages, so it uses Chat."},
+      {"url": "builtin:tokenrhythm.protocol-switch-probe.2026-11-08", "note": "2026-11-08 probe of the six Messages models on Chat and Responses. DeepSeek V4 Pro 0813 moves to Responses: effort none turns reasoning off, low to max are accepted, json_object and strict json_schema pass twice. GLM-5.2 moves to Responses: effort none turns reasoning off (Chat ignores every off switch), reasoning is visible, json_schema passes twice. Kimi K2.6 moves to Chat (no Responses API): reasoning stays on but becomes visible, json_schema passes twice, image input works. GLM-5.1, GLM-5.3 and MiniMax M2.7 stay on Messages: GLM-5.1 has no Responses API and on Chat cannot turn reasoning off and fails json_schema; GLM-5.3 already passes json_schema on Messages; MiniMax M2.7 has no Responses API and on Chat leaks think tags into content and fails json_schema."}
     ],
     "verified_at": "2026-08-19T00:00:00Z"
   }
