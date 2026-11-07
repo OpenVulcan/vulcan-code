@@ -13,13 +13,15 @@ use serde::{Deserialize, de::DeserializeOwned};
 /// 账户与推理共用的授权端。
 pub(crate) const ORIGIN: &str = "https://tokenrhythm.studio";
 
-/// OAuth client registered with TokenRhythm.
-/// 在 TokenRhythm 注册的 OAuth 客户端。
-pub(crate) const CLIENT_ID: &str = "opensquilla-desktop";
+/// OAuth client Vulcan Code requests from TokenRhythm. Until TokenRhythm registers it the
+/// authorize endpoint answers `invalid_client`; replace both values with the registered ones.
+/// Vulcan Code 向 TokenRhythm 申请的 OAuth 客户端。注册完成前授权端返回 `invalid_client`；
+/// 注册后将两个值改为实际登记值。
+pub(crate) const CLIENT_ID: &str = "vulcan-code";
 
 /// Integration application whose account resources `CLIENT_ID` may read.
 /// `CLIENT_ID` 可读取其账户资源的集成应用。
-pub(crate) const INTEGRATION_APP: &str = "opensquilla";
+pub(crate) const INTEGRATION_APP: &str = "vulcan-code";
 
 /// Scopes requested at login; the token response must grant every one of them.
 /// 登录时请求的权限范围；令牌响应必须全部授予。
