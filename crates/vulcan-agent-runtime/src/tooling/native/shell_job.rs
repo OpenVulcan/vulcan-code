@@ -308,7 +308,7 @@ async fn execute_shell_job_tool(
                 let summary = find_summary(runtime, &owner, &jobs_dir, job_id)?;
                 return Ok(shell_job_result(
                     render_job_status(&summary),
-                    json!({ "action": "wait", "job_id": job_id, "running": false }),
+                    json!({ "action": "wait", "job_id": job_id, "running": false, "purpose": summary.purpose }),
                 ));
             };
             let budget = args
@@ -354,7 +354,7 @@ async fn execute_shell_job_tool(
                 let summary = find_summary(runtime, &owner, &jobs_dir, job_id)?;
                 return Ok(shell_job_result(
                     format!("The job is not running.\n{}", render_job_status(&summary)),
-                    json!({ "action": "stop", "job_id": job_id, "running": false }),
+                    json!({ "action": "stop", "job_id": job_id, "running": false, "purpose": summary.purpose }),
                 ));
             };
             job.request_stop("Stopped with shell_job.");
@@ -377,6 +377,14 @@ async fn execute_shell_job_tool(
             )));
         }
     };
+    let mut payload = payload;
+    // The card names the job by its purpose, so every payload that names a job carries it.
+    // 卡片以用途称呼任务，因此每个指明任务的载荷都附带用途。
+    if let Some(job_id) = payload.get("job_id").and_then(Value::as_str)
+        && let Ok(summary) = find_summary(runtime, &owner, &jobs_dir, job_id)
+    {
+        payload["purpose"] = Value::String(summary.purpose);
+    }
     Ok(shell_job_result(text, payload))
 }
 

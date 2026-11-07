@@ -501,6 +501,24 @@ function toolCardGallery(sessionId: string): ConversationEventHydrationV1Respons
         },
         { name: "shell_command", input: { command: "pnpm run build" }, status: "interrupted", durationMs: 2_000 },
         {
+          name: "shell_job",
+          input: { action: "wait", job_id: "job_5c75e5de823a", timeout_ms: 60_000 },
+          output: toolOutput(
+            "shell_job",
+            "The job finished.\nJob: job_5c75e5de823a\nPurpose: Run the full workspace test suite after the tool card migration\nStatus: completed\nExit code: 0",
+            {
+              kind: "shell_job",
+              payload: {
+                action: "wait",
+                job_id: "job_5c75e5de823a",
+                running: false,
+                purpose: "Run the full workspace test suite after the tool card migration",
+              },
+            },
+          ),
+          durationMs: 30_300,
+        },
+        {
           name: "submit_plan",
           input: { name: "tool-card-migration" },
           output: toolOutput("submit_plan", "# Plan saved\n\nName: `tool-card-migration`\n\nPath: `docs/plan/tool-card-migration.md`\n", {
