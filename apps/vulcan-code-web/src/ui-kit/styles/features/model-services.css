@@ -473,11 +473,14 @@ button.vk-ms-alert:focus-visible { outline: var(--vk-focus-w) solid var(--vk-sig
 .vk-ms-section-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .vk-ms-models { padding-top: 14px; border-top: var(--vk-bw) solid var(--vk-line); }
 
-/* Account cards: compact grid; name and menu, entry chips, usage slot, status footer. */
-/* 账号卡片：紧凑网格；名称与菜单、入口标签、用量区与状态栏。 */
+/* Account cards: compact grid; name and menu, entry chips, usage slot, status footer. The minimum width fits one
+ * quota row (label, two windows, reset time) on a line and follows the interface scale; a narrow area shows fewer
+ * cards per row instead of squeezing them, and a single card never overflows the column. */
+/* 账号卡片：紧凑网格；名称与菜单、入口标签、用量区与状态栏。最小宽度能在一行放下一条额度行（标签、两个周期、
+ * 重置时间）并随界面缩放；区域较窄时每行减少卡片数而不是挤压卡片，单张卡片也不会超出栏宽。 */
 .vk-ms-accounts {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr));
   gap: 10px;
 }
 
