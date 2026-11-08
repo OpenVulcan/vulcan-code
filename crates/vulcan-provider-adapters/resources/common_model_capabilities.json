@@ -290,16 +290,14 @@
       "aliases": [],
       "context_window": 1000000,
       "input_modalities": [
-        "file",
         "image",
         "text"
       ],
       "output_modalities": [
         "text"
       ],
-      "output_limit": 128000,
       "reasoning": "native",
-      "reasoning_control": "toggle",
+      "reasoning_control": "effort_selection",
       "reasoning_efforts": [
         "low",
         "medium",
@@ -313,16 +311,14 @@
       "aliases": [],
       "context_window": 1000000,
       "input_modalities": [
-        "file",
         "image",
         "text"
       ],
       "output_modalities": [
         "text"
       ],
-      "output_limit": 128000,
       "reasoning": "native",
-      "reasoning_control": "toggle",
+      "reasoning_control": "effort_selection",
       "reasoning_efforts": [
         "low",
         "medium",
@@ -339,16 +335,14 @@
       ],
       "context_window": 1000000,
       "input_modalities": [
-        "file",
         "image",
         "text"
       ],
       "output_modalities": [
         "text"
       ],
-      "output_limit": 128000,
       "reasoning": "native",
-      "reasoning_control": "toggle",
+      "reasoning_control": "effort_selection",
       "reasoning_efforts": [
         "low",
         "medium",
@@ -429,20 +423,19 @@
       "aliases": [],
       "context_window": 1000000,
       "input_modalities": [
-        "file",
         "image",
         "text"
       ],
       "output_modalities": [
         "text"
       ],
-      "output_limit": 128000,
       "reasoning": "native",
-      "reasoning_control": "toggle",
+      "reasoning_control": "effort_selection",
       "reasoning_efforts": [
         "low",
         "medium",
         "high",
+        "xhigh",
         "max"
       ]
     },
@@ -451,16 +444,14 @@
       "aliases": [],
       "context_window": 1000000,
       "input_modalities": [
-        "file",
         "image",
         "text"
       ],
       "output_modalities": [
         "text"
       ],
-      "output_limit": 128000,
       "reasoning": "native",
-      "reasoning_control": "toggle",
+      "reasoning_control": "effort_selection",
       "reasoning_efforts": [
         "low",
         "medium",
@@ -699,7 +690,7 @@
     {
       "key": "deepseek-v4.1-flash",
       "aliases": [],
-      "context_window": 1000000,
+      "context_window": 1048000,
       "input_modalities": [
         "image",
         "text"
@@ -707,10 +698,11 @@
       "output_modalities": [
         "text"
       ],
-      "output_limit": 384000,
+      "output_limit": 128000,
       "reasoning": "native",
       "reasoning_control": "effort_selection",
       "reasoning_efforts": [
+        "none",
         "low",
         "high",
         "max"
@@ -1030,20 +1022,19 @@
     {
       "key": "gemini-4-argon",
       "aliases": [],
-      "context_window": 1048576,
+      "context_window": 1048000,
       "input_modalities": [
         "audio",
         "file",
         "image",
-        "text",
-        "video"
+        "text"
       ],
       "output_modalities": [
         "text"
       ],
-      "output_limit": 65536,
+      "output_limit": 64000,
       "reasoning": "native",
-      "reasoning_control": "fixed_on",
+      "reasoning_control": "effort_selection",
       "reasoning_efforts": [
         "low",
         "medium",
@@ -1094,12 +1085,11 @@
       "output_modalities": [
         "text"
       ],
-      "output_limit": 131072,
       "reasoning": "native",
-      "reasoning_control": "effort_selection",
+      "reasoning_control": "toggle",
       "reasoning_efforts": [
-        "high",
-        "max"
+        "none",
+        "adaptive"
       ]
     },
     {
@@ -1142,16 +1132,15 @@
     {
       "key": "glm-5.3-flash",
       "aliases": [],
-      "context_window": 1000000,
+      "context_window": 1048000,
       "input_modalities": [
         "image",
-        "text",
-        "video"
+        "text"
       ],
       "output_modalities": [
         "text"
       ],
-      "output_limit": 131072,
+      "output_limit": 32000,
       "reasoning": "native",
       "reasoning_control": "effort_selection",
       "reasoning_efforts": [
@@ -1366,7 +1355,7 @@
         "openai/gpt-5.4-20260305",
         "openai: gpt-5.4"
       ],
-      "context_window": 1050000,
+      "context_window": 400000,
       "input_modalities": [
         "image",
         "text"
@@ -1374,11 +1363,9 @@
       "output_modalities": [
         "text"
       ],
-      "output_limit": 128000,
       "reasoning": "native",
-      "reasoning_control": "toggle",
+      "reasoning_control": "effort_selection",
       "reasoning_efforts": [
-        "none",
         "low",
         "medium",
         "high",
@@ -1413,7 +1400,7 @@
         "openai/gpt-5.5-20260423",
         "openai: gpt-5.5"
       ],
-      "context_window": 1050000,
+      "context_window": 400000,
       "input_modalities": [
         "image",
         "text"
@@ -1421,11 +1408,9 @@
       "output_modalities": [
         "text"
       ],
-      "output_limit": 128000,
       "reasoning": "native",
-      "reasoning_control": "toggle",
+      "reasoning_control": "effort_selection",
       "reasoning_efforts": [
-        "none",
         "low",
         "medium",
         "high",
@@ -1735,15 +1720,9 @@
       "output_modalities": [
         "text"
       ],
-      "output_limit": 500000,
+      "output_limit": 128000,
       "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ]
+      "reasoning_control": "fixed_on"
     },
     {
       "key": "grok-imagine-image",
@@ -1829,7 +1808,7 @@
     {
       "key": "hy4",
       "aliases": [],
-      "context_window": 1048576,
+      "context_window": 1048000,
       "input_modalities": [
         "image",
         "text"
@@ -1837,9 +1816,9 @@
       "output_modalities": [
         "text"
       ],
-      "output_limit": 65536,
+      "output_limit": 64000,
       "reasoning": "native",
-      "reasoning_control": "effort_selection",
+      "reasoning_control": "toggle",
       "reasoning_efforts": [
         "none",
         "high"
@@ -1848,16 +1827,16 @@
     {
       "key": "hy4-preview",
       "aliases": [],
-      "context_window": 1024000,
+      "context_window": 1048000,
       "input_modalities": [
         "text"
       ],
       "output_modalities": [
         "text"
       ],
-      "output_limit": 64000,
+      "output_limit": 32000,
       "reasoning": "native",
-      "reasoning_control": "effort_selection",
+      "reasoning_control": "toggle",
       "reasoning_efforts": [
         "none",
         "high"
@@ -2073,16 +2052,15 @@
     {
       "key": "kimi-k3.1-pro",
       "aliases": [],
-      "context_window": 1048576,
+      "context_window": 1048000,
       "input_modalities": [
         "image",
-        "text",
-        "video"
+        "text"
       ],
       "output_modalities": [
         "text"
       ],
-      "output_limit": 131072,
+      "output_limit": 32000,
       "reasoning": "native",
       "reasoning_control": "effort_selection",
       "reasoning_efforts": [
@@ -2270,19 +2248,22 @@
         "xiaomi/mimo-v2.6-flash-20260921",
         "xiaomi: mimo-v2.6-flash"
       ],
-      "context_window": 1048576,
+      "context_window": 1048000,
       "input_modalities": [
         "audio",
         "image",
-        "text",
-        "video"
+        "text"
       ],
       "output_modalities": [
         "text"
       ],
-      "output_limit": 131072,
+      "output_limit": 32000,
       "reasoning": "native",
-      "reasoning_control": "fixed_on"
+      "reasoning_control": "toggle",
+      "reasoning_efforts": [
+        "none",
+        "high"
+      ]
     },
     {
       "key": "mimo-v2.6-pro",
@@ -2290,19 +2271,22 @@
         "xiaomi/mimo-v2.6-pro-20260921",
         "xiaomi: mimo-v2.6-pro"
       ],
-      "context_window": 1048576,
+      "context_window": 1048000,
       "input_modalities": [
         "audio",
         "image",
-        "text",
-        "video"
+        "text"
       ],
       "output_modalities": [
         "text"
       ],
-      "output_limit": 131072,
+      "output_limit": 32000,
       "reasoning": "native",
-      "reasoning_control": "fixed_on"
+      "reasoning_control": "toggle",
+      "reasoning_efforts": [
+        "none",
+        "high"
+      ]
     },
     {
       "key": "minimax-m2.5",
@@ -3178,13 +3162,11 @@
       "output_modalities": [
         "text"
       ],
-      "output_limit": 65536,
       "reasoning": "native",
-      "reasoning_control": "effort_selection",
+      "reasoning_control": "toggle",
       "reasoning_efforts": [
         "none",
-        "high",
-        "max"
+        "adaptive"
       ]
     },
     {
@@ -3253,12 +3235,9 @@
       ],
       "output_limit": 131072,
       "reasoning": "native",
-      "reasoning_control": "effort_selection",
+      "reasoning_control": "fixed_on",
       "reasoning_efforts": [
-        "none",
-        "low",
-        "medium",
-        "xhigh"
+        "adaptive"
       ]
     },
     {
@@ -3275,12 +3254,9 @@
       ],
       "output_limit": 131072,
       "reasoning": "native",
-      "reasoning_control": "effort_selection",
+      "reasoning_control": "fixed_on",
       "reasoning_efforts": [
-        "none",
-        "low",
-        "medium",
-        "xhigh"
+        "adaptive"
       ]
     },
     {
@@ -3434,7 +3410,7 @@
       "output_modalities": [
         "text"
       ],
-      "output_limit": 65536,
+      "output_limit": 64000,
       "reasoning": "native",
       "reasoning_control": "effort_selection",
       "reasoning_efforts": [

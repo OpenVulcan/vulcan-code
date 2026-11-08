@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "commandcode",
-  "revision": 12,
-  "published_at": "2026-11-01T05:48:02Z",
+  "revision": 13,
+  "published_at": "2026-11-08T04:27:33Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -17,7 +17,7 @@
   },
   "display": {
     "name": "CommandCode",
-    "category": "relay",
+    "category": "cloud_maa_s",
     "directory_rank": 230,
     "credential_directory_visibility": "pinned_onboarding",
     "promotion": {

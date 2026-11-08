@@ -32,6 +32,14 @@ test('official manifests own a shared identifier before relays', () => {
   assert.deepEqual(records[0].aliases, ['model-x']);
 });
 
+test('cloud platforms own a shared identifier before relays', () => {
+  const records = providerRecords([
+    { fileName: 'a-relay.json', manifest: manifest('relay', chat, [exact('vendor/model-y', { context_limit: 1 })]) },
+    { fileName: 'z-cloud.json', manifest: manifest('cloud_maa_s', chat, [exact('vendor/model-y', { context_limit: 2 })]) },
+  ]);
+  assert.deepEqual(records.map((record) => [record.key, record.context_window]), [['vendor/model-y', 2]]);
+});
+
 test('a rule field overrides the default by presence and catalog models use the best rule', () => {
   const defaults = { ...chat, reasoning: 'native', reasoning_efforts: ['low', 'high'], output_resources: [] };
   const rules = [

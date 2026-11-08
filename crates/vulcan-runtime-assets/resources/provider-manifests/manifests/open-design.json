@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "open-design",
-  "revision": 8,
-  "published_at": "2026-11-07T11:32:02Z",
+  "revision": 9,
+  "published_at": "2026-11-08T04:27:33Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -24,7 +24,7 @@
   },
   "display": {
     "name": "OpenDesign",
-    "category": "relay",
+    "category": "cloud_maa_s",
     "directory_rank": 250,
     "credential_directory_visibility": "pinned_onboarding",
     "promotion": {

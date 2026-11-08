@@ -3,7 +3,7 @@
 //
 // Usage: node scripts/sync-common-model-capabilities.mjs [--offline] [--source <file|url>] [--check] [--dry-run]
 // 1. Every exact manifest model rule and every static catalog model becomes one record; official
-//    manifests own a shared identifier before relays.
+//    manifests own a shared identifier before cloud platforms, and cloud platforms before relays.
 // 2. The records are cross referenced with OpenRouter's public model list, which only fills fields a
 //    manifest leaves empty and contributes aliases; upstream-only models are excluded.
 // 3. --offline cross references the published catalog instead, so adding a manifest model offline
@@ -114,15 +114,20 @@ function bestRule(rules, key) {
   return best;
 }
 
+// CATEGORY_AUTHORITY ranks manifest categories for shared model facts; a lower tier wins. Cloud
+// platforms are more authoritative than relays, which resell upstream access and carry risk.
+// CATEGORY_AUTHORITY 为公共模型事实给清单类别排序，层级越低越优先。云平台比中转更权威，中转转售上游访问且存在风险。
+const CATEGORY_AUTHORITY = { official: 0, cloud_maa_s: 1, relay: 2, unclassified: 2 };
+
 // providerRecords inventories every exact rule and static catalog model; the first owner of a key wins.
 // providerRecords 盘点每条精确规则与静态目录模型；首个持有某键的清单胜出。
 //
-// manifests is a list of { fileName, manifest }. Official providers own shared model facts before
-// relays, then file names decide.
-// manifests 为 { fileName, manifest } 列表。官方供应商先于中转持有公共模型事实，其次按文件名。
+// manifests is a list of { fileName, manifest }. Official providers own shared model facts first,
+// then cloud platforms, then relays and unclassified ones; file names decide within a tier.
+// manifests 为 { fileName, manifest } 列表。官方供应商最先持有公共模型事实，其次云平台，再次中转与未分类；同层按文件名。
 export function providerRecords(manifests) {
   const ordered = manifests
-    .map((source) => ({ ...source, authority: source.manifest.display?.category === 'official' ? 0 : 1 }))
+    .map((source) => ({ ...source, authority: CATEGORY_AUTHORITY[source.manifest.display?.category] ?? CATEGORY_AUTHORITY.relay }))
     .sort((left, right) => left.authority - right.authority || (left.fileName < right.fileName ? -1 : 1));
   const records = [];
   const keys = new Set();

@@ -164,11 +164,12 @@ pub enum ManifestCategory {
     /// An official model-provider endpoint.
     /// 模型厂商官方入口。
     Official,
-    /// An official cloud or MaaS service.
-    /// 官方云服务或 MaaS 服务。
+    /// An established platform that runs its own multi-model service: a cloud MaaS, a model
+    /// aggregator or a coding tool's own subscription.
+    /// 运营自有多模型服务的权威平台：云厂商 MaaS、模型聚合平台或编程工具自带订阅。
     CloudMaaS,
-    /// A third-party relay or aggregation service.
-    /// 第三方中转或聚合服务。
+    /// A third-party relay that resells upstream access and carries counterparty risk.
+    /// 转售上游访问、存在对方风险的第三方中转服务。
     Relay,
 }
 
