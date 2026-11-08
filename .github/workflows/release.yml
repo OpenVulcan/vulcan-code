@@ -355,9 +355,11 @@ jobs:
           ./target/release/vulcan-release-tool record --objects "$out/objects" --components "$out/components.json" `
             --version $env:VERSION --platform $env:PLATFORM --install-epoch $env:INSTALL_EPOCH --tree $root
           if ($LASTEXITCODE -ne 0) { throw 'record failed' }
-      # Inno Setup signs the setup program and its uninstaller through the sign command, file by file.
-      # Inno Setup 通过签名命令逐个为安装程序及其卸载程序签名。
-      - name: Compile and sign the installer
+      # Inno Setup signs the installer, the update package and their uninstaller through the sign command, file
+      # by file; the update package is the in-app update across install epochs (scripts/windows-installer.mjs).
+      # Inno Setup 通过签名命令逐个为安装程序、更新包及其卸载程序签名；更新包用于跨安装纪元的应用内更新
+      # （scripts/windows-installer.mjs）。
+      - name: Compile and sign the installer and update package
         env:
           CERTUM_TOTP_EMAIL: ${{ secrets.CERTUM_TOTP_EMAIL }}
           CERTUM_TOTP_SECRET: ${{ secrets.CERTUM_TOTP_SECRET }}
@@ -467,8 +469,13 @@ jobs:
               --released-at "$released_at" --key-env UPDATE_SIGNING_KEY --notes "$RUNNER_TEMP/notes.json"
             # The previous release lets the in-app updater walk back through every skipped version's notes.
             [ -n "$PREVIOUS_VERSION" ] && set -- "$@" --previous-version "$PREVIOUS_VERSION"
-            for installer in "$artifacts/release-$platform/downloads/"*.exe; do
+            for installer in "$artifacts/release-$platform/downloads/"*-setup.exe; do
               [ -e "$installer" ] && set -- "$@" --download "inno=$installer"
+            done
+            # The Inno update package lets an in-app update across install epochs reuse unchanged files.
+            # Inno 更新包使跨安装纪元的应用内更新能够复用未变化的文件。
+            for package in "$artifacts/release-$platform/downloads/"*-update.exe; do
+              [ -e "$package" ] && set -- "$@" --inno-update "$package"
             done
             "$tool" manifest "$@"
             # A resumed run keeps the manifest it already published, which the CDN caches for a year; the
@@ -508,7 +515,9 @@ jobs:
           node scripts/release-package.mjs checksums "$assets"
           node scripts/release-signing.mjs gpg "$assets/SHA256SUMS" "$RUNNER_TEMP/gpg-evidence"
           cp "$RUNNER_TEMP/gpg-evidence/SHA256SUMS.asc" "$assets/"
-          cp "$RUNNER_TEMP"/artifacts/release-windows-x64/downloads/*.exe "$assets/"
+          # The update package only finishes an in-app update, so the GitHub Release offers the installer alone.
+          # 更新包只用于完成应用内更新，因此 GitHub Release 只提供安装程序。
+          cp "$RUNNER_TEMP"/artifacts/release-windows-x64/downloads/*-setup.exe "$assets/"
           ls -l "$assets"
       - name: Draft the GitHub Release
         env:

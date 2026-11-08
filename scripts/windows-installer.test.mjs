@@ -2,7 +2,9 @@
 // 基于合成布局验证 Windows 安装程序脚本的生成。
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { innoSignToolName, installLayout, installerAssetName, innoSetupScript } from './windows-installer.mjs';
+import {
+  innoSignToolName, installLayout, installerAssetName, installRecordFile, innoSetupScript, updateAssetName,
+} from './windows-installer.mjs';
 
 // windowsLayout is the minimal release layout the installer reads.
 // windowsLayout 是安装程序读取的最小正式版布局。
@@ -158,4 +160,56 @@ test('an interactive install offers a launch and a relaunch-requesting silent in
   assert.equal(relaunch.Filename, launcher);
   assert.equal(relaunch.Check, 'RelaunchRequested');
   assert.match(innoSetupScript(options()), /function RelaunchRequested: Boolean;/);
+});
+
+// procedure returns the body of one [Code] routine, from its header to the next routine.
+// procedure 返回一个 [Code] 例程的正文，从其声明到下一个例程。
+function procedure(script, header) {
+  const start = script.indexOf(header);
+  assert.notEqual(start, -1, `missing ${header}`);
+  const rest = script.slice(start + header.length);
+  const end = rest.search(/^(?:procedure|function) /m);
+  return end === -1 ? rest : rest.slice(0, end);
+}
+
+test('the update package is named as the release manifest accepts for its innoUpdate', () => {
+  assert.equal(updateAssetName(windowsLayout, '1.2.3'), 'VulcanCode-1.2.3-windows-x64-update');
+  const setup = sectionLines(innoSetupScript(options(windowsLayout, { update: true })), 'Setup');
+  assert.ok(setup.includes('OutputBaseFilename=VulcanCode-1.2.3-windows-x64-update'));
+});
+
+test('the update package carries the launchers and setup program but no version files', () => {
+  const update = innoSetupScript(options(windowsLayout, { update: true, setupProgram: 'D:\\setup\\setup.exe' }));
+  const files = sectionLines(update, 'Files').map(parameters);
+  assert.ok(files.every(file => !file.DestDir.startsWith('{app}\\versions')));
+  const destinations = files.map(file => `${file.DestDir}\\${file.DestName}`).sort();
+  assert.deepEqual(destinations, [
+    `{app}\\${installLayout.cli}\\${installLayout.forwarder}`, `{app}\\${installLayout.launcher}`,
+    `{app}\\${installLayout.setup}\\${installLayout.setupProgram}`,
+  ].sort());
+});
+
+test('the update package keeps the installer identity, integration and uninstall entries', () => {
+  const full = innoSetupScript(options());
+  const update = innoSetupScript(options(windowsLayout, { update: true }));
+  const appId = script => sectionLines(script, 'Setup').find(line => line.startsWith('AppId='));
+  assert.equal(appId(update), appId(full));
+  for (const section of ['Tasks', 'InstallDelete', 'Icons', 'Registry', 'Run', 'UninstallDelete']) {
+    assert.deepEqual(sectionLines(update, section), sectionLines(full, section), section);
+  }
+  assert.equal(/CurrentJson = '(.*)';/.exec(update)?.[1], /CurrentJson = '(.*)';/.exec(full)?.[1]);
+});
+
+test('the update package refuses a root without the assembled version and never moves it aside', () => {
+  const prepare = header => procedure(header, 'function PrepareToInstall(var NeedsRestart: Boolean): String;');
+  const update = prepare(innoSetupScript(options(windowsLayout, { update: true })));
+  // The refusal comes before any launcher is renamed, so a refused run changes nothing.
+  // 拒绝发生在任何启动器改名之前，因此被拒绝的运行不做任何改动。
+  const check = update.indexOf(`FileExists(VersionDir + '\\${installRecordFile}')`);
+  assert.notEqual(check, -1);
+  assert.ok(check < update.indexOf('RenameFile(Targets[I]'));
+  assert.ok(!update.includes('RenameFile(VersionDir'));
+  const full = prepare(innoSetupScript(options()));
+  assert.ok(full.includes('RenameFile(VersionDir'));
+  assert.ok(!full.includes(installRecordFile));
 });

@@ -15,7 +15,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use vulcan_install_core::FormatError;
 use vulcan_install_core::assemble::Assembly;
 use vulcan_install_core::fetch::{Downloader, Route};
 use vulcan_install_core::index::{ComponentIndex, IndexEntry};
@@ -24,7 +23,7 @@ use vulcan_install_core::install_root::{
     STARTUP_TRIAL_FILE, SetupFailure, StartupTrial, UPDATES_DIR,
 };
 use vulcan_install_core::layout::installer_key;
-use vulcan_install_core::manifest::{DownloadKind, ReleaseManifest};
+use vulcan_install_core::manifest::{DownloadKind, InnoUpdate, ReleaseManifest};
 use vulcan_install_core::names::{Channel, ReleaseVersion};
 use vulcan_install_core::record::{InstallRecord, RECORD_FILE_NAME};
 use vulcan_install_core::repair::prepare_repair;
@@ -32,6 +31,7 @@ use vulcan_install_core::signing::BUILT_IN_KEYS;
 use vulcan_install_core::update::{
     find_update, read_indexes, read_manifest, read_skipped_release_notes,
 };
+use vulcan_install_core::{FormatError, Sha256Digest};
 use vulcan_service_api::{
     AppUpdateActivity, AppUpdateCheckInterval, AppUpdateDesktopProfile, AppUpdateError,
     AppUpdateKind, AppUpdateOffer, AppUpdateOperation, AppUpdateProgress, AppUpdateReleaseNotes,
@@ -171,6 +171,9 @@ enum Method {
     /// Assembled next to the running version; the setup program makes it current on restart.
     /// 在正在运行的版本旁组装；重启时由安装器设为当前版本。
     Setup,
+    /// Assembled next to the running version; the Inno update package makes it current on restart.
+    /// 在正在运行的版本旁组装；重启时由 Inno 更新包设为当前版本。
+    InnoUpdate,
     /// The full Windows installer runs on restart.
     /// 重启时运行完整的 Windows 安装包。
     Installer,
@@ -201,16 +204,22 @@ struct Situation {
     /// The version publishes a full Windows installer.
     /// 该版本发布了完整的 Windows 安装包。
     has_installer: bool,
+    /// The version publishes the Inno update package.
+    /// 该版本发布了 Inno 更新包。
+    has_update_package: bool,
 }
 
 /// Chooses how a version installs. Assembly reuses every file the running version already has by
 /// its digest, so it is preferred whenever the root can be finished without a full installer: the
-/// same epoch is switched at once; across epochs the setup program finishes the roots it owns, and
-/// a root no installer made has nothing outside its versions to refresh. Only a Windows root the
-/// Inno installer made needs that installer, since only it rewrites its own registration.
+/// same epoch is switched at once; across epochs the setup program finishes the roots it owns, a
+/// root no installer made has nothing outside its versions to refresh, and on a Windows root the
+/// Inno installer made the Inno update package finishes it, since only Inno rewrites its own
+/// registration. The full installer remains only for a Windows root that cannot be assembled or a
+/// version without the update package.
 /// 选择版本的安装方式。组装按摘要复用正在运行版本已有的每个文件，因此只要根目录无需完整安装包即可完成就
-/// 优先组装：同一纪元立即切换；跨纪元时安装器完成它拥有的根目录，而不由安装程序创建的根目录在版本之外没有
-/// 需要刷新的内容。只有 Inno 安装包创建的 Windows 根目录需要该安装包，因为只有它能改写自身的注册信息。
+/// 优先组装：同一纪元立即切换；跨纪元时安装器完成它拥有的根目录，不由安装程序创建的根目录在版本之外没有
+/// 需要刷新的内容，Inno 安装包创建的 Windows 根目录由 Inno 更新包完成，因为只有 Inno 能改写自身的注册
+/// 信息。完整安装包只留给无法组装的 Windows 根目录或没有更新包的版本。
 fn install_method(situation: Situation) -> Method {
     let Situation {
         same_epoch,
@@ -219,6 +228,7 @@ fn install_method(situation: Situation) -> Method {
         setup_program_present,
         windows,
         has_installer,
+        has_update_package,
     } = situation;
     if components_present && same_epoch {
         Method::Switch
@@ -229,7 +239,9 @@ fn install_method(situation: Situation) -> Method {
             Method::Manual
         }
     } else if windows {
-        if has_installer {
+        if components_present && has_update_package {
+            Method::InnoUpdate
+        } else if has_installer {
             Method::Installer
         } else {
             Method::Manual
@@ -442,6 +454,9 @@ struct Offer {
     /// The channel that offered it.
     /// 提供它的通道。
     channel: Channel,
+    /// How it installs on this root; never [`Method::Manual`] for an installable offer.
+    /// 它在本根目录上的安装方式；可安装的提议绝不为 [`Method::Manual`]。
+    method: Method,
 }
 
 /// A version waiting for a restart.
@@ -964,43 +979,70 @@ impl Inner {
     }
 
     /// Downloads the offered version: assembles it next to the running one and makes it current,
-    /// or downloads and verifies its installer.
-    /// 下载所提供的版本：在正在运行版本旁组装并设为当前版本，或下载并校验其安装包。
+    /// assembles it for the setup program or the Inno update package to finish, or downloads and
+    /// verifies the full installer.
+    /// 下载所提供的版本：在正在运行版本旁组装并设为当前版本；组装后交由安装器或 Inno 更新包完成；或下载并
+    /// 校验完整安装包。
     fn download(
         &self,
         installed: &Installed,
         downloader: &mut Downloader,
     ) -> Result<(), FormatError> {
-        let (public, manifest, indexes, channel) = {
+        let (method, manifest, indexes, channel) = {
             let state = self.lock();
             let offer = state
                 .offer
                 .as_ref()
                 .ok_or_else(|| invalid("no newer version was found"))?;
             (
-                offer.public.clone(),
+                offer.method,
                 offer.manifest.clone(),
                 offer.indexes.clone(),
                 offer.channel,
             )
         };
-        let apply = match public.kind {
-            AppUpdateKind::Full => {
+        let apply = match method {
+            Method::Installer => {
                 Apply::Installer(self.download_installer(installed, downloader, &manifest)?)
             }
-            AppUpdateKind::Incremental => {
-                self.assemble(installed, downloader, &manifest, indexes, true)?;
+            Method::Switch => {
+                self.assemble(installed, downloader, &manifest, indexes, true, 0)?;
                 Apply::Switched
             }
-            AppUpdateKind::Setup => {
+            Method::Setup => {
                 if !installed.root.setup_program().is_file() {
                     return Err(invalid(
                         "the setup program of this installation is missing; run `vulcan-code-setup update`",
                     ));
                 }
-                self.assemble(installed, downloader, &manifest, indexes, false)?;
+                self.assemble(installed, downloader, &manifest, indexes, false, 0)?;
                 Apply::Setup(channel)
             }
+            Method::InnoUpdate => {
+                let package = update_package(installed, &manifest)
+                    .ok_or_else(|| invalid("this version publishes no Inno update package"))?;
+                // One progress covers the changed files and the package. An assembled version whose
+                // package then fails is reused by the next attempt, or pruned at the next start.
+                // 同一进度涵盖变化的文件与更新包。若组装后更新包失败，已组装的版本供下次尝试复用，或在下次启动时
+                // 清理。
+                self.assemble(
+                    installed,
+                    downloader,
+                    &manifest,
+                    indexes,
+                    false,
+                    package.size,
+                )?;
+                Apply::Installer(download_signed_installer(
+                    installed,
+                    downloader,
+                    &manifest,
+                    &package.file,
+                    package.size,
+                    package.sha256,
+                )?)
+            }
+            Method::Manual => return Err(invalid("this version cannot be installed here")),
         };
         let mut state = self.lock();
         state.ready = Some(Ready {
@@ -1012,9 +1054,10 @@ impl Inner {
     }
 
     /// Assembles `manifest` next to the running version and, when `switch` is set, makes it current
-    /// on trial; otherwise the setup program switches to it on restart.
-    /// 在正在运行的版本旁组装 `manifest`；`switch` 为真时将其设为试运行中的当前版本，否则由安装器在重启时
-    /// 切换到它。
+    /// on trial; otherwise the setup program or the Inno update package switches to it on restart.
+    /// The progress it starts also counts `then_bytes` the caller downloads next.
+    /// 在正在运行的版本旁组装 `manifest`；`switch` 为真时将其设为试运行中的当前版本，否则由安装器或 Inno
+    /// 更新包在重启时切换到它。它开始的进度同时计入调用方随后下载的 `then_bytes`。
     fn assemble(
         &self,
         installed: &Installed,
@@ -1022,16 +1065,19 @@ impl Inner {
         manifest: &ReleaseManifest,
         indexes: Vec<ComponentIndex>,
         switch: bool,
+        then_bytes: u64,
     ) -> Result<(), FormatError> {
         let root = &installed.root;
         let lock = root.lock()?;
-        if !root
+        if root
             .version_dir(&manifest.version)
             .join(RECORD_FILE_NAME)
             .is_file()
         {
+            self.track(downloader, then_bytes);
+        } else {
             let prepared = Assembly::new(root, &lock, manifest, indexes)?.prepare()?;
-            self.track(downloader, prepared.download_bytes());
+            self.track(downloader, prepared.download_bytes() + then_bytes);
             prepared.complete(downloader)?;
         }
         if !switch {
@@ -1065,24 +1111,15 @@ impl Inner {
                 "this version must be installed from the download page"
             })
         })?;
-        let target = installed
-            .root
-            .path()
-            .join(UPDATES_DIR)
-            .join("installers")
-            .join(&installer.file);
         self.track(downloader, installer.size);
-        downloader.download_file(
-            &installer_key(&manifest.version, &installer.file),
-            &target,
+        download_signed_installer(
+            installed,
+            downloader,
+            manifest,
+            &installer.file,
             installer.size,
             installer.sha256,
-        )?;
-        signer::verify_installer_signer(&target).map_err(|reason| FormatError::Download {
-            key: installer.file.clone(),
-            reason,
-        })?;
-        Ok(target)
+        )
     }
 
     /// Hashes every installed file and restores the missing or changed ones.
@@ -1175,6 +1212,7 @@ fn describe(
         );
     }
     let installer = full_installer(installed, &manifest);
+    let package = update_package(installed, &manifest);
     let method = install_method(Situation {
         same_epoch: manifest.install_epoch == installed.install_epoch,
         components_present: installed
@@ -1185,15 +1223,16 @@ fn describe(
         setup_program_present: installed.root.setup_program().is_file(),
         windows: installed.platform.is_windows(),
         has_installer: installer.is_some(),
+        has_update_package: package.is_some(),
     });
     let (kind, download_bytes, installable, indexes) = match method {
-        Method::Switch | Method::Setup => {
+        Method::Switch | Method::Setup | Method::InnoUpdate => {
             let indexes = read_indexes(downloader, &manifest, &installed.components)?;
             let bytes = incremental_bytes(installed, &indexes)?;
-            let kind = if method == Method::Setup {
-                AppUpdateKind::Setup
-            } else {
-                AppUpdateKind::Incremental
+            let (kind, bytes) = match (method, package) {
+                (Method::Switch, _) => (AppUpdateKind::Incremental, bytes),
+                (Method::InnoUpdate, Some(package)) => (AppUpdateKind::Setup, bytes + package.size),
+                _ => (AppUpdateKind::Setup, bytes),
             };
             (kind, bytes, true, indexes)
         }
@@ -1230,6 +1269,7 @@ fn describe(
         manifest,
         indexes,
         channel: found.channel,
+        method,
     })
 }
 
@@ -1246,6 +1286,49 @@ fn full_installer<'a>(
         .iter()
         .find(|download| download.kind == DownloadKind::Inno)
         .filter(|_| installed.platform.is_windows() && !installed.root.setup_owned())
+}
+
+/// The Inno update package the app may run here, under the same rule as [`full_installer`].
+/// 应用在此可运行的 Inno 更新包，规则与 [`full_installer`] 相同。
+fn update_package<'a>(
+    installed: &Installed,
+    manifest: &'a ReleaseManifest,
+) -> Option<&'a InnoUpdate> {
+    manifest
+        .inno_update
+        .as_ref()
+        .filter(|_| installed.platform.is_windows() && !installed.root.setup_owned())
+}
+
+/// Downloads the installer `file` of `manifest` into `updates\installers`, checked against the
+/// manifest's size and SHA-256, then verifies its Authenticode signer.
+/// 将 `manifest` 的安装包 `file` 下载到 `updates\installers`，按清单的大小与 SHA-256 校验，再校验其
+/// Authenticode 签名者。
+fn download_signed_installer(
+    installed: &Installed,
+    downloader: &mut Downloader,
+    manifest: &ReleaseManifest,
+    file: &str,
+    size: u64,
+    sha256: Sha256Digest,
+) -> Result<PathBuf, FormatError> {
+    let target = installed
+        .root
+        .path()
+        .join(UPDATES_DIR)
+        .join("installers")
+        .join(file);
+    downloader.download_file(
+        &installer_key(&manifest.version, file),
+        &target,
+        size,
+        sha256,
+    )?;
+    signer::verify_installer_signer(&target).map_err(|reason| FormatError::Download {
+        key: file.to_owned(),
+        reason,
+    })?;
+    Ok(target)
 }
 
 /// Bytes an incremental update downloads: the frames of contents the running version lacks.
@@ -1310,6 +1393,7 @@ mod tests {
             setup_program_present: false,
             windows: false,
             has_installer: false,
+            has_update_package: false,
         }
     }
 
@@ -1321,6 +1405,7 @@ mod tests {
                 setup_program_present: setup_owned,
                 windows,
                 has_installer: windows,
+                has_update_package: windows,
                 ..situation()
             });
             assert_eq!(
@@ -1334,11 +1419,15 @@ mod tests {
     #[test]
     fn a_new_epoch_on_a_setup_root_is_assembled_for_the_setup_program() {
         for windows in [false, true] {
+            // An Inno package is never run over a root the setup program owns.
+            // 绝不在安装器拥有的根目录上运行 Inno 安装包。
             let owned = Situation {
                 same_epoch: false,
                 setup_owned: true,
                 setup_program_present: true,
                 windows,
+                has_installer: windows,
+                has_update_package: windows,
                 ..situation()
             };
             assert_eq!(install_method(owned), Method::Setup);
@@ -1373,6 +1462,43 @@ mod tests {
             ..situation()
         };
         assert_eq!(install_method(unix), Method::Switch);
+    }
+
+    #[test]
+    fn a_new_epoch_on_an_inno_root_is_assembled_for_the_update_package() {
+        let inno = Situation {
+            same_epoch: false,
+            windows: true,
+            has_installer: true,
+            has_update_package: true,
+            ..situation()
+        };
+        assert_eq!(install_method(inno), Method::InnoUpdate);
+        assert_eq!(
+            install_method(Situation {
+                has_installer: false,
+                ..inno
+            }),
+            Method::InnoUpdate
+        );
+        // A version published without the package falls back to the full installer.
+        // 未发布更新包的版本退回完整安装包。
+        assert_eq!(
+            install_method(Situation {
+                has_update_package: false,
+                ..inno
+            }),
+            Method::Installer
+        );
+        // A root that cannot be assembled falls back to the full installer as well.
+        // 无法组装的根目录同样退回完整安装包。
+        assert_eq!(
+            install_method(Situation {
+                components_present: false,
+                ..inno
+            }),
+            Method::Installer
+        );
     }
 
     #[test]

@@ -83,11 +83,13 @@ pub enum AppUpdateKind {
     /// The install epoch changed, so the complete installer must run.
     /// 安装纪元已变化，必须运行完整安装包。
     Full,
-    /// The install epoch changed on a root the setup program owns: only changed files are
-    /// downloaded and the new version is assembled next to the current one, then on restart the
-    /// setup program switches to it and refreshes what it installed outside the version directory.
-    /// 安装器拥有的根目录上安装纪元已变化：只下载变化的文件并在当前版本旁组装新版本，重启时由安装器切换
-    /// 到它并刷新其在版本目录之外安装的内容。
+    /// The install epoch changed on a root an installer made: only changed files are downloaded
+    /// and the new version is assembled next to the current one, then on restart that installer
+    /// (the setup program, or the Inno update package on a Windows root the Inno installer made)
+    /// switches to it and refreshes what it installed outside the version directory.
+    /// 由安装程序创建的根目录上安装纪元已变化：只下载变化的文件并在当前版本旁组装新版本，重启时由该安装
+    /// 程序（安装器；Inno 安装包创建的 Windows 根目录上为 Inno 更新包）切换到它并刷新其在版本目录之外
+    /// 安装的内容。
     Setup,
 }
 
@@ -324,8 +326,9 @@ pub enum ServiceRestartReason {
     /// A new version is current; the service starts again from it.
     /// 新版本已成为当前版本；服务从它重新启动。
     Update,
-    /// The full installer runs and starts the app when it finishes.
-    /// 完整安装包运行，结束后启动应用。
+    /// The full installer, or the Inno update package over an assembled version, runs and starts
+    /// the app when it finishes.
+    /// 完整安装包（或在已组装版本上运行的 Inno 更新包）运行，结束后启动应用。
     Installer,
     /// The setup program finishes the assembled version once the service stopped, then the service
     /// starts again from the current version; clients wait for that service.

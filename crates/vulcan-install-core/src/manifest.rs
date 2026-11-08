@@ -95,6 +95,42 @@ pub struct Download {
     pub size: u64,
 }
 
+/// The signed Inno update package of a Windows release, stored at `installers/<version>/<file>`
+/// like the downloads. It installs no version files: an in-app update first assembles
+/// `versions\<version>` by digest, then this package switches to it and refreshes what only the
+/// Inno installer owns (the root launchers, the setup program, shortcuts and the uninstall entry).
+/// It is a field of its own, not a download kind, so manifests that carry it stay readable by
+/// clients released before it existed.
+/// Windows 版本的已签名 Inno 更新包，与下载文件一样存放在 `installers/<版本>/<文件>`。它不安装版本文件：
+/// 应用内更新先按摘要组装 `versions\<版本>`，再由此包切换到该版本，并刷新只属于 Inno 安装程序的内容
+/// （根目录启动器、安装器、快捷方式与卸载项）。它是独立字段而非下载类型，因此带有它的清单仍可被它出现
+/// 之前发布的客户端读取。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InnoUpdate {
+    /// File name below `installers/<version>/`; only [`InnoUpdate::file_name`] is accepted.
+    /// `installers/<版本>/` 下的文件名；只接受 [`InnoUpdate::file_name`]。
+    pub file: String,
+    /// SHA-256 of the file.
+    /// 文件的 SHA-256。
+    pub sha256: Sha256Digest,
+    /// Size of the file.
+    /// 文件大小。
+    pub size: u64,
+}
+
+impl InnoUpdate {
+    /// The only file name the update package of `version` may carry on `platform`; `None` where
+    /// the platform has no Inno installer. `scripts/windows-installer.mjs` (`updateAssetName`)
+    /// names the compiled package the same way.
+    /// `version` 的更新包在 `platform` 上唯一允许的文件名；平台没有 Inno 安装程序时为 `None`。
+    /// `scripts/windows-installer.mjs`（`updateAssetName`）以相同方式命名编译出的包。
+    pub fn file_name(version: &ReleaseVersion, platform: Platform) -> Option<String> {
+        platform
+            .is_windows()
+            .then(|| format!("VulcanCode-{version}-{platform}-update.exe"))
+    }
+}
+
 /// Everything one version publishes for one platform.
 /// 一个版本为一个平台发布的全部内容。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,6 +176,11 @@ pub struct ReleaseManifest {
     /// 在它出现之前发布的清单使回溯到此为止。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_version: Option<ReleaseVersion>,
+    /// The Inno update package, on Windows only; without it a new install epoch on an Inno root
+    /// falls back to the full installer.
+    /// Inno 更新包，仅 Windows；缺少它时，Inno 根目录上的新安装纪元退回完整安装包。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inno_update: Option<InnoUpdate>,
     /// The key that signed this manifest.
     /// 签署本清单的公钥。
     pub key_id: String,
@@ -260,6 +301,20 @@ impl ReleaseManifest {
                 ));
             }
         }
+        if let Some(update) = &self.inno_update {
+            if InnoUpdate::file_name(&self.version, self.platform).as_ref() != Some(&update.file) {
+                return invalid(format!(
+                    "Inno update package `{}` is not allowed for {} {}",
+                    update.file, self.version, self.platform
+                ));
+            }
+            if update.size == 0 || update.size > MAX_INSTALLER_BYTES {
+                return invalid(format!(
+                    "Inno update package `{}` size {} is outside 1..={MAX_INSTALLER_BYTES}",
+                    update.file, update.size
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -342,7 +397,16 @@ mod tests {
             downloads,
             min_setup_version: None,
             previous_version: None,
+            inno_update: None,
             key_id: "test-key".to_owned(),
+        }
+    }
+
+    fn inno_update(manifest: &ReleaseManifest) -> InnoUpdate {
+        InnoUpdate {
+            file: InnoUpdate::file_name(&manifest.version, manifest.platform).expect("Windows"),
+            sha256: Sha256Digest::of(b"update"),
+            size: 3,
         }
     }
 
@@ -417,6 +481,37 @@ mod tests {
         let mut empty = manifest(Platform::MacosX64);
         empty.downloads[0].size = 0;
         assert!(empty.validate().is_err());
+    }
+
+    #[test]
+    fn an_inno_update_package_belongs_to_its_windows_version() {
+        let mut windows = manifest(Platform::WindowsX64);
+        windows.inno_update = Some(inno_update(&windows));
+        let (document, signature, pointer) = signed(&windows);
+        let verified = ReleaseManifest::verify(&document, &signature, &test_keys(), &pointer)
+            .expect("verified");
+        assert_eq!(verified.inno_update, windows.inno_update);
+
+        let mut linux = manifest(Platform::LinuxX64);
+        linux.inno_update = Some(InnoUpdate {
+            file: "VulcanCode-0.1.3-linux-x64-update.exe".to_owned(),
+            ..inno_update(&windows)
+        });
+        assert!(linux.validate().is_err());
+
+        let mut wrong_version = windows.clone();
+        if let Some(update) = &mut wrong_version.inno_update {
+            update.file = "VulcanCode-0.1.2-windows-x64-update.exe".to_owned();
+        }
+        assert!(wrong_version.validate().is_err());
+
+        for size in [0, MAX_INSTALLER_BYTES + 1] {
+            let mut sized = windows.clone();
+            if let Some(update) = &mut sized.inno_update {
+                update.size = size;
+            }
+            assert!(sized.validate().is_err());
+        }
     }
 
     #[test]

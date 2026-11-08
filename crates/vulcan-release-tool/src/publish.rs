@@ -13,7 +13,7 @@ use vulcan_install_core::layout::{
 };
 use vulcan_install_core::limits::MAX_NOTES_BYTES;
 use vulcan_install_core::manifest::{
-    ComponentRef, Download, DownloadKind, NotesRef, ReleaseManifest,
+    ComponentRef, Download, DownloadKind, InnoUpdate, NotesRef, ReleaseManifest,
 };
 use vulcan_install_core::names::{
     Channel, ComponentName, PRODUCT, Platform, ReleaseVersion, SCHEMA_VERSION,
@@ -46,6 +46,9 @@ pub struct ManifestInput {
     /// Separately downloadable files.
     /// 可单独下载的文件。
     pub downloads: Vec<(DownloadKind, PathBuf)>,
+    /// The Inno update package, on Windows only.
+    /// Inno 更新包，仅 Windows。
+    pub inno_update: Option<PathBuf>,
     /// Oldest setup program that can install this version.
     /// 能安装此版本的最旧安装器版本。
     pub min_setup_version: Option<ReleaseVersion>,
@@ -81,22 +84,21 @@ pub fn write_manifest(
     };
     let mut downloads = Vec::with_capacity(input.downloads.len());
     for (kind, path) in &input.downloads {
-        let Some(file) = path.file_name().and_then(|name| name.to_str()) else {
-            bail!("{} has no usable file name", path.display());
-        };
-        let target = objects.join(installer_key(&input.version, file));
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::copy(path, &target).with_context(|| format!("copying {}", path.display()))?;
-        let (size, sha256) = hash_file(&target)?;
+        let (file, size, sha256) = copy_installer(objects, &input.version, path)?;
         downloads.push(Download {
             kind: *kind,
-            file: file.to_owned(),
+            file,
             sha256,
             size,
         });
     }
+    let inno_update = match &input.inno_update {
+        Some(path) => {
+            let (file, size, sha256) = copy_installer(objects, &input.version, path)?;
+            Some(InnoUpdate { file, sha256, size })
+        }
+        None => None,
+    };
     let manifest = ReleaseManifest {
         schema: SCHEMA_VERSION,
         product: PRODUCT.to_owned(),
@@ -109,6 +111,7 @@ pub fn write_manifest(
         downloads,
         min_setup_version: input.min_setup_version,
         previous_version: input.previous_version,
+        inno_update,
         key_id: key.key_id.to_owned(),
     };
     let document = manifest.to_document()?;
@@ -120,6 +123,27 @@ pub fn write_manifest(
         &sign_detached(&document, secret),
     )?;
     Ok(manifest)
+}
+
+/// Copies the installer at `path` to `installers/<version>/<its name>` below `objects` and returns
+/// its name, size and SHA-256; the manifest's validation then decides whether the name is allowed.
+/// 将 `path` 处的安装包复制到 `objects` 下的 `installers/<版本>/<其名称>`，返回名称、大小与 SHA-256；
+/// 名称是否允许由版本清单的校验决定。
+fn copy_installer(
+    objects: &Path,
+    version: &ReleaseVersion,
+    path: &Path,
+) -> anyhow::Result<(String, u64, Sha256Digest)> {
+    let Some(file) = path.file_name().and_then(|name| name.to_str()) else {
+        bail!("{} has no usable file name", path.display());
+    };
+    let target = objects.join(installer_key(version, file));
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::copy(path, &target).with_context(|| format!("copying {}", path.display()))?;
+    let (size, sha256) = hash_file(&target)?;
+    Ok((file.to_owned(), size, sha256))
 }
 
 /// Signs a pointer to the manifest already below `objects`, after verifying that manifest.

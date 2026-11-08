@@ -35,9 +35,13 @@
     切换并刷新它在版本目录之外安装的内容（见下文“经安装器完成”）。根目录缺少安装器程序或清单缺少已安装
     组件时不可由应用安装（`installable: false`、`setupManaged: true`），界面只提示运行
     `vulcan-code-setup update`。安装器拥有的根目录绝不运行 Inno 安装包，避免产生第二个卸载项并使安装器状态失真。
-  - 不归安装器所有的 Windows 根目录由 Inno 安装包创建，纪元升高或缺少组件时下载 Inno 安装包（`kind: full`，
-    SHA-256 来自签名清单，Authenticode 签名者须为发布证书）：只有它能改写自己的注册表、卸载项、快捷方式与根
-    启动器，因此这里无法复用已有文件，这是唯一下载完整安装包的情况。清单没有 Inno 安装包时不可由应用安装。
+  - 不归安装器所有的 Windows 根目录由 Inno 安装包创建，只有 Inno 能改写它自己的注册表、卸载项、快捷方式与根
+    启动器。纪元升高且清单含全部已安装组件与 **Inno 更新包**（清单字段 `innoUpdate`）时同为 `kind: setup`：
+    下载阶段先组装 `versions/<新版本>`（不切换、不写试运行标记），再下载更新包，下载量为变化的文件加更新包；
+    重启时按完整安装包的方式运行更新包（见下文“经 Inno 更新包完成”）。更新包与完整安装包一样，SHA-256 来自
+    签名清单，Authenticode 签名者须为发布证书；组装后更新包下载或校验失败时，已组装的版本留给下一次尝试复用，
+    或在下一次服务启动时清理。只有清单没有更新包（它出现之前发布的版本）或缺少已安装组件时才下载完整 Inno
+    安装包（`kind: full`）；两者都没有时不可由应用安装。
   - 不归任何安装程序所有的 Linux/macOS 根目录在版本目录之外没有需要刷新的内容，纪元升高时同增量更新；
     只有清单缺少已安装组件时才不可由应用安装，此时提供下载页 `https://openvulcan.com/download`。
 - 回退提示仍在时，提议的版本若正是启动失败的版本，仍可提议但标记 `previouslyFailed`；用户关闭提示后不再标记。
@@ -87,6 +91,13 @@
    `--install-user-service`。桌面端等待旧 Core 退出后继续等待下一个 Core（最多 15 分钟），再从稳定入口重新
    启动；TUI 与浏览器自动重连。此路径没有试运行标记，与 Inno 安装包相同。下载完成但未重启时组装的版本只在
    内存中就绪，下一次服务启动会按清理规则删除它。
+   **经 Inno 更新包完成**（`kind: setup` 且根目录不归安装器所有，事件 `reason` 为 `installer`）：与完整安装包
+   相同，桌面端只退出，更新包以 `INSTALLER_ARGUMENTS` 分离运行，结束后由 `RelaunchRequested` 启动应用。更新包
+   由 `scripts/windows-installer.mjs` 以同一模板、同一 AppId 生成，含根启动器、PATH 转发器、内置安装器与相同的
+   `[Icons]`、`[Registry]`、`[UninstallDelete]`、`[Run]`，但不含 `versions\<版本>`。它在任何改名之前检查
+   `versions\<版本>\.vulcan-install.json`，缺少即拒绝（静默运行时以 Inno 的准备失败退出，不做任何改动），
+   因此不能用于全新安装；它不把该版本目录移开，切换与旧版本清理同完整安装包（保留新版本与它替换的版本）。
+   Inno 以追加方式写卸载记录，卸载项与快捷方式因此仍归 Inno 管理。
 4. Windows 启动器每次桌面启动计一次尝试；`previous` 或试运行版本的服务可执行文件（各自 `runtime-layout.json`
    的 `serviceExecutable`）正在运行时本次既不计数也不回退，因为桌面端会复用该 Core，新版本并未被启动
    （运行判断依据 Windows 对运行中映像写访问的共享冲突，其他结果按未运行处理）；`attempts` 达到 `max_attempts` 而标记仍在时，把
@@ -125,7 +136,7 @@
   最新产品版本的 `minSetupVersion` 高于自身时更新，`--no-self-update` 跳过。替换后以相同参数加
   `--no-self-update` 重新运行。组装前仍按所装版本的 `minSetupVersion` 检查，不满足即停止。
 - **Inno 安装包**：产品发布在构建前下载 stable 安装器指针与 Windows 程序，经 `vulcan-release-tool setup-check`
-  校验后按原样装入 `{app}\setup\vulcan-code-setup.exe`（不再签名），卸载时删除；stable 安装器指针缺失或校验
+  校验后按原样装入完整安装包与 Inno 更新包的 `{app}\setup\vulcan-code-setup.exe`（不再签名），卸载时删除；stable 安装器指针缺失或校验
   失败时产品发布停止。
 - **安装选项**（实现权威 `args.rs`、`integrate.rs`）：所有平台都可选 GUI（`--gui`，Linux 无桌面环境时仍可安装，
   只是无法运行）、开始菜单/应用菜单（`--menu`）、桌面快捷方式（`--desktop-shortcut`）、PATH（`--path`）、用户服务
@@ -183,13 +194,20 @@
 - 试运行与回退标记的文件名、字段在 `install_root.rs` 与启动器 `trial.rs` 中各写一次（启动器只依赖
   `serde_json`），修改时两处同时改；尝试上限只在 `MAX_STARTUP_ATTEMPTS` 定义并随标记写出。
 - `/RELAUNCH=1` 在 `INSTALLER_ARGUMENTS` 与 `scripts/windows-installer.mjs` 的 `RelaunchRequested` 中成对出现。
+- Inno 更新包的文件名在 `vulcan-install-core` 的 `InnoUpdate::file_name` 与 `windows-installer.mjs` 的
+  `updateAssetName` 中各写一次，完整安装包的文件名同理在 `DownloadKind::allowed_files` 与 `installerAssetName`；
+  `release.yml` 按 `-setup.exe` 与 `-update.exe` 后缀把两者分别交给 `--download inno=` 与 `--inno-update`，
+  GitHub Release 只附带完整安装包。更新包是清单的独立可选字段而非下载类型，因为旧客户端会拒绝未知的下载
+  类型与文件名，却忽略未知字段；不得把它改为下载类型。安装记录文件名在 `RECORD_FILE_NAME` 与
+  `installRecordFile` 中各写一次。修改任一侧时同时修改另一侧。
 - 安装器程序名 `SETUP_PROGRAM` 只在 `install_root.rs` 定义，安装器 `integrate.rs` 重新导出它。`setup_command`
   依赖安装器 `update`/`install` 的 `--yes`、`--prefix`、`--channel` 选项，以及“版本目录已有安装记录时跳过下载”
   （安装器 `install.rs` 的 `assemble`）；修改这些行为时同时修改 `setup_command`。
 - 重启原因 `setup` 在 `ServiceRestartReason`、WebUI `ServiceRestartReason` 与桌面端 `update-restart.ts`
   中各写一次，修改时三处同时改。
 - 启动器、安装器模板、注册表、PATH、快捷方式或安装布局变化时递增 `product.json` 的 `installEpoch`
-  （方案第九节），旧安装由此走完整更新。安装器自身写入的快捷方式与注册表项随安装器版本发布，不触发
+  （方案第九节），旧安装由此走跨纪元更新（按上文 `install_method` 组装后交由安装器或 Inno 更新包完成，
+  必要时退回完整安装包）。安装器自身写入的快捷方式与注册表项随安装器版本发布，不触发
   `installEpoch`；运行布局新增可选字段（如 `desktopIdentity`）而启动器不校验其版本时同样不触发。
 - 运行布局的 `desktopIdentity` 由 `scripts/desktop-runtime.mjs` 从桌面端的通知身份常量写出，是安装器读取 AUMID 与
   通知 CLSID 的唯一来源；修改身份值时只改桌面端常量。

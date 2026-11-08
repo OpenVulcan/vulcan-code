@@ -85,6 +85,15 @@ pub fn verify_release(
             bail!("download `{}` differs from the manifest", download.file);
         }
     }
+    if let Some(update) = &manifest.inno_update {
+        let (size, sha256) = hash_file(&objects.join(installer_key(version, &update.file)))?;
+        if size != update.size || sha256 != update.sha256 {
+            bail!(
+                "Inno update package `{}` differs from the manifest",
+                update.file
+            );
+        }
+    }
     let indexes = read_indexes(objects, &manifest)?;
 
     let root = InstallRoot::new(install_root);
@@ -203,6 +212,7 @@ pub(crate) mod tests {
                 downloads: Vec::new(),
                 min_setup_version: None,
                 previous_version: None,
+                inno_update: None,
             },
             &SECRET,
             &keys(),
@@ -322,6 +332,7 @@ pub(crate) mod tests {
                 downloads: Vec::new(),
                 min_setup_version: None,
                 previous_version: None,
+                inno_update: None,
             },
             &[1; 32],
             &keys(),

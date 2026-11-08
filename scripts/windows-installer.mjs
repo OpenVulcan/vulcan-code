@@ -1,5 +1,5 @@
-// Package the verified Windows x64 release distribution into an unsigned Inno Setup installer.
-// 将已验证的 Windows x64 正式版发行物打包为未签名的 Inno Setup 安装程序。
+// Package the verified Windows x64 release distribution into its Inno Setup installer and update package.
+// 将已验证的 Windows x64 正式版发行物打包为 Inno Setup 安装程序与更新包。
 import { spawn } from 'node:child_process';
 import { access, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -24,6 +24,20 @@ const installerAppId = '4AA6A407-B39F-4AF7-9F9B-167D14D64368';
 export function installerAssetName(layout, version) {
   return `VulcanCode-${version}-${managedRuntimePlatformKey(layout)}-setup`;
 }
+
+// updateAssetName names the update package as the release manifest's `innoUpdate` must
+// (`InnoUpdate::file_name` in vulcan-install-core); the compiler appends `.exe`.
+// updateAssetName 按版本清单 `innoUpdate` 要求的名称（vulcan-install-core 的 `InnoUpdate::file_name`）
+// 为更新包命名；编译器会追加 `.exe`。
+export function updateAssetName(layout, version) {
+  return `VulcanCode-${version}-${managedRuntimePlatformKey(layout)}-update`;
+}
+
+// installRecordFile is the install record every complete version directory holds (`RECORD_FILE_NAME` in
+// vulcan-install-core): the release tool writes it into the tree, and an in-app assembly writes it last.
+// installRecordFile 是每个完整版本目录都有的安装记录（vulcan-install-core 的 `RECORD_FILE_NAME`）：发布工具
+// 将其写入发行树，应用内组装在最后写入它。
+export const installRecordFile = '.vulcan-install.json';
 
 // innoSignToolName names the sign tool a signed build passes to the compiler with `/S<name>=<command>`;
 // Inno Setup then signs the setup program and the uninstaller it embeds.
@@ -101,10 +115,17 @@ function desktopShortcutIdentity(identity) {
 // the former single-directory layout, so installing over that layout removes exactly those, never user data.
 // identity is the desktop executable's release notification identity. setupProgram, when given, is the verified
 // stable setup program to bundle. signed adds the sign tool directive.
+// update builds the update package instead: the same AppId, sections and [Code], without the version's files. An
+// in-app update across install epochs assembles versions\<version> by digest first and runs this package to switch
+// to it, so Inno still owns the launchers, shortcuts and uninstall entry. It refuses a root where that version is
+// not complete, and never moves that version aside or removes it.
 // 发行物安装为 versions\<版本>；启动器、PATH 转发器与 current.json 位于其旁。entries 是发行物的顶层名称，
 // 同时也是旧单目录布局的顶层发行文件，因此覆盖安装旧布局时只删除这些条目，绝不删除用户数据。identity 是
 // 桌面可执行文件的正式版通知身份。若给出 setupProgram，它是要内置的已校验 stable 安装器。signed 加入签名工具指令。
-export function innoSetupScript({ root, layout, version, entries, outputDir, icon, identity, setupProgram = null, signed = false }) {
+// update 改为生成更新包：AppId、各节与 [Code] 相同，但不含版本文件。跨安装纪元的应用内更新先按摘要组装
+// versions\<版本>，再运行此包切换到该版本，使启动器、快捷方式与卸载项仍归 Inno 管理。该版本不完整的根目录会被
+// 拒绝，且绝不将该版本移开或删除。
+export function innoSetupScript({ root, layout, version, entries, outputDir, icon, identity, setupProgram = null, signed = false, update = false }) {
   if (layout.platform !== 'win32' || layout.architecture !== 'x64') {
     throw new Error(`Only a Windows x64 distribution can be packaged; found ${layout.platform}-${layout.architecture}.`);
   }
@@ -133,6 +154,39 @@ export function innoSetupScript({ root, layout, version, entries, outputDir, ico
   const setupFile = setupProgram === null
     ? ''
     : `\nSource: "${issValue(setupProgram)}"; DestDir: "{app}\\${setup}"; DestName: "${installLayout.setupProgram}"; Flags: ignoreversion`;
+  // The update package installs no version files; the version it switches to was assembled by the app.
+  // 更新包不安装版本文件；它切换到的版本由应用组装。
+  const versionFiles = update
+    ? ''
+    : `Source: "${issValue(root)}\\*"; DestDir: "{app}\\${versionDir}"; Flags: ignoreversion recursesubdirs createallsubdirs\n`;
+  // The update package refuses a root without the complete version, before anything is renamed; the full
+  // installer instead moves a same-version directory aside, so a reinstall starts from a clean one.
+  // 更新包在任何改名之前拒绝缺少完整版本的根目录；完整安装包则将同版本目录移开，使重新安装从干净目录开始。
+  const versionCheck = update
+    ? `  // The update package carries no version files; it only finishes a version the app assembled.
+  if not FileExists(VersionDir + '\\${installRecordFile}') then
+  begin
+    Result := 'Vulcan Code ' + InstalledVersion + ' is not prepared in ' + ExpandConstant('{app}')
+      + '. This package only finishes an update started from Vulcan Code; use the full installer instead.';
+    Exit;
+  end;
+`
+    : '';
+  const repairAside = update
+    ? ''
+    : `  // A same-version reinstall starts from a clean directory; the old one is kept until the new one is complete.
+  if DirExists(VersionDir) then
+  begin
+    RepairAside := ExpandConstant('{app}\\${updates}\\') + InstalledVersion + '.reinstalling-'
+      + GetDateTimeString('yyyymmddhhnnsszzz', #0, #0);
+    ForceDirectories(ExpandConstant('{app}\\${updates}'));
+    if not RenameFile(VersionDir, RepairAside) then
+    begin
+      Log('Version ' + InstalledVersion + ' could not be moved aside; its files are overwritten in place.');
+      RepairAside := '';
+    end;
+  end;
+`;
   const shortcut = `Filename: "{app}\\${launcher}"; AppUserModelID: "${appUserModelId}"; AppUserModelToastActivatorCLSID: "${clsid}"`;
   const currentJson = JSON.stringify({ version, path: `${versions}\\${version}` });
   return `; Generated by scripts/windows-installer.mjs; do not edit.
@@ -157,7 +211,7 @@ WizardStyle=modern
 SetupIconFile=${issValue(icon)}
 UninstallDisplayIcon={app}\\${launcher}
 OutputDir=${issValue(outputDir)}
-OutputBaseFilename=${issValue(installerAssetName(layout, version))}
+OutputBaseFilename=${issValue((update ? updateAssetName : installerAssetName)(layout, version))}
 ${signed ? `SignTool=${innoSignToolName}\n` : ''}
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
@@ -169,8 +223,7 @@ Name: "addtopath"; Description: "Add vulcan-tui to PATH for the current user"; G
 ${legacy}
 
 [Files]
-Source: "${issValue(root)}\\*"; DestDir: "{app}\\${versionDir}"; Flags: ignoreversion recursesubdirs createallsubdirs
-${launcherFiles}${setupFile}
+${versionFiles}${launcherFiles}${setupFile}
 
 [Icons]
 Name: "{autoprograms}\\Vulcan Code"; ${shortcut}
@@ -281,26 +334,14 @@ var
   I: Integer;
 begin
   Result := '';
-  // Only a directory holding both of these was installed by the former single-directory layout.
+${versionCheck}  // Only a directory holding both of these was installed by the former single-directory layout.
   FormerLayout := FileExists(ExpandConstant('{app}\\runtime-layout.json'))
     and FileExists(ExpandConstant('{app}\\bin\\vulcan-code-service.exe'));
   // Leftovers of earlier installs go first, so nothing this run moves aside is deleted before it finishes.
   DeleteMatchingFiles(ExpandConstant('{app}'), '${launcher}.*.old');
   DeleteMatchingFiles(CliDir, '${forwarder}.*.old');
   DeleteMatchingDirs(ExpandConstant('{app}\\${updates}'), '*.reinstalling-*');
-  // A same-version reinstall starts from a clean directory; the old one is kept until the new one is complete.
-  if DirExists(VersionDir) then
-  begin
-    RepairAside := ExpandConstant('{app}\\${updates}\\') + InstalledVersion + '.reinstalling-'
-      + GetDateTimeString('yyyymmddhhnnsszzz', #0, #0);
-    ForceDirectories(ExpandConstant('{app}\\${updates}'));
-    if not RenameFile(VersionDir, RepairAside) then
-    begin
-      Log('Version ' + InstalledVersion + ' could not be moved aside; its files are overwritten in place.');
-      RepairAside := '';
-    end;
-  end;
-  SetArrayLength(Targets, 2);
+${repairAside}  SetArrayLength(Targets, 2);
   Targets[0] := ExpandConstant('{app}\\${launcher}');
   Targets[1] := CliDir + '\\${forwarder}';
   for I := 0 to GetArrayLength(Targets) - 1 do
@@ -527,8 +568,9 @@ begin
   if CurStep = ssPostInstall then
   begin
     Previous := CurrentVersion;
-    // The install record .vulcan-install.json arrived with the version's files: the release tool wrote it
-    // into the tree before compiling, so current.json only ever points at a recorded version.
+    // The install record ${installRecordFile} is in the version directory: the release tool wrote it into the
+    // tree before compiling, and the update package runs only where the app's assembly wrote it, so
+    // current.json only ever points at a recorded version.
     if not SwitchCurrentVersion then
     begin
       // The copied files stay and nothing is cleaned up: the still current version keeps working,
@@ -640,21 +682,25 @@ async function packageWindowsInstaller(outputOverride, signCommand, setupProgram
     path.join(repository, 'apps', 'vulcan-code-desktop', 'dist', 'gui', 'notification-identity-values.js'),
   ).href);
   const compiler = await ensureInnoSetup();
-  const script = innoSetupScript({
+  const common = {
     root, layout, version, outputDir,
     entries: (await readdir(root)).sort(),
     icon: path.join(repository, 'apps', 'vulcan-code-service', 'icons', 'icon.ico'),
     identity: resolveGuiNotificationIdentity(path.join(root, layout.desktopExecutable), 'win32'),
     setupProgram: setupProgram ?? null,
     signed: Boolean(signCommand),
-  });
-  // The generated script lives beside the setup program so a failed build can be inspected.
-  // 生成的脚本与安装程序放在一起，便于检查失败的构建。
-  const scriptPath = path.join(outputDir, `${installerAssetName(layout, version)}.iss`);
-  await writeFile(scriptPath, script);
-  console.log(`==> Compiling ${path.basename(scriptPath)} (${signCommand ? 'signed' : 'unsigned'})`);
-  await runInherited(compiler, ['/Qp', ...(signCommand ? [`/S${innoSignToolName}=${signCommand}`] : []), scriptPath]);
-  console.log(`Windows installer: ${path.join(outputDir, `${installerAssetName(layout, version)}.exe`)}`);
+  };
+  // The full installer and the update package come from one template and are signed by the same command.
+  // 完整安装包与更新包出自同一模板，并由同一命令签名。
+  for (const [update, name] of [[false, installerAssetName(layout, version)], [true, updateAssetName(layout, version)]]) {
+    // The generated script lives beside the setup program so a failed build can be inspected.
+    // 生成的脚本与安装程序放在一起，便于检查失败的构建。
+    const scriptPath = path.join(outputDir, `${name}.iss`);
+    await writeFile(scriptPath, innoSetupScript({ ...common, update }));
+    console.log(`==> Compiling ${path.basename(scriptPath)} (${signCommand ? 'signed' : 'unsigned'})`);
+    await runInherited(compiler, ['/Qp', ...(signCommand ? [`/S${innoSignToolName}=${signCommand}`] : []), scriptPath]);
+    console.log(`Windows ${update ? 'update package' : 'installer'}: ${path.join(outputDir, `${name}.exe`)}`);
+  }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
