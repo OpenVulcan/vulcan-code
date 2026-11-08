@@ -266,11 +266,27 @@ impl PlatformAssets {
 /// Returns the download staging root beneath one installer work root.
 /// 返回某个安装器工作根之下的下载暂存根。
 ///
-/// Every managed component stages under a versioned child of this root and wipes only that child
-/// before installing.
-/// 每个受管组件都在本根之下的版本化子目录中暂存，且安装前只清空该子目录。
+/// Every managed component stages under a versioned child of this root. A child whose archive still matches its
+/// checksum is installed again without a download; otherwise only that child is wiped and downloaded anew.
+/// 每个受管组件都在本根之下的版本化子目录中暂存。归档仍与其摘要一致的子目录无需下载即可再次安装；否则只清空该
+/// 子目录并重新下载。
 pub(crate) fn managed_runtime_download_root(work_root: &Path) -> PathBuf {
     work_root.join("downloads")
+}
+
+/// Returns true when `archive` and `checksum_file` from an earlier install are both present and the archive matches
+/// the digest that `digest_of` reads from the checksum file; any missing, unreadable or mismatching file means false.
+/// 当先前安装留下的 `archive` 与 `checksum_file` 都存在且归档与 `digest_of` 从摘要文件读出的摘要一致时返回 true；
+/// 任一文件缺失、不可读或不一致即返回 false。
+fn earlier_download_verifies(
+    archive: &Path,
+    checksum_file: &Path,
+    digest_of: impl Fn(&str) -> Result<String, String>,
+) -> bool {
+    fs::read_to_string(checksum_file)
+        .ok()
+        .and_then(|text| digest_of(&text).ok())
+        .is_some_and(|expected| archive.is_file() && verify_sha256(archive, &expected).is_ok())
 }
 
 /// Download, verify, extract, and atomically install the managed uv executable.
@@ -294,33 +310,35 @@ where
     // download_root 将可复用归档与最终安装隔离。
     let download_root = managed_runtime_download_root(request.work_root)
         .join(format!("uv-{}-{}", request.uv_version, request.platform));
-    prepare_clean_directory(&download_root)?;
     // archive_path stores the complete verified uv archive.
     // archive_path 保存完整且经过校验的 uv 归档。
     let archive_path = download_root.join(&assets.uv_asset);
-    download_file(
-        client,
-        &asset_url,
-        &archive_path,
-        "uv",
-        &format!("Downloading uv {}", request.uv_version),
-        3,
-        15,
-        progress,
-    )?;
     // checksum_path stores the official uv SHA-256 sidecar.
     // checksum_path 保存官方 uv SHA-256 旁路文件。
     let checksum_path = download_root.join(format!("{}.sha256", assets.uv_asset));
-    download_file(
-        client,
-        &format!("{asset_url}.sha256"),
-        &checksum_path,
-        "uv",
-        "Downloading the uv checksum file",
-        15,
-        16,
-        progress,
-    )?;
+    if !earlier_download_verifies(&archive_path, &checksum_path, parse_first_sha256) {
+        prepare_clean_directory(&download_root)?;
+        download_file(
+            client,
+            &asset_url,
+            &archive_path,
+            "uv",
+            &format!("Downloading uv {}", request.uv_version),
+            3,
+            15,
+            progress,
+        )?;
+        download_file(
+            client,
+            &format!("{asset_url}.sha256"),
+            &checksum_path,
+            "uv",
+            "Downloading the uv checksum file",
+            15,
+            16,
+            progress,
+        )?;
+    }
     emit_progress(
         progress,
         "verifying",
@@ -660,33 +678,37 @@ where
         "node-{}-{}",
         request.node_version, request.platform
     ));
-    prepare_clean_directory(&download_root)?;
     // archive_path stores the complete Node.js archive.
     // archive_path 保存完整 Node.js 归档。
     let archive_path = download_root.join(&assets.node_asset);
-    download_file(
-        client,
-        &asset_url,
-        &archive_path,
-        "node",
-        &format!("Downloading Node.js {}", request.node_version),
-        52,
-        72,
-        progress,
-    )?;
     // checksums_path stores the official Node.js checksum manifest.
     // checksums_path 保存官方 Node.js 校验清单。
     let checksums_path = download_root.join("SHASUMS256.txt");
-    download_file(
-        client,
-        &format!("{base_url}/SHASUMS256.txt"),
-        &checksums_path,
-        "node",
-        "Downloading the Node.js checksum list",
-        72,
-        73,
-        progress,
-    )?;
+    if !earlier_download_verifies(&archive_path, &checksums_path, |text| {
+        parse_named_sha256(text, &assets.node_asset)
+    }) {
+        prepare_clean_directory(&download_root)?;
+        download_file(
+            client,
+            &asset_url,
+            &archive_path,
+            "node",
+            &format!("Downloading Node.js {}", request.node_version),
+            52,
+            72,
+            progress,
+        )?;
+        download_file(
+            client,
+            &format!("{base_url}/SHASUMS256.txt"),
+            &checksums_path,
+            "node",
+            "Downloading the Node.js checksum list",
+            72,
+            73,
+            progress,
+        )?;
+    }
     emit_progress(
         progress,
         "verifying",
@@ -828,20 +850,24 @@ where
     // download_root 将包 tarball 与最终安装隔离。
     let download_root = managed_runtime_download_root(request.work_root)
         .join(format!("pnpm-{}", request.pnpm_version));
-    prepare_clean_directory(&download_root)?;
     // tarball_path stores the exact verified pnpm package tarball.
     // tarball_path 保存精确且经过校验的 pnpm 包 tarball。
     let tarball_path = download_root.join(format!("pnpm-{}.tgz", request.pnpm_version));
-    download_file(
-        client,
-        &metadata.dist.tarball,
-        &tarball_path,
-        "pnpm",
-        &format!("Downloading pnpm {}", request.pnpm_version),
-        84,
-        95,
-        progress,
-    )?;
+    // An earlier tarball is reused only when it matches the integrity just read from the registry.
+    // 先前的 tarball 只有与刚从注册表读取的完整性摘要一致时才复用。
+    if verify_sha512_base64(&tarball_path, expected_digest).is_err() {
+        prepare_clean_directory(&download_root)?;
+        download_file(
+            client,
+            &metadata.dist.tarball,
+            &tarball_path,
+            "pnpm",
+            &format!("Downloading pnpm {}", request.pnpm_version),
+            84,
+            95,
+            progress,
+        )?;
+    }
     emit_progress(
         progress,
         "verifying",
@@ -1832,6 +1858,39 @@ mod tests {
                 .expect_err("404 is not repeated")
                 .contains("404")
         );
+    }
+
+    /// Verify an earlier download is reused only when both files exist and the archive matches the checksum file.
+    /// 验证先前下载只有在两个文件都存在且归档与摘要文件一致时才会复用。
+    #[test]
+    fn earlier_downloads_are_reused_only_when_they_verify() {
+        let root = tempfile::tempdir().expect("temporary directory");
+        let archive = root.path().join("uv.zip");
+        let checksum = root.path().join("uv.zip.sha256");
+        assert!(!earlier_download_verifies(
+            &archive,
+            &checksum,
+            parse_first_sha256
+        ));
+        fs::write(&archive, b"archive").expect("write archive");
+        assert!(!earlier_download_verifies(
+            &archive,
+            &checksum,
+            parse_first_sha256
+        ));
+        let digest = sha256_file_hex(&archive).expect("archive digest");
+        fs::write(&checksum, format!("{digest}  uv.zip\n")).expect("write checksum");
+        assert!(earlier_download_verifies(
+            &archive,
+            &checksum,
+            parse_first_sha256
+        ));
+        fs::write(&archive, b"truncated").expect("rewrite archive");
+        assert!(!earlier_download_verifies(
+            &archive,
+            &checksum,
+            parse_first_sha256
+        ));
     }
 
     /// Verify only exact github.com release download URLs are split for the API asset endpoint.
