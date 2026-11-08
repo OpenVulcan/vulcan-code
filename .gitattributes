@@ -19,6 +19,8 @@
 /crates/vulcan-runtime-assets/resources/memory/**/*.md text eol=lf
 /crates/vulcan-runtime-assets/resources/memory/*.toml text eol=lf
 
-# The installer is published byte-for-byte as a release asset and run by sh; CRLF would break it.
-# 安装脚本按原字节作为发行资源发布并由 sh 执行；CRLF 会使其失效。
-/scripts/install.sh text eol=lf
+# Shell scripts run under sh, including ones sent to macOS and Linux machines from a Windows checkout (the
+# self-hosted runner scripts); CRLF would break them. The installer is also published byte-for-byte.
+# Shell 脚本由 sh 执行，包括从 Windows 检出发往 macOS 与 Linux 机器的脚本（自托管运行器脚本）；CRLF 会使其
+# 失效。安装脚本还按原字节发布。
+*.sh text eol=lf
