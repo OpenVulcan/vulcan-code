@@ -164,6 +164,8 @@ OAuth 测试保留双端点读取及余额失败时整体失败的行为。
 - 会话请求头：API Key 请求缺少 `x-opencode-session` 时返回 400 `MissingSessionID`，因此该请求头对两类
   凭据都是必需的。会话请求的值是会话 ID；VMM 后台请求使用产生该 VMM 命令的会话 ID
   （`session_source_id`），不属于任何会话的命令（如画像指令、清洗、维护）不发送该请求头。
+  会话标题生成使用其命名会话的 ID；设置页模型验证与专职提示词起草不属于会话，以本次请求的执行 ID
+  作为作用域（同时满足 Codex Responses Lite 对稳定 `cache_scope_id` 的要求）。
 
 ## 2026-11-07 目录同步与 Gemini 路由
 

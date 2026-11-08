@@ -328,10 +328,15 @@ pub(crate) async fn service_draft_dedicated_prompt(
         .as_ref()
         .map(|runtime| std::sync::Arc::clone(&runtime.configured_inference_service))
         .ok_or_else(|| String::from("Configured inference runtime is still starting."))?;
+    let execution_id = uuid::Uuid::new_v4().to_string();
     let execution_request = AiExecutionRequest {
         operation: AiOperation::ConversationRespond,
         model_id: selection.model.id.clone(),
-        cache_scope_id: None,
+        // The draft belongs to no session, so it is its own scope: providers that route by a
+        // session header or derive prefix identity from the cache scope reject a request without one.
+        // 起草不属于任何会话，因此以自身为作用域：按会话请求头路由或从缓存作用域派生前缀标识的
+        // 供应商会拒绝没有作用域的请求。
+        cache_scope_id: Some(execution_id.clone()),
         continuation: None,
         messages: vec![
             text_message(
@@ -364,7 +369,7 @@ pub(crate) async fn service_draft_dedicated_prompt(
             crate::configured_inference::ExactSelectionTextPurpose::DedicatedPromptDraft,
             &selection,
             execution_request,
-            uuid::Uuid::new_v4().to_string(),
+            execution_id,
             report.as_ref().map(|report| {
                 report as &crate::configured_inference::ExactSelectionTextProgress<'_>
             }),
