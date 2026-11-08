@@ -3,6 +3,7 @@ import {
   GlobalActions,
   WindowControls,
 } from "@/components/shell/app-chrome";
+import { NATIVE_WINDOW_BUTTONS } from "@/app/boot-startup-screen";
 import { shellClient } from "@/service/webui-service-runtime";
 import { useI18n, type LocaleCode } from "@/i18n";
 import { toast } from "@/ui-kit/primitives/toast";
@@ -31,6 +32,9 @@ interface WorkbenchShellChromeState {
   // showWindowControls reports whether the current runtime supports custom window controls.
   // showWindowControls 表示当前运行时是否支持自定义窗口控制。
   showWindowControls: boolean;
+  // nativeWindowButtons reports a desktop window whose operating system draws its own window buttons (macOS).
+  // nativeWindowButtons 表示操作系统自行绘制窗口按钮的桌面窗口（macOS）。
+  nativeWindowButtons: boolean;
   // windowDragRegionEnabled reports whether native titlebar dragging is safe for the current window state.
   // windowDragRegionEnabled 表示当前窗口状态下是否可以安全启用原生标题栏拖动。
   windowDragRegionEnabled: boolean;
@@ -61,6 +65,9 @@ export function useWorkbenchShellChrome({
   // showWindowControls enables the custom titlebar only inside the Tauri desktop shell.
   // showWindowControls 仅在 Tauri 桌面壳内启用自定义标题栏。
   const showWindowControls = shellClient.supportsWindowControls();
+  // nativeWindowButtons keeps the system buttons, with their tiling and full-screen menu, in place of the custom ones.
+  // nativeWindowButtons 保留系统按钮及其平铺与全屏菜单，代替自绘按钮。
+  const nativeWindowButtons = showWindowControls && NATIVE_WINDOW_BUTTONS;
   // isWindowMaximized tracks the current Tauri window maximize state for the titlebar button.
   // isWindowMaximized 跟踪当前 Tauri 窗口最大化状态，用于标题栏按钮。
   const [isWindowMaximized, setIsWindowMaximized] = React.useState(false);
@@ -170,7 +177,7 @@ export function useWorkbenchShellChrome({
   const shellChromeActions = (
     <div className="vk-stage-chrome" data-no-drag>
       <GlobalActions startup={startup} locale={locale} onChangeLocale={onChangeLocale} />
-      {showWindowControls ? (
+      {showWindowControls && !nativeWindowButtons ? (
         <WindowControls
           isMaximized={isWindowMaximized}
           onMaximizeToggle={toggleWindowMaximize}
@@ -183,6 +190,7 @@ export function useWorkbenchShellChrome({
   return {
     shellChromeActions,
     showWindowControls,
+    nativeWindowButtons,
     windowDragRegionEnabled,
     handleTitlebarDoubleClick,
   };

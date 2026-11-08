@@ -452,6 +452,7 @@ export function WorkbenchLayout(props: {
   const {
     shellChromeActions,
     showWindowControls,
+    nativeWindowButtons,
     windowDragRegionEnabled,
     handleTitlebarDoubleClick,
   } = useWorkbenchShellChrome({
@@ -1358,7 +1359,11 @@ export function WorkbenchLayout(props: {
     <ComposerAccountHostContext.Provider value={accountHostValue}>
     <DraftComposerContext.Provider value={draftComposerContext}>
     <ComposerMediaUploadProgressContext.Provider value={mediaUploadProgresses}>
-    <div className="vk-workbench" data-window={showWindowControls ? "native" : "browser"}>
+    <div
+      className="vk-workbench"
+      data-native-buttons={nativeWindowButtons ? "" : undefined}
+      data-window={showWindowControls ? "native" : "browser"}
+    >
       {floatingMediaUploadProgresses.length > 0 ? (
         <div className="media-upload-progress-stack">
           <React.Suspense fallback={<div role="status">{i18n.t("composer.attachment.processing")}</div>}>

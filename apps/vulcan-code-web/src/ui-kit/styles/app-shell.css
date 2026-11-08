@@ -34,6 +34,17 @@
 }
 .vk-rail-brand[data-tauri-drag-region] > * { pointer-events: none; }
 .vk-rail-brand > .vk-rail-logo { width: calc(var(--vk-u) * 6.5); height: calc(var(--vk-u) * 6.5); margin: 0; color: var(--vk-ink); }
+/* macOS draws its own window buttons over the top-left corner. They keep a fixed size whatever the interface
+ * scale, so the corner is reserved in pixels: the rail logo gives way to them, and the title strip content that
+ * starts beside the rail is pushed clear of them. */
+.vk-workbench[data-native-buttons] { --vk-native-buttons-w: 80px; }
+.vk-workbench[data-native-buttons] .vk-rail-brand > .vk-rail-logo { visibility: hidden; }
+.vk-workbench[data-native-buttons] .vk-sidebar-head > .vk-brand {
+  padding-left: max(0px, calc(var(--vk-native-buttons-w) - var(--vk-rail-w) - calc(var(--vk-u) * 3)));
+}
+.vk-workbench[data-native-buttons] .vk-shell[data-sidebar="closed"] .vk-stage > .vk-stage-head {
+  padding-left: max(calc(var(--vk-u) * 4), calc(var(--vk-native-buttons-w) - var(--vk-rail-w)));
+}
 .vk-rail-group[data-scroll] {
   flex: 1 1 auto;
   min-height: 0;
