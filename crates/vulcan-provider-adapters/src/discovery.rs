@@ -781,6 +781,17 @@ fn apply_resolved_capability_template(
         None => field.to_string(),
     };
     let declared = |field: &str| provenance.contains_key(field_key(field).as_str());
+    // A token limit inherited from the core list is a catalog fact; a limit the provider's live
+    // discovery reports for this exact route outranks it. Provider-declared limits still win.
+    // 继承自核心清单的 Token 上限是目录事实；供应商实时发现为该路线上报的上限优先于它。
+    // 供应商自身声明的上限仍然胜出。
+    let core_sourced = |field: &str| {
+        provenance
+            .get(field_key(field).as_str())
+            .is_some_and(|origin| {
+                origin.source == crate::provider_manifest::FieldSourceKind::CoreModel
+            })
+    };
     if declared("operations") {
         target.operations = template.operations.clone();
     }
@@ -811,10 +822,13 @@ fn apply_resolved_capability_template(
     if declared("reasoning_efforts") {
         target.reasoning_efforts = template.reasoning_efforts.clone();
     }
-    if declared("context_limit") {
+    if declared("context_limit")
+        && !(core_sourced("context_limit") && target.context_limit.is_some())
+    {
         target.context_limit = template.context_limit;
     }
-    if declared("output_limit") {
+    if declared("output_limit") && !(core_sourced("output_limit") && target.output_limit.is_some())
+    {
         target.output_limit = template.output_limit;
     }
     if declared("prompt_cache") {
@@ -2488,6 +2502,57 @@ mod tests {
             crate::provider_manifest::ManifestOwnership::System,
         )
         .expect("bundled deepseek manifest must compile")
+    }
+
+    /// Verifies a token limit inherited from the core yields to a discovered limit, while a
+    /// limit the provider rule declares still replaces discovery evidence.
+    /// 验证继承自核心的 Token 上限让位于已发现的上限，而供应商规则声明的上限仍替换发现证据。
+    #[test]
+    fn discovered_limits_outrank_core_limits_but_not_rule_limits() {
+        use crate::provider_manifest::core_models::tests::{
+            compile_against, deepseek_core, deepseek_manifest,
+        };
+        let discovered = |id: &str| ConnectionModel {
+            id: String::from(id),
+            display_name: String::from(id),
+            capabilities: ModelCapabilities {
+                context_limit: Some(42),
+                ..ModelCapabilities::default()
+            },
+            capability_evidence: Default::default(),
+            protocol_variants: BTreeMap::new(),
+            resolved_protocol_binding: None,
+        };
+        let mut manifest = deepseek_manifest();
+        let resolved = compile_against(&manifest, &deepseek_core()).expect("manifest must compile");
+        let mut model = discovered("deepseek-flash");
+        assert!(apply_manifest_model_rule(
+            &resolved,
+            "official-api",
+            None,
+            OPENAI_CHAT_PROFILE_ID,
+            &mut model,
+        ));
+        assert_eq!(model.capabilities.context_limit, Some(42));
+        assert_eq!(model.capabilities.output_limit, Some(100));
+
+        let rule = manifest["model_rules"]
+            .as_array_mut()
+            .expect("model_rules array")
+            .iter_mut()
+            .find(|rule| rule["core_model_ref"] == "deepseek-flash")
+            .expect("deepseek-flash rule");
+        rule["capabilities"]["context_limit"] = serde_json::json!(3000);
+        let resolved = compile_against(&manifest, &deepseek_core()).expect("manifest must compile");
+        let mut model = discovered("deepseek-flash");
+        assert!(apply_manifest_model_rule(
+            &resolved,
+            "official-api",
+            None,
+            OPENAI_CHAT_PROFILE_ID,
+            &mut model,
+        ));
+        assert_eq!(model.capabilities.context_limit, Some(3000));
     }
 
     /// Verifies manifest rules apply protocol-scoped provider-native tools.

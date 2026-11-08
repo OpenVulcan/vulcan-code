@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use vulcan_ai_contract::{ModelCapabilities, ModelParameterDefinition};
 
 use super::{
-    FieldSourceKind, ManifestCapabilityPatch, ProviderManifestV1, ResolvedRuleProvenance,
-    RuleMatcher,
+    CoreModelCatalog, FieldSourceKind, ManifestCapabilityPatch, ProviderManifestV1,
+    ResolvedRuleProvenance, RuleMatcher,
 };
 
 /// One resolved capability field's provenance.
@@ -22,6 +22,11 @@ pub struct ResolvedFieldProvenance {
     /// 值来自模型规则时的规则标识；来自供应商默认时为 `None`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rule_id: Option<String>,
+    /// Core model identity when the value came from a core entry; its `manifest_revision` is then
+    /// the core list revision.
+    /// 值来自核心条目时的核心模型身份；此时 `manifest_revision` 为核心清单修订号。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub core_model_id: Option<String>,
     /// Manifest revision that produced the value.
     /// 产生值的清单修订号。
     pub manifest_revision: u64,
@@ -46,6 +51,11 @@ pub struct ResolvedFieldOrigin {
     /// 可选精确规则标识。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rule_id: Option<String>,
+    /// Core model identity when the value came from a core entry; its `manifest_revision` is then
+    /// the core list revision.
+    /// 值来自核心条目时的核心模型身份；此时 `manifest_revision` 为核心清单修订号。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub core_model_id: Option<String>,
     /// Manifest revision that produced the overridden value.
     /// 产生被覆盖值的 Manifest 修订号。
     pub manifest_revision: u64,
@@ -62,6 +72,7 @@ impl ResolvedFieldProvenance {
         ResolvedFieldOrigin {
             source: self.source,
             rule_id: self.rule_id.clone(),
+            core_model_id: self.core_model_id.clone(),
             manifest_revision: self.manifest_revision,
             evidence_revision: self.evidence_revision.clone(),
         }
@@ -263,11 +274,17 @@ pub struct ResolvedRuleInstance {
 /// Expands every model rule into per-service-entry instances with inherited effective fields.
 /// 将每条模型规则展开为携带继承有效字段的按服务入口实例。
 ///
-/// Provider defaults form the inheritance base; entry overlays refine protocols; rules override
-/// the base for the entries they cover. Rules with an empty scope expand to every service entry.
-/// 供应商默认构成继承基座；入口覆盖细化协议；规则对其覆盖的入口覆盖基座。
-/// 无作用域的规则展开到全部服务入口。
-pub fn resolve_rule_instances(manifest: &ProviderManifestV1) -> Vec<ResolvedRuleInstance> {
+/// Provider defaults form the inheritance base; a referenced core model overlays its model-level
+/// facts; entry overlays refine protocols; rules override the base for the entries they cover.
+/// Rules with an empty scope expand to every service entry. `core` must already contain every
+/// `core_model_ref` the manifest declares; the compiler checks that closure first.
+/// 供应商默认构成继承基座；被引用的核心模型覆盖其模型级事实；入口覆盖细化协议；规则对其
+/// 覆盖的入口覆盖基座。无作用域的规则展开到全部服务入口。`core` 必须已包含清单声明的每个
+/// `core_model_ref`；编译器会先检查该闭包。
+pub fn resolve_rule_instances(
+    manifest: &ProviderManifestV1,
+    core: &CoreModelCatalog,
+) -> Vec<ResolvedRuleInstance> {
     let mut instances = Vec::new();
     for rule in manifest.model_rules.iter() {
         // The normalized target set is a rule-level fact; every expanded instance of the
@@ -281,7 +298,7 @@ pub fn resolve_rule_instances(manifest: &ProviderManifestV1) -> Vec<ResolvedRule
             .filter(|entry| rule.scope.covers_service_entry(&entry.service_entry_id))
             .collect();
         for entry in targets {
-            let mut instance = resolve_rule_for_entry(manifest, rule, entry);
+            let mut instance = resolve_rule_for_entry(manifest, core, rule, entry);
             instance.normalized_scope = normalized_scope.clone();
             instances.push(instance);
         }
@@ -293,6 +310,7 @@ pub fn resolve_rule_instances(manifest: &ProviderManifestV1) -> Vec<ResolvedRule
 /// 针对单个服务入口解析一条规则。
 fn resolve_rule_for_entry(
     manifest: &ProviderManifestV1,
+    core: &CoreModelCatalog,
     rule: &crate::provider_manifest::schema::ModelRule,
     entry: &crate::provider_manifest::schema::ManifestServiceEntry,
 ) -> ResolvedRuleInstance {
@@ -331,92 +349,76 @@ fn resolve_rule_for_entry(
     // overlays only the fields it declares, and each written field records its provenance.
     // 能力补丁按真实 presence 语义逐字段合并而不是整对象替换（方案 §6.4）：
     // 供应商默认构成基座，规则只覆盖其声明的字段，且每个被写入字段记录来源。
-    let default_source = FieldSourceKind::ProviderDefaults;
-    let (capabilities, capability_provenance) =
-        match (rule.capabilities.as_ref(), defaults.capabilities.as_ref()) {
-            (Some(rule_caps), Some(default_caps)) => {
-                let mut merged = ModelCapabilities::default();
-                let mut provenance = BTreeMap::new();
-                let mut written = Vec::new();
-                apply_capability_patch(&mut merged, default_caps, &mut written);
-                for field in written {
-                    provenance.insert(
-                        field.to_string(),
-                        ResolvedFieldProvenance {
-                            source: default_source,
-                            rule_id: None,
-                            manifest_revision: manifest.revision,
-                            evidence_revision: default_caps.evidence_revision.clone(),
-                            overridden_sources: Vec::new(),
-                        },
-                    );
-                }
-                let mut written = Vec::new();
-                apply_capability_patch(&mut merged, rule_caps, &mut written);
-                for field in written {
-                    let overridden = provenance
-                        .get(field)
-                        .cloned()
-                        .into_iter()
-                        .collect::<Vec<_>>();
-                    provenance.insert(
-                        field.to_string(),
-                        provenance_with_overridden(
-                            ResolvedFieldProvenance {
-                                source,
-                                rule_id: Some(rule.rule_id.clone()),
-                                manifest_revision: manifest.revision,
-                                evidence_revision: rule_caps.evidence_revision.clone(),
-                                overridden_sources: Vec::new(),
-                            },
-                            overridden,
-                        ),
-                    );
-                }
-                (Some(merged), provenance)
-            }
-            (Some(rule_caps), None) => {
-                let mut merged = ModelCapabilities::default();
-                let mut provenance = BTreeMap::new();
-                let mut written = Vec::new();
-                apply_capability_patch(&mut merged, rule_caps, &mut written);
-                for field in written {
-                    provenance.insert(
-                        field.to_string(),
-                        ResolvedFieldProvenance {
-                            source,
-                            rule_id: Some(rule.rule_id.clone()),
-                            manifest_revision: manifest.revision,
-                            evidence_revision: rule_caps.evidence_revision.clone(),
-                            overridden_sources: Vec::new(),
-                        },
-                    );
-                }
-                (Some(merged), provenance)
-            }
-            (None, default_caps) => match default_caps {
-                Some(default_caps) => {
-                    let mut merged = ModelCapabilities::default();
-                    let mut provenance = BTreeMap::new();
-                    let mut written = Vec::new();
-                    apply_capability_patch(&mut merged, default_caps, &mut written);
-                    for field in written {
-                        provenance.insert(
-                            field.to_string(),
-                            ResolvedFieldProvenance {
-                                source: default_source,
-                                rule_id: None,
-                                manifest_revision: manifest.revision,
-                                evidence_revision: default_caps.evidence_revision.clone(),
-                                overridden_sources: Vec::new(),
-                            },
-                        );
-                    }
-                    (Some(merged), provenance)
-                }
-                None => (None, BTreeMap::new()),
+    // Capability layers merge field-by-field with real presence semantics instead of replacing
+    // the whole object (plan §6.4): provider defaults form the base, the referenced core model
+    // overlays its model-level facts, and the rule overlays only the fields it declares. Each
+    // written field records its winner and every lower-precedence origin it replaced.
+    // 能力层按真实 presence 语义逐字段合并而不是整对象替换（方案 §6.4）：供应商默认构成基座，
+    // 被引用的核心模型覆盖其模型级事实，规则只覆盖其声明的字段。每个被写入字段记录胜者及其
+    // 替换的全部低优先级来源。
+    let core_entry = rule
+        .core_model_ref
+        .as_deref()
+        .and_then(|model_id| core.get(model_id));
+    let mut layers: Vec<(&ManifestCapabilityPatch, ResolvedFieldProvenance)> = Vec::new();
+    if let Some(default_caps) = defaults.capabilities.as_ref() {
+        layers.push((
+            default_caps,
+            ResolvedFieldProvenance {
+                source: FieldSourceKind::ProviderDefaults,
+                rule_id: None,
+                core_model_id: None,
+                manifest_revision: manifest.revision,
+                evidence_revision: default_caps.evidence_revision.clone(),
+                overridden_sources: Vec::new(),
             },
-        };
+        ));
+    }
+    if let Some(entry) = core_entry {
+        layers.push((
+            &entry.capabilities,
+            ResolvedFieldProvenance {
+                source: FieldSourceKind::CoreModel,
+                rule_id: None,
+                core_model_id: Some(entry.model_id.clone()),
+                manifest_revision: core.revision(),
+                evidence_revision: None,
+                overridden_sources: Vec::new(),
+            },
+        ));
+    }
+    if let Some(rule_caps) = rule.capabilities.as_ref() {
+        layers.push((
+            rule_caps,
+            ResolvedFieldProvenance {
+                source,
+                rule_id: Some(rule.rule_id.clone()),
+                core_model_id: None,
+                manifest_revision: manifest.revision,
+                evidence_revision: rule_caps.evidence_revision.clone(),
+                overridden_sources: Vec::new(),
+            },
+        ));
+    }
+    let (capabilities, capability_provenance) = if layers.is_empty() {
+        (None, BTreeMap::new())
+    } else {
+        let mut merged = ModelCapabilities::default();
+        let mut provenance: BTreeMap<String, ResolvedFieldProvenance> = BTreeMap::new();
+        for (patch, layer_provenance) in layers {
+            let mut written = Vec::new();
+            apply_capability_patch(&mut merged, patch, &mut written);
+            for field in written {
+                let mut winner = layer_provenance.clone();
+                if let Some(previous) = provenance.get(field) {
+                    winner.overridden_sources = previous.overridden_sources.clone();
+                    winner.overridden_sources.push(previous.winner_origin());
+                }
+                provenance.insert(field.to_string(), winner);
+            }
+        }
+        (Some(merged), provenance)
+    };
 
     // Protocol-scoped patches compile into concrete capability snapshots from the same
     // conservative base; every field written by a protocol patch records its provenance.
@@ -433,6 +435,7 @@ fn resolve_rule_for_entry(
                 ResolvedFieldProvenance {
                     source,
                     rule_id: Some(rule.rule_id.clone()),
+                    core_model_id: None,
                     manifest_revision: manifest.revision,
                     evidence_revision: patch.evidence_revision.clone(),
                     overridden_sources: Vec::new(),
@@ -470,6 +473,7 @@ fn resolve_rule_for_entry(
     let provider_provenance = || ResolvedFieldProvenance {
         source: FieldSourceKind::ProviderDefaults,
         rule_id: None,
+        core_model_id: None,
         manifest_revision: manifest.revision,
         evidence_revision: None,
         overridden_sources: Vec::new(),
@@ -477,6 +481,7 @@ fn resolve_rule_for_entry(
     let entry_provenance = || ResolvedFieldProvenance {
         source: FieldSourceKind::ServiceEntryOverride,
         rule_id: None,
+        core_model_id: None,
         manifest_revision: manifest.revision,
         evidence_revision: None,
         overridden_sources: Vec::new(),
@@ -484,6 +489,7 @@ fn resolve_rule_for_entry(
     let rule_provenance = || ResolvedFieldProvenance {
         source,
         rule_id: Some(rule.rule_id.clone()),
+        core_model_id: None,
         manifest_revision: manifest.revision,
         evidence_revision: None,
         overridden_sources: Vec::new(),

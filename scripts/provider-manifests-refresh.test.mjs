@@ -40,6 +40,27 @@ test('an author-raised revision is kept and new or removed providers rebuild the
   assert.deepEqual(plan.removed, ['gone']);
 });
 
+test('a core list edit rebuilds the index and bumps only a revision that was not raised', () => {
+  const bytes = Buffer.from(manifestText(3));
+  const pinnedCore = Buffer.from(manifestText(2));
+  const index = {
+    index_revision: 7,
+    providers: { p: { revision: 3, sha256: sha256(bytes) } },
+    core_models: { revision: 2, sha256: sha256(pinnedCore) },
+  };
+  const manifests = { p: { bytes, revision: 3 } };
+  const unchanged = planRefresh(index, manifests, { bytes: pinnedCore, revision: 2 });
+  assert.equal(unchanged.rebuildIndex, false);
+  const edited = planRefresh(index, manifests, { bytes: Buffer.from(manifestText(2, '"x": 1')), revision: 2 });
+  assert.equal(edited.rebuildIndex, true);
+  assert.equal(edited.coreBump, 3);
+  const raised = planRefresh(index, manifests, { bytes: Buffer.from(manifestText(4)), revision: 4 });
+  assert.equal(raised.coreBump, null);
+  const legacy = planRefresh({ index_revision: 7, providers: index.providers }, manifests, { bytes: pinnedCore, revision: 1 });
+  assert.equal(legacy.rebuildIndex, true);
+  assert.equal(legacy.coreBump, null);
+});
+
 test('header rewrite changes only the top-level revision and publication time', () => {
   const text = manifestText(3, '"nested": {"revision": 1}');
   const rewritten = bumpManifestHeader(text, 4, '2026-10-19T00:00:00Z');

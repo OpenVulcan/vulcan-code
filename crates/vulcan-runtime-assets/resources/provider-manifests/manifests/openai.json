@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "openai",
-  "revision": 27,
-  "published_at": "2026-11-07T17:16:21Z",
+  "revision": 28,
+  "published_at": "2026-11-08T06:25:07Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -192,32 +192,13 @@
         "kind": "exact",
         "value": "gpt-5.6-sol"
       },
+      "core_model_ref": "gpt-5.6-sol",
       "supported_protocols": [
         "openai-responses.v1"
       ],
       "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "file",
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "none",
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1050000,
-        "output_limit": 128000,
         "evidence_revision": "openai.public-api.reasoning-none.20261108"
       },
       "protocol_capabilities": {
@@ -243,32 +224,13 @@
         "kind": "exact",
         "value": "gpt-5.6-terra"
       },
+      "core_model_ref": "gpt-5.6-terra",
       "supported_protocols": [
         "openai-responses.v1"
       ],
       "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "file",
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "none",
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1050000,
-        "output_limit": 128000,
         "evidence_revision": "openai.public-api.reasoning-none.20261108"
       },
       "protocol_capabilities": {
@@ -294,32 +256,13 @@
         "kind": "exact",
         "value": "gpt-5.6-luna"
       },
+      "core_model_ref": "gpt-5.6-luna",
       "supported_protocols": [
         "openai-responses.v1"
       ],
       "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "file",
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "none",
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1050000,
-        "output_limit": 128000,
         "evidence_revision": "openai.public-api.reasoning-none.20261108"
       },
       "protocol_capabilities": {
@@ -345,31 +288,13 @@
         "kind": "exact",
         "value": "gpt-6-astra"
       },
+      "core_model_ref": "gpt-6-astra",
       "supported_protocols": [
         "openai-responses.v1"
       ],
       "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "file",
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1050000,
-        "output_limit": 128000,
         "evidence_revision": "openai.public-api.models.20261029"
       },
       "protocol_capabilities": {
@@ -395,32 +320,13 @@
         "kind": "exact",
         "value": "gpt-6-sol"
       },
+      "core_model_ref": "gpt-6-sol",
       "supported_protocols": [
         "openai-responses.v1"
       ],
       "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "file",
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "none",
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1050000,
-        "output_limit": 128000,
         "evidence_revision": "openai.public-api.reasoning-none.20261108"
       },
       "protocol_capabilities": {
@@ -446,32 +352,13 @@
         "kind": "exact",
         "value": "gpt-6-luna"
       },
+      "core_model_ref": "gpt-6-luna",
       "supported_protocols": [
         "openai-responses.v1"
       ],
       "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "file",
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "none",
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1050000,
-        "output_limit": 128000,
         "evidence_revision": "openai.public-api.reasoning-none.20261108"
       },
       "protocol_capabilities": {
@@ -497,31 +384,13 @@
         "kind": "exact",
         "value": "gpt-6.1-sol"
       },
+      "core_model_ref": "gpt-6.1-sol",
       "supported_protocols": [
         "openai-responses.v1"
       ],
       "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "file",
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1050000,
-        "output_limit": 128000,
         "evidence_revision": "openai.public-api.models.20261029"
       },
       "protocol_capabilities": {
@@ -547,32 +416,13 @@
         "kind": "exact",
         "value": "gpt-6.1-terra"
       },
+      "core_model_ref": "gpt-6.1-terra",
       "supported_protocols": [
         "openai-responses.v1"
       ],
       "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "file",
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "none",
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1050000,
-        "output_limit": 128000,
         "evidence_revision": "openai.public-api.reasoning-none.20261108"
       },
       "protocol_capabilities": {
@@ -598,22 +448,13 @@
         "kind": "exact",
         "value": "gpt-image-2"
       },
+      "core_model_ref": "gpt-image-2",
       "supported_protocols": [
         "openai-responses.v1"
       ],
       "selected_protocol": "openai-responses.v1",
       "default_enabled": false,
       "capabilities": {
-        "operations": [
-          "image_generate"
-        ],
-        "input_resources": [],
-        "output_resources": [
-          "image"
-        ],
-        "reasoning": "unsupported",
-        "reasoning_control": "fixed_off",
-        "reasoning_efforts": [],
         "provider_native_tools": [],
         "context_limit": null,
         "output_limit": null,
@@ -639,22 +480,13 @@
         "kind": "exact",
         "value": "gpt-image-2.5-flare"
       },
+      "core_model_ref": "gpt-image-2.5-flare",
       "supported_protocols": [
         "openai-responses.v1"
       ],
       "selected_protocol": "openai-responses.v1",
       "default_enabled": false,
       "capabilities": {
-        "operations": [
-          "image_generate"
-        ],
-        "input_resources": [],
-        "output_resources": [
-          "image"
-        ],
-        "reasoning": "unsupported",
-        "reasoning_control": "fixed_off",
-        "reasoning_efforts": [],
         "provider_native_tools": [],
         "context_limit": null,
         "output_limit": null,
@@ -680,22 +512,13 @@
         "kind": "exact",
         "value": "gpt-image-2.5-sunburst"
       },
+      "core_model_ref": "gpt-image-2.5-sunburst",
       "supported_protocols": [
         "openai-responses.v1"
       ],
       "selected_protocol": "openai-responses.v1",
       "default_enabled": false,
       "capabilities": {
-        "operations": [
-          "image_generate"
-        ],
-        "input_resources": [],
-        "output_resources": [
-          "image"
-        ],
-        "reasoning": "unsupported",
-        "reasoning_control": "fixed_off",
-        "reasoning_efforts": [],
         "provider_native_tools": [],
         "context_limit": null,
         "output_limit": null,
@@ -721,22 +544,13 @@
         "kind": "exact",
         "value": "gpt-transcribe"
       },
+      "core_model_ref": "gpt-transcribe",
       "supported_protocols": [
         "openai-responses.v1"
       ],
       "selected_protocol": "openai-responses.v1",
       "default_enabled": false,
       "capabilities": {
-        "operations": [
-          "speech_transcribe"
-        ],
-        "input_resources": [
-          "audio"
-        ],
-        "output_resources": [],
-        "reasoning": "unsupported",
-        "reasoning_control": "fixed_off",
-        "reasoning_efforts": [],
         "provider_native_tools": [],
         "context_limit": null,
         "output_limit": null,
@@ -751,6 +565,7 @@
       "rule_id": "codex-gpt-5-6-luna",
       "display_name": "GPT-5.6 Luna",
       "matcher": {"kind": "exact", "value": "gpt-5.6-luna"},
+      "core_model_ref": "gpt-5.6-luna",
       "supported_protocols": ["openai-codex-responses.v1"],
       "selected_protocol": "openai-codex-responses.v1",
       "codex_behavior": {
@@ -777,14 +592,9 @@
         "supports_experimental_context": false
       },
       "capabilities": {
-        "operations": ["conversation_respond"],
         "input_resources": ["image"],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
         "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
-        "context_limit": 1050000,
         "evidence_revision": "openai.codex.models.v1"
       },
       "scope": {"service_entry_ids": ["codex-subscription"]}
@@ -793,6 +603,7 @@
       "rule_id": "codex-gpt-5-6-terra",
       "display_name": "GPT-5.6 Terra",
       "matcher": {"kind": "exact", "value": "gpt-5.6-terra"},
+      "core_model_ref": "gpt-5.6-terra",
       "supported_protocols": ["openai-codex-responses.v1"],
       "selected_protocol": "openai-codex-responses.v1",
       "codex_behavior": {
@@ -819,14 +630,9 @@
         "supports_experimental_context": false
       },
       "capabilities": {
-        "operations": ["conversation_respond"],
         "input_resources": ["image"],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
         "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
-        "context_limit": 1050000,
         "evidence_revision": "openai.codex.models.v1"
       },
       "scope": {"service_entry_ids": ["codex-subscription"]}
@@ -835,6 +641,7 @@
       "rule_id": "codex-gpt-5-6-sol",
       "display_name": "GPT-5.6 Sol",
       "matcher": {"kind": "exact", "value": "gpt-5.6-sol"},
+      "core_model_ref": "gpt-5.6-sol",
       "supported_protocols": ["openai-codex-responses.v1"],
       "selected_protocol": "openai-codex-responses.v1",
       "codex_behavior": {
@@ -861,14 +668,9 @@
         "supports_experimental_context": false
       },
       "capabilities": {
-        "operations": ["conversation_respond"],
         "input_resources": ["image"],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
         "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
-        "context_limit": 1050000,
         "evidence_revision": "openai.codex.models.v1"
       },
       "scope": {"service_entry_ids": ["codex-subscription"]}
@@ -877,6 +679,7 @@
       "rule_id": "codex-gpt-6-astra",
       "display_name": "GPT-6 Astra",
       "matcher": {"kind": "exact", "value": "gpt-6-astra"},
+      "core_model_ref": "gpt-6-astra",
       "supported_protocols": ["openai-codex-responses.v1"],
       "selected_protocol": "openai-codex-responses.v1",
       "codex_behavior": {
@@ -904,14 +707,8 @@
         "supports_experimental_context": true
       },
       "capabilities": {
-        "operations": ["conversation_respond"],
         "input_resources": ["image"],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
-        "context_limit": 1050000,
         "evidence_revision": "openai.codex.models.v1"
       },
       "scope": {"service_entry_ids": ["codex-subscription"]}
@@ -920,6 +717,7 @@
       "rule_id": "codex-gpt-6-1-sol",
       "display_name": "GPT-6.1 Sol",
       "matcher": {"kind": "exact", "value": "gpt-6.1-sol"},
+      "core_model_ref": "gpt-6.1-sol",
       "supported_protocols": ["openai-codex-responses.v1"],
       "selected_protocol": "openai-codex-responses.v1",
       "codex_behavior": {
@@ -947,14 +745,8 @@
         "supports_experimental_context": true
       },
       "capabilities": {
-        "operations": ["conversation_respond"],
         "input_resources": ["image"],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
-        "context_limit": 1050000,
         "evidence_revision": "openai.codex.models.v1"
       },
       "scope": {"service_entry_ids": ["codex-subscription"]}
@@ -963,6 +755,7 @@
       "rule_id": "codex-gpt-6-sol",
       "display_name": "GPT-6 Sol",
       "matcher": {"kind": "exact", "value": "gpt-6-sol"},
+      "core_model_ref": "gpt-6-sol",
       "supported_protocols": ["openai-codex-responses.v1"],
       "selected_protocol": "openai-codex-responses.v1",
       "codex_behavior": {
@@ -989,14 +782,9 @@
         "supports_experimental_context": true
       },
       "capabilities": {
-        "operations": ["conversation_respond"],
         "input_resources": ["image"],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
         "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
-        "context_limit": 1050000,
         "evidence_revision": "openai.codex.models.v1"
       },
       "scope": {"service_entry_ids": ["codex-subscription"]}
@@ -1005,6 +793,7 @@
       "rule_id": "codex-gpt-6-luna",
       "display_name": "GPT-6 Luna",
       "matcher": {"kind": "exact", "value": "gpt-6-luna"},
+      "core_model_ref": "gpt-6-luna",
       "supported_protocols": ["openai-codex-responses.v1"],
       "selected_protocol": "openai-codex-responses.v1",
       "codex_behavior": {
@@ -1031,14 +820,9 @@
         "supports_experimental_context": true
       },
       "capabilities": {
-        "operations": ["conversation_respond"],
         "input_resources": ["image"],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
         "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
-        "context_limit": 1050000,
         "evidence_revision": "openai.codex.models.v1"
       },
       "scope": {"service_entry_ids": ["codex-subscription"]}

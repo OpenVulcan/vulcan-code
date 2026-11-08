@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "commandcode",
-  "revision": 13,
-  "published_at": "2026-11-08T04:27:33Z",
+  "revision": 14,
+  "published_at": "2026-11-08T06:25:07Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -306,29 +306,13 @@
         "kind": "exact",
         "value": "claude-sonnet-5"
       },
+      "core_model_ref": "claude-sonnet-5",
       "supported_protocols": [
         "anthropic-messages.v1"
       ],
       "selected_protocol": "anthropic-messages.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1000000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -342,29 +326,13 @@
         "kind": "exact",
         "value": "claude-sonnet-4-6"
       },
+      "core_model_ref": "claude-sonnet-4-6",
       "supported_protocols": [
         "anthropic-messages.v1"
       ],
       "selected_protocol": "anthropic-messages.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1000000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -378,29 +346,13 @@
         "kind": "exact",
         "value": "claude-fable-5"
       },
+      "core_model_ref": "claude-fable-5",
       "supported_protocols": [
         "anthropic-messages.v1"
       ],
       "selected_protocol": "anthropic-messages.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1000000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -414,29 +366,13 @@
         "kind": "exact",
         "value": "claude-opus-5"
       },
+      "core_model_ref": "claude-opus-5",
       "supported_protocols": [
         "anthropic-messages.v1"
       ],
       "selected_protocol": "anthropic-messages.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1000000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -450,29 +386,13 @@
         "kind": "exact",
         "value": "claude-opus-4-8"
       },
+      "core_model_ref": "claude-opus-4-8",
       "supported_protocols": [
         "anthropic-messages.v1"
       ],
       "selected_protocol": "anthropic-messages.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1000000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -486,29 +406,13 @@
         "kind": "exact",
         "value": "claude-opus-4-7"
       },
+      "core_model_ref": "claude-opus-4-7",
       "supported_protocols": [
         "anthropic-messages.v1"
       ],
       "selected_protocol": "anthropic-messages.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1000000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -522,29 +426,13 @@
         "kind": "exact",
         "value": "claude-haiku-4-5-20251001"
       },
+      "core_model_ref": "claude-haiku-4-5-20251001",
       "supported_protocols": [
         "anthropic-messages.v1"
       ],
       "selected_protocol": "anthropic-messages.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 200000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -558,29 +446,15 @@
         "kind": "exact",
         "value": "gpt-5.6-sol"
       },
+      "core_model_ref": "gpt-5.6-sol",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
+        "input_resources": ["image"],
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1050000,
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -594,29 +468,15 @@
         "kind": "exact",
         "value": "gpt-5.6-terra"
       },
+      "core_model_ref": "gpt-5.6-terra",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
+        "input_resources": ["image"],
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1050000,
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -630,29 +490,15 @@
         "kind": "exact",
         "value": "gpt-5.6-luna"
       },
+      "core_model_ref": "gpt-5.6-luna",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
+        "input_resources": ["image"],
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1050000,
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -669,28 +515,13 @@
         "kind": "exact",
         "value": "gpt-5.5"
       },
+      "core_model_ref": "gpt-5.5",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh"
-        ],
-        "context_limit": 400000,
         "evidence_revision": "commandcode.cli-1.54.1+provider-api.2026-09-16"
       },
       "account_access_groups": [
@@ -704,28 +535,13 @@
         "kind": "exact",
         "value": "gpt-5.4"
       },
+      "core_model_ref": "gpt-5.4",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh"
-        ],
-        "context_limit": 400000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -739,28 +555,13 @@
         "kind": "exact",
         "value": "gpt-5.3-codex"
       },
+      "core_model_ref": "gpt-5.3-codex",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh"
-        ],
-        "context_limit": 400000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -774,27 +575,13 @@
         "kind": "exact",
         "value": "gpt-5.4-mini"
       },
+      "core_model_ref": "gpt-5.4-mini",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high"
-        ],
-        "context_limit": 400000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -808,24 +595,15 @@
         "kind": "exact",
         "value": "deepseek/deepseek-v4-pro"
       },
+      "core_model_ref": "deepseek-v4-pro",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "high",
-          "max"
-        ],
-        "context_limit": 1000000,
+        "reasoning_efforts": ["high", "max"],
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -839,24 +617,15 @@
         "kind": "exact",
         "value": "deepseek/deepseek-v4-flash"
       },
+      "core_model_ref": "deepseek-v4-flash",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "high",
-          "max"
-        ],
-        "context_limit": 1000000,
+        "reasoning_efforts": ["high", "max"],
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -870,28 +639,15 @@
         "kind": "exact",
         "value": "moonshotai/Kimi-K3"
       },
+      "core_model_ref": "kimi-k3",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
+        "input_resources": ["image"],
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
         "context_limit": 1000000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
@@ -906,28 +662,16 @@
         "kind": "exact",
         "value": "moonshotai/Kimi-K2.7-Code"
       },
+      "core_model_ref": "kimi-k2.7-code",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
+        "input_resources": ["image"],
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
         "context_limit": 256000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
@@ -942,28 +686,16 @@
         "kind": "exact",
         "value": "moonshotai/Kimi-K2.7-Code-Highspeed"
       },
+      "core_model_ref": "kimi-k2.7-code-highspeed",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
+        "input_resources": ["image"],
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
         "context_limit": 262000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
@@ -978,28 +710,17 @@
         "kind": "exact",
         "value": "moonshotai/Kimi-K2.6"
       },
+      "core_model_ref": "kimi-k2.6",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
+        "input_resources": ["image"],
         "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
         "context_limit": 256000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
@@ -1014,22 +735,15 @@
         "kind": "exact",
         "value": "moonshotai/Kimi-K2.5"
       },
+      "core_model_ref": "kimi-k2.5",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
         "reasoning": "unsupported",
         "provider_native_tools": [],
         "reasoning_control": "fixed_off",
-        "reasoning_efforts": [],
         "context_limit": 256000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
@@ -1044,25 +758,13 @@
         "kind": "exact",
         "value": "zai-org/GLM-5.3"
       },
+      "core_model_ref": "glm-5.3",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "high",
-          "max"
-        ],
-        "context_limit": 1000000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -1076,24 +778,15 @@
         "kind": "exact",
         "value": "zai-org/GLM-5.2"
       },
+      "core_model_ref": "glm-5.2",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "high",
-          "max"
-        ],
-        "context_limit": 1000000,
+        "reasoning_efforts": ["high", "max"],
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -1107,27 +800,13 @@
         "kind": "exact",
         "value": "zai-org/GLM-5.2-Fast"
       },
+      "core_model_ref": "glm-5.2-fast",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1000000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -1141,26 +820,15 @@
         "kind": "exact",
         "value": "zai-org/GLM-5.1"
       },
+      "core_model_ref": "glm-5.1",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
         "context_limit": 200000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
@@ -1175,26 +843,15 @@
         "kind": "exact",
         "value": "zai-org/GLM-5"
       },
+      "core_model_ref": "glm-5",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
         "context_limit": 200000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
@@ -1209,29 +866,16 @@
         "kind": "exact",
         "value": "MiniMaxAI/MiniMax-M3"
       },
+      "core_model_ref": "minimax-m3",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
+        "input_resources": ["image"],
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1000000,
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -1245,27 +889,15 @@
         "kind": "exact",
         "value": "MiniMaxAI/MiniMax-M2.7"
       },
+      "core_model_ref": "minimax-m2.7",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 200000,
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -1279,26 +911,15 @@
         "kind": "exact",
         "value": "MiniMaxAI/MiniMax-M2.5"
       },
+      "core_model_ref": "minimax-m2.5",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
         "context_limit": 200000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
@@ -1313,26 +934,15 @@
         "kind": "exact",
         "value": "xiaomi/mimo-v2.5-pro"
       },
+      "core_model_ref": "mimo-v2.5-pro",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
         "context_limit": 1000000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
@@ -1347,29 +957,13 @@
         "kind": "exact",
         "value": "xiaomi/mimo-v2.5"
       },
+      "core_model_ref": "mimo-v2.5",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1000000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -1383,27 +977,16 @@
         "kind": "exact",
         "value": "Qwen/Qwen3.8-Max"
       },
+      "core_model_ref": "qwen3.8-max",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
+        "input_resources": ["image"],
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "xhigh"
-        ],
-        "context_limit": 1000000,
+        "reasoning_efforts": ["low", "medium", "xhigh"],
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -1417,27 +1000,15 @@
         "kind": "exact",
         "value": "Qwen/Qwen3.7-Max"
       },
+      "core_model_ref": "qwen3.7-max",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1000000,
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -1451,29 +1022,16 @@
         "kind": "exact",
         "value": "Qwen/Qwen3.7-Plus"
       },
+      "core_model_ref": "qwen3.7-plus",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
+        "input_resources": ["image"],
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1000000,
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -1487,29 +1045,15 @@
         "kind": "exact",
         "value": "Qwen/Qwen3.7-Flash"
       },
+      "core_model_ref": "qwen3.7-flash",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1000000,
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -1523,27 +1067,13 @@
         "kind": "exact",
         "value": "Qwen/Qwen3.6-Max-Preview"
       },
+      "core_model_ref": "qwen3.6-max-preview",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 200000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -1557,28 +1087,16 @@
         "kind": "exact",
         "value": "Qwen/Qwen3.6-Plus"
       },
+      "core_model_ref": "qwen3.6-plus",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
+        "input_resources": ["image"],
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
         "context_limit": 200000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
@@ -1593,29 +1111,15 @@
         "kind": "exact",
         "value": "stepfun/Step-3.7-Flash"
       },
+      "core_model_ref": "step-3.7-flash",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
+        "input_resources": ["image"],
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 256000,
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -1629,26 +1133,15 @@
         "kind": "exact",
         "value": "stepfun/Step-3.5-Flash"
       },
+      "core_model_ref": "step-3.5-flash",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
         "context_limit": 1000000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
@@ -1663,27 +1156,13 @@
         "kind": "exact",
         "value": "tencent/hy3-paid"
       },
+      "core_model_ref": "hy3-paid",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 262144,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -1697,28 +1176,14 @@
         "kind": "exact",
         "value": "google/gemini-3.7-flash"
       },
+      "core_model_ref": "gemini-3.7-flash",
       "tool_schema_projection": "strict",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high"
-        ],
-        "context_limit": 1048576,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -1732,27 +1197,17 @@
         "kind": "exact",
         "value": "google/gemini-3.6-flash"
       },
+      "core_model_ref": "gemini-3.6-flash",
       "tool_schema_projection": "strict",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
+        "input_resources": ["image"],
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high"
-        ],
+        "reasoning_efforts": ["low", "medium", "high"],
         "context_limit": 1000000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       }
@@ -1764,27 +1219,17 @@
         "kind": "exact",
         "value": "google/gemini-3.5-flash"
       },
+      "core_model_ref": "gemini-3.5-flash",
       "tool_schema_projection": "strict",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
+        "input_resources": ["image"],
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high"
-        ],
+        "reasoning_efforts": ["low", "medium", "high"],
         "context_limit": 1000000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
@@ -1799,28 +1244,14 @@
         "kind": "exact",
         "value": "google/gemini-3.5-flash-lite"
       },
+      "core_model_ref": "gemini-3.5-flash-lite",
       "tool_schema_projection": "strict",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high"
-        ],
-        "context_limit": 1000000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       }
     },
@@ -1831,27 +1262,17 @@
         "kind": "exact",
         "value": "google/gemini-3.1-flash-lite"
       },
+      "core_model_ref": "gemini-3.1-flash-lite",
       "tool_schema_projection": "strict",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
+        "input_resources": ["image"],
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high"
-        ],
+        "reasoning_efforts": ["low", "medium", "high"],
         "context_limit": 1000000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
@@ -1866,26 +1287,13 @@
         "kind": "exact",
         "value": "sakana/fugu-ultra"
       },
+      "core_model_ref": "fugu-ultra",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "high",
-          "xhigh"
-        ],
-        "context_limit": 1000000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -1899,21 +1307,13 @@
         "kind": "exact",
         "value": "nvidia/nemotron-3-ultra-550b-a55b"
       },
+      "core_model_ref": "nemotron-3-ultra-550b-a55b",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "unsupported",
         "provider_native_tools": [],
-        "reasoning_control": "fixed_off",
-        "reasoning_efforts": [],
-        "context_limit": 1000000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -1927,29 +1327,13 @@
         "kind": "exact",
         "value": "thinkingmachines/inkling"
       },
+      "core_model_ref": "inkling",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 256000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -1963,29 +1347,13 @@
         "kind": "exact",
         "value": "thinkingmachines/inkling-small"
       },
+      "core_model_ref": "inkling-small",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1000000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       }
     },
@@ -1996,27 +1364,13 @@
         "kind": "exact",
         "value": "poolside/laguna-s-2.1-free"
       },
+      "core_model_ref": "laguna-s-2.1-free",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 256000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       }
     },
@@ -2027,29 +1381,13 @@
         "kind": "exact",
         "value": "meta/muse-spark-1.1"
       },
+      "core_model_ref": "muse-spark-1.1",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1048576,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -2063,29 +1401,13 @@
         "kind": "exact",
         "value": "meta/muse-spark-1.2"
       },
+      "core_model_ref": "muse-spark-1.2",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1048576,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -2102,29 +1424,15 @@
         "kind": "exact",
         "value": "meta/muse-spark-1.2-contributor"
       },
+      "core_model_ref": "muse-spark-1.2-contributor",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
+        "input_resources": ["image"],
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1048576,
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -2141,27 +1449,14 @@
         "kind": "exact",
         "value": "xai/grok-4.5"
       },
+      "core_model_ref": "grok-4.5",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high"
-        ],
-        "context_limit": 500000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -2178,26 +1473,15 @@
         "kind": "exact",
         "value": "xai/grok-4.6"
       },
+      "core_model_ref": "grok-4.6",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
         "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh"
-        ],
-        "context_limit": 500000,
         "evidence_revision": "commandcode.cli-1.26.0-reasoning.2026-08-18"
       },
       "account_access_groups": [
@@ -2214,29 +1498,13 @@
         "kind": "exact",
         "value": "claude-fable-5-1"
       },
+      "core_model_ref": "claude-fable-5-1",
       "supported_protocols": [
         "anthropic-messages.v1"
       ],
       "selected_protocol": "anthropic-messages.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1000000,
         "evidence_revision": "commandcode.cli-1.54.1+provider-api.2026-09-16"
       },
       "account_access_groups": [
@@ -2250,25 +1518,14 @@
         "kind": "exact",
         "value": "deepseek/deepseek-v4-flash-vision-exp"
       },
+      "core_model_ref": "deepseek-v4-flash-vision-exp",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "high",
-          "max"
-        ],
+        "reasoning_efforts": ["high", "max"],
         "context_limit": 1000000,
         "evidence_revision": "commandcode.cli-1.54.1+provider-api.2026-09-16"
       },
@@ -2283,25 +1540,13 @@
         "kind": "exact",
         "value": "deepseek/deepseek-v4-flash-fast"
       },
+      "core_model_ref": "deepseek-v4-flash-fast",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "high",
-          "max"
-        ],
-        "context_limit": 1000000,
         "evidence_revision": "commandcode.cli-1.54.1+provider-api.2026-09-16"
       },
       "account_access_groups": [
@@ -2315,26 +1560,14 @@
         "kind": "exact",
         "value": "deepseek/deepseek-v4.1-flash"
       },
+      "core_model_ref": "deepseek-v4.1-flash",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "high",
-          "max"
-        ],
+        "reasoning_efforts": ["low", "high", "max"],
         "context_limit": 1000000,
         "evidence_revision": "commandcode.cli-1.54.1+provider-api.2026-09-16"
       },
@@ -2349,26 +1582,13 @@
         "kind": "exact",
         "value": "z-ai/glm-5.3-flash"
       },
+      "core_model_ref": "glm-5.3-flash",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "high",
-          "max"
-        ],
         "context_limit": 1048576,
         "output_limit": 131072,
         "evidence_revision": "commandcode.cli-1.54.1+provider-api.2026-09-16"
@@ -2384,27 +1604,13 @@
         "kind": "exact",
         "value": "Qwen/Qwen3.8-Max-0902"
       },
+      "core_model_ref": "qwen3.8-max-0902",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "xhigh"
-        ],
-        "context_limit": 1000000,
         "evidence_revision": "commandcode.cli-1.54.1+provider-api.2026-09-16"
       },
       "account_access_groups": [
@@ -2418,26 +1624,15 @@
         "kind": "exact",
         "value": "Qwen/Qwen3.8-27B"
       },
+      "core_model_ref": "qwen3.8-27b",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "xhigh"
-        ],
+        "reasoning_efforts": ["low", "medium", "xhigh"],
         "context_limit": 262144,
         "output_limit": 32768,
         "evidence_revision": "commandcode.cli-1.54.1+provider-api.2026-09-16"
@@ -2453,27 +1648,16 @@
         "kind": "exact",
         "value": "Qwen/Qwen3.8-Flash"
       },
+      "core_model_ref": "qwen3.8-flash",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
+        "input_resources": ["image"],
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "xhigh"
-        ],
-        "context_limit": 1000000,
+        "reasoning_efforts": ["low", "medium", "xhigh"],
         "evidence_revision": "commandcode.cli-1.54.1+provider-api.2026-09-16"
       },
       "account_access_groups": [
@@ -2487,27 +1671,13 @@
         "kind": "exact",
         "value": "meituan/LongCat-2.0:free"
       },
+      "core_model_ref": "longcat-2.0:free",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1048576,
         "evidence_revision": "commandcode.cli-1.54.1+provider-api.2026-09-16"
       },
       "account_access_groups": [
@@ -2521,24 +1691,15 @@
         "kind": "exact",
         "value": "tencent/hy4-preview"
       },
+      "core_model_ref": "hy4-preview",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high"
-        ],
+        "reasoning_efforts": ["low", "medium", "high"],
         "context_limit": 1048576,
         "evidence_revision": "commandcode.cli-1.54.1+provider-api.2026-09-16"
       },
@@ -2553,26 +1714,14 @@
         "kind": "exact",
         "value": "google/gemini-3.8-flash"
       },
+      "core_model_ref": "gemini-3.8-flash",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
+        "input_resources": ["image"],
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high"
-        ],
         "context_limit": 1000000,
         "evidence_revision": "commandcode.cli-1.54.1+provider-api.2026-09-16"
       },
@@ -2588,28 +1737,13 @@
         "kind": "exact",
         "value": "inclusionai/ling-3.0-flash-sante:free"
       },
+      "core_model_ref": "ling-3.0-flash-sante:free",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 262144,
-        "output_limit": 32768,
         "evidence_revision": "commandcode.cli-1.54.1+provider-api.2026-09-16"
       },
       "account_access_groups": [
@@ -2623,28 +1757,16 @@
         "kind": "exact",
         "value": "meta/muse-spark-1.3"
       },
+      "core_model_ref": "muse-spark-1.3",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
+        "input_resources": ["image"],
         "provider_native_tools": [],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
         "context_limit": 1048576,
         "evidence_revision": "commandcode.cli-1.54.1+provider-api.2026-09-16"
       },
@@ -2659,28 +1781,15 @@
         "kind": "exact",
         "value": "meta/muse-spark-1.3-contributor"
       },
+      "core_model_ref": "muse-spark-1.3-contributor",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
+        "input_resources": ["image"],
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh"
-        ],
-        "context_limit": 1048576,
+        "reasoning_efforts": ["low", "medium", "high", "xhigh"],
         "evidence_revision": "commandcode.cli-1.54.1+provider-api.2026-09-16"
       },
       "account_access_groups": [

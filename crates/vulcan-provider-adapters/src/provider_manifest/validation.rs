@@ -2480,6 +2480,15 @@ fn validate_model_rule(
             ),
         ));
     }
+    if let Some(core_model_ref) = rule.core_model_ref.as_deref()
+        && !super::core_models::is_core_model_identifier(core_model_ref)
+    {
+        errors.push(ManifestValidationError::new(
+            "invalid_core_model_ref",
+            path(".core_model_ref"),
+            format!("core model reference `{core_model_ref}` is not a lowercase core model id"),
+        ));
+    }
     if let Some(display_name) = &rule.display_name
         && (display_name.trim().is_empty() || display_name.chars().count() > 512)
     {
@@ -7190,6 +7199,16 @@ fn validate_provider_request_id_headers(
             ));
         }
     }
+}
+
+/// Validates parameter definitions and operation/resource contracts of one capability patch.
+/// 校验单个能力补丁的参数定义与操作/资源契约。
+pub(crate) fn validate_capability_patch_contracts(
+    capabilities: &super::schema::ManifestCapabilityPatch,
+    path: &str,
+    errors: &mut Vec<ManifestValidationError>,
+) {
+    validate_capabilities(capabilities, path, errors);
 }
 
 /// Validates capability/resource consistency for media operations.

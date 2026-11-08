@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "open-design",
-  "revision": 9,
-  "published_at": "2026-11-08T04:27:33Z",
+  "revision": 10,
+  "published_at": "2026-11-08T06:25:07Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -143,28 +143,13 @@
         "kind": "exact",
         "value": "claude-haiku-5.5"
       },
+      "core_model_ref": "claude-haiku-5.5",
       "display_name": "Claude Haiku 5.5",
       "supported_protocols": [
         "anthropic-messages.v1"
       ],
       "selected_protocol": "anthropic-messages.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "file"
-        ],
-        "reasoning": "native",
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "none",
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1000000,
-        "output_limit": 128000,
         "evidence_revision": "open-design.official-efforts.2026-11-07"
       },
       "input_resource_constraints": [
@@ -193,21 +178,15 @@
         "kind": "exact",
         "value": "deepseek-v4-flash"
       },
+      "core_model_ref": "deepseek-v4-flash",
       "display_name": "DeepSeek V4 Flash",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [],
-        "reasoning": "native",
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "none",
-          "low",
-          "high",
-          "max"
-        ],
+        "reasoning_efforts": ["none", "low", "high", "max"],
         "context_limit": 1048000,
         "output_limit": 32000,
         "evidence_revision": "open-design.official-efforts.2026-11-07"
@@ -226,25 +205,13 @@
         "kind": "exact",
         "value": "deepseek-v4-flash-vision-exp"
       },
+      "core_model_ref": "deepseek-v4-flash-vision-exp",
       "display_name": "DeepSeek V4 Flash Vision Exp",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [
-          "image"
-        ],
-        "reasoning": "native",
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "none",
-          "low",
-          "high",
-          "max"
-        ],
-        "context_limit": 1048000,
-        "output_limit": 32000,
         "evidence_revision": "open-design.official-efforts.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.gateway.2026-10-14",
@@ -261,21 +228,15 @@
         "kind": "exact",
         "value": "deepseek-v4-pro"
       },
+      "core_model_ref": "deepseek-v4-pro",
       "display_name": "DeepSeek V4 Pro",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [],
-        "reasoning": "native",
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "none",
-          "low",
-          "high",
-          "max"
-        ],
+        "reasoning_efforts": ["none", "low", "high", "max"],
         "context_limit": 1048000,
         "output_limit": 128000,
         "evidence_revision": "open-design.official-efforts.2026-11-07"
@@ -294,25 +255,13 @@
         "kind": "exact",
         "value": "deepseek-v4.1-flash"
       },
+      "core_model_ref": "deepseek-v4.1-flash",
       "display_name": "DeepSeek V4.1 Flash",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [
-          "image"
-        ],
-        "reasoning": "native",
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "none",
-          "low",
-          "high",
-          "max"
-        ],
-        "context_limit": 1048000,
-        "output_limit": 128000,
         "evidence_revision": "open-design.official-efforts.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.gateway.2026-10-14",
@@ -329,23 +278,13 @@
         "kind": "exact",
         "value": "deepseek-v4.1-flash-eco"
       },
+      "core_model_ref": "deepseek-v4.1-flash-eco",
       "display_name": "DeepSeek V4.1 Flash Eco",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [],
-        "reasoning": "native",
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "none",
-          "low",
-          "high",
-          "max"
-        ],
-        "context_limit": 1048000,
-        "output_limit": 128000,
         "evidence_revision": "open-design.official-efforts.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.gateway.2026-11-07",
@@ -362,24 +301,13 @@
         "kind": "exact",
         "value": "glm-5.3-flash"
       },
+      "core_model_ref": "glm-5.3-flash",
       "display_name": "GLM-5.3 Flash",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [
-          "image"
-        ],
-        "reasoning": "native",
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "high",
-          "max"
-        ],
-        "context_limit": 1048000,
-        "output_limit": 32000,
         "evidence_revision": "open-design.official-efforts.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.gateway.2026-10-14",
@@ -396,25 +324,13 @@
         "kind": "exact",
         "value": "glm-5.3-flashx"
       },
+      "core_model_ref": "glm-5.3-flashx",
       "display_name": "GLM-5.3 Flash-X",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "file"
-        ],
-        "reasoning": "native",
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "high",
-          "max"
-        ],
-        "context_limit": 1000000,
-        "output_limit": 32000,
         "evidence_revision": "open-design.official-efforts.2026-11-07"
       },
       "input_resource_constraints": [
@@ -440,28 +356,14 @@
         "kind": "exact",
         "value": "gpt-6-luna"
       },
+      "core_model_ref": "gpt-6-luna",
       "display_name": "GPT-6 Luna",
       "supported_protocols": [
         "openai-responses.v1"
       ],
       "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "file"
-        ],
-        "reasoning": "native",
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "none",
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1050000,
-        "output_limit": 128000,
+        "input_resources": ["image", "file"],
         "evidence_revision": "open-design.official-efforts.2026-11-07"
       },
       "input_resource_constraints": [
@@ -488,21 +390,13 @@
         "kind": "exact",
         "value": "hy4-preview"
       },
+      "core_model_ref": "hy4-preview",
       "display_name": "Hy4 Preview",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [],
-        "reasoning": "native",
-        "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "high"
-        ],
-        "context_limit": 1048000,
-        "output_limit": 32000,
         "evidence_revision": "open-design.official-efforts.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.gateway.2026-11-07"
@@ -513,18 +407,14 @@
         "kind": "exact",
         "value": "kimi-k2.7-code"
       },
+      "core_model_ref": "kimi-k2.7-code",
       "display_name": "Kimi K2.7 Code",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [
-          "image"
-        ],
-        "reasoning": "native",
-        "reasoning_control": "fixed_on",
-        "reasoning_efforts": [],
+        "input_resources": ["image"],
         "context_limit": 262000,
         "output_limit": 32000,
         "evidence_revision": "open-design.official-efforts.2026-11-07"
@@ -544,24 +434,13 @@
         "kind": "exact",
         "value": "mimo-v2.6-flash"
       },
+      "core_model_ref": "mimo-v2.6-flash",
       "display_name": "MiMo V2.6 Flash",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "audio"
-        ],
-        "reasoning": "native",
-        "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "high"
-        ],
-        "context_limit": 1048000,
-        "output_limit": 32000,
         "evidence_revision": "open-design.official-efforts.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.gateway.2026-10-14",
@@ -578,24 +457,13 @@
         "kind": "exact",
         "value": "mimo-v2.6-pro"
       },
+      "core_model_ref": "mimo-v2.6-pro",
       "display_name": "MiMo V2.6 Pro",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "audio"
-        ],
-        "reasoning": "native",
-        "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "high"
-        ],
-        "context_limit": 1048000,
-        "output_limit": 32000,
         "evidence_revision": "open-design.official-efforts.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.gateway.2026-10-14",
@@ -612,25 +480,14 @@
         "kind": "exact",
         "value": "minimax-m3.1-flash"
       },
+      "core_model_ref": "minimax-m3.1-flash",
       "display_name": "MiniMax M3.1 Flash",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [
-          "image"
-        ],
-        "reasoning": "native",
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1000000,
+        "input_resources": ["image"],
         "output_limit": 32000,
         "evidence_revision": "open-design.official-efforts.2026-11-07"
       },
@@ -642,6 +499,7 @@
         "kind": "exact",
         "value": "gpt-image-2"
       },
+      "core_model_ref": "gpt-image-2",
       "display_name": "GPT Image 2",
       "supported_protocols": [
         "openai-chat-completions.v1"
@@ -649,17 +507,7 @@
       "selected_protocol": "openai-chat-completions.v1",
       "default_enabled": false,
       "capabilities": {
-        "operations": [
-          "image_generate"
-        ],
-        "input_resources": [],
-        "output_resources": [
-          "image"
-        ],
-        "reasoning": "unsupported",
         "provider_native_tools": [],
-        "reasoning_control": "fixed_off",
-        "reasoning_efforts": [],
         "evidence_revision": "open-design.image-source.2026-11-07"
       },
       "provenance_ref": "https://github.com/nexu-io/open-design/blob/87a4f91c30/apps/daemon/src/media/vela.ts"
@@ -670,6 +518,7 @@
         "kind": "exact",
         "value": "nano-banana-2"
       },
+      "core_model_ref": "nano-banana-2",
       "display_name": "Nano Banana 2",
       "supported_protocols": [
         "openai-chat-completions.v1"
@@ -677,17 +526,7 @@
       "selected_protocol": "openai-chat-completions.v1",
       "default_enabled": false,
       "capabilities": {
-        "operations": [
-          "image_generate"
-        ],
-        "input_resources": [],
-        "output_resources": [
-          "image"
-        ],
-        "reasoning": "unsupported",
         "provider_native_tools": [],
-        "reasoning_control": "fixed_off",
-        "reasoning_efforts": [],
         "evidence_revision": "open-design.image-source.2026-11-07"
       },
       "provenance_ref": "https://github.com/nexu-io/open-design/blob/87a4f91c30/apps/daemon/src/media/vela.ts"
@@ -698,6 +537,7 @@
         "kind": "exact",
         "value": "nano-banana-2-lite"
       },
+      "core_model_ref": "nano-banana-2-lite",
       "display_name": "Nano Banana 2 Lite",
       "supported_protocols": [
         "openai-chat-completions.v1"
@@ -705,17 +545,7 @@
       "selected_protocol": "openai-chat-completions.v1",
       "default_enabled": false,
       "capabilities": {
-        "operations": [
-          "image_generate"
-        ],
-        "input_resources": [],
-        "output_resources": [
-          "image"
-        ],
-        "reasoning": "unsupported",
         "provider_native_tools": [],
-        "reasoning_control": "fixed_off",
-        "reasoning_efforts": [],
         "evidence_revision": "open-design.image-source.2026-11-07"
       },
       "provenance_ref": "https://github.com/nexu-io/open-design/blob/87a4f91c30/apps/daemon/src/media/vela.ts"
@@ -726,6 +556,7 @@
         "kind": "exact",
         "value": "seedream-5.0"
       },
+      "core_model_ref": "seedream-5.0",
       "display_name": "Seedream 5.0",
       "supported_protocols": [
         "openai-chat-completions.v1"
@@ -733,17 +564,7 @@
       "selected_protocol": "openai-chat-completions.v1",
       "default_enabled": false,
       "capabilities": {
-        "operations": [
-          "image_generate"
-        ],
-        "input_resources": [],
-        "output_resources": [
-          "image"
-        ],
-        "reasoning": "unsupported",
         "provider_native_tools": [],
-        "reasoning_control": "fixed_off",
-        "reasoning_efforts": [],
         "evidence_revision": "open-design.image-source.2026-11-07"
       },
       "provenance_ref": "https://github.com/nexu-io/open-design/blob/87a4f91c30/apps/daemon/src/media/vela.ts"
@@ -754,6 +575,7 @@
         "kind": "exact",
         "value": "seedream-5.0-pro"
       },
+      "core_model_ref": "seedream-5.0-pro",
       "display_name": "Seedream 5.0 Pro",
       "supported_protocols": [
         "openai-chat-completions.v1"
@@ -761,17 +583,7 @@
       "selected_protocol": "openai-chat-completions.v1",
       "default_enabled": false,
       "capabilities": {
-        "operations": [
-          "image_generate"
-        ],
-        "input_resources": [],
-        "output_resources": [
-          "image"
-        ],
-        "reasoning": "unsupported",
         "provider_native_tools": [],
-        "reasoning_control": "fixed_off",
-        "reasoning_efforts": [],
         "evidence_revision": "open-design.image-source.2026-11-07"
       },
       "provenance_ref": "https://github.com/nexu-io/open-design/blob/87a4f91c30/apps/daemon/src/media/vela.ts"
@@ -782,26 +594,15 @@
         "kind": "exact",
         "value": "gpt-6-sol"
       },
+      "core_model_ref": "gpt-6-sol",
       "display_name": "GPT-6 Sol",
       "supported_protocols": [
         "openai-responses.v1"
       ],
       "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "file"
-        ],
-        "reasoning": "native",
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1050000,
+        "input_resources": ["image", "file"],
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
         "output_limit": 32000,
         "evidence_revision": "open-design.catalog-tier.2026-11-07"
       },
@@ -814,26 +615,15 @@
         "kind": "exact",
         "value": "gpt-6.1-terra"
       },
+      "core_model_ref": "gpt-6.1-terra",
       "display_name": "GPT-6.1 Terra",
       "supported_protocols": [
         "openai-responses.v1"
       ],
       "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "file"
-        ],
-        "reasoning": "native",
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1050000,
+        "input_resources": ["image", "file"],
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
         "output_limit": 32000,
         "evidence_revision": "open-design.catalog-tier.2026-11-07"
       },
@@ -846,27 +636,14 @@
         "kind": "exact",
         "value": "gpt-6-astra"
       },
+      "core_model_ref": "gpt-6-astra",
       "display_name": "GPT-6 Astra",
       "supported_protocols": [
         "openai-responses.v1"
       ],
       "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "file"
-        ],
-        "reasoning": "native",
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1050000,
-        "output_limit": 128000,
+        "input_resources": ["image", "file"],
         "evidence_revision": "open-design.catalog-tier.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.catalog-tier.2026-11-07",
@@ -878,27 +655,13 @@
         "kind": "exact",
         "value": "claude-sonnet-5.5"
       },
+      "core_model_ref": "claude-sonnet-5.5",
       "display_name": "Claude Sonnet 5.5",
       "supported_protocols": [
         "anthropic-messages.v1"
       ],
       "selected_protocol": "anthropic-messages.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "file"
-        ],
-        "reasoning": "native",
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1000000,
-        "output_limit": 128000,
         "evidence_revision": "open-design.catalog-tier.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.catalog-tier.2026-11-07",
@@ -912,27 +675,13 @@
         "kind": "exact",
         "value": "claude-opus-5.5"
       },
+      "core_model_ref": "claude-opus-5.5",
       "display_name": "Claude Opus 5.5",
       "supported_protocols": [
         "anthropic-messages.v1"
       ],
       "selected_protocol": "anthropic-messages.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "file"
-        ],
-        "reasoning": "native",
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1000000,
-        "output_limit": 128000,
         "evidence_revision": "open-design.catalog-tier.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.catalog-tier.2026-11-07",
@@ -946,27 +695,13 @@
         "kind": "exact",
         "value": "claude-fable-5.1"
       },
+      "core_model_ref": "claude-fable-5.1",
       "display_name": "Claude Fable 5.1",
       "supported_protocols": [
         "anthropic-messages.v1"
       ],
       "selected_protocol": "anthropic-messages.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "file"
-        ],
-        "reasoning": "native",
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1000000,
-        "output_limit": 128000,
         "evidence_revision": "open-design.catalog-tier.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.catalog-tier.2026-11-07",
@@ -980,25 +715,13 @@
         "kind": "exact",
         "value": "gemini-3.8-flash"
       },
+      "core_model_ref": "gemini-3.8-flash",
       "display_name": "Gemini 3.8 Flash",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "audio"
-        ],
-        "reasoning": "native",
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high"
-        ],
-        "context_limit": 1048000,
-        "output_limit": 64000,
         "evidence_revision": "open-design.catalog-tier.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.catalog-tier.2026-11-07"
@@ -1009,26 +732,13 @@
         "kind": "exact",
         "value": "gemini-4-argon"
       },
+      "core_model_ref": "gemini-4-argon",
       "display_name": "Gemini 4 Argon",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "file",
-          "audio"
-        ],
-        "reasoning": "native",
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high"
-        ],
-        "context_limit": 1048000,
-        "output_limit": 64000,
         "evidence_revision": "open-design.catalog-tier.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.catalog-tier.2026-11-07"
@@ -1039,22 +749,14 @@
         "kind": "exact",
         "value": "kimi-k3"
       },
+      "core_model_ref": "kimi-k3",
       "display_name": "Kimi K3",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [
-          "image"
-        ],
-        "reasoning": "native",
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "high",
-          "max"
-        ],
+        "input_resources": ["image"],
         "context_limit": 1048000,
         "output_limit": 32000,
         "evidence_revision": "open-design.catalog-tier.2026-11-07"
@@ -1067,24 +769,13 @@
         "kind": "exact",
         "value": "kimi-k3.1-pro"
       },
+      "core_model_ref": "kimi-k3.1-pro",
       "display_name": "Kimi K3.1 Pro",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [
-          "image"
-        ],
-        "reasoning": "native",
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "high",
-          "max"
-        ],
-        "context_limit": 1048000,
-        "output_limit": 32000,
         "evidence_revision": "open-design.catalog-tier.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.catalog-tier.2026-11-07"
@@ -1095,23 +786,13 @@
         "kind": "exact",
         "value": "hy4"
       },
+      "core_model_ref": "hy4",
       "display_name": "Hy4",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [
-          "image"
-        ],
-        "reasoning": "native",
-        "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "high"
-        ],
-        "context_limit": 1048000,
-        "output_limit": 64000,
         "evidence_revision": "open-design.catalog-tier.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.catalog-tier.2026-11-07"
@@ -1122,21 +803,13 @@
         "kind": "exact",
         "value": "grok-4.7"
       },
+      "core_model_ref": "grok-4.7",
       "display_name": "Grok 4.7",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "file"
-        ],
-        "reasoning": "native",
-        "reasoning_control": "fixed_on",
-        "reasoning_efforts": [],
-        "context_limit": 500000,
-        "output_limit": 128000,
         "evidence_revision": "open-design.catalog-tier.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.catalog-tier.2026-11-07",
@@ -1148,22 +821,13 @@
         "kind": "exact",
         "value": "muse-spark-1.3"
       },
+      "core_model_ref": "muse-spark-1.3",
       "display_name": "Muse Spark 1.3",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "file",
-          "audio"
-        ],
-        "reasoning": "native",
-        "reasoning_control": "fixed_on",
-        "reasoning_efforts": [],
-        "context_limit": 1048000,
-        "output_limit": 32000,
         "evidence_revision": "open-design.catalog-tier.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.catalog-tier.2026-11-07",
@@ -1175,22 +839,13 @@
         "kind": "exact",
         "value": "muse-wonder"
       },
+      "core_model_ref": "muse-wonder",
       "display_name": "Muse Wonder",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "file",
-          "audio"
-        ],
-        "reasoning": "native",
-        "reasoning_control": "fixed_on",
-        "reasoning_efforts": [],
-        "context_limit": 1048000,
-        "output_limit": 32000,
         "evidence_revision": "open-design.catalog-tier.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.catalog-tier.2026-11-07",

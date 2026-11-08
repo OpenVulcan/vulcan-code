@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "typesafe",
-  "revision": 3,
-  "published_at": "2026-10-26T15:26:02Z",
+  "revision": 4,
+  "published_at": "2026-11-08T06:25:07Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -125,6 +125,7 @@
         "kind": "exact",
         "value": "jev-1.14.0"
       },
+      "core_model_ref": "jev-1.14.0",
       "supported_protocols": [
         "typesafe-systemone.v1"
       ],
@@ -143,6 +144,7 @@
         "kind": "exact",
         "value": "jev-1.13.0"
       },
+      "core_model_ref": "jev-1.13.0",
       "supported_protocols": [
         "typesafe-systemone.v1"
       ],

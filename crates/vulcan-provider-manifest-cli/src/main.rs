@@ -14,9 +14,77 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use vulcan_provider_adapters::ManifestOwnership;
 use vulcan_provider_config::manifest_sync::{
-    RemoteProviderEntry, TrustedSigningKey, build_index_document, sign_index_document,
-    verify_and_parse_index, verify_provider_bytes,
+    RemoteCoreModelsEntry, RemoteProviderEntry, TrustedSigningKey, build_index_document,
+    sign_index_document, verify_and_parse_index, verify_provider_bytes,
 };
+
+/// Source-tree core model list text, read once and shared by every compile in this process.
+/// 源码树核心模型清单文本，每个进程读取一次，供本进程全部编译共享。
+fn source_core_models_text() -> Result<&'static str, String> {
+    static TEXT: std::sync::OnceLock<Result<String, String>> = std::sync::OnceLock::new();
+    TEXT.get_or_init(|| {
+        let path = source_core_models_path();
+        std::fs::read_to_string(&path).map_err(|error| {
+            format!(
+                "core model list `{}` could not be read: {error}",
+                path.display()
+            )
+        })
+    })
+    .as_deref()
+    .map_err(Clone::clone)
+}
+
+/// Returns the source-tree core model list path next to the bundled index.
+/// 返回与内置 Index 同目录的源码树核心模型清单路径。
+fn source_core_models_path() -> PathBuf {
+    vulcan_runtime_assets::source_bundled_provider_manifest_index_path()
+        .with_file_name(vulcan_provider_adapters::provider_manifest::CORE_MODELS_RELATIVE_URL)
+}
+
+/// Compiles the source-tree core model list the CLI resolves every reference against.
+/// 编译 CLI 解析全部引用所用的源码树核心模型清单。
+///
+/// The CLI reads the core file directly instead of through the bundled index, so `build-index`
+/// can pin a core list the current index does not pin yet.
+/// CLI 直接读取核心文件而不经过内置 Index，使 `build-index` 能固定当前 Index 尚未固定的核心清单。
+fn source_core_models()
+-> Result<&'static vulcan_provider_adapters::provider_manifest::CoreModelCatalog, String> {
+    static CORE: std::sync::OnceLock<
+        Result<vulcan_provider_adapters::provider_manifest::CoreModelCatalog, String>,
+    > = std::sync::OnceLock::new();
+    CORE.get_or_init(|| {
+        vulcan_provider_adapters::provider_manifest::compile_core_models_text(
+            source_core_models_text()?,
+        )
+        .map_err(|error| format!("core model list is invalid: {error}"))
+    })
+    .as_ref()
+    .map_err(Clone::clone)
+}
+
+/// Compiles one system manifest against the source-tree core model list.
+/// 以源码树核心模型清单编译一份系统清单。
+fn compile_system_manifest(
+    text: &str,
+) -> Result<
+    vulcan_provider_adapters::ResolvedProviderManifest,
+    vulcan_provider_adapters::provider_manifest::ManifestValidationError,
+> {
+    let core = source_core_models().map_err(|error| {
+        vulcan_provider_adapters::provider_manifest::ManifestValidationError::new(
+            "core_models_unavailable",
+            "$",
+            error,
+        )
+    })?;
+    vulcan_provider_adapters::compile_manifest_text_with_core(
+        text,
+        ManifestOwnership::System,
+        vulcan_provider_adapters::provider_manifest::ManifestSourceLayer::Bundled,
+        Some(core),
+    )
+}
 
 /// Usage failure exit code.
 /// 用法失败退出码。
@@ -161,8 +229,12 @@ fn cmd_validate_all(args: &[String]) -> Result<(), CliError> {
         vulcan_provider_adapters::verify_source_bundled_manifest_integrity_index()
             .map_err(CliError::Operation)?;
     println!("validate-all: bundled integrity index binds {indexed_provider_count} provider(s)");
+    let core_model_count = vulcan_provider_adapters::verify_source_bundled_core_models()
+        .map_err(CliError::Operation)?;
+    println!("validate-all: bundled integrity index binds {core_model_count} core model(s)");
     let directory = vulcan_runtime_assets::source_bundled_provider_manifests_directory();
     validate_manifest_json_schema(&directory)?;
+    validate_core_models_json_schema()?;
     cmd_validate(&[directory.to_string_lossy().into_owned()])
 }
 
@@ -226,6 +298,47 @@ fn validate_manifest_json_schema(directory: &Path) -> Result<(), CliError> {
     Ok(())
 }
 
+/// Validates the source-tree core model list against its Draft 2020-12 schema.
+/// 按 Draft 2020-12 Schema 校验源码树核心模型清单。
+fn validate_core_models_json_schema() -> Result<(), CliError> {
+    let schema_path = vulcan_runtime_assets::source_provider_manifest_schema_directory()
+        .join("core-models-v1.schema.json");
+    let schema_text = read_bounded(&schema_path)?;
+    let schema = parse_bounded_json(&schema_text, &format!("schema `{}`", schema_path.display()))?;
+    jsonschema::draft202012::meta::validate(&schema).map_err(|error| {
+        CliError::Operation(format!(
+            "schema `{}` is not a valid Draft 2020-12 schema: {error}",
+            schema_path.display()
+        ))
+    })?;
+    let validator = jsonschema::draft202012::new(&schema).map_err(|error| {
+        CliError::Operation(format!(
+            "schema `{}` could not be compiled: {error}",
+            schema_path.display()
+        ))
+    })?;
+    let path = source_core_models_path();
+    let text = read_bounded(&path)?;
+    let document = parse_bounded_json(&text, &format!("core model list `{}`", path.display()))?;
+    let mut failures = 0_u32;
+    for error in validator.iter_errors(&document) {
+        failures += 1;
+        eprintln!(
+            "{}{}: JSON Schema violation at {}: {}",
+            path.display(),
+            error.instance_path(),
+            error.schema_path(),
+            error
+        );
+    }
+    if failures > 0 {
+        return Err(CliError::Operation(format!(
+            "{failures} core model list JSON Schema violation(s) found."
+        )));
+    }
+    Ok(())
+}
+
 /// Prints one validation error from a compile attempt.
 /// 打印一次编译尝试的单个校验错误。
 fn print_compile_error(
@@ -242,7 +355,7 @@ fn cmd_validate(args: &[String]) -> Result<(), CliError> {
     let mut failures = 0_u32;
     for path in manifest_files(&target)? {
         let text = read_bounded(&path)?;
-        match vulcan_provider_adapters::compile_manifest_text(&text, ManifestOwnership::System) {
+        match compile_system_manifest(&text) {
             Ok(resolved) => println!(
                 "{}: valid (revision {}, provider {})",
                 path.display(),
@@ -269,8 +382,7 @@ fn cmd_compile(args: &[String]) -> Result<(), CliError> {
     let path = required_path(args, 0, "compile <file>")?;
     let text = read_bounded(&path)?;
     let resolved =
-        vulcan_provider_adapters::compile_manifest_text(&text, ManifestOwnership::System)
-            .map_err(|error| CliError::Operation(error.to_string()))?;
+        compile_system_manifest(&text).map_err(|error| CliError::Operation(error.to_string()))?;
     println!("provider: {}", resolved.descriptor.id);
     println!("revision: {}", resolved.revision);
     println!(
@@ -311,8 +423,7 @@ fn cmd_inspect(args: &[String]) -> Result<(), CliError> {
     let path = required_path(args, 0, "inspect <file>")?;
     let text = read_bounded(&path)?;
     let resolved =
-        vulcan_provider_adapters::compile_manifest_text(&text, ManifestOwnership::System)
-            .map_err(|error| CliError::Operation(error.to_string()))?;
+        compile_system_manifest(&text).map_err(|error| CliError::Operation(error.to_string()))?;
     println!("provider: {}", resolved.descriptor.id);
     println!("revision: {}", resolved.revision);
     println!(
@@ -606,9 +717,8 @@ fn cmd_build_index(args: &[String]) -> Result<(), CliError> {
     let mut entries = Vec::new();
     for path in manifest_files(&directory)? {
         let text = read_bounded(&path)?;
-        let resolved =
-            vulcan_provider_adapters::compile_manifest_text(&text, ManifestOwnership::System)
-                .map_err(|error| CliError::Operation(format!("{}: {error}", path.display())))?;
+        let resolved = compile_system_manifest(&text)
+            .map_err(|error| CliError::Operation(format!("{}: {error}", path.display())))?;
         let provider_id = resolved.descriptor.id.clone();
         let sha256 = vulcan_provider_config::manifest_store::ManifestStoreLayout::sha256_hex(
             text.as_bytes(),
@@ -651,7 +761,27 @@ fn cmd_build_index(args: &[String]) -> Result<(), CliError> {
     let revision: u64 = revision
         .parse()
         .map_err(|_| CliError::Usage("--revision must be a positive integer".into()))?;
-    let index_bytes = build_index_document(entries, revision, key_id, now_ms, expires_ms);
+    // coreModels pins the exact source core list; the packaged index keeps it next to itself and
+    // a remote index serves it from the origin root.
+    // coreModels 固定精确的源码核心清单；打包 Index 将其放在自身旁边，远端 Index 从源根目录提供。
+    let core = source_core_models().map_err(CliError::Operation)?;
+    let core_text = source_core_models_text().map_err(CliError::Operation)?;
+    let core_file = vulcan_provider_adapters::provider_manifest::CORE_MODELS_RELATIVE_URL;
+    let core_models = RemoteCoreModelsEntry {
+        revision: core.revision(),
+        relative_url: if relative_prefix.is_some() {
+            String::from(core_file)
+        } else {
+            format!("/{core_file}")
+        },
+        sha256: vulcan_provider_config::manifest_store::ManifestStoreLayout::sha256_hex(
+            core_text.as_bytes(),
+        ),
+        bytes: core_text.len() as u64,
+        minimum_engine_contract: 1,
+    };
+    let index_bytes =
+        build_index_document(entries, core_models, revision, key_id, now_ms, expires_ms);
     let index_text = String::from_utf8(index_bytes)
         .map_err(|_| String::from("index serialization produced invalid UTF-8"))?;
     if let Some(out) = flag_path(args, "--out") {
@@ -778,7 +908,7 @@ fn cmd_fixture_check(args: &[String]) -> Result<(), CliError> {
     let mut failures = 0_u32;
     for path in &files {
         let text = read_bounded(path)?;
-        match vulcan_provider_adapters::compile_manifest_text(&text, ManifestOwnership::System) {
+        match compile_system_manifest(&text) {
             Ok(resolved) => println!(
                 "{}: ok (revision {})",
                 path.file_name()
@@ -846,8 +976,7 @@ fn cmd_dry_run_activate(args: &[String]) -> Result<(), CliError> {
     let path = required_path(args, 0, "dry-run-activate <file>")?;
     let text = read_bounded(&path)?;
     let resolved =
-        vulcan_provider_adapters::compile_manifest_text(&text, ManifestOwnership::System)
-            .map_err(|error| CliError::Operation(error.to_string()))?;
+        compile_system_manifest(&text).map_err(|error| CliError::Operation(error.to_string()))?;
     // The candidate would be pinned by an index with these exact facts; verifying the bytes
     // proves activation eligibility without touching any store or runtime.
     // 候选将由 Index 以这些精确事实固定；校验字节可证明激活资格而不触碰任何存储或运行时。
@@ -1068,7 +1197,7 @@ mod tests {
         assert!(!files.is_empty(), "bundled manifests must exist");
         for path in files {
             let text = read_bounded(&path).expect("readable manifest");
-            vulcan_provider_adapters::compile_manifest_text(&text, ManifestOwnership::System)
+            compile_system_manifest(&text)
                 .unwrap_or_else(|error| panic!("{} must compile: {error}", path.display()));
         }
     }
@@ -1095,9 +1224,7 @@ mod tests {
         )
         .expect("bundled tavily manifest");
         std::fs::write(&manifest_path, &text).expect("write manifest");
-        let resolved =
-            vulcan_provider_adapters::compile_manifest_text(&text, ManifestOwnership::System)
-                .expect("compile");
+        let resolved = compile_system_manifest(&text).expect("compile");
         let entry = RemoteProviderEntry {
             provider_id: resolved.descriptor.id.clone(),
             revision: resolved.revision,
@@ -1111,6 +1238,10 @@ mod tests {
         let now_ms = current_unix_millis();
         let index_bytes = build_index_document(
             vec![entry],
+            vulcan_provider_config::manifest_sync::installed_core_models_entry(String::from(
+                "/core-models.json",
+            ))
+            .expect("installed core model list"),
             1,
             "cli-test-key",
             now_ms,

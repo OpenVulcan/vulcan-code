@@ -1077,6 +1077,12 @@ pub struct ModelRule {
     /// Exact or longest-prefix matcher.
     /// 精确或最长前缀匹配器。
     pub matcher: RuleMatcher,
+    /// Optional explicit core-model identity whose model-level capabilities this rule inherits
+    /// between the provider defaults and its own capability patch; never inferred from names.
+    /// 可选的显式核心模型身份；此规则在供应商默认值与自身能力补丁之间继承其模型级能力，
+    /// 绝不按名称推断。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub core_model_ref: Option<String>,
     /// Optional user-visible model name owned by this exact rule.
     /// 此精确规则持有的可选用户可见模型名称。
     #[serde(default, skip_serializing_if = "Option::is_none")]

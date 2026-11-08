@@ -1,8 +1,7 @@
 {
   "schema_version": 2,
   "sources": [
-    "vulcan:bundled-provider-manifests",
-    "vulcan:provider-specific-capabilities",
+    "vulcan:bundled-core-models",
     "openrouter:/api/v1/models?output_modalities=all (cross reference for context and modality metadata only)"
   ],
   "fallback": {
@@ -15,32 +14,6 @@
     ]
   },
   "models": [
-    {
-      "key": "anthropic/claude-opus-4.8",
-      "aliases": [
-        "anthropic/claude-4.8-opus-20260528",
-        "anthropic: claude opus 4.8",
-        "claude-opus-4.8"
-      ],
-      "context_window": 1000000,
-      "input_modalities": [
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ]
-    },
-    {
-      "key": "anthropic/claude-sonnet-5",
-      "aliases": [],
-      "context_window": 1000000,
-      "input_modalities": [
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ]
-    },
     {
       "key": "beam-free",
       "aliases": [],
@@ -192,6 +165,27 @@
       ]
     },
     {
+      "key": "claude-haiku-5",
+      "aliases": [],
+      "context_window": 200000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": "native",
+      "reasoning_control": "unknown",
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
       "key": "claude-haiku-5-5",
       "aliases": [],
       "context_window": 1000000,
@@ -240,6 +234,46 @@
         "high",
         "xhigh",
         "max"
+      ]
+    },
+    {
+      "key": "claude-mythos-5",
+      "aliases": [],
+      "context_window": 200000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": "native",
+      "reasoning_control": "unknown",
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "key": "claude-opus-4-5",
+      "aliases": [],
+      "context_window": 200000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": "native",
+      "reasoning_control": "unknown",
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high"
       ]
     },
     {
@@ -441,7 +475,9 @@
     },
     {
       "key": "claude-sonnet-5",
-      "aliases": [],
+      "aliases": [
+        "anthropic/claude-sonnet-5"
+      ],
       "context_window": 1000000,
       "input_modalities": [
         "image",
@@ -595,7 +631,9 @@
     },
     {
       "key": "deepseek-v4-flash",
-      "aliases": [],
+      "aliases": [
+        "deepseek/deepseek-v4-flash"
+      ],
       "context_window": 1000000,
       "input_modalities": [
         "text"
@@ -627,8 +665,30 @@
       "reasoning_control": "unknown"
     },
     {
+      "key": "deepseek-v4-flash-fast",
+      "aliases": [
+        "deepseek/deepseek-v4-flash-fast"
+      ],
+      "context_window": 1000000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": "native",
+      "reasoning_control": "effort_selection",
+      "reasoning_efforts": [
+        "low",
+        "high",
+        "max"
+      ]
+    },
+    {
       "key": "deepseek-v4-flash-vision-exp",
-      "aliases": [],
+      "aliases": [
+        "deepseek/deepseek-v4-flash-vision-exp"
+      ],
       "context_window": 1048000,
       "input_modalities": [
         "image",
@@ -649,7 +709,9 @@
     },
     {
       "key": "deepseek-v4-pro",
-      "aliases": [],
+      "aliases": [
+        "deepseek/deepseek-v4-pro"
+      ],
       "context_window": 1000000,
       "input_modalities": [
         "text"
@@ -689,7 +751,9 @@
     },
     {
       "key": "deepseek-v4.1-flash",
-      "aliases": [],
+      "aliases": [
+        "deepseek/deepseek-v4.1-flash"
+      ],
       "context_window": 1048000,
       "input_modalities": [
         "image",
@@ -750,97 +814,6 @@
       ]
     },
     {
-      "key": "deepseek/deepseek-v4-flash",
-      "aliases": [],
-      "context_window": 1000000,
-      "input_modalities": [
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "high",
-        "max"
-      ]
-    },
-    {
-      "key": "deepseek/deepseek-v4-flash-fast",
-      "aliases": [
-        "deepseek-v4-flash-fast"
-      ],
-      "context_window": 1000000,
-      "input_modalities": [
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "high",
-        "max"
-      ]
-    },
-    {
-      "key": "deepseek/deepseek-v4-flash-vision-exp",
-      "aliases": [],
-      "context_window": 1000000,
-      "input_modalities": [
-        "image",
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "high",
-        "max"
-      ]
-    },
-    {
-      "key": "deepseek/deepseek-v4-pro",
-      "aliases": [],
-      "context_window": 1000000,
-      "input_modalities": [
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "high",
-        "max"
-      ]
-    },
-    {
-      "key": "deepseek/deepseek-v4.1-flash",
-      "aliases": [],
-      "context_window": 1000000,
-      "input_modalities": [
-        "image",
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "high",
-        "max"
-      ]
-    },
-    {
       "key": "egg-alpha",
       "aliases": [],
       "context_window": 1000000,
@@ -856,6 +829,65 @@
       "reasoning_control": "toggle",
       "reasoning_efforts": [
         "none",
+        "high"
+      ]
+    },
+    {
+      "key": "fugu-ultra",
+      "aliases": [
+        "sakana/fugu-ultra",
+        "sakana/fugu-ultra-20260615",
+        "sakana: fugu ultra"
+      ],
+      "context_window": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": "native",
+      "reasoning_control": "effort_selection",
+      "reasoning_efforts": [
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "key": "gemini-2.5-flash",
+      "aliases": [],
+      "context_window": 200000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": "native",
+      "reasoning_control": "unknown",
+      "reasoning_efforts": [
+        "none",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "key": "gemini-2.5-pro",
+      "aliases": [],
+      "context_window": 200000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": "native",
+      "reasoning_control": "unknown",
+      "reasoning_efforts": [
+        "low",
+        "medium",
         "high"
       ]
     },
@@ -884,8 +916,27 @@
       ]
     },
     {
-      "key": "gemini-3.1-flash-lite",
+      "key": "gemini-3-pro",
       "aliases": [],
+      "context_window": 200000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": "native",
+      "reasoning_control": "unknown",
+      "reasoning_efforts": [
+        "low",
+        "high"
+      ]
+    },
+    {
+      "key": "gemini-3.1-flash-lite",
+      "aliases": [
+        "google/gemini-3.1-flash-lite"
+      ],
       "context_window": 1048576,
       "input_modalities": [
         "audio",
@@ -952,7 +1003,9 @@
     },
     {
       "key": "gemini-3.5-flash",
-      "aliases": [],
+      "aliases": [
+        "google/gemini-3.5-flash"
+      ],
       "context_window": 1048576,
       "input_modalities": [
         "audio",
@@ -969,6 +1022,29 @@
       "reasoning_control": "fixed_on",
       "reasoning_efforts": [
         "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "key": "gemini-3.5-flash-lite",
+      "aliases": [
+        "google/gemini-3.5-flash-lite",
+        "google/gemini-3.5-flash-lite-20260721",
+        "google: gemini 3.5 flash lite"
+      ],
+      "context_window": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": "native",
+      "reasoning_control": "effort_selection",
+      "reasoning_efforts": [
         "low",
         "medium",
         "high"
@@ -976,7 +1052,9 @@
     },
     {
       "key": "gemini-3.6-flash",
-      "aliases": [],
+      "aliases": [
+        "google/gemini-3.6-flash"
+      ],
       "context_window": 1048576,
       "input_modalities": [
         "audio",
@@ -999,8 +1077,35 @@
       ]
     },
     {
+      "key": "gemini-3.7-flash",
+      "aliases": [
+        "google/gemini-3.7-flash",
+        "google/gemini-3.7-flash-20260813",
+        "google: gemini 3.7 flash"
+      ],
+      "context_window": 1048576,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": "native",
+      "reasoning_control": "effort_selection",
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
       "key": "gemini-3.8-flash",
-      "aliases": [],
+      "aliases": [
+        "google/gemini-3.8-flash",
+        "google/gemini-3.8-flash-20260902",
+        "google: gemini 3.8 flash"
+      ],
       "context_window": 1048000,
       "input_modalities": [
         "audio",
@@ -1043,7 +1148,9 @@
     },
     {
       "key": "glm-5",
-      "aliases": [],
+      "aliases": [
+        "zai-org/glm-5"
+      ],
       "context_window": 198000,
       "input_modalities": [
         "text"
@@ -1060,7 +1167,9 @@
     },
     {
       "key": "glm-5.1",
-      "aliases": [],
+      "aliases": [
+        "zai-org/glm-5.1"
+      ],
       "context_window": 198000,
       "input_modalities": [
         "text"
@@ -1077,7 +1186,11 @@
     },
     {
       "key": "glm-5.2",
-      "aliases": [],
+      "aliases": [
+        "z-ai/glm-5.2",
+        "zai-org/glm-5.2",
+        "zhipu/glm-5.2"
+      ],
       "context_window": 1000000,
       "input_modalities": [
         "text"
@@ -1090,6 +1203,28 @@
       "reasoning_efforts": [
         "none",
         "adaptive"
+      ]
+    },
+    {
+      "key": "glm-5.2-fast",
+      "aliases": [
+        "zai-org/glm-5.2-fast"
+      ],
+      "context_window": 1000000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": "native",
+      "reasoning_control": "effort_selection",
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
       ]
     },
     {
@@ -1112,7 +1247,9 @@
     },
     {
       "key": "glm-5.3",
-      "aliases": [],
+      "aliases": [
+        "zai-org/glm-5.3"
+      ],
       "context_window": 1000000,
       "input_modalities": [
         "text"
@@ -1131,7 +1268,9 @@
     },
     {
       "key": "glm-5.3-flash",
-      "aliases": [],
+      "aliases": [
+        "z-ai/glm-5.3-flash"
+      ],
       "context_window": 1048000,
       "input_modalities": [
         "image",
@@ -1171,146 +1310,6 @@
         "low",
         "high",
         "max"
-      ]
-    },
-    {
-      "key": "google/gemini-3.1-flash-lite",
-      "aliases": [],
-      "context_window": 1000000,
-      "input_modalities": [
-        "image",
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high"
-      ]
-    },
-    {
-      "key": "google/gemini-3.1-pro-preview",
-      "aliases": [
-        "gemini-3.1-pro-preview",
-        "google/gemini-3.1-pro-preview-20260219",
-        "google: gemini 3.1 pro preview"
-      ],
-      "context_window": 1048576,
-      "input_modalities": [
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ]
-    },
-    {
-      "key": "google/gemini-3.5-flash",
-      "aliases": [],
-      "context_window": 1000000,
-      "input_modalities": [
-        "image",
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high"
-      ]
-    },
-    {
-      "key": "google/gemini-3.5-flash-lite",
-      "aliases": [
-        "gemini-3.5-flash-lite",
-        "google/gemini-3.5-flash-lite-20260721",
-        "google: gemini 3.5 flash lite"
-      ],
-      "context_window": 1000000,
-      "input_modalities": [
-        "image",
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high"
-      ]
-    },
-    {
-      "key": "google/gemini-3.6-flash",
-      "aliases": [],
-      "context_window": 1000000,
-      "input_modalities": [
-        "image",
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high"
-      ]
-    },
-    {
-      "key": "google/gemini-3.7-flash",
-      "aliases": [
-        "gemini-3.7-flash",
-        "google/gemini-3.7-flash-20260813",
-        "google: gemini 3.7 flash"
-      ],
-      "context_window": 1048576,
-      "input_modalities": [
-        "image",
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high"
-      ]
-    },
-    {
-      "key": "google/gemini-3.8-flash",
-      "aliases": [
-        "google/gemini-3.8-flash-20260902",
-        "google: gemini 3.8 flash"
-      ],
-      "context_window": 1000000,
-      "input_modalities": [
-        "image",
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high"
       ]
     },
     {
@@ -1445,7 +1444,9 @@
     },
     {
       "key": "gpt-5.6-sol",
-      "aliases": [],
+      "aliases": [
+        "openai/gpt-5.6-sol"
+      ],
       "context_window": 1050000,
       "input_modalities": [
         "file",
@@ -1469,7 +1470,9 @@
     },
     {
       "key": "gpt-5.6-terra",
-      "aliases": [],
+      "aliases": [
+        "openai/gpt-5.6-terra"
+      ],
       "context_window": 1050000,
       "input_modalities": [
         "file",
@@ -1668,7 +1671,9 @@
     },
     {
       "key": "grok-4.5",
-      "aliases": [],
+      "aliases": [
+        "xai/grok-4.5"
+      ],
       "context_window": 500000,
       "input_modalities": [
         "image",
@@ -1687,7 +1692,9 @@
     },
     {
       "key": "grok-4.6",
-      "aliases": [],
+      "aliases": [
+        "xai/grok-4.6"
+      ],
       "context_window": 500000,
       "input_modalities": [
         "image",
@@ -1806,6 +1813,28 @@
       ]
     },
     {
+      "key": "hy3-paid",
+      "aliases": [
+        "tencent/hy3-paid"
+      ],
+      "context_window": 262144,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": "native",
+      "reasoning_control": "effort_selection",
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
       "key": "hy4",
       "aliases": [],
       "context_window": 1048000,
@@ -1826,7 +1855,9 @@
     },
     {
       "key": "hy4-preview",
-      "aliases": [],
+      "aliases": [
+        "tencent/hy4-preview"
+      ],
       "context_window": 1048000,
       "input_modalities": [
         "text"
@@ -1857,18 +1888,45 @@
       "reasoning_control": "fixed_on"
     },
     {
-      "key": "inclusionai/ling-3.0-flash-sante:free",
+      "key": "inkling",
       "aliases": [
-        "ling-3.0-flash-sante:free"
+        "thinking machines: inkling",
+        "thinkingmachines/inkling",
+        "thinkingmachines/inkling-20260715"
       ],
-      "context_window": 262144,
+      "context_window": 256000,
       "input_modalities": [
+        "image",
         "text"
       ],
       "output_modalities": [
         "text"
       ],
-      "output_limit": 32768,
+      "reasoning": "native",
+      "reasoning_control": "effort_selection",
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "key": "inkling-small",
+      "aliases": [
+        "thinking machines: inkling small",
+        "thinkingmachines/inkling-small",
+        "thinkingmachines/inkling-small-20260730"
+      ],
+      "context_window": 1000000,
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
       "reasoning": "native",
       "reasoning_control": "effort_selection",
       "reasoning_efforts": [
@@ -1972,7 +2030,9 @@
     },
     {
       "key": "kimi-k2.5",
-      "aliases": [],
+      "aliases": [
+        "moonshotai/kimi-k2.5"
+      ],
       "context_window": 262144,
       "input_modalities": [
         "image",
@@ -1986,7 +2046,9 @@
     },
     {
       "key": "kimi-k2.6",
-      "aliases": [],
+      "aliases": [
+        "moonshotai/kimi-k2.6"
+      ],
       "context_window": 262144,
       "input_modalities": [
         "image",
@@ -2001,7 +2063,9 @@
     },
     {
       "key": "kimi-k2.7-code",
-      "aliases": [],
+      "aliases": [
+        "moonshotai/kimi-k2.7-code"
+      ],
       "context_window": 262144,
       "input_modalities": [
         "image",
@@ -2016,7 +2080,9 @@
     },
     {
       "key": "kimi-k2.7-code-highspeed",
-      "aliases": [],
+      "aliases": [
+        "moonshotai/kimi-k2.7-code-highspeed"
+      ],
       "context_window": 262144,
       "input_modalities": [
         "image",
@@ -2031,7 +2097,10 @@
     },
     {
       "key": "kimi-k3",
-      "aliases": [],
+      "aliases": [
+        "kimi/kimi-k3",
+        "moonshotai/kimi-k3"
+      ],
       "context_window": 1048576,
       "input_modalities": [
         "image",
@@ -2070,22 +2139,48 @@
       ]
     },
     {
-      "key": "kimi/kimi-k3",
-      "aliases": [],
-      "context_window": 1048576,
+      "key": "laguna-s-2.1-free",
+      "aliases": [
+        "poolside/laguna-s-2.1-free"
+      ],
+      "context_window": 256000,
       "input_modalities": [
-        "image",
-        "text",
-        "video"
+        "text"
       ],
       "output_modalities": [
         "text"
       ],
-      "output_limit": 1048576,
       "reasoning": "native",
-      "reasoning_control": "fixed_on",
+      "reasoning_control": "effort_selection",
       "reasoning_efforts": [
-        "adaptive"
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "key": "ling-3.0-flash-sante:free",
+      "aliases": [
+        "inclusionai/ling-3.0-flash-sante:free"
+      ],
+      "context_window": 262144,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "output_limit": 32768,
+      "reasoning": "native",
+      "reasoning_control": "effort_selection",
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
       ]
     },
     {
@@ -2106,9 +2201,9 @@
       "reasoning_control": "fixed_on"
     },
     {
-      "key": "meituan/longcat-2.0:free",
+      "key": "longcat-2.0:free",
       "aliases": [
-        "longcat-2.0:free"
+        "meituan/longcat-2.0:free"
       ],
       "context_window": 1048576,
       "input_modalities": [
@@ -2128,13 +2223,11 @@
       ]
     },
     {
-      "key": "meta/muse-spark-1.1",
+      "key": "mimo-v2.5",
       "aliases": [
-        "meta/muse-spark-1.1-20260709",
-        "meta: muse spark 1.1",
-        "muse-spark-1.1"
+        "xiaomi/mimo-v2.5"
       ],
-      "context_window": 1048576,
+      "context_window": 1000000,
       "input_modalities": [
         "image",
         "text"
@@ -2153,93 +2246,23 @@
       ]
     },
     {
-      "key": "meta/muse-spark-1.2",
+      "key": "mimo-v2.5-pro",
       "aliases": [
-        "meta/muse-spark-1.2-20260805",
-        "meta: muse spark 1.2",
-        "muse-spark-1.2"
+        "xiaomi/mimo-v2.5-pro"
       ],
       "context_window": 1048576,
       "input_modalities": [
-        "image",
         "text"
       ],
       "output_modalities": [
         "text"
       ],
+      "output_limit": 131072,
       "reasoning": "native",
-      "reasoning_control": "effort_selection",
+      "reasoning_control": "toggle",
       "reasoning_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "key": "meta/muse-spark-1.2-contributor",
-      "aliases": [],
-      "context_window": 1048576,
-      "input_modalities": [
-        "image",
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "key": "meta/muse-spark-1.3",
-      "aliases": [
-        "meta/muse-spark-1.3-20260902",
-        "meta: muse spark 1.3"
-      ],
-      "context_window": 1048576,
-      "input_modalities": [
-        "image",
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "key": "meta/muse-spark-1.3-contributor",
-      "aliases": [],
-      "context_window": 1048576,
-      "input_modalities": [
-        "image",
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
+        "none",
+        "adaptive"
       ]
     },
     {
@@ -2290,7 +2313,9 @@
     },
     {
       "key": "minimax-m2.5",
-      "aliases": [],
+      "aliases": [
+        "minimaxai/minimax-m2.5"
+      ],
       "context_window": 196608,
       "input_modalities": [
         "text"
@@ -2306,7 +2331,9 @@
     },
     {
       "key": "minimax-m2.7",
-      "aliases": [],
+      "aliases": [
+        "minimaxai/minimax-m2.7"
+      ],
       "context_window": 200000,
       "input_modalities": [
         "text"
@@ -2320,7 +2347,10 @@
     },
     {
       "key": "minimax-m3",
-      "aliases": [],
+      "aliases": [
+        "minimax/minimax-m3",
+        "minimaxai/minimax-m3"
+      ],
       "context_window": 1000000,
       "input_modalities": [
         "image",
@@ -2350,86 +2380,6 @@
         "text"
       ],
       "output_limit": 128000,
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "key": "minimax/minimax-m3",
-      "aliases": [],
-      "context_window": 1048576,
-      "input_modalities": [
-        "image",
-        "text",
-        "video"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "output_limit": 32768,
-      "reasoning": "native",
-      "reasoning_control": "fixed_on",
-      "reasoning_efforts": [
-        "adaptive"
-      ]
-    },
-    {
-      "key": "minimaxai/minimax-m2.5",
-      "aliases": [],
-      "context_window": 200000,
-      "input_modalities": [
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "key": "minimaxai/minimax-m2.7",
-      "aliases": [],
-      "context_window": 200000,
-      "input_modalities": [
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "key": "minimaxai/minimax-m3",
-      "aliases": [],
-      "context_window": 1000000,
-      "input_modalities": [
-        "image",
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
       "reasoning": "native",
       "reasoning_control": "effort_selection",
       "reasoning_efforts": [
@@ -2522,23 +2472,13 @@
       "reasoning_control": "unknown"
     },
     {
-      "key": "moonshotai/kimi-k2.5",
-      "aliases": [],
-      "context_window": 256000,
-      "input_modalities": [
-        "image",
-        "text"
+      "key": "muse-spark-1.1",
+      "aliases": [
+        "meta/muse-spark-1.1",
+        "meta/muse-spark-1.1-20260709",
+        "meta: muse spark 1.1"
       ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "unsupported",
-      "reasoning_control": "fixed_off"
-    },
-    {
-      "key": "moonshotai/kimi-k2.6",
-      "aliases": [],
-      "context_window": 256000,
+      "context_window": 1048576,
       "input_modalities": [
         "image",
         "text"
@@ -2557,51 +2497,13 @@
       ]
     },
     {
-      "key": "moonshotai/kimi-k2.7-code",
-      "aliases": [],
-      "context_window": 256000,
-      "input_modalities": [
-        "image",
-        "text"
+      "key": "muse-spark-1.2",
+      "aliases": [
+        "meta/muse-spark-1.2",
+        "meta/muse-spark-1.2-20260805",
+        "meta: muse spark 1.2"
       ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "key": "moonshotai/kimi-k2.7-code-highspeed",
-      "aliases": [],
-      "context_window": 262000,
-      "input_modalities": [
-        "image",
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "key": "moonshotai/kimi-k3",
-      "aliases": [],
-      "context_window": 1000000,
+      "context_window": 1048576,
       "input_modalities": [
         "image",
         "text"
@@ -2621,7 +2523,9 @@
     },
     {
       "key": "muse-spark-1.2-contributor",
-      "aliases": [],
+      "aliases": [
+        "meta/muse-spark-1.2-contributor"
+      ],
       "context_window": 1048576,
       "input_modalities": [
         "audio",
@@ -2646,7 +2550,11 @@
     },
     {
       "key": "muse-spark-1.3",
-      "aliases": [],
+      "aliases": [
+        "meta/muse-spark-1.3",
+        "meta/muse-spark-1.3-20260902",
+        "meta: muse spark 1.3"
+      ],
       "context_window": 1048000,
       "input_modalities": [
         "audio",
@@ -2663,7 +2571,9 @@
     },
     {
       "key": "muse-spark-1.3-contributor",
-      "aliases": [],
+      "aliases": [
+        "meta/muse-spark-1.3-contributor"
+      ],
       "context_window": 1048576,
       "input_modalities": [
         "audio",
@@ -2728,6 +2638,23 @@
       "reasoning_control": "fixed_off"
     },
     {
+      "key": "nemotron-3-ultra-550b-a55b",
+      "aliases": [
+        "nvidia/nemotron-3-ultra-550b-a55b",
+        "nvidia/nemotron-3-ultra-550b-a55b-20260604",
+        "nvidia: nemotron 3 ultra"
+      ],
+      "context_window": 1000000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": "unsupported",
+      "reasoning_control": "fixed_off"
+    },
+    {
       "key": "neohorse-1-9b",
       "aliases": [],
       "context_window": 262144,
@@ -2746,67 +2673,6 @@
       ]
     },
     {
-      "key": "nvidia/nemotron-3-ultra-550b-a55b",
-      "aliases": [
-        "nemotron-3-ultra-550b-a55b",
-        "nvidia/nemotron-3-ultra-550b-a55b-20260604",
-        "nvidia: nemotron 3 ultra"
-      ],
-      "context_window": 1000000,
-      "input_modalities": [
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "unsupported",
-      "reasoning_control": "fixed_off"
-    },
-    {
-      "key": "openai/gpt-5.6-sol",
-      "aliases": [],
-      "context_window": 1050000,
-      "input_modalities": [
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ]
-    },
-    {
-      "key": "openai/gpt-5.6-terra",
-      "aliases": [],
-      "context_window": 1050000,
-      "input_modalities": [
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ]
-    },
-    {
-      "key": "poolside/laguna-s-2.1-free",
-      "aliases": [
-        "laguna-s-2.1-free"
-      ],
-      "context_window": 256000,
-      "input_modalities": [
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
       "key": "qwen-image-2.0",
       "aliases": [],
       "input_modalities": [
@@ -2817,192 +2683,6 @@
       ],
       "reasoning": "unsupported",
       "reasoning_control": "fixed_off"
-    },
-    {
-      "key": "qwen/qwen3.6-max-preview",
-      "aliases": [
-        "qwen3.6-max-preview"
-      ],
-      "context_window": 200000,
-      "input_modalities": [
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "key": "qwen/qwen3.6-plus",
-      "aliases": [],
-      "context_window": 200000,
-      "input_modalities": [
-        "image",
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "key": "qwen/qwen3.7-flash",
-      "aliases": [],
-      "context_window": 1000000,
-      "input_modalities": [
-        "image",
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "key": "qwen/qwen3.7-max",
-      "aliases": [],
-      "context_window": 1000000,
-      "input_modalities": [
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "key": "qwen/qwen3.7-plus",
-      "aliases": [],
-      "context_window": 1000000,
-      "input_modalities": [
-        "image",
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "key": "qwen/qwen3.8-27b",
-      "aliases": [],
-      "context_window": 262144,
-      "input_modalities": [
-        "image",
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "output_limit": 32768,
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "xhigh"
-      ]
-    },
-    {
-      "key": "qwen/qwen3.8-flash",
-      "aliases": [],
-      "context_window": 1000000,
-      "input_modalities": [
-        "image",
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "xhigh"
-      ]
-    },
-    {
-      "key": "qwen/qwen3.8-max",
-      "aliases": [],
-      "context_window": 1000000,
-      "input_modalities": [
-        "image",
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "xhigh"
-      ]
-    },
-    {
-      "key": "qwen/qwen3.8-max-0902",
-      "aliases": [
-        "qwen/qwen3.8-max-20260902",
-        "qwen3.8-max-0902",
-        "qwen: qwen3.8 max (0902)"
-      ],
-      "context_window": 1000000,
-      "input_modalities": [
-        "image",
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "xhigh"
-      ]
     },
     {
       "key": "qwen3-rerank",
@@ -3076,8 +2756,32 @@
       ]
     },
     {
+      "key": "qwen3.6-max-preview",
+      "aliases": [
+        "qwen/qwen3.6-max-preview"
+      ],
+      "context_window": 200000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "reasoning": "native",
+      "reasoning_control": "effort_selection",
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
       "key": "qwen3.6-plus",
-      "aliases": [],
+      "aliases": [
+        "qwen/qwen3.6-plus"
+      ],
       "context_window": 1000000,
       "input_modalities": [
         "image",
@@ -3096,7 +2800,9 @@
     },
     {
       "key": "qwen3.7-flash",
-      "aliases": [],
+      "aliases": [
+        "qwen/qwen3.7-flash"
+      ],
       "context_window": 1000000,
       "input_modalities": [
         "image",
@@ -3115,7 +2821,9 @@
     },
     {
       "key": "qwen3.7-max",
-      "aliases": [],
+      "aliases": [
+        "qwen/qwen3.7-max"
+      ],
       "context_window": 1000000,
       "input_modalities": [
         "text"
@@ -3152,7 +2860,9 @@
     },
     {
       "key": "qwen3.7-plus",
-      "aliases": [],
+      "aliases": [
+        "qwen/qwen3.7-plus"
+      ],
       "context_window": 1000000,
       "input_modalities": [
         "image",
@@ -3204,7 +2914,9 @@
     },
     {
       "key": "qwen3.8-27b",
-      "aliases": [],
+      "aliases": [
+        "qwen/qwen3.8-27b"
+      ],
       "context_window": 1000000,
       "input_modalities": [
         "image",
@@ -3223,7 +2935,9 @@
     },
     {
       "key": "qwen3.8-flash",
-      "aliases": [],
+      "aliases": [
+        "qwen/qwen3.8-flash"
+      ],
       "context_window": 1000000,
       "input_modalities": [
         "image",
@@ -3242,7 +2956,9 @@
     },
     {
       "key": "qwen3.8-max",
-      "aliases": [],
+      "aliases": [
+        "qwen/qwen3.8-max"
+      ],
       "context_window": 1000000,
       "input_modalities": [
         "image",
@@ -3260,11 +2976,11 @@
       ]
     },
     {
-      "key": "sakana/fugu-ultra",
+      "key": "qwen3.8-max-0902",
       "aliases": [
-        "fugu-ultra",
-        "sakana/fugu-ultra-20260615",
-        "sakana: fugu ultra"
+        "qwen/qwen3.8-max-0902",
+        "qwen/qwen3.8-max-20260902",
+        "qwen: qwen3.8 max (0902)"
       ],
       "context_window": 1000000,
       "input_modalities": [
@@ -3277,7 +2993,8 @@
       "reasoning": "native",
       "reasoning_control": "effort_selection",
       "reasoning_efforts": [
-        "high",
+        "low",
+        "medium",
         "xhigh"
       ]
     },
@@ -3347,7 +3064,9 @@
     },
     {
       "key": "step-3.5-flash",
-      "aliases": [],
+      "aliases": [
+        "stepfun/step-3.5-flash"
+      ],
       "context_window": 256000,
       "input_modalities": [
         "text"
@@ -3377,7 +3096,9 @@
     },
     {
       "key": "step-3.7-flash",
-      "aliases": [],
+      "aliases": [
+        "stepfun/step-3.7-flash"
+      ],
       "context_window": 256000,
       "input_modalities": [
         "image",
@@ -3411,86 +3132,6 @@
         "text"
       ],
       "output_limit": 64000,
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high"
-      ]
-    },
-    {
-      "key": "stepfun/step-3.5-flash",
-      "aliases": [],
-      "context_window": 1000000,
-      "input_modalities": [
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "key": "stepfun/step-3.7-flash",
-      "aliases": [],
-      "context_window": 262144,
-      "input_modalities": [
-        "image",
-        "text",
-        "video"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "output_limit": 262144,
-      "reasoning": "native",
-      "reasoning_control": "toggle",
-      "reasoning_efforts": [
-        "none",
-        "adaptive"
-      ]
-    },
-    {
-      "key": "tencent/hy3-paid",
-      "aliases": [
-        "hy3-paid"
-      ],
-      "context_window": 262144,
-      "input_modalities": [
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "key": "tencent/hy4-preview",
-      "aliases": [],
-      "context_window": 1048576,
-      "input_modalities": [
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
       "reasoning": "native",
       "reasoning_control": "effort_selection",
       "reasoning_efforts": [
@@ -3544,69 +3185,6 @@
       "reasoning_control": "fixed_off"
     },
     {
-      "key": "thinkingmachines/inkling",
-      "aliases": [
-        "inkling",
-        "thinking machines: inkling",
-        "thinkingmachines/inkling-20260715"
-      ],
-      "context_window": 256000,
-      "input_modalities": [
-        "image",
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "key": "thinkingmachines/inkling-small",
-      "aliases": [
-        "inkling-small",
-        "thinking machines: inkling small",
-        "thinkingmachines/inkling-small-20260730"
-      ],
-      "context_window": 1000000,
-      "input_modalities": [
-        "image",
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "key": "typesafe/jev-1.13-20260917",
-      "aliases": [
-        "jev-1.13-20260917"
-      ],
-      "context_window": 32768,
-      "input_modalities": [
-        "text"
-      ],
-      "output_modalities": [],
-      "reasoning": "unsupported",
-      "reasoning_control": "fixed_off"
-    },
-    {
       "key": "wan2.7-image",
       "aliases": [],
       "input_modalities": [
@@ -3617,233 +3195,6 @@
       ],
       "reasoning": "unsupported",
       "reasoning_control": "fixed_off"
-    },
-    {
-      "key": "xai/grok-4.5",
-      "aliases": [],
-      "context_window": 500000,
-      "input_modalities": [
-        "image",
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high"
-      ]
-    },
-    {
-      "key": "xai/grok-4.6",
-      "aliases": [],
-      "context_window": 500000,
-      "input_modalities": [
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ]
-    },
-    {
-      "key": "xiaomi/mimo-v2.5",
-      "aliases": [
-        "mimo-v2.5"
-      ],
-      "context_window": 1000000,
-      "input_modalities": [
-        "image",
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "key": "xiaomi/mimo-v2.5-pro",
-      "aliases": [
-        "mimo-v2.5-pro"
-      ],
-      "context_window": 1048576,
-      "input_modalities": [
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "output_limit": 131072,
-      "reasoning": "native",
-      "reasoning_control": "toggle",
-      "reasoning_efforts": [
-        "none",
-        "adaptive"
-      ]
-    },
-    {
-      "key": "z-ai/glm-5.2",
-      "aliases": [],
-      "context_window": 1048576,
-      "input_modalities": [
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ]
-    },
-    {
-      "key": "z-ai/glm-5.3-flash",
-      "aliases": [],
-      "context_window": 1048576,
-      "input_modalities": [
-        "image",
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "output_limit": 131072,
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "high",
-        "max"
-      ]
-    },
-    {
-      "key": "zai-org/glm-5",
-      "aliases": [],
-      "context_window": 200000,
-      "input_modalities": [
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "key": "zai-org/glm-5.1",
-      "aliases": [],
-      "context_window": 200000,
-      "input_modalities": [
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "key": "zai-org/glm-5.2",
-      "aliases": [],
-      "context_window": 1000000,
-      "input_modalities": [
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "high",
-        "max"
-      ]
-    },
-    {
-      "key": "zai-org/glm-5.2-fast",
-      "aliases": [
-        "glm-5.2-fast"
-      ],
-      "context_window": 1000000,
-      "input_modalities": [
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "key": "zai-org/glm-5.3",
-      "aliases": [],
-      "context_window": 1000000,
-      "input_modalities": [
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "reasoning": "native",
-      "reasoning_control": "effort_selection",
-      "reasoning_efforts": [
-        "low",
-        "high",
-        "max"
-      ]
-    },
-    {
-      "key": "zhipu/glm-5.2",
-      "aliases": [],
-      "context_window": 1048576,
-      "input_modalities": [
-        "text"
-      ],
-      "output_modalities": [
-        "text"
-      ],
-      "output_limit": 131072,
-      "reasoning": "native",
-      "reasoning_control": "toggle",
-      "reasoning_efforts": [
-        "none",
-        "adaptive"
-      ]
     }
   ]
 }

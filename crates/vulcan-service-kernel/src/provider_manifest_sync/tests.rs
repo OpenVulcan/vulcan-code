@@ -703,6 +703,10 @@ async fn signed_https_sync_service(
                 minimum_engine_contract: 1,
             },
         )]),
+        core_models: vulcan_provider_config::manifest_sync::installed_core_models_entry(
+            String::from("/core-models.json"),
+        )
+        .expect("installed core model list"),
     };
     let index_bytes = serde_json::to_vec(&index).expect("index should encode");
     let signature = vulcan_provider_config::manifest_sync::sign_index_document(&index_bytes, &seed)
@@ -1880,6 +1884,10 @@ async fn signed_remote_sync_e2e_over_https_loopback() {
                 minimum_engine_contract: 1,
             },
         )]),
+        core_models: vulcan_provider_config::manifest_sync::installed_core_models_entry(
+            String::from("/core-models.json"),
+        )
+        .expect("installed core model list"),
     };
     let index_bytes = serde_json::to_vec(&index).expect("index should encode");
     let signature = vulcan_provider_config::manifest_sync::sign_index_document(&index_bytes, &seed)

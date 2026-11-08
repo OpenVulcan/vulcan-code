@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "opencode-go",
-  "revision": 15,
-  "published_at": "2026-11-08T04:27:33Z",
+  "revision": 16,
+  "published_at": "2026-11-08T06:25:07Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -351,26 +351,12 @@
         "kind": "exact",
         "value": "claude-haiku-5-5"
       },
+      "core_model_ref": "claude-haiku-5-5",
       "supported_protocols": [
         "anthropic-messages.v1"
       ],
       "selected_protocol": "anthropic-messages.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "file"
-        ],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "none",
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1000000,
-        "output_limit": 128000,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
       "request_profile_refs": [
@@ -396,18 +382,14 @@
         "kind": "exact",
         "value": "deepseek-v4-pro"
       },
+      "core_model_ref": "deepseek-v4-pro",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "high",
-          "max"
-        ],
-        "context_limit": 1000000,
+        "reasoning_efforts": ["high", "max"],
         "output_limit": 384000,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
@@ -437,20 +419,13 @@
         "kind": "exact",
         "value": "deepseek-v4.1-flash"
       },
+      "core_model_ref": "deepseek-v4.1-flash",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [
-          "image"
-        ],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "high",
-          "max"
-        ],
+        "reasoning_efforts": ["low", "high", "max"],
         "context_limit": 1000000,
         "output_limit": 384000,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
@@ -482,18 +457,14 @@
         "kind": "exact",
         "value": "glm-5.2"
       },
+      "core_model_ref": "glm-5.2",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "high",
-          "max"
-        ],
-        "context_limit": 1000000,
+        "reasoning_efforts": ["high", "max"],
         "output_limit": 131072,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
@@ -518,20 +489,12 @@
         "kind": "exact",
         "value": "glm-5.3"
       },
+      "core_model_ref": "glm-5.3",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "high",
-          "max"
-        ],
-        "context_limit": 1000000,
-        "output_limit": 131072,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
       "request_profile_refs": [],
@@ -555,21 +518,13 @@
         "kind": "exact",
         "value": "glm-5.3-flash"
       },
+      "core_model_ref": "glm-5.3-flash",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "video"
-        ],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "high",
-          "max"
-        ],
+        "input_resources": ["image", "video"],
         "context_limit": 1000000,
         "output_limit": 131072,
         "evidence_revision": "opencode-go.live-catalog.2026-11-07"
@@ -595,26 +550,13 @@
         "kind": "exact",
         "value": "gpt-5.6-luna"
       },
+      "core_model_ref": "gpt-5.6-luna",
       "supported_protocols": [
         "openai-responses.v1"
       ],
       "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "file"
-        ],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "none",
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1050000,
-        "output_limit": 128000,
+        "input_resources": ["image", "file"],
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
       "request_profile_refs": [],
@@ -638,26 +580,13 @@
         "kind": "exact",
         "value": "gpt-6-luna"
       },
+      "core_model_ref": "gpt-6-luna",
       "supported_protocols": [
         "openai-responses.v1"
       ],
       "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "file"
-        ],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "none",
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1050000,
-        "output_limit": 128000,
+        "input_resources": ["image", "file"],
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
       "request_profile_refs": [],
@@ -681,23 +610,14 @@
         "kind": "exact",
         "value": "grok-4.7"
       },
+      "core_model_ref": "grok-4.7",
       "supported_protocols": [
         "openai-responses.v1"
       ],
       "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "file"
-        ],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh"
-        ],
-        "context_limit": 500000,
+        "reasoning_efforts": ["low", "medium", "high", "xhigh"],
         "output_limit": 500000,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
@@ -722,20 +642,12 @@
         "kind": "exact",
         "value": "hy3"
       },
+      "core_model_ref": "hy3",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "none",
-          "low",
-          "high"
-        ],
-        "context_limit": 256000,
-        "output_limit": 128000,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
       "request_profile_refs": [],
@@ -759,17 +671,13 @@
         "kind": "exact",
         "value": "hy4-preview"
       },
+      "core_model_ref": "hy4-preview",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "none",
-          "high"
-        ],
         "context_limit": 1024000,
         "output_limit": 64000,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
@@ -795,18 +703,12 @@
         "kind": "exact",
         "value": "kimi-k2.7-code"
       },
+      "core_model_ref": "kimi-k2.7-code",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "video"
-        ],
-        "reasoning_control": "fixed_on",
-        "reasoning_efforts": [],
-        "context_limit": 262144,
         "output_limit": 262144,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
@@ -831,20 +733,13 @@
         "kind": "exact",
         "value": "kimi-k3"
       },
+      "core_model_ref": "kimi-k3",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "video"
-        ],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "max"
-        ],
-        "context_limit": 1048576,
+        "reasoning_efforts": ["max"],
         "output_limit": 131072,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
@@ -869,21 +764,13 @@
         "kind": "exact",
         "value": "kimi-k3.1-pro"
       },
+      "core_model_ref": "kimi-k3.1-pro",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "video"
-        ],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "high",
-          "max"
-        ],
+        "input_resources": ["image", "video"],
         "context_limit": 1048576,
         "output_limit": 131072,
         "evidence_revision": "opencode-go.live-catalog.2026-10-31"
@@ -909,16 +796,12 @@
         "kind": "exact",
         "value": "longcat-2.0"
       },
+      "core_model_ref": "longcat-2.0",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [],
-        "reasoning_control": "fixed_on",
-        "reasoning_efforts": [],
-        "context_limit": 1000000,
-        "output_limit": 131072,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
       "request_profile_refs": [],
@@ -942,6 +825,7 @@
         "kind": "exact",
         "value": "mimo-v2.6-flash"
       },
+      "core_model_ref": "mimo-v2.6-flash",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
@@ -979,6 +863,7 @@
         "kind": "exact",
         "value": "mimo-v2.6-pro"
       },
+      "core_model_ref": "mimo-v2.6-pro",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
@@ -1016,21 +901,12 @@
         "kind": "exact",
         "value": "minimax-m3"
       },
+      "core_model_ref": "minimax-m3",
       "supported_protocols": [
         "anthropic-messages-video.v1"
       ],
       "selected_protocol": "anthropic-messages-video.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "video"
-        ],
-        "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "context_limit": 1000000,
         "output_limit": 131072,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
@@ -1057,24 +933,12 @@
         "kind": "exact",
         "value": "minimax-m3.1-flash"
       },
+      "core_model_ref": "minimax-m3.1-flash",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "video"
-        ],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1000000,
         "output_limit": 512000,
         "evidence_revision": "opencode-go.live-catalog.2026-10-31"
       },
@@ -1099,27 +963,12 @@
         "kind": "exact",
         "value": "muse-spark-1.2-contributor"
       },
+      "core_model_ref": "muse-spark-1.2-contributor",
       "supported_protocols": [
         "openai-responses.v1"
       ],
       "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "video",
-          "file",
-          "audio"
-        ],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "minimal",
-          "low",
-          "medium",
-          "high",
-          "xhigh"
-        ],
-        "context_limit": 1048576,
-        "output_limit": 131072,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
       "request_profile_refs": [],
@@ -1143,27 +992,12 @@
         "kind": "exact",
         "value": "muse-spark-1.3-contributor"
       },
+      "core_model_ref": "muse-spark-1.3-contributor",
       "supported_protocols": [
         "openai-responses.v1"
       ],
       "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "video",
-          "file",
-          "audio"
-        ],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "minimal",
-          "low",
-          "medium",
-          "high",
-          "xhigh"
-        ],
-        "context_limit": 1048576,
-        "output_limit": 131072,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
       "request_profile_refs": [],
@@ -1187,22 +1021,14 @@
         "kind": "exact",
         "value": "qwen3.7-plus"
       },
+      "core_model_ref": "qwen3.7-plus",
       "supported_protocols": [
         "anthropic-messages-video.v1"
       ],
       "selected_protocol": "anthropic-messages-video.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "video"
-        ],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "none",
-          "high",
-          "max"
-        ],
-        "context_limit": 1000000,
+        "reasoning_efforts": ["none", "high", "max"],
         "output_limit": 65536,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
@@ -1229,24 +1055,14 @@
         "kind": "exact",
         "value": "qwen3.8-flash"
       },
+      "core_model_ref": "qwen3.8-flash",
       "supported_protocols": [
         "anthropic-messages-video.v1"
       ],
       "selected_protocol": "anthropic-messages-video.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "video"
-        ],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "none",
-          "low",
-          "medium",
-          "xhigh"
-        ],
-        "context_limit": 1000000,
-        "output_limit": 131072,
+        "reasoning_efforts": ["none", "low", "medium", "xhigh"],
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
       "request_profile_refs": [
@@ -1272,24 +1088,14 @@
         "kind": "exact",
         "value": "qwen3.8-max"
       },
+      "core_model_ref": "qwen3.8-max",
       "supported_protocols": [
         "anthropic-messages-video.v1"
       ],
       "selected_protocol": "anthropic-messages-video.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "video"
-        ],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "none",
-          "low",
-          "medium",
-          "xhigh"
-        ],
-        "context_limit": 1000000,
-        "output_limit": 131072,
+        "reasoning_efforts": ["none", "low", "medium", "xhigh"],
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
       "request_profile_refs": [
@@ -1315,22 +1121,12 @@
         "kind": "exact",
         "value": "step-5-preview"
       },
+      "core_model_ref": "step-5-preview",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "video"
-        ],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high"
-        ],
-        "context_limit": 1000000,
         "output_limit": 65536,
         "evidence_revision": "opencode-go.live-catalog.2026-10-31"
       },
@@ -1355,23 +1151,14 @@
         "kind": "exact",
         "value": "gemini-4-argon"
       },
+      "core_model_ref": "gemini-4-argon",
       "supported_protocols": [
         "google.gemini.generate_content"
       ],
       "selected_protocol": "google.gemini.generate_content",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "audio",
-          "video",
-          "file"
-        ],
+        "input_resources": ["image", "audio", "video", "file"],
         "reasoning_control": "fixed_on",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high"
-        ],
         "context_limit": 1048576,
         "output_limit": 65536,
         "evidence_revision": "opencode-go.live-catalog.2026-11-07"
@@ -1397,19 +1184,13 @@
         "kind": "exact",
         "value": "hy4"
       },
+      "core_model_ref": "hy4",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [
-          "image"
-        ],
         "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "none",
-          "high"
-        ],
         "context_limit": 1048576,
         "output_limit": 65536,
         "evidence_revision": "opencode-go.live-catalog.2026-11-07"
@@ -1435,22 +1216,12 @@
         "kind": "exact",
         "value": "beam-free"
       },
+      "core_model_ref": "beam-free",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1048576,
-        "output_limit": 131072,
         "evidence_revision": "opencode-go.free-models.2026-11-07"
       },
       "request_profile_refs": [],
@@ -1474,16 +1245,12 @@
         "kind": "exact",
         "value": "iceman-contributor-free"
       },
+      "core_model_ref": "iceman-contributor-free",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [],
-        "reasoning_control": "fixed_on",
-        "reasoning_efforts": [],
-        "context_limit": 262144,
-        "output_limit": 131072,
         "evidence_revision": "opencode-go.free-models.2026-11-07"
       },
       "request_profile_refs": [],
@@ -1507,27 +1274,12 @@
         "kind": "exact",
         "value": "crouton-alpha-free"
       },
+      "core_model_ref": "crouton-alpha-free",
       "supported_protocols": [
         "openai-responses.v1"
       ],
       "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "video",
-          "file"
-        ],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "minimal",
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1048576,
-        "output_limit": 270000,
         "evidence_revision": "opencode-go.free-models.2026-11-07"
       },
       "request_profile_refs": [],

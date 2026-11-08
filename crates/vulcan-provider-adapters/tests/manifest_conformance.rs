@@ -439,94 +439,105 @@ fn common_model_catalog() -> Value {
     serde_json::from_str(&text).expect("common model catalog must parse")
 }
 
-/// Returns every identity the catalog generator reads from exact rules and static catalogs.
-/// 返回目录生成器从精确规则及静态目录读取的全部模型身份。
-fn configured_model_identities() -> BTreeSet<String> {
-    let mut identities = BTreeSet::new();
+/// Returns every model identity of the bundled core model list, which the catalog is generated from.
+/// 返回随包核心模型清单中的全部模型身份，公共目录由它生成。
+fn core_model_identities() -> BTreeSet<String> {
+    let path = provider_manifests_root().join("core-models.json");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("read {}", path.display()));
+    let document: Value = serde_json::from_str(&text).expect("core model list must parse");
+    let identities = document["models"]
+        .as_array()
+        .expect("core models array")
+        .iter()
+        .map(|model| {
+            model["model_id"]
+                .as_str()
+                .expect("core model id")
+                .to_owned()
+        })
+        .collect::<BTreeSet<_>>();
+    assert!(
+        !identities.is_empty(),
+        "the bundled core model list must declare at least one model"
+    );
+    identities
+}
+
+/// Returns every `core_model_ref` the bundled provider manifests declare.
+/// 返回随包供应商清单声明的全部 `core_model_ref`。
+fn referenced_core_models() -> BTreeSet<String> {
+    let mut references = BTreeSet::new();
     for (stem, text) in read_json_directory(&provider_manifests_root().join("manifests")) {
         let document = parse_manifest(&stem, &text);
         for rule in document["model_rules"]
             .as_array()
             .expect("model_rules array")
         {
-            // Only exact matchers name a model identity; prefix matchers are family selectors.
-            // 只有 exact 匹配器才指向一个模型身份；prefix 匹配器是族选择器。
-            if rule["matcher"]["kind"].as_str() != Some("exact") {
-                continue;
-            }
-            let value = rule["matcher"]["value"]
-                .as_str()
-                .expect("exact matcher value")
-                .trim()
-                .to_lowercase();
-            if !value.is_empty() {
-                identities.insert(value);
-            }
-        }
-        // The generator also includes explicitly cataloged identities covered by prefix rules.
-        // 生成器也纳入由前缀规则覆盖、但已在静态目录中明确列出的模型身份。
-        for service in document["services"].as_array().expect("services array") {
-            let Some(models) = service["model_catalog"]["models"].as_array() else {
-                continue;
-            };
-            for model in models {
-                let value = model["model_id"]
-                    .as_str()
-                    .expect("catalog model identifier")
-                    .trim()
-                    .to_lowercase();
-                if !value.is_empty() {
-                    identities.insert(value);
-                }
+            if let Some(reference) = rule["core_model_ref"].as_str() {
+                references.insert(reference.to_owned());
             }
         }
     }
-    assert!(
-        !identities.is_empty(),
-        "bundled manifests must configure at least one model identity"
-    );
-    identities
+    references
 }
 
-/// Asserts the common model catalog resolves every model our manifests configure.
-/// 断言通用目录能解析我们清单配置的每一个模型。
+/// Asserts the common model catalog has one record for every core model.
+/// 断言公共模型目录为每个核心模型都有一条记录。
 ///
-/// This is the machine-checked form of "one shared catalog for every model we configured": adding
-/// a provider or a model fails this check until the catalog is regenerated, and regenerating it
+/// Adding a core model fails this check until the catalog is regenerated, and regenerating it
 /// never requires editing this file.
-/// 这是"为我们配置过的每个模型维护一份共享目录"的机器化形式：增删供应商或模型都会让本检测
-/// 失败直到目录被重新生成，而重新生成目录永远不需要修改本文件。
+/// 新增核心模型会让本检测失败直到目录被重新生成，而重新生成目录永远不需要修改本文件。
 #[test]
-fn every_configured_model_is_resolvable_in_the_common_catalog() {
+fn every_core_model_is_resolvable_in_the_common_catalog() {
     let lookup = common_model_catalog()["models"]
         .as_array()
         .expect("catalog models array")
         .iter()
         .map(|model| model["key"].as_str().expect("catalog key").to_lowercase())
         .collect::<BTreeSet<_>>();
-    for identity in configured_model_identities() {
+    for identity in core_model_identities() {
         assert!(
             lookup.contains(&identity),
-            "configured model `{identity}` must have its own common catalog record"
+            "core model `{identity}` must have its own common catalog record; regenerate the catalog"
         );
     }
 }
 
 /// Asserts the common model catalog never becomes a pull of an upstream model list.
-/// 断言通用目录绝不会变成上游模型清单的拉取结果。
+/// 断言公共模型目录绝不会变成上游模型清单的拉取结果。
 ///
 /// Upstream sources are cross references for context and modality metadata only: every catalog
-/// record must still name a model our own manifests configure.
-/// 上游来源只作为上下文与模态元数据的交叉参照：每条目录记录仍必须指向我们清单配置的模型。
+/// record must still name a core model.
+/// 上游来源只作为上下文与模态元数据的交叉参照：每条目录记录仍必须指向一个核心模型。
 #[test]
-fn the_common_catalog_contains_only_configured_models() {
-    let identities = configured_model_identities();
-    let catalog = common_model_catalog();
-    for model in catalog["models"].as_array().expect("catalog models array") {
+fn the_common_catalog_contains_only_core_models() {
+    let identities = core_model_identities();
+    for model in common_model_catalog()["models"]
+        .as_array()
+        .expect("catalog models array")
+    {
         let key = model["key"].as_str().expect("catalog key").to_lowercase();
         assert!(
             identities.contains(&key),
-            "common model catalog record `{key}` is not a model any bundled manifest configures"
+            "common model catalog record `{key}` is not a core model"
+        );
+    }
+}
+
+/// Asserts every core reference in the bundled manifests names a model of the core list.
+/// 断言随包清单中的每个核心引用都指向核心清单中的模型。
+#[test]
+fn every_core_model_reference_names_a_core_model() {
+    let identities = core_model_identities();
+    let references = referenced_core_models();
+    assert!(
+        !references.is_empty(),
+        "bundled manifests must reference the core model list"
+    );
+    for reference in references {
+        assert!(
+            identities.contains(&reference),
+            "core_model_ref `{reference}` does not name a core model"
         );
     }
 }

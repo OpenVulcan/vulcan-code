@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "google",
-  "revision": 11,
-  "published_at": "2026-10-21T12:34:56Z",
+  "revision": 12,
+  "published_at": "2026-11-08T06:25:07Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -187,26 +187,15 @@
         "kind": "exact",
         "value": "gemini-3.1-flash-lite-image"
       },
+      "core_model_ref": "gemini-3.1-flash-lite-image",
       "tool_schema_projection": "strict",
       "supported_protocols": [
         "google.gemini.generate_content",
         "gemini-interactions.v1"
       ],
       "capabilities": {
-        "operations": ["conversation_respond"],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "unknown",
-        "reasoning_efforts": [
-          "minimal",
-          "high"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false},
         "evidence_revision": "google-thinking-docs-2026-07-28"
       },
       "scope": {
@@ -222,27 +211,17 @@
         "kind": "prefix",
         "value": "gemini-3.1-pro"
       },
+      "core_model_ref": "gemini-3.1-pro",
       "tool_schema_projection": "strict",
       "supported_protocols": [
         "google.gemini.generate_content",
         "gemini-interactions.v1"
       ],
       "capabilities": {
-        "operations": ["conversation_respond"],
         "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "unknown",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false},
         "evidence_revision": "google-thinking-docs-2026-07-28"
       },
       "scope": {
@@ -258,26 +237,15 @@
         "kind": "prefix",
         "value": "gemini-3-pro"
       },
+      "core_model_ref": "gemini-3-pro",
       "tool_schema_projection": "strict",
       "supported_protocols": [
         "google.gemini.generate_content",
         "gemini-interactions.v1"
       ],
       "capabilities": {
-        "operations": ["conversation_respond"],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "unknown",
-        "reasoning_efforts": [
-          "low",
-          "high"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false},
         "evidence_revision": "google-thinking-docs-2026-07-28"
       },
       "scope": {
@@ -293,28 +261,17 @@
         "kind": "prefix",
         "value": "gemini-3.6-flash"
       },
+      "core_model_ref": "gemini-3.6-flash",
       "tool_schema_projection": "strict",
       "supported_protocols": [
         "google.gemini.generate_content",
         "gemini-interactions.v1"
       ],
       "capabilities": {
-        "operations": ["conversation_respond"],
         "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "unknown",
-        "reasoning_efforts": [
-          "minimal",
-          "low",
-          "medium",
-          "high"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false},
         "evidence_revision": "google-thinking-docs-2026-07-28"
       },
       "scope": {
@@ -330,28 +287,17 @@
         "kind": "prefix",
         "value": "gemini-3.5-flash"
       },
+      "core_model_ref": "gemini-3.5-flash",
       "tool_schema_projection": "strict",
       "supported_protocols": [
         "google.gemini.generate_content",
         "gemini-interactions.v1"
       ],
       "capabilities": {
-        "operations": ["conversation_respond"],
         "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "unknown",
-        "reasoning_efforts": [
-          "minimal",
-          "low",
-          "medium",
-          "high"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false},
         "evidence_revision": "google-thinking-docs-2026-07-28"
       },
       "scope": {
@@ -367,28 +313,17 @@
         "kind": "prefix",
         "value": "gemini-3.1-flash-lite"
       },
+      "core_model_ref": "gemini-3.1-flash-lite",
       "tool_schema_projection": "strict",
       "supported_protocols": [
         "google.gemini.generate_content",
         "gemini-interactions.v1"
       ],
       "capabilities": {
-        "operations": ["conversation_respond"],
         "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "unknown",
-        "reasoning_efforts": [
-          "minimal",
-          "low",
-          "medium",
-          "high"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false},
         "evidence_revision": "google-thinking-docs-2026-07-28"
       },
       "scope": {
@@ -404,28 +339,17 @@
         "kind": "prefix",
         "value": "gemini-3-flash"
       },
+      "core_model_ref": "gemini-3-flash",
       "tool_schema_projection": "strict",
       "supported_protocols": [
         "google.gemini.generate_content",
         "gemini-interactions.v1"
       ],
       "capabilities": {
-        "operations": ["conversation_respond"],
         "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "unknown",
-        "reasoning_efforts": [
-          "minimal",
-          "low",
-          "medium",
-          "high"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false},
         "evidence_revision": "google-thinking-docs-2026-07-28"
       },
       "scope": {
@@ -441,27 +365,15 @@
         "kind": "prefix",
         "value": "gemini-2.5-pro"
       },
+      "core_model_ref": "gemini-2.5-pro",
       "tool_schema_projection": "strict",
       "supported_protocols": [
         "google.gemini.generate_content",
         "gemini-interactions.v1"
       ],
       "capabilities": {
-        "operations": ["conversation_respond"],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "unknown",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false},
         "evidence_revision": "google-thinking-docs-2026-07-28"
       },
       "scope": {
@@ -477,28 +389,15 @@
         "kind": "prefix",
         "value": "gemini-2.5-flash"
       },
+      "core_model_ref": "gemini-2.5-flash",
       "tool_schema_projection": "strict",
       "supported_protocols": [
         "google.gemini.generate_content",
         "gemini-interactions.v1"
       ],
       "capabilities": {
-        "operations": ["conversation_respond"],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "unknown",
-        "reasoning_efforts": [
-          "none",
-          "low",
-          "medium",
-          "high"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false},
         "evidence_revision": "google-thinking-docs-2026-07-28"
       },
       "scope": {

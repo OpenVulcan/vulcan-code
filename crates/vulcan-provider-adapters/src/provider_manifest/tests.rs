@@ -576,6 +576,7 @@ fn rust_model_rule_fields() -> BTreeSet<&'static str> {
         "rule_id",
         "scope",
         "matcher",
+        "core_model_ref",
         "display_name",
         "supported_protocols",
         "selected_protocol",
@@ -1200,10 +1201,10 @@ fn capability_patch_serialization_preserves_presence_semantics() {
 /// 验证 Index Schema 保持可解析并符合冻结契约。
 #[test]
 fn index_schema_contract_is_stable() {
-    let schema = load_schema("provider-index-v1.schema.json");
+    let schema = load_schema("provider-index-v2.schema.json");
     assert_eq!(
         schema["properties"]["schema_version"]["const"],
-        "vulcan.provider-index.v1"
+        "vulcan.provider-index.v2"
     );
     assert_eq!(schema["properties"]["providers"]["type"], "object");
     assert_eq!(schema["properties"]["providers"]["maxProperties"], 256);
@@ -1436,7 +1437,8 @@ fn rule_reference_collections_distinguish_inherit_from_explicit_clear() {
     // manifest 保留 JSON 字段 presence，instances 冻结最终胜者。
     let manifest: super::ProviderManifestV1 =
         serde_json::from_value(manifest_value).expect("presence fixture must deserialize");
-    let instances = super::inheritance::resolve_rule_instances(&manifest);
+    let instances =
+        super::inheritance::resolve_rule_instances(&manifest, &super::CoreModelCatalog::empty());
     let cleared = instances
         .iter()
         .find(|instance| instance.rule_id == "flash")
@@ -1865,8 +1867,22 @@ fn bundled_manifest_provenance_closure_is_complete() {
                 .values()
                 .chain(rule.capability_provenance.values())
             {
+                // Core-sourced fields carry the core list revision; every other field the manifest's.
+                // 来自核心的字段携带核心清单修订号；其余字段携带清单修订号。
+                let expected = if provenance.source == super::FieldSourceKind::CoreModel {
+                    assert!(
+                        provenance.core_model_id.is_some(),
+                        "provider `{provider_id}` rule `{}` has core provenance without a core model id",
+                        rule.rule_id
+                    );
+                    manifest
+                        .core_models_revision
+                        .expect("a core-sourced field requires a pinned core revision")
+                } else {
+                    manifest.revision
+                };
                 assert_eq!(
-                    provenance.manifest_revision, manifest.revision,
+                    provenance.manifest_revision, expected,
                     "provider `{provider_id}` rule `{}` contains a stale provenance revision",
                     rule.rule_id
                 );
@@ -1946,7 +1962,8 @@ fn unscoped_rules_expand_to_every_entry() {
         )
         .expect("second entry must parse"),
     );
-    let instances = super::inheritance::resolve_rule_instances(&manifest);
+    let instances =
+        super::inheritance::resolve_rule_instances(&manifest, &super::CoreModelCatalog::empty());
     assert_eq!(
         instances.len(),
         4,

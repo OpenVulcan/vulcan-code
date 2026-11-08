@@ -2,8 +2,8 @@
 // 编辑清单后用一条命令刷新随包供应商清单基线。
 //
 // Usage: node scripts/provider-manifests-refresh.mjs [--dry-run] [--no-sync]
-// 1. Compares every manifest file with the digest pinned by bundled-index.json.
-// 2. Bumps `revision` and `published_at` of each changed manifest whose revision was not raised yet.
+// 1. Compares every manifest file and core-models.json with the digests pinned by bundled-index.json.
+// 2. Bumps `revision` and `published_at` of each changed file whose revision was not raised yet.
 // 3. Rebuilds bundled-index.json with the next index revision, then runs `validate-all`.
 // 4. Regenerates the common model capability catalog offline from the refreshed manifests.
 // 5. Runs `make.ps1 sync` so `output/` serves the new baseline (skip with --no-sync).
@@ -19,6 +19,7 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 const baselineDirectory = path.join(repositoryRoot, 'crates/vulcan-runtime-assets/resources/provider-manifests');
 const manifestDirectory = path.join(baselineDirectory, 'manifests');
 const indexFile = path.join(baselineDirectory, 'bundled-index.json');
+const coreModelsFile = path.join(baselineDirectory, 'core-models.json');
 
 // sha256 returns the lowercase hex digest the index pins for one file.
 // sha256 返回索引为单个文件固定的小写十六进制摘要。
@@ -28,9 +29,11 @@ export function sha256(bytes) {
 
 // planRefresh decides which manifests need a revision bump and whether the index must be rebuilt.
 // planRefresh 判定哪些清单需要递增修订，以及是否必须重建索引。
-// index is the parsed bundled index; manifests maps provider file stem to { bytes, revision }.
-// index 为已解析的随包索引；manifests 将供应商文件名映射到 { bytes, revision }。
-export function planRefresh(index, manifests) {
+// index is the parsed bundled index; manifests maps provider file stem to { bytes, revision };
+// coreModels is the core model list as { bytes, revision }, or undefined when the caller has none.
+// index 为已解析的随包索引；manifests 将供应商文件名映射到 { bytes, revision }；
+// coreModels 为核心模型清单 { bytes, revision }，调用方没有时为 undefined。
+export function planRefresh(index, manifests, coreModels) {
   const changed = [];
   const bumps = [];
   for (const [providerId, manifest] of Object.entries(manifests)) {
@@ -40,11 +43,19 @@ export function planRefresh(index, manifests) {
     if (pinned && manifest.revision <= pinned.revision) bumps.push({ providerId, revision: pinned.revision + 1 });
   }
   const removed = Object.keys(index.providers).filter((providerId) => !(providerId in manifests));
+  // An index without a core entry predates the core list, so the current file is pinned as is.
+  // 没有核心条目的索引早于核心清单，当前文件按原样固定。
+  const pinnedCore = index.core_models;
+  const coreChanged = coreModels !== undefined && pinnedCore?.sha256 !== sha256(coreModels.bytes);
+  const coreBump =
+    coreChanged && pinnedCore && coreModels.revision <= pinnedCore.revision ? pinnedCore.revision + 1 : null;
   return {
     changed,
     removed,
     bumps,
-    rebuildIndex: changed.length > 0 || removed.length > 0,
+    coreChanged,
+    coreBump,
+    rebuildIndex: changed.length > 0 || removed.length > 0 || coreChanged,
     indexRevision: index.index_revision + 1,
   };
 }
@@ -55,7 +66,7 @@ export function bumpManifestHeader(text, revision, publishedAt) {
   const revisionPattern = /^( {2})"revision": \d+,/m;
   const publishedPattern = /^( {2})"published_at": "[^"]*",/m;
   if (!revisionPattern.test(text) || !publishedPattern.test(text)) {
-    throw new Error('Manifest header must contain top-level "revision" and "published_at" lines.');
+    throw new Error('Baseline file header must contain top-level "revision" and "published_at" lines.');
   }
   return text
     .replace(revisionPattern, `$1"revision": ${revision},`)
@@ -78,7 +89,9 @@ function main() {
     const bytes = readFileSync(path.join(manifestDirectory, name));
     manifests[name.slice(0, -'.json'.length)] = { bytes, revision: JSON.parse(bytes.toString('utf8')).revision };
   }
-  const plan = planRefresh(index, manifests);
+  const coreBytes = readFileSync(coreModelsFile);
+  const coreModels = { bytes: coreBytes, revision: JSON.parse(coreBytes.toString('utf8')).revision };
+  const plan = planRefresh(index, manifests, coreModels);
   if (!plan.rebuildIndex) {
     console.log('Provider manifests match bundled-index.json; nothing to refresh.');
     return;
@@ -86,6 +99,7 @@ function main() {
   console.log(`Changed: ${plan.changed.join(', ') || '(none)'}`);
   if (plan.removed.length) console.log(`Removed: ${plan.removed.join(', ')}`);
   for (const { providerId, revision } of plan.bumps) console.log(`Bump ${providerId} to revision ${revision}`);
+  if (plan.coreChanged) console.log(`Core models changed${plan.coreBump ? `; bump to revision ${plan.coreBump}` : ''}`);
   console.log(`Index revision ${index.index_revision} -> ${plan.indexRevision}`);
   if (dryRun) return;
 
@@ -94,6 +108,9 @@ function main() {
   for (const { providerId, revision } of plan.bumps) {
     const file = path.join(manifestDirectory, `${providerId}.json`);
     writeFileSync(file, bumpManifestHeader(readFileSync(file, 'utf8'), revision, publishedAt));
+  }
+  if (plan.coreBump) {
+    writeFileSync(coreModelsFile, bumpManifestHeader(readFileSync(coreModelsFile, 'utf8'), plan.coreBump, publishedAt));
   }
   const cli = ['run', '--quiet', '-p', 'vulcan-provider-manifest-cli', '--'];
   run('cargo', [

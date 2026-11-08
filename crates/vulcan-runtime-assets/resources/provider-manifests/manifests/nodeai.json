@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "nodeai",
-  "revision": 7,
-  "published_at": "2026-10-31T11:07:44Z",
+  "revision": 8,
+  "published_at": "2026-11-08T06:25:07Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -159,6 +159,10 @@
         "credential_profile_ids": ["api-key"]
       },
       "matcher": {"kind": "exact", "value": "gpt-6-astra"},
+      "capabilities": {
+        "context_limit": 1000000
+      },
+      "core_model_ref": "gpt-6-astra",
       "display_name": "GPT-6 Astra",
       "supported_protocols": ["openai-responses.v1"],
       "selected_protocol": "openai-responses.v1",
@@ -171,6 +175,10 @@
         "credential_profile_ids": ["api-key"]
       },
       "matcher": {"kind": "exact", "value": "gpt-6.1-sol"},
+      "capabilities": {
+        "context_limit": 1000000
+      },
+      "core_model_ref": "gpt-6.1-sol",
       "display_name": "GPT-6.1 Sol",
       "supported_protocols": ["openai-responses.v1"],
       "selected_protocol": "openai-responses.v1",
@@ -183,6 +191,11 @@
         "credential_profile_ids": ["api-key"]
       },
       "matcher": {"kind": "exact", "value": "gpt-5.6-sol"},
+      "capabilities": {
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
+        "context_limit": 1000000
+      },
+      "core_model_ref": "gpt-5.6-sol",
       "display_name": "GPT-5.6 Sol",
       "supported_protocols": ["openai-responses.v1"],
       "selected_protocol": "openai-responses.v1",
@@ -195,6 +208,11 @@
         "credential_profile_ids": ["api-key"]
       },
       "matcher": {"kind": "exact", "value": "gpt-6-sol"},
+      "capabilities": {
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
+        "context_limit": 1000000
+      },
+      "core_model_ref": "gpt-6-sol",
       "display_name": "GPT-6 Sol",
       "supported_protocols": ["openai-responses.v1"],
       "selected_protocol": "openai-responses.v1",
@@ -207,6 +225,11 @@
         "credential_profile_ids": ["api-key"]
       },
       "matcher": {"kind": "exact", "value": "gpt-5.6-terra"},
+      "capabilities": {
+        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
+        "context_limit": 1000000
+      },
+      "core_model_ref": "gpt-5.6-terra",
       "display_name": "GPT-5.6 Terra",
       "supported_protocols": ["openai-responses.v1"],
       "selected_protocol": "openai-responses.v1",
@@ -219,24 +242,14 @@
         "credential_profile_ids": ["api-key"]
       },
       "matcher": {"kind": "exact", "value": "claude-sonnet-5-5"},
+      "core_model_ref": "claude-sonnet-5-5",
       "display_name": "Claude Sonnet 5.5",
       "supported_protocols": ["anthropic-messages.v1"],
       "selected_protocol": "anthropic-messages.v1",
       "capabilities": {
-        "operations": ["conversation_respond"],
-        "input_resources": ["image"],
-        "output_resources": [],
         "structured_output": "json_schema",
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "unknown",
-        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
-        "context_limit": 1000000,
-        "output_limit": 128000,
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false},
         "evidence_revision": "nodeai.anthropic.inherited-settings.20261029"
       },
       "request_profile_refs": ["anthropic.default-adaptive-effort.v1"],
@@ -249,24 +262,14 @@
         "credential_profile_ids": ["api-key"]
       },
       "matcher": {"kind": "exact", "value": "claude-opus-5-5"},
+      "core_model_ref": "claude-opus-5-5",
       "display_name": "Claude Opus 5.5",
       "supported_protocols": ["anthropic-messages.v1"],
       "selected_protocol": "anthropic-messages.v1",
       "capabilities": {
-        "operations": ["conversation_respond"],
-        "input_resources": ["image"],
-        "output_resources": [],
         "structured_output": "json_schema",
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "unknown",
-        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
-        "context_limit": 1000000,
-        "output_limit": 128000,
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false},
         "evidence_revision": "nodeai.anthropic.inherited-settings.20261029"
       },
       "request_profile_refs": ["anthropic.default-adaptive-effort.v1"],
@@ -279,24 +282,15 @@
         "credential_profile_ids": ["api-key"]
       },
       "matcher": {"kind": "exact", "value": "claude-fable-5-1"},
+      "core_model_ref": "claude-fable-5-1",
       "display_name": "Claude Fable 5.1",
       "supported_protocols": ["anthropic-messages.v1"],
       "selected_protocol": "anthropic-messages.v1",
       "capabilities": {
-        "operations": ["conversation_respond"],
-        "input_resources": ["image"],
-        "output_resources": [],
         "structured_output": "json_schema",
-        "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "unknown",
-        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
-        "context_limit": 1000000,
-        "output_limit": 128000,
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false},
         "evidence_revision": "nodeai.anthropic.inherited-settings.20261029"
       },
       "request_profile_refs": ["anthropic.default-adaptive-effort.v1"],
@@ -309,24 +303,14 @@
         "credential_profile_ids": ["api-key"]
       },
       "matcher": {"kind": "exact", "value": "claude-sonnet-5-5-thinking"},
+      "core_model_ref": "claude-sonnet-5-5-thinking",
       "display_name": "Claude Sonnet 5.5 Thinking",
       "supported_protocols": ["anthropic-messages.v1"],
       "selected_protocol": "anthropic-messages.v1",
       "capabilities": {
-        "operations": ["conversation_respond"],
-        "input_resources": ["image"],
-        "output_resources": [],
         "structured_output": "json_schema",
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "unknown",
-        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
-        "context_limit": 1000000,
-        "output_limit": 128000,
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false},
         "evidence_revision": "nodeai.anthropic.thinking.user-declaration.20261030"
       },
       "request_profile_refs": ["anthropic.default-adaptive-effort.v1"],
@@ -339,24 +323,14 @@
         "credential_profile_ids": ["api-key"]
       },
       "matcher": {"kind": "exact", "value": "claude-opus-5-5-thinking"},
+      "core_model_ref": "claude-opus-5-5-thinking",
       "display_name": "Claude Opus 5.5 Thinking",
       "supported_protocols": ["anthropic-messages.v1"],
       "selected_protocol": "anthropic-messages.v1",
       "capabilities": {
-        "operations": ["conversation_respond"],
-        "input_resources": ["image"],
-        "output_resources": [],
         "structured_output": "json_schema",
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "unknown",
-        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
-        "context_limit": 1000000,
-        "output_limit": 128000,
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false},
         "evidence_revision": "nodeai.anthropic.thinking.user-declaration.20261030"
       },
       "request_profile_refs": ["anthropic.default-adaptive-effort.v1"],
@@ -369,24 +343,14 @@
         "credential_profile_ids": ["api-key"]
       },
       "matcher": {"kind": "exact", "value": "claude-fable-5-1-thinking"},
+      "core_model_ref": "claude-fable-5-1-thinking",
       "display_name": "Claude Fable 5.1 Thinking",
       "supported_protocols": ["anthropic-messages.v1"],
       "selected_protocol": "anthropic-messages.v1",
       "capabilities": {
-        "operations": ["conversation_respond"],
-        "input_resources": ["image"],
-        "output_resources": [],
         "structured_output": "json_schema",
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "unknown",
-        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
-        "context_limit": 1000000,
-        "output_limit": 128000,
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false},
         "evidence_revision": "nodeai.anthropic.thinking.user-declaration.20261030"
       },
       "request_profile_refs": ["anthropic.default-adaptive-effort.v1"],

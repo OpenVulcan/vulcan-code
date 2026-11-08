@@ -16,7 +16,7 @@ pub const REMOTE_INDEX_MAX_BYTES: u64 = 1024 * 1024;
 pub const REMOTE_PROVIDER_MAX_BYTES: u64 = vulcan_provider_adapters::MAX_MANIFEST_BYTES as u64;
 /// Index schema version accepted by this engine.
 /// 本引擎接受的 Index Schema 版本。
-pub const INDEX_SCHEMA_VERSION: &str = "vulcan.provider-index.v1";
+pub const INDEX_SCHEMA_VERSION: &str = "vulcan.provider-index.v2";
 
 /// One trusted signing key bundled with the client binary.
 /// 随客户端二进制内置的一把受信签名密钥。
@@ -55,6 +55,28 @@ pub struct RemoteProviderEntry {
     pub minimum_engine_contract: u64,
 }
 
+/// The core model list pinned by the signed index.
+/// 由签名 Index 固定的核心模型清单。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteCoreModelsEntry {
+    /// Core model list revision.
+    /// 核心模型清单修订号。
+    pub revision: u64,
+    /// Index-relative URL of the core model list.
+    /// 核心模型清单的 Index 相对 URL。
+    pub relative_url: String,
+    /// SHA-256 hex digest of the exact core list bytes.
+    /// 精确核心清单字节的 SHA-256 十六进制摘要。
+    pub sha256: String,
+    /// Exact byte count of the core list file.
+    /// 核心清单文件的精确字节数。
+    pub bytes: u64,
+    /// Minimum engine contract required to read the core list.
+    /// 读取核心清单所需的最低引擎契约。
+    pub minimum_engine_contract: u64,
+}
+
 /// The signed remote index binding every provider JSON path and digest.
 /// 绑定全部供应商 JSON 路径与摘要的签名远端 Index。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,6 +100,9 @@ pub struct ManifestRemoteIndex {
     /// Provider entries keyed by provider id.
     /// 按供应商 ID 索引的供应商条目。
     pub providers: BTreeMap<String, RemoteProviderEntry>,
+    /// The core model list every provider of this index compiles against.
+    /// 此 Index 所有供应商编译时共用的核心模型清单。
+    pub core_models: RemoteCoreModelsEntry,
 }
 
 /// Outcome of one bounded sync attempt for one provider.
@@ -429,7 +454,78 @@ pub fn verify_and_parse_index(
             ));
         }
     }
+    validate_remote_core_models_entry(&parsed.core_models)?;
     Ok(parsed)
+}
+
+/// Validates the signed core-model pin and requires it to equal the installed core list.
+/// 校验已签名的核心模型固定值，并要求其等于已安装的核心清单。
+///
+/// Remote providers compile against the installed core list because remote core download is not
+/// implemented yet; an index that pins any other core list is rejected rather than compiled
+/// against facts it did not sign.
+/// 远端核心清单下载尚未实现，远端供应商以已安装核心清单编译；固定其他核心清单的 Index 会被
+/// 拒绝，而不是用它未签名的事实编译。
+///
+/// # Parameters
+/// 参数
+/// `entry` is the authenticated core pin of one remote index.
+/// `entry` 是一份远端 Index 中已认证的核心固定值。
+///
+/// # Returns
+/// 返回值
+/// Success only for a well-formed pin of the installed core list.
+/// 仅对形状正确且指向已安装核心清单的固定值返回成功。
+fn validate_remote_core_models_entry(entry: &RemoteCoreModelsEntry) -> Result<(), String> {
+    validate_remote_relative_url(&entry.relative_url)?;
+    if entry.revision == 0
+        || entry.bytes == 0
+        || entry.bytes > REMOTE_PROVIDER_MAX_BYTES
+        || entry.minimum_engine_contract == 0
+        || entry.sha256.len() != SHA256_HEX_LENGTH
+        || !entry
+            .sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(String::from(
+            "Remote index core model entry has an invalid revision, length, digest or engine contract.",
+        ));
+    }
+    let installed = installed_core_models_entry(entry.relative_url.clone())?;
+    if installed.revision != entry.revision || installed.sha256 != entry.sha256 {
+        return Err(format!(
+            "Remote index pins core model list revision {} but this engine has revision {}; remote core model sync is not supported.",
+            entry.revision, installed.revision
+        ));
+    }
+    Ok(())
+}
+
+/// Returns the pin of the installed core model list under one index-relative URL.
+/// 以一个 Index 相对 URL 返回已安装核心模型清单的固定值。
+///
+/// # Parameters
+/// 参数
+/// `relative_url` is the URL the produced pin should carry.
+/// `relative_url` 是生成的固定值所携带的 URL。
+///
+/// # Returns
+/// 返回值
+/// The installed core revision, digest and length, or the installed-core failure.
+/// 返回已安装核心的修订号、摘要与长度，或已安装核心的失败。
+pub fn installed_core_models_entry(relative_url: String) -> Result<RemoteCoreModelsEntry, String> {
+    let core = vulcan_provider_adapters::bundled_core_model_catalog()?;
+    let (sha256, bytes) = core
+        .source_pin()
+        .ok_or_else(|| String::from("The installed core model list has no source pin."))?;
+    Ok(RemoteCoreModelsEntry {
+        revision: core.revision(),
+        relative_url,
+        sha256: sha256.to_string(),
+        bytes,
+        minimum_engine_contract: 1,
+    })
 }
 
 /// Validates one signed remote system-provider identity before any local path is constructed.
@@ -1800,9 +1896,10 @@ where
 ///
 /// # Parameters
 /// 参数
-/// `entries` are the pinned provider records, `index_revision` is monotonic, and
+/// `entries` are the pinned provider records, `core_models` pins the core model list,
+/// `index_revision` is monotonic, and
 /// `issued_at_unix_ms`/`expires_at_unix_ms` bound the validity window.
-/// `entries` 是固定的供应商记录，`index_revision` 单调递增，
+/// `entries` 是固定的供应商记录，`core_models` 固定核心模型清单，`index_revision` 单调递增，
 /// `issued_at_unix_ms`/`expires_at_unix_ms` 限定有效窗口。
 ///
 /// # Returns
@@ -1811,6 +1908,7 @@ where
 /// 返回可进行分离签名的序列化 Index 字节。
 pub fn build_index_document(
     entries: Vec<RemoteProviderEntry>,
+    core_models: RemoteCoreModelsEntry,
     index_revision: u64,
     signing_key_id: &str,
     issued_at_unix_ms: i64,
@@ -1827,6 +1925,7 @@ pub fn build_index_document(
         expires_at_unix_ms,
         signing_key_id: signing_key_id.to_string(),
         providers,
+        core_models,
     };
     serde_json::to_vec(&index).expect("index must serialize")
 }
@@ -1860,6 +1959,13 @@ pub fn public_key_for_seed(secret_key: &[u8; 32]) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pins the installed core model list, the only one a remote index may reference.
+    /// 固定已安装核心模型清单，这是远端 Index 唯一可引用的核心清单。
+    fn test_core_models() -> RemoteCoreModelsEntry {
+        installed_core_models_entry(String::from("/core-models.json"))
+            .expect("installed core model list")
+    }
 
     /// Builds one deterministic trusted key pair for tests only.
     /// 仅为测试构建确定性受信密钥对。
@@ -1921,8 +2027,14 @@ mod tests {
             minimum_engine_contract: 1,
         };
         let now = 1_000_000;
-        let index_bytes =
-            build_index_document(vec![entry], 3, "test-key-1", now - 1000, now + 1000);
+        let index_bytes = build_index_document(
+            vec![entry],
+            test_core_models(),
+            3,
+            "test-key-1",
+            now - 1000,
+            now + 1000,
+        );
         let signature = sign_index_document(&index_bytes, &secret).expect("sign should work");
         let parsed = verify_and_parse_index(
             &index_bytes,
@@ -2128,8 +2240,14 @@ mod tests {
             minimum_engine_contract: 1,
         };
         let now = 1_000_000;
-        let index_bytes =
-            build_index_document(vec![entry], 3, "test-key-1", now - 1000, now + 1000);
+        let index_bytes = build_index_document(
+            vec![entry],
+            test_core_models(),
+            3,
+            "test-key-1",
+            now - 1000,
+            now + 1000,
+        );
         let signature = sign_index_document(&index_bytes, &secret).expect("sign should work");
         let duplicate = TrustedSigningKey {
             key_id: String::from("test-key-1"),
@@ -2154,8 +2272,14 @@ mod tests {
             minimum_engine_contract: 1,
         };
         let now = 1_000_000;
-        let index_bytes =
-            build_index_document(vec![entry], 3, "test-key-1", now - 1000, now + 1000);
+        let index_bytes = build_index_document(
+            vec![entry],
+            test_core_models(),
+            3,
+            "test-key-1",
+            now - 1000,
+            now + 1000,
+        );
         let signature = sign_index_document(&index_bytes, &secret).expect("sign should work");
         let alias = TrustedSigningKey {
             key_id: String::from("test-key-alias"),
@@ -2847,8 +2971,14 @@ mod tests {
             minimum_engine_contract: 1,
         };
         let now = 1_000_000;
-        let index_bytes =
-            build_index_document(vec![entry], 3, "test-key-1", now - 1000, now + 1000);
+        let index_bytes = build_index_document(
+            vec![entry],
+            test_core_models(),
+            3,
+            "test-key-1",
+            now - 1000,
+            now + 1000,
+        );
         let signature = sign_index_document(&index_bytes, &secret).expect("sign should work");
         let mut keys = vec![trusted];
         for index in 1..=MAX_TRUSTED_SIGNING_KEYS {
@@ -2879,8 +3009,14 @@ mod tests {
 
         let mut zero_revision = valid_entry.clone();
         zero_revision.revision = 0;
-        let index_bytes =
-            build_index_document(vec![zero_revision], 3, "test-key-1", now - 1000, now + 1000);
+        let index_bytes = build_index_document(
+            vec![zero_revision],
+            test_core_models(),
+            3,
+            "test-key-1",
+            now - 1000,
+            now + 1000,
+        );
         let signature = sign_index_document(&index_bytes, &secret).expect("sign should work");
         let error = verify_and_parse_index(
             &index_bytes,
@@ -2893,8 +3029,14 @@ mod tests {
 
         let mut short_sha = valid_entry.clone();
         short_sha.sha256 = String::from("abc");
-        let index_bytes =
-            build_index_document(vec![short_sha], 3, "test-key-1", now - 1000, now + 1000);
+        let index_bytes = build_index_document(
+            vec![short_sha],
+            test_core_models(),
+            3,
+            "test-key-1",
+            now - 1000,
+            now + 1000,
+        );
         let signature = sign_index_document(&index_bytes, &secret).expect("sign should work");
         let error = verify_and_parse_index(
             &index_bytes,
@@ -2909,8 +3051,14 @@ mod tests {
         // 可执行验证器必须与 JSON Schema 的小写摘要模式一致。
         let mut uppercase_sha = valid_entry.clone();
         uppercase_sha.sha256 = "A".repeat(SHA256_HEX_LENGTH);
-        let index_bytes =
-            build_index_document(vec![uppercase_sha], 3, "test-key-1", now - 1000, now + 1000);
+        let index_bytes = build_index_document(
+            vec![uppercase_sha],
+            test_core_models(),
+            3,
+            "test-key-1",
+            now - 1000,
+            now + 1000,
+        );
         let signature = sign_index_document(&index_bytes, &secret).expect("sign should work");
         let error = verify_and_parse_index(
             &index_bytes,
@@ -2925,6 +3073,7 @@ mod tests {
         oversized_bytes.bytes = REMOTE_PROVIDER_MAX_BYTES + 1;
         let index_bytes = build_index_document(
             vec![oversized_bytes],
+            test_core_models(),
             3,
             "test-key-1",
             now - 1000,
@@ -2947,6 +3096,7 @@ mod tests {
             .repeat(vulcan_provider_adapters::provider_manifest::MAX_PROVIDER_IDENTIFIER_LEN + 1);
         let index_bytes = build_index_document(
             vec![oversized_identity],
+            test_core_models(),
             3,
             "test-key-1",
             now - 1000,
@@ -2984,6 +3134,7 @@ mod tests {
             expires_at_unix_ms: now + 1000,
             signing_key_id: String::from("test-key-1"),
             providers: BTreeMap::new(),
+            core_models: test_core_models(),
         };
         entry.provider_id = String::from("forged-id");
         index.providers.insert(String::from("expected-id"), entry);
@@ -3312,6 +3463,7 @@ mod tests {
             expires_at_unix_ms: 1_001_000,
             signing_key_id: String::from("test-key-1"),
             providers: BTreeMap::new(),
+            core_models: test_core_models(),
         };
         index.providers.insert(
             String::from("forged-key"),

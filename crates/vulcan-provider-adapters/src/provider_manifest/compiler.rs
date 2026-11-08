@@ -16,9 +16,10 @@ use crate::{
 };
 
 use super::{
-    CatalogMembershipPolicy, EnginePrimitiveRegistry, MAX_PROVIDER_IDENTIFIER_LEN,
-    ManifestOwnership, ManifestSnapshotProvenance, ModelSourcePolicy, ProviderManifestV1,
-    ResolvedRuleInstance, UnknownModelPolicy, resolve_rule_instances, validate_manifest,
+    CatalogMembershipPolicy, CoreModelCatalog, EnginePrimitiveRegistry,
+    MAX_PROVIDER_IDENTIFIER_LEN, ManifestOwnership, ManifestSnapshotProvenance, ModelSourcePolicy,
+    ProviderManifestV1, ResolvedRuleInstance, UnknownModelPolicy, resolve_rule_instances,
+    validate_core_model_references, validate_manifest,
 };
 
 /// Maximum byte length accepted for the packaged bundled-manifest integrity index.
@@ -32,7 +33,10 @@ const BUNDLED_MANIFEST_INDEX_MAX_BYTES: u64 = 1024 * 1024;
 const BUNDLED_MANIFEST_MAX_BYTES: u64 = super::MAX_MANIFEST_BYTES as u64;
 /// Shared schema identifier used by both signed remote and packaged integrity indexes.
 /// 签名远端 Index 与打包完整性 Index 共用的 Schema 标识。
-const BUNDLED_MANIFEST_INDEX_SCHEMA_VERSION: &str = "vulcan.provider-index.v1";
+const BUNDLED_MANIFEST_INDEX_SCHEMA_VERSION: &str = "vulcan.provider-index.v2";
+/// Exact index-relative path of the core model list next to the index.
+/// 核心模型清单相对 Index 的精确路径，与 Index 同目录。
+pub const CORE_MODELS_RELATIVE_URL: &str = "core-models.json";
 /// Maximum provider entries accepted from one packaged integrity index.
 /// 单份打包完整性 Index 允许的最大供应商条目数。
 const BUNDLED_MANIFEST_INDEX_MAX_PROVIDERS: usize = 256;
@@ -63,6 +67,31 @@ struct BundledManifestIndex {
     /// Complete provider entries keyed by exact provider identity.
     /// 按精确供应商身份索引的完整供应商条目。
     providers: BTreeMap<String, BundledManifestIndexEntry>,
+    /// The one core model list every provider of this generation compiles against.
+    /// 此代际所有供应商编译时共用的唯一核心模型清单。
+    core_models: BundledCoreModelsIndexEntry,
+}
+
+/// The core model list pinned by the bundled integrity index.
+/// 由内置完整性 Index 固定的核心模型清单。
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BundledCoreModelsIndexEntry {
+    /// Exact core list revision declared by the indexed bytes.
+    /// 被索引字节声明的精确核心清单修订号。
+    revision: u64,
+    /// Exact index-relative path; always `CORE_MODELS_RELATIVE_URL`.
+    /// 相对 Index 的精确路径；固定为 `CORE_MODELS_RELATIVE_URL`。
+    relative_url: String,
+    /// Lowercase SHA-256 digest of the exact core list bytes.
+    /// 精确核心清单字节的小写 SHA-256 摘要。
+    sha256: String,
+    /// Exact core list byte length.
+    /// 核心清单的精确字节长度。
+    bytes: u64,
+    /// Minimum manifest engine contract required to read the core list.
+    /// 读取核心清单所需的最低 Manifest 引擎契约。
+    minimum_engine_contract: u64,
 }
 
 /// One packaged provider manifest pinned by the bundled integrity index.
@@ -205,6 +234,9 @@ pub struct ResolvedProviderManifest {
     /// Whole-manifest provenance.
     /// 整份清单来源。
     pub snapshot_provenance: ManifestSnapshotProvenance,
+    /// Core model list revision this snapshot inherited from; `None` when no rule references it.
+    /// 此快照继承的核心模型清单修订号；没有规则引用时为 `None`。
+    pub core_models_revision: Option<u64>,
 }
 
 /// Provenance for one concrete target instantiated from immutable bundled authority.
@@ -1151,6 +1183,30 @@ pub fn compile_manifest_with_layer(
     ownership: ManifestOwnership,
     source_layer: super::ManifestSourceLayer,
 ) -> Result<ResolvedProviderManifest, super::ManifestValidationError> {
+    let core = core_models_for_manifest(manifest)?;
+    compile_manifest_with_core(manifest, ownership, source_layer, &core)
+}
+
+/// Compiles one validated manifest document against an explicit core model list.
+/// 以显式核心模型清单编译一份已验证清单文档。
+///
+/// # Parameters
+/// 参数
+/// `manifest` is the parsed document, `ownership` and `source_layer` select its projection and
+/// layer, and `core` is the core model list every `core_model_ref` must resolve against.
+/// `manifest` 是已解析文档，`ownership` 与 `source_layer` 选择其投影与层，`core` 是每个
+/// `core_model_ref` 必须解析到的核心模型清单。
+///
+/// # Returns
+/// 返回值
+/// The immutable compiled manifest, or the first closed validation failure.
+/// 返回不可变已编译清单，或首个封闭校验失败。
+pub fn compile_manifest_with_core(
+    manifest: &ProviderManifestV1,
+    ownership: ManifestOwnership,
+    source_layer: super::ManifestSourceLayer,
+    core: &CoreModelCatalog,
+) -> Result<ResolvedProviderManifest, super::ManifestValidationError> {
     let registry = EnginePrimitiveRegistry::current_protocol_baseline();
     if let Err(errors) = validate_manifest(manifest, ownership, &registry) {
         return Err(errors.into_iter().next().unwrap_or_else(|| {
@@ -1173,7 +1229,13 @@ pub fn compile_manifest_with_layer(
     let manifest = &expanded.manifest;
 
     let descriptor = compile_descriptor(manifest, ownership)?;
-    let rule_instances = resolve_rule_instances(manifest);
+    validate_core_model_references(manifest, core)?;
+    let rule_instances = resolve_rule_instances(manifest, core);
+    let core_models_revision = manifest
+        .model_rules
+        .iter()
+        .any(|rule| rule.core_model_ref.is_some())
+        .then(|| core.revision());
     validate_resolved_model_parameter_sets(rule_instances.as_slice())?;
     let default_capabilities = manifest.model_defaults.capabilities.as_ref().map(|patch| {
         let mut compiled = vulcan_ai_contract::ModelCapabilities::default();
@@ -1282,6 +1344,7 @@ pub fn compile_manifest_with_layer(
             sha256: None,
             provenance_status: manifest.provenance.status,
         },
+        core_models_revision,
     })
 }
 
@@ -2115,6 +2178,21 @@ pub fn compile_manifest_text_with_layer(
     ownership: ManifestOwnership,
     source_layer: super::ManifestSourceLayer,
 ) -> Result<ResolvedProviderManifest, super::ManifestValidationError> {
+    compile_manifest_text_with_core(text, ownership, source_layer, None)
+}
+
+/// Compiles one manifest document from text, optionally against an explicit core model list.
+/// 从文本编译一份清单文档，可选使用显式核心模型清单。
+///
+/// `core` is `None` to use the installed bundled core list, loaded only when the document
+/// references it.
+/// `core` 为 `None` 时使用已安装的随包核心清单，且只在文档引用它时加载。
+pub fn compile_manifest_text_with_core(
+    text: &str,
+    ownership: ManifestOwnership,
+    source_layer: super::ManifestSourceLayer,
+    core: Option<&CoreModelCatalog>,
+) -> Result<ResolvedProviderManifest, super::ManifestValidationError> {
     let registry = EnginePrimitiveRegistry::current_protocol_baseline();
     let manifest =
         super::parse_and_validate(text, ownership, &registry).map_err(|mut errors| {
@@ -2126,7 +2204,10 @@ pub fn compile_manifest_text_with_layer(
                 )
             })
         })?;
-    let mut resolved = compile_manifest_with_layer(&manifest, ownership, source_layer)?;
+    let mut resolved = match core {
+        Some(core) => compile_manifest_with_core(&manifest, ownership, source_layer, core)?,
+        None => compile_manifest_with_layer(&manifest, ownership, source_layer)?,
+    };
     // Snapshot provenance carries the content-addressed digest of the exact source bytes so
     // consumers can prove which revision their binding came from (plan §15.3).
     // 快照来源携带精确源字节的内容寻址摘要，使消费方能够证明其绑定来自哪个修订（方案 §15.3）。
@@ -2336,6 +2417,9 @@ fn load_bundled_manifest_generation_from_paths(
     directory: &Path,
 ) -> Result<BundledManifestGenerationLoad, String> {
     let index = read_bundled_manifest_index(index_path)?;
+    // The core list is a generation-wide input: when it fails, no provider may compile.
+    // 核心清单是整个代际的输入：它失败时任何供应商都不得编译。
+    let core = load_indexed_core_models(index_path, &index.core_models)?;
 
     // Every index identity is validated before it becomes one deterministic filesystem path.
     // 每个 Index 身份都在成为确定性文件系统路径前完成校验。
@@ -2348,7 +2432,7 @@ fn load_bundled_manifest_generation_from_paths(
     let mut manifests = BTreeMap::new();
     let mut failures = BTreeMap::new();
     for (provider_id, indexed) in &index.providers {
-        match load_indexed_bundled_provider_manifest(directory, provider_id, indexed) {
+        match load_indexed_bundled_provider_manifest(directory, provider_id, indexed, &core) {
             Ok(resolved) => {
                 manifests.insert(provider_id.clone(), std::sync::Arc::new(resolved));
             }
@@ -2387,6 +2471,7 @@ fn load_indexed_bundled_provider_manifest(
     directory: &Path,
     provider_id: &str,
     indexed: &BundledManifestIndexEntry,
+    core: &CoreModelCatalog,
 ) -> Result<ResolvedProviderManifest, String> {
     let path = directory.join(format!("{provider_id}.json"));
     let bytes = read_bounded_bundled_file(
@@ -2411,9 +2496,13 @@ fn load_indexed_bundled_provider_manifest(
     let text = std::str::from_utf8(&bytes).map_err(|error| {
         format!("indexed bundled provider manifest `{provider_id}` is not UTF-8: {error}")
     })?;
-    let resolved = compile_manifest_text(text, ManifestOwnership::System).map_err(|error| {
-        format!("bundled provider manifest `{provider_id}` is invalid: {error}")
-    })?;
+    let resolved = compile_manifest_text_with_core(
+        text,
+        ManifestOwnership::System,
+        default_source_layer(ManifestOwnership::System),
+        Some(core),
+    )
+    .map_err(|error| format!("bundled provider manifest `{provider_id}` is invalid: {error}"))?;
     validate_compiled_bundled_manifest(provider_id, indexed, &resolved)?;
     Ok(resolved)
 }
@@ -2470,6 +2559,140 @@ fn sanitize_bundled_failure_diagnostic(message: String, directory: &Path) -> Str
             without_directory.as_str(),
         ),
     )
+}
+
+/// Loads, authenticates and compiles the core model list pinned by one bundled index.
+/// 加载、认证并编译一份内置 Index 固定的核心模型清单。
+///
+/// # Parameters
+/// 参数
+/// `index_path` is the exact index file whose directory holds the core list, and `indexed` is
+/// the trusted core pin.
+/// `index_path` 是精确 Index 文件，其所在目录保存核心清单；`indexed` 是可信核心固定值。
+///
+/// # Returns
+/// 返回值
+/// The compiled core list, or a closed integrity or validation failure.
+/// 返回已编译核心清单，或封闭的完整性/校验失败。
+fn load_indexed_core_models(
+    index_path: &Path,
+    indexed: &BundledCoreModelsIndexEntry,
+) -> Result<CoreModelCatalog, String> {
+    if indexed.relative_url != CORE_MODELS_RELATIVE_URL {
+        return Err(format!(
+            "bundled core model list must use relative path `{CORE_MODELS_RELATIVE_URL}`"
+        ));
+    }
+    if indexed.revision == 0
+        || indexed.bytes == 0
+        || indexed.bytes > BUNDLED_MANIFEST_MAX_BYTES
+        || indexed.minimum_engine_contract == 0
+        || indexed.minimum_engine_contract > u32::MAX as u64
+        || !is_lowercase_sha256(&indexed.sha256)
+    {
+        return Err(String::from(
+            "bundled core model list index entry has an invalid revision, length, digest or engine contract",
+        ));
+    }
+    let directory = index_path
+        .parent()
+        .ok_or_else(|| String::from("bundled provider manifest index has no parent directory"))?;
+    let bytes = read_bounded_bundled_file(
+        &directory.join(CORE_MODELS_RELATIVE_URL),
+        BUNDLED_MANIFEST_MAX_BYTES,
+        "bundled core model list",
+    )?;
+    if bytes.len() as u64 != indexed.bytes {
+        return Err(format!(
+            "bundled core model list declares {} indexed bytes but contains {}",
+            indexed.bytes,
+            bytes.len()
+        ));
+    }
+    let actual_sha256 = hex::encode(Sha256::digest(&bytes));
+    if actual_sha256 != indexed.sha256 {
+        return Err(format!(
+            "bundled core model list has SHA-256 `{actual_sha256}` instead of `{}`",
+            indexed.sha256
+        ));
+    }
+    let text = std::str::from_utf8(&bytes)
+        .map_err(|error| format!("bundled core model list is not UTF-8: {error}"))?;
+    let core = super::compile_core_models_text(text)
+        .map_err(|error| format!("bundled core model list is invalid: {error}"))?;
+    if core.revision() != indexed.revision {
+        return Err(format!(
+            "bundled core model list revision {} disagrees with index revision {}",
+            core.revision(),
+            indexed.revision
+        ));
+    }
+    Ok(core.with_source_pin(actual_sha256, indexed.bytes))
+}
+
+/// Reports whether one value is a lowercase 64-character SHA-256 hex digest.
+/// 判断一个值是否为 64 位小写 SHA-256 十六进制摘要。
+fn is_lowercase_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+/// Returns the installed bundled core model list, verified once per process.
+/// 返回已安装的随包核心模型清单，每个进程只校验一次。
+///
+/// # Returns
+/// 返回值
+/// The shared compiled core list, or the closed failure that prevents any reference from
+/// resolving.
+/// 返回共享的已编译核心清单，或使任何引用都无法解析的封闭失败。
+pub fn bundled_core_model_catalog() -> Result<std::sync::Arc<CoreModelCatalog>, String> {
+    static CORE: std::sync::OnceLock<Result<std::sync::Arc<CoreModelCatalog>, String>> =
+        std::sync::OnceLock::new();
+    CORE.get_or_init(|| {
+        let index_path = vulcan_runtime_assets::resolve_bundled_provider_manifest_index_path();
+        let index = read_bundled_manifest_index(&index_path)?;
+        load_indexed_core_models(&index_path, &index.core_models).map(std::sync::Arc::new)
+    })
+    .clone()
+}
+
+/// Verifies the source-tree core model list against the source-tree bundled index.
+/// 对照源码树内置 Index 校验源码树核心模型清单。
+///
+/// # Returns
+/// 返回值
+/// The verified core entry count, or the first closed failure.
+/// 返回已校验的核心条目数，或首个封闭失败。
+pub fn verify_source_bundled_core_models() -> Result<usize, String> {
+    let index_path = vulcan_runtime_assets::source_bundled_provider_manifest_index_path();
+    let index = read_bundled_manifest_index(&index_path)?;
+    load_indexed_core_models(&index_path, &index.core_models).map(|core| core.len())
+}
+
+/// Selects the core list a single-manifest compile resolves references against.
+/// 选择单份清单编译时解析引用所用的核心清单。
+///
+/// A manifest without references never touches the installed core list.
+/// 没有引用的清单绝不读取已安装的核心清单。
+fn core_models_for_manifest(
+    manifest: &ProviderManifestV1,
+) -> Result<std::sync::Arc<CoreModelCatalog>, super::ManifestValidationError> {
+    if manifest
+        .model_rules
+        .iter()
+        .all(|rule| rule.core_model_ref.is_none())
+    {
+        return Ok(std::sync::Arc::new(CoreModelCatalog::empty()));
+    }
+    bundled_core_model_catalog().map_err(|error| {
+        super::ManifestValidationError::new(
+            "core_models_unavailable",
+            "$.model_rules",
+            format!("the installed core model list is unavailable: {error}"),
+        )
+    })
 }
 
 /// Validates the bounded, non-expiring header of one packaged integrity index.
@@ -2720,6 +2943,7 @@ mod tests {
         // fixtureIndex remains valid so only the tampered provider file is attributable locally.
         // fixtureIndex 保持有效，使只有被篡改供应商文件可逐项归因。
         let fixture_index = temporary_root.path().join("bundled-index.json");
+        copy_core_models_fixture(&source_index, &fixture_index);
         std::fs::copy(source_index, &fixture_index).expect("index fixture must copy");
         // missingProvider removes one provider without changing its trusted index identity.
         // missingProvider 在不改变可信 Index 身份的情况下移除一个供应商。
@@ -2767,6 +2991,53 @@ mod tests {
         );
     }
 
+    /// Verifies a v1 index and a core list that differs from its pinned digest both fail the
+    /// whole generation, because every provider rule depends on the one pinned core list.
+    /// 验证 v1 Index 与偏离固定摘要的核心清单都会令整个代际失败，因为每条供应商规则都依赖唯一固定的核心清单。
+    #[test]
+    fn bundled_generation_requires_index_v2_and_the_pinned_core_list() {
+        let source_directory = vulcan_runtime_assets::source_bundled_provider_manifests_directory();
+        let source_index = vulcan_runtime_assets::source_bundled_provider_manifest_index_path();
+        let index_text = std::fs::read_to_string(&source_index).expect("source index must read");
+        let temporary_root = tempfile::tempdir().expect("temporary directory must create");
+        let fixture_index = temporary_root.path().join("bundled-index.json");
+        copy_core_models_fixture(&source_index, &fixture_index);
+
+        let legacy = index_text.replace(
+            BUNDLED_MANIFEST_INDEX_SCHEMA_VERSION,
+            "vulcan.provider-index.v1",
+        );
+        std::fs::write(&fixture_index, legacy).expect("legacy index fixture must write");
+        assert!(
+            load_bundled_manifest_generation_from_paths(&fixture_index, &source_directory).is_err(),
+            "a v1 index must be rejected"
+        );
+
+        std::fs::write(&fixture_index, &index_text).expect("index fixture must write");
+        let pinned = load_bundled_manifest_generation_from_paths(&fixture_index, &source_directory)
+            .expect("the unchanged fixture must load");
+        assert!(pinned.failures.is_empty());
+        let core_path = fixture_index.with_file_name(CORE_MODELS_RELATIVE_URL);
+        let mut core_text = std::fs::read_to_string(&core_path).expect("core fixture must read");
+        core_text.push(' ');
+        std::fs::write(&core_path, core_text).expect("tampered core fixture must write");
+        assert!(
+            load_bundled_manifest_generation_from_paths(&fixture_index, &source_directory).is_err(),
+            "a core list that differs from the pinned digest must be rejected"
+        );
+    }
+
+    /// Copies the indexed core model list next to a fixture index, where the index resolves it.
+    /// 将已索引的核心模型清单复制到夹具 Index 旁，Index 在该位置解析它。
+    fn copy_core_models_fixture(source_index: &Path, fixture_index: &Path) {
+        let file_name = CORE_MODELS_RELATIVE_URL;
+        std::fs::copy(
+            source_index.with_file_name(file_name),
+            fixture_index.with_file_name(file_name),
+        )
+        .expect("core model fixture must copy");
+    }
+
     /// Verifies an unindexed sibling is ignored because bundled loading opens only exact index paths.
     /// 验证未索引同级文件会被忽略，因为内置加载只打开精确 Index 路径。
     #[test]
@@ -2790,6 +3061,7 @@ mod tests {
             .expect("indexed provider fixture must copy");
         }
         let fixture_index = temporary_root.path().join("bundled-index.json");
+        copy_core_models_fixture(&source_index, &fixture_index);
         std::fs::copy(source_index, &fixture_index).expect("index fixture must copy");
         // unexpectedFile has no trusted index identity and must never be discovered or opened.
         // unexpectedFile 没有可信 Index 身份，绝不能被发现或打开。

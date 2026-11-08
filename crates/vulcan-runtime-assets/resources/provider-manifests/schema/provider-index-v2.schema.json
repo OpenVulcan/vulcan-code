@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "vulcan.provider-index.v1",
-  "title": "Vulcan Provider Manifest Remote Index v1",
-  "description": "Signed remote index binding provider manifest revisions to relative URLs and SHA-256 digests.",
+  "$id": "vulcan.provider-index.v2",
+  "title": "Vulcan Provider Manifest Remote Index v2",
+  "description": "Signed remote index binding provider manifest revisions and the one core model list to relative URLs and SHA-256 digests.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -11,10 +11,11 @@
     "issued_at_unix_ms",
     "expires_at_unix_ms",
     "signing_key_id",
-    "providers"
+    "providers",
+    "core_models"
   ],
   "properties": {
-    "schema_version": { "type": "string", "const": "vulcan.provider-index.v1" },
+    "schema_version": { "type": "string", "const": "vulcan.provider-index.v2" },
     "index_revision": { "type": "integer", "minimum": 1 },
     "issued_at_unix_ms": { "type": "integer" },
     "expires_at_unix_ms": { "type": "integer" },
@@ -40,6 +41,18 @@
           "bytes": { "type": "integer", "minimum": 1 },
           "minimum_engine_contract": { "type": "integer", "minimum": 1 }
         }
+      }
+    },
+    "core_models": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "relative_url", "sha256", "bytes", "minimum_engine_contract"],
+      "properties": {
+        "revision": { "type": "integer", "minimum": 1 },
+        "relative_url": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "bytes": { "type": "integer", "minimum": 1 },
+        "minimum_engine_contract": { "type": "integer", "minimum": 1 }
       }
     }
   }

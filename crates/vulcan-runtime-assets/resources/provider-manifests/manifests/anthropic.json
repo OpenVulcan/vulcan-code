@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "anthropic",
-  "revision": 12,
-  "published_at": "2026-11-03T10:03:11Z",
+  "revision": 13,
+  "published_at": "2026-11-08T06:25:07Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -96,26 +96,14 @@
         "kind": "prefix",
         "value": "claude-opus-4-8"
       },
+      "core_model_ref": "claude-opus-4-8",
       "supported_protocols": [
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": ["conversation_respond"],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "unknown",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false},
         "evidence_revision": "anthropic-thinking-docs-2026-10-21"
       },
       "scope": {
@@ -133,26 +121,14 @@
         "kind": "prefix",
         "value": "claude-opus-4-7"
       },
+      "core_model_ref": "claude-opus-4-7",
       "supported_protocols": [
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": ["conversation_respond"],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "unknown",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false},
         "evidence_revision": "anthropic-thinking-docs-2026-10-21"
       },
       "scope": {
@@ -170,26 +146,14 @@
         "kind": "prefix",
         "value": "claude-sonnet-5"
       },
+      "core_model_ref": "claude-sonnet-5",
       "supported_protocols": [
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": ["conversation_respond"],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "unknown",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false},
         "evidence_revision": "anthropic-thinking-docs-2026-10-21"
       },
       "scope": {
@@ -207,26 +171,14 @@
         "kind": "prefix",
         "value": "claude-opus-5"
       },
+      "core_model_ref": "claude-opus-5",
       "supported_protocols": [
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": ["conversation_respond"],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "unknown",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false},
         "evidence_revision": "anthropic-thinking-docs-2026-10-21"
       },
       "scope": {
@@ -244,26 +196,13 @@
         "kind": "prefix",
         "value": "claude-haiku-5"
       },
+      "core_model_ref": "claude-haiku-5",
       "supported_protocols": [
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": ["conversation_respond"],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "unknown",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false},
         "evidence_revision": "anthropic-thinking-docs-2026-10-21"
       },
       "scope": {
@@ -281,26 +220,14 @@
         "kind": "prefix",
         "value": "claude-fable-5"
       },
+      "core_model_ref": "claude-fable-5",
       "supported_protocols": [
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": ["conversation_respond"],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "unknown",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false},
         "evidence_revision": "anthropic-thinking-docs-2026-10-21"
       },
       "scope": {
@@ -318,29 +245,13 @@
         "kind": "exact",
         "value": "claude-fable-5-1"
       },
+      "core_model_ref": "claude-fable-5-1",
       "supported_protocols": [
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": ["conversation_respond"],
-        "input_resources": ["image"],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1000000,
-        "output_limit": 128000,
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false},
         "evidence_revision": "anthropic-model-overviews-2026-11-03"
       },
       "scope": {
@@ -358,29 +269,13 @@
         "kind": "exact",
         "value": "claude-fable-5"
       },
+      "core_model_ref": "claude-fable-5",
       "supported_protocols": [
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": ["conversation_respond"],
-        "input_resources": ["image"],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "context_limit": 1000000,
-        "output_limit": 128000,
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false},
         "evidence_revision": "anthropic-model-overviews-2026-11-03"
       },
       "scope": {
@@ -398,26 +293,13 @@
         "kind": "prefix",
         "value": "claude-mythos-5"
       },
+      "core_model_ref": "claude-mythos-5",
       "supported_protocols": [
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": ["conversation_respond"],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "unknown",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false},
         "evidence_revision": "anthropic-thinking-docs-2026-10-21"
       },
       "scope": {
@@ -435,25 +317,15 @@
         "kind": "prefix",
         "value": "claude-opus-4-6"
       },
+      "core_model_ref": "claude-opus-4-6",
       "supported_protocols": [
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": ["conversation_respond"],
-        "output_resources": [],
-        "reasoning": "native",
+        "input_resources": ["image"],
         "provider_native_tools": [],
         "reasoning_control": "unknown",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "max"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false},
         "evidence_revision": "anthropic-thinking-docs-2026-10-21"
       },
       "scope": {
@@ -471,25 +343,15 @@
         "kind": "prefix",
         "value": "claude-sonnet-4-6"
       },
+      "core_model_ref": "claude-sonnet-4-6",
       "supported_protocols": [
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": ["conversation_respond"],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "unknown",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "max"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
+        "reasoning_efforts": ["low", "medium", "high", "max"],
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false},
         "evidence_revision": "anthropic-thinking-docs-2026-10-21"
       },
       "scope": {
@@ -507,24 +369,13 @@
         "kind": "prefix",
         "value": "claude-opus-4-5"
       },
+      "core_model_ref": "claude-opus-4-5",
       "supported_protocols": [
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": ["conversation_respond"],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "unknown",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false},
         "evidence_revision": "anthropic-effort-docs-2026-07-28"
       },
       "scope": {

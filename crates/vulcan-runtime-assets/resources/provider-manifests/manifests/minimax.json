@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "minimax",
-  "revision": 35,
-  "published_at": "2026-10-29T14:56:07Z",
+  "revision": 36,
+  "published_at": "2026-11-08T06:25:07Z",
   "engine_contract": {
     "minimum_manifest_engine": 2,
     "required_protocol_profiles": [
@@ -362,32 +362,14 @@
         "kind": "exact",
         "value": "MiniMax-M3.1-Flash"
       },
+      "core_model_ref": "minimax-m3.1-flash",
       "supported_protocols": [
         "anthropic-messages-video.v1"
       ],
       "selected_protocol": "anthropic-messages-video.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": ["image", "video"],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "MiniMax M3.1 Flash caching follows the provider default.",
-          "supports_managed_explicit": false
-        },
-        "context_limit": 1000000,
-        "output_limit": 128000,
+        "prompt_cache": {"provider_default_behavior": "MiniMax M3.1 Flash caching follows the provider default.", "supports_managed_explicit": false},
         "evidence_revision": "minimax-m3.1-flash-official-and-inherited-limits-2026-10-29"
       },
       "input_resource_constraints": [
@@ -442,6 +424,7 @@
         "kind": "exact",
         "value": "MiniMax-M3"
       },
+      "core_model_ref": "minimax-m3",
       "supported_protocols": [
         "anthropic-messages.v1",
         "anthropic-messages-video.v1",
@@ -449,23 +432,8 @@
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": ["image", "video"],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "MiniMax M3 caching follows the provider default for this compatible route.",
-          "supports_managed_explicit": false
-        },
-        "context_limit": 1000000,
+        "prompt_cache": {"provider_default_behavior": "MiniMax M3 caching follows the provider default for this compatible route.", "supports_managed_explicit": false},
         "evidence_revision": "minimax-compatible-text-openapi-2026-07-30"
       },
       "input_resource_constraints": [

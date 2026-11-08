@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "alibaba",
-  "revision": 23,
-  "published_at": "2026-11-06T08:27:35Z",
+  "revision": 24,
+  "published_at": "2026-11-08T06:25:07Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -834,32 +834,18 @@
         "kind": "exact",
         "value": "MiniMax-M2.5"
       },
+      "core_model_ref": "minimax-m2.5",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "fixed_on",
-        "reasoning_efforts": [
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
         "rerank": null,
-        "context_limit": 196608,
         "output_limit": null
       },
       "model_parameters": []
@@ -876,27 +862,14 @@
         "kind": "exact",
         "value": "MiniMax-M2.5"
       },
+      "core_model_ref": "minimax-m2.5",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "fixed_on",
-        "reasoning_efforts": [
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
@@ -919,33 +892,18 @@
         "kind": "exact",
         "value": "glm-5"
       },
+      "core_model_ref": "glm-5",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
         "rerank": null,
-        "context_limit": 198000,
         "output_limit": null
       },
       "model_parameters": []
@@ -962,36 +920,22 @@
         "kind": "exact",
         "value": "kimi-k2.5"
       },
+      "core_model_ref": "kimi-k2.5",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image",
-          "video"
-        ],
-        "output_resources": [],
+        "input_resources": ["image", "video"],
         "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "reasoning_efforts": ["none", "adaptive"],
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
         "rerank": null,
-        "context_limit": 262144,
         "output_limit": null
       },
       "model_parameters": []
@@ -1008,31 +952,18 @@
         "kind": "exact",
         "value": "kimi-k2.5"
       },
+      "core_model_ref": "kimi-k2.5",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image",
-          "video"
-        ],
-        "output_resources": [],
+        "input_resources": ["image", "video"],
         "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "reasoning_efforts": ["none", "adaptive"],
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
@@ -1055,37 +986,18 @@
         "kind": "exact",
         "value": "qwen3.5-plus"
       },
+      "core_model_ref": "qwen3.5-plus",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image",
-          "video"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
-        "rerank": null,
-        "context_limit": 1000000,
-        "output_limit": 65536
+        "rerank": null
       },
       "model_parameters": []
     },
@@ -1102,36 +1014,18 @@
         "kind": "exact",
         "value": "qwen3.6-plus"
       },
+      "core_model_ref": "qwen3.6-plus",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image",
-          "video"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
         "rerank": null,
-        "context_limit": 1000000,
         "output_limit": null
       },
       "model_parameters": []
@@ -1149,36 +1043,18 @@
         "kind": "exact",
         "value": "qwen3.6-plus"
       },
+      "core_model_ref": "qwen3.6-plus",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image",
-          "video"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
         "rerank": null,
-        "context_limit": 1000000,
         "output_limit": 65536
       },
       "model_parameters": []
@@ -1198,37 +1074,19 @@
         "kind": "exact",
         "value": "qwen3.7-plus"
       },
+      "core_model_ref": "qwen3.7-plus",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "openai-responses.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image",
-          "video"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
         "rerank": null,
-        "context_limit": 1000000,
         "output_limit": null
       },
       "model_parameters": [],
@@ -1254,37 +1112,19 @@
         "kind": "exact",
         "value": "qwen3.7-plus"
       },
+      "core_model_ref": "qwen3.7-plus",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "openai-responses.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image",
-          "video"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
         "rerank": null,
-        "context_limit": 1000000,
         "output_limit": 65536
       },
       "model_parameters": [],
@@ -1312,37 +1152,19 @@
         "kind": "exact",
         "value": "qwen3.8-max"
       },
+      "core_model_ref": "qwen3.8-max",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "openai-responses.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image",
-          "video"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "fixed_on",
-        "reasoning_efforts": [
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
-        "rerank": null,
-        "context_limit": 1000000,
-        "output_limit": 131072
+        "rerank": null
       },
       "model_parameters": [],
       "protocol_capabilities": {
@@ -1368,37 +1190,19 @@
         "kind": "exact",
         "value": "qwen3.8-flash"
       },
+      "core_model_ref": "qwen3.8-flash",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "openai-responses.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image",
-          "video"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "fixed_on",
-        "reasoning_efforts": [
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
-        "rerank": null,
-        "context_limit": 1000000,
-        "output_limit": 131072
+        "rerank": null
       },
       "model_parameters": [],
       "protocol_capabilities": {
@@ -1426,34 +1230,19 @@
         "kind": "exact",
         "value": "qwen3.7-max"
       },
+      "core_model_ref": "qwen3.7-max",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "openai-responses.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
         "rerank": null,
-        "context_limit": 1000000,
         "output_limit": null
       },
       "model_parameters": [],
@@ -1479,34 +1268,19 @@
         "kind": "exact",
         "value": "qwen3.7-max"
       },
+      "core_model_ref": "qwen3.7-max",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "openai-responses.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
         "rerank": null,
-        "context_limit": 1000000,
         "output_limit": 65536
       },
       "model_parameters": [],
@@ -1535,35 +1309,18 @@
         "kind": "exact",
         "value": "qwen3.6-flash"
       },
+      "core_model_ref": "qwen3.6-flash",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
         "rerank": null,
-        "context_limit": 1000000,
         "output_limit": null
       },
       "model_parameters": []
@@ -1582,33 +1339,18 @@
         "kind": "exact",
         "value": "glm-5.2"
       },
+      "core_model_ref": "glm-5.2",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
         "rerank": null,
-        "context_limit": 1000000,
         "output_limit": null
       },
       "model_parameters": []
@@ -1625,28 +1367,14 @@
         "kind": "exact",
         "value": "glm-5.2"
       },
+      "core_model_ref": "glm-5.2",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
@@ -1671,33 +1399,19 @@
         "kind": "exact",
         "value": "deepseek-v4-pro"
       },
+      "core_model_ref": "deepseek-v4-pro",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "reasoning_efforts": ["none", "adaptive"],
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
         "rerank": null,
-        "context_limit": 1000000,
         "output_limit": null
       },
       "model_parameters": []
@@ -1714,34 +1428,19 @@
         "kind": "exact",
         "value": "deepseek-v4-pro"
       },
+      "core_model_ref": "deepseek-v4-pro",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "reasoning_efforts": ["none", "adaptive"],
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
-        "rerank": null,
-        "context_limit": 1000000,
-        "output_limit": 393216
+        "rerank": null
       },
       "model_parameters": []
     },
@@ -1758,33 +1457,18 @@
         "kind": "exact",
         "value": "deepseek-v4-pro-0813"
       },
+      "core_model_ref": "deepseek-v4-pro-0813",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
         "rerank": null,
-        "context_limit": 1000000,
         "output_limit": null
       },
       "model_parameters": []
@@ -1802,29 +1486,18 @@
         "kind": "exact",
         "value": "deepseek-v4-flash-0731"
       },
+      "core_model_ref": "deepseek-v4-flash-0731",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
         "embedding": null,
         "rerank": null,
-        "reasoning": "unknown",
         "provider_native_tools": [],
-        "reasoning_control": "unknown",
-        "reasoning_efforts": [],
         "context_limit": null,
         "output_limit": null,
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "alibaba.token-plan.personal-global.2026-08-01"
       },
@@ -1843,33 +1516,18 @@
         "kind": "exact",
         "value": "deepseek-v4-flash"
       },
+      "core_model_ref": "deepseek-v4-flash",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
         "rerank": null,
-        "context_limit": 1000000,
         "output_limit": null
       },
       "model_parameters": []
@@ -1887,33 +1545,18 @@
         "kind": "exact",
         "value": "deepseek-v4-flash"
       },
+      "core_model_ref": "deepseek-v4-flash",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
         "rerank": null,
-        "context_limit": 1000000,
         "output_limit": 393216
       },
       "model_parameters": []
@@ -1930,33 +1573,18 @@
         "kind": "exact",
         "value": "deepseek-v3.2"
       },
+      "core_model_ref": "deepseek-v3.2",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
         "rerank": null,
-        "context_limit": 131072,
         "output_limit": null
       },
       "model_parameters": []
@@ -1973,28 +1601,14 @@
         "kind": "exact",
         "value": "deepseek-v3.2"
       },
+      "core_model_ref": "deepseek-v3.2",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
@@ -2016,35 +1630,19 @@
         "kind": "exact",
         "value": "kimi-k2.7-code"
       },
+      "core_model_ref": "kimi-k2.7-code",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image",
-          "video"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "fixed_on",
-        "reasoning_efforts": [
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "reasoning_efforts": ["adaptive"],
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
         "rerank": null,
-        "context_limit": 262144,
         "output_limit": null
       },
       "model_parameters": []
@@ -2061,30 +1659,15 @@
         "kind": "exact",
         "value": "kimi-k2.7-code"
       },
+      "core_model_ref": "kimi-k2.7-code",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image",
-          "video"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "fixed_on",
-        "reasoning_efforts": [
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "reasoning_efforts": ["adaptive"],
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
@@ -2106,33 +1689,22 @@
         "kind": "exact",
         "value": "kimi-k2.6"
       },
+      "core_model_ref": "kimi-k2.6",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
         "input_resources": [],
-        "output_resources": [],
         "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "reasoning_efforts": ["none", "adaptive"],
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
         "rerank": null,
-        "context_limit": 262144,
         "output_limit": null
       },
       "model_parameters": []
@@ -2149,28 +1721,18 @@
         "kind": "exact",
         "value": "kimi-k2.6"
       },
+      "core_model_ref": "kimi-k2.6",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
         "input_resources": [],
-        "output_resources": [],
         "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "reasoning_efforts": ["none", "adaptive"],
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
@@ -2193,33 +1755,18 @@
         "kind": "exact",
         "value": "glm-5.1"
       },
+      "core_model_ref": "glm-5.1",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
         "rerank": null,
-        "context_limit": 198000,
         "output_limit": null
       },
       "model_parameters": []
@@ -2236,28 +1783,14 @@
         "kind": "exact",
         "value": "glm-5.1"
       },
+      "core_model_ref": "glm-5.1",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
@@ -2280,37 +1813,18 @@
         "kind": "exact",
         "value": "qwen3.5-flash"
       },
+      "core_model_ref": "qwen3.5-flash",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image",
-          "video"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
-        "rerank": null,
-        "context_limit": 1000000,
-        "output_limit": 65536
+        "rerank": null
       },
       "model_parameters": []
     },
@@ -2326,37 +1840,18 @@
         "kind": "exact",
         "value": "qwen3.7-max-2026-06-08"
       },
+      "core_model_ref": "qwen3.7-max-2026-06-08",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image",
-          "video"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
-        "rerank": null,
-        "context_limit": 1000000,
-        "output_limit": 65536
+        "rerank": null
       },
       "model_parameters": []
     },
@@ -2373,34 +1868,18 @@
         "kind": "exact",
         "value": "glm-5.2-fast-preview"
       },
+      "core_model_ref": "glm-5.2-fast-preview",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
-        "rerank": null,
-        "context_limit": 1048576,
-        "output_limit": 131072
+        "rerank": null
       },
       "model_parameters": []
     },
@@ -2416,28 +1895,14 @@
         "kind": "exact",
         "value": "ZHIPU/GLM-5.2"
       },
+      "core_model_ref": "glm-5.2",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
@@ -2459,35 +1924,20 @@
         "kind": "exact",
         "value": "kimi/kimi-k3"
       },
+      "core_model_ref": "kimi-k3",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image",
-          "video"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "fixed_on",
-        "reasoning_efforts": [
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "reasoning_efforts": ["adaptive"],
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
         "rerank": null,
-        "context_limit": 1048576,
         "output_limit": 1048576
       },
       "model_parameters": []
@@ -2504,30 +1954,16 @@
         "kind": "exact",
         "value": "MiniMax/MiniMax-M3"
       },
+      "core_model_ref": "minimax-m3",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image",
-          "video"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "fixed_on",
-        "reasoning_efforts": [
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "reasoning_efforts": ["adaptive"],
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
@@ -2549,31 +1985,16 @@
         "kind": "exact",
         "value": "stepfun/step-3.7-flash"
       },
+      "core_model_ref": "step-3.7-flash",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image",
-          "video"
-        ],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
         "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "reasoning_efforts": ["none", "adaptive"],
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
@@ -2595,34 +2016,18 @@
         "kind": "exact",
         "value": "xiaomi/mimo-v2.5-pro"
       },
+      "core_model_ref": "mimo-v2.5-pro",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "toggle",
-        "reasoning_efforts": [
-          "none",
-          "adaptive"
-        ],
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
-        "rerank": null,
-        "context_limit": 1048576,
-        "output_limit": 131072
+        "rerank": null
       },
       "model_parameters": []
     },
@@ -2638,49 +2043,15 @@
         "kind": "exact",
         "value": "text-embedding-v1"
       },
+      "core_model_ref": "text-embedding-v1",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "openai-responses.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "embedding_create"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "embedding": {
-          "tasks": [
-            "provider_default"
-          ],
-          "input_resources": [],
-          "output_kinds": [
-            "dense"
-          ],
-          "encodings": [
-            "float"
-          ],
-          "dimensions": [
-            1536
-          ],
-          "minimum_dimensions": 1536,
-          "maximum_dimensions": 1536,
-          "default_dimensions": 1536,
-          "maximum_inputs": 25,
-          "maximum_tokens_per_input": 2048,
-          "normalization": "unknown",
-          "distance_metric": "unknown"
-        },
-        "reasoning": "unsupported",
         "provider_native_tools": [],
-        "reasoning_control": "fixed_off",
-        "reasoning_efforts": [],
-        "context_limit": 2048,
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.embeddings.2026-09-12",
         "output_limit": null,
@@ -2700,49 +2071,15 @@
         "kind": "exact",
         "value": "text-embedding-v2"
       },
+      "core_model_ref": "text-embedding-v2",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "openai-responses.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "embedding_create"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "embedding": {
-          "tasks": [
-            "provider_default"
-          ],
-          "input_resources": [],
-          "output_kinds": [
-            "dense"
-          ],
-          "encodings": [
-            "float"
-          ],
-          "dimensions": [
-            1536
-          ],
-          "minimum_dimensions": 1536,
-          "maximum_dimensions": 1536,
-          "default_dimensions": 1536,
-          "maximum_inputs": 25,
-          "maximum_tokens_per_input": 2048,
-          "normalization": "unknown",
-          "distance_metric": "unknown"
-        },
-        "reasoning": "unsupported",
         "provider_native_tools": [],
-        "reasoning_control": "fixed_off",
-        "reasoning_efforts": [],
-        "context_limit": 2048,
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.embeddings.2026-09-12",
         "output_limit": null,
@@ -2763,56 +2100,15 @@
         "kind": "exact",
         "value": "text-embedding-v4"
       },
+      "core_model_ref": "text-embedding-v4",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "openai-responses.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "embedding_create"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "embedding": {
-          "tasks": [
-            "provider_default"
-          ],
-          "input_resources": [],
-          "output_kinds": [
-            "dense"
-          ],
-          "encodings": [
-            "float"
-          ],
-          "dimensions": [
-            64,
-            128,
-            256,
-            512,
-            768,
-            1024,
-            1536,
-            2048
-          ],
-          "minimum_dimensions": 64,
-          "maximum_dimensions": 2048,
-          "default_dimensions": 1024,
-          "maximum_inputs": 10,
-          "maximum_tokens_per_input": 8192,
-          "normalization": "unknown",
-          "distance_metric": "unknown"
-        },
-        "reasoning": "unsupported",
         "provider_native_tools": [],
-        "reasoning_control": "fixed_off",
-        "reasoning_efforts": [],
-        "context_limit": 8192,
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.embeddings.2026-07-30",
         "output_limit": null,
@@ -2833,54 +2129,15 @@
         "kind": "exact",
         "value": "text-embedding-v3"
       },
+      "core_model_ref": "text-embedding-v3",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "openai-responses.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "embedding_create"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "embedding": {
-          "tasks": [
-            "provider_default"
-          ],
-          "input_resources": [],
-          "output_kinds": [
-            "dense"
-          ],
-          "encodings": [
-            "float"
-          ],
-          "dimensions": [
-            64,
-            128,
-            256,
-            512,
-            768,
-            1024
-          ],
-          "minimum_dimensions": 64,
-          "maximum_dimensions": 1024,
-          "default_dimensions": 1024,
-          "maximum_inputs": 10,
-          "maximum_tokens_per_input": 8192,
-          "normalization": "unknown",
-          "distance_metric": "unknown"
-        },
-        "reasoning": "unsupported",
         "provider_native_tools": [],
-        "reasoning_control": "fixed_off",
-        "reasoning_efforts": [],
-        "context_limit": 8192,
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.embeddings.2026-07-30",
         "output_limit": null,
@@ -2901,39 +2158,15 @@
         "kind": "exact",
         "value": "qwen3-rerank"
       },
+      "core_model_ref": "qwen3-rerank",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "openai-responses.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "rerank_documents"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "rerank": {
-          "query_resources": [],
-          "candidate_resources": [],
-          "maximum_candidates": 500,
-          "maximum_tokens_per_item": 4000,
-          "maximum_request_tokens": 120000,
-          "truncation": [
-            "provider_default"
-          ],
-          "supports_return_content": true,
-          "score_semantics": "higher_is_more_relevant"
-        },
-        "reasoning": "unsupported",
         "provider_native_tools": [],
-        "reasoning_control": "fixed_off",
-        "reasoning_efforts": [],
-        "context_limit": 120000,
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.qwen3-rerank.2026-07-30",
         "output_limit": null,
@@ -2953,55 +2186,15 @@
         "kind": "exact",
         "value": "qwen3.7-text-embedding"
       },
+      "core_model_ref": "qwen3.7-text-embedding",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "openai-responses.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "embedding_create"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "embedding": {
-          "tasks": [
-            "provider_default"
-          ],
-          "input_resources": [],
-          "output_kinds": [
-            "dense"
-          ],
-          "encodings": [
-            "float"
-          ],
-          "dimensions": [
-            256,
-            512,
-            768,
-            1024,
-            1536,
-            2048,
-            2560
-          ],
-          "minimum_dimensions": 256,
-          "maximum_dimensions": 2560,
-          "default_dimensions": 1024,
-          "maximum_inputs": 20,
-          "maximum_tokens_per_input": 128000,
-          "normalization": "unknown",
-          "distance_metric": "unknown"
-        },
-        "reasoning": "unsupported",
         "provider_native_tools": [],
-        "reasoning_control": "fixed_off",
-        "reasoning_efforts": [],
-        "context_limit": 128000,
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.embeddings.2026-07-30",
         "output_limit": null,
@@ -3021,53 +2214,15 @@
         "kind": "exact",
         "value": "qwen3.7-text-embedding-flash"
       },
+      "core_model_ref": "qwen3.7-text-embedding-flash",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "openai-responses.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "embedding_create"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "embedding": {
-          "tasks": [
-            "provider_default"
-          ],
-          "input_resources": [],
-          "output_kinds": [
-            "dense"
-          ],
-          "encodings": [
-            "float",
-            "base64"
-          ],
-          "dimensions": [
-            256,
-            512,
-            768,
-            1024
-          ],
-          "minimum_dimensions": 256,
-          "maximum_dimensions": 1024,
-          "default_dimensions": 1024,
-          "maximum_inputs": 20,
-          "maximum_tokens_per_input": 128000,
-          "normalization": "unknown",
-          "distance_metric": "unknown"
-        },
-        "reasoning": "unsupported",
         "provider_native_tools": [],
-        "reasoning_control": "fixed_off",
-        "reasoning_efforts": [],
-        "context_limit": 128000,
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.qwen3.7-text-embedding-flash.2026-09-01",
         "output_limit": null,
@@ -3087,39 +2242,15 @@
         "kind": "exact",
         "value": "qwen3.7-text-rerank"
       },
+      "core_model_ref": "qwen3.7-text-rerank",
       "supported_protocols": [
         "openai-chat-completions.v1",
         "openai-responses.v1",
         "anthropic-messages.v1"
       ],
       "capabilities": {
-        "operations": [
-          "rerank_documents"
-        ],
-        "input_resources": [],
-        "output_resources": [],
-        "rerank": {
-          "query_resources": [],
-          "candidate_resources": [],
-          "maximum_candidates": 500,
-          "maximum_tokens_per_item": 30000,
-          "maximum_request_tokens": 120000,
-          "truncation": [
-            "provider_default"
-          ],
-          "supports_return_content": false,
-          "score_semantics": "higher_is_more_relevant"
-        },
-        "reasoning": "unsupported",
         "provider_native_tools": [],
-        "reasoning_control": "fixed_off",
-        "reasoning_efforts": [],
-        "context_limit": 32768,
-        "prompt_cache": {
-          "provider_default_behavior": "host-managed prompt cache injection is not available",
-          "supports_managed_explicit": false,
-          "supported_ttl_options": []
-        },
+        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
         "model_parameters": [],
         "evidence_revision": "model-core.alibaba.qwen3.7-text-rerank.2026-09-01",
         "output_limit": null,

@@ -988,6 +988,13 @@
               }
             }
           },
+          "core_model_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^[a-z0-9][a-z0-9._:/-]*$",
+            "description": "Explicit core-model identity whose model-level capabilities this rule inherits between the provider defaults and its own capability patch."
+          },
           "display_name": {
             "type": "string",
             "minLength": 1,

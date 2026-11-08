@@ -4,81 +4,61 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   catalogDocument,
+  coreRecords,
   crossReference,
-  providerRecords,
   publishedRecords,
   serialize,
   upstreamRecords,
 } from './sync-common-model-capabilities.mjs';
 
-// manifest builds a minimal manifest with the given category, default capabilities, rules and catalog ids.
-// manifest 用给定分类、默认能力、规则与目录标识构造最小清单。
-const manifest = (category, defaults, rules = [], catalog = []) => ({
-  display: { category },
-  model_defaults: { capabilities: defaults },
-  model_rules: rules,
-  services: [{ model_catalog: { models: catalog.map((model_id) => ({ model_id })) } }],
+// coreList builds a minimal core model list from [model_id, capabilities, aliases] tuples.
+// coreList 由 [model_id, capabilities, aliases] 元组构造最小核心模型清单。
+const coreList = (...entries) => ({
+  models: entries.map(([model_id, capabilities = {}, aliases = []]) => ({ model_id, capabilities, aliases })),
 });
-const exact = (value, capabilities) => ({ matcher: { kind: 'exact', value }, capabilities });
-const prefix = (value, capabilities) => ({ matcher: { kind: 'prefix', value }, capabilities });
 const chat = { operations: ['conversation_respond'] };
 
-test('official manifests own a shared identifier before relays', () => {
-  const records = providerRecords([
-    { fileName: 'a-relay.json', manifest: manifest('relay', chat, [exact('Vendor/Model-X', { context_limit: 1 })]) },
-    { fileName: 'z-official.json', manifest: manifest('official', chat, [exact('vendor/model-x', { context_limit: 2 })]) },
-  ]);
+test('every core entry becomes one record keyed by its model id with tail and core aliases', () => {
+  const records = coreRecords(coreList(['vendor/model-x', { ...chat, context_limit: 2 }, ['model x']]));
   assert.deepEqual(records.map((record) => [record.key, record.context_window]), [['vendor/model-x', 2]]);
-  assert.deepEqual(records[0].aliases, ['model-x']);
+  assert.deepEqual(records[0].aliases, ['model x', 'model-x']);
 });
 
-test('cloud platforms own a shared identifier before relays', () => {
-  const records = providerRecords([
-    { fileName: 'a-relay.json', manifest: manifest('relay', chat, [exact('vendor/model-y', { context_limit: 1 })]) },
-    { fileName: 'z-cloud.json', manifest: manifest('cloud_maa_s', chat, [exact('vendor/model-y', { context_limit: 2 })]) },
-  ]);
-  assert.deepEqual(records.map((record) => [record.key, record.context_window]), [['vendor/model-y', 2]]);
-});
-
-test('a rule field overrides the default by presence and catalog models use the best rule', () => {
-  const defaults = { ...chat, reasoning: 'native', reasoning_efforts: ['low', 'high'], output_resources: [] };
-  const rules = [
-    exact('plain', { reasoning: null, reasoning_efforts: [] }),
-    prefix('fam', { input_resources: ['image', 'hologram'] }),
-    prefix('fam-pro', { input_resources: ['audio'], output_limit: 64 }),
-  ];
-  const records = providerRecords([{ fileName: 'p.json', manifest: manifest('official', defaults, rules, ['fam-pro-1', 'other']) }]);
+test('undeclared core fields stay unknown and declared ones carry over', () => {
+  const records = coreRecords(coreList(
+    ['plain', { ...chat }],
+    ['seer', { ...chat, input_resources: ['image', 'hologram'], output_limit: 64, reasoning: 'native', reasoning_efforts: ['low', 'high'] }],
+  ));
   const byKey = Object.fromEntries(records.map((record) => [record.key, record]));
-  assert.equal(byKey.plain.reasoning, null);
-  assert.deepEqual(byKey.plain.reasoning_efforts, []);
-  assert.deepEqual(byKey['fam-pro-1'].input_modalities, ['audio', 'text']);
-  assert.equal(byKey['fam-pro-1'].output_limit, 64);
-  assert.deepEqual(byKey.other.reasoning_efforts, ['low', 'high']);
+  assert.deepEqual([byKey.plain.reasoning, byKey.plain.output_limit, byKey.plain.reasoning_efforts], [null, null, []]);
+  assert.deepEqual(byKey.seer.input_modalities, ['image', 'text']);
+  assert.equal(byKey.seer.output_limit, 64);
+  assert.deepEqual(byKey.seer.reasoning_efforts, ['low', 'high']);
 });
 
 test('operations decide implicit text and an explicitly empty list removes it', () => {
-  const records = providerRecords([{
-    fileName: 'p.json',
-    manifest: manifest('official', chat, [
-      exact('embed', { operations: ['embedding_create'] }),
-      exact('none', { operations: [], input_resources: ['audio'] }),
-    ]),
-  }]);
+  const records = coreRecords(coreList(
+    ['embed', { operations: ['embedding_create'] }],
+    ['none', { operations: [], input_resources: ['audio'] }],
+    ['implicit'],
+  ));
   const byKey = Object.fromEntries(records.map((record) => [record.key, record]));
   assert.deepEqual([byKey.embed.input_modalities, byKey.embed.output_modalities], [['text'], []]);
   assert.deepEqual([byKey.none.input_modalities, byKey.none.output_modalities], [['audio'], []]);
+  assert.deepEqual([byKey.implicit.input_modalities, byKey.implicit.output_modalities], [['text'], []]);
+});
+
+test('a core list without a models array is rejected', () => {
+  assert.throws(() => coreRecords({}), /models array/);
 });
 
 test('upstream fills only empty fields, matches a unique tail and sizes only text output', () => {
-  const records = providerRecords([{
-    fileName: 'p.json',
-    manifest: manifest('official', chat, [
-      exact('model-a', {}),
-      exact('painter', { operations: ['image_generate'], output_resources: ['image'] }),
-      exact('sized', { context_limit: 10 }),
-      exact('vendor/model-b', {}),
-    ]),
-  }]);
+  const records = coreRecords(coreList(
+    ['model-a', chat],
+    ['painter', { operations: ['image_generate'], output_resources: ['image'] }],
+    ['sized', { ...chat, context_limit: 10 }],
+    ['vendor/model-b', chat],
+  ));
   const upstream = upstreamRecords({ data: [
     { id: 'Lab/Model-A', name: 'Lab: Model A', context_length: 500, architecture: { input_modalities: ['text', 'image'] } },
     { id: 'lab/painter', context_length: 900, architecture: { output_modalities: ['image'] } },
@@ -115,16 +95,13 @@ test('the document keeps only uniquely owned aliases, falls back for text and om
 });
 
 test('offline regeneration from the published catalog reproduces it byte for byte', () => {
-  const sources = [{
-    fileName: 'p.json',
-    manifest: manifest('official', chat, [exact('vendor/model-a', {}), exact('painter', { operations: ['image_generate'], output_resources: ['image'] })]),
-  }];
+  const sources = coreList(['vendor/model-a', chat], ['painter', { operations: ['image_generate'], output_resources: ['image'] }]);
   const upstream = upstreamRecords({ data: [
     { id: 'vendor/model-a', canonical_slug: 'vendor/model-a-2026', context_length: 400, architecture: { input_modalities: ['text', 'file'] } },
   ] });
-  const online = serialize(catalogDocument(crossReference(providerRecords(sources), upstream, { matchTail: true }).records));
+  const online = serialize(catalogDocument(crossReference(coreRecords(sources), upstream, { matchTail: true }).records));
   const published = publishedRecords(JSON.parse(online));
-  const offline = serialize(catalogDocument(crossReference(providerRecords(sources), published, { matchTail: false }).records));
+  const offline = serialize(catalogDocument(crossReference(coreRecords(sources), published, { matchTail: false }).records));
   assert.equal(offline, online);
   assert.match(online, /"vendor\/model-a-2026"/);
   assert.ok(!online.includes('\r'));

@@ -3,6 +3,7 @@
 
 pub mod binding;
 pub mod compiler;
+pub mod core_models;
 pub mod custom_projection;
 pub mod inheritance;
 pub mod matcher;
@@ -16,6 +17,7 @@ mod tests;
 
 pub use binding::*;
 pub use compiler::*;
+pub use core_models::*;
 pub use custom_projection::*;
 pub use inheritance::*;
 pub use matcher::*;

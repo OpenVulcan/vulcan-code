@@ -14,6 +14,9 @@ pub enum FieldSourceKind {
     /// The value came from one service-entry defaults overlay.
     /// 值来自单个服务入口默认覆盖。
     ServiceEntryOverride,
+    /// The value came from one core-model entry referenced by the rule's `core_model_ref`.
+    /// 值来自规则 `core_model_ref` 引用的一个核心模型条目。
+    CoreModel,
     /// The value came from one exact model rule.
     /// 值来自单条精确模型规则。
     ModelRuleExact,

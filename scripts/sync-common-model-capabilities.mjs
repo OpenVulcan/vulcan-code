@@ -1,22 +1,22 @@
-// Regenerate the common model capability catalog from the bundled provider manifests.
-// 由随包供应商清单重新生成公共模型能力目录。
+// Regenerate the common model capability catalog from the bundled core model list.
+// 由随包核心模型清单重新生成公共模型能力目录。
 //
 // Usage: node scripts/sync-common-model-capabilities.mjs [--offline] [--source <file|url>] [--check] [--dry-run]
-// 1. Every exact manifest model rule and every static catalog model becomes one record; official
-//    manifests own a shared identifier before cloud platforms, and cloud platforms before relays.
-// 2. The records are cross referenced with OpenRouter's public model list, which only fills fields a
-//    manifest leaves empty and contributes aliases; upstream-only models are excluded.
-// 3. --offline cross references the published catalog instead, so adding a manifest model offline
+// 1. Every core model becomes one record keyed by its model id with the core aliases; provider
+//    manifests and their categories no longer decide shared model facts.
+// 2. The records are cross referenced with OpenRouter's public model list, which only fills fields the
+//    core leaves empty and contributes aliases; upstream-only models are excluded.
+// 3. --offline cross references the published catalog instead, so adding a core model offline
 //    keeps every upstream alias and window already published.
 // 4. --check writes nothing and fails when the published catalog differs from the generated one.
-import { readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // repositoryRoot anchors every path so the script works from any working directory.
 // repositoryRoot 锚定所有路径，使脚本可在任意工作目录运行。
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const manifestDirectory = path.join(repositoryRoot, 'crates/vulcan-runtime-assets/resources/provider-manifests/manifests');
+const coreModelsFile = path.join(repositoryRoot, 'crates/vulcan-runtime-assets/resources/provider-manifests/core-models.json');
 const catalogFile = path.join(repositoryRoot, 'crates/vulcan-provider-adapters/resources/common_model_capabilities.json');
 const upstreamUrl = 'https://openrouter.ai/api/v1/models?output_modalities=all';
 
@@ -54,110 +54,56 @@ function modalityList(values) {
   return uniqueSorted((values ?? []).map(normalizeKey).filter((value) => MODALITIES.has(value)));
 }
 
-// declared reads one capability by field presence: a rule field, even null or empty, overrides the default.
-// declared 按字段存在性读取能力：规则字段即使为 null 或空也覆盖默认值。
-function declared(defaults, specific, name) {
-  if (specific && Object.hasOwn(specific, name)) return specific[name];
-  if (defaults && Object.hasOwn(defaults, name)) return defaults[name];
-  return null;
+// declared reads one core capability; an undeclared field stays unknown.
+// declared 读取一项核心能力；未声明的字段保持未知。
+function declared(capabilities, name) {
+  return capabilities && Object.hasOwn(capabilities, name) ? capabilities[name] : null;
 }
 
-// providerRecord builds one record from a manifest's defaults and the optional matched rule.
-// providerRecord 由清单默认值与可选匹配规则构建一条记录。
+// coreRecord builds one catalog record from a core model entry.
+// coreRecord 由一个核心模型条目构建一条目录记录。
 //
-// Manifests declare only non-text resources: any declared operation implies text input, and
+// The core declares only non-text resources: any declared operation implies text input, and
 // conversation_respond implies text output. Undeclared operations count as one implicit operation.
-// 清单只声明非文本资源：任一已声明 operation 隐含文本输入，conversation_respond 隐含文本输出。
+// 核心只声明非文本资源：任一已声明 operation 隐含文本输入，conversation_respond 隐含文本输出。
 // 未声明 operations 视为一项隐含 operation。
-function providerRecord(key, manifest, rule) {
-  const defaults = manifest.model_defaults?.capabilities ?? null;
-  const specific = rule?.capabilities ?? null;
-  const operations = declared(defaults, specific, 'operations');
-  const contextLimit = declared(defaults, specific, 'context_limit');
-  const efforts = declared(defaults, specific, 'reasoning_efforts');
+function coreRecord(entry) {
+  const key = normalizeKey(entry.model_id);
+  const capabilities = entry.capabilities ?? {};
+  const operations = declared(capabilities, 'operations');
+  const contextLimit = declared(capabilities, 'context_limit');
   const tail = tailOf(key);
   return {
     key,
-    aliases: tail === key ? [] : [tail],
+    aliases: uniqueSorted([...(tail === key ? [] : [tail]), ...(entry.aliases ?? []).map(normalizeKey)].filter((alias) => alias && alias !== key)),
     context_window: contextLimit > 0 ? contextLimit : null,
     input_modalities: modalityList([
       ...(operations === null || operations.length > 0 ? ['text'] : []),
-      ...(declared(defaults, specific, 'input_resources') ?? []),
+      ...(declared(capabilities, 'input_resources') ?? []),
     ]),
     output_modalities: modalityList([
       ...((operations ?? []).includes('conversation_respond') ? ['text'] : []),
-      ...(declared(defaults, specific, 'output_resources') ?? []),
+      ...(declared(capabilities, 'output_resources') ?? []),
     ]),
-    output_limit: declared(defaults, specific, 'output_limit'),
-    reasoning: declared(defaults, specific, 'reasoning'),
-    reasoning_control: declared(defaults, specific, 'reasoning_control'),
-    reasoning_efforts: efforts ?? [],
+    output_limit: declared(capabilities, 'output_limit'),
+    reasoning: declared(capabilities, 'reasoning'),
+    reasoning_control: declared(capabilities, 'reasoning_control'),
+    reasoning_efforts: declared(capabilities, 'reasoning_efforts') ?? [],
   };
 }
 
-// bestRule picks the rule a catalog model resolves to: an exact rule first, then the longest prefix.
-// bestRule 选出目录模型解析到的规则：精确规则优先，其次最长前缀。
-function bestRule(rules, key) {
-  let best = null;
-  let bestRank = -1;
-  for (const rule of rules) {
-    const value = normalizeKey(rule.matcher?.value);
-    const kind = rule.matcher?.kind;
-    let rank = -1;
-    if (kind === 'exact' && value === key) rank = Number.MAX_SAFE_INTEGER;
-    else if (kind === 'prefix' && key.startsWith(value)) rank = value.length;
-    if (rank > bestRank) {
-      best = rule;
-      bestRank = rank;
-    }
-  }
-  return best;
-}
-
-// CATEGORY_AUTHORITY ranks manifest categories for shared model facts; a lower tier wins. Cloud
-// platforms are more authoritative than relays, which resell upstream access and carry risk.
-// CATEGORY_AUTHORITY 为公共模型事实给清单类别排序，层级越低越优先。云平台比中转更权威，中转转售上游访问且存在风险。
-const CATEGORY_AUTHORITY = { official: 0, cloud_maa_s: 1, relay: 2, unclassified: 2 };
-
-// providerRecords inventories every exact rule and static catalog model; the first owner of a key wins.
-// providerRecords 盘点每条精确规则与静态目录模型；首个持有某键的清单胜出。
-//
-// manifests is a list of { fileName, manifest }. Official providers own shared model facts first,
-// then cloud platforms, then relays and unclassified ones; file names decide within a tier.
-// manifests 为 { fileName, manifest } 列表。官方供应商最先持有公共模型事实，其次云平台，再次中转与未分类；同层按文件名。
-export function providerRecords(manifests) {
-  const ordered = manifests
-    .map((source) => ({ ...source, authority: CATEGORY_AUTHORITY[source.manifest.display?.category] ?? CATEGORY_AUTHORITY.relay }))
-    .sort((left, right) => left.authority - right.authority || (left.fileName < right.fileName ? -1 : 1));
-  const records = [];
-  const keys = new Set();
-  const claim = (key, manifest, rule) => {
-    if (!key || keys.has(key)) return;
-    keys.add(key);
-    records.push(providerRecord(key, manifest, rule));
-  };
-  for (const { manifest } of ordered) {
-    const rules = manifest.model_rules ?? [];
-    // Only exact matchers name a model identity; prefix matchers are family selectors.
-    // 只有 exact 匹配器才指向一个模型身份；prefix 匹配器是族选择器。
-    for (const rule of rules) {
-      if (rule.matcher?.kind === 'exact') claim(normalizeKey(rule.matcher.value), manifest, rule);
-    }
-    for (const service of manifest.services ?? []) {
-      for (const model of service.model_catalog?.models ?? []) {
-        const key = normalizeKey(model.model_id);
-        claim(key, manifest, bestRule(rules, key));
-      }
-    }
-  }
-  return records;
+// coreRecords turns every entry of the core model list into one catalog record.
+// coreRecords 将核心模型清单的每个条目转为一条目录记录。
+export function coreRecords(document) {
+  if (!Array.isArray(document?.models)) throw new Error('Core model list does not contain a models array.');
+  return document.models.map(coreRecord);
 }
 
 // upstreamRecords reads OpenRouter's model list into cross-reference records.
 // upstreamRecords 将 OpenRouter 模型列表读取为交叉参照记录。
 //
-// Missing upstream modality metadata stays unknown; only signed manifests supply text defaults.
-// 上游模态元数据缺失时维持未知；只有受签名清单提供文本默认值。
+// Missing upstream modality metadata stays unknown; only the signed core supplies text defaults.
+// 上游模态元数据缺失时维持未知；只有受签名核心清单提供文本默认值。
 export function upstreamRecords(response) {
   if (!Array.isArray(response?.data)) throw new Error('OpenRouter model response does not contain a data array.');
   const keys = new Set();
@@ -199,12 +145,12 @@ function isTextOnly(outputs) {
   return outputs.length === 1 && outputs[0] === 'text';
 }
 
-// crossReference fills empty provider fields from the reference records and adds their aliases.
-// crossReference 用参照记录填充供应商留空的字段并补充其别名。
+// crossReference fills empty core fields from the reference records and adds their aliases.
+// crossReference 用参照记录填充核心留空的字段并补充其别名。
 //
-// Provider declarations stay authoritative and reference-only models are excluded. matchTail lets a
-// provider key match a reference by its unique tail, which only the upstream list needs.
-// 供应商声明保持权威，仅存在于参照中的模型被排除。matchTail 允许供应商键按唯一尾名匹配参照，
+// Core declarations stay authoritative and reference-only models are excluded. matchTail lets a
+// core key match a reference by its unique tail, which only the upstream list needs.
+// 核心声明保持权威，仅存在于参照中的模型被排除。matchTail 允许核心键按唯一尾名匹配参照，
 // 只有上游列表需要它。
 export function crossReference(records, references, { matchTail }) {
   const byKey = new Map();
@@ -261,8 +207,7 @@ export function catalogDocument(records) {
   return {
     schema_version: 2,
     sources: [
-      'vulcan:bundled-provider-manifests',
-      'vulcan:provider-specific-capabilities',
+      'vulcan:bundled-core-models',
       'openrouter:/api/v1/models?output_modalities=all (cross reference for context and modality metadata only)',
     ],
     fallback: { context_window: TEXT_ONLY_FALLBACK_WINDOW, input_modalities: ['text'], output_modalities: ['text'] },
@@ -309,10 +254,7 @@ function parseArguments(argv) {
 
 async function main() {
   const options = parseArguments(process.argv.slice(2));
-  const manifests = readdirSync(manifestDirectory)
-    .filter((name) => name.endsWith('.json'))
-    .map((fileName) => ({ fileName, manifest: readJson(path.join(manifestDirectory, fileName)) }));
-  const records = providerRecords(manifests);
+  const records = coreRecords(readJson(coreModelsFile));
   const publishedText = readFileSync(catalogFile, 'utf8').replace(/\r\n/g, '\n');
   const published = JSON.parse(publishedText);
   const references = options.offline ? publishedRecords(published) : upstreamRecords(await loadUpstream(options.source));
@@ -320,7 +262,7 @@ async function main() {
   const document = catalogDocument(merged.records);
   const text = serialize(document);
   console.log(
-    `Inventoried ${records.length} provider-configured record(s); cross-referenced ${merged.enriched} against `
+    `Inventoried ${records.length} core model record(s); cross-referenced ${merged.enriched} against `
       + `${references.length} ${options.offline ? 'published' : 'upstream'} record(s) and excluded ${merged.excluded}.`,
   );
 
@@ -328,7 +270,7 @@ async function main() {
   const removed = published.models.filter((model) => !generated.has(model.key)).map((model) => model.key);
   const added = document.models.filter((model) => !published.models.some((old) => old.key === model.key)).map((model) => model.key);
   if (added.length) console.log(`Adding: ${added.join(', ')}`);
-  if (removed.length) console.log(`Removing records no bundled manifest declares: ${removed.join(', ')}`);
+  if (removed.length) console.log(`Removing records the core model list does not declare: ${removed.join(', ')}`);
 
   if (options.check) {
     if (text === publishedText) return console.log('Common model capability catalog is up to date.');

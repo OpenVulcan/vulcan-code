@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "apikeyfan",
-"revision": 11,
-"published_at": "2026-10-19T07:42:22Z",
+  "revision": 12,
+  "published_at": "2026-11-08T06:25:07Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -187,13 +187,13 @@
       "rule_id": "gpt-5-6-sol",
       "display_name": "GPT-5.6 Sol",
       "matcher": {"kind": "exact", "value": "gpt-5.6-sol"},
+      "core_model_ref": "gpt-5.6-sol",
       "supported_protocols": ["openai-responses.v1"],
       "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "operations": ["conversation_respond"], "input_resources": ["image"], "output_resources": [],
-        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
-        "reasoning_efforts": ["none", "low", "medium", "high", "xhigh", "max"],
-        "context_limit": 1050000, "output_limit": 128000,
+        "input_resources": ["image"],
+        "provider_native_tools": [],
+        "reasoning_control": "toggle",
         "evidence_revision": "openai.gpt-5.6.2026-08-13"
       }
     },
@@ -201,12 +201,12 @@
       "rule_id": "gpt-5-6-terra",
       "display_name": "GPT-5.6 Terra",
       "matcher": {"kind": "exact", "value": "gpt-5.6-terra"},
+      "core_model_ref": "gpt-5.6-terra",
       "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "operations": ["conversation_respond"], "input_resources": ["image"], "output_resources": [],
-        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
-        "reasoning_efforts": ["none", "low", "medium", "high", "xhigh", "max"],
-        "context_limit": 1050000, "output_limit": 128000,
+        "input_resources": ["image"],
+        "provider_native_tools": [],
+        "reasoning_control": "toggle",
         "evidence_revision": "openai.gpt-5.6.2026-08-13"
       }
     },
@@ -214,12 +214,12 @@
       "rule_id": "gpt-5-6-luna",
       "display_name": "GPT-5.6 Luna",
       "matcher": {"kind": "exact", "value": "gpt-5.6-luna"},
+      "core_model_ref": "gpt-5.6-luna",
       "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "operations": ["conversation_respond"], "input_resources": ["image"], "output_resources": [],
-        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
-        "reasoning_efforts": ["none", "low", "medium", "high", "xhigh", "max"],
-        "context_limit": 1050000, "output_limit": 128000,
+        "input_resources": ["image"],
+        "provider_native_tools": [],
+        "reasoning_control": "toggle",
         "evidence_revision": "openai.gpt-5.6.2026-08-13"
       }
     },
@@ -227,12 +227,14 @@
       "rule_id": "gpt-5-5",
       "display_name": "GPT-5.5",
       "matcher": {"kind": "exact", "value": "gpt-5.5"},
+      "core_model_ref": "gpt-5.5",
       "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "operations": ["conversation_respond"], "input_resources": ["image"], "output_resources": [],
-        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
+        "provider_native_tools": [],
+        "reasoning_control": "toggle",
         "reasoning_efforts": ["none", "low", "medium", "high", "xhigh"],
-        "context_limit": 1050000, "output_limit": 128000,
+        "context_limit": 1050000,
+        "output_limit": 128000,
         "evidence_revision": "openai.gpt-5.5.2026-08-13"
       }
     },
@@ -240,12 +242,14 @@
       "rule_id": "gpt-5-4",
       "display_name": "GPT-5.4",
       "matcher": {"kind": "exact", "value": "gpt-5.4"},
+      "core_model_ref": "gpt-5.4",
       "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "operations": ["conversation_respond"], "input_resources": ["image"], "output_resources": [],
-        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
+        "provider_native_tools": [],
+        "reasoning_control": "toggle",
         "reasoning_efforts": ["none", "low", "medium", "high", "xhigh"],
-        "context_limit": 1050000, "output_limit": 128000,
+        "context_limit": 1050000,
+        "output_limit": 128000,
         "evidence_revision": "openai.gpt-5.4.2026-08-13"
       }
     },
@@ -253,11 +257,10 @@
       "rule_id": "gpt-5-3-codex-spark",
       "display_name": "GPT-5.3 Codex Spark",
       "matcher": {"kind": "exact", "value": "gpt-5.3-codex-spark"},
+      "core_model_ref": "gpt-5.3-codex-spark",
       "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "operations": ["conversation_respond"], "input_resources": [], "output_resources": [],
-        "reasoning": "unknown", "provider_native_tools": [], "reasoning_control": "unknown",
-        "reasoning_efforts": [], "context_limit": 128000,
+        "provider_native_tools": [],
         "evidence_revision": "openai.gpt-5.3-codex-spark.2026-08-13"
       }
     },
@@ -265,12 +268,13 @@
       "rule_id": "claude-opus-5",
       "display_name": "Claude Opus 5",
       "matcher": {"kind": "exact", "value": "claude-opus-5"},
+      "core_model_ref": "claude-opus-5",
       "supported_protocols": ["anthropic-messages.v1"], "selected_protocol": "anthropic-messages.v1",
       "capabilities": {
-        "operations": ["conversation_respond"], "input_resources": ["image", "file"], "output_resources": [],
-        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
-        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
-        "context_limit": 1000000, "output_limit": 128000,
+        "input_resources": ["image", "file"],
+        "provider_native_tools": [],
+        "reasoning_control": "toggle",
+        "output_limit": 128000,
         "evidence_revision": "anthropic.claude-5.2026-08-13"
       }
     },
@@ -278,12 +282,12 @@
       "rule_id": "claude-fable-5",
       "display_name": "Claude Fable 5",
       "matcher": {"kind": "exact", "value": "claude-fable-5"},
+      "core_model_ref": "claude-fable-5",
       "supported_protocols": ["anthropic-messages.v1"], "selected_protocol": "anthropic-messages.v1",
       "capabilities": {
-        "operations": ["conversation_respond"], "input_resources": ["image", "file"], "output_resources": [],
-        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
-        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
-        "context_limit": 1000000, "output_limit": 128000,
+        "input_resources": ["image", "file"],
+        "provider_native_tools": [],
+        "reasoning_control": "fixed_on",
         "evidence_revision": "anthropic.claude-5.2026-08-13"
       }
     },
@@ -291,12 +295,13 @@
       "rule_id": "claude-opus-4-8",
       "display_name": "Claude Opus 4.8",
       "matcher": {"kind": "exact", "value": "claude-opus-4-8"},
+      "core_model_ref": "claude-opus-4-8",
       "supported_protocols": ["anthropic-messages.v1"], "selected_protocol": "anthropic-messages.v1",
       "capabilities": {
-        "operations": ["conversation_respond"], "input_resources": ["image", "file"], "output_resources": [],
-        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
-        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
-        "context_limit": 1000000, "output_limit": 128000,
+        "input_resources": ["image", "file"],
+        "provider_native_tools": [],
+        "reasoning_control": "toggle",
+        "output_limit": 128000,
         "evidence_revision": "anthropic.claude-opus-4.8.2026-08-13"
       }
     },
@@ -304,12 +309,13 @@
       "rule_id": "claude-opus-4-7",
       "display_name": "Claude Opus 4.7",
       "matcher": {"kind": "exact", "value": "claude-opus-4-7"},
+      "core_model_ref": "claude-opus-4-7",
       "supported_protocols": ["anthropic-messages.v1"], "selected_protocol": "anthropic-messages.v1",
       "capabilities": {
-        "operations": ["conversation_respond"], "input_resources": ["image", "file"], "output_resources": [],
-        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
-        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
-        "context_limit": 1000000, "output_limit": 128000,
+        "input_resources": ["image", "file"],
+        "provider_native_tools": [],
+        "reasoning_control": "toggle",
+        "output_limit": 128000,
         "evidence_revision": "anthropic.claude-opus-4.7.2026-08-13"
       }
     },
@@ -317,12 +323,10 @@
       "rule_id": "claude-opus-4-6",
       "display_name": "Claude Opus 4.6",
       "matcher": {"kind": "exact", "value": "claude-opus-4-6"},
+      "core_model_ref": "claude-opus-4-6",
       "supported_protocols": ["anthropic-messages.v1"], "selected_protocol": "anthropic-messages.v1",
       "capabilities": {
-        "operations": ["conversation_respond"], "input_resources": ["image", "file"], "output_resources": [],
-        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
-        "reasoning_efforts": ["low", "medium", "high", "max"],
-        "context_limit": 1000000, "output_limit": 128000,
+        "provider_native_tools": [],
         "evidence_revision": "anthropic.claude-opus-4.6.2026-08-13"
       }
     },
@@ -330,12 +334,13 @@
       "rule_id": "claude-sonnet-5",
       "display_name": "Claude Sonnet 5",
       "matcher": {"kind": "exact", "value": "claude-sonnet-5"},
+      "core_model_ref": "claude-sonnet-5",
       "supported_protocols": ["anthropic-messages.v1"], "selected_protocol": "anthropic-messages.v1",
       "capabilities": {
-        "operations": ["conversation_respond"], "input_resources": ["image", "file"], "output_resources": [],
-        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
-        "reasoning_efforts": ["low", "medium", "high", "xhigh", "max"],
-        "context_limit": 1000000, "output_limit": 128000,
+        "input_resources": ["image", "file"],
+        "provider_native_tools": [],
+        "reasoning_control": "toggle",
+        "output_limit": 128000,
         "evidence_revision": "anthropic.claude-5.2026-08-13"
       }
     },
@@ -343,12 +348,14 @@
       "rule_id": "claude-sonnet-4-6",
       "display_name": "Claude Sonnet 4.6",
       "matcher": {"kind": "exact", "value": "claude-sonnet-4-6"},
+      "core_model_ref": "claude-sonnet-4-6",
       "supported_protocols": ["anthropic-messages.v1"], "selected_protocol": "anthropic-messages.v1",
       "capabilities": {
-        "operations": ["conversation_respond"], "input_resources": ["image", "file"], "output_resources": [],
-        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
+        "input_resources": ["image", "file"],
+        "provider_native_tools": [],
+        "reasoning_control": "toggle",
         "reasoning_efforts": ["low", "medium", "high", "max"],
-        "context_limit": 1000000, "output_limit": 128000,
+        "output_limit": 128000,
         "evidence_revision": "anthropic.claude-sonnet-4.6.2026-08-13"
       }
     },
@@ -356,12 +363,10 @@
       "rule_id": "claude-opus-4-5-20251101",
       "display_name": "Claude Opus 4.5",
       "matcher": {"kind": "exact", "value": "claude-opus-4-5-20251101"},
+      "core_model_ref": "claude-opus-4-5-20251101",
       "supported_protocols": ["anthropic-messages.v1"], "selected_protocol": "anthropic-messages.v1",
       "capabilities": {
-        "operations": ["conversation_respond"], "input_resources": ["image", "file"], "output_resources": [],
-        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
-        "reasoning_efforts": ["low", "medium", "high"],
-        "context_limit": 200000, "output_limit": 64000,
+        "provider_native_tools": [],
         "evidence_revision": "anthropic.claude-opus-4.5.2026-08-13"
       }
     },
@@ -369,11 +374,10 @@
       "rule_id": "claude-haiku-4-5",
       "display_name": "Claude Haiku 4.5",
       "matcher": {"kind": "exact", "value": "claude-haiku-4-5"},
+      "core_model_ref": "claude-haiku-4-5",
       "supported_protocols": ["anthropic-messages.v1"], "selected_protocol": "anthropic-messages.v1",
       "capabilities": {
-        "operations": ["conversation_respond"], "input_resources": ["image", "file"], "output_resources": [],
-        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
-        "reasoning_efforts": [], "context_limit": 200000, "output_limit": 64000,
+        "provider_native_tools": [],
         "evidence_revision": "anthropic.claude-haiku-4.5.2026-08-13"
       }
     },
@@ -381,11 +385,10 @@
       "rule_id": "grok-4-5",
       "display_name": "Grok 4.5",
       "matcher": {"kind": "exact", "value": "grok-4.5"},
+      "core_model_ref": "grok-4.5",
       "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "operations": ["conversation_respond"], "input_resources": ["image"], "output_resources": [],
-        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
-        "reasoning_efforts": ["low", "medium", "high"], "context_limit": 500000,
+        "provider_native_tools": [],
         "evidence_revision": "xai.grok-4.5.2026-08-13"
       }
     },
@@ -393,11 +396,10 @@
       "rule_id": "grok-4-6",
       "display_name": "Grok 4.6",
       "matcher": {"kind": "exact", "value": "grok-4.6"},
+      "core_model_ref": "grok-4.6",
       "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "operations": ["conversation_respond"], "input_resources": ["image"], "output_resources": [],
-        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
-        "reasoning_efforts": ["low", "medium", "high", "xhigh"], "context_limit": 500000,
+        "provider_native_tools": [],
         "evidence_revision": "apikeyfan.grok-4.6.user-confirmed.2026-08-13"
       }
     },
@@ -406,12 +408,11 @@
       "scope": {"service_entry_ids": ["grok-media"], "credential_profile_ids": ["api-key"]},
       "display_name": "Grok Imagine Image",
       "matcher": {"kind": "exact", "value": "grok-imagine-image"},
+      "core_model_ref": "grok-imagine-image",
       "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
       "default_enabled": false,
       "capabilities": {
-        "operations": ["image_generate"], "input_resources": [], "output_resources": ["image"],
-        "reasoning": "unsupported", "provider_native_tools": [], "reasoning_control": "fixed_off",
-        "reasoning_efforts": [],
+        "provider_native_tools": [],
         "evidence_revision": "apikeyfan.grok-imagine-image.2026-08-13"
       }
     },
@@ -420,12 +421,11 @@
       "scope": {"service_entry_ids": ["grok-media"], "credential_profile_ids": ["api-key"]},
       "display_name": "Grok Imagine Image Quality",
       "matcher": {"kind": "exact", "value": "grok-imagine-image-quality"},
+      "core_model_ref": "grok-imagine-image-quality",
       "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
       "default_enabled": false,
       "capabilities": {
-        "operations": ["image_generate"], "input_resources": [], "output_resources": ["image"],
-        "reasoning": "unsupported", "provider_native_tools": [], "reasoning_control": "fixed_off",
-        "reasoning_efforts": [],
+        "provider_native_tools": [],
         "evidence_revision": "apikeyfan.grok-imagine-image-quality.2026-08-13"
       }
     },
@@ -434,12 +434,11 @@
       "scope": {"service_entry_ids": ["grok-media"], "credential_profile_ids": ["api-key"]},
       "display_name": "Grok Imagine Video",
       "matcher": {"kind": "exact", "value": "grok-imagine-video"},
+      "core_model_ref": "grok-imagine-video",
       "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
       "default_enabled": false,
       "capabilities": {
-        "operations": ["video_generate"], "input_resources": ["image"], "output_resources": ["video"],
-        "reasoning": "unsupported", "provider_native_tools": [], "reasoning_control": "fixed_off",
-        "reasoning_efforts": [],
+        "provider_native_tools": [],
         "evidence_revision": "apikeyfan.grok-imagine-video.2026-08-13"
       }
     },
@@ -448,14 +447,12 @@
       "scope": {"service_entry_ids": ["api", "slb"], "credential_profile_ids": ["api-key"]},
       "display_name": "Gemini 3.6 Flash",
       "matcher": {"kind": "exact", "value": "gemini-3.6-flash"},
+      "core_model_ref": "gemini-3.6-flash",
       "tool_schema_projection": "strict",
       "supported_protocols": ["google.gemini.generate_content"], "selected_protocol": "google.gemini.generate_content",
       "request_profile_refs": ["apikeyfan.gemini.max-output.v1"],
       "capabilities": {
-        "operations": ["conversation_respond"], "input_resources": ["image", "audio", "video", "file"], "output_resources": [],
-        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
-        "reasoning_efforts": ["minimal", "low", "medium", "high"],
-        "context_limit": 1048576, "output_limit": 65536,
+        "provider_native_tools": [],
         "evidence_revision": "google.gemini-3.6-flash.2026-08-13"
       }
     },
@@ -464,14 +461,12 @@
       "scope": {"service_entry_ids": ["api", "slb"], "credential_profile_ids": ["api-key"]},
       "display_name": "Gemini 3.5 Flash",
       "matcher": {"kind": "exact", "value": "gemini-3.5-flash"},
+      "core_model_ref": "gemini-3.5-flash",
       "tool_schema_projection": "strict",
       "supported_protocols": ["google.gemini.generate_content"], "selected_protocol": "google.gemini.generate_content",
       "request_profile_refs": ["apikeyfan.gemini.max-output.v1"],
       "capabilities": {
-        "operations": ["conversation_respond"], "input_resources": ["image", "audio", "video", "file"], "output_resources": [],
-        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
-        "reasoning_efforts": ["minimal", "low", "medium", "high"],
-        "context_limit": 1048576, "output_limit": 65536,
+        "provider_native_tools": [],
         "evidence_revision": "google.gemini-3.5-flash.2026-08-13"
       }
     },
@@ -480,14 +475,12 @@
       "scope": {"service_entry_ids": ["api", "slb"], "credential_profile_ids": ["api-key"]},
       "display_name": "Gemini 3.1 Pro",
       "matcher": {"kind": "exact", "value": "gemini-3.1-pro"},
+      "core_model_ref": "gemini-3.1-pro",
       "tool_schema_projection": "strict",
       "supported_protocols": ["google.gemini.generate_content"], "selected_protocol": "google.gemini.generate_content",
       "request_profile_refs": ["apikeyfan.gemini.max-output.v1"],
       "capabilities": {
-        "operations": ["conversation_respond"], "input_resources": ["image", "audio", "video", "file"], "output_resources": [],
-        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
-        "reasoning_efforts": ["low", "medium", "high"],
-        "context_limit": 1048576, "output_limit": 65536,
+        "provider_native_tools": [],
         "evidence_revision": "google.gemini-3.1-pro-alias.2026-08-13"
       }
     },
@@ -496,14 +489,12 @@
       "scope": {"service_entry_ids": ["api", "slb"], "credential_profile_ids": ["api-key"]},
       "display_name": "Gemini 3.1 Flash-Lite",
       "matcher": {"kind": "exact", "value": "gemini-3.1-flash-lite"},
+      "core_model_ref": "gemini-3.1-flash-lite",
       "tool_schema_projection": "strict",
       "supported_protocols": ["google.gemini.generate_content"], "selected_protocol": "google.gemini.generate_content",
       "request_profile_refs": ["apikeyfan.gemini.max-output.v1"],
       "capabilities": {
-        "operations": ["conversation_respond"], "input_resources": ["image", "audio", "video", "file"], "output_resources": [],
-        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
-        "reasoning_efforts": ["minimal", "low", "medium", "high"],
-        "context_limit": 1048576, "output_limit": 65536,
+        "provider_native_tools": [],
         "evidence_revision": "google.gemini-3.1-flash-lite.2026-08-13"
       }
     },
@@ -512,14 +503,12 @@
       "scope": {"service_entry_ids": ["api", "slb"], "credential_profile_ids": ["api-key"]},
       "display_name": "Gemini 3 Flash",
       "matcher": {"kind": "exact", "value": "gemini-3-flash"},
+      "core_model_ref": "gemini-3-flash",
       "tool_schema_projection": "strict",
       "supported_protocols": ["google.gemini.generate_content"], "selected_protocol": "google.gemini.generate_content",
       "request_profile_refs": ["apikeyfan.gemini.max-output.v1"],
       "capabilities": {
-        "operations": ["conversation_respond"], "input_resources": ["image", "audio", "video", "file"], "output_resources": [],
-        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
-        "reasoning_efforts": ["minimal", "low", "medium", "high"],
-        "context_limit": 1048576, "output_limit": 65536,
+        "provider_native_tools": [],
         "evidence_revision": "google.gemini-3-flash-alias.2026-08-13"
       }
     },
@@ -527,11 +516,13 @@
       "rule_id": "glm-5-2",
       "display_name": "GLM-5.2",
       "matcher": {"kind": "exact", "value": "glm-5.2"},
+      "core_model_ref": "glm-5.2",
       "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "operations": ["conversation_respond"], "input_resources": [], "output_resources": [],
-        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
-        "reasoning_efforts": ["high", "max"], "context_limit": 1000000, "output_limit": 128000,
+        "provider_native_tools": [],
+        "reasoning_control": "fixed_on",
+        "reasoning_efforts": ["high", "max"],
+        "output_limit": 128000,
         "evidence_revision": "zhipu.glm-5.2.apikeyfan-responses.2026-08-13"
       }
     },
@@ -539,11 +530,14 @@
       "rule_id": "glm-5-1",
       "display_name": "GLM-5.1",
       "matcher": {"kind": "exact", "value": "glm-5.1"},
+      "core_model_ref": "glm-5.1",
       "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "operations": ["conversation_respond"], "input_resources": [], "output_resources": [],
-        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
-        "reasoning_efforts": [], "context_limit": 200000, "output_limit": 128000,
+        "provider_native_tools": [],
+        "reasoning_control": "fixed_on",
+        "reasoning_efforts": [],
+        "context_limit": 200000,
+        "output_limit": 128000,
         "evidence_revision": "zhipu.glm-5.1.apikeyfan-responses.2026-08-13"
       }
     },
@@ -551,12 +545,13 @@
       "rule_id": "kimi-k3",
       "display_name": "Kimi K3",
       "matcher": {"kind": "exact", "value": "kimi-k3"},
+      "core_model_ref": "kimi-k3",
       "supported_protocols": ["anthropic-messages-video.v1"], "selected_protocol": "anthropic-messages-video.v1",
       "request_profile_refs": ["apikeyfan.kimi.default-output.v1"],
       "capabilities": {
-        "operations": ["conversation_respond"], "input_resources": ["image", "video"], "output_resources": [],
-        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
-        "reasoning_efforts": ["low", "high", "max"], "context_limit": 1048576, "output_limit": 1048576,
+        "provider_native_tools": [],
+        "reasoning_control": "fixed_on",
+        "output_limit": 1048576,
         "evidence_revision": "kimi.k3.2026-08-13"
       }
     },
@@ -564,12 +559,11 @@
       "rule_id": "kimi-k2-7-code",
       "display_name": "Kimi K2.7 Code",
       "matcher": {"kind": "exact", "value": "kimi-k2.7-code"},
+      "core_model_ref": "kimi-k2.7-code",
       "supported_protocols": ["anthropic-messages-video.v1"], "selected_protocol": "anthropic-messages-video.v1",
       "request_profile_refs": ["apikeyfan.kimi.default-output.v1"],
       "capabilities": {
-        "operations": ["conversation_respond"], "input_resources": ["image", "video"], "output_resources": [],
-        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "fixed_on",
-        "reasoning_efforts": [], "context_limit": 262144,
+        "provider_native_tools": [],
         "evidence_revision": "kimi.k2.7-code.2026-08-13"
       }
     },
@@ -577,12 +571,13 @@
       "rule_id": "kimi-k2-6",
       "display_name": "Kimi K2.6",
       "matcher": {"kind": "exact", "value": "kimi-k2.6"},
+      "core_model_ref": "kimi-k2.6",
       "supported_protocols": ["anthropic-messages-video.v1"], "selected_protocol": "anthropic-messages-video.v1",
       "request_profile_refs": ["apikeyfan.kimi.default-output.v1"],
       "capabilities": {
-        "operations": ["conversation_respond"], "input_resources": ["image", "video"], "output_resources": [],
-        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
-        "reasoning_efforts": [], "context_limit": 262144,
+        "reasoning": "native",
+        "provider_native_tools": [],
+        "reasoning_control": "toggle",
         "evidence_revision": "kimi.k2.6.2026-08-13"
       }
     },
@@ -590,11 +585,11 @@
       "rule_id": "deepseek-v4-pro",
       "display_name": "DeepSeek V4 Pro",
       "matcher": {"kind": "exact", "value": "deepseek-v4-pro"},
+      "core_model_ref": "deepseek-v4-pro",
       "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "operations": ["conversation_respond"], "input_resources": [], "output_resources": [],
-        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
-        "reasoning_efforts": ["none", "high", "low", "max"], "context_limit": 1048576,
+        "provider_native_tools": [],
+        "context_limit": 1048576,
         "evidence_revision": "deepseek.v4.2026-08-13"
       },
       "response_profile_refs": ["apikeyfan.deepseek.responses.reasoning-mirror.v1"]
@@ -603,11 +598,12 @@
       "rule_id": "deepseek-v4-flash",
       "display_name": "DeepSeek V4 Flash",
       "matcher": {"kind": "exact", "value": "deepseek-v4-flash"},
+      "core_model_ref": "deepseek-v4-flash",
       "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
       "capabilities": {
-        "operations": ["conversation_respond"], "input_resources": [], "output_resources": [],
-        "reasoning": "native", "provider_native_tools": [], "reasoning_control": "toggle",
-        "reasoning_efforts": ["none", "high", "low", "max"], "context_limit": 1048576,
+        "provider_native_tools": [],
+        "reasoning_efforts": ["none", "high", "low", "max"],
+        "context_limit": 1048576,
         "evidence_revision": "deepseek.v4.2026-08-13"
       },
       "response_profile_refs": ["apikeyfan.deepseek.responses.reasoning-mirror.v1"]
@@ -617,12 +613,11 @@
       "display_name": "GPT Image 2.5 Sunburst",
       "scope": {"service_entry_ids": ["gpt-image"], "credential_profile_ids": ["api-key"]},
       "matcher": {"kind": "exact", "value": "gpt-image-2.5-sunburst"},
+      "core_model_ref": "gpt-image-2.5-sunburst",
       "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
       "default_enabled": false,
       "capabilities": {
-        "operations": ["image_generate"], "input_resources": [], "output_resources": ["image"],
-        "reasoning": "unsupported", "provider_native_tools": [], "reasoning_control": "fixed_off",
-        "reasoning_efforts": [],
+        "provider_native_tools": [],
         "evidence_revision": "apikeyfan.gpt-image-2.5-sunburst.official-and-skill.2026-09-22"
       }
     },
@@ -631,12 +626,11 @@
       "display_name": "GPT Image 2.5 Flare",
       "scope": {"service_entry_ids": ["gpt-image"], "credential_profile_ids": ["api-key"]},
       "matcher": {"kind": "exact", "value": "gpt-image-2.5-flare"},
+      "core_model_ref": "gpt-image-2.5-flare",
       "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
       "default_enabled": false,
       "capabilities": {
-        "operations": ["image_generate"], "input_resources": [], "output_resources": ["image"],
-        "reasoning": "unsupported", "provider_native_tools": [], "reasoning_control": "fixed_off",
-        "reasoning_efforts": [],
+        "provider_native_tools": [],
         "evidence_revision": "apikeyfan.gpt-image-2.5-flare.official-and-user.2026-09-22"
       }
     },
@@ -645,12 +639,11 @@
       "display_name": "GPT Image 2",
       "scope": {"service_entry_ids": ["gpt-image"], "credential_profile_ids": ["api-key"]},
       "matcher": {"kind": "exact", "value": "gpt-image-2"},
+      "core_model_ref": "gpt-image-2",
       "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
       "default_enabled": false,
       "capabilities": {
-        "operations": ["image_generate"], "input_resources": [], "output_resources": ["image"],
-        "reasoning": "unsupported", "provider_native_tools": [], "reasoning_control": "fixed_off",
-        "reasoning_efforts": [],
+        "provider_native_tools": [],
         "evidence_revision": "apikeyfan.verified-groups.2026-08-14"
       }
     },
@@ -659,12 +652,11 @@
       "display_name": "Grok Imagine Video 1.5",
       "scope": {"service_entry_ids": ["grok-media"], "credential_profile_ids": ["api-key"]},
       "matcher": {"kind": "exact", "value": "grok-imagine-video-1.5"},
+      "core_model_ref": "grok-imagine-video-1.5",
       "supported_protocols": ["openai-responses.v1"], "selected_protocol": "openai-responses.v1",
       "default_enabled": false,
       "capabilities": {
-        "operations": ["video_generate"], "input_resources": ["image"], "output_resources": ["video"],
-        "reasoning": "unsupported", "provider_native_tools": [], "reasoning_control": "fixed_off",
-        "reasoning_efforts": [],
+        "provider_native_tools": [],
         "evidence_revision": "apikeyfan.grok-imagine-video-1.5.user-verified.2026-09-22"
       }
     }  ],

@@ -54,9 +54,9 @@ $privateSeedPath = Join-Path ([System.IO.Path]::GetTempPath()) ("vulcan-provider
 
 # Canonical generated release artifact paths.
 # 规范生成的发布工件路径。
-$indexPath = Join-Path $artifactRoot 'provider-index-v1.json'
-$signaturePath = Join-Path $artifactRoot 'provider-index-v1.sig'
-$publicKeyPath = Join-Path $artifactRoot 'provider-index-v1.pub'
+$indexPath = Join-Path $artifactRoot 'provider-index-v2.json'
+$signaturePath = Join-Path $artifactRoot 'provider-index-v2.sig'
+$publicKeyPath = Join-Path $artifactRoot 'provider-index-v2.pub'
 
 # Runs one RTK-prefixed command and fails at its exact non-zero exit code.
 # 运行一条带 RTK 前缀的命令，并在其精确非零退出码处失败。

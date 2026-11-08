@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "stepfun",
-  "revision": 5,
-  "published_at": "2026-10-19T07:42:22Z",
+  "revision": 6,
+  "published_at": "2026-11-08T06:25:07Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -447,29 +447,14 @@
         "kind": "exact",
         "value": "step-3.7-flash"
       },
+      "core_model_ref": "step-3.7-flash",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image",
-          "video"
-        ],
-        "output_resources": [],
         "structured_output": "json_schema",
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high"
-        ],
-        "context_limit": 256000,
         "evidence_revision": "stepfun.model-docs.2026-09-19"
       },
       "provenance_ref": "https://platform.stepfun.com/docs/zh/guides/models/step-3.7-flash"
@@ -485,25 +470,14 @@
         "kind": "exact",
         "value": "step-3.5-flash-2603"
       },
+      "core_model_ref": "step-3.5-flash-2603",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
         "structured_output": "json_schema",
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "high"
-        ],
-        "context_limit": 256000,
         "evidence_revision": "stepfun.model-docs.2026-09-19"
       },
       "provenance_ref": "https://platform.stepfun.com/docs/zh/guides/models/step-3.5-flash"
@@ -519,22 +493,14 @@
         "kind": "exact",
         "value": "step-3.5-flash"
       },
+      "core_model_ref": "step-3.5-flash",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [],
-        "output_resources": [],
         "structured_output": "json_schema",
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "fixed_on",
-        "reasoning_efforts": [],
-        "context_limit": 256000,
         "evidence_revision": "stepfun.model-docs.2026-09-19"
       },
       "provenance_ref": "https://platform.stepfun.com/docs/zh/guides/models/step-3.5-flash"
@@ -550,30 +516,14 @@
         "kind": "exact",
         "value": "step-5-preview"
       },
+      "core_model_ref": "step-5-preview",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image",
-          "video"
-        ],
-        "output_resources": [],
         "structured_output": "json_schema",
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high"
-        ],
-        "context_limit": 1000000,
-        "output_limit": 64000,
         "evidence_revision": "stepfun.step-5-preview-model-docs.2026-09-20"
       },
       "provenance_ref": "https://platform.stepfun.com/docs/zh/guides/models/step-5-preview"
@@ -591,30 +541,14 @@
         "kind": "exact",
         "value": "step-5-preview"
       },
+      "core_model_ref": "step-5-preview",
       "supported_protocols": [
         "openai-chat-completions.v1"
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "operations": [
-          "conversation_respond"
-        ],
-        "input_resources": [
-          "image",
-          "video"
-        ],
-        "output_resources": [],
         "structured_output": "json_schema",
-        "reasoning": "native",
         "provider_native_tools": [],
-        "reasoning_control": "effort_selection",
-        "reasoning_efforts": [
-          "low",
-          "medium",
-          "high"
-        ],
-        "context_limit": 1000000,
-        "output_limit": 64000,
         "evidence_revision": "stepfun.step-5-preview-model-docs.2026-09-20"
       },
       "provenance_ref": "https://platform.stepfun.com/docs/zh/guides/models/step-5-preview",
