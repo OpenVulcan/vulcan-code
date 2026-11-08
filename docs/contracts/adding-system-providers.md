@@ -46,9 +46,11 @@ APIKEY.FAN 多分组中转站接入过程中已经实际遇到的错误。本文
 ```text
 crates/vulcan-runtime-assets/resources/provider-manifests/
 ├── manifests/<provider-id>.json
+├── core-models.json
 ├── bundled-index.json
 ├── schema/provider-manifest-v2.schema.json
-├── schema/provider-index-v1.schema.json
+├── schema/provider-index-v2.schema.json
+├── schema/core-models-v1.schema.json
 └── fixtures/
 ```
 
@@ -57,7 +59,8 @@ crates/vulcan-runtime-assets/resources/provider-manifests/
 | 文件 | 作用 |
 | --- | --- |
 | `manifests/<provider-id>.json` | 供应商、入口、凭据、模型、协议、Profile、Operation 和 Tool Target 的权威定义 |
-| `bundled-index.json` | 固定每份随包 Manifest 的身份、revision、字节数、SHA-256 和最低引擎契约 |
+| `core-models.json` | 核心模型清单：模型级事实（操作、模态、思考、上下文与输出上限、向量/重排）的唯一来源 |
+| `bundled-index.json` | 固定每份随包 Manifest 与核心清单的身份、revision、字节数、SHA-256 和最低引擎契约 |
 | `schema/provider-manifest-v2.schema.json` | 可发布字段形状与封闭枚举 |
 | `fixtures/` | 真实协议形状的可执行证据，不是只验证 JSON 能解析的样板 |
 
@@ -294,6 +297,12 @@ OpenCode Go 的经验是：同一供应商可以同时有 Chat、Anthropic 和 R
 支持的协议不同，必须逐模型声明。不能因为供应商提供三个入口就把三个协议批量赋给全部模型。
 
 ### 5.3 思考、多模态和输出限制
+
+模型级事实先写进 `core-models.json`：已有核心条目时，模型规则只写 `core_model_ref` 和真实的路线差异，
+与核心一致的字段必须省略（重复写会被 `redundant_core_override` 拒绝），改写核心字段必须附
+`provenance_ref` 或 `evidence_revision`；还没有条目时先按原厂文档新增条目（核实过标 `verified`），
+再在规则中引用。核心只放模型级字段，结构化输出、提示缓存、原生工具、请求参数与 Profile 仍逐路线
+写在供应商清单中。完整规则见 `provider-manifest-authoring.md` 第 4.1 节。
 
 思考档位必须逐模型精确配置：
 

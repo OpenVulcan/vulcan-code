@@ -81,6 +81,7 @@
 | 修改 LuaSkills 版本、技能配置、Schema、宿主注入或管理链路 | 版本以根 `Cargo.toml` 与 `Cargo.lock` 为准；实现以 `luaskills_runtime/` 与 `tooling/bridge/` 当前源码为准 | [`luaskills-skill-config-guide.md`](docs/contracts/luaskills-skill-config-guide.md) |
 | 修改 luaskills-debug 安装器、`luaskills_debug` 工具、调试 Lua 技能页面或 `luaskills-dev` 技能 | 只有一个安装器，页面、TUI 与工具共享同一 Core 任务；系列派生自内嵌 `luaskills` 版本，不匹配直接报错；校验和不符即失败；`install` 为 `Opaque`、计划模式只允许 `status`、派生代理不得安装 | [`luaskills-debug-tool.md`](docs/contracts/luaskills-debug-tool.md) |
 | 新增、迁移或维护系统供应商、模型协议、Provider Tool、媒体扩展 | **字段形状的权威是 Schema 与 Rust 编译器的共同校验结果，不是文档**；供应商事实只通过受签名 JSON 发布 | 参考手册（非契约）：[`adding-system-providers.md`](docs/contracts/adding-system-providers.md)、[`provider-manifest-authoring.md`](docs/contracts/provider-manifest-authoring.md) |
+| 修改核心模型清单（`core-models.json`）、`core_model_ref`、其编译与 Index 固定或公共模型目录生成 | 核心只放模型级字段，结构化输出、提示缓存、原生工具、参数与 Profile 留在供应商清单；规则只用显式 `core_model_ref` 引入，不按 matcher 推断；与继承值相同的覆盖直接拒绝，改写核心字段必须带证据；随包与远端 Index 都固定唯一核心清单，不符即整个代际失败；公共模型目录只由核心生成；核心上限让位于实时发现上报的上限 | [`provider-manifest-authoring.md`](docs/contracts/provider-manifest-authoring.md) 第 4.1 节 |
 | 维护 APIKEY.FAN（`apikeyfan`）的图片、视频声明、媒体入口门控或证据引用 | 图片/视频模型**只列入媒体入口**的定死目录，不混入对话入口；该目录成员即媒体可用性的权威依据，媒体目标门控指向目录内模型自身 ID，启用由用户在该列表中按模型选择。「按 Key 有效模型集合（如含 `gpt-5.6`）推断生图能力」的旧规则已废弃，不得恢复。带参考图的生成与带 `mask` 的编辑均未验证，禁止据接口形态反推 | [`apikeyfan-verified-media-facts.md`](docs/contracts/providers/apikeyfan-verified-media-facts.md) |
 
 ## 三、文档维护规则

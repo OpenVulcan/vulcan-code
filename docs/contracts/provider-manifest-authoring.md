@@ -17,15 +17,19 @@ crates/vulcan-runtime-assets/resources/provider-manifests/manifests/<provider>.j
 
 同一随包发布批次由
 `crates/vulcan-runtime-assets/resources/provider-manifests/bundled-index.json` 固定。Index 必须与目录
-文件集合完全一致，并逐份绑定字节数、SHA-256、供应商身份、Manifest 修订和最低引擎契约。运行时在
-编译任何可发布目录前整体校验该 Index；缺文件、多文件或任一固定值漂移都会使随包信任基线关闭
-失败，不会形成部分运行时代际。
+文件集合完全一致，并逐份绑定字节数、SHA-256、供应商身份、Manifest 修订和最低引擎契约；同一 Index
+（`vulcan.provider-index.v2`）还用唯一的 `core_models` 条目固定同目录下的核心模型清单
+`core-models.json`（见 4.1）。运行时在编译任何可发布目录前整体校验该 Index；缺文件、多文件或任一
+固定值漂移都会使随包信任基线关闭失败，不会形成部分运行时代际。核心清单不符直接使整个代际失败，
+因为每条引用它的规则都依赖这一份固定内容。
 
 配套资源位于：
 
 ```text
 crates/vulcan-runtime-assets/resources/provider-manifests/schema/provider-manifest-v2.schema.json
-crates/vulcan-runtime-assets/resources/provider-manifests/schema/provider-index-v1.schema.json
+crates/vulcan-runtime-assets/resources/provider-manifests/schema/provider-index-v2.schema.json
+crates/vulcan-runtime-assets/resources/provider-manifests/schema/core-models-v1.schema.json
+crates/vulcan-runtime-assets/resources/provider-manifests/core-models.json
 crates/vulcan-runtime-assets/resources/provider-manifests/fixtures/
 ```
 
@@ -432,7 +436,8 @@ LLM 运行时只冻结连接、秘密引用、模型、协议和路由，不把�
 | 显式空数组/空对象 | 清空集合或对象；不是“未配置” |
 | 允许可空字段显式 `null` | 清除可选值；不是继承 |
 
-能力解析顺序是供应商默认、入口覆盖、模型规则、协议作用域覆盖。编译结果为每个字段保存来源，
+能力解析顺序是供应商默认、入口覆盖、核心模型条目（规则声明 `core_model_ref` 时，见 4.1）、模型规则、
+协议作用域覆盖。编译结果为每个字段保存来源，
 生产消费者只依据 provenance 中确实出现的字段应用补丁，不能用 `Unknown`、空数组或 `None` 猜测
 作者是否想覆盖。
 
@@ -455,6 +460,41 @@ OpenAI Chat Completions 路由上发送原生 Schema（`configured_inference.rs`
 `operation_refs` 同样遵循上述 presence 语义。显式空 `usage_profile_refs` 清除供应商专属统计特例
 后仍恢复所选协议的标准 usage 基线；显式空 request/response/operation 引用则清为空集合。若只是要
 继承路由或供应商默认，必须省略字段，不要写样板空数组。
+
+### 4.1 核心模型清单与 `core_model_ref`
+
+`core-models.json`（Schema `core-models-v1.schema.json`）是模型级事实的唯一来源：每个条目以小写、
+厂商无关的 `model_id` 为身份，`aliases` 与身份合起来全局唯一（别名为规范化查找形式，可含
+`vendor: name` 这类展示拼写），`vendor` 只用于展示与分组，不要求存在同名供应商。`verification`
+为 `verified`（有原厂文档或真实请求证据）或 `seeded`（迁移时从既有供应商声明播种，待逐模型核实）。
+
+核心条目只承载模型级字段：`operations`、`input_resources`、`output_resources`、`reasoning`、
+`reasoning_control`、`reasoning_efforts`、`context_limit`、`output_limit`、`embedding`、`rerank`。
+路线级字段（`structured_output`、`prompt_cache`、`provider_native_tools`、`model_parameters`、
+`evidence_revision`，以及协议、Profile、资源约束）随协议与供应商变化，只写在供应商清单中；核心条目
+写入这些字段、写 `null` 或写非正上限都会被拒绝，输出上限不得超过上下文上限。
+
+模型规则用显式 `core_model_ref` 引入一个核心条目，编译器从不按 matcher 推断；Exact 与 Prefix 规则都
+可以引用（官方供应商常用 Prefix 规则声明模型族）。引用规则：
+
+- 引用必须指向当前核心清单中的条目，否则 `unknown_core_model_ref`；格式不合法为 `invalid_core_model_ref`；
+- 规则字段等于继承值（核心值，核心未声明时为供应商默认值）是冗余覆盖，`redundant_core_override` 直接
+  拒绝：与核心一致就省略字段；
+- 规则改写核心已声明的字段时必须有 `provenance_ref` 或 `evidence_revision`，否则
+  `core_override_without_evidence`。覆盖表示真实的路线差异，不是抄写误差；
+- 来自核心的字段 provenance 为 `core_model`，携带 `core_model_id`，其 `manifest_revision` 是核心清单
+  修订号；被替换的供应商默认值保留在 `overridden_sources` 中。
+
+核心声明的 `context_limit` 与 `output_limit` 是目录事实：当供应商的实时发现已为该路线上报上限时，
+发现值优先于核心值；规则或默认值自己声明的上限仍覆盖发现证据。其余字段按 provenance 正常应用。
+
+由实时发现提供模型事实、规则刻意不声明能力的供应商（如 OpenRouter 精选规则）不写 `core_model_ref`，
+避免核心值覆盖发现证据。
+
+公共模型能力目录（`common_model_capabilities.json`）由 `scripts/sync-common-model-capabilities.mjs`
+从核心清单生成：每个核心条目一条记录，键为 `model_id`，别名来自核心；供应商分类不参与事实取舍。
+OpenRouter 交叉参照只补核心留空的上下文窗口、模态与别名；只存在于参照中的模型被排除。新增模型时先在
+核心清单中加入条目，再在各供应商规则中引用并只写真实差异。
 
 ## 5. 模型级唯一协议与自定义供应商规则
 
@@ -1110,8 +1150,9 @@ rtk cargo run -p vulcan-provider-manifest-cli -- build-index crates/vulcan-runti
 node scripts/provider-manifests-refresh.mjs            # 加 --dry-run 只列计划，加 --no-sync 跳过同步
 ```
 
-脚本按 `bundled-index.json` 固定的摘要找出改动的清单；作者未提高 `revision` 的清单自动递增
-`revision` 并刷新 `published_at`（只改这两行，保留手工排版）；随后以下一个 Index 修订重建
+脚本按 `bundled-index.json` 固定的摘要找出改动的清单与核心清单 `core-models.json`；作者未提高
+`revision` 的文件自动递增 `revision` 并刷新 `published_at`（只改这两行，保留手工排版）；只改核心清单
+同样触发重建。随后以下一个 Index 修订重建
 `bundled-index.json`、执行 `validate-all`，再离线重新生成公共模型能力目录，最后执行
 `make.ps1 sync`。任一步失败即停止。
 
@@ -1161,6 +1202,9 @@ bundled trust ceiling 禁止远端新增网络宿主、凭据角色、协议/执
 
 304 只有在本地 Active 字节仍与持久化 revision/SHA-256 一致并能重新编译时才成立；否则无条件
 重取。每个供应商有 single-flight，同一次 `sync_all` 共用一份已验签 Index 快照。
+
+远端 Index 的 `core_models` 条目必须与已安装核心清单的修订、字节数与 SHA-256 完全一致：远端同步暂不
+下发核心清单，核心变化随客户端发布；条目不一致的 Index 被整体拒绝，而不是混用两份核心事实。
 
 生产 Index URL、受信公钥、签名责任人和发布周期属于外部配置门。未配置时报告
 `not_configured`，不能在代码中猜端点或密钥。
