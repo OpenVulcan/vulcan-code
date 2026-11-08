@@ -37,13 +37,22 @@ test('download rejects HTTP failures and corrupt content before publishing cache
   const asset = { url: 'https://example.invalid/locked', sha256 };
   const fetchMock = context.mock.method(globalThis, 'fetch', async () => new Response('unavailable', { status: 503 }));
   try {
-    await assert.rejects(obtainLockedInput(asset, cache), /503/);
+    await assert.rejects(obtainLockedInput(asset, cache, false, [0, 0]), /503/);
+    assert.equal(fetchMock.mock.callCount(), 3);
     assert.deepEqual(await readdir(cache), []);
+    fetchMock.mock.resetCalls();
+    fetchMock.mock.mockImplementation(async () => new Response('missing', { status: 404 }));
+    await assert.rejects(obtainLockedInput(asset, cache, false, [0, 0]), /404/);
+    assert.equal(fetchMock.mock.callCount(), 1);
     fetchMock.mock.mockImplementation(async () => new Response('corrupt'));
     await assert.rejects(obtainLockedInput(asset, cache), /checksum mismatch/);
     assert.deepEqual(await readdir(cache), []);
-    fetchMock.mock.mockImplementation(async () => new Response(bytes));
-    assert.deepEqual(await obtainLockedInput(asset, cache), bytes);
+    // A transient failure followed by the right bytes succeeds on the repeated request.
+    // 暂时性失败之后返回正确字节时，重试的请求成功。
+    let calls = 0;
+    fetchMock.mock.mockImplementation(async () => (calls++ === 0 ? new Response('gateway', { status: 504 }) : new Response(bytes)));
+    assert.deepEqual(await obtainLockedInput(asset, cache, false, [0]), bytes);
+    assert.equal(calls, 2);
     fetchMock.mock.mockImplementation(async () => { throw new Error('Network must not be used'); });
     assert.deepEqual(await obtainLockedInput(asset, cache, true), bytes);
     assert.deepEqual(await readdir(cache), [sha256]);

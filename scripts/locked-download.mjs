@@ -13,9 +13,32 @@ export function verifyBytes(bytes, sha256) {
   return bytes;
 }
 
+// RETRY_DELAYS_MS are the waits before each repeated request of the same locked URL after a transient failure (a
+// network error, 429 or a 5xx): GitHub release downloads intermittently answer 504 for a few seconds.
+// RETRY_DELAYS_MS 是同一锁定地址在暂时性失败（网络错误、429 或 5xx）后每次重试前的等待；GitHub 发布下载会间歇性
+// 地在数秒内返回 504。
+export const RETRY_DELAYS_MS = [5_000, 20_000, 60_000];
+
+// fetchLocked requests `url`, repeating it after each delay while the failure is transient; any other status, or the
+// last transient one, is returned or thrown to the caller.
+// fetchLocked 请求 `url`，失败为暂时性时按每个等待重试；其他状态或最后一次暂时性失败交给调用方。
+async function fetchLocked(url, retryDelaysMs) {
+  for (let attempt = 0; ; attempt += 1) {
+    let response;
+    try {
+      response = await fetch(url, { signal: AbortSignal.timeout(10 * 60 * 1000) });
+    } catch (error) {
+      if (attempt >= retryDelaysMs.length) throw error;
+    }
+    if (response && (response.ok || (response.status !== 429 && response.status < 500) || attempt >= retryDelaysMs.length)) return response;
+    console.warn(`Build input request failed (${response ? response.status : 'network error'}), retrying: ${url}`);
+    await new Promise(resolve => setTimeout(resolve, retryDelaysMs[attempt]));
+  }
+}
+
 // obtainLockedInput reads asset {url, sha256} into cache; offline forbids network access and returns verified bytes.
 // obtainLockedInput 将资产 {url, sha256} 读入 cache；offline 禁止网络访问并返回已验证字节。
-export async function obtainLockedInput(asset, cache, offline = false) {
+export async function obtainLockedInput(asset, cache, offline = false, retryDelaysMs = RETRY_DELAYS_MS) {
   if (!/^[a-f0-9]{64}$/.test(asset.sha256)) throw new Error('Invalid locked SHA-256.');
   // file is content-addressed so different tools or revisions cannot overwrite each other.
   // file 按内容寻址，避免不同工具或修订相互覆盖。
@@ -27,9 +50,9 @@ export async function obtainLockedInput(asset, cache, offline = false) {
   }
   if (offline) throw new Error(`Offline build input is absent: ${asset.sha256}`);
   if (!asset.url.startsWith('https://')) throw new Error('Locked build inputs require HTTPS.');
-  // response belongs to the exact locked URL; failures never select another version or mirror.
-  // response 属于锁定的精确地址；失败绝不选择其他版本或镜像。
-  const response = await fetch(asset.url, { signal: AbortSignal.timeout(10 * 60 * 1000) });
+  // response belongs to the exact locked URL; failures repeat that URL and never select another version or mirror.
+  // response 属于锁定的精确地址；失败只重试该地址，绝不选择其他版本或镜像。
+  const response = await fetchLocked(asset.url, retryDelaysMs);
   if (!response.ok) throw new Error(`Build input download failed (${response.status}): ${asset.url}`);
   const bytes = verifyBytes(Buffer.from(await response.arrayBuffer()), asset.sha256);
   await mkdir(cache, { recursive: true });
