@@ -6812,6 +6812,7 @@
   "settings.appUpdate.available": "Vulcan Code {version}을(를) 사용할 수 있습니다",
   "settings.appUpdate.preview": "미리 보기",
   "settings.appUpdate.incremental": "변경된 파일만 다운로드합니다: {size}.",
+  "settings.appUpdate.setup": "변경된 파일만 다운로드합니다: {size}. Vulcan Code를 다시 시작하면 설치 프로그램이 설치를 마칩니다.",
   "settings.appUpdate.full": "이 버전은 전체 설치 프로그램이 필요합니다: {size}.",
   "settings.appUpdate.fullManual": "이 버전은 다운로드 페이지에서 설치해야 합니다.",
   "settings.appUpdate.fullSetup": "이 설치는 설치 프로그램이 관리합니다. 이 버전을 설치하려면 \"vulcan-code-setup update\"를 실행하세요.",

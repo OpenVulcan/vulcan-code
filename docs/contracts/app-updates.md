@@ -25,13 +25,21 @@
 - 顺序固定：指针 → 版本 → 清单 → 发布说明；全部经内置 Ed25519 公钥校验。只接受高于当前版本的版本。
 - 稳定版始终检查；预览通道开启时同时检查预览版并取较高者。
 - 下载源：`auto` 先国际源再中国镜像，`international`、`china` 只用对应源。
-- 安装纪元升高或缺少已安装组件时为完整更新：Windows 下载 Inno 安装包（SHA-256 来自签名清单，
-  Authenticode 签名者须为发布证书），Linux/macOS 只提供下载页 `https://openvulcan.com/download`。
-  安装根含 `setup/installation.json`（`SETUP_DIR`/`SETUP_STATE_FILE`，定义在 `install_root.rs`，只有
-  `vulcan-code-setup` 写入）时该根归安装器所有：完整更新一律不可由应用安装（`installable: false`、
-  `setupManaged: true`），界面只提示运行 `vulcan-code-setup update`，不提供下载页或 Inno 安装包，避免
-  产生第二个卸载项并使安装器状态失真。增量更新不受影响。
-  其余情况为增量更新，只下载摘要不在本地安装记录中的文件。
+- 安装方式只由 `vulcan-app-update` 的 `install_method` 决定，原则是能组装就组装：组装按摘要复用运行版本
+  已有的每个文件（浏览器、Electron、Node 等未变化的基础资源不重新下载），跨安装纪元也一样，只下载摘要
+  不在本地安装记录中的文件。
+  - 同一纪元且清单含全部已安装组件：增量更新（`kind: incremental`），组装后立即切换并写入试运行标记。
+  - 安装根含 `setup/installation.json`（`SETUP_DIR`/`SETUP_STATE_FILE`，定义在 `install_root.rs`，只有
+    `vulcan-code-setup` 写入）时该根归安装器所有。纪元升高时为 `kind: setup`：下载阶段同样只组装
+    `versions/<新版本>`，但不切换、不写试运行标记；重启时由根目录自带的安装器 `setup/<SETUP_PROGRAM>`
+    切换并刷新它在版本目录之外安装的内容（见下文“经安装器完成”）。根目录缺少安装器程序或清单缺少已安装
+    组件时不可由应用安装（`installable: false`、`setupManaged: true`），界面只提示运行
+    `vulcan-code-setup update`。安装器拥有的根目录绝不运行 Inno 安装包，避免产生第二个卸载项并使安装器状态失真。
+  - 不归安装器所有的 Windows 根目录由 Inno 安装包创建，纪元升高或缺少组件时下载 Inno 安装包（`kind: full`，
+    SHA-256 来自签名清单，Authenticode 签名者须为发布证书）：只有它能改写自己的注册表、卸载项、快捷方式与根
+    启动器，因此这里无法复用已有文件，这是唯一下载完整安装包的情况。清单没有 Inno 安装包时不可由应用安装。
+  - 不归任何安装程序所有的 Linux/macOS 根目录在版本目录之外没有需要刷新的内容，纪元升高时同增量更新；
+    只有清单缺少已安装组件时才不可由应用安装，此时提供下载页 `https://openvulcan.com/download`。
 - 回退提示仍在时，提议的版本若正是启动失败的版本，仍可提议但标记 `previouslyFailed`；用户关闭提示后不再标记。
 - **被跳过版本的说明**：版本清单的可选字段 `previousVersion` 写明上一发布（`release-plan.mjs` 取更新记录
   `releases.json` 中的下一项，`release.yml` 以 `--previous-version` 传给发布工具）。旧客户端与 openvulcan-web
@@ -54,7 +62,7 @@
    其他平台 `current` 符号链接），并写入 `updates/startup-trial.json`：`version`、`previous`、
    `attempts: 0` 与 `max_attempts`（取自 `MAX_STARTUP_ATTEMPTS`，当前为 2）。
 2. 重启会停止所有运行中的后台命令任务：WebUI 在重启前以 `service_running_shell_job_count` 读取数量，大于 0 时
-   先给出警告，由用户在警告中选择“仍然重启”；计数失败不阻止更新。用户确认重启后，服务发布 `service.restarting`（`reason` 为 `update` 或 `installer`），正常排空后
+   先给出警告，由用户在警告中选择“仍然重启”；计数失败不阻止更新。用户确认重启后，服务发布 `service.restarting`（`reason` 为 `update`、`installer` 或 `setup`），正常排空后
    以相同参数加 `--await-owner-exit` 分离启动新服务；新服务最多等待 120 秒取得实例锁。在 systemd 用户
    服务中改用 `systemd-run --user` 重新安装用户单元，单元的 `ExecStart` 使用稳定路径 `<root>/current/<rel>`。
    是否运行在该单元中只按 `/proc/self/cgroup` 的叶节点是否为本单元名判断，不看 `INVOCATION_ID`：GNOME Shell、
@@ -67,6 +75,18 @@
    `RelaunchRequested` 启动应用。TUI 与浏览器自动重连。
    新服务、安装包与重新启动的桌面端都不继承旧进程的 `VULCAN_RUNTIME_LAYOUT`：该变量指向旧版本的布局清单，
    继承后新版本会报告新版本号却从旧版本目录提供 WebUI 等资源；新进程改为读取自身可执行文件旁的清单。
+   **经安装器完成**（`kind: setup`，事件 `reason` 为 `setup`）：服务排空后启动本版本服务程序的辅助模式
+   `--run-setup-update <版本> <通道> <detached|user-unit> <原服务参数…>`（`setup_update.rs`；在 systemd
+   用户单元中经 `systemd-run --user` 启动到单元之外）。辅助进程最多等待 `OWNER_EXIT_WAIT` 直到数据根空闲，
+   然后无人值守运行安装器（`setup_command`：稳定版为 `update --yes --prefix <根>`，预览版为
+   `install --yes --channel preview --prefix <根>`，因为安装器否则只查看安装时记录的通道，这会把安装器记录的
+   通道改为预览），输出写入 `updates/setup-update.log`。安装器发现该版本已有安装记录便跳过下载，只切换、
+   刷新集成并清理；`minSetupVersion` 要求时它先自更新。安装器未成功退出或当前版本未达到组装的版本时写入
+   `updates/setup-failure.json`（`SETUP_FAILURE_FILE`），下一次服务启动以重启错误报告一次后删除。之后若数据根
+   仍空闲（安装器注册用户服务时已启动服务），辅助进程以原参数启动当前版本的服务；原服务在用户单元中时改为
+   `--install-user-service`。桌面端等待旧 Core 退出后继续等待下一个 Core（最多 15 分钟），再从稳定入口重新
+   启动；TUI 与浏览器自动重连。此路径没有试运行标记，与 Inno 安装包相同。下载完成但未重启时组装的版本只在
+   内存中就绪，下一次服务启动会按清理规则删除它。
 4. Windows 启动器每次桌面启动计一次尝试；`previous` 或试运行版本的服务可执行文件（各自 `runtime-layout.json`
    的 `serviceExecutable`）正在运行时本次既不计数也不回退，因为桌面端会复用该 Core，新版本并未被启动
    （运行判断依据 Windows 对运行中映像写访问的共享冲突，其他结果按未运行处理）；`attempts` 达到 `max_attempts` 而标记仍在时，把
@@ -163,6 +183,11 @@
 - 试运行与回退标记的文件名、字段在 `install_root.rs` 与启动器 `trial.rs` 中各写一次（启动器只依赖
   `serde_json`），修改时两处同时改；尝试上限只在 `MAX_STARTUP_ATTEMPTS` 定义并随标记写出。
 - `/RELAUNCH=1` 在 `INSTALLER_ARGUMENTS` 与 `scripts/windows-installer.mjs` 的 `RelaunchRequested` 中成对出现。
+- 安装器程序名 `SETUP_PROGRAM` 只在 `install_root.rs` 定义，安装器 `integrate.rs` 重新导出它。`setup_command`
+  依赖安装器 `update`/`install` 的 `--yes`、`--prefix`、`--channel` 选项，以及“版本目录已有安装记录时跳过下载”
+  （安装器 `install.rs` 的 `assemble`）；修改这些行为时同时修改 `setup_command`。
+- 重启原因 `setup` 在 `ServiceRestartReason`、WebUI `ServiceRestartReason` 与桌面端 `update-restart.ts`
+  中各写一次，修改时三处同时改。
 - 启动器、安装器模板、注册表、PATH、快捷方式或安装布局变化时递增 `product.json` 的 `installEpoch`
   （方案第九节），旧安装由此走完整更新。安装器自身写入的快捷方式与注册表项随安装器版本发布，不触发
   `installEpoch`；运行布局新增可选字段（如 `desktopIdentity`）而启动器不校验其版本时同样不触发。

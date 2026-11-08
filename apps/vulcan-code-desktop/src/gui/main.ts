@@ -42,6 +42,7 @@ import {
 } from './startup-surface.js';
 import { parseStartupAppearance, type StartupAppearance } from './startup-appearance.js';
 import { resolveStableDesktopEntry } from './installed-launcher.js';
+import { awaitUpdateRestart, isUpdateRestartReason, type UpdateRestartReason } from './update-restart.js';
 import {
   desktopText,
   detectDesktopLocale,
@@ -298,22 +299,32 @@ let maximizeQueue: Promise<void> = Promise.resolve();
 // RESTART_WAIT_MS 限定客户端等待旧 Core 退出的时长（服务端 `OWNER_EXIT_WAIT`）。
 const RESTART_WAIT_MS = 120_000;
 
-// restartForUpdate ends this client once the Core that announced the restart exited. An update
-// relaunches the client from the stable entry, so the new version starts; an installer starts the
-// app itself when it finishes, so the client only quits.
-// restartForUpdate 在宣布重启的 Core 退出后结束本客户端。更新会从稳定入口重新启动客户端以运行新版本；
-// 安装包结束时会自行启动应用，因此客户端只退出。
+// SETUP_WAIT_MS bounds how long the client waits for the setup program to finish an update and
+// for the service started after it; the client relaunches when it runs out.
+// SETUP_WAIT_MS 限定客户端等待安装器完成更新及其之后启动的服务的时长；超时后客户端照常重新启动。
+const SETUP_WAIT_MS = 15 * 60_000;
+
+// restartForUpdate ends this client once the restart announced by the Core allows it (see
+// awaitUpdateRestart): an update or a setup run relaunches the client from the stable entry, so the
+// new version starts; an installer starts the app itself when it finishes, so the client only quits.
+// restartForUpdate 在 Core 宣布的重启允许时结束本客户端（见 awaitUpdateRestart）：更新或安装器运行会从
+// 稳定入口重新启动客户端以运行新版本；安装包结束时会自行启动应用，因此客户端只退出。
 // Parameters: reason comes from the service event, discoveryPath names the authoritative discovery file.
 // 参数：reason 来自服务事件，discoveryPath 指明权威发现文件。
-async function restartForUpdate(reason: 'update' | 'installer', discoveryPath: string): Promise<void> {
-  const announcing = guiState.instance;
-  const deadline = Date.now() + RESTART_WAIT_MS;
-  while (announcing && Date.now() < deadline) {
-    const live = await readLiveServiceInstance(discoveryPath).catch(() => null);
-    if (!live || live.pid !== announcing.pid) break;
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  }
-  if (reason === 'update') relaunchFromStableEntry();
+async function restartForUpdate(reason: UpdateRestartReason, discoveryPath: string): Promise<void> {
+  const relaunch = await awaitUpdateRestart(
+    reason,
+    guiState.instance?.pid ?? null,
+    async () => (await readLiveServiceInstance(discoveryPath).catch(() => null))?.pid ?? null,
+    {
+      exitWaitMs: RESTART_WAIT_MS,
+      setupWaitMs: SETUP_WAIT_MS,
+      pollMs: 500,
+      now: Date.now,
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    },
+  );
+  if (relaunch) relaunchFromStableEntry();
   app.exit(0);
 }
 
@@ -379,7 +390,7 @@ function registerWindowIpcHandlers(window: BrowserWindow, webUiUrl: string, disc
     if (!window.isDestroyed()) window.setBackgroundColor(appearance.ground);
   });
   handle(SERVICE_CHANNELS.restartForUpdate, (_event, reason: unknown) => {
-    if (reason !== 'update' && reason !== 'installer') throw new TypeError('Unknown restart reason.');
+    if (!isUpdateRestartReason(reason)) throw new TypeError('Unknown restart reason.');
     void restartForUpdate(reason, discoveryPath);
   });
   // Temporary browser pages run in a separate in-memory partition with no workbench preload.

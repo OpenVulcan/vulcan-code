@@ -50,9 +50,10 @@ export interface AppUpdateReleaseNotes {
 export interface AppUpdateOffer {
   version: string;
   channel: string;
-  // incremental downloads only changed files; full runs the installer.
-  // incremental 只下载变化的文件；full 运行安装包。
-  kind: "incremental" | "full";
+  // incremental downloads only changed files; setup does too and the setup program finishes it on
+  // restart; full runs the installer.
+  // incremental 只下载变化的文件；setup 同样如此，并在重启时由安装器完成；full 运行安装包。
+  kind: "incremental" | "setup" | "full";
   downloadBytes: number;
   releasedAt: string;
   // Release notes by locale code, Markdown.
@@ -111,9 +112,14 @@ export interface AppUpdateSnapshot {
   downloadPageUrl: string;
 }
 
+// Why the Core stops: a new current version, the full installer, or the setup program finishing an
+// assembled version.
+// Core 停止的原因：新的当前版本、完整安装包，或由安装器完成已组装的版本。
+export type ServiceRestartReason = "update" | "installer" | "setup";
+
 /** Announcement that the Core stops for an update. / Core 为更新而停止的通告。 */
 export interface ServiceRestartingEvent {
-  reason: "update" | "installer";
+  reason: ServiceRestartReason;
   version: string;
 }
 

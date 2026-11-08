@@ -6812,6 +6812,7 @@
   "settings.appUpdate.available": "O Vulcan Code {version} está disponível",
   "settings.appUpdate.preview": "Prévia",
   "settings.appUpdate.incremental": "Somente os arquivos alterados são baixados: {size}.",
+  "settings.appUpdate.setup": "Somente os arquivos alterados são baixados: {size}. O programa de instalação conclui a instalação quando o Vulcan Code reinicia.",
   "settings.appUpdate.full": "Esta versão precisa do instalador completo: {size}.",
   "settings.appUpdate.fullManual": "Esta versão precisa ser instalada pela página de download.",
   "settings.appUpdate.fullSetup": "Esta instalação é gerenciada pelo programa de instalação. Execute \"vulcan-code-setup update\" para instalar esta versão.",

@@ -21,13 +21,7 @@ use crate::state::{Item, SERVICE_PENDING_FILE, SETUP_DIR};
 /// 刷新而不是被跳过。
 pub const LAUNCHER_MARKER: &str = vulcan_install_core::install_root::GENERATED_MARKER;
 
-/// File name of the setup program inside [`SETUP_DIR`].
-/// [`SETUP_DIR`] 中安装器的文件名。
-pub const SETUP_PROGRAM: &str = if cfg!(windows) {
-    "vulcan-code-setup.exe"
-} else {
-    "vulcan-code-setup"
-};
+pub use vulcan_install_core::install_root::SETUP_PROGRAM;
 
 /// The PATH forwarder inside a Windows version, part of the `tui` component
 /// (`scripts/release-components.json`).

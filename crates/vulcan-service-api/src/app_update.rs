@@ -83,6 +83,12 @@ pub enum AppUpdateKind {
     /// The install epoch changed, so the complete installer must run.
     /// 安装纪元已变化，必须运行完整安装包。
     Full,
+    /// The install epoch changed on a root the setup program owns: only changed files are
+    /// downloaded and the new version is assembled next to the current one, then on restart the
+    /// setup program switches to it and refreshes what it installed outside the version directory.
+    /// 安装器拥有的根目录上安装纪元已变化：只下载变化的文件并在当前版本旁组装新版本，重启时由安装器切换
+    /// 到它并刷新其在版本目录之外安装的内容。
+    Setup,
 }
 
 /// A verified newer release.
@@ -121,9 +127,9 @@ pub struct AppUpdateOffer {
     /// Whether the app can install it by itself; otherwise the download page is offered.
     /// 应用能否自行安装；不能时提供下载页。
     pub installable: bool,
-    /// Whether the setup program owns this installation; a full update that the app cannot install
-    /// then comes from `vulcan-code-setup update` instead of the download page.
-    /// 此安装是否由安装器拥有；此时应用无法自行安装的完整更新改由 `vulcan-code-setup update` 完成，
+    /// Whether the setup program owns this installation; an update the app cannot install then
+    /// comes from `vulcan-code-setup update` instead of the download page.
+    /// 此安装是否由安装器拥有；此时应用无法自行安装的更新改由 `vulcan-code-setup update` 完成，
     /// 不提供下载页。
     #[serde(default)]
     pub setup_managed: bool,
@@ -321,6 +327,10 @@ pub enum ServiceRestartReason {
     /// The full installer runs and starts the app when it finishes.
     /// 完整安装包运行，结束后启动应用。
     Installer,
+    /// The setup program finishes the assembled version once the service stopped, then the service
+    /// starts again from the current version; clients wait for that service.
+    /// 服务停止后由安装器完成已组装的版本，然后服务从当前版本重新启动；客户端等待该服务。
+    Setup,
 }
 
 /// Sent to every client right before the service stops for an update.

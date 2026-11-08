@@ -83,7 +83,7 @@ export function useAppUpdatePrompts(
     void serviceClient.subscribe<ServiceRestartingEvent>(SERVICE_RESTARTING_TOPIC, (event) => {
       if (cancelled) return;
       toast.dismiss(READY_TOAST_ID);
-      toast.loading(translateActive(event.reason === "installer" ? "appUpdate.toast.installing" : "appUpdate.toast.restarting"), {
+      toast.loading(translateActive(event.reason === "update" ? "appUpdate.toast.restarting" : "appUpdate.toast.installing"), {
         id: RESTARTING_TOAST_ID,
         duration: Infinity,
       });

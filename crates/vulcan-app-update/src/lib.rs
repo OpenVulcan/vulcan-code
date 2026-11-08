@@ -20,7 +20,8 @@ use vulcan_install_core::assemble::Assembly;
 use vulcan_install_core::fetch::{Downloader, Route};
 use vulcan_install_core::index::{ComponentIndex, IndexEntry};
 use vulcan_install_core::install_root::{
-    MAX_STARTUP_ATTEMPTS, ROLLBACK_FILE, Rollback, STARTUP_TRIAL_FILE, StartupTrial, UPDATES_DIR,
+    MAX_STARTUP_ATTEMPTS, ROLLBACK_FILE, Rollback, SETUP_FAILURE_FILE, SETUP_LOG_FILE,
+    STARTUP_TRIAL_FILE, SetupFailure, StartupTrial, UPDATES_DIR,
 };
 use vulcan_install_core::layout::installer_key;
 use vulcan_install_core::manifest::{DownloadKind, ReleaseManifest};
@@ -145,6 +146,208 @@ pub enum RestartPlan {
         /// 其参数。
         arguments: Vec<String>,
     },
+    /// The setup program of this root, run once this process exited ([`setup_command`]); it
+    /// switches to the version assembled for it and refreshes its integration, and the service of
+    /// the current version starts afterwards.
+    /// 本根目录的安装器，在本进程退出后运行（[`setup_command`]）；它切换到为其组装的版本并刷新集成，
+    /// 之后启动当前版本的服务。
+    Setup {
+        /// The version assembled for it.
+        /// 为其组装的版本。
+        version: String,
+        /// The channel that offered the version, `stable` or `preview`.
+        /// 提供该版本的通道，`stable` 或 `preview`。
+        channel: String,
+    },
+}
+
+/// How an offered version is installed on this root.
+/// 所提供版本在本根目录上的安装方式。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Method {
+    /// Assembled next to the running version and made current at once.
+    /// 在正在运行的版本旁组装并立即设为当前版本。
+    Switch,
+    /// Assembled next to the running version; the setup program makes it current on restart.
+    /// 在正在运行的版本旁组装；重启时由安装器设为当前版本。
+    Setup,
+    /// The full Windows installer runs on restart.
+    /// 重启时运行完整的 Windows 安装包。
+    Installer,
+    /// The app cannot install it.
+    /// 应用无法安装它。
+    Manual,
+}
+
+/// What a root offers for installing a version, as [`install_method`] weighs it.
+/// 根目录为安装某版本所具备的条件，供 [`install_method`] 权衡。
+#[derive(Clone, Copy, Debug)]
+struct Situation {
+    /// The version keeps the running install epoch.
+    /// 该版本沿用正在运行的安装纪元。
+    same_epoch: bool,
+    /// The version publishes every installed component.
+    /// 该版本发布了每个已安装组件。
+    components_present: bool,
+    /// The setup program owns the root.
+    /// 根目录由安装器拥有。
+    setup_owned: bool,
+    /// The root holds its setup program.
+    /// 根目录中有安装器程序。
+    setup_program_present: bool,
+    /// The platform is Windows, where only the installer that made a root may refresh it.
+    /// 平台为 Windows，只有创建该根目录的安装程序可以刷新它。
+    windows: bool,
+    /// The version publishes a full Windows installer.
+    /// 该版本发布了完整的 Windows 安装包。
+    has_installer: bool,
+}
+
+/// Chooses how a version installs. Assembly reuses every file the running version already has by
+/// its digest, so it is preferred whenever the root can be finished without a full installer: the
+/// same epoch is switched at once; across epochs the setup program finishes the roots it owns, and
+/// a root no installer made has nothing outside its versions to refresh. Only a Windows root the
+/// Inno installer made needs that installer, since only it rewrites its own registration.
+/// 选择版本的安装方式。组装按摘要复用正在运行版本已有的每个文件，因此只要根目录无需完整安装包即可完成就
+/// 优先组装：同一纪元立即切换；跨纪元时安装器完成它拥有的根目录，而不由安装程序创建的根目录在版本之外没有
+/// 需要刷新的内容。只有 Inno 安装包创建的 Windows 根目录需要该安装包，因为只有它能改写自身的注册信息。
+fn install_method(situation: Situation) -> Method {
+    let Situation {
+        same_epoch,
+        components_present,
+        setup_owned,
+        setup_program_present,
+        windows,
+        has_installer,
+    } = situation;
+    if components_present && same_epoch {
+        Method::Switch
+    } else if setup_owned {
+        if components_present && setup_program_present {
+            Method::Setup
+        } else {
+            Method::Manual
+        }
+    } else if windows {
+        if has_installer {
+            Method::Installer
+        } else {
+            Method::Manual
+        }
+    } else if components_present {
+        Method::Switch
+    } else {
+        Method::Manual
+    }
+}
+
+/// The setup program that finishes an update of the root holding `executable`, and its arguments:
+/// `update`, or `install --channel preview` for a preview version, since the setup program
+/// otherwise looks only at the channel recorded when it installed.
+/// 完成包含 `executable` 的根目录更新的安装器及其参数：`update`；预览版本使用
+/// `install --channel preview`，否则安装器只查看安装时记录的通道。
+pub fn setup_command(executable: &Path, channel: &str) -> Result<(PathBuf, Vec<String>), String> {
+    let installed = detect_running(executable)?;
+    Ok((
+        installed.root.setup_program(),
+        setup_arguments(installed.root.path(), channel),
+    ))
+}
+
+/// The arguments of [`setup_command`] for the root at `root`.
+/// [`setup_command`] 对位于 `root` 的根目录使用的参数。
+fn setup_arguments(root: &Path, channel: &str) -> Vec<String> {
+    let mut arguments: Vec<String> = if channel == Channel::Preview.as_str() {
+        vec![
+            String::from("install"),
+            String::from("--yes"),
+            String::from("--channel"),
+            Channel::Preview.as_str().to_owned(),
+        ]
+    } else {
+        vec![String::from("update"), String::from("--yes")]
+    };
+    arguments.push(String::from("--prefix"));
+    arguments.push(plain_path(root).display().to_string());
+    arguments
+}
+
+/// Records how a setup program run started with [`setup_command`] ended for `version`, so the next
+/// service start reports a failure; `outcome` is its exit status, or why it could not run.
+/// 记录以 [`setup_command`] 启动的安装器运行对 `version` 的结果，使下一次服务启动报告失败；`outcome`
+/// 为其退出状态，或其无法运行的原因。
+///
+/// The run succeeded when it exited cleanly and the current version reached `version`; the setup
+/// program may have found an even newer one.
+/// 运行干净退出且当前版本达到 `version` 时视为成功；安装器可能找到了更新的版本。
+pub fn finish_setup_run(
+    executable: &Path,
+    version: &str,
+    outcome: Result<std::process::ExitStatus, String>,
+) -> Result<(), String> {
+    let installed = detect_running(executable)?;
+    let version: ReleaseVersion = version.parse().map_err(|error| format!("{error}"))?;
+    let root = &installed.root;
+    let current = root.current_version().map_err(|error| error.to_string())?;
+    let reached = current.is_some_and(|current| current >= version);
+    let reason = setup_failure(outcome.map(|status| status.success()), reached);
+    let lock = root.lock().map_err(|error| error.to_string())?;
+    match reason {
+        Some(reason) => {
+            root.write_marker(&lock, SETUP_FAILURE_FILE, &SetupFailure { version, reason })
+        }
+        None => root.remove_marker(&lock, SETUP_FAILURE_FILE),
+    }
+    .map_err(|error| error.to_string())
+}
+
+/// Why a setup program run failed: `exited` tells whether it exited successfully (or why it could
+/// not run), `reached` whether the current version reached the assembled one; `None` on success.
+/// 安装器运行失败的原因：`exited` 表示是否成功退出（或无法运行的原因），`reached` 表示当前版本是否已达到
+/// 组装的版本；成功时为 `None`。
+fn setup_failure(exited: Result<bool, String>, reached: bool) -> Option<String> {
+    match exited {
+        Err(error) => Some(format!("it could not run: {error}")),
+        Ok(false) => Some(String::from("it exited with a failure")),
+        Ok(true) if !reached => Some(String::from("it finished without switching to the version")),
+        Ok(true) => None,
+    }
+}
+
+/// Where a setup program run started by the updater writes its output.
+/// 由更新器启动的安装器运行写出输出的位置。
+pub fn setup_log(executable: &Path) -> Option<PathBuf> {
+    let installed = detect_running(executable).ok()?;
+    Some(installed.root.path().join(UPDATES_DIR).join(SETUP_LOG_FILE))
+}
+
+/// The same executable inside the current version of the root holding `executable`.
+/// 包含 `executable` 的根目录当前版本中的同一可执行文件。
+pub fn current_executable(executable: &Path) -> Option<PathBuf> {
+    let installed = detect_running(executable).ok()?;
+    let current = installed.root.current_version().ok()??;
+    Some(installed.executable_of(&current))
+}
+
+/// The installed layout of the running process at `executable`.
+/// 运行于 `executable` 的进程所在的已安装布局。
+fn detect_running(executable: &Path) -> Result<Installed, String> {
+    installed::detect(executable, vulcan_product_info::version())
+        .map_err(|reason| format!("updating is unavailable: {reason:?}"))
+}
+
+/// `path` without the Windows verbatim prefix that canonicalizing adds, so the setup program
+/// records the root as users write it.
+/// 去掉规范化时添加的 Windows 逐字前缀的 `path`，使安装器以用户书写的形式记录根目录。
+fn plain_path(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(share) = text.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{share}"))
+    } else if let Some(local) = text.strip_prefix(r"\\?\") {
+        PathBuf::from(local)
+    } else {
+        path.to_path_buf()
+    }
 }
 
 /// The update subsystem of one service process.
@@ -233,9 +436,12 @@ struct Offer {
     /// Its verified manifest.
     /// 其已校验的版本清单。
     manifest: ReleaseManifest,
-    /// Indexes of the installed components, for an incremental update.
-    /// 已安装组件的索引，用于增量更新。
+    /// Indexes of the installed components, for an assembled update.
+    /// 已安装组件的索引，用于组装的更新。
     indexes: Vec<ComponentIndex>,
+    /// The channel that offered it.
+    /// 提供它的通道。
+    channel: Channel,
 }
 
 /// A version waiting for a restart.
@@ -245,9 +451,24 @@ struct Ready {
     /// The version.
     /// 版本。
     version: ReleaseVersion,
-    /// The verified installer of a full update; `None` for an assembled version.
-    /// 全量更新的已校验安装包；已组装版本为 `None`。
-    installer: Option<PathBuf>,
+    /// What the restart runs.
+    /// 重启时运行的内容。
+    apply: Apply,
+}
+
+/// What a restart runs to start a version made ready.
+/// 重启时为启动已就绪版本所运行的内容。
+#[derive(Clone)]
+enum Apply {
+    /// The service of the version already made current.
+    /// 已设为当前版本的服务。
+    Switched,
+    /// The verified full installer.
+    /// 已校验的完整安装包。
+    Installer(PathBuf),
+    /// The setup program, which makes the assembled version current; the offer's channel.
+    /// 安装器，由它将已组装的版本设为当前版本；附提议所属的通道。
+    Setup(Channel),
 }
 
 impl AppUpdater {
@@ -437,8 +658,9 @@ impl AppUpdater {
         Ok(self.snapshot())
     }
 
-    /// Stops the service so that the version made ready starts, or runs the full installer.
-    /// 停止服务以启动已就绪的版本，或运行完整安装包。
+    /// Stops the service so that the version made ready starts, or runs the full installer or the
+    /// setup program.
+    /// 停止服务以启动已就绪的版本，或运行完整安装包或安装器。
     pub fn restart(&self) -> Result<AppUpdateSnapshot, String> {
         let installed = self.inner.available()?;
         let ready = {
@@ -454,8 +676,8 @@ impl AppUpdater {
             ready
         };
         self.inner.notify();
-        let (reason, plan) = match &ready.installer {
-            Some(program) => (
+        let (reason, plan) = match &ready.apply {
+            Apply::Installer(program) => (
                 ServiceRestartReason::Installer,
                 RestartPlan::Installer {
                     program: program.clone(),
@@ -465,7 +687,14 @@ impl AppUpdater {
                         .collect(),
                 },
             ),
-            None => (
+            Apply::Setup(channel) => (
+                ServiceRestartReason::Setup,
+                RestartPlan::Setup {
+                    version: ready.version.to_string(),
+                    channel: channel.as_str().to_owned(),
+                },
+            ),
+            Apply::Switched => (
                 ServiceRestartReason::Update,
                 RestartPlan::Service {
                     executable: installed.executable_of(&ready.version),
@@ -742,7 +971,7 @@ impl Inner {
         installed: &Installed,
         downloader: &mut Downloader,
     ) -> Result<(), FormatError> {
-        let (public, manifest, indexes) = {
+        let (public, manifest, indexes, channel) = {
             let state = self.lock();
             let offer = state
                 .offer
@@ -752,32 +981,47 @@ impl Inner {
                 offer.public.clone(),
                 offer.manifest.clone(),
                 offer.indexes.clone(),
+                offer.channel,
             )
         };
-        let installer = match public.kind {
-            AppUpdateKind::Full => Some(self.download_installer(installed, downloader, &manifest)?),
+        let apply = match public.kind {
+            AppUpdateKind::Full => {
+                Apply::Installer(self.download_installer(installed, downloader, &manifest)?)
+            }
             AppUpdateKind::Incremental => {
-                self.assemble(installed, downloader, &manifest, indexes)?;
-                None
+                self.assemble(installed, downloader, &manifest, indexes, true)?;
+                Apply::Switched
+            }
+            AppUpdateKind::Setup => {
+                if !installed.root.setup_program().is_file() {
+                    return Err(invalid(
+                        "the setup program of this installation is missing; run `vulcan-code-setup update`",
+                    ));
+                }
+                self.assemble(installed, downloader, &manifest, indexes, false)?;
+                Apply::Setup(channel)
             }
         };
         let mut state = self.lock();
         state.ready = Some(Ready {
             version: manifest.version,
-            installer,
+            apply,
         });
         state.offer = None;
         Ok(())
     }
 
-    /// Assembles `manifest` next to the running version and makes it current on trial.
-    /// 在正在运行的版本旁组装 `manifest`，并将其设为试运行中的当前版本。
+    /// Assembles `manifest` next to the running version and, when `switch` is set, makes it current
+    /// on trial; otherwise the setup program switches to it on restart.
+    /// 在正在运行的版本旁组装 `manifest`；`switch` 为真时将其设为试运行中的当前版本，否则由安装器在重启时
+    /// 切换到它。
     fn assemble(
         &self,
         installed: &Installed,
         downloader: &mut Downloader,
         manifest: &ReleaseManifest,
         indexes: Vec<ComponentIndex>,
+        switch: bool,
     ) -> Result<(), FormatError> {
         let root = &installed.root;
         let lock = root.lock()?;
@@ -789,6 +1033,9 @@ impl Inner {
             let prepared = Assembly::new(root, &lock, manifest, indexes)?.prepare()?;
             self.track(downloader, prepared.download_bytes());
             prepared.complete(downloader)?;
+        }
+        if !switch {
+            return Ok(());
         }
         root.switch_to(&lock, &manifest.version)?;
         root.write_marker(
@@ -872,6 +1119,20 @@ impl Inner {
         {
             root.remove_marker(&lock, STARTUP_TRIAL_FILE)?;
         }
+        // A setup program run that could not finish is reported once.
+        // 未能完成的安装器运行只报告一次。
+        if let Ok(Some(failure)) = root.read_marker::<SetupFailure>(SETUP_FAILURE_FILE) {
+            self.lock().error = Some(AppUpdateError {
+                operation: AppUpdateOperation::Restart,
+                message: format!(
+                    "the setup program did not finish {}: {}; its output is in {}",
+                    failure.version,
+                    failure.reason,
+                    root.path().join(UPDATES_DIR).join(SETUP_LOG_FILE).display()
+                ),
+            });
+        }
+        root.remove_marker(&lock, SETUP_FAILURE_FILE)?;
         match root.read_marker::<Rollback>(ROLLBACK_FILE) {
             Ok(Some(rollback)) if rollback.restored == installed.version => {
                 self.lock().rollback = Some(rollback);
@@ -888,7 +1149,7 @@ impl Inner {
             Some(current) if current > installed.version => {
                 self.lock().ready = Some(Ready {
                     version: current,
-                    installer: None,
+                    apply: Apply::Switched,
                 });
             }
             _ => {}
@@ -913,23 +1174,36 @@ fn describe(
             manifest.version
         );
     }
-    let incremental = manifest.install_epoch == installed.install_epoch
-        && installed
+    let installer = full_installer(installed, &manifest);
+    let method = install_method(Situation {
+        same_epoch: manifest.install_epoch == installed.install_epoch,
+        components_present: installed
             .components
             .iter()
-            .all(|component| manifest.components.contains_key(component));
-    let (kind, download_bytes, installable, indexes) = if incremental {
-        let indexes = read_indexes(downloader, &manifest, &installed.components)?;
-        let bytes = incremental_bytes(installed, &indexes)?;
-        (AppUpdateKind::Incremental, bytes, true, indexes)
-    } else {
-        let installer = full_installer(installed, &manifest);
-        (
+            .all(|component| manifest.components.contains_key(component)),
+        setup_owned: installed.root.setup_owned(),
+        setup_program_present: installed.root.setup_program().is_file(),
+        windows: installed.platform.is_windows(),
+        has_installer: installer.is_some(),
+    });
+    let (kind, download_bytes, installable, indexes) = match method {
+        Method::Switch | Method::Setup => {
+            let indexes = read_indexes(downloader, &manifest, &installed.components)?;
+            let bytes = incremental_bytes(installed, &indexes)?;
+            let kind = if method == Method::Setup {
+                AppUpdateKind::Setup
+            } else {
+                AppUpdateKind::Incremental
+            };
+            (kind, bytes, true, indexes)
+        }
+        Method::Installer => (
             AppUpdateKind::Full,
             installer.map_or(0, |installer| installer.size),
-            installer.is_some(),
+            true,
             Vec::new(),
-        )
+        ),
+        Method::Manual => (AppUpdateKind::Full, 0, false, Vec::new()),
     };
     Ok(Offer {
         public: AppUpdateOffer {
@@ -955,6 +1229,7 @@ fn describe(
         },
         manifest,
         indexes,
+        channel: found.channel,
     })
 }
 
@@ -1019,4 +1294,160 @@ fn now_ms() -> u64 {
         .map_or(0, |elapsed| {
             u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A root of the running epoch with every component published, before any variation.
+    /// 沿用运行纪元且发布了全部组件的根目录，作为各变化的起点。
+    fn situation() -> Situation {
+        Situation {
+            same_epoch: true,
+            components_present: true,
+            setup_owned: false,
+            setup_program_present: false,
+            windows: false,
+            has_installer: false,
+        }
+    }
+
+    #[test]
+    fn the_same_epoch_is_assembled_and_switched_on_every_root() {
+        for (setup_owned, windows) in [(false, false), (true, false), (false, true), (true, true)] {
+            let method = install_method(Situation {
+                setup_owned,
+                setup_program_present: setup_owned,
+                windows,
+                has_installer: windows,
+                ..situation()
+            });
+            assert_eq!(
+                method,
+                Method::Switch,
+                "setup {setup_owned}, windows {windows}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_new_epoch_on_a_setup_root_is_assembled_for_the_setup_program() {
+        for windows in [false, true] {
+            let owned = Situation {
+                same_epoch: false,
+                setup_owned: true,
+                setup_program_present: true,
+                windows,
+                ..situation()
+            };
+            assert_eq!(install_method(owned), Method::Setup);
+            // Without its program nothing here can finish the root.
+            // 缺少安装器程序时，这里没有任何东西能完成该根目录。
+            let missing = Situation {
+                setup_program_present: false,
+                ..owned
+            };
+            assert_eq!(install_method(missing), Method::Manual);
+        }
+    }
+
+    #[test]
+    fn a_new_epoch_runs_the_installer_only_on_a_root_it_made() {
+        let inno = Situation {
+            same_epoch: false,
+            windows: true,
+            has_installer: true,
+            ..situation()
+        };
+        assert_eq!(install_method(inno), Method::Installer);
+        let unpublished = Situation {
+            has_installer: false,
+            ..inno
+        };
+        assert_eq!(install_method(unpublished), Method::Manual);
+        // A Unix root no installer made has nothing outside its versions to refresh.
+        // 不由安装程序创建的 Unix 根目录在版本之外没有需要刷新的内容。
+        let unix = Situation {
+            same_epoch: false,
+            ..situation()
+        };
+        assert_eq!(install_method(unix), Method::Switch);
+    }
+
+    #[test]
+    fn a_missing_component_cannot_be_assembled() {
+        let missing = Situation {
+            components_present: false,
+            ..situation()
+        };
+        assert_eq!(install_method(missing), Method::Manual);
+        assert_eq!(
+            install_method(Situation {
+                setup_owned: true,
+                setup_program_present: true,
+                ..missing
+            }),
+            Method::Manual
+        );
+        assert_eq!(
+            install_method(Situation {
+                windows: true,
+                has_installer: true,
+                ..missing
+            }),
+            Method::Installer
+        );
+    }
+
+    #[test]
+    fn the_setup_program_runs_unattended_on_the_offered_channel() {
+        let root = Path::new("/opt/vulcan-code");
+        let stable = setup_arguments(root, "stable");
+        assert_eq!(stable[..2], ["update", "--yes"]);
+        assert!(!stable.iter().any(|arg| arg == "--channel"));
+        let preview = setup_arguments(root, "preview");
+        assert_eq!(preview[0], "install");
+        let channel = preview.iter().position(|arg| arg == "--channel");
+        assert_eq!(
+            channel
+                .and_then(|at| preview.get(at + 1))
+                .map(String::as_str),
+            Some("preview")
+        );
+        for arguments in [stable, preview] {
+            assert!(arguments.iter().any(|arg| arg == "--yes"));
+            let prefix = arguments.iter().position(|arg| arg == "--prefix");
+            assert_eq!(
+                prefix
+                    .and_then(|at| arguments.get(at + 1))
+                    .map(String::as_str),
+                Some("/opt/vulcan-code")
+            );
+        }
+    }
+
+    #[test]
+    fn verbatim_prefixes_are_dropped_from_the_root() {
+        assert_eq!(
+            plain_path(Path::new(r"\\?\C:\Users\me\VulcanCode")),
+            PathBuf::from(r"C:\Users\me\VulcanCode")
+        );
+        assert_eq!(
+            plain_path(Path::new(r"\\?\UNC\server\share\VulcanCode")),
+            PathBuf::from(r"\\server\share\VulcanCode")
+        );
+        assert_eq!(
+            plain_path(Path::new("/opt/vulcan-code")),
+            PathBuf::from("/opt/vulcan-code")
+        );
+    }
+
+    #[test]
+    fn a_setup_run_succeeds_only_when_it_reached_the_version() {
+        assert_eq!(setup_failure(Ok(true), true), None);
+        assert!(setup_failure(Ok(true), false).is_some());
+        assert!(setup_failure(Ok(false), true).is_some());
+        assert!(setup_failure(Err(String::from("not found")), true).is_some());
+    }
 }

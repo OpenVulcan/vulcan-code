@@ -1344,7 +1344,7 @@ impl Worker {
                 NoticeSeverity::Info,
                 match restarting.reason {
                     api::ServiceRestartReason::Update => crate::tr!("appUpdate.toast.restarting"),
-                    api::ServiceRestartReason::Installer => {
+                    api::ServiceRestartReason::Installer | api::ServiceRestartReason::Setup => {
                         crate::tr!("appUpdate.toast.installing")
                     }
                 },

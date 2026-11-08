@@ -153,7 +153,7 @@ const service = {
   getConnection: (): Promise<unknown> => ipcRenderer.invoke('vulcan:service:connection'),
   // Ends this client after an update restart of the Core (see the main-process handler).
   // 在 Core 更新重启后结束本客户端（见主进程处理器）。
-  restartForUpdate: (reason: 'update' | 'installer'): Promise<void> =>
+  restartForUpdate: (reason: 'update' | 'installer' | 'setup'): Promise<void> =>
     ipcRenderer.invoke('vulcan:service:restart-for-update', reason),
 };
 

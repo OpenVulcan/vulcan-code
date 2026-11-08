@@ -189,11 +189,13 @@ export function AppUpdateOfferRows(props: { snapshot: AppUpdateSnapshot; calls: 
           <p className="vk-form-note">
             {offer.kind === "incremental"
               ? formatMessage(t("settings.appUpdate.incremental"), { size: formatBytes(offer.downloadBytes) })
-              : offer.installable
-                ? formatMessage(t("settings.appUpdate.full"), { size: formatBytes(offer.downloadBytes) })
-                : offer.setupManaged
-                  ? t("settings.appUpdate.fullSetup")
-                  : t("settings.appUpdate.fullManual")}
+              : offer.kind === "setup"
+                ? formatMessage(t("settings.appUpdate.setup"), { size: formatBytes(offer.downloadBytes) })
+                : offer.installable
+                  ? formatMessage(t("settings.appUpdate.full"), { size: formatBytes(offer.downloadBytes) })
+                  : offer.setupManaged
+                    ? t("settings.appUpdate.fullSetup")
+                    : t("settings.appUpdate.fullManual")}
           </p>
           {offer.previouslyFailed ? <p role="alert" className="vk-field-error">{t("settings.appUpdate.previouslyFailed")}</p> : null}
         </div>

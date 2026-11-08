@@ -57,6 +57,8 @@ fn offer_rows(rows: &mut Vec<Row>, snapshot: &Value, offer: &Value, busy: bool) 
     let size = format_bytes(n(offer, "/downloadBytes") as f64);
     let detail = if s(offer, "/kind") == "incremental" {
         tr!("settings.appUpdate.incremental", size = size)
+    } else if s(offer, "/kind") == "setup" {
+        tr!("settings.appUpdate.setup", size = size)
     } else if b(offer, "/installable") {
         tr!("settings.appUpdate.full", size = size)
     } else if b(offer, "/setupManaged") {
@@ -498,6 +500,13 @@ mod tests {
         };
         let incremental = methods(&page(snapshot(offer("incremental", true))));
         assert!(incremental.contains(&"service_download_app_update".to_string()));
+        // A new epoch the setup program finishes downloads here like any other update.
+        // 由安装器完成的新纪元更新与其他更新一样在此下载。
+        let mut setup = offer("setup", true);
+        setup["offer"]["setupManaged"] = json!(true);
+        let setup = methods(&page(snapshot(setup)));
+        assert!(setup.contains(&"service_download_app_update".to_string()));
+        assert!(!setup.contains(&"service_open_external_url".to_string()));
         let manual = methods(&page(snapshot(offer("full", false))));
         assert!(!manual.contains(&"service_download_app_update".to_string()));
         assert!(manual.contains(&"service_open_external_url".to_string()));

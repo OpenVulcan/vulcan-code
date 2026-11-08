@@ -55,6 +55,15 @@ pub const SETUP_DIR: &str = "setup";
 /// 安装器，但绝不会有此文件）。
 pub const SETUP_STATE_FILE: &str = "installation.json";
 
+/// File name of the setup program inside [`SETUP_DIR`]; the setup program copies itself there and
+/// the in-app updater runs it to finish an update across install epochs.
+/// [`SETUP_DIR`] 中安装器的文件名；安装器把自身复制到这里，应用内更新运行它来完成跨安装纪元的更新。
+pub const SETUP_PROGRAM: &str = if cfg!(windows) {
+    "vulcan-code-setup.exe"
+} else {
+    "vulcan-code-setup"
+};
+
 /// Line that marks a file outside the root as written by Vulcan Code (launchers, menu entries, the
 /// AppArmor profile), so it is replaced or removed only while it still carries the line.
 /// 标记根目录之外的文件由 Vulcan Code 写入的行（启动器、菜单项、AppArmor 配置），只有文件仍带有该行时
@@ -118,6 +127,12 @@ impl InstallRoot {
     /// 此根目录是否由安装器拥有，因而只有安装器可以替换该安装。
     pub fn setup_owned(&self) -> bool {
         self.path.join(SETUP_DIR).join(SETUP_STATE_FILE).is_file()
+    }
+
+    /// The setup program of a root the setup program owns.
+    /// 由安装器拥有的根目录中的安装器程序。
+    pub fn setup_program(&self) -> PathBuf {
+        self.path.join(SETUP_DIR).join(SETUP_PROGRAM)
     }
 
     /// Directory of an installed version.
@@ -239,6 +254,27 @@ pub const STARTUP_TRIAL_FILE: &str = "startup-trial.json";
 /// Marker below [`UPDATES_DIR`] left by the launcher after it switched back to the previous version.
 /// 启动器切换回上一版本后留在 [`UPDATES_DIR`] 下的标记。
 pub const ROLLBACK_FILE: &str = "rollback.json";
+
+/// Marker below [`UPDATES_DIR`] left when the setup program could not finish an update the in-app
+/// updater assembled; the next service start reports it once and removes it.
+/// 安装器未能完成应用内更新所组装的更新时留在 [`UPDATES_DIR`] 下的标记；下一次服务启动报告一次后删除。
+pub const SETUP_FAILURE_FILE: &str = "setup-failure.json";
+
+/// Output of the last setup program run started by the in-app updater, below [`UPDATES_DIR`].
+/// 应用内更新最近一次启动的安装器运行的输出，位于 [`UPDATES_DIR`] 下。
+pub const SETUP_LOG_FILE: &str = "setup-update.log";
+
+/// Content of [`SETUP_FAILURE_FILE`].
+/// [`SETUP_FAILURE_FILE`] 的内容。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetupFailure {
+    /// The version the setup program was to switch to.
+    /// 安装器应切换到的版本。
+    pub version: ReleaseVersion,
+    /// Why it did not.
+    /// 未能切换的原因。
+    pub reason: String,
+}
 
 /// Launches of a new version that may fail to start before the launcher switches back; written
 /// into each [`StartupTrial`], so the launcher reads it instead of keeping a copy.

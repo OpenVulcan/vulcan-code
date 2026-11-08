@@ -6812,6 +6812,7 @@
   "settings.appUpdate.available": "Доступна версия Vulcan Code {version}",
   "settings.appUpdate.preview": "Предварительная",
   "settings.appUpdate.incremental": "Загружаются только изменённые файлы: {size}.",
+  "settings.appUpdate.setup": "Загружаются только изменённые файлы: {size}. При перезапуске Vulcan Code программа установки завершит установку.",
   "settings.appUpdate.full": "Для этой версии нужен полный установщик: {size}.",
   "settings.appUpdate.fullManual": "Эту версию нужно установить со страницы загрузки.",
   "settings.appUpdate.fullSetup": "Эта установка управляется программой установки. Чтобы установить эту версию, выполните «vulcan-code-setup update».",

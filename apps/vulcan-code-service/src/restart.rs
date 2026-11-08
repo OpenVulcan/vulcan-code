@@ -1,5 +1,6 @@
-//! Restarting the service into an updated version or a full installer (plan section 8).
-//! 将服务重启到更新版本或完整安装包（方案第八节）。
+//! Restarting the service into an updated version, a full installer or the setup program (plan
+//! section 8).
+//! 将服务重启到更新版本、完整安装包或安装器（方案第八节）。
 //!
 //! The updater asks for a restart; the owner loop drains every session as for a normal quit, and
 //! only after a successful drain starts the replacement. A replacement service waits for this
@@ -57,23 +58,66 @@ pub(crate) fn launch_pending() {
     let Some(plan) = PENDING.lock().ok().and_then(|mut pending| pending.take()) else {
         return;
     };
+    // The replacement keeps this process's launch mode.
+    // 替代进程沿用本进程的启动模式。
+    let own_arguments = || {
+        std::env::args()
+            .skip(1)
+            .filter(|arg| arg != ARG_AWAIT_OWNER_EXIT)
+    };
     let result = match &plan {
         RestartPlan::Service { executable } => {
-            // The replacement keeps this process's launch mode.
-            // 替代进程沿用本进程的启动模式。
-            let mut arguments: Vec<String> = std::env::args()
-                .skip(1)
-                .filter(|arg| arg != ARG_AWAIT_OWNER_EXIT)
-                .collect();
+            let mut arguments: Vec<String> = own_arguments().collect();
             arguments.push(String::from(ARG_AWAIT_OWNER_EXIT));
             spawn_detached(executable, &arguments)
         }
         RestartPlan::Installer { program, arguments } => spawn_detached(program, arguments),
+        RestartPlan::Setup { version, channel } => std::env::current_exe()
+            .map_err(|error| format!("failed to resolve the service executable: {error}"))
+            .and_then(|executable| {
+                spawn_setup_helper(&executable, version, channel, own_arguments().collect())
+            }),
     };
     match result {
         Ok(()) => tracing::info!("[vulcan-code-service] started {plan:?}"),
         Err(error) => tracing::error!("[vulcan-code-service] could not start {plan:?}: {error}"),
     }
+}
+
+/// Starts this program as the helper that finishes an update through the setup program
+/// ([`crate::setup_update`]). Under the systemd user unit it runs outside the unit, since stopping
+/// the unit would stop it too, and starts the unit again afterwards.
+/// 以经安装器完成更新的辅助进程方式启动本程序（[`crate::setup_update`]）。在 systemd 用户单元中它运行于
+/// 单元之外（否则停止单元也会停止它），之后再重新启动该单元。
+fn spawn_setup_helper(
+    executable: &std::path::Path,
+    version: &str,
+    channel: &str,
+    service_arguments: Vec<String>,
+) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    if crate::user_service::running_in_user_unit() {
+        let arguments =
+            crate::setup_update::helper_arguments(version, channel, true, service_arguments);
+        let status = Command::new("systemd-run")
+            .args(["--user", "--collect", "--quiet", "--"])
+            .arg(executable)
+            .args(&arguments)
+            .env_remove(crate::runtime_layout::RUNTIME_LAYOUT_ENV)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map_err(|error| format!("failed to run systemd-run: {error}"))?;
+        return if status.success() {
+            Ok(())
+        } else {
+            Err(format!("systemd-run failed with {status}"))
+        };
+    }
+    let arguments =
+        crate::setup_update::helper_arguments(version, channel, false, service_arguments);
+    spawn_detached(executable, &arguments)
 }
 
 /// Starts `program` outside this process's console and process group.
@@ -93,7 +137,7 @@ fn spawn_detached(program: &std::path::Path, arguments: &[String]) -> Result<(),
 /// an installer starts) reads the manifest beside its own executable.
 /// 替代进程属于另一个版本：本进程从启动者继承的布局覆盖指向本版本的清单，因此将其移除，使替代进程
 /// （或安装包启动的应用）读取其自身可执行文件旁的清单。
-fn replacement_command(program: &std::path::Path, arguments: &[String]) -> Command {
+pub(crate) fn replacement_command(program: &std::path::Path, arguments: &[String]) -> Command {
     let mut command = Command::new(program);
     command
         .args(arguments)

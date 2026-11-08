@@ -127,6 +127,19 @@ describe("AppUpdateSettingsArea", () => {
     expect(container.querySelector("[data-app-update-offer]")?.textContent).toContain("settings.appUpdate.fullSetup");
   });
 
+  it("downloads a new epoch that the setup program finishes like any other update", async () => {
+    await render(snapshot({ offer: {
+      version: "0.2.0", channel: "stable", kind: "setup", downloadBytes: 2048, releasedAt: "2026-11-04T00:00:00Z",
+      notes: {}, skippedReleases: [], skippedReleasesComplete: true, installable: true, setupManaged: true,
+      previouslyFailed: false,
+    } }));
+    expect(button("settings.appUpdate.openDownloadPage")).toBeUndefined();
+    expect(container.querySelector("[data-app-update-offer]")?.textContent).toContain("settings.appUpdate.setup");
+    service.downloadAppUpdate.mockResolvedValue(snapshot({ activity: "downloading", progress: { receivedBytes: 0, totalBytes: 2048 } }));
+    await act(async () => { button("settings.appUpdate.download")?.click(); });
+    expect(service.downloadAppUpdate).toHaveBeenCalledOnce();
+  });
+
   it("installs a missing desktop profile and keeps the button off while the password prompt is open", async () => {
     const profile = { status: "missing" as const, installing: false, command: "sudo install -m 0644 a b", error: null };
     await render(snapshot({ desktopProfile: profile }));

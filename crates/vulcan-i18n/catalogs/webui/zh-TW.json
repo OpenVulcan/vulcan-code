@@ -6812,6 +6812,7 @@
   "settings.appUpdate.available": "Vulcan Code {version} 可以更新",
   "settings.appUpdate.preview": "預覽版",
   "settings.appUpdate.incremental": "只下載變更的檔案：{size}。",
+  "settings.appUpdate.setup": "只下載變更的檔案：{size}。重新啟動 Vulcan Code 時由安裝程式完成安裝。",
   "settings.appUpdate.full": "此版本需要完整安裝程式：{size}。",
   "settings.appUpdate.fullManual": "此版本需要從下載頁面安裝。",
   "settings.appUpdate.fullSetup": "此安裝由安裝程式管理。請執行「vulcan-code-setup update」安裝此版本。",

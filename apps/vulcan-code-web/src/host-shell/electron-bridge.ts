@@ -11,6 +11,7 @@ import type {
   ShellNotificationPermission,
   ShellNotificationRequest,
 } from "@/host-shell/protocol";
+import type { ServiceRestartReason } from "@/service/app-update-events";
 
 // ElectronDesktopBridge is the exact native window and notification surface the preload exposes.
 // ElectronDesktopBridge 是预加载暴露的精确原生窗口与通知表面。
@@ -251,7 +252,7 @@ interface ElectronDesktopApi {
   // restartForUpdate 存在于能在更新重启后重新启动客户端的预加载中。
   service: {
     getConnection: () => Promise<ElectronServiceConnection>;
-    restartForUpdate?: (reason: "update" | "installer") => Promise<void>;
+    restartForUpdate?: (reason: ServiceRestartReason) => Promise<void>;
   };
   // localBrowser is the optional isolated temporary-page surface of this GUI.
   // localBrowser 是此 GUI 可选的隔离临时页面界面。
@@ -297,7 +298,7 @@ export async function readElectronServiceConnection(): Promise<ElectronServiceCo
 // itself once the old Core exited; returns false outside Electron or on an older preload.
 // restartElectronClientForUpdate 将已宣布的 Core 重启交给桌面客户端，客户端在旧 Core 退出后结束自身；
 // 在 Electron 之外或旧预加载上返回 false。
-export async function restartElectronClientForUpdate(reason: "update" | "installer"): Promise<boolean> {
+export async function restartElectronClientForUpdate(reason: ServiceRestartReason): Promise<boolean> {
   if (typeof window === "undefined") return false;
   const api = (window as unknown as { vulcanDesktop?: ElectronDesktopApi }).vulcanDesktop;
   const restart = api?.service?.restartForUpdate;
