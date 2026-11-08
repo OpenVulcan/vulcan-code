@@ -149,6 +149,22 @@ jobs:
             export PATH="$HOME/.cargo/bin:$PATH"
           fi
           rustup toolchain install
+      # The build scripts produce only the platform they run on, so an own Mac must run the job natively for
+      # macos-arm64 and under Rosetta, with x86_64 Node and Rust, for macos-x64 (self-hosted-runner.sh).
+      # 构建脚本只产出其所在平台，因此自有 Mac 为 macos-arm64 必须原生运行作业，为 macos-x64 必须在 Rosetta 下以
+      # x86_64 的 Node 与 Rust 运行（self-hosted-runner.sh）。
+      - name: Check the architecture of a self-hosted Mac
+        if: runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: |
+          set -eu
+          case "$PLATFORM" in macos-x64) want=x86_64 ;; *) want=arm64 ;; esac
+          rust=$(rustc -vV | sed -n 's/^host: //p')
+          node=$(node -p process.arch)
+          echo "shell $(uname -m), node $node, rustc $rust"
+          case "$want/$(uname -m)/$node/$rust" in
+            x86_64/x86_64/x64/x86_64-apple-darwin | arm64/arm64/arm64/aarch64-apple-darwin) ;;
+            *) echo "::error::the $PLATFORM release needs $want for the shell, Node and Rust; register the runner with scripts/ci-runners.mjs"; exit 1 ;;
+          esac
       # The build scripts take the restored kinds from VULCAN_PREBUILT_KINDS instead of compiling them.
       # 构建脚本从 VULCAN_PREBUILT_KINDS 读取已还原的类别，不再编译它们。
       - name: Reuse unchanged programs from a published release

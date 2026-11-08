@@ -86,8 +86,10 @@ const USAGE = `usage: ci-runners.mjs prepare <root@host|wsl:distribution> [--use
        ci-runners.mjs register <where> <${POOLS.join('|')}> [--name <name>] [--dir <directory>] [--manual]
        ci-runners.mjs unregister <where> [--dir <directory>]
 <where> is <user@host> (SSH), wsl:<distribution> or local; --manual installs no service, so the runner is
-online only while its run script is started by hand. \`prepare\` sets up a fresh Ubuntu 22.04 machine as root
-first: packages, Node, the runner user and its Rust toolchain, on the data disk when one is given.`;
+online only while its run script is started by hand. macos-x64 on an Apple silicon Mac installs a Rosetta runner in
+~/actions-runner/vulcan-code-x64; unregister it with --dir ~/actions-runner/vulcan-code-x64. \`prepare\` sets up
+a fresh Ubuntu 22.04 machine as root first: packages, Node, the runner user and its Rust toolchain, on the data
+disk when one is given.`;
 
 // shellFor returns the command prefix that runs a shell command line on `where`; WSL runs it as `user`.
 // shellFor 返回在 `where` 上运行一条 shell 命令行的命令前缀；WSL 以 `user` 身份运行。
@@ -109,6 +111,16 @@ function run(program, args, input) {
 // quote 为一个 shell 单词加单引号；取值中不含引号，若有则删除而不转义。
 const quote = value => `'${String(value).replaceAll("'", '')}'`;
 
+// toolchainVersions returns the Node and Rust versions the repository builds with, from managed-runtimes.json and
+// rust-toolchain.toml.
+// toolchainVersions 返回仓库构建所用的 Node 与 Rust 版本，取自 managed-runtimes.json 与 rust-toolchain.toml。
+function toolchainVersions() {
+  const node = JSON.parse(readFileSync(new URL('../crates/vulcan-service-runtime/managed-runtimes.json', import.meta.url), 'utf8')).node_version;
+  const rust = /^channel\s*=\s*"([^"]+)"/m.exec(readFileSync(new URL('../rust-toolchain.toml', import.meta.url), 'utf8'))?.[1];
+  if (!node || !rust) throw new Error('managed-runtimes.json or rust-toolchain.toml does not name a version');
+  return { node, rust };
+}
+
 // prepareCommand runs scripts/self-hosted-machine.sh as root on a fresh machine reached over SSH or in a WSL
 // distribution. The Node and Rust versions come from managed-runtimes.json and rust-toolchain.toml.
 // prepareCommand 在经 SSH 访问的新机器或 WSL 发行版上以 root 运行 scripts/self-hosted-machine.sh。Node 与 Rust
@@ -121,9 +133,7 @@ function prepareCommand(argv) {
   });
   const [where] = positionals;
   if (!where || where === 'local') throw new Error(USAGE);
-  const node = JSON.parse(readFileSync(new URL('../crates/vulcan-service-runtime/managed-runtimes.json', import.meta.url), 'utf8')).node_version;
-  const rust = /^channel\s*=\s*"([^"]+)"/m.exec(readFileSync(new URL('../rust-toolchain.toml', import.meta.url), 'utf8'))?.[1];
-  if (!node || !rust) throw new Error('managed-runtimes.json or rust-toolchain.toml does not name a version');
+  const { node, rust } = toolchainVersions();
   const shell = shellFor(where, 'root');
   const directory = '/tmp/vulcan-self-hosted-machine';
   run(shell[0], [...shell.slice(1), `rm -rf ${directory} && mkdir -p ${directory}`]);
@@ -169,8 +179,14 @@ function runnerCommand(command, argv) {
     process.stdout.write(run('pwsh', ['-NoProfile', '-File', script, action, ...options], tokenLine));
     return;
   }
-  // A POSIX machine gets the script first, then runs it with the token on standard input.
-  // POSIX 机器先收到脚本，再以标准输入上的令牌运行它。
+  // A POSIX machine gets the script first, then runs it with the token on standard input. Registering passes the
+  // toolchain versions, which a Rosetta runner (macos-x64 on Apple silicon) installs as x86_64.
+  // POSIX 机器先收到脚本，再以标准输入上的令牌运行它。注册时传入工具链版本，Rosetta 运行器（Apple 芯片上的
+  // macos-x64）据此安装 x86_64 工具链。
+  if (command === 'register') {
+    const { node, rust } = toolchainVersions();
+    options.push('--node', node, '--rust', rust);
+  }
   const shell = shellFor(where);
   const script = '"$HOME/.vulcan-self-hosted-runner.sh"';
   run(shell[0], [...shell.slice(1), `cat > ${script}`], readFileSync(new URL('./self-hosted-runner.sh', import.meta.url), 'utf8'));

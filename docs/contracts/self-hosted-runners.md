@@ -118,8 +118,22 @@ node scripts/ci-runners.mjs unregister <位置> [--dir <目录>]
 记录的 `.path`。令牌不打印、不写入命令行历史。无法 SSH 时，
 可在机器上直接运行该脚本，并从标准输入提供在仓库 Settings → Actions → Runners 页面取得的令牌。
 
-用 Apple 芯片机器服务 `macos-x64` 池时须让整个作业在 Rosetta 下运行（x86_64 的 Node 与 Rust 工具链）；
-构建脚本按宿主平台选择产物，交叉编译不受支持。
+**Apple 芯片机器服务 `macos-x64` 池（Rosetta 运行器）。** 构建脚本按宿主平台选择产物（Node、Electron、浏览器、
+LuaJIT 与运行时布局均取宿主架构），交叉编译不受支持，因此整个作业须在 Rosetta 下以 x86_64 运行。在 Apple 芯片
+Mac 上 `register <位置> macos-x64` 自动按此安装，可与同一用户的原生 `macos-arm64` 运行器并存：
+- 前置条件：机器使用者先安装 Rosetta（`sudo softwareupdate --install-rosetta --agree-to-license`）。
+- 安装 `osx-x64` 运行器，目录默认为 `~/actions-runner/vulcan-code-x64`；移除时以
+  `unregister <位置> --dir ~/actions-runner/vulcan-code-x64` 指定该目录。
+- 安装 x86_64 rustup（`~/.cargo-x64`、`~/.rustup-x64`，按其 `.sha256` 校验，默认工具链取 `rust-toolchain.toml`）
+  与 x86_64 Node（`~/.local/opt`，按 `SHASUMS256.txt` 校验，链接到 `~/.local/x64/bin`），两者放在 `.path` 最前，
+  并在运行器 `.env` 写入 `CARGO_HOME` 与 `RUSTUP_HOME`，使作业使用 x86_64 目录而不触及原生工具链。已存在时保留，
+  重新注册不会再次下载；运行器的 `_work`（含 `target/`）在移除后保留，重新注册可继续复用。
+- 标记文件 `.rosetta` 使 `start.sh` 以 `arch -x86_64 ./run.sh` 启动，作业运行的通用程序因此都取 x86_64。
+- 发布作业在自托管 Mac 上先检查 shell、Node 与 `rustc` 宿主都是该平台的架构（`macos-x64` 为 x86_64，
+  `macos-arm64` 为 arm64），不符即失败，避免产出错误架构的归档。
+
+没有运行器在线时 `auto` 选择托管镜像（`macos-x64` 为 `macos-15-intel`、`macos-arm64` 为 `macos-15`），与引入池之前
+相同；Rosetta 运行器只影响它在线时的选择。
 
 ## 安全
 
