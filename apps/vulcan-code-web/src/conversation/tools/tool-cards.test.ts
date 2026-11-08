@@ -16,7 +16,14 @@ import { extractReport, searchReport, sourceParts } from "./cards/web-cards";
 import { formatToolDuration, readToolCall, toolCardState } from "./tool-call";
 import { resolveToolCard, toolCallFamily } from "./tool-call-card";
 import { readRequestPreview, requestToolCall } from "./tool-request";
-import { summarizeToolSequence, toolSequenceEntry } from "./tool-sequence";
+import {
+  summarizeToolSequence,
+  TOOL_STRIP_FULL_TICKS,
+  TOOL_STRIP_PER_CALL_MAX,
+  toolSequenceEntry,
+  toolStripLayout,
+  type ToolSequenceEntry,
+} from "./tool-sequence";
 import { fileDiffRows, fileFirstEditLines, fileLineCounts } from "./views/change-set";
 import { parseTerminalText } from "./views/terminal-view";
 
@@ -211,6 +218,26 @@ describe("tool sequence summary", () => {
       toolSequenceEntry(undefined, false),
     ]);
     expect(summary).toEqual({ active: 1, families: [["read", 1], ["edit", 1], ["run", 2], ["other", 1]], unsuccessful: 1 });
+  });
+
+  it("narrows the strip past the full-tick count and merges runs past the per-call limit", () => {
+    const calls = (count: number): ToolSequenceEntry[] => Array.from({ length: count }, (_, index) => ({ family: index % 4 < 2 ? "read" : "run", state: "done" }));
+    expect(toolStripLayout(calls(TOOL_STRIP_FULL_TICKS)).density).toBe("ticks");
+    const compact = toolStripLayout(calls(TOOL_STRIP_FULL_TICKS + 1));
+    expect(compact.density).toBe("compact");
+    expect(compact.cells).toHaveLength(TOOL_STRIP_FULL_TICKS + 1);
+
+    const entries = calls(TOOL_STRIP_PER_CALL_MAX + 2);
+    entries[5] = { family: "read", state: "failed" };
+    const runs = toolStripLayout(entries);
+    expect(runs.density).toBe("runs");
+    expect(runs.cells.reduce((sum, cell) => sum + cell.count, 0)).toBe(entries.length);
+    expect(runs.cells.slice(0, 4)).toEqual([
+      { count: 2, family: "read", state: "done" },
+      { count: 2, family: "run", state: "done" },
+      { count: 1, family: "read", state: "done" },
+      { count: 1, family: "read", state: "failed" },
+    ]);
   });
 });
 

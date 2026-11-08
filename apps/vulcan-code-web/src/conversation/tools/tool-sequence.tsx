@@ -2,6 +2,7 @@
 // how many calls each family made, and how many did not succeed, so a closed group still says what happened.
 // 连续工具调用折叠组的标题：每次调用一格、按家族与状态着色，并给出调用总数、各家族次数与未成功次数，
 // 让收起的分组仍能说明发生了什么。
+import type { CSSProperties } from "react";
 import { ChevronRight } from "lucide-react";
 import { useI18n } from "@/i18n";
 import type { ToolCallEvent } from "@/service/conversation-event-display-projection";
@@ -59,6 +60,53 @@ export function summarizeToolSequence(entries: readonly ToolSequenceEntry[]): To
   };
 }
 
+// TOOL_STRIP_FULL_TICKS is the most calls the strip shows as full-size ticks; its width is also the strip's
+// fixed width once a sequence grows past it.
+// TOOL_STRIP_FULL_TICKS 是格子条以完整尺寸显示的最大调用数；序列超过它后，该宽度即格子条的固定宽度。
+export const TOOL_STRIP_FULL_TICKS = 30;
+// TOOL_STRIP_PER_CALL_MAX is the most calls the fixed-width strip still gives one narrowed tick each; past it,
+// consecutive calls of the same family and state merge into one proportional segment.
+// TOOL_STRIP_PER_CALL_MAX 是固定宽度格子条仍为每次调用保留一个收窄格子的最大调用数；超过后，
+// 家族与状态都相同的连续调用合并为一段按次数分配宽度的色段。
+export const TOOL_STRIP_PER_CALL_MAX = 90;
+
+// ToolStripCell is one drawn cell: one call, or a run of consecutive calls sharing family and state.
+// ToolStripCell 是一个绘制单元：一次调用，或家族与状态相同的一串连续调用。
+export interface ToolStripCell extends ToolSequenceEntry {
+  // Calls the cell stands for.
+  // 该单元代表的调用数。
+  count: number;
+}
+
+// ToolStripLayout is how the strip draws a sequence.
+// ToolStripLayout 是格子条绘制一个序列的方式。
+export interface ToolStripLayout {
+  // "ticks": full-size ticks; "compact": one narrowed tick per call in the fixed width; "runs": merged segments.
+  // "ticks"：完整尺寸格子；"compact"：固定宽度内每次调用一个收窄格子；"runs"：合并后的色段。
+  density: "ticks" | "compact" | "runs";
+  // Cells in call order.
+  // 按调用顺序排列的单元。
+  cells: ToolStripCell[];
+}
+
+// toolStripLayout picks the density for a sequence so the strip never grows past the full-tick width.
+// toolStripLayout 为序列选择密度，使格子条永远不超过完整格子的宽度。
+export function toolStripLayout(entries: readonly ToolSequenceEntry[]): ToolStripLayout {
+  if (entries.length <= TOOL_STRIP_PER_CALL_MAX) {
+    return {
+      cells: entries.map((entry) => ({ ...entry, count: 1 })),
+      density: entries.length <= TOOL_STRIP_FULL_TICKS ? "ticks" : "compact",
+    };
+  }
+  const cells: ToolStripCell[] = [];
+  for (const entry of entries) {
+    const last = cells.at(-1);
+    if (last && last.family === entry.family && last.state === entry.state) last.count += 1;
+    else cells.push({ ...entry, count: 1 });
+  }
+  return { cells, density: "runs" };
+}
+
 /** Renders the toggle that opens or closes a folded tool sequence.
  * 渲染展开或收起工具序列折叠组的切换头。 */
 export function ToolSequenceHead(props: {
@@ -74,6 +122,7 @@ export function ToolSequenceHead(props: {
 }) {
   const { t } = useI18n();
   const summary = summarizeToolSequence(props.entries);
+  const strip = toolStripLayout(props.entries);
   const total = props.entries.length;
   const title = summary.active > 0
     ? t("conversation.toolSequence.runningSummary").replace("{completed}", String(total - summary.active)).replace("{running}", String(summary.active))
@@ -87,8 +136,15 @@ export function ToolSequenceHead(props: {
       type="button"
     >
       <ChevronRight aria-hidden="true" className="vk-tools-chev" />
-      <span aria-hidden="true" className="vk-tools-strip">
-        {props.entries.map((entry, index) => <i data-family={entry.family} data-state={entry.state} key={index} />)}
+      <span
+        aria-hidden="true"
+        className="vk-tools-strip"
+        data-density={strip.density}
+        style={{ "--vk-strip-cap": TOOL_STRIP_FULL_TICKS, "--vk-strip-cells": strip.cells.length } as CSSProperties}
+      >
+        {strip.cells.map((cell, index) => (
+          <i data-family={cell.family} data-state={cell.state} key={index} style={cell.count > 1 ? { flexGrow: cell.count } : undefined} />
+        ))}
       </span>
       <b>{title}</b>
       {summary.families.length > 1 ? (

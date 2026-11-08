@@ -537,8 +537,22 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 .vk-tools-families { display: inline-flex; flex-wrap: wrap; gap: calc(var(--vk-u) * 2.5); font-variant-numeric: tabular-nums; }
 .vk-tools-families > span { display: inline-flex; align-items: center; gap: calc(var(--vk-u) * 1); }
 .vk-tools-families > span::before { content: ""; width: calc(var(--vk-u) * 1.5); height: calc(var(--vk-u) * 1.5); background: var(--vk-fam); }
-.vk-tools-strip { display: inline-flex; gap: 2px; }
-.vk-tools-strip > i { width: calc(var(--vk-u) * 2); height: calc(var(--vk-u) * 1.5); background: var(--vk-fam); opacity: 0.85; }
+.vk-tools-strip { --vk-strip-tick: calc(var(--vk-u) * 2); --vk-strip-gap: 2px; display: inline-flex; gap: var(--vk-strip-gap); }
+.vk-tools-strip > i { flex: none; width: var(--vk-strip-tick); height: calc(var(--vk-u) * 1.5); background: var(--vk-fam); opacity: 0.85; }
+/* Past the full-tick count the strip keeps the width those ticks fill and narrows its cells instead of growing.
+   超过完整格子数后，格子条保持这些格子占满的宽度，改为收窄单元而不再变长。 */
+.vk-tools-strip:not([data-density="ticks"]) {
+  flex: 0 1 auto;
+  width: min(calc(var(--vk-strip-cap) * var(--vk-strip-tick) + (var(--vk-strip-cap) - 1) * var(--vk-strip-gap)), 100%);
+  min-width: 0;
+  overflow: hidden;
+}
+.vk-tools-strip:not([data-density="ticks"]) > i { flex: 1 1 0; width: auto; min-width: 0; }
+.vk-tools-strip[data-density="compact"] { gap: 1px; }
+.vk-tools-strip[data-density="runs"] { gap: 0; }
+/* Merged segments keep calls that did not finish normally visible however short their run.
+   合并色段中未正常结束的调用无论多短都保持可见。 */
+.vk-tools-strip[data-density="runs"] > i:not([data-state="done"]) { min-width: 2px; }
 .vk-tools-strip > i[data-state="running"] { animation: vk-pulse 1.4s ease-in-out infinite; }
 .vk-tools-strip > i[data-state="failed"],
 .vk-tools-strip > i[data-state="denied"] { background: var(--vk-bad); }
