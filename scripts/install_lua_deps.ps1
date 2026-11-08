@@ -26,6 +26,15 @@ if ($PSVersionTable.PSEdition -ne "Core") {
 $ProjectDir = Split-Path $PSScriptRoot -Parent
 Set-Location $ProjectDir
 
+# HttpRetry repeats a GitHub request that failed with a 4xx or 5xx: release downloads answer 504 in bursts that can
+# last several minutes. Windows PowerShell 5.1 has no retry parameters and requests once.
+# HttpRetry 在 GitHub 请求以 4xx 或 5xx 失败时重试：发布下载会成串地返回 504，可持续数分钟。Windows PowerShell 5.1
+# 没有重试参数，只请求一次。
+$HttpRetry = @{}
+if ($PSVersionTable.PSEdition -eq "Core") {
+    $HttpRetry = @{ MaximumRetryCount = 6; RetryIntervalSec = 60 }
+}
+
 # LuaRuntimeRepo stores the GitHub repository that publishes runtime package assets.
 # LuaRuntimeRepo 保存发布 runtime package 资产的 GitHub 仓库。
 $LuaRuntimeRepo = "LuaSkills/luaskills-packages"
@@ -165,7 +174,7 @@ function Resolve-ReleaseTagForSeries {
     }
 
     $ApiUrl = "https://api.github.com/repos/$Repo/releases?per_page=100"
-    $Releases = Invoke-RestMethod -Uri $ApiUrl -UseBasicParsing -Headers (Get-GitHubApiHeaders)
+    $Releases = Invoke-RestMethod -Uri $ApiUrl -UseBasicParsing -Headers (Get-GitHubApiHeaders) @HttpRetry
     $Matches = @()
 
     foreach ($Release in $Releases) {
@@ -316,7 +325,7 @@ function Get-ReleaseAssetInfo {
     )
 
     $ApiUrl = "https://api.github.com/repos/$Repo/releases/tags/$Tag"
-    $Release = Invoke-RestMethod -Uri $ApiUrl -UseBasicParsing -Headers (Get-GitHubApiHeaders)
+    $Release = Invoke-RestMethod -Uri $ApiUrl -UseBasicParsing -Headers (Get-GitHubApiHeaders) @HttpRetry
     $Asset = $Release.assets | Where-Object { $_.name -eq $AssetName } | Select-Object -First 1
     if (-not $Asset) {
         $Available = ($Release.assets | ForEach-Object { $_.name }) -join ", "
@@ -369,7 +378,7 @@ function Save-ReleaseAssetWithDigest {
 
     Write-Host "==> Downloading asset: $($AssetInfo.Url)"
     try {
-        Invoke-WebRequest -Uri $AssetInfo.Url -OutFile $ArchivePath -UseBasicParsing
+        Invoke-WebRequest -Uri $AssetInfo.Url -OutFile $ArchivePath -UseBasicParsing @HttpRetry
     } catch {
         throw "Failed to download runtime asset '$AssetName' from $Repo@$Tag. Confirm that the LuaSkills runtime assets have been published for this tag. Original error: $($_.Exception.Message)"
     }
