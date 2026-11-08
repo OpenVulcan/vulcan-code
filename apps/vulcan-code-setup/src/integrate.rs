@@ -785,13 +785,21 @@ const BUNDLE_EXECUTABLE: &str = "vulcan-code";
 /// 应用程序包的图标文件，位于 `Contents/Resources` 下。
 const BUNDLE_ICON: &str = "AppIcon.icns";
 
-/// The application icon of a macOS desktop program `.../Electron.app/Contents/MacOS/Electron`:
+/// The macOS application icon of a desktop program `.../Electron.app/Contents/MacOS/Electron`:
 /// `scripts/desktop-runtime.mjs` copies it beside `gui/` in `Contents/Resources/app`, where the
-/// desktop app reads it for the Dock (`app-icon.ts`).
-/// macOS 桌面程序 `.../Electron.app/Contents/MacOS/Electron` 的应用图标：`scripts/desktop-runtime.mjs`
-/// 将其复制到 `Contents/Resources/app` 中 `gui/` 旁，桌面应用从此处读取程序坞图标（`app-icon.ts`）。
+/// desktop app reads it for the Dock (`MACOS_ICON_FILE` in `app-icon.ts`). Its artwork sits on
+/// Apple's icon grid, so the bundle shows it at the size of other applications' icons.
+/// macOS 桌面程序 `.../Electron.app/Contents/MacOS/Electron` 的 macOS 应用图标：
+/// `scripts/desktop-runtime.mjs` 将其复制到 `Contents/Resources/app` 中 `gui/` 旁，桌面应用从此处读取
+/// 程序坞图标（`app-icon.ts` 的 `MACOS_ICON_FILE`）。其图形位于 Apple 图标网格上，使应用包以与其他
+/// 应用图标相同的大小显示它。
 fn desktop_icon(program: &Path) -> Option<PathBuf> {
-    Some(program.parent()?.parent()?.join("Resources/app/icon.png"))
+    Some(
+        program
+            .parent()?
+            .parent()?
+            .join("Resources/app/icon-macos.png"),
+    )
 }
 
 /// Writes the macOS application bundle that starts `program`.
@@ -1319,6 +1327,18 @@ mod tests {
     }
 
     #[test]
+    fn the_packaged_macos_icon_makes_a_bundle_icon() {
+        let asset = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../vulcan-code-service/icons/icon-macos.png");
+        let png = std::fs::read(&asset).expect("macOS icon asset");
+        assert!(
+            icns_from_png(&png).is_some(),
+            "{} is not an icon size",
+            asset.display()
+        );
+    }
+
+    #[test]
     fn the_bundle_carries_the_icon_of_its_program() {
         let temp = tempfile::tempdir().expect("temp dir");
         let app = temp.path().join("Electron.app/Contents");
@@ -1339,7 +1359,7 @@ mod tests {
         );
 
         std::fs::create_dir_all(app.join("Resources/app")).expect("app dir");
-        std::fs::write(app.join("Resources/app/icon.png"), png(512)).expect("icon");
+        std::fs::write(app.join("Resources/app/icon-macos.png"), png(512)).expect("icon");
         write_bundle_files(&bundle, &program).expect("bundle with icon");
         assert_eq!(
             std::fs::read(&icon).expect("icns"),

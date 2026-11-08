@@ -508,9 +508,12 @@ async function main() {
   // 即使应用使用 ESM，沙箱 Electron 仍需要位于 gui/ 同级目录的 CommonJS 预加载入口。
   await cp(path.join(desktop, 'dist/preload.cjs'), path.join(appRoot, 'preload.cjs'));
   await writeFile(path.join(appRoot, 'desktop-entry.js'), "import './gui/main.js';\n");
-  // Linux windows and the macOS Dock read the application icon beside gui/ (`app-icon.ts`).
-  // Linux 窗口与 macOS 程序坞从 gui/ 旁读取应用图标（`app-icon.ts`）。
-  await cp(path.join(repository, 'apps/vulcan-code-service/icons/icon.png'), path.join(appRoot, 'icon.png'));
+  // Linux windows read the application icon beside gui/, and the macOS Dock and launcher bundle its
+  // variant on Apple's icon grid (`app-icon.ts`).
+  // Linux 窗口从 gui/ 旁读取应用图标，macOS 程序坞与启动器应用包读取其位于 Apple 图标网格上的版本（`app-icon.ts`）。
+  for (const icon of ['icon.png', 'icon-macos.png']) {
+    await cp(path.join(repository, 'apps/vulcan-code-service/icons', icon), path.join(appRoot, icon));
+  }
   // The workbench window shows the startup page from startup/ beside gui/ before Core serves the WebUI
   // (`startup-surface.ts`).
   // 工作台窗口在 Core 提供 WebUI 之前，从 gui/ 旁的 startup/ 显示启动页（`startup-surface.ts`）。
