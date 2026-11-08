@@ -899,18 +899,32 @@ function math(args: string, body: string): AnswerComponent | null {
   return { kind: "math", title: args || undefined, equations, symbols };
 }
 
+// One decision option line: `* text` (recommended) or `- text`. Models also write the recommendation as `*text`
+// without the space; a line wrapped in or opening with emphasis (`*Q?*`, `**Q?**`) stays text.
+// 一个决策选项行：`* 文字`（建议项）或 `- 文字`。模型也会把建议项写成不带空格的 `*文字`；以强调包裹或开头的行
+// （`*Q?*`、`**Q?**`）仍是文字。
+function decisionOption(line: string): { recommended: boolean; text: string } | null {
+  if (line.startsWith("* ") || line.startsWith("- ")) return { recommended: line.startsWith("*"), text: line.slice(2) };
+  if (line.startsWith("*") && !line.startsWith("**") && !line.endsWith("*")) return { recommended: true, text: line.slice(1) };
+  return null;
+}
+
 // `ui-decision [multi]`: the question line, then option lines `* label | note` (the recommended option) or
-// `- label | note`. Labels are unique; a single choice recommends at most one option.
-// `ui-decision [multi]`：问题行，然后是选项行 `* 标签 | 说明`（建议选项）或 `- 标签 | 说明`。标签不可重复；单选最多建议一个选项。
+// `- label | note`. Labels are unique; a single choice recommends at most one option. A body whose first line is
+// already an option has no question.
+// `ui-decision [multi]`：问题行，然后是选项行 `* 标签 | 说明`（建议选项）或 `- 标签 | 说明`。标签不可重复；单选最多
+// 建议一个选项。首行已是选项时没有问题行。
 function decision(multiple: boolean, body: string): AnswerComponent | null {
-  const [question = "", ...lines] = body.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
-  if (/^[*-] /u.test(question) || lines.length < 2 || lines.length > ANSWER_COMPONENT_MAX_ROWS) return null;
+  const rows = body.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
+  const question = rows.length > 0 && decisionOption(rows[0]) === null ? rows[0] : "";
+  const lines = question ? rows.slice(1) : rows;
+  if (lines.length < 2 || lines.length > ANSWER_COMPONENT_MAX_ROWS) return null;
   const options: AnswerDecisionOption[] = [];
   for (const line of lines) {
-    const marker = line.slice(0, 2);
-    const cells = marker === "* " || marker === "- " ? rowCells(line.slice(2), 1, 2) : null;
-    if (cells === null || options.some((option) => option.label === cells[0])) return null;
-    options.push({ label: cells[0], note: cells[1], recommended: marker === "* " });
+    const option = decisionOption(line);
+    const cells = option ? rowCells(option.text, 1, 2) : null;
+    if (option === null || cells === null || options.some((item) => item.label === cells[0])) return null;
+    options.push({ label: cells[0], note: cells[1], recommended: option.recommended });
   }
   if (!multiple && options.filter((option) => option.recommended).length > 1) return null;
   return { kind: "decision", multiple, question, options };

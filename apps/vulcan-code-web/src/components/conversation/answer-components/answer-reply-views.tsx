@@ -119,7 +119,9 @@ export function AnswerDecisionView({ decision, replyKey }: { decision: Extract<A
   const editor = useNoteEditor(note, live);
   const save = (nextPicks: string[], nextNote: string) => live?.set(replyKey!, nextPicks.length > 0 || nextNote.trim() ? {
     kind: "decision",
-    question: decision.question,
+    // A decision without a question line is named in the reply by its options.
+    // 没有问题行的决策在回复中以其选项命名。
+    question: decision.question || decision.options.map((option) => option.label).join(" / "),
     picks: nextPicks,
     recommended: decision.options.filter((option) => option.recommended).map((option) => option.label),
     note: nextNote,
@@ -136,7 +138,7 @@ export function AnswerDecisionView({ decision, replyKey }: { decision: Extract<A
         {decision.multiple ? <small>{t("answerComponents.decision.multiple")}</small> : null}
         {live ? <CommentButton active={editor.visible} onClick={editor.show} /> : null}
       </header>
-      <div aria-label={decision.question} className="vk-a-decision-options" role={decision.multiple ? "group" : "radiogroup"}>
+      <div aria-label={decision.question || undefined} className="vk-a-decision-options" role={decision.multiple ? "group" : "radiogroup"}>
         {decision.options.map((option) => {
           const picked = picks.includes(option.label);
           return (

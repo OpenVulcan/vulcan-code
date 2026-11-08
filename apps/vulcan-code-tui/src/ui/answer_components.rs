@@ -1413,45 +1413,61 @@ fn math(args: &str, lines: &[&str]) -> Option<String> {
     Some(output)
 }
 
+/// One decision option line: `* text` (recommended) or `- text`. Models also write the recommendation as
+/// `*text` without the space; a line wrapped in or opening with emphasis (`*Q?*`, `**Q?**`) stays text.
+/// 一个决策选项行：`* 文字`（建议项）或 `- 文字`。模型也会把建议项写成不带空格的 `*文字`；以强调包裹或开头的行
+/// （`*Q?*`、`**Q?**`）仍是文字。
+fn decision_option(line: &str) -> Option<(bool, &str)> {
+    if let Some(text) = line.strip_prefix("* ") {
+        return Some((true, text));
+    }
+    if let Some(text) = line.strip_prefix("- ") {
+        return Some((false, text));
+    }
+    let text = line.strip_prefix('*')?;
+    (!text.starts_with('*') && !text.ends_with('*')).then_some((true, text))
+}
+
 /// `ui-decision [multi]`: the question in bold, then one bullet per option with the recommended option starred.
-/// The terminal shows the choice read-only; the reader answers in their own message.
-/// `ui-decision [multi]`：问题加粗，随后每个选项一条，建议选项带星标。终端以只读方式显示，读者在自己的消息中作答。
+/// A body whose first line is already an option has no question. The terminal shows the choice read-only; the
+/// reader answers in their own message.
+/// `ui-decision [multi]`：问题加粗，随后每个选项一条，建议选项带星标。首行已是选项时没有问题行。终端以只读方式显示，
+/// 读者在自己的消息中作答。
 fn decision(args: &str, lines: &[&str]) -> Option<String> {
     let multiple = match args {
         "" => false,
         "multi" => true,
         _ => return None,
     };
-    let mut rows = lines
+    let rows: Vec<&str> = lines
         .iter()
         .map(|line| line.trim())
-        .filter(|line| !line.is_empty());
-    let question = rows.next()?;
-    let options: Vec<&str> = rows.collect();
-    if question.starts_with("* ")
-        || question.starts_with("- ")
-        || options.len() < 2
-        || options.len() > ANSWER_COMPONENT_MAX_ROWS
-    {
+        .filter(|line| !line.is_empty())
+        .collect();
+    let question = rows
+        .first()
+        .copied()
+        .filter(|first| decision_option(first).is_none());
+    let options = &rows[usize::from(question.is_some())..];
+    if options.len() < 2 || options.len() > ANSWER_COMPONENT_MAX_ROWS {
         return None;
     }
-    let mut output = format!("**{question}**");
+    let mut output = question.map_or(String::new(), |question| format!("**{question}**"));
     if multiple {
         output.push_str(&format!(
             " _({})_",
             tr!("answerComponents.decision.multiple")
         ));
     }
-    output.push_str("\n\n");
+    output = output.trim_start().to_owned();
+    if !output.is_empty() {
+        output.push_str("\n\n");
+    }
     let mut labels = Vec::new();
     let mut recommended = 0;
     for option in options {
-        let starred = match option.get(..2)? {
-            "* " => true,
-            "- " => false,
-            _ => return None,
-        };
-        let cell = row_cells(option.get(2..)?, 1, 2)?;
+        let (starred, text) = decision_option(option)?;
+        let cell = row_cells(text, 1, 2)?;
         if labels.contains(&cell[0]) {
             return None;
         }

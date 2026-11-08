@@ -322,8 +322,20 @@ describe("parseAnswerComponent", () => {
     expect(parse("ui-decision", "Q?\nA\n- B")).toBeNull();
     expect(parse("ui-decision", "Q?\n- A\n- A")).toBeNull();
     expect(parse("ui-decision", "Q?\n* A\n* B")).toBeNull();
-    expect(parse("ui-decision", "- Q?\n- A\n- B")).toBeNull();
+    expect(parse("ui-decision", "*Q?*\n- A")).toBeNull();
     expect(parse("ui-decision single", "Q?\n- A\n- B")).toBeNull();
+  });
+
+  it("accepts a recommendation without the space after its star and a decision without a question line", () => {
+    expect(parse("ui-decision", "*Clean | Back up first\n- Install Node\n- Leave it")).toEqual({
+      kind: "decision", multiple: false, question: "", options: [
+        { label: "Clean", note: "Back up first", recommended: true },
+        { label: "Install Node", note: undefined, recommended: false },
+        { label: "Leave it", note: undefined, recommended: false },
+      ],
+    });
+    expect(parse("ui-decision", "Next?\n*A\n- B")).toMatchObject({ question: "Next?", options: [{ label: "A", recommended: true }, { label: "B" }] });
+    expect(parse("ui-decision", "**Next?**\n- A\n- B")).toMatchObject({ question: "**Next?**" });
   });
 
   it("parses code excerpts with ranges, single lines, drive letters, highlights and notes", () => {

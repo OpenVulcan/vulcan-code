@@ -845,6 +845,10 @@ A[Plan] --> B[Build]";
         assert!(joined("```ui-decision multi\nAlso?\n* A\n* B\n```").contains("☐ B ★"));
         assert!(joined("```ui-decision\nQ?\n* A\n* B\n```").contains("ui-decision"));
         assert!(joined("```ui-decision\nQ?\n- A\n- A\n```").contains("ui-decision"));
+        let bare = joined("```ui-decision\n*Clean | backup\n- Node\n- Leave\n```");
+        assert!(!bare.contains("ui-decision") && bare.contains("○ Clean — backup ★"));
+        assert!(bare.contains("○ Node") && !bare.contains("Clean |"));
+        assert!(joined("```ui-decision\n*Q?*\n- A\n```").contains("ui-decision"));
     }
 
     #[test]
