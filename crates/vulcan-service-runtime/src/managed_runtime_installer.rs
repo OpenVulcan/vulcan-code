@@ -938,6 +938,50 @@ where
     Ok(())
 }
 
+/// Waits before each repeated request of the same URL after a transient failure (a connection error, a timeout,
+/// 429 or a 5xx): GitHub release downloads answer 504 in bursts that can last several minutes.
+/// 同一地址在暂时性失败（连接错误、超时、429 或 5xx）后每次重试前的等待；GitHub 发布下载会成串地返回 504，可持续数分钟。
+const DOWNLOAD_RETRY_DELAYS: [Duration; 5] = [
+    Duration::from_secs(5),
+    Duration::from_secs(20),
+    Duration::from_secs(60),
+    Duration::from_secs(120),
+    Duration::from_secs(240),
+];
+
+/// Request `url` and return its successful response, repeating the same request after each delay while the failure
+/// is transient; any other failure, or the last transient one, is returned at once. Another URL is never tried.
+/// 请求 `url` 并返回成功响应；失败为暂时性时按每个等待重试同一请求，其他失败或最后一次暂时性失败立即返回；绝不改用其他地址。
+fn send_with_retries(
+    client: &Client,
+    url: &str,
+    delays: &[Duration],
+) -> Result<reqwest::blocking::Response, String> {
+    let mut attempt = 0;
+    loop {
+        match client
+            .get(url)
+            .send()
+            .and_then(reqwest::blocking::Response::error_for_status)
+        {
+            Ok(response) => return Ok(response),
+            Err(error) => {
+                let transient = error.is_connect()
+                    || error.is_timeout()
+                    || error.status().is_some_and(|status| {
+                        status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                    });
+                let Some(delay) = delays.get(attempt).filter(|_| transient) else {
+                    return Err(format!("failed to download {url}: {error}"));
+                };
+                eprintln!("[vulcan-code-service] retrying {url} after: {error}");
+                std::thread::sleep(*delay);
+                attempt += 1;
+            }
+        }
+    }
+}
+
 /// Download one HTTP resource to a partial file and atomically publish it with throttled progress.
 /// 把一个 HTTP 资源下载到临时文件，并在节流进度更新下原子发布。
 #[allow(clippy::too_many_arguments)]
@@ -975,11 +1019,7 @@ where
     remove_path_if_exists(&partial_path)?;
     // response is the successful official HTTP body after redirect handling.
     // response 是处理重定向后的成功官方 HTTP 响应体。
-    let mut response = client
-        .get(url)
-        .send()
-        .and_then(reqwest::blocking::Response::error_for_status)
-        .map_err(|error| format!("failed to download {url}: {error}"))?;
+    let mut response = send_with_retries(client, url, &DOWNLOAD_RETRY_DELAYS)?;
     // total_bytes is the server-declared body size when available.
     // total_bytes 是服务器声明的响应体大小（如可用）。
     let total_bytes = response.content_length();
@@ -1692,6 +1732,49 @@ fn relative_path_text(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Serve one HTTP status per accepted connection, in order, and return the server's base URL.
+    /// 每个接受的连接按顺序返回一个 HTTP 状态，并返回服务器基础地址。
+    fn serve_statuses(statuses: Vec<u16>) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a local port");
+        let address = listener.local_addr().expect("local address");
+        std::thread::spawn(move || {
+            for status in statuses {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                let mut request = [0_u8; 4096];
+                let _ = stream.read(&mut request);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status} X\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok"
+                );
+            }
+        });
+        format!("http://{address}/asset")
+    }
+
+    /// Verify transient statuses repeat the same request until it succeeds, and other statuses fail at once.
+    /// 验证暂时性状态会重试同一请求直至成功，其他状态立即失败。
+    #[test]
+    fn downloads_repeat_only_transient_failures() {
+        let client = Client::new();
+        let delays = [Duration::ZERO; 2];
+        let url = serve_statuses(vec![504, 429, 200]);
+        assert!(send_with_retries(&client, &url, &delays).is_ok());
+        let url = serve_statuses(vec![503, 503, 503]);
+        assert!(
+            send_with_retries(&client, &url, &delays)
+                .expect_err("three transient failures exhaust two retries")
+                .contains("503")
+        );
+        let url = serve_statuses(vec![404, 200]);
+        assert!(
+            send_with_retries(&client, &url, &delays)
+                .expect_err("404 is not repeated")
+                .contains("404")
+        );
+    }
 
     /// Verify every published platform maps to exact official asset names.
     /// 验证每个已发布平台都会映射到精确官方资产名。
