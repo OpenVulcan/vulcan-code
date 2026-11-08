@@ -14,10 +14,10 @@ export function verifyBytes(bytes, sha256) {
 }
 
 // RETRY_DELAYS_MS are the waits before each repeated request of the same locked URL after a transient failure (a
-// network error, 429 or a 5xx): GitHub release downloads intermittently answer 504 for a few seconds.
-// RETRY_DELAYS_MS 是同一锁定地址在暂时性失败（网络错误、429 或 5xx）后每次重试前的等待；GitHub 发布下载会间歇性
-// 地在数秒内返回 504。
-export const RETRY_DELAYS_MS = [5_000, 20_000, 60_000];
+// network error, 429 or a 5xx): GitHub release downloads answer 504 in bursts that can last several minutes.
+// RETRY_DELAYS_MS 是同一锁定地址在暂时性失败（网络错误、429 或 5xx）后每次重试前的等待；GitHub 发布下载会成串地
+// 返回 504，可持续数分钟。
+export const RETRY_DELAYS_MS = [5_000, 20_000, 60_000, 120_000, 240_000];
 
 // fetchLocked requests `url`, repeating it after each delay while the failure is transient; any other status, or the
 // last transient one, is returned or thrown to the caller.
