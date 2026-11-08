@@ -68,7 +68,7 @@ export default function SetupGuideDialog(props: SetupGuideDialogProps) {
   const { t } = useI18n();
   const [snapshot, setSnapshot] = React.useState<PermissionJudgeSettingsSnapshot | null>(null);
   const [loadError, setLoadError] = React.useState<string | null>(null);
-  const [choice, setChoice] = React.useState<Choice>("local");
+  const [pickedChoice, setPickedChoice] = React.useState<Choice | null>(null);
   const [busy, setBusy] = React.useState<string | null>(null);
   const [failure, setFailure] = React.useState<Failure | null>(null);
   // apiConfigured tells whether an API decision route is saved, as reported by its section.
@@ -77,6 +77,11 @@ export default function SetupGuideDialog(props: SetupGuideDialogProps) {
   // signedIn tells whether the OpenVulcan account the cloud judge uses is signed in.
   // signedIn 表示云端判定所用的 OpenVulcan 账户是否已登录。
   const signedIn = React.useContext(OpenVulcanAccountContext)?.snapshot?.connected === true;
+  // choice is the answer picked here; until then it is only the shown default, never a saved value:
+  // the cloud judge while the account is signed in and no judge is configured, else the local model.
+  // choice 是此处选择的答案；选择之前只是显示的默认项，绝不写入设置：账户已登录且尚未配置判定时为
+  // 云端判定，否则为本机模型。
+  const choice: Choice = pickedChoice ?? (signedIn && snapshot?.backend === null ? "cloud" : "local");
   // edgeModels is the cloud model list, read while the cloud answer is chosen and the account is
   // signed in; edgeRead drops answers of superseded reads. pickedEdgeModel is the model picked here.
   // edgeModels 是云端模型清单，在选中云端答案且账户已登录时读取；edgeRead 丢弃已被取代的读取结果。
@@ -173,7 +178,7 @@ export default function SetupGuideDialog(props: SetupGuideDialogProps) {
             ? <SettingsErrorNotice detail={loadError} message={t("settings.permissionJudge.loadFailed")} />
             : <StreamPlaceholder label={t("ui.loading")} shape="rows" count={3} />
           : <>
-            <RadioGroup className="vk-form-choices" value={choice} onValueChange={(value) => setChoice(value as Choice)} disabled={busy !== null}>
+            <RadioGroup className="vk-form-choices" value={choice} onValueChange={(value) => setPickedChoice(value as Choice)} disabled={busy !== null}>
               {CHOICES.map((option) => (
                 <label key={option.value} className="vk-form-choice" data-setup-choice={option.value}>
                   <RadioGroupItem value={option.value} />

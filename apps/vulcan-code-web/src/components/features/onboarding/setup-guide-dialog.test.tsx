@@ -110,6 +110,41 @@ async function mount(initial: PermissionJudgeSettingsSnapshot, onOpenChange = vi
   return onOpenChange;
 }
 
+// checkedChoice reports which answer the radio group shows as selected.
+// checkedChoice 报告单选组当前显示为选中的答案。
+function checkedChoice(): string | null {
+  return document.body.querySelector('[data-setup-choice] [role="radio"][aria-checked="true"]')
+    ?.closest("[data-setup-choice]")?.getAttribute("data-setup-choice") ?? null;
+}
+
+// Signed in with no judge configured, the guide preselects the cloud judge and reads its models,
+// but saves nothing until the user confirms.
+// 已登录且尚未配置判定时，引导预先选中云端判定并读取其模型，但在用户确认前不保存任何内容。
+it("preselects the cloud judge when the account is signed in", async () => {
+  service.loadPermissionJudgeEdgeModels.mockResolvedValue({ models: [{ modelId: "shell" }] });
+  await mount(snapshot(null), vi.fn(), true);
+  expect(checkedChoice()).toBe("cloud");
+  expect(service.loadPermissionJudgeEdgeModels).toHaveBeenCalledOnce();
+  expect(buttonByKey("setupGuide.cloud.confirm")?.disabled).toBe(false);
+  expect(service.savePermissionJudgeSettings).not.toHaveBeenCalled();
+});
+
+// Signed out, the guide keeps the local model as its default and reads no cloud models.
+// 未登录时，引导仍以本机模型为默认项，且不读取云端模型。
+it("keeps the local default when the account is signed out", async () => {
+  await mount(snapshot(null));
+  expect(checkedChoice()).toBe("local");
+  expect(service.loadPermissionJudgeEdgeModels).not.toHaveBeenCalled();
+});
+
+// A configured judge keeps the local default even when signed in, so re-entering never suggests a switch.
+// 已配置判定时即使已登录也保持本机默认项，重新进入不会暗示切换。
+it("keeps the local default for a configured judge", async () => {
+  await mount({ ...snapshot("model-a"), backend: "local" }, vi.fn(), true);
+  expect(checkedChoice()).toBe("local");
+  expect(service.loadPermissionJudgeEdgeModels).not.toHaveBeenCalled();
+});
+
 // Skipping closes the guide without writing anything, so the judge stays unset.
 // 跳过会关闭引导且不写入任何内容，判定保持未设定。
 it("closes without saving when skipped", async () => {
