@@ -97,11 +97,21 @@ function Toaster({ className, containerAriaLabel }: { className?: string; contai
     document.addEventListener("visibilitychange", onVisibility);
     return () => document.removeEventListener("visibilitychange", onVisibility);
   }, []);
+  const list = React.useRef<HTMLOListElement>(null);
+  // A notice that leaves while one of its buttons holds focus (pressing its close or action button) takes the
+  // focused element with it, and no blur reaches the stack, so the focus pause is re-checked against the document
+  // whenever the stack changes. Otherwise every later notice would stay open.
+  // 提示在其按钮持有焦点时离开（按下其关闭或操作按钮），会带走获得焦点的元素，且不会有失焦事件到达堆叠，因此每当堆叠变化时
+  // 都按文档重新核对焦点暂停；否则之后的每条提示都会一直停留。
+  React.useLayoutEffect(() => {
+    if (!list.current?.contains(document.activeElement)) setFocused(false);
+  }, [records]);
   const paused = hovered || focused || hidden;
   return (
     <LayerPortal className="vk-layer-toast">
       <section aria-label={containerAriaLabel ?? text.notifications} aria-live="polite" data-slot="toaster" className={cx("vk-toasts", className)}>
         <ol
+          ref={list}
           onPointerEnter={() => setHovered(true)}
           onPointerLeave={() => setHovered(false)}
           onFocus={() => setFocused(true)}
