@@ -92,7 +92,7 @@ for (const scenario of [
         await copyFile(path.join(sourceScripts, script), path.join(root, 'scripts', script));
       }
       await writeFile(path.join(root, 'scripts/desktop-runtime.mjs'), runtimeFixture);
-      await writeFile(path.join(root, 'apps/vulcan-code-desktop/node_modules/electron/install.js'),
+      await writeFile(path.join(root, 'scripts/install-electron.mjs'),
         'process.exit(process.env.VULCAN_FAIL_ELECTRON === "1" ? 23 : 0);\n');
       await writeFile(path.join(root, 'fake-bin/cargo'), '#!' + process.execPath + '\n' + cargoFixture, { mode: 0o755 });
       await writeFile(path.join(root, 'fake-bin/pnpm'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });

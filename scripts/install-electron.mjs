@@ -23,9 +23,16 @@ const electronRoot = realpathSync(fileURLToPath(new URL('../apps/vulcan-code-des
 const require = createRequire(path.join(electronRoot, 'package.json'));
 const { version } = require('./package.json');
 
-// The architecture is stated explicitly: under Rosetta, install.js would otherwise pick arm64 for an x64 build.
-// 架构显式指定：否则在 Rosetta 下 install.js 会为 x64 构建选择 arm64。
-const environment = { ...process.env, ELECTRON_INSTALL_ARCH: process.arch, ELECTRON_INSTALL_PLATFORM: process.platform };
+// The architecture is stated explicitly: under Rosetta, install.js picks arm64 for an x64 build unless
+// npm_config_arch is set (ELECTRON_INSTALL_ARCH alone does not stop that switch).
+// 架构显式指定：在 Rosetta 下，除非设置 npm_config_arch，install.js 会为 x64 构建选择 arm64
+// （仅设 ELECTRON_INSTALL_ARCH 不能阻止这一切换）。
+const environment = {
+  ...process.env,
+  ELECTRON_INSTALL_ARCH: process.arch,
+  ELECTRON_INSTALL_PLATFORM: process.platform,
+  npm_config_arch: process.arch,
+};
 
 // installedVersion is the version install.js last extracted, if any; a matching one needs no archive.
 // installedVersion 是 install.js 上次解压的版本（如有）；版本一致时无需归档。
