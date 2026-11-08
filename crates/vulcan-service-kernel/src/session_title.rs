@@ -241,7 +241,12 @@ async fn run_generation(
     let execution_request = AiExecutionRequest {
         operation: AiOperation::ConversationRespond,
         model_id: selection.model.id.clone(),
-        cache_scope_id: None,
+        // The request belongs to the session it titles: providers that route by a session header
+        // (x-opencode-session) or derive prefix identity from the cache scope (Responses Lite)
+        // reject a request without one.
+        // 请求属于其命名的会话：按会话请求头路由（x-opencode-session）或从缓存作用域派生前缀标识
+        // （Responses Lite）的供应商会拒绝没有作用域的请求。
+        cache_scope_id: Some(request.session_id.to_string()),
         continuation: None,
         messages: vec![
             text_message(
