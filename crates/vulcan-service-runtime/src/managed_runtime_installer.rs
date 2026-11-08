@@ -939,8 +939,8 @@ where
 }
 
 /// Waits before each repeated request of the same URL after a transient failure (a connection error, a timeout,
-/// 429 or a 5xx): GitHub release downloads answer 504 in bursts that can last several minutes.
-/// 同一地址在暂时性失败（连接错误、超时、429 或 5xx）后每次重试前的等待；GitHub 发布下载会成串地返回 504，可持续数分钟。
+/// 429 or a 5xx).
+/// 同一地址在暂时性失败（连接错误、超时、429 或 5xx）后每次重试前的等待。
 const DOWNLOAD_RETRY_DELAYS: [Duration; 5] = [
     Duration::from_secs(5),
     Duration::from_secs(20),
@@ -949,18 +949,76 @@ const DOWNLOAD_RETRY_DELAYS: [Duration; 5] = [
     Duration::from_secs(240),
 ];
 
-/// Request `url` and return its successful response, repeating the same request after each delay while the failure
-/// is transient; any other failure, or the last transient one, is returned at once. Another URL is never tried.
-/// 请求 `url` 并返回成功响应；失败为暂时性时按每个等待重试同一请求，其他失败或最后一次暂时性失败立即返回；绝不改用其他地址。
+/// Base address of the GitHub REST API used for release lookups and asset downloads.
+/// 用于发布查询与资产下载的 GitHub REST API 基础地址。
+const GITHUB_API_BASE: &str = "https://api.github.com";
+
+/// Split `https://github.com/<owner>/<repo>/releases/download/<tag>/<asset>` into its four parts, or return `None`
+/// for any other URL.
+/// 将 `https://github.com/<owner>/<repo>/releases/download/<tag>/<asset>` 拆为四部分；其他地址返回 `None`。
+fn github_release_download_parts(url: &str) -> Option<[&str; 4]> {
+    let mut segments = url.strip_prefix("https://github.com/")?.split('/');
+    let owner = segments.next()?;
+    let repo = segments.next()?;
+    if segments.next()? != "releases" || segments.next()? != "download" {
+        return None;
+    }
+    let parts = [owner, repo, segments.next()?, segments.next()?];
+    (segments.next().is_none() && parts.iter().all(|part| !part.is_empty())).then_some(parts)
+}
+
+/// Request `url` and return its successful response. A github.com release download is taken from the same asset's
+/// API endpoint: github.com/<repo>/releases/download/ can answer 504 from every edge for hours while the API works.
+/// The bytes are the same asset, so every caller's checksum still applies.
+/// 请求 `url` 并返回成功响应。github.com 发布下载改从同一资产的 API 端点获取：github.com/<repo>/releases/download/
+/// 可能在所有边缘节点上持续数小时返回 504，而 API 正常。字节属于同一资产，调用方的摘要校验照常适用。
 fn send_with_retries(
     client: &Client,
     url: &str,
     delays: &[Duration],
 ) -> Result<reqwest::blocking::Response, String> {
+    let Some([owner, repo, tag, asset_name]) = github_release_download_parts(url) else {
+        return send_request_with_retries(client, url, None, delays);
+    };
+    let release_url = format!("{GITHUB_API_BASE}/repos/{owner}/{repo}/releases/tags/{tag}");
+    let release_text = send_request_with_retries(
+        client,
+        &release_url,
+        Some("application/vnd.github+json"),
+        delays,
+    )?
+    .text()
+    .map_err(|error| format!("failed to read GitHub release {release_url}: {error}"))?;
+    let release: serde_json::Value = serde_json::from_str(&release_text)
+        .map_err(|error| format!("GitHub release {release_url} is not valid JSON: {error}"))?;
+    let asset_url = release["assets"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|asset| asset["name"].as_str() == Some(asset_name))
+        .and_then(|asset| asset["url"].as_str())
+        .ok_or_else(|| format!("GitHub release {owner}/{repo}@{tag} has no asset {asset_name}"))?;
+    send_request_with_retries(client, asset_url, Some("application/octet-stream"), delays)
+}
+
+/// Request `url` (with `accept` when given) and return its successful response, repeating the same request after
+/// each delay while the failure is transient; any other failure, or the last transient one, is returned at once.
+/// Another URL is never tried.
+/// 请求 `url`（给出 `accept` 时附带）并返回成功响应；失败为暂时性时按每个等待重试同一请求，其他失败或最后一次
+/// 暂时性失败立即返回；绝不改用其他地址。
+fn send_request_with_retries(
+    client: &Client,
+    url: &str,
+    accept: Option<&str>,
+    delays: &[Duration],
+) -> Result<reqwest::blocking::Response, String> {
     let mut attempt = 0;
     loop {
-        match client
-            .get(url)
+        let mut request = client.get(url);
+        if let Some(accept) = accept {
+            request = request.header(reqwest::header::ACCEPT, accept);
+        }
+        match request
             .send()
             .and_then(reqwest::blocking::Response::error_for_status)
         {
@@ -1774,6 +1832,26 @@ mod tests {
                 .expect_err("404 is not repeated")
                 .contains("404")
         );
+    }
+
+    /// Verify only exact github.com release download URLs are split for the API asset endpoint.
+    /// 验证只有精确的 github.com 发布下载地址会被拆分并改走 API 资产端点。
+    #[test]
+    fn github_release_downloads_are_recognized_exactly() {
+        assert_eq!(
+            github_release_download_parts(
+                "https://github.com/astral-sh/uv/releases/download/0.11.28/uv.zip"
+            ),
+            Some(["astral-sh", "uv", "0.11.28", "uv.zip"])
+        );
+        for other in [
+            "https://nodejs.org/dist/v24.18.0/node.zip",
+            "https://github.com/astral-sh/uv/archive/0.11.28.zip",
+            "https://github.com/astral-sh/uv/releases/download/0.11.28/",
+            "https://github.com/astral-sh/uv/releases/download/0.11.28/a/b",
+        ] {
+            assert_eq!(github_release_download_parts(other), None, "{other}");
+        }
     }
 
     /// Verify every published platform maps to exact official asset names.

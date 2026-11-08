@@ -65,6 +65,11 @@
   构建：浏览器组件与 Electron 缓存按版本分目录，受管 Node/pnpm、Inno Setup 按版本目录与身份清单，LuaSkills
   运行时按版本标记，随附工具、protoc 与判定执行库由 `install-locked-tools.mjs` 核对记录的归档摘要与实际版本
   输出（判定执行库逐文件核对摘要）。新增 `third_party/` 下的安装器必须同样核对，否则不能依赖此保留。
+- GitHub 发布资产一律经 API 资产端点（`api.github.com/repos/<repo>/releases/assets/<id>`，`Accept:
+  application/octet-stream`）下载，不经 `github.com/<repo>/releases/download/`：后者曾在所有边缘节点上持续数小时
+  返回 504，而 git 与 API 正常。实现点：`locked-download.mjs` 的 `fetchDownload`（构建输入与 Electron，
+  `install-electron.mjs`；桌面应用的 pnpm 不运行 Electron 自带的 postinstall 下载）、`install_lua_deps.ps1`、
+  Core 的 `managed_runtime_installer.rs` 的 `send_with_retries`。新增 GitHub 发布下载必须走这些入口。
 - 发布的 `rebuild` 输入为真时，`prepare` 删除 `target/`、`.cargo/protoc/` 与 `third_party/` 中除
   `build-input-cache/`（按摘要保存）以外的内容，全部重新编译与安装。
 - 编译 Rust 的作业末尾的 `tidy` 执行 `make prune`（发布为 `make prune release`；Windows 上为 `make.ps1`），每个工作区 crate 保留最新单元，

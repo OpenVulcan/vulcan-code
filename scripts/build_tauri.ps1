@@ -139,12 +139,11 @@ if ($Release -or -not (Test-Path -LiteralPath (Join-Path $DesktopAppDir "node_mo
     pnpm --dir $DesktopAppDir install --frozen-lockfile
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
-# The official installer verifies executable/version markers even when node_modules already exists;
-# pnpm may skip the lifecycle download, so a fresh checkout would otherwise lack electron/dist.
-# 即使 node_modules 已存在，官方安装器仍须核验可执行文件和版本标记；pnpm 可能跳过生命周期下载，
-# 否则全新检出会缺少 electron/dist。A transient download failure is repeated first.
-# 暂时性下载失败会先重试。
-node (Join-Path $ProjectDir 'scripts/retry-node-script.mjs') (Join-Path $DesktopAppDir 'node_modules/electron/install.js')
+# The official installer verifies executable/version markers even when node_modules already exists; pnpm does not
+# run the lifecycle download, so a fresh checkout would otherwise lack electron/dist.
+# 即使 node_modules 已存在，官方安装器仍须核验可执行文件和版本标记；pnpm 不运行生命周期下载，
+# 否则全新检出会缺少 electron/dist。
+node (Join-Path $ProjectDir 'scripts/install-electron.mjs')
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Host "==> Building Electron desktop..."
 pnpm --dir $DesktopAppDir run build

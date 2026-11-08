@@ -1,4 +1,7 @@
+# Electron's own postinstall download is not run: scripts/install-electron.mjs installs the binary for the build's
+# architecture through the GitHub API asset endpoint (see that script).
+# 不运行 Electron 自带的 postinstall 下载：scripts/install-electron.mjs 经 GitHub API 资产端点为构建架构安装二进制（见该脚本）。
 allowBuilds:
-  electron: true
+  electron: false
 minimumReleaseAgeExclude:
   - electron@44.4.1

@@ -26,10 +26,9 @@ if ($PSVersionTable.PSEdition -ne "Core") {
 $ProjectDir = Split-Path $PSScriptRoot -Parent
 Set-Location $ProjectDir
 
-# HttpRetry repeats a GitHub request that failed with a 4xx or 5xx: release downloads answer 504 in bursts that can
-# last several minutes. Windows PowerShell 5.1 has no retry parameters and requests once.
-# HttpRetry 在 GitHub 请求以 4xx 或 5xx 失败时重试：发布下载会成串地返回 504，可持续数分钟。Windows PowerShell 5.1
-# 没有重试参数，只请求一次。
+# HttpRetry repeats a GitHub request that failed with a 4xx or 5xx. Windows PowerShell 5.1 has no retry parameters and
+# requests once.
+# HttpRetry 在 GitHub 请求以 4xx 或 5xx 失败时重试。Windows PowerShell 5.1 没有重试参数，只请求一次。
 $HttpRetry = @{}
 if ($PSVersionTable.PSEdition -eq "Core") {
     $HttpRetry = @{ MaximumRetryCount = 6; RetryIntervalSec = 60 }
@@ -303,8 +302,10 @@ function Get-CurrentPlatformKey {
 function Get-ReleaseAssetInfo {
     <#
     .SYNOPSIS
-    Find one exact GitHub Release asset download URL and API digest.
-    查找一个精确 GitHub Release 资产下载地址与 API 摘要。
+    Find one exact GitHub Release asset's API download URL and API digest. The asset is downloaded from the API
+    endpoint, never from github.com/<repo>/releases/download/, which can answer 504 from every edge for hours.
+    查找一个精确 GitHub Release 资产的 API 下载地址与 API 摘要。资产从 API 端点下载，绝不经
+    github.com/<repo>/releases/download/，该地址可能在所有边缘节点上持续数小时返回 504。
 
     .PARAMETER Repo
     GitHub repository in owner/name form.
@@ -332,7 +333,7 @@ function Get-ReleaseAssetInfo {
         throw "Asset '$AssetName' not found in $Repo@$Tag. Available: $Available"
     }
     return [PSCustomObject]@{
-        Url = $Asset.browser_download_url
+        Url = $Asset.url
         Digest = [string]$Asset.digest
     }
 }
@@ -378,7 +379,11 @@ function Save-ReleaseAssetWithDigest {
 
     Write-Host "==> Downloading asset: $($AssetInfo.Url)"
     try {
-        Invoke-WebRequest -Uri $AssetInfo.Url -OutFile $ArchivePath -UseBasicParsing @HttpRetry
+        # The API asset endpoint returns the bytes only for an octet-stream request; it redirects to the asset store.
+        # API 资产端点只对 octet-stream 请求返回字节，并重定向到资产存储。
+        $AssetHeaders = Get-GitHubApiHeaders
+        $AssetHeaders['Accept'] = 'application/octet-stream'
+        Invoke-WebRequest -Uri $AssetInfo.Url -OutFile $ArchivePath -UseBasicParsing -Headers $AssetHeaders @HttpRetry
     } catch {
         throw "Failed to download runtime asset '$AssetName' from $Repo@$Tag. Confirm that the LuaSkills runtime assets have been published for this tag. Original error: $($_.Exception.Message)"
     }

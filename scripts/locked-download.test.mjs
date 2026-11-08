@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile, readFile, readdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { obtainLockedInput } from './locked-download.mjs';
+import { githubReleaseDownloadParts, obtainLockedInput } from './locked-download.mjs';
 
 // Verify offline cache hits, absence and corruption without any reachable network source.
 // 在没有可访问网络来源的情况下验证离线缓存命中、缺失与损坏。
@@ -56,6 +56,35 @@ test('download rejects HTTP failures and corrupt content before publishing cache
     fetchMock.mock.mockImplementation(async () => { throw new Error('Network must not be used'); });
     assert.deepEqual(await obtainLockedInput(asset, cache, true), bytes);
     assert.deepEqual(await readdir(cache), [sha256]);
+  } finally {
+    await rm(cache, { recursive: true, force: true });
+  }
+});
+
+// A github.com release download is taken from the asset's API endpoint after one release lookup per tag.
+// github.com 发布下载在每个标签一次发布查询后，改从资产的 API 端点获取。
+test('github release downloads use the API asset endpoint', async (context) => {
+  const cache = await mkdtemp(path.join(os.tmpdir(), 'vulcan-github-download-'));
+  const bytes = Buffer.from('release asset');
+  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  const requests = [];
+  context.mock.method(globalThis, 'fetch', async (url, options) => {
+    requests.push({ url, accept: options.headers.accept });
+    if (url === 'https://api.github.com/repos/owner/repo/releases/tags/v1') {
+      return Response.json({ assets: [{ name: 'tool a.zip', url: 'https://api.github.com/repos/owner/repo/releases/assets/7' }] });
+    }
+    if (url === 'https://api.github.com/repos/owner/repo/releases/assets/7') return new Response(bytes);
+    return new Response('gateway', { status: 504 });
+  });
+  try {
+    assert.equal(githubReleaseDownloadParts('https://nodejs.org/dist/v1/node.zip'), null);
+    const asset = { url: 'https://github.com/owner/repo/releases/download/v1/tool%20a.zip', sha256 };
+    assert.deepEqual(await obtainLockedInput(asset, cache, false, []), bytes);
+    assert.deepEqual(requests.map(request => request.accept), ['application/vnd.github+json', 'application/octet-stream']);
+    await assert.rejects(
+      obtainLockedInput({ url: 'https://github.com/owner/repo/releases/download/v1/missing.zip', sha256: '0'.repeat(64) }, cache, false, []),
+      /has no asset missing\.zip/,
+    );
   } finally {
     await rm(cache, { recursive: true, force: true });
   }

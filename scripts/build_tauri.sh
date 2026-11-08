@@ -69,9 +69,8 @@ fi
 # The official installer verifies executable/version markers even when node_modules already exists.
 # 即使 node_modules 已存在，官方安装器仍须核验可执行文件和版本标记。
 # Missing runtime downloads or extraction failures must stop before expensive Cargo compilation.
-# 运行时下载或解压失败必须在耗时的 Cargo 编译前终止。A transient download failure is repeated first.
-# 暂时性下载失败会先重试。
-node "$ProjectDir/scripts/retry-node-script.mjs" "$ProjectDir/apps/vulcan-code-desktop/node_modules/electron/install.js"
+# 运行时下载或解压失败必须在耗时的 Cargo 编译前终止。
+node "$ProjectDir/scripts/install-electron.mjs"
 
 # CargoPackageArguments derives the shipped executables from the same inventory used by Windows and notices.
 # CargoPackageArguments 从 Windows 与声明生成共用的清单派生分发可执行文件。
