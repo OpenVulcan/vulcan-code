@@ -207,6 +207,9 @@ jobs:
           root=$(node scripts/desktop-runtime.mjs root release)
           built=$(node scripts/release-plan.mjs platform --tree "$root")
           [ "$built" = "$PLATFORM" ] || { echo "the tree was built for $built, not $PLATFORM" >&2; exit 1; }
+          # An x64 Mac release built under Rosetta must not carry arm64-only programs.
+          # 在 Rosetta 下构建的 x64 Mac 发行物不得带有仅 arm64 的程序。
+          if [ "$RUNNER_OS" = macOS ]; then node scripts/check-binary-architecture.mjs "$root" "$PLATFORM"; fi
           out="$RUNNER_TEMP/release"
           mkdir -p "$out"
           origin=$(target/release/vulcan-release-tool origin)

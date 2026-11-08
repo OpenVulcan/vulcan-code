@@ -98,7 +98,7 @@ export async function browserPackageInputs(root) {
   const executable = await browserNodeExecutable(root);
   // Resolve through Playwright in a fresh process so its registry sees the owned browser cache.
   // 在新进程中通过 Playwright 解析路径，确保其注册表读取自有浏览器缓存。
-  const { stdout } = await execute(executable, ['-e', "process.stdout.write(require('playwright-core').chromium.executablePath())"], {
+  const { stdout } = await execute(executable, [...playwrightNodeArguments, '-e', "process.stdout.write(require('playwright-core').chromium.executablePath())"], {
     cwd: pluginNode, windowsHide: true, env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: browserCacheRoot },
   });
   const chromiumExecutable = path.resolve(stdout.trim());
@@ -127,6 +127,14 @@ async function run(executable, args, options = {}) {
   });
 }
 
+// playwrightNodeArguments precede every Playwright build command: on macOS x64 they preload playwright-x64-host.cjs
+// so Playwright selects the x64 browsers under Rosetta too.
+// playwrightNodeArguments 位于每个 Playwright 构建命令之前：在 macOS x64 上预加载 playwright-x64-host.cjs，使
+// Playwright 在 Rosetta 下同样选择 x64 浏览器。
+const playwrightNodeArguments = process.platform === 'darwin' && process.arch === 'x64'
+  ? ['--require', fileURLToPath(new URL('./playwright-x64-host.cjs', import.meta.url))]
+  : [];
+
 // Prepare all network dependencies explicitly during sync, never from an end-user session.
 // 在同步期间显式准备全部网络依赖，绝不由最终用户会话下载。
 // root is the profile-owned distribution root chosen by the caller, so one profile never prepares another's tree.
@@ -139,7 +147,7 @@ async function prepare(root) {
   await removeBinShims(path.join(pluginNode, 'node_modules'));
   await verifyBrowserDependencies();
   await mkdir(browserCacheRoot, { recursive: true });
-  await run(executable, [path.join(pluginNode, 'node_modules/playwright-core/cli.js'), 'install', 'chromium', '--no-shell'], {
+  await run(executable, [...playwrightNodeArguments, path.join(pluginNode, 'node_modules/playwright-core/cli.js'), 'install', 'chromium', '--no-shell'], {
     cwd: pluginNode, env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: browserCacheRoot },
   });
   await browserPackageInputs(root);

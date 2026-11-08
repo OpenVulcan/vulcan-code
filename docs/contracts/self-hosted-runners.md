@@ -141,6 +141,10 @@ Mac 上 `register <位置> macos-x64` 自动按此安装，可与同一用户的
 - 标记文件 `.rosetta` 使 `start.sh` 以 `arch -x86_64 ./run.sh` 启动，作业运行的通用程序因此都取 x86_64。
 - 发布作业在自托管 Mac 上先检查 shell、Node、`rustc` 宿主与 PowerShell 都是该平台的架构（`macos-x64` 为 x86_64，
   `macos-arm64` 为 arm64），不符即失败，避免产出错误架构的归档。
+- 部分工具按硬件而非进程判断架构，在 Rosetta 下会选择 arm64：Electron 的 `install.js` 由 `install-electron.mjs`
+  以 `npm_config_arch` 固定架构；Playwright 的浏览器由 `browser-runtime.mjs` 预加载 `playwright-x64-host.cjs`
+  选择 x64。打包后 `check-binary-architecture.mjs` 检查 macOS 发行树中每个 Mach-O 文件都含目标架构（以单一平台
+  命名的 npm 包除外），不符即失败。
 
 没有运行器在线时 `auto` 选择托管镜像（`macos-x64` 为 `macos-15-intel`、`macos-arm64` 为 `macos-15`），与引入池之前
 相同；Rosetta 运行器只影响它在线时的选择。
