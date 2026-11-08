@@ -85,13 +85,24 @@ fetch_verified() {
     [ "$(sha256_of "$3")" = "$5" ] || fail "$4 does not match its published SHA-256"
 }
 
+# install_pwsh installs PowerShell unless the runner already finds one. A Rosetta runner always gets its own x86_64
+# copy first on its PATH: scripts read the platform from PowerShell's process architecture, and a native arm64 pwsh
+# runs as arm64 even when a Rosetta job starts it.
+# install_pwsh 在运行器找不到 PowerShell 时安装它。Rosetta 运行器总是使用排在其 PATH 最前的独立 x86_64 副本：脚本按
+# PowerShell 进程架构判断平台，而原生 arm64 的 pwsh 即使由 Rosetta 作业启动也以 arm64 运行。
 install_pwsh() {
-    if command -v pwsh > /dev/null 2>&1; then return; fi
-    mkdir -p "$Opt/pwsh" "$Bin"
-    fetch_verified PowerShell/PowerShell "^powershell-[0-9.]+-$PwshAsset\\.tar\\.gz\$" "$Opt/pwsh.tar.gz"
-    tar -xzf "$Opt/pwsh.tar.gz" -C "$Opt/pwsh" && rm -f "$Opt/pwsh.tar.gz"
-    chmod +x "$Opt/pwsh/pwsh"
-    ln -sfn "$Opt/pwsh/pwsh" "$Bin/pwsh"
+    if [ "$Rosetta" = true ]; then
+        PwshDir="$Opt/pwsh-x64" PwshLink="$X64Bin/pwsh"
+        if [ -x "$PwshLink" ]; then return; fi
+    else
+        PwshDir="$Opt/pwsh" PwshLink="$Bin/pwsh"
+        if command -v pwsh > /dev/null 2>&1; then return; fi
+    fi
+    mkdir -p "$PwshDir" "$(dirname "$PwshLink")"
+    fetch_verified PowerShell/PowerShell "^powershell-[0-9.]+-$PwshAsset\\.tar\\.gz\$" "$PwshDir.tar.gz"
+    tar -xzf "$PwshDir.tar.gz" -C "$PwshDir" && rm -f "$PwshDir.tar.gz"
+    chmod +x "$PwshDir/pwsh"
+    ln -sfn "$PwshDir/pwsh" "$PwshLink"
 }
 
 # installed_service reports whether svc.sh installed a service for this runner (it records it in .service).
@@ -182,6 +193,7 @@ Rosetta=false
 if [ "$(uname -s)-$(uname -m)" = Darwin-arm64 ] && [ "$Label" = vulcan-macos-x64 ]; then
     Rosetta=true
     RunnerAsset=osx-x64
+    PwshAsset=osx-x64
     [ "$DirGiven" = true ] || RunnerDir="$HOME/actions-runner/vulcan-code-x64"
 fi
 case "$command" in

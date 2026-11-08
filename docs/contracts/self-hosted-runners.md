@@ -127,12 +127,14 @@ Mac 上 `register <位置> macos-x64` 自动按此安装，可与同一用户的
 - 前置条件：机器使用者先安装 Rosetta（`sudo softwareupdate --install-rosetta --agree-to-license`）。
 - 安装 `osx-x64` 运行器，目录默认为 `~/actions-runner/vulcan-code-x64`；移除时以
   `unregister <位置> --dir ~/actions-runner/vulcan-code-x64` 指定该目录。
+- 安装 x86_64 PowerShell（`~/.local/opt/pwsh-x64`，链接到 `~/.local/x64/bin`；脚本按 PowerShell 进程架构判断平台，原生
+  arm64 的 pwsh 即使由 Rosetta 作业启动也以 arm64 运行）。
 - 安装 x86_64 rustup（`~/.cargo-x64`、`~/.rustup-x64`，按其 `.sha256` 校验，默认工具链取 `rust-toolchain.toml`）
   与 x86_64 Node（`~/.local/opt`，按 `SHASUMS256.txt` 校验，链接到 `~/.local/x64/bin`），两者放在 `.path` 最前，
   并在运行器 `.env` 写入 `CARGO_HOME` 与 `RUSTUP_HOME`，使作业使用 x86_64 目录而不触及原生工具链。已存在时保留，
   重新注册不会再次下载；运行器的 `_work`（含 `target/`）在移除后保留，重新注册可继续复用。
 - 标记文件 `.rosetta` 使 `start.sh` 以 `arch -x86_64 ./run.sh` 启动，作业运行的通用程序因此都取 x86_64。
-- 发布作业在自托管 Mac 上先检查 shell、Node 与 `rustc` 宿主都是该平台的架构（`macos-x64` 为 x86_64，
+- 发布作业在自托管 Mac 上先检查 shell、Node、`rustc` 宿主与 PowerShell 都是该平台的架构（`macos-x64` 为 x86_64，
   `macos-arm64` 为 arm64），不符即失败，避免产出错误架构的归档。
 
 没有运行器在线时 `auto` 选择托管镜像（`macos-x64` 为 `macos-15-intel`、`macos-arm64` 为 `macos-15`），与引入池之前
