@@ -4257,6 +4257,7 @@
   "settings.manifest.fieldSource.providerDefaults": "供應商預設",
   "settings.manifest.fieldSource.entryOverride": "入口覆寫",
   "settings.manifest.fieldSource.exactRule": "精確規則",
+  "settings.manifest.fieldSource.coreModel": "核心模型",
   "settings.manifest.fieldSource.prefixRule": "前綴規則",
   "settings.manifest.modelSource.discovery": "探索",
   "settings.manifest.modelSource.manual": "手動",

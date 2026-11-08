@@ -4257,6 +4257,7 @@
   "settings.manifest.fieldSource.providerDefaults": "공급자 기본값",
   "settings.manifest.fieldSource.entryOverride": "항목 재정의",
   "settings.manifest.fieldSource.exactRule": "정확 일치 규칙",
+  "settings.manifest.fieldSource.coreModel": "핵심 모델",
   "settings.manifest.fieldSource.prefixRule": "접두사 규칙",
   "settings.manifest.modelSource.discovery": "검색",
   "settings.manifest.modelSource.manual": "수동",

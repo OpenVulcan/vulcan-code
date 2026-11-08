@@ -88,6 +88,8 @@ export function manifestFieldSourceLabel(source: ManifestFieldProvenance["source
       return t("settings.manifest.fieldSource.providerDefaults")
     case "service_entry_override":
       return t("settings.manifest.fieldSource.entryOverride")
+    case "core_model":
+      return t("settings.manifest.fieldSource.coreModel")
     case "model_rule_exact":
       return t("settings.manifest.fieldSource.exactRule")
     case "model_rule_prefix":
@@ -146,7 +148,8 @@ export function ruleProvenanceSummary(
   if (!provenance) {
     return t("settings.manifest.noDeclaredProtocol")
   }
-  const rule = provenance.rule_id ? ` · ${provenance.rule_id}` : ""
+  const origin = provenance.rule_id ?? provenance.core_model_id
+  const rule = origin ? ` · ${origin}` : ""
   return `${manifestFieldSourceLabel(provenance.source, t)}${rule} · r${provenance.manifest_revision}`
 }
 

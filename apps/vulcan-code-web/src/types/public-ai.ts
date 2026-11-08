@@ -1817,14 +1817,19 @@ export interface QuarantineSummary {
 export type ManifestFieldSourceKind =
   | "provider_defaults"
   | "service_entry_override"
+  | "core_model"
   | "model_rule_exact"
   | "model_rule_prefix";
 
 // ManifestFieldOrigin preserves one lower-precedence value replaced by the winner.
 // ManifestFieldOrigin 保留一个被最终胜者替换的低优先级值来源。
+// core_model_id names the core entry when the value came from the core model list; its
+// manifest_revision is then the core list revision.
+// 值来自核心模型清单时 core_model_id 指明核心条目，此时 manifest_revision 为核心清单修订号。
 export interface ManifestFieldOrigin {
   source: ManifestFieldSourceKind;
   rule_id?: string;
+  core_model_id?: string;
   manifest_revision: number;
   evidence_revision?: string;
 }

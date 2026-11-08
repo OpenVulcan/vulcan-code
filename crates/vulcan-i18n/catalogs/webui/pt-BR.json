@@ -4257,6 +4257,7 @@
   "settings.manifest.fieldSource.providerDefaults": "Padrão do provedor",
   "settings.manifest.fieldSource.entryOverride": "Substituição da entrada",
   "settings.manifest.fieldSource.exactRule": "Regra exata",
+  "settings.manifest.fieldSource.coreModel": "Modelo central",
   "settings.manifest.fieldSource.prefixRule": "Regra de prefixo",
   "settings.manifest.modelSource.discovery": "Descoberta",
   "settings.manifest.modelSource.manual": "Manual",

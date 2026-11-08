@@ -4257,6 +4257,7 @@
   "settings.manifest.fieldSource.providerDefaults": "プロバイダーの既定値",
   "settings.manifest.fieldSource.entryOverride": "エントリのオーバーライド",
   "settings.manifest.fieldSource.exactRule": "完全一致ルール",
+  "settings.manifest.fieldSource.coreModel": "コアモデル",
   "settings.manifest.fieldSource.prefixRule": "プレフィックスルール",
   "settings.manifest.modelSource.discovery": "検出",
   "settings.manifest.modelSource.manual": "手動",

@@ -4257,6 +4257,7 @@
   "settings.manifest.fieldSource.providerDefaults": "Predeterminado del proveedor",
   "settings.manifest.fieldSource.entryOverride": "Anulación de la entrada",
   "settings.manifest.fieldSource.exactRule": "Regla exacta",
+  "settings.manifest.fieldSource.coreModel": "Modelo base",
   "settings.manifest.fieldSource.prefixRule": "Regla de prefijo",
   "settings.manifest.modelSource.discovery": "Descubrimiento",
   "settings.manifest.modelSource.manual": "Manual",

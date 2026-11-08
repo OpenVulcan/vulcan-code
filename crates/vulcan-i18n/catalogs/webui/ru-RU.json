@@ -4257,6 +4257,7 @@
   "settings.manifest.fieldSource.providerDefaults": "По умолчанию провайдера",
   "settings.manifest.fieldSource.entryOverride": "Переопределение точки входа",
   "settings.manifest.fieldSource.exactRule": "Точное правило",
+  "settings.manifest.fieldSource.coreModel": "Базовая модель",
   "settings.manifest.fieldSource.prefixRule": "Правило префикса",
   "settings.manifest.modelSource.discovery": "Обнаружение",
   "settings.manifest.modelSource.manual": "Вручную",

@@ -4257,6 +4257,7 @@
   "settings.manifest.fieldSource.providerDefaults": "Anbieterstandard",
   "settings.manifest.fieldSource.entryOverride": "Eintragsüberschreibung",
   "settings.manifest.fieldSource.exactRule": "Exakte Regel",
+  "settings.manifest.fieldSource.coreModel": "Kernmodell",
   "settings.manifest.fieldSource.prefixRule": "Präfixregel",
   "settings.manifest.modelSource.discovery": "Erkennung",
   "settings.manifest.modelSource.manual": "Manuell",
