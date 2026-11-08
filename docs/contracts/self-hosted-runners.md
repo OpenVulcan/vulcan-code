@@ -57,6 +57,9 @@
 - 自托管作业检出时 `clean: false`，随后 `self-hosted-workspace` 的 `prepare` 删除 `target/`、
   `third_party/` 与 `.cargo/protoc/` 之外的全部未跟踪文件。发行目录 `output-release/` 与 `node_modules/`
   等每次重新生成，不会把上一版的旧文件打进新包。
+- 机器上 `git` 无法运行时（macOS 上未接受新装或更新后的 Xcode 许可即如此），`actions/checkout` 会清空整个工作区
+  （含 `target/` 与 `third_party/`）并改为下载源码归档。因此这些作业在检出之前先执行 `git --version`，失败即停止并
+  保留工作区；在机器上修复（macOS：`sudo xcodebuild -license accept`）后重新运行。
 - `target/` 跨运行保留，Cargo 按指纹只重编输入变化的 crate。
 - `third_party/` 跨运行保留，前提是其中每个安装器都按锁定版本或摘要识别已有内容，只在其变化时重新下载或
   构建：浏览器组件与 Electron 缓存按版本分目录，受管 Node/pnpm、Inno Setup 按版本目录与身份清单，LuaSkills

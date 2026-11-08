@@ -58,6 +58,15 @@ jobs:
       run:
         shell: bash
     steps:
+      # actions/checkout empties the workspace, kept build and downloads included, and fetches an archive when git
+      # cannot run (on macOS an unaccepted Xcode license does that), so a self-hosted job stops before it.
+      # git 无法运行时（macOS 上未接受 Xcode 许可即如此），actions/checkout 会清空工作区（含保留的构建与下载）并改为
+      # 下载归档，因此自托管作业在它之前停止。
+      - name: Check that git runs on a self-hosted machine
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        run: |
+          git --version || { echo '::error::git does not run on this machine; fix it there first (macOS: sudo xcodebuild -license accept).'; exit 1; }
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
@@ -174,6 +183,15 @@ jobs:
       # 托管镜像只有 4 个 vCPU；自有机器使用仓库默认的 16。
       CARGO_BUILD_JOBS: ${{ fromJSON(needs.runners.outputs.pools)['linux-x64'] && '16' || '4' }}
     steps:
+      # actions/checkout empties the workspace, kept build and downloads included, and fetches an archive when git
+      # cannot run (on macOS an unaccepted Xcode license does that), so a self-hosted job stops before it.
+      # git 无法运行时（macOS 上未接受 Xcode 许可即如此），actions/checkout 会清空工作区（含保留的构建与下载）并改为
+      # 下载归档，因此自托管作业在它之前停止。
+      - name: Check that git runs on a self-hosted machine
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        run: |
+          git --version || { echo '::error::git does not run on this machine; fix it there first (macOS: sudo xcodebuild -license accept).'; exit 1; }
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
@@ -203,6 +221,15 @@ jobs:
       # 托管镜像只有 4 个 vCPU；自有机器使用仓库默认的 16。
       CARGO_BUILD_JOBS: ${{ fromJSON(needs.runners.outputs.pools)['linux-x64'] && '16' || '4' }}
     steps:
+      # actions/checkout empties the workspace, kept build and downloads included, and fetches an archive when git
+      # cannot run (on macOS an unaccepted Xcode license does that), so a self-hosted job stops before it.
+      # git 无法运行时（macOS 上未接受 Xcode 许可即如此），actions/checkout 会清空工作区（含保留的构建与下载）并改为
+      # 下载归档，因此自托管作业在它之前停止。
+      - name: Check that git runs on a self-hosted machine
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        run: |
+          git --version || { echo '::error::git does not run on this machine; fix it there first (macOS: sudo xcodebuild -license accept).'; exit 1; }
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
@@ -249,6 +276,15 @@ jobs:
       # 托管镜像只有 4 个 vCPU；自有机器使用仓库默认的 16。
       CARGO_BUILD_JOBS: ${{ fromJSON(needs.runners.outputs.pools)[matrix.pool || 'none'] && '16' || '4' }}
     steps:
+      # actions/checkout empties the workspace, kept build and downloads included, and fetches an archive when git
+      # cannot run (on macOS an unaccepted Xcode license does that), so a self-hosted job stops before it.
+      # git 无法运行时（macOS 上未接受 Xcode 许可即如此），actions/checkout 会清空工作区（含保留的构建与下载）并改为
+      # 下载归档，因此自托管作业在它之前停止。
+      - name: Check that git runs on a self-hosted machine
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        run: |
+          git --version || { echo '::error::git does not run on this machine; fix it there first (macOS: sudo xcodebuild -license accept).'; exit 1; }
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
