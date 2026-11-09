@@ -109,6 +109,28 @@
 `vulcan-session-core/src/v1/document/subagent.rs` 为权威；调整时同步验证 `provider_v1_sink/tests/queued_child_returns.rs`
 及 `provider_v1_sink/tests/terminal_return_owner.rs`、`document_tests/subagent/owned_returns/overlap.rs`。
 
+## 手动压缩与尚未完成的业务回合
+
+- 手动 `/compact` 只取得本次摘要请求的执行许可，不授予业务续跑。宿主先排除活动物理执行，
+  再按与压缩规划同时捕获的规范来源校验；仅输入框草稿及其记账变化可忽略。
+- 已结束的历史继续使用独立 `ContextMaintenance` 回合。物理空闲但业务仍开放时，手动压缩借用
+  原回合的 `turn_id/start_seq/segment_generation`，不关闭、不替换、不重开原业务，也不改写其 Hook 和停止控制。
+  活动 API、辅助回合、子会话、专职或归档会话、已有排队/插队输入，以及未结算子任务仍拒绝准入。
+- 借用凭据仅存在内存，物理摘要仍以现有 `ApiStarted/ApiStats` 记录。节点发布在同一文档事务内
+  校验借用归属与最终摘要 API；不是先写节点、后检查所有者。早期流错误只结算接收器持有的精确摘要 API。
+- 摘要成功、准备失败、模型失败及后续 VMM 发布失败都不完成业务；已提交节点不会被后续错误伪称回滚。
+  原业务 Continue 策略不受摘要终态改变，摘要不携带也不消费 Continue 动作。手动流结束后仍需明确继续原任务。
+- 摘要期间新普通输入继续排队。若插队已获准，则沿用现有 API 终态投影：输入按原身份、正文、附件与顺序
+  写入同一业务回合，但不会因此自动派发业务请求。不是要求 pending 集合原样保留。
+- 显式 Stop 仍是会话级停止；不因正在压缩而失效。普通用户业务的冷加载仅中断尚未结束的物理摘要请求，
+  保留原业务回合和继续策略，不自动执行旧任务；目标或 Shell Job 自动续接回合仍遵守原有冷加载停止规则。
+  独立维护回合仍沿用其原有冷加载结算。
+
+权威入口为 `context_compaction/manual.rs`、`streaming.rs`、`completion.rs` 与
+`vulcan-session-core/src/v1/document/child_execution/maintenance/manual/borrowed.rs`。
+回归见核心 `tests/maintenance/manual/borrowed.rs` 和服务 `context_compaction/manual/tests/borrowed.rs`；
+借用类型不序列化，不增加持久字段，不改变元数据版本。
+
 ## 首个业务请求前的压缩检查
 
 - 用户新输入、显式继续或重试进入请求准备阶段后，先检查本次请求预算及当前上下文已有的可靠实测用量。

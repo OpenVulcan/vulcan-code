@@ -1,5 +1,5 @@
-//! Durable admission and terminal facts for explicitly requested standalone compaction.
-//! 显式请求的独立压缩所需的可靠准入与终态事实。
+//! Explicit manual compaction admission and settlement without business continuation.
+//! 显式手动压缩的准入与结算，不续跑业务。
 
 use super::*;
 use crate::session_runtime_registry_v1::{
@@ -14,20 +14,25 @@ use vulcan_session_core::v1::{
 #[cfg(test)]
 mod tests;
 
-/// Publishes a real auxiliary turn before the registered manual task can dispatch any Provider request.
-/// 在已登记手动任务可分发供应商请求前，发布真实辅助回合。
+/// Chooses a validated borrowed business owner or publishes an independent auxiliary turn.
+/// 选择经过校验的借用业务所有者，或发布独立辅助回合。
 /// `state` provides registered writers and stream owners; `session_id` selects the canonical document.
 /// `state` 提供已登记写入器与流所有者；`session_id` 选择规范文档。
 /// `source` binds the prepared history and `task_id` is both the stream and maintenance owner.
 /// `source` 绑定已准备历史，`task_id` 同时标识流任务和维护所有者。
-/// Returns only after the start is durable; stale or stopped work cannot create a replacement turn.
-/// 仅在起始事实可靠落盘后返回；过期或停止工作不能创建替代回合。
+/// Returns the exact completion mode after source validation; borrowing never changes business run control.
+/// 来源校验后返回精确完成方式；借用绝不改变业务运行控制。
 pub(super) async fn begin(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
     task_id: Uuid,
     source: vulcan_session_core::v1::context_maintenance::ManualContextMaintenanceSource,
-) -> Result<(), String> {
+) -> Result<ContextCompactionCommitMode, String> {
+    let handle =
+        crate::session_goal_lifecycle::registered_session_v1_handle_from_state(state, session_id)?;
+    // Drain a prior cancelled preparation before borrowing its business boundary.
+    // 借用业务边界前排空之前已取消的准备工作。
+    let preparation_settlement = handle.acquire_request_preparation_settlement().await;
     // Verify the registered task before transferring the writer to the blocking pool.
     // 将写入器转交阻塞线程池前核验已登记任务。
     {
@@ -40,8 +45,6 @@ pub(super) async fn begin(
     }
     // Exact source evidence rejects a racing Stop or history edit while allowing composer draft saves.
     // 精确来源证据拒绝竞争的停止或历史编辑，同时允许输入框草稿保存。
-    let handle =
-        crate::session_goal_lifecycle::registered_session_v1_handle_from_state(state, session_id)?;
     // The stream UUID is never reused as a business execution or user input identity.
     // 流 UUID 绝不被复用为业务执行或用户输入身份。
     let execution_id = CollaborationExecutionId::try_new(task_id.to_string())
@@ -49,30 +52,55 @@ pub(super) async fn begin(
     // Capture admission time before publishing the exact owner.
     // 在发布精确所有者前捕获准入时间。
     let now_ms = crate::current_v1_unix_millis()?;
-    handle
+    let receipt = handle
         .mutate_durable_if_changed_async(
             SessionMutationAdmission::RootTurn,
             SessionFlushReason::MetadataChanged,
             move |document| {
+                // Keep exclusion inside the blocking writer even when the async waiter is cancelled.
+                // 即使异步等待者取消，也在阻塞写入器内部保持互斥。
+                let _preparation_settlement = preparation_settlement;
+                if document
+                    .metadata
+                    .context_maintenance
+                    .as_ref()
+                    .is_some_and(|record| record.execution_id == execution_id)
+                {
+                    document.begin_manual_context_maintenance(&source, execution_id, now_ms)?;
+                    return Ok(SessionMutationChange::Unchanged(
+                        ContextCompactionCommitMode::FinishActiveStream { task_id },
+                    ));
+                }
+                if let Some(owner) = document.borrow_manual_context_compaction(&source)? {
+                    return Ok(SessionMutationChange::Unchanged(
+                        ContextCompactionCommitMode::FinishBorrowedStream { task_id, owner },
+                    ));
+                }
                 Ok(
                     match document.begin_manual_context_maintenance(
                         &source,
                         execution_id,
                         now_ms,
                     )? {
-                        IdempotentMutation::Committed(record) => {
-                            SessionMutationChange::Changed(record)
-                        }
-                        IdempotentMutation::Idempotent(record) => {
-                            SessionMutationChange::Unchanged(record)
-                        }
+                        IdempotentMutation::Committed(_) => SessionMutationChange::Changed(
+                            ContextCompactionCommitMode::FinishActiveStream { task_id },
+                        ),
+                        IdempotentMutation::Idempotent(_) => SessionMutationChange::Unchanged(
+                            ContextCompactionCommitMode::FinishActiveStream { task_id },
+                        ),
                     },
                 )
             },
         )
         .await
-        .map_err(|error| error.to_string())?;
-    Ok(())
+        .map_err(|error| match &error {
+            crate::session_runtime_registry_v1::SessionRuntimeError::Domain(cause)
+                if matches!(cause.as_ref(), vulcan_session_core::v1::DomainError::CollaborationStateViolation {
+                    field: "manual_maintenance.competing_owner",
+                }) => String::from("Manual compaction is waiting for an auxiliary execution or unsettled child task. Finish or settle that work before compacting; the business turn was not changed."),
+            _ => error.to_string(),
+        })?;
+    Ok(receipt.value)
 }
 
 /// Closes the exact successful auxiliary owner after its canonical compaction node is committed.

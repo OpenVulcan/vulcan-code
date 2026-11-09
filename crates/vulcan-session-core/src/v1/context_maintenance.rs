@@ -26,6 +26,20 @@ pub struct ManualContextMaintenanceSource {
     pub(crate) event_revisions: Vec<(Seq, u64)>,
 }
 
+/// In-memory proof that an explicit manual summary may borrow one idle business turn.
+/// 显式手动摘要可借用某个空闲业务回合的内存证明。
+/// The host must retain its exact stream owner; this proof grants no business continuation.
+/// 宿主必须保留精确流所有者；此证明不授予业务续跑许可。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ManualContextCompactionBorrow {
+    pub(crate) turn_id: TurnId,
+    pub(crate) start_seq: Seq,
+    pub(crate) segment_generation: u64,
+    pub(crate) after_seq: Seq,
+    pub(crate) source_compaction_id: Option<CompactionId>,
+    pub(crate) run_control: super::collaboration::CollaborationRunControl,
+}
+
 /// Terminal maintenance fact, independent from the original business outcome.
 /// 维护终态事实，独立于原业务结果。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

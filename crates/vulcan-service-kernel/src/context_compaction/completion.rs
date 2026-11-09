@@ -122,6 +122,16 @@ pub(crate) enum ContextCompactionCommitMode {
         /// 拥有终态提交的精确手动压缩任务身份。
         task_id: Uuid,
     },
+    /// Finish the manual stream without ending its original business turn.
+    /// 结束手动流但不结束原业务回合。
+    FinishBorrowedStream {
+        /// Exact physical stream identity.
+        /// 精确物理流身份。
+        task_id: Uuid,
+        /// Validated source proof retained until publication and settlement finish.
+        /// 保留至发布与结算完成的已校验来源证明。
+        owner: vulcan_session_core::v1::context_maintenance::ManualContextCompactionBorrow,
+    },
 }
 
 impl ContextCompactionCommitMode {
@@ -134,9 +144,9 @@ impl ContextCompactionCommitMode {
     /// 返回所有者流注册时捕获的不可变 task id。
     const fn task_id(self) -> Uuid {
         match self {
-            Self::ContinueActiveStream { task_id } | Self::FinishActiveStream { task_id } => {
-                task_id
-            }
+            Self::ContinueActiveStream { task_id }
+            | Self::FinishActiveStream { task_id }
+            | Self::FinishBorrowedStream { task_id, .. } => task_id,
         }
     }
 
@@ -145,10 +155,13 @@ impl ContextCompactionCommitMode {
     ///
     /// # Returns
     /// 返回值
-    /// `true` only for standalone manual-compaction terminal commits.
-    /// 仅独立手动压缩终态提交返回 `true`。
+    /// `true` for either manual-compaction owner, never an automatic compaction.
+    /// 两种手动压缩所有者均返回 `true`，自动压缩不返回。
     const fn finishes_active_stream(self) -> bool {
-        matches!(self, Self::FinishActiveStream { .. })
+        matches!(
+            self,
+            Self::FinishActiveStream { .. } | Self::FinishBorrowedStream { .. }
+        )
     }
 }
 
@@ -428,7 +441,33 @@ pub(crate) async fn finish_webui_context_compaction_execution(
     })?;
     let handle =
         crate::session_goal_lifecycle::registered_session_v1_handle_from_state(state, session_id)?;
-    let compaction_receipt = match handle.record_compaction(commit_input, now_ms) {
+    // Borrow validation and publication share one canonical document transaction.
+    // 借用校验与发布共享同一规范文档事务。
+    let publication = match commit_mode {
+        ContextCompactionCommitMode::FinishBorrowedStream { owner, .. } => handle
+            .mutate_durable_if_changed(
+                crate::session_runtime_registry_v1::SessionMutationAdmission::ExistingTurn,
+                crate::session_runtime_registry_v1::SessionFlushReason::ContextChanged,
+                |document| {
+                    use crate::session_runtime_registry_v1::SessionMutationChange;
+                    use vulcan_session_core::v1::document::IdempotentMutation;
+                    Ok(
+                        match document.record_borrowed_manual_compaction(
+                            owner,
+                            commit_input,
+                            now_ms,
+                        )? {
+                            IdempotentMutation::Committed(id) => SessionMutationChange::Changed(id),
+                            IdempotentMutation::Idempotent(id) => {
+                                SessionMutationChange::Unchanged(id)
+                            }
+                        },
+                    )
+                },
+            ),
+        _ => handle.record_compaction(commit_input, now_ms),
+    };
+    let compaction_receipt = match publication {
         Ok(receipt) => receipt,
         Err(error) => {
             let rejection_error =
@@ -478,10 +517,19 @@ pub(crate) async fn finish_webui_context_compaction_execution(
             format!("V1 compaction committed, but VMM epoch publication failed: {error}")
         })?;
 
-    // Close the durable auxiliary turn before releasing the manual stream's admission slot.
-    // 在释放手动流的准入槽位前闭合可靠辅助回合。
-    if commit_mode.finishes_active_stream() {
-        super::manual::complete(state, session_id, commit_mode.task_id())?;
+    // Settle the exact manual owner before releasing its stream slot; borrowed business stays open.
+    // 释放流槽位前结算精确手动所有者；被借用的业务保持开放。
+    match commit_mode {
+        ContextCompactionCommitMode::FinishActiveStream { task_id } => {
+            super::manual::complete(state, session_id, task_id)?;
+        }
+        ContextCompactionCommitMode::FinishBorrowedStream { owner, .. } => {
+            handle
+                .read(|document| document.complete_borrowed_manual_compaction(owner))
+                .map_err(|error| error.to_string())?
+                .map_err(|error| error.to_string())?;
+        }
+        ContextCompactionCommitMode::ContinueActiveStream { .. } => {}
     }
 
     // The retained workspace is now display-only projection. It must not retain
@@ -626,7 +674,32 @@ pub(crate) fn fail_webui_context_compaction_execution(
             let guard = state.lock().map_err(|error| error.to_string())?;
             ensure_context_compaction_commit_owner(&guard, session_id, commit_mode)?;
         }
-        super::manual::fail(state, session_id, commit_mode.task_id(), error)?;
+        match commit_mode {
+            ContextCompactionCommitMode::FinishBorrowedStream { owner, .. } => {
+                let handle =
+                    crate::session_goal_lifecycle::registered_session_v1_handle_from_state(
+                        state, session_id,
+                    )?;
+                let now_ms = crate::current_v1_unix_millis()?;
+                handle
+                    .mutate_durable_if_changed(
+                        crate::session_runtime_registry_v1::SessionMutationAdmission::ExistingTurn,
+                        crate::session_runtime_registry_v1::SessionFlushReason::MetadataChanged,
+                        |document| {
+                            use crate::session_runtime_registry_v1::SessionMutationChange;
+                            let changed =
+                                document.fail_borrowed_manual_compaction(owner, error, now_ms)?;
+                            Ok(if changed {
+                                SessionMutationChange::Changed(())
+                            } else {
+                                SessionMutationChange::Unchanged(())
+                            })
+                        },
+                    )
+                    .map_err(|error| error.to_string())?;
+            }
+            _ => super::manual::fail(state, session_id, commit_mode.task_id(), error)?,
+        }
     }
     // committed_state carries the post-terminal workspace and its aligned phase delta.
     // committed_state 携带终结后的工作区及其对齐阶段增量。

@@ -195,29 +195,63 @@ pub(crate) async fn stream_webui_context_compaction_execution(
             tracing::warn!("[session-usage] cancellation projection: {error}");
         }
     }
-    if let Some(error) = projection_error {
-        return Err(error);
+    let result = (|| {
+        if let Some(error) = projection_error {
+            return Err(error);
+        }
+        // execution is the validated Agent-level compaction result.
+        // execution 是已校验的 Agent 层压缩结果。
+        let execution = terminal_result.unwrap_or_else(|| {
+            Err(String::from(
+                "The model summary stream ended early; this prompt compaction was cancelled.",
+            ))
+        })?;
+        // durability contains the exact V1 API and normalized assistant semantic receipts.
+        // durability 包含精确的 V1 API 与规范化 assistant 语义回执。
+        let durability = provider_v1_sink.take_finished_durability();
+        super::completion::verified_compaction_commit_input(
+            &execution,
+            &durability,
+            retained_from_seq,
+        )?;
+        Ok(WebuiContextCompactionExecution {
+            execution,
+            retained_from_seq,
+            durability,
+        })
+    })();
+    // The sink, not the latest document request, identifies an early failed summary API.
+    // 提前失败摘要的 API 由接收器标识，不从文档最近请求推断。
+    if trigger == MANUAL_CONTEXT_COMPACTION_TRIGGER
+        && let Err(error) = &result
+        && let Ok(api_id) = provider_v1_sink.request_preview_api_id()
+    {
+        let handle = crate::session_goal_lifecycle::registered_session_v1_handle_from_state(
+            state, session_id,
+        )?;
+        let api_id = vulcan_session_core::v1::ids::ApiCallId::try_new(api_id)
+            .map_err(|error| error.to_string())?;
+        let now_ms = crate::current_v1_unix_millis()?;
+        handle
+            .mutate_durable_if_changed(
+                crate::session_runtime_registry_v1::SessionMutationAdmission::ExistingTurn,
+                crate::session_runtime_registry_v1::SessionFlushReason::ApiCompleted,
+                |document| {
+                    use crate::session_runtime_registry_v1::SessionMutationChange;
+                    Ok(
+                        if document.fail_manual_compaction_api(api_id, error, now_ms)? {
+                            SessionMutationChange::Changed(())
+                        } else {
+                            SessionMutationChange::Unchanged(())
+                        },
+                    )
+                },
+            )
+            .map_err(|settlement| {
+                format!("{error}; manual summary API settlement failed: {settlement}")
+            })?;
     }
-    // execution is the validated Agent-level compaction result.
-    // execution 是已校验的 Agent 层压缩结果。
-    let execution = terminal_result.unwrap_or_else(|| {
-        Err(String::from(
-            "The model summary stream ended early; this prompt compaction was cancelled.",
-        ))
-    })?;
-    // durability contains the exact V1 API and normalized assistant semantic receipts.
-    // durability 包含精确的 V1 API 与规范化 assistant 语义回执。
-    let durability = provider_v1_sink.take_finished_durability();
-    super::completion::verified_compaction_commit_input(
-        &execution,
-        &durability,
-        retained_from_seq,
-    )?;
-    Ok(WebuiContextCompactionExecution {
-        execution,
-        retained_from_seq,
-        durability,
-    })
+    result
 }
 
 /// Publishes the display-only summary preview of the active compaction API.
@@ -331,31 +365,34 @@ pub(crate) fn spawn_webui_context_compaction_task(
         .ok()
         .and_then(|guard| webui_session_kernel_generation(&guard, session_id));
     let task_future = async move {
-        // Admission creates the real V1 owner before the first physical request is prepared.
-        // 准入在准备首个物理请求前创建真实 V1 所有者。
-        let admitted_request = match super::manual::begin(
-            &task_state,
-            session_id,
-            active_stream_task_id,
-            source,
-        )
-        .await
-        {
-            Ok(()) => match request {
-                // Declare the ordinary-turn tool list so the summary request reuses the provider prompt cache.
-                // 声明普通回合的工具清单，使摘要请求复用供应商提示缓存。
-                Ok(mut request) => {
-                    super::manual_tool_visibility::apply_manual_compaction_tool_visibility(
-                        &task_app,
-                        &task_state,
-                        &agent_runtime,
-                        &mut request,
-                    )
-                    .await
-                    .map(|()| request)
-                }
-                Err(error) => Err(error),
-            },
+        // Bind the exact V1 owner before preparing the summary request.
+        // 在准备摘要请求前绑定精确的 V1 所有者。
+        let admission =
+            super::manual::begin(&task_state, session_id, active_stream_task_id, source).await;
+        // Retain the admitted mode even when later request preparation fails.
+        // 即使后续请求准备失败，也保留已准入的结算模式。
+        let (admitted_request, commit_mode) = match admission {
+            Ok(mode) => (request, mode),
+            Err(error) => (
+                Err(error),
+                ContextCompactionCommitMode::FinishActiveStream {
+                    task_id: active_stream_task_id,
+                },
+            ),
+        };
+        // Both manual owners need the ordinary-turn declarations to reuse the provider prompt cache.
+        // 两种手动压缩归属都需要普通回合的工具声明，才能复用供应商提示缓存。
+        let admitted_request = match admitted_request {
+            Ok(mut request) => {
+                super::manual_tool_visibility::apply_manual_compaction_tool_visibility(
+                    &task_app,
+                    &task_state,
+                    &agent_runtime,
+                    &mut request,
+                )
+                .await
+                .map(|()| request)
+            }
             Err(error) => Err(error),
         };
         let terminal_result = match admitted_request {
@@ -377,9 +414,6 @@ pub(crate) fn spawn_webui_context_compaction_task(
         };
         // commit_mode keeps ownership validation, domain mutation, task removal, and kernel closure in one transaction.
         // commit_mode 将所有权校验、领域修改、任务移除与 kernel 关闭保留在同一事务中。
-        let commit_mode = ContextCompactionCommitMode::FinishActiveStream {
-            task_id: active_stream_task_id,
-        };
         // finish_result classifies both provider failures and fallback summaries before kernel closure.
         // finish_result 在关闭内核前同时分类 Provider 失败与回退摘要。
         let finish_result = match terminal_result {
