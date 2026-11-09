@@ -220,11 +220,6 @@ pub(super) async fn compact_admitted(
     let mut launch_context =
         PromptCompactionLaunchContext::from_execution_request(&request.preparation);
     launch_context.media_projection = Some(planned.media_projection);
-    // The declared model window uses the same reserve rule as root summary execution.
-    // 声明的模型窗口使用与根摘要执行相同的余量规则。
-    let input_budget = crate::context_compaction::context_compaction_input_budget_from_limit(
-        request.model_target.context_limit,
-    );
     // Original route diagnostics are frozen before moving the model target into its execution request.
     // 将模型目标交给执行请求之前冻结原路由诊断。
     let model_label = Some(request.model_target.label());
@@ -241,9 +236,6 @@ pub(super) async fn compact_admitted(
             workspace_path: request.preparation.workspace_path.clone(),
             plan: planned.plan,
             full_context_state: planned.full_context_state,
-            input_budget,
-            observed_input_tokens: None,
-            estimated_input_tokens: None,
             provider_configuration: request.provider_configuration,
             model_target: Some(request.model_target),
             execution_agent_id: request.preparation.execution_agent_id.clone(),
@@ -269,8 +261,8 @@ pub(super) async fn compact_admitted(
     let mut finished = None;
     while let Some(event) = stream.next().await {
         match event {
-            PromptCompactionStreamEvent::PreparedSource { source, mode } => {
-                sink.select_compaction_source(&source, mode)?;
+            PromptCompactionStreamEvent::PreparedSource { source } => {
+                sink.select_compaction_source(&source)?;
                 raw.clear();
             }
             PromptCompactionStreamEvent::Stream(event) => {

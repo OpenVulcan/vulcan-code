@@ -1369,7 +1369,6 @@ mod tests {
         let (completion, _receiver) = provider_request_preparation_barrier();
         ProviderStreamDelta::RequestPrepared {
             candidate: ProviderRequestPreparationCandidate {
-                source_message_positions: Default::default(),
                 media_context: None,
                 request_snapshot: test_request_snapshot(),
                 exact_request: serde_json::from_value(json!({

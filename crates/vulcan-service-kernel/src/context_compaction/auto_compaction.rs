@@ -649,8 +649,22 @@ pub(crate) fn compaction_message_from_v1_projection(
             output,
             ..
         } => Some(
-            serde_json::to_string(output)
+            serde_json::to_value(output)
+                .map_err(|error| format!("failed to project V1 tool result for compaction: {error}"))
+                .and_then(|mut output| {
+                    // Retire native media before the transcript can recover a tool result as plain user text.
+                    // 在转录层可能把工具结果恢复为普通用户文本之前，将原生媒体替换为地址说明。
+                    if let Some(model_output) = output.get_mut("model_output")
+                        && let Some(address) =
+                            vulcan_agent_runtime::native_media_input::compacted_native_media_content(
+                                model_output,
+                            )?
+                    {
+                        *model_output = address;
+                    }
+                    serde_json::to_string(&output)
                 .map_err(|error| format!("failed to serialize V1 tool result for compaction: {error}"))
+                })
                 .map(|body| {
                     let metadata = json!({
                         "tool_call_id": tool_call_id.value().to_string(),
@@ -1119,7 +1133,6 @@ pub(crate) fn build_webui_context_compaction_job_request(
             persisted_launch_context
         }
     };
-    let budget_snapshot = context_compaction_budget_snapshot_from_state(state, session_id);
     launch_context.media_projection = Some(media_projection);
     Ok(PromptCompactionJobRequest {
         session_id,
@@ -1127,13 +1140,6 @@ pub(crate) fn build_webui_context_compaction_job_request(
         workspace_path,
         plan,
         full_context_state,
-        input_budget: context_compaction_input_budget_from_snapshot(budget_snapshot.as_ref()),
-        observed_input_tokens: context_compaction_observed_input_tokens_from_snapshot(
-            budget_snapshot.as_ref(),
-        ),
-        estimated_input_tokens: context_compaction_estimated_input_tokens_from_snapshot(
-            budget_snapshot.as_ref(),
-        ),
         provider_configuration: agent_runtime.provider_configuration.clone(),
         model_target: Some(model_target),
         execution_agent_id: source_execution

@@ -512,6 +512,18 @@ fn provider_visible_history_downgrades_orphan_tool_result() {
 /// 验证部分完成的并行工具批次会在 Provider 回放前降级。
 #[test]
 fn provider_visible_history_downgrades_partial_tool_batch() {
+    // media_receipt contains real host-marked media that must contribute only its description to historical text.
+    // media_receipt 包含宿主标记的真实媒体，转为历史文本时只能贡献其描述。
+    let media_receipt = serde_json::json!({
+        "$vulcan_native_media_input": 1,
+        "text": "Read media: fixture.png",
+        "byte_len": 3,
+        "upload": null,
+        "resource": { "id": "media-fixture", "kind": "image", "media_type": "image/png",
+            "source_kind": "inline_data", "resource_path": "fixture.png", "url": "data:image/png;base64,YWJj" }
+    }).to_string();
+    // messages holds a partially completed parallel batch, with a media read as its completed result.
+    // messages 保存未完成的并行批次，其中已完成的结果为媒体读取。
     let messages = vec![
         CoreConversationMessage {
             id: String::from("assistant-1"),
@@ -525,7 +537,7 @@ fn provider_visible_history_downgrades_partial_tool_batch() {
                     CoreConversationToolCall {
                         id: String::from("local-call-1"),
                         tool_call_id: Some(String::from("provider-call-1")),
-                        tool_name: String::from("first_tool"),
+                        tool_name: String::from("read_media"),
                         arguments: serde_json::json!({"step": 1}),
                         argument_parse_error: None,
                         raw_arguments: Default::default(),
@@ -546,7 +558,7 @@ fn provider_visible_history_downgrades_partial_tool_batch() {
             payload: CoreConversationPayload::ToolResult {
                 tool_call_id: Some(String::from("provider-call-1")),
                 is_error: false,
-                text: String::from("first done"),
+                text: media_receipt,
             },
         },
     ];
@@ -564,9 +576,10 @@ fn provider_visible_history_downgrades_partial_tool_batch() {
     };
     assert!(attachments.is_empty());
     assert!(text.contains("interrupted before every requested tool returned"));
-    assert!(text.contains("first_tool"));
+    assert!(text.contains("read_media"));
     assert!(text.contains("second_tool"));
-    assert!(text.contains("first done"));
+    assert!(text.contains("fixture.png"));
+    assert!(!text.contains("data:image/png;base64,"));
 }
 
 /// Verifies interrupted tool batches with no results are never replayed as live provider tool calls.

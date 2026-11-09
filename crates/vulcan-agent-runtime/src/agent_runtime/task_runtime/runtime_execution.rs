@@ -1616,9 +1616,6 @@ pub(crate) async fn run_task_session_context_compaction(
         workspace_path: context.request_template.workspace_path.clone(),
         plan,
         full_context_state: conversation_state.clone(),
-        input_budget: None,
-        observed_input_tokens: None,
-        estimated_input_tokens: None,
         provider_configuration,
         model_target: Some(model_target),
         execution_agent_id: compaction_preparation_request.execution_agent_id.clone(),
@@ -2035,7 +2032,6 @@ mod standalone_compaction_tests {
         snapshot: &CoreRequestSnapshot,
     ) -> ProviderRequestPreparationCandidate {
         ProviderRequestPreparationCandidate {
-            source_message_positions: Default::default(),
             media_context: None,
             exact_request: vulcan_ai_contract::AiExecutionRequest {
                 operation: vulcan_ai_contract::AiOperation::ConversationRespond,

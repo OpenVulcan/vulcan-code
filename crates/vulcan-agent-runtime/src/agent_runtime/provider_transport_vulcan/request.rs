@@ -4,7 +4,7 @@ use super::message_projection::{core_message_text, core_message_to_public};
 use super::{VulcanPublicContractAdapter, provider_failure};
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use async_trait::async_trait;
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use vulcan_ai_contract::{
     APPLY_PATCH_LARK_GRAMMAR, APPLY_PATCH_TOOL_NAME, AiContinuation, AiExecutionRequest, AiMessage,
     AiOperation, ContentItem, FreeformToolArgumentEncoding, FreeformToolFormat, FreeformToolSyntax,
@@ -36,10 +36,6 @@ pub(crate) struct VulcanPublicContractRequest {
     /// Exact canonical controller snapshot used to build this public request.
     /// 用于构建当前公共请求的精确规范控制器快照。
     pub(crate) controller_snapshot: CoreConversationSnapshot,
-    /// Exact source IDs mapped to positions at assembly time, excluding synthetic system messages.
-    /// 组装时映射至位置的精确来源ID，不包含合成系统消息。
-    #[serde(skip)]
-    pub(crate) source_message_positions: BTreeMap<String, usize>,
     /// Exact canonical snapshot used by the request budget guard.
     /// 请求预算门使用的精确规范快照。
     pub(crate) budget: CoreProviderRequestSnapshot,
@@ -193,18 +189,11 @@ impl VulcanProviderAdapter for VulcanPublicContractAdapter {
                 provider_context_items: Vec::new(),
             });
         }
-        // Build the canonical history before inserting host events so source positions remain exact after projection.
-        // 先构建规范历史再插入宿主事件，确保投影后来源位置仍然精确。
-        let mut projected_history = Vec::with_capacity(snapshot.messages.len());
-        // Record identities beside conversion so capture never guesses a synthetic-message offset.
-        // 在转换位置旁记录身份，使捕获绝不猜测合成消息偏移。
-        let mut source_message_positions = BTreeMap::new();
+        // source_ids enforces unique canonical message identities before they reach the provider.
+        // source_ids 确保进入供应商请求的规范消息身份唯一。
+        let mut source_ids = BTreeSet::new();
         for message in &snapshot.messages {
-            if message.id.trim().is_empty()
-                || projected_history
-                    .iter()
-                    .any(|(source_id, _)| source_id == &message.id)
-            {
+            if message.id.trim().is_empty() || !source_ids.insert(message.id.as_str()) {
                 return Err(provider_failure(
                     self.provider_id(),
                     "Provider source message identities are empty or duplicated.",
@@ -218,10 +207,6 @@ impl VulcanProviderAdapter for VulcanPublicContractAdapter {
                 self.route.protocol_route.protocol_profile_id.as_str(),
                 self.model_id(),
             )?;
-            projected_history.push((message.id.clone(), public_message));
-        }
-        for (source_id, public_message) in projected_history {
-            source_message_positions.insert(source_id, messages.len());
             messages.push(public_message);
         }
         // Native user media is prepared only by its exact prompt owner after this pure candidate stage.
@@ -301,7 +286,6 @@ impl VulcanProviderAdapter for VulcanPublicContractAdapter {
             public: rebuilt_public,
             controller_config: config.clone(),
             controller_snapshot: snapshot.clone(),
-            source_message_positions,
             budget,
             context_budget: None,
             request_budget_guard: None,

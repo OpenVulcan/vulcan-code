@@ -77,7 +77,7 @@ async fn native_read_fixture() -> Result<NativeReadFixture, Box<dyn std::error::
     let tool_id = ToolCallId::try_new(1)?;
     // This projection is the authoritative V1 source, independent of pre-gate candidate messages.
     // 此投影是权威V1来源，独立于闸门前候选消息。
-    let snapshot = SessionProviderProjectionSnapshot {
+    let mut snapshot = SessionProviderProjectionSnapshot {
         current_compaction_id: None,
         open_turn_id: None,
         child_business_execution_id: None,
@@ -114,6 +114,22 @@ async fn native_read_fixture() -> Result<NativeReadFixture, Box<dyn std::error::
         provider_usage_budget_anchor: None,
         initialized_locked_baseline: None,
     };
+    // Preserve the durable source sequences so the fixture can exercise the bound compaction path.
+    // 保留持久来源序列，使夹具能验证已绑定来源的压缩路径。
+    snapshot.sourced_items = snapshot
+        .items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let seq = Seq::try_new(index as u64 + 1)?;
+            Ok(vulcan_session_core::v1::projection::SourcedProjectedItem {
+                source_from_seq: seq,
+                source_to_seq: seq,
+                user_prompt_parameters: None,
+                item: item.clone(),
+            })
+        })
+        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
     Ok((context, facts, candidate, snapshot, base64, directory))
 }
 
@@ -125,11 +141,26 @@ async fn native_media_v1_rebuild_preserves_media_instead_of_serializing_host_jso
     let (context, facts, candidate, snapshot, base64, _directory) = native_read_fixture().await?;
     // Execute the actual rebuild and budget finalization used before production provider dispatch.
     // 执行生产供应商分派前使用的实际重建及预算完成逻辑。
-    let prepared =
-        rebuild_provider_transport_candidate(snapshot, &facts, candidate, Default::default())?;
+    let prepared = rebuild_provider_transport_candidate(
+        snapshot.clone(),
+        &facts,
+        candidate.clone(),
+        Default::default(),
+    )?;
     // Media must be an input resource, and durable controller history must remain lossless.
     // 媒体必须成为输入资源，且持久控制器历史必须保持无损。
-    assert!(prepared.transport.exact_request.messages.iter().flat_map(|message| &message.content).any(|item| matches!(item, ContentItem::Resource { resource } if resource.id == "native-media-v1")));
+    assert!(
+        prepared
+            .transport
+            .exact_request
+            .messages
+            .iter()
+            .any(|message| {
+                message.role == MessageRole::User && message.content.iter().any(|item| {
+            matches!(item, ContentItem::Resource { resource } if resource.id == "native-media-v1")
+        })
+            })
+    );
     assert!(
         serde_json::to_string(&prepared.transport.controller_snapshot)?
             .contains("$vulcan_native_media_input")
@@ -152,6 +183,160 @@ async fn native_media_v1_rebuild_preserves_media_instead_of_serializing_host_jso
     assert!(body.contains("input_image"));
     assert!(body.contains(&base64));
     assert!(!body.contains("$vulcan_native_media_input"));
+
+    // summary_facts and summary_candidate select the same frozen route and add only the summary instruction.
+    // summary_facts 与 summary_candidate 选择同一冻结路由，仅追加摘要指令。
+    let mut summary_facts = facts;
+    summary_facts.purpose = ApiPurposeKind::Compaction;
+    let mut summary_candidate = candidate;
+    summary_candidate.request_snapshot.prompt = String::from("Summarize the existing context.");
+    // rows and state mirror the planner's projection without using it as the physical request history.
+    // rows 和 state 模拟规划器的投影，但不将其用作物理请求历史。
+    let rows = snapshot
+        .sourced_items
+        .iter()
+        .filter_map(crate::context_compaction::compaction_message_from_v1_projection)
+        .map(|entry| entry.map(|(message, _)| message))
+        .collect::<Result<Vec<_>, _>>()?;
+    let state = vulcan_context::conversation_state_from_session_messages(&rows)?;
+    // source binds the planner identity to the durable snapshot that owns the original media.
+    // source 将规划器身份绑定到持有原生媒体的持久快照。
+    let mut source = compaction_source::CompactionSourceWindow::capture(snapshot.clone(), &state)?;
+    source.select(&vulcan_context::conversation_state_to_compaction_source_messages(&state)?)?;
+    // summary uses the same native media projection as the ordinary physical request.
+    // summary 与普通物理请求使用同一原生媒体投影。
+    let summary = rebuild_provider_transport_candidate_with_compaction(
+        snapshot,
+        &summary_facts,
+        summary_candidate,
+        Default::default(),
+        Some(&source),
+    )?;
+    // prefix and summary_messages compare every physical message without depending on a particular history size.
+    // prefix 与 summary_messages 逐条比较物理消息，不依赖固定的历史数量。
+    let prefix = &prepared.transport.exact_request.messages;
+    let summary_messages = &summary.transport.exact_request.messages;
+    assert_eq!(summary_messages.len(), prefix.len() + 1);
+    assert_eq!(
+        serde_json::to_value(&summary_messages[..prefix.len()])?,
+        serde_json::to_value(prefix)?
+    );
+    assert!(
+        matches!(summary_messages.last(), Some(message) if message.role == MessageRole::User
+        && message.content.iter().any(|item| matches!(item, ContentItem::Text { text }
+            if text.contains("Summarize the existing context."))))
+    );
+    Ok(())
+}
+
+/// Verifies the runtime-only permit sends matched media as a User resource.
+/// 验证纯运行时许可将已配对媒体作为 User 资源发送。
+/// Takes no arguments and returns any fixture or preparation failure.
+/// 不接收参数，返回夹具或准备失败。
+#[tokio::test]
+async fn native_media_non_session_permit_projects_the_tool_result()
+-> Result<(), Box<dyn std::error::Error>> {
+    // candidate and snapshot describe the same frozen media execution.
+    // candidate 和 snapshot 描述同一冻结媒体执行。
+    let (_, _, mut candidate, snapshot, base64, _directory) = native_read_fixture().await?;
+    // output is the exact persisted result wrapper, as emitted by the controller bridge.
+    // output 是控制器桥接发出的完整持久结果包装。
+    let output = snapshot
+        .items
+        .iter()
+        .find_map(|item| match item {
+            ProjectedItem::ToolResult { output, .. } => Some(output),
+            _ => None,
+        })
+        .expect("native media fixture tool result");
+    candidate.exact_request.messages = vec![
+        AiMessage {
+            role: MessageRole::Assistant,
+            content: vec![ContentItem::ToolCall {
+                call: AiToolCall {
+                    id: String::from("native-read"),
+                    name: String::from("read_media"),
+                    arguments: json!({"path":"image.png"}),
+                    signature: None,
+                },
+            }],
+            provider_context_items: Vec::new(),
+        },
+        AiMessage {
+            role: MessageRole::Tool,
+            content: vec![ContentItem::ToolResult {
+                result: AiToolResult {
+                    call_id: String::from("native-read"),
+                    is_error: false,
+                    content: serde_json::Value::String(serde_json::to_string(output)?),
+                },
+            }],
+            provider_context_items: Vec::new(),
+        },
+    ];
+    // exact_request is the only request released to the provider adapter.
+    // exact_request 是唯一放行给供应商适配器的请求。
+    let PreparedPhysicalApi::ExcludedNonSession { exact_request, .. } =
+        candidate.into_excluded_non_session()?
+    else {
+        panic!("expected a standalone physical request");
+    };
+    assert!(exact_request.messages.iter().any(|message| {
+        message.role == MessageRole::User && message.content.iter().any(|item| {
+            matches!(item, ContentItem::Resource { resource } if resource.id == "native-media-v1")
+        })
+    }));
+    for item in exact_request
+        .messages
+        .iter()
+        .flat_map(|message| &message.content)
+    {
+        if let ContentItem::ToolResult { result } = item {
+            assert!(!serde_json::to_string(&result.content)?.contains(&base64));
+        }
+    }
+    Ok(())
+}
+
+/// Verifies the compaction text projection keeps the media address, including for orphaned results.
+/// 验证压缩文本投影保留媒体地址，包括缺少可配对调用的工具结果。
+/// Takes no arguments and returns any fixture or projection failure.
+/// 不接收参数，返回夹具或投影失败。
+#[tokio::test]
+async fn compaction_transcript_keeps_read_media_as_an_address()
+-> Result<(), Box<dyn std::error::Error>> {
+    // snapshot and base64 come from the same native-media fixture used by physical request preparation.
+    // snapshot 与 base64 来自物理请求准备使用的同一原生媒体夹具。
+    let (_, _, _, snapshot, base64, _directory) = native_read_fixture().await?;
+    // item is the persisted tool result that can become historical text without a structured call.
+    // item 是可能在缺少结构化调用时转成历史文本的持久工具结果。
+    let item = snapshot
+        .items
+        .into_iter()
+        .find(|item| matches!(item, ProjectedItem::ToolResult { .. }))
+        .expect("native media fixture tool result");
+    // projected retains the same identity and sequence when the compaction planner projects it.
+    // projected 在压缩规划器投影时保留相同身份和序列。
+    let projected = vulcan_session_core::v1::projection::SourcedProjectedItem {
+        item,
+        source_from_seq: Seq::try_new(2)?,
+        source_to_seq: Seq::try_new(2)?,
+        user_prompt_parameters: None,
+    };
+    // transcript contains the textual copy used by the compaction source and budget.
+    // transcript 包含压缩来源和预算使用的文本副本。
+    let (transcript, _) =
+        crate::context_compaction::compaction_message_from_v1_projection(&projected)
+            .expect("tool result belongs in compaction source")?;
+    // state runs the orphaned result through the same conversation normalization as the summary.
+    // state 使缺少调用的工具结果经过摘要使用的同一会话规范化。
+    let state = vulcan_context::conversation_state_from_session_messages(&[transcript])?;
+    // text is the serialized conversation after historical fallback has been applied.
+    // text 是历史文本回退应用后的序列化会话。
+    let text = serde_json::to_string(&state)?;
+    assert!(text.contains("image.png"));
+    assert!(!text.contains(&base64));
+    assert!(!text.contains("data:image/png;base64,"));
     Ok(())
 }
 
@@ -164,20 +349,6 @@ async fn native_media_before_compaction_frontier_keeps_only_its_address()
         native_read_fixture().await?;
     // Both items come from seqs 1 and 2; the frontier at 2 covers the whole read.
     // 两项分别来自seq 1与2；前沿位于2覆盖整个读取。
-    snapshot.sourced_items = snapshot
-        .items
-        .iter()
-        .enumerate()
-        .map(|(index, item)| {
-            let seq = Seq::try_new(index as u64 + 1)?;
-            Ok(vulcan_session_core::v1::projection::SourcedProjectedItem {
-                user_prompt_parameters: None,
-                source_from_seq: seq,
-                source_to_seq: seq,
-                item: item.clone(),
-            })
-        })
-        .collect::<Result<_, Box<dyn std::error::Error>>>()?;
     snapshot.compaction_frontier_seq = Some(Seq::try_new(2)?);
     let prepared =
         rebuild_provider_transport_candidate(snapshot, &facts, candidate, Default::default())?;

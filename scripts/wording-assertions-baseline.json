@@ -96,7 +96,6 @@
   "apps/vulcan-code-web/src/ui-kit/shell/sidebar.test.tsx": 1,
   "crates/vulcan-agent-runtime/src/agent_profile.rs": 2,
   "crates/vulcan-agent-runtime/src/agent_runtime/config.rs": 2,
-  "crates/vulcan-agent-runtime/src/agent_runtime/prompt_compaction/tests.rs": 1,
   "crates/vulcan-agent-runtime/src/agent_runtime/provider_request_bridge_messages/tests.rs": 4,
   "crates/vulcan-agent-runtime/src/agent_runtime/provider_request_snapshot_builder.rs": 2,
   "crates/vulcan-agent-runtime/src/agent_runtime/provider_transport_vulcan/accumulator/tests.rs": 3,

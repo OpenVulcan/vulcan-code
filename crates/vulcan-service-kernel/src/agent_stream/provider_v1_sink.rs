@@ -1434,15 +1434,6 @@ fn rebuild_provider_transport_candidate_with_compaction(
         }
     }
 
-    // Pruned summaries use the exact normalized attempt, never the complete business history.
-    // 剪枝摘要使用精确规范化尝试，绝不恢复为完整业务历史。
-    if let Some(source) = compaction
-        && let Some((history, messages)) = source.pruned_transport(&candidate)?
-    {
-        controller_snapshot = history;
-        request_messages.extend(messages);
-    }
-
     // Summary instructions belong to this physical request and never replace business producer state.
     // 摘要指令属于本次物理请求，绝不替换业务生产者状态。
     for message in context_injection::compaction_request_messages(facts, &candidate)? {
@@ -1882,19 +1873,14 @@ impl ProviderV1StreamSink {
             .map_err(provider_projection_runtime_error)?;
         }
         context_injection::synchronize_request_dynamic_context(&self.handle, &facts, &candidate)?;
-        // A summary must keep the jobs that still run, or the model forgets them after compaction. The
-        // list is request-local: it joins the summary controls after the context was published.
-        // 摘要必须保留仍在运行的任务，否则压缩后模型会忘记它们。该列表只属于本次请求：它在上下文发布之后才
-        // 加入摘要控制消息。
+        // Include active shell jobs in the single summary instruction so they survive compaction.
+        // 将正在运行的 Shell 任务放入唯一的摘要指令，使其在压缩后仍被记住。
         let mut candidate = candidate;
         if facts.purpose == vulcan_session_core::v1::event::ApiPurposeKind::Compaction
             && let Some(jobs) = running_shell_jobs_context(&self.handle.session_id().to_string())
         {
-            let runtime_context = &mut candidate.dynamic_prompt_layers.runtime_context;
-            if !runtime_context.trim().is_empty() {
-                runtime_context.push_str("\n\n");
-            }
-            runtime_context.push_str(&jobs);
+            candidate.request_snapshot.prompt.push_str("\n\n");
+            candidate.request_snapshot.prompt.push_str(&jobs);
         }
         let locked_baseline =
             initial_locked_baseline_with_host_guidance(&candidate.locked_baseline)?;

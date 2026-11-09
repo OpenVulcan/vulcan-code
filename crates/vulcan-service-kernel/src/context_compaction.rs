@@ -21,9 +21,7 @@ use vulcan_agent_runtime::{
     provider_config::ReasoningEffortLevel,
 };
 use vulcan_context::{ContextBudgetSnapshot, ContextCompactionPolicy, append_record_body_delta};
-use vulcan_context_compaction::{
-    CompactionInputBudget, CompactionPlan, CompactionPlanInput, plan_context_compaction,
-};
+use vulcan_context_compaction::{CompactionPlan, CompactionPlanInput, plan_context_compaction};
 use vulcan_service_api::{ServiceEvent, ServiceEventEmitter, WorkbenchDeltaEnvelope};
 use vulcan_session_core::{
     TurnTerminalStatus,
@@ -62,18 +60,12 @@ const AUTO_CONTEXT_COMPACTION_TRIGGER: &str = "auto_budget";
 /// Maximum consecutive automatic compaction failures within one stream execution.
 /// 单个流执行内允许的最大连续自动压缩失败次数。
 const MAX_CONSECUTIVE_AUTO_COMPACTION_FAILURES: usize = 3;
-/// Fixed input-token reserve kept free when deciding whether compaction input must be clone-pruned.
-/// 判断压缩输入是否必须进行克隆剪枝时保留的固定输入 Token 安全阈值。
-const CONTEXT_COMPACTION_INPUT_SAFETY_RESERVE_TOKENS: usize = 30_000;
 /// Reclaimable VMM anchor tokens that independently justify cache-boundary compaction.
 /// 可独立触发缓存边界压缩的 VMM 可回收锚点 Token 数。
 const VMM_RECLAIMABLE_ANCHOR_COMPACTION_TOKENS: usize = 32_768;
 /// Effective input-window ratio at which reclaimable VMM anchors justify earlier compaction.
 /// VMM 可回收锚点足以提前触发压缩的生效输入窗口比例。
 const VMM_RECLAIMABLE_ANCHOR_COMPACTION_RATIO: f32 = 0.05;
-/// Minimum allowed reserve for compaction-input pruning decisions.
-/// 压缩输入剪枝决策允许使用的最低安全阈值。
-const MIN_CONTEXT_COMPACTION_INPUT_SAFETY_RESERVE_TOKENS: usize = 20_000;
 
 mod auto_compaction;
 mod budget;

@@ -301,10 +301,8 @@ impl StandalonePromptCompactionOwner {
                 "Standalone prompt compaction prepared the already admitted Provider request `{request_id}`."
             ));
         }
-        // The standalone owner is the only permit authority on this path: it releases the candidate
-        // exactly as built because no session media owner or V1 ledger exists to rebuild it.
-        // 独立所有者是此路径上唯一的许可权威：由于不存在会话媒体所有者或 V1 账本可以重建候选，
-        // 它按原样放行候选。
+        // The standalone owner admits the candidate after native tool-media projection, without a V1 rebuild.
+        // 独立所有者在原生工具媒体投影后放行候选，不依赖 V1 重建。
         let permit = candidate.into_excluded_non_session()?;
         self.requests
             .push(StandaloneRequestLedger::admitted(request_id));

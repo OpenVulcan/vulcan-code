@@ -67,9 +67,6 @@ impl std::fmt::Debug for ProviderRequestMediaContext {
 /// V1会话所有者重建请求前产生的不可变传输候选。
 #[derive(Debug, Clone)]
 pub struct ProviderRequestPreparationCandidate {
-    /// Exact controller-message identities mapped by the transport builder to physical positions.
-    /// 由传输构建器映射到物理位置的准确控制器消息身份。
-    pub source_message_positions: std::collections::BTreeMap<String, usize>,
     /// Frozen media execution for real session requests; state-only and excluded fixtures may omit it.
     /// 真实会话请求的冻结媒体执行；仅状态和排除夹具可以省略。
     pub media_context: Option<ProviderRequestMediaContext>,
@@ -131,9 +128,9 @@ impl ProviderRequestPreparationCandidate {
     ///
     /// # Returns
     /// 返回值
-    /// Returns an excluded permit only when every resource already has provider-safe source semantics.
-    /// 仅当每项资源已经具备供应商安全来源语义时返回排除许可。
-    pub fn into_excluded_non_session(self) -> Result<PreparedPhysicalApi, String> {
+    /// Returns an excluded permit only after validating resource sources and projecting native tool media.
+    /// 仅在校验资源来源并投影原生工具媒体后返回排除许可。
+    pub fn into_excluded_non_session(mut self) -> Result<PreparedPhysicalApi, String> {
         let has_unprepared_resource = self
             .exact_request
             .resources
@@ -150,6 +147,12 @@ impl ProviderRequestPreparationCandidate {
                 "A non-session Provider request contains an unprepared host resource; route it through the session media owner or an explicit AI extension pipeline.",
             ));
         }
+        // Standalone requests lack the V1 rebuild that normally separates tool receipts from media input.
+        // 独立请求没有通常用于拆分工具回执与媒体输入的 V1 重建步骤。
+        crate::native_media_input::project_native_media_messages(
+            &mut self.exact_request.messages,
+            self.media_context.as_ref(),
+        )?;
         Ok(PreparedPhysicalApi::ExcludedNonSession {
             exact_request: self.exact_request,
             controller_config: self.controller_config,

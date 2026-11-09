@@ -137,7 +137,7 @@ fn project_core_messages_to_provider_visible_history_for_model(
                     projected.push(CoreConversationMessage {
                         id: message.id.clone(),
                         payload: CoreConversationPayload::UserText {
-                            text: partial_tool_batch_text(text, reasoning, tool_calls, &[]),
+                            text: partial_tool_batch_text(text, reasoning, tool_calls, &[])?,
                             attachments: Vec::new(),
                         },
                     });
@@ -160,7 +160,7 @@ fn project_core_messages_to_provider_visible_history_for_model(
                             projected.push(project_tool_result_message(
                                 result_message,
                                 &mut active_tool_call_identities,
-                            ));
+                            )?);
                         }
                     }
                 } else {
@@ -172,7 +172,7 @@ fn project_core_messages_to_provider_visible_history_for_model(
                                 reasoning,
                                 tool_calls,
                                 &messages[index + 1..result_end],
-                            ),
+                            )?,
                             attachments: Vec::new(),
                         },
                     });
@@ -184,7 +184,7 @@ fn project_core_messages_to_provider_visible_history_for_model(
                 projected.push(project_tool_result_message(
                     message,
                     &mut active_tool_call_identities,
-                ));
+                )?);
                 index += 1;
             }
             CoreConversationPayload::AgentMessage { .. } => {
@@ -499,17 +499,21 @@ fn consecutive_tool_result_span(
 
 /// Projects one tool-result message either as a native provider tool response or as plain fallback text.
 /// 将一条工具结果消息投影为原生 Provider 工具响应，或投影为普通文本回退。
+/// `message` is the canonical result and `active_tool_call_identities` owns the remaining matches.
+/// `message` 是规范结果，`active_tool_call_identities` 保存剩余的配对身份。
+/// Returns the projected message or an error for invalid native media in a text fallback.
+/// 返回投影消息，文本回退遇到无效的原生媒体时返回错误。
 fn project_tool_result_message(
     message: &CoreConversationMessage,
     active_tool_call_identities: &mut Vec<(String, Vec<String>)>,
-) -> CoreConversationMessage {
+) -> Result<CoreConversationMessage, String> {
     let CoreConversationPayload::ToolResult {
         tool_call_id,
         is_error,
         text,
     } = &message.payload
     else {
-        return message.clone();
+        return Ok(message.clone());
     };
     let tool_call_key = tool_call_id.as_deref().unwrap_or_default().trim();
     let matching_identity_index = if tool_call_key.is_empty() {
@@ -528,14 +532,14 @@ fn project_tool_result_message(
         }
     } else {
         CoreConversationPayload::UserText {
-            text: orphan_tool_result_text(&message.id, tool_call_id, text),
+            text: orphan_tool_result_text(&message.id, tool_call_id, text)?,
             attachments: Vec::new(),
         }
     };
-    CoreConversationMessage {
+    Ok(CoreConversationMessage {
         id: message.id.clone(),
         payload,
-    }
+    })
 }
 
 /// Selects the exact identifier serialized for one provider-visible tool call.
@@ -650,26 +654,39 @@ fn tool_call_identifier_groups(tool_calls: &[CoreConversationToolCall]) -> Vec<V
 
 /// Builds a provider-visible plain-text fallback for a tool result whose matching tool call was compacted away.
 /// 为匹配工具调用已被压缩移除的工具结果构建 Provider 可见的纯文本回退内容。
-fn orphan_tool_result_text(message_id: &str, tool_call_id: &Option<String>, text: &str) -> String {
+/// `message_id` and `tool_call_id` identify the `text`. Returns a receipt or a native-media validation error.
+/// `message_id` 与 `tool_call_id` 标识 `text`。返回回执文本或原生媒体校验错误。
+fn orphan_tool_result_text(
+    message_id: &str,
+    tool_call_id: &Option<String>,
+    text: &str,
+) -> Result<String, String> {
     let call_label = tool_call_id
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("unknown");
-    format!(
+    // preview discards native-media bytes before the result becomes user text.
+    // preview 在结果转为用户文本前移除原生媒体字节。
+    let preview = crate::agent_runtime::tool_result_media::tool_result_text_preview(text)?;
+    Ok(format!(
         "ERROR: Tool result `{}` cannot be replayed as a tool response because matching assistant tool call `{}` is no longer present in context. Treat the following as historical text only.\n\n{}",
-        message_id, call_label, text
-    )
+        message_id, call_label, preview
+    ))
 }
 
 /// Builds plain provider-visible history text for a partially completed assistant tool-call batch.
 /// 为一批未完整完成的助手工具调用构建 Provider 可见的普通历史文本。
+/// `text` and `reasoning` are the assistant output; `tool_calls` and `result_messages` describe the batch.
+/// `text` 和 `reasoning` 为助手输出，`tool_calls` 和 `result_messages` 描述该批调用。
+/// Returns the history text or an error for invalid native media.
+/// 返回历史文本，遇到无效原生媒体时返回错误。
 fn partial_tool_batch_text(
     text: &str,
     reasoning: &str,
     tool_calls: &[CoreConversationToolCall],
     result_messages: &[CoreConversationMessage],
-) -> String {
+) -> Result<String, String> {
     let mut lines = Vec::new();
     lines.push(String::from(
         "NOTE: A previous assistant tool-call batch was interrupted before every requested tool returned. Treat this block as historical text only, not as live tool protocol state.",
@@ -709,10 +726,10 @@ fn partial_tool_batch_text(
                     result_message.id,
                     call_label,
                     is_error,
-                    text.trim()
+                    crate::agent_runtime::tool_result_media::tool_result_text_preview(text)?.trim()
                 ));
             }
         }
     }
-    lines.join("\n")
+    Ok(lines.join("\n"))
 }

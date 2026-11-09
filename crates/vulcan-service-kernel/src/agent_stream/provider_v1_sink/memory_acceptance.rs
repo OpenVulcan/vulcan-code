@@ -63,7 +63,6 @@ fn memory_acceptance_candidate(
     // All history starts empty so only the supplied V1 owner can contribute conversation content.
     // 历史初始为空，只有传入的 V1 归属方可以贡献会话内容。
     let candidate = ProviderRequestPreparationCandidate {
-        source_message_positions: Default::default(),
         media_context: None,
         exact_request: AiExecutionRequest {
             operation: AiOperation::ConversationRespond,

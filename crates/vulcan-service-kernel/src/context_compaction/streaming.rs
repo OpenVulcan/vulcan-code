@@ -110,8 +110,8 @@ pub(crate) async fn stream_webui_context_compaction_execution(
     let mut stream = Box::pin(stream_prompt_compaction_job(request));
     while let Some(event) = stream.next().await {
         match event {
-            PromptCompactionStreamEvent::PreparedSource { source, mode } => {
-                if let Err(error) = provider_v1_sink.select_compaction_source(&source, mode) {
+            PromptCompactionStreamEvent::PreparedSource { source } => {
+                if let Err(error) = provider_v1_sink.select_compaction_source(&source) {
                     projection_error = Some(error);
                     break;
                 }

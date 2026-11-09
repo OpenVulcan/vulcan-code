@@ -323,10 +323,10 @@ pub(super) fn synchronize_request_dynamic_context(
     Ok(())
 }
 
-/// Builds request-local User controls for a summary without adding events to the business document.
-/// 为摘要构建请求局部 User 控制消息，不向业务文档添加事件。
-/// Exact typed layers and the prepared final prompt are rendered once; returns an error for invalid envelopes.
-/// 精确类型化提示层和已准备最终提示只渲染一次；信封无效时返回错误。
+/// Builds the single request-local User instruction without adding events to the business document.
+/// 构建一条请求局部 User 摘要指令，不向业务文档添加事件。
+/// `facts` selects the compaction call and `candidate` holds the final prompt. Returns zero or one message.
+/// `facts` 选择压缩调用，`candidate` 持有最终提示词。返回零条或一条消息。
 pub(super) fn compaction_request_messages(
     facts: &ProviderV1RequestFacts,
     candidate: &ProviderRequestPreparationCandidate,
@@ -334,53 +334,38 @@ pub(super) fn compaction_request_messages(
     if facts.purpose != vulcan_session_core::v1::event::ApiPurposeKind::Compaction {
         return Ok(Vec::new());
     }
-    if candidate.request_snapshot.prompt.trim().is_empty() {
+    // instruction is the sole addition to the frozen business request prefix.
+    // instruction 是冻结业务请求前缀之后追加的唯一内容。
+    let instruction = &candidate.request_snapshot.prompt;
+    if instruction.trim().is_empty() {
         return Err(provider_projection_runtime_error(
             "Compaction request has no final summary instruction.",
         ));
     }
-    // Fixed source names come from the typed composer fields, never from parsing user content.
-    // 固定来源名称来自类型化组合器字段，绝不通过解析用户内容推测。
-    let layers = &candidate.dynamic_prompt_layers;
-    // Ordered controls are appended after authoritative history and included in request budgeting.
-    // 有序控制消息追加在权威历史之后，并计入请求预算。
-    let mut messages = Vec::new();
-    for (source, body) in [
-        ("system", layers.system.as_str()),
-        ("developer", layers.developer.as_str()),
-        ("tool_guidance", layers.tool_guidance.as_str()),
-        ("runtime_context", layers.runtime_context.as_str()),
-        ("instruction", candidate.request_snapshot.prompt.as_str()),
-    ] {
-        if body.trim().is_empty() {
-            continue;
-        }
-        // Bind each local control to this exact physical request and fixed composer field.
-        // 将每条局部控制绑定到本次精确物理请求及固定组合器字段。
-        let event_id = format!("compaction-request:{}:{source}", facts.provider_call_id);
-        // This typed envelope is request-local; no body text can create durable collaboration authority.
-        // 此类型化信封仅属于请求；正文不能创建持久协作权限。
-        let envelope = vulcan_ai_contract::HostMessageEnvelope {
-            event_id: event_id.clone(),
-            kind: vulcan_ai_contract::HostMessageKind::ContextUpdate,
-            source: format!("context_compaction:{source}"),
-            target: String::from("model"),
-            task_id: None,
-            question_id: None,
-            scope: String::from("compaction_request"),
-            body: body.to_owned(),
-        };
-        messages.push(ConversationMessage {
-            id: event_id,
-            payload: ConversationPayload::UserText {
-                text: envelope
-                    .render()
-                    .map_err(provider_projection_runtime_error)?,
-                attachments: Vec::new(),
-            },
-        });
-    }
-    Ok(messages)
+    // event_id binds the request-local instruction to the exact physical call.
+    // event_id 将请求局部摘要指令绑定到精确物理调用。
+    let event_id = format!("compaction-request:{}:instruction", facts.provider_call_id);
+    // envelope adds a typed control without replaying newly composed system, tool, or runtime layers.
+    // envelope 追加类型化控制消息，避免重放新组合的系统、工具或运行时提示层。
+    let envelope = vulcan_ai_contract::HostMessageEnvelope {
+        event_id: event_id.clone(),
+        kind: vulcan_ai_contract::HostMessageKind::ContextUpdate,
+        source: String::from("context_compaction:instruction"),
+        target: String::from("model"),
+        task_id: None,
+        question_id: None,
+        scope: String::from("compaction_request"),
+        body: instruction.clone(),
+    };
+    Ok(vec![ConversationMessage {
+        id: event_id,
+        payload: ConversationPayload::UserText {
+            text: envelope
+                .render()
+                .map_err(provider_projection_runtime_error)?,
+            attachments: Vec::new(),
+        },
+    }])
 }
 
 /// Builds the stable prompt inputs, independent transient blocks, and typed expiry facts.

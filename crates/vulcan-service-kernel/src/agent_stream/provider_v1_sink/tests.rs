@@ -617,7 +617,6 @@ fn provider_transport_rebuild_replaces_pre_gate_conversation() {
     ])
     .expect("persisted initialized baseline");
     let candidate = ProviderRequestPreparationCandidate {
-        source_message_positions: Default::default(),
         media_context: None,
         exact_request: AiExecutionRequest {
             operation: AiOperation::ConversationRespond,
@@ -3834,7 +3833,6 @@ fn provider_transport_rebuild_keeps_durable_envelope_conservative()
         initialized_locked_baseline: None,
     };
     let candidate = ProviderRequestPreparationCandidate {
-        source_message_positions: Default::default(),
         media_context: None,
         exact_request: AiExecutionRequest {
             operation: AiOperation::ConversationRespond,
@@ -3950,7 +3948,7 @@ fn provider_transport_rebuild_keeps_durable_envelope_conservative()
         "local-summary-tools",
         "local-summary-context",
     ] {
-        assert_eq!(serialized.matches(body).count(), 1);
+        assert!(!serialized.contains(body));
         assert!(
             !summary
                 .transport
@@ -3965,7 +3963,10 @@ fn provider_transport_rebuild_keeps_durable_envelope_conservative()
             if text.contains("scope=\"compaction_request\"")
             && text.contains("source=\"context_compaction:instruction\"")
             && text.contains("Summarize &lt;history&gt; &amp; preserve pending questions.")));
-    assert_eq!(summary.transport.request_snapshot.history.len(), 6);
+    assert_eq!(
+        summary.transport.request_snapshot.history.len(),
+        snapshot.items.len() + 1
+    );
     assert_eq!(
         summary.transport.request_snapshot.history,
         summary.transport.controller_snapshot.messages
@@ -3975,7 +3976,7 @@ fn provider_transport_rebuild_keeps_durable_envelope_conservative()
             .request_budget_evidence
             .request_text_measurement
             .history_message_count,
-        6
+        (snapshot.items.len() + 1) as u64
     );
     assert!(summary.transport.dynamic_prompt_layers.is_empty());
     compaction_source::verify_compaction_transport_selection(
