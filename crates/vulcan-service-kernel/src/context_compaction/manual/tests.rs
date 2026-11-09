@@ -10,6 +10,8 @@ use vulcan_session_core::{
     v1::{ClientActionId, ClientInputSubmission, event::EventBody},
 };
 
+mod borrowed;
+
 /// Registers an idle failed business session and a separate pending manual stream in isolated storage.
 /// 在隔离存储中登记空闲失败业务会话及独立待执行手动流。
 /// Returns the storage guard, service state, canonical handle and exact stream owner.
@@ -97,6 +99,50 @@ async fn fixture() -> (
     )
     .unwrap();
     (root, state, handle, task_id)
+}
+
+/// A physically idle open business turn remains available to explicit manual compaction.
+/// 物理空闲但仍开放的业务回合应允许显式手动压缩。
+#[tokio::test]
+async fn manual_compaction_admits_open_business_without_closing_it() {
+    let (_root, state, handle, task_id) = fixture().await;
+    let session_id = handle.session_id();
+    handle
+        .submit_root_input(
+            ClientInputSubmission::new(
+                ClientActionId::try_new("open-manual-business").unwrap(),
+                "Retained unfinished work",
+                Vec::new(),
+            ),
+            4,
+        )
+        .unwrap();
+    let before = handle
+        .read_full_durable(|document| {
+            serde_json::to_value((&document.metadata, document.events())).unwrap()
+        })
+        .unwrap();
+    let (_, source) = handle
+        .capture_context_compaction_planning_snapshot_with_source()
+        .unwrap();
+    begin(&state, session_id, task_id, source)
+        .await
+        .expect("manual compaction must not reject only an open business journal");
+    assert_eq!(
+        handle
+            .read_full_durable(|document| {
+                serde_json::to_value((&document.metadata, document.events())).unwrap()
+            })
+            .unwrap(),
+        before
+    );
+    let worker = state
+        .lock()
+        .unwrap()
+        .active_stream_tasks
+        .remove(&session_id)
+        .unwrap();
+    worker.abort_and_wait().await.unwrap();
 }
 
 /// Pre-dispatch failure is a durable UI event, closes the exact Core owner and releases the kernel slot.

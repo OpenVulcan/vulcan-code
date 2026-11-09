@@ -4,6 +4,8 @@
 use super::*;
 use crate::v1::context_maintenance::ManualContextMaintenanceSource;
 
+mod borrowed;
+
 impl SessionDocument {
     /// Captures a durable source without admitting execution; callers must serialize it with projection capture.
     /// 捕获可靠来源但不准入执行；调用方必须将其与投影捕获串行化。
@@ -53,6 +55,22 @@ impl SessionDocument {
             }
             return Ok(IdempotentMutation::Idempotent(existing.clone()));
         }
+        self.validate_manual_context_maintenance_source(source)?;
+        self.validate_manual_context_maintenance_availability()?;
+        if self.active_turn().is_some_and(|turn| !turn.closed) {
+            return Err(DomainError::CollaborationStateViolation {
+                field: "manual_maintenance.unavailable",
+            });
+        }
+        self.begin_idle_manual_context_maintenance(source, execution_id, now_ms)
+    }
+
+    /// Checks the captured history while allowing only composer draft bookkeeping to change.
+    /// 校验捕获历史，仅允许输入框草稿记账变化。
+    fn validate_manual_context_maintenance_source(
+        &self,
+        source: &ManualContextMaintenanceSource,
+    ) -> Result<(), DomainError> {
         // Slash-command activation and draft autosave run independently; neither changes the Provider history.
         // 斜杠命令激活与草稿自动保存独立执行；二者都不改变供应商历史。
         // Ignore only the draft and its general write bookkeeping; retain every other source field exactly.
@@ -74,11 +92,16 @@ impl SessionDocument {
                 field: "manual_maintenance.source_changed",
             });
         }
+        Ok(())
+    }
+
+    /// Rejects actual competing or unsupported manual-summary sources without changing history.
+    /// 不改动历史地拒绝实际竞争或不受支持的手动摘要来源。
+    fn validate_manual_context_maintenance_availability(&self) -> Result<(), DomainError> {
         if self.metadata.child_execution_profile.is_some()
             || self.metadata.dedicated.is_some()
             || self.metadata.archived_at_ms.is_some()
             || self.active_api().is_some()
-            || self.active_turn().is_some_and(|turn| !turn.closed)
             || !self.metadata.input_state.queued_inputs.is_empty()
             || !self.metadata.input_state.pending_in_turn_inputs.is_empty()
             || self
@@ -91,6 +114,17 @@ impl SessionDocument {
                 field: "manual_maintenance.unavailable",
             });
         }
+        Ok(())
+    }
+
+    /// Allocates the existing independent owner only after the source is proven idle.
+    /// 仅在来源确认空闲后分配既有独立所有者。
+    fn begin_idle_manual_context_maintenance(
+        &mut self,
+        source: &ManualContextMaintenanceSource,
+        execution_id: CollaborationExecutionId,
+        now_ms: i64,
+    ) -> Result<IdempotentMutation<ContextMaintenanceExecution>, DomainError> {
         // A failed or stopped business turn is still a valid source; its outcome must remain unchanged.
         // 失败或停止的业务回合仍是有效来源；其结果必须保持不变。
         let business_turn_id = self

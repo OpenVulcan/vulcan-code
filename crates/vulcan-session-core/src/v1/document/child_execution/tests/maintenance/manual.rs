@@ -4,6 +4,9 @@
 use super::*;
 use crate::v1::context_maintenance::ContextMaintenanceExecution;
 
+#[path = "manual/borrowed.rs"]
+mod borrowed;
+
 /// Builds and publishes an idle root with a failed business turn; returns its canonical document.
 /// 构造并发布包含失败业务回合的空闲主会话，返回规范文档。
 fn idle_root() -> SessionDocument {
