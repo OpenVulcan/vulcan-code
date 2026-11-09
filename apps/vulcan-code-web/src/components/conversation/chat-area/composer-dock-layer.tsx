@@ -62,9 +62,9 @@ export interface ChatAreaComposerDockLayerProps {
   onSubmitPrompt: ComposerDockProps["onSubmitPrompt"];
 }
 
-// ChatAreaComposerDockLayer renders the floating composer using ChatArea's derived state.
-// ChatAreaComposerDockLayer 使用 ChatArea 的已派生状态渲染浮动输入区。
-export function ChatAreaComposerDockLayer(props: ChatAreaComposerDockLayerProps) {
+// ChatAreaComposerDockLayerView renders the floating composer using ChatArea's derived state.
+// ChatAreaComposerDockLayerView 使用 ChatArea 的已派生状态渲染浮动输入区。
+function ChatAreaComposerDockLayerView(props: ChatAreaComposerDockLayerProps) {
   const chatAreaProps = props.chatAreaProps;
   const workbench = chatAreaProps.workbench;
   const draft = chatAreaProps.selectedDraftConversation;
@@ -168,5 +168,11 @@ export function ChatAreaComposerDockLayer(props: ChatAreaComposerDockLayerProps)
     />
   );
 }
+
+// ChatAreaComposerDockLayer is the memoized floating composer: ChatArea re-renders once per frame while a reply
+// streams and keeps every prop stable across those frames, so the composer re-renders only when its inputs change.
+// ChatAreaComposerDockLayer 是记忆化的浮动输入区：回复流式输出期间 ChatArea 每帧重新渲染，并在这些帧之间保持全部属性
+// 稳定，因此输入区只在其输入变化时重新渲染。
+export const ChatAreaComposerDockLayer = React.memo(ChatAreaComposerDockLayerView);
 
 export { composerAttachmentMedia };

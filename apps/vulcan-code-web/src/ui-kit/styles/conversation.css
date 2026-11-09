@@ -312,7 +312,10 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 /* While the floating window owns live reasoning, the tag only marks the spot. */
 .vk-think-tag[data-indicator] { color: var(--vk-ember-ink); cursor: default; pointer-events: none; }
 .vk-think-tag[data-indicator] > svg { animation: vk-pulse 1.6s var(--vk-ease) infinite; }
-.vk-pop.vk-think-pop { width: min(37.5rem, calc(100vw - 32px)); max-width: min(calc(100vw - 32px), var(--vk-available-width, 100vw)); max-height: min(26rem, 70dvh, var(--vk-available-height, 70dvh)); overflow: hidden; padding: calc(var(--vk-u) * 3.5) calc(var(--vk-u) * 4); background: color-mix(in srgb, var(--vk-raised) 88%, transparent); backdrop-filter: blur(16px) saturate(1.15); }
+/* The preview stays open over a transcript that may still be streaming beneath it, so it is opaque and carries no
+ * backdrop blur: a blur would resample the long transcript on every revision. Containment keeps its growing body
+ * from invalidating layout and paint outside the preview. */
+.vk-pop.vk-think-pop { width: min(37.5rem, calc(100vw - 32px)); max-width: min(calc(100vw - 32px), var(--vk-available-width, 100vw)); max-height: min(26rem, 70dvh, var(--vk-available-height, 70dvh)); overflow: hidden; padding: calc(var(--vk-u) * 3.5) calc(var(--vk-u) * 4); background: var(--vk-raised); contain: layout paint style; }
 .vk-think-pop-body { flex: 1; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; color: var(--vk-ink-2); font-size: var(--vk-fs-md); }
 .vk-think-pop-body .vk-md { min-width: 0; max-width: none; font-size: var(--vk-fs-md); overflow-wrap: anywhere; }
 

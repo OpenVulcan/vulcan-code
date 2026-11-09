@@ -328,6 +328,21 @@ export function conversationSelectionEqual(left: unknown, right: unknown): boole
   return leftKeys.every((key) => Object.hasOwn(rightRecord, key) && conversationSelectionEqual(leftRecord[key], rightRecord[key]));
 }
 
+/** Returns the previously returned value while isEqual holds, so values derived per snapshot keep one identity.
+ * 在 isEqual 成立期间返回上一次的值，使按快照派生的值保持同一身份。
+ *
+ * @param value newly derived value.
+ *              新派生的值。
+ * @param isEqual decides whether value matches the previously returned one.
+ *                判断 value 是否与上一次返回的值相同。
+ * @returns the previous value when equal, otherwise value.
+ *          相等时返回上一次的值，否则返回 value。 */
+export function useEqualValue<T>(value: T, isEqual: (left: T, right: T) => boolean): T {
+  const [memo] = React.useState(() => ({ value }));
+  if (!Object.is(memo.value, value) && !isEqual(memo.value, value)) memo.value = value;
+  return memo.value;
+}
+
 /** Reads the selected-session hydration lifecycle through the same external-store publication.
  * 通过同一外部 store 发布读取选中会话 hydration 生命周期。 */
 export function useSelectedConversationEventWindowStatus():
@@ -348,13 +363,8 @@ SelectedConversationEventWindowStatus {
 export function useSelectedConversationEventWindowCommands():
 SelectedConversationEventWindowCommands {
   const store = useSelectedConversationEventWindowExternalStore();
-  // selectedSnapshot subscribes this command-only consumer to owner replacement publications.
-  // selectedSnapshot 让仅消费命令的组件订阅归属替换发布。
-  const selectedSnapshot = React.useSyncExternalStore(
-    store.subscribe,
-    store.getSnapshot,
-    store.getServerSnapshot,
-  );
-  void selectedSnapshot;
-  return store.getCommands();
+  // The command object is the subscribed value: it is replaced only with its owner, so this consumer re-renders on
+  // owner replacement and never on the streaming deltas that publish a new snapshot every frame.
+  // 订阅值就是命令对象：它只随归属一起替换，因此该消费者在归属替换时重新渲染，绝不因每帧发布新快照的流式增量而渲染。
+  return React.useSyncExternalStore(store.subscribe, store.getCommands, store.getCommands);
 }

@@ -38,7 +38,9 @@ function project(workbench: WorkbenchSnapshot, id: string | null, empty: boolean
   // Only workbench is inspected here; all parent callbacks are forwarded without invocation.
   // 此处仅检查 workbench；所有父层回调只被转发，不会调用。
   const chatAreaProps = { workbench } as ChatAreaComposerDockLayerProps["chatAreaProps"];
-  return ChatAreaComposerDockLayer({ chatAreaProps, projectId: "preview", conversationId: id,
+  // The memo's inner component is invoked directly so the test reads the produced child props without rendering.
+  // 直接调用记忆化组件的内部组件，使测试无需渲染即可读取生成的子组件属性。
+  return ChatAreaComposerDockLayer.type({ chatAreaProps, projectId: "preview", conversationId: id,
     isEmptyConversation: empty, startProjectName: "project", isConversationRunning: false, showScrollToBottom: false,
     todolistStatusHost: null, sessionTodolist: null,
     thinkingDisplayMode: DEFAULT_THINKING_DISPLAY_MODE, sessionReviewSummary: null, onComposerDockHeightChange: vi.fn(),

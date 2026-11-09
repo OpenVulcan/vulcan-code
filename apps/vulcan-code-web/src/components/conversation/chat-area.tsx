@@ -7,16 +7,12 @@ import {
   ConversationSubmissionStatus,
   DraftSubmissionTranscript,
 } from "@/components/conversation/conversation-chrome";
-import {
-  ConversationBranchWorkspaceV1,
-  type ConversationBranchGenerationActionV1,
-} from "@/components/conversation/conversation-branch-workspace-v1";
+import type { ConversationBranchGenerationActionV1 } from "@/components/conversation/conversation-branch-workspace-v1";
 import {
   ConversationGenerationDialogV1,
   type ConversationGenerationDialogActionV1,
 } from "@/components/conversation/conversation-generation-dialog-v1";
 import {
-  RuntimeCueLine,
   StreamingThinkingOverlay,
   TransientReasoningStatusLine,
 } from "@/components/conversation/conversation-live-reasoning";
@@ -26,12 +22,8 @@ import {
   conversationRuntimeCue,
   normalizedSessionRunPhase,
 } from "@/components/conversation/conversation-runtime";
-import type {
-  ConversationBlock,
-} from "@/components/conversation/conversation-model";
 import type { ComposerSubmission } from "@/components/composer/composer-model";
-import { useI18n, type Translate } from "@/i18n";
-import { selectConversationSessionTodolistV1 } from "@/service/conversation-session-tools-v1";
+import { useI18n } from "@/i18n";
 import { projectForConversation } from "@/state/workbench-selectors";
 import {
   useConversationProviderRetryStatus,
@@ -40,6 +32,9 @@ import {
 import { toast } from "@/ui-kit/primitives/toast";
 import type { ChatAreaProps } from "@/components/conversation/chat-area/types";
 import { useChatAreaPlanActions } from "@/components/conversation/chat-area/plan-actions";
+import { useComposerRuntimeStatus } from "@/components/conversation/chat-area/composer-inputs";
+import { useChatAreaEventWindowFacts } from "@/components/conversation/chat-area/event-window-facts";
+import { SelectedConversationTranscript } from "@/components/conversation/chat-area/selected-transcript";
 import {
   useConversationVisualTransitions,
   useThinkingDisplayMode,
@@ -47,18 +42,8 @@ import {
 import { useConversationSurfaceLayoutMemory } from "@/components/conversation/chat-area/surface-layout-memory";
 import { useConversationScrollController } from "@/components/conversation/chat-area/conversation-scroll-controller";
 import { ConversationContinueControl } from "@/components/conversation/conversation-continue-control";
-import { activeThinkingOverlayBlock } from "@/components/conversation/thinking-display";
 import { ConversationFindBar } from "@/components/conversation/conversation-find-bar";
-import { selectConversationContinueCandidateV1 } from "@/service/conversation-continuation-selector-v1";
-import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
-import {
-  isTerminalApiStatsStatus,
-  type ConversationEventSummary,
-} from "@/service/conversation-event-window-store";
-import {
-  useSelectedConversationEventWindowCommands,
-  useSelectedConversationEventWindowSnapshot,
-} from "@/state/conversation-event-window-react";
+import { useSelectedConversationEventWindowCommands } from "@/state/conversation-event-window-react";
 
 /** Process-local target for one exact V1 edit or fork action.
  * 一次精确 V1 编辑或分叉动作的进程内目标。
@@ -95,17 +80,17 @@ export function ChatArea(props: ChatAreaProps) {
     conversationId: props.selectedConversationId,
   });
   const selectedConversation = props.workbench.conversations.find((conversation) => conversation.id === props.selectedConversationId);
-  // eventWindowSnapshot is the sole durable authority for Continue eligibility and consumption.
-  // eventWindowSnapshot 是 Continue 资格与消费状态的唯一可靠权威。
-  const eventWindowSnapshot = useSelectedConversationEventWindowSnapshot();
-  // sessionTodolist is projected from the same durable V1 generation as the visible transcript.
-  // sessionTodolist 从与可见转录相同的可靠 V1 代次投影。
-  const sessionTodolist = React.useMemo(
-    () => eventWindowSnapshot.owner?.session_id === selectedConversation?.id
-      ? selectConversationSessionTodolistV1(eventWindowSnapshot)
-      : null,
-    [eventWindowSnapshot, selectedConversation?.id],
-  );
+  // eventWindowFacts are the selected V1 window's facts ChatArea renders, the sole durable authority for Continue
+  // eligibility; each keeps its identity while a reply only appends text, so streaming re-renders only the transcript.
+  // eventWindowFacts 是 ChatArea 渲染的选中 V1 窗口事实，也是 Continue 资格的唯一可靠权威；回复只追加文本时各项保持身份，
+  // 因此流式输出只重新渲染转录。
+  const eventWindowFacts = useChatAreaEventWindowFacts({
+    sessionId: selectedConversation?.id,
+    pendingClientSubmissionId: props.selectedDraftConversation?.pendingSubmission?.clientSubmissionId ?? null,
+    thinkingDisplayMode,
+    t,
+  });
+  const { sessionTodolist, continuationCandidate } = eventWindowFacts;
   // eventWindowCommands stays bound to the exact owner generation represented by the selected store.
   // eventWindowCommands 始终绑定到选中 store 所表示的精确归属代次。
   const eventWindowCommands = useSelectedConversationEventWindowCommands();
@@ -119,12 +104,6 @@ export function ChatArea(props: ChatAreaProps) {
   // generationSubmitting blocks duplicate dialog submissions while the durable boundary is in flight.
   // generationSubmitting 在可靠边界执行期间阻止重复提交对话框。
   const [generationSubmitting, setGenerationSubmitting] = React.useState(false);
-  // continuationCandidate identifies the latest eligible physical API in the selected V1 open Turn.
-  // continuationCandidate 标识选中 V1 开放 Turn 中最近的可继续物理 API。
-  const continuationCandidate = React.useMemo(
-    () => selectConversationContinueCandidateV1(eventWindowSnapshot),
-    [eventWindowSnapshot],
-  );
   // activeContinuationKey is UI-only and never becomes backend authorization.
   // activeContinuationKey 仅供界面使用，绝不会成为后端授权信息。
   const activeContinuationKey = selectedConversation
@@ -173,7 +152,7 @@ export function ChatArea(props: ChatAreaProps) {
    */
   const handleConfirmGenerationAction = React.useCallback(async (value: string) => {
     const target = generationTarget;
-    const owner = eventWindowSnapshot.owner;
+    const owner = eventWindowFacts.owner;
     const session = selectedConversation;
     if (
       target === null
@@ -222,7 +201,7 @@ export function ChatArea(props: ChatAreaProps) {
     }
   }, [
     eventWindowCommands,
-    eventWindowSnapshot.owner,
+    eventWindowFacts.owner,
     generationTarget,
     props,
     selectedConversation,
@@ -326,21 +305,11 @@ export function ChatArea(props: ChatAreaProps) {
   const surfaceConversation = selectedConversation;
   // eventWindowOwnerReady permits rendering only when the selected durable session owns the V1 snapshot.
   // eventWindowOwnerReady 仅在选中的持久化会话拥有 V1 快照时允许渲染。
-  const eventWindowOwnerReady = Boolean(
-    selectedConversation
-    && eventWindowSnapshot.owner?.session_id === selectedConversation.id,
-  );
-  // authoritativeEvents is empty during owner handoff and never falls back to legacy messages.
-  // authoritativeEvents 在归属切换期间保持为空，绝不回退到旧 messages。
-  const authoritativeEvents = eventWindowOwnerReady ? eventWindowSnapshot.events : [];
+  const eventWindowOwnerReady = eventWindowFacts.ownerReady;
   // pendingSubmissionVisible remains true only until the exact authoritative user record replaces the optimistic row.
   // pendingSubmissionVisible 仅在精确权威用户记录替代乐观行之前保持为真。
   const pendingSubmissionVisible = Boolean(
-    props.selectedDraftConversation?.pendingSubmission
-    && !eventWindowHasAuthoritativeSubmissionCorrelation(
-      authoritativeEvents,
-      props.selectedDraftConversation.pendingSubmission.clientSubmissionId,
-    ),
+    props.selectedDraftConversation?.pendingSubmission && !eventWindowFacts.submissionCorrelated,
   );
   // optimisticUserInput is process-local and disappears only after exact V1 ClientActionId reconciliation.
   // optimisticUserInput 仅属于进程内，并且只在精确 V1 ClientActionId 对账后消失。
@@ -360,7 +329,7 @@ export function ChatArea(props: ChatAreaProps) {
   const emptyProjectName = props.selectedDraftConversation?.projectName ?? selectedProject?.name ?? t("conversation.unlinkedProject");
   const isEmptyConversation = Boolean(
     (props.selectedDraftConversation && !props.selectedDraftConversation.pendingSubmission)
-      || (selectedConversation && eventWindowOwnerReady && !props.selectedDraftConversation?.pendingSubmission && !eventWindowHasVisibleTranscript(authoritativeEvents)),
+      || (selectedConversation && eventWindowOwnerReady && !props.selectedDraftConversation?.pendingSubmission && !eventWindowFacts.hasVisibleTranscript),
   );
   // isMaterializingConversationSurface identifies the brief draft-to-summary frame that must remain visually blank.
   // isMaterializingConversationSurface 标识草稿转为真实摘要期间必须保持空白的短暂帧。
@@ -391,18 +360,6 @@ export function ChatArea(props: ChatAreaProps) {
       props.onFirstSubmissionReconciled?.(selectedConversation.id, pending.clientSubmissionId);
     }
   }, [eventWindowOwnerReady, pendingSubmissionVisible, props.onFirstSubmissionReconciled, props.selectedDraftConversation?.pendingSubmission, selectedConversation]);
-  // streamingReasoningBlock uses the canonical V1 reasoning row and its request lifecycle.
-  // streamingReasoningBlock 使用 canonical V1 思考事件及其请求生命周期。
-  const streamingReasoningBlock = React.useMemo(
-    () => latestStreamingReasoningBlock(authoritativeEvents, t),
-    [authoritativeEvents, t],
-  );
-  // displayedStreamingReasoningBlock drives the popup modes without reading legacy transcript rows.
-  // displayedStreamingReasoningBlock 在不读取旧转录行的情况下驱动浮层模式。
-  const displayedStreamingReasoningBlock = activeThinkingOverlayBlock(
-    thinkingDisplayMode,
-    streamingReasoningBlock,
-  );
   // Visual transitions retain empty, popup, and first-submission surfaces within the current conversation scope.
   // 视觉过渡在当前会话作用域内保留空状态、思考浮层与首条提交界面。
   const {
@@ -410,11 +367,11 @@ export function ChatArea(props: ChatAreaProps) {
     thinkingOverlayLeaving: streamingThinkingOverlayLeaving,
   } = useConversationVisualTransitions({
     surfaceKey: visualSurfaceKey,
-    displayedThinkingBlock: displayedStreamingReasoningBlock,
+    displayedThinkingBlock: eventWindowFacts.streamingReasoningBlock,
   });
   // reasoningDisplaySignature is a stable scroll-restoration marker for V1 reasoning filtering.
   // reasoningDisplaySignature 是 V1 思考过滤使用的稳定滚动恢复标记。
-  const reasoningDisplaySignature = `${thinkingDisplayMode}:${eventWindowSnapshot.owner?.window_generation ?? "none"}`;
+  const reasoningDisplaySignature = `${thinkingDisplayMode}:${eventWindowFacts.owner?.window_generation ?? "none"}`;
   // hasRunningSubagents reflects the backend-routed subagent lane rather than local UI inference.
   // hasRunningSubagents 反映后端路由的子代理通道，而不是本地界面推断。
   const hasRunningSubagents = subagentNavigation?.tasks?.some((task) => task.isRunning || task.runState === "running") ?? false;
@@ -425,12 +382,14 @@ export function ChatArea(props: ChatAreaProps) {
   const runtimeCue = visibleStreamingThinkingOverlayBlock || suppressSubagentOnlyMainCue
     ? null
     : conversationRuntimeCue(surfaceConversation, t);
-  // composerRuntimeCue floats over the composer's top-left edge instead of entering the transcript, so its
+  // composerRuntimeStatus floats over the composer's top-left edge instead of entering the transcript, so its
   // appearance, phase changes and removal never reflow the conversation; a retry wait or reasoning status still
   // takes precedence over it exactly as when they shared the transcript tail.
-  // composerRuntimeCue 悬浮在输入区左上沿而不进入转录，其出现、阶段切换与移除都不会让会话重排；
+  // composerRuntimeStatus 悬浮在输入区左上沿而不进入转录，其出现、阶段切换与移除都不会让会话重排；
   // 重试等待或思考状态仍按共用转录尾部时的规则优先于它。
-  const composerRuntimeCue = providerRetryStatus || transientReasoningStatus ? null : runtimeCue;
+  const composerRuntimeStatus = useComposerRuntimeStatus(
+    providerRetryStatus || transientReasoningStatus ? null : runtimeCue,
+  );
   // tailStatusVisible tracks insertion and removal of every transcript-tail status line; the shared
   // ResizeObserver owns node reflow.
   // tailStatusVisible 跟踪全部转录尾部状态行的插入与移除；共享 ResizeObserver 负责节点重排。
@@ -472,10 +431,7 @@ export function ChatArea(props: ChatAreaProps) {
   const composerBlockedByDecision = Boolean(pendingPlanArtifact || pendingAskQuestion);
   // conversationStreamSignature tracks transcript structure without rescanning cumulative streamed bodies.
   // conversationStreamSignature 跟踪转录结构，且不重复扫描累计流式正文。
-  const conversationStreamSignature = React.useMemo(
-    () => buildConversationEventWindowStreamSignature(eventWindowSnapshot),
-    [eventWindowSnapshot],
-  );
+  const conversationStreamSignature = eventWindowFacts.streamSignature;
   // readConversationScrollSnapshot returns the exact saved semantic viewport for one surface.
   // readConversationScrollSnapshot 返回单个界面精确保存的语义视口。
   const readConversationScrollSnapshot = React.useCallback((surfaceId: string) => (
@@ -534,6 +490,11 @@ export function ChatArea(props: ChatAreaProps) {
   const scrollConversationToBottom = React.useCallback((behavior: ScrollBehavior = "smooth") => {
     conversationScrollController.scrollToBottom(behavior);
   }, [conversationScrollController]);
+  // handleComposerScrollToBottom is the composer's stable scroll-to-latest action.
+  // handleComposerScrollToBottom 是输入区稳定的滚动到最新内容操作。
+  const handleComposerScrollToBottom = React.useCallback(() => {
+    scrollConversationToBottom();
+  }, [scrollConversationToBottom]);
 
   // handleComposerDockHeightChange captures the reader anchor before composer geometry changes.
   // handleComposerDockHeightChange 在输入区几何变化前捕获阅读者锚点。
@@ -586,8 +547,8 @@ export function ChatArea(props: ChatAreaProps) {
       thinkingDisplayMode={thinkingDisplayMode}
       sessionReviewSummary={props.sessionReviewSummary}
       onComposerDockHeightChange={handleComposerDockHeightChange}
-      runtimeStatus={composerRuntimeCue && <RuntimeCueLine cue={composerRuntimeCue} key={composerRuntimeCue.text} />}
-      onScrollToBottom={() => scrollConversationToBottom()}
+      runtimeStatus={composerRuntimeStatus}
+      onScrollToBottom={handleComposerScrollToBottom}
       onThinkingDisplayModeChange={handleThinkingDisplayModeChange}
       onSubmitPrompt={handleComposerSubmit}
     />
@@ -610,7 +571,7 @@ export function ChatArea(props: ChatAreaProps) {
   const conversationSurfaceContent = (
     <>
       {selectedConversation ? (
-        <ConversationBranchWorkspaceV1
+        <SelectedConversationTranscript
           collaborationNavigation={{
             conversations: props.workbench.conversations,
             navigation: subagentNavigation,
@@ -658,7 +619,6 @@ export function ChatArea(props: ChatAreaProps) {
           scrollRef={workspaceRef}
           sessionId={selectedConversation.id}
           sessionRunning={conversationIsRunning(surfaceConversation)}
-          snapshot={eventWindowSnapshot}
           suppressEmptyPlaceholder={isEmptyConversation || isMaterializingConversationSurface}
           transientReasoningStatus={providerRetryStatus ? (
             <ProviderRetryCountdownLine countdown={providerRetryStatus} />
@@ -720,127 +680,4 @@ export function ChatArea(props: ChatAreaProps) {
       </div>
     </AnswerReplyContext.Provider>
   );
-}
-
-/** Reports whether one V1 UserInput already owns the browser submission identity.
- * 判断一条 V1 UserInput 是否已经拥有浏览器提交身份。
- *
- * @param events canonical selected-session events.
- *               当前选中会话的 canonical 事件。
- * @param clientActionId exact browser idempotency identity.
- *                       精确的浏览器幂等身份。
- * @returns true only for one exact persisted UserInput match.
- *          仅在存在精确持久化 UserInput 匹配时返回 true。 */
-function eventWindowHasAuthoritativeSubmissionCorrelation(
-  events: readonly ConversationEventSummary[],
-  clientActionId: string,
-): boolean {
-  return events.some((event) => (
-    event.event.kind === "user_input"
-    && event.event.client_action_id === clientActionId
-  ));
-}
-
-/** Reports whether a canonical V1 window contains visible transcript content.
- * 判断一个 canonical V1 窗口是否包含可见转录内容。
- *
- * @param events canonical selected-session events.
- *               当前选中会话的 canonical 事件。
- * @returns true when at least one user, assistant, tool, or durable display fact exists.
- *          存在至少一条用户、assistant、工具或可靠显示事实时返回 true。 */
-function eventWindowHasVisibleTranscript(events: readonly ConversationEventSummary[]): boolean {
-  return events.some((summary) => {
-    if (summary.visibility === "host_only") {
-      return false;
-    }
-    switch (summary.event.kind) {
-      case "user_input":
-      case "assistant_reasoning":
-      case "assistant_text":
-      case "tool_call":
-      case "display_note":
-      case "request_config_changed":
-      case "subagent_return":
-        return true;
-      default:
-        return false;
-    }
-  });
-}
-
-/** Projects the latest actively streaming V1 reasoning event into the established popup shell.
- * 将最新活动流式 V1 思考事件投影到既有浮层外壳。
- *
- * @param events canonical selected-session events.
- *               当前选中会话的 canonical 事件。
- * @param t Resolves the popup's display labels.
- *          解析弹窗展示文案。
- * @returns one presentation-only block, or null when no reasoning stream is active.
- *          一条仅用于展示的块；没有活动思考流时返回 null。 */
-function latestStreamingReasoningBlock(
-  events: readonly ConversationEventSummary[],
-  t: Translate,
-): ConversationBlock | null {
-  // A request or turn can close before the same-seq terminal reasoning update reaches this window.
-  // 请求或回合可能已经结束，而同序号的思考终态更新尚未到达事件窗口。
-  const terminalApiCallIds = new Set<number>();
-  // Closed turn identities cover endings that do not include terminal stats for every request.
-  // 已结束回合的身份覆盖未为每个请求提供终态统计的结束路径。
-  const closedTurnIds = new Set<number>();
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    // summary is inspected in reverse only to select the latest fact; no display order is changed.
-    // summary 仅为选择最新事实而逆向检查；不会改变任何显示顺序。
-    const summary = events[index];
-    // The newest physical request supersedes older requests, even before it starts reasoning.
-    // 最新物理请求取代更早的请求，即使它还未开始输出思考。
-    if (summary.event.kind === "api_started") return null;
-    if (summary.event.kind === "api_stats" && isTerminalApiStatsStatus(summary.event.status)) {
-      terminalApiCallIds.add(summary.event.api_call_id);
-    }
-    if (summary.event.kind === "turn_boundary" && summary.turn_id !== null) {
-      closedTurnIds.add(summary.turn_id);
-    }
-    if (
-      summary.event.kind !== "assistant_reasoning"
-      || summary.event.status !== "streaming"
-      || terminalApiCallIds.has(summary.event.api_call_id)
-      || (summary.turn_id !== null && closedTurnIds.has(summary.turn_id))
-    ) {
-      continue;
-    }
-    return {
-      id: `v1-reasoning:${summary.seq}:${summary.event_revision}`,
-      kind: "thinking",
-      title: t("conversation.block.thinking"),
-      summary: t("conversation.block.thinkingActive"),
-      body: summary.event.text,
-      status: summary.event.status,
-    };
-  }
-  return null;
-}
-
-/** Builds a structure-only V1 stream signature without reading cumulative event bodies.
- * 在不读取累计事件正文的情况下构建仅结构性的 V1 流签名。
- *
- * @param snapshot atomic controller snapshot.
- *                 原子控制器快照。
- * @returns stable owner, frontier, and per-event revision identity.
- *          稳定的归属、前沿与逐事件修订身份。 */
-function buildConversationEventWindowStreamSignature(
-  snapshot: ConversationEventWindowControllerSnapshot,
-): string {
-  // eventRevisions captures same-seq streaming updates without hashing large text bodies.
-  // eventRevisions 捕获同 seq 流式更新，同时不散列大段文本正文。
-  const eventRevisions = snapshot.events
-    .map((event) => `${event.seq}:${event.event_revision}`)
-    .join(",");
-  return [
-    snapshot.owner?.session_id ?? "none",
-    snapshot.owner?.window_generation ?? "none",
-    snapshot.memory_revision ?? "none",
-    snapshot.durable_revision ?? "none",
-    snapshot.has_more ? "more" : "complete",
-    eventRevisions,
-  ].join("|");
 }

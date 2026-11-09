@@ -9,6 +9,10 @@ import { I18nProvider } from "@/i18n";
 import { browserFallbackSnapshot } from "@/service/browser-fallback-workbench";
 import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
 import type { ConversationEventBody, ConversationEventSummary } from "@/service/conversation-event-window-store";
+import {
+  ConversationEventWindowExternalStoreProvider,
+  createConversationEventWindowExternalStore,
+} from "@/state/conversation-event-window-react";
 import { THINKING_OVERLAY_EXIT_MS } from "@/components/conversation/chat-area/visual-state";
 import type { ChatAreaProps } from "@/components/conversation/chat-area/types";
 import type { TransientReasoningStatus } from "@/types";
@@ -17,9 +21,17 @@ import type { TransientReasoningStatus } from "@/types";
 // liveStatus 让每个场景选择与运行提示竞争的请求局部状态。
 const liveStatus: { reasoning: TransientReasoningStatus | null } = { reasoning: null };
 
+// dockRenders records the props ChatArea hands the composer layer on every render.
+// dockRenders 记录 ChatArea 每次渲染时交给输入区层的属性。
+const dockRenders: Record<string, unknown>[] = [];
+
+// transcriptRenders counts transcript renders, which must follow every streamed frame.
+// transcriptRenders 统计转录渲染次数，转录必须跟随每个流式帧。
+let transcriptRenders = 0;
+
 // The event window owns one visible user prompt for the selected session; no service is started.
 // 事件窗口为选中会话持有一条可见用户提示；不启动任何服务。
-const eventWindow: ConversationEventWindowControllerSnapshot = {
+let eventWindow: ConversationEventWindowControllerSnapshot = {
   owner: { session_id: "test-playwright", window_generation: 1 } as ConversationEventWindowControllerSnapshot["owner"],
   service_epoch: null,
   memory_revision: 1,
@@ -41,10 +53,42 @@ const eventWindow: ConversationEventWindowControllerSnapshot = {
 // initialEvents 在每个合成生命周期测试后恢复默认转录。
 const initialEvents = eventWindow.events;
 
-vi.mock("@/state/conversation-event-window-react", () => ({
-  useSelectedConversationEventWindowSnapshot: () => eventWindow,
-  useSelectedConversationEventWindowCommands: () => ({ rehydrate: async () => true }),
-}));
+// eventWindowCommands is the owner-bound command surface; like the registry's, it keeps one identity per owner.
+// eventWindowCommands 是绑定归属的命令面；与 registry 一样，每个归属保持同一身份。
+const eventWindowCommands = { rehydrate: async () => true, prependOlder: async () => true };
+
+// eventWindowListeners receive controller notifications; the real external store relays them to React.
+// eventWindowListeners 接收控制器通知；真实外部存储把它们转发给 React。
+const eventWindowListeners = new Set<() => void>();
+
+/** Replaces the controller snapshot's events and notifies subscribers, as one streamed delta does.
+ * 替换控制器快照的事件并通知订阅者，如同一次流式增量。
+ * events is the complete next event list; returns nothing. events 为完整的下一份事件列表；无返回值。 */
+function publishEvents(events: ConversationEventSummary[]) {
+  eventWindow = { ...eventWindow, events };
+  for (const listener of Array.from(eventWindowListeners)) listener();
+}
+
+// eventWindowStore is the production external store over a synthetic controller; each frame flushes on the next
+// microtask, which act() drains, so one publication reaches React per streamed delta.
+// eventWindowStore 是基于合成控制器的生产外部存储；每帧在下一个微任务刷新（由 act() 排空），使每个流式增量向 React 发布一次。
+const eventWindowStore = createConversationEventWindowExternalStore({
+  snapshot: () => eventWindow,
+  subscribe: (listener) => {
+    eventWindowListeners.add(listener);
+    return () => eventWindowListeners.delete(listener);
+  },
+  commands: () => eventWindowCommands,
+  status: () => ({ kind: "ready", session_id: "test-playwright" }),
+}, (flush) => {
+  let cancelled = false;
+  queueMicrotask(() => {
+    if (!cancelled) flush();
+  });
+  return () => {
+    cancelled = true;
+  };
+});
 vi.mock("@/state/conversation-live-stream-context", () => ({
   useConversationProviderRetryStatus: () => null,
   useConversationTransientReasoningStatus: () => liveStatus.reasoning,
@@ -52,14 +96,16 @@ vi.mock("@/state/conversation-live-stream-context", () => ({
 // The transcript and composer stop at their slots: the transcript shows its tail status, the dock its floating status.
 // 转录与输入区止于各自插槽：转录显示尾部状态，停靠层显示悬浮状态。
 vi.mock("@/components/conversation/conversation-branch-workspace-v1", () => ({
-  ConversationBranchWorkspaceV1: (props: { transientReasoningStatus?: React.ReactNode }) => (
-    <section data-testid="transcript">{props.transientReasoningStatus}</section>
-  ),
+  ConversationBranchWorkspaceV1: (props: { transientReasoningStatus?: React.ReactNode }) => {
+    transcriptRenders += 1;
+    return <section data-testid="transcript">{props.transientReasoningStatus}</section>;
+  },
 }));
 vi.mock("@/components/conversation/chat-area/composer-dock-layer", () => ({
-  ChatAreaComposerDockLayer: (props: { runtimeStatus?: React.ReactNode }) => (
-    <div data-testid="composer-dock">{props.runtimeStatus}</div>
-  ),
+  ChatAreaComposerDockLayer: (props: { runtimeStatus?: React.ReactNode }) => {
+    dockRenders.push(props);
+    return <div data-testid="composer-dock">{props.runtimeStatus}</div>;
+  },
 }));
 vi.mock("@/components/conversation/conversation-find-bar", () => ({ ConversationFindBar: () => null }));
 vi.mock("@/components/conversation/conversation-generation-dialog-v1", () => ({ ConversationGenerationDialogV1: () => null }));
@@ -103,12 +149,14 @@ describe("session runtime cue placement", () => {
     document.body.append(host);
     root = createRoot(host);
     liveStatus.reasoning = null;
+    dockRenders.length = 0;
+    transcriptRenders = 0;
   });
 
   afterEach(async () => {
     await React.act(async () => root.unmount());
     host.remove();
-    eventWindow.events = initialEvents;
+    eventWindow = { ...eventWindow, events: initialEvents };
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
@@ -120,10 +168,19 @@ describe("session runtime cue placement", () => {
     // area 是受测的真实会话界面。
     const area = <ChatArea {...props} />;
     await React.act(async () => root.render(
-      <I18nProvider initialLocale="en-US">
-        {onRender ? <React.Profiler id="chat" onRender={onRender}>{area}</React.Profiler> : area}
-      </I18nProvider>,
+      <ConversationEventWindowExternalStoreProvider store={eventWindowStore}>
+        <I18nProvider initialLocale="en-US">
+          {onRender ? <React.Profiler id="chat" onRender={onRender}>{area}</React.Profiler> : area}
+        </I18nProvider>
+      </ConversationEventWindowExternalStoreProvider>,
     ));
+  }
+
+  /** Publishes one streamed delta through the external store and waits for React to commit it.
+   * 通过外部存储发布一次流式增量，并等待 React 提交。
+   * events is the complete next event list. events 为完整的下一份事件列表。 */
+  async function stream(events: ConversationEventSummary[]) {
+    await React.act(async () => publishEvents(events));
   }
 
   it.each(["toolCalling", "requesting", "memoryRecall"])("floats the %s cue over the composer, never in the transcript", async (phase) => {
@@ -163,7 +220,7 @@ describe("session runtime cue placement", () => {
     // props keeps the workbench snapshot stable while only the reasoning event changes.
     // props 让工作台快照在只有思考事件变化时保持稳定。
     const props = chatAreaProps("requesting");
-    eventWindow.events = [...initialEvents, reasoning];
+    eventWindow = { ...eventWindow, events: [...initialEvents, reasoning] };
     await render(props, commits);
 
     // liveBody stays mounted throughout streaming and exit to preserve the reader's viewport.
@@ -176,25 +233,46 @@ describe("session runtime cue placement", () => {
     for (const fragment of Array.from({ length: 8 }, () => "\n\nReasoning paragraph. ".repeat(256))) {
       finalText += fragment;
       revision += 1;
-      eventWindow.events = [...initialEvents, {
+      commits.mockClear();
+      await stream([...initialEvents, {
         ...reasoning, event_revision: revision,
         event: { kind: "assistant_reasoning", api_call_id: 2, status: "streaming", text: finalText },
-      }];
-      commits.mockClear();
-      await render(props, commits);
+      }]);
       expect(commits).toHaveBeenCalledTimes(1);
       expect(liveBody?.textContent).toBe(finalText);
     }
 
-    eventWindow.events = [...initialEvents, {
+    await stream([...initialEvents, {
       ...reasoning, event_revision: revision + 1,
       event: { kind: "assistant_reasoning", api_call_id: 2, status: "completed", text: finalText },
-    }];
-    await render(props, commits);
+    }]);
     expect(host.querySelector(".vk-think-float-content")).toBe(liveBody);
     expect(liveBody?.textContent).toBe(finalText);
     await React.act(async () => vi.advanceTimersByTimeAsync(THINKING_OVERLAY_EXIT_MS * 2));
     expect(host.querySelector(".vk-think-float")).toBeNull();
+  });
+
+  it("re-renders only the transcript while reply text streams", async () => {
+    // reply is one streaming answer row whose text grows in place.
+    // reply 是一条正文原位增长的流式回答记录。
+    const reply: ConversationEventSummary = {
+      seq: 2, turn_id: 1, event_revision: 1, created_at_ms: 2, updated_at_ms: 2, visibility: "provider",
+      event: { kind: "assistant_text", api_call_id: 2, status: "streaming", text: "first" },
+    };
+    eventWindow = { ...eventWindow, events: [...initialEvents, reply] };
+    await render(chatAreaProps("requesting"));
+    // dockBefore and transcriptBefore are the render counts of the frame preceding the deltas.
+    // dockBefore 与 transcriptBefore 是增量之前那一帧的渲染次数。
+    const dockBefore = dockRenders.length;
+    const transcriptBefore = transcriptRenders;
+    for (const [revision, text] of [[2, "first second"], [3, "first second third"]] as const) {
+      await stream([...initialEvents, {
+        ...reply, event_revision: revision,
+        event: { kind: "assistant_text", api_call_id: 2, status: "streaming", text },
+      }]);
+    }
+    expect(transcriptRenders - transcriptBefore).toBe(2);
+    expect(dockRenders.length).toBe(dockBefore);
   });
 
   it.each([
@@ -213,18 +291,17 @@ describe("session runtime cue placement", () => {
       seq: 2, turn_id: 1, event_revision: 1, created_at_ms: 2, updated_at_ms: 2, visibility: "provider",
       event: { kind: "assistant_reasoning", api_call_id: 2, status: "streaming", text: "Reasoning in flight" },
     };
-    eventWindow.events = [...initialEvents, reasoning];
+    eventWindow = { ...eventWindow, events: [...initialEvents, reasoning] };
     await render(chatAreaProps("requesting"));
     expect(host.querySelector(".vk-think-float")).not.toBeNull();
 
-    eventWindow.events = [...eventWindow.events, {
+    await stream([...eventWindow.events, {
       seq: 3, turn_id: reasoning.turn_id, event_revision: 1, created_at_ms: 3, updated_at_ms: 3,
       visibility: "provider", event: { kind: "assistant_text", api_call_id: 2, status: "completed", text: "Answer" },
     }, {
       seq: 4, turn_id: reasoning.turn_id, event_revision: 1, created_at_ms: 4, updated_at_ms: 4,
       visibility: boundary.kind === "api_started" ? "host_only" : "ui_only", event: boundary,
-    }];
-    await render(chatAreaProps("requesting"));
+    }]);
     await React.act(async () => vi.advanceTimersByTimeAsync(THINKING_OVERLAY_EXIT_MS * 2));
     expect(host.querySelector(".vk-think-float")).toBeNull();
 

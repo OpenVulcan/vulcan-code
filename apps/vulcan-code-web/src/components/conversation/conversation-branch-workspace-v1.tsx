@@ -29,7 +29,7 @@ import type { ToolDetailPayload } from "@/components/conversation/conversation-d
 import { useI18n } from "@/i18n";
 import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
 import { selectDedicatedMemory } from "@/service/dedicated-memory";
-import { conversationSelectionEqual } from "@/state/conversation-event-window-react";
+import { conversationSelectionEqual, useEqualValue } from "@/state/conversation-event-window-react";
 import type { SelectedConversationEventWindowCommands } from "@/service/selected-conversation-event-window-registry";
 import type {
   ConversationEventSummary,
@@ -494,16 +494,6 @@ async function unavailableToolDetailV1(): Promise<ToolDetailPayload | null> {
 // emptyGeneratedMediaAttachmentsV1 拒绝隐藏详情媒体回退；V1 生成资源是内联事实。
 function emptyGeneratedMediaAttachmentsV1(): GeneratedMediaAttachment[] {
   return [];
-}
-
-// useEqualValue returns the previously returned value while isEqual holds, so derived collections keep one identity.
-// useEqualValue 在 isEqual 成立期间返回上一次的值，使派生集合保持同一身份。
-// Parameters: value is the newly derived value; isEqual decides whether it matches the previous one.
-// 参数：value 是新派生的值；isEqual 判断它是否与上一个值相同。
-function useEqualValue<T>(value: T, isEqual: (left: T, right: T) => boolean): T {
-  const [memo] = React.useState(() => ({ value }));
-  if (!Object.is(memo.value, value) && !isEqual(memo.value, value)) memo.value = value;
-  return memo.value;
 }
 
 // sameReferences reports whether two lists hold the same objects in the same order.
