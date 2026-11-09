@@ -54,7 +54,7 @@ export function useChatAreaEventWindowFacts(options: ChatAreaEventWindowFactsOpt
   const streamingReasoningBlock = useSelectedConversationEventWindowSelector(React.useCallback(
     (snapshot: ConversationEventWindowControllerSnapshot) => activeThinkingOverlayBlock(
       thinkingDisplayMode,
-      latestStreamingReasoningBlock(snapshot.events, t),
+      latestStreamingReasoningBlock(snapshot, t),
     ),
     [t, thinkingDisplayMode],
   ), sameBlockRevision);
@@ -94,8 +94,8 @@ function selectHasVisibleTranscript(snapshot: ConversationEventWindowControllerS
   return eventWindowHasVisibleTranscript(snapshot.events);
 }
 
-/** Treats two popup blocks as the same while they show the same event revision.
- * 两个弹窗块展示同一事件修订时视为相同。 */
+/** Treats two popup blocks as the same while they show the same event revision of the same owner window.
+ * 两个弹窗块展示同一归属窗口的同一事件修订时视为相同。 */
 function sameBlockRevision(left: ConversationBlock | null, right: ConversationBlock | null): boolean {
   return left?.id === right?.id;
 }
@@ -149,16 +149,22 @@ function eventWindowHasVisibleTranscript(events: readonly ConversationEventSumma
 /** Projects the latest actively streaming V1 reasoning event into the established popup shell.
  * 将最新活动流式 V1 思考事件投影到既有浮层外壳。
  *
- * @param events canonical selected-session events.
- *               当前选中会话的 canonical 事件。
+ * The block id carries the owner session and window generation: seq and revision restart in every session and after
+ * an edit regenerates the window, so they alone would let a block from the previous owner pass as unchanged.
+ * 块 id 带有归属会话与窗口代次：seq 与修订号在每个会话中以及编辑重生成窗口后都会重新开始，仅凭它们会让上一归属的块
+ * 被当成未变化。
+ *
+ * @param snapshot canonical selected-session window.
+ *                 当前选中会话的 canonical 窗口。
  * @param t Resolves the popup's display labels.
  *          解析弹窗展示文案。
  * @returns one presentation-only block, or null when no reasoning stream is active.
  *          一条仅用于展示的块；没有活动思考流时返回 null。 */
 function latestStreamingReasoningBlock(
-  events: readonly ConversationEventSummary[],
+  snapshot: ConversationEventWindowControllerSnapshot,
   t: Translate,
 ): ConversationBlock | null {
+  const { events, owner } = snapshot;
   // A request or turn can close before the same-seq terminal reasoning update reaches this window.
   // 请求或回合可能已经结束，而同序号的思考终态更新尚未到达事件窗口。
   const terminalApiCallIds = new Set<number>();
@@ -187,7 +193,7 @@ function latestStreamingReasoningBlock(
       continue;
     }
     return {
-      id: `v1-reasoning:${summary.seq}:${summary.event_revision}`,
+      id: `v1-reasoning:${owner?.session_id ?? "none"}:${owner?.window_generation ?? "none"}:${summary.seq}:${summary.event_revision}`,
       kind: "thinking",
       title: t("conversation.block.thinking"),
       summary: t("conversation.block.thinkingActive"),

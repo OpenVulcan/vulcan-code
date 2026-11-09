@@ -52,6 +52,7 @@ let eventWindow: ConversationEventWindowControllerSnapshot = {
 // initialEvents restores the default transcript after each synthetic lifecycle test.
 // initialEvents 在每个合成生命周期测试后恢复默认转录。
 const initialEvents = eventWindow.events;
+const initialOwner = eventWindow.owner;
 
 // eventWindowCommands is the owner-bound command surface; like the registry's, it keeps one identity per owner.
 // eventWindowCommands 是绑定归属的命令面；与 registry 一样，每个归属保持同一身份。
@@ -65,7 +66,14 @@ const eventWindowListeners = new Set<() => void>();
  * 替换控制器快照的事件并通知订阅者，如同一次流式增量。
  * events is the complete next event list; returns nothing. events 为完整的下一份事件列表；无返回值。 */
 function publishEvents(events: ConversationEventSummary[]) {
-  eventWindow = { ...eventWindow, events };
+  publishWindow({ ...eventWindow, events });
+}
+
+/** Replaces the whole controller snapshot and notifies subscribers, as an owner switch does.
+ * 替换整个控制器快照并通知订阅者，如同一次归属切换。
+ * next is the complete next snapshot; returns nothing. next 为完整的下一份快照；无返回值。 */
+function publishWindow(next: ConversationEventWindowControllerSnapshot) {
+  eventWindow = next;
   for (const listener of Array.from(eventWindowListeners)) listener();
 }
 
@@ -156,7 +164,7 @@ describe("session runtime cue placement", () => {
   afterEach(async () => {
     await React.act(async () => root.unmount());
     host.remove();
-    eventWindow = { ...eventWindow, events: initialEvents };
+    eventWindow = { ...eventWindow, owner: initialOwner, events: initialEvents };
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
@@ -273,6 +281,34 @@ describe("session runtime cue placement", () => {
     }
     expect(transcriptRenders - transcriptBefore).toBe(2);
     expect(dockRenders.length).toBe(dockBefore);
+  });
+
+  it("shows the selected session's reasoning when another session streamed the same row identity", async () => {
+    stubPopupResizeObserver();
+    // reasoningRow builds one streaming reasoning row whose seq and revision are identical in both sessions.
+    // reasoningRow 构建一条流式思考行，其 seq 与修订号在两个会话中相同。
+    const reasoningRow = (text: string): ConversationEventSummary => ({
+      seq: 2, turn_id: 1, event_revision: 1, created_at_ms: 2, updated_at_ms: 2, visibility: "provider",
+      event: { kind: "assistant_reasoning", api_call_id: 2, status: "streaming", text },
+    });
+    // switchedProps selects the second session, which is running in the same phase.
+    // switchedProps 选中同样处于该阶段运行中的第二个会话。
+    const switchedProps = chatAreaProps("requesting");
+    switchedProps.workbench.conversations = switchedProps.workbench.conversations.map((conversation) => (
+      conversation.id === "test-tools" ? { ...conversation, status: "Running", runPhase: "requesting" } : conversation
+    ));
+    switchedProps.workbench.selectedConversationId = "test-tools";
+    eventWindow = { ...eventWindow, events: [...initialEvents, reasoningRow("Session A reasoning")] };
+    await render(chatAreaProps("requesting"));
+    expect(host.querySelector(".vk-think-float-content")?.textContent).toBe("Session A reasoning");
+
+    await React.act(async () => publishWindow({
+      ...eventWindow,
+      owner: { session_id: "test-tools", window_generation: 1 },
+      events: [...initialEvents, reasoningRow("Session B reasoning")],
+    }));
+    await render({ ...switchedProps, selectedConversationId: "test-tools" });
+    expect(host.querySelector(".vk-think-float-content")?.textContent).toBe("Session B reasoning");
   });
 
   it.each([
