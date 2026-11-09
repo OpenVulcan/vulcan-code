@@ -35,7 +35,13 @@ fn open_business(allowed: bool) -> SessionDocument {
     document
 }
 
-fn complete_summary(document: &mut SessionDocument, api: ApiCallId, stamp: i64) {
+/// Completes the exact `api` in `document` at `stamp` and returns its durable terminal coordinates.
+/// 在 `stamp` 完成 `document` 中的精确 `api`，返回其可靠终态坐标。
+fn complete_summary(
+    document: &mut SessionDocument,
+    api: ApiCallId,
+    stamp: i64,
+) -> crate::v1::document::ApiGroupCompletionReceipt {
     document
         .complete_api_group(
             api,
@@ -51,7 +57,98 @@ fn complete_summary(document: &mut SessionDocument, api: ApiCallId, stamp: i64) 
                 completed_at_ms: stamp,
             },
         )
+        .unwrap()
+}
+
+/// Verifies borrowed compaction only hands input to the existing business turn while it remains runnable.
+/// 验证借用压缩只在原业务仍可运行时将输入交给该回合。
+/// Returns nothing; a stop preserves the queued identity and a permitted dispatch follows the summary.
+/// 不返回值；停止保留排队身份，获准的分发跟随摘要。
+#[test]
+fn borrowed_manual_compaction_insertion_obeys_stop_and_preserves_turn() {
+    // document starts with a real open business turn and an exact persisted continuation boundary.
+    // document 从真实开放业务回合及精确持久化续跑边界开始。
+    let mut document = open_business(true);
+    // source and owner bind the summary to the original turn without granting resume authority.
+    // source 与 owner 将摘要绑定到原回合，不授予恢复执行权限。
+    let source = document
+        .capture_manual_context_maintenance_source()
         .unwrap();
+    let owner = document
+        .borrow_manual_context_compaction(&source)
+        .unwrap()
+        .unwrap();
+    // api and summary identify the completed assistant summary used by the compaction node.
+    // api 和 summary 标识压缩节点使用的已完成助手摘要。
+    let api = document
+        .start_api(
+            ApiPurposeKind::Compaction,
+            ApiRequestSnapshot::new("provider", "model"),
+            10,
+        )
+        .unwrap();
+    let summary = document
+        .append_assistant_text(api, "Task summary", AssistantSemanticStatus::Completed, 11)
+        .unwrap()
+        .into_value();
+    // terminal and compaction_id are the exact committed handoff proof.
+    // terminal 与 compaction_id 是精确已提交的交接证明。
+    let terminal = complete_summary(&mut document, api, 12);
+    let compaction_id = document
+        .record_borrowed_manual_compaction(
+            owner,
+            CompactionCommitInput::new(
+                api,
+                summary,
+                document.events().first().unwrap().seq,
+                "Task summary",
+                LockedBaselineProjection::empty(),
+            ),
+            13,
+        )
+        .unwrap()
+        .into_value();
+    document.complete_borrowed_manual_compaction(owner).unwrap();
+    // input_id and identity select the exact queued insertion across both admission attempts.
+    // input_id 和 identity 在两次准入尝试中选择精确排队插入项。
+    let input_id = document
+        .enqueue_input_fixture("Insert after summary", Vec::new(), 14)
+        .unwrap();
+    let identity = crate::v1::config::QueuedInputIdentity {
+        input_id,
+        client_action_id: document.metadata.input_state.queued_inputs[0]
+            .client_action_id
+            .clone(),
+    };
+    assert!(
+        document
+            .admit_compaction_insertions(
+                compaction_id,
+                terminal.clone(),
+                std::slice::from_ref(&identity),
+                15
+            )
+            .unwrap()
+            .is_none()
+    );
+    document
+        .set_collaboration_run_control(SetRunControlInput {
+            operation_id: CollaborationOperationId::try_new("manual-insertion-runnable").unwrap(),
+            state: CollaborationRunControl::Running,
+            changed_at_ms: 16,
+        })
+        .unwrap();
+    // admitted identifies the same-turn continuation after its input is visible in canonical history.
+    // admitted 标识输入在规范历史中可见后的同回合续跑。
+    let Some(crate::v1::document::CompactionInsertionDispatch::InTurn(admitted)) = document
+        .admit_compaction_insertions(compaction_id, terminal.clone(), &[identity], 17)
+        .unwrap()
+    else {
+        panic!("expected the original business turn to own the insertion");
+    };
+    assert_eq!(admitted.turn_id, terminal.turn_id);
+    assert_eq!(admitted.promoted_input_seqs.len(), 1);
+    assert!(document.events().iter().any(|event| event.seq == admitted.promoted_input_seqs[0] && matches!(&event.event, EventBody::UserInput(input) if input.input_id == input_id)));
 }
 
 #[test]

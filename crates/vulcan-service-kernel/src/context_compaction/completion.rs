@@ -2,6 +2,8 @@
 //! 上下文压缩 completion 辅助逻辑。
 
 use super::*;
+use vulcan_session_core::v1::config::QueuedInputIdentity;
+use vulcan_session_core::v1::document::CompactionInsertionDispatch;
 
 /// Verifies `execution` against exact physical `durability` and builds the commit for `retained_from_seq`.
 /// 根据精确物理`durability`验证`execution`，并为`retained_from_seq`构建提交。
@@ -212,25 +214,27 @@ fn ensure_context_compaction_commit_owner(
 ///
 /// # Returns
 /// 返回值
-/// Success after retaining or exactly removing the owner; an error if ownership changed unexpectedly.
-/// 保留或精确移除所有者后返回成功；所有权意外变化时返回错误。
+/// Returns the removed owner's deferred queue identities, or an error if ownership changed.
+/// 返回已移除所有者的延后排队身份，所有权变化时返回错误。
 fn finish_context_compaction_stream_owner_if_needed(
     state: &mut ServiceBridgeState,
     session_id: SessionId,
     commit_mode: ContextCompactionCommitMode,
     terminal_status: TurnTerminalStatus,
-) -> Result<(), String> {
+) -> Result<Vec<QueuedInputIdentity>, String> {
     if !commit_mode.finishes_active_stream() {
-        return Ok(());
+        return Ok(Vec::new());
     }
-    remove_active_stream_task_if_id(state, session_id, commit_mode.task_id()).ok_or_else(|| {
+    // task carries only the exact manual stream's deferred requests.
+    // task 仅携带精确手动流的延后请求。
+    let task = remove_active_stream_task_if_id(state, session_id, commit_mode.task_id()).ok_or_else(|| {
         format!(
             "context compaction stream ownership changed during terminal commit for session {session_id} task {}",
             commit_mode.task_id()
         )
     })?;
     finish_webui_session_kernel_turn(state, session_id, terminal_status);
-    Ok(())
+    Ok(task.deferred_compaction_insertions)
 }
 
 /// Authoritative terminal outcome after a context-compaction workspace commit.
@@ -535,7 +539,7 @@ pub(crate) async fn finish_webui_context_compaction_execution(
     // The retained workspace is now display-only projection. It must not retain
     // another compaction checkpoint or runtime anchor.
     // 此后的保留工作区仅是显示投影，不得再保存另一份压缩检查点或 runtime 锚点。
-    let (workspace, phase_event) = {
+    let (workspace, phase_event, followup) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -573,18 +577,59 @@ pub(crate) async fn finish_webui_context_compaction_execution(
             sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
         }
         let phase_event = apply_session_phase_to_state(&mut guard, session_id, previous_phase)?;
-        finish_context_compaction_stream_owner_if_needed(
+        // insertions were accepted while the exact manual owner still held the same service lock.
+        // insertions 在精确手动所有者仍持有同一服务锁时被接受。
+        let insertions = finish_context_compaction_stream_owner_if_needed(
             &mut guard,
             session_id,
             commit_mode,
             TurnTerminalStatus::Completed,
         )?;
+        // followup admits only the explicitly deferred inputs before another service action can replace the owner.
+        // followup 在其他服务操作替换所有者前，仅准入用户明确要求延后的输入。
+        let followup = (!insertions.is_empty()).then(|| {
+            // controller and terminal keep dispatch bound to this service and exact summary receipt.
+            // controller 与 terminal 将分发绑定到本服务及精确摘要回执。
+            let controller = guard
+                .controller_runtime
+                .clone()
+                .ok_or_else(|| String::from("Compaction insertion has no session controller."))?;
+            let terminal = durability
+                .api_terminal
+                .as_ref()
+                .ok_or_else(|| {
+                    String::from("Compaction insertion has no summary terminal receipt.")
+                })?
+                .value
+                .clone();
+            handle
+                .mutate_durable_if_changed(
+                    crate::session_runtime_registry_v1::SessionMutationAdmission::RootTurn,
+                    crate::session_runtime_registry_v1::SessionFlushReason::InputAccepted,
+                    |document| {
+                        use crate::session_runtime_registry_v1::SessionMutationChange;
+                        Ok(
+                            match document.admit_compaction_insertions(
+                                compaction_receipt.value,
+                                terminal,
+                                &insertions,
+                                now_ms,
+                            )? {
+                                Some(dispatch) => SessionMutationChange::Changed(Some(dispatch)),
+                                None => SessionMutationChange::Unchanged(None),
+                            },
+                        )
+                    },
+                )
+                .map(|receipt| receipt.value.map(|dispatch| (controller, dispatch)))
+                .map_err(|error| error.to_string())
+        });
         let workspace = guard
             .workspace_snapshot
             .as_ref()
             .ok_or_else(|| String::from("workspace snapshot is not ready"))?
             .clone();
-        (workspace, phase_event)
+        (workspace, phase_event, followup)
     };
     let vmm_runtime_ready = webui_vmm_runtime_readiness(state)?.service_ready;
 
@@ -627,9 +672,145 @@ pub(crate) async fn finish_webui_context_compaction_execution(
             compaction_receipt.changed
         ),
     );
+    // Dispatch errors are scoped to the input and cannot turn the already committed summary into a failure.
+    // 分发错误仅归属于输入，不能使已提交的摘要变为失败。
+    if let Some(followup) = followup {
+        // result reports whether the existing business dispatcher started the exact admitted inputs.
+        // result 报告现有业务分发器是否已启动精确准入的输入。
+        let result = match followup {
+            Ok(Some((controller, dispatch))) => {
+                dispatch_compaction_insertion(
+                    app,
+                    state,
+                    &controller,
+                    agent_runtime,
+                    session_id,
+                    handle.as_ref(),
+                    dispatch,
+                )
+                .await
+            }
+            Ok(None) => Ok(()),
+            Err(error) => Err(error),
+        };
+        if let Err(error) = result {
+            tracing::warn!("[webui-service] post-compaction insertion failed: {error}");
+        }
+    }
     Ok(ContextCompactionFinishOutcome::Committed {
         workspace_snapshot: workspace,
     })
+}
+
+/// Dispatches the exact admitted input after the summary stream releases its kernel slot.
+/// 摘要流释放内核槽位后，分发精确准入的输入。
+/// The runtime arguments select the existing business dispatcher; returns any admission or dispatch error.
+/// 运行时参数选择现有业务分发器；返回准入或分发错误。
+async fn dispatch_compaction_insertion(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    controller: &HostRuntimeHandle,
+    agent_runtime: &AgentRuntimeBridge,
+    session_id: SessionId,
+    handle: &crate::session_runtime_registry_v1::SessionHandle,
+    dispatch: CompactionInsertionDispatch,
+) -> Result<(), String> {
+    // Refresh the durable queue projection before starting either kind of business request.
+    // 启动任一业务请求之前，刷新可靠队列投影。
+    let project_directory = handle
+        .storage_locator()
+        .map_err(|error| error.to_string())?
+        .project_directory();
+    let catalog =
+        vulcan_workspace_store::workspace_store::load_project_resource_catalog(&project_directory)
+            .map_err(|error| error.to_string())?;
+    if crate::pending_prompt_services::rebuild_pending_prompt_panel_from_v1(
+        state,
+        session_id,
+        handle,
+        &project_directory,
+        &catalog,
+    )? {
+        crate::emit_pending_prompts_changed_delta(app, state, session_id)?;
+    }
+    // A later stop prevents automatic dispatch and leaves the admitted input in durable history.
+    // 后续停止阻止自动分发，并将已接纳输入保留在可靠历史中。
+    if !handle
+        .read(|document| {
+            matches!(document.collaboration_run_control(),
+        vulcan_session_core::v1::collaboration::CollaborationRunControl::Running
+        | vulcan_session_core::v1::collaboration::CollaborationRunControl::NaturallyIdle)
+        })
+        .map_err(|error| error.to_string())?
+    {
+        return Ok(());
+    }
+    // The input is durable before it can interrupt a foreground shell command or release its queue lease.
+    // 输入可靠落盘后才可打断前台 Shell 命令或释放其队列租约。
+    vulcan_host_tools::shell_job::ShellJobRuntime::global().notify_interjection(
+        &vulcan_agent_runtime::tooling::native::canonical_shell_job_session_id(
+            &session_id.to_string(),
+        ),
+    );
+    if let Err(error) =
+        crate::pending_prompt_services::pending_prompt_attachment_workspace_path(state, session_id)
+            .and_then(|workspace| {
+                crate::pending_prompt_services::reconcile_pending_prompt_attachment_leases(
+                    handle, session_id, &workspace,
+                )
+            })
+    {
+        tracing::warn!(
+            "[webui-service] post-compaction queue attachment release is pending: {error}"
+        );
+    }
+    // started is owned by the same exact dispatch entry used by ordinary insertion or queue chaining.
+    // started 由普通插入或队列接续所用的同一精确分发入口产生。
+    let started = match dispatch {
+        CompactionInsertionDispatch::NewTurn {
+            turn_id,
+            input_id,
+            client_action_id,
+            input_seq,
+        } => {
+            // authority revalidates the initial batch from persisted events.
+            // authority 从持久事件重新校验初始批次。
+            let authority =
+                crate::webui_prompt_lifecycle::queued_dispatch_authority_from_v1_handle(
+                    handle,
+                    turn_id,
+                    input_id,
+                    &client_action_id,
+                    input_seq,
+                )?;
+            crate::start_exact_v1_queued_turn(
+                app,
+                state,
+                controller,
+                agent_runtime,
+                session_id,
+                authority,
+            )
+            .await?
+        }
+        CompactionInsertionDispatch::InTurn(receipt) => {
+            crate::start_exact_v1_pending_in_turn(
+                app,
+                state,
+                controller,
+                agent_runtime,
+                session_id,
+                receipt,
+            )
+            .await?
+        }
+    };
+    if !started {
+        return Err(String::from(
+            "The deferred compaction input was committed but its business dispatch did not start.",
+        ));
+    }
+    Ok(())
 }
 
 /// Records a failed manual context-compaction attempt without moving the conversation anchor.

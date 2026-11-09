@@ -84,9 +84,9 @@ pub use collaboration::ChildTaskNonSuccessInput;
 pub use compaction::CompactionCommitInput;
 pub use dedicated::{DEDICATED_MEMORY_LOCKED_REASON, DEDICATED_MEMORY_UNLOCKED_REASON};
 pub use input::{
-    ClientInputSubmission, DraftMutationReceipt, EnqueueInputDisposition, EnqueueInputReceipt,
-    QueuedInputDraftReceipt, QueuedInputOrderReceipt, QueuedInputPendingTurnReceipt,
-    QueuedInputRemovalReceipt,
+    ClientInputSubmission, CompactionInsertionDispatch, DraftMutationReceipt,
+    EnqueueInputDisposition, EnqueueInputReceipt, QueuedInputDraftReceipt, QueuedInputOrderReceipt,
+    QueuedInputPendingTurnReceipt, QueuedInputRemovalReceipt,
 };
 pub use modes::{GoalModeTransition, PlanModeTransitionInput};
 pub use persistence::{DirtyFile, FlushCandidate, MemoryRevisionReceipt};

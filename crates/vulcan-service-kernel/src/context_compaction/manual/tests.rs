@@ -12,6 +12,97 @@ use vulcan_session_core::{
 
 mod borrowed;
 
+/// Verifies the real insert RPC defers one exact queue identity during independent maintenance.
+/// 验证真实插队 RPC 在独立维护期间延后一个精确排队身份。
+/// Returns nothing; duplicate clicks and summary failure leave the durable queue untouched.
+/// 不返回值；重复点击及摘要失败均保留可靠队列。
+#[tokio::test]
+async fn manual_compaction_insertion_rpc_defers_and_deduplicates_until_success() {
+    // fixture wires the exact service, storage, and task owner used by the public RPC.
+    // fixture 连接公开 RPC 使用的精确服务、存储及任务所有者。
+    let (_root, state, handle, task_id) = fixture().await;
+    // session_id, source, and mode bind the independent maintenance turn.
+    // session_id、source 与 mode 绑定独立维护回合。
+    let session_id = handle.session_id();
+    let source = handle
+        .read(|document| document.capture_manual_context_maintenance_source())
+        .unwrap()
+        .unwrap();
+    let mode = begin(&state, session_id, task_id, source).await.unwrap();
+    state.lock().unwrap().workbench.selected_conversation_id = Some(session_id.to_string());
+    // action is the client identity that remains queued until the summary commits.
+    // action 是在摘要提交前保持排队的客户端身份。
+    let action = ClientActionId::try_new("manual-deferred-insertion").unwrap();
+    handle
+        .enqueue_input(
+            ClientInputSubmission::new(action.clone(), "After the summary", Vec::new()),
+            crate::current_v1_unix_millis().unwrap(),
+        )
+        .unwrap();
+    // app has no external subscriber and captures only this fixture's events.
+    // app 没有外部订阅方，仅捕获此夹具的事件。
+    let app = ServiceEventEmitter::new(Vec::new());
+    for _ in 0..2 {
+        assert!(
+            crate::service_insert_pending_prompt(
+                app.clone(),
+                state.clone(),
+                action.as_str().to_owned()
+            )
+            .await
+            .unwrap()
+        );
+    }
+    assert_eq!(
+        state.lock().unwrap().active_stream_tasks[&session_id]
+            .deferred_compaction_insertions
+            .len(),
+        1
+    );
+    assert!(
+        handle
+            .read(|document| document
+                .metadata
+                .input_state
+                .pending_in_turn_inputs
+                .is_empty())
+            .unwrap()
+    );
+    assert!(matches!(
+        mode,
+        ContextCompactionCommitMode::FinishActiveStream { .. }
+    ));
+    crate::context_compaction::fail_webui_context_compaction_execution(
+        &app,
+        &state,
+        session_id,
+        SessionRunPhase::Idle,
+        "manual-deferred-status",
+        "",
+        MANUAL_CONTEXT_COMPACTION_TRIGGER,
+        mode,
+        "Synthetic summary rejection",
+    )
+    .unwrap();
+    assert!(
+        !state
+            .lock()
+            .unwrap()
+            .active_stream_tasks
+            .contains_key(&session_id)
+    );
+    assert!(
+        handle
+            .read(|document| document
+                .metadata
+                .input_state
+                .queued_inputs
+                .iter()
+                .any(|entry| entry.client_action_id == action))
+            .unwrap()
+    );
+}
+
 /// Registers an idle failed business session and a separate pending manual stream in isolated storage.
 /// 在隔离存储中登记空闲失败业务会话及独立待执行手动流。
 /// Returns the storage guard, service state, canonical handle and exact stream owner.

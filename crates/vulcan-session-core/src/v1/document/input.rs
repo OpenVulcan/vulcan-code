@@ -22,6 +22,9 @@ use crate::v1::ids::{ClientActionId, PendingInputId, ResourceId, Seq, TurnId};
 use crate::v1::user_prompt::initial_preparation_matches;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod compaction_insertions;
+pub use compaction_insertions::CompactionInsertionDispatch;
+
 /// Validates exact ordered staged `attachment_ids` against `resource_ids`; absence never invents old asset lineage.
 /// 根据`resource_ids`校验精确有序暂存`attachment_ids`；缺失绝不虚构旧资产来源。
 /// Returns an explicit domain error for mismatched counts or invalid opaque identifiers.

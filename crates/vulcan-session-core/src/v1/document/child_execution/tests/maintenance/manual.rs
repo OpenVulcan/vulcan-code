@@ -29,8 +29,8 @@ fn idle_root() -> SessionDocument {
 
 /// A manual request after a failed turn can dispatch a compaction API and commit an independent summary.
 /// 失败回合后的手动请求可以分发压缩 API，并提交独立摘要。
-/// Returns nothing; checks source preservation, exact ownership, closure and cold reload.
-/// 不返回值；检查来源保留、精确归属、闭合与冷重载。
+/// Returns nothing; checks source preservation, deferred insertion order, and cold reload.
+/// 不返回值；检查来源保留、延后插入顺序与冷重载。
 #[test]
 fn manual_compaction_opens_real_api_owner_and_preserves_business() {
     // Start from the same idle failure boundary that previously produced NoActiveTurn.
@@ -81,7 +81,9 @@ fn manual_compaction_opens_real_api_owner_and_preserves_business() {
         )
         .unwrap()
         .into_value();
-    document
+    // terminal is the only summary API allowed to authorize the deferred handoff.
+    // terminal 是唯一可授权延后交接的摘要 API。
+    let terminal = document
         .complete_api_group(
             api,
             ApiCompletion {
@@ -97,7 +99,9 @@ fn manual_compaction_opens_real_api_owner_and_preserves_business() {
             },
         )
         .unwrap();
-    document
+    // compaction_id ties the input handoff to this exact summary checkpoint.
+    // compaction_id 将输入交接绑定到本次精确摘要检查点。
+    let compaction_id = document
         .record_compaction(
             CompactionCommitInput::new(
                 api,
@@ -108,9 +112,41 @@ fn manual_compaction_opens_real_api_owner_and_preserves_business() {
             ),
             14,
         )
-        .unwrap();
+        .unwrap()
+        .into_value();
+    // queued records ordinary and explicitly selected items, preserving their distinct identities.
+    // queued 记录普通及明确选中的排队项，保留各自的身份。
+    let queued = [
+        (14, "ordinary"),
+        (15, "first requested"),
+        (16, "second requested"),
+    ]
+    .map(|(time, text)| {
+        // id is the original durable queue identity created during the summary.
+        // id 是摘要期间创建的原始可靠队列身份。
+        let id = document
+            .enqueue_input_fixture(text, Vec::new(), time)
+            .unwrap();
+        document
+            .metadata
+            .input_state
+            .queued_inputs
+            .iter()
+            .find(|input| input.input_id == id)
+            .map(|input| crate::v1::config::QueuedInputIdentity {
+                input_id: input.input_id,
+                client_action_id: input.client_action_id.clone(),
+            })
+            .unwrap()
+    });
+    assert!(
+        document
+            .admit_compaction_insertions(compaction_id, terminal.clone(), &queued[1..], 17)
+            .unwrap()
+            .is_none()
+    );
     document
-        .finish_context_maintenance(&execution_id, TurnClosureReason::Completed, 15)
+        .finish_context_maintenance(&execution_id, TurnClosureReason::Completed, 18)
         .unwrap();
     for event in &original {
         assert_eq!(
@@ -126,9 +162,46 @@ fn manual_compaction_opens_real_api_owner_and_preserves_business() {
             .count(),
         1
     );
+    // dispatch starts a fresh business turn with only the selected inputs in their insertion order.
+    // dispatch 仅按插入顺序将选中输入放入新的业务回合。
+    let dispatch = document
+        .admit_compaction_insertions(
+            compaction_id,
+            terminal.clone(),
+            &[queued[2].clone(), queued[1].clone()],
+            19,
+        )
+        .unwrap()
+        .unwrap();
+    let crate::v1::document::CompactionInsertionDispatch::NewTurn {
+        turn_id, input_seq, ..
+    } = dispatch
+    else {
+        panic!("selected inputs must open one business turn");
+    };
+    assert!(
+        document
+            .admit_compaction_insertions(compaction_id, terminal, &queued[1..], 20)
+            .unwrap()
+            .is_none()
+    );
     publish(&mut document);
     document = reload(&document);
-    assert!(document.active_turn().is_none());
+    assert_eq!(document.active_turn().unwrap().turn_id, turn_id);
+    assert_eq!(document.metadata.input_state.queued_inputs.len(), 1);
+    assert_eq!(
+        document.metadata.input_state.queued_inputs[0].input_id,
+        queued[0].input_id
+    );
+    assert_eq!(
+        document
+            .initial_queued_input_batch(turn_id, input_seq)
+            .unwrap()
+            .iter()
+            .map(|(_, input)| input.input_id)
+            .collect::<Vec<_>>(),
+        vec![queued[2].input_id, queued[1].input_id]
+    );
     assert!(
         document
             .metadata

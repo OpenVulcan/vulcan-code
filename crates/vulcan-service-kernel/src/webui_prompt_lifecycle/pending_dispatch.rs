@@ -11,10 +11,14 @@ use crate::pending_prompt_services::{
 use crate::session_goal_lifecycle::{current_v1_goal_unix_millis, session_v1_handle_from_state};
 use vulcan_workspace_store::workspace_store::load_project_resource_catalog;
 
+// STOPPED_INSERTION_ERROR explains why the exact queue entry remains available.
+// STOPPED_INSERTION_ERROR 说明精确队列条目为何保持可用。
+const STOPPED_INSERTION_ERROR: &str = "The conversation is stopped. Continue it before inserting a message; the message remains queued.";
+
 /// Inserts one visible queued prompt at a future boundary of the current business execution.
 /// 将可见排队提示词插入当前业务执行的后续边界。
-/// This does not resume a stopped conversation or start a new model request.
-/// 此操作不恢复已停止会话，也不启动新的模型请求。
+/// A manual summary retains the queue entry until successful settlement authorizes dispatch.
+/// 手动摘要期间保留排队条目，直到成功结算授权分发。
 ///
 /// # Parameters
 /// 参数
@@ -38,18 +42,63 @@ pub(crate) async fn service_insert_pending_prompt(
     let client_action_id = pending_prompt_action_id(&entry_id)?;
     let handle = session_v1_handle_from_state(&state, selected_session_id).await?;
     let identity = pending_prompt_queue_identity(handle.as_ref(), &client_action_id)?;
+    {
+        // Hold the same service lock as compaction settlement so an accepted request cannot miss the handoff.
+        // 持有与压缩结算相同的服务锁，使已接收请求不会错过交接。
+        let mut guard = state.lock().map_err(|error| error.to_string())?;
+        if guard
+            .session_runtime_kernels
+            .get(&selected_session_id)
+            .and_then(|kernel| kernel.active_turn())
+            .is_some_and(|turn| turn.kind == crate::ActiveTurnKind::ContextCompaction)
+            && let Some(task) = guard.active_stream_tasks.get_mut(&selected_session_id)
+        {
+            // Check current queue membership rather than an action identity recovered from terminal history.
+            // 校验当前队列成员资格，而不是仅依赖从终态历史恢复的动作身份。
+            let (queued, stopped) = handle
+                .read(|document| {
+                    (document
+                        .metadata
+                        .input_state
+                        .queued_inputs
+                        .iter()
+                        .any(|item| {
+                            item.input_id == identity.input_id
+                                && item.client_action_id == identity.client_action_id
+                        }), !matches!(document.collaboration_run_control(),
+                            vulcan_session_core::v1::collaboration::CollaborationRunControl::Running
+                            | vulcan_session_core::v1::collaboration::CollaborationRunControl::NaturallyIdle))
+                })
+                .map_err(|error| error.to_string())?;
+            if stopped {
+                return Err(STOPPED_INSERTION_ERROR.to_owned());
+            }
+            if !queued {
+                return Err(String::from(
+                    "The message is no longer queued for insertion.",
+                ));
+            }
+            if !task.deferred_compaction_insertions.contains(&identity) {
+                task.deferred_compaction_insertions.push(identity);
+            }
+            return Ok(true);
+        }
+    }
     let attachment_workspace_path =
         pending_prompt_attachment_workspace_path(&state, selected_session_id)?;
     handle
         .promote_queued_input_to_pending_turn(identity, current_v1_goal_unix_millis()?)
         .map_err(|error| match error {
             crate::session_runtime_registry_v1::SessionRuntimeError::Domain(ref cause)
-                if matches!(cause.as_ref(),
+                if matches!(
+                    cause.as_ref(),
                     vulcan_session_core::v1::DomainError::CollaborationStateViolation {
                         field: "pending_input.stopped_turn",
-                    }) => String::from(
-                "The conversation is stopped. Continue it before inserting a message; the message remains queued.",
-            ),
+                    }
+                ) =>
+            {
+                STOPPED_INSERTION_ERROR.to_owned()
+            }
             error => {
                 format!("Failed to insert the V1 pending message into the current turn: {error}")
             }

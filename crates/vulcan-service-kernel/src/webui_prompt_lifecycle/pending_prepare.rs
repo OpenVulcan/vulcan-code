@@ -1072,6 +1072,26 @@ pub(super) async fn prepare_webui_pending_prompt(
     };
     let pending_prompt_dispatch_authorization =
         pending_prompt_dispatch_guard.existing_submission_authorization(session_id)?;
+    // A stop may settle between the predecessor finishing and this reservation being acquired.
+    // 前驱结束到取得本次预留之间，停止操作可能已经完成结算。
+    if matches!(
+        &exact_dispatch,
+        ExactPendingPromptDispatch::Queued { .. }
+            | ExactPendingPromptDispatch::PendingInTurn { .. }
+    ) {
+        // runnable is read inside the same admission exclusion that protects the launch.
+        // runnable 在保护本次启动的同一准入排他区间内读取。
+        let runnable = registered_session_v1_handle_from_state(state, session_id)?
+            .read(|document| {
+                matches!(document.collaboration_run_control(),
+                vulcan_session_core::v1::collaboration::CollaborationRunControl::Running
+                | vulcan_session_core::v1::collaboration::CollaborationRunControl::NaturallyIdle)
+            })
+            .map_err(|error| error.to_string())?;
+        if !runnable {
+            return Ok(false);
+        }
+    }
     if let Some(expected_goal_authority) = goal_authority {
         let handle = registered_session_v1_handle_from_state(state, session_id)?;
         let current_goal_authority =

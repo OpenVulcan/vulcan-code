@@ -1217,6 +1217,10 @@ pub(crate) struct ActiveStreamTask {
     /// Goal identifier currently bound to this provider execution.
     /// 当前绑定到该 Provider 执行的目标标识。
     session_goal_id: Option<String>,
+    /// Exact queued inputs the user asked to execute after this manual compaction succeeds.
+    /// 用户要求在本次手动压缩成功后执行的精确排队输入。
+    pub(crate) deferred_compaction_insertions:
+        Vec<vulcan_session_core::v1::config::QueuedInputIdentity>,
 }
 
 impl ActiveStreamTask {
@@ -1250,6 +1254,7 @@ impl ActiveStreamTask {
             task_id,
             handle,
             session_goal_id,
+            deferred_compaction_insertions: Vec::new(),
         }
     }
 
