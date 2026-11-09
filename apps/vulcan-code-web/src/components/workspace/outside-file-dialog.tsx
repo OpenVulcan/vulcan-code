@@ -85,7 +85,7 @@ export function OutsideFileDialog(props: { request: WorkspaceFileActionRequest; 
   if (inspection === undefined) return null;
   return (
     <Dialog open onOpenChange={(next) => { if (!next && !busy) props.onDone(); }}>
-      <DialogContent size="sm">
+      <DialogContent className="workspace-outside-file-dialog" size="md">
         <DialogHeader>
           <DialogTitle>{t("outsideFile.title")}</DialogTitle>
           <DialogDescription>{t("outsideFile.hint")}</DialogDescription>

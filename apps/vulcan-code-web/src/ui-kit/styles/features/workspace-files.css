@@ -104,6 +104,26 @@
   user-select: text;
 }
 
+/* Keep the path and the four desktop actions inside the available dialog width. */
+/* 将路径和四个桌面端操作限制在弹窗可用宽度内。 */
+.workspace-outside-file-dialog {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.workspace-outside-file-dialog > .vk-dialog-footer {
+  flex-wrap: wrap;
+}
+
+/* Long translated labels may wrap within a button when a whole row is too narrow. */
+/* 当整行宽度也不足时，允许较长的译文在按钮内部换行。 */
+.workspace-outside-file-dialog > .vk-dialog-footer > .vk-btn {
+  max-width: 100%;
+  height: auto;
+  padding-block: var(--vk-u);
+  line-height: var(--vk-lh-ui);
+  white-space: normal;
+}
+
 /* The "don't ask again in this session" choice of the outside-file prompt. 工作区外文件提示中的“本会话不再提示”选项。 */
 .workspace-file-action-remember {
   display: flex;
