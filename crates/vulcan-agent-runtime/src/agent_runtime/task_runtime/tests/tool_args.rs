@@ -205,6 +205,7 @@ fn spawn_agent_schema_requires_task_name_and_message() {
         "agent_id",
         "system_prompt",
         "model",
+        "reasoning_effort",
         "task_name",
     ] {
         assert!(properties.contains_key(key), "missing {key}");
@@ -213,6 +214,51 @@ fn spawn_agent_schema_requires_task_name_and_message() {
     assert_eq!(properties["task_name"]["minLength"], 1);
     assert_eq!(properties["task_name"]["pattern"], "^[^/]+$");
     assert_eq!(schema["required"], json!(["task_name", "message"]));
+    assert_eq!(
+        properties["reasoning_effort"]["enum"],
+        json!(ReasoningEffortLevel::ALL)
+    );
+}
+
+#[test]
+fn spawn_agent_reasoning_effort_reaches_the_invocation_snapshot() {
+    for effort in ReasoningEffortLevel::ALL {
+        for model in [None, Some("provider/model-a")] {
+            let mut args = json!({
+                "message": "Review the change.",
+                "task_name": "review",
+                "reasoning_effort": effort,
+            });
+            if let Some(model) = model {
+                args["model"] = json!(model);
+            }
+            let mapped = task_tool_args_from_spawn_agent_args(args).unwrap();
+            let parsed = parse_task_tool_arguments(mapped).unwrap();
+            let config = task_invocation_config_from_args(&parsed);
+            assert_eq!(json!(config.provider_model.reasoning_effort), json!(effort));
+            assert_eq!(config.provider_model.model_id.is_some(), model.is_some());
+        }
+    }
+}
+
+#[test]
+fn spawn_agent_rejects_invalid_reasoning_effort_values() {
+    for effort in [
+        json!("unknown"),
+        json!("xhigh"),
+        json!(""),
+        json!(null),
+        json!(7),
+    ] {
+        assert!(
+            task_tool_args_from_spawn_agent_args(json!({
+                "message": "Review the change.",
+                "task_name": "review",
+                "reasoning_effort": effort,
+            }))
+            .is_err()
+        );
+    }
 }
 
 /// Verifies spawn_agent maps agent creation mode into profile bindings.

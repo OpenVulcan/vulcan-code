@@ -308,6 +308,8 @@ pub(super) fn apply_provider_model_value(snapshot: &mut ProviderModelSnapshot, v
                 string_field(map, &["model_id", "model"]).or_else(|| snapshot.model_id.clone());
             snapshot.execution_mode = string_field(map, &["execution_mode", "mode"])
                 .or_else(|| snapshot.execution_mode.clone());
+            snapshot.reasoning_effort = string_field(map, &["reasoning_effort"])
+                .or_else(|| snapshot.reasoning_effort.clone());
         }
         _ => {}
     }
@@ -432,6 +434,51 @@ pub(super) fn resolve_child_model_reasoning_effort(
             Some(inherited),
         ),
     )
+}
+
+/// Returns the exact host effort choices for the resolved model, including provider-default `off`.
+/// 返回已解析模型支持的精确宿主档位，包括使用供应商默认行为的 `off`。
+pub(super) fn child_model_reasoning_efforts(
+    capabilities: &vulcan_ai_contract::ModelCapabilities,
+) -> Vec<crate::provider_config::ReasoningEffortLevel> {
+    crate::provider_config::ReasoningEffortLevel::ALL
+        .into_iter()
+        .filter(|effort| {
+            crate::agent_runtime::provider_reasoning::validate_exact_wire_reasoning_effort(
+                capabilities,
+                *effort,
+            )
+            .is_ok()
+        })
+        .collect()
+}
+
+/// Resolves the provider/model in the runtime and validates the requested host effort without normalization.
+/// 从运行时解析指定供应商和模型，并校验请求的宿主档位，不进行档位转换。
+/// Returns the exact requested level or an error if the route or host spelling is unsupported.
+/// 返回请求的精确档位，路由或宿主拼写不受支持时返回错误。
+pub(super) fn resolve_explicit_child_reasoning_effort(
+    foundation: &RuntimeFoundation,
+    provider_id: &str,
+    model_id: &str,
+    requested: &str,
+) -> Result<crate::provider_config::ReasoningEffortLevel, String> {
+    // Resolve the eligible account's model before applying the provider capability rules.
+    // 先解析符合条件的账号所提供的模型，再应用供应商能力规则。
+    let runtime = foundation
+        .public_ai_runtime()
+        .ok_or_else(|| String::from("The service has not installed the public AI runtime."))?;
+    let configuration = runtime.configuration_snapshot()?;
+    let selection = runtime.resolve_model_selection(&configuration, provider_id, model_id)?;
+    // Deserialize the host spelling so provider-specific aliases cannot bypass the public contract.
+    // 按宿主拼写反序列化，避免供应商别名绕过公开契约。
+    let effort = serde_json::from_value(Value::String(requested.to_owned()))
+        .map_err(|error| format!("Invalid child reasoning effort: {error}"))?;
+    crate::agent_runtime::provider_reasoning::validate_exact_wire_reasoning_effort(
+        &selection.model.capabilities,
+        effort,
+    )?;
+    Ok(effort)
 }
 
 /// Validates an explicit model override selected by a spawn_agent call.

@@ -1596,6 +1596,8 @@ pub(super) fn agent_orchestration_info_models(
             .provider(provider_id.as_str())
             .map(|provider| provider.display_name.clone())
             .unwrap_or_else(|| provider_id.clone());
+        let selection = runtime.resolve_model_selection(&configuration, &provider_id, &model_id)?;
+        let reasoning_efforts = child_model_reasoning_efforts(&selection.model.capabilities);
         rows.push(json!({
             "provider_id": provider_id,
             "provider_name": provider_name,
@@ -1606,6 +1608,7 @@ pub(super) fn agent_orchestration_info_models(
             "is_session_model": is_session_model,
             "is_agent_fixed_model": fixed_selector.as_deref() == Some(selector.as_str()),
             "account_count": account_count,
+            "reasoning_efforts": reasoning_efforts,
         }));
     }
     Ok(rows)
