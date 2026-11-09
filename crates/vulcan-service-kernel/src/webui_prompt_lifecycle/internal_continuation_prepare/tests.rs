@@ -22,6 +22,8 @@ use vulcan_workspace_store::workspace_store::{
     create_session_v1_storage_fixture, load_session_v1_full,
 };
 
+mod questions;
+
 /// Creates isolated actual storage and its canonical writer; the directory must outlive the handle.
 /// 创建隔离实际存储及规范写入器；目录必须比句柄存活更久。
 fn stored_handle() -> (tempfile::TempDir, Arc<SessionHandle>) {

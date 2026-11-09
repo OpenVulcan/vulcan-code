@@ -233,6 +233,10 @@ impl SessionDocument {
     /// Returns immutable admission facts; source history and run control are rechecked before reconstruction.
     /// 返回不可变准入事实；重建前重新校验来源历史及运行控制。
     pub fn business_hook_recovery_binding(&self) -> Result<&BusinessHookBinding, DomainError> {
+        use crate::v1::collaboration::{
+            CollaborationExecutionPurpose, CollaborationQuestionExecutionState,
+        };
+
         if self.memory_revision != self.durable_revision {
             return Err(DomainError::SubagentSourceNotDurable {
                 memory_revision: self.memory_revision,
@@ -260,8 +264,14 @@ impl SessionDocument {
                 .question_executions
                 .values()
                 .any(|execution| {
-                    execution.state
-                        == crate::v1::collaboration::CollaborationQuestionExecutionState::Running
+                    // In-turn attempts live until this business turn closes, including after a reply.
+                    // 回合内答疑尝试直到本业务回合闭合才结束，即使已经回复也一样。
+                    // Only this exact non-standalone owner may share the original business Hook.
+                    // 只有精确属于本回合的非独立所有者可以共享原业务 Hook。
+                    execution.state == CollaborationQuestionExecutionState::Running
+                        && (execution.purpose != CollaborationExecutionPurpose::InTurnQuestion
+                            || execution.parent_turn_id != Some(turn.turn_id)
+                            || execution.execution_turn_id.is_some())
                 })
             || !self.events().iter().any(|event| {
                 event.seq == binding.start_seq && event.turn_id == Some(binding.turn_id)

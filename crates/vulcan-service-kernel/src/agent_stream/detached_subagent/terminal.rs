@@ -244,23 +244,51 @@ pub(super) async fn handle_parent_event(
             && parent_is_regular_session
             && !parent_is_stopped
         {
-            let started = start_exact_v1_subagent_return_turn(
-                app,
+            // Publication retries retain the original receipt even after Stop or a new parent turn.
+            // 发布重试在停止或新父回合之后仍保留原回执。
+            // Retire only the old continuation obligation; never rebind its result to the new owner.
+            // 只退休旧续跑义务；绝不把结果重新绑定给新所有者。
+            let parent = crate::session_goal_lifecycle::registered_session_v1_handle_from_state(
                 state,
-                controller_runtime,
-                agent_runtime,
                 parent_session_id,
-                receipt,
-            )
-            .await?;
-            webui_trace(
-                "detached_parent_event_v1_return_dispatch",
-                format!("parent={parent_session_id} task={task_id} started={started}"),
-            );
-            if !started {
+            )?;
+            let can_continue_original_turn = parent
+                .read_full_durable(|document| {
+                    document.active_turn().is_some_and(|turn| {
+                        !turn.closed && turn.turn_id == receipt.parent_turn_id
+                    }) && document.collaboration_run_control()
+                        == vulcan_session_core::v1::collaboration::CollaborationRunControl::Running
+                })
+                .map_err(|error| error.to_string())?;
+            if can_continue_original_turn {
+                // Exact admission rechecks the owner after any asynchronous preparation; errors still retry.
+                // 精确准入在任何异步准备后重查所有者；错误仍保留重试。
+                let started = start_exact_v1_subagent_return_turn(
+                    app,
+                    state,
+                    controller_runtime,
+                    agent_runtime,
+                    parent_session_id,
+                    receipt,
+                )
+                .await?;
                 webui_trace(
-                    "detached_parent_event_v1_return_deferred_to_parent_terminal",
-                    format!("parent={parent_session_id} task={task_id}"),
+                    "detached_parent_event_v1_return_dispatch",
+                    format!("parent={parent_session_id} task={task_id} started={started}"),
+                );
+                if !started {
+                    webui_trace(
+                        "detached_parent_event_v1_return_deferred_to_parent_terminal",
+                        format!("parent={parent_session_id} task={task_id}"),
+                    );
+                }
+            } else {
+                webui_trace(
+                    "detached_parent_event_v1_return_owner_ended",
+                    format!(
+                        "parent={parent_session_id} task={task_id} turn={}",
+                        receipt.parent_turn_id.value()
+                    ),
                 );
             }
         } else if terminal_mailbox.as_ref().is_some_and(|mailbox| {

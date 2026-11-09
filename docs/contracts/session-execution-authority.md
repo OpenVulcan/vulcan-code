@@ -17,6 +17,38 @@
 - 协作启动恢复可以依据具体消息、问题或子执行的持久凭据，按既有契约恢复该项工作或补齐结果投递；这不授予任意普通历史主任务新的执行许可。仅修复子任务回执不需要创建主业务钩子或派发主任务。
 - 目标模式的启动暂停与用户显式恢复沿用现有契约。
 
+## 子代理未结算时的新输入
+
+- 普通用户提交同时读取 V1 文档的队列占用和当前开放回合的子任务完成义务。即使父级物理请求已经结束、
+  运行时没有活动流或子代理镜像，只要该回合仍有 `reserved` 或 `active` 子任务，新消息就进入既有可见队列。
+- 排队保留原父回合及精确子执行归属，用户仍可使用现有插队入口；不得通过删除
+  `root_input.unsettled_execution_owner` 校验、关闭父回合或清除子任务义务来接纳新根输入。
+- 已终结子任务和其他历史回合的子任务不单独阻塞当前提交；没有子任务义务的空闲遗留回合继续使用原子收口准入。
+- 显式 Continue 不创建新根，仍按原业务终态判断资格；子任务义务不能单独使其返回 busy，已有队列和活动物理请求的排他检查保持不变。
+- 插队不是 Continue。开放回合处于 `Stopped`、`MainOnly` 或 `MainAndSubagents` 时，V1 原子晋升拒绝新的插队，
+  保留原排队消息、附件租约和动作身份；服务返回先继续会话的提示，不将消息显示为已成功插入。
+  已经提交的插队回执仍可幂等重放，恢复运行后同一排队身份可正常晋升。等待者通知仅在可靠晋升后发送。
+
+本节以 `conversation_submission/queue.rs` 为实现权威，回归见 `tests/conversation_submission_queue_tests.rs`
+的 `idle_parent_submission_respects_durable_child_ownership`；不改变持久字段或自动恢复许可。
+停止插队边界由 `document_tests/input.rs::guided_queued_input_rejects_stopped_turn_without_losing_message`
+和 `webui_prompt_lifecycle/pending_dispatch.rs::tests::stopped_pending_insertion_preserves_queued_input` 约束。
+
+## 同回合答疑与待发送投影
+
+- `InTurnQuestion` 的执行记录属于原业务回合，直到该回合收口才结束；其 `running` 状态不单独证明仍有
+  独占的辅助请求。恢复原业务 Hook 时，只允许与当前父回合一致且没有独立 `execution_turn_id` 的记录共存，
+  不要求先答复才能继续处理同回合问题。活动物理 API、独立答疑回合、其他回合归属及停止控制仍阻止恢复。
+- 上述判断只恢复已经发布的原 Hook，不创建首次业务身份、不结束问题记录、不丢弃未回答问题，
+  也不替代服务层的精确来源校验与提交互斥。
+- 待发送面板从 V1 输入状态重建。变更判定同时比较 process mirror 与已经发布的 workbench 投影，
+  不能因为水合已经提前清空 mirror 就遗漏清除已消费的 `inserted` 行。
+  retained workbench、revision 和客户端 delta 仍由原发送入口共同更新，只影响精确目标会话。
+
+本节以 `business_hook.rs::business_hook_recovery_binding`、`pending_prompt_services.rs::rebuild_pending_prompt_panel_from_v1`
+与 `pending_prompts.rs::emit_pending_prompts_changed_delta` 为实现权威；回归见
+`internal_continuation_prepare/tests/questions.rs` 及 `pending_prompt_services::tests`。
+
 ## 最终回答后的插队批次交接
 
 - 成功的主业务 API 返回正文且没有工具调用时，尚未消费的插队输入暂时保留在可靠输入状态中，
@@ -69,10 +101,13 @@
   普通回流、交叉区间、复用根动作、不同任务及正文漂移仍拒绝；不能用后继正文替代原始结果或直接清除完成约束。
 - 补回时保留既有事件、正文和来源区间。已发布结果的重试沿用其原始来源前沿，不能因为补回前驱而改变不可变回执。
   重复恢复及冷加载不得重复写入结果、释放其他子任务或自动执行历史主任务。
+- 结果可靠发布后，若规范父回合已经关闭、被替换或明确停止，旧终态监听器只释放自身的精确重试归属，
+  不再尝试旧父续跑，不把结果挂到新回合，也不把已完成子任务改成失败。父回合仍有执行许可时，准备错误
+  继续保留重试；结果发布失败仍保留投递责任。异步准备期间的归属变化由原准入重验拒绝，下一次重试再收口。
 
 本节以 `agent_stream/detached_subagent/queued_admission.rs`、`terminal.rs`、`agent_collaboration/startup_recovery/native_results.rs` 和
 `vulcan-session-core/src/v1/document/subagent.rs` 为权威；调整时同步验证 `provider_v1_sink/tests/queued_child_returns.rs`
-及 `document_tests/subagent/owned_returns/overlap.rs`。
+及 `provider_v1_sink/tests/terminal_return_owner.rs`、`document_tests/subagent/owned_returns/overlap.rs`。
 
 ## 首个业务请求前的压缩检查
 

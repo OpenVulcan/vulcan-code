@@ -1628,6 +1628,18 @@ impl SessionDocument {
                 field: "question_execution.business_inputs",
             });
         }
+        // An open journal is not permission to feed a stopped execution. Keep the queue and its lease.
+        // 开放日志不授权向已停止执行投递输入；保留队列及其租约。
+        if matches!(
+            self.collaboration_run_control(),
+            crate::v1::collaboration::CollaborationRunControl::Stopped
+                | crate::v1::collaboration::CollaborationRunControl::MainOnly
+                | crate::v1::collaboration::CollaborationRunControl::MainAndSubagents
+        ) {
+            return Err(DomainError::CollaborationStateViolation {
+                field: "pending_input.stopped_turn",
+            });
+        }
         // Only the admitted business turn receives this explicit queue promotion.
         // 只有已准入业务回合接收此次明确队列晋升。
         let turn_id = turn.turn_id;

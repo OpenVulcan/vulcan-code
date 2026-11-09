@@ -9,6 +9,7 @@ mod native_media;
 mod permission_mode;
 mod provider_tools;
 mod queued_child_returns;
+mod terminal_return_owner;
 use super::*;
 
 /// Proves the real persistence pair retains source once and leaves non-diff metadata intact.

@@ -289,6 +289,7 @@ pub(crate) fn evaluate_existing_submission_queue(
     workspace_snapshot: &WorkspaceSnapshot,
     submission_session_id: Option<Uuid>,
     v1_handle: Option<&Arc<SessionHandle>>,
+    submission_mode: &ConversationSubmissionMode,
 ) -> Result<ExistingSubmissionQueueDecision, String> {
     // session_id exists only for submissions targeting an already materialized conversation.
     // session_id 仅在提交目标为已物化会话时存在。
@@ -304,15 +305,20 @@ pub(crate) fn evaluate_existing_submission_queue(
     // durable_queue_started_at isolates the authoritative V1 queue occupancy read.
     // durable_queue_started_at 隔离权威 V1 队列占用读取部分。
     let durable_queue_started_at = current_unix_millis_value();
-    // has_queued_inputs is read from the exact V1 session document. A missing compatibility
-    // mirror can never make a non-empty durable queue look empty and unlock an immediate
-    // admission that would violate V1 FIFO order.
-    // has_queued_inputs 读取自精确 V1 会话文档。兼容镜像缺失绝不能让非空可靠队列看起来为空，
-    // 从而放行违反 V1 FIFO 顺序的即时准入。
-    let has_queued_inputs = match v1_handle {
+    // Queue occupancy and child obligations share one durable document revision. A missing
+    // runtime mirror cannot unlock a new root while the open parent still owns child results.
+    // 队列占用与子任务义务来自同一可靠文档版本；运行时镜像缺失不能放行仍拥有子结果的父回合替换。
+    let (has_queued_inputs, has_unsettled_child_tasks) = match v1_handle {
         Some(handle) => handle
-            .read(|document| !document.metadata.input_state.queued_inputs.is_empty())
-            .map_err(|error| format!("failed to read durable V1 queue occupancy: {error}"))?,
+            .read(|document| {
+                (
+                    !document.metadata.input_state.queued_inputs.is_empty(),
+                    document.active_turn().is_some_and(|turn| {
+                        !turn.closed && document.has_unsettled_collaboration(Some(turn.turn_id))
+                    }),
+                )
+            })
+            .map_err(|error| format!("failed to read durable V1 submission ownership: {error}"))?,
         None => {
             return Err(format!(
                 "existing session `{session_id}` submission requires its exact V1 document authority"
@@ -322,7 +328,9 @@ pub(crate) fn evaluate_existing_submission_queue(
     webui_trace_if_slow(
         "submit_prompt_durable_queue_check_slow",
         durable_queue_started_at,
-        format!("session={session_id} has_queued_inputs={has_queued_inputs}"),
+        format!(
+            "session={session_id} has_queued_inputs={has_queued_inputs} has_unsettled_child_tasks={has_unsettled_child_tasks}"
+        ),
     );
     // activity reads the stream owner and authoritative kernel turn from one revision.
     // activity 从同一版本读取活动流所有者与权威内核回合。
@@ -342,10 +350,6 @@ pub(crate) fn evaluate_existing_submission_queue(
         active_state_started_at,
         format!("session={session_id}"),
     );
-    webui_submit_trace(
-        "submit_prompt_subagent_running_check_skipped",
-        format!("session={session_id} reason=independent_subagent_lane"),
-    );
     // has_precheck_progress is the retained precheck ownership marker consumed by pending-lane rules.
     // has_precheck_progress 是待发送通道规则消费的保留 precheck 所有权标记。
     let has_precheck_progress = workspace_snapshot
@@ -353,20 +357,21 @@ pub(crate) fn evaluate_existing_submission_queue(
         .get(&session_id)
         .and_then(|runtime_state| runtime_state.active_precheck_turn_id.as_deref())
         .is_some_and(|turn_id| !turn_id.trim().is_empty());
-    // should_queue is the authoritative shared pending-lane decision for this existing session.
-    // should_queue 是当前已有会话的权威共享待发送通道决策。
-    let should_queue = session_has_blocking_system_prompt_work(
-        workspace_snapshot,
-        session_id,
-        has_queued_inputs,
-        has_active_stream_task,
-        has_active_kernel_turn,
-        has_precheck_progress,
-    );
+    // should_queue also preserves the current parent's exact child settlement ownership.
+    // should_queue 同时保留当前父回合精确的子任务结算归属。
+    let should_queue = (submission_mode.appends_user_records() && has_unsettled_child_tasks)
+        || session_has_blocking_system_prompt_work(
+            workspace_snapshot,
+            session_id,
+            has_queued_inputs,
+            has_active_stream_task,
+            has_active_kernel_turn,
+            has_precheck_progress,
+        );
     webui_submit_trace(
         "submit_prompt_blocking_check",
         format!(
-            "session={session_id} has_active_stream_task={has_active_stream_task} has_active_kernel_turn={has_active_kernel_turn} has_active_session_run={} has_running_subagents=false elapsed_ms={}",
+            "session={session_id} has_active_stream_task={has_active_stream_task} has_active_kernel_turn={has_active_kernel_turn} has_active_session_run={} has_unsettled_child_tasks={has_unsettled_child_tasks} elapsed_ms={}",
             has_active_stream_task || has_active_kernel_turn,
             current_unix_millis_value().saturating_sub(blocking_check_started_at)
         ),

@@ -783,6 +783,108 @@ fn guided_queued_input_without_open_turn_is_failure_atomic() -> Result<(), Domai
     Ok(())
 }
 
+/// Stopped business turns cannot strand queued input in a lane with no consumer.
+/// 已停止业务回合不能把排队输入滞留在没有消费者的通道中。
+#[test]
+fn guided_queued_input_rejects_stopped_turn_without_losing_message() -> Result<(), DomainError> {
+    use crate::v1::collaboration::{
+        CollaborationOperationId, CollaborationRunControl, SetRunControlInput,
+    };
+
+    for stopped in [
+        CollaborationRunControl::Stopped,
+        CollaborationRunControl::MainOnly,
+        CollaborationRunControl::MainAndSubagents,
+    ] {
+        let mut document = new_document();
+        let turn_id = document.submit_root_input_fixture("original", Vec::new(), T0)?;
+        document.set_collaboration_run_control(SetRunControlInput {
+            operation_id: CollaborationOperationId::try_new("running-before-interruption")?,
+            state: CollaborationRunControl::Running,
+            changed_at_ms: T0 + 1,
+        })?;
+        document.start_api(
+            ApiPurposeKind::RetryGeneration,
+            ApiRequestSnapshot::new("openai", "gpt-5"),
+            T0 + 2,
+        )?;
+        document.set_collaboration_run_control(SetRunControlInput {
+            operation_id: CollaborationOperationId::try_new("stop-before-insertion")?,
+            state: stopped,
+            changed_at_ms: T0 + 3,
+        })?;
+        document.interrupt_active_api(T0 + 4)?;
+        let queued = document
+            .enqueue_input(
+                ClientInputSubmission::new(
+                    ClientActionId::try_new("insert-after-stop")?,
+                    "Keep this input",
+                    vec![ResourceId::try_new(501)?],
+                ),
+                T0 + 5,
+            )?
+            .into_value();
+        let identity = QueuedInputIdentity {
+            client_action_id: queued.client_action_id,
+            input_id: queued.input_id,
+        };
+        advance_fixture_durable(&mut document)?;
+        let mut document = SessionDocument::from_parts(
+            document.metadata.clone(),
+            document.runtime_lock.clone(),
+            document.compactions.clone(),
+            document.segment_catalog().to_vec(),
+            document.events().to_vec(),
+        )?;
+        let before = document.clone();
+        assert!(
+            matches!(
+                document.promote_queued_input_to_pending_turn(identity.clone(), T0 + 6),
+                Err(DomainError::CollaborationStateViolation {
+                    field: "pending_input.stopped_turn",
+                })
+            ),
+            "stopped control {stopped:?} must retain the queued input"
+        );
+        assert_eq!(document, before);
+        assert!(document.active_api().is_none());
+        assert_eq!(document.active_turn().unwrap().turn_id, turn_id);
+
+        document.set_collaboration_run_control(SetRunControlInput {
+            operation_id: CollaborationOperationId::try_new("explicit-resume-before-insertion")?,
+            state: CollaborationRunControl::Running,
+            changed_at_ms: T0 + 7,
+        })?;
+        let accepted = document
+            .promote_queued_input_to_pending_turn(identity.clone(), T0 + 8)?
+            .into_value();
+        assert_eq!(accepted.turn_id, turn_id);
+        assert!(document.metadata.input_state.queued_inputs.is_empty());
+        assert!(
+            document
+                .metadata
+                .input_state
+                .pending_in_turn_inputs
+                .iter()
+                .any(|input| {
+                    input.input_id == identity.input_id
+                        && input.resource_ids == [ResourceId::try_new(501).unwrap()]
+                })
+        );
+        document.set_collaboration_run_control(SetRunControlInput {
+            operation_id: CollaborationOperationId::try_new("stop-after-accepted-insertion")?,
+            state: stopped,
+            changed_at_ms: T0 + 9,
+        })?;
+        let before_retry = document.clone();
+        let retried = document.promote_queued_input_to_pending_turn(identity, T0 + 10)?;
+        assert!(!retried.changed());
+        assert_eq!(retried.into_value(), accepted);
+        assert_eq!(document, before_retry);
+    }
+    Ok(())
+}
+
 /// Queued terminal resolutions publish no partial metadata when seq validation fails.
 /// 排队输入终结处置在 seq 校验失败时不发布任何部分元数据。
 #[test]
