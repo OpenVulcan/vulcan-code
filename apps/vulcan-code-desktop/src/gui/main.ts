@@ -53,6 +53,7 @@ import { applyDockIcon, windowIconOptions } from './app-icon.js';
 import { canUseNativeNotifications, configureGuiNotificationIdentity } from './notification-identity.js';
 import { createWindowsToastXml } from './notification-toast.js';
 import { registerRendererRecovery } from './renderer-recovery.js';
+import { loadWorkbenchPage } from './workbench-page.js';
 
 // Direct development launches bypass the packaged entry but keep the same identity contract.
 // 直接开发启动会绕开发行入口，但仍遵循相同的身份契约。
@@ -563,7 +564,7 @@ async function runDesktopGui(): Promise<void> {
     allowWebUi(webUiUrl);
     registerWindowIpcHandlers(window, webUiUrl, description.discoveryPath, instance.baseUrl);
     try {
-      await window.loadURL(webUiUrl);
+      await loadWorkbenchPage(window, webUiUrl);
     } catch (error) {
       throw new Error(formatDesktopText(text.workbenchLoadFailed, { url: webUiUrl, error: String(error) }));
     }

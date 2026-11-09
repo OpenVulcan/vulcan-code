@@ -2,6 +2,7 @@ import { dialog, type BrowserWindow } from 'electron';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { desktopText, formatDesktopText, type DesktopLocale } from './desktop-text.js';
+import { loadWorkbenchPage } from './workbench-page.js';
 
 // RendererFailure contains native exit facts or an explicitly identified reload failure.
 // RendererFailure 保存原生退出事实，或明确标识的重新加载失败。
@@ -94,7 +95,7 @@ export function registerRendererRecovery(
         try {
           // Reload the known workbench URL; the new renderer reconnects to the existing Core.
           // 重新加载已知工作台地址；新渲染进程会重新连接既有 Core。
-          await window.loadURL(webUiUrl);
+          await loadWorkbenchPage(window, webUiUrl);
         } catch {
           if (closing || window.isDestroyed()) return;
           // Preserve an accompanying native crash reason instead of replacing it with a generic load error.

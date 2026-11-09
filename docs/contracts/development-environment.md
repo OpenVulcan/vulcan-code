@@ -260,6 +260,7 @@ cargo test --doc
 
 | 脚本 | 何时执行 | 执行方式 |
 | --- | --- | --- |
+| `apps/vulcan-code-desktop/tools/test-workbench-history.mjs` | 修改工作台初始载入或渲染器恢复；验证启动页不能被历史后退重新打开，独立浏览内容仍可后退 | 使用清单指定的 pnpm 安装桌面依赖，执行 `node scripts/install-electron.mjs`；桌面 `build` 后执行 `pnpm --dir apps/vulcan-code-desktop run test:workbench-history`，需要可运行 Electron 的桌面环境 |
 | `scripts/test_core_debug_cycle.ps1` | 修改 Debug Core 强制重启归属逻辑 | `pwsh -File`，无参数 |
 | `scripts/test_distribution_processes.ps1` | 修改发行目录发布与进程占用处理 | `pwsh -File`，无参数 |
 | `scripts/test_cargo_artifact_cleanup.ps1` | 修改 Cargo 产物清理；会执行真实隔离 Cargo 构建，耗时较长 | `pwsh -File`，无参数 |
