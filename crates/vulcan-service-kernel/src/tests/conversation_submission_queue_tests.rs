@@ -1,6 +1,6 @@
 use super::*;
 use crate::conversation_submission::{
-    ExistingSubmissionQueueDecision, ExistingSubmissionQueueInput,
+    ConversationSubmissionMode, ExistingSubmissionQueueDecision, ExistingSubmissionQueueInput,
     commit_existing_submission_v1_queue, emit_queued_prompt_run_phase_delta,
     evaluate_existing_submission_queue, queue_existing_submission,
 };
@@ -8,8 +8,10 @@ use crate::session_runtime_registry_v1::{SessionHandle, SessionPersistenceBacken
 use std::sync::atomic::{AtomicUsize, Ordering};
 use vulcan_session_core::v1::document::FlushCandidate;
 use vulcan_session_core::v1::{
-    ClientActionId, ClientInputSubmission, QueuedInputIdentity, ResourceId, SessionDocument,
-    TurnOrigin,
+    ActivateChildTaskInput, ClientActionId, ClientInputSubmission, CollaborationChildTaskState,
+    CollaborationChildTaskTerminalOutcome, CollaborationExecutionId, CollaborationOperationId,
+    CollaborationParticipant, QueuedInputIdentity, ReserveChildTaskInput, ResourceId,
+    SessionDocument, SubagentTaskId, TerminalChildTaskInput, TurnOrigin,
 };
 use vulcan_workspace_store::workspace_store::{
     SessionV1FlushResult, SessionV1StorageError, SessionV1StoreError,
@@ -138,10 +140,220 @@ fn idle_existing_session_submission_starts_immediately() {
             &workspace_snapshot,
             Some(session_id),
             Some(&durable_handle),
+            &ConversationSubmissionMode::UserPrompt,
         )
         .expect("idle queue decision"),
         ExistingSubmissionQueueDecision::StartImmediately
     );
+}
+
+/// Routes only the open parent's unsettled child reservations to the durable queue.
+/// 仅将开放父回合尚未结算的子任务预留路由到可靠队列。
+#[test]
+fn idle_parent_submission_respects_durable_child_ownership() {
+    for child_state in [
+        None,
+        Some(CollaborationChildTaskState::Reserved),
+        Some(CollaborationChildTaskState::Active),
+        Some(CollaborationChildTaskState::Terminal),
+    ] {
+        let session_id = SessionId::new_v4();
+        let mut document = SessionDocument::new(
+            session_id.to_string(),
+            "project-queue-v1",
+            "parent waiting for child",
+            1,
+        );
+        let parent_turn = document
+            .submit_root_input(
+                ClientInputSubmission::new(
+                    ClientActionId::try_new("parent-root").unwrap(),
+                    "delegate work",
+                    vec![],
+                ),
+                2,
+            )
+            .unwrap()
+            .into_value();
+        let execution_id = CollaborationExecutionId::try_new("child-execution").unwrap();
+        let task_id = SubagentTaskId::try_new("child-task").unwrap();
+        if let Some(child_state) = child_state {
+            document
+                .reserve_child_task(ReserveChildTaskInput {
+                    operation_id: CollaborationOperationId::try_new("reserve-child").unwrap(),
+                    source_tool_name: "spawn_agent".to_owned(),
+                    execution_id: execution_id.clone(),
+                    task_id: task_id.clone(),
+                    parent_turn_id: parent_turn,
+                    child: CollaborationParticipant::new(
+                        SessionId::new_v4().to_string(),
+                        session_id.to_string(),
+                        "project-queue-v1",
+                        1,
+                        None,
+                        Some(task_id.clone()),
+                    )
+                    .unwrap(),
+                    reserved_at_ms: 3,
+                })
+                .unwrap();
+            if child_state != CollaborationChildTaskState::Reserved {
+                document
+                    .activate_child_task(ActivateChildTaskInput {
+                        operation_id: CollaborationOperationId::try_new("activate-child").unwrap(),
+                        execution_id: execution_id.clone(),
+                        task_id: task_id.clone(),
+                        active_at_ms: 4,
+                    })
+                    .unwrap();
+            }
+            if child_state == CollaborationChildTaskState::Terminal {
+                document
+                    .terminal_child_task(TerminalChildTaskInput {
+                        operation_id: CollaborationOperationId::try_new("finish-child").unwrap(),
+                        execution_id: execution_id.clone(),
+                        task_id: task_id.clone(),
+                        outcome: CollaborationChildTaskTerminalOutcome::Completed,
+                        terminal_at_ms: 5,
+                    })
+                    .unwrap();
+            }
+        }
+        let through_seq = document.events().last().unwrap().seq;
+        let projection = vulcan_session_core::v1::event::ProviderProjectionProof {
+            segment_generation: document.segment_generation(),
+            document_revision: document.memory_revision(),
+            retained_from_seq: vulcan_session_core::v1::Seq::try_new(1).unwrap(),
+            through_seq,
+            fingerprint_sha256: vulcan_session_core::v1::projection::provider_visible_fingerprint(
+                document.events(),
+                through_seq,
+            )
+            .unwrap(),
+        };
+        document
+            .prepare_and_start_api(vulcan_session_core::v1::PrepareAndStartApiInput {
+                purpose: vulcan_session_core::v1::ApiPurposeKind::MainGeneration,
+                request: vulcan_session_core::v1::event::ApiRequestSnapshot::new("openai", "gpt-5"),
+                request_budget_evidence:
+                    crate::session_runtime_registry_v1::test_provider_request_budget_evidence(),
+                projection,
+                locked_baseline: vulcan_session_core::v1::LockedBaselineProjection::empty(),
+                continuation_action_id: None,
+                now_ms: 6,
+            })
+            .unwrap();
+        document.interrupt_active_api_for_process(7).unwrap();
+        // Reconstruct persisted facts without a parent stream or a subagent runtime mirror.
+        // 重建持久事实，不创建父级活动流或子代理运行时镜像。
+        document.rebuild_derived_state().unwrap();
+        let backend = Arc::new(QueueRecordingBackend::default());
+        let handle = queue_v1_test_handle_from_document(session_id, document, backend.clone());
+        let service_state = test_service_state_with_parent_session(session_id);
+        let workspace_snapshot = service_state.workspace_snapshot.as_ref().unwrap().clone();
+        let state = Arc::new(Mutex::new(service_state));
+        let unsettled = matches!(
+            child_state,
+            Some(CollaborationChildTaskState::Reserved | CollaborationChildTaskState::Active)
+        );
+        let before = handle.read(SessionDocument::memory_revision).unwrap();
+        assert_eq!(
+            evaluate_existing_submission_queue(
+                &state,
+                &workspace_snapshot,
+                Some(session_id),
+                Some(&handle),
+                &ConversationSubmissionMode::UserPrompt,
+            )
+            .unwrap(),
+            if unsettled {
+                ExistingSubmissionQueueDecision::Queue { session_id }
+            } else {
+                ExistingSubmissionQueueDecision::StartImmediately
+            },
+            "queue routing must respect child state {child_state:?}"
+        );
+        assert_eq!(
+            evaluate_existing_submission_queue(
+                &state,
+                &workspace_snapshot,
+                Some(session_id),
+                Some(&handle),
+                &ConversationSubmissionMode::Continuation,
+            )
+            .unwrap(),
+            ExistingSubmissionQueueDecision::StartImmediately,
+            "child ownership must not block an explicit Continue"
+        );
+        handle
+            .read(|document| {
+                let mut continued = document.clone();
+                let original_obligations = continued.completion_obligations(parent_turn);
+                continued
+                    .continue_open_turn(
+                        vulcan_session_core::v1::ContinuationRequest::new(
+                            ClientActionId::try_new("explicit-continue").unwrap(),
+                            "",
+                            vec![],
+                        ),
+                        8,
+                    )
+                    .unwrap();
+                assert_eq!(continued.active_turn().unwrap().turn_id, parent_turn);
+                assert_eq!(
+                    continued.completion_obligations(parent_turn),
+                    original_obligations
+                );
+            })
+            .unwrap();
+        assert_eq!(
+            handle.read(SessionDocument::memory_revision).unwrap(),
+            before
+        );
+        assert_eq!(backend.flush_count.load(Ordering::SeqCst), 0);
+
+        if unsettled {
+            let submission = ClientInputSubmission::new(
+                ClientActionId::try_new("followup-with-child").unwrap(),
+                "new instruction",
+                vec![ResourceId::try_new(9).unwrap()],
+            );
+            let accepted = commit_existing_submission_v1_queue(&handle, &submission, 9).unwrap();
+            assert!(accepted.changed);
+            assert!(
+                !commit_existing_submission_v1_queue(&handle, &submission, 10)
+                    .unwrap()
+                    .changed
+            );
+            handle
+                .read(|document| {
+                    assert_eq!(document.memory_revision(), document.durable_revision());
+                    assert_eq!(document.active_turn().unwrap().turn_id, parent_turn);
+                    assert!(!document.active_turn().unwrap().closed);
+                    assert_eq!(
+                        document
+                            .completion_obligations(parent_turn)
+                            .open_child_task_ids,
+                        vec![task_id]
+                    );
+                    assert_eq!(
+                        document.collaboration_state().child_tasks[&execution_id].state,
+                        child_state.unwrap()
+                    );
+                    let accepted_input = document
+                        .client_input_for_action(&submission.client_action_id)
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(accepted_input.text, submission.text);
+                    assert_eq!(accepted_input.resource_ids, submission.resource_ids);
+                    let mut reloaded = document.clone();
+                    reloaded.rebuild_derived_state().unwrap();
+                    assert_eq!(reloaded.metadata.input_state.queued_inputs.len(), 1);
+                })
+                .unwrap();
+            assert_eq!(backend.flush_count.load(Ordering::SeqCst), 1);
+        }
+    }
 }
 
 /// Verifies an active kernel turn routes a new submission into the exact existing-session queue.
@@ -181,16 +393,22 @@ fn active_kernel_turn_routes_submission_to_existing_session_queue() {
     // state 向决策提供活动内核版本。
     let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
     // provider_configuration supplies provider-specific pending-lane behavior.
-    assert_eq!(
-        evaluate_existing_submission_queue(
-            &state,
-            &workspace_snapshot,
-            Some(session_id),
-            Some(&durable_handle),
-        )
-        .expect("active queue decision"),
-        ExistingSubmissionQueueDecision::Queue { session_id }
-    );
+    for mode in [
+        ConversationSubmissionMode::UserPrompt,
+        ConversationSubmissionMode::Continuation,
+    ] {
+        assert_eq!(
+            evaluate_existing_submission_queue(
+                &state,
+                &workspace_snapshot,
+                Some(session_id),
+                Some(&durable_handle),
+                &mode,
+            )
+            .expect("active queue decision"),
+            ExistingSubmissionQueueDecision::Queue { session_id }
+        );
+    }
 }
 
 /// Verifies an active stream owner blocks a second submission even without a kernel marker.
@@ -230,16 +448,22 @@ async fn active_stream_owner_routes_submission_to_existing_session_queue() {
     )
     .expect("active stream owner should register");
 
-    assert_eq!(
-        evaluate_existing_submission_queue(
-            &state,
-            &workspace_snapshot,
-            Some(session_id),
-            Some(&durable_handle),
-        )
-        .expect("stream-owner queue decision"),
-        ExistingSubmissionQueueDecision::Queue { session_id }
-    );
+    for mode in [
+        ConversationSubmissionMode::UserPrompt,
+        ConversationSubmissionMode::Continuation,
+    ] {
+        assert_eq!(
+            evaluate_existing_submission_queue(
+                &state,
+                &workspace_snapshot,
+                Some(session_id),
+                Some(&durable_handle),
+                &mode,
+            )
+            .expect("stream-owner queue decision"),
+            ExistingSubmissionQueueDecision::Queue { session_id }
+        );
+    }
 
     // Cleanup proves the test leaves no asynchronous owner behind.
     // 清理步骤确保测试不会遗留异步所有者。
@@ -384,16 +608,22 @@ fn durable_v1_queue_occupancy_queues_submission_without_process_mirror() {
         .clone();
     let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
 
-    assert_eq!(
-        evaluate_existing_submission_queue(
-            &state,
-            &workspace_snapshot,
-            Some(session_id),
-            Some(&handle),
-        )
-        .expect("durable queue decision"),
-        ExistingSubmissionQueueDecision::Queue { session_id }
-    );
+    for mode in [
+        ConversationSubmissionMode::UserPrompt,
+        ConversationSubmissionMode::Continuation,
+    ] {
+        assert_eq!(
+            evaluate_existing_submission_queue(
+                &state,
+                &workspace_snapshot,
+                Some(session_id),
+                Some(&handle),
+                &mode,
+            )
+            .expect("durable queue decision"),
+            ExistingSubmissionQueueDecision::Queue { session_id }
+        );
+    }
     assert_eq!(
         handle
             .read(|document| document.metadata.input_state.queued_inputs.len())
@@ -417,9 +647,14 @@ fn existing_session_submission_without_v1_authority_fails_closed() {
         .clone();
     let state: SharedServiceBridgeState = Arc::new(Mutex::new(service_state));
 
-    let error =
-        evaluate_existing_submission_queue(&state, &workspace_snapshot, Some(session_id), None)
-            .expect_err("a missing durable authority must not unlock immediate admission");
+    let error = evaluate_existing_submission_queue(
+        &state,
+        &workspace_snapshot,
+        Some(session_id),
+        None,
+        &ConversationSubmissionMode::UserPrompt,
+    )
+    .expect_err("a missing durable authority must not unlock immediate admission");
 
     assert!(error.contains("V1 document authority"));
 }

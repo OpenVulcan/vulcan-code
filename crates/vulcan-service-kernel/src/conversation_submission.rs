@@ -2992,6 +2992,7 @@ async fn service_start_conversation_execution(
             existing_submission_v1_authority
                 .as_ref()
                 .map(|authority| &authority.handle),
+            &submission_mode,
         )?
     {
         if submission_mode.is_continuation() {
