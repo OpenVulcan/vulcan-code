@@ -18,8 +18,15 @@ import { WorkbenchLayout } from "../workbench-layout";
 const stream = vi.hoisted(() => ({ resetForWorkbenchSnapshot: vi.fn(), flushNotifications: vi.fn() }));
 vi.mock("@/state/conversation-live-stream-context", () => ({ useConversationLiveStreamStore: () => stream }));
 vi.mock("@/notifications/coordinator", () => ({ notificationCoordinator: { setRouteHandler: vi.fn() } }));
+// shellClient answers the away-unread tracker's window presentation reads with a focused, visible window, so the
+// layout never marks a conversation unread on its own while these tests count navigation.
+// shellClient 以已聚焦且可见的窗口回答离开未读跟踪器的窗口展示读取，使布局在这些测试统计导航时不会自行将会话标为未读。
 vi.mock("@/service/webui-service-runtime", () => ({ hasServiceRuntime: () => true,
-  serviceClient: { request: vi.fn(), subscribe: vi.fn().mockResolvedValue(() => undefined) } }));
+  serviceClient: { request: vi.fn(), subscribe: vi.fn().mockResolvedValue(() => undefined) },
+  shellClient: {
+    getNotificationPresentationState: vi.fn().mockResolvedValue({ foreground: true, focused: true, visible: true }),
+    subscribeNotificationPresentationChange: vi.fn().mockResolvedValue(() => undefined),
+  } }));
 vi.mock("@/service/plugin-resource-diagnostics-service", () => ({ readPluginResourceDiagnostics: vi.fn().mockResolvedValue({
   resources: { ...diagnosticReport, resources: [diagnosticResource] }, update: null, uninstall: null }) }));
 vi.mock("@/components/workspace/workbench-layout/shell-chrome", () => ({ useWorkbenchShellChrome: () => ({ shellChromeActions: null, showWindowControls: false, windowDragRegionEnabled: false }) }));

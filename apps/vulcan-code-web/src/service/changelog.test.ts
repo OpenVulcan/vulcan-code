@@ -7,6 +7,12 @@ import { CHANGELOG_RELEASES, loadReleaseNotes } from "./changelog"
 // CONTAINERS 承载可再嵌套组件围栏的 Markdown。
 const CONTAINERS = new Set(["ui-callout", "ui-details", "ui-tabs", "ui-columns"])
 
+// NOTES_TIMEOUT_MS bounds the walk over every release and language, which loads each notes chunk through the module
+// graph: alone it takes well under a second, but under the full parallel suite the cold chunk loads exceed the default.
+// NOTES_TIMEOUT_MS 限定遍历全部发布与语言的时间；该遍历经模块图加载每个说明分块：单独运行远不到一秒，但在完整并行
+// 套件下冷加载分块会超出默认时限。
+const NOTES_TIMEOUT_MS = 30_000
+
 // componentFences lists every closed `ui-*` fence in `markdown`, including fences nested in containers.
 // componentFences 列出 `markdown` 中全部已闭合的 `ui-*` 围栏，含嵌套在容器内的围栏。
 // Parameters: markdown is release notes; returns name, info-string rest and body of each fence, or an unclosed marker.
@@ -50,7 +56,7 @@ describe("release notes", () => {
         }
       }
     }
-  })
+  }, NOTES_TIMEOUT_MS)
 
   it("rejects a language that was not bundled", async () => {
     await expect(loadReleaseNotes(CHANGELOG_RELEASES[0].version, "xx-XX")).rejects.toThrow()
