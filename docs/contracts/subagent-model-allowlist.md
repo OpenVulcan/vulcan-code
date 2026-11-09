@@ -30,11 +30,11 @@
    取消包含后，调用模型也不能从独立的 session model 区块重新出现。
 6. **恢复路径跟随根会话策略。** 子代理问题恢复从根会话读取完整策略，不混合系统开关与会话清单。
    下一个回合读取已保存策略；当前回合已冻结的请求不变，也不改写已创建子代理的模型。
-7. **新派生独立选择思考档位。** `spawn_agent.reasoning_effort` 可指定目标模型支持的精确档位；省略时选取
-   目标模型支持的最高档，而不是继承父级档位或强行发送字面量 `max`。不支持的显式档位直接拒绝，绝不规范化。
-   `agent_orchestration_info` 的模型行公开 `reasoning_efforts` 与 `default_reasoning_effort`，使用宿主枚举拼写
-   （如 `x-high`）；`off` 表示保留供应商默认行为。选择复用既有 `ProviderModelSnapshot.reasoning_effort`，
-   最终子请求的档位捕获到既有子执行配置中；后续消息、答疑及业务恢复不重新应用新派生默认值，不改变持久格式。
+7. **新派生可显式选择思考档位。** `spawn_agent.reasoning_effort` 可指定目标模型支持的精确档位。省略时沿用
+   既有继承策略，同模型使用父级档位，切换模型时按目标模型能力规范化继承档位。
+   `agent_orchestration_info` 的模型行通过 `reasoning_efforts` 公开目标模型支持的档位，使用宿主枚举拼写
+   （如 `x-high`）；`off` 表示使用供应商默认行为。显式选择通过既有 `ProviderModelSnapshot.reasoning_effort`
+   保存，首次请求和消息续跑均精确校验，答疑与原执行恢复使用已捕获的最终请求档位。
 
 ## 存储与边界
 

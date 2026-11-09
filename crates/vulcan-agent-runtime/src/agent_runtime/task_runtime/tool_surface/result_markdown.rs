@@ -226,9 +226,8 @@ fn orchestration(model: &Value) -> Result<String, String> {
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             text.push_str(&format!(
-                "  Reasoning efforts: {}. Default: {} (highest supported). Pass an exact choice to `spawn_agent.reasoning_effort`; unsupported choices are rejected.\n",
+                "  Reasoning efforts: {}. Pass an exact choice to `spawn_agent.reasoning_effort`, or omit it to use the inherited effort policy.\n",
                 efforts.join(", "),
-                code(row, "default_reasoning_effort")?,
             ));
         }
     }

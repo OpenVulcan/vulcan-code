@@ -300,7 +300,7 @@ pub(super) fn spawn_agent_args_schema() -> Value {
             "reasoning_effort": {
                 "type": "string",
                 "enum": crate::provider_config::ReasoningEffortLevel::ALL,
-                "description": "Optional reasoning effort from the target model's reasoning_efforts in agent_orchestration_info. Omission selects that model's highest supported effort, not the parent's effort. Unsupported choices fail instead of being normalized. `off` leaves the provider default unchanged."
+                "description": "Optional reasoning effort from the target model's reasoning_efforts in agent_orchestration_info. Omit to use the inherited effort policy. Unsupported explicit choices fail instead of being normalized. `off` leaves the provider default unchanged."
             },
             "task_name": {
                 "type": "string",

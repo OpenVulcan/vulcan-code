@@ -208,11 +208,20 @@ fn build_task_runtime_preparation_with_history(
         &resolved_config.effective_config.provider_model,
         &context.config,
     );
+    // Inbox resumption carries the child's stored invocation but prepares against the current parent template.
+    // 收件箱续跑携带子代理已保存的调用配置，但以当前父请求为模板准备执行。
+    let requested_reasoning_effort = invocation
+        .invocation_config
+        .provider_model
+        .reasoning_effort
+        .as_deref();
     if let Some((provider_id, model_id)) = public_model_override {
+        // Preserve the existing target normalization for inherited effort when the model changes.
+        // 模型变化时，沿用目标模型对继承档位的既有规范化规则。
         let inherits_parent_model = request.provider_id_override.as_deref()
             == Some(provider_id.as_str())
             && request.model_id_override.as_deref() == Some(model_id.as_str());
-        if invocation.is_resumed && !inherits_parent_model {
+        if requested_reasoning_effort.is_none() && !inherits_parent_model {
             request.reasoning_effort = resolve_child_model_reasoning_effort(
                 &context.foundation,
                 &provider_id,
@@ -226,22 +235,20 @@ fn build_task_runtime_preparation_with_history(
         // 子任务更换供应商/模型后不得继续复用父任务凭据连接。
         request.connection_id_override = None;
     }
-    if !invocation.is_resumed {
+    if let Some(requested) = requested_reasoning_effort {
+        // Revalidate the stored explicit setting against the resolved route for both starts and follow-ups.
+        // 启动和后续执行都按已解析路由重验已保存的显式档位。
         let provider_id = request.provider_id_override.as_deref().ok_or_else(|| {
-            String::from("New child reasoning selection requires an exact provider.")
+            String::from("Explicit child reasoning effort requires an exact provider.")
         })?;
         let model_id = request.model_id_override.as_deref().ok_or_else(|| {
-            String::from("New child reasoning selection requires an exact model.")
+            String::from("Explicit child reasoning effort requires an exact model.")
         })?;
-        request.reasoning_effort = resolve_spawn_reasoning_effort(
+        request.reasoning_effort = resolve_explicit_child_reasoning_effort(
             &context.foundation,
             provider_id,
             model_id,
-            invocation
-                .invocation_config
-                .provider_model
-                .reasoning_effort
-                .as_deref(),
+            requested,
         )?;
     }
     request.subagent_prompt_context =

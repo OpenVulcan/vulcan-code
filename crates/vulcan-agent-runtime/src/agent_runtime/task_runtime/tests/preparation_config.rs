@@ -2532,29 +2532,36 @@ fn reasoning_test_context(
     context
 }
 
+/// Checks explicit effort admission against the resolved target model, including fixed-off and adaptive models.
+/// 验证显式档位按解析出的目标模型准入，覆盖固定关闭与自适应模型。
 #[test]
-fn spawn_reasoning_defaults_to_the_target_models_highest_supported_effort() {
+fn explicit_spawn_reasoning_matches_the_target_models_capabilities() {
     use vulcan_ai_contract::{CapabilitySupport, ReasoningControlMode, ReasoningEffort};
 
-    for (efforts, expected) in [
+    for (efforts, requested, expected) in [
         (
             vec![ReasoningEffort::High, ReasoningEffort::Low],
-            ReasoningEffortLevel::High,
+            "low",
+            ReasoningEffortLevel::Low,
         ),
         (
             vec![ReasoningEffort::XHigh, ReasoningEffort::Medium],
+            "x-high",
             ReasoningEffortLevel::XHigh,
         ),
         (
             vec![ReasoningEffort::Max, ReasoningEffort::High],
+            "max",
             ReasoningEffortLevel::Max,
         ),
         (
             vec![ReasoningEffort::Ultra, ReasoningEffort::Low],
+            "ultra",
             ReasoningEffortLevel::Ultra,
         ),
         (
             vec![ReasoningEffort::Adaptive],
+            "adaptive",
             ReasoningEffortLevel::Adaptive,
         ),
     ] {
@@ -2564,21 +2571,21 @@ fn spawn_reasoning_defaults_to_the_target_models_highest_supported_effort() {
             efforts,
         );
         assert_eq!(
-            resolve_spawn_reasoning_effort(
+            resolve_explicit_child_reasoning_effort(
                 &context.foundation,
                 "openrouter",
                 "openai/gpt-5.6-sol",
-                None,
+                requested,
             )
             .unwrap(),
             expected,
         );
         assert!(
-            resolve_spawn_reasoning_effort(
+            resolve_explicit_child_reasoning_effort(
                 &context.foundation,
                 "openrouter",
                 "openai/gpt-5.6-sol",
-                Some("minimal"),
+                "minimal",
             )
             .is_err()
         );
@@ -2589,21 +2596,21 @@ fn spawn_reasoning_defaults_to_the_target_models_highest_supported_effort() {
         vec![ReasoningEffort::None],
     );
     assert_eq!(
-        resolve_spawn_reasoning_effort(
+        resolve_explicit_child_reasoning_effort(
             &context.foundation,
             "openrouter",
             "openai/gpt-5.6-sol",
-            None,
+            "none",
         )
         .unwrap(),
         ReasoningEffortLevel::None,
     );
     assert!(
-        resolve_spawn_reasoning_effort(
+        resolve_explicit_child_reasoning_effort(
             &context.foundation,
             "openrouter",
             "openai/gpt-5.6-sol",
-            Some("high"),
+            "high",
         )
         .is_err()
     );
@@ -2613,6 +2620,8 @@ fn spawn_reasoning_defaults_to_the_target_models_highest_supported_effort() {
     );
 }
 
+/// Checks the initial provider request, resident follow-up, and durable recovery against the same effort.
+/// 验证初次供应商请求、进程内续跑及持久恢复的档位一致。
 #[test]
 fn spawn_reasoning_reaches_provider_capture_and_exact_restoration() {
     use vulcan_ai_contract::{CapabilitySupport, ReasoningControlMode, ReasoningEffort};
@@ -2633,7 +2642,7 @@ fn spawn_reasoning_reaches_provider_capture_and_exact_restoration() {
         .install_execution_context(parent_id, context.clone())
         .unwrap();
     for (index, (requested, expected)) in [
-        (None, ReasoningEffortLevel::XHigh),
+        (None, ReasoningEffortLevel::High),
         (Some("low"), ReasoningEffortLevel::Low),
         (Some("x-high"), ReasoningEffortLevel::XHigh),
         (Some("off"), ReasoningEffortLevel::Off),
@@ -2685,13 +2694,39 @@ fn spawn_reasoning_reaches_provider_capture_and_exact_restoration() {
         restored.prompt_purpose = ExecutionPromptPurpose::QuestionExecution;
         restore_child_question_request(&mut restored, &profile, 7).unwrap();
         assert_eq!(restored.reasoning_effort, expected);
-        invocation.is_resumed = true;
-        let mut resumed_context = context.clone();
-        resumed_context.request_template = child;
+        // Rebuild an inbox successor from the resident task record and the unchanged parent context.
+        // 用进程内的任务记录及原父级上下文重建收件箱后继执行。
+        let follow_up_args = parse_task_tool_arguments(json!({
+            "task_id": invocation.public_task_id,
+            "prompt": "Follow-up",
+        }))
+        .unwrap();
+        // The existing child identity must survive the follow-up without a new spawn.
+        // 续跑必须沿用已有子代理身份。
+        let follow_up_id = resolve_task_session_id(&runtime, parent_id, &follow_up_args).unwrap();
+        assert!(follow_up_id.is_resumed);
+        // This uses the same task record preparation as the send_message inbox path.
+        // 与 send_message 的收件箱路径共用同一任务记录准备逻辑。
+        let follow_up =
+            prepare_task_execution_request(&runtime, parent_id, follow_up_id, follow_up_args)
+                .unwrap();
+        assert_eq!(follow_up.task_id, invocation.task_id);
+        // Re-resolve the successor's config before using the parent template, as the live backend does.
+        // 与实际后端一致，重新解析后继执行配置，然后使用父请求模板。
+        let follow_up_config = test_resolved_config(
+            &test_preparation_controller_config("Base"),
+            &follow_up.invocation_config,
+        );
+        // The child request must keep the exact explicit effort even though the template comes from the parent.
+        // 即使模板来自父级，子请求也必须保留精确的显式档位。
         let (_, resumed) =
-            build_task_runtime_preparation_request(&resumed_context, &invocation, &resolved)
+            build_task_runtime_preparation_request(&context, &follow_up, &follow_up_config)
                 .unwrap();
         assert_eq!(resumed.reasoning_effort, expected);
+        invocation.is_resumed = true;
+        // Cold recovery starts from the captured child template and exact original execution identity.
+        // 冷恢复从捕获的子请求模板及原执行的精确身份开始。
+        let mut resumed_context = context.clone();
         restored.prompt_purpose = ExecutionPromptPurpose::AgentTask;
         resumed_context.request_template = restored;
         resumed_context.recovered_child_profile = Some(profile);
@@ -2732,14 +2767,13 @@ async fn orchestration_reasoning_efforts_match_spawn_choices_and_visible_project
         .find(|row| row["selector"] == "openrouter/openai/gpt-5.6-sol")
         .unwrap();
     assert_eq!(model["reasoning_efforts"], json!(["off", "low", "x-high"]));
-    assert_eq!(model["default_reasoning_effort"], "x-high");
     for effort in model["reasoning_efforts"].as_array().unwrap() {
         assert!(
-            resolve_spawn_reasoning_effort(
+            resolve_explicit_child_reasoning_effort(
                 &context.foundation,
                 "openrouter",
                 "openai/gpt-5.6-sol",
-                effort.as_str(),
+                effort.as_str().unwrap(),
             )
             .is_ok()
         );
@@ -2834,7 +2868,6 @@ fn orchestration_reasoning_uses_eligible_accounts_and_omits_unavailable_models()
             .unwrap();
         assert_eq!(model["account_count"], expected_accounts);
         assert_eq!(model["reasoning_efforts"], json!(["off", "low", "high"]));
-        assert_eq!(model["default_reasoning_effort"], "high");
     }
     configuration
         .set_connection_enabled("second-account", false)

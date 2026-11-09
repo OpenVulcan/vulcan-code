@@ -1609,7 +1609,6 @@ pub(super) fn agent_orchestration_info_models(
             "is_agent_fixed_model": fixed_selector.as_deref() == Some(selector.as_str()),
             "account_count": account_count,
             "reasoning_efforts": reasoning_efforts,
-            "default_reasoning_effort": reasoning_efforts.last(),
         }));
     }
     Ok(rows)
