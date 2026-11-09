@@ -112,21 +112,21 @@ fn compaction_summary_verification_preserves_canonical_identity() {
 pub(crate) enum ContextCompactionCommitMode {
     /// Validate the parent Provider stream owner and keep it active after compaction.
     /// 校验父 Provider 流所有者，并在压缩后保持其活动状态。
-    ContinueActiveStream {
+    ContinueActive {
         /// Exact Provider stream task identity that owns the auto-compaction commit.
         /// 拥有自动压缩提交的精确 Provider 流任务身份。
         task_id: Uuid,
     },
     /// Validate and atomically terminate the standalone manual-compaction stream.
     /// 校验并原子终结独立手动压缩流。
-    FinishActiveStream {
+    FinishStandalone {
         /// Exact manual-compaction task identity that owns the terminal commit.
         /// 拥有终态提交的精确手动压缩任务身份。
         task_id: Uuid,
     },
     /// Finish the manual stream without ending its original business turn.
     /// 结束手动流但不结束原业务回合。
-    FinishBorrowedStream {
+    FinishBorrowed {
         /// Exact physical stream identity.
         /// 精确物理流身份。
         task_id: Uuid,
@@ -146,9 +146,9 @@ impl ContextCompactionCommitMode {
     /// 返回所有者流注册时捕获的不可变 task id。
     const fn task_id(self) -> Uuid {
         match self {
-            Self::ContinueActiveStream { task_id }
-            | Self::FinishActiveStream { task_id }
-            | Self::FinishBorrowedStream { task_id, .. } => task_id,
+            Self::ContinueActive { task_id }
+            | Self::FinishStandalone { task_id }
+            | Self::FinishBorrowed { task_id, .. } => task_id,
         }
     }
 
@@ -162,7 +162,7 @@ impl ContextCompactionCommitMode {
     const fn finishes_active_stream(self) -> bool {
         matches!(
             self,
-            Self::FinishActiveStream { .. } | Self::FinishBorrowedStream { .. }
+            Self::FinishStandalone { .. } | Self::FinishBorrowed { .. }
         )
     }
 }
@@ -448,7 +448,7 @@ pub(crate) async fn finish_webui_context_compaction_execution(
     // Borrow validation and publication share one canonical document transaction.
     // 借用校验与发布共享同一规范文档事务。
     let publication = match commit_mode {
-        ContextCompactionCommitMode::FinishBorrowedStream { owner, .. } => handle
+        ContextCompactionCommitMode::FinishBorrowed { owner, .. } => handle
             .mutate_durable_if_changed(
                 crate::session_runtime_registry_v1::SessionMutationAdmission::ExistingTurn,
                 crate::session_runtime_registry_v1::SessionFlushReason::ContextChanged,
@@ -524,16 +524,16 @@ pub(crate) async fn finish_webui_context_compaction_execution(
     // Settle the exact manual owner before releasing its stream slot; borrowed business stays open.
     // 释放流槽位前结算精确手动所有者；被借用的业务保持开放。
     match commit_mode {
-        ContextCompactionCommitMode::FinishActiveStream { task_id } => {
+        ContextCompactionCommitMode::FinishStandalone { task_id } => {
             super::manual::complete(state, session_id, task_id)?;
         }
-        ContextCompactionCommitMode::FinishBorrowedStream { owner, .. } => {
+        ContextCompactionCommitMode::FinishBorrowed { owner, .. } => {
             handle
                 .read(|document| document.complete_borrowed_manual_compaction(owner))
                 .map_err(|error| error.to_string())?
                 .map_err(|error| error.to_string())?;
         }
-        ContextCompactionCommitMode::ContinueActiveStream { .. } => {}
+        ContextCompactionCommitMode::ContinueActive { .. } => {}
     }
 
     // The retained workspace is now display-only projection. It must not retain
@@ -856,7 +856,7 @@ pub(crate) fn fail_webui_context_compaction_execution(
             ensure_context_compaction_commit_owner(&guard, session_id, commit_mode)?;
         }
         match commit_mode {
-            ContextCompactionCommitMode::FinishBorrowedStream { owner, .. } => {
+            ContextCompactionCommitMode::FinishBorrowed { owner, .. } => {
                 let handle =
                     crate::session_goal_lifecycle::registered_session_v1_handle_from_state(
                         state, session_id,

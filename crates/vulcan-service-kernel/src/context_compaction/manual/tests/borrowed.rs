@@ -91,7 +91,7 @@ async fn borrowed_fixture() -> (
         .unwrap();
     assert!(matches!(
         mode,
-        ContextCompactionCommitMode::FinishBorrowedStream { .. }
+        ContextCompactionCommitMode::FinishBorrowed { .. }
     ));
     (root, state, handle, mode)
 }
@@ -335,7 +335,7 @@ async fn borrowed_manual_failure_and_stale_callback_preserve_business() {
 #[tokio::test]
 async fn borrowed_manual_post_commit_failure_keeps_committed_summary() {
     let (_root, state, handle, mode) = borrowed_fixture().await;
-    let ContextCompactionCommitMode::FinishBorrowedStream { owner, .. } = mode else {
+    let ContextCompactionCommitMode::FinishBorrowed { owner, .. } = mode else {
         unreachable!()
     };
     let execution = completed_summary(&handle);

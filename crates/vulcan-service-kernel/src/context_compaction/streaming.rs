@@ -375,7 +375,7 @@ pub(crate) fn spawn_webui_context_compaction_task(
             Ok(mode) => (request, mode),
             Err(error) => (
                 Err(error),
-                ContextCompactionCommitMode::FinishActiveStream {
+                ContextCompactionCommitMode::FinishStandalone {
                     task_id: active_stream_task_id,
                 },
             ),

@@ -616,7 +616,7 @@ async fn context_compaction_fallback_returns_rejected_terminal_outcome() {
         &section_id,
         "预算说明",
         "auto_budget",
-        ContextCompactionCommitMode::ContinueActiveStream {
+        ContextCompactionCommitMode::ContinueActive {
             task_id: active_stream_task_id,
         },
         WebuiContextCompactionExecution {
@@ -737,7 +737,7 @@ async fn context_compaction_without_v1_durability_cannot_write_legacy_checkpoint
         &section_id,
         "预算说明",
         MANUAL_CONTEXT_COMPACTION_TRIGGER,
-        ContextCompactionCommitMode::FinishActiveStream {
+        ContextCompactionCommitMode::FinishStandalone {
             task_id: active_stream_task_id,
         },
         WebuiContextCompactionExecution {
@@ -839,7 +839,7 @@ async fn stale_context_compaction_owner_preserves_replacement_state() {
         &section_id,
         "预算说明",
         MANUAL_CONTEXT_COMPACTION_TRIGGER,
-        ContextCompactionCommitMode::FinishActiveStream {
+        ContextCompactionCommitMode::FinishStandalone {
             task_id: stale_task_id,
         },
         "stale compaction failure",

@@ -2,6 +2,7 @@
 
 - La requête de résumé conserve l’intégralité de l’historique, les résultats d’outils et les médias natifs. Si l’entrée complète dépasse la limite de contexte du modèle, le compactage signale l’erreur et conserve l’historique.
 - Les tours inachevés admissibles peuvent être compactés manuellement lorsqu’aucune requête n’est active. La tâche d’origine et les entrées en file d’attente sont conservées pour permettre de reprendre la tâche ensuite.
+- Les messages en attente que vous choisissez d’insérer pendant le compactage manuel sont envoyés dans l’ordre des clics une fois le compactage réussi. Si le compactage échoue, s’arrête ou si le processus redémarre, ils restent en file d’attente.
 
 ### Autres améliorations
 

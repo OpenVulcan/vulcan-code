@@ -68,12 +68,12 @@ pub(super) async fn begin(
                 {
                     document.begin_manual_context_maintenance(&source, execution_id, now_ms)?;
                     return Ok(SessionMutationChange::Unchanged(
-                        ContextCompactionCommitMode::FinishActiveStream { task_id },
+                        ContextCompactionCommitMode::FinishStandalone { task_id },
                     ));
                 }
                 if let Some(owner) = document.borrow_manual_context_compaction(&source)? {
                     return Ok(SessionMutationChange::Unchanged(
-                        ContextCompactionCommitMode::FinishBorrowedStream { task_id, owner },
+                        ContextCompactionCommitMode::FinishBorrowed { task_id, owner },
                     ));
                 }
                 Ok(
@@ -83,10 +83,10 @@ pub(super) async fn begin(
                         now_ms,
                     )? {
                         IdempotentMutation::Committed(_) => SessionMutationChange::Changed(
-                            ContextCompactionCommitMode::FinishActiveStream { task_id },
+                            ContextCompactionCommitMode::FinishStandalone { task_id },
                         ),
                         IdempotentMutation::Idempotent(_) => SessionMutationChange::Unchanged(
-                            ContextCompactionCommitMode::FinishActiveStream { task_id },
+                            ContextCompactionCommitMode::FinishStandalone { task_id },
                         ),
                     },
                 )

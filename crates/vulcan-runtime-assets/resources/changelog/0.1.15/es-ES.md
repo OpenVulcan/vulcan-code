@@ -2,6 +2,7 @@
 
 - La solicitud de resumen conserva todo el historial de la conversación, los resultados de las herramientas y el contenido multimedia nativo. Si la entrada completa supera el límite de contexto del modelo, la compactación informa del error y conserva el historial.
 - Los turnos sin terminar que cumplen los requisitos se pueden compactar manualmente cuando no hay ninguna solicitud activa. Se conservan la tarea original y la entrada en cola para poder continuar después.
+- Los mensajes en cola que eliges insertar durante la compactación manual se envían en el orden de selección cuando la compactación termina correctamente. Si la compactación falla, se detiene o el proceso se reinicia, los mensajes permanecen en cola.
 
 ### Otras mejoras
 

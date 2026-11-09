@@ -2,6 +2,7 @@
 
 - Die Zusammenfassungsanfrage behält den vollständigen Gesprächsverlauf, die Werkzeugergebnisse und native Medien. Überschreitet die vollständige Eingabe das Kontextlimit des Modells, meldet die Komprimierung den Fehler und bewahrt den Verlauf.
 - Geeignete offene Durchläufe lassen sich manuell komprimieren, solange keine Anfrage aktiv ist. Die ursprüngliche Aufgabe und vorgemerkte Eingaben bleiben erhalten. Die Aufgabe kann anschließend fortgesetzt werden.
+- Während der manuellen Komprimierung ausgewählte Nachrichten werden nach erfolgreicher Komprimierung in der Reihenfolge der Klicks gesendet. Schlägt die Komprimierung fehl, wird sie gestoppt oder der Prozess neu gestartet, bleiben die Nachrichten in der Warteschlange.
 
 ### Weitere Verbesserungen
 

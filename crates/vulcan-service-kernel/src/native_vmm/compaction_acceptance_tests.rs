@@ -381,7 +381,7 @@ pub(super) async fn verify(
         "compaction-section",
         "test budget",
         crate::context_compaction::MANUAL_CONTEXT_COMPACTION_TRIGGER,
-        ContextCompactionCommitMode::FinishActiveStream { task_id },
+        ContextCompactionCommitMode::FinishStandalone { task_id },
         WebuiContextCompactionExecution {
             execution: PromptCompactionExecution {
                 compaction_result: CompactionResult::from_model_summary(&plan, summary),

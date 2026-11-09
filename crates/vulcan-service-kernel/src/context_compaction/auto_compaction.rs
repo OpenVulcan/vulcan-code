@@ -366,7 +366,7 @@ async fn maybe_auto_compact_webui_session_with_mode(
                 &status_message_id,
                 &budget_note,
                 AUTO_CONTEXT_COMPACTION_TRIGGER,
-                ContextCompactionCommitMode::ContinueActiveStream {
+                ContextCompactionCommitMode::ContinueActive {
                     task_id: active_stream_task_id,
                 },
                 execution,
@@ -936,7 +936,7 @@ pub(crate) async fn persist_failed_webui_context_compaction(
         section_id,
         budget_note,
         trigger,
-        ContextCompactionCommitMode::ContinueActiveStream {
+        ContextCompactionCommitMode::ContinueActive {
             task_id: active_stream_task_id,
         },
         error,

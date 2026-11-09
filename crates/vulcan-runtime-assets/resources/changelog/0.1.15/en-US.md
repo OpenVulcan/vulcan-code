@@ -2,6 +2,7 @@
 
 - Compaction preserves the full conversation history, tool results, and native media in the summary request. If the full input exceeds the model's context limit, compaction reports the error and leaves the history intact.
 - Eligible unfinished turns can be compacted manually while no request is active. The original task and queued input are preserved, so you can continue the task afterward.
+- During manual compaction, queued messages you choose to insert are sent in click order after compaction completes successfully. If compaction fails, is stopped, or the process restarts, those messages stay queued.
 
 ### Other improvements
 

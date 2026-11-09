@@ -70,7 +70,7 @@ async fn manual_compaction_insertion_rpc_defers_and_deduplicates_until_success()
     );
     assert!(matches!(
         mode,
-        ContextCompactionCommitMode::FinishActiveStream { .. }
+        ContextCompactionCommitMode::FinishStandalone { .. }
     ));
     crate::context_compaction::fail_webui_context_compaction_execution(
         &app,
@@ -267,7 +267,7 @@ async fn manual_compaction_failure_publishes_visible_event_and_closes_owner() {
         "manual-section",
         "",
         MANUAL_CONTEXT_COMPACTION_TRIGGER,
-        ContextCompactionCommitMode::FinishActiveStream { task_id },
+        ContextCompactionCommitMode::FinishStandalone { task_id },
         "Fixture provider preparation failed",
     )
     .unwrap();
@@ -413,7 +413,7 @@ async fn manual_compaction_can_prepare_a_physical_api_from_idle_history() {
         "manual-section",
         "",
         MANUAL_CONTEXT_COMPACTION_TRIGGER,
-        ContextCompactionCommitMode::FinishActiveStream { task_id },
+        ContextCompactionCommitMode::FinishStandalone { task_id },
         "Fixture ends after verified dispatch admission",
     )
     .unwrap();
@@ -480,7 +480,7 @@ async fn manual_compaction_rejected_summary_closes_owner_and_preserves_history()
         "rejected-section",
         "",
         MANUAL_CONTEXT_COMPACTION_TRIGGER,
-        ContextCompactionCommitMode::FinishActiveStream { task_id },
+        ContextCompactionCommitMode::FinishStandalone { task_id },
         WebuiContextCompactionExecution {
             execution: PromptCompactionExecution {
                 compaction_result: CompactionResult::from_model_summary(
@@ -570,7 +570,7 @@ async fn manual_compaction_stale_admission_keeps_new_business_and_reports_failur
         "stale-section",
         "",
         MANUAL_CONTEXT_COMPACTION_TRIGGER,
-        ContextCompactionCommitMode::FinishActiveStream { task_id },
+        ContextCompactionCommitMode::FinishStandalone { task_id },
         &error,
     )
     .unwrap();
