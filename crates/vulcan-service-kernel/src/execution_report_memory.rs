@@ -18,16 +18,60 @@ use super::{
     SharedServiceBridgeState, UpdateConversationRunPhaseDelta, WorkbenchDelta,
     WorkbenchDeltaEnvelope, active_session_summary_for_session_mut,
     apply_vmm_writeback_effects_to_runtime_state, build_terminal_execution_report_state,
-    context_usage_snapshot_from_runtime_state, current_unix_millis_text, current_unix_millis_value,
-    emit_service_event_with_trace, owning_project_id_for_session,
+    context_usage_snapshot_from_runtime_state, conversation_attention_summary_for_session,
+    current_unix_millis_text, current_unix_millis_value, emit_service_event_with_trace,
+    owning_project_id_for_session, pending_question_snapshots_from_agent_runtime,
     refresh_exact_vmm_hook_session_projection, session_context_usage_facts_from_v1_registry,
-    session_public_ai_model_capabilities, spawn_service_task,
-    sync_hydrated_session_dialogue_ready_marker, webui_trace, webui_trace_if_slow,
-    webui_turn_completion_gate_from_state, workbench_surface_matches_conversation,
-    workspace_session_summary_for_session, workspace_snapshot_contains_regular_session,
+    session_plan_mode_summary_from_runtime_state, session_public_ai_model_capabilities,
+    spawn_service_task, sync_hydrated_session_dialogue_ready_marker, webui_trace,
+    webui_trace_if_slow, webui_turn_completion_gate_from_state,
+    workbench_surface_matches_conversation, workspace_session_summary_for_session,
+    workspace_snapshot_contains_regular_session,
 };
 use crate::vmm_session_controller::open_registered_session_vmm_controller;
-use crate::webui_vmm_runtime_readiness;
+use crate::{HostRuntimeHandle, webui_vmm_runtime_readiness};
+use vulcan_workspace_store::workspace_store::set_session_unread_v1;
+
+/// Mirrors the in-memory unread flag of one main session into its durable session index row.
+/// 将单个主会话的内存未读标记镜像写入其持久会话索引行。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the retained runtime flag; `controller_runtime` owns the session index.
+/// `state` 持有保留的运行态标记；`controller_runtime` 持有会话索引。
+/// `session_id` identifies the indexed main session whose terminal report was just applied.
+/// `session_id` 标识刚应用终态报告的已索引主会话。
+///
+/// # Returns
+/// 返回值
+/// Success once the index matches the latest in-memory flag, or the storage error.
+/// 索引与最新内存标记一致后返回成功，否则返回存储错误。
+pub(super) async fn persist_main_session_unread(
+    state: &SharedServiceBridgeState,
+    controller_runtime: &HostRuntimeHandle,
+    session_id: SessionId,
+) -> Result<(), String> {
+    // A concurrent mark-read may change the flag during the write, so the latest value is written
+    // until the persisted value equals the value observed after the write.
+    // 并发的标记已读可能在写入期间改变标记，因此持续写入最新值，直到写入后观察到的值与已写入值一致。
+    let mut persisted = None;
+    loop {
+        let current = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
+            .is_some_and(|runtime_state| runtime_state.ui_state.unread);
+        if persisted == Some(current) {
+            return Ok(());
+        }
+        set_session_unread_v1(controller_runtime, &session_id.to_string(), current)
+            .await
+            .map_err(|error| format!("Failed to persist the session unread marker: {error}"))?;
+        persisted = Some(current);
+    }
+}
 
 /// Applies only the auxiliary checkpoint to existing session memory; V1 owns outcome and usage.
 /// 仅将辅助检查点应用到既有会话内存；结果与用量由 V1 拥有。
@@ -111,6 +155,9 @@ pub(super) struct TerminalReportMemoryApply {
     /// Final conversation outcome when this report closes a regular user-facing turn.
     /// 当本报告闭合普通用户会话回合时的最终会话结果。
     pub(super) conversation_run_outcome: Option<ConversationRunOutcome>,
+    /// Whether the report belongs to an indexed main session whose unread flag must be persisted.
+    /// 报告是否属于已索引主会话，其未读标记必须持久化。
+    pub(super) persists_unread: bool,
 }
 
 /// Exact conversation-hook side effect committed for one terminal report.
@@ -359,6 +406,7 @@ pub(super) fn apply_task_session_execution_report_to_memory(
         project_id: None,
         completion_request: None,
         conversation_run_outcome: None,
+        persists_unread: false,
     })
 }
 
@@ -808,6 +856,9 @@ pub(super) fn apply_execution_report_to_memory(
         project_id,
         completion_request,
         conversation_run_outcome,
+        // Only indexed main sessions own a durable unread row; child task sessions have none.
+        // 只有已索引主会话拥有持久未读行；子任务会话没有。
+        persists_unread: is_main_session,
     })
 }
 
@@ -883,6 +934,19 @@ fn emit_terminal_execution_report_workbench_deltas(
         } else {
             None
         };
+        // unread is the runtime flag just committed by the terminal report; the summary must mirror it.
+        // unread 是终态报告刚提交的运行态标记；摘要必须镜像它。
+        let unread = workspace
+            .session_runtime_state
+            .get(&session_id)
+            .is_some_and(|runtime_state| runtime_state.ui_state.unread);
+        // Attention is rebuilt from the same live inputs as a full refresh, so the unread dot is not lost.
+        // 注意力标记与完整刷新使用相同的实时输入重建，避免丢失未读圆点。
+        let session_plan_mode = session_plan_mode_summary_from_runtime_state(
+            workspace.session_runtime_state.get(&session_id),
+        );
+        let pending_questions =
+            pending_question_snapshots_from_agent_runtime(guard.agent_runtime.as_ref())?;
         let mut events = Vec::new();
         events.push(terminal_report_workbench_delta_envelope(
             &mut guard,
@@ -900,6 +964,14 @@ fn emit_terminal_execution_report_workbench_deltas(
                 conversation.status = status_label.to_string();
                 conversation.last_updated_label = String::from("just now");
                 conversation.last_updated_at = current_unix_millis_text();
+                conversation.unread = unread;
+                conversation.attention = conversation_attention_summary_for_session(
+                    session_id,
+                    &pending_questions,
+                    session_plan_mode.as_ref(),
+                    unread,
+                    Some(conversation.last_updated_at.clone()),
+                );
                 changed_conversation = Some(conversation.clone());
                 break;
             }
@@ -1155,6 +1227,102 @@ pub(super) fn spawn_conversation_completion_hook_task(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Records every service event so the emitted terminal delta can be inspected.
+    /// 记录每个服务事件，以便检查发出的终态增量。
+    #[derive(Default)]
+    struct RecordedEvents {
+        events: std::sync::Mutex<Vec<ServiceEvent>>,
+    }
+
+    impl vulcan_service_api::ServiceEventSink for RecordedEvents {
+        /// Stores one emitted event; returns after the synchronous capture.
+        /// 保存一个已发出的事件；同步捕获后返回。
+        fn emit_service_event(&self, event: ServiceEvent) {
+            self.events.lock().expect("recorded events").push(event);
+        }
+    }
+
+    /// A background session that finished unread must publish `unread` and its attention in the summary delta.
+    /// 后台完成且未读的会话必须在摘要增量中发布 `unread` 及其注意力标记。
+    #[test]
+    fn terminal_summary_delta_carries_the_committed_unread_flag() {
+        let selected_id = uuid::Uuid::new_v4();
+        let background_id = uuid::Uuid::new_v4();
+        let mut service =
+            crate::tests::test_support::test_service_state_with_parent_session(selected_id);
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        runtime_state.ui_state.unread = true;
+        service
+            .workspace_snapshot
+            .as_mut()
+            .expect("workspace")
+            .session_runtime_state
+            .insert(background_id, runtime_state);
+        service.workbench.selected_conversation_id = Some(selected_id.to_string());
+        // The retained summary still holds the stale value captured when the turn started.
+        // 保留的摘要仍是回合开始时捕获的过期值。
+        service
+            .workbench
+            .conversations
+            .push(vulcan_service_api::ConversationSummary {
+                id: background_id.to_string(),
+                title: String::from("background"),
+                status: String::from("Running"),
+                run_phase: SessionRunPhase::Preparing.to_string(),
+                last_updated_label: String::new(),
+                last_updated_at: String::from("1"),
+                created_at: String::from("1"),
+                last_request_at: String::from("1"),
+                manual_position: None,
+                unread: false,
+                attention: None,
+                project_id: Some(String::from("project-a")),
+                dedicated: false,
+                assistant_name: None,
+            });
+        let state: SharedServiceBridgeState = std::sync::Arc::new(std::sync::Mutex::new(service));
+        let recorded = std::sync::Arc::new(RecordedEvents::default());
+        let app = ServiceEventEmitter::new(vec![recorded.clone()]);
+
+        emit_terminal_execution_report_workbench_deltas(
+            &app,
+            &state,
+            background_id,
+            SessionRunPhase::Ready,
+            SessionState::Completed.label(),
+        )
+        .expect("emit terminal deltas");
+
+        let events = recorded.events.lock().expect("recorded events");
+        let delta = events
+            .iter()
+            .find_map(|event| match event {
+                ServiceEvent::WorkbenchDelta(envelope) => match &envelope.delta {
+                    WorkbenchDelta::ConversationSummaryChanged(delta) => Some(delta),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .expect("conversation summary delta");
+        assert!(delta.conversation.unread);
+        assert_eq!(
+            delta
+                .conversation
+                .attention
+                .as_ref()
+                .map(|attention| attention.kind.as_str()),
+            Some("unread")
+        );
+        let guard = state.lock().expect("service state");
+        let retained = guard
+            .workbench
+            .conversations
+            .iter()
+            .find(|conversation| conversation.id == background_id.to_string())
+            .expect("retained summary");
+        assert!(retained.unread);
+    }
 
     /// Missing Hook ownership rejects completion before TTL persistence or synthesized turn allocation.
     /// 缺失 Hook 归属时，在 TTL 持久化或合成回合分配之前拒绝完成。

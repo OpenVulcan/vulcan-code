@@ -337,7 +337,7 @@ pub async fn load_workspace_index_report(
         }
     }
 
-    let runtime_state_map: BTreeMap<SessionId, SessionRuntimeStateEntry> = BTreeMap::new();
+    let mut runtime_state_map: BTreeMap<SessionId, SessionRuntimeStateEntry> = BTreeMap::new();
     let archived_runtime_state_map: BTreeMap<SessionId, SessionRuntimeStateEntry> = BTreeMap::new();
     let mut visible_sessions = Vec::new();
     let mut archived_sessions = Vec::new();
@@ -416,6 +416,17 @@ pub async fn load_workspace_index_report(
         if archived {
             archived_sessions.push(session_summary);
         } else {
+            // The index row is the durable owner of the sidebar unread marker; restore it so a
+            // finished turn that was never opened still shows its unread dot after a restart.
+            // 索引行是侧栏未读标记的持久所有者；恢复它，使从未打开的已完成回合在重启后仍显示未读圆点。
+            if row.unread != 0 {
+                let mut runtime_state = SessionRuntimeStateEntry {
+                    updated_at: row.updated_at_ms.to_string(),
+                    ..SessionRuntimeStateEntry::default()
+                };
+                runtime_state.ui_state.unread = true;
+                runtime_state_map.insert(session_id, runtime_state);
+            }
             visible_sessions.push(session_summary);
         }
     }

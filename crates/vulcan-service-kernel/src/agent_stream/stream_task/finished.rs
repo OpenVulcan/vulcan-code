@@ -329,6 +329,22 @@ pub(super) async fn handle_finished_stream_event(
             None
         }
     };
+    // The sidebar unread marker survives restarts only through the session index row.
+    // 侧栏未读标记只有写入会话索引行才能跨重启保留。
+    if final_report_apply
+        .as_ref()
+        .is_some_and(|apply| apply.persists_unread)
+        && let Err(error) = crate::execution_report_memory::persist_main_session_unread(
+            task_state,
+            controller_runtime,
+            finished_session_id,
+        )
+        .await
+    {
+        tracing::warn!(
+            "[webui-service] persist unread marker failed: session={finished_session_id} error={error}"
+        );
+    }
     webui_trace_if_slow(
         "stream_final_report_apply_slow",
         final_report_apply_started_at,
