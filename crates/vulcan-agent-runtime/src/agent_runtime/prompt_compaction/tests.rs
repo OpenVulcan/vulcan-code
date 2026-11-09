@@ -108,6 +108,72 @@ fn compaction_launch_request_excludes_dynamic_vmm_injection() {
     assert_eq!(request.session_vmm, Default::default());
 }
 
+/// Verifies a cache-preserving compaction request declares exactly the source turn's tool list,
+/// because any difference changes the provider prompt-cache prefix.
+/// 验证保缓存压缩请求声明与来源回合完全相同的工具清单，因为任何差异都会改变供应商提示缓存前缀。
+#[test]
+fn cache_preserving_compaction_declares_source_turn_tool_list() {
+    use crate::agent_runtime::execution_preparation::tests::{
+        test_execution_preparation_request, test_runtime_foundation,
+    };
+    let config = ProviderConfigurationFile::default();
+    let foundation = test_runtime_foundation(&config);
+    // sourceRequest enables a request-gated tool family so a dropped gate changes the tool list.
+    // sourceRequest 启用一个由请求控制的工具族，使丢失的闸门会改变工具清单。
+    let mut source_request = test_execution_preparation_request();
+    source_request.project_id = Some(String::from("project-a"));
+    source_request.knowledge_access = Some(crate::agent_runtime::ExecutionKnowledgeAccessContext {
+        project_id: String::from("project-a"),
+        library_ids: vec![String::from("550e8400-e29b-41d4-a716-446655440000")],
+        search_enabled: true,
+    });
+    let source = prepare_execution_with_tool_snapshot(&foundation, None, &config, &source_request)
+        .expect("source turn preparation should resolve");
+
+    let launch_context = PromptCompactionLaunchContext::from_execution_request(&source_request);
+    let compaction_request = build_prompt_compaction_launch_request(
+        source_request.session_id,
+        "session",
+        &source_request.workspace_path,
+        None,
+        &launch_context,
+        None,
+        ReasoningEffortLevel::Off,
+        SessionConversationState::default(),
+        ContextCompactionRequestPromptMode::FullFidelityMerge,
+    );
+    let compaction =
+        prepare_execution_with_tool_snapshot(&foundation, None, &config, &compaction_request)
+            .expect("compaction preparation should resolve");
+
+    let tool_ids = |definitions: &[vulcan_tools_manager::ResolvedToolDefinition]| {
+        definitions
+            .iter()
+            .map(|definition| definition.descriptor.id.clone())
+            .collect::<Vec<_>>()
+    };
+    let source_ids = tool_ids(&source.tool_snapshot.resolved_tool_definitions);
+    assert!(
+        !source_ids.is_empty(),
+        "source turn should declare tools; the fixture may have changed"
+    );
+    assert_eq!(
+        tool_ids(&compaction.tool_snapshot.resolved_tool_definitions),
+        source_ids,
+        "compaction must declare the source turn's exact ordered tool list"
+    );
+    // Declared tools stay non-executable during compaction.
+    // 压缩期间声明的工具仍不可执行。
+    assert!(compaction.preparation.tool_request_rejection_all_tools);
+    // Hooks, recall and writeback remain disabled; only VMM layer admission follows the source.
+    // Hook、召回与回写保持关闭；只有 VMM 层准入跟随来源。
+    assert!(compaction_request.runtime_policy.vmm_enabled);
+    assert!(!compaction_request.runtime_policy.hooks_enabled);
+    assert!(!compaction_request.runtime_policy.memory_recall_enabled);
+    assert!(!compaction_request.runtime_policy.memory_writeback_enabled);
+    assert!(compaction_request.context_injection.is_none());
+}
+
 /// Verifies local prompt compaction preserves the exact route while disabling recursive automatic compaction.
 /// 验证本地提示词压缩保留精确路由，同时禁用递归自动压缩。
 #[test]

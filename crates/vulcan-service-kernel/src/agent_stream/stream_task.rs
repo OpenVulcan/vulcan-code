@@ -2011,7 +2011,7 @@ async fn handle_v1_provider_request_telemetry(
 /// 返回值
 /// A project-bound access snapshot, possibly with an empty library list, or `None` without a project.
 /// 绑定项目且知识库列表可能为空的访问快照；无所属项目时返回 `None`。
-async fn resolve_turn_knowledge_access(
+pub(crate) async fn resolve_turn_knowledge_access(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
 ) -> Result<Option<ExecutionKnowledgeAccessContext>, String> {

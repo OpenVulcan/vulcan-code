@@ -341,7 +341,21 @@ pub(crate) fn spawn_webui_context_compaction_task(
         )
         .await
         {
-            Ok(()) => request,
+            Ok(()) => match request {
+                // Declare the ordinary-turn tool list so the summary request reuses the provider prompt cache.
+                // 声明普通回合的工具清单，使摘要请求复用供应商提示缓存。
+                Ok(mut request) => {
+                    super::manual_tool_visibility::apply_manual_compaction_tool_visibility(
+                        &task_app,
+                        &task_state,
+                        &agent_runtime,
+                        &mut request,
+                    )
+                    .await
+                    .map(|()| request)
+                }
+                Err(error) => Err(error),
+            },
             Err(error) => Err(error),
         };
         let terminal_result = match admitted_request {

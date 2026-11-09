@@ -1142,7 +1142,8 @@ fn test_resolved_tool(id: &str, source: VulcanToolSourceKind) -> ResolvedToolDef
 
 /// Builds one minimal execution-preparation request for agent-routing tests.
 /// 为代理路由测试构建一份最小执行准备请求。
-fn test_execution_preparation_request() -> ExecutionPreparationRequest {
+pub(in crate::agent_runtime) fn test_execution_preparation_request() -> ExecutionPreparationRequest
+{
     let session_id = Uuid::nil();
     ExecutionPreparationRequest {
         session_id,

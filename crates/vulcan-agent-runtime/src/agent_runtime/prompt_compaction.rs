@@ -166,6 +166,37 @@ pub struct PromptCompactionLaunchContext {
     /// Optional Plan-mode developer guidance captured by the source turn.
     /// 来源回合捕获的可选计划模式开发者指引。
     pub session_plan_context: Option<String>,
+    /// Owning project identifier that gates project-scoped tool families such as Markdown memory.
+    /// 控制项目级工具族（如 Markdown 记忆）可见性的所属项目标识。
+    pub project_id: Option<String>,
+    /// Effective child-agent model policy that gates delegation tool visibility.
+    /// 控制委派工具可见性的有效子代理模型策略。
+    pub subagent_model_policy: Option<crate::provider_config::SubagentModelPolicy>,
+    /// Whether the source execution admitted VMM layers; only tool visibility follows it during compaction.
+    /// 来源执行是否接纳 VMM 层；压缩期间只有工具可见性跟随该值。
+    pub vmm_enabled: bool,
+    /// Effective project-level VMM layer of the source execution.
+    /// 来源执行的有效项目级 VMM 层。
+    pub project_vmm: vulcan_vmm::VmmConfigLayer,
+    /// Effective session-level VMM layer of the source execution.
+    /// 来源执行的有效会话级 VMM 层。
+    pub session_vmm: vulcan_vmm::VmmConfigLayer,
+    /// Whether the VMM transport was ready for the source execution.
+    /// 来源执行时 VMM 传输是否就绪。
+    pub vmm_runtime_ready: bool,
+    /// Browser runtime whose presence gates native browser tool visibility.
+    /// 其存在与否决定原生浏览器工具可见性的浏览器运行时。
+    pub native_browser_runtime: Option<Arc<dyn crate::tooling::native::NativeBrowserRuntime>>,
+    /// Collaboration runtime whose presence gates question and session tool visibility.
+    /// 其存在与否决定问答及会话工具可见性的协作运行时。
+    pub native_agent_collaboration_runtime:
+        Option<Arc<dyn crate::tooling::collaboration::NativeAgentCollaborationRuntime>>,
+    /// Owner-scoped MCP bindings declared by the source execution.
+    /// 来源执行声明的所有者范围 MCP 绑定。
+    pub supplemental_mcp_tools: Vec<crate::mcp::McpRuntimeToolBinding>,
+    /// Knowledge-base access that gates knowledge tool visibility.
+    /// 控制知识库工具可见性的知识库访问上下文。
+    pub knowledge_access: Option<crate::agent_runtime::ExecutionKnowledgeAccessContext>,
 }
 
 impl Default for PromptCompactionLaunchContext {
@@ -200,6 +231,16 @@ impl Default for PromptCompactionLaunchContext {
             project_prompt_skills: Default::default(),
             session_prompt_skill_overrides: BTreeMap::new(),
             session_plan_context: None,
+            project_id: None,
+            subagent_model_policy: None,
+            vmm_enabled: false,
+            project_vmm: Default::default(),
+            session_vmm: Default::default(),
+            vmm_runtime_ready: false,
+            native_browser_runtime: None,
+            native_agent_collaboration_runtime: None,
+            supplemental_mcp_tools: Vec::new(),
+            knowledge_access: None,
         }
     }
 }
@@ -218,6 +259,9 @@ impl PromptCompactionLaunchContext {
     /// An immutable compaction launch context with dynamic conversation overlays intentionally excluded.
     /// 返回一份不可变压缩启动上下文，并有意排除动态会话覆盖层。
     pub fn from_execution_request(request: &ExecutionPreparationRequest) -> Self {
+        // Copy only the source's effective VMM layers so children whose policy hides VMM keep that shape.
+        // 只复制来源的有效 VMM 层，使策略隐藏 VMM 的子代理保持原形态。
+        let vmm_enabled = request.runtime_policy.vmm_enabled;
         Self {
             temperature: request.temperature,
             // Compaction planning supplies its own exact source snapshot after the ordinary controls are copied.
@@ -249,6 +293,24 @@ impl PromptCompactionLaunchContext {
             project_prompt_skills: request.project_prompt_skills.clone(),
             session_prompt_skill_overrides: request.session_prompt_skill_overrides.clone(),
             session_plan_context: request.session_plan_context.clone(),
+            project_id: request.project_id.clone(),
+            subagent_model_policy: request.subagent_model_policy.clone(),
+            vmm_enabled,
+            project_vmm: if vmm_enabled {
+                request.project_vmm.clone()
+            } else {
+                Default::default()
+            },
+            session_vmm: if vmm_enabled {
+                request.session_vmm.clone()
+            } else {
+                Default::default()
+            },
+            vmm_runtime_ready: vmm_enabled && request.vmm_runtime_ready,
+            native_browser_runtime: request.native_browser_runtime.clone(),
+            native_agent_collaboration_runtime: request.native_agent_collaboration_runtime.clone(),
+            supplemental_mcp_tools: request.supplemental_mcp_tools.clone(),
+            knowledge_access: request.knowledge_access.clone(),
         }
     }
 }
@@ -1121,7 +1183,13 @@ fn build_prompt_compaction_launch_request(
         execution_scope: vulcan_session_core::ExecutionScope::ContextCompaction {
             node_id: vulcan_session_core::SessionNodeId::from(session_id),
         },
-        runtime_policy: vulcan_session_core::ExecutionRuntimePolicy::context_compaction(),
+        // Hooks, recall and writeback stay disabled; only VMM layer admission follows the source so the
+        // compaction request declares the same tool list and keeps the provider prompt-cache prefix.
+        // Hook、召回与回写保持关闭；只有 VMM 层准入跟随来源，使压缩请求声明相同工具清单并保留供应商提示缓存前缀。
+        runtime_policy: vulcan_session_core::ExecutionRuntimePolicy {
+            vmm_enabled: launch_context.vmm_enabled,
+            ..vulcan_session_core::ExecutionRuntimePolicy::context_compaction()
+        },
         conversation_hook_turn_id: None,
         continuation_action_id: None,
         provider_request_continuation: None,
@@ -1131,7 +1199,7 @@ fn build_prompt_compaction_launch_request(
         provider_id_override: model_target.map(|target| target.provider_id.clone()),
         model_id_override: model_target.map(|target| target.model_id.clone()),
         connection_id_override: model_target.map(|target| target.connection_id.clone()),
-        subagent_model_policy: None,
+        subagent_model_policy: launch_context.subagent_model_policy.clone(),
         provider_route_lease_identity: model_target
             .map(|target| target.provider_route_lease_identity.clone()),
         provider_tool_selections_override: launch_context.provider_tool_selections_override.clone(),
@@ -1149,7 +1217,7 @@ fn build_prompt_compaction_launch_request(
         session_storage_directory: launch_context.session_storage_directory.clone(),
         session_title: session_title.to_string(),
         workspace_path: workspace_path.to_string(),
-        project_id: None,
+        project_id: launch_context.project_id.clone(),
         prompt: build_compaction_request_prompt_for_mode(prompt_mode),
         output_style_snapshot: launch_context.output_style_snapshot.clone(),
         provider_visible_agent_messages: Vec::new(),
@@ -1184,18 +1252,20 @@ fn build_prompt_compaction_launch_request(
         session_prompt_skill_overrides: launch_context.session_prompt_skill_overrides.clone(),
         context_injection: None,
         system_prompt_hook_blocks: Vec::new(),
-        project_vmm: Default::default(),
-        session_vmm: Default::default(),
-        vmm_runtime_ready: false,
+        project_vmm: launch_context.project_vmm.clone(),
+        session_vmm: launch_context.session_vmm.clone(),
+        vmm_runtime_ready: launch_context.vmm_runtime_ready,
         boundary_events: Vec::new(),
         runtime_system_updates: Vec::new(),
         controller_runtime: None,
         native_goal_runtime: None,
-        native_browser_runtime: None,
-        native_agent_collaboration_runtime: None,
-        supplemental_mcp_tools: Vec::new(),
+        native_browser_runtime: launch_context.native_browser_runtime.clone(),
+        native_agent_collaboration_runtime: launch_context
+            .native_agent_collaboration_runtime
+            .clone(),
+        supplemental_mcp_tools: launch_context.supplemental_mcp_tools.clone(),
         media_resource_runtime: None,
-        knowledge_access: None,
+        knowledge_access: launch_context.knowledge_access.clone(),
         session_goal_context: None,
         session_plan_context: launch_context.session_plan_context.clone(),
         embedded_turn_usage_segments: Vec::new(),

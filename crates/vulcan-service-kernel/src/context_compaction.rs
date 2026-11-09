@@ -80,6 +80,7 @@ mod budget;
 mod completion;
 mod draft;
 mod manual;
+mod manual_tool_visibility;
 mod messages;
 mod persist_display;
 mod streaming;
