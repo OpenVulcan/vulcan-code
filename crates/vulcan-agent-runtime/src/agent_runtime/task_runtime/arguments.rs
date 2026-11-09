@@ -308,6 +308,8 @@ pub(super) fn apply_provider_model_value(snapshot: &mut ProviderModelSnapshot, v
                 string_field(map, &["model_id", "model"]).or_else(|| snapshot.model_id.clone());
             snapshot.execution_mode = string_field(map, &["execution_mode", "mode"])
                 .or_else(|| snapshot.execution_mode.clone());
+            snapshot.reasoning_effort = string_field(map, &["reasoning_effort"])
+                .or_else(|| snapshot.reasoning_effort.clone());
         }
         _ => {}
     }
@@ -432,6 +434,52 @@ pub(super) fn resolve_child_model_reasoning_effort(
             Some(inherited),
         ),
     )
+}
+
+/// Lists exact host effort choices in ascending strength for a resolved model contract.
+/// `capabilities` is the effective target model; provider-default `off` remains an explicit choice.
+pub(super) fn child_model_reasoning_efforts(
+    capabilities: &vulcan_ai_contract::ModelCapabilities,
+) -> Vec<crate::provider_config::ReasoningEffortLevel> {
+    crate::provider_config::ReasoningEffortLevel::ALL
+        .into_iter()
+        .filter(|effort| {
+            crate::agent_runtime::provider_reasoning::validate_exact_wire_reasoning_effort(
+                capabilities,
+                *effort,
+            )
+            .is_ok()
+        })
+        .collect()
+}
+
+/// Validates a fresh child's explicit effort or selects its target model's highest supported level.
+/// `requested` uses the persisted host spelling, including `x-high`, never a provider wire alias.
+pub(super) fn resolve_spawn_reasoning_effort(
+    foundation: &RuntimeFoundation,
+    provider_id: &str,
+    model_id: &str,
+    requested: Option<&str>,
+) -> Result<crate::provider_config::ReasoningEffortLevel, String> {
+    let runtime = foundation
+        .public_ai_runtime()
+        .ok_or_else(|| String::from("The service has not installed the public AI runtime."))?;
+    let configuration = runtime.configuration_snapshot()?;
+    let selection = runtime.resolve_model_selection(&configuration, provider_id, model_id)?;
+    let capabilities = &selection.model.capabilities;
+    if let Some(requested) = requested {
+        let effort = serde_json::from_value(Value::String(requested.to_owned()))
+            .map_err(|error| format!("Invalid child reasoning effort: {error}"))?;
+        crate::agent_runtime::provider_reasoning::validate_exact_wire_reasoning_effort(
+            capabilities,
+            effort,
+        )?;
+        return Ok(effort);
+    }
+    child_model_reasoning_efforts(capabilities)
+        .last()
+        .copied()
+        .ok_or_else(|| String::from("The child model has no valid reasoning effort selection."))
 }
 
 /// Validates an explicit model override selected by a spawn_agent call.

@@ -216,6 +216,20 @@ fn orchestration(model: &Value) -> Result<String, String> {
                 }
                 _ => text.push('\n'),
             }
+            let efforts = array(row, "reasoning_efforts")?
+                .iter()
+                .map(|effort| {
+                    effort
+                        .as_str()
+                        .map(inline_code)
+                        .ok_or_else(|| String::from("Invalid subagent reasoning effort"))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            text.push_str(&format!(
+                "  Reasoning efforts: {}. Default: {} (highest supported). Pass an exact choice to `spawn_agent.reasoning_effort`; unsupported choices are rejected.\n",
+                efforts.join(", "),
+                code(row, "default_reasoning_effort")?,
+            ));
         }
     }
     let modes = array(model, "modes")?;

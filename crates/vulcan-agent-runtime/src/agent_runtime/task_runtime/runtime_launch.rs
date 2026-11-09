@@ -209,12 +209,10 @@ fn build_task_runtime_preparation_with_history(
         &context.config,
     );
     if let Some((provider_id, model_id)) = public_model_override {
-        // The parent level may be unsupported by another model; keep it only where the target accepts it.
-        // 父级档位可能不被其他模型支持；仅在目标模型接受时保留。
         let inherits_parent_model = request.provider_id_override.as_deref()
             == Some(provider_id.as_str())
             && request.model_id_override.as_deref() == Some(model_id.as_str());
-        if !inherits_parent_model {
+        if invocation.is_resumed && !inherits_parent_model {
             request.reasoning_effort = resolve_child_model_reasoning_effort(
                 &context.foundation,
                 &provider_id,
@@ -227,6 +225,24 @@ fn build_task_runtime_preparation_with_history(
         // A child provider/model pair cannot reuse the parent's credential connection.
         // 子任务更换供应商/模型后不得继续复用父任务凭据连接。
         request.connection_id_override = None;
+    }
+    if !invocation.is_resumed {
+        let provider_id = request.provider_id_override.as_deref().ok_or_else(|| {
+            String::from("New child reasoning selection requires an exact provider.")
+        })?;
+        let model_id = request.model_id_override.as_deref().ok_or_else(|| {
+            String::from("New child reasoning selection requires an exact model.")
+        })?;
+        request.reasoning_effort = resolve_spawn_reasoning_effort(
+            &context.foundation,
+            provider_id,
+            model_id,
+            invocation
+                .invocation_config
+                .provider_model
+                .reasoning_effort
+                .as_deref(),
+        )?;
     }
     request.subagent_prompt_context =
         build_task_subagent_prompt_context(invocation, resolved_config);

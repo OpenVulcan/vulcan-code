@@ -2,6 +2,14 @@ use super::*;
 use crate::{ExecutionKnowledgeAccessContext, ExecutionSessionGoalContext};
 use vulcan_workspace_store::data_plane::{HostRuntimeHandle, HostRuntimeMetadata};
 
+/// Uses the enabled in-memory route for tests that prepare real child model settings.
+fn test_preparation_controller_config(system_prompt: &str) -> CoreControllerConfig {
+    let mut config = build_test_controller_config(system_prompt);
+    config.provider_id = String::from("openrouter");
+    config.model_id = String::from("openai/gpt-5.6-sol");
+    config
+}
+
 /// Builds a resolved TaskSession configuration for controller-config tests.
 /// 为控制器配置测试构建已解析 TaskSession 配置。
 fn test_resolved_config(
@@ -1061,11 +1069,8 @@ fn task_runtime_preparation_request_uses_resolved_runtime_policy() {
     let parent_session_id = Uuid::new_v4();
     let task_id = Uuid::new_v4();
     let provider_config = ProviderConfigurationFile::default();
-    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+    let foundation = crate::agent_runtime::execution_preparation::tests::test_runtime_foundation(
         &provider_config,
-        &AgentProfileCatalog::default(),
-        None,
-        None,
     );
     let context = TaskExecutionRuntimeContext::new(
         provider_config,
@@ -1091,7 +1096,7 @@ fn task_runtime_preparation_request_uses_resolved_runtime_policy() {
         is_resumed: false,
     };
     let mut resolved_config = test_resolved_config(
-        &build_test_controller_config("Base prompt"),
+        &test_preparation_controller_config("Base prompt"),
         &invocation.invocation_config,
     );
     resolved_config.runtime_policy = vulcan_session_core::ExecutionRuntimePolicy {
@@ -1187,7 +1192,7 @@ fn task_runtime_preparation_request_does_not_mix_parent_connection_with_child_ro
         is_resumed: false,
     };
     let mut resolved_config = test_resolved_config(
-        &build_test_controller_config("Base prompt"),
+        &test_preparation_controller_config("Base prompt"),
         &invocation.invocation_config,
     );
     // The explicit provider owns a model id that itself contains `/`.
@@ -1208,9 +1213,18 @@ fn task_runtime_preparation_request_does_not_mix_parent_connection_with_child_ro
         child_request.model_id_override.as_deref(),
         Some("openai/gpt-5.6-sol")
     );
-    // The inherited level is replaced by the target model's own default instead of being rejected later.
-    // 继承档位被替换为目标模型自身默认值，而不是在之后被拒绝。
-    assert_ne!(child_request.reasoning_effort, ReasoningEffortLevel::Ultra);
+    let target = context.foundation.public_ai_runtime().unwrap();
+    let selection = target
+        .resolve_model_selection(
+            &target.configuration_snapshot().unwrap(),
+            "openrouter",
+            "openai/gpt-5.6-sol",
+        )
+        .unwrap();
+    assert_eq!(
+        Some(&child_request.reasoning_effort),
+        child_model_reasoning_efforts(&selection.model.capabilities).last(),
+    );
     assert_eq!(child_request.connection_id_override, None);
     assert_eq!(child_request.provider_route_lease_identity, None);
     assert!(child_request.captured_child_tool_admission.is_none());
@@ -1224,11 +1238,8 @@ fn task_runtime_preparation_request_hides_parent_tools_by_default() {
     let parent_session_id = Uuid::new_v4();
     let task_id = Uuid::new_v4();
     let provider_config = ProviderConfigurationFile::default();
-    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+    let foundation = crate::agent_runtime::execution_preparation::tests::test_runtime_foundation(
         &provider_config,
-        &AgentProfileCatalog::default(),
-        None,
-        None,
     );
     let context = TaskExecutionRuntimeContext::new(
         provider_config,
@@ -1254,7 +1265,7 @@ fn task_runtime_preparation_request_hides_parent_tools_by_default() {
         is_resumed: false,
     };
     let resolved_config = test_resolved_config(
-        &build_test_controller_config("Base prompt"),
+        &test_preparation_controller_config("Base prompt"),
         &invocation.invocation_config,
     );
 
@@ -1278,11 +1289,8 @@ fn task_runtime_preparation_request_preserves_tools_but_rejects_calls_for_mirror
     let parent_session_id = Uuid::new_v4();
     let task_id = Uuid::new_v4();
     let provider_config = ProviderConfigurationFile::default();
-    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+    let foundation = crate::agent_runtime::execution_preparation::tests::test_runtime_foundation(
         &provider_config,
-        &AgentProfileCatalog::default(),
-        None,
-        None,
     );
     let context = TaskExecutionRuntimeContext::new(
         provider_config,
@@ -1310,7 +1318,7 @@ fn task_runtime_preparation_request_preserves_tools_but_rejects_calls_for_mirror
         is_resumed: false,
     };
     let resolved_config = test_resolved_config(
-        &build_test_controller_config("Base prompt"),
+        &test_preparation_controller_config("Base prompt"),
         &invocation.invocation_config,
     );
 
@@ -1479,11 +1487,8 @@ fn spawn_agent_record_captures_parent_agent_prompt_snapshot() {
     let parent_session_id = Uuid::new_v4();
     let task_id = Uuid::new_v4();
     let provider_config = ProviderConfigurationFile::default();
-    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+    let foundation = crate::agent_runtime::execution_preparation::tests::test_runtime_foundation(
         &provider_config,
-        &AgentProfileCatalog::default(),
-        None,
-        None,
     );
     let mut parent_request = test_parent_execution_request(parent_session_id);
     parent_request.agent_prompt_snapshot =
@@ -1519,7 +1524,7 @@ fn spawn_agent_record_captures_parent_agent_prompt_snapshot() {
         .and_then(|record| record.agent_prompt_snapshot.clone())
         .expect("task record should store the fixed parent prompt");
     let resolved_config = test_resolved_config(
-        &build_test_controller_config("Provider rendered preamble"),
+        &test_preparation_controller_config("Provider rendered preamble"),
         &request.invocation_config,
     );
     let (_, child_request) =
@@ -1668,11 +1673,8 @@ fn task_runtime_preparation_request_carries_subagent_prompt_context() {
     let parent_session_id = Uuid::new_v4();
     let task_id = Uuid::new_v4();
     let provider_config = ProviderConfigurationFile::default();
-    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+    let foundation = crate::agent_runtime::execution_preparation::tests::test_runtime_foundation(
         &provider_config,
-        &AgentProfileCatalog::default(),
-        None,
-        None,
     );
     let mut parent_request = test_parent_execution_request(parent_session_id);
     parent_request.agent_prompt_snapshot =
@@ -1700,11 +1702,11 @@ fn task_runtime_preparation_request_carries_subagent_prompt_context() {
         controller_config: None,
         is_resumed: false,
     };
-    let mut controller_config = build_test_controller_config("Base prompt");
+    let mut controller_config = test_preparation_controller_config("Base prompt");
     controller_config.system_prompt = String::from("Composed TaskSession prompt");
     invocation.controller_config = Some(controller_config);
     let resolved_config = test_resolved_config(
-        &build_test_controller_config("Base prompt"),
+        &test_preparation_controller_config("Base prompt"),
         &invocation.invocation_config,
     );
 
@@ -1800,7 +1802,7 @@ fn task_runtime_preparation_request_reports_poisoned_prompt_snapshot_registry() 
     // resolvedConfig supplies the effective child execution settings.
     // resolvedConfig 提供子任务执行的生效配置。
     let resolved_config = test_resolved_config(
-        &build_test_controller_config("Base prompt"),
+        &test_preparation_controller_config("Base prompt"),
         &invocation.invocation_config,
     );
 
@@ -1820,11 +1822,8 @@ fn task_runtime_preparation_request_clears_parent_context_injection() {
     let parent_session_id = Uuid::new_v4();
     let task_id = Uuid::new_v4();
     let provider_config = ProviderConfigurationFile::default();
-    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+    let foundation = crate::agent_runtime::execution_preparation::tests::test_runtime_foundation(
         &provider_config,
-        &AgentProfileCatalog::default(),
-        None,
-        None,
     );
     let mut parent_request = test_parent_execution_request(parent_session_id);
     parent_request.context_injection = Some(vulcan_core::types::ProviderContextInjection {
@@ -1857,7 +1856,7 @@ fn task_runtime_preparation_request_clears_parent_context_injection() {
         is_resumed: false,
     };
     let resolved_config = test_resolved_config(
-        &build_test_controller_config("Base prompt"),
+        &test_preparation_controller_config("Base prompt"),
         &invocation.invocation_config,
     );
 
@@ -1875,11 +1874,8 @@ async fn task_runtime_preparation_request_clears_parent_transient_runtime_state(
     let parent_session_id = Uuid::new_v4();
     let task_id = Uuid::new_v4();
     let provider_config = ProviderConfigurationFile::default();
-    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+    let foundation = crate::agent_runtime::execution_preparation::tests::test_runtime_foundation(
         &provider_config,
-        &AgentProfileCatalog::default(),
-        None,
-        None,
     );
     let mut parent_request = test_parent_execution_request(parent_session_id);
     parent_request.project_id = Some(String::from("parent-project"));
@@ -1975,7 +1971,7 @@ async fn task_runtime_preparation_request_clears_parent_transient_runtime_state(
         is_resumed: false,
     };
     let resolved_config = test_resolved_config(
-        &build_test_controller_config("Base prompt"),
+        &test_preparation_controller_config("Base prompt"),
         &invocation.invocation_config,
     );
 
@@ -2008,11 +2004,8 @@ fn task_runtime_preparation_request_preserves_enabled_knowledge_access() {
     let parent_session_id = Uuid::new_v4();
     let task_id = Uuid::new_v4();
     let provider_config = ProviderConfigurationFile::default();
-    let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+    let foundation = crate::agent_runtime::execution_preparation::tests::test_runtime_foundation(
         &provider_config,
-        &AgentProfileCatalog::default(),
-        None,
-        None,
     );
     let mut parent_request = test_parent_execution_request(parent_session_id);
     parent_request.controller_runtime =
@@ -2054,7 +2047,7 @@ fn task_runtime_preparation_request_preserves_enabled_knowledge_access() {
         is_resumed: false,
     };
     let resolved_config = test_resolved_config(
-        &build_test_controller_config("Base prompt"),
+        &test_preparation_controller_config("Base prompt"),
         &invocation.invocation_config,
     );
 
@@ -2507,6 +2500,351 @@ fn explicit_model(provider_id: &str, model_id: &str) -> ProviderModelSnapshot {
         model_id: Some(model_id.to_string()),
         ..ProviderModelSnapshot::default()
     }
+}
+
+/// Installs a synthetic effective reasoning contract without any external Provider request.
+fn reasoning_test_context(
+    support: vulcan_ai_contract::CapabilitySupport,
+    control: vulcan_ai_contract::ReasoningControlMode,
+    efforts: Vec<vulcan_ai_contract::ReasoningEffort>,
+) -> TaskExecutionRuntimeContext {
+    let context = allowlist_test_context("openai/gpt-5.6-sol", Vec::new(), None);
+    let runtime = context.foundation.public_ai_runtime().unwrap();
+    let mut configuration = runtime.configuration_snapshot().unwrap();
+    configuration.model_capability_overrides.insert(
+        vulcan_provider_adapters::PersistedAiConfiguration::provider_model_key(
+            "openrouter",
+            "openai/gpt-5.6-sol",
+        ),
+        vulcan_provider_adapters::ModelCapabilityOverrides {
+            reasoning: Some(support),
+            reasoning_control: Some(control),
+            reasoning_efforts: Some(efforts),
+            ..Default::default()
+        },
+    );
+    runtime
+        .replace_configuration(configuration.clone())
+        .unwrap();
+    runtime
+        .reapply_model_catalog_overlays(&configuration)
+        .unwrap();
+    context
+}
+
+#[test]
+fn spawn_reasoning_defaults_to_the_target_models_highest_supported_effort() {
+    use vulcan_ai_contract::{CapabilitySupport, ReasoningControlMode, ReasoningEffort};
+
+    for (efforts, expected) in [
+        (
+            vec![ReasoningEffort::High, ReasoningEffort::Low],
+            ReasoningEffortLevel::High,
+        ),
+        (
+            vec![ReasoningEffort::XHigh, ReasoningEffort::Medium],
+            ReasoningEffortLevel::XHigh,
+        ),
+        (
+            vec![ReasoningEffort::Max, ReasoningEffort::High],
+            ReasoningEffortLevel::Max,
+        ),
+        (
+            vec![ReasoningEffort::Ultra, ReasoningEffort::Low],
+            ReasoningEffortLevel::Ultra,
+        ),
+        (
+            vec![ReasoningEffort::Adaptive],
+            ReasoningEffortLevel::Adaptive,
+        ),
+    ] {
+        let context = reasoning_test_context(
+            CapabilitySupport::Native,
+            ReasoningControlMode::EffortSelection,
+            efforts,
+        );
+        assert_eq!(
+            resolve_spawn_reasoning_effort(
+                &context.foundation,
+                "openrouter",
+                "openai/gpt-5.6-sol",
+                None,
+            )
+            .unwrap(),
+            expected,
+        );
+        assert!(
+            resolve_spawn_reasoning_effort(
+                &context.foundation,
+                "openrouter",
+                "openai/gpt-5.6-sol",
+                Some("minimal"),
+            )
+            .is_err()
+        );
+    }
+    let context = reasoning_test_context(
+        CapabilitySupport::Unsupported,
+        ReasoningControlMode::FixedOff,
+        vec![ReasoningEffort::None],
+    );
+    assert_eq!(
+        resolve_spawn_reasoning_effort(
+            &context.foundation,
+            "openrouter",
+            "openai/gpt-5.6-sol",
+            None,
+        )
+        .unwrap(),
+        ReasoningEffortLevel::None,
+    );
+    assert!(
+        resolve_spawn_reasoning_effort(
+            &context.foundation,
+            "openrouter",
+            "openai/gpt-5.6-sol",
+            Some("high"),
+        )
+        .is_err()
+    );
+    assert_eq!(
+        child_model_reasoning_efforts(&vulcan_ai_contract::ModelCapabilities::default()),
+        vec![ReasoningEffortLevel::Off],
+    );
+}
+
+#[test]
+fn spawn_reasoning_reaches_provider_capture_and_exact_restoration() {
+    use vulcan_ai_contract::{CapabilitySupport, ReasoningControlMode, ReasoningEffort};
+
+    let mut context = reasoning_test_context(
+        CapabilitySupport::Native,
+        ReasoningControlMode::EffortSelection,
+        vec![
+            ReasoningEffort::High,
+            ReasoningEffort::Low,
+            ReasoningEffort::XHigh,
+        ],
+    );
+    context.request_template.reasoning_effort = ReasoningEffortLevel::High;
+    let runtime = context.foundation.task_runtime();
+    let parent_id = context.request_template.session_id;
+    let _registration = runtime
+        .install_execution_context(parent_id, context.clone())
+        .unwrap();
+    for (index, (requested, expected)) in [
+        (None, ReasoningEffortLevel::XHigh),
+        (Some("low"), ReasoningEffortLevel::Low),
+        (Some("x-high"), ReasoningEffortLevel::XHigh),
+        (Some("off"), ReasoningEffortLevel::Off),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut args = json!({"message": "Review", "task_name": format!("review-{index}")});
+        if let Some(requested) = requested {
+            args["reasoning_effort"] = json!(requested);
+        }
+        let parsed =
+            parse_task_tool_arguments(task_tool_args_from_spawn_agent_args(args).unwrap()).unwrap();
+        let identifier = resolve_new_spawn_task_session_id(&runtime, parent_id, &parsed).unwrap();
+        let mut invocation =
+            prepare_task_execution_request(&runtime, parent_id, identifier, parsed).unwrap();
+        let resolved = test_resolved_config(
+            &test_preparation_controller_config("Base"),
+            &invocation.invocation_config,
+        );
+        let (_, child) =
+            build_task_runtime_preparation_request(&context, &invocation, &resolved).unwrap();
+        assert_eq!(child.reasoning_effort, expected);
+        assert_eq!(
+            context.request_template.reasoning_effort,
+            ReasoningEffortLevel::High
+        );
+        let blueprint = crate::agent_runtime::provider::resolve_public_ai_provider_blueprint(
+            context.foundation.public_ai_runtime().unwrap().as_ref(),
+            &child.session_id.to_string(),
+            None,
+            child.reasoning_effort,
+            child.provider_id_override.as_deref(),
+            child.model_id_override.as_deref(),
+            child.connection_id_override.as_deref(),
+        )
+        .unwrap();
+        assert_eq!(blueprint.reasoning.requested_effort, expected);
+        let mut profile = question_request_profile(child.session_id);
+        profile.invocation_config = invocation.invocation_config.clone();
+        profile.resolved_config = resolved.clone();
+        profile.business_execution_id = invocation.execution_id.clone();
+        profile.effective_config =
+            capture_child_effective_config(&resolved.effective_config, &child).unwrap();
+        let profile: vulcan_session_core::v1::child_execution::ChildExecutionProfile =
+            serde_json::from_value(serde_json::to_value(profile).unwrap()).unwrap();
+        let mut restored = test_parent_execution_request(child.session_id);
+        restored.prompt.clear();
+        restored.prompt_purpose = ExecutionPromptPurpose::QuestionExecution;
+        restore_child_question_request(&mut restored, &profile, 7).unwrap();
+        assert_eq!(restored.reasoning_effort, expected);
+        invocation.is_resumed = true;
+        let mut resumed_context = context.clone();
+        resumed_context.request_template = child;
+        let (_, resumed) =
+            build_task_runtime_preparation_request(&resumed_context, &invocation, &resolved)
+                .unwrap();
+        assert_eq!(resumed.reasoning_effort, expected);
+        restored.prompt_purpose = ExecutionPromptPurpose::AgentTask;
+        resumed_context.request_template = restored;
+        resumed_context.recovered_child_profile = Some(profile);
+        let (_, recovered) =
+            build_task_runtime_preparation_request(&resumed_context, &invocation, &resolved)
+                .unwrap();
+        assert_eq!(recovered.reasoning_effort, expected);
+    }
+    let parsed = parse_task_tool_arguments(
+        task_tool_args_from_spawn_agent_args(json!({
+            "message": "Review", "task_name": "unsupported", "reasoning_effort": "max",
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let identifier = resolve_new_spawn_task_session_id(&runtime, parent_id, &parsed).unwrap();
+    let invocation =
+        prepare_task_execution_request(&runtime, parent_id, identifier, parsed).unwrap();
+    let resolved = test_resolved_config(
+        &test_preparation_controller_config("Base"),
+        &invocation.invocation_config,
+    );
+    assert!(build_task_runtime_preparation_request(&context, &invocation, &resolved).is_err());
+}
+
+#[tokio::test]
+async fn orchestration_reasoning_efforts_match_spawn_choices_and_visible_projection() {
+    use vulcan_ai_contract::{CapabilitySupport, ReasoningControlMode, ReasoningEffort};
+    let context = reasoning_test_context(
+        CapabilitySupport::Native,
+        ReasoningControlMode::EffortSelection,
+        vec![ReasoningEffort::XHigh, ReasoningEffort::Low],
+    );
+    let rows =
+        super::super::invocation_methods::agent_orchestration_info_models(&context, None).unwrap();
+    let model = rows
+        .iter()
+        .find(|row| row["selector"] == "openrouter/openai/gpt-5.6-sol")
+        .unwrap();
+    assert_eq!(model["reasoning_efforts"], json!(["off", "low", "x-high"]));
+    assert_eq!(model["default_reasoning_effort"], "x-high");
+    for effort in model["reasoning_efforts"].as_array().unwrap() {
+        assert!(
+            resolve_spawn_reasoning_effort(
+                &context.foundation,
+                "openrouter",
+                "openai/gpt-5.6-sol",
+                effort.as_str(),
+            )
+            .is_ok()
+        );
+    }
+    let session_id = context.request_template.session_id;
+    let runtime = Arc::new(TaskRuntime::new());
+    let _registration = runtime
+        .install_execution_context(session_id, context)
+        .unwrap();
+    let candidate = build_subagent_tool_candidates(runtime, None)
+        .into_iter()
+        .find(|candidate| candidate.descriptor.id == AGENT_ORCHESTRATION_INFO_TOOL)
+        .unwrap();
+    let result = (candidate.invoke)(
+        json!({"sections": ["models"]}),
+        vulcan_tools_manager::VulcanToolInvocationContext {
+            session_id: session_id.to_string(),
+            turn_id: vulcan_session_core::v1::ids::TurnId::try_new(1).unwrap(),
+            request_stream_id: vulcan_session_core::v1::ids::RequestStreamId::try_new("info")
+                .unwrap(),
+            api_call_id: vulcan_session_core::v1::ids::ApiCallId::try_new(1).unwrap(),
+            tool_call_id: vulcan_session_core::v1::ids::ToolCallId::try_new(1).unwrap(),
+            tool_seq: vulcan_session_core::v1::ids::Seq::try_new(1).unwrap(),
+            controller_tool_call_id: String::from("info"),
+            provider_tool_call_id: None,
+        },
+    )
+    .await
+    .unwrap();
+    let visible = result.model_output.as_str().unwrap();
+    for effort in model["reasoning_efforts"].as_array().unwrap() {
+        assert!(
+            visible.contains(&vulcan_tools_manager::result_markdown::inline_code(
+                effort.as_str().unwrap()
+            ))
+        );
+    }
+}
+
+#[test]
+fn orchestration_reasoning_uses_eligible_accounts_and_omits_unavailable_models() {
+    use vulcan_ai_contract::{CapabilitySupport, ReasoningControlMode, ReasoningEffort};
+    let mut context = reasoning_test_context(
+        CapabilitySupport::Native,
+        ReasoningControlMode::EffortSelection,
+        vec![ReasoningEffort::Low, ReasoningEffort::High],
+    );
+    let runtime = context.foundation.public_ai_runtime().unwrap();
+    let mut configuration = runtime.configuration_snapshot().unwrap();
+    let mut second = configuration.connection_graph.connections["test-openrouter"].clone();
+    second.id = String::from("second-account");
+    configuration
+        .connection_graph
+        .connections
+        .insert(second.id.clone(), second);
+    let mut second_catalog = runtime.source_catalog_snapshot().unwrap()["test-openrouter"].clone();
+    second_catalog.connection_id = String::from("second-account");
+    runtime
+        .stage_source_catalog_for_testing(second_catalog)
+        .unwrap();
+    configuration
+        .connection_graph
+        .remember_model_connection("openrouter", "openai/gpt-5.6-sol", "second-account")
+        .unwrap();
+    configuration.set_model_enabled("openrouter", "vendor/unavailable", true);
+    context
+        .config
+        .subagent_models
+        .push(test_grant("openrouter", "vendor/unavailable", ""));
+    runtime
+        .replace_configuration(configuration.clone())
+        .unwrap();
+    runtime
+        .reapply_model_catalog_overlays(&configuration)
+        .unwrap();
+    for (disabled, expected_accounts) in [(None, 2), (Some("test-openrouter"), 1)] {
+        if let Some(disabled) = disabled {
+            configuration
+                .set_connection_enabled(disabled, false)
+                .unwrap();
+            runtime
+                .replace_configuration(configuration.clone())
+                .unwrap();
+        }
+        let rows =
+            super::super::invocation_methods::agent_orchestration_info_models(&context, None)
+                .unwrap();
+        assert_eq!(rows.len(), 1);
+        let model = rows
+            .iter()
+            .find(|row| row["selector"] == "openrouter/openai/gpt-5.6-sol")
+            .unwrap();
+        assert_eq!(model["account_count"], expected_accounts);
+        assert_eq!(model["reasoning_efforts"], json!(["off", "low", "high"]));
+        assert_eq!(model["default_reasoning_effort"], "high");
+    }
+    configuration
+        .set_connection_enabled("second-account", false)
+        .unwrap();
+    runtime.replace_configuration(configuration).unwrap();
+    assert!(
+        super::super::invocation_methods::agent_orchestration_info_models(&context, None)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 /// Verifies the model list holds only the session model and available allowlisted models with notes.

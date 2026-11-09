@@ -111,7 +111,7 @@ pub(super) fn build_agent_orchestration_info_tool_candidate(
             AGENT_ORCHESTRATION_INFO_TOOL,
             AGENT_ORCHESTRATION_INFO_TOOL,
             String::from(
-                "Return enabled child-agent profiles, supported creation modes, available model selectors, and runtime counts without changing runtime state.",
+                "Return enabled child-agent profiles, supported creation modes, available model selectors with reasoning efforts, and runtime counts without changing runtime state.",
             ),
             None,
             VulcanToolOrigin::new(
@@ -296,6 +296,11 @@ pub(super) fn spawn_agent_args_schema() -> Value {
             "model": {
                 "type": "string",
                 "description": "Optional permitted model selector returned by agent_orchestration_info. Omitting it uses the profile model or calling session model only if that model is permitted. Invalid, unavailable or ungranted models fail the spawn call."
+            },
+            "reasoning_effort": {
+                "type": "string",
+                "enum": crate::provider_config::ReasoningEffortLevel::ALL,
+                "description": "Optional reasoning effort from the target model's reasoning_efforts in agent_orchestration_info. Omission selects that model's highest supported effort, not the parent's effort. Unsupported choices fail instead of being normalized. `off` leaves the provider default unchanged."
             },
             "task_name": {
                 "type": "string",
@@ -608,14 +613,20 @@ pub(super) fn task_tool_args_from_spawn_agent_args(args: Value) -> Result<Value,
         .filter(|key| {
             !matches!(
                 key.as_str(),
-                "message" | "task_name" | "creation_mode" | "agent_id" | "system_prompt" | "model"
+                "message"
+                    | "task_name"
+                    | "creation_mode"
+                    | "agent_id"
+                    | "system_prompt"
+                    | "model"
+                    | "reasoning_effort"
             )
         })
         .cloned()
         .collect::<Vec<_>>();
     if !unsupported_keys.is_empty() {
         return Err(format!(
-            "`spawn_agent` only accepts message, task_name, creation_mode, agent_id, system_prompt, and model; unsupported keys: {}",
+            "`spawn_agent` only accepts message, task_name, creation_mode, agent_id, system_prompt, model, and reasoning_effort; unsupported keys: {}",
             unsupported_keys.join(", ")
         ));
     }
@@ -656,14 +667,21 @@ pub(super) fn task_tool_args_from_spawn_agent_args(args: Value) -> Result<Value,
     if let Some(system_prompt) = system_prompt {
         task_args.insert(String::from("system_prompt"), Value::String(system_prompt));
     }
+    let mut provider_model = serde_json::Map::new();
     if let Some(model) = model {
         let (provider_id, model_id) = split_provider_model_selector(&model)?;
+        provider_model.insert(String::from("provider_id"), Value::String(provider_id));
+        provider_model.insert(String::from("model_id"), Value::String(model_id));
+    }
+    if let Some(effort) = map.get("reasoning_effort") {
+        serde_json::from_value::<crate::provider_config::ReasoningEffortLevel>(effort.clone())
+            .map_err(|error| format!("Invalid spawn_agent.reasoning_effort: {error}"))?;
+        provider_model.insert(String::from("reasoning_effort"), effort.clone());
+    }
+    if !provider_model.is_empty() {
         task_args.insert(
             String::from("provider_model"),
-            json!({
-                "provider_id": provider_id,
-                "model_id": model_id,
-            }),
+            Value::Object(provider_model),
         );
     }
     Ok(Value::Object(task_args))

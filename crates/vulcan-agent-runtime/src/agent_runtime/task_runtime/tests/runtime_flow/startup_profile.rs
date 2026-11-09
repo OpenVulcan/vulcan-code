@@ -398,6 +398,9 @@ async fn durable_child_preparation_failure_prevents_activation() {
                 &context.config,
             ),
         );
+        context.request_template.provider_id_override = Some("openrouter".into());
+        context.request_template.model_id_override = Some("openai/gpt-5.6-sol".into());
+        context.request_template.connection_id_override = Some("test-openrouter".into());
         if valid_preparation {
             // Use the fixture's actual built agent identity, not the invalid placeholder from the rejection fixture.
             // 使用夹具实际构建的代理身份，不沿用拒绝夹具中的无效占位身份。
@@ -409,11 +412,6 @@ async fn durable_child_preparation_failure_prevents_activation() {
                     .id
                     .clone(),
             );
-            // Match the explicit route installed by the in-memory fixture, as the real host request does.
-            // 与内存夹具安装的显式路由一致，和真实宿主请求相同。
-            context.request_template.provider_id_override = Some("openrouter".into());
-            context.request_template.model_id_override = Some("openai/gpt-5.6-sol".into());
-            context.request_template.connection_id_override = Some("test-openrouter".into());
         } else {
             context.request_template.execution_agent_id = Some("missing-admission-agent".into());
         }
