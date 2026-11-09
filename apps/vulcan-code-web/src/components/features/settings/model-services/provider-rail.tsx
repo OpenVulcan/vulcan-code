@@ -170,8 +170,8 @@ export function ProviderRail(props: ProviderRailProps) {
           </button>
         ))}
       </div>
-      {!props.directory ? <StreamPlaceholder decorative shape="rows" count={6} /> : (
-        <div className="vk-ms-rail-sections">
+      <div className="vk-ms-rail-sections">
+        {!props.directory ? <StreamPlaceholder decorative shape="rows" count={6} /> : <>
           {configured.length > 0 ? (
             <section>
               <p className="vk-ms-rail-heading" title={t("settings.modelServices.rail.reorderHint")}>
@@ -193,8 +193,8 @@ export function ProviderRail(props: ProviderRailProps) {
           {configured.length === 0 && available.length === 0 ? (
             <PageEmptyState icon={<Search />} title={t("settings.modelExperience.noProviders")} />
           ) : null}
-        </div>
-      )}
+        </>}
+      </div>
       <div className="vk-ms-rail-foot">
         <Button onClick={props.onAddCustom} size="sm" type="button" variant="outline">
           <Plus aria-hidden="true" />

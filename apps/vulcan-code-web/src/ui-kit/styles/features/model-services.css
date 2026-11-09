@@ -9,25 +9,40 @@
   min-width: 0;
 }
 
+.vk-ms-page > .vk-page-tabs { flex: none; }
+
 /* Shell: one bordered card; alerts on top, the provider rail and the working panel side by side. */
 /* 外壳：一张带边框的卡片；顶部为提醒，下方左侧目录与右侧工作区并排。 */
 .vk-ms-shell {
   display: flex;
+  flex: 1;
   flex-direction: column;
   min-width: 0;
+  /* Let the outer settings frame scroll if the viewport cannot fit a usable workspace. */
+  /* 视区过矮无法容纳可用工作区时，由外层设置正文滚动。 */
+  min-height: 240px;
   overflow: clip;
   border: var(--vk-bw) solid var(--vk-line);
   background: var(--vk-panel);
 }
 
+/* Share the remaining settings height so either column can scroll without moving the other. */
+/* 共用设置正文的剩余高度，让任一栏滚动时另一栏保持原位。 */
 .vk-ms-body {
   display: grid;
+  flex: 1;
   grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   min-width: 0;
-  min-height: 560px;
+  min-height: 0;
 }
 
-.vk-ms-main { min-width: 0; padding: 16px 18px 18px; }
+.vk-ms-main {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 18px 18px;
+}
 
 /* Health dots shared by alerts and rail rows. */
 /* 健康圆点，由提醒与目录行共用。 */
@@ -47,9 +62,14 @@
 /* 提醒：可打开对应供应商的严重程度胶囊；没有提醒时显示一个“全部正常”胶囊。 */
 .vk-ms-alerts {
   display: flex;
+  flex: none;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px 12px;
+  /* Keep long alert lists accessible while reserving space for the two working panes. */
+  /* 提醒过多时允许在提醒区内滚动，同时为两栏工作区保留空间。 */
+  max-height: 25%;
+  overflow: auto;
   padding: 8px 14px;
   border-bottom: var(--vk-bw) solid var(--vk-line);
   background: var(--vk-ground);
@@ -128,13 +148,10 @@ button.vk-ms-alert:focus-visible { outline: var(--vk-focus-w) solid var(--vk-sig
 /* Rail: search, tag filter, configured list (reorderable), recommendations and a footer. */
 /* 左侧目录：搜索、标签筛选、已配置列表（可排序）、推荐列表与底部操作。 */
 .vk-ms-rail {
-  position: sticky;
-  top: 0;
   display: flex;
   flex-direction: column;
-  align-self: stretch;
-  max-height: calc(100dvh - 140px);
   min-width: 0;
+  min-height: 0;
   border-right: var(--vk-bw) solid var(--vk-line);
   background: var(--vk-ground);
 }
@@ -303,6 +320,7 @@ button.vk-ms-alert:focus-visible { outline: var(--vk-focus-w) solid var(--vk-sig
 
 .vk-ms-rail-foot {
   display: flex;
+  flex: none;
   flex-direction: column;
   align-items: stretch;
   gap: 4px;
@@ -766,8 +784,11 @@ button.vk-ms-alert:focus-visible { outline: var(--vk-focus-w) solid var(--vk-sig
 }
 
 @container model-services (max-width: 700px) {
-  .vk-ms-body { grid-template-columns: minmax(0, 1fr); }
-  .vk-ms-rail { position: static; max-height: 460px; border-right: 0; border-bottom: var(--vk-bw) solid var(--vk-line); }
+  /* Stacked panes reserve more space for the rail's fixed search, filters, and footer. */
+  /* 上下叠放时为左栏固定的搜索、筛选和底部操作多留一些空间。 */
+  .vk-ms-shell { min-height: 400px; }
+  .vk-ms-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 3fr) minmax(0, 2fr); }
+  .vk-ms-rail { border-right: 0; border-bottom: var(--vk-bw) solid var(--vk-line); }
   .vk-ms-main { padding: 14px; }
   .vk-ms-head-actions { justify-content: flex-start; margin-left: 0; }
   /* Short filters share one row below search so narrow lists keep reading space. */

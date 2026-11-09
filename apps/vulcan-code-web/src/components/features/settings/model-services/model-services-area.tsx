@@ -134,6 +134,15 @@ export function ModelServicesArea(props: ModelServicesAreaProps) {
     ?? directory?.configured[0]
     ?? directory?.available[0]
     ?? null
+  // The focused provider determines which details the independently scrolling pane displays.
+  // 当前供应商决定独立滚动的详情栏显示哪份内容。
+  const displayedProviderId = view === "provider" ? selected?.id ?? null : null
+  // Reset the detail scroll when its subject changes so the newly selected header is visible.
+  // 详情栏切换内容时回到顶部，让新选中的标题可见。
+  const detailScrollRef = React.useRef<HTMLDivElement>(null)
+  React.useLayoutEffect(() => {
+    if (detailScrollRef.current) detailScrollRef.current.scrollTop = 0
+  }, [displayedProviderId, view])
   // modelProviderIds lists configured model providers, signed-in core accounts first, for the model-led view.
   // modelProviderIds 列出已配置的模型供应商（已登录的核心账号在前），用于以模型为主的视图。
   const modelProviderIds = React.useMemo(
@@ -259,10 +268,10 @@ export function ModelServicesArea(props: ModelServicesAreaProps) {
               onTag={setTag}
               query={query}
               reorderDisabled={mutations.pendingKey !== null}
-              selectedId={view === "provider" ? selected?.id ?? null : null}
+              selectedId={displayedProviderId}
               tag={tag}
             />
-            <div className="vk-ms-main">
+            <div className="vk-ms-main" ref={detailScrollRef}>
               {!snapshot ? (
                 <StreamPlaceholder decorative shape="rows" count={6} />
               ) : view === "model" ? (
