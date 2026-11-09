@@ -1,7 +1,8 @@
-import type {
-  ApiPurposeKind,
-  ConversationEventBody,
-  ConversationEventSummary,
+import {
+  isTerminalApiStatsStatus,
+  type ApiPurposeKind,
+  type ConversationEventBody,
+  type ConversationEventSummary,
 } from "./conversation-event-window-store";
 import type { ConversationEventWindowControllerSnapshot } from "./conversation-event-window-controller";
 
@@ -139,15 +140,4 @@ export function selectConversationContinueCandidateV1(
  *          压缩与答疑返回 false，因为它们不能授权业务 Continue。 */
 function isBusinessApiPurpose(purpose: ApiPurposeKind): boolean {
   return purpose !== "compaction" && purpose !== "question_execution";
-}
-
-/** Returns whether one ApiStats status is terminal rather than an in-flight snapshot.
- * 判断一条 ApiStats 状态是否为终态而不是进行中快照。 */
-function isTerminalApiStatsStatus(
-  status: Extract<ConversationEventBody, { kind: "api_stats" }>["status"],
-): boolean {
-  return status === "completed"
-    || status === "failed"
-    || status === "cancelled"
-    || status === "interrupted";
 }

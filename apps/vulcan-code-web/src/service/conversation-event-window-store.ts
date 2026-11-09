@@ -1181,6 +1181,21 @@ resolution: "moved_to_draft" | "removed" | "promoted_to_pending_in_turn";
  * 从判别事件体派生的稳定事件种类。 */
 export type ConversationEventKind = ConversationEventBody["kind"];
 
+/** Returns whether the given API stats status closes its physical request.
+ * 判断给定的 API 统计状态是否结束其物理请求。
+ * @param status The canonical API statistics status.
+ *               规范 API 统计状态。
+ * @returns Whether this status is terminal.
+ *          此状态是否为终态。 */
+export function isTerminalApiStatsStatus(
+  status: Extract<ConversationEventBody, { kind: "api_stats" }>["status"],
+): boolean {
+  return status === "completed"
+    || status === "failed"
+    || status === "cancelled"
+    || status === "interrupted";
+}
+
 /** Immutable identity used to compare revisions of one persisted event.
  * 用于比较同一持久化事件修订的不可变身份。 */
 export type EventIdentity = string;
@@ -1483,6 +1498,21 @@ export class ConversationEventWindowStore {
    * 返回已加载的最晚 seq。 */
   getLatestSeq(): number | null {
     return this.latest;
+  }
+
+  /** Returns the inclusive reconnect cursor, keeping mutable streams inside the replay range.
+   * 返回含起点的重连游标，确保仍可更新的流式事件落在重放区间内。
+   * The cursor is null only when the window contains no events.
+   * 仅当窗口内没有事件时返回空游标。 */
+  getReconnectSeq(): number | null {
+    // A later event can advance the tail before an earlier stream receives its terminal revision.
+    // 较晚的事件可能先推进窗口尾部，而更早的流仍未收到终态修订。
+    for (const { event, seq } of this.events.values()) {
+      if ((event.kind === "assistant_reasoning" || event.kind === "assistant_text") && event.status === "streaming") {
+        return seq;
+      }
+    }
+    return this.getLatestSeq();
   }
 
   /** Returns a defensive copy of the current owner-generation revision frontiers.

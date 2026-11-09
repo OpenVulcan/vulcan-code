@@ -352,6 +352,93 @@ describe("V1 conversation event window controller", () => {
     restored.dispose();
   });
 
+  it.each(["cached window", "revision gap"])("settles earlier reasoning when recovering a %s", async (recovery) => {
+    // reasoning is the cached revision left open when its completion update is missed.
+    // reasoning 是漏收完成更新后仍处于流式状态的缓存修订。
+    const reasoning = summary(2, { kind: "assistant_reasoning", api_call_id: 2, text: "thinking", status: "streaming" });
+    // completed is the server's terminal revision for the same sequence.
+    // completed 是服务端对同一序号记录的终态修订。
+    const completed = summary(reasoning.seq, { kind: "assistant_reasoning", api_call_id: 2, text: "thinking done", status: "completed" }, 20, 2);
+    // boundary advances the cached tail beyond the unfinished reasoning.
+    // boundary 将缓存尾部推进至未收尾思考之后。
+    const boundary = summary(3, { kind: "turn_boundary", reason: "completed", outcome: "completed", purpose: "business" });
+    // nextInput advances the service revision beyond the cached window.
+    // nextInput 将服务修订推进至缓存窗口之后。
+    const nextInput = summary(4, userInput(4), 30, 1, 3);
+    // reconnect returns the inclusive range selected by the controller's replay cursor.
+    // reconnect 返回由控制器重放游标选出的含起点区间。
+    const reconnect = vi.fn<ConversationEventWindowRpc["reconnect"]>(async (_owner, cursor) => reconnectResponse(
+      [completed, boundary, nextInput].filter((event) => cursor === null || event.seq >= cursor),
+      { memory_revision: 3, durable_revision: 3 },
+    ));
+    // cachedResponse represents a closed turn already visible in the browser.
+    // cachedResponse 表示浏览器已显示的结束回合。
+    const cachedResponse = response([summary(1, userInput(1)), reasoning, boundary]);
+    // push receives the live handler installed by the first controller.
+    // push 接收首个控制器安装的实时事件处理器。
+    let push: ((delta: ConversationEventLiveDeltaV1) => void) | null = null;
+    // first is the controller holding the stale reasoning and the later turn boundary.
+    // first 是持有过期思考和后续回合边界的控制器。
+    const first = new ConversationEventWindowController(rpcMock({
+      hydrate: async () => cachedResponse,
+      reconnect,
+      subscribeLive: async (handler) => {
+        push = handler;
+        return () => undefined;
+      },
+    }));
+    await first.hydrate(SESSION_ID);
+    // controller is the active owner after either restoring the cache or receiving a pushed revision gap.
+    // controller 是恢复缓存或收到推送修订缺口后负责恢复的活动归属方。
+    const controller = recovery === "cached window"
+      ? new ConversationEventWindowController(rpcMock({ reconnect }))
+      : first;
+    if (recovery === "cached window") {
+      controller.restoreCachedSnapshot(first.snapshot());
+      first.dispose();
+      await controller.resumeCachedWindow();
+    } else {
+      requireAssignedCallback(push, "live subscription")(liveDelta([nextInput], { revision: 3 }));
+      await vi.waitFor(() => expect(controller.snapshot().memory_revision).toBe(3));
+    }
+    expect(reconnect).toHaveBeenCalledWith(controller.snapshot().owner, reasoning.seq, 1, SERVICE_EPOCH, undefined);
+    expect(controller.snapshot().events.find((event) => event.seq === reasoning.seq)).toEqual(completed);
+    controller.dispose();
+  });
+
+  it("reloads the authoritative window when reconnect exposes a stale row at the same memory revision", async () => {
+    // reasoning is the stale event kept even though the client has confirmed the latest memory revision.
+    // reasoning 是客户端已确认最新内存修订后仍保留的过期事件。
+    const reasoning = summary(1, { kind: "assistant_reasoning", api_call_id: 2, text: "thinking", status: "streaming" });
+    // completed is the authoritative replacement that contradicts the client's confirmed revision.
+    // completed 是与客户端已确认修订发生冲突的权威替换事件。
+    const completed = summary(
+      reasoning.seq, { kind: "assistant_reasoning", api_call_id: 2, text: "thinking", status: "completed" }, 20, 2,
+    );
+    // boundary makes the latest sequence newer than the stale stream.
+    // boundary 使最新序号晚于过期流。
+    const boundary = summary(2, { kind: "turn_boundary", reason: "completed", outcome: "completed", purpose: "business" });
+    // frontier fixes both snapshots to the same confirmed document revision.
+    // frontier 令两个快照使用相同的已确认文档修订。
+    const frontier = { memory_revision: 3, durable_revision: 3 };
+    // hydrate serves the fresh authoritative snapshot after reconnect validation detects the conflict.
+    // hydrate 在重连校验发现冲突后返回新的权威快照。
+    const hydrate = vi.fn(async () => response([completed, boundary], frontier));
+    // controller resumes a warm window whose same-revision history still needs repair.
+    // controller 恢复同修订历史仍需修复的缓存窗口。
+    const controller = new ConversationEventWindowController(rpcMock({
+      hydrate,
+      reconnect: async () => reconnectResponse([completed, boundary], { ...frontier, base_memory_revision: 3 }),
+    }));
+    controller.hydrateSnapshot(response([reasoning, boundary], frontier));
+
+    await controller.resumeCachedWindow();
+
+    expect(hydrate).toHaveBeenCalledOnce();
+    expect(controller.snapshot().events.find((event) => event.seq === reasoning.seq)).toEqual(completed);
+    controller.dispose();
+  });
+
   it("installs the live subscription again when recovering after it failed during hydration", async () => {
     // The first subscription fails because the event channel is down; recovery must not stay push-blind.
     // 首次订阅因事件通道中断而失败；恢复后不能一直收不到推送。

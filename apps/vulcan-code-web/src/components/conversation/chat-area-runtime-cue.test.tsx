@@ -8,7 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
 import { browserFallbackSnapshot } from "@/service/browser-fallback-workbench";
 import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
-import type { ConversationEventSummary } from "@/service/conversation-event-window-store";
+import type { ConversationEventBody, ConversationEventSummary } from "@/service/conversation-event-window-store";
+import { THINKING_OVERLAY_EXIT_MS } from "@/components/conversation/chat-area/visual-state";
 import type { ChatAreaProps } from "@/components/conversation/chat-area/types";
 import type { TransientReasoningStatus } from "@/types";
 
@@ -35,6 +36,10 @@ const eventWindow: ConversationEventWindowControllerSnapshot = {
   open_turn_start_seq: null,
   session_config: null,
 };
+
+// initialEvents restores the default transcript after each synthetic lifecycle test.
+// initialEvents 在每个合成生命周期测试后恢复默认转录。
+const initialEvents = eventWindow.events;
 
 vi.mock("@/state/conversation-event-window-react", () => ({
   useSelectedConversationEventWindowSnapshot: () => eventWindow,
@@ -90,6 +95,8 @@ describe("session runtime cue placement", () => {
   afterEach(async () => {
     await React.act(async () => root.unmount());
     host.remove();
+    eventWindow.events = initialEvents;
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -121,6 +128,50 @@ describe("session runtime cue placement", () => {
     await render("toolCalling");
     expect(host.querySelector("[data-testid=transcript]")!.childElementCount).toBe(1);
     expect(host.querySelector("[data-runtime-cue]")).toBeNull();
+  });
+
+  it.each([
+    {
+      kind: "api_stats", api_call_id: 2, purpose: "main_generation", provider: "test", model: "test",
+      usage: {}, status: "completed", continuation_eligibility: "forbidden", timing: {},
+    },
+    { kind: "turn_boundary", reason: "completed", outcome: "completed", purpose: "business" },
+    { kind: "api_started", api_call_id: 3, purpose: "main_generation", request: { provider: "test", model: "test" } },
+  ] satisfies ConversationEventBody[])("closes stale reasoning after $kind and stays closed on remount", async (boundary) => {
+    vi.useFakeTimers();
+    vi.stubGlobal("ResizeObserver", class {
+      // Accepts an observed element without delivering geometry notifications.
+      // 接收被观察的元素，不发送几何变化通知。
+      observe() {}
+      // Releases the synthetic observer without retaining any elements.
+      // 释放模拟观察器，不保留任何元素。
+      disconnect() {}
+    });
+    // reasoning is the live row whose terminal revision is deliberately omitted.
+    // reasoning 是刻意省略终态修订的实时事件。
+    const reasoning: ConversationEventSummary = {
+      seq: 2, turn_id: 1, event_revision: 1, created_at_ms: 2, updated_at_ms: 2, visibility: "provider",
+      event: { kind: "assistant_reasoning", api_call_id: 2, status: "streaming", text: "Reasoning in flight" },
+    };
+    eventWindow.events = [...initialEvents, reasoning];
+    await render("requesting");
+    expect(host.querySelector(".vk-think-float")).not.toBeNull();
+
+    eventWindow.events = [...eventWindow.events, {
+      seq: 3, turn_id: reasoning.turn_id, event_revision: 1, created_at_ms: 3, updated_at_ms: 3,
+      visibility: "provider", event: { kind: "assistant_text", api_call_id: 2, status: "completed", text: "Answer" },
+    }, {
+      seq: 4, turn_id: reasoning.turn_id, event_revision: 1, created_at_ms: 4, updated_at_ms: 4,
+      visibility: boundary.kind === "api_started" ? "host_only" : "ui_only", event: boundary,
+    }];
+    await render("requesting");
+    await React.act(async () => vi.advanceTimersByTimeAsync(THINKING_OVERLAY_EXIT_MS * 2));
+    expect(host.querySelector(".vk-think-float")).toBeNull();
+
+    await React.act(async () => root.unmount());
+    root = createRoot(host);
+    await render("requesting");
+    expect(host.querySelector(".vk-think-float")).toBeNull();
   });
 
   it("keeps the ticking elapsed time out of the live region", async () => {

@@ -51,8 +51,9 @@ import { activeThinkingOverlayBlock } from "@/components/conversation/thinking-d
 import { ConversationFindBar } from "@/components/conversation/conversation-find-bar";
 import { selectConversationContinueCandidateV1 } from "@/service/conversation-continuation-selector-v1";
 import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
-import type {
-  ConversationEventSummary,
+import {
+  isTerminalApiStatsStatus,
+  type ConversationEventSummary,
 } from "@/service/conversation-event-window-store";
 import {
   useSelectedConversationEventWindowCommands,
@@ -390,8 +391,8 @@ export function ChatArea(props: ChatAreaProps) {
       props.onFirstSubmissionReconciled?.(selectedConversation.id, pending.clientSubmissionId);
     }
   }, [eventWindowOwnerReady, pendingSubmissionVisible, props.onFirstSubmissionReconciled, props.selectedDraftConversation?.pendingSubmission, selectedConversation]);
-  // streamingReasoningBlock is derived only from the latest canonical V1 streaming reasoning event.
-  // streamingReasoningBlock 仅从最新 canonical V1 流式思考事件派生。
+  // streamingReasoningBlock uses the canonical V1 reasoning row and its request lifecycle.
+  // streamingReasoningBlock 使用 canonical V1 思考事件及其请求生命周期。
   const streamingReasoningBlock = React.useMemo(
     () => latestStreamingReasoningBlock(authoritativeEvents, t),
     [authoritativeEvents, t],
@@ -772,17 +773,39 @@ function eventWindowHasVisibleTranscript(events: readonly ConversationEventSumma
  *
  * @param events canonical selected-session events.
  *               当前选中会话的 canonical 事件。
+ * @param t Resolves the popup's display labels.
+ *          解析弹窗展示文案。
  * @returns one presentation-only block, or null when no reasoning stream is active.
  *          一条仅用于展示的块；没有活动思考流时返回 null。 */
 function latestStreamingReasoningBlock(
   events: readonly ConversationEventSummary[],
   t: Translate,
 ): ConversationBlock | null {
+  // A request or turn can close before the same-seq terminal reasoning update reaches this window.
+  // 请求或回合可能已经结束，而同序号的思考终态更新尚未到达事件窗口。
+  const terminalApiCallIds = new Set<number>();
+  // Closed turn identities cover endings that do not include terminal stats for every request.
+  // 已结束回合的身份覆盖未为每个请求提供终态统计的结束路径。
+  const closedTurnIds = new Set<number>();
   for (let index = events.length - 1; index >= 0; index -= 1) {
     // summary is inspected in reverse only to select the latest fact; no display order is changed.
     // summary 仅为选择最新事实而逆向检查；不会改变任何显示顺序。
     const summary = events[index];
-    if (summary.event.kind !== "assistant_reasoning" || summary.event.status !== "streaming") {
+    // The newest physical request supersedes older requests, even before it starts reasoning.
+    // 最新物理请求取代更早的请求，即使它还未开始输出思考。
+    if (summary.event.kind === "api_started") return null;
+    if (summary.event.kind === "api_stats" && isTerminalApiStatsStatus(summary.event.status)) {
+      terminalApiCallIds.add(summary.event.api_call_id);
+    }
+    if (summary.event.kind === "turn_boundary" && summary.turn_id !== null) {
+      closedTurnIds.add(summary.turn_id);
+    }
+    if (
+      summary.event.kind !== "assistant_reasoning"
+      || summary.event.status !== "streaming"
+      || terminalApiCallIds.has(summary.event.api_call_id)
+      || (summary.turn_id !== null && closedTurnIds.has(summary.turn_id))
+    ) {
       continue;
     }
     return {

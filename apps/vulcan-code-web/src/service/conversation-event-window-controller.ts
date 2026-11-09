@@ -126,11 +126,11 @@ export class ConversationEventWindowController {
   /** Single in-flight hydration that atomically rebases an edited generation.
    * 用于原子重建编辑后代际的唯一进行中 hydration。 */
   private generationRebasePromise: Promise<void> | null = null;
-  /** Ordered same-generation pushes held while one revision-gap reconnect is in flight.
-   * 一次修订缺口重连期间暂存的同代次有序推送。 */
+  /** Ordered same-generation pushes held while one reconnect is in flight.
+   * 一次重连期间暂存的同代次有序推送。 */
   private pendingRevisionDeltas: ConversationEventLiveDeltaV1[] = [];
-  /** Single in-flight reconnect that repairs a missing revision edge.
-   * 用于修复缺失修订边的唯一进行中重连。 */
+  /** Single in-flight reconnect shared by transport recovery and revision-gap repair.
+   * 传输恢复与修订缺口修复共用的唯一进行中重连。 */
   private revisionReconnectPromise: Promise<void> | null = null;
   /** New service-process epoch observed before its durable hydration commits.
    * 可靠 hydration 提交前观察到的新服务进程代次。 */
@@ -369,27 +369,13 @@ export class ConversationEventWindowController {
   }
 
   /** Requests and atomically applies duplicate-safe reconnect events.
-   * 请求并原子应用可安全去重的重连事件。 */
+   * 请求并原子应用可安全去重的重连事件。
+   * @param options Options for a newly started reconnect request.
+   *                用于新启动重连请求的选项。
+   * @returns A promise that resolves once the shared recovery task completes.
+   *          共享恢复任务完成后兑现的 Promise。 */
   async reconnect(options?: ServiceRequestOptions): Promise<void> {
-    const owner = this.requireOwner();
-    const frontier = this.store.getFrontier();
-    if (frontier === null) throw new Error("conversation event window frontier is not hydrated");
-    const response = await this.rpc.reconnect(
-      owner,
-      this.store.getLatestSeq(),
-      frontier.memory_revision,
-      frontier.service_epoch,
-      options,
-    );
-    if (response.disposition.kind === "rehydrate_required") {
-      await this.recoverConnection(true, options);
-      return;
-    }
-    this.store.applyReconnect(response);
-    this.commitAnswerMode(response.answer_mode);
-    this.commitAccess(response.access);
-    this.settleToolRequestProgress(response.events, response.session_id);
-    this.publishSnapshotIfChanged();
+    await this.startRevisionReconnectTask(options);
   }
 
   /** Recovers one transport interruption according to the verified service-instance boundary.
@@ -688,11 +674,17 @@ export class ConversationEventWindowController {
     this.publishSnapshotIfChanged();
   }
 
-  /** Starts one single-flight reconnect after a pushed revision edge is missing.
-   * 在推送修订边缺失后启动一次单飞重连。 */
-  private startRevisionReconnectTask(): void {
-    if (this.revisionReconnectPromise !== null) return;
-    const task = this.runRevisionReconnect();
+  /** Starts or joins a reconnect so pushed events cannot advance its baseline during the request.
+   * 启动或加入重连，使实时推送无法在请求期间推进其基线。
+   * @param options Request options for a newly started reconnect.
+   *                用于新启动重连的请求选项。
+   * @returns The shared recovery task, which rejects if recovery fails.
+   *          共享恢复任务，恢复失败时拒绝。 */
+  private startRevisionReconnectTask(options?: ServiceRequestOptions): Promise<void> {
+    if (this.revisionReconnectPromise !== null) return this.revisionReconnectPromise;
+    // task owns incoming pushes until it applies the authoritative range and drains the queue.
+    // task 在应用权威恢复区间并处理完队列前持有收到的推送。
+    const task = this.runRevisionReconnect(options);
     this.revisionReconnectPromise = task;
     void task.then(
       () => {
@@ -706,24 +698,30 @@ export class ConversationEventWindowController {
         console.error("[conversation-event-window] revision reconnect failed", error);
       },
     );
+    return task;
   }
 
   /** Reconnects from the exact memory frontier, then replays pushes received in flight.
-   * 从精确内存前沿重连，随后重放进行中收到的推送。 */
-  private async runRevisionReconnect(): Promise<void> {
+   * 从精确内存前沿重连，随后重放进行中收到的推送。
+   * @param options Request options shared by recovery and authoritative reload.
+   *                增量恢复与权威重载共用的请求选项。
+   * @returns A promise that resolves after reconciliation finishes or its owner is released.
+   *          对账结束或归属方释放后兑现的 Promise。 */
+  private async runRevisionReconnect(options?: ServiceRequestOptions): Promise<void> {
     while (true) {
       const owner = this.requireOwner();
       const frontier = this.store.getFrontier();
       if (frontier === null) throw new Error("conversation event window frontier is not hydrated");
       const response: ConversationEventReconnectV1Response = await this.rpc.reconnect(
         owner,
-        this.store.getLatestSeq(),
+        this.store.getReconnectSeq(),
         frontier.memory_revision,
         frontier.service_epoch,
-        undefined,
+        options,
       );
       const currentOwner = this.store.getOwner();
       if (
+        this.disposed ||
         currentOwner === null ||
         currentOwner.session_id !== owner.session_id ||
         currentOwner.window_generation !== owner.window_generation
@@ -732,7 +730,7 @@ export class ConversationEventWindowController {
       }
       if (response.disposition.kind === "rehydrate_required") {
         this.pendingRevisionDeltas = [];
-        await this.recoverConnection(true);
+        await this.recoverConnection(true, options);
         return;
       }
       try {
@@ -745,7 +743,7 @@ export class ConversationEventWindowController {
         if (error instanceof ConversationEventServiceEpochMismatchError) throw error;
         this.pendingRevisionDeltas = [];
         console.warn("[conversation-event-window] reconnect validation failed; rehydrating", error);
-        await this.recoverConnection(true);
+        await this.recoverConnection(true, options);
         return;
       }
       this.settleToolRequestProgress(response.events, response.session_id);
@@ -776,7 +774,7 @@ export class ConversationEventWindowController {
             // 重放结构上被拒绝的 patch 无法从当前本地基线继续推进。
             this.pendingRevisionDeltas = [];
             console.warn("[conversation-event-window] pending delta validation failed; rehydrating", error);
-            await this.recoverConnection(true);
+            await this.recoverConnection(true, options);
             return;
           }
           this.pendingRevisionDeltas.push(...pending.slice(index));
