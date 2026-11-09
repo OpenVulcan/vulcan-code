@@ -25,9 +25,14 @@
   `root_input.unsettled_execution_owner` 校验、关闭父回合或清除子任务义务来接纳新根输入。
 - 已终结子任务和其他历史回合的子任务不单独阻塞当前提交；没有子任务义务的空闲遗留回合继续使用原子收口准入。
 - 显式 Continue 不创建新根，仍按原业务终态判断资格；子任务义务不能单独使其返回 busy，已有队列和活动物理请求的排他检查保持不变。
+- 插队不是 Continue。开放回合处于 `Stopped`、`MainOnly` 或 `MainAndSubagents` 时，V1 原子晋升拒绝新的插队，
+  保留原排队消息、附件租约和动作身份；服务返回先继续会话的提示，不将消息显示为已成功插入。
+  已经提交的插队回执仍可幂等重放，恢复运行后同一排队身份可正常晋升。等待者通知仅在可靠晋升后发送。
 
 本节以 `conversation_submission/queue.rs` 为实现权威，回归见 `tests/conversation_submission_queue_tests.rs`
 的 `idle_parent_submission_respects_durable_child_ownership`；不改变持久字段或自动恢复许可。
+停止插队边界由 `document_tests/input.rs::guided_queued_input_rejects_stopped_turn_without_losing_message`
+和 `webui_prompt_lifecycle/pending_dispatch.rs::tests::stopped_pending_insertion_preserves_queued_input` 约束。
 
 ## 同回合答疑与待发送投影
 
