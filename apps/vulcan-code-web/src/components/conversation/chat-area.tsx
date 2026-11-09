@@ -12,7 +12,6 @@ import {
   ConversationGenerationDialogV1,
   type ConversationGenerationDialogActionV1,
 } from "@/components/conversation/conversation-generation-dialog-v1";
-import { StreamingThinkingOverlay } from "@/components/conversation/conversation-live-reasoning";
 import {
   conversationIsRunning,
   conversationRuntimeCue,
@@ -28,11 +27,9 @@ import type { ChatAreaProps } from "@/components/conversation/chat-area/types";
 import { useChatAreaPlanActions } from "@/components/conversation/chat-area/plan-actions";
 import { useComposerRuntimeStatus } from "@/components/conversation/chat-area/composer-inputs";
 import { useChatAreaEventWindowFacts } from "@/components/conversation/chat-area/event-window-facts";
+import { SelectedConversationThinkingOverlay } from "@/components/conversation/chat-area/selected-thinking-overlay";
 import { SelectedConversationTranscript } from "@/components/conversation/chat-area/selected-transcript";
-import {
-  useConversationVisualTransitions,
-  useThinkingDisplayMode,
-} from "@/components/conversation/chat-area/visual-state";
+import { useThinkingDisplayMode } from "@/components/conversation/chat-area/visual-state";
 import { useConversationSurfaceLayoutMemory } from "@/components/conversation/chat-area/surface-layout-memory";
 import { useConversationScrollController } from "@/components/conversation/chat-area/conversation-scroll-controller";
 import { ConversationContinueControl } from "@/components/conversation/conversation-continue-control";
@@ -85,8 +82,6 @@ export function ChatArea(props: ChatAreaProps) {
   const eventWindowFacts = useChatAreaEventWindowFacts({
     sessionId: selectedConversation?.id,
     pendingClientSubmissionId: props.selectedDraftConversation?.pendingSubmission?.clientSubmissionId ?? null,
-    thinkingDisplayMode,
-    t,
   });
   const { sessionTodolist, continuationCandidate } = eventWindowFacts;
   // eventWindowCommands stays bound to the exact owner generation represented by the selected store.
@@ -352,15 +347,9 @@ export function ChatArea(props: ChatAreaProps) {
       props.onFirstSubmissionReconciled?.(selectedConversation.id, pending.clientSubmissionId);
     }
   }, [eventWindowOwnerReady, pendingSubmissionVisible, props.onFirstSubmissionReconciled, props.selectedDraftConversation?.pendingSubmission, selectedConversation]);
-  // Visual transitions retain empty, popup, and first-submission surfaces within the current conversation scope.
-  // 视觉过渡在当前会话作用域内保留空状态、思考浮层与首条提交界面。
-  const {
-    visibleThinkingBlock: visibleStreamingThinkingOverlayBlock,
-    thinkingOverlayLeaving: streamingThinkingOverlayLeaving,
-  } = useConversationVisualTransitions({
-    surfaceKey: visualSurfaceKey,
-    displayedThinkingBlock: eventWindowFacts.streamingReasoningBlock,
-  });
+  // Track only the visible overlay's owner so the cue stays hidden through exit without subscribing to reasoning text.
+  // 只记录可见浮层的归属，让提示在退场期间继续隐藏，同时避免订阅思考正文。
+  const [visibleThinkingOverlaySessionId, setVisibleThinkingOverlaySessionId] = React.useState<string | null>(null);
   // reasoningDisplaySignature is a stable scroll-restoration marker for V1 reasoning filtering.
   // reasoningDisplaySignature 是 V1 思考过滤使用的稳定滚动恢复标记。
   const reasoningDisplaySignature = `${thinkingDisplayMode}:${eventWindowFacts.owner?.window_generation ?? "none"}`;
@@ -371,7 +360,7 @@ export function ChatArea(props: ChatAreaProps) {
   // suppressSubagentOnlyMainCue 将纯子代理工作保留在底部栏，不显示为主窗口请求提示。
   const suppressSubagentOnlyMainCue = hasRunningSubagents
     && normalizedSessionRunPhase(surfaceConversation?.runPhase) === "toolrunning";
-  const runtimeCue = visibleStreamingThinkingOverlayBlock || suppressSubagentOnlyMainCue
+  const runtimeCue = visibleThinkingOverlaySessionId === selectedConversation?.id || suppressSubagentOnlyMainCue
     ? null
     : conversationRuntimeCue(surfaceConversation, t);
   // composerRuntimeStatus floats over the composer's top-left edge instead of entering the transcript, so its
@@ -647,11 +636,11 @@ export function ChatArea(props: ChatAreaProps) {
           scrollRef={workspaceRef}
         />
       ) : null}
-      {visibleStreamingThinkingOverlayBlock && activeSurfaceConversationId ? (
-        <StreamingThinkingOverlay
-          block={visibleStreamingThinkingOverlayBlock}
-          conversationId={activeSurfaceConversationId}
-          leaving={streamingThinkingOverlayLeaving}
+      {selectedConversation ? (
+        <SelectedConversationThinkingOverlay
+          conversationId={selectedConversation.id}
+          mode={thinkingDisplayMode}
+          onVisibilityChange={setVisibleThinkingOverlaySessionId}
         />
       ) : null}
       {composerDock}

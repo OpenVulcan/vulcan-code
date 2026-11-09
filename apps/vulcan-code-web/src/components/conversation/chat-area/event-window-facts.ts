@@ -1,10 +1,7 @@
 import React from "react";
-import type { ConversationBlock } from "@/components/conversation/conversation-model";
-import { activeThinkingOverlayBlock, type ThinkingDisplayMode } from "@/components/conversation/thinking-display";
-import type { Translate } from "@/i18n";
 import { selectConversationContinueCandidateV1 } from "@/service/conversation-continuation-selector-v1";
 import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
-import { isTerminalApiStatsStatus, type ConversationEventSummary } from "@/service/conversation-event-window-store";
+import type { ConversationEventSummary } from "@/service/conversation-event-window-store";
 import { selectConversationSessionTodolistV1 } from "@/service/conversation-session-tools-v1";
 import { conversationSelectionEqual, useSelectedConversationEventWindowSelector } from "@/state/conversation-event-window-react";
 
@@ -17,29 +14,20 @@ export interface ChatAreaEventWindowFactsOptions {
   /** Browser identity of the optimistic first prompt still awaiting its canonical record.
    * 仍在等待规范记录的乐观首条提示词的浏览器身份。 */
   pendingClientSubmissionId: string | null;
-  /** Effective reasoning display mode; only the popup mode reads the live reasoning row.
-   * 生效的思考展示模式；只有弹窗模式读取实时思考行。 */
-  thinkingDisplayMode: ThinkingDisplayMode;
-  /** Resolves the popup's display labels.
-   * 解析弹窗展示文案。 */
-  t: Translate;
 }
 
 /** Reads the selected event-window facts ChatArea renders, each through its own selector.
  * 通过各自的选择器读取 ChatArea 渲染所需的选中事件窗口事实。
  *
- * ChatArea never subscribes to the whole snapshot: a reply streams one publication per frame, and every fact below
- * keeps its value while text is only appended, so the chat surface, composer and overlays stay idle and only the
- * transcript re-renders. The popup reasoning block is the one fact that follows each reasoning delta.
- * ChatArea 绝不订阅整个快照：回复流式输出时每帧发布一次，而下列事实在只追加文本时保持不变，因此会话界面、输入区与浮层
- * 保持静止，只有转录重新渲染。弹窗思考块是唯一随每个思考增量变化的事实。
+ * These facts keep their values while text is only appended. The transcript and thinking overlay own their text subscriptions.
+ * 只追加文本时，下列事实保持不变。转录与思考浮层各自订阅正文。
  *
- * @param options selected session, pending submission, display mode and translator.
- *                选中会话、待对账提交、展示模式与翻译函数。
- * @returns owner facts, transcript structure, live popup block and composer inputs.
- *          归属事实、转录结构、实时弹窗块与输入区输入。 */
+ * @param options selected session and pending submission.
+ *                选中会话与待对账提交。
+ * @returns owner facts, transcript structure and composer inputs.
+ *          归属事实、转录结构与输入区输入。 */
 export function useChatAreaEventWindowFacts(options: ChatAreaEventWindowFactsOptions) {
-  const { sessionId, pendingClientSubmissionId, thinkingDisplayMode, t } = options;
+  const { sessionId, pendingClientSubmissionId } = options;
   const owner = useSelectedConversationEventWindowSelector(selectOwner, conversationSelectionEqual);
   // ownerReady permits rendering only when the selected durable session owns the V1 snapshot.
   // ownerReady 仅在选中的持久会话拥有 V1 快照时允许渲染。
@@ -51,13 +39,6 @@ export function useChatAreaEventWindowFacts(options: ChatAreaEventWindowFactsOpt
       && eventWindowHasAuthoritativeSubmissionCorrelation(snapshot.events, pendingClientSubmissionId),
     [pendingClientSubmissionId],
   ));
-  const streamingReasoningBlock = useSelectedConversationEventWindowSelector(React.useCallback(
-    (snapshot: ConversationEventWindowControllerSnapshot) => activeThinkingOverlayBlock(
-      thinkingDisplayMode,
-      latestStreamingReasoningBlock(snapshot, t),
-    ),
-    [t, thinkingDisplayMode],
-  ), sameBlockRevision);
   // sessionTodolist is projected from the same durable V1 generation as the visible transcript.
   // sessionTodolist 从与可见转录相同的可靠 V1 代次投影。
   const sessionTodolist = useSelectedConversationEventWindowSelector(React.useCallback(
@@ -78,7 +59,6 @@ export function useChatAreaEventWindowFacts(options: ChatAreaEventWindowFactsOpt
     streamSignature,
     hasVisibleTranscript: ownerReady && hasVisibleTranscript,
     submissionCorrelated: ownerReady && submissionCorrelated,
-    streamingReasoningBlock: ownerReady ? streamingReasoningBlock : null,
     sessionTodolist,
     continuationCandidate,
   };
@@ -92,12 +72,6 @@ function selectOwner(snapshot: ConversationEventWindowControllerSnapshot) {
 /** Reports whether the snapshot holds visible transcript content. 判断快照是否包含可见转录内容。 */
 function selectHasVisibleTranscript(snapshot: ConversationEventWindowControllerSnapshot): boolean {
   return eventWindowHasVisibleTranscript(snapshot.events);
-}
-
-/** Treats two popup blocks as the same while they show the same event revision of the same owner window.
- * 两个弹窗块展示同一归属窗口的同一事件修订时视为相同。 */
-function sameBlockRevision(left: ConversationBlock | null, right: ConversationBlock | null): boolean {
-  return left?.id === right?.id;
 }
 
 /** Reports whether one V1 UserInput already owns the browser submission identity.
@@ -144,64 +118,6 @@ function eventWindowHasVisibleTranscript(events: readonly ConversationEventSumma
         return false;
     }
   });
-}
-
-/** Projects the latest actively streaming V1 reasoning event into the established popup shell.
- * 将最新活动流式 V1 思考事件投影到既有浮层外壳。
- *
- * The block id carries the owner session and window generation: seq and revision restart in every session and after
- * an edit regenerates the window, so they alone would let a block from the previous owner pass as unchanged.
- * 块 id 带有归属会话与窗口代次：seq 与修订号在每个会话中以及编辑重生成窗口后都会重新开始，仅凭它们会让上一归属的块
- * 被当成未变化。
- *
- * @param snapshot canonical selected-session window.
- *                 当前选中会话的 canonical 窗口。
- * @param t Resolves the popup's display labels.
- *          解析弹窗展示文案。
- * @returns one presentation-only block, or null when no reasoning stream is active.
- *          一条仅用于展示的块；没有活动思考流时返回 null。 */
-function latestStreamingReasoningBlock(
-  snapshot: ConversationEventWindowControllerSnapshot,
-  t: Translate,
-): ConversationBlock | null {
-  const { events, owner } = snapshot;
-  // A request or turn can close before the same-seq terminal reasoning update reaches this window.
-  // 请求或回合可能已经结束，而同序号的思考终态更新尚未到达事件窗口。
-  const terminalApiCallIds = new Set<number>();
-  // Closed turn identities cover endings that do not include terminal stats for every request.
-  // 已结束回合的身份覆盖未为每个请求提供终态统计的结束路径。
-  const closedTurnIds = new Set<number>();
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    // summary is inspected in reverse only to select the latest fact; no display order is changed.
-    // summary 仅为选择最新事实而逆向检查；不会改变任何显示顺序。
-    const summary = events[index];
-    // The newest physical request supersedes older requests, even before it starts reasoning.
-    // 最新物理请求取代更早的请求，即使它还未开始输出思考。
-    if (summary.event.kind === "api_started") return null;
-    if (summary.event.kind === "api_stats" && isTerminalApiStatsStatus(summary.event.status)) {
-      terminalApiCallIds.add(summary.event.api_call_id);
-    }
-    if (summary.event.kind === "turn_boundary" && summary.turn_id !== null) {
-      closedTurnIds.add(summary.turn_id);
-    }
-    if (
-      summary.event.kind !== "assistant_reasoning"
-      || summary.event.status !== "streaming"
-      || terminalApiCallIds.has(summary.event.api_call_id)
-      || (summary.turn_id !== null && closedTurnIds.has(summary.turn_id))
-    ) {
-      continue;
-    }
-    return {
-      id: `v1-reasoning:${owner?.session_id ?? "none"}:${owner?.window_generation ?? "none"}:${summary.seq}:${summary.event_revision}`,
-      kind: "thinking",
-      title: t("conversation.block.thinking"),
-      summary: t("conversation.block.thinkingActive"),
-      body: summary.event.text,
-      status: summary.event.status,
-    };
-  }
-  return null;
 }
 
 /** Builds a structure-only V1 stream signature without reading cumulative event bodies.

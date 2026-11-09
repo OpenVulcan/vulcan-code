@@ -214,7 +214,7 @@ describe("session runtime cue placement", () => {
     expect(host.querySelector("[data-runtime-cue]")).toBeNull();
   });
 
-  it("commits each reasoning revision once and retains the final text for the overlay exit", async () => {
+  it("streams reasoning without rendering ChatArea and restores the runtime cue after exit", async () => {
     vi.useFakeTimers();
     stubPopupResizeObserver();
     // reasoning keeps one canonical event identity as the stream appends text.
@@ -229,12 +229,17 @@ describe("session runtime cue placement", () => {
     // props keeps the workbench snapshot stable while only the reasoning event changes.
     // props 让工作台快照在只有思考事件变化时保持稳定。
     const props = chatAreaProps("requesting");
-    eventWindow = { ...eventWindow, events: [...initialEvents, reasoning] };
     await render(props, commits);
+    expect(host.querySelector("[data-runtime-cue]")).not.toBeNull();
+    await stream([...initialEvents, reasoning]);
+    expect(host.querySelector("[data-runtime-cue]")).toBeNull();
 
     // liveBody stays mounted throughout streaming and exit to preserve the reader's viewport.
     // liveBody 在流式更新和退场期间保持挂载，以保留阅读者的视区。
     const liveBody = host.querySelector(".vk-think-float-content");
+    // The unmemoized dock test double renders every time ChatArea creates the dock element.
+    // 未使用缓存的停靠层测试替身会在 ChatArea 每次创建该元素时渲染。
+    const dockBefore = dockRenders.length;
     // finalText and revision advance with every cumulative reasoning update.
     // finalText 与 revision 随每次累积思考更新递进。
     let finalText = "first";
@@ -248,6 +253,7 @@ describe("session runtime cue placement", () => {
         event: { kind: "assistant_reasoning", api_call_id: 2, status: "streaming", text: finalText },
       }]);
       expect(commits).toHaveBeenCalledTimes(1);
+      expect(dockRenders).toHaveLength(dockBefore);
       expect(liveBody?.textContent).toBe(finalText);
     }
 
@@ -257,8 +263,12 @@ describe("session runtime cue placement", () => {
     }]);
     expect(host.querySelector(".vk-think-float-content")).toBe(liveBody);
     expect(liveBody?.textContent).toBe(finalText);
-    await React.act(async () => vi.advanceTimersByTimeAsync(THINKING_OVERLAY_EXIT_MS * 2));
+    await React.act(async () => vi.advanceTimersByTimeAsync(THINKING_OVERLAY_EXIT_MS));
+    expect(host.querySelector(".vk-think-float[data-leaving]")).not.toBeNull();
+    expect(host.querySelector("[data-runtime-cue]")).toBeNull();
+    await React.act(async () => vi.advanceTimersByTimeAsync(THINKING_OVERLAY_EXIT_MS));
     expect(host.querySelector(".vk-think-float")).toBeNull();
+    expect(host.querySelector("[data-runtime-cue]")).not.toBeNull();
   });
 
   it("re-renders only the transcript while reply text streams", async () => {

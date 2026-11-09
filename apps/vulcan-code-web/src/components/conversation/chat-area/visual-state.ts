@@ -30,8 +30,8 @@ export interface ThinkingDisplayModeState {
   selectMode: (mode: ThinkingDisplayMode) => void;
 }
 
-// UseConversationVisualTransitionsOptions defines one surface's empty and thinking-overlay transition inputs.
-// UseConversationVisualTransitionsOptions 定义单个界面的空状态与思考浮层过渡输入。
+// UseConversationVisualTransitionsOptions defines the thinking overlay's inputs and conversation scope.
+// UseConversationVisualTransitionsOptions 定义思考浮层的输入及会话作用域。
 export interface UseConversationVisualTransitionsOptions {
   // Stable conversation or draft surface key.
   // 稳定的会话或草稿界面键。
@@ -41,8 +41,8 @@ export interface UseConversationVisualTransitionsOptions {
   displayedThinkingBlock: ConversationBlock | null;
 }
 
-// ConversationVisualTransitionsState exposes retained visual state for ChatArea rendering.
-// ConversationVisualTransitionsState 暴露 ChatArea 渲染使用的保留视觉状态。
+// ConversationVisualTransitionsState exposes retained visual state to the thinking overlay.
+// ConversationVisualTransitionsState 向思考浮层提供退场期间保留的视觉状态。
 export interface ConversationVisualTransitionsState {
   // Thinking block displayed live or retained during exit.
   // 实时展示或退场期间保留的思考块。
