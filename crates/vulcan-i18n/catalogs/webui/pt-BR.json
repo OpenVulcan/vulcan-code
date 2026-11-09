@@ -6082,6 +6082,7 @@
   "answerComponents.severity.medium": "Média",
   "answerComponents.severity.low": "Baixa",
   "answerComponents.severity.info": "Info",
+  "answerComponents.severity.ok": "OK",
   "answerComponents.fileCount": "{count} arquivos",
   "answerComponents.column.severity": "Gravidade",
   "answerComponents.column.finding": "Achado",

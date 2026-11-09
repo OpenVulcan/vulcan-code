@@ -6082,6 +6082,7 @@
   "answerComponents.severity.medium": "Средняя",
   "answerComponents.severity.low": "Низкая",
   "answerComponents.severity.info": "Инфо",
+  "answerComponents.severity.ok": "Норма",
   "answerComponents.fileCount": "Файлов: {count}",
   "answerComponents.column.severity": "Серьёзность",
   "answerComponents.column.finding": "Проблема",

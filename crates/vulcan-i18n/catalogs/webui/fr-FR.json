@@ -6082,6 +6082,7 @@
   "answerComponents.severity.medium": "Moyenne",
   "answerComponents.severity.low": "Faible",
   "answerComponents.severity.info": "Info",
+  "answerComponents.severity.ok": "OK",
   "answerComponents.fileCount": "{count} fichiers",
   "answerComponents.column.severity": "Gravité",
   "answerComponents.column.finding": "Constat",

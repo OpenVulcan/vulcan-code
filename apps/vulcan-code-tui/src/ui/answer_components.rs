@@ -755,8 +755,9 @@ fn kv(lines: &[&str]) -> Option<String> {
 
 /// `severity | finding | location` rows. Models sometimes add a fourth note cell as in `ui-checklist`; it
 /// is read only after the documented split, including the lenient one, has failed, as in the WebUI.
+/// Models also mark a resolved or healthy item with the severity `ok`.
 /// `严重度 | 问题 | 位置` 行。模型有时仿照 `ui-checklist` 追加第四格说明；仅当包括宽松拆分在内的
-/// 文档写法都失败后才按四格读取，与 WebUI 一致。
+/// 文档写法都失败后才按四格读取，与 WebUI 一致。模型还会以严重度 `ok` 标记已解决或正常的项。
 fn findings(lines: &[&str]) -> Option<String> {
     let rows = data_rows(lines);
     if rows.is_empty() || rows.len() > ANSWER_COMPONENT_MAX_ROWS {
@@ -770,6 +771,7 @@ fn findings(lines: &[&str]) -> Option<String> {
                 "medium" => tr!("answerComponents.severity.medium"),
                 "low" => tr!("answerComponents.severity.low"),
                 "info" => tr!("answerComponents.severity.info"),
+                "ok" => tr!("answerComponents.severity.ok"),
                 _ => return None,
             };
             let note = cell

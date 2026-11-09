@@ -194,6 +194,14 @@ describe("parseAnswerComponent", () => {
     expect(parse("ui-findings", "high | a | b | c | d")).toBeNull();
   });
 
+  it("accepts the ok severity models write for resolved items, with a trailing empty pipe", () => {
+    expect(parse("ui-findings", "high | cursor p99 300 ms | \nok | taskbar fixed | \ninfo | scheduler healthy |")).toMatchObject({
+      kind: "findings",
+      rows: [{ severity: "high", location: undefined }, { severity: "ok", text: "taskbar fixed" }, { severity: "info" }],
+    });
+    expect(parse("ui-findings", "warn | issue")).toBeNull();
+  });
+
   it("accepts a fourth checklist cell only when it is a path-shaped location", () => {
     expect(parse("ui-checklist", "no | Sums reasoning twice | double count | crates/a/src/turn_stats.rs:150\nok | Builds")).toMatchObject({
       kind: "checklist", items: [{ status: "no", note: "double count", location: "crates/a/src/turn_stats.rs:150" }, { item: "Builds" }],

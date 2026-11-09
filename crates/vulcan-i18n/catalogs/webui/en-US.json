@@ -6082,6 +6082,7 @@
   "answerComponents.severity.medium": "Medium",
   "answerComponents.severity.low": "Low",
   "answerComponents.severity.info": "Info",
+  "answerComponents.severity.ok": "OK",
   "answerComponents.fileCount": "{count} files",
   "answerComponents.column.severity": "Severity",
   "answerComponents.column.finding": "Finding",

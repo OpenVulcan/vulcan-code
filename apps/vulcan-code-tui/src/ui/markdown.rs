@@ -834,6 +834,8 @@ A[Plan] --> B[Build]";
         let noted = joined("```ui-findings\nhigh | issue | ledger | note-marker\n```");
         assert!(!noted.contains("ui-findings") && noted.contains("note-marker"));
         assert!(joined("```ui-findings\nhigh | a | b | c | d\n```").contains("ui-findings"));
+        let resolved = joined("```ui-findings\nok | resolved-marker | \n```");
+        assert!(!resolved.contains("ui-findings") && resolved.contains("resolved-marker"));
         let untoned = joined("```ui-callout\nbody-marker\n```");
         assert!(!untoned.contains("ui-callout") && untoned.contains("body-marker"));
         let aliased = joined("```ui-callout warn Title-marker\nbody\n```");

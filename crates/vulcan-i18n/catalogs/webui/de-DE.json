@@ -6082,6 +6082,7 @@
   "answerComponents.severity.medium": "Mittel",
   "answerComponents.severity.low": "Niedrig",
   "answerComponents.severity.info": "Info",
+  "answerComponents.severity.ok": "OK",
   "answerComponents.fileCount": "{count} Dateien",
   "answerComponents.column.severity": "Schweregrad",
   "answerComponents.column.finding": "Befund",

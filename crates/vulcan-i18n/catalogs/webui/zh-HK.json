@@ -6082,6 +6082,7 @@
   "answerComponents.severity.medium": "中",
   "answerComponents.severity.low": "低",
   "answerComponents.severity.info": "提示",
+  "answerComponents.severity.ok": "正常",
   "answerComponents.fileCount": "{count} 個檔案",
   "answerComponents.column.severity": "嚴重度",
   "answerComponents.column.finding": "問題",

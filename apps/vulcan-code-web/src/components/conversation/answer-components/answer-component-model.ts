@@ -20,9 +20,9 @@ export type AnswerTone = "ok" | "warn" | "no";
 // 清单状态：色调或待办项。
 export type AnswerStatus = AnswerTone | "todo";
 
-// Finding severity.
-// 发现项严重度。
-export type AnswerSeverity = "high" | "medium" | "low" | "info";
+// Finding severity. `ok` is not in the prompt; models write it for a resolved or healthy item.
+// 发现项严重度。`ok` 不在提示词中，模型用它标记已解决或正常的项。
+export type AnswerSeverity = "high" | "medium" | "low" | "info" | "ok";
 
 // Plan step status.
 // 计划步骤状态。
@@ -206,7 +206,7 @@ export type AnswerComponentBody =
 
 const TONES = new Set<string>(["ok", "warn", "no"]);
 const STATUSES = new Set<string>(["ok", "warn", "no", "todo"]);
-const SEVERITIES = new Set<string>(["high", "medium", "low", "info"]);
+const SEVERITIES = new Set<string>(["high", "medium", "low", "info", "ok"]);
 const STEP_STATUSES = new Set<string>(["done", "now", "todo"]);
 const CALLOUT_TONES = new Set<string>(["info", "success", "warning", "danger"]);
 const CHART_KINDS = new Set<string>(["bar", "hbar", "stack", "line", "area", "pie", "donut"]);
@@ -488,8 +488,9 @@ function lineDelta(cell: string): { added?: number; removed?: number } | null {
 
 // `severity | finding | location` rows. Models sometimes add a fourth note cell as in `ui-checklist`; it is read
 // only after the documented split, including the lenient one, has failed, so `fetch|iex` stays in the finding.
+// Models also mark a resolved or healthy item with the severity `ok`.
 // `严重度 | 问题 | 位置` 行。模型有时仿照 `ui-checklist` 追加第四格说明；仅当包括宽松拆分在内的
-// 文档写法都失败后才按四格读取，因此 `fetch|iex` 仍留在问题文字中。
+// 文档写法都失败后才按四格读取，因此 `fetch|iex` 仍留在问题文字中。模型还会以严重度 `ok` 标记已解决或正常的项。
 function findings(body: string): AnswerComponent | null {
   const cells = (line: string) => rowCells(line, 2, 3) ?? rowCells(line, 4, 4);
   return mapLines(body, cells, ([severity, text, location, note]) => (

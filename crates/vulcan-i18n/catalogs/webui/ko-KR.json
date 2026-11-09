@@ -6082,6 +6082,7 @@
   "answerComponents.severity.medium": "중간",
   "answerComponents.severity.low": "낮음",
   "answerComponents.severity.info": "정보",
+  "answerComponents.severity.ok": "정상",
   "answerComponents.fileCount": "파일 {count}개",
   "answerComponents.column.severity": "심각도",
   "answerComponents.column.finding": "문제",

@@ -330,6 +330,7 @@ const SEVERITY_KEYS = {
   medium: "answerComponents.severity.medium",
   low: "answerComponents.severity.low",
   info: "answerComponents.severity.info",
+  ok: "answerComponents.severity.ok",
 } as const;
 
 // Symbols of checklist statuses.

@@ -6082,6 +6082,7 @@
   "answerComponents.severity.medium": "Media",
   "answerComponents.severity.low": "Baja",
   "answerComponents.severity.info": "Info",
+  "answerComponents.severity.ok": "OK",
   "answerComponents.fileCount": "{count} archivos",
   "answerComponents.column.severity": "Gravedad",
   "answerComponents.column.finding": "Hallazgo",
