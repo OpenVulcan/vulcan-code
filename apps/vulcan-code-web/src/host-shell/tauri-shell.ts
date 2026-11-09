@@ -18,6 +18,12 @@ interface TauriWindowHandle {
   // Returns whether the current desktop window is maximized.
   // 返回当前桌面窗口是否处于最大化状态。
   isMaximized: () => Promise<boolean>;
+  // Returns whether the current desktop window is in full screen.
+  // 返回当前桌面窗口是否处于全屏。
+  isFullscreen: () => Promise<boolean>;
+  // Enters or leaves full screen.
+  // 进入或离开全屏。
+  setFullscreen: (fullscreen: boolean) => Promise<void>;
   // Closes the current desktop window.
   // 关闭当前桌面窗口。
   close: () => Promise<void>;
@@ -149,6 +155,25 @@ export class TauriShellClient implements ShellClient {
   // toggleWindowMaximize 在当前原生窗口上切换最大化或还原。
   async toggleWindowMaximize(): Promise<void> {
     await (await this.currentWindow()).toggleMaximize();
+  }
+
+  // isWindowFullScreen returns the current native full-screen state.
+  // isWindowFullScreen 返回当前原生全屏状态。
+  async isWindowFullScreen(): Promise<boolean> {
+    return (await this.currentWindow()).isFullscreen();
+  }
+
+  // toggleWindowFullScreen enters or leaves native full screen.
+  // toggleWindowFullScreen 进入或离开原生全屏。
+  async toggleWindowFullScreen(): Promise<void> {
+    const windowHandle = await this.currentWindow();
+    await windowHandle.setFullscreen(!(await windowHandle.isFullscreen()));
+  }
+
+  // placeNativeWindowButtons returns null: the Tauri window keeps its configured button position.
+  // placeNativeWindowButtons 返回 null：Tauri 窗口保留其配置的按钮位置。
+  async placeNativeWindowButtons(_placement: { left: number; height: number }): Promise<number | null> {
+    return null;
   }
 
   // closeWindow closes the current native window.

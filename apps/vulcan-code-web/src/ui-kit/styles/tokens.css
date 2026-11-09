@@ -13,12 +13,13 @@
  */
 
 /* ---------- Size system: every length derives from the root text tier ---------- */
-/* The navigation widths and the conversation reserve are registered lengths so script reads them back as
- * resolved pixels for width-based layout decisions (components/shell/navigation-layout.ts); these tokens stay
- * their only source. */
+/* The navigation widths, the conversation reserve and the title strip height are registered lengths so script
+ * reads them back as resolved pixels for layout decisions and the macOS window buttons
+ * (components/shell/navigation-layout.ts); these tokens stay their only source. */
 @property --vk-rail-w { syntax: "<length>"; inherits: true; initial-value: 0px; }
 @property --vk-sidebar-w { syntax: "<length>"; inherits: true; initial-value: 0px; }
 @property --vk-reserve-w { syntax: "<length>"; inherits: true; initial-value: 0px; }
+@property --vk-titlebar-h { syntax: "<length>"; inherits: true; initial-value: 0px; }
 :root {
   /* UI body size; the five tiers below only change this value. */
   font-size: 13px;

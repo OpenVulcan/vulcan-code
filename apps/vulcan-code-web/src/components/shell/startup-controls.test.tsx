@@ -39,6 +39,7 @@ describe("startup controls", () => {
     // desktop 是完整的合成预加载桥，用于观察关闭调用。
     const desktop = Object.fromEntries([
       "minimizeWindow", "toggleWindowMaximize", "isWindowMaximized", "closeWindow", "subscribeWindowResize",
+      "toggleWindowFullScreen", "isWindowFullScreen", "placeNativeButtons",
       "isWindowMinimized", "isWindowFocused", "isWindowVisible", "subscribeWindowFocusChange",
       "getNotificationPermission", "requestNotificationPermission", "showNotification", "subscribeNotificationActivation",
     ].map((name) => [name, vi.fn(async () => undefined)]));

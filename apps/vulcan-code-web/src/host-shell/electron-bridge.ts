@@ -40,6 +40,15 @@ export interface ElectronDesktopBridge {
   // Returns whether the current desktop window is maximized.
   // 返回当前桌面窗口是否处于最大化状态。
   isWindowMaximized: () => Promise<boolean>;
+  // Enters or leaves native full screen, the macOS green-button action.
+  // 进入或离开原生全屏，即 macOS 绿色按钮的操作。
+  toggleWindowFullScreen: () => Promise<void>;
+  // Returns whether the current desktop window is in native full screen.
+  // 返回当前桌面窗口是否处于原生全屏。
+  isWindowFullScreen: () => Promise<boolean>;
+  // Places the macOS window buttons in the reported title strip and resolves with their right edge; rejects elsewhere.
+  // 将 macOS 窗口按钮放入上报的标题条并返回其右边缘；其他平台上拒绝。
+  placeNativeButtons: (placement: { left: number; height: number }) => Promise<number>;
   // Closes the current desktop window without stopping Core.
   // 关闭当前桌面窗口，不停止 Core。
   closeWindow: () => Promise<void>;
@@ -354,6 +363,9 @@ const electronDesktopBridgeMethodNames = [
   "minimizeWindow",
   "toggleWindowMaximize",
   "isWindowMaximized",
+  "toggleWindowFullScreen",
+  "isWindowFullScreen",
+  "placeNativeButtons",
   "closeWindow",
   "subscribeWindowResize",
   "isWindowMinimized",

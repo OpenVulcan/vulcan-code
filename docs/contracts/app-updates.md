@@ -185,8 +185,13 @@
   必须等于该 ID 加 `.desktop`：Electron 由 `desktopName` 得出窗口类（X11 上为 `WM_CLASS "vulcan-code"`）与
   Wayland 应用 ID，而不是取 `package.json` 的 `name`。不一致时 GNOME 会为窗口另显示一个通用图标。修改任一侧时
   两处同时改。
-- Linux 窗口与 macOS 程序坞图标来自打包应用 `gui/` 旁的 `icon.png`（`desktop-runtime.mjs` 从
-  `apps/vulcan-code-service/icons/icon.png` 复制，桌面端 `app-icon.ts` 读取）；Windows 图标来自程序资源。
+- Linux 窗口图标来自打包应用 `gui/` 旁的 `icon.png`，macOS 运行中的程序坞图标来自同目录的 `icon-macos.png`
+  （`desktop-runtime.mjs` 从 `apps/vulcan-code-service/icons/` 复制，桌面端 `app-icon.ts` 读取）；Windows 图标来自
+  程序资源。
+- macOS 发行物把 Electron.app 改名为 `desktop/runtime/Vulcan Code.app`（`desktop-runtime.mjs` 的 `MACOS_BUNDLE`），
+  按模式改写 `Info.plist` 的名称与标识、以 `icon-macos.png` 生成应用包图标并临时签名；程序坞、菜单栏与退出后
+  固定在程序坞的图标都取自该应用包。可执行文件 `Contents/MacOS/Electron` 与辅助应用保留 Electron 名称，Electron
+  按这些名称查找辅助进程，不得改名。修改应用包名称会改变 `desktopExecutable`，须递增 `installEpoch`。
 - 安装器对象键（`setup_pointer_key`、`setup_file_key`）与产品对象键一样，在 `layout.rs` 与 openvulcan-web 的
   `server/internal/staticsync/format.go` 中各写一次，修改时两处同时改。
 - 入口脚本在安装器发布时内嵌下载源；修改 `AUTO_ORIGINS` 后须发布新的安装器版本，脚本才会使用新下载源。

@@ -100,6 +100,15 @@ export class NotificationTestShell implements ShellClient {
   // toggleWindowMaximize performs no action in notification tests.
   // toggleWindowMaximize 在通知测试中不执行操作。
   async toggleWindowMaximize(): Promise<void> {}
+  // isWindowFullScreen returns the deterministic test window state.
+  // isWindowFullScreen 返回确定的测试窗口状态。
+  async isWindowFullScreen(): Promise<boolean> { return false; }
+  // toggleWindowFullScreen performs no action in notification tests.
+  // toggleWindowFullScreen 在通知测试中不执行操作。
+  async toggleWindowFullScreen(): Promise<void> {}
+  // placeNativeWindowButtons reports no native buttons in notification tests.
+  // placeNativeWindowButtons 在通知测试中报告没有原生按钮。
+  async placeNativeWindowButtons(_placement: { left: number; height: number }): Promise<number | null> { return null; }
   // closeWindow performs no action in notification tests.
   // closeWindow 在通知测试中不执行操作。
   async closeWindow(): Promise<void> {}

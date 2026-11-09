@@ -108,6 +108,21 @@ export interface ShellClient {
   // 在支持时切换当前原生窗口最大化状态。
   toggleWindowMaximize(): Promise<void>;
 
+  // Returns whether the current native window is in full screen.
+  // 返回当前原生窗口是否处于全屏。
+  isWindowFullScreen(): Promise<boolean>;
+
+  // Toggles native full screen when supported; the macOS title strip double click uses it like the green button.
+  // 在支持时切换原生全屏；macOS 标题条双击以此达到与绿色按钮相同的效果。
+  toggleWindowFullScreen(): Promise<void>;
+
+  // Places the operating system's own window buttons (macOS) in the title strip right of `left`, centred in
+  // `height` CSS pixels; resolves with their right edge, or null where the host cannot place them. Callers use it
+  // only where the operating system draws those buttons; a desktop host without them rejects.
+  // 将操作系统自绘的窗口按钮（macOS）放入标题条中 `left` 右侧、在 `height` CSS 像素内垂直居中；返回其右边缘，
+  // 宿主无法放置时返回 null。调用方只在操作系统自绘这些按钮时使用；没有这些按钮的桌面宿主会拒绝。
+  placeNativeWindowButtons(placement: { left: number; height: number }): Promise<number | null>;
+
   // Closes the current native window when supported.
   // 在支持时关闭当前原生窗口。
   closeWindow(): Promise<void>;

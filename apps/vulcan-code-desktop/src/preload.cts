@@ -19,6 +19,9 @@ const WINDOW_COMMAND_CHANNELS = {
   minimize: 'vulcan:window:minimize',
   toggleMaximize: 'vulcan:window:toggle-maximize',
   isMaximized: 'vulcan:window:is-maximized',
+  toggleFullScreen: 'vulcan:window:toggle-full-screen',
+  isFullScreen: 'vulcan:window:is-full-screen',
+  placeNativeButtons: 'vulcan:window:place-native-buttons',
   isMinimized: 'vulcan:window:is-minimized',
   isFocused: 'vulcan:window:is-focused',
   isVisible: 'vulcan:window:is-visible',
@@ -116,6 +119,14 @@ const desktop = {
   toggleWindowMaximize: (): Promise<void> =>
     ipcRenderer.invoke(WINDOW_COMMAND_CHANNELS.toggleMaximize),
   isWindowMaximized: (): Promise<boolean> => ipcRenderer.invoke(WINDOW_COMMAND_CHANNELS.isMaximized),
+  // toggleWindowFullScreen enters or leaves native full screen, the macOS green-button action.
+  // toggleWindowFullScreen 进入或离开原生全屏，即 macOS 绿色按钮的操作。
+  toggleWindowFullScreen: (): Promise<void> => ipcRenderer.invoke(WINDOW_COMMAND_CHANNELS.toggleFullScreen),
+  isWindowFullScreen: (): Promise<boolean> => ipcRenderer.invoke(WINDOW_COMMAND_CHANNELS.isFullScreen),
+  // placeNativeButtons forwards the title strip geometry; resolves with the right edge of the macOS buttons.
+  // placeNativeButtons 转发标题条几何；返回 macOS 按钮的右边缘。
+  placeNativeButtons: (placement: { left: number; height: number }): Promise<number> =>
+    ipcRenderer.invoke(WINDOW_COMMAND_CHANNELS.placeNativeButtons, placement),
   isWindowMinimized: (): Promise<boolean> => ipcRenderer.invoke(WINDOW_COMMAND_CHANNELS.isMinimized),
   isWindowFocused: (): Promise<boolean> => ipcRenderer.invoke(WINDOW_COMMAND_CHANNELS.isFocused),
   isWindowVisible: (): Promise<boolean> => ipcRenderer.invoke(WINDOW_COMMAND_CHANNELS.isVisible),

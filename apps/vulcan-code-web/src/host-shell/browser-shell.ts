@@ -123,6 +123,22 @@ export class BrowserShellClient implements ShellClient {
   // toggleWindowMaximize 是空操作，因为浏览器无法切换宿主窗口状态。
   async toggleWindowMaximize(): Promise<void> {}
 
+  // isWindowFullScreen always returns false for browser hosts.
+  // isWindowFullScreen 在浏览器宿主中始终返回 false。
+  async isWindowFullScreen(): Promise<boolean> {
+    return false;
+  }
+
+  // toggleWindowFullScreen is a no-op because the page does not own its host window.
+  // toggleWindowFullScreen 是空操作，因为页面不拥有宿主窗口。
+  async toggleWindowFullScreen(): Promise<void> {}
+
+  // placeNativeWindowButtons returns null because browsers draw no window buttons inside the page.
+  // placeNativeWindowButtons 返回 null，因为浏览器不在页面内绘制窗口按钮。
+  async placeNativeWindowButtons(_placement: { left: number; height: number }): Promise<number | null> {
+    return null;
+  }
+
   // closeWindow is a no-op because browser pages should not close their host window implicitly.
   // closeWindow 是空操作，因为浏览器页面不应隐式关闭宿主窗口。
   async closeWindow(): Promise<void> {}

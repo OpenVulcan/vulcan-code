@@ -453,7 +453,7 @@ export function WorkbenchLayout(props: {
   const {
     shellChromeActions,
     showWindowControls,
-    nativeWindowButtons,
+    nativeButtonsInset,
     windowDragRegionEnabled,
     handleTitlebarDoubleClick,
   } = useWorkbenchShellChrome({
@@ -1365,7 +1365,8 @@ export function WorkbenchLayout(props: {
     <ComposerMediaUploadProgressContext.Provider value={mediaUploadProgresses}>
     <div
       className="vk-workbench"
-      data-native-buttons={nativeWindowButtons ? "" : undefined}
+      data-native-buttons-inset={nativeButtonsInset === null ? undefined : ""}
+      style={nativeButtonsInset === null ? undefined : { "--vk-native-buttons-w": `${nativeButtonsInset}px` } as React.CSSProperties}
       data-window={showWindowControls ? "native" : "browser"}
     >
       {floatingMediaUploadProgresses.length > 0 ? (

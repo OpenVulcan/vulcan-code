@@ -135,6 +135,24 @@ export class ElectronShellClient implements ShellClient {
     await this.requireBridge().toggleWindowMaximize();
   }
 
+  // isWindowFullScreen returns the current native full-screen state.
+  // isWindowFullScreen 返回当前原生全屏状态。
+  async isWindowFullScreen(): Promise<boolean> {
+    return this.requireBridge().isWindowFullScreen();
+  }
+
+  // toggleWindowFullScreen enters or leaves native full screen.
+  // toggleWindowFullScreen 进入或离开原生全屏。
+  async toggleWindowFullScreen(): Promise<void> {
+    await this.requireBridge().toggleWindowFullScreen();
+  }
+
+  // placeNativeWindowButtons positions the macOS window buttons and returns their right edge.
+  // placeNativeWindowButtons 放置 macOS 窗口按钮并返回其右边缘。
+  async placeNativeWindowButtons(placement: { left: number; height: number }): Promise<number | null> {
+    return this.requireBridge().placeNativeButtons(placement);
+  }
+
   // closeWindow closes the current GUI window without stopping Core.
   // closeWindow 关闭当前 GUI 窗口，不停止 Core。
   async closeWindow(): Promise<void> {

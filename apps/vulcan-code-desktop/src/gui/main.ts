@@ -66,6 +66,38 @@ const INITIAL_WINDOW_HEIGHT = 900;
 const MINIMUM_WINDOW_WIDTH = 960;
 const MINIMUM_WINDOW_HEIGHT = 600;
 
+// TRAFFIC_LIGHT_FRAME_HEIGHT is the height of one macOS window button's frame: a 12px light with an
+// invisible 2px margin above and below, the height the buttons are centred by.
+// TRAFFIC_LIGHT_FRAME_HEIGHT 是 macOS 单个窗口按钮框架的高度：12px 的按钮加上下各 2px 的不可见边距，
+// 按钮按此高度垂直居中。
+const TRAFFIC_LIGHT_FRAME_HEIGHT = 16;
+
+// TRAFFIC_LIGHTS_WIDTH spans the three macOS window button frames (14px each) and the two 6px gaps between them.
+// TRAFFIC_LIGHTS_WIDTH 为三个 macOS 窗口按钮框架（各 14px）及其间两个 6px 间隔的总宽度。
+const TRAFFIC_LIGHTS_WIDTH = 54;
+
+// MAXIMUM_TITLE_STRIP_LENGTH bounds the renderer-reported title strip geometry, in CSS pixels.
+// MAXIMUM_TITLE_STRIP_LENGTH 限定渲染端上报的标题条几何尺寸，单位为 CSS 像素。
+const MAXIMUM_TITLE_STRIP_LENGTH = 512;
+
+/** Title strip geometry the WebUI reports for the macOS window buttons, in CSS pixels. */
+interface NativeButtonsPlacement {
+  /** Left edge of the strip the buttons sit in, the activity rail's width. */
+  left: number;
+  /** Height of the title strip the buttons are centred in. */
+  height: number;
+}
+
+// parseNativeButtonsPlacement validates untrusted renderer geometry; returns null when any field is unusable.
+// parseNativeButtonsPlacement 校验不受信的渲染端几何数据；任一字段不可用时返回 null。
+function parseNativeButtonsPlacement(value: unknown): NativeButtonsPlacement | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const { left, height } = value as Record<string, unknown>;
+  const usable = (length: unknown): length is number =>
+    typeof length === 'number' && Number.isFinite(length) && length >= 0 && length <= MAXIMUM_TITLE_STRIP_LENGTH;
+  return usable(left) && usable(height) && height >= TRAFFIC_LIGHT_FRAME_HEIGHT ? { left, height } : null;
+}
+
 /** Service switches this GUI forwards to the service process on request. */
 const FORWARDED_SERVICE_ARGUMENTS = new Set(['--test-root']);
 
@@ -268,6 +300,11 @@ function createWorkbenchWindow(background: string): WorkbenchWindow {
   window.on('maximize', notifyResized);
   window.on('unmaximize', notifyResized);
   window.on('restore', notifyResized);
+  // The WebUI drops its window-button reservation in full screen, so both transitions make it read the state again.
+  // WebUI 在全屏时取消窗口按钮预留，因此两次切换都让它重新读取状态。
+  window.on('enter-full-screen', notifyResized);
+  window.on('leave-full-screen', notifyResized);
+  if (process.platform === 'darwin') convertTitlebarZoomToFullScreen(window);
   window.on('focus', () => {
     if (!window.isDestroyed()) {
       window.webContents.send(WINDOW_EVENT_CHANNELS.focusChanged);
@@ -287,6 +324,29 @@ function createWorkbenchWindow(background: string): WorkbenchWindow {
     return { action: 'deny' };
   });
   return { window, allowWebUi: (webUiUrl) => { webUiOrigin = new URL(webUiUrl).origin; } };
+}
+
+// convertTitlebarZoomToFullScreen makes a title strip double click act like the green button. Chromium answers a
+// double click on a drag region itself with the system zoom and the page never sees it; Electron only reports the
+// finished zoom as `maximize`, so the window then enters native full screen, and leaving it undoes the zoom.
+// convertTitlebarZoomToFullScreen 使标题条双击与绿色按钮效果相同。Chromium 自行以系统缩放响应拖动区域上的双击，
+// 页面收不到该事件；Electron 只把完成的缩放报告为 `maximize`，因此窗口随即进入原生全屏，离开全屏时撤销缩放。
+// window is the macOS workbench window; the listeners live as long as it does.
+// window 为 macOS 工作台窗口；监听器与其生命周期相同。
+function convertTitlebarZoomToFullScreen(window: BrowserWindow): void {
+  // zoomedIntoFullScreen marks a full screen entered from a zoom, which leaving full screen must undo.
+  // zoomedIntoFullScreen 标记由缩放进入的全屏，离开全屏时必须撤销该缩放。
+  let zoomedIntoFullScreen = false;
+  window.on('maximize', () => {
+    if (window.isDestroyed() || window.isFullScreen()) return;
+    zoomedIntoFullScreen = true;
+    window.setFullScreen(true);
+  });
+  window.on('leave-full-screen', () => {
+    if (!zoomedIntoFullScreen || window.isDestroyed()) return;
+    zoomedIntoFullScreen = false;
+    if (window.isMaximized()) window.unmaximize();
+  });
 }
 
 /** Serializes maximize toggles so rapid mixed clicks cannot interleave. */
@@ -455,6 +515,24 @@ function registerWindowIpcHandlers(window: BrowserWindow, webUiUrl: string, disc
     return maximizeQueue;
   });
   handle(WINDOW_COMMAND_CHANNELS.isMaximized, () => !window.isDestroyed() && window.isMaximized());
+  handle(WINDOW_COMMAND_CHANNELS.toggleFullScreen, () => {
+    if (!window.isDestroyed()) window.setFullScreen(!window.isFullScreen());
+  });
+  handle(WINDOW_COMMAND_CHANNELS.isFullScreen, () => !window.isDestroyed() && window.isFullScreen());
+  // The buttons sit right of the activity rail, centred in the title strip, with the same gap on either side;
+  // the answer is their right edge so the WebUI clears exactly that much. Electron renders at a zoom factor of
+  // one, so CSS pixels equal window points.
+  // 按钮位于活动轨道右侧，在标题条中垂直居中，两侧间距相同；返回其右边缘，使 WebUI 恰好让出该宽度。
+  // Electron 以缩放系数 1 渲染，因此 CSS 像素等于窗口点数。
+  handle(WINDOW_COMMAND_CHANNELS.placeNativeButtons, (_event, report: unknown) => {
+    if (process.platform !== 'darwin') throw new Error('Native window buttons exist only on macOS.');
+    const placement = parseNativeButtonsPlacement(report);
+    if (!placement) throw new TypeError('Invalid native window button placement.');
+    const inset = Math.floor((placement.height - TRAFFIC_LIGHT_FRAME_HEIGHT) / 2);
+    const x = Math.round(placement.left) + inset;
+    if (!window.isDestroyed()) window.setWindowButtonPosition({ x, y: inset });
+    return x + TRAFFIC_LIGHTS_WIDTH + inset;
+  });
   handle(WINDOW_COMMAND_CHANNELS.isMinimized, () => !window.isDestroyed() && window.isMinimized());
   handle(WINDOW_COMMAND_CHANNELS.isFocused, () => !window.isDestroyed() && window.isFocused());
   handle(WINDOW_COMMAND_CHANNELS.isVisible, () => !window.isDestroyed() && window.isVisible());

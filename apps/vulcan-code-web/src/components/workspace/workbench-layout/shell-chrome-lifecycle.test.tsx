@@ -13,10 +13,19 @@ import { copyText } from "./types";
 const nativeShell = vi.hoisted(() => ({
   supportsWindowControls: vi.fn(() => true),
   isWindowMaximized: vi.fn(async () => false),
+  isWindowFullScreen: vi.fn(async () => false),
   toggleWindowMaximize: vi.fn(async () => {}),
+  toggleWindowFullScreen: vi.fn(async () => {}),
+  placeNativeWindowButtons: vi.fn(async (_placement: { left: number; height: number }) => 86 as number | null),
   subscribeWindowResize: vi.fn(async (_handler: () => void) => () => {}),
 }));
+// nativeButtons switches the hook between the macOS window buttons and the custom controls per test.
+// nativeButtons 按测试在 macOS 窗口按钮与自绘控制之间切换钩子。
+const nativeButtons = vi.hoisted(() => ({ value: false }));
 vi.mock("@/service/webui-service-runtime", () => ({ shellClient: nativeShell }));
+vi.mock("@/app/boot-startup-screen", () => ({
+  get NATIVE_WINDOW_BUTTONS() { return nativeButtons.value; },
+}));
 vi.mock("@/ui-kit/primitives/toast", () => ({ toast: { error: vi.fn() } }));
 vi.mock("@/components/shell/app-chrome", () => ({
   // GlobalActions and WindowControls render nothing; this suite covers the hook's native window state.
@@ -34,8 +43,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   nativeShell.subscribeWindowResize.mockImplementation(async () => () => {});
   nativeShell.isWindowMaximized.mockResolvedValue(false);
+  nativeShell.isWindowFullScreen.mockResolvedValue(false);
   nativeShell.toggleWindowMaximize.mockResolvedValue(undefined);
+  nativeShell.toggleWindowFullScreen.mockResolvedValue(undefined);
+  nativeShell.placeNativeWindowButtons.mockResolvedValue(86);
   nativeShell.supportsWindowControls.mockReturnValue(true);
+  nativeButtons.value = false;
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 });
@@ -85,6 +98,33 @@ it("rejects duplicate titlebar toggles and reports failure without an unhandled 
   expect(nativeShell.toggleWindowMaximize).toHaveBeenCalledTimes(1);
   await act(async () => rejectToggle(new Error("Synthetic native denial")));
   expect(toast.error).toHaveBeenCalledTimes(1);
+});
+
+it("toggles native full screen from the macOS titlebar and reserves the buttons only outside full screen", async () => {
+  nativeButtons.value = true;
+  await mount();
+  expect(nativeShell.placeNativeWindowButtons).toHaveBeenCalledTimes(1);
+  expect(state.nativeButtonsInset).toBe(86);
+  expect(host.querySelector(".vk-stage-wordmark")).not.toBeNull();
+  // titlebarEvent contains only the target property consumed by the actual handler.
+  // titlebarEvent 仅包含真实处理器消费的 target 属性。
+  const titlebarEvent = { target: host } as unknown as React.MouseEvent<HTMLElement>;
+  await act(async () => { state.handleTitlebarDoubleClick(titlebarEvent); });
+  expect(nativeShell.toggleWindowFullScreen).toHaveBeenCalledTimes(1);
+  expect(nativeShell.toggleWindowMaximize).not.toHaveBeenCalled();
+  // resize replays the native resize notification that full screen entry emits.
+  // resize 重放进入全屏时发出的原生尺寸通知。
+  const resize = nativeShell.subscribeWindowResize.mock.calls[0]?.[0];
+  expect(resize).toBeTypeOf("function");
+  nativeShell.isWindowFullScreen.mockResolvedValue(true);
+  await act(async () => { resize?.(); });
+  expect(state.nativeButtonsInset).toBeNull();
+  expect(state.windowDragRegionEnabled).toBe(false);
+  expect(host.querySelector(".vk-stage-wordmark")).toBeNull();
+  nativeShell.isWindowFullScreen.mockResolvedValue(false);
+  await act(async () => { resize?.(); });
+  expect(nativeShell.placeNativeWindowButtons).toHaveBeenCalledTimes(2);
+  expect(state.nativeButtonsInset).toBe(86);
 });
 
 it("never reports successful copying when the clipboard API is absent or rejects", async () => {

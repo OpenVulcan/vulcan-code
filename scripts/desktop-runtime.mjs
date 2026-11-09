@@ -1,8 +1,9 @@
 // Build and launch the manifest-owned desktop distribution without an implicit browser download.
 // 构建并启动清单拥有的桌面发行物，不隐式下载浏览器。
-import { cp, readFile, writeFile, mkdir, access, realpath, rm, stat, lstat, readdir, rename } from 'node:fs/promises';
+import { cp, readFile, writeFile, mkdir, mkdtemp, access, realpath, rm, stat, lstat, readdir, rename } from 'node:fs/promises';
 import { spawn, execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
+import os from 'node:os';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -43,6 +44,18 @@ if (path.resolve(output) === repository) {
 // One schema authority is shared by packaging, launching, and the Core restart layout reader.
 // 打包、启动与核心重启布局读取器共享唯一的架构版本权威。
 export const runtimeLayoutSchemaVersion = 4;
+// The shipped macOS application bundle below desktop/runtime; the Dock, menu bar and Finder name the app after it.
+// 位于 desktop/runtime 下的发行 macOS 应用包；程序坞、菜单栏与访达按它命名应用。
+const MACOS_BUNDLE = 'Vulcan Code.app';
+// The bundle icon below Contents/Resources, replacing Electron's electron.icns.
+// 位于 Contents/Resources 下的应用包图标，取代 Electron 的 electron.icns。
+const MACOS_BUNDLE_ICON = 'vulcan-code.icns';
+// Each profile names its bundle apart so a debug and a release app running together stay distinguishable.
+// 每个模式使用各自的应用包名称与标识，使同时运行的调试版与正式版可以区分。
+const macosBundleIdentities = {
+  debug: { name: 'Vulcan Code Debug', identifier: 'ai.vulcan.code.desktop.debug' },
+  release: { name: 'Vulcan Code', identifier: 'ai.vulcan.code.desktop' },
+};
 // The service describes its compiled profile without starting user services or touching settings.
 // 服务描述自身编译模式，不启动用户服务或修改配置。
 const execFileAsync = promisify(execFile);
@@ -398,6 +411,55 @@ async function verifyServiceProfile(executable) {
   }
 }
 
+// Rename the copied Electron.app to MACOS_BUNDLE and give it the profile's name, identifier and icon.
+// 将复制的 Electron.app 改名为 MACOS_BUNDLE，并写入该模式的名称、标识与图标。
+// The executable and helper apps keep Electron's names, by which Electron finds its helpers; the bundle
+// is signed after its app files are in place (`signMacosBundle`). Uses macOS plutil, sips and iconutil.
+// 可执行文件与辅助应用保留 Electron 的名称，Electron 按这些名称查找辅助进程；应用包在其应用文件就位后签名
+// （`signMacosBundle`）。使用 macOS 的 plutil、sips 与 iconutil。
+async function brandMacosBundle() {
+  const runtime = entry('desktop/runtime');
+  const bundle = path.join(runtime, MACOS_BUNDLE);
+  await rename(path.join(runtime, 'Electron.app'), bundle);
+  const { name, identifier } = macosBundleIdentities[profile];
+  const plist = path.join(bundle, 'Contents/Info.plist');
+  for (const [key, value] of [
+    ['CFBundleName', name], ['CFBundleDisplayName', name],
+    ['CFBundleIdentifier', identifier], ['CFBundleIconFile', MACOS_BUNDLE_ICON],
+  ]) {
+    // -replace inserts a missing key, such as CFBundleDisplayName in Electron's property list.
+    // -replace 会插入缺失的键，例如 Electron 属性列表中没有的 CFBundleDisplayName。
+    await run('plutil', ['-replace', key, '-string', value, plist]);
+  }
+  const resources = path.join(bundle, 'Contents/Resources');
+  await rm(path.join(resources, 'electron.icns'));
+  // The iconset holds every size iconutil expects, scaled from the 1024-pixel artwork on Apple's icon grid.
+  // 图标集包含 iconutil 要求的全部尺寸，均由位于 Apple 图标网格上的 1024 像素图形缩放而来。
+  const source = path.join(repository, 'apps/vulcan-code-service/icons/icon-macos.png');
+  const work = await mkdtemp(path.join(os.tmpdir(), 'vulcan-code-icon-'));
+  try {
+    const iconset = path.join(work, 'icon.iconset');
+    await mkdir(iconset);
+    for (const size of [16, 32, 128, 256, 512]) {
+      for (const [scale, suffix] of [[1, ''], [2, '@2x']]) {
+        const pixels = String(size * scale);
+        await run('sips', ['-z', pixels, pixels, source, '--out', path.join(iconset, `icon_${size}x${size}${suffix}.png`)],
+          { stdio: ['ignore', 'ignore', 'inherit'] });
+      }
+    }
+    await run('iconutil', ['-c', 'icns', iconset, '-o', path.join(resources, MACOS_BUNDLE_ICON)]);
+  } finally {
+    await rm(work, { recursive: true, force: true });
+  }
+}
+
+// Re-seal the branded bundle with an ad-hoc signature once all of its files are written, since the
+// changed property list, icon and app files invalidate Electron's original signature.
+// 在应用包全部文件写入后以临时签名重新封装，因为修改后的属性列表、图标与应用文件会使 Electron 原签名失效。
+async function signMacosBundle() {
+  await run('codesign', ['--force', '--deep', '--sign', '-', entry(`desktop/runtime/${MACOS_BUNDLE}`)]);
+}
+
 async function main() {
   await verifyIsolatedDistributionBoundary();
   if (!['debug', 'release'].includes(profile)) {
@@ -455,9 +517,8 @@ async function main() {
   // The compiled application preserves ESM and the CommonJS sandbox preload.
   // 编译应用保留 ESM 与沙箱使用的 CommonJS 预加载。
   const appEntry = process.platform === 'darwin'
-    ? 'desktop/runtime/Electron.app/Contents/Resources/app' : 'desktop/runtime/resources/app';
+    ? `desktop/runtime/${MACOS_BUNDLE}/Contents/Resources/app` : 'desktop/runtime/resources/app';
   const appRoot = path.join(output, appEntry);
-  await mkdir(appRoot, { recursive: true });
   // desktopNotificationIdentity keeps executable metadata and the runtime identity resolver aligned.
   // desktopNotificationIdentity 使可执行文件元数据与运行时身份解析器保持一致。
   let desktopNotificationIdentity = {
@@ -468,6 +529,13 @@ async function main() {
   // Preserve relative framework symlinks so a relocated macOS bundle does not point into node_modules.
   // 保留框架的相对符号链接，避免搬移后的 macOS 应用包仍指向 node_modules。
   await cp(path.join(desktop, 'node_modules/electron/dist'), path.join(output, 'desktop/runtime'), { recursive: true, verbatimSymlinks: true });
+  // The Dock, the menu bar and Finder name a macOS app after its bundle, so the shipped bundle
+  // carries the product name and icon instead of Electron's.
+  // 程序坞、菜单栏与访达按应用包命名 macOS 应用，因此发行的应用包使用产品名称与图标，而非 Electron 的。
+  if (process.platform === 'darwin') {
+    await brandMacosBundle();
+  }
+  await mkdir(appRoot, { recursive: true });
   // Give the shipped Windows executable its own file identity and product resources before
   // Electron registers the Start Menu shortcut used by native toast notifications.
   // 在 Electron 为原生通知注册开始菜单快捷方式前，为发行版 Windows 程序写入独立文件身份和产品资源。
@@ -553,12 +621,17 @@ async function main() {
      type: 'module',
      main: 'desktop-entry.js',
    }));
+  // Every file of the macOS bundle is in place; seal it before the layout records its executable.
+  // macOS 应用包的全部文件均已就位；在布局记录其可执行文件前封装签名。
+  if (process.platform === 'darwin') {
+    await signMacosBundle();
+  }
   await cp(path.join(repository, 'apps/vulcan-code-web/dist'), path.join(output, 'webui'), { recursive: true });
   // Resolve the installed platform executable without inventing a Windows-only suffix.
   // 按安装平台解析可执行文件，不使用仅适用于 Windows 的后缀。
   const electronBinary = process.platform === 'win32'
     ? (profile === 'release' ? 'VulcanCodeDesktop.exe' : 'VulcanCodeDesktopDebug.exe')
-    : process.platform === 'darwin' ? 'Electron.app/Contents/MacOS/Electron' : 'electron';
+    : process.platform === 'darwin' ? `${MACOS_BUNDLE}/Contents/MacOS/Electron` : 'electron';
   // Read actual runtime and service versions from their authoritative artifacts.
   // 从权威制品读取实际运行时和服务版本。
   const electronPackage = JSON.parse(await readFile(path.join(desktop, 'node_modules/electron/package.json'), 'utf8'));

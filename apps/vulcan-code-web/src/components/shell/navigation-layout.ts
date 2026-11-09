@@ -35,3 +35,12 @@ export function navigationColumnWidth(isMobile: boolean, panelOpen: boolean): nu
 export function conversationReservedWidth(): number {
   return readLengthToken("--vk-reserve-w");
 }
+
+// nativeWindowButtonsStrip reads where the operating system's window buttons go: the title strip beside the
+// activity rail. Both lengths follow the text tier through the kit tokens.
+// nativeWindowButtonsStrip 读取操作系统窗口按钮所在的位置：活动轨道旁的标题条。两个长度都通过 kit 令牌跟随文字档位。
+// Returns the rail width as the strip's left edge and the title strip height, in pixels.
+// 返回作为标题条左边缘的轨道宽度及标题条高度，单位为像素。
+export function nativeWindowButtonsStrip(): { left: number; height: number } {
+  return { left: readLengthToken("--vk-rail-w"), height: readLengthToken("--vk-titlebar-h") };
+}

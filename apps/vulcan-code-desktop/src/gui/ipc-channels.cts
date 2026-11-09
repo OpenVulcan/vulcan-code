@@ -105,6 +105,15 @@ export const WINDOW_COMMAND_CHANNELS = {
   /** Reports the current window maximize state. */
   /** 报告当前窗口最大化状态。 */
   isMaximized: 'vulcan:window:is-maximized',
+  /** Toggles native full screen, the macOS green-button action. */
+  /** 切换原生全屏，即 macOS 绿色按钮的操作。 */
+  toggleFullScreen: 'vulcan:window:toggle-full-screen',
+  /** Reports whether the current window is in native full screen. */
+  /** 报告当前窗口是否处于原生全屏。 */
+  isFullScreen: 'vulcan:window:is-full-screen',
+  /** Places the macOS window buttons in the title strip the WebUI reports; answers the width they take. */
+  /** 将 macOS 窗口按钮放入 WebUI 上报的标题条区域；返回其占用宽度。 */
+  placeNativeButtons: 'vulcan:window:place-native-buttons',
   /** Reports the current window minimized state. */
   /** 报告当前窗口最小化状态。 */
   isMinimized: 'vulcan:window:is-minimized',
