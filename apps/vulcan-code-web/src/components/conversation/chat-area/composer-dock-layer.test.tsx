@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
-import { ChatAreaComposerDockLayer, type ChatAreaComposerDockLayerProps } from "./composer-dock-layer";
+import {
+  ChatAreaComposerDockLayer,
+  composerDockLayerPropsEqual,
+  type ChatAreaComposerDockLayerProps,
+} from "./composer-dock-layer";
 import { browserFallbackSnapshot } from "@/service/browser-fallback-workbench";
 import type { WorkbenchSnapshot } from "@/types";
 import { DEFAULT_THINKING_DISPLAY_MODE } from "../thinking-display";
@@ -34,21 +38,42 @@ function configuredSnapshot(): WorkbenchSnapshot {
  * workbench is already locally projected; id selects the persisted owner and empty controls only layout.
  * workbench 已按本地选择投影；id 选择持久归属，empty 仅控制布局。
  */
-function project(workbench: WorkbenchSnapshot, id: string | null, empty: boolean, runtimeStatus: ReactNode = null) {
+function layerProps(workbench: WorkbenchSnapshot, id: string | null, empty: boolean, runtimeStatus: ReactNode = null): ChatAreaComposerDockLayerProps {
   // Only workbench is inspected here; all parent callbacks are forwarded without invocation.
   // 此处仅检查 workbench；所有父层回调只被转发，不会调用。
   const chatAreaProps = { workbench } as ChatAreaComposerDockLayerProps["chatAreaProps"];
-  // The memo's inner component is invoked directly so the test reads the produced child props without rendering.
-  // 直接调用记忆化组件的内部组件，使测试无需渲染即可读取生成的子组件属性。
-  return ChatAreaComposerDockLayer.type({ chatAreaProps, projectId: "preview", conversationId: id,
+  return { chatAreaProps, projectId: "preview", conversationId: id,
     isEmptyConversation: empty, startProjectName: "project", isConversationRunning: false, showScrollToBottom: false,
     todolistStatusHost: null, sessionTodolist: null,
-    thinkingDisplayMode: DEFAULT_THINKING_DISPLAY_MODE, sessionReviewSummary: null, onComposerDockHeightChange: vi.fn(),
-    runtimeStatus, onScrollToBottom: vi.fn(), onThinkingDisplayModeChange: vi.fn(), onSubmitPrompt: vi.fn(),
-  }).props;
+    thinkingDisplayMode: DEFAULT_THINKING_DISPLAY_MODE, sessionReviewSummary: null, onComposerDockHeightChange: noop,
+    runtimeStatus, onScrollToBottom: noop, onThinkingDisplayModeChange: noop, onSubmitPrompt: submit,
+  };
+}
+
+// noop and submit are shared callbacks, so two prop sets built for the same scenario compare equal.
+// noop 与 submit 是共享回调，使为同一场景构建的两组属性比较相等。
+const noop = () => undefined;
+const submit = async () => true;
+
+function project(workbench: WorkbenchSnapshot, id: string | null, empty: boolean, runtimeStatus: ReactNode = null) {
+  // The memo's inner component is invoked directly so the test reads the produced child props without rendering.
+  // 直接调用记忆化组件的内部组件，使测试无需渲染即可读取生成的子组件属性。
+  return ChatAreaComposerDockLayer.type(layerProps(workbench, id, empty, runtimeStatus)).props;
 }
 
 describe("composer dock authoritative settings", () => {
+  it("skips Workbench deltas that touch only fields the composer does not read", () => {
+    const workbench = configuredSnapshot();
+    const before = layerProps(workbench, "preview", false);
+    // unrelated replaces the run phase of every session and the command sessions, as a running turn does.
+    // unrelated 替换每个会话的运行阶段与命令会话，与运行中的回合一致。
+    const unrelated = { ...workbench, commandSessions: [], conversations: workbench.conversations.map((conversation) => ({ ...conversation, runPhase: "toolRunning" })) };
+    expect(composerDockLayerPropsEqual(before, layerProps(unrelated, "preview", false))).toBe(true);
+    // contextUsage is shown by the composer, so a new value must re-render it.
+    // contextUsage 由输入区显示，因此新值必须使其重新渲染。
+    const read = { ...workbench, contextUsage: { ...workbench.contextUsage } } as WorkbenchSnapshot;
+    expect(composerDockLayerPropsEqual(before, layerProps(read, "preview", false))).toBe(false);
+  });
   it("retains saved session settings when the durable session has no visible messages", () => {
     const workbench = configuredSnapshot();
     const props = project(workbench, "preview", true);

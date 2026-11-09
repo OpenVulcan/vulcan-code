@@ -18,15 +18,15 @@ export interface ConversationTurnSeatProps {
   // Exact parent projection used only before a newly mounted row enters the committed Store.
   // 仅在新挂载行进入已提交 Store 前使用的精确父级投影。
   initialRow: ConversationTurnProjection;
-  // Renders one timeline item with the clock owned by this Seat.
-  // 使用当前 Seat 所属计时值渲染单条时间线条目。
-  renderItem: (item: ConversationTimelineItem, nowMs: number) => React.ReactNode;
+  // Renders one timeline item; live clocks belong to the leaves that display them, never to the Seat.
+  // 渲染单条时间线条目；实时计时属于显示它的叶子组件，绝不属于 Seat。
+  renderItem: (item: ConversationTimelineItem) => React.ReactNode;
 }
 
 // ConversationTurnSeat keeps one stable Turn outside sibling render updates.
 // ConversationTurnSeat 让单个稳定 Turn 不受兄弟行渲染更新影响。
-// Parameters: props contains the exact Turn identity, row store, live-clock ownership, and stable renderer.
-// 参数：props 包含精确 Turn 身份、行仓库、实时计时所有权与稳定渲染器。
+// Parameters: props contains the exact Turn identity, row store, and stable renderer.
+// 参数：props 包含精确 Turn 身份、行仓库与稳定渲染器。
 // Returns: the unchanged conversation-turn-shell DOM boundary and its ordered timeline children.
 // 返回值：保持不变的 conversation-turn-shell DOM 边界及其有序时间线子项。
 export const ConversationTurnSeat = React.memo(function ConversationTurnSeat(
@@ -47,21 +47,6 @@ export const ConversationTurnSeat = React.memo(function ConversationTurnSeat(
   // row is updated only when this exact Turn projection changes.
   // row 仅在当前精确 Turn 投影变化时更新。
   const row = React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-  // running is derived from the exact subscribed row so parent order reconciliation never owns live-clock updates.
-  // running 从精确订阅行派生，使父级顺序协调不再负责实时计时更新。
-  const running = row.items.some((item) => item.kind === "process" && item.process.running);
-  // nowMs is local to the active Turn so historical Seats never inherit periodic parent renders.
-  // nowMs 仅属于活动 Turn，使历史 Seat 永远不会继承父级周期渲染。
-  const [nowMs, setNowMs] = React.useState(() => running ? Date.now() : 0);
-  React.useEffect(() => {
-    if (!running) {
-      setNowMs(0);
-      return;
-    }
-    setNowMs(Date.now());
-    const interval = window.setInterval(() => setNowMs(Date.now()), 1000);
-    return () => window.clearInterval(interval);
-  }, [running]);
 
   return (
     <section
@@ -71,7 +56,7 @@ export const ConversationTurnSeat = React.memo(function ConversationTurnSeat(
     >
       {row.items.map((item) => (
         <React.Fragment key={conversationTimelineItemKey(item)}>
-          {props.renderItem(item, nowMs)}
+          {props.renderItem(item)}
         </React.Fragment>
       ))}
     </section>
@@ -110,7 +95,7 @@ export interface ConversationTurnSeatListProps {
   store: ConversationTimelineProjectionStore;
   // Shared presentation renderer whose identity changes only for presentation-wide inputs.
   // 仅在展示级输入变化时改变身份的共享展示渲染器。
-  renderItem: (item: ConversationTimelineItem, nowMs: number) => React.ReactNode;
+  renderItem: (item: ConversationTimelineItem) => React.ReactNode;
 }
 
 // ConversationTurnSeatList prevents content-only row changes from reconciling every historical Seat.

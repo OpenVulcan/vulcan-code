@@ -501,7 +501,6 @@ export function ConversationWorkspace(props: {
 
   const renderTimelineItem = React.useCallback((
     timelineItem: ConversationTimelineItem,
-    seatNowMs: number,
   ): React.ReactNode => {
     if (timelineItem.kind === "fork-source") return null;
     if (timelineItem.kind === "final-assistant-meta") {
@@ -557,7 +556,6 @@ export function ConversationWorkspace(props: {
         autoExpandThinkingBlockId={autoExpandThinkingBlockId}
         collapsedOverride={collapseKey ? processCollapseOverridesRef.current.get(collapseKey) : undefined}
         hiddenThinkingBlockIds={props.hiddenThinkingBlockIds}
-        nowMs={seatNowMs}
         parentConversationId={props.parentConversationId}
         process={timelineItem.process}
         sessionRunning={props.sessionRunning}
@@ -565,7 +563,7 @@ export function ConversationWorkspace(props: {
         expandedToolPresentationIds={toolPresentationExpansionOverridesRef.current}
         workspacePath={props.workspacePath}
         commandSessions={commandSessionsRef.current}
-        onCollapsedChange={(collapsed) => handleProcessCollapsedChange(timelineItem.process, collapsed)}
+        onCollapsedChange={handleProcessCollapsedChange}
         onCopyText={props.onCopyText}
         onEditUserPrompt={props.onEditUserPrompt}
         userPromptEditDisabled={lockedTimelineActionKeys.has(conversationTimelineItemKey(timelineItem))}

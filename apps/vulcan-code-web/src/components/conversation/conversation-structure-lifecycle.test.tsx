@@ -30,13 +30,13 @@ function processRow(key: string, running: boolean): ConversationTurnProjection {
   } }] };
 }
 
-it("keeps historical rows idle while only the running seat owns a timer", async () => {
-  // history and live have separate keys, clocks, and immutable row snapshots.
-  // history 与 live 具有独立的键、计时器和不可变行快照。
+it("never re-renders a seat while time passes, even when its process is running", async () => {
+  // history and live have separate keys and immutable row snapshots; the clock belongs to leaf labels only.
+  // history 与 live 具有独立的键和不可变行快照；计时只属于叶子标签。
   const history = processRow("history", false);
   const live = processRow("live", true);
   const store = new ConversationTimelineProjectionStore();
-  const renderItem = vi.fn((item: ConversationTimelineItem, now: number) => <p>{item.kind === "process" ? item.process.id : "unexpected"}:{now}</p>);
+  const renderItem = vi.fn((item: ConversationTimelineItem) => <p>{item.kind === "process" ? item.process.id : "unexpected"}</p>);
   const keys = [history.key, live.key];
   const rows = new Map([[history.key, history], [live.key, live]]);
   await act(async () => root.render(<ConversationTurnSeatList cacheScopeKey="one" rowKeys={keys} rows={rows} store={store} renderItem={renderItem} />));
@@ -44,16 +44,9 @@ it("keeps historical rows idle while only the running seat owns a timer", async 
   // 父层在子项挂载后提交行，与生产布局效果一致。
   await act(async () => { store.reconcile([history, live]); store.flushNotifications(); });
   renderItem.mockClear();
-  await act(async () => vi.advanceTimersByTime(2000));
-  expect(renderItem).toHaveBeenCalledTimes(1);
-  expect(host.textContent).toBe("history:0live:3000");
-  expect(vi.getTimerCount()).toBe(1);
-  await act(async () => { store.reconcile([history, processRow("live", false)]); store.flushNotifications(); });
-  expect(host.textContent).toBe("history:0live:0");
-  expect(vi.getTimerCount()).toBe(0);
-  renderItem.mockClear();
   await act(async () => vi.advanceTimersByTime(5000));
   expect(renderItem).not.toHaveBeenCalled();
+  expect(vi.getTimerCount()).toBe(0);
 });
 
 it("applies row notifications through a memoized list and clears clocks on scope removal", async () => {
@@ -63,14 +56,12 @@ it("applies row notifications through a memoized list and clears clocks on scope
   const first = processRow("one", false);
   const rows = new Map([[first.key, first]]);
   const keys = [first.key];
-  const renderItem = vi.fn((_item: ConversationTimelineItem, now: number) => <p>{now}</p>);
+  const renderItem = vi.fn((item: ConversationTimelineItem) => <p>{item.kind === "process" && item.process.running ? "running" : "idle"}</p>);
   await act(async () => root.render(<ConversationTurnSeatList cacheScopeKey="a" rowKeys={keys} rows={rows} store={store} renderItem={renderItem} />));
   await act(async () => { store.reconcile([first]); store.flushNotifications(); });
   await act(async () => { store.reconcile([processRow("one", true)]); store.flushNotifications(); });
-  expect(vi.getTimerCount()).toBe(1);
-  expect(host.textContent).toBe("1000");
+  expect(host.textContent).toBe("running");
   await act(async () => root.render(<ConversationTurnSeatList cacheScopeKey="b" rowKeys={[]} rows={new Map()} store={new ConversationTimelineProjectionStore()} renderItem={renderItem} />));
-  expect(vi.getTimerCount()).toBe(0);
   expect(host.textContent).toBe("");
 });
 

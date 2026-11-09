@@ -12,11 +12,7 @@ import {
   ConversationGenerationDialogV1,
   type ConversationGenerationDialogActionV1,
 } from "@/components/conversation/conversation-generation-dialog-v1";
-import {
-  StreamingThinkingOverlay,
-  TransientReasoningStatusLine,
-} from "@/components/conversation/conversation-live-reasoning";
-import { ProviderRetryCountdownLine } from "@/components/conversation/conversation-provider-retry-card";
+import { StreamingThinkingOverlay } from "@/components/conversation/conversation-live-reasoning";
 import {
   conversationIsRunning,
   conversationRuntimeCue,
@@ -25,10 +21,8 @@ import {
 import type { ComposerSubmission } from "@/components/composer/composer-model";
 import { useI18n } from "@/i18n";
 import { projectForConversation } from "@/state/workbench-selectors";
-import {
-  useConversationProviderRetryStatus,
-  useConversationTransientReasoningStatus,
-} from "@/state/conversation-live-stream-context";
+import { useConversationTailStatusKind } from "@/state/conversation-live-stream-context";
+import { ConversationTailStatus } from "@/components/conversation/chat-area/tail-status";
 import { toast } from "@/ui-kit/primitives/toast";
 import type { ChatAreaProps } from "@/components/conversation/chat-area/types";
 import { useChatAreaPlanActions } from "@/components/conversation/chat-area/plan-actions";
@@ -54,6 +48,10 @@ type ConversationGenerationTargetV1 = ConversationBranchGenerationActionV1 & {
    */
   childSessionId: string | null;
 };
+
+// NO_COMMAND_SESSIONS is the shared empty list, so a Workbench without command sessions keeps one prop identity.
+// NO_COMMAND_SESSIONS 是共享空列表，使没有命令会话的 Workbench 保持同一属性身份。
+const NO_COMMAND_SESSIONS: NonNullable<ChatAreaProps["workbench"]["commandSessions"]> = [];
 
 // ChatArea renders the conversation workspace and composer.
 // ChatArea 渲染会话工作区与输入区域。
@@ -313,15 +311,12 @@ export function ChatArea(props: ChatAreaProps) {
   );
   // optimisticUserInput is process-local and disappears only after exact V1 ClientActionId reconciliation.
   // optimisticUserInput 仅属于进程内，并且只在精确 V1 ClientActionId 对账后消失。
-  const optimisticUserInput = props.selectedDraftConversation?.pendingSubmission && pendingSubmissionVisible
-    ? {
-      clientActionId: props.selectedDraftConversation.pendingSubmission.clientSubmissionId,
-      text: props.selectedDraftConversation.pendingSubmission.prompt,
-      attachmentNames: props.selectedDraftConversation.pendingSubmission.attachments.map(
-        (attachment) => attachment.fileName,
-      ),
-    }
-    : null;
+  const visiblePendingSubmission = pendingSubmissionVisible ? props.selectedDraftConversation?.pendingSubmission ?? null : null;
+  const optimisticUserInput = React.useMemo(() => visiblePendingSubmission ? {
+    clientActionId: visiblePendingSubmission.clientSubmissionId,
+    text: visiblePendingSubmission.prompt,
+    attachmentNames: visiblePendingSubmission.attachments.map((attachment) => attachment.fileName),
+  } : null, [visiblePendingSubmission]);
   // showConversationLoadingOnly covers only the exact V1 owner handoff for a persisted selection.
   // showConversationLoadingOnly 仅覆盖持久化选择的精确 V1 归属切换阶段。
   const showConversationLoadingOnly = Boolean(selectedConversation && !eventWindowOwnerReady && !props.selectedDraftConversation?.pendingSubmission);
@@ -344,14 +339,11 @@ export function ChatArea(props: ChatAreaProps) {
   // each conversation surface starts with an empty store.
   // answerReplyStore 保存读者在回答组件上的决策与批注，直到输入区取走；每个会话界面都从空存储开始。
   const answerReplyStore = React.useMemo(() => new AnswerReplyStore(), [visualSurfaceKey]);
-  // transientReasoningStatus is request-local and never enters the stable Workbench snapshot.
-  // transientReasoningStatus 仅属于当前请求，绝不进入稳定 Workbench 快照。
-  const transientReasoningStatus = useConversationTransientReasoningStatus(
-    activeSurfaceConversationId,
-  );
-  // providerRetryStatus is the request-local wait before the next automatic Provider retry.
-  // providerRetryStatus 是下一次 Provider 自动重试前的请求局部等待。
-  const providerRetryStatus = useConversationProviderRetryStatus(activeSurfaceConversationId);
+  // tailStatusKind says only which request-local tail status is present; its changing content is subscribed by
+  // ConversationTailStatus, so token-count and countdown updates never re-render ChatArea.
+  // tailStatusKind 只表示存在哪种请求局部尾部状态；其变化内容由 ConversationTailStatus 订阅，
+  // 因此 token 计数与倒计时更新绝不会重新渲染 ChatArea。
+  const tailStatusKind = useConversationTailStatusKind(activeSurfaceConversationId);
   // Canonical correlation retires only this accepted first prompt after it is already renderable.
   // 规范关联只在该首条提示词已经可渲染后移除同一乐观记录。
   React.useEffect(() => {
@@ -388,12 +380,18 @@ export function ChatArea(props: ChatAreaProps) {
   // composerRuntimeStatus 悬浮在输入区左上沿而不进入转录，其出现、阶段切换与移除都不会让会话重排；
   // 重试等待或思考状态仍按共用转录尾部时的规则优先于它。
   const composerRuntimeStatus = useComposerRuntimeStatus(
-    providerRetryStatus || transientReasoningStatus ? null : runtimeCue,
+    tailStatusKind ? null : runtimeCue,
   );
   // tailStatusVisible tracks insertion and removal of every transcript-tail status line; the shared
   // ResizeObserver owns node reflow.
   // tailStatusVisible 跟踪全部转录尾部状态行的插入与移除；共享 ResizeObserver 负责节点重排。
-  const tailStatusVisible = transientReasoningStatus !== null || providerRetryStatus !== null;
+  const tailStatusVisible = tailStatusKind !== null;
+  // tailStatusElement keeps one element identity per conversation, so the transcript is not re-rendered for it.
+  // tailStatusElement 对每个会话保持同一元素身份，使转录不会因它重新渲染。
+  const tailStatusElement = React.useMemo(
+    () => activeSurfaceConversationId ? <ConversationTailStatus conversationId={activeSurfaceConversationId} /> : null,
+    [activeSurfaceConversationId],
+  );
   // isConversationRunning controls only the main composer stop affordance.
   // isConversationRunning 仅控制主输入区的停止操作展示。
   const isConversationRunning = conversationIsRunning(selectedConversation);
@@ -566,42 +564,49 @@ export function ChatArea(props: ChatAreaProps) {
   ): void => {
     writeSurfaceExpandedState(surfaceId, state);
   }, [writeSurfaceExpandedState]);
+  // collaborationNavigation and continuationFooter keep their identity between unrelated ChatArea renders, so the
+  // memoized transcript is not projected again for them.
+  // collaborationNavigation 与 continuationFooter 在无关的 ChatArea 渲染之间保持身份，使缓存的转录不会因它们重新投影。
+  const collaborationNavigation = React.useMemo(() => ({
+    conversations: props.workbench.conversations,
+    navigation: subagentNavigation,
+    onSelectConversation: props.onSelectConversation,
+    onOpenSubagentPanel: handleOpenSubagentPanelFromTimeline,
+  }), [handleOpenSubagentPanelFromTimeline, props.onSelectConversation, props.workbench.conversations, subagentNavigation]);
+  const continuationFooterVisible = Boolean(selectedConversation
+    && continuationCandidate?.session_id === selectedConversation.id
+    && !conversationIsRunning(selectedConversation)
+    && props.onContinueConversation);
+  const continuationFeedbackKind = continuationFeedback?.key === activeContinuationKey ? continuationFeedback?.kind ?? null : null;
+  const continuationFooter = React.useMemo(() => continuationFooterVisible ? (
+    <ConversationContinueControl
+      blockedLabel={t("conversation.continuation.blocked")}
+      blockedReason=""
+      claiming={continuationClaimKey === activeContinuationKey}
+      continueLabel={t("conversation.continue")}
+      continuingLabel={t("conversation.continuing")}
+      eligible
+      feedback={continuationFeedbackKind && continuationFeedbackKind !== "claiming" ? {
+        kind: continuationFeedbackKind,
+        label: continuationFeedbackKind === "failed"
+          ? t("conversation.continuation.claimFailed")
+          : t("conversation.continuing"),
+      } : null}
+      onContinue={() => void handleContinueConversation(null)}
+    />
+  ) : null, [activeContinuationKey, continuationClaimKey, continuationFeedbackKind, continuationFooterVisible, handleContinueConversation, t]);
   // conversationSurfaceContent keeps transcript, overlays, and composer in one adaptive content coordinate space.
   // conversationSurfaceContent 将转录、浮层与输入区保留在同一个自适应内容坐标空间内。
   const conversationSurfaceContent = (
     <>
       {selectedConversation ? (
         <SelectedConversationTranscript
-          collaborationNavigation={{
-            conversations: props.workbench.conversations,
-            navigation: subagentNavigation,
-            onSelectConversation: props.onSelectConversation,
-            onOpenSubagentPanel: handleOpenSubagentPanelFromTimeline,
-          }}
+          collaborationNavigation={collaborationNavigation}
           providers={props.workbench.providers}
-          commandSessions={props.workbench.commandSessions ?? []}
+          commandSessions={props.workbench.commandSessions ?? NO_COMMAND_SESSIONS}
           commands={eventWindowCommands}
           conversation={selectedConversation}
-          footer={continuationCandidate?.session_id === selectedConversation.id
-            && !conversationIsRunning(selectedConversation)
-            && props.onContinueConversation ? (
-              <ConversationContinueControl
-                blockedLabel={t("conversation.continuation.blocked")}
-                blockedReason=""
-                claiming={continuationClaimKey === activeContinuationKey}
-                continueLabel={t("conversation.continue")}
-                continuingLabel={t("conversation.continuing")}
-                eligible
-                feedback={continuationFeedback?.key === activeContinuationKey
-                  && continuationFeedback.kind !== "claiming" ? {
-                    kind: continuationFeedback.kind,
-                    label: continuationFeedback.kind === "failed"
-                      ? t("conversation.continuation.claimFailed")
-                      : t("conversation.continuing"),
-                  } : null}
-                onContinue={() => void handleContinueConversation(null)}
-              />
-            ) : null}
+          footer={continuationFooter}
           onCopyText={props.onCopyText}
           onExpandedStateChange={handleExpandedStateChange}
           onOpenSubagentPanel={handleOpenSubagentPanelFromTimeline}
@@ -620,11 +625,7 @@ export function ChatArea(props: ChatAreaProps) {
           sessionId={selectedConversation.id}
           sessionRunning={conversationIsRunning(surfaceConversation)}
           suppressEmptyPlaceholder={isEmptyConversation || isMaterializingConversationSurface}
-          transientReasoningStatus={providerRetryStatus ? (
-            <ProviderRetryCountdownLine countdown={providerRetryStatus} />
-          ) : transientReasoningStatus ? (
-            <TransientReasoningStatusLine status={transientReasoningStatus} />
-          ) : null}
+          transientReasoningStatus={tailStatusElement}
           workspacePath={selectedProject?.path ?? null}
           onTrace={props.onTrace}
         />

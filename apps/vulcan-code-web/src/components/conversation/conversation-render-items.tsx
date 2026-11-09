@@ -52,6 +52,10 @@ import type {
   ConversationRenderItem,
 } from "@/components/conversation/conversation-model";
 import { metadataValue } from "@/components/conversation/conversation-metadata";
+import {
+  conversationProcessRenderItemEqual,
+  conversationRenderItemEqual,
+} from "@/components/conversation/conversation-timeline-projection-store";
 import type {
   CommandSessionSummary,
   ComposerAttachmentSummary,
@@ -66,6 +70,26 @@ import { PageNotice } from "@/components/page/page-feedback";
 import { USER_PROMPT_COLLAPSE_LINE_LIMIT } from "./conversation-bubble-limits";
 import { DedicatedUserMessageMarks } from "./dedicated-transcript-memory";
 
+// propsEqualExcept compares memoized row props: the projected row by its sources, everything else by identity.
+// propsEqualExcept 比较缓存行的属性：投影行按来源比较，其余属性按引用比较。
+// Parameters: previous and next are the props of two renders; key names the projected row; equal compares it.
+// 参数：previous 与 next 是两次渲染的属性；key 指定投影行；equal 比较该行。
+// Returns: true when re-rendering would produce the same row, so React may keep the previous output.
+// 返回值：重新渲染会得到相同的行时返回 true，React 可保留上次输出。
+function propsEqualExcept<P extends object, K extends keyof P>(
+  previous: P,
+  next: P,
+  key: K,
+  equal: (left: P[K], right: P[K]) => boolean,
+): boolean {
+  const previousKeys = Object.keys(previous) as (keyof P)[];
+  if (previousKeys.length !== Object.keys(next).length) {
+    return false;
+  }
+  return previousKeys.every((name) => (
+    name === key ? equal(previous[key], next[key]) : Object.is(previous[name], next[name])
+  ));
+}
 
 // conversationPresentationMessageIsStreaming reads the explicit V1 adapter lifecycle marker.
 // conversationPresentationMessageIsStreaming 读取 V1 适配层显式写入的生命周期标记。
@@ -395,7 +419,32 @@ export function ConversationToolSequenceGroup(props: {
 
 // ConversationProcessGroup renders one per-turn process header and its foldable rows.
 // ConversationProcessGroup 渲染单个轮次过程标题及其可折叠处理行。
-export function ConversationProcessGroup(props: {
+// PROCESS_DURATION_TICK_MS is the refresh interval of a running process's elapsed time.
+// PROCESS_DURATION_TICK_MS 是运行中过程已用时长的刷新间隔。
+const PROCESS_DURATION_TICK_MS = 1000;
+
+// ProcessHeaderLabel renders the process header text; a running process ticks here, so only this text redraws.
+// ProcessHeaderLabel 渲染过程标题文字；运行中的过程在此计时，因此只有这段文字重绘。
+// Parameters: running selects the live clock, startedAtMs anchors it, durationMs is the settled duration.
+// 参数：running 选择实时计时，startedAtMs 为计时起点，durationMs 为已结算时长。
+function ProcessHeaderLabel(props: { running: boolean; startedAtMs: number; durationMs: number | null }) {
+  const { locale, t } = useI18n();
+  const [nowMs, setNowMs] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    if (!props.running) return undefined;
+    setNowMs(Date.now());
+    const timer = window.setInterval(() => setNowMs(Date.now()), PROCESS_DURATION_TICK_MS);
+    return () => window.clearInterval(timer);
+  }, [props.running]);
+  const durationMs = props.durationMs ?? (props.running ? Math.max(0, nowMs - props.startedAtMs) : null);
+  const durationLabel = formatWorkProcessDuration(durationMs, locale);
+  // Use the owning process lifecycle so completed work stays terminal while another turn runs.
+  // 使用所属过程的生命周期，避免其他回合运行时将已完成工作显示为进行中。
+  const workLabel = t(props.running ? "conversation.process.working" : "conversation.process.worked");
+  return <span>{durationLabel ? `${workLabel} ${durationLabel}` : workLabel}</span>;
+}
+
+export const ConversationProcessGroup = React.memo(function ConversationProcessGroup(props: {
   // autoExpandThinkingBlockId keeps parity with normal block rendering.
   // autoExpandThinkingBlockId 保持与普通块渲染一致。
   autoExpandThinkingBlockId: string | null;
@@ -405,9 +454,6 @@ export function ConversationProcessGroup(props: {
   // hiddenThinkingBlockIds hides thinking blocks filtered by the display mode.
   // hiddenThinkingBlockIds 隐藏由展示模式过滤的思考块。
   hiddenThinkingBlockIds: ReadonlySet<string>;
-  // Current clock tick used for live duration projection.
-  // 用于实时耗时投影的当前时钟刻度。
-  nowMs: number;
   // Parent conversation id used by subagent navigation.
   // 子代理导航使用的父会话标识。
   parentConversationId: string | null;
@@ -429,9 +475,9 @@ export function ConversationProcessGroup(props: {
   // Live command-session summaries used by terminal presentations.
   // 终端展示使用的实时命令会话摘要。
   commandSessions: CommandSessionSummary[];
-  // Records one user-triggered collapsed state change.
-  // 记录一次用户触发的折叠状态变化。
-  onCollapsedChange: (collapsed: boolean) => void;
+  // Records one user-triggered collapsed state change for the given process; a stable callback keeps the memo valid.
+  // 为指定过程记录一次用户触发的折叠状态变化；稳定的回调可保持缓存有效。
+  onCollapsedChange: (process: ConversationProcessRenderItem, collapsed: boolean) => void;
   // Copies transcript text using the shell-provided clipboard path.
   // 使用外壳提供的剪贴板路径复制转录文本。
   onCopyText: (text: string) => Promise<void> | void;
@@ -512,17 +558,9 @@ export function ConversationProcessGroup(props: {
       .filter((item) => conversationPresentationMessageIsStreaming(item.sourceMessage))
       .map((item) => item.id),
   );
-  const liveDurationMs = props.process.running
-    ? Math.max(0, props.nowMs - (props.process.startedAtMs ?? fallbackStartedAtMsRef.current))
-    : null;
-  const displayedDurationMs = props.process.durationMs ?? liveDurationMs;
-  const durationLabel = formatWorkProcessDuration(displayedDurationMs, locale);
-  // Use the owning process lifecycle so completed work stays terminal while another turn runs.
-  // 使用所属过程的生命周期，避免其他回合运行时将已完成工作显示为进行中。
-  const workLabel = t(props.process.running ? "conversation.process.working" : "conversation.process.worked");
-  // Append the existing measured duration without changing timer or stopped-state semantics.
-  // 附加现有实测耗时，不改变计时器或停止状态语义。
-  const headerText = durationLabel ? `${workLabel} ${durationLabel}` : workLabel;
+  // A stopped process is never running, so its label uses only the settled duration.
+  // 已停止的过程不会处于运行中，因此其文案只使用已结算时长。
+  const durationLabel = formatWorkProcessDuration(props.process.running ? null : props.process.durationMs, locale);
   const stoppedText = durationLabel
     ? t("conversation.process.stoppedAfter").replace("{duration}", durationLabel)
     : t("conversation.process.stopped");
@@ -584,12 +622,16 @@ export function ConversationProcessGroup(props: {
             return;
           }
           dispatchConversationManualViewportInteraction();
-          props.onCollapsedChange(!collapsed);
+          props.onCollapsedChange(props.process, !collapsed);
         }}
         type="button"
       >
         <Clock3 aria-hidden="true" />
-        <span>{headerText}</span>
+        <ProcessHeaderLabel
+          durationMs={props.process.durationMs}
+          running={props.process.running}
+          startedAtMs={props.process.startedAtMs ?? fallbackStartedAtMsRef.current}
+        />
         {props.process.collapsible && toolCollapseEnabled ? (collapsed ? <ChevronRight aria-hidden="true" className="vk-process-chev" /> : <ChevronDown aria-hidden="true" className="vk-process-chev" />) : null}
       </button>
       <div className="vk-process-guidance">
@@ -686,7 +728,7 @@ export function ConversationProcessGroup(props: {
       </ConversationMeasuredCollapse>
     </section>
   );
-}
+}, (previous, next) => propsEqualExcept(previous, next, "process", conversationProcessRenderItemEqual));
 
 // isTurnProcessUserRenderItem returns whether one user row should stay visible while its process is collapsed.
 // isTurnProcessUserRenderItem 返回单条用户行是否应在过程折叠时保持可见。
@@ -807,13 +849,15 @@ function itemRevision(item: ConversationRenderItem): string {
 // its place and leaves the rest of the conversation working; it tries again when the item's content changes.
 // ConversationRenderItemView 渲染单条投影后的转录展示项。渲染失败的行在原位显示提示，会话其余部分照常工作；
 // 该项内容变化时会再次尝试渲染。
-export function ConversationRenderItemView(props: ConversationRenderItemViewProps) {
+// Memoized by row sources, so a row re-renders only when its own content or a shared input changes.
+// 按行来源缓存，因此只有自身内容或共享输入变化时才重新渲染该行。
+export const ConversationRenderItemView = React.memo(function ConversationRenderItemView(props: ConversationRenderItemViewProps) {
   return (
     <RenderErrorBoundary fallback={(error) => <ConversationItemFault error={error} />} resetKey={itemRevision(props.item)}>
       <ConversationRenderItemContent {...props} />
     </RenderErrorBoundary>
   );
-}
+}, (previous, next) => propsEqualExcept(previous, next, "item", conversationRenderItemEqual));
 
 // ConversationItemFault stands in for a row that failed to render, with the error behind a disclosure.
 // ConversationItemFault 代替渲染失败的行，错误信息收在展开区中。

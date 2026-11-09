@@ -100,6 +100,7 @@ const eventWindowStore = createConversationEventWindowExternalStore({
 vi.mock("@/state/conversation-live-stream-context", () => ({
   useConversationProviderRetryStatus: () => null,
   useConversationTransientReasoningStatus: () => liveStatus.reasoning,
+  useConversationTailStatusKind: () => liveStatus.reasoning ? "transientReasoning" : null,
 }));
 // The transcript and composer stop at their slots: the transcript shows its tail status, the dock its floating status.
 // 转录与输入区止于各自插槽：转录显示尾部状态，停靠层显示悬浮状态。

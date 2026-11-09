@@ -101,6 +101,40 @@ export function useConversationProviderRetryStatus(
   return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
+// ConversationTailStatusKind names which transcript-tail status line is showing; a retry wait outranks reasoning.
+// ConversationTailStatusKind 指明当前显示哪一条转录尾部状态行；重试等待优先于思考状态。
+export type ConversationTailStatusKind = "providerRetry" | "transientReasoning";
+
+// useConversationTailStatusKind reports only which tail status is present, never its changing content.
+// useConversationTailStatusKind 只报告存在哪种尾部状态，从不报告其变化中的内容。
+// Parameters: conversationId is the exact conversation identity, or null to disable the subscription.
+// 参数：conversationId 是精确会话身份；为 null 时禁用订阅。
+// Returns: the present status kind or null; token-count updates keep the same value, so callers do not re-render.
+// 返回值：存在的状态类型或 null；token 计数更新保持相同值，因此调用方不会重新渲染。
+export function useConversationTailStatusKind(
+  conversationId: string | null,
+): ConversationTailStatusKind | null {
+  const store = useConversationLiveStreamStore();
+  const subscribe = React.useCallback(
+    (listener: () => void) => {
+      if (!conversationId) return () => {};
+      const unsubscribeRetry = store.subscribe(providerRetryStatusKey(conversationId), listener);
+      const unsubscribeReasoning = store.subscribe(transientReasoningStatusKey(conversationId), listener);
+      return () => {
+        unsubscribeRetry();
+        unsubscribeReasoning();
+      };
+    },
+    [conversationId, store],
+  );
+  const getSnapshot = React.useCallback((): ConversationTailStatusKind | null => {
+    if (!conversationId) return null;
+    if (store.getProviderRetryStatus(conversationId)) return "providerRetry";
+    return store.getTransientReasoningStatus(conversationId) ? "transientReasoning" : null;
+  }, [conversationId, store]);
+  return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
 // useConversationContextCompactionPreview subscribes one compaction card to its live summary preview.
 // useConversationContextCompactionPreview 让单张压缩卡订阅其实时摘要预览。
 // Parameters: conversationId and apiCallId identify the card; null for either disables the subscription.

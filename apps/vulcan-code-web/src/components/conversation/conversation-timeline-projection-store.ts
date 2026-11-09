@@ -223,7 +223,7 @@ function conversationTimelineItemEqual(
 // 参数：left 与 right 是相同视觉位置的过程投影。
 // Returns: true when header state, timing, and ordered child rows are unchanged.
 // 返回值：当标题状态、计时与有序子行均未变化时返回 true。
-function conversationProcessRenderItemEqual(
+export function conversationProcessRenderItemEqual(
   left: ConversationProcessRenderItem,
   right: ConversationProcessRenderItem,
 ): boolean {
@@ -259,7 +259,7 @@ function conversationRenderItemArrayEqual(
 // 参数：left 与 right 是由同一转录投影器契约生成的渲染项。
 // Returns: true when identity, role, and every contributing immutable message reference match.
 // 返回值：当身份、角色及全部贡献不可变消息引用均匹配时返回 true。
-function conversationRenderItemEqual(
+export function conversationRenderItemEqual(
   left: ConversationRenderItem,
   right: ConversationRenderItem | undefined,
 ): boolean {
