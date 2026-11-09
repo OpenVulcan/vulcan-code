@@ -150,18 +150,21 @@ export function StreamingThinkingOverlay(props: {
     ? t("runtime.thinkingOverlayDockRight")
     : t("runtime.thinkingOverlayRestoreCentered");
 
+  // The section is deliberately not a live region: every streamed revision would otherwise raise an accessibility
+  // event carrying the whole growing body, which Windows delivers through the system-wide window event path.
+  // Only the static heading below announces that reasoning started.
+  // 外层区块刻意不作为实时区域：否则每次流式修订都会携带整段增长正文触发辅助功能事件，而 Windows
+  // 经全系统窗口事件路径投递这些事件。仅由下方静态标题播报一次思考开始。
   return (
     <section
       className="vk-think-float"
       data-dock={layoutMode === "right_docked" ? "right" : "center"}
       data-leaving={props.leaving || undefined}
       style={{ "--vk-think-exit": `${THINKING_OVERLAY_EXIT_MS}ms` } as React.CSSProperties}
-      aria-live="polite"
-      aria-busy={!props.leaving}
     >
       <header className="vk-think-float-head">
         <Brain aria-hidden="true" />
-        <b>{t("runtime.thinking")}</b>
+        <b role="status">{t("runtime.thinking")}</b>
         <div className="vk-actions">
           <Tooltip>
             <TooltipTrigger asChild>

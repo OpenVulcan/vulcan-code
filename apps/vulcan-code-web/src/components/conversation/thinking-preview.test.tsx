@@ -89,6 +89,9 @@ it("does not open a second preview while the live thinking popup owns the stream
       </I18nProvider>,
     ));
     expect(document.querySelectorAll(".vk-think-float")).toHaveLength(1);
+    // The streamed body must stay outside every live region so revisions raise no accessibility events.
+    // 流式正文必须位于所有实时区域之外，使修订不触发辅助功能事件。
+    expect(document.querySelector(".vk-think-float-content")?.closest("[aria-live], [role=status]")).toBeNull();
     expect(host.querySelector(".vk-think-tag[data-indicator]")).not.toBeNull();
     expect(host.querySelector("button.vk-think-tag")).toBeNull();
     expect(document.querySelector(".vk-think-pop")).toBeNull();

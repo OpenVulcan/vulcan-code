@@ -389,7 +389,10 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
 
 /* The floating reasoning window shown while the model thinks. Centered, it floats over the transcript
  * just above the composer, where no reply is being written yet; right-docked, it keeps to the right
- * edge. It fades out once the reply starts. Markdown rendering is a per-viewer toggle. */
+ * edge. It fades out once the reply starts. Markdown rendering is a per-viewer toggle.
+ * Its background is opaque, so it carries no backdrop blur: a blur would resample the long transcript
+ * behind it on every streamed revision and every frame of the heading shimmer. Containment keeps its
+ * growing body from invalidating layout and paint outside the window. */
 .vk-think-float {
   position: absolute;
   z-index: 7;
@@ -397,7 +400,7 @@ button.vk-turn-stat:hover { background: var(--vk-hover); color: var(--vk-ink); }
   grid-template-rows: auto minmax(0, 1fr);
   border: var(--vk-bw) solid color-mix(in srgb, var(--vk-ember) 35%, var(--vk-line-strong));
   background: var(--vk-raised);
-  backdrop-filter: blur(10px);
+  contain: layout paint style;
   box-shadow: var(--vk-shadow-2), 0 0 0 1px color-mix(in srgb, var(--vk-ember) 10%, transparent);
   animation: vk-rise var(--vk-t-med) var(--vk-ease) backwards;
   transition: opacity var(--vk-t-med) var(--vk-ease), transform var(--vk-t-med) var(--vk-ease);

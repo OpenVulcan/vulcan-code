@@ -80,6 +80,19 @@ function chatAreaProps(runPhase: string): ChatAreaProps {
   return { workbench, selectedConversationId: "test-playwright" } as unknown as ChatAreaProps;
 }
 
+/** Stubs popup viewport observation in jsdom. Takes no inputs and returns nothing.
+ * 在 jsdom 中替换浮层视区观察。无参数和返回值。 */
+function stubPopupResizeObserver() {
+  vi.stubGlobal("ResizeObserver", class {
+    // Accepts an observed element without delivering geometry notifications.
+    // 接收被观察的元素，不发送几何变化通知。
+    observe() {}
+    // Releases the synthetic observer without retaining any elements.
+    // 释放模拟观察器，不保留任何元素。
+    disconnect() {}
+  });
+}
+
 describe("session runtime cue placement", () => {
   let host: HTMLDivElement;
   let root: ReturnType<typeof createRoot>;
@@ -100,16 +113,21 @@ describe("session runtime cue placement", () => {
     vi.unstubAllGlobals();
   });
 
-  /** Renders ChatArea for one run phase; returns nothing, the DOM is read from host.
-   * 按一个运行阶段渲染 ChatArea；无返回值，从 host 读取 DOM。 */
-  async function render(runPhase: string) {
+  /** Renders ChatArea with props, optionally observing commits with onRender; returns after the DOM settles.
+   * 用 props 渲染 ChatArea，可选用 onRender 观察提交；DOM 稳定后返回。 */
+  async function render(props: ChatAreaProps, onRender?: React.ProfilerOnRenderCallback) {
+    // area is the real conversation surface under test.
+    // area 是受测的真实会话界面。
+    const area = <ChatArea {...props} />;
     await React.act(async () => root.render(
-      <I18nProvider initialLocale="en-US"><ChatArea {...chatAreaProps(runPhase)} /></I18nProvider>,
+      <I18nProvider initialLocale="en-US">
+        {onRender ? <React.Profiler id="chat" onRender={onRender}>{area}</React.Profiler> : area}
+      </I18nProvider>,
     ));
   }
 
   it.each(["toolCalling", "requesting", "memoryRecall"])("floats the %s cue over the composer, never in the transcript", async (phase) => {
-    await render(phase);
+    await render(chatAreaProps(phase));
     const transcript = host.querySelector("[data-testid=transcript]")!;
     const dock = host.querySelector("[data-testid=composer-dock]")!;
     expect(transcript.querySelector("[data-runtime-cue]")).toBeNull();
@@ -119,15 +137,64 @@ describe("session runtime cue placement", () => {
   });
 
   it("shows no cue while the phase has none", async () => {
-    await render("toolRunning");
+    await render(chatAreaProps("toolRunning"));
     expect(host.querySelector("[data-runtime-cue]")).toBeNull();
   });
 
   it("keeps a reasoning status in the transcript and suppresses the floating cue", async () => {
     liveStatus.reasoning = { kind: "encrypted" };
-    await render("toolCalling");
+    await render(chatAreaProps("toolCalling"));
     expect(host.querySelector("[data-testid=transcript]")!.childElementCount).toBe(1);
     expect(host.querySelector("[data-runtime-cue]")).toBeNull();
+  });
+
+  it("commits each reasoning revision once and retains the final text for the overlay exit", async () => {
+    vi.useFakeTimers();
+    stubPopupResizeObserver();
+    // reasoning keeps one canonical event identity as the stream appends text.
+    // reasoning 在流式追加正文时保持同一个规范事件标识。
+    const reasoning: ConversationEventSummary = {
+      seq: 2, turn_id: 1, event_revision: 1, created_at_ms: 2, updated_at_ms: 2, visibility: "provider",
+      event: { kind: "assistant_reasoning", api_call_id: 2, status: "streaming", text: "first" },
+    };
+    // commits counts the whole chat surface's commits, including any caused by popup state updates.
+    // commits 统计整个会话界面的提交，包括浮层状态更新触发的提交。
+    const commits = vi.fn<React.ProfilerOnRenderCallback>();
+    // props keeps the workbench snapshot stable while only the reasoning event changes.
+    // props 让工作台快照在只有思考事件变化时保持稳定。
+    const props = chatAreaProps("requesting");
+    eventWindow.events = [...initialEvents, reasoning];
+    await render(props, commits);
+
+    // liveBody stays mounted throughout streaming and exit to preserve the reader's viewport.
+    // liveBody 在流式更新和退场期间保持挂载，以保留阅读者的视区。
+    const liveBody = host.querySelector(".vk-think-float-content");
+    // finalText and revision advance with every cumulative reasoning update.
+    // finalText 与 revision 随每次累积思考更新递进。
+    let finalText = "first";
+    let revision = reasoning.event_revision;
+    for (const fragment of Array.from({ length: 8 }, () => "\n\nReasoning paragraph. ".repeat(256))) {
+      finalText += fragment;
+      revision += 1;
+      eventWindow.events = [...initialEvents, {
+        ...reasoning, event_revision: revision,
+        event: { kind: "assistant_reasoning", api_call_id: 2, status: "streaming", text: finalText },
+      }];
+      commits.mockClear();
+      await render(props, commits);
+      expect(commits).toHaveBeenCalledTimes(1);
+      expect(liveBody?.textContent).toBe(finalText);
+    }
+
+    eventWindow.events = [...initialEvents, {
+      ...reasoning, event_revision: revision + 1,
+      event: { kind: "assistant_reasoning", api_call_id: 2, status: "completed", text: finalText },
+    }];
+    await render(props, commits);
+    expect(host.querySelector(".vk-think-float-content")).toBe(liveBody);
+    expect(liveBody?.textContent).toBe(finalText);
+    await React.act(async () => vi.advanceTimersByTimeAsync(THINKING_OVERLAY_EXIT_MS * 2));
+    expect(host.querySelector(".vk-think-float")).toBeNull();
   });
 
   it.each([
@@ -139,14 +206,7 @@ describe("session runtime cue placement", () => {
     { kind: "api_started", api_call_id: 3, purpose: "main_generation", request: { provider: "test", model: "test" } },
   ] satisfies ConversationEventBody[])("closes stale reasoning after $kind and stays closed on remount", async (boundary) => {
     vi.useFakeTimers();
-    vi.stubGlobal("ResizeObserver", class {
-      // Accepts an observed element without delivering geometry notifications.
-      // 接收被观察的元素，不发送几何变化通知。
-      observe() {}
-      // Releases the synthetic observer without retaining any elements.
-      // 释放模拟观察器，不保留任何元素。
-      disconnect() {}
-    });
+    stubPopupResizeObserver();
     // reasoning is the live row whose terminal revision is deliberately omitted.
     // reasoning 是刻意省略终态修订的实时事件。
     const reasoning: ConversationEventSummary = {
@@ -154,7 +214,7 @@ describe("session runtime cue placement", () => {
       event: { kind: "assistant_reasoning", api_call_id: 2, status: "streaming", text: "Reasoning in flight" },
     };
     eventWindow.events = [...initialEvents, reasoning];
-    await render("requesting");
+    await render(chatAreaProps("requesting"));
     expect(host.querySelector(".vk-think-float")).not.toBeNull();
 
     eventWindow.events = [...eventWindow.events, {
@@ -164,18 +224,18 @@ describe("session runtime cue placement", () => {
       seq: 4, turn_id: reasoning.turn_id, event_revision: 1, created_at_ms: 4, updated_at_ms: 4,
       visibility: boundary.kind === "api_started" ? "host_only" : "ui_only", event: boundary,
     }];
-    await render("requesting");
+    await render(chatAreaProps("requesting"));
     await React.act(async () => vi.advanceTimersByTimeAsync(THINKING_OVERLAY_EXIT_MS * 2));
     expect(host.querySelector(".vk-think-float")).toBeNull();
 
     await React.act(async () => root.unmount());
     root = createRoot(host);
-    await render("requesting");
+    await render(chatAreaProps("requesting"));
     expect(host.querySelector(".vk-think-float")).toBeNull();
   });
 
   it("keeps the ticking elapsed time out of the live region", async () => {
-    await render("toolCalling");
+    await render(chatAreaProps("toolCalling"));
     const cue = host.querySelector("[data-runtime-cue]")!;
     // The live region announces only the phase text; every other child is hidden from assistive technology.
     // 实时区域只播报阶段文本；其余子节点都对辅助技术隐藏。

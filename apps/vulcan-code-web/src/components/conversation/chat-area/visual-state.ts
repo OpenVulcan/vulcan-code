@@ -8,18 +8,6 @@ import { useThinkingDisplayPreference } from "@/components/conversation/thinking
 // THINKING_OVERLAY_EXIT_MS 是思考结束后实时思考窗等待及淡出的时长；其淡出样式也读取该值。
 export const THINKING_OVERLAY_EXIT_MS = 500;
 
-// thinkingOverlayBlockSignature identifies one displayed thinking block without importing the legacy transcript parser.
-// thinkingOverlayBlockSignature 在不导入旧转录解析器的前提下标识一个已显示的思考块。
-function thinkingOverlayBlockSignature(block: ConversationBlock): string {
-  return [
-    block.id,
-    block.title,
-    block.summary,
-    block.status ?? "",
-  ].join("\u0000");
-}
-
-
 // UseThinkingDisplayModeOptions defines the global default and exact session scope.
 // UseThinkingDisplayModeOptions 定义全局默认值及精确会话作用域。
 export interface UseThinkingDisplayModeOptions {
@@ -64,6 +52,17 @@ export interface ConversationVisualTransitionsState {
   thinkingOverlayLeaving: boolean;
 }
 
+// ScopedThinkingBlock binds an overlay snapshot to the surface that can display it.
+// ScopedThinkingBlock 将浮层快照绑定到可显示它的界面。
+interface ScopedThinkingBlock {
+  // Surface that owns the snapshot.
+  // 持有快照的界面。
+  surfaceKey: string;
+  // Last committed live block at the time of capture.
+  // 捕获时最近一次提交的实时思考块。
+  block: ConversationBlock;
+}
+
 // Resolves a session override without rewriting the global service preference.
 // 解析会话覆盖值，不改写全局服务偏好。
 // Parameters: options provides the authoritative global default and exact conversation ID.
@@ -83,49 +82,39 @@ export function useThinkingDisplayMode(options: UseThinkingDisplayModeOptions): 
 export function useConversationVisualTransitions(
   options: UseConversationVisualTransitionsOptions,
 ): ConversationVisualTransitionsState {
-  // retainedThinkingBlock keeps the latest overlay mounted during its delayed exit.
-  // retainedThinkingBlock 在延迟退场期间保持最新浮层挂载。
-  const [retainedThinkingBlock, setRetainedThinkingBlock] = React.useState<ConversationBlock | null>(
-    options.displayedThinkingBlock,
-  );
+  // surfaceKey and displayedThinkingBlock are the current owner and live content.
+  // surfaceKey 与 displayedThinkingBlock 分别是当前归属与实时内容。
+  const { surfaceKey, displayedThinkingBlock } = options;
+  // hasLiveThinking changes only when the live overlay opens or closes.
+  // hasLiveThinking 仅在实时浮层出现或退出时变化。
+  const hasLiveThinking = displayedThinkingBlock !== null;
+  // committedThinkingBlock tracks revisions without scheduling another conversation render.
+  // committedThinkingBlock 记录各次修订，无需再次渲染会话。
+  const committedThinkingBlock = React.useRef<ScopedThinkingBlock | null>(null);
+  // retainedThinkingBlock keeps the overlay mounted while it transitions to its final snapshot.
+  // retainedThinkingBlock 让浮层在切换到最终快照期间保持挂载。
+  const [retainedThinkingBlock, setRetainedThinkingBlock] = React.useState<ScopedThinkingBlock | null>(null);
   // thinkingOverlayLeaving marks the fade-out half of overlay exit.
   // thinkingOverlayLeaving 标记浮层退场的淡出阶段。
   const [thinkingOverlayLeaving, setThinkingOverlayLeaving] = React.useState(false);
-  // previousSurfaceKeyRef detects actual surface changes before paint.
-  // previousSurfaceKeyRef 在绘制前检测真实界面变化。
-  const previousSurfaceKeyRef = React.useRef(options.surfaceKey);
-  // displayedThinkingSignature identifies content changes inside one live overlay block.
-  // displayedThinkingSignature 标识单个实时浮层块内部的内容变化。
-  const displayedThinkingSignature = options.displayedThinkingBlock
-    ? thinkingOverlayBlockSignature(options.displayedThinkingBlock)
-    : null;
-  // visibleThinkingBlock selects live content before delayed retained content.
-  // visibleThinkingBlock 优先选择实时内容，再选择延迟保留内容。
-  const visibleThinkingBlock = options.displayedThinkingBlock ?? retainedThinkingBlock;
 
   React.useLayoutEffect(() => {
-    if (previousSurfaceKeyRef.current === options.surfaceKey) {
-      return;
+    if (displayedThinkingBlock) {
+      committedThinkingBlock.current = { surfaceKey, block: displayedThinkingBlock };
     }
-    previousSurfaceKeyRef.current = options.surfaceKey;
-    setRetainedThinkingBlock(options.displayedThinkingBlock);
-    setThinkingOverlayLeaving(false);
-  }, [
-    options.displayedThinkingBlock,
-    options.surfaceKey,
-  ]);
+  }, [displayedThinkingBlock, surfaceKey]);
 
-  React.useEffect(() => {
-    if (options.displayedThinkingBlock) {
-      setRetainedThinkingBlock((current) => (
-        current && thinkingOverlayBlockSignature(current) === displayedThinkingSignature
-          ? current
-          : options.displayedThinkingBlock
-      ));
-      setThinkingOverlayLeaving(false);
-      return;
-    }
-    if (!retainedThinkingBlock) {
+  React.useLayoutEffect(() => {
+    // latest is the most recent block that actually reached the UI.
+    // latest 是最近一次实际提交到界面的思考块。
+    const latest = committedThinkingBlock.current;
+    // scopedBlock can only survive within its originating conversation or draft.
+    // scopedBlock 只能在其所属的会话或草稿内保留。
+    const scopedBlock = latest?.surfaceKey === surfaceKey ? latest : null;
+    committedThinkingBlock.current = scopedBlock;
+    setRetainedThinkingBlock(scopedBlock);
+    setThinkingOverlayLeaving(false);
+    if (hasLiveThinking || !scopedBlock) {
       return;
     }
     // fadeTimer starts the visual exit after the live overlay disappears.
@@ -136,6 +125,7 @@ export function useConversationVisualTransitions(
     // removeTimer unmounts the retained overlay after the complete exit interval.
     // removeTimer 在完整退场间隔后卸载保留浮层。
     const removeTimer = window.setTimeout(() => {
+      committedThinkingBlock.current = null;
       setRetainedThinkingBlock(null);
       setThinkingOverlayLeaving(false);
     }, THINKING_OVERLAY_EXIT_MS * 2);
@@ -143,15 +133,13 @@ export function useConversationVisualTransitions(
       window.clearTimeout(fadeTimer);
       window.clearTimeout(removeTimer);
     };
-  }, [
-    displayedThinkingSignature,
-    options.displayedThinkingBlock,
-    options.surfaceKey,
-    retainedThinkingBlock,
-  ]);
+  }, [hasLiveThinking, surfaceKey]);
 
+  // retainedBlock keeps the outgoing overlay in place only while its surface still owns it.
+  // retainedBlock 仅在当前界面仍拥有浮层时保留退场内容。
+  const retainedBlock = retainedThinkingBlock?.surfaceKey === surfaceKey ? retainedThinkingBlock.block : null;
   return {
-    visibleThinkingBlock,
-    thinkingOverlayLeaving,
+    visibleThinkingBlock: displayedThinkingBlock ?? retainedBlock,
+    thinkingOverlayLeaving: !hasLiveThinking && retainedBlock !== null && thinkingOverlayLeaving,
   };
 }
