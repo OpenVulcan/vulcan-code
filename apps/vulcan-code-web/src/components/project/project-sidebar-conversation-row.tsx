@@ -11,6 +11,7 @@ import {
 
 import { SidebarMenuItem } from "@/ui-kit/shell/sidebar";
 import { useI18n, type LocaleCode } from "@/i18n";
+import { conversationIsRunning, useAwayUnread } from "@/state/away-unread";
 import type { ConversationSummary, ProjectSummary } from "@/types";
 
 import { ConversationContextMenu } from "./project-sidebar-menus";
@@ -67,7 +68,10 @@ export function ConversationTreeRow(props: {
   const [archiveConfirming, setArchiveConfirming] = React.useState(false);
   const resetArchiveConfirming = React.useCallback(() => setArchiveConfirming(false), []);
   const variant = props.variant ?? "tree";
-  const state = conversationRowState(props.conversation, props.isSelected);
+  // awayUnread marks a selected conversation that finished while the window was unattended.
+  // awayUnread 标记窗口无人关注期间结束的选中会话。
+  const awayUnread = useAwayUnread(props.conversation.id);
+  const state = conversationRowState(props.conversation, props.isSelected, awayUnread);
   const stateLabel = conversationStateLabel(state, t);
   // Dedicated sessions carry a kind mark so they read apart from ordinary conversations.
   // 专职会话带有种类标记，以便与普通对话区分。
@@ -162,13 +166,19 @@ export function ConversationTreeRow(props: {
 // ConversationRowState 是行展示的单一状态，按优先级依次为：问题、计划、运行中、未读。
 type ConversationRowState = "ask" | "plan" | "running" | "unread" | null;
 
-// conversationRowState picks the state the row signals; a selected row is never unread.
-// conversationRowState 选出行要展示的状态；选中的行不显示未读。
-function conversationRowState(conversation: ConversationSummary, isSelected: boolean): ConversationRowState {
+// conversationRowState picks the state the row signals; a selected row is unread only when it finished while the
+// window was unattended.
+// conversationRowState 选出行要展示的状态；选中的行只有在窗口无人关注期间结束时才显示未读。
+function conversationRowState(
+  conversation: ConversationSummary,
+  isSelected: boolean,
+  awayUnread: boolean,
+): ConversationRowState {
   const attention = conversation.attention?.kind ?? null;
   if (attention === "ask") return "ask";
   if (attention === "plan_confirm") return "plan";
-  if (conversation.status.toLowerCase() === "running") return "running";
+  if (conversationIsRunning(conversation)) return "running";
+  if (awayUnread) return "unread";
   // Unread attention only mirrors the unread flag, which alone decides; other attention kinds still mark the row.
   // 未读关注只是未读标志的镜像，由标志单独决定；其他关注类型仍会标记该行。
   if ((conversation.unread || (attention !== null && attention !== "unread")) && !isSelected) return "unread";

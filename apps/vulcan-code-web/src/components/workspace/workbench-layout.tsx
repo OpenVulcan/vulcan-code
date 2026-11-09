@@ -62,6 +62,7 @@ import { useProjectLifecycleConfirmation } from "@/components/workspace/workbenc
 import { useConversationMenuActions } from "@/components/workspace/workbench-layout/use-conversation-menu-actions";
 import { UnsupportedSessionDeleteDialog } from "@/components/project/unsupported-session-delete-dialog";
 import { useConversationSelectionNavigation } from "@/components/workspace/workbench-layout/use-conversation-selection-navigation";
+import { useAwayUnreadTracker } from "@/components/workspace/workbench-layout/use-away-unread-tracker";
 import { PermissionJudgeEntryContext, type PermissionJudgeEntry } from "@/components/composer/permission-judge-entry-context";
 import { useSetupGuide } from "@/components/features/onboarding/use-setup-guide";
 import { useOpenVulcanAccount } from "@/components/features/account/use-openvulcan-account";
@@ -628,6 +629,9 @@ export function WorkbenchLayout(props: {
   // selectedConversation stores the conversation used by the console header.
   // selectedConversation 保存控制台标题栏使用的当前会话。
   const selectedConversation = workbenchState.conversations.find((conversation) => conversation.id === selectedConversationId);
+  // A selected run that settles while the window is unattended keeps an unread dot until the user is back.
+  // 窗口无人关注期间结束的选中会话运行保留未读圆点，直到用户回来。
+  useAwayUnreadTracker(selectedConversationId, workbenchState.conversations);
   // selectedDraftConversation stores the draft used by the console header and empty state.
   // selectedDraftConversation 保存控制台标题栏与空状态使用的草稿会话。
   const selectedDraftConversation = selectedConversationId === draftConversation?.id ? draftConversation : null;
