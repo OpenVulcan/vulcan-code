@@ -17,7 +17,7 @@ use vulcan_workspace_store::workspace_store::{
 
 use super::pending_prompts::{
     pending_prompt_attachment_staging_scope, pending_prompt_preview_text,
-    pending_prompt_process_mirror_from_v1_inputs,
+    pending_prompt_process_mirror_from_v1_inputs, pending_prompt_summaries_from_process_mirror,
 };
 use super::session_goal_lifecycle::{
     conversation_attachments_from_resource_ids, current_v1_goal_unix_millis,
@@ -138,8 +138,8 @@ pub(crate) fn pending_prompt_queue_identity(
 ///
 /// # Returns
 /// 返回值
-/// Returns whether the visible process projection changed, or an explicit read/lock error.
-/// 返回可见进程投影是否发生变化，或明确的读取/加锁错误。
+/// Returns whether the pending projection needs publication, or an explicit read/lock error.
+/// 返回待发送投影是否需要发布，或明确的读取/加锁错误。
 pub(crate) fn rebuild_pending_prompt_panel_from_v1(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
@@ -167,6 +167,7 @@ pub(crate) fn rebuild_pending_prompt_panel_from_v1(
             ))
         },
     )?;
+    let pending_prompts = pending_prompt_summaries_from_process_mirror(&rebuilt);
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -176,11 +177,21 @@ pub(crate) fn rebuild_pending_prompt_panel_from_v1(
         .or_default()
         .ui_state
         .pending_prompt_panel_queue;
-    if *panel_queue == rebuilt.ui_state.pending_prompt_panel_queue {
-        return Ok(false);
-    }
+    let mirror_changed = *panel_queue != rebuilt.ui_state.pending_prompt_panel_queue;
     *panel_queue = rebuilt.ui_state.pending_prompt_panel_queue;
-    Ok(true)
+    // Hydration can update the mirror before its retained workbench projection is published.
+    let conversation_id = session_id.to_string();
+    let retained_prompts = guard
+        .workbench
+        .pending_prompts_by_conversation
+        .iter()
+        .find(|entry| entry.conversation_id == conversation_id)
+        .map(|entry| entry.pending_prompts.as_slice())
+        .unwrap_or_default();
+    Ok(mirror_changed
+        || retained_prompts != pending_prompts.as_slice()
+        || (guard.workbench.selected_conversation_id.as_deref() == Some(conversation_id.as_str())
+            && guard.workbench.pending_prompts != pending_prompts))
 }
 
 /// Reads a previously committed move timestamp before attempting the idempotent mutation.
@@ -501,6 +512,201 @@ mod tests {
     use vulcan_agent_runtime::attachment_assets::resolve_managed_attachment_root;
     use vulcan_session_core::v1::document::ClientInputSubmission;
     use vulcan_workspace_store::workspace_store::load_session_v1_full;
+
+    struct PendingPromptEventSink(std::sync::Mutex<Vec<vulcan_service_api::ServiceEvent>>);
+
+    impl vulcan_service_api::ServiceEventSink for PendingPromptEventSink {
+        fn emit_service_event(&self, event: vulcan_service_api::ServiceEvent) {
+            self.0
+                .lock()
+                .expect("capture pending projection event")
+                .push(event);
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_v1_queue_reconciles_retained_inserted_rows_after_mirror_hydration() {
+        use crate::tests::test_support::test_service_state_with_parent_session;
+        use vulcan_service_api::{PendingPromptsChangedDelta, ServiceEvent, WorkbenchDelta};
+        use vulcan_session_core::v1::config::PendingInTurnInput;
+        use vulcan_session_core::v1::ids::{PendingInputId, TurnId};
+
+        for mirror_state in ["absent", "empty", "inserted"] {
+            for target_selected in [true, false] {
+                let session_id = SessionId::new_v4();
+                let other_session_id = SessionId::new_v4();
+                let fixture = TestHostRuntimeRoot::new(session_id);
+                let controller_runtime = fixture.attached_host_runtime_handle().await;
+                let locator = fixture.v1_storage_locator();
+                let document = load_session_v1_full(&locator)
+                    .expect("load empty V1 queue")
+                    .document;
+                assert!(
+                    document
+                        .metadata
+                        .input_state
+                        .pending_in_turn_inputs
+                        .is_empty()
+                );
+                assert!(document.metadata.input_state.queued_inputs.is_empty());
+                let handle = SessionHandle::new(session_id, locator, document);
+                let inputs = [1_u64, 2].map(|id| PendingInTurnInput {
+                    parameters: None,
+                    bound_request_config: None,
+                    client_action_id: ClientActionId::try_new(format!("inserted-{id}"))
+                        .expect("valid action"),
+                    input_id: PendingInputId::try_new(id).expect("valid input"),
+                    turn_id: TurnId::try_new(78).expect("valid turn"),
+                    text: format!("consumed input {id}"),
+                    resource_ids: Vec::new(),
+                    created_at_ms: id as i64,
+                });
+                let stale_mirror =
+                    pending_prompt_process_mirror_from_v1_inputs(&inputs, &[], |_| Ok(Vec::new()))
+                        .expect("project stale inserted rows");
+                let stale_rows = pending_prompt_summaries_from_process_mirror(&stale_mirror);
+                let other_projection = PendingPromptsChangedDelta {
+                    conversation_id: other_session_id.to_string(),
+                    pending_prompts: vec![PendingPromptSummary {
+                        id: String::from("other-queued"),
+                        state: String::from("ready"),
+                        ..stale_rows.first().expect("inserted row").clone()
+                    }],
+                };
+                let mut service_state = test_service_state_with_parent_session(session_id);
+                service_state.controller_runtime = Some(controller_runtime.clone());
+                service_state
+                    .session_runtime_registry
+                    .register(handle.clone())
+                    .expect("register exact V1 authority");
+                service_state.workbench.selected_conversation_id = Some(
+                    if target_selected {
+                        session_id
+                    } else {
+                        other_session_id
+                    }
+                    .to_string(),
+                );
+                service_state.workbench.pending_prompts = if target_selected {
+                    stale_rows.clone()
+                } else {
+                    other_projection.pending_prompts.clone()
+                };
+                service_state.workbench.pending_prompts_by_conversation = vec![
+                    other_projection.clone(),
+                    PendingPromptsChangedDelta {
+                        conversation_id: session_id.to_string(),
+                        pending_prompts: stale_rows,
+                    },
+                ];
+                match mirror_state {
+                    "empty" => {
+                        service_state
+                            .pending_prompt_process_mirrors
+                            .insert(session_id, Default::default());
+                    }
+                    "inserted" | "absent" => {
+                        service_state
+                            .pending_prompt_process_mirrors
+                            .insert(session_id, stale_mirror);
+                    }
+                    _ => {}
+                }
+                let state = std::sync::Arc::new(std::sync::Mutex::new(service_state));
+                if mirror_state == "absent" {
+                    let mut workspace = state
+                        .lock()
+                        .expect("service state")
+                        .workspace_snapshot
+                        .clone()
+                        .expect("test workspace");
+                    crate::sync_selected_session_v1_projection_from_store(
+                        &state,
+                        controller_runtime,
+                        session_id,
+                        &mut workspace,
+                    )
+                    .await
+                    .expect("hydrate mirror from empty durable queue");
+                    assert!(
+                        !state
+                            .lock()
+                            .expect("service state")
+                            .pending_prompt_process_mirrors
+                            .contains_key(&session_id)
+                    );
+                }
+                let sink = std::sync::Arc::new(PendingPromptEventSink(Default::default()));
+                let app = ServiceEventEmitter::new(vec![sink.clone()]);
+                let catalog = ProjectResourceCatalog {
+                    entries: Vec::new(),
+                    next_resource_id: 1,
+                };
+                let changed = rebuild_pending_prompt_panel_from_v1(
+                    &state,
+                    session_id,
+                    handle.as_ref(),
+                    Path::new("."),
+                    &catalog,
+                )
+                .expect("reconcile exact V1 pending projection");
+                assert!(
+                    changed,
+                    "retained rows require a delta even with {mirror_state} mirror"
+                );
+                assert_eq!(state.lock().expect("service state").workbench_generation, 0);
+                if changed {
+                    emit_pending_prompts_changed_delta(&app, &state, session_id)
+                        .expect("publish reconciled queue");
+                }
+                let snapshot =
+                    crate::service_workbench_snapshot(state.clone()).expect("retained snapshot");
+                assert_eq!(
+                    snapshot.pending_prompts_by_conversation,
+                    vec![other_projection.clone()]
+                );
+                assert_eq!(
+                    snapshot.pending_prompts,
+                    if target_selected {
+                        Vec::new()
+                    } else {
+                        other_projection.pending_prompts
+                    }
+                );
+                let events = sink.0.lock().expect("captured delta");
+                assert_eq!(events.len(), 1);
+                let ServiceEvent::WorkbenchDelta(envelope) = events.first().expect("pending delta")
+                else {
+                    panic!("pending reconciliation must emit a workbench delta");
+                };
+                assert_eq!(envelope.generation, snapshot.revision);
+                let WorkbenchDelta::PendingPromptsChanged(delta) = &envelope.delta else {
+                    panic!("pending reconciliation must not emit an unrelated delta");
+                };
+                assert_eq!(delta.conversation_id, session_id.to_string());
+                assert!(delta.pending_prompts.is_empty());
+                drop(events);
+                let changed = rebuild_pending_prompt_panel_from_v1(
+                    &state,
+                    session_id,
+                    handle.as_ref(),
+                    Path::new("."),
+                    &catalog,
+                )
+                .expect("repeat exact projection");
+                assert!(!changed);
+                if changed {
+                    emit_pending_prompts_changed_delta(&app, &state, session_id)
+                        .expect("repeat pending projection");
+                }
+                assert_eq!(sink.0.lock().expect("captured delta").len(), 1);
+                assert_eq!(
+                    state.lock().expect("service state").workbench_generation,
+                    snapshot.revision
+                );
+            }
+        }
+    }
 
     /// A durable edit remains a successful typed outcome when both local projections fail afterwards.
     /// 持久编辑完成后即使两个本地投影均失败，也仍返回成功的强类型结果。
