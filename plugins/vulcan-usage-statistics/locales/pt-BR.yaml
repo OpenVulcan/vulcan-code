@@ -201,6 +201,8 @@ messages:
   trend.range: Últimos 30 dias
   trend.aria: Gráfico diário de tokens agrupado por modelo
   other: Outros modelos
+  trend.hourlyTitle: Uso de tokens por hora
+  trend.hourlyAria: Gráfico de linhas do uso de tokens por hora agrupado por modelo
   trend.empty: Nenhum dado de tendência neste intervalo
   daily.title: Uso dos modelos
   daily.empty: Nenhum uso neste intervalo

@@ -804,9 +804,37 @@ LEFT JOIN ranked_models r
     ON r.calendar_date = d.calendar_date AND r.model_rank = 1
 ORDER BY d.calendar_date;
 ]]) or vulcan.json.array()
-    -- series contains the top five model lines plus one stable Other line for the selected range.
-    -- series 包含所选范围前五个模型折线及一个稳定的其他折线。
-    local series = (view == "all" or view == "overview") and query([[
+    -- series contains the daily projection; hourly_series owns the exact upper bound of the hourly projection.
+    -- series 保存每日投影；hourly_series 持有每小时投影的精确结束边界。
+    local series, hourly_series = vulcan.json.array(), nil
+    if view == "all" or view == "overview" then
+        -- hour_ms is the elapsed width of one bucket and defines the strict 24-hour cutoff.
+        -- hour_ms 是每个分桶的实际时长，用于定义严格的 24 小时分界。
+        local hour_ms = 3600000
+        -- hourly uses the validated explicit bounds; legacy calendar ranges stay daily.
+        -- hourly 使用已校验的显式时间边界；原有自然日范围仍按日统计。
+        local hourly = input.startAtMs ~= nil and input.endAtMs - input.startAtMs < 24 * hour_ms
+        -- bucket_source aligns hourly buckets to the start's local clock hour, then advances in elapsed hours.
+        -- bucket_source 将每小时分桶对齐到起点所在的本地整点，之后按实际小时推进。
+        local bucket_source = hourly and [[
+, hour_anchor AS (
+    SELECT (?10 / 60000 - CAST(strftime('%M', ?10 / 1000, 'unixepoch', 'localtime') AS INTEGER)) * 60000 AS first_hour
+), bucket_usage AS (
+    SELECT first_hour + ((terminal_at_ms - first_hour) / ]] .. hour_ms .. [[) * ]] .. hour_ms .. [[ AS bucket,
+           provider_id, mapped_model AS model_id, known_total_tokens AS total_tokens
+    FROM filtered_attempts CROSS JOIN hour_anchor
+)
+]] or [[
+, bucket_usage AS (
+    SELECT calendar_date AS bucket, provider_id, model_id, total_tokens FROM filtered_daily
+)
+]]
+        -- bucket_column carries the matching typed key for consumers of each projection.
+        -- bucket_column 为各投影的使用方提供对应的类型化键。
+        local bucket_column = hourly and "hourStartAtMs" or "date"
+        -- points shares model ranking across both grains so changing time buckets never changes the model totals.
+        -- points 在两种粒度下共用模型排名，切换分桶不会改变模型总量。
+        local points = query(bucket_source .. [[
 , ranked_models AS (
     SELECT provider_id, model_id,
            SUM(COALESCE(total_tokens, 0)) AS metric_value
@@ -815,24 +843,27 @@ ORDER BY d.calendar_date;
     ORDER BY metric_value DESC, provider_id, model_id
     LIMIT 5
 ), classified AS (
-    SELECT d.calendar_date,
+    SELECT d.bucket,
            CASE WHEN r.provider_id IS NULL THEN 'other'
                 ELSE r.provider_id || '/' || r.model_id END AS seriesKey,
            CASE WHEN r.provider_id IS NULL THEN 'Other'
                 ELSE r.provider_id || ' / ' || r.model_id END AS label,
            COALESCE(d.total_tokens, 0) AS total_tokens
-    FROM filtered_daily d
+    FROM bucket_usage d
     LEFT JOIN ranked_models r
         ON r.provider_id = d.provider_id AND r.model_id = d.model_id
 ), projected AS (
-    SELECT calendar_date, seriesKey, label, SUM(total_tokens) AS value
+    SELECT bucket, seriesKey, label, SUM(total_tokens) AS value
     FROM classified
-    GROUP BY calendar_date, seriesKey, label
+    GROUP BY bucket, seriesKey, label
 )
-SELECT calendar_date AS date, seriesKey, label, value
+SELECT bucket AS ]] .. bucket_column .. [[, seriesKey, label, value
 FROM projected
-ORDER BY date, seriesKey;
-]]) or vulcan.json.array()
+ORDER BY bucket, seriesKey;
+]])
+        if hourly then hourly_series = { endAtMs = input.endAtMs, points = points }
+        else series = points end
+    end
     local recent_attempts = (view == "all" or view == "details" or view == "recent" or view == "recent-page" or view == "detail-pages") and query([[
 SELECT attempts.attempt_id AS attemptId, attempts.consumer_id AS consumerId,
        attempts.operation, attempts.provider_id AS providerId,
@@ -1056,6 +1087,7 @@ FROM provider_usage_meta WHERE meta_key = 'aggregate_revision';
         daily = daily,
         heatmap = heatmap,
         series = series,
+        hourlySeries = hourly_series,
         recentAttempts = recent_attempts,
         accounts = accounts,
     }

@@ -55,6 +55,15 @@
       "type": "array",
       "items": { "$ref": "#/$defs/seriesPoint" }
     },
+    "hourlySeries": {
+      "type": "object",
+      "properties": {
+        "endAtMs": { "type": "integer", "minimum": 1 },
+        "points": { "type": "array", "items": { "$ref": "#/$defs/hourlySeriesPoint" } }
+      },
+      "required": ["endAtMs", "points"],
+      "additionalProperties": false
+    },
     "recentAttempts": {
       "type": "array",
       "maxItems": 200,
@@ -238,6 +247,17 @@
         "value": { "type": "integer", "minimum": 0 }
       },
       "required": ["date", "seriesKey", "label", "value"],
+      "additionalProperties": false
+    },
+    "hourlySeriesPoint": {
+      "type": "object",
+      "properties": {
+        "hourStartAtMs": { "type": "integer" },
+        "seriesKey": { "type": "string", "minLength": 1 },
+        "label": { "type": "string", "minLength": 1 },
+        "value": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["hourStartAtMs", "seriesKey", "label", "value"],
       "additionalProperties": false
     },
     "billingDetail": {

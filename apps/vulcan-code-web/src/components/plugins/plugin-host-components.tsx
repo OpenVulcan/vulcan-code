@@ -420,6 +420,10 @@ export interface TimeSeriesPoint {
   // Stable x-axis key such as an ISO date.
   // 稳定横轴键，例如 ISO 日期。
   key: string;
+  // Optional short x-axis label and full tooltip label for non-date keys.
+  // 非日期键可提供简短横轴标签和完整提示标签。
+  label?: string;
+  detailLabel?: string;
   // Numeric metric value.
   // 数值指标值。
   value: number;
@@ -465,9 +469,9 @@ export interface TimeSeriesLineChartProps {
   tooltipDelayMs?: number;
 }
 
-// TIME_SERIES_WIDTH defines the chart view-box width.
-// TIME_SERIES_WIDTH 定义图表视图框宽度。
-const TIME_SERIES_WIDTH = 800;
+// TIME_SERIES_INITIAL_WIDTH defines the chart view-box before the first layout measurement.
+// TIME_SERIES_INITIAL_WIDTH 定义首次布局测量前的图表视图框宽度。
+const TIME_SERIES_INITIAL_WIDTH = 800;
 
 // TIME_SERIES_HEIGHT defines the chart view-box height.
 // TIME_SERIES_HEIGHT 定义图表视图框高度。
@@ -480,6 +484,10 @@ const TIME_SERIES_PADDING = 24;
 // TIME_SERIES_AXIS_WIDTH reserves the left gutter for the y-axis value labels.
 // TIME_SERIES_AXIS_WIDTH 为纵轴数值标签预留左侧栏宽。
 const TIME_SERIES_AXIS_WIDTH = 56;
+
+// TIME_SERIES_LABEL_SPACING reserves space between sampled x-axis labels.
+// TIME_SERIES_LABEL_SPACING 为抽样显示的横轴标签预留间距。
+const TIME_SERIES_LABEL_SPACING = 64;
 
 // TIME_SERIES_GRID_RATIOS places the shared horizontal guides from the top of the drawing area.
 // TIME_SERIES_GRID_RATIOS 从绘图区顶部起放置共享水平参考线。
@@ -499,6 +507,8 @@ function niceAxisMaximum(maximum: number, intervals: number): number {
 
 // TimeSeriesLineChart renders host-native lines without loading a chart runtime.
 // TimeSeriesLineChart 在不加载图表运行时的前提下渲染宿主原生折线。
+// props provides the aligned series and formatters; returns the chart or its empty state.
+// props 提供对齐的序列及格式化函数；返回图表或空状态。
 export function TimeSeriesLineChart(props: TimeSeriesLineChartProps) {
   const { locale, t } = useI18n();
   // axisFormat keeps y-axis labels short; exact values stay in the point tooltips.
@@ -507,7 +517,32 @@ export function TimeSeriesLineChart(props: TimeSeriesLineChartProps) {
   // visibleSeries excludes empty inputs while retaining zero-valued datasets.
   // visibleSeries 排除空输入，同时保留全零数据集。
   const visibleSeries = props.series.filter((item) => item.points.length > 0);
-  if (visibleSeries.length === 0) {
+  // hasPoints controls when the measurable chart element is mounted.
+  // hasPoints 控制可测量图表元素的挂载时机。
+  const hasPoints = visibleSeries.length > 0;
+  // chartRef and chartWidth track the container width without stretching text or point markers.
+  // chartRef 与 chartWidth 跟踪容器宽度，避免拉伸文字与点标记。
+  const chartRef = React.useRef<HTMLDivElement>(null);
+  const [chartWidth, setChartWidth] = React.useState(TIME_SERIES_INITIAL_WIDTH);
+  React.useEffect(() => {
+    // chart owns the current layout and is absent while the chart is empty.
+    // chart 持有当前布局，图表为空时没有此元素。
+    const chart = chartRef.current;
+    if (!chart) return;
+    // updateWidth accepts measured CSS pixels and ignores hidden or unmeasured layouts.
+    // updateWidth 接收实测 CSS 像素，并忽略隐藏或尚未测量的布局。
+    const updateWidth = (width: number) => {
+      if (width > 0) setChartWidth(Math.max(TIME_SERIES_AXIS_WIDTH + TIME_SERIES_PADDING + 1, Math.floor(width)));
+    };
+    updateWidth(chart.clientWidth);
+    if (typeof ResizeObserver === "undefined") return;
+    // observer follows panel resizing even when the window itself does not resize.
+    // observer 在窗口尺寸不变时也能跟踪面板尺寸变化。
+    const observer = new ResizeObserver(([entry]) => updateWidth(entry.contentRect.width));
+    observer.observe(chart);
+    return () => observer.disconnect();
+  }, [hasPoints]);
+  if (!hasPoints) {
     return <PageEmptyState title={props.emptyLabel ?? t("pluginHost.chart.empty")} />;
   }
   // pointCount is the maximum aligned x-axis length.
@@ -523,7 +558,7 @@ export function TimeSeriesLineChart(props: TimeSeriesLineChartProps) {
   const maximumValue = niceAxisMaximum(Math.max(1, ...visibleSeries.flatMap((item) => item.points.map((point) => point.value))), TIME_SERIES_GRID_RATIOS.length - 1);
   // drawingWidth is the horizontal area inside chart padding.
   // drawingWidth 是图表内边距中的水平区域。
-  const drawingWidth = TIME_SERIES_WIDTH - TIME_SERIES_AXIS_WIDTH - TIME_SERIES_PADDING;
+  const drawingWidth = chartWidth - TIME_SERIES_AXIS_WIDTH - TIME_SERIES_PADDING;
   // drawingHeight is the vertical area inside chart padding.
   // drawingHeight 是图表内边距中的垂直区域。
   const drawingHeight = TIME_SERIES_HEIGHT - TIME_SERIES_PADDING * 2;
@@ -533,23 +568,26 @@ export function TimeSeriesLineChart(props: TimeSeriesLineChartProps) {
     x: TIME_SERIES_AXIS_WIDTH + (pointCount <= 1 ? 0 : (index / (pointCount - 1)) * drawingWidth),
     y: TIME_SERIES_PADDING + drawingHeight - (Math.max(0, value) / maximumValue) * drawingHeight,
   });
-  // xAxisLabelIndexes samples at most five stable labels including both range endpoints.
-  // xAxisLabelIndexes 最多采样五个稳定标签，并包含时间范围两端。
+  // labelCount fits the axis labels to the available width, retaining both endpoints when they fit.
+  // labelCount 使横轴标签适应可用宽度，在空间足够时保留两个端点。
+  const labelCount = Math.min(5, pointCount, Math.floor(drawingWidth / TIME_SERIES_LABEL_SPACING) + 1);
+  // xAxisLabelIndexes distributes the available labels evenly across the range.
+  // xAxisLabelIndexes 将可显示的标签均匀分布在时间范围内。
   const xAxisLabelIndexes = Array.from(new Set(
-    Array.from({ length: Math.min(5, pointCount) }, (_, index) => (
-      Math.round((index / Math.max(1, Math.min(5, pointCount) - 1)) * (pointCount - 1))
+    Array.from({ length: labelCount }, (_, index) => (
+      Math.round((index / Math.max(1, labelCount - 1)) * (pointCount - 1))
     )),
   ));
   return (
-    <div className="plugin-time-series-chart" role="group" aria-label={props.ariaLabel}>
-      <svg viewBox={`0 0 ${TIME_SERIES_WIDTH} ${TIME_SERIES_HEIGHT}`} preserveAspectRatio="xMidYMid meet">
+    <div ref={chartRef} className="plugin-time-series-chart" role="group" aria-label={props.ariaLabel}>
+      <svg viewBox={`0 0 ${chartWidth} ${TIME_SERIES_HEIGHT}`} preserveAspectRatio="xMidYMid meet">
         {TIME_SERIES_GRID_RATIOS.map((ratio) => {
           // gridY is one shared horizontal guide position.
           // gridY 是一条共享水平参考线位置。
           const gridY = TIME_SERIES_PADDING + drawingHeight * ratio;
           return (
             <g key={ratio}>
-              <line className="plugin-chart-grid-line" x1={TIME_SERIES_AXIS_WIDTH} y1={gridY} x2={TIME_SERIES_WIDTH - TIME_SERIES_PADDING} y2={gridY} />
+              <line className="plugin-chart-grid-line" x1={TIME_SERIES_AXIS_WIDTH} y1={gridY} x2={chartWidth - TIME_SERIES_PADDING} y2={gridY} />
               <text aria-hidden="true" className="plugin-chart-axis-label" textAnchor="end" x={TIME_SERIES_AXIS_WIDTH - 8} y={gridY + 4}>{(props.formatAxisValue ?? axisFormat.format)(maximumValue * (1 - ratio))}</text>
             </g>
           );
@@ -576,11 +614,14 @@ export function TimeSeriesLineChart(props: TimeSeriesLineChartProps) {
                 // formattedValue is the localized accessible value for this point.
                 // formattedValue 是当前数据点的本地化可访问数值。
                 const formattedValue = props.formatValue?.(point.value) ?? String(point.value);
+                // detailLabel shows a human-readable date and time when the key is an epoch timestamp.
+                // detailLabel 在键为时间戳时显示便于阅读的日期和时间。
+                const detailLabel = point.detailLabel ?? point.key;
                 return (
                   <Tooltip delayDuration={props.tooltipDelayMs ?? 0} key={point.key}>
                     <TooltipTrigger asChild>
                       <circle
-                        aria-label={`${item.label}, ${point.key}, ${formattedValue}`}
+                        aria-label={`${item.label}, ${detailLabel}, ${formattedValue}`}
                         className="plugin-chart-point"
                         cx={position.x}
                         cy={position.y}
@@ -589,7 +630,7 @@ export function TimeSeriesLineChart(props: TimeSeriesLineChartProps) {
                         tabIndex={0}
                       />
                     </TooltipTrigger>
-                    <TooltipContent side="top">{`${item.label} · ${point.key}: ${formattedValue}`}</TooltipContent>
+                    <TooltipContent side="top">{`${item.label} · ${detailLabel}: ${formattedValue}`}</TooltipContent>
                   </Tooltip>
                 );
               })}
@@ -603,7 +644,7 @@ export function TimeSeriesLineChart(props: TimeSeriesLineChartProps) {
           // position is the label's horizontal coordinate on the shared x-axis.
           // position 是标签在共享横轴上的水平坐标。
           const position = pointPosition(index, 0);
-          return <text className="plugin-chart-axis-label" key={point.key} textAnchor={index === 0 ? "start" : index === pointCount - 1 ? "end" : "middle"} x={position.x} y={TIME_SERIES_HEIGHT - 5}>{point.key.slice(5)}</text>;
+          return <text className="plugin-chart-axis-label" key={point.key} textAnchor={index === 0 ? "start" : index === pointCount - 1 ? "end" : "middle"} x={position.x} y={TIME_SERIES_HEIGHT - 5}>{point.label ?? point.key.slice(5)}</text>;
         })}
       </svg>
     </div>

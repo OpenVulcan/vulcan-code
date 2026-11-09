@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
-import { createPluginPanel, formatMoney, presetTimeRange } from "./index.mjs";
+import { formatMoney, presetTimeRange } from "./index.mjs";
 import { createPluginQueryClient, invalidatePluginQueries } from "../../../apps/vulcan-code-web/src/service/plugin-ui-query-runtime.ts";
 // Read the authoritative registry without depending on the WebUI bundler's aliases.
 // 直接读取权威注册表，不依赖 WebUI 打包器的别名。
@@ -52,11 +52,13 @@ test("money localizes zero, tiny values and exact rounding without losing stored
 
 // Mount the actual plugin against an isolated DOM and controlled action responses.
 // 将真实插件挂载到隔离 DOM 与受控 Action 响应。
-// invoke handles declared actions; strict controls StrictMode; locale and messages project host localization.
-// invoke 处理声明的 Action；strict 控制 StrictMode；locale 与 messages 投影宿主本地化。
+// invoke handles actions, strict controls StrictMode, and factory optionally reuses a loaded plugin module.
+// invoke 处理 Action，strict 控制 StrictMode，factory 可复用已加载的插件模块。
+// locale and messages project host localization.
+// locale 和 messages 投影宿主本地化。
 // Returns the container and asynchronous cleanup.
 // 返回容器与异步清理函数。
-async function mount(invoke, strict = false, locale = "en-US", messages = {}) {
+async function mount(invoke, strict = false, locale = "en-US", messages = {}, factory) {
   // Use the real host coordinator so StrictMode tests exercise the shared subscription contract.
   // 使用真实宿主协调器，让 StrictMode 测试覆盖共享订阅契约。
   invalidatePluginQueries("usage-test");
@@ -75,6 +77,9 @@ async function mount(invoke, strict = false, locale = "en-US", messages = {}) {
   // Expose exact projected calendar labels without recreating the host's visual layout.
   // 暴露准确投影的日历名称，不重新实现宿主视觉布局。
   const ActivityHeatmap = ({ cells }) => React.createElement("div", { "data-test-heatmap": true }, cells.map((cell) => React.createElement("span", { key: cell.date, "aria-label": cell.label })));
+  // TimeSeriesLineChart exposes the exact points and labels passed to the host chart.
+  // TimeSeriesLineChart 暴露传入宿主图表的准确数据点和标签。
+  const TimeSeriesLineChart = ({ ariaLabel, series }) => React.createElement("div", { "aria-label": ariaLabel, "data-series": JSON.stringify(series) });
   // SelectControl preserves the host's declared value-change contract.
   // SelectControl 保留宿主声明的值变更契约。
   const SelectControl = ({ ariaLabel, value, options, onValueChange, disabled }) => React.createElement("select", {
@@ -111,7 +116,7 @@ async function mount(invoke, strict = false, locale = "en-US", messages = {}) {
     formatTokenCount: (value) => `tok:${value}`,
     components: { PageBody: plain, PageToolbar, PageTabs, PageTabPanel, PageSection, PageHint: plain, PageNotice, PageEmptyState: ({ title }) => React.createElement("p", null, title),
       PageFacts, PageTable, MetricCard: plain, MetricGrid: plain, Badge: plain, Button, Input, Checkbox, SelectControl, StatusPill: plain, StreamPlaceholder: plain,
-      ActivityHeatmap, ActivityHeatmapLegend: plain, TimeSeriesLineChart: plain, ChartLegend: plain,
+      ActivityHeatmap, ActivityHeatmapLegend: plain, TimeSeriesLineChart, ChartLegend: plain,
       HelpTooltip: ({ ariaLabel }) => React.createElement("button", { "aria-label": ariaLabel }),
       Dialog: ({ open, children }) => open ? React.createElement("div", null, children) : null,
       DialogContent: plain, DialogHeader: plain, DialogTitle: plain, DialogDescription: plain, DialogFooter: plain },
@@ -119,6 +124,9 @@ async function mount(invoke, strict = false, locale = "en-US", messages = {}) {
   // root mounts the real hook-based plugin component.
   // root 挂载真实的基于 Hook 的插件组件。
   const root = require("react-dom/client").createRoot(document.getElementById("root"));
+  // createPluginPanel starts with fresh module memory unless the test is navigating within one app lifetime.
+  // createPluginPanel 使用全新的模块内存，除非测试模拟同一次应用运行期间的导航。
+  const createPluginPanel = factory ?? (await import(`./index.mjs?instance=${crypto.randomUUID()}`)).createPluginPanel;
   await React.act(async () => root.render(React.createElement(strict ? React.StrictMode : React.Fragment, null,
     React.createElement(createPluginPanel(sdk)))));
   return { container: document.getElementById("root"), close: async () => {
@@ -179,6 +187,72 @@ const dashboard = {
     costs: [{ currency: "USD", amount: null, pricedRows: 0, incompleteRows: 0, unpricedRows: 0 }] },
   pricingCatalog: { currency: "USD", entryCount: 1, overrideCount: 0 },
 };
+
+// Reopening the panel shares only committed range memory, while a fresh module starts at local midnight.
+// 重新打开面板只复用已确认的时间范围，全新模块从本地零点开始。
+test("remembers the committed range until the plugin module is reloaded", async () => {
+  // factory represents the persistent namespace held by the plugin host during navigation.
+  // factory 代表导航期间插件宿主持有的持久命名空间。
+  const factory = (await import("./index.mjs?instance=range-lifetime")).createPluginPanel;
+  // reads records exactly the filters forwarded to the action.
+  // reads 记录转发给 Action 的确切筛选条件。
+  const reads = [];
+  // invoke returns isolated statistics and records every dashboard read.
+  // invoke 返回隔离统计并记录每次仪表盘读取。
+  const invoke = async (action, args) => {
+    if (action === "settings-get") return settings;
+    reads.push(args);
+    return dashboard;
+  };
+  // initial, reopened and restarted distinguish initial, navigation and restart lifetimes.
+  // initial、reopened 与 restarted 分别表示首次挂载、导航和重启的生命周期。
+  const initial = await mount(invoke, false, "en-US", {}, factory);
+  try {
+    assert.equal(reads.at(-1).startAtMs, presetTimeRange(0).startAtMs);
+    assert.ok(reads.at(-1).endAtMs > reads.at(-1).startAtMs && reads.at(-1).endAtMs <= Date.now());
+    await selectRange(initial, "7 days");
+  } finally { await initial.close(); }
+  // committed captures the exact confirmed range, including the fixed end instant.
+  // committed 捕获确认后的完整范围，包括固定的结束时刻。
+  const committed = reads.at(-1);
+  const reopened = await mount(invoke, false, "en-US", {}, factory);
+  try {
+    assert.deepEqual(reads.at(-1), committed);
+  } finally { await reopened.close(); }
+  const restarted = await mount(invoke);
+  try {
+    assert.equal(reads.at(-1).startAtMs, presetTimeRange(0).startAtMs);
+    assert.ok(reads.at(-1).endAtMs > reads.at(-1).startAtMs && reads.at(-1).endAtMs <= Date.now());
+  } finally { await restarted.close(); }
+});
+
+// The chart consumes the server's exact hourly projection and fills empty hours with zeros.
+// 图表使用服务端的精确小时投影，并为没有数据的小时补零。
+test("plots hourly usage with empty buckets and clock labels", async () => {
+  // start and hour define three buckets in the same local-day range.
+  // start 与 hour 定义同一本地自然日范围的三个分桶。
+  const start = presetTimeRange(0).startAtMs;
+  const hour = 3_600_000;
+  // panel receives two non-adjacent points of one model.
+  // panel 收到同一个模型的两个不相邻数据点。
+  const panel = await mount(async (action) => action === "settings-get" ? settings : {
+    ...dashboard,
+    hourlySeries: { endAtMs: start + 2 * hour + 1, points: [
+      { hourStartAtMs: start, seriesKey: "fixture", label: "Fixture", value: 2 },
+      { hourStartAtMs: start + 2 * hour, seriesKey: "fixture", label: "Fixture", value: 5 },
+    ] },
+  });
+  try {
+    // chart and points capture the real plugin's SDK chart output.
+    // chart 和 points 捕获真实插件的 SDK 图表输出。
+    const chart = panel.container.querySelector("[data-series]");
+    const [{ points }] = JSON.parse(chart.dataset.series);
+    assert.match(chart.getAttribute("aria-label"), /Hourly/);
+    assert.deepEqual(points.map((point) => point.value), [2, 0, 5]);
+    assert.deepEqual(points.map((point) => Number(point.key)), [start, start + hour, start + 2 * hour]);
+    assert.ok(points.every((point) => /^\d{2}:\d{2}$/.test(point.label) && point.detailLabel.length > point.label.length));
+  } finally { await panel.close(); }
+});
 
 // Locale affects projected text only; arithmetic, stored facts and CSS proportions stay exact.
 // 语言只影响投影文本；计算、存储事实和 CSS 占比保持精确。
@@ -267,7 +341,7 @@ test("StrictMode shares initial reads and older range results cannot replace new
   const panel = await mount((action, argumentsValue) => {
     calls.push({ action, argumentsValue });
     if (action === "settings-get") return Promise.resolve(settings);
-    return argumentsValue.endAtMs === null ? oldRequest : Promise.resolve({ ...dashboard, aggregateRevision: 777 });
+    return argumentsValue.startAtMs === presetTimeRange(0).startAtMs ? oldRequest : Promise.resolve({ ...dashboard, aggregateRevision: 777 });
   }, true);
   assert.equal(calls.filter((call) => call.action === "settings-get").length, 1);
   assert.equal(calls.filter((call) => call.action === "dashboard-get").length, 1);
@@ -310,7 +384,7 @@ test("price-save completion refreshes the currently selected dashboard scope", a
     if (action === "pricing-get") return Promise.resolve(pricingDirectory);
     if (action === "settings-update") return new Promise((resolve) => { finishSave = () => resolve({ ...settings, modelOverrides: args.modelOverrides }); });
     reads.push(args);
-    return Promise.resolve({ ...dashboard, aggregateRevision: args.endAtMs === null ? 30 : 7 });
+    return Promise.resolve({ ...dashboard, aggregateRevision: args.startAtMs === presetTimeRange(0).startAtMs ? 30 : 7 });
   });
   try {
     await openPricing(panel);

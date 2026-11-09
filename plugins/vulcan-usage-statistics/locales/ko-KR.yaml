@@ -201,6 +201,8 @@ messages:
   trend.range: 최근 30일
   trend.aria: 모델별 일별 Token 사용량 꺾은선 그래프
   other: 기타 모델
+  trend.hourlyTitle: 시간별 토큰 사용량
+  trend.hourlyAria: 모델별 시간당 토큰 사용량 꺾은선 차트
   trend.empty: 이 범위에 추세 데이터가 없음
   daily.title: 모델 사용량
   daily.empty: 이 시간 범위에 사용량이 없음

@@ -142,6 +142,8 @@ messages:
   trend.range: 最近 30 天
   trend.aria: 按模型分组的每日 Token 用量折线图
   other: 其他模型
+  trend.hourlyTitle: 每小时 Token 用量
+  trend.hourlyAria: 按模型分组的每小时 Token 用量折线图
   trend.empty: 当前范围暂无趋势数据
   daily.title: 模型用量
   daily.empty: 此时间范围内暂无用量

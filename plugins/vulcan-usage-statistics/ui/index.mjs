@@ -34,6 +34,14 @@ export function presetTimeRange(days, now = Date.now()) {
   return { startAtMs: start.getTime(), endAtMs: days === 0 ? null : now };
 }
 
+// lastTimeRange survives navigation through the host's in-memory module cache.
+// lastTimeRange 通过宿主的内存模块缓存跨页面导航保留。
+let lastTimeRange = null;
+
+// HOUR_MS is the elapsed time between consecutive hourly chart points.
+// HOUR_MS 是相邻小时图表数据点之间的实际时长。
+const HOUR_MS = 3_600_000;
+
 // CHART_COLORS is the inherited chart palette, handed to the series of one chart in order.
 // CHART_COLORS 是继承的图表调色板，按顺序分给同一图表的各序列。
 const CHART_COLORS = ["var(--chart-1)", "var(--chart-2)", "var(--chart-3)", "var(--chart-4)", "var(--chart-5)"];
@@ -295,7 +303,7 @@ export function createPluginPanel(sdk) {
     return h(React.Fragment, null,
       h(Button, { type: "button", size: "sm", variant: "outline", "aria-label": text("range.label", "Time range"), onClick: () => {
         setStart(localDateTimeValue(value.startAtMs)); setEnd(localDateTimeValue(value.endAtMs ?? Date.now()));
-        setExactBounds({ startAtMs: value.startAtMs, endAtMs: value.endAtMs ?? Date.now() });
+        setExactBounds({ ...value, endAtMs: value.endAtMs ?? Date.now() });
         setFollowNow(value.endAtMs === null); setRangeError(""); setOpen(true);
       } }, timeRangeLabel(value)),
       h(Dialog, { open, onOpenChange: setOpen },
@@ -309,7 +317,7 @@ export function createPluginPanel(sdk) {
               // 仅当天跟随当前时刻；其他快捷项在选择时固定结束时间。
               const now = Date.now();
               const bounds = presetTimeRange(days, now);
-              setExactBounds({ startAtMs: bounds.startAtMs, endAtMs: now });
+              setExactBounds({ ...bounds, endAtMs: now, today: days === 0 });
               setStart(localDateTimeValue(bounds.startAtMs)); setEnd(localDateTimeValue(now)); setFollowNow(days === 0); setRangeError("");
             },
           }, days === 0 ? text("range.today", "Today") : days === 1 ? text("range.last24Hours", "1 day") : interpolate(text("range.lastDays", "{{days}} days"), { days })))),
@@ -329,7 +337,7 @@ export function createPluginPanel(sdk) {
               if (!Number.isFinite(startAtMs) || !Number.isFinite(endAtMs) || startAtMs <= 0 || endAtMs <= startAtMs) {
                 setRangeError(text("range.invalid", "End time must be later than start time.")); return;
               }
-              onChange({ startAtMs, endAtMs: followNow ? null : endAtMs }); setOpen(false);
+              onChange({ startAtMs, endAtMs: followNow ? null : endAtMs, today: followNow && exactBounds?.today === true }); setOpen(false);
             } }, text("range.confirm", "Confirm")),
           ),
         ),
@@ -456,14 +464,37 @@ export function createPluginPanel(sdk) {
     return new Intl.DateTimeFormat(sdk.locale, { month: "short" }).format(new Date(`${date}T00:00:00`));
   }
 
-  // buildLineSeries aligns sparse model rows onto one selected-range local-date axis.
-  // buildLineSeries 将稀疏模型行对齐到所选范围的本地自然日横轴。
-  function buildLineSeries(rows, range) {
-    // dates is the complete fixed chart x-axis.
-    // dates 是完整的固定图表横轴。
-    const dates = localCalendarDates(range);
-    // groups accumulates exact values by stable series key and date.
-    // groups 按稳定序列键与日期累积精确数值。
+  // Align sparse model rows with the daily or hourly chart axis for the queried range.
+  // 将稀疏模型记录对齐到查询范围的每日或每小时横轴。
+  // dashboard owns the returned buckets and range owns the selected bounds; returns display series.
+  // dashboard 提供返回的分桶，range 提供所选边界；返回展示序列。
+  function buildLineSeries(dashboard, range) {
+    // hourly is present only for an explicitly bounded request shorter than one day.
+    // hourly 仅在显式指定且不足一天的请求范围内出现。
+    const hourly = dashboard?.hourlySeries;
+    // rows contains one runtime-projected value per populated model bucket.
+    // rows 包含运行时投影的每个非空模型分桶数值。
+    const rows = hourly ? hourly.points : dashboard?.series ?? [];
+    if (rows.length === 0) return [];
+    // axis uses unique epoch keys for repeated local hours and pads empty buckets with zeros.
+    // axis 使用唯一时间戳区分重复的本地小时，并为无记录的分桶补零。
+    const axis = hourly ? [] : localCalendarDates(range).map((key) => ({ key }));
+    if (hourly) {
+      // The earliest populated bucket fixes the server's alignment, including fractional time zones.
+      // 最早的有数据分桶确定服务端对齐方式，兼容非整点时区。
+      const anchor = rows[0].hourStartAtMs;
+      // first is the aligned bucket containing the start of the requested range.
+      // first 是包含查询起点的对齐分桶。
+      const first = anchor + Math.floor((range.startAtMs - anchor) / HOUR_MS) * HOUR_MS;
+      // hours formats visible labels in local time while detail labels retain the date.
+      // hours 以本地时间格式化可见标签，详情标签则保留日期。
+      const hours = new Intl.DateTimeFormat(sdk.locale, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+      for (let cursor = first; cursor <= hourly.endAtMs; cursor += HOUR_MS) {
+        axis.push({ key: String(cursor), label: hours.format(cursor), detailLabel: formatTimestamp(cursor) });
+      }
+    }
+    // groups accumulates exact values by stable series key and bucket.
+    // groups 按稳定序列键与分桶累积精确数值。
     const groups = new Map();
     for (const row of rows) {
       if (!groups.has(row.seriesKey)) {
@@ -472,7 +503,7 @@ export function createPluginPanel(sdk) {
       // group is the exact series accumulator for one stable model identity.
       // group 是一个稳定模型身份对应的精确序列累加器。
       const group = groups.get(row.seriesKey);
-      group.values.set(row.date, numeric(row.value));
+      group.values.set(hourly ? String(row.hourStartAtMs) : row.date, numeric(row.value));
     }
     // position counts model series only, so the folded remainder never consumes a palette color.
     // position 只计模型序列，折叠的剩余部分不占用调色板颜色。
@@ -481,7 +512,7 @@ export function createPluginPanel(sdk) {
       id,
       label: id === "other" ? text("other", "Other models") : group.label,
       color: colorForSeries(id, id === "other" ? 0 : position++),
-      points: dates.map((date) => ({ key: date, value: group.values.get(date) ?? 0 })),
+      points: axis.map((point) => ({ ...point, value: group.values.get(point.key) ?? 0 })),
     }));
   }
 
@@ -791,7 +822,8 @@ export function createPluginPanel(sdk) {
     const dashboardView = section === "pricing" ? "overview" : section;
     // Apply one exact time interval to all usage queries; null end follows query time.
     // 为所有用量查询应用同一精确时间区间；空终点跟随查询时刻。
-    const [timeRange, setTimeRange] = React.useState(() => ({ ...presetTimeRange(30), endAtMs: null }));
+    const [timeRange, setTimeRange] = React.useState(() => lastTimeRange?.today === false
+      ? lastTimeRange : { ...presetTimeRange(0), today: true });
     // modelQuery and sortOrder bind explicit search and chronological ordering to the server.
     // modelQuery 与 sortOrder 将明确搜索和时间排序绑定到服务端。
     const [modelQuery, setModelQuery] = React.useState("");
@@ -940,9 +972,11 @@ export function createPluginPanel(sdk) {
           argumentsValue.view = changedTables.daily && changedTables.recent ? "detail-pages"
             : changedTables.daily ? "daily-page" : "recent-page";
         }
-        // Host identity includes the actual partial projection and freezes null end once per execution.
-        // 宿主身份包含实际局部投影，并在每次执行中只冻结一次空终点。
-        const nextDashboard = await sdk.invoke("dashboard-get", argumentsValue, {
+        // Freeze the live end once per action. Keep the selection identity stable across refreshes and pagination.
+        // 每次 Action 只取一次实时结束时刻，保持刷新与分页使用同一选择身份。
+        const nextDashboard = await sdk.invoke("dashboard-get", {
+          ...argumentsValue, endAtMs: argumentsValue.endAtMs ?? Math.max(Date.now(), argumentsValue.startAtMs + 1),
+        }, {
           refresh: force, signal: subscription.signal,
         });
         if (mountedRef.current && sequence === requestSequence.current) {
@@ -1160,7 +1194,10 @@ export function createPluginPanel(sdk) {
     const heatmapCells = buildHeatmapCells(dashboard?.heatmap ?? [], timeRange);
     // allSeries contains every runtime-projected model line.
     // allSeries 包含运行时投影的全部模型折线。
-    const allSeries = buildLineSeries(dashboard?.series ?? [], timeRange);
+    const allSeries = buildLineSeries(dashboard, timeRange);
+    // hourlyTrend selects the chart labels from the same projection as its points.
+    // hourlyTrend 按图表数据点所属的同一投影选择标题。
+    const hourlyTrend = dashboard?.hourlySeries !== undefined;
     // visibleSeries excludes locally hidden lines without changing the action result.
     // visibleSeries 排除本地隐藏折线，但不改变 Action 结果。
     const visibleSeries = allSeries.filter((series) => !hiddenSeries.has(series.id));
@@ -1242,7 +1279,7 @@ export function createPluginPanel(sdk) {
           }))),
           h(TimeRangeControl, {
             value: timeRange,
-            onChange: (value) => { setTimeRange(value); setDailyOffset(0); setRecentOffset(0); },
+            onChange: (value) => { lastTimeRange = value; setTimeRange(value); setDailyOffset(0); setRecentOffset(0); },
           }),
           consumerIds.length > 0 ? h(SelectControl, {
             ariaLabel: text("consumer.label", "Consumer"),
@@ -1334,9 +1371,9 @@ export function createPluginPanel(sdk) {
             tooltipDelayMs: TOOLTIP_DELAY_MS,
           }),
         ),
-        h(PageSection, { title: text("trend.title", "Daily token usage"), status: h(Badge, { variant: "outline" }, timeRangeLabel(timeRange)) },
+        h(PageSection, { title: hourlyTrend ? text("trend.hourlyTitle", "Hourly token usage") : text("trend.title", "Daily token usage"), status: h(Badge, { variant: "outline" }, timeRangeLabel(timeRange)) },
           h(TimeSeriesLineChart, {
-            ariaLabel: text("trend.aria", "Daily token usage line chart grouped by model"),
+            ariaLabel: hourlyTrend ? text("trend.hourlyAria", "Hourly token usage line chart grouped by model") : text("trend.aria", "Daily token usage line chart grouped by model"),
             emptyLabel: text("trend.empty", "No trend data in this range"),
             formatValue: formatTokens,
             formatAxisValue: formatTokens,
