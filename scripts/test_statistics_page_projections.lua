@@ -24,7 +24,12 @@ for _, view in ipairs({ "daily-page", "recent-page", "detail-pages" }) do
         local sql = request.sql
         if sql:find("AS dashboardRevision", 1, true) then
             revision_reads = revision_reads + 1
-            return { rows = {{ dashboardRevision = args.change_revision and revision_reads or 7, generatedAtMs = 123456 }} }
+            -- Move the revision after the opening read, then hold it steady for the retry.
+            -- 在首次读取版本后推进版本，随后在重试期间保持稳定。
+            if args.change_revision == "once" and revision_reads >= 2 then
+                return { rows = {{ dashboardRevision = 8, generatedAtMs = 123456 }} }
+            end
+            return { rows = {{ dashboardRevision = args.change_revision == true and revision_reads or 7, generatedAtMs = 123456 }} }
         end
         assert(request.params[3].value == 100 and request.params[4].value == 50)
         assert(request.params[9].value == "embedding")
@@ -60,18 +65,19 @@ for _, view in ipairs({ "daily-page", "recent-page", "detail-pages" }) do
     local ok, response = pcall(plugin.dashboard_get, { arguments = {
         view = view, dailyOffset = 100, recentOffset = 50, recentModelType = "embedding",
     } })
-    if args.change_revision then
+    if args.change_revision == true then
         assert(not ok and tostring(response):find("consistent page", 1, true), tostring(response))
     else
         assert(ok, tostring(response))
         local page = runtime_json.decode(response).result
-        assert(page.view == view and page.aggregateRevision == 7)
+        assert(page.view == view and page.aggregateRevision == (args.change_revision == "once" and 8 or 7))
         assert(page.summary == nil and page.accounts == nil and page.heatmap == nil)
         assert(page.series == nil and page.consumerIds == nil and page.pricingCatalog == nil)
         assert((page.daily ~= nil) == (view ~= "recent-page"))
         assert((page.recentAttempts ~= nil) == (view ~= "daily-page"))
-        assert(#calls == (view == "detail-pages" and 4 or 2))
     end
+    assert(revision_reads == (args.change_revision and 4 or 2))
+    assert(#calls == (view == "detail-pages" and 4 or 2) * (args.change_revision and 2 or 1))
     results[view] = { calls = calls, rejected_changed_revision = args.change_revision == true }
 end
 return results

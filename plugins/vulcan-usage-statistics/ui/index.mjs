@@ -1315,7 +1315,8 @@ export function createPluginPanel(sdk) {
               h(PageHint, null, interpolate(text("cost.coverage", "{{priced}} priced rows · {{unpriced}} unpriced · {{incomplete}} incomplete"), {
                 priced: formatInteger(cost.pricedRows), unpriced: formatInteger(cost.unpricedRows), incomplete: formatInteger(cost.incompleteRows),
               })),
-              cost.unpricedRows + cost.incompleteRows > 0 ? h(Badge, { variant: "outline" }, text("cost.partial", "Partial coverage")) : null,
+              cost.hasPartialUsage || cost.unpricedRows + cost.incompleteRows > 0
+                ? h(Badge, { variant: "outline" }, text("cost.partial", "Partial coverage")) : null,
             )),
             dashboard.summary.costs.length === 0 ? h(PageHint, null, text("cost.empty", "No cost records in this range")) : null,
           ),
@@ -1386,7 +1387,8 @@ export function createPluginPanel(sdk) {
                 icon: "activity",
                 label: text("cost.reference", "Reference cost"),
                 value: cost.amount === null ? "-" : currencyAmount(formatMoney(cost.amount, sdk.locale), cost.currency),
-                detail: cost.unpricedRows + cost.incompleteRows > 0 ? text("cost.partial", "Partial coverage") : undefined,
+                detail: cost.hasPartialUsage || cost.unpricedRows + cost.incompleteRows > 0
+                  ? text("cost.partial", "Partial coverage") : undefined,
               })),
             ),
             h(PageSection, {

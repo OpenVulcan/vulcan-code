@@ -433,6 +433,27 @@ test("overview shows input/output proportions without adding overlapping cache c
   }
 });
 
+// Keep the summed reference amount visible while marking a priced group with missing usage.
+// 保留已汇总的参考金额，同时标记存在用量缺口的已定价分组。
+test("overview marks partial usage even when every model row has a reference amount", async () => {
+  // snapshot supplies two estimated rows, one with incomplete attempt-level coverage.
+  // snapshot 提供两行可估算结果，其中一行的请求级覆盖不完整。
+  const snapshot = {
+    ...dashboard,
+    summary: { ...dashboard.summary, costs: [{
+      currency: "USD", amount: "7.0150016", pricedRows: 2, incompleteRows: 0, unpricedRows: 0, hasPartialUsage: true,
+    }] },
+  };
+  // panel uses a sentinel translation to assert the partial coverage state without locking wording.
+  // panel 使用测试专用译文验证部分覆盖状态，避免绑定界面措辞。
+  const panel = await mount((action) => Promise.resolve(action === "settings-get" ? settings : snapshot),
+    false, "en-US", { "cost.partial": "fixture-partial-coverage" });
+  try {
+    assert.match(panel.container.textContent, /fixture-partial-coverage/);
+    assert.equal(panel.container.querySelector(".plugin-statistics-cost-value").title, snapshot.summary.costs[0].amount);
+  } finally { await panel.close(); }
+});
+
 // An explicit directory selection opens the editor before the table and retains exact unsaved input through filters.
 // 明确目录选择在表格前打开编辑器，并在筛选过程中保留精确未保存输入。
 test("pricing requires an explicit target, preserves its draft across filters and reports unpriced source", async () => {

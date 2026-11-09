@@ -34,13 +34,19 @@ local function host_call(operation, request)
         pages[#pages + 1] = offset
         -- A concurrent commit between cost pages must invalidate the whole mixed projection.
         -- 费用分页间的并发提交必须使整个混合投影失效。
-        if args.change_revision and offset == 1000 then revision = revision + 1 end
+        if offset == 1000 and (args.change_revision == true or (args.change_revision == "once" and revision == 1)) then
+            revision = revision + 1
+        end
         local rows = runtime_vulcan.json.array()
         for index = offset + 1, math.min(offset + 1000, 1200) do
             rows[#rows + 1] = {
                 modelId = "fixture-" .. ((index - 1) % 600 + 1), rowCount = 1,
-                uncachedInputTokens = 10, outputTokens = 20, cacheReadTokens = 0,
+                uncachedInputTokens = 10 * revision, outputTokens = 20, cacheReadTokens = 0,
                 cacheWriteTokens = index <= 600 and 0 or runtime_vulcan.json.null,
+                -- Keep a known subtotal from the group with missing input and ignore missing zero-rate cache usage.
+                -- 保留输入部分缺失分组的已知小计，零费率缓存用量缺失不影响覆盖判断。
+                uncachedInputTokensMissing = args.partial_usage and index == 1 and 1 or 0,
+                cacheWriteTokensMissing = index > 600 and 1 or 0,
             }
         end
         if offset == 1000 then
@@ -49,6 +55,8 @@ local function host_call(operation, request)
                 cacheReadTokens = 0, cacheWriteTokens = 0 }
         end
         return { rows = rows }
+    elseif sql:find("FROM scoped_attempts\nGROUP BY provider_id", 1, true) then
+        return { rows = {{ providerId = "fixture-provider", attempts = revision }} }
     elseif sql:find("AS attempts", 1, true) then
         return { rows = {{ attempts = 1202, successes = 1202, reported = 1202, totalTokens = 36000,
             inputTokens = 12000, outputTokens = 24000, cacheReadTokens = 0, cacheWriteTokens = 0 }} }
@@ -72,19 +80,28 @@ handle:close()
 local plugin = assert(load(source, "@statistics-cost-test", "t", environment))()
 -- Execute the actual bundle so a stale projection cannot pass through a handwritten accumulator.
 -- 执行实际 Bundle，避免手写累加器掩盖过期投影。
-local ok, response = pcall(plugin.dashboard_get, { arguments = { view = "overview", rangeDays = 30 } })
-if args.change_revision then
-    assert(not ok, "a revision change between cost pages must reject the mixed dashboard")
-    assert(tostring(response):find("statistics changed during loading", 1, true), tostring(response))
+local ok, response = pcall(plugin.dashboard_get, { arguments = { view = args.view or "overview", rangeDays = 30 } })
+if args.change_revision == true then
+    assert(not ok, "continued revision changes must reject the mixed dashboard")
+    assert(#pages == 4 and pages[1] == 0 and pages[2] == 1000 and pages[3] == 0 and pages[4] == 1000)
     return { rejected_mixed_revision = true, pages = pages }
 end
 assert(ok, tostring(response))
 local result = runtime_vulcan.json.decode(response).result
 local cost = result.summary.costs[1]
-assert(cost.amount == "0.06")
+if args.change_revision == "once" then
+    assert(result.aggregateRevision == 2 and cost.amount == "0.072")
+    assert(#pages == 4 and pages[1] == 0 and pages[2] == 1000 and pages[3] == 0 and pages[4] == 1000)
+else
+    assert(result.aggregateRevision == 1 and cost.amount == "0.06")
+    assert(#pages == 2 and pages[1] == 0 and pages[2] == 1000)
+end
+if args.view == "providers" then
+    assert(result.providers[1].attempts == result.aggregateRevision)
+end
 assert(cost.pricedRows == 1200)
 assert(cost.incompleteRows == 1)
 assert(cost.unpricedRows == 1)
-assert(#pages == 2 and pages[1] == 0 and pages[2] == 1000)
+assert(cost.hasPartialUsage == (args.partial_usage == true))
 return { amount = cost.amount, priced_rows = cost.pricedRows,
     incomplete_rows = cost.incompleteRows, unpriced_rows = cost.unpricedRows, pages = pages }

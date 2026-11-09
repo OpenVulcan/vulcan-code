@@ -22,7 +22,8 @@
               "amount": { "type": ["string", "null"] },
               "pricedRows": { "type": "integer", "minimum": 0 },
               "incompleteRows": { "type": "integer", "minimum": 0 },
-              "unpricedRows": { "type": "integer", "minimum": 0 }
+              "unpricedRows": { "type": "integer", "minimum": 0 },
+              "hasPartialUsage": { "type": "boolean" }
             },
             "required": ["currency", "amount", "pricedRows", "incompleteRows", "unpricedRows"],
             "additionalProperties": false
