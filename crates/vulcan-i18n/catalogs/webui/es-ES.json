@@ -1302,6 +1302,7 @@
   "composer.reasoning.subtitle": "Nivel de razonamiento",
   "composer.placeholder": "Escribe la instrucción de la tarea para esta conversación ({shortcut})",
   "composer.shortcutHint": "⏎ Enviar, Mayús + ⏎ Nueva línea",
+  "composer.runningShortcutHint": "⏎ {enterAction}, Ctrl + ⏎ {ctrlEnterAction}, Mayús + ⏎ Nueva línea",
   "composer.selectFallback": "Seleccionar",
   "composer.aria.input": "Entrada de la conversación actual",
   "composer.contextMenu.copy": "Copiar",

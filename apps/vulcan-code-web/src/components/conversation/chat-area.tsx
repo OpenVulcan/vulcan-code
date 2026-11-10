@@ -381,8 +381,8 @@ export function ChatArea(props: ChatAreaProps) {
     () => activeSurfaceConversationId ? <ConversationTailStatus conversationId={activeSurfaceConversationId} /> : null,
     [activeSurfaceConversationId],
   );
-  // isConversationRunning controls only the main composer stop affordance.
-  // isConversationRunning 仅控制主输入区的停止操作展示。
+  // The composer uses this run state for its stop action and delivery shortcuts.
+  // 输入区使用此运行状态决定停止操作和发送快捷键提示。
   const isConversationRunning = conversationIsRunning(selectedConversation);
   // pendingPlanArtifact tracks the current submit_plan artifact that still requires a user decision.
   // pendingPlanArtifact 跟踪当前仍需要用户决策的 submit_plan 计划产物。

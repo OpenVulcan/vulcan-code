@@ -46,7 +46,6 @@ import type {
 } from "@/types";
 import type { ComposerTraceCallback } from "@/components/composer/composer-control-types";
 
-import { composerShortcutHint } from "@/components/composer/composer-panel/helpers";
 import { ModelSecondaryRouteControl } from "@/components/composer/composer-panel/model-secondary-route-control";
 import { ComposerGoalStrip, ComposerPlanModeChip } from "@/components/composer/composer-panel/goal-strip";
 import { ComposerAnswerReplySlot } from "@/components/composer/composer-panel/answer-reply-slot";
@@ -63,6 +62,7 @@ import {
 } from "@/components/composer/composer-panel/use-composer-session-draft";
 import { useComposerModelSelection } from "@/components/composer/composer-panel/use-composer-model-selection";
 import { useComposerSlashCommands } from "@/components/composer/composer-panel/use-composer-slash-commands";
+import { useComposerShortcutHint } from "@/components/composer/composer-panel/use-composer-shortcut-hint";
 import { useComposerTypingRedirect } from "@/components/composer/composer-panel/use-composer-typing-redirect";
 import { recordSentPrompt } from "@/components/composer/composer-panel/use-composer-prompt-recall";
 import { useComposerSendController } from "@/components/composer/composer-panel/use-composer-send-controller";
@@ -542,9 +542,9 @@ export function ComposerPanel(props: {
       }
     }
   }, [flushSecondaryRouteSelection]);
-  // placeholder describes the platform-specific send and newline keyboard behavior.
-  // placeholder 描述平台相关的发送与换行键盘行为。
-  const placeholder = t("composer.placeholder").replace("{shortcut}", composerShortcutHint(t("composer.shortcutHint")));
+  // Keep shortcuts visible in the placeholder or the note under a populated running draft.
+  // 在占位提示或运行中已有内容的草稿下方显示快捷键。
+  const { placeholder, note: shortcutNote } = useComposerShortcutHint(props.isConversationRunning, draftInput.length > 0, t);
   // promptRecallScope groups recalled prompts by project; drafts outside any project share one scope.
   // promptRecallScope 按项目归组召回的提示词；不属于任何项目的草稿共用一个范围。
   const promptRecallScope = props.projectId ?? "";
@@ -855,6 +855,7 @@ export function ComposerPanel(props: {
         >
           <Textarea
             {...textareaListbox}
+            aria-describedby={shortcutNote?.id}
             aria-label={t("composer.aria.input")}
             disabled={isPendingPromptEditing}
             onChange={(event) => { handleDraftInputChange(event.currentTarget.value); pathMention.trackCaret(event.currentTarget); }}
@@ -866,6 +867,7 @@ export function ComposerPanel(props: {
             value={draftInput}
           />
         </ComposerTextContextMenu>
+        {shortcutNote ? <p className="vk-composer-note" id={shortcutNote.id}>{shortcutNote.text}</p> : null}
         {pendingAttachmentCount > 0 ? <p role="status" aria-busy="true" className="vk-composer-note">
           {t("composer.attachment.stagingPending")} ({pendingAttachmentCount})
         </p> : null}

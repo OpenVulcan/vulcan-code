@@ -9,7 +9,7 @@ import type { ComposerSettingsSection } from "@/components/composer/composer-set
 import type { ComposerSlashCommandSummary } from "@/types";
 import { useComposerExternalCommands, type ComposerOwner } from "@/components/composer/composer-external-commands";
 import type { ComposerPromptSkillOverrides } from "@/components/composer/composer-model";
-import { readComposerEnterSendMode, type ComposerSendMode } from "@/components/composer/composer-send-preference";
+import { oppositeComposerSendMode, readComposerEnterSendMode, type ComposerSendMode } from "@/components/composer/composer-send-preference";
 
 // UseComposerSlashCommandsOptions defines the input state and routed actions owned outside slash selection.
 // UseComposerSlashCommandsOptions 定义 slash 选择之外持有的输入状态与路由动作。
@@ -244,10 +244,10 @@ export function useComposerSlashCommands(options: UseComposerSlashCommandsOption
     // alternate selects Ctrl+Enter, which reverses the saved choice and only sends messages.
     // alternate 选择 Ctrl+Enter，它反转已保存的选项，仅用于发送消息。
     const alternate = event.ctrlKey && !event.altKey && !event.metaKey;
-    // insert captures the requested action at keydown; the service still decides whether a queue is needed.
-    // insert 在按键时捕获所请求的操作，是否需要排队仍由服务决定。
-    const insert = (readComposerEnterSendMode() === "insert") !== alternate;
-    void options.onSend(insert ? "insert" : "queue", !alternate);
+    // Read the preference at keydown; the service still decides whether the message needs to queue.
+    // 在按键时读取偏好，是否需要排队仍由服务决定。
+    const enterMode = readComposerEnterSendMode();
+    void options.onSend(alternate ? oppositeComposerSendMode(enterMode) : enterMode, !alternate);
   }, [activateCommand, exactCommand, highlightedCommand, options.input, options.onSend, panelVisible, visibleCommands.length]);
   // reset clears transient slash state without mutating the newly restored draft input.
   // reset 清理临时 slash 状态，但不修改刚恢复的草稿输入。

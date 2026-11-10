@@ -1302,6 +1302,7 @@
   "composer.reasoning.subtitle": "推理等级",
   "composer.placeholder": "输入当前会话要执行的任务指令（{shortcut}）",
   "composer.shortcutHint": "⏎ 发送，Shift + ⏎ 换行",
+  "composer.runningShortcutHint": "⏎ {enterAction}，Ctrl + ⏎ {ctrlEnterAction}，Shift + ⏎ 换行",
   "composer.selectFallback": "选择",
   "composer.aria.input": "当前会话输入",
   "composer.contextMenu.copy": "复制",

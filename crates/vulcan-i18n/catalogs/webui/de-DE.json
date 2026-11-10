@@ -1302,6 +1302,7 @@
   "composer.reasoning.subtitle": "Denkstufe",
   "composer.placeholder": "Aufgabe für diese Unterhaltung eingeben ({shortcut})",
   "composer.shortcutHint": "⏎ Senden, Umschalt + ⏎ Neue Zeile",
+  "composer.runningShortcutHint": "⏎ {enterAction}, Strg + ⏎ {ctrlEnterAction}, Umschalt + ⏎ Neue Zeile",
   "composer.selectFallback": "Auswählen",
   "composer.aria.input": "Eingabe der aktuellen Unterhaltung",
   "composer.contextMenu.copy": "Kopieren",

@@ -219,17 +219,6 @@ function persistComposerSessionDraft(
   }
 }
 
-// composerShortcutHint returns a platform-specific keyboard hint for the composer placeholder.
-// composerShortcutHint 返回输入区 placeholder 使用的平台化快捷键提示。
-export function composerShortcutHint(baseHint: string): string {
-  const platformText = typeof navigator === "undefined"
-    ? ""
-    : `${navigator.platform} ${navigator.userAgent}`.toLowerCase();
-  if (platformText.includes("mac")) {
-    return baseHint;
-  }
-  return baseHint;
-}
 
 // composerSessionDraftKey returns the stable slot for one selected or draft conversation.
 // composerSessionDraftKey 返回当前选中会话或新建会话对应的稳定草稿槽。

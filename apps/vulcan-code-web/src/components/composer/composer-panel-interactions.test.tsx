@@ -29,7 +29,11 @@ vi.mock("@/service/conversation-actions-service", () => ({
 }));
 // translate keeps hook dependencies stable while exposing semantic labels for DOM interaction.
 // translate 保持 Hook 依赖稳定，同时暴露用于 DOM 交互的语义标签。
-const translate = (key: string) => key;
+const translate = (key: string): string => {
+  if (key === "composer.placeholder") return "{shortcut}";
+  if (key === "composer.runningShortcutHint") return "{enterAction} / {ctrlEnterAction}";
+  return key;
+};
 vi.mock("@/i18n", () => ({ useI18n: () => ({ locale: "en-US", t: translate }) }));
 
 // root and host isolate each complete composer instance.
@@ -218,6 +222,40 @@ it("keeps an empty Ctrl+Enter and repeated Enter from stopping the active turn",
   await pressEnter({ repeat: true });
   expect(props.onSubmitPrompt).not.toHaveBeenCalled();
   expect(props.onStopConversationRun).not.toHaveBeenCalled();
+});
+
+it("updates the mounted composer shortcut hint when the run or the saved Enter action changes", async () => {
+  // Re-render the same composer and settings components with the requested run state.
+  // 按指定的运行状态重新渲染同一输入区和设置组件。
+  const props = composerProps();
+  const render = async (isConversationRunning: boolean): Promise<void> => {
+    await act(async () => root.render(<>
+      <ComposerEnterSendSettingsSection />
+      <ComposerPanel {...props} isConversationRunning={isConversationRunning} />
+    </>));
+  };
+  await render(false);
+  // Keep the same textarea reference to verify updates without remounting the composer.
+  // 保留同一文本框引用，验证无需重挂载输入区即可更新。
+  const field = host.querySelector("textarea")!;
+  expect(field.placeholder).toBe("composer.shortcutHint");
+
+  await render(true);
+  expect(field.placeholder).toBe("settings.composerEnterSend.queue / settings.composerEnterSend.insert");
+  await act(async () => host.querySelector<HTMLButtonElement>('[role="radio"][value="insert"]')!.click());
+  expect(field.placeholder).toBe("settings.composerEnterSend.insert / settings.composerEnterSend.queue");
+
+  // Type through the native input path so the visible hint moves below the populated field.
+  // 通过原生输入路径填写文字，使可见提示移到已有内容的文本框下方。
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(field, "Follow up");
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  expect(document.getElementById(field.getAttribute("aria-describedby")!)?.textContent).toBe(field.placeholder);
+
+  await render(false);
+  expect(field.getAttribute("aria-describedby")).toBeNull();
+  expect(field.placeholder).toBe("composer.shortcutHint");
 });
 
 it("returns keyboard focus to the actual textarea after confirmed removal of its final attachment", async () => {

@@ -1302,6 +1302,7 @@
   "composer.reasoning.subtitle": "Уровень рассуждений",
   "composer.placeholder": "Введите задание для этой беседы ({shortcut})",
   "composer.shortcutHint": "⏎ Отправить, Shift + ⏎ Новая строка",
+  "composer.runningShortcutHint": "⏎ {enterAction}, Ctrl + ⏎ {ctrlEnterAction}, Shift + ⏎ Новая строка",
   "composer.selectFallback": "Выбрать",
   "composer.aria.input": "Ввод текущей беседы",
   "composer.contextMenu.copy": "Копировать",

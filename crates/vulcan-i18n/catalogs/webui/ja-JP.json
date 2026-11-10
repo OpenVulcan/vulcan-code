@@ -1302,6 +1302,7 @@
   "composer.reasoning.subtitle": "推論レベル",
   "composer.placeholder": "この会話のタスクの指示を入力（{shortcut}）",
   "composer.shortcutHint": "⏎ 送信、Shift + ⏎ 改行",
+  "composer.runningShortcutHint": "⏎ {enterAction}、Ctrl + ⏎ {ctrlEnterAction}、Shift + ⏎ 改行",
   "composer.selectFallback": "選択",
   "composer.aria.input": "現在の会話の入力",
   "composer.contextMenu.copy": "コピー",

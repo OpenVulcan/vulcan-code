@@ -1302,6 +1302,7 @@
   "composer.reasoning.subtitle": "推理等級",
   "composer.placeholder": "輸入此對話要執行的任務指令（{shortcut}）",
   "composer.shortcutHint": "⏎ 傳送，Shift + ⏎ 換行",
+  "composer.runningShortcutHint": "⏎ {enterAction}，Ctrl + ⏎ {ctrlEnterAction}，Shift + ⏎ 換行",
   "composer.selectFallback": "選擇",
   "composer.aria.input": "目前對話輸入",
   "composer.contextMenu.copy": "複製",
