@@ -25,6 +25,7 @@ import type { ConversationEventWindowControllerSnapshot } from "@/service/conver
 import type { SelectedConversationEventWindowCommands } from "@/service/selected-conversation-event-window-registry";
 import {
   clientActionId,
+  type ApiPurposeKind,
   type ConversationEventSummary,
   type CollaborationTaskResult,
 } from "@/service/conversation-event-window-store";
@@ -354,7 +355,132 @@ function renderWorkspace(...args: Parameters<typeof workspaceTree>): string {
   return renderToStaticMarkup(workspaceTree(...args));
 }
 
+// appendRetryRequest adds one physical request to the test history in place.
+// appendRetryRequest 就地向测试历史追加一次物理请求。
+// The failure descriptor carries a diagnostic and the host's optional retry-exhaustion decision.
+// 失败描述提供诊断以及宿主的可选重试耗尽判定。
+function appendRetryRequest(
+  history: ConversationEventSummary[],
+  purpose: ApiPurposeKind,
+  failure?: { message: string; exhausted?: boolean },
+): void {
+  // Use the next event sequence as a unique fixture API identity.
+  // 用下一事件序号作为唯一的夹具 API 标识。
+  const apiCallId = history.length + 1;
+  // The same Provider route owns each attempt in these scenarios.
+  // 这些场景中的每次尝试均由同一供应商路由持有。
+  const route = { provider: "deepseek", model: "test-model", connection_id: "test-connection" };
+  history.push(eventSummary(apiCallId, { kind: "api_started", api_call_id: apiCallId, purpose, request: route }));
+  // Core places the permanent notice immediately after its terminal API statistics.
+  // Core 将永久提示紧接着放在终态 API 统计之后。
+  const failureReason = failure?.exhausted ? "retry_exhausted" : "provider_error";
+  history.push(eventSummary(history.length + 1, {
+    kind: "api_stats", api_call_id: apiCallId, purpose, ...route, usage: {},
+    status: failure ? "failed" : "completed", end_reason: failure ? failureReason : "completed_successfully",
+    ...(failure ? { error: { category: "provider", message: failure.message } } : {}),
+    continuation_eligibility: failure ? "allowed" : "forbidden", timing: { completed_at_ms: 1_000 + history.length + 1 },
+  }, "ui_only"));
+  if (failure) history.push(eventSummary(history.length + 1, {
+    kind: "display_note", api_call_id: apiCallId, notice_kind: failureReason, reason_code: failureReason,
+    severity: "error", redacted_detail: failure.message,
+  }, "ui_only"));
+}
+
+// retryDiagnostic returns the same structured overload failure with a distinct request identifier per attempt.
+// retryDiagnostic 返回相同的结构化过载错误，每次尝试附带不同的请求编号。
+function retryDiagnostic(requestId: string): string {
+  return `Provider streaming execution failed: provider deepseek failure: ${JSON.stringify({
+    category: "provider_unavailable", stage: "response_headers", http_status: 503,
+    dispatch_outcome: "dispatched", semantic_output_observed: false, retryable: true,
+    request_id: requestId, message: "Fixture service overloaded",
+  })}`;
+}
+
 describe("ConversationBranchWorkspaceV1", () => {
+  // Verify that new failures update the existing card, its controls show exact diagnostics, and recovery removes it.
+  // 验证新增失败更新现有卡片，翻页显示精确诊断，恢复后移除卡片。
+  it("pages repeated provider errors in one card and hides the card after recovery", async () => {
+    // Start with one user prompt and extend the same event window as transport retries settle.
+    // 从一条用户提示词开始，随着传输重试结束扩展同一事件窗口。
+    const history = [completeTurnEvents()[0]];
+    appendRetryRequest(history, "main_generation", { message: retryDiagnostic("fixture-attempt-one") });
+    // Mount the production transcript so paging buttons exercise the actual error card.
+    // 挂载生产转录区，使翻页按钮操作实际错误卡。
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    const store = new ConversationLiveStreamStore();
+    // Render a copy of the current window so the workspace observes each append.
+    // 渲染当前窗口的副本，使工作区观察到每次追加。
+    const render = () => React.act(async () => root.render(workspaceTree([...history], "inline_output", [], true, undefined, store)));
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    try {
+      await render();
+      expect(host.querySelectorAll(".vk-error-card")).toHaveLength(1);
+      expect(host.querySelector(".vk-error-retry-pager")).toBeNull();
+
+      appendRetryRequest(history, "retry_generation", { message: retryDiagnostic("fixture-attempt-two") });
+      await render();
+      expect(host.querySelectorAll(".vk-error-card")).toHaveLength(1);
+      expect(host.querySelector(".vk-error-raw pre")?.textContent).toContain("fixture-attempt-two");
+
+      appendRetryRequest(history, "retry_generation", { message: retryDiagnostic("fixture-attempt-three") });
+      await render();
+      expect(host.querySelectorAll(".vk-error-card")).toHaveLength(1);
+      expect(host.querySelector(".vk-error-raw pre")?.textContent).toContain("fixture-attempt-three");
+
+      // Select the controls by their localized labels, and check diagnostic data rather than translated wording.
+      // 按本地化标签选择控件，验证诊断数据而非翻译措辞。
+      const catalog = loadedLocaleCatalog("zh-CN")!;
+      expect(host.querySelector(".vk-error-retry-pager span")?.textContent)
+        .toBe(catalog["conversation.providerRetry.attempt"].replace("{attempt}", "3"));
+      const previous = host.querySelector<HTMLButtonElement>(`button[aria-label="${catalog["conversation.providerRetry.previousAttempt"]}"]`)!;
+      const next = host.querySelector<HTMLButtonElement>(`button[aria-label="${catalog["conversation.providerRetry.nextAttempt"]}"]`)!;
+      expect(next.disabled).toBe(true);
+      await React.act(async () => previous.click());
+      expect(host.querySelector(".vk-error-raw pre")?.textContent).toContain("fixture-attempt-two");
+      await React.act(async () => previous.click());
+      expect(host.querySelector(".vk-error-raw pre")?.textContent).toContain("fixture-attempt-one");
+      expect(previous.disabled).toBe(true);
+      await React.act(async () => next.click());
+      expect(host.querySelector(".vk-error-raw pre")?.textContent).toContain("fixture-attempt-two");
+
+      // A reopened window missing the initial attempt can page through the remaining failures with relative labels.
+      // 重新打开的窗口缺少首次尝试时，可使用相对页码查看剩余失败。
+      const firstRetry = history.find(({ event }) => event.kind === "api_started" && event.purpose === "retry_generation")!;
+      expect(renderWorkspace(history.filter(({ seq }) => seq >= firstRetry.seq))).toContain(">2 / 2</span>");
+
+      appendRetryRequest(history, "retry_generation");
+      await render();
+      expect(host.querySelector(".vk-error-card")).toBeNull();
+      expect(host.querySelector(".vk-error-retry-pager")).toBeNull();
+    } finally {
+      await React.act(async () => root.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
+
+  // Only recovery within the same retry sequence hides earlier failures, even when their diagnostics differ.
+  // 即使诊断不同，只有同一重试序列内的恢复才会隐藏先前失败。
+  it.each([
+    { nextPurpose: "retry_generation", exhausted: false, remaining: 0 },
+    { nextPurpose: "continue", exhausted: true, remaining: 2 },
+  ] as const)("keeps distinct errors separate and scopes recovery to $nextPurpose", ({ nextPurpose, exhausted, remaining }) => {
+    // The retry changes error while the original Provider route stays the same.
+    // 原供应商路由保持相同，但重试遇到不同错误。
+    const history = [completeTurnEvents()[0]];
+    appendRetryRequest(history, "main_generation", { message: "Fixture provider unavailable" });
+    appendRetryRequest(history, "retry_generation", { message: "Fixture invalid response", exhausted });
+
+    // The workspace still shows each of the distinct failures without adding pagination.
+    // 工作区仍分别展示不同失败，且不增加翻页。
+    const markup = renderWorkspace(history);
+    expect(markup.match(/class="vk-error-card"/g)).toHaveLength(2);
+    expect(markup).not.toContain("vk-error-retry-pager");
+
+    appendRetryRequest(history, nextPurpose);
+    expect(renderWorkspace(history).match(/class="vk-error-card"/g) ?? []).toHaveLength(remaining);
+  });
+
   // The real branch surface must show one card from API start through terminal replay, without leaking summary prose.
   // 真实分支界面必须从 API 开始到终态重放都显示一张卡，不能把摘要正文泄漏为普通回复。
   it.each(["completed", "failed", "interrupted"] as const)("renders %s compaction as one lifecycle card", (status) => {

@@ -33,6 +33,7 @@ import { modelSwitchRouteLabel } from "./conversation-model-switch";
 import { goalNoticeTitle } from "./conversation-goal-notice";
 import { dedicatedMemoryNoticeTitle, isDedicatedMemoryNoticeKind } from "@/components/conversation/conversation-dedicated-notice";
 import { parseCompactionProviderError, parseSystemProviderError } from "./conversation-system-error-card";
+import { projectProviderRetryNotices, type RetryFailureAttempt } from "./conversation-provider-retry-notices";
 import { nativeMediaInputPreview } from "./tool-presentations/native-media-input-preview";
 import {
   contextInjectionCategoryLabel,
@@ -139,6 +140,9 @@ interface BranchPresentationContextV1 {
 // CachedEventMessagesV1 records the display messages of one immutable event and the cross-event facts they read.
 // CachedEventMessagesV1 记录一条不可变事件的展示消息及其读取的跨事件事实。
 interface CachedEventMessagesV1 {
+  // Repeated retry failures can change when the live window appends another terminal result.
+  // 实时窗口追加另一终态结果时，重复重试失败分页可能变化。
+  retryFailures: readonly RetryFailureAttempt[] | undefined;
   // Canonical API purpose can arrive when an older page is prepended.
   // 前置更早分页时可能补齐规范 API 用途。
   compaction: boolean;
@@ -180,6 +184,9 @@ export function createConversationBranchPresentationProjectorV1(): ConversationB
       projectRenderItems = createConversationRenderItemsProjector(t);
     }
     const cache = eventMessages;
+    // Retry visibility is reconstructed from the same event window for live updates and reopened sessions.
+    // 实时更新与重新打开的会话都从同一事件窗口重建重试提示的可见性。
+    const retryNotices = projectProviderRetryNotices(events);
     // usageCoverageBySeq retains known API contributions separately from strict persisted totals.
     // usageCoverageBySeq 将已知 API 贡献与严格持久化总量分开保留。
     const usageCoverageBySeq = projectTurnUsageCoverage(events);
@@ -245,6 +252,10 @@ export function createConversationBranchPresentationProjectorV1(): ConversationB
     // 通知生命周期快照同样更新同一通知的首张卡片。
     const mergedIds = new Set<string>();
     for (const summary of projectCollaborationTurnLayout(events)) {
+      // Skip recovered and merged failures before caching the display rows.
+      // 在缓存展示行前跳过已恢复或已合并的失败。
+      const retryFailures = retryNotices.get(summary.seq);
+      if (retryFailures === null) continue;
       // Filter before consulting the event cache so pagination and live question arrival remain reversible.
       // 读取事件缓存前过滤，使分页及实时问题到达后的显示切换保持可逆。
       if (summary.event.kind === "tool_call" && questionCardReplacesToolReceipt(summary.event, visibleQuestionIds)) continue;
@@ -284,14 +295,15 @@ export function createConversationBranchPresentationProjectorV1(): ConversationB
         && cached.rootInputText === rootInput?.text
         && cached.apiStats === apiStats
         && cached.compaction === compaction
+        && sameRetryFailurePages(cached.retryFailures, retryFailures)
       ) {
         messages.push(...cached.messages);
         continue;
       }
-      const projected = conversationMessagesForV1Event(
+      const projected = retryFailures === undefined ? conversationMessagesForV1Event(
         sessionId, summary, rootInput, apiStatsByCall, resources, providers, t, compaction, undefined, undefined,
-      );
-      cache.set(summary, { rootInputSeq: rootInput?.seq, rootInputText: rootInput?.text, apiStats, compaction, messages: projected });
+      ) : [retryFailureMessage(conversationMessageBase(sessionId, summary, rootInput), retryFailures)];
+      cache.set(summary, { rootInputSeq: rootInput?.seq, rootInputText: rootInput?.text, apiStats, compaction, retryFailures, messages: projected });
       messages.push(...projected);
     }
 
@@ -304,6 +316,35 @@ export function createConversationBranchPresentationProjectorV1(): ConversationB
       messages: projectedMessages,
       renderItems: projectRenderItems(projectedMessages),
     };
+  };
+}
+
+// sameRetryFailurePages compares the cached and current page sources so unchanged cards keep their render identity.
+// sameRetryFailurePages 比较缓存和当前分页的来源，使未变化的卡片保留渲染标识。
+function sameRetryFailurePages(
+  cached: readonly RetryFailureAttempt[] | undefined,
+  current: readonly RetryFailureAttempt[] | undefined,
+): boolean {
+  return cached === current || (cached !== undefined && current !== undefined
+    && cached.length === current.length && cached.every((page, index) => page.attempt === current[index].attempt
+      && page.stats === current[index].stats && page.notice.event === current[index].notice.event));
+}
+
+// retryFailureMessage anchors a group at its first notice and keeps the original diagnostic for every page.
+// retryFailureMessage 将一组失败锚定到首条提示，并保留每一页的原始诊断。
+function retryFailureMessage(
+  base: ReturnType<typeof conversationMessageBase>,
+  failures: readonly RetryFailureAttempt[],
+): ConversationMessage {
+  // Pages carry the existing error-card body so reports and raw details follow the selected attempt.
+  // 分页携带现有错误卡正文，使问题反馈和原始详情随所选尝试切换。
+  const pages = failures.map(({ attempt, notice, stats }) => ({ attempt, body: providerErrorBody(notice.event, stats) }));
+  return {
+    ...base,
+    role: "system",
+    recordKind: "transcript",
+    body: pages[pages.length - 1].body,
+    metadata: { ...base.metadata, provider_retry_failure_pages: pages },
   };
 }
 
@@ -637,7 +678,7 @@ function conversationMessageBase(
   sessionId: string,
   summary: ConversationEventSummary,
   rootInput: V1RootInputPresentationMetadata | undefined,
-): Pick<ConversationMessage, "id" | "conversationId" | "createdAt" | "metadata"> {
+): Pick<ConversationMessage, "id" | "conversationId" | "createdAt"> & { metadata: Record<string, unknown> } {
   // displayedCreatedAtMs uses the durable last-update timestamp only for editable user-input facts.
   // displayedCreatedAtMs 仅对可编辑的用户输入事实使用持久化最后更新时间。
   const displayedCreatedAtMs = summary.event.kind === "user_input"
@@ -880,50 +921,15 @@ function displayNoteMessage(
   apiStatsByCall: ReadonlyMap<number, ApiStatsBody>,
   t: Translation,
 ): ConversationMessage {
-  const apiStats = event.api_call_id === undefined ? undefined : apiStatsByCall.get(event.api_call_id);
   if (event.severity === "error") {
-    // A producer-owned structured error already contains dispatch, route and stage facts; never wrap it in invented defaults.
-    // 生产端结构化错误已经包含派发、路由与阶段事实，不能再用推测的默认值包裹它。
-    if (event.redacted_detail !== undefined && parseSystemProviderError(event.redacted_detail)) {
-      return { ...base, role: "system", recordKind: "transcript", body: event.redacted_detail, metadata: presentationMetadata(summary, rootInput) };
-    }
-    // The original wrapper stays in the expanded diagnostic while the card uses the parsed provider message.
-    // 原始外壳保留在展开诊断中，卡片使用解析出的供应商消息。
-    const compactionProviderError = (event.reason_code === "context_compaction_failed"
-      || event.reason_code === "automatic_context_compaction_failed") && event.redacted_detail !== undefined
-      ? parseCompactionProviderError(event.redacted_detail)
-      : null;
-    const provider = compactionProviderError?.provider ?? apiStats?.provider ?? "unknown";
-    const error = apiStats?.error;
-    // The V1 balance category allows a user to Continue after replenishment, independently of automatic retry.
-    // V1 余额类别允许用户充值后主动继续，与自动重试独立。
-    const balanceInsufficient = error?.category === "balance";
-    const payload = compactionProviderError === null ? {
-      category: balanceInsufficient ? "payment_required" : error?.category ?? event.notice_kind,
-      stage: "terminal",
-      // An absent API receipt is not evidence that an external request was sent.
-      // 缺少 API 回执不能作为外部请求已经发出的证据。
-      dispatch_outcome: apiStats === undefined ? "unknown" : apiStats.status === "prepared" ? "not_dispatched" : "dispatched",
-      semantic_output_observed: false,
-      side_effect_observed: false,
-      terminal: true,
-      retryable: !balanceInsufficient && apiStats?.continuation_eligibility === "allowed",
-      upstream_code: error?.error_code ?? event.reason_code,
-      upstream_message: event.redacted_detail ?? error?.message ?? "",
-      provider_id: apiStats?.provider,
-      model_id: apiStats?.model,
-      message: event.redacted_detail ?? error?.message ?? event.reason_code,
-    } : {
-      ...compactionProviderError.structured,
-      retryable: false,
-      message: compactionProviderError.message,
-      compaction_diagnostic: event.redacted_detail,
-    };
+    // The notice's explicit API identity supplies the matching terminal facts when present.
+    // 提示中的显式 API 标识在可用时提供匹配的终态事实。
+    const apiStats = event.api_call_id === undefined ? undefined : apiStatsByCall.get(event.api_call_id);
     return {
       ...base,
       role: "system",
       recordKind: "transcript",
-      body: `Provider streaming execution failed: provider ${provider} failure: ${JSON.stringify(payload)}`,
+      body: providerErrorBody(event, apiStats),
       metadata: presentationMetadata(summary, rootInput),
     };
   }
@@ -948,6 +954,58 @@ function displayNoteMessage(
       status: event.severity,
     },
   };
+}
+
+// providerErrorBody formats a display note and its optional API facts for the shared diagnostic card.
+// providerErrorBody 将展示提示及其可选 API 事实格式化为共享诊断卡正文。
+function providerErrorBody(
+  event: Extract<ConversationEventBody, { kind: "display_note" }>,
+  apiStats: ApiStatsBody | undefined,
+): string {
+  // Preserve producer-owned structured errors and their exact dispatch, route and stage facts.
+  // 保留生产端结构化错误及其精确的派发、路由与阶段事实。
+  if (event.redacted_detail !== undefined && parseSystemProviderError(event.redacted_detail)) {
+    return event.redacted_detail;
+  }
+  // The original wrapper stays in the expanded diagnostic while the card uses the parsed provider message.
+  // 原始外壳保留在展开诊断中，卡片使用解析出的供应商消息。
+  const compactionProviderError = (event.reason_code === "context_compaction_failed"
+    || event.reason_code === "automatic_context_compaction_failed") && event.redacted_detail !== undefined
+    ? parseCompactionProviderError(event.redacted_detail)
+    : null;
+  // Compaction carries its own structured provider identity; other notes read the matching terminal facts.
+  // 压缩携带自身的结构化供应商标识，其他提示读取匹配的终态事实。
+  const provider = compactionProviderError?.provider ?? apiStats?.provider ?? "unknown";
+  // Pre-API host failures have no matching terminal error.
+  // API 建立前的宿主失败没有对应的终态错误。
+  const error = apiStats?.error;
+  // The V1 balance category allows a user to Continue after replenishment, independently of automatic retry.
+  // V1 余额类别允许用户充值后主动继续，与自动重试独立。
+  const balanceInsufficient = error?.category === "balance";
+  // Keep the expanded diagnostic compatible with ordinary single failures and paged retries.
+  // 使展开诊断兼容普通单次失败及分页重试。
+  const payload = compactionProviderError === null ? {
+    category: balanceInsufficient ? "payment_required" : error?.category ?? event.notice_kind,
+    stage: "terminal",
+    // An absent API receipt is not evidence that an external request was sent.
+    // 缺少 API 回执不能作为外部请求已经发出的证据。
+    dispatch_outcome: apiStats === undefined ? "unknown" : apiStats.status === "prepared" ? "not_dispatched" : "dispatched",
+    semantic_output_observed: false,
+    side_effect_observed: false,
+    terminal: true,
+    retryable: !balanceInsufficient && apiStats?.continuation_eligibility === "allowed",
+    upstream_code: error?.error_code ?? event.reason_code,
+    upstream_message: event.redacted_detail ?? error?.message ?? "",
+    provider_id: apiStats?.provider,
+    model_id: apiStats?.model,
+    message: event.redacted_detail ?? error?.message ?? event.reason_code,
+  } : {
+    ...compactionProviderError.structured,
+    retryable: false,
+    message: compactionProviderError.message,
+    compaction_diagnostic: event.redacted_detail,
+  };
+  return `Provider streaming execution failed: provider ${provider} failure: ${JSON.stringify(payload)}`;
 }
 
 // memoryRecallMessage shows what long-term memory recall gave the turn as one work-process notice.

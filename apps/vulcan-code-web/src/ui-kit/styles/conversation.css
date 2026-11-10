@@ -156,6 +156,10 @@ button.vk-note:not(:disabled):hover { background: var(--vk-hover); }
 /* Provider error: the message folds the request facts and the raw payload beneath it. */
 .vk-error-card { width: 100%; min-width: 0; border: var(--vk-bw) solid color-mix(in srgb, var(--vk-tone) 35%, var(--vk-line)); border-left: 2px solid var(--vk-tone); background: color-mix(in srgb, var(--vk-tone) 5%, var(--vk-panel)); --vk-tone: var(--vk-bad); }
 .vk-error-card[data-pending] { --vk-tone: var(--vk-warn); }
+/* Keep attempt navigation above the disclosure so paging does not toggle its expanded state. */
+/* 将尝试导航置于折叠详情上方，避免翻页切换其展开状态。 */
+.vk-error-retry-group { width: 100%; min-width: 0; }
+.vk-error-retry-pager { justify-content: flex-end; }
 .vk-error-summary { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: calc(var(--vk-u) * 2.5); align-items: start; padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3); cursor: pointer; list-style: none; }
 .vk-error-summary::-webkit-details-marker { display: none; }
 .vk-error-summary:hover { background: var(--vk-hover); }

@@ -35,6 +35,8 @@ import {
 } from "@/components/conversation/conversation-plan-artifact";
 import {
   parseSystemProviderError,
+  ProviderRetryErrorCard,
+  readProviderRetryFailurePages,
   SystemErrorCard,
 } from "@/components/conversation/conversation-system-error-card";
 import {
@@ -297,7 +299,10 @@ function SpecialConversationBlock(props: {
     ? parseSystemProviderError(props.block.body)
     : null;
   if (systemProviderError) {
-    return <SystemErrorCard error={systemProviderError} />;
+    // A group selects among the original diagnostics while keeping a single visible error card.
+    // 合并组在原始诊断之间切换，同时只显示一张错误卡。
+    const pages = readProviderRetryFailurePages(props.block.rawMetadata);
+    return pages ? <ProviderRetryErrorCard pages={pages} /> : <SystemErrorCard error={systemProviderError} />;
   }
   // providerRetryState exists only for backend-owned Provider retry lifecycle notes.
   // providerRetryState 仅存在于后端持有的 Provider 重试生命周期提示。

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ChevronRight, CircleAlert } from "lucide-react";
+import { ChevronLeft, ChevronRight, CircleAlert } from "lucide-react";
 
 import { StatusPill } from "@/components/shared/status";
 import { FeedbackCenterContext } from "@/components/features/feedback/feedback-center-context";
@@ -81,6 +81,77 @@ export interface SystemErrorCardProps {
   // Parsed provider failure shown in the transcript.
   // 转录区中展示的已解析 Provider 失败信息。
   error: SystemProviderError;
+}
+
+// ProviderRetryFailurePage describes the parsed diagnostic for one physical attempt in a grouped card.
+// ProviderRetryFailurePage 描述合并卡中一次物理请求的解析后诊断。
+interface ProviderRetryFailurePage {
+  // Attempt number within the original retry sequence, when the first attempt is loaded.
+  // 已加载首次尝试时，表示原始重试序列中的尝试编号。
+  attempt: number | null;
+  // Complete diagnostic for the displayed attempt.
+  // 当前展示尝试的完整诊断。
+  error: SystemProviderError;
+}
+
+// readProviderRetryFailurePages reads the branch projection's page metadata and returns parsed error pages.
+// readProviderRetryFailurePages 读取分支投影的分页元数据并返回解析后的错误页。
+export function readProviderRetryFailurePages(metadata: unknown): ProviderRetryFailurePage[] | null {
+  // Only a grouped failure has this presentation field, and the regular card handles single failures.
+  // 只有合并失败具有该展示字段，单次失败由常规卡片处理。
+  const entries = isRecord(metadata) ? metadata.provider_retry_failure_pages : undefined;
+  if (!Array.isArray(entries) || entries.length < 2) return null;
+  // All attempts must parse so paging cannot silently discard a diagnostic.
+  // 每次尝试都必须可解析，避免翻页时静默丢弃诊断。
+  const pages: ProviderRetryFailurePage[] = [];
+  for (const entry of entries) {
+    if (!isRecord(entry) || (entry.attempt !== null && typeof entry.attempt !== "number")
+      || typeof entry.body !== "string") return null;
+    const error = parseSystemProviderError(entry.body);
+    if (!error) return null;
+    pages.push({ attempt: entry.attempt, error });
+  }
+  return pages;
+}
+
+// ProviderRetryErrorCard receives the grouped attempts and renders one diagnostic with a pager above it.
+// ProviderRetryErrorCard 接收合并后的尝试列表，并在单条诊断上方渲染分页器。
+export function ProviderRetryErrorCard(props: { pages: readonly ProviderRetryFailurePage[] }) {
+  // Localize the attempt label and both paging actions.
+  // 本地化尝试标签和两个翻页操作。
+  const { t } = useI18n();
+  // Null follows the latest failure while an explicit page keeps earlier diagnostics readable during retries.
+  // 空值表示跟随最新失败，显式页号让重试期间仍可阅读先前诊断。
+  const [selectedIndex, setSelectedIndex] = React.useState<number | null>(null);
+  // The newest failure is selected by default.
+  // 默认选中最新一次失败。
+  const lastIndex = props.pages.length - 1;
+  // A selection outside the loaded group returns to its newest failure.
+  // 所选尝试超出已加载的组时回到该组最新失败。
+  const index = Math.min(selectedIndex ?? lastIndex, lastIndex);
+  // Both the card and its report action receive the exact diagnostic for this page.
+  // 卡片及其反馈操作都接收当前页的精确诊断。
+  const page = props.pages[index];
+  // A truncated history can show page position without assigning an unverified request number.
+  // 历史被截断时可显示页码，避免赋予未经证实的请求编号。
+  const label = page.attempt === null ? `${index + 1} / ${props.pages.length}`
+    : t("conversation.providerRetry.attempt").replace("{attempt}", String(page.attempt));
+  return (
+    <div className="vk-error-retry-group">
+      <div className="vk-memory-pager vk-error-retry-pager">
+        <Button aria-label={t("conversation.providerRetry.previousAttempt")} disabled={index === 0}
+          onClick={() => setSelectedIndex(index - 1)} size="icon-xs" type="button" variant="ghost">
+          <ChevronLeft aria-hidden="true" size={12} />
+        </Button>
+        <span>{label}</span>
+        <Button aria-label={t("conversation.providerRetry.nextAttempt")} disabled={index === lastIndex}
+          onClick={() => setSelectedIndex(index + 1 === lastIndex ? null : index + 1)} size="icon-xs" type="button" variant="ghost">
+          <ChevronRight aria-hidden="true" size={12} />
+        </Button>
+      </div>
+      <SystemErrorCard error={page.error} />
+    </div>
+  );
 }
 
 // Registered prefixes cover the runtime provider failure format.
