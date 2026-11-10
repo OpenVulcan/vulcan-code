@@ -3,19 +3,14 @@
   "type": "object",
   "properties": {
     "cnyPerUsd": { "type": "string" },
+    "defaultCnyPerUsd": { "type": "string" },
     "modelAliases": { "type": "object", "additionalProperties": { "type": "string" } },
     "modelPrefixes": { "type": "object", "additionalProperties": { "type": "string" } },
-    "modelOverrides": {
+    "modelOverrides": { "$ref": "#/$defs/modelOverrides" },
+    "providerOverrides": {
       "type": "object",
-      "maxProperties": 1000,
-      "propertyNames": {
-        "type": "string",
-        "minLength": 1,
-        "maxLength": 256
-      },
-      "additionalProperties": {
-        "$ref": "#/$defs/modelPrice"
-      }
+      "propertyNames": { "minLength": 1, "maxLength": 256 },
+      "additionalProperties": { "$ref": "#/$defs/modelOverrides" }
     },
     "catalogModels": {
       "type": "array",
@@ -34,6 +29,12 @@
   "required": ["modelOverrides", "catalogModels"],
   "additionalProperties": false,
   "$defs": {
+    "modelOverrides": {
+      "type": "object",
+      "maxProperties": 1000,
+      "propertyNames": { "minLength": 1, "maxLength": 256 },
+      "additionalProperties": { "$ref": "#/$defs/modelPrice" }
+    },
     "decimalPrice": {
       "type": "string",
       "minLength": 1,

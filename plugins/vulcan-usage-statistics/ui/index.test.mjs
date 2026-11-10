@@ -705,6 +705,66 @@ test("price editor saves a shared alias tariff and preserves the exchange rate",
   } finally { await panel.close(); }
 });
 
+// A provider can copy a tariff, edit one amount and save it independently of the shared rate.
+// 供应商可以复制费率并修改单项金额，保存时与共享汇率分开。
+test("copies a tariff into a new provider scope and uses the shared exchange rate", async () => {
+  // The alternate template includes both a time window and an input-length tier.
+  // 备用模板同时包含时段和输入长度档位。
+  const prices = { inputPerMillion: "3", outputPerMillion: "4", cacheReadPerMillion: "0", cacheWritePerMillion: "0" };
+  const template = { ...prices, contextTiers: [{ aboveInputTokens: 1000, prices }],
+    offPeak: { utcOffsetMinutes: 480, windows: [{ days: "weekend", start: "00:00", end: "24:00" }], prices } };
+  const initial = { ...settings, defaultCnyPerUsd: "6.7",
+    catalogModels: [...settings.catalogModels, { modelId: "template-model", prices: template }],
+    providerOverrides: { "existing-provider": { "fixture-model": prices } } };
+  // The mock preserves the action's full-document write semantics and records scoped reads.
+  // 模拟调用保留 Action 的整份文档写入语义，并记录带范围的读取。
+  const writes = [];
+  const reads = [];
+  const messages = Object.fromEntries(["providerScope", "providerId", "template", "applyTemplate",
+    "exchangeRate", "saveExchangeRate", "save"].map((key) => [`pricing.${key}`, `fixture-${key}`]));
+  const panel = await mount((action, args) => {
+    if (action === "settings-get") return Promise.resolve(initial);
+    if (action === "dashboard-get") return Promise.resolve(dashboard);
+    if (action === "pricing-get") {
+      reads.push(args);
+      return Promise.resolve({ ...pricingDirectory, providerIds: ["existing-provider"] });
+    }
+    writes.push(args);
+    return Promise.resolve({ ...initial, ...args });
+  }, false, "en-US", messages);
+  try {
+    await openPricing(panel);
+    // Drive the native inputs and selects through the same events as the host stubs.
+    // 使用与宿主模拟控件一致的事件驱动原生输入框及下拉框。
+    const change = async (label, value, tag = "input") => {
+      const control = panel.container.querySelector(`${tag}[aria-label="${label}"]`);
+      const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(control), "value").set;
+      await React.act(async () => {
+        setter.call(control, value);
+        control.dispatchEvent(new window.Event(tag === "input" ? "input" : "change", { bubbles: true }));
+      });
+    };
+    const click = async (label) => React.act(async () =>
+      [...panel.container.querySelectorAll("button")].find((button) => button.textContent === label).click());
+    assert.equal(panel.container.querySelector('input[aria-label="fixture-exchangeRate"]').value, "6.7");
+    await change("fixture-providerScope", "manual", "select");
+    await change("fixture-providerId", "custom-new");
+    await React.act(async () => new Promise((resolve) => window.setTimeout(resolve, 250)));
+    assert.equal(reads.at(-1).providerId, "custom-new");
+    await click("fixture-model");
+    await change("fixture-template", "catalog:template-model", "select");
+    await click("fixture-applyTemplate");
+    await change("Output · CNY", "29");
+    await click("fixture-save");
+    assert.deepEqual(writes[0], { modelOverrides: {}, providerOverrides: {
+      ...initial.providerOverrides, "custom-new": { "fixture-model": { ...template, outputPerMillionCny: "29" } },
+    } });
+    await change("fixture-exchangeRate", "7.1");
+    await click("fixture-saveExchangeRate");
+    assert.deepEqual(writes[1], { ...writes[0], cnyPerUsd: "7.1" });
+  } finally { await panel.close(); }
+});
+
 // Provider selection narrows only the Provider tab; recent attempts never inherit it.
 // Provider 选择只收窄供应商分类，最近请求不会继承该筛选。
 test("provider selection scopes the provider tab without narrowing recent attempts", async () => {

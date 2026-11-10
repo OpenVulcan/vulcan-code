@@ -570,13 +570,20 @@ export function createPluginPanel(sdk) {
       : settings.catalogModels.find((entry) => entry.modelId === modelId)?.prices;
   }
 
-  // Return editable currency strings from the selected tariff for settings and modelId.
-  // 返回 settings 中 modelId 所选费率的可编辑币种字符串。
-  function editablePrices(settings, modelId) {
-    // prices may be absent for models without a configured quote.
-    // 未配置报价的模型可能没有 prices。
-    const prices = editableTariff(settings, modelId);
+  // Return editable currency strings for the selected tariff, or empty fields for an unpriced model.
+  // 返回所选费率的可编辑币种字符串，未定价模型返回空字段。
+  function editablePrices(prices) {
     return Object.fromEntries(Object.keys(EMPTY_PRICE_DRAFT).map((key) => [key, prices?.[key] ?? ""]));
+  }
+
+  // Return the saved overrides for exactly one provider, or the shared map for an empty provider ID.
+  // 返回一家供应商的已保存覆盖；供应商 ID 为空时返回共享映射。
+  function pricingScopeOverrides(settings, providerId) {
+    if (providerId === "") return settings.modelOverrides;
+    // Own-property lookup also treats identifiers matching JavaScript prototype keys as ordinary IDs.
+    // 使用自有属性查找，避免与 JavaScript 原型键同名的标识被特殊处理。
+    const providers = settings.providerOverrides ?? {};
+    return Object.hasOwn(providers, providerId) ? providers[providerId] : {};
   }
 
   // Return the longest complete billing stem for key using canonical IDs and configured families.
@@ -626,8 +633,8 @@ export function createPluginPanel(sdk) {
 
   // Return the exact persisted keys belonging to one canonical billing model.
   // 返回归属于同一个定价模型的原始持久化键。
-  function overridesForModel(settings, modelId) {
-    return Object.keys(settings.modelOverrides).filter((key) => billingModelId(settings, key) === modelId).sort();
+  function overridesForModel(settings, modelId, providerId = "") {
+    return Object.keys(pricingScopeOverrides(settings, providerId)).filter((key) => billingModelId(settings, key) === modelId).sort();
   }
 
   // pricingDraftIsValid mirrors the exact non-negative decimal configuration rules.
@@ -644,10 +651,7 @@ export function createPluginPanel(sdk) {
 
   // Project an existing schedule into editable text fields; null represents base pricing only.
   // 将已有时段投影为可编辑文本字段；null 表示仅使用基础价。
-  function editableOffPeak(settings, modelId) {
-    // offPeak comes from the same tariff as the selected base prices.
-    // offPeak 与选中的基础价来自同一费率配置。
-    const offPeak = editableTariff(settings, modelId)?.offPeak;
+  function editableOffPeak(offPeak) {
     return offPeak === undefined ? null : {
       utcOffsetMinutes: String(offPeak.utcOffsetMinutes),
       windows: offPeak.windows,
@@ -1035,7 +1039,8 @@ export function createPluginPanel(sdk) {
           );
         }),
         estimates.length > 0 ? facts([[text("pricing.source", "Price source"), text(
-          record.pricingSourceId?.startsWith("plugin.config.modelOverrides:") ? "pricing.override" : "pricing.default", "Reference price")]]) : null,
+          record.pricingSourceId?.startsWith("plugin.config.providerOverrides:") ? "pricing.providerOverride"
+            : record.pricingSourceId?.startsWith("plugin.config.modelOverrides:") ? "pricing.override" : "pricing.default", "Reference price")]]) : null,
         h("p", null, text("cost.referenceOnly", "Calculated from recorded usage and current reference prices; this is not a provider bill.")),
       ) }),
     );
@@ -1125,6 +1130,19 @@ export function createPluginPanel(sdk) {
     // rateDraft holds the user's unsaved CNY-per-USD rate as decimal text.
     // rateDraft 以十进制文本保存用户尚未提交的人民币兑美元折算比例。
     const [rateDraft, setRateDraft] = React.useState("");
+    // Provider selection is separate from the dashboard filter and can use an exact, unused provider ID.
+    // 定价供应商选择独立于仪表盘筛选，可使用尚无记录的精确供应商 ID。
+    const [pricingProviderChoice, setPricingProviderChoice] = React.useState("shared");
+    const [pricingProviderDraft, setPricingProviderDraft] = React.useState("");
+    const [observedPricingProviders, setObservedPricingProviders] = React.useState([]);
+    // A template selection is applied to the draft only when the user invokes the copy action.
+    // 只有用户执行复制操作时，所选模板才写入草稿。
+    const [pricingTemplate, setPricingTemplate] = React.useState("choose");
+    // Provider option values carry a prefix to avoid collisions with the shared and manual controls.
+    // 供应商选项值带前缀，避免与共享和手动输入控件发生冲突。
+    const pricingProviderId = pricingProviderChoice === "manual" ? pricingProviderDraft.trim()
+      : pricingProviderChoice === "shared" ? "" : pricingProviderChoice.slice("provider:".length);
+    const pricingScopeReady = pricingProviderChoice !== "manual" || pricingProviderId !== "";
     // selectedPricingModel identifies the exact model edited by the pricing form.
     // selectedPricingModel 标识价格表单当前编辑的精确模型。
     const [selectedPricingModel, setSelectedPricingModel] = React.useState("");
@@ -1275,23 +1293,35 @@ export function createPluginPanel(sdk) {
     const currentRefresh = React.useRef(refresh);
     currentRefresh.current = refresh;
 
-    // selectPricingModel loads one exact override or catalog default into the string-only editor.
-    // selectPricingModel 将一个精确覆盖或目录默认值加载到纯字符串编辑器。
+    // Replace the entire price draft with the selected source, including its schedule and tiers.
+    // 使用所选来源替换整份价格草稿，包括时段与分档。
+    const loadPricingDraft = React.useCallback((tariff) => {
+      setPricingDraft(editablePrices(tariff));
+      setContextTiersDraft(editableContextTiers(tariff?.contextTiers));
+      setOffPeakDraft(editableOffPeak(tariff?.offPeak));
+    }, []);
+
+    // Open a provider override if it exists, otherwise seed the editor from the shared tariff.
+    // 打开已有的供应商覆盖，否则使用共享费率预填编辑器。
     const selectPricingModel = React.useCallback((modelId) => {
+      if (!pricingScopeReady) return;
+      // The same canonical model identity is used for browsing, editing and usage estimates.
+      // 浏览、编辑及用量估算使用同一个主模型标识。
       const canonical = billingModelId(pricingSettings, modelId);
+      const [scopedKey] = overridesForModel(pricingSettings, canonical, pricingProviderId);
       setSelectedPricingModel(canonical);
-      setPricingDraft(editablePrices(pricingSettings, canonical));
-      setContextTiersDraft(editableContextTiers(editableTariff(pricingSettings, canonical)?.contextTiers));
-      setOffPeakDraft(editableOffPeak(pricingSettings, canonical));
+      loadPricingDraft(scopedKey === undefined ? editableTariff(pricingSettings, canonical)
+        : pricingScopeOverrides(pricingSettings, pricingProviderId)[scopedKey]);
+      setPricingTemplate("choose");
       setNotice("");
       setSettingsError("");
-    }, [pricingSettings]);
+    }, [loadPricingDraft, pricingProviderId, pricingScopeReady, pricingSettings]);
 
     // Persist a complete override map and optional rate, then refresh the accepted estimates.
     // 保存完整的覆盖价映射与可选汇率，再刷新已接受的估算。
     // successMessage is displayed after the write; closeEditor controls whether a model edit ends.
     // successMessage 用于写入成功后提示；closeEditor 控制是否结束模型编辑。
-    const persistPricingOverrides = React.useCallback(async (modelOverrides, cnyPerUsd, successMessage, closeEditor) => {
+    const persistPricingOverrides = React.useCallback(async (modelOverrides, providerOverrides, cnyPerUsd, successMessage, closeEditor) => {
       if (settingsBusyRef.current) return;
       settingsBusyRef.current = true;
       setSettingsBusy(true);
@@ -1299,13 +1329,13 @@ export function createPluginPanel(sdk) {
       setNotice("");
       try {
         const nextSettings = await sdk.invoke("settings-update", {
-          modelOverrides, ...(cnyPerUsd ? { cnyPerUsd } : {}),
+          modelOverrides, ...(providerOverrides === undefined ? {} : { providerOverrides }), ...(cnyPerUsd ? { cnyPerUsd } : {}),
         });
         if (mountedRef.current) {
           setPricingSettings(nextSettings);
           setNotice(successMessage);
           if (closeEditor) setSelectedPricingModel("");
-          else setRateDraft(nextSettings.cnyPerUsd ?? "");
+          else setRateDraft(nextSettings.cnyPerUsd ?? nextSettings.defaultCnyPerUsd ?? "");
         }
         await currentRefresh.current(true);
       } catch (reason) {
@@ -1322,8 +1352,9 @@ export function createPluginPanel(sdk) {
       if (!pricingSettings || !selectedPricingModel || !pricingDraftIsValid(pricingDraft)
         || !contextTierDraftsAreValid(contextTiersDraft)
         || (offPeakDraft !== null && !contextTierDraftsAreValid(offPeakDraft.contextTiers))) return;
-      const aliasKeys = new Set(overridesForModel(pricingSettings, selectedPricingModel));
-      const nextOverrides = Object.fromEntries(Object.entries(pricingSettings.modelOverrides).filter(([key]) => !aliasKeys.has(key)));
+      const aliasKeys = new Set(overridesForModel(pricingSettings, selectedPricingModel, pricingProviderId));
+      const retainedOverrides = Object.fromEntries(Object.entries(pricingScopeOverrides(pricingSettings, pricingProviderId))
+        .filter(([key]) => !aliasKeys.has(key)));
       const modelPrices = explicitPrices(pricingDraft);
       if (contextTiersDraft.length > 0) modelPrices.contextTiers = explicitContextTiers(contextTiersDraft);
       if (offPeakDraft !== null) modelPrices.offPeak = {
@@ -1332,18 +1363,33 @@ export function createPluginPanel(sdk) {
         prices: explicitPrices(offPeakDraft.prices),
         ...(offPeakDraft.contextTiers.length > 0 ? { contextTiers: explicitContextTiers(offPeakDraft.contextTiers) } : {}),
       };
-      void persistPricingOverrides({ ...nextOverrides, [selectedPricingModel]: modelPrices },
-        pricingSettings.cnyPerUsd, text("pricing.saved", "Saved model price override"), true);
-    }, [contextTiersDraft, offPeakDraft, persistPricingOverrides, pricingDraft, pricingSettings, selectedPricingModel]);
+      const nextOverrides = { ...retainedOverrides, [selectedPricingModel]: modelPrices };
+      if (pricingProviderId === "") {
+        void persistPricingOverrides(nextOverrides, pricingSettings.providerOverrides,
+          pricingSettings.cnyPerUsd, text("pricing.saved", "Saved model price override"), true);
+      } else {
+        void persistPricingOverrides(pricingSettings.modelOverrides, { ...pricingSettings.providerOverrides, [pricingProviderId]: nextOverrides },
+          pricingSettings.cnyPerUsd, text("pricing.saved", "Saved model price override"), true);
+      }
+    }, [contextTiersDraft, offPeakDraft, persistPricingOverrides, pricingDraft, pricingProviderId, pricingSettings, selectedPricingModel]);
 
     // resetPricingOverride removes only the selected model override and restores catalog matching.
     // resetPricingOverride 仅移除所选模型覆盖并恢复目录匹配。
     const resetPricingOverride = React.useCallback(() => {
       if (!pricingSettings || !selectedPricingModel) return;
-      const nextOverrides = { ...pricingSettings.modelOverrides };
-      for (const key of overridesForModel(pricingSettings, selectedPricingModel)) delete nextOverrides[key];
-      void persistPricingOverrides(nextOverrides, pricingSettings.cnyPerUsd, text("pricing.resetDone", "Restored catalog price"), true);
-    }, [persistPricingOverrides, pricingSettings, selectedPricingModel]);
+      const nextOverrides = { ...pricingScopeOverrides(pricingSettings, pricingProviderId) };
+      for (const key of overridesForModel(pricingSettings, selectedPricingModel, pricingProviderId)) delete nextOverrides[key];
+      if (pricingProviderId === "") {
+        void persistPricingOverrides(nextOverrides, pricingSettings.providerOverrides,
+          pricingSettings.cnyPerUsd, text("pricing.resetDone", "Restored catalog price"), true);
+      } else {
+        const nextProviders = { ...pricingSettings.providerOverrides };
+        if (Object.keys(nextOverrides).length === 0) delete nextProviders[pricingProviderId];
+        else nextProviders[pricingProviderId] = nextOverrides;
+        void persistPricingOverrides(pricingSettings.modelOverrides, nextProviders,
+          pricingSettings.cnyPerUsd, text("pricing.providerResetDone", "Restored shared price for this provider"), true);
+      }
+    }, [persistPricingOverrides, pricingProviderId, pricingSettings, selectedPricingModel]);
 
     // toggleSeries changes only local chart visibility and never reloads statistics.
     // toggleSeries 仅改变本地图表可见性，绝不重新加载统计。
@@ -1368,7 +1414,7 @@ export function createPluginPanel(sdk) {
       void sdk.invoke("settings-get", {}).then((nextSettings) => {
         if (active) {
           setPricingSettings(nextSettings);
-          setRateDraft(nextSettings.cnyPerUsd ?? "");
+          setRateDraft(nextSettings.cnyPerUsd ?? nextSettings.defaultCnyPerUsd ?? "");
         }
       }).catch((reason) => {
         if (active) setSettingsError(reason instanceof Error ? reason.message : String(reason));
@@ -1398,7 +1444,7 @@ export function createPluginPanel(sdk) {
       setPricingDirectoryLoading(true);
       // A different search cannot inherit rows; another page of the same search retains them.
       // 不同搜索不能继承记录；相同搜索的另一分页保留已有记录。
-      const scope = JSON.stringify({ search: pricingSearch, filter: pricingFilter });
+      const scope = JSON.stringify({ search: pricingSearch, filter: pricingFilter, providerId: pricingProviderId });
       if (pricingDirectoryScope.current !== scope) {
         setPricingDirectory(null);
         setPricingDirectoryPage(0);
@@ -1406,29 +1452,38 @@ export function createPluginPanel(sdk) {
       }
       setPricingDirectoryError("");
       const timer = window.setTimeout(() => {
-        void sdk.invoke("pricing-get", { search: pricingSearch, filter: pricingFilter, offset: pricingPage * PRICING_PAGE_SIZE }, { signal: subscription.signal })
+        void sdk.invoke("pricing-get", { search: pricingSearch, filter: pricingFilter, offset: pricingPage * PRICING_PAGE_SIZE,
+          ...(pricingProviderId ? { providerId: pricingProviderId } : {}) }, { signal: subscription.signal })
           .then((result) => { if (active) {
             pricingDirectoryScope.current = scope;
             setPricingDirectory(result);
             setPricingDirectoryPage(pricingPage);
+            setObservedPricingProviders(result.providerIds ?? []);
           } })
           .catch((reason) => { if (active) setPricingDirectoryError(reason instanceof Error ? reason.message : String(reason)); })
           .finally(() => { if (active) setPricingDirectoryLoading(false); });
       }, 200);
       return () => { active = false; subscription.abort(); window.clearTimeout(timer); };
-    }, [section, pricingSearch, pricingFilter, pricingPage, pricingSettings, pricingRetry]);
+    }, [section, pricingSearch, pricingFilter, pricingPage, pricingProviderId, pricingSettings, pricingRetry]);
 
     // consumerIds contains exact server-bound identities observed in either dashboard projection.
     // consumerIds 包含任一仪表盘投影中观察到的精确服务端身份。
     const consumerIds = dashboard?.consumerIds ?? [];
     // selectedModelHasOverride controls the exact restore-default operation.
     // selectedModelHasOverride 控制精确的恢复默认操作。
-    const selectedOverrideIds = pricingSettings === null ? [] : overridesForModel(pricingSettings, selectedPricingModel);
+    const selectedOverrideIds = pricingSettings === null ? [] : overridesForModel(pricingSettings, selectedPricingModel, pricingProviderId);
     const selectedModelHasOverride = selectedOverrideIds.length > 0;
-    // selectedPricingSource is derived from the complete settings authority, independent of the filtered directory page.
-    // selectedPricingSource 派生自完整设置权威，与已筛选目录分页无关。
-    const selectedPricingSource = !selectedPricingModel || !pricingSettings ? null : selectedModelHasOverride ? "override"
-      : pricingSettings.catalogModels.some((entry) => entry.modelId === selectedPricingModel) ? "catalog" : "unpriced";
+    // Saved provider prices and shared templates remain distinct even when the editor pre-fills the same values.
+    // 即使编辑器预填同样的值，已保存的供应商价格与共享模板也保持独立。
+    const sharedTariff = editableTariff(pricingSettings, selectedPricingModel);
+    const originalTariff = selectedModelHasOverride
+      ? pricingScopeOverrides(pricingSettings, pricingProviderId)[selectedOverrideIds[0]]
+      : pricingProviderId === "" ? sharedTariff : undefined;
+    // The template picker reads an explicit catalog entry or the current model's shared tariff.
+    // 模板选择器读取明确的目录条目或当前模型的共享费率。
+    const templateTariff = pricingTemplate === "shared" ? sharedTariff
+      : pricingTemplate === "choose" ? undefined
+      : pricingSettings?.catalogModels.find((entry) => entry.modelId === pricingTemplate.slice("catalog:".length))?.prices;
     // pricingDraftValid controls persistence without coercing decimal strings.
     // pricingDraftValid 控制持久化，且不强制转换十进制字符串。
     const pricingDraftValid = pricingDraftIsValid(pricingDraft);
@@ -1493,10 +1548,10 @@ export function createPluginPanel(sdk) {
     const visiblePricingModels = pricingDirectory?.models ?? [];
     // pricingDirty compares exact strings so opening a default never creates an unsolicited override.
     // pricingDirty 比较精确字符串，确保打开默认值不会产生非预期覆盖。
-    const originalPrices = editablePrices(pricingSettings, selectedPricingModel);
+    const originalPrices = editablePrices(originalTariff);
     const pricingDirty = selectedOverrideIds.length > 1 || Object.keys(originalPrices).some((key) => pricingDraft[key] !== originalPrices[key])
-      || JSON.stringify(contextTiersDraft) !== JSON.stringify(editableContextTiers(editableTariff(pricingSettings, selectedPricingModel)?.contextTiers))
-      || JSON.stringify(offPeakDraft) !== JSON.stringify(editableOffPeak(pricingSettings, selectedPricingModel));
+      || JSON.stringify(contextTiersDraft) !== JSON.stringify(editableContextTiers(originalTariff?.contextTiers))
+      || JSON.stringify(offPeakDraft) !== JSON.stringify(editableOffPeak(originalTariff?.offPeak));
     // contextTiersValid covers both time tariffs before either can be saved.
     // contextTiersValid 在保存之前同时校验两个时段费率。
     const contextTiersValid = contextTierDraftsAreValid(contextTiersDraft)
@@ -1514,9 +1569,15 @@ export function createPluginPanel(sdk) {
       setOffPeakDraft((draft) => ({ ...draft, windows: draft.windows.map((window, position) =>
         position === index ? { ...window, [field]: value } : window) }));
     };
-    // An empty rate disables conversion; a supplied rate must be a positive decimal.
-    // 汇率留空会关闭折算；填写时必须是正十进制数。
-    const rateValid = rateDraft === "" || (DECIMAL_PRICE_PATTERN.test(rateDraft) && /[1-9]/.test(rateDraft));
+    // An empty rate restores the bundled default; a supplied rate must fit the settings schema.
+    // 汇率留空会恢复随包默认值；填写时必须符合设置 Schema。
+    const rateValid = rateDraft === "" || (rateDraft.length <= 12 && DECIMAL_PRICE_PATTERN.test(rateDraft) && /[1-9]/.test(rateDraft));
+    const currentRate = pricingSettings?.cnyPerUsd ?? pricingSettings?.defaultCnyPerUsd ?? "";
+    const rateChanged = rateDraft !== currentRate && (rateDraft !== "" || pricingSettings?.cnyPerUsd !== undefined);
+    // Include observed and configured providers so clearing usage does not hide a saved binding.
+    // 同时列出使用过的和已配置的供应商，清除用量也不会隐藏已保存的绑定。
+    const pricingProviders = [...new Set([...observedPricingProviders, ...Object.keys(pricingSettings?.providerOverrides ?? {}),
+      ...(pricingProviderChoice.startsWith("provider:") ? [pricingProviderId] : [])])].sort();
     const exactModelId = pricingSearch.trim();
 
     // refreshLabel names the toolbar refresh button for its current state.
@@ -1848,11 +1909,24 @@ export function createPluginPanel(sdk) {
                 value: rateDraft, disabled: settingsBusy, "aria-invalid": !rateValid,
                 onChange: (event) => setRateDraft(event.currentTarget.value.trim()) }),
               h(Button, { type: "button", variant: "outline", size: "sm",
-                disabled: settingsBusy || !rateValid || rateDraft === (pricingSettings.cnyPerUsd ?? ""),
-                onClick: () => void persistPricingOverrides(pricingSettings.modelOverrides, rateDraft,
+                disabled: settingsBusy || !rateValid || !rateChanged,
+                onClick: () => void persistPricingOverrides(pricingSettings.modelOverrides, pricingSettings.providerOverrides, rateDraft,
                   text("pricing.exchangeSaved", "Saved exchange rate"), false) },
               text("pricing.saveExchangeRate", "Save exchange rate")),
-              h(PageHint, null, text("pricing.exchangeHint", "Enter how many CNY equal 1 USD. Leave blank to disable conversion.")),
+              h(PageHint, null, text("pricing.exchangeHint", "All prices use this CNY-per-USD rate. Leave blank to restore the default.")),
+            ),
+            h(PageToolbar, null,
+              h(SelectControl, { ariaLabel: text("pricing.providerScope", "Price scope"), value: pricingProviderChoice,
+                disabled: settingsBusy, options: [
+                  { value: "shared", label: text("pricing.sharedScope", "Shared model prices") },
+                  ...pricingProviders.map((providerId) => ({ value: `provider:${providerId}`, label: providerId })),
+                  { value: "manual", label: text("pricing.manualProvider", "Enter provider ID") },
+                ], onValueChange: (value) => { setPricingProviderChoice(value); setPricingPage(0); } }),
+              pricingProviderChoice === "manual" ? h(Input, { density: "compact", type: "text", maxLength: 256,
+                "aria-label": text("pricing.providerId", "Exact provider ID"), placeholder: text("pricing.providerId", "Exact provider ID"),
+                value: pricingProviderDraft, disabled: settingsBusy,
+                onChange: (event) => { setPricingProviderDraft(event.currentTarget.value); setPricingPage(0); } }) : null,
+              h(PageHint, null, text("pricing.providerScopeHint", "Provider prices apply only to that exact provider ID. Other requests use shared prices.")),
             ),
             h(PageToolbar, null,
               h(Input, { density: "compact", type: "search",
@@ -1861,7 +1935,7 @@ export function createPluginPanel(sdk) {
               h(SelectControl, { ariaLabel: text("pricing.filter", "Price filter"), value: pricingFilter,
                 options: ["all", "unpriced", "override", "used"].map((value) => ({ value, label: text(`pricing.filter.${value}`, value) })),
                 onValueChange: (value) => { setPricingFilter(value); setPricingPage(0); } }),
-              h(Button, { type: "button", variant: "outline", size: "sm", disabled: settingsBusy || exactModelId === "",
+              h(Button, { type: "button", variant: "outline", size: "sm", disabled: settingsBusy || !pricingScopeReady || exactModelId === "",
                 onClick: () => selectPricingModel(exactModelId) }, text("pricing.addModel", "Edit exact model ID")),
               h(PageHint, null, text("pricing.tableScope", "Prices per 1M tokens. Used models include all retained usage.")),
             ),
@@ -1884,7 +1958,7 @@ export function createPluginPanel(sdk) {
                   key: entry.modelId,
                   selected: selectedPricingModel === entry.modelId,
                   cells: {
-                    model: h(Button, { size: "sm", type: "button", variant: "ghost", disabled: settingsBusy,
+                    model: h(Button, { size: "sm", type: "button", variant: "ghost", disabled: settingsBusy || !pricingScopeReady,
                       title: entry.aliases?.join(", "), onClick: () => selectPricingModel(entry.modelId) }, entry.modelId),
                     ...Object.fromEntries(PRICE_FIELDS.map((field) => [field.key, h("div", null,
                       priceCell(entry.effectivePrices, field.key),
@@ -1892,8 +1966,9 @@ export function createPluginPanel(sdk) {
                         priceCell(entry.offPeakPrices, field.key, `${text("pricing.offPeak", "Off-peak")} · `)),
                     )])),
                     source: entry.source === "conflict" ? text("pricing.aliasConflict", "Conflicting alias prices")
+                      : entry.source === "provider_override" ? text("pricing.providerOverride", "Provider price")
                       : text(entry.source === "override" ? "pricing.override" : entry.source === "catalog" ? "pricing.default" : "pricing.unpriced", "Price source"),
-                    actions: h(Button, { size: "sm", type: "button", variant: "outline", disabled: settingsBusy,
+                    actions: h(Button, { size: "sm", type: "button", variant: "outline", disabled: settingsBusy || !pricingScopeReady,
                       onClick: () => selectPricingModel(entry.modelId) }, text("pricing.edit", "Edit")),
                   },
                 })),
@@ -1908,14 +1983,26 @@ export function createPluginPanel(sdk) {
           h(DialogHeader, null,
             h("div", { className: "plugin-statistics-section-header" },
               h(DialogTitle, { className: "plugin-statistics-pricing-model" }, interpolate(text("pricing.editModel", "Edit model · {{model}}"), { model: selectedPricingModel })),
-              h(Badge, { variant: "outline" }, selectedPricingSource === "override" ? text("pricing.override", "Custom override")
-                : selectedPricingSource === "catalog" ? text("pricing.default", "Catalog default") : text("pricing.unpriced", "Unpriced")),
+              h(Badge, { variant: "outline" }, pricingProviderId !== "" ? text("pricing.providerOverride", "Provider price")
+                : selectedModelHasOverride ? text("pricing.override", "Custom override")
+                : sharedTariff !== undefined ? text("pricing.default", "Catalog default") : text("pricing.unpriced", "Unpriced")),
             ),
-            h(DialogDescription, null, text("pricing.dualCurrencyHint", "Enter USD, CNY, or both for each dimension. After saving, an empty side is converted using the saved rate. Two entered prices are applied independently.")),
+            h(DialogDescription, null, pricingProviderId !== "" ? `${pricingProviderId} · ` : null,
+              text("pricing.dualCurrencyHint", "Enter USD, CNY, or both for each dimension. After saving, an empty side is converted using the saved rate. Two entered prices are applied independently.")),
           ),
           // The host scrolls the form between the title and actions when the list of tiers grows.
           // 档位列表增长时，宿主在标题与操作区之间滚动表单。
           h("section", { className: "plugin-statistics-price-editor", "aria-label": text("pricing.editor", "Model price editor") },
+            pricingProviderId !== "" ? h(PageToolbar, null,
+              h(SelectControl, { ariaLabel: text("pricing.template", "Price template"), value: pricingTemplate, disabled: settingsBusy,
+                options: [
+                  { value: "choose", label: text("pricing.chooseTemplate", "Choose a price template") },
+                  ...(sharedTariff === undefined ? [] : [{ value: "shared", label: text("pricing.sharedTemplate", "Shared price for this model") }]),
+                  ...(pricingSettings?.catalogModels ?? []).map((entry) => ({ value: `catalog:${entry.modelId}`, label: entry.modelId })),
+                ], onValueChange: setPricingTemplate }),
+              h(Button, { type: "button", size: "sm", variant: "outline", disabled: settingsBusy || templateTariff === undefined,
+                onClick: () => loadPricingDraft(templateTariff) }, text("pricing.applyTemplate", "Copy template to draft")),
+            ) : null,
             h(PriceInputs, { draft: pricingDraft, disabled: settingsBusy,
               onChange: (key, value) => setPricingDraft((current) => ({ ...current, [key]: value })) }),
             h(PageSection, {
@@ -1972,7 +2059,8 @@ export function createPluginPanel(sdk) {
             settingsError ? h(PageNotice, { tone: "error" }, settingsError) : null,
           ),
           h(DialogFooter, null,
-            h(Button, { disabled: settingsBusy || !selectedModelHasOverride, onClick: resetPricingOverride, size: "sm", type: "button", variant: "outline" }, text("pricing.reset", "Restore catalog default")),
+            h(Button, { disabled: settingsBusy || !selectedModelHasOverride, onClick: resetPricingOverride, size: "sm", type: "button", variant: "outline" },
+              pricingProviderId === "" ? text("pricing.reset", "Restore catalog default") : text("pricing.providerReset", "Restore shared price")),
             h(Button, { "aria-busy": settingsBusy, disabled: settingsBusy || !selectedPricingModel || !pricingDraftValid || !offPeakValid || !contextTiersValid || !pricingDirty,
               onClick: savePricingOverride, size: "sm", type: "button" }, settingsBusy ? text("pricing.saving", "Saving") : text("pricing.save", "Save override")),
           ),

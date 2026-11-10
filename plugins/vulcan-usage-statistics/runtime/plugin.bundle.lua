@@ -1242,11 +1242,11 @@ end
 
 -- Group explicit overrides by billing ID without modifying persisted legacy keys.
 -- 按定价标识聚合显式覆盖价，保留已持久化的历史键。
-local function index_model_overrides(config)
+local function index_model_overrides(model_overrides)
     -- groups separates shared prices from legacy keys with competing prices.
     -- groups 区分可共享单价与价格冲突的历史键。
     local groups = {}
-    for model_id, prices in pairs(config.modelOverrides) do
+    for model_id, prices in pairs(model_overrides) do
         -- Compare the exact settings within the resolved billing group.
         -- 在解析后的定价组内比较精确设置。
         local canonical = billing_model_id(model_id)
@@ -1261,6 +1261,21 @@ local function index_model_overrides(config)
         end
     end
     return groups
+end
+
+-- Index shared and provider-bound model overrides independently for one settings snapshot.
+-- 为一份设置快照分别索引共享和绑定供应商的模型覆盖。
+local function index_pricing_overrides(config)
+    -- Each provider owns a separate model namespace even when it uses the same aliases.
+    -- 即使使用相同的别名，每家供应商也有独立的模型命名空间。
+    local providers = {}
+    for provider_id, prices in pairs(config.providerOverrides or {}) do
+        providers[provider_id] = { prices = prices, groups = index_model_overrides(prices) }
+    end
+    return {
+        shared = { prices = config.modelOverrides, groups = index_model_overrides(config.modelOverrides) },
+        providers = providers,
+    }
 end
 
 -- Define weekly billing boundaries on a Monday-based minute grid in UTC.
@@ -1341,36 +1356,56 @@ local function tariff_rule(prices)
     if next(rule) ~= nil then return rule end
 end
 
--- Build shared and exact legacy tariff rules from config and the resolved override groups.
--- 从 config 和已解析的覆盖组生成共享计费规则及历史精确计费规则。
--- Returns SQL-ready rules also used to select off-peak periods for individual requests.
--- 返回可供 SQL 使用的规则，逐请求也通过这些规则匹配谷价时段。
-local function pricing_rules(config, groups)
-    -- Overrides replace the entire catalog rule, including when the override is flat.
-    -- 覆盖配置替换整条目录规则，单一费率覆盖也是如此。
-    local rules = { shared = vulcan.json.object(), exact = vulcan.json.object() }
-    for model_id, prices in pairs(DEFAULT_PRICING_CATALOG.models) do
-        rules.shared[model_id] = tariff_rule(prices)
+-- Add one scope's override rules, retaining a flat rule when it shadows a lower scope.
+-- 添加一个范围的覆盖规则；单一费率需要覆盖下级范围时保留空规则。
+local function add_override_rules(rules, scope, retain_flat)
+    for model_id, group in pairs(scope.groups) do
+        if not group.conflict then
+            -- A provider's flat tariff still takes precedence over shared windows and tiers.
+            -- 供应商的单一费率仍优先于共享的时段及档位。
+            local rule = tariff_rule(group.prices)
+            if rule == nil and retain_flat then rule = vulcan.json.object() end
+            rules.shared[model_id] = rule
+        end
     end
-    for model_id, group in pairs(groups) do
-        if not group.conflict then rules.shared[model_id] = tariff_rule(group.prices) end
-    end
-    for model_id, prices in pairs(config.modelOverrides) do
-        if groups[billing_model_id(model_id)].conflict then
+    for model_id, prices in pairs(scope.prices) do
+        if scope.groups[billing_model_id(model_id)].conflict then
             -- An empty object shadows a shared rule for this exact legacy key.
             -- 用空对象为此历史精确键覆盖共享规则。
             rules.exact[model_id] = tariff_rule(prices) or vulcan.json.object()
         end
+    end
+end
+
+-- Build the SQL and Lua schedule maps for catalog, shared overrides and provider overrides.
+-- 为目录、共享覆盖与供应商覆盖建立 SQL 和 Lua 时段映射。
+local function pricing_rules(overrides)
+    -- The shared map starts with the catalog, while a provider map contains only its own overrides.
+    -- 共享映射以目录为起点，供应商映射仅包含该供应商的覆盖。
+    local rules = { shared = vulcan.json.object(), exact = vulcan.json.object(), providers = vulcan.json.object() }
+    for model_id, prices in pairs(DEFAULT_PRICING_CATALOG.models) do
+        rules.shared[model_id] = tariff_rule(prices)
+    end
+    add_override_rules(rules, overrides.shared, false)
+    for provider_id, scope in pairs(overrides.providers) do
+        -- Keeping the provider as a separate key avoids combining models served by different providers.
+        -- 单独使用供应商作为键，避免合并由不同供应商提供的模型。
+        local provider_rules = { shared = vulcan.json.object(), exact = vulcan.json.object() }
+        add_override_rules(provider_rules, scope, true)
+        rules.providers[provider_id] = provider_rules
     end
     return rules
 end
 
 -- Report whether this raw model's recorded terminal time falls in an off-peak interval.
 -- 判断原始模型记录的终止时间是否落在谷价时段内。
-local function is_off_peak(model_id, terminal_at_ms, rules)
+local function is_off_peak(provider_id, model_id, terminal_at_ms, rules)
     -- The exact map contains only legacy conflicts; other matches use the canonical map.
     -- 精确映射只含历史冲突，其余匹配使用定价主标识映射。
-    local rule = rules.exact[model_id] or rules.shared[billing_model_id(model_id)]
+    local canonical = billing_model_id(model_id)
+    local provider = rules.providers[provider_id]
+    local rule = provider and (provider.exact[model_id] or provider.shared[canonical])
+    if rule == nil then rule = rules.exact[model_id] or rules.shared[canonical] end
     if rule == nil or rule.windows == nil then return false end
     local minute = (math.floor(terminal_at_ms / MILLISECONDS_PER_MINUTE) + UNIX_EPOCH_WEEK_MINUTE) % WEEK_MINUTES
     for _, interval in ipairs(rule.windows) do
@@ -1408,45 +1443,57 @@ local function price_in_usd(price, rate_digits, rate_scale)
     return format_scaled_decimal(result, scale + precision)
 end
 
+-- Default CNY per USD applies to every model and provider without writing a setting.
+-- 默认的每美元人民币金额适用于所有模型及供应商，并且不写入设置。
+local DEFAULT_CNY_PER_USD = "6.7"
+
 -- Resolve missing sides of each explicit price pair using the captured rate.
 -- 用固定汇率解析每对显式单价中缺失的一侧。
 -- Returns effective rates grouped by currency for a base or off-peak price set.
 -- 返回按币种分组的基础价或谷价生效单价。
 local function effective_prices(explicit, config)
-    -- Preserve absent currency fields when conversion has not been enabled.
-    -- 未启用折算时保留缺失的币种字段。
+    -- Calculate both currencies from the single rate captured for the pricing request.
+    -- 使用为本次定价请求获取的统一汇率计算两个币种。
     local effective = { USD = vulcan.json.object(), CNY = vulcan.json.object() }
-    local rate_digits, rate_scale
-    if config.cnyPerUsd ~= nil then
-        rate_digits, rate_scale = parse_catalog_decimal(config.cnyPerUsd)
-    end
+    local rate_digits, rate_scale = parse_catalog_decimal(config.cnyPerUsd or DEFAULT_CNY_PER_USD)
     for _, dimension in ipairs(PRICE_DIMENSIONS) do
         local usd, cny = explicit[dimension.usd], explicit[dimension.cny]
-        if rate_digits ~= nil then
-            -- Only an empty side is derived. Explicit zero also takes precedence.
-            -- 只折算留空的一侧，显式填写的零也优先。
-            if usd == nil then
-                usd = price_in_usd(cny, rate_digits, rate_scale)
-            elseif cny == nil then
-                local digits, scale = parse_catalog_decimal(usd)
-                cny = format_scaled_decimal(multiply_unsigned_integers(digits, rate_digits), scale + rate_scale)
-            end
+        -- Only an empty side is derived. Explicit zero also takes precedence.
+        -- 只折算留空的一侧，显式填写的零也优先。
+        if usd == nil then
+            usd = price_in_usd(cny, rate_digits, rate_scale)
+        elseif cny == nil then
+            local digits, scale = parse_catalog_decimal(usd)
+            cny = format_scaled_decimal(multiply_unsigned_integers(digits, rate_digits), scale + rate_scale)
         end
         effective.USD[dimension.usd], effective.CNY[dimension.usd] = usd, cny
     end
     return effective
 end
 
--- Resolve a raw model ID to its editable price set, effective base rates and source.
--- 将原始模型标识解析为可编辑单价、生效基础价与来源。
-local function model_prices(model_id, config, groups)
+-- Resolve a model override and its stored key within one provider or shared scope.
+-- 在单个供应商或共享范围内解析模型覆盖和对应的存储键。
+local function scope_override(scope, model_id, canonical)
     -- For conflicted groups, only the original exact key can supply a user override.
     -- 对于冲突组，只有原始精确键能提供用户覆盖价。
+    local group = scope.groups[canonical]
+    if group ~= nil and not group.conflict then return group.prices, canonical end
+    return scope.prices[model_id], model_id
+end
+
+-- Resolve a model's editable price, effective rates, source and override key.
+-- 解析模型的可编辑单价、生效价格、来源及覆盖键。
+local function model_prices(model_id, config, overrides, provider_id)
+    -- A provider-specific price wins over the shared override and catalog for the same model.
+    -- 同一模型的供应商专属价格优先于共享覆盖和目录。
     local canonical = billing_model_id(model_id)
-    local group = groups[canonical]
-    local explicit = config.modelOverrides[model_id]
-    if group ~= nil and not group.conflict then explicit = group.prices end
-    if explicit ~= nil then return explicit, effective_prices(explicit, config), "override" end
+    local provider = overrides.providers[provider_id]
+    if provider ~= nil then
+        local price, key = scope_override(provider, model_id, canonical)
+        if price ~= nil then return price, effective_prices(price, config), "provider_override", key end
+    end
+    local explicit, key = scope_override(overrides.shared, model_id, canonical)
+    if explicit ~= nil then return explicit, effective_prices(explicit, config), "override", key end
     -- Reference prices are keyed by canonical billing model IDs.
     -- 参考价以定价主模型标识作为键。
     local catalog = DEFAULT_PRICING_CATALOG.models[canonical]
@@ -1618,25 +1665,31 @@ end
 --
 -- row contains the token-only core projection.
 -- row 包含仅 Token 的核心投影。
--- config owns the overrides and exchange rate; cache reuses effective prices for the same model.
--- config 持有覆盖价格和汇率；cache 复用同一模型的生效价格。
+-- config holds the exchange rate; cache reuses effective prices within the same provider and model.
+-- config 持有汇率；cache 在相同供应商和模型范围内复用生效价格。
 -- Updates the row and returns a currency map of estimates and partial coverage flags.
 -- 更新用量行，并返回按币种组织的估算与部分覆盖标志。
-local function attach_reference_estimate(row, config, cache, groups)
-    -- Reuse converted rates across grouped rows and paged usage in this action.
-    -- 在本次 Action 的分组行和分页用量之间复用折算后的单价。
-    local model = cache[row.modelId]
+local function attach_reference_estimate(row, config, cache, overrides)
+    -- Providers without their own overrides can safely reuse the same converted prices.
+    -- 没有专属覆盖的供应商可以共用同一份折算价格。
+    local scope_id = overrides.providers[row.providerId] and row.providerId or ""
+    if cache[scope_id] == nil then cache[scope_id] = {} end
+    local model = cache[scope_id][row.modelId]
     if model == nil then
-        local explicit, effective, source = model_prices(row.modelId, config, groups)
+        local explicit, effective, source, source_model = model_prices(row.modelId, config, overrides, row.providerId)
         model = { base = { prices = effective, tiers = effective_context_tiers(explicit and explicit.contextTiers, config) }, source = source }
         if source == "catalog" then
             model.revision = DEFAULT_PRICING_CATALOG.revision
             model.source_id = DEFAULT_PRICING_CATALOG.catalog_id
         elseif source == "override" then
-            local canonical = billing_model_id(row.modelId)
-            local source_model = groups[canonical].conflict and row.modelId or canonical
             model.revision = "plugin-config-v2:" .. source_model .. ":" .. price_signature(explicit)
             model.source_id = "plugin.config.modelOverrides:" .. source_model
+        elseif source == "provider_override" then
+            -- Encode both keys unambiguously even if a custom identifier contains delimiters.
+            -- 即使自定义标识包含分隔符，也能明确编码两个键。
+            local binding = vulcan.json.encode(vulcan.json.array({ row.providerId, source_model }))
+            model.revision = "plugin-provider-config-v1:" .. binding .. ":" .. price_signature(explicit)
+            model.source_id = "plugin.config.providerOverrides:" .. binding
         end
         if explicit ~= nil and explicit.offPeak ~= nil then
             model.off_peak = {
@@ -1644,10 +1697,10 @@ local function attach_reference_estimate(row, config, cache, groups)
                 tiers = effective_context_tiers(explicit.offPeak.contextTiers, config),
             }
         end
-        if model.revision ~= nil and config.cnyPerUsd ~= nil then
-            model.revision = model.revision .. ":cnyPerUsd:" .. config.cnyPerUsd
+        if model.revision ~= nil then
+            model.revision = model.revision .. ":cnyPerUsd:" .. (config.cnyPerUsd or DEFAULT_CNY_PER_USD)
         end
-        cache[row.modelId] = model
+        cache[scope_id][row.modelId] = model
     end
 
     -- SQL supplies tariff buckets only when the aggregate includes off-peak requests.
@@ -1672,7 +1725,7 @@ local function attach_reference_estimate(row, config, cache, groups)
     elseif primary.amount == vulcan.json.null then
         row.pricingMatchStatus = "incomplete_usage"
     else
-        row.pricingMatchStatus = model.source == "override" and "override_exact" or "catalog_exact"
+        row.pricingMatchStatus = model.source == "catalog" and "catalog_exact" or "override_exact"
     end
     if usd ~= nil and cny ~= nil then row.alternateEstimate = cny end
     return { USD = usd, CNY = cny }, { USD = usd_partial, CNY = cny_partial }
@@ -1681,14 +1734,17 @@ end
 -- Count exact model overrides without depending on Lua table iteration order.
 -- 统计精确模型覆盖数量，且不依赖 Lua 表迭代顺序。
 --
--- model_overrides is the schema-validated plugin configuration map.
--- model_overrides 是通过 Schema 校验的插件配置映射。
--- Returns the number of configured model identities.
--- 返回已配置模型标识的数量。
-local function model_override_count(model_overrides)
+-- config holds shared model overrides and optional provider maps.
+-- config 保存共享模型覆盖及可选的供应商覆盖映射。
+-- Returns the number of configured model prices across all scopes.
+-- 返回所有范围内配置的模型价格数量。
+local function model_override_count(config)
     local count = 0
-    for _ in pairs(model_overrides) do
+    for _ in pairs(config.modelOverrides) do
         count = count + 1
+    end
+    for _, prices in pairs(config.providerOverrides or {}) do
+        for _ in pairs(prices) do count = count + 1 end
     end
     return count
 end
@@ -1713,8 +1769,10 @@ local function settings_projection(config)
     end)
     return {
         modelOverrides = config.modelOverrides,
+        providerOverrides = config.providerOverrides,
         catalogModels = catalog_models,
         cnyPerUsd = config.cnyPerUsd,
+        defaultCnyPerUsd = DEFAULT_CNY_PER_USD,
         modelAliases = DECLARED_MODEL_ALIASES,
         modelPrefixes = DECLARED_MODEL_PREFIXES,
     }
@@ -1729,7 +1787,7 @@ end
 -- config 与 price_cache 持有本次固定的定价配置和已解析的模型价格。
 -- Returns the projection, or nil and the projection kind if the aggregate revision changes.
 -- 返回统计投影；若聚合版本发生变化，则返回 nil 和投影类别。
-local function load_dashboard(input, config, price_cache, groups, rules)
+local function load_dashboard(input, config, price_cache, overrides, rules)
     -- view selects required projections; omitted arguments retain the complete legacy response.
     -- view 选择所需投影；参数省略时保留完整旧响应。
     local view = input.view or "all"
@@ -1746,7 +1804,10 @@ local function load_dashboard(input, config, price_cache, groups, rules)
     -- known_models 将费用聚合限制在目录与已配置模型身份内。
     local known_models = {}
     for model_id in pairs(DEFAULT_PRICING_CATALOG.models) do known_models[model_id] = true end
-    for model_id in pairs(groups) do known_models[model_id] = true end
+    for model_id in pairs(overrides.shared.groups) do known_models[model_id] = true end
+    for _, scope in pairs(overrides.providers) do
+        for model_id in pairs(scope.groups) do known_models[model_id] = true end
+    end
     -- priced_model_ids contains at most the catalog size plus the schema-limited override count.
     -- priced_model_ids 最多包含目录规模加 Schema 限制的覆盖数量。
     local priced_model_ids = vulcan.json.array()
@@ -1785,25 +1846,30 @@ local function load_dashboard(input, config, price_cache, groups, rules)
     FROM range_usage WHERE 0
 )
 ]]
-    if next(rules.shared) ~= nil or next(rules.exact) ~= nil then
+    if next(rules.shared) ~= nil or next(rules.exact) ~= nil or next(rules.providers) ~= nil then
         -- Classify each original request before grouping Token quantities.
         -- 在汇总 Token 数量之前，先对每条原始请求选档。
         local minute = "((CAST(a.terminal_at_ms / " .. MILLISECONDS_PER_MINUTE .. " AS INTEGER) + " ..
             UNIX_EPOCH_WEEK_MINUTE .. ") % " .. WEEK_MINUTES .. " + " .. WEEK_MINUTES .. ") % " .. WEEK_MINUTES
         tariff_sql = [[
-, tariff_models AS MATERIALIZED (
-    SELECT m.raw_model,
-           COALESCE((SELECT value FROM json_each(?14, '$.exact') WHERE key = m.raw_model),
-                    (SELECT value FROM json_each(?14, '$.shared') WHERE key = ]] ..
-                    billing_model_sql("m.raw_model") .. [[)) AS rule
-    FROM (SELECT DISTINCT mapped_model AS raw_model FROM filtered_attempts) m
+, tariff_identities AS MATERIALIZED (
+    SELECT provider_id, raw_model, ]] .. billing_model_sql("raw_model") .. [[ AS canonical
+    FROM (SELECT DISTINCT provider_id, mapped_model AS raw_model FROM filtered_attempts)
+), tariff_models AS MATERIALIZED (
+    SELECT m.provider_id, m.raw_model,
+           COALESCE((SELECT value FROM json_each(p.value, '$.exact') WHERE key = m.raw_model),
+                    (SELECT value FROM json_each(p.value, '$.shared') WHERE key = m.canonical),
+                    (SELECT value FROM json_each(?14, '$.exact') WHERE key = m.raw_model),
+                    (SELECT value FROM json_each(?14, '$.shared') WHERE key = m.canonical)) AS rule
+    FROM tariff_identities m
+    LEFT JOIN json_each(?14, '$.providers') p ON p.key = m.provider_id
 ), tariff_candidates AS (
     SELECT a.provider_id, a.service_entry_id, a.consumer_id, a.operation, a.mapped_model AS model_id,
            a.input_tokens, a.uncached_input_tokens, a.cache_read_tokens, a.cache_write_tokens, a.output_tokens, m.rule,
            EXISTS (SELECT 1 FROM json_each(m.rule, '$.windows') w
                    WHERE ]] .. minute .. [[ >= json_extract(w.value, '$.lower')
                      AND ]] .. minute .. [[ < json_extract(w.value, '$.upper')) AS is_off_peak
-    FROM filtered_attempts a JOIN tariff_models m ON m.raw_model = a.mapped_model
+    FROM filtered_attempts a JOIN tariff_models m ON m.provider_id = a.provider_id AND m.raw_model = a.mapped_model
     WHERE m.rule IS NOT NULL
 ), tariff_thresholds AS (
     SELECT *, CASE WHEN is_off_peak = 1 THEN '$.offPeakThresholds' ELSE '$.baseThresholds' END AS thresholds_path
@@ -2170,14 +2236,15 @@ FROM filtered_daily;
 ]])
     -- Use the same known quantities as the model table and track holes separately for coverage.
     -- 使用与模型表相同的已知用量，另行追踪缺失以标记覆盖范围。
-    -- Group only rows with the same model and complete, partial, or absent state for each dimension.
-    -- 只合并模型相同且各维度同为完整、部分缺失或完全缺失的行。
+    -- Group only rows sharing a price scope, model and usage availability for each dimension.
+    -- 只合并计价范围、模型以及各维度的用量可用性一致的行。
     -- cost_page_size is the one page size shared by the SQL LIMIT and the paging loop.
     -- cost_page_size 是 SQL LIMIT 与分页循环共用的唯一页大小。
     local cost_page_size = 1000
     local cost_sql = tariff_sql .. [[
 , cost_basis AS (
-    SELECT model_id, uncached_input_tokens, cache_read_tokens, cache_write_tokens, output_tokens,
+    SELECT CASE WHEN provider_id IN (SELECT key FROM json_each(?14, '$.providers')) THEN provider_id ELSE '' END AS pricing_provider,
+      model_id, uncached_input_tokens, cache_read_tokens, cache_write_tokens, output_tokens,
       uncached_input_missing > 0 AS uncachedInputTokensMissing,
       cache_read_missing > 0 AS cacheReadTokensMissing,
       cache_write_missing > 0 AS cacheWriteTokensMissing,
@@ -2188,7 +2255,7 @@ FROM filtered_daily;
       AND tariffUsageJson IS NULL
 )
 SELECT * FROM (
-SELECT model_id AS modelId, COUNT(*) AS rowCount,
+SELECT pricing_provider AS providerId, model_id AS modelId, COUNT(*) AS rowCount,
        SUM(uncached_input_tokens) AS uncachedInputTokens,
        SUM(cache_read_tokens) AS cacheReadTokens,
        SUM(cache_write_tokens) AS cacheWriteTokens,
@@ -2196,13 +2263,13 @@ SELECT model_id AS modelId, COUNT(*) AS rowCount,
        uncachedInputTokensMissing, cacheReadTokensMissing, cacheWriteTokensMissing, outputTokensMissing,
        NULL AS tariffUsageJson
 FROM cost_basis
-GROUP BY model_id, uncached_input_tokens IS NULL, cache_read_tokens IS NULL,
+GROUP BY pricing_provider, model_id, uncached_input_tokens IS NULL, cache_read_tokens IS NULL,
          cache_write_tokens IS NULL, output_tokens IS NULL,
          uncachedInputTokensMissing, cacheReadTokensMissing, cacheWriteTokensMissing, outputTokensMissing
 UNION ALL
-SELECT model_id, 1, NULL, NULL, NULL, NULL, 0, 0, 0, 0, tariffUsageJson FROM tariff_groups
+SELECT provider_id, model_id, 1, NULL, NULL, NULL, NULL, 0, 0, 0, 0, tariffUsageJson FROM tariff_groups
 )
-ORDER BY modelId, uncachedInputTokens IS NULL, cacheReadTokens IS NULL,
+ORDER BY providerId, modelId, uncachedInputTokens IS NULL, cacheReadTokens IS NULL,
          cacheWriteTokens IS NULL, outputTokens IS NULL,
          uncachedInputTokensMissing, cacheReadTokensMissing, cacheWriteTokensMissing, outputTokensMissing,
          tariffUsageJson
@@ -2217,7 +2284,7 @@ LIMIT ]] .. cost_page_size .. [[ OFFSET (SELECT cost_offset FROM page_offsets);
     while true do
       local cost_rows = query(cost_sql)
       for _, row in ipairs(cost_rows) do
-        local estimates, partial_usage = attach_reference_estimate(row, config, price_cache, groups)
+        local estimates, partial_usage = attach_reference_estimate(row, config, price_cache, overrides)
         for currency, estimate in pairs(estimates) do
             local total = totals[currency]
             if estimate.amount == vulcan.json.null then
@@ -2248,16 +2315,14 @@ FROM provider_usage_meta WHERE meta_key = 'aggregate_revision';
     local costs = vulcan.json.array()
     for _, currency in ipairs({ "USD", "CNY" }) do
         local total = totals[currency]
-        if currency == "USD" or config.cnyPerUsd ~= nil or total.priced + total.incomplete > 0 then
-            costs[#costs + 1] = {
-                currency = currency,
-                amount = total.priced > 0 and format_scaled_decimal(total.digits, total.scale) or vulcan.json.null,
-                pricedRows = total.priced,
-                incompleteRows = total.incomplete,
-                unpricedRows = meta.dailyCount - total.priced - total.incomplete,
-                hasPartialUsage = total.partial,
-            }
-        end
+        costs[#costs + 1] = {
+            currency = currency,
+            amount = total.priced > 0 and format_scaled_decimal(total.digits, total.scale) or vulcan.json.null,
+            pricedRows = total.priced,
+            incompleteRows = total.incomplete,
+            unpricedRows = meta.dailyCount - total.priced - total.incomplete,
+            hasPartialUsage = total.partial,
+        }
     end
     summary_rows[1].costs = costs
     local dashboard = {
@@ -2275,7 +2340,7 @@ FROM provider_usage_meta WHERE meta_key = 'aggregate_revision';
             revision = DEFAULT_PRICING_CATALOG.revision,
             currency = DEFAULT_PRICING_CATALOG.currency,
             entryCount = DEFAULT_PRICING_CATALOG.entry_count,
-            overrideCount = model_override_count(config.modelOverrides),
+            overrideCount = model_override_count(config),
             matchingStrategy = DEFAULT_PRICING_CATALOG.matching_strategy,
         },
         daily = daily,
@@ -2311,9 +2376,15 @@ end
 -- 返回已经持久化的设置投影。
 function M.settings_update(args)
     local input = action_arguments(args)
+    -- Older callers omit the provider map; an explicit empty map still clears it.
+    -- 旧调用方省略供应商映射；显式传入空映射仍可清空它。
+    if input.providerOverrides == nil then input.providerOverrides = read_config().providerOverrides end
     -- Validate windows and context tier ordering before any configuration write.
     -- 写入任何配置之前校验时段和上下文档位顺序。
     for _, prices in pairs(input.modelOverrides) do tariff_rule(prices) end
+    for _, model_overrides in pairs(input.providerOverrides or {}) do
+        for _, prices in pairs(model_overrides) do tariff_rule(prices) end
+    end
     local updated = vulcan.host.call("vulcan.plugin.config.update", { value = input })
     return success(settings_projection(updated))
 end
@@ -2356,13 +2427,13 @@ function M.dashboard_get(args)
     -- Capture the same prices and rate for pagination, retries and displayed details.
     -- 分页、重试和展示明细共用同一份单价与汇率。
     local config, price_cache = read_config(), {}
-    local groups = index_model_overrides(config)
-    local rules = pricing_rules(config, groups)
+    local overrides = index_pricing_overrides(config)
+    local rules = pricing_rules(overrides)
     -- dashboard is populated only by a complete read; conflict names a discarded projection.
     -- dashboard 仅由完整读取填充；conflict 标识被丢弃的投影类别。
-    local dashboard, conflict = load_dashboard(input, config, price_cache, groups, rules)
+    local dashboard, conflict = load_dashboard(input, config, price_cache, overrides, rules)
     if dashboard == nil then
-        dashboard, conflict = load_dashboard(input, config, price_cache, groups, rules)
+        dashboard, conflict = load_dashboard(input, config, price_cache, overrides, rules)
     end
     if dashboard == nil then
         error("Vulcan Usage Statistics: statistics changed during loading; refresh to read a consistent " .. conflict)
@@ -2373,7 +2444,7 @@ function M.dashboard_get(args)
     -- Page projections omit row sets outside their declared view.
     -- 分页投影省略其声明视图范围之外的记录集。
     for _, row in ipairs(dashboard.daily or EMPTY_ARRAY) do
-        attach_reference_estimate(row, config, price_cache, groups)
+        attach_reference_estimate(row, config, price_cache, overrides)
     end
     for _, attempt in ipairs(dashboard.recentAttempts or EMPTY_ARRAY) do
         if attempt.billingDetailsJson == nil or attempt.billingDetailsJson == vulcan.json.null then
@@ -2385,8 +2456,8 @@ function M.dashboard_get(args)
             )
         end
         attempt.billingDetailsJson = nil
-        attempt.isOffPeak = is_off_peak(attempt.modelId, attempt.terminalAtMs, rules)
-        attach_reference_estimate(attempt, config, price_cache, groups)
+        attempt.isOffPeak = is_off_peak(attempt.providerId, attempt.modelId, attempt.terminalAtMs, rules)
+        attach_reference_estimate(attempt, config, price_cache, overrides)
     end
     for _, account in ipairs(dashboard.accounts or EMPTY_ARRAY) do
         account.payload = decode_json_text(account.payloadJson, "payload_json")
@@ -2402,14 +2473,20 @@ end
 function M.pricing_get(args)
     local input = action_arguments(args)
     local config = read_config()
-    local groups = index_model_overrides(config)
+    local overrides = index_pricing_overrides(config)
+    local provider = overrides.providers[input.providerId]
     -- Catalog and override keys describe pricing eligibility after model grouping.
     -- 目录与覆盖键描述模型分组后的定价资格。
     local catalog_ids, override_ids, declared_ids = vulcan.json.array(), vulcan.json.array(), vulcan.json.array()
+    local scoped_ids = vulcan.json.array()
     local legacy_ids = vulcan.json.array()
     for model_id in pairs(DEFAULT_PRICING_CATALOG.models) do catalog_ids[#catalog_ids + 1] = model_id end
-    for model_id in pairs(groups) do override_ids[#override_ids + 1] = model_id end
+    for model_id in pairs(overrides.shared.groups) do override_ids[#override_ids + 1] = model_id end
     for model_id in pairs(config.modelOverrides) do legacy_ids[#legacy_ids + 1] = model_id end
+    if provider ~= nil then
+        for model_id in pairs(provider.groups) do scoped_ids[#scoped_ids + 1] = model_id end
+        for model_id in pairs(provider.prices) do legacy_ids[#legacy_ids + 1] = model_id end
+    end
     for _, model_id in ipairs(DECLARED_MODEL_IDS) do declared_ids[#declared_ids + 1] = model_id end
     for model_id in pairs(DECLARED_MODEL_ALIASES) do
         if not PRICING_HIDDEN_MODEL_IDS[model_id] then declared_ids[#declared_ids + 1] = model_id end
@@ -2421,8 +2498,11 @@ function M.pricing_get(args)
 WITH ]] .. billing_lookup_sql("?7") .. [[,
 hidden_ids AS MATERIALIZED (SELECT lower(key) AS model_id FROM json_each(?10)),
 catalog AS (SELECT value AS model_id FROM json_each(?1)),
-overrides AS (SELECT value AS model_id FROM json_each(?2)),
-used AS (SELECT model_id, SUM(attempt_count) AS attempts FROM provider_usage_daily_v3 GROUP BY model_id),
+shared_overrides AS (SELECT value AS model_id FROM json_each(?2)),
+scoped_overrides AS (SELECT value AS model_id FROM json_each(?13)),
+overrides AS (SELECT model_id FROM shared_overrides UNION SELECT model_id FROM scoped_overrides),
+used AS (SELECT model_id, SUM(attempt_count) AS attempts FROM provider_usage_daily_v3
+    WHERE ?12 = '' OR provider_id = ?12 GROUP BY model_id),
 declared AS (SELECT value AS model_id FROM json_each(?6)),
 identities AS (SELECT model_id FROM catalog UNION SELECT model_id FROM overrides UNION SELECT model_id FROM used
     UNION SELECT model_id FROM declared UNION SELECT value FROM json_each(?8)),
@@ -2459,9 +2539,12 @@ models AS (
 ), filtered AS (
     SELECT m.model_id, SUM(m.attempts) AS attempts
     FROM models m
-    WHERE lower(m.model_id) NOT IN (SELECT model_id FROM excluded_models)
+    WHERE (lower(m.model_id) NOT IN (SELECT model_id FROM excluded_models)
+           OR m.model_id IN (SELECT model_id FROM scoped_overrides))
       AND (?4 IN ('all', 'used')
-        OR (?4 = 'override' AND m.model_id IN (SELECT model_id FROM overrides))
+        OR (?4 = 'override' AND (
+             (?12 = '' AND m.model_id IN (SELECT model_id FROM shared_overrides))
+             OR (?12 <> '' AND m.model_id IN (SELECT model_id FROM scoped_overrides))))
         OR (?4 = 'unpriced' AND m.model_id NOT IN (SELECT model_id FROM catalog UNION SELECT model_id FROM overrides)))
     GROUP BY m.model_id
     HAVING (?4 <> 'used' OR SUM(m.attempts) > 0)
@@ -2469,6 +2552,8 @@ models AS (
             OR lower(m.model_id) = lower(?9))
 ), page AS (SELECT * FROM filtered ORDER BY model_id LIMIT 25 OFFSET ?5)
 SELECT json_object('totalCount', (SELECT COUNT(*) FROM filtered),
+    'providerIds', json((SELECT json_group_array(provider_id) FROM (
+        SELECT DISTINCT provider_id FROM provider_usage_daily_v3 ORDER BY provider_id))),
     'models', json((SELECT json_group_array(json_object('modelId', page.model_id, 'attempts', page.attempts,
         'aliases', json((SELECT json_group_array(model_suffix) FROM
             (SELECT model_suffix FROM billing_aliases
@@ -2489,16 +2574,18 @@ SELECT json_object('totalCount', (SELECT COUNT(*) FROM filtered),
         { kind = "string", value = vulcan.json.encode({
             minimum = MINIMUM_GPT_PRICING_VERSION, named = NAMED_GPT_PRICING, minimax = MINIMUM_MINIMAX_PRICING_VERSION,
         }) },
+        { kind = "string", value = input.providerId or "" },
+        { kind = "string", value = vulcan.json.encode(scoped_ids) },
     })
     local result = decode_json_text(rows[1].resultJson, "pricing directory")
     result.currency = DEFAULT_PRICING_CATALOG.currency
     for _, row in ipairs(result.models) do
-        local group = groups[row.modelId]
+        local group = (provider and provider.groups[row.modelId]) or overrides.shared.groups[row.modelId]
         if group ~= nil and group.conflict then
             row.effectivePrices = vulcan.json.object()
             row.source = "conflict"
         else
-            local explicit, effective, source = model_prices(row.modelId, config, groups)
+            local explicit, effective, source = model_prices(row.modelId, config, overrides, input.providerId)
             row.effectivePrices = effective
             row.source = source
             if explicit ~= nil and explicit.offPeak ~= nil then

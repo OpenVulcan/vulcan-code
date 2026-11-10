@@ -4,6 +4,7 @@
   "properties": {
     "totalCount": { "type": "integer", "minimum": 0 },
     "currency": { "type": "string", "minLength": 1 },
+    "providerIds": { "type": "array", "items": { "type": "string", "minLength": 1 } },
     "models": {
       "type": "array", "maxItems": 25,
       "items": {
@@ -11,7 +12,7 @@
         "properties": {
           "modelId": { "type": "string" },
           "attempts": { "type": "integer", "minimum": 0 },
-          "source": { "enum": ["catalog", "override", "unpriced", "conflict"] },
+          "source": { "enum": ["catalog", "override", "provider_override", "unpriced", "conflict"] },
           "aliases": { "type": "array", "maxItems": 25, "items": { "type": "string" } },
           "effectivePrices": { "$ref": "#/$defs/currencyPrices" },
           "offPeakPrices": { "$ref": "#/$defs/currencyPrices" }

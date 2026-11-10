@@ -10,22 +10,22 @@
         { "pattern": "[1-9]" }
       ]
     },
-    "modelOverrides": {
+    "modelOverrides": { "$ref": "#/$defs/modelOverrides" },
+    "providerOverrides": {
       "type": "object",
-      "maxProperties": 1000,
-      "propertyNames": {
-        "type": "string",
-        "minLength": 1,
-        "maxLength": 256
-      },
-      "additionalProperties": {
-        "$ref": "#/$defs/modelPrice"
-      }
+      "propertyNames": { "minLength": 1, "maxLength": 256 },
+      "additionalProperties": { "$ref": "#/$defs/modelOverrides" }
     }
   },
   "required": ["modelOverrides"],
   "additionalProperties": false,
   "$defs": {
+    "modelOverrides": {
+      "type": "object",
+      "maxProperties": 1000,
+      "propertyNames": { "minLength": 1, "maxLength": 256 },
+      "additionalProperties": { "$ref": "#/$defs/modelPrice" }
+    },
     "decimalPrice": {
       "type": "string",
       "minLength": 1,

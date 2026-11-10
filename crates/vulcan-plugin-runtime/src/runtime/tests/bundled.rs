@@ -468,6 +468,55 @@ fn bundled_usage_statistics_plugin_loads_through_system_vldb_bridge() {
         dashboard["daily"][0]["pricingRevision"]
     );
     assert_eq!(overridden_dashboard["pricingCatalog"]["overrideCount"], 1);
+    // Bind an independent CNY price to the recorded provider while keeping the shared rate.
+    // 为已记录的供应商绑定独立人民币单价，同时保留统一汇率。
+    let scoped_settings = runtime
+        .block_on(manager.invoke_action(VulcanPluginActionRequest {
+            plugin_id: String::from("vulcan-usage-statistics"),
+            action_id: String::from("settings-update"),
+            arguments: json!({
+                "cnyPerUsd": "7",
+                "modelOverrides": updated_settings["modelOverrides"],
+                "providerOverrides": {
+                    "provider-1": { "gpt-5.6-sol": {
+                        "inputPerMillionCny": "7",
+                        "outputPerMillionCny": "14",
+                        "cacheReadPerMillionCny": "0",
+                        "cacheWritePerMillionCny": "0"
+                    } }
+                }
+            }),
+            caller: crate::VulcanPluginActionCaller::PluginUi,
+            workspace_root: repository_root.to_path_buf(),
+            reuse_enabled_runtime: true,
+        }))
+        .expect("persist and validate provider-scoped model prices");
+    assert_eq!(scoped_settings["defaultCnyPerUsd"], "6.7");
+    // The request uses an alias of the priced model and must use the provider's flat rate.
+    // 请求使用该模型的别名，并应采用该供应商的单一费率。
+    let scoped_dashboard = runtime
+        .block_on(manager.invoke_action(VulcanPluginActionRequest {
+            plugin_id: String::from("vulcan-usage-statistics"),
+            action_id: String::from("dashboard-get"),
+            arguments: json!({}),
+            caller: crate::VulcanPluginActionCaller::PluginUi,
+            workspace_root: repository_root.to_path_buf(),
+            reuse_enabled_runtime: true,
+        }))
+        .expect("estimate provider-scoped usage");
+    assert_eq!(
+        scoped_dashboard["recentAttempts"][0]["estimatedCost"],
+        "0.000048"
+    );
+    assert_eq!(
+        scoped_dashboard["recentAttempts"][0]["alternateEstimate"]["amount"],
+        "0.000336"
+    );
+    assert!(
+        scoped_dashboard["recentAttempts"][0]["pricingSourceId"]
+            .as_str()
+            .is_some_and(|source| source.starts_with("plugin.config.providerOverrides:"))
+    );
     // pricing_page validates the declared complete usage-directory action and unknown prices.
     // pricing_page 验证声明的完整用量目录 Action 与未知价格。
     let pricing_page = runtime
