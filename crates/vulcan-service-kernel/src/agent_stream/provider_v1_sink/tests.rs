@@ -1531,7 +1531,6 @@ async fn compaction_tool_rejections_settle_before_final_barrier_failure() {
         // 准入开始前冻结物理用途。
         let mut facts = request_facts();
         facts.purpose = ApiPurposeKind::Compaction;
-        prepare_sink_request_with_facts(&handle, &mut sink, facts.clone());
         // The actual telemetry guard observes completion without inventing cancellation usage.
         // 实际遥测守卫观察完成，不虚构取消用量。
         let mut telemetry =
@@ -1542,6 +1541,63 @@ async fn compaction_tool_rejections_settle_before_final_barrier_failure() {
         // Hidden execution must not allocate a root display identity.
         // 隐藏执行不得分配根展示身份。
         let mut output_id = None;
+        // The tool coordinator emits the preview before the host adds the physical API identity.
+        // 工具协调器先发出预览，再由宿主补充物理 API 身份。
+        let formation = ExecutionStreamEvent::RuntimeEvent {
+            session_id: handle.session_id(),
+            event: RuntimeEvent::new(RuntimeEventKind::ToolRequestStarted, "", "")
+                .with_metadata(Some(json!({ "request_stream_id": "rejected-one" }))),
+        };
+        assert!(
+            crate::context_compaction::apply_context_compaction_stream_event(
+                &app,
+                &state,
+                None,
+                &mut output_id,
+                &mut raw,
+                &mut sink,
+                &mut telemetry,
+                formation.clone(),
+            )
+            .await
+            .is_err(),
+            "an unbound compaction preview must fail before handoff"
+        );
+        prepare_sink_request_with_facts(&handle, &mut sink, facts.clone());
+        // Capture the owner that must survive forwarding through the original child listener.
+        // 记录必须在原子任务监听器转发过程中保留的归属。
+        let compaction_api = sink.request_preview_api_id().unwrap();
+        let Some(ExecutionStreamEvent::RuntimeEvent {
+            event: mut forwarded,
+            ..
+        }) = crate::context_compaction::apply_context_compaction_stream_event(
+            &app,
+            &state,
+            None,
+            &mut output_id,
+            &mut raw,
+            &mut sink,
+            &mut telemetry,
+            formation,
+        )
+        .await
+        .unwrap()
+        else {
+            panic!("child compaction must forward its bound preview");
+        };
+        // The original listener can be idle while compaction owns the active API.
+        // 压缩持有活动 API 时，原监听器可以处于空闲状态。
+        let listener_sink = ProviderV1StreamSink::new(
+            Arc::clone(&handle),
+            Arc::new(ProjectResourceCatalogRegistry::default()),
+        );
+        listener_sink
+            .bind_tool_request_preview(&mut forwarded)
+            .unwrap();
+        assert_eq!(
+            forwarded.metadata.unwrap()["api_call_id"],
+            json!(compaction_api)
+        );
         // Two tools prove the first rejection cannot prematurely close the physical group.
         // 两个工具证明首个拒绝不能提前关闭物理组。
         let mut terminal = terminal_facts(2);

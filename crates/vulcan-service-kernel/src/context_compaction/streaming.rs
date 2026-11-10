@@ -628,13 +628,12 @@ pub(crate) async fn apply_context_compaction_stream_event(
     provider_telemetry_guard: &mut ProviderTelemetryHookGuard,
     mut event: ExecutionStreamEvent,
 ) -> Result<Option<ExecutionStreamEvent>, String> {
-    // Bind request formation to its real compaction API before any projection or owner handoff,
-    // exactly as the root and detached streams do.
-    // 与根流及分离流一致，在任何投影或归属交接前将请求构造绑定到真实的压缩 API。
-    if let ExecutionStreamEvent::RuntimeEvent { event, .. } = &mut event
-        && let Err(error) = provider_v1_sink.bind_tool_request_preview(event)
-    {
-        tracing::warn!("[webui-service] compaction tool request preview ownership failed: {error}");
+    // Bind formation before projection or handoff so a detached listener cannot claim an unbound compaction event.
+    // 在投影或转交前绑定构造事件，避免分离监听器接管尚未绑定的压缩事件。
+    if let ExecutionStreamEvent::RuntimeEvent { event, .. } = &mut event {
+        provider_v1_sink
+            .bind_tool_request_preview(event)
+            .map_err(|error| format!("Failed to bind compaction tool request preview: {error}"))?;
     }
     if presentation.is_none()
         && matches!(&event, ExecutionStreamEvent::RuntimeEvent { event, .. }

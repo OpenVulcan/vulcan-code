@@ -1668,12 +1668,12 @@ impl ProviderV1StreamSink {
             .ok_or(ProviderV1SinkError::RequestNotActive)
     }
 
-    /// Binds a tool-request formation event to the active API before projection, which requires `api_call_id`.
-    /// 在投影前将工具请求构造事件绑定到活动 API，投影要求提供 `api_call_id`。
+    /// Binds an unbound tool-request formation event to the active API required by projection.
+    /// 将尚未绑定的工具请求构造事件绑定到投影所需的活动 API。
     /// `event` is the runtime event about to be projected; other event kinds are left untouched.
     /// `event` 是即将投影的运行时事件；其他事件类型保持不变。
-    /// Returns an explicit inactive-request error when a formation event arrives without an active API.
-    /// 构造事件到达时若无活动 API，返回明确的请求未活动错误。
+    /// Preserves an existing host binding and returns an inactive-request error if a new binding has no active API.
+    /// 保留已有的宿主绑定；新绑定没有活动 API 时返回请求未活动错误。
     pub(crate) fn bind_tool_request_preview(
         &self,
         event: &mut RuntimeEvent,
@@ -1688,9 +1688,12 @@ impl ProviderV1StreamSink {
         ) {
             return Ok(());
         }
-        let api_call_id = self.request_preview_api_id()?;
-        if let Some(serde_json::Value::Object(metadata)) = event.metadata.as_mut() {
-            metadata.insert("api_call_id".into(), serde_json::json!(api_call_id));
+        // The formation producer leaves this field unset. A forwarded event already carries its owner's API.
+        // 构造事件的生产方不设置此字段。转发事件已携带其所有者的 API。
+        if let Some(serde_json::Value::Object(metadata)) = event.metadata.as_mut()
+            && let serde_json::map::Entry::Vacant(binding) = metadata.entry("api_call_id")
+        {
+            binding.insert(serde_json::json!(self.request_preview_api_id()?));
         }
         Ok(())
     }
