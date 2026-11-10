@@ -178,6 +178,19 @@ messages:
   cost.coverage: '{{priced}} filas con precio · {{unpriced}} sin precio · {{incomplete}} incompletas'
   cost.partial: Cobertura parcial
   pricing.source: Fuente del precio
+  pricing.nativeReference: Precios de referencia de medios de Alibaba Cloud
+  pricing.nativeHint: Tarifas de pago por uso. Los totales de uso no incluyen cargos de medios.
+  pricing.nativeBeijing: Pekín
+  pricing.nativeSingapore: Singapur
+  pricing.nativeUnit.input_second: Por segundo de audio de entrada
+  pricing.nativeUnit.input_10000_characters: Por cada 10.000 caracteres de entrada
+  pricing.nativeUnit.input_image: Por imagen de entrada
+  pricing.nativeUnit.output_image: Por imagen generada
+  pricing.nativeUnit.output_image_1k: Por imagen 1K generada
+  pricing.nativeUnit.output_image_2k: Por imagen 2K generada
+  pricing.nativeUnit.output_second_480p: Por segundo de salida a 480p
+  pricing.nativeUnit.output_second_720p: Por segundo de salida a 720p
+  pricing.nativeUnit.output_second_1080p: Por segundo de salida a 1080p
   pricing.unpriced: Sin precio configurado
   pricing.incompleteUsage: El uso necesario está incompleto
   pricing.loadError: No se pueden cargar los precios de modelos

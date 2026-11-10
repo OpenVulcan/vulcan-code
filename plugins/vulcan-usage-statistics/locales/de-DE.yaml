@@ -178,6 +178,19 @@ messages:
   cost.coverage: '{{priced}} Zeilen mit Preis · {{unpriced}} ohne Preis · {{incomplete}} unvollständig'
   cost.partial: Teilweise Abdeckung
   pricing.source: Preisquelle
+  pricing.nativeReference: Medienreferenzpreise von Alibaba Cloud
+  pricing.nativeHint: Tarife nach Verbrauch. Die Nutzungssummen enthalten keine Medienkosten.
+  pricing.nativeBeijing: Peking
+  pricing.nativeSingapore: Singapur
+  pricing.nativeUnit.input_second: Pro Sekunde Audioeingabe
+  pricing.nativeUnit.input_10000_characters: Pro 10.000 Eingabezeichen
+  pricing.nativeUnit.input_image: Pro Eingabebild
+  pricing.nativeUnit.output_image: Pro erzeugtem Bild
+  pricing.nativeUnit.output_image_1k: Pro erzeugtem 1K-Bild
+  pricing.nativeUnit.output_image_2k: Pro erzeugtem 2K-Bild
+  pricing.nativeUnit.output_second_480p: Pro Sekunde Ausgabe in 480p
+  pricing.nativeUnit.output_second_720p: Pro Sekunde Ausgabe in 720p
+  pricing.nativeUnit.output_second_1080p: Pro Sekunde Ausgabe in 1080p
   pricing.unpriced: Kein Preis festgelegt
   pricing.incompleteUsage: Erforderliche Nutzungsdaten unvollständig
   pricing.loadError: Modellpreise konnten nicht geladen werden

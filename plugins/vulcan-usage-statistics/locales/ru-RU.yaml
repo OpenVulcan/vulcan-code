@@ -178,6 +178,19 @@ messages:
   cost.coverage: '{{priced}} строк с ценой · {{unpriced}} без цены · {{incomplete}} неполных'
   cost.partial: Частичное покрытие
   pricing.source: Источник цены
+  pricing.nativeReference: Справочные цены Alibaba Cloud на медиа
+  pricing.nativeHint: Тарифы с оплатой по факту использования. Расходы на медиа не входят в итоги использования.
+  pricing.nativeBeijing: Пекин
+  pricing.nativeSingapore: Сингапур
+  pricing.nativeUnit.input_second: За секунду входного аудио
+  pricing.nativeUnit.input_10000_characters: За 10 000 входных символов
+  pricing.nativeUnit.input_image: За входное изображение
+  pricing.nativeUnit.output_image: За сгенерированное изображение
+  pricing.nativeUnit.output_image_1k: За сгенерированное изображение 1K
+  pricing.nativeUnit.output_image_2k: За сгенерированное изображение 2K
+  pricing.nativeUnit.output_second_480p: За секунду вывода в 480p
+  pricing.nativeUnit.output_second_720p: За секунду вывода в 720p
+  pricing.nativeUnit.output_second_1080p: За секунду вывода в 1080p
   pricing.unpriced: Цена не задана
   pricing.incompleteUsage: Необходимые данные использования неполны
   pricing.loadError: Не удалось загрузить цены моделей

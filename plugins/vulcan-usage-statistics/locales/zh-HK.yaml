@@ -178,6 +178,19 @@ messages:
   cost.coverage: '{{priced}} 列可計算 · {{unpriced}} 列未定價 · {{incomplete}} 列用量不完整'
   cost.partial: 部分涵蓋
   pricing.source: 價格來源
+  pricing.nativeReference: 阿里雲媒體參考價
+  pricing.nativeHint: 官網按用量收費的定價。用量合計不包括媒體費用。
+  pricing.nativeBeijing: 北京
+  pricing.nativeSingapore: 新加坡
+  pricing.nativeUnit.input_second: 每秒輸入音訊
+  pricing.nativeUnit.input_10000_characters: 每萬個輸入字元
+  pricing.nativeUnit.input_image: 每張輸入圖片
+  pricing.nativeUnit.output_image: 每張生成圖片
+  pricing.nativeUnit.output_image_1k: 每張生成的 1K 圖片
+  pricing.nativeUnit.output_image_2k: 每張生成的 2K 圖片
+  pricing.nativeUnit.output_second_480p: 每秒 480p 輸出
+  pricing.nativeUnit.output_second_720p: 每秒 720p 輸出
+  pricing.nativeUnit.output_second_1080p: 每秒 1080p 輸出
   pricing.unpriced: 未設定價格
   pricing.incompleteUsage: 必要用量不完整
   pricing.loadError: 無法讀取模型價格

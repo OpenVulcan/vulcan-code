@@ -178,6 +178,19 @@ messages:
   cost.coverage: '料金設定済み {{priced}} 行 · 未設定 {{unpriced}} 行 · 不完全 {{incomplete}} 行'
   cost.partial: 一部のみ算出
   pricing.source: 料金の出典
+  pricing.nativeReference: Alibaba Cloud のメディア参考料金
+  pricing.nativeHint: 従量課金の料金です。利用量の合計にはメディア料金が含まれません。
+  pricing.nativeBeijing: 北京
+  pricing.nativeSingapore: シンガポール
+  pricing.nativeUnit.input_second: 入力音声 1 秒あたり
+  pricing.nativeUnit.input_10000_characters: 入力 1 万文字あたり
+  pricing.nativeUnit.input_image: 入力画像 1 枚あたり
+  pricing.nativeUnit.output_image: 生成画像 1 枚あたり
+  pricing.nativeUnit.output_image_1k: 生成した 1K 画像 1 枚あたり
+  pricing.nativeUnit.output_image_2k: 生成した 2K 画像 1 枚あたり
+  pricing.nativeUnit.output_second_480p: 480p 出力 1 秒あたり
+  pricing.nativeUnit.output_second_720p: 720p 出力 1 秒あたり
+  pricing.nativeUnit.output_second_1080p: 1080p 出力 1 秒あたり
   pricing.unpriced: 料金未設定
   pricing.incompleteUsage: 必要な使用量が不完全です
   pricing.loadError: モデル料金を読み込めません
