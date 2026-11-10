@@ -41,7 +41,6 @@ import {
 } from "@/components/workspace/workspace-resizable-body";
 import { observeCoreBrowserSessions } from "@/service/core-browser-metadata";
 import { readElectronLocalBrowserBridge } from "@/host-shell/electron-bridge";
-import { LocalBrowserCloseDialog } from "@/components/features/browser/local-browser-close-dialog";
 import { readConversationLinkPreference } from "@/components/conversation/conversation-link-preference";
 import { resolveConversationLinkTarget } from "@/components/conversation/conversation-link-navigation";
 import {
@@ -93,6 +92,7 @@ import {
   type WorkspaceContextTabStateEntry,
 } from "@/components/workspace/workspace-shell/context-tabs";
 import { useWorkspaceGitState } from "@/components/workspace/workspace-shell/use-workspace-git-state";
+import { useCloseWorkspaceContextTab } from "@/components/workspace/workspace-shell/use-close-workspace-context-tab";
 import { useSessionActivityPanel } from "@/components/workspace/workspace-shell/use-session-activity-panel";
 import { AssistantDockButton } from "@/components/assistant/assistant-dock-button";
 import { TurnChangeReviewActionsContext } from "@/components/conversation/turn-change-review-context";
@@ -456,36 +456,11 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       state: openWorkspaceContextTab(current.state, kind, t),
     }));
   }, [t]);
-  // browserCloseRequest binds the shared confirmation dialog to the exact panel and conversation.
-  // browserCloseRequest 将共享确认弹窗绑定到精确的面板与会话。
-  const [browserCloseRequest, setBrowserCloseRequest] = React.useState<{
-    // Conversation whose native pages may be destroyed.
-    // 允许销毁原生页面的会话。
-    owner: string;
-    // Context state identity protected against late completion after navigation.
-    // 防止导航后迟到完成写入的上下文状态身份。
-    cacheKey: string;
-    // Exact browser panel removed only after native destruction succeeds.
-    // 仅在原生销毁成功后移除的精确浏览器面板。
-    tabId: string;
-  } | null>(null);
-  React.useEffect(() => { setBrowserCloseRequest(null); }, [contextTabCacheKey]);
-  // closeContextTab removes tabId after browser confirmation and resource release; returns immediately.
-  // closeContextTab 在浏览器确认及资源释放后移除 tabId；调用立即返回。
-  const closeContextTab = React.useCallback((tabId: string) => {
-    // tab resolves the exact singleton being closed rather than the currently selected tab.
-    // tab 定位正在关闭的精确单实例，而不是当前选中的页签。
-    const tab = contextTabState.tabs.find((candidate) => candidate.id === tabId);
-    if (tab?.kind === "local-browser") {
-      if (!props.selectedConversationId || !readElectronLocalBrowserBridge()) return;
-      setBrowserCloseRequest({ owner: props.selectedConversationId, cacheKey: contextTabCacheKey, tabId });
-      return;
-    }
-    setContextTabStateEntry((current) => ({
-      ...current,
-      state: closeWorkspaceContextTab(current.state, tabId),
-    }));
-  }, [contextTabCacheKey, contextTabState.tabs, props.selectedConversationId]);
+  // closeContextTab removes the selected tab after any native pages are released.
+  // closeContextTab 在相关原生页面释放后移除指定页签。
+  const closeContextTab = useCloseWorkspaceContextTab(
+    contextTabStateEntry, contextTabCacheKey, props.selectedConversationId, setContextTabStateEntry,
+  );
   // activateContextTab switches the right context content to an opened tab.
   // activateContextTab 将右侧上下文内容切换到已打开页签。
   const activateContextTab = React.useCallback((tabId: string) => {
@@ -1112,17 +1087,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           ) : null}
           </TurnChangeReviewActionsContext.Provider>
         </SidebarInset>
-        {browserCloseRequest && browserCloseRequest.cacheKey === contextTabCacheKey
-          && browserCloseRequest.owner === props.selectedConversationId ? <LocalBrowserCloseDialog
-            key={`${browserCloseRequest.cacheKey}:${browserCloseRequest.tabId}`}
-            ownerSessionId={browserCloseRequest.owner}
-            onCancel={() => setBrowserCloseRequest(null)}
-            onClosed={() => {
-              setContextTabStateEntry((current) => current.cacheKey === browserCloseRequest.cacheKey
-                ? { ...current, state: closeWorkspaceContextTab(current.state, browserCloseRequest.tabId) } : current);
-              setBrowserCloseRequest(null);
-            }}
-          /> : null}
         {sessionGitCommitActionVisible && activeSessionReviewSummary ? (
           <ConversationSessionCommitDialog
             busyState={activeGitCommitBusyState}

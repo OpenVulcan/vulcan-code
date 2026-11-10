@@ -1,10 +1,14 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, useEffect, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ElectronLocalBrowserBridge, ElectronLocalBrowserSnapshot } from "@/host-shell/electron-bridge";
+import { openWorkspaceContextTab, emptyWorkspaceContextTabState, workspaceContextTabStateCache } from "@/components/workspace/workspace-shell/context-tabs";
+import { useCloseWorkspaceContextTab } from "@/components/workspace/workspace-shell/use-close-workspace-context-tab";
+import { AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogTitle } from "@/ui-kit/primitives/alert-dialog";
+import { PanelTab } from "@/ui-kit/primitives/panel-tab";
+import { toast } from "@/ui-kit/primitives/toast";
 import { ClientBrowserArea } from "./client-browser-area";
-import { LocalBrowserCloseDialog } from "./local-browser-close-dialog";
 
 vi.mock("@/i18n", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/i18n")>();
@@ -60,6 +64,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   host.remove();
+  workspaceContextTabStateCache.clear();
   Reflect.deleteProperty(window, "vulcanDesktop");
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -73,67 +78,99 @@ async function mount(): Promise<void> {
   await act(async () => root.render(<ClientBrowserArea ownerSessionId="owner" />));
 }
 
-// closeAction finds a dialog button by its translated action, never by a changing child index.
-// closeAction 按翻译后的动作查找弹窗按钮，不依赖会变化的子元素下标。
-// label identifies the action; returns its actual button or fails the test when missing.
-// label 标识动作；返回实际按钮，缺失时使测试失败。
-function closeAction(label: string): HTMLButtonElement {
-  const button = [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
-    .find((entry) => entry.textContent === label);
-  expect(button).toBeDefined();
-  return button!;
-}
-
-it("uses the internal close dialog and restores the native viewport after cancellation", async () => {
+it("hides the native viewport under an application dialog and restores it after dismissal", async () => {
   // render keeps the actual browser mounted while the shared application dialog enters and exits.
   // render 在共享应用弹窗进入与退出期间保持真实浏览器组件挂载。
   const render = (open: boolean) => root.render(<>
     <ClientBrowserArea ownerSessionId="owner" />
-    {open ? <LocalBrowserCloseDialog ownerSessionId="owner" onCancel={() => render(false)} onClosed={vi.fn()} /> : null}
+    <AlertDialog open={open}>
+      <AlertDialogContent>
+        <AlertDialogTitle>Fixture</AlertDialogTitle>
+        <AlertDialogDescription>Application dialog fixture</AlertDialogDescription>
+      </AlertDialogContent>
+    </AlertDialog>
   </>);
   await act(async () => render(false));
   await vi.waitFor(() => expect(bridge.viewport).toHaveBeenLastCalledWith(expect.objectContaining({ visible: true })));
   await act(async () => render(true));
-  expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain("当前有 2 个页面");
+  expect(document.querySelector('[role="alertdialog"]')).not.toBeNull();
   await vi.waitFor(() => expect(bridge.viewport).toHaveBeenLastCalledWith(expect.objectContaining({ visible: false })));
-  await act(async () => closeAction("取消").click());
-  expect(bridge.closeOwner).not.toHaveBeenCalled();
+  await act(async () => render(false));
   await vi.waitFor(() => expect(bridge.viewport).toHaveBeenLastCalledWith(expect.objectContaining({ visible: true })));
 });
 
-it("waits for confirmed native destruction and ignores duplicate confirmation clicks", async () => {
-  // finish holds the native destruction response so the UI cannot optimistically remove its panel.
-  // finish 暂缓原生销毁响应，确保界面不会提前移除面板。
+// CloseTabFixture renders the workspace close action with the shared tab control.
+// CloseTabFixture 用共享页签控件呈现工作区关闭动作。
+// owner identifies the active route; its tab state is restored from the same cache as the workspace.
+// owner 标识当前路由，页签状态从与工作区相同的缓存恢复。
+function CloseTabFixture({ owner }: { owner: string }) {
+  // entry pairs the visible tabs with their originating route, even during navigation.
+  // entry 将可见页签与其所属路由绑定，切换路由期间也保持这一归属。
+  const [entry, setEntry] = useState({ cacheKey: owner, state: emptyWorkspaceContextTabState() });
+  useEffect(() => {
+    // Read the saved route or open a local browser tab for this fixture.
+    // 读取已保存的路由状态，首次进入时为用例打开本地浏览器页签。
+    const state = workspaceContextTabStateCache.get(owner)
+      ?? openWorkspaceContextTab(emptyWorkspaceContextTabState(), "local-browser", (key) => key);
+    workspaceContextTabStateCache.set(owner, state);
+    setEntry({ cacheKey: owner, state });
+  }, [owner]);
+  // closeTab is the production handler invoked by the panel's close control.
+  // closeTab 是面板关闭控件调用的生产处理函数。
+  const closeTab = useCloseWorkspaceContextTab(entry, owner, owner, setEntry);
+  return <div role="tablist">{entry.state.tabs.map((tab) => (
+    <PanelTab key={tab.id} active label={owner} title={owner} closeLabel={`Close ${owner}`}
+      onSelect={vi.fn()} onClose={() => closeTab(tab.id)} />
+  ))}</div>;
+}
+
+// browserCloseButton returns the close control for the requested fixture owner, if present.
+// browserCloseButton 返回指定用例会话的关闭控件，控件不存在时返回空值。
+function browserCloseButton(owner: string): HTMLButtonElement | null {
+  return host.querySelector<HTMLButtonElement>(`button[aria-label="Close ${owner}"]`);
+}
+
+it("closes the local browser directly and waits for native destruction", async () => {
+  // finish delays native destruction to exercise repeated clicks while closure is in flight.
+  // finish 暂缓原生销毁，用于检验关闭期间的连续点击。
   let finish!: (closed: boolean) => void;
   vi.mocked(bridge.closeOwner).mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
-  const closed = vi.fn();
-  await act(async () => root.render(<LocalBrowserCloseDialog ownerSessionId="owner" onCancel={vi.fn()} onClosed={closed} />));
-  const confirm = closeAction("确认关闭");
-  await act(async () => { confirm.click(); confirm.click(); });
+  await act(async () => root.render(<CloseTabFixture owner="owner" />));
+  await act(async () => { browserCloseButton("owner")!.click(); browserCloseButton("owner")!.click(); });
   expect(bridge.closeOwner).toHaveBeenCalledExactlyOnceWith("owner", true);
-  expect(closed).not.toHaveBeenCalled();
-  expect(closeAction("取消").disabled).toBe(true);
+  expect(bridge.snapshot).not.toHaveBeenCalled();
+  expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+  expect(browserCloseButton("owner")).not.toBeNull();
   await act(async () => finish(true));
-  expect(closed).toHaveBeenCalledOnce();
+  expect(browserCloseButton("owner")).toBeNull();
 });
 
-it("keeps failed closure visible and permits retry without removing the browser", async () => {
+it("keeps the browser tab open when native closure fails and lets the user retry", async () => {
+  // report captures the workspace notification without mounting an application-wide toast host.
+  // report 捕获工作区通知，无需挂载全局通知容器。
+  const report = vi.spyOn(toast, "error").mockImplementation(() => "");
   vi.mocked(bridge.closeOwner).mockRejectedValueOnce(new Error("native close failed"));
-  const closed = vi.fn();
-  await act(async () => root.render(<LocalBrowserCloseDialog ownerSessionId="owner" onCancel={vi.fn()} onClosed={closed} />));
-  await act(async () => closeAction("确认关闭").click());
-  expect(document.querySelector('[role="alert"]')?.textContent).toContain("native close failed");
-  expect(closed).not.toHaveBeenCalled();
-  await act(async () => closeAction("确认关闭").click());
-  expect(closed).toHaveBeenCalledOnce();
+  await act(async () => root.render(<CloseTabFixture owner="owner" />));
+  await act(async () => browserCloseButton("owner")!.click());
+  expect(report).toHaveBeenCalledWith("native close failed");
+  expect(browserCloseButton("owner")).not.toBeNull();
+  await act(async () => browserCloseButton("owner")!.click());
+  expect(bridge.closeOwner).toHaveBeenCalledTimes(2);
+  expect(browserCloseButton("owner")).toBeNull();
 });
 
-it("refuses a snapshot from a different conversation", async () => {
-  vi.mocked(bridge.snapshot).mockResolvedValue({ ...snapshot, ownerSessionId: "other" });
-  await act(async () => root.render(<LocalBrowserCloseDialog ownerSessionId="owner" onCancel={vi.fn()} onClosed={vi.fn()} />));
-  expect(closeAction("确认关闭").disabled).toBe(true);
-  expect(document.querySelector('[role="alert"]')?.textContent).toContain("conversation changed");
-  expect(bridge.closeOwner).not.toHaveBeenCalled();
+it("only removes the originating conversation's tab after switching conversations", async () => {
+  // finish allows navigation before the originating native close operation completes.
+  // finish 让用例在发起会话的原生关闭完成前切换会话。
+  let finish!: (closed: boolean) => void;
+  vi.mocked(bridge.closeOwner).mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+  await act(async () => root.render(<CloseTabFixture owner="owner" />));
+  await act(async () => browserCloseButton("owner")!.click());
+  await act(async () => root.render(<CloseTabFixture owner="other" />));
+  await act(async () => finish(true));
+  expect(browserCloseButton("other")).not.toBeNull();
+  await act(async () => root.render(<CloseTabFixture owner="owner" />));
+  expect(browserCloseButton("owner")).toBeNull();
 });
 
 // addressInput locates the address bar; returns its actual DOM input.

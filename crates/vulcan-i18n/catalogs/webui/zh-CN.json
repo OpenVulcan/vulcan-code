@@ -5688,7 +5688,6 @@
   "browser.noActiveAiBrowser": "当前会话没有活跃的 AI 浏览器。AI 创建后会显示在这里。",
   "browser.closePage2": "关闭页面？",
   "browser.closeBrowser2": "关闭浏览器？",
-  "browser.closeLocalPages": "当前有 {count} 个页面。是否全部关闭并释放资源？未保存的页面内容将丢失。",
   "browser.closeUnsavedPageChanges": "确定关闭“{label}”？未保存的页面内容将丢失。",
   "browser.closeAndAllIts": "确定关闭“{label}”及其中的全部页面？这会释放浏览器资源。",
   "browser.activeAutomationWillBe": " 如有 AI 正在操作，将先接管控制权再关闭。",

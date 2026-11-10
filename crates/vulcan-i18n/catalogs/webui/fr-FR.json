@@ -5688,7 +5688,6 @@
   "browser.noActiveAiBrowser": "Aucun navigateur IA actif dans cette conversation. Il apparaîtra ici lorsque l’IA en créera un.",
   "browser.closePage2": "Fermer la page ?",
   "browser.closeBrowser2": "Fermer le navigateur ?",
-  "browser.closeLocalPages": "Il y a {count} pages. Toutes les fermer et libérer leurs ressources ? Le contenu non enregistré sera perdu.",
   "browser.closeUnsavedPageChanges": "Fermer « {label} » ? Les modifications non enregistrées de la page seront perdues.",
   "browser.closeAndAllIts": "Fermer « {label} » et toutes ses pages ? Cela libère les ressources du navigateur.",
   "browser.activeAutomationWillBe": " L’automatisation active sera reprise en main avant la fermeture.",

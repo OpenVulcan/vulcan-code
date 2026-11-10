@@ -5688,7 +5688,6 @@
   "browser.noActiveAiBrowser": "此對話中沒有作用中的 AI 瀏覽器。AI 建立後會顯示在這裡。",
   "browser.closePage2": "關閉頁面？",
   "browser.closeBrowser2": "關閉瀏覽器？",
-  "browser.closeLocalPages": "目前有 {count} 個頁面。是否全部關閉並釋放資源？未儲存的頁面內容將遺失。",
   "browser.closeUnsavedPageChanges": "確定關閉「{label}」？未儲存的頁面變更將會遺失。",
   "browser.closeAndAllIts": "確定關閉「{label}」及其所有頁面？這會釋放瀏覽器資源。",
   "browser.activeAutomationWillBe": "如有 AI 正在操作，將先接管控制權再關閉。",

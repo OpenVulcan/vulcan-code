@@ -31,7 +31,7 @@
   "apps/vulcan-code-web/src/components/conversation/tool-presentations/v1-tool-domain-presentation.test.ts": 12,
   "apps/vulcan-code-web/src/components/features/agent-skills/agent-skill-management-dialogs.test.tsx": 2,
   "apps/vulcan-code-web/src/components/features/agents/agents-editor-lifecycle.test.tsx": 3,
-  "apps/vulcan-code-web/src/components/features/browser/client-browser-area.interactions.test.tsx": 4,
+  "apps/vulcan-code-web/src/components/features/browser/client-browser-area.interactions.test.tsx": 1,
   "apps/vulcan-code-web/src/components/features/browser/client-browser-area.test.ts": 2,
   "apps/vulcan-code-web/src/components/features/browser/core-browser-runtime-controls.test.tsx": 7,
   "apps/vulcan-code-web/src/components/features/knowledge/knowledge-operation-feedback.test.tsx": 1,

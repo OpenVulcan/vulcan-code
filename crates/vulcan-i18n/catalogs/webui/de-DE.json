@@ -5688,7 +5688,6 @@
   "browser.noActiveAiBrowser": "In dieser Unterhaltung gibt es keinen aktiven KI-Browser. Er erscheint hier, sobald die KI einen erstellt.",
   "browser.closePage2": "Seite schließen?",
   "browser.closeBrowser2": "Browser schließen?",
-  "browser.closeLocalPages": "Es sind {count} Seiten geöffnet. Alle schließen und Ressourcen freigeben? Nicht gespeicherte Seiteninhalte gehen verloren.",
   "browser.closeUnsavedPageChanges": "„{label}“ schließen? Nicht gespeicherte Änderungen auf der Seite gehen verloren.",
   "browser.closeAndAllIts": "„{label}“ und alle seine Seiten schließen? Dadurch werden die Browserressourcen freigegeben.",
   "browser.activeAutomationWillBe": " Aktive Automatisierung wird vor dem Schließen übernommen.",

@@ -5688,7 +5688,6 @@
   "browser.noActiveAiBrowser": "No active AI browser in this conversation. One will appear here when AI creates it.",
   "browser.closePage2": "Close page?",
   "browser.closeBrowser2": "Close browser?",
-  "browser.closeLocalPages": "There are {count} pages. Close all pages and release their resources? Unsaved page content will be lost.",
   "browser.closeUnsavedPageChanges": "Close “{label}”? Unsaved page changes will be lost.",
   "browser.closeAndAllIts": "Close “{label}” and all its pages? This releases the browser resources.",
   "browser.activeAutomationWillBe": " Active automation will be taken over before closing.",

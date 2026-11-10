@@ -5688,7 +5688,6 @@
   "browser.noActiveAiBrowser": "この会話にはアクティブな AI ブラウザーがありません。AI が作成するとここに表示されます。",
   "browser.closePage2": "ページを閉じますか？",
   "browser.closeBrowser2": "ブラウザーを閉じますか？",
-  "browser.closeLocalPages": "現在 {count} ページあります。すべて閉じてリソースを解放しますか？未保存の内容は失われます。",
   "browser.closeUnsavedPageChanges": "「{label}」を閉じますか？保存されていないページの変更は失われます。",
   "browser.closeAndAllIts": "「{label}」とそのすべてのページを閉じますか？ブラウザーのリソースが解放されます。",
   "browser.activeAutomationWillBe": "実行中の自動操作は、閉じる前に引き継がれます。",

@@ -5688,7 +5688,6 @@
   "browser.noActiveAiBrowser": "이 대화에 활성 AI 브라우저가 없습니다. AI가 만들면 여기에 표시됩니다.",
   "browser.closePage2": "페이지를 닫으시겠습니까?",
   "browser.closeBrowser2": "브라우저를 닫으시겠습니까?",
-  "browser.closeLocalPages": "현재 페이지가 {count}개 있습니다. 모두 닫고 리소스를 해제할까요? 저장하지 않은 내용은 사라집니다.",
   "browser.closeUnsavedPageChanges": "\"{label}\"을(를) 닫으시겠습니까? 저장되지 않은 페이지 변경 사항은 사라집니다.",
   "browser.closeAndAllIts": "\"{label}\"과(와) 모든 페이지를 닫으시겠습니까? 브라우저 리소스가 해제됩니다.",
   "browser.activeAutomationWillBe": " 진행 중인 자동화는 닫기 전에 인계됩니다.",
