@@ -6,7 +6,8 @@ import type { AgentSkillActionProps } from "@/components/features/agent-skills/a
 import type { RenameTarget } from "@/components/project/project-action-dialogs";
 import { normalizeProjectIconSelection, type ProjectIconDialogTarget, type ProjectIconSelection } from "@/components/project/project-icons";
 import type { ProjectAgentSkillState } from "@/components/project/project-settings-types";
-import type { ProjectGroupAction, ProjectMenuAction } from "@/components/project/project-sidebar";
+import type { ProjectFolderStart, ProjectGroupAction, ProjectMenuAction } from "@/components/project/project-sidebar";
+import { projectPathKey } from "@/components/project/project-path-key";
 import type { DraftConversationSelection } from "@/components/workspace/workspace-resizable-body";
 import type { AgentSkillsCatalogUpdate, LuaSkillsCatalogUpdate, ProjectSummary, SubagentCatalogUpdate, VmmConfigDraftSummary, WorkbenchSnapshot } from "@/types";
 import {
@@ -82,6 +83,20 @@ import { INITIAL_DEDICATED_DRAFT, writeDedicatedDraft, type DraftSessionKind } f
 // WorkbenchProjectActionSnapshotSource separates backend snapshots from local optimistic previews.
 // WorkbenchProjectActionSnapshotSource 区分后端快照与本地乐观预览。
 type WorkbenchProjectActionSnapshotSource = "service" | "local";
+
+// projectOwnedByFolder finds the project that now owns one chosen folder. The stored path is authoritative, so an
+// exact match wins; a differently cased path counts only when it names exactly one project.
+// projectOwnedByFolder 查找当前拥有所选文件夹的项目。存储路径是权威来源，因此精确匹配优先；大小写不同的路径
+// 只有在唯一指向一个项目时才算数。
+function projectOwnedByFolder(projects: readonly ProjectSummary[], path: string): ProjectSummary | undefined {
+  const exact = projects.find((candidate) => candidate.path === path);
+  if (exact) {
+    return exact;
+  }
+  const key = projectPathKey(path);
+  const matches = projects.filter((candidate) => projectPathKey(candidate.path) === key);
+  return matches.length === 1 ? matches[0] : undefined;
+}
 
 // WorkbenchProjectActionsOptions groups state and service bridges used by project-side workbench actions.
 // WorkbenchProjectActionsOptions 归组项目侧工作台动作使用的状态与服务桥接。
@@ -442,27 +457,32 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     setSelectedConversationId(draftId);
   }, [handleOpenWorkspaceChat]);
 
-  // projectFolderTargetGroupRef remembers the group the open folder picker adds into; null adds without placing.
-  // projectFolderTargetGroupRef 记住打开的文件夹选择器要添加到的分组；为 null 时添加但不指定分组。
-  const projectFolderTargetGroupRef = React.useRef<string | null>(null);
+  // projectFolderStartRef remembers why the open folder picker was opened: the group that receives the
+  // chosen folder and whether the added project immediately starts a conversation.
+  // projectFolderStartRef 记住打开的文件夹选择器为何打开：接收所选文件夹的分组，以及新项目是否立即开始会话。
+  const projectFolderStartRef = React.useRef<ProjectFolderStart>({});
 
-  // handleCreateProject opens the service-backed project folder picker, optionally targeting one group.
-  // handleCreateProject 打开服务驱动的项目文件夹选择器，可选地以某分组为目标。
-  const handleCreateProject = React.useCallback((groupId?: string) => {
-    projectFolderTargetGroupRef.current = groupId ?? null;
+  // handleCreateProject opens the service-backed project folder picker with the caller's start intent.
+  // handleCreateProject 按调用方的启动意图打开服务驱动的项目文件夹选择器。
+  const handleCreateProject = React.useCallback((start: ProjectFolderStart = {}) => {
+    projectFolderStartRef.current = start;
     setProjectFolderPickerOpen(true);
   }, []);
 
-  // handleConfirmProjectFolder adds the selected service-host directory as a project.
-  // handleConfirmProjectFolder 将选中的服务宿主目录添加为项目。
+  // handleConfirmProjectFolder adds the selected service-host directory as a project and, when the picker
+  // was opened to start working there, continues into a new unsent conversation owned by that project.
+  // handleConfirmProjectFolder 将选中的服务宿主目录添加为项目；若选择器是为开始工作而打开，则继续进入该项目的
+  // 新未发送会话。
   const handleConfirmProjectFolder = React.useCallback(async (path: string) => {
+    // A rejected add keeps this intent so the picker's retry still starts the conversation; every open rewrites it.
+    // 添加失败时保留该意图，使选择器重试后仍会开始会话；每次打开都会重写它。
+    const start = projectFolderStartRef.current;
     // A folder chosen for a group joins that group, and an existing project only moves into it.
     // 为分组选择的文件夹加入该分组；已存在的项目只会移入其中。
-    const groupId = projectFolderTargetGroupRef.current;
-    const snapshot = groupId
-      ? await addProjectToGroup(path, groupId)
+    const snapshot = start.groupId
+      ? await addProjectToGroup(path, start.groupId)
       : await addProjectFromPath(path) ?? await loadWorkbenchSnapshot();
-    applyProjectActionSnapshot(snapshot);
+    const applied = applyProjectActionSnapshot(snapshot);
     toast.success(t("projectActions.listUpdated"));
     // The binding notice belongs only to this project-add response and must not be inferred later.
     // 绑定提示只属于本次项目添加响应，后续不得根据快照状态推断。
@@ -472,7 +492,16 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     } else if (bindingNotice?.status === "failed") {
       toast.error(bindingNotice.message);
     }
-  }, [applyProjectActionSnapshot, t]);
+    // A stale snapshot never reached local state, so the new project has no draft route to open.
+    // 过期快照不会进入本地状态，因此新项目没有可打开的草稿路由。
+    if (!start.startConversation || !applied) {
+      return;
+    }
+    const project = projectOwnedByFolder(snapshot.projects, path);
+    if (project) {
+      handleCreateConversation(project);
+    }
+  }, [applyProjectActionSnapshot, handleCreateConversation, t]);
 
   // handleProjectGroupAction persists one project-group change and applies the authoritative snapshot; it rejects
   // with the service error so the caller can show it where the change was made.

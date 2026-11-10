@@ -25,6 +25,9 @@ export interface DraftComposerContextValue {
   /** Moves the draft to another project; ignored once a submission is pending.
    * 将草稿移动到另一个项目；提交挂起后忽略。 */
   onChangeProject: (projectId: string) => void;
+  /** Opens the project folder picker; the chosen folder becomes a project and the next draft.
+   * 打开项目文件夹选择器；所选文件夹成为项目并进入下一个草稿。 */
+  onCreateProject: () => void;
 }
 
 /** Present only while an unsent draft is selected.

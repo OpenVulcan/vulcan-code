@@ -131,7 +131,7 @@ it("creates with the recommended answer mode and style, not the global ones, and
   await act(async () => root.render(
     <TooltipProvider>
       <DedicatedSessionWizard
-        draft={{ draftId: "d", projectId: "project", projects: [], submissionPending: false, onChangeProject: vi.fn() }}
+        draft={{ draftId: "d", projectId: "project", projects: [], submissionPending: false, onChangeProject: vi.fn(), onCreateProject: vi.fn() }}
         onBusyChange={vi.fn()}
         onChange={vi.fn()}
         onSelectWorkbenchModel={vi.fn()}

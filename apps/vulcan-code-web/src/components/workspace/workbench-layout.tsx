@@ -680,15 +680,6 @@ export function WorkbenchLayout(props: {
       : current);
     setActiveProjectId(project.id);
   }, []);
-  // draftComposerContext lets the composer pick the draft's project and session kind without prop threading.
-  // draftComposerContext 让输入区无需逐层传参即可选择草稿的项目与会话种类。
-  const draftComposerContext = React.useMemo<DraftComposerContextValue | null>(() => actionDraftConversation ? {
-    draftId: actionDraftConversation.id,
-    projectId: actionDraftConversation.projectId,
-    projects: workbenchState.projects.map((project) => ({ id: project.id, name: project.name })),
-    submissionPending: Boolean(actionDraftConversation.pendingSubmission),
-    onChangeProject: handleChangeDraftProject,
-  } : null, [actionDraftConversation, handleChangeDraftProject, workbenchState.projects]);
   // selectedRouteProjectId changes only when the user selects a conversation or draft in another project.
   // selectedRouteProjectId 仅在用户选择另一个项目的会话或草稿时变化。
   const selectedRouteProjectId = selectedDraftConversation?.projectId ?? selectedConversation?.projectId ?? null;
@@ -812,6 +803,22 @@ export function WorkbenchLayout(props: {
     applySubagentCatalogUpdate,
     handleOpenWorkspaceChat,
   });
+  // draftComposerContext lets the composer pick the draft's project and session kind without prop threading;
+  // the picker's new-project entry adds the chosen folder and opens the next draft in it.
+  // draftComposerContext 让输入区无需逐层传参即可选择草稿的项目与会话种类；选择器的新建项目入口会添加所选
+  // 文件夹，并在其中打开下一个草稿。
+  const handleCreateProjectForDraft = React.useCallback(
+    () => handleCreateProject({ startConversation: true }),
+    [handleCreateProject],
+  );
+  const draftComposerContext = React.useMemo<DraftComposerContextValue | null>(() => actionDraftConversation ? {
+    draftId: actionDraftConversation.id,
+    projectId: actionDraftConversation.projectId,
+    projects: workbenchState.projects.map((project) => ({ id: project.id, name: project.name })),
+    submissionPending: Boolean(actionDraftConversation.pendingSubmission),
+    onChangeProject: handleChangeDraftProject,
+    onCreateProject: handleCreateProjectForDraft,
+  } : null, [actionDraftConversation, handleChangeDraftProject, handleCreateProjectForDraft, workbenchState.projects]);
   // luaSkillActions adds the MCP server page hosted by plugin management to the catalog lifecycle actions.
   // luaSkillActions 在目录生命周期动作之外加入插件管理承载的 MCP 服务器页面动作。
   const luaSkillActions = React.useMemo<SkillActionProps>(() => ({

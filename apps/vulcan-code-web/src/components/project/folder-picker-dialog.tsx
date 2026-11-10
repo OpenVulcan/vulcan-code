@@ -27,18 +27,13 @@ import { Input } from "@/ui-kit/primitives/input";
 import { Spinner } from "@/ui-kit/primitives/spinner";
 import { formatMessage, useI18n } from "@/i18n";
 import type { ProjectDirectoryListing } from "@/types";
+import { projectPathKey } from "./project-path-key";
 import "@/ui-kit/styles/features/project-folder-picker.css";
 import "@/ui-kit/styles/features/settings-forms.css"
 
 // PLACE_LIMIT caps how many project parent folders the sidebar offers as quick places.
 // PLACE_LIMIT 限制侧栏作为常用位置提供的项目上级目录数量。
 const PLACE_LIMIT = 6;
-
-// projectFolderPickerPathKey normalizes a path for picker root matching.
-// projectFolderPickerPathKey 将路径归一化用于选择器根目录匹配。
-function projectFolderPickerPathKey(path: string): string {
-  return path.replace(/\\/g, "/").replace(/\/+$/g, "").toLocaleLowerCase() || "/";
-}
 
 // ProjectFolderPickerCrumb is one clickable ancestor of the browsed directory.
 // ProjectFolderPickerCrumb 是当前浏览目录的一个可点击祖先。
@@ -92,7 +87,7 @@ export function projectFolderPickerPlaces(projectPaths: readonly string[]): Proj
     if (crumbs.length < 3) continue;
     const parent = crumbs[crumbs.length - 2];
     const owner = crumbs[crumbs.length - 3].label;
-    const key = projectFolderPickerPathKey(parent.path);
+    const key = projectPathKey(parent.path);
     const known = places.get(key);
     if (known) known.count += 1;
     else places.set(key, { place: parent, owner, count: 1, order: places.size });
@@ -128,7 +123,7 @@ export function FolderPickerSidebar(props: {
           {props.places.map((place) => (
             <button
               className="project-folder-picker-place"
-              data-active={projectFolderPickerPathKey(place.path) === props.currentKey ? "" : undefined}
+              data-active={projectPathKey(place.path) === props.currentKey ? "" : undefined}
               data-folder-picker-place={place.path}
               disabled={props.busy}
               key={place.path}
@@ -258,9 +253,9 @@ export function ProjectFolderPickerDialog({
   const listRef = React.useRef<HTMLDivElement | null>(null);
   const directoryRoots = React.useMemo(() => listing?.roots ?? [], [listing?.roots]);
   const places = React.useMemo(() => projectFolderPickerPlaces(projectPaths ?? []), [projectPaths]);
-  const projectKeys = React.useMemo(() => new Set((projectPaths ?? []).map(projectFolderPickerPathKey)), [projectPaths]);
+  const projectKeys = React.useMemo(() => new Set((projectPaths ?? []).map(projectPathKey)), [projectPaths]);
   const crumbs = React.useMemo(() => (listing ? projectFolderPickerCrumbs(listing.path) : []), [listing]);
-  const currentKey = listing ? projectFolderPickerPathKey(listing.path) : null;
+  const currentKey = listing ? projectPathKey(listing.path) : null;
   // activeRootPath stores the root currently owning the displayed directory.
   // activeRootPath 保存当前显示目录所属的根目录路径。
   const activeRootPath = React.useMemo(() => {
@@ -268,7 +263,7 @@ export function ProjectFolderPickerDialog({
     let matchedPath: string | null = null;
     let matchedLength = -1;
     for (const root of directoryRoots) {
-      const rootKey = projectFolderPickerPathKey(root.path);
+      const rootKey = projectPathKey(root.path);
       const rootMatches = rootKey === "/" ? currentKey.startsWith("/") : currentKey === rootKey || currentKey.startsWith(`${rootKey}/`);
       if (rootMatches && rootKey.length > matchedLength) {
         matchedPath = root.path;
@@ -299,7 +294,7 @@ export function ProjectFolderPickerDialog({
       if (browseSequenceRef.current !== sequence) {
         return;
       }
-      if (from !== null && projectFolderPickerPathKey(from) !== projectFolderPickerPathKey(nextListing.path)) {
+      if (from !== null && projectPathKey(from) !== projectPathKey(nextListing.path)) {
         setHistory((previous) => [...previous, from]);
       }
       setListing(nextListing);
@@ -578,7 +573,7 @@ export function ProjectFolderPickerDialog({
             >
               {visibleEntries.map((entry, index) => {
                 const selected = entry.path === selectedChild;
-                const isProject = projectKeys.has(projectFolderPickerPathKey(entry.path));
+                const isProject = projectKeys.has(projectPathKey(entry.path));
                 return (
                   <div
                     aria-selected={selected}

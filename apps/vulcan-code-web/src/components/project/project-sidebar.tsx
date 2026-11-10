@@ -52,11 +52,11 @@ import {
   sessionSortModeOf,
   withSubsetOrder,
 } from "./project-session-order";
-import type { ConversationMenuAction, ProjectMenuAction } from "./project-sidebar-types";
+import type { ConversationMenuAction, ProjectFolderStart, ProjectMenuAction } from "./project-sidebar-types";
 import { handleSessionStepKey, handleSessionTreeKey, SESSION_TREE_ROW_SELECTOR } from "./session-tree-keys";
 import { setSidebarFlow, useSidebarFlow, type SidebarFlow } from "./sidebar-flow";
 
-export type { ConversationMenuAction, ProjectMenuAction } from "./project-sidebar-types";
+export type { ConversationMenuAction, ProjectFolderStart, ProjectMenuAction } from "./project-sidebar-types";
 export type { ProjectGroupAction } from "./project-sidebar-groups";
 
 // ProjectSessionTreeProps describes the session navigation shared by the session panel and the rail's session flyout.
@@ -78,9 +78,9 @@ export type ProjectSessionTreeProps = {
   // Opens a new draft preset to a dedicated assistant; the entry is hidden when absent.
   // 打开预设为专职助手的新草稿；缺省时隐藏该入口。
   onCreateDedicatedConversation?: (project: ProjectSummary) => void;
-  // Opens the add-project flow; a group id places the chosen folder in that group.
-  // 打开添加项目流程；给出分组标识时，所选文件夹放入该分组。
-  onCreateProject: (groupId?: string) => void;
+  // Opens the add-project flow; the start says where the folder goes and what follows it.
+  // 打开添加项目流程；start 说明文件夹放入哪里，以及之后做什么。
+  onCreateProject: (start?: ProjectFolderStart) => void;
   onExpandedProjectIdsChange: (projectIds: string[]) => void;
   onProjectMenuAction: (action: ProjectMenuAction, project: ProjectSummary) => void;
   // Persists one project-tree change; rejects with the service error.
@@ -193,7 +193,7 @@ export function NavigationPanelBody(props: ProjectSessionTreeProps) {
         {flow === "session" && currentProject ? (
           <ProjectSwitch
             currentProject={currentProject}
-            onCreateProject={() => props.onCreateProject()}
+            onCreateProject={() => props.onCreateProject({ startConversation: true })}
             onSelectProject={props.onSelectProject}
             projects={props.projects}
           />
@@ -240,7 +240,7 @@ export function NavigationPanelBody(props: ProjectSessionTreeProps) {
                 <IconButton
                   aria-label={t("sidebar.newProject")}
                   data-action="new-project"
-                  onClick={() => navigate(props.onCreateProject)()}
+                  onClick={() => navigate(props.onCreateProject)({ startConversation: true })}
                   variant="outline"
                 >
                   <FolderPlus aria-hidden="true" />
@@ -287,7 +287,7 @@ export function NavigationPanelBody(props: ProjectSessionTreeProps) {
       </div>
       <div className="vk-nav-list" onKeyDown={(event) => { handleSessionTreeKey(event); }} ref={listRef}>
         {props.projects.length === 0 ? (
-          <NoProjectsEntry onCreateProject={() => navigate(props.onCreateProject)()} />
+          <NoProjectsEntry onCreateProject={() => navigate(props.onCreateProject)({ startConversation: true })} />
         ) : flow === "session" && currentProject ? (
           <SessionFlowList {...props} currentProject={currentProject} query={normalizedQuery} />
         ) : (
@@ -779,7 +779,7 @@ function ProjectSessionTree(props: ProjectSessionTreeProps & {
         filtering={filtering}
         isConversationVisible={(conversation) => matchesQuery(conversation.title, props.query)}
         isProjectVisible={isProjectVisible}
-        onCreateProject={(groupId) => navigate(props.onCreateProject)(groupId)}
+        onCreateProject={(groupId) => navigate(props.onCreateProject)({ groupId })}
         onGroupAction={props.onProjectGroupAction}
         onSortingChange={setSorting}
         projectTree={props.projectTree ?? EMPTY_PROJECT_TREE}
