@@ -1,10 +1,10 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "xiaomi",
-  "revision": 3,
-  "published_at": "2026-11-10T12:33:04Z",
+  "revision": 4,
+  "published_at": "2026-11-10T13:12:52Z",
   "engine_contract": {
-    "minimum_manifest_engine": 1,
+    "minimum_manifest_engine": 5,
     "required_protocol_profiles": [
       "openai-chat-completions.v1"
     ],
@@ -46,6 +46,24 @@
           "credential_mode": "token",
           "billing_kind": "pay_as_you_go",
           "key_prefix": "sk-",
+          "account_usage_query": "xiaomi_mimo_balance",
+          "default_usage_scopes": [
+            "interactive_agent",
+            "internal_background",
+            "external_service"
+          ]
+        },
+        {
+          "credential_profile_id": "browser-login",
+          "display_name": "MiMo Account Login",
+          "credential_mode": "auth",
+          "authorization": {
+            "kind": "registered_oauth",
+            "provider": "xiaomi_mimo"
+          },
+          "billing_kind": "pay_as_you_go",
+          "key_prefix": "sk-",
+          "account_usage_query": "xiaomi_mimo_balance",
           "default_usage_scopes": [
             "interactive_agent",
             "internal_background",
@@ -122,6 +140,7 @@
           "credential_mode": "token",
           "billing_kind": "token_plan",
           "key_prefix": "tp-",
+          "account_usage_query": "xiaomi_mimo_token_plan",
           "default_usage_scopes": [
             "interactive_agent"
           ]
@@ -132,6 +151,21 @@
           "credential_mode": "token",
           "billing_kind": "token_plan",
           "key_prefix": "ttp-",
+          "default_usage_scopes": [
+            "interactive_agent"
+          ]
+        },
+        {
+          "credential_profile_id": "browser-login",
+          "display_name": "Personal MiMo Account Login",
+          "credential_mode": "auth",
+          "authorization": {
+            "kind": "registered_oauth",
+            "provider": "xiaomi_mimo"
+          },
+          "billing_kind": "token_plan",
+          "key_prefix": "tp-",
+          "account_usage_query": "xiaomi_mimo_token_plan",
           "default_usage_scopes": [
             "interactive_agent"
           ]
@@ -216,6 +250,7 @@
           "credential_mode": "token",
           "billing_kind": "token_plan",
           "key_prefix": "tp-",
+          "account_usage_query": "xiaomi_mimo_token_plan",
           "default_usage_scopes": [
             "interactive_agent"
           ]
@@ -226,6 +261,21 @@
           "credential_mode": "token",
           "billing_kind": "token_plan",
           "key_prefix": "ttp-",
+          "default_usage_scopes": [
+            "interactive_agent"
+          ]
+        },
+        {
+          "credential_profile_id": "browser-login",
+          "display_name": "Personal MiMo Account Login",
+          "credential_mode": "auth",
+          "authorization": {
+            "kind": "registered_oauth",
+            "provider": "xiaomi_mimo"
+          },
+          "billing_kind": "token_plan",
+          "key_prefix": "tp-",
+          "account_usage_query": "xiaomi_mimo_token_plan",
           "default_usage_scopes": [
             "interactive_agent"
           ]
@@ -310,6 +360,7 @@
           "credential_mode": "token",
           "billing_kind": "token_plan",
           "key_prefix": "tp-",
+          "account_usage_query": "xiaomi_mimo_token_plan",
           "default_usage_scopes": [
             "interactive_agent"
           ]
@@ -320,6 +371,21 @@
           "credential_mode": "token",
           "billing_kind": "token_plan",
           "key_prefix": "ttp-",
+          "default_usage_scopes": [
+            "interactive_agent"
+          ]
+        },
+        {
+          "credential_profile_id": "browser-login",
+          "display_name": "Personal MiMo Account Login",
+          "credential_mode": "auth",
+          "authorization": {
+            "kind": "registered_oauth",
+            "provider": "xiaomi_mimo"
+          },
+          "billing_kind": "token_plan",
+          "key_prefix": "tp-",
+          "account_usage_query": "xiaomi_mimo_token_plan",
           "default_usage_scopes": [
             "interactive_agent"
           ]
@@ -887,7 +953,8 @@
       "description": "Transcribe one local WAV or MP3 recording.",
       "service_entry_id": "public-api",
       "credential_profile_ids": [
-        "api-key"
+        "api-key",
+        "browser-login"
       ],
       "upstream_target_id": "mimo-v2.5-asr",
       "availability_model_ids_any": [
@@ -936,7 +1003,8 @@
       "description": "Synthesize speech using a built-in MiMo voice.",
       "service_entry_id": "public-api",
       "credential_profile_ids": [
-        "api-key"
+        "api-key",
+        "browser-login"
       ],
       "upstream_target_id": "mimo-v2.5-tts",
       "availability_model_ids_any": [
@@ -1004,7 +1072,8 @@
       "description": "Design a voice from its description and synthesize the given text.",
       "service_entry_id": "public-api",
       "credential_profile_ids": [
-        "api-key"
+        "api-key",
+        "browser-login"
       ],
       "upstream_target_id": "mimo-v2.5-tts-voicedesign",
       "availability_model_ids_any": [
@@ -1064,7 +1133,8 @@
       "description": "Synthesize speech using one local WAV or MP3 voice sample.",
       "service_entry_id": "public-api",
       "credential_profile_ids": [
-        "api-key"
+        "api-key",
+        "browser-login"
       ],
       "upstream_target_id": "mimo-v2.5-tts-voiceclone",
       "availability_model_ids_any": [

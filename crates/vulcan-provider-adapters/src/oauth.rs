@@ -27,6 +27,7 @@ mod open_design;
 mod opencode;
 mod openvulcan;
 mod tokenrhythm;
+mod xiaomi;
 pub use openvulcan::revoke_openvulcan_authorization;
 
 const OPENAI_CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -101,6 +102,9 @@ pub enum OAuthProviderKind {
     /// TokenRhythm account login issuing a managed inference key and wallet access.
     /// 签发托管推理密钥与钱包访问的 TokenRhythm 账户登录。
     TokenRhythm,
+    /// Xiaomi MiMo browser authorization delivering an encrypted API key.
+    /// 交付加密 API Key 的小米 MiMo 浏览器授权。
+    XiaomiMimo,
 }
 
 /// Derives one opaque transaction binding from an exact provider authorization scope.
@@ -109,9 +113,9 @@ pub enum OAuthProviderKind {
 /// # Parameters
 /// 参数
 /// `provider_id`, `service_entry_id`, and `credential_profile_id` identify the selected scope;
-/// `authorization` is the complete compiled declaration frozen by the transaction.
-/// `provider_id`、`service_entry_id` 与 `credential_profile_id` 标识选中作用域；`authorization`
-/// 是由事务冻结的完整已编译声明。
+/// `service_base_url` and `authorization` pin the selected service route and compiled declaration.
+/// `provider_id`、`service_entry_id` 与 `credential_profile_id` 标识选中作用域；
+/// `service_base_url` 与 `authorization` 固定选中的服务路由和已编译声明。
 ///
 /// # Returns
 /// 返回值
@@ -122,12 +126,18 @@ pub fn credential_authorization_binding(
     provider_id: &str,
     service_entry_id: &str,
     credential_profile_id: &str,
+    service_base_url: &str,
     authorization: &CredentialAuthorization,
 ) -> Result<String, String> {
     let declaration = serde_json::to_vec(authorization)
         .map_err(|_| String::from("Failed to bind the credential authorization declaration."))?;
     let mut digest = Sha256::new();
-    for identity in [provider_id, service_entry_id, credential_profile_id] {
+    for identity in [
+        provider_id,
+        service_entry_id,
+        credential_profile_id,
+        service_base_url,
+    ] {
         digest.update(identity.len().to_be_bytes());
         digest.update(identity.as_bytes());
     }
@@ -520,8 +530,10 @@ impl OAuthAuthorizationRuntime {
     /// `authorization` is the compiled Manifest declaration, `authorization_binding` freezes its
     /// exact scope, `required_secret_prefix` is an optional declared token constraint, and `client`
     /// supplies user-owned OAuth settings when required.
+    /// `service_base_url` is the selected service route for endpoint-bound authorization.
     /// `authorization` 是已编译 Manifest 声明，`authorization_binding` 冻结其精确作用域，
     /// `required_secret_prefix` 是可选已声明 Token 约束，`client` 在需要时提供用户自有 OAuth 设置。
+    /// `service_base_url` 是绑定服务地址的授权所选用的服务路由。
     ///
     /// # Returns
     /// 返回值
@@ -532,9 +544,16 @@ impl OAuthAuthorizationRuntime {
         authorization: &CredentialAuthorization,
         authorization_binding: String,
         required_secret_prefix: Option<String>,
+        service_base_url: &str,
         client: OAuthClientConfiguration,
     ) -> Result<OAuthAuthorizationChallenge, String> {
         match authorization {
+            CredentialAuthorization::RegisteredOauth {
+                provider: OAuthProviderKind::XiaomiMimo,
+            } => {
+                self.start_xiaomi_mimo(authorization_binding, service_base_url)
+                    .await
+            }
             CredentialAuthorization::RegisteredOauth { provider } => {
                 self.start_registered_oauth(*provider, authorization_binding, client)
                     .await
@@ -2514,7 +2533,8 @@ async fn bind_callback_listener(provider_kind: OAuthProviderKind) -> Result<TcpL
         | OAuthProviderKind::OpenDesign
         | OAuthProviderKind::TokenRhythm
         | OAuthProviderKind::OpencodeConsole
-        | OAuthProviderKind::KimiCodingPlan => {
+        | OAuthProviderKind::KimiCodingPlan
+        | OAuthProviderKind::XiaomiMimo => {
             return Err(String::from(
                 "This authorization flow requires its dedicated callback runtime.",
             ));
@@ -2548,7 +2568,8 @@ fn callback_redirect_uri(
         | OAuthProviderKind::OpenDesign
         | OAuthProviderKind::TokenRhythm
         | OAuthProviderKind::OpencodeConsole
-        | OAuthProviderKind::KimiCodingPlan => Err(String::from(
+        | OAuthProviderKind::KimiCodingPlan
+        | OAuthProviderKind::XiaomiMimo => Err(String::from(
             "This authorization flow requires its dedicated callback runtime.",
         )),
     }
@@ -2613,7 +2634,8 @@ fn build_oauth_flow(
             | OAuthProviderKind::OpenDesign
             | OAuthProviderKind::TokenRhythm
             | OAuthProviderKind::OpencodeConsole
-            | OAuthProviderKind::KimiCodingPlan => {
+            | OAuthProviderKind::KimiCodingPlan
+            | OAuthProviderKind::XiaomiMimo => {
                 return Err(String::from(
                     "This authorization flow must be constructed by its dedicated runtime.",
                 ));
@@ -2662,7 +2684,8 @@ fn build_oauth_flow(
             | OAuthProviderKind::OpenDesign
             | OAuthProviderKind::TokenRhythm
             | OAuthProviderKind::OpencodeConsole
-            | OAuthProviderKind::KimiCodingPlan => {
+            | OAuthProviderKind::KimiCodingPlan
+            | OAuthProviderKind::XiaomiMimo => {
                 return Err(String::from(
                     "This authorization flow must use its dedicated authorization URL.",
                 ));
@@ -2783,6 +2806,14 @@ fn validate_callback_state(
 }
 
 async fn read_callback(stream: &mut TcpStream) -> Result<(String, String), String> {
+    parse_callback_request(&read_callback_headers(stream).await?)
+}
+
+/// Reads a bounded request header from the connected loopback browser stream.
+/// 从已连接的浏览器回环流读取有界请求头。
+/// `stream` is the accepted connection; returns header bytes for protocol-specific validation.
+/// `stream` 是已接受的连接；返回供具体协议校验的请求头字节。
+async fn read_callback_headers(stream: &mut TcpStream) -> Result<Vec<u8>, String> {
     let mut buffer = vec![0_u8; OAUTH_CALLBACK_MAX_BYTES];
     let mut length = 0_usize;
     loop {
@@ -2804,7 +2835,8 @@ async fn read_callback(stream: &mut TcpStream) -> Result<(String, String), Strin
             break;
         }
     }
-    parse_callback_request(&buffer[..length])
+    buffer.truncate(length);
+    Ok(buffer)
 }
 
 /// Parses one complete loopback HTTP request without retaining request headers.
@@ -2859,7 +2891,7 @@ fn callback_html(succeeded: bool) -> &'static str {
 
 async fn write_callback_response(stream: &mut TcpStream, body: &str) -> Result<(), String> {
     let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         body.len(),
         body
     );
@@ -2988,7 +3020,8 @@ async fn exchange_authorization_code(
         | OAuthProviderKind::OpenDesign
         | OAuthProviderKind::TokenRhythm
         | OAuthProviderKind::OpencodeConsole
-        | OAuthProviderKind::KimiCodingPlan => {
+        | OAuthProviderKind::KimiCodingPlan
+        | OAuthProviderKind::XiaomiMimo => {
             return Err(String::from(
                 "This authorization flow must use its dedicated token exchange.",
             ));
@@ -3684,13 +3717,24 @@ mod tests {
         let commandcode = CredentialAuthorization::RegisteredOauth {
             provider: OAuthProviderKind::OpenAiCodex,
         };
-        let first =
-            credential_authorization_binding("commandcode", "provider-api", "login", &commandcode)
-                .expect("authorization binding");
+        let first = credential_authorization_binding(
+            "commandcode",
+            "provider-api",
+            "login",
+            "https://example.test",
+            &commandcode,
+        )
+        .expect("authorization binding");
         assert_eq!(
             first,
-            credential_authorization_binding("commandcode", "provider-api", "login", &commandcode)
-                .expect("stable authorization binding")
+            credential_authorization_binding(
+                "commandcode",
+                "provider-api",
+                "login",
+                "https://example.test",
+                &commandcode
+            )
+            .expect("stable authorization binding")
         );
         assert_ne!(
             first,
@@ -3698,6 +3742,7 @@ mod tests {
                 "commandcode",
                 "provider-api",
                 "user-api-key",
+                "https://example.test",
                 &commandcode
             )
             .expect("profile-scoped authorization binding")
@@ -3708,6 +3753,7 @@ mod tests {
                 "commandcode",
                 "provider-api",
                 "login",
+                "https://example.test",
                 &CredentialAuthorization::RegisteredOauth {
                     provider: OAuthProviderKind::GoogleGemini,
                 },

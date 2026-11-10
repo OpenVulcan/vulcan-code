@@ -388,14 +388,20 @@ pub(crate) async fn start(
         .authorization
         .as_ref()
         .ok_or_else(|| String::from("Core account entry omitted authorization."))?;
-    let binding =
-        credential_authorization_binding(&provider.id, &entry.id, &profile.id, authorization)?;
+    let binding = credential_authorization_binding(
+        &provider.id,
+        &entry.id,
+        &profile.id,
+        &entry.base_url,
+        authorization,
+    )?;
     let challenge = runtime
         .oauth()
         .start(
             authorization,
             binding.clone(),
             None,
+            &entry.base_url,
             OAuthClientConfiguration {
                 return_page_locale: crate::service_ui_locale_from_state(&state),
                 ..OAuthClientConfiguration::default()
@@ -502,8 +508,13 @@ pub(crate) async fn commit(
         .authorization
         .as_ref()
         .ok_or_else(|| String::from("OpenVulcan authorization declaration disappeared."))?;
-    if credential_authorization_binding(&provider.id, &entry.id, &profile.id, authorization)?
-        != pending.authorization_binding
+    if credential_authorization_binding(
+        &provider.id,
+        &entry.id,
+        &profile.id,
+        &entry.base_url,
+        authorization,
+    )? != pending.authorization_binding
     {
         return Err(String::from(
             "OpenVulcan authorization declaration changed during login.",

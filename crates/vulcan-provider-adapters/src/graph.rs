@@ -833,6 +833,12 @@ pub enum AccountUsageQueryKind {
     /// OpenAI Codex subscription rate-limit windows and credits from the ChatGPT backend.
     /// 来自 ChatGPT 后端的 OpenAI Codex 订阅限额窗口与 Credits。
     OpenAiCodexUsage,
+    /// Xiaomi MiMo pay-as-you-go balance and its account currency.
+    /// 小米 MiMo 按量付费余额与账户币种。
+    XiaomiMimoBalance,
+    /// Xiaomi MiMo personal Token Plan credits for the selected cluster.
+    /// 小米 MiMo 所选集群的个人 Token Plan 积分。
+    XiaomiMimoTokenPlan,
 }
 
 impl AccountUsageQueryKind {

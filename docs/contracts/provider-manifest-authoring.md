@@ -393,6 +393,15 @@ OpenCode Console 使用 `opencode_console` 注册设备授权，凭据固定工�
 请求使用 Vulcan Code 自有客户端身份；Console 凭据与旧 Go Key 路由分开，
 具体协议和同步触发点见 [OpenCode Go 协议记录](providers/opencode-go-verified-facts.md)。
 
+小米 MiMo 使用 `xiaomi_mimo` 注册浏览器授权，要求 Manifest 引擎契约 5。官方授权页将一次性
+加密的 API Key 回传本机，宿主按授权前选定的服务地址和密钥类型核验后保存静态凭据。普通 API
+使用 `xiaomi_mimo_balance` 查询账户币种和总余额，个人套餐使用 `xiaomi_mimo_token_plan` 在
+所选中国、新加坡或欧洲集群查询当期积分。团队密钥的查询能力以小米另行发布的接口契约为准。
+同步触发点为 MiMo Code 的 `packages/cli/src/plugin/mimo.ts`、官方授权页回调及财务 API 变更。
+参见 [MiMo Code 授权](https://mimo.mi.com/docs/zh-CN/tokenplan/integration/mimo-code)、
+[余额](https://mimo.mi.com/docs/zh-CN/api/asset/balance-get)和
+[套餐余量](https://mimo.mi.com/docs/zh-CN/api/asset/credits-get)。
+
 LLM 运行时只冻结连接、秘密引用、模型、协议和路由，不把可续期 Access Token 冻结到完整智能体执行结束。
 每次真实 LLM Provider 请求前，宿主必须为同一个 `secret_reference` 重读最新修订版；其他请求完成 OAuth
 刷新后，当前长任务的下一次请求必须立即使用新 Token。上游对可安全重放且尚未产生语义输出或副作用

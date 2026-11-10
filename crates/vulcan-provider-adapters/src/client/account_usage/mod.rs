@@ -13,6 +13,7 @@ mod opencode;
 mod openrouter;
 mod tavily;
 mod tokenrhythm;
+mod xiaomi;
 
 pub(super) use codex::query_openai_codex_usage;
 pub(super) use command_code::query_command_code_usage;
@@ -25,6 +26,7 @@ pub(super) use opencode::query_opencode_go;
 pub(super) use openrouter::query_openrouter_credits;
 pub(super) use tavily::query_tavily_credits;
 pub(super) use tokenrhythm::query_tokenrhythm_wallet;
+pub(super) use xiaomi::query_xiaomi_usage;
 
 /// Returns the current Unix timestamp in milliseconds without manufacturing an epoch value.
 /// 返回当前 Unix 毫秒时间戳，且不会伪造纪元零值。

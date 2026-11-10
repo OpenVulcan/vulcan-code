@@ -41,7 +41,9 @@ pub(super) fn account_usage_secret_reference<'a>(
         | crate::AccountUsageQueryKind::OpenDesignWallet
         | crate::AccountUsageQueryKind::TokenRhythmWallet
         | crate::AccountUsageQueryKind::CommandCodeUsage
-        | crate::AccountUsageQueryKind::OpenAiCodexUsage => {
+        | crate::AccountUsageQueryKind::OpenAiCodexUsage
+        | crate::AccountUsageQueryKind::XiaomiMimoBalance
+        | crate::AccountUsageQueryKind::XiaomiMimoTokenPlan => {
             Ok(connection.secret_reference.as_str())
         }
     }
@@ -281,7 +283,9 @@ impl PublicAiRuntime {
                 crate::AccountUsageQueryKind::CommandCodeUsage => true,
                 crate::AccountUsageQueryKind::OpenDesignWallet => true,
                 crate::AccountUsageQueryKind::TokenRhythmWallet => true,
-                crate::AccountUsageQueryKind::OpenAiCodexUsage => true,
+                crate::AccountUsageQueryKind::OpenAiCodexUsage
+                | crate::AccountUsageQueryKind::XiaomiMimoBalance
+                | crate::AccountUsageQueryKind::XiaomiMimoTokenPlan => true,
                 crate::AccountUsageQueryKind::OpenRouterCredits => {
                     connection.management_secret_reference.is_some()
                 }

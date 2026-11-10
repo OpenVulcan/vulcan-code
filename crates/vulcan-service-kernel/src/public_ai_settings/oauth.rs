@@ -131,6 +131,7 @@ pub(crate) async fn service_start_public_ai_oauth(
         request.provider_id.as_str(),
         request.service_entry_id.as_str(),
         request.credential_profile_id.as_str(),
+        &entry.base_url,
         authorization,
     )?;
     let challenge = runtime
@@ -139,6 +140,7 @@ pub(crate) async fn service_start_public_ai_oauth(
             authorization,
             authorization_binding,
             credential_profile.key_prefix.clone(),
+            &entry.base_url,
             request.client,
         )
         .await?;
@@ -260,6 +262,7 @@ pub(crate) async fn service_commit_public_ai_oauth_connection(
         request.provider_id.as_str(),
         request.service_entry_id.as_str(),
         request.credential_profile_id.as_str(),
+        &entry.base_url,
         authorization,
     )?;
     if snapshot.authorization_binding != expected_authorization_binding {

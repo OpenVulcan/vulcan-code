@@ -63,6 +63,7 @@ export function credentialUsageIsNonPlanAccount(
   credentialProfile: PublicAiCredentialProfile | undefined,
 ): boolean {
   return credentialProfile?.account_usage_query === "deep_seek_balance"
+    || credentialProfile?.account_usage_query === "xiaomi_mimo_balance"
     || credentialProfile?.account_usage_query === "node_ai_balance"
 }
 
@@ -284,7 +285,8 @@ function CredentialUsageSummary(props: {
                 ? opencodeUsageWindowLabel(window, t)
                 : window.display_name}
           window={window}
-          showReset={props.credentialProfile?.account_usage_query === "opencode_go"}
+          showReset={props.credentialProfile?.account_usage_query === "opencode_go"
+            || props.credentialProfile?.account_usage_query === "xiaomi_mimo_token_plan"}
         />
       ))}
     </div>

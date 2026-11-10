@@ -32,6 +32,7 @@ pub mod registry;
 pub mod runtime;
 mod tokenrhythm;
 mod upload_engine;
+mod xiaomi;
 
 pub use operation_media_source::{
     ProviderToolMediaSource, ProviderToolMediaSourceResolver, ProviderToolResourceContext,

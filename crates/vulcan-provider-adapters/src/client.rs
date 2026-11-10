@@ -42,7 +42,7 @@ use account_usage::{
     query_command_code_usage, query_deepseek_balance, query_kimi_coding_plan,
     query_minimax_token_plan, query_nodeai_balance, query_open_design_wallet,
     query_openai_codex_usage, query_opencode_go, query_openrouter_credits, query_tavily_credits,
-    query_tokenrhythm_wallet,
+    query_tokenrhythm_wallet, query_xiaomi_usage,
 };
 pub use minimax_registration::MiniMaxKeyRegistration;
 use model_discovery::{
@@ -585,6 +585,10 @@ impl ProviderMetadataClient for HttpProviderMetadataClient {
             }
             AccountUsageQueryKind::OpenAiCodexUsage => {
                 query_openai_codex_usage(&self.http, entry, secret).await
+            }
+            kind @ (AccountUsageQueryKind::XiaomiMimoBalance
+            | AccountUsageQueryKind::XiaomiMimoTokenPlan) => {
+                query_xiaomi_usage(&self.http, entry, secret.expose_value(), kind).await
             }
         };
         match result {

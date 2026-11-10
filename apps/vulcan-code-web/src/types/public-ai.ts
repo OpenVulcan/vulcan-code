@@ -19,7 +19,8 @@ export type OAuthProviderKind =
   | "mini_max_china_token_plan"
   | "kimi_coding_plan"
   | "open_design"
-  | "token_rhythm";
+  | "token_rhythm"
+  | "xiaomi_mimo";
 
 // PublicAiCredentialAuthorization declares a registered OAuth primitive or a Manifest browser callback.
 // PublicAiCredentialAuthorization 声明已注册 OAuth 原语或 Manifest 浏览器回调。
@@ -80,7 +81,9 @@ export interface PublicAiCredentialProfile {
     | "command_code_usage"
     | "open_design_wallet"
     | "token_rhythm_wallet"
-    | "open_ai_codex_usage";
+    | "open_ai_codex_usage"
+    | "xiaomi_mimo_balance"
+    | "xiaomi_mimo_token_plan";
   authentication?: string;
   key_prefix?: string;
 }
@@ -621,7 +624,9 @@ export interface PublicAiConnection {
     | "command_code_usage"
     | "open_design_wallet"
     | "token_rhythm_wallet"
-    | "open_ai_codex_usage";
+    | "open_ai_codex_usage"
+    | "xiaomi_mimo_balance"
+    | "xiaomi_mimo_token_plan";
   // Whether usage refresh needs a separate provider-management credential.
   // 用量刷新是否需要独立的供应商管理凭据。
   usage_requires_management_key: boolean;

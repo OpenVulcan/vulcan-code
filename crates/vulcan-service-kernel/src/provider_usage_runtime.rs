@@ -107,7 +107,8 @@ fn account_usage_snapshot_kind(query: AccountUsageQueryKind) -> &'static str {
         AccountUsageQueryKind::MiniMaxTokenPlan
         | AccountUsageQueryKind::KimiCodingPlan
         | AccountUsageQueryKind::OpencodeGo
-        | AccountUsageQueryKind::OpenAiCodexUsage => "token_plan",
+        | AccountUsageQueryKind::OpenAiCodexUsage
+        | AccountUsageQueryKind::XiaomiMimoTokenPlan => "token_plan",
         AccountUsageQueryKind::OpenRouterCredits
         | AccountUsageQueryKind::OpenVulcan
         | AccountUsageQueryKind::TavilyCredits
@@ -115,7 +116,8 @@ fn account_usage_snapshot_kind(query: AccountUsageQueryKind) -> &'static str {
         AccountUsageQueryKind::DeepSeekBalance
         | AccountUsageQueryKind::NodeAiBalance
         | AccountUsageQueryKind::OpenDesignWallet
-        | AccountUsageQueryKind::TokenRhythmWallet => "balance",
+        | AccountUsageQueryKind::TokenRhythmWallet
+        | AccountUsageQueryKind::XiaomiMimoBalance => "balance",
         AccountUsageQueryKind::Unsupported => "unsupported",
     }
 }

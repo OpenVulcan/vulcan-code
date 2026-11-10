@@ -229,6 +229,7 @@ crossterm = "0.29.0"
 regex = "1.13.1"
 regex-syntax = "0.8.8"
 rmcp = { version = "3.1", default-features = false }
+ring = "0.17.14"
 rustls = { version = "0.23.45", default-features = false, features = ["ring"] }
 rustix = { version = "1.1.4", features = ["process"] }
 semver = "1"
