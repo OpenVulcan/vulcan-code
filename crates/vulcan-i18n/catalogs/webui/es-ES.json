@@ -1,4 +1,10 @@
 {
+  "settings.composerEnterSend.label": "Modo de envío con Enter",
+  "settings.composerEnterSend.description": "Mientras se ejecuta una tarea, Enter usa el modo seleccionado y Ctrl+Enter usa el contrario. Si la conversación está inactiva, el mensaje se envía de inmediato.",
+  "settings.composerEnterSend.queue": "Poner en cola",
+  "settings.composerEnterSend.insert": "Insertar en la tarea actual",
+  "palette.shortcuts.sendAlternate": "Enviar con el modo contrario",
+  "conversationActions.insertUnconfirmed": "Se envió el mensaje, pero no se pudo confirmar su inserción.",
   "pluginMaintenance.action.usage": "Ver dónde se usa",
   "pluginMaintenance.action.recovery": "Revisar operaciones sin terminar",
   "pluginMaintenance.action.capacity": "Ajustar recursos de ejecución",

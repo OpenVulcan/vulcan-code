@@ -1,4 +1,10 @@
 {
+  "settings.composerEnterSend.label": "Enter send behavior",
+  "settings.composerEnterSend.description": "While a task is running, Enter uses the selected behavior and Ctrl+Enter uses the opposite. An idle conversation starts immediately.",
+  "settings.composerEnterSend.queue": "Queue",
+  "settings.composerEnterSend.insert": "Insert into current task",
+  "palette.shortcuts.sendAlternate": "Send with the opposite behavior",
+  "conversationActions.insertUnconfirmed": "Message submitted, but insertion could not be confirmed.",
   "pluginMaintenance.action.usage": "See where it is in use",
   "pluginMaintenance.action.recovery": "Check unfinished operations",
   "pluginMaintenance.action.capacity": "Adjust runtime resources",

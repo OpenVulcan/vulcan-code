@@ -1,4 +1,10 @@
 {
+  "settings.composerEnterSend.label": "Режим отправки по Enter",
+  "settings.composerEnterSend.description": "Во время выполнения задачи Enter использует выбранный режим, а Ctrl+Enter — противоположный. Если беседа неактивна, сообщение отправляется сразу.",
+  "settings.composerEnterSend.queue": "Поставить в очередь",
+  "settings.composerEnterSend.insert": "Добавить в текущую задачу",
+  "palette.shortcuts.sendAlternate": "Отправить в противоположном режиме",
+  "conversationActions.insertUnconfirmed": "Сообщение отправлено, но вставку подтвердить не удалось.",
   "pluginMaintenance.action.usage": "Где используется",
   "pluginMaintenance.action.recovery": "Проверить незавершённые операции",
   "pluginMaintenance.action.capacity": "Настроить ресурсы выполнения",

@@ -1,4 +1,10 @@
 {
+  "settings.composerEnterSend.label": "Mode d’envoi avec Entrée",
+  "settings.composerEnterSend.description": "Pendant une tâche, Entrée utilise le mode choisi et Ctrl+Entrée utilise le mode inverse. Si la conversation est inactive, l’envoi est immédiat.",
+  "settings.composerEnterSend.queue": "Mettre en file d’attente",
+  "settings.composerEnterSend.insert": "Insérer dans la tâche en cours",
+  "palette.shortcuts.sendAlternate": "Envoyer avec le mode inverse",
+  "conversationActions.insertUnconfirmed": "Le message a été envoyé, mais son insertion n’a pas pu être confirmée.",
   "pluginMaintenance.action.usage": "Voir l’utilisation",
   "pluginMaintenance.action.recovery": "Vérifier les opérations inachevées",
   "pluginMaintenance.action.capacity": "Ajuster les ressources d’exécution",

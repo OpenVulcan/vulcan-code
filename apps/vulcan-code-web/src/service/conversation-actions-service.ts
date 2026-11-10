@@ -799,13 +799,15 @@ export async function editPendingPrompt(entryId: string): Promise<PendingPromptE
   return serviceClient.request<PendingPromptEditOutcome>("service_edit_pending_prompt", { entryId });
 }
 
-// insertPendingPrompt routes one visible queue item through the shared pending-prompt router.
-// insertPendingPrompt 通过共享待发送提示词路由器插入单条可见队列项。
-export async function insertPendingPrompt(entryId: string): Promise<boolean> {
+// insertPendingPrompt requests insertion of entryId in conversationId, defaulting to the selected conversation.
+// insertPendingPrompt 请求在 conversationId 中插入 entryId，省略时使用当前选中的会话。
+// Returns whether the service accepted the insertion request.
+// 返回服务是否接收了插队请求。
+export async function insertPendingPrompt(entryId: string, conversationId?: string): Promise<boolean> {
   if (!hasServiceRuntime()) {
     return false;
   }
-  return serviceClient.request<boolean>("service_insert_pending_prompt", { entryId });
+  return serviceClient.request<boolean>("service_insert_pending_prompt", { entryId, conversationId });
 }
 
 // removePendingPrompt removes one queued prompt from the selected conversation queue.

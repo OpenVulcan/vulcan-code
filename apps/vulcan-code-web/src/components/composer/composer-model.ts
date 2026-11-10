@@ -141,6 +141,9 @@ export interface ComposerDedicatedSessionSnapshot {
 // ComposerSubmission contains the user prompt and runtime quick-control values.
 // ComposerSubmission 包含用户提示词与运行时快捷控制取值。
 export interface ComposerSubmission {
+  // Requests insertion of this exact submission if the service admits it to the queue.
+  // 若服务将本次提交接纳到队列，则请求插入该精确提交。
+  insertIntoCurrentTurn?: true;
   // Stable composer draft slot whose attachment lease transfers with this submission.
   // 随本次提交转移附件租约的稳定输入区草稿槽。
   draftSlotKey: string;

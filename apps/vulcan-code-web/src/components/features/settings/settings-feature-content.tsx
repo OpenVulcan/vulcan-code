@@ -34,6 +34,7 @@ import { VoiceInputSettingsSection } from "./voice-input-settings";
 import { ToolChainSettingsSection } from "./tool-chain-settings";
 import { ThinkingPopupSettingsSection } from "./thinking-popup-settings";
 import { ConversationLinkSettingsSection } from "./conversation-link-settings";
+import { ComposerEnterSendSettingsSection } from "./composer-enter-send-settings";
 import { SystemPromptSettingsCard } from "./system-prompt-settings";
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types";
 import {
@@ -153,6 +154,7 @@ function SettingsRoutedPage(props: SettingsFeatureContentProps) {
         commandShell={props.workbench.hostTools?.commandShell}
         onOpenUsageStatistics={props.onOpenUsageStatistics}
         outputStyleSettings={<>
+          <ComposerEnterSendSettingsSection />
           <OutputStyleSettingsSection actions={props.actions} outputStyleCatalog={props.workbench.outputStyleCatalog} />
           <AnswerModeSettingsSection actions={props.actions} defaultAnswerMode={props.workbench.defaultAnswerMode} />
           <ToolCollapseSettingsSection />

@@ -7,6 +7,7 @@ import {
 import type { ModelPickerChoice } from "@/components/composer/model-picker-control";
 import { ModelReasoningPickerControl } from "@/components/composer/model-reasoning-picker-control";
 import type { ComposerSlashCommandResult, ComposerSubmission } from "@/components/composer/composer-model";
+import type { ComposerSendMode } from "@/components/composer/composer-send-preference";
 import {
   ComposerAiCapabilityControl,
   ComposerAttachmentMenu,
@@ -592,13 +593,13 @@ export function ComposerPanel(props: {
   const { admit: admitAttachments, dialog: attachmentOverflowDialog } = useComposerAttachmentSubmissionGate(attachmentPreparation, sendDraft);
   // handleComposerSend routes the visible stop action before applying barriers shared by button and keyboard submission.
   // handleComposerSend 先路由界面显示的停止操作，再应用按钮和键盘提交共同遵守的屏障。
-  // Parameters: none; returns after stopping the current run or validating and submitting the current draft.
-  // 参数：无；停止当前运行或校验并提交当前草稿后返回。
-  const handleComposerSend = React.useCallback(async () => {
+  // sendMode selects delivery and allowStop permits stopping an empty draft. Returns when the action settles.
+  // sendMode 选择发送方式，allowStop 允许空草稿触发停止。操作结束后返回。
+  const handleComposerSend = React.useCallback(async (sendMode: ComposerSendMode = "queue", allowStop = true) => {
     // Match the toolbar's stop action: unsent staging and draft replacement must not block stopping a running turn.
     // 与工具栏的停止操作保持一致：未完成的暂存和草稿替换不得阻止停止运行中的轮次。
     if (props.isConversationRunning && !draftInput.trim() && attachments.length === 0) {
-      await sendDraft();
+      if (allowStop) await sendDraft();
       return;
     }
     if (pendingPromptEditRef.current) return;
@@ -607,8 +608,8 @@ export function ComposerPanel(props: {
       return;
     }
     if (providerToolSettingsBlocked || voice.busy) return;
-    if (!admitAttachments()) return;
-    await sendDraft();
+    if (!admitAttachments(sendMode)) return;
+    await sendDraft(sendMode);
   }, [
     attachments.length,
     admitAttachments,

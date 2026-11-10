@@ -210,6 +210,21 @@ const handleSubmitConversationPrompt = React.useCallback(async (submission: Comp
     if (ack.clientSubmissionId !== clientSubmissionId) {
       throw new Error("Service acknowledgement did not match the active submission.");
     }
+    if (submission.insertIntoCurrentTurn && ack.queued) {
+      // Use the acknowledged owner and action even if the user has since changed the selected conversation.
+      // 即使用户后来切换了会话，也使用服务已确认的会话和消息标识。
+      try {
+        if (!await insertPendingPrompt(ack.clientSubmissionId, ack.conversationId)) {
+          toast.error(translate("conversationActions.insertUnconfirmed"));
+        }
+      } catch (error) {
+        // Admission already succeeded. Reporting an insertion failure must never restore or duplicate the draft.
+        // 提交已经成功。报告插队失败时不能恢复或重复发送草稿。
+        toast.error(translate("conversationActions.insertUnconfirmed"), {
+          description: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     const nextConversationId = ack.conversationId || activeConversationId;
     if (nextConversationId) {
       // A successful draft submit creates the persisted id before its ordered sidebar delta is rendered.

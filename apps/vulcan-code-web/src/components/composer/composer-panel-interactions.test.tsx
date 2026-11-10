@@ -5,7 +5,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { toast } from "@/ui-kit/primitives/toast";
 import { ComposerPanel } from "./composer-panel";
 import { DEFAULT_THINKING_DISPLAY_MODE } from "@/components/conversation/thinking-display";
-import type { ComposerAttachmentSummary, PendingPromptSummary } from "@/types";
+import { ComposerEnterSendSettingsSection } from "@/components/features/settings/composer-enter-send-settings";
+import { publicAiSettingsWithInvalidDefaultFixture } from "@/test-fixtures/public-ai-settings";
+import type { ComposerAttachmentSummary, PendingPromptSummary, PublicAiSessionProviderToolSettings } from "@/types";
 
 // transport replaces only external service boundaries; composer controls and all draft hooks remain real.
 // transport 仅替换外部服务边界；输入区控件和全部草稿 Hook 均使用真实实现。
@@ -93,6 +95,13 @@ async function pressEnter(init: KeyboardEventInit = {}): Promise<KeyboardEvent> 
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // stored isolates browser preferences without relying on Node's optional localStorage.
+  // stored 隔离浏览器偏好，无需依赖 Node 的可选 localStorage。
+  const stored = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => stored.get(key) ?? null,
+    setItem: (key: string, value: string) => { stored.set(key, value); },
+  });
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   Element.prototype.scrollIntoView = vi.fn();
@@ -166,6 +175,48 @@ it("keeps Shift+Enter and IME confirmation out of the submission path", async ()
   await mount(props);
   expect((await pressEnter({ shiftKey: true })).defaultPrevented).toBe(false);
   expect((await pressEnter({ isComposing: true })).defaultPrevented).toBe(false);
+  expect(props.onSubmitPrompt).not.toHaveBeenCalled();
+  expect(props.onStopConversationRun).not.toHaveBeenCalled();
+});
+
+it.each([
+  [null, false, undefined],
+  [null, true, true],
+  ["insert", false, true],
+  ["insert", true, undefined],
+] as const)("routes Enter with preference %s and Ctrl %s to the selected delivery action", async (preference, ctrlKey, insertion) => {
+  if (preference === "insert") {
+    await act(async () => root.render(<ComposerEnterSendSettingsSection />));
+    await act(async () => host.querySelector<HTMLButtonElement>('[role="combobox"]')!.click());
+    // alternative is the only unselected option in the real settings control.
+    // alternative 是实际设置控件中唯一未选中的选项。
+    const alternative = document.querySelector<HTMLElement>('[role="option"][aria-selected="false"]')!;
+    await act(async () => alternative.click());
+  }
+  transport.loadSettings.mockResolvedValue(publicAiSettingsWithInvalidDefaultFixture());
+  transport.loadSession.mockResolvedValue({
+    enabledCapabilities: [], selections: {}, extensionTargetSets: {}, extensionModes: {},
+    mediaUnderstandingSelections: {}, conflicts: [], requestsStarted: true,
+  } satisfies PublicAiSessionProviderToolSettings);
+  transport.read.mockImplementation(async (sessionId: string) => ({ sessionId, text: "next prompt", attachments: [] }));
+  // props observes the actual submission while keeping draft persistence and key routing active.
+  // props 观察真实提交，并保留草稿持久化和按键路由。
+  const props = composerProps();
+  await mount(props);
+  expect((await pressEnter({ ctrlKey })).defaultPrevented).toBe(true);
+  expect(props.onSubmitPrompt).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+    prompt: "next prompt",
+  }));
+  expect(vi.mocked(props.onSubmitPrompt).mock.calls[0]?.[0].insertIntoCurrentTurn).toBe(insertion);
+});
+
+it("keeps an empty Ctrl+Enter and repeated Enter from stopping the active turn", async () => {
+  // props exposes both effects of the key routing while the draft is empty.
+  // props 在草稿为空时观察按键路由的两种副作用。
+  const props = composerProps();
+  await mount(props);
+  await pressEnter({ ctrlKey: true });
+  await pressEnter({ repeat: true });
   expect(props.onSubmitPrompt).not.toHaveBeenCalled();
   expect(props.onStopConversationRun).not.toHaveBeenCalled();
 });

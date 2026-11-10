@@ -409,9 +409,21 @@ pub(super) async fn dispatch(
         "service_edit_pending_prompt" => rpc_json_result(
             service_edit_pending_prompt(app, state, rpc_required_param(params, "entryId")?).await,
         ),
-        "service_insert_pending_prompt" => rpc_json_result(
-            service_insert_pending_prompt(app, state, rpc_required_param(params, "entryId")?).await,
-        ),
+        "service_insert_pending_prompt" => {
+            // entry_id comes from the queue row or the acknowledged submission's client action id.
+            // entry_id 来自队列行或已确认提交的客户端动作标识。
+            let entry_id = rpc_required_param(params, "entryId")?;
+            rpc_json_result(
+                if let Some(session_id) = rpc_optional_param(params, "conversationId")? {
+                    crate::webui_prompt_lifecycle::insert_pending_prompt_for_session(
+                        app, state, session_id, entry_id,
+                    )
+                    .await
+                } else {
+                    service_insert_pending_prompt(app, state, entry_id).await
+                },
+            )
+        }
         "service_remove_pending_prompt" => rpc_json_result(
             service_remove_pending_prompt(app, state, rpc_required_param(params, "entryId")?).await,
         ),

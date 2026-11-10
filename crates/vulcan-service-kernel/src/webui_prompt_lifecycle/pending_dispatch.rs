@@ -38,9 +38,26 @@ pub(crate) async fn service_insert_pending_prompt(
     state: SharedServiceBridgeState,
     entry_id: String,
 ) -> Result<bool, String> {
-    let selected_session_id = selected_session_id_from_state(&state)?;
+    // session_id freezes the selection used by the existing queue-row action.
+    // session_id 固定现有队列行操作使用的会话选择。
+    let session_id = selected_session_id_from_state(&state)?;
+    insert_pending_prompt_for_session(app, state, session_id, entry_id).await
+}
+
+/// Inserts the exact queued entry in its owning session without consulting the selected conversation.
+/// 在精确队列项的所属会话中执行插队，无需读取当前选中会话。
+/// `app` emits deltas, `state` holds the runtime, and `session_id` and `entry_id` identify the owner and action.
+/// `app` 发出增量，`state` 持有运行时，`session_id` 和 `entry_id` 标识所属会话和操作。
+/// Returns true on acceptance, including deferred insertion during manual compaction.
+/// 接受插队时返回 true，包括手动压缩期间延后插入的情况。
+pub(crate) async fn insert_pending_prompt_for_session(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    session_id: SessionId,
+    entry_id: String,
+) -> Result<bool, String> {
     let client_action_id = pending_prompt_action_id(&entry_id)?;
-    let handle = session_v1_handle_from_state(&state, selected_session_id).await?;
+    let handle = session_v1_handle_from_state(&state, session_id).await?;
     let identity = pending_prompt_queue_identity(handle.as_ref(), &client_action_id)?;
     {
         // Hold the same service lock as compaction settlement so an accepted request cannot miss the handoff.
@@ -48,10 +65,10 @@ pub(crate) async fn service_insert_pending_prompt(
         let mut guard = state.lock().map_err(|error| error.to_string())?;
         if guard
             .session_runtime_kernels
-            .get(&selected_session_id)
+            .get(&session_id)
             .and_then(|kernel| kernel.active_turn())
             .is_some_and(|turn| turn.kind == crate::ActiveTurnKind::ContextCompaction)
-            && let Some(task) = guard.active_stream_tasks.get_mut(&selected_session_id)
+            && let Some(task) = guard.active_stream_tasks.get_mut(&session_id)
         {
             // Check current queue membership rather than an action identity recovered from terminal history.
             // 校验当前队列成员资格，而不是仅依赖从终态历史恢复的动作身份。
@@ -84,8 +101,7 @@ pub(crate) async fn service_insert_pending_prompt(
             return Ok(true);
         }
     }
-    let attachment_workspace_path =
-        pending_prompt_attachment_workspace_path(&state, selected_session_id)?;
+    let attachment_workspace_path = pending_prompt_attachment_workspace_path(&state, session_id)?;
     handle
         .promote_queued_input_to_pending_turn(identity, current_v1_goal_unix_millis()?)
         .map_err(|error| match error {
@@ -111,7 +127,7 @@ pub(crate) async fn service_insert_pending_prompt(
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         notify_webui_wait_agent_parent_interruption_if_waiting(
             &guard,
-            selected_session_id,
+            session_id,
             "user_interrupt_prompt",
         )?;
     }
@@ -120,14 +136,14 @@ pub(crate) async fn service_insert_pending_prompt(
     // 插队的消息会把运行中的前台命令转到后台，让模型能够回复；仅排队而不插入的消息不影响前台命令。
     vulcan_host_tools::shell_job::ShellJobRuntime::global().notify_interjection(
         &vulcan_agent_runtime::tooling::native::canonical_shell_job_session_id(
-            &selected_session_id.to_string(),
+            &session_id.to_string(),
         ),
     );
     // The V1 promotion is already durable; later panel failures cannot retain its queue lease.
     // V1 提升已可靠提交；后续面板故障不能保留该队列租约。
     reconcile_pending_prompt_attachment_leases(
         handle.as_ref(),
-        selected_session_id,
+        session_id,
         &attachment_workspace_path,
     )
     .map_err(|error| format!("The pending message was promoted into the V1 current turn, but attachment cleanup is pending a retry: {error}"))?;
@@ -139,12 +155,12 @@ pub(crate) async fn service_insert_pending_prompt(
         .map_err(|error| format!("Failed to load the V1 project resource catalog: {error}"))?;
     rebuild_pending_prompt_panel_from_v1(
         &state,
-        selected_session_id,
+        session_id,
         handle.as_ref(),
         &project_directory,
         &catalog,
     )?;
-    emit_pending_prompts_changed_delta(&app, &state, selected_session_id)?;
+    emit_pending_prompts_changed_delta(&app, &state, session_id)?;
     Ok(true)
 }
 
@@ -158,8 +174,10 @@ mod tests {
         SetRunControlInput,
     };
 
-    /// A stopped insertion RPC keeps the durable message and never claims to have delivered it.
-    /// 已停止会话的插队 RPC 保留可靠消息，绝不声称已经投递。
+    /// Verifies that a stopped turn retains its queued input and that a resumed turn accepts its exact RPC target.
+    /// 验证停止回合保留排队消息，恢复后通过 RPC 精确目标接收插队。
+    /// Takes no parameters and returns after both durable outcomes are verified.
+    /// 无参数，验证两个可靠结果后返回。
     #[tokio::test]
     async fn stopped_pending_insertion_preserves_queued_input() {
         let session_id = SessionId::new_v4();
@@ -233,5 +251,59 @@ mod tests {
         );
         assert_eq!(state.lock().unwrap().workbench_generation, 0);
         assert!(state.lock().unwrap().active_stream_tasks.is_empty());
+
+        handle
+            .set_collaboration_run_control_durable(SetRunControlInput {
+                operation_id: CollaborationOperationId::try_new("resume-before-shortcut-insert")
+                    .unwrap(),
+                state: CollaborationRunControl::Running,
+                changed_at_ms: 5,
+            })
+            .unwrap();
+        // shortcut_action is the newly submitted item; the older queued item must retain its place.
+        // shortcut_action 是新提交的消息，较早的排队消息必须保留原有位置。
+        let shortcut_action = ClientActionId::try_new("shortcut-insert-message").unwrap();
+        handle
+            .enqueue_input(
+                ClientInputSubmission::new(shortcut_action.clone(), "Insert this", Vec::new()),
+                6,
+            )
+            .unwrap();
+        state.lock().unwrap().workbench.selected_conversation_id = None;
+        // inserted records the explicit RPC response after the user has left the target conversation.
+        // inserted 记录用户离开目标会话后，显式 RPC 返回的结果。
+        let inserted = crate::rpc_dispatch::dispatch_service_rpc(
+            ServiceEventEmitter::new(Vec::new()),
+            state,
+            String::from("service_insert_pending_prompt"),
+            Some(serde_json::json!({
+                "conversationId": session_id,
+                "entryId": shortcut_action.as_str(),
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(inserted, serde_json::Value::Bool(true));
+        handle
+            .read_full_durable(|document| {
+                // input_state verifies the exact new message was promoted and the older one retained.
+                // input_state 用于验证精确的新消息已插入，较早的消息仍留在队列中。
+                let input_state = &document.metadata.input_state;
+                assert_eq!(input_state.queued_inputs.len(), 1);
+                assert!(
+                    input_state
+                        .queued_inputs
+                        .iter()
+                        .any(|input| input.client_action_id == action)
+                );
+                assert_eq!(input_state.pending_in_turn_inputs.len(), 1);
+                assert!(
+                    input_state
+                        .pending_in_turn_inputs
+                        .iter()
+                        .any(|input| input.client_action_id == shortcut_action)
+                );
+            })
+            .unwrap();
     }
 }

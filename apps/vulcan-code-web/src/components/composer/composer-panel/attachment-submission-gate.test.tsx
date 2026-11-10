@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useComposerAttachmentSubmissionGate } from "./attachment-submission-gate";
+import type { ComposerSendMode } from "@/components/composer/composer-send-preference";
 import type { ComposerAttachmentPreparationController } from "./use-composer-attachment-preparation";
 import type { ComposerAttachmentPreparationSummary } from "@/types";
 
@@ -17,7 +18,7 @@ vi.mock("@/ui-kit/primitives/toast", () => ({ toast: { info: toastInfo } }));
 let host: HTMLDivElement;
 let root: Root;
 const send = vi.fn(async () => {});
-let admit: () => boolean = () => false;
+let admit: (sendMode?: ComposerSendMode) => boolean = () => false;
 
 /** Builds one synthetic plan row with the given delivery reason.
  * 使用给定投递原因构建一条合成规划记录。
@@ -54,16 +55,16 @@ it("admits ordinary attachments and holds a pending preparation barrier", async 
   expect(toastInfo).toHaveBeenCalledTimes(1);
 });
 
-it("sends over-budget attachments only after explicit confirmation", async () => {
+it("preserves insertion of over-budget attachments across explicit confirmation", async () => {
   await mount({ a: row("a", "encoded_budget"), b: row("b", "encoded_budget") });
   let admitted = true;
-  await act(async () => { admitted = admit(); });
+  await act(async () => { admitted = admit("insert"); });
   expect(admitted).toBe(false);
   expect(send).not.toHaveBeenCalled();
   const dialog = document.querySelector("[role='alertdialog']");
   expect(dialog?.textContent).toContain("composer.attachment.overflowTitle");
   const confirm = Array.from(dialog!.querySelectorAll("button")).find((button) => button.textContent === "composer.attachment.overflowConfirm")!;
   await act(async () => confirm.click());
-  expect(send).toHaveBeenCalledTimes(1);
+  expect(send).toHaveBeenCalledExactlyOnceWith("insert");
   expect(document.querySelector("[role='alertdialog']")).toBeNull();
 });

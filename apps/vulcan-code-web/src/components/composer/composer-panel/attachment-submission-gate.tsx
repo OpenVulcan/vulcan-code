@@ -1,4 +1,5 @@
 import React from "react";
+import type { ComposerSendMode } from "@/components/composer/composer-send-preference";
 import { toast } from "@/ui-kit/primitives/toast";
 import { composerAttachmentOverflowCount } from "@/components/composer/composer-image-compression-preference";
 import type { ComposerAttachmentPreparationController } from "@/components/composer/composer-panel/use-composer-attachment-preparation";
@@ -22,13 +23,15 @@ import { useI18n } from "@/i18n";
 // 返回值：admit 仅在可以立即发送时为 true，以及需要渲染的确认对话框。
 export function useComposerAttachmentSubmissionGate(
   preparation: ComposerAttachmentPreparationController,
-  send: () => Promise<void>,
-): { admit: () => boolean; dialog: React.ReactNode } {
+  send: (sendMode: ComposerSendMode) => Promise<void>,
+): { admit: (sendMode?: ComposerSendMode) => boolean; dialog: React.ReactNode } {
   const { t } = useI18n();
-  // overflowCount holds the over-budget attachment count while the user decides.
-  // overflowCount 在用户决定期间保存超出预算的附件数量。
-  const [overflowCount, setOverflowCount] = React.useState<number | null>(null);
-  const admit = React.useCallback(() => {
+  // overflow holds the attachment count and original send action across confirmation.
+  // overflow 在确认期间保留附件数量及原始发送操作。
+  const [overflow, setOverflow] = React.useState<{ count: number; sendMode: ComposerSendMode } | null>(null);
+  // admit checks preparation for sendMode and reports whether it can proceed now.
+  // admit 检查 sendMode 的准备情况，并返回是否可以立即提交。
+  const admit = React.useCallback((sendMode: ComposerSendMode = "queue") => {
     if (preparation.blocksSubmission) {
       toast.info(t("composer.attachment.preparationBlocked").replace("{count}", String(preparation.blockingCount)));
       return false;
@@ -37,26 +40,27 @@ export function useComposerAttachmentSubmissionGate(
     // 超出单次请求预算的图片只会以地址发送，因此先由用户决定。
     const count = composerAttachmentOverflowCount(preparation.preparations);
     if (count > 0) {
-      setOverflowCount(count);
+      setOverflow({ count, sendMode });
       return false;
     }
     return true;
   }, [preparation.blockingCount, preparation.blocksSubmission, preparation.preparations, t]);
   const dialog = (
-    <AlertDialog open={overflowCount !== null} onOpenChange={(open) => { if (!open) setOverflowCount(null); }}>
+    <AlertDialog open={overflow !== null} onOpenChange={(open) => { if (!open) setOverflow(null); }}>
       <AlertDialogContent size="md">
         <AlertDialogHeader>
           <AlertDialogTitle>{t("composer.attachment.overflowTitle")}</AlertDialogTitle>
           <AlertDialogDescription>
-            {t("composer.attachment.overflowDescription").replace("{count}", String(overflowCount ?? 0))}
+            {t("composer.attachment.overflowDescription").replace("{count}", String(overflow?.count ?? 0))}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>{t("composer.attachment.overflowCancel")}</AlertDialogCancel>
           <AlertDialogAction
             onClick={() => {
-              setOverflowCount(null);
-              void send();
+              if (!overflow) return;
+              setOverflow(null);
+              void send(overflow.sendMode);
             }}
           >
             {t("composer.attachment.overflowConfirm")}

@@ -9,6 +9,7 @@ import type { ComposerSettingsSection } from "@/components/composer/composer-set
 import type { ComposerSlashCommandSummary } from "@/types";
 import { useComposerExternalCommands, type ComposerOwner } from "@/components/composer/composer-external-commands";
 import type { ComposerPromptSkillOverrides } from "@/components/composer/composer-model";
+import { readComposerEnterSendMode, type ComposerSendMode } from "@/components/composer/composer-send-preference";
 
 // UseComposerSlashCommandsOptions defines the input state and routed actions owned outside slash selection.
 // UseComposerSlashCommandsOptions 定义 slash 选择之外持有的输入状态与路由动作。
@@ -43,9 +44,9 @@ export interface UseComposerSlashCommandsOptions {
   // Opens the conversation settings menu, optionally at one submenu.
   // 打开对话设置菜单，可选地直接展开某个子菜单。
   onOpenSettings: (section: ComposerSettingsSection | null) => void;
-  // Sends the current composer draft when Enter is not consumed by the slash panel.
-  // 当 Enter 未被 slash 面板消费时发送当前输入区草稿。
-  onSend: () => Promise<void>;
+  // Sends with sendMode after slash navigation; allowStop permits an empty Enter to stop an active turn.
+  // slash 导航处理后以 sendMode 发送；allowStop 允许空草稿按 Enter 停止当前回合。
+  onSend: (sendMode: ComposerSendMode, allowStop: boolean) => Promise<void>;
   // Receives the caret at the end of the draft after another surface inserted text into it.
   // 其他界面向草稿插入文本后，在此输入框中将光标放到草稿末尾。
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
@@ -237,7 +238,16 @@ export function useComposerSlashCommands(options: UseComposerSlashCommandsOption
       return;
     }
     event.preventDefault();
-    void options.onSend();
+    // A held key must not turn a just-completed send into an empty-draft stop.
+    // 长按回车不能在发送完成后把空草稿变成停止操作。
+    if (event.repeat) return;
+    // alternate selects Ctrl+Enter, which reverses the saved choice and only sends messages.
+    // alternate 选择 Ctrl+Enter，它反转已保存的选项，仅用于发送消息。
+    const alternate = event.ctrlKey && !event.altKey && !event.metaKey;
+    // insert captures the requested action at keydown; the service still decides whether a queue is needed.
+    // insert 在按键时捕获所请求的操作，是否需要排队仍由服务决定。
+    const insert = (readComposerEnterSendMode() === "insert") !== alternate;
+    void options.onSend(insert ? "insert" : "queue", !alternate);
   }, [activateCommand, exactCommand, highlightedCommand, options.input, options.onSend, panelVisible, visibleCommands.length]);
   // reset clears transient slash state without mutating the newly restored draft input.
   // reset 清理临时 slash 状态，但不修改刚恢复的草稿输入。

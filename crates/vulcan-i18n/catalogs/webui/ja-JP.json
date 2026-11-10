@@ -1,4 +1,10 @@
 {
+  "settings.composerEnterSend.label": "Enter キーの送信動作",
+  "settings.composerEnterSend.description": "タスクの実行中は、Enter で選択した動作、Ctrl+Enter で逆の動作を実行します。会話が待機中の場合はすぐに送信します。",
+  "settings.composerEnterSend.queue": "キューに追加",
+  "settings.composerEnterSend.insert": "現在のタスクに割り込む",
+  "palette.shortcuts.sendAlternate": "逆の動作で送信",
+  "conversationActions.insertUnconfirmed": "メッセージは送信されましたが、割り込みを確認できませんでした。",
   "pluginMaintenance.action.usage": "使用状況を見る",
   "pluginMaintenance.action.recovery": "未完了の操作を確認",
   "pluginMaintenance.action.capacity": "実行リソースを調整",

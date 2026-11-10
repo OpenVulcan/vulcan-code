@@ -1,4 +1,10 @@
 {
+  "settings.composerEnterSend.label": "Enter 전송 방식",
+  "settings.composerEnterSend.description": "작업이 실행 중일 때 Enter는 선택한 방식으로, Ctrl+Enter는 반대 방식으로 전송합니다. 대화가 대기 중이면 즉시 전송합니다.",
+  "settings.composerEnterSend.queue": "대기열에 추가",
+  "settings.composerEnterSend.insert": "현재 작업에 삽입",
+  "palette.shortcuts.sendAlternate": "반대 방식으로 전송",
+  "conversationActions.insertUnconfirmed": "메시지를 제출했지만 삽입 여부를 확인하지 못했습니다.",
   "pluginMaintenance.action.usage": "사용 현황 보기",
   "pluginMaintenance.action.recovery": "완료되지 않은 작업 확인",
   "pluginMaintenance.action.capacity": "실행 리소스 조정",

@@ -1,4 +1,10 @@
 {
+  "settings.composerEnterSend.label": "Sendeverhalten der Eingabetaste",
+  "settings.composerEnterSend.description": "Während einer Aufgabe verwendet Enter die gewählte Einstellung und Strg+Enter die jeweils andere. Ist die Unterhaltung inaktiv, wird die Nachricht sofort gesendet.",
+  "settings.composerEnterSend.queue": "In die Warteschlange stellen",
+  "settings.composerEnterSend.insert": "In die laufende Aufgabe einfügen",
+  "palette.shortcuts.sendAlternate": "Mit dem anderen Sendeverhalten senden",
+  "conversationActions.insertUnconfirmed": "Die Nachricht wurde gesendet, das Einfügen konnte jedoch nicht bestätigt werden.",
   "pluginMaintenance.action.usage": "Nutzung anzeigen",
   "pluginMaintenance.action.recovery": "Unfertige Vorgänge prüfen",
   "pluginMaintenance.action.capacity": "Laufzeitressourcen anpassen",

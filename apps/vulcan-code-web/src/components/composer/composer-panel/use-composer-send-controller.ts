@@ -4,6 +4,7 @@ import type {
   ComposerModelSelectionSnapshot,
   ComposerSubmission,
 } from "@/components/composer/composer-model";
+import type { ComposerSendMode } from "@/components/composer/composer-send-preference";
 import type { ComposerTraceCallback } from "@/components/composer/composer-control-types";
 import {
   ComposerDraftChangedBeforeSubmissionError,
@@ -94,7 +95,7 @@ export interface ComposerSendController {
   isSubmissionActive: () => boolean;
   // Validates, consumes, and sends the current draft or stops an empty running conversation.
   // 校验、消费并发送当前草稿，或停止空草稿的运行中会话。
-  sendDraft: () => Promise<void>;
+  sendDraft: (sendMode?: ComposerSendMode) => Promise<void>;
   // Stops the current backend run without consuming draft content.
   // 在不消费草稿内容的情况下停止当前后端运行。
   stopConversation: () => Promise<void>;
@@ -218,7 +219,9 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
 
   // sendDraft validates and consumes the active draft before forwarding it to the backend runtime.
   // sendDraft 校验并消费当前草稿，再将其转发到后端运行时。
-  const sendDraft = React.useCallback(async () => {
+  // sendMode selects queueing or insertion. Returns after submission or stop settles.
+  // sendMode 选择排队或插队。提交或停止结束后返回。
+  const sendDraft = React.useCallback(async (sendMode: ComposerSendMode = "queue") => {
     // prompt is the trimmed model-facing text while the transaction snapshot preserves exact input.
     // prompt 是去除首尾空白的模型文本，事务快照仍保留精确输入。
     const prompt = options.draftInput.trim();
@@ -278,6 +281,7 @@ export function useComposerSendController(options: UseComposerSendControllerOpti
         draftSlotKey: submittedDraft.draftSlotKey,
         prompt,
         attachments: submittedAttachments,
+        ...(sendMode === "insert" ? { insertIntoCurrentTurn: true } : {}),
         ...submissionSettings,
         sessionSettings: submittedSessionSettings,
       });

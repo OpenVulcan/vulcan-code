@@ -1,4 +1,10 @@
 {
+  "settings.composerEnterSend.label": "Enter 发送方式",
+  "settings.composerEnterSend.description": "任务运行时，Enter 使用选定方式，Ctrl+Enter 使用相反方式。会话空闲时直接发送。",
+  "settings.composerEnterSend.queue": "排队",
+  "settings.composerEnterSend.insert": "插队",
+  "palette.shortcuts.sendAlternate": "以相反方式发送",
+  "conversationActions.insertUnconfirmed": "消息已提交，未能确认插队。",
   "pluginMaintenance.action.usage": "查看使用情况",
   "pluginMaintenance.action.recovery": "检查未完成的操作",
   "pluginMaintenance.action.capacity": "调整运行资源",
