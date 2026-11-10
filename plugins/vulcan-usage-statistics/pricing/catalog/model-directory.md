@@ -1,6 +1,6 @@
 # 用量统计随包模型清单
 
-随包共 **200** 个模型组，其中 **175** 组有美元或人民币参考价，**25** 组待配置。用量记录中的其他模型会另外进入费用表，也可以在搜索栏输入完整模型 ID 后直接编辑。
+随包共 **210** 个模型组，其中 **187** 组有美元或人民币参考价，**23** 组待配置。用量记录中的其他模型会另外进入费用表，也可以在搜索栏输入完整模型 ID 后直接编辑。
 
 费用表按模型组共用一份配置。匹配时取最后一个斜杠后的模型 ID，忽略英文字母大小写。先匹配精确型号或别名，再按连字符边界匹配最长的已知型号段。例如 glm-5.3-flash-xxx 优先匹配 glm-5.3-flash。日期、Preview 和 Claude 兼容写法也按规则归组。别名栏只列需要单独映射的名称。
 
@@ -8,6 +8,7 @@
 可用精确供应商 ID 为模型绑定独立价格。该供应商优先使用专属价格，其余请求沿用共享价格。模板会将基础价、谷价和上下文档位复制到草稿，保存后可单独编辑。
 启用谷价后，以请求终止时间和模型配置的固定 UTC 偏移匹配每周时段，区间包含开始时间，不含结束时间。时段之外使用基础价。
 上下文分档以单次请求的总输入 Token 选档。等于阈值时使用前一档，超过阈值后整笔请求使用新档。基础价和谷价可分别配置多个档位。
+百炼媒体模型的按张、按秒及按字符刊例，以及百炼专属的 MiniMax M2.5 报价，见 [官网价格核查](official-price-audit-2026-11-10.md#百炼-token-plan-补齐项)。
 
 | 定价模型组 | 随包参考价 | 已声明别名 |
 | --- | --- | --- |
@@ -34,6 +35,7 @@
 | `codex-mini` | USD | — |
 | `command-a` | USD | — |
 | `crouton-alpha-free` | USD | — |
+| `decision-model` | USD | — |
 | `deepseek-reasoner` | USD | — |
 | `deepseek-v3.1` | USD | — |
 | `deepseek-v3.2` | USD | — |
@@ -109,6 +111,9 @@
 | `grok-imagine-image-quality` | 待配置 | — |
 | `grok-imagine-video` | 待配置 | — |
 | `grok-imagine-video-1.5` | 待配置 | — |
+| `happyhorse-1.1-i2v` | CNY（按媒体单位） | — |
+| `happyhorse-1.1-r2v` | CNY（按媒体单位） | — |
+| `happyhorse-1.1-t2v` | CNY（按媒体单位） | — |
 | `hy3` | USD | `hunyuan-hy3` |
 | `hy3-paid` | USD | — |
 | `hy4` | CNY | — |
@@ -173,7 +178,11 @@
 | `o3-mini` | USD | — |
 | `o3-pro` | USD | — |
 | `o4-mini` | USD | — |
-| `qwen-image-2.0` | 待配置 | — |
+| `qwen-audio-3.0-asr-flash` | CNY（按媒体单位） | — |
+| `qwen-audio-3.0-tts-plus` | CNY（按媒体单位） | — |
+| `qwen-image-2.0` | CNY（按媒体单位） | — |
+| `qwen-image-2.0-pro` | CNY（按媒体单位） | — |
+| `qwen-image-3.0-pro` | CNY（按媒体单位） | — |
 | `qwen3-235b-a22b` | USD | — |
 | `qwen3-32b` | USD | — |
 | `qwen3-coder-480b-a35b-instruct` | USD | `qwen3-coder-480b` |
@@ -210,7 +219,9 @@
 | `text-embedding-v2` | 待配置 | — |
 | `text-embedding-v3` | 待配置 | — |
 | `text-embedding-v4` | CNY | — |
-| `wan2.7-image` | 待配置 | — |
+| `wan2.7-image` | CNY（按媒体单位） | — |
+| `wan2.7-image-pro` | CNY（按媒体单位） | — |
+| `wan3.0-video` | CNY（按媒体单位） | — |
 
 ## GPT 费用表清理清单
 

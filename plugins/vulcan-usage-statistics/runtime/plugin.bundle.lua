@@ -27,10 +27,10 @@ END]]
 -- 由 pricing/tools/sync-reference-pricing.mjs 生成。
 local DEFAULT_PRICING_CATALOG = {
     catalog_id = "vulcan.reference.model-pricing",
-    revision = "sha256:498a6cc837aeae0137bbdabec4d2ed3d339ae2a537362b7e4718839cf95753f4",
+    revision = "sha256:36569af0bc10302958c50fff52e40fbd97a0d4bec177151a7695a1f14990ff91",
     currency = "USD",
     matching_strategy = "exact_canonical_model_id",
-    entry_count = 175,
+    entry_count = 176,
     models = {
     ["beam-free"] = { ["inputPerMillion"] = "0", ["outputPerMillion"] = "0", ["cacheReadPerMillion"] = "0", ["cacheWritePerMillion"] = "0" },
     ["claude-fable-5"] = { ["inputPerMillion"] = "10", ["outputPerMillion"] = "50", ["cacheReadPerMillion"] = "1.00", ["cacheWritePerMillion"] = "12.50" },
@@ -55,6 +55,7 @@ local DEFAULT_PRICING_CATALOG = {
     ["codex-mini"] = { ["inputPerMillion"] = "0.75", ["outputPerMillion"] = "3", ["cacheReadPerMillion"] = "0.025", ["cacheWritePerMillion"] = "0" },
     ["command-a"] = { ["inputPerMillion"] = "2.50", ["outputPerMillion"] = "10", ["cacheReadPerMillion"] = "0", ["cacheWritePerMillion"] = "0" },
     ["crouton-alpha-free"] = { ["inputPerMillion"] = "0", ["outputPerMillion"] = "0", ["cacheReadPerMillion"] = "0", ["cacheWritePerMillion"] = "0" },
+    ["decision-model"] = { ["inputPerMillion"] = "0", ["outputPerMillion"] = "0", ["cacheReadPerMillion"] = "0", ["cacheWritePerMillion"] = "0" },
     ["deepseek-reasoner"] = { ["inputPerMillion"] = "0.14", ["outputPerMillion"] = "0.28", ["cacheReadPerMillion"] = "0.0028", ["cacheWritePerMillion"] = "0" },
     ["deepseek-v3.1"] = { ["inputPerMillion"] = "0.55", ["outputPerMillion"] = "1.67", ["cacheReadPerMillion"] = "0.055", ["cacheWritePerMillion"] = "0" },
     ["deepseek-v3.2"] = { ["inputPerMillion"] = "0.28", ["outputPerMillion"] = "0.42", ["cacheReadPerMillion"] = "0.028", ["cacheWritePerMillion"] = "0" },
@@ -208,6 +209,9 @@ local DEFAULT_PRICING_CATALOG = {
     ["step-5"] = { ["inputPerMillionCny"] = "7", ["outputPerMillionCny"] = "20", ["cacheReadPerMillionCny"] = "0.35", ["cacheWritePerMillionCny"] = "0" },
     ["text-embedding-v4"] = { ["inputPerMillionCny"] = "0.50", ["outputPerMillionCny"] = "0", ["cacheReadPerMillionCny"] = "0", ["cacheWritePerMillionCny"] = "0" },
     },
+    provider_models = { ["alibaba"] = { ["deepseek-v4.1-flash"] = { ["inputPerMillionCny"] = "2", ["outputPerMillionCny"] = "8", ["cacheReadPerMillionCny"] = "0.2", ["cacheWritePerMillionCny"] = "0", ["offPeak"] = { ["utcOffsetMinutes"] = 480, ["windows"] = { { ["days"] = "daily", ["start"] = "22:00", ["end"] = "08:00" } }, ["prices"] = { ["inputPerMillionCny"] = "1", ["outputPerMillionCny"] = "4", ["cacheReadPerMillionCny"] = "0.1", ["cacheWritePerMillionCny"] = "0" } } }, ["deepseek-v4-pro"] = { ["inputPerMillionCny"] = "12", ["outputPerMillionCny"] = "24", ["cacheReadPerMillionCny"] = "1", ["cacheWritePerMillionCny"] = "0" }, ["deepseek-v4-pro-0813"] = { ["inputPerMillionCny"] = "9", ["outputPerMillionCny"] = "27", ["cacheReadPerMillionCny"] = "0.9", ["cacheWritePerMillionCny"] = "0", ["offPeak"] = { ["utcOffsetMinutes"] = 480, ["windows"] = { { ["days"] = "daily", ["start"] = "22:00", ["end"] = "08:00" } }, ["prices"] = { ["inputPerMillionCny"] = "4.5", ["outputPerMillionCny"] = "13.5", ["cacheReadPerMillionCny"] = "0.45", ["cacheWritePerMillionCny"] = "0" } } }, ["deepseek-v4-flash"] = { ["inputPerMillionCny"] = "3", ["outputPerMillionCny"] = "9", ["cacheReadPerMillionCny"] = "0.3", ["cacheWritePerMillionCny"] = "0", ["offPeak"] = { ["utcOffsetMinutes"] = 480, ["windows"] = { { ["days"] = "daily", ["start"] = "22:00", ["end"] = "08:00" } }, ["prices"] = { ["inputPerMillionCny"] = "1.5", ["outputPerMillionCny"] = "4.5", ["cacheReadPerMillionCny"] = "0.15", ["cacheWritePerMillionCny"] = "0" } } }, ["minimax-m2.5"] = { ["inputPerMillion"] = "0.304", ["outputPerMillion"] = "1.213", ["cacheReadPerMillion"] = "0.061", ["cacheWritePerMillion"] = "0", ["inputPerMillionCny"] = "2.1", ["outputPerMillionCny"] = "8.4", ["cacheReadPerMillionCny"] = "0.42" } } },
+    provider_entry_models = { ["alibaba"] = { ["model-studio-singapore"] = { ["deepseek-v4.1-flash"] = { ["inputPerMillionCny"] = "2.188", ["outputPerMillionCny"] = "8.75", ["cacheReadPerMillionCny"] = "0.219", ["cacheWritePerMillionCny"] = "0", ["offPeak"] = { ["utcOffsetMinutes"] = 480, ["windows"] = { { ["days"] = "daily", ["start"] = "22:00", ["end"] = "08:00" } }, ["prices"] = { ["inputPerMillionCny"] = "1.094", ["outputPerMillionCny"] = "4.375", ["cacheReadPerMillionCny"] = "0.109", ["cacheWritePerMillionCny"] = "0" } } }, ["deepseek-v4-pro"] = { ["inputPerMillionCny"] = "17.986", ["outputPerMillionCny"] = "35.972", ["cacheReadPerMillionCny"] = "1.499", ["cacheWritePerMillionCny"] = "0" }, ["deepseek-v4-pro-0813"] = { ["inputPerMillionCny"] = "9.625", ["outputPerMillionCny"] = "28.875", ["cacheReadPerMillionCny"] = "0.963", ["cacheWritePerMillionCny"] = "0", ["offPeak"] = { ["utcOffsetMinutes"] = 480, ["windows"] = { { ["days"] = "daily", ["start"] = "22:00", ["end"] = "08:00" } }, ["prices"] = { ["inputPerMillionCny"] = "4.813", ["outputPerMillionCny"] = "14.438", ["cacheReadPerMillionCny"] = "0.481", ["cacheWritePerMillionCny"] = "0" } } }, ["deepseek-v4-flash"] = { ["inputPerMillionCny"] = "3.208", ["outputPerMillionCny"] = "9.625", ["cacheReadPerMillionCny"] = "0.3208", ["cacheWritePerMillionCny"] = "0", ["offPeak"] = { ["utcOffsetMinutes"] = 480, ["windows"] = { { ["days"] = "daily", ["start"] = "22:00", ["end"] = "08:00" } }, ["prices"] = { ["inputPerMillionCny"] = "1.604", ["outputPerMillionCny"] = "4.813", ["cacheReadPerMillionCny"] = "0.1604", ["cacheWritePerMillionCny"] = "0" } } } }, ["token-plan-personal-global"] = { ["deepseek-v4.1-flash"] = { ["inputPerMillionCny"] = "2.188", ["outputPerMillionCny"] = "8.75", ["cacheReadPerMillionCny"] = "0.219", ["cacheWritePerMillionCny"] = "0", ["offPeak"] = { ["utcOffsetMinutes"] = 480, ["windows"] = { { ["days"] = "daily", ["start"] = "22:00", ["end"] = "08:00" } }, ["prices"] = { ["inputPerMillionCny"] = "1.094", ["outputPerMillionCny"] = "4.375", ["cacheReadPerMillionCny"] = "0.109", ["cacheWritePerMillionCny"] = "0" } } }, ["deepseek-v4-pro"] = { ["inputPerMillionCny"] = "17.986", ["outputPerMillionCny"] = "35.972", ["cacheReadPerMillionCny"] = "1.499", ["cacheWritePerMillionCny"] = "0" }, ["deepseek-v4-pro-0813"] = { ["inputPerMillionCny"] = "9.625", ["outputPerMillionCny"] = "28.875", ["cacheReadPerMillionCny"] = "0.963", ["cacheWritePerMillionCny"] = "0", ["offPeak"] = { ["utcOffsetMinutes"] = 480, ["windows"] = { { ["days"] = "daily", ["start"] = "22:00", ["end"] = "08:00" } }, ["prices"] = { ["inputPerMillionCny"] = "4.813", ["outputPerMillionCny"] = "14.438", ["cacheReadPerMillionCny"] = "0.481", ["cacheWritePerMillionCny"] = "0" } } }, ["deepseek-v4-flash"] = { ["inputPerMillionCny"] = "3.208", ["outputPerMillionCny"] = "9.625", ["cacheReadPerMillionCny"] = "0.3208", ["cacheWritePerMillionCny"] = "0", ["offPeak"] = { ["utcOffsetMinutes"] = 480, ["windows"] = { { ["days"] = "daily", ["start"] = "22:00", ["end"] = "08:00" } }, ["prices"] = { ["inputPerMillionCny"] = "1.604", ["outputPerMillionCny"] = "4.813", ["cacheReadPerMillionCny"] = "0.1604", ["cacheWritePerMillionCny"] = "0" } } } }, ["token-plan-team-global"] = { ["deepseek-v4.1-flash"] = { ["inputPerMillionCny"] = "2.188", ["outputPerMillionCny"] = "8.75", ["cacheReadPerMillionCny"] = "0.219", ["cacheWritePerMillionCny"] = "0", ["offPeak"] = { ["utcOffsetMinutes"] = 480, ["windows"] = { { ["days"] = "daily", ["start"] = "22:00", ["end"] = "08:00" } }, ["prices"] = { ["inputPerMillionCny"] = "1.094", ["outputPerMillionCny"] = "4.375", ["cacheReadPerMillionCny"] = "0.109", ["cacheWritePerMillionCny"] = "0" } } }, ["deepseek-v4-pro"] = { ["inputPerMillionCny"] = "17.986", ["outputPerMillionCny"] = "35.972", ["cacheReadPerMillionCny"] = "1.499", ["cacheWritePerMillionCny"] = "0" }, ["deepseek-v4-pro-0813"] = { ["inputPerMillionCny"] = "9.625", ["outputPerMillionCny"] = "28.875", ["cacheReadPerMillionCny"] = "0.963", ["cacheWritePerMillionCny"] = "0", ["offPeak"] = { ["utcOffsetMinutes"] = 480, ["windows"] = { { ["days"] = "daily", ["start"] = "22:00", ["end"] = "08:00" } }, ["prices"] = { ["inputPerMillionCny"] = "4.813", ["outputPerMillionCny"] = "14.438", ["cacheReadPerMillionCny"] = "0.481", ["cacheWritePerMillionCny"] = "0" } } }, ["deepseek-v4-flash"] = { ["inputPerMillionCny"] = "3.208", ["outputPerMillionCny"] = "9.625", ["cacheReadPerMillionCny"] = "0.3208", ["cacheWritePerMillionCny"] = "0", ["offPeak"] = { ["utcOffsetMinutes"] = 480, ["windows"] = { { ["days"] = "daily", ["start"] = "22:00", ["end"] = "08:00" } }, ["prices"] = { ["inputPerMillionCny"] = "1.604", ["outputPerMillionCny"] = "4.813", ["cacheReadPerMillionCny"] = "0.1604", ["cacheWritePerMillionCny"] = "0" } } } } } },
+    native_unit_references = { ["happyhorse-1.1-i2v"] = { ["source"] = "https://help.aliyun.com/zh/model-studio/model-pricing", ["rates"] = { { ["unit"] = "output_second_480p", ["beijingCny"] = "0.45", ["singaporeCny"] = "0.524594" }, { ["unit"] = "output_second_720p", ["beijingCny"] = "0.9", ["singaporeCny"] = "1.049188" }, { ["unit"] = "output_second_1080p", ["beijingCny"] = "1.2", ["singaporeCny"] = "1.348956" } } }, ["happyhorse-1.1-r2v"] = { ["source"] = "https://help.aliyun.com/zh/model-studio/model-pricing", ["rates"] = { { ["unit"] = "output_second_480p", ["beijingCny"] = "0.45", ["singaporeCny"] = "0.524594" }, { ["unit"] = "output_second_720p", ["beijingCny"] = "0.9", ["singaporeCny"] = "1.049188" }, { ["unit"] = "output_second_1080p", ["beijingCny"] = "1.2", ["singaporeCny"] = "1.348956" } } }, ["happyhorse-1.1-t2v"] = { ["source"] = "https://help.aliyun.com/zh/model-studio/model-pricing", ["rates"] = { { ["unit"] = "output_second_480p", ["beijingCny"] = "0.45", ["singaporeCny"] = "0.524594" }, { ["unit"] = "output_second_720p", ["beijingCny"] = "0.9", ["singaporeCny"] = "1.049188" }, { ["unit"] = "output_second_1080p", ["beijingCny"] = "1.2", ["singaporeCny"] = "1.348956" } } }, ["qwen-audio-3.0-asr-flash"] = { ["source"] = "https://help.aliyun.com/zh/model-studio/qwen-audio-3-0-asr-flash", ["rates"] = { { ["unit"] = "input_second", ["beijingCny"] = "0.00022", ["singaporeCny"] = "0.00026" } } }, ["qwen-audio-3.0-tts-plus"] = { ["source"] = "https://help.aliyun.com/zh/model-studio/model-pricing", ["rates"] = { { ["unit"] = "input_10000_characters", ["beijingCny"] = "1.4", ["singaporeCny"] = "1.49884" } } }, ["qwen-image-2.0"] = { ["source"] = "https://help.aliyun.com/zh/model-studio/model-pricing", ["rates"] = { { ["unit"] = "output_image", ["beijingCny"] = "0.2", ["singaporeCny"] = "0.256873" } } }, ["qwen-image-2.0-pro"] = { ["source"] = "https://help.aliyun.com/zh/model-studio/model-pricing", ["rates"] = { { ["unit"] = "output_image", ["beijingCny"] = "0.5", ["singaporeCny"] = "0.550443" } } }, ["qwen-image-3.0-pro"] = { ["source"] = "https://help.aliyun.com/zh/model-studio/model-pricing", ["rates"] = { { ["unit"] = "input_image", ["beijingCny"] = "0.02", ["singaporeCny"] = "0.022483" }, { ["unit"] = "output_image_1k", ["beijingCny"] = "0.25", ["singaporeCny"] = "0.299768" }, { ["unit"] = "output_image_2k", ["beijingCny"] = "0.5", ["singaporeCny"] = "0.562065" } } }, ["wan2.7-image"] = { ["source"] = "https://help.aliyun.com/zh/model-studio/model-pricing", ["rates"] = { { ["unit"] = "output_image", ["beijingCny"] = "0.2", ["singaporeCny"] = "0.224826" } } }, ["wan2.7-image-pro"] = { ["source"] = "https://help.aliyun.com/zh/model-studio/model-pricing", ["rates"] = { { ["unit"] = "output_image", ["beijingCny"] = "0.5", ["singaporeCny"] = "0.562065" } } }, ["wan3.0-video"] = { ["source"] = "https://help.aliyun.com/zh/model-studio/wan3-0-video", ["rates"] = { { ["unit"] = "output_second_480p", ["beijingCny"] = "0.3", ["singaporeCny"] = "0.37471" }, { ["unit"] = "output_second_720p", ["beijingCny"] = "0.6", ["singaporeCny"] = "0.74942" }, { ["unit"] = "output_second_1080p", ["beijingCny"] = "1.2", ["singaporeCny"] = "1.49884" } } } },
 }
 -- END GENERATED VULCAN DEFAULT PRICING CATALOG
 
@@ -231,6 +235,7 @@ local DECLARED_MODEL_IDS = {
     "claude-sonnet-5",
     "claude-sonnet-5-5",
     "crouton-alpha-free",
+    "decision-model",
     "deepseek-v3.2",
     "deepseek-v4-flash",
     "deepseek-v4-pro",
@@ -280,6 +285,9 @@ local DECLARED_MODEL_IDS = {
     "grok-imagine-image-quality",
     "grok-imagine-video",
     "grok-imagine-video-1.5",
+    "happyhorse-1.1-i2v",
+    "happyhorse-1.1-r2v",
+    "happyhorse-1.1-t2v",
     "hy3",
     "hy3-paid",
     "hy4",
@@ -327,7 +335,11 @@ local DECLARED_MODEL_IDS = {
     "muse-wonder",
     "nemotron-3-ultra-550b-a55b",
     "neohorse-1-9b",
+    "qwen-audio-3.0-asr-flash",
+    "qwen-audio-3.0-tts-plus",
     "qwen-image-2.0",
+    "qwen-image-2.0-pro",
+    "qwen-image-3.0-pro",
     "qwen3-rerank",
     "qwen3.5-flash",
     "qwen3.5-plus",
@@ -356,6 +368,8 @@ local DECLARED_MODEL_IDS = {
     "text-embedding-v3",
     "text-embedding-v4",
     "wan2.7-image",
+    "wan2.7-image-pro",
+    "wan3.0-video",
 }
 -- Match declared model suffixes and aliases using ASCII case folding.
 -- 匹配已声明的型号后缀与别名时统一 ASCII 大小写。
@@ -384,6 +398,7 @@ local DECLARED_MODEL_ALIASES = {
     ["codex-mini"] = "codex-mini",
     ["command-a"] = "command-a",
     ["crouton-alpha-free"] = "crouton-alpha-free",
+    ["decision-model"] = "decision-model",
     ["deepseek-flash"] = "deepseek-v4.1-flash",
     ["deepseek-reasoner"] = "deepseek-reasoner",
     ["deepseek-v3.1"] = "deepseek-v3.1",
@@ -513,6 +528,9 @@ local DECLARED_MODEL_ALIASES = {
     ["grok-imagine-image-quality"] = "grok-imagine-image-quality",
     ["grok-imagine-video"] = "grok-imagine-video",
     ["grok-imagine-video-1.5"] = "grok-imagine-video-1.5",
+    ["happyhorse-1.1-i2v"] = "happyhorse-1.1-i2v",
+    ["happyhorse-1.1-r2v"] = "happyhorse-1.1-r2v",
+    ["happyhorse-1.1-t2v"] = "happyhorse-1.1-t2v",
     ["hunyuan-hy3"] = "hy3",
     ["hy3"] = "hy3",
     ["hy3-paid"] = "hy3-paid",
@@ -584,7 +602,11 @@ local DECLARED_MODEL_ALIASES = {
     ["o3-mini"] = "o3-mini",
     ["o3-pro"] = "o3-pro",
     ["o4-mini"] = "o4-mini",
+    ["qwen-audio-3.0-asr-flash"] = "qwen-audio-3.0-asr-flash",
+    ["qwen-audio-3.0-tts-plus"] = "qwen-audio-3.0-tts-plus",
     ["qwen-image-2.0"] = "qwen-image-2.0",
+    ["qwen-image-2.0-pro"] = "qwen-image-2.0-pro",
+    ["qwen-image-3.0-pro"] = "qwen-image-3.0-pro",
     ["qwen3-235b-a22b"] = "qwen3-235b-a22b",
     ["qwen3-32b"] = "qwen3-32b",
     ["qwen3-coder-480b"] = "qwen3-coder-480b-a35b-instruct",
@@ -623,6 +645,8 @@ local DECLARED_MODEL_ALIASES = {
     ["text-embedding-v3"] = "text-embedding-v3",
     ["text-embedding-v4"] = "text-embedding-v4",
     ["wan2.7-image"] = "wan2.7-image",
+    ["wan2.7-image-pro"] = "wan2.7-image-pro",
+    ["wan3.0-video"] = "wan3.0-video",
 }
 -- Configured families match the stem itself or a nonempty hyphen suffix.
 -- 已配置的系列匹配主干本身，或主干后带非空连字符后缀的写法。
@@ -1160,6 +1184,17 @@ local function billing_model_id(model_id)
     return canonical or (is_preview and normalized or suffix)
 end
 
+-- Resolve a provider's exact catalog models before applying shared aliases.
+-- 先解析供应商有独立报价的精确型号，再应用共享别名。
+-- Returns the provider's billing ID for model_id, or its shared billing ID.
+-- 返回 model_id 的供应商计费标识；没有独立型号时返回共享计费标识。
+local function provider_billing_model_id(model_id, provider_id)
+    local refs = DEFAULT_PRICING_CATALOG.provider_models[provider_id]
+    local suffix = (model_id:match("[^/]+$") or model_id):lower()
+    if refs ~= nil and refs[suffix] ~= nil then return suffix end
+    return billing_model_id(model_id)
+end
+
 -- Return a SQL expression for the last slash component of a trusted model ID column.
 -- 为可信的模型标识列返回提取最后一个斜杠分段的 SQL 表达式。
 local function model_id_suffix_sql(column)
@@ -1256,14 +1291,14 @@ end
 
 -- Group explicit overrides by billing ID without modifying persisted legacy keys.
 -- 按定价标识聚合显式覆盖价，保留已持久化的历史键。
-local function index_model_overrides(model_overrides)
+local function index_model_overrides(model_overrides, provider_id)
     -- groups separates shared prices from legacy keys with competing prices.
     -- groups 区分可共享单价与价格冲突的历史键。
     local groups = {}
     for model_id, prices in pairs(model_overrides) do
         -- Compare the exact settings within the resolved billing group.
         -- 在解析后的定价组内比较精确设置。
-        local canonical = billing_model_id(model_id)
+        local canonical = provider_billing_model_id(model_id, provider_id)
         local signature = price_signature(prices)
         local group = groups[canonical]
         if group == nil then
@@ -1284,7 +1319,7 @@ local function index_pricing_overrides(config)
     -- 即使使用相同的别名，每家供应商也有独立的模型命名空间。
     local providers = {}
     for provider_id, prices in pairs(config.providerOverrides or {}) do
-        providers[provider_id] = { prices = prices, groups = index_model_overrides(prices) }
+        providers[provider_id] = { prices = prices, groups = index_model_overrides(prices, provider_id), provider_id = provider_id }
     end
     return {
         shared = { prices = config.modelOverrides, groups = index_model_overrides(config.modelOverrides) },
@@ -1370,20 +1405,18 @@ local function tariff_rule(prices)
     if next(rule) ~= nil then return rule end
 end
 
--- Add one scope's override rules, retaining a flat rule when it shadows a lower scope.
--- 添加一个范围的覆盖规则；单一费率需要覆盖下级范围时保留空规则。
-local function add_override_rules(rules, scope, retain_flat)
+-- Add one scope's overrides; a flat rule shadows any lower priority schedule.
+-- 添加一个范围的覆盖价；单一费率屏蔽更低优先级的时段费率。
+local function add_override_rules(rules, scope)
     for model_id, group in pairs(scope.groups) do
         if not group.conflict then
             -- A provider's flat tariff still takes precedence over shared windows and tiers.
             -- 供应商的单一费率仍优先于共享的时段及档位。
-            local rule = tariff_rule(group.prices)
-            if rule == nil and retain_flat then rule = vulcan.json.object() end
-            rules.shared[model_id] = rule
+            rules.shared[model_id] = tariff_rule(group.prices) or vulcan.json.object()
         end
     end
     for model_id, prices in pairs(scope.prices) do
-        if scope.groups[billing_model_id(model_id)].conflict then
+        if scope.groups[provider_billing_model_id(model_id, scope.provider_id)].conflict then
             -- An empty object shadows a shared rule for this exact legacy key.
             -- 用空对象为此历史精确键覆盖共享规则。
             rules.exact[model_id] = tariff_rule(prices) or vulcan.json.object()
@@ -1391,35 +1424,72 @@ local function add_override_rules(rules, scope, retain_flat)
     end
 end
 
--- Build the SQL and Lua schedule maps for catalog, shared overrides and provider overrides.
--- 为目录、共享覆盖与供应商覆盖建立 SQL 和 Lua 时段映射。
+-- Build schedule maps from catalog quotes and overrides for SQL and per-request estimates.
+-- 从目录报价和用户覆盖构建供 SQL 与逐请求估算使用的时段映射。
 local function pricing_rules(overrides)
-    -- The shared map starts with the catalog, while a provider map contains only its own overrides.
-    -- 共享映射以目录为起点，供应商映射仅包含该供应商的覆盖。
-    local rules = { shared = vulcan.json.object(), exact = vulcan.json.object(), providers = vulcan.json.object() }
+    -- An empty rule shadows less specific windows when the selected price is flat.
+    -- 所选价格为单一费率时，空规则屏蔽优先级较低的时段。
+    local rules = { shared = vulcan.json.object(), providers = vulcan.json.object(),
+        userShared = { shared = vulcan.json.object(), exact = vulcan.json.object() },
+        providerRefs = vulcan.json.object(), entryRefs = vulcan.json.object() }
     for model_id, prices in pairs(DEFAULT_PRICING_CATALOG.models) do
         rules.shared[model_id] = tariff_rule(prices)
     end
-    add_override_rules(rules, overrides.shared, false)
+    add_override_rules(rules.userShared, overrides.shared)
+    for provider_id, models in pairs(DEFAULT_PRICING_CATALOG.provider_models) do
+        rules.providers[provider_id] = { shared = vulcan.json.object(), exact = vulcan.json.object() }
+        rules.providerRefs[provider_id] = vulcan.json.object()
+        for model_id, prices in pairs(models) do
+            rules.providerRefs[provider_id][model_id] = tariff_rule(prices) or vulcan.json.object()
+        end
+    end
+    for provider_id, entries in pairs(DEFAULT_PRICING_CATALOG.provider_entry_models) do
+        rules.entryRefs[provider_id] = vulcan.json.object()
+        for entry_id, models in pairs(entries) do
+            rules.entryRefs[provider_id][entry_id] = vulcan.json.object()
+            for model_id, prices in pairs(models) do
+                rules.entryRefs[provider_id][entry_id][model_id] = tariff_rule(prices) or vulcan.json.object()
+            end
+        end
+    end
     for provider_id, scope in pairs(overrides.providers) do
         -- Keeping the provider as a separate key avoids combining models served by different providers.
         -- 单独使用供应商作为键，避免合并由不同供应商提供的模型。
         local provider_rules = { shared = vulcan.json.object(), exact = vulcan.json.object() }
-        add_override_rules(provider_rules, scope, true)
+        add_override_rules(provider_rules, scope)
         rules.providers[provider_id] = provider_rules
     end
     return rules
 end
 
+-- Return a regional or provider reference for the exact upstream suffix, then its billing family.
+-- 先按上游精确后缀、再按定价系列查找地区或供应商报价。
+-- maps are keyed by provider and optional service entry; the result is a price or schedule.
+-- maps 按供应商和可选服务入口索引；返回价格或时段规则。
+local function scoped_catalog_value(provider_refs, entry_refs, provider_id, entry_id, model_id, canonical)
+    -- Preserve differently priced snapshots before consulting shared model aliases.
+    -- 优先保留独立定价的快照，再查找共享模型别名。
+    local suffix = (model_id:match("[^/]+$") or model_id):lower()
+    local entries = entry_refs[provider_id]
+    local regional = entries and entries[entry_id]
+    local provider = provider_refs[provider_id]
+    return (regional and (regional[suffix] or regional[canonical]))
+        or (provider and (provider[suffix] or provider[canonical]))
+end
+
 -- Report whether this raw model's recorded terminal time falls in an off-peak interval.
 -- 判断原始模型记录的终止时间是否落在谷价时段内。
-local function is_off_peak(provider_id, model_id, terminal_at_ms, rules)
+local function is_off_peak(provider_id, entry_id, model_id, terminal_at_ms, rules)
     -- The exact map contains only legacy conflicts; other matches use the canonical map.
     -- 精确映射只含历史冲突，其余匹配使用定价主标识映射。
     local canonical = billing_model_id(model_id)
     local provider = rules.providers[provider_id]
-    local rule = provider and (provider.exact[model_id] or provider.shared[canonical])
-    if rule == nil then rule = rules.exact[model_id] or rules.shared[canonical] end
+    local rule = provider and (provider.exact[model_id] or provider.shared[provider_billing_model_id(model_id, provider_id)])
+    if rule == nil then rule = rules.userShared.exact[model_id] or rules.userShared.shared[canonical] end
+    if rule == nil then
+        rule = scoped_catalog_value(rules.providerRefs, rules.entryRefs, provider_id, entry_id, model_id, canonical)
+            or rules.shared[canonical]
+    end
     if rule == nil or rule.windows == nil then return false end
     local minute = (math.floor(terminal_at_ms / MILLISECONDS_PER_MINUTE) + UNIX_EPOCH_WEEK_MINUTE) % WEEK_MINUTES
     for _, interval in ipairs(rule.windows) do
@@ -1497,17 +1567,22 @@ end
 
 -- Resolve a model's editable price, effective rates, source and override key.
 -- 解析模型的可编辑单价、生效价格、来源及覆盖键。
-local function model_prices(model_id, config, overrides, provider_id)
+local function model_prices(model_id, config, overrides, provider_id, entry_id)
     -- A provider-specific price wins over the shared override and catalog for the same model.
     -- 同一模型的供应商专属价格优先于共享覆盖和目录。
     local canonical = billing_model_id(model_id)
     local provider = overrides.providers[provider_id]
     if provider ~= nil then
-        local price, key = scope_override(provider, model_id, canonical)
+        local price, key = scope_override(provider, model_id, provider_billing_model_id(model_id, provider_id))
         if price ~= nil then return price, effective_prices(price, config), "provider_override", key end
     end
     local explicit, key = scope_override(overrides.shared, model_id, canonical)
     if explicit ~= nil then return explicit, effective_prices(explicit, config), "override", key end
+    -- Consult the provider's reference only after both user override scopes.
+    -- 两级用户覆盖都未命中时，才查找供应商参考价。
+    local provider_catalog = scoped_catalog_value(DEFAULT_PRICING_CATALOG.provider_models,
+        DEFAULT_PRICING_CATALOG.provider_entry_models, provider_id, entry_id, model_id, canonical)
+    if provider_catalog ~= nil then return provider_catalog, effective_prices(provider_catalog, config), "catalog" end
     -- Reference prices are keyed by canonical billing model IDs.
     -- 参考价以定价主模型标识作为键。
     local catalog = DEFAULT_PRICING_CATALOG.models[canonical]
@@ -1696,13 +1771,18 @@ end
 -- Updates the row and returns estimates with their coverage keyed by currency.
 -- 更新用量行，并返回以币种为键、包含覆盖情况的估算。
 local function attach_reference_estimate(row, config, cache, overrides)
-    -- Providers without their own overrides can safely reuse the same converted prices.
-    -- 没有专属覆盖的供应商可以共用同一份折算价格。
-    local scope_id = overrides.providers[row.providerId] and row.providerId or ""
+    -- Reuse converted rates only within a provider and regional scope.
+    -- 折算后的单价只在同一供应商与地区范围内复用。
+    local scope_id = (overrides.providers[row.providerId] or DEFAULT_PRICING_CATALOG.provider_models[row.providerId])
+        and row.providerId or ""
     if cache[scope_id] == nil then cache[scope_id] = {} end
-    local model = cache[scope_id][row.modelId]
+    local regional = DEFAULT_PRICING_CATALOG.provider_entry_models[row.providerId]
+    local entry_key = regional and regional[row.serviceEntryId] and row.serviceEntryId or ""
+    if cache[scope_id][entry_key] == nil then cache[scope_id][entry_key] = {} end
+    local scope_cache = cache[scope_id][entry_key]
+    local model = scope_cache[row.modelId]
     if model == nil then
-        local explicit, effective, source, source_model = model_prices(row.modelId, config, overrides, row.providerId)
+        local explicit, effective, source, source_model = model_prices(row.modelId, config, overrides, row.providerId, row.serviceEntryId)
         model = { base = { prices = effective, tiers = effective_context_tiers(explicit and explicit.contextTiers, config) }, source = source }
         if source == "catalog" then
             model.revision = DEFAULT_PRICING_CATALOG.revision
@@ -1726,7 +1806,7 @@ local function attach_reference_estimate(row, config, cache, overrides)
         if model.revision ~= nil then
             model.revision = model.revision .. ":cnyPerUsd:" .. (config.cnyPerUsd or DEFAULT_CNY_PER_USD)
         end
-        cache[scope_id][row.modelId] = model
+        scope_cache[row.modelId] = model
     end
 
     -- SQL supplies tariff buckets only when the aggregate includes off-peak requests.
@@ -1797,6 +1877,7 @@ local function settings_projection(config)
         modelOverrides = config.modelOverrides,
         providerOverrides = config.providerOverrides,
         catalogModels = catalog_models,
+        providerCatalogModels = DEFAULT_PRICING_CATALOG.provider_models,
         cnyPerUsd = config.cnyPerUsd,
         defaultCnyPerUsd = DEFAULT_CNY_PER_USD,
         modelAliases = DECLARED_MODEL_ALIASES,
@@ -1830,6 +1911,9 @@ local function load_dashboard(input, config, price_cache, overrides, rules)
     -- known_models 将费用聚合限制在目录与已配置模型身份内。
     local known_models = {}
     for model_id in pairs(DEFAULT_PRICING_CATALOG.models) do known_models[model_id] = true end
+    for _, models in pairs(DEFAULT_PRICING_CATALOG.provider_models) do
+        for model_id in pairs(models) do known_models[billing_model_id(model_id)] = true end
+    end
     for model_id in pairs(overrides.shared.groups) do known_models[model_id] = true end
     for _, scope in pairs(overrides.providers) do
         for model_id in pairs(scope.groups) do known_models[model_id] = true end
@@ -1872,30 +1956,42 @@ local function load_dashboard(input, config, price_cache, overrides, rules)
     FROM range_usage WHERE 0
 )
 ]]
-    if next(rules.shared) ~= nil or next(rules.exact) ~= nil or next(rules.providers) ~= nil then
+    if next(rules.shared) ~= nil or next(rules.userShared.exact) ~= nil or next(rules.userShared.shared) ~= nil
+        or next(rules.providers) ~= nil then
         -- Classify each original request before grouping Token quantities.
         -- 在汇总 Token 数量之前，先对每条原始请求选档。
         local minute = "((CAST(a.terminal_at_ms / " .. MILLISECONDS_PER_MINUTE .. " AS INTEGER) + " ..
             UNIX_EPOCH_WEEK_MINUTE .. ") % " .. WEEK_MINUTES .. " + " .. WEEK_MINUTES .. ") % " .. WEEK_MINUTES
         tariff_sql = [[
 , tariff_identities AS MATERIALIZED (
-    SELECT provider_id, raw_model, ]] .. billing_model_sql("raw_model") .. [[ AS canonical
-    FROM (SELECT DISTINCT provider_id, mapped_model AS raw_model FROM filtered_attempts)
+    SELECT provider_id, service_entry_id, raw_model, lower(]] .. model_id_suffix_sql("raw_model") .. [[) AS suffix,
+           ]] .. billing_model_sql("raw_model") .. [[ AS canonical
+    FROM (SELECT DISTINCT provider_id, service_entry_id, mapped_model AS raw_model FROM filtered_attempts)
 ), tariff_models AS MATERIALIZED (
-    SELECT m.provider_id, m.raw_model,
+    SELECT m.provider_id, m.service_entry_id, m.raw_model,
            COALESCE((SELECT value FROM json_each(p.value, '$.exact') WHERE key = m.raw_model),
-                    (SELECT value FROM json_each(p.value, '$.shared') WHERE key = m.canonical),
-                    (SELECT value FROM json_each(?14, '$.exact') WHERE key = m.raw_model),
+                    (SELECT value FROM json_each(p.value, '$.shared') WHERE key =
+                        COALESCE((SELECT key FROM json_each(r.value) WHERE key = m.suffix), m.canonical)),
+                    (SELECT value FROM json_each(?14, '$.userShared.exact') WHERE key = m.raw_model),
+                    (SELECT value FROM json_each(?14, '$.userShared.shared') WHERE key = m.canonical),
+                    (SELECT value FROM json_each(e.value) WHERE key = m.suffix),
+                    (SELECT value FROM json_each(e.value) WHERE key = m.canonical),
+                    (SELECT value FROM json_each(r.value) WHERE key = m.suffix),
+                    (SELECT value FROM json_each(r.value) WHERE key = m.canonical),
                     (SELECT value FROM json_each(?14, '$.shared') WHERE key = m.canonical)) AS rule
     FROM tariff_identities m
     LEFT JOIN json_each(?14, '$.providers') p ON p.key = m.provider_id
+    LEFT JOIN json_each(?14, '$.providerRefs') r ON r.key = m.provider_id
+    LEFT JOIN json_each(?14, '$.entryRefs') entries ON entries.key = m.provider_id
+    LEFT JOIN json_each(entries.value) e ON e.key = m.service_entry_id
 ), tariff_candidates AS (
     SELECT a.provider_id, a.service_entry_id, a.consumer_id, a.operation, a.mapped_model AS model_id,
            a.input_tokens, a.uncached_input_tokens, a.cache_read_tokens, a.cache_write_tokens, a.output_tokens, m.rule,
            EXISTS (SELECT 1 FROM json_each(m.rule, '$.windows') w
                    WHERE ]] .. minute .. [[ >= json_extract(w.value, '$.lower')
                      AND ]] .. minute .. [[ < json_extract(w.value, '$.upper')) AS is_off_peak
-    FROM filtered_attempts a JOIN tariff_models m ON m.provider_id = a.provider_id AND m.raw_model = a.mapped_model
+    FROM filtered_attempts a JOIN tariff_models m ON m.provider_id = a.provider_id
+      AND m.service_entry_id = a.service_entry_id AND m.raw_model = a.mapped_model
     WHERE m.rule IS NOT NULL
 ), tariff_thresholds AS (
     SELECT *, CASE WHEN is_off_peak = 1 THEN '$.offPeakThresholds' ELSE '$.baseThresholds' END AS thresholds_path
@@ -2270,6 +2366,7 @@ FROM filtered_daily;
     local cost_sql = tariff_sql .. [[
 , cost_basis AS (
     SELECT CASE WHEN provider_id IN (SELECT key FROM json_each(?14, '$.providers')) THEN provider_id ELSE '' END AS pricing_provider,
+      CASE WHEN provider_id IN (SELECT key FROM json_each(?14, '$.entryRefs')) THEN service_entry_id ELSE '' END AS pricing_entry,
       model_id, uncached_input_tokens, cache_read_tokens, cache_write_tokens, output_tokens,
       uncached_input_missing > 0 AS uncachedInputTokensMissing,
       cache_read_missing > 0 AS cacheReadTokensMissing,
@@ -2281,7 +2378,7 @@ FROM filtered_daily;
       AND tariffUsageJson IS NULL
 )
 SELECT * FROM (
-SELECT pricing_provider AS providerId, model_id AS modelId, COUNT(*) AS rowCount,
+SELECT pricing_provider AS providerId, pricing_entry AS serviceEntryId, model_id AS modelId, COUNT(*) AS rowCount,
        SUM(uncached_input_tokens) AS uncachedInputTokens,
        SUM(cache_read_tokens) AS cacheReadTokens,
        SUM(cache_write_tokens) AS cacheWriteTokens,
@@ -2289,13 +2386,13 @@ SELECT pricing_provider AS providerId, model_id AS modelId, COUNT(*) AS rowCount
        uncachedInputTokensMissing, cacheReadTokensMissing, cacheWriteTokensMissing, outputTokensMissing,
        NULL AS tariffUsageJson
 FROM cost_basis
-GROUP BY pricing_provider, model_id, uncached_input_tokens IS NULL, cache_read_tokens IS NULL,
+GROUP BY pricing_provider, pricing_entry, model_id, uncached_input_tokens IS NULL, cache_read_tokens IS NULL,
          cache_write_tokens IS NULL, output_tokens IS NULL,
          uncachedInputTokensMissing, cacheReadTokensMissing, cacheWriteTokensMissing, outputTokensMissing
 UNION ALL
-SELECT provider_id, model_id, 1, NULL, NULL, NULL, NULL, 0, 0, 0, 0, tariffUsageJson FROM tariff_groups
+SELECT provider_id, service_entry_id, model_id, 1, NULL, NULL, NULL, NULL, 0, 0, 0, 0, tariffUsageJson FROM tariff_groups
 )
-ORDER BY providerId, modelId, uncachedInputTokens IS NULL, cacheReadTokens IS NULL,
+ORDER BY providerId, serviceEntryId, modelId, uncachedInputTokens IS NULL, cacheReadTokens IS NULL,
          cacheWriteTokens IS NULL, outputTokens IS NULL,
          uncachedInputTokensMissing, cacheReadTokensMissing, cacheWriteTokensMissing, outputTokensMissing,
          tariffUsageJson
@@ -2482,7 +2579,7 @@ function M.dashboard_get(args)
             )
         end
         attempt.billingDetailsJson = nil
-        attempt.isOffPeak = is_off_peak(attempt.providerId, attempt.modelId, attempt.terminalAtMs, rules)
+        attempt.isOffPeak = is_off_peak(attempt.providerId, attempt.serviceEntryId, attempt.modelId, attempt.terminalAtMs, rules)
         attach_reference_estimate(attempt, config, price_cache, overrides)
     end
     for _, account in ipairs(dashboard.accounts or EMPTY_ARRAY) do
@@ -2506,7 +2603,18 @@ function M.pricing_get(args)
     local catalog_ids, override_ids, declared_ids = vulcan.json.array(), vulcan.json.array(), vulcan.json.array()
     local scoped_ids = vulcan.json.array()
     local legacy_ids = vulcan.json.array()
+    -- Scoped catalog IDs are selectable even when the shared version floor hides the model.
+    -- 即使共享版本下限隐藏该模型，供应商刊例仍可在专属范围选用。
+    local scoped_catalog_ids, catalog_provider_ids = vulcan.json.array(), vulcan.json.array()
+    local provider_catalog = DEFAULT_PRICING_CATALOG.provider_models[input.providerId]
+    if provider_catalog ~= nil then
+        for model_id in pairs(provider_catalog) do scoped_catalog_ids[#scoped_catalog_ids + 1] = model_id end
+    end
+    for provider_id in pairs(DEFAULT_PRICING_CATALOG.provider_models) do
+        catalog_provider_ids[#catalog_provider_ids + 1] = provider_id
+    end
     for model_id in pairs(DEFAULT_PRICING_CATALOG.models) do catalog_ids[#catalog_ids + 1] = model_id end
+    for model_id in pairs(DEFAULT_PRICING_CATALOG.native_unit_references) do catalog_ids[#catalog_ids + 1] = model_id end
     for model_id in pairs(overrides.shared.groups) do override_ids[#override_ids + 1] = model_id end
     for model_id in pairs(config.modelOverrides) do legacy_ids[#legacy_ids + 1] = model_id end
     if provider ~= nil then
@@ -2523,7 +2631,8 @@ function M.pricing_get(args)
     local rows = sqlite_query([[
 WITH ]] .. billing_lookup_sql("?7") .. [[,
 hidden_ids AS MATERIALIZED (SELECT lower(key) AS model_id FROM json_each(?10)),
-catalog AS (SELECT value AS model_id FROM json_each(?1)),
+scoped_catalog AS (SELECT value AS model_id FROM json_each(?14)),
+catalog AS (SELECT value AS model_id FROM json_each(?1) UNION SELECT model_id FROM scoped_catalog),
 shared_overrides AS (SELECT value AS model_id FROM json_each(?2)),
 scoped_overrides AS (SELECT value AS model_id FROM json_each(?13)),
 overrides AS (SELECT model_id FROM shared_overrides UNION SELECT model_id FROM scoped_overrides),
@@ -2533,7 +2642,8 @@ declared AS (SELECT value AS model_id FROM json_each(?6)),
 identities AS (SELECT model_id FROM catalog UNION SELECT model_id FROM overrides UNION SELECT model_id FROM used
     UNION SELECT model_id FROM declared UNION SELECT value FROM json_each(?8)),
 models AS (
-    SELECT i.model_id AS raw_model, ]] .. billing_model_sql("i.model_id") .. [[ AS model_id,
+    SELECT i.model_id AS raw_model, COALESCE((SELECT model_id FROM scoped_catalog
+        WHERE model_id = lower(]] .. model_id_suffix_sql("i.model_id") .. [[)), ]] .. billing_model_sql("i.model_id") .. [[) AS model_id,
         COALESCE(u.attempts, 0) AS attempts
     FROM identities i LEFT JOIN used u ON i.model_id = u.model_id
 ), numeric_ids AS (
@@ -2566,7 +2676,7 @@ models AS (
     SELECT m.model_id, SUM(m.attempts) AS attempts
     FROM models m
     WHERE (lower(m.model_id) NOT IN (SELECT model_id FROM excluded_models)
-           OR m.model_id IN (SELECT model_id FROM scoped_overrides))
+           OR m.model_id IN (SELECT model_id FROM scoped_overrides UNION SELECT model_id FROM scoped_catalog))
       AND (?4 IN ('all', 'used')
         OR (?4 = 'override' AND (
              (?12 = '' AND m.model_id IN (SELECT model_id FROM shared_overrides))
@@ -2579,11 +2689,13 @@ models AS (
 ), page AS (SELECT * FROM filtered ORDER BY model_id LIMIT 25 OFFSET ?5)
 SELECT json_object('totalCount', (SELECT COUNT(*) FROM filtered),
     'providerIds', json((SELECT json_group_array(provider_id) FROM (
-        SELECT DISTINCT provider_id FROM provider_usage_daily_v3 ORDER BY provider_id))),
+        SELECT provider_id FROM provider_usage_daily_v3
+        UNION SELECT value AS provider_id FROM json_each(?15) ORDER BY provider_id))),
     'models', json((SELECT json_group_array(json_object('modelId', page.model_id, 'attempts', page.attempts,
         'aliases', json((SELECT json_group_array(model_suffix) FROM
             (SELECT model_suffix FROM billing_aliases
                 WHERE model_id = page.model_id AND model_suffix <> lower(model_id)
+                AND model_suffix NOT IN (SELECT model_id FROM scoped_catalog)
                 AND model_suffix NOT IN (SELECT model_id FROM hidden_ids) ORDER BY model_suffix LIMIT 25)))))
         FROM page))) AS resultJson;
 ]], {
@@ -2602,11 +2714,21 @@ SELECT json_object('totalCount', (SELECT COUNT(*) FROM filtered),
         }) },
         { kind = "string", value = input.providerId or "" },
         { kind = "string", value = vulcan.json.encode(scoped_ids) },
+        { kind = "string", value = vulcan.json.encode(scoped_catalog_ids) },
+        { kind = "string", value = vulcan.json.encode(catalog_provider_ids) },
     })
     local result = decode_json_text(rows[1].resultJson, "pricing directory")
     result.currency = DEFAULT_PRICING_CATALOG.currency
     for _, row in ipairs(result.models) do
-        local group = (provider and provider.groups[row.modelId]) or overrides.shared.groups[row.modelId]
+        -- Show official media rates without treating media units as tokens in estimates.
+        -- 展示官方媒体报价，估算时不将媒体单位当作 Token。
+        local native_reference = DEFAULT_PRICING_CATALOG.native_unit_references[row.modelId]
+        if native_reference ~= nil then
+            local rates = vulcan.json.array()
+            for _, rate in ipairs(native_reference.rates) do rates[#rates + 1] = rate end
+            row.nativeUnitRates = rates
+        end
+        local group = (provider and provider.groups[row.modelId]) or overrides.shared.groups[billing_model_id(row.modelId)]
         if group ~= nil and group.conflict then
             row.effectivePrices = vulcan.json.object()
             row.source = "conflict"

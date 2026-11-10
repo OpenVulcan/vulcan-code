@@ -15,7 +15,22 @@
           "source": { "enum": ["catalog", "override", "provider_override", "unpriced", "conflict"] },
           "aliases": { "type": "array", "maxItems": 25, "items": { "type": "string" } },
           "effectivePrices": { "$ref": "#/$defs/currencyPrices" },
-          "offPeakPrices": { "$ref": "#/$defs/currencyPrices" }
+          "offPeakPrices": { "$ref": "#/$defs/currencyPrices" },
+          "nativeUnitRates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "unit": {
+                  "enum": ["input_second", "input_10000_characters", "input_image", "output_image", "output_image_1k", "output_image_2k", "output_second_480p", "output_second_720p", "output_second_1080p"]
+                },
+                "beijingCny": { "type": "string" },
+                "singaporeCny": { "type": "string" }
+              },
+              "required": ["unit", "beijingCny", "singaporeCny"],
+              "additionalProperties": false
+            }
+          }
         },
         "required": ["modelId", "attempts", "source", "aliases", "effectivePrices"],
         "additionalProperties": false

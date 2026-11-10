@@ -1,14 +1,15 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "alibaba",
-  "revision": 24,
-  "published_at": "2026-11-08T06:25:07Z",
+  "revision": 26,
+  "published_at": "2026-11-10T12:48:28Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
       "openai-chat-completions.v1",
       "anthropic-messages.v1",
-      "openai-responses.v1"
+      "openai-responses.v1",
+      "typesafe-systemone.v1"
     ],
     "required_execution_primitives": [
       "conversation_media_analyze",
@@ -21,6 +22,7 @@
       "signed_object_upload"
     ],
     "required_transformers": [
+      "copy_request_field",
       "delete_if_equals",
       "delete_json_pointer",
       "enum_map",
@@ -34,9 +36,9 @@
     "directory_rank": 40,
     "credential_directory_visibility": "configured_only",
     "promotion": {
-      "signup_url": "https://bailian.console.aliyun.com/",
-      "partnership_kind": "none",
-      "disclosure_key": "settings.providerPromotion.neutralDisclosure"
+      "signup_url": "https://www.aliyun.com/minisite/goods?userCode=m1quo9ys",
+      "partnership_kind": "referral",
+      "disclosure_key": "settings.providerPromotion.referralDisclosure"
     }
   },
   "services": [
@@ -72,7 +74,23 @@
           { "model_id": "deepseek-v4-pro", "display_name": "DeepSeek V4 Pro" },
           { "model_id": "deepseek-v4-pro-0813", "display_name": "DeepSeek V4 Pro 0813" },
           { "model_id": "deepseek-v4-flash-0731", "display_name": "DeepSeek V4 Flash 0731" },
-          { "model_id": "glm-5.2", "display_name": "GLM-5.2" }
+          { "model_id": "glm-5.2", "display_name": "GLM-5.2" },
+          {
+            "model_id": "deepseek-v4.1-flash",
+            "display_name": "DeepSeek V4.1 Flash"
+          },
+          {
+            "model_id": "deepseek-v4.1-flash-1017",
+            "display_name": "DeepSeek V4.1 Flash 1017"
+          },
+          {
+            "model_id": "glm-5.3",
+            "display_name": "GLM-5.3"
+          },
+          {
+            "model_id": "decision-model-preview",
+            "display_name": "Bailian Decision Model Preview"
+          }
         ]
       },
       "protocol_routes": [
@@ -98,7 +116,7 @@
           ],
           "usage_profile_refs": [],
           "request_profile_refs": [
-            "alibaba.chat.thinking.v1"
+            "alibaba.token-plan.chat.thinking.v1"
           ],
           "response_profile_refs": [],
           "provider_request_id_headers": [],
@@ -129,7 +147,7 @@
             "alibaba.openai.responses.sse.completed.v1",
             "alibaba.openai.responses.ws.completed.v1"
           ],
-          "request_profile_refs": [],
+          "request_profile_refs": ["alibaba.token-plan.responses.thinking.v1"],
           "response_profile_refs": [],
           "provider_request_id_headers": [],
           "verified": true
@@ -159,11 +177,31 @@
           ],
           "usage_profile_refs": [],
           "request_profile_refs": [
-            "alibaba.anthropic.thinking.v1"
+            "alibaba.token-plan.anthropic.thinking.v1"
           ],
           "response_profile_refs": [],
           "provider_request_id_headers": [],
           "verified": true
+        },
+        {
+          "protocol_profile_id": "typesafe-systemone.v1",
+          "endpoint_path": "/systemone",
+          "usage_profile_refs": [],
+          "request_profile_refs": [],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
+        }
+      ],
+      "native_inference_bindings": [
+        {
+          "operation": "decision_evaluate",
+          "model_ids": [
+            "decision-model-preview"
+          ],
+          "binding_id": "alibaba.token-plan.systemone.v1",
+          "endpoint_path": "/systemone",
+          "projection": "system_one"
         }
       ]
     },
@@ -199,16 +237,49 @@
           { "model_id": "deepseek-v4-pro", "display_name": "DeepSeek V4 Pro" },
           { "model_id": "deepseek-v4-pro-0813", "display_name": "DeepSeek V4 Pro 0813" },
           { "model_id": "deepseek-v4-flash-0731", "display_name": "DeepSeek V4 Flash 0731" },
-          { "model_id": "glm-5.2", "display_name": "GLM-5.2" }
+          { "model_id": "glm-5.2", "display_name": "GLM-5.2" },
+          {
+            "model_id": "deepseek-v4.1-flash",
+            "display_name": "DeepSeek V4.1 Flash"
+          },
+          {
+            "model_id": "deepseek-v4.1-flash-1017",
+            "display_name": "DeepSeek V4.1 Flash 1017"
+          },
+          {
+            "model_id": "glm-5.3",
+            "display_name": "GLM-5.3"
+          },
+          {
+            "model_id": "decision-model-preview",
+            "display_name": "Bailian Decision Model Preview"
+          }
         ]
       },
       "protocol_routes": [
         {
           "protocol_profile_id": "openai-chat-completions.v1",
           "endpoint_path": "/chat/completions",
+          "request_headers": {
+            "x-dashscope-ossresource-resolve": "enable"
+          },
+          "input_resource_constraints": [
+            {
+              "resource_kind": "image",
+              "max_bytes": 1073741824,
+              "reference_policy": "local_only",
+              "upload_channel_refs": ["sg.temporary-oss"]
+            },
+            {
+              "resource_kind": "video",
+              "max_bytes": 1073741824,
+              "reference_policy": "local_only",
+              "upload_channel_refs": ["sg.temporary-oss"]
+            }
+          ],
           "usage_profile_refs": [],
           "request_profile_refs": [
-            "alibaba.chat.thinking.v1"
+            "alibaba.token-plan.chat.thinking.v1"
           ],
           "response_profile_refs": [],
           "provider_request_id_headers": [],
@@ -217,12 +288,29 @@
         {
           "protocol_profile_id": "openai-responses.v1",
           "endpoint_path": "/responses",
+          "request_headers": {
+            "x-dashscope-ossresource-resolve": "enable"
+          },
+          "input_resource_constraints": [
+            {
+              "resource_kind": "image",
+              "max_bytes": 1073741824,
+              "reference_policy": "local_only",
+              "upload_channel_refs": ["sg.temporary-oss"]
+            },
+            {
+              "resource_kind": "video",
+              "max_bytes": 1073741824,
+              "reference_policy": "local_only",
+              "upload_channel_refs": ["sg.temporary-oss"]
+            }
+          ],
           "usage_profile_refs": [
             "alibaba.openai.responses.body.v1",
             "alibaba.openai.responses.sse.completed.v1",
             "alibaba.openai.responses.ws.completed.v1"
           ],
-          "request_profile_refs": [],
+          "request_profile_refs": ["alibaba.token-plan.responses.thinking.v1"],
           "response_profile_refs": [],
           "provider_request_id_headers": [],
           "verified": true
@@ -233,15 +321,50 @@
           "base_url_override": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic",
           "authentication": "x_api_key",
           "request_headers": {
-            "anthropic-version": "2023-06-01"
+            "anthropic-version": "2023-06-01",
+            "x-dashscope-ossresource-resolve": "enable"
           },
+          "input_resource_constraints": [
+            {
+              "resource_kind": "image",
+              "max_bytes": 1073741824,
+              "reference_policy": "local_only",
+              "upload_channel_refs": ["sg.temporary-oss"]
+            },
+            {
+              "resource_kind": "video",
+              "max_bytes": 1073741824,
+              "reference_policy": "local_only",
+              "upload_channel_refs": ["sg.temporary-oss"]
+            }
+          ],
           "usage_profile_refs": [],
           "request_profile_refs": [
-            "alibaba.anthropic.thinking.v1"
+            "alibaba.token-plan.anthropic.thinking.v1"
           ],
           "response_profile_refs": [],
           "provider_request_id_headers": [],
           "verified": true
+        },
+        {
+          "protocol_profile_id": "typesafe-systemone.v1",
+          "endpoint_path": "/systemone",
+          "usage_profile_refs": [],
+          "request_profile_refs": [],
+          "response_profile_refs": [],
+          "provider_request_id_headers": [],
+          "verified": true
+        }
+      ],
+      "native_inference_bindings": [
+        {
+          "operation": "decision_evaluate",
+          "model_ids": [
+            "decision-model-preview"
+          ],
+          "binding_id": "alibaba.token-plan.systemone.v1",
+          "endpoint_path": "/systemone",
+          "projection": "system_one"
         }
       ]
     },
@@ -275,15 +398,37 @@
           { "model_id": "qwen3.6-plus", "display_name": "Qwen3.6 Plus" },
           { "model_id": "qwen3.6-flash", "display_name": "Qwen3.6 Flash" },
           { "model_id": "deepseek-v4-pro", "display_name": "DeepSeek V4 Pro" },
-          { "model_id": "deepseek-v4-flash", "display_name": "DeepSeek V4 Flash" },
-          { "model_id": "deepseek-v3.2", "display_name": "DeepSeek V3.2" },
           { "model_id": "kimi-k2.7-code", "display_name": "Kimi K2.7 Code" },
           { "model_id": "kimi-k2.6", "display_name": "Kimi K2.6" },
           { "model_id": "kimi-k2.5", "display_name": "Kimi K2.5" },
           { "model_id": "glm-5.2", "display_name": "GLM-5.2" },
           { "model_id": "glm-5.1", "display_name": "GLM-5.1" },
           { "model_id": "glm-5", "display_name": "GLM-5" },
-          { "model_id": "MiniMax-M2.5", "display_name": "MiniMax M2.5" }
+          { "model_id": "MiniMax-M2.5", "display_name": "MiniMax M2.5" },
+          {
+            "model_id": "qwen3.8-flash",
+            "display_name": "Qwen3.8 Flash"
+          },
+          {
+            "model_id": "deepseek-v4-pro-0813",
+            "display_name": "DeepSeek V4 Pro 0813"
+          },
+          {
+            "model_id": "deepseek-v4-flash-0731",
+            "display_name": "DeepSeek V4 Flash 0731"
+          },
+          {
+            "model_id": "deepseek-v4.1-flash",
+            "display_name": "DeepSeek V4.1 Flash"
+          },
+          {
+            "model_id": "deepseek-v4.1-flash-1017",
+            "display_name": "DeepSeek V4.1 Flash 1017"
+          },
+          {
+            "model_id": "glm-5.3",
+            "display_name": "GLM-5.3"
+          }
         ]
       },
       "protocol_routes": [
@@ -292,7 +437,7 @@
           "endpoint_path": "/chat/completions",
           "usage_profile_refs": [],
           "request_profile_refs": [
-            "alibaba.chat.thinking.v1"
+            "alibaba.token-plan.chat.thinking.v1"
           ],
           "response_profile_refs": [],
           "provider_request_id_headers": [],
@@ -306,7 +451,7 @@
             "alibaba.openai.responses.sse.completed.v1",
             "alibaba.openai.responses.ws.completed.v1"
           ],
-          "request_profile_refs": [],
+          "request_profile_refs": ["alibaba.token-plan.responses.thinking.v1"],
           "response_profile_refs": [],
           "provider_request_id_headers": [],
           "verified": true
@@ -321,7 +466,7 @@
           },
           "usage_profile_refs": [],
           "request_profile_refs": [
-            "alibaba.anthropic.thinking.v1"
+            "alibaba.token-plan.anthropic.thinking.v1"
           ],
           "response_profile_refs": [],
           "provider_request_id_headers": [],
@@ -353,20 +498,43 @@
         "source_policy": "manifest_only",
         "discovery_kind": "manifest_static",
         "models": [
+          { "model_id": "qwen3.8-max", "display_name": "Qwen3.8 Max" },
           { "model_id": "qwen3.7-max", "display_name": "Qwen3.7 Max" },
           { "model_id": "qwen3.7-plus", "display_name": "Qwen3.7 Plus" },
           { "model_id": "qwen3.6-plus", "display_name": "Qwen3.6 Plus" },
           { "model_id": "qwen3.6-flash", "display_name": "Qwen3.6 Flash" },
           { "model_id": "deepseek-v4-pro", "display_name": "DeepSeek V4 Pro" },
-          { "model_id": "deepseek-v4-flash", "display_name": "DeepSeek V4 Flash" },
-          { "model_id": "deepseek-v3.2", "display_name": "DeepSeek V3.2" },
           { "model_id": "kimi-k2.7-code", "display_name": "Kimi K2.7 Code" },
           { "model_id": "kimi-k2.6", "display_name": "Kimi K2.6" },
           { "model_id": "kimi-k2.5", "display_name": "Kimi K2.5" },
           { "model_id": "glm-5.2", "display_name": "GLM-5.2" },
           { "model_id": "glm-5.1", "display_name": "GLM-5.1" },
           { "model_id": "glm-5", "display_name": "GLM-5" },
-          { "model_id": "MiniMax-M2.5", "display_name": "MiniMax M2.5" }
+          { "model_id": "MiniMax-M2.5", "display_name": "MiniMax M2.5" },
+          {
+            "model_id": "qwen3.8-flash",
+            "display_name": "Qwen3.8 Flash"
+          },
+          {
+            "model_id": "deepseek-v4-pro-0813",
+            "display_name": "DeepSeek V4 Pro 0813"
+          },
+          {
+            "model_id": "deepseek-v4-flash-0731",
+            "display_name": "DeepSeek V4 Flash 0731"
+          },
+          {
+            "model_id": "deepseek-v4.1-flash",
+            "display_name": "DeepSeek V4.1 Flash"
+          },
+          {
+            "model_id": "deepseek-v4.1-flash-1017",
+            "display_name": "DeepSeek V4.1 Flash 1017"
+          },
+          {
+            "model_id": "glm-5.3",
+            "display_name": "GLM-5.3"
+          }
         ]
       },
       "protocol_routes": [
@@ -375,7 +543,7 @@
           "endpoint_path": "/chat/completions",
           "usage_profile_refs": [],
           "request_profile_refs": [
-            "alibaba.chat.thinking.v1"
+            "alibaba.token-plan.chat.thinking.v1"
           ],
           "response_profile_refs": [],
           "provider_request_id_headers": [],
@@ -389,7 +557,7 @@
             "alibaba.openai.responses.sse.completed.v1",
             "alibaba.openai.responses.ws.completed.v1"
           ],
-          "request_profile_refs": [],
+          "request_profile_refs": ["alibaba.token-plan.responses.thinking.v1"],
           "response_profile_refs": [],
           "provider_request_id_headers": [],
           "verified": true
@@ -404,7 +572,7 @@
           },
           "usage_profile_refs": [],
           "request_profile_refs": [
-            "alibaba.anthropic.thinking.v1"
+            "alibaba.token-plan.anthropic.thinking.v1"
           ],
           "response_profile_refs": [],
           "provider_request_id_headers": [],
@@ -826,34 +994,7 @@
       "rule_id": "alibaba-minimax-m2-5",
       "scope": {
         "service_entry_ids": [
-          "token-plan-team-cn"
-        ],
-        "credential_profile_ids": []
-      },
-      "matcher": {
-        "kind": "exact",
-        "value": "MiniMax-M2.5"
-      },
-      "core_model_ref": "minimax-m2.5",
-      "supported_protocols": [
-        "openai-chat-completions.v1",
-        "anthropic-messages.v1"
-      ],
-      "capabilities": {
-        "provider_native_tools": [],
-        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
-        "model_parameters": [],
-        "evidence_revision": "model-core.alibaba.2026-07-30",
-        "embedding": null,
-        "rerank": null,
-        "output_limit": null
-      },
-      "model_parameters": []
-    },
-    {
-      "rule_id": "alibaba-minimax-m2-5-catalog-2",
-      "scope": {
-        "service_entry_ids": [
+          "token-plan-team-cn",
           "token-plan-team-global"
         ],
         "credential_profile_ids": []
@@ -874,7 +1015,6 @@
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
         "rerank": null,
-        "context_limit": 192000,
         "output_limit": null
       },
       "model_parameters": []
@@ -912,38 +1052,7 @@
       "rule_id": "alibaba-kimi-k2-5",
       "scope": {
         "service_entry_ids": [
-          "token-plan-team-cn"
-        ],
-        "credential_profile_ids": []
-      },
-      "matcher": {
-        "kind": "exact",
-        "value": "kimi-k2.5"
-      },
-      "core_model_ref": "kimi-k2.5",
-      "supported_protocols": [
-        "openai-chat-completions.v1",
-        "anthropic-messages.v1"
-      ],
-      "capabilities": {
-        "input_resources": ["image", "video"],
-        "reasoning": "native",
-        "provider_native_tools": [],
-        "reasoning_control": "toggle",
-        "reasoning_efforts": ["none", "adaptive"],
-        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
-        "model_parameters": [],
-        "evidence_revision": "model-core.alibaba.2026-07-30",
-        "embedding": null,
-        "rerank": null,
-        "output_limit": null
-      },
-      "model_parameters": []
-    },
-    {
-      "rule_id": "alibaba-kimi-k2-5-catalog-2",
-      "scope": {
-        "service_entry_ids": [
+          "token-plan-team-cn",
           "token-plan-team-global"
         ],
         "credential_profile_ids": []
@@ -968,7 +1077,6 @@
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
         "rerank": null,
-        "context_limit": 256000,
         "output_limit": null
       },
       "model_parameters": []
@@ -1093,12 +1201,44 @@
       "protocol_capabilities": {
         "openai-responses.v1": {
           "input_resources": [],
-          "reasoning": "unsupported",
-          "reasoning_control": "fixed_off",
-          "reasoning_efforts": [],
-          "evidence_revision": "model-core.alibaba.responses-harness.2026-07-30"
+          "reasoning": "native",
+          "reasoning_control": "effort_selection",
+          "reasoning_efforts": ["none", "adaptive", "minimal", "low", "medium", "high", "xhigh", "max"],
+          "evidence_revision": "alibaba.token-plan.beijing.2026-11-10",
+          "structured_output": "json_schema"
+        },
+        "openai-chat-completions.v1": {
+          "reasoning": "native",
+          "reasoning_control": "effort_selection",
+          "reasoning_efforts": [
+            "none",
+            "adaptive",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "structured_output": "json_schema",
+          "evidence_revision": "alibaba.token-plan.beijing.2026-11-10"
+        },
+        "anthropic-messages.v1": {
+          "reasoning": "native",
+          "reasoning_control": "effort_selection",
+          "reasoning_efforts": [
+            "none",
+            "adaptive",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "evidence_revision": "alibaba.token-plan.beijing.2026-11-10",
+          "structured_output": "json_schema"
         }
-      }
+      },
+      "provenance_ref": "https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions"
     },
     {
       "rule_id": "alibaba-qwen3-7-plus-catalog-3",
@@ -1144,7 +1284,8 @@
         "service_entry_ids": [
           "token-plan-personal-cn",
           "token-plan-personal-global",
-          "token-plan-team-cn"
+          "token-plan-team-cn",
+          "token-plan-team-global"
         ],
         "credential_profile_ids": []
       },
@@ -1170,19 +1311,54 @@
       "protocol_capabilities": {
         "openai-responses.v1": {
           "input_resources": [],
-          "reasoning": "unsupported",
-          "reasoning_control": "fixed_off",
-          "reasoning_efforts": [],
-          "evidence_revision": "model-core.alibaba.responses-harness.2026-07-30"
+          "reasoning": "native",
+          "reasoning_control": "effort_selection",
+          "reasoning_efforts": ["none", "adaptive", "minimal", "low", "medium", "high", "xhigh", "max"],
+          "evidence_revision": "alibaba.token-plan.beijing.2026-11-10",
+          "structured_output": "json_schema"
+        },
+        "openai-chat-completions.v1": {
+          "reasoning": "native",
+          "reasoning_control": "effort_selection",
+          "reasoning_efforts": [
+            "none",
+            "adaptive",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "structured_output": "json_schema",
+          "evidence_revision": "alibaba.token-plan.beijing.2026-11-10"
+        },
+        "anthropic-messages.v1": {
+          "reasoning": "native",
+          "reasoning_control": "effort_selection",
+          "reasoning_efforts": [
+            "none",
+            "adaptive",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "evidence_revision": "alibaba.token-plan.beijing.2026-11-10",
+          "structured_output": "json_schema"
         }
-      }
+      },
+      "provenance_ref": "https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions"
     },
     {
       "rule_id": "alibaba-qwen3-8-flash",
       "scope": {
         "service_entry_ids": [
           "token-plan-personal-cn",
-          "token-plan-personal-global"
+          "token-plan-personal-global",
+          "token-plan-team-cn",
+          "token-plan-team-global"
         ],
         "credential_profile_ids": []
       },
@@ -1208,12 +1384,45 @@
       "protocol_capabilities": {
         "openai-responses.v1": {
           "input_resources": [],
-          "reasoning": "unsupported",
-          "reasoning_control": "fixed_off",
-          "reasoning_efforts": [],
-          "evidence_revision": "model-core.alibaba.responses-harness.2026-07-30"
+          "reasoning": "native",
+          "reasoning_control": "effort_selection",
+          "reasoning_efforts": ["none", "adaptive", "minimal", "low", "medium", "high", "xhigh", "max"],
+          "evidence_revision": "alibaba.token-plan.beijing.2026-11-10",
+          "structured_output": "json_schema"
+        },
+        "openai-chat-completions.v1": {
+          "reasoning": "native",
+          "reasoning_control": "effort_selection",
+          "reasoning_efforts": [
+            "none",
+            "adaptive",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "structured_output": "json_schema",
+          "evidence_revision": "alibaba.token-plan.beijing.2026-11-10"
+        },
+        "anthropic-messages.v1": {
+          "reasoning": "native",
+          "reasoning_control": "effort_selection",
+          "reasoning_efforts": [
+            "none",
+            "adaptive",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "evidence_revision": "alibaba.token-plan.beijing.2026-11-10",
+          "structured_output": "json_schema"
         }
-      }
+      },
+      "provenance_ref": "https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions"
     },
     {
       "rule_id": "alibaba-qwen3-7-max",
@@ -1249,12 +1458,44 @@
       "protocol_capabilities": {
         "openai-responses.v1": {
           "input_resources": [],
-          "reasoning": "unsupported",
-          "reasoning_control": "fixed_off",
-          "reasoning_efforts": [],
-          "evidence_revision": "model-core.alibaba.responses-harness.2026-07-30"
+          "reasoning": "native",
+          "reasoning_control": "effort_selection",
+          "reasoning_efforts": ["none", "adaptive", "minimal", "low", "medium", "high", "xhigh", "max"],
+          "evidence_revision": "alibaba.token-plan.beijing.2026-11-10",
+          "structured_output": "json_schema"
+        },
+        "openai-chat-completions.v1": {
+          "reasoning": "native",
+          "reasoning_control": "effort_selection",
+          "reasoning_efforts": [
+            "none",
+            "adaptive",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "structured_output": "json_schema",
+          "evidence_revision": "alibaba.token-plan.beijing.2026-11-10"
+        },
+        "anthropic-messages.v1": {
+          "reasoning": "native",
+          "reasoning_control": "effort_selection",
+          "reasoning_efforts": [
+            "none",
+            "adaptive",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "evidence_revision": "alibaba.token-plan.beijing.2026-11-10",
+          "structured_output": "json_schema"
         }
-      }
+      },
+      "provenance_ref": "https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions"
     },
     {
       "rule_id": "alibaba-qwen3-7-max-catalog-2",
@@ -1323,7 +1564,39 @@
         "rerank": null,
         "output_limit": null
       },
-      "model_parameters": []
+      "model_parameters": [],
+      "provenance_ref": "https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions",
+      "protocol_capabilities": {
+        "openai-chat-completions.v1": {
+          "reasoning": "native",
+          "reasoning_control": "effort_selection",
+          "reasoning_efforts": [
+            "none",
+            "adaptive",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "structured_output": "json_object",
+          "evidence_revision": "alibaba.token-plan.beijing.2026-11-10"
+        },
+        "anthropic-messages.v1": {
+          "reasoning": "native",
+          "reasoning_control": "effort_selection",
+          "reasoning_efforts": [
+            "none",
+            "adaptive",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "evidence_revision": "alibaba.token-plan.beijing.2026-11-10"
+        }
+      }
     },
     {
       "rule_id": "alibaba-glm-5-2",
@@ -1331,34 +1604,7 @@
         "service_entry_ids": [
           "token-plan-personal-cn",
           "token-plan-personal-global",
-          "token-plan-team-cn"
-        ],
-        "credential_profile_ids": []
-      },
-      "matcher": {
-        "kind": "exact",
-        "value": "glm-5.2"
-      },
-      "core_model_ref": "glm-5.2",
-      "supported_protocols": [
-        "openai-chat-completions.v1",
-        "anthropic-messages.v1"
-      ],
-      "capabilities": {
-        "provider_native_tools": [],
-        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
-        "model_parameters": [],
-        "evidence_revision": "model-core.alibaba.2026-07-30",
-        "embedding": null,
-        "rerank": null,
-        "output_limit": null
-      },
-      "model_parameters": []
-    },
-    {
-      "rule_id": "alibaba-glm-5-2-catalog-2",
-      "scope": {
-        "service_entry_ids": [
+          "token-plan-team-cn",
           "token-plan-team-global"
         ],
         "credential_profile_ids": []
@@ -1379,10 +1625,43 @@
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
         "rerank": null,
-        "context_limit": 198000,
         "output_limit": null
       },
-      "model_parameters": []
+      "model_parameters": [],
+      "provenance_ref": "https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions",
+      "protocol_capabilities": {
+        "openai-chat-completions.v1": {
+          "reasoning": "native",
+          "reasoning_control": "effort_selection",
+          "reasoning_efforts": [
+            "none",
+            "adaptive",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "structured_output": "json_schema",
+          "evidence_revision": "alibaba.token-plan.beijing.2026-11-10"
+        },
+        "anthropic-messages.v1": {
+          "reasoning": "native",
+          "reasoning_control": "effort_selection",
+          "reasoning_efforts": [
+            "none",
+            "adaptive",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "evidence_revision": "alibaba.token-plan.beijing.2026-11-10",
+          "structured_output": "json_schema"
+        }
+      }
     },
     {
       "rule_id": "alibaba-deepseek-v4-pro",
@@ -1414,7 +1693,40 @@
         "rerank": null,
         "output_limit": null
       },
-      "model_parameters": []
+      "model_parameters": [],
+      "provenance_ref": "https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions",
+      "protocol_capabilities": {
+        "openai-chat-completions.v1": {
+          "reasoning": "native",
+          "reasoning_control": "effort_selection",
+          "reasoning_efforts": [
+            "none",
+            "adaptive",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "structured_output": "json_schema",
+          "evidence_revision": "alibaba.token-plan.beijing.2026-11-10"
+        },
+        "anthropic-messages.v1": {
+          "reasoning": "native",
+          "reasoning_control": "effort_selection",
+          "reasoning_efforts": [
+            "none",
+            "adaptive",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "evidence_revision": "alibaba.token-plan.beijing.2026-11-10",
+          "structured_output": "json_schema"
+        }
+      }
     },
     {
       "rule_id": "alibaba-deepseek-v4-pro-catalog-2",
@@ -1449,7 +1761,9 @@
       "scope": {
         "service_entry_ids": [
           "token-plan-personal-cn",
-          "token-plan-personal-global"
+          "token-plan-personal-global",
+          "token-plan-team-cn",
+          "token-plan-team-global"
         ],
         "credential_profile_ids": []
       },
@@ -1471,14 +1785,49 @@
         "rerank": null,
         "output_limit": null
       },
-      "model_parameters": []
+      "model_parameters": [],
+      "provenance_ref": "https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions",
+      "protocol_capabilities": {
+        "openai-chat-completions.v1": {
+          "reasoning": "native",
+          "reasoning_control": "effort_selection",
+          "reasoning_efforts": [
+            "none",
+            "adaptive",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "structured_output": "json_schema",
+          "evidence_revision": "alibaba.token-plan.beijing.2026-11-10"
+        },
+        "anthropic-messages.v1": {
+          "reasoning": "native",
+          "reasoning_control": "effort_selection",
+          "reasoning_efforts": [
+            "none",
+            "adaptive",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "evidence_revision": "alibaba.token-plan.beijing.2026-11-10"
+        }
+      }
     },
     {
       "rule_id": "alibaba-deepseek-v4-flash-0731",
       "scope": {
         "service_entry_ids": [
           "token-plan-personal-cn",
-          "token-plan-personal-global"
+          "token-plan-personal-global",
+          "token-plan-team-cn",
+          "token-plan-team-global"
         ],
         "credential_profile_ids": []
       },
@@ -1501,36 +1850,40 @@
         "model_parameters": [],
         "evidence_revision": "alibaba.token-plan.personal-global.2026-08-01"
       },
-      "model_parameters": []
-    },
-    {
-      "rule_id": "alibaba-deepseek-v4-flash",
-      "scope": {
-        "service_entry_ids": [
-          "token-plan-team-cn",
-          "token-plan-team-global"
-        ],
-        "credential_profile_ids": []
-      },
-      "matcher": {
-        "kind": "exact",
-        "value": "deepseek-v4-flash"
-      },
-      "core_model_ref": "deepseek-v4-flash",
-      "supported_protocols": [
-        "openai-chat-completions.v1",
-        "anthropic-messages.v1"
-      ],
-      "capabilities": {
-        "provider_native_tools": [],
-        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
-        "model_parameters": [],
-        "evidence_revision": "model-core.alibaba.2026-07-30",
-        "embedding": null,
-        "rerank": null,
-        "output_limit": null
-      },
-      "model_parameters": []
+      "model_parameters": [],
+      "provenance_ref": "https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions",
+      "protocol_capabilities": {
+        "openai-chat-completions.v1": {
+          "reasoning": "native",
+          "reasoning_control": "effort_selection",
+          "reasoning_efforts": [
+            "none",
+            "adaptive",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "structured_output": "json_object",
+          "evidence_revision": "alibaba.token-plan.beijing.2026-11-10"
+        },
+        "anthropic-messages.v1": {
+          "reasoning": "native",
+          "reasoning_control": "effort_selection",
+          "reasoning_efforts": [
+            "none",
+            "adaptive",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "evidence_revision": "alibaba.token-plan.beijing.2026-11-10"
+        }
+      }
     },
     {
       "rule_id": "alibaba-deepseek-v4-flash-catalog-2",
@@ -1562,95 +1915,10 @@
       "model_parameters": []
     },
     {
-      "rule_id": "alibaba-deepseek-v3-2",
-      "scope": {
-        "service_entry_ids": [
-          "token-plan-team-cn"
-        ],
-        "credential_profile_ids": []
-      },
-      "matcher": {
-        "kind": "exact",
-        "value": "deepseek-v3.2"
-      },
-      "core_model_ref": "deepseek-v3.2",
-      "supported_protocols": [
-        "openai-chat-completions.v1",
-        "anthropic-messages.v1"
-      ],
-      "capabilities": {
-        "provider_native_tools": [],
-        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
-        "model_parameters": [],
-        "evidence_revision": "model-core.alibaba.2026-07-30",
-        "embedding": null,
-        "rerank": null,
-        "output_limit": null
-      },
-      "model_parameters": []
-    },
-    {
-      "rule_id": "alibaba-deepseek-v3-2-catalog-2",
-      "scope": {
-        "service_entry_ids": [
-          "token-plan-team-global"
-        ],
-        "credential_profile_ids": []
-      },
-      "matcher": {
-        "kind": "exact",
-        "value": "deepseek-v3.2"
-      },
-      "core_model_ref": "deepseek-v3.2",
-      "supported_protocols": [
-        "openai-chat-completions.v1",
-        "anthropic-messages.v1"
-      ],
-      "capabilities": {
-        "provider_native_tools": [],
-        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
-        "model_parameters": [],
-        "evidence_revision": "model-core.alibaba.2026-07-30",
-        "embedding": null,
-        "rerank": null,
-        "context_limit": 128000,
-        "output_limit": null
-      },
-      "model_parameters": []
-    },
-    {
       "rule_id": "alibaba-kimi-k2-7-code",
       "scope": {
         "service_entry_ids": [
-          "token-plan-team-cn"
-        ],
-        "credential_profile_ids": []
-      },
-      "matcher": {
-        "kind": "exact",
-        "value": "kimi-k2.7-code"
-      },
-      "core_model_ref": "kimi-k2.7-code",
-      "supported_protocols": [
-        "openai-chat-completions.v1",
-        "anthropic-messages.v1"
-      ],
-      "capabilities": {
-        "provider_native_tools": [],
-        "reasoning_efforts": ["adaptive"],
-        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
-        "model_parameters": [],
-        "evidence_revision": "model-core.alibaba.2026-07-30",
-        "embedding": null,
-        "rerank": null,
-        "output_limit": null
-      },
-      "model_parameters": []
-    },
-    {
-      "rule_id": "alibaba-kimi-k2-7-code-catalog-2",
-      "scope": {
-        "service_entry_ids": [
+          "token-plan-team-cn",
           "token-plan-team-global"
         ],
         "credential_profile_ids": []
@@ -1672,7 +1940,6 @@
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
         "rerank": null,
-        "context_limit": 256000,
         "output_limit": null
       },
       "model_parameters": []
@@ -1681,38 +1948,7 @@
       "rule_id": "alibaba-kimi-k2-6",
       "scope": {
         "service_entry_ids": [
-          "token-plan-team-cn"
-        ],
-        "credential_profile_ids": []
-      },
-      "matcher": {
-        "kind": "exact",
-        "value": "kimi-k2.6"
-      },
-      "core_model_ref": "kimi-k2.6",
-      "supported_protocols": [
-        "openai-chat-completions.v1",
-        "anthropic-messages.v1"
-      ],
-      "capabilities": {
-        "input_resources": [],
-        "reasoning": "native",
-        "provider_native_tools": [],
-        "reasoning_control": "toggle",
-        "reasoning_efforts": ["none", "adaptive"],
-        "prompt_cache": {"provider_default_behavior": "host-managed prompt cache injection is not available", "supports_managed_explicit": false, "supported_ttl_options": []},
-        "model_parameters": [],
-        "evidence_revision": "model-core.alibaba.2026-07-30",
-        "embedding": null,
-        "rerank": null,
-        "output_limit": null
-      },
-      "model_parameters": []
-    },
-    {
-      "rule_id": "alibaba-kimi-k2-6-catalog-2",
-      "scope": {
-        "service_entry_ids": [
+          "token-plan-team-cn",
           "token-plan-team-global"
         ],
         "credential_profile_ids": []
@@ -1737,7 +1973,6 @@
         "evidence_revision": "model-core.alibaba.2026-07-30",
         "embedding": null,
         "rerank": null,
-        "context_limit": 256000,
         "output_limit": null
       },
       "model_parameters": []
@@ -2257,6 +2492,230 @@
         "embedding": null
       },
       "model_parameters": []
+    },
+    {
+      "rule_id": "alibaba-deepseek-v4-1-flash",
+      "scope": {
+        "service_entry_ids": [
+          "token-plan-personal-cn",
+          "token-plan-personal-global",
+          "token-plan-team-cn",
+          "token-plan-team-global"
+        ],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "deepseek-v4.1-flash"
+      },
+      "core_model_ref": "deepseek-v4.1-flash",
+      "supported_protocols": [
+        "openai-chat-completions.v1",
+        "anthropic-messages.v1"
+      ],
+      "capabilities": {
+        "provider_native_tools": [],
+        "prompt_cache": {
+          "provider_default_behavior": "host-managed prompt cache injection is not available",
+          "supports_managed_explicit": false,
+          "supported_ttl_options": []
+        },
+        "model_parameters": [],
+        "evidence_revision": "model-core.alibaba.2026-07-30",
+        "embedding": null,
+        "rerank": null,
+        "output_limit": null
+      },
+      "model_parameters": [],
+      "provenance_ref": "https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions",
+      "protocol_capabilities": {
+        "openai-chat-completions.v1": {
+          "reasoning": "native",
+          "reasoning_control": "effort_selection",
+          "reasoning_efforts": [
+            "none",
+            "adaptive",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra"
+          ],
+          "structured_output": "json_schema",
+          "evidence_revision": "alibaba.token-plan.beijing.2026-11-10"
+        },
+        "anthropic-messages.v1": {
+          "reasoning": "native",
+          "reasoning_control": "effort_selection",
+          "reasoning_efforts": [
+            "none",
+            "adaptive",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "evidence_revision": "alibaba.token-plan.beijing.2026-11-10"
+        }
+      }
+    },
+    {
+      "rule_id": "alibaba-deepseek-v4-1-flash-1017",
+      "scope": {
+        "service_entry_ids": [
+          "token-plan-personal-cn",
+          "token-plan-personal-global",
+          "token-plan-team-cn",
+          "token-plan-team-global"
+        ],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "deepseek-v4.1-flash-1017"
+      },
+      "core_model_ref": "deepseek-v4.1-flash-1017",
+      "supported_protocols": [
+        "openai-chat-completions.v1",
+        "anthropic-messages.v1"
+      ],
+      "capabilities": {
+        "provider_native_tools": [],
+        "prompt_cache": {
+          "provider_default_behavior": "host-managed prompt cache injection is not available",
+          "supports_managed_explicit": false,
+          "supported_ttl_options": []
+        },
+        "model_parameters": [],
+        "evidence_revision": "model-core.alibaba.2026-07-30",
+        "embedding": null,
+        "rerank": null,
+        "output_limit": null
+      },
+      "model_parameters": [],
+      "provenance_ref": "https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions",
+      "protocol_capabilities": {
+        "openai-chat-completions.v1": {
+          "reasoning": "native",
+          "reasoning_control": "effort_selection",
+          "reasoning_efforts": [
+            "none",
+            "adaptive",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra"
+          ],
+          "structured_output": "json_object",
+          "evidence_revision": "alibaba.token-plan.beijing.2026-11-10"
+        },
+        "anthropic-messages.v1": {
+          "reasoning": "native",
+          "reasoning_control": "effort_selection",
+          "reasoning_efforts": [
+            "none",
+            "adaptive",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "evidence_revision": "alibaba.token-plan.beijing.2026-11-10"
+        }
+      }
+    },
+    {
+      "rule_id": "alibaba-glm-5-3",
+      "scope": {
+        "service_entry_ids": [
+          "token-plan-personal-cn",
+          "token-plan-personal-global",
+          "token-plan-team-cn",
+          "token-plan-team-global"
+        ],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "glm-5.3"
+      },
+      "core_model_ref": "glm-5.3",
+      "supported_protocols": [
+        "openai-chat-completions.v1",
+        "anthropic-messages.v1"
+      ],
+      "capabilities": {
+        "provider_native_tools": [],
+        "prompt_cache": {
+          "provider_default_behavior": "host-managed prompt cache injection is not available",
+          "supports_managed_explicit": false,
+          "supported_ttl_options": []
+        },
+        "model_parameters": [],
+        "evidence_revision": "model-core.alibaba.2026-07-30",
+        "embedding": null,
+        "rerank": null,
+        "output_limit": null
+      },
+      "model_parameters": [],
+      "provenance_ref": "https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions",
+      "protocol_capabilities": {
+        "openai-chat-completions.v1": {
+          "reasoning": "native",
+          "reasoning_control": "effort_selection",
+          "reasoning_efforts": [
+            "adaptive",
+            "low",
+            "high",
+            "max"
+          ],
+          "structured_output": "json_schema",
+          "evidence_revision": "alibaba.token-plan.beijing.2026-11-10"
+        },
+        "anthropic-messages.v1": {
+          "reasoning": "native",
+          "reasoning_control": "effort_selection",
+          "reasoning_efforts": [
+            "adaptive",
+            "low",
+            "high",
+            "max"
+          ],
+          "evidence_revision": "alibaba.token-plan.beijing.2026-11-10",
+          "structured_output": "json_schema"
+        }
+      }
+    },
+    {
+      "rule_id": "alibaba-token-plan-decision-model-preview",
+      "display_name": "Bailian Decision Model Preview",
+      "scope": {
+        "service_entry_ids": [
+          "token-plan-personal-cn",
+          "token-plan-personal-global"
+        ],
+        "credential_profile_ids": [
+          "token-plan-api-key"
+        ]
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "decision-model-preview"
+      },
+      "core_model_ref": "decision-model-preview",
+      "supported_protocols": [
+        "typesafe-systemone.v1"
+      ],
+      "selected_protocol": "typesafe-systemone.v1",
+      "model_parameters": [],
+      "provenance_ref": "https://help.aliyun.com/zh/model-studio/token-plan-decision-model"
     }
   ],
   "usage_profiles": [
@@ -3248,6 +3707,215 @@
           }
         ]
       }
+    },
+    {
+      "profile_id": "alibaba.token-plan.chat.thinking.v1",
+      "description": "Project Token Plan thinking switches and preserve validated effort levels.",
+      "payload": {
+        "profile_id": "alibaba.token-plan.chat.thinking.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "enum_map",
+            "path": "/enable_thinking",
+            "source": "request_field",
+            "source_path": "@reasoning_effort",
+            "mapping": {
+              "none": false,
+              "adaptive": true,
+              "minimal": true,
+              "low": true,
+              "medium": true,
+              "high": true,
+              "xhigh": true,
+              "max": true,
+              "ultra": true
+            },
+            "unmatched": "error",
+            "default": null
+          },
+          {
+            "op": "delete_if_equals",
+            "path": "/reasoning_effort",
+            "source": "request_field",
+            "source_path": "@reasoning_effort",
+            "equals": "none"
+          },
+          {
+            "op": "delete_if_equals",
+            "path": "/reasoning_effort",
+            "source": "request_field",
+            "source_path": "@reasoning_effort",
+            "equals": "adaptive"
+          }
+        ]
+      }
+    },
+    {
+      "profile_id": "alibaba.async.wan3-video-generate.request.v1",
+      "description": "Build Token Plan Wan3 text-to-video requests.",
+      "payload": {
+        "profile_id": "alibaba.async.wan3-video-generate.request.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "model": {
+                "$vulcan_model_id": true
+              },
+              "input": {
+                "prompt": {
+                  "$vulcan_ref": {
+                    "path": "/prompt"
+                  }
+                }
+              },
+              "parameters": {
+                "resolution": {
+                  "$vulcan_ref": {
+                    "path": "/resolution",
+                    "optional": true
+                  }
+                },
+                "ratio": {
+                  "$vulcan_ref": {
+                    "path": "/aspect_ratio",
+                    "optional": true
+                  }
+                },
+                "duration": {
+                  "$vulcan_ref": {
+                    "path": "/duration_seconds",
+                    "optional": true
+                  }
+                },
+                "audio": {
+                  "$vulcan_ref": {
+                    "path": "/audio",
+                    "optional": true
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "profile_id": "alibaba.token-plan.anthropic.thinking.v1",
+      "description": "Project verified Token Plan Messages thinking modes and effort values.",
+      "payload": {
+        "profile_id": "alibaba.token-plan.anthropic.thinking.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "enum_map",
+            "path": "/thinking",
+            "source": "request_field",
+            "source_path": "@reasoning_effort",
+            "mapping": {
+              "none": {
+                "type": "disabled"
+              },
+              "adaptive": {
+                "type": "enabled"
+              },
+              "low": {
+                "type": "enabled"
+              },
+              "medium": {
+                "type": "enabled"
+              },
+              "high": {
+                "type": "enabled"
+              },
+              "xhigh": {
+                "type": "enabled"
+              },
+              "max": {
+                "type": "enabled"
+              }
+            },
+            "unmatched": "error",
+            "default": null
+          },
+          {
+            "op": "copy_request_field",
+            "path": "/output_config/effort",
+            "field": "reasoning_effort"
+          },
+          {
+            "op": "delete_if_equals",
+            "path": "/output_config/effort",
+            "source": "request_field",
+            "source_path": "@reasoning_effort",
+            "equals": "none"
+          },
+          {
+            "op": "delete_if_equals",
+            "path": "/output_config/effort",
+            "source": "request_field",
+            "source_path": "@reasoning_effort",
+            "equals": "adaptive"
+          },
+          {
+            "op": "remove_if_empty",
+            "path": "/output_config"
+          }
+        ]
+      }
+    },
+    {
+      "profile_id": "alibaba.token-plan.responses.thinking.v1",
+      "description": "Project Token Plan Responses thinking modes and explicit effort.",
+      "payload": {
+        "profile_id": "alibaba.token-plan.responses.thinking.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "enum_map",
+            "path": "/enable_thinking",
+            "source": "request_field",
+            "source_path": "@reasoning_effort",
+            "mapping": {
+              "none": false,
+              "adaptive": true,
+              "minimal": true,
+              "low": true,
+              "medium": true,
+              "high": true,
+              "xhigh": true,
+              "max": true
+            },
+            "unmatched": "error",
+            "default": null
+          },
+          {
+            "op": "copy_request_field",
+            "path": "/reasoning/effort",
+            "field": "reasoning_effort"
+          },
+          {
+            "op": "delete_if_equals",
+            "path": "/reasoning",
+            "source": "request_field",
+            "source_path": "@reasoning_effort",
+            "equals": "none"
+          },
+          {
+            "op": "delete_if_equals",
+            "path": "/reasoning/effort",
+            "source": "request_field",
+            "source_path": "@reasoning_effort",
+            "equals": "adaptive"
+          },
+          {
+            "op": "remove_if_empty",
+            "path": "/reasoning"
+          }
+        ]
+      }
     }
   ],
   "response_profiles": [
@@ -3433,38 +4101,41 @@
       "description": "Normalize the verified Token Plan Qwen Audio TTS URL response.",
       "payload": {
         "profile_id": "alibaba.audio.token-plan-tts.response.v1",
-        "revision": 1,
+        "revision": 2,
         "steps": [
           {
             "op": "rebuild_json_template",
             "template": {
               "$vulcan_if_equals": {
-                "path": "/status_code",
-                "equals": 200,
+                "path": "/output/finish_reason",
+                "equals": "stop",
                 "then": {
-                  "$vulcan_if_equals": {
-                    "path": "/output/finish_reason",
-                    "equals": "stop",
+                  "$vulcan_if_present": {
+                    "path": "/output/audio/url",
+                    "non_empty": true,
                     "then": {
-                      "$vulcan_if_present": {
-                        "path": "/output/audio/url",
-                        "non_empty": true,
-                        "then": {
-                          "request_id": {"$vulcan_ref": {"path": "/request_id"}},
-                          "audio_url": {"$vulcan_ref": {"path": "/output/audio/url"}}
-                        },
-                        "otherwise": {
-                          "error": {"message": "Alibaba Token Plan TTS response has no audio URL."}
+                      "request_id": {
+                        "$vulcan_ref": {
+                          "path": "/request_id"
+                        }
+                      },
+                      "audio_url": {
+                        "$vulcan_ref": {
+                          "path": "/output/audio/url"
                         }
                       }
                     },
                     "otherwise": {
-                      "error": {"message": "Alibaba Token Plan TTS response is not terminal."}
+                      "error": {
+                        "message": "Alibaba Token Plan TTS response has no audio URL."
+                      }
                     }
                   }
                 },
                 "otherwise": {
-                  "error": {"message": "Alibaba Token Plan TTS returned a non-success status."}
+                  "error": {
+                    "message": "Alibaba Token Plan TTS response is not terminal."
+                  }
                 }
               }
             }
@@ -3477,29 +4148,30 @@
       "description": "Normalize the verified Token Plan Qwen Audio ASR text response.",
       "payload": {
         "profile_id": "alibaba.audio.token-plan-asr.response.v1",
-        "revision": 1,
+        "revision": 2,
         "steps": [
           {
             "op": "rebuild_json_template",
             "template": {
-              "$vulcan_if_equals": {
-                "path": "/status_code",
-                "equals": 200,
+              "$vulcan_if_present": {
+                "path": "/output/text",
+                "non_empty": true,
                 "then": {
-                  "$vulcan_if_present": {
-                    "path": "/output/text",
-                    "non_empty": true,
-                    "then": {
-                      "request_id": {"$vulcan_ref": {"path": "/request_id"}},
-                      "text": {"$vulcan_ref": {"path": "/output/text"}}
-                    },
-                    "otherwise": {
-                      "error": {"message": "Alibaba Token Plan ASR response has no transcript text."}
+                  "request_id": {
+                    "$vulcan_ref": {
+                      "path": "/request_id"
+                    }
+                  },
+                  "text": {
+                    "$vulcan_ref": {
+                      "path": "/output/text"
                     }
                   }
                 },
                 "otherwise": {
-                  "error": {"message": "Alibaba Token Plan ASR returned a non-success status."}
+                  "error": {
+                    "message": "Alibaba Token Plan ASR response has no transcript text."
+                  }
                 }
               }
             }
@@ -3609,6 +4281,46 @@
       "reference_encoding": "response_url"
     },
     {
+      "upload_channel_id": "sg.temporary-oss",
+      "description": "Upload one local conversation resource through the reviewed temporary OSS policy handshake.",
+      "primitive": "signed_object_upload",
+      "signing_primitive": "temporary_oss_policy",
+      "endpoint_host": "dashscope-intl.aliyuncs.com",
+      "endpoint_path": "/api/v1/uploads",
+      "method": "GET",
+      "accepted_mime_types": [
+        "image/jpeg",
+        "image/png",
+        "image/bmp",
+        "image/webp",
+        "image/gif",
+        "audio/aac",
+        "audio/amr",
+        "audio/flac",
+        "audio/mp4",
+        "audio/mpeg",
+        "audio/ogg",
+        "audio/opus",
+        "audio/wav",
+        "audio/x-ms-wma",
+        "video/mp4",
+        "video/mpeg",
+        "video/quicktime",
+        "video/webm",
+        "video/x-flv",
+        "video/x-matroska",
+        "video/x-ms-wmv",
+        "video/x-msvideo"
+      ],
+      "max_bytes": 2147483648,
+      "max_count": 100,
+      "timeout_ms": 1800000,
+      "progress_supported": true,
+      "cancellation_supported": true,
+      "cache_duration_ms": 1800000,
+      "reference_encoding": "response_url"
+    },
+    {
       "upload_channel_id": "inline.image-data-url",
       "description": "Materialize a verified local image as an inline Data URL.",
       "primitive": "inline_data_url",
@@ -3683,7 +4395,9 @@
         "token-plan-team-cn.qwen-image-2.0.image-generate",
         "token-plan-team-cn.qwen-image-2.0-pro.image-generate",
         "token-plan-team-global.qwen-image-2.0.image-generate",
-        "token-plan-team-global.qwen-image-2.0-pro.image-generate"
+        "token-plan-team-global.qwen-image-2.0-pro.image-generate",
+        "token-plan-team-cn.qwen-image-3.0-pro.image-generate",
+        "token-plan-team-global.qwen-image-3.0-pro.image-generate"
       ],
       "tool_target_template_refs": ["alibaba.model-studio-cn.qwen-image-generate.v1"],
       "request_profile_refs": ["alibaba.image.qwen-generate.request.v1"],
@@ -4155,12 +4869,10 @@
         "model-studio-cn.happyhorse-1.1-r2v",
         "token-plan-personal-cn.happyhorse-1.1-t2v",
         "token-plan-personal-cn.happyhorse-1.1-i2v",
-        "token-plan-personal-global.happyhorse-1.1-t2v",
-        "token-plan-personal-global.happyhorse-1.1-i2v",
         "token-plan-team-cn.happyhorse-1.1-t2v",
         "token-plan-team-cn.happyhorse-1.1-i2v",
         "token-plan-personal-cn.happyhorse-1.1-r2v",
-        "token-plan-personal-global.happyhorse-1.1-r2v"
+        "token-plan-team-cn.happyhorse-1.1-r2v"
       ],
       "request_profile_refs": ["alibaba.async.happyhorse-generate.request.v1"],
       "response_profile_refs": ["alibaba.async.task.response.v1"],
@@ -4217,6 +4929,126 @@
           "item_source_path": "/voice_path",
           "item_target_path": "/voice",
           "upload_channel_refs": ["cn.temporary-oss"],
+          "mime_types_by_extension": {
+            "mp3": "audio/mpeg",
+            "wav": "audio/wav",
+            "m4a": "audio/mp4",
+            "mp4": "audio/mp4",
+            "aac": "audio/aac",
+            "flac": "audio/flac"
+          },
+          "required": false,
+          "remove_source": true
+        }
+      ],
+      "timeout_ms": 1800000,
+      "idempotent": false,
+      "async_execution": {
+        "poll_interval_ms": 15000,
+        "max_backoff_ms": 60000,
+        "timeout_ms": 1800000,
+        "cancellation_supported": true,
+        "generic_json": {
+          "poll_endpoint_path": "/api/v1/tasks",
+          "poll_method": "get",
+          "cancel_endpoint_path": "/api/v1/tasks",
+          "cancel_method": "post",
+          "cancel_task_id_path_suffix": "cancel",
+          "task_id_pointer": "/output/task_id",
+          "task_id_in_path": true,
+          "start_status_pointer": "/output/task_status",
+          "start_success_statuses": ["PENDING"],
+          "poll_task_id_pointer": "/output/task_id",
+          "status_pointer": "/output/task_status",
+          "queued_statuses": ["PENDING"],
+          "running_statuses": ["RUNNING"],
+          "success_statuses": ["SUCCEEDED"],
+          "failure_statuses": ["FAILED", "UNKNOWN"],
+          "cancelled_statuses": ["CANCELED"],
+          "start_requirements": {
+            "non_empty_string_pointers": ["/request_id"],
+            "empty_or_missing_string_pointers": ["/code"]
+          },
+          "poll_requirements": {"non_empty_string_pointers": ["/request_id"]},
+          "poll_success_requirements": {"empty_or_missing_string_pointers": ["/code"]},
+          "cancel_requirements": {
+            "non_empty_string_pointers": ["/request_id"],
+            "empty_or_missing_string_pointers": ["/code"]
+          }
+        }
+      }
+    },
+    {
+      "operation_id": "alibaba.alibaba_happy_horse_video_generate_sg",
+      "operation": "video_generate",
+      "carrier": "provider_tool",
+      "input_resources": ["image", "video", "audio"],
+      "output_resources": [
+        "video"
+      ],
+      "tool_target_refs": [
+        "token-plan-personal-global.happyhorse-1.1-t2v",
+        "token-plan-personal-global.happyhorse-1.1-i2v",
+        "token-plan-personal-global.happyhorse-1.1-r2v",
+        "token-plan-team-global.happyhorse-1.1-t2v",
+        "token-plan-team-global.happyhorse-1.1-i2v",
+        "token-plan-team-global.happyhorse-1.1-r2v"
+      ],
+      "request_profile_refs": ["alibaba.async.happyhorse-generate.request.v1"],
+      "response_profile_refs": ["alibaba.async.task.response.v1"],
+      "upload_channel_refs": ["inline.image-data-url", "sg.temporary-oss"],
+      "upload_bindings": [
+        {
+          "source_path": "/first_frame_path",
+          "target_path": "/first_frame",
+          "upload_channel_refs": ["inline.image-data-url"],
+          "mime_types_by_extension": {
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "png": "image/png",
+            "webp": "image/webp"
+          },
+          "required": false,
+          "remove_source": true
+        },
+        {
+          "source_path": "/references",
+          "target_path": "/references",
+          "item_source_path": "/path",
+          "item_target_path": "/carrier",
+          "item_match_path": "/kind",
+          "item_match_value": "image",
+          "upload_channel_refs": ["inline.image-data-url"],
+          "mime_types_by_extension": {
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "png": "image/png",
+            "webp": "image/webp"
+          },
+          "required": true,
+          "remove_source": true
+        },
+        {
+          "source_path": "/references",
+          "target_path": "/references",
+          "item_source_path": "/path",
+          "item_target_path": "/carrier",
+          "item_match_path": "/kind",
+          "item_match_value": "video",
+          "upload_channel_refs": ["sg.temporary-oss"],
+          "mime_types_by_extension": {
+            "mp4": "video/mp4",
+            "mov": "video/quicktime"
+          },
+          "required": true,
+          "remove_source": true
+        },
+        {
+          "source_path": "/references",
+          "target_path": "/references",
+          "item_source_path": "/voice_path",
+          "item_target_path": "/voice",
+          "upload_channel_refs": ["sg.temporary-oss"],
           "mime_types_by_extension": {
             "mp3": "audio/mpeg",
             "wav": "audio/wav",
@@ -4387,6 +5219,83 @@
       ],
       "timeout_ms": 60000,
       "idempotent": false
+    },
+    {
+      "operation_id": "alibaba.token_plan_wan3_video_generate",
+      "operation": "video_generate",
+      "carrier": "provider_tool",
+      "input_resources": [],
+      "output_resources": [
+        "video"
+      ],
+      "tool_target_refs": [
+        "token-plan-personal-cn.wan3.0-video",
+        "token-plan-personal-global.wan3.0-video",
+        "token-plan-team-cn.wan3.0-video",
+        "token-plan-team-global.wan3.0-video"
+      ],
+      "request_profile_refs": [
+        "alibaba.async.wan3-video-generate.request.v1"
+      ],
+      "response_profile_refs": [
+        "alibaba.async.task.response.v1"
+      ],
+      "upload_channel_refs": [],
+      "upload_bindings": [],
+      "timeout_ms": 1800000,
+      "idempotent": false,
+      "async_execution": {
+        "poll_interval_ms": 15000,
+        "max_backoff_ms": 60000,
+        "timeout_ms": 1800000,
+        "cancellation_supported": false,
+        "generic_json": {
+          "poll_endpoint_path": "/api/v1/tasks",
+          "poll_method": "get",
+          "task_id_pointer": "/output/task_id",
+          "task_id_in_path": true,
+          "start_status_pointer": "/output/task_status",
+          "start_success_statuses": [
+            "PENDING"
+          ],
+          "poll_task_id_pointer": "/output/task_id",
+          "status_pointer": "/output/task_status",
+          "queued_statuses": [
+            "PENDING"
+          ],
+          "running_statuses": [
+            "RUNNING"
+          ],
+          "success_statuses": [
+            "SUCCEEDED"
+          ],
+          "failure_statuses": [
+            "FAILED",
+            "UNKNOWN"
+          ],
+          "cancelled_statuses": [
+            "CANCELED"
+          ],
+          "start_requirements": {
+            "non_empty_string_pointers": [
+              "/request_id"
+            ],
+            "empty_or_missing_string_pointers": [
+              "/code"
+            ]
+          },
+          "poll_requirements": {
+            "non_empty_string_pointers": [
+              "/request_id"
+            ]
+          },
+          "poll_success_requirements": {
+            "empty_or_missing_string_pointers": [
+              "/code"
+            ]
+          }
+        }
+      }
     }
   ],
   "tool_targets": [
@@ -10095,6 +11004,992 @@
       "target_id": "token-plan-personal-global.qwen-audio-3.0-asr-flash.speech-transcribe",
       "tool_id": "vulcan_speech_transcribe",
       "upstream_target_id": "qwen-audio-3.0-asr-flash"
+    },
+    {
+      "capability": "image_generate",
+      "credential_profile_ids": [
+        "token-plan-api-key"
+      ],
+      "description": "Generate PNG images with the selected Qwen Image model using its exact native controls.",
+      "display_name": "qwen-image-3.0-pro Generate",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_base_url": "https://token-plan.cn-beijing.maas.aliyuncs.com",
+        "endpoint_path": "/api/v1/services/aigc/multimodal-generation/generation",
+        "execution_kind": "http_json_sync"
+      },
+      "input_numeric_product_ranges": [
+        {
+          "factor_paths": [
+            "/width",
+            "/height"
+          ],
+          "minimum": 262144,
+          "maximum": 4194304,
+          "require_all_or_none": true
+        }
+      ],
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "dependentRequired": {
+          "height": [
+            "width"
+          ],
+          "width": [
+            "height"
+          ]
+        },
+        "properties": {
+          "count": {
+            "default": 1,
+            "maximum": 6,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "height": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "negative_prompt": {
+            "description": "Optional excluded visual content.",
+            "maxLength": 500,
+            "type": "string"
+          },
+          "prompt": {
+            "description": "The exact image generation prompt.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "prompt_extend": {
+            "type": "boolean"
+          },
+          "seed": {
+            "maximum": 2147483647,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "watermark": {
+            "type": "boolean"
+          },
+          "width": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "image/png"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "image",
+        "source_path": "/images",
+        "resource_decoders": [
+          {
+            "source_path": "/images",
+            "encoding": "public_http_url",
+            "resource_kind": "image",
+            "mime_type": "image/png",
+            "optional": false,
+            "output_id_prefix": "image"
+          }
+        ]
+      },
+      "service_entry_id": "token-plan-team-cn",
+      "target_id": "token-plan-team-cn.qwen-image-3.0-pro.image-generate",
+      "tool_id": "vulcan_image_generate",
+      "upstream_target_id": "qwen-image-3.0-pro"
+    },
+    {
+      "capability": "image_generate",
+      "credential_profile_ids": [
+        "token-plan-api-key"
+      ],
+      "description": "Generate PNG images with the selected Qwen Image model using its exact native controls.",
+      "display_name": "qwen-image-3.0-pro Generate",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_base_url": "https://token-plan.ap-southeast-1.maas.aliyuncs.com",
+        "endpoint_path": "/api/v1/services/aigc/multimodal-generation/generation",
+        "execution_kind": "http_json_sync"
+      },
+      "input_numeric_product_ranges": [
+        {
+          "factor_paths": [
+            "/width",
+            "/height"
+          ],
+          "minimum": 262144,
+          "maximum": 4194304,
+          "require_all_or_none": true
+        }
+      ],
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "dependentRequired": {
+          "height": [
+            "width"
+          ],
+          "width": [
+            "height"
+          ]
+        },
+        "properties": {
+          "count": {
+            "default": 1,
+            "maximum": 6,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "height": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "negative_prompt": {
+            "description": "Optional excluded visual content.",
+            "maxLength": 500,
+            "type": "string"
+          },
+          "prompt": {
+            "description": "The exact image generation prompt.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "prompt_extend": {
+            "type": "boolean"
+          },
+          "seed": {
+            "maximum": 2147483647,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "watermark": {
+            "type": "boolean"
+          },
+          "width": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "image/png"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "image",
+        "source_path": "/images",
+        "resource_decoders": [
+          {
+            "source_path": "/images",
+            "encoding": "public_http_url",
+            "resource_kind": "image",
+            "mime_type": "image/png",
+            "optional": false,
+            "output_id_prefix": "image"
+          }
+        ]
+      },
+      "service_entry_id": "token-plan-team-global",
+      "target_id": "token-plan-team-global.qwen-image-3.0-pro.image-generate",
+      "tool_id": "vulcan_image_generate",
+      "upstream_target_id": "qwen-image-3.0-pro"
+    },
+    {
+      "capability": "video_generate",
+      "credential_profile_ids": [
+        "token-plan-api-key"
+      ],
+      "description": "Generate one MP4 video from a text prompt with Wan 3.0 and wait for completion.",
+      "display_name": "Wan 3.0 Text to Video",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_base_url": "https://token-plan.cn-beijing.maas.aliyuncs.com",
+        "endpoint_path": "/api/v1/services/aigc/video-generation/video-synthesis",
+        "execution_kind": "http_json_async_poll",
+        "start_fixed_headers": {
+          "x-dashscope-async": "enable"
+        }
+      },
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "minLength": 1
+          },
+          "duration_seconds": {
+            "type": "integer",
+            "minimum": 2,
+            "maximum": 30
+          },
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "480P",
+              "720P",
+              "1080P"
+            ]
+          },
+          "aspect_ratio": {
+            "type": "string",
+            "enum": [
+              "16:9",
+              "9:16",
+              "1:1",
+              "4:3",
+              "3:4",
+              "21:9"
+            ]
+          },
+          "audio": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "video/mp4"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "video",
+        "source_path": "/output/video_url",
+        "resource_decoders": [
+          {
+            "source_path": "/output/video_url",
+            "encoding": "public_http_url",
+            "resource_kind": "video",
+            "mime_type": "video/mp4",
+            "optional": false,
+            "output_id_prefix": "video"
+          }
+        ]
+      },
+      "service_entry_id": "token-plan-personal-cn",
+      "target_id": "token-plan-personal-cn.wan3.0-video",
+      "tool_id": "video_generate",
+      "upstream_target_id": "wan3.0-video"
+    },
+    {
+      "capability": "video_generate",
+      "credential_profile_ids": [
+        "token-plan-api-key"
+      ],
+      "description": "Generate one MP4 video from a text prompt with Wan 3.0 and wait for completion.",
+      "display_name": "Wan 3.0 Text to Video",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_base_url": "https://token-plan.ap-southeast-1.maas.aliyuncs.com",
+        "endpoint_path": "/api/v1/services/aigc/video-generation/video-synthesis",
+        "execution_kind": "http_json_async_poll",
+        "start_fixed_headers": {
+          "x-dashscope-async": "enable"
+        }
+      },
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "minLength": 1
+          },
+          "duration_seconds": {
+            "type": "integer",
+            "minimum": 2,
+            "maximum": 30
+          },
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "480P",
+              "720P",
+              "1080P"
+            ]
+          },
+          "aspect_ratio": {
+            "type": "string",
+            "enum": [
+              "16:9",
+              "9:16",
+              "1:1",
+              "4:3",
+              "3:4",
+              "21:9"
+            ]
+          },
+          "audio": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "video/mp4"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "video",
+        "source_path": "/output/video_url",
+        "resource_decoders": [
+          {
+            "source_path": "/output/video_url",
+            "encoding": "public_http_url",
+            "resource_kind": "video",
+            "mime_type": "video/mp4",
+            "optional": false,
+            "output_id_prefix": "video"
+          }
+        ]
+      },
+      "service_entry_id": "token-plan-personal-global",
+      "target_id": "token-plan-personal-global.wan3.0-video",
+      "tool_id": "video_generate",
+      "upstream_target_id": "wan3.0-video"
+    },
+    {
+      "capability": "video_generate",
+      "credential_profile_ids": [
+        "token-plan-api-key"
+      ],
+      "description": "Generate one MP4 video from a text prompt with Wan 3.0 and wait for completion.",
+      "display_name": "Wan 3.0 Text to Video",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_base_url": "https://token-plan.cn-beijing.maas.aliyuncs.com",
+        "endpoint_path": "/api/v1/services/aigc/video-generation/video-synthesis",
+        "execution_kind": "http_json_async_poll",
+        "start_fixed_headers": {
+          "x-dashscope-async": "enable"
+        }
+      },
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "minLength": 1
+          },
+          "duration_seconds": {
+            "type": "integer",
+            "minimum": 2,
+            "maximum": 30
+          },
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "480P",
+              "720P",
+              "1080P"
+            ]
+          },
+          "aspect_ratio": {
+            "type": "string",
+            "enum": [
+              "16:9",
+              "9:16",
+              "1:1",
+              "4:3",
+              "3:4",
+              "21:9"
+            ]
+          },
+          "audio": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "video/mp4"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "video",
+        "source_path": "/output/video_url",
+        "resource_decoders": [
+          {
+            "source_path": "/output/video_url",
+            "encoding": "public_http_url",
+            "resource_kind": "video",
+            "mime_type": "video/mp4",
+            "optional": false,
+            "output_id_prefix": "video"
+          }
+        ]
+      },
+      "service_entry_id": "token-plan-team-cn",
+      "target_id": "token-plan-team-cn.wan3.0-video",
+      "tool_id": "video_generate",
+      "upstream_target_id": "wan3.0-video"
+    },
+    {
+      "capability": "video_generate",
+      "credential_profile_ids": [
+        "token-plan-api-key"
+      ],
+      "description": "Generate one MP4 video from a text prompt with Wan 3.0 and wait for completion.",
+      "display_name": "Wan 3.0 Text to Video",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_base_url": "https://token-plan.ap-southeast-1.maas.aliyuncs.com",
+        "endpoint_path": "/api/v1/services/aigc/video-generation/video-synthesis",
+        "execution_kind": "http_json_async_poll",
+        "start_fixed_headers": {
+          "x-dashscope-async": "enable"
+        }
+      },
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "minLength": 1
+          },
+          "duration_seconds": {
+            "type": "integer",
+            "minimum": 2,
+            "maximum": 30
+          },
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "480P",
+              "720P",
+              "1080P"
+            ]
+          },
+          "aspect_ratio": {
+            "type": "string",
+            "enum": [
+              "16:9",
+              "9:16",
+              "1:1",
+              "4:3",
+              "3:4",
+              "21:9"
+            ]
+          },
+          "audio": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "video/mp4"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "video",
+        "source_path": "/output/video_url",
+        "resource_decoders": [
+          {
+            "source_path": "/output/video_url",
+            "encoding": "public_http_url",
+            "resource_kind": "video",
+            "mime_type": "video/mp4",
+            "optional": false,
+            "output_id_prefix": "video"
+          }
+        ]
+      },
+      "service_entry_id": "token-plan-team-global",
+      "target_id": "token-plan-team-global.wan3.0-video",
+      "tool_id": "video_generate",
+      "upstream_target_id": "wan3.0-video"
+    },
+    {
+      "capability": "video_generate",
+      "credential_profile_ids": [
+        "token-plan-api-key"
+      ],
+      "description": "Generate one MP4 video with the selected HappyHorse model and wait for provider completion.",
+      "display_name": "HappyHorse 1.1 Reference to Video",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_base_url": "https://token-plan.cn-beijing.maas.aliyuncs.com",
+        "endpoint_path": "/api/v1/services/aigc/video-generation/video-synthesis",
+        "execution_kind": "http_json_async_poll",
+        "start_fixed_headers": {
+          "x-dashscope-async": "enable"
+        },
+        "start_conditional_headers": [
+          {
+            "name": "x-dashscope-ossresource-resolve",
+            "value": "enable",
+            "when_any": [
+              {
+                "pointer_pattern": "/references/*/kind",
+                "equals": "video"
+              },
+              {
+                "pointer_pattern": "/references/*/voice"
+              }
+            ]
+          }
+        ]
+      },
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "aspect_ratio": {
+            "enum": [
+              "16:9",
+              "9:16",
+              "1:1",
+              "4:3",
+              "3:4"
+            ],
+            "type": "string"
+          },
+          "duration_seconds": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "negative_prompt": {
+            "type": "string"
+          },
+          "prompt": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "prompt_extend": {
+            "type": "boolean"
+          },
+          "references": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "image",
+                    "video"
+                  ],
+                  "type": "string"
+                },
+                "path": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "voice_path": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "kind"
+              ],
+              "type": "object"
+            },
+            "maxItems": 9,
+            "minItems": 1,
+            "type": "array"
+          },
+          "resolution": {
+            "enum": [
+              "720P",
+              "1080P"
+            ],
+            "type": "string"
+          },
+          "seed": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "watermark": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "prompt",
+          "references"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "video/mp4"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "video",
+        "source_path": "/output/video_url",
+        "resource_decoders": [
+          {
+            "source_path": "/output/video_url",
+            "encoding": "public_http_url",
+            "resource_kind": "video",
+            "mime_type": "video/mp4",
+            "optional": false,
+            "output_id_prefix": "video"
+          }
+        ]
+      },
+      "service_entry_id": "token-plan-team-cn",
+      "target_id": "token-plan-team-cn.happyhorse-1.1-r2v",
+      "tool_id": "video_generate",
+      "upstream_target_id": "happyhorse-1.1-r2v"
+    },
+    {
+      "capability": "video_generate",
+      "credential_profile_ids": [
+        "token-plan-api-key"
+      ],
+      "description": "Generate one MP4 video with the selected HappyHorse model and wait for provider completion.",
+      "display_name": "HappyHorse 1.1 Text to Video",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_base_url": "https://token-plan.ap-southeast-1.maas.aliyuncs.com",
+        "endpoint_path": "/api/v1/services/aigc/video-generation/video-synthesis",
+        "execution_kind": "http_json_async_poll",
+        "start_fixed_headers": {
+          "x-dashscope-async": "enable"
+        }
+      },
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "aspect_ratio": {
+            "enum": [
+              "16:9",
+              "9:16",
+              "1:1",
+              "4:3",
+              "3:4"
+            ],
+            "type": "string"
+          },
+          "duration_seconds": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "negative_prompt": {
+            "type": "string"
+          },
+          "prompt": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "prompt_extend": {
+            "type": "boolean"
+          },
+          "resolution": {
+            "enum": [
+              "720P",
+              "1080P"
+            ],
+            "type": "string"
+          },
+          "seed": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "watermark": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "video/mp4"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "video",
+        "source_path": "/output/video_url",
+        "resource_decoders": [
+          {
+            "source_path": "/output/video_url",
+            "encoding": "public_http_url",
+            "resource_kind": "video",
+            "mime_type": "video/mp4",
+            "optional": false,
+            "output_id_prefix": "video"
+          }
+        ]
+      },
+      "service_entry_id": "token-plan-team-global",
+      "target_id": "token-plan-team-global.happyhorse-1.1-t2v",
+      "tool_id": "video_generate",
+      "upstream_target_id": "happyhorse-1.1-t2v"
+    },
+    {
+      "capability": "video_generate",
+      "credential_profile_ids": [
+        "token-plan-api-key"
+      ],
+      "description": "Generate one MP4 video with the selected HappyHorse model and wait for provider completion.",
+      "display_name": "HappyHorse 1.1 Image to Video",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_base_url": "https://token-plan.ap-southeast-1.maas.aliyuncs.com",
+        "endpoint_path": "/api/v1/services/aigc/video-generation/video-synthesis",
+        "execution_kind": "http_json_async_poll",
+        "start_fixed_headers": {
+          "x-dashscope-async": "enable"
+        }
+      },
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "aspect_ratio": {
+            "enum": [
+              "16:9",
+              "9:16",
+              "1:1",
+              "4:3",
+              "3:4"
+            ],
+            "type": "string"
+          },
+          "duration_seconds": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "first_frame_path": {
+            "description": "Local JPEG, PNG, or WebP first-frame path.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "negative_prompt": {
+            "type": "string"
+          },
+          "prompt": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "prompt_extend": {
+            "type": "boolean"
+          },
+          "resolution": {
+            "enum": [
+              "720P",
+              "1080P"
+            ],
+            "type": "string"
+          },
+          "seed": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "watermark": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "prompt",
+          "first_frame_path"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "video/mp4"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "video",
+        "source_path": "/output/video_url",
+        "resource_decoders": [
+          {
+            "source_path": "/output/video_url",
+            "encoding": "public_http_url",
+            "resource_kind": "video",
+            "mime_type": "video/mp4",
+            "optional": false,
+            "output_id_prefix": "video"
+          }
+        ]
+      },
+      "service_entry_id": "token-plan-team-global",
+      "target_id": "token-plan-team-global.happyhorse-1.1-i2v",
+      "tool_id": "video_generate",
+      "upstream_target_id": "happyhorse-1.1-i2v"
+    },
+    {
+      "capability": "video_generate",
+      "credential_profile_ids": [
+        "token-plan-api-key"
+      ],
+      "description": "Generate one MP4 video with the selected HappyHorse model and wait for provider completion.",
+      "display_name": "HappyHorse 1.1 Reference to Video",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_base_url": "https://token-plan.ap-southeast-1.maas.aliyuncs.com",
+        "endpoint_path": "/api/v1/services/aigc/video-generation/video-synthesis",
+        "execution_kind": "http_json_async_poll",
+        "start_fixed_headers": {
+          "x-dashscope-async": "enable"
+        },
+        "start_conditional_headers": [
+          {
+            "name": "x-dashscope-ossresource-resolve",
+            "value": "enable",
+            "when_any": [
+              {
+                "pointer_pattern": "/references/*/kind",
+                "equals": "video"
+              },
+              {
+                "pointer_pattern": "/references/*/voice"
+              }
+            ]
+          }
+        ]
+      },
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "aspect_ratio": {
+            "enum": [
+              "16:9",
+              "9:16",
+              "1:1",
+              "4:3",
+              "3:4"
+            ],
+            "type": "string"
+          },
+          "duration_seconds": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "negative_prompt": {
+            "type": "string"
+          },
+          "prompt": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "prompt_extend": {
+            "type": "boolean"
+          },
+          "references": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "image",
+                    "video"
+                  ],
+                  "type": "string"
+                },
+                "path": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "voice_path": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "kind"
+              ],
+              "type": "object"
+            },
+            "maxItems": 9,
+            "minItems": 1,
+            "type": "array"
+          },
+          "resolution": {
+            "enum": [
+              "720P",
+              "1080P"
+            ],
+            "type": "string"
+          },
+          "seed": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "watermark": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "prompt",
+          "references"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "resources",
+        "mime_types": [
+          "video/mp4"
+        ],
+        "normalized_result_path": "resources",
+        "resource_kind": "video",
+        "source_path": "/output/video_url",
+        "resource_decoders": [
+          {
+            "source_path": "/output/video_url",
+            "encoding": "public_http_url",
+            "resource_kind": "video",
+            "mime_type": "video/mp4",
+            "optional": false,
+            "output_id_prefix": "video"
+          }
+        ]
+      },
+      "service_entry_id": "token-plan-team-global",
+      "target_id": "token-plan-team-global.happyhorse-1.1-r2v",
+      "tool_id": "video_generate",
+      "upstream_target_id": "happyhorse-1.1-r2v"
     }
   ],
   "tool_target_templates": [
@@ -10313,6 +12208,55 @@
   ],
   "provenance": {
     "status": "migrated",
-    "sources": []
+    "sources": [
+      {
+        "url": "https://help.aliyun.com/zh/model-studio/token-plan-personal-overview",
+        "note": "Personal edition catalog and separate native media APIs. The Beijing personal credential was live-probed on 2026-11-10."
+      },
+      {
+        "url": "https://help.aliyun.com/zh/model-studio/token-plan-team-overview",
+        "note": "Team edition catalog. Team entitlements and the Singapore gateway were not live-tested with a matching credential."
+      },
+      {
+        "url": "https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions",
+        "note": "Chat contract and model parameters. Beijing tests checked exact effort values, reasoning suppression and schema-constrained output."
+      },
+      {
+        "url": "https://www.alibabacloud.com/help/en/model-studio/qwen-code",
+        "note": "Singapore Token Plan Personal lists the decision model on its regional gateway. System One and local uploads on Singapore Token Plan were not live-tested with a matching credential."
+      },
+      {
+        "url": "https://www.alibabacloud.com/help/en/model-studio/get-temporary-file-url",
+        "note": "Use the Singapore temporary OSS policy endpoint for Singapore uploads; do not send Singapore credentials to the Beijing upload host."
+      },
+      {
+        "url": "https://help.aliyun.com/zh/model-studio/token-plan-decision-model",
+        "note": "Live Beijing personal System One choice, confidence and probability response."
+      },
+      {
+        "url": "https://help.aliyun.com/en/model-studio/token-plan-video-generation",
+        "note": "Live Beijing personal text-to-video request, asynchronous completion and MP4 retrieval. The three HappyHorse 1.1 operations also completed successfully with the Beijing personal credential."
+      },
+      {
+        "url": "https://help.aliyun.com/en/model-studio/token-plan-speech-recognition",
+        "note": "Live Beijing transcript verified for WAV and Chromium WebM. HTTP 200 has output.text and request_id and no status_code field."
+      },
+      {
+        "url": "https://help.aliyun.com/zh/model-studio/token-plan-speech-synthesis",
+        "note": "Live Beijing MP3 and WAV synthesis returned output.audio.url and output.finish_reason; the signed asset downloaded successfully. HTTP 200 has no status_code field."
+      },
+      {
+        "url": "https://help.aliyun.com/en/model-studio/token-plan-image-generation",
+        "note": "Live Beijing PNG generation and downloads verified for qwen-image-3.0-pro, wan2.7-image and wan2.7-image-pro. Team-only Qwen Image 2.0 models returned entitlement errors with the personal key."
+      },
+      {
+        "url": "https://help.aliyun.com/zh/model-studio/anthropic-api-messages",
+        "note": "Beijing Token Plan Messages verified disabled and enabled modes, output_config.effort values, and the documented strict Schema models. GLM-5.3 accepts low, high and max and cannot disable thinking."
+      },
+      {
+        "url": "https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-responses",
+        "note": "All five configured Qwen Responses models were live-tested with enable_thinking=false and with all six explicit efforts. Qwen3.6 Flash returned JSON objects but did not enforce the test schema."
+      }
+    ]
   }
 }

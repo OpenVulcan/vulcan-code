@@ -1,0 +1,229 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "alibaba-token-plan-wan3-video",
+  "base_manifest": "alibaba.json",
+  "production_target_refs": [
+    "alibaba::token-plan-personal-cn.wan3.0-video",
+    "alibaba::token-plan-personal-global.wan3.0-video",
+    "alibaba::token-plan-team-cn.wan3.0-video",
+    "alibaba::token-plan-team-global.wan3.0-video"
+  ],
+  "tool_target": {
+    "capability": "video_generate",
+    "credential_profile_ids": [
+      "api-key"
+    ],
+    "description": "Generate one MP4 video from a text prompt with Wan 3.0 and wait for completion.",
+    "display_name": "Wan 3.0 Text to Video",
+    "execution": {
+      "adapter": "generic_json",
+      "authentication": "bearer_authorization",
+      "endpoint_path": "/api/v1/services/aigc/video-generation/video-synthesis",
+      "execution_kind": "http_json_async_poll",
+      "start_fixed_headers": {
+        "x-dashscope-async": "enable"
+      }
+    },
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "prompt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "duration_seconds": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 30
+        },
+        "resolution": {
+          "type": "string",
+          "enum": [
+            "480P",
+            "720P",
+            "1080P"
+          ]
+        },
+        "aspect_ratio": {
+          "type": "string",
+          "enum": [
+            "16:9",
+            "9:16",
+            "1:1",
+            "4:3",
+            "3:4",
+            "21:9"
+          ]
+        },
+        "audio": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "prompt"
+      ],
+      "type": "object"
+    },
+    "output": {
+      "kind": "resources",
+      "mime_types": [
+        "video/mp4"
+      ],
+      "normalized_result_path": "resources",
+      "resource_kind": "video",
+      "source_path": "/output/video_url",
+      "resource_decoders": [
+        {
+          "source_path": "/output/video_url",
+          "encoding": "public_http_url",
+          "resource_kind": "video",
+          "mime_type": "video/mp4",
+          "optional": false,
+          "output_id_prefix": "video"
+        }
+      ]
+    },
+    "service_entry_id": "model-studio-cn",
+    "target_id": "model-studio-cn.fixture-token-plan-wan3-video",
+    "tool_id": "fixture_alibaba_token_plan_wan3_video",
+    "upstream_target_id": "wan3.0-video"
+  },
+  "operation": {
+    "operation_id": "fixture.alibaba-token-plan-wan3-video",
+    "operation": "video_generate",
+    "carrier": "provider_tool",
+    "input_resources": [],
+    "output_resources": [
+      "video"
+    ],
+    "tool_target_refs": [
+      "model-studio-cn.fixture-token-plan-wan3-video"
+    ],
+    "request_profile_refs": [
+      "alibaba.async.wan3-video-generate.request.v1"
+    ],
+    "response_profile_refs": [
+      "alibaba.async.task.response.v1"
+    ],
+    "upload_channel_refs": [],
+    "upload_bindings": [],
+    "timeout_ms": 2000,
+    "idempotent": false,
+    "async_execution": {
+      "poll_interval_ms": 250,
+      "max_backoff_ms": 1000,
+      "timeout_ms": 2000,
+      "cancellation_supported": false,
+      "generic_json": {
+        "poll_endpoint_path": "/api/v1/tasks",
+        "poll_method": "get",
+        "task_id_pointer": "/output/task_id",
+        "task_id_in_path": true,
+        "start_status_pointer": "/output/task_status",
+        "start_success_statuses": [
+          "PENDING"
+        ],
+        "poll_task_id_pointer": "/output/task_id",
+        "status_pointer": "/output/task_status",
+        "queued_statuses": [
+          "PENDING"
+        ],
+        "running_statuses": [
+          "RUNNING"
+        ],
+        "success_statuses": [
+          "SUCCEEDED"
+        ],
+        "failure_statuses": [
+          "FAILED",
+          "UNKNOWN"
+        ],
+        "cancelled_statuses": [
+          "CANCELED"
+        ],
+        "start_requirements": {
+          "non_empty_string_pointers": [
+            "/request_id"
+          ],
+          "empty_or_missing_string_pointers": [
+            "/code"
+          ]
+        },
+        "poll_requirements": {
+          "non_empty_string_pointers": [
+            "/request_id"
+          ]
+        },
+        "poll_success_requirements": {
+          "empty_or_missing_string_pointers": [
+            "/code"
+          ]
+        }
+      }
+    }
+  },
+  "required_execution_primitives": [
+    "http_json_async_poll"
+  ],
+  "required_upload_primitives": [],
+  "arguments": {
+    "prompt": "blue square",
+    "duration_seconds": 2,
+    "resolution": "480P",
+    "aspect_ratio": "1:1",
+    "audio": false
+  },
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/api/v1/services/aigc/video-generation/video-synthesis",
+      "expected_headers": {
+        "x-dashscope-async": "enable"
+      },
+      "absent_headers": [
+        "x-dashscope-ossresource-resolve"
+      ],
+      "expected_json_body": {
+        "model": "wan3.0-video",
+        "input": {
+          "prompt": "blue square"
+        },
+        "parameters": {
+          "resolution": "480P",
+          "ratio": "1:1",
+          "duration": 2,
+          "audio": false
+        }
+      },
+      "response_status": 200,
+      "response_json_body": {
+        "request_id": "request-start",
+        "code": "",
+        "output": {
+          "task_id": "task/with space",
+          "task_status": "PENDING"
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/tasks/task%2Fwith%20space",
+      "absent_headers": [
+        "x-dashscope-async",
+        "x-dashscope-ossresource-resolve"
+      ],
+      "response_status": 200,
+      "response_json_body": {
+        "request_id": "request-poll",
+        "code": "",
+        "output": {
+          "task_id": "task/with space",
+          "task_status": "SUCCEEDED",
+          "video_url": "https://example.com/generated.mp4"
+        }
+      }
+    }
+  ],
+  "expected_output_kind": "resources"
+}

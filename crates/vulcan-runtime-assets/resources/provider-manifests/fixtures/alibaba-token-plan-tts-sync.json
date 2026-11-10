@@ -1,0 +1,158 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "alibaba-token-plan-tts-sync",
+  "base_manifest": "alibaba.json",
+  "production_target_refs": [
+    "alibaba::token-plan-personal-cn.qwen-audio-3.0-tts-plus.speech-synthesize",
+    "alibaba::token-plan-personal-global.qwen-audio-3.0-tts-plus.speech-synthesize",
+    "alibaba::token-plan-team-cn.qwen-audio-3.0-tts-plus.speech-synthesize",
+    "alibaba::token-plan-team-global.qwen-audio-3.0-tts-plus.speech-synthesize"
+  ],
+  "tool_target": {
+    "capability": "speech_synthesize",
+    "credential_profile_ids": [
+      "api-key"
+    ],
+    "description": "Synthesize an audio resource with the verified Token Plan Qwen Audio TTS model.",
+    "display_name": "qwen-audio-3.0-tts-plus Speech",
+    "execution": {
+      "adapter": "generic_json",
+      "authentication": "bearer_authorization",
+      "endpoint_path": "/api/v1/services/audio/tts/SpeechSynthesizer",
+      "execution_kind": "http_json_sync"
+    },
+    "input_schema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "default": "mp3",
+          "enum": [
+            "mp3",
+            "wav",
+            "pcm",
+            "opus"
+          ],
+          "type": "string"
+        },
+        "sample_rate": {
+          "default": 24000,
+          "type": "integer"
+        },
+        "text": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "voice_id": {
+          "default": "longanhuan_v3.6",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "voice_id"
+      ],
+      "type": "object"
+    },
+    "output": {
+      "kind": "resources",
+      "mime_types": [
+        "audio/mpeg",
+        "audio/wav",
+        "audio/pcm",
+        "audio/opus"
+      ],
+      "normalized_result_path": "resources",
+      "resource_kind": "audio",
+      "source_path": "/audio_url",
+      "resource_decoders": [
+        {
+          "source_path": "/audio_url",
+          "encoding": "public_http_url",
+          "mime_type_request_path": "/format",
+          "mime_types_by_request_value": {
+            "mp3": "audio/mpeg",
+            "wav": "audio/wav",
+            "pcm": "audio/pcm",
+            "opus": "audio/opus"
+          },
+          "resource_kind": "audio",
+          "optional": false,
+          "output_id_prefix": "audio"
+        }
+      ]
+    },
+    "service_entry_id": "model-studio-cn",
+    "target_id": "model-studio-cn.fixture-token-plan-tts-sync",
+    "tool_id": "fixture_alibaba_token_plan_tts_sync",
+    "upstream_target_id": "qwen-audio-3.0-tts-plus"
+  },
+  "operation": {
+    "operation_id": "fixture.alibaba-token-plan-tts-sync",
+    "operation": "speech_synthesize",
+    "carrier": "provider_tool",
+    "input_resources": [],
+    "output_resources": [
+      "audio"
+    ],
+    "tool_target_refs": [
+      "model-studio-cn.fixture-token-plan-tts-sync"
+    ],
+    "request_profile_refs": [
+      "alibaba.audio.token-plan-tts.request.v1"
+    ],
+    "response_profile_refs": [
+      "alibaba.audio.token-plan-tts.response.v1"
+    ],
+    "upload_channel_refs": [],
+    "upload_bindings": [],
+    "timeout_ms": 60000,
+    "idempotent": false
+  },
+  "upload_channels": [],
+  "required_execution_primitives": [
+    "http_json_sync"
+  ],
+  "required_upload_primitives": [],
+  "arguments": {
+    "text": "Test speech.",
+    "voice_id": "longanhuan_v3.6",
+    "format": "mp3",
+    "sample_rate": 24000
+  },
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/api/v1/services/audio/tts/SpeechSynthesizer",
+      "expected_json_body": {
+        "model": "qwen-audio-3.0-tts-plus",
+        "input": {
+          "text": "Test speech.",
+          "voice": "longanhuan_v3.6",
+          "format": "mp3",
+          "sample_rate": 24000
+        }
+      },
+      "response_status": 200,
+      "response_json_body": {
+        "request_id": "tts-fixture",
+        "output": {
+          "audio": {
+            "url": "http://example.com/sample.mp3"
+          },
+          "finish_reason": "stop"
+        },
+        "usage": {
+          "characters": 12
+        }
+      }
+    }
+  ],
+  "expected_output_kind": "resources",
+  "request_profiles": [],
+  "response_profiles": [],
+  "required_transformers": [
+    "rebuild_json_template"
+  ]
+}

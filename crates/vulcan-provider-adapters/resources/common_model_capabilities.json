@@ -589,6 +589,16 @@
       ]
     },
     {
+      "key": "decision-model-preview",
+      "aliases": [],
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [],
+      "reasoning": "unsupported",
+      "reasoning_control": "fixed_off"
+    },
+    {
       "key": "deepseek-flash",
       "aliases": [],
       "context_window": 1000000,

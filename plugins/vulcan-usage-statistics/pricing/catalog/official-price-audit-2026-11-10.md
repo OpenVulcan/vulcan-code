@@ -74,3 +74,41 @@ GLM 5.2 Fast 的美元与人民币采用两家平台分别公布的单价。Moon
 - GPT-5.5、5.6 Sol/Terra/Luna、6 Astra/Sol/Luna、6.1 Sol/Terra 使用 272,000 输入 Token 阈值，超过后整笔请求使用长上下文价。5.6 Sol 默认记录常规价，官方当期促销截止 2026-11-30。 [GPT-5.5](https://developers.openai.com/api/docs/models/gpt-5.5) · [GPT-5.6 Sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol) · [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol)
 - Claude Haiku 5.5 超过 100,000 输入 Token 后使用长上下文价。阈值包含普通输入、缓存读和缓存写。参考价采用 5 分钟缓存写入档。 [Anthropic 定价](https://platform.claude.com/docs/en/about-claude/pricing)
 - Kimi Code 的 `k3-256k` 固定在 256K，`k3` 可随会员等级使用 1M，上下文路线涉及不同额度消耗。Kimi API 公布的 `kimi-k3` 为 1M 标准按量报价，当前公开价目未提供 256K 前后的两套现金单价。具有单独报价的渠道可为通用 K3 配置自己的分档。 [Kimi Code 模型说明](https://www.kimi.com/en/help/kimi-code/models) · [Kimi API 定价](https://platform.kimi.ai/docs/pricing/chat)
+
+## 百炼 Token Plan 补齐项
+
+已逐项核对个人版和团队版的模型。两种套餐都有 Token 用量时，按模型的标准按量参考价估算；用户配置价格覆盖时沿用覆盖。套餐实际消耗请查看百炼控制台的 Credits 明细。
+
+- `decision-model-preview` 按现有 Preview 归组匹配 `decision-model`。北京和新加坡目前均限时免费，官网未公布长期单价或截止日。 [决策模型价格](https://www.alibabacloud.com/help/en/model-studio/decision-model-preview)
+- `MiniMax-M2.5` 仍在百炼团队版清单中，因此仅在 `alibaba` 供应商范围补参考价。百炼北京刊例每百万 Token 的输入、输出、缓存读分别为 **¥2.1 / ¥8.4 / ¥0.42**，美元刊例分别为 **$0.304 / $1.213 / $0.061**，不支持显式缓存写。共享清单的 MiniMax M2.7 下限保持有效。 [团队版模型](https://www.alibabacloud.com/help/en/model-studio/token-plan-team-overview) · [人民币刊例](https://help.aliyun.com/zh/model-studio/minimax-m2-5) · [美元刊例](https://www.alibabacloud.com/help/en/model-studio/minimax-m2-5)
+
+媒体参考价在「模型定价」中按原单位展示。用量库目前记录 Token，不能据此推算实际的媒体张数、时长或字符数。
+
+| 模型 | 单位或档位 | 北京（CNY） | 新加坡（CNY） |
+| --- | --- | ---: | ---: |
+| `qwen-audio-3.0-asr-flash` | 每秒输入音频 | 0.00022 | 0.00026 |
+| `qwen-audio-3.0-tts-plus` | 每万输入字符 | 1.4 | 1.49884 |
+| `qwen-image-2.0` | 每张输出 | 0.2 | 0.256873 |
+| `qwen-image-2.0-pro` | 每张输出 | 0.5 | 0.550443 |
+| `qwen-image-3.0-pro` | 每张：输入 / 1K 输出 / 2K 输出 | 0.02 / 0.25 / 0.5 | 0.022483 / 0.299768 / 0.562065 |
+| `wan2.7-image` | 每张输出 | 0.2 | 0.224826 |
+| `wan2.7-image-pro` | 每张输出 | 0.5 | 0.562065 |
+| `happyhorse-1.1-t2v`、`happyhorse-1.1-i2v`、`happyhorse-1.1-r2v` | 每秒输出：480p / 720p / 1080p | 0.45 / 0.9 / 1.2 | 0.524594 / 1.049188 / 1.348956 |
+| `wan3.0-video` | 每秒输出：480p / 720p / 1080p | 0.3 / 0.6 / 1.2 | 0.37471 / 0.74942 / 1.49884 |
+
+[百炼按量价目](https://help.aliyun.com/zh/model-studio/model-pricing) · [语音识别价目](https://help.aliyun.com/zh/model-studio/qwen-audio-3-0-asr-flash) · [万相视频价目](https://help.aliyun.com/zh/model-studio/wan3-0-video)
+
+### 百炼 DeepSeek 专属费率
+
+以下是每百万 Token 的人民币刊例，顺序为「非缓存输入 / 输出 / 缓存命中」。套餐和按量入口都按实际接入地区匹配标准参考价；只录入人民币的条目由统一汇率换算美元。仅使用隐式缓存，缓存写入不单列收费。
+
+| 模型 | 北京忙时 | 北京闲时 | 新加坡忙时 | 新加坡闲时 |
+| --- | --- | --- | --- | --- |
+| `deepseek-v4.1-flash`、`deepseek-v4.1-flash-1017` | 2 / 8 / 0.2 | 1 / 4 / 0.1 | 2.188 / 8.75 / 0.219 | 1.094 / 4.375 / 0.109 |
+| `deepseek-v4-pro` | 12 / 24 / 1（全天） | 同左 | 17.986 / 35.972 / 1.499（全天） | 同左 |
+| `deepseek-v4-pro-0813` | 9 / 27 / 0.9 | 4.5 / 13.5 / 0.45 | 9.625 / 28.875 / 0.963 | 4.813 / 14.438 / 0.481 |
+| `deepseek-v4-flash-0731` | 3 / 9 / 0.3 | 1.5 / 4.5 / 0.15 | 3.208 / 9.625 / 0.3208 | 1.604 / 4.813 / 0.1604 |
+
+百炼闲时为 UTC+8 每天 22:00 至次日 08:00；周末使用同样的时段。V4 Pro 原版与 0813 在百炼分别计费；V4.1 Flash 和 1017 则复用同一份价格。0731 缓存价按百炼公布的当期输入价 10% 计算。百炼的模型定价目录显示北京参考价，统计根据接入入口选用对应地区报价。
+
+[V4.1 Flash 及 1017](https://help.aliyun.com/zh/model-studio/deepseek-v4-1-flash) · [V4 Pro 及 0813](https://help.aliyun.com/zh/model-studio/deepseek-v4-pro) · [百炼按量价目](https://help.aliyun.com/zh/model-studio/model-pricing) · [上下文缓存规则](https://help.aliyun.com/zh/model-studio/context-cache)

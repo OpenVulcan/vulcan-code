@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "catalogId": "vulcan.reference.model-pricing",
-  "catalogRevision": "sha256:498a6cc837aeae0137bbdabec4d2ed3d339ae2a537362b7e4718839cf95753f4",
+  "catalogRevision": "sha256:36569af0bc10302958c50fff52e40fbd97a0d4bec177151a7695a1f14990ff91",
   "adapterVersion": 2,
   "currencies": [
     "USD",
@@ -96,6 +96,365 @@
   "minimumMiniMaxVersion": {
     "major": 2,
     "minor": 7
+  },
+  "providerModels": {
+    "alibaba": {
+      "deepseek-v4.1-flash": {
+        "prices": {
+          "inputPerMillionCny": "2",
+          "outputPerMillionCny": "8",
+          "cacheReadPerMillionCny": "0.2",
+          "cacheWritePerMillionCny": "0"
+        },
+        "offPeak": {
+          "scheduleRef": "alibaba-deepseek",
+          "prices": {
+            "inputPerMillionCny": "1",
+            "outputPerMillionCny": "4",
+            "cacheReadPerMillionCny": "0.1",
+            "cacheWritePerMillionCny": "0"
+          }
+        },
+        "sources": [
+          "https://help.aliyun.com/zh/model-studio/deepseek-v4-1-flash",
+          "https://help.aliyun.com/zh/model-studio/context-cache"
+        ]
+      },
+      "deepseek-v4-pro": {
+        "prices": {
+          "inputPerMillionCny": "12",
+          "outputPerMillionCny": "24",
+          "cacheReadPerMillionCny": "1",
+          "cacheWritePerMillionCny": "0"
+        },
+        "sources": [
+          "https://help.aliyun.com/zh/model-studio/deepseek-v4-pro",
+          "https://help.aliyun.com/zh/model-studio/context-cache"
+        ]
+      },
+      "deepseek-v4-pro-0813": {
+        "prices": {
+          "inputPerMillionCny": "9",
+          "outputPerMillionCny": "27",
+          "cacheReadPerMillionCny": "0.9",
+          "cacheWritePerMillionCny": "0"
+        },
+        "offPeak": {
+          "scheduleRef": "alibaba-deepseek",
+          "prices": {
+            "inputPerMillionCny": "4.5",
+            "outputPerMillionCny": "13.5",
+            "cacheReadPerMillionCny": "0.45",
+            "cacheWritePerMillionCny": "0"
+          }
+        },
+        "sources": [
+          "https://help.aliyun.com/zh/model-studio/deepseek-v4-pro",
+          "https://help.aliyun.com/zh/model-studio/context-cache"
+        ]
+      },
+      "deepseek-v4-flash": {
+        "prices": {
+          "inputPerMillionCny": "3",
+          "outputPerMillionCny": "9",
+          "cacheReadPerMillionCny": "0.3",
+          "cacheWritePerMillionCny": "0"
+        },
+        "offPeak": {
+          "scheduleRef": "alibaba-deepseek",
+          "prices": {
+            "inputPerMillionCny": "1.5",
+            "outputPerMillionCny": "4.5",
+            "cacheReadPerMillionCny": "0.15",
+            "cacheWritePerMillionCny": "0"
+          }
+        },
+        "sources": [
+          "https://help.aliyun.com/zh/model-studio/model-pricing",
+          "https://help.aliyun.com/zh/model-studio/context-cache"
+        ]
+      },
+      "minimax-m2.5": {
+        "prices": {
+          "inputPerMillion": "0.304",
+          "outputPerMillion": "1.213",
+          "cacheReadPerMillion": "0.061",
+          "cacheWritePerMillion": "0",
+          "inputPerMillionCny": "2.1",
+          "outputPerMillionCny": "8.4",
+          "cacheReadPerMillionCny": "0.42"
+        },
+        "sources": [
+          "https://www.alibabacloud.com/help/en/model-studio/minimax-m2-5",
+          "https://help.aliyun.com/zh/model-studio/minimax-m2-5",
+          "https://www.alibabacloud.com/help/en/model-studio/minimax-api",
+          "https://www.alibabacloud.com/help/en/model-studio/token-plan-team-overview"
+        ],
+        "basis": "百炼团队版仍列出该型号。参考百炼北京按量刊例，只支持隐式缓存，不另收缓存创建费。"
+      }
+    }
+  },
+  "providerEntryModels": {
+    "alibaba": {
+      "singapore": {
+        "serviceEntryIds": [
+          "model-studio-singapore",
+          "token-plan-personal-global",
+          "token-plan-team-global"
+        ],
+        "models": {
+          "deepseek-v4.1-flash": {
+            "prices": {
+              "inputPerMillionCny": "2.188",
+              "outputPerMillionCny": "8.75",
+              "cacheReadPerMillionCny": "0.219",
+              "cacheWritePerMillionCny": "0"
+            },
+            "offPeak": {
+              "scheduleRef": "alibaba-deepseek",
+              "prices": {
+                "inputPerMillionCny": "1.094",
+                "outputPerMillionCny": "4.375",
+                "cacheReadPerMillionCny": "0.109",
+                "cacheWritePerMillionCny": "0"
+              }
+            },
+            "sources": [
+              "https://help.aliyun.com/zh/model-studio/deepseek-v4-1-flash",
+              "https://help.aliyun.com/zh/model-studio/context-cache"
+            ]
+          },
+          "deepseek-v4-pro": {
+            "prices": {
+              "inputPerMillionCny": "17.986",
+              "outputPerMillionCny": "35.972",
+              "cacheReadPerMillionCny": "1.499",
+              "cacheWritePerMillionCny": "0"
+            },
+            "sources": [
+              "https://help.aliyun.com/zh/model-studio/deepseek-v4-pro",
+              "https://help.aliyun.com/zh/model-studio/context-cache"
+            ]
+          },
+          "deepseek-v4-pro-0813": {
+            "prices": {
+              "inputPerMillionCny": "9.625",
+              "outputPerMillionCny": "28.875",
+              "cacheReadPerMillionCny": "0.963",
+              "cacheWritePerMillionCny": "0"
+            },
+            "offPeak": {
+              "scheduleRef": "alibaba-deepseek",
+              "prices": {
+                "inputPerMillionCny": "4.813",
+                "outputPerMillionCny": "14.438",
+                "cacheReadPerMillionCny": "0.481",
+                "cacheWritePerMillionCny": "0"
+              }
+            },
+            "sources": [
+              "https://help.aliyun.com/zh/model-studio/deepseek-v4-pro",
+              "https://help.aliyun.com/zh/model-studio/context-cache"
+            ]
+          },
+          "deepseek-v4-flash": {
+            "prices": {
+              "inputPerMillionCny": "3.208",
+              "outputPerMillionCny": "9.625",
+              "cacheReadPerMillionCny": "0.3208",
+              "cacheWritePerMillionCny": "0"
+            },
+            "offPeak": {
+              "scheduleRef": "alibaba-deepseek",
+              "prices": {
+                "inputPerMillionCny": "1.604",
+                "outputPerMillionCny": "4.813",
+                "cacheReadPerMillionCny": "0.1604",
+                "cacheWritePerMillionCny": "0"
+              }
+            },
+            "sources": [
+              "https://help.aliyun.com/zh/model-studio/model-pricing",
+              "https://help.aliyun.com/zh/model-studio/context-cache"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "tariffSchedules": {
+    "alibaba-deepseek": {
+      "utcOffsetMinutes": 480,
+      "windows": [
+        {
+          "days": "daily",
+          "start": "22:00",
+          "end": "08:00"
+        }
+      ]
+    }
+  },
+  "nativeUnitReferences": {
+    "happyhorse-1.1-i2v": {
+      "source": "https://help.aliyun.com/zh/model-studio/model-pricing",
+      "rates": [
+        {
+          "unit": "output_second_480p",
+          "beijingCny": "0.45",
+          "singaporeCny": "0.524594"
+        },
+        {
+          "unit": "output_second_720p",
+          "beijingCny": "0.9",
+          "singaporeCny": "1.049188"
+        },
+        {
+          "unit": "output_second_1080p",
+          "beijingCny": "1.2",
+          "singaporeCny": "1.348956"
+        }
+      ]
+    },
+    "happyhorse-1.1-r2v": {
+      "source": "https://help.aliyun.com/zh/model-studio/model-pricing",
+      "rates": [
+        {
+          "unit": "output_second_480p",
+          "beijingCny": "0.45",
+          "singaporeCny": "0.524594"
+        },
+        {
+          "unit": "output_second_720p",
+          "beijingCny": "0.9",
+          "singaporeCny": "1.049188"
+        },
+        {
+          "unit": "output_second_1080p",
+          "beijingCny": "1.2",
+          "singaporeCny": "1.348956"
+        }
+      ]
+    },
+    "happyhorse-1.1-t2v": {
+      "source": "https://help.aliyun.com/zh/model-studio/model-pricing",
+      "rates": [
+        {
+          "unit": "output_second_480p",
+          "beijingCny": "0.45",
+          "singaporeCny": "0.524594"
+        },
+        {
+          "unit": "output_second_720p",
+          "beijingCny": "0.9",
+          "singaporeCny": "1.049188"
+        },
+        {
+          "unit": "output_second_1080p",
+          "beijingCny": "1.2",
+          "singaporeCny": "1.348956"
+        }
+      ]
+    },
+    "qwen-audio-3.0-asr-flash": {
+      "source": "https://help.aliyun.com/zh/model-studio/qwen-audio-3-0-asr-flash",
+      "rates": [
+        {
+          "unit": "input_second",
+          "beijingCny": "0.00022",
+          "singaporeCny": "0.00026"
+        }
+      ]
+    },
+    "qwen-audio-3.0-tts-plus": {
+      "source": "https://help.aliyun.com/zh/model-studio/model-pricing",
+      "rates": [
+        {
+          "unit": "input_10000_characters",
+          "beijingCny": "1.4",
+          "singaporeCny": "1.49884"
+        }
+      ]
+    },
+    "qwen-image-2.0": {
+      "source": "https://help.aliyun.com/zh/model-studio/model-pricing",
+      "rates": [
+        {
+          "unit": "output_image",
+          "beijingCny": "0.2",
+          "singaporeCny": "0.256873"
+        }
+      ]
+    },
+    "qwen-image-2.0-pro": {
+      "source": "https://help.aliyun.com/zh/model-studio/model-pricing",
+      "rates": [
+        {
+          "unit": "output_image",
+          "beijingCny": "0.5",
+          "singaporeCny": "0.550443"
+        }
+      ]
+    },
+    "qwen-image-3.0-pro": {
+      "source": "https://help.aliyun.com/zh/model-studio/model-pricing",
+      "rates": [
+        {
+          "unit": "input_image",
+          "beijingCny": "0.02",
+          "singaporeCny": "0.022483"
+        },
+        {
+          "unit": "output_image_1k",
+          "beijingCny": "0.25",
+          "singaporeCny": "0.299768"
+        },
+        {
+          "unit": "output_image_2k",
+          "beijingCny": "0.5",
+          "singaporeCny": "0.562065"
+        }
+      ]
+    },
+    "wan2.7-image": {
+      "source": "https://help.aliyun.com/zh/model-studio/model-pricing",
+      "rates": [
+        {
+          "unit": "output_image",
+          "beijingCny": "0.2",
+          "singaporeCny": "0.224826"
+        }
+      ]
+    },
+    "wan2.7-image-pro": {
+      "source": "https://help.aliyun.com/zh/model-studio/model-pricing",
+      "rates": [
+        {
+          "unit": "output_image",
+          "beijingCny": "0.5",
+          "singaporeCny": "0.562065"
+        }
+      ]
+    },
+    "wan3.0-video": {
+      "source": "https://help.aliyun.com/zh/model-studio/wan3-0-video",
+      "rates": [
+        {
+          "unit": "output_second_480p",
+          "beijingCny": "0.3",
+          "singaporeCny": "0.37471"
+        },
+        {
+          "unit": "output_second_720p",
+          "beijingCny": "0.6",
+          "singaporeCny": "0.74942"
+        },
+        {
+          "unit": "output_second_1080p",
+          "beijingCny": "1.2",
+          "singaporeCny": "1.49884"
+        }
+      ]
+    }
   },
   "models": [
     {
@@ -404,6 +763,22 @@
         "https://opencode.ai/docs/console/go/"
       ],
       "basis": "OpenCode Go 官方免费模型路线，适用其计划和模型访问规则。"
+    },
+    {
+      "canonicalModelId": "decision-model",
+      "displayName": "Bailian Decision Model",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "0",
+        "outputPerMillion": "0",
+        "cacheReadPerMillion": "0",
+        "cacheWritePerMillion": "0"
+      },
+      "sources": [
+        "https://www.alibabacloud.com/help/en/model-studio/decision-model-preview",
+        "https://help.aliyun.com/zh/model-studio/decision-model-tuning-guide"
+      ],
+      "basis": "百炼北京和新加坡的决策模型限时免费；无长期刊例价或公开截止日。"
     },
     {
       "canonicalModelId": "deepseek-reasoner",

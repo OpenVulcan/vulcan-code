@@ -90,7 +90,7 @@ impl VulcanPluginVldbService for RecordingVldbService {
             json!([
                 {
                     "providerId": "provider-1",
-                    "serviceEntryId": "entry-1",
+                    "serviceEntryId": "codex-subscription",
                     "consumerId": "webui",
                     "operation": "response_create",
                     "modelId": "gpt-5.6-sol",
@@ -164,7 +164,7 @@ impl VulcanPluginVldbService for RecordingVldbService {
                 "consumerId": "webui",
                 "operation": "response_create",
                 "providerId": "provider-1",
-                "serviceEntryId": "entry-1",
+                "serviceEntryId": "codex-subscription",
                 "modelId": "openai/gpt-5-6-sol-high",
                 "transport": "http_sse",
                 "httpStatus": 200,
@@ -401,7 +401,16 @@ fn bundled_usage_statistics_plugin_loads_through_system_vldb_bridge() {
     );
     assert_eq!(dashboard["providers"][0]["providerId"], "provider-1");
     assert_eq!(dashboard["providers"][0]["attempts"], 3);
-    assert_eq!(dashboard["recentAttempts"][0]["estimatedCost"], priced_cost);
+    // A subscription route uses the same standard model tariff as the aggregate.
+    // 套餐入口使用与汇总相同的标准模型单价。
+    let subscription_attempt = dashboard["recentAttempts"]
+        .as_array()
+        .and_then(|rows| {
+            rows.iter()
+                .find(|row| row["serviceEntryId"] == "codex-subscription")
+        })
+        .expect("find the subscription attempt in the usage dashboard");
+    assert_eq!(subscription_attempt["estimatedCost"], priced_cost);
     // settings proves prices persist only in the plugin-owned configuration domain.
     // settings 证明价格只持久化于插件自有配置域。
     let settings = runtime

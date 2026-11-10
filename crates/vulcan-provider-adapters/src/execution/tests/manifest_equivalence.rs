@@ -177,6 +177,60 @@ fn alibaba_manifest_profiles_produce_legacy_equivalent_wire() {
     assert_eq!(encoded.body["thinking"]["type"], "enabled");
 }
 
+/// Verify the bundled Token Plan route preserves an explicit thinking effort and can disable thinking.
+/// 验证内置 Token Plan 路线保留明确的思考档位，并能够关闭思考。
+#[test]
+fn alibaba_token_plan_projects_thinking_levels_and_off() {
+    // Use the same compiled request profile that the Beijing personal route uses in production.
+    // 使用北京个人版生产路线所用的已编译请求配置。
+    let route = bundled_manifest_route("alibaba", "token-plan-personal-cn", OPENAI_CHAT_PROFILE_ID);
+    let client = projection_test_client();
+    // The 1017 snapshot accepts Ultra on this gateway, while disabling thinking omits the effort.
+    // 1017 快照在该网关支持 Ultra，关闭思考时则省略档位字段。
+    let mut request = minimal_request();
+    request.model_id = String::from("deepseek-v4.1-flash-1017");
+    request.reasoning_effort = Some(ReasoningEffort::Ultra);
+    let enabled = client
+        .encode_request(&route, &request)
+        .expect("Token Plan must encode the tested Ultra effort");
+    assert_eq!(enabled.body["enable_thinking"], true);
+    assert_eq!(enabled.body["reasoning_effort"], "ultra");
+
+    // Send the verified boolean switch without an additional effort that can override it.
+    // 发送已验证的布尔开关，避免额外的档位字段覆盖它。
+    request.reasoning_effort = Some(ReasoningEffort::None);
+    let disabled = client
+        .encode_request(&route, &request)
+        .expect("Token Plan must encode thinking disabled");
+    assert_eq!(disabled.body["enable_thinking"], false);
+    assert!(disabled.body.get("reasoning_effort").is_none());
+
+    // The same user-facing level occupies a different field on the other protocols.
+    // 同一用户可选档位在另外两种协议中使用不同字段。
+    let messages_route = bundled_manifest_route(
+        "alibaba",
+        "token-plan-personal-cn",
+        ANTHROPIC_MESSAGES_PROFILE_ID,
+    );
+    let responses_route = bundled_manifest_route(
+        "alibaba",
+        "token-plan-personal-cn",
+        OPENAI_RESPONSES_PROFILE_ID,
+    );
+    request.model_id = String::from("qwen3.8-max");
+    request.reasoning_effort = Some(ReasoningEffort::High);
+    let messages = client
+        .encode_request(&messages_route, &request)
+        .expect("Token Plan Messages must encode the tested high effort");
+    assert_eq!(messages.body["thinking"]["type"], "enabled");
+    assert_eq!(messages.body["output_config"]["effort"], "high");
+    let responses = client
+        .encode_request(&responses_route, &request)
+        .expect("Token Plan Responses must encode the tested high effort");
+    assert_eq!(responses.body["enable_thinking"], true);
+    assert_eq!(responses.body["reasoning"]["effort"], "high");
+}
+
 /// Verifies the bundled OpenRouter request profiles produce the legacy-equivalent wire.
 /// 验证内置 OpenRouter 请求 Profile 产生与旧版等价的 Wire 请求。
 #[test]

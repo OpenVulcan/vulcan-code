@@ -105,6 +105,32 @@ function mergeGroupQuotes(canonical, quotes, group) {
   return { ...reference, prices };
 }
 
+// Compile exact provider reference quotes and expand their declared tariff schedule.
+// 编译供应商精确报价，并展开其声明的时段费率规则。
+// entries supplies source quotes; schedules maps schedule names to local time windows.
+// entries 提供来源报价；schedules 将时段规则名称映射到当地时间窗口。
+// Returns the model-indexed price table consumed by the runtime.
+// 返回运行时使用的按模型索引的价格表。
+function compileProviderPrices(entries, schedules) {
+  return Object.fromEntries(Object.entries(entries).map(([id, quote]) => {
+    if (id !== catalogBillingModelId(id) || quote.sources.length === 0 ||
+        quote.sources.some((url) => !url.startsWith("https://"))) {
+      throw new Error(`Invalid provider reference quote: ${id}`);
+    }
+    for (const rates of [quote.prices, ...(quote.offPeak === undefined ? [] : [quote.offPeak.prices])]) {
+      if (priceKeys.some((key) => rates[key] === undefined && rates[`${key}Cny`] === undefined)) {
+        throw new Error(`Incomplete provider reference quote: ${id}`);
+      }
+    }
+    if (quote.offPeak === undefined) return [id, quote.prices];
+    // schedule is an exact catalog reference shared by models with the same local windows.
+    // schedule 为共享同一当地时段的型号提供精确的目录引用。
+    const schedule = schedules[quote.offPeak.scheduleRef];
+    if (schedule === undefined) throw new Error(`Unknown provider tariff schedule for ${id}`);
+    return [id, { ...quote.prices, offPeak: { ...schedule, prices: quote.offPeak.prices } }];
+  }));
+}
+
 // Produce the reference catalog and runtime block from the frozen snapshot and audited overlay.
 // 从冻结快照及已核查的覆盖数据生成参考目录和运行时区块。
 // root is the plugin directory; check rejects stale generated files without writing them.
@@ -193,7 +219,36 @@ export function syncReferencePricing(root, check = false) {
   // ordered models and stable material keep content revisions independent of source file ordering.
   // 有序模型与稳定的哈希材料使内容修订号独立于来源文件的行顺序。
   const ordered = [...models.keys()].sort().map((id) => models.get(id));
+  // providerModels keeps exact provider tariffs separate from shared model defaults.
+  // providerModels 将供应商精确报价与共享模型默认价分开。
+  const providerModels = official.providerModels;
+  // providerEntryModels groups entries that share a regional tariff without duplicating source quotes.
+  // providerEntryModels 将共享地区费率的入口归组，避免复制来源报价。
+  const providerEntryModels = official.providerEntryModels;
+  // nativeUnitReferences are display-only quotes because recorded usage contains Token counts.
+  // nativeUnitReferences 仅展示报价，因为现有用量记录保存的是 Token 数。
+  const nativeUnitReferences = official.nativeUnitReferences;
+  // compiledProviders and compiledEntries are exact runtime indexes for provider and regional prices.
+  // compiledProviders 与 compiledEntries 是供应商及地区价格的精确运行时索引。
+  const compiledProviders = Object.fromEntries(Object.entries(providerModels).map(([provider, entries]) =>
+    [provider, compileProviderPrices(entries, official.tariffSchedules)]));
+  const compiledEntries = Object.fromEntries(Object.entries(providerEntryModels).map(([provider, groups]) => {
+    // entries maps stable service entry IDs to their shared regional tariff table.
+    // entries 将稳定服务入口标识映射至共用的地区报价表。
+    const entries = {};
+    for (const group of Object.values(groups)) {
+      // compiled stores rates shared by all explicitly listed entries in one region.
+      // compiled 保存同一地区明确列出的入口共用费率。
+      const compiled = compileProviderPrices(group.models, official.tariffSchedules);
+      for (const id of group.serviceEntryIds) {
+        if (Object.hasOwn(entries, id)) throw new Error(`Duplicate service entry tariff: ${provider}/${id}`);
+        entries[id] = compiled;
+      }
+    }
+    return [provider, entries];
+  }));
   const material = { schemaVersion: 1, currencies: ["USD", "CNY"], unit: "per_million_tokens",
+    compiledProviders, compiledEntries, nativeUnitReferences,
     models: ordered.map(({ canonicalModelId, prices, contextTiers, offPeak, aliases, members, prefixes }) =>
       ({ canonicalModelId, prices, contextTiers, offPeak, aliases, members, prefixes })) };
   const revision = `sha256:${createHash("sha256").update(jsonText(material)).digest("hex")}`;
@@ -216,6 +271,10 @@ export function syncReferencePricing(root, check = false) {
     excludedGptModelIds,
     excludedMiniMaxModelIds,
     minimumMiniMaxVersion: official.minimumMiniMaxVersion,
+    providerModels,
+    providerEntryModels,
+    tariffSchedules: official.tariffSchedules,
+    nativeUnitReferences,
     models: ordered,
   };
   // block matches only the catalog region of the self-contained bundle.
@@ -241,6 +300,9 @@ export function syncReferencePricing(root, check = false) {
       `    [${JSON.stringify(canonicalModelId)}] = ${luaLiteral({ ...prices,
         ...(contextTiers ? { contextTiers } : {}), ...(offPeak ? { offPeak } : {}) })},`),
     "    },",
+    `    provider_models = ${luaLiteral(compiledProviders)},`,
+    `    provider_entry_models = ${luaLiteral(compiledEntries)},`,
+    `    native_unit_references = ${luaLiteral(nativeUnitReferences)},`,
     "}",
     "-- END GENERATED VULCAN DEFAULT PRICING CATALOG",
   ].join(bundle.includes("\r\n") ? "\r\n" : "\n");

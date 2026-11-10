@@ -69,7 +69,7 @@ messages:
   cost.total: Total reference estimate
   serviceEntry.codex-subscription: Codex subscription
   serviceEntry.public-api: Public API
-  cost.referenceOnly: Calculated from recorded usage and current reference prices, not a provider bill.
+  cost.referenceOnly: Estimates use recorded usage and reference rates, including subscription requests. Actual charges and subscription credits may differ.
   pricing.actions: Actions
   pricing.edit: Edit
   consumer.name.default-worker: Conversation assistant
@@ -178,6 +178,19 @@ messages:
   cost.coverage: "{{priced}} priced rows · {{unpriced}} unpriced · {{incomplete}} incomplete"
   cost.partial: Partial coverage
   pricing.source: Price source
+  pricing.nativeReference: Alibaba Cloud media reference
+  pricing.nativeHint: Pay-as-you-go rates. Usage totals do not calculate media charges.
+  pricing.nativeBeijing: Beijing
+  pricing.nativeSingapore: Singapore
+  pricing.nativeUnit.input_second: Per second of input audio
+  pricing.nativeUnit.input_10000_characters: Per 10,000 input characters
+  pricing.nativeUnit.input_image: Per input image
+  pricing.nativeUnit.output_image: Per generated image
+  pricing.nativeUnit.output_image_1k: Per generated 1K image
+  pricing.nativeUnit.output_image_2k: Per generated 2K image
+  pricing.nativeUnit.output_second_480p: Per second of 480p output
+  pricing.nativeUnit.output_second_720p: Per second of 720p output
+  pricing.nativeUnit.output_second_1080p: Per second of 1080p output
   pricing.unpriced: No price configured
   pricing.incompleteUsage: Required usage is incomplete
   pricing.loadError: Unable to load model prices

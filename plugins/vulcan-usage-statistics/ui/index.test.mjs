@@ -59,7 +59,7 @@ test("money localizes zero, tiny values and exact rounding without losing stored
 // locale 和 messages 投影宿主本地化。
 // Returns the container and asynchronous cleanup.
 // 返回容器与异步清理函数。
-async function mount(invoke, strict = false, locale = "en-US", messages = {}, factory) {
+async function mount(invoke, strict = false, locale = "en-US", messages = {}, factory, renderTooltipContent = false) {
   // Use the real host coordinator so StrictMode tests exercise the shared subscription contract.
   // 使用真实宿主协调器，让 StrictMode 测试覆盖共享订阅契约。
   invalidatePluginQueries("usage-test");
@@ -118,7 +118,9 @@ async function mount(invoke, strict = false, locale = "en-US", messages = {}, fa
     components: { PageBody: plain, PageToolbar, PageTabs, PageTabPanel, PageSection, PageHint: plain, PageNotice, PageEmptyState: ({ title }) => React.createElement("p", null, title),
       PageFacts, PageTable, MetricCard: plain, MetricGrid: plain, Badge: plain, Button, Input, Checkbox, SelectControl, StatusPill: plain, StreamPlaceholder: plain,
       ActivityHeatmap, ActivityHeatmapLegend: plain, TimeSeriesLineChart, ChartLegend: plain,
-      HelpTooltip: ({ ariaLabel }) => React.createElement("button", { "aria-label": ariaLabel }),
+      HelpTooltip: ({ ariaLabel, content }) => React.createElement(React.Fragment, null,
+        React.createElement("button", { "aria-label": ariaLabel }),
+        renderTooltipContent ? React.createElement("div", { hidden: true }, content) : null),
       Dialog: ({ open, children }) => open ? React.createElement("div", null, children) : null,
       // Preserve the dialog's class so tests can address its header, scrollable form and footer together.
       // 保留对话框类名，让测试可同时访问标题、可滚动表单和底部操作区。
@@ -159,6 +161,34 @@ async function openPricing(panel) {
   await React.act(async () => panel.container.querySelector("nav button:nth-child(4)").click());
   await React.act(async () => new Promise((resolve) => window.setTimeout(resolve, 250)));
 }
+
+// Confirm that a sub-cent media tariff stays precise in the reference tooltip and outside Token prices.
+// 验证不足一分钱的媒体单价在参考提示中保留精度，且不进入 Token 单价栏。
+test("lists regional media prices in their original units", async () => {
+  // mediaPricing is a synthetic row with distinct rates small enough to expose rounding loss.
+  // mediaPricing 使用不同地区的微小测试单价，便于发现错误舍入。
+  const mediaPricing = { ...pricingDirectory, models: [{
+    modelId: "fixture-audio", attempts: 0, source: "unpriced", aliases: [], effectivePrices: {},
+    nativeUnitRates: [{ unit: "input_second", beijingCny: "0.00012", singaporeCny: "0.00034" }],
+  }] };
+  // panel mounts the real pricing table with the public action payload.
+  // panel 用公开 Action 返回的数据挂载真实定价表。
+  const panel = await mount(
+    (action) => Promise.resolve(action === "settings-get" ? settings : action === "pricing-get" ? mediaPricing : dashboard),
+    false, "en-US", {}, undefined, true,
+  );
+  try {
+    await openPricing(panel);
+    // row locates the entry by model identity so directory order does not affect the assertion.
+    // row 按模型标识定位条目，避免目录顺序影响断言。
+    const row = [...panel.container.querySelectorAll("tr")].find((element) => element.textContent.includes("fixture-audio"));
+    assert.ok(row);
+    assert.equal([...row.cells].filter((cell) => cell.textContent.includes("0.00012")).length, 1);
+    assert.match(row.querySelector("dd").textContent, /0\.00012.*0\.00034/);
+  } finally {
+    await panel.close();
+  }
+});
 
 test("price configuration remains usable while the database action is pending", async () => {
   // dashboardPromise intentionally remains pending until after configuration is inspected.
@@ -763,6 +793,44 @@ test("copies a tariff into a new provider scope and uses the shared exchange rat
     await change("fixture-exchangeRate", "7.1");
     await click("fixture-saveExchangeRate");
     assert.deepEqual(writes[1], { ...writes[0], cnyPerUsd: "7.1" });
+  } finally { await panel.close(); }
+});
+
+// A shared model alias can still have a separately editable provider tariff.
+// 共享目录中的型号别名仍可拥有独立可编辑的供应商单价。
+test("edits an independently priced provider snapshot without rewriting its shared group", async () => {
+  // initial represents a shared alias with an independently quoted provider snapshot.
+  // initial 表示共享别名与供应商单独报价并存。
+  const initial = { ...settings,
+    modelAliases: { "fixture-model-snapshot": "fixture-model" },
+    providerCatalogModels: { vendor: { "fixture-model-snapshot": {
+      inputPerMillionCny: "2", outputPerMillionCny: "4", cacheReadPerMillionCny: "0.25", cacheWritePerMillionCny: "0",
+    } } } };
+  // writes records the exact provider ID and model key accepted from the editor.
+  // writes 记录编辑器提交的精确供应商标识与模型键。
+  const writes = [];
+  // panel mounts the production price editor with isolated fixture settings.
+  // panel 使用隔离的夹具设置挂载生产定价编辑器。
+  const panel = await mount((action, args) => {
+    if (action === "settings-get") return Promise.resolve(initial);
+    if (action === "dashboard-get") return Promise.resolve(dashboard);
+    if (action === "pricing-get") return Promise.resolve({ ...pricingDirectory, providerIds: ["vendor"],
+      models: [{ ...pricingDirectory.models[0], modelId: "fixture-model-snapshot" }] });
+    writes.push(args);
+    return Promise.resolve({ ...initial, ...args });
+  }, false, "en-US", { "pricing.providerScope": "fixture-scope", "pricing.save": "fixture-save", "pricing.cacheRead": "fixture-cache-read" });
+  try {
+    await openPricing(panel);
+    // scope selects the provider's quote instead of the shared alias.
+    // scope 选择供应商报价，而不是共享别名。
+    const scope = panel.container.querySelector('select[aria-label="fixture-scope"]');
+    await React.act(async () => { scope.value = "provider:vendor"; scope.dispatchEvent(new window.Event("change", { bubbles: true })); });
+    await React.act(async () => new Promise((resolve) => window.setTimeout(resolve, 250)));
+    await React.act(async () => [...panel.container.querySelectorAll("button")].find((button) => button.textContent === "fixture-model-snapshot").click());
+    assert.equal(panel.container.querySelector('input[aria-label="fixture-cache-read · CNY"]').value, "0.25");
+    await React.act(async () => [...panel.container.querySelectorAll("button")].find((button) => button.textContent === "fixture-save").click());
+    assert.deepEqual(writes[0]?.providerOverrides?.vendor, initial.providerCatalogModels.vendor);
+    assert.deepEqual(writes[0]?.modelOverrides, initial.modelOverrides);
   } finally { await panel.close(); }
 });
 

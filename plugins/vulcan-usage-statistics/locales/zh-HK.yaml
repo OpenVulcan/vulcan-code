@@ -69,7 +69,7 @@ messages:
   cost.total: 參考費用合計
   serviceEntry.codex-subscription: Codex 訂閱
   serviceEntry.public-api: 公開 API
-  cost.referenceOnly: 根據已記錄用量與目前參考單價計算，不代表供應商實際賬單。
+  cost.referenceOnly: 套餐請求亦按已記錄用量及參考單價估算。實際扣款及套餐額度用量以供應商為準。
   pricing.actions: 操作
   pricing.edit: 編輯
   consumer.name.default-worker: 對話助理

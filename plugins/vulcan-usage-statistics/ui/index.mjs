@@ -574,6 +574,17 @@ export function createPluginPanel(sdk) {
       : settings.catalogModels.find((entry) => entry.modelId === modelId)?.prices;
   }
 
+  // Find the exact bundled provider tariff for the selected model, if available.
+  // 查找所选型号的精确随包供应商费率，若存在则返回。
+  // settings supplies catalog maps; providerId and modelId identify one reference price.
+  // settings 提供目录映射；providerId 与 modelId 标识一份参考价。
+  function providerCatalogTariff(settings, providerId, modelId) {
+    const catalogs = settings.providerCatalogModels;
+    if (catalogs === undefined || !Object.hasOwn(catalogs, providerId)) return undefined;
+    const models = catalogs[providerId];
+    return Object.hasOwn(models, modelId) ? models[modelId] : undefined;
+  }
+
   // Return editable currency strings for the selected tariff, or empty fields for an unpriced model.
   // 返回所选费率的可编辑币种字符串，未定价模型返回空字段。
   function editablePrices(prices) {
@@ -611,7 +622,7 @@ export function createPluginPanel(sdk) {
 
   // Return the billing ID for modelId's last slash component using the aliases in settings.
   // 使用 settings 中的别名，将 modelId 最后一个斜杠后的分段解析为计费标识。
-  function billingModelId(settings, modelId) {
+  function billingModelId(settings, modelId, providerId = "") {
     const aliases = settings.modelAliases ?? {};
     // suffix is the alias lookup key for both direct and provider-qualified IDs.
     // 直接标识和带供应商前缀的标识都用 suffix 查找别名。
@@ -619,6 +630,9 @@ export function createPluginPanel(sdk) {
     // key uses SQLite's ASCII case folding and leaves unknown model IDs intact.
     // key 使用与 SQLite 相同的 ASCII 大小写转换，并保留未知型号原有写法。
     const key = suffix.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+    // Provider catalog entries with independent tariffs keep their exact billing identity.
+    // 具有独立单价的供应商目录条目保留精确定价标识。
+    if (providerCatalogTariff(settings, providerId, key) !== undefined) return key;
     if (Object.hasOwn(aliases, key)) return aliases[key];
     // Exact prices take precedence over spelling normalization, including priced snapshots.
     // 精确报价优先于写法归一，包括单独定价的快照。
@@ -638,7 +652,7 @@ export function createPluginPanel(sdk) {
   // Return the exact persisted keys belonging to one canonical billing model.
   // 返回归属于同一个定价模型的原始持久化键。
   function overridesForModel(settings, modelId, providerId = "") {
-    return Object.keys(pricingScopeOverrides(settings, providerId)).filter((key) => billingModelId(settings, key) === modelId).sort();
+    return Object.keys(pricingScopeOverrides(settings, providerId)).filter((key) => billingModelId(settings, key, providerId) === modelId).sort();
   }
 
   // pricingDraftIsValid mirrors the exact non-negative decimal configuration rules.
@@ -1059,7 +1073,7 @@ export function createPluginPanel(sdk) {
         estimates.length > 0 ? facts([[text("pricing.source", "Price source"), text(
           record.pricingSourceId?.startsWith("plugin.config.providerOverrides:") ? "pricing.providerOverride"
             : record.pricingSourceId?.startsWith("plugin.config.modelOverrides:") ? "pricing.override" : "pricing.default", "Reference price")]]) : null,
-        h("p", null, text("cost.referenceOnly", "Calculated from recorded usage and current reference prices; this is not a provider bill.")),
+        h("p", null, text("cost.referenceOnly", "Estimates use recorded usage and reference rates, including subscription requests. Actual charges and subscription credits may differ.")),
       ) }),
     );
   }
@@ -1325,11 +1339,18 @@ export function createPluginPanel(sdk) {
       if (!pricingScopeReady) return;
       // The same canonical model identity is used for browsing, editing and usage estimates.
       // 浏览、编辑及用量估算使用同一个主模型标识。
-      const canonical = billingModelId(pricingSettings, modelId);
+      const canonical = billingModelId(pricingSettings, modelId, pricingProviderId);
       const [scopedKey] = overridesForModel(pricingSettings, canonical, pricingProviderId);
+      // sharedModel resolves the same model through the shared price aliases.
+      // sharedModel 用共享价格别名解析同一个模型。
+      const sharedModel = billingModelId(pricingSettings, canonical);
+      const [sharedKey] = overridesForModel(pricingSettings, sharedModel);
+      // baseTariff follows the estimator order when no provider override exists.
+      // 没有供应商覆盖时，baseTariff 按估算器的优先级读取费率。
+      const baseTariff = sharedKey !== undefined ? pricingSettings.modelOverrides[sharedKey]
+        : providerCatalogTariff(pricingSettings, pricingProviderId, canonical) ?? editableTariff(pricingSettings, sharedModel);
       setSelectedPricingModel(canonical);
-      loadPricingDraft(scopedKey === undefined ? editableTariff(pricingSettings, canonical)
-        : pricingScopeOverrides(pricingSettings, pricingProviderId)[scopedKey]);
+      loadPricingDraft(scopedKey === undefined ? baseTariff : pricingScopeOverrides(pricingSettings, pricingProviderId)[scopedKey]);
       setPricingTemplate("choose");
       setNotice("");
       setSettingsError("");
@@ -1493,7 +1514,8 @@ export function createPluginPanel(sdk) {
     const selectedModelHasOverride = selectedOverrideIds.length > 0;
     // Saved provider prices and shared templates remain distinct even when the editor pre-fills the same values.
     // 即使编辑器预填同样的值，已保存的供应商价格与共享模板也保持独立。
-    const sharedTariff = editableTariff(pricingSettings, selectedPricingModel);
+    const sharedTariff = pricingSettings === null ? undefined
+      : editableTariff(pricingSettings, billingModelId(pricingSettings, selectedPricingModel));
     const originalTariff = selectedModelHasOverride
       ? pricingScopeOverrides(pricingSettings, pricingProviderId)[selectedOverrideIds[0]]
       : pricingProviderId === "" ? sharedTariff : undefined;
@@ -1983,9 +2005,23 @@ export function createPluginPanel(sdk) {
                       entry.offPeakPrices === undefined ? null : h("div", null,
                         priceCell(entry.offPeakPrices, field.key, `${text("pricing.offPeak", "Off-peak")} · `)),
                     )])),
-                    source: entry.source === "conflict" ? text("pricing.aliasConflict", "Conflicting alias prices")
-                      : entry.source === "provider_override" ? text("pricing.providerOverride", "Provider price")
-                      : text(entry.source === "override" ? "pricing.override" : entry.source === "catalog" ? "pricing.default" : "pricing.unpriced", "Price source"),
+                    // Media quotes are shown with their own units and never fill the Token rate columns.
+                    // 媒体报价按原单位展示，不填入 Token 单价列。
+                    source: entry.source === "unpriced" && entry.nativeUnitRates !== undefined
+                      ? h("span", null, text("pricing.nativeReference", "Alibaba Cloud media reference"), " ", h(HelpTooltip, {
+                        ariaLabel: text("pricing.nativeReference", "Alibaba Cloud media reference"),
+                        content: h("div", { className: "plugin-statistics-detail-tooltip" },
+                          h("strong", null, text("pricing.nativeReference", "Alibaba Cloud media reference")),
+                          facts(entry.nativeUnitRates.map((rate) => [
+                            text(`pricing.nativeUnit.${rate.unit}`, rate.unit),
+                            `${text("pricing.nativeBeijing", "Beijing")} ¥${rate.beijingCny} / ${text("pricing.nativeSingapore", "Singapore")} ¥${rate.singaporeCny}`,
+                          ])),
+                          h("p", null, text("pricing.nativeHint", "Pay-as-you-go rates. Usage totals do not calculate media charges.")),
+                        ),
+                      }))
+                      : entry.source === "conflict" ? text("pricing.aliasConflict", "Conflicting alias prices")
+                        : entry.source === "provider_override" ? text("pricing.providerOverride", "Provider price")
+                        : text(entry.source === "override" ? "pricing.override" : entry.source === "catalog" ? "pricing.default" : "pricing.unpriced", "Price source"),
                     actions: h(Button, { size: "sm", type: "button", variant: "outline", disabled: settingsBusy || !pricingScopeReady,
                       onClick: () => selectPricingModel(entry.modelId) }, text("pricing.edit", "Edit")),
                   },

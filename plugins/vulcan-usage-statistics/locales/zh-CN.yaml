@@ -69,7 +69,7 @@ messages:
   cost.total: 参考费用合计
   serviceEntry.codex-subscription: Codex 订阅
   serviceEntry.public-api: 公共 API
-  cost.referenceOnly: 根据已记录用量和当前参考单价计算，不代表供应商实际账单。
+  cost.referenceOnly: 套餐请求也按已记录用量和参考单价估算。实际扣款和套餐额度消耗以供应商为准。
   pricing.actions: 操作
   pricing.edit: 编辑
   consumer.name.default-worker: 会话助手
@@ -276,6 +276,19 @@ messages:
   cost.coverage: "{{priced}} 行可计算 · {{unpriced}} 行未定价 · {{incomplete}} 行用量不完整"
   cost.partial: 部分覆盖
   pricing.source: 价格来源
+  pricing.nativeReference: 百炼媒体参考价
+  pricing.nativeHint: 官网按量刊例，媒体费用暂不计入用量合计。
+  pricing.nativeBeijing: 北京
+  pricing.nativeSingapore: 新加坡
+  pricing.nativeUnit.input_second: 每秒输入音频
+  pricing.nativeUnit.input_10000_characters: 每万输入字符
+  pricing.nativeUnit.input_image: 每张输入图片
+  pricing.nativeUnit.output_image: 每张生成图片
+  pricing.nativeUnit.output_image_1k: 每张生成的 1K 图片
+  pricing.nativeUnit.output_image_2k: 每张生成的 2K 图片
+  pricing.nativeUnit.output_second_480p: 每秒 480p 输出
+  pricing.nativeUnit.output_second_720p: 每秒 720p 输出
+  pricing.nativeUnit.output_second_1080p: 每秒 1080p 输出
   pricing.unpriced: 未配置价格
   pricing.incompleteUsage: 必需用量不完整
   pricing.loadError: 无法读取模型价格

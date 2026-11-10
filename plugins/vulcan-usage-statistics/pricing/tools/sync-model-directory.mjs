@@ -70,6 +70,9 @@ const aliases = new Map();
 // catalog supplies retained prices and model groups before aliases are projected to the runtime.
 // catalog 提供保留报价与型号分组，再投影别名到运行时。
 const catalog = JSON.parse(readFileSync(referenceCatalog, "utf8"));
+// Native-unit quotes identify media models without giving them a synthetic Token tariff.
+// 原始单位报价标识媒体模型，不为它们构造虚假的 Token 单价。
+for (const id of Object.keys(catalog.nativeUnitReferences)) ids.add(id);
 // billingPrefixes maps complete family stems to their canonical model IDs.
 // billingPrefixes 将完整系列主干映射到主型号标识。
 const billingPrefixes = new Map();
@@ -146,6 +149,9 @@ const referencePrices = new Map(catalog.models.map(({ canonicalModelId, prices }
   canonicalModelId,
   [prices.inputPerMillion !== undefined ? "USD" : null, prices.inputPerMillionCny !== undefined ? "CNY" : null].filter(Boolean).join(" / "),
 ]));
+// Non-Token reference prices remain visible without entering the Token estimator.
+// 非 Token 参考价保持可见，但不参与 Token 费用估算。
+for (const id of Object.keys(catalog.nativeUnitReferences)) referencePrices.set(id, "CNY（按媒体单位）");
 // hiddenIds suppresses removed names in the directory while retaining their usage and user overrides.
 // hiddenIds 让移除的名称不再显示在费用目录中，同时保留相关用量和用户配置。
 const hiddenIds = new Set([...catalog.excludedGptModelIds, ...catalog.excludedMiniMaxModelIds]);
@@ -197,6 +203,11 @@ for (const id of referencePrices.keys()) {
 // lookupKeys folds ASCII case for declared models and aliases while preserving their canonical IDs.
 // lookupKeys 对已声明型号和别名统一 ASCII 大小写，同时保留其主标识。
 const lookupKeys = new Map();
+for (const entries of Object.values(catalog.providerModels)) {
+  for (const id of Object.keys(entries)) {
+    if (billingModelId(id, aliases) === id) lookupKeys.set(id.toLowerCase(), id);
+  }
+}
 for (const [suffix, canonical] of [...[...knownModels].map((id) => [id, id]), ...aliases]) {
   // key follows SQLite's ASCII case folding so all pricing entry points agree.
   // key 与 SQLite 的 ASCII 大小写转换规则一致，保证各计费入口一致。
@@ -301,6 +312,7 @@ const markdown = [
   "可用精确供应商 ID 为模型绑定独立价格。该供应商优先使用专属价格，其余请求沿用共享价格。模板会将基础价、谷价和上下文档位复制到草稿，保存后可单独编辑。",
   "启用谷价后，以请求终止时间和模型配置的固定 UTC 偏移匹配每周时段，区间包含开始时间，不含结束时间。时段之外使用基础价。",
   "上下文分档以单次请求的总输入 Token 选档。等于阈值时使用前一档，超过阈值后整笔请求使用新档。基础价和谷价可分别配置多个档位。",
+  "百炼媒体模型的按张、按秒及按字符刊例，以及百炼专属的 MiniMax M2.5 报价，见 [官网价格核查](official-price-audit-2026-11-10.md#百炼-token-plan-补齐项)。",
   "",
   "| 定价模型组 | 随包参考价 | 已声明别名 |",
   "| --- | --- | --- |",

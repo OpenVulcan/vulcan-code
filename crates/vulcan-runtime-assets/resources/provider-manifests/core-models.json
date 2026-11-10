@@ -1,7 +1,7 @@
 {
   "schema_version": "vulcan.core-models.v1",
-  "revision": 2,
-  "published_at": "2026-11-10T12:48:21Z",
+  "revision": 3,
+  "published_at": "2026-11-10T13:16:34Z",
   "models": [
     {
       "model_id": "beam-free",
@@ -436,6 +436,23 @@
       },
       "verification": "seeded",
       "provenance_ref": "builtin:core.seed.2026-11-08"
+    },
+    {
+      "model_id": "decision-model-preview",
+      "display_name": "Bailian Decision Model Preview",
+      "vendor": "alibaba",
+      "capabilities": {
+        "operations": [
+          "decision_evaluate"
+        ],
+        "input_resources": [],
+        "output_resources": [],
+        "reasoning": "unsupported",
+        "reasoning_control": "fixed_off",
+        "reasoning_efforts": []
+      },
+      "verification": "verified",
+      "provenance_ref": "https://help.aliyun.com/zh/model-studio/token-plan-decision-model"
     },
     {
       "model_id": "deepseek-flash",
@@ -2830,7 +2847,11 @@
         "url": "https://mimo.mi.com/docs/en-US/quick-start/model",
         "note": "Official MiMo API model identities, speech operations, multimodal inputs, and published token limits. The V2.6 context size also matches Xiaomi's official Codex configuration."
       },
-      {"url": "builtin:core.seed.2026-11-08", "note": "Seeded from the bundled provider manifests on 2026-11-08: each value comes from the rule that owned the model in the previous common model catalog (official, then cloud platform, then relay); every entry awaits per-model verification against vendor documentation."}
+      {"url": "builtin:core.seed.2026-11-08", "note": "Seeded from the bundled provider manifests on 2026-11-08: each value comes from the rule that owned the model in the previous common model catalog (official, then cloud platform, then relay); every entry awaits per-model verification against vendor documentation."},
+      {
+        "url": "https://help.aliyun.com/zh/model-studio/token-plan-decision-model",
+        "note": "Alibaba Token Plan Beijing returned a validated choice, probabilities and confidence for decision-model-preview via its native System One endpoint on 2026-11-10."
+      }
     ]
   }
 }

@@ -6,6 +6,10 @@
     "defaultCnyPerUsd": { "type": "string" },
     "modelAliases": { "type": "object", "additionalProperties": { "type": "string" } },
     "modelPrefixes": { "type": "object", "additionalProperties": { "type": "string" } },
+    "providerCatalogModels": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/modelOverrides" }
+    },
     "modelOverrides": { "$ref": "#/$defs/modelOverrides" },
     "providerOverrides": {
       "type": "object",

@@ -6,6 +6,8 @@
     "alibaba::model-studio-singapore.qwen-image-2.0-pro.image-generate",
     "alibaba::token-plan-personal-cn.qwen-image-3.0-pro.image-generate",
     "alibaba::token-plan-personal-global.qwen-image-3.0-pro.image-generate",
+    "alibaba::token-plan-team-cn.qwen-image-3.0-pro.image-generate",
+    "alibaba::token-plan-team-global.qwen-image-3.0-pro.image-generate",
     "alibaba::token-plan-team-cn.qwen-image-2.0.image-generate",
     "alibaba::token-plan-team-cn.qwen-image-2.0-pro.image-generate",
     "alibaba::token-plan-team-global.qwen-image-2.0.image-generate",

@@ -1,0 +1,129 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "alibaba-token-plan-asr-sync",
+  "base_manifest": "alibaba.json",
+  "production_target_refs": [
+    "alibaba::token-plan-personal-cn.qwen-audio-3.0-asr-flash.speech-transcribe",
+    "alibaba::token-plan-personal-global.qwen-audio-3.0-asr-flash.speech-transcribe",
+    "alibaba::token-plan-team-cn.qwen-audio-3.0-asr-flash.speech-transcribe",
+    "alibaba::token-plan-team-global.qwen-audio-3.0-asr-flash.speech-transcribe"
+  ],
+  "tool_target": {
+    "target_id": "model-studio-cn.fixture-token-plan-asr-sync",
+    "description": "Verify Token Plan ASR projection and transcript extraction.",
+    "service_entry_id": "model-studio-cn",
+    "credential_profile_ids": [
+      "api-key"
+    ],
+    "upstream_target_id": "qwen-audio-3.0-asr-flash",
+    "display_name": "Alibaba Qwen ASR Sync Generic Fixture",
+    "tool_id": "fixture_alibaba_token_plan_asr_sync",
+    "capability": "speech_transcribe",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "audio_url": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "audio_url"
+      ]
+    },
+    "output": {
+      "kind": "text",
+      "source_path": "/text",
+      "normalized_result_path": "text",
+      "resource_kind": null,
+      "mime_types": []
+    },
+    "execution": {
+      "endpoint_path": "/api/v1/services/aigc/multimodal-generation/generation",
+      "authentication": "bearer_authorization",
+      "adapter": "generic_json",
+      "execution_kind": "http_json_sync"
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.alibaba-token-plan-asr-sync",
+    "operation": "speech_transcribe",
+    "carrier": "provider_tool",
+    "input_resources": [
+      "audio"
+    ],
+    "output_resources": [],
+    "tool_target_refs": [
+      "model-studio-cn.fixture-token-plan-asr-sync"
+    ],
+    "request_profile_refs": [
+      "alibaba.audio.token-plan-asr.request.v1"
+    ],
+    "response_profile_refs": [
+      "alibaba.audio.token-plan-asr.response.v1"
+    ],
+    "upload_channel_refs": [],
+    "upload_bindings": [],
+    "timeout_ms": 60000,
+    "idempotent": false
+  },
+  "upload_channels": [],
+  "request_profiles": [],
+  "response_profiles": [],
+  "required_execution_primitives": [
+    "http_json_sync"
+  ],
+  "required_upload_primitives": [],
+  "arguments": {
+    "audio_url": "data:audio/webm;base64,GkXfo0E="
+  },
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/api/v1/services/aigc/multimodal-generation/generation",
+      "expected_json_body": {
+        "model": "qwen-audio-3.0-asr-flash",
+        "input": {
+          "messages": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_audio",
+                  "input_audio": {
+                    "data": "data:audio/webm;base64,GkXfo0E="
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "parameters": {
+          "format": "mp3",
+          "sample_rate": "16000"
+        }
+      },
+      "response_status": 200,
+      "response_json_body": {
+        "request_id": "asr-fixture",
+        "output": {
+          "text": "fixture transcript",
+          "sentence": {
+            "text": "fixture transcript",
+            "words": []
+          },
+          "request_id": "asr-fixture"
+        },
+        "usage": {
+          "duration": 2
+        }
+      }
+    }
+  ],
+  "expected_output_kind": "text",
+  "expected_text_output": "fixture transcript",
+  "required_transformers": [
+    "rebuild_json_template"
+  ]
+}
