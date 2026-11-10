@@ -12,11 +12,11 @@ Rust Core · Electron 桌面殼 · React WebUI · ratatui TUI
 [![Issues](https://img.shields.io/github/issues/OpenVulcan/vulcan-code)](https://github.com/OpenVulcan/vulcan-code/issues)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/OpenVulcan/vulcan-code/pulls)
 
-[简体中文](README.md) | [English](README.en.md) | **繁體中文** | [日本語](README.ja.md) | [한국어](README.ko.md) | [Español](README.es.md) | [Français](README.fr.md) | [Deutsch](README.de.md) | [Русский](README.ru.md) | [Português](README.pt-BR.md)
+[English](README.md) | [简体中文](README.zh-CN.md) | **繁體中文** | [日本語](README.ja.md) | [한국어](README.ko.md) | [Español](README.es.md) | [Français](README.fr.md) | [Deutsch](README.de.md) | [Русский](README.ru.md) | [Português](README.pt-BR.md)
 
 </div>
 
-> 本文為[簡體中文 README](README.md) 的翻譯；兩者不一致時，以簡體中文版為準。歡迎透過 PR 修正翻譯。
+> 本文為[簡體中文 README](README.zh-CN.md) 的翻譯；兩者不一致時，以簡體中文版為準。歡迎透過 PR 修正翻譯。
 
 ---
 

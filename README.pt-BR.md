@@ -12,11 +12,11 @@ Rust Core · Shell desktop Electron · React WebUI · ratatui TUI
 [![Issues](https://img.shields.io/github/issues/OpenVulcan/vulcan-code)](https://github.com/OpenVulcan/vulcan-code/issues)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/OpenVulcan/vulcan-code/pulls)
 
-[简体中文](README.md) | [English](README.en.md) | [繁體中文](README.zh-TW.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [Español](README.es.md) | [Français](README.fr.md) | [Deutsch](README.de.md) | [Русский](README.ru.md) | **Português**
+[English](README.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [Español](README.es.md) | [Français](README.fr.md) | [Deutsch](README.de.md) | [Русский](README.ru.md) | **Português**
 
 </div>
 
-> Esta é uma tradução do [README em chinês simplificado](README.md). Em caso de divergência, prevalece a versão em chinês. Correções de tradução são bem-vindas via PR.
+> Esta é uma tradução do [README em chinês simplificado](README.zh-CN.md). Em caso de divergência, prevalece a versão em chinês. Correções de tradução são bem-vindas via PR.
 
 ---
 

@@ -12,11 +12,11 @@ Rust Core · настольная оболочка Electron · React WebUI · ra
 [![Issues](https://img.shields.io/github/issues/OpenVulcan/vulcan-code)](https://github.com/OpenVulcan/vulcan-code/issues)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/OpenVulcan/vulcan-code/pulls)
 
-[简体中文](README.md) | [English](README.en.md) | [繁體中文](README.zh-TW.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [Español](README.es.md) | [Français](README.fr.md) | [Deutsch](README.de.md) | **Русский** | [Português](README.pt-BR.md)
+[English](README.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [Español](README.es.md) | [Français](README.fr.md) | [Deutsch](README.de.md) | **Русский** | [Português](README.pt-BR.md)
 
 </div>
 
-> Это перевод [README на упрощённом китайском](README.md). При расхождениях приоритет имеет китайская версия. Исправления перевода принимаются через PR.
+> Это перевод [README на упрощённом китайском](README.zh-CN.md). При расхождениях приоритет имеет китайская версия. Исправления перевода принимаются через PR.
 
 ---
 

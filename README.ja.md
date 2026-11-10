@@ -12,11 +12,11 @@ Rust Core · Electron デスクトップシェル · React WebUI · ratatui TUI
 [![Issues](https://img.shields.io/github/issues/OpenVulcan/vulcan-code)](https://github.com/OpenVulcan/vulcan-code/issues)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/OpenVulcan/vulcan-code/pulls)
 
-[简体中文](README.md) | [English](README.en.md) | [繁體中文](README.zh-TW.md) | **日本語** | [한국어](README.ko.md) | [Español](README.es.md) | [Français](README.fr.md) | [Deutsch](README.de.md) | [Русский](README.ru.md) | [Português](README.pt-BR.md)
+[English](README.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | **日本語** | [한국어](README.ko.md) | [Español](README.es.md) | [Français](README.fr.md) | [Deutsch](README.de.md) | [Русский](README.ru.md) | [Português](README.pt-BR.md)
 
 </div>
 
-> 本書は[簡体字中国語版 README](README.md) の翻訳です。内容に相違がある場合は中国語版が優先されます。翻訳の修正は PR で歓迎します。
+> 本書は[簡体字中国語版 README](README.zh-CN.md) の翻訳です。内容に相違がある場合は中国語版が優先されます。翻訳の修正は PR で歓迎します。
 
 ---
 
