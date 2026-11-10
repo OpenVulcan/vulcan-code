@@ -5,14 +5,16 @@ import type { ShellJobNoticeFacts } from "./shell-job-notice";
 // ContextInjectionCategory names the user-facing family of one injected prompt.
 // ContextInjectionCategory 表示一条注入提示词面向用户的类别。
 export type ContextInjectionCategory =
-  | "goal" | "shellJob" | "plan" | "tools" | "permission" | "model" | "answer" | "guidance" | "base" | "injection" | "other";
+  | "goal" | "shellJob" | "plan" | "tools" | "permission" | "model" | "answer" | "guidance" | "base" | "injection" | "memoryExpiration" | "other";
 
 // ContextInjectionEntry is one injected prompt shown inside a context-injection card.
 // ContextInjectionEntry 是上下文注入卡片中显示的一条注入提示词。
 export interface ContextInjectionEntry {
   context_key: string;
   category: ContextInjectionCategory;
-  operation: "upsert" | "remove";
+  // Display operation; expire represents Core's internal snapshot invalidation.
+  // 展示操作；expire 表示 Core 的内部快照失效。
+  operation: "upsert" | "remove" | "expire";
   content: string;
   // Optional heading that names what the entry is about, shown instead of the operation.
   // 可选标题，指明条目的对象，替代操作名显示。
@@ -34,19 +36,27 @@ export function contextInjectionCategoryLabel(category: ContextInjectionCategory
   return t(`conversation.contextInjection.category.${category}`);
 }
 
-// contextInjectionOperationLabel localizes whether an entry sent or withdrew its instructions.
-// contextInjectionOperationLabel 本地化条目是发送还是撤回指令。
+// contextInjectionOperationLabel returns the localized state for a context entry's display operation.
+// contextInjectionOperationLabel 返回上下文条目展示操作对应的本地化状态。
 export function contextInjectionOperationLabel(operation: ContextInjectionEntry["operation"], t: Translation): string {
-  return t(operation === "remove" ? "conversation.contextInjection.remove" : "conversation.contextInjection.upsert");
+  switch (operation) {
+    case "expire": return t("conversation.contextInjection.expire");
+    case "remove": return t("conversation.contextInjection.remove");
+    case "upsert": return t("conversation.contextInjection.upsert");
+  }
 }
 
-// contextInjectionEntryMarkdown shows one entry's operation over the exact text the model received, fenced
-// longer than any backtick run inside it so the text renders verbatim.
-// contextInjectionEntryMarkdown 显示一个条目的操作及模型收到的原文；围栏长于原文中的任何反引号序列，使原文逐字显示。
+// contextInjectionEntryMarkdown returns one entry's status and any instruction text in a verbatim fence.
+// contextInjectionEntryMarkdown 返回单条记录的状态，并用围栏逐字展示其中的指令正文。
 export function contextInjectionEntryMarkdown(entry: ContextInjectionEntry, t: Translation): string {
+  // The heading alone communicates expiration when it shares a card with instruction text.
+  // 失效说明与指令正文共用卡片时，只用标题即可传达失效状态。
+  const heading = entry.label ?? contextInjectionOperationLabel(entry.operation, t);
+  if (entry.operation === "expire") return `**${heading}**`;
+  // Size the fence so embedded backticks cannot escape the instruction block.
+  // 按正文中的反引号长度设置围栏，避免正文提前结束代码块。
   const longestRun = Math.max(0, ...(entry.content.match(/`{3,}/g) ?? []).map((run) => run.length));
   const fence = "`".repeat(Math.max(3, longestRun + 1));
-  const heading = entry.label ?? contextInjectionOperationLabel(entry.operation, t);
   return `**${heading}**\n\n${fence}text\n${entry.content}\n${fence}`;
 }
 

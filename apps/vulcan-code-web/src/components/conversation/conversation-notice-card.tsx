@@ -57,6 +57,22 @@ export function ConversationNoticeCard(props: {
     React.startTransition(() => onExpandedChange(cardKey, next));
   }, [cardKey, onExpandedChange]);
   const entries = readContextInjectionEntries(props.block.rawMetadata);
+  // A quiet status line is sufficient when the notice only reports expiration.
+  // 提示仅报告失效时，一条简短的状态行就足够。
+  if (entries && entries.length > 0 && entries.every((entry) => entry.operation === "expire")) {
+    // Reuse the notice icon to connect the status line to other context messages.
+    // 复用提示图标，使状态行与其他上下文消息保持一致。
+    const Icon = props.icon;
+    // The memory category title identifies what expired even in the compact presentation.
+    // 即使在紧凑样式中，记忆类别标题也能说明失效对象。
+    const text = entries.every((entry) => entry.category === "memoryExpiration") ? props.title : props.block.summary;
+    return (
+      <div className="vk-note">
+        <Icon aria-hidden="true" />
+        <div className="vk-note-text"><span>{text}</span></div>
+      </div>
+    );
+  }
   const body = entries && entries.length > 0
     ? <ContextInjectionPages entries={entries} />
     : props.block.body.trim() ? <MarkdownResult text={props.block.body} /> : null;

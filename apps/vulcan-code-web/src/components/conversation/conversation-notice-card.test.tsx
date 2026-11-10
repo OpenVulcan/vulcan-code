@@ -81,3 +81,25 @@ it("shows a single-category card without a pager", () => {
   expect(host.textContent).toContain("PLAN-TEXT");
   expect(host.querySelector(".vk-memory-pager")).toBeNull();
 });
+
+// Expiration-only notices use one line even if the old card was expanded in the saved UI state.
+// 即使旧卡片的界面状态曾保存为展开，纯失效提示也只占一行。
+it.each([
+  { category: "injection", useTitle: false },
+  { category: "memoryExpiration", useTitle: true },
+] as const)("renders an expiration-only notice for $category as a status line", ({ category, useTitle }) => {
+  // Model the projected state and the matching saved card expansion.
+  // 模拟投影后的状态及对应的卡片展开记录。
+  const block: ConversationBlock = { ...injectionBlock, summary: "Fixture expiration summary", rawMetadata: {
+    notice_kind: "context_injection",
+    context_entries: [{ context_key: "injection.persistent", category, operation: "expire", content: "" }],
+  } };
+  act(() => root.render(
+    <I18nProvider initialLocale="en-US">
+      <ConversationNoticeCard block={block} expandedIds={new Set([`note:${block.id}`])} icon={ScrollText}
+        onExpandedChange={() => undefined} title={block.title} />
+    </I18nProvider>,
+  ));
+  expect(host.querySelector(".vk-note-text")?.textContent).toBe(useTitle ? block.title : block.summary);
+  expect(host.querySelector(".vk-tool")).toBeNull();
+});

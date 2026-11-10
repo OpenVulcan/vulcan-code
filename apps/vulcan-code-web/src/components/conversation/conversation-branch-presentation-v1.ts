@@ -80,6 +80,10 @@ type ToolCallBody = Extract<ConversationEventBody, { kind: "tool_call" }>;
 // SystemContextBody 收窄一条规范 V1 系统提示词注入事件。
 type SystemContextBody = Extract<ConversationEventBody, { kind: "system_context" }>;
 
+// ContextExpirationCategory describes a persistent snapshot invalidation with or without a known memory source.
+// ContextExpirationCategory 区分记忆来源已确认和未确认的持久快照失效。
+type ContextExpirationCategory = "memoryExpiration" | "injection";
+
 // UserInputBody narrows one canonical V1 user input event.
 // UserInputBody 收窄一条规范 V1 用户输入事件。
 type UserInputBody = Extract<ConversationEventBody, { kind: "user_input" }>;
@@ -146,6 +150,9 @@ interface CachedEventMessagesV1 {
   // Canonical API purpose can arrive when an older page is prepended.
   // 前置更早分页时可能补齐规范 API 用途。
   compaction: boolean;
+  // Loading the original injection can identify a previously generic expiration as a memory expiration.
+  // 加载原注入事件后，可以把之前的通用失效提示识别为记忆失效提示。
+  contextExpiration: ContextExpirationCategory | null;
   // Root input of the event Turn when projected.
   // 投影时该事件所属 Turn 的根输入。
   rootInputSeq: number | undefined;
@@ -214,8 +221,12 @@ export function createConversationBranchPresentationProjectorV1(): ConversationB
     // Turns whose memory recall already has its own card do not repeat the injected memory text.
     // 已有记忆召回卡的回合不再重复显示注入的记忆正文。
     const memoryRecallTurns = new Set<number>();
+    // Index VMM baseline events by their canonical sequence so invalidations can resolve their exact source.
+    // 按规范序号索引 VMM 基线事件，使失效记录能定位其精确来源。
+    const memoryBaselineSeqs = new Set<number>();
     for (const summary of events) {
       if (summary.event.kind === "memory_recall" && summary.turn_id !== null) memoryRecallTurns.add(summary.turn_id);
+      if (summary.event.kind === "system_context" && isVmmMemoryBaseline(summary.event)) memoryBaselineSeqs.add(summary.seq);
       if (summary.event.kind === "tool_call") claimCollaborationReceipt(summary.event, claimed);
       if (summary.event.kind === "collaboration" && summary.event.after_state.kind === "task_result_projection"
         && summary.event.after_state.projection.disclosure === "authorization_revoked") {
@@ -288,6 +299,10 @@ export function createConversationBranchPresentationProjectorV1(): ConversationB
         continue;
       }
       const apiStats = eventApiStatsDependency(summary.event, apiStatsByCall);
+      // Resolve the category from the referenced source whenever it is present in the current window.
+      // 当被引用的来源已加载到当前窗口时，按来源解析失效类别。
+      const contextExpiration = summary.event.kind === "system_context"
+        ? contextExpirationCategory(summary.event, memoryBaselineSeqs) : null;
       const cached = cache.get(summary);
       if (
         cached
@@ -295,15 +310,16 @@ export function createConversationBranchPresentationProjectorV1(): ConversationB
         && cached.rootInputText === rootInput?.text
         && cached.apiStats === apiStats
         && cached.compaction === compaction
+        && cached.contextExpiration === contextExpiration
         && sameRetryFailurePages(cached.retryFailures, retryFailures)
       ) {
         messages.push(...cached.messages);
         continue;
       }
       const projected = retryFailures === undefined ? conversationMessagesForV1Event(
-        sessionId, summary, rootInput, apiStatsByCall, resources, providers, t, compaction, undefined, undefined,
+        sessionId, summary, rootInput, apiStatsByCall, resources, providers, t, compaction, undefined, undefined, contextExpiration,
       ) : [retryFailureMessage(conversationMessageBase(sessionId, summary, rootInput), retryFailures)];
-      cache.set(summary, { rootInputSeq: rootInput?.seq, rootInputText: rootInput?.text, apiStats, compaction, retryFailures, messages: projected });
+      cache.set(summary, { rootInputSeq: rootInput?.seq, rootInputText: rootInput?.text, apiStats, compaction, contextExpiration, retryFailures, messages: projected });
       messages.push(...projected);
     }
 
@@ -483,6 +499,9 @@ function conversationMessagesForV1Event(
   // Applied file changes of the Turn, read only by its statistics row.
   // 该 Turn 的已应用文件变更，仅由其统计行读取。
   turnChanges: TurnChangeSummaryV1 | undefined,
+  // Display category of a snapshot invalidation, resolved from the loaded source event when available.
+  // 快照失效的展示类别，来源事件已加载时按其解析。
+  contextExpiration: ContextExpirationCategory | null = null,
 ): ConversationMessage[] {
   const base = conversationMessageBase(sessionId, summary, rootInput);
   if (compaction) {
@@ -571,7 +590,7 @@ function conversationMessagesForV1Event(
     case "memory_recall":
       return [memoryRecallMessage(base, summary, summary.event, rootInput, t)];
     case "system_context":
-      return [contextInjectionMessage(base, summary, summary.event, rootInput, t)];
+      return [contextInjectionMessage(base, summary, summary.event, rootInput, contextExpiration, t)];
     case "request_config_changed": {
       // changeKind is derived from exact persisted fields, never from a display label.
       // changeKind 从精确持久化字段派生，绝不依赖展示文案。
@@ -1089,9 +1108,8 @@ function contextInjectionCategory(contextKey: string): ContextInjectionCategory 
   return "other";
 }
 
-// contextInjectionIsHidden drops only automatic turn-end expirations and memory text already shown by the
-// memory recall card; every other upsert or removal stays visible.
-// contextInjectionIsHidden 只隐藏回合结束时的自动失效，以及记忆召回卡已经显示的记忆正文；其余写入或移除都保持可见。
+// contextInjectionIsHidden suppresses automatic turn-end expiration and memory text already shown by the recall card.
+// contextInjectionIsHidden 隐藏回合结束时的自动失效和召回卡已展示的记忆正文。
 function contextInjectionIsHidden(
   summary: ConversationEventSummary,
   event: SystemContextBody,
@@ -1103,22 +1121,42 @@ function contextInjectionIsHidden(
     && memoryRecallTurns.has(summary.turn_id);
 }
 
-// contextInjectionMessage shows one prompt injection as a categorized notice whose detail is the exact
-// English text the model received, so no instruction reaches the model without the user seeing it.
-// contextInjectionMessage 把一条提示词注入显示为分类提示，详情是模型收到的英文原文，
-// 使任何指令都不会在用户不知情时到达模型。
+// isVmmMemoryBaseline recognizes the exact baseline envelope emitted into the persistent injection snapshot.
+// isVmmMemoryBaseline 识别写入持久注入快照的规范 VMM 基线信封。
+function isVmmMemoryBaseline(event: SystemContextBody): boolean {
+  return event.context_key === "injection.persistent" && event.operation === "upsert" && event.scope === "session"
+    && event.content.startsWith("<VMM_MEMORY_BASELINE>\n") && event.content.endsWith("\n</VMM_MEMORY_BASELINE>");
+}
+
+// contextExpirationCategory maps a persistent cleanup marker to the category proved by its source sequence.
+// contextExpirationCategory 根据持久上下文清理标记引用的来源序号确定展示类别。
+function contextExpirationCategory(
+  event: SystemContextBody,
+  memoryBaselineSeqs: ReadonlySet<number>,
+): ContextExpirationCategory | null {
+  if (event.operation !== "remove" || event.scope !== "session" || event.context_key !== "injection.persistent") return null;
+  // The source can be on a page that has yet to load, so an unresolved marker stays in added context.
+  // 来源可能在尚未加载的页面上，因此未解析的标记仍归为附加上下文。
+  const marker = /^expired_source_seq=([1-9][0-9]*)$/u.exec(event.content);
+  if (!marker) return null;
+  return memoryBaselineSeqs.has(Number(marker[1])) ? "memoryExpiration" : "injection";
+}
+
+// contextInjectionMessage turns a context event into a categorized notice with instruction text or a compact expiration state.
+// contextInjectionMessage 将上下文事件转换成分类提示，显示指令正文或简短的失效状态。
 function contextInjectionMessage(
   base: Pick<ConversationMessage, "id" | "conversationId" | "createdAt" | "metadata">,
   summary: ConversationEventSummary,
   event: SystemContextBody,
   rootInput: V1RootInputPresentationMetadata | undefined,
+  expiration: ContextExpirationCategory | null,
   t: Translation,
 ): ConversationMessage {
   return contextInjectionNotice({ ...base, metadata: presentationMetadata(summary, rootInput) }, [{
     context_key: event.context_key,
-    category: contextInjectionCategory(event.context_key),
-    operation: event.operation,
-    content: event.content,
+    category: expiration ?? contextInjectionCategory(event.context_key),
+    operation: expiration ? "expire" : event.operation,
+    content: expiration ? "" : event.content,
   }], t);
 }
 
@@ -1142,10 +1180,11 @@ function contextInjectionNotice(
     ...base,
     role: "assistant",
     recordKind: "display-note",
-    title: t("conversation.contextInjection.title").replace(
-      "{category}",
-      categories.map((category) => contextInjectionCategoryLabel(category, t)).join("/"),
-    ),
+    title: categories.length === 1 && categories[0] === "memoryExpiration"
+      ? t("conversation.contextInjection.memoryExpirationTitle")
+      : t("conversation.contextInjection.title").replace(
+        "{category}", categories.map((category) => contextInjectionCategoryLabel(category, t)).join("/"),
+      ),
     body: sections.join("\n\n"),
     metadata: {
       ...(base.metadata as Record<string, unknown> | undefined),

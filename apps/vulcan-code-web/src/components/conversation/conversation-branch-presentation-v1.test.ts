@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import zhCNTranslations from "@catalogs/webui/zh-CN.json";
 import { parseConversationBlocks } from "./conversation-transcript-parser";
 import { parseSystemProviderError } from "./conversation-system-error-card";
+import { readContextInjectionEntries } from "./conversation-context-injection";
 
-import { projectConversationBranchPresentationV1 } from "./conversation-branch-presentation-v1";
+import { createConversationBranchPresentationProjectorV1, projectConversationBranchPresentationV1 } from "./conversation-branch-presentation-v1";
 import { clientActionId, type ConversationEventSummary } from "@/service/conversation-event-window-store";
 import type { ConversationSessionResourceCatalogV1 } from "@/state/conversation-session-resources-v1";
 
@@ -208,6 +209,77 @@ describe("V1 branch request configuration presentation", () => {
     // The fence outlasts backtick runs inside the content, so the exact text stays one code block.
     // 围栏长于正文中的反引号串，使原文保持为一个代码块。
     expect(notices[0]!.body).toContain("````text\nModel extensions changed: image_generate uses ```fixed```.\n````");
+  });
+  // Reopening a later window describes expiration while preserving explicit context changes.
+  // 重新打开较晚的窗口时，说明失效状态并保留显式上下文变更。
+  it("shows expiration without loading the older source event", () => {
+    // The window begins after the original VMM baseline, just before the next Provider request.
+    // 事件窗口从原 VMM 基线之后、下一次供应商请求前开始。
+    const cleanup = {
+      seq: 51, turn_id: null, created_at_ms: 51, updated_at_ms: 51, event_revision: 1, visibility: "provider",
+      event: { kind: "system_context", context_key: "injection.persistent", operation: "remove",
+        scope: "session", content: "expired_source_seq=12" },
+    } satisfies ConversationEventSummary;
+    // An explicit history reset carries its own explanation for the same producer.
+    // 同一个生产者在显式历史重置时携带该操作的说明。
+    const reset = {
+      ...cleanup, seq: 52,
+      event: { ...cleanup.event, content: "Fixture context reset explanation." },
+    };
+    // The compact notice shows expiration in its header when there are no other context changes.
+    // 没有其他上下文变更时，紧凑提示在标题栏显示失效状态。
+    const expirationOnly = projectConversationBranchPresentationV1("session-context", [cleanup], EMPTY_RESOURCES, (key) => key);
+    expect(expirationOnly.renderItems.flatMap((item) => item.blocks).find((block) => block.kind === "notice")?.summary)
+      .toBe("conversation.contextInjection.expire");
+
+    // The merged card distinguishes expiration from a genuine withdrawal and displays only its human-readable detail.
+    // 合并卡区分失效与真实撤回，只显示撤回的可读详情。
+    const presentation = projectConversationBranchPresentationV1("session-context", [cleanup, reset], EMPTY_RESOURCES, (key) => key);
+    const notice = presentation.renderItems.flatMap((item) => item.blocks).find((block) => block.kind === "notice");
+    expect(readContextInjectionEntries(notice?.rawMetadata)).toMatchObject([
+      { operation: "expire", content: "" },
+      { operation: "remove", content: reset.event.content },
+    ]);
+    expect(notice?.body).toContain("conversation.contextInjection.expire");
+    expect(notice?.body).not.toContain(cleanup.event.content);
+  });
+  // Prepending the exact VMM source updates the category of an expiration that was already displayed.
+  // 前置精确的 VMM 来源后，更新已经显示的失效提示类别。
+  it("titles a VMM baseline expiration using the referenced history event", () => {
+    // The source uses the runtime's reserved baseline envelope.
+    // 来源使用运行时的保留基线信封。
+    const baseline = {
+      seq: 12, turn_id: null, created_at_ms: 12, updated_at_ms: 12, event_revision: 1, visibility: "provider",
+      event: { kind: "system_context", context_key: "injection.persistent", operation: "upsert", scope: "session",
+        content: "<VMM_MEMORY_BASELINE>\nFixture retained memory.\n</VMM_MEMORY_BASELINE>" },
+    } satisfies ConversationEventSummary;
+    // A new root message separates the original injection from the later cleanup notice.
+    // 一条新的根消息把原注入与之后的清理提示分隔开。
+    const userInput = {
+      ...baseline, seq: 50, turn_id: 7,
+      event: { kind: "user_input", input_source: "root", client_action_id: clientActionId("memory-expiration-prompt"),
+        input_id: 7, text: "Fixture follow-up" },
+    } satisfies ConversationEventSummary;
+    // The cleanup refers to the canonical event sequence, regardless of its page position.
+    // 清理记录引用规范事件序号，与事件的分页位置无关。
+    const cleanup = {
+      ...baseline, seq: 51,
+      event: { ...baseline.event, operation: "remove", content: `expired_source_seq=${baseline.seq}` },
+    } satisfies ConversationEventSummary;
+    // Reuse the same projector to exercise the cache invalidation after a history prepend.
+    // 复用同一个投影器，验证前置历史后缓存随分类更新。
+    const project = createConversationBranchPresentationProjectorV1();
+    // Supply one translator identity across both windows so changing the source drives reprojection.
+    // 两个窗口共用同一个翻译函数，使重投影由来源变化触发。
+    const translate = (key: string) => key;
+    // Find the expiry row by its projected operation. Return its rendered block for assertions.
+    // 按投影后的操作查找失效行，返回渲染块供断言。
+    const expirationBlock = (events: ConversationEventSummary[]) => project("session-context", events, EMPTY_RESOURCES, translate)
+      .renderItems.flatMap((item) => item.blocks)
+      .find((block) => readContextInjectionEntries(block.rawMetadata)?.some((entry) => entry.operation === "expire"));
+    expect(readContextInjectionEntries(expirationBlock([userInput, cleanup])?.rawMetadata))
+      .toMatchObject([{ category: "injection" }]);
+    expect(expirationBlock([baseline, userInput, cleanup])?.title).toBe("conversation.contextInjection.memoryExpirationTitle");
   });
   // A host wake after background shell jobs finished shows as its own category; its turn-end expiry stays hidden.
   // 后台 shell 任务结束后的宿主唤醒显示为独立类别；其回合结束失效保持隐藏。
