@@ -187,10 +187,9 @@ it.each([
 ] as const)("routes Enter with preference %s and Ctrl %s to the selected delivery action", async (preference, ctrlKey, insertion) => {
   if (preference === "insert") {
     await act(async () => root.render(<ComposerEnterSendSettingsSection />));
-    await act(async () => host.querySelector<HTMLButtonElement>('[role="combobox"]')!.click());
-    // alternative is the only unselected option in the real settings control.
-    // alternative 是实际设置控件中唯一未选中的选项。
-    const alternative = document.querySelector<HTMLElement>('[role="option"][aria-selected="false"]')!;
+    // Select the insertion card in the real settings control.
+    // 在实际设置控件中选择插队卡片。
+    const alternative = host.querySelector<HTMLButtonElement>('[role="radio"][value="insert"]')!;
     await act(async () => alternative.click());
   }
   transport.loadSettings.mockResolvedValue(publicAiSettingsWithInvalidDefaultFixture());

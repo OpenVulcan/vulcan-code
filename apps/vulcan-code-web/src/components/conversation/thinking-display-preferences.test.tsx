@@ -96,9 +96,15 @@ it("saves the global popup mode while keeping explicit session popup choices", a
     }}><ThinkingPopupSettingsSection /><output>{session.mode}</output></ThinkingDisplaySystemContext.Provider></I18nProvider>;
   }
   await act(async () => root.render(<Harness />));
-  await act(async () => host.querySelector<HTMLButtonElement>('[role="switch"]')!.click());
+  // Opening the sample is independent of selecting a default.
+  // 试开示例独立于选择默认设置。
+  const example = host.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
+  await act(async () => example.click());
+  expect(example.getAttribute("aria-expanded")).toBe("true");
+  expect(save).not.toHaveBeenCalled();
+  await act(async () => host.querySelector<HTMLButtonElement>('[role="radio"][value="inline_output"]')!.click());
   expect(save).toHaveBeenCalledExactlyOnceWith("inline_output");
-  expect(host.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("false");
+  expect(host.querySelector('[role="radio"][value="inline_output"]')?.getAttribute("aria-checked")).toBe("true");
   expect(host.querySelector("output")?.textContent).toBe("popup_only");
 });
 
@@ -108,7 +114,7 @@ it("retains the saved global mode and reports rejected persistence", async () =>
       <ThinkingPopupSettingsSection />
     </ThinkingDisplaySystemContext.Provider>
   </I18nProvider>));
-  await act(async () => host.querySelector<HTMLButtonElement>('[role="switch"]')!.click());
-  expect(host.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("true");
-  expect(host.querySelector('[role="alert"]')?.textContent).toContain("设置保持不变");
+  await act(async () => host.querySelector<HTMLButtonElement>('[role="radio"][value="inline_output"]')!.click());
+  expect(host.querySelector('[role="radio"][value="popup_only"]')?.getAttribute("aria-checked")).toBe("true");
+  expect(host.querySelector('[role="alert"]')).not.toBeNull();
 });

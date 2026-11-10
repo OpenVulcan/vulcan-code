@@ -1,8 +1,8 @@
 import * as React from "react";
+import { MessageSquareText, Sparkles } from "lucide-react";
 import { toast } from "@/ui-kit/primitives/toast";
 import { Combobox } from "@/ui-kit/primitives/combobox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select";
-import { Switch } from "@/ui-kit/primitives/switch";
 import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice";
 import {
   candidateSupportsDisabledReasoning,
@@ -19,6 +19,7 @@ import type {
   PublicAiReasoningEffort,
   PublicAiSettingsSnapshot,
 } from "@/types";
+import { SettingsPreviewChoices } from "./settings-preview-choices";
 import "@/ui-kit/styles/features/settings-forms.css";
 
 // The title generator's consumer profile and its single LLM purpose, owned by the service kernel.
@@ -77,6 +78,8 @@ function defaultTitleEffort(candidate: PublicAiInternalInferenceCandidate): stri
 // Parameters: `actions` saves the switch; `enabled` is the saved switch value.
 // 参数：`actions` 保存开关；`enabled` 是已保存的开关值。
 export function SessionTitleSettingsSection(props: { actions: SettingsActionProps; enabled: boolean }) {
+  // Keep generation and route saves independent; each has its own authoritative response and error.
+  // 生成开关与路由独立保存，各自使用权威响应及错误。
   const { t } = useI18n();
   const [pendingEnabled, setPendingEnabled] = React.useState<boolean | null>(null);
   const [switchError, setSwitchError] = React.useState("");
@@ -166,57 +169,68 @@ export function SessionTitleSettingsSection(props: { actions: SettingsActionProp
     void saveRoute(candidate.route, defaultTitleEffort(candidate));
   };
 
-  return <>
-    <section className="vk-form-pref" data-session-title-settings>
-      <div className="vk-form-pref-text">
-        <strong>{t("settings.sessionTitle.title")}</strong>
-        <p className="vk-form-note">{t("settings.sessionTitle.hint")}</p>
-      </div>
-      <Switch
-        aria-label={t("settings.sessionTitle.title")}
-        checked={enabled}
-        disabled={pendingEnabled !== null}
-        onCheckedChange={(next) => { void saveEnabled(next); }}
-      />
+  return <SettingsPreviewChoices
+    label={t("settings.sessionTitle.title")}
+    description={t("settings.sessionTitle.hint")}
+    value={enabled ? "generated" : "first-message"}
+    disabled={pendingEnabled !== null}
+    onSelect={(next) => { void saveEnabled(next === "generated"); }}
+    options={[
+      { value: "generated", label: t("settings.preview.generated"), preview: <TitleExample generated /> },
+      { value: "first-message", label: t("settings.preview.firstMessage"), preview: <TitleExample generated={false} /> },
+    ]}
+  >
       {pendingEnabled !== null ? <p role="status" className="vk-form-note">{t("settings.sessionTitle.saving")}</p> : null}
       {switchError ? <SettingsErrorNotice detail={switchError} message={t("settings.sessionTitle.switchFailed")} /> : null}
-    </section>
-    {enabled ? <section className="vk-form-pref">
-      <div className="vk-form-pref-text">
-        <strong>{t("settings.sessionTitle.route")}</strong>
-        <p className="vk-form-note">{t("settings.sessionTitle.recommendation")}</p>
-        {!selected ? <p className="vk-form-note">{t("settings.sessionTitle.sessionModelHint")}</p> : null}
+    {enabled ? <div className="session-defaults-title-config">
+      <div className="session-defaults-title-fields">
+        <div className="session-defaults-title-field">
+          <strong className="vk-field-label">{t("settings.sessionTitle.route")}</strong>
+          <Combobox
+            ariaLabel={t("settings.sessionTitle.route")}
+            disabled={busy || !snapshot}
+            emptyText={t("settings.sessionTitle.noCandidate")}
+            onValueChange={selectRoute}
+            options={options}
+            placeholder={t(savedRoute ? "settings.sessionTitle.route" : "settings.sessionTitle.sessionModel")}
+            searchPlaceholder={t("settings.sessionTitle.search")}
+            value={selected ? routeKey : savedRoute ? "" : SESSION_MODEL}
+          />
+        </div>
+        <div className="session-defaults-title-field">
+          <strong className="vk-field-label">{t("settings.sessionTitle.reasoning")}</strong>
+          {selected ? <Select disabled={busy} value={savedEffort ?? MODEL_DEFAULT_EFFORT}
+            onValueChange={(effort) => void saveRoute(selected.route, effort)}>
+            <SelectTrigger aria-label={t("settings.sessionTitle.reasoning")}><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value={MODEL_DEFAULT_EFFORT}>{t("settings.sessionTitle.reasoningDefault")}</SelectItem>
+              {efforts.map((effort) => (
+                <SelectItem key={effort} value={effort}>{EFFORT_KEYS[effort] ? t(EFFORT_KEYS[effort]) : effort}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select> : snapshot && !savedRoute ? <p className="vk-form-note">{t("settings.sessionTitle.sessionModelHint")}</p> : null}
+        </div>
       </div>
-      <Combobox
-        ariaLabel={t("settings.sessionTitle.route")}
-        disabled={busy || !snapshot}
-        emptyText={t("settings.sessionTitle.noCandidate")}
-        onValueChange={selectRoute}
-        options={options}
-        placeholder={t("settings.sessionTitle.sessionModel")}
-        searchPlaceholder={t("settings.sessionTitle.search")}
-        value={selected ? routeKey : savedRoute ? "" : SESSION_MODEL}
-      />
+      <p className="vk-form-note">{t("settings.sessionTitle.recommendation")}</p>
       {savedRoute && snapshot && !selected
         ? <p role="alert" className="vk-field-error">{t("settings.sessionTitle.unavailable")}</p>
         : null}
       {loadError ? <SettingsErrorNotice detail={loadError} message={t("settings.sessionTitle.loadFailed")} /> : null}
       {saveError ? <SettingsErrorNotice detail={saveError} message={t("settings.sessionTitle.saveFailed")} /> : null}
-    </section> : null}
-    {enabled && selected ? <section className="vk-form-pref">
-      <div className="vk-form-pref-text">
-        <strong>{t("settings.sessionTitle.reasoning")}</strong>
-      </div>
-      <Select disabled={busy} value={savedEffort ?? MODEL_DEFAULT_EFFORT}
-        onValueChange={(effort) => void saveRoute(selected.route, effort)}>
-        <SelectTrigger aria-label={t("settings.sessionTitle.reasoning")} className="vk-form-w-md"><SelectValue /></SelectTrigger>
-        <SelectContent>
-          <SelectItem value={MODEL_DEFAULT_EFFORT}>{t("settings.sessionTitle.reasoningDefault")}</SelectItem>
-          {efforts.map((effort) => (
-            <SelectItem key={effort} value={effort}>{EFFORT_KEYS[effort] ? t(EFFORT_KEYS[effort]) : effort}</SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </section> : null}
-  </>;
+    </div> : null}
+  </SettingsPreviewChoices>;
+}
+
+// Show the title bar for a generated title or the beginning of the sample first message.
+// 展示标题栏中的模型生成标题，或示例首条消息的开头。
+function TitleExample({ generated }: { generated: boolean }) {
+  // Resolve fictional titles from the same language catalog as the settings.
+  // 从设置所用的语言目录解析示例标题。
+  const { t } = useI18n();
+  return <span className="session-defaults-scene" data-short="">
+    <span className="session-defaults-mini-row">
+      {generated ? <Sparkles size={14} /> : <MessageSquareText size={14} />}
+      {t(generated ? "settings.preview.generatedSample" : "settings.preview.firstMessageSample")}
+    </span>
+  </span>;
 }

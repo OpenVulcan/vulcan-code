@@ -1,7 +1,8 @@
 import React from "react";
 import { readComposerEnterSendMode, saveComposerEnterSendMode } from "@/components/composer/composer-send-preference";
 import { useI18n } from "@/i18n";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select";
+import { ListEnd, ListStart } from "lucide-react";
+import { SettingsPreviewChoices } from "./settings-preview-choices";
 import "@/ui-kit/styles/features/settings-forms.css";
 
 // ComposerEnterSendSettingsSection takes no props and renders a selector for the saved Enter action.
@@ -27,18 +28,31 @@ export function ComposerEnterSendSettingsSection() {
     }
   };
 
-  return <section className="vk-form-pref">
-    <div className="vk-form-pref-text">
-      <strong>{t("settings.composerEnterSend.label")}</strong>
-      <p className="vk-form-note">{t("settings.composerEnterSend.description")}</p>
-    </div>
-    <Select onValueChange={selectMode} value={mode}>
-      <SelectTrigger aria-label={t("settings.composerEnterSend.label")}><SelectValue /></SelectTrigger>
-      <SelectContent>
-        <SelectItem value="queue">{t("settings.composerEnterSend.queue")}</SelectItem>
-        <SelectItem value="insert">{t("settings.composerEnterSend.insert")}</SelectItem>
-      </SelectContent>
-    </Select>
+  return <SettingsPreviewChoices
+    label={t("settings.composerEnterSend.label")}
+    description={t("settings.composerEnterSend.description")}
+    value={mode}
+    onSelect={selectMode}
+    options={[
+      { value: "queue", label: t("settings.composerEnterSend.queue"), preview: <EnterSendExample insert={false} /> },
+      { value: "insert", label: t("settings.composerEnterSend.insert"), preview: <EnterSendExample insert /> },
+    ]}
+  >
     {error && <p className="vk-field-error" role="alert">{error}</p>}
-  </section>;
+  </SettingsPreviewChoices>;
+}
+
+// Show where the newly sent message goes relative to the running task.
+// 展示新发送的消息相对于运行中任务的位置。
+function EnterSendExample({ insert }: { insert: boolean }) {
+  // Both previews share the same two sample labels so their ordering is comparable.
+  // 两个预览共用两条标签，便于比较顺序。
+  const { t } = useI18n();
+  return <span className="session-defaults-scene" data-short="">
+    {insert ? null : <span className="session-defaults-mini-row">{t("settings.preview.currentTask")}</span>}
+    <span className="session-defaults-mini-row" data-active="">
+      {insert ? <ListStart size={14} /> : <ListEnd size={14} />}{t("settings.preview.newMessage")}
+    </span>
+    {insert ? <span className="session-defaults-mini-row">{t("settings.preview.currentTask")}</span> : null}
+  </span>;
 }

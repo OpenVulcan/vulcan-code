@@ -84,11 +84,11 @@ it("shows save errors and retains the authoritative system default", async () =>
       <ToolCollapseSettingsSection />
     </ToolCollapsePreferencesContext.Provider>
   </I18nProvider>));
-  expect(host.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("true");
-  await act(async () => host.querySelector<HTMLButtonElement>('[role="switch"]')!.click());
+  expect(host.querySelector('[role="radio"][value="collapsed"]')?.getAttribute("aria-checked")).toBe("true");
+  await act(async () => host.querySelector<HTMLButtonElement>('[role="radio"][value="expanded"]')!.click());
   expect(saveDefault).toHaveBeenCalledExactlyOnceWith(false);
   expect(host.querySelector('[role="alert"]')?.textContent).toBe("synthetic save failure");
-  expect(host.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("true");
+  expect(host.querySelector('[role="radio"][value="collapsed"]')?.getAttribute("aria-checked")).toBe("true");
 });
 
 it("saves a changed system default and does not overwrite an explicit session choice", async () => {
@@ -105,7 +105,7 @@ it("saves a changed system default and does not overwrite an explicit session ch
   }
   setConversationToolCollapseOverride("pref-b", true);
   await act(async () => root.render(<Harness />));
-  await act(async () => host.querySelector<HTMLButtonElement>('[role="switch"]')!.click());
-  expect(host.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("false");
+  await act(async () => host.querySelector<HTMLButtonElement>('[role="radio"][value="expanded"]')!.click());
+  expect(host.querySelector('[role="radio"][value="expanded"]')?.getAttribute("aria-checked")).toBe("true");
   expect(host.querySelector("output")?.textContent).toBe("true");
 });

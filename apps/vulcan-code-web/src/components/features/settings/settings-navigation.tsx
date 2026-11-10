@@ -6,7 +6,6 @@ import {
   Cpu,
   Database,
   GitCommitHorizontal,
-  History,
   Info,
   MessageSquare,
   Palette,
@@ -104,6 +103,7 @@ export interface SettingsSubAreaGroup {
 // 参数：area 为任意已保存或深链接的页面标识；返回在导航中显示为当前页的标识。
 export function normalizeSettingsSubArea(area: SettingsSubAreaId): SettingsSubAreaId {
   if (area === "prompt-composer") return "context-basics";
+  if (area === "changelog") return "app-update";
   // Providers, accounts, models and capability routing share the merged model services page.
   // 供应商、账号、模型与能力分配共用合并后的模型服务页。
   if (area === "ai-vendors" || area === "credential-management" || area === "model-list" || area === "ai-capabilities") return "model-providers";
@@ -180,7 +180,6 @@ export function settingsSubAreaGroups(t: ReturnType<typeof useI18n>["t"]): Setti
       items: [
         { id: "runtime-diagnostics", label: t("settings.runtimeDiagnostics"), icon: <Stethoscope size={16} />, description: t("settings.runtimeDiagnostics.description") },
         { id: "app-update", label: t("settings.appUpdate"), icon: <RefreshCw size={16} />, description: t("settings.appUpdate.description") },
-        { id: "changelog", label: t("settings.changelog"), icon: <History size={16} />, description: t("settings.changelog.description") },
         { id: "about-licenses", label: t("settings.aboutLicenses"), icon: <ScrollText size={16} />, description: t("settings.aboutLicenses.description") },
         { id: "visual-lab", label: t("settings.visualLab"), icon: <Palette size={16} />, description: t("settings.visualLab.description") },
       ],

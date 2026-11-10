@@ -83,6 +83,8 @@ MCP 服务器）是两件事，互不共享配置。实现以下列源码为准�
 
 ## 设置与持久化
 
+设置中的入口称为「对外 AI 服务」；添加 Vulcan 自己调用的 MCP 服务器仍在插件管理。
+
 1. 配置位于全局配置 `mcpService`：开关、客户端清单（ID、名称、令牌摘要与提示、创建时间、开关、授权）。
    边界常量 `MAX_MCP_SERVICE_CLIENTS`、`MAX_MCP_CLIENT_NAME_CHARS`、`MAX_MCP_CLIENT_PROJECTS`、
    `MAX_MCP_CLIENT_MEDIA_TARGETS` 只在该文件定义，界面经快照 `limits` 读取。

@@ -65,7 +65,7 @@
    （`ui/answer_components.rs` 测试）分别用自身解析器检查全部说明的每个 `ui-*` 围栏；`ui-code` 只在回答封口时
    抓取文件行，更新记录没有这一步，因此禁止使用。说明页没有输入区，`ui-decision` 只读显示。
 4. **消费方。** WebUI 经 `@changelog` 别名按发布与语言分块懒加载（`src/service/changelog.ts`），设置 → 关于 →
-   更新记录页每页一个发布并可翻页；TUI 经 `vulcan_product_info::releases()` 与 `release_notes()` 从发行资源读取，在同名页面镜像该行为。
+  软件更新 → 更新记录页签每页一个发布并可翻页；TUI 经 `vulcan_product_info::releases()` 与 `release_notes()` 从发行资源读取，在同名页面镜像该行为。
    两者都不经服务调用。
 5. **GitHub Release 正文是英文说明的 Markdown 形式。** GitHub 不渲染 `ui-*` 组件，`release.yml` 创建草稿时用
    `scripts/release-notes-github.mjs` 把 `en-US.md` 转为纯 Markdown：行组件变为列表，`ui-callout` 变为 GitHub 提示块，

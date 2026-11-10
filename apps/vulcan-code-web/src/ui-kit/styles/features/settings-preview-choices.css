@@ -1,0 +1,140 @@
+/* Settings comparisons follow the wizard's square cards and ember selection mark. */
+/* 设置对照沿用向导的方形卡片与余烬色选择标记。 */
+.settings-preview-field {
+  display: grid;
+  gap: calc(var(--vk-u) * 2.5);
+  min-width: 0;
+  padding-block: calc(var(--vk-u) * 3.5);
+  container-type: inline-size;
+}
+
+.settings-preview-field + :is(.settings-preview-field, .vk-form-pref) { border-top: var(--vk-bw) solid var(--vk-line-soft); }
+.settings-preview-heading { display: flex; align-items: flex-start; flex-wrap: wrap; justify-content: space-between; gap: calc(var(--vk-u) * 2); }
+.settings-preview-heading strong { font-weight: 600; }
+.settings-preview-heading p { margin: 3px 0 0; }
+
+.settings-preview-choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 132px), 1fr));
+  gap: calc(var(--vk-u) * 2);
+}
+
+.settings-preview-choices[data-pair] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@container (max-width: 330px) {
+  .settings-preview-choices[data-pair] { grid-template-columns: minmax(0, 1fr); }
+}
+
+.settings-preview-choice {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  align-content: start;
+  gap: calc(var(--vk-u) * 1.5);
+  min-width: 0;
+  padding: calc(var(--vk-u) * 2);
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-panel);
+  color: var(--vk-ink);
+  text-align: start;
+  font: inherit;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  transition: border-color var(--vk-t-fast) var(--vk-ease), background-color var(--vk-t-fast) var(--vk-ease);
+}
+.settings-preview-choice:hover:not(:disabled) { border-color: var(--vk-line-strong); background: var(--vk-hover); }
+.settings-preview-choice[aria-checked="true"] {
+  border-color: color-mix(in srgb, var(--vk-ember) 65%, var(--vk-line));
+  background: var(--vk-raised);
+  box-shadow: inset 2px 0 0 var(--vk-ember);
+}
+.settings-preview-choice:focus-visible { outline: var(--vk-focus-w) solid var(--vk-signal); outline-offset: 1px; }
+.settings-preview-choice:disabled { cursor: default; opacity: 0.7; }
+.settings-preview-choice > small { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
+.settings-preview-label { display: flex; align-items: center; justify-content: space-between; gap: calc(var(--vk-u) * 2); }
+.settings-preview-label strong { font-size: var(--vk-fs-sm); font-weight: 600; }
+.settings-preview-mark { flex: none; width: 12px; height: 12px; border: var(--vk-bw) solid var(--vk-line-strong); }
+[aria-checked="true"] > .settings-preview-label > .settings-preview-mark { border-color: var(--vk-ember); background: var(--vk-ember); box-shadow: inset 0 0 0 2px var(--vk-raised); }
+.settings-preview-art { display: grid; min-width: 0; background: var(--vk-sunken); }
+
+/* The miniature scenes show actual differences with the same sample in both cards. */
+/* 两张缩略场景使用同一示例，直接呈现效果差异。 */
+.session-defaults-scene {
+  display: grid;
+  align-content: start;
+  gap: calc(var(--vk-u) * 1.5);
+  min-width: 0;
+  min-height: calc(var(--vk-u) * 19);
+  padding: calc(var(--vk-u) * 2);
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-xs);
+}
+.session-defaults-scene[data-short] { min-height: 0; }
+.session-defaults-mini-row {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--vk-u) * 1.5);
+  padding: calc(var(--vk-u) * 1.25) calc(var(--vk-u) * 2);
+  min-width: 0;
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-raised);
+}
+.session-defaults-mini-row > svg { flex: none; }
+.session-defaults-mini-row > svg:last-child:not(:first-child) { margin-inline-start: auto; }
+.session-defaults-mini-row[data-active] { color: var(--vk-ember-ink); }
+.session-defaults-mini-code {
+  display: grid;
+  gap: 2px;
+  padding: 0 calc(var(--vk-u) * 2);
+  color: var(--vk-ink-3);
+  font-family: var(--vk-font-mono);
+}
+.session-defaults-mini-code > code { font: inherit; }
+.session-defaults-thought {
+  padding: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 2);
+  border-inline-start: 2px solid var(--vk-line-strong);
+}
+.session-defaults-thought[data-popup] {
+  margin-inline-start: 15%;
+  border: var(--vk-bw) solid var(--vk-line-strong);
+  border-top: 2px solid var(--vk-ember);
+  background: var(--vk-raised);
+  box-shadow: var(--vk-shadow-2);
+}
+.session-defaults-title-config {
+  display: grid;
+  gap: calc(var(--vk-u) * 2);
+  padding: calc(var(--vk-u) * 3);
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-sunken);
+}
+.session-defaults-title-fields { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: calc(var(--vk-u) * 3); }
+.session-defaults-title-field { display: grid; align-content: start; gap: calc(var(--vk-u) * 1.5); min-width: 0; }
+.session-defaults-title-field > button { width: 100%; min-width: 0; }
+.session-defaults-group + .session-defaults-group { margin-top: calc(var(--vk-u) * 6); }
+.session-defaults-group-title {
+  margin: 0;
+  padding-bottom: calc(var(--vk-u) * 2);
+  border-bottom: var(--vk-bw) solid var(--vk-line-strong);
+  font-size: var(--vk-fs-lg);
+  font-weight: 600;
+}
+.settings-preview-lines { display: grid; gap: 5px; padding: calc(var(--vk-u) * 1.5); }
+.settings-preview-lines > i { display: block; height: 4px; background: color-mix(in srgb, var(--vk-ink) 18%, transparent); }
+.settings-preview-lines > i:first-child { width: 45%; background: color-mix(in srgb, var(--vk-ink) 38%, transparent); }
+.settings-preview-lines > i:last-child { width: 70%; }
+.settings-preview-lines[data-mode="interactive"] > i:not(:first-child) { display: none; }
+.settings-preview-chart {
+  display: flex;
+  align-items: end;
+  gap: 5px;
+  height: calc(var(--vk-u) * 10);
+  padding: calc(var(--vk-u) * 1.5);
+  border: var(--vk-bw) solid var(--vk-line);
+  background: var(--vk-raised);
+}
+.settings-preview-chart > i { width: 12%; height: 50%; background: color-mix(in srgb, var(--vk-ember) 65%, transparent); }
+.settings-preview-chart > i:nth-child(2) { height: 80%; }
+.settings-preview-chart > i:nth-child(3) { height: 65%; }
+.settings-preview-chart > i:last-child { height: 100%; }
+@container (max-width: 420px) {
+  .session-defaults-title-fields { grid-template-columns: minmax(0, 1fr); }
+}

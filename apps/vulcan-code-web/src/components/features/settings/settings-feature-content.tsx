@@ -16,6 +16,8 @@ import {
 } from "@/components/features/settings/misc-settings-areas";
 import { AboutLicensesSettingsArea } from "@/components/features/settings/about-licenses-settings-area";
 import { ChangelogSettingsArea } from "@/components/features/settings/changelog-settings-area";
+import { useI18n } from "@/i18n";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/ui-kit/primitives/tabs";
 import { FeedbackSettingsArea } from "@/components/features/feedback/feedback-settings-area";
 import { AppUpdateSettingsArea } from "@/components/features/settings/app-update-settings-area";
 import { ModelServicesArea } from "@/components/features/settings/model-services/model-services-area";
@@ -79,7 +81,7 @@ export interface SettingsFeatureContentProps {
 
 // READABLE_SETTINGS_PAGES are preference pages that read as one centred column; work surfaces fill the pane.
 // READABLE_SETTINGS_PAGES 是以居中单列阅读的偏好类页面；工作界面铺满面板。
-const READABLE_SETTINGS_PAGES: ReadonlySet<SettingsSubAreaId> = new Set(["context-basics", "appearance", "notifications", "git-commit", "permission-judge", "subagent-models", "mcp-service", "app-update", "changelog", "feedback-messages", "about-licenses"]);
+const READABLE_SETTINGS_PAGES: ReadonlySet<SettingsSubAreaId> = new Set(["context-basics", "appearance", "notifications", "git-commit", "permission-judge", "subagent-models", "mcp-service", "app-update", "feedback-messages", "about-licenses"]);
 
 // SettingsFeatureContent frames every settings page; the feature header shows its title and navigation stays in the sidebar.
 // SettingsFeatureContent 包裹每个设置页面；功能页头显示其标题，导航保留在侧栏。
@@ -154,28 +156,18 @@ function SettingsRoutedPage(props: SettingsFeatureContentProps) {
         retrySettings={props.workbench.providerRetry}
         commandShell={props.workbench.hostTools?.commandShell}
         onOpenUsageStatistics={props.onOpenUsageStatistics}
-        outputStyleSettings={<>
-          <ComposerEnterSendSettingsSection />
-          <DefaultPermissionModeSettingsSection judgeConfigured={!!props.workbench.permissionJudgeBackend} mode={props.workbench.defaultPermissionMode} />
-          <OutputStyleSettingsSection actions={props.actions} outputStyleCatalog={props.workbench.outputStyleCatalog} />
-          <AnswerModeSettingsSection actions={props.actions} defaultAnswerMode={props.workbench.defaultAnswerMode} />
-          <ToolCollapseSettingsSection />
-          <SessionTitleSettingsSection actions={props.actions} enabled={props.workbench.sessionTitleGenerationEnabled ?? true} />
-          <VoiceInputSettingsSection />
-          <ToolChainSettingsSection actions={props.actions} enabled={props.workbench.toolChainEnabled ?? true} maxSteps={props.workbench.toolChainMaxSteps ?? null} />
-          <ThinkingPopupSettingsSection />
-          <ConversationLinkSettingsSection />
-          <OutsideFileAccessSettingsSection access={props.workbench.outsideWorkspaceFileAccess ?? "prompt"} />
-        </>}
+        outputStyleSettings={<SessionDefaultsSettings actions={props.actions} workbench={props.workbench} />}
         systemPromptSettings={<SystemPromptSettingsCard projects={props.workbench.projects} />}
       />
     );
   }
-  if (props.activeSettingsSubArea === "app-update") {
-    return <AppUpdateSettingsArea serviceInstanceEpoch={props.serviceInstanceEpoch} />;
-  }
-  if (props.activeSettingsSubArea === "changelog") {
-    return <ChangelogSettingsArea appVersion={props.workbench.appVersion} />;
+  if (props.activeSettingsSubArea === "app-update" || props.activeSettingsSubArea === "changelog") {
+    return <SoftwareUpdateSettings
+      key={props.activeSettingsSubArea}
+      appVersion={props.workbench.appVersion}
+      openNotes={props.activeSettingsSubArea === "changelog"}
+      serviceInstanceEpoch={props.serviceInstanceEpoch}
+    />;
   }
   if (props.activeSettingsSubArea === "feedback-messages") {
     return <FeedbackSettingsArea />;
@@ -189,4 +181,57 @@ function SettingsRoutedPage(props: SettingsFeatureContentProps) {
   return (
     <ModelServicesArea />
   );
+}
+
+// Group the conversation defaults from the workbench snapshot without changing their save owners.
+// 将工作台快照中的会话默认值按用途分组，保持原有保存归属。
+function SessionDefaultsSettings({ actions, workbench }: Pick<SettingsFeatureContentProps, "actions" | "workbench">) {
+  // t resolves the group titles and each child owns its setting.
+  // t 解析分组标题，各子组件继续管理自己的设置。
+  const { t } = useI18n();
+  return <>
+    <section className="session-defaults-group">
+      <h3 className="session-defaults-group-title">{t("settings.preview.presentation")}</h3>
+      <ToolCollapseSettingsSection />
+      <ThinkingPopupSettingsSection />
+      <AnswerModeSettingsSection actions={actions} defaultAnswerMode={workbench.defaultAnswerMode} />
+      <OutputStyleSettingsSection actions={actions} outputStyleCatalog={workbench.outputStyleCatalog} />
+    </section>
+    <section className="session-defaults-group">
+      <h3 className="session-defaults-group-title">{t("settings.preview.naming")}</h3>
+      <SessionTitleSettingsSection actions={actions} enabled={workbench.sessionTitleGenerationEnabled ?? true} />
+    </section>
+    <section className="session-defaults-group">
+      <h3 className="session-defaults-group-title">{t("settings.preview.inputTools")}</h3>
+      <ComposerEnterSendSettingsSection />
+      <VoiceInputSettingsSection />
+      <ToolChainSettingsSection actions={actions} enabled={workbench.toolChainEnabled ?? true} maxSteps={workbench.toolChainMaxSteps ?? null} />
+    </section>
+    <section className="session-defaults-group">
+      <h3 className="session-defaults-group-title">{t("settings.preview.access")}</h3>
+      <DefaultPermissionModeSettingsSection judgeConfigured={!!workbench.permissionJudgeBackend} mode={workbench.defaultPermissionMode} />
+      <ConversationLinkSettingsSection />
+      <OutsideFileAccessSettingsSection access={workbench.outsideWorkspaceFileAccess ?? "prompt"} />
+    </section>
+  </>;
+}
+
+// Show update controls and release notes as sibling tabs; old links open the notes tab.
+// 将更新操作和更新记录并列为页签；旧链接直接打开更新记录。
+function SoftwareUpdateSettings(props: {
+  appVersion: SettingsFeatureContentProps["workbench"]["appVersion"];
+  openNotes: boolean;
+  serviceInstanceEpoch: SettingsFeatureContentProps["serviceInstanceEpoch"];
+}) {
+  // t supplies the tab labels from the settings catalog.
+  // t 从设置目录读取页签标签。
+  const { t } = useI18n();
+  return <Tabs className="settings-update-tabs" defaultValue={props.openNotes ? "notes" : "update"}>
+    <TabsList aria-label={t("settings.appUpdate")} variant="line">
+      <TabsTrigger value="update">{t("settings.appUpdate")}</TabsTrigger>
+      <TabsTrigger value="notes">{t("settings.changelog")}</TabsTrigger>
+    </TabsList>
+    <TabsContent value="update"><AppUpdateSettingsArea serviceInstanceEpoch={props.serviceInstanceEpoch} /></TabsContent>
+    <TabsContent value="notes"><ChangelogSettingsArea appVersion={props.appVersion} /></TabsContent>
+  </Tabs>;
 }

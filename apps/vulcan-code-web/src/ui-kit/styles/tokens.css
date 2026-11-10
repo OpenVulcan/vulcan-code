@@ -22,7 +22,7 @@
 @property --vk-titlebar-h { syntax: "<length>"; inherits: true; initial-value: 0px; }
 :root {
   /* UI body size; the five tiers below only change this value. */
-  font-size: 13px;
+  font-size: var(--vk-text-base);
   /* One spacing unit: 4px at the standard tier. */
   --vk-u: calc(1rem / 3.25);
 
@@ -31,7 +31,7 @@
   --vk-fs-xs: 0.846rem;   /* 11 */
   --vk-fs-sm: 0.923rem;   /* 12 */
   --vk-fs-md: 1rem;       /* 13 UI body */
-  --vk-fs-read: 1.077rem; /* 14 conversation reading text */
+  --vk-fs-read: calc(1rem * var(--vk-read-scale)); /* 14 conversation reading text */
   --vk-fs-lg: 1.23rem;    /* 16 */
   --vk-fs-xl: 1.54rem;    /* 20 */
   --vk-fs-2xl: 2.15rem;   /* 28 */
@@ -52,7 +52,6 @@
   --vk-feature-sidebar-w: calc(var(--vk-u) * 54);
   --vk-panel-w: calc(var(--vk-u) * 94);
   /* The "standard" reading measure; the width presets below move it. */
-  --vk-read-w: 72rem;
   /* The conversation column: the reading measure plus its side padding, or the whole stage at "full". */
   --vk-column-pad: calc(var(--vk-u) * 8);
   --vk-read-col: calc(var(--vk-read-w) + var(--vk-column-pad) * 2);
@@ -93,22 +92,25 @@
 @media (prefers-reduced-motion: reduce) { :root { --vk-t-fast: 1ms; --vk-t-med: 1ms; } }
 :root[data-vk-motion="reduce"] { --vk-t-fast: 1ms; --vk-t-med: 1ms; }
 
-:root[data-vk-text="xs"] { font-size: 12px; }
-:root[data-vk-text="s"] { font-size: 13px; }
-:root[data-vk-text="m"] { font-size: 15px; }
-:root[data-vk-text="l"] { font-size: 17px; }
-:root[data-vk-text="xl"] { font-size: 19px; }
+/* Local preview attributes reuse the actual text tiers and reading measures without changing the shell. */
+/* 局部预览属性复用真实字号及阅读宽度，不改变外壳。 */
+:root, [data-vk-preview-text] { --vk-text-base: 13px; --vk-read-scale: 1.077; }
+:root[data-vk-text="xs"], [data-vk-preview-text="xs"] { --vk-text-base: 12px; }
+:root[data-vk-text="m"], [data-vk-preview-text="m"] { --vk-text-base: 15px; }
+:root[data-vk-text="l"], [data-vk-preview-text="l"] { --vk-text-base: 17px; }
+:root[data-vk-text="xl"], [data-vk-preview-text="xl"] { --vk-text-base: 19px; }
 
 /* Reading width presets for the conversation column (data-vk-width). "standard" is the :root default.
  * "full" drops the cap (--vk-column-w) but keeps a margin on each side; the others only move the reading
  * measure, so they scale with the text tier. */
-:root[data-vk-width="compact"] { --vk-read-w: 58rem; }
-:root[data-vk-width="wide"] { --vk-read-w: 86rem; }
-:root[data-vk-width="xwide"] { --vk-read-w: 100rem; }
+:root, [data-vk-preview-width] { --vk-read-measure: 72; --vk-read-w: calc(var(--vk-read-measure) * 1rem); }
+:root[data-vk-width="compact"], [data-vk-preview-width="compact"] { --vk-read-measure: 58; }
+:root[data-vk-width="wide"], [data-vk-preview-width="wide"] { --vk-read-measure: 86; }
+:root[data-vk-width="xwide"], [data-vk-preview-width="xwide"] { --vk-read-measure: 100; }
 :root[data-vk-width="full"] { --vk-column-w: calc(100% - var(--vk-full-gutter) * 2); }
 
 /* ---------- Skin surface: light (default) ---------- */
-:root {
+:root, [data-vk-preview-theme] {
   --vk-ground: #f2f3f5;
   --vk-ground-2: #ebedf0;
   --vk-panel: #ffffff;
@@ -184,7 +186,8 @@
 
 /* ---------- Dark: follows the system when no theme is chosen ---------- */
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]):not([data-vk-theme]) {
+  :root:not([data-theme="light"]):not([data-vk-theme]),
+  [data-vk-preview-theme="auto"] {
     --vk-ground: #0c0e11;
     --vk-ground-2: #101317;
     --vk-panel: #15181d;
@@ -233,7 +236,8 @@
 }
 
 :root[data-theme="dark"]:not([data-vk-theme]),
-:root[data-vk-theme="dark"] {
+:root[data-vk-theme="dark"],
+[data-vk-preview-theme="dark"] {
   --vk-ground: #0c0e11;
   --vk-ground-2: #101317;
   --vk-panel: #15181d;
@@ -283,7 +287,8 @@
 /* An explicit light choice needs no block: the dark blocks above skip any root with data-vk-theme. */
 
 /* ---------- Command bridge: a dark tactical skin with HUD framing ---------- */
-:root[data-vk-theme="command"] {
+:root[data-vk-theme="command"],
+[data-vk-preview-theme="command"] {
   --vk-ground: #03060b;
   --vk-ground-2: rgba(5, 11, 18, 0.86);
   --vk-panel: rgba(8, 17, 27, 0.78);

@@ -56,6 +56,7 @@ describe("normalizeSettingsSubArea", () => {
     expect(normalizeSettingsSubArea("credential-management")).toBe("model-providers");
     expect(normalizeSettingsSubArea("model-list")).toBe("model-providers");
     expect(normalizeSettingsSubArea("prompt-composer")).toBe("context-basics");
+    expect(normalizeSettingsSubArea("changelog")).toBe("app-update");
     expect(normalizeSettingsSubArea("notifications")).toBe("notifications");
   });
 });

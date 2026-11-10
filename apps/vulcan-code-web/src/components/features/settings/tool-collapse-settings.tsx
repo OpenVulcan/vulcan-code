@@ -1,11 +1,11 @@
 import React from "react";
-import { Switch } from "@/ui-kit/primitives/switch";
+import { ChevronDown, ChevronRight, Terminal } from "lucide-react";
 import { ToolCollapsePreferencesContext } from "@/components/conversation/tool-collapse-preferences";
 import { useI18n } from "@/i18n";
-import "@/ui-kit/styles/features/settings-forms.css"
+import { SettingsPreviewChoices } from "./settings-preview-choices";
 
-/** Renders the shared default independently of per-session choices; takes no props and returns a save-aware switch.
- * 独立于会话选择渲染共享默认值；无参数，返回具有保存状态的开关。
+/** Renders both completed tool layouts without changing per-session choices; takes no props and returns the picker.
+ * 渲染工具执行完成后的两种布局，不改变会话选择；无参数，返回选择器。
  */
 export function ToolCollapseSettingsSection() {
   // preferences contains the authoritative default and its service-backed save operation.
@@ -40,18 +40,32 @@ export function ToolCollapseSettingsSection() {
       setPending(null);
     }
   };
-  return <section className="vk-form-pref">
-    <div className="vk-form-pref-text">
-      <strong>{t("settings.toolCollapse.collapseToolCallsBy")}</strong>
-      <p className="vk-form-note">{t("settings.toolCollapse.whenOnToolCalls")}</p>
-    </div>
-      <Switch
-        aria-label={t("settings.toolCollapse.collapseToolCallsBy")}
-        checked={pending ?? preferences.defaultEnabled}
-        disabled={pending !== null || !preferences.saveDefault}
-        onCheckedChange={(enabled) => { void save(enabled); }}
-      />
+  return <SettingsPreviewChoices
+    label={t("settings.toolCollapse.collapseToolCallsBy")}
+    description={t("settings.toolCollapse.whenOnToolCalls")}
+    value={(pending ?? preferences.defaultEnabled) ? "collapsed" : "expanded"}
+    disabled={pending !== null || !preferences.saveDefault}
+    onSelect={(next) => { void save(next === "collapsed"); }}
+    options={[
+      { value: "collapsed", label: t("settings.preview.collapse"), preview: <ToolCallExample expanded={false} /> },
+      { value: "expanded", label: t("settings.preview.expand"), preview: <ToolCallExample expanded /> },
+    ]}
+  >
     {pending !== null ? <p role="status" className="vk-form-note">{t("settings.toolCollapse.saving")}</p> : null}
     {error ? <p role="alert" className="vk-field-error">{error}</p> : null}
-  </section>;
+  </SettingsPreviewChoices>;
+}
+
+// Render the same completed command with or without its arguments and result.
+// 使用同一条已完成的命令，按 expanded 展示或隐藏参数和结果。
+function ToolCallExample({ expanded }: { expanded: boolean }) {
+  return <span className="session-defaults-scene">
+    <span className="session-defaults-mini-row">
+      <Terminal size={14} /> shell_command
+      {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+    </span>
+    {expanded ? <span className="session-defaults-mini-code">
+      <code>git status --short</code><code>M  README.md</code>
+    </span> : null}
+  </span>;
 }

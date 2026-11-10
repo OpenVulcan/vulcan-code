@@ -30,6 +30,7 @@ import { formatMessage, pickBilingualText, useI18n } from "@/i18n"
 import { formatConversationRelativeTime, formatConversationUpdatedAt } from "@/components/project/project-sidebar-time"
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types"
 import type { AnswerMode } from "@/service/answer-mode"
+import { SettingsPreviewChoices } from "./settings-preview-choices"
 import type {
   ConversationSummary,
   ProjectSummary,
@@ -327,22 +328,29 @@ export function AnswerModeSettingsSection(props: {
       setSaving(false)
     }
   }
-  return <div className="vk-form-pref">
-    <div className="vk-form-pref-text">
-      <strong>{t("answerMode.globalDefault")}</strong>
-      <p className="vk-form-note">{t(mode === "interactive" ? "answerMode.interactiveHint" : "answerMode.standardHint")}</p>
-      <p className="vk-form-note">{t("settings.misc.takesEffectForNew")}</p>
-    </div>
-      <Select disabled={saving} onValueChange={(next) => void selectMode(next)} value={mode}>
-        <SelectTrigger aria-label={t("answerMode.globalDefault")} className="vk-form-w-md"><SelectValue /></SelectTrigger>
-        <SelectContent>
-          <SelectItem value="standard">{t("answerMode.standard")}</SelectItem>
-          <SelectItem value="interactive">{t("answerMode.interactive")}</SelectItem>
-        </SelectContent>
-      </Select>
+  return <SettingsPreviewChoices
+    label={t("answerMode.globalDefault")}
+    description={t("settings.misc.takesEffectForNew")}
+    value={mode}
+    disabled={saving}
+    onSelect={(next) => void selectMode(next)}
+    options={[
+      { value: "standard", label: t("answerMode.standard"), hint: t("answerMode.standardHint"), preview: <AnswerLayoutExample mode="standard" /> },
+      { value: "interactive", label: t("answerMode.interactive"), hint: t("answerMode.interactiveHint"), preview: <AnswerLayoutExample mode="interactive" /> },
+    ]}
+  >
     {saving ? <p className="vk-form-note" role="status">{t("settings.misc.saving2")}</p> : null}
     {error ? <SettingsErrorNotice detail={error} message={t("answerMode.saveFailed")} /> : null}
-  </div>
+  </SettingsPreviewChoices>
+}
+
+// Illustrate the two answer modes without rendering a live answer or any interactive component.
+// 用静态图示对比两种回答模式，无需渲染实时回答或实际互动组件。
+function AnswerLayoutExample({ mode }: { mode: AnswerMode }) {
+  return <span className="session-defaults-scene">
+    <span className="settings-preview-lines" data-mode={mode}><i /><i /><i /></span>
+    {mode === "interactive" ? <span className="settings-preview-chart"><i /><i /><i /><i /></span> : null}
+  </span>
 }
 
 // ArchivedRestoreSettingsArea renders restorable archived conversations from service snapshots.

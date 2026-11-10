@@ -261,8 +261,5 @@ export function NotificationSettingsArea() {
       </PageRow>
     </PageSection>
     {displayedError ? <SettingsErrorNotice detail={displayedError} message={permissionError ? t("settings.notifications.couldnTReadThe") : t("settings.notifications.thatDidnTFinish")} /> : null}
-    {/* Platform limits stay visible as a regular information section, with no disclosure control. */}
-    {/* 平台能力边界作为普通说明区常显，不使用折叠控件。 */}
-    <PageSection title={t("settings.notifications.limitations")} description={capability.shellKind === "browser" ? t("settings.notifications.browserLimitation") : t("settings.notifications.desktopLimitation")} />
   </PageBody>;
 }

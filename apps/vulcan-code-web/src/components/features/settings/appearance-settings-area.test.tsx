@@ -31,13 +31,13 @@ afterEach(async () => {
 // 每个氛围选项都把取值写到文档根节点，由 kit 样式读取。
 it("applies every ambience choice to the document root", async () => {
   await act(async () => root.render(<I18nProvider initialLocale="en-US"><AppearanceSettingsArea /></I18nProvider>));
-  const group = host.querySelector<HTMLElement>('[role="radiogroup"][aria-label="Ambience"]');
-  expect(group, "ambience segmented control").not.toBeNull();
-  const options = [...group!.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
-  expect(options).toHaveLength(3);
-  for (const [index, value] of (["off", "calm", "live"] as const).entries()) {
-    await act(async () => options[index].click());
+  const scene = host.querySelector<HTMLElement>(".appearance-scene");
+  expect(scene, "live appearance scene").not.toBeNull();
+  for (const value of ["off", "calm", "live"] as const) {
+    const option = host.querySelector<HTMLButtonElement>(`[role="radio"][value="${value}"]`)!;
+    await act(async () => option.click());
     expect(document.documentElement.dataset.vkAmbience).toBe(value);
-    expect(options[index].getAttribute("aria-checked")).toBe("true");
+    expect(scene?.dataset.vkPreviewAmbience).toBe(value);
+    expect(option.getAttribute("aria-checked")).toBe("true");
   }
 });

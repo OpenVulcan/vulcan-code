@@ -25,7 +25,6 @@
   "apps/vulcan-code-web/src/components/conversation/session-review-repositories.test.tsx": 3,
   "apps/vulcan-code-web/src/components/conversation/session-todolist-panel.test.tsx": 2,
   "apps/vulcan-code-web/src/components/conversation/session-todolist-panel/git-branch-controls.test.tsx": 2,
-  "apps/vulcan-code-web/src/components/conversation/thinking-display-preferences.test.tsx": 1,
   "apps/vulcan-code-web/src/components/conversation/thinking-preview.test.tsx": 3,
   "apps/vulcan-code-web/src/components/conversation/tool-presentations/subagent-orchestration-presentation.test.ts": 4,
   "apps/vulcan-code-web/src/components/conversation/tool-presentations/v1-tool-domain-presentation.test.ts": 12,

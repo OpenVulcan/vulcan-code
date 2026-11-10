@@ -73,7 +73,7 @@ it("offers internal routes with the models that can turn thinking off first", ()
   expect(sessionTitleCandidates([thinking, quiet, foreground])).toEqual([quiet, thinking]);
 });
 
-it("saves the switch and hides the model rows while it is off", async () => {
+it("saves the naming choice and hides model configuration when generation is off", async () => {
   service.loadPublicAiSettings.mockResolvedValue({
     internalInferenceCandidates: [candidate("quiet", ["none"])],
     inferenceProfiles: {},
@@ -83,8 +83,10 @@ it("saves the switch and hides the model rows while it is off", async () => {
 
   await act(async () => root.render(<SessionTitleSettingsSection actions={actions(save)} enabled />));
   expect(host.querySelector('[aria-label="settings.sessionTitle.route"]')).not.toBeNull();
-  const toggle = host.querySelector<HTMLElement>('[aria-label="settings.sessionTitle.title"]');
-  await act(async () => toggle?.click());
+  // Choose the first-message option through the same radio used by the page.
+  // 通过页面使用的同一单选项选择首条消息。
+  const firstMessage = host.querySelector<HTMLButtonElement>('[role="radio"][value="first-message"]')!;
+  await act(async () => firstMessage.click());
   expect(save).toHaveBeenCalledExactlyOnceWith(false);
 
   await act(async () => root.render(<SessionTitleSettingsSection actions={actions(save)} enabled={false} />));
