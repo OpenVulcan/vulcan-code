@@ -520,6 +520,9 @@ pub(crate) fn refresh_settings_projection_locked(
     guard.workbench.output_style_catalog = output_style_catalog_summary(provider_configuration);
     guard.workbench.default_answer_mode =
         crate::answer_mode::global_answer_mode(provider_configuration);
+    guard.workbench.default_permission_mode = provider_configuration
+        .default_permission_mode
+        .unwrap_or_default();
     guard.workbench.permission_judge_backend = provider_configuration.permission_judge.backend;
     // Settings refreshes use the same session-owned model projection as navigation, never global picker rows.
     // 设置刷新与导航使用同一会话自有模型投影，绝不使用全局选择器行。
@@ -652,6 +655,7 @@ pub(crate) fn sync_workbench_runtime_control_fields_locked(
         && let Ok(configuration) = agent_runtime.public_ai_runtime.configuration_snapshot()
         && let Ok(rows) = public_ai_provider_rows_for_selection(
             &configuration,
+            Some(provider_configuration),
             agent_runtime.public_ai_runtime.as_ref(),
             effective_public_ai_selection.as_ref(),
         )
@@ -663,8 +667,15 @@ pub(crate) fn sync_workbench_runtime_control_fields_locked(
     {
         guard.workbench.voice_input = Some(voice_input_summary(&configuration));
     }
-    guard.workbench.reasoning_selection =
-        reasoning_selection(provider_configuration, public_model_capabilities.as_ref());
+    guard.workbench.reasoning_selection = workbench_model_reasoning_selection(
+        provider_configuration,
+        effective_public_ai_selection.as_ref(),
+        guard.workspace_snapshot.as_ref().and_then(|workspace| {
+            workspace
+                .session_runtime_state
+                .get(&workspace.selected_session)
+        }),
+    );
     guard.workbench.composer_attachment_capabilities = composer_attachment_capabilities(
         effective_public_ai_selection
             .as_ref()

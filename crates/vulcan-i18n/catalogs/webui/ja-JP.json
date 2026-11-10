@@ -1,4 +1,8 @@
 {
+  "settings.defaultPermissionMode.title": "既定の承認モード",
+  "settings.defaultPermissionMode.hint": "新しい会話の開始時に適用されます。会話内で選択した権限モードが優先されます。",
+  "settings.defaultPermissionMode.autoApproveUnavailable": "現在は自動承認を利用できません。権限判定を設定するまで、新しい会話はワークスペースへの書き込みモードになります。",
+  "settings.defaultPermissionMode.fullAccessConfirmBody": "新しい会話では、ツールが既定でフルアクセスで実行されます。承認なしでワークスペース外のファイルを変更したり、コマンドを実行したりできます。",
   "settings.composerEnterSend.label": "Enter キーの送信動作",
   "settings.composerEnterSend.description": "タスクの実行中は、Enter で選択した動作、Ctrl+Enter で逆の動作を実行します。会話が待機中の場合はすぐに送信します。",
   "settings.composerEnterSend.queue": "キューに追加",

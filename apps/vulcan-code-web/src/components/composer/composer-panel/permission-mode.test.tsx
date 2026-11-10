@@ -3,14 +3,20 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { toast } from "@/ui-kit/primitives/toast";
+import { DefaultPermissionModeSettingsSection } from "@/components/features/settings/default-permission-mode-settings";
 import type { PermissionMode } from "@/service/permission-mode";
-import { setSessionPermissionMode, setSessionUnattended, type SessionPermissionModeUpdateResponse } from "@/service/permission-mode-service";
+import { saveDefaultPermissionMode, setSessionPermissionMode, setSessionUnattended, type SessionPermissionModeUpdateResponse } from "@/service/permission-mode-service";
 import { useComposerSessionSettings } from "./use-composer-answer-mode";
 import type { PermissionModeOwner } from "./use-composer-permission-mode";
+import { PermissionJudgeEntryContext } from "../permission-judge-entry-context";
 
 vi.mock("@/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 vi.mock("@/ui-kit/primitives/toast", () => ({ toast: { error: vi.fn(), info: vi.fn() } }));
-vi.mock("@/service/permission-mode-service", () => ({ setSessionPermissionMode: vi.fn(), setSessionUnattended: vi.fn() }));
+vi.mock("@/service/permission-mode-service", () => ({
+  saveDefaultPermissionMode: vi.fn().mockResolvedValue(null),
+  setSessionPermissionMode: vi.fn(),
+  setSessionUnattended: vi.fn(),
+}));
 
 // root/host isolate actual hook lifetimes; only RPC and text catalogs are synthetic.
 // root/host 隔离真实钩子生命周期；仅 RPC 与文案目录使用合成边界。
@@ -57,6 +63,44 @@ it("shows the session default for drafts and captures only explicit choices", as
   expect(save).not.toHaveBeenCalled();
   await act(async () => root.render(<Harness slot="draft:b" />));
   expect(settings.permissionMode.mode).toBe("workspace_write");
+});
+
+it("uses the published permission default for new drafts while keeping existing session authority", async () => {
+  // judge models a saved default without a configured backend.
+  // judge 模拟保存了默认值但尚未配置判定后端。
+  const judge = { backend: null, openSettings: vi.fn(), openGuide: vi.fn() };
+  await act(async () => root.render(<PermissionJudgeEntryContext.Provider value={{ ...judge, defaultPermissionMode: "full_access" }}>
+    <Harness />
+  </PermissionJudgeEntryContext.Provider>));
+  expect(settings.permissionMode.mode).toBe("full_access");
+  expect(settings.draftSessionSettings.captureSubmissionSettings()).toBeNull();
+  await act(async () => root.render(<PermissionJudgeEntryContext.Provider value={{ ...judge, defaultPermissionMode: "auto_approve" }}>
+    <Harness />
+  </PermissionJudgeEntryContext.Provider>));
+  expect(settings.permissionMode.mode).toBe("workspace_write");
+  await act(async () => root.render(<PermissionJudgeEntryContext.Provider value={{ ...judge, defaultPermissionMode: "full_access" }}>
+    <Harness sessionId="session-a" authority={authority("read_only")} />
+  </PermissionJudgeEntryContext.Provider>));
+  expect(settings.permissionMode.mode).toBe("read_only");
+  expect(save).not.toHaveBeenCalled();
+});
+
+it("requires confirmation before saving a full-access default and disables an unavailable judge", async () => {
+  await act(async () => root.render(<DefaultPermissionModeSettingsSection judgeConfigured={false} />));
+  // choices resolve the real settings controls by their mocked translation keys.
+  // choices 按模拟的目录键定位真实设置控件。
+  const choices = Array.from(host.querySelectorAll<HTMLButtonElement>('[role="radio"]'));
+  expect(choices.find((button) => button.textContent === "permissionMode.autoApprove")?.disabled).toBe(true);
+  await act(async () => choices.find((button) => button.textContent === "permissionMode.fullAccess")!.click());
+  expect(saveDefaultPermissionMode).not.toHaveBeenCalled();
+  // confirm and acknowledge are the real full-access guard controls.
+  // confirm 与 acknowledge 是真实的完全权限确认控件。
+  const confirm = document.querySelector<HTMLButtonElement>("[data-full-access-confirm]")!;
+  const acknowledge = document.querySelector<HTMLButtonElement>("[data-full-access-acknowledge]")!;
+  expect(confirm.disabled).toBe(true);
+  await act(async () => acknowledge.click());
+  await act(async () => confirm.click());
+  expect(saveDefaultPermissionMode).toHaveBeenCalledExactlyOnceWith("full_access");
 });
 
 it("saves existing sessions once and keeps the receipt until the projection changes", async () => {

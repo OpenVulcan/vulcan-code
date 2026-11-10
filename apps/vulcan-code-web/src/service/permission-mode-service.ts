@@ -1,5 +1,12 @@
 import { serviceClient } from "@/service/webui-service-runtime";
 import type { PermissionMode, UnattendedConfig } from "@/service/permission-mode";
+import type { WorkbenchSnapshot } from "@/types";
+
+// saveDefaultPermissionMode persists mode for future sessions and returns the updated workbench.
+// saveDefaultPermissionMode 为未来会话持久化 mode，并返回更新后的工作台。
+export function saveDefaultPermissionMode(mode: Exclude<PermissionMode, "read_only">): Promise<WorkbenchSnapshot> {
+  return serviceClient.request("service_save_default_permission_mode", { mode });
+}
 
 /** Durable receipt of one session permission mode write.
  * 一次会话权限模式写入的可靠回执。 */

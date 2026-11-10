@@ -1,4 +1,8 @@
 {
+  "settings.defaultPermissionMode.title": "Режим подтверждения по умолчанию",
+  "settings.defaultPermissionMode.hint": "Применяется при начале новой беседы. Выбор, сделанный в беседе, имеет приоритет.",
+  "settings.defaultPermissionMode.autoApproveUnavailable": "Автоматическое подтверждение недоступно. До настройки проверки разрешений новые беседы смогут изменять файлы в рабочей области.",
+  "settings.defaultPermissionMode.fullAccessConfirmBody": "В новых беседах инструменты по умолчанию получат полный доступ. Они смогут изменять файлы за пределами рабочей области и выполнять команды без подтверждения.",
   "settings.composerEnterSend.label": "Режим отправки по Enter",
   "settings.composerEnterSend.description": "Во время выполнения задачи Enter использует выбранный режим, а Ctrl+Enter — противоположный. Если беседа неактивна, сообщение отправляется сразу.",
   "settings.composerEnterSend.queue": "Поставить в очередь",

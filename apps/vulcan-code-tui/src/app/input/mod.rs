@@ -414,7 +414,6 @@ fn submit(app: &mut App) {
         conversation_id,
         prompt: prompt.to_string(),
         mode: app.mode(),
-        effort: app.effort,
         model_id: app.model_id.clone(),
         attachments: std::mem::take(&mut app.attachments),
     });

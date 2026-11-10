@@ -988,13 +988,14 @@ export async function selectWorkbenchModelSecondaryRoute(
 
 // selectWorkbenchReasoningEffort persists one reasoning selection for an exact materialized conversation.
 // selectWorkbenchReasoningEffort 为一个精确的已物化会话持久化思考档位选择。
-// Parameters: effort is the provider-neutral level and conversationId is the immutable session owner.
-// 参数：effort 是供应商中立档位，conversationId 是不可变会话归属。
+// effort is the level, conversationId identifies an existing session, and modelSelection pins the exact route.
+// effort 是思考档位，conversationId 标识已有会话，modelSelection 固定精确路线。
 // Returns: the committed Workbench snapshot, or null when no desktop Service runtime exists.
 // 返回值：已提交的 Workbench 快照；桌面 Service 运行时不存在时返回 null。
 export async function selectWorkbenchReasoningEffort(
   effort: string,
-  conversationId: string,
+  conversationId: string | null,
+  modelSelection: { providerId: string; modelId: string; connectionId: string },
 ): Promise<WorkbenchSnapshot | null> {
   if (!hasServiceRuntime()) {
     return null;
@@ -1002,6 +1003,7 @@ export async function selectWorkbenchReasoningEffort(
   return serviceClient.request<WorkbenchSnapshot>("service_select_workbench_reasoning_effort", {
     conversationId,
     effort,
+    modelSelection,
   });
 }
 

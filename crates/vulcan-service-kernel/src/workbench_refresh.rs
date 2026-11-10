@@ -1447,6 +1447,7 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
             .and_then(|(runtime, configuration)| {
                 public_ai_provider_rows_for_selection(
                     configuration,
+                    Some(provider_configuration),
                     runtime,
                     public_ai_selection.as_ref(),
                 )
@@ -1455,11 +1456,10 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
             .unwrap_or_default(),
         mcp_servers: mcp_servers(provider_configuration),
         mcp_tools: mcp_tools(mcp_catalog),
-        reasoning_selection: reasoning_selection(
+        reasoning_selection: workbench_model_reasoning_selection(
             provider_configuration,
-            public_ai_selection
-                .as_ref()
-                .map(|selection| &selection.model.capabilities),
+            public_ai_selection.as_ref(),
+            selected_runtime_state,
         ),
         thinking_display_mode: workbench_thinking_display_mode(provider_configuration),
         tool_collapse_default_enabled: Some(
@@ -1488,6 +1488,9 @@ pub(crate) fn workbench_from_runtime(input: WorkbenchRuntimeProjection<'_>) -> W
         voice_input: public_ai_configuration.as_ref().map(voice_input_summary),
         output_style_catalog: output_style_catalog_summary(provider_configuration),
         default_answer_mode: crate::answer_mode::global_answer_mode(provider_configuration),
+        default_permission_mode: provider_configuration
+            .default_permission_mode
+            .unwrap_or_default(),
         permission_judge_backend: provider_configuration.permission_judge.backend,
         composer_slash_commands: vulcan_service_api::composer_slash_command_catalog(),
         pending_prompts: pending_prompt_process_mirrors

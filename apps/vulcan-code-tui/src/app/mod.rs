@@ -1351,9 +1351,9 @@ impl App {
                 if !model_id.is_empty() {
                     self.model_id = model_id;
                 }
-                if !efforts.is_empty() {
-                    self.efforts = efforts;
-                }
+                // A fixed reasoning policy replaces the previous model's selectable levels with an empty list.
+                // 固定思考策略用空列表替换上一个模型的可选档位。
+                self.efforts = efforts;
                 if let Some(effort) = effort {
                     self.effort = effort;
                 }

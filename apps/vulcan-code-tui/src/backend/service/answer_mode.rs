@@ -192,7 +192,6 @@ mod tests {
             id.clone(),
             "synthetic".into(),
             ExecutionMode::Build,
-            ReasoningEffort::Off,
             String::new(),
             Vec::new(),
         );
@@ -230,7 +229,6 @@ mod tests {
             id,
             "synthetic".into(),
             ExecutionMode::Build,
-            ReasoningEffort::Off,
             String::new(),
             Vec::new(),
         );

@@ -41,6 +41,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_license_body",
     "service_save_prompt_output_style",
     "service_save_prompt_answer_mode",
+    "service_save_default_permission_mode",
     "service_system_prompt_settings",
     "service_save_system_prompt",
     "service_reset_system_prompt",
@@ -208,12 +209,21 @@ pub(super) async fn dispatch(
     // result preserves service failures inside Handled so the top-level return trace still runs.
     // result 把服务失败保留在 Handled 内，使顶层返回追踪仍会执行。
     let result = match method {
+        "service_save_default_permission_mode" => rpc_json_result(
+            crate::permission_mode::service_save_default_permission_mode(
+                app,
+                state,
+                rpc_required_param(params, "mode")?,
+            )
+            .await,
+        ),
         "service_select_workbench_reasoning_effort" => rpc_json_result(
             service_select_workbench_reasoning_effort(
                 app,
                 state,
-                rpc_required_param(params, "conversationId")?,
+                rpc_optional_param(params, "conversationId")?,
                 rpc_required_param(params, "effort")?,
+                rpc_optional_param(params, "modelSelection")?,
             )
             .await,
         ),

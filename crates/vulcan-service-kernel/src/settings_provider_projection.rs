@@ -273,14 +273,46 @@ fn public_ai_workbench_selection_from_runtime_state(
         }))
 }
 
+/// Projects reasoning for the selected model using the session's level when it owns that model.
+/// 使用所选模型的会话档位投影思考选择；仅当会话持有该模型时采用会话档位。
+/// `preferences` supplies remembered values, `selection` identifies the route, and `session` supplies active controls.
+/// `preferences` 提供记忆值，`selection` 标识路线，`session` 提供当前会话控制。
+/// Returns the resolved selector, or no selector when there is no selected model.
+/// 返回解析后的选择器，未选模型时返回空。
+pub(crate) fn workbench_model_reasoning_selection(
+    preferences: &ProviderConfigurationFile,
+    selection: Option<&vulcan_provider_adapters::ResolvedPublicAiSelection>,
+    session: Option<&SessionRuntimeStateEntry>,
+) -> Option<ReasoningSelectionSummary> {
+    let selection = selection?;
+    // provider_id and model_id identify the model independently of the account used to access it.
+    // provider_id 和 model_id 标识模型，独立于用于访问模型的账号。
+    let provider_id = selection.route.provider.id.as_str();
+    let model_id = selection.model.id.as_str();
+    // configured uses the target model's preference when switching away from the session's active model.
+    // 切离会话当前模型时，configured 使用目标模型的记忆档位。
+    let configured = session
+        .filter(|session| {
+            if let Some(pending) = session.pending_model_selection.as_ref() {
+                pending.provider_id == provider_id && pending.model_id == model_id
+            } else {
+                session.active_provider_id.as_deref() == Some(provider_id)
+                    && session.active_model_id.as_deref() == Some(model_id)
+            }
+        })
+        .and_then(|session| session.active_reasoning_effort)
+        .or_else(|| preferences.remembered_model_reasoning_effort(provider_id, model_id));
+    reasoning_selection(configured, Some(&selection.model.capabilities))
+}
+
 /// Projects credential-scoped model rows using an explicit effective workbench selection.
 /// 使用明确的工作台生效选择投影凭据作用域模型行。
 ///
 /// # Parameters
 /// 参数
-/// `configuration` owns account preferences, `runtime` owns in-memory catalogs, and
+/// `configuration` owns account preferences, `preferences` owns reasoning choices, `runtime` owns catalogs, and
 /// `active_selection` is the selected session model after degradation.
-/// `configuration` 持有账号偏好，`runtime` 持有内存目录，`active_selection`
+/// `configuration` 持有账号偏好，`preferences` 持有思考选择，`runtime` 持有内存目录，`active_selection`
 /// 是完成降级后的当前会话模型。
 ///
 /// # Returns
@@ -289,6 +321,7 @@ fn public_ai_workbench_selection_from_runtime_state(
 /// 返回每个凭据连接一行，并且仅标记一个生效模型行为当前项。
 pub(crate) fn public_ai_provider_rows_for_selection(
     configuration: &vulcan_provider_adapters::PersistedAiConfiguration,
+    preferences: Option<&ProviderConfigurationFile>,
     runtime: &vulcan_provider_adapters::PublicAiRuntime,
     active_selection: Option<&vulcan_provider_adapters::ResolvedPublicAiSelection>,
 ) -> Result<Vec<ProviderSummary>, String> {
@@ -438,7 +471,12 @@ pub(crate) fn public_ai_provider_rows_for_selection(
                                 .collect(),
                             reasoning_profile_json: None,
                             reasoning_selection: reasoning_selection(
-                                &ProviderConfigurationFile::default(),
+                                preferences.and_then(|preferences| {
+                                    preferences.remembered_model_reasoning_effort(
+                                        &connection.provider_id,
+                                        &model.id,
+                                    )
+                                }),
                                 Some(&model.capabilities),
                             ),
                             supports_secondary_routes,
@@ -509,7 +547,12 @@ pub(crate) fn public_ai_provider_rows_for_selection(
                     .collect(),
                 reasoning_profile_json: None,
                 reasoning_selection: reasoning_selection(
-                    &ProviderConfigurationFile::default(),
+                    preferences.and_then(|preferences| {
+                        preferences.remembered_model_reasoning_effort(
+                            &connection.provider_id,
+                            &selection.model.id,
+                        )
+                    }),
                     Some(capabilities),
                 ),
                 supports_secondary_routes: leased_supports_secondary_routes,

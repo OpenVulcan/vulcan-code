@@ -175,6 +175,10 @@ pub struct WorkbenchSnapshot {
     /// 复制到新会话的已持久化全局回答模式。
     #[serde(default)]
     pub default_answer_mode: vulcan_session_core::v1::config::AnswerMode,
+    /// Saved permission default for new conversations, before checking judge availability.
+    /// 新会话已保存的权限默认值，此处尚未检查判定器是否可用。
+    #[serde(default)]
+    pub default_permission_mode: vulcan_session_core::v1::config::PermissionMode,
     /// Configured permission judge backend; `None` until one is set up, which the permission mode
     /// selector shows as auto-approve needing setup.
     /// 已配置的权限判定后端；设置完成前为 `None`，权限模式选择器据此将自动审批显示为需要设置。

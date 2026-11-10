@@ -787,20 +787,20 @@ const handleSelectWorkbenchModelSecondaryRoute = React.useCallback(async (
   }
 }, [mergeWorkbenchWithLocalCaches, setWorkbenchState, translate]);
 
-// handleSelectWorkbenchReasoningEffort persists one reasoning-effort choice through the shared service router.
-// handleSelectWorkbenchReasoningEffort 通过共享服务路由持久化单个思考档位选择。
-const handleSelectWorkbenchReasoningEffort = React.useCallback(async (effort: string): Promise<boolean> => {
+// handleSelectWorkbenchReasoningEffort persists effort for the exact choice and returns whether it was saved.
+// handleSelectWorkbenchReasoningEffort 为精确 choice 持久化 effort，返回是否保存成功。
+const handleSelectWorkbenchReasoningEffort = React.useCallback(async (effort: string, choice: ModelPickerChoice): Promise<boolean> => {
   // conversationId freezes the exact owner in this callback instance. A queued write keeps this
   // closure even if the user navigates before the former write settles.
   // conversationId 在本回调实例中冻结精确归属。即使用户在前一写入结束前切换会话，排队写入
   // 仍会保留该闭包。
   const conversationId = selectedDraftConversation ? null : selectedConversationId;
-  if (!conversationId) {
-    toast.error("Reasoning effort can only be persisted for a materialized conversation.");
-    return false;
-  }
   try {
-    const snapshot = await selectWorkbenchReasoningEffort(effort, conversationId);
+    const snapshot = await selectWorkbenchReasoningEffort(effort, conversationId, {
+      providerId: choice.providerId,
+      modelId: choice.modelId,
+      connectionId: choice.connectionId,
+    });
     if (snapshot) {
       setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
     }

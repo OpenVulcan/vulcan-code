@@ -193,7 +193,7 @@ export interface WorkspaceShellProps {
   ) => Promise<boolean>;
   // Selects the active reasoning effort for the workbench.
   // 选择工作台当前推理强度。
-  onSelectWorkbenchReasoningEffort: (effort: string) => Promise<boolean>;
+  onSelectWorkbenchReasoningEffort: (effort: string, choice: ModelPickerChoice) => Promise<boolean>;
   // Service-backed skill page actions.
   // 服务端支持的技能页面动作。
   // Independent LuaSkills lifecycle actions.

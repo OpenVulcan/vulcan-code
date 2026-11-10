@@ -113,10 +113,13 @@
   `vulcan-curl-post`、`vulcan-curl-request` 与其他未列出入口沿用名称只读启发式。`call_luaskill` 按其目标入口
   分类，规则与直接调用相同，参数无法解析时不放行。
 - 模式保存在会话配置（`PermissionMode`，会话元数据模式版本见
-  [`session-metadata-migrations.md`](session-metadata-migrations.md)）；新会话默认值只存在于运行时内存。
+  [`session-metadata-migrations.md`](session-metadata-migrations.md)）。系统设置「基础设置 → 会话默认」可显式保存
+  工作区修改、自动审批或完全权限作为新会话默认值。缺省时仅在内存使用工作区修改，已有会话继续读取自身的持久配置。
+- 默认完全权限复用会话完全权限确认。自动审批只有已保存判定后端时可选；若之后移除后端，新会话在内存使用
+  工作区修改，保留已保存选择。TUI 草稿从同一工作台快照显示生效模式。
 - 子代理会话使用其根会话的模式；读不到模式时拒绝调用。
-- 草稿会话的显式选择随首次提交的 `sessionSettings.permissionMode` 发送并在首个提示边界写入；未选择时
-  不发送值。已存在会话通过 `service_set_session_permission_mode` 修改，只影响下一次工具调用。
+- 草稿会话的显式选择随首次提交的 `sessionSettings.permissionMode` 发送并优先写入；未选择时由 Core 在首个
+  提示边界复制生效的系统默认值。已存在会话通过 `service_set_session_permission_mode` 修改，只影响下一次工具调用。
 - 事件窗口的 `session_config` 是界面显示模式的唯一权威：可靠确认（`durability: durable`）与仅元数据重连都携带
   写入后的 `access`（`permission_mode`、`unattended`），窗口据此更新。输入区的保存回执只在组件内存中过渡，
   弹窗或切换导致输入区重新挂载后必须仍显示已保存模式，不得回落到重新加载前的投影。

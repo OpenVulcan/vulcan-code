@@ -2,6 +2,7 @@ import React from "react";
 import {
   confirmedComposerPersistenceValue,
   enqueueComposerPersistence,
+  flushLatestComposerPersistence,
 } from "@/components/composer/composer-persistence-queue";
 import {
   modelPickerChoiceKey,
@@ -28,9 +29,9 @@ export interface UseComposerModelSelectionOptions {
   // Exact conversation scope whose persisted model and account are being rendered.
   // 当前渲染其持久化模型与账号的精确会话作用域。
   conversationScopeKey: string;
-  // Whether reasoning changes may be persisted to an already materialized conversation.
-  // 思考档位变更是否可以持久化到已经物化的会话。
-  persistReasoningSelection: boolean;
+  // Whether the selected route also has an authoritative materialized session level.
+  // 所选路线是否还有权威的已物化会话档位。
+  useSessionReasoningSelection: boolean;
   // Providers and models projected by the shared workbench service.
   // 共享工作台服务投影出的 Provider 与模型。
   providers: ProviderSummary[];
@@ -40,9 +41,9 @@ export interface UseComposerModelSelectionOptions {
   // Persists one selected provider/model pair.
   // 持久化一个选中的 Provider/模型组合。
   onSelectModel: (choice: ModelPickerChoice) => Promise<boolean>;
-  // Persists one selected reasoning effort through the backend router.
-  // 通过后端路由持久化一个选中的推理档位。
-  onSelectReasoningEffort: (effort: string) => Promise<boolean>;
+  // Persists a selected reasoning effort for the exact model and account.
+  // 为精确模型和账号持久化所选思考档位。
+  onSelectReasoningEffort: (effort: string, choice: ModelPickerChoice) => Promise<boolean>;
 }
 
 // ComposerModelSelectionController exposes synchronized model and reasoning controls to ComposerPanel.
@@ -72,9 +73,6 @@ export interface ComposerModelSelectionController {
   // Level the backend applies with no stored choice, used by "restore default"; null when unreported.
   // 未保存选择时后端采用的档位，供“恢复默认”使用；未上报时为 null。
   defaultReasoningEffort: string | null;
-  // Backend-confirmed effort safe to include in prompt submissions.
-  // 可安全包含在提示词提交中的后端确认档位。
-  submittedReasoningEffort: string | null;
   // Monotonic signal used to open the reasoning picker from a slash command.
   // slash 指令用于打开推理选择器的单调信号。
   reasoningPickerOpenSignal: number;
@@ -84,6 +82,9 @@ export interface ComposerModelSelectionController {
   // Applies one optimistic reasoning selection and rolls back the latest failed request.
   // 应用一个乐观推理选择，并回滚最新失败请求。
   selectReasoningEffort: (effort: string) => Promise<void>;
+  // Waits for the latest reasoning choice of this draft or session model before submitting.
+  // 提交前等待此草稿或会话模型的最新思考选择。
+  flushReasoningSelection: () => Promise<boolean>;
   // Opens the model picker through its external signal.
   // 通过外部信号打开模型选择器。
   openModelPicker: () => void;
@@ -145,8 +146,8 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
   // modelRequestVersionRef prevents an older failed request from rolling back a newer model choice.
   // modelRequestVersionRef 防止较早的失败请求回滚较新的模型选择。
   const modelRequestVersionRef = React.useRef(0);
-  // modelPersistenceQueueRef serializes model and account writes so an older RPC cannot finish last.
-  // modelPersistenceQueueRef 串行化模型与账号写入，避免较早 RPC 最后完成并覆盖最新意图。
+  // modelPersistenceQueueRef serializes route and reasoning writes so each choice sees its exact model.
+  // modelPersistenceQueueRef 串行化路线和思考档位写入，使每次选择都对应其精确模型。
   const modelPersistenceQueueRef = React.useRef<Promise<void>>(Promise.resolve());
   // confirmedModelChoiceRef retains the latest authoritative or successfully persisted model value.
   // confirmedModelChoiceRef 保留最新权威或已成功持久化的模型值。
@@ -160,18 +161,15 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
   // reasoningRequestVersionRef prevents an older failed request from rolling back a newer reasoning choice.
   // reasoningRequestVersionRef 防止较早的失败请求回滚较新的推理选择。
   const reasoningRequestVersionRef = React.useRef(0);
-  // reasoningPersistenceQueueRef preserves user-intent order across overlapping reasoning writes.
-  // reasoningPersistenceQueueRef 在重叠推理设置写入之间保持用户意图顺序。
-  const reasoningPersistenceQueueRef = React.useRef<Promise<void>>(Promise.resolve());
+  // pendingReasoningWriteRef binds the send barrier to the exact owner and write.
+  // pendingReasoningWriteRef 将发送屏障绑定到精确归属和写入。
+  const pendingReasoningWriteRef = React.useRef<{ ownerKey: string; result: Promise<boolean> } | null>(null);
   // pendingReasoningEffortRef protects the latest optimistic effort from a stale same-session snapshot.
   // pendingReasoningEffortRef 保护最新乐观推理档位，避免同会话旧快照覆盖。
   const pendingReasoningEffortRef = React.useRef<string | null>(null);
-  // reasoningScopeRef distinguishes navigation from a same-session reasoning refresh.
-  // reasoningScopeRef 区分会话导航与同会话推理状态刷新。
-  const reasoningScopeRef = React.useRef(options.conversationScopeKey);
-  // reasoningEffortValueRef exposes the latest optimistic value without a stale callback closure.
-  // reasoningEffortValueRef 暴露最新乐观值，避免回调闭包读取陈旧状态。
-  const reasoningEffortValueRef = React.useRef("");
+  // reasoningScopeRef distinguishes model changes and navigation from same-owner updates.
+  // reasoningScopeRef 将模型变化和会话导航与同一归属的更新区分开来。
+  const reasoningScopeRef = React.useRef("");
   // confirmedReasoningEffortRef retains the latest authoritative or successfully persisted effort.
   // confirmedReasoningEffortRef 保留最新权威或已成功持久化的推理档位。
   const confirmedReasoningEffortRef = React.useRef("");
@@ -229,9 +227,13 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
       && choice.modelId === activeModelChoice.modelId
     ));
   }, [activeModelChoice, availableModelChoices]);
-  // effectiveReasoningSelection uses the selected model contract for drafts and session state after materialization.
-  // effectiveReasoningSelection 对草稿使用已选模型契约，物化后使用会话状态。
-  const effectiveReasoningSelection = options.persistReasoningSelection
+  // selectedModelKey and reasoningOwnerKey scope optimistic levels to the exact route and conversation.
+  // selectedModelKey 与 reasoningOwnerKey 将乐观档位限定在精确路线和会话。
+  const selectedModelKey = modelChoice || activeModelChoiceKey;
+  const reasoningOwnerKey = JSON.stringify([options.conversationScopeKey, selectedModelKey]);
+  // effectiveReasoningSelection uses catalog preferences until the service confirms an optimistic route.
+  // effectiveReasoningSelection 在服务确认乐观路线前使用目录中的记忆档位。
+  const effectiveReasoningSelection = options.useSessionReasoningSelection && selectedModelKey === activeModelChoiceKey
     ? options.reasoningSelection
     : activeProviderModel?.model.reasoningSelection ?? null;
   // reasoningEffortOptions exposes only levels declared by the active model catalog.
@@ -254,17 +256,6 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
   // serviceSelectedReasoningEffort is the authoritative selected effort from the backend snapshot.
   // serviceSelectedReasoningEffort 是后端快照中的权威选中档位。
   const serviceSelectedReasoningEffort = effectiveReasoningSelection?.selectedEffort;
-  // submittedReasoningEffort is non-null only when backend capabilities explicitly allow the local value.
-  // submittedReasoningEffort 仅在后端能力明确允许本地值时非空。
-  const submittedReasoningEffort = React.useMemo(() => {
-    if (reasoningEffort === "fixed-on" || reasoningEffort === "fixed-off") {
-      return null;
-    }
-    if (!effectiveReasoningSelection?.options.some((option) => option.value === reasoningEffort)) {
-      return null;
-    }
-    return reasoningEffort;
-  }, [effectiveReasoningSelection, reasoningEffort]);
 
   React.useLayoutEffect(() => {
     // scopeChanged makes a different conversation's persisted model immediately authoritative.
@@ -288,33 +279,22 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
   }, [activeModelChoiceKey, options.conversationScopeKey]);
 
   React.useLayoutEffect(() => {
-    // scopeChanged makes another conversation's persisted reasoning immediately authoritative.
-    // scopeChanged 使另一会话的持久化推理档位立即成为权威值。
-    const scopeChanged = reasoningScopeRef.current !== options.conversationScopeKey;
-    reasoningScopeRef.current = options.conversationScopeKey;
-    if (!scopeChanged && pendingReasoningEffortRef.current !== null) {
+    // scopeChanged restores the new model's choice even if both models offer identical levels.
+    // 即使两个模型提供相同档位，scopeChanged 也会恢复新模型的选择。
+    const scopeChanged = reasoningScopeRef.current !== reasoningOwnerKey;
+    reasoningScopeRef.current = reasoningOwnerKey;
+    if (!scopeChanged && reasoningEffortOptions.some((option) => option.value === pendingReasoningEffortRef.current)) {
       return;
     }
     pendingReasoningEffortRef.current = null;
     reasoningRequestVersionRef.current += 1;
-    // currentEffort reads the immediate optimistic value rather than the render that scheduled this effect.
-    // currentEffort 读取即时乐观值，而不是调度本 Effect 的渲染快照。
-    const currentEffort = reasoningEffortValueRef.current;
-    // nextEffort applies the same authoritative/default policy without a state-updater side effect.
-    // nextEffort 在不向状态更新器写副作用的前提下应用同一权威值或默认值策略。
-    const nextEffort = !options.persistReasoningSelection
-      && reasoningEffortOptions.some((option) => option.value === currentEffort)
-      ? currentEffort
-      : serviceSelectedReasoningEffort
-        || (reasoningEffortOptions.some((option) => option.value === currentEffort)
-          ? currentEffort
-          : reasoningEffortOptions[0]?.value ?? "");
-    reasoningEffortValueRef.current = nextEffort;
+    // nextEffort comes from the backend's selection for this model and its current capabilities.
+    // nextEffort 来自后端按此模型及当前能力解析的选择。
+    const nextEffort = serviceSelectedReasoningEffort ?? "";
     confirmedReasoningEffortRef.current = nextEffort;
     setReasoningEffort(nextEffort);
   }, [
-    options.conversationScopeKey,
-    options.persistReasoningSelection,
+    reasoningOwnerKey,
     reasoningEffortValuesSignature,
     serviceSelectedReasoningEffort,
   ]);
@@ -364,29 +344,31 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
   // selectReasoningEffort applies an optimistic effort and only lets the latest failed request roll it back.
   // selectReasoningEffort 应用乐观推理档位，仅允许最新失败请求执行回滚。
   const selectReasoningEffort = React.useCallback(async (effort: string) => {
+    if (!activeModelChoice || !reasoningEffortOptions.some((option) => option.value === effort)) return;
     // requestScope prevents an old conversation result from changing the new conversation's local baseline.
     // requestScope 防止旧会话结果修改新会话的本地基线。
-    const requestScope = options.conversationScopeKey;
+    const requestScope = reasoningOwnerKey;
     // requestVersion identifies this optimistic request among overlapping selections.
     // requestVersion 在重叠选择中标识本次乐观请求。
     const requestVersion = reasoningRequestVersionRef.current + 1;
     reasoningRequestVersionRef.current = requestVersion;
-    reasoningEffortValueRef.current = effort;
     setReasoningEffort(effort);
-    if (!options.persistReasoningSelection) {
-      return;
-    }
     pendingReasoningEffortRef.current = effort;
-    // queuedWrite preserves last-intent-wins semantics at the serialized backend boundary.
-    // queuedWrite 在串行后端边界保持最后意图胜出语义。
+    // queuedWrite waits for older model writes before sending the choice for this exact route.
+    // queuedWrite 先等待较早模型写入，再发送此精确路线的选择。
     const queuedWrite = enqueueComposerPersistence(
-      reasoningPersistenceQueueRef.current,
-      () => options.onSelectReasoningEffort(effort),
+      modelPersistenceQueueRef.current,
+      () => options.onSelectReasoningEffort(effort, activeModelChoice),
     );
-    reasoningPersistenceQueueRef.current = queuedWrite.tail;
+    modelPersistenceQueueRef.current = queuedWrite.tail;
+    // pending binds this write to its owner until the service acknowledges it.
+    // pending 在服务确认前将此写入绑定到其归属。
+    const pending = { ownerKey: requestScope, result: queuedWrite.result };
+    pendingReasoningWriteRef.current = pending;
     // saved records whether the service accepted this reasoning selection.
     // saved 记录服务是否接受本次推理选择。
     const saved = await queuedWrite.result;
+    if (pendingReasoningWriteRef.current === pending) pendingReasoningWriteRef.current = null;
     if (reasoningScopeRef.current !== requestScope) {
       return;
     }
@@ -398,15 +380,24 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
     if (reasoningRequestVersionRef.current === requestVersion) {
       pendingReasoningEffortRef.current = null;
       if (!saved) {
-        reasoningEffortValueRef.current = confirmedReasoningEffortRef.current;
         setReasoningEffort(confirmedReasoningEffortRef.current);
       }
     }
   }, [
-    options.conversationScopeKey,
+    activeModelChoice,
     options.onSelectReasoningEffort,
-    options.persistReasoningSelection,
+    reasoningEffortOptions,
+    reasoningOwnerKey,
   ]);
+
+  // flushReasoningSelection takes no arguments and returns the latest save result for this owner.
+  // flushReasoningSelection 无参数，返回此归属最新档位的保存结果。
+  const flushReasoningSelection = React.useCallback(() => flushLatestComposerPersistence(() => {
+    // pending belongs to an exact model and must never block a different conversation's send.
+    // pending 属于精确模型，不得阻塞其他会话的发送。
+    const pending = pendingReasoningWriteRef.current;
+    return pending?.ownerKey === reasoningOwnerKey ? pending.result : null;
+  }), [reasoningOwnerKey]);
 
   // openModelPicker increments the external open signal consumed by ModelPickerControl.
   // openModelPicker 递增 ModelPickerControl 使用的外部打开信号。
@@ -428,10 +419,10 @@ export function useComposerModelSelection(options: UseComposerModelSelectionOpti
     reasoningEffort,
     reasoningEffortOptions,
     defaultReasoningEffort,
-    submittedReasoningEffort,
     reasoningPickerOpenSignal,
     selectModel,
     selectReasoningEffort,
+    flushReasoningSelection,
     openModelPicker,
     openReasoningPicker,
   };

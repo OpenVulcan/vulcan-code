@@ -47,6 +47,9 @@ export function DedicatedSessionWizard(props: {
   providers: ProviderSummary[];
   outputStyleCatalog: OutputStyleCatalogSummary;
   onSelectWorkbenchModel: (choice: ModelPickerChoice) => Promise<boolean>;
+  // Persists the explicit level for the selected draft model.
+  // 为所选草稿模型保存显式档位。
+  onSelectWorkbenchReasoningEffort: (effort: string, choice: ModelPickerChoice) => Promise<boolean>;
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
   onBusyChange: (busy: boolean) => void;
 }) {
@@ -56,16 +59,15 @@ export function DedicatedSessionWizard(props: {
   const [generatorOpen, setGeneratorOpen] = React.useState(false);
   React.useEffect(() => onBusyChange(submitting), [submitting, onBusyChange]);
   const draftSlotKey = composerSessionDraftKey(props.draft.projectId, null);
-  // The session model and thinking level follow the composer's draft rules: the model choice is the workbench
-  // route, the level stays local and defaults to the model's declared level until the session is created.
-  // 会话模型与思考档位遵循输入区草稿规则：模型选择即工作台路由，档位保持本地并默认取模型声明的档位，直到会话创建。
+  // The wizard shares the regular draft's model-scoped reasoning choice and save barrier.
+  // 向导与普通草稿共用按模型记录的思考档位及保存屏障。
   const model = useComposerModelSelection({
     conversationScopeKey: draftSlotKey,
-    persistReasoningSelection: false,
+    useSessionReasoningSelection: false,
     providers: props.providers,
     reasoningSelection: null,
     onSelectModel: props.onSelectWorkbenchModel,
-    onSelectReasoningEffort: () => Promise.resolve(true),
+    onSelectReasoningEffort: props.onSelectWorkbenchReasoningEffort,
   });
   const activeChoice = model.activeModelChoice;
   const setKnowledge = React.useCallback(
@@ -89,12 +91,13 @@ export function DedicatedSessionWizard(props: {
     if (!basePrompt || submitting) return;
     setSubmitting(true);
     try {
+      if (!await model.flushReasoningSelection()) return;
       const submitted = await props.onSubmitPrompt({
         draftSlotKey,
         prompt: basePrompt,
         attachments: [],
         executionMode: "build",
-        reasoningEffort: model.submittedReasoningEffort,
+        reasoningEffort: null,
         modelSelection: activeChoice
           ? { providerId: activeChoice.providerId, modelId: activeChoice.modelId, connectionId: activeChoice.connectionId }
           : null,

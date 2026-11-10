@@ -63,7 +63,7 @@ export interface ChatAreaProps {
   ) => Promise<boolean>;
   // Selects the active reasoning effort.
   // 选择当前推理强度。
-  onSelectWorkbenchReasoningEffort: (effort: string) => Promise<boolean>;
+  onSelectWorkbenchReasoningEffort: (effort: string, choice: ModelPickerChoice) => Promise<boolean>;
   // Opens the project knowledge-library management surface.
   // 打开项目知识库管理界面。
   onOpenKnowledge: () => void;

@@ -70,6 +70,14 @@ pub struct ProviderConfigurationFile {
         skip_serializing_if = "Option::is_none"
     )]
     pub workbench_reasoning_effort: Option<ReasoningEffortLevel>,
+    /// Explicit reasoning choices keyed first by provider ID and then by model ID.
+    /// 先按供应商 ID、再按模型 ID 保存的显式思考档位。
+    #[serde(
+        default,
+        rename = "modelReasoningEfforts",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub model_reasoning_efforts: BTreeMap<String, BTreeMap<String, ReasoningEffortLevel>>,
     /// Remembered workbench thinking-output display mode selected by the user.
     /// 由用户选择并记忆的工作台思考输出展示模式。
     #[serde(
@@ -124,6 +132,14 @@ pub struct ProviderConfigurationFile {
         skip_serializing_if = "Option::is_none"
     )]
     pub outside_workspace_file_access: Option<vulcan_session_core::OutsideWorkspaceFileAccess>,
+    /// User-selected permission mode for new sessions; absence keeps the product default in memory.
+    /// 用户为新会话选择的权限模式；缺省时仅在内存使用产品默认值。
+    #[serde(
+        default,
+        rename = "defaultPermissionMode",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub default_permission_mode: Option<vulcan_session_core::v1::config::PermissionMode>,
     /// Remembered WebUI locale identifier selected by the user.
     /// 由用户选择并记忆的WebUI语言标识。
     #[serde(rename = "uiLocale", skip_serializing_if = "Option::is_none")]
@@ -256,6 +272,19 @@ pub struct ProviderConfigurationFile {
 }
 
 impl ProviderConfigurationFile {
+    /// Returns the remembered effort for the exact provider and model, before capability validation.
+    /// 返回精确供应商和模型记住的档位，尚未进行能力校验。
+    pub fn remembered_model_reasoning_effort(
+        &self,
+        provider_id: &str,
+        model_id: &str,
+    ) -> Option<ReasoningEffortLevel> {
+        self.model_reasoning_efforts
+            .get(provider_id)
+            .and_then(|models| models.get(model_id))
+            .copied()
+    }
+
     /// Whether OpenVulcan announcements are fetched and shown; on unless the user turned them off.
     /// 是否获取并显示 OpenVulcan 公告；除非用户关闭，否则开启。
     pub fn receives_announcements(&self) -> bool {

@@ -135,6 +135,7 @@ it("creates with the recommended answer mode and style, not the global ones, and
         onBusyChange={vi.fn()}
         onChange={vi.fn()}
         onSelectWorkbenchModel={vi.fn()}
+        onSelectWorkbenchReasoningEffort={vi.fn().mockResolvedValue(true)}
         onSubmitPrompt={onSubmitPrompt}
         outputStyleCatalog={catalog}
         providers={providers({
@@ -150,7 +151,7 @@ it("creates with the recommended answer mode and style, not the global ones, and
   const submission = (onSubmitPrompt.mock.calls[0] as unknown as [{ sessionSettings: Record<string, unknown> }])[0];
   expect(submission.sessionSettings.answerMode).toBe("standard");
   expect(submission.sessionSettings.outputStyleId).toBe("unrestricted");
-  // The draft follows the composer rule: the model's selected level is shown and submitted.
-  // 草稿遵循输入区规则：显示并提交模型的选中档位。
-  expect((onSubmitPrompt.mock.calls[0] as unknown as [{ reasoningEffort: string | null }])[0].reasoningEffort).toBe("high");
+  // Core resolves the latest model preference after the wizard has flushed explicit choices.
+  // 向导等待显式选择保存完成后，由 Core 解析最新模型偏好。
+  expect((onSubmitPrompt.mock.calls[0] as unknown as [{ reasoningEffort: string | null }])[0].reasoningEffort).toBeNull();
 });

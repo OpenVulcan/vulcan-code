@@ -172,7 +172,7 @@ export function ComposerDock(props: {
   ) => Promise<boolean>;
   // onSelectWorkbenchReasoningEffort persists a selected reasoning effort.
   // onSelectWorkbenchReasoningEffort 持久化选中的思考档位。
-  onSelectWorkbenchReasoningEffort: (effort: string) => Promise<boolean>;
+  onSelectWorkbenchReasoningEffort: (effort: string, choice: ModelPickerChoice) => Promise<boolean>;
   // onSlashCommand routes one projected slash command.
   // onSlashCommand 路由单个投影 slash 指令。
   onSlashCommand: (command: ComposerSlashCommandSummary) => ComposerSlashCommandResult;
@@ -362,6 +362,7 @@ export function ComposerDock(props: {
           onBusyChange={setDedicatedCreating}
           onChange={updateDraftState}
           onSelectWorkbenchModel={props.onSelectWorkbenchModel}
+          onSelectWorkbenchReasoningEffort={props.onSelectWorkbenchReasoningEffort}
           onSubmitPrompt={props.onSubmitPrompt}
           outputStyleCatalog={props.outputStyleCatalog}
           providers={props.providers}

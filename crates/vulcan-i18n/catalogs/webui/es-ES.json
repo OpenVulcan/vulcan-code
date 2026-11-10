@@ -1,4 +1,8 @@
 {
+  "settings.defaultPermissionMode.title": "Modo de aprobación predeterminado",
+  "settings.defaultPermissionMode.hint": "Se aplica al iniciar una conversación nueva. La elección hecha en la conversación tiene prioridad.",
+  "settings.defaultPermissionMode.autoApproveUnavailable": "La aprobación automática no está disponible. Las conversaciones nuevas usarán la escritura en el espacio de trabajo hasta que se configure un evaluador de permisos.",
+  "settings.defaultPermissionMode.fullAccessConfirmBody": "Las conversaciones nuevas ejecutarán las herramientas con acceso completo de forma predeterminada. Podrán modificar archivos fuera del espacio de trabajo y ejecutar comandos sin aprobación.",
   "settings.composerEnterSend.label": "Modo de envío con Enter",
   "settings.composerEnterSend.description": "Mientras se ejecuta una tarea, Enter usa el modo seleccionado y Ctrl+Enter usa el contrario. Si la conversación está inactiva, el mensaje se envía de inmediato.",
   "settings.composerEnterSend.queue": "Poner en cola",

@@ -47,7 +47,6 @@ pub enum Command {
         conversation_id: ConversationId,
         prompt: String,
         mode: ExecutionMode,
-        effort: ReasoningEffort,
         model_id: String,
         /// Attached file paths, staged through `stageComposerAttachmentBytes`.
         /// 附件文件路径，经 `stageComposerAttachmentBytes` 暂存。

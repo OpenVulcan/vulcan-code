@@ -1,4 +1,8 @@
 {
+  "settings.defaultPermissionMode.title": "Mode d’approbation par défaut",
+  "settings.defaultPermissionMode.hint": "S’applique au démarrage d’une nouvelle conversation. Le choix effectué dans la conversation est prioritaire.",
+  "settings.defaultPermissionMode.autoApproveUnavailable": "L’approbation automatique est indisponible. Les nouvelles conversations utilisent le mode d’écriture dans l’espace de travail jusqu’à la configuration d’un évaluateur d’autorisations.",
+  "settings.defaultPermissionMode.fullAccessConfirmBody": "Les outils s’exécuteront par défaut avec un accès complet dans les nouvelles conversations. Ils pourront modifier des fichiers hors de l’espace de travail et exécuter des commandes sans approbation.",
   "settings.composerEnterSend.label": "Mode d’envoi avec Entrée",
   "settings.composerEnterSend.description": "Pendant une tâche, Entrée utilise le mode choisi et Ctrl+Entrée utilise le mode inverse. Si la conversation est inactive, l’envoi est immédiat.",
   "settings.composerEnterSend.queue": "Mettre en file d’attente",

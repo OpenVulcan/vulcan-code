@@ -3,17 +3,6 @@ import { Bot, ChevronDown, CircleAlert, Hand, MessageSquareText, ShieldCheck, Sl
 import { useI18n } from "@/i18n";
 import type { PermissionMode } from "@/service/permission-mode";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/ui-kit/primitives/alert-dialog";
-import { Checkbox } from "@/ui-kit/primitives/checkbox";
-import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
@@ -30,6 +19,7 @@ import {
 import type { ComposerPermissionModeController } from "./composer-panel/use-composer-permission-mode";
 import { ComposerReviewPromptDialog } from "./composer-review-prompt-dialog";
 import { ComposerUnattendedDialog } from "./composer-unattended-dialog";
+import { FullAccessConfirmation } from "./full-access-confirmation";
 import { PermissionJudgeEntryContext } from "./permission-judge-entry-context";
 import { useDedicatedComposer } from "@/components/composer/dedicated/dedicated-session-controls";
 import { OPTION_KEYS, label as codeLabel } from "@/components/features/settings/permission-judge-labels";
@@ -120,10 +110,9 @@ function PermissionModeChip(props: { controller: ComposerPermissionModeControlle
   const { t } = useI18n();
   const judge = React.useContext(PermissionJudgeEntryContext);
   const { mode, saving, available, select } = props.controller;
-  // confirmingFullAccess holds the confirmation dialog open; acknowledged gates its action button.
-  // confirmingFullAccess 控制确认框开启；acknowledged 控制其确认按钮可用。
+  // confirmingFullAccess holds the permission confirmation dialog open.
+  // confirmingFullAccess 控制完全权限确认框开启。
   const [confirmingFullAccess, setConfirmingFullAccess] = React.useState(false);
-  const [acknowledged, setAcknowledged] = React.useState(false);
   // editingUnattended holds the unattended dialog open.
   // editingUnattended 控制无人值守对话框开启。
   const [editingUnattended, setEditingUnattended] = React.useState(false);
@@ -151,7 +140,6 @@ function PermissionModeChip(props: { controller: ComposerPermissionModeControlle
     }
     if (next === "full_access") {
       if (next === mode) return;
-      setAcknowledged(false);
       setConfirmingFullAccess(true);
       return;
     }
@@ -258,32 +246,11 @@ function PermissionModeChip(props: { controller: ComposerPermissionModeControlle
       </DropdownMenu>
       <ComposerUnattendedDialog open={editingUnattended} onOpenChange={setEditingUnattended} controller={unattended} />
       <ComposerReviewPromptDialog open={editingReviewPrompt} onOpenChange={setEditingReviewPrompt} sessionId={props.controller.sessionId} />
-      <AlertDialog open={confirmingFullAccess} onOpenChange={setConfirmingFullAccess}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t("permissionMode.fullAccessConfirmTitle")}</AlertDialogTitle>
-            <AlertDialogDescription>{t("permissionMode.fullAccessConfirmBody")}</AlertDialogDescription>
-          </AlertDialogHeader>
-          <label className="vk-check-label">
-            <Checkbox
-              checked={acknowledged}
-              data-full-access-acknowledge=""
-              onCheckedChange={(checked) => setAcknowledged(checked === true)}
-            />
-            {t("permissionMode.fullAccessConfirmAcknowledge")}
-          </label>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t("permissionMode.cancel")}</AlertDialogCancel>
-            <AlertDialogAction
-              data-full-access-confirm=""
-              disabled={!acknowledged}
-              onClick={() => select("full_access")}
-            >
-              {t("permissionMode.fullAccessConfirmAction")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <FullAccessConfirmation
+        open={confirmingFullAccess}
+        onOpenChange={setConfirmingFullAccess}
+        onConfirm={() => select("full_access")}
+      />
     </>
   );
 }

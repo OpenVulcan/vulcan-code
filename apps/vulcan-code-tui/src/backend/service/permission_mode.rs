@@ -9,8 +9,19 @@ impl Worker {
     /// 发布一个精确窗口或草稿；未知会话没有可发布权威。
     pub(super) fn emit_permission_mode(&self, id: &str) {
         let (mode, unattended) = if let Some(draft) = self.drafts.get(id) {
+            // default_mode follows the service snapshot; a missing judge disables automatic approval.
+            // default_mode 跟随服务快照，缺少判定器时不启用自动审批。
+            let default_mode =
+                self.wb.as_ref().map_or_else(PermissionMode::default, |wb| {
+                    match wb.default_permission_mode {
+                        PermissionMode::AutoApprove if wb.permission_judge_backend.is_none() => {
+                            PermissionMode::default()
+                        }
+                        mode => mode,
+                    }
+                });
             (
-                draft.permission_mode.unwrap_or_default(),
+                draft.permission_mode.unwrap_or(default_mode),
                 Unattended::Unavailable,
             )
         } else if let Some(window) = self.windows.get(id) {
@@ -264,7 +275,6 @@ mod tests {
             id.clone(),
             "synthetic".into(),
             ExecutionMode::Build,
-            ReasoningEffort::Off,
             String::new(),
             Vec::new(),
         );

@@ -1,4 +1,8 @@
 {
+  "settings.defaultPermissionMode.title": "Standard-Genehmigungsmodus",
+  "settings.defaultPermissionMode.hint": "Gilt beim Start einer neuen Unterhaltung. Eine in der Unterhaltung getroffene Auswahl hat Vorrang.",
+  "settings.defaultPermissionMode.autoApproveUnavailable": "Die automatische Genehmigung ist nicht verfügbar. Neue Unterhaltungen verwenden Schreibzugriff im Arbeitsbereich, bis eine Berechtigungsprüfung konfiguriert ist.",
+  "settings.defaultPermissionMode.fullAccessConfirmBody": "In neuen Unterhaltungen werden Werkzeuge standardmäßig mit Vollzugriff ausgeführt. Sie können Dateien außerhalb des Arbeitsbereichs ändern und Befehle ohne Genehmigung ausführen.",
   "settings.composerEnterSend.label": "Sendeverhalten der Eingabetaste",
   "settings.composerEnterSend.description": "Während einer Aufgabe verwendet Enter die gewählte Einstellung und Strg+Enter die jeweils andere. Ist die Unterhaltung inaktiv, wird die Nachricht sofort gesendet.",
   "settings.composerEnterSend.queue": "In die Warteschlange stellen",

@@ -895,6 +895,9 @@ impl Worker {
         }
         if let Some(id) = self.selected.clone() {
             self.emit_conversation_state(&id);
+            if self.drafts.contains_key(&id) {
+                self.emit_permission_mode(&id);
+            }
         }
         self.emit_effort();
         self.emit_workbench_slot();
@@ -1151,17 +1154,18 @@ impl Worker {
         self.emit_insight(parent);
     }
 
-    /// Reasoning effort choices of the service-selected conversation's model.
-    /// 服务选中会话所用模型的推理强度选项。
+    /// Emits reasoning for the selected session or draft using its own model.
+    /// 使用所选会话或草稿自身的模型发布思考档位。
+    /// Takes no parameters and emits a model selection event when a conversation is selected.
+    /// 无参数，在选中会话时发布模型选择事件。
     fn emit_effort(&self) {
         let Some(id) = self.selected.clone() else {
             return;
         };
-        let model_id = self.model_keys.get(&id).cloned().unwrap_or_default();
-        let selection = self
-            .wb
-            .as_ref()
-            .and_then(|wb| wb.reasoning_selection.as_ref());
+        // model_id identifies the precise credential row used by the picker.
+        // model_id 标识选择器所用的精确凭据行。
+        let model_id = self.reasoning_model_key(&id).unwrap_or_default();
+        let selection = self.reasoning_selection_for(&id, &model_id);
         let mut efforts: Vec<ReasoningEffort> = selection
             .iter()
             .flat_map(|selection| &selection.options)
@@ -1176,13 +1180,52 @@ impl Worker {
         });
     }
 
-    /// Workbench value for an effort, picked from the current model's own options.
-    /// 推理强度对应的工作台取值，从当前模型自身的选项中挑选。
-    fn effort_value(&self, effort: ReasoningEffort) -> Option<String> {
-        self.wb
-            .as_ref()?
+    /// Returns the selected catalog route key for id, using the workbench active route for new drafts.
+    /// 返回 id 所选的目录路线键，新草稿使用工作台当前路线。
+    fn reasoning_model_key(&self, id: &str) -> Option<String> {
+        self.model_keys
+            .get(id)
+            .cloned()
+            .or_else(|| self.wb.as_ref().and_then(|wb| map::models(&wb.providers).1))
+    }
+
+    /// Returns id's session selector, or the catalog selector for the draft's exact model_key.
+    /// 返回 id 的会话选择器，或草稿精确 model_key 的目录选择器。
+    fn reasoning_selection_for(
+        &self,
+        id: &str,
+        model_key: &str,
+    ) -> Option<&api::ReasoningSelectionSummary> {
+        // wb owns the current model catalog and the selected session projection.
+        // wb 持有当前模型目录和所选会话投影。
+        let wb = self.wb.as_ref()?;
+        if !is_draft(id) {
+            return wb.reasoning_selection.as_ref();
+        }
+        // route identifies the draft's exact provider, account, and model.
+        // route 标识草稿的精确供应商、账号与模型。
+        let route = ModelRoute::from_key(model_key)?;
+        wb.providers
+            .iter()
+            .find(|provider| {
+                provider
+                    .source_provider_id
+                    .as_deref()
+                    .unwrap_or(&provider.id)
+                    == route.provider_id
+                    && provider.connection_id.as_deref() == Some(route.connection_id.as_str())
+            })?
+            .models
+            .iter()
+            .find(|model| model.enabled && model.id == route.model_id)?
             .reasoning_selection
-            .as_ref()?
+            .as_ref()
+    }
+
+    /// Returns the service wire value for effort when the exact id and model_key offer it.
+    /// 在精确 id 和 model_key 提供 effort 时返回该档位的服务协议值。
+    fn effort_value(&self, id: &str, model_key: &str, effort: ReasoningEffort) -> Option<String> {
+        self.reasoning_selection_for(id, model_key)?
             .options
             .iter()
             .map(|option| option.value.clone())
@@ -1787,10 +1830,9 @@ impl Worker {
                 conversation_id,
                 prompt,
                 mode,
-                effort,
                 model_id,
                 attachments,
-            } => self.submit(conversation_id, prompt, mode, effort, model_id, attachments),
+            } => self.submit(conversation_id, prompt, mode, model_id, attachments),
             Command::StopConversationRun { conversation_id } => {
                 // The run state arrives through workbench deltas.
                 // 运行状态经由工作台增量到达。
@@ -1844,21 +1886,39 @@ impl Worker {
                 conversation_id,
                 effort,
             } => {
-                // Value.
-                // 当前协议值。
-                let Some(value) = self.effort_value(effort) else {
+                // id owns the choice even when it is a local draft.
+                // 即使 id 是本地草稿，也由它持有此选择。
+                let Some(id) = conversation_id else {
                     return;
                 };
-                // Exact entity identity.
-                // 准确实体身份。
-                let Some(id) = conversation_id.filter(|id| !is_draft(id)) else {
+                // model_key and route bind the choice to the same account and model shown in the picker.
+                // model_key 和 route 把选择绑定到选择器显示的同一账号和模型。
+                let Some(model_key) = self.reasoning_model_key(&id) else {
+                    return;
+                };
+                let Some(route) = ModelRoute::from_key(&model_key) else {
+                    return;
+                };
+                // value is accepted only when the exact model offers this level.
+                // 仅在精确模型提供此档位时才接受 value。
+                let Some(value) = self.effort_value(&id, &model_key, effort) else {
                     return;
                 };
                 if let Some(snapshot) = self.call_as(
                     "service_select_workbench_reasoning_effort",
-                    json!({ "conversationId": id, "effort": value }),
+                    json!({
+                        "conversationId": (!is_draft(&id)).then_some(id),
+                        "effort": value,
+                        "modelSelection": {
+                            "providerId": route.provider_id,
+                            "modelId": route.model_id,
+                            "connectionId": route.connection_id,
+                        },
+                    }),
                 ) {
                     self.apply_snapshot(snapshot);
+                } else {
+                    self.emit_effort();
                 }
             }
             Command::LoadWorkspaceDiffSnapshot => self.git_refresh(),
@@ -2162,6 +2222,9 @@ impl Worker {
             self.model_keys.insert(id.clone(), model_id.clone());
             if let Some(draft) = self.drafts.get_mut(id) {
                 draft.model_key = Some(model_id);
+                if self.selected.as_deref() == Some(id.as_str()) {
+                    self.emit_effort();
+                }
                 return;
             }
         }
@@ -2201,7 +2264,6 @@ impl Worker {
         conversation_id: String,
         prompt: String,
         mode: ExecutionMode,
-        effort: ReasoningEffort,
         model_id: String,
         attachments: Vec<String>,
     ) {
@@ -2234,10 +2296,9 @@ impl Worker {
             ExecutionMode::Build => "build",
             ExecutionMode::Plan => "plan",
         };
-        // Existing conversations change model and effort through their own calls; only a new
-        // conversation carries them in the submission.
-        // 已有会话通过专门调用切换模型与推理强度；只有新会话在提交中携带它们。
-        let (id_param, model_selection, effort_param) = match is_new {
+        // Only a draft carries its model. Core resolves its remembered level after the serial picker write.
+        // 只有草稿携带模型。Core 在串行选择器写入之后解析记忆档位。
+        let (id_param, model_selection) = match is_new {
             true => {
                 // Selection.
                 // 已批准选择。
@@ -2248,17 +2309,9 @@ impl Worker {
                         "connectionId": r.connection_id,
                     })
                 });
-                (
-                    Value::Null,
-                    selection.unwrap_or(Value::Null),
-                    self.effort_value(effort).map_or(Value::Null, Value::String),
-                )
+                (Value::Null, selection.unwrap_or(Value::Null))
             }
-            false => (
-                Value::String(conversation_id.clone()),
-                Value::Null,
-                Value::Null,
-            ),
+            false => (Value::String(conversation_id.clone()), Value::Null),
         };
         // The service admits a submission only from the slot that owns its target: the
         // conversation itself once it exists, the project's new-conversation slot before that.
@@ -2277,7 +2330,6 @@ impl Worker {
             "prompt": prompt,
             "attachments": staged,
             "executionMode": execution_mode,
-            "reasoningEffort": effort_param,
             "modelSelection": model_selection,
             // An unchanged draft sends no answer mode, so the service applies the default at creation.
             // 未修改的草稿不发送回答模式，由服务在创建时采用默认值。
@@ -2717,7 +2769,6 @@ mod tests {
             session_id.to_string(),
             "follow up".to_string(),
             ExecutionMode::Build,
-            ReasoningEffort::High,
             String::new(),
             Vec::new(),
         );

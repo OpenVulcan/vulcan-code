@@ -1,17 +1,14 @@
 import React from "react";
 import { toast } from "@/ui-kit/primitives/toast";
 import { useI18n } from "@/i18n";
-import type { PermissionMode, UnattendedConfig } from "@/service/permission-mode";
+import { DEFAULT_PERMISSION_MODE, type PermissionMode, type UnattendedConfig } from "@/service/permission-mode";
+import { PermissionJudgeEntryContext } from "../permission-judge-entry-context";
 import {
   loadSessionUnattendedDefault,
   setSessionPermissionMode,
   setSessionUnattended,
   type UnattendedDefault,
 } from "@/service/permission-mode-service";
-
-/** Session default every new conversation starts with unless its draft chooses another mode.
- * 新会话在草稿未选择其他模式时使用的会话默认值。 */
-export const DEFAULT_PERMISSION_MODE: PermissionMode = "workspace_write";
 
 /** Permission mode bound to one hydrated session and history generation.
  * 绑定到一个已加载会话及历史代次的权限模式。 */
@@ -58,6 +55,14 @@ export function useComposerPermissionMode(options: PermissionModeComposerOptions
   // t resolves all feedback from the shared locale catalog.
   // t 从共享语言目录解析全部反馈。
   const { t } = useI18n();
+  // judge supplies the saved default and the backend required to apply automatic approval.
+  // judge 提供已保存的默认值以及自动审批所需的判定后端。
+  const judge = React.useContext(PermissionJudgeEntryContext);
+  // defaultMode matches Core's safe default when automatic approval cannot run.
+  // 自动审批不可用时，defaultMode 与 Core 的安全默认值一致。
+  const defaultMode = judge?.defaultPermissionMode === "auto_approve" && judge.backend === null
+    ? DEFAULT_PERMISSION_MODE
+    : judge?.defaultPermissionMode ?? DEFAULT_PERMISSION_MODE;
   // ownerKey invalidates old receipts on selection changes and history rewrites.
   // ownerKey 在选择变化及历史重写时使旧回执失效。
   const ownerKey = `${options.scopeKey}:${options.authority?.generation ?? "loading"}`;
@@ -86,7 +91,7 @@ export function useComposerPermissionMode(options: PermissionModeComposerOptions
   const current = authority !== null && accepted?.key === ownerKey && accepted.base === authority.mode
     ? accepted.mode : authority?.mode ?? null;
   const mode: PermissionMode | null = options.sessionId === null
-    ? options.draftMode ?? DEFAULT_PERMISSION_MODE
+    ? options.draftMode ?? defaultMode
     : current;
   const saving = savingOwner === owner;
 

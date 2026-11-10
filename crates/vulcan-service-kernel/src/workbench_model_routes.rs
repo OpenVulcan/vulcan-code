@@ -12,10 +12,9 @@ use vulcan_service_api::{
 use vulcan_workbench_model::{SessionId, SessionRuntimeStateEntry};
 
 use super::{
-    SharedServiceBridgeState, current_unix_millis_text, emit_workbench_event,
-    mutate_provider_configuration, mutate_provider_configuration_with_state_validation,
-    mutate_public_ai_configuration, parse_reasoning_effort, parse_thinking_display_mode,
-    publish_public_ai_workbench, refresh_settings_projection_locked,
+    ReasoningEffortLevel, SharedServiceBridgeState, current_unix_millis_text, emit_workbench_event,
+    mutate_provider_configuration, mutate_public_ai_configuration, parse_reasoning_effort,
+    parse_thinking_display_mode, publish_public_ai_workbench, refresh_settings_projection_locked,
     refresh_workbench_runtime_controls_locked,
 };
 
@@ -230,79 +229,194 @@ fn public_secondary_route_summary(
     }
 }
 
-/// Persists the active workbench reasoning effort through the shared provider configuration.
-/// 通过共享 Provider 配置持久化当前工作台思考档位。
+/// Saves a reasoning choice for its exact model and updates the next request of an existing conversation.
+/// 为精确模型保存思考选择，并更新已有会话的下一次请求。
+/// `app` emits the resulting workbench, `state` owns settings, and `conversation_id` identifies an existing session.
+/// `app` 发出更新后的工作台，`state` 持有设置，`conversation_id` 标识已有会话。
+/// `effort` is the chosen level and `requested_model` identifies the draft route or verifies the session route.
+/// `effort` 是所选档位，`requested_model` 标识草稿路线或校验会话路线。
+/// Returns the resulting workbench after projecting the saved selection.
+/// 返回已投影保存选择的工作台。
 pub(super) async fn service_select_workbench_reasoning_effort(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
-    conversation_id: SessionId,
+    conversation_id: Option<SessionId>,
     effort: String,
+    requested_model: Option<crate::conversation_submission::SubmissionModelSelection>,
 ) -> Result<WorkbenchSnapshot, String> {
-    let selected_effort = parse_reasoning_effort(effort.trim())
+    // requested_effort is a recognized provider-neutral level, even if a manifest has removed it.
+    // requested_effort 是已知的供应商中立档位，即使清单已移除该档位。
+    let requested_effort = parse_reasoning_effort(effort.trim())
         .ok_or_else(|| format!("Unknown reasoning level: {effort}"))?;
-    let pending_requested_at_ms = crate::session_goal_lifecycle::current_v1_goal_unix_millis()?;
-    let handle =
-        crate::session_goal_lifecycle::session_v1_handle_from_state(&state, conversation_id)
-            .await?;
-    let workbench = mutate_provider_configuration_with_state_validation(
-        &state,
-        "Failed to save the reasoning level",
-        |guard| {
-            // workspace proves the caller-owned session still exists at the serialized
-            // transaction boundary; selected_session is deliberately not consulted.
-            // workspace 在串行事务边界证明调用方持有的会话仍然存在；这里有意不读取
-            // selected_session。
-            let workspace = guard
+    // session pins the existing document independently of workbench navigation.
+    // session 固定已有会话文档，独立于工作台导航。
+    let session = match conversation_id {
+        Some(id) => Some((
+            id,
+            crate::session_goal_lifecycle::session_v1_handle_from_state(&state, id).await?,
+        )),
+        None => None,
+    };
+    // Serialize with explicit model switches and manifest publication before validating the route.
+    // 在校验路线前，与显式模型切换和清单发布串行化。
+    let _model_transaction = crate::begin_public_ai_configuration_transaction().await;
+    let settings_transaction = crate::begin_provider_configuration_transaction().await;
+    // guard pins the runtime mirror and the latest persisted preferences through the write.
+    // guard 在写入期间固定运行时镜像和最新的持久偏好。
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("Failed to lock service state: {error}"))?;
+    // agent_runtime owns the executable provider catalog and the user settings document.
+    // agent_runtime 持有可执行供应商目录和用户设置文档。
+    let agent_runtime = guard
+        .agent_runtime
+        .as_ref()
+        .ok_or_else(|| String::from("Service is still starting; agent runtime is not ready."))?;
+    let runtime = agent_runtime.public_ai_runtime.as_ref();
+    let public_configuration = runtime.configuration_snapshot()?;
+    // runtime_state is present only for the exact existing conversation targeted by the picker.
+    // runtime_state 仅在选择器指向精确已有会话时存在。
+    let runtime_state = conversation_id
+        .map(|id| {
+            guard
                 .workspace_snapshot
                 .as_ref()
-                .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
-            if !workspace
-                .sessions
-                .iter()
-                .any(|session| session.id == conversation_id)
-            {
-                return Err(format!(
-                    "Conversation `{conversation_id}` is not an active workspace session."
-                ));
-            }
-            Ok(())
-        },
-        |configuration| {
-            // The provider configuration retains the process-wide default; the session-specific
-            // next-request authority is committed separately through the V1 document below.
-            // Provider 配置保留进程级默认值；会话级下一请求权威在下方通过 V1 文档独立提交。
-            configuration.workbench_reasoning_effort = Some(selected_effort);
-            Ok(())
-        },
-        |guard, configuration| -> Result<WorkbenchSnapshot, String> {
-            let workspace = guard
-                .workspace_snapshot
-                .as_mut()
-                .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
-            let runtime_state = workspace
-                .session_runtime_state
-                .get_mut(&conversation_id)
-                .ok_or_else(|| format!("Conversation `{conversation_id}` has no runtime state."))?;
-            let fallback =
-                crate::session_request_config_v1::SessionRequestFallback::from_runtime_state(
-                    runtime_state,
-                );
-            crate::session_request_config_v1::set_pending_reasoning_request_v1(
-                handle.as_ref(),
-                selected_effort,
-                fallback,
-                pending_requested_at_ms,
-            )?;
-            // Legacy runtime controls remain an in-memory WebUI adapter only and are not persisted.
-            // 旧运行控制项仅保留为内存 WebUI 适配器，不再持久化。
-            runtime_state.active_reasoning_effort = Some(selected_effort);
-            runtime_state.updated_at = current_unix_millis_text();
-            refresh_workbench_runtime_controls_locked(guard, configuration);
-            Ok(guard.workbench.clone())
-        },
-    )
-    .await??;
-
+                .filter(|workspace| workspace.sessions.iter().any(|session| session.id == id))
+                .and_then(|workspace| workspace.session_runtime_state.get(&id))
+                .ok_or_else(|| format!("Conversation `{id}` has no runtime state."))
+        })
+        .transpose()?;
+    // selected_model resolves the session's exact route or the explicitly supplied draft route.
+    // selected_model 解析会话的精确路线或显式传入的草稿路线。
+    let selected_model = if session.is_some() {
+        crate::public_ai_workbench_selection(
+            &public_configuration,
+            runtime,
+            conversation_id,
+            runtime_state,
+        )?
+        .ok_or_else(|| {
+            String::from("Select an available model before changing its reasoning level.")
+        })?
+    } else {
+        crate::conversation_submission::resolve_enabled_submission_model_selection(
+            runtime,
+            &public_configuration,
+            requested_model.as_ref().ok_or_else(|| {
+                String::from("A draft reasoning choice requires its exact model selection.")
+            })?,
+        )?
+    };
+    if let Some(expected) = requested_model.as_ref()
+        && (expected.provider_id != selected_model.route.provider.id
+            || expected.model_id != selected_model.model.id
+            || expected.connection_id != selected_model.route.connection.id)
+    {
+        return Err(String::from(
+            "The reasoning selection's model changed. Select its level again.",
+        ));
+    }
+    // effective_effort tolerates a level removed between rendering the picker and saving.
+    // effective_effort 兼容在选择器渲染与保存之间被移除的档位。
+    let effective_effort =
+        vulcan_agent_runtime::agent_runtime::provider_reasoning::resolve_effective_reasoning_effort(
+            &selected_model.model.capabilities,
+            Some(requested_effort),
+        );
+    // provider_id and model_id scope preferences independently of account selection.
+    // provider_id 与 model_id 确定偏好范围，独立于账号选择。
+    let provider_id = &selected_model.route.provider.id;
+    let model_id = &selected_model.model.id;
+    if let Some((_, handle)) = session.as_ref() {
+        // next_request prevents a stale workbench mirror from assigning the choice to another model.
+        // next_request 防止过期的工作台镜像把选择归属到其他模型。
+        let next_request =
+            crate::session_request_config_v1::capture_next_request_config_v1(handle.as_ref())?;
+        if next_request
+            .provider
+            .as_ref()
+            .is_some_and(|id| id != provider_id)
+            || next_request.model.as_ref().is_some_and(|id| id != model_id)
+            || next_request
+                .connection_id
+                .as_ref()
+                .is_some_and(|id| id != &selected_model.route.connection.id)
+        {
+            return Err(String::from(
+                "The session's next request uses a different model. Select its level again.",
+            ));
+        }
+    }
+    // now_ms pins the pending request timestamp before either durable write.
+    // now_ms 在任一可靠写入前固定待生效请求的时间戳。
+    let now_ms = crate::current_v1_unix_millis()?;
+    // configuration stages the new preference; original remains available for rollback.
+    // configuration 暂存新偏好，original 保留用于回滚。
+    let original = &agent_runtime.provider_configuration;
+    let mut configuration = original.clone();
+    // preference_changed excludes compatibility fallbacks and idempotent choices.
+    // preference_changed 排除兼容回退和幂等选择。
+    let preference_changed = requested_effort == effective_effort
+        && requested_effort != ReasoningEffortLevel::Off
+        && configuration.remembered_model_reasoning_effort(provider_id, model_id)
+            != Some(requested_effort);
+    if preference_changed {
+        configuration
+            .model_reasoning_efforts
+            .entry(provider_id.clone())
+            .or_default()
+            .insert(model_id.clone(), requested_effort);
+        settings_transaction.persist(
+            &configuration,
+            "Failed to remember the model's reasoning level",
+        )?;
+    }
+    if let (Some((_, handle)), Some(runtime_state)) = (session.as_ref(), runtime_state)
+        && let Err(error) = crate::session_request_config_v1::set_pending_reasoning_request_v1(
+            handle.as_ref(),
+            effective_effort,
+            crate::session_request_config_v1::SessionRequestFallback {
+                provider: Some(provider_id.clone()),
+                connection_id: Some(selected_model.route.connection.id.clone()),
+                model: Some(model_id.clone()),
+                temperature: runtime_state.active_temperature,
+            },
+            now_ms,
+        )
+    {
+        // The preference and session change form one user action; restore settings if the session write fails.
+        // 偏好与会话修改属于同一用户操作，会话写入失败时恢复设置。
+        if preference_changed
+            && let Err(rollback) = settings_transaction.persist(
+                original,
+                "Failed to restore the previous reasoning preference",
+            )
+        {
+            return Err(format!("{error}; {rollback}"));
+        }
+        return Err(error);
+    }
+    // installed is the runtime we just read under the same service-state lock.
+    // installed 是刚刚在同一服务状态锁内读取的运行时。
+    let installed = guard
+        .agent_runtime
+        .as_mut()
+        .ok_or_else(|| String::from("Service is still starting; agent runtime is not ready."))?;
+    installed.provider_configuration = configuration.clone();
+    if let Some(id) = conversation_id
+        && let Some(runtime_state) = guard
+            .workspace_snapshot
+            .as_mut()
+            .and_then(|workspace| workspace.session_runtime_state.get_mut(&id))
+    {
+        runtime_state.active_reasoning_effort = Some(effective_effort);
+        runtime_state.updated_at = current_unix_millis_text();
+    }
+    refresh_workbench_runtime_controls_locked(&mut guard, &configuration);
+    // workbench contains the exact route and level resulting from the serialized write.
+    // workbench 包含本次串行写入后的精确路线和档位。
+    let workbench = guard.workbench.clone();
+    drop(guard);
     emit_workbench_event(&app, &workbench);
     Ok(workbench)
 }
@@ -523,7 +637,7 @@ pub(super) async fn service_select_webui_locale(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use vulcan_provider_adapters::{
         ActiveAiModelSelection, CredentialConnection, CredentialMode, PersistedAiConfiguration,
@@ -532,14 +646,24 @@ mod tests {
     };
     use vulcan_workbench_model::{SessionPendingModelSelection, SessionRuntimeStateEntry};
 
-    use super::exact_public_secondary_route_target;
+    use super::{exact_public_secondary_route_target, service_select_workbench_reasoning_effort};
+    use crate::conversation_submission::SubmissionModelSelection;
+    use crate::tests::{
+        provider_configuration_persistence_scope::PROVIDER_CONFIGURATION_PATH,
+        test_support::{test_agent_runtime_bridge, test_service_state_with_parent_session},
+    };
+    use crate::{ProviderConfigurationFile, ReasoningEffortLevel, SessionId};
+    use vulcan_service_api::ServiceEventEmitter;
 
-    /// Verifies a pending next-turn model owns secondary routes before the old active model.
-    /// 验证下一轮待生效模型优先于旧的当前模型持有二级路由。
-    #[test]
-    fn secondary_route_uses_pending_workbench_model() {
-        let runtime = PublicAiRuntime::first_batch(Arc::new(UnavailableCredentialSecretResolver))
-            .expect("runtime should initialize");
+    /// Builds a synthetic two-model catalog without using provider credentials or the network.
+    /// 构建不使用供应商凭据或网络的合成双模型目录。
+    /// Takes no parameters and returns the runtime and its installed route configuration.
+    /// 无参数，返回运行时及其已安装的路线配置。
+    fn two_model_fixture() -> (Arc<PublicAiRuntime>, PersistedAiConfiguration) {
+        let runtime = Arc::new(
+            PublicAiRuntime::first_batch(Arc::new(UnavailableCredentialSecretResolver))
+                .expect("runtime should initialize"),
+        );
         let mut configuration = PersistedAiConfiguration::default();
         configuration
             .connection_graph
@@ -593,6 +717,14 @@ mod tests {
             .reapply_model_catalog_overlays(&configuration)
             .expect("catalog should activate");
 
+        (runtime, configuration)
+    }
+
+    /// Verifies a pending next-turn model owns secondary routes before the old active model.
+    /// 验证下一轮待生效模型优先于旧的当前模型持有二级路由。
+    #[test]
+    fn secondary_route_uses_pending_workbench_model() {
+        let (runtime, configuration) = two_model_fixture();
         let state = SessionRuntimeStateEntry {
             active_provider_id: Some(String::from("openrouter")),
             active_connection_id: Some(String::from("openrouter-account")),
@@ -624,5 +756,72 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// Verifies two explicit model preferences survive persistence without sharing a legacy global value.
+    /// 验证两个显式模型偏好各自持久化，不共用旧全局值。
+    /// Takes no arguments and checks the real draft RPC and configuration document.
+    /// 无参数，校验真实草稿 RPC 和配置文档。
+    #[tokio::test]
+    async fn draft_reasoning_choices_are_remembered_per_model() {
+        // runtime and public_configuration hold the exact synthetic routes used for each RPC.
+        // runtime 和 public_configuration 持有每个 RPC 使用的精确合成路线。
+        let (runtime, public_configuration) = two_model_fixture();
+        // service runs real configuration persistence with a synthetic provider runtime.
+        // service 使用合成供应商运行时执行真实配置持久化。
+        let mut service = test_service_state_with_parent_session(SessionId::new_v4());
+        let mut agent_runtime = test_agent_runtime_bridge();
+        agent_runtime.public_ai_runtime = Arc::clone(&runtime);
+        service.agent_runtime = Some(agent_runtime);
+        // state and app capture the authoritative configuration and its resulting projections.
+        // state 与 app 持有权威配置和由此产生的投影。
+        let state = Arc::new(Mutex::new(service));
+        let app = ServiceEventEmitter::new(Vec::new());
+        // directory and path keep these writes away from real user settings.
+        // directory 和 path 使这些写入远离真实用户设置。
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("configuration.json");
+        PROVIDER_CONFIGURATION_PATH.scope(path.clone(), async {
+            // choices tracks what the synthetic catalog actually supports, rather than assuming levels.
+            // choices 记录合成目录实际支持的档位，而不假定固定档位。
+            let mut choices = Vec::new();
+            for model_id in ["openai/gpt-5.6-terra", "openai/gpt-5.6-sol"] {
+                // selection and model bind the exact route and its executable capabilities.
+                // selection 与 model 绑定精确路线及其可执行能力。
+                let selection = SubmissionModelSelection {
+                    provider_id: String::from("openrouter"),
+                    model_id: model_id.to_owned(),
+                    connection_id: String::from("openrouter-account"),
+                };
+                let model = runtime.resolve_connection_model_selection(
+                    &public_configuration, &selection.connection_id, &selection.provider_id, &selection.model_id,
+                ).unwrap();
+                // effort picks a supported level different from the previous model's choice.
+                // effort 选择一个受支持且与前一模型选择不同的档位。
+                let effort = [ReasoningEffortLevel::Low, ReasoningEffortLevel::High, ReasoningEffortLevel::Medium]
+                    .into_iter()
+                    .find(|effort| {
+                        !choices.iter().any(|&(_, used)| used == *effort)
+                            && vulcan_agent_runtime::agent_runtime::provider_reasoning::resolve_effective_reasoning_effort(
+                                &model.model.capabilities, Some(*effort),
+                            ) == *effort
+                    }).expect("fixture models should support distinct selectable reasoning levels");
+                service_select_workbench_reasoning_effort(
+                    app.clone(), state.clone(), None,
+                    crate::session_request_config_v1::reasoning_effort_level_key(effort),
+                    Some(selection),
+                ).await.unwrap();
+                choices.push((model_id, effort));
+            }
+            // saved is reloaded from the real configuration written by both calls.
+            // saved 从两次调用写入的真实配置重新读取。
+            let saved: ProviderConfigurationFile =
+                serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            for (model_id, effort) in choices {
+                assert_eq!(saved.remembered_model_reasoning_effort("openrouter", model_id), Some(effort));
+                assert_eq!(saved.remembered_model_reasoning_effort("other-provider", model_id), None);
+            }
+            assert_eq!(saved.workbench_reasoning_effort, None);
+        }).await;
     }
 }

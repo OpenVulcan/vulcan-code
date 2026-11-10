@@ -136,10 +136,10 @@ pub(crate) fn active_reasoning_selection_effort(
     provider_configuration.workbench_reasoning_effort
 }
 
-/// Builds the WebUI reasoning selector snapshot from the shared provider configuration.
-/// 从共享 Provider 配置构建 WebUI 思考选择器快照。
+/// Projects the configured effort against exact model capabilities, or returns no selector without a model.
+/// 按精确模型能力投影所配置的档位，未选模型时不返回选择器。
 pub(crate) fn reasoning_selection(
-    provider_configuration: &ProviderConfigurationFile,
+    configured: Option<ReasoningEffortLevel>,
     capabilities: Option<&vulcan_ai_contract::ModelCapabilities>,
 ) -> Option<ReasoningSelectionSummary> {
     let capabilities = capabilities?;
@@ -219,7 +219,6 @@ pub(crate) fn reasoning_selection(
             }
         })
         .collect::<Vec<_>>();
-    let configured = provider_configuration.workbench_reasoning_effort;
     // effectiveEffort shares the exact execution-time resolver so the displayed default cannot diverge from dispatch.
     // effectiveEffort 复用精确的执行期解析器，确保展示默认值不会与分发行为分叉。
     let effective_effort =
@@ -660,10 +659,6 @@ mod tests {
     /// 验证后端只发布当前模型声明的推理档位。
     #[test]
     fn reasoning_selector_uses_active_model_capabilities() {
-        let configuration = ProviderConfigurationFile {
-            workbench_reasoning_effort: Some(ReasoningEffortLevel::Ultra),
-            ..ProviderConfigurationFile::default()
-        };
         let capabilities = vulcan_ai_contract::ModelCapabilities {
             reasoning_efforts: vec![
                 vulcan_ai_contract::ReasoningEffort::Minimal,
@@ -671,7 +666,7 @@ mod tests {
             ],
             ..vulcan_ai_contract::ModelCapabilities::default()
         };
-        let selection = reasoning_selection(&configuration, Some(&capabilities))
+        let selection = reasoning_selection(Some(ReasoningEffortLevel::Ultra), Some(&capabilities))
             .expect("active reasoning levels should create a selector");
         assert_eq!(
             selection
@@ -690,10 +685,6 @@ mod tests {
     /// 验证用户明确选择的 `none` 仍然能够关闭思考。
     #[test]
     fn reasoning_selector_preserves_explicit_none() {
-        let configuration = ProviderConfigurationFile {
-            workbench_reasoning_effort: Some(ReasoningEffortLevel::None),
-            ..ProviderConfigurationFile::default()
-        };
         let capabilities = vulcan_ai_contract::ModelCapabilities {
             reasoning_efforts: vec![
                 vulcan_ai_contract::ReasoningEffort::None,
@@ -702,7 +693,7 @@ mod tests {
             ..vulcan_ai_contract::ModelCapabilities::default()
         };
 
-        let selection = reasoning_selection(&configuration, Some(&capabilities))
+        let selection = reasoning_selection(Some(ReasoningEffortLevel::None), Some(&capabilities))
             .expect("explicit reasoning preference should still expose a selector");
 
         assert_eq!(selection.selected_effort, "none");
@@ -713,7 +704,6 @@ mod tests {
     /// 验证 MiniMax 仅暴露精确开关值，并默认启用自适应思考。
     #[test]
     fn reasoning_selector_removes_duplicate_default_and_enables_minimax() {
-        let configuration = ProviderConfigurationFile::default();
         let capabilities = vulcan_ai_contract::ModelCapabilities {
             reasoning_efforts: vec![
                 vulcan_ai_contract::ReasoningEffort::None,
@@ -722,7 +712,7 @@ mod tests {
             ..vulcan_ai_contract::ModelCapabilities::default()
         };
 
-        let selection = reasoning_selection(&configuration, Some(&capabilities))
+        let selection = reasoning_selection(None, Some(&capabilities))
             .expect("MiniMax reasoning switch should create a selector");
 
         assert_eq!(
@@ -747,9 +737,8 @@ mod tests {
             ..vulcan_ai_contract::ModelCapabilities::default()
         };
 
-        let selection =
-            reasoning_selection(&ProviderConfigurationFile::default(), Some(&capabilities))
-                .expect("MiniMax M2.x automatic reasoning should remain visible");
+        let selection = reasoning_selection(None, Some(&capabilities))
+            .expect("MiniMax M2.x automatic reasoning should remain visible");
 
         assert_eq!(selection.options.len(), 1);
         assert_eq!(selection.options[0].value, "adaptive");
@@ -773,9 +762,8 @@ mod tests {
             ..vulcan_ai_contract::ModelCapabilities::default()
         };
 
-        let selection =
-            reasoning_selection(&ProviderConfigurationFile::default(), Some(&capabilities))
-                .expect("DeepSeek reasoning toggle should create a selector");
+        let selection = reasoning_selection(None, Some(&capabilities))
+            .expect("DeepSeek reasoning toggle should create a selector");
 
         assert_eq!(
             selection
@@ -797,9 +785,8 @@ mod tests {
             ..vulcan_ai_contract::ModelCapabilities::default()
         };
 
-        let selection =
-            reasoning_selection(&ProviderConfigurationFile::default(), Some(&capabilities))
-                .expect("fixed reasoning support should remain visible");
+        let selection = reasoning_selection(None, Some(&capabilities))
+            .expect("fixed reasoning support should remain visible");
 
         assert_eq!(selection.options.len(), 1);
         assert_eq!(selection.options[0].value, "fixed-on");
@@ -816,9 +803,8 @@ mod tests {
             ..vulcan_ai_contract::ModelCapabilities::default()
         };
 
-        let selection =
-            reasoning_selection(&ProviderConfigurationFile::default(), Some(&capabilities))
-                .expect("unsupported reasoning should remain visible");
+        let selection = reasoning_selection(None, Some(&capabilities))
+            .expect("unsupported reasoning should remain visible");
 
         assert_eq!(selection.options.len(), 1);
         assert_eq!(selection.options[0].value, "fixed-off");
@@ -840,9 +826,8 @@ mod tests {
             ..vulcan_ai_contract::ModelCapabilities::default()
         };
 
-        let selection =
-            reasoning_selection(&ProviderConfigurationFile::default(), Some(&capabilities))
-                .expect("fixed-off reasoning should remain visible");
+        let selection = reasoning_selection(None, Some(&capabilities))
+            .expect("fixed-off reasoning should remain visible");
 
         assert_eq!(selection.options.len(), 1);
         assert_eq!(selection.selected_effort, "fixed-off");
@@ -857,9 +842,8 @@ mod tests {
             ..vulcan_ai_contract::ModelCapabilities::default()
         };
 
-        let selection =
-            reasoning_selection(&ProviderConfigurationFile::default(), Some(&capabilities))
-                .expect("unknown text model should expose host reasoning defaults");
+        let selection = reasoning_selection(None, Some(&capabilities))
+            .expect("unknown text model should expose host reasoning defaults");
 
         assert_eq!(
             selection

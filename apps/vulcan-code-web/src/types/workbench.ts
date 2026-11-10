@@ -269,6 +269,9 @@ export interface WorkbenchSnapshot {
   // Persisted global answer mode copied into new conversations.
   // 复制到新会话的已持久化全局回答模式。
   defaultAnswerMode: AnswerMode;
+  // Saved global permission default for new sessions.
+  // 新会话已保存的全局权限默认值。
+  defaultPermissionMode?: import("@/service/permission-mode").PermissionMode;
   // Configured permission judge backend; null until one is set up, which keeps auto-approve
   // unavailable. Absent from older test fixtures.
   // 已配置的权限判定后端；设置完成前为 null，此时自动审批不可用。旧测试夹具中可缺省。

@@ -185,7 +185,7 @@ export function ComposerPanel(props: {
   ) => Promise<boolean>;
   // Persists one selected workbench reasoning effort.
   // 持久化单个选中的工作台思考档位。
-  onSelectWorkbenchReasoningEffort: (effort: string) => Promise<boolean>;
+  onSelectWorkbenchReasoningEffort: (effort: string, choice: ModelPickerChoice) => Promise<boolean>;
   // Routes one projected slash command through the workbench shell.
   // 通过工作台外壳路由单个投影 slash 指令。
   onSlashCommand: (command: ComposerSlashCommandSummary) => ComposerSlashCommandResult;
@@ -369,15 +369,14 @@ export function ComposerPanel(props: {
     reasoningEffort,
     reasoningEffortOptions,
     defaultReasoningEffort,
-    submittedReasoningEffort,
     reasoningPickerOpenSignal,
     selectModel: handleModelChoiceChange,
     selectReasoningEffort: handleReasoningEffortChange,
-    openModelPicker,
-    openReasoningPicker,
+    openModelPicker, openReasoningPicker,
+    flushReasoningSelection,
   } = useComposerModelSelection({
     conversationScopeKey: draftSlotKey,
-    persistReasoningSelection: Boolean(props.conversationId),
+    useSessionReasoningSelection: Boolean(props.conversationId),
     providers: props.providers,
     reasoningSelection: props.reasoningSelection,
     onSelectModel: props.onSelectWorkbenchModel,
@@ -392,12 +391,9 @@ export function ComposerPanel(props: {
         connectionId: activeModelChoice.connectionId,
       }
     : null, [activeModelChoice]);
-  // Existing sessions persist picker changes through dedicated RPCs, so submissions must not echo
-  // rendered model or reasoning values back into Meta. Drafts still carry their initial selection.
-  // 已有会话通过专用 RPC 持久化选择器变更，因此提交不得把渲染出的模型或思考值回写 Meta；
-  // 草稿仍携带首次选择。
+  // Existing sessions own their next route in Core; only a draft submits its initial model identity.
+  // 已有会话的下一路线由 Core 持有；仅草稿提交首个模型身份。
   const submittedModelSelection = props.conversationId ? null : activeModelSelection;
-  const submittedSessionReasoningEffort = props.conversationId ? null : submittedReasoningEffort;
   // pendingModelSelectionRef retains the latest model/account persistence request until submission.
   // pendingModelSelectionRef 将最新模型或账号持久化请求保留到提交边界。
   const pendingModelSelectionRef = React.useRef<Promise<boolean> | null>(null);
@@ -574,11 +570,11 @@ export function ComposerPanel(props: {
     attachments,
     projectAttachmentsForSubmission: attachmentPreparation.projectForSubmission,
     executionMode,
-    reasoningEffort: submittedSessionReasoningEffort,
+    reasoningEffort: null,
     modelSelection: submittedModelSelection,
     captureSessionSettings: draftSessionSettings.captureSubmissionSettings,
     clearSessionSettings: draftSessionSettings.clearSubmissionSettings,
-    beforeSubmit: async () => await flushComposerRouteSelections() && await answerMode.flush() && await permissionMode.flush(),
+    beforeSubmit: async () => await flushComposerRouteSelections() && await flushReasoningSelection() && await answerMode.flush() && await permissionMode.flush(),
     isConversationRunning: props.isConversationRunning,
     isDraftReplacementActive: isPendingPromptEditActive,
     clearForSubmission,

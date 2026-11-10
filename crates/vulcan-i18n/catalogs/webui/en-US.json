@@ -1,4 +1,8 @@
 {
+  "settings.defaultPermissionMode.title": "Default approval mode",
+  "settings.defaultPermissionMode.hint": "Applies when a new conversation starts. A choice made in the conversation takes precedence.",
+  "settings.defaultPermissionMode.autoApproveUnavailable": "Automatic approval is unavailable. New conversations use Workspace write until a permission judge is configured.",
+  "settings.defaultPermissionMode.fullAccessConfirmBody": "New conversations will run tools with full access by default. Tool calls can modify files outside the workspace and run commands without approval.",
   "settings.composerEnterSend.label": "Enter send behavior",
   "settings.composerEnterSend.description": "While a task is running, Enter uses the selected behavior and Ctrl+Enter uses the opposite. An idle conversation starts immediately.",
   "settings.composerEnterSend.queue": "Queue",

@@ -75,7 +75,7 @@ pub(crate) fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot 
         providers: Vec::new(),
         mcp_servers: mcp_servers(&provider_configuration),
         mcp_tools: Vec::new(),
-        reasoning_selection: reasoning_selection(&provider_configuration, None),
+        reasoning_selection: None,
         thinking_display_mode: workbench_thinking_display_mode(&provider_configuration),
         tool_collapse_default_enabled: Some(
             provider_configuration
@@ -99,6 +99,9 @@ pub(crate) fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot 
         voice_input: None,
         output_style_catalog: output_style_catalog_summary(&provider_configuration),
         default_answer_mode: crate::answer_mode::global_answer_mode(&provider_configuration),
+        default_permission_mode: provider_configuration
+            .default_permission_mode
+            .unwrap_or_default(),
         permission_judge_backend: provider_configuration.permission_judge.backend,
         composer_slash_commands: vulcan_service_api::composer_slash_command_catalog(),
         pending_prompts: Vec::new(),

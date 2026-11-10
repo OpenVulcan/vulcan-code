@@ -35,6 +35,7 @@ import { ToolChainSettingsSection } from "./tool-chain-settings";
 import { ThinkingPopupSettingsSection } from "./thinking-popup-settings";
 import { ConversationLinkSettingsSection } from "./conversation-link-settings";
 import { ComposerEnterSendSettingsSection } from "./composer-enter-send-settings";
+import { DefaultPermissionModeSettingsSection } from "./default-permission-mode-settings";
 import { SystemPromptSettingsCard } from "./system-prompt-settings";
 import type { SettingsActionProps } from "@/components/features/settings/settings-action-types";
 import {
@@ -155,6 +156,7 @@ function SettingsRoutedPage(props: SettingsFeatureContentProps) {
         onOpenUsageStatistics={props.onOpenUsageStatistics}
         outputStyleSettings={<>
           <ComposerEnterSendSettingsSection />
+          <DefaultPermissionModeSettingsSection judgeConfigured={!!props.workbench.permissionJudgeBackend} mode={props.workbench.defaultPermissionMode} />
           <OutputStyleSettingsSection actions={props.actions} outputStyleCatalog={props.workbench.outputStyleCatalog} />
           <AnswerModeSettingsSection actions={props.actions} defaultAnswerMode={props.workbench.defaultAnswerMode} />
           <ToolCollapseSettingsSection />

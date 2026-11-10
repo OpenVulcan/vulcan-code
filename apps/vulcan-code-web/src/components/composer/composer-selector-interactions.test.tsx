@@ -14,6 +14,7 @@ import { PendingPromptQueueStrip } from "./composer-prompt-controls";
 import { DedicatedComposerContext } from "./dedicated/dedicated-session-controls";
 import type { DedicatedMemorySelection } from "@/service/dedicated-memory";
 import { useComposerPlanMode } from "./composer-panel/use-composer-plan-mode";
+import { useComposerModelSelection, type ComposerModelSelectionController } from "./composer-panel/use-composer-model-selection";
 import { ComposerPanelToolbarRight } from "./composer-panel/toolbar-right";
 import { loadPublicAiSettings, loadPublicAiSessionProviderToolSelections, queryPublicAiConnectionUsage, savePublicAiSessionProviderToolSelections } from "@/service/settings-actions-service";
 
@@ -66,6 +67,65 @@ function providers(): ProviderSummary[] {
   return [{ id: "a", sourceProviderId: "p", connectionId: "a", accountName: "Account A", name: "Provider", status: "ready",
     models: [{ id: "first", name: "First", active: true }, { id: "second", name: "Second", active: false }] }];
 }
+
+it("restores the target model's remembered effort and adopts the supported fallback after a catalog update", async () => {
+  // saved observes the exact route that owns an explicit draft choice.
+  // saved 观察显式草稿选择所属的精确路线。
+  const saved = vi.fn().mockResolvedValue(true);
+  // rows projects distinct selections even when both models offer the same levels.
+  // 即使两个模型提供相同档位，rows 也会投影彼此独立的选择。
+  const rows = providers().map((provider) => ({
+    ...provider,
+    models: provider.models?.map((model) => ({
+      ...model,
+      reasoningSelection: {
+        options: ["low", "high"].map((value) => ({ value, label: value })),
+        selectedEffort: model.id === "first" ? "low" : "high",
+        defaultEffort: "low",
+      },
+    })),
+  }));
+  // selection is the real hook result from the most recent render.
+  // selection 是最近一次渲染的真实钩子结果。
+  let selection!: ComposerModelSelectionController;
+  // Probe takes a catalog snapshot and exposes its rendered controller to the test.
+  // Probe 接收目录快照，将渲染出的控制器暴露给测试。
+  function Probe({ catalog }: { catalog: ProviderSummary[] }) {
+    selection = useComposerModelSelection({
+      conversationScopeKey: "draft:reasoning",
+      useSessionReasoningSelection: false,
+      providers: catalog,
+      reasoningSelection: null,
+      onSelectModel: async () => true,
+      onSelectReasoningEffort: saved,
+    });
+    return null;
+  }
+  await render(<Probe catalog={rows} />);
+  expect(selection.reasoningEffort).toBe("low");
+  // second is located by identity, independently of catalog order.
+  // second 按身份定位，与目录顺序无关。
+  const second = modelPickerChoicesFromProviders(rows).find((choice) => choice.modelId === "second")!;
+  await act(async () => { await selection.selectModel(second); });
+  expect(selection.reasoningEffort).toBe("high");
+  await act(async () => selection.selectReasoningEffort("low"));
+  expect(saved).toHaveBeenCalledExactlyOnceWith("low", expect.objectContaining({
+    providerId: second.providerId, connectionId: second.connectionId, modelId: second.modelId,
+  }));
+  // upgraded removes the old level only from the selected model.
+  // upgraded 仅从当前选中模型移除旧档位。
+  const upgraded = rows.map((provider) => ({
+    ...provider,
+    models: provider.models?.map((model) => model.id === second.modelId ? {
+      ...model, reasoningSelection: {
+        options: [{ value: "medium", label: "medium" }], selectedEffort: "medium", defaultEffort: "medium",
+      },
+    } : model),
+  }));
+  await render(<Probe catalog={upgraded} />);
+  expect(selection.reasoningEffort).toBe("medium");
+  expect(saved).toHaveBeenCalledTimes(1);
+});
 
 it("selects the second exact model with ArrowDown and Enter through real cmdk", async () => {
   const select = vi.fn();

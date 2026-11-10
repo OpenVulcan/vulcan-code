@@ -1,4 +1,8 @@
 {
+  "settings.defaultPermissionMode.title": "默认审批模式",
+  "settings.defaultPermissionMode.hint": "在新会话首次发送时生效。会话中手动选择的权限模式优先。",
+  "settings.defaultPermissionMode.autoApproveUnavailable": "自动审批当前不可用。配置权限判定器前，新会话使用工作区修改模式。",
+  "settings.defaultPermissionMode.fullAccessConfirmBody": "新会话默认以完全权限运行工具。工具可以修改工作区以外的文件，也可以直接运行命令。",
   "settings.composerEnterSend.label": "Enter 发送方式",
   "settings.composerEnterSend.description": "任务运行时，Enter 使用选定方式，Ctrl+Enter 使用相反方式。会话空闲时直接发送。",
   "settings.composerEnterSend.queue": "排队",

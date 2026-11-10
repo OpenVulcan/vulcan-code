@@ -1,4 +1,8 @@
 {
+  "settings.defaultPermissionMode.title": "預設審批模式",
+  "settings.defaultPermissionMode.hint": "新對話第一次發送時生效。對話中手動選擇的權限模式優先。",
+  "settings.defaultPermissionMode.autoApproveUnavailable": "自動審批目前無法使用。設定權限判定器前，新對話會使用工作區修改模式。",
+  "settings.defaultPermissionMode.fullAccessConfirmBody": "新對話預設以完整權限執行工具。工具可以修改工作區以外的檔案，也可以直接執行指令。",
   "settings.composerEnterSend.label": "Enter 發送方式",
   "settings.composerEnterSend.description": "任務執行時，Enter 使用所選方式，Ctrl+Enter 使用相反方式。對話閒置時直接發送。",
   "settings.composerEnterSend.queue": "排隊",

@@ -456,7 +456,14 @@ async fn apply_submission_session_settings(
         ));
     }
     let configuration = runtime.configuration_snapshot()?;
-    let (global_output_style_selection, global_answer_mode, global_prompt_skills) = {
+    // New-session defaults come from the same immutable settings snapshot.
+    // 新会话默认值来自同一份不可变设置快照。
+    let (
+        global_output_style_selection,
+        global_answer_mode,
+        global_permission_mode,
+        global_prompt_skills,
+    ) = {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -468,6 +475,7 @@ async fn apply_submission_session_settings(
         (
             provider_configuration.prompt.output_style,
             crate::answer_mode::global_answer_mode(provider_configuration),
+            crate::permission_mode::effective_default_permission_mode(provider_configuration),
             provider_configuration.prompt_skills.clone(),
         )
     };
@@ -613,13 +621,13 @@ async fn apply_submission_session_settings(
                 .unwrap_or(global_answer_mode),
             updated_at_ms,
         )?;
-        if let Some(mode) = settings.and_then(|settings| settings.permission_mode) {
-            crate::permission_mode::set_session_permission_mode_v1(
-                handle.as_ref(),
-                mode,
-                updated_at_ms,
-            )?;
-        }
+        crate::permission_mode::set_session_permission_mode_v1(
+            handle.as_ref(),
+            settings
+                .and_then(|settings| settings.permission_mode)
+                .unwrap_or(global_permission_mode),
+            updated_at_ms,
+        )?;
         Some(
             handle
                 .read(|document| document.metadata.config.selection.clone())
@@ -793,7 +801,7 @@ fn validated_submission_model_selection_configuration(
 /// 返回值
 /// The fully resolved immutable route, or an explicit unavailable/disabled error without fallback.
 /// 返回完整解析的不可变路由；若不可用或被禁用，则返回明确错误且不降级。
-fn resolve_enabled_submission_model_selection(
+pub(crate) fn resolve_enabled_submission_model_selection(
     runtime: &vulcan_provider_adapters::PublicAiRuntime,
     configuration: &vulcan_provider_adapters::PersistedAiConfiguration,
     selection: &SubmissionModelSelection,
@@ -1675,6 +1683,7 @@ mod submission_model_selection_tests {
         );
         let rows = crate::public_ai_provider_rows_for_selection(
             &configuration,
+            None,
             &runtime,
             Some(&workbench_selection),
         )
@@ -3172,6 +3181,33 @@ async fn service_start_conversation_execution(
         } else {
             (None, None)
         };
+    // Bind the initial reasoning level to the exact model resolved for the new session.
+    // 将首个思考档位绑定到为新会话解析出的精确模型。
+    let reasoning_effort = new_session_model.as_ref().map(|selection| {
+        // remembered is a model-scoped default, used only when the new draft supplied no level.
+        // remembered 是模型范围默认值，仅在新草稿未指定档位时使用。
+        let remembered = agent_runtime.provider_configuration.remembered_model_reasoning_effort(
+            &selection.route.provider.id,
+            &selection.model.id,
+        );
+        // effective validates even a draft that was open before the current manifest arrived.
+        // effective 会校验当前清单到达前就已打开的草稿。
+        let effective = vulcan_agent_runtime::agent_runtime::provider_reasoning::resolve_effective_reasoning_effort(
+            &selection.model.capabilities,
+            reasoning_effort.as_deref().and_then(crate::parse_reasoning_effort).or(remembered),
+        );
+        crate::session_request_config_v1::reasoning_effort_level_key(effective)
+    }).or(reasoning_effort);
+    // model_selection pins the resolved global default as well as an explicit draft model.
+    // model_selection 同时固定已解析的全局默认模型及显式草稿模型。
+    let model_selection = new_session_model
+        .as_ref()
+        .map(|selection| SubmissionModelSelection {
+            provider_id: selection.route.provider.id.clone(),
+            connection_id: selection.route.connection.id.clone(),
+            model_id: selection.model.id.clone(),
+        })
+        .or(model_selection);
     let title_generation_request = (materialized_session.kind
         == PromptSessionMaterializationKind::Created
         && !prompt.is_empty())

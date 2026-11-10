@@ -284,18 +284,18 @@ fn toolbar(app: &App, area: Rect, buf: &mut Buffer) {
     // 右侧从右边缘向左排布；放不下的项从左侧开始省略。
     let model = app.model().map(|m| m.label.clone()).unwrap_or_default();
     let chip = Style::new().fg(theme.fg).bg(theme.control_bg());
-    let mut right: Vec<(String, Style, UiAction)> = vec![
-        (
-            format!("{} ▾", truncate(&model, 28)),
-            chip,
-            UiAction::App(AppCommand::SelectModel),
-        ),
-        (
+    let mut right: Vec<(String, Style, UiAction)> = vec![(
+        format!("{} ▾", truncate(&model, 28)),
+        chip,
+        UiAction::App(AppCommand::SelectModel),
+    )];
+    if !app.efforts.is_empty() {
+        right.push((
             format!("◔ {}", effort_label(app.effort)),
             chip.fg(theme.muted_fg),
             UiAction::App(AppCommand::CycleReasoning),
-        ),
-    ];
+        ));
+    }
     if app.run_phase().is_active()
         && let Some(id) = app.selected.clone()
     {

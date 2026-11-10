@@ -815,6 +815,10 @@ where
         // rows 是从同一不可变选择派生的完整供应商投影。
         let rows = public_ai_provider_rows_for_selection(
             configuration,
+            guard
+                .agent_runtime
+                .as_ref()
+                .map(|runtime| &runtime.provider_configuration),
             runtime,
             effective_selection.as_ref(),
         )?;
@@ -877,11 +881,10 @@ where
             .as_ref()
             .map(|agent_runtime| agent_runtime.provider_configuration.clone())
         {
-            planned_workbench.reasoning_selection = crate::reasoning_selection(
+            planned_workbench.reasoning_selection = crate::workbench_model_reasoning_selection(
                 &provider_configuration,
-                effective_selection
-                    .as_ref()
-                    .map(|selection| &selection.model.capabilities),
+                effective_selection.as_ref(),
+                selected_runtime_state,
             );
             planned_workbench.composer_attachment_capabilities =
                 crate::composer_attachment_capabilities(

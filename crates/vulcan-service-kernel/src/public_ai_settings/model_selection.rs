@@ -257,14 +257,35 @@ pub(crate) async fn service_select_public_ai_model(
         session_context_window_selection,
         target_context_limit,
     )?;
-    // A model-picker action is the only model-change boundary allowed to replace an incompatible
-    // reasoning level. Supported levels remain byte-for-byte session authority.
-    // 模型选择器动作是模型变化时唯一允许替换不兼容思考档位的边界；受支持档位逐字保持会话权威。
+    // remembered_reasoning comes from the exact target model, not the model being left.
+    // remembered_reasoning 来自精确的目标模型，与正在离开的模型无关。
+    let remembered_reasoning = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("Failed to lock service state: {error}"))?;
+        guard.agent_runtime.as_ref().and_then(|agent_runtime| {
+            agent_runtime
+                .provider_configuration
+                .remembered_model_reasoning_effort(&request.provider_id, &request.model_id)
+        })
+    };
+    // A model change resolves the target's remembered effort against the current route capabilities.
+    // 切换模型时，按当前路线能力解析目标模型的记忆档位。
     let reasoning_override = session_handle
         .as_ref()
         .map(|handle| -> Result<_, String> {
             let next_request =
                 crate::session_request_config_v1::capture_next_request_config_v1(handle.as_ref())?;
+            if next_request.provider.as_deref() != Some(request.provider_id.as_str())
+                || next_request.model.as_deref() != Some(request.model_id.as_str())
+            {
+                return Ok(Some(
+                    vulcan_agent_runtime::agent_runtime::provider_reasoning::resolve_effective_reasoning_effort(
+                        &selected_model.model.capabilities,
+                        remembered_reasoning,
+                    ),
+                ));
+            }
             let current_reasoning = next_request
                 .thinking_level
                 .as_deref()
@@ -349,6 +370,14 @@ pub(crate) async fn service_select_public_ai_model(
                                     session_id,
                                     &pending_target,
                                 )?;
+                            if let Some(effort) = reasoning_override
+                                && let Some(runtime_state) =
+                                    workspace.session_runtime_state.get_mut(&session_id)
+                            {
+                                // The mirror tracks the pending picker; dispatch still reads the active V1 request.
+                                // 镜像跟踪待生效选择器；分发仍读取活动 V1 请求。
+                                runtime_state.active_reasoning_effort = Some(effort);
+                            }
                             if release_window_selection
                                 && let Some(runtime_state) =
                                     workspace.session_runtime_state.get_mut(&session_id)
