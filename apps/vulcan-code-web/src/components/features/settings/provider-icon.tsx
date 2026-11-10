@@ -30,6 +30,7 @@ import qwenIcon from "@/assets/provider-icons/provider-qwen.svg"
 import stepFunIcon from "@/assets/provider-icons/provider-stepfun.svg"
 import tavilyIcon from "@/assets/provider-icons/provider-tavily.svg"
 import tokenRhythmIcon from "@/assets/provider-icons/provider-tokenrhythm.svg"
+import xiaomiIcon from "@/assets/provider-icons/provider-xiaomi.png"
 // TypeSafe's supplied path is centered on the standard square icon canvas.
 // TypeSafe 提供的路径居中放置于标准方形图标画布。
 import typeSafeIcon from "@/assets/provider-icons/provider-typesafe.svg"
@@ -67,6 +68,7 @@ export type ProviderIconKey =
   | "stepfun"
   | "tavily"
   | "tokenrhythm"
+  | "xiaomi"
   | "typesafe"
   | "vertex"
   | "zhipu"
@@ -140,6 +142,7 @@ const providerIconLibrary: Readonly<Record<ProviderIconKey, ProviderIconAsset>> 
   stepfun: { light: stepFunIcon, themeSurface: true, transparent: true, monochrome: true },
   tavily: { light: tavilyIcon, monochrome: true, transparent: true },
   tokenrhythm: { light: tokenRhythmIcon, monochrome: true, transparent: true },
+  xiaomi: { light: xiaomiIcon },
   typesafe: { light: typeSafeIcon, monochrome: true, transparent: true },
   vertex: { light: vertexIcon },
   zhipu: { light: zhipuIcon },
@@ -172,6 +175,7 @@ const providerIconMap: Readonly<Record<string, ProviderIconKey>> = {
   stepfun: "stepfun",
   tavily: "tavily",
   tokenrhythm: "tokenrhythm",
+  xiaomi: "xiaomi",
   typesafe: "typesafe",
   vertex: "vertex",
   xai: "grok",

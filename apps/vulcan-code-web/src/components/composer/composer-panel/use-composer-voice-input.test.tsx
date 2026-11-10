@@ -9,10 +9,16 @@ import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import type { VoiceInputSummary } from "@/types";
 import { useComposerVoiceInput } from "./use-composer-voice-input";
 import { saveVoiceInputDevice } from "./voice-input-device";
+import { encodeVoiceInputWav } from "./voice-input-wav";
 
 vi.mock("@/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }), formatMessage: (template: string) => template }));
 vi.mock("@/ui-kit/primitives/toast", () => ({ toast: { error: vi.fn(), info: vi.fn(), success: vi.fn() } }));
 vi.mock("@/service/voice-input-service", () => ({ transcribeVoiceInput: vi.fn(), loadVoiceInputSettings: vi.fn() }));
+// The browser decoder is exercised independently of the push-to-talk lifecycle.
+// 浏览器音频解码与按住说话的生命周期分开验证。
+vi.mock("./voice-input-wav", () => ({
+  encodeVoiceInputWav: vi.fn(async () => new Blob(["pcm"], { type: "audio/wav" })),
+}));
 
 const CONFIGURED: VoiceInputSummary = { configured: true, maxDurationSeconds: 120 };
 // Sample CJK draft and transcript; the test checks how they join, not what they say.
@@ -147,7 +153,8 @@ it("records while held, holds sending, and inserts the selected transcript at th
   await settle();
 
   expect(transcribe).toHaveBeenCalledTimes(1);
-  expect(transcribe.mock.calls[0]![0].type).toBe("audio/webm");
+  expect(vi.mocked(encodeVoiceInputWav).mock.calls[0]![0].type).toBe("audio/webm");
+  expect(transcribe.mock.calls[0]![0].type).toBe("audio/wav");
   expect(track.stop).toHaveBeenCalled();
   expect(state).toEqual({ draft: "Hello world", busy: false });
   expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([6, 11]);

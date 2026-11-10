@@ -9,14 +9,15 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/ui-kit/primitiv
 import type { VoiceInputSummary } from "@/types";
 import { VoiceInputCard } from "@/components/composer/composer-panel/voice-input-card";
 import { readVoiceInputDevice, voiceInputAudioConstraints } from "@/components/composer/composer-panel/voice-input-device";
+import { encodeVoiceInputWav } from "./voice-input-wav";
 
 // The settings section loads with the quick setup dialog, keeping settings styles out of the workbench chunk.
 // 设置节随快速设置对话框加载，使设置样式不进入工作台分块。
 const LazyVoiceInputSettingsSection = React.lazy(() => import("@/components/features/settings/voice-input-settings")
   .then((module) => ({ default: module.VoiceInputSettingsSection })));
 
-// Recorder formats in preference order; every one maps to an extension the service accepts.
-// 按偏好排列的录音格式；每一种都对应服务接受的扩展名。
+// Keep the browser's native recording formats and encode the completed recording as PCM WAV for ASR.
+// 保留浏览器原生录音格式，录制完成后编码为 PCM WAV 供语音识别使用。
 const RECORDING_MIME_TYPES = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"];
 
 // Recordings shorter than this are treated as a tap, not speech.
@@ -117,7 +118,11 @@ export function VoiceInputButton(props: VoiceInputButtonProps) {
     }
     setPhase("transcribing");
     try {
-      const { text } = await transcribeVoiceInput(new Blob(current.chunks, { type: mimeType }));
+      // Decode after stopping so cancelled recordings never incur conversion or a provider call.
+      // 停止后再解码，取消的录音无需转换或调用供应商。
+      const recording = await encodeVoiceInputWav(new Blob(current.chunks, { type: mimeType }));
+      if (session.current !== current) return;
+      const { text } = await transcribeVoiceInput(recording);
       if (text) onTranscript(text);
       else toast.info(t("composer.voice.noSpeech"));
     } catch (cause) {

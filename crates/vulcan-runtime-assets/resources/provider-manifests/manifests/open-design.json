@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "open-design",
-  "revision": 10,
-  "published_at": "2026-11-08T06:25:07Z",
+  "revision": 11,
+  "published_at": "2026-11-10T12:27:06Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -441,6 +441,9 @@
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
+        "input_resources": ["image", "audio"],
+        "context_limit": 1048000,
+        "output_limit": 32000,
         "evidence_revision": "open-design.official-efforts.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.gateway.2026-10-14",
@@ -464,6 +467,9 @@
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
+        "input_resources": ["image", "audio"],
+        "context_limit": 1048000,
+        "output_limit": 32000,
         "evidence_revision": "open-design.official-efforts.2026-11-07"
       },
       "provenance_ref": "builtin:open-design.gateway.2026-10-14",

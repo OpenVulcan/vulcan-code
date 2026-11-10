@@ -2246,6 +2246,19 @@
       ]
     },
     {
+      "key": "mimo-v2.5-asr",
+      "aliases": [],
+      "context_window": 8192,
+      "input_modalities": [
+        "audio",
+        "text"
+      ],
+      "output_modalities": [],
+      "output_limit": 2048,
+      "reasoning": "unsupported",
+      "reasoning_control": "fixed_off"
+    },
+    {
       "key": "mimo-v2.5-pro",
       "aliases": [
         "xiaomi/mimo-v2.5-pro"
@@ -2266,21 +2279,65 @@
       ]
     },
     {
+      "key": "mimo-v2.5-tts",
+      "aliases": [],
+      "context_window": 8192,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "output_limit": 8192,
+      "reasoning": "unsupported",
+      "reasoning_control": "fixed_off"
+    },
+    {
+      "key": "mimo-v2.5-tts-voiceclone",
+      "aliases": [],
+      "context_window": 8192,
+      "input_modalities": [
+        "audio",
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "output_limit": 8192,
+      "reasoning": "unsupported",
+      "reasoning_control": "fixed_off"
+    },
+    {
+      "key": "mimo-v2.5-tts-voicedesign",
+      "aliases": [],
+      "context_window": 8192,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "audio"
+      ],
+      "output_limit": 8192,
+      "reasoning": "unsupported",
+      "reasoning_control": "fixed_off"
+    },
+    {
       "key": "mimo-v2.6-flash",
       "aliases": [
         "xiaomi/mimo-v2.6-flash-20260921",
         "xiaomi: mimo-v2.6-flash"
       ],
-      "context_window": 1048000,
+      "context_window": 1048576,
       "input_modalities": [
         "audio",
         "image",
-        "text"
+        "text",
+        "video"
       ],
       "output_modalities": [
         "text"
       ],
-      "output_limit": 32000,
+      "output_limit": 131072,
       "reasoning": "native",
       "reasoning_control": "toggle",
       "reasoning_efforts": [
@@ -2294,16 +2351,38 @@
         "xiaomi/mimo-v2.6-pro-20260921",
         "xiaomi: mimo-v2.6-pro"
       ],
-      "context_window": 1048000,
+      "context_window": 1048576,
       "input_modalities": [
         "audio",
         "image",
-        "text"
+        "text",
+        "video"
       ],
       "output_modalities": [
         "text"
       ],
-      "output_limit": 32000,
+      "output_limit": 131072,
+      "reasoning": "native",
+      "reasoning_control": "toggle",
+      "reasoning_efforts": [
+        "none",
+        "high"
+      ]
+    },
+    {
+      "key": "mimo-v2.6-pro-ultraspeed",
+      "aliases": [],
+      "context_window": 1048576,
+      "input_modalities": [
+        "audio",
+        "image",
+        "text",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "output_limit": 131072,
       "reasoning": "native",
       "reasoning_control": "toggle",
       "reasoning_efforts": [

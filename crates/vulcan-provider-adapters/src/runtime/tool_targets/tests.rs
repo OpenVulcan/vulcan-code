@@ -10,6 +10,100 @@ use crate::parse_openai_model_catalog;
 use std::sync::Arc;
 use vulcan_llm_core::OPENAI_CHAT_PROFILE_ID;
 
+/// Verifies MiMo publishes the correct catalog and tool candidates for each credential type.
+/// 验证 MiMo 按凭据类型发布正确的模型目录和工具候选。
+#[test]
+fn xiaomi_catalog_keeps_plan_chat_and_public_api_speech_selectable() {
+    // Use the real bundled generation with a synthetic API discovery response.
+    // 使用真实随包代际和合成 API 发现响应。
+    let runtime = PublicAiRuntime::unavailable().expect("isolated runtime");
+    // Keep the API and three regional plans in the same account graph to check their isolation.
+    // 将 API 与三个区域套餐放入同一账号图中，检查各入口是否隔离。
+    let mut configuration = PersistedAiConfiguration::default();
+    // Resolve credentials against the same registry used to publish the effective generation.
+    // 使用发布有效代际时的同一注册表解析凭据。
+    let providers = runtime.providers().expect("bundled providers");
+    for (entry, profile) in [
+        ("public-api", "api-key"),
+        ("token-plan-cn", "personal-api-key"),
+        ("token-plan-sgp", "team-api-key"),
+        ("token-plan-ams", "personal-api-key"),
+    ] {
+        // Each connection ID matches its service entry so the assertions locate it by identity.
+        // 连接 ID 与入口标识一致，便于断言按身份定位。
+        let mut account = connection(entry);
+        account.provider_id = String::from("xiaomi");
+        account.service_entry_id = String::from(entry);
+        account.credential_profile_id = String::from(profile);
+        configuration
+            .connection_graph
+            .add_connection(&providers, account)
+            .expect("MiMo credential must register");
+    }
+    install_source_catalog(
+        &runtime,
+        parse_openai_model_catalog(
+            "public-api",
+            1,
+            r#"{"data":[{"id":"mimo-v2.6-flash"},{"id":"mimo-v2.5-asr"},{"id":"mimo-v2.5-tts"},{"id":"unknown-mimo-model"}]}"#,
+        )
+        .expect("synthetic MiMo catalog"),
+    );
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("test runtime")
+        .block_on(runtime.activate_staged_manifest_catalogs(&configuration, &[]))
+        .expect("MiMo generation must publish");
+
+    // Inspect the settings snapshot used to build the selectable models and voice targets.
+    // 检查用于生成可选模型及语音目标的设置快照。
+    let snapshot = runtime
+        .settings_catalog_snapshot(&configuration)
+        .expect("MiMo settings catalog");
+    for entry in [
+        "public-api",
+        "token-plan-cn",
+        "token-plan-sgp",
+        "token-plan-ams",
+    ] {
+        // The shared Flash model must survive both live discovery and a plan's static catalog.
+        // Flash 模型在实时发现和套餐静态目录中都必须保留。
+        let models = &snapshot.catalogs[entry].models;
+        assert!(models.iter().any(|model| model.id == "mimo-v2.6-flash"));
+        assert!(models.iter().all(|model| model.id != "unknown-mimo-model"));
+    }
+    for model_id in ["mimo-v2.5-asr", "mimo-v2.5-tts"] {
+        // The audio model stays enabled for tools and is excluded by the conversation predicate.
+        // 音频模型保留给工具使用，并由对话能力判定排除。
+        let model = snapshot.catalogs["public-api"]
+            .models
+            .iter()
+            .find(|model| model.id == model_id)
+            .expect("discovered speech model must be eligible for provider tools");
+        assert!(!crate::model_supports_text_conversation(
+            &model.capabilities
+        ));
+    }
+    assert!(
+        snapshot
+            .available_provider_tool_targets
+            .iter()
+            .all(|candidate| candidate.connection_id == "public-api")
+    );
+    for capability in [
+        ProviderToolCapabilityKind::SpeechTranscribe,
+        ProviderToolCapabilityKind::SpeechSynthesize,
+    ] {
+        assert!(
+            snapshot
+                .available_provider_tool_targets
+                .iter()
+                .any(|candidate| candidate.connection_id == "public-api"
+                    && candidate.target.contract.capability == capability)
+        );
+    }
+}
+
 /// Verifies tool policy belongs to the published generation rather than the ignored caller configuration.
 /// 验证工具策略属于已发布代际，而不是被忽略的调用者配置参数。
 #[test]

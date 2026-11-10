@@ -1,7 +1,7 @@
 {
   "schema_version": "vulcan.core-models.v1",
-  "revision": 1,
-  "published_at": "2026-11-08T00:00:00Z",
+  "revision": 2,
+  "published_at": "2026-11-10T12:48:21Z",
   "models": [
     {
       "model_id": "beam-free",
@@ -1845,22 +1845,90 @@
       "provenance_ref": "builtin:core.seed.2026-11-08"
     },
     {
+      "model_id": "mimo-v2.5-asr",
+      "display_name": "MiMo V2.5 ASR",
+      "vendor": "xiaomi",
+      "capabilities": {
+        "operations": ["speech_transcribe"],
+        "input_resources": ["audio"],
+        "output_resources": [],
+        "reasoning": "unsupported",
+        "reasoning_control": "fixed_off",
+        "reasoning_efforts": [],
+        "context_limit": 8192,
+        "output_limit": 2048
+      },
+      "verification": "verified",
+      "provenance_ref": "https://mimo.mi.com/docs/en-US/quick-start/model"
+    },
+    {
+      "model_id": "mimo-v2.5-tts",
+      "display_name": "MiMo V2.5 TTS",
+      "vendor": "xiaomi",
+      "capabilities": {
+        "operations": ["speech_synthesize"],
+        "input_resources": [],
+        "output_resources": ["audio"],
+        "reasoning": "unsupported",
+        "reasoning_control": "fixed_off",
+        "reasoning_efforts": [],
+        "context_limit": 8192,
+        "output_limit": 8192
+      },
+      "verification": "verified",
+      "provenance_ref": "https://mimo.mi.com/docs/en-US/quick-start/model"
+    },
+    {
+      "model_id": "mimo-v2.5-tts-voiceclone",
+      "display_name": "MiMo V2.5 TTS Voice Clone",
+      "vendor": "xiaomi",
+      "capabilities": {
+        "operations": ["speech_synthesize"],
+        "input_resources": ["audio"],
+        "output_resources": ["audio"],
+        "reasoning": "unsupported",
+        "reasoning_control": "fixed_off",
+        "reasoning_efforts": [],
+        "context_limit": 8192,
+        "output_limit": 8192
+      },
+      "verification": "verified",
+      "provenance_ref": "https://mimo.mi.com/docs/en-US/quick-start/model"
+    },
+    {
+      "model_id": "mimo-v2.5-tts-voicedesign",
+      "display_name": "MiMo V2.5 TTS Voice Design",
+      "vendor": "xiaomi",
+      "capabilities": {
+        "operations": ["speech_synthesize"],
+        "input_resources": [],
+        "output_resources": ["audio"],
+        "reasoning": "unsupported",
+        "reasoning_control": "fixed_off",
+        "reasoning_efforts": [],
+        "context_limit": 8192,
+        "output_limit": 8192
+      },
+      "verification": "verified",
+      "provenance_ref": "https://mimo.mi.com/docs/en-US/quick-start/model"
+    },
+    {
       "model_id": "mimo-v2.6-flash",
       "display_name": "MiMo V2.6 Flash",
       "vendor": "xiaomi",
       "aliases": ["xiaomi/mimo-v2.6-flash-20260921", "xiaomi: mimo-v2.6-flash"],
       "capabilities": {
         "operations": ["conversation_respond"],
-        "input_resources": ["image", "audio"],
+        "input_resources": ["image", "audio", "video"],
         "output_resources": [],
         "reasoning": "native",
         "reasoning_control": "toggle",
         "reasoning_efforts": ["none", "high"],
-        "context_limit": 1048000,
-        "output_limit": 32000
+        "context_limit": 1048576,
+        "output_limit": 131072
       },
-      "verification": "seeded",
-      "provenance_ref": "builtin:core.seed.2026-11-08"
+      "verification": "verified",
+      "provenance_ref": "https://mimo.mi.com/docs/en-US/quick-start/model"
     },
     {
       "model_id": "mimo-v2.6-pro",
@@ -1869,16 +1937,33 @@
       "aliases": ["xiaomi/mimo-v2.6-pro-20260921", "xiaomi: mimo-v2.6-pro"],
       "capabilities": {
         "operations": ["conversation_respond"],
-        "input_resources": ["image", "audio"],
+        "input_resources": ["image", "audio", "video"],
         "output_resources": [],
         "reasoning": "native",
         "reasoning_control": "toggle",
         "reasoning_efforts": ["none", "high"],
-        "context_limit": 1048000,
-        "output_limit": 32000
+        "context_limit": 1048576,
+        "output_limit": 131072
       },
-      "verification": "seeded",
-      "provenance_ref": "builtin:core.seed.2026-11-08"
+      "verification": "verified",
+      "provenance_ref": "https://mimo.mi.com/docs/en-US/quick-start/model"
+    },
+    {
+      "model_id": "mimo-v2.6-pro-ultraspeed",
+      "display_name": "MiMo V2.6 Pro Ultraspeed",
+      "vendor": "xiaomi",
+      "capabilities": {
+        "operations": ["conversation_respond"],
+        "input_resources": ["image", "audio", "video"],
+        "output_resources": [],
+        "reasoning": "native",
+        "reasoning_control": "toggle",
+        "reasoning_efforts": ["none", "high"],
+        "context_limit": 1048576,
+        "output_limit": 131072
+      },
+      "verification": "verified",
+      "provenance_ref": "https://mimo.mi.com/docs/en-US/quick-start/model"
     },
     {
       "model_id": "minimax-m2.5",
@@ -2741,6 +2826,10 @@
   "provenance": {
     "status": "migrated",
     "sources": [
+      {
+        "url": "https://mimo.mi.com/docs/en-US/quick-start/model",
+        "note": "Official MiMo API model identities, speech operations, multimodal inputs, and published token limits. The V2.6 context size also matches Xiaomi's official Codex configuration."
+      },
       {"url": "builtin:core.seed.2026-11-08", "note": "Seeded from the bundled provider manifests on 2026-11-08: each value comes from the rule that owned the model in the previous common model catalog (official, then cloud platform, then relay); every entry awaits per-model verification against vendor documentation."}
     ]
   }

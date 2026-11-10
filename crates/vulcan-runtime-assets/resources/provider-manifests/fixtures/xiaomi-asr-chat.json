@@ -1,0 +1,132 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "xiaomi-asr-chat",
+  "base_manifest": "xiaomi.json",
+  "production_target_refs": [
+    "xiaomi::public-api.mimo-v2.5-asr"
+  ],
+  "tool_target": {
+    "target_id": "public-api.fixture-asr",
+    "description": "Transcribe one local WAV or MP3 recording.",
+    "service_entry_id": "public-api",
+    "credential_profile_ids": [
+      "api-key"
+    ],
+    "upstream_target_id": "mimo-v2.5-asr",
+    "availability_model_ids_any": [],
+    "display_name": "MiMo V2.5 ASR",
+    "tool_id": "fixture_xiaomi_asr",
+    "capability": "speech_transcribe",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "audio_path": {
+          "type": "string",
+          "minLength": 1,
+          "format": "vulcan-local-path",
+          "description": "Local WAV or MP3 recording path."
+        },
+        "language": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "zh",
+            "en"
+          ]
+        }
+      },
+      "required": [
+        "audio_path"
+      ]
+    },
+    "output": {
+      "kind": "text",
+      "source_path": "/choices/0/message/content",
+      "normalized_result_path": "text"
+    },
+    "execution": {
+      "adapter": "generic_json",
+      "authentication": "bearer_authorization",
+      "endpoint_path": "/fixture/asr",
+      "execution_kind": "http_json_sync"
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.xiaomi-asr-chat",
+    "operation": "speech_transcribe",
+    "carrier": "provider_tool",
+    "input_resources": [
+      "audio"
+    ],
+    "output_resources": [],
+    "tool_target_refs": [
+      "public-api.fixture-asr"
+    ],
+    "request_profile_refs": [
+      "xiaomi.asr.request.v1"
+    ],
+    "upload_channel_refs": [
+      "inline.speech-audio"
+    ],
+    "upload_bindings": [
+      {
+        "source_path": "/audio_path",
+        "target_path": "/audio_data",
+        "upload_channel_refs": [
+          "inline.speech-audio"
+        ],
+        "mime_types_by_extension": {
+          "wav": "audio/wav",
+          "mp3": "audio/mpeg"
+        },
+        "required": true,
+        "remove_source": true
+      }
+    ],
+    "timeout_ms": 60000,
+    "idempotent": false
+  },
+  "required_execution_primitives": [
+    "http_json_sync"
+  ],
+  "arguments": {
+    "audio_path": "xiaomi-speech-fixture.wav"
+  },
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/fixture/asr",
+      "expected_json_body": {
+        "model": "mimo-v2.5-asr",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_audio",
+                "input_audio": {
+                  "data": "data:audio/wav;base64,UklGRkQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YSAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+                }
+              }
+            ]
+          }
+        ],
+        "asr_options": {},
+        "stream": false
+      },
+      "response_status": 200,
+      "response_json_body": {
+        "choices": [
+          {
+            "message": {
+              "content": "A fixture transcript."
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "expected_output_kind": "text",
+  "expected_text_output": "A fixture transcript."
+}

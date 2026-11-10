@@ -1,0 +1,1177 @@
+{
+  "schema_version": "vulcan.provider-manifest.v2",
+  "provider_id": "xiaomi",
+  "revision": 3,
+  "published_at": "2026-11-10T12:33:04Z",
+  "engine_contract": {
+    "minimum_manifest_engine": 1,
+    "required_protocol_profiles": [
+      "openai-chat-completions.v1"
+    ],
+    "required_execution_primitives": [
+      "http_json_sync",
+      "deepseek_chat_reasoning_content_v1"
+    ],
+    "required_upload_primitives": [
+      "inline_data_url"
+    ],
+    "required_transformers": [
+      "enum_map",
+      "delete_json_pointer",
+      "delete_unless_equals",
+      "rebuild_json_template"
+    ]
+  },
+  "display": {
+    "name": "Xiaomi MiMo",
+    "category": "official",
+    "directory_rank": 115,
+    "credential_directory_visibility": "configured_only",
+    "promotion": {
+      "signup_url": "https://platform.xiaomimimo.com/",
+      "partnership_kind": "none",
+      "disclosure_key": "settings.providerPromotion.neutralDisclosure"
+    }
+  },
+  "services": [
+    {
+      "service_entry_id": "public-api",
+      "display_name": "MiMo API",
+      "kind": "conversation",
+      "base_url": "https://api.xiaomimimo.com/v1",
+      "credential_profiles": [
+        {
+          "credential_profile_id": "api-key",
+          "display_name": "API Key",
+          "credential_mode": "token",
+          "billing_kind": "pay_as_you_go",
+          "key_prefix": "sk-",
+          "default_usage_scopes": [
+            "interactive_agent",
+            "internal_background",
+            "external_service"
+          ]
+        }
+      ],
+      "default_authentication": "bearer_authorization",
+      "request_projector": "compatible",
+      "model_catalog": {
+        "source_policy": "discovery_only",
+        "discovery_kind": "open_ai"
+      },
+      "protocol_routes": [
+        {
+          "protocol_profile_id": "openai-chat-completions.v1",
+          "endpoint_path": "/chat/completions",
+          "request_profile_refs": [
+            "xiaomi.chat.thinking.v1"
+          ],
+          "input_resource_constraints": [
+            {
+              "resource_kind": "image",
+              "accepted_mime_types": [
+                "image/jpeg",
+                "image/png",
+                "image/gif",
+                "image/webp",
+                "image/bmp"
+              ],
+              "max_bytes": 37500000
+            },
+            {
+              "resource_kind": "audio",
+              "accepted_mime_types": [
+                "audio/mpeg",
+                "audio/mp3",
+                "audio/wav",
+                "audio/x-wav",
+                "audio/flac",
+                "audio/mp4",
+                "audio/m4a",
+                "audio/x-m4a",
+                "audio/ogg"
+              ],
+              "max_bytes": 37500000,
+              "reference_policy": "local_only"
+            },
+            {
+              "resource_kind": "video",
+              "accepted_mime_types": [
+                "video/mp4",
+                "video/quicktime",
+                "video/x-msvideo",
+                "video/x-ms-wmv"
+              ],
+              "max_bytes": 37500000
+            }
+          ],
+          "verified": true,
+          "reasoning_replay_contract": "deepseek_chat_reasoning_content_v1"
+        }
+      ]
+    },
+    {
+      "service_entry_id": "token-plan-cn",
+      "display_name": "Token Plan (China)",
+      "kind": "conversation",
+      "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
+      "credential_profiles": [
+        {
+          "credential_profile_id": "personal-api-key",
+          "display_name": "Personal Token Plan API Key",
+          "credential_mode": "token",
+          "billing_kind": "token_plan",
+          "key_prefix": "tp-",
+          "default_usage_scopes": [
+            "interactive_agent"
+          ]
+        },
+        {
+          "credential_profile_id": "team-api-key",
+          "display_name": "Team Token Plan API Key",
+          "credential_mode": "token",
+          "billing_kind": "token_plan",
+          "key_prefix": "ttp-",
+          "default_usage_scopes": [
+            "interactive_agent"
+          ]
+        }
+      ],
+      "default_authentication": "bearer_authorization",
+      "request_projector": "compatible",
+      "model_catalog": {
+        "source_policy": "manifest_only",
+        "discovery_kind": "manifest_static",
+        "models": [
+          {
+            "model_id": "mimo-v2.6-flash",
+            "display_name": "MiMo V2.6 Flash"
+          },
+          {
+            "model_id": "mimo-v2.6-pro",
+            "display_name": "MiMo V2.6 Pro"
+          }
+        ]
+      },
+      "protocol_routes": [
+        {
+          "protocol_profile_id": "openai-chat-completions.v1",
+          "endpoint_path": "/chat/completions",
+          "request_profile_refs": [
+            "xiaomi.chat.thinking.v1"
+          ],
+          "input_resource_constraints": [
+            {
+              "resource_kind": "image",
+              "accepted_mime_types": [
+                "image/jpeg",
+                "image/png",
+                "image/gif",
+                "image/webp",
+                "image/bmp"
+              ],
+              "max_bytes": 37500000
+            },
+            {
+              "resource_kind": "audio",
+              "accepted_mime_types": [
+                "audio/mpeg",
+                "audio/mp3",
+                "audio/wav",
+                "audio/x-wav",
+                "audio/flac",
+                "audio/mp4",
+                "audio/m4a",
+                "audio/x-m4a",
+                "audio/ogg"
+              ],
+              "max_bytes": 37500000,
+              "reference_policy": "local_only"
+            },
+            {
+              "resource_kind": "video",
+              "accepted_mime_types": [
+                "video/mp4",
+                "video/quicktime",
+                "video/x-msvideo",
+                "video/x-ms-wmv"
+              ],
+              "max_bytes": 37500000
+            }
+          ],
+          "verified": true,
+          "reasoning_replay_contract": "deepseek_chat_reasoning_content_v1"
+        }
+      ]
+    },
+    {
+      "service_entry_id": "token-plan-sgp",
+      "display_name": "Token Plan (Singapore)",
+      "kind": "conversation",
+      "base_url": "https://token-plan-sgp.xiaomimimo.com/v1",
+      "credential_profiles": [
+        {
+          "credential_profile_id": "personal-api-key",
+          "display_name": "Personal Token Plan API Key",
+          "credential_mode": "token",
+          "billing_kind": "token_plan",
+          "key_prefix": "tp-",
+          "default_usage_scopes": [
+            "interactive_agent"
+          ]
+        },
+        {
+          "credential_profile_id": "team-api-key",
+          "display_name": "Team Token Plan API Key",
+          "credential_mode": "token",
+          "billing_kind": "token_plan",
+          "key_prefix": "ttp-",
+          "default_usage_scopes": [
+            "interactive_agent"
+          ]
+        }
+      ],
+      "default_authentication": "bearer_authorization",
+      "request_projector": "compatible",
+      "model_catalog": {
+        "source_policy": "manifest_only",
+        "discovery_kind": "manifest_static",
+        "models": [
+          {
+            "model_id": "mimo-v2.6-flash",
+            "display_name": "MiMo V2.6 Flash"
+          },
+          {
+            "model_id": "mimo-v2.6-pro",
+            "display_name": "MiMo V2.6 Pro"
+          }
+        ]
+      },
+      "protocol_routes": [
+        {
+          "protocol_profile_id": "openai-chat-completions.v1",
+          "endpoint_path": "/chat/completions",
+          "request_profile_refs": [
+            "xiaomi.chat.thinking.v1"
+          ],
+          "input_resource_constraints": [
+            {
+              "resource_kind": "image",
+              "accepted_mime_types": [
+                "image/jpeg",
+                "image/png",
+                "image/gif",
+                "image/webp",
+                "image/bmp"
+              ],
+              "max_bytes": 37500000
+            },
+            {
+              "resource_kind": "audio",
+              "accepted_mime_types": [
+                "audio/mpeg",
+                "audio/mp3",
+                "audio/wav",
+                "audio/x-wav",
+                "audio/flac",
+                "audio/mp4",
+                "audio/m4a",
+                "audio/x-m4a",
+                "audio/ogg"
+              ],
+              "max_bytes": 37500000,
+              "reference_policy": "local_only"
+            },
+            {
+              "resource_kind": "video",
+              "accepted_mime_types": [
+                "video/mp4",
+                "video/quicktime",
+                "video/x-msvideo",
+                "video/x-ms-wmv"
+              ],
+              "max_bytes": 37500000
+            }
+          ],
+          "verified": true,
+          "reasoning_replay_contract": "deepseek_chat_reasoning_content_v1"
+        }
+      ]
+    },
+    {
+      "service_entry_id": "token-plan-ams",
+      "display_name": "Token Plan (Europe)",
+      "kind": "conversation",
+      "base_url": "https://token-plan-ams.xiaomimimo.com/v1",
+      "credential_profiles": [
+        {
+          "credential_profile_id": "personal-api-key",
+          "display_name": "Personal Token Plan API Key",
+          "credential_mode": "token",
+          "billing_kind": "token_plan",
+          "key_prefix": "tp-",
+          "default_usage_scopes": [
+            "interactive_agent"
+          ]
+        },
+        {
+          "credential_profile_id": "team-api-key",
+          "display_name": "Team Token Plan API Key",
+          "credential_mode": "token",
+          "billing_kind": "token_plan",
+          "key_prefix": "ttp-",
+          "default_usage_scopes": [
+            "interactive_agent"
+          ]
+        }
+      ],
+      "default_authentication": "bearer_authorization",
+      "request_projector": "compatible",
+      "model_catalog": {
+        "source_policy": "manifest_only",
+        "discovery_kind": "manifest_static",
+        "models": [
+          {
+            "model_id": "mimo-v2.6-flash",
+            "display_name": "MiMo V2.6 Flash"
+          },
+          {
+            "model_id": "mimo-v2.6-pro",
+            "display_name": "MiMo V2.6 Pro"
+          }
+        ]
+      },
+      "protocol_routes": [
+        {
+          "protocol_profile_id": "openai-chat-completions.v1",
+          "endpoint_path": "/chat/completions",
+          "request_profile_refs": [
+            "xiaomi.chat.thinking.v1"
+          ],
+          "input_resource_constraints": [
+            {
+              "resource_kind": "image",
+              "accepted_mime_types": [
+                "image/jpeg",
+                "image/png",
+                "image/gif",
+                "image/webp",
+                "image/bmp"
+              ],
+              "max_bytes": 37500000
+            },
+            {
+              "resource_kind": "audio",
+              "accepted_mime_types": [
+                "audio/mpeg",
+                "audio/mp3",
+                "audio/wav",
+                "audio/x-wav",
+                "audio/flac",
+                "audio/mp4",
+                "audio/m4a",
+                "audio/x-m4a",
+                "audio/ogg"
+              ],
+              "max_bytes": 37500000,
+              "reference_policy": "local_only"
+            },
+            {
+              "resource_kind": "video",
+              "accepted_mime_types": [
+                "video/mp4",
+                "video/quicktime",
+                "video/x-msvideo",
+                "video/x-ms-wmv"
+              ],
+              "max_bytes": 37500000
+            }
+          ],
+          "verified": true,
+          "reasoning_replay_contract": "deepseek_chat_reasoning_content_v1"
+        }
+      ]
+    }
+  ],
+  "model_defaults": {
+    "default_enabled": true,
+    "catalog_membership_policy": "declared_only",
+    "unknown_model_policy": "declared_rule_required",
+    "supported_protocols": [
+      "openai-chat-completions.v1"
+    ],
+    "selected_protocol": "openai-chat-completions.v1"
+  },
+  "model_rules": [
+    {
+      "rule_id": "mimo-v2.6-flash",
+      "display_name": "MiMo V2.6 Flash",
+      "matcher": {
+        "kind": "exact",
+        "value": "mimo-v2.6-flash"
+      },
+      "core_model_ref": "mimo-v2.6-flash",
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "structured_output": "json_schema",
+        "evidence_revision": "xiaomi.official-api.2026-11-10"
+      },
+      "provenance_ref": "https://mimo.mi.com/docs/en-US/quick-start/model"
+    },
+    {
+      "rule_id": "mimo-v2.6-pro",
+      "display_name": "MiMo V2.6 Pro",
+      "matcher": {
+        "kind": "exact",
+        "value": "mimo-v2.6-pro"
+      },
+      "core_model_ref": "mimo-v2.6-pro",
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "structured_output": "json_schema",
+        "evidence_revision": "xiaomi.official-api.2026-11-10"
+      },
+      "provenance_ref": "https://mimo.mi.com/docs/en-US/quick-start/model"
+    },
+    {
+      "rule_id": "mimo-v2.6-pro-ultraspeed",
+      "display_name": "MiMo V2.6 Pro Ultraspeed",
+      "scope": {
+        "service_entry_ids": [
+          "public-api"
+        ]
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "mimo-v2.6-pro-ultraspeed"
+      },
+      "core_model_ref": "mimo-v2.6-pro-ultraspeed",
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "capabilities": {
+        "structured_output": "json_schema",
+        "evidence_revision": "xiaomi.official-api.2026-11-10"
+      },
+      "provenance_ref": "https://mimo.mi.com/docs/en-US/quick-start/model"
+    },
+    {
+      "rule_id": "mimo-v2.5-asr",
+      "display_name": "MiMo V2.5 ASR",
+      "scope": {
+        "service_entry_ids": [
+          "public-api"
+        ]
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "mimo-v2.5-asr"
+      },
+      "core_model_ref": "mimo-v2.5-asr",
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "operation_refs": [
+        "public-api.mimo-v2.5-asr.operation"
+      ],
+      "provenance_ref": "https://mimo.mi.com/docs/en-US/api/audio/Speech-Recognition-post"
+    },
+    {
+      "rule_id": "mimo-v2.5-tts",
+      "display_name": "MiMo V2.5 TTS",
+      "scope": {
+        "service_entry_ids": [
+          "public-api"
+        ]
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "mimo-v2.5-tts"
+      },
+      "core_model_ref": "mimo-v2.5-tts",
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "operation_refs": [
+        "public-api.mimo-v2.5-tts.operation"
+      ],
+      "provenance_ref": "https://mimo.mi.com/docs/en-US/api/audio/tts-post"
+    },
+    {
+      "rule_id": "mimo-v2.5-tts-voicedesign",
+      "display_name": "MiMo V2.5 TTS Voice Design",
+      "scope": {
+        "service_entry_ids": [
+          "public-api"
+        ]
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "mimo-v2.5-tts-voicedesign"
+      },
+      "core_model_ref": "mimo-v2.5-tts-voicedesign",
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "operation_refs": [
+        "public-api.mimo-v2.5-tts-voicedesign.operation"
+      ],
+      "provenance_ref": "https://mimo.mi.com/docs/en-US/api/audio/tts-post"
+    },
+    {
+      "rule_id": "mimo-v2.5-tts-voiceclone",
+      "display_name": "MiMo V2.5 TTS Voice Clone",
+      "scope": {
+        "service_entry_ids": [
+          "public-api"
+        ]
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "mimo-v2.5-tts-voiceclone"
+      },
+      "core_model_ref": "mimo-v2.5-tts-voiceclone",
+      "supported_protocols": [
+        "openai-chat-completions.v1"
+      ],
+      "selected_protocol": "openai-chat-completions.v1",
+      "operation_refs": [
+        "public-api.mimo-v2.5-tts-voiceclone.operation"
+      ],
+      "provenance_ref": "https://mimo.mi.com/docs/en-US/api/audio/tts-post"
+    }
+  ],
+  "request_profiles": [
+    {
+      "profile_id": "xiaomi.chat.thinking.v1",
+      "description": "Project the reasoning toggle to the MiMo Chat thinking object.",
+      "payload": {
+        "profile_id": "xiaomi.chat.thinking.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "enum_map",
+            "path": "/thinking",
+            "source": "request_field",
+            "source_path": "@reasoning_effort",
+            "mapping": {
+              "none": {
+                "type": "disabled"
+              },
+              "high": {
+                "type": "enabled"
+              }
+            },
+            "unmatched": "error",
+            "default": null
+          },
+          {
+            "op": "delete_json_pointer",
+            "path": "/reasoning_effort"
+          },
+          {
+            "op": "delete_unless_equals",
+            "path": "/temperature",
+            "source": "request_field",
+            "source_path": "@reasoning_effort",
+            "equals": "none"
+          },
+          {
+            "op": "delete_unless_equals",
+            "path": "/top_p",
+            "source": "request_field",
+            "source_path": "@reasoning_effort",
+            "equals": "none"
+          }
+        ]
+      }
+    },
+    {
+      "profile_id": "xiaomi.asr.request.v1",
+      "description": "Build the documented single-audio MiMo transcription request.",
+      "payload": {
+        "profile_id": "xiaomi.asr.request.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "model": {
+                "$vulcan_model_id": true
+              },
+              "messages": [
+                {
+                  "role": "user",
+                  "content": [
+                    {
+                      "type": "input_audio",
+                      "input_audio": {
+                        "data": {
+                          "$vulcan_ref": {
+                            "path": "/audio_data"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ],
+              "asr_options": {
+                "language": {
+                  "$vulcan_ref": {
+                    "path": "/language",
+                    "optional": true
+                  }
+                }
+              },
+              "stream": false
+            }
+          }
+        ]
+      }
+    },
+    {
+      "profile_id": "xiaomi.tts.request.v1",
+      "description": "Synthesize the assistant message with an optional preset voice.",
+      "payload": {
+        "profile_id": "xiaomi.tts.request.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "model": {
+                "$vulcan_model_id": true
+              },
+              "messages": [
+                {
+                  "role": "assistant",
+                  "content": {
+                    "$vulcan_ref": {
+                      "path": "/text"
+                    }
+                  }
+                }
+              ],
+              "audio": {
+                "format": "wav",
+                "voice": {
+                  "$vulcan_ref": {
+                    "path": "/voice_id",
+                    "optional": true
+                  }
+                }
+              },
+              "stream": false
+            }
+          }
+        ]
+      }
+    },
+    {
+      "profile_id": "xiaomi.voice-design.request.v1",
+      "description": "Use the user message to design the voice and the assistant message as the text to synthesize.",
+      "payload": {
+        "profile_id": "xiaomi.voice-design.request.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "model": {
+                "$vulcan_model_id": true
+              },
+              "messages": [
+                {
+                  "role": "user",
+                  "content": {
+                    "$vulcan_ref": {
+                      "path": "/voice_description"
+                    }
+                  }
+                },
+                {
+                  "role": "assistant",
+                  "content": {
+                    "$vulcan_ref": {
+                      "path": "/text"
+                    }
+                  }
+                }
+              ],
+              "audio": {
+                "format": "wav"
+              },
+              "stream": false
+            }
+          }
+        ]
+      }
+    },
+    {
+      "profile_id": "xiaomi.voice-clone.request.v1",
+      "description": "Synthesize the assistant message using the uploaded voice sample.",
+      "payload": {
+        "profile_id": "xiaomi.voice-clone.request.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "model": {
+                "$vulcan_model_id": true
+              },
+              "messages": [
+                {
+                  "role": "assistant",
+                  "content": {
+                    "$vulcan_ref": {
+                      "path": "/text"
+                    }
+                  }
+                }
+              ],
+              "audio": {
+                "format": "wav",
+                "voice": {
+                  "$vulcan_ref": {
+                    "path": "/voice_data"
+                  }
+                }
+              },
+              "stream": false
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "response_profiles": [],
+  "upload_channels": [
+    {
+      "upload_channel_id": "inline.speech-audio",
+      "description": "Encode a WAV or MP3 file as a data URL within the documented 10 MB encoded limit.",
+      "primitive": "inline_data_url",
+      "accepted_mime_types": [
+        "audio/wav",
+        "audio/mpeg"
+      ],
+      "max_bytes": 7500000,
+      "max_count": 1,
+      "progress_supported": false,
+      "cancellation_supported": false,
+      "reference_encoding": "response_url"
+    }
+  ],
+  "operations": [
+    {
+      "operation_id": "public-api.mimo-v2.5-asr.operation",
+      "operation": "speech_transcribe",
+      "carrier": "provider_tool",
+      "input_resources": [
+        "audio"
+      ],
+      "output_resources": [],
+      "tool_target_refs": [
+        "public-api.mimo-v2.5-asr"
+      ],
+      "request_profile_refs": [
+        "xiaomi.asr.request.v1"
+      ],
+      "upload_channel_refs": [
+        "inline.speech-audio"
+      ],
+      "upload_bindings": [
+        {
+          "source_path": "/audio_path",
+          "target_path": "/audio_data",
+          "upload_channel_refs": [
+            "inline.speech-audio"
+          ],
+          "mime_types_by_extension": {
+            "wav": "audio/wav",
+            "mp3": "audio/mpeg"
+          },
+          "required": true,
+          "remove_source": true
+        }
+      ],
+      "timeout_ms": 60000,
+      "idempotent": false
+    },
+    {
+      "operation_id": "public-api.mimo-v2.5-tts.operation",
+      "operation": "speech_synthesize",
+      "carrier": "provider_tool",
+      "input_resources": [],
+      "output_resources": [
+        "audio"
+      ],
+      "tool_target_refs": [
+        "public-api.mimo-v2.5-tts"
+      ],
+      "request_profile_refs": [
+        "xiaomi.tts.request.v1"
+      ],
+      "timeout_ms": 60000,
+      "idempotent": false
+    },
+    {
+      "operation_id": "public-api.mimo-v2.5-tts-voicedesign.operation",
+      "operation": "speech_synthesize",
+      "carrier": "provider_tool",
+      "input_resources": [],
+      "output_resources": [
+        "audio"
+      ],
+      "tool_target_refs": [
+        "public-api.mimo-v2.5-tts-voicedesign"
+      ],
+      "request_profile_refs": [
+        "xiaomi.voice-design.request.v1"
+      ],
+      "timeout_ms": 60000,
+      "idempotent": false
+    },
+    {
+      "operation_id": "public-api.mimo-v2.5-tts-voiceclone.operation",
+      "operation": "speech_synthesize",
+      "carrier": "provider_tool",
+      "input_resources": [
+        "audio"
+      ],
+      "output_resources": [
+        "audio"
+      ],
+      "tool_target_refs": [
+        "public-api.mimo-v2.5-tts-voiceclone"
+      ],
+      "request_profile_refs": [
+        "xiaomi.voice-clone.request.v1"
+      ],
+      "upload_channel_refs": [
+        "inline.speech-audio"
+      ],
+      "upload_bindings": [
+        {
+          "source_path": "/voice_sample_path",
+          "target_path": "/voice_data",
+          "upload_channel_refs": [
+            "inline.speech-audio"
+          ],
+          "mime_types_by_extension": {
+            "wav": "audio/wav",
+            "mp3": "audio/mpeg"
+          },
+          "required": true,
+          "remove_source": true
+        }
+      ],
+      "timeout_ms": 60000,
+      "idempotent": false
+    }
+  ],
+  "tool_targets": [
+    {
+      "target_id": "public-api.mimo-v2.5-asr",
+      "description": "Transcribe one local WAV or MP3 recording.",
+      "service_entry_id": "public-api",
+      "credential_profile_ids": [
+        "api-key"
+      ],
+      "upstream_target_id": "mimo-v2.5-asr",
+      "availability_model_ids_any": [
+        "mimo-v2.5-asr"
+      ],
+      "display_name": "MiMo V2.5 ASR",
+      "tool_id": "speech_transcribe",
+      "capability": "speech_transcribe",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "audio_path": {
+            "type": "string",
+            "minLength": 1,
+            "format": "vulcan-local-path",
+            "description": "Local WAV or MP3 recording path."
+          },
+          "language": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "zh",
+              "en"
+            ]
+          }
+        },
+        "required": [
+          "audio_path"
+        ]
+      },
+      "output": {
+        "kind": "text",
+        "source_path": "/choices/0/message/content",
+        "normalized_result_path": "text"
+      },
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/chat/completions",
+        "execution_kind": "http_json_sync"
+      }
+    },
+    {
+      "target_id": "public-api.mimo-v2.5-tts",
+      "description": "Synthesize speech using a built-in MiMo voice.",
+      "service_entry_id": "public-api",
+      "credential_profile_ids": [
+        "api-key"
+      ],
+      "upstream_target_id": "mimo-v2.5-tts",
+      "availability_model_ids_any": [
+        "mimo-v2.5-tts"
+      ],
+      "display_name": "MiMo V2.5 TTS",
+      "tool_id": "speech_synthesize",
+      "capability": "speech_synthesize",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Text to synthesize as speech."
+          },
+          "voice_id": {
+            "type": "string",
+            "enum": [
+              "mimo_default",
+              "冰糖",
+              "茉莉",
+              "苏打",
+              "白桦",
+              "Mia",
+              "Chloe",
+              "Milo",
+              "Dean"
+            ]
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "output": {
+        "kind": "resources",
+        "source_path": "/choices/0/message/audio/data",
+        "normalized_result_path": "resources",
+        "resource_kind": "audio",
+        "mime_types": [
+          "audio/wav"
+        ],
+        "resource_decoders": [
+          {
+            "source_path": "/choices/0/message/audio/data",
+            "encoding": "base64",
+            "resource_kind": "audio",
+            "mime_type": "audio/wav",
+            "max_bytes": 8388608,
+            "output_id_prefix": "audio"
+          }
+        ]
+      },
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/chat/completions",
+        "execution_kind": "http_json_sync"
+      }
+    },
+    {
+      "target_id": "public-api.mimo-v2.5-tts-voicedesign",
+      "description": "Design a voice from its description and synthesize the given text.",
+      "service_entry_id": "public-api",
+      "credential_profile_ids": [
+        "api-key"
+      ],
+      "upstream_target_id": "mimo-v2.5-tts-voicedesign",
+      "availability_model_ids_any": [
+        "mimo-v2.5-tts-voicedesign"
+      ],
+      "display_name": "MiMo V2.5 TTS Voice Design",
+      "tool_id": "speech_synthesize",
+      "capability": "speech_synthesize",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Text to synthesize as speech."
+          },
+          "voice_description": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Natural-language description of the voice to design."
+          }
+        },
+        "required": [
+          "text",
+          "voice_description"
+        ]
+      },
+      "output": {
+        "kind": "resources",
+        "source_path": "/choices/0/message/audio/data",
+        "normalized_result_path": "resources",
+        "resource_kind": "audio",
+        "mime_types": [
+          "audio/wav"
+        ],
+        "resource_decoders": [
+          {
+            "source_path": "/choices/0/message/audio/data",
+            "encoding": "base64",
+            "resource_kind": "audio",
+            "mime_type": "audio/wav",
+            "max_bytes": 8388608,
+            "output_id_prefix": "audio"
+          }
+        ]
+      },
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/chat/completions",
+        "execution_kind": "http_json_sync"
+      }
+    },
+    {
+      "target_id": "public-api.mimo-v2.5-tts-voiceclone",
+      "description": "Synthesize speech using one local WAV or MP3 voice sample.",
+      "service_entry_id": "public-api",
+      "credential_profile_ids": [
+        "api-key"
+      ],
+      "upstream_target_id": "mimo-v2.5-tts-voiceclone",
+      "availability_model_ids_any": [
+        "mimo-v2.5-tts-voiceclone"
+      ],
+      "display_name": "MiMo V2.5 TTS Voice Clone",
+      "tool_id": "speech_synthesize",
+      "capability": "speech_synthesize",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Text to synthesize as speech."
+          },
+          "voice_sample_path": {
+            "type": "string",
+            "minLength": 1,
+            "format": "vulcan-local-path",
+            "description": "Local WAV or MP3 voice sample path."
+          }
+        },
+        "required": [
+          "text",
+          "voice_sample_path"
+        ]
+      },
+      "output": {
+        "kind": "resources",
+        "source_path": "/choices/0/message/audio/data",
+        "normalized_result_path": "resources",
+        "resource_kind": "audio",
+        "mime_types": [
+          "audio/wav"
+        ],
+        "resource_decoders": [
+          {
+            "source_path": "/choices/0/message/audio/data",
+            "encoding": "base64",
+            "resource_kind": "audio",
+            "mime_type": "audio/wav",
+            "max_bytes": 8388608,
+            "output_id_prefix": "audio"
+          }
+        ]
+      },
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_path": "/chat/completions",
+        "execution_kind": "http_json_sync"
+      }
+    }
+  ],
+  "provenance": {
+    "status": "verified",
+    "sources": [
+      {
+        "url": "https://mimo.mi.com/docs/en-US/quick-start/model",
+        "note": "Current official model identifiers, model capabilities and length limits."
+      },
+      {
+        "url": "https://mimo.mi.com/docs/en-US/api/model/list-models-get",
+        "note": "The pay-as-you-go catalog matched the seven documented model IDs using a live API key on 2026-11-10."
+      },
+      {
+        "url": "https://mimo.mi.com/docs/en-US/api/chat/openai-api-post",
+        "note": "Official Chat endpoint and thinking toggle. A live Flash request accepted a strict JSON Schema. Tool continuation with the prior assistant reasoning_content, string content, tool call ID and tool result was verified on the pay-as-you-go API using the existing Chat replay wire contract."
+      },
+      {
+        "url": "https://mimo.mi.com/docs/en-US/api/audio/Speech-Recognition-post",
+        "note": "The ASR endpoint documents one WAV or MP3 data URL. On 2026-11-10 WAV transcription reproduced the phrase from synthesized speech using the pay-as-you-go API."
+      },
+      {
+        "url": "https://mimo.mi.com/docs/en-US/api/audio/tts-post",
+        "note": "The three speech synthesis operations returned WAV audio on the pay-as-you-go API on 2026-11-10."
+      },
+      {
+        "url": "https://mimo.mi.com/docs/en-US/quick-start/usage-guide/multimodal-understanding/image-understanding",
+        "note": "Official image input and limits; PNG input was verified against Flash."
+      },
+      {
+        "url": "https://mimo.mi.com/docs/en-US/quick-start/usage-guide/multimodal-understanding/audio-understanding",
+        "note": "Official audio input and limits; WAV input was verified against Flash with Chat inline audio fields."
+      },
+      {
+        "url": "https://mimo.mi.com/docs/en-US/quick-start/usage-guide/multimodal-understanding/video-understanding",
+        "note": "Official video input and limits; MP4 URL input was verified against Pro."
+      },
+      {
+        "url": "https://mimo.mi.com/docs/en-US/tokenplan/integration/opencode",
+        "note": "Official Token Plan endpoints for China, Singapore and Europe. These routes are declared from vendor documentation and await credentialed verification."
+      },
+      {
+        "url": "https://mimo.mi.com/docs/en-US/quick-start/faq/token-plan/Plans%26Pricing",
+        "note": "Both individual and team plans include Flash and Pro. Speech extensions are configured on the pay-as-you-go service in this manifest."
+      },
+      {
+        "url": "https://mimo.mi.com/docs/en-US/tokenplan/integration/codex-configuration",
+        "note": "Official 1048576-token context configuration."
+      },
+      {
+        "url": "https://github.com/XiaomiMiMo/MiMo-Code",
+        "note": "MiMo Code confirms the regional host mapping and bearer-authenticated WAV transcription request."
+      }
+    ]
+  }
+}

@@ -1,6 +1,6 @@
 # 用量统计随包模型清单
 
-随包共 **195** 个模型组，其中 **171** 组有美元或人民币参考价，**24** 组待配置。用量记录中的其他模型会另外进入费用表，也可以在搜索栏输入完整模型 ID 后直接编辑。
+随包共 **200** 个模型组，其中 **171** 组有美元或人民币参考价，**29** 组待配置。用量记录中的其他模型会另外进入费用表，也可以在搜索栏输入完整模型 ID 后直接编辑。
 
 费用表按模型组共用一份配置。匹配时取最后一个斜杠后的模型 ID，忽略英文字母大小写。先匹配精确型号或别名，再按连字符边界匹配最长的已知型号段。例如 glm-5.3-flash-xxx 优先匹配 glm-5.3-flash。日期、Preview 和 Claude 兼容写法也按规则归组。别名栏只列需要单独映射的名称。
 
@@ -138,9 +138,14 @@
 | `mimo-v2-flash` | USD | — |
 | `mimo-v2-pro` | USD | — |
 | `mimo-v2.5` | USD | — |
+| `mimo-v2.5-asr` | 待配置 | — |
 | `mimo-v2.5-pro` | USD | — |
+| `mimo-v2.5-tts` | 待配置 | — |
+| `mimo-v2.5-tts-voiceclone` | 待配置 | — |
+| `mimo-v2.5-tts-voicedesign` | 待配置 | — |
 | `mimo-v2.6-flash` | USD / CNY | — |
 | `mimo-v2.6-pro` | USD / CNY | — |
+| `mimo-v2.6-pro-ultraspeed` | 待配置 | — |
 | `minimax-m2.7` | USD | — |
 | `minimax-m2.7-highspeed` | USD | — |
 | `minimax-m3` | USD | — |

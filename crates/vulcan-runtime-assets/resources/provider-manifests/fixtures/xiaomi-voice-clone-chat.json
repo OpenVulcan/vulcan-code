@@ -1,0 +1,144 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "xiaomi-voice-clone-chat",
+  "base_manifest": "xiaomi.json",
+  "production_target_refs": [
+    "xiaomi::public-api.mimo-v2.5-tts-voiceclone"
+  ],
+  "tool_target": {
+    "target_id": "public-api.fixture-voice-clone",
+    "description": "Synthesize speech using one local WAV or MP3 voice sample.",
+    "service_entry_id": "public-api",
+    "credential_profile_ids": [
+      "api-key"
+    ],
+    "upstream_target_id": "mimo-v2.5-tts-voiceclone",
+    "availability_model_ids_any": [],
+    "display_name": "MiMo V2.5 TTS Voice Clone",
+    "tool_id": "fixture_xiaomi_voice_clone",
+    "capability": "speech_synthesize",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Text to synthesize as speech."
+        },
+        "voice_sample_path": {
+          "type": "string",
+          "minLength": 1,
+          "format": "vulcan-local-path",
+          "description": "Local WAV or MP3 voice sample path."
+        }
+      },
+      "required": [
+        "text",
+        "voice_sample_path"
+      ]
+    },
+    "output": {
+      "kind": "resources",
+      "source_path": "/choices/0/message/audio/data",
+      "normalized_result_path": "resources",
+      "resource_kind": "audio",
+      "mime_types": [
+        "audio/wav"
+      ],
+      "resource_decoders": [
+        {
+          "source_path": "/choices/0/message/audio/data",
+          "encoding": "base64",
+          "resource_kind": "audio",
+          "mime_type": "audio/wav",
+          "output_id_prefix": "audio",
+          "max_bytes": 8388608
+        }
+      ]
+    },
+    "execution": {
+      "adapter": "generic_json",
+      "authentication": "bearer_authorization",
+      "endpoint_path": "/fixture/voice-clone",
+      "execution_kind": "http_json_sync"
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.xiaomi-voice-clone-chat",
+    "operation": "speech_synthesize",
+    "carrier": "provider_tool",
+    "input_resources": [
+      "audio"
+    ],
+    "output_resources": [
+      "audio"
+    ],
+    "tool_target_refs": [
+      "public-api.fixture-voice-clone"
+    ],
+    "request_profile_refs": [
+      "xiaomi.voice-clone.request.v1"
+    ],
+    "upload_channel_refs": [
+      "inline.speech-audio"
+    ],
+    "upload_bindings": [
+      {
+        "source_path": "/voice_sample_path",
+        "target_path": "/voice_data",
+        "upload_channel_refs": [
+          "inline.speech-audio"
+        ],
+        "mime_types_by_extension": {
+          "wav": "audio/wav",
+          "mp3": "audio/mpeg"
+        },
+        "required": true,
+        "remove_source": true
+      }
+    ],
+    "timeout_ms": 60000,
+    "idempotent": false
+  },
+  "required_execution_primitives": [
+    "http_json_sync"
+  ],
+  "arguments": {
+    "text": "Synthesize this fixture sentence.",
+    "voice_sample_path": "xiaomi-speech-fixture.wav"
+  },
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/fixture/voice-clone",
+      "expected_json_body": {
+        "model": "mimo-v2.5-tts-voiceclone",
+        "messages": [
+          {
+            "role": "assistant",
+            "content": "Synthesize this fixture sentence."
+          }
+        ],
+        "audio": {
+          "format": "wav",
+          "voice": "data:audio/wav;base64,UklGRkQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YSAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+        },
+        "stream": false
+      },
+      "response_status": 200,
+      "response_json_body": {
+        "choices": [
+          {
+            "message": {
+              "audio": {
+                "data": "UklGRkQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YSAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "expected_output_kind": "resources"
+}

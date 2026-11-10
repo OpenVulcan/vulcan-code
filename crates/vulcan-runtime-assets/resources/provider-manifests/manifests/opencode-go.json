@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "opencode-go",
-  "revision": 16,
-  "published_at": "2026-11-08T06:25:07Z",
+  "revision": 17,
+  "published_at": "2026-11-10T12:27:06Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -831,15 +831,8 @@
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "audio",
-          "video"
-        ],
         "reasoning_control": "fixed_on",
         "reasoning_efforts": [],
-        "context_limit": 1048576,
-        "output_limit": 131072,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
       "request_profile_refs": [],
@@ -869,15 +862,8 @@
       ],
       "selected_protocol": "openai-chat-completions.v1",
       "capabilities": {
-        "input_resources": [
-          "image",
-          "audio",
-          "video"
-        ],
         "reasoning_control": "fixed_on",
         "reasoning_efforts": [],
-        "context_limit": 1048576,
-        "output_limit": 131072,
         "evidence_revision": "opencode.v2.4617210822.2026-10-17"
       },
       "request_profile_refs": [],

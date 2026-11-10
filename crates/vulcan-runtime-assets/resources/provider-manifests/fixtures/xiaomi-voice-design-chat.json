@@ -1,0 +1,126 @@
+{
+  "schema_version": "provider-manifest-execution-fixture.v1",
+  "fixture_id": "xiaomi-voice-design-chat",
+  "base_manifest": "xiaomi.json",
+  "production_target_refs": [
+    "xiaomi::public-api.mimo-v2.5-tts-voicedesign"
+  ],
+  "tool_target": {
+    "target_id": "public-api.fixture-voice-design",
+    "description": "Design a voice from its description and synthesize the given text.",
+    "service_entry_id": "public-api",
+    "credential_profile_ids": [
+      "api-key"
+    ],
+    "upstream_target_id": "mimo-v2.5-tts-voicedesign",
+    "availability_model_ids_any": [],
+    "display_name": "MiMo V2.5 TTS Voice Design",
+    "tool_id": "fixture_xiaomi_voice_design",
+    "capability": "speech_synthesize",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Text to synthesize as speech."
+        },
+        "voice_description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Natural-language description of the voice to design."
+        }
+      },
+      "required": [
+        "text",
+        "voice_description"
+      ]
+    },
+    "output": {
+      "kind": "resources",
+      "source_path": "/choices/0/message/audio/data",
+      "normalized_result_path": "resources",
+      "resource_kind": "audio",
+      "mime_types": [
+        "audio/wav"
+      ],
+      "resource_decoders": [
+        {
+          "source_path": "/choices/0/message/audio/data",
+          "encoding": "base64",
+          "resource_kind": "audio",
+          "mime_type": "audio/wav",
+          "output_id_prefix": "audio",
+          "max_bytes": 8388608
+        }
+      ]
+    },
+    "execution": {
+      "adapter": "generic_json",
+      "authentication": "bearer_authorization",
+      "endpoint_path": "/fixture/voice-design",
+      "execution_kind": "http_json_sync"
+    }
+  },
+  "operation": {
+    "operation_id": "fixture.xiaomi-voice-design-chat",
+    "operation": "speech_synthesize",
+    "carrier": "provider_tool",
+    "input_resources": [],
+    "output_resources": [
+      "audio"
+    ],
+    "tool_target_refs": [
+      "public-api.fixture-voice-design"
+    ],
+    "request_profile_refs": [
+      "xiaomi.voice-design.request.v1"
+    ],
+    "timeout_ms": 60000,
+    "idempotent": false
+  },
+  "required_execution_primitives": [
+    "http_json_sync"
+  ],
+  "arguments": {
+    "text": "Synthesize this fixture sentence.",
+    "voice_description": "Read in a calm adult voice."
+  },
+  "interactions": [
+    {
+      "method": "POST",
+      "path": "/fixture/voice-design",
+      "expected_json_body": {
+        "model": "mimo-v2.5-tts-voicedesign",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Read in a calm adult voice."
+          },
+          {
+            "role": "assistant",
+            "content": "Synthesize this fixture sentence."
+          }
+        ],
+        "audio": {
+          "format": "wav"
+        },
+        "stream": false
+      },
+      "response_status": 200,
+      "response_json_body": {
+        "choices": [
+          {
+            "message": {
+              "audio": {
+                "data": "UklGRkQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YSAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "expected_output_kind": "resources"
+}

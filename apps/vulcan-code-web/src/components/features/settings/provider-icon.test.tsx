@@ -30,6 +30,7 @@ describe("provider icon library", () => {
     expect(resolveProviderIconKey({ providerId: "commandcode" })).toBe("commandcode")
     expect(resolveProviderIconKey({ providerId: "opencode-go" })).toBe("opencode-go")
     expect(resolveProviderIconKey({ providerId: "tokenrhythm" })).toBe("tokenrhythm")
+    expect(resolveProviderIconKey({ providerId: "xiaomi" })).toBe("xiaomi")
     expect(resolveProviderIconKey({ providerId: "openvulcan" })).toBe("openvulcan")
   })
 
