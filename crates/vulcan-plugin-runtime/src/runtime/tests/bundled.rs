@@ -210,6 +210,7 @@ impl VulcanPluginVldbService for RecordingVldbService {
                 "healthStatus": "ready"
                 ,"dailyCount": 3
                 ,"recentCount": 1
+                ,"recentModelsJson": "[{\"providerId\":\"provider-1\",\"modelId\":\"gpt-5\"}]"
                 ,"consumerIdsJson": "[\"webui\"]"
             }])
         } else if sql.contains("AS rowCount") {
@@ -371,6 +372,10 @@ fn bundled_usage_statistics_plugin_loads_through_system_vldb_bridge() {
     assert_eq!(dashboard["summary"]["costs"][0]["unpricedRows"], 1);
     assert_eq!(dashboard["summary"]["costs"][0]["incompleteRows"], 1);
     assert_eq!(dashboard["recentAttempts"][0]["attemptId"], "attempt-1");
+    assert_eq!(
+        dashboard["recentModels"],
+        json!([{ "providerId": "provider-1", "modelId": "gpt-5" }])
+    );
     assert_eq!(dashboard["providers"][0]["providerId"], "provider-1");
     assert_eq!(dashboard["providers"][0]["attempts"], 3);
     assert_eq!(dashboard["recentAttempts"][0]["estimatedCost"], priced_cost);

@@ -636,6 +636,12 @@ local function load_dashboard(input, model_overrides)
     -- Page projections read only their requested table and count, retaining the revision guard.
     -- 分页投影仅读取请求的表格及数量，并保留修订一致性检查。
     local page_only = view == "daily-page" or view == "recent-page" or view == "detail-pages"
+    -- Only views with recent rows need the full list of eligible models.
+    -- 仅包含最近请求记录的视图需要完整的可选模型列表。
+    local include_recent = view == "all" or view == "details" or view == "recent" or view == "recent-page" or view == "detail-pages"
+    -- The input schema requires both IDs whenever a recent model is selected.
+    -- 选择最近请求模型时，输入 Schema 要求同时提供两个标识。
+    local recent_model = input.recentModel
     -- known_models bounds cost aggregation to catalog and configured model identities.
     -- known_models 将费用聚合限制在目录与已配置模型身份内。
     local known_models = {}
@@ -666,6 +672,8 @@ local function load_dashboard(input, model_overrides)
         -- An empty Provider keeps every Provider; the Provider list itself ignores this filter.
         -- 空 Provider 保留全部 Provider；Provider 列表本身不应用此筛选。
         { kind = "string", value = input.providerId or "" },
+        { kind = "string", value = recent_model and recent_model.providerId or "" },
+        { kind = "string", value = recent_model and recent_model.modelId or "" },
     }
     -- query binds one shared filter contract to every dashboard projection.
     -- query 为每个仪表盘投影绑定同一个筛选契约。
@@ -717,7 +725,7 @@ WITH scoped_attempts AS (
       CASE WHEN first_token_at_ms >= dispatched_at_ms AND terminal_at_ms >= first_token_at_ms
         THEN terminal_at_ms - first_token_at_ms END AS output_duration_ms
     FROM filtered_attempts
-), recent_model_attempts AS (
+), recent_model_scope AS (
     SELECT * FROM timed_attempts
     WHERE ?9 = 'all'
        OR (?9 = 'llm' AND operation IN ('conversation', 'conversation_respond', 'compact', 'warmup')
@@ -726,6 +734,9 @@ WITH scoped_attempts AS (
        OR (?9 = 'rerank' AND operation = 'rerank_documents')
        OR (?9 = 'decision' AND (operation = 'decision_evaluate'
            OR consumer_id IN ('vulcan-code-permission-judge', 'vulcan-code-permission-review')))
+), recent_model_attempts AS (
+    SELECT * FROM recent_model_scope
+    WHERE ?13 = '' OR (provider_id = ?13 AND mapped_model = ?14)
 ), page_offsets AS (SELECT ?3 AS daily_offset, ?4 AS recent_offset, ?6 AS sort_order, ?7 AS priced_models, ?8 AS cost_offset)
 ]] .. sql, filter_params)
     end
@@ -864,7 +875,7 @@ ORDER BY bucket, seriesKey;
         if hourly then hourly_series = { endAtMs = input.endAtMs, points = points }
         else series = points end
     end
-    local recent_attempts = (view == "all" or view == "details" or view == "recent" or view == "recent-page" or view == "detail-pages") and query([[
+    local recent_attempts = include_recent and query([[
 SELECT attempts.attempt_id AS attemptId, attempts.consumer_id AS consumerId,
        attempts.operation, attempts.provider_id AS providerId,
        attempts.service_entry_id AS serviceEntryId,
@@ -895,6 +906,11 @@ ORDER BY CASE WHEN ?6 = 'oldest' THEN attempts.terminal_at_ms END ASC,
          CASE WHEN ?6 = 'newest' THEN attempts.terminal_at_ms END DESC, attempts.attempt_id DESC
 LIMIT 50 OFFSET (SELECT recent_offset FROM page_offsets);
     ]]) or vulcan.json.array()
+    -- Aggregate choices before the exact model filter and pagination so switching can reach every model in scope.
+    -- 在精确模型筛选及分页前汇总选项，以便切换到范围内的任意模型。
+    local recent_models_sql = [[(SELECT json_group_array(json_object('providerId', provider_id, 'modelId', mapped_model))
+        FROM (SELECT provider_id, mapped_model FROM recent_model_scope
+              GROUP BY provider_id, mapped_model ORDER BY MAX(terminal_at_ms) DESC, provider_id, mapped_model))]]
     if page_only then
         -- Return only requested slices; never calculate overview costs, account snapshots or unrelated counts.
         -- 仅返回请求切片；不计算概览费用、账号快照或无关表格数量。
@@ -904,10 +920,14 @@ LIMIT 50 OFFSET (SELECT recent_offset FROM page_offsets);
             page.daily = daily
             page.dailyCount = count_rows[1].count
         end
-        if view ~= "daily-page" then
-            local count_rows = query([[SELECT COUNT(*) AS count FROM recent_model_attempts;]])
+        if include_recent then
+            -- Read the filtered count and unfiltered choices together under the page revision guard.
+            -- 在分页修订保护内一起读取筛选后的数量及完整模型选项。
+            local recent_metadata = query([[SELECT (SELECT COUNT(*) FROM recent_model_attempts) AS count,
+]] .. recent_models_sql .. [[ AS recentModelsJson;]])[1]
             page.recentAttempts = recent_attempts
-            page.recentCount = count_rows[1].count
+            page.recentCount = recent_metadata.count
+            page.recentModels = decode_json_text(recent_metadata.recentModelsJson, "recentModelsJson")
         end
         -- Capture the closing revision after both page rows and counts have been read.
         -- 在分页记录与数量均读取后捕获结束修订号。
@@ -955,6 +975,7 @@ LIMIT 200;
 SELECT CAST(strftime('%s', 'now') AS INTEGER) * 1000 AS generatedAtMs,
        (SELECT COUNT(*) FROM range_usage) AS dailyCount,
        (SELECT COUNT(*) FROM recent_model_attempts) AS recentCount,
+       ]] .. (include_recent and recent_models_sql or "NULL") .. [[ AS recentModelsJson,
        (SELECT json_group_array(consumer_id) FROM
            (SELECT DISTINCT consumer_id FROM provider_usage_daily_v3 ORDER BY consumer_id)) AS consumerIdsJson,
        COALESCE(MAX(CASE WHEN meta_key = 'schema_revision'
@@ -1092,6 +1113,7 @@ FROM provider_usage_meta WHERE meta_key = 'aggregate_revision';
         accounts = accounts,
     }
     if providers then dashboard.providers = providers end
+    if include_recent then dashboard.recentModels = decode_json_text(meta.recentModelsJson, "recentModelsJson") end
     return dashboard
 end
 

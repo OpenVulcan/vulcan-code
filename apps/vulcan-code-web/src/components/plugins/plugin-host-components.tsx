@@ -208,6 +208,9 @@ export interface SelectControlOption {
   // Localized user-visible option label.
   // 本地化用户可见选项标签。
   label: string;
+  // Optional secondary line that identifies or describes the choice.
+  // 用于标识或说明选项的可选第二行。
+  description?: string;
   // Whether the option is unavailable for selection.
   // 当前选项是否不可选择。
   disabled?: boolean;
@@ -247,15 +250,23 @@ export interface SelectControlProps {
 // Returns: a controlled host select whose popup inherits the active Vulcan theme.
 // 返回值：返回弹层继承当前 Vulcan 主题的受控宿主下拉控件。
 export function SelectControl(props: SelectControlProps) {
+  // Give the trigger enough height for both lines even when the all-items choice is selected.
+  // 即使选中全部项，也为触发器保留容纳两行文字的高度。
+  const multiline = props.options.some((option) => option.description !== undefined);
   return (
     <Select disabled={props.disabled} value={props.value} onValueChange={props.onValueChange}>
-      <SelectTrigger aria-label={props.ariaLabel} className={props.className} size={props.size ?? "sm"}>
+      <SelectTrigger aria-label={props.ariaLabel} className={props.className} size={props.size ?? "sm"} data-plugin-multiline={multiline || undefined}>
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
         {props.options.map((option) => (
-          <SelectItem disabled={option.disabled} key={option.value} value={option.value}>
-            {option.label}
+          <SelectItem disabled={option.disabled} key={option.value} value={option.value} textValue={option.label}>
+            {option.description === undefined ? option.label : (
+              <span className="vk-plugin-select-option-copy">
+                <span title={option.label}>{option.label}</span>
+                <small title={option.description}>{option.description}</small>
+              </span>
+            )}
           </SelectItem>
         ))}
       </SelectContent>

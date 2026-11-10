@@ -10,6 +10,10 @@ const MAX_DAILY_ROWS = 100;
 // MAX_RECENT_ATTEMPTS 限制单次面板渲染的物理请求证据数量。
 const MAX_RECENT_ATTEMPTS = 50;
 
+// Use a dropdown once the recent model choices no longer fit the short button row.
+// 最近请求的模型选项超过紧凑按钮行的数量时使用下拉框。
+const MAX_RECENT_MODEL_BUTTONS = 5;
+
 // PRICING_PAGE_SIZE is the pricing-get page length; request offsets and pagination both derive from it.
 // PRICING_PAGE_SIZE 是 pricing-get 的分页长度；请求偏移与分页导航均由其派生。
 const PRICING_PAGE_SIZE = 25;
@@ -705,7 +709,53 @@ export function createPluginPanel(sdk) {
   // Returns a compact, wrapping model cell with the full values available on hover.
   // 返回紧凑可换行的模型单元格，悬停可读取完整值。
   function modelIdentity(record) {
-    return h("div", { className: "plugin-statistics-model-identity" }, h("span", { title: record.modelId }, record.modelId), h("small", { title: record.providerId }, record.providerId));
+    return h("span", { className: "plugin-statistics-model-identity" }, h("span", { title: record.modelId }, record.modelId), h("small", { title: record.providerId }, record.providerId));
+  }
+
+  // Encode a model's exact provider/model pair for React and the select; null represents all models.
+  // 为 React 与下拉框编码模型的精确供应商和模型组合；null 表示全部模型。
+  // model is a returned choice or null; returns a collision-free string identity.
+  // model 为返回的选项或 null；返回无冲突的字符串标识。
+  function recentModelKey(model) {
+    return model === null ? "all" : JSON.stringify([model.providerId, model.modelId]);
+  }
+
+  // Render the exact model selector in the recent requests filter row.
+  // 在最近请求筛选行渲染精确模型筛选器。
+  // models covers the entire scope, selected is the current pair, and onChange receives a pair or null.
+  // models 覆盖完整范围，selected 为当前组合，onChange 接收组合或 null。
+  // Returns the button row, the compact dropdown, or null when there are no choices.
+  // 返回按钮行、紧凑下拉框，或在没有选项时返回 null。
+  function recentModelFilter(models, selected, onChange) {
+    if (models.length === 0) return null;
+    // Use the same exact choice keys for buttons and dropdown options.
+    // 按钮和下拉选项使用同一套精确标识。
+    const selectedKey = recentModelKey(selected);
+    const label = text("recent.model", "Model / provider");
+    const allLabel = text("recent.allModels", "All models");
+    return h("div", { className: "plugin-statistics-recent-models", role: "group", "aria-label": label },
+      models.length > MAX_RECENT_MODEL_BUTTONS
+        ? h(SelectControl, {
+          ariaLabel: label,
+          value: selectedKey,
+          options: [{ value: recentModelKey(null), label: allLabel }, ...models.map((model) => ({
+            value: recentModelKey(model), label: model.modelId, description: model.providerId,
+          }))],
+          onValueChange: (key) => {
+            if (key === recentModelKey(null)) { onChange(null); return; }
+            // Ignore a choice from a menu whose model list changed before the event was handled.
+            // 忽略事件处理前列表已经变化的菜单选项。
+            const model = models.find((choice) => recentModelKey(choice) === key);
+            if (model) onChange(model);
+          },
+        })
+        : [null, ...models].map((model) => {
+          // Keep the all-model action distinct from each exact provider/model button.
+          // 将全部模型操作与每个精确的供应商和模型按钮区分开。
+          const key = recentModelKey(model);
+          return h(Button, { key, type: "button", size: "sm", variant: "outline", "aria-pressed": selectedKey === key,
+            onClick: () => onChange(model) }, model === null ? allLabel : modelIdentity(model));
+        }));
   }
 
   // errorDetails exposes all persisted error facts; absent provider prose is explicitly identified.
@@ -836,6 +886,9 @@ export function createPluginPanel(sdk) {
     // Select a server-filtered model category; switching categories starts at its first page.
     // 选择服务端筛选的模型类别；切换类别时从该类别首页开始。
     const [recentModelType, setRecentModelType] = React.useState("llm");
+    // A model filter applies only to recent attempts and uses the exact displayed provider/model pair.
+    // 模型筛选仅用于最近请求，并使用界面显示的精确供应商和模型组合。
+    const [recentModel, setRecentModel] = React.useState(null);
     // providerFilter narrows the Provider tab to one exact Provider; empty selects all Providers.
     // providerFilter 将供应商分类限定为一个精确 Provider；空值表示全部 Provider。
     const [providerFilter, setProviderFilter] = React.useState("");
@@ -934,7 +987,7 @@ export function createPluginPanel(sdk) {
           startAtMs: timeRange.startAtMs, endAtMs: timeRange.endAtMs, consumerId: consumerFilter === ALL_CONSUMERS ? "" : consumerFilter,
           modelQuery, sortOrder,
           ...(dashboardView === "providers" ? { providerId: providerFilter, dailyOffset } : {}),
-          ...(dashboardView === "recent" ? { recentOffset, recentModelType } : {}),
+          ...(dashboardView === "recent" ? { recentOffset, recentModelType, ...(recentModel === null ? {} : { recentModel }) } : {}),
         };
         // key compares only immutable action arguments, never SQL or runtime guesses.
         // key 仅比较不可变 Action 参数，不使用 SQL 或运行时猜测。
@@ -956,7 +1009,8 @@ export function createPluginPanel(sdk) {
             // Both tables may change when the user navigates before an earlier response completes.
             // 用户在前一次响应完成前导航时，两张表格可能同时变化。
             const daily = previous.dailyOffset !== next.dailyOffset;
-            const recent = previous.recentOffset !== next.recentOffset || previous.recentModelType !== next.recentModelType;
+            const recent = previous.recentOffset !== next.recentOffset || previous.recentModelType !== next.recentModelType
+              || recentModelKey(previous.recentModel ?? null) !== recentModelKey(next.recentModel ?? null);
             if (daily || recent) changedTables = { daily, recent };
           }
         }
@@ -980,13 +1034,23 @@ export function createPluginPanel(sdk) {
           refresh: force, signal: subscription.signal,
         });
         if (mountedRef.current && sequence === requestSequence.current) {
+          // If retention removed the selected pair, reopen the scope at its unfiltered first page.
+          // 如果数据保留策略清除了选中组合，则回到范围内未筛选的第一页。
+          if (argumentsValue.recentModel && !nextDashboard.recentModels.some(
+            (model) => recentModelKey(model) === recentModelKey(argumentsValue.recentModel),
+          )) {
+            dashboardKey.current = null;
+            setRecentModel(null);
+            setRecentOffset(0);
+            return;
+          }
           dashboardKey.current = key;
           // Publish only the requested table slices; unrelated summaries and rows stay mounted.
           // 仅发布请求的表格切片；无关摘要和记录保持挂载。
           setDashboard((previous) => changedTables === null ? nextDashboard : {
             ...previous,
             ...(changedTables.daily ? { daily: nextDashboard.daily, dailyCount: nextDashboard.dailyCount } : {}),
-            ...(changedTables.recent ? { recentAttempts: nextDashboard.recentAttempts, recentCount: nextDashboard.recentCount } : {}),
+            ...(changedTables.recent ? { recentAttempts: nextDashboard.recentAttempts, recentCount: nextDashboard.recentCount, recentModels: nextDashboard.recentModels } : {}),
           });
           setTableRefresh({ daily: false, recent: false, error: "" });
         }
@@ -1001,7 +1065,7 @@ export function createPluginPanel(sdk) {
       } finally {
         if (mountedRef.current && sequence === requestSequence.current) setLoading(false);
       }
-    }, [timeRange, consumerFilter, providerFilter, dailyOffset, recentOffset, recentModelType, modelQuery, sortOrder, dashboardView]);
+    }, [timeRange, consumerFilter, providerFilter, dailyOffset, recentOffset, recentModelType, recentModel, modelQuery, sortOrder, dashboardView]);
 
     // Post-write refresh follows the currently rendered scope even if the user navigated during the write.
     // 即使用户在写入期间切换页面，写入后的刷新也遵循当前渲染作用域。
@@ -1227,7 +1291,7 @@ export function createPluginPanel(sdk) {
       ? h(PageNotice, { tone: "error", actions: retryButton(() => void refresh()) }, tableRefresh.error) : null;
     // searchForm renders the shared model search and time order used by both usage tabs.
     // searchForm 渲染两个用量标签页共用的模型搜索与时间排序。
-    const searchForm = () => h("form", { role: "search", onSubmit: (event) => { event.preventDefault(); setModelQuery(modelDraft.trim()); setDailyOffset(0); setRecentOffset(0); } },
+    const searchForm = () => h("form", { role: "search", onSubmit: (event) => { event.preventDefault(); setModelQuery(modelDraft.trim()); setDailyOffset(0); setRecentOffset(0); setRecentModel(null); } },
       h(PageToolbar, {
         actions: h(SelectControl, { ariaLabel: text("usage.order", "Time order"), value: sortOrder,
           options: ["newest", "oldest"].map((value) => ({ value, label: text(`usage.${value}`, value) })),
@@ -1279,7 +1343,7 @@ export function createPluginPanel(sdk) {
           }))),
           h(TimeRangeControl, {
             value: timeRange,
-            onChange: (value) => { lastTimeRange = value; setTimeRange(value); setDailyOffset(0); setRecentOffset(0); },
+            onChange: (value) => { lastTimeRange = value; setTimeRange(value); setDailyOffset(0); setRecentOffset(0); setRecentModel(null); },
           }),
           consumerIds.length > 0 ? h(SelectControl, {
             ariaLabel: text("consumer.label", "Consumer"),
@@ -1289,7 +1353,7 @@ export function createPluginPanel(sdk) {
               { value: ALL_CONSUMERS, label: text("consumer.all", "All consumers") },
               ...consumerIds.map((consumerId) => ({ value: consumerId, label: consumerLabel(consumerId) })),
             ],
-            onValueChange: (value) => { setConsumerFilter(value); setDailyOffset(0); setRecentOffset(0); },
+            onValueChange: (value) => { setConsumerFilter(value); setDailyOffset(0); setRecentOffset(0); setRecentModel(null); },
           }) : null,
         ),
       },
@@ -1298,7 +1362,7 @@ export function createPluginPanel(sdk) {
           `${text("pricing.catalog", "Reference catalog")} · ${currencyAmount("", dashboard.pricingCatalog.currency).trim()} · ${formatInteger(dashboard.pricingCatalog.entryCount)} + ${formatInteger(dashboard.pricingCatalog.overrideCount)}`) : null,
         modelQuery ? h(Badge, { variant: "outline" }, `${text("pricing.model", "Model")}: ${modelQuery}`) : null,
         modelQuery ? h(Button, { type: "button", size: "sm", variant: "ghost", onClick: () => {
-          setModelQuery(""); setModelDraft(""); setDailyOffset(0); setRecentOffset(0);
+          setModelQuery(""); setModelDraft(""); setDailyOffset(0); setRecentOffset(0); setRecentModel(null);
         } }, text("usage.clearSearch", "Clear model search")) : null,
         dashboard ? h(PageHint, null, `${text("revision", "Revision")} ${formatInteger(dashboard.aggregateRevision)} · ${formatTimestamp(dashboard.generatedAtMs)}`) : null,
       ),
@@ -1475,15 +1539,20 @@ export function createPluginPanel(sdk) {
             status: h(React.Fragment, null,
               h(Badge, { variant: "outline" }, `${displayedPage.recentOffset + filteredAttempts.length} / ${dashboard.recentCount}`),
               tableStatus("recent")),
-            actions: h(SelectControl, {
-              ariaLabel: text("recent.modelTypes", "Model types"),
-              value: recentModelType,
-              options: [{ value: "llm", label: "Chat models" }, { value: "embedding", label: "Embedding models" }, { value: "rerank", label: "Reranking models" }, { value: "decision", label: "Decision models" }]
-                .map(({ value, label }) => ({ value, label: text(`recent.group.${value}`, label) })),
-              onValueChange: (value) => { setRecentModelType(value); setRecentOffset(0); },
-            }),
             footer: pageControls(displayedPage.recentOffset, MAX_RECENT_ATTEMPTS, dashboard.recentCount, setRecentOffset, loading || (tableRefresh.recent && !tableRefresh.error)),
           },
+            h(PageToolbar, {
+              actions: h(SelectControl, {
+                ariaLabel: text("recent.modelTypes", "Model types"),
+                value: recentModelType,
+                options: [{ value: "llm", label: "Chat models" }, { value: "embedding", label: "Embedding models" }, { value: "rerank", label: "Reranking models" }, { value: "decision", label: "Decision models" }]
+                  .map(({ value, label }) => ({ value, label: text(`recent.group.${value}`, label) })),
+                onValueChange: (value) => { setRecentModelType(value); setRecentOffset(0); setRecentModel(null); },
+              }),
+            }, dashboard.view === "recent" && committedPage.recentModelType === recentModelType
+              ? recentModelFilter(dashboard.recentModels, recentModel, (model) => {
+                setRecentModel(model); setRecentOffset(0);
+              }) : null),
             tableError("recent"),
             h(PageTable, {
               label: text("recent.title", "Recent physical attempts"),

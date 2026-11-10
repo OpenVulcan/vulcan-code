@@ -217,6 +217,7 @@ messages:
   daily.cost: Estimación de referencia
   recent.title: Intentos reales recientes
   recent.modelTypes: Tipos de modelo
+  recent.allModels: Todos los modelos
   recent.group.llm: Modelos de conversación
   recent.group.embedding: Modelos de vectores
   recent.group.rerank: Modelos de reordenación

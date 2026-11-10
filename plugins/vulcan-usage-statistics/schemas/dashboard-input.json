@@ -11,9 +11,21 @@
     "dailyOffset": { "type": "integer", "minimum": 0, "maximum": 10000000 },
     "recentOffset": { "type": "integer", "minimum": 0, "maximum": 10000000 },
     "recentModelType": { "type": "string", "enum": ["all", "llm", "embedding", "rerank", "decision"] },
+    "recentModel": { "$ref": "#/$defs/recentModel" },
     "startAtMs": { "type": "integer", "minimum": 1, "maximum": 8640000000000000 },
     "endAtMs": { "type": "integer", "minimum": 1, "maximum": 8640000000000000 }
   },
   "dependentRequired": { "startAtMs": ["endAtMs"], "endAtMs": ["startAtMs"] },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "$defs": {
+    "recentModel": {
+      "type": "object",
+      "properties": {
+        "providerId": { "type": "string", "minLength": 1 },
+        "modelId": { "type": "string", "minLength": 1 }
+      },
+      "required": ["providerId", "modelId"],
+      "additionalProperties": false
+    }
+  }
 }

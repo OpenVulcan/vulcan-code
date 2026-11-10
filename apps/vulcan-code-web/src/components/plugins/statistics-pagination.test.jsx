@@ -43,18 +43,24 @@ const dashboard = {
 let root;
 let host;
 let requests;
+// Whole-scope choices are independent of the currently returned request rows.
+// 完整范围内的选项独立于当前返回的请求记录。
+let recentModels;
 beforeEach(async () => {
   vi.useFakeTimers();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
   requests = [];
+  recentModels = [];
   // Host calls never access a service, provider, real settings or user statistics.
   // 宿主调用不访问服务、供应商、真实设置或用户统计。
   const invoke = (action, args) => {
     if (action === "settings-get") return Promise.resolve({ modelOverrides: {}, catalogModels: [] });
     // Whole-tab views answer at once; only paged table projections stay pending for the test to settle.
     // 整页视图立即返回；只有分页表格投影保持挂起，由测试决定其结果。
-    if (action === "dashboard-get" && ["overview", "providers", "recent"].includes(args.view)) return Promise.resolve({ ...dashboard, view: args.view, providers: [] });
+    if (action === "dashboard-get" && ["overview", "providers", "recent"].includes(args.view)) {
+      return Promise.resolve({ ...dashboard, view: args.view, providers: [], ...(args.view === "recent" ? { recentModels } : {}) });
+    }
     return new Promise((resolve, reject) => requests.push({ action, args, resolve, reject }));
   };
   const Panel = createPluginPanel({ React, components, locale: "en", t: (_, fallback) => fallback, formatTokenCount, invoke });
@@ -97,8 +103,8 @@ it("requests isolated table pages and rejects stale category responses", async (
   expect(requests[0].args.view).toBe("recent-page");
   await choose("Model types", "rerank", recent);
   expect(requests[1].args.recentModelType).toBe("rerank");
-  await act(async () => requests[1].resolve({ recentAttempts: [], recentCount: 75 }));
-  await act(async () => requests[0].resolve({ recentAttempts: [], recentCount: 999 }));
+  await act(async () => requests[1].resolve({ recentAttempts: [], recentCount: 75, recentModels: [] }));
+  await act(async () => requests[0].resolve({ recentAttempts: [], recentCount: 999, recentModels: [] }));
   expect(recent.textContent).toContain("0 / 75");
   expect(recent.textContent).not.toContain("999");
   // Leaving and returning to the committed category supersedes the pending request without another one,
@@ -109,8 +115,62 @@ it("requests isolated table pages and rejects stale category responses", async (
   await choose("Model types", "rerank", recent);
   expect(requests).toHaveLength(3);
   expect(recent.getAttribute("aria-busy")).toBe("false");
-  await act(async () => requests[2].resolve({ recentAttempts: [], recentCount: 999 }));
+  await act(async () => requests[2].resolve({ recentAttempts: [], recentCount: 999, recentModels: [] }));
   expect(recent.textContent).toContain("0 / 75");
+});
+
+// Verify that the scope includes models outside the returned page and keeps providers distinct.
+// 验证选项包含当前页之外的模型，并区分同名模型的供应商。
+it("filters recent pages by an exact model and provider and returns to the first page", async () => {
+  recentModels = [
+    { providerId: "provider-a", modelId: "shared-model" },
+    { providerId: "provider-b", modelId: "shared-model" },
+  ];
+  await click("recent");
+  // The model and category controls share a toolbar below the section heading.
+  // 模型与类别控件共用区块标题下方的工具栏。
+  const recent = section("Recent physical attempts");
+  const header = recent.querySelector("header");
+  const toolbar = recent.querySelector('[data-slot="page-toolbar"]');
+  const options = toolbar.querySelector('[role="group"][aria-label="Model / provider"]');
+  expect(header.contains(toolbar)).toBe(false);
+  expect(toolbar.querySelector('select[aria-label="Model types"]')).not.toBeNull();
+  expect(options.querySelector("select")).toBeNull();
+  await click("Next", recent);
+  expect(requests[0].args.recentOffset).toBe(50);
+  await act(async () => requests[0].resolve({ recentAttempts: [], recentCount: 100, recentModels }));
+  // The provider label on its own line disambiguates buttons with the same model name.
+  // 单独一行的供应商名称区分模型名相同的按钮。
+  const modelButton = [...options.querySelectorAll("button")].find((button) => button.querySelector("small")?.textContent === "provider-b");
+  expect(modelButton.querySelector("span[title]").textContent).toBe("shared-model");
+  await act(async () => modelButton.click());
+  expect(requests[1].args).toMatchObject({ view: "recent-page", recentOffset: 0, recentModel: recentModels[1] });
+  await act(async () => requests[1].resolve({ recentAttempts: [], recentCount: 4, recentModels }));
+  expect(modelButton.getAttribute("aria-pressed")).toBe("true");
+  expect(recent.textContent).toContain("0 / 4");
+  await click("All models", recent);
+  expect(requests[2].args.recentModel).toBeUndefined();
+  expect(requests[2].args.recentOffset).toBe(0);
+});
+
+// Exercise the boundary without counting the all-model reset option as a model.
+// 验证阈值边界，且不将全部模型选项计为一个模型。
+it.each([5, 6])("chooses the correct recent model control for %i distinct models", async (count) => {
+  recentModels = Array.from({ length: count }, (_, index) => ({ providerId: `provider-${index}`, modelId: "shared-model" }));
+  await click("recent");
+  // Read the control within the filter toolbar and select an option from the dropdown when present.
+  // 从筛选工具栏内读取控件；有下拉框时选择一项。
+  const options = section("Recent physical attempts").querySelector('[data-slot="page-toolbar"] [role="group"][aria-label="Model / provider"]');
+  const select = options.querySelector("select");
+  if (count === 5) {
+    expect(select).toBeNull();
+    expect(options.querySelectorAll("button[aria-pressed]")).toHaveLength(count + 1);
+  } else {
+    expect(options.querySelector("button")).toBeNull();
+    expect(select.options).toHaveLength(count + 1);
+    await choose("Model / provider", select.options[count].value, options);
+    expect(requests[0].args.recentModel).toEqual(recentModels.at(-1));
+  }
 });
 
 it("keeps a failed daily page inside its own section and retries it", async () => {
@@ -192,6 +252,6 @@ it("hides token generation timing for embeddings and reranking in both tables", 
   await click("recent");
   const recent = section("Recent physical attempts");
   await choose("Model types", "embedding", recent);
-  await act(async () => requests[1].resolve({ recentAttempts: rows, recentCount: 3 }));
+  await act(async () => requests[1].resolve({ recentAttempts: rows, recentCount: 3, recentModels: [] }));
   expectTiming(recent);
 });

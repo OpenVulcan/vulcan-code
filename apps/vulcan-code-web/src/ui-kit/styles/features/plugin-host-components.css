@@ -102,6 +102,24 @@
 .plugin-statistics-model-identity, .plugin-statistics-time { display: grid; gap: 3px; }
 .plugin-statistics-model-identity { white-space: normal; overflow-wrap: anywhere; }
 .plugin-statistics-model-identity > small, .plugin-statistics-time > small { color: var(--vk-ink-2); font-size: var(--vk-fs-xs); }
+/* Wrap model choices within the filter row when long names cannot fit side by side. */
+/* 当较长的模型名无法并排显示时，在筛选行内换行。 */
+.plugin-statistics-recent-models { display: flex; flex: 1 1 auto; flex-wrap: wrap; align-items: center; gap: var(--vk-u); min-width: 0; }
+.plugin-statistics-recent-models > .vk-btn[data-size="sm"] {
+  flex: 0 1 auto;
+  min-width: 0;
+  min-height: var(--vk-h-md);
+  height: auto;
+  padding-block: var(--vk-u);
+  text-align: start;
+}
+.plugin-statistics-recent-models > .vk-btn[aria-pressed="true"] { border-color: var(--vk-signal); background: var(--vk-signal-soft); }
+.plugin-statistics-recent-models .plugin-statistics-model-identity,
+.vk-plugin-select-option-copy { display: grid; gap: 2px; min-width: 0; line-height: var(--vk-lh-tight); }
+.plugin-statistics-recent-models .plugin-statistics-model-identity > *,
+.vk-plugin-select-option-copy > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vk-select[data-plugin-multiline] { min-height: var(--vk-h-md); height: auto; padding-block: var(--vk-u); }
+.vk-plugin-select-option-copy > small { color: var(--vk-ink-2); font-size: var(--vk-fs-xs); }
 
 .plugin-text-document-content,
 .plugin-text-document-state {

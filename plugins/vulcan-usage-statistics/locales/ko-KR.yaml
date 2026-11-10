@@ -217,6 +217,7 @@ messages:
   daily.cost: 참고 예상 비용
   recent.title: 최근 실제 시도
   recent.modelTypes: 모델 유형
+  recent.allModels: 모든 모델
   recent.group.llm: 대화 모델
   recent.group.embedding: 임베딩 모델
   recent.group.rerank: 재순위화 모델

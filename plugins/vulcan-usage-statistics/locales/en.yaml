@@ -217,6 +217,7 @@ messages:
   daily.cost: Reference estimate
   recent.title: Recent physical attempts
   recent.modelTypes: Model types
+  recent.allModels: All models
   recent.group.llm: Conversation models
   recent.group.embedding: Embedding models
   recent.group.rerank: Reranking models

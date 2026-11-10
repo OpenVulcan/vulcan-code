@@ -217,6 +217,7 @@ messages:
   daily.cost: 参考推定値
   recent.title: 最近の実際の試行
   recent.modelTypes: モデルの種類
+  recent.allModels: すべてのモデル
   recent.group.llm: 会話モデル
   recent.group.embedding: ベクトルモデル
   recent.group.rerank: 再順位付けモデル

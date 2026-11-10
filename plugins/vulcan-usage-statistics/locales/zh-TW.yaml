@@ -217,6 +217,7 @@ messages:
   daily.cost: 參考估算
   recent.title: 最近實際呼叫
   recent.modelTypes: 模型類別
+  recent.allModels: 全部模型
   recent.group.llm: 對話模型
   recent.group.embedding: 向量模型
   recent.group.rerank: 重新排序模型

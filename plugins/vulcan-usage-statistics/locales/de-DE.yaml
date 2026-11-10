@@ -217,6 +217,7 @@ messages:
   daily.cost: Referenzschätzung
   recent.title: Letzte tatsächliche Versuche
   recent.modelTypes: Modelltypen
+  recent.allModels: Alle Modelle
   recent.group.llm: Gesprächsmodelle
   recent.group.embedding: Vektormodelle
   recent.group.rerank: Neusortierungsmodelle

@@ -217,6 +217,7 @@ messages:
   daily.cost: Ориентировочная оценка
   recent.title: Последние фактические попытки
   recent.modelTypes: Типы моделей
+  recent.allModels: Все модели
   recent.group.llm: Диалоговые модели
   recent.group.embedding: Векторные модели
   recent.group.rerank: Модели переранжирования

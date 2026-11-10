@@ -69,6 +69,19 @@
       "maxItems": 200,
       "items": { "$ref": "#/$defs/attemptSummary" }
     },
+    "recentModels": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "providerId": { "type": "string", "minLength": 1 },
+          "modelId": { "type": "string", "minLength": 1 }
+        },
+        "required": ["providerId", "modelId"],
+        "additionalProperties": false
+      },
+      "uniqueItems": true
+    },
     "accounts": {
       "type": "array",
       "maxItems": 500,
@@ -86,6 +99,8 @@
       "then": { "required": ["daily", "dailyCount"] } },
     { "if": { "properties": { "view": { "enum": ["recent-page", "detail-pages"] } } },
       "then": { "required": ["recentAttempts", "recentCount"] } },
+    { "if": { "properties": { "view": { "enum": ["all", "details", "recent", "recent-page", "detail-pages"] } } },
+      "then": { "required": ["recentModels"] } },
     { "if": { "properties": { "view": { "enum": ["all", "providers"] } } },
       "then": { "required": ["providers"] } },
     { "if": { "properties": { "view": { "enum": ["all", "overview", "details", "providers", "recent", "maintenance"] } } },

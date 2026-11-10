@@ -33,6 +33,7 @@ for _, view in ipairs({ "daily-page", "recent-page", "detail-pages" }) do
         end
         assert(request.params[3].value == 100 and request.params[4].value == 50)
         assert(request.params[9].value == "embedding")
+        assert(request.params[13].value == "selected-provider" and request.params[14].value == "shared-model")
         if sql:find("LIMIT 100 OFFSET", 1, true) then
             assert(view ~= "recent-page", "recent page must not query model usage")
             calls[#calls + 1] = "daily"
@@ -43,10 +44,13 @@ for _, view in ipairs({ "daily-page", "recent-page", "detail-pages" }) do
             assert(view ~= "recent-page")
             calls[#calls + 1] = "daily-count"
             return { rows = {{ count = 150 }} }
-        elseif sql:find("SELECT COUNT(*) AS count FROM recent_model_attempts;", 1, true) then
+        elseif sql:find("AS recentModelsJson;", 1, true) then
             assert(view ~= "daily-page")
             calls[#calls + 1] = "recent-count"
-            return { rows = {{ count = 75 }} }
+            return { rows = {{ count = 75, recentModelsJson = [[
+                [{"providerId":"selected-provider","modelId":"shared-model"},
+                 {"providerId":"other-provider","modelId":"shared-model"}]
+            ]] }} }
         else
             error("Unexpected query in page projection: " .. sql)
         end
@@ -64,6 +68,7 @@ for _, view in ipairs({ "daily-page", "recent-page", "detail-pages" }) do
     local plugin = assert(load(source, "@statistics-page-test", "t", environment))()
     local ok, response = pcall(plugin.dashboard_get, { arguments = {
         view = view, dailyOffset = 100, recentOffset = 50, recentModelType = "embedding",
+        recentModel = { providerId = "selected-provider", modelId = "shared-model" },
     } })
     if args.change_revision == true then
         assert(not ok and tostring(response):find("consistent page", 1, true), tostring(response))
@@ -75,6 +80,12 @@ for _, view in ipairs({ "daily-page", "recent-page", "detail-pages" }) do
         assert(page.series == nil and page.consumerIds == nil and page.pricingCatalog == nil)
         assert((page.daily ~= nil) == (view ~= "recent-page"))
         assert((page.recentAttempts ~= nil) == (view ~= "daily-page"))
+        if view == "daily-page" then
+            assert(page.recentModels == nil)
+        else
+            assert(page.recentCount == 75 and #page.recentModels == 2)
+            assert(page.recentModels[2].providerId == "other-provider")
+        end
     end
     assert(revision_reads == (args.change_revision and 4 or 2))
     assert(#calls == (view == "detail-pages" and 4 or 2) * (args.change_revision and 2 or 1))

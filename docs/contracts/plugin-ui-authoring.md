@@ -219,6 +219,8 @@ Action 完成后宿主只重读凭据校验状态，不重置配置草稿；状�
 
 `TimeSeriesLineChart` 按所在容器宽度绘制。数据点使用稳定 `key` 和 `value`，并可提供 `label` 作为横轴短标签、`detailLabel` 作为提示和辅助技术读取的完整标签。
 
+`SelectControl` 的选项使用 `value` 和 `label`，可用 `description` 在列表选项与选中值中展示第二行文字。
+
 ### 自定义样式限制
 
 插件不携带样式表。`apps/vulcan-code-web` 的 `pnpm run check:ui-architecture`（`pnpm run build` 的一部分）对 `plugins/*/ui/*.mjs`（测试文件除外）强制执行：
