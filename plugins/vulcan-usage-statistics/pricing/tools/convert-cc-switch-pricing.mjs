@@ -1,23 +1,14 @@
-import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
-// ADAPTER_VERSION identifies the exact Vulcan source-adaptation contract.
-// ADAPTER_VERSION 标识精确的 Vulcan 来源适配契约。
-const ADAPTER_VERSION = 1;
+import { syncReferencePricing } from "./sync-reference-pricing.mjs";
+
 // UPSTREAM_REPOSITORY is provenance only and is never a runtime dependency.
 // UPSTREAM_REPOSITORY 仅用于来源追踪，绝不是运行时依赖。
 const UPSTREAM_REPOSITORY = "https://github.com/farion1231/cc-switch.git";
 // UPSTREAM_SOURCE_PATH identifies the audited upstream source file.
 // UPSTREAM_SOURCE_PATH 标识已审计的上游源文件。
 const UPSTREAM_SOURCE_PATH = "src-tauri/src/database/schema.rs";
-// GENERATED_BLOCK_BEGIN marks the first generated runtime line.
-// GENERATED_BLOCK_BEGIN 标记运行时生成区块的首行。
-const GENERATED_BLOCK_BEGIN = "-- BEGIN GENERATED VULCAN DEFAULT PRICING CATALOG";
-// GENERATED_BLOCK_END marks the last generated runtime line.
-// GENERATED_BLOCK_END 标记运行时生成区块的末行。
-const GENERATED_BLOCK_END = "-- END GENERATED VULCAN DEFAULT PRICING CATALOG";
-
 // Fail with one deterministic adapter diagnostic.
 // 使用确定性的适配器诊断终止执行。
 //
@@ -207,17 +198,6 @@ function canonicalDecimal(value, label) {
   return value;
 }
 
-// Compute one lowercase SHA-256 digest for exact UTF-8 text.
-// 为精确 UTF-8 文本计算一个小写 SHA-256 摘要。
-//
-// text is the exact content to hash.
-// text 是要计算哈希的精确内容。
-// Returns the hexadecimal digest without a prefix.
-// 返回不含前缀的十六进制摘要。
-function sha256(text) {
-  return createHash("sha256").update(text, "utf8").digest("hex");
-}
-
 // Serialize deterministic JSON with one trailing newline.
 // 序列化确定性 JSON 并附加一个尾随换行。
 //
@@ -227,17 +207,6 @@ function sha256(text) {
 // 返回便于审计的 UTF-8 文本。
 function jsonText(value) {
   return `${JSON.stringify(value, null, 2)}\n`;
-}
-
-// Escape one ASCII catalog field for a Lua double-quoted literal.
-// 为 Lua 双引号字面量转义一个 ASCII 目录字段。
-//
-// value is one validated model or price string.
-// value 是一个已校验的模型或价格字符串。
-// Returns a Lua-safe string body.
-// 返回可安全用于 Lua 的字符串正文。
-function luaString(value) {
-  return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("\n", "\\n");
 }
 
 // Write one generated file after ensuring its parent directory exists.
@@ -351,101 +320,14 @@ const upstreamSnapshot = {
 // upstreamSnapshotText is hashed exactly as written.
 // upstreamSnapshotText 按实际写入内容精确计算哈希。
 const upstreamSnapshotText = jsonText(upstreamSnapshot);
-// canonicalModels removes upstream naming from the Vulcan runtime contract.
-// canonicalModels 从 Vulcan 运行时契约中移除上游命名。
-const canonicalModels = sortedModels.map((model) => ({
-  canonicalModelId: model.modelId,
-  displayName: model.displayName,
-  aliases: [],
-  prices: {
-    inputPerMillion: model.inputCostPerMillion,
-    outputPerMillion: model.outputCostPerMillion,
-    cacheReadPerMillion: model.cacheReadCostPerMillion,
-    cacheWritePerMillion: model.cacheCreationCostPerMillion,
-  },
-}));
-// catalogRevisionMaterial excludes provenance so equivalent price content has one stable identity.
-// catalogRevisionMaterial 排除来源信息，使等价价格内容拥有唯一稳定身份。
-const catalogRevisionMaterial = jsonText({
-  schemaVersion: 1,
-  currency: "USD",
-  unit: "per_million_tokens",
-  matchingStrategy: "exact_canonical_model_id",
-  models: canonicalModels,
-});
-// catalogRevision is the content-addressed Vulcan pricing identity.
-// catalogRevision 是内容寻址的 Vulcan 价格身份。
-const catalogRevision = `sha256:${sha256(catalogRevisionMaterial)}`;
-// vulcanCatalog is the only price contract consumed by Vulcan plugin logic.
-// vulcanCatalog 是 Vulcan 插件逻辑消费的唯一价格契约。
-const vulcanCatalog = {
-  schemaVersion: 1,
-  catalogId: "vulcan.reference.model-pricing",
-  catalogRevision,
-  adapterVersion: ADAPTER_VERSION,
-  currency: "USD",
-  unit: "per_million_tokens",
-  matching: {
-    strategy: "exact_canonical_model_id",
-    aliases: "explicit_only",
-  },
-  source: {
-    kind: "vendored_reference_snapshot",
-    snapshotSha256: sha256(upstreamSnapshotText),
-    provenance,
-  },
-  models: canonicalModels,
-};
-// upstreamOutput is the plugin-local frozen reference snapshot.
-// upstreamOutput 是插件本地冻结参考快照。
-const upstreamOutput = resolve(pluginRoot, "pricing/upstream/cc-switch-v3.19.2-model-pricing.v1.json");
-// catalogOutput is the Vulcan-owned canonical catalog.
-// catalogOutput 是 Vulcan 自有的规范价格目录。
-const catalogOutput = resolve(pluginRoot, "pricing/catalog/vulcan-model-pricing.v1.json");
-writeGeneratedFile(upstreamOutput, upstreamSnapshotText);
-writeGeneratedFile(catalogOutput, jsonText(vulcanCatalog));
-
-// luaRows contains the generated exact-match runtime index.
-// luaRows 包含生成的精确匹配运行时索引。
-const luaRows = canonicalModels.map((model) => `    ["${luaString(model.canonicalModelId)}"] = { input_per_million = "${luaString(model.prices.inputPerMillion)}", output_per_million = "${luaString(model.prices.outputPerMillion)}", cache_read_per_million = "${luaString(model.prices.cacheReadPerMillion)}", cache_write_per_million = "${luaString(model.prices.cacheWritePerMillion)}" },`);
-// generatedLua is replaced atomically between stable marker lines.
-// generatedLua 在稳定标记行之间被原子替换。
-const generatedLua = [
-  GENERATED_BLOCK_BEGIN,
-  "-- This block is generated by pricing/tools/convert-cc-switch-pricing.mjs.",
-  "-- 此区块由 pricing/tools/convert-cc-switch-pricing.mjs 生成。",
-  "local DEFAULT_PRICING_CATALOG = {",
-  "    catalog_id = \"vulcan.reference.model-pricing\",",
-  `    revision = "${catalogRevision}",`,
-  "    currency = \"USD\",",
-  "    matching_strategy = \"exact_canonical_model_id\",",
-  `    entry_count = ${canonicalModels.length},`,
-  "    models = {",
-  ...luaRows,
-  "    },",
-  "}",
-  GENERATED_BLOCK_END,
-].join("\n");
-// runtimeBundlePath identifies the sole managed Lua entrypoint.
-// runtimeBundlePath 标识唯一的受管 Lua 入口。
-const runtimeBundlePath = resolve(pluginRoot, "runtime/plugin.bundle.lua");
-// runtimeBundle is the existing hand-written bundle surrounding the generated block.
-// runtimeBundle 是生成区块外围现有的手写 Bundle。
-const runtimeBundle = readFileSync(runtimeBundlePath, "utf8");
-// blockPattern locates exactly one complete generated section.
-// blockPattern 精确定位一个完整生成区段。
-const blockPattern = new RegExp(`${GENERATED_BLOCK_BEGIN.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\\s\\S]*?${GENERATED_BLOCK_END.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`);
-if (!blockPattern.test(runtimeBundle)) fail("runtime bundle is missing the generated catalog markers");
-writeGeneratedFile(runtimeBundlePath, runtimeBundle.replace(blockPattern, generatedLua));
-
-process.stdout.write(`${JSON.stringify({
-  adapterVersion: ADAPTER_VERSION,
+// Write the licensed input before regenerating the merged reference catalog.
+// 先写入有许可的输入，再重新生成合并参考目录。
+writeGeneratedFile(resolve(pluginRoot, "pricing/upstream/cc-switch-v3.19.2-model-pricing.v1.json"), upstreamSnapshotText);
+process.stdout.write(jsonText({
   sourceTag: upstreamTag,
   sourceCommit: upstreamCommit,
   seedEntryCount: seedTuples.length,
   declaredRepairCount: repairTuples.length,
   appliedRepairCount,
-  catalogEntryCount: canonicalModels.length,
-  catalogRevision,
-  snapshotSha256: sha256(upstreamSnapshotText),
-})}\n`);
+  ...syncReferencePricing(pluginRoot),
+}));

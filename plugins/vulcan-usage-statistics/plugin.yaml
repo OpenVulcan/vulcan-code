@@ -1,6 +1,6 @@
 schema_version: 2
 id: vulcan-usage-statistics
-version: 0.4.0
+version: 0.5.1
 default_enabled: true
 display:
   name: Vulcan Usage Statistics
@@ -27,6 +27,7 @@ required_files:
   - pricing/THIRD_PARTY_NOTICES.md
   - pricing/licenses/CC-SWITCH-MIT.txt
   - pricing/upstream/cc-switch-v3.19.2-model-pricing.v1.json
+  - pricing/upstream/official-model-pricing.v1.json
   - pricing/catalog/vulcan-model-pricing.v1.json
 execution:
   dependencies:

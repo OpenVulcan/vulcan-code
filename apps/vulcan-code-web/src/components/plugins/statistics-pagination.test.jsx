@@ -193,7 +193,11 @@ it("keeps pricing rows and committed page numbers during loading, failure and re
   await act(async () => vi.advanceTimersByTime(200));
   // Distinct rows identify the exact committed pricing page through asynchronous replacements.
   // 不同记录在异步替换期间标识精确的已提交定价页。
-  const prices = (name) => ({ totalCount: 60, currency: "USD", models: [{ modelId: name, source: "unpriced", prices: null }] });
+  // Return a single unpriced model group within a multi-page directory.
+  // 返回多页目录中的一个未定价模型组。
+  const prices = (name) => ({ totalCount: 60, currency: "USD", models: [
+    { modelId: name, attempts: 0, aliases: [], source: "unpriced", effectivePrices: {} },
+  ] });
   await act(async () => requests[0].resolve(prices("first-page-model")));
   const pricing = section("Model reference prices");
   const firstRow = pricing.querySelector("tbody tr");

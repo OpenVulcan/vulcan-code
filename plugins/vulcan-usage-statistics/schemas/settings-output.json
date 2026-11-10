@@ -2,6 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
+    "cnyPerUsd": { "type": "string" },
+    "modelAliases": { "type": "object", "additionalProperties": { "type": "string" } },
+    "modelPrefixes": { "type": "object", "additionalProperties": { "type": "string" } },
     "modelOverrides": {
       "type": "object",
       "maxProperties": 1000,
@@ -38,20 +41,73 @@
       "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$"
     },
     "modelPrice": {
+      "allOf": [{ "$ref": "#/$defs/priceAmounts" }],
+      "properties": {
+        "offPeak": { "$ref": "#/$defs/offPeak" },
+        "contextTiers": { "$ref": "#/$defs/contextTiers" }
+      },
+      "unevaluatedProperties": false
+    },
+    "contextTiers": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "aboveInputTokens": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+          "prices": { "$ref": "#/$defs/completePriceAmounts" }
+        },
+        "required": ["aboveInputTokens", "prices"],
+        "additionalProperties": false
+      }
+    },
+    "completePriceAmounts": {
+      "allOf": [{ "$ref": "#/$defs/priceAmounts" }],
+      "unevaluatedProperties": false
+    },
+    "offPeak": {
+      "type": "object",
+      "properties": {
+        "utcOffsetMinutes": { "type": "integer", "minimum": -720, "maximum": 840 },
+        "windows": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 14,
+          "items": {
+            "type": "object",
+            "properties": {
+              "days": { "enum": ["daily", "weekdays", "weekend"] },
+              "start": { "type": "string", "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$" },
+              "end": { "type": "string", "pattern": "^(?:(?:[01][0-9]|2[0-3]):[0-5][0-9]|24:00)$" }
+            },
+            "required": ["days", "start", "end"],
+            "additionalProperties": false
+          }
+        },
+        "prices": { "$ref": "#/$defs/completePriceAmounts" },
+        "contextTiers": { "$ref": "#/$defs/contextTiers" }
+      },
+      "required": ["utcOffsetMinutes", "windows", "prices"],
+      "additionalProperties": false
+    },
+    "priceAmounts": {
       "type": "object",
       "properties": {
         "inputPerMillion": { "$ref": "#/$defs/decimalPrice" },
+        "inputPerMillionCny": { "$ref": "#/$defs/decimalPrice" },
         "outputPerMillion": { "$ref": "#/$defs/decimalPrice" },
+        "outputPerMillionCny": { "$ref": "#/$defs/decimalPrice" },
         "cacheReadPerMillion": { "$ref": "#/$defs/decimalPrice" },
-        "cacheWritePerMillion": { "$ref": "#/$defs/decimalPrice" }
+        "cacheReadPerMillionCny": { "$ref": "#/$defs/decimalPrice" },
+        "cacheWritePerMillion": { "$ref": "#/$defs/decimalPrice" },
+        "cacheWritePerMillionCny": { "$ref": "#/$defs/decimalPrice" }
       },
-      "required": [
-        "inputPerMillion",
-        "outputPerMillion",
-        "cacheReadPerMillion",
-        "cacheWritePerMillion"
-      ],
-      "additionalProperties": false
+      "allOf": [
+        { "anyOf": [{ "required": ["inputPerMillion"] }, { "required": ["inputPerMillionCny"] }] },
+        { "anyOf": [{ "required": ["outputPerMillion"] }, { "required": ["outputPerMillionCny"] }] },
+        { "anyOf": [{ "required": ["cacheReadPerMillion"] }, { "required": ["cacheReadPerMillionCny"] }] },
+        { "anyOf": [{ "required": ["cacheWritePerMillion"] }, { "required": ["cacheWritePerMillionCny"] }] }
+      ]
     }
   }
 }

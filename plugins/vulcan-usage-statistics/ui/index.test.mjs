@@ -119,7 +119,10 @@ async function mount(invoke, strict = false, locale = "en-US", messages = {}, fa
       ActivityHeatmap, ActivityHeatmapLegend: plain, TimeSeriesLineChart, ChartLegend: plain,
       HelpTooltip: ({ ariaLabel }) => React.createElement("button", { "aria-label": ariaLabel }),
       Dialog: ({ open, children }) => open ? React.createElement("div", null, children) : null,
-      DialogContent: plain, DialogHeader: plain, DialogTitle: plain, DialogDescription: plain, DialogFooter: plain },
+      // Preserve the dialog's class so tests can address its header, scrollable form and footer together.
+      // 保留对话框类名，让测试可同时访问标题、可滚动表单和底部操作区。
+      DialogContent: ({ className, children }) => React.createElement("div", { className }, children),
+      DialogHeader: plain, DialogTitle: plain, DialogDescription: plain, DialogFooter: plain },
   };
   // root mounts the real hook-based plugin component.
   // root 挂载真实的基于 Hook 的插件组件。
@@ -144,7 +147,8 @@ const settings = { modelOverrides: {}, catalogModels: [{ modelId: "fixture-model
 
 // pricingDirectory is a complete declared page, independent from dashboard availability.
 // pricingDirectory 是完整声明分页，与仪表盘是否可用无关。
-const pricingDirectory = { currency: "USD", totalCount: 1, models: [{ modelId: "fixture-model", attempts: 0, source: "catalog", prices: settings.catalogModels[0].prices }] };
+const pricingDirectory = { currency: "USD", totalCount: 1, models: [{ modelId: "fixture-model", attempts: 0, source: "catalog",
+  aliases: [], effectivePrices: { USD: settings.catalogModels[0].prices } }] };
 
 // openPricing follows the real task navigation and allows its debounced directory read to settle.
 // openPricing 遵循真实任务导航，并等待防抖目录读取完成。
@@ -462,7 +466,7 @@ test("used-price directory reads and paginates the full server filter", async ()
     calls.push(argumentsValue);
     return Promise.resolve({ currency: "USD", totalCount: 30, models: [{
       modelId: argumentsValue.offset === 0 ? "history-only-1" : "history-only-26",
-      attempts: 1, source: "unpriced", prices: null,
+      attempts: 1, source: "unpriced", aliases: [], effectivePrices: {},
     }] });
   });
   await React.act(async () => panel.container.querySelector("nav button:nth-child(4)").click());
@@ -537,14 +541,14 @@ test("pricing requires an explicit target, preserves its draft across filters an
     if (action === "dashboard-get") return Promise.resolve(dashboard);
     if (action === "settings-update") { saves.push(args); return Promise.resolve({ ...settings, modelOverrides: args.modelOverrides }); }
     return Promise.resolve({ currency: "USD", totalCount: args.search ? 0 : 1,
-      models: args.search ? [] : [{ modelId: "unknown-model", attempts: 1, source: "unpriced", prices: null }] });
+      models: args.search ? [] : [{ modelId: "unknown-model", attempts: 1, source: "unpriced", aliases: [], effectivePrices: {} }] });
   });
   try {
     await openPricing(panel);
-    assert.equal(panel.container.querySelector(".plugin-statistics-price-editor"), null);
+    assert.equal(panel.container.querySelector(".plugin-statistics-price-dialog"), null);
     const table = [...panel.container.querySelectorAll("button")].find((button) => button.textContent === "unknown-model").closest("table");
     await React.act(async () => [...table.querySelectorAll("button")].find((button) => button.textContent === "unknown-model").click());
-    const editor = panel.container.querySelector(".plugin-statistics-price-editor");
+    const editor = panel.container.querySelector(".plugin-statistics-price-dialog");
     assert.match(editor.textContent, /Edit model · unknown-model/);
     assert.match(editor.textContent, /Unpriced/);
     assert.doesNotMatch(editor.textContent, /Catalog default/);
@@ -554,7 +558,10 @@ test("pricing requires an explicit target, preserves its draft across filters an
     // setter 使用原生输入编辑，让 React 接收到精确十进制字符串而不是数字。
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
     const decimals = ["0.0000000000000000000000001", "2.12345678901234567890", "0", "1.50"];
-    await React.act(async () => [...editor.querySelectorAll("input")].forEach((input, index) => {
+    // Only the USD inputs are explicit in this legacy-compatible write.
+    // 此次兼容历史配置的写入仅显式填写美元字段。
+    const usdInputs = [...editor.querySelectorAll('input[aria-label$="USD"]')];
+    await React.act(async () => usdInputs.forEach((input, index) => {
       setter.call(input, decimals[index]); input.dispatchEvent(new window.Event("input", { bubbles: true }));
     }));
     await React.act(async () => {
@@ -563,12 +570,13 @@ test("pricing requires an explicit target, preserves its draft across filters an
     });
     await React.act(async () => new Promise((resolve) => window.setTimeout(resolve, 250)));
     assert.match(editor.textContent, /Edit model · unknown-model/);
-    assert.deepEqual([...editor.querySelectorAll("input")].map((input) => input.value), decimals);
+    assert.deepEqual(usdInputs.map((input) => input.value), decimals);
+    assert.equal([...editor.querySelectorAll('input[aria-label$="CNY"]')].every((input) => input.value === ""), true);
     await React.act(async () => [...editor.querySelectorAll("button")].find((button) => button.textContent === "Save override").click());
     assert.deepEqual(saves, [{ modelOverrides: { "unknown-model": {
       inputPerMillion: decimals[0], outputPerMillion: decimals[1], cacheReadPerMillion: decimals[2], cacheWritePerMillion: decimals[3],
     } } }]);
-    assert.equal(panel.container.querySelector(".plugin-statistics-price-editor"), null);
+    assert.equal(panel.container.querySelector(".plugin-statistics-price-dialog"), null);
     assert.match(panel.container.textContent, /Saved model price override/);
   } finally { await panel.close(); }
 });
@@ -599,6 +607,101 @@ test("price save rejects duplicate events and retains failed exact decimals", as
     assert.equal(input.value, "0.12345678901234567890");
     assert.equal(save.disabled, false);
     assert.match(panel.container.textContent, /isolated write rejected/);
+  } finally { await panel.close(); }
+});
+
+// Verify that currency and schedule edits consolidate the selected alias without altering unrelated prices.
+// 验证币种和时段编辑归并所选别名，同时保留无关模型的价格。
+test("price editor saves a shared alias tariff and preserves the exchange rate", async () => {
+  // configured is the same historical price under an explicit alias and a family variant.
+  // configured 是显式别名和系列变体下相同的历史价格。
+  const configured = settings.catalogModels[0].prices;
+  const initial = { ...settings, modelAliases: {
+      "fixture-alias": "fixture-model", "fixture-model": "fixture-model", "fixture-model-advanced": "fixture-model-advanced",
+    },
+    modelPrefixes: { "fixture-family": "fixture-model" },
+    modelOverrides: {
+      "aggregator/vendor/Fixture-Alias": configured,
+      "aggregator/vendor/Fixture-Family": configured,
+      "aggregator/vendor/Fixture-Family-0309": configured,
+      "aggregator/vendor/Fixture-Model-Preview-20261008": configured,
+      "aggregator/vendor/Fixture-Model-Variant": configured,
+      "aggregator/vendor/Fixture-Model-Advanced-Variant": configured,
+      unrelated: configured,
+    } };
+  // Stable catalog keys allow this test to ignore the exact wording.
+  // 使用稳定文案键，使测试不依赖具体措辞。
+  const messages = Object.fromEntries([
+    "exchangeRate", "saveExchangeRate", "enableOffPeak", "offPeak", "windowStart", "windowEnd",
+    "windowDays", "addWindow", "save", "contextThreshold", "addContextTier",
+  ].map((key) => [`pricing.${key}`, `fixture-${key}`]));
+  // writes records the exact full configuration sent through the declared settings action.
+  // writes 记录通过已声明设置 Action 提交的完整精确配置。
+  const writes = [];
+  const panel = await mount((action, args) => {
+    if (action === "settings-get") return Promise.resolve(initial);
+    if (action === "dashboard-get") return Promise.resolve(dashboard);
+    if (action === "pricing-get") return Promise.resolve(pricingDirectory);
+    writes.push(args);
+    return Promise.resolve({ ...initial, ...args });
+  }, false, "en-US", messages);
+  try {
+    await openPricing(panel);
+    // change drives React through the native field setter and input event.
+    // change 通过原生字段赋值和输入事件驱动 React。
+    const change = async (label, value) => {
+      const input = panel.container.querySelector(`input[aria-label="${label}"]`);
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+      await React.act(async () => { setter.call(input, value); input.dispatchEvent(new window.Event("input", { bubbles: true })); });
+    };
+    // click triggers the button identified by a stable fixture label.
+    // click 触发由稳定夹具标签标识的按钮。
+    const click = async (label) => React.act(async () =>
+      [...panel.container.querySelectorAll("button")].find((button) => button.textContent === label).click());
+    await change("fixture-exchangeRate", "7.2");
+    await click("fixture-saveExchangeRate");
+    await click("fixture-model");
+    await click("fixture-addContextTier");
+    await change("fixture-contextThreshold · 1", "262144");
+    await change("fixture-contextThreshold · 1 · Uncached input · USD", "8");
+    await click("fixture-enableOffPeak");
+    await change("fixture-windowStart 1", "00:00");
+    await change("fixture-windowEnd 1", "02:00");
+    await click("fixture-addWindow");
+    await change("fixture-windowStart 2", "00:00");
+    await change("fixture-windowEnd 2", "24:00");
+    // The second window selects the weekend and explicitly prices its input in CNY.
+    // 第二条时段选择周末，并显式填写人民币输入单价。
+    const days = panel.container.querySelector('select[aria-label="fixture-windowDays 2"]');
+    await React.act(async () => { days.value = "weekend"; days.dispatchEvent(new window.Event("change", { bubbles: true })); });
+    await change("fixture-offPeak · Uncached input · CNY", "6");
+    await change("fixture-offPeak · Uncached input · USD", "");
+    await React.act(async () => panel.container.querySelector('button[aria-label="fixture-offPeak · fixture-addContextTier"]').click());
+    await change("fixture-offPeak · fixture-contextThreshold · 1", "262144");
+    await change("fixture-offPeak · fixture-contextThreshold · 1 · Uncached input · CNY", "12");
+    await click("fixture-save");
+    assert.equal(writes.length, 2);
+    assert.equal(writes[1].cnyPerUsd, "7.2");
+    assert.deepEqual(writes[1].modelOverrides.unrelated, configured);
+    assert.deepEqual(writes[1].modelOverrides["aggregator/vendor/Fixture-Model-Advanced-Variant"], configured);
+    assert.equal(Object.hasOwn(writes[1].modelOverrides, "aggregator/vendor/Fixture-Alias"), false);
+    assert.equal(Object.hasOwn(writes[1].modelOverrides, "aggregator/vendor/Fixture-Family"), false);
+    assert.equal(Object.hasOwn(writes[1].modelOverrides, "aggregator/vendor/Fixture-Family-0309"), false);
+    assert.equal(Object.hasOwn(writes[1].modelOverrides, "aggregator/vendor/Fixture-Model-Preview-20261008"), false);
+    assert.equal(Object.hasOwn(writes[1].modelOverrides, "aggregator/vendor/Fixture-Model-Variant"), false);
+    assert.deepEqual(writes[1].modelOverrides["fixture-model"].contextTiers, [
+      { aboveInputTokens: 262144, prices: { ...configured, inputPerMillion: "8" } },
+    ]);
+    const tariff = writes[1].modelOverrides["fixture-model"].offPeak;
+    assert.deepEqual(tariff.windows, [
+      { days: "weekdays", start: "00:00", end: "02:00" },
+      { days: "weekend", start: "00:00", end: "24:00" },
+    ]);
+    assert.equal(tariff.prices.inputPerMillionCny, "6");
+    assert.equal(Object.hasOwn(tariff.prices, "inputPerMillion"), false);
+    assert.deepEqual(tariff.contextTiers, [
+      { aboveInputTokens: 262144, prices: { ...tariff.prices, inputPerMillionCny: "12" } },
+    ]);
   } finally { await panel.close(); }
 });
 

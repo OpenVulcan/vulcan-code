@@ -1,6 +1,37 @@
 name: Vulcan 用量統計
 capability: 透過系統 VLDB 查詢 Provider Token 事實，並使用外掛自有價目表即時計算參考費用
 messages:
+  pricing.exchangeRate: "每 1 美元折合人民幣"
+  pricing.saveExchangeRate: "儲存匯率"
+  pricing.exchangeSaved: "已儲存匯率"
+  pricing.exchangeHint: "填寫 1 美元折合的人民幣金額，留空即停用換算。"
+  pricing.addModel: "依完整模型 ID 編輯"
+  pricing.dualCurrencyHint: "每項可填美元、人民幣或兩者。儲存後，留空的一側依已儲存的匯率換算。兩側皆有價格時，各自獨立計費。"
+  pricing.dualCurrencyValidation: "每項至少填一個非負價格，免費項目填 0。"
+  pricing.aliasConflict: "別名價格衝突"
+  pricing.mergeAliases: "儲存後，這組別名的既有覆寫價格會取代為此共用價格。"
+  pricing.offPeak: "離峰費率"
+  pricing.contextTiers: "上下文分級計費"
+  pricing.contextTierHint: "依整筆請求的輸入 Token 數選擇已超過的最高門檻，並對整筆請求使用該級單價。"
+  pricing.contextThreshold: "輸入 Token 超過"
+  pricing.removeContextTier: "移除此級"
+  pricing.addContextTier: "新增上下文級距"
+  pricing.contextTierValidation: "請依遞增順序填寫整數 Token 門檻，以及每級的四項價格。"
+  pricing.baseRate: "基本費率"
+  pricing.offPeakHint: "每週指定時段內使用離峰費率，其餘時間使用基本費率。"
+  pricing.enableOffPeak: "啟用離峰費率"
+  pricing.disableOffPeak: "停用離峰費率"
+  pricing.utcOffset: "固定 UTC 偏移分鐘數（UTC+8 填 480）"
+  pricing.windowDays: "適用日期"
+  pricing.days.daily: "每天"
+  pricing.days.weekdays: "週一至週五"
+  pricing.days.weekend: "週六和週日"
+  pricing.windowStart: "開始時間"
+  pricing.windowEnd: "結束時間"
+  pricing.removeWindow: "移除時段"
+  pricing.addWindow: "新增時段"
+  pricing.windowHint: "全天請填 00:00–24:00。結束時間早於開始時間時，時段延續至次日。"
+  pricing.offPeakValidation: "請填寫 UTC 偏移、至少一個有效時段，以及四項離峰價格。"
   tokens.details: Token 明細
   timing.request: 請求總時間
   timing.column: 延遲

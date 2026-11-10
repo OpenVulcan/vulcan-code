@@ -1,6 +1,37 @@
 name: Estatísticas de uso do Vulcan
 capability: Consultar dados de Token do provedor pela VLDB do sistema e calcular estimativas com o catálogo do plugin
 messages:
+  pricing.exchangeRate: "CNY por 1 USD"
+  pricing.saveExchangeRate: "Salvar taxa de câmbio"
+  pricing.exchangeSaved: "Taxa de câmbio salva"
+  pricing.exchangeHint: "Informe quantos CNY equivalem a 1 USD. Deixe em branco para desativar a conversão."
+  pricing.addModel: "Editar ID exato do modelo"
+  pricing.dualCurrencyHint: "Informe USD, CNY ou ambos em cada item. Ao salvar, o lado vazio é convertido pela taxa salva. Quando ambos são preenchidos, os preços são aplicados separadamente."
+  pricing.dualCurrencyValidation: "Informe pelo menos um preço não negativo por item. Use zero para uso gratuito."
+  pricing.aliasConflict: "Preços de alias em conflito"
+  pricing.mergeAliases: "Ao salvar, este preço compartilhado substitui os preços personalizados dos aliases."
+  pricing.offPeak: "Fora do pico"
+  pricing.contextTiers: "Faixas de preço por contexto"
+  pricing.contextTierHint: "A faixa do maior limite de tokens de entrada ultrapassado vale para toda a solicitação."
+  pricing.contextThreshold: "Tokens de entrada acima de"
+  pricing.removeContextTier: "Remover faixa"
+  pricing.addContextTier: "Adicionar faixa de contexto"
+  pricing.contextTierValidation: "Insira limites inteiros crescentes e os quatro preços de cada faixa."
+  pricing.baseRate: "Tarifa base"
+  pricing.offPeakHint: "A tarifa fora do pico vale nos períodos semanais configurados. A tarifa base vale nos demais horários."
+  pricing.enableOffPeak: "Ativar tarifa fora do pico"
+  pricing.disableOffPeak: "Desativar tarifa fora do pico"
+  pricing.utcOffset: "Deslocamento fixo de UTC em minutos (UTC+8 = 480)"
+  pricing.windowDays: "Dias"
+  pricing.days.daily: "Todos os dias"
+  pricing.days.weekdays: "Segunda a sexta"
+  pricing.days.weekend: "Sábado e domingo"
+  pricing.windowStart: "Horário de início"
+  pricing.windowEnd: "Horário de término"
+  pricing.removeWindow: "Remover período"
+  pricing.addWindow: "Adicionar período"
+  pricing.windowHint: "Use 00:00–24:00 para o dia todo. Se o término for anterior ao início, o período continua no dia seguinte."
+  pricing.offPeakValidation: "Informe o deslocamento de UTC, pelo menos um período válido e os quatro preços fora do pico."
   tokens.details: Detalhes dos tokens
   timing.request: Duração da solicitação
   timing.column: Latência

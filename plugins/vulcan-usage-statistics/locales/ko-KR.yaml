@@ -1,6 +1,37 @@
 name: Vulcan 사용량 통계
 capability: 시스템 VLDB에서 Provider Token 사용 사실을 조회하고 플러그인 자체 가격표로 참고 비용 계산
 messages:
+  pricing.exchangeRate: "미국 달러 1달러당 위안"
+  pricing.saveExchangeRate: "환율 저장"
+  pricing.exchangeSaved: "환율을 저장했습니다"
+  pricing.exchangeHint: "미국 달러 1달러에 해당하는 위안 금액을 입력하세요. 비워 두면 환산하지 않습니다."
+  pricing.addModel: "정확한 모델 ID 편집"
+  pricing.dualCurrencyHint: "각 항목에 달러, 위안 또는 둘 다 입력하세요. 저장하면 빈 통화는 저장된 환율로 환산합니다. 양쪽에 가격을 입력하면 각각 계산합니다."
+  pricing.dualCurrencyValidation: "각 항목에 0 이상의 가격을 하나 이상 입력하세요. 무료는 0을 입력하세요."
+  pricing.aliasConflict: "별칭 가격 충돌"
+  pricing.mergeAliases: "저장하면 기존 별칭의 재정의 가격을 이 공통 가격으로 바꿉니다."
+  pricing.offPeak: "비혼잡 시간대"
+  pricing.contextTiers: "컨텍스트별 요금 구간"
+  pricing.contextTierHint: "입력 토큰 수가 초과한 가장 높은 기준의 요금을 요청 전체에 적용합니다."
+  pricing.contextThreshold: "입력 토큰 초과 기준"
+  pricing.removeContextTier: "구간 삭제"
+  pricing.addContextTier: "컨텍스트 요금 구간 추가"
+  pricing.contextTierValidation: "오름차순의 정수 토큰 기준과 각 구간의 단가 네 가지를 입력하세요."
+  pricing.baseRate: "기본 요금"
+  pricing.offPeakHint: "매주 지정한 시간대에는 비혼잡 요금이 적용되고 그 외에는 기본 요금이 적용됩니다."
+  pricing.enableOffPeak: "비혼잡 요금 사용"
+  pricing.disableOffPeak: "비혼잡 요금 사용 중지"
+  pricing.utcOffset: "고정 UTC 오프셋(분, UTC+8은 480)"
+  pricing.windowDays: "적용 요일"
+  pricing.days.daily: "매일"
+  pricing.days.weekdays: "월요일~금요일"
+  pricing.days.weekend: "토요일 및 일요일"
+  pricing.windowStart: "시작 시간"
+  pricing.windowEnd: "종료 시간"
+  pricing.removeWindow: "시간대 삭제"
+  pricing.addWindow: "시간대 추가"
+  pricing.windowHint: "하루 전체는 00:00–24:00을 입력하세요. 종료가 시작보다 이르면 다음 날까지 이어집니다."
+  pricing.offPeakValidation: "UTC 오프셋, 유효한 시간대 하나 이상, 네 가지 비혼잡 요금을 입력하세요."
   tokens.details: Token 상세
   timing.request: 요청 소요 시간
   timing.column: 지연 시간

@@ -1,6 +1,37 @@
 name: Vulcan 使用量統計
 capability: システム VLDB から Provider の Token 使用量を取得し、プラグイン独自の料金表で参考費用を計算
 messages:
+  pricing.exchangeRate: "1 米ドルあたりの人民元"
+  pricing.saveExchangeRate: "為替レートを保存"
+  pricing.exchangeSaved: "為替レートを保存しました"
+  pricing.exchangeHint: "1 米ドルに相当する人民元を入力してください。空欄の場合は換算しません。"
+  pricing.addModel: "正確なモデル ID を編集"
+  pricing.dualCurrencyHint: "各項目に米ドル、人民元、または両方を入力します。保存後、空欄は保存済みのレートで換算されます。両方に価格がある場合は別々に計算します。"
+  pricing.dualCurrencyValidation: "各項目に 0 以上の価格を少なくとも 1 つ入力してください。無料の場合は 0 を入力します。"
+  pricing.aliasConflict: "別名の価格が競合しています"
+  pricing.mergeAliases: "保存すると、既存の別名ごとの価格がこの共通価格に置き換わります。"
+  pricing.offPeak: "オフピーク"
+  pricing.contextTiers: "コンテキスト長別料金"
+  pricing.contextTierHint: "入力トークン数が超えた最も高いしきい値の料金をリクエスト全体に適用します。"
+  pricing.contextThreshold: "入力トークン数が超える値"
+  pricing.removeContextTier: "段階を削除"
+  pricing.addContextTier: "コンテキスト料金段階を追加"
+  pricing.contextTierValidation: "昇順の整数トークンしきい値と各段階の4つの単価を入力してください。"
+  pricing.baseRate: "基本料金"
+  pricing.offPeakHint: "毎週指定した時間帯にはオフピーク料金、それ以外には基本料金を適用します。"
+  pricing.enableOffPeak: "オフピーク料金を有効にする"
+  pricing.disableOffPeak: "オフピーク料金を無効にする"
+  pricing.utcOffset: "UTC からの固定時差（分、UTC+8 は 480）"
+  pricing.windowDays: "適用日"
+  pricing.days.daily: "毎日"
+  pricing.days.weekdays: "月曜から金曜"
+  pricing.days.weekend: "土曜と日曜"
+  pricing.windowStart: "開始時刻"
+  pricing.windowEnd: "終了時刻"
+  pricing.removeWindow: "時間帯を削除"
+  pricing.addWindow: "時間帯を追加"
+  pricing.windowHint: "終日は 00:00–24:00 と入力します。終了が開始より早い場合は翌日まで続きます。"
+  pricing.offPeakValidation: "UTC からの時差、有効な時間帯を 1 つ以上、オフピーク料金 4 項目を入力してください。"
   tokens.details: Token の内訳
   timing.request: リクエスト所要時間
   timing.column: 遅延

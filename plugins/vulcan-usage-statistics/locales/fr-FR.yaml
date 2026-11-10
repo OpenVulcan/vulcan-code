@@ -1,6 +1,37 @@
 name: Statistiques d’utilisation Vulcan
 capability: Consulter les données Token du fournisseur via la VLDB système et estimer les coûts à partir du catalogue de l’extension
 messages:
+  pricing.exchangeRate: "CNY pour 1 USD"
+  pricing.saveExchangeRate: "Enregistrer le taux de change"
+  pricing.exchangeSaved: "Taux de change enregistré"
+  pricing.exchangeHint: "Indiquez combien de CNY valent 1 USD. Laissez le champ vide pour désactiver la conversion."
+  pricing.addModel: "Modifier l’identifiant exact du modèle"
+  pricing.dualCurrencyHint: "Pour chaque poste, saisissez un prix en USD, en CNY ou les deux. À l’enregistrement, le prix manquant est converti au taux enregistré. Deux prix saisis s’appliquent séparément."
+  pricing.dualCurrencyValidation: "Saisissez au moins un prix positif ou nul par poste. Utilisez zéro pour un poste gratuit."
+  pricing.aliasConflict: "Prix d’alias en conflit"
+  pricing.mergeAliases: "L’enregistrement remplace les tarifs personnalisés des alias par ce tarif commun."
+  pricing.offPeak: "Heures creuses"
+  pricing.contextTiers: "Tarifs par longueur de contexte"
+  pricing.contextTierHint: "Le plus haut seuil de jetons d’entrée dépassé fixe le tarif de toute la requête."
+  pricing.contextThreshold: "Jetons d’entrée au-delà de"
+  pricing.removeContextTier: "Supprimer le palier"
+  pricing.addContextTier: "Ajouter un palier de contexte"
+  pricing.contextTierValidation: "Saisissez des seuils entiers croissants et les quatre tarifs de chaque palier."
+  pricing.baseRate: "Tarif de base"
+  pricing.offPeakHint: "Le tarif heures creuses s’applique pendant les créneaux hebdomadaires configurés. Le tarif de base s’applique le reste du temps."
+  pricing.enableOffPeak: "Activer le tarif heures creuses"
+  pricing.disableOffPeak: "Désactiver le tarif heures creuses"
+  pricing.utcOffset: "Décalage UTC fixe en minutes (UTC+8 = 480)"
+  pricing.windowDays: "Jours"
+  pricing.days.daily: "Tous les jours"
+  pricing.days.weekdays: "Du lundi au vendredi"
+  pricing.days.weekend: "Samedi et dimanche"
+  pricing.windowStart: "Heure de début"
+  pricing.windowEnd: "Heure de fin"
+  pricing.removeWindow: "Supprimer le créneau"
+  pricing.addWindow: "Ajouter un créneau"
+  pricing.windowHint: "Utilisez 00:00–24:00 pour une journée entière. Si la fin précède le début, le créneau se poursuit le lendemain."
+  pricing.offPeakValidation: "Saisissez le décalage UTC, au moins un créneau valide et les quatre prix en heures creuses."
   tokens.details: Détails des tokens
   timing.request: Durée de la requête
   timing.column: Latence

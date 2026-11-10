@@ -1,6 +1,37 @@
 name: Статистика использования Vulcan
 capability: Запрос данных Token провайдера через системную VLDB и расчёт ориентировочной стоимости по каталогу плагина
 messages:
+  pricing.exchangeRate: "CNY за 1 USD"
+  pricing.saveExchangeRate: "Сохранить курс"
+  pricing.exchangeSaved: "Курс сохранён"
+  pricing.exchangeHint: "Укажите, сколько CNY соответствует 1 USD. Оставьте поле пустым, чтобы отключить пересчёт."
+  pricing.addModel: "Изменить точный ID модели"
+  pricing.dualCurrencyHint: "Укажите цену в USD, CNY или обе для каждой категории. После сохранения пустое значение рассчитывается по сохранённому курсу. Две указанные цены применяются независимо."
+  pricing.dualCurrencyValidation: "Укажите хотя бы одну неотрицательную цену для каждой категории. Для бесплатного использования укажите ноль."
+  pricing.aliasConflict: "Конфликт цен псевдонимов"
+  pricing.mergeAliases: "При сохранении эта общая цена заменит прежние настройки цен для псевдонимов."
+  pricing.offPeak: "Вне пика"
+  pricing.contextTiers: "Тарифы по длине контекста"
+  pricing.contextTierHint: "Ко всему запросу применяется тариф по наибольшему превышенному порогу входных токенов."
+  pricing.contextThreshold: "Входных токенов свыше"
+  pricing.removeContextTier: "Удалить уровень"
+  pricing.addContextTier: "Добавить уровень контекста"
+  pricing.contextTierValidation: "Укажите возрастающие целочисленные пороги и все четыре цены для каждого уровня."
+  pricing.baseRate: "Базовый тариф"
+  pricing.offPeakHint: "Тариф вне пика действует в заданные периоды недели. В остальное время действует базовый тариф."
+  pricing.enableOffPeak: "Включить тариф вне пика"
+  pricing.disableOffPeak: "Отключить тариф вне пика"
+  pricing.utcOffset: "Фиксированное смещение от UTC в минутах (UTC+8 = 480)"
+  pricing.windowDays: "Дни"
+  pricing.days.daily: "Каждый день"
+  pricing.days.weekdays: "С понедельника по пятницу"
+  pricing.days.weekend: "Суббота и воскресенье"
+  pricing.windowStart: "Время начала"
+  pricing.windowEnd: "Время окончания"
+  pricing.removeWindow: "Удалить период"
+  pricing.addWindow: "Добавить период"
+  pricing.windowHint: "Для полных суток укажите 00:00–24:00. Если окончание раньше начала, период продолжается на следующий день."
+  pricing.offPeakValidation: "Укажите смещение от UTC, хотя бы один допустимый период и все четыре цены тарифа вне пика."
   tokens.details: Подробности токенов
   timing.request: Длительность запроса
   timing.column: Задержка

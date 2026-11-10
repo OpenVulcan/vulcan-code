@@ -1,6 +1,37 @@
 name: Vulcan 用量统计
 capability: 通过系统 VLDB 查询 Provider Token 事实，并使用插件自有价目表即时估算参考费用
 messages:
+  pricing.exchangeRate: "每 1 美元折合人民币"
+  pricing.saveExchangeRate: "保存汇率"
+  pricing.exchangeSaved: "已保存汇率"
+  pricing.exchangeHint: "填写 1 美元折合的人民币金额，留空关闭折算。"
+  pricing.addModel: "按完整模型 ID 编辑"
+  pricing.dualCurrencyHint: "每项可填美元、人民币或两者。保存后，留空的一侧按已保存汇率折算。两侧都有价格时，各自独立计费。"
+  pricing.dualCurrencyValidation: "每项至少填一个非负价格，免费项填 0。"
+  pricing.aliasConflict: "别名价格冲突"
+  pricing.mergeAliases: "保存后，这组别名的现有覆盖价会替换为此共享价格。"
+  pricing.offPeak: "谷价"
+  pricing.contextTiers: "上下文分档计费"
+  pricing.contextTierHint: "按整笔请求的输入 Token 数选择已超过的最高阈值，并对整笔请求使用该档单价。"
+  pricing.contextThreshold: "输入 Token 超过"
+  pricing.removeContextTier: "移除此档"
+  pricing.addContextTier: "添加上下文档位"
+  pricing.contextTierValidation: "请按升序填写整数 Token 阈值，并填写每档的四项价格。"
+  pricing.baseRate: "基础价"
+  pricing.offPeakHint: "每周指定时段内使用谷价，其余时间使用基础价。"
+  pricing.enableOffPeak: "启用谷价"
+  pricing.disableOffPeak: "关闭谷价"
+  pricing.utcOffset: "固定 UTC 偏移分钟数（UTC+8 填 480）"
+  pricing.windowDays: "适用日期"
+  pricing.days.daily: "每天"
+  pricing.days.weekdays: "周一至周五"
+  pricing.days.weekend: "周六和周日"
+  pricing.windowStart: "开始时间"
+  pricing.windowEnd: "结束时间"
+  pricing.removeWindow: "移除时段"
+  pricing.addWindow: "添加时段"
+  pricing.windowHint: "全天填写 00:00–24:00。结束时间早于开始时间时，时段延续至次日。"
+  pricing.offPeakValidation: "请填写 UTC 偏移、至少一个有效时段，以及四项谷价。"
   tokens.details: Token 明细
   timing.request: 请求总时长
   timing.column: 延迟

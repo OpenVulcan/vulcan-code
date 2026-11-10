@@ -11,24 +11,36 @@
         "properties": {
           "modelId": { "type": "string" },
           "attempts": { "type": "integer", "minimum": 0 },
-          "source": { "enum": ["catalog", "override", "unpriced"] },
-          "prices": {
-            "type": ["object", "null"],
-            "properties": {
-              "inputPerMillion": { "type": "string" },
-              "outputPerMillion": { "type": "string" },
-              "cacheReadPerMillion": { "type": "string" },
-              "cacheWritePerMillion": { "type": "string" }
-            },
-            "required": ["inputPerMillion", "outputPerMillion", "cacheReadPerMillion", "cacheWritePerMillion"],
-            "additionalProperties": false
-          }
+          "source": { "enum": ["catalog", "override", "unpriced", "conflict"] },
+          "aliases": { "type": "array", "maxItems": 25, "items": { "type": "string" } },
+          "effectivePrices": { "$ref": "#/$defs/currencyPrices" },
+          "offPeakPrices": { "$ref": "#/$defs/currencyPrices" }
         },
-        "required": ["modelId", "attempts", "source", "prices"],
+        "required": ["modelId", "attempts", "source", "aliases", "effectivePrices"],
         "additionalProperties": false
       }
     }
   },
   "required": ["totalCount", "currency", "models"],
-  "additionalProperties": false
+  "additionalProperties": false,
+  "$defs": {
+    "currencyPrices": {
+      "type": "object",
+      "properties": {
+        "USD": { "$ref": "#/$defs/prices" },
+        "CNY": { "$ref": "#/$defs/prices" }
+      },
+      "additionalProperties": false
+    },
+    "prices": {
+      "type": "object",
+      "properties": {
+        "inputPerMillion": { "type": "string" },
+        "outputPerMillion": { "type": "string" },
+        "cacheReadPerMillion": { "type": "string" },
+        "cacheWritePerMillion": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
 }

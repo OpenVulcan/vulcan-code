@@ -33,7 +33,7 @@ for _, view in ipairs({ "daily-page", "recent-page", "detail-pages" }) do
         end
         assert(request.params[3].value == 100 and request.params[4].value == 50)
         assert(request.params[9].value == "embedding")
-        assert(request.params[13].value == "selected-provider" and request.params[14].value == "shared-model")
+        assert(request.params[15].value == "selected-provider" and request.params[16].value == "shared-model")
         if sql:find("LIMIT 100 OFFSET", 1, true) then
             assert(view ~= "recent-page", "recent page must not query model usage")
             calls[#calls + 1] = "daily"

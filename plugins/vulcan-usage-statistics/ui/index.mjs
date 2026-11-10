@@ -72,23 +72,28 @@ const TOOLTIP_DELAY_MS = 500;
 // DECIMAL_PRICE_PATTERN 镜像由宿主校验的插件配置契约。
 const DECIMAL_PRICE_PATTERN = /^(0|[1-9][0-9]*)(\.[0-9]+)?$/;
 
-// EMPTY_PRICE_DRAFT preserves unknown model rates as missing rather than zero.
-// EMPTY_PRICE_DRAFT 将未知模型费率保持为缺失而非零。
-const EMPTY_PRICE_DRAFT = Object.freeze({
-  inputPerMillion: "",
-  outputPerMillion: "",
-  cacheReadPerMillion: "",
-  cacheWritePerMillion: "",
-});
-
 // PRICE_FIELDS defines the complete editable per-million Token price dimensions.
 // PRICE_FIELDS 定义完整的可编辑每百万 Token 价格维度。
 const PRICE_FIELDS = Object.freeze([
-  { key: "inputPerMillion", messageKey: "pricing.input", fallback: "Uncached input" },
-  { key: "outputPerMillion", messageKey: "pricing.output", fallback: "Output" },
-  { key: "cacheReadPerMillion", messageKey: "pricing.cacheRead", fallback: "Cache read" },
-  { key: "cacheWritePerMillion", messageKey: "pricing.cacheWrite", fallback: "Cache write" },
+  { key: "inputPerMillion", cnyKey: "inputPerMillionCny", messageKey: "pricing.input", fallback: "Uncached input" },
+  { key: "outputPerMillion", cnyKey: "outputPerMillionCny", messageKey: "pricing.output", fallback: "Output" },
+  { key: "cacheReadPerMillion", cnyKey: "cacheReadPerMillionCny", messageKey: "pricing.cacheRead", fallback: "Cache read" },
+  { key: "cacheWritePerMillion", cnyKey: "cacheWritePerMillionCny", messageKey: "pricing.cacheWrite", fallback: "Cache write" },
 ]);
+
+// PRICE_CURRENCIES sets the display order of independent currency amounts.
+// PRICE_CURRENCIES 设置独立币种金额的展示顺序。
+const PRICE_CURRENCIES = ["USD", "CNY"];
+
+// EMPTY_PRICE_DRAFT keeps missing model rates blank so automatic conversions remain derived.
+// EMPTY_PRICE_DRAFT 保留缺失单价的空白，使自动折算继续作为派生值。
+const EMPTY_PRICE_DRAFT = Object.freeze(Object.fromEntries(
+  PRICE_FIELDS.flatMap(({ key, cnyKey }) => [[key, ""], [cnyKey, ""]]),
+));
+
+// WINDOW_DAYS are the supported recurring day groups in the off-peak schema.
+// WINDOW_DAYS 是谷价 Schema 支持的周期日分组。
+const WINDOW_DAYS = ["daily", "weekdays", "weekend"];
 
 // Format exact non-negative decimals without converting the stored value to floating point.
 // 格式化精确非负十进制数，不把存储值转换为浮点数。
@@ -237,18 +242,6 @@ export function createPluginPanel(sdk) {
     }).format(new Date(numeric(value)));
   }
 
-  // formatReferenceEstimate renders one plugin-computed reference estimate.
-  // formatReferenceEstimate 渲染一个由插件计算的参考估算值。
-  //
-  // record contains ephemeral estimate fields attached by the plugin runtime.
-  // record 包含由插件运行时附加的临时估算字段。
-  // Returns an explicitly estimated value or the exact reason it is unavailable.
-  // 返回带明确估算标记的值，或返回其不可用的精确原因。
-  function formatReferenceEstimate(record) {
-      if (record.estimatedCost === null || record.estimatedCost === undefined) return "-";
-      return currencyAmount(formatMoney(record.estimatedCost, sdk.locale), record.estimatedCurrency);
-    }
-
   // Render dollar amounts with their symbol while retaining exact decimal text and approximation marks.
   // 使用美元符号渲染金额，同时保留精确小数文本与近似标记。
   // value is formatted or exact decimal text; currency is the declared code; returns display text.
@@ -256,6 +249,20 @@ export function createPluginPanel(sdk) {
   function currencyAmount(value, currency) {
     if (currency === "USD") return value.startsWith("≈") ? `≈$${value.slice(1)}` : `$${value}`;
     return currency ? `${value} ${currency}` : value;
+  }
+
+  // Render effective prices for a single dimension and preserve exact values in the tooltip.
+  // 渲染单个维度的生效单价，并在提示中保留精确值。
+  // prices is the currency map; key selects the dimension and prefix optionally labels the tariff.
+  // prices 是币种映射；key 选择维度，prefix 可提供时段费率标签。
+  function priceCell(prices, key, prefix = "") {
+    const amounts = PRICE_CURRENCIES.flatMap((currency) => {
+      const value = prices[currency]?.[key];
+      return value === undefined ? [] : [{ currency, value }];
+    });
+    const exact = amounts.map(({ currency, value }) => currencyAmount(value, currency)).join(" / ");
+    const formatted = amounts.map(({ currency, value }) => currencyAmount(formatMoney(value, sdk.locale), currency)).join(" / ");
+    return h("span", { title: exact }, prefix, formatted || "-");
   }
 
   // Identify exact decimal zero without rounding small positive costs away.
@@ -550,29 +557,197 @@ export function createPluginPanel(sdk) {
     };
   }
 
-  // editablePrices resolves one model's override first and catalog defaults second.
-  // editablePrices 优先解析模型覆盖，其次解析目录默认值。
-  //
-  // settings is the schema-validated plugin settings projection and modelId is exact.
-  // settings 是通过 Schema 校验的插件设置投影，modelId 是精确模型标识。
-  // Returns an isolated editable price object or blank unknown fields.
-  // 返回隔离的可编辑价格对象，或返回空白未知字段。
+  // Resolve the complete editable tariff for modelId, prioritizing user settings over the catalog.
+  // 解析 modelId 的完整可编辑费率，用户设置优先于目录。
+  // Returns undefined until settings load or when no rate has been configured.
+  // 设置未加载或未配置费率时返回 undefined。
+  function editableTariff(settings, modelId) {
+    if (settings === null) return undefined;
+    // overrideId is the first exact key when several aliases have existing overrides.
+    // 多个别名已有覆盖时，overrideId 取排序后的第一个原始键。
+    const [overrideId] = overridesForModel(settings, modelId);
+    return overrideId !== undefined ? settings.modelOverrides[overrideId]
+      : settings.catalogModels.find((entry) => entry.modelId === modelId)?.prices;
+  }
+
+  // Return editable currency strings from the selected tariff for settings and modelId.
+  // 返回 settings 中 modelId 所选费率的可编辑币种字符串。
   function editablePrices(settings, modelId) {
-    const configured = settings?.modelOverrides?.[modelId];
-    const catalog = settings?.catalogModels?.find((entry) => entry.modelId === modelId)?.prices;
-    return { ...(configured ?? catalog ?? EMPTY_PRICE_DRAFT) };
+    // prices may be absent for models without a configured quote.
+    // 未配置报价的模型可能没有 prices。
+    const prices = editableTariff(settings, modelId);
+    return Object.fromEntries(Object.keys(EMPTY_PRICE_DRAFT).map((key) => [key, prices?.[key] ?? ""]));
+  }
+
+  // Return the longest complete billing stem for key using canonical IDs and configured families.
+  // 使用主型号与已配置系列，返回 key 对应的最长完整计费段。
+  function billingSegmentMatch(key, aliases, prefixes) {
+    // stem shortens only at hyphens and starts with the complete key.
+    // stem 从完整键开始，只在连字符处缩短。
+    let stem = key;
+    let boundary = key.length > 1 ? key.lastIndexOf("-", key.length - 2) : -1;
+    while (stem) {
+      if (Object.hasOwn(prefixes, stem)) return { modelId: prefixes[stem], length: stem.length };
+      if (Object.hasOwn(aliases, stem) && aliases[stem].toLowerCase() === stem) {
+        return { modelId: aliases[stem], length: stem.length };
+      }
+      if (boundary < 0) break;
+      stem = key.slice(0, boundary);
+      boundary = stem.lastIndexOf("-");
+    }
+    return { length: 0 };
+  }
+
+  // Return the billing ID for modelId's last slash component using the aliases in settings.
+  // 使用 settings 中的别名，将 modelId 最后一个斜杠后的分段解析为计费标识。
+  function billingModelId(settings, modelId) {
+    const aliases = settings.modelAliases ?? {};
+    // suffix is the alias lookup key for both direct and provider-qualified IDs.
+    // 直接标识和带供应商前缀的标识都用 suffix 查找别名。
+    const suffix = modelId.split("/").at(-1) || modelId;
+    // key uses SQLite's ASCII case folding and leaves unknown model IDs intact.
+    // key 使用与 SQLite 相同的 ASCII 大小写转换，并保留未知型号原有写法。
+    const key = suffix.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+    if (Object.hasOwn(aliases, key)) return aliases[key];
+    // Exact prices take precedence over spelling normalization, including priced snapshots.
+    // 精确报价优先于写法归一，包括单独定价的快照。
+    const claude = key.startsWith("claude-");
+    const stem = (claude ? key.replace(/-thinking$/, "") : key).replace(/^(.+)(?:[-@]20\d{6}|-20\d{2}-\d{2}-\d{2})$/, "$1");
+    const preview = stem.replace(/^(.+)-preview(?:-latest)?$/, "$1");
+    const normalized = claude ? preview.replaceAll(".", "-") : preview;
+    if (Object.hasOwn(aliases, normalized)) return aliases[normalized];
+    // Use the same longest segment and tie-break rules as the SQLite projection.
+    // 使用与 SQLite 投影相同的最长匹配规则，同长度时优先原始写法。
+    const prefixes = settings.modelPrefixes ?? {};
+    const rawMatch = billingSegmentMatch(key, aliases, prefixes);
+    const bestMatch = normalized === key ? rawMatch : billingSegmentMatch(normalized, aliases, prefixes);
+    return (bestMatch.length > rawMatch.length ? bestMatch.modelId : rawMatch.modelId) ?? (preview !== stem ? normalized : suffix);
+  }
+
+  // Return the exact persisted keys belonging to one canonical billing model.
+  // 返回归属于同一个定价模型的原始持久化键。
+  function overridesForModel(settings, modelId) {
+    return Object.keys(settings.modelOverrides).filter((key) => billingModelId(settings, key) === modelId).sort();
   }
 
   // pricingDraftIsValid mirrors the exact non-negative decimal configuration rules.
   // pricingDraftIsValid 镜像精确的非负十进制配置规则。
   //
-  // draft contains all four per-million Token price strings.
-  // draft 包含四个每百万 Token 价格字符串。
-  // Returns true only when every required price is valid.
-  // 仅当全部必需价格均有效时返回 true。
+  // draft contains the USD and CNY price inputs; returns true when each dimension has a valid amount.
+  // draft 包含美元和人民币单价输入；每个维度至少有一项有效金额时返回 true。
   function pricingDraftIsValid(draft) {
-    return Object.values(draft).every(
-      (value) => typeof value === "string" && value.length <= 64 && DECIMAL_PRICE_PATTERN.test(value),
+    return PRICE_FIELDS.every(({ key, cnyKey }) => {
+      const amounts = [draft[key], draft[cnyKey]].filter((value) => value !== "");
+      return amounts.length > 0 && amounts.every((value) => value.length <= 64 && DECIMAL_PRICE_PATTERN.test(value));
+    });
+  }
+
+  // Project an existing schedule into editable text fields; null represents base pricing only.
+  // 将已有时段投影为可编辑文本字段；null 表示仅使用基础价。
+  function editableOffPeak(settings, modelId) {
+    // offPeak comes from the same tariff as the selected base prices.
+    // offPeak 与选中的基础价来自同一费率配置。
+    const offPeak = editableTariff(settings, modelId)?.offPeak;
+    return offPeak === undefined ? null : {
+      utcOffsetMinutes: String(offPeak.utcOffsetMinutes),
+      windows: offPeak.windows,
+      prices: { ...EMPTY_PRICE_DRAFT, ...offPeak.prices },
+      contextTiers: editableContextTiers(offPeak.contextTiers),
+    };
+  }
+
+  // Return isolated text drafts for the supplied context tiers, or an empty list for flat rates.
+  // 返回各上下文档位独立的文本草稿，单一费率返回空列表。
+  function editableContextTiers(tiers = []) {
+    return tiers.map(({ aboveInputTokens, prices }) => ({
+      aboveInputTokens: String(aboveInputTokens),
+      prices: { ...EMPTY_PRICE_DRAFT, ...prices },
+    }));
+  }
+
+  // Check that tiers have strictly increasing positive integer thresholds and complete prices.
+  // 校验档位阈值为严格递增的正整数且价格完整。
+  function contextTierDraftsAreValid(tiers) {
+    return tiers.every(({ aboveInputTokens, prices }, index) => /^[1-9]\d*$/.test(aboveInputTokens)
+      && Number.isSafeInteger(Number(aboveInputTokens))
+      && (index === 0 || Number(aboveInputTokens) > Number(tiers[index - 1].aboveInputTokens))
+      && pricingDraftIsValid(prices));
+  }
+
+  // Serialize validated text drafts while leaving unfilled currency inputs unset.
+  // 序列化已校验的文本草稿，同时保留币种留空的状态。
+  function explicitContextTiers(tiers) {
+    return tiers.map(({ aboveInputTokens, prices }) => ({
+      aboveInputTokens: Number(aboveInputTokens), prices: explicitPrices(prices),
+    }));
+  }
+
+  // Remove blank currency inputs so later rate changes can recalculate those sides.
+  // 移除留空的币种输入，使以后修改汇率时可重新折算这些金额。
+  function explicitPrices(draft) {
+    return Object.fromEntries(Object.entries(draft).filter(([, value]) => value !== ""));
+  }
+
+  // Render both explicit currency inputs for every Token dimension of a base or off-peak draft.
+  // 为基础价或谷价草稿中的每个 Token 维度渲染两个币种的显式输入。
+  // draft supplies the text values; onChange receives a price key and exact new text.
+  // draft 提供文本值；onChange 接收单价键和精确的新文本。
+  function PriceInputs({ draft, onChange, disabled, offPeak = false, tierLabel }) {
+    return h("div", { className: "plugin-statistics-price-grid" },
+      ...PRICE_FIELDS.flatMap((field) => PRICE_CURRENCIES.map((currency) => {
+        // The USD key retains existing overrides while CNY uses its explicit field.
+        // 美元沿用旧配置键，人民币使用独立的显式字段。
+        const key = currency === "USD" ? field.key : field.cnyKey;
+        const label = `${text(field.messageKey, field.fallback)} · ${currency}`;
+        return h("label", { className: "plugin-statistics-price-field", key },
+          h("span", null, `${label} · ${text("pricing.perMillion", "per 1M Token")}`),
+          h(Input, { "aria-label": [offPeak ? text("pricing.offPeak", "Off-peak") : null, tierLabel, label].filter(Boolean).join(" · "),
+            disabled, inputMode: "decimal", maxLength: 64, spellCheck: false,
+            type: "text", value: draft[key], onChange: (event) => onChange(key, event.currentTarget.value.trim()) }),
+        );
+      })),
+    );
+  }
+
+  // Edit context thresholds and their independent price grids for one time tariff.
+  // 为一个时段费率编辑上下文阈值和各自的单价输入。
+  // onChange receives a function that updates the current list; seedPrices fills newly added tiers.
+  // onChange 接收更新当前列表的函数；seedPrices 用于填充新增档位。
+  function ContextTierInputs({ tiers, seedPrices, disabled, onChange, offPeak = false }) {
+    return h(React.Fragment, null,
+      ...tiers.map((tier, index) => {
+        // label identifies this threshold in both the toolbar and the currency inputs.
+        // label 在工具栏与币种输入中标识此阈值。
+        const label = `${text("pricing.contextThreshold", "Input tokens above")} · ${index + 1}`;
+        // Replace only the tier at index while retaining other drafts.
+        // 只替换 index 处的档位，保留其他草稿。
+        const updateTier = (update) => onChange((current) => current.map((entry, position) =>
+          position === index ? update(entry) : entry));
+        return h(React.Fragment, { key: index },
+          h(PageToolbar, null,
+            h("label", { className: "plugin-statistics-price-field" },
+              h("span", null, label),
+              h(Input, { type: "text", inputMode: "numeric", disabled, value: tier.aboveInputTokens,
+                "aria-label": offPeak ? `${text("pricing.offPeak", "Off-peak")} · ${label}` : label,
+                onChange: (event) => {
+                  // Capture the threshold before React applies the functional update.
+                  // 在 React 执行函数更新前读取阈值。
+                  const value = event.currentTarget.value.trim();
+                  updateTier((entry) => ({ ...entry, aboveInputTokens: value }));
+                } }),
+            ),
+            h(Button, { type: "button", size: "sm", variant: "outline", disabled,
+              onClick: () => onChange((current) => current.filter((_, position) => position !== index)) },
+            text("pricing.removeContextTier", "Remove tier")),
+          ),
+          h(PriceInputs, { draft: tier.prices, disabled, offPeak, tierLabel: label,
+            onChange: (key, value) => updateTier((entry) => ({ ...entry, prices: { ...entry.prices, [key]: value } })) }),
+        );
+      }),
+      h(Button, { type: "button", size: "sm", variant: "outline", disabled,
+        "aria-label": offPeak ? `${text("pricing.offPeak", "Off-peak")} · ${text("pricing.addContextTier", "Add context tier")}` : undefined,
+        onClick: () => onChange((current) => [...current, { aboveInputTokens: "", prices: { ...seedPrices } }]) },
+      text("pricing.addContextTier", "Add context tier")),
     );
   }
 
@@ -817,31 +992,50 @@ export function createPluginPanel(sdk) {
   // record is a priced runtime projection; returns the estimate and its exact reference-price breakdown.
   // record 是运行时定价投影；返回估算和精确参考价格明细。
   function estimateDetails(record) {
-    // Exclude only explicitly zero dimensions; unknown costs retain their explanation.
-    // 仅排除明确为零的费用维度；未知费用保留说明。
-    const dimensions = record.pricingDetails === null ? [] : record.pricingDetails.dimensions.filter((dimension) => !isZeroCost(dimension.cost));
+    // The primary estimate retains the original record contract; the alternate is optional.
+    // 主估算保留原记录契约；第二币种可省略。
+    const estimates = record.pricingDetails === null ? [] : [
+      { amount: record.estimatedCost, details: record.pricingDetails },
+      ...(record.alternateEstimate ? [record.alternateEstimate] : []),
+    ];
+    // Compact values include only currencies with complete required usage.
+    // 紧凑金额只显示必要用量齐全的币种。
+    const amounts = estimates.filter(({ amount }) => amount !== null).map(({ amount, details }) =>
+      currencyAmount(formatMoney(amount, sdk.locale), details.currency));
     return h("div", { className: "plugin-statistics-estimate-cell" },
-      record.estimatedCost === null ? null : h("span", null, formatReferenceEstimate(record)),
+      amounts.length > 0 ? h("span", null, amounts.join(" / ")) : null,
       h(HelpTooltip, { ariaLabel: text("cost.details", "Reference cost details"), content: h("div", { className: "plugin-statistics-detail-tooltip" },
         h("strong", null, text("cost.details", "Reference cost details")),
-        record.pricingDetails === null ? h("p", null, text("pricing.unpriced", "Unpriced"))
-          : h(React.Fragment, null,
-          dimensions.length === 0 ? h("p", null, text("cost.noNonzero", "No nonzero cost items")) : h("table", { className: "plugin-statistics-cost-table" },
-            h("thead", null, h("tr", null,
-              h("th", null, text("cost.item", "Item")),
-              h("th", null, text("cost.component", "Estimated cost")),
-              h("th", null, text("cost.unitPerMillion", "Price / 1M Token")),
-            )),
-            h("tbody", null, ...dimensions.map((dimension) => h("tr", { key: dimension.tokenField },
-              h("td", null, text(`tokens.${dimension.tokenField}`, dimension.tokenField)),
-              h("td", null, dimension.cost === null ? text("pricing.incompleteUsage", "Required usage is incomplete") : currencyAmount(dimension.cost, record.pricingDetails.currency)),
-              h("td", null, currencyAmount(dimension.perMillion, record.pricingDetails.currency)),
-            ))),
-          ),
-          facts([[text("pricing.source", "Price source"), text(record.pricingMatchStatus === "override_exact" || record.pricingSourceId?.startsWith("plugin.config.modelOverrides:") ? "pricing.override" : "pricing.default", "Reference price")]])),
-        h("div", { className: "plugin-statistics-cost-total" }, facts([[text("cost.total", "Total reference estimate"), record.estimatedCost === null
-          ? text(record.pricingMatchStatus === "unmatched" ? "pricing.unpriced" : "pricing.incompleteUsage", "Estimate unavailable")
-          : currencyAmount(record.estimatedCost, record.estimatedCurrency)]])),
+        estimates.length === 0 ? h("p", null, text("pricing.unpriced", "Unpriced")) : null,
+        ...estimates.map(({ amount, details }) => {
+          // Unknown usage still needs an explanation; explicitly free components can be hidden.
+          // 未知用量仍需说明，明确免费的分项可以隐藏。
+          const dimensions = details.dimensions.filter((dimension) => !isZeroCost(dimension.cost));
+          return h(React.Fragment, { key: details.currency },
+            h("strong", null, details.currency),
+            dimensions.length === 0 ? h("p", null, text("cost.noNonzero", "No nonzero cost items")) : h("table", { className: "plugin-statistics-cost-table" },
+              h("thead", null, h("tr", null,
+                h("th", null, text("cost.item", "Item")),
+                h("th", null, text("cost.component", "Estimated cost")),
+                h("th", null, text("cost.unitPerMillion", "Price / 1M Token")),
+              )),
+              h("tbody", null, ...dimensions.map((dimension) => h("tr", { key: `${dimension.tokenField}:${dimension.offPeak}:${dimension.aboveInputTokens}` },
+                h("td", null, text(`tokens.${dimension.tokenField}`, dimension.tokenField),
+                  dimension.offPeak === undefined ? null : ` · ${dimension.offPeak
+                    ? text("pricing.offPeak", "Off-peak") : text("pricing.baseRate", "Base rate")}`,
+                  dimension.aboveInputTokens === undefined ? null
+                    : ` · ${text("pricing.contextThreshold", "Input tokens above")} ${dimension.aboveInputTokens.toLocaleString(sdk.locale)}`),
+                h("td", null, dimension.cost === null ? text("pricing.incompleteUsage", "Required usage is incomplete") : currencyAmount(dimension.cost, details.currency)),
+                h("td", null, currencyAmount(dimension.perMillion, details.currency)),
+              ))),
+            ),
+            h("div", { className: "plugin-statistics-cost-total" }, facts([[text("cost.total", "Total reference estimate"), amount === null
+              ? text("pricing.incompleteUsage", "Required usage is incomplete")
+              : currencyAmount(amount, details.currency)]])),
+          );
+        }),
+        estimates.length > 0 ? facts([[text("pricing.source", "Price source"), text(
+          record.pricingSourceId?.startsWith("plugin.config.modelOverrides:") ? "pricing.override" : "pricing.default", "Reference price")]]) : null,
         h("p", null, text("cost.referenceOnly", "Calculated from recorded usage and current reference prices; this is not a provider bill.")),
       ) }),
     );
@@ -897,8 +1091,8 @@ export function createPluginPanel(sdk) {
     const [pricingSearch, setPricingSearch] = React.useState("");
     const [pricingFilter, setPricingFilter] = React.useState("all");
     const [pricingPage, setPricingPage] = React.useState(0);
-    // pricingDirectory is a server page across all retained usage, catalog and override models.
-    // pricingDirectory 是横跨全部保留用量、目录与覆盖模型的服务端分页。
+    // pricingDirectory contains server-paged model groups from declared identities, prices and retained usage.
+    // pricingDirectory 包含由声明标识、价格及保留用量组成的服务端分页模型组。
     const [pricingDirectory, setPricingDirectory] = React.useState(null);
     // Committed pricing scope and page keep retained rows and pagination labels consistent.
     // 已提交定价作用域与页码确保保留记录和分页标签一致。
@@ -928,12 +1122,21 @@ export function createPluginPanel(sdk) {
     // pricingSettings stores plugin-owned model overrides and the bundled catalog projection.
     // pricingSettings 保存插件自有模型覆盖与内置目录投影。
     const [pricingSettings, setPricingSettings] = React.useState(null);
+    // rateDraft holds the user's unsaved CNY-per-USD rate as decimal text.
+    // rateDraft 以十进制文本保存用户尚未提交的人民币兑美元折算比例。
+    const [rateDraft, setRateDraft] = React.useState("");
     // selectedPricingModel identifies the exact model edited by the pricing form.
     // selectedPricingModel 标识价格表单当前编辑的精确模型。
     const [selectedPricingModel, setSelectedPricingModel] = React.useState("");
-    // pricingDraft stores four exact decimal strings without numeric conversion.
-    // pricingDraft 保存四个不经过数值转换的精确十进制字符串。
+    // pricingDraft stores explicit USD and CNY decimals without numeric conversion.
+    // pricingDraft 保存显式填写的美元与人民币十进制单价，不做数值转换。
     const [pricingDraft, setPricingDraft] = React.useState({ ...EMPTY_PRICE_DRAFT });
+    // contextTiersDraft stores the thresholds and rates used outside of off-peak windows.
+    // contextTiersDraft 保存谷价时段之外的上下文阈值和单价。
+    const [contextTiersDraft, setContextTiersDraft] = React.useState([]);
+    // offPeakDraft holds the optional per-model recurring tariff until the user saves it.
+    // offPeakDraft 保存尚未提交的模型周期谷价配置。
+    const [offPeakDraft, setOffPeakDraft] = React.useState(null);
     // settingsBusy prevents overlapping model-price persistence operations.
     // settingsBusy 防止模型价格持久化操作重叠。
     const [settingsBusy, setSettingsBusy] = React.useState(false);
@@ -1075,27 +1278,34 @@ export function createPluginPanel(sdk) {
     // selectPricingModel loads one exact override or catalog default into the string-only editor.
     // selectPricingModel 将一个精确覆盖或目录默认值加载到纯字符串编辑器。
     const selectPricingModel = React.useCallback((modelId) => {
-      setSelectedPricingModel(modelId);
-      setPricingDraft(editablePrices(pricingSettings, modelId));
+      const canonical = billingModelId(pricingSettings, modelId);
+      setSelectedPricingModel(canonical);
+      setPricingDraft(editablePrices(pricingSettings, canonical));
+      setContextTiersDraft(editableContextTiers(editableTariff(pricingSettings, canonical)?.contextTiers));
+      setOffPeakDraft(editableOffPeak(pricingSettings, canonical));
       setNotice("");
       setSettingsError("");
     }, [pricingSettings]);
 
-    // persistPricingOverrides saves one complete plugin-owned configuration and refreshes estimates.
-    // persistPricingOverrides 保存完整插件自有配置并刷新估算结果。
-    const persistPricingOverrides = React.useCallback(async (modelOverrides, successMessage) => {
+    // Persist a complete override map and optional rate, then refresh the accepted estimates.
+    // 保存完整的覆盖价映射与可选汇率，再刷新已接受的估算。
+    // successMessage is displayed after the write; closeEditor controls whether a model edit ends.
+    // successMessage 用于写入成功后提示；closeEditor 控制是否结束模型编辑。
+    const persistPricingOverrides = React.useCallback(async (modelOverrides, cnyPerUsd, successMessage, closeEditor) => {
       if (settingsBusyRef.current) return;
       settingsBusyRef.current = true;
       setSettingsBusy(true);
       setSettingsError("");
       setNotice("");
       try {
-        const nextSettings = await sdk.invoke("settings-update", { modelOverrides });
+        const nextSettings = await sdk.invoke("settings-update", {
+          modelOverrides, ...(cnyPerUsd ? { cnyPerUsd } : {}),
+        });
         if (mountedRef.current) {
           setPricingSettings(nextSettings);
-          setPricingDraft(editablePrices(nextSettings, selectedPricingModel));
           setNotice(successMessage);
-          setSelectedPricingModel("");
+          if (closeEditor) setSelectedPricingModel("");
+          else setRateDraft(nextSettings.cnyPerUsd ?? "");
         }
         await currentRefresh.current(true);
       } catch (reason) {
@@ -1104,25 +1314,35 @@ export function createPluginPanel(sdk) {
         settingsBusyRef.current = false;
         if (mountedRef.current) setSettingsBusy(false);
       }
-    }, [selectedPricingModel]);
+    }, []);
 
     // savePricingOverride validates and persists all four exact prices for the selected model.
     // savePricingOverride 校验并持久化所选模型的四项精确价格。
     const savePricingOverride = React.useCallback(() => {
-      if (!pricingSettings || !selectedPricingModel || !pricingDraftIsValid(pricingDraft)) return;
-      void persistPricingOverrides({
-        ...pricingSettings.modelOverrides,
-        [selectedPricingModel]: { ...pricingDraft },
-      }, text("pricing.saved", "Saved model price override"));
-    }, [persistPricingOverrides, pricingDraft, pricingSettings, selectedPricingModel]);
+      if (!pricingSettings || !selectedPricingModel || !pricingDraftIsValid(pricingDraft)
+        || !contextTierDraftsAreValid(contextTiersDraft)
+        || (offPeakDraft !== null && !contextTierDraftsAreValid(offPeakDraft.contextTiers))) return;
+      const aliasKeys = new Set(overridesForModel(pricingSettings, selectedPricingModel));
+      const nextOverrides = Object.fromEntries(Object.entries(pricingSettings.modelOverrides).filter(([key]) => !aliasKeys.has(key)));
+      const modelPrices = explicitPrices(pricingDraft);
+      if (contextTiersDraft.length > 0) modelPrices.contextTiers = explicitContextTiers(contextTiersDraft);
+      if (offPeakDraft !== null) modelPrices.offPeak = {
+        utcOffsetMinutes: Number(offPeakDraft.utcOffsetMinutes),
+        windows: offPeakDraft.windows,
+        prices: explicitPrices(offPeakDraft.prices),
+        ...(offPeakDraft.contextTiers.length > 0 ? { contextTiers: explicitContextTiers(offPeakDraft.contextTiers) } : {}),
+      };
+      void persistPricingOverrides({ ...nextOverrides, [selectedPricingModel]: modelPrices },
+        pricingSettings.cnyPerUsd, text("pricing.saved", "Saved model price override"), true);
+    }, [contextTiersDraft, offPeakDraft, persistPricingOverrides, pricingDraft, pricingSettings, selectedPricingModel]);
 
     // resetPricingOverride removes only the selected model override and restores catalog matching.
     // resetPricingOverride 仅移除所选模型覆盖并恢复目录匹配。
     const resetPricingOverride = React.useCallback(() => {
       if (!pricingSettings || !selectedPricingModel) return;
       const nextOverrides = { ...pricingSettings.modelOverrides };
-      delete nextOverrides[selectedPricingModel];
-      void persistPricingOverrides(nextOverrides, text("pricing.resetDone", "Restored catalog price"));
+      for (const key of overridesForModel(pricingSettings, selectedPricingModel)) delete nextOverrides[key];
+      void persistPricingOverrides(nextOverrides, pricingSettings.cnyPerUsd, text("pricing.resetDone", "Restored catalog price"), true);
     }, [persistPricingOverrides, pricingSettings, selectedPricingModel]);
 
     // toggleSeries changes only local chart visibility and never reloads statistics.
@@ -1148,6 +1368,7 @@ export function createPluginPanel(sdk) {
       void sdk.invoke("settings-get", {}).then((nextSettings) => {
         if (active) {
           setPricingSettings(nextSettings);
+          setRateDraft(nextSettings.cnyPerUsd ?? "");
         }
       }).catch((reason) => {
         if (active) setSettingsError(reason instanceof Error ? reason.message : String(reason));
@@ -1202,9 +1423,8 @@ export function createPluginPanel(sdk) {
     const consumerIds = dashboard?.consumerIds ?? [];
     // selectedModelHasOverride controls the exact restore-default operation.
     // selectedModelHasOverride 控制精确的恢复默认操作。
-    const selectedModelHasOverride = Boolean(
-      selectedPricingModel && pricingSettings?.modelOverrides?.[selectedPricingModel],
-    );
+    const selectedOverrideIds = pricingSettings === null ? [] : overridesForModel(pricingSettings, selectedPricingModel);
+    const selectedModelHasOverride = selectedOverrideIds.length > 0;
     // selectedPricingSource is derived from the complete settings authority, independent of the filtered directory page.
     // selectedPricingSource 派生自完整设置权威，与已筛选目录分页无关。
     const selectedPricingSource = !selectedPricingModel || !pricingSettings ? null : selectedModelHasOverride ? "override"
@@ -1273,7 +1493,31 @@ export function createPluginPanel(sdk) {
     const visiblePricingModels = pricingDirectory?.models ?? [];
     // pricingDirty compares exact strings so opening a default never creates an unsolicited override.
     // pricingDirty 比较精确字符串，确保打开默认值不会产生非预期覆盖。
-    const pricingDirty = pricingSettings && PRICE_FIELDS.some((field) => pricingDraft[field.key] !== editablePrices(pricingSettings, selectedPricingModel)[field.key]);
+    const originalPrices = editablePrices(pricingSettings, selectedPricingModel);
+    const pricingDirty = selectedOverrideIds.length > 1 || Object.keys(originalPrices).some((key) => pricingDraft[key] !== originalPrices[key])
+      || JSON.stringify(contextTiersDraft) !== JSON.stringify(editableContextTiers(editableTariff(pricingSettings, selectedPricingModel)?.contextTiers))
+      || JSON.stringify(offPeakDraft) !== JSON.stringify(editableOffPeak(pricingSettings, selectedPricingModel));
+    // contextTiersValid covers both time tariffs before either can be saved.
+    // contextTiersValid 在保存之前同时校验两个时段费率。
+    const contextTiersValid = contextTierDraftsAreValid(contextTiersDraft)
+      && (offPeakDraft === null || contextTierDraftsAreValid(offPeakDraft.contextTiers));
+    // Validate entered schedule text before sending the host-validated configuration.
+    // 在提交由宿主校验的配置前，先校验输入的时段文本。
+    const offPeakValid = offPeakDraft === null || (
+      /^-?\d+$/.test(offPeakDraft.utcOffsetMinutes) && pricingDraftIsValid(offPeakDraft.prices) && offPeakDraft.windows.length > 0
+      && offPeakDraft.windows.every((window) => /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(window.start)
+        && /^(?:(?:[01]\d|2[0-3]):[0-5]\d|24:00)$/.test(window.end) && window.start !== window.end)
+    );
+    // Update one schedule window without mutating the persisted settings projection.
+    // 更新一条时段，不修改已持久化的设置投影。
+    const updateOffPeakWindow = (index, field, value) => {
+      setOffPeakDraft((draft) => ({ ...draft, windows: draft.windows.map((window, position) =>
+        position === index ? { ...window, [field]: value } : window) }));
+    };
+    // An empty rate disables conversion; a supplied rate must be a positive decimal.
+    // 汇率留空会关闭折算；填写时必须是正十进制数。
+    const rateValid = rateDraft === "" || (DECIMAL_PRICE_PATTERN.test(rateDraft) && /[1-9]/.test(rateDraft));
+    const exactModelId = pricingSearch.trim();
 
     // refreshLabel names the toolbar refresh button for its current state.
     // refreshLabel 按当前状态命名工具栏刷新按钮。
@@ -1359,7 +1603,7 @@ export function createPluginPanel(sdk) {
       },
         dashboard ? h(Badge, { variant: "outline" }, text("source.host", "Host data")) : null,
         dashboard ? h(Badge, { variant: "outline" },
-          `${text("pricing.catalog", "Reference catalog")} · ${currencyAmount("", dashboard.pricingCatalog.currency).trim()} · ${formatInteger(dashboard.pricingCatalog.entryCount)} + ${formatInteger(dashboard.pricingCatalog.overrideCount)}`) : null,
+          `${text("pricing.catalog", "Reference catalog")} · ${formatInteger(dashboard.pricingCatalog.entryCount)} + ${formatInteger(dashboard.pricingCatalog.overrideCount)}`) : null,
         modelQuery ? h(Badge, { variant: "outline" }, `${text("pricing.model", "Model")}: ${modelQuery}`) : null,
         modelQuery ? h(Button, { type: "button", size: "sm", variant: "ghost", onClick: () => {
           setModelQuery(""); setModelDraft(""); setDailyOffset(0); setRecentOffset(0); setRecentModel(null);
@@ -1598,14 +1842,28 @@ export function createPluginPanel(sdk) {
               (offset) => setPricingPage(offset / PRICING_PAGE_SIZE), pricingDirectoryLoading) : null,
           },
             h(PageToolbar, null,
+              h(Input, { density: "compact", type: "text", inputMode: "decimal", spellCheck: false,
+                "aria-label": text("pricing.exchangeRate", "CNY per 1 USD"),
+                placeholder: text("pricing.exchangeRate", "CNY per 1 USD"),
+                value: rateDraft, disabled: settingsBusy, "aria-invalid": !rateValid,
+                onChange: (event) => setRateDraft(event.currentTarget.value.trim()) }),
+              h(Button, { type: "button", variant: "outline", size: "sm",
+                disabled: settingsBusy || !rateValid || rateDraft === (pricingSettings.cnyPerUsd ?? ""),
+                onClick: () => void persistPricingOverrides(pricingSettings.modelOverrides, rateDraft,
+                  text("pricing.exchangeSaved", "Saved exchange rate"), false) },
+              text("pricing.saveExchangeRate", "Save exchange rate")),
+              h(PageHint, null, text("pricing.exchangeHint", "Enter how many CNY equal 1 USD. Leave blank to disable conversion.")),
+            ),
+            h(PageToolbar, null,
               h(Input, { density: "compact", type: "search",
                 "aria-label": text("pricing.search", "Search models"), placeholder: text("pricing.search", "Search models"),
-                value: pricingSearch, onChange: (event) => { setPricingSearch(event.currentTarget.value); setPricingPage(0); } }),
+                value: pricingSearch, maxLength: 256, onChange: (event) => { setPricingSearch(event.currentTarget.value); setPricingPage(0); } }),
               h(SelectControl, { ariaLabel: text("pricing.filter", "Price filter"), value: pricingFilter,
                 options: ["all", "unpriced", "override", "used"].map((value) => ({ value, label: text(`pricing.filter.${value}`, value) })),
                 onValueChange: (value) => { setPricingFilter(value); setPricingPage(0); } }),
-              h(PageHint, null, text("pricing.tableScope", "Prices per 1M tokens. Used models include all retained usage."),
-                pricingDirectory ? ` · ${currencyAmount("", pricingDirectory.currency).trim()}` : ""),
+              h(Button, { type: "button", variant: "outline", size: "sm", disabled: settingsBusy || exactModelId === "",
+                onClick: () => selectPricingModel(exactModelId) }, text("pricing.addModel", "Edit exact model ID")),
+              h(PageHint, null, text("pricing.tableScope", "Prices per 1M tokens. Used models include all retained usage.")),
             ),
             pricingDirectoryError ? h(PageNotice, {
               tone: "error", title: text("pricing.loadError", "Unable to load model prices"),
@@ -1626,10 +1884,15 @@ export function createPluginPanel(sdk) {
                   key: entry.modelId,
                   selected: selectedPricingModel === entry.modelId,
                   cells: {
-                    model: h(Button, { size: "sm", type: "button", variant: "ghost", disabled: settingsBusy, onClick: () => selectPricingModel(entry.modelId) }, entry.modelId),
-                    ...Object.fromEntries(PRICE_FIELDS.map((field) => [field.key,
-                      h("span", { title: entry.prices === null ? "" : entry.prices[field.key] }, formatMoney(entry.prices === null ? null : entry.prices[field.key], sdk.locale))])),
-                    source: text(entry.source === "override" ? "pricing.override" : entry.source === "catalog" ? "pricing.default" : "pricing.unpriced", "Price source"),
+                    model: h(Button, { size: "sm", type: "button", variant: "ghost", disabled: settingsBusy,
+                      title: entry.aliases?.join(", "), onClick: () => selectPricingModel(entry.modelId) }, entry.modelId),
+                    ...Object.fromEntries(PRICE_FIELDS.map((field) => [field.key, h("div", null,
+                      priceCell(entry.effectivePrices, field.key),
+                      entry.offPeakPrices === undefined ? null : h("div", null,
+                        priceCell(entry.offPeakPrices, field.key, `${text("pricing.offPeak", "Off-peak")} · `)),
+                    )])),
+                    source: entry.source === "conflict" ? text("pricing.aliasConflict", "Conflicting alias prices")
+                      : text(entry.source === "override" ? "pricing.override" : entry.source === "catalog" ? "pricing.default" : "pricing.unpriced", "Price source"),
                     actions: h(Button, { size: "sm", type: "button", variant: "outline", disabled: settingsBusy,
                       onClick: () => selectPricingModel(entry.modelId) }, text("pricing.edit", "Edit")),
                   },
@@ -1641,38 +1904,79 @@ export function createPluginPanel(sdk) {
           // Keep the selected model stable until the pending configuration write finishes.
           // 配置写入完成前保持所选模型稳定。
           if (!open && !settingsBusyRef.current) setSelectedPricingModel("");
-        } }, h(DialogContent, { scrollMode: "body-scroll", className: "plugin-statistics-price-dialog" },
+        } }, h(DialogContent, { size: "lg", scrollMode: "fixed-footer", className: "plugin-statistics-price-dialog" },
+          h(DialogHeader, null,
+            h("div", { className: "plugin-statistics-section-header" },
+              h(DialogTitle, { className: "plugin-statistics-pricing-model" }, interpolate(text("pricing.editModel", "Edit model · {{model}}"), { model: selectedPricingModel })),
+              h(Badge, { variant: "outline" }, selectedPricingSource === "override" ? text("pricing.override", "Custom override")
+                : selectedPricingSource === "catalog" ? text("pricing.default", "Catalog default") : text("pricing.unpriced", "Unpriced")),
+            ),
+            h(DialogDescription, null, text("pricing.dualCurrencyHint", "Enter USD, CNY, or both for each dimension. After saving, an empty side is converted using the saved rate. Two entered prices are applied independently.")),
+          ),
+          // The host scrolls the form between the title and actions when the list of tiers grows.
+          // 档位列表增长时，宿主在标题与操作区之间滚动表单。
           h("section", { className: "plugin-statistics-price-editor", "aria-label": text("pricing.editor", "Model price editor") },
-            h(DialogHeader, null,
-              h("div", { className: "plugin-statistics-section-header" },
-                h(DialogTitle, { className: "plugin-statistics-pricing-model" }, interpolate(text("pricing.editModel", "Edit model · {{model}}"), { model: selectedPricingModel })),
-                h(Badge, { variant: "outline" }, selectedPricingSource === "override" ? text("pricing.override", "Custom override")
-                  : selectedPricingSource === "catalog" ? text("pricing.default", "Catalog default") : text("pricing.unpriced", "Unpriced")),
-              ),
-              h(DialogDescription, null, text("pricing.description", "Enter all four prices, using zero only for explicitly free dimensions.")),
-            ),
-            h("div", { className: "plugin-statistics-price-grid" },
-              ...PRICE_FIELDS.map((field) => h("label", { className: "plugin-statistics-price-field", key: field.key },
-                h("span", null, `${text(field.messageKey, field.fallback)} · ${text("pricing.perMillion", "per 1M Token")}`),
-                h(Input, { "aria-label": text(field.messageKey, field.fallback),
-                  disabled: settingsBusy, inputMode: "decimal", maxLength: 64, spellCheck: false, type: "text", value: pricingDraft[field.key],
+            h(PriceInputs, { draft: pricingDraft, disabled: settingsBusy,
+              onChange: (key, value) => setPricingDraft((current) => ({ ...current, [key]: value })) }),
+            h(PageSection, {
+              title: text("pricing.contextTiers", "Context pricing tiers"),
+              description: text("pricing.contextTierHint", "Use the highest exceeded input-token threshold to price the entire request."),
+            }, h(ContextTierInputs, { tiers: contextTiersDraft, seedPrices: pricingDraft, disabled: settingsBusy,
+              onChange: setContextTiersDraft })),
+            h(PageSection, {
+              title: text("pricing.offPeak", "Off-peak"),
+              description: text("pricing.offPeakHint", "Off-peak prices apply inside the weekly windows. Base rates apply at all other times."),
+              actions: h(Button, { type: "button", size: "sm", variant: "outline", disabled: settingsBusy,
+                onClick: () => setOffPeakDraft(offPeakDraft === null ? {
+                  utcOffsetMinutes: "0", windows: [{ days: "weekdays", start: "", end: "" }], prices: { ...pricingDraft }, contextTiers: [],
+                } : null) }, offPeakDraft === null ? text("pricing.enableOffPeak", "Enable off-peak pricing")
+                : text("pricing.disableOffPeak", "Disable off-peak pricing")),
+            }, offPeakDraft === null ? null : h(React.Fragment, null,
+              h("label", { className: "plugin-statistics-price-field" },
+                h("span", null, text("pricing.utcOffset", "Fixed UTC offset in minutes (UTC+8 = 480)")),
+                h(Input, { type: "text", inputMode: "numeric", disabled: settingsBusy, value: offPeakDraft.utcOffsetMinutes,
                   onChange: (event) => {
-                    // Capture the exact string before React releases the event's currentTarget.
-                    // 在 React 释放事件 currentTarget 前捕获精确字符串。
                     const value = event.currentTarget.value.trim();
-                    setPricingDraft((current) => ({ ...current, [field.key]: value }));
-                  },
-                }),
+                    setOffPeakDraft((draft) => ({ ...draft, utcOffsetMinutes: value }));
+                  } }),
+              ),
+              ...offPeakDraft.windows.map((window, index) => h(PageToolbar, { key: index },
+                h(SelectControl, { ariaLabel: `${text("pricing.windowDays", "Days")} ${index + 1}`, value: window.days,
+                  disabled: settingsBusy, options: WINDOW_DAYS.map((value) => ({ value, label: text(`pricing.days.${value}`, value) })),
+                  onValueChange: (value) => updateOffPeakWindow(index, "days", value) }),
+                h(Input, { type: "text", placeholder: "HH:MM", "aria-label": `${text("pricing.windowStart", "Start time")} ${index + 1}`,
+                  disabled: settingsBusy, value: window.start, onChange: (event) => updateOffPeakWindow(index, "start", event.currentTarget.value.trim()) }),
+                h(Input, { type: "text", placeholder: "HH:MM", "aria-label": `${text("pricing.windowEnd", "End time")} ${index + 1}`,
+                  disabled: settingsBusy, value: window.end, onChange: (event) => updateOffPeakWindow(index, "end", event.currentTarget.value.trim()) }),
+                h(Button, { type: "button", size: "sm", variant: "outline", disabled: settingsBusy,
+                  onClick: () => setOffPeakDraft((draft) => ({ ...draft, windows: draft.windows.filter((_, position) => position !== index) })) },
+                text("pricing.removeWindow", "Remove window")),
               )),
-            ),
-            !pricingDraftValid ? h(PageHint, null, text("pricing.validation", "Enter four non-negative decimal prices.")) : null,
+              h(PageToolbar, null,
+                h(Button, { type: "button", size: "sm", variant: "outline", disabled: settingsBusy,
+                  onClick: () => setOffPeakDraft((draft) => ({
+                    ...draft, windows: [...draft.windows, { days: "weekdays", start: "", end: "" }],
+                  })) }, text("pricing.addWindow", "Add window")),
+                h(PageHint, null, text("pricing.windowHint", "Use 00:00–24:00 for a full day. An end before the start continues into the next day.")),
+              ),
+              h(PriceInputs, { offPeak: true, draft: offPeakDraft.prices, disabled: settingsBusy,
+                onChange: (key, value) => setOffPeakDraft((draft) => ({ ...draft, prices: { ...draft.prices, [key]: value } })) }),
+              h(ContextTierInputs, { tiers: offPeakDraft.contextTiers, seedPrices: offPeakDraft.prices, disabled: settingsBusy, offPeak: true,
+                onChange: (update) => setOffPeakDraft((draft) => ({ ...draft, contextTiers: update(draft.contextTiers) })) }),
+            )),
+            !pricingDraftValid ? h(PageHint, null, text("pricing.dualCurrencyValidation", "Enter at least one non-negative price per dimension. Use zero for free usage.")) : null,
+            !offPeakValid ? h(PageHint, null, text("pricing.offPeakValidation", "Enter the UTC offset, at least one valid window and all four off-peak price dimensions.")) : null,
+            !contextTiersValid ? h(PageHint, null, text("pricing.contextTierValidation", "Enter increasing whole-token thresholds and all four price dimensions for each tier.")) : null,
+            selectedOverrideIds.length > 1 ? h(PageHint, null,
+              text("pricing.mergeAliases", "Saving replaces the existing alias overrides with this shared price."), " ", selectedOverrideIds.join(", ")) : null,
             settingsError ? h(PageNotice, { tone: "error" }, settingsError) : null,
-            h(DialogFooter, null,
-              h(Button, { disabled: settingsBusy || !selectedModelHasOverride, onClick: resetPricingOverride, size: "sm", type: "button", variant: "outline" }, text("pricing.reset", "Restore catalog default")),
-              h(Button, { "aria-busy": settingsBusy, disabled: settingsBusy || !selectedPricingModel || !pricingDraftValid || !pricingDirty,
-                onClick: savePricingOverride, size: "sm", type: "button" }, settingsBusy ? text("pricing.saving", "Saving") : text("pricing.save", "Save override")),
-            ),
-          ))),
+          ),
+          h(DialogFooter, null,
+            h(Button, { disabled: settingsBusy || !selectedModelHasOverride, onClick: resetPricingOverride, size: "sm", type: "button", variant: "outline" }, text("pricing.reset", "Restore catalog default")),
+            h(Button, { "aria-busy": settingsBusy, disabled: settingsBusy || !selectedPricingModel || !pricingDraftValid || !offPeakValid || !contextTiersValid || !pricingDirty,
+              onClick: savePricingOverride, size: "sm", type: "button" }, settingsBusy ? text("pricing.saving", "Saving") : text("pricing.save", "Save override")),
+          ),
+        )),
       ),
     );
   }

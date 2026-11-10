@@ -1,6 +1,37 @@
 name: Estadísticas de uso de Vulcan
 capability: Consultar datos de Token del proveedor mediante VLDB del sistema y calcular estimaciones con el catálogo del complemento
 messages:
+  pricing.exchangeRate: "CNY por 1 USD"
+  pricing.saveExchangeRate: "Guardar tipo de cambio"
+  pricing.exchangeSaved: "Tipo de cambio guardado"
+  pricing.exchangeHint: "Indica cuántos CNY equivalen a 1 USD. Deja el campo vacío para desactivar la conversión."
+  pricing.addModel: "Editar ID exacto del modelo"
+  pricing.dualCurrencyHint: "Introduce USD, CNY o ambos en cada concepto. Al guardar, se convierte la moneda que quede vacía con el tipo guardado. Si introduces ambos precios, se aplican por separado."
+  pricing.dualCurrencyValidation: "Introduce al menos un precio no negativo por concepto. Usa cero para el uso gratuito."
+  pricing.aliasConflict: "Precios de alias en conflicto"
+  pricing.mergeAliases: "Al guardar, esta tarifa compartida sustituye los precios personalizados de los alias."
+  pricing.offPeak: "Horas valle"
+  pricing.contextTiers: "Tramos de precio por contexto"
+  pricing.contextTierHint: "Se aplica a toda la solicitud el tramo del mayor umbral de tokens de entrada superado."
+  pricing.contextThreshold: "Tokens de entrada por encima de"
+  pricing.removeContextTier: "Quitar tramo"
+  pricing.addContextTier: "Añadir tramo de contexto"
+  pricing.contextTierValidation: "Introduce umbrales enteros crecientes y los cuatro precios de cada tramo."
+  pricing.baseRate: "Tarifa base"
+  pricing.offPeakHint: "La tarifa valle se aplica en los horarios semanales configurados. El resto del tiempo se aplica la tarifa base."
+  pricing.enableOffPeak: "Activar tarifa valle"
+  pricing.disableOffPeak: "Desactivar tarifa valle"
+  pricing.utcOffset: "Desfase fijo de UTC en minutos (UTC+8 = 480)"
+  pricing.windowDays: "Días"
+  pricing.days.daily: "Todos los días"
+  pricing.days.weekdays: "De lunes a viernes"
+  pricing.days.weekend: "Sábado y domingo"
+  pricing.windowStart: "Hora de inicio"
+  pricing.windowEnd: "Hora de fin"
+  pricing.removeWindow: "Quitar horario"
+  pricing.addWindow: "Añadir horario"
+  pricing.windowHint: "Usa 00:00–24:00 para todo el día. Si el fin es anterior al inicio, el horario continúa al día siguiente."
+  pricing.offPeakValidation: "Introduce el desfase UTC, al menos un horario válido y los cuatro precios de la tarifa valle."
   tokens.details: Detalles de tokens
   timing.request: Duración de la solicitud
   timing.column: Latencia

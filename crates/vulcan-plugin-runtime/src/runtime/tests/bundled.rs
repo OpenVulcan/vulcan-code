@@ -69,14 +69,14 @@ impl VulcanPluginVldbService for RecordingVldbService {
                 "requests": 3,
                 "successes": 3,
                 "topProviderName": "provider-1",
-                "topModelName": "gpt-5"
+                "topModelName": "gpt-5.6-sol"
             }])
         } else if sql.contains("AS seriesKey") {
             json!([
                 {
                     "date": "2026-08-15",
-                    "seriesKey": "provider-1/gpt-5",
-                    "label": "provider-1 / gpt-5",
+                    "seriesKey": "provider-1/gpt-5.6-sol",
+                    "label": "provider-1 / gpt-5.6-sol",
                     "value": 35
                 },
                 {
@@ -93,7 +93,7 @@ impl VulcanPluginVldbService for RecordingVldbService {
                     "serviceEntryId": "entry-1",
                     "consumerId": "webui",
                     "operation": "response_create",
-                    "modelId": "gpt-5",
+                    "modelId": "gpt-5.6-sol",
                     "attemptCount": 1,
                     "successfulAttemptCount": 1,
                     "reportedUsageAttemptCount": 1,
@@ -139,7 +139,7 @@ impl VulcanPluginVldbService for RecordingVldbService {
                     "serviceEntryId": "entry-1",
                     "consumerId": "webui",
                     "operation": "response_create",
-                    "modelId": "gpt-5",
+                    "modelId": "gpt-5.6-sol",
                     "attemptCount": 1,
                     "successfulAttemptCount": 1,
                     "reportedUsageAttemptCount": 1,
@@ -165,7 +165,7 @@ impl VulcanPluginVldbService for RecordingVldbService {
                 "operation": "response_create",
                 "providerId": "provider-1",
                 "serviceEntryId": "entry-1",
-                "modelId": "gpt-5",
+                "modelId": "openai/gpt-5-6-sol-high",
                 "transport": "http_sse",
                 "httpStatus": 200,
                 "websocketCloseCode": null,
@@ -210,18 +210,18 @@ impl VulcanPluginVldbService for RecordingVldbService {
                 "healthStatus": "ready"
                 ,"dailyCount": 3
                 ,"recentCount": 1
-                ,"recentModelsJson": "[{\"providerId\":\"provider-1\",\"modelId\":\"gpt-5\"}]"
+                ,"recentModelsJson": "[{\"providerId\":\"provider-1\",\"modelId\":\"gpt-5.6-sol\"}]"
                 ,"consumerIdsJson": "[\"webui\"]"
             }])
         } else if sql.contains("AS rowCount") {
             json!([
-                { "modelId": "gpt-5", "rowCount": 1, "uncachedInputTokens": 8,
+                { "modelId": "gpt-5.6-sol", "rowCount": 1, "uncachedInputTokens": 8,
                   "cacheReadTokens": 2, "cacheWriteTokens": 0, "outputTokens": 20 },
-                { "modelId": "gpt-5", "rowCount": 1, "uncachedInputTokens": 1,
+                { "modelId": "gpt-5.6-sol", "rowCount": 1, "uncachedInputTokens": 1,
                   "cacheReadTokens": 0, "cacheWriteTokens": 0, "outputTokens": null }
             ])
         } else if sql.contains("AS resultJson") {
-            json!([{ "resultJson": "{\"totalCount\":1,\"models\":[{\"modelId\":\"private-model\",\"attempts\":1}]}" }])
+            json!([{ "resultJson": "{\"totalCount\":1,\"models\":[{\"modelId\":\"private-model\",\"attempts\":1,\"aliases\":[]}]}" }])
         } else if sql.contains("COUNT(*) AS attempts") {
             json!([{ "providerId": "provider-1", "attempts": 3, "successes": 3, "totalTokens": 37 }])
         } else if sql.contains("AS attempts") {
@@ -359,8 +359,11 @@ fn bundled_usage_statistics_plugin_loads_through_system_vldb_bridge() {
     );
     assert!(dashboard["daily"][2]["estimatedCost"].is_null());
     assert_eq!(dashboard["heatmap"][0]["value"], 37);
-    assert_eq!(dashboard["heatmap"][0]["topModelName"], "gpt-5");
-    assert_eq!(dashboard["series"][0]["seriesKey"], "provider-1/gpt-5");
+    assert_eq!(dashboard["heatmap"][0]["topModelName"], "gpt-5.6-sol");
+    assert_eq!(
+        dashboard["series"][0]["seriesKey"],
+        "provider-1/gpt-5.6-sol"
+    );
     assert_eq!(dashboard["series"][0]["value"], 35);
     assert!(
         dashboard["pricingCatalog"]["entryCount"]
@@ -374,7 +377,7 @@ fn bundled_usage_statistics_plugin_loads_through_system_vldb_bridge() {
     assert_eq!(dashboard["recentAttempts"][0]["attemptId"], "attempt-1");
     assert_eq!(
         dashboard["recentModels"],
-        json!([{ "providerId": "provider-1", "modelId": "gpt-5" }])
+        json!([{ "providerId": "provider-1", "modelId": "gpt-5.6-sol" }])
     );
     assert_eq!(dashboard["providers"][0]["providerId"], "provider-1");
     assert_eq!(dashboard["providers"][0]["attempts"], 3);
@@ -403,12 +406,24 @@ fn bundled_usage_statistics_plugin_loads_through_system_vldb_bridge() {
             plugin_id: String::from("vulcan-usage-statistics"),
             action_id: String::from("settings-update"),
             arguments: json!({
+                "cnyPerUsd": "7",
                 "modelOverrides": {
-                    "gpt-5": {
+                    "gpt-5.6-sol": {
                         "inputPerMillion": "2",
                         "outputPerMillion": "20",
                         "cacheReadPerMillion": "0.2",
-                        "cacheWritePerMillion": "0"
+                        "cacheWritePerMillion": "0",
+                        "outputPerMillionCny": "80",
+                        "offPeak": {
+                            "utcOffsetMinutes": 480,
+                            "windows": [{ "days": "daily", "start": "00:00", "end": "24:00" }],
+                            "prices": {
+                                "inputPerMillionCny": "7",
+                                "outputPerMillionCny": "0",
+                                "cacheReadPerMillionCny": "0",
+                                "cacheWritePerMillionCny": "0"
+                            }
+                        }
                     }
                 }
             }),
@@ -418,9 +433,10 @@ fn bundled_usage_statistics_plugin_loads_through_system_vldb_bridge() {
         }))
         .expect("persist one plugin-owned model price override");
     assert_eq!(
-        updated_settings["modelOverrides"]["gpt-5"]["outputPerMillion"],
+        updated_settings["modelOverrides"]["gpt-5.6-sol"]["outputPerMillion"],
         "20"
     );
+    assert_eq!(updated_settings["cnyPerUsd"], "7");
     let overridden_dashboard = runtime
         .block_on(manager.invoke_action(VulcanPluginActionRequest {
             plugin_id: String::from("vulcan-usage-statistics"),
@@ -440,8 +456,16 @@ fn bundled_usage_statistics_plugin_loads_through_system_vldb_bridge() {
         "0.0004164"
     );
     assert_eq!(
+        overridden_dashboard["daily"][0]["alternateEstimate"]["amount"],
+        "0.0017148"
+    );
+    assert_eq!(
+        overridden_dashboard["recentAttempts"][0]["alternateEstimate"]["amount"],
+        "0.000056"
+    );
+    assert_ne!(
         overridden_dashboard["daily"][0]["pricingRevision"],
-        "plugin-config-v1:gpt-5:2:20:0.2:0"
+        dashboard["daily"][0]["pricingRevision"]
     );
     assert_eq!(overridden_dashboard["pricingCatalog"]["overrideCount"], 1);
     // pricing_page validates the declared complete usage-directory action and unknown prices.
@@ -458,7 +482,7 @@ fn bundled_usage_statistics_plugin_loads_through_system_vldb_bridge() {
         .expect("query the complete model pricing directory");
     assert_eq!(pricing_page["totalCount"], 1);
     assert_eq!(pricing_page["models"][0]["source"], "unpriced");
-    assert!(pricing_page["models"][0]["prices"].is_null());
+    assert_eq!(pricing_page["models"][0]["effectivePrices"], json!({}));
     // clearPreview proves the real Lua bundle can query maintenance facts through the same binding.
     // clearPreview 证明真实 Lua Bundle 可以通过同一绑定查询维护事实。
     let clear_preview = runtime

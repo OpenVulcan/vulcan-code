@@ -1,6 +1,37 @@
 name: Vulcan-Nutzungsstatistik
 capability: Token-Daten des Anbieters über die System-VLDB abfragen und Referenzkosten mit dem eigenen Plugin-Katalog berechnen
 messages:
+  pricing.exchangeRate: "CNY pro 1 USD"
+  pricing.saveExchangeRate: "Wechselkurs speichern"
+  pricing.exchangeSaved: "Wechselkurs gespeichert"
+  pricing.exchangeHint: "Gib an, wie vielen CNY 1 USD entspricht. Ein leeres Feld deaktiviert die Umrechnung."
+  pricing.addModel: "Exakte Modell-ID bearbeiten"
+  pricing.dualCurrencyHint: "Gib pro Posten USD, CNY oder beide an. Nach dem Speichern wird ein leerer Preis mit dem gespeicherten Kurs umgerechnet. Zwei eingegebene Preise gelten unabhängig voneinander."
+  pricing.dualCurrencyValidation: "Gib je Posten mindestens einen nicht negativen Preis ein. Für kostenlose Nutzung gilt null."
+  pricing.aliasConflict: "Widersprüchliche Aliaspreise"
+  pricing.mergeAliases: "Beim Speichern ersetzt dieser gemeinsame Preis die bisherigen Aliaspreise."
+  pricing.offPeak: "Nebenzeit"
+  pricing.contextTiers: "Preisstufen für Kontextlängen"
+  pricing.contextTierHint: "Für die gesamte Anfrage gilt die höchste überschrittene Eingabe-Token-Schwelle."
+  pricing.contextThreshold: "Eingabe-Token über"
+  pricing.removeContextTier: "Stufe entfernen"
+  pricing.addContextTier: "Kontextstufe hinzufügen"
+  pricing.contextTierValidation: "Geben Sie aufsteigende ganzzahlige Token-Schwellen und alle vier Preise pro Stufe ein."
+  pricing.baseRate: "Grundtarif"
+  pricing.offPeakHint: "In den wöchentlichen Zeitfenstern gilt der Nebenzeittarif. Zu allen anderen Zeiten gilt der Grundtarif."
+  pricing.enableOffPeak: "Nebenzeittarif aktivieren"
+  pricing.disableOffPeak: "Nebenzeittarif deaktivieren"
+  pricing.utcOffset: "Feste UTC-Abweichung in Minuten (UTC+8 = 480)"
+  pricing.windowDays: "Tage"
+  pricing.days.daily: "Jeden Tag"
+  pricing.days.weekdays: "Montag bis Freitag"
+  pricing.days.weekend: "Samstag und Sonntag"
+  pricing.windowStart: "Beginn"
+  pricing.windowEnd: "Ende"
+  pricing.removeWindow: "Zeitfenster entfernen"
+  pricing.addWindow: "Zeitfenster hinzufügen"
+  pricing.windowHint: "Für den ganzen Tag gilt 00:00–24:00. Liegt das Ende vor dem Beginn, läuft das Zeitfenster bis zum Folgetag."
+  pricing.offPeakValidation: "Gib die UTC-Abweichung, mindestens ein gültiges Zeitfenster und alle vier Nebenzeitpreise ein."
   tokens.details: Token-Details
   timing.request: Anfragedauer
   timing.column: Latenz

@@ -146,6 +146,15 @@
       "type": "string",
       "enum": ["catalog_exact", "override_exact", "unmatched", "incomplete_usage"]
     },
+    "currencyEstimate": {
+      "type": "object",
+      "properties": {
+        "amount": { "$ref": "#/$defs/nullableString" },
+        "details": { "$ref": "#/$defs/pricingDetails" }
+      },
+      "required": ["amount", "details"],
+      "additionalProperties": false
+    },
     "pricingDetails": {
       "type": ["object", "null"],
       "properties": {
@@ -156,6 +165,8 @@
             "type": "object",
             "properties": {
               "tokenField": { "enum": ["uncachedInputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens"] },
+              "offPeak": { "type": "boolean" },
+              "aboveInputTokens": { "type": "integer", "minimum": 1 },
               "perMillion": { "type": "string" },
               "cost": { "$ref": "#/$defs/nullableString" }
             },
@@ -207,6 +218,7 @@
         "pricingRevision": { "$ref": "#/$defs/nullableString" },
         "pricingSourceId": { "$ref": "#/$defs/nullableString" },
         "pricingDetails": { "$ref": "#/$defs/pricingDetails" },
+        "alternateEstimate": { "$ref": "#/$defs/currencyEstimate" },
         "aggregateRevision": { "type": "integer", "minimum": 0 },
         "requestDurationMs": { "type": ["number", "null"], "minimum": 0 },
         "firstTokenLatencyMs": { "type": ["number", "null"], "minimum": 0 },
@@ -324,6 +336,7 @@
         "pricingRevision": { "$ref": "#/$defs/nullableString" },
         "pricingSourceId": { "$ref": "#/$defs/nullableString" },
         "pricingDetails": { "$ref": "#/$defs/pricingDetails" },
+        "alternateEstimate": { "$ref": "#/$defs/currencyEstimate" },
         "terminalAtMs": { "type": "integer" },
         "requestDurationMs": { "type": ["number", "null"], "minimum": 0 },
         "firstTokenLatencyMs": { "type": ["number", "null"], "minimum": 0 },

@@ -1,6 +1,37 @@
 name: Vulcan Usage Statistics
 capability: Query Provider Token facts through system VLDB and compute reference estimates from a plugin-owned catalog
 messages:
+  pricing.exchangeRate: "CNY per 1 USD"
+  pricing.saveExchangeRate: "Save exchange rate"
+  pricing.exchangeSaved: "Saved exchange rate"
+  pricing.exchangeHint: "Enter how many CNY equal 1 USD. Leave blank to disable conversion."
+  pricing.addModel: "Edit exact model ID"
+  pricing.dualCurrencyHint: "Enter USD, CNY, or both for each dimension. After saving, an empty side is converted using the saved rate. Two entered prices are applied independently."
+  pricing.dualCurrencyValidation: "Enter at least one non-negative price per dimension. Use zero for free usage."
+  pricing.aliasConflict: "Conflicting alias prices"
+  pricing.mergeAliases: "Saving replaces the existing alias overrides with this shared price."
+  pricing.offPeak: "Off-peak"
+  pricing.contextTiers: "Context pricing tiers"
+  pricing.contextTierHint: "Use the highest exceeded input-token threshold to price the entire request."
+  pricing.contextThreshold: "Input tokens above"
+  pricing.removeContextTier: "Remove tier"
+  pricing.addContextTier: "Add context tier"
+  pricing.contextTierValidation: "Enter increasing whole-token thresholds and all four price dimensions for each tier."
+  pricing.baseRate: "Base rate"
+  pricing.offPeakHint: "Off-peak prices apply inside the weekly windows. Base rates apply at all other times."
+  pricing.enableOffPeak: "Enable off-peak pricing"
+  pricing.disableOffPeak: "Disable off-peak pricing"
+  pricing.utcOffset: "Fixed UTC offset in minutes (UTC+8 = 480)"
+  pricing.windowDays: "Days"
+  pricing.days.daily: "Every day"
+  pricing.days.weekdays: "Monday to Friday"
+  pricing.days.weekend: "Saturday and Sunday"
+  pricing.windowStart: "Start time"
+  pricing.windowEnd: "End time"
+  pricing.removeWindow: "Remove window"
+  pricing.addWindow: "Add window"
+  pricing.windowHint: "Use 00:00–24:00 for a full day. An end before the start continues into the next day."
+  pricing.offPeakValidation: "Enter the UTC offset, at least one valid window and all four off-peak price dimensions."
   tokens.details: Token details
   timing.request: Request duration
   timing.column: Latency

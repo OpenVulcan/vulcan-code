@@ -1,16 +1,19 @@
 {
   "schemaVersion": 1,
   "catalogId": "vulcan.reference.model-pricing",
-  "catalogRevision": "sha256:8eff3eefccf75fcacc8572b6251bc35640f86248ddf31018a7f26c21a2317599",
-  "adapterVersion": 1,
-  "currency": "USD",
+  "catalogRevision": "sha256:43eae202d6802f64e894f48fe9c0bc7faa33770d8ee7e53a59fae084fb486454",
+  "adapterVersion": 2,
+  "currencies": [
+    "USD",
+    "CNY"
+  ],
   "unit": "per_million_tokens",
   "matching": {
     "strategy": "exact_canonical_model_id",
     "aliases": "explicit_only"
   },
   "source": {
-    "kind": "vendored_reference_snapshot",
+    "kind": "official_prices_and_vendored_snapshot",
     "snapshotSha256": "5d9000d88e11bb36408d9d3886ce094a421ff8f3d6ad7e45a9180740b8fee1ac",
     "provenance": {
       "repository": "https://github.com/farion1231/cc-switch.git",
@@ -22,30 +25,93 @@
         "Database::repair_current_model_pricing"
       ],
       "license": "MIT"
-    }
+    },
+    "official": "pricing/upstream/official-model-pricing.v1.json",
+    "verifiedOn": "2026-11-10",
+    "retainFrom": "2025-01-01"
+  },
+  "excludedGptModelIds": [
+    "gpt-4.1",
+    "gpt-4.1-mini",
+    "gpt-4.1-nano",
+    "gpt-5",
+    "gpt-5-codex",
+    "gpt-5-codex-high",
+    "gpt-5-codex-low",
+    "gpt-5-codex-medium",
+    "gpt-5-codex-mini",
+    "gpt-5-codex-mini-high",
+    "gpt-5-codex-mini-medium",
+    "gpt-5-high",
+    "gpt-5-low",
+    "gpt-5-medium",
+    "gpt-5-mini",
+    "gpt-5-minimal",
+    "gpt-5-nano",
+    "gpt-5.1",
+    "gpt-5.1-codex",
+    "gpt-5.1-codex-max",
+    "gpt-5.1-codex-max-high",
+    "gpt-5.1-codex-max-xhigh",
+    "gpt-5.1-codex-mini",
+    "gpt-5.1-high",
+    "gpt-5.1-low",
+    "gpt-5.1-medium",
+    "gpt-5.1-minimal",
+    "gpt-5.2",
+    "gpt-5.2-codex",
+    "gpt-5.2-codex-high",
+    "gpt-5.2-codex-low",
+    "gpt-5.2-codex-medium",
+    "gpt-5.2-codex-xhigh",
+    "gpt-5.2-high",
+    "gpt-5.2-low",
+    "gpt-5.2-medium",
+    "gpt-5.2-xhigh",
+    "gpt-5.3-codex",
+    "gpt-5.3-codex-high",
+    "gpt-5.3-codex-low",
+    "gpt-5.3-codex-medium",
+    "gpt-5.3-codex-spark",
+    "gpt-5.3-codex-xhigh",
+    "gpt-5.5-high",
+    "gpt-5.5-low",
+    "gpt-5.5-medium",
+    "gpt-5.5-minimal",
+    "gpt-5.5-xhigh",
+    "gpt-5.6",
+    "gpt-5.6-high",
+    "gpt-5.6-low",
+    "gpt-5.6-medium",
+    "gpt-5.6-minimal",
+    "gpt-5.6-xhigh"
+  ],
+  "excludedMiniMaxModelIds": [
+    "minimax-m2",
+    "minimax-m2.1",
+    "minimax-m2.1-lightning",
+    "minimax-m2.5",
+    "minimax-m2.5-lightning"
+  ],
+  "minimumMiniMaxVersion": {
+    "major": 2,
+    "minor": 7
   },
   "models": [
     {
-      "canonicalModelId": "claude-3-5-haiku-20241022",
-      "displayName": "Claude 3.5 Haiku",
+      "canonicalModelId": "beam-free",
+      "displayName": "OpenCode Go Free Model",
       "aliases": [],
       "prices": {
-        "inputPerMillion": "0.80",
-        "outputPerMillion": "4",
-        "cacheReadPerMillion": "0.08",
-        "cacheWritePerMillion": "1"
-      }
-    },
-    {
-      "canonicalModelId": "claude-3-5-sonnet-20241022",
-      "displayName": "Claude 3.5 Sonnet",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "3",
-        "outputPerMillion": "15",
-        "cacheReadPerMillion": "0.30",
-        "cacheWritePerMillion": "3.75"
-      }
+        "inputPerMillion": "0",
+        "outputPerMillion": "0",
+        "cacheReadPerMillion": "0",
+        "cacheWritePerMillion": "0"
+      },
+      "sources": [
+        "https://opencode.ai/docs/console/go/"
+      ],
+      "basis": "OpenCode Go 官方免费模型路线，适用其计划和模型访问规则。"
     },
     {
       "canonicalModelId": "claude-fable-5",
@@ -59,7 +125,23 @@
       }
     },
     {
-      "canonicalModelId": "claude-haiku-4-5-20251001",
+      "canonicalModelId": "claude-fable-5-1",
+      "displayName": "Claude Fable 5.1",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "10",
+        "outputPerMillion": "50",
+        "cacheReadPerMillion": "0.25",
+        "cacheWritePerMillion": "12.50"
+      },
+      "sources": [
+        "https://platform.claude.com/docs/en/about-claude/pricing",
+        "https://platform.claude.com/docs/en/models/overview"
+      ],
+      "basis": "Anthropic 标准推理，缓存写入采用 5 分钟档。"
+    },
+    {
+      "canonicalModelId": "claude-haiku-4-5",
       "displayName": "Claude Haiku 4.5",
       "aliases": [],
       "prices": {
@@ -67,7 +149,39 @@
         "outputPerMillion": "5",
         "cacheReadPerMillion": "0.10",
         "cacheWritePerMillion": "1.25"
-      }
+      },
+      "sources": [
+        "https://platform.claude.com/docs/en/about-claude/pricing",
+        "https://platform.claude.com/docs/en/models/overview"
+      ],
+      "basis": "Anthropic 标准推理，缓存写入采用 5 分钟档。"
+    },
+    {
+      "canonicalModelId": "claude-haiku-5-5",
+      "displayName": "Claude Haiku 5.5",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "0.10",
+        "outputPerMillion": "0.50",
+        "cacheReadPerMillion": "0.01",
+        "cacheWritePerMillion": "0.125"
+      },
+      "contextTiers": [
+        {
+          "aboveInputTokens": 100000,
+          "prices": {
+            "inputPerMillion": "0.50",
+            "outputPerMillion": "2.50",
+            "cacheReadPerMillion": "0.05",
+            "cacheWritePerMillion": "0.625"
+          }
+        }
+      ],
+      "sources": [
+        "https://platform.claude.com/docs/en/about-claude/pricing",
+        "https://platform.claude.com/docs/en/models/overview"
+      ],
+      "basis": "Anthropic 标准推理的 ≤100K 输入参考档，缓存写入采用 5 分钟档。"
     },
     {
       "canonicalModelId": "claude-mythos-5",
@@ -81,18 +195,7 @@
       }
     },
     {
-      "canonicalModelId": "claude-opus-4-1-20250805",
-      "displayName": "Claude Opus 4.1",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "15",
-        "outputPerMillion": "75",
-        "cacheReadPerMillion": "1.50",
-        "cacheWritePerMillion": "18.75"
-      }
-    },
-    {
-      "canonicalModelId": "claude-opus-4-20250514",
+      "canonicalModelId": "claude-opus-4",
       "displayName": "Claude Opus 4",
       "aliases": [],
       "prices": {
@@ -103,7 +206,18 @@
       }
     },
     {
-      "canonicalModelId": "claude-opus-4-5-20251101",
+      "canonicalModelId": "claude-opus-4-1",
+      "displayName": "Claude Opus 4.1",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "15",
+        "outputPerMillion": "75",
+        "cacheReadPerMillion": "1.50",
+        "cacheWritePerMillion": "18.75"
+      }
+    },
+    {
+      "canonicalModelId": "claude-opus-4-5",
       "displayName": "Claude Opus 4.5",
       "aliases": [],
       "prices": {
@@ -111,21 +225,15 @@
         "outputPerMillion": "25",
         "cacheReadPerMillion": "0.50",
         "cacheWritePerMillion": "6.25"
-      }
+      },
+      "sources": [
+        "https://platform.claude.com/docs/en/about-claude/pricing",
+        "https://platform.claude.com/docs/en/models/overview"
+      ],
+      "basis": "Anthropic 标准推理，缓存写入采用 5 分钟档。"
     },
     {
       "canonicalModelId": "claude-opus-4-6",
-      "displayName": "Claude Opus 4.6",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "5",
-        "outputPerMillion": "25",
-        "cacheReadPerMillion": "0.50",
-        "cacheWritePerMillion": "6.25"
-      }
-    },
-    {
-      "canonicalModelId": "claude-opus-4-6-20260206",
       "displayName": "Claude Opus 4.6",
       "aliases": [],
       "prices": {
@@ -155,7 +263,12 @@
         "outputPerMillion": "25",
         "cacheReadPerMillion": "0.50",
         "cacheWritePerMillion": "6.25"
-      }
+      },
+      "sources": [
+        "https://platform.claude.com/docs/en/about-claude/pricing",
+        "https://platform.claude.com/docs/en/models/overview"
+      ],
+      "basis": "Anthropic 标准推理，缓存写入采用 5 分钟档。"
     },
     {
       "canonicalModelId": "claude-opus-5",
@@ -169,7 +282,23 @@
       }
     },
     {
-      "canonicalModelId": "claude-sonnet-4-20250514",
+      "canonicalModelId": "claude-opus-5-5",
+      "displayName": "Claude Opus 5.5",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "4",
+        "outputPerMillion": "20",
+        "cacheReadPerMillion": "0.20",
+        "cacheWritePerMillion": "5"
+      },
+      "sources": [
+        "https://platform.claude.com/docs/en/about-claude/pricing",
+        "https://platform.claude.com/docs/en/models/overview"
+      ],
+      "basis": "Anthropic 标准推理，缓存写入采用 5 分钟档。"
+    },
+    {
+      "canonicalModelId": "claude-sonnet-4",
       "displayName": "Claude Sonnet 4",
       "aliases": [],
       "prices": {
@@ -180,7 +309,7 @@
       }
     },
     {
-      "canonicalModelId": "claude-sonnet-4-5-20250929",
+      "canonicalModelId": "claude-sonnet-4-5",
       "displayName": "Claude Sonnet 4.5",
       "aliases": [],
       "prices": {
@@ -202,17 +331,6 @@
       }
     },
     {
-      "canonicalModelId": "claude-sonnet-4-6-20260217",
-      "displayName": "Claude Sonnet 4.6",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "3",
-        "outputPerMillion": "15",
-        "cacheReadPerMillion": "0.30",
-        "cacheWritePerMillion": "3.75"
-      }
-    },
-    {
       "canonicalModelId": "claude-sonnet-5",
       "displayName": "Claude Sonnet 5",
       "aliases": [],
@@ -222,6 +340,22 @@
         "cacheReadPerMillion": "0.30",
         "cacheWritePerMillion": "3.75"
       }
+    },
+    {
+      "canonicalModelId": "claude-sonnet-5-5",
+      "displayName": "Claude Sonnet 5.5",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "2",
+        "outputPerMillion": "10",
+        "cacheReadPerMillion": "0.10",
+        "cacheWritePerMillion": "2.50"
+      },
+      "sources": [
+        "https://platform.claude.com/docs/en/about-claude/pricing",
+        "https://platform.claude.com/docs/en/models/overview"
+      ],
+      "basis": "Anthropic 标准推理，缓存写入采用 5 分钟档。"
     },
     {
       "canonicalModelId": "codestral-2508",
@@ -257,37 +391,19 @@
       }
     },
     {
-      "canonicalModelId": "command-r",
-      "displayName": "Cohere Command R",
+      "canonicalModelId": "crouton-alpha-free",
+      "displayName": "OpenCode Go Free Model",
       "aliases": [],
       "prices": {
-        "inputPerMillion": "0.15",
-        "outputPerMillion": "0.60",
+        "inputPerMillion": "0",
+        "outputPerMillion": "0",
         "cacheReadPerMillion": "0",
         "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "command-r-plus",
-      "displayName": "Cohere Command R+",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "2.50",
-        "outputPerMillion": "10",
-        "cacheReadPerMillion": "0",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "deepseek-chat",
-      "displayName": "DeepSeek Chat",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "0.14",
-        "outputPerMillion": "0.28",
-        "cacheReadPerMillion": "0.0028",
-        "cacheWritePerMillion": "0"
-      }
+      },
+      "sources": [
+        "https://opencode.ai/docs/console/go/"
+      ],
+      "basis": "OpenCode Go 官方免费模型路线，适用其计划和模型访问规则。"
     },
     {
       "canonicalModelId": "deepseek-reasoner",
@@ -297,17 +413,6 @@
         "inputPerMillion": "0.14",
         "outputPerMillion": "0.28",
         "cacheReadPerMillion": "0.0028",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "deepseek-v3",
-      "displayName": "DeepSeek V3",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "0.28",
-        "outputPerMillion": "1.11",
-        "cacheReadPerMillion": "0.028",
         "cacheWritePerMillion": "0"
       }
     },
@@ -335,25 +440,175 @@
     },
     {
       "canonicalModelId": "deepseek-v4-flash",
-      "displayName": "DeepSeek V4 Flash",
+      "displayName": "DeepSeek V4 Flash 0731",
       "aliases": [],
       "prices": {
-        "inputPerMillion": "0.14",
-        "outputPerMillion": "0.28",
-        "cacheReadPerMillion": "0.0028",
-        "cacheWritePerMillion": "0"
-      }
+        "inputPerMillionCny": "2",
+        "outputPerMillionCny": "8",
+        "cacheReadPerMillionCny": "0.04",
+        "cacheWritePerMillionCny": "0"
+      },
+      "offPeak": {
+        "utcOffsetMinutes": 480,
+        "windows": [
+          {
+            "days": "weekdays",
+            "start": "00:00",
+            "end": "09:00"
+          },
+          {
+            "days": "weekdays",
+            "start": "12:00",
+            "end": "14:00"
+          },
+          {
+            "days": "weekdays",
+            "start": "18:00",
+            "end": "24:00"
+          },
+          {
+            "days": "weekend",
+            "start": "00:00",
+            "end": "24:00"
+          }
+        ],
+        "prices": {
+          "inputPerMillionCny": "1",
+          "outputPerMillionCny": "4",
+          "cacheReadPerMillionCny": "0.02",
+          "cacheWritePerMillionCny": "0"
+        }
+      },
+      "sources": [
+        "https://cloud.tencent.com/document/product/1823/130055/"
+      ],
+      "basis": "腾讯云 TokenHub 将 V4 Flash 与 0731 列在同一原厂直供报价。DeepSeek 官方当前转发到 V4.1 的请求按 V4.1 刊例计费。",
+      "members": [
+        "deepseek-v4-flash-0731",
+        "deepseek-v4-flash-202605",
+        "deepseek-v4-flash-fast",
+        "deepseek-v4-flash-vision-exp"
+      ]
     },
     {
       "canonicalModelId": "deepseek-v4-pro",
-      "displayName": "DeepSeek V4 Pro",
+      "displayName": "DeepSeek V4 Pro 0813",
       "aliases": [],
       "prices": {
-        "inputPerMillion": "0.435",
-        "outputPerMillion": "0.87",
-        "cacheReadPerMillion": "0.003625",
-        "cacheWritePerMillion": "0"
-      }
+        "inputPerMillion": "1.32",
+        "outputPerMillion": "3.96",
+        "cacheReadPerMillion": "0.044",
+        "cacheWritePerMillion": "0",
+        "inputPerMillionCny": "9",
+        "outputPerMillionCny": "27",
+        "cacheReadPerMillionCny": "0.30",
+        "cacheWritePerMillionCny": "0"
+      },
+      "offPeak": {
+        "utcOffsetMinutes": 480,
+        "windows": [
+          {
+            "days": "weekdays",
+            "start": "00:00",
+            "end": "09:00"
+          },
+          {
+            "days": "weekdays",
+            "start": "12:00",
+            "end": "14:00"
+          },
+          {
+            "days": "weekdays",
+            "start": "18:00",
+            "end": "24:00"
+          },
+          {
+            "days": "weekend",
+            "start": "00:00",
+            "end": "24:00"
+          }
+        ],
+        "prices": {
+          "inputPerMillion": "0.66",
+          "outputPerMillion": "1.98",
+          "cacheReadPerMillion": "0.022",
+          "cacheWritePerMillion": "0",
+          "inputPerMillionCny": "4.5",
+          "outputPerMillionCny": "13.5",
+          "cacheReadPerMillionCny": "0.15",
+          "cacheWritePerMillionCny": "0"
+        }
+      },
+      "sources": [
+        "https://api-docs.deepseek.com/quick_start/pricing/",
+        "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/"
+      ],
+      "basis": "DeepSeek API 当前官方版本和峰谷价。",
+      "members": [
+        "deepseek-v4-pro-0813",
+        "deepseek-v4-pro-202606"
+      ]
+    },
+    {
+      "canonicalModelId": "deepseek-v4.1-flash",
+      "displayName": "DeepSeek V4.1 Flash 1017",
+      "aliases": [
+        "deepseek-flash"
+      ],
+      "prices": {
+        "inputPerMillion": "0.30",
+        "outputPerMillion": "1.20",
+        "cacheReadPerMillion": "0.006",
+        "cacheWritePerMillion": "0",
+        "inputPerMillionCny": "2",
+        "outputPerMillionCny": "8",
+        "cacheReadPerMillionCny": "0.04",
+        "cacheWritePerMillionCny": "0"
+      },
+      "offPeak": {
+        "utcOffsetMinutes": 480,
+        "windows": [
+          {
+            "days": "weekdays",
+            "start": "00:00",
+            "end": "09:00"
+          },
+          {
+            "days": "weekdays",
+            "start": "12:00",
+            "end": "14:00"
+          },
+          {
+            "days": "weekdays",
+            "start": "18:00",
+            "end": "24:00"
+          },
+          {
+            "days": "weekend",
+            "start": "00:00",
+            "end": "24:00"
+          }
+        ],
+        "prices": {
+          "inputPerMillion": "0.15",
+          "outputPerMillion": "0.60",
+          "cacheReadPerMillion": "0.003",
+          "cacheWritePerMillion": "0",
+          "inputPerMillionCny": "1",
+          "outputPerMillionCny": "4",
+          "cacheReadPerMillionCny": "0.02",
+          "cacheWritePerMillionCny": "0"
+        }
+      },
+      "sources": [
+        "https://api-docs.deepseek.com/quick_start/pricing/",
+        "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/"
+      ],
+      "basis": "DeepSeek API 双币种独立刊例，工作日北京时间 09:00–12:00 和 14:00–18:00 为高峰。",
+      "members": [
+        "deepseek-v4.1-flash-1017",
+        "deepseek-v4.1-flash-eco"
+      ]
     },
     {
       "canonicalModelId": "devstral-2-2512",
@@ -411,17 +666,6 @@
       }
     },
     {
-      "canonicalModelId": "doubao-seed-2-0-code-preview-latest",
-      "displayName": "Doubao Seed 2.0 Code Preview",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "0.47",
-        "outputPerMillion": "2.37",
-        "cacheReadPerMillion": "0.09",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
       "canonicalModelId": "doubao-seed-2-0-lite",
       "displayName": "Doubao Seed 2.0 Lite",
       "aliases": [],
@@ -455,28 +699,6 @@
       }
     },
     {
-      "canonicalModelId": "doubao-seed-2-1-pro",
-      "displayName": "Doubao Seed 2.1 Pro",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "0.84",
-        "outputPerMillion": "4.2",
-        "cacheReadPerMillion": "0.17",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "doubao-seed-2-1-turbo",
-      "displayName": "Doubao Seed 2.1 Turbo",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "0.42",
-        "outputPerMillion": "2.1",
-        "cacheReadPerMillion": "0.08",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
       "canonicalModelId": "doubao-seed-code",
       "displayName": "Doubao Seed Code",
       "aliases": [],
@@ -488,15 +710,21 @@
       }
     },
     {
-      "canonicalModelId": "gemini-2.0-flash",
-      "displayName": "Gemini 2.0 Flash",
+      "canonicalModelId": "fugu-ultra",
+      "displayName": "Sakana Fugu Ultra",
       "aliases": [],
       "prices": {
-        "inputPerMillion": "0.10",
-        "outputPerMillion": "0.40",
-        "cacheReadPerMillion": "0.025",
+        "inputPerMillion": "5",
+        "outputPerMillion": "30",
+        "cacheReadPerMillion": "0.50",
         "cacheWritePerMillion": "0"
-      }
+      },
+      "sources": [
+        "https://commandcode.ai/models/fugu-ultra",
+        "https://console.sakana.ai/pricing",
+        "https://openrouter.ai/sakana/fugu-ultra-20260615"
+      ],
+      "basis": "Command Code 同名路线，与 Sakana 现行 ≤272K 标准档及 OpenRouter 的 2026-06-15 快照同价。缓存写入未单列。长上下文和独立上报的编排用量可能产生额外费用。"
     },
     {
       "canonicalModelId": "gemini-2.5-flash",
@@ -532,19 +760,24 @@
       }
     },
     {
-      "canonicalModelId": "gemini-3-flash-preview",
-      "displayName": "Gemini 3 Flash Preview",
+      "canonicalModelId": "gemini-3-flash",
+      "displayName": "Gemini 3 Flash",
       "aliases": [],
       "prices": {
-        "inputPerMillion": "0.5",
+        "inputPerMillion": "0.50",
         "outputPerMillion": "3",
         "cacheReadPerMillion": "0.05",
         "cacheWritePerMillion": "0"
-      }
+      },
+      "sources": [
+        "https://ai.google.dev/gemini-api/docs/pricing",
+        "https://cloud.google.com/model-garden/pricing"
+      ],
+      "basis": "Google Gemini 3 Flash Preview 标准参考档，按文本、图片及视频输入价格。音频输入和缓存存储单独计费。"
     },
     {
-      "canonicalModelId": "gemini-3-pro-preview",
-      "displayName": "Gemini 3 Pro Preview",
+      "canonicalModelId": "gemini-3-pro",
+      "displayName": "Gemini 3 Pro",
       "aliases": [],
       "prices": {
         "inputPerMillion": "2",
@@ -565,26 +798,20 @@
       }
     },
     {
-      "canonicalModelId": "gemini-3.1-flash-lite-preview",
-      "displayName": "Gemini 3.1 Flash Lite Preview",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "0.25",
-        "outputPerMillion": "1.50",
-        "cacheReadPerMillion": "0.025",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gemini-3.1-pro-preview",
-      "displayName": "Gemini 3.1 Pro Preview",
+      "canonicalModelId": "gemini-3.1-pro",
+      "displayName": "Gemini 3.1 Pro",
       "aliases": [],
       "prices": {
         "inputPerMillion": "2",
         "outputPerMillion": "12",
         "cacheReadPerMillion": "0.20",
         "cacheWritePerMillion": "0"
-      }
+      },
+      "sources": [
+        "https://cloud.google.com/model-garden/pricing",
+        "https://ai.google.dev/gemini-api/docs/gemini-3"
+      ],
+      "basis": "Google Cloud 全球在线 Gemini 3.1 Pro Preview 的 ≤200K 输入参考档。缓存存储另按时长计价。"
     },
     {
       "canonicalModelId": "gemini-3.5-flash",
@@ -618,6 +845,51 @@
         "cacheReadPerMillion": "0.15",
         "cacheWritePerMillion": "0"
       }
+    },
+    {
+      "canonicalModelId": "gemini-3.7-flash",
+      "displayName": "Gemini 3.7 Flash",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "0.75",
+        "outputPerMillion": "3.75",
+        "cacheReadPerMillion": "0.075",
+        "cacheWritePerMillion": "0"
+      },
+      "sources": [
+        "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
+      ],
+      "basis": "Google Cloud 全球在线标准推理的优惠档，截止 2026-12-31。缓存存储另按时长计费。"
+    },
+    {
+      "canonicalModelId": "gemini-3.8-flash",
+      "displayName": "Gemini 3.8 Flash",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "0.75",
+        "outputPerMillion": "3.75",
+        "cacheReadPerMillion": "0.075",
+        "cacheWritePerMillion": "0"
+      },
+      "sources": [
+        "https://ai.google.dev/gemini-api/docs/pricing"
+      ],
+      "basis": "Gemini Developer API 标准推理的当前优惠档，截止 2026-12-31。缓存存储另按时长计价。"
+    },
+    {
+      "canonicalModelId": "gemini-4-argon",
+      "displayName": "Gemini 4 Argon",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "2",
+        "outputPerMillion": "10",
+        "cacheReadPerMillion": "0.10",
+        "cacheWritePerMillion": "0"
+      },
+      "sources": [
+        "https://cloud.google.com/model-garden/pricing"
+      ],
+      "basis": "Google Cloud 全球在线标准推理，优惠截止 2026-11-30。2026-12-01 起刊例为输入 4、输出 20、缓存命中 0.20 美元。"
     },
     {
       "canonicalModelId": "glm-4.6",
@@ -686,6 +958,71 @@
       }
     },
     {
+      "canonicalModelId": "glm-5.2-fast",
+      "displayName": "GLM-5.2 Fast",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "3",
+        "outputPerMillion": "10.25",
+        "cacheReadPerMillion": "0.50",
+        "cacheWritePerMillion": "0",
+        "inputPerMillionCny": "16",
+        "outputPerMillionCny": "56",
+        "cacheReadPerMillionCny": "4",
+        "cacheWritePerMillionCny": "0"
+      },
+      "sources": [
+        "https://commandcode.ai/models/glm-5-2-fast",
+        "https://help.aliyun.cn/zh/model-studio/glm-5-2-fast"
+      ],
+      "basis": "美元采用 Command Code 的 zai-org/glm-5.2-fast 路线，人民币采用百炼北京的 glm-5.2-fast-preview 路线。两家均未单列缓存写入费。"
+    },
+    {
+      "canonicalModelId": "glm-5.3",
+      "displayName": "GLM-5.3",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "1.40",
+        "outputPerMillion": "4.40",
+        "cacheReadPerMillion": "0.26",
+        "cacheWritePerMillion": "0"
+      },
+      "sources": [
+        "https://docs.z.ai/guides/overview/pricing"
+      ],
+      "basis": "Z.AI 国际标准推理，缓存存储现为限时免费。"
+    },
+    {
+      "canonicalModelId": "glm-5.3-flash",
+      "displayName": "GLM-5.3-Flash",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "0.15",
+        "outputPerMillion": "0.50",
+        "cacheReadPerMillion": "0.03",
+        "cacheWritePerMillion": "0"
+      },
+      "sources": [
+        "https://docs.z.ai/guides/overview/pricing"
+      ],
+      "basis": "Z.AI 国际标准推理，缓存存储现为限时免费。"
+    },
+    {
+      "canonicalModelId": "glm-5.3-flashx",
+      "displayName": "GLM-5.3-FlashX",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "0.37",
+        "outputPerMillion": "1.25",
+        "cacheReadPerMillion": "0.075",
+        "cacheWritePerMillion": "0"
+      },
+      "sources": [
+        "https://docs.z.ai/guides/overview/pricing"
+      ],
+      "basis": "Z.AI 国际标准推理，缓存存储现为限时免费。"
+    },
+    {
       "canonicalModelId": "glm-5v-turbo",
       "displayName": "GLM-5V-Turbo",
       "aliases": [],
@@ -693,479 +1030,6 @@
         "inputPerMillion": "1.2",
         "outputPerMillion": "4",
         "cacheReadPerMillion": "0.24",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-4.1",
-      "displayName": "GPT-4.1",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "2",
-        "outputPerMillion": "8",
-        "cacheReadPerMillion": "0.50",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-4.1-mini",
-      "displayName": "GPT-4.1 Mini",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "0.40",
-        "outputPerMillion": "1.60",
-        "cacheReadPerMillion": "0.10",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-4.1-nano",
-      "displayName": "GPT-4.1 Nano",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "0.10",
-        "outputPerMillion": "0.40",
-        "cacheReadPerMillion": "0.025",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5",
-      "displayName": "GPT-5",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.25",
-        "outputPerMillion": "10",
-        "cacheReadPerMillion": "0.125",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5-codex",
-      "displayName": "GPT-5 Codex",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.25",
-        "outputPerMillion": "10",
-        "cacheReadPerMillion": "0.125",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5-codex-high",
-      "displayName": "GPT-5 Codex",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.25",
-        "outputPerMillion": "10",
-        "cacheReadPerMillion": "0.125",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5-codex-low",
-      "displayName": "GPT-5 Codex",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.25",
-        "outputPerMillion": "10",
-        "cacheReadPerMillion": "0.125",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5-codex-medium",
-      "displayName": "GPT-5 Codex",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.25",
-        "outputPerMillion": "10",
-        "cacheReadPerMillion": "0.125",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5-codex-mini",
-      "displayName": "GPT-5 Codex",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.25",
-        "outputPerMillion": "10",
-        "cacheReadPerMillion": "0.125",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5-codex-mini-high",
-      "displayName": "GPT-5 Codex",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.25",
-        "outputPerMillion": "10",
-        "cacheReadPerMillion": "0.125",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5-codex-mini-medium",
-      "displayName": "GPT-5 Codex",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.25",
-        "outputPerMillion": "10",
-        "cacheReadPerMillion": "0.125",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5-high",
-      "displayName": "GPT-5",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.25",
-        "outputPerMillion": "10",
-        "cacheReadPerMillion": "0.125",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5-low",
-      "displayName": "GPT-5",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.25",
-        "outputPerMillion": "10",
-        "cacheReadPerMillion": "0.125",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5-medium",
-      "displayName": "GPT-5",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.25",
-        "outputPerMillion": "10",
-        "cacheReadPerMillion": "0.125",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5-mini",
-      "displayName": "GPT-5 Mini",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "0.25",
-        "outputPerMillion": "2",
-        "cacheReadPerMillion": "0.025",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5-minimal",
-      "displayName": "GPT-5",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.25",
-        "outputPerMillion": "10",
-        "cacheReadPerMillion": "0.125",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5-nano",
-      "displayName": "GPT-5 Nano",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "0.05",
-        "outputPerMillion": "0.40",
-        "cacheReadPerMillion": "0.005",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.1",
-      "displayName": "GPT-5.1",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.25",
-        "outputPerMillion": "10",
-        "cacheReadPerMillion": "0.125",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.1-codex",
-      "displayName": "GPT-5.1 Codex",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.25",
-        "outputPerMillion": "10",
-        "cacheReadPerMillion": "0.125",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.1-codex-max",
-      "displayName": "GPT-5.1 Codex",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.25",
-        "outputPerMillion": "10",
-        "cacheReadPerMillion": "0.125",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.1-codex-max-high",
-      "displayName": "GPT-5.1 Codex",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.25",
-        "outputPerMillion": "10",
-        "cacheReadPerMillion": "0.125",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.1-codex-max-xhigh",
-      "displayName": "GPT-5.1 Codex",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.25",
-        "outputPerMillion": "10",
-        "cacheReadPerMillion": "0.125",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.1-codex-mini",
-      "displayName": "GPT-5.1 Codex",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.25",
-        "outputPerMillion": "10",
-        "cacheReadPerMillion": "0.125",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.1-high",
-      "displayName": "GPT-5.1",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.25",
-        "outputPerMillion": "10",
-        "cacheReadPerMillion": "0.125",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.1-low",
-      "displayName": "GPT-5.1",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.25",
-        "outputPerMillion": "10",
-        "cacheReadPerMillion": "0.125",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.1-medium",
-      "displayName": "GPT-5.1",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.25",
-        "outputPerMillion": "10",
-        "cacheReadPerMillion": "0.125",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.1-minimal",
-      "displayName": "GPT-5.1",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.25",
-        "outputPerMillion": "10",
-        "cacheReadPerMillion": "0.125",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.2",
-      "displayName": "GPT-5.2",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.75",
-        "outputPerMillion": "14",
-        "cacheReadPerMillion": "0.175",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.2-codex",
-      "displayName": "GPT-5.2 Codex",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.75",
-        "outputPerMillion": "14",
-        "cacheReadPerMillion": "0.175",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.2-codex-high",
-      "displayName": "GPT-5.2 Codex",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.75",
-        "outputPerMillion": "14",
-        "cacheReadPerMillion": "0.175",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.2-codex-low",
-      "displayName": "GPT-5.2 Codex",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.75",
-        "outputPerMillion": "14",
-        "cacheReadPerMillion": "0.175",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.2-codex-medium",
-      "displayName": "GPT-5.2 Codex",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.75",
-        "outputPerMillion": "14",
-        "cacheReadPerMillion": "0.175",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.2-codex-xhigh",
-      "displayName": "GPT-5.2 Codex",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.75",
-        "outputPerMillion": "14",
-        "cacheReadPerMillion": "0.175",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.2-high",
-      "displayName": "GPT-5.2",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.75",
-        "outputPerMillion": "14",
-        "cacheReadPerMillion": "0.175",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.2-low",
-      "displayName": "GPT-5.2",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.75",
-        "outputPerMillion": "14",
-        "cacheReadPerMillion": "0.175",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.2-medium",
-      "displayName": "GPT-5.2",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.75",
-        "outputPerMillion": "14",
-        "cacheReadPerMillion": "0.175",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.2-xhigh",
-      "displayName": "GPT-5.2",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.75",
-        "outputPerMillion": "14",
-        "cacheReadPerMillion": "0.175",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.3-codex",
-      "displayName": "GPT-5.3 Codex",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.75",
-        "outputPerMillion": "14",
-        "cacheReadPerMillion": "0.175",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.3-codex-high",
-      "displayName": "GPT-5.3 Codex",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.75",
-        "outputPerMillion": "14",
-        "cacheReadPerMillion": "0.175",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.3-codex-low",
-      "displayName": "GPT-5.3 Codex",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.75",
-        "outputPerMillion": "14",
-        "cacheReadPerMillion": "0.175",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.3-codex-medium",
-      "displayName": "GPT-5.3 Codex",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.75",
-        "outputPerMillion": "14",
-        "cacheReadPerMillion": "0.175",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.3-codex-spark",
-      "displayName": "GPT-5.3 Codex Spark",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.75",
-        "outputPerMillion": "14",
-        "cacheReadPerMillion": "0.175",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.3-codex-xhigh",
-      "displayName": "GPT-5.3 Codex",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.75",
-        "outputPerMillion": "14",
-        "cacheReadPerMillion": "0.175",
         "cacheWritePerMillion": "0"
       }
     },
@@ -1211,95 +1075,22 @@
         "outputPerMillion": "30",
         "cacheReadPerMillion": "0.50",
         "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.5-high",
-      "displayName": "GPT-5.5",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "5",
-        "outputPerMillion": "30",
-        "cacheReadPerMillion": "0.50",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.5-low",
-      "displayName": "GPT-5.5",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "5",
-        "outputPerMillion": "30",
-        "cacheReadPerMillion": "0.50",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.5-medium",
-      "displayName": "GPT-5.5",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "5",
-        "outputPerMillion": "30",
-        "cacheReadPerMillion": "0.50",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.5-minimal",
-      "displayName": "GPT-5.5",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "5",
-        "outputPerMillion": "30",
-        "cacheReadPerMillion": "0.50",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.5-xhigh",
-      "displayName": "GPT-5.5",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "5",
-        "outputPerMillion": "30",
-        "cacheReadPerMillion": "0.50",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.6",
-      "displayName": "GPT-5.6 Sol",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "5",
-        "outputPerMillion": "30",
-        "cacheReadPerMillion": "0.50",
-        "cacheWritePerMillion": "6.25"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.6-high",
-      "displayName": "GPT-5.6 Sol",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "5",
-        "outputPerMillion": "30",
-        "cacheReadPerMillion": "0.50",
-        "cacheWritePerMillion": "6.25"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.6-low",
-      "displayName": "GPT-5.6 Sol",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "5",
-        "outputPerMillion": "30",
-        "cacheReadPerMillion": "0.50",
-        "cacheWritePerMillion": "6.25"
-      }
+      },
+      "contextTiers": [
+        {
+          "aboveInputTokens": 272000,
+          "prices": {
+            "inputPerMillion": "10",
+            "outputPerMillion": "45",
+            "cacheReadPerMillion": "1",
+            "cacheWritePerMillion": "0"
+          }
+        }
+      ],
+      "sources": [
+        "https://developers.openai.com/api/docs/models/gpt-5.5"
+      ],
+      "basis": "OpenAI 标准实时参考价。超过 272,000 输入 Token 时整笔请求使用长上下文价，缓存写入未单列。"
     },
     {
       "canonicalModelId": "gpt-5.6-luna",
@@ -1310,29 +1101,22 @@
         "outputPerMillion": "1.20",
         "cacheReadPerMillion": "0.02",
         "cacheWritePerMillion": "0.25"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.6-medium",
-      "displayName": "GPT-5.6 Sol",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "5",
-        "outputPerMillion": "30",
-        "cacheReadPerMillion": "0.50",
-        "cacheWritePerMillion": "6.25"
-      }
-    },
-    {
-      "canonicalModelId": "gpt-5.6-minimal",
-      "displayName": "GPT-5.6 Sol",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "5",
-        "outputPerMillion": "30",
-        "cacheReadPerMillion": "0.50",
-        "cacheWritePerMillion": "6.25"
-      }
+      },
+      "contextTiers": [
+        {
+          "aboveInputTokens": 272000,
+          "prices": {
+            "inputPerMillion": "0.40",
+            "outputPerMillion": "1.80",
+            "cacheReadPerMillion": "0.04",
+            "cacheWritePerMillion": "0.50"
+          }
+        }
+      ],
+      "sources": [
+        "https://developers.openai.com/api/docs/models/gpt-5.6-luna"
+      ],
+      "basis": "OpenAI 标准实时参考档，沿用原目录的缓存写入参考价。超过 272,000 输入 Token 时整笔请求使用长上下文价。"
     },
     {
       "canonicalModelId": "gpt-5.6-sol",
@@ -1343,7 +1127,22 @@
         "outputPerMillion": "30",
         "cacheReadPerMillion": "0.50",
         "cacheWritePerMillion": "6.25"
-      }
+      },
+      "contextTiers": [
+        {
+          "aboveInputTokens": 272000,
+          "prices": {
+            "inputPerMillion": "10",
+            "outputPerMillion": "45",
+            "cacheReadPerMillion": "1",
+            "cacheWritePerMillion": "12.50"
+          }
+        }
+      ],
+      "sources": [
+        "https://developers.openai.com/api/docs/models/gpt-5.6-sol"
+      ],
+      "basis": "OpenAI 常规定价参考档，沿用原目录的缓存写入参考价。促销至 2026-11-30，优惠期间可覆盖实际单价。超过 272,000 输入 Token 时整笔请求使用长上下文价。"
     },
     {
       "canonicalModelId": "gpt-5.6-terra",
@@ -1354,18 +1153,152 @@
         "outputPerMillion": "12",
         "cacheReadPerMillion": "0.20",
         "cacheWritePerMillion": "2.50"
-      }
+      },
+      "contextTiers": [
+        {
+          "aboveInputTokens": 272000,
+          "prices": {
+            "inputPerMillion": "4",
+            "outputPerMillion": "18",
+            "cacheReadPerMillion": "0.40",
+            "cacheWritePerMillion": "5"
+          }
+        }
+      ],
+      "sources": [
+        "https://developers.openai.com/api/docs/models/gpt-5.6-terra"
+      ],
+      "basis": "OpenAI 标准实时参考档，沿用原目录的缓存写入参考价。超过 272,000 输入 Token 时整笔请求使用长上下文价。"
     },
     {
-      "canonicalModelId": "gpt-5.6-xhigh",
-      "displayName": "GPT-5.6 Sol",
+      "canonicalModelId": "gpt-6-astra",
+      "displayName": "GPT-6 Astra",
       "aliases": [],
       "prices": {
-        "inputPerMillion": "5",
-        "outputPerMillion": "30",
-        "cacheReadPerMillion": "0.50",
-        "cacheWritePerMillion": "6.25"
-      }
+        "inputPerMillion": "10",
+        "outputPerMillion": "50",
+        "cacheReadPerMillion": "1",
+        "cacheWritePerMillion": "12.50"
+      },
+      "contextTiers": [
+        {
+          "aboveInputTokens": 272000,
+          "prices": {
+            "inputPerMillion": "20",
+            "outputPerMillion": "75",
+            "cacheReadPerMillion": "2",
+            "cacheWritePerMillion": "25"
+          }
+        }
+      ],
+      "sources": [
+        "https://developers.openai.com/api/docs/models/gpt-6-astra"
+      ],
+      "basis": "OpenAI 标准实时参考价，缓存写入采用 30 分钟档。超过 272,000 输入 Token 时整笔请求使用长上下文价。"
+    },
+    {
+      "canonicalModelId": "gpt-6-luna",
+      "displayName": "GPT-6 Luna",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "0.10",
+        "outputPerMillion": "0.50",
+        "cacheReadPerMillion": "0.01",
+        "cacheWritePerMillion": "0.125"
+      },
+      "contextTiers": [
+        {
+          "aboveInputTokens": 272000,
+          "prices": {
+            "inputPerMillion": "0.20",
+            "outputPerMillion": "0.75",
+            "cacheReadPerMillion": "0.02",
+            "cacheWritePerMillion": "0.25"
+          }
+        }
+      ],
+      "sources": [
+        "https://developers.openai.com/api/docs/models/gpt-6-luna"
+      ],
+      "basis": "OpenAI 标准实时参考价，缓存写入采用 30 分钟档。超过 272,000 输入 Token 时整笔请求使用长上下文价。"
+    },
+    {
+      "canonicalModelId": "gpt-6-sol",
+      "displayName": "GPT-6 Sol",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "2",
+        "outputPerMillion": "10",
+        "cacheReadPerMillion": "0.20",
+        "cacheWritePerMillion": "2.50"
+      },
+      "contextTiers": [
+        {
+          "aboveInputTokens": 272000,
+          "prices": {
+            "inputPerMillion": "4",
+            "outputPerMillion": "15",
+            "cacheReadPerMillion": "0.40",
+            "cacheWritePerMillion": "5"
+          }
+        }
+      ],
+      "sources": [
+        "https://developers.openai.com/api/docs/models/gpt-6-sol"
+      ],
+      "basis": "OpenAI 标准实时参考价，缓存写入采用 30 分钟档。超过 272,000 输入 Token 时整笔请求使用长上下文价。"
+    },
+    {
+      "canonicalModelId": "gpt-6.1-sol",
+      "displayName": "GPT-6.1 Sol",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "2",
+        "outputPerMillion": "10",
+        "cacheReadPerMillion": "0.10",
+        "cacheWritePerMillion": "2.50"
+      },
+      "contextTiers": [
+        {
+          "aboveInputTokens": 272000,
+          "prices": {
+            "inputPerMillion": "4",
+            "outputPerMillion": "15",
+            "cacheReadPerMillion": "0.20",
+            "cacheWritePerMillion": "5"
+          }
+        }
+      ],
+      "sources": [
+        "https://developers.openai.com/api/docs/models/gpt-6.1-sol"
+      ],
+      "basis": "OpenAI 标准实时参考价，缓存写入采用 30 分钟档。超过 272,000 输入 Token 时整笔请求使用长上下文价。"
+    },
+    {
+      "canonicalModelId": "gpt-6.1-terra",
+      "displayName": "GPT-6.1 Terra",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "1",
+        "outputPerMillion": "5",
+        "cacheReadPerMillion": "0.05",
+        "cacheWritePerMillion": "1.25"
+      },
+      "contextTiers": [
+        {
+          "aboveInputTokens": 272000,
+          "prices": {
+            "inputPerMillion": "2",
+            "outputPerMillion": "7.50",
+            "cacheReadPerMillion": "0.10",
+            "cacheWritePerMillion": "2.50"
+          }
+        }
+      ],
+      "sources": [
+        "https://developers.openai.com/api/docs/models/gpt-6.1-terra"
+      ],
+      "basis": "OpenAI 标准实时参考价，缓存写入采用 30 分钟档。超过 272,000 输入 Token 时整笔请求使用长上下文价。"
     },
     {
       "canonicalModelId": "grok-3",
@@ -1401,7 +1334,7 @@
       }
     },
     {
-      "canonicalModelId": "grok-4-1-fast-non-reasoning",
+      "canonicalModelId": "grok-4-1",
       "displayName": "Grok 4.1 Fast",
       "aliases": [],
       "prices": {
@@ -1409,21 +1342,14 @@
         "outputPerMillion": "0.50",
         "cacheReadPerMillion": "0.05",
         "cacheWritePerMillion": "0"
-      }
+      },
+      "prefixes": [
+        "grok-4-1",
+        "grok-4.1"
+      ]
     },
     {
-      "canonicalModelId": "grok-4-1-fast-reasoning",
-      "displayName": "Grok 4.1 Fast Reasoning",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "0.20",
-        "outputPerMillion": "0.50",
-        "cacheReadPerMillion": "0.05",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "grok-4.20-0309-non-reasoning",
+      "canonicalModelId": "grok-4.20",
       "displayName": "Grok 4.20",
       "aliases": [],
       "prices": {
@@ -1431,18 +1357,11 @@
         "outputPerMillion": "2.50",
         "cacheReadPerMillion": "0.20",
         "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "grok-4.20-0309-reasoning",
-      "displayName": "Grok 4.20 Reasoning",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "1.25",
-        "outputPerMillion": "2.50",
-        "cacheReadPerMillion": "0.20",
-        "cacheWritePerMillion": "0"
-      }
+      },
+      "prefixes": [
+        "grok-4.20",
+        "grok-4-20"
+      ]
     },
     {
       "canonicalModelId": "grok-4.3",
@@ -1478,6 +1397,36 @@
       }
     },
     {
+      "canonicalModelId": "grok-4.6",
+      "displayName": "Grok 4.6",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "2",
+        "outputPerMillion": "6",
+        "cacheReadPerMillion": "0.50",
+        "cacheWritePerMillion": "0"
+      },
+      "sources": [
+        "https://docs.x.ai/developers/pricing"
+      ],
+      "basis": "xAI 全球标准推理的 <200K 输入参考档。"
+    },
+    {
+      "canonicalModelId": "grok-4.7",
+      "displayName": "Grok 4.7",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "2",
+        "outputPerMillion": "6",
+        "cacheReadPerMillion": "0.50",
+        "cacheWritePerMillion": "0"
+      },
+      "sources": [
+        "https://docs.x.ai/developers/pricing"
+      ],
+      "basis": "xAI 全球标准推理的 <200K 输入参考档。"
+    },
+    {
       "canonicalModelId": "grok-build-0.1",
       "displayName": "Grok Build 0.1",
       "aliases": [],
@@ -1500,20 +1449,11 @@
       }
     },
     {
-      "canonicalModelId": "hunyuan-hy3",
-      "displayName": "Hunyuan Hy3",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "0.14",
-        "outputPerMillion": "0.56",
-        "cacheReadPerMillion": "0.035",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
       "canonicalModelId": "hy3",
       "displayName": "Hunyuan Hy3",
-      "aliases": [],
+      "aliases": [
+        "hunyuan-hy3"
+      ],
       "prices": {
         "inputPerMillion": "0.14",
         "outputPerMillion": "0.56",
@@ -1522,15 +1462,112 @@
       }
     },
     {
-      "canonicalModelId": "k3",
-      "displayName": "Kimi K3",
+      "canonicalModelId": "hy3-paid",
+      "displayName": "Tencent Hy3 Paid",
       "aliases": [],
       "prices": {
-        "inputPerMillion": "3.00",
-        "outputPerMillion": "15.00",
-        "cacheReadPerMillion": "0.30",
+        "inputPerMillion": "0.14",
+        "outputPerMillion": "0.58",
+        "cacheReadPerMillion": "0.035",
         "cacheWritePerMillion": "0"
-      }
+      },
+      "sources": [
+        "https://commandcode.ai/models/tencent-hy3",
+        "https://commandcode.ai/models"
+      ],
+      "basis": "Command Code 的 tencent/hy3-paid 路线，缓存命中使用完整价目表精度。缓存写入未单列。"
+    },
+    {
+      "canonicalModelId": "hy4",
+      "displayName": "Tencent Hy4",
+      "aliases": [],
+      "prices": {
+        "inputPerMillionCny": "6",
+        "outputPerMillionCny": "18",
+        "cacheReadPerMillionCny": "0.30",
+        "cacheWritePerMillionCny": "0"
+      },
+      "sources": [
+        "https://cloud.tencent.com/document/product/1823/130055/"
+      ],
+      "basis": "腾讯云 TokenHub 基础刊例，正式版当前另有截至 2026-12-31 的限时折扣。"
+    },
+    {
+      "canonicalModelId": "iceman-contributor-free",
+      "displayName": "OpenCode Go Free Model",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "0",
+        "outputPerMillion": "0",
+        "cacheReadPerMillion": "0",
+        "cacheWritePerMillion": "0"
+      },
+      "sources": [
+        "https://opencode.ai/docs/console/go/"
+      ],
+      "basis": "OpenCode Go 官方免费模型路线，适用其计划和模型访问规则。"
+    },
+    {
+      "canonicalModelId": "inkling",
+      "displayName": "Inkling",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "1.87",
+        "outputPerMillion": "4.68",
+        "cacheReadPerMillion": "0.374",
+        "cacheWritePerMillion": "0"
+      },
+      "sources": [
+        "https://tinker-docs.thinkingmachines.ai/tinker/models/models_and_pricing/"
+      ],
+      "basis": "Thinking Machines Tinker 标准推理预填充和采样单价。训练另收费。"
+    },
+    {
+      "canonicalModelId": "inkling-small",
+      "displayName": "Inkling Small",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "0.58",
+        "outputPerMillion": "1.44",
+        "cacheReadPerMillion": "0.116",
+        "cacheWritePerMillion": "0"
+      },
+      "sources": [
+        "https://tinker-docs.thinkingmachines.ai/tinker/models/models_and_pricing/"
+      ],
+      "basis": "Thinking Machines Tinker 标准推理预填充和采样单价。训练另收费。"
+    },
+    {
+      "canonicalModelId": "jev-1.13.0",
+      "displayName": "TypeSafe Jev",
+      "aliases": [
+        "jev-1.13-20260917"
+      ],
+      "prices": {
+        "inputPerMillion": "0.042",
+        "outputPerMillion": "0",
+        "cacheReadPerMillion": "0",
+        "cacheWritePerMillion": "0"
+      },
+      "sources": [
+        "https://help.typesafe.ai/articles/5187202169-how-much-does-jev-cost"
+      ],
+      "basis": "TypeSafe Jev 标准方案按输入 Token 收费，输出免费。"
+    },
+    {
+      "canonicalModelId": "jev-1.14.0",
+      "displayName": "TypeSafe Jev",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "0.042",
+        "outputPerMillion": "0",
+        "cacheReadPerMillion": "0",
+        "cacheWritePerMillion": "0"
+      },
+      "sources": [
+        "https://help.typesafe.ai/articles/5187202169-how-much-does-jev-cost"
+      ],
+      "basis": "TypeSafe Jev 标准方案按输入 Token 收费，输出免费。"
     },
     {
       "canonicalModelId": "kimi-k2-0905",
@@ -1612,13 +1649,106 @@
     {
       "canonicalModelId": "kimi-k3",
       "displayName": "Kimi K3",
+      "aliases": [
+        "k3"
+      ],
+      "prices": {
+        "inputPerMillion": "3",
+        "outputPerMillion": "15",
+        "cacheReadPerMillion": "0.30",
+        "cacheWritePerMillion": "3",
+        "inputPerMillionCny": "20",
+        "outputPerMillionCny": "100",
+        "cacheReadPerMillionCny": "2",
+        "cacheWritePerMillionCny": "20"
+      },
+      "sources": [
+        "https://platform.kimi.ai/",
+        "https://platform.kimi.com/",
+        "https://platform.kimi.ai/docs/pricing/chat"
+      ],
+      "basis": "Kimi API 公布的标准实时单价，缓存写入为默认 5 分钟档。Kimi Code 会员额度另计。"
+    },
+    {
+      "canonicalModelId": "kimi-k3.1-pro",
+      "displayName": "Kimi K3.1 Pro",
       "aliases": [],
       "prices": {
-        "inputPerMillion": "3.00",
-        "outputPerMillion": "15.00",
-        "cacheReadPerMillion": "0.30",
+        "inputPerMillion": "2",
+        "outputPerMillion": "10",
+        "cacheReadPerMillion": "0.20",
+        "cacheWritePerMillion": "2"
+      },
+      "sources": [
+        "https://platform.kimi.ai/docs/pricing/chat",
+        "https://platform.kimi.ai/"
+      ],
+      "basis": "Kimi API Platform 标准实时推理，缓存写入采用 5 分钟档。"
+    },
+    {
+      "canonicalModelId": "laguna-s-2.1-free",
+      "displayName": "Laguna S 2.1 Free",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "0",
+        "outputPerMillion": "0",
+        "cacheReadPerMillion": "0",
         "cacheWritePerMillion": "0"
-      }
+      },
+      "sources": [
+        "https://poolside.ai/blog/introducing-laguna-s-2-1",
+        "https://openrouter.ai/poolside/laguna-s-2.1%3Afree"
+      ],
+      "basis": "Poolside 发布说明列出的 OpenRouter 免费路线。"
+    },
+    {
+      "canonicalModelId": "ling-3.0-flash-sante:free",
+      "displayName": "Ling 3.0 Flash Sante Free",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "0",
+        "outputPerMillion": "0",
+        "cacheReadPerMillion": "0",
+        "cacheWritePerMillion": "0"
+      },
+      "sources": [
+        "https://openrouter.ai/inclusionai/ling-3.0-flash-sante%3Afree"
+      ],
+      "basis": "OpenRouter 明确标记的免费路线。"
+    },
+    {
+      "canonicalModelId": "longcat-2.0",
+      "displayName": "LongCat 2.0",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "0.30",
+        "outputPerMillion": "1.20",
+        "cacheReadPerMillion": "0.006",
+        "cacheWritePerMillion": "0",
+        "inputPerMillionCny": "2",
+        "outputPerMillionCny": "8",
+        "cacheReadPerMillionCny": "0.04",
+        "cacheWritePerMillionCny": "0"
+      },
+      "sources": [
+        "https://longcat.chat/platform/docs/Pricing/LongCat-2.0.html"
+      ],
+      "basis": "LongCat 官方当前限时优惠档。常规人民币 5 / 20 / 0.10，美元 0.75 / 2.95 / 0.015。"
+    },
+    {
+      "canonicalModelId": "longcat-2.0:free",
+      "displayName": "LongCat 2.0 Free",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "0",
+        "outputPerMillion": "0",
+        "cacheReadPerMillion": "0",
+        "cacheWritePerMillion": "0"
+      },
+      "sources": [
+        "https://openrouter.ai/meituan/longcat-2.0%3Afree"
+      ],
+      "basis": "OpenRouter 明确标记的免费路线。"
     },
     {
       "canonicalModelId": "magistral-medium",
@@ -1687,59 +1817,42 @@
       }
     },
     {
-      "canonicalModelId": "minimax-m2",
-      "displayName": "MiniMax M2",
+      "canonicalModelId": "mimo-v2.6-flash",
+      "displayName": "Xiaomi MiMo V2.6 Flash",
       "aliases": [],
       "prices": {
-        "inputPerMillion": "0.27",
-        "outputPerMillion": "0.95",
-        "cacheReadPerMillion": "0.03",
-        "cacheWritePerMillion": "0"
-      }
+        "inputPerMillion": "0.14",
+        "outputPerMillion": "0.28",
+        "cacheReadPerMillion": "0.0028",
+        "cacheWritePerMillion": "0",
+        "inputPerMillionCny": "1",
+        "outputPerMillionCny": "2",
+        "cacheReadPerMillionCny": "0.02",
+        "cacheWritePerMillionCny": "0"
+      },
+      "sources": [
+        "https://mimo.mi.com/docs/en-US/pricing"
+      ],
+      "basis": "小米 MiMo 实时 API 双币种刊例，缓存写入当前限时免费。"
     },
     {
-      "canonicalModelId": "minimax-m2.1",
-      "displayName": "MiniMax M2.1",
+      "canonicalModelId": "mimo-v2.6-pro",
+      "displayName": "Xiaomi MiMo V2.6 Pro",
       "aliases": [],
       "prices": {
-        "inputPerMillion": "0.27",
-        "outputPerMillion": "0.95",
-        "cacheReadPerMillion": "0.03",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "minimax-m2.1-lightning",
-      "displayName": "MiniMax M2.1 Lightning",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "0.27",
-        "outputPerMillion": "2.33",
-        "cacheReadPerMillion": "0.03",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "minimax-m2.5",
-      "displayName": "MiniMax M2.5",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "0.15",
-        "outputPerMillion": "0.95",
-        "cacheReadPerMillion": "0.03",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "minimax-m2.5-lightning",
-      "displayName": "MiniMax M2.5 Lightning",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "0.30",
-        "outputPerMillion": "2.40",
-        "cacheReadPerMillion": "0.03",
-        "cacheWritePerMillion": "0"
-      }
+        "inputPerMillion": "0.435",
+        "outputPerMillion": "0.87",
+        "cacheReadPerMillion": "0.0036",
+        "cacheWritePerMillion": "0",
+        "inputPerMillionCny": "3",
+        "outputPerMillionCny": "6",
+        "cacheReadPerMillionCny": "0.025",
+        "cacheWritePerMillionCny": "0"
+      },
+      "sources": [
+        "https://mimo.mi.com/docs/en-US/pricing"
+      ],
+      "basis": "小米 MiMo 实时 API 双币种刊例，缓存写入当前限时免费。"
     },
     {
       "canonicalModelId": "minimax-m2.7",
@@ -1773,6 +1886,21 @@
         "cacheReadPerMillion": "0.06",
         "cacheWritePerMillion": "0"
       }
+    },
+    {
+      "canonicalModelId": "minimax-m3.1-flash",
+      "displayName": "MiniMax M3.1 Flash",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "0.15",
+        "outputPerMillion": "0.60",
+        "cacheReadPerMillion": "0.015",
+        "cacheWritePerMillion": "0"
+      },
+      "sources": [
+        "https://platform.minimax.io/docs/guides/pricing-paygo"
+      ],
+      "basis": "MiniMax 国际按量实时 API，缓存未单列写入费。"
     },
     {
       "canonicalModelId": "mistral-large-3-2512",
@@ -1830,26 +1958,180 @@
       }
     },
     {
-      "canonicalModelId": "o1",
-      "displayName": "OpenAI o1",
+      "canonicalModelId": "moonshot-v1-128k-vision",
+      "displayName": "Moonshot V1 128K Vision Preview",
       "aliases": [],
       "prices": {
-        "inputPerMillion": "15",
-        "outputPerMillion": "60",
-        "cacheReadPerMillion": "7.50",
+        "inputPerMillion": "2",
+        "outputPerMillion": "5",
+        "cacheReadPerMillion": "0",
         "cacheWritePerMillion": "0"
-      }
+      },
+      "sources": [
+        "https://docs.merge.dev/merge-gateway/models/catalog",
+        "https://platform.kimi.com/blog/posts/changelog"
+      ],
+      "basis": "Merge Gateway 公布的 moonshot/moonshot-v1-128k-vision-preview 路线报价，缓存未单列。Kimi 于 2025-01-13 发布 Vision Preview 系列。"
     },
     {
-      "canonicalModelId": "o1-mini",
-      "displayName": "OpenAI o1-mini",
+      "canonicalModelId": "moonshot-v1-32k-vision",
+      "displayName": "Moonshot V1 32K Vision Preview",
       "aliases": [],
       "prices": {
-        "inputPerMillion": "0.55",
-        "outputPerMillion": "2.20",
-        "cacheReadPerMillion": "0.55",
+        "inputPerMillion": "1",
+        "outputPerMillion": "3",
+        "cacheReadPerMillion": "0",
         "cacheWritePerMillion": "0"
-      }
+      },
+      "sources": [
+        "https://docs.merge.dev/merge-gateway/models/catalog",
+        "https://platform.kimi.com/blog/posts/changelog"
+      ],
+      "basis": "Merge Gateway 公布的 moonshot/moonshot-v1-32k-vision-preview 路线报价，缓存未单列。Kimi 于 2025-01-13 发布 Vision Preview 系列。"
+    },
+    {
+      "canonicalModelId": "moonshot-v1-8k-vision",
+      "displayName": "Moonshot V1 8K Vision Preview",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "0.20",
+        "outputPerMillion": "2",
+        "cacheReadPerMillion": "0",
+        "cacheWritePerMillion": "0"
+      },
+      "sources": [
+        "https://docs.merge.dev/merge-gateway/models/catalog",
+        "https://platform.kimi.com/blog/posts/changelog"
+      ],
+      "basis": "Merge Gateway 公布的 moonshot/moonshot-v1-8k-vision-preview 路线报价，缓存未单列。Kimi 于 2025-01-13 发布 Vision Preview 系列。"
+    },
+    {
+      "canonicalModelId": "muse-spark-1.1",
+      "displayName": "Muse Spark",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "1.25",
+        "outputPerMillion": "4.25",
+        "cacheReadPerMillion": "0.15",
+        "cacheWritePerMillion": "0"
+      },
+      "sources": [
+        "https://dev.meta.ai/docs/pricing-rate-limits",
+        "https://dev.meta.ai/docs/choose-a-model"
+      ],
+      "basis": "Meta Model API 标准模式。"
+    },
+    {
+      "canonicalModelId": "muse-spark-1.2",
+      "displayName": "Muse Spark",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "1.25",
+        "outputPerMillion": "4.25",
+        "cacheReadPerMillion": "0.15",
+        "cacheWritePerMillion": "0"
+      },
+      "sources": [
+        "https://dev.meta.ai/docs/pricing-rate-limits",
+        "https://dev.meta.ai/docs/choose-a-model"
+      ],
+      "basis": "Meta Model API 标准模式。"
+    },
+    {
+      "canonicalModelId": "muse-spark-1.2-contributor",
+      "displayName": "Muse Spark Contributor",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "0.10",
+        "outputPerMillion": "0.20",
+        "cacheReadPerMillion": "0.002",
+        "cacheWritePerMillion": "0"
+      },
+      "sources": [
+        "https://dev.meta.ai/docs/pricing-rate-limits",
+        "https://dev.meta.ai/docs/choose-a-model"
+      ],
+      "basis": "Meta Model API Contributor 模式。"
+    },
+    {
+      "canonicalModelId": "muse-spark-1.3",
+      "displayName": "Muse Spark",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "1.25",
+        "outputPerMillion": "4.25",
+        "cacheReadPerMillion": "0.15",
+        "cacheWritePerMillion": "0"
+      },
+      "sources": [
+        "https://dev.meta.ai/docs/pricing-rate-limits",
+        "https://dev.meta.ai/docs/choose-a-model"
+      ],
+      "basis": "Meta Model API 标准模式。"
+    },
+    {
+      "canonicalModelId": "muse-spark-1.3-contributor",
+      "displayName": "Muse Spark Contributor",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "0.10",
+        "outputPerMillion": "0.20",
+        "cacheReadPerMillion": "0.002",
+        "cacheWritePerMillion": "0"
+      },
+      "sources": [
+        "https://dev.meta.ai/docs/pricing-rate-limits",
+        "https://dev.meta.ai/docs/choose-a-model"
+      ],
+      "basis": "Meta Model API Contributor 模式。"
+    },
+    {
+      "canonicalModelId": "muse-wonder",
+      "displayName": "Muse Wonder 1.0",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "4",
+        "outputPerMillion": "20",
+        "cacheReadPerMillion": "0.20",
+        "cacheWritePerMillion": "0"
+      },
+      "sources": [
+        "https://dev.meta.ai/docs/pricing-rate-limits",
+        "https://dev.meta.ai/docs/choose-a-model"
+      ],
+      "basis": "Meta Model API 标准模式。"
+    },
+    {
+      "canonicalModelId": "nemotron-3-ultra-550b-a55b",
+      "displayName": "NVIDIA Nemotron 3 Ultra 550B A55B",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "0.60",
+        "outputPerMillion": "2.40",
+        "cacheReadPerMillion": "0.12",
+        "cacheWritePerMillion": "0"
+      },
+      "sources": [
+        "https://commandcode.ai/models/nemotron-3-ultra-550b-a55b",
+        "https://commandcode.ai/models"
+      ],
+      "basis": "Command Code 的 nvidia/nemotron-3-ultra-550b-a55b 托管路线，缓存写入未单列。"
+    },
+    {
+      "canonicalModelId": "neohorse-1-9b",
+      "displayName": "NeoHorse 1 9B",
+      "aliases": [],
+      "prices": {
+        "inputPerMillionCny": "0.60",
+        "outputPerMillionCny": "1",
+        "cacheReadPerMillionCny": "0.10",
+        "cacheWritePerMillionCny": "0"
+      },
+      "sources": [
+        "https://tokenrhythm.studio/api/models",
+        "https://tokenrhythm.studio/docs/updates"
+      ],
+      "basis": "基元律动灰度路线的人民币刊例价，缓存写入未单列。核查时平台对符合条件的充值账号标为限免，优惠价为 0，适用情况以账号为准。"
     },
     {
       "canonicalModelId": "o3",
@@ -1918,20 +2200,11 @@
       }
     },
     {
-      "canonicalModelId": "qwen3-coder-480b",
-      "displayName": "Qwen3 Coder 480B",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "0.65",
-        "outputPerMillion": "3.25",
-        "cacheReadPerMillion": "0",
-        "cacheWritePerMillion": "0"
-      }
-    },
-    {
       "canonicalModelId": "qwen3-coder-480b-a35b-instruct",
       "displayName": "Qwen3 Coder 480B-A35B Instruct",
-      "aliases": [],
+      "aliases": [
+        "qwen3-coder-480b"
+      ],
       "prices": {
         "inputPerMillion": "0.65",
         "outputPerMillion": "3.25",
@@ -1984,6 +2257,38 @@
       }
     },
     {
+      "canonicalModelId": "qwen3-rerank",
+      "displayName": "Qwen3 Rerank",
+      "aliases": [],
+      "prices": {
+        "inputPerMillionCny": "0.50",
+        "outputPerMillionCny": "0",
+        "cacheReadPerMillionCny": "0",
+        "cacheWritePerMillionCny": "0"
+      },
+      "sources": [
+        "https://help.aliyun.com/zh/model-studio/qwen3-rerank"
+      ],
+      "basis": "百炼中国内地同步 API，只对文本输入 Token 计费。"
+    },
+    {
+      "canonicalModelId": "qwen3.5-flash",
+      "displayName": "Qwen3.5 Flash",
+      "aliases": [],
+      "prices": {
+        "inputPerMillionCny": "0.20",
+        "outputPerMillionCny": "2",
+        "cacheReadPerMillionCny": "0.02",
+        "cacheWritePerMillionCny": "0.25"
+      },
+      "sources": [
+        "https://help.aliyun.com/zh/model-studio/qwen3-5-flash",
+        "https://help.aliyun.com/zh/model-studio/model-pricing",
+        "https://help.aliyun.com/zh/model-studio/context-cache"
+      ],
+      "basis": "百炼北京 ≤128K 输入参考档，使用显式缓存单价。"
+    },
+    {
       "canonicalModelId": "qwen3.5-plus",
       "displayName": "Qwen3.5 Plus",
       "aliases": [],
@@ -2006,6 +2311,22 @@
       }
     },
     {
+      "canonicalModelId": "qwen3.6-max",
+      "displayName": "Qwen3.6 Max Preview",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "1.30",
+        "outputPerMillion": "7.80",
+        "cacheReadPerMillion": "0.26",
+        "cacheWritePerMillion": "1.63"
+      },
+      "sources": [
+        "https://commandcode.ai/models/qwen3-6-max-preview",
+        "https://commandcode.ai/models"
+      ],
+      "basis": "Command Code 的 Qwen/Qwen3.6-Max-Preview 路线，采用完整价目表公布的单价。"
+    },
+    {
       "canonicalModelId": "qwen3.6-plus",
       "displayName": "Qwen3.6 Plus",
       "aliases": [],
@@ -2015,6 +2336,23 @@
         "cacheReadPerMillion": "0.065",
         "cacheWritePerMillion": "0"
       }
+    },
+    {
+      "canonicalModelId": "qwen3.7-flash",
+      "displayName": "Qwen3.7 Flash",
+      "aliases": [],
+      "prices": {
+        "inputPerMillionCny": "0.20",
+        "outputPerMillionCny": "0.80",
+        "cacheReadPerMillionCny": "0.02",
+        "cacheWritePerMillionCny": "0.25"
+      },
+      "sources": [
+        "https://help.aliyun.com/zh/model-studio/qwen3-7-flash",
+        "https://help.aliyun.com/zh/model-studio/model-pricing",
+        "https://help.aliyun.com/zh/model-studio/context-cache"
+      ],
+      "basis": "百炼北京 ≤32K 输入参考档，显式缓存创建为输入价 125%，显式缓存命中为输入价 10%。"
     },
     {
       "canonicalModelId": "qwen3.7-max",
@@ -2028,6 +2366,23 @@
       }
     },
     {
+      "canonicalModelId": "qwen3.7-max-2026-06-08",
+      "displayName": "Qwen3.7 Max 2026-06-08",
+      "aliases": [],
+      "prices": {
+        "inputPerMillionCny": "12",
+        "outputPerMillionCny": "36",
+        "cacheReadPerMillionCny": "1.20",
+        "cacheWritePerMillionCny": "15"
+      },
+      "sources": [
+        "https://help.aliyun.com/zh/model-studio/qwen3-7-max",
+        "https://help.aliyun.com/zh/model-studio/model-pricing",
+        "https://help.aliyun.com/zh/model-studio/context-cache"
+      ],
+      "basis": "百炼北京 6 月 8 日快照，采用显式缓存价格。"
+    },
+    {
       "canonicalModelId": "qwen3.7-plus",
       "displayName": "Qwen3.7 Plus",
       "aliases": [],
@@ -2039,15 +2394,105 @@
       }
     },
     {
-      "canonicalModelId": "qwen3.8-max",
-      "displayName": "Qwen3.8 Max",
+      "canonicalModelId": "qwen3.7-text-embedding",
+      "displayName": "Qwen3.7 Text Embedding",
       "aliases": [],
       "prices": {
+        "inputPerMillionCny": "0.50",
+        "outputPerMillionCny": "0",
+        "cacheReadPerMillionCny": "0",
+        "cacheWritePerMillionCny": "0"
+      },
+      "sources": [
+        "https://help.aliyun.com/zh/model-studio/text-embedding-synchronous-api"
+      ],
+      "basis": "百炼北京同步 API，只对输入 Token 计费。"
+    },
+    {
+      "canonicalModelId": "qwen3.7-text-embedding-flash",
+      "displayName": "Qwen3.7 Text Embedding Flash",
+      "aliases": [],
+      "prices": {
+        "inputPerMillionCny": "0.125",
+        "outputPerMillionCny": "0",
+        "cacheReadPerMillionCny": "0",
+        "cacheWritePerMillionCny": "0"
+      },
+      "sources": [
+        "https://help.aliyun.com/zh/model-studio/text-embedding-synchronous-api"
+      ],
+      "basis": "百炼北京同步 API，只对输入 Token 计费。"
+    },
+    {
+      "canonicalModelId": "qwen3.7-text-rerank",
+      "displayName": "Qwen3.7 Text Rerank",
+      "aliases": [],
+      "prices": {
+        "inputPerMillionCny": "0.50",
+        "outputPerMillionCny": "0",
+        "cacheReadPerMillionCny": "0",
+        "cacheWritePerMillionCny": "0"
+      },
+      "sources": [
+        "https://help.aliyun.com/zh/model-studio/model-pricing"
+      ],
+      "basis": "百炼北京同步 API，只对文本输入 Token 计费。"
+    },
+    {
+      "canonicalModelId": "qwen3.8-27b",
+      "displayName": "Qwen3.8 27B",
+      "aliases": [],
+      "prices": {
+        "inputPerMillionCny": "3",
+        "outputPerMillionCny": "12",
+        "cacheReadPerMillionCny": "0.30",
+        "cacheWritePerMillionCny": "3.75"
+      },
+      "sources": [
+        "https://help.aliyun.com/zh/model-studio/qwen3-8-27b"
+      ],
+      "basis": "百炼中国内地显式缓存参考档。隐式缓存命中价格为 0.60 元。"
+    },
+    {
+      "canonicalModelId": "qwen3.8-flash",
+      "displayName": "Qwen3.8 Flash",
+      "aliases": [],
+      "prices": {
+        "inputPerMillionCny": "0.80",
+        "outputPerMillionCny": "2.70",
+        "cacheReadPerMillionCny": "0.10",
+        "cacheWritePerMillionCny": "1.25"
+      },
+      "sources": [
+        "https://help.aliyun.com/zh/model-studio/qwen3-8-flash",
+        "https://help.aliyun.com/zh/model-studio/model-pricing",
+        "https://help.aliyun.com/zh/model-studio/context-cache"
+      ],
+      "basis": "百炼北京标准推理，采用显式缓存价格。"
+    },
+    {
+      "canonicalModelId": "qwen3.8-max",
+      "displayName": "Qwen3.8 Max 0902",
+      "aliases": [],
+      "prices": {
+        "inputPerMillionCny": "12",
+        "outputPerMillionCny": "36",
+        "cacheReadPerMillionCny": "1",
+        "cacheWritePerMillionCny": "15",
         "inputPerMillion": "2",
         "outputPerMillion": "6",
         "cacheReadPerMillion": "0.25",
         "cacheWritePerMillion": "2.50"
-      }
+      },
+      "sources": [
+        "https://help.aliyun.com/zh/model-studio/qwen3-8-max",
+        "https://help.aliyun.com/zh/model-studio/model-pricing",
+        "https://help.aliyun.com/zh/model-studio/context-cache"
+      ],
+      "basis": "百炼北京 9 月 2 日快照，采用显式缓存价格。",
+      "members": [
+        "qwen3.8-max-0902"
+      ]
     },
     {
       "canonicalModelId": "qwq-32b",
@@ -2072,6 +2517,48 @@
       }
     },
     {
+      "canonicalModelId": "seed-2.1-pro",
+      "displayName": "Doubao Seed 2.1 Pro",
+      "aliases": [
+        "doubao-seed-2-1-pro"
+      ],
+      "prices": {
+        "inputPerMillionCny": "6",
+        "outputPerMillionCny": "30",
+        "cacheReadPerMillionCny": "1.20",
+        "cacheWritePerMillionCny": "0",
+        "inputPerMillion": "0.84",
+        "outputPerMillion": "4.2",
+        "cacheReadPerMillion": "0.17",
+        "cacheWritePerMillion": "0"
+      },
+      "sources": [
+        "https://console.volcengine.com/ark/region%3Acn-beijing/docs/model-pricing"
+      ],
+      "basis": "火山方舟常规在线推理，按非音频 Token 估算。缓存存储另按时长计费。"
+    },
+    {
+      "canonicalModelId": "seed-2.1-turbo",
+      "displayName": "Doubao Seed 2.1 Turbo",
+      "aliases": [
+        "doubao-seed-2-1-turbo"
+      ],
+      "prices": {
+        "inputPerMillionCny": "3",
+        "outputPerMillionCny": "15",
+        "cacheReadPerMillionCny": "0.60",
+        "cacheWritePerMillionCny": "0",
+        "inputPerMillion": "0.42",
+        "outputPerMillion": "2.1",
+        "cacheReadPerMillion": "0.08",
+        "cacheWritePerMillion": "0"
+      },
+      "sources": [
+        "https://console.volcengine.com/ark/region%3Acn-beijing/docs/model-pricing"
+      ],
+      "basis": "火山方舟常规在线推理，≤256K 输入档。缓存存储另按时长计费。"
+    },
+    {
       "canonicalModelId": "step-3.5-flash",
       "displayName": "Step 3.5 Flash",
       "aliases": [],
@@ -2080,18 +2567,10 @@
         "outputPerMillion": "0.30",
         "cacheReadPerMillion": "0.02",
         "cacheWritePerMillion": "0"
-      }
-    },
-    {
-      "canonicalModelId": "step-3.5-flash-2603",
-      "displayName": "Step 3.5 Flash 2603",
-      "aliases": [],
-      "prices": {
-        "inputPerMillion": "0.10",
-        "outputPerMillion": "0.30",
-        "cacheReadPerMillion": "0.02",
-        "cacheWritePerMillion": "0"
-      }
+      },
+      "members": [
+        "step-3.5-flash-2603"
+      ]
     },
     {
       "canonicalModelId": "step-3.7-flash",
@@ -2103,6 +2582,36 @@
         "cacheReadPerMillion": "0.04",
         "cacheWritePerMillion": "0"
       }
+    },
+    {
+      "canonicalModelId": "step-5",
+      "displayName": "Step 5",
+      "aliases": [],
+      "prices": {
+        "inputPerMillionCny": "7",
+        "outputPerMillionCny": "20",
+        "cacheReadPerMillionCny": "0.35",
+        "cacheWritePerMillionCny": "0"
+      },
+      "sources": [
+        "https://cloud.tencent.com/document/product/1823/130055/"
+      ],
+      "basis": "腾讯云 TokenHub 广州按量路线参考价。"
+    },
+    {
+      "canonicalModelId": "text-embedding-v4",
+      "displayName": "Text Embedding V4",
+      "aliases": [],
+      "prices": {
+        "inputPerMillionCny": "0.50",
+        "outputPerMillionCny": "0",
+        "cacheReadPerMillionCny": "0",
+        "cacheWritePerMillionCny": "0"
+      },
+      "sources": [
+        "https://help.aliyun.com/zh/model-studio/text-embedding-synchronous-api"
+      ],
+      "basis": "百炼北京同步 API，只对输入 Token 计费。"
     }
   ]
 }

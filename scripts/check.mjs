@@ -27,6 +27,8 @@ const groups = {
     ['node', ['scripts/test-home-isolation.mjs']],
     ['node', ['scripts/release-notes-check.mjs']],
     ['node', ['scripts/sync-common-model-capabilities.mjs', '--offline', '--check']],
+    ['node', ['plugins/vulcan-usage-statistics/pricing/tools/sync-reference-pricing.mjs', '--check']],
+    ['node', ['plugins/vulcan-usage-statistics/pricing/tools/sync-model-directory.mjs', '--check']],
   ],
 };
 
