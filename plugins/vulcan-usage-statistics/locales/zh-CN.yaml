@@ -67,6 +67,8 @@ messages:
   cost.component: 参考费用
   cost.unitPrice: 单价
   cost.total: 参考费用合计
+  serviceEntry.codex-subscription: Codex 订阅
+  serviceEntry.public-api: 公共 API
   cost.referenceOnly: 根据已记录用量和当前参考单价计算，不代表供应商实际账单。
   pricing.actions: 操作
   pricing.edit: 编辑

@@ -67,6 +67,8 @@ messages:
   cost.component: Geschätzte Kosten
   cost.unitPrice: Stückpreis
   cost.total: Gesamte Referenzschätzung
+  serviceEntry.codex-subscription: Codex-Abonnement
+  serviceEntry.public-api: Öffentliche API
   cost.referenceOnly: Aus aufgezeichneter Nutzung und aktuellen Referenzpreisen berechnet; keine Rechnung des Anbieters.
   pricing.actions: Aktionen
   pricing.edit: Bearbeiten

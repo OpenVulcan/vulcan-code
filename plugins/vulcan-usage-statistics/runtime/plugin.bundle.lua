@@ -1513,15 +1513,17 @@ end
 
 -- Estimate one currency from row at the selected time and context rate.
 -- 使用所选时段和上下文档位的单价估算 row 的单币种费用。
--- Returns the amount and breakdown or nil for unpriced currency, plus the partial coverage flag.
--- 返回金额、分项和部分覆盖标志，币种未定价时返回 nil。
+-- Returns the known subtotal and coverage, or nil for an unpriced currency.
+-- 返回已知小计及覆盖情况，币种未定价时返回 nil。
 local function estimate_currency(row, prices, currency, off_peak, above_input_tokens)
     if not currency_has_prices(prices) then return nil end
     -- details tracks the component amounts independently from complete and partial coverage.
     -- details 记录分项金额，并与完整和部分覆盖状态分开保存。
     local details = { currency = currency, dimensions = vulcan.json.array() }
     local total_digits, total_scale = "0", 0
-    local incomplete, partial = false, false
+    -- Track gaps separately from evidence that a subtotal can be calculated.
+    -- 分开记录用量缺口和可计算小计的依据。
+    local missing, has_priced_usage = false, false
     for _, dimension in ipairs(PRICE_DIMENSIONS) do
         -- Keep each exact amount tied to its source Token fact and applicable rate.
         -- 将每个精确金额与相应 Token 事实和适用费率绑定。
@@ -1530,8 +1532,11 @@ local function estimate_currency(row, prices, currency, off_peak, above_input_to
         local tokens = token_digits(row[dimension.tokens])
         local cost = vulcan.json.null
         if price_digits ~= "0" and tokens == nil then
-            incomplete = true
+            missing = true
         else
+            -- A known amount at a nonzero rate is evidence for displaying a partial subtotal.
+            -- 非零费率下已知的用量可以作为显示部分小计的依据。
+            has_priced_usage = has_priced_usage or price_digits ~= "0"
             -- A missing free dimension contributes exactly zero and does not reduce coverage.
             -- 免费维度即使用量缺失也恰好计零，且不影响覆盖率。
             local digits = multiply_unsigned_integers(tokens or "0", price_digits)
@@ -1544,16 +1549,17 @@ local function estimate_currency(row, prices, currency, off_peak, above_input_to
             )
             total_scale = next_scale
         end
-        partial = partial or (price_digits ~= "0" and row[dimension.tokens .. "Missing"] == 1)
+        missing = missing or (price_digits ~= "0" and row[dimension.tokens .. "Missing"] == 1)
         details.dimensions[#details.dimensions + 1] = {
             tokenField = dimension.tokens, perMillion = price, cost = cost, offPeak = off_peak,
             aboveInputTokens = above_input_tokens,
         }
     end
+    details.hasPartialUsage = missing
     return {
-        amount = incomplete and vulcan.json.null or format_scaled_decimal(total_digits, total_scale),
+        amount = (not missing or has_priced_usage) and format_scaled_decimal(total_digits, total_scale) or vulcan.json.null,
         details = details,
-    }, partial
+    }
 end
 
 -- Add a decimal amount to an exact scaled total in place.
@@ -1613,7 +1619,9 @@ local function estimate_tariff_bucket(row, tariff, currency, off_peak, threshold
             priced = priced or currency_has_prices(prices[currency])
         end
         if priced then
-            return { amount = vulcan.json.null, details = { currency = currency, dimensions = vulcan.json.array() } }, false
+            return { amount = vulcan.json.null, details = {
+                currency = currency, dimensions = vulcan.json.array(), hasPartialUsage = true,
+            } }
         end
         return nil
     end
@@ -1623,8 +1631,8 @@ end
 
 -- Estimate one currency across time and context buckets without averaging unit prices.
 -- 分开估算时段和上下文用量桶中的一个币种，避免对单价取平均。
--- Returns the full estimate and whether some required usage was only partially recorded.
--- 返回完整估算，以及必要用量是否只有部分记录。
+-- Returns the known subtotal and coverage across the buckets, or nil if unpriced.
+-- 返回各用量桶的已知小计和覆盖情况，未定价时返回 nil。
 local function estimate_tariffs(row, model, currency, tariff_usage)
     if tariff_usage == nil then
         -- Only individual requests can select a tier from this row's input tokens.
@@ -1636,28 +1644,32 @@ local function estimate_tariffs(row, model, currency, tariff_usage)
     end
     -- combined contains one currency's detailed rows and its own accumulator.
     -- combined 包含一个币种的费用明细，其金额独立累加。
-    local combined = { details = { currency = currency, dimensions = vulcan.json.array() } }
+    local combined = { details = { currency = currency, dimensions = vulcan.json.array(), hasPartialUsage = false } }
     local total = { digits = "0", scale = 0 }
-    local incomplete, partial = false, false
+    -- Track whether any bucket contributed a known amount, including an observed zero.
+    -- 记录是否有用量桶贡献了已知金额，包括实际观测到的零值。
+    local has_amount = false
     for _, bucket in ipairs(tariff_usage) do
         -- Choose the rate belonging to this timestamp bucket before estimating usage.
         -- 先选择该时间戳用量桶的对应费率，再估算费用。
         local off_peak = bucket.isOffPeak == 1
         local tariff = model.base
         if off_peak then tariff = model.off_peak end
-        local estimate, bucket_partial = estimate_tariff_bucket(bucket, tariff, currency, off_peak, bucket.contextThreshold)
+        local estimate = estimate_tariff_bucket(bucket, tariff, currency, off_peak, bucket.contextThreshold)
         -- An unknown tariff price leaves the currency unpriced for the aggregate row.
         -- 时段单价缺失时，整条聚合行在该币种下标记为未定价。
         if estimate == nil then return nil end
-        if estimate.amount == vulcan.json.null then incomplete = true
-        else add_cost(total, estimate.amount) end
-        partial = partial or bucket_partial
+        if estimate.amount ~= vulcan.json.null then
+            has_amount = true
+            add_cost(total, estimate.amount)
+        end
+        combined.details.hasPartialUsage = combined.details.hasPartialUsage or estimate.details.hasPartialUsage
         for _, dimension in ipairs(estimate.details.dimensions) do
             combined.details.dimensions[#combined.details.dimensions + 1] = dimension
         end
     end
-    combined.amount = incomplete and vulcan.json.null or format_scaled_decimal(total.digits, total.scale)
-    return combined, partial
+    combined.amount = has_amount and format_scaled_decimal(total.digits, total.scale) or vulcan.json.null
+    return combined
 end
 
 -- Estimate both currencies for a usage row using the action's captured pricing configuration.
@@ -1667,8 +1679,8 @@ end
 -- row 包含仅 Token 的核心投影。
 -- config holds the exchange rate; cache reuses effective prices within the same provider and model.
 -- config 持有汇率；cache 在相同供应商和模型范围内复用生效价格。
--- Updates the row and returns a currency map of estimates and partial coverage flags.
--- 更新用量行，并返回按币种组织的估算与部分覆盖标志。
+-- Updates the row and returns estimates with their coverage keyed by currency.
+-- 更新用量行，并返回以币种为键、包含覆盖情况的估算。
 local function attach_reference_estimate(row, config, cache, overrides)
     -- Providers without their own overrides can safely reuse the same converted prices.
     -- 没有专属覆盖的供应商可以共用同一份折算价格。
@@ -1709,8 +1721,8 @@ local function attach_reference_estimate(row, config, cache, overrides)
     if row.tariffUsageJson ~= nil and row.tariffUsageJson ~= vulcan.json.null then
         tariff_usage = decode_json_text(row.tariffUsageJson, "tariffUsageJson")
     end
-    local usd, usd_partial = estimate_tariffs(row, model, "USD", tariff_usage)
-    local cny, cny_partial = estimate_tariffs(row, model, "CNY", tariff_usage)
+    local usd = estimate_tariffs(row, model, "USD", tariff_usage)
+    local cny = estimate_tariffs(row, model, "CNY", tariff_usage)
     row.tariffUsageJson, row.isOffPeak = nil, nil
     -- Keep the existing primary estimate fields usable for USD-only and CNY-only rows.
     -- 让现有主估算字段同时支持仅美元和仅人民币的行。
@@ -1722,13 +1734,13 @@ local function attach_reference_estimate(row, config, cache, overrides)
     row.pricingSourceId = model.source_id or vulcan.json.null
     if primary == nil then
         row.pricingMatchStatus = "unmatched"
-    elseif primary.amount == vulcan.json.null then
+    elseif primary.details.hasPartialUsage then
         row.pricingMatchStatus = "incomplete_usage"
     else
         row.pricingMatchStatus = model.source == "catalog" and "catalog_exact" or "override_exact"
     end
     if usd ~= nil and cny ~= nil then row.alternateEstimate = cny end
-    return { USD = usd, CNY = cny }, { USD = usd_partial, CNY = cny_partial }
+    return { USD = usd, CNY = cny }
 end
 
 -- Count exact model overrides without depending on Lua table iteration order.
@@ -2284,14 +2296,14 @@ LIMIT ]] .. cost_page_size .. [[ OFFSET (SELECT cost_offset FROM page_offsets);
     while true do
       local cost_rows = query(cost_sql)
       for _, row in ipairs(cost_rows) do
-        local estimates, partial_usage = attach_reference_estimate(row, config, price_cache, overrides)
+        local estimates = attach_reference_estimate(row, config, price_cache, overrides)
         for currency, estimate in pairs(estimates) do
             local total = totals[currency]
             if estimate.amount == vulcan.json.null then
                 total.incomplete = total.incomplete + row.rowCount
             else
                 total.priced = total.priced + row.rowCount
-                total.partial = total.partial or partial_usage[currency]
+                total.partial = total.partial or estimate.details.hasPartialUsage
                 -- Align decimal places before adding this model group to its currency total.
                 -- 先对齐小数位，再将模型分组小计计入对应币种总额。
                 add_cost(total, estimate.amount)

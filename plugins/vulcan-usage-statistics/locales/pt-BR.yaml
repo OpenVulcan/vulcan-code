@@ -67,6 +67,8 @@ messages:
   cost.component: Custo estimado
   cost.unitPrice: Preço unitário
   cost.total: Estimativa total de referência
+  serviceEntry.codex-subscription: Assinatura do Codex
+  serviceEntry.public-api: API pública
   cost.referenceOnly: Calculado com o uso registrado e os preços atuais de referência; não é uma fatura do provedor.
   pricing.actions: Ações
   pricing.edit: Editar

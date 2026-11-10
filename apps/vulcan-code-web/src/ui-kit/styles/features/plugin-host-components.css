@@ -85,7 +85,9 @@
 /* Align exact nonzero costs and unit prices in a compact tooltip table. */
 /* 将精确非零费用与单价对齐到紧凑的提示表格中。 */
 .plugin-statistics-cost-table { width: 100%; margin: 8px 0; border-collapse: collapse; font-size: var(--vk-fs-xs); }
-.plugin-statistics-cost-table :is(th, td) { padding: 5px 3px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* Wrap long tier and coverage labels so the last column fits inside the tooltip. */
+/* 允许较长的档位及覆盖说明换行，确保提示框容得下最后一列。 */
+.plugin-statistics-cost-table :is(th, td) { padding: 5px 3px; text-align: right; white-space: normal; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .plugin-statistics-cost-table th { font-weight: 500; border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent); }
 .plugin-statistics-cost-table :is(th, td):first-child { text-align: left; }
 .plugin-statistics-cost-total { padding-top: 10px; margin-top: 10px; border-top: 1px solid color-mix(in srgb, currentColor 25%, transparent); font-weight: 600; }

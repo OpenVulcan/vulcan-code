@@ -32,10 +32,11 @@ async function selectRange(panel, label) {
 test("money preserves unknown, zero, tiny values, carry and large exact digits", () => {
   for (const [input, expected] of [
     [null, "-"], ["", "-"], ["NaN", "-"], ["-1", "-"], ["1e3", "-"],
-    ["0", "0.00"], ["0.000000", "0.00"], ["0.00000001", "<0.0001"],
-    ["0.000365468432134", "≈0.0004"], ["0.1", "0.1"],
-    ["0.99999", "≈1.00"], ["1.2300", "1.23"],
-    ["123456789012345678901.125", "≈123,456,789,012,345,678,901.13"],
+    ["0", "0.00"], ["0.000000", "0.00"], ["0.00000001", "<0.001"],
+    ["0.000365468432134", "<0.001"], ["0.001", "0.001"], ["0.1", "0.1"],
+    ["0.129933358208955", "≈0.13"], ["0.8705535", "≈0.871"],
+    ["0.99999", "≈1.00"], ["1.2300", "1.23"], ["1.2345", "≈1.235"],
+    ["123456789012345678901.125", "123,456,789,012,345,678,901.125"],
   ]) assert.equal(formatMoney(input, "en-US"), expected, String(input));
 });
 
@@ -44,9 +45,9 @@ test("money preserves unknown, zero, tiny values, carry and large exact digits",
 test("money localizes zero, tiny values and exact rounding without losing stored digits", () => {
   for (const locale of ["fr-FR", "de-DE", "es-ES", "pt-BR", "ru-RU"]) {
     assert.equal(formatMoney("0", locale), "0,00", locale);
-    assert.equal(formatMoney("0.00000001", locale), "<0,0001", locale);
+    assert.equal(formatMoney("0.00000001", locale), "<0,001", locale);
     assert.equal(formatMoney("0.99999", locale), "≈1,00", locale);
-    assert.equal(formatMoney("123456789012345678901.125", locale).replace(/[.\s\u00a0\u202f]/g, ""), "≈123456789012345678901,13", locale);
+    assert.equal(formatMoney("123456789012345678901.125", locale).replace(/[.\s\u00a0\u202f]/g, ""), "123456789012345678901,125", locale);
   }
 });
 
@@ -300,7 +301,7 @@ test("every host locale renders real translations, percentage measurements and s
     // separator 使断言不依赖仅适用英文的标点假设。
     const separator = new Intl.NumberFormat(locale).formatToParts(1.1).find((part) => part.type === "decimal").value;
     assert.equal(formatMoney("0", locale), `0${separator}00`, locale);
-    assert.equal(formatMoney("0.00000001", locale), `<0${separator}0001`, locale);
+    assert.equal(formatMoney("0.00000001", locale), `<0${separator}001`, locale);
     const panel = await mount((action) => Promise.resolve(action === "settings-get" ? settings : {
       ...dashboard, summary: { ...dashboard.summary, inputTokens: 1200, outputTokens: 300, cacheReadTokens: 400 },
       heatmap: [{ date: new Date().toLocaleDateString("en-CA"), value: 1500, requests: 3, successes: 2, topModelName: "fixture-model", topProviderName: "fixture-provider" }],
@@ -783,5 +784,48 @@ test("provider selection scopes the provider tab without narrowing recent attemp
     await React.act(async () => panel.container.querySelector("nav button:nth-child(3)").click());
     assert.equal(reads.at(-1).view, "recent");
     assert.equal("providerId" in reads.at(-1), false);
+  } finally { await panel.close(); }
+});
+
+// Distinguish service entries even when every other visible grouping field matches.
+// 即使其他可见分组字段完全相同，也应区分服务入口。
+test("shows service entries and keeps partial estimates visible for the same model", async () => {
+  // Both records have the same model and consumer but different routes and cost coverage.
+  // 两条记录的模型和调用方相同，接入入口与费用覆盖情况不同。
+  const shared = {
+    providerId: "openai", modelId: "fixture-model", consumerId: "webui", operation: "conversation_respond",
+    attemptCount: 1, successfulAttemptCount: 1, timedAttemptCount: 0,
+    inputTokens: 10, uncachedInputTokens: 10, outputTokens: null, totalTokens: 10,
+    cacheReadTokens: null, cacheWriteTokens: null, reasoningTokens: null,
+    requestDurationMs: null, firstTokenLatencyMs: null, outputDurationMs: null, outputTokensPerSecond: null,
+    pricingMatchStatus: "incomplete_usage", estimatedCurrency: "USD",
+    pricingDetails: { currency: "USD", dimensions: [], hasPartialUsage: true },
+  };
+  // One group has enough usage for a subtotal; the other has no calculable amount.
+  // 一组有足够用量可估算小计，另一组没有可计算的金额。
+  const daily = [
+    { ...shared, serviceEntryId: "codex-subscription", estimatedCost: "0.129933358208955" },
+    { ...shared, serviceEntryId: "public-api", estimatedCost: null },
+  ];
+  // Sentinel translations check the displayed route and coverage without fixing user-facing wording.
+  // 使用测试专用译文验证接入入口和覆盖状态，避免绑定面向用户的措辞。
+  const panel = await mount(async (action) => action === "settings-get" ? settings
+    : { ...dashboard, view: "providers", daily, dailyCount: daily.length },
+    false, "en-US", {
+      "serviceEntry.codex-subscription": "fixture-subscription",
+      "serviceEntry.public-api": "fixture-api",
+      "cost.partial": "fixture-partial",
+      "pricing.incompleteUsage": "fixture-incomplete",
+    });
+  try {
+    await React.act(async () => panel.container.querySelector("nav button:nth-child(2)").click());
+    // Locate each row by its recorded identity regardless of sort order.
+    // 按已记录的入口标识定位每行，避免依赖排序位置。
+    const subscription = panel.container.querySelector('small[title="openai · codex-subscription"]').closest("tr");
+    const api = panel.container.querySelector('small[title="openai · public-api"]').closest("tr");
+    assert.match(subscription.textContent, /fixture-subscription/);
+    assert.match(subscription.querySelector(".plugin-statistics-estimate-cell").textContent, /≈\$0\.13 · fixture-partial/);
+    assert.match(api.textContent, /fixture-api/);
+    assert.equal(api.querySelector(".plugin-statistics-estimate-cell").textContent, "fixture-incomplete");
   } finally { await panel.close(); }
 });

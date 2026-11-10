@@ -67,6 +67,8 @@ messages:
   cost.component: 예상 비용
   cost.unitPrice: 단가
   cost.total: 총 참고 예상 비용
+  serviceEntry.codex-subscription: Codex 구독
+  serviceEntry.public-api: 공개 API
   cost.referenceOnly: 기록된 사용량과 현재 참고 단가로 계산한 값이며 공급자의 청구서가 아닙니다.
   pricing.actions: 작업
   pricing.edit: 편집

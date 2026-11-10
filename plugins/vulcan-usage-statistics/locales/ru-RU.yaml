@@ -67,6 +67,8 @@ messages:
   cost.component: Расчётная стоимость
   cost.unitPrice: Цена за единицу
   cost.total: Итоговая ориентировочная оценка
+  serviceEntry.codex-subscription: Подписка Codex
+  serviceEntry.public-api: Публичный API
   cost.referenceOnly: Расчёт по записанному использованию и текущим справочным ценам, а не счёт провайдера.
   pricing.actions: Действия
   pricing.edit: Изменить

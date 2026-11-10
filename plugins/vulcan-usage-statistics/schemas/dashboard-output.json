@@ -159,6 +159,7 @@
       "type": ["object", "null"],
       "properties": {
         "currency": { "type": "string" },
+        "hasPartialUsage": { "type": "boolean" },
         "dimensions": {
           "type": "array",
           "items": {

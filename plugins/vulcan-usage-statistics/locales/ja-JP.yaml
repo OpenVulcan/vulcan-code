@@ -67,6 +67,8 @@ messages:
   cost.component: 推定費用
   cost.unitPrice: 単価
   cost.total: 参考費用の合計
+  serviceEntry.codex-subscription: Codex サブスクリプション
+  serviceEntry.public-api: 公開 API
   cost.referenceOnly: 記録された使用量と現在の参考単価による計算値であり、プロバイダーの請求額ではありません。
   pricing.actions: 操作
   pricing.edit: 編集

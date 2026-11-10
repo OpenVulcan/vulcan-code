@@ -26,7 +26,7 @@ local function host_call(operation, request)
     local sql = request.sql
     if sql:find("AS generatedAtMs", 1, true) then
         return { rows = {{ generatedAtMs = 0, schemaRevision = 1, aggregateRevision = revision,
-            healthStatus = "ready", dailyCount = 1202, recentCount = 0, consumerIdsJson = "[]" }} }
+            healthStatus = "ready", dailyCount = 1203, recentCount = 0, consumerIdsJson = "[]" }} }
     elseif sql:find("AS dashboardRevision", 1, true) then
         return { rows = {{ dashboardRevision = revision }} }
     elseif sql:find("AS rowCount", 1, true) then
@@ -50,15 +50,22 @@ local function host_call(operation, request)
             }
         end
         if offset == 1000 then
-            rows[#rows + 1] = { modelId = "gpt-5", rowCount = 1,
+            -- Preserve a subtotal on the second page even with one missing charged dimension.
+            -- 第二页有一项收费维度缺失时，仍应保留可计算的小计。
+            rows[#rows + 1] = { modelId = "fixture-1", rowCount = 1,
                 uncachedInputTokens = 1, outputTokens = runtime_vulcan.json.null,
+                cacheReadTokens = 0, cacheWriteTokens = 0 }
+            -- Known free cache usage alone cannot establish a subtotal.
+            -- 仅有已知免费缓存用量时，不能据此生成小计。
+            rows[#rows + 1] = { modelId = "fixture-2", rowCount = 1,
+                uncachedInputTokens = runtime_vulcan.json.null, outputTokens = runtime_vulcan.json.null,
                 cacheReadTokens = 0, cacheWriteTokens = 0 }
         end
         return { rows = rows }
     elseif sql:find("FROM scoped_attempts\nGROUP BY provider_id", 1, true) then
         return { rows = {{ providerId = "fixture-provider", attempts = revision }} }
     elseif sql:find("AS attempts", 1, true) then
-        return { rows = {{ attempts = 1202, successes = 1202, reported = 1202, totalTokens = 36000,
+        return { rows = {{ attempts = 1203, successes = 1203, reported = 1202, totalTokens = 36000,
             inputTokens = 12000, outputTokens = 24000, cacheReadTokens = 0, cacheWriteTokens = 0 }} }
     end
     return { rows = runtime_vulcan.json.array() }
@@ -90,18 +97,18 @@ assert(ok, tostring(response))
 local result = runtime_vulcan.json.decode(response).result
 local cost = result.summary.costs[1]
 if args.change_revision == "once" then
-    assert(result.aggregateRevision == 2 and cost.amount == "0.072")
+    assert(result.aggregateRevision == 2 and cost.amount == "0.072001")
     assert(#pages == 4 and pages[1] == 0 and pages[2] == 1000 and pages[3] == 0 and pages[4] == 1000)
 else
-    assert(result.aggregateRevision == 1 and cost.amount == "0.06")
+    assert(result.aggregateRevision == 1 and cost.amount == "0.060001")
     assert(#pages == 2 and pages[1] == 0 and pages[2] == 1000)
 end
 if args.view == "providers" then
     assert(result.providers[1].attempts == result.aggregateRevision)
 end
-assert(cost.pricedRows == 1200)
+assert(cost.pricedRows == 1201)
 assert(cost.incompleteRows == 1)
 assert(cost.unpricedRows == 1)
-assert(cost.hasPartialUsage == (args.partial_usage == true))
+assert(cost.hasPartialUsage == true)
 return { amount = cost.amount, priced_rows = cost.pricedRows,
     incomplete_rows = cost.incompleteRows, unpriced_rows = cost.unpricedRows, pages = pages }

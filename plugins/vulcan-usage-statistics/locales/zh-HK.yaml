@@ -67,6 +67,8 @@ messages:
   cost.component: 預估費用
   cost.unitPrice: 單價
   cost.total: 參考費用合計
+  serviceEntry.codex-subscription: Codex 訂閱
+  serviceEntry.public-api: 公開 API
   cost.referenceOnly: 根據已記錄用量與目前參考單價計算，不代表供應商實際賬單。
   pricing.actions: 操作
   pricing.edit: 編輯

@@ -67,6 +67,8 @@ messages:
   cost.component: Estimated cost
   cost.unitPrice: Unit price
   cost.total: Total reference estimate
+  serviceEntry.codex-subscription: Codex subscription
+  serviceEntry.public-api: Public API
   cost.referenceOnly: Calculated from recorded usage and current reference prices, not a provider bill.
   pricing.actions: Actions
   pricing.edit: Edit

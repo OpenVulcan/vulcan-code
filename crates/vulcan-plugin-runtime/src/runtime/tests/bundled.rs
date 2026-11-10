@@ -136,7 +136,7 @@ impl VulcanPluginVldbService for RecordingVldbService {
                 },
                 {
                     "providerId": "provider-1",
-                    "serviceEntryId": "entry-1",
+                    "serviceEntryId": "entry-2",
                     "consumerId": "webui",
                     "operation": "response_create",
                     "modelId": "gpt-5.6-sol",
@@ -353,11 +353,30 @@ fn bundled_usage_statistics_plugin_loads_through_system_vldb_bridge() {
     assert_eq!(dashboard["daily"][0]["pricingMatchStatus"], "catalog_exact");
     assert_eq!(dashboard["daily"][1]["pricingMatchStatus"], "unmatched");
     assert!(dashboard["daily"][1]["estimatedCost"].is_null());
+    // The known input charge remains visible even though output usage was not reported.
+    // 即使未报告输出用量，已知输入费用也应继续显示。
+    let partial = dashboard["daily"]
+        .as_array()
+        .and_then(|rows| rows.iter().find(|row| row["serviceEntryId"] == "entry-2"))
+        .expect("usage row for the second service entry");
+    assert_eq!(partial["pricingMatchStatus"], "incomplete_usage");
+    assert_eq!(partial["pricingDetails"]["hasPartialUsage"], true);
     assert_eq!(
-        dashboard["daily"][2]["pricingMatchStatus"],
-        "incomplete_usage"
+        partial["alternateEstimate"]["details"]["hasPartialUsage"],
+        true
     );
-    assert!(dashboard["daily"][2]["estimatedCost"].is_null());
+    // Use the live input charge so the assertion survives catalog updates.
+    // 使用当前输入分项费用，价目表更新后断言仍然有效。
+    let input_charge = partial["pricingDetails"]["dimensions"]
+        .as_array()
+        .and_then(|dimensions| {
+            dimensions
+                .iter()
+                .find(|dimension| dimension["tokenField"] == "uncachedInputTokens")
+        })
+        .expect("known input charge");
+    assert!(partial["estimatedCost"].is_string());
+    assert_eq!(partial["estimatedCost"], input_charge["cost"]);
     assert_eq!(dashboard["heatmap"][0]["value"], 37);
     assert_eq!(dashboard["heatmap"][0]["topModelName"], "gpt-5.6-sol");
     assert_eq!(
@@ -370,10 +389,11 @@ fn bundled_usage_statistics_plugin_loads_through_system_vldb_bridge() {
             .as_u64()
             .is_some_and(|count| count > 0)
     );
-    assert_eq!(dashboard["summary"]["costs"][0]["amount"], priced_cost);
-    assert_eq!(dashboard["summary"]["costs"][0]["pricedRows"], 1);
+    assert_ne!(dashboard["summary"]["costs"][0]["amount"], priced_cost);
+    assert_eq!(dashboard["summary"]["costs"][0]["pricedRows"], 2);
     assert_eq!(dashboard["summary"]["costs"][0]["unpricedRows"], 1);
-    assert_eq!(dashboard["summary"]["costs"][0]["incompleteRows"], 1);
+    assert_eq!(dashboard["summary"]["costs"][0]["incompleteRows"], 0);
+    assert_eq!(dashboard["summary"]["costs"][0]["hasPartialUsage"], true);
     assert_eq!(dashboard["recentAttempts"][0]["attemptId"], "attempt-1");
     assert_eq!(
         dashboard["recentModels"],

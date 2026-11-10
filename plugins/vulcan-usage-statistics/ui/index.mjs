@@ -110,25 +110,29 @@ export function formatMoney(value, locale = "en") {
   // The decimal separator also applies to zero and values below display precision.
   // 小数分隔符同样适用于零值和低于展示精度的数值。
   const decimalSeparator = new Intl.NumberFormat(locale).formatToParts(1.1).find((part) => part.type === "decimal").value;
-  if (BigInt(parts[0]) === 0n && !/[1-9]/.test(fraction)) return `0${decimalSeparator}00`;
-  if (BigInt(parts[0]) === 0n && fraction.slice(0, 4).padEnd(4, "0") === "0000") return `<0${decimalSeparator}0001`;
-  // places keeps small amounts useful while limiting ordinary amounts to cents.
-  // places 保留小金额的有效信息，并将普通金额限制为分。
-  let places = BigInt(parts[0]) === 0n ? 4 : 2;
+  // Limit all displayed money to three fractional digits, including very small estimates.
+  // 所有展示金额最多保留三位小数，包括极小的估算值。
+  const places = 3;
+  // Preserve the smallest displayable fraction without converting the source value.
+  // 保留最小可显示小数，不对原始金额做数值转换。
+  const shownFraction = fraction.slice(0, places).padEnd(places, "0");
+  if (parts[0] === "0" && !/[1-9]/.test(shownFraction)) {
+    return /[1-9]/.test(fraction) ? `<0${decimalSeparator}${"1".padStart(places, "0")}` : `0${decimalSeparator}00`;
+  }
   // scaled rounds integer digits only; the exact source is never changed.
   // scaled 仅对整数数字进行展示舍入；精确来源不会改变。
-  let scaled = BigInt(parts[0] + fraction.slice(0, places).padEnd(places, "0"));
+  let scaled = BigInt(parts[0] + shownFraction);
   if (Number(fraction[places] ?? "0") >= 5) scaled += 1n;
-  if (places === 4 && scaled >= 10000n) { scaled = 100n; places = 2; }
   // digits provides the rounded integer and fractional portions.
   // digits 提供舍入后的整数与小数部分。
   const digits = scaled.toString().padStart(places + 1, "0");
-  // integer is formatted as BigInt to preserve arbitrarily large exact values.
-  // integer 使用 BigInt 格式化，以保留任意大精确值。
-  const integer = new Intl.NumberFormat(locale).format(BigInt(digits.slice(0, -places)));
-  // tail removes insignificant zeros only for sub-unit amounts.
-  // tail 仅在小于一的金额中移除无意义尾零。
-  const tail = places === 4 ? digits.slice(-places).replace(/0+$/, "") : digits.slice(-places);
+  // Format the rounded whole part as BigInt to preserve arbitrarily large exact values.
+  // 将舍入后的整数部分按 BigInt 格式化，以保留任意大精确值。
+  const whole = BigInt(digits.slice(0, -places));
+  const integer = new Intl.NumberFormat(locale).format(whole);
+  // Keep cents for whole-unit amounts and drop insignificant zeros on smaller values.
+  // 至少一元的金额保留分位，更小的金额移除无意义尾零。
+  const tail = digits.slice(-places).replace(/0+$/, "").padEnd(whole === 0n ? 0 : 2, "0");
   // rounded reports only actual precision loss.
   // rounded 仅表示确实存在精度舍弃。
   const rounded = /[1-9]/.test(fraction.slice(places));
@@ -247,7 +251,7 @@ export function createPluginPanel(sdk) {
   // value is formatted or exact decimal text; currency is the declared code; returns display text.
   // value 为格式化或精确小数文本；currency 为声明币种；返回展示文本。
   function currencyAmount(value, currency) {
-    if (currency === "USD") return value.startsWith("≈") ? `≈$${value.slice(1)}` : `$${value}`;
+    if (currency === "USD") return /^[≈<]/.test(value) ? `${value[0]}$${value.slice(1)}` : `$${value}`;
     return currency ? `${value} ${currency}` : value;
   }
 
@@ -883,12 +887,20 @@ export function createPluginPanel(sdk) {
     return text(`operation.${operation}`, interpolate(text("operation.custom", "Custom operation · {{id}}"), { id: operation }));
   }
 
-  // modelIdentity renders the model and its provider as two lines. record supplies exact identities.
-  // modelIdentity 将模型和供应商分两行显示。record 提供精确身份。
-  // Returns a compact, wrapping model cell with the full values available on hover.
-  // 返回紧凑可换行的模型单元格，悬停可读取完整值。
+  // Show the service entry that separates rows for the same provider and model.
+  // 显示区分同一供应商、同一模型不同记录行的服务入口。
+  // record is a picker item or a usage row; returns a wrapping cell with the exact identifiers on hover.
+  // record 是模型选择项或用量记录；返回可换行单元格，悬停可查看原始标识。
   function modelIdentity(record) {
-    return h("span", { className: "plugin-statistics-model-identity" }, h("span", { title: record.modelId }, record.modelId), h("small", { title: record.providerId }, record.providerId));
+    // Unknown custom entries retain their recorded identifiers.
+    // 自定义入口保留已记录的标识。
+    const entry = record.serviceEntryId;
+    // Picker options have no service entry in their schema; usage rows always carry one.
+    // 模型选择项的 Schema 没有入口字段；用量记录始终包含入口。
+    const route = entry === undefined ? record.providerId : `${record.providerId} · ${text(`serviceEntry.${entry}`, entry)}`;
+    const exactRoute = entry === undefined ? record.providerId : `${record.providerId} · ${entry}`;
+    return h("span", { className: "plugin-statistics-model-identity" },
+      h("span", { title: record.modelId }, record.modelId), h("small", { title: exactRoute }, route));
   }
 
   // Encode a model's exact provider/model pair for React and the select; null represents all models.
@@ -991,10 +1003,10 @@ export function createPluginPanel(sdk) {
     );
   }
 
-  // Keep short cost cells while exposing the exact estimate and missing-price reason.
-  // 保持费用单元格简短，同时提供精确估算与价格缺失原因。
-  // record is a priced runtime projection; returns the estimate and its exact reference-price breakdown.
-  // record 是运行时定价投影；返回估算和精确参考价格明细。
+  // Show compact subtotals with a currency-specific breakdown and coverage status.
+  // 显示紧凑的小计，提供各币种的费用明细及覆盖状态。
+  // record is a usage projection with pricing fields; returns the cost cell and its tooltip.
+  // record 是包含定价字段的用量投影；返回费用单元格及提示。
   function estimateDetails(record) {
     // The primary estimate retains the original record contract; the alternate is optional.
     // 主估算保留原记录契约；第二币种可省略。
@@ -1002,12 +1014,18 @@ export function createPluginPanel(sdk) {
       { amount: record.estimatedCost, details: record.pricingDetails },
       ...(record.alternateEstimate ? [record.alternateEstimate] : []),
     ];
-    // Compact values include only currencies with complete required usage.
-    // 紧凑金额只显示必要用量齐全的币种。
+    // Show every known subtotal and label incomplete coverage without substituting zero.
+    // 显示每个已知小计并标注覆盖不完整的情况，避免将未知用量写成零。
     const amounts = estimates.filter(({ amount }) => amount !== null).map(({ amount, details }) =>
       currencyAmount(formatMoney(amount, sdk.locale), details.currency));
+    // Label a displayed subtotal as partial and keep entirely unknown amounts distinguishable.
+    // 标明可显示的小计仅覆盖部分用量，并区分完全未知的金额。
+    const partialLabel = text("cost.partial", "Partial coverage");
+    const incompleteLabel = text("pricing.incompleteUsage", "Required usage is incomplete");
+    const hasPartialUsage = estimates.some(({ amount, details }) => amount === null || details.hasPartialUsage === true);
     return h("div", { className: "plugin-statistics-estimate-cell" },
-      amounts.length > 0 ? h("span", null, amounts.join(" / ")) : null,
+      amounts.length > 0 ? h("span", null, amounts.join(" / "), hasPartialUsage ? ` · ${partialLabel}` : null)
+        : estimates.length > 0 ? h("span", null, incompleteLabel) : null,
       h(HelpTooltip, { ariaLabel: text("cost.details", "Reference cost details"), content: h("div", { className: "plugin-statistics-detail-tooltip" },
         h("strong", null, text("cost.details", "Reference cost details")),
         estimates.length === 0 ? h("p", null, text("pricing.unpriced", "Unpriced")) : null,
@@ -1017,7 +1035,7 @@ export function createPluginPanel(sdk) {
           const dimensions = details.dimensions.filter((dimension) => !isZeroCost(dimension.cost));
           return h(React.Fragment, { key: details.currency },
             h("strong", null, details.currency),
-            dimensions.length === 0 ? h("p", null, text("cost.noNonzero", "No nonzero cost items")) : h("table", { className: "plugin-statistics-cost-table" },
+            dimensions.length === 0 ? (amount === null ? null : h("p", null, text("cost.noNonzero", "No nonzero cost items"))) : h("table", { className: "plugin-statistics-cost-table" },
               h("thead", null, h("tr", null,
                 h("th", null, text("cost.item", "Item")),
                 h("th", null, text("cost.component", "Estimated cost")),
@@ -1029,13 +1047,13 @@ export function createPluginPanel(sdk) {
                     ? text("pricing.offPeak", "Off-peak") : text("pricing.baseRate", "Base rate")}`,
                   dimension.aboveInputTokens === undefined ? null
                     : ` · ${text("pricing.contextThreshold", "Input tokens above")} ${dimension.aboveInputTokens.toLocaleString(sdk.locale)}`),
-                h("td", null, dimension.cost === null ? text("pricing.incompleteUsage", "Required usage is incomplete") : currencyAmount(dimension.cost, details.currency)),
-                h("td", null, currencyAmount(dimension.perMillion, details.currency)),
+                h("td", null, dimension.cost === null ? incompleteLabel : currencyAmount(formatMoney(dimension.cost, sdk.locale), details.currency)),
+                h("td", null, currencyAmount(formatMoney(dimension.perMillion, sdk.locale), details.currency)),
               ))),
             ),
             h("div", { className: "plugin-statistics-cost-total" }, facts([[text("cost.total", "Total reference estimate"), amount === null
-              ? text("pricing.incompleteUsage", "Required usage is incomplete")
-              : currencyAmount(amount, details.currency)]])),
+              ? incompleteLabel
+              : `${currencyAmount(formatMoney(amount, sdk.locale), details.currency)}${details.hasPartialUsage ? ` · ${partialLabel}` : ""}`]])),
           );
         }),
         estimates.length > 0 ? facts([[text("pricing.source", "Price source"), text(
