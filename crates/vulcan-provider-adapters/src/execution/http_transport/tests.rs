@@ -329,6 +329,21 @@ async fn http_wire_response_capture_classifies_dispatch_failure() {
 
     assert!(failure.error.retryable);
     assert_eq!(captured_response.failure_stage.as_deref(), Some("dispatch"));
+    // The closed port yields a proven connection phase and a non-empty bounded cause chain.
+    // 关闭端口会给出已证明的连接阶段以及非空的受限原因链。
+    assert_eq!(
+        captured_response.transport_failure_phase.as_deref(),
+        Some("connect")
+    );
+    assert!(
+        captured_response
+            .transport_failure_causes
+            .as_ref()
+            .is_some_and(|causes| !causes.is_empty())
+    );
+    // a send failure keeps no response-header bound.
+    // 发送失败不携带响应头时限。
+    assert_eq!(captured_response.transport_failure_timeout_ms, None);
     assert_eq!(captured_response.received_bytes, 0);
     assert!(captured_response.body.is_empty());
     assert_ne!(

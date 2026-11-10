@@ -181,6 +181,19 @@ async fn http_send_failure_uses_reqwest_connection_evidence() {
     assert_eq!(connect_failure.error.transport, Some(AiTransportKind::Http));
     assert!(connect_failure.error.retryable);
 
+    // connect_evidence keeps the phase label and the bounded cause chain for later diagnosis.
+    // connect_evidence 为后续诊断保留阶段标签与受限原因链。
+    let connect_evidence = http_send_failure_evidence(&connect_error);
+    assert_eq!(connect_evidence.phase, TransportFailurePhase::Connect);
+    assert!(!connect_evidence.causes.is_empty());
+    assert!(connect_evidence.causes.len() <= TRANSPORT_FAILURE_MAX_CAUSES);
+    assert!(
+        connect_evidence
+            .causes
+            .iter()
+            .all(|cause| cause.chars().count() <= TRANSPORT_FAILURE_MAX_CAUSE_CHARACTERS)
+    );
+
     // builder_error proves that unrelated request-send failures retain the conservative outcome.
     // builder_error 证明无关的请求发送失败会保留保守结果。
     let builder_error = reqwest::Client::new()
@@ -197,6 +210,12 @@ async fn http_send_failure_uses_reqwest_connection_evidence() {
         DispatchOutcome::Unknown
     );
     assert_eq!(builder_failure.error.transport, Some(AiTransportKind::Http));
+
+    // builder_evidence must never claim a proven connection-establishment failure.
+    // builder_evidence 绝不声称已证明连接建立失败。
+    let builder_evidence = http_send_failure_evidence(&builder_error);
+    assert_ne!(builder_evidence.phase, TransportFailurePhase::Connect);
+    assert!(builder_evidence.causes.len() <= TRANSPORT_FAILURE_MAX_CAUSES);
 }
 
 /// Verifies HTTP stream failures cannot be mislabeled as Responses WebSocket failures.
@@ -344,4 +363,21 @@ fn responses_http_completion_failure_preserves_retry_safety() {
         Some("protocol_conversion")
     );
     assert!(!malformed.error.retryable);
+}
+
+/// Verifies the response-header bound produces timeout evidence without a cause chain.
+/// 验证响应头时限生成不含原因链的超时证据。
+#[test]
+fn response_header_timeout_evidence_carries_the_registered_bound() {
+    // evidence records only the bound that expired; it never invents a cause chain.
+    // evidence 只记录真正到期的时限，不会凭空构造原因链。
+    let evidence = response_headers_timeout_evidence(60_000);
+
+    assert_eq!(
+        evidence.phase,
+        TransportFailurePhase::ResponseHeadersTimeout
+    );
+    assert_eq!(evidence.phase.as_str(), "response_headers_timeout");
+    assert!(evidence.causes.is_empty());
+    assert_eq!(evidence.timeout_ms, Some(60_000));
 }

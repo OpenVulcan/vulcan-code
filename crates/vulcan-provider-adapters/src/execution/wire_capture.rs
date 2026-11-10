@@ -2,6 +2,7 @@
 //! 真实供应商分派的有界无秘密请求与响应捕获。
 
 use super::ProviderExecutionFailure;
+use super::failure::TransportFailureEvidence;
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -118,6 +119,15 @@ pub struct ProviderWireResponseCapture {
     /// Controlled failure diagnostic paired with `failure_stage`.
     /// 与 `failure_stage` 配对的受控失败诊断。
     pub failure_message: Option<String>,
+    /// Stable phase label recorded only when the transport attempt stopped before its first byte.
+    /// 仅在传输尝试在其首字节之前中断时记录的稳定阶段标签。
+    pub transport_failure_phase: Option<String>,
+    /// Bounded ordered transport cause chain recorded only for a stopped transport attempt.
+    /// 仅在传输尝试中断时记录的有序受限传输原因链。
+    pub transport_failure_causes: Option<Vec<String>>,
+    /// Registered bound in milliseconds recorded only when that bound ended the attempt.
+    /// 仅在已登记时限结束本次尝试时记录的时限毫秒数。
+    pub transport_failure_timeout_ms: Option<u64>,
     /// SHA-256 of every raw payload byte received, including bytes beyond the retained body cap.
     /// 所有已接收原始载荷字节的 SHA-256，包括超出正文保留上限的字节。
     pub body_sha256: String,
@@ -217,6 +227,9 @@ impl ProviderWireResponseCaptureGuard {
             normalized_tool_call_abort: None,
             failure_stage: None,
             failure_message: None,
+            transport_failure_phase: None,
+            transport_failure_causes: None,
+            transport_failure_timeout_ms: None,
             body_sha256: String::new(),
         });
         let body_hasher = capture.as_ref().map(|_| Sha256::new());
@@ -373,6 +386,23 @@ impl ProviderWireResponseCaptureGuard {
         {
             capture.failure_stage = Some(stage.to_string());
             capture.failure_message = Some(failure.error.message.clone());
+        }
+    }
+
+    /// Records the first bounded transport-failure evidence without changing Provider retry semantics.
+    /// 记录首个受限传输失败证据，且不改变 Provider 重试语义。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `evidence` is the secret-safe phase, cause chain, and bound collected from the stopped attempt.
+    /// `evidence` 是从中断尝试中收集的无秘密阶段、原因链与时限。
+    pub(super) fn observe_transport_failure(&mut self, evidence: &TransportFailureEvidence) {
+        if let Some(capture) = self.capture.as_mut()
+            && capture.transport_failure_phase.is_none()
+        {
+            capture.transport_failure_phase = Some(evidence.phase.as_str().to_string());
+            capture.transport_failure_causes = Some(evidence.causes.clone());
+            capture.transport_failure_timeout_ms = evidence.timeout_ms;
         }
     }
 

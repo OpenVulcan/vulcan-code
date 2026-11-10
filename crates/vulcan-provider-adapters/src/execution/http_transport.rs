@@ -2,8 +2,9 @@
 //! 不可变 HTTP 流式执行与解析前线路诊断。
 
 use super::failure::{
-    http_failure, http_send_transport_failure, llm_core_protocol_failure, protocol_failure,
-    redact_exact_credential, stream_completion_failure, stream_idle_timeout_failure,
+    http_failure, http_send_failure_evidence, http_send_transport_failure,
+    llm_core_protocol_failure, protocol_failure, redact_exact_credential,
+    response_headers_timeout_evidence, stream_completion_failure, stream_idle_timeout_failure,
     stream_protocol_failure, stream_transport_failure, transport_failure,
 };
 use super::framing::IncrementalFrameParser;
@@ -124,18 +125,22 @@ impl ProviderExecutionClient {
             )
             .await
             .map_err(|_| {
+                let timeout_ms = transport.response_headers_timeout_ms;
                 let failure = transport_failure(format!(
-                    "Provider request to `{url}` exceeded the registered {} ms response-header timeout.",
-                    transport.response_headers_timeout_ms
+                    "Provider request to `{url}` exceeded the registered {timeout_ms} ms response-header timeout."
                 ));
+                wire_response_capture
+                    .observe_transport_failure(&response_headers_timeout_evidence(timeout_ms));
                 wire_response_capture.observe_failure("dispatch", &failure);
                 failure
             })?
             .map_err(|error| {
+                let evidence = http_send_failure_evidence(&error);
                 let failure = http_send_transport_failure(
                     &error,
                     format!("Provider request to `{url}` failed: {error}"),
                 );
+                wire_response_capture.observe_transport_failure(&evidence);
                 wire_response_capture.observe_failure("dispatch", &failure);
                 failure
             })?;
