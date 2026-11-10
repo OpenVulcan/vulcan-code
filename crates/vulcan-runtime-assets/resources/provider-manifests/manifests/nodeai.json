@@ -1,10 +1,10 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "nodeai",
-  "revision": 8,
-  "published_at": "2026-11-08T06:25:07Z",
+  "revision": 9,
+  "published_at": "2026-11-10T08:17:06Z",
   "engine_contract": {
-    "minimum_manifest_engine": 1,
+    "minimum_manifest_engine": 4,
     "required_protocol_profiles": [
       "openai-responses.v1",
       "anthropic-messages.v1"
@@ -21,7 +21,7 @@
   "display": {
     "name": "NODEAI",
     "category": "relay",
-    "credential_directory_visibility": "pinned_onboarding",
+    "credential_directory_visibility": "existing_accounts_only",
     "promotion": {
       "signup_url": "https://nodeai.cc/register",
       "referral_url": "https://nodeai.cc/register?aff=ZP8C2RWW64D7",

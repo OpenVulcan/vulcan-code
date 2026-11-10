@@ -1161,6 +1161,11 @@ node scripts/provider-manifests-refresh.mjs            # 加 --dry-run 只列计
 目录与介绍卡上的注册入口；无合作关系的供应商使用 `partnership_kind: "none"` 与中性披露键，不得
 填写 `referral_url`。
 
+`display.credential_directory_visibility: "existing_accounts_only"` 需要 Manifest 引擎 4。
+仅在客户端存在该供应商的已保存账号时，设置目录和诊断才显示该供应商。模型服务显示不稳定风险标记，
+并省略公开推广入口。已有账号、模型和执行路由按原声明管理。随包的显示限制同样应用于已验证的
+远端与缓存清单，保留这些清单的执行声明。
+
 发布门禁脚本：
 
 ```powershell

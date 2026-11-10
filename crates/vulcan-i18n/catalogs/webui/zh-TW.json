@@ -3627,6 +3627,7 @@
   "settings.modelServices.head.protocols": "協定",
   "settings.modelServices.head.entries": "接入入口",
   "settings.modelServices.head.details": "技術詳情",
+  "settings.modelServices.providerUnstable": "供應商不穩定，不建議繼續使用",
   "settings.modelServices.section.accounts": "帳號",
   "settings.modelServices.section.models": "模型",
   "settings.modelServices.scope.label": "帳號範圍",

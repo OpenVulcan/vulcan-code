@@ -56,6 +56,9 @@ pub enum CredentialDirectoryVisibility {
     /// Keeps a provider-owned onboarding entry visible without creating a fake credential.
     /// 在不创建虚假凭据的情况下固定显示供应商引导入口。
     PinnedOnboarding,
+    /// Hides onboarding and marks an unstable provider that already has a saved account.
+    /// 隐藏接入引导，并为已有账号的不稳定供应商标记风险。
+    ExistingAccountsOnly,
 }
 
 /// Identifies one service family a provider offers, shown as a tag in the provider directory.

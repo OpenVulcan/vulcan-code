@@ -2,7 +2,9 @@
 //! 供应商 Manifest 同步、暂存发布与取消补偿。
 
 use std::sync::Arc;
-use vulcan_provider_adapters::{PersistedAiConfiguration, PublicAiRuntime};
+use vulcan_provider_adapters::{
+    CredentialDirectoryVisibility, PersistedAiConfiguration, PublicAiRuntime,
+};
 use vulcan_service_api::ServiceEventEmitter;
 
 use super::{
@@ -775,8 +777,32 @@ pub(crate) async fn service_get_provider_manifest_status(
     // new configuration before publishing its matching model-catalog generation.
     // configurationGuard 关闭设置事务先安装新配置、后发布配对模型目录代际的独立竞争窗口。
     let _configuration_guard = begin_public_ai_configuration_transaction().await;
+    // Read account membership under the same guards used to assemble manifest diagnostics.
+    // 在组装清单诊断的同一组保护锁内读取账号归属。
+    let configuration = runtime
+        .configuration_snapshot()
+        .map_err(bounded_provider_manifest_rpc_error)?;
+    // Use the effective manifest policy, including any reviewed bundled restriction on cached layers.
+    // 使用生效清单策略，包括对缓存层生效的随包限制。
+    let providers = runtime
+        .effective_providers(&configuration)
+        .map_err(bounded_provider_manifest_rpc_error)?;
     service
         .provider_manifest_status_all(runtime.as_ref())
+        .map(|mut statuses| {
+            statuses.retain(|status| {
+                providers
+                    .provider(&status.provider_id)
+                    .is_none_or(|provider| {
+                        provider.credential_directory_visibility
+                            != CredentialDirectoryVisibility::ExistingAccountsOnly
+                            || configuration
+                                .connection_graph
+                                .has_provider_connection(&provider.id)
+                    })
+            });
+            statuses
+        })
         .map_err(bounded_provider_manifest_rpc_error)
 }
 

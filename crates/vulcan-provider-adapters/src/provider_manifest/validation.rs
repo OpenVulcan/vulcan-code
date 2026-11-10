@@ -50,6 +50,9 @@ const ADDITIVE_TOTAL_USAGE_DERIVATION_MIN_ENGINE: u32 = 2;
 /// Minimum manifest engine supporting independent reasoning in normalized complete output.
 /// 支持将独立思考归一化到完整输出的最低 Manifest 引擎版本。
 const DISJOINT_REASONING_USAGE_MIN_ENGINE: u32 = 3;
+/// Minimum manifest engine supporting the existing-accounts-only directory policy.
+/// 支持仅显示既有账号目录策略的最低 Manifest 引擎版本。
+const EXISTING_ACCOUNTS_ONLY_MIN_ENGINE: u32 = 4;
 /// Sensitive response headers that may never be reclassified as provider request identifiers.
 /// 绝不能被重新归类为供应商请求标识的敏感响应头。
 const FORBIDDEN_PROVIDER_REQUEST_ID_RESPONSE_HEADERS: &[&str] = &[
@@ -342,6 +345,16 @@ fn validate_engine_contract(
     registry: &EnginePrimitiveRegistry,
     errors: &mut Vec<ManifestValidationError>,
 ) {
+    if manifest.display.credential_directory_visibility
+        == super::ManifestDirectoryVisibility::ExistingAccountsOnly
+        && manifest.engine_contract.minimum_manifest_engine < EXISTING_ACCOUNTS_ONLY_MIN_ENGINE
+    {
+        errors.push(ManifestValidationError::new(
+            "engine_contract_missing_directory_visibility_version",
+            "$.display.credential_directory_visibility",
+            format!("existing_accounts_only requires manifest engine {EXISTING_ACCOUNTS_ONLY_MIN_ENGINE} or newer"),
+        ));
+    }
     let contract = &manifest.engine_contract;
     validate_engine_requirement_list(
         contract.required_protocol_profiles.as_slice(),

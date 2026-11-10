@@ -11,13 +11,13 @@ use vulcan_provider_adapters::{
     AccountUsageQueryKind, ActiveAiModelSelection, CUSTOM_PROVIDER_DEFAULT_CONTEXT_LIMIT,
     CUSTOM_PROVIDER_DEFAULT_OUTPUT_LIMIT, CatalogDiscoveryStatus, ConnectionModelCatalog,
     ContextCompactionWindowConfiguration, CredentialBillingKind, CredentialConnection,
-    CredentialMode, CustomModelDefinition, CustomModelProtocolPreference,
-    CustomModelTemplateDecision, CustomProviderManifestFailure, CustomProviderModelDefaults,
-    DeclaredProviderToolTemplateModel, InferenceProfile, InternalModelOverrides,
-    ManifestSourceLayer, MediaUnderstandingBackendOptions, MediaUnderstandingBackendSelection,
-    ModelCapabilityOverrides, PersistedAiConfiguration, ProviderDescriptor, ProviderRegistry,
-    ProviderToolCapabilityKind, ProviderToolTarget, ProviderToolTargetSelection, PublicAiRuntime,
-    PublicAiRuntimeSettingsCatalogSnapshot,
+    CredentialDirectoryVisibility, CredentialMode, CustomModelDefinition,
+    CustomModelProtocolPreference, CustomModelTemplateDecision, CustomProviderManifestFailure,
+    CustomProviderModelDefaults, DeclaredProviderToolTemplateModel, InferenceProfile,
+    InternalModelOverrides, ManifestSourceLayer, MediaUnderstandingBackendOptions,
+    MediaUnderstandingBackendSelection, ModelCapabilityOverrides, PersistedAiConfiguration,
+    ProviderDescriptor, ProviderRegistry, ProviderToolCapabilityKind, ProviderToolTarget,
+    ProviderToolTargetSelection, PublicAiRuntime, PublicAiRuntimeSettingsCatalogSnapshot,
 };
 
 use super::{
@@ -837,13 +837,13 @@ pub(super) fn build_public_ai_settings_snapshot(
             .providers()
             .into_iter()
             .filter(|provider| {
-                provider.credential_directory_visibility
-                    != vulcan_provider_adapters::CredentialDirectoryVisibility::CoreAccount
-                    || configuration
-                        .connection_graph
-                        .connections
-                        .values()
-                        .any(|connection| connection.provider_id == provider.id)
+                !matches!(
+                    provider.credential_directory_visibility,
+                    CredentialDirectoryVisibility::CoreAccount
+                        | CredentialDirectoryVisibility::ExistingAccountsOnly
+                ) || configuration
+                    .connection_graph
+                    .has_provider_connection(&provider.id)
             })
             .cloned()
             .collect(),

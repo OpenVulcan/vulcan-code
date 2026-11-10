@@ -188,6 +188,9 @@ pub enum ManifestDirectoryVisibility {
     /// Keeps a provider-owned onboarding entry visible.
     /// 固定显示供应商引导入口。
     PinnedOnboarding,
+    /// Limits the provider directory to existing accounts and marks provider instability.
+    /// 仅在有既有账号时显示供应商，并标记供应商不稳定。
+    ExistingAccountsOnly,
 }
 
 /// Public registration and referral metadata declared by one manifest.

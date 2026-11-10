@@ -3,6 +3,91 @@
 
 use super::*;
 
+/// An unstable provider is only visible in settings while it owns a saved client account.
+/// 不稳定的供应商仅在本客户端有已保存账号时出现在设置中。
+#[test]
+fn unstable_provider_existing_accounts_only_visibility() {
+    // Use the bundled registry and a synthetic account so no credential lookup or network runs.
+    // 使用随包注册表和合成账号，避免读取真实凭据或访问网络。
+    let runtime = PublicAiRuntime::unavailable().expect("offline runtime");
+    // Start with the same empty configuration as an unconfigured client.
+    // 从未配置客户端的空配置开始。
+    let mut configuration = PersistedAiConfiguration::default();
+    // Resolve the stable NodeAI account route from its manifest.
+    // 从 NodeAI 清单解析稳定的账号路由。
+    let providers = runtime.effective_providers(&configuration).unwrap();
+    let provider = providers
+        .provider("nodeai")
+        .expect("bundled NodeAI provider");
+    let entry = provider
+        .service_entries
+        .iter()
+        .find(|entry| entry.id == "chatgpt")
+        .expect("ChatGPT entry");
+    let profile = entry
+        .credential_profiles
+        .iter()
+        .find(|profile| profile.id == "api-key")
+        .expect("API Key profile");
+    // Confirm the directory omits NodeAI before any connection exists.
+    // 确认尚无连接时目录省略 NodeAI。
+    let empty = build_public_ai_settings_snapshot(&runtime, &configuration).unwrap();
+    assert!(empty.providers.iter().all(|item| item.id != provider.id));
+    // Preserve the complete saved account identity when the provider becomes visible.
+    // 供应商可见后保留已保存账号的完整身份。
+    let connection = CredentialConnection {
+        id: String::from("nodeai-fixture"),
+        provider_id: provider.id.clone(),
+        service_entry_id: entry.id.clone(),
+        credential_profile_id: profile.id.clone(),
+        credential_mode: profile.credential_mode,
+        credential_id: String::from("fixture-credential"),
+        display_name: String::from("Fixture"),
+        secret_reference: String::from("fixture-secret"),
+        management_secret_reference: None,
+        service_origin_override: None,
+    };
+    configuration
+        .connection_graph
+        .add_connection(&providers, connection.clone())
+        .unwrap();
+    runtime
+        .replace_configuration(configuration.clone())
+        .unwrap();
+    // The same snapshot exposes the risk marker and the existing account for management.
+    // 同一份快照同时提供风险标记及可管理的既有账号。
+    let connected = build_public_ai_settings_snapshot(&runtime, &configuration).unwrap();
+    let visible = connected
+        .providers
+        .iter()
+        .find(|item| item.id == provider.id)
+        .expect("configured provider");
+    assert_eq!(
+        visible.credential_directory_visibility,
+        CredentialDirectoryVisibility::ExistingAccountsOnly
+    );
+    assert!(visible.promotion.is_none());
+    assert!(
+        connected
+            .connections
+            .iter()
+            .any(|item| item.id == connection.id)
+    );
+    super::super::connections::remove_connection_from_configuration(
+        &mut configuration,
+        &connection.id,
+        None,
+    )
+    .unwrap();
+    runtime
+        .replace_configuration(configuration.clone())
+        .unwrap();
+    // Removing the last account hides the provider again.
+    // 移除最后一个账号后再次隐藏供应商。
+    let removed = build_public_ai_settings_snapshot(&runtime, &configuration).unwrap();
+    assert!(removed.providers.iter().all(|item| item.id != provider.id));
+}
+
 /// The real settings projection reveals a core system provider only while its global account exists.
 /// 真实设置投影仅在全局账户存在时显示核心系统供应商。
 #[test]

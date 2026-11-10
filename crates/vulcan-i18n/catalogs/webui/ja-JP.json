@@ -3627,6 +3627,7 @@
   "settings.modelServices.head.protocols": "プロトコル",
   "settings.modelServices.head.entries": "接続先",
   "settings.modelServices.head.details": "技術情報",
+  "settings.modelServices.providerUnstable": "プロバイダーが不安定です。継続利用は推奨されません。",
   "settings.modelServices.section.accounts": "アカウント",
   "settings.modelServices.section.models": "モデル",
   "settings.modelServices.scope.label": "アカウントの範囲",

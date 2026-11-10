@@ -42,7 +42,8 @@
    `transport` 必填，标识由名称派生，重名拒绝），带 `server_id` 时更新，省略的字段保持原值；`remove` 移除。
    新服务器缺省为停用，只有显式 `enabled: true` 才启用。在 stdio 与 http/sse 之间切换时清空另一族字段并提示
    `drops_secret_fields`。已启用服务器的工具从下一轮起进入会话（工具清单按执行快照）。
-2. **`provider_config`。** `list` 返回接受 API Key 的供应商（含服务入口与凭据档）和全部连接（启用、待验证、默认）；
+2. **`provider_config`。** `list` 返回接受 API Key 的供应商（含服务入口与凭据档）和全部连接（启用、待验证、默认）。
+   仅限既有账号的供应商在本地保存了该供应商的连接时才列出。
    `add_connection` 为内置供应商添加 API Key 连接，入口或凭据档只有一个时可省略；`add_custom_provider` 添加兼容
    OpenAI、Anthropic 或 Gemini 的供应商及首个连接，认证缺省为 Bearer；`model_discovery_protocol`
    独立选择唯一目录格式（`open_ai`、`anthropic`、`gemini`，默认 `open_ai`），目录使用共享地址与认证，

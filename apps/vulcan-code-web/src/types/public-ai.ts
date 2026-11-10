@@ -163,7 +163,7 @@ export type PublicAiProviderCategory = "unclassified" | "official" | "cloud_maas
 
 // PublicAiCredentialDirectoryVisibility controls zero-credential onboarding visibility.
 // PublicAiCredentialDirectoryVisibility 控制零凭据引导入口的可见性。
-export type PublicAiCredentialDirectoryVisibility = "configured_only" | "pinned_onboarding" | "core_account";
+export type PublicAiCredentialDirectoryVisibility = "configured_only" | "pinned_onboarding" | "core_account" | "existing_accounts_only";
 
 // PublicAiProviderPartnershipKind identifies the disclosed commercial relationship.
 // PublicAiProviderPartnershipKind 标识已披露的商业合作关系。

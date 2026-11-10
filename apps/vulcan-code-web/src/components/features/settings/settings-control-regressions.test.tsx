@@ -3,7 +3,7 @@ import * as React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { I18nProvider } from "@/i18n";
+import { I18nProvider, readLocaleMessage } from "@/i18n";
 import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import { PublicAiModelCapabilityDialog } from "@/components/features/settings/public-ai-model-capability-dialog";
 import { PublicAiConnectionDialog } from "@/components/features/settings/provider-list-settings";
@@ -181,6 +181,24 @@ it("does not restart OAuth commit when the parent callback changes and locks clo
   await act(async () => resolve(snapshot));
   expect(firstSaved).not.toHaveBeenCalled();
   expect(latestSaved).toHaveBeenCalledExactlyOnceWith(snapshot);
+});
+
+it("marks an unstable configured provider in the rail and workspace", async () => {
+  // Use a saved account to exercise the configured provider row and its selected workspace.
+  // 使用已保存账号覆盖已配置供应商行及其选中的工作区。
+  const snapshot = publicAiSettingsWithInvalidDefaultFixture();
+  const provider = snapshot.providers.find((item) =>
+    snapshot.connections.some((connection) => connection.provider_id === item.id)
+  )!;
+  provider.credential_directory_visibility = "existing_accounts_only";
+  snapshot.providers = [provider];
+  service.load.mockResolvedValue(snapshot);
+  await render(<ModelServicesArea />);
+  // Compare against the catalog entry so copy edits can evolve independently of the behavior.
+  // 通过目录项核对标记，让文案可独立于行为调整。
+  const warning = readLocaleMessage("en-US", "settings.modelServices.providerUnstable");
+  expect(host.querySelector('.vk-ms-head-title [data-variant="warning"]')?.textContent).toBe(warning);
+  expect(host.querySelector('.vk-ms-rail-name [role="img"]')?.getAttribute("aria-label")).toBe(warning);
 });
 
 it("keeps a deleting account dialog open and editable after a rejected deletion", async () => {

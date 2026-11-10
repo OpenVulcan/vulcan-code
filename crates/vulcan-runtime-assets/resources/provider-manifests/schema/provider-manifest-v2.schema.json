@@ -118,7 +118,8 @@
           "enum": [
             "configured_only",
             "pinned_onboarding",
-            "core_account"
+            "core_account",
+            "existing_accounts_only"
           ]
         },
         "promotion": {

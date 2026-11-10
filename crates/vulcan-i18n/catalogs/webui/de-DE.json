@@ -3627,6 +3627,7 @@
   "settings.modelServices.head.protocols": "Protokolle",
   "settings.modelServices.head.entries": "Zugangspunkte",
   "settings.modelServices.head.details": "Technische Details",
+  "settings.modelServices.providerUnstable": "Der Anbieter ist instabil. Von der weiteren Nutzung wird abgeraten.",
   "settings.modelServices.section.accounts": "Konten",
   "settings.modelServices.section.models": "Modelle",
   "settings.modelServices.scope.label": "Kontoumfang",

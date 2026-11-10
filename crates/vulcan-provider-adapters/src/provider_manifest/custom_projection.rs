@@ -128,6 +128,9 @@ pub fn project_custom_descriptor_manifest(
                 CredentialDirectoryVisibility::PinnedOnboarding => {
                     ManifestDirectoryVisibility::PinnedOnboarding
                 }
+                CredentialDirectoryVisibility::ExistingAccountsOnly => {
+                    ManifestDirectoryVisibility::ExistingAccountsOnly
+                }
             },
             promotion: provider
                 .promotion

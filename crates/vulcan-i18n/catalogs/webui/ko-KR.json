@@ -3627,6 +3627,7 @@
   "settings.modelServices.head.protocols": "프로토콜",
   "settings.modelServices.head.entries": "접속 경로",
   "settings.modelServices.head.details": "기술 정보",
+  "settings.modelServices.providerUnstable": "공급자가 불안정합니다. 계속 사용하지 않는 것이 좋습니다.",
   "settings.modelServices.section.accounts": "계정",
   "settings.modelServices.section.models": "모델",
   "settings.modelServices.scope.label": "계정 범위",

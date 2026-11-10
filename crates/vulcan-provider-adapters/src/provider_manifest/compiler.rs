@@ -1561,9 +1561,18 @@ fn compile_descriptor(
             super::ManifestDirectoryVisibility::PinnedOnboarding => {
                 CredentialDirectoryVisibility::PinnedOnboarding
             }
+            super::ManifestDirectoryVisibility::ExistingAccountsOnly => {
+                CredentialDirectoryVisibility::ExistingAccountsOnly
+            }
         },
         credential_registration: manifest.credential_registration,
-        promotion: manifest.display.promotion.as_ref().map(compile_promotion),
+        promotion: if manifest.display.credential_directory_visibility
+            == super::ManifestDirectoryVisibility::ExistingAccountsOnly
+        {
+            None
+        } else {
+            manifest.display.promotion.as_ref().map(compile_promotion)
+        },
         directory_rank: manifest.display.directory_rank,
         service_tags: compile_service_tags(manifest),
         service_entries,

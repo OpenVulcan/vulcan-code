@@ -291,6 +291,7 @@ button.vk-ms-alert:focus-visible { outline: var(--vk-focus-w) solid var(--vk-sig
 }
 
 .vk-ms-rail-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; min-width: 0; }
+.vk-ms-rail-name > .vk-badge { margin-inline-start: 4px; vertical-align: middle; }
 .vk-ms-rail-sub:empty { display: none; }
 
 .vk-ms-rail-meta {

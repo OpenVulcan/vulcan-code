@@ -1,11 +1,12 @@
 import * as React from "react"
-import { ExternalLink, Info, KeyRound, ListTree, MoreHorizontal, Pencil, Stethoscope, Trash2, WandSparkles } from "lucide-react"
+import { ExternalLink, Info, KeyRound, ListTree, MoreHorizontal, Pencil, Stethoscope, Trash2, TriangleAlert, WandSparkles } from "lucide-react"
 
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
 import { protocolDisplayName } from "@/components/features/settings/provider-management-settings/protocol-display-name"
 import { ProviderModelCatalog } from "@/components/features/settings/provider-model-settings"
 import { isFunctionalProvider } from "@/components/features/settings/provider-ordering"
 import { localizedProviderDescription, localizedProviderName } from "@/components/features/settings/provider-presentation"
+import { Badge } from "@/ui-kit/primitives/badge"
 import { Button } from "@/ui-kit/primitives/button"
 import {
   DropdownMenu,
@@ -197,6 +198,11 @@ function WorkspaceHeader(props: ProviderWorkspaceProps & { showDetails: boolean;
             {category ? <span className="vk-ms-chip" data-variant="category">{category}</span> : null}
             {provider.kind === "custom" ? <span className="vk-ms-chip" data-variant="category">{t("settings.modelServices.category.custom")}</span> : null}
             <AffiliateChip provider={provider} />
+            {provider.credential_directory_visibility === "existing_accounts_only" ? (
+              <Badge variant="warning">
+                <TriangleAlert aria-hidden="true" />{t("settings.modelServices.providerUnstable")}
+              </Badge>
+            ) : null}
           </div>
           <p>
             {localizedProviderDescription(provider.id, t)}

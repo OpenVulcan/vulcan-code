@@ -93,6 +93,14 @@ impl RuntimeConnectionCatalogs {
 }
 
 impl PersistedConnectionGraph {
+    /// Returns whether `provider_id` has a saved connection, including disabled accounts.
+    /// 返回 `provider_id` 是否有已保存的连接，包含已停用账号。
+    pub fn has_provider_connection(&self, provider_id: &str) -> bool {
+        self.connections
+            .values()
+            .any(|connection| connection.provider_id == provider_id)
+    }
+
     /// Adds a validated connection and assigns the first provider default.
     /// 添加已校验连接，并为首个连接设置供应商默认值。
     ///

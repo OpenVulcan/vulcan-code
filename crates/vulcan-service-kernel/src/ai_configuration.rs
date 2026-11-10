@@ -634,6 +634,11 @@ fn list_providers(state: &SharedServiceBridgeState) -> Result<ConfigurationOutco
         .into_iter()
         .filter(|provider| {
             provider.credential_directory_visibility != CredentialDirectoryVisibility::CoreAccount
+                && (provider.credential_directory_visibility
+                    != CredentialDirectoryVisibility::ExistingAccountsOnly
+                    || configuration
+                        .connection_graph
+                        .has_provider_connection(&provider.id))
         })
         .filter_map(|provider| {
             let entries = api_key_entries(&provider.service_entries);

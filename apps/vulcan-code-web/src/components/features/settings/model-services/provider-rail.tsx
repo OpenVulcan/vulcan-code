@@ -1,9 +1,10 @@
 import * as React from "react"
-import { ChevronDown, ChevronUp, GripVertical, Plus, Search } from "lucide-react"
+import { ChevronDown, ChevronUp, GripVertical, Plus, Search, TriangleAlert } from "lucide-react"
 
 import { ProviderIcon } from "@/components/features/settings/provider-icon"
 import { localizedProviderName } from "@/components/features/settings/provider-presentation"
 import { PageEmptyState } from "@/components/page"
+import { Badge } from "@/ui-kit/primitives/badge"
 import { Button } from "@/ui-kit/primitives/button"
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/ui-kit/primitives/hover-card"
 import { Input } from "@/ui-kit/primitives/input"
@@ -245,7 +246,14 @@ function RailRowButton(props: {
         >
           <ProviderIcon category={props.provider.category} size={28} providerId={props.provider.id} />
           <span className="vk-ms-rail-copy">
-            <span className="vk-ms-rail-name" title={props.name}>{props.name}</span>
+            <span className="vk-ms-rail-name" title={props.name}>
+              {props.name}
+              {props.provider.credential_directory_visibility === "existing_accounts_only" ? (
+                <Badge title={t("settings.modelServices.providerUnstable")} variant="warning">
+                  <TriangleAlert aria-label={t("settings.modelServices.providerUnstable")} role="img" />
+                </Badge>
+              ) : null}
+            </span>
             {/* Configured rows show health and counts on their second line; their service tags stay in the header and filter. */}
             {/* 已配置行第二行显示健康状态与数量；其服务标签保留在详情标题与筛选中。 */}
             {props.configured ? null : <span className="vk-ms-rail-sub">

@@ -3627,6 +3627,7 @@
   "settings.modelServices.head.protocols": "Protocols",
   "settings.modelServices.head.entries": "Entries",
   "settings.modelServices.head.details": "Technical details",
+  "settings.modelServices.providerUnstable": "This provider is unstable. Continued use is not recommended.",
   "settings.modelServices.section.accounts": "Accounts",
   "settings.modelServices.section.models": "Models",
   "settings.modelServices.scope.label": "Account scope",

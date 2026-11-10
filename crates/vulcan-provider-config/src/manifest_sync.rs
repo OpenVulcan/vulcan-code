@@ -1418,7 +1418,7 @@ fn verify_system_manifest_text_against_bundled_classified(
     std::sync::Arc<vulcan_provider_adapters::ResolvedProviderManifest>,
     ProviderManifestVerificationError,
 > {
-    let compiled = vulcan_provider_adapters::compile_manifest_text_with_layer(
+    let mut compiled = vulcan_provider_adapters::compile_manifest_text_with_layer(
         text,
         vulcan_provider_adapters::ManifestOwnership::System,
         source_layer,
@@ -1462,7 +1462,9 @@ fn verify_system_manifest_text_against_bundled_classified(
             format!("Provider `{provider_id}` bundled trust baseline is not UTF-8: {error}"),
         )
     })?;
-    vulcan_provider_adapters::compile_manifest_text_with_layer(
+    // Keep the reviewed presentation policy alongside the remote execution declaration.
+    // 将审核过的显示策略与远端执行声明分开保留。
+    let bundled_compiled = vulcan_provider_adapters::compile_manifest_text_with_layer(
         bundled_text,
         vulcan_provider_adapters::ManifestOwnership::System,
         vulcan_provider_adapters::ManifestSourceLayer::Bundled,
@@ -1506,6 +1508,15 @@ fn verify_system_manifest_text_against_bundled_classified(
             error,
         )
     })?;
+    // Cached and remote manifests keep their routes while respecting the bundled directory restriction.
+    // 缓存和远端清单保留各自路由，同时遵循随包目录的显示限制。
+    if bundled_compiled.descriptor.credential_directory_visibility
+        == vulcan_provider_adapters::CredentialDirectoryVisibility::ExistingAccountsOnly
+    {
+        compiled.descriptor.credential_directory_visibility =
+            bundled_compiled.descriptor.credential_directory_visibility;
+        compiled.descriptor.promotion = bundled_compiled.descriptor.promotion;
+    }
     Ok(std::sync::Arc::new(compiled))
 }
 
@@ -2288,6 +2299,49 @@ mod tests {
         let error = verify_and_parse_index(&index_bytes, &signature, &[trusted, alias], now)
             .expect_err("duplicate public keys must be rejected");
         assert!(error.contains("more than one"), "{error}");
+    }
+
+    /// A cached manifest keeps its execution routes and inherits the bundled account visibility.
+    /// 缓存清单保留执行路由并继承随包账号可见性。
+    #[test]
+    fn cached_manifest_inherits_existing_accounts_only_visibility() {
+        use vulcan_provider_adapters::{
+            CredentialDirectoryVisibility, ManifestDirectoryVisibility, ManifestOwnership,
+            ManifestSourceLayer, ProviderManifestV1,
+        };
+
+        // Simulate the previously published presentation with the same signed route declaration.
+        // 模拟此前发布的显示状态，并保留相同的签名路由声明。
+        let bytes = vulcan_provider_adapters::read_bundled_provider_manifest_bytes("nodeai")
+            .expect("bundled NodeAI manifest");
+        let mut previous: ProviderManifestV1 = serde_json::from_slice(&bytes).unwrap();
+        previous.display.credential_directory_visibility =
+            ManifestDirectoryVisibility::PinnedOnboarding;
+        previous.engine_contract.minimum_manifest_engine = 1;
+        let text = serde_json::to_string(&previous).unwrap();
+        // Compare the cached execution descriptor before and after applying the bundled display policy.
+        // 比较随包显示策略应用前后的缓存执行描述。
+        let original = vulcan_provider_adapters::compile_manifest_text_with_layer(
+            &text,
+            ManifestOwnership::System,
+            ManifestSourceLayer::Active,
+        )
+        .unwrap();
+        let resolved = verify_system_manifest_text_against_bundled_classified(
+            "nodeai",
+            &text,
+            ManifestSourceLayer::Active,
+        )
+        .unwrap();
+        assert_eq!(
+            resolved.descriptor.credential_directory_visibility,
+            CredentialDirectoryVisibility::ExistingAccountsOnly
+        );
+        assert!(resolved.descriptor.promotion.is_none());
+        assert_eq!(
+            resolved.descriptor.service_entries,
+            original.descriptor.service_entries
+        );
     }
 
     /// Verifies remote manifests cannot expand bundled hosts, credentials, primitives, or actions.

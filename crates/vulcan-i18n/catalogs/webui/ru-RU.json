@@ -3627,6 +3627,7 @@
   "settings.modelServices.head.protocols": "Протоколы",
   "settings.modelServices.head.entries": "Точки доступа",
   "settings.modelServices.head.details": "Технические сведения",
+  "settings.modelServices.providerUnstable": "Поставщик работает нестабильно. Продолжать использование не рекомендуется.",
   "settings.modelServices.section.accounts": "Аккаунты",
   "settings.modelServices.section.models": "Модели",
   "settings.modelServices.scope.label": "Область аккаунта",
