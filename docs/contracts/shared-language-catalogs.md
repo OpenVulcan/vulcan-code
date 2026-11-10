@@ -71,6 +71,8 @@
    `scripts/release-notes-github.mjs` 把 `en-US.md` 转为纯 Markdown：行组件变为列表，`ui-callout` 变为 GitHub 提示块，
    `ui-tabs`/`ui-columns` 各节变为标题。没有 GitHub 形式的组件直接报错；`release-notes-check.mjs` 对每个发布执行这一转换，
    所以英文说明中使用新组件前须先在该脚本中补上其转换。
+6. **说明排版。** 首段用一句话概括本版重点，随后按主题分组。用 `ui-checklist` 的「标题＋说明」呈现各项改动，
+   有确切的升级方式或限制时单独放在更新分组。较大的发布可按内容选用其他已有组件。
 
 ## 服务错误消息
 
