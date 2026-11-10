@@ -633,16 +633,7 @@ fn structured_error_matches_retry_keyword(
 /// `true` for request, policy, schema, unsupported-feature, or decoder/protocol failures.
 /// 对请求、策略、Schema、不支持能力或解码/协议失败返回 `true`。
 fn structured_error_is_deterministic_terminal(error: &AiExecutionError) -> bool {
-    if matches!(
-        error.category,
-        AiErrorCategory::Authentication
-            | AiErrorCategory::PermissionDenied
-            | AiErrorCategory::PaymentRequired
-            | AiErrorCategory::InvalidRequest
-            | AiErrorCategory::ContextLengthExceeded
-            | AiErrorCategory::ContentPolicy
-            | AiErrorCategory::Cancelled
-    ) {
+    if provider_error_category_is_deterministic_terminal(error.category) {
         return true;
     }
     error.subcategory.as_deref().is_some_and(|subcategory| {
@@ -657,6 +648,25 @@ fn structured_error_is_deterministic_terminal(error: &AiExecutionError) -> bool 
                 | TERMINAL_TOOL_CALL_STREAM_FAILURE_SUBCATEGORY
         )
     })
+}
+
+/// Returns whether the Provider category forbids automatic replay in both transport and compaction.
+/// 返回该供应商类别是否在传输与压缩两层都禁止自动重放。
+/// `category` is the normalized terminal classification. A true result requires no display-text check.
+/// `category` 是规范终态分类。返回 true 时无须检查展示文本。
+pub(super) const fn provider_error_category_is_deterministic_terminal(
+    category: AiErrorCategory,
+) -> bool {
+    matches!(
+        category,
+        AiErrorCategory::Authentication
+            | AiErrorCategory::PermissionDenied
+            | AiErrorCategory::PaymentRequired
+            | AiErrorCategory::InvalidRequest
+            | AiErrorCategory::ContextLengthExceeded
+            | AiErrorCategory::ContentPolicy
+            | AiErrorCategory::Cancelled
+    )
 }
 
 /// Recognizes only the registered Codex overload markers that are safe to replay before semantic output.

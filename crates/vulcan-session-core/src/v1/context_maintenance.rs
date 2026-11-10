@@ -26,6 +26,62 @@ pub struct ManualContextMaintenanceSource {
     pub(crate) event_revisions: Vec<(Seq, u64)>,
 }
 
+impl ManualContextMaintenanceSource {
+    /// Returns the session settings captured with this exact summary source.
+    /// 返回与本次摘要来源一同捕获的会话设置。
+    pub fn session_config(&self) -> &super::config::SessionConfig {
+        &self.metadata.config
+    }
+
+    /// Binds the captured pending selection to an admitted manual owner, if a selection exists.
+    /// 将来源中捕获的待生效选择绑定到已准入的手动所有者，缺省时返回 None。
+    pub fn bind_pending_request(
+        &self,
+        owner: ManualCompactionRequestOwner,
+    ) -> Option<ManualCompactionPendingRequest> {
+        Some(ManualCompactionPendingRequest {
+            owner,
+            pending: self.metadata.config.pending_request.clone()?,
+            session_id: self.metadata.session_id.clone(),
+            segment_generation: self.metadata.segment_generation,
+            source_revision: self.metadata.document_revision,
+        })
+    }
+}
+
+/// Identifies the standalone or borrowed execution allowed to use the pending summary route.
+/// 标识获准使用待生效摘要路由的独立或借用执行。
+#[derive(Debug, Clone)]
+pub enum ManualCompactionRequestOwner {
+    /// Execution identity of a durably admitted standalone summary.
+    /// 已可靠准入的独立摘要执行身份。
+    Standalone(CollaborationExecutionId),
+    /// Core-issued proof that an idle business turn was borrowed.
+    /// Core 签发的空闲业务回合借用证明。
+    Borrowed(ManualContextCompactionBorrow),
+}
+
+/// In-memory authority for a manual summary to use the captured pending request.
+/// 允许手动摘要使用已捕获待生效请求的内存凭据。
+#[derive(Debug, Clone)]
+pub struct ManualCompactionPendingRequest {
+    /// The admitted manual execution that owns this selection.
+    /// 持有该选择的已准入手动执行。
+    pub(crate) owner: ManualCompactionRequestOwner,
+    /// The exact pending configuration captured with the summary source.
+    /// 与摘要来源一同捕获的精确待生效配置。
+    pub(crate) pending: super::config::PendingRequestConfig,
+    /// The document that issued the source snapshot.
+    /// 签发来源快照的文档身份。
+    pub(crate) session_id: String,
+    /// The history generation covered by this authority.
+    /// 本凭据覆盖的历史代次。
+    pub(crate) segment_generation: u64,
+    /// The source revision verified at admission.
+    /// 准入时核验的来源修订。
+    pub(crate) source_revision: u64,
+}
+
 /// In-memory proof that an explicit manual summary may borrow one idle business turn.
 /// 显式手动摘要可借用某个空闲业务回合的内存证明。
 /// The host must retain its exact stream owner; this proof grants no business continuation.
@@ -35,6 +91,9 @@ pub struct ManualContextCompactionBorrow {
     pub(crate) turn_id: TurnId,
     pub(crate) start_seq: Seq,
     pub(crate) segment_generation: u64,
+    /// Durable planning revision admitted for this borrow.
+    /// 为本次借用准入的可靠规划修订。
+    pub(crate) source_revision: u64,
     pub(crate) after_seq: Seq,
     pub(crate) source_compaction_id: Option<CompactionId>,
     pub(crate) run_control: super::collaboration::CollaborationRunControl,

@@ -113,6 +113,11 @@
 
 - 手动 `/compact` 只取得本次摘要请求的执行许可，不授予业务续跑。宿主先排除活动物理执行，
   再按与压缩规划同时捕获的规范来源校验；仅输入框草稿及其记账变化可忽略。
+- 手动压缩从同一规范快照读取压缩历史与已保存的模型选择。待生效的供应商、连接或模型发生切换时，仅为本次摘要冻结新路由与采样配置。
+  服务层在准备媒体前校验当前选择及摘要所有者，Core 在持久化 `ApiStarted` 时再次校验。摘要保留业务租约与待生效选择，
+  下一次正常输入或继续动作仍按原边界应用选择。自动压缩沿用正在准备的业务请求路由。
+- 压缩重试读取结束本次尝试的供应商错误类别。余额不足、鉴权拒绝、无效请求等确定性失败立即终止，
+  界面摘要直接呈现供应商消息，展开错误卡保留请求诊断。
 - 已结束的历史继续使用独立 `ContextMaintenance` 回合。物理空闲但业务仍开放时，手动压缩借用
   原回合的 `turn_id/start_seq/segment_generation`，不关闭、不替换、不重开原业务，也不改写其 Hook 和停止控制。
   活动 API、辅助回合、子会话、专职或归档会话、已有排队/插队输入，以及未结算子任务仍拒绝准入。
@@ -130,8 +135,8 @@
 
 权威入口为 `context_compaction/manual.rs`、`streaming.rs`、`completion.rs` 与
 `vulcan-session-core/src/v1/document/child_execution/maintenance/manual/borrowed.rs`。
-回归见核心 `tests/maintenance/manual/borrowed.rs` 和服务 `context_compaction/manual/tests/borrowed.rs`；
-借用类型不序列化，不增加持久字段，不改变元数据版本。
+回归见核心 `tests/maintenance/manual/borrowed.rs` 和服务 `context_compaction/manual/tests.rs`、`tests/borrowed.rs`；
+借用及待生效路由凭据仅存在于内存，沿用当前持久格式和元数据版本。
 
 ## 首个业务请求前的压缩检查
 

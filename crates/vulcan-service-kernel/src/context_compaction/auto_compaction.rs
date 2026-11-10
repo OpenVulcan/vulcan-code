@@ -268,7 +268,8 @@ async fn maybe_auto_compact_webui_session_with_mode(
         state,
         agent_runtime,
         session_id,
-        Some((request, preparation)),
+        request,
+        preparation,
     )?;
     // preparedPolicy must match the independently lease-validated target without default fallback.
     // preparedPolicy 必须与经租约独立校验的目标一致，不允许回退默认值。
@@ -347,6 +348,7 @@ async fn maybe_auto_compact_webui_session_with_mode(
         &status_message_id,
         &budget_note,
         AUTO_CONTEXT_COMPACTION_TRIGGER,
+        None,
     )
     .await;
     match terminal_result {
@@ -521,6 +523,62 @@ pub(crate) fn webui_context_compaction_plan_from_v1(
     let (snapshot, source) = handle
         .capture_context_compaction_planning_snapshot_with_source()
         .map_err(|error| format!("failed to capture V1 compaction projection: {error}"))?;
+    plan_webui_context_compaction(state, session_id, policy, empty_error, snapshot, source)
+}
+
+/// Plans a manual summary for `session_id` from one durable capture of the model and history.
+/// 从同一次可靠捕获的模型及历史规划 `session_id` 的手动摘要。
+/// `state` and `agent_runtime` resolve the selected session. Returns the plan and its frozen route.
+/// `state` 与 `agent_runtime` 解析所选会话。返回计划及其冻结路由。
+pub(crate) fn plan_manual_webui_context_compaction(
+    state: &SharedServiceBridgeState,
+    agent_runtime: &AgentRuntimeBridge,
+    session_id: SessionId,
+) -> Result<(WebuiContextCompactionPlan, PromptCompactionModelTarget), String> {
+    // One capture prevents a picker change between route resolution and history admission.
+    // 一次捕获避免路由解析与历史准入之间出现选择器变更。
+    let handle =
+        crate::session_goal_lifecycle::registered_session_v1_handle_from_state(state, session_id)?;
+    // Both values carry the same durable revision into planning and manual admission.
+    // 两者将同一可靠修订带入规划及手动准入。
+    let (snapshot, source) = handle
+        .capture_context_compaction_planning_snapshot_with_source()
+        .map_err(|error| format!("failed to capture V1 compaction projection: {error}"))?;
+    // The selected model's context window controls the retained tail.
+    // 所选模型的上下文窗口控制保留尾部。
+    let target = resolve_manual_webui_context_compaction_model_target(
+        state,
+        agent_runtime,
+        session_id,
+        &source,
+    )?;
+    // The plan hands the same source proof to the admitted stream.
+    // 计划将同一来源证明交给已准入的流。
+    let plan = plan_webui_context_compaction(
+        state,
+        session_id,
+        target.context_compaction_policy,
+        "Nothing to compact yet: the whole history still fits in the recent turns that compaction keeps verbatim.",
+        snapshot,
+        source,
+    )?;
+    Ok((plan, target))
+}
+
+/// Builds the summary plan and media projection from `snapshot` and its matching `source`.
+/// 由 `snapshot` 及配对的 `source` 构建摘要计划和媒体投影。
+/// `state` supplies resource ownership, `session_id` names the source, and `policy` selects the retained tail.
+/// `state` 提供资源所有权，`session_id` 标识来源，`policy` 选择保留尾部。
+/// Returns the plan or `empty_error` when there is no eligible history, and reports projection errors.
+/// 返回计划，无可压缩历史时返回 `empty_error`，并报告投影错误。
+fn plan_webui_context_compaction(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    policy: ContextCompactionPolicy,
+    empty_error: &str,
+    snapshot: crate::session_runtime_registry_v1::SessionProviderProjectionSnapshot,
+    source: vulcan_session_core::v1::context_maintenance::ManualContextMaintenanceSource,
+) -> Result<WebuiContextCompactionPlan, String> {
     let projected_messages = snapshot
         .sourced_items
         .iter()
@@ -767,70 +825,105 @@ fn compaction_assistant_message_from_v1_projection(
 /// # 返回值
 /// The exact immutable target, or an explicit error when no dispatchable target exists.
 /// 返回精确不可变目标；不存在可分派目标时返回显式错误。
-pub(crate) fn resolve_webui_context_compaction_model_target(
+fn resolve_webui_context_compaction_model_target(
     state: &SharedServiceBridgeState,
     agent_runtime: &AgentRuntimeBridge,
     session_id: SessionId,
-    source_execution: Option<(&ExecutionPreparationRequest, &ExecutionPreparation)>,
+    source_request: &ExecutionPreparationRequest,
+    preparation: &ExecutionPreparation,
 ) -> Result<PromptCompactionModelTarget, String> {
-    let (
-        retained_route_lease_identity,
-        active_provider_id,
-        active_connection_id,
-        active_model_id,
-        session_runtime_registry,
-    ) = {
-        let guard = state
-            .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let runtime_state = guard
-            .workspace_snapshot
-            .as_ref()
-            .and_then(|workspace| workspace.session_runtime_state.get(&session_id));
-        (
-            runtime_state.and_then(|state| state.provider_route_lease.clone()),
-            runtime_state.and_then(|state| state.active_provider_id.clone()),
-            runtime_state.and_then(|state| state.active_connection_id.clone()),
-            runtime_state.and_then(|state| state.active_model_id.clone()),
-            Arc::clone(&guard.session_runtime_registry),
-        )
-    };
-    let context_window_selection = session_runtime_registry
-        .get(session_id)
-        .map_err(|error| format!("Context compaction has no V1 session owner: {error}"))?
-        .read(|document| document.metadata.config.context_window_selection)
-        .map_err(|error| format!("Context compaction cannot read V1 metadata: {error}"))?;
-    let route_lease_identity = source_execution
-        .and_then(|(_, preparation)| {
-            preparation
-                .model_blueprint
-                .session_provider_route_lease_identity()
-        })
-        .or(retained_route_lease_identity);
-    let compaction_session_id = session_id.to_string();
-    let target = match source_execution {
-        Some((_, preparation)) => resolve_prompt_compaction_model_target(
+    // The prepared business route remains the authority for automatic compaction.
+    // 已准备的业务路由仍是自动压缩的权威。
+    let route_lease_identity = preparation
+        .model_blueprint
+        .session_provider_route_lease_identity()
+        .or(read_compaction_route_lease(state, session_id)?);
+    resolve_prompt_compaction_model_target(
+        agent_runtime.public_ai_runtime.as_ref(),
+        &session_id.to_string(),
+        route_lease_identity.as_ref(),
+        Some(preparation.model_blueprint.provider_id.as_str()),
+        Some(preparation.model_blueprint.connection_id.as_str()),
+        Some(preparation.model_blueprint.model_id.as_str()),
+        source_request.context_window_selection,
+        preparation.context_compaction_policy,
+    )?
+    .ok_or_else(|| {
+        String::from("Context compaction requires an exact provider, connection, and model target.")
+    })
+}
+
+/// Reads the retained session lease identity from `state` for `session_id`, if present.
+/// 从 `state` 读取 `session_id` 保留的会话租约身份，缺省时返回 None。
+fn read_compaction_route_lease(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<Option<vulcan_workbench_model::SessionProviderRouteLeaseIdentity>, String> {
+    // The workbench holds the non-secret lease identity for the business route.
+    // 工作台持有业务路由的非秘密租约身份。
+    let guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    Ok(guard
+        .workspace_snapshot
+        .as_ref()
+        .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
+        .and_then(|state| state.provider_route_lease.clone()))
+}
+
+/// Resolves the manual target for `session_id` from the captured `source` used at admission.
+/// 从准入使用的已捕获 `source` 解析 `session_id` 的手动目标。
+/// `state` supplies the lease and `agent_runtime` resolves the exact connection. Returns the target or a route error.
+/// `state` 提供租约，`agent_runtime` 解析精确连接。返回目标或路由错误。
+fn resolve_manual_webui_context_compaction_model_target(
+    state: &SharedServiceBridgeState,
+    agent_runtime: &AgentRuntimeBridge,
+    session_id: SessionId,
+    source: &vulcan_session_core::v1::context_maintenance::ManualContextMaintenanceSource,
+) -> Result<PromptCompactionModelTarget, String> {
+    // Model, connection and window belong to the same durable history source.
+    // 模型、连接及窗口归同一可靠历史来源持有。
+    let config = source.session_config();
+    // The active route applies to manual summaries without a pending model switch.
+    // 没有待生效模型切换的手动摘要使用活动路由。
+    let active_request = &config.active_request;
+    // The picker authorizes the replacement route for this manual request. Keep the original
+    // business boundary and pending promotion available for a later user or Continue action.
+    // 选择器授权本次手动请求使用替换路由。原业务边界及待生效晋升保留给后续用户输入或继续动作。
+    if let Some(pending) = config.pending_request.as_ref()
+        && (pending.provider != active_request.provider
+            || pending.connection_id != active_request.connection_id
+            || pending.model != active_request.model)
+    {
+        // Use the replacement's validated thinking level, since the previous model may support different levels.
+        // 使用替换目标已校验的思考档位，旧模型可能支持不同档位。
+        let reasoning_effort = pending
+            .thinking_level
+            .as_deref()
+            .map(|level| {
+                crate::workspace_persistence_versions::parse_reasoning_effort(level)
+                    .ok_or_else(|| format!("Invalid V1 reasoning level: {level}"))
+            })
+            .transpose()?
+            .unwrap_or(ReasoningEffortLevel::Off);
+        return resolve_pending_prompt_compaction_model_target(
             agent_runtime.public_ai_runtime.as_ref(),
-            compaction_session_id.as_str(),
-            route_lease_identity.as_ref(),
-            Some(preparation.model_blueprint.provider_id.as_str()),
-            Some(preparation.model_blueprint.connection_id.as_str()),
-            Some(preparation.model_blueprint.model_id.as_str()),
-            source_execution.and_then(|(request, _)| request.context_window_selection),
-            preparation.context_compaction_policy,
-        )?,
-        None => resolve_prompt_compaction_model_target(
-            agent_runtime.public_ai_runtime.as_ref(),
-            compaction_session_id.as_str(),
-            route_lease_identity.as_ref(),
-            active_provider_id.as_deref(),
-            active_connection_id.as_deref(),
-            active_model_id.as_deref(),
-            context_window_selection,
-            None,
-        )?,
-    };
-    target.ok_or_else(|| {
+            pending,
+            reasoning_effort,
+            config.context_window_selection,
+        );
+    }
+    resolve_prompt_compaction_model_target(
+        agent_runtime.public_ai_runtime.as_ref(),
+        &session_id.to_string(),
+        read_compaction_route_lease(state, session_id)?.as_ref(),
+        active_request.provider.as_deref(),
+        active_request.connection_id.as_deref(),
+        active_request.model.as_deref(),
+        config.context_window_selection,
+        None,
+    )?
+    .ok_or_else(|| {
         String::from("Context compaction requires an exact provider, connection, and model target.")
     })
 }
@@ -1450,6 +1543,7 @@ mod tests {
                     },
                 context_limit: None,
                 context_compaction_policy: vulcan_context::ContextCompactionPolicy::default(),
+                pending_route: None,
             };
 
         assert_eq!(

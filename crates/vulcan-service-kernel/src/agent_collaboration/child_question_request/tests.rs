@@ -1,6 +1,6 @@
 use super::*;
 
-mod compaction;
+pub(crate) mod compaction;
 use std::collections::BTreeMap;
 use vulcan_agent_runtime::conversation_protocol::{
     SessionConversationMessage, SessionConversationPayload,

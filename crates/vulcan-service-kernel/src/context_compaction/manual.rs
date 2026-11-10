@@ -26,8 +26,11 @@ pub(super) async fn begin(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
     task_id: Uuid,
-    source: vulcan_session_core::v1::context_maintenance::ManualContextMaintenanceSource,
+    source: impl Into<Arc<vulcan_session_core::v1::context_maintenance::ManualContextMaintenanceSource>>,
 ) -> Result<ContextCompactionCommitMode, String> {
+    // The dispatch stage retains the same source proof without copying the history revision index.
+    // 分派阶段保留同一来源证明，无须复制历史修订索引。
+    let source = source.into();
     let handle =
         crate::session_goal_lifecycle::registered_session_v1_handle_from_state(state, session_id)?;
     // Drain a prior cancelled preparation before borrowing its business boundary.
@@ -101,6 +104,39 @@ pub(super) async fn begin(
             _ => error.to_string(),
         })?;
     Ok(receipt.value)
+}
+
+/// Binds the pending selection in `source` to the manual `mode` admitted by Core.
+/// 将 `source` 内的待生效选择绑定到 Core 已准入的手动 `mode`。
+/// Returns dispatch authority, or an error if the source or owner is invalid.
+/// 返回分派凭据，来源或所有者无效时报错。
+pub(super) fn pending_request_authority(
+    source: &vulcan_session_core::v1::context_maintenance::ManualContextMaintenanceSource,
+    mode: ContextCompactionCommitMode,
+) -> Result<vulcan_session_core::v1::context_maintenance::ManualCompactionPendingRequest, String> {
+    use vulcan_session_core::v1::context_maintenance::ManualCompactionRequestOwner;
+
+    // Only the two admitted manual owners can authorize a pending route.
+    // 仅两种已准入的手动所有者可授权待生效路由。
+    let owner = match mode {
+        ContextCompactionCommitMode::FinishStandalone { task_id } => {
+            ManualCompactionRequestOwner::Standalone(
+                CollaborationExecutionId::try_new(task_id.to_string())
+                    .map_err(|error| error.to_string())?,
+            )
+        }
+        ContextCompactionCommitMode::FinishBorrowed { owner, .. } => {
+            ManualCompactionRequestOwner::Borrowed(owner)
+        }
+        ContextCompactionCommitMode::ContinueActive { .. } => {
+            return Err(String::from(
+                "Automatic compaction cannot use a pending request.",
+            ));
+        }
+    };
+    source
+        .bind_pending_request(owner)
+        .ok_or_else(|| String::from("Manual compaction has no captured pending request."))
 }
 
 /// Closes the exact successful auxiliary owner after its canonical compaction node is committed.

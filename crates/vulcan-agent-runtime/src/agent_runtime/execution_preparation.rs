@@ -5,7 +5,8 @@ use crate::agent_runtime::execution_models::{
     ExecutionPreparation, ExecutionPreparationRequest, ExecutionPromptPurpose,
 };
 use crate::agent_runtime::provider::{
-    resolve_git_commit_summary_provider_blueprint, resolve_public_ai_provider_blueprint,
+    ProviderRuntimeBlueprint, resolve_git_commit_summary_provider_blueprint,
+    resolve_public_ai_provider_blueprint,
 };
 use crate::agent_runtime::provider_stream_projection::truncate_preview;
 use crate::agent_runtime::runtime::RuntimeFoundation;
@@ -105,6 +106,21 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
     config: &ProviderConfigurationFile,
     request: &ExecutionPreparationRequest,
 ) -> Result<PreparedExecution, String> {
+    prepare_execution_with_provider_blueprint(foundation, luaskills_runtime, config, request, None)
+}
+
+/// Builds validated preparation and tool registration from the foundation, skill runtime and
+/// request config. A manual summary may supply its frozen blueprint instead of the session lease.
+/// Returns the preparation and matching tool snapshot, or a validation error.
+/// 根据运行基础、技能运行时与请求配置构建已校验的执行准备及工具注册。
+/// 手动摘要可提供其冻结蓝图。返回执行准备及匹配的工具快照，或校验错误。
+pub(crate) fn prepare_execution_with_provider_blueprint(
+    foundation: &RuntimeFoundation,
+    luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
+    config: &ProviderConfigurationFile,
+    request: &ExecutionPreparationRequest,
+    manual_summary_blueprint: Option<&ProviderRuntimeBlueprint>,
+) -> Result<PreparedExecution, String> {
     captured_child_tool_admission::validate_request(request)?;
     // preparationStartedAt measures the complete synchronous execution-preparation boundary.
     // preparationStartedAt 测量完整同步执行准备边界。
@@ -158,7 +174,11 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
     // Git 总结不属于会话 V1，并且可以明确选择另一个模型。
     // Preserve session ownership for accounting while keeping its route lease untouched.
     // 保留统计中的会话归属，同时不触碰会话路由租约。
-    let model_blueprint = if request.prompt_purpose == ExecutionPromptPurpose::GitCommitSummary {
+    let model_blueprint = if let Some(blueprint) = manual_summary_blueprint {
+        // The summary owns this immutable blueprint while the business session keeps its own lease.
+        // 摘要持有此不可变蓝图，业务会话保留其自身租约。
+        blueprint.clone()
+    } else if request.prompt_purpose == ExecutionPromptPurpose::GitCommitSummary {
         // summaryTarget must come from the service's validated model selection, never global defaults.
         // summaryTarget 必须来自服务已校验的模型选择，绝不取全局默认值。
         let (provider_id, model_id) = request

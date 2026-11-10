@@ -6,10 +6,11 @@ use crate::agent_runtime::execution_models::{
     ExecutionAgentPromptSnapshot, ExecutionSubagentPromptContext,
 };
 use crate::agent_runtime::execution_preparation::prepare_execution_with_tool_snapshot;
+use crate::agent_runtime::provider::{ProviderRuntimeBlueprint, provider_blueprint_from_selection};
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::agent_runtime::runtime_stream_bootstrap::bootstrap_runtime_stream;
 use crate::agent_runtime::runtime_stream_driver::drive_runtime_stream_launch;
-use crate::agent_runtime::runtime_stream_launch::prepare_runtime_stream_launch_with_plugins_and_public_ai;
+use crate::agent_runtime::runtime_stream_launch::prepare_runtime_stream_launch_with_provider_blueprint;
 use crate::agent_runtime::runtime_stream_launch_payload::build_runtime_stream_launch_payload;
 use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::agent_runtime::{
@@ -53,7 +54,7 @@ use attempt::should_retry_compaction;
 
 /// Exact public provider target frozen for one context-compaction execution.
 /// 为单次上下文压缩执行冻结的精确公共供应商目标。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct PromptCompactionModelTarget {
     /// Exact provider identifier selected by the owning session.
     /// 所属会话选择的精确供应商标识。
@@ -73,6 +74,21 @@ pub struct PromptCompactionModelTarget {
     /// Complete context-compaction policy frozen with this exact route.
     /// 随该精确路由一同冻结的完整上下文压缩策略。
     pub context_compaction_policy: ContextCompactionPolicy,
+    /// Request-scoped route for a manually selected replacement that has not been applied to business execution.
+    /// 尚未应用到业务执行的手动替换选择所使用的请求级路由。
+    pub pending_route: Option<PromptCompactionPendingRoute>,
+}
+
+/// Carries the frozen route and sampling controls for one manual summary.
+/// 携带一次手动摘要的冻结路由与采样控制。
+#[derive(Debug, Clone)]
+pub struct PromptCompactionPendingRoute {
+    /// Exact validated blueprint owned by the summary request.
+    /// 由摘要请求持有的精确已校验蓝图。
+    blueprint: ProviderRuntimeBlueprint,
+    /// Sampling override from the same pending request snapshot.
+    /// 来自同一待生效请求快照的采样覆盖。
+    temperature: Option<f32>,
 }
 
 impl PromptCompactionModelTarget {
@@ -358,6 +374,77 @@ pub fn resolve_prompt_compaction_model_target(
         model_id_override,
         connection_id_override,
     )?;
+    prompt_compaction_target_from_blueprint(
+        &configuration,
+        &blueprint,
+        context_window_selection,
+        context_compaction_policy_seed,
+    )
+    .map(Some)
+}
+
+/// Freezes an explicitly selected replacement for a manual summary without installing a session lease.
+/// 为手动摘要冻结显式选择的替换路由，保持会话租约独立。
+/// `pending` supplies the exact route and temperature, `reasoning_effort` is its parsed setting,
+/// and `context_window_selection` is the session's window. Returns the frozen target or a validation error.
+/// `pending` 提供精确路由与温度，`reasoning_effort` 是解析后的档位，
+/// `context_window_selection` 是会话窗口。返回冻结目标或校验错误。
+pub fn resolve_pending_prompt_compaction_model_target(
+    runtime: &vulcan_provider_adapters::PublicAiRuntime,
+    pending: &vulcan_session_core::v1::config::PendingRequestConfig,
+    reasoning_effort: ReasoningEffortLevel,
+    context_window_selection: Option<vulcan_context::ContextWindowSelection>,
+) -> Result<PromptCompactionModelTarget, String> {
+    // A replacement must identify its exact account; provider defaults may point to a different credential.
+    // 替换路由必须指定精确账号，供应商默认项可能指向另一凭据。
+    let (Some(provider), Some(connection_id), Some(model)) = (
+        pending.provider.as_deref(),
+        pending.connection_id.as_deref(),
+        pending.model.as_deref(),
+    ) else {
+        return Err(String::from(
+            "Manual context compaction requires a complete pending model selection.",
+        ));
+    };
+    // Both route and policy resolve before the summary can enter its admission boundary.
+    // 路由与策略都在摘要进入准入边界前解析。
+    let configuration = runtime.configuration_snapshot()?;
+    // This lookup has no effect on a retained business route or pending picker configuration.
+    // 该查找不会影响保留的业务路由或待生效选择器配置。
+    let selection = runtime.resolve_connection_model_selection(
+        &configuration,
+        connection_id,
+        provider,
+        model,
+    )?;
+    // The blueprint applies the replacement model's own reasoning validation.
+    // 蓝图使用替换模型自身的思考档位校验。
+    let blueprint = provider_blueprint_from_selection(selection, reasoning_effort)?;
+    // The planning policy and dispatch blueprint describe the same frozen model.
+    // 规划策略和分派蓝图描述同一个冻结模型。
+    let mut target = prompt_compaction_target_from_blueprint(
+        &configuration,
+        &blueprint,
+        context_window_selection,
+        None,
+    )?;
+    target.pending_route = Some(PromptCompactionPendingRoute {
+        blueprint,
+        temperature: pending.temperature.map(|temperature| temperature as f32),
+    });
+    Ok(target)
+}
+
+/// Derives the exact compaction policy and target from one validated Provider blueprint.
+/// 从一份已校验供应商蓝图派生精确压缩策略与目标。
+/// `configuration` supplies policy defaults; the window and seed customize them. Returns the target or a policy error.
+/// `configuration` 提供策略默认值，窗口与种子用于定制。返回目标或策略错误。
+fn prompt_compaction_target_from_blueprint(
+    configuration: &vulcan_provider_adapters::PersistedAiConfiguration,
+    blueprint: &ProviderRuntimeBlueprint,
+    context_window_selection: Option<vulcan_context::ContextWindowSelection>,
+    context_compaction_policy_seed: Option<ContextCompactionPolicy>,
+) -> Result<PromptCompactionModelTarget, String> {
     // selection is guaranteed for a dispatchable blueprint and carries every frozen profile.
     // selection 对可分派蓝图必然存在，并携带全部冻结 Profile。
     let selection = blueprint.frozen_selection.as_ref().ok_or_else(|| {
@@ -379,14 +466,15 @@ pub fn resolve_prompt_compaction_model_target(
         context_window_selection,
         context_compaction_policy_seed,
     )?;
-    Ok(Some(PromptCompactionModelTarget {
+    Ok(PromptCompactionModelTarget {
         provider_id: selection.route.provider.id.clone(),
         connection_id: selection.route.connection.id.clone(),
         model_id: selection.model.id.clone(),
         provider_route_lease_identity,
         context_limit,
         context_compaction_policy,
-    }))
+        pending_route: None,
+    })
 }
 
 /// Immutable request payload required to execute one prompt-based compaction job.
@@ -721,7 +809,7 @@ pub fn stream_prompt_compaction_job(
             );
 
             yield prompt_compaction_progress("prepare_runtime");
-            let launch = prepare_runtime_stream_launch_with_plugins_and_public_ai(
+            let launch = prepare_runtime_stream_launch_with_provider_blueprint(
                 &request.provider_configuration,
                 &request.agent_profile_catalog,
                 request.luaskills_runtime.clone(),
@@ -732,6 +820,9 @@ pub fn stream_prompt_compaction_job(
                 Arc::clone(&request.command_session_runtime),
                 Some(Arc::clone(&request.public_ai_runtime)),
                 launch_request,
+                request.model_target.as_ref().and_then(|target| {
+                    target.pending_route.as_ref().map(|route| &route.blueprint)
+                }),
             )
             .await;
 
@@ -745,7 +836,7 @@ pub fn stream_prompt_compaction_job(
                         request.model_label.as_deref(),
                         &report,
                     );
-                    if should_retry_compaction(&error, attempts) {
+                    if should_retry_compaction(report.provider_failure_category, &error, attempts) {
                         continue;
                     }
                     yield PromptCompactionStreamEvent::Finished(Err(error));
@@ -757,9 +848,13 @@ pub fn stream_prompt_compaction_job(
                 drive_runtime_stream_launch(request.provider_configuration.clone(), launch, None);
             futures_util::pin_mut!(runtime_stream);
             let mut terminal_error = None;
+            // The final report owns the classified failure for this attempt.
+            // 最终报告持有本次尝试已分类的失败。
+            let mut terminal_provider_failure_category = None;
             while let Some(event) = runtime_stream.next().await {
                 match event {
                     ExecutionStreamEvent::Finished(report) => {
+                        terminal_provider_failure_category = report.provider_failure_category;
                         provider_request_count =
                             provider_request_count.saturating_add(report.provider_request_count);
                         match finalize_prompt_compaction_report(
@@ -810,7 +905,7 @@ pub fn stream_prompt_compaction_job(
             let error = terminal_error.unwrap_or_else(|| {
                 String::from("Prompt compaction stream ended without a terminal execution report.")
             });
-            if !should_retry_compaction(&error, attempts) {
+            if !should_retry_compaction(terminal_provider_failure_category, &error, attempts) {
                 yield PromptCompactionStreamEvent::Finished(Err(error));
                 return;
             }
@@ -870,7 +965,7 @@ pub fn stream_prompt_compaction_foundation_job(
                 }
                 Err(error) => {
                     let error = format!("Prompt compaction preparation failed: {error}");
-                    if should_retry_compaction(&error, attempts) {
+                    if should_retry_compaction(None, &error, attempts) {
                         continue;
                     }
                     yield PromptCompactionStreamEvent::Finished(Err(error));
@@ -893,7 +988,7 @@ pub fn stream_prompt_compaction_foundation_job(
                 }
                 Err(error) => {
                     let error = format!("Prompt compaction bootstrap failed: {error}");
-                    if should_retry_compaction(&error, attempts) {
+                    if should_retry_compaction(None, &error, attempts) {
                         continue;
                     }
                     yield PromptCompactionStreamEvent::Finished(Err(error));
@@ -931,9 +1026,13 @@ pub fn stream_prompt_compaction_foundation_job(
                 drive_runtime_stream_launch(request.provider_configuration.clone(), launch, None);
             futures_util::pin_mut!(runtime_stream);
             let mut terminal_error = None;
+            // Use the terminal request classification for foundation-backed jobs as well.
+            // 复用运行基础的压缩任务同样使用终态请求分类。
+            let mut terminal_provider_failure_category = None;
             while let Some(event) = runtime_stream.next().await {
                 match event {
                     ExecutionStreamEvent::Finished(report) => {
+                        terminal_provider_failure_category = report.provider_failure_category;
                         provider_request_count =
                             provider_request_count.saturating_add(report.provider_request_count);
                         match finalize_prompt_compaction_report(
@@ -984,7 +1083,7 @@ pub fn stream_prompt_compaction_foundation_job(
             let error = terminal_error.unwrap_or_else(|| {
                 String::from("Prompt compaction stream ended without a terminal execution report.")
             });
-            if !should_retry_compaction(&error, attempts) {
+            if !should_retry_compaction(terminal_provider_failure_category, &error, attempts) {
                 yield PromptCompactionStreamEvent::Finished(Err(error));
                 return;
             }
@@ -1009,6 +1108,9 @@ fn build_prompt_compaction_launch_request(
     reasoning_effort: ReasoningEffortLevel,
     conversation_state: vulcan_context::SessionConversationState,
 ) -> ExecutionPreparationRequest {
+    // Pending route settings come from the exact picker snapshot captured for this manual summary.
+    // 待生效路由设置来自为本次手动摘要捕获的精确选择器快照。
+    let pending_route = model_target.and_then(|target| target.pending_route.as_ref());
     ExecutionPreparationRequest {
         session_id,
         execution_scope: vulcan_session_core::ExecutionScope::ContextCompaction {
@@ -1070,9 +1172,11 @@ fn build_prompt_compaction_launch_request(
         context_budget_override: None,
         context_window_prefill_input_tokens: None,
         execution_mode: launch_context.execution_mode.clone(),
-        temperature: launch_context.temperature,
+        temperature: pending_route.map_or(launch_context.temperature, |route| route.temperature),
         session_request_options: Default::default(),
-        reasoning_effort,
+        reasoning_effort: pending_route.map_or(reasoning_effort, |route| {
+            route.blueprint.reasoning.requested_effort
+        }),
         tool_exposure_override: launch_context.tool_exposure_override.clone(),
         captured_child_tool_admission: launch_context.captured_child_tool_admission.clone(),
         tool_request_rejection_reason: launch_context.tool_request_rejection_reason.clone(),

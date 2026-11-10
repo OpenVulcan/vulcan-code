@@ -74,6 +74,9 @@ pub(crate) async fn stream_webui_context_compaction_execution(
     section_id: &str,
     budget_note: &str,
     trigger: &str,
+    manual_request: Option<
+        vulcan_session_core::v1::context_maintenance::ManualCompactionPendingRequest,
+    >,
 ) -> Result<WebuiContextCompactionExecution, String> {
     // outputMessageId identifies the visible compaction status output row.
     // outputMessageId 标识可见的压缩状态输出行。
@@ -97,7 +100,7 @@ pub(crate) async fn stream_webui_context_compaction_execution(
             String::from(
                 "Context compaction requires a registered V1 session owner before Provider dispatch.",
             )
-        })?;
+        })?.with_manual_compaction_request(manual_request);
     provider_v1_sink.bind_compaction_source(&request.full_context_state)?;
     // providerTelemetryGuard closes an active compaction request if the stream future is dropped.
     // providerTelemetryGuard 在压缩流 Future 被丢弃时关闭活动请求。
@@ -365,10 +368,18 @@ pub(crate) fn spawn_webui_context_compaction_task(
         .ok()
         .and_then(|guard| webui_session_kernel_generation(&guard, session_id));
     let task_future = async move {
+        // Admission and physical request preparation use the same captured route and history.
+        // 准入与物理请求准备使用同一已捕获路由及历史。
+        let source = Arc::new(source);
         // Bind the exact V1 owner before preparing the summary request.
         // 在准备摘要请求前绑定精确的 V1 所有者。
-        let admission =
-            super::manual::begin(&task_state, session_id, active_stream_task_id, source).await;
+        let admission = super::manual::begin(
+            &task_state,
+            session_id,
+            active_stream_task_id,
+            Arc::clone(&source),
+        )
+        .await;
         // Retain the admitted mode even when later request preparation fails.
         // 即使后续请求准备失败，也保留已准入的结算模式。
         let (admitted_request, commit_mode) = match admission {
@@ -397,17 +408,29 @@ pub(crate) fn spawn_webui_context_compaction_task(
         };
         let terminal_result = match admitted_request {
             Ok(request) => {
-                stream_webui_context_compaction_execution(
-                    &task_app,
-                    &task_state,
-                    &controller_runtime,
-                    request,
-                    session_id,
-                    retained_from_seq,
-                    &status_message_id,
-                    &budget_note,
-                    &trigger,
-                )
+                async {
+                    // A frozen replacement must carry the same pending selection into both durable gates.
+                    // 已冻结的替换路由必须把同一待生效选择带入两层可靠准入。
+                    let manual_request = request
+                        .model_target
+                        .as_ref()
+                        .filter(|target| target.pending_route.is_some())
+                        .map(|_| super::manual::pending_request_authority(&source, commit_mode))
+                        .transpose()?;
+                    stream_webui_context_compaction_execution(
+                        &task_app,
+                        &task_state,
+                        &controller_runtime,
+                        request,
+                        session_id,
+                        retained_from_seq,
+                        &status_message_id,
+                        &budget_note,
+                        &trigger,
+                        manual_request,
+                    )
+                    .await
+                }
                 .await
             }
             Err(error) => Err(error),

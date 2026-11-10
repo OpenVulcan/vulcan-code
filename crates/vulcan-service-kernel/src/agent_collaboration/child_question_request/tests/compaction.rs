@@ -25,7 +25,7 @@ use vulcan_workspace_store::workspace_store::{
     load_session_v1_for_runtime,
 };
 
-mod https;
+pub(crate) mod https;
 mod main_only;
 mod standalone;
 

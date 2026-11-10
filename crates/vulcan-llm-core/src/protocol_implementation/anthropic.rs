@@ -965,18 +965,23 @@ fn anthropic_error(value: &Value) -> AiExecutionError {
         .pointer("/error/type")
         .and_then(Value::as_str)
         .map(str::to_string);
+    let upstream_message = value
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     let category = match error_type.as_deref() {
         Some("authentication_error") => AiErrorCategory::Authentication,
         Some("permission_error") => AiErrorCategory::PermissionDenied,
         Some("rate_limit_error") => AiErrorCategory::RateLimited,
         Some("overloaded_error") => AiErrorCategory::ProviderOverloaded,
+        error_type
+            if crate::is_anthropic_insufficient_credit(error_type, upstream_message.as_deref()) =>
+        {
+            AiErrorCategory::PaymentRequired
+        }
         Some("invalid_request_error") => AiErrorCategory::InvalidRequest,
         _ => AiErrorCategory::Unclassified,
     };
-    let upstream_message = value
-        .pointer("/error/message")
-        .and_then(Value::as_str)
-        .map(str::to_string);
     AiExecutionError {
         category,
         subcategory: error_type.clone(),

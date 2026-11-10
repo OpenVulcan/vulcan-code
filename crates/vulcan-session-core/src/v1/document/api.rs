@@ -9,7 +9,7 @@ use super::provider_source::{
     validate_provider_source_input,
 };
 use super::selection::{
-    active_request_from_snapshot, validate_api_request_snapshot,
+    active_request_from_pending, active_request_from_snapshot, validate_api_request_snapshot,
     validate_request_against_active_config,
 };
 #[cfg(test)]
@@ -23,6 +23,9 @@ use crate::v1::answer_components::{AnswerCodeSnapshot, validate_answer_code_snap
 use crate::v1::budget::ProviderRequestBudgetEvidence;
 use crate::v1::config::ActiveRequestConfig;
 use crate::v1::context::{LockedBaselineProjection, RuntimeInitializationState};
+use crate::v1::context_maintenance::{
+    ManualCompactionPendingRequest, ManualCompactionRequestOwner,
+};
 use crate::v1::errors::DomainError;
 use crate::v1::event::{
     ApiCallStatus, ApiEndReason, ApiErrorCategory, ApiPurposeKind, ApiRequestSnapshot,
@@ -676,6 +679,83 @@ impl SessionDocument {
         input: PrepareAndStartApiInput,
         prompt_media: Vec<crate::v1::UserPromptMediaBinding>,
     ) -> Result<IdempotentMutation<PreparedApiStart>, DomainError> {
+        self.prepare_and_start_api_with_manual_compaction_request(input, prompt_media, None)
+    }
+
+    /// Checks the pending route and manual owner described by `authority` for this `purpose` and `request`.
+    /// 根据 `authority` 校验 `purpose` 和 `request` 对应的待生效路由及手动所有者。
+    /// Returns success for that exact summary request, or an error before transport work.
+    /// 精确摘要请求校验成功时返回空值，否则在传输工作之前报错。
+    pub fn validate_manual_compaction_pending_request(
+        &self,
+        authority: &ManualCompactionPendingRequest,
+        purpose: ApiPurposeKind,
+        request: &ApiRequestSnapshot,
+    ) -> Result<(), DomainError> {
+        if purpose != ApiPurposeKind::Compaction
+            || self.metadata.session_id != authority.session_id
+            || self.segment_generation() != authority.segment_generation
+            || self.metadata.config.pending_request.as_ref() != Some(&authority.pending)
+        {
+            return Err(DomainError::InvalidRequestConfiguration {
+                field: "manual_compaction.pending_request_changed",
+            });
+        }
+        match &authority.owner {
+            ManualCompactionRequestOwner::Standalone(execution_id) => {
+                // The durable auxiliary start must belong to this exact planning snapshot and open turn.
+                // 可靠辅助起始事实必须属于精确规划快照及开放回合。
+                let valid_owner = self
+                    .metadata
+                    .context_maintenance
+                    .as_ref()
+                    .is_some_and(|owner| {
+                        &owner.execution_id == execution_id
+                            && owner.business_execution_id.is_none()
+                            && owner.terminal.is_none()
+                            && owner.source_revision == authority.source_revision
+                            && owner.segment_generation == authority.segment_generation
+                            && owner.source_compaction_id == self.runtime_lock.current_compaction_id
+                            && self.active_turn().is_some_and(|turn| {
+                                !turn.closed
+                                    && turn.turn_id == owner.turn_id
+                                    && turn.origin == super::TurnOrigin::ContextMaintenance
+                            })
+                    });
+                if !valid_owner {
+                    return Err(DomainError::CollaborationStateViolation {
+                        field: "manual_compaction.pending_request_owner",
+                    });
+                }
+            }
+            ManualCompactionRequestOwner::Borrowed(owner) => {
+                self.validate_manual_compaction_borrow(*owner)?;
+                if owner.source_revision != authority.source_revision
+                    || owner.source_compaction_id != self.runtime_lock.current_compaction_id
+                {
+                    return Err(DomainError::CollaborationStateViolation {
+                        field: "manual_compaction.pending_request_owner",
+                    });
+                }
+            }
+        }
+        // Compaction captures the same f32 sampling precision used by runtime execution.
+        // 压缩按执行运行时所用的相同 f32 精度捕获采样值。
+        let mut expected = active_request_from_pending(&authority.pending);
+        expected.temperature = expected.temperature.map(|value| f64::from(value as f32));
+        validate_request_against_active_config(&expected, &active_request_from_snapshot(request))
+    }
+
+    /// Records the API `input` and its `prompt_media`, optionally using the admitted `manual_request` route.
+    /// 记录 API `input` 及其 `prompt_media`，可选用已准入的 `manual_request` 路由。
+    /// Returns the start receipt or rejects the candidate before publishing any events.
+    /// 返回起始回执，或在发布事件前拒绝候选请求。
+    pub fn prepare_and_start_api_with_manual_compaction_request(
+        &mut self,
+        input: PrepareAndStartApiInput,
+        prompt_media: Vec<crate::v1::UserPromptMediaBinding>,
+        manual_request: Option<&ManualCompactionPendingRequest>,
+    ) -> Result<IdempotentMutation<PreparedApiStart>, DomainError> {
         let PrepareAndStartApiInput {
             purpose,
             request,
@@ -685,6 +765,9 @@ impl SessionDocument {
             continuation_action_id,
             now_ms,
         } = input;
+        if let Some(authority) = manual_request {
+            self.validate_manual_compaction_pending_request(authority, purpose, &request)?;
+        }
         // A newly frozen prompt must use the exact captured request route, never a later global selection.
         // 新冻结提示词必须使用精确捕获请求路线，绝不能使用后来的全局选择。
         for binding in &prompt_media {
@@ -728,16 +811,19 @@ impl SessionDocument {
         // 物理 API 必须与刷新的提示词基线一起建立当前精确请求。
         let request_rebase_allowed = self.runtime_lock.initialization_state
             == RuntimeInitializationState::BaselineRefreshPending;
-        if !active_is_empty && !request_rebase_allowed {
-            validate_request_against_active_config(
-                &self.metadata.config.active_request,
-                &requested_active,
-            )?;
-        } else if self.runtime_lock.initialization_state == RuntimeInitializationState::Initialized
-        {
-            return Err(DomainError::InvalidRequestConfiguration {
-                field: "active_request_uninitialized",
-            });
+        if manual_request.is_none() {
+            if !active_is_empty && !request_rebase_allowed {
+                validate_request_against_active_config(
+                    &self.metadata.config.active_request,
+                    &requested_active,
+                )?;
+            } else if self.runtime_lock.initialization_state
+                == RuntimeInitializationState::Initialized
+            {
+                return Err(DomainError::InvalidRequestConfiguration {
+                    field: "active_request_uninitialized",
+                });
+            }
         }
         let turn = self.require_open_turn()?;
         if turn.origin == super::TurnOrigin::ContextMaintenance
@@ -777,7 +863,7 @@ impl SessionDocument {
             }
         };
         let mut staged_metadata = self.metadata.clone();
-        if active_is_empty || request_rebase_allowed {
+        if manual_request.is_none() && (active_is_empty || request_rebase_allowed) {
             staged_metadata.config.active_request = requested_active;
         }
 

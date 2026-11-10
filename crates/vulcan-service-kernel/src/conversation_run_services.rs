@@ -2,7 +2,7 @@
 //! 会话运行服务处理器。
 
 use super::*;
-use crate::context_compaction::resolve_webui_context_compaction_model_target;
+use crate::context_compaction::plan_manual_webui_context_compaction;
 use crate::session_goal_lifecycle::{
     current_v1_goal_unix_millis, session_goal_summary_from_v1_handle, session_v1_handle_from_state,
 };
@@ -210,20 +210,10 @@ pub(crate) async fn service_compact_selected_conversation_context(
     )
     .await?;
     ensure_webui_session_runtime_state(&mut workspace_snapshot, selected_session_id, None)?;
-    // modelTarget freezes the exact session route and adaptive tail policy before manual planning.
-    // modelTarget 在手动规划前冻结精确会话路由与自适应尾部策略。
-    let model_target = resolve_webui_context_compaction_model_target(
-        &state,
-        &agent_runtime,
-        selected_session_id,
-        None,
-    )?;
-    let compaction_plan = webui_context_compaction_plan_from_v1(
-        &state,
-        selected_session_id,
-        model_target.context_compaction_policy,
-        "Nothing to compact yet: the whole history still fits in the recent turns that compaction keeps verbatim.",
-    )?;
+    // Freeze the selected model and retained history at the same durable revision.
+    // 在同一可靠修订冻结所选模型及保留历史。
+    let (compaction_plan, model_target) =
+        plan_manual_webui_context_compaction(&state, &agent_runtime, selected_session_id)?;
 
     let budget_note = context_compaction_budget_note_from_state(&state, selected_session_id);
     let previous_phase = workspace_snapshot

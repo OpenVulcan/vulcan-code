@@ -22,7 +22,9 @@ use vulcan_session_core::v1::collaboration::{
 };
 use vulcan_session_core::v1::config::QueuedInputIdentity;
 use vulcan_session_core::v1::context::LockedBaselineProjection;
-use vulcan_session_core::v1::context_maintenance::ManualContextMaintenanceSource;
+use vulcan_session_core::v1::context_maintenance::{
+    ManualCompactionPendingRequest, ManualContextMaintenanceSource,
+};
 use vulcan_session_core::v1::dedicated::dedicated_provider_events;
 use vulcan_session_core::v1::document::{
     ApiTransportObservedReceipt, ClientInputSubmission, CompactionCommitInput,
@@ -1721,6 +1723,7 @@ impl SessionHandle {
     /// 候选与活动选择不一致，或外部文档前沿在提交之前变化时返回 `None`；自身完成写入要求真实可靠重捕获。
     /// The asynchronous preparation gate serializes builders; writer/publisher guards cover capture and commit only.
     /// 异步准备门串行化构建者；写入器与发布器守卫仅覆盖捕获和提交。
+    #[cfg(test)]
     pub(crate) async fn prepare_physical_api_durable<T, BuildFuture>(
         self: &Arc<Self>,
         purpose: ApiPurposeKind,
@@ -1728,6 +1731,46 @@ impl SessionHandle {
         candidate_locked_baseline: LockedBaselineProjection,
         continuation_action_id: Option<ClientActionId>,
         now_ms: i64,
+        build: impl FnOnce(
+            SessionProviderProjectionSnapshot,
+            Arc<SessionPhysicalPreparation>,
+        ) -> BuildFuture,
+    ) -> Result<
+        Option<SessionConditionalMutationReceipt<SessionPreparedPhysicalApi<T>>>,
+        SessionRuntimeError,
+    >
+    where
+        BuildFuture: std::future::Future<
+                Output = Result<Option<SessionPreparedPhysicalRequest<T>>, SessionRuntimeError>,
+            >,
+    {
+        self.prepare_physical_api_durable_with_manual_request(
+            purpose,
+            request,
+            candidate_locked_baseline,
+            continuation_action_id,
+            now_ms,
+            None,
+            build,
+        )
+        .await
+    }
+
+    /// Prepares and records a physical API before issuing its dispatch permit.
+    /// 在签发分派许可前准备并记录物理 API。
+    /// `purpose`, `request`, the baseline, action and time bind the candidate. `build` encodes its durable projection.
+    /// `purpose`、`request`、基线、动作及时间绑定候选请求，`build` 编码其可靠投影。
+    /// `manual_request` authorizes the exact pending summary route. Returns a receipt, no permit for stale work, or an error.
+    /// `manual_request` 授权精确待生效摘要路由。返回回执，过期时无许可，失败时报错。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn prepare_physical_api_durable_with_manual_request<T, BuildFuture>(
+        self: &Arc<Self>,
+        purpose: ApiPurposeKind,
+        request: ApiRequestSnapshot,
+        candidate_locked_baseline: LockedBaselineProjection,
+        continuation_action_id: Option<ClientActionId>,
+        now_ms: i64,
+        manual_request: Option<&ManualCompactionPendingRequest>,
         build: impl FnOnce(
             SessionProviderProjectionSnapshot,
             Arc<SessionPhysicalPreparation>,
@@ -1787,26 +1830,33 @@ impl SessionHandle {
                 if document.active_api().is_some() {
                     return Err(DomainError::NoActiveApi.into());
                 }
-                let active = &document.metadata.config.active_request;
-                let active_route_initialized = active.provider.is_some() || active.model.is_some();
-                if active_route_initialized
-                    && (active.provider.as_deref() != Some(request.provider.as_str())
-                        || active.connection_id != request.connection_id
-                        || active.model.as_deref() != Some(request.model.as_str())
-                        || vulcan_session_core::v1::config::canonical_request_thinking_level(
-                            active.thinking_level.as_deref(),
-                        ) != vulcan_session_core::v1::config::canonical_request_thinking_level(
-                            request.thinking_level.as_deref(),
-                        )
-                        || active.temperature != request.temperature)
-                {
-                    return Ok(None);
+                if let Some(authority) = manual_request {
+                    document
+                        .validate_manual_compaction_pending_request(authority, purpose, &request)?;
+                } else {
+                    // Business requests use the activity already admitted for their turn.
+                    // 业务请求使用已为其回合准入的活动配置。
+                    let active = &document.metadata.config.active_request;
+                    let active_route_initialized =
+                        active.provider.is_some() || active.model.is_some();
+                    if active_route_initialized
+                        && (active.provider.as_deref() != Some(request.provider.as_str())
+                            || active.connection_id != request.connection_id
+                            || active.model.as_deref() != Some(request.model.as_str())
+                            || vulcan_session_core::v1::config::canonical_request_thinking_level(
+                                active.thinking_level.as_deref(),
+                            )
+                                != vulcan_session_core::v1::config::canonical_request_thinking_level(
+                                    request.thinking_level.as_deref(),
+                                )
+                            || active.temperature != request.temperature)
+                    {
+                        return Ok(None);
+                    }
                 }
             }
-            // Provider preparation consumes only the already active request configuration. Picker
-            // writes remain pending until an explicit user-input or Continue boundary activates them.
-            // Provider 准备仅消费已经活动的请求配置。选择器写入保持待生效，直到明确的用户输入或
-            // Continue 边界激活它们。
+            // Both routes now have an authority that can be rechecked at durable API start.
+            // 两类路由均已获得可在可靠 API 起始时复核的凭据。
             self.capture_provider_projection_snapshot_with_publisher_locked(projection_purpose)?
         };
         // Completed-result workers retain this same lease if the asynchronous builder is dropped.
@@ -1887,7 +1937,7 @@ impl SessionHandle {
         let receipt = self.mutate_in_memory_if_changed_with_publisher_locked(
             SessionFlushReason::ApiStarted,
             move |document| {
-                let mutation = document.prepare_and_start_api_with_user_prompt_media(
+                let mutation = document.prepare_and_start_api_with_manual_compaction_request(
                     PrepareAndStartApiInput {
                         purpose,
                         request,
@@ -1898,6 +1948,7 @@ impl SessionHandle {
                         now_ms,
                     },
                     prepared.user_prompt_media,
+                    manual_request,
                 )?;
                 match mutation {
                     IdempotentMutation::Committed(core_start) => {

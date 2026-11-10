@@ -61,6 +61,8 @@ mod child_profile;
 mod child_question_admission;
 mod child_question_launch;
 mod child_question_request;
+#[cfg(test)]
+pub(crate) use child_question_request::tests::compaction::https as compaction_test_https;
 pub(crate) mod dispatch_owner;
 #[cfg(test)]
 mod execution_binding_tests;

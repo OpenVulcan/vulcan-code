@@ -12,6 +12,317 @@ use vulcan_session_core::{
 
 mod borrowed;
 
+/// Runs both manual owners through physical dispatch and summary commit after the old account is removed.
+/// 旧账号删除后，验证两种手动所有者均通过物理分派及摘要提交。
+#[test]
+fn manual_compaction_dispatches_pending_route_after_old_connection_removal() {
+    // Use the production worker stack for the real summary transport.
+    // 使用生产工作线程栈执行真实摘要传输。
+    let executor = crate::service_bridge_io::webui_service_runtime_builder()
+        .worker_threads(2)
+        .build()
+        .unwrap();
+    executor
+        .block_on(executor.spawn(Box::pin(async {
+            verify_manual_compaction_replacement(false).await;
+            verify_manual_compaction_replacement(true).await;
+        })))
+        .unwrap();
+}
+
+/// Verifies a standalone or `borrowed` summary using isolated storage and loopback TLS.
+/// 使用隔离存储和回环 TLS 验证独立或 `borrowed` 摘要。
+/// Returns after checking the physical model, committed summary and retained business configuration.
+/// 检查物理模型、已提交摘要及保留的业务配置后返回。
+async fn verify_manual_compaction_replacement(borrowed: bool) {
+    use crate::agent_collaboration::compaction_test_https as https;
+    use vulcan_session_core::v1::event::ApiPurposeKind;
+
+    // Use isolated durable state and the bundled static catalog.
+    // 使用隔离持久状态与内置静态目录。
+    let (root, state, handle, fixture_task_id) = fixture().await;
+    // The bundled OpenCode host is pinned to this private TLS listener.
+    // 内置 OpenCode 主机固定至此私有 TLS 监听器。
+    let server = https::Server::start(
+        "<summary>Retain the prior review and all outstanding tasks.</summary>",
+    )
+    .await;
+    // Install a fixture credential and the pinned HTTP client on the real provider runtime.
+    // 将夹具凭据及固定 HTTP 客户端安装到真实供应商运行时。
+    let mut bridge = crate::tests::test_support::test_agent_runtime_bridge();
+    bridge.public_ai_runtime = Arc::new(
+        vulcan_provider_adapters::PublicAiRuntime::first_batch_with_http_client_for_testing(
+            Arc::new(https::Secrets),
+            server.http.clone(),
+        )
+        .unwrap(),
+    );
+    // The replacement is the only configured connection in this fixture.
+    // 替换账号是本夹具唯一配置的连接。
+    let mut configuration = bridge.public_ai_runtime.configuration_snapshot().unwrap();
+    configuration
+        .connection_graph
+        .add_connection(
+            &bridge.public_ai_runtime.providers().unwrap(),
+            vulcan_provider_adapters::CredentialConnection {
+                id: "replacement-account".into(),
+                provider_id: "opencode-go".into(),
+                service_entry_id: "go-api".into(),
+                credential_profile_id: "api-key".into(),
+                credential_mode: vulcan_provider_adapters::CredentialMode::Token,
+                credential_id: "replacement-credential".into(),
+                display_name: "Replacement account".into(),
+                secret_reference: "compaction-test-secret".into(),
+                management_secret_reference: None,
+                service_origin_override: None,
+            },
+        )
+        .unwrap();
+    configuration.set_model_enabled("opencode-go", "deepseek-v4.1-flash", true);
+    bridge
+        .public_ai_runtime
+        .replace_configuration(configuration)
+        .unwrap();
+    // Persist the former model through ordinary root admission as it was saved before removal.
+    // 经普通根输入准入持久化删除前保存的旧模型。
+    handle
+        .submit_root_input(
+            ClientInputSubmission::new(
+                ClientActionId::try_new("manual-removed-account").unwrap(),
+                "Previous request on the removed account",
+                Vec::new(),
+            )
+            .with_bound_request_config(
+                vulcan_session_core::v1::config::ActiveRequestConfig {
+                    provider: Some("anthropic".into()),
+                    connection_id: Some("removed-account".into()),
+                    model: Some("claude-opus-5-5".into()),
+                    thinking_level: Some("high".into()),
+                    temperature: None,
+                },
+            ),
+            4,
+        )
+        .unwrap();
+    seed_manual_replacement_history(&handle, borrowed);
+    crate::session_request_config_v1::set_pending_model_request_v1(
+        handle.as_ref(),
+        "opencode-go".into(),
+        "replacement-account".into(),
+        "deepseek-v4.1-flash".into(),
+        Some(ReasoningEffortLevel::Low),
+        crate::session_request_config_v1::SessionRequestFallback::default(),
+        crate::current_v1_unix_millis().unwrap(),
+    )
+    .unwrap();
+    // Only the preinstalled test owner is removed before starting the real worker.
+    // 启动真实工作任务前仅移除夹具预装的所有者。
+    let fixture_task = crate::remove_active_stream_task_if_id(
+        &mut state.lock().unwrap(),
+        handle.session_id(),
+        fixture_task_id,
+    )
+    .unwrap();
+    fixture_task.abort_and_wait().await.unwrap();
+    state.lock().unwrap().agent_runtime = Some(bridge.clone());
+    // The production planner captures the pending route and the history in one revision.
+    // 生产规划器在同一修订捕获待生效路由及历史。
+    let (planned, target) =
+        plan_manual_webui_context_compaction(&state, &bridge, handle.session_id()).unwrap();
+    // Use the worker's ordinary status row and provider pipeline.
+    // 使用工作任务的常规状态行及供应商链路。
+    let status = append_webui_context_compaction_status_message_to_workspace(
+        state.lock().unwrap().workspace_snapshot.as_mut().unwrap(),
+        handle.session_id(),
+        "",
+        MANUAL_CONTEXT_COMPACTION_TRIGGER,
+    )
+    .unwrap();
+    // The registered worker owns transport, durable API events and compaction commit.
+    // 已登记工作任务拥有传输、可靠 API 事件及压缩提交。
+    let app = ServiceEventEmitter::new(Vec::new());
+    // Reuse the storage and statistics owner already attached to the fixture.
+    // 复用夹具已连接的存储及统计所有者。
+    let controller = state.lock().unwrap().controller_runtime.clone().unwrap();
+    spawn_webui_context_compaction_task(
+        app,
+        state.clone(),
+        controller,
+        bridge.clone(),
+        handle.session_id(),
+        SessionRunPhase::Ready,
+        status,
+        String::new(),
+        MANUAL_CONTEXT_COMPACTION_TRIGGER.into(),
+        planned.plan,
+        planned.full_context_state,
+        planned.media_projection,
+        planned.retained_from_seq,
+        planned.source,
+        target,
+    )
+    .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while state
+            .lock()
+            .unwrap()
+            .active_stream_tasks
+            .contains_key(&handle.session_id())
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("manual compaction must settle");
+    {
+        // The only physical request must reach the exact selected model.
+        // 唯一物理请求必须到达精确选择的模型。
+        let requests = server.requests.lock().unwrap();
+        assert_eq!(
+            requests.len(),
+            1,
+            "manual compaction must reach the replacement transport"
+        );
+        assert_eq!(requests[0]["model"], "deepseek-v4.1-flash");
+    }
+    assert!(
+        bridge
+            .public_ai_runtime
+            .session_selection_lease(&handle.session_id().to_string())
+            .unwrap()
+            .is_none()
+    );
+    // A cold reload verifies the summary and request route reached durable storage.
+    // 冷加载验证摘要及请求路由已可靠落盘。
+    let loaded = vulcan_workspace_store::workspace_store::load_session_v1_for_runtime(
+        &root.v1_storage_locator(),
+    )
+    .unwrap();
+    {
+        // Both business and pending request metadata remain owned by ordinary admission.
+        // 业务及待生效请求元数据仍归普通准入持有。
+        let document = &loaded.document;
+        assert!(document.runtime_lock.current_compaction_id.is_some());
+        assert_eq!(
+            document.active_turn().is_some_and(|turn| !turn.closed),
+            borrowed
+        );
+        assert!(document.events().iter().any(|event| matches!(
+            &event.event, EventBody::ApiStarted(api)
+                if api.purpose == ApiPurposeKind::Compaction
+                    && api.request.connection_id.as_deref() == Some("replacement-account")
+                    && api.request.model == "deepseek-v4.1-flash"
+        )));
+        assert_eq!(
+            document
+                .metadata
+                .config
+                .active_request
+                .connection_id
+                .as_deref(),
+            Some("removed-account"),
+        );
+        assert_eq!(
+            document
+                .metadata
+                .config
+                .pending_request
+                .as_ref()
+                .unwrap()
+                .connection_id
+                .as_deref(),
+            Some("replacement-account"),
+        );
+    }
+    server.shutdown().await;
+}
+
+/// Seeds replayable history on the removed route using `handle`; leaves the business open when `borrowed`.
+/// 使用 `handle` 在已删除路由上播种可重放历史，`borrowed` 时保留开放业务。
+/// Returns after publishing enough real API segments for the production planner to compact.
+/// 发布足够的真实 API 执行段供生产规划器压缩后返回。
+fn seed_manual_replacement_history(handle: &SessionHandle, borrowed: bool) {
+    use vulcan_session_core::v1::{
+        context::{
+            LockedBaselineProjection, LockedBaselineSegmentInput, LockedPromptTarget,
+            LockedSourceKind,
+        },
+        document::{ApiCompletion, PrepareAndStartApiInput},
+        event::{
+            ApiCallStatus, ApiEndReason, ApiPurposeKind, ApiRequestSnapshot, ApiTimings,
+            AssistantSemanticStatus, ContinuationEligibility, ProviderProjectionProof, TurnOutcome,
+        },
+        projection::provider_visible_fingerprint,
+    };
+
+    // Real historical requests establish the locked host baseline.
+    // 真实历史请求建立锁定的宿主基线。
+    let baseline = LockedBaselineProjection::project(vec![LockedBaselineSegmentInput {
+        kind: LockedSourceKind::BaselineHooks,
+        node_id: "host-message-guidance".into(),
+        target: LockedPromptTarget::System,
+        source_label: Some("host_message_guidance".into()),
+        source_id: Some("v1:host_message_guidance".into()),
+        content: vulcan_ai_contract::HOST_MESSAGE_GUIDANCE.into(),
+    }])
+    .unwrap();
+    // The old request facts remain the business authority after compaction.
+    // 压缩后原请求事实仍为业务权威。
+    let request = ApiRequestSnapshot {
+        connection_id: Some("removed-account".into()),
+        thinking_level: Some("high".into()),
+        ..ApiRequestSnapshot::new("anthropic", "claude-opus-5-5")
+    };
+    // Exceed the real retained segment ceiling without hardcoding that policy.
+    // 超过真实保留执行段上限，不硬编码该策略。
+    let rounds = vulcan_context::CONTEXT_COMPACTION_MAX_TAIL_SEGMENTS + 1;
+    handle.mutate_durable(
+        SessionMutationAdmission::ExistingTurn,
+        SessionFlushReason::MetadataChanged,
+        |document| document.apply_atomic_transition(|document| {
+            for round in 0..rounds {
+                // Each historical request has its own chronological projection frontier.
+                // 每个历史请求具有独立的时序投影前沿。
+                let now = 6 + i64::try_from(round).unwrap() * 4;
+                let through_seq = document.events().last().unwrap().seq;
+                let api = document.prepare_and_start_api(PrepareAndStartApiInput {
+                    purpose: ApiPurposeKind::MainGeneration,
+                    request: request.clone(),
+                    request_budget_evidence:
+                        crate::session_runtime_registry_v1::test_provider_request_budget_evidence(),
+                    projection: ProviderProjectionProof {
+                        segment_generation: document.segment_generation(),
+                        document_revision: document.memory_revision(),
+                        retained_from_seq: document.events().first().unwrap().seq,
+                        through_seq,
+                        fingerprint_sha256: provider_visible_fingerprint(document.events(), through_seq)?,
+                    },
+                    locked_baseline: baseline.clone(),
+                    continuation_action_id: None,
+                    now_ms: now,
+                })?.into_value().api_call_id;
+                document.append_assistant_text(api, "Original review evidence and work items.",
+                    AssistantSemanticStatus::Completed, now + 1)?;
+                document.complete_api_group(api, ApiCompletion {
+                    request: request.clone(),
+                    usage: Default::default(),
+                    status: ApiCallStatus::Completed,
+                    end_reason: Some(ApiEndReason::CompletedSuccessfully),
+                    error: None,
+                    continuation_eligibility: ContinuationEligibility::Forbidden,
+                    timing: ApiTimings::default(),
+                    provider_source: None,
+                    completed_at_ms: now + 2,
+                })?;
+            }
+            if !borrowed {
+                document.close_turn(TurnOutcome::Completed, 5, 6 + i64::try_from(rounds).unwrap() * 4)?;
+            }
+            Ok(())
+        }),
+    ).unwrap();
+}
+
 /// Verifies the real insert RPC defers one exact queue identity during independent maintenance.
 /// 验证真实插队 RPC 在独立维护期间延后一个精确排队身份。
 /// Returns nothing; duplicate clicks and summary failure leave the durable queue untouched.

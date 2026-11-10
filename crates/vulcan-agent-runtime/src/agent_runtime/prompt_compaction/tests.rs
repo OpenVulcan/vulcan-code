@@ -197,6 +197,7 @@ fn compaction_launch_request_preserves_session_model_target() {
                 vulcan_context::ContextCompactionTailPolicySource::DeclaredContextLimit,
             ..vulcan_context::ContextCompactionPolicy::default()
         },
+        pending_route: None,
     };
 
     // request must project all three target fields into execution preparation.
@@ -358,16 +359,18 @@ fn compaction_launch_request_preserves_ordinary_turn_controls() {
 #[test]
 fn compaction_retries_only_with_the_same_full_input() {
     assert!(!should_retry_compaction(
+        None,
         "prompt is too long: 1143843 tokens > 1000000 maximum",
         1
     ));
     assert!(!should_retry_compaction(
+        None,
         &prompt_compaction_request_budget_error("fixture limit"),
         1
     ));
-    assert!(should_retry_compaction("connection reset", 1));
-    assert!(should_retry_compaction("connection reset", 2));
-    assert!(!should_retry_compaction("connection reset", 3));
+    assert!(should_retry_compaction(None, "connection reset", 1));
+    assert!(should_retry_compaction(None, "connection reset", 2));
+    assert!(!should_retry_compaction(None, "connection reset", 3));
 }
 
 /// Verifies full-fidelity summaries still commit the planner boundary.

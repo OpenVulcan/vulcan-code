@@ -508,6 +508,10 @@ pub(crate) fn provider_v1_stream_sink_for_session(
 /// Stream-local V1 projection state that retains one exact session handle for its whole lifetime.
 /// 在完整生命周期内保留同一精确会话句柄的流局部 V1 投影状态。
 pub(crate) struct ProviderV1StreamSink {
+    /// Optional pending route authorized by the exact manual summary owner.
+    /// 由精确手动摘要所有者授权的可选待生效路由。
+    manual_compaction_request:
+        Option<vulcan_session_core::v1::context_maintenance::ManualCompactionPendingRequest>,
     /// Frozen planning source and current local compaction attempt, absent for business execution.
     /// 冻结的规划来源及当前本地压缩尝试；业务执行时不存在。
     compaction_source: Option<compaction_source::CompactionSourceWindow>,
@@ -1790,6 +1794,7 @@ impl ProviderV1StreamSink {
     ) -> Self {
         Self {
             compaction_source: None,
+            manual_compaction_request: None,
             handle,
             project_resource_catalog_registry,
             active: None,
@@ -1800,6 +1805,18 @@ impl ProviderV1StreamSink {
             completed_locked_baseline: None,
             answer_code_root: None,
         }
+    }
+
+    /// Returns this sink with the optional manual summary `authority` for physical admission.
+    /// 返回带可选手动摘要 `authority` 的接收器，用于物理请求准入。
+    pub(crate) fn with_manual_compaction_request(
+        mut self,
+        authority: Option<
+            vulcan_session_core::v1::context_maintenance::ManualCompactionPendingRequest,
+        >,
+    ) -> Self {
+        self.manual_compaction_request = authority;
+        self
     }
 
     /// Resolves relative `ui-code` paths of this stream's replies against `root`.
@@ -1901,12 +1918,13 @@ impl ProviderV1StreamSink {
         let project_directory = self.handle.storage_locator()?.project_directory();
         let receipt = self
             .handle
-            .prepare_physical_api_durable(
+            .prepare_physical_api_durable_with_manual_request(
                 purpose,
                 request,
                 locked_baseline,
                 continuation_action_id,
                 prepared_at_ms,
+                self.manual_compaction_request.as_ref(),
                 move |snapshot, preparation| async move {
                     // Plan and materialize all resources before the durable API permit, outside both session locks.
                     // 在可靠API许可之前、两把会话锁之外规划和物化全部资源。

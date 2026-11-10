@@ -35,6 +35,7 @@ impl SessionDocument {
             turn_id: turn.turn_id,
             start_seq: turn.start_seq,
             segment_generation: self.segment_generation(),
+            source_revision: source.metadata.document_revision,
             after_seq: self.last_seq()?,
             source_compaction_id: self.runtime_lock.current_compaction_id,
             run_control: self.collaboration_run_control(),
@@ -154,7 +155,7 @@ impl SessionDocument {
         Ok(true)
     }
 
-    fn validate_manual_compaction_borrow(
+    pub(in crate::v1::document) fn validate_manual_compaction_borrow(
         &self,
         owner: ManualContextCompactionBorrow,
     ) -> Result<(), DomainError> {

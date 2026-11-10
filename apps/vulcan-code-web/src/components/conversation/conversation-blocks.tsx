@@ -31,6 +31,7 @@ import {
 import { useConversationContextCompactionPreview } from "@/state/conversation-live-stream-context";
 import { formatWorkProcessDuration } from "@/components/conversation/conversation-timeline";
 import { TurnStatsTooltipCard } from "@/components/conversation/conversation-turn-stats-card";
+import { parseCompactionProviderError } from "./conversation-system-error-card";
 import { useOpenTurnChangeReview } from "@/components/conversation/turn-change-review-context";
 import type { TurnChangeSummaryV1 } from "@/diff/turn-change-summary-v1";
 
@@ -253,7 +254,12 @@ function contextCompactionFailedDetail(
     metadataString(block.rawMetadata, ["context_compaction_trigger"]) ?? block.compactionTrigger,
     t,
   );
-  const error = metadataString(block.rawMetadata, ["context_compaction_error"]) ?? block.body.trim();
+  // The status summary uses the same short Provider message as the detailed error card.
+  // 状态摘要使用与详细错误卡相同的简短供应商消息。
+  const diagnostic = metadataString(block.rawMetadata, ["context_compaction_error"]) ?? block.body.trim();
+  // Retain the original text for local errors with no upstream response.
+  // 没有上游响应的本地错误保留原始文本。
+  const error = parseCompactionProviderError(diagnostic)?.message ?? diagnostic;
   const lines = [`**${t("contextCompaction.failed.trigger")}:** ${trigger}`];
   if (error) {
     lines.push(`**${t("contextCompaction.failed.error")}:** ${error}`);

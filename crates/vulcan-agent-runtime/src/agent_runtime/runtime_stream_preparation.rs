@@ -7,8 +7,9 @@ use crate::agent_runtime::execution_models::{
     ExecutionPreparation, ExecutionPreparationRequest, ExecutionRunReport,
 };
 use crate::agent_runtime::execution_preparation::{
-    PreparedToolSnapshot, prepare_execution_with_tool_snapshot,
+    PreparedToolSnapshot, prepare_execution_with_provider_blueprint,
 };
+use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
 use crate::agent_runtime::question_runtime::QuestionRuntime;
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::agent_runtime::runtime_stream_bootstrap_core::{
@@ -75,6 +76,7 @@ pub(crate) fn prepare_runtime_launch_input(
     command_session_runtime: Arc<CommandSessionRuntime>,
     public_ai_runtime: Option<Arc<vulcan_provider_adapters::PublicAiRuntime>>,
     request: ExecutionPreparationRequest,
+    manual_summary_blueprint: Option<&ProviderRuntimeBlueprint>,
 ) -> Result<RuntimePreparedLaunchInput, ExecutionRunReport> {
     // preparationStartedAt measures the complete synchronous launch-preparation boundary.
     // preparationStartedAt 测量完整同步启动准备边界。
@@ -109,11 +111,12 @@ pub(crate) fn prepare_runtime_launch_input(
     // executionPreparationStartedAt isolates tool and provider preparation after foundation construction.
     // executionPreparationStartedAt 将基础设施构建后的工具及供应商准备隔离计时。
     let execution_preparation_started_at = after_precheck_unix_millis();
-    let prepared = match prepare_execution_with_tool_snapshot(
+    let prepared = match prepare_execution_with_provider_blueprint(
         &resources.foundation,
         resources.luaskills_runtime.clone(),
         config,
         &resources.request,
+        manual_summary_blueprint,
     ) {
         Ok(prepared) => prepared,
         Err(error) => {

@@ -46,6 +46,20 @@ pub use usage::{
 /// VulcanCode's own client name, sent wherever a protocol carries a client or platform label.
 /// VulcanCode 自身的客户端名称，用于协议携带客户端或平台标签的位置。
 pub const VULCAN_CODE_CLIENT_NAME: &str = "vulcan_code";
+
+/// Identifies the Anthropic billing rejection carried in a generic invalid-request envelope.
+/// 识别封装在通用无效请求错误中的 Anthropic 余额拒绝。
+/// `error_type` and `message` are upstream fields. Returns true only for the known billing sentence.
+/// `error_type` 与 `message` 是上游字段。仅在命中已知余额错误句子时返回 true。
+pub fn is_anthropic_insufficient_credit(error_type: Option<&str>, message: Option<&str>) -> bool {
+    error_type == Some("invalid_request_error")
+        && message.is_some_and(|message| {
+            message
+                .trim_start()
+                .starts_with("Your credit balance is too low to access the Anthropic API.")
+        })
+}
+
 /// VulcanCode product version from the distribution resources, shared by every client identity field.
 /// 来自发行资源的 VulcanCode 产品版本，由所有客户端身份字段共用。
 pub fn vulcan_code_version() -> &'static str {

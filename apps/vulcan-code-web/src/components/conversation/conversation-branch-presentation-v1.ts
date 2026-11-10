@@ -32,7 +32,7 @@ import { turnChangeSummariesV1, type TurnChangeSummaryV1 } from "@/diff/turn-cha
 import { modelSwitchRouteLabel } from "./conversation-model-switch";
 import { goalNoticeTitle } from "./conversation-goal-notice";
 import { dedicatedMemoryNoticeTitle, isDedicatedMemoryNoticeKind } from "@/components/conversation/conversation-dedicated-notice";
-import { parseSystemProviderError } from "./conversation-system-error-card";
+import { parseCompactionProviderError, parseSystemProviderError } from "./conversation-system-error-card";
 import { nativeMediaInputPreview } from "./tool-presentations/native-media-input-preview";
 import {
   contextInjectionCategoryLabel,
@@ -887,10 +887,19 @@ function displayNoteMessage(
     if (event.redacted_detail !== undefined && parseSystemProviderError(event.redacted_detail)) {
       return { ...base, role: "system", recordKind: "transcript", body: event.redacted_detail, metadata: presentationMetadata(summary, rootInput) };
     }
-    const provider = apiStats?.provider ?? "unknown";
+    // The original wrapper stays in the expanded diagnostic while the card uses the parsed provider message.
+    // 原始外壳保留在展开诊断中，卡片使用解析出的供应商消息。
+    const compactionProviderError = (event.reason_code === "context_compaction_failed"
+      || event.reason_code === "automatic_context_compaction_failed") && event.redacted_detail !== undefined
+      ? parseCompactionProviderError(event.redacted_detail)
+      : null;
+    const provider = compactionProviderError?.provider ?? apiStats?.provider ?? "unknown";
     const error = apiStats?.error;
-    const payload = {
-      category: error?.category ?? event.notice_kind,
+    // The V1 balance category allows a user to Continue after replenishment, independently of automatic retry.
+    // V1 余额类别允许用户充值后主动继续，与自动重试独立。
+    const balanceInsufficient = error?.category === "balance";
+    const payload = compactionProviderError === null ? {
+      category: balanceInsufficient ? "payment_required" : error?.category ?? event.notice_kind,
       stage: "terminal",
       // An absent API receipt is not evidence that an external request was sent.
       // 缺少 API 回执不能作为外部请求已经发出的证据。
@@ -898,12 +907,17 @@ function displayNoteMessage(
       semantic_output_observed: false,
       side_effect_observed: false,
       terminal: true,
-      retryable: apiStats?.continuation_eligibility === "allowed",
+      retryable: !balanceInsufficient && apiStats?.continuation_eligibility === "allowed",
       upstream_code: error?.error_code ?? event.reason_code,
       upstream_message: event.redacted_detail ?? error?.message ?? "",
       provider_id: apiStats?.provider,
       model_id: apiStats?.model,
       message: event.redacted_detail ?? error?.message ?? event.reason_code,
+    } : {
+      ...compactionProviderError.structured,
+      retryable: false,
+      message: compactionProviderError.message,
+      compaction_diagnostic: event.redacted_detail,
     };
     return {
       ...base,

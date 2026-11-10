@@ -4,6 +4,7 @@
 use crate::agent_profile::AgentProfileCatalog;
 use crate::agent_runtime::ExtensionGeneration;
 use crate::agent_runtime::execution_models::{ExecutionPreparationRequest, ExecutionRunReport};
+use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
 use crate::agent_runtime::question_runtime::QuestionRuntime;
 use crate::agent_runtime::runtime_stream_bootstrap::bootstrap_runtime_stream;
 use crate::agent_runtime::runtime_stream_bootstrap_core::{
@@ -36,6 +37,40 @@ pub async fn prepare_runtime_stream_launch_with_plugins_and_public_ai(
     public_ai_runtime: Option<Arc<vulcan_provider_adapters::PublicAiRuntime>>,
     request: ExecutionPreparationRequest,
 ) -> Result<RuntimeStreamLaunch, ExecutionRunReport> {
+    Box::pin(prepare_runtime_stream_launch_with_provider_blueprint(
+        config,
+        agent_profile_catalog,
+        luaskills_runtime,
+        vulcan_plugin_runtime,
+        extension_generation,
+        task_runtime,
+        question_runtime,
+        command_session_runtime,
+        public_ai_runtime,
+        request,
+        None,
+    ))
+    .await
+}
+
+/// Builds a launch from the runtime resources and an execution request, optionally using the
+/// request-scoped manual summary blueprint. Returns the launch or a terminal preparation report.
+/// 使用运行时资源与执行请求构建启动，可选用请求级手动摘要蓝图。
+/// 返回启动载荷或终态准备报告。
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn prepare_runtime_stream_launch_with_provider_blueprint(
+    config: &ProviderConfigurationFile,
+    agent_profile_catalog: &AgentProfileCatalog,
+    luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
+    vulcan_plugin_runtime: Option<vulcan_plugin_runtime::VulcanPluginRuntimeManager>,
+    extension_generation: Arc<ExtensionGeneration>,
+    task_runtime: Arc<TaskRuntime>,
+    question_runtime: Arc<QuestionRuntime>,
+    command_session_runtime: Arc<CommandSessionRuntime>,
+    public_ai_runtime: Option<Arc<vulcan_provider_adapters::PublicAiRuntime>>,
+    request: ExecutionPreparationRequest,
+    manual_summary_blueprint: Option<&ProviderRuntimeBlueprint>,
+) -> Result<RuntimeStreamLaunch, ExecutionRunReport> {
     // launchStartedAt measures the complete lazy launch preparation reached by the first stream poll.
     // launchStartedAt 测量首次流轮询进入的完整惰性启动准备边界。
     let launch_started_at = after_precheck_unix_millis();
@@ -54,6 +89,7 @@ pub async fn prepare_runtime_stream_launch_with_plugins_and_public_ai(
         command_session_runtime,
         public_ai_runtime,
         request,
+        manual_summary_blueprint,
     )?;
     after_precheck_trace(
         "after_precheck_26_prepared_launch_input_ready",

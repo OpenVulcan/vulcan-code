@@ -608,7 +608,12 @@ pub(crate) fn http_failure(
         upstream_code.as_deref().or(error_type),
         Some("context_length_exceeded" | "max_tokens_exceeded" | "token_limit_exceeded")
     );
-    let category = if known_overload {
+    let category = if vulcan_llm_core::is_anthropic_insufficient_credit(
+        error_type,
+        upstream_message.as_deref(),
+    ) {
+        AiErrorCategory::PaymentRequired
+    } else if known_overload {
         AiErrorCategory::ProviderOverloaded
     } else if known_context_overflow {
         AiErrorCategory::ContextLengthExceeded

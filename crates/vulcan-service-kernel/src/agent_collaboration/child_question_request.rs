@@ -140,7 +140,7 @@ async fn prepare_child_execution_request(
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// Constructs an auxiliary request from exact storage, history, profile and current project configuration.
 /// 按精确存储、历史、配置记录与当前项目配置构建辅助请求。

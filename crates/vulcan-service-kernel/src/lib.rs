@@ -283,7 +283,6 @@ use context_compaction::{
     context_compaction_budget_note_from_state,
     force_auto_compact_webui_session_after_provider_boundary,
     maybe_auto_compact_webui_session_before_provider_request, spawn_webui_context_compaction_task,
-    webui_context_compaction_plan_from_v1,
 };
 use conversation_actions::*;
 pub use conversation_events_v1::service_install_conversation_event_v1_emitter;

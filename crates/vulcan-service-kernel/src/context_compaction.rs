@@ -13,8 +13,8 @@ use vulcan_agent_runtime::{
         prompt_compaction::{
             PromptCompactionExecution, PromptCompactionJobRequest, PromptCompactionLaunchContext,
             PromptCompactionModelTarget, PromptCompactionProgressEvent,
-            PromptCompactionStreamEvent, resolve_prompt_compaction_model_target,
-            stream_prompt_compaction_job,
+            PromptCompactionStreamEvent, resolve_pending_prompt_compaction_model_target,
+            resolve_prompt_compaction_model_target, stream_prompt_compaction_job,
         },
     },
     conversation_protocol::SessionConversationState,

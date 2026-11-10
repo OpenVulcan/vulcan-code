@@ -374,7 +374,7 @@ pub(crate) fn resolve_git_commit_summary_provider_blueprint(
 /// `selection` 持有精确路由；`requested_reasoning_effort` 经过校验且不会被替换。
 /// Returns a complete execution blueprint, or the exact reasoning validation error.
 /// 返回完整执行蓝图，或精确的思考档位校验错误。
-fn provider_blueprint_from_selection(
+pub(crate) fn provider_blueprint_from_selection(
     selection: vulcan_provider_adapters::ResolvedPublicAiSelection,
     requested_reasoning_effort: ReasoningEffortLevel,
 ) -> Result<ProviderRuntimeBlueprint, String> {

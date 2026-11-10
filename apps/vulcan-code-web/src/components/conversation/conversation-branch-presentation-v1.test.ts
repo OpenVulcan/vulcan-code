@@ -62,6 +62,38 @@ describe("V1 branch request configuration presentation", () => {
     expect(parseConversationBlocks(message!).some((block) => block.kind === "notice")).toBe(true);
   });
 
+  // Verify that a persisted wrapped Provider failure has a short summary and a lossless diagnostic.
+  // 验证已持久化的供应商失败外壳提供简短摘要并无损保留诊断。
+  it("shows the upstream message for a failed compaction", () => {
+    // The nested payload is the terminal request diagnostic, with the actual dispatch facts.
+    // 内层载荷是包含真实分派事实的终态请求诊断。
+    const upstream = {
+      category: "payment_required",
+      stage: "response_headers",
+      dispatch_outcome: "dispatched",
+      semantic_output_observed: false,
+      retryable: false,
+      request_id: "fixture-request",
+      message: "Fixture credit balance is insufficient.",
+    };
+    // Reproduce the persisted compaction wrapper and registered route suffix.
+    // 重现持久化的压缩错误外壳及登记路由后缀。
+    const detail = `Prompt compaction on anthropic/model did not produce a usable summary: Provider streaming execution failed: provider anthropic failure: ${JSON.stringify(upstream)} [provider_route: provider=anthropic].`;
+    // Project the same display note shape emitted by Core, without an invented API link.
+    // 投影 Core 产生的同形显示提示，不捏造 API 关联。
+    const presentation = projectConversationBranchPresentationV1("session-request-config", [{
+      seq: 1, turn_id: null, created_at_ms: 1, updated_at_ms: 1, event_revision: 1, visibility: "ui_only",
+      event: { kind: "display_note", notice_kind: "system_error", severity: "error", reason_code: "context_compaction_failed", redacted_detail: detail },
+    }], EMPTY_RESOURCES, (key) => zhCNTranslations[key]);
+    // The card reads the normalized summary while preserving request identity and the original diagnostic.
+    // 卡片读取规范化摘要，同时保留请求身份与原诊断。
+    const error = parseSystemProviderError(presentation.messages[0]!.body);
+    expect(error?.message).toBe(upstream.message);
+    expect(error?.requestId).toBe(upstream.request_id);
+    expect(error?.retryable).toBe(false);
+    expect(error?.structured.compaction_diagnostic).toBe(detail);
+  });
+
   // A pre-API host failure must retain its original message without claiming unknown dispatch facts.
   // API 前宿主失败必须保留原始消息，不得声称未知的派发事实。
   it("does not manufacture dispatched provider identity for a host failure", () => {

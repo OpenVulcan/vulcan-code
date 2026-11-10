@@ -252,6 +252,25 @@ fn http_insufficient_quota_is_payment_required() {
     assert!(!failure.error.retryable);
 }
 
+/// Checks the real Anthropic HTTP 400 billing envelope while preserving the upstream error type.
+/// 检查真实 Anthropic HTTP 400 余额错误封装，同时保留上游错误类型。
+#[test]
+fn http_anthropic_credit_rejection_is_payment_required() {
+    // Anthropic reuses invalid_request_error for unrelated failures, so only its billing message is special.
+    // Anthropic 对无关失败复用 invalid_request_error，因此只特殊识别余额消息。
+    let failure = http_failure(
+        400,
+        None,
+        r#"{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."}}"#,
+    );
+    assert_eq!(failure.error.category, AiErrorCategory::PaymentRequired);
+    assert_eq!(
+        failure.error.upstream_type.as_deref(),
+        Some("invalid_request_error")
+    );
+    assert!(!failure.error.retryable);
+}
+
 /// Verifies the official Codex overload code overrides a generic HTTP proxy error type.
 /// 验证官方 Codex 过载代码会覆盖 HTTP 代理返回的通用错误类型。
 #[test]

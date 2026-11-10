@@ -28,7 +28,7 @@ pub(super) const HOST: &str = "compaction.cn-beijing.maas.aliyuncs.com";
 
 /// Isolated immutable fake API-key secret, unrelated to user credentials.
 /// 隔离的不可变假 API 密钥秘密，与用户凭据无关。
-pub(super) struct Secrets;
+pub(crate) struct Secrets;
 
 #[async_trait::async_trait]
 impl CredentialSecretResolver for Secrets {
@@ -86,13 +86,13 @@ impl CredentialSecretStore for Secrets {
 
 /// Owns bounded real TLS requests and their JSON bodies, without retaining authorization headers.
 /// 持有有界真实 TLS 请求及 JSON 正文，不保留授权请求头。
-pub(super) struct Server {
+pub(crate) struct Server {
     /// Exact trusted and DNS-pinned transport installed in the real provider runtime.
     /// 安装到真实供应商运行时的精确信任及 DNS 固定传输。
-    pub(super) http: reqwest::Client,
+    pub(crate) http: reqwest::Client,
     /// Actually transmitted requests, in arrival order.
     /// 实际传输的请求，按到达顺序保存。
-    pub(super) requests: Arc<Mutex<Vec<serde_json::Value>>>,
+    pub(crate) requests: Arc<Mutex<Vec<serde_json::Value>>>,
     /// Owning task, aborted on unwind and explicitly joined on successful completion.
     /// 持有任务，展开时中止，正常完成时明确等待退出。
     task: Option<tokio::task::JoinHandle<()>>,
@@ -101,7 +101,7 @@ pub(super) struct Server {
 impl Server {
     /// Starts private TLS returning `summary`; returns isolated transport.
     /// 启动返回`summary`的私有 TLS；返回隔离传输。
-    pub(super) async fn start(summary: &str) -> Self {
+    pub(crate) async fn start(summary: &str) -> Self {
         Self::start_mode(summary, ResponseMode::Summary).await
     }
 
@@ -123,9 +123,12 @@ impl Server {
         let address = listener.local_addr().unwrap();
         // Keep certificate verification active for the declared workspace and standard API host.
         // 为声明的工作空间和标准 API 主机保持证书校验。
-        let parameters =
-            rcgen::CertificateParams::new(vec![HOST.into(), "dashscope.aliyuncs.com".into()])
-                .unwrap();
+        let parameters = rcgen::CertificateParams::new(vec![
+            HOST.into(),
+            "dashscope.aliyuncs.com".into(),
+            "opencode.ai".into(),
+        ])
+        .unwrap();
         // Generate isolated ephemeral server credentials.
         // 生成隔离的临时服务器凭据。
         let key = rcgen::KeyPair::generate().unwrap();
@@ -180,6 +183,7 @@ impl Server {
             .add_root_certificate(root)
             .resolve(HOST, address)
             .resolve("dashscope.aliyuncs.com", address)
+            .resolve("opencode.ai", address)
             .timeout(Duration::from_secs(25))
             .build()
             .unwrap();
@@ -192,7 +196,7 @@ impl Server {
 
     /// Stops and joins the listener; no request or assertion panic may be hidden.
     /// 停止并等待监听器退出；不得隐藏请求或断言异常。
-    pub(super) async fn shutdown(mut self) {
+    pub(crate) async fn shutdown(mut self) {
         let task = self.task.take().unwrap();
         task.abort();
         assert!(task.await.unwrap_err().is_cancelled());

@@ -393,6 +393,17 @@ export function parseSystemProviderError(body: string): SystemProviderError | nu
   return buildLegacyStructuredError(normalizedBody, provider, values, messageParts.join(" | ").trim());
 }
 
+// parseCompactionProviderError extracts a structured failure from the compaction producer's wrapper.
+// parseCompactionProviderError 从压缩生产端的固定外壳提取结构化失败。
+// Given a compaction diagnostic, returns the original Provider facts or null for local failures.
+// 输入压缩诊断，返回原始供应商事实。本地失败返回 null。
+export function parseCompactionProviderError(diagnostic: string): SystemProviderError | null {
+  // Match the full persisted wrapper so provider diagnostics quoted in unrelated messages stay plain text.
+  // 匹配完整持久化外壳，使无关消息中引用的供应商诊断仍保持纯文本。
+  const wrapper = /^Prompt compaction on [^\r\n]+? did not produce a usable summary: (.+)\.$/s.exec(diagnostic);
+  return wrapper === null ? null : parseSystemProviderError(wrapper[1]);
+}
+
 // isProviderResultReconciliationPending returns whether the backend classified this exact attempt as unresolved.
 // isProviderResultReconciliationPending 返回后端是否已将当前精确尝试分类为待确认。
 export function isProviderResultReconciliationPending(

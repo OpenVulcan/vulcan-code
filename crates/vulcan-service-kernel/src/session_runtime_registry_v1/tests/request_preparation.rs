@@ -81,6 +81,104 @@ fn started_count(handle: &SessionHandle) -> usize {
         .expect("read authoritative starts")
 }
 
+/// Rejects a stale manual summary route when the user changes the picker during resource preparation.
+/// 用户在准备资源期间改选模型时，拒绝已过期的手动摘要路由。
+#[tokio::test]
+async fn manual_compaction_preparation_rejects_picker_change() {
+    use vulcan_session_core::v1::context_maintenance::ManualCompactionRequestOwner;
+
+    // Use the same durable picker update as the conversation settings.
+    // 使用会话设置所用的同一可靠选择更新。
+    let (_directory, handle, request) = preparation_fixture();
+    // Change the model while keeping the provider account fixed.
+    // 改选模型，保持供应商账号固定。
+    let choose_model = |model: &str, now_ms| {
+        crate::session_request_config_v1::set_pending_model_request_v1(
+            handle.as_ref(),
+            request.provider.clone(),
+            request.connection_id.clone().unwrap(),
+            model.into(),
+            None,
+            crate::session_request_config_v1::SessionRequestFallback::default(),
+            now_ms,
+        )
+        .unwrap();
+    };
+    choose_model(&request.model, 3);
+    // Borrow the exact idle turn and bind its captured pending selection.
+    // 借用精确空闲回合并绑定捕获的待生效选择。
+    let (_, source) = handle
+        .capture_context_compaction_planning_snapshot_with_source()
+        .unwrap();
+    // Only Core can issue proof of the borrowed turn.
+    // 仅 Core 可签发回合借用凭据。
+    let owner = handle
+        .read(|document| document.borrow_manual_context_compaction(&source))
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    // This authorization covers summary requests alone.
+    // 此凭据仅覆盖摘要请求。
+    let authority = source
+        .bind_pending_request(ManualCompactionRequestOwner::Borrowed(owner))
+        .unwrap();
+    assert!(
+        handle
+            .read(
+                |document| document.validate_manual_compaction_pending_request(
+                    &authority,
+                    ApiPurposeKind::MainGeneration,
+                    &request,
+                )
+            )
+            .unwrap()
+            .is_err()
+    );
+
+    // The builder is reached after preflight and changes the model before durable dispatch.
+    // 构建阶段在预检之后触达，并在可靠分派前改选模型。
+    let receipt = handle
+        .prepare_physical_api_durable_with_manual_request(
+            ApiPurposeKind::Compaction,
+            request.clone(),
+            LockedBaselineProjection::empty(),
+            None,
+            5,
+            Some(&authority),
+            |snapshot, _| async move {
+                choose_model("model-2", 4);
+                Ok(Some(prepared_fixture(snapshot)))
+            },
+        )
+        .await
+        .unwrap();
+    assert!(receipt.is_none());
+    assert_eq!(started_count(&handle), 0);
+
+    // Reusing the stale authorization must fail before any media work on a later attempt.
+    // 后续尝试复用过期凭据时，必须在准备媒体之前失败。
+    let result = handle
+        .prepare_physical_api_durable_with_manual_request::<(), _>(
+            ApiPurposeKind::Compaction,
+            request,
+            LockedBaselineProjection::empty(),
+            None,
+            6,
+            Some(&authority),
+            |_, _| async { panic!("stale authorization reached resource preparation") },
+        )
+        .await;
+    assert!(matches!(
+        result,
+        Err(SessionRuntimeError::Domain(error)) if matches!(
+            *error, DomainError::InvalidRequestConfiguration {
+                field: "manual_compaction.pending_request_changed"
+            }
+        )
+    ));
+    assert_eq!(started_count(&handle), 0);
+}
+
 /// Verifies media work runs outside both synchronous locks and only a durable start releases the result.
 /// 验证媒体工作在两个同步锁之外运行，且仅可靠起始会放行结果。
 #[tokio::test]
