@@ -27,10 +27,10 @@ END]]
 -- 由 pricing/tools/sync-reference-pricing.mjs 生成。
 local DEFAULT_PRICING_CATALOG = {
     catalog_id = "vulcan.reference.model-pricing",
-    revision = "sha256:43eae202d6802f64e894f48fe9c0bc7faa33770d8ee7e53a59fae084fb486454",
+    revision = "sha256:498a6cc837aeae0137bbdabec4d2ed3d339ae2a537362b7e4718839cf95753f4",
     currency = "USD",
     matching_strategy = "exact_canonical_model_id",
-    entry_count = 171,
+    entry_count = 175,
     models = {
     ["beam-free"] = { ["inputPerMillion"] = "0", ["outputPerMillion"] = "0", ["cacheReadPerMillion"] = "0", ["cacheWritePerMillion"] = "0" },
     ["claude-fable-5"] = { ["inputPerMillion"] = "10", ["outputPerMillion"] = "50", ["cacheReadPerMillion"] = "1.00", ["cacheWritePerMillion"] = "12.50" },
@@ -146,8 +146,12 @@ local DEFAULT_PRICING_CATALOG = {
     ["mimo-v2-pro"] = { ["inputPerMillion"] = "0.435", ["outputPerMillion"] = "0.87", ["cacheReadPerMillion"] = "0.0036", ["cacheWritePerMillion"] = "0" },
     ["mimo-v2.5"] = { ["inputPerMillion"] = "0.14", ["outputPerMillion"] = "0.29", ["cacheReadPerMillion"] = "0.0028", ["cacheWritePerMillion"] = "0" },
     ["mimo-v2.5-pro"] = { ["inputPerMillion"] = "0.435", ["outputPerMillion"] = "0.87", ["cacheReadPerMillion"] = "0.0036", ["cacheWritePerMillion"] = "0" },
+    ["mimo-v2.5-tts"] = { ["inputPerMillion"] = "0", ["outputPerMillion"] = "0", ["cacheReadPerMillion"] = "0", ["cacheWritePerMillion"] = "0", ["inputPerMillionCny"] = "0", ["outputPerMillionCny"] = "0", ["cacheReadPerMillionCny"] = "0", ["cacheWritePerMillionCny"] = "0" },
+    ["mimo-v2.5-tts-voiceclone"] = { ["inputPerMillion"] = "0", ["outputPerMillion"] = "0", ["cacheReadPerMillion"] = "0", ["cacheWritePerMillion"] = "0", ["inputPerMillionCny"] = "0", ["outputPerMillionCny"] = "0", ["cacheReadPerMillionCny"] = "0", ["cacheWritePerMillionCny"] = "0" },
+    ["mimo-v2.5-tts-voicedesign"] = { ["inputPerMillion"] = "0", ["outputPerMillion"] = "0", ["cacheReadPerMillion"] = "0", ["cacheWritePerMillion"] = "0", ["inputPerMillionCny"] = "0", ["outputPerMillionCny"] = "0", ["cacheReadPerMillionCny"] = "0", ["cacheWritePerMillionCny"] = "0" },
     ["mimo-v2.6-flash"] = { ["inputPerMillion"] = "0.14", ["outputPerMillion"] = "0.28", ["cacheReadPerMillion"] = "0.0028", ["cacheWritePerMillion"] = "0", ["inputPerMillionCny"] = "1", ["outputPerMillionCny"] = "2", ["cacheReadPerMillionCny"] = "0.02", ["cacheWritePerMillionCny"] = "0" },
     ["mimo-v2.6-pro"] = { ["inputPerMillion"] = "0.435", ["outputPerMillion"] = "0.87", ["cacheReadPerMillion"] = "0.0036", ["cacheWritePerMillion"] = "0", ["inputPerMillionCny"] = "3", ["outputPerMillionCny"] = "6", ["cacheReadPerMillionCny"] = "0.025", ["cacheWritePerMillionCny"] = "0" },
+    ["mimo-v2.6-pro-ultraspeed"] = { ["inputPerMillion"] = "4.35", ["outputPerMillion"] = "8.7", ["cacheReadPerMillion"] = "0.036", ["cacheWritePerMillion"] = "0", ["inputPerMillionCny"] = "30", ["outputPerMillionCny"] = "60", ["cacheReadPerMillionCny"] = "0.25", ["cacheWritePerMillionCny"] = "0" },
     ["minimax-m2.7"] = { ["inputPerMillion"] = "0.30", ["outputPerMillion"] = "1.20", ["cacheReadPerMillion"] = "0.06", ["cacheWritePerMillion"] = "0.375" },
     ["minimax-m2.7-highspeed"] = { ["inputPerMillion"] = "0.60", ["outputPerMillion"] = "2.40", ["cacheReadPerMillion"] = "0.06", ["cacheWritePerMillion"] = "0.375" },
     ["minimax-m3"] = { ["inputPerMillion"] = "0.30", ["outputPerMillion"] = "1.20", ["cacheReadPerMillion"] = "0.06", ["cacheWritePerMillion"] = "0" },

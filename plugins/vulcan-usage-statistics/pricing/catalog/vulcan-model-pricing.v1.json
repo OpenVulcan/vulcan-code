@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "catalogId": "vulcan.reference.model-pricing",
-  "catalogRevision": "sha256:43eae202d6802f64e894f48fe9c0bc7faa33770d8ee7e53a59fae084fb486454",
+  "catalogRevision": "sha256:498a6cc837aeae0137bbdabec4d2ed3d339ae2a537362b7e4718839cf95753f4",
   "adapterVersion": 2,
   "currencies": [
     "USD",
@@ -1817,6 +1817,63 @@
       }
     },
     {
+      "canonicalModelId": "mimo-v2.5-tts",
+      "displayName": "Xiaomi MiMo V2.5 TTS",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "0",
+        "outputPerMillion": "0",
+        "cacheReadPerMillion": "0",
+        "cacheWritePerMillion": "0",
+        "inputPerMillionCny": "0",
+        "outputPerMillionCny": "0",
+        "cacheReadPerMillionCny": "0",
+        "cacheWritePerMillionCny": "0"
+      },
+      "sources": [
+        "https://mimo.mi.com/docs/price"
+      ],
+      "basis": "小米 MiMo 按量 API 在核查日对该语音合成模型限时免费，官网未公布优惠结束后的费率。"
+    },
+    {
+      "canonicalModelId": "mimo-v2.5-tts-voiceclone",
+      "displayName": "Xiaomi MiMo V2.5 TTS Voice Clone",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "0",
+        "outputPerMillion": "0",
+        "cacheReadPerMillion": "0",
+        "cacheWritePerMillion": "0",
+        "inputPerMillionCny": "0",
+        "outputPerMillionCny": "0",
+        "cacheReadPerMillionCny": "0",
+        "cacheWritePerMillionCny": "0"
+      },
+      "sources": [
+        "https://mimo.mi.com/docs/price"
+      ],
+      "basis": "小米 MiMo 按量 API 在核查日对该语音合成模型限时免费，官网未公布优惠结束后的费率。"
+    },
+    {
+      "canonicalModelId": "mimo-v2.5-tts-voicedesign",
+      "displayName": "Xiaomi MiMo V2.5 TTS Voice Design",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "0",
+        "outputPerMillion": "0",
+        "cacheReadPerMillion": "0",
+        "cacheWritePerMillion": "0",
+        "inputPerMillionCny": "0",
+        "outputPerMillionCny": "0",
+        "cacheReadPerMillionCny": "0",
+        "cacheWritePerMillionCny": "0"
+      },
+      "sources": [
+        "https://mimo.mi.com/docs/price"
+      ],
+      "basis": "小米 MiMo 按量 API 在核查日对该语音合成模型限时免费，官网未公布优惠结束后的费率。"
+    },
+    {
       "canonicalModelId": "mimo-v2.6-flash",
       "displayName": "Xiaomi MiMo V2.6 Flash",
       "aliases": [],
@@ -1853,6 +1910,25 @@
         "https://mimo.mi.com/docs/en-US/pricing"
       ],
       "basis": "小米 MiMo 实时 API 双币种刊例，缓存写入当前限时免费。"
+    },
+    {
+      "canonicalModelId": "mimo-v2.6-pro-ultraspeed",
+      "displayName": "Xiaomi MiMo V2.6 Pro Ultraspeed",
+      "aliases": [],
+      "prices": {
+        "inputPerMillion": "4.35",
+        "outputPerMillion": "8.7",
+        "cacheReadPerMillion": "0.036",
+        "cacheWritePerMillion": "0",
+        "inputPerMillionCny": "30",
+        "outputPerMillionCny": "60",
+        "cacheReadPerMillionCny": "0.25",
+        "cacheWritePerMillionCny": "0"
+      },
+      "sources": [
+        "https://mimo.mi.com/docs/price"
+      ],
+      "basis": "小米 MiMo 实时按量 API 的独立双币种刊例，缓存写入在核查日限时免费。"
     },
     {
       "canonicalModelId": "minimax-m2.7",

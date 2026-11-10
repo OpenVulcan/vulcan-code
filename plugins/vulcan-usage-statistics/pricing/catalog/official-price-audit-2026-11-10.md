@@ -55,12 +55,19 @@ GLM 5.2 Fast 的美元与人民币采用两家平台分别公布的单价。Moon
 | `grok-imagine-image-quality` | 原路线于 2026-11-02 退役。兼容请求转到 Imagine Image 2.0 Low，1K 输出 $0.04/张，2K 输出 $0.06/张，编辑输入 $0.01/张。 [xAI 迁移公告](https://docs.x.ai/developers/migration/imagine-image-quality-nov-2) |
 | `grok-imagine-video`、`grok-imagine-video-1.5` | 视频按秒和分辨率计价。480p 输出分别从 $0.05/秒和 $0.08/秒起。 [xAI](https://docs.x.ai/developers/pricing) |
 | `kimi-k3-256k`、`kimi-for-coding`、`kimi-for-coding-highspeed` | Kimi Code 按会员和额度计。三条路线分别对应固定 256K 的 K3、K2.8 Preview、K2.7 Code HighSpeed，额度消耗随路线变化。 [Kimi Code 模型说明](https://www.kimi.com/en/help/kimi-code/models) · [会员说明](https://www.kimi.com/en/help/kimi-code/membership-guide) |
+| `mimo-v2.5-asr` | 按输入音频时长计费，国内 ¥0.50/小时，海外 $0.074/小时。当前费用估算按 Token 计，因此该型号保留待配置。 [小米 MiMo API 价目](https://mimo.mi.com/docs/price) |
 | `moonshot-v1-8k`、`moonshot-v1-32k`、`moonshot-v1-128k` | 文本版系列于 2024-01-31 公测，早于收录起点。Merge Gateway 的每百万输入/输出参考价依次为 $0.20/$2、$1/$3、$2/$5。 [Kimi 发布记录](https://platform.kimi.com/blog/posts/kimi-latest) · [Merge Gateway](https://docs.merge.dev/merge-gateway/models/catalog) |
 | `qwen-image-2.0`、`wan2.7-image` | 百炼中国内地每张 ¥0.20，其他地域有各自单价。 [Qwen Image](https://help.aliyun.com/zh/model-studio/qwen-image-2-0) · [Wan](https://help.aliyun.com/zh/model-studio/wan2-7-image) |
 | `seedream-5.0`、`seedream-5.0-pro` | OpenDesign 的托管图片路线使用套餐额度。火山方舟独立 API 参考价为 Lite ¥0.22/张，Pro 单图 ¥0.30 或 ¥0.60，图层拆分 ¥0.15 或 ¥0.30/层，Pro 自第 2 张输入图起 ¥0.02/张。 [OpenDesign](https://open-design.ai/pricing/) · [火山方舟](https://console.volcengine.com/ark/region%3Acn-beijing/docs/model-pricing) |
 | `text-embedding-v1`、`text-embedding-v2`、`text-embedding-v3` | 按 2025-01-01 起收录的规则保留待配置。百炼北京同步单价为 v1/v2 每百万输入 ¥0.70、v3 ¥0.50。 [百炼价格](https://help.aliyun.com/zh/model-studio/text-embedding-synchronous-api) · [发布记录](https://help.aliyun.com/zh/model-studio/newly-released-models) |
 
 生效目录移除了 9 条 2025-01-01 之前公开的旧参考价，包括 Claude 3.5 Haiku/Sonnet、Cohere Command R/R+、OpenAI o1/o1-mini、DeepSeek Chat/V3 和 Gemini 2.0 Flash。Gemini 2.0 Flash 以首次公开预览的日期计。旧用量和用户覆盖价继续由原有存储保存。 [移除依据](../upstream/official-model-pricing.v1.json)
+
+## MiMo 官方 API 接入补充
+
+复核确认 V2.6 Flash 和 Pro 的实时参考价与官网一致。V2.6 Pro Ultraspeed 使用独立的双币种费用组。每百万 Token 的输入、输出和缓存命中价分别为国内 ¥30、¥60、¥0.25，海外 $4.35、$8.70、$0.036。核查日缓存写入限时免费。 [小米 MiMo API 价目](https://mimo.mi.com/docs/price)
+
+`mimo-v2.5-tts`、`mimo-v2.5-tts-voiceclone` 和 `mimo-v2.5-tts-voicedesign` 在核查日限时免费，随包参考价记录当日的零费率。官网尚未公布活动结束后的价格。Token Plan 使用独立的积分额度。 [小米 MiMo API 价目](https://mimo.mi.com/docs/price) · [Token Plan 额度规则](https://mimo.mi.com/docs/en-US/quick-start/faq/token-plan/Usage%26Quota)
 
 ## 上下文分档
 

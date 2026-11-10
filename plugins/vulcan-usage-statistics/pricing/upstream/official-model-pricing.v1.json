@@ -1101,6 +1101,57 @@
       ],
       "basis": "OpenRouter 明确标记的免费路线。"
     },
+    "mimo-v2.5-tts": {
+      "displayName": "Xiaomi MiMo V2.5 TTS",
+      "prices": {
+        "inputPerMillion": "0",
+        "outputPerMillion": "0",
+        "cacheReadPerMillion": "0",
+        "cacheWritePerMillion": "0",
+        "inputPerMillionCny": "0",
+        "outputPerMillionCny": "0",
+        "cacheReadPerMillionCny": "0",
+        "cacheWritePerMillionCny": "0"
+      },
+      "sources": [
+        "https://mimo.mi.com/docs/price"
+      ],
+      "basis": "小米 MiMo 按量 API 在核查日对该语音合成模型限时免费，官网未公布优惠结束后的费率。"
+    },
+    "mimo-v2.5-tts-voiceclone": {
+      "displayName": "Xiaomi MiMo V2.5 TTS Voice Clone",
+      "prices": {
+        "inputPerMillion": "0",
+        "outputPerMillion": "0",
+        "cacheReadPerMillion": "0",
+        "cacheWritePerMillion": "0",
+        "inputPerMillionCny": "0",
+        "outputPerMillionCny": "0",
+        "cacheReadPerMillionCny": "0",
+        "cacheWritePerMillionCny": "0"
+      },
+      "sources": [
+        "https://mimo.mi.com/docs/price"
+      ],
+      "basis": "小米 MiMo 按量 API 在核查日对该语音合成模型限时免费，官网未公布优惠结束后的费率。"
+    },
+    "mimo-v2.5-tts-voicedesign": {
+      "displayName": "Xiaomi MiMo V2.5 TTS Voice Design",
+      "prices": {
+        "inputPerMillion": "0",
+        "outputPerMillion": "0",
+        "cacheReadPerMillion": "0",
+        "cacheWritePerMillion": "0",
+        "inputPerMillionCny": "0",
+        "outputPerMillionCny": "0",
+        "cacheReadPerMillionCny": "0",
+        "cacheWritePerMillionCny": "0"
+      },
+      "sources": [
+        "https://mimo.mi.com/docs/price"
+      ],
+      "basis": "小米 MiMo 按量 API 在核查日对该语音合成模型限时免费，官网未公布优惠结束后的费率。"
+    },
     "mimo-v2.6-flash": {
       "displayName": "Xiaomi MiMo V2.6 Flash",
       "prices": {
@@ -1134,6 +1185,23 @@
         "https://mimo.mi.com/docs/en-US/pricing"
       ],
       "basis": "小米 MiMo 实时 API 双币种刊例，缓存写入当前限时免费。"
+    },
+    "mimo-v2.6-pro-ultraspeed": {
+      "displayName": "Xiaomi MiMo V2.6 Pro Ultraspeed",
+      "prices": {
+        "inputPerMillion": "4.35",
+        "outputPerMillion": "8.7",
+        "cacheReadPerMillion": "0.036",
+        "cacheWritePerMillion": "0",
+        "inputPerMillionCny": "30",
+        "outputPerMillionCny": "60",
+        "cacheReadPerMillionCny": "0.25",
+        "cacheWritePerMillionCny": "0"
+      },
+      "sources": [
+        "https://mimo.mi.com/docs/price"
+      ],
+      "basis": "小米 MiMo 实时按量 API 的独立双币种刊例，缓存写入在核查日限时免费。"
     },
     "minimax-m3.1-flash": {
       "displayName": "MiniMax M3.1 Flash",
