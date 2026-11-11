@@ -159,6 +159,13 @@ impl SessionDocument {
     ) -> Result<GenerationBuildOutput, DomainError> {
         self.reject_dedicated_change("generation")?;
         self.ensure_generation_source_ready()?;
+        // Editing replaces the live generation, so its physical API must already be finished.
+        // 编辑会替换原会话代次，因此物理 API 必须已经结束。
+        if let Some(active_api) = &self.active_api {
+            return Err(DomainError::GenerationWhileApiActive {
+                api_call_id: active_api.api_call_id.value(),
+            });
+        }
         // Replacing source history cannot abandon an accepted question or child obligation.
         // 替换来源历史不能遗弃已接纳问题或子任务义务。
         if self.has_unsettled_collaboration_for_edit_or_delete() {
@@ -250,6 +257,8 @@ impl SessionDocument {
             });
         }
 
+        // A validated Turn end bounds the copy even when a later source request is active.
+        // 即使来源的后续请求仍在运行，已校验的回合结束点也能限定复制范围。
         let target_index = self.require_generation_turn_end_target(input.source_turn_end_seq)?;
         let mut retained = self.events[..=target_index].to_vec();
         // The child excludes successor work, while the source retains its complete cross-Turn audit.
@@ -300,11 +309,6 @@ impl SessionDocument {
         if self.resident_start_seq != 1 {
             return Err(DomainError::GenerationRequiresFullHistory {
                 resident_start_seq: self.resident_start_seq,
-            });
-        }
-        if let Some(active_api) = &self.active_api {
-            return Err(DomainError::GenerationWhileApiActive {
-                api_call_id: active_api.api_call_id.value(),
             });
         }
         Ok(())

@@ -344,7 +344,7 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
     _conversationId: string,
     anchorMessageId?: string,
   ): boolean => {
-    if (!anchorMessageId || props.sessionRunning) return false;
+    if (!anchorMessageId) return false;
     const messages = canonicalMessages.current;
     const sourceMessage = messages.find((message) => message.id === anchorMessageId);
     const sourceTurnEndSeq = completedTurnEndSeqForPresentation(
@@ -357,7 +357,7 @@ export function ConversationBranchWorkspaceV1(props: ConversationBranchWorkspace
       sourceTurnEndSeq,
     });
     return true;
-  }, [props.onRootInputGenerationAction, props.sessionRunning]);
+  }, [props.onRootInputGenerationAction]);
 
   return (
     <ThinkingPopupContext.Provider value={normalizeThinkingDisplayMode(props.reasoningDisplayMode) === "popup_only"}>

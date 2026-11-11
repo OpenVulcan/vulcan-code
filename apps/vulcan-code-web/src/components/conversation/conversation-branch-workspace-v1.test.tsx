@@ -34,7 +34,7 @@ import { ConversationLiveStreamProvider } from "@/state/conversation-live-stream
 import { ConversationLiveStreamStore } from "@/state/conversation-live-stream-store";
 import type { ConversationSessionResourceCatalogV1 } from "@/state/conversation-session-resources-v1";
 import { appendToolRequestDraftMessages, createConversationBranchPresentationProjectorV1, projectConversationBranchPresentationV1 } from "./conversation-branch-presentation-v1";
-import { ConversationBranchWorkspaceV1 } from "./conversation-branch-workspace-v1";
+import { ConversationBranchWorkspaceV1, type ConversationBranchGenerationActionV1 } from "./conversation-branch-workspace-v1";
 import type { ThinkingDisplayMode } from "./thinking-display";
 import { projectConversationTimelineItems } from "./conversation-timeline";
 import type { ConversationV1CollaborationNavigation } from "./conversation-collaboration-navigation";
@@ -291,6 +291,9 @@ function workspaceTree(
   // Inject a stable transport store for live construction tests.
   // 为实时构造测试注入稳定传输存储。
   liveStore = new ConversationLiveStreamStore(),
+  // Capture requests emitted by the real history action buttons.
+  // 捕获真实历史操作按钮发出的请求。
+  onGenerationAction: (action: ConversationBranchGenerationActionV1) => void = () => undefined,
 ): React.ReactElement {
   const conversation: ConversationSummary = {
     id: "session-branch-v1",
@@ -333,7 +336,7 @@ function workspaceTree(
             onExpandedStateChange={() => undefined}
             onOpenSubagentPanel={async () => true}
             onPreserveHistoryPrepend={(load) => load()}
-            onRootInputGenerationAction={() => undefined}
+            onRootInputGenerationAction={onGenerationAction}
             onScrollStateChange={() => undefined}
             reasoningDisplayMode={reasoningDisplayMode}
             scrollRef={React.createRef<HTMLElement>()}
@@ -397,6 +400,42 @@ function retryDiagnostic(requestId: string): string {
 }
 
 describe("ConversationBranchWorkspaceV1", () => {
+  it("opens the fork action for a completed turn while a later turn is running", async () => {
+    // Keep the completed turn and a distinct live follow-up in the same event window.
+    // 在同一事件窗口中保留已完成回合与独立的运行中后续回合。
+    const completed = completeTurnEvents();
+    const turnEnd = completed.find(({ event }) => event.kind === "turn_stats")!;
+    const followUp = {
+      ...eventSummary(turnEnd.seq + 1, {
+        kind: "user_input",
+        client_action_id: clientActionId("follow-up"),
+        input_id: 2,
+        input_source: "root",
+        text: "Follow up",
+      }),
+      turn_id: 12,
+    };
+    const onGenerationAction = vi.fn();
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    try {
+      await React.act(async () => root.render(workspaceTree(
+        [...completed, followUp], "inline_output", [], true, undefined, undefined, onGenerationAction,
+      )));
+      // Click the localized production button and assert the exact historical boundary.
+      // 点击本地化的实际按钮，并验证精确的历史回合边界。
+      const label = loadedLocaleCatalog("zh-CN")!["conversation.action.fork"];
+      const fork = host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+      expect(fork).not.toBeNull();
+      await React.act(async () => fork!.click());
+      expect(onGenerationAction).toHaveBeenCalledExactlyOnceWith({ kind: "fork", sourceTurnEndSeq: turnEnd.seq });
+    } finally {
+      await React.act(async () => root.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
+
   // Verify that new failures update the existing card, its controls show exact diagnostics, and recovery removes it.
   // 验证新增失败更新现有卡片，翻页显示精确诊断，恢复后移除卡片。
   it("pages repeated provider errors in one card and hides the card after recovery", async () => {

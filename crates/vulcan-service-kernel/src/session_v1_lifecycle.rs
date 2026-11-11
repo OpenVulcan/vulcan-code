@@ -1789,6 +1789,96 @@ mod tests {
         fixture.shutdown().await;
     }
 
+    /// Forks the completed prefix while a later source API continues streaming.
+    /// 后续来源 API 继续流式运行时，从已完成的历史前缀分叉。
+    #[tokio::test]
+    async fn fork_creation_copies_completed_prefix_during_active_request() {
+        // The fixture owns the storage and registry for both sessions.
+        // 夹具持有两个会话的存储与运行时注册表。
+        let fixture = LifecycleStorageFixture::start().await;
+        let registry = SessionRuntimeRegistry::default();
+        let source_session_id = SessionId::new_v4();
+        let child_session_id = SessionId::new_v4();
+        let source = create_fixture_session(&fixture, &registry, source_session_id).await;
+        let source_turn_end_seq = close_fixture_turn(&source, 1_787_788_800_100);
+        let (source_generation, completed_events) = source
+            .read(|document| (document.segment_generation(), document.events().to_vec()))
+            .expect("capture completed source prefix");
+
+        // Stage an actual API owner and unflushed progress after the selected fork point.
+        // 在所选分叉点之后建立真实 API 所有者，并写入尚未刷盘的进度。
+        source
+            .submit_root_input(
+                ClientInputSubmission::new(
+                    ClientActionId::try_new("live-follow-up").expect("follow-up action id"),
+                    "live follow-up",
+                    Vec::new(),
+                ),
+                1_787_788_800_200,
+            )
+            .expect("open a later source turn");
+        let preparation = source
+            .read(|document| {
+                lifecycle_test_api_input(
+                    document,
+                    ApiRequestSnapshot::new("provider", "model"),
+                    1_787_788_800_300,
+                )
+            })
+            .expect("prepare later source API");
+        let api_call_id = source
+            .prepare_and_start_api_durable(preparation)
+            .expect("start later source API")
+            .value
+            .api_call_id;
+        source
+            .update_reasoning(
+                api_call_id,
+                "streaming",
+                AssistantSemanticStatus::Streaming,
+                1_787_788_800_400,
+            )
+            .expect("append source reasoning");
+
+        // The child receives the exact completed history and no work from the live turn.
+        // 子会话收到精确的已完成历史，且不包含运行中回合的工作。
+        let child = create_or_get_forked_session_v1(
+            &fixture.controller,
+            &registry,
+            CreateForkSessionV1Request {
+                source_session_id,
+                expected_source_generation: source_generation,
+                child_session_id,
+                title: String::from("Forked during streaming"),
+                source_turn_end_seq,
+                now_ms: 1_787_788_800_500,
+            },
+        )
+        .await
+        .expect("fork a completed turn while the source API is active");
+        assert!(child.created);
+        child
+            .handle
+            .read(|document| {
+                assert_eq!(document.events(), completed_events.as_slice());
+                assert!(document.active_turn().is_none());
+                assert!(document.active_api().is_none());
+            })
+            .expect("read the idle child");
+
+        // The same source API can still publish progress after the child is created.
+        // 创建子会话后，同一个来源 API 仍可发布进度。
+        source
+            .update_reasoning(
+                api_call_id,
+                "streaming continues",
+                AssistantSemanticStatus::Streaming,
+                1_787_788_800_600,
+            )
+            .expect("continue streaming the same source API");
+        fixture.shutdown().await;
+    }
+
     /// A stale parent generation cannot publish any child row or directory owner.
     /// 陈旧父 generation 不能发布任何子会话索引或目录 owner。
     #[tokio::test]
