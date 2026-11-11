@@ -9,13 +9,8 @@ import { useI18n } from "@/i18n";
 import type { PackageFileListing } from "@/types";
 import { formatBytes } from "@/lib/display-format";
 import { FolderPickerSidebar } from "./folder-picker-dialog";
+import { projectPathKey } from "./project-path-key";
 import "@/ui-kit/styles/features/project-folder-picker.css";
-
-// Parameters: path is a native directory identity. Returns its comparison key for the host-declared root list.
-// 参数：path 为原生目录身份。返回其在宿主声明根列表中的比较键。
-function packagePathKey(path: string): string {
-  return path.replace(/\\/g, "/").replace(/\/+$/g, "").toLocaleLowerCase() || "/";
-}
 
 // PackageFilePickerDialogProps configures a picker for one kind of package file.
 // PackageFilePickerDialogProps 配置某一类套件文件的选择器。
@@ -84,11 +79,11 @@ export function PackageFilePickerDialog(props: PackageFilePickerDialogProps) {
   // activeRootPath 解析包含当前目录的最长根路径前缀。
   const activeRootPath = React.useMemo(() => {
     if (!listing) return null;
-    const currentKey = packagePathKey(listing.directory.path);
+    const currentKey = projectPathKey(listing.directory.path);
     let matchedPath: string | null = null;
     let matchedLength = -1;
     roots.forEach((root) => {
-      const rootKey = packagePathKey(root.path);
+      const rootKey = projectPathKey(root.path);
       const matches = rootKey === "/" ? currentKey.startsWith("/") : currentKey === rootKey || currentKey.startsWith(`${rootKey}/`);
       if (matches && rootKey.length > matchedLength) {
         matchedPath = root.path;
@@ -167,7 +162,7 @@ export function PackageFilePickerDialog(props: PackageFilePickerDialogProps) {
   // busy 在目录加载或套件处理期间阻止导航。
   const busy = loading || submitting;
   const directory = listing?.directory ?? null;
-  const currentKey = directory ? packagePathKey(directory.path) : null;
+  const currentKey = directory ? projectPathKey(directory.path) : null;
   // visibleEntries keeps dot folders out of the way, as the folder picker does by default.
   // visibleEntries 与目录选择器默认行为一致，隐藏以点开头的目录。
   const visibleEntries = directory?.entries.filter((entry) => !entry.hidden) ?? [];

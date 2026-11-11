@@ -8,7 +8,7 @@ import type { AgentActionProps } from "@/components/features/agents/agents-area"
 import type { SkillActionProps, SkillSubAreaId } from "@/components/features/skills/skills-area";
 import type { AgentSkillActionProps } from "@/components/features/agent-skills/agent-skills-types";
 import type { MemoryActionProps, MemorySubAreaId } from "@/components/features/memory/memory-area";
-import type { ConversationMenuAction, ProjectGroupAction, ProjectMenuAction } from "@/components/project/project-sidebar";
+import type { ConversationMenuAction, ProjectFolderStart, ProjectGroupAction, ProjectMenuAction } from "@/components/project/project-sidebar";
 import type { DraftConversationSelection } from "@/components/workspace/workspace-resizable-body";
 import type {
   DiffReviewSelection,
@@ -124,9 +124,9 @@ export interface WorkspaceShellProps {
   // Opens a new draft preset to a dedicated assistant in one project.
   // 在单个项目中打开预设为专职助手的新草稿。
   onCreateDedicatedConversation: (project: ProjectSummary) => void;
-  // Opens the create-project flow.
-  // 打开创建项目流程。
-  onCreateProject: (groupId?: string) => void;
+  // Opens the create-project flow; the start says where the folder goes and what follows it.
+  // 打开创建项目流程；start 说明文件夹放入哪里，以及之后做什么。
+  onCreateProject: (start?: ProjectFolderStart) => void;
   // Project home shown over the chat stage, with its page body and close action; null shows the conversation.
   // 覆盖在聊天舞台上的项目首页及其页面主体与关闭动作；为 null 时显示会话。
   projectHome?: { project: ProjectSummary; content: React.ReactNode; onClose: () => void } | null;
