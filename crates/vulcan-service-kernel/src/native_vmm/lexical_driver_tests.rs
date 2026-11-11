@@ -1027,6 +1027,36 @@ async fn real_controller_lexical_driver_pages_and_tracks_mutations_body() {
     verify_saved_cleanup_policy_on_real_storage(runtime).await;
 }
 
+/// Rebuilds 39 memories through native maintenance using a simulated model capped at 20 inputs.
+/// 通过原生维护重建 39 条记忆，模拟模型单次最多接收 20 条。
+#[test]
+fn real_controller_vector_rebuild_respects_embedding_input_limit() {
+    run_on_engine_stack("vmm-rebuild-input-limit", || async {
+        // The controller and all seeded data belong to this test.
+        // 控制器和种入的全部数据均归本测试所有。
+        let (_temporary, controller) = isolated_controller().await;
+        let capability = super::tests::embedding_capability_handle(BTreeSet::from([
+            EmbeddingTask::ProviderDefault,
+        ]));
+        // Seed distinct, privately owned summaries in one project to reproduce the oversize batch.
+        // 在同一项目种入彼此不同且有明确私有归属的摘要，复现超限批次。
+        let memories = (0..39)
+            .map(|index| {
+                let mut record = indexed_memory(index, "vmm-project:1");
+                record.source_subject_id = Some(SubjectId::new("vmm-subject:1").expect("subject"));
+                record.vector_space_id = None;
+                record.summary = format!("Vector rebuild fixture {index}");
+                record
+            })
+            .collect();
+        crate::native_vmm::client::pending_analysis_acceptance_tests::verify_vector_rebuild_batch_limit(
+            bootstrap_vmm_data_plane(&controller).await.expect("rebuild data plane"),
+            capability.snapshot,
+            memories,
+        ).await;
+    });
+}
+
 /// Verifies queued native extraction on its own vector generation and isolated controller.
 /// 在独立向量代次及隔离控制器上验证排队的原生提炼。
 #[tokio::test]

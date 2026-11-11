@@ -36,6 +36,109 @@ pub(in crate::native_vmm) mod nonempty;
 #[path = "project_profile_acceptance_tests.rs"]
 pub(in crate::native_vmm) mod project_profiles;
 
+/// Verifies preview, physical request sizes and durable vector replacement on an isolated controller.
+/// 在隔离控制器上验证预检、实际请求条数及持久向量重建。
+/// `data_plane` owns the test storage, `capability` is the simulated model, and `memories` are the initial targets.
+/// `data_plane` 持有测试存储，`capability` 为模拟模型，`memories` 为初始目标。
+pub(in crate::native_vmm) async fn verify_vector_rebuild_batch_limit(
+    data_plane: VmmDataPlaneHandle,
+    mut capability: InferenceCapabilitySnapshot,
+    memories: Vec<vulcan_memorymesh_core::MemoryRecord>,
+) {
+    // Keep the validating mock port and the deterministic dense-vector response used by native analysis tests.
+    // 复用原生分析测试的校验端口及确定性稠密向量响应。
+    let port = Arc::new(CapturingAnalysisPort {
+        inner: MockHostAiPort::new(),
+        requests: StdMutex::new(Vec::new()),
+        reject_next_turn: AtomicBool::new(false),
+        fixture: AnalysisFixture::Nonempty,
+        embedding_requests: StdMutex::new(Vec::new()),
+        profile_instruction_pause: StdMutex::new(None),
+        postaction_pause: StdMutex::new(None),
+    });
+    let contract = capability
+        .operations
+        .iter_mut()
+        .find(|operation| {
+            operation.operation == AiOperation::EmbeddingCreate && operation.purpose_id.is_none()
+        })
+        .and_then(|operation| operation.embedding.as_mut())
+        .expect("embedding contract");
+    contract.maximum_inputs = Some(20);
+    let contract = contract.clone();
+    port.inner
+        .set_capability_snapshot(capability)
+        .expect("fixture capability");
+    let runtime = Arc::new(
+        NativeVmmCoreRuntime::bootstrap(port.clone(), data_plane.clone())
+            .await
+            .expect("isolated rebuild runtime"),
+    );
+    let initial = runtime.storage_snapshot().expect("initial snapshot");
+    runtime
+        .transform_storage_snapshot(
+            "rebuild-seed",
+            "test",
+            initial.storage_version,
+            move |snapshot| {
+                snapshot.dataset.memories.extend(memories);
+                Ok(())
+            },
+        )
+        .await
+        .expect("seed legacy memories");
+    let maintenance = crate::native_vmm::NativeVmmMaintenance::new(
+        runtime,
+        data_plane,
+        Arc::new(RwLock::new(())),
+    );
+
+    // The same confirmation is consumed by the actual maintenance entry point.
+    // 由真实维护入口消费同一份确认。
+    let preview = maintenance
+        .preview_vector_rebuild()
+        .await
+        .expect("rebuild preview");
+    assert_eq!((preview.rebuild_memory_count, preview.batch_count), (39, 2));
+    let result = maintenance
+        .execute_vector_rebuild(
+            "rebuild-capped-fixture",
+            preview.storage_version,
+            &preview.preview_fingerprint,
+            true,
+        )
+        .await
+        .expect("rebuild through production maintenance");
+    assert_eq!((result.rebuilt_memory_count, result.batch_count), (39, 2));
+    assert_eq!(
+        maintenance
+            .preview_vector_rebuild()
+            .await
+            .expect("remaining preview")
+            .rebuild_memory_count,
+        0
+    );
+
+    // Validate each observed request against the same typed limit that rejects the original request.
+    // 用会拒绝原始超限请求的同一强类型契约校验每条观测请求。
+    let requests = port
+        .embedding_requests
+        .lock()
+        .expect("captured embedding requests");
+    assert_eq!(
+        requests
+            .iter()
+            .map(|call| call.request.inputs.len())
+            .collect::<Vec<_>>(),
+        [20, 19]
+    );
+    for call in requests.iter() {
+        contract
+            .validate_request(&call.request)
+            .expect("within selected model limit");
+    }
+}
+
 /// One explicitly armed test pause after command admission and before the model response is released.
 /// 在命令准入后、模型响应释放前显式启用的一次测试暂停。
 struct ProfileInstructionPause {

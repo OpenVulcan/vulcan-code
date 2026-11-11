@@ -683,8 +683,8 @@ pub(crate) struct NativeVmmVectorRebuildPreview {
     /// Number of project scopes containing rebuild targets.
     /// 包含重建目标的项目作用域数量。
     pub affected_project_count: u64,
-    /// Exact number of Core rebuild batches required at the rebuild batch contract limit.
-    /// 按 Core 每批重建契约上限计算的准确重建批次数量。
+    /// Exact rebuild batch count after applying both the Core and model limits.
+    /// 应用 Core 和模型两项上限后的准确重建批次数。
     pub batch_count: u64,
     /// SHA-256 confirmation identity of the exact displayed target set.
     /// 所显示准确目标集合的 SHA-256 确认身份。
@@ -1637,13 +1637,13 @@ impl NativeVmmMaintenance {
         let subject_id = native_vmm_subject_id()?;
         let mut rebuilt_memory_count = 0_u64;
         let mut batch_count = 0_u64;
+        // Use the same ceiling bound to the confirmation for both storage lanes.
+        // 活动区和回收站使用绑定在确认指纹中的同一个批次上限。
+        let batch_limit = descriptor.rebuild_batch_limit.get();
         for (scope_id, memory_ids) in active_targets {
-            for memory_ids in memory_ids.chunks(vulcan_memorymesh_core::MAX_REBUILD_VECTORS_BATCH) {
+            for memory_ids in memory_ids.chunks(batch_limit) {
                 let current = self.runtime.current_vector_space_descriptor().await?;
-                if current.vector_space_id != descriptor.vector_space_id
-                    || current.embedding_dimension != descriptor.embedding_dimension
-                    || current.capability_fingerprint != descriptor.capability_fingerprint
-                {
+                if current != descriptor {
                     return Err(String::from(
                         "The embedding route changed during the vector rebuild; committed batches stay valid; precheck the remaining records again.",
                     ));
@@ -1702,7 +1702,7 @@ impl NativeVmmMaintenance {
             }
         }
         for (scope_id, memory_ids) in recycle_bin_targets {
-            for memory_ids in memory_ids.chunks(vulcan_memorymesh_core::MAX_REBUILD_VECTORS_BATCH) {
+            for memory_ids in memory_ids.chunks(batch_limit) {
                 let current = self.runtime.current_vector_space_descriptor().await?;
                 if current != descriptor {
                     return Err(String::from(
@@ -1897,7 +1897,15 @@ impl NativeVmmMaintenance {
                 required_similarity: NATIVE_VMM_VECTOR_ADOPTION_MIN_SIMILARITY,
             });
         }
-        if self.runtime.current_vector_space_descriptor().await? != descriptor {
+        // Adoption samples one vector at a time and is bound to vector identity.
+        // 沿用流程每次抽样一个向量，校验绑定的是向量标识。
+        if self
+            .runtime
+            .current_vector_space_descriptor()
+            .await?
+            .vector_space_id
+            != descriptor.vector_space_id
+        {
             return Err(String::from(
                 "The embedding route changed while keeping existing vectors; precheck again.",
             ));
@@ -4280,8 +4288,8 @@ fn vector_status_from_snapshot(
 ///
 /// # Returns
 /// 返回值
-/// A deterministic scope-to-memory map suitable for 256-record Core batches.
-/// 返回适用于 Core 每批 256 条限制的确定性作用域到记忆映射。
+/// A deterministic scope-to-memory map ready for model-bounded maintenance batches.
+/// 返回可按模型上限分批的确定性作用域到记忆映射。
 fn active_vector_rebuild_targets(
     snapshot: &StorageSnapshot,
     target: &VectorSpaceId,
@@ -4525,29 +4533,25 @@ fn vector_rebuild_preview(
         recycle_bin_targets.values().map(Vec::len).sum::<usize>();
     let rebuild_memory_count =
         active_rebuild_memory_count.saturating_add(recycle_bin_rebuild_memory_count);
+    // Count per project and lane using the exact ceiling applied by execution.
+    // 按项目及存储区计数，并使用执行采用的准确上限。
+    let batch_limit = descriptor.rebuild_batch_limit.get();
     let batch_count = active_targets
         .values()
-        .map(|memory_ids| {
-            memory_ids
-                .len()
-                .div_ceil(vulcan_memorymesh_core::MAX_REBUILD_VECTORS_BATCH)
-        })
-        .chain(recycle_bin_targets.values().map(|memory_ids| {
-            memory_ids
-                .len()
-                .div_ceil(vulcan_memorymesh_core::MAX_REBUILD_VECTORS_BATCH)
-        }))
+        .chain(recycle_bin_targets.values())
+        .map(|memory_ids| memory_ids.len().div_ceil(batch_limit))
         .sum::<usize>();
     let affected_projects = active_targets
         .keys()
         .chain(recycle_bin_targets.keys())
         .collect::<BTreeSet<_>>();
     let mut hasher = Sha256::new();
-    hasher.update(b"native-vmm-vector-rebuild-preview-v2\0");
+    hasher.update(b"native-vmm-vector-rebuild-preview-v3\0");
     hasher.update(snapshot.storage_version.to_le_bytes());
     hasher.update(descriptor.vector_space_id.as_str().as_bytes());
     hasher.update([0]);
     hasher.update(descriptor.embedding_dimension.to_le_bytes());
+    hasher.update(usize_to_u64(batch_limit).to_le_bytes());
     hasher.update(descriptor.capability_fingerprint.as_bytes());
     for (lane, targets) in [
         (b"active".as_slice(), &active_targets),

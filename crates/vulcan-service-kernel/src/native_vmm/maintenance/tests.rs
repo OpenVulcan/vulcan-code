@@ -279,8 +279,8 @@ fn vector_status_keeps_route_failure_distinct_from_generation_mismatch() {
     assert_eq!(status.error.as_deref(), Some("embedding route unavailable"));
 }
 
-/// Verifies rebuild previews are deterministic, project-aware, and split only at Core's 256-record limit.
-/// 验证重建预检具有确定性、感知项目，并且只按 Core 的 256 条上限切批。
+/// Verifies deterministic per-project rebuild counts and confirmation binding to the effective limit.
+/// 验证按项目确定性计算重建批次，并将确认绑定到有效上限。
 #[test]
 fn vector_rebuild_preview_is_deterministic_and_bounded() {
     let target = VectorSpaceId::new("target-space").expect("target vector space");
@@ -288,6 +288,10 @@ fn vector_rebuild_preview_is_deterministic_and_bounded() {
         vector_space_id: target.clone(),
         embedding_dimension: 1_536,
         capability_fingerprint: String::from("capability-fingerprint"),
+        rebuild_batch_limit: std::num::NonZeroUsize::new(
+            vulcan_memorymesh_core::MAX_REBUILD_VECTORS_BATCH,
+        )
+        .expect("positive Core limit"),
     };
     let mut snapshot = empty_snapshot(21);
     for index in 0..257 {
@@ -350,6 +354,18 @@ fn vector_rebuild_preview_is_deterministic_and_bounded() {
     assert_eq!(first.affected_project_count, 2);
     assert_eq!(first.batch_count, 4);
     assert!(first.preview_fingerprint.starts_with("sha256:"));
+
+    // A smaller model limit changes the confirmation and count without changing the target generation.
+    // 更小的模型上限改变确认指纹与批数，目标向量代次保持一致。
+    let limited_descriptor = NativeVmmVectorSpaceDescriptor {
+        rebuild_batch_limit: std::num::NonZeroUsize::new(20).expect("positive fixture limit"),
+        ..descriptor
+    };
+    let limited = vector_rebuild_preview(&snapshot, &limited_descriptor).expect("limited preview");
+    assert_eq!(limited.batch_count, 15);
+    assert_eq!(limited.rebuild_memory_count, first.rebuild_memory_count);
+    assert_eq!(limited.target_vector_space_id, first.target_vector_space_id);
+    assert_ne!(limited.preview_fingerprint, first.preview_fingerprint);
 }
 
 /// Verifies keeping vectors moves only old-generation memories whose vector has the current dimension.
@@ -362,6 +378,7 @@ fn vector_adoption_keeps_same_dimension_vectors_and_leaves_the_rest_for_rebuild(
         vector_space_id: current.clone(),
         embedding_dimension: 2,
         capability_fingerprint: String::from("capability-fingerprint"),
+        rebuild_batch_limit: std::num::NonZeroUsize::MIN,
     };
     let stored = |id: &str, space: &VectorSpaceId, vector: Vec<f32>| {
         let mut record = memory(
@@ -445,6 +462,7 @@ fn vector_adoption_keeps_only_the_older_generations_whose_sample_passed() {
         vector_space_id: current.clone(),
         embedding_dimension: 2,
         capability_fingerprint: String::from("capability-fingerprint"),
+        rebuild_batch_limit: std::num::NonZeroUsize::MIN,
     };
     let stored = |id: &str, space: &VectorSpaceId| {
         let mut record = memory(

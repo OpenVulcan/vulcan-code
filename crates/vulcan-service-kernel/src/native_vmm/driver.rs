@@ -86,6 +86,9 @@ pub(super) struct NativeVmmVectorSpaceDescriptor {
     /// Opaque capability fingerprint used to derive the generation.
     /// 用于派生该代次的不透明能力指纹。
     pub(super) capability_fingerprint: String,
+    /// Effective rebuild batch ceiling of this route and the Core maintenance contract.
+    /// 此路由和 Core 维护契约共同约束的有效重建批次上限。
+    pub(super) rebuild_batch_limit: std::num::NonZeroUsize,
 }
 
 /// Owns the copied native Core and its process-local host driver.
@@ -3634,8 +3637,8 @@ fn native_vector_space_id(
 ///
 /// # Returns
 /// 返回值
-/// The route-derived logical generation, dense width, and opaque capability fingerprint.
-/// 返回由路由派生的逻辑代次、稠密维度及不透明能力指纹。
+/// The route-derived vector identity and the effective rebuild batch ceiling.
+/// 返回由路由派生的向量标识及有效重建批次上限。
 ///
 /// # Errors
 /// 错误
@@ -3645,6 +3648,25 @@ fn vector_space_descriptor_from_capability(
     handle: &HostAiCapabilityHandle,
 ) -> Result<NativeVmmVectorSpaceDescriptor, CoreError> {
     let (embedding_dimension, capability_fingerprint) = embedding_config_from_capability(handle)?;
+    // The request ceiling constrains rebuild execution without changing stored-vector compatibility.
+    // 请求条数上限约束重建执行，但不影响已存向量的兼容性。
+    let embedding = native_vmm_embedding_operation(handle)
+        .map_err(NativeVmmEmbeddingRouteIssue::core_error)?
+        .embedding
+        .as_ref()
+        .ok_or_else(|| NativeVmmEmbeddingRouteIssue::MissingLimits.core_error())?;
+    let core_limit = vulcan_memorymesh_core::MAX_REBUILD_VECTORS_BATCH;
+    let rebuild_batch_limit =
+        std::num::NonZeroUsize::new(embedding.maximum_inputs.map_or(core_limit, |model_limit| {
+            core_limit.min(model_limit as usize)
+        }))
+        .ok_or_else(|| {
+            CoreError::new(
+                ErrorCode::InvalidConfiguration,
+                ErrorStage::Configuration,
+                "The selected embedding model declares a zero input limit.",
+            )
+        })?;
     let vector_space_id =
         native_vector_space_id(capability_fingerprint.as_str(), embedding_dimension).map_err(
             |error| {
@@ -3659,6 +3681,7 @@ fn vector_space_descriptor_from_capability(
         vector_space_id,
         embedding_dimension,
         capability_fingerprint,
+        rebuild_batch_limit,
     })
 }
 
