@@ -5,7 +5,8 @@ use crate::CredentialExecutionSecret;
 use serde_json::Value;
 use std::error::Error as _;
 use vulcan_ai_contract::{
-    AiErrorCategory, AiExecutionError, AiTransportKind, DispatchOutcome, RetryAfterHint,
+    AiErrorCategory, AiExecutionError, AiTransportKind, DispatchOutcome,
+    HTTP_RESPONSE_HEADERS_TIMEOUT_CODE, RetryAfterHint,
 };
 use vulcan_llm_core::LlmCoreError;
 use vulcan_llm_core::ProtocolConversionError;
@@ -402,7 +403,7 @@ impl TransportFailurePhase {
             Self::Decode => "decode",
             Self::Redirect => "redirect",
             Self::Status => "status",
-            Self::ResponseHeadersTimeout => "response_headers_timeout",
+            Self::ResponseHeadersTimeout => HTTP_RESPONSE_HEADERS_TIMEOUT_CODE,
             Self::Other => "other",
         }
     }
@@ -466,6 +467,26 @@ pub(crate) fn response_headers_timeout_evidence(timeout_ms: u64) -> TransportFai
         causes: Vec::new(),
         timeout_ms: Some(timeout_ms),
     }
+}
+
+/// Builds a host-owned failure for the registered HTTP response-header deadline.
+/// 为已登记的 HTTP 响应头截止时间构建宿主持有的失败。
+///
+/// `timeout_ms` is the expired bound; returns the same transport semantics with a stable diagnostic code.
+/// `timeout_ms` 是已到期的时限；返回传输语义一致且带稳定诊断码的失败。
+pub(super) fn response_headers_timeout_failure(timeout_ms: u64) -> ProviderExecutionFailure {
+    // The peer returned no headers, so the diagnostic code comes from the host's observed phase.
+    // 对端没有返回响应头，因此诊断码来自宿主观测到的阶段。
+    let mut failure = transport_failure(format!(
+        "exceeded the registered {timeout_ms} ms response-header timeout."
+    ));
+    failure.error.transport = Some(AiTransportKind::Http);
+    failure.error.subcategory = Some(
+        TransportFailurePhase::ResponseHeadersTimeout
+            .as_str()
+            .into(),
+    );
+    failure
 }
 
 /// Derives the stable send phase from reqwest's own failure flags.
@@ -555,6 +576,7 @@ pub(crate) fn http_send_transport_failure(
     // failure 初始采用用于模糊发送错误的保守未知分派结果。
     let mut failure = transport_failure(message);
     failure.error.transport = Some(AiTransportKind::Http);
+    failure.error.subcategory = Some(http_send_phase(error).as_str().into());
     if error.is_connect() {
         // A DNS, TCP, or TLS connection-establishment failure occurs before an HTTP request can be dispatched.
         // DNS、TCP 或 TLS 连接建立失败发生在 HTTP 请求可被分派之前。

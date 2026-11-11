@@ -4,8 +4,8 @@
 use super::failure::{
     http_failure, http_send_failure_evidence, http_send_transport_failure,
     llm_core_protocol_failure, protocol_failure, redact_exact_credential,
-    response_headers_timeout_evidence, stream_completion_failure, stream_idle_timeout_failure,
-    stream_protocol_failure, stream_transport_failure, transport_failure,
+    response_headers_timeout_evidence, response_headers_timeout_failure, stream_completion_failure,
+    stream_idle_timeout_failure, stream_protocol_failure, stream_transport_failure,
 };
 use super::framing::IncrementalFrameParser;
 use super::projection_profiles::{project_response_record, project_response_record_text};
@@ -126,10 +126,8 @@ impl ProviderExecutionClient {
             .await
             .map_err(|_| {
                 let timeout_ms = transport.response_headers_timeout_ms;
-                let failure = transport_failure(format!(
-                    "exceeded the registered {timeout_ms} ms response-header timeout."
-                ))
-                .with_host_http_endpoint(&url, &secret);
+                let failure = response_headers_timeout_failure(timeout_ms)
+                    .with_host_http_endpoint(&url, &secret);
                 wire_response_capture
                     .observe_transport_failure(&response_headers_timeout_evidence(timeout_ms));
                 wire_response_capture.observe_failure("dispatch", &failure);

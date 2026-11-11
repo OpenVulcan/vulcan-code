@@ -354,6 +354,7 @@ async fn http_wire_response_capture_classifies_dispatch_failure() {
         .expect("response guard should publish dispatch failure");
 
     assert!(failure.error.retryable);
+    assert_eq!(failure.error.subcategory.as_deref(), Some("connect"));
     assert!(
         failure
             .error

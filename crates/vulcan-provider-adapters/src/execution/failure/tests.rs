@@ -419,8 +419,8 @@ fn response_header_timeout_evidence_carries_the_registered_bound() {
     assert_eq!(evidence.timeout_ms, Some(60_000));
 }
 
-/// Verifies the host timeout crosses the public error boundary with its safe endpoint.
-/// 验证宿主超时携带安全端点通过公开错误边界。
+/// Verifies the host timeout crosses the public error boundary with its safe endpoint and specific code.
+/// 验证宿主超时携带安全端点与具体代码通过公开错误边界。
 #[test]
 fn response_header_timeout_keeps_the_public_http_endpoint() {
     // Use distinct secrets in every URL component that the diagnostic must remove.
@@ -431,13 +431,17 @@ fn response_header_timeout_keeps_the_public_http_endpoint() {
         .expect("fixture key should resolve");
     // This is the same host construction and sanitization path used by the HTTP deadline.
     // 此处走与 HTTP 截止时间相同的宿主构造与清理路径。
-    let failure = transport_failure("exceeded the registered 60000 ms response-header timeout.")
-        .with_host_http_endpoint(
+    let failure = response_headers_timeout_failure(60_000).with_host_http_endpoint(
         "https://fixture-user:fixture-password@provider.invalid/v1/fixture-key/chat/completions?token=fixture-query#fixture-fragment",
         &secret,
     );
     let error = sanitize_provider_execution_failure(failure, &secret).error;
 
+    assert_eq!(error.transport, Some(AiTransportKind::Http));
+    assert_eq!(
+        error.subcategory.as_deref(),
+        Some("response_headers_timeout")
+    );
     assert_eq!(error.upstream_code, None);
     assert_eq!(error.dispatch_outcome, DispatchOutcome::Unknown);
     assert!(error.retryable);

@@ -8,6 +8,10 @@ use serde::{Deserialize, Serialize};
 pub const AGENTSPACE_RECONCILIATION_REQUIRED_SUBCATEGORY: &str =
     "agentspace_result_reconciliation_required";
 
+/// Host-observed expiry of the HTTP response-header deadline.
+/// 宿主观测到的 HTTP 响应头截止时间到期。
+pub const HTTP_RESPONSE_HEADERS_TIMEOUT_CODE: &str = "response_headers_timeout";
+
 /// Identifies a non-replayable provider outcome that still requires authoritative confirmation.
 /// 标识不可自动重放但仍需权威确认的供应商结果。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
