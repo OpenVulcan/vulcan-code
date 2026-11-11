@@ -3088,6 +3088,31 @@
       ]
     },
     {
+      "key": "qwen4-max-preview",
+      "aliases": [
+        "qwen4.0-max-preview"
+      ],
+      "context_window": 1000000,
+      "input_modalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "output_limit": 393216,
+      "reasoning": "native",
+      "reasoning_control": "effort_selection",
+      "reasoning_efforts": [
+        "none",
+        "adaptive",
+        "low",
+        "medium",
+        "xhigh"
+      ]
+    },
+    {
       "key": "seed-2.1-pro",
       "aliases": [],
       "context_window": 262144,

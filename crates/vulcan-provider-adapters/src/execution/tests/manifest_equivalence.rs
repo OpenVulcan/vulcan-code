@@ -5,7 +5,9 @@ use super::super::ProviderExecutionClient;
 use super::super::test_support::{bundled_manifest_route, minimal_request};
 use crate::{MINIMAX_REASONING_SPLIT_PARAMETER_ID, SAMPLING_TEMPERATURE_PARAMETER_ID};
 use std::sync::Arc;
-use vulcan_ai_contract::{ModelParameterValue, ReasoningEffort};
+use vulcan_ai_contract::{
+    ModelParameterValue, ReasoningEffort, StructuredOutputCapability, StructuredOutputPolicy,
+};
 use vulcan_llm_core::{
     ANTHROPIC_MESSAGES_PROFILE_ID, ANTHROPIC_MESSAGES_VIDEO_PROFILE_ID, OPENAI_CHAT_PROFILE_ID,
     OPENAI_RESPONSES_PROFILE_ID, ProtocolRegistry,
@@ -229,6 +231,113 @@ fn alibaba_token_plan_projects_thinking_levels_and_off() {
         .expect("Token Plan Responses must encode the tested high effort");
     assert_eq!(responses.body["enable_thinking"], true);
     assert_eq!(responses.body["reasoning"]["effort"], "high");
+}
+
+/// Verifies that each Qwen4 Token Plan route can send strict Schema with thinking disabled.
+/// 验证 Qwen4 的每条 Token Plan 路由都能在关闭思考的同时发送严格 Schema。
+///
+/// Takes no parameters and returns no value. Checks manifest capability resolution and the
+/// exact encoded fields used by the three supported upstream protocols.
+/// 不接收参数且无返回值。检查清单能力解析以及三种上游协议实际编码的字段。
+#[test]
+fn alibaba_qwen4_token_plan_projects_schema_with_thinking_disabled() {
+    // Load the same compiled manifest and model capabilities used for system model selection.
+    // 加载系统模型选择使用的同一份已编译清单和模型能力。
+    let manifests = crate::provider_manifest::load_bundled_resolved_manifests();
+    // Select Alibaba's signed system manifest for the four Token Plan entries.
+    // 选择四个 Token Plan 入口共用的阿里云签名系统清单。
+    let manifest = manifests
+        .get("alibaba")
+        .expect("Alibaba manifest must exist");
+    // The client applies the actual wire encoder and the entry's request profile.
+    // 客户端执行实际线路编码并应用入口的请求配置。
+    let client = projection_test_client();
+    // Use a closed schema so losing its required field or extra-field restriction fails the test.
+    // 使用闭合 Schema，丢失必填字段或额外字段限制时测试会失败。
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": { "accepted": { "type": "boolean" } },
+        "required": ["accepted"],
+        "additionalProperties": false,
+    });
+    // Exercise the same request on each entry and protocol.
+    // 在每个入口和协议上执行同一份请求。
+    let mut request = minimal_request();
+    request.model_id = String::from("qwen4-max-preview");
+    request.reasoning_effort = Some(ReasoningEffort::None);
+    request.structured_output = StructuredOutputPolicy::JsonSchema {
+        name: String::from("result"),
+        description: None,
+        schema: schema.clone(),
+        strict: true,
+    };
+
+    // Check both personal and team products in both regions.
+    // 检查两个地区各自的个人版和团队版。
+    for entry_id in [
+        "token-plan-personal-cn",
+        "token-plan-personal-global",
+        "token-plan-team-cn",
+        "token-plan-team-global",
+    ] {
+        // Find the model in the same static inventory used to populate the connection.
+        // 从填充连接时使用的静态目录中查找模型。
+        let declared_model = manifest.catalog_models[entry_id]
+            .iter()
+            .find(|model| model.model_id == request.model_id)
+            .expect("the Qwen4 Token Plan preview entitlement may have changed upstream");
+        // Each protocol has its own location for the same Schema.
+        // 同一份 Schema 在每种协议中的位置不同。
+        for (protocol, schema_path) in [
+            (
+                OPENAI_CHAT_PROFILE_ID,
+                "/response_format/json_schema/schema",
+            ),
+            (OPENAI_RESPONSES_PROFILE_ID, "/text/format/schema"),
+            (
+                ANTHROPIC_MESSAGES_PROFILE_ID,
+                "/output_config/format/schema",
+            ),
+        ] {
+            // Let discovery apply the model and protocol layers to a static catalog record.
+            // 让发现逻辑将模型层和协议层应用到静态目录条目。
+            let mut model = crate::ConnectionModel {
+                id: declared_model.model_id.clone(),
+                display_name: declared_model.display_name.clone(),
+                capabilities: Default::default(),
+                capability_evidence: Default::default(),
+                protocol_variants: Default::default(),
+                resolved_protocol_binding: None,
+            };
+            assert!(crate::discovery::apply_manifest_model_rule(
+                manifest, entry_id, None, protocol, &mut model,
+            ));
+            assert_eq!(
+                model.capabilities.structured_output,
+                StructuredOutputCapability::JsonSchema
+            );
+            assert!(
+                model
+                    .capabilities
+                    .reasoning_efforts
+                    .contains(&ReasoningEffort::None)
+            );
+
+            // Require the final wire request to explicitly disable thinking.
+            // 要求最终线路请求显式关闭思考。
+            let route = bundled_manifest_route("alibaba", entry_id, protocol);
+            // The required-disabled encoder rejects projections that could enable thinking.
+            // 强制关闭思考的编码器会拒绝可能启用思考的投影。
+            let encoded = client
+                .encode_required_disabled_reasoning_request(&route, &request, false)
+                .expect("Qwen4 must preserve explicit thinking-off and strict Schema");
+            assert_eq!(
+                encoded.body.pointer(schema_path),
+                Some(&schema),
+                "{entry_id}/{protocol}"
+            );
+        }
+    }
 }
 
 /// Verifies the bundled OpenRouter request profiles produce the legacy-equivalent wire.

@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "alibaba",
-  "revision": 27,
-  "published_at": "2026-11-10T14:23:33Z",
+  "revision": 28,
+  "published_at": "2026-11-11T03:39:03Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -67,6 +67,7 @@
         "source_policy": "manifest_only",
         "discovery_kind": "manifest_static",
         "models": [
+          { "model_id": "qwen4-max-preview", "display_name": "Qwen4.0 Max Preview" },
           { "model_id": "qwen3.8-max", "display_name": "Qwen3.8 Max" },
           { "model_id": "qwen3.8-flash", "display_name": "Qwen3.8 Flash" },
           { "model_id": "qwen3.7-max", "display_name": "Qwen3.7 Max" },
@@ -230,6 +231,7 @@
         "source_policy": "manifest_only",
         "discovery_kind": "manifest_static",
         "models": [
+          { "model_id": "qwen4-max-preview", "display_name": "Qwen4.0 Max Preview" },
           { "model_id": "qwen3.8-max", "display_name": "Qwen3.8 Max" },
           { "model_id": "qwen3.8-flash", "display_name": "Qwen3.8 Flash" },
           { "model_id": "qwen3.7-max", "display_name": "Qwen3.7 Max" },
@@ -393,6 +395,7 @@
         "source_policy": "manifest_only",
         "discovery_kind": "manifest_static",
         "models": [
+          { "model_id": "qwen4-max-preview", "display_name": "Qwen4.0 Max Preview" },
           { "model_id": "qwen3.8-max", "display_name": "Qwen3.8 Max" },
           { "model_id": "qwen3.7-max", "display_name": "Qwen3.7 Max" },
           { "model_id": "qwen3.7-plus", "display_name": "Qwen3.7 Plus" },
@@ -499,6 +502,7 @@
         "source_policy": "manifest_only",
         "discovery_kind": "manifest_static",
         "models": [
+          { "model_id": "qwen4-max-preview", "display_name": "Qwen4.0 Max Preview" },
           { "model_id": "qwen3.8-max", "display_name": "Qwen3.8 Max" },
           { "model_id": "qwen3.7-max", "display_name": "Qwen3.7 Max" },
           { "model_id": "qwen3.7-plus", "display_name": "Qwen3.7 Plus" },
@@ -1278,6 +1282,39 @@
           "evidence_revision": "model-core.alibaba.responses-harness.2026-07-30"
         }
       }
+    },
+    {
+      "rule_id": "alibaba-qwen4-max-preview",
+      "scope": {
+        "service_entry_ids": [
+          "token-plan-personal-cn",
+          "token-plan-personal-global",
+          "token-plan-team-cn",
+          "token-plan-team-global"
+        ],
+        "credential_profile_ids": []
+      },
+      "matcher": {
+        "kind": "exact",
+        "value": "qwen4-max-preview"
+      },
+      "core_model_ref": "qwen4-max-preview",
+      "supported_protocols": [
+        "openai-chat-completions.v1",
+        "openai-responses.v1",
+        "anthropic-messages.v1"
+      ],
+      "capabilities": {
+        "structured_output": "json_schema",
+        "evidence_revision": "alibaba.token-plan.qwen4-max-preview.2026-11-11"
+      },
+      "protocol_capabilities": {
+        "openai-responses.v1": {
+          "input_resources": ["image"],
+          "evidence_revision": "alibaba.token-plan.qwen4-max-preview.2026-11-11"
+        }
+      },
+      "provenance_ref": "https://help.aliyun.com/zh/model-studio/qwen-structured-output"
     },
     {
       "rule_id": "alibaba-qwen3-8-max",
@@ -12257,6 +12294,10 @@
       {
         "url": "https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-responses",
         "note": "All five configured Qwen Responses models were live-tested with enable_thinking=false and with all six explicit efforts. Qwen3.6 Flash returned JSON objects but did not enforce the test schema."
+      },
+      {
+        "url": "https://help.aliyun.com/zh/model-studio/qwen-structured-output",
+        "note": "Beijing Personal Qwen4 Max Preview enforced strict JSON Schema on Chat Completions, Responses and Messages in streaming tests with thinking disabled on 2026-11-11. The Beijing and Singapore Personal and Team editions list the same preview model."
       }
     ]
   }

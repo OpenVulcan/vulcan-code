@@ -1728,19 +1728,20 @@ fn required_disabled_reasoning_validation_rejects_dropped_or_contradictory_proje
         .expect_err("an unknown non-disabled thinking type must fail closed");
     assert!(unknown_type.error.message.contains("enables reasoning"));
 
-    // crossDialectResponses removes the authoritative Responses effort and leaves an
-    // Anthropic-shaped disabled marker; protocol-specific validation must reject the decoy.
-    // crossDialectResponses 移除权威 Responses effort 并留下 Anthropic 形态的关闭标记；
-    // 协议专属校验必须拒绝该诱饵字段。
+    // The Responses route must reject both an Anthropic marker and an undeclared thinking switch.
+    // Responses 路由必须拒绝 Anthropic 关闭标记和清单未声明的思考开关。
     let mut cross_dialect_responses = deepseek_route(OPENAI_RESPONSES_PROFILE_ID);
     cross_dialect_responses.custom_model_projection = Some(CustomModelRequestProjection {
         reasoning: BTreeMap::from([(
             ReasoningEffort::None,
             crate::CustomRequestMutation {
-                set: BTreeMap::from([(
-                    String::from("thinking.type"),
-                    Value::String(String::from("disabled")),
-                )]),
+                set: BTreeMap::from([
+                    (
+                        String::from("thinking.type"),
+                        Value::String(String::from("disabled")),
+                    ),
+                    (String::from("enable_thinking"), Value::Bool(false)),
+                ]),
                 delete: vec![String::from("reasoning.effort")],
             },
         )]),
@@ -1748,7 +1749,7 @@ fn required_disabled_reasoning_validation_rejects_dropped_or_contradictory_proje
     });
     let cross_dialect_responses_failure = client
         .encode_required_disabled_reasoning_request(&cross_dialect_responses, &request, false)
-        .expect_err("Responses must not accept an Anthropic-shaped disabled marker");
+        .expect_err("Responses must reject disabled markers the active route does not declare");
     assert!(
         cross_dialect_responses_failure
             .error

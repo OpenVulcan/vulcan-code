@@ -1,7 +1,7 @@
 {
   "schema_version": "vulcan.core-models.v1",
-  "revision": 3,
-  "published_at": "2026-11-10T13:16:34Z",
+  "revision": 4,
+  "published_at": "2026-11-11T03:39:03Z",
   "models": [
     {
       "model_id": "beam-free",
@@ -2590,6 +2590,24 @@
       "provenance_ref": "builtin:core.seed.2026-11-08"
     },
     {
+      "model_id": "qwen4-max-preview",
+      "display_name": "Qwen4.0 Max Preview",
+      "vendor": "alibaba",
+      "aliases": ["qwen4.0-max-preview"],
+      "capabilities": {
+        "operations": ["conversation_respond"],
+        "input_resources": ["image", "video"],
+        "output_resources": [],
+        "reasoning": "native",
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": ["none", "adaptive", "low", "medium", "xhigh"],
+        "context_limit": 1000000,
+        "output_limit": 393216
+      },
+      "verification": "verified",
+      "provenance_ref": "https://help.aliyun.com/zh/model-studio/text-generation-model"
+    },
+    {
       "model_id": "qwen3.8-max",
       "display_name": "Qwen 3.8 Max",
       "vendor": "alibaba",
@@ -2851,6 +2869,14 @@
       {
         "url": "https://help.aliyun.com/zh/model-studio/token-plan-decision-model",
         "note": "Alibaba Token Plan Beijing returned a validated choice, probabilities and confidence for decision-model-preview via its native System One endpoint on 2026-11-10."
+      },
+      {
+        "url": "https://help.aliyun.com/zh/model-studio/token-plan-personal-overview",
+        "note": "Token Plan documents the Qwen4 Max Preview identity and billing alias. Beijing Personal model discovery returned qwen4-max-preview on 2026-11-11. The announced preview ends at 24:00 UTC+8 on 2026-11-25."
+      },
+      {
+        "url": "https://help.aliyun.com/zh/model-studio/text-generation-model",
+        "note": "Qwen4 Max Preview supports text, image, and video input with a 1M-token context and a combined reasoning and answer output limit of 393,216 tokens."
       }
     ]
   }

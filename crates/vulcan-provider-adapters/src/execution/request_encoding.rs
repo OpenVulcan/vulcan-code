@@ -1193,6 +1193,7 @@ fn wire_body_explicitly_disables_reasoning(route: &ProviderExecutionRoute, body:
     match upstream_protocol_for_route(route) {
         Some(UpstreamProtocol::OpenAiResponses) => {
             json_pointer_is_disabled_label(body, "/reasoning/effort")
+                || responses_profile_explicitly_disables_thinking(route, body)
         }
         Some(UpstreamProtocol::OpenAiChatCompletions) => {
             chat_body_explicitly_disables_reasoning(route, body)
@@ -1213,6 +1214,45 @@ fn wire_body_explicitly_disables_reasoning(route: &ProviderExecutionRoute, body:
         // 可切换模型必须采用失败关闭策略。
         Some(UpstreamProtocol::GeminiInteractions) | None => false,
     }
+}
+
+/// Verifies a Responses extension against the active manifest projection and final request body.
+/// 根据生效的清单投影和最终请求体校验 Responses 扩展字段。
+///
+/// `route` supplies the frozen projection chain and `body` supplies the post-projection request.
+/// `route` 提供冻结的投影链，`body` 提供投影后的请求体。
+/// Returns true only when the route explicitly maps effort none to enable_thinking false and
+/// that value survives projection. The same field on an undeclared route does not prove shutdown.
+/// 仅当路由明确将 none 档映射为 enable_thinking false 且投影保留该值时返回 true。
+/// 未声明该映射的路由即使带有同一字段，也无法证明思考已关闭。
+fn responses_profile_explicitly_disables_thinking(
+    route: &ProviderExecutionRoute,
+    body: &Value,
+) -> bool {
+    use crate::provider_manifest::{MappingStep, MappingStepSource};
+
+    // Check the field and its manifest declaration together because Responses extensions vary by route.
+    // Responses 扩展字段因路由而异，因此同时检查实际字段及其清单声明。
+    let path = "/enable_thinking";
+    body.pointer(path) == Some(&Value::Bool(false))
+        && route
+            .request_projection_profiles
+            .iter()
+            .flat_map(|profile| &profile.steps)
+            .any(|step| {
+                matches!(
+                    step,
+                    MappingStep::EnumMap {
+                        path: target,
+                        source: MappingStepSource::RequestField,
+                        source_path,
+                        mapping,
+                        ..
+                    } if target == path
+                        && source_path == "@reasoning_effort"
+                        && mapping.get("none") == Some(&Value::Bool(false))
+                )
+            })
 }
 
 /// Reports whether one Chat-compatible final body preserves its frozen route's declared disabled-reasoning projection.
