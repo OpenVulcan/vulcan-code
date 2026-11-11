@@ -30,7 +30,7 @@ function renderGoal(status: SessionGoalStatus) {
   // Harness 绑定与 ComposerPanel 相同的控制器和目标条契约；无参数，返回目标条。
   function Harness() {
     controller = useComposerGoalController({
-      scopeKey: "session", goal, canAutoSubmitCreatedGoal: false,
+      scope: { key: "session", owner: "session" }, goal, canAutoSubmitCreatedGoal: false,
       onPrepareEditor: async () => true, onSaveGoal: async () => true,
       onResumeGoal: async () => true, onClearGoal: async () => true,
       onSubmitCreatedGoal: async () => undefined, onUpdateGoalStatus,
