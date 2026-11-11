@@ -116,6 +116,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_save_public_ai_provider_extension_mode",
     "service_test_public_ai_provider_tool",
     "service_voice_input_settings",
+    "service_voice_input_cloud_catalog",
     "service_save_voice_input_selection",
     "service_transcribe_voice_input",
     "service_list_provider_tasks",
@@ -812,6 +813,9 @@ pub(super) async fn dispatch(
                 .await,
         ),
         "service_voice_input_settings" => rpc_json_result(service_voice_input_settings(state)),
+        "service_voice_input_cloud_catalog" => {
+            rpc_json_result(service_voice_input_cloud_catalog(state).await)
+        }
         "service_save_voice_input_selection" => rpc_json_result(
             service_save_voice_input_selection(app, state, rpc_required_param(params, "request")?)
                 .await,

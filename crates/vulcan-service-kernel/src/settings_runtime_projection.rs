@@ -665,7 +665,10 @@ pub(crate) fn sync_workbench_runtime_control_fields_locked(
     if let Some(agent_runtime) = guard.agent_runtime.as_ref()
         && let Ok(configuration) = agent_runtime.public_ai_runtime.configuration_snapshot()
     {
-        guard.workbench.voice_input = Some(voice_input_summary(&configuration));
+        guard.workbench.voice_input = Some(voice_input_summary(
+            &agent_runtime.public_ai_runtime,
+            &configuration,
+        ));
     }
     guard.workbench.reasoning_selection = workbench_model_reasoning_selection(
         provider_configuration,

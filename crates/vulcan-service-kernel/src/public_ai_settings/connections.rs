@@ -1958,7 +1958,7 @@ pub(super) fn remove_connection_from_configuration(
     if configuration
         .voice_input_selection
         .as_ref()
-        .is_some_and(|selection| selection.connection_id == connection_id)
+        .is_some_and(|selection| selection.connection_id() == connection_id)
     {
         configuration.voice_input_selection = None;
     }

@@ -85,7 +85,7 @@ pub(crate) struct AccountSnapshot {
 /// 查找当前签名供应商注册表声明的唯一核心连接。
 /// runtime resolves provider ownership; configuration supplies global connections. Returns none or one connection, rejecting ambiguity.
 /// runtime 解析供应商归属；configuration 提供全局连接。返回无连接或唯一连接，拒绝歧义。
-fn account_connection(
+pub(super) fn account_connection(
     runtime: &PublicAiRuntime,
     configuration: &PersistedAiConfiguration,
 ) -> Result<Option<vulcan_provider_adapters::CredentialConnection>, String> {

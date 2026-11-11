@@ -5,9 +5,13 @@ use super::*;
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct VoiceInputSummary {
-    /// Whether the user has chosen a speech-transcription target for voice input.
-    /// 用户是否已为语音输入选择语音转写目标。
+    /// Whether a direct-provider route is configured for voice input.
+    /// 是否已为语音输入配置直连供应商路由。
     pub configured: bool,
+    /// Native account eligible for a cloud route, pending regional catalog resolution.
+    /// 可使用云端路由的原生账号，需查询区域目录确认可用性。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_account_id: Option<String>,
     /// Longest single recording in seconds; the composer stops recording at this limit.
     /// 单次录音的最长秒数；输入区到达该上限时停止录音。
     pub max_duration_seconds: u32,

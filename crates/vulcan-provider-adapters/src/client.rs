@@ -36,6 +36,12 @@ pub use openvulcan_inbox::{
     list_openvulcan_feedback, list_openvulcan_messages, mark_openvulcan_messages_read,
     read_openvulcan_feedback, request_openvulcan_announcements, request_openvulcan_message_summary,
 };
+mod openvulcan_voice_input;
+pub use openvulcan_voice_input::{
+    OPENVULCAN_VOICE_DURATION_SECONDS, OPENVULCAN_VOICE_MAX_AUDIO_BYTES, OpenVulcanVoiceCatalog,
+    OpenVulcanVoiceError, OpenVulcanVoiceModel, request_openvulcan_voice_catalog,
+    request_openvulcan_voice_transcription,
+};
 mod secondary_routes;
 
 use account_usage::{

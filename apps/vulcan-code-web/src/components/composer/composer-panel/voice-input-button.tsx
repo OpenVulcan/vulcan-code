@@ -2,7 +2,6 @@ import * as React from "react";
 import { LoaderCircle, Mic } from "lucide-react";
 import { formatMessage, useI18n } from "@/i18n";
 import { errorMessage } from "@/lib/display-format";
-import { transcribeVoiceInput } from "@/service/voice-input-service";
 import { toast } from "@/ui-kit/primitives/toast";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/ui-kit/primitives/dialog";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/ui-kit/primitives/hover-card";
@@ -11,7 +10,6 @@ import { readVoiceInputDevice, voiceInputAudioConstraints } from "@/components/c
 import { hasBlockingComposerPopup, isComposerTextEntryElement } from "@/components/composer/composer-model";
 import { getWorkspaceInputOwner } from "@/components/workspace/workspace-input-owner";
 import { readVoiceInputShortcut, voiceInputShortcutFromKey } from "./voice-input-shortcut";
-import { encodeVoiceInputWav } from "./voice-input-wav";
 
 // The settings section loads with the quick setup dialog, keeping settings styles out of the workbench chunk.
 // 设置节随快速设置对话框加载，使设置样式不进入工作台分块。
@@ -94,7 +92,23 @@ export function VoiceInputButton(props: VoiceInputButtonProps) {
   // session holds the live recorder; it is replaced on every press so late callbacks are ignored.
   // session 持有当前录音器；每次按下都会替换，使迟到的回调被忽略。
   const session = React.useRef<RecordingSession | null>(null);
-  const configured = props.voiceInput?.configured ?? false;
+  // Only a catalog result for the currently published native account can enable the microphone.
+  // 只有当前发布的原生账号所对应的目录结果才能启用麦克风。
+  const cloudAccountId = props.voiceInput?.cloudAccountId;
+  const [readyCloudAccount, setReadyCloudAccount] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    if (!cloudAccountId) return;
+    let cancelled = false;
+    void import("@/service/voice-input-service").then(({ loadVoiceInputCloudCatalog }) => loadVoiceInputCloudCatalog()).then(
+      (catalog) => {
+        if (cancelled) return;
+        setReadyCloudAccount(catalog.status === "available" && catalog.connection_id === cloudAccountId && catalog.selection ? cloudAccountId : null);
+      },
+      () => { if (!cancelled) setReadyCloudAccount(null); },
+    );
+    return () => { cancelled = true; };
+  }, [cloudAccountId]);
+  const configured = Boolean(props.voiceInput?.configured || (cloudAccountId && readyCloudAccount === cloudAccountId));
   const maxDurationSeconds = props.voiceInput?.maxDurationSeconds ?? 0;
   const { disabled, onBusyChange, onTranscript, textareaRef } = props;
 
@@ -131,6 +145,13 @@ export function VoiceInputButton(props: VoiceInputButtonProps) {
     }
     setPhase("transcribing");
     try {
+      // Load conversion and transport on demand when a complete recording needs transcription.
+      // 录音完成且需要转写时按需加载转换与传输代码。
+      const [{ encodeVoiceInputWav }, { transcribeVoiceInput }] = await Promise.all([
+        import("./voice-input-wav"),
+        import("@/service/voice-input-service"),
+      ]);
+      if (session.current !== current) return;
       // Decode after stopping so cancelled recordings never incur conversion or a provider call.
       // 停止后再解码，取消的录音无需转换或调用供应商。
       const recording = await encodeVoiceInputWav(new Blob(current.chunks, { type: mimeType }));

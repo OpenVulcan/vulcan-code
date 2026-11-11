@@ -2,15 +2,20 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { loadVoiceInputSettings } from "@/service/voice-input-service";
+import { loadVoiceInputCloudCatalog, loadVoiceInputSettings } from "@/service/voice-input-service";
 import type { VoiceInputSettingsSnapshot } from "@/types";
 import { VoiceInputCard } from "./voice-input-card";
 import { readVoiceInputDevice, saveVoiceInputDevice } from "./voice-input-device";
 
 vi.mock("@/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }), formatMessage: (template: string) => template }));
-vi.mock("@/service/voice-input-service", () => ({ loadVoiceInputSettings: vi.fn() }));
+vi.mock("@/service/voice-input-service", async (original) => ({
+  ...await original<typeof import("@/service/voice-input-service")>(),
+  loadVoiceInputSettings: vi.fn(),
+  loadVoiceInputCloudCatalog: vi.fn(),
+}));
 
 const SETTINGS: VoiceInputSettingsSnapshot = {
+  disabled: false,
   selection: { connection_id: "openai-main", target_id: "gpt-transcribe" },
   candidates: [{
     connectionId: "openai-main", connectionDisplayName: "OpenAI main", providerId: "openai",
@@ -100,10 +105,28 @@ it("flags a remembered microphone that is no longer connected", async () => {
 });
 
 it("offers quick setup when no model is selected", async () => {
-  vi.mocked(loadVoiceInputSettings).mockResolvedValue({ ...SETTINGS, selection: null });
+  vi.mocked(loadVoiceInputSettings).mockResolvedValue({ ...SETTINGS, selection: null, disabled: true });
   const { onConfigure } = await render(false);
   expect(host.textContent).toContain("composer.voice.modelNone");
   const setup = Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "composer.voice.configure")!;
   await act(async () => { setup.click(); });
   expect(onConfigure).toHaveBeenCalledTimes(1);
+});
+
+it("shows the effective cloud model when the saved publication is retired", async () => {
+  // The saved cloud publication has disappeared while the native account is unchanged.
+  // 已保存的云端发布条目已下架，原生账号保持一致。
+  vi.mocked(loadVoiceInputSettings).mockResolvedValue({
+    ...SETTINGS, selection: { openvulcan_cloud: { connection_id: "native", model_id: "retired-asr" } },
+  });
+  // Core reports the current replacement as the effective model.
+  // Core 返回当前替代模型作为生效模型。
+  const replacement = { id: "current-asr", display_name: "Replacement ASR", supported_languages: [] };
+  vi.mocked(loadVoiceInputCloudCatalog).mockResolvedValue({
+    status: "available", connection_id: "native", default_model_id: replacement.id,
+    models: [replacement], selection: { connection_id: "native", model_id: replacement.id },
+  });
+  await render(true);
+  expect(host.textContent).toContain(replacement.display_name);
+  expect(host.textContent).toContain("settings.voiceInput.cloudTitle");
 });

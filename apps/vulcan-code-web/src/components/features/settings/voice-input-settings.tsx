@@ -12,8 +12,8 @@ import {
 } from "@/components/composer/composer-panel/voice-input-shortcut";
 import { formatMessage, useI18n } from "@/i18n";
 import { errorMessage } from "@/lib/display-format";
-import { loadVoiceInputSettings, saveVoiceInputSelection } from "@/service/voice-input-service";
-import type { VoiceInputParameter, VoiceInputParameters, VoiceInputSettingsSnapshot, VoiceInputTargetSelection } from "@/types";
+import { loadVoiceInputCloudCatalog, loadVoiceInputSettings, resolveVoiceInputSelection, saveVoiceInputSelection, voiceInputCloudStatusKeys } from "@/service/voice-input-service";
+import type { VoiceInputCloudCatalog, VoiceInputParameter, VoiceInputParameters, VoiceInputSelection, VoiceInputSettingsSnapshot } from "@/types";
 import "@/ui-kit/styles/features/settings-forms.css";
 
 // VOICE_INPUT_OFF is the picker value that clears the target and disables the composer microphone.
@@ -24,10 +24,10 @@ const VOICE_INPUT_OFF = "voice-input-off";
 // 清除显式识别选项的选择值。
 const VOICE_INPUT_PARAMETER_DEFAULT = "voice-input-model-default";
 
-// selectionKey identifies one target on one account inside the picker.
-// selectionKey 在选择器中标识某个账号上的一个目标。
-function selectionKey(connectionId: string, targetId: string): string {
-  return JSON.stringify([connectionId, targetId]);
+// Returns a picker key for the given source, account and model so the two sources cannot collide.
+// 根据来源、账号和模型返回选择器键，避免两种来源的模型冲突。
+function selectionKey(source: "direct" | "cloud", connectionId: string, modelId: string): string {
+  return JSON.stringify([source, connectionId, modelId]);
 }
 
 // Translation keys for the recognition options declared by the service.
@@ -163,24 +163,61 @@ export function VoiceInputSettingsSection() {
     return () => { cancelled = true; };
   }, []);
 
+  // Cloud discovery runs independently so local provider settings stay usable offline.
+  // 云端发现独立运行，让本地供应商设置离线时仍可用。
+  const [cloud, setCloud] = React.useState<VoiceInputCloudCatalog | null>(null);
+  React.useEffect(() => {
+    let cancelled = false;
+    void loadVoiceInputCloudCatalog().then(
+      (next) => { if (!cancelled) setCloud(next); },
+      () => { if (!cancelled) setCloud({ status: "unavailable" }); },
+    );
+    return () => { cancelled = true; };
+  }, []);
+
   const candidates = React.useMemo(() => snapshot?.candidates ?? [], [snapshot]);
+  // Each option carries its exact service selection so saving can preserve the declared routing.
+  // 每个选项携带对应的服务选择，保存时按声明的路径转写。
   const options = React.useMemo(() => [
-    { value: VOICE_INPUT_OFF, label: t("settings.voiceInput.none"), keywords: [] },
+    { value: VOICE_INPUT_OFF, label: t("settings.voiceInput.none"), selection: null },
+    ...(cloud?.status === "available" ? cloud.models.map((model) => ({
+      value: selectionKey("cloud", cloud.connection_id, model.id),
+      label: model.display_name,
+      description: model.id === cloud.default_model_id
+        ? `${t("settings.voiceInput.cloudTitle")} · ${t("settings.voiceInput.cloudDefaultModel")}`
+        : t("settings.voiceInput.cloudTitle"),
+      keywords: [model.id],
+      selection: { openvulcan_cloud: { connection_id: cloud.connection_id, model_id: model.id } },
+    })) : []),
     ...candidates.map((candidate) => ({
-      value: selectionKey(candidate.connectionId, candidate.targetId),
+      value: selectionKey("direct", candidate.connectionId, candidate.targetId),
       label: candidate.displayName,
       description: candidate.connectionDisplayName,
       keywords: [candidate.providerId, candidate.targetId, candidate.connectionDisplayName],
+      selection: { connection_id: candidate.connectionId, target_id: candidate.targetId },
     })),
-  ], [candidates, t]);
+  ], [candidates, cloud, t]);
 
-  const saved = snapshot?.selection ?? null;
-  const savedKey = saved ? selectionKey(saved.connection_id, saved.target_id) : "";
-  const selected = candidates.find((candidate) => selectionKey(candidate.connectionId, candidate.targetId) === savedKey);
+  // Identify cloud and direct choices from their disjoint service shapes.
+  // 根据互斥的服务结构识别云端和直连选择。
+  const saved = resolveVoiceInputSelection(snapshot, cloud);
+  const direct = saved && "connection_id" in saved ? saved : null;
+  const cloudSaved = saved && "openvulcan_cloud" in saved ? saved.openvulcan_cloud : null;
+  const savedKey = cloudSaved ? selectionKey("cloud", cloudSaved.connection_id, cloudSaved.model_id)
+    : direct ? selectionKey("direct", direct.connection_id, direct.target_id) : VOICE_INPUT_OFF;
+  const selected = direct && candidates.find((candidate) =>
+    candidate.connectionId === direct.connection_id && candidate.targetId === direct.target_id);
+  const cloudSelected = cloud?.status === "available" && cloudSaved?.connection_id === cloud.connection_id
+    ? cloud.models.find((model) => model.id === cloudSaved.model_id)
+    : undefined;
+  const staleCloudLanguage = cloudSelected && cloudSaved?.language && !cloudSelected.supported_languages.includes(cloudSaved.language);
+  const cloudFields: VoiceInputParameter[] = cloudSelected && (cloudSelected.supported_languages.length > 0 || staleCloudLanguage)
+    ? [{ name: "language", kind: "language", choices: cloudSelected.supported_languages }]
+    : [];
 
   // Commits the target and its settings, then displays the supplied success message.
   // 提交目标和对应设置，随后显示传入的成功提示。
-  const save = async (selection: VoiceInputTargetSelection | null, message = t("settings.voiceInput.saved")) => {
+  const save = async (selection: VoiceInputSelection | null, message = t("settings.voiceInput.saved")) => {
     setBusy(true);
     setSaveError("");
     try {
@@ -193,14 +230,13 @@ export function VoiceInputSettingsSection() {
     }
   };
 
-  const select = (key: string) => {
-    if (key === savedKey) return;
-    if (key === VOICE_INPUT_OFF) {
-      if (saved) void save(null);
-      return;
+  // Saves the option identified by the picker key only when the choice changes.
+  // 仅当选择变化时，保存选择器键对应的选项。
+  const select = (key: string): void => {
+    const option = options.find(({ value }) => value === key);
+    if (option && (key !== savedKey || (key === VOICE_INPUT_OFF && !snapshot?.disabled))) {
+      void save(option.selection);
     }
-    const candidate = candidates.find((item) => selectionKey(item.connectionId, item.targetId) === key);
-    if (candidate) void save({ connection_id: candidate.connectionId, target_id: candidate.targetId });
   };
 
   // Persist the captured chord or clear it for null. The editor updates only after storage succeeds.
@@ -243,22 +279,43 @@ export function VoiceInputSettingsSection() {
         ariaLabel={t("settings.voiceInput.title")}
         className="vk-voice-model-select"
         disabled={busy || !snapshot}
-        emptyText={t("settings.voiceInput.noCandidate")}
+        emptyText={t("conversation.find.none")}
         onValueChange={select}
         options={options}
         placeholder={t("settings.voiceInput.none")}
         searchPlaceholder={t("settings.voiceInput.search")}
-        value={selected ? savedKey : saved ? "" : VOICE_INPUT_OFF}
+        value={savedKey}
       />
-      {saved && snapshot && !selected
+      {cloud?.status !== "available" ? (
+        <p className="vk-form-note">{t(cloud ? voiceInputCloudStatusKeys[cloud.status] : "composer.voice.loading")}</p>
+      ) : cloudSelected ? (
+        <p className="vk-form-note">{t("settings.voiceInput.cloudTitle")}</p>
+      ) : null}
+      {(direct && !selected) || (cloudSaved && cloud?.status === "available" && !cloudSelected)
         ? <p role="alert" className="vk-field-error">{t("settings.voiceInput.unavailable")}</p>
         : null}
       {loadError ? <SettingsErrorNotice detail={loadError} message={t("settings.voiceInput.loadFailed")} /> : null}
       {saveError ? <SettingsErrorNotice detail={saveError} message={t("settings.voiceInput.saveFailed")} /> : null}
-      {saved && selected && selected.parameters.length > 0 ? (
-        <VoiceInputModelParameters busy={busy} fields={selected.parameters} key={savedKey} saved={saved.parameters}
-          onSave={(parameters) => void save({ ...saved, parameters }, t("settings.voiceInput.parametersSaved"))} />
+      {direct && selected && selected.parameters.length > 0 ? (
+        <VoiceInputModelParameters busy={busy} fields={selected.parameters} key={savedKey} saved={direct.parameters}
+          onSave={(parameters) => void save({ ...direct, parameters }, t("settings.voiceInput.parametersSaved"))} />
       ) : null}
+      {staleCloudLanguage
+        ? <p role="alert" className="vk-field-error">{t("settings.voiceInput.cloudLanguageUnavailable")}</p>
+        : null}
+      {cloudSaved && cloudFields.length > 0 ? (
+        <VoiceInputModelParameters busy={busy} fields={cloudFields}
+          key={savedKey}
+          saved={cloudSaved.language ? { language: cloudSaved.language } : undefined}
+          onSave={(parameters) => {
+            const { language, ...identity } = cloudSaved;
+            const preferredLanguage = typeof parameters.language === "string" ? parameters.language : undefined;
+            if (preferredLanguage !== language) {
+              void save({ openvulcan_cloud: { ...identity, language: preferredLanguage } }, t("settings.voiceInput.parametersSaved"));
+            }
+          }} />
+      ) : null}
+
       <div className="vk-voice-input-field">
         <label className="vk-field-label" htmlFor={shortcutId}>{t("settings.voiceInput.shortcut")}</label>
         <div className="vk-voice-shortcut-controls">

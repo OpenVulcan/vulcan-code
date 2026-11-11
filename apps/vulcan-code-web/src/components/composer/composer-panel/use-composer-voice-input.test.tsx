@@ -3,7 +3,7 @@ import * as React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { transcribeVoiceInput } from "@/service/voice-input-service";
+import { loadVoiceInputCloudCatalog, transcribeVoiceInput } from "@/service/voice-input-service";
 import { toast } from "@/ui-kit/primitives/toast";
 import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import type { VoiceInputSummary } from "@/types";
@@ -14,7 +14,9 @@ import { encodeVoiceInputWav } from "./voice-input-wav";
 
 vi.mock("@/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }), formatMessage: (template: string) => template }));
 vi.mock("@/ui-kit/primitives/toast", () => ({ toast: { error: vi.fn(), info: vi.fn(), success: vi.fn() } }));
-vi.mock("@/service/voice-input-service", () => ({ transcribeVoiceInput: vi.fn(), loadVoiceInputSettings: vi.fn() }));
+vi.mock("@/service/voice-input-service", () => ({
+  transcribeVoiceInput: vi.fn(), loadVoiceInputSettings: vi.fn(), loadVoiceInputCloudCatalog: vi.fn(),
+}));
 // The browser decoder is exercised independently of the push-to-talk lifecycle.
 // 浏览器音频解码与按住说话的生命周期分开验证。
 vi.mock("./voice-input-wav", () => ({
@@ -145,6 +147,30 @@ it("stays inert until a voice input target is configured", async () => {
   await key(button, "keydown", " ");
   await settle();
   expect(getUserMedia).not.toHaveBeenCalled();
+});
+
+it("enables the microphone after native sign-in only while the cloud route is eligible", async () => {
+  // The initial workbench has no explicit target; signing in publishes an eligible account.
+  // 初始工作台没有显式目标；登录后发布可用云端的账号。
+  const unset = { configured: false, maxDurationSeconds: 120 };
+  const { button } = await render(unset);
+  vi.mocked(loadVoiceInputCloudCatalog).mockResolvedValue({
+    status: "available", connection_id: "native", default_model_id: "site-asr",
+    models: [{ id: "site-asr", display_name: "Default ASR", supported_languages: [] }],
+    selection: { connection_id: "native", model_id: "site-asr" },
+  });
+  await render({ ...unset, cloudAccountId: "native" });
+  await settle();
+  await key(button, "keydown", " ");
+  await settle();
+  await key(button, "keydown", "Escape");
+  await settle();
+  expect(getUserMedia).toHaveBeenCalledTimes(1);
+
+  await render(unset);
+  await key(button, "keydown", " ");
+  await settle();
+  expect(getUserMedia).toHaveBeenCalledTimes(1);
 });
 
 it("records while held, holds sending, and inserts the selected transcript at the caret", async () => {

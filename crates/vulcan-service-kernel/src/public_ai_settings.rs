@@ -274,7 +274,7 @@ use std::sync::Arc;
 pub(crate) use voice_input::voice_input_summary;
 pub(super) use voice_input::{
     service_save_voice_input_selection, service_transcribe_voice_input,
-    service_voice_input_settings,
+    service_voice_input_cloud_catalog, service_voice_input_settings,
 };
 use vulcan_provider_adapters::{PersistedAiConfiguration, PublicAiRuntime};
 

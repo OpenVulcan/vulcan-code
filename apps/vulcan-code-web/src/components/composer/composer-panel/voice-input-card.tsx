@@ -2,8 +2,8 @@ import * as React from "react";
 import { Check, ChevronRight, Settings2 } from "lucide-react";
 import { formatMessage, useI18n } from "@/i18n";
 import { errorMessage } from "@/lib/display-format";
-import { loadVoiceInputSettings } from "@/service/voice-input-service";
-import type { VoiceInputSettingsSnapshot } from "@/types";
+import { loadVoiceInputCloudCatalog, loadVoiceInputSettings, resolveVoiceInputSelection, voiceInputCloudStatusKeys } from "@/service/voice-input-service";
+import type { VoiceInputCloudCatalog, VoiceInputSettingsSnapshot } from "@/types";
 import {
   readVoiceInputDevice,
   saveVoiceInputDevice,
@@ -40,10 +40,35 @@ export function VoiceInputCard(props: VoiceInputCardProps) {
     return () => { cancelled = true; };
   }, []);
 
-  const selection = settings?.selection ?? null;
-  const target = selection ? settings?.candidates.find((candidate) => (
-    candidate.connectionId === selection.connection_id && candidate.targetId === selection.target_id
+  // Only the cloud route needs regional discovery for the model shown in this card.
+  // 仅云端路由需要通过区域目录解析此卡片中的模型。
+  const [cloud, setCloud] = React.useState<VoiceInputCloudCatalog | null>(null);
+  const selection = resolveVoiceInputSelection(settings, cloud);
+  const direct = selection && "connection_id" in selection ? selection : null;
+  const cloudSelection = selection && "openvulcan_cloud" in selection ? selection.openvulcan_cloud : null;
+  // An unset choice can still resolve to a cloud model after native sign-in.
+  // 选择未设置时，原生账号登录后仍可能解析出云端模型。
+  const needsCloudCatalog = Boolean(settings && !settings.disabled && !direct);
+  React.useEffect(() => {
+    if (!needsCloudCatalog) return;
+    let cancelled = false;
+    void loadVoiceInputCloudCatalog().then(
+      (next) => { if (!cancelled) setCloud(next); },
+      () => { if (!cancelled) setCloud({ status: "unavailable" }); },
+    );
+    return () => { cancelled = true; };
+  }, [needsCloudCatalog]);
+  const cloudModel = cloud?.status === "available" && cloudSelection?.connection_id === cloud.connection_id
+    ? cloud.models.find((model) => model.id === cloudSelection.model_id)
+    : undefined;
+  const target = direct ? settings?.candidates.find((candidate) => (
+    candidate.connectionId === direct.connection_id && candidate.targetId === direct.target_id
   )) : undefined;
+  const modelName = cloudModel?.display_name ?? target?.displayName;
+  const sourceName = cloudModel ? t("settings.voiceInput.cloudTitle") : target?.connectionDisplayName;
+  const cloudStatusKey = needsCloudCatalog
+    ? !cloud ? "composer.voice.loading" : cloud.status !== "available" ? voiceInputCloudStatusKeys[cloud.status] : undefined
+    : undefined;
   const selectDevice = (next: string | null) => {
     saveVoiceInputDevice(next);
     setDeviceId(next);
@@ -62,14 +87,14 @@ export function VoiceInputCard(props: VoiceInputCardProps) {
         <h4>{t("composer.voice.model")}</h4>
         {loadError ? <p className="vk-cap-sum-note" data-tone="bad">{t("settings.voiceInput.loadFailed")}</p>
           : !settings ? <p className="vk-cap-sum-note">{t("composer.voice.loading")}</p>
-            : target ? (
+            : modelName ? (
               <span className="vk-cap-sum-text">
-                <span className="vk-cap-sum-label">{target.displayName}</span>
-                <span className="vk-cap-sum-detail">{target.connectionDisplayName}</span>
+                <span className="vk-cap-sum-label">{modelName}</span>
+                <span className="vk-cap-sum-detail">{sourceName}</span>
               </span>
             ) : (
               <p className="vk-cap-sum-note" data-tone={selection ? "bad" : undefined}>
-                {t(selection ? "settings.voiceInput.unavailable" : "composer.voice.modelNone")}
+                {t(cloudStatusKey ?? (selection ? "settings.voiceInput.unavailable" : "composer.voice.modelNone"))}
               </p>
             )}
       </div>

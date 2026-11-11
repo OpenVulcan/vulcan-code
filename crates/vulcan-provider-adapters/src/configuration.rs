@@ -995,7 +995,62 @@ pub struct PersistedAiConfiguration {
     /// absent until the user selects one.
     /// 用户语音输入使用的语音转写目标，与 AI 工具选择相互独立；用户选择前缺失。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub voice_input_selection: Option<VoiceInputSelection>,
+    pub voice_input_selection: Option<VoiceInputRoute>,
+    /// Explicit microphone opt-out; an absent field allows the runtime cloud default.
+    /// 麦克风显式关闭状态；字段缺省时允许运行时使用云端默认模型。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub voice_input_disabled: bool,
+}
+
+/// One exact microphone route, preserving the existing direct-provider serialization.
+/// 一条精确麦克风路由，并保留现有直连供应商的序列化结构。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum VoiceInputRoute {
+    /// The independently managed native OpenVulcan microphone route.
+    /// 独立管理的 OpenVulcan 原生麦克风路由。
+    Cloud(OpenVulcanVoiceInputRoute),
+    /// A speech transcription tool on a user-configured provider.
+    /// 用户自配供应商上的语音转写工具。
+    Provider(VoiceInputSelection),
+}
+
+impl VoiceInputRoute {
+    /// Returns the account connection that owns this route.
+    /// 返回持有此路由的账号连接。
+    pub fn connection_id(&self) -> &str {
+        match self {
+            Self::Cloud(route) => &route.openvulcan_cloud.connection_id,
+            Self::Provider(route) => &route.connection_id,
+        }
+    }
+}
+
+/// Envelope distinguishing cloud selection from the legacy provider selection.
+/// 将云端选择与既有供应商选择区分开的封套。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OpenVulcanVoiceInputRoute {
+    /// The exact native account and publication selected by the user.
+    /// 用户选择的精确原生账号和发布条目。
+    pub openvulcan_cloud: OpenVulcanVoiceInputSelection,
+}
+
+/// The public model, account binding, and optional preferred language of a microphone selection.
+/// 麦克风选择的发布模型、账号绑定及可选优先语言。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OpenVulcanVoiceInputSelection {
+    /// Native OpenVulcan connection that supplied the regional catalog.
+    /// 提供区域目录的 OpenVulcan 原生连接。
+    pub connection_id: String,
+    /// Stable published ID independent of the upstream model name.
+    /// 独立于上游模型名称的稳定发布标识。
+    pub model_id: String,
+    /// Explicit preferred language; absent means the model's default recognition.
+    /// 显式优先语言；缺失时使用模型的默认识别方式。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
 }
 
 /// Stores the microphone target and its optional transcription parameters as one selection.
@@ -1109,6 +1164,7 @@ impl Default for PersistedAiConfiguration {
             provider_extension_target_sets: BTreeMap::new(),
             provider_extension_modes: BTreeMap::new(),
             voice_input_selection: None,
+            voice_input_disabled: false,
         }
     }
 }
