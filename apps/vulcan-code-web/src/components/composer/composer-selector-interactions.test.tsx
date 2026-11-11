@@ -653,6 +653,7 @@ it("opens the capability dialog from the hover summary footer action", async () 
   await render(<ComposerAiCapabilityControl ariaLabel="Capabilities" conversationId="c" />);
   await act(async () => { document.querySelector<HTMLButtonElement>('[aria-label="Capabilities"]')!.focus(); });
   await act(async () => { await new Promise(resolve => setTimeout(resolve, HOVER_CARD_OPEN_DELAY_MS + 50)); });
+  await act(async () => vi.dynamicImportSettled());
   // configure is the footer action rendered by the mounted hover summary.
   // configure 是已挂载悬浮摘要渲染的底部操作。
   const configure = document.querySelector<HTMLButtonElement>(".vk-cap-sum-action");

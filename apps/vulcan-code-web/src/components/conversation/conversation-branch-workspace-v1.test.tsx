@@ -450,7 +450,10 @@ describe("ConversationBranchWorkspaceV1", () => {
     const store = new ConversationLiveStreamStore();
     // Render a copy of the current window so the workspace observes each append.
     // 渲染当前窗口的副本，使工作区观察到每次追加。
-    const render = () => React.act(async () => root.render(workspaceTree([...history], "inline_output", [], true, undefined, store)));
+    const render = async () => {
+      await React.act(async () => root.render(workspaceTree([...history], "inline_output", [], true, undefined, store)));
+      await React.act(async () => vi.dynamicImportSettled());
+    };
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     try {
       await render();
@@ -460,6 +463,11 @@ describe("ConversationBranchWorkspaceV1", () => {
       appendRetryRequest(history, "retry_generation", { message: retryDiagnostic("fixture-attempt-two") });
       await render();
       expect(host.querySelectorAll(".vk-error-card")).toHaveLength(1);
+      // Open the raw diagnostic through the same control the user sees.
+      // 通过用户可见的控件展开原始诊断。
+      const details = host.querySelector<HTMLButtonElement>(".vk-error-footer button[aria-expanded]")!;
+      expect(details.getAttribute("aria-expanded")).toBe("false");
+      await React.act(async () => details.click());
       expect(host.querySelector(".vk-error-raw pre")?.textContent).toContain("fixture-attempt-two");
 
       appendRetryRequest(history, "retry_generation", { message: retryDiagnostic("fixture-attempt-three") });
@@ -503,21 +511,31 @@ describe("ConversationBranchWorkspaceV1", () => {
   it.each([
     { nextPurpose: "retry_generation", exhausted: false, remaining: 0 },
     { nextPurpose: "continue", exhausted: true, remaining: 2 },
-  ] as const)("keeps distinct errors separate and scopes recovery to $nextPurpose", ({ nextPurpose, exhausted, remaining }) => {
+  ] as const)("keeps distinct errors separate and scopes recovery to $nextPurpose", async ({ nextPurpose, exhausted, remaining }) => {
     // The retry changes error while the original Provider route stays the same.
     // 原供应商路由保持相同，但重试遇到不同错误。
     const history = [completeTurnEvents()[0]];
     appendRetryRequest(history, "main_generation", { message: "Fixture provider unavailable" });
     appendRetryRequest(history, "retry_generation", { message: "Fixture invalid response", exhausted });
 
-    // The workspace still shows each of the distinct failures without adding pagination.
-    // 工作区仍分别展示不同失败，且不增加翻页。
-    const markup = renderWorkspace(history);
-    expect(markup.match(/class="vk-error-card"/g)).toHaveLength(2);
-    expect(markup).not.toContain("vk-error-retry-pager");
+    // Mount the workspace so the lazy diagnostic panels can load before inspecting them.
+    // 挂载工作区，让延迟加载的诊断面板完成加载后再检查。
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    try {
+      await React.act(async () => root.render(workspaceTree([...history])));
+      await React.act(async () => vi.dynamicImportSettled());
+      expect(host.querySelectorAll("section.vk-error-card")).toHaveLength(2);
+      expect(host.querySelector(".vk-error-retry-pager")).toBeNull();
 
-    appendRetryRequest(history, nextPurpose);
-    expect(renderWorkspace(history).match(/class="vk-error-card"/g) ?? []).toHaveLength(remaining);
+      appendRetryRequest(history, nextPurpose);
+      await React.act(async () => root.render(workspaceTree([...history])));
+      expect(host.querySelectorAll("section.vk-error-card")).toHaveLength(remaining);
+    } finally {
+      await React.act(async () => root.unmount());
+      vi.unstubAllGlobals();
+    }
   });
 
   // The real branch surface must show one card from API start through terminal replay, without leaking summary prose.
