@@ -521,6 +521,15 @@ export interface PublicAiModelCandidate {
   displayName: string;
   kind: PublicAiModelCandidateKind;
   addable: boolean;
+  // Only a verified conversation route can supply fields for the add form.
+  // 只有已验证的会话路由能为新增表单提供字段。
+  prefill?: {
+    protocolProfileId: string;
+    contextLimit: number | null;
+    outputLimit: number | null;
+    inputResources: PublicAiResourceKind[];
+    reasoningEfforts: string[];
+  };
 }
 
 // PublicAiModelCandidatesRecord lists the candidates of one account and its node.

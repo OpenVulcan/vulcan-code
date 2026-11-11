@@ -2,14 +2,16 @@
 //! 签名目录尚未收录的已拉取系统供应商模型。
 
 use serde::{Deserialize, Serialize};
-use vulcan_ai_contract::{AiOperation, ModelCapabilities, ResourceKind};
+use vulcan_ai_contract::{AiOperation, ModelCapabilities, ReasoningEffort, ResourceKind};
 use vulcan_provider_adapters::{
-    ConnectionModel, CustomModelDefinition, CustomModelRequestProjection, PersistedAiConfiguration,
-    ProtocolRoute, PublicAiRuntime, ServiceEntryKind, SystemManualModelBinding,
-    ToolSchemaProjectionMode, apply_common_model_capability_defaults,
-    provider_manifest::ResolvedProviderManifest, validate_route_input_resources,
+    CatalogDiscoveryState, ConnectionModel, ConnectionModelCatalog, CustomModelDefinition,
+    CustomModelRequestProjection, PersistedAiConfiguration, ProtocolRoute, PublicAiRuntime,
+    ServiceEntryKind, SystemManualModelBinding, ToolSchemaProjectionMode,
+    apply_common_model_capability_defaults, provider_manifest::ResolvedProviderManifest,
+    validate_route_input_resources,
 };
 
+use super::catalog_projection::{PublicAiModelDirectoryKind, service_entry_model_directory_kind};
 use super::{public_ai_runtime_and_configuration, validate_non_empty};
 use crate::SharedServiceBridgeState;
 
@@ -81,6 +83,28 @@ pub(crate) struct PublicAiModelCandidate {
     /// Whether the candidate can currently be added as a conversation model.
     /// 候选当前能否作为对话模型添加。
     addable: bool,
+    /// Editable conversation fields from the source catalog, present only for addable candidates.
+    /// 来源目录中的可编辑会话字段，仅可添加候选具有此字段。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prefill: Option<PublicAiModelCandidatePrefill>,
+}
+
+/// Carries just the conversation fields needed to open one draft without retaining an isolated catalog.
+/// 仅携带打开单个草稿所需的会话字段，无需保留隔离目录。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PublicAiModelCandidatePrefill {
+    /// Verified route that owns the draft.
+    /// 持有草稿的已验证路由。
+    protocol_profile_id: String,
+    /// Confirmed token bounds, absent when the directory lacks evidence.
+    /// 已确认的 Token 上限；目录缺少证据时为空。
+    context_limit: Option<u64>,
+    output_limit: Option<u64>,
+    /// Supported input modalities and reasoning choices on the verified route.
+    /// 已验证路由支持的输入模态与思考选项。
+    input_resources: Vec<ResourceKind>,
+    reasoning_efforts: Vec<ReasoningEffort>,
 }
 
 /// Fetched candidates of one account with the node they would be added to.
@@ -139,6 +163,96 @@ pub(crate) fn service_list_public_ai_model_candidates(
     list_model_candidates(&runtime, &configuration, request.connection_id.as_str())
 }
 
+/// Fetches one account's remote candidate catalog without publishing it or saving models.
+/// 拉取一个账号的远程候选目录，不发布目录也不保存模型。
+///
+/// `state` supplies the current runtime and configuration; `request` names the exact account.
+/// `state` 提供当前运行时与配置；`request` 指定精确账号。
+/// Returns filtered candidates from a fresh observation or its controlled error.
+/// 返回新观测中过滤后的候选，或该次观测的受控错误。
+pub(crate) async fn service_fetch_public_ai_model_candidates(
+    state: SharedServiceBridgeState,
+    request: PublicAiModelCandidatesRequest,
+) -> Result<PublicAiModelCandidatesRecord, String> {
+    // Resolve the exact configured account before the isolated runtime reads a credential.
+    // 在隔离运行时读取凭据之前解析精确的已配置账号。
+    let connection_id = request.connection_id.as_str();
+    validate_non_empty("connectionId", connection_id)?;
+    let (runtime, configuration) = public_ai_runtime_and_configuration(&state)?;
+    let account = system_account(&runtime, &configuration, connection_id)?;
+    let connection = configuration
+        .connection_graph
+        .connections
+        .get(connection_id);
+    let entry = account
+        .manifest
+        .descriptor
+        .service_entries
+        .iter()
+        .find(|entry| entry.id == account.service_entry_id)
+        .ok_or_else(|| String::from("The selected model catalog service entry is unavailable."))?;
+    if !configuration.connection_is_enabled(connection_id)
+        || configuration.connection_is_pending_validation(connection_id)
+    {
+        return Err(String::from(
+            "Select an enabled and validated model catalog account.",
+        ));
+    }
+    if service_entry_model_directory_kind(entry, false) != PublicAiModelDirectoryKind::Dynamic
+        || !account
+            .manifest
+            .model_source_policy(&entry.id)?
+            .includes_discovery()
+    {
+        return Err(String::from(
+            "The selected service entry has no remote model catalog.",
+        ));
+    }
+    // Keep fresh discovery out of the live catalogs so only an explicit model save changes the inventory.
+    // 让新发现与在线目录隔离，仅显式保存模型才能更改清单。
+    let observation = runtime
+        .observe_connection_catalog_candidate(&configuration, connection_id, None)
+        .await?;
+    if observation.refresh_error.is_some()
+        || !matches!(
+            observation.status.state,
+            CatalogDiscoveryState::Ready | CatalogDiscoveryState::Empty
+        )
+    {
+        return Err(observation
+            .status
+            .message
+            .or(observation.refresh_error)
+            .unwrap_or_else(|| {
+                String::from("The remote model catalog did not return a fresh result.")
+            }));
+    }
+    if observation.status.state == CatalogDiscoveryState::Ready && observation.catalog.is_none() {
+        return Err(String::from(
+            "The ready remote model catalog contains no source observation.",
+        ));
+    }
+    // Check the original account and manifest before filtering against the latest saved models.
+    // 使用最新已保存模型过滤前，确认账号和签名清单仍与请求发起时一致。
+    let (current_runtime, current) = public_ai_runtime_and_configuration(&state)?;
+    let current_account = system_account(&current_runtime, &current, connection_id)?;
+    if current.connection_graph.connections.get(connection_id) != connection
+        || !current.connection_is_enabled(connection_id)
+        || current.connection_is_pending_validation(connection_id)
+        || !std::sync::Arc::ptr_eq(&account.manifest, &current_account.manifest)
+    {
+        return Err(String::from(
+            "The selected account changed during model discovery. Fetch the catalog again.",
+        ));
+    }
+    candidates_from_catalog(
+        &current_runtime,
+        &current,
+        current_account,
+        observation.catalog.as_ref(),
+    )
+}
+
 /// Lists the candidates of one account against an explicit runtime and configuration.
 /// 针对显式运行时与配置列出一个账号的候选。
 fn list_model_candidates(
@@ -148,19 +262,61 @@ fn list_model_candidates(
 ) -> Result<PublicAiModelCandidatesRecord, String> {
     let account = system_account(runtime, configuration, connection_id)?;
     let source_catalogs = runtime.source_catalog_snapshot()?;
+    candidates_from_catalog(
+        runtime,
+        configuration,
+        account,
+        source_catalogs.get(connection_id),
+    )
+}
+
+/// Filters one raw source catalog against signed identities and already saved models.
+/// 对照签名模型身份和已保存模型过滤一个原始来源目录。
+///
+/// The runtime and configuration supply current membership; the account and catalog identify the source.
+/// 运行时与配置提供当前成员关系；账号与目录标识来源。
+/// Returns sorted candidates with prefill available only for verified conversation routes.
+/// 返回排序后的候选，仅已验证会话路由提供预填数据。
+fn candidates_from_catalog(
+    runtime: &PublicAiRuntime,
+    configuration: &PersistedAiConfiguration,
+    account: SystemAccount,
+    catalog: Option<&ConnectionModelCatalog>,
+) -> Result<PublicAiModelCandidatesRecord, String> {
+    // Collect candidates after verifying each exact model identity.
+    // 校验每个精确模型身份后收集候选。
     let mut candidates = Vec::new();
-    if let Some(catalog) = source_catalogs.get(connection_id) {
+    if let Some(catalog) = catalog {
         for model in &catalog.models {
             if !is_candidate(runtime, configuration, &account, model.id.as_str())? {
                 continue;
             }
+            // Only text conversation candidates can expose fields for the manual conversation editor.
+            // 只有文本会话候选才能向手工会话模型编辑器提供字段。
             let kind = detected_kind(model.id.as_str(), &model.capabilities);
+            let prefill = if kind == PublicAiModelCandidateKind::Conversation {
+                candidate_route(&account, model).map(|route| {
+                    // Apply the same discovery and capability defaults as the existing draft service.
+                    // 使用与现有草稿服务相同的发现与能力默认规则。
+                    let (capabilities, _) =
+                        draft_capabilities(&account.service_entry_id, route, model);
+                    PublicAiModelCandidatePrefill {
+                        protocol_profile_id: route.protocol_profile_id.clone(),
+                        context_limit: capabilities.context_limit,
+                        output_limit: capabilities.output_limit,
+                        input_resources: capabilities.input_resources,
+                        reasoning_efforts: capabilities.reasoning_efforts,
+                    }
+                })
+            } else {
+                None
+            };
             candidates.push(PublicAiModelCandidate {
                 model_id: model.id.clone(),
                 display_name: model.display_name.clone(),
                 kind,
-                addable: kind == PublicAiModelCandidateKind::Conversation
-                    && candidate_route(&account, model).is_some(),
+                addable: prefill.is_some(),
+                prefill,
             });
         }
     }

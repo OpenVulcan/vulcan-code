@@ -105,6 +105,27 @@ fn candidates_exclude_featured_models_and_flag_non_conversation_kinds() {
             ("acme/pixel-paint", PublicAiModelCandidateKind::Image, false),
         ]
     );
+    // Only the conversation row receives draft fields from the exact source route.
+    // 只有会话模型行获得精确来源路由的草稿字段。
+    let prefill = record
+        .candidates
+        .iter()
+        .find(|candidate| candidate.model_id == "acme/fresh-chat")
+        .and_then(|candidate| candidate.prefill.as_ref())
+        .expect("conversation candidate should expose prefill");
+    assert_eq!(
+        prefill.protocol_profile_id,
+        vulcan_llm_core::OPENAI_RESPONSES_PROFILE_ID
+    );
+    assert_eq!(prefill.context_limit, Some(64_000));
+    assert_eq!(prefill.output_limit, Some(64_000));
+    assert!(
+        record
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.kind != PublicAiModelCandidateKind::Conversation)
+            .all(|candidate| candidate.prefill.is_none())
+    );
 }
 
 /// Verifies a prepared draft carries discovery facts, passes save validation and leaves the list.

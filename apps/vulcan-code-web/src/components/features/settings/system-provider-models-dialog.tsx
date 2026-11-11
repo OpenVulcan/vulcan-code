@@ -16,6 +16,7 @@ import type {
   PublicAiServiceEntry,
   PublicAiSettingsSnapshot,
 } from "@/types"
+import { SystemModelCandidatePicker, type AddableSystemModelCandidate } from "./system-model-candidate-picker"
 import "@/ui-kit/styles/features/settings-forms.css"
 
 // SystemModelDraft keeps incomplete form fields separate from persisted model definitions.
@@ -30,6 +31,9 @@ interface SystemModelDraft {
   enabled: boolean
   inputResources: PublicAiResourceKind[]
   reasoningEfforts: string[]
+  // Fetched facts belong to the exact model, service entry and protocol used by discovery.
+  // 拉取事实属于发现时使用的精确模型、服务入口和协议。
+  fetched?: true
 }
 
 // SystemProviderModelsDialogProps binds editing to one exact system provider snapshot.
@@ -85,6 +89,14 @@ function positiveInteger(value: string): number | null {
   if (!/^[1-9][0-9]*$/.test(value.trim())) return null
   const parsed = Number(value)
   return Number.isSafeInteger(parsed) ? parsed : null
+}
+
+// reasoningEffortsForProtocol takes a verified protocol ID and returns the effort choices its projector accepts.
+// reasoningEffortsForProtocol 接收已验证协议 ID，并返回其投影器接受的思考档位。
+function reasoningEffortsForProtocol(protocolProfileId: string) {
+  return ["google.gemini.generate_content", "google.code_assist.generate_content.v1", "gemini-interactions.v1"].includes(protocolProfileId)
+    ? OPENAI_DIRECT_REASONING_EFFORTS.filter((effort) => ["minimal", "low", "medium", "high"].includes(effort))
+    : OPENAI_DIRECT_REASONING_EFFORTS
 }
 
 // modelFromDraft creates one user-owned text-output model without editing signed provider data.
@@ -181,9 +193,28 @@ export function SystemProviderModelsDialog(props: SystemProviderModelsDialogProp
   ].includes(draft?.protocolProfileId ?? "")
   // Gemini's current request projector accepts only four explicit thinking levels.
   // 当前 Gemini 请求投影器仅接受四个显式思考档位。
-  const availableReasoningEfforts = ["google.gemini.generate_content", "google.code_assist.generate_content.v1", "gemini-interactions.v1"].includes(draft?.protocolProfileId ?? "")
-    ? OPENAI_DIRECT_REASONING_EFFORTS.filter((effort) => ["minimal", "low", "medium", "high"].includes(effort))
-    : OPENAI_DIRECT_REASONING_EFFORTS
+  const availableReasoningEfforts = reasoningEffortsForProtocol(draft?.protocolProfileId ?? "")
+  // chooseCandidate fills one unsaved draft; missing limits are left for the user to confirm.
+  // chooseCandidate 预填一个尚未保存的草稿；缺少的上限由用户确认填写。
+  const chooseCandidate = (entryId: string, candidate: AddableSystemModelCandidate) => {
+    // Only options rendered by the exact route's editor can enter its draft.
+    // 只有精确路由编辑器可显示的选项才能进入草稿。
+    const choices = new Set<string>(reasoningEffortsForProtocol(candidate.prefill.protocolProfileId))
+    setEditingId(null)
+    setError(null)
+    setDraft({
+      id: candidate.modelId,
+      displayName: candidate.displayName,
+      serviceEntryId: entryId,
+      protocolProfileId: candidate.prefill.protocolProfileId,
+      contextLimit: String(candidate.prefill.contextLimit ?? ""),
+      outputLimit: String(candidate.prefill.outputLimit ?? ""),
+      enabled: true,
+      inputResources: candidate.prefill.inputResources,
+      reasoningEfforts: candidate.prefill.reasoningEfforts.filter((effort) => choices.has(effort)),
+      fetched: true,
+    })
+  }
   // persist sends the complete provider-owned replacement and adopts only the returned snapshot.
   // persist 发送完整供应商自有替换集合，且只采用后台返回的快照。
   const persist = async (replacement: PublicAiCustomModelDefinition[]) => {
@@ -268,13 +299,23 @@ export function SystemProviderModelsDialog(props: SystemProviderModelsDialogProp
           ))}
           {models.length === 0 ? <p className="vk-form-text">{t("settings.systemManualModels.empty")}</p> : null}
         </div>
+        {props.open ? <SystemModelCandidatePicker
+          busy={busy}
+          entries={entries}
+          hidden={draft !== null}
+          key={props.provider.id}
+          onChoose={chooseCandidate}
+          providerId={props.provider.id}
+          savedModels={models}
+          snapshot={props.snapshot}
+        /> : null}
         {!draft ? <Button disabled={busy || entries.length === 0} onClick={() => { setEditingId(null); setDraft(emptyDraft(entries[0], props.snapshot.manualModelDefaults)); setError(null) }} type="button" variant="outline"><Plus className="vk-icon" />{t("settings.customModels.addManual")}</Button> : (
           <div className="vk-form-box">
             <div className="vk-form-grid">
-              <label className="vk-field"><span>{t("settings.customModels.modelId")}</span><Input disabled={busy || editingId !== null} value={draft.id} onChange={(event) => setDraft({ ...draft, id: event.target.value })} /></label>
+              <label className="vk-field"><span>{t("settings.customModels.modelId")}</span><Input disabled={busy || editingId !== null || draft.fetched} value={draft.id} onChange={(event) => setDraft({ ...draft, id: event.target.value })} /></label>
               <label className="vk-field"><span>{t("settings.customModels.displayName")}</span><Input disabled={busy} value={draft.displayName} onChange={(event) => setDraft({ ...draft, displayName: event.target.value })} /></label>
-              <label className="vk-field"><span>{t("settings.systemManualModels.entry")}</span><Select value={draft.serviceEntryId} onValueChange={(entryId) => { const entry = entries.find((item) => item.id === entryId); setDraft({ ...draft, serviceEntryId: entryId, protocolProfileId: entry?.protocol_routes.find((route) => route.verified)?.protocol_profile_id ?? "", inputResources: draft.inputResources.filter((resource) => resource !== "video" && resource !== "audio"), reasoningEfforts: [] }) }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{entries.map((entry) => <SelectItem key={entry.id} value={entry.id}>{entry.display_name}</SelectItem>)}</SelectContent></Select></label>
-              <label className="vk-field"><span>{t("settings.customModels.protocolSelect")}</span><Select value={draft.protocolProfileId} onValueChange={(protocolId) => setDraft({ ...draft, protocolProfileId: protocolId, inputResources: draft.inputResources.filter((resource) => resource !== "video" && resource !== "audio"), reasoningEfforts: [] })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{selectedEntry?.protocol_routes.filter((route) => route.verified).map((route) => <SelectItem key={route.protocol_profile_id} value={route.protocol_profile_id}>{route.protocol_profile_id}</SelectItem>)}</SelectContent></Select></label>
+              <label className="vk-field"><span>{t("settings.systemManualModels.entry")}</span><Select disabled={busy || draft.fetched} value={draft.serviceEntryId} onValueChange={(entryId) => { const entry = entries.find((item) => item.id === entryId); setDraft({ ...draft, serviceEntryId: entryId, protocolProfileId: entry?.protocol_routes.find((route) => route.verified)?.protocol_profile_id ?? "", inputResources: draft.inputResources.filter((resource) => resource !== "video" && resource !== "audio"), reasoningEfforts: [] }) }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{entries.map((entry) => <SelectItem key={entry.id} value={entry.id}>{entry.display_name}</SelectItem>)}</SelectContent></Select></label>
+              <label className="vk-field"><span>{t("settings.customModels.protocolSelect")}</span><Select disabled={busy || draft.fetched} value={draft.protocolProfileId} onValueChange={(protocolId) => setDraft({ ...draft, protocolProfileId: protocolId, inputResources: draft.inputResources.filter((resource) => resource !== "video" && resource !== "audio"), reasoningEfforts: [] })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{selectedEntry?.protocol_routes.filter((route) => route.verified).map((route) => <SelectItem key={route.protocol_profile_id} value={route.protocol_profile_id}>{route.protocol_profile_id}</SelectItem>)}</SelectContent></Select></label>
               <label className="vk-field"><span>{t("settings.customModels.contextLimit")}</span><Input disabled={busy} inputMode="numeric" value={draft.contextLimit} onChange={(event) => setDraft({ ...draft, contextLimit: event.target.value })} /></label>
               <label className="vk-field"><span>{t("settings.customModels.outputLimit")}</span><Input disabled={busy} inputMode="numeric" value={draft.outputLimit} onChange={(event) => setDraft({ ...draft, outputLimit: event.target.value })} /></label>
             </div>

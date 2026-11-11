@@ -1,31 +1,25 @@
 import * as React from "react"
-import { Boxes, ExternalLink, KeyRound, ListChecks, MoreHorizontal, Pencil, RefreshCw, Star, Trash2 } from "lucide-react"
+import { ExternalLink, KeyRound, ListChecks, MoreHorizontal, Pencil, Star, Trash2 } from "lucide-react"
 
 import { CredentialModelAccessDialog } from "@/components/features/settings/credential-model-access-dialog"
 import {
-  credentialSupportsModelSynchronization,
   PublicAiConnectionDialog,
   PublicAiDeleteConnectionDialog,
 } from "@/components/features/settings/provider-list-settings"
 import { localizedServiceEntryPresentation } from "@/components/features/settings/provider-presentation"
 import { PageEmptyState } from "@/components/page"
 import { credentialUsageIsNonPlanAccount, useCredentialUsageOverview } from "@/components/public-ai/credential-usage-overview"
-import { Button } from "@/ui-kit/primitives/button"
+import { Button, IconButton } from "@/ui-kit/primitives/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/ui-kit/primitives/dropdown-menu"
 import { Switch } from "@/ui-kit/primitives/switch"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui-kit/primitives/tooltip"
 import { useI18n } from "@/i18n"
-import {
-  queryPublicAiConnectionUsage,
-  savePublicAiConnectionEnabled,
-  savePublicAiDefaultConnection,
-  syncPublicAiConnection,
-} from "@/service/settings-actions-service"
+import { savePublicAiConnectionEnabled } from "@/service/settings-actions-service"
 import type {
   PublicAiAccountUsage,
   PublicAiConnection,
@@ -48,7 +42,6 @@ export interface ProviderAccountsProps {
   // usageByConnection holds usage reads newer than the snapshot cache.
   // usageByConnection 保存比快照缓存更新的用量读取。
   usageByConnection: Readonly<Record<string, PublicAiAccountUsage>>
-  onUsage: (connectionId: string, usage: PublicAiAccountUsage) => void
   alerts: readonly ProviderAlert[]
   // scopeId is the account the model list is narrowed to; onScope toggles it.
   // scopeId 是模型列表收窄到的账号；onScope 切换它。
@@ -81,15 +74,7 @@ export function ProviderAccounts(props: ProviderAccountsProps) {
               onEdit={() => setEditing(connection)}
               onEnabledChange={(enabled) => run(`account/${connection.id}`, () => savePublicAiConnectionEnabled({ connectionId: connection.id, enabled }))}
               onManageModels={() => setModelAccess(connection)}
-              onRefreshUsage={() => run(`usage/${connection.id}`, async () => {
-                props.onUsage(connection.id, await queryPublicAiConnectionUsage(connection.id))
-              })}
               onScope={() => props.onScope(props.scopeId === connection.id ? null : connection.id)}
-              onSetDefault={() => run(`account/${connection.id}`, () => savePublicAiDefaultConnection({
-                providerId: connection.provider_id,
-                connectionId: connection.id,
-              }))}
-              onSync={() => run(`account/${connection.id}`, () => syncPublicAiConnection(connection.id))}
               provider={provider}
               scoped={props.scopeId === connection.id}
               snapshot={snapshot}
@@ -155,13 +140,10 @@ interface AccountCardProps {
   onDelete: () => void
   onManageModels: () => void
   onEnabledChange: (enabled: boolean) => void
-  onRefreshUsage: () => void
-  onSetDefault: () => void
-  onSync: () => void
 }
 
-// AccountCard shows who the account is, what it has left, and whether it works, with actions behind one menu.
-// AccountCard 显示账号身份、剩余用量与是否正常，操作收在一个菜单里。
+// AccountCard renders an account's identity, usage and health, and binds its controls to the supplied callbacks.
+// AccountCard 渲染账号的身份、用量和状态，并将控件绑定到传入的回调。
 function AccountCard(props: AccountCardProps) {
   const { t } = useI18n()
   const { snapshot, provider, connection } = props
@@ -175,6 +157,10 @@ function AccountCard(props: AccountCardProps) {
   const health = healthOf(props.alerts, connection.enabled)
   const catalogError = props.alerts.find((alert) => alert.kind === "catalog_error")?.detail
   const modelCount = snapshot.catalogs[connection.id]?.models.length ?? 0
+  // Share the translated names between hover hints and accessible button labels.
+  // 悬停提示与按钮的无障碍名称共用翻译文案。
+  const editLabel = t("settings.credentials.edit")
+  const manageLabel = t("settings.credentialModels.manage")
   return (
     <article className="vk-ms-account" data-state={health}>
       <header className="vk-ms-account-top">
@@ -182,7 +168,7 @@ function AccountCard(props: AccountCardProps) {
           {isDefault ? <Star aria-label={t("settings.credentials.currentDefault")} className="vk-ms-account-default" role="img" /> : null}
           <strong title={connection.display_name}>{connection.display_name}</strong>
         </span>
-        <AccountMenu {...props} isDefault={isDefault} profile={profile} toolsOnly={toolsOnly} />
+        <AccountMenu busy={props.busy} connection={connection} onDelete={props.onDelete} />
       </header>
       <div className="vk-ms-chip-row">
         <span className="vk-ms-chip">{presentation.title}</span>
@@ -196,19 +182,53 @@ function AccountCard(props: AccountCardProps) {
           {healthLabel(health, props.alerts, t)}
           {!toolsOnly && connection.enabled ? ` · ${t("settings.modelServices.connect.enabled").replace("{count}", String(modelCount))}` : null}
         </span>
-        <span className="vk-ms-account-controls">
-          {!toolsOnly ? (
-            <Button aria-pressed={props.scoped} className="vk-ms-scope-button" onClick={props.onScope} size="xs" type="button" variant="ghost">
-              {t("settings.modelServices.account.onlyThis")}
-            </Button>
-          ) : null}
-          <Switch
-            aria-label={connection.enabled ? t("settings.credentials.disable") : t("settings.credentials.enable")}
-            checked={connection.enabled}
-            disabled={props.busy}
-            onCheckedChange={props.onEnabledChange}
-          />
-        </span>
+        <div className="vk-ms-account-actions">
+          <div className="vk-ms-account-shortcuts">
+            {/* The wrapper keeps hover hints available while the button is disabled. */}
+            {/* 按钮禁用时，外层元素仍可显示悬停提示。 */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span>
+                  <IconButton aria-label={editLabel} disabled={props.busy} onClick={props.onEdit} size="xs" type="button">
+                    <Pencil aria-hidden="true" />
+                  </IconButton>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>{editLabel}</TooltipContent>
+            </Tooltip>
+            {!toolsOnly ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span>
+                    <IconButton
+                      aria-label={manageLabel}
+                      disabled={props.busy || !connection.enabled || connection.pending_validation}
+                      onClick={props.onManageModels}
+                      size="xs"
+                      type="button"
+                    >
+                      <ListChecks aria-hidden="true" />
+                    </IconButton>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>{manageLabel}</TooltipContent>
+              </Tooltip>
+            ) : null}
+          </div>
+          <span className="vk-ms-account-controls">
+            {!toolsOnly ? (
+              <Button aria-pressed={props.scoped} className="vk-ms-scope-button" onClick={props.onScope} size="xs" type="button" variant="ghost">
+                {t("settings.modelServices.account.onlyThis")}
+              </Button>
+            ) : null}
+            <Switch
+              aria-label={connection.enabled ? t("settings.credentials.disable") : t("settings.credentials.enable")}
+              checked={connection.enabled}
+              disabled={props.busy}
+              onCheckedChange={props.onEnabledChange}
+            />
+          </span>
+        </div>
       </footer>
     </article>
   )
@@ -227,42 +247,23 @@ function healthLabel(health: HealthState, alerts: readonly ProviderAlert[], t: R
   }
 }
 
-// AccountMenu holds the account actions that are not needed at a glance.
-// AccountMenu 收纳无需一眼看到的账号操作。
-function AccountMenu(props: AccountCardProps & { isDefault: boolean; profile: PublicAiCredentialProfile | undefined; toolsOnly: boolean }) {
+// AccountMenu renders the account's delete entry and delegates confirmation to the supplied callback.
+// AccountMenu 渲染账号的删除入口，并将确认流程交给传入的回调。
+function AccountMenu({ busy, connection, onDelete }: Pick<AccountCardProps, "busy" | "connection" | "onDelete">) {
   const { t } = useI18n()
-  const { connection } = props
-  const usageSupported = props.profile?.account_usage_query !== "unsupported"
-    && (!connection.usage_requires_management_key || connection.has_management_key)
-  const directoryKind = props.snapshot.connectionModelAccessPolicyRecords
-    .find((record) => record.connectionId === connection.id)?.directoryKind
-  const blocked = props.busy || !connection.enabled || connection.pending_validation
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button
+        <IconButton
           aria-label={t("settings.modelServices.account.menu").replace("{account}", connection.display_name)}
-          size="icon-xs"
+          size="xs"
           type="button"
-          variant="ghost"
-        ><MoreHorizontal /></Button>
+        ><MoreHorizontal aria-hidden="true" /></IconButton>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuItem disabled={props.busy} onSelect={props.onEdit}><Pencil />{t("settings.credentials.edit")}</DropdownMenuItem>
-        {usageSupported ? (
-          <DropdownMenuItem disabled={props.busy || !connection.enabled} onSelect={props.onRefreshUsage}><RefreshCw />{t("settings.credentials.refreshUsage")}</DropdownMenuItem>
-        ) : null}
-        {credentialSupportsModelSynchronization(directoryKind) ? (
-          <DropdownMenuItem disabled={blocked} onSelect={props.onSync}><Boxes />{t("settings.credentials.syncModels")}</DropdownMenuItem>
-        ) : null}
-        {!props.toolsOnly ? (
-          <DropdownMenuItem disabled={blocked} onSelect={props.onManageModels}><ListChecks />{t("settings.credentialModels.manage")}</DropdownMenuItem>
-        ) : null}
-        {!props.isDefault ? (
-          <DropdownMenuItem disabled={blocked} onSelect={props.onSetDefault}><Star />{t("settings.credentials.setDefault")}</DropdownMenuItem>
-        ) : null}
-        <DropdownMenuSeparator />
-        <DropdownMenuItem disabled={props.busy} onSelect={props.onDelete} variant="destructive"><Trash2 />{t("settings.credentials.remove")}</DropdownMenuItem>
+        <DropdownMenuItem disabled={busy} onSelect={onDelete} variant="destructive">
+          <Trash2 aria-hidden="true" />{t("settings.credentials.remove")}
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   )

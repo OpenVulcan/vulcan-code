@@ -299,6 +299,21 @@ export async function listPublicAiModelCandidates(
   );
 }
 
+// Fetches one account's remote candidates without publishing or saving any models.
+// 拉取一个账号的远程候选，不发布或保存任何模型。
+// connectionId identifies the account and signal cancels this client request; returns the isolated result.
+// connectionId 标识账号，signal 取消本次客户端请求；返回隔离查询结果。
+export async function fetchPublicAiModelCandidates(
+  connectionId: string,
+  signal: AbortSignal,
+): Promise<PublicAiModelCandidatesRecord> {
+  return serviceClient.request<PublicAiModelCandidatesRecord>(
+    "service_fetch_public_ai_model_candidates",
+    { request: { connectionId } },
+    { signal },
+  );
+}
+
 // preparePublicAiModelCandidate returns a prefilled definition; saving uses savePublicAiCustomModels.
 // preparePublicAiModelCandidate 返回预填定义；保存走 savePublicAiCustomModels。
 export async function preparePublicAiModelCandidate(

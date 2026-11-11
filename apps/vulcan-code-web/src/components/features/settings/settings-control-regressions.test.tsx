@@ -201,13 +201,52 @@ it("marks an unstable configured provider in the rail and workspace", async () =
   expect(host.querySelector('.vk-ms-rail-name [role="img"]')?.getAttribute("aria-label")).toBe(warning);
 });
 
+it("opens account editing and model management from the icon-only footer shortcuts", async () => {
+  service.load.mockResolvedValue(publicAiSettingsWithInvalidDefaultFixture());
+  await render(<ModelServicesArea />);
+  // The visible shortcuts reuse catalog labels for keyboard access and tooltips.
+  // 可见的快捷按钮复用目录文案作为键盘访问名称与提示。
+  const editLabel = readLocaleMessage("en-US", "settings.credentials.edit");
+  const manageLabel = readLocaleMessage("en-US", "settings.credentialModels.manage");
+  // Both icon controls belong to the same rendered account footer.
+  // 两个图标控件属于同一张已渲染账号卡片的底部。
+  const edit = button(editLabel);
+  const manage = button(manageLabel);
+  expect(edit.closest(".vk-ms-account-foot")).not.toBeNull();
+  expect(manage.closest(".vk-ms-account-foot")).toBe(edit.closest(".vk-ms-account-foot"));
+  expect(edit.textContent).toBe("");
+  expect(manage.textContent).toBe("");
+  vi.useFakeTimers();
+  try {
+    await act(async () => {
+      edit.dispatchEvent(new MouseEvent("pointermove", { bubbles: true }));
+      await vi.runOnlyPendingTimersAsync();
+    });
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toBe(editLabel);
+  } finally {
+    vi.useRealTimers();
+  }
+  await act(async () => edit.click());
+  expect(document.querySelector('[role="dialog"] [data-slot="dialog-title"]')?.textContent).toBe(
+    readLocaleMessage("en-US", "settings.credentials.editModelTitle"),
+  );
+  await act(async () => document.querySelector<HTMLButtonElement>('[data-slot="dialog-close"]')!.click());
+  await act(async () => manage.focus());
+  expect(document.querySelector('[role="tooltip"]')?.textContent).toBe(manageLabel);
+  await act(async () => manage.click());
+  expect(document.querySelector('[role="dialog"] [data-slot="dialog-title"]')?.textContent).toContain(
+    readLocaleMessage("en-US", "settings.credentialModels.title"),
+  );
+});
+
 it("keeps a deleting account dialog open and editable after a rejected deletion", async () => {
   const snapshot = publicAiSettingsWithInvalidDefaultFixture();
   service.load.mockResolvedValue(snapshot);
   let reject!: (error: Error) => void;
   service.connectionDelete.mockImplementation(() => new Promise((_resolve, fail) => { reject = fail; }));
   await render(<ModelServicesArea />);
-  const remove = await menuItem(document.querySelector<HTMLElement>('button[aria-label^="Actions for "]'), "Delete credential");
+  const remove = await menuItem(document.querySelector<HTMLElement>('button[aria-label^="Actions for "]'), readLocaleMessage("en-US", "settings.credentials.remove"));
+  expect(document.querySelectorAll('[role="menuitem"]')).toHaveLength(1);
   await act(async () => remove.click());
   const confirm = document.querySelector<HTMLButtonElement>('[data-slot="dialog-footer"] button:last-child')!;
   await act(async () => { confirm.click(); confirm.click(); });

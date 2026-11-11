@@ -558,13 +558,23 @@ button.vk-ms-alert:focus-visible { outline: var(--vk-focus-w) solid var(--vk-sig
 .vk-ms-usage-quota [data-slot="credential-credit-balances"] { column-gap: 12px; }
 
 .vk-ms-account-foot {
+  display: grid;
+  gap: 6px;
+  margin-top: auto;
+}
+
+/* Keep account shortcuts and model filters on opposite ends of the bottom row. */
+/* 将账号快捷操作与模型筛选分别放在底部一行的两端。 */
+.vk-ms-account-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 6px 10px;
-  margin-top: auto;
 }
+
+.vk-ms-account-shortcuts { display: inline-flex; align-items: center; gap: 4px; }
+.vk-ms-account-shortcuts > span { display: inline-flex; }
 
 .vk-ms-status {
   --vk-tone: var(--vk-ok);
