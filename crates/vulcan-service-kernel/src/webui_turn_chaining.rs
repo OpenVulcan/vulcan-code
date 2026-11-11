@@ -348,9 +348,8 @@ pub(super) async fn start_v1_queued_turn_with_admission(
         controller_runtime,
         agent_runtime,
         session_id,
-        authority.clone(),
+        (authority.clone(), authorization),
         entry,
-        authorization,
     )
     .await?
     {

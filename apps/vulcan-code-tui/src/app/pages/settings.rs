@@ -1602,7 +1602,7 @@ pub(super) fn diagnostics(app: &App) -> Vec<Row> {
             ),
         ));
         rows.push(string_list(
-            tr!("settings.retry.retryWhenTheError"),
+            tr!("settings.retry.errorKeywords"),
             retry,
             "/retryKeywords",
             settings::save_provider_retry_settings,

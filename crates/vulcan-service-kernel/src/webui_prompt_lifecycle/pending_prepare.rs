@@ -844,16 +844,25 @@ pub(crate) async fn maybe_prepare_webui_shell_job_continuation(
 
 /// Starts one queued user successor directly from its exact durable V1 authority.
 /// 直接从精确可靠的 V1 权威启动一个排队用户后继。
+/// `admission` carries the durable input identity and any authorization retained by its submitting RPC.
+/// `admission` 携带可靠的输入身份和提交 RPC 仍持有的授权。
+/// `entry` is the in-memory execution adapter. Returns whether preparation accepted the successor.
+/// `entry` 是内存中的执行适配对象。返回准备流程是否已接手该后继。
 pub(crate) async fn maybe_prepare_webui_queued_successor(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     controller_runtime: &HostRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
     session_id: SessionId,
-    authority: SessionQueuedDispatchAuthority,
+    admission: (
+        SessionQueuedDispatchAuthority,
+        Option<ExistingSubmissionAdmissionAuthorization>,
+    ),
     entry: PendingSessionPromptEntry,
-    authorization: Option<ExistingSubmissionAdmissionAuthorization>,
 ) -> Result<bool, String> {
+    // Keep the optional reservation tied to the input it authorizes when preparing the dispatch.
+    // 准备派发时，将可选的预留授权与其所对应的输入一并传递。
+    let (authority, authorization) = admission;
     prepare_webui_pending_prompt(
         app,
         state,
