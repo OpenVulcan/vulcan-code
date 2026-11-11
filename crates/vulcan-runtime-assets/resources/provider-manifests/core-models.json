@@ -1,7 +1,7 @@
 {
   "schema_version": "vulcan.core-models.v1",
-  "revision": 4,
-  "published_at": "2026-11-11T03:39:03Z",
+  "revision": 5,
+  "published_at": "2026-11-11T07:03:23Z",
   "models": [
     {
       "model_id": "beam-free",
@@ -2554,6 +2554,23 @@
       "provenance_ref": "builtin:core.seed.2026-11-08"
     },
     {
+      "model_id": "qwen3.8-2.4t-a95b",
+      "display_name": "Qwen 3.8 2.4T A95B",
+      "vendor": "alibaba",
+      "capabilities": {
+        "operations": ["conversation_respond"],
+        "input_resources": [],
+        "output_resources": [],
+        "reasoning": "native",
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": ["low", "medium", "xhigh"],
+        "context_limit": 1000000,
+        "output_limit": 131072
+      },
+      "verification": "verified",
+      "provenance_ref": "https://help.aliyun.com/zh/model-studio/qwen3-8-2-4t-a95b"
+    },
+    {
       "model_id": "qwen3.8-27b",
       "display_name": "Qwen 3.8 27B",
       "vendor": "alibaba",
@@ -2629,7 +2646,7 @@
       "model_id": "qwen3.8-max-0902",
       "display_name": "Qwen 3.8 Max 0902",
       "vendor": "alibaba",
-      "aliases": ["qwen/qwen3.8-max-0902", "qwen/qwen3.8-max-20260902", "qwen: qwen3.8 max (0902)"],
+      "aliases": ["qwen/qwen3.8-max-0902", "qwen/qwen3.8-max-20260902", "qwen: qwen3.8 max (0902)", "qwen3.8-max-2026-09-02"],
       "capabilities": {
         "operations": ["conversation_respond"],
         "input_resources": ["image"],
@@ -2641,6 +2658,23 @@
       },
       "verification": "seeded",
       "provenance_ref": "builtin:core.seed.2026-11-08"
+    },
+    {
+      "model_id": "qwen3.8-omni-flash",
+      "display_name": "Qwen 3.8 Omni Flash",
+      "vendor": "alibaba",
+      "capabilities": {
+        "operations": ["conversation_respond"],
+        "input_resources": ["image", "video", "audio"],
+        "output_resources": [],
+        "reasoning": "native",
+        "reasoning_control": "effort_selection",
+        "reasoning_efforts": ["none", "low", "medium", "xhigh"],
+        "context_limit": 1000000,
+        "output_limit": 131072
+      },
+      "verification": "verified",
+      "provenance_ref": "https://help.aliyun.com/en/model-studio/qwen3-8-omni-flash"
     },
     {
       "model_id": "seed-2.1-pro",
@@ -2877,6 +2911,14 @@
       {
         "url": "https://help.aliyun.com/zh/model-studio/text-generation-model",
         "note": "Qwen4 Max Preview supports text, image, and video input with a 1M-token context and a combined reasoning and answer output limit of 393,216 tokens."
+      },
+      {
+        "url": "https://help.aliyun.com/zh/model-studio/qwen3-8-2-4t-a95b",
+        "note": "Model Studio documents a 1M-token context, 131,072 output tokens, and text-only input. Beijing Model Studio rejected requests that disabled thinking."
+      },
+      {
+        "url": "https://help.aliyun.com/en/model-studio/qwen3-8-omni-flash",
+        "note": "The updated non-realtime model contract specifies 1M context, 131,072 output tokens, text, image, video and audio input, and text-only output."
       }
     ]
   }

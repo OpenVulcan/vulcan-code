@@ -340,6 +340,92 @@ fn alibaba_qwen4_token_plan_projects_schema_with_thinking_disabled() {
     }
 }
 
+/// Verifies the Model Studio inventory, snapshot default, and Qwen3.8 request projection.
+/// 验证 Model Studio 目录、快照默认状态以及 Qwen3.8 请求投影。
+///
+/// Takes no parameters and returns no value. Exercises the compiled entry rules and wire encoder.
+/// 无参数、无返回值。通过已编译的入口规则与线路编码器验证行为。
+#[test]
+fn alibaba_model_studio_exposes_qwen38_with_native_effort_and_qwen37_snapshot_opt_in() {
+    // Use the bundled generation that the account catalog reads.
+    // 使用账号目录读取的随包代际。
+    let manifests = crate::provider_manifest::load_bundled_resolved_manifests();
+    // Alibaba owns both regional inventories and their defaults.
+    // 阿里云清单定义两个地域的目录及默认状态。
+    let manifest = manifests
+        .get("alibaba")
+        .expect("Alibaba manifest must exist");
+    // Exercise the provider's effort projections on the actual protocol encoder.
+    // 通过实际协议编码器执行供应商的思考档位投影。
+    let client = projection_test_client();
+    for entry_id in ["model-studio-cn", "model-studio-singapore"] {
+        for model_id in [
+            "qwen3.8-max",
+            "qwen3.8-max-0902",
+            "qwen3.8-flash",
+            "qwen3.8-2.4t-a95b",
+            "qwen3.8-27b",
+            "qwen3.8-omni-flash",
+        ] {
+            assert!(
+                manifest.catalog_models[entry_id]
+                    .iter()
+                    .any(|model| model.model_id == model_id),
+                "{entry_id}/{model_id} is missing; check whether the upstream catalog changed"
+            );
+            assert!(crate::provider_manifest::manifest_default_enabled(
+                manifest,
+                entry_id,
+                Some("api-key"),
+                model_id,
+            ));
+        }
+
+        // Model Studio sends the same selected strength in each protocol's native field.
+        // Model Studio 在每个协议的原生字段中发送同一所选思考档位。
+        let mut request = minimal_request();
+        request.model_id = String::from("qwen3.8-max");
+        request.reasoning_effort = Some(ReasoningEffort::Low);
+        for (protocol, effort_path) in [
+            (OPENAI_CHAT_PROFILE_ID, "/reasoning_effort"),
+            (OPENAI_RESPONSES_PROFILE_ID, "/reasoning/effort"),
+            (ANTHROPIC_MESSAGES_PROFILE_ID, "/output_config/effort"),
+        ] {
+            // Resolve the exact regional route before running its encoder and projection.
+            // 在运行编码器和投影前解析精确地域路由。
+            let route = bundled_manifest_route("alibaba", entry_id, protocol);
+            // Compare the final request rather than an intermediate encoding.
+            // 比较最终请求线路字段。
+            let encoded = client
+                .encode_request(&route, &request)
+                .expect("Qwen3.8 Max must accept an explicitly selected effort");
+            assert_eq!(
+                encoded
+                    .body
+                    .pointer(effort_path)
+                    .and_then(serde_json::Value::as_str),
+                Some("low"),
+                "{entry_id}/{protocol}"
+            );
+        }
+    }
+
+    // The exact Beijing snapshot rule remains available for an explicit account selection.
+    // 北京入口保留精确的快照规则，供账号手动选择。
+    let snapshot_id = "qwen3.7-max-2026-06-08";
+    assert!(
+        manifest
+            .rule_for_model("model-studio-cn", Some("api-key"), snapshot_id)
+            .is_some()
+    );
+    assert!(!crate::provider_manifest::manifest_default_enabled(
+        manifest,
+        "model-studio-cn",
+        Some("api-key"),
+        snapshot_id,
+    ));
+}
+
 /// Verifies the bundled OpenRouter request profiles produce the legacy-equivalent wire.
 /// 验证内置 OpenRouter 请求 Profile 产生与旧版等价的 Wire 请求。
 #[test]

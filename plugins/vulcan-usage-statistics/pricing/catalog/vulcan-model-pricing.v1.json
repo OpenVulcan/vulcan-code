@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "catalogId": "vulcan.reference.model-pricing",
-  "catalogRevision": "sha256:36569af0bc10302958c50fff52e40fbd97a0d4bec177151a7695a1f14990ff91",
+  "catalogRevision": "sha256:e7b62a43c67135cdfca4325ffd40a76c7dd75376ce3c7ff1e01176e8aef14615",
   "adapterVersion": 2,
   "currencies": [
     "USD",
@@ -27,7 +27,7 @@
       "license": "MIT"
     },
     "official": "pricing/upstream/official-model-pricing.v1.json",
-    "verifiedOn": "2026-11-10",
+    "verifiedOn": "2026-11-11",
     "retainFrom": "2025-01-01"
   },
   "excludedGptModelIds": [
@@ -203,6 +203,66 @@
           "token-plan-team-global"
         ],
         "models": {
+          "qwen3.8-2.4t-a95b": {
+            "prices": {
+              "inputPerMillionCny": "14.988",
+              "outputPerMillionCny": "44.965",
+              "cacheReadPerMillionCny": "1.274",
+              "cacheWritePerMillionCny": "18.736"
+            },
+            "sources": [
+              "https://help.aliyun.com/zh/model-studio/qwen3-8-2-4t-a95b"
+            ],
+            "basis": "百炼新加坡国际部署，采用显式缓存价格。"
+          },
+          "qwen3.8-27b": {
+            "prices": {
+              "inputPerMillionCny": "3.646",
+              "outputPerMillionCny": "21.875",
+              "cacheReadPerMillionCny": "0.365",
+              "cacheWritePerMillionCny": "4.557"
+            },
+            "sources": [
+              "https://help.aliyun.com/zh/model-studio/qwen3-8-27b"
+            ],
+            "basis": "百炼新加坡国际部署，采用显式缓存价格。"
+          },
+          "qwen3.8-flash": {
+            "prices": {
+              "inputPerMillionCny": "1.094",
+              "outputPerMillionCny": "3.427",
+              "cacheReadPerMillionCny": "0.117",
+              "cacheWritePerMillionCny": "1.458"
+            },
+            "sources": [
+              "https://help.aliyun.com/zh/model-studio/qwen3-8-flash"
+            ],
+            "basis": "百炼新加坡国际部署，采用显式缓存价格。"
+          },
+          "qwen3.8-max": {
+            "prices": {
+              "inputPerMillionCny": "14.988",
+              "outputPerMillionCny": "44.965",
+              "cacheReadPerMillionCny": "1.274",
+              "cacheWritePerMillionCny": "18.736"
+            },
+            "sources": [
+              "https://help.aliyun.com/zh/model-studio/qwen3-8-max"
+            ],
+            "basis": "百炼新加坡国际部署，Max 与 0902 快照同价，采用显式缓存价格。"
+          },
+          "qwen3.8-omni-flash": {
+            "prices": {
+              "inputPerMillionCny": "1.094",
+              "outputPerMillionCny": "3.427",
+              "cacheReadPerMillionCny": "0.117",
+              "cacheWritePerMillionCny": "0"
+            },
+            "sources": [
+              "https://help.aliyun.com/zh/model-studio/model-pricing"
+            ],
+            "basis": "百炼新加坡国际部署，使用隐式缓存。"
+          },
           "deepseek-v4.1-flash": {
             "prices": {
               "inputPerMillionCny": "2.188",
@@ -2890,6 +2950,21 @@
       "basis": "百炼北京同步 API，只对文本输入 Token 计费。"
     },
     {
+      "canonicalModelId": "qwen3.8-2.4t-a95b",
+      "displayName": "Qwen3.8 2.4T A95B",
+      "aliases": [],
+      "prices": {
+        "inputPerMillionCny": "12",
+        "outputPerMillionCny": "36",
+        "cacheReadPerMillionCny": "1",
+        "cacheWritePerMillionCny": "15"
+      },
+      "sources": [
+        "https://help.aliyun.com/zh/model-studio/qwen3-8-2-4t-a95b"
+      ],
+      "basis": "百炼北京按量刊例，采用显式缓存价格。"
+    },
+    {
       "canonicalModelId": "qwen3.8-27b",
       "displayName": "Qwen3.8 27B",
       "aliases": [],
@@ -2944,6 +3019,21 @@
       "members": [
         "qwen3.8-max-0902"
       ]
+    },
+    {
+      "canonicalModelId": "qwen3.8-omni-flash",
+      "displayName": "Qwen3.8 Omni Flash",
+      "aliases": [],
+      "prices": {
+        "inputPerMillionCny": "0.8",
+        "outputPerMillionCny": "2.7",
+        "cacheReadPerMillionCny": "0.1",
+        "cacheWritePerMillionCny": "0"
+      },
+      "sources": [
+        "https://help.aliyun.com/zh/model-studio/model-pricing"
+      ],
+      "basis": "百炼北京按量刊例，使用隐式缓存。"
     },
     {
       "canonicalModelId": "qwq-32b",

@@ -3002,6 +3002,25 @@
       "reasoning_control": "fixed_off"
     },
     {
+      "key": "qwen3.8-2.4t-a95b",
+      "aliases": [],
+      "context_window": 1000000,
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "output_limit": 131072,
+      "reasoning": "native",
+      "reasoning_control": "effort_selection",
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "xhigh"
+      ]
+    },
+    {
       "key": "qwen3.8-27b",
       "aliases": [
         "qwen/qwen3.8-27b"
@@ -3069,6 +3088,7 @@
       "aliases": [
         "qwen/qwen3.8-max-0902",
         "qwen/qwen3.8-max-20260902",
+        "qwen3.8-max-2026-09-02",
         "qwen: qwen3.8 max (0902)"
       ],
       "context_window": 1000000,
@@ -3082,6 +3102,29 @@
       "reasoning": "native",
       "reasoning_control": "effort_selection",
       "reasoning_efforts": [
+        "low",
+        "medium",
+        "xhigh"
+      ]
+    },
+    {
+      "key": "qwen3.8-omni-flash",
+      "aliases": [],
+      "context_window": 1000000,
+      "input_modalities": [
+        "audio",
+        "image",
+        "text",
+        "video"
+      ],
+      "output_modalities": [
+        "text"
+      ],
+      "output_limit": 131072,
+      "reasoning": "native",
+      "reasoning_control": "effort_selection",
+      "reasoning_efforts": [
+        "none",
         "low",
         "medium",
         "xhigh"
