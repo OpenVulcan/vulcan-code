@@ -1572,6 +1572,8 @@
   "sessionActions.previewCannotSetVmmPolicy": "浏览器预览模式下无法切换 VMM 记忆策略。",
   "sessionActions.vmmPolicySaved": "VMM 记忆策略已保存。",
   "conversationActions.noProjectForSend": "当前会话没有明确关联项目，无法发送。",
+  "conversationActions.acceptedAwaitingDispatch": "消息已保存，会话就绪后将启动。",
+  "conversationActions.acceptedDispatchFailed": "消息已保存，但未能启动。点击「继续」可重试原回合。",
   "conversationActions.previewCannotSend": "浏览器预览模式下无法发送真实会话。",
   "conversationActions.previewCannotCompact": "浏览器预览模式下无法执行真实上下文压缩。",
   "conversationActions.previewCannotContinue": "浏览器预览模式下无法继续真实会话。",

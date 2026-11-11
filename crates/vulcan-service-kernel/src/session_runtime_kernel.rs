@@ -390,6 +390,9 @@ pub(crate) fn finish_webui_session_kernel_turn(
     // 已完成及失败回合不能继续在后台初始化。
     crate::plugin_runtime_services::automatic_prewarm::close(state, session_id);
     if let Some(turn) = finished {
+        crate::conversation_submission::queued_dispatch::wake_waiting_queued_turn(
+            state, session_id,
+        );
         webui_trace(
             "session_kernel_turn_finished",
             format!(

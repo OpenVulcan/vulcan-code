@@ -14,6 +14,7 @@ use vulcan_workspace_store::workspace_store::{
 use super::conversation_submission::exact_v1_dispatch_runtime_options;
 use super::pending_prompt_services::rebuild_pending_prompt_panel_from_v1;
 use super::pending_prompts::emit_pending_prompts_changed_delta;
+use super::project_conversation_services::ExistingSubmissionAdmissionAuthorization;
 use super::session_goal_lifecycle::{
     conversation_attachments_from_resource_ids, session_goal_dispatch_authority_from_v1_handle,
     session_goal_summary_from_v1_handle, session_v1_handle_from_state,
@@ -258,6 +259,31 @@ pub(crate) async fn start_exact_v1_queued_turn(
     session_id: SessionId,
     authority: SessionQueuedDispatchAuthority,
 ) -> Result<bool, String> {
+    start_v1_queued_turn_with_admission(
+        app,
+        state,
+        controller_runtime,
+        agent_runtime,
+        session_id,
+        authority,
+        None,
+    )
+    .await
+}
+
+/// Starts the exact queued turn using the caller's retained authorization when provided.
+/// 如调用方仍持有授权，则使用该授权启动精确排程回合。
+/// Service arguments identify the session and durable input. Returns whether preparation was accepted.
+/// 服务参数标识会话和已保存输入。返回准备是否已接手。
+pub(super) async fn start_v1_queued_turn_with_admission(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    controller_runtime: &HostRuntimeHandle,
+    agent_runtime: &AgentRuntimeBridge,
+    session_id: SessionId,
+    authority: SessionQueuedDispatchAuthority,
+    authorization: Option<ExistingSubmissionAdmissionAuthorization>,
+) -> Result<bool, String> {
     let handle = session_v1_handle_from_state(state, session_id).await?;
     let locator = locate_session_v1_storage(controller_runtime, session_id.to_string().as_str())
         .await
@@ -324,6 +350,7 @@ pub(crate) async fn start_exact_v1_queued_turn(
         session_id,
         authority.clone(),
         entry,
+        authorization,
     )
     .await?
     {

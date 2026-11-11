@@ -64,6 +64,7 @@ export async function continueConversation(
   clientContinuationId: string,
   supplement: ComposerSubmission | null,
   signal?: AbortSignal,
+  queuedInputActionId?: string,
 ): Promise<SubmitConversationPromptAck | null> {
   if (!hasServiceRuntime()) {
     return null;
@@ -73,6 +74,7 @@ export async function continueConversation(
     {
       conversationId,
       clientContinuationId,
+      queuedInputActionId,
       prompt: supplement?.prompt,
       hiddenModelGuidance: supplement?.hiddenModelGuidance,
       executionMode: supplement?.executionMode,

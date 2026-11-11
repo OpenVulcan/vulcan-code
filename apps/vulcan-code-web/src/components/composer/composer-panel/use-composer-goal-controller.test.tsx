@@ -28,7 +28,7 @@ function Harness({ options }: { options: UseComposerGoalControllerOptions }) { c
 // Parameters: scopeKey identifies one conversation. Returns: a fully typed synthetic controller input.
 // 参数：scopeKey 标识一个会话。返回值：完整类型的合成控制器输入。
 function options(scopeKey = "conversation-a"): UseComposerGoalControllerOptions {
-  return { scopeKey, goal: null, canAutoSubmitCreatedGoal: true, onPrepareEditor: async () => true, onSaveGoal: async () => true, onResumeGoal: async () => true, onClearGoal: async () => true, onUpdateGoalStatus: async () => true, onSubmitCreatedGoal: async () => {} };
+  return { scope: { key: scopeKey, owner: "draft" }, goal: null, canAutoSubmitCreatedGoal: true, onPrepareEditor: async () => true, onSaveGoal: async () => true, onResumeGoal: async () => true, onClearGoal: async () => true, onUpdateGoalStatus: async () => true, onSubmitCreatedGoal: async () => {} };
 }
 
 it("accepts only one rapid save and auto-submits exactly once", async () => {
@@ -47,6 +47,35 @@ it("accepts only one rapid save and auto-submits exactly once", async () => {
   expect(submit).toHaveBeenCalledExactlyOnceWith("验收目标");
   expect(controller.dialogOpen).toBe(false);
   expect(controller.saving).toBe(false);
+});
+
+// Both event orders must leave an existing session's first Goal turn with the service.
+// 两种事件顺序下，已有会话的目标首轮均由服务端负责。
+it.each([false, true])("does not send a saved existing-session Goal as a user prompt (phase arrived: %s)", async (phaseArrived) => {
+  // resolveSave releases the acknowledgement relative to the phase update.
+  // resolveSave 在阶段更新前后的指定时机释放保存回执。
+  let resolveSave: (saved: boolean) => void = () => { throw new Error("Save not started"); };
+  // save and submit observe the persistence and ordinary submission callbacks.
+  // save 和 submit 观测持久化与普通提交回调。
+  const save = vi.fn(() => new Promise<boolean>((resolve) => { resolveSave = resolve; }));
+  const submit = vi.fn(async () => {});
+  // input represents an existing session that looks idle when the dialog is saved.
+  // input 表示保存弹窗时界面仍显示空闲的已有会话。
+  const input: UseComposerGoalControllerOptions = {
+    ...options(), scope: { key: "conversation-a", owner: "session" }, onSaveGoal: save, onSubmitCreatedGoal: submit,
+  };
+
+  await act(async () => root.render(<Harness options={input} />));
+  await act(async () => { controller.setObjectiveDraft("Goal objective"); controller.setDialogOpen(true); });
+  await act(async () => { void controller.save(); });
+  if (phaseArrived) {
+    await act(async () => root.render(<Harness options={{ ...input, canAutoSubmitCreatedGoal: false }} />));
+  }
+  await act(async () => resolveSave(true));
+
+  expect(save).toHaveBeenCalledTimes(1);
+  expect(submit).not.toHaveBeenCalled();
+  expect(controller.dialogOpen).toBe(false);
 });
 
 it("retains failed drafts and rejects budgets outside exact integer precision", async () => {
@@ -78,7 +107,7 @@ it("does not let an old same-conversation response close a new visit or release 
   await act(async () => root.render(<Harness options={input} />));
   await act(async () => controller.setObjectiveDraft("旧请求"));
   await act(async () => { void controller.save(); });
-  await act(async () => root.render(<Harness options={{ ...input, scopeKey: "conversation-b" }} />));
+  await act(async () => root.render(<Harness options={{ ...input, scope: { key: "conversation-b", owner: "draft" } }} />));
   await act(async () => root.render(<Harness options={input} />));
   await act(async () => { controller.setObjectiveDraft("新请求"); controller.setDialogOpen(true); });
   await act(async () => { void controller.save(); });

@@ -966,8 +966,11 @@ fn superseded_goal_admission_returns_scheduled_turn_without_queue_mirror() {
         .expect("scheduled UserRoot Turn should remain readable")
         .expect("scheduled UserRoot Turn should remain open");
     let dispatch_authority =
-        queued_dispatch_authority_for_client_action(handle.as_ref(), &client_action_id)
-            .expect("scheduled UserRoot Turn should resolve by its durable browser action");
+        crate::webui_prompt_lifecycle::queued_dispatch_authority_for_client_action(
+            handle.as_ref(),
+            &client_action_id,
+        )
+        .expect("scheduled UserRoot Turn should resolve by its durable browser action");
     // expected_turn_id keeps the exact durable numeric identity alive for the RPC assertion.
     // expected_turn_id 为 RPC 断言保留精确可靠数字身份的所有权。
     let expected_turn_id = active_turn.turn_id.value().to_string();

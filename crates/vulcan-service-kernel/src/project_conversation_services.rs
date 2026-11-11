@@ -102,12 +102,19 @@ impl Drop for SessionTurnAdmissionGuard {
         // guard recovers poisoned state only to remove reservations still owned by this exact transaction.
         // guard 仅为删除仍由当前精确事务拥有的预留而恢复中毒状态。
         let mut guard = lock_service_state_for_admission_cleanup(&self.state, "session-turn guard");
-        guard
-            .session_turn_admission_reservations
-            .retain(|session_id, reservation| {
-                !self.session_ids.contains(session_id)
-                    || reservation.reservation_id != self.reservation_id
-            });
+        for session_id in &self.session_ids {
+            if guard
+                .session_turn_admission_reservations
+                .get(session_id)
+                .is_some_and(|reservation| reservation.reservation_id == self.reservation_id)
+            {
+                guard.session_turn_admission_reservations.remove(session_id);
+                crate::conversation_submission::queued_dispatch::wake_waiting_queued_turn(
+                    &guard,
+                    *session_id,
+                );
+            }
+        }
         guard
             .project_admission_reservations
             .retain(|project_scope, reservation| {

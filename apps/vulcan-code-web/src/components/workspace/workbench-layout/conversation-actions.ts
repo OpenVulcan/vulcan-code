@@ -210,6 +210,11 @@ const handleSubmitConversationPrompt = React.useCallback(async (submission: Comp
     if (ack.clientSubmissionId !== clientSubmissionId) {
       throw new Error("Service acknowledgement did not match the active submission.");
     }
+    if (ack.queuedTurnDispatch === "waiting") {
+      toast.info(translate("conversationActions.acceptedAwaitingDispatch"));
+    } else if (ack.queuedTurnDispatch === "failed") {
+      toast.error(translate("conversationActions.acceptedDispatchFailed"));
+    }
     if (submission.insertIntoCurrentTurn && ack.queued) {
       // Use the acknowledged owner and action even if the user has since changed the selected conversation.
       // 即使用户后来切换了会话，也使用服务已确认的会话和消息标识。
@@ -385,6 +390,7 @@ const handleContinueConversation = React.useCallback(async (
   conversationId: string,
   clientContinuationId: string,
   supplement: ComposerSubmission | null,
+  queuedInputActionId?: string,
 ): Promise<boolean> => {
   // controller owns only the bounded RPC wait for the durable transport observation.
   // controller 只控制等待可靠传输观察事实的有界 RPC。
@@ -407,6 +413,7 @@ const handleContinueConversation = React.useCallback(async (
       clientContinuationId,
       supplement,
       controller.signal,
+      queuedInputActionId,
     );
     if (!response) {
       toast.info(translate("conversationActions.previewCannotContinue"));
@@ -417,6 +424,12 @@ const handleContinueConversation = React.useCallback(async (
       || response.conversationId !== conversationId
     ) {
       throw new Error("ERR_CONVERSATION_CONTINUE_ACK_MISMATCH");
+    }
+    if (response.queuedTurnDispatch === "waiting") {
+      toast.info(translate("conversationActions.acceptedAwaitingDispatch"));
+    } else if (response.queuedTurnDispatch === "failed") {
+      toast.error(translate("conversationActions.acceptedDispatchFailed"));
+      return false;
     }
   } catch (nextError) {
     // normalizedError gives a timed-out transport one stable user-facing classification.

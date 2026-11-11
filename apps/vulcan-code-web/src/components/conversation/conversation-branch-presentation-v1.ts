@@ -1240,6 +1240,7 @@ function markdownCodeSpan(text: string): string {
 // displayNoteTitle 本地化宿主自有通知种类，其余保留生产端细节。
 function displayNoteTitle(event: Extract<ConversationEventBody, { kind: "display_note" }>, t: Translation): string {
   if (event.notice_kind === "goal_status") return goalNoticeTitle(event.reason_code, t);
+  if (event.reason_code === "queued_turn_dispatch_failed") return t("conversationActions.acceptedDispatchFailed");
   if (isDedicatedMemoryNoticeKind(event.notice_kind)) return dedicatedMemoryNoticeTitle(event.notice_kind, t);
   return event.redacted_detail ?? event.reason_code;
 }

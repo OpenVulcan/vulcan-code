@@ -135,6 +135,223 @@ async fn main_business_queued_dispatch_rejects_auxiliary_acknowledgement() {
     }
 }
 
+/// Keeps a real recovery RPC attached to its durable input while another owner holds admission.
+/// 另一个所有者持有准入时，真实恢复 RPC 继续绑定到可靠输入。
+/// Uses an isolated store and synthetic API start, with no network or wall-clock scheduling assumptions.
+/// 使用隔离存储和合成 API 启动，不依赖网络或墙钟调度。
+#[tokio::test(flavor = "current_thread")]
+async fn scheduled_recovery_rpc_waits_and_observes_one_business_start() {
+    // The source is the retained conversation and the fixture provides its registered durable owner.
+    // 来源会话是保留会话，夹具提供其已登记的可靠所有者。
+    let (_root, invocation, _) = fixture(false).await;
+    let handle = &invocation.source_handle;
+    let session_id = handle.session_id();
+    invocation.state.lock().unwrap().agent_runtime =
+        Some(crate::tests::test_support::test_agent_runtime_bridge());
+    handle
+        .mutate_durable(
+            SessionMutationAdmission::MetadataOnly,
+            SessionFlushReason::MetadataChanged,
+            |document| document.create_goal("Goal", None, "Continue goal", 2),
+        )
+        .unwrap();
+    // The same durable input is used by every recovery receipt.
+    // 每个恢复回执都使用同一可靠输入。
+    let action = ClientActionId::try_new("original-queued-action").unwrap();
+    let scheduled = handle
+        .enqueue_input(
+            ClientInputSubmission::new(action.clone(), "Queued input", Vec::new()),
+            3,
+        )
+        .unwrap()
+        .value;
+    let vulcan_session_core::v1::document::EnqueueInputDisposition::SupersededContinuationAndScheduled {
+        scheduled_turn_id, input_seq, ..
+    } = scheduled.disposition else { panic!("Expected a scheduled input"); };
+    // Hold a live owner across both real RPC calls so there is no timing dependence.
+    // 两次真实 RPC 期间保持实时所有者，消除时序依赖。
+    let admission =
+        crate::project_conversation_services::try_begin_pending_prompt_dispatch_exclusion(
+            &invocation.state,
+            session_id,
+        )
+        .unwrap()
+        .unwrap();
+
+    for recovery_id in ["recovery-a", "recovery-b"] {
+        // receipt is serialized by the actual RPC dispatcher.
+        // receipt 由真实 RPC 分发器序列化。
+        let receipt = crate::rpc_dispatch::dispatch_service_rpc(
+            crate::ServiceEventEmitter::new(Vec::new()),
+            invocation.state.clone(),
+            String::from("service_continue_conversation"),
+            Some(serde_json::json!({
+                "conversationId": session_id.to_string(),
+                "clientContinuationId": recovery_id,
+                "queuedInputActionId": action.as_str(),
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(receipt["queuedTurnDispatch"], "waiting");
+        assert_eq!(receipt["turnId"], scheduled_turn_id.value().to_string());
+        assert_eq!(receipt["queued"], false);
+    }
+    assert_eq!(
+        invocation.state.lock().unwrap().waiting_queued_turns.len(),
+        1
+    );
+    // Another admitted path records the one business start before releasing its reservation.
+    // 另一个已准入路径在释放预留前记录唯一一次业务启动。
+    start_api_with_purpose(handle, ApiPurposeKind::MainGeneration, 4);
+    drop(admission);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while invocation
+            .state
+            .lock()
+            .unwrap()
+            .waiting_queued_turns
+            .contains_key(&session_id)
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("The released reservation must wake the waiting dispatch");
+    handle.read(|document| {
+        assert!(document.business_input_dispatch_started(scheduled_turn_id, input_seq));
+        assert_eq!(document.events().iter().filter(|event| matches!(
+            &event.event, EventBody::UserInput(input) if input.client_action_id == action
+        )).count(), 1);
+        assert_eq!(document.events().iter().filter(|event| event.turn_id == Some(scheduled_turn_id)
+            && matches!(&event.event, EventBody::ApiStarted(started) if started.purpose == ApiPurposeKind::MainGeneration)
+        ).count(), 1);
+    }).unwrap();
+}
+
+/// A released live reservation wakes the real service preparation for the exact accepted input.
+/// 实时预留释放后，唤醒精确已接收输入的真实服务准备。
+/// Uses an unavailable provider runtime; the assertion observes the preparation boundary.
+/// 使用不可用供应商运行时，断言仅观测准备边界。
+#[tokio::test(flavor = "current_thread")]
+async fn scheduled_recovery_rpc_starts_preparation_after_admission_release() {
+    // sink observes only preparation of the exact recovered session.
+    // sink 只观测精确恢复会话的准备。
+    struct PreparationSink {
+        // session_id matches the recovered owner.
+        // session_id 匹配已恢复的所有者。
+        session_id: String,
+        // entered wakes the test after the real service publishes Preparing.
+        // entered 在真实服务发布准备阶段后唤醒测试。
+        entered: tokio::sync::Notify,
+        // count verifies that only one preparation is published.
+        // count 验证只发布一次准备。
+        count: std::sync::atomic::AtomicUsize,
+    }
+
+    impl vulcan_service_api::ServiceEventSink for PreparationSink {
+        /// Signals the matching preparation delta and ignores other service events.
+        /// 通知匹配的准备增量，并忽略其他服务事件。
+        fn emit_service_event(&self, event: vulcan_service_api::ServiceEvent) {
+            if let vulcan_service_api::ServiceEvent::WorkbenchDelta(envelope) = event
+                && let vulcan_service_api::WorkbenchDelta::UpdateConversationRunPhase(phase) =
+                    &envelope.delta
+                && phase.conversation_id == self.session_id
+                && phase.run_phase == vulcan_workbench_model::SessionRunPhase::Preparing.to_string()
+            {
+                self.count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                self.entered.notify_one();
+            }
+        }
+    }
+
+    // The retained workspace and durable input must agree on the exact indexed project.
+    // 保留工作区与可靠输入必须使用相同的精确项目。
+    let (root, invocation, _) = fixture(false).await;
+    let handle = &invocation.source_handle;
+    let session_id = handle.session_id();
+    let project_id = invocation.source_locator.project_id();
+    let project = vulcan_workbench_model::TaskProjectSummary::new(
+        project_id,
+        "Queued recovery project",
+        root.data_root().display().to_string(),
+        false,
+        0,
+        None,
+        None,
+        vec![session_id],
+    );
+    {
+        let mut state = invocation.state.lock().unwrap();
+        state.agent_runtime = Some(crate::tests::test_support::test_agent_runtime_bridge());
+        let workspace = state.workspace_snapshot.as_mut().unwrap();
+        workspace
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+            .unwrap()
+            .project_id = Some(project_id.to_owned());
+        workspace.task_projects.push(project);
+    }
+    handle
+        .mutate_durable(
+            SessionMutationAdmission::MetadataOnly,
+            SessionFlushReason::MetadataChanged,
+            |document| document.create_goal("Goal", None, "Continue goal", 2),
+        )
+        .unwrap();
+    // action retains the original identity through both admission and recovery.
+    // action 在准入和恢复期间保留原始身份。
+    let action = ClientActionId::try_new("queued-preparation").unwrap();
+    handle
+        .enqueue_input(
+            ClientInputSubmission::new(action.clone(), "Queued input", Vec::new()),
+            3,
+        )
+        .unwrap();
+    // admission keeps the waiter blocked until the test releases it explicitly.
+    // admission 保持等待者阻塞，直至测试显式释放。
+    let admission =
+        crate::project_conversation_services::try_begin_pending_prompt_dispatch_exclusion(
+            &invocation.state,
+            session_id,
+        )
+        .unwrap()
+        .unwrap();
+    let sink = Arc::new(PreparationSink {
+        session_id: session_id.to_string(),
+        entered: tokio::sync::Notify::new(),
+        count: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let receipt = crate::rpc_dispatch::dispatch_service_rpc(
+        crate::ServiceEventEmitter::new(vec![sink.clone()]), invocation.state.clone(),
+        String::from("service_continue_conversation"),
+        Some(serde_json::json!({
+            "conversationId": session_id.to_string(), "clientContinuationId": "wake-queued-preparation",
+            "queuedInputActionId": action.as_str(),
+        })),
+    ).await.unwrap();
+    assert_eq!(receipt["queuedTurnDispatch"], "waiting");
+    assert_eq!(sink.count.load(std::sync::atomic::Ordering::SeqCst), 0);
+    drop(admission);
+    tokio::time::timeout(std::time::Duration::from_secs(5), sink.entered.notified())
+        .await
+        .expect("Releasing the owner must start preparation");
+    assert_eq!(sink.count.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(
+        handle
+            .read(|document| document
+                .events()
+                .iter()
+                .filter(|event| matches!(
+                    &event.event, EventBody::UserInput(input) if input.client_action_id == action
+                ))
+                .count())
+            .unwrap(),
+        1
+    );
+}
+
 /// Promoted direction remains unacknowledged while a later auxiliary API occupies its turn.
 /// 后续辅助 API 占用回合时，已提升方向仍保持未确认。
 /// Uses a real API terminal receipt and the production continuation entry; no provider is contacted.

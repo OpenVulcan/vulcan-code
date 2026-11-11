@@ -715,7 +715,7 @@ export function ComposerPanel(props: {
     toggleStatus: handleGoalStatusToggle,
     clear: handleGoalClear,
   } = useComposerGoalController({
-    scopeKey: draftSlotKey,
+    scope: { key: draftSlotKey, owner: props.conversationId ? "session" : "draft" },
     goal: visibleSessionGoal,
     canAutoSubmitCreatedGoal,
     onPrepareEditor: prepareGoalEditor,

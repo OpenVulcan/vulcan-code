@@ -1572,6 +1572,8 @@
   "sessionActions.previewCannotSetVmmPolicy": "Die VMM-Gedächtnisrichtlinie kann im Browser-Vorschaumodus nicht geändert werden.",
   "sessionActions.vmmPolicySaved": "VMM-Gedächtnisrichtlinie gespeichert.",
   "conversationActions.noProjectForSend": "Die aktuelle Unterhaltung ist mit keinem Projekt verknüpft und kann daher nicht gesendet werden.",
+  "conversationActions.acceptedAwaitingDispatch": "Nachricht gespeichert. Sie wird gestartet, sobald die Unterhaltung bereit ist.",
+  "conversationActions.acceptedDispatchFailed": "Nachricht gespeichert, konnte aber nicht gestartet werden. Mit „Fortsetzen“ können Sie denselben Durchlauf erneut starten.",
   "conversationActions.previewCannotSend": "Echte Unterhaltungen können im Browser-Vorschaumodus nicht gesendet werden.",
   "conversationActions.previewCannotCompact": "Eine echte Kontextkomprimierung kann im Browser-Vorschaumodus nicht ausgeführt werden.",
   "conversationActions.previewCannotContinue": "Echte Unterhaltungen können im Browser-Vorschaumodus nicht fortgesetzt werden.",

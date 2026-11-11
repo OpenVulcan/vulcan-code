@@ -149,7 +149,15 @@ impl McpServiceBackend for KernelMcpBackend {
                 .iter()
                 .find(|entry| entry.conversation_id == session_id)
                 .map_or(0, |entry| entry.pending_prompts.len());
-            Ok(Some((session_row(conversation), questions, queued_prompts)))
+            // An accepted turn waiting for admission is also pending work for MCP's wait loop.
+            // 已接收且等待准入的回合也属于 MCP 等待循环中的待处理工作。
+            let waiting_for_dispatch = crate::parse_session_id(session_id)
+                .is_some_and(|id| guard.waiting_queued_turns.contains_key(&id));
+            Ok(Some((
+                session_row(conversation),
+                questions,
+                queued_prompts + usize::from(waiting_for_dispatch),
+            )))
         })?;
         let Some((row, questions, queued_prompts)) = snapshot else {
             return Ok(None);
@@ -223,7 +231,9 @@ impl McpServiceBackend for KernelMcpBackend {
         .await?;
         Ok(McpSubmissionAck {
             session_id: ack.conversation_id,
-            queued: ack.queued,
+            queued: ack.queued
+                || ack.queued_turn_dispatch
+                    == Some(vulcan_service_api::QueuedTurnDispatchStatus::Waiting),
         })
     }
 

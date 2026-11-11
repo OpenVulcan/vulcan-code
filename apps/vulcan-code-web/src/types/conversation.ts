@@ -609,6 +609,9 @@ export interface SubmitConversationPromptAck {
   // Whether the prompt was queued behind existing work.
   // 该提示词是否已排队等待既有工作结束。
   queued: boolean;
+  // queuedTurnDispatch reports the status of dispatch after the original input was durably accepted.
+  // queuedTurnDispatch 报告原输入可靠接收后的派发状态。
+  queuedTurnDispatch?: "waiting" | "failed";
   // Latest accepted workbench revision after the submit-side update.
   // 提交侧更新后的最新已接收工作台版本。
   revision: number;

@@ -16,7 +16,9 @@ use crate::{
         effective_pending_prompt_reasoning_effort, exact_v1_dispatch_runtime_options,
     },
     emit_webui_subagent_navigation_changed_delta_for_parent,
-    project_conversation_services::try_begin_pending_prompt_dispatch_exclusion,
+    project_conversation_services::{
+        ExistingSubmissionAdmissionAuthorization, try_begin_pending_prompt_dispatch_exclusion,
+    },
     session_goal_lifecycle::{
         SessionGoalDispatchAuthority, registered_session_v1_handle_from_state,
         session_goal_dispatch_authority_from_v1_handle,
@@ -27,6 +29,7 @@ use crate::{
         shell_job_dispatch_authority_from_v1_handle,
     },
     start_reserved_webui_session_kernel_turn, start_reserved_webui_session_kernel_user_turn,
+    state::SessionTurnAdmissionReservationKind,
 };
 
 /// Exact V1 authority of one queued user input already promoted into an open Turn.
@@ -590,6 +593,9 @@ pub(super) enum ExactPendingPromptDispatch {
         /// Exact durable queued-input identity.
         /// 精确可靠的排队输入身份。
         authority: SessionQueuedDispatchAuthority,
+        /// Authorization retained by the submitting RPC, if that RPC still owns the session.
+        /// 提交 RPC 仍持有会话时，由该 RPC 保留的授权。
+        authorization: Option<ExistingSubmissionAdmissionAuthorization>,
         /// Non-persistent execution adapter built from that authority.
         /// 由该权威构建且不持久化的执行适配对象。
         entry: PendingSessionPromptEntry,
@@ -846,6 +852,7 @@ pub(crate) async fn maybe_prepare_webui_queued_successor(
     session_id: SessionId,
     authority: SessionQueuedDispatchAuthority,
     entry: PendingSessionPromptEntry,
+    authorization: Option<ExistingSubmissionAdmissionAuthorization>,
 ) -> Result<bool, String> {
     prepare_webui_pending_prompt(
         app,
@@ -853,7 +860,11 @@ pub(crate) async fn maybe_prepare_webui_queued_successor(
         controller_runtime,
         agent_runtime,
         session_id,
-        ExactPendingPromptDispatch::Queued { authority, entry },
+        ExactPendingPromptDispatch::Queued {
+            authority,
+            entry,
+            authorization,
+        },
     )
     .await
 }
@@ -1061,17 +1072,46 @@ pub(super) async fn prepare_webui_pending_prompt(
     // User-authored work and Goal continuation both need one admission owner across validation,
     // media preparation, Hook setup, and kernel registration.
     // 用户编写工作与 Goal 续跑都需要一个准入所有者，覆盖校验、媒体准备、Hook 设置与 kernel 注册。
-    let Some(pending_prompt_dispatch_guard) =
-        try_begin_pending_prompt_dispatch_exclusion(state, session_id)?
-    else {
-        webui_trace(
-            "pending_prompt_prepare_admission_busy",
-            format!("session={session_id} next_source={next_source:?}"),
-        );
-        return Ok(false);
+    // A queued submission already owns the reservation. Validate it instead of competing with it.
+    // 排程提交已经持有预留，校验该预留，避免与本次提交自身竞争。
+    let pending_prompt_dispatch_guard;
+    let pending_prompt_dispatch_authorization = match &exact_dispatch {
+        ExactPendingPromptDispatch::Queued {
+            authorization: Some(authorization),
+            ..
+        } => {
+            // guard holds the reservation table for exact session, owner and purpose validation.
+            // guard 持有预留表，用于校验精确会话、所有者和用途。
+            let guard = state.lock().map_err(|error| error.to_string())?;
+            if authorization.session_id != session_id
+                || !guard
+                    .session_turn_admission_reservations
+                    .get(&session_id)
+                    .is_some_and(|reservation| {
+                        reservation.reservation_id == authorization.reservation_id
+                            && reservation.kind
+                                == SessionTurnAdmissionReservationKind::PromptSubmission
+                    })
+            {
+                return Err(String::from(
+                    "Queued dispatch no longer owns its submission reservation.",
+                ));
+            }
+            *authorization
+        }
+        _ => {
+            pending_prompt_dispatch_guard =
+                try_begin_pending_prompt_dispatch_exclusion(state, session_id)?;
+            let Some(guard) = pending_prompt_dispatch_guard.as_ref() else {
+                webui_trace(
+                    "pending_prompt_prepare_admission_busy",
+                    format!("session={session_id} next_source={next_source:?}"),
+                );
+                return Ok(false);
+            };
+            guard.existing_submission_authorization(session_id)?
+        }
     };
-    let pending_prompt_dispatch_authorization =
-        pending_prompt_dispatch_guard.existing_submission_authorization(session_id)?;
     // A stop may settle between the predecessor finishing and this reservation being acquired.
     // 前驱结束到取得本次预留之间，停止操作可能已经完成结算。
     if matches!(
@@ -1677,6 +1717,7 @@ mod tests {
         // queued models a durable successor promoted after a prior turn becomes terminal.
         // queued 模拟上一回合终态后提升的可靠后继输入。
         let queued = ExactPendingPromptDispatch::Queued {
+            authorization: None,
             authority: SessionQueuedDispatchAuthority {
                 turn_id: TurnId::try_new(9).expect("queued Turn id should be valid"),
                 input_id: PendingInputId::try_new(3).expect("queued input id should be valid"),

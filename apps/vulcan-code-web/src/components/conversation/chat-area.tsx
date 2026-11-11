@@ -250,6 +250,7 @@ export function ChatArea(props: ChatAreaProps) {
         selectedConversation.id,
         clientContinuationId,
         supplement,
+        continuationCandidate && "queuedInputActionId" in continuationCandidate ? continuationCandidate.queuedInputActionId : undefined,
       );
     } catch {
       toast.error(t("conversation.continuation.claimFailed"));
@@ -272,11 +273,11 @@ export function ChatArea(props: ChatAreaProps) {
   // handleComposerSubmit keeps an interrupted Turn open when the user supplies a supplement.
   // handleComposerSubmit 在用户提供补充内容时保持中断的 Turn 不变。
   const handleComposerSubmit = React.useCallback((submission: ComposerSubmission): Promise<boolean> => {
-    if (activeContinuationKey !== null) {
+    if (activeContinuationKey !== null && continuationCandidate && !("queuedInputActionId" in continuationCandidate)) {
       return handleContinueConversation(submission);
     }
     return props.onSubmitPrompt(submission);
-  }, [activeContinuationKey, handleContinueConversation, props.onSubmitPrompt]);
+  }, [activeContinuationKey, continuationCandidate, handleContinueConversation, props.onSubmitPrompt]);
   const subagentNavigation = props.workbench.subagentNavigation?.parentConversationId === props.selectedConversationId
     ? props.workbench.subagentNavigation
     : null;

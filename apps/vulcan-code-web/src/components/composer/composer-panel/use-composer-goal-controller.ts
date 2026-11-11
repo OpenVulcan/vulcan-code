@@ -11,9 +11,16 @@ export type ComposerGoalDialogMode = "edit" | "resume";
 // UseComposerGoalControllerOptions defines the persisted operations and composer coordination needed by the goal controller.
 // UseComposerGoalControllerOptions 定义目标控制器所需的持久化操作与输入区协作能力。
 export interface UseComposerGoalControllerOptions {
-  // Stable conversation or new-conversation draft slot that owns dialog side effects.
-  // 持有弹窗副作用的稳定会话或新建会话草稿槽。
-  scopeKey: string;
+  // scope identifies the owner of dialog effects and first-turn submission.
+  // scope 标识弹窗副作用和首轮提交的所有者。
+  scope: {
+    // key identifies the durable session or new-conversation draft slot.
+    // key 标识稳定会话或新建会话草稿槽。
+    key: string;
+    // owner selects draft submission or server-owned Goal dispatch.
+    // owner 选择草稿提交或由服务端负责目标派发。
+    owner: "draft" | "session";
+  };
   // Visible non-completed goal rendered by the composer.
   // 输入区渲染的未完成可见目标。
   goal: SessionGoalSummary | null;
@@ -96,15 +103,15 @@ export function useComposerGoalController(options: UseComposerGoalControllerOpti
   const { t } = useI18n();
   // activeScopeKeyRef identifies the scope allowed to receive in-flight dialog side effects.
   // activeScopeKeyRef 标识允许接收飞行中弹窗副作用的作用域。
-  const activeScopeKeyRef = React.useRef(options.scopeKey);
-  activeScopeKeyRef.current = options.scopeKey;
+  const activeScopeKeyRef = React.useRef(options.scope.key);
+  activeScopeKeyRef.current = options.scope.key;
   // operationGuard owns one synchronous operation for one continuous visit to a conversation.
   // operationGuard 为每次连续停留的会话持有一个同步操作守卫。
   // Replacing the guard on scope changes also rejects stale completion after navigating away and back.
   // 作用域变更时替换守卫，也能拒绝离开后返回同一会话的旧完成事件。
-  const operationGuard = React.useRef({ scopeKey: options.scopeKey, busy: false });
-  if (operationGuard.current.scopeKey !== options.scopeKey) {
-    operationGuard.current = { scopeKey: options.scopeKey, busy: false };
+  const operationGuard = React.useRef({ scopeKey: options.scope.key, busy: false });
+  if (operationGuard.current.scopeKey !== options.scope.key) {
+    operationGuard.current = { scopeKey: options.scope.key, busy: false };
   }
   // dialogOpen controls the user-facing session goal editor.
   // dialogOpen 控制面向用户的会话目标编辑器。
@@ -126,7 +133,7 @@ export function useComposerGoalController(options: UseComposerGoalControllerOpti
     setDialogOpen(false);
     setDialogMode("edit");
     setSaving(false);
-  }, [options.scopeKey]);
+  }, [options.scope.key]);
 
   // openEditor seeds the goal editor after conflicting composer modes have been disabled.
   // openEditor 在禁用冲突的输入区模式后初始化目标编辑器。
@@ -139,7 +146,7 @@ export function useComposerGoalController(options: UseComposerGoalControllerOpti
     setSaving(true);
     // editorScopeKey binds asynchronous preparation to the visible session that requested it.
     // editorScopeKey 将异步准备绑定到发起请求的可见会话。
-    const editorScopeKey = options.scopeKey;
+    const editorScopeKey = options.scope.key;
     // prepared records whether the caller successfully resolved mutually exclusive state.
     // prepared 记录调用方是否成功解除互斥状态。
     try {
@@ -155,7 +162,7 @@ export function useComposerGoalController(options: UseComposerGoalControllerOpti
       guard.busy = false;
       if (operationGuard.current === guard) setSaving(false);
     }
-  }, [options.goal, options.onPrepareEditor, options.scopeKey]);
+  }, [options.goal, options.onPrepareEditor, options.scope.key]);
 
   // openResumeEditor seeds the next-stage editor from the stopped goal.
   // openResumeEditor 使用已停止目标初始化下一阶段编辑器。
@@ -178,7 +185,7 @@ export function useComposerGoalController(options: UseComposerGoalControllerOpti
     if (guard.busy) return;
     // requestScopeKey binds persistence and auto-submit side effects to the initiating session.
     // requestScopeKey 将持久化与自动提交副作用绑定到发起会话。
-    const requestScopeKey = options.scopeKey;
+    const requestScopeKey = options.scope.key;
     // objective is the normalized non-empty goal text sent to persistence.
     // objective 是发送给持久化层的规范化非空目标文本。
     const objective = objectiveDraft.trim();
@@ -196,9 +203,10 @@ export function useComposerGoalController(options: UseComposerGoalControllerOpti
       toast.error(t("composer.goal.error.budgetInvalid"));
       return;
     }
-    // shouldAutoSubmit captures pre-save state so the first goal turn starts exactly once.
-    // shouldAutoSubmit 捕获保存前状态，确保目标首轮只启动一次。
-    const shouldAutoSubmit = !options.goal && dialogMode === "edit" && options.canAutoSubmitCreatedGoal;
+    // Only a draft needs the composer to submit its first turn. The service owns existing Goal dispatch.
+    // 只有草稿需要输入区提交首轮，已有会话的目标派发由服务端负责。
+    const shouldAutoSubmit = options.scope.owner === "draft"
+      && !options.goal && dialogMode === "edit" && options.canAutoSubmitCreatedGoal;
     guard.busy = true;
     setSaving(true);
     try {
@@ -228,7 +236,8 @@ export function useComposerGoalController(options: UseComposerGoalControllerOpti
     options.onResumeGoal,
     options.onSaveGoal,
     options.onSubmitCreatedGoal,
-    options.scopeKey,
+    options.scope.owner,
+    options.scope.key,
     t,
     tokenBudgetDraft,
   ]);

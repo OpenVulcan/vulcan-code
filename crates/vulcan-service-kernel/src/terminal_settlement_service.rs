@@ -518,6 +518,9 @@ fn release_recorded_settlement_owner(
             guard
                 .session_terminal_persistence_owners
                 .remove(&session_id);
+            crate::conversation_submission::queued_dispatch::wake_waiting_queued_turn(
+                &guard, session_id,
+            );
             webui_trace(
                 "terminal_settlement_owner_released",
                 format!("session={session_id} settlement={}", record.settlement_id),

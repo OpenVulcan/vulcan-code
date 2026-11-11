@@ -182,6 +182,7 @@ fn task_session_execution_report_fast_path_skips_completion_hook() {
         permission_judge: Arc::new(Default::default()),
         project_resource_catalog_registry: Default::default(),
         session_turn_admission_reservations: BTreeMap::new(),
+        waiting_queued_turns: BTreeMap::new(),
         project_admission_reservations: BTreeMap::new(),
         vmm_controller_registry: Default::default(),
         browser_manager: crate::browser::BrowserManager::new(),

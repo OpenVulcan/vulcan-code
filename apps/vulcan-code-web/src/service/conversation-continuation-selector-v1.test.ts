@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { selectConversationContinueCandidateV1 } from "./conversation-continuation-selector-v1";
+import { selectConversationContinueCandidateV1, selectQueuedTurnDispatchCandidateV1 } from "./conversation-continuation-selector-v1";
 import type { ConversationEventWindowControllerSnapshot } from "./conversation-event-window-controller";
 import type {
   ApiPurposeKind,
+  ClientActionId,
   ConversationEventBody,
   ConversationEventSummary,
 } from "./conversation-event-window-store";
@@ -107,6 +108,21 @@ function snapshot(
 }
 
 describe("V1 conversation continuation selector", () => {
+
+  it("recovers only the original queued root before a business request starts", () => {
+    // queuedInput identifies the durable root and retains its action across auxiliary APIs.
+    // queuedInput 标识可靠根输入，在辅助 API 前后保持原始动作身份。
+    const queuedInput = summary(1, {
+      kind: "user_input", input_id: 3, input_source: "queued_scheduled",
+      client_action_id: "original-queued" as ClientActionId, text: "queued input",
+    });
+    expect(selectQueuedTurnDispatchCandidateV1(snapshot([
+      queuedInput, summary(2, apiStarted(4, "compaction")),
+      summary(3, apiStats(4, "forbidden", "completed", "completed_successfully", "compaction")),
+    ]))).toMatchObject({ queuedInputActionId: "original-queued" });
+    expect(selectQueuedTurnDispatchCandidateV1(snapshot([queuedInput, summary(2, apiStarted(5))]))).toBeNull();
+    expect(selectQueuedTurnDispatchCandidateV1(snapshot([queuedInput], { openTurnId: null }))).toBeNull();
+  });
   it("returns the latest terminal allowed ApiStats as one UI-only identity", () => {
     // controllerSnapshot contains one complete claimable physical API boundary.
     // controllerSnapshot 包含一个完整可领取的物理 API 边界。

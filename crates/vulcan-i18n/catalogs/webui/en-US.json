@@ -1572,6 +1572,8 @@
   "sessionActions.previewCannotSetVmmPolicy": "VMM memory policy cannot be changed in browser preview mode.",
   "sessionActions.vmmPolicySaved": "VMM memory policy saved.",
   "conversationActions.noProjectForSend": "The current conversation is not linked to a project, so it cannot be sent.",
+  "conversationActions.acceptedAwaitingDispatch": "Message saved. It will start when the conversation is ready.",
+  "conversationActions.acceptedDispatchFailed": "Message saved, but it could not start. Use Continue to retry the same turn.",
   "conversationActions.previewCannotSend": "Real conversations cannot be sent in browser preview mode.",
   "conversationActions.previewCannotCompact": "Real context compaction cannot run in browser preview mode.",
   "conversationActions.previewCannotContinue": "Real conversations cannot be continued in browser preview mode.",

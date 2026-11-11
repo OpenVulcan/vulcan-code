@@ -109,6 +109,7 @@ export interface ChatAreaProps {
     conversationId: string,
     clientContinuationId: string,
     supplement: ComposerSubmission | null,
+    queuedInputActionId?: string,
   ) => Promise<boolean>;
   // Opens a subagent transcript in the right context panel.
   // 在右侧上下文面板中打开子代理转录。
