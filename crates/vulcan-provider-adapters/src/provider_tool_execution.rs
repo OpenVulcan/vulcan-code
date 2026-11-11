@@ -3748,6 +3748,15 @@ fn bound_provider_diagnostic_text(value: &str, maximum_characters: usize) -> Str
     bounded
 }
 
+/// Applies the shared diagnostic field limit to already controlled text.
+/// 对已经受控的文本应用共享诊断字段上限。
+///
+/// `value` is the controlled field; returns a character-bounded rendering.
+/// `value` 是受控字段；返回按字符限长的文本。
+pub(crate) fn bound_provider_diagnostic_field(value: &str) -> String {
+    bound_provider_diagnostic_text(value, PROVIDER_TOOL_DIAGNOSTIC_FIELD_MAX_CHARACTERS)
+}
+
 /// Reports whether one provider-owned JSON key names credential or signing material.
 /// 判断一个供应商 JSON 键是否命名凭据或签名材料。
 ///
@@ -3906,10 +3915,7 @@ pub(crate) fn sanitize_provider_diagnostic_text(value: &str) -> String {
     {
         return String::from("<redacted>");
     }
-    bound_provider_diagnostic_text(
-        url_safe.as_str(),
-        PROVIDER_TOOL_DIAGNOSTIC_FIELD_MAX_CHARACTERS,
-    )
+    bound_provider_diagnostic_field(url_safe.as_str())
 }
 
 /// Recursively redacts sensitive metadata keys and bounds every provider-controlled string.

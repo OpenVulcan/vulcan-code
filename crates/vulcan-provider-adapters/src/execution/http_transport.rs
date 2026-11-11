@@ -127,8 +127,9 @@ impl ProviderExecutionClient {
             .map_err(|_| {
                 let timeout_ms = transport.response_headers_timeout_ms;
                 let failure = transport_failure(format!(
-                    "Provider request to `{url}` exceeded the registered {timeout_ms} ms response-header timeout."
-                ));
+                    "exceeded the registered {timeout_ms} ms response-header timeout."
+                ))
+                .with_host_http_endpoint(&url, &secret);
                 wire_response_capture
                     .observe_transport_failure(&response_headers_timeout_evidence(timeout_ms));
                 wire_response_capture.observe_failure("dispatch", &failure);
@@ -138,13 +139,9 @@ impl ProviderExecutionClient {
                 // Retain the transport phase and causes for local inspection with the exact credential masked.
                 // 保留传输阶段与原因供本机检查，同时遮蔽精确凭据。
                 let evidence = http_send_failure_evidence(&error, &secret);
-                let failure = http_send_transport_failure(
-                    &error,
-                    redact_exact_credential(
-                        &format!("Provider request to `{url}` failed: {error}"),
-                        &secret,
-                    ),
-                );
+                let error = error.without_url();
+                let failure = http_send_transport_failure(&error, format!("failed: {error}"))
+                    .with_host_http_endpoint(&url, &secret);
                 wire_response_capture.observe_transport_failure(&evidence);
                 wire_response_capture.observe_failure("dispatch", &failure);
                 failure

@@ -354,6 +354,13 @@ async fn http_wire_response_capture_classifies_dispatch_failure() {
         .expect("response guard should publish dispatch failure");
 
     assert!(failure.error.retryable);
+    assert!(
+        failure
+            .error
+            .message
+            .contains(&format!("http://{closed_address}/responses"))
+    );
+    assert!(!failure.error.message.contains("<redacted-url>"));
     assert_eq!(captured_response.failure_stage.as_deref(), Some("dispatch"));
     // The closed port yields a proven connection phase and a non-empty bounded cause chain.
     // 关闭端口会给出已证明的连接阶段以及非空的受限原因链。

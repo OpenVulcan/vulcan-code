@@ -17,6 +17,37 @@ pub struct ProviderExecutionFailure {
     /// Normalized public error.
     /// 归一化公共错误。
     pub error: Box<AiExecutionError>,
+    /// Host-owned message with an already screened HTTP endpoint and controlled detail.
+    /// 包含已检查 HTTP 端点及受控详情的宿主消息。
+    host_http_message: Option<String>,
+}
+
+impl ProviderExecutionFailure {
+    /// Adds the host's actual HTTP endpoint to a transport diagnostic.
+    /// 将宿主的实际 HTTP 端点加入传输诊断。
+    ///
+    /// `request_url` is the resolved dispatch URL and `secret` is the exact request credential.
+    /// `request_url` 是已解析的分派 URL，`secret` 是本次请求的精确凭据。
+    /// Returns the same failure with a bounded public message assembled from separately screened fields.
+    /// 返回同一失败，公开消息由分别检查过的字段组成并限长。
+    pub(super) fn with_host_http_endpoint(
+        mut self,
+        request_url: &str,
+        secret: &CredentialExecutionSecret,
+    ) -> Self {
+        // Keep the locally resolved endpoint separate from transport-supplied detail, which may include arbitrary text.
+        // 将本机解析的端点与传输层提供的详情分开，因为后者可能包含任意文本。
+        let endpoint = public_http_endpoint(request_url, secret);
+        let detail = crate::provider_tool_execution::sanitize_provider_diagnostic_text(
+            &redact_exact_credential(&self.error.message, secret),
+        );
+        let message = crate::provider_tool_execution::bound_provider_diagnostic_field(&format!(
+            "Provider request to `{endpoint}` {detail}"
+        ));
+        self.error.message = message.clone();
+        self.host_http_message = Some(message);
+        self
+    }
 }
 
 impl std::fmt::Display for ProviderExecutionFailure {
@@ -33,6 +64,7 @@ impl std::error::Error for ProviderExecutionFailure {}
 /// 创建结构化分派前失败。
 pub(crate) fn pre_dispatch_failure(message: impl Into<String>) -> ProviderExecutionFailure {
     ProviderExecutionFailure {
+        host_http_message: None,
         error: Box::new(AiExecutionError {
             category: AiErrorCategory::InvalidRequest,
             subcategory: Some(String::from("route_validation")),
@@ -105,6 +137,7 @@ pub(crate) fn unreplayable_history_failure(
 /// 转换确定性协议失败。
 pub(super) fn protocol_failure(error: ProtocolConversionError) -> ProviderExecutionFailure {
     ProviderExecutionFailure {
+        host_http_message: None,
         error: Box::new(AiExecutionError {
             category: AiErrorCategory::InvalidRequest,
             subcategory: Some(String::from("protocol_conversion")),
@@ -135,6 +168,7 @@ pub(super) fn protocol_failure(error: ProtocolConversionError) -> ProviderExecut
 /// 将 LLM 核心协议运行时失败转换为适配层错误，但不恢复适配层注册表逻辑。
 pub(super) fn llm_core_protocol_failure(error: LlmCoreError) -> ProviderExecutionFailure {
     ProviderExecutionFailure {
+        host_http_message: None,
         error: Box::new(AiExecutionError {
             category: AiErrorCategory::InvalidRequest,
             subcategory: Some(String::from("protocol_conversion")),
@@ -200,6 +234,7 @@ pub(super) fn stream_protocol_failure_for_transport(
     transport: AiTransportKind,
 ) -> ProviderExecutionFailure {
     ProviderExecutionFailure {
+        host_http_message: None,
         error: Box::new(AiExecutionError {
             category: AiErrorCategory::InvalidRequest,
             subcategory: Some(String::from("protocol_conversion")),
@@ -279,6 +314,7 @@ pub(super) fn stream_completion_failure_for_transport(
 /// 创建结构化传输失败。
 pub(crate) fn transport_failure(message: impl Into<String>) -> ProviderExecutionFailure {
     ProviderExecutionFailure {
+        host_http_message: None,
         error: Box::new(AiExecutionError {
             category: AiErrorCategory::ProviderUnavailable,
             subcategory: Some(String::from("transport")),
@@ -668,6 +704,7 @@ fn dispatched_stream_failure(
     retry_after_semantic_output: bool,
 ) -> ProviderExecutionFailure {
     ProviderExecutionFailure {
+        host_http_message: None,
         error: Box::new(AiExecutionError {
             category,
             subcategory: Some(String::from(subcategory)),
@@ -710,6 +747,7 @@ pub(crate) fn response_headers_protocol_failure(
     message: impl Into<String>,
 ) -> ProviderExecutionFailure {
     ProviderExecutionFailure {
+        host_http_message: None,
         error: Box::new(AiExecutionError {
             category: AiErrorCategory::InvalidRequest,
             subcategory: Some(String::from("response_content_type")),
@@ -847,6 +885,7 @@ pub(crate) fn http_failure(
     };
     let public_upstream_message = upstream_message.map(&public_field);
     ProviderExecutionFailure {
+        host_http_message: None,
         error: Box::new(AiExecutionError {
             category,
             subcategory: error_type
@@ -926,7 +965,32 @@ pub(crate) fn sanitize_provider_execution_failure(
     secret: &CredentialExecutionSecret,
 ) -> ProviderExecutionFailure {
     sanitize_ai_execution_error(&mut failure.error, secret);
+    if let Some(message) = failure.host_http_message.take() {
+        failure.error.message = message;
+    }
     failure
+}
+
+/// Screens the locally resolved HTTP URL before adding it to a user-facing error.
+/// 在把本机解析的 HTTP URL 加入面向用户的错误前检查其内容。
+///
+/// `request_url` is the dispatch URL and `secret` is its credential. Returns the scheme, authority and path with secrets removed.
+/// `request_url` 是分派 URL，`secret` 是其凭据。返回移除秘密后的协议、主机及路径。
+fn public_http_endpoint(request_url: &str, secret: &CredentialExecutionSecret) -> String {
+    // URL parsing keeps user info, query strings, and fragments outside the displayable endpoint.
+    // URL 解析将用户信息、查询串与片段排除在可显示端点之外。
+    let Ok(mut endpoint) = reqwest::Url::parse(request_url) else {
+        return String::from("<invalid-url>");
+    };
+    if !matches!(endpoint.scheme(), "http" | "https") || endpoint.host_str().is_none() {
+        return String::from("<invalid-url>");
+    }
+    if endpoint.set_password(None).is_err() || endpoint.set_username("").is_err() {
+        return String::from("<invalid-url>");
+    }
+    endpoint.set_query(None);
+    endpoint.set_fragment(None);
+    redact_exact_credential(endpoint.as_str(), secret)
 }
 
 /// Replaces exact credential occurrences in raw provider text before any bounding.
