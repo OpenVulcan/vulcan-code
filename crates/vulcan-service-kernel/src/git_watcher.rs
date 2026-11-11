@@ -90,11 +90,15 @@ pub(crate) fn reconcile_webui_git_repository_watches(
         .iter()
         .filter(|repository| repository.monitoring_enabled)
     {
+        // The service's discovery catalog already verified the repository within its owning root.
+        // 服务生成的发现目录已在各所属根目录内校验仓库。
         let repository_root =
-            crate::git::resolve_webui_repository_root_from_workspace_text_with_key(
-                workspace_path.to_string_lossy().as_ref(),
-                Some(repository.repository_key.as_str()),
-            )?;
+            std::fs::canonicalize(&repository.repository_root).map_err(|error| {
+                format!(
+                    "Cannot normalize the Git watcher repository `{}`: {error}",
+                    repository.repository_root
+                )
+            })?;
         desired_targets
             .entry(repository_root)
             .or_default()

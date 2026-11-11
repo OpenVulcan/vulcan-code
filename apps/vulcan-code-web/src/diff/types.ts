@@ -434,8 +434,8 @@ export interface WorkspaceGitRepositorySummary {
   // Compact repository name.
   // 紧凑展示的仓库名称。
   name: string;
-  // Stable project-relative path shown as secondary context.
-  // 展示为次级上下文的稳定项目相对路径。
+  // Display location, project-relative for primary-tree repositories and absolute for attachments.
+  // 显示位置，主目录树中的仓库使用项目相对路径，附属仓库使用绝对路径。
   relativePath: string;
   // Whether this repository is the deterministic primary node.
   // 该仓库是否为确定性的主要节点。

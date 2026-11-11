@@ -69,6 +69,8 @@ describe("markdownLinkFileTarget", () => {
     expect(markdownLinkFileTarget("make.ps1:3-5")).toEqual({ path: "make.ps1", lines: { start: 3, end: 5 } });
     expect(markdownLinkFileTarget("./make.ps1:3")).toEqual({ path: "make.ps1", lines: { start: 3, end: 3 } });
     expect(markdownLinkFileTarget("src/my%20notes.md")).toBeNull();
+    expect(markdownLinkFileTarget("file:///D:/shared%20repo/src/a.ts#L3"))
+      .toEqual({ path: "D:/shared repo/src/a.ts", lines: { start: 3, end: 3 } });
     expect(markdownLinkFileTarget("file:///D:/repo/a.ts")).toEqual({ path: "D:/repo/a.ts", lines: null });
   });
 
@@ -87,6 +89,7 @@ describe("parseFilePathMention", () => {
     expect(parseFilePathMention("src/app.ts:12")).toEqual({ path: "src/app.ts", lines: { start: 12, end: 12 } });
     expect(parseFilePathMention("crates/a/lib.rs:4-9")).toEqual({ path: "crates/a/lib.rs", lines: { start: 4, end: 9 } });
     expect(parseFilePathMention("D:\\repo\\main.rs:3")).toEqual({ path: "D:\\repo\\main.rs", lines: { start: 3, end: 3 } });
+    expect(parseFilePathMention("D:/shared repo/main.rs:3")).toEqual({ path: "D:/shared repo/main.rs", lines: { start: 3, end: 3 } });
     expect(parseFilePathMention("src/app.ts:9-4")).toEqual({ path: "src/app.ts", lines: null });
   });
 
@@ -95,6 +98,24 @@ describe("parseFilePathMention", () => {
       expect(parseFilePathMention(text)).toBeNull();
     }
   });
+});
+
+// Protect automatic routing when sibling repositories contain the same relative file names.
+// 防止相邻仓库包含相同相对文件名时自动路由串目录。
+it("routes absolute paths to the deepest registered root and keeps relative paths in the primary root", () => {
+  // The sibling and the nested root may have similar prefixes and use different Windows separators.
+  // 同级与嵌套目录可能有相似前缀，并使用不同的 Windows 分隔符。
+  const roots = ["D:\\work\\shared repo", "D:\\work\\main\\vendor"];
+  expect(routeWorkspaceFileOpen("D:/work/main", "d:/WORK/SHARED REPO/src/app.ts", undefined, roots))
+    .toEqual({ kind: "files", rootPath: roots[0] });
+  expect(routeWorkspaceFileOpen("D:/work/main", "D:/work/main/vendor/report.pdf", undefined, roots))
+    .toEqual({ kind: "files", rootPath: roots[1] });
+  expect(routeWorkspaceFileOpen("D:/work/main", "vendor/report.pdf", undefined, roots))
+    .toEqual({ kind: "window", path: "D:/work/main/vendor/report.pdf" });
+  expect(routeWorkspaceFileOpen("D:/work/main", "D:/work/shared repo-old/src/app.ts", undefined, roots))
+    .toEqual({ kind: "outside", path: "D:/work/shared repo-old/src/app.ts" });
+  expect(routeWorkspaceFileOpen("D:/work/main", "D:/work/shared repo/../other/src/app.ts", undefined, roots).kind).toBe("outside");
+  expect(routeWorkspaceFileOpen("D:/work/main", "D:/work/shared repo/src/app.ts", undefined, []).kind).toBe("outside");
 });
 
 describe("findRequestedFileEntry", () => {

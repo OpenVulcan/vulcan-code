@@ -463,16 +463,17 @@ impl GitView {
         })
     }
 
-    /// Path of `file` from the project root: the displayed repository's folder joined with the
-    /// repository path, or none during selection.
-    /// `file` 相对项目根目录的路径：显示仓库的目录与仓库内路径拼接；选择切换期间返回空。
+    /// Joins the displayed repository's folder with `file` for mention or copy, preserving an attached absolute root.
+    /// 将所选仓库的目录与 `file` 拼接供引用或复制，保留附属仓库的绝对根目录。
+    /// Returns none while repository selection is pending.
+    /// 仓库选择尚未完成时返回空。
     pub fn project_relative_path(&self, file: &GitFile) -> Option<String> {
         let snapshot = self.repository()?;
         let selected = snapshot.selected.as_ref()?;
         let repository = snapshot.repositories.iter().find(|r| &r.key == selected)?;
-        Some(match repository.relative_path.trim_matches('/') {
+        Some(match repository.relative_path.as_str() {
             "" | "." => file.path.clone(),
-            folder => format!("{folder}/{}", file.path),
+            folder => format!("{}/{}", folder.trim_end_matches(['/', '\\']), file.path),
         })
     }
 
@@ -564,8 +565,8 @@ impl GitView {
     }
 }
 
-/// The relative path shown beside a repository name, omitted when it adds nothing.
-/// 显示在仓库名称旁的相对路径；不提供额外信息时省略。
+/// The location shown beside a repository name, omitted when it adds nothing.
+/// 显示在仓库名称旁的路径；不提供额外信息时省略。
 pub fn repository_path(repository: &GitRepository) -> Option<&str> {
     let path = repository.relative_path.as_str();
     (!path.is_empty() && path != "." && path != repository.name).then_some(path)

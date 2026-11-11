@@ -44,6 +44,7 @@ import { readElectronLocalBrowserBridge } from "@/host-shell/electron-bridge";
 import { readConversationLinkPreference } from "@/components/conversation/conversation-link-preference";
 import { resolveConversationLinkTarget } from "@/components/conversation/conversation-link-navigation";
 import {
+  isAbsoluteWorkspaceFilePath,
   requestWorkspaceFileOpen,
   routeWorkspaceFileOpen,
   usePublishWorkspaceFileOpener,
@@ -51,6 +52,7 @@ import {
   type WorkspaceFileOpener,
 } from "@/components/workspace/workspace-file-open-request";
 import { requestWorkspaceFileAction, WorkspaceFileActionHost } from "@/components/workspace/workspace-file-actions";
+import { useWorkspaceFileRoots, WorkspaceFileRootsContext } from "@/components/workspace/workspace-file-roots";
 import {
   type WorkspaceContextTabKind,
 } from "@/components/workspace/workspace-context-panel";
@@ -469,6 +471,14 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       state: activateWorkspaceContextTab(current.state, tabId),
     }));
   }, []);
+  // Read attached roots for the project that owns the visible file-open action.
+  // 读取当前文件打开动作所属项目的附属根目录。
+  const fileProjectId = props.mainView === "chat" ? selectedChatProject?.id ?? routeDraftConversation?.projectId ?? null : null;
+  const { attachedFolders, fileRootContext, selectFileRoot } = useWorkspaceFileRoots(fileProjectId, contextTabCacheKey);
+  // One latest absolute file request may wait for the current project's attachment list.
+  // 一次最新的绝对路径打开请求可以等待当前项目的附属目录列表。
+  const pendingFileRoute = React.useRef<{ owner: string; projectId: string; path: string; lines: Parameters<WorkspaceFileOpener>[1] } | null>(null);
+
   // openWorkspaceFile opens a viewable file in a file window of the session, shows another project file in a files tab
   // of the open right panel and a docked file in the viewer tab; files outside the project, which first pass the
   // session's outside-file access, and explicit OS actions go to the file action host. Transcript cards reach it
@@ -478,15 +488,33 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // 通过 WorkspaceFileOpenContext 调用它。其引用恒定不变，页签变化不会使每张转录卡片重新渲染。
   const openWorkspaceFileLatest = React.useRef<WorkspaceFileOpener>(() => undefined);
   openWorkspaceFileLatest.current = (path, lines, action) => {
-    const route = routeWorkspaceFileOpen(selectedChatProject?.path ?? null, path, action);
+    pendingFileRoute.current = null;
+    if (!action && fileProjectId && !attachedFolders && isAbsoluteWorkspaceFilePath(path.trim())) {
+      pendingFileRoute.current = { owner: contextTabCacheKey, projectId: fileProjectId, path, lines };
+      return;
+    }
+    // Classify the path against the primary and registered roots before applying outside-file policy.
+    // 先根据主目录与已登记根目录判断路径归属，再决定是否应用工作区外策略。
+    const route = routeWorkspaceFileOpen(selectedChatProject?.path ?? null, path, action, attachedFolders?.paths ?? []);
     if (route.kind === "action") return requestWorkspaceFileAction(route.path, route.action);
     if (route.kind === "outside") return requestWorkspaceFileAction(route.path, "outside", props.selectedConversationId ?? null);
     if (route.kind === "window") return void import("@/components/file-windows/file-window-store").then((store) => store.openFileWindow(props.selectedConversationId ?? "", route.path));
     const next = route.kind === "viewer" ? openWorkspaceViewerContextTab(contextTabState, route.path, t) : focusWorkspaceFilesTab(contextTabState, t);
     setContextTabStateEntry((current) => ({ ...current, state: next }));
-    if (next.activeTabId && route.kind === "files") requestWorkspaceFileOpen(next.activeTabId, path, lines);
+    if (next.activeTabId && route.kind === "files") {
+      selectFileRoot(next.activeTabId, route.rootPath ?? null);
+      requestWorkspaceFileOpen(next.activeTabId, path, lines, route.rootPath ?? selectedChatProject?.path ?? null);
+    }
     openRightContextPanel();
   };
+  React.useEffect(() => {
+    // Replay a deferred request only when it still belongs to the visible conversation and project.
+    // 仅在延后的请求仍属于当前可见会话和项目时重放。
+    const pending = pendingFileRoute.current;
+    if (!pending) return;
+    if (pending.owner !== contextTabCacheKey || pending.projectId !== fileProjectId) pendingFileRoute.current = null;
+    else if (attachedFolders) openWorkspaceFileLatest.current(pending.path, pending.lines);
+  }, [attachedFolders, contextTabCacheKey, fileProjectId]);
   const openWorkspaceFile = React.useCallback<WorkspaceFileOpener>((...request) => openWorkspaceFileLatest.current(...request), []);
   // The floating project terminals render outside this shell, so they reach the same action through publication.
   // 浮动项目终端渲染在本外壳之外，因此通过发布取得同一动作。
@@ -1014,6 +1042,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           onSelectConversation={props.onSelectConversation}
         />}
         <SidebarInset>
+          <WorkspaceFileRootsContext.Provider value={fileRootContext}>
           <TurnChangeReviewActionsContext.Provider value={reviewFocus.turnChangeReviewActions}>
           <WorkspaceResizableBody
             aiBrowserAvailable={aiBrowserAvailable}
@@ -1086,6 +1115,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
             </div>
           ) : null}
           </TurnChangeReviewActionsContext.Provider>
+          </WorkspaceFileRootsContext.Provider>
         </SidebarInset>
         {sessionGitCommitActionVisible && activeSessionReviewSummary ? (
           <ConversationSessionCommitDialog

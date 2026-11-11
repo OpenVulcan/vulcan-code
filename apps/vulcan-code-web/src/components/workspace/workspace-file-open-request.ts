@@ -23,7 +23,7 @@ export interface WorkspaceFileLines {
 
 // WorkspaceFileOpenRequest names the files tab that should show `path`, and optionally the lines to bring into view.
 // WorkspaceFileOpenRequest 指明应显示 `path` 的文件页签，以及可选的需要滚动到视野内的行。
-type WorkspaceFileOpenRequest = { tabId: string; path: string; lines: WorkspaceFileLines | null };
+type WorkspaceFileOpenRequest = { id: number; tabId: string; path: string; lines: WorkspaceFileLines | null; rootPath: string | null };
 
 // WorkspaceFileOpener shows a file: a document in a file window, any other project file, optionally at some lines,
 // in the files panel, and a file outside the project after the session's outside-file access allows it. With
@@ -37,6 +37,10 @@ export type WorkspaceFileOpener = (path: string, lines?: WorkspaceFileLines | nu
 // pendingFileOpen holds the latest request until the files panel of that tab takes it; the tab may still be mounting.
 // pendingFileOpen 保存最近一次请求，直到对应页签的文件面板取走；该页签可能仍在挂载。
 let pendingFileOpen: WorkspaceFileOpenRequest | null = null;
+
+// The latest request identity invalidates a slower directory read from an earlier click.
+// 最新请求的标识使较早点击发起的迟到目录读取失效。
+let latestFileOpenId = 0;
 
 // WorkspaceFileLineReveal is one request to bring lines of an absolute file path into view; id tells requests apart.
 // WorkspaceFileLineReveal 是一次将某绝对路径文件的行滚动到视野内的请求；id 用于区分请求。
@@ -115,10 +119,10 @@ export function usePublishedWorkspaceFileOpener(): WorkspaceFileOpener | null {
   }, () => publishedOpener, () => null);
 }
 
-// requestWorkspaceFileOpen asks the files panel of tab `tabId` to open `path` at `lines`, now or once it mounts.
-// requestWorkspaceFileOpen 请求 `tabId` 页签的文件面板立即或在挂载后打开 `path` 并定位到 `lines`。
-export function requestWorkspaceFileOpen(tabId: string, path: string, lines: WorkspaceFileLines | null = null): void {
-  pendingFileOpen = { tabId, path, lines };
+// Queues path and lines for tabId once it is ready to display rootPath.
+// 为 tabId 排队打开 path 与 lines，等待页签准备好显示 rootPath。
+export function requestWorkspaceFileOpen(tabId: string, path: string, lines: WorkspaceFileLines | null = null, rootPath: string | null = null): void {
+  pendingFileOpen = { id: ++latestFileOpenId, tabId, path, lines, rootPath };
   window.dispatchEvent(new CustomEvent(WORKSPACE_FILE_OPEN_EVENT));
 }
 
@@ -133,6 +137,12 @@ export interface WorkspaceFileTarget {
   name: string;
 }
 
+// Returns whether path starts at a filesystem root, including Windows drive and UNC paths.
+// 判断 path 是否从文件系统根开始，包括 Windows 盘符路径和 UNC 路径。
+export function isAbsoluteWorkspaceFilePath(path: string): boolean {
+  return /^(?:[A-Za-z]:)?[\\/]/.test(path);
+}
+
 // resolveWorkspaceFileTarget places an absolute or project-relative path inside workspacePath. Returns null for a
 // path outside the project, one that climbs with "..", or one that names the root itself. Drive-letter roots
 // compare without case, as Windows paths do.
@@ -142,7 +152,7 @@ export function resolveWorkspaceFileTarget(workspacePath: string, path: string):
   const separator = workspacePath.includes("\\") ? "\\" : "/";
   const root = workspacePath.replace(/[\\/]+$/, "");
   const requested = path.trim();
-  const relative = /^(?:[A-Za-z]:)?[\\/]/.test(requested) ? relativeToWorkspace(workspacePath, requested) : requested.replace(/\\/g, "/");
+  const relative = isAbsoluteWorkspaceFilePath(requested) ? relativeToWorkspace(workspacePath, requested) : requested.replace(/\\/g, "/");
   if (relative === null) return null;
   const segments = relative.split("/").filter((segment) => segment !== "" && segment !== ".");
   const name = segments.pop();
@@ -155,7 +165,7 @@ export function resolveWorkspaceFileTarget(workspacePath: string, path: string):
 // WorkspaceFileRoute 是单个文件请求的去向：文件面板、文件窗口、查看页签、操作系统文件操作，或针对项目之外文件的
 // 工作区外文件访问检查。
 export type WorkspaceFileRoute =
-  | { kind: "files" }
+  | { kind: "files"; rootPath?: string }
   | { kind: "window"; path: string }
   | { kind: "outside"; path: string }
   | { kind: "viewer"; path: string }
@@ -168,25 +178,41 @@ export type WorkspaceFileRoute =
 // routeWorkspaceFileOpen 决定文件请求的去向，始终按文件的绝对路径（项目相对路径定位到项目中）。显式 `action` 交给操作
 // 系统，"dock" 进入查看页签，"window" 进入文件窗口。否则项目之外（或没有项目时）的绝对路径进入工作区外文件访问检查，
 // 查看器可读的项目文件在文件窗口中打开，其他项目文件进入文件面板。
-export function routeWorkspaceFileOpen(workspacePath: string | null, path: string, action?: "open" | "reveal" | "dock" | "window"): WorkspaceFileRoute {
+export function routeWorkspaceFileOpen(
+  workspacePath: string | null,
+  path: string,
+  action?: "open" | "reveal" | "dock" | "window",
+  attachedPaths: readonly string[] = [],
+): WorkspaceFileRoute {
   const requested = path.trim();
   const target = workspacePath ? resolveWorkspaceFileTarget(workspacePath, requested) : null;
   const root = workspacePath?.replace(/[\\/]+$/, "") ?? "";
   const separator = workspacePath?.includes("\\") ? "\\" : "/";
-  const full = /^(?:[A-Za-z]:)?[\\/]/.test(requested) ? requested : target ? `${target.directory ?? root}${separator}${target.name}` : null;
+  // Relative references always resolve in the primary root, independently of the active file tab.
+  // 相对引用始终从主目录解析，与活动文件页签无关。
+  const absolute = isAbsoluteWorkspaceFilePath(requested);
+  const full = absolute ? requested : target ? `${target.directory ?? root}${separator}${target.name}` : null;
   if (!full) return { kind: "files" };
   if (action === "dock") return { kind: "viewer", path: full };
   if (action === "window") return { kind: "window", path: full };
   if (action) return { kind: "action", path: full, action };
+  if (absolute && workspacePath) {
+    // For overlapping roots, route to the deepest directory that actually contains the target.
+    // 多个根目录重叠时，路由到实际包含目标的最深目录。
+    const attachedRoot = attachedPaths.reduce<string | null>((current, candidate) => (
+      candidate.length > (current?.length ?? (target ? root.length : 0)) && resolveWorkspaceFileTarget(candidate, full) ? candidate : current
+    ), null);
+    if (attachedRoot) return { kind: "files", rootPath: attachedRoot };
+  }
   if (!target) return { kind: "outside", path: full };
   return fileViewerKind(full) ? { kind: "window", path: full } : { kind: "files" };
 }
 
 // FILE_PATH_MENTION matches inline text naming a file by path: at least one folder separator, a file name with a
-// letter-led extension, and an optional ":line" or ":start-end" suffix. URLs, spaces and wildcards do not match.
+// letter-led extension, and an optional ":line" or ":start-end" suffix. Only absolute paths may contain spaces.
 // FILE_PATH_MENTION 匹配以路径指名文件的行内文本：至少一个目录分隔符、扩展名以字母开头的文件名，以及可选的
-// ":行" 或 ":起-止" 后缀。URL、空格与通配符不匹配。
-const FILE_PATH_MENTION = /^((?:[A-Za-z]:)?[^\s:*?"<>|]*[\\/][^\s:*?"<>|\\/]+\.[A-Za-z][A-Za-z0-9]{0,9})(?::(\d+)(?:[-–](\d+))?)?$/;
+// ":行" 或 ":起-止" 后缀。只有绝对路径可包含空格。
+const FILE_PATH_MENTION = /^((?:[A-Za-z]:)?[^\r\n\t:*?"<>|]*[\\/][^\r\n\t:*?"<>|\\/]+\.[A-Za-z][A-Za-z0-9]{0,9})(?::(\d+)(?:[-–](\d+))?)?$/;
 
 // parseFilePathMention reads a path, and any line range, from inline text such as `src/app.ts:12-20`.
 // Returns null for text that does not look like a file path, including text with surrounding whitespace or a line
@@ -194,6 +220,7 @@ const FILE_PATH_MENTION = /^((?:[A-Za-z]:)?[^\s:*?"<>|]*[\\/][^\s:*?"<>|\\/]+\.[
 // parseFilePathMention 从行内文本（例如 `src/app.ts:12-20`）读取路径及可能的行范围；不像文件路径时返回 null，
 // 包括带首尾空白或换行的文本（围栏代码总以换行结尾）。
 export function parseFilePathMention(text: string): { path: string; lines: WorkspaceFileLines | null } | null {
+  if (text !== text.trim() || (/\s/.test(text) && !isAbsoluteWorkspaceFilePath(text))) return null;
   const match = FILE_PATH_MENTION.exec(text);
   if (!match) return null;
   const start = match[2] ? Number(match[2]) : null;
@@ -233,7 +260,8 @@ export function markdownLinkFileTarget(href: string): { path: string; lines: Wor
   const bare = target.replace(/[?#].*$/, "");
   const suffix = /:(\d+)(?:[-–](\d+))?$/.exec(bare);
   const path = (suffix ? bare.slice(0, suffix.index) : bare).replace(/^\.\//, "");
-  if (path === "" || /[\\/]$/.test(path) || /[\s*?"<>|]/.test(path)) return null;
+  if (path === "" || /[\\/]$/.test(path) || /[*?"<>|]/.test(path) || /[^\S ]/.test(path)
+    || (path.includes(" ") && !isAbsoluteWorkspaceFilePath(path))) return null;
   const range = suffix ?? fragment;
   const start = range ? Number(range[1]) : 0;
   const end = range?.[2] ? Number(range[2]) : start;
@@ -274,29 +302,42 @@ export function useWorkspaceFileOpenRequests(args: {
   const { t } = useI18n();
   const latest = React.useRef(args);
   latest.current = args;
+  // Track whether this instance can still apply file selections and line reveals.
+  // 跟踪此实例是否仍可应用文件选择和行号定位。
+  const active = React.useRef(false);
   const take = React.useCallback(() => {
     const request = pendingFileOpen;
-    const { load, select, tabId, workspacePath } = latest.current;
-    if (!request || request.tabId !== tabId || !workspacePath) return;
+    const { load, ready, select, tabId, workspacePath } = latest.current;
+    if (!request || request.tabId !== tabId || !workspacePath || !ready
+      || (request.rootPath !== null && request.rootPath !== workspacePath)) return;
     pendingFileOpen = null;
     const target = resolveWorkspaceFileTarget(workspacePath, request.path);
     if (!target) {
       toast.info(t("workspaceFiles.openPathOutside"));
       return;
     }
+    // A later click or a root switch makes this read irrelevant to the visible preview.
+    // 后续点击或根目录切换会使这次读取与当前预览无关。
+    const ownsPreview = () => active.current && request.id === latestFileOpenId
+      && latest.current.tabId === tabId && latest.current.workspacePath === workspacePath && latest.current.ready;
     void load(target.directory).then((listing) => {
+      if (!ownsPreview()) return;
       const entry = findRequestedFileEntry(listing, target.name);
       if (entry?.kind === "other") requestWorkspaceFileAction(entry.path, "prompt");
       else if (entry) {
         pendingLineReveal = request.lines ? { id: ++lastLineRevealId, path: entry.path, lines: request.lines } : null;
         void select(entry);
       } else toast.info(t("workspaceFiles.openPathMissing"));
-    }, (error: unknown) => toast.error(error instanceof Error ? error.message : String(error)));
+    }, (error: unknown) => { if (ownsPreview()) toast.error(error instanceof Error ? error.message : String(error)); });
   }, [t]);
   React.useEffect(() => {
     if (!args.ready) return;
+    active.current = true;
     take();
     window.addEventListener(WORKSPACE_FILE_OPEN_EVENT, take);
-    return () => window.removeEventListener(WORKSPACE_FILE_OPEN_EVENT, take);
-  }, [args.ready, take]);
+    return () => {
+      active.current = false;
+      window.removeEventListener(WORKSPACE_FILE_OPEN_EVENT, take);
+    };
+  }, [args.ready, args.workspacePath, take]);
 }

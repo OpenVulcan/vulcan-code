@@ -70,7 +70,7 @@ export function relativeToWorkspace(workspacePath: string | null, path: string):
   const normalize = (value: string) => value.replace(/\\/g, "/").replace(/\/+$/, "");
   const root = normalize(workspacePath);
   const target = normalize(path);
-  const windows = /^[a-z]:\//i.test(root);
+  const windows = /^[a-z]:\//i.test(root) || root.startsWith("//");
   const same = (a: string, b: string) => windows ? a.toLowerCase() === b.toLowerCase() : a === b;
   if (!same(target.slice(0, root.length), root) || target.charAt(root.length) !== "/") return null;
   return target.slice(root.length + 1);

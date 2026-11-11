@@ -38,7 +38,6 @@ use super::diff::{
 use super::model::{
     GitCommitSummaryGenerateRequest, GitCommitSummaryGenerateResponse, GitCommitSummaryInput,
 };
-use super::repository::resolve_webui_repository_root_from_workspace_text_with_key;
 use super::settings::resolve_git_commit_summary_model;
 use crate::{
     AgentRuntimeBridge, ProviderTelemetryHookGuard, SharedServiceBridgeState,
@@ -57,16 +56,14 @@ pub(crate) async fn service_generate_git_commit_message(
         .map_err(|error| {
             format!("Invalid session identifier; the commit message cannot be generated: {error}")
         })?;
-    let resolved_workspace_path = crate::webui_diff_workspace_path_from_state(
+    let repository_root = crate::resolve_webui_git_request_repository_root(
         &state,
+        Some(&request.workspace_path),
         None,
         Some(&request.conversation_id),
-        Some(&request.workspace_path),
-    )?;
-    let repository_root = resolve_webui_repository_root_from_workspace_text_with_key(
-        &resolved_workspace_path,
-        request.repository_key.as_deref(),
-    )?;
+        request.repository_key.clone(),
+    )
+    .await?;
     let (agent_runtime, provider_id, model_id, reasoning_effort, extra_prompt, plugin_runtime, rtk) = {
         let guard = state
             .lock()

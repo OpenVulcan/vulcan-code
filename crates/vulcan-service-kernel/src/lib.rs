@@ -205,6 +205,7 @@ mod plugin_services;
 mod plugin_storage;
 mod plugin_ui_events;
 mod plugin_vldb;
+mod project_attached_folders;
 mod project_conversation_services;
 mod project_directories;
 mod project_terminals;

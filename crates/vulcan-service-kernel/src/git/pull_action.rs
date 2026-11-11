@@ -15,7 +15,6 @@ use super::diff::{
     webui_current_branch_has_upstream,
 };
 use super::model::{GitPullActionRequest, GitPullActionResponse};
-use super::repository::resolve_webui_repository_root_from_workspace_text_with_key;
 use crate::SharedServiceBridgeState;
 
 /// Pulls the current branch from its upstream, fast-forward only.
@@ -35,16 +34,14 @@ pub(crate) async fn service_run_git_pull_action(
                 .with("detail", error.to_string())
         })?;
     validate_git_commit_action_session_exists(&state, session_id)?;
-    let resolved_workspace_path = crate::webui_diff_workspace_path_from_state(
+    let repository_root = crate::resolve_webui_git_request_repository_root(
         &state,
+        Some(&request.workspace_path),
         None,
         Some(&request.conversation_id),
-        Some(&request.workspace_path),
-    )?;
-    let repository_root = resolve_webui_repository_root_from_workspace_text_with_key(
-        &resolved_workspace_path,
-        request.repository_key.as_deref(),
-    )?;
+        request.repository_key.clone(),
+    )
+    .await?;
     // operation_guard prevents concurrent sessions from mutating the same repository index or refs.
     // operation_guard 防止多个会话并发修改同一个仓库的索引或引用。
     let _operation_guard = crate::begin_webui_git_repository_operation(&repository_root).await?;

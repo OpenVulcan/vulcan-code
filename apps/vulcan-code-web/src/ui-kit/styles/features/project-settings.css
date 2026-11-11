@@ -329,6 +329,43 @@
   gap: calc(var(--vk-u) * 3);
 }
 
+/* Folder associations follow the project card density and keep long paths inside their column. */
+/* 目录关联沿用项目卡片的间距，并将长路径限制在当前列内。 */
+.project-attached-folders-actions,
+.project-attached-folder-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(var(--vk-u) * 2);
+}
+
+.project-attached-folders-list {
+  display: grid;
+  gap: var(--vk-u);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-wrap: anywhere;
+}
+
+.project-attached-folder-heading strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.project-attached-folder-status,
+.project-attached-folder li {
+  color: var(--vk-ink-2);
+  font-size: var(--vk-fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.project-attached-folder li > svg {
+  display: inline-block;
+  margin-inline-end: var(--vk-u);
+  vertical-align: middle;
+}
+
 .project-settings-heading,
 .project-settings-summary {
   min-width: 0;

@@ -538,6 +538,27 @@ fn changed_files_are_mentioned_by_project_path() {
     assert_eq!(app.focus, Focus::Composer);
 }
 
+/// Preserves the leading slash of an attached repository when copying or mentioning its file.
+/// 复制或引用附属仓库文件时保留绝对路径的前导斜杠。
+#[test]
+fn attached_git_files_are_mentioned_by_absolute_path() {
+    let (mut app, _) = isolated_app();
+    let file = GitFile {
+        path: "src/a.rs".into(),
+        status: GitFileStatus::Modified,
+        staged: false,
+        additions: 1,
+        deletions: 0,
+    };
+    let mut attached = repository("attached-test", false, true);
+    attached.relative_path = "/repos/attached/".into();
+    app.apply(git(vec![attached], Some("attached-test")));
+    assert_eq!(
+        app.git.project_relative_path(&file).as_deref(),
+        Some("/repos/attached/src/a.rs")
+    );
+}
+
 /// Pull needs a repository, then sends one pull request; its notice reports whether the branch moved.
 /// 拉取需要仓库，随后发送一次拉取请求；其提示说明分支是否移动。
 #[test]

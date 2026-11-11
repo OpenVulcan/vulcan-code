@@ -68,11 +68,14 @@
 
 ## 四、Markdown
 
+项目首页可登记本机附属文件夹。会话内打开文件时，绝对路径按目录边界归属主目录或已登记的附属目录，重叠时优先最具体的根目录。
+命中附属目录的文件进入右侧文件面板并按原有规则定位行号。相对路径从会话项目主目录解析，目录外文件继续使用会话的工作区外文件策略。
+
 - 网页快捷链接使用普通 Markdown：`[打开网页](https://host/path)`、`[打开本地网页](file:///C:/path/page.html)`；路径空格应百分号编码。`file://` 只放行超链接，不放宽脚本、嵌入内容或图片 URL 策略。
 - 正文中的裸网址与文件引用由 [`conversation-link-literals.ts`](../../apps/vulcan-code-web/src/components/conversation/conversation-link-literals.ts) 在 remark-gfm 之后统一识别（GFM 由裸网址生成的链接先还原为文本，因为它会吞入中文与全角标点；手写链接、`<url>`、电子邮件、代码段与围栏代码不处理）。规则：
   - 网址以 `http://`、`https://` 或 `www.` 开头，前一字符不是 ASCII 字母或数字；只含 RFC 3986 URL 字符，遇空白、中日韩文字、全角标点或 `<>"{}|\^` 与反引号即结束；末尾 `.,;:!?'*` 与不配对的 `)`、`]` 修剪。主机须为 localhost、IP、带端口名称或以至少两字母顶级域结尾的点分名称，因此流式输出中的半截地址保持为文本。含中文路径的网址在首个中文字符前截断，需完整链接时用 Markdown 链接或 `<...>`。`www.` 补全为 `https://`。
   - 文件引用为 `file://` URL 或绝对路径（盘符路径，或至少含一层文件夹的 `/` 根路径），必须以字母开头的扩展名结尾，可带 `:行` 或 `:起-止`；名称可含中文，不跨空白、全角标点与 `#`。相对路径不自动链接（行内代码路径仍按原规则可点击）。绝对路径转为 `file:///` 链接后与手写文件链接同样路由，存在性在点击时检查。
-- 只读文件查看（阅读，不提供编辑）：项目内的 PDF、Word（`.docx`/`.doc`）、电子表格（`.xlsx`/`.xlsm`/`.xlsb`/`.xls`/`.ods`）与 PowerPoint（`.ppt`/`.pptx`）归为服务的 `document` 文件类别，在文件面板中由对应查看器显示，不受图片/视频显示授权门控。会话中指向这些文档或图片、视频的文件引用（项目内外均可，相对路径按项目定位为绝对路径）由 `workspace-file-open-request.ts` 的 `routeWorkspaceFileOpen` 判定：项目内的查看器文件在文件窗口中打开（见下条），其他项目文件进入文件面板，项目外（或没有项目时）的所有文件先经“工作区外文件访问”检查（见下下条）。
+- 只读文件查看（阅读，不提供编辑）：PDF、Word（`.docx`/`.doc`）、电子表格（`.xlsx`/`.xlsm`/`.xlsb`/`.xls`/`.ods`）与 PowerPoint（`.ppt`/`.pptx`）归为服务的 `document` 文件类别，在文件面板中由对应查看器显示，不受图片/视频显示授权门控。会话文件引用由 `workspace-file-open-request.ts` 的 `routeWorkspaceFileOpen` 判定：归属主目录的查看器文件在文件窗口中打开，其他主目录文件与附属目录文件进入文件面板，已登记根目录之外（或没有项目时）的文件先经“工作区外文件访问”检查。
 - 工作区外文件访问：系统设置 `outsideWorkspaceFileAccess`（`deny` 禁止 / `prompt` 提示 / `allow` 允许，缺省为提示，只在内存中补默认值，只有用户在设置页选择时写入配置）是总默认；会话可在会话设置中另选，自有选择存于会话目录旁置文件 `outside-file-access.json`（`{ version: 1, access }`，未知字段、取值或其他版本即报错），文件缺失表示跟随系统。生效值为会话选择，否则系统默认，由 `service_session_outside_file_access` 返回。项目外文件经文件操作宿主的 `outside` 操作：禁止时只提示不打开；查看器文件与服务按名称归为 `code` 的文件（`workspace.files.kind`，不读文件）允许时直接在文件窗口中打开，提示时询问“打开 / 在文件夹中显示 / 用默认程序打开（仍经可运行文件校验）/ 取消”，勾选“本会话不再提示”即把会话选择保存为 `allow`；其他文件及没有会话的请求转入下述“不能在侧边栏显示的文件”。项目外文本在窗口或查看页签中只读显示，经 `workspace.files.readOutside`（绝对路径，与文件面板相同的 1 MiB 有界预览）读取。已打开的文件在窗口与查看页签之间移动（`window` / `dock`）不再检查。该提示只防误开，不是安全边界。
 - 文件窗口：每个文件一个可移动、可缩放、可最大化的浮动窗口，复用 `ProjectFloatingLayer`；同一文件再次打开时还原并置前已有窗口，新窗口按槽位层叠错开。所选会话在输入区上方显示文件任务栏（仅有窗口时出现），每个条目是其窗口的最小化目标（精灵动画），最小化后条目变暗保留，点击还原并置前，条目上的关闭按钮关闭窗口。切换会话时只显示该会话的窗口与任务栏。标题栏提供全屏阅读（浏览器 Fullscreen API，Esc 退出）、挂到右侧、最大化、最小化与关闭；挂到右侧关闭窗口并在右侧唯一的“查看”页签显示该文件（以文件名命名，每次替换为新文件），页签路径行的“在窗口中打开”再关闭页签并回到窗口。各会话的窗口列表与最小化状态是本浏览器的界面布局，只存于 `localStorage` 的 `vulcan.file-windows`（窗口几何按槽位存于浮动层自身的键），不进入会话数据，格式错误的记录直接丢弃。实现见 [`file-windows/`](../../apps/vulcan-code-web/src/components/file-windows/)，窗口层、任务栏与存储均延迟加载。查看器扩展名表唯一实现为 [`file-viewer-kind.ts`](../../apps/vulcan-code-web/src/components/file-viewers/file-viewer-kind.ts)，须与服务端 `path_metadata.rs` 的 `document` 类别保持一致。
   - PDF 与 Word 经本地媒体路由 `/asset` 获取，分别由延迟加载的 pdf.js（`pdfjs-dist`，字体、CMap、wasm 与 ICC 数据由 Vite 插件复制到 `pdfjs/`）与 `docx-preview`（不渲染 altChunk）显示；文档内网页链接以新窗口打开。

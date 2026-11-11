@@ -10,6 +10,9 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_open_project_directory_path",
     "service_open_project_directory",
     "service_browse_project_directories",
+    "project.attachedFolders.list",
+    "project.attachedFolders.set",
+    "project.attachedFolders.git",
     "service_add_project_from_path",
     "service_prepare_self_fix_workspace",
     "service_toggle_project_pinned",
@@ -73,6 +76,30 @@ pub(super) async fn dispatch(
         )),
         "service_browse_project_directories" => rpc_json_result(
             service_browse_project_directories(state, rpc_optional_param(params, "path")?),
+        ),
+        "project.attachedFolders.list" => rpc_json_result(
+            crate::project_attached_folders::service_list_project_attached_folders(
+                state,
+                rpc_required_param(params, "projectId")?,
+            )
+            .await,
+        ),
+        "project.attachedFolders.set" => rpc_json_result(
+            crate::project_attached_folders::service_set_project_attached_folder(
+                state,
+                rpc_required_param(params, "projectId")?,
+                rpc_required_param(params, "path")?,
+                rpc_required_param(params, "attached")?,
+            )
+            .await,
+        ),
+        "project.attachedFolders.git" => rpc_json_result(
+            crate::project_attached_folders::service_detect_project_attached_folder_git(
+                state,
+                rpc_required_param(params, "projectId")?,
+                rpc_required_param(params, "path")?,
+            )
+            .await,
         ),
         "service_add_project_from_path" => rpc_json_result(broadcast_after_success(
             &app,

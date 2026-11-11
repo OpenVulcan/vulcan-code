@@ -8,6 +8,8 @@ import { WorkspaceTitleMenu } from "./workspace-title-menu";
 import { WorkspaceContextPanel, type WorkspaceContextPanelProps } from "./workspace-context-panel";
 import { WorkspaceResizableBody } from "./workspace-resizable-body";
 import { WorkspaceFilesPanelHost } from "./workspace-files-panel-host";
+import { WorkspaceFileRootsContext } from "./workspace-file-roots";
+import { requestWorkspaceFileOpen } from "./workspace-file-open-request";
 import { DEFAULT_WORKSPACE_FILE_FILTERS } from "@/service/workbench-snapshot-service";
 import { toast } from "@/ui-kit/primitives/toast";
 import { ConversationSessionTodolistPanel } from "@/components/conversation/session-todolist-panel";
@@ -237,4 +239,44 @@ it("does not report copied file content when the host clipboard rejects", async 
   expect(onCopyText).toHaveBeenCalledExactlyOnceWith("hello");
   expect(toast.success).not.toHaveBeenCalled();
   expect(toast.error).toHaveBeenCalledWith("Clipboard denied");
+});
+
+// Exercise the real file panel when a conversation opens a file in a different registered root.
+// 使用真实文件面板验证会话打开另一已登记根目录内的文件。
+it("scopes file listing and preview to the active attached root, then restores the primary root after removal", async () => {
+  // Two roots intentionally contain the same filename.
+  // 两个根目录故意放置同名文件。
+  const main = "X:/main-repository";
+  const attached = "X:/attached-repository";
+  const workbench = browserFallbackSnapshot();
+  workbench.projects = [{ id: "attached-project", name: "Project", path: main }];
+  workbench.conversations = [{ id: "attached-session", title: "Session", status: "idle", projectId: "attached-project" }];
+  // Construct a file entry for the root requested by the actual panel.
+  // 为真实面板请求的根目录构造文件条目。
+  const entryFor = (root: string) => ({ name: "same.ts", path: `${root}/same.ts`, relativePath: "same.ts", kind: "code" as const, isDirectory: false, hidden: false, hasChildren: false });
+  const directory = vi.fn(async (root: string) => ({ workspacePath: root, path: root, relativePath: "", entries: [entryFor(root)], filters: DEFAULT_WORKSPACE_FILE_FILTERS, truncated: false, entryCount: 1 }));
+  const preview = vi.fn(async (root: string) => ({ ...entryFor(root), workspacePath: root, sizeBytes: 32, content: "attached file preview", truncated: false }));
+  // Render the production panel with the shell's project-scoped root selection.
+  // 使用工作区外壳限定在项目内的根目录选择渲染生产面板。
+  const panel = (paths: string[], selected: string | null) => (
+    <WorkspaceFileRootsContext.Provider value={{
+      projectId: "attached-project",
+      attachedPaths: paths,
+      selectedPaths: selected ? new Map([["attached-test-tab", selected]]) : new Map(),
+      select: vi.fn(),
+    }}>
+      <WorkspaceFilesPanelHost instanceId="attached-test-tab" selectedDraftConversation={null} selectedConversationId="attached-session"
+        workbench={workbench} loadWorkspaceFileDirectory={directory} loadWorkspaceFilePreview={preview}
+        resolveMediaSourceUrl={(path) => path} onCopyText={vi.fn()} onTitleChange={vi.fn()} />
+    </WorkspaceFileRootsContext.Provider>
+  );
+  await render(panel([attached], null));
+  await act(async () => requestWorkspaceFileOpen("attached-test-tab", `${attached}/same.ts`, null, attached));
+  expect(preview).not.toHaveBeenCalled();
+  await render(panel([attached], attached));
+  expect(preview).toHaveBeenCalledWith(attached, "attached-project", "attached-session", `${attached}/same.ts`, expect.any(Object));
+  expect(host.querySelector('[data-slot="select-trigger"]')?.getAttribute("title")).toBe(attached);
+  await render(panel([], attached));
+  expect(host.querySelector('[data-slot="select-trigger"]')).toBeNull();
+  expect(directory.mock.calls.at(-1)?.[0]).toBe(main);
 });

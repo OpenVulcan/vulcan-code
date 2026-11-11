@@ -3,6 +3,7 @@ import { toast } from "@/ui-kit/primitives/toast";
 import type { ConversationSessionCommitBusyState } from "@/components/conversation/session-todolist-panel";
 import type { ConversationSessionGitBranchActions } from "@/components/conversation/session-todolist-panel/git-branch-controls";
 import { createWorkspaceGitRefreshOwnership } from "@/components/workspace/workspace-shell/git-refresh-ownership";
+import { subscribeProjectAttachedFolderChanges } from "@/components/project/project-attached-folders-state";
 import {
   buildWorkspaceProjectGitSummary,
   mergeWorkspaceDiffSnapshotIntoProjectGitState,
@@ -526,6 +527,18 @@ export function useWorkspaceGitState(options: WorkspaceGitStateOptions): Workspa
     selectedChatProject?.id,
     selectedChatProject?.path,
   ]);
+
+  React.useEffect(() => subscribeProjectAttachedFolderChanges((projectId) => {
+    // Refresh the visible project immediately and invalidate cached data for an inactive project.
+    // 立即刷新可见项目，并使非活动项目的缓存失效。
+    if (projectId === selectedChatProject?.id) {
+      void refreshSessionReviewSummary().catch((error: unknown) => toast.error(error instanceof Error ? error.message : String(error)));
+      return;
+    }
+    setWorkspaceGitStateByProject((current) => Object.fromEntries(
+      Object.entries(current).filter(([, summary]) => summary.projectId !== projectId),
+    ));
+  }), [refreshSessionReviewSummary, selectedChatProject?.id]);
 
   // refreshSelectedGitRepositorySummary refreshes only the repository captured by the commit dialog.
   // refreshSelectedGitRepositorySummary 只刷新提交弹窗捕获的目标仓库。

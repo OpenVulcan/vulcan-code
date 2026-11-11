@@ -548,8 +548,8 @@ pub(crate) fn default_webui_workspace_diff_request() -> WebuiWorkspaceDiffReques
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WebuiGitRepositorySummary {
-    /// Stable project-relative repository key.
-    /// 稳定的项目相对仓库键。
+    /// Stable project-scoped repository key, including explicitly attached roots.
+    /// 稳定的项目范围仓库键，涵盖显式登记的附属根目录。
     pub(crate) repository_key: String,
     /// Canonical repository root used by backend Git commands.
     /// 后端 Git 命令使用的规范化仓库根目录。
@@ -557,8 +557,8 @@ pub(crate) struct WebuiGitRepositorySummary {
     /// Repository directory name shown in compact selectors.
     /// 紧凑选择器中显示的仓库目录名称。
     pub(crate) name: String,
-    /// Stable project-relative path shown as secondary context.
-    /// 展示为次级上下文的稳定项目相对路径。
+    /// Display location: relative to the project for its own repositories, absolute for attached ones.
+    /// 显示位置：项目自身的仓库为项目相对路径，附属仓库为绝对路径。
     pub(crate) relative_path: String,
     /// Whether this repository is the deterministic primary repository.
     /// 该仓库是否为确定性的主要仓库。

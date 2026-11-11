@@ -22,6 +22,7 @@ mod announcement_states;
 mod environment_variables;
 mod git_preferences;
 mod persistence;
+mod project_attached_folders;
 mod project_groups;
 mod provider_api_trace;
 mod provider_usage;
@@ -65,6 +66,7 @@ pub use persistence::{
     persist_project_pinned_and_order_update, persist_project_session_sort_mode, rename_project,
     restore_archived_project_row_v1,
 };
+pub use project_attached_folders::{load_project_attached_folders, set_project_attached_folder};
 pub use project_groups::{
     DEFAULT_PROJECT_GROUP_ID, PROJECT_GROUP_NAME_MAX_CHARS, PROJECT_GROUPS_FORMAT_VERSION,
     ProjectGroup, ProjectGroupSlot, ProjectTree, ProjectTreePin, ProjectTreePinKind,

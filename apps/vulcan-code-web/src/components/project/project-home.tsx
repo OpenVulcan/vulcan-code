@@ -1,5 +1,5 @@
 import React from "react";
-import { FolderCog, MessagesSquare } from "lucide-react";
+import { FolderCog, FolderTree, MessagesSquare } from "lucide-react";
 import { Button } from "@/ui-kit/primitives/button";
 import { useI18n } from "@/i18n";
 import type { ProjectSummary, VmmConfigDraftSummary, WorkbenchSnapshot } from "@/types";
@@ -9,6 +9,7 @@ import {
   ProjectVmmSection,
 } from "./project-settings-sections";
 import { ProjectOverviewSection } from "./project-overview-section";
+import { ProjectAttachedFoldersSection } from "./project-attached-folders-section";
 import { ProjectKnowledgeBasesSection } from "./project-knowledge-bases-section";
 import { ProjectCollaborationGrantsSection } from "./project-collaboration-grants-section";
 import { ProjectPermissionJudgeSection } from "./project-permission-judge-section";
@@ -33,7 +34,7 @@ import "@/ui-kit/styles/features/project-settings.css";
 
 // projectHomeCardId names the anchor of one home card so overview links and the jump bar can scroll to it.
 // projectHomeCardId 命名单张首页卡片的锚点，供概览链接与跳转条滚动定位。
-export function projectHomeCardId(projectId: string, section: ProjectSettingsSectionId | "sessions"): string {
+export function projectHomeCardId(projectId: string, section: ProjectSettingsSectionId | "sessions" | "attached-folders"): string {
   return `project-home-${projectId}-${section}`;
 }
 
@@ -121,13 +122,13 @@ export function ProjectHome(props: {
 
   // scrollToCard brings one card into view; overview links and the jump bar share it.
   // scrollToCard 将单张卡片滚动到可见区域；概览链接与跳转条共用。
-  const scrollToCard = (section: ProjectSettingsSectionId | "sessions") => {
+  const scrollToCard = (section: ProjectSettingsSectionId | "sessions" | "attached-folders") => {
     document.getElementById(projectHomeCardId(project.id, section))?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   // card renders one anchored home card around an existing settings section.
   // card 将既有设置分区包裹为一张带锚点的首页卡片。
-  const card = (section: ProjectSettingsSectionId | "sessions", content: React.ReactNode) => (
+  const card = (section: ProjectSettingsSectionId | "sessions" | "attached-folders", content: React.ReactNode) => (
     <section className="project-home-card" id={projectHomeCardId(project.id, section)} key={section}>{content}</section>
   );
 
@@ -156,6 +157,7 @@ export function ProjectHome(props: {
 
       <nav aria-label={t("projectSettings.categoryAria")} className="project-home-jump">
         <button type="button" onClick={() => scrollToCard("sessions")}><MessagesSquare size={14} />{t("projectHome.sessionsTitle")}</button>
+        <button type="button" onClick={() => scrollToCard("attached-folders")}><FolderTree size={14} />{t("projectAttachedFolders.title")}</button>
         {sections.map((section) => (
           <button key={section.id} type="button" onClick={() => scrollToCard(section.id)}>{section.icon}{section.label}</button>
         ))}
@@ -171,6 +173,8 @@ export function ProjectHome(props: {
               onSelectConversation={props.onSelectConversation}
             />
           ))}
+
+          {card("attached-folders", <ProjectAttachedFoldersSection key={project.id} project={project} />)}
 
           {card("agent-skills", (
             <ProjectAgentSkillsSection

@@ -121,7 +121,9 @@ export function useWorkspaceFilesRefresh(options: WorkspaceFilesRefreshOptions):
         if (projectId && event.projectId === projectId) schedule();
       }),
       serviceClient.subscribe<WorkspaceGitChangedEvent>("workspace.git.changed", (event) => {
-        if (comparableWorkspacePath(event.workspacePath) === workspaceKey) schedule();
+        // Git watchers publish changes for attached repositories under the owning project.
+        // Git 监听以所属项目为单位发布附属仓库的变化。
+        if ((projectId && event.projectId === projectId) || comparableWorkspacePath(event.workspacePath) === workspaceKey) schedule();
       }),
     ];
     const unsubscribes: Array<() => void> = [];

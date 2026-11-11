@@ -20,6 +20,8 @@ import {
   workspaceFilePreviewErrorMessage,
 } from "@/components/workspace/workspace-files-preview";
 import { useWorkspaceFileOpenRequests } from "@/components/workspace/workspace-file-open-request";
+import { WorkspaceFileRootsContext } from "@/components/workspace/workspace-file-roots";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select";
 import { useWorkspaceFileWrapLines } from "@/components/workspace/workspace-file-wrap-lines";
 import { useWorkspaceFilesRequestOwnership } from "@/components/workspace/workspace-files-panel-request-ownership";
 import { useWorkspaceFilesRefresh, WorkspaceFilesRefreshButton } from "@/components/workspace/workspace-files-panel-refresh";
@@ -87,7 +89,7 @@ interface WorkspaceFilesPanelCacheEntry {
 // 参数：props 提供路由身份、强类型文件输入输出及剪贴板回调。返回文件树与预览界面。
 // Parameters: props supplies workspace identity, file services and context-panel callbacks; returns authoritative tree and preview state with explicit read recovery.
 // 参数：props 提供工作区身份、文件服务及上下文面板回调；返回带明确读取恢复的权威目录树与预览状态。
-export function WorkspaceFilesPanelHost(props: {
+interface WorkspaceFilesPanelHostProps {
   // Unique dynamic context tab instance id.
   // 唯一动态上下文页签实例标识。
   instanceId: string;
@@ -127,6 +129,65 @@ export function WorkspaceFilesPanelHost(props: {
   // Updates the parent dynamic tab title.
   // 更新父级动态页签标题。
   onTitleChange: (title: string) => void;
+}
+
+// Resolves the file tab's owning project and renders a tree for its selected registered root.
+// 解析文件页签所属的项目，并渲染所选已登记根目录的文件树。
+export function WorkspaceFilesPanelHost(props: WorkspaceFilesPanelHostProps) {
+  const { t } = useI18n();
+  // Roots belong to the active conversation's project, even while a prior tab is being unmounted.
+  // 即使上一页签正在卸载，根目录也归活动会话的项目所有。
+  const roots = React.useContext(WorkspaceFileRootsContext);
+  // Resolve the project and primary root from the same workbench route as the current file tab.
+  // 从当前文件页签所用的同一工作台路由解析项目及主目录。
+  const workspaceProjectId = selectedConversationProjectId(props.workbench, props.selectedConversationId, props.selectedDraftConversation);
+  const primaryPath = selectedConversationWorkspacePath(props.workbench, props.selectedConversationId, props.selectedDraftConversation);
+  // Only expose paths belonging to this tab's project.
+  // 只提供当前页签所属项目的路径。
+  const scopedRoots = roots?.projectId === workspaceProjectId ? roots : null;
+  // Ignore a remembered selection once the folder association is removed.
+  // 目录关联被移除后忽略保留的选择。
+  const selectedPath = scopedRoots?.selectedPaths.get(props.instanceId);
+  const workspacePath = selectedPath && scopedRoots?.attachedPaths.includes(selectedPath) ? selectedPath : primaryPath;
+  // Preserve the existing single-root layout when the project has no attached folders.
+  // 项目没有附属文件夹时沿用现有的单根目录布局。
+  const rootPicker = scopedRoots?.attachedPaths.length && primaryPath && workspacePath ? (
+    <div className="workspace-files-root-picker">
+      <Select value={workspacePath} onValueChange={(path) => scopedRoots.select(props.instanceId, path === primaryPath ? null : path)}>
+        <SelectTrigger aria-label={t("projectAttachedFolders.selectRoot")} title={workspacePath}>
+          <Folder size={14} />
+          <SelectValue>{workspacePath === primaryPath ? t("projectAttachedFolders.primaryRoot") : workspaceFileNameFromPath(workspacePath, workspacePath)}</SelectValue>
+        </SelectTrigger>
+        <SelectContent className="workspace-files-root-options">
+          <SelectItem title={primaryPath} value={primaryPath}>
+            <span className="workspace-files-root-option">{t("projectAttachedFolders.primaryRoot")}<small>{primaryPath}</small></span>
+          </SelectItem>
+          {scopedRoots.attachedPaths.map((path) => (
+            <SelectItem key={path} title={path} value={path}>
+              <span className="workspace-files-root-option">{workspaceFileNameFromPath(path, path)}<small>{path}</small></span>
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  ) : null;
+  return (
+    <div className="workspace-files-root-layout">
+      {rootPicker}
+      <WorkspaceFilesPanelForRoot {...props} key={workspacePath} workspacePath={workspacePath} workspaceProjectId={workspaceProjectId} />
+    </div>
+  );
+}
+
+// Manages the lazy tree and preview for the supplied root, with its existing route-owned cache.
+// 管理指定根目录的懒加载文件树与预览，并复用原有的路由归属缓存。
+function WorkspaceFilesPanelForRoot(props: WorkspaceFilesPanelHostProps & {
+  // Registered root whose files can be browsed in this panel.
+  // 可在此面板中浏览文件的已登记根目录。
+  workspacePath: string | null;
+  // Project owning the current conversation or draft.
+  // 当前会话或草稿所属的项目。
+  workspaceProjectId: string | null;
 }) {
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
@@ -134,18 +195,9 @@ export function WorkspaceFilesPanelHost(props: {
   // activeSurfaceId stores the conversation or subagent surface represented by this panel.
   // activeSurfaceId 保存当前面板代表的会话或子代理界面标识。
   const activeSurfaceId = activeWorkbenchSurfaceId(props.workbench, props.selectedConversationId);
-  // workspaceProjectId stores the backend project id used for file RPC symmetry.
-  // workspaceProjectId 保存用于文件 RPC 协议对称的后端项目标识。
-  const workspaceProjectId = React.useMemo(
-    () => selectedConversationProjectId(props.workbench, props.selectedConversationId, props.selectedDraftConversation),
-    [props.selectedConversationId, props.selectedDraftConversation, props.workbench],
-  );
-  // workspacePath stores the selected conversation owner project path.
-  // workspacePath 保存当前选中会话所属项目路径。
-  const workspacePath = React.useMemo(
-    () => selectedConversationWorkspacePath(props.workbench, props.selectedConversationId, props.selectedDraftConversation),
-    [props.selectedConversationId, props.selectedDraftConversation, props.workbench],
-  );
+  // File RPCs, caches and filters use the exact active root.
+  // 文件调用、缓存与筛选使用当前选中的确切根目录。
+  const { workspacePath, workspaceProjectId } = props;
   // cacheKey stores the cache bucket for this visible conversation surface.
   // cacheKey 保存当前可见会话界面的缓存桶。
   const cacheKey = React.useMemo(
@@ -174,6 +226,9 @@ export function WorkspaceFilesPanelHost(props: {
     const cachedEntry = workspaceFilesPanelCache.get(cacheKey) ?? null;
     return cachedEntry?.listingFiltersKey === listingFiltersKey ? cachedEntry : null;
   }, [cacheKey, listingFiltersKey]);
+  React.useEffect(() => {
+    props.onTitleChange(initialCache?.selectedEntry?.name ?? t("workspaceFilePreview.openFile"));
+  }, [initialCache, props.onTitleChange, t]);
   // filterText stores the local file tree filter query.
   // filterText 保存本地文件树过滤查询。
   const [filterText, setFilterText] = React.useState(() => initialCache?.filterText ?? "");

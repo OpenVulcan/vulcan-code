@@ -975,12 +975,16 @@ pub(crate) fn load_webui_current_branch_unpushed_commit_count(
 /// 解析用于唯一界定当前分支未推送提交的 Git 修订参数。
 /// Parameters: repository_root is the Git repository root whose current branch and upstream are inspected.
 /// 参数：repository_root 是需要检查当前分支与上游配置的 Git 仓库根目录。
-/// Returns: an upstream-relative or all-remotes-relative revision range, or None for detached HEAD.
-/// 返回：相对上游或全部远端的修订范围；分离 HEAD 状态下返回 None。
+/// Returns the range relative to the upstream or all remotes, or None for a detached or unborn HEAD.
+/// 返回相对于上游或全部远端的修订范围；HEAD 分离或尚无提交时返回 None。
 fn webui_unpushed_commit_revision_args(
     repository_root: &Path,
 ) -> Result<Option<Vec<&'static str>>, String> {
-    if load_webui_current_git_branch(repository_root)?.is_none() {
+    // A newly initialized branch has a symbolic name but no commit to pass to rev-list.
+    // 刚初始化的分支已有符号名称，但尚无提交可以传给 rev-list。
+    if load_webui_current_git_branch(repository_root)?.is_none()
+        || !webui_git_ref_exists(repository_root, "HEAD")?
+    {
         return Ok(None);
     }
     if webui_current_branch_has_upstream(repository_root) {

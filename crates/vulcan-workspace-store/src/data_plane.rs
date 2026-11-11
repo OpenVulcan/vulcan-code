@@ -472,6 +472,13 @@ CREATE TABLE IF NOT EXISTS project_session_preferences (
     session_sort_mode TEXT NOT NULL CHECK(session_sort_mode IN ('last_request', 'manual'))
 );
 
+CREATE TABLE IF NOT EXISTS project_attached_folders (
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    path_key TEXT NOT NULL,
+    path TEXT NOT NULL,
+    PRIMARY KEY (project_id, path_key)
+);
+
 CREATE TABLE IF NOT EXISTS workspace_session_index (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL,
@@ -865,6 +872,7 @@ mod tests {
             ("table", "knowledge_libraries"),
             ("table", "knowledge_library_project_bindings"),
             ("table", "knowledge_operations"),
+            ("table", "project_attached_folders"),
             ("table", "project_git_review_preferences"),
             ("table", "project_session_preferences"),
             ("table", "projects"),

@@ -66,7 +66,29 @@ pub(crate) const APP_SCHEMA_MIGRATIONS: &[AppSchemaMigration] = &[
         description: "accept TokenRhythm account credentials",
         apply: migrate_v4_to_v5,
     },
+    AppSchemaMigration {
+        from_version: 5,
+        description: "add project attached folders",
+        apply: migrate_v5_to_v6,
+    },
 ];
+
+/// Creates the empty project folder association table in the migration transaction.
+/// 在升级事务中创建空的项目目录关联表。
+/// `transaction` applies the DDL and returns the SQLite result.
+/// `transaction` 执行建表语句并返回 SQLite 结果。
+fn migrate_v5_to_v6(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        r#"
+CREATE TABLE project_attached_folders (
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    path_key TEXT NOT NULL,
+    path TEXT NOT NULL,
+    PRIMARY KEY (project_id, path_key)
+);
+"#,
+    )
+}
 
 /// Current application schema version, derived from the baseline and the length of the upgrade chain.
 /// 当前应用结构版本，由基线与升级链长度派生。
@@ -490,8 +512,8 @@ mod tests {
         }
     }
 
-    /// Turns a current database back into version 1 by removing what versions 2 to 4 added.
-    /// 移除版本 2 至版本 4 新增的对象，把当前数据库还原为版本 1。
+    /// Turns a current database back into version 1 by removing objects introduced after the baseline.
+    /// 移除基线后引入的对象，把当前数据库还原为版本 1。
     fn downgrade_to_v1(connection: &Connection) {
         connection
             .execute_batch(
@@ -499,6 +521,7 @@ mod tests {
                  DROP TABLE project_session_preferences;
                  DROP TABLE session_activity_marks_v1;
                  DROP TABLE announcement_states_v1;
+                 DROP TABLE project_attached_folders;
                  UPDATE app_metadata SET value = '1' WHERE key = 'schema_version';
                  PRAGMA user_version = 1;",
             )

@@ -13,6 +13,9 @@ use vulcan_workspace_store::workspace_store::{
     load_git_repository_monitoring_preferences, persist_git_repository_monitoring_preference,
 };
 
+mod attached_folders;
+use attached_folders::{discover_project_git_catalog, resolve_git_request_scope};
+
 /// Process-wide weak registry for serializing writes against one canonical Git repository.
 /// 进程级弱引用注册表，用于串行化同一个规范 Git 仓库上的写操作。
 static WEBUI_GIT_REPOSITORY_OPERATION_LOCKS: std::sync::LazyLock<
@@ -82,8 +85,19 @@ pub(crate) async fn service_workspace_git_catalog(
         conversation_id.as_deref(),
         workspace_path.as_deref(),
     )?;
+    // Load saved roots before entering the blocking Git discovery lane.
+    // 进入阻塞式 Git 发现通道前先加载已登记的根目录。
+    let attached_paths = if let Some(project_id) = preference_project_id.as_deref() {
+        vulcan_workspace_store::workspace_store::load_project_attached_folders(
+            crate::controller_runtime_from_state(&state)?,
+            project_id,
+        )
+        .await?
+    } else {
+        Vec::new()
+    };
     let mut catalog = spawn_service_blocking_task(move || {
-        discover_webui_git_repository_catalog(std::path::Path::new(&resolved_workspace_path))
+        discover_project_git_catalog(&resolved_workspace_path, &attached_paths)
     })
     .await
     .map_err(|error| format!("workspace Git catalog task failed: {error}"))??;
@@ -155,14 +169,13 @@ pub(crate) async fn service_set_workspace_git_monitoring(
         conversation_id.as_deref(),
         workspace_path.as_deref(),
     )?;
-    let catalog = spawn_service_blocking_task({
-        let resolved_workspace_path = resolved_workspace_path.clone();
-        move || {
-            discover_webui_git_repository_catalog(std::path::Path::new(&resolved_workspace_path))
-        }
-    })
-    .await
-    .map_err(|error| format!("workspace Git catalog task failed: {error}"))??;
+    let catalog = service_workspace_git_catalog(
+        state.clone(),
+        Some(resolved_workspace_path.clone()),
+        Some(project_id.clone()),
+        conversation_id.clone(),
+    )
+    .await?;
     if !catalog
         .repositories
         .iter()
@@ -173,10 +186,14 @@ pub(crate) async fn service_set_workspace_git_monitoring(
             request.repository_key
         ));
     }
-    let repository_root = crate::git::resolve_webui_repository_root_from_workspace_text_with_key(
-        &resolved_workspace_path,
-        Some(request.repository_key.as_str()),
-    )?;
+    let repository_root = resolve_webui_git_request_repository_root(
+        &state,
+        Some(&resolved_workspace_path),
+        Some(&project_id),
+        conversation_id.as_deref(),
+        Some(request.repository_key.clone()),
+    )
+    .await?;
     // Preference writes share the repository mutation lane so a toggle cannot race an index or ref write.
     // 偏好写入与仓库变更共用同一条互斥通道，避免开关切换与索引或引用写入竞态。
     let operation_guard = begin_webui_git_repository_operation(&repository_root).await?;
@@ -210,13 +227,18 @@ pub(crate) async fn ensure_webui_git_repository_monitoring_enabled(
 ) -> Result<(), String> {
     let catalog =
         service_workspace_git_catalog(state, workspace_path, project_id, conversation_id).await?;
-    if catalog.repositories.is_empty() {
-        return Ok(());
-    }
-    let target_key = repository_key
+    let Some(target_key) = repository_key
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| catalog.repositories[0].repository_key.as_str());
+        .or_else(|| {
+            catalog
+                .repositories
+                .first()
+                .map(|repository| repository.repository_key.as_str())
+        })
+    else {
+        return Ok(());
+    };
     let repository = catalog
         .repositories
         .iter()
@@ -252,14 +274,16 @@ pub(crate) async fn service_workspace_diff_snapshot(
     workspace_path: Option<String>,
     project_id: Option<String>,
     conversation_id: Option<String>,
-    request: Option<WebuiWorkspaceDiffRequest>,
+    mut request: Option<WebuiWorkspaceDiffRequest>,
 ) -> Result<WebuiWorkspaceDiffSnapshot, String> {
-    let resolved_workspace_path = webui_diff_workspace_path_from_state(
+    let resolved_workspace_path = resolve_git_request_scope(
         &state,
+        workspace_path.as_deref(),
         project_id.as_deref(),
         conversation_id.as_deref(),
-        workspace_path.as_deref(),
-    )?;
+        request.as_mut().map(|request| &mut request.repository_key),
+    )
+    .await?;
     spawn_service_blocking_task(move || {
         load_webui_workspace_diff_snapshot(&resolved_workspace_path, request)
     })
@@ -274,15 +298,17 @@ pub(crate) async fn service_workspace_diff_file_detail(
     workspace_path: Option<String>,
     project_id: Option<String>,
     conversation_id: Option<String>,
-    request: Option<WebuiWorkspaceDiffRequest>,
+    mut request: Option<WebuiWorkspaceDiffRequest>,
     file: WebuiWorkspaceDiffFileDetailRequest,
 ) -> Result<WebuiWorkspaceDiffFileDetail, String> {
-    let resolved_workspace_path = webui_diff_workspace_path_from_state(
+    let resolved_workspace_path = resolve_git_request_scope(
         &state,
+        workspace_path.as_deref(),
         project_id.as_deref(),
         conversation_id.as_deref(),
-        workspace_path.as_deref(),
-    )?;
+        request.as_mut().map(|request| &mut request.repository_key),
+    )
+    .await?;
     spawn_service_blocking_task(move || {
         load_webui_workspace_diff_file_detail(&resolved_workspace_path, request, file)
     })
@@ -297,15 +323,17 @@ pub(crate) async fn service_workspace_diff_search(
     workspace_path: Option<String>,
     project_id: Option<String>,
     conversation_id: Option<String>,
-    request: Option<WebuiWorkspaceDiffRequest>,
+    mut request: Option<WebuiWorkspaceDiffRequest>,
     search: WebuiWorkspaceDiffSearchRequest,
 ) -> Result<WebuiWorkspaceDiffSearchResponse, String> {
-    let resolved_workspace_path = webui_diff_workspace_path_from_state(
+    let resolved_workspace_path = resolve_git_request_scope(
         &state,
+        workspace_path.as_deref(),
         project_id.as_deref(),
         conversation_id.as_deref(),
-        workspace_path.as_deref(),
-    )?;
+        request.as_mut().map(|request| &mut request.repository_key),
+    )
+    .await?;
     spawn_service_blocking_task(move || {
         load_webui_workspace_diff_search(&resolved_workspace_path, request, search)
     })
@@ -320,14 +348,19 @@ pub(crate) async fn service_workspace_git_file_action(
     workspace_path: Option<String>,
     project_id: Option<String>,
     conversation_id: Option<String>,
-    request: WebuiWorkspaceGitFileActionRequest,
+    mut request: WebuiWorkspaceGitFileActionRequest,
 ) -> Result<WebuiWorkspaceGitFileActionResult, String> {
-    let resolved_workspace_path = webui_diff_workspace_path_from_state(
+    // Preserve the project-level key for the monitoring check before translating the request.
+    // 翻译请求前保留项目级仓库键，供监听设置校验使用。
+    let project_repository_key = request.repository_key.clone();
+    let resolved_workspace_path = resolve_git_request_scope(
         &state,
+        workspace_path.as_deref(),
         project_id.as_deref(),
         conversation_id.as_deref(),
-        workspace_path.as_deref(),
-    )?;
+        Some(&mut request.repository_key),
+    )
+    .await?;
     let repository_key = request.repository_key.clone();
     let repository_root = spawn_service_blocking_task({
         let resolved_workspace_path = resolved_workspace_path.clone();
@@ -345,10 +378,10 @@ pub(crate) async fn service_workspace_git_file_action(
     let _operation_guard = begin_webui_git_repository_operation(&repository_root).await?;
     ensure_webui_git_repository_monitoring_enabled(
         state,
-        Some(resolved_workspace_path.clone()),
+        workspace_path,
         project_id,
         conversation_id,
-        request.repository_key.as_deref(),
+        project_repository_key.as_deref(),
     )
     .await?;
     spawn_service_blocking_task(move || {
@@ -437,15 +470,21 @@ pub(crate) async fn service_workspace_git_history(
 
 /// Resolves the repository root addressed by one WebUI Git request.
 /// 解析单个 WebUI Git 请求所指向的仓库根目录。
-async fn resolve_webui_git_request_repository_root(
+pub(crate) async fn resolve_webui_git_request_repository_root(
     state: &SharedServiceBridgeState,
     workspace_path: Option<&str>,
     project_id: Option<&str>,
     conversation_id: Option<&str>,
-    repository_key: Option<String>,
+    mut repository_key: Option<String>,
 ) -> Result<std::path::PathBuf, String> {
-    let resolved_workspace_path =
-        webui_diff_workspace_path_from_state(state, project_id, conversation_id, workspace_path)?;
+    let resolved_workspace_path = resolve_git_request_scope(
+        state,
+        workspace_path,
+        project_id,
+        conversation_id,
+        Some(&mut repository_key),
+    )
+    .await?;
     spawn_service_blocking_task(move || {
         resolve_webui_repository_root_from_workspace_text_with_key(
             &resolved_workspace_path,
@@ -645,6 +684,123 @@ mod tests {
             selected_session: session_id,
             hydrated_session_ids: BTreeSet::new(),
         }
+    }
+
+    /// Exercises the attached folder write, Git catalog, diff, and revocation through service entry points.
+    /// 通过服务入口验证附属目录写入、Git 目录、差异与撤销关联。
+    #[tokio::test]
+    async fn attached_git_diff_uses_the_registered_repository_until_removal() {
+        use vulcan_workspace_store::{
+            data_plane::{HostRuntimeHandle, HostRuntimeMetadata, build_application_schema_script},
+            local_database_runtime::LogicalDatabase,
+            local_sql,
+            workspace_store::persist_new_project,
+        };
+
+        // Build independent host folders and an isolated production-format database.
+        // 构建独立的宿主目录与采用生产结构的隔离数据库。
+        let temp = tempfile::tempdir().expect("test workspace");
+        let main = temp.path().join("main");
+        let attached = temp.path().join("attached");
+        std::fs::create_dir(&main).expect("primary folder");
+        std::fs::create_dir(&attached).expect("attached folder");
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "--quiet"])
+                .current_dir(&attached)
+                .status()
+                .expect("start git init")
+                .success()
+        );
+        std::fs::write(attached.join("initial.txt"), "first local change\n")
+            .expect("create an untracked file before the first commit");
+        let runtime = HostRuntimeHandle::new_for_test(HostRuntimeMetadata {
+            data_root: temp.path().to_path_buf(),
+            sqlite_path: temp.path().join("app.sqlite3"),
+            sqlite_binding_id: "attached-git-app".into(),
+            system_statistics_sqlite_path: temp.path().join("statistics.sqlite3"),
+            system_statistics_sqlite_binding_id: "attached-git-statistics".into(),
+        });
+        local_sql::execute_script(
+            &runtime.local,
+            LogicalDatabase::AppState,
+            build_application_schema_script(),
+            &[],
+        )
+        .expect("initialize production schema");
+        // Retain the project in both the state snapshot and the database as normal service startup does.
+        // 与正常服务启动相同，在状态快照与数据库内同时保留项目。
+        let mut snapshot = git_diff_workspace_snapshot();
+        let project = snapshot
+            .task_projects
+            .iter_mut()
+            .find(|project| project.id == "project-a")
+            .expect("fixture project");
+        project.path = normalized_workspace_path_text_from_path(&main);
+        let project_id = project.id.clone();
+        persist_new_project(runtime.clone(), project)
+            .await
+            .expect("persist project");
+        let state = service_state_with_workspace_snapshot(snapshot);
+        state.lock().expect("service state").controller_runtime = Some(runtime);
+
+        let attached_path = normalized_workspace_path_text_from_path(
+            &std::fs::canonicalize(&attached).expect("canonical attached path"),
+        );
+        crate::project_attached_folders::service_set_project_attached_folder(
+            state.clone(),
+            project_id.clone(),
+            attached_path.clone(),
+            true,
+        )
+        .await
+        .expect("register sibling folder");
+        let catalog =
+            service_workspace_git_catalog(state.clone(), None, Some(project_id.clone()), None)
+                .await
+                .expect("load project repository catalog");
+        let repository = catalog
+            .repositories
+            .iter()
+            .find(|repo| repo.repository_root == attached_path)
+            .expect("discover attached repository");
+        let request = WebuiWorkspaceDiffRequest {
+            repository_key: Some(repository.repository_key.clone()),
+            mode: crate::git::WebuiWorkspaceDiffMode::Unstaged,
+            base_branch: None,
+            compare_branch: None,
+            commit_hash: None,
+        };
+        let diff = service_workspace_diff_snapshot(
+            state.clone(),
+            None,
+            Some(project_id.clone()),
+            None,
+            Some(request.clone()),
+        )
+        .await
+        .expect("load attached repository diff");
+        assert!(diff.git_repository);
+        assert_eq!(diff.repository_root, attached_path);
+        assert_eq!(diff.current_branch_unpushed_commits, 0);
+        assert!(diff.files.iter().any(|file| file.new_path == "initial.txt"));
+        crate::project_attached_folders::service_set_project_attached_folder(
+            state.clone(),
+            project_id.clone(),
+            attached_path,
+            false,
+        )
+        .await
+        .expect("remove folder association");
+        assert!(
+            service_workspace_diff_snapshot(state, None, Some(project_id), None, Some(request))
+                .await
+                .is_err()
+        );
+        assert!(
+            attached.is_dir(),
+            "removing the association must preserve the repository"
+        );
     }
 
     /// Verifies explicit project ids resolve to backend-owned project paths.
