@@ -19,8 +19,8 @@ use vulcan_workspace_store::workspace_store::ProviderApiTraceStore;
 
 use crate::session_goal_lifecycle::registered_session_v1_handle_from_state;
 use crate::{
-    SharedServiceBridgeState, emit_workbench_event, mutate_provider_configuration,
-    refresh_settings_projection_locked, shell_host_from_state,
+    ServiceBridgeState, SharedServiceBridgeState, emit_workbench_event,
+    mutate_provider_configuration, refresh_settings_projection_locked, shell_host_from_state,
 };
 
 /// Provider retry settings save request sent by the WebUI settings page.
@@ -125,19 +125,69 @@ pub(super) async fn service_save_provider_retry_settings(
             configuration.retry = persisted_retry.clone();
             Ok(())
         },
-        |guard, configuration| {
-            if let Some(runtime) = guard.agent_runtime.as_ref() {
-                runtime
-                    .configured_inference_service
-                    .update_retry_configuration(&configuration.retry);
-            }
-            refresh_settings_projection_locked(guard, configuration);
-            guard.workbench.clone()
-        },
+        project_saved_provider_retry_settings,
     )
     .await?;
     emit_workbench_event(&app, &workbench);
     Ok(workbench)
+}
+
+/// Appends a single rule to the current retry policy in one configuration transaction.
+/// 在一次配置事务中将单条规则追加到当前重试策略。
+///
+/// `app` publishes the updated workbench, `state` owns the policy, and `rule` is the submitted rule line.
+/// `app` 发布更新后的工作台，`state` 持有策略，`rule` 是提交的一行规则。
+/// Returns success after persistence, or a validation or persistence error.
+/// 持久化完成后返回成功，校验或持久化失败则返回错误。
+pub(super) async fn service_add_provider_retry_rule(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    rule: String,
+) -> Result<(), String> {
+    // Read and append under the same lock so simultaneous additions cannot erase each other.
+    // 在同一把锁内读取并追加，避免同时添加时相互覆盖。
+    let workbench = mutate_provider_configuration(
+        &state,
+        "Failed to add the provider retry rule",
+        |configuration| append_provider_retry_rule(&mut configuration.retry, &rule),
+        project_saved_provider_retry_settings,
+    )
+    .await?;
+    emit_workbench_event(&app, &workbench);
+    Ok(())
+}
+
+/// Appends one nonblank rule to `retry` and returns an error if `rule` would make the list invalid.
+/// 将一条非空规则追加到 `retry`，若 `rule` 使列表无效则返回错误。
+fn append_provider_retry_rule(
+    retry: &mut PersistedProviderRetryConfiguration,
+    rule: &str,
+) -> Result<(), String> {
+    if rule.trim().is_empty() {
+        return Err(String::from("A provider retry rule cannot be blank."));
+    }
+    // Stage the deduplicated list before replacing the current rules.
+    // 先构造去重后的列表，通过校验后才替换当前规则。
+    let mut rules = retry.retry_keywords.clone();
+    rules.push(rule.to_owned());
+    validate_retry_keywords(&rules)?;
+    retry.retry_keywords = normalized_retry_keywords(&rules);
+    Ok(())
+}
+
+/// Projects a committed `configuration` into the runtime and returns the refreshed workbench from `state`.
+/// 将已提交的 `configuration` 应用到运行时，并从 `state` 返回刷新的工作台。
+fn project_saved_provider_retry_settings(
+    state: &mut ServiceBridgeState,
+    configuration: &ProviderConfigurationFile,
+) -> WorkbenchSnapshot {
+    if let Some(runtime) = state.agent_runtime.as_ref() {
+        runtime
+            .configured_inference_service
+            .update_retry_configuration(&configuration.retry);
+    }
+    refresh_settings_projection_locked(state, configuration);
+    state.workbench.clone()
 }
 
 /// Saves the bounded Provider wire-request trace diagnostic switch from system settings.
@@ -570,5 +620,26 @@ mod tests {
         );
         request.retry_keywords.push("regex:[".into());
         assert!(validate_provider_retry_settings_request(&request).is_err());
+    }
+
+    /// Verifies appending a rule preserves settings and rejects invalid input without mutation.
+    /// 验证追加规则保留设置，且拒绝无效输入时不产生变更。
+    #[test]
+    fn append_retry_rule_keeps_existing_policy_and_deduplicates() {
+        // Start with disabled automatic retry to verify adding a rule cannot enable it.
+        // 从关闭自动重试开始，验证添加规则无法开启它。
+        let mut retry = PersistedProviderRetryConfiguration {
+            enabled: false,
+            ..PersistedProviderRetryConfiguration::default()
+        };
+        // Extend the default rules with one expected expression.
+        // 在默认规则后追加一条预期正则。
+        let mut expected = default_provider_retry_keywords();
+        expected.push("regex:^temporary [0-9]+$".into());
+        append_provider_retry_rule(&mut retry, "regex:^temporary [0-9]+$").unwrap();
+        append_provider_retry_rule(&mut retry, " regex:^temporary [0-9]+$ ").unwrap();
+        assert!(append_provider_retry_rule(&mut retry, "regex:[").is_err());
+        assert!(!retry.enabled);
+        assert_eq!(retry.retry_keywords, expected);
     }
 }

@@ -1079,6 +1079,7 @@
   "conversation.systemError.retryable": "再試行可能",
   "conversation.systemError.httpStatus": "HTTP ステータス",
   "conversation.systemError.subcategory": "サブカテゴリ",
+  "conversation.systemError.addRetryRule": "再試行ルールに追加",
   "conversation.systemError.upstreamCode": "上流のコード",
   "conversation.systemError.retryAfter": "再試行までの待機",
   "conversation.systemError.true": "はい",

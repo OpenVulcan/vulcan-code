@@ -1079,6 +1079,7 @@
   "conversation.systemError.retryable": "Pode tentar novamente",
   "conversation.systemError.httpStatus": "Status HTTP",
   "conversation.systemError.subcategory": "Subcategoria",
+  "conversation.systemError.addRetryRule": "Adicionar às regras de nova tentativa",
   "conversation.systemError.upstreamCode": "Código de origem",
   "conversation.systemError.retryAfter": "Tentar novamente após",
   "conversation.systemError.true": "Sim",

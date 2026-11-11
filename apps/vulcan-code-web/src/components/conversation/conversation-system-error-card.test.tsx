@@ -1,16 +1,30 @@
+// @vitest-environment jsdom
+
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { FeedbackCenterContext, type FeedbackCenterController } from "@/components/features/feedback/feedback-center-context";
 import { I18nProvider } from "@/i18n";
 import type { ConversationMessage } from "@/types";
 import {
   isProviderResultReconciliationPending,
-  isReportableSystemError,
   parseSystemProviderError,
   SystemErrorCard,
 } from "./conversation-system-error-card";
+import ProviderErrorActions, { isReportableSystemError } from "./conversation-system-error-actions";
 import { parseConversationBlocks } from "./conversation-transcript-parser";
+
+// Capture the exact append request while leaving the persisted settings untouched.
+// 捕获精确的追加请求，同时保持持久化设置不变。
+const retryService = vi.hoisted(() => ({
+  request: vi.fn<(method: string, params: { rule: string }) => Promise<null>>().mockResolvedValue(null),
+}));
+vi.mock("@/service/webui-service-runtime", () => ({
+  hasServiceRuntime: () => true,
+  serviceClient: retryService,
+}));
 
 // SYSTEM_ERROR_BODY mirrors the new JSON public-contract failure shape shown by the user.
 // SYSTEM_ERROR_BODY 对应用户提供的新 JSON 公共契约失败正文格式。
@@ -82,6 +96,55 @@ const AGENTSPACE_RECONCILIATION_BODY = `Provider streaming execution failed: pro
 })}`;
 
 describe("system provider error card", () => {
+  // Verify that the card generates a portable regex from both historical and current timeout diagnostics.
+  // 验证错误卡可以从历史及当前超时诊断生成可复用的正则。
+  it("adds a retry rule that matches response-header timeouts across endpoints", async () => {
+    // Use the structured V1 error shape with the historical placeholder as the source.
+    // 以带有历史占位符的 V1 结构化错误为来源。
+    const original = "Provider request to `<redacted-url>` exceeded the registered 60000 ms response-header timeout.";
+    // Parse the same provider error body that supplies the action in a conversation.
+    // 解析会话中为该操作提供数据的同一种供应商错误正文。
+    const error = parseSystemProviderError(`Provider streaming execution failed: provider alibaba failure: ${JSON.stringify({
+      category: "provider",
+      stage: "terminal",
+      dispatch_outcome: "dispatched",
+      semantic_output_observed: false,
+      retryable: false,
+      upstream_code: "provider_error",
+      upstream_message: original,
+      provider_id: "alibaba",
+      message: original,
+    })}`)!;
+    // Mount the real card and open its disclosure to load the retry action.
+    // 挂载真实卡片并展开详情以加载重试操作。
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(<I18nProvider initialLocale="en-US"><SystemErrorCard error={error} /></I18nProvider>));
+      expect(host.querySelector("button")).toBeNull();
+      const details = host.querySelector("details")!;
+      await act(async () => {
+        details.open = true;
+        details.dispatchEvent(new Event("toggle"));
+        await vi.dynamicImportSettled();
+      });
+      await act(async () => host.querySelector("button")!.click());
+      expect(retryService.request).toHaveBeenCalledExactlyOnceWith(
+        "service_add_provider_retry_rule", { rule: expect.stringMatching(/^regex:/) },
+      );
+      // The persisted expression must match both historical and current timeout messages.
+      // 持久化表达式必须同时匹配历史和当前的超时消息。
+      const [, { rule }] = retryService.request.mock.calls[0];
+      const matcher = new RegExp(rule.slice("regex:".length));
+      expect(matcher.test(original)).toBe(true);
+      expect(matcher.test("Provider request to `https://a.invalid/v1/chat` exceeded the registered 1000 ms response-header timeout.")).toBe(true);
+      expect(matcher.test("Provider request to `https://a.invalid/v1/chat` failed: unexpected response")).toBe(false);
+    } finally {
+      await act(async () => root.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
   // English runtime errors retain structured diagnostics with and without route context.
   // 英文运行时错误无论是否携带路由上下文，都保留结构化诊断。
   it("parses runtime failures with and without route context", () => {
@@ -253,7 +316,7 @@ describe("system provider error card", () => {
     const reportButton = (body: string) => renderToStaticMarkup(
       <I18nProvider initialLocale="en-US">
         <FeedbackCenterContext.Provider value={{ openFeedback: () => undefined } as unknown as FeedbackCenterController}>
-          <SystemErrorCard error={parseSystemProviderError(body)!} />
+          <ProviderErrorActions error={parseSystemProviderError(body)!} />
         </FeedbackCenterContext.Provider>
       </I18nProvider>,
     ).includes("vk-error-report");

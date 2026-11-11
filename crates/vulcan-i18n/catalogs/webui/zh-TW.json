@@ -1079,6 +1079,7 @@
   "conversation.systemError.retryable": "允許重試",
   "conversation.systemError.httpStatus": "HTTP 狀態",
   "conversation.systemError.subcategory": "錯誤子類別",
+  "conversation.systemError.addRetryRule": "加入重試清單",
   "conversation.systemError.upstreamCode": "上游錯誤碼",
   "conversation.systemError.retryAfter": "重試等待",
   "conversation.systemError.true": "是",

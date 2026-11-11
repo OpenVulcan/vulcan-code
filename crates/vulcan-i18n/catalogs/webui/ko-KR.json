@@ -1079,6 +1079,7 @@
   "conversation.systemError.retryable": "재시도 가능",
   "conversation.systemError.httpStatus": "HTTP 상태",
   "conversation.systemError.subcategory": "하위 범주",
+  "conversation.systemError.addRetryRule": "재시도 규칙에 추가",
   "conversation.systemError.upstreamCode": "업스트림 코드",
   "conversation.systemError.retryAfter": "재시도 대기",
   "conversation.systemError.true": "예",

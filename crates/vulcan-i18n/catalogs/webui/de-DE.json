@@ -1079,6 +1079,7 @@
   "conversation.systemError.retryable": "Wiederholbar",
   "conversation.systemError.httpStatus": "HTTP-Status",
   "conversation.systemError.subcategory": "Unterkategorie",
+  "conversation.systemError.addRetryRule": "Zu Wiederholungsregeln hinzufügen",
   "conversation.systemError.upstreamCode": "Upstream-Code",
   "conversation.systemError.retryAfter": "Wiederholen nach",
   "conversation.systemError.true": "Ja",

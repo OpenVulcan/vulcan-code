@@ -341,7 +341,8 @@ use project_directories::service_browse_project_directories;
 use project_directories::visible_project_id_for_path;
 use project_terminals::*;
 use provider_settings::{
-    provider_retry_settings, service_clear_selected_provider_api_trace_directory,
+    provider_retry_settings, service_add_provider_retry_rule,
+    service_clear_selected_provider_api_trace_directory,
     service_open_selected_provider_api_trace_directory,
     service_save_provider_request_trace_settings, service_save_provider_retry_settings,
 };
