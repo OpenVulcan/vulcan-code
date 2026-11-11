@@ -747,6 +747,14 @@ async fn service_stop_conversation_run_owned(
     if let Some(error) = active_task_join_error {
         tracing::warn!("[webui-service] stopped conversation task teardown warning: {error}");
     }
+    // The durable Stop is visible before a parked queued turn rechecks whether it may run.
+    // 休眠的排程回合重新检查可运行性之前，可靠停止已经可见。
+    if let Ok(guard) = state.lock() {
+        crate::conversation_submission::queued_dispatch::wake_waiting_queued_turn(
+            &guard,
+            target_session_id,
+        );
+    }
     Ok(StopConversationRunResponse::Stopped {
         workbench: Box::new(workbench),
     })
@@ -844,6 +852,14 @@ pub(crate) async fn service_set_session_plan_mode(
             });
         work_mode.apply_to_runtime_state(runtime_state);
         runtime_state.updated_at = updated_at;
+    }
+    // The plan projection is already clear when the waiter checks the session again.
+    // 等待者重新检查会话时，计划投影已经清除。
+    {
+        let guard = state.lock().map_err(|error| error.to_string())?;
+        crate::conversation_submission::queued_dispatch::wake_waiting_queued_turn(
+            &guard, session_id,
+        );
     }
     emit_session_addons_changed_delta(&app, &state, session_id)
 }

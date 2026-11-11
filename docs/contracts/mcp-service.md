@@ -63,7 +63,7 @@ MCP 服务器）是两件事，互不共享配置。实现以下列源码为准�
    输入区的模型与模式控件；会话摘要增量不携带 `selectedConversationId`，前端保持原选中。
 2. **执行模式。** `plan_mode: true` 以计划模式提交；省略或 `false` 保持会话当前模式，不强制改为执行。
 3. **等待。** `wait_seconds` 默认 `MCP_DEFAULT_WAIT_SECONDS`，上限 `MCP_MAX_WAIT_SECONDS`；等待按
-   `MCP_STATUS_POLL_INTERVAL` 读取实时运行阶段、待回答问题与排队提示词。结果状态为 `running`、
+   `MCP_STATUS_POLL_INTERVAL` 读取实时运行阶段、待回答问题与排队提示词。已保存、等待派发的用户回合也计入待处理输入。结果状态为 `running`、
    `waiting_for_answer`、`waiting_for_approval`、`idle`、`failed`、`stopped` 之一，并附 `cursor`；
    仍在运行时用 `wait_for_reply` 以 `after_seq` 带上 `cursor` 继续等待，不会重复读到已返回的内容。
 4. **读取。** `read_messages` 合并已持久化与常驻内存的事件，按 `after_seq` 分页并返回 `cursor` 与 `has_more`，单次上限

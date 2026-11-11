@@ -1572,6 +1572,8 @@
   "sessionActions.previewCannotSetVmmPolicy": "ブラウザーのプレビューモードでは VMM メモリポリシーを変更できません。",
   "sessionActions.vmmPolicySaved": "VMM メモリポリシーを保存しました。",
   "conversationActions.noProjectForSend": "現在の会話はプロジェクトにリンクされていないため、送信できません。",
+  "conversationActions.acceptedAwaitingDispatch": "メッセージを保存しました。会話の準備ができ次第、処理を開始します。",
+  "conversationActions.acceptedDispatchFailed": "メッセージは保存されましたが、処理を開始できませんでした。「続行」で同じターンを再試行できます。",
   "conversationActions.previewCannotSend": "ブラウザーのプレビューモードでは実際の会話を送信できません。",
   "conversationActions.previewCannotCompact": "ブラウザーのプレビューモードでは実際のコンテキスト圧縮を実行できません。",
   "conversationActions.previewCannotContinue": "ブラウザーのプレビューモードでは実際の会話を続行できません。",

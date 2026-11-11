@@ -1572,6 +1572,8 @@
   "sessionActions.previewCannotSetVmmPolicy": "La política de memoria VMM no se puede cambiar en el modo de vista previa del navegador.",
   "sessionActions.vmmPolicySaved": "Política de memoria VMM guardada.",
   "conversationActions.noProjectForSend": "La conversación actual no está vinculada a un proyecto, así que no se puede enviar.",
+  "conversationActions.acceptedAwaitingDispatch": "Mensaje guardado. Se iniciará cuando la conversación esté lista.",
+  "conversationActions.acceptedDispatchFailed": "El mensaje se guardó, pero no pudo iniciarse. Pulsa «Continuar» para reintentar el mismo turno.",
   "conversationActions.previewCannotSend": "Las conversaciones reales no se pueden enviar en el modo de vista previa del navegador.",
   "conversationActions.previewCannotCompact": "La compresión real del contexto no se puede ejecutar en el modo de vista previa del navegador.",
   "conversationActions.previewCannotContinue": "Las conversaciones reales no se pueden continuar en el modo de vista previa del navegador.",

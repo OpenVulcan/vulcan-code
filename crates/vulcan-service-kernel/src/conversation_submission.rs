@@ -56,20 +56,21 @@ use super::{
     mark_webui_prompt_preparation_failed, mark_webui_prompt_snapshot_preparing,
     materialize_prompt_session, owning_project_id_for_session, parse_prompt_session_target,
     parse_session_id, persist_initial_submission_goal, preserve_active_session_run_state,
-    provider_tool_capability_key, queued_dispatch_authority_for_client_action,
-    refresh_exact_vmm_hook_session_projection, resolve_composer_attachment_summary_for_workspace,
-    retain_slow_submission_diagnostic, retained_submission_snapshot_has_session_context,
-    retained_submission_snapshot_is_usable, runtime_parts_from_state,
-    session_has_blocking_system_prompt_work, session_process_public_ai_selection,
-    spawn_service_task, start_exact_v1_queued_turn, start_reserved_webui_session_kernel_user_turn,
-    start_webui_precheck_or_continue, start_webui_session_kernel_user_turn,
-    webui_session_kernel_has_active_turn, webui_shared_prompt_precheck_plan, webui_submit_trace,
-    webui_trace_if_slow, webui_vmm_runtime_readiness,
+    provider_tool_capability_key, refresh_exact_vmm_hook_session_projection,
+    resolve_composer_attachment_summary_for_workspace, retain_slow_submission_diagnostic,
+    retained_submission_snapshot_has_session_context, retained_submission_snapshot_is_usable,
+    runtime_parts_from_state, session_has_blocking_system_prompt_work,
+    session_process_public_ai_selection, spawn_service_task,
+    start_reserved_webui_session_kernel_user_turn, start_webui_precheck_or_continue,
+    start_webui_session_kernel_user_turn, webui_session_kernel_has_active_turn,
+    webui_shared_prompt_precheck_plan, webui_submit_trace, webui_trace_if_slow,
+    webui_vmm_runtime_readiness,
 };
 mod activation;
 pub(crate) mod idle_root_input;
 mod preflight;
 mod queue;
+pub(crate) mod queued_dispatch;
 mod runtime_options;
 mod submission_failure;
 
@@ -2067,6 +2068,7 @@ pub(super) async fn service_continue_conversation(
     reasoning_effort: Option<String>,
     model_selection: Option<SubmissionModelSelection>,
     attachments: Option<Vec<ComposerAttachmentSummary>>,
+    queued_input_action_id: Option<String>,
 ) -> Result<SubmitConversationPromptAck, String> {
     let has_supplement = prompt.is_some()
         || hidden_model_guidance.is_some()
@@ -2074,6 +2076,21 @@ pub(super) async fn service_continue_conversation(
         || reasoning_effort.is_some()
         || model_selection.is_some()
         || attachments.is_some();
+    if let Some(queued_input_action_id) = queued_input_action_id {
+        if has_supplement {
+            return Err(String::from(
+                "An accepted queued input cannot be changed during dispatch recovery.",
+            ));
+        }
+        return recover_accepted_queued_turn(
+            &app,
+            &state,
+            conversation_id,
+            client_continuation_id,
+            queued_input_action_id,
+        )
+        .await;
+    }
     let user_submission = has_supplement.then_some(ContinuationUserSubmission {
         prompt: prompt.unwrap_or_default(),
         hidden_model_guidance,
@@ -2090,6 +2107,64 @@ pub(super) async fn service_continue_conversation(
         user_submission,
     )
     .await
+}
+
+/// Resumes the exact accepted queued input selected by the user without adding a new message.
+/// 恢复用户选中的精确已接收排程输入，不新增消息。
+/// Session and queued action select the durable root. The continuation ID correlates the returned receipt.
+/// 会话及排程动作选择可靠根输入。继续动作 ID 用于关联返回回执。
+async fn recover_accepted_queued_turn(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    conversation_id: String,
+    client_continuation_id: String,
+    queued_input_action_id: String,
+) -> Result<SubmitConversationPromptAck, String> {
+    // session_id and the original action are independently validated before recovery.
+    // 恢复前独立校验会话及原始动作身份。
+    let session_id = parse_session_id(&conversation_id)
+        .ok_or_else(|| String::from("ERR_CONVERSATION_CONTINUE_INVALID_CONVERSATION"))?;
+    let original_action =
+        ClientActionId::try_new(queued_input_action_id).map_err(|error| error.to_string())?;
+    let continuation_action =
+        ClientActionId::try_new(client_continuation_id).map_err(|error| error.to_string())?;
+    let handle =
+        crate::session_goal_lifecycle::session_v1_handle_from_state(state, session_id).await?;
+    // The explicit action cannot replace a newer turn or bypass Stop and archival.
+    // 显式动作不能取代更新回合，也不能绕过停止和归档。
+    let (turn_id, action) = queued_dispatch::undispatched_queued_root(handle.as_ref())?
+        .filter(|(_, action)| *action == original_action)
+        .ok_or_else(|| String::from("The selected queued input is no longer awaiting dispatch."))?;
+    let runnable = handle
+        .read(|document| {
+            matches!(
+        document.collaboration_run_control(),
+        vulcan_session_core::v1::collaboration::CollaborationRunControl::Running
+            | vulcan_session_core::v1::collaboration::CollaborationRunControl::NaturallyIdle,
+    )
+        })
+        .map_err(|error| error.to_string())?;
+    if !runnable {
+        return Err(String::from(
+            "The selected queued input cannot dispatch while the session is stopped.",
+        ));
+    }
+    // Read a valid receipt before the attempt so a projection issue does not repeat admitted work.
+    // 尝试前读取有效回执，避免投影问题使已接收工作被重复派发。
+    let (revision, phase) = queue::current_queued_submission_ack_state(state, session_id)?;
+    let mut ack = queue::submission_admission_ack(
+        continuation_action.as_str().to_owned(),
+        session_id,
+        revision,
+        phase,
+        false,
+        Some(turn_id.value().to_string()),
+    );
+    ack.queued_turn_dispatch = queued_dispatch::dispatch_accepted_queued_turn(
+        app, state, session_id, turn_id, action, None,
+    )
+    .await;
+    Ok(ack)
 }
 
 /// Claims one frozen continuation and starts its retained execution with an optional durable user follow-up.
@@ -2993,7 +3068,26 @@ async fn service_start_conversation_execution(
         .into_iter()
         .map(composer_attachment_summary_to_provider_core)
         .collect::<Result<Vec<_>, _>>()?;
-    if let ExistingSubmissionQueueDecision::Queue { session_id } =
+    // A same-id retry stays on the durable enqueue receipt even if live activity has since cleared.
+    // 同 ID 重试沿用持久化排队回执，即使实时活动已经结束。
+    let replaying_scheduled_input = match (&existing_submission_v1_authority, &accepted_input) {
+        (Some(authority), Some(_)) if !submission_mode.is_continuation() => authority.handle.read(|document| {
+            document.events().iter().any(|event| matches!(&event.event,
+                vulcan_session_core::v1::event::EventBody::UserInput(input)
+                    if input.client_action_id == accepted_action_id
+                    && input.input_source == vulcan_session_core::v1::event::UserInputSource::QueuedScheduled))
+        }).map_err(|error| error.to_string())?,
+        _ => false,
+    };
+    // The replay uses the exact existing target captured before reading its input.
+    // 重试使用读取输入前固定的精确已有会话目标。
+    let queue_decision = if replaying_scheduled_input {
+        ExistingSubmissionQueueDecision::Queue {
+            session_id: submission_session_id.ok_or_else(|| {
+                String::from("Scheduled input replay requires an existing session.")
+            })?,
+        }
+    } else {
         evaluate_existing_submission_queue(
             &state,
             &workspace_snapshot,
@@ -3003,7 +3097,8 @@ async fn service_start_conversation_execution(
                 .map(|authority| &authority.handle),
             &submission_mode,
         )?
-    {
+    };
+    if let ExistingSubmissionQueueDecision::Queue { session_id } = queue_decision {
         if submission_mode.is_continuation() {
             return Err(String::from("ERR_CONVERSATION_CONTINUE_SESSION_BUSY"));
         }
@@ -3051,7 +3146,7 @@ async fn service_start_conversation_execution(
         );
         let scheduled_handle = Arc::clone(&v1_authority.handle);
         let scheduled_client_action_id = client_action_id.clone();
-        let acknowledgement = queue_existing_submission(
+        let mut acknowledgement = queue_existing_submission(
             &app,
             &state,
             &agent_runtime,
@@ -3074,32 +3169,42 @@ async fn service_start_conversation_execution(
                 submit_total_started_at,
             },
         )?;
-        crate::session_request_config_v1::persist_missing_reasoning_reconciliation_after_user_admission_v1(
-            v1_authority.handle.as_ref(),
-            agent_runtime.public_ai_runtime.as_ref(),
-            crate::current_v1_unix_millis()?,
-        )?;
-        if acknowledgement.turn_id.is_some() {
-            // Goal supersession has already created the exact open UserRoot Turn durably.
-            // Goal 替代已经可靠创建精确开放 UserRoot 回合。
-            let authority = queued_dispatch_authority_for_client_action(
-                scheduled_handle.as_ref(),
-                &scheduled_client_action_id,
-            )?;
-            if !start_exact_v1_queued_turn(
-                &app,
-                &state,
-                &controller_runtime,
-                &agent_runtime,
-                session_id,
-                authority,
+        // A failed post-admission update must not turn a durable scheduled input back into a draft.
+        // 准入后的更新失败不能把已可靠排程的输入重新变成草稿。
+        let reconciliation = crate::current_v1_unix_millis().and_then(|now_ms| {
+            crate::session_request_config_v1::persist_missing_reasoning_reconciliation_after_user_admission_v1(
+                v1_authority.handle.as_ref(), agent_runtime.public_ai_runtime.as_ref(), now_ms,
             )
-            .await?
+        });
+        if let Some(scheduled_turn_id) = acknowledgement.turn_id.as_deref() {
+            match reconciliation
+                .and_then(|_| queued_dispatch::undispatched_queued_root(scheduled_handle.as_ref()))
             {
-                return Err(String::from(
-                    "The durable scheduled user Turn could not acquire physical dispatch admission; retry the same client submission id.",
-                ));
+                Ok(Some((turn_id, action)))
+                    if action == scheduled_client_action_id
+                        && turn_id.value().to_string() == scheduled_turn_id =>
+                {
+                    acknowledgement.queued_turn_dispatch =
+                        queued_dispatch::dispatch_accepted_queued_turn(
+                            &app,
+                            &state,
+                            session_id,
+                            turn_id,
+                            action,
+                            Some(turn_admission.existing_authorization()?),
+                        )
+                        .await;
+                }
+                Ok(_) => {}
+                Err(_) => {
+                    tracing::warn!(%session_id, scheduled_turn_id, action = %scheduled_client_action_id.as_str(),
+                        reason = "dispatch_preparation_failed", "Accepted queued turn preparation failed");
+                    acknowledgement.queued_turn_dispatch =
+                        Some(vulcan_service_api::QueuedTurnDispatchStatus::Failed);
+                }
             }
+        } else {
+            reconciliation?;
         }
         return Ok(acknowledgement);
     }
@@ -3725,6 +3830,7 @@ async fn service_start_conversation_execution(
         turn_id,
         run_phase: submit_visible_run_phase.to_string(),
         queued: false,
+        queued_turn_dispatch: None,
         revision,
     };
     // Deferred preparation begins only after the visible message and acknowledgement facts are committed.
@@ -3969,6 +4075,7 @@ fn continuation_replay_ack_from_state(
         turn_id: None,
         run_phase: run_phase.to_string(),
         queued: false,
+        queued_turn_dispatch: None,
         revision: guard.workbench_generation,
     })
 }

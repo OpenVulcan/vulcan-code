@@ -28,54 +28,31 @@ function submit(): ReturnType<typeof submitConversationPrompt> {
   );
 }
 
-describe("conversation submission dispatch retry", () => {
+describe("conversation submission receipt", () => {
   beforeEach(() => {
     transport.request.mockReset();
   });
 
-  // A refused physical dispatch is recoverable only through the identical durable identity.
-  // 被拒绝的物理派发只能通过完全相同的可靠身份恢复。
-  it("retries the same client submission id after a rejection", async () => {
-    vi.useFakeTimers();
-    const acknowledgement = { clientSubmissionId: "submission-1", conversationId: "conversation-1" };
-    transport.request
-      .mockRejectedValueOnce(new Error("physical dispatch admission refused"))
-      .mockResolvedValueOnce(acknowledgement);
-
-    const pending = submit();
-    await vi.advanceTimersByTimeAsync(500);
-
-    await expect(pending).resolves.toBe(acknowledgement);
-    expect(transport.request).toHaveBeenCalledTimes(2);
-    expect(transport.request.mock.calls.map((call) => (call[1] as { clientSubmissionId: string }).clientSubmissionId))
-      .toEqual(["submission-1", "submission-1"]);
-    vi.useRealTimers();
+  // The accepted input has a durable identity while Core waits for dispatch.
+  // 核心等待派发时，已接收输入持有可靠身份。
+  it("returns the original accepted waiting receipt without resending", async () => {
+    // receipt proves admission without claiming a business API has already started.
+    // receipt 证明输入已接收，同时不声称业务 API 已经启动。
+    const receipt = { clientSubmissionId: "submission-1", conversationId: "conversation-1", queuedTurnDispatch: "waiting" };
+    transport.request.mockResolvedValueOnce(receipt);
+    await expect(submit()).resolves.toBe(receipt);
+    expect(transport.request).toHaveBeenCalledTimes(1);
+    expect(transport.request.mock.calls[0][1]).toMatchObject({ clientSubmissionId: "submission-1" });
   });
 
-  // The retry is bounded: a second rejection is reported instead of looping.
-  // 重试是有界的：第二次拒绝直接上报，不循环。
-  it("reports the second rejection without a third attempt", async () => {
-    vi.useFakeTimers();
-    transport.request
-      .mockRejectedValueOnce(new Error("first rejection"))
-      .mockRejectedValueOnce(new Error("second rejection"));
-
-    const pending = submit();
-    const assertion = expect(pending).rejects.toThrow("second rejection");
-    await vi.advanceTimersByTimeAsync(500);
-    await assertion;
-
-    expect(transport.request).toHaveBeenCalledTimes(2);
-    vi.useRealTimers();
-  });
-
-  // An accepted submission is never sent twice.
-  // 已接纳的提交绝不发送两次。
-  it("does not retry an accepted submission", async () => {
-    const acknowledgement = { clientSubmissionId: "submission-1", conversationId: "conversation-1" };
-    transport.request.mockResolvedValueOnce(acknowledgement);
-
-    await expect(submit()).resolves.toBe(acknowledgement);
+  // A transport rejection can occur after the service accepts a request.
+  // 服务接收请求后，传输仍可能失败。
+  it("surfaces a rejected submission without replaying it", async () => {
+    // failure represents the original transport error kept for the caller.
+    // failure 表示保留给调用方的原始传输错误。
+    const failure = new Error("Response unavailable");
+    transport.request.mockRejectedValueOnce(failure);
+    await expect(submit()).rejects.toBe(failure);
     expect(transport.request).toHaveBeenCalledTimes(1);
   });
 });

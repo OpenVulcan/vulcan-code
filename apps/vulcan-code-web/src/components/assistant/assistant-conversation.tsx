@@ -407,6 +407,11 @@ export function AssistantComposer(props: {
         toast.info(t("conversationActions.previewCannotSend"));
         return;
       }
+      if (ack.queuedTurnDispatch === "waiting") {
+        toast.info(t("conversationActions.acceptedAwaitingDispatch"));
+      } else if (ack.queuedTurnDispatch === "failed") {
+        toast.error(t("conversationActions.acceptedDispatchFailed"));
+      }
       // The input stays editable while the receipt is pending, so only what was sent is cleared.
       // 等待回执期间输入框仍可编辑，因此只清除已发送的内容。
       setText((current) => (current === sentText ? "" : current));

@@ -215,7 +215,7 @@ fn v1_admission_is_currently_queued(
 /// 返回值
 /// Returns the current workbench revision and run phase, or an explicit state-lock error.
 /// 返回当前工作台修订号与运行阶段，或明确的状态锁错误。
-fn current_queued_submission_ack_state(
+pub(super) fn current_queued_submission_ack_state(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
 ) -> Result<(u64, SessionRunPhase), String> {
@@ -244,7 +244,7 @@ fn current_queued_submission_ack_state(
 /// 返回值
 /// Returns a queued RPC acknowledgement without creating any additional fact.
 /// 返回不创建任何额外事实的排队 RPC 确认。
-fn submission_admission_ack(
+pub(super) fn submission_admission_ack(
     client_submission_id: String,
     session_id: SessionId,
     revision: u64,
@@ -261,6 +261,7 @@ fn submission_admission_ack(
         // queued reflects the current V1 metadata state, not the historical admission route.
         // queued 反映当前 V1 metadata 状态，而不是历史准入路径。
         queued,
+        queued_turn_dispatch: None,
         revision,
     }
 }
@@ -334,7 +335,7 @@ pub(crate) fn evaluate_existing_submission_queue(
     );
     // activity reads the stream owner and authoritative kernel turn from one revision.
     // activity 从同一版本读取活动流所有者与权威内核回合。
-    let (has_active_stream_task, has_active_kernel_turn) = {
+    let (has_active_stream_task, has_active_kernel_turn, has_waiting_scheduled_turn) = {
         // guard keeps both activity diagnostics on one authoritative service-state revision.
         // guard 使两个活动诊断保持在同一个权威服务状态版本上。
         let guard = state
@@ -343,6 +344,7 @@ pub(crate) fn evaluate_existing_submission_queue(
         (
             guard.active_stream_tasks.contains_key(&session_id),
             webui_session_kernel_has_active_turn(&guard, session_id),
+            guard.waiting_queued_turns.contains_key(&session_id),
         )
     };
     webui_trace_if_slow(
@@ -359,7 +361,10 @@ pub(crate) fn evaluate_existing_submission_queue(
         .is_some_and(|turn_id| !turn_id.trim().is_empty());
     // should_queue also preserves the current parent's exact child settlement ownership.
     // should_queue 同时保留当前父回合精确的子任务结算归属。
-    let should_queue = (submission_mode.appends_user_records() && has_unsettled_child_tasks)
+    // The parked accepted root keeps its place until it can take ownership of dispatch.
+    // 已接收且等待派发的根回合保留原顺序，直至取得派发所有权。
+    let should_queue = has_waiting_scheduled_turn
+        || (submission_mode.appends_user_records() && has_unsettled_child_tasks)
         || session_has_blocking_system_prompt_work(
             workspace_snapshot,
             session_id,

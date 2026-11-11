@@ -1572,6 +1572,8 @@
   "sessionActions.previewCannotSetVmmPolicy": "La politique de mémoire VMM ne peut pas être modifiée en mode aperçu du navigateur.",
   "sessionActions.vmmPolicySaved": "Politique de mémoire VMM enregistrée.",
   "conversationActions.noProjectForSend": "La conversation actuelle n’est liée à aucun projet ; elle ne peut donc pas être envoyée.",
+  "conversationActions.acceptedAwaitingDispatch": "Message enregistré. Il sera traité dès que la conversation sera prête.",
+  "conversationActions.acceptedDispatchFailed": "Le message a été enregistré, mais le tour n’a pas pu démarrer. Utilisez « Continuer » pour réessayer le même tour.",
   "conversationActions.previewCannotSend": "Les vraies conversations ne peuvent pas être envoyées en mode aperçu du navigateur.",
   "conversationActions.previewCannotCompact": "Une vraie compression du contexte ne peut pas s’exécuter en mode aperçu du navigateur.",
   "conversationActions.previewCannotContinue": "Les vraies conversations ne peuvent pas être poursuivies en mode aperçu du navigateur.",

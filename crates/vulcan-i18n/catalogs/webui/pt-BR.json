@@ -1572,6 +1572,8 @@
   "sessionActions.previewCannotSetVmmPolicy": "A política de memória VMM não pode ser alterada no modo de prévia do navegador.",
   "sessionActions.vmmPolicySaved": "Política de memória VMM salva.",
   "conversationActions.noProjectForSend": "A conversa atual não está vinculada a um projeto, então não pode ser enviada.",
+  "conversationActions.acceptedAwaitingDispatch": "Mensagem salva. Ela será processada quando a conversa estiver pronta.",
+  "conversationActions.acceptedDispatchFailed": "A mensagem foi salva, mas o turno não pôde começar. Use “Continuar” para tentar novamente o mesmo turno.",
   "conversationActions.previewCannotSend": "Conversas reais não podem ser enviadas no modo de prévia do navegador.",
   "conversationActions.previewCannotCompact": "A compressão real do contexto não pode ser executada no modo de prévia do navegador.",
   "conversationActions.previewCannotContinue": "Conversas reais não podem ser continuadas no modo de prévia do navegador.",

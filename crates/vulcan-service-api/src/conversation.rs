@@ -1107,9 +1107,26 @@ pub struct SubmitConversationPromptAck {
     /// Whether the prompt was queued behind existing work.
     /// 该提示词是否已排队等待既有工作结束。
     pub queued: bool,
+    /// Dispatch condition after the input has been saved as an open queued turn.
+    /// 输入已保存为开放排程回合后的派发情况。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queued_turn_dispatch: Option<QueuedTurnDispatchStatus>,
     /// Latest accepted workbench revision after the submit-side update.
     /// 提交侧更新后的最新已接收工作台版本。
     pub revision: u64,
+}
+
+/// Dispatch state of a durable input that is no longer in the ordinary queue.
+/// 已离开普通队列的可靠输入所处的派发状态。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum QueuedTurnDispatchStatus {
+    /// A live admission owner or pending plan is blocking dispatch.
+    /// 实时准入所有者或待决计划正在阻塞派发。
+    Waiting,
+    /// The original input is durable, but the dispatch attempt failed.
+    /// 原输入已可靠保存，但派发尝试失败。
+    Failed,
 }
 
 #[cfg(test)]

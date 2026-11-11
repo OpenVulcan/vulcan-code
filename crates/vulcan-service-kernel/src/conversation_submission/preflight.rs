@@ -41,6 +41,25 @@ pub(crate) struct ExistingSubmissionTurnAdmission {
 }
 
 impl SubmissionTurnAdmission {
+    /// Returns the exact existing session authorization for dispatch within this submission.
+    /// 返回用于在本次提交内派发的精确已有会话授权。
+    /// The caller validates the current reservation before preparing the kernel turn.
+    /// 调用方在准备内核回合之前校验当前预留。
+    pub(crate) fn existing_authorization(
+        &self,
+    ) -> Result<ExistingSubmissionAdmissionAuthorization, String> {
+        match self {
+            Self::Existing(admission) => Ok(ExistingSubmissionAdmissionAuthorization {
+                session_id: admission.session_id,
+                reservation_id: admission.reservation_id,
+            }),
+            Self::Preauthorized(authorization) => Ok(*authorization),
+            Self::Unreserved => Err(String::from(
+                "Queued dispatch requires existing submission ownership.",
+            )),
+        }
+    }
+
     /// Resolves the reservation id that may authorize the materialized session's kernel start.
     /// 解析可授权已物化会话启动 kernel 的预留标识。
     ///
@@ -99,11 +118,19 @@ impl Drop for ExistingSubmissionTurnAdmission {
         // guard 仅为删除当前提交精确拥有的预留而恢复中毒状态。
         let mut guard =
             lock_service_state_for_admission_cleanup(&self.state, "existing-submission-turn guard");
-        guard
+        if guard
             .session_turn_admission_reservations
-            .retain(|session_id, reservation| {
-                *session_id != self.session_id || reservation.reservation_id != self.reservation_id
-            });
+            .get(&self.session_id)
+            .is_some_and(|reservation| reservation.reservation_id == self.reservation_id)
+        {
+            guard
+                .session_turn_admission_reservations
+                .remove(&self.session_id);
+            crate::conversation_submission::queued_dispatch::wake_waiting_queued_turn(
+                &guard,
+                self.session_id,
+            );
+        }
     }
 }
 

@@ -1572,6 +1572,8 @@
   "sessionActions.previewCannotSetVmmPolicy": "В режиме предпросмотра в браузере политику памяти VMM нельзя изменить.",
   "sessionActions.vmmPolicySaved": "Политика памяти VMM сохранена.",
   "conversationActions.noProjectForSend": "Текущая беседа не связана с проектом, поэтому её нельзя отправить.",
+  "conversationActions.acceptedAwaitingDispatch": "Сообщение сохранено. Оно будет обработано, когда диалог будет готов.",
+  "conversationActions.acceptedDispatchFailed": "Сообщение сохранено, но запустить ход не удалось. Нажмите «Продолжить», чтобы повторить запуск того же хода.",
   "conversationActions.previewCannotSend": "В режиме предпросмотра в браузере нельзя отправлять настоящие беседы.",
   "conversationActions.previewCannotCompact": "В режиме предпросмотра в браузере нельзя выполнить настоящее сжатие контекста.",
   "conversationActions.previewCannotContinue": "В режиме предпросмотра в браузере нельзя продолжать настоящие беседы.",

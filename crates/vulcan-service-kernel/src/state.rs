@@ -952,6 +952,9 @@ pub struct ServiceBridgeState {
     /// 按精确存储分区路径索引的唯一项目级资源目录 owner。
     pub(crate) project_resource_catalog_registry:
         Arc<vulcan_workspace_store::workspace_store::ProjectResourceCatalogRegistry>,
+    /// In-process wakeups for exact accepted turns that are waiting to be dispatched.
+    /// 已接收且等待派发的精确回合所使用的进程内唤醒。
+    pub(crate) waiting_queued_turns: BTreeMap<SessionId, crate::conversation_submission::queued_dispatch::WaitingQueuedTurn>,
     /// Owned turn-admission reservations keyed by exact session id.
     /// 按精确会话标识索引的有所有权回合准入预留。
     pub(crate) session_turn_admission_reservations:
@@ -1079,6 +1082,10 @@ impl SessionTerminalPersistenceOwnerGuard {
         guard
             .session_terminal_persistence_owners
             .remove(&self.session_id);
+        crate::conversation_submission::queued_dispatch::wake_waiting_queued_turn(
+            &guard,
+            self.session_id,
+        );
         self.released = true;
         Ok(())
     }
@@ -1407,10 +1414,14 @@ pub(crate) fn remove_active_stream_task_if_id(
 ) -> Option<ActiveStreamTask> {
     // owns_entry reuses the exact non-mutating ownership predicate shared by terminal transactions.
     // owns_entry 复用终态事务共享的精确只读所有权判定。
-    let owns_entry = active_stream_task_matches_id(state, session_id, task_id);
-    owns_entry
-        .then(|| state.active_stream_tasks.remove(&session_id))
-        .flatten()
+    if !active_stream_task_matches_id(state, session_id, task_id) {
+        return None;
+    }
+    // removed releases the exact stream owner before the queued waiter retries admission.
+    // removed 先释放精确流所有者，再让排程等待者重试准入。
+    let removed = state.active_stream_tasks.remove(&session_id);
+    crate::conversation_submission::queued_dispatch::wake_waiting_queued_turn(state, session_id);
+    removed
 }
 
 /// Failure returned when an active stream task cannot complete gated registration.

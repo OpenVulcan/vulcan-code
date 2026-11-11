@@ -132,6 +132,31 @@ export function selectConversationContinueCandidateV1(
   };
 }
 
+/** Selects a durable queued root that can be dispatched without resending its input.
+ * 选择可以直接派发、无需重发输入的可靠排程根回合。
+ * @param snapshot the current open turn and its authoritative root sequence.
+ *                 当前开放回合及其权威根序号。
+ * @returns the original queued action and UI owner, or null after business has started.
+ *          原排程动作与界面归属。业务启动后返回 null。 */
+export function selectQueuedTurnDispatchCandidateV1(snapshot: ConversationEventWindowControllerSnapshot) {
+  // owner and openTurnId bind the action to the current V1 generation.
+  // owner 和 openTurnId 将动作绑定到当前 V1 代次。
+  const owner = snapshot.owner;
+  const openTurnId = snapshot.open_turn_id;
+  if (!owner || openTurnId === null || snapshot.open_turn_start_seq === null) return null;
+  // root identifies the exact input rather than a later queued message in the same turn.
+  // root 标识精确根输入，避免使用同一回合中较晚的排队消息。
+  const root = snapshot.events.find((event) => event.turn_id === openTurnId && event.seq === snapshot.open_turn_start_seq);
+  if (root?.event.kind !== "user_input" || root.event.input_source !== "queued_scheduled") return null;
+  if (snapshot.events.some(({ event, turn_id }) => turn_id === openTurnId
+    && event.kind === "api_started" && isBusinessApiPurpose(event.purpose))) return null;
+  return {
+    session_id: owner.session_id,
+    ui_identity: JSON.stringify([owner.session_id, owner.window_generation, openTurnId, root.seq, root.event.client_action_id]),
+    queuedInputActionId: root.event.client_action_id,
+  };
+}
+
 /** Classifies the canonical purpose using the same business boundary as Session Core.
  * 使用与 Session Core 相同的业务边界划分规范请求用途。
  * @param purpose the declared purpose from ApiStarted, never inferred from status or model.

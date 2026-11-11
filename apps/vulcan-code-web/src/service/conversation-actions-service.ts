@@ -24,21 +24,8 @@ import {
 } from "@/service/webui-service-runtime";
 import { updateBrowserFallbackWorkbench } from "@/service/browser-fallback-workbench";
 
-// SUBMISSION_DISPATCH_RETRY_DELAY_MS is the single bounded wait before the one retry of an idempotent submission.
-// SUBMISSION_DISPATCH_RETRY_DELAY_MS 是一次幂等提交在唯一一次重试之前的有界等待。
-const SUBMISSION_DISPATCH_RETRY_DELAY_MS = 500;
-
 // submitConversationPrompt sends one ordinary new user turn to the desktop conversation runtime.
 // submitConversationPrompt 将一个普通的新用户回合发送到桌面会话运行时。
-//
-// The service accepts this request only once per client submission id, so a rejected attempt may be
-// repeated with the identical identity: the duplicate admission is answered from the durable receipt
-// and only the physical dispatch is attempted again. A Turn that was already scheduled durably but
-// missed dispatch admission asks exactly for that retry, and the composer owns the id, so the retry has
-// to happen here rather than in the user's next click.
-// 服务对同一 client submission id 只接纳一次，因此被拒绝的尝试可以用完全相同的身份重试：重复准入由
-// 可靠回执直接应答，只有物理派发会再尝试一次。已可靠排程但没拿到派发准入的回合正是要求这种重试，
-// 而该 id 由输入区持有，所以重试必须发生在这里，而不是等用户再点一次发送。
 export async function submitConversationPrompt(
   clientSubmissionId: string,
   projectId: string | null,
@@ -55,9 +42,7 @@ export async function submitConversationPrompt(
   if (!hasServiceRuntime()) {
     return null;
   }
-  // parameters are built once so the retry carries the identical durable identity and payload.
-  // 参数只构建一次，重试携带完全相同的可靠身份与载荷。
-  const parameters = {
+  return serviceClient.request<SubmitConversationPromptAck>("service_submit_conversation_prompt", {
     clientSubmissionId,
     projectId,
     conversationId,
@@ -69,17 +54,7 @@ export async function submitConversationPrompt(
     reasoningEffort,
     modelSelection,
     sessionSettings,
-  };
-  const submit = (): Promise<SubmitConversationPromptAck> =>
-    serviceClient.request<SubmitConversationPromptAck>("service_submit_conversation_prompt", parameters);
-  try {
-    return await submit();
-  } catch {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, SUBMISSION_DISPATCH_RETRY_DELAY_MS);
-    });
-    return await submit();
-  }
+  });
 }
 
 // continueConversation resumes one terminated conversation without appending a user prompt.
@@ -89,6 +64,7 @@ export async function continueConversation(
   clientContinuationId: string,
   supplement: ComposerSubmission | null,
   signal?: AbortSignal,
+  queuedInputActionId?: string,
 ): Promise<SubmitConversationPromptAck | null> {
   if (!hasServiceRuntime()) {
     return null;
@@ -98,6 +74,7 @@ export async function continueConversation(
     {
       conversationId,
       clientContinuationId,
+      queuedInputActionId,
       prompt: supplement?.prompt,
       hiddenModelGuidance: supplement?.hiddenModelGuidance,
       executionMode: supplement?.executionMode,

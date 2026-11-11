@@ -404,6 +404,7 @@ pub(crate) fn test_service_state_with_parent_session(
         permission_judge: Arc::new(Default::default()),
         project_resource_catalog_registry: Default::default(),
         session_turn_admission_reservations: BTreeMap::new(),
+        waiting_queued_turns: BTreeMap::new(),
         project_admission_reservations: BTreeMap::new(),
         vmm_controller_registry: Default::default(),
         browser_manager: crate::browser::BrowserManager::new(),

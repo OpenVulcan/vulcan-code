@@ -1,5 +1,5 @@
 import React from "react";
-import { selectConversationContinueCandidateV1 } from "@/service/conversation-continuation-selector-v1";
+import { selectConversationContinueCandidateV1, selectQueuedTurnDispatchCandidateV1 } from "@/service/conversation-continuation-selector-v1";
 import type { ConversationEventWindowControllerSnapshot } from "@/service/conversation-event-window-controller";
 import type { ConversationEventSummary } from "@/service/conversation-event-window-store";
 import { selectConversationSessionTodolistV1 } from "@/service/conversation-session-tools-v1";
@@ -50,7 +50,7 @@ export function useChatAreaEventWindowFacts(options: ChatAreaEventWindowFactsOpt
   // continuationCandidate identifies the latest eligible physical API in the selected V1 open Turn.
   // continuationCandidate 标识选中 V1 开放 Turn 中最近的可继续物理 API。
   const continuationCandidate = useSelectedConversationEventWindowSelector(
-    selectConversationContinueCandidateV1,
+    selectRecoverableTurn,
     conversationSelectionEqual,
   );
   return {
@@ -62,6 +62,12 @@ export function useChatAreaEventWindowFacts(options: ChatAreaEventWindowFactsOpt
     sessionTodolist,
     continuationCandidate,
   };
+}
+
+/** Selects the exact business continuation or an undispatched queued root in this window.
+ * 选择本窗口内精确的业务继续入口或尚未派发的排程根回合。 */
+function selectRecoverableTurn(snapshot: ConversationEventWindowControllerSnapshot) {
+  return selectConversationContinueCandidateV1(snapshot) ?? selectQueuedTurnDispatchCandidateV1(snapshot);
 }
 
 /** Returns the snapshot owner. 返回快照归属。 */

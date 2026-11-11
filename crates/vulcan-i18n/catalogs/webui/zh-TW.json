@@ -1572,6 +1572,8 @@
   "sessionActions.previewCannotSetVmmPolicy": "瀏覽器預覽模式下無法切換 VMM 記憶策略。",
   "sessionActions.vmmPolicySaved": "VMM 記憶策略已儲存。",
   "conversationActions.noProjectForSend": "目前對話沒有明確關聯專案，無法傳送。",
+  "conversationActions.acceptedAwaitingDispatch": "訊息已儲存，對話就緒後將啟動。",
+  "conversationActions.acceptedDispatchFailed": "訊息已儲存，但未能啟動。按一下「繼續」可重試原回合。",
   "conversationActions.previewCannotSend": "瀏覽器預覽模式下無法傳送真實對話。",
   "conversationActions.previewCannotCompact": "瀏覽器預覽模式下無法執行真實的上下文壓縮。",
   "conversationActions.previewCannotContinue": "瀏覽器預覽模式下無法繼續真實對話。",
