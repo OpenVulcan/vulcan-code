@@ -1,10 +1,8 @@
 import * as React from "react";
-import { ChevronLeft, ChevronRight, CircleAlert } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 
-import { StatusPill } from "@/components/shared/status";
 import { useI18n } from "@/i18n";
 import { Button } from "@/ui-kit/primitives/button";
-import { formatDurationSeconds } from "@/lib/usage-format";
 
 // SystemProviderError describes the structured failure emitted by the public provider contract.
 // SystemProviderError 描述公共 Provider 契约发出的结构化失败信息。
@@ -219,13 +217,6 @@ function scalarText(value: unknown): string | null {
 // retryAfterMilliseconds 从 Provider 契约读取归一化的 retry-after 对象。
 function retryAfterMilliseconds(value: unknown): string | null {
   return isRecord(value) ? scalarText(value.delay_milliseconds) : null;
-}
-
-// retryAfterDisplay renders the exact retry delay as seconds; non-numeric text keeps its raw millisecond form instead of becoming zero.
-// retryAfterDisplay 将精确重试等待时长渲染为秒；非数值文本保留原始毫秒形式，不会显示为零。
-function retryAfterDisplay(retryAfterMs: string): string {
-  const milliseconds = Number(retryAfterMs);
-  return Number.isFinite(milliseconds) ? formatDurationSeconds(milliseconds) : `${retryAfterMs} ms`;
 }
 
 // structuredProviderDisplayMessage derives a non-empty summary only from normalized failure facts.
@@ -456,132 +447,16 @@ export function formatSystemProviderErrorJson(error: SystemProviderError): strin
   return JSON.stringify(error.structured, null, 2);
 }
 
-// Load error actions when the diagnostic is expanded.
-// 在诊断展开时加载错误操作。
-const ProviderErrorActions = React.lazy(() => import("./conversation-system-error-actions"));
+// Loads the diagnostic controls only when a conversation contains an error card.
+// 只有会话包含错误卡时才加载诊断控件。
+const ProviderErrorPanel = React.lazy(() => import("./conversation-system-error-panel"));
 
-// SystemErrorCard renders a compact error summary with a metadata disclosure panel.
-// SystemErrorCard 渲染紧凑错误摘要与可展开的元数据面板。
+// Renders the preview and controls for the diagnostic in `props`.
+// 渲染 `props` 中诊断的预览和控件。
 export function SystemErrorCard(props: SystemErrorCardProps) {
-  const { t } = useI18n();
-  // reconciliationPending is derived exclusively from the backend-owned closed classification.
-  // reconciliationPending 仅从后端持有的封闭分类派生。
-  const reconciliationPending = isProviderResultReconciliationPending(props.error);
-  // Track whether the action row is visible inside the diagnostic.
-  // 跟踪诊断中的操作行是否可见。
-  const [expanded, setExpanded] = React.useState(false);
-  const fields: Array<{ label: string; value: string }> = [
-    { label: t("conversation.systemError.category"), value: props.error.category },
-    { label: t("conversation.systemError.stage"), value: props.error.stage },
-    { label: t("conversation.systemError.dispatchOutcome"), value: props.error.dispatchOutcome },
-    {
-      label: t("conversation.systemError.semanticOutput"),
-      value: props.error.semanticOutputObserved
-        ? t("conversation.systemError.true")
-        : t("conversation.systemError.false"),
-    },
-    {
-      label: t("conversation.systemError.retryable"),
-      value: props.error.retryable
-        ? t("conversation.systemError.true")
-        : t("conversation.systemError.false"),
-    },
-  ];
-  if (props.error.httpStatus) {
-    fields.push({ label: t("conversation.systemError.httpStatus"), value: props.error.httpStatus });
-  }
-  if (props.error.subcategory) {
-    fields.push({ label: t("conversation.systemError.subcategory"), value: props.error.subcategory });
-  }
-  if (props.error.upstreamCode) {
-    fields.push({ label: t("conversation.systemError.upstreamCode"), value: props.error.upstreamCode });
-  }
-  if (props.error.retryAfterMs) {
-    fields.push({
-      label: t("conversation.systemError.retryAfter"),
-      value: retryAfterDisplay(props.error.retryAfterMs),
-    });
-  }
-  if (reconciliationPending) {
-    fields.push(
-      {
-        label: t("conversation.systemError.requestIdentifier"),
-        value: props.error.requestId ?? t("conversation.systemError.identifierMissing"),
-      },
-      {
-        label: t("conversation.systemError.requestIdentifierSource"),
-        value: props.error.requestId
-          ? t("conversation.systemError.upstreamErrorPayload")
-          : t("conversation.systemError.identifierMissing"),
-      },
-      {
-        label: t("conversation.systemError.resultConfirmation"),
-        value: t("conversation.systemError.unconfirmed"),
-      },
-      {
-        label: t("conversation.systemError.usageConfirmation"),
-        value: t("conversation.systemError.unconfirmed"),
-      },
-    );
-  }
-
-  // The card is transcript history that remounts on every conversation switch, so it carries no live-region role
-  // (which would also replace the native disclosure semantics of <details>).
-  // 该卡片属于转录历史，每次切换会话都会重新挂载，因此不带实时区域角色（该角色还会覆盖 <details> 原生的展开语义）。
   return (
-    <details
-      aria-label={reconciliationPending
-        ? t("conversation.systemError.pendingTitle")
-        : t("conversation.systemError.title")}
-      className="vk-error-card"
-      data-pending={reconciliationPending || undefined}
-      onToggle={(event) => setExpanded(event.currentTarget.open)}
-    >
-      <summary className="vk-error-summary">
-        <CircleAlert aria-hidden="true" className="vk-error-icon" />
-        <div className="vk-error-message">
-          <span>{t("conversation.systemError.message")}</span>
-          <p>{props.error.message}</p>
-        </div>
-        <ChevronRight aria-hidden="true" className="vk-error-chev" />
-      </summary>
-      <div className="vk-error-details">
-        <div className="vk-error-head">
-          <strong>
-              {reconciliationPending
-                ? t("conversation.systemError.pendingTitle")
-                : t("conversation.systemError.title")}
-          </strong>
-          <StatusPill
-              status={reconciliationPending ? "pending" : "error"}
-              label={reconciliationPending
-                ? t("conversation.systemError.pendingStatus")
-                : t("conversation.systemError.status")}
-          />
-        </div>
-        {expanded ? (
-          <React.Suspense fallback={null}>
-            <ProviderErrorActions error={props.error} />
-          </React.Suspense>
-        ) : null}
-        {reconciliationPending ? (
-          <p className="vk-error-pending">
-            {t("conversation.systemError.pendingNotice")}
-          </p>
-        ) : null}
-        <dl className="vk-facts">
-          {fields.map((field) => (
-            <React.Fragment key={field.label}>
-              <dt>{field.label}</dt>
-              <dd>{field.value}</dd>
-            </React.Fragment>
-          ))}
-        </dl>
-        <div className="vk-error-raw">
-          <span>{t("conversation.systemError.raw")}</span>
-          <pre><code className="language-json">{formatSystemProviderErrorJson(props.error)}</code></pre>
-        </div>
-      </div>
-    </details>
+    <React.Suspense fallback={<div className="vk-error-card vk-error-loading">{props.error.message}</div>}>
+      <ProviderErrorPanel error={props.error} />
+    </React.Suspense>
   );
 }

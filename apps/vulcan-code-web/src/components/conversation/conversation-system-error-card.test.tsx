@@ -14,6 +14,7 @@ import {
   SystemErrorCard,
 } from "./conversation-system-error-card";
 import ProviderErrorActions, { isReportableSystemError } from "./conversation-system-error-actions";
+import ProviderErrorPanel from "./conversation-system-error-panel";
 import { parseConversationBlocks } from "./conversation-transcript-parser";
 
 // Capture the exact append request while leaving the persisted settings untouched.
@@ -115,21 +116,21 @@ describe("system provider error card", () => {
       provider_id: "alibaba",
       message: original,
     })}`)!;
-    // Mount the real card and open its disclosure to load the retry action.
-    // 挂载真实卡片并展开详情以加载重试操作。
+    // Mount the real card and capture copies without writing to the system clipboard.
+    // 挂载真实卡片，并捕获复制内容而不写入系统剪贴板。
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     const host = document.createElement("div");
     const root = createRoot(host);
+    const writeText = vi.fn<(value: string) => Promise<void>>().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     try {
       await act(async () => root.render(<I18nProvider initialLocale="en-US"><SystemErrorCard error={error} /></I18nProvider>));
-      expect(host.querySelector("button")).toBeNull();
-      const details = host.querySelector("details")!;
-      await act(async () => {
-        details.open = true;
-        details.dispatchEvent(new Event("toggle"));
-        await vi.dynamicImportSettled();
-      });
-      await act(async () => host.querySelector("button")!.click());
+      await act(async () => vi.dynamicImportSettled());
+      expect(host.querySelector("pre")).toBeNull();
+      await act(async () => host.querySelector<HTMLButtonElement>(".vk-error-summary button")!.click());
+      expect(JSON.parse(writeText.mock.calls[0][0])).toEqual(error.structured);
+      expect(host.querySelector("pre")).toBeNull();
+      await act(async () => host.querySelector<HTMLButtonElement>(".vk-error-actions button")!.click());
       expect(retryService.request).toHaveBeenCalledExactlyOnceWith(
         "service_add_provider_retry_rule", { rule: expect.stringMatching(/^regex:/) },
       );
@@ -140,8 +141,11 @@ describe("system provider error card", () => {
       expect(matcher.test(original)).toBe(true);
       expect(matcher.test("Provider request to `https://a.invalid/v1/chat` exceeded the registered 1000 ms response-header timeout.")).toBe(true);
       expect(matcher.test("Provider request to `https://a.invalid/v1/chat` failed: unexpected response")).toBe(false);
+      await act(async () => host.querySelector<HTMLButtonElement>(".vk-error-footer button[aria-expanded]")!.click());
+      expect(JSON.parse(host.querySelector("pre")!.textContent!)).toEqual(error.structured);
     } finally {
       await act(async () => root.unmount());
+      Reflect.deleteProperty(navigator, "clipboard");
       vi.unstubAllGlobals();
     }
   });
@@ -209,7 +213,7 @@ describe("system provider error card", () => {
     // 重试等待时长渲染为保留一位小数的秒数，而不是原始毫秒。
     const markup = renderToStaticMarkup(
       <I18nProvider initialLocale="zh-CN">
-        <SystemErrorCard error={parseSystemProviderError(EMPTY_MESSAGE_502_BODY)!} />
+        <ProviderErrorPanel error={parseSystemProviderError(EMPTY_MESSAGE_502_BODY)!} />
       </I18nProvider>,
     );
     expect(markup).toContain("60.0 s");
@@ -250,7 +254,7 @@ describe("system provider error card", () => {
 
     const markup = renderToStaticMarkup(
       <I18nProvider initialLocale="zh-CN">
-        <SystemErrorCard error={error!} />
+        <ProviderErrorPanel error={error!} />
       </I18nProvider>,
     );
     expect(markup).toContain("结果与费用待确认");
@@ -279,20 +283,20 @@ describe("system provider error card", () => {
     // markup 不得虚构 response ID 或其他供应商标识。
     const markup = renderToStaticMarkup(
       <I18nProvider initialLocale="zh-CN">
-        <SystemErrorCard error={error!} />
+        <ProviderErrorPanel error={error!} />
       </I18nProvider>,
     );
     expect(markup).toContain("请求标识");
     expect(markup).toContain("供应商未提供");
   });
 
-  it("renders a compact summary with an expandable JSON detail block", () => {
+  it("renders a compact summary with the raw diagnostic hidden", () => {
     const error = parseSystemProviderError(SYSTEM_ERROR_BODY);
     expect(error).not.toBeNull();
 
     const markup = renderToStaticMarkup(
       <I18nProvider initialLocale="zh-CN">
-        <SystemErrorCard error={error!} />
+        <ProviderErrorPanel error={error!} />
       </I18nProvider>,
     );
 
@@ -301,7 +305,7 @@ describe("system provider error card", () => {
     expect(markup).toContain("server_is_overloaded");
     expect(markup).toContain("查看原始错误");
     expect(markup).toContain("vk-error-chev");
-    expect(markup).toContain("language-json");
+    expect(markup).not.toContain("language-json");
     expect(markup).toContain("Our servers are currently overloaded. Please try again later.");
   });
 
