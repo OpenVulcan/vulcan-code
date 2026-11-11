@@ -148,7 +148,7 @@ async fn http_wire_request_capture_matches_dispatched_api_body() {
     assert_eq!(captured.path, "/responses");
     assert_eq!(
         captured.headers.get("authorization").map(String::as_str),
-        Some("<redacted>")
+        Some("Bearer {APIKEY}")
     );
     assert_eq!(
         captured.headers.get("user-agent").map(String::as_str),

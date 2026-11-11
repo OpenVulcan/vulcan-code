@@ -115,8 +115,8 @@ pub enum ProviderApiTraceReservationOutcome {
 /// Borrowed complete payload of one finished physical attempt.
 /// 一次已结束物理 attempt 的借用完整载荷。
 pub struct ProviderApiTracePayload<'a> {
-    /// Complete Provider input after final wire lowering.
-    /// 最终 wire lowering 后的完整 Provider 输入。
+    /// Complete Provider input with credential headers already masked by the wire capture.
+    /// 完整 Provider 输入，其中凭据头已由线路捕获遮蔽。
     pub input: &'a str,
     /// Complete Provider response or structured transport failure.
     /// 完整 Provider 响应或结构化传输失败。
@@ -455,8 +455,10 @@ impl ProviderApiTraceStore {
             Ok(existing) => existing,
             Err(error) => return ProviderApiTraceWriteOutcome::Diagnostic(error),
         };
-        let redacted_input = redact_provider_secrets(payload.input, payload.secrets);
-        let redacted_output = redact_provider_secrets(payload.output, payload.secrets);
+        // The trace producer has already masked credentials at capture. Preserve diagnostic values such as token counts.
+        // 追踪生产端已在捕获时遮蔽凭据，保留令牌数等诊断值。
+        let redacted_input = redact_known_provider_secrets(payload.input, payload.secrets);
+        let redacted_output = redact_known_provider_secrets(payload.output, payload.secrets);
         let input_sha256 = sha256_hex(redacted_input.as_bytes());
         let output_sha256 = sha256_hex(redacted_output.as_bytes());
         if let Some(existing) = existing.as_ref() {
@@ -904,13 +906,24 @@ where
     write_file_atomic(path, &encoded, artifact_kind).map_err(|error| error.to_string())
 }
 
-/// Replaces caller-known secrets and sensitive JSON fields with one marker.
-/// 使用同一标记替换调用方已知密钥和敏感 JSON 字段。
-pub fn redact_provider_secrets(input: &str, secrets: &[String]) -> String {
+/// Replaces exact known credential values and returns the original text with those values masked.
+/// 替换已知凭据的精确值，返回仅遮蔽这些值的原文。
+fn redact_known_provider_secrets(input: &str, secrets: &[String]) -> String {
+    // Work on the supplied text so arbitrary JSON field names retain their diagnostic values.
+    // 直接处理输入文本，使任意 JSON 字段名对应的诊断值都能保留。
     let mut literal_redacted = input.to_string();
     for secret in secrets.iter().filter(|secret| !secret.is_empty()) {
         literal_redacted = literal_redacted.replace(secret, REDACTED_PROVIDER_SECRET);
     }
+    literal_redacted
+}
+
+/// Replaces caller-known secrets and sensitive JSON fields with one marker.
+/// 使用同一标记替换调用方已知密钥和敏感 JSON 字段。
+pub fn redact_provider_secrets(input: &str, secrets: &[String]) -> String {
+    // Apply the exact-value rule before inspecting structured secret fields.
+    // 在检查结构化秘密字段前先处理精确值。
+    let literal_redacted = redact_known_provider_secrets(input, secrets);
     if let Ok(mut value) = serde_json::from_str::<Value>(&literal_redacted) {
         redact_json_value(&mut value);
         return serde_json::to_string(&value).unwrap_or(literal_redacted);

@@ -5,7 +5,6 @@ use super::{VulcanPublicContractAdapter, provider_failure};
 use base64::Engine;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use vulcan_ai_contract::AiStreamEvent;
 use vulcan_core::provider::VulcanProviderAdapter;
@@ -116,48 +115,6 @@ fn provider_request_trace_timestamp_ms() -> Result<u128, String> {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .map_err(|error| format!("Provider request trace clock failed: {error}"))
-}
-
-/// Redacts credential-shaped header values before a trace reaches disk.
-/// 在追踪写入磁盘前脱敏具有凭据形态的请求头值。
-///
-/// # Parameters
-/// 参数
-/// `headers` are the final protocol-projected non-transport headers.
-/// `headers` 是协议最终投影的非传输请求头。
-///
-/// # Returns
-/// 返回值
-/// A complete header map with sensitive values replaced by a fixed marker.
-/// 返回完整请求头映射，其中敏感值被固定标记替换。
-fn provider_request_trace_headers(headers: &BTreeMap<String, String>) -> BTreeMap<String, String> {
-    headers
-        .iter()
-        .map(|(name, value)| {
-            let normalized = name.trim().to_ascii_lowercase();
-            let sensitive = matches!(
-                normalized.as_str(),
-                "authorization"
-                    | "proxy-authorization"
-                    | "x-api-key"
-                    | "api-key"
-                    | "x-goog-api-key"
-                    | "anthropic-api-key"
-                    | "cookie"
-                    | "set-cookie"
-            ) || normalized.contains("token")
-                || normalized.contains("secret")
-                || normalized.ends_with("-key");
-            (
-                name.clone(),
-                if sensitive {
-                    String::from("<redacted>")
-                } else {
-                    value.clone()
-                },
-            )
-        })
-        .collect()
 }
 
 /// Selects the authoritative failure stage for one persisted Provider trace attempt.
@@ -383,7 +340,6 @@ pub(crate) async fn persist_provider_api_trace_snapshot(
     }
     let captured_at_unix_ms = provider_request_trace_timestamp_ms()
         .map_err(|error| provider_failure(identity.provider_id.as_str(), &error))?;
-    let headers = provider_request_trace_headers(&captured_request.headers);
     let processing_failure_stage = processing_failure
         .as_ref()
         .map(|failure| failure.stage.clone());
@@ -528,7 +484,7 @@ pub(crate) async fn persist_provider_api_trace_snapshot(
             "method": captured_request.method,
             "path": captured_request.path,
             "resolved_url": captured_request.resolved_url,
-            "headers": headers,
+            "headers": captured_request.headers,
             "credential_values_redacted": true,
             "body": captured_request.body,
         },
@@ -610,11 +566,11 @@ fn publish_provider_api_trace_values(
     output["trace_sequence"] = json!(reservation.trace_sequence);
     // Serialize the envelope after assigning the destination-specific sequence.
     // 分配目标专用序号后再序列化信封。
-    let input = serde_json::to_string_pretty(input)
+    let input = serde_json::to_string(input)
         .map_err(|error| format!("Provider API trace input serialization failed: {error}"))?;
     // The response retains the same destination identity as its request.
     // 响应与其请求保留相同的目标身份。
-    let output = serde_json::to_string_pretty(output)
+    let output = serde_json::to_string(output)
         .map_err(|error| format!("Provider API trace output serialization failed: {error}"))?;
     match store.publish_attempt(
         reservation,

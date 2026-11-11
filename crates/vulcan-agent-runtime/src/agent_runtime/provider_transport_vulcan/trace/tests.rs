@@ -2,38 +2,7 @@
 //! trace边界的回归测试。
 
 use super::*;
-
-/// Verifies trace headers preserve ordinary protocol fields while removing access material.
-/// 验证追踪请求头保留普通协议字段，同时移除访问凭据材料。
-#[test]
-fn provider_request_trace_headers_redact_access_material() {
-    let headers = BTreeMap::from([
-        (
-            String::from("content-type"),
-            String::from("application/json"),
-        ),
-        (String::from("Authorization"), String::from("Bearer secret")),
-        (
-            String::from("x-session-token"),
-            String::from("secret-token"),
-        ),
-    ]);
-
-    let traced = provider_request_trace_headers(&headers);
-
-    assert_eq!(
-        traced.get("content-type").map(String::as_str),
-        Some("application/json")
-    );
-    assert_eq!(
-        traced.get("Authorization").map(String::as_str),
-        Some("<redacted>")
-    );
-    assert_eq!(
-        traced.get("x-session-token").map(String::as_str),
-        Some("<redacted>")
-    );
-}
+use std::collections::BTreeMap;
 
 /// Verifies host-side failures fill the trace stage only when no lower transport failure exists.
 /// 验证仅当不存在更底层传输失败时，宿主侧失败才会补充追踪阶段。
@@ -306,9 +275,13 @@ async fn ordinary_provider_request_trace_shape_is_unchanged() {
                 String::from("content-type"),
                 String::from("application/json"),
             ),
-            (String::from("authorization"), String::from("<redacted>")),
+            (
+                String::from("authorization"),
+                String::from("Bearer {APIKEY}"),
+            ),
+            (String::from("x-cache-key"), String::from("fixture-cache")),
         ]),
-        body: json!({"model": TRACE_FIXTURE_MODEL_ID, "input": []}),
+        body: json!({"model": TRACE_FIXTURE_MODEL_ID, "input": [], "metadata": {"input_token": 7}}),
     };
     let ordinary_response_body = br#"data: {"type":"response.completed"}"#;
     let captured_response = ProviderWireResponseCapture {
@@ -359,6 +332,22 @@ async fn ordinary_provider_request_trace_shape_is_unchanged() {
     assert_reused_trace_envelope(&published.input, &published.output, api_call_id);
     assert_eq!(published.input["request"]["transport"], "http_sse");
     assert_eq!(published.input["request"]["path"], "/responses");
+    assert_eq!(
+        published.input["request"]["resolved_url"],
+        "https://example.test/responses"
+    );
+    assert_eq!(
+        published.input["request"]["headers"]["authorization"],
+        "Bearer {APIKEY}"
+    );
+    assert_eq!(
+        published.input["request"]["headers"]["x-cache-key"],
+        "fixture-cache"
+    );
+    assert_eq!(
+        published.input["request"]["body"]["metadata"]["input_token"],
+        7
+    );
     assert_eq!(published.input["session_id"], "ordinary-trace-session");
     assert_eq!(
         published.input["turn_anchor_message_id"],

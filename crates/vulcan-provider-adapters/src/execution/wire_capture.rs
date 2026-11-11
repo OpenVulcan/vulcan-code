@@ -536,24 +536,41 @@ fn provider_wire_request_capture_headers(headers: &HeaderMap) -> BTreeMap<String
     headers
         .iter()
         .map(|(name, value)| {
-            let normalized = name.as_str().trim().to_ascii_lowercase();
-            let sensitive = matches!(
-                normalized.as_str(),
-                "authorization"
-                    | "proxy-authorization"
-                    | "x-api-key"
-                    | "api-key"
-                    | "x-goog-api-key"
-                    | "anthropic-api-key"
-                    | "cookie"
-                    | "set-cookie"
-            ) || normalized.contains("token")
-                || normalized.contains("secret")
-                || normalized.ends_with("-key");
+            // Use the header's sensitivity flag and known credential headers so ordinary protocol fields stay readable.
+            // 使用请求头的敏感标记与已知凭据头，保留普通协议字段供排查。
+            let sensitive = value.is_sensitive()
+                || matches!(
+                    name.as_str(),
+                    "authorization"
+                        | "proxy-authorization"
+                        | "x-api-key"
+                        | "api-key"
+                        | "x-goog-api-key"
+                        | "anthropic-api-key"
+                        | "x-auth-token"
+                        | "x-session-token"
+                        | "cookie"
+                        | "set-cookie"
+                );
+            // Preserve the authentication scheme for diagnosing the wire format.
+            // 保留认证方式，便于排查线路格式。
+            let value = String::from_utf8_lossy(value.as_bytes());
+            // Only recognized authentication schemes can appear before the placeholder.
+            // 只有已知的认证方式可以保留在占位符之前。
             let projected = if sensitive {
-                String::from("<redacted>")
+                match value.split_once(' ') {
+                    Some((scheme, _))
+                        if matches!(name.as_str(), "authorization" | "proxy-authorization")
+                            && ["Bearer", "Basic", "Auth"]
+                                .iter()
+                                .any(|known| scheme.eq_ignore_ascii_case(known)) =>
+                    {
+                        format!("{scheme} {{APIKEY}}")
+                    }
+                    _ => String::from("{APIKEY}"),
+                }
             } else {
-                String::from_utf8_lossy(value.as_bytes()).into_owned()
+                value.into_owned()
             };
             (name.as_str().to_string(), projected)
         })

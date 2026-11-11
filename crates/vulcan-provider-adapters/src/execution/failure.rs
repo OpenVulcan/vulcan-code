@@ -394,15 +394,20 @@ pub(crate) struct TransportFailureEvidence {
 /// 参数
 /// `error` is the exact reqwest send error that ended the attempt.
 /// `error` 是结束本次尝试的精确 reqwest 发送错误。
+/// `secret` is the credential used for this attempt.
+/// `secret` 是本次尝试使用的凭据。
 ///
 /// # Returns
 /// 返回值
 /// A stable phase label plus its bounded cause chain, never a dispatch decision.
 /// 稳定阶段标签及其受限原因链，绝不包含分派决策。
-pub(crate) fn http_send_failure_evidence(error: &reqwest::Error) -> TransportFailureEvidence {
+pub(crate) fn http_send_failure_evidence(
+    error: &reqwest::Error,
+    secret: &CredentialExecutionSecret,
+) -> TransportFailureEvidence {
     TransportFailureEvidence {
         phase: http_send_phase(error),
-        causes: http_send_causes(error),
+        causes: http_send_causes(error.source(), secret),
         timeout_ms: None,
     }
 }
@@ -464,23 +469,26 @@ fn http_send_phase(error: &reqwest::Error) -> TransportFailurePhase {
 ///
 /// # Parameters
 /// 参数
-/// `error` is the exact reqwest send error.
-/// `error` 是精确的 reqwest 发送错误。
+/// `source` starts at the first underlying error, and `secret` is the exact request credential.
+/// `source` 从第一层底层错误开始，`secret` 是请求的精确凭据。
 ///
 /// # Returns
 /// 返回值
-/// At most `TRANSPORT_FAILURE_MAX_CAUSES` texts, each truncated to its character bound.
-/// 至多 `TRANSPORT_FAILURE_MAX_CAUSES` 条文本，每条截断到各自的字符上限。
-fn http_send_causes(error: &reqwest::Error) -> Vec<String> {
+/// At most `TRANSPORT_FAILURE_MAX_CAUSES` texts with the known credential masked before truncation.
+/// 至多 `TRANSPORT_FAILURE_MAX_CAUSES` 条文本，先遮蔽已知凭据再截断。
+fn http_send_causes(
+    mut source: Option<&(dyn std::error::Error + 'static)>,
+    secret: &CredentialExecutionSecret,
+) -> Vec<String> {
+    // Retain endpoint details while removing any exact credential echoed by the transport.
+    // 保留端点详情，同时移除传输层可能回显的精确凭据。
     let mut causes = Vec::new();
-    let mut source = error.source();
     while let Some(cause) = source {
         if causes.len() >= TRANSPORT_FAILURE_MAX_CAUSES {
             break;
         }
         causes.push(
-            cause
-                .to_string()
+            redact_exact_credential(&cause.to_string(), secret)
                 .chars()
                 .take(TRANSPORT_FAILURE_MAX_CAUSE_CHARACTERS)
                 .collect(),

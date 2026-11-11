@@ -183,7 +183,13 @@ async fn http_send_failure_uses_reqwest_connection_evidence() {
 
     // connect_evidence keeps the phase label and the bounded cause chain for later diagnosis.
     // connect_evidence 为后续诊断保留阶段标签与受限原因链。
-    let connect_evidence = http_send_failure_evidence(&connect_error);
+    let secret = crate::CredentialSecretEnvelope::new_api_key(String::from("fixture-send-key"))
+        .expect("test credential should validate")
+        .execution_secret()
+        .expect("test execution secret should resolve");
+    // Use the same synthetic credential for both transport failure categories.
+    // 两类传输失败共用同一组合成凭据。
+    let connect_evidence = http_send_failure_evidence(&connect_error, &secret);
     assert_eq!(connect_evidence.phase, TransportFailurePhase::Connect);
     assert!(!connect_evidence.causes.is_empty());
     assert!(connect_evidence.causes.len() <= TRANSPORT_FAILURE_MAX_CAUSES);
@@ -213,9 +219,40 @@ async fn http_send_failure_uses_reqwest_connection_evidence() {
 
     // builder_evidence must never claim a proven connection-establishment failure.
     // builder_evidence 绝不声称已证明连接建立失败。
-    let builder_evidence = http_send_failure_evidence(&builder_error);
+    let builder_evidence = http_send_failure_evidence(&builder_error, &secret);
     assert_ne!(builder_evidence.phase, TransportFailurePhase::Connect);
     assert!(builder_evidence.causes.len() <= TRANSPORT_FAILURE_MAX_CAUSES);
+}
+
+/// Verifies a transport cause retains the endpoint and reason while hiding an echoed credential.
+/// 验证传输原因保留端点与故障原因，同时遮蔽回显凭据。
+#[test]
+fn http_send_causes_preserve_endpoint_and_mask_exact_credential() {
+    // The synthetic cause includes a normal URL and an opaque credential.
+    // 合成原因同时包含普通 URL 与不透明凭据。
+    let secret = crate::CredentialSecretEnvelope::new_api_key(String::from("fixture-cause-key"))
+        .expect("test credential should validate")
+        .execution_secret()
+        .expect("test execution secret should resolve");
+    // The cause reaches the same formatter used for reqwest's source chain.
+    // 此原因进入 reqwest 错误来源链使用的同一格式化逻辑。
+    let cause = std::io::Error::other(format!(
+        "https://example.test/v1/v1/responses connection refused for {}",
+        secret.expose_value()
+    ));
+    // The resulting trace cause keeps the diagnostic context.
+    // 生成的追踪原因保留诊断上下文。
+    let causes = http_send_causes(Some(&cause), &secret);
+    assert!(
+        causes
+            .iter()
+            .any(|value| value.contains("/v1/v1/responses connection refused"))
+    );
+    assert!(
+        causes
+            .iter()
+            .all(|value| !value.contains(secret.expose_value()))
+    );
 }
 
 /// Verifies HTTP stream failures cannot be mislabeled as Responses WebSocket failures.
