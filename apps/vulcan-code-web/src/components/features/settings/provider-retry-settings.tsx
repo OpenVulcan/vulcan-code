@@ -3,11 +3,11 @@ import { LoaderCircle } from "lucide-react"
 
 import type { ProviderRetrySettingsSaveRequest, SettingsActionProps } from "@/components/features/settings/settings-action-types"
 import { PageActionBar, PageNotice } from "@/components/page"
+import { ProviderRetryRuleList, type ProviderRetryRuleEditor } from "./provider-retry-rule-list"
 import { Button } from "@/ui-kit/primitives/button"
 import { DisclosureSection } from "@/ui-kit/primitives/disclosure"
 import { Input } from "@/ui-kit/primitives/input"
 import { Switch } from "@/ui-kit/primitives/switch"
-import { Textarea } from "@/ui-kit/primitives/textarea"
 import { toast } from "@/ui-kit/primitives/toast"
 import { formatMessage, useI18n, type Translate } from "@/i18n"
 import type { ProviderRetrySettingsSummary } from "@/types"
@@ -65,9 +65,9 @@ interface ProviderRetrySettingsDraft {
   // Whether rate-limit failures may be retried.
   // 是否允许重试限流失败。
   retry429: boolean
-  // Retry keywords, one per line; the backend trims, deduplicates and bounds them.
-  // 重试关键词，每行一个；后台负责修剪、去重与上限校验。
-  retryKeywords: string
+  // Ordered retry rules in the service's string representation.
+  // 按服务字符串格式保存的有序重试规则。
+  retryKeywords: string[]
   // Maximum finite rate-limit retries.
   // 限流最大有限重试次数。
   rateLimitMaxRetries: string
@@ -156,6 +156,9 @@ export function ProviderRetrySettingsArea(props: {
   const [draft, setDraft] = React.useState<ProviderRetrySettingsDraft>(sourceDraft)
   const [saveState, setSaveState] = React.useState<"idle" | "saving" | "saved">("idle")
   const [saveError, setSaveError] = React.useState<string | null>(null)
+  // Protect an open rule editor from settings refresh or a save of unconfirmed input.
+  // 保护打开的规则编辑器，避免设置刷新覆盖输入或保存尚未确认的内容。
+  const [ruleEditor, setRuleEditor] = React.useState<ProviderRetryRuleEditor | null>(null)
   // baselineDraft tracks the values the user actually began editing.
   // baselineDraft 跟踪用户实际开始编辑的值。
   const [baselineDraft, setBaselineDraft] = React.useState(sourceDraft)
@@ -172,16 +175,16 @@ export function ProviderRetrySettingsArea(props: {
     const sourceKey = JSON.stringify(sourceDraft)
     if (observedSource.current === sourceKey) return
     observedSource.current = sourceKey
-    if (dirty || savingRef.current) return
+    if (dirty || ruleEditor || savingRef.current) return
     setDraft(sourceDraft)
     setBaselineDraft(sourceDraft)
     setSaveState("idle")
     setSaveError(null)
-  }, [dirty, sourceDraft])
+  }, [dirty, ruleEditor, sourceDraft])
 
   const validationError = validateRetrySettingsDraft(draft, t)
   const saveDraft = React.useCallback(async () => {
-    if (savingRef.current || !dirty || sourceChanged) return
+    if (savingRef.current || !dirty || sourceChanged || ruleEditor) return
     const error = validateRetrySettingsDraft(draft, t)
     if (error) {
       setSaveError(error)
@@ -201,7 +204,7 @@ export function ProviderRetrySettingsArea(props: {
     } finally {
       savingRef.current = false
     }
-  }, [dirty, draft, props.actions, sourceChanged, t])
+  }, [dirty, draft, props.actions, ruleEditor, sourceChanged, t])
 
   // saving locks the editor while one complete policy is persisted.
   // saving 在持久化一份完整策略期间锁定编辑器。
@@ -248,41 +251,23 @@ export function ProviderRetrySettingsArea(props: {
           </DisclosureSection>
         </fieldset>
 
-        <fieldset className="context-basics-group">
-          <legend>{t("settings.retry.errorKeywords")}</legend>
-          <div className="vk-form-pref">
-            <span className="vk-form-pref-text"><strong>{t("settings.retry.retryWhenTheError")}</strong><small className="vk-form-note">{t("settings.retry.oneKeywordPerLine")}</small></span>
-          </div>
-          <Textarea
-            aria-label={t("settings.retry.retryWhenTheError")}
-            onChange={(event) => {
-              const retryKeywords = event.currentTarget.value
-              setDraft((current) => ({ ...current, retryKeywords }))
-            }}
-            rows={4}
-            spellCheck={false}
-            value={draft.retryKeywords}
-          />
-          <div>
-            <Button
-              disabled={draft.retryKeywords === keywordsText(settings.defaultRetryKeywords)}
-              onClick={() => setDraft((current) => ({ ...current, retryKeywords: keywordsText(settings.defaultRetryKeywords) }))}
-              size="sm"
-              type="button"
-              variant="outline"
-            >{t("settings.retry.restoreDefaultKeywords")}</Button>
-          </div>
-        </fieldset>
+        <ProviderRetryRuleList
+          defaultRules={settings.defaultRetryKeywords}
+          editor={ruleEditor}
+          onEditorChange={setRuleEditor}
+          onRulesChange={(retryKeywords) => setDraft((current) => ({ ...current, retryKeywords }))}
+          rules={draft.retryKeywords}
+        />
       </fieldset>
       {validationError || saveError ? <p className="vk-field-error" role="alert">{validationError ?? saveError}</p> : null}
       {sourceChanged ? (
         <PageNotice tone="warning" title={t("settings.retry.theseSettingsWereJust")} actions={
-          <Button onClick={() => { setDraft(sourceDraft); setBaselineDraft(sourceDraft); setSaveState("idle"); setSaveError(null) }} size="sm" type="button" variant="outline">{t("settings.retry.reload")}</Button>
+          <Button onClick={() => { setDraft(sourceDraft); setBaselineDraft(sourceDraft); setSaveState("idle"); setSaveError(null); setRuleEditor(null) }} size="sm" type="button" variant="outline">{t("settings.retry.reload")}</Button>
         } />
       ) : null}
       {dirty || saving ? (
         <PageActionBar pending={dirty} actions={
-          <Button disabled={!dirty || sourceChanged || Boolean(validationError) || saving} onClick={() => void saveDraft()} size="sm" type="button">
+          <Button disabled={!dirty || sourceChanged || Boolean(validationError) || saving || ruleEditor !== null} onClick={() => void saveDraft()} size="sm" type="button">
             {saving ? <LoaderCircle className="vk-spin" /> : null}
             {t(saving ? "settings.retry.saving" : "settings.retry.save")}
           </Button>
@@ -304,7 +289,7 @@ function retrySettingsDraft(settings: ProviderRetrySettingsSummary): ProviderRet
     jitterPercent: String(settings.jitterPercent),
     respectRetryAfter: settings.respectRetryAfter,
     retry429: settings.retry429,
-    retryKeywords: keywordsText(settings.retryKeywords),
+    retryKeywords: settings.retryKeywords,
     rateLimitMaxRetries: String(settings.rateLimit.maxRetries),
     rateLimitInitialDelaySeconds: millisecondsToSecondsText(settings.rateLimit.initialDelayMs),
     rateLimitMaxDelaySeconds: millisecondsToSecondsText(settings.rateLimit.maxDelayMs),
@@ -324,7 +309,7 @@ function retrySettingsRequest(draft: ProviderRetrySettingsDraft): ProviderRetryS
     jitterPercent: Number(draft.jitterPercent),
     respectRetryAfter: draft.respectRetryAfter,
     retry429: draft.retry429,
-    retryKeywords: draft.retryKeywords.split("\n"),
+    retryKeywords: draft.retryKeywords,
     rateLimit: {
       maxRetries: Number(draft.rateLimitMaxRetries),
       initialDelayMs: secondsTextToMilliseconds(draft.rateLimitInitialDelaySeconds),
@@ -356,11 +341,6 @@ function validateRetrySettingsDraft(draft: ProviderRetrySettingsDraft, t: Transl
   return null
 }
 
-// keywordsText joins a keyword list into the one-per-line editor text.
-// keywordsText 将关键词列表拼接为每行一个的编辑文本。
-function keywordsText(keywords: readonly string[]): string {
-  return keywords.join("\n")
-}
 
 // validDelayPair checks one initial and maximum delay pair expressed in seconds.
 // validDelayPair 校验一组以秒表示的首次与最大等待。
