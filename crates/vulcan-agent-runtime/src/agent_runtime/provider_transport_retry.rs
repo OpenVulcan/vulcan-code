@@ -4,12 +4,16 @@
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::agent_runtime::provider_transport_vulcan::NO_ANSWER_COMPLETION_SUBCATEGORY;
 use crate::provider_config::{
-    PROVIDER_RATE_LIMIT_RETRY_MAX_DELAY_MS, PROVIDER_RETRY_MAX_JITTER_PERCENT,
-    PROVIDER_RETRY_MAX_RETRIES, PersistedProviderRetryConfiguration,
+    PROVIDER_RATE_LIMIT_RETRY_MAX_DELAY_MS, PROVIDER_RETRY_KEYWORD_MAX_COUNT,
+    PROVIDER_RETRY_MAX_JITTER_PERCENT, PROVIDER_RETRY_MAX_RETRIES,
+    PersistedProviderRetryConfiguration, ProviderRetryRule,
     normalize_provider_rate_limit_retry_max_retries, normalize_provider_retry_backoff_factor,
 };
 use std::time::Duration;
-use vulcan_ai_contract::{AiErrorCategory, AiExecutionError, AiTransportKind, DispatchOutcome};
+use vulcan_ai_contract::{
+    AiErrorCategory, AiExecutionError, AiTransportKind, DispatchOutcome,
+    HTTP_RESPONSE_HEADERS_TIMEOUT_CODE,
+};
 use vulcan_core::types::CoreError as VulcanCoreError;
 
 /// Hard safety ceiling for every backend-configured rate-limit retry wait.
@@ -61,9 +65,9 @@ pub struct ProviderRetryPolicy {
     /// Rate-limit backoff multiplier, where one selects a fixed interval.
     /// 限流退避倍数；一表示固定间隔。
     rate_limit_backoff_factor: f64,
-    /// Lowercase configured error keywords whose match makes a dispatched failure replayable.
-    /// 已配置的小写错误关键词；命中时已分派失败可重放。
-    retry_keywords: Vec<String>,
+    /// Compiled literal and regular expression rules for structured provider failures.
+    /// 用于结构化供应商失败的已编译字面及正则规则。
+    retry_rules: Vec<ProviderRetryRule>,
 }
 
 impl ProviderRetryPolicy {
@@ -102,11 +106,11 @@ impl ProviderRetryPolicy {
             rate_limit_backoff_factor: normalize_provider_retry_backoff_factor(
                 config.rate_limit.backoff_factor,
             ),
-            retry_keywords: config
+            retry_rules: config
                 .retry_keywords
                 .iter()
-                .map(|keyword| keyword.trim().to_lowercase())
-                .filter(|keyword| !keyword.is_empty())
+                .take(PROVIDER_RETRY_KEYWORD_MAX_COUNT)
+                .filter_map(|line| ProviderRetryRule::parse(line).ok().flatten())
                 .collect(),
         }
     }
@@ -133,14 +137,14 @@ impl ProviderRetryPolicy {
     ) -> Option<ProviderRetryDecision> {
         if !self.enabled
             || (unsafe_delta_seen
-                && !core_error_is_replayable_stream_failure(error, &self.retry_keywords))
+                && !core_error_is_replayable_stream_failure(error, &self.retry_rules))
         {
             return None;
         }
 
         // classification separates rate-limit scheduling from ordinary transient retry rules.
         // classification 将限流调度与普通瞬态重试规则分离。
-        let classification = classify_retry_reason(error, self.retry_429, &self.retry_keywords)?;
+        let classification = classify_retry_reason(error, self.retry_429, &self.retry_rules)?;
         // retryLimit selects the independent backend ceiling for rate limits or ordinary transient failures.
         // retryLimit 为限流或普通瞬态失败选择彼此独立的后台次数上限。
         // isRateLimit selects the dedicated backend interval and count configuration.
@@ -199,7 +203,7 @@ impl ProviderRetryPolicy {
             return None;
         }
         let classification =
-            classify_structured_retry_reason(error, self.retry_429, &self.retry_keywords)?;
+            classify_structured_retry_reason(error, self.retry_429, &self.retry_rules)?;
         let is_rate_limit = classification.category == ProviderRetryCategory::RateLimit;
         let retry_limit = if is_rate_limit {
             self.rate_limit_max_retries
@@ -353,14 +357,14 @@ fn deterministic_jitter_multiplier(retry_number: u32, jitter_percent: u8) -> f64
 fn classify_retry_reason(
     error: &VulcanCoreError,
     retry_429: bool,
-    retry_keywords: &[String],
+    retry_rules: &[ProviderRetryRule],
 ) -> Option<ProviderRetryClassification> {
     if let VulcanCoreError::ProviderFailure {
         details: Some(details),
         ..
     } = error
     {
-        return classify_structured_retry_reason(details, retry_429, retry_keywords);
+        return classify_structured_retry_reason(details, retry_429, retry_rules);
     }
     classify_legacy_retry_reason(error, retry_429)
 }
@@ -371,8 +375,8 @@ fn classify_retry_reason(
 /// # Parameters
 /// 参数
 /// `error` is the normalized execution failure, `retry_429` controls rate-limit retry, and
-/// `retry_keywords` are the lowercase configured keywords.
-/// `error` 是归一化执行失败，`retry_429` 控制是否重试限流，`retry_keywords` 是已配置的小写关键词。
+/// `retry_rules` are the compiled user rules.
+/// `error` 是归一化执行失败，`retry_429` 控制是否重试限流，`retry_rules` 是已编译的用户规则。
 ///
 /// # Returns
 /// 返回值
@@ -381,7 +385,7 @@ fn classify_retry_reason(
 fn classify_structured_retry_reason(
     error: &AiExecutionError,
     retry_429: bool,
-    retry_keywords: &[String],
+    retry_rules: &[ProviderRetryRule],
 ) -> Option<ProviderRetryClassification> {
     // A provider-owned reconciliation state forbids transparent replay even if a future generic
     // classifier learns to recognize its HTTP status or surrounding error type.
@@ -412,17 +416,26 @@ fn classify_structured_retry_reason(
     // replayableStreamIdleTimeout keeps the existing timeout-specific retry classification.
     // replayableStreamIdleTimeout 保留现有的流空闲超时专用重试分类。
     let replayable_stream_idle_timeout = structured_error_is_replayable_stream_idle_timeout(error);
-    // replayableStreamFailure contains only the registered stream subtypes allowed to replace discarded partial output.
-    // replayableStreamFailure 仅包含允许替换已丢弃局部输出的已注册流子类型。
+    // A user rule can opt in to the host's registered header deadline while dispatch remains unknown.
+    // 用户规则可显式启用宿主已登记响应头截止时间的重试，分派结果仍保留为未知。
+    let rule_match = structured_error_matches_retry_rule(error, retry_rules);
+    // Reuse the rule result for discarded partial output and for ordinary transient failures.
+    // 丢弃的部分输出与普通瞬态失败共用同一次规则匹配结果。
     let replayable_stream_failure =
-        structured_error_is_replayable_stream_failure(error, retry_keywords);
-    // keywordMatch is the user-configured transient marker; it still respects every safety gate.
-    // keywordMatch 是用户配置的瞬态标记；它仍遵守全部安全守卫。
-    let keyword_match = structured_error_matches_retry_keyword(error, retry_keywords);
-    if !error.retryable && !known_overload && !known_stream_error && !keyword_match
+        structured_error_is_replayable_stream_failure(error, rule_match);
+    // The exception is confined to this HTTP deadline before any semantic output or observed effect.
+    // 此例外仅限尚无语义输出或已观测副作用时的这类 HTTP 截止时间。
+    let matched_header_deadline = rule_match
+        && error.category == AiErrorCategory::ProviderUnavailable
+        && error.subcategory.as_deref() == Some(HTTP_RESPONSE_HEADERS_TIMEOUT_CODE)
+        && error.stage == "transport"
+        && error.transport == Some(AiTransportKind::Http)
+        && error.retryable
+        && !error.semantic_output_observed;
+    if !error.retryable && !known_overload && !known_stream_error && !rule_match
         || (error.semantic_output_observed && !replayable_stream_failure)
         || error.side_effect_observed
-        || error.dispatch_outcome == DispatchOutcome::Unknown
+        || (error.dispatch_outcome == DispatchOutcome::Unknown && !matched_header_deadline)
     {
         return None;
     }
@@ -444,10 +457,10 @@ fn classify_structured_retry_reason(
             reason: String::from("Provider completed without an answer"),
         });
     }
-    if keyword_match {
+    if rule_match {
         return Some(ProviderRetryClassification {
             category: ProviderRetryCategory::Transient,
-            reason: String::from("Provider error matched a retry keyword"),
+            reason: String::from("Provider error matched a retry rule"),
         });
     }
     match error.category {
@@ -486,8 +499,8 @@ fn classify_structured_retry_reason(
 /// # Parameters
 /// 参数
 /// `error` is the controller failure retaining optional structured Provider details and
-/// `retry_keywords` are the lowercase configured keywords.
-/// `error` 是保留可选强类型 Provider 详情的控制器失败，`retry_keywords` 是已配置的小写关键词。
+/// `retry_rules` are the compiled user rules.
+/// `error` 是保留可选强类型 Provider 详情的控制器失败，`retry_rules` 是已编译的用户规则。
 ///
 /// # Returns
 /// 返回值
@@ -495,14 +508,17 @@ fn classify_structured_retry_reason(
 /// 仅当强类型失败属于已注册、已分派且无副作用的流失败子类型时返回 `true`。
 fn core_error_is_replayable_stream_failure(
     error: &VulcanCoreError,
-    retry_keywords: &[String],
+    retry_rules: &[ProviderRetryRule],
 ) -> bool {
     matches!(
         error,
         VulcanCoreError::ProviderFailure {
             details: Some(details),
             ..
-        } if structured_error_is_replayable_stream_failure(details, retry_keywords)
+        } if structured_error_is_replayable_stream_failure(
+            details,
+            structured_error_matches_retry_rule(details, retry_rules),
+        )
     )
 }
 
@@ -573,9 +589,12 @@ fn structured_error_is_no_answer_completion(error: &AiExecutionError) -> bool {
 
 /// Returns whether one structured failure is an explicitly replayable stream failure.
 /// 判断一项结构化失败是否属于明确可重放的流失败。
+///
+/// `error` carries the execution facts and `rule_match` records whether a user rule matched.
+/// `error` 携带执行事实，`rule_match` 记录是否命中用户规则。
 fn structured_error_is_replayable_stream_failure(
     error: &AiExecutionError,
-    retry_keywords: &[String],
+    rule_match: bool,
 ) -> bool {
     structured_error_is_replayable_stream_idle_timeout(error)
         || structured_error_is_known_stream_error(error)
@@ -583,40 +602,47 @@ fn structured_error_is_replayable_stream_failure(
         || structured_error_is_no_answer_completion(error)
         || (error.dispatch_outcome == DispatchOutcome::Dispatched
             && !error.side_effect_observed
-            && structured_error_matches_retry_keyword(error, retry_keywords))
+            && rule_match)
 }
 
-/// Reports whether any diagnostic text of one failure contains a configured retry keyword.
-/// 报告一项失败的任一诊断文本是否包含已配置的重试关键词。
+/// Reports whether any diagnostic field of one failure matches a configured retry rule.
+/// 报告一项失败的任一诊断字段是否命中已配置的重试规则。
 ///
 /// # Parameters
 /// 参数
-/// `error` is the normalized failure and `retry_keywords` are lowercase, non-empty keywords.
-/// `error` 是归一化失败，`retry_keywords` 是小写且非空的关键词。
+/// `error` is the normalized failure and `retry_rules` are compiled literal and regex rules.
+/// `error` 是归一化失败，`retry_rules` 是已编译的字面和正则规则。
 ///
 /// # Returns
 /// 返回值
-/// `true` when the message, upstream message, or upstream code contains one keyword.
-/// 当消息、上游消息或上游代码包含任一关键词时返回 `true`。
-fn structured_error_matches_retry_keyword(
+/// `true` when a message or diagnostic code matches any rule.
+/// 消息或诊断码命中任一规则时返回 `true`。
+fn structured_error_matches_retry_rule(
     error: &AiExecutionError,
-    retry_keywords: &[String],
+    retry_rules: &[ProviderRetryRule],
 ) -> bool {
-    if retry_keywords.is_empty() {
+    if retry_rules.is_empty() {
         return false;
     }
     [
         Some(error.message.as_str()),
         error.upstream_message.as_deref(),
         error.upstream_code.as_deref(),
+        error
+            .subcategory
+            .as_deref()
+            .filter(|code| *code == HTTP_RESPONSE_HEADERS_TIMEOUT_CODE),
     ]
     .into_iter()
     .flatten()
-    .map(str::to_lowercase)
-    .any(|text| {
-        retry_keywords
-            .iter()
-            .any(|keyword| text.contains(keyword.as_str()))
+    .any(|diagnostic| {
+        // Fold once for literals and preserve the original spelling for regular expressions.
+        // 字面匹配只做一次大小写折叠，正则匹配保留原始拼写。
+        let folded = diagnostic.to_lowercase();
+        retry_rules.iter().any(|rule| match rule {
+            ProviderRetryRule::Literal(literal) => folded.contains(literal.as_str()),
+            ProviderRetryRule::Regex(regex) => regex.is_match(diagnostic),
+        })
     })
 }
 
@@ -895,8 +921,8 @@ mod tests {
     };
     use std::time::Duration;
     use vulcan_ai_contract::{
-        AiErrorCategory, AiExecutionError, AiTransportKind, DispatchOutcome, RetryAfterHint,
-        RetryAfterSource,
+        AiErrorCategory, AiExecutionError, AiTransportKind, DispatchOutcome,
+        HTTP_RESPONSE_HEADERS_TIMEOUT_CODE, RetryAfterHint, RetryAfterSource,
     };
     use vulcan_core::types::{
         CoreError as VulcanCoreError, ProviderUsageSnapshot as CoreProviderUsageSnapshot,
@@ -1301,6 +1327,57 @@ mod tests {
         assert!(policy().next_retry(&no_answer, 0, true).is_none());
     }
 
+    /// Verifies a configured regex matches different HTTP header deadlines under the ordinary retry budget.
+    /// 验证已配置正则可匹配不同 HTTP 响应头截止时间，并受普通重试预算限制。
+    #[test]
+    fn regex_retries_only_the_matching_registered_http_header_deadline() {
+        // Build the same typed failure facts produced by the registered HTTP adapter deadline.
+        // 构造与 HTTP 适配器已登记截止时间产生的相同强类型失败事实。
+        let VulcanCoreError::ProviderFailure {
+            details: Some(mut failure),
+            ..
+        } = structured_provider_error(AiErrorCategory::ProviderUnavailable, true)
+        else {
+            panic!("structured error expected");
+        };
+        failure.subcategory = Some(HTTP_RESPONSE_HEADERS_TIMEOUT_CODE.into());
+        failure.transport = Some(AiTransportKind::Http);
+        failure.stage = "transport".into();
+        failure.dispatch_outcome = DispatchOutcome::Unknown;
+        // The anchored rule keeps URL and elapsed time variable and preserves message case.
+        // 锚定规则允许 URL 和耗时变化，且保留消息大小写。
+        let retry_policy = ProviderRetryPolicy::from_config(&PersistedProviderRetryConfiguration {
+            max_retries: 1,
+            retry_keywords: vec![
+                r"regex:^Provider request to `[^`]+` exceeded the registered [0-9]+ ms response-header timeout\.$"
+                    .into(),
+            ],
+            ..PersistedProviderRetryConfiguration::default()
+        });
+        for (url, timeout_ms) in [
+            ("https://a.invalid/v1/chat", 60_000),
+            ("https://b.invalid/", 1_000),
+        ] {
+            failure.message = format!(
+                "Provider request to `{url}` exceeded the registered {timeout_ms} ms response-header timeout."
+            );
+            assert!(retry_policy.next_structured_retry(&failure, 0).is_some());
+            assert!(retry_policy.next_structured_retry(&failure, 1).is_none());
+            assert!(policy().next_structured_retry(&failure, 0).is_none());
+        }
+        failure.semantic_output_observed = true;
+        assert!(retry_policy.next_structured_retry(&failure, 0).is_none());
+        failure.semantic_output_observed = false;
+        failure.side_effect_observed = true;
+        assert!(retry_policy.next_structured_retry(&failure, 0).is_none());
+        failure.side_effect_observed = false;
+        failure.subcategory = Some("transport".into());
+        assert!(retry_policy.next_structured_retry(&failure, 0).is_none());
+        failure.subcategory = Some(HTTP_RESPONSE_HEADERS_TIMEOUT_CODE.into());
+        failure.message.make_ascii_lowercase();
+        assert!(retry_policy.next_structured_retry(&failure, 0).is_none());
+    }
+
     /// Verifies a configured keyword replays an interrupted stream yet keeps every safety gate.
     /// 验证已配置关键词可重放中断的流，同时保留全部安全守卫。
     #[test]
@@ -1328,7 +1405,7 @@ mod tests {
         let decision = policy()
             .next_retry(&keyword_error(), 0, true)
             .expect("a keyword match should replay the interrupted stream");
-        assert_eq!(decision.reason, "Provider error matched a retry keyword");
+        assert_eq!(decision.retry_number, 1);
         assert!(
             policy().next_retry(&keyword_error(), 3, true).is_none(),
             "keyword retries must stay within the ordinary retry count"

@@ -4,11 +4,11 @@
 use serde::Deserialize;
 use vulcan_agent_runtime::provider_config::{
     PROVIDER_RATE_LIMIT_RETRY_MAX_DELAY_MS, PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES,
-    PROVIDER_RETRY_KEYWORD_MAX_CHARACTERS, PROVIDER_RETRY_KEYWORD_MAX_COUNT,
-    PROVIDER_RETRY_MAX_BACKOFF_FACTOR_MILLI, PROVIDER_RETRY_MAX_JITTER_PERCENT,
-    PROVIDER_RETRY_MAX_RETRIES, PROVIDER_RETRY_MIN_BACKOFF_FACTOR_MILLI,
+    PROVIDER_RETRY_KEYWORD_MAX_COUNT, PROVIDER_RETRY_MAX_BACKOFF_FACTOR_MILLI,
+    PROVIDER_RETRY_MAX_JITTER_PERCENT, PROVIDER_RETRY_MAX_RETRIES,
+    PROVIDER_RETRY_MIN_BACKOFF_FACTOR_MILLI, PROVIDER_RETRY_REGEX_PREFIX,
     PersistedProviderRateLimitRetryConfiguration, PersistedProviderRetryConfiguration,
-    ProviderConfigurationFile, default_provider_retry_keywords,
+    ProviderConfigurationFile, ProviderRetryRule, default_provider_retry_keywords,
     normalize_provider_rate_limit_retry_max_retries, normalize_provider_retry_backoff_factor,
 };
 use vulcan_service_api::{
@@ -52,8 +52,8 @@ pub(super) struct ProviderRetrySettingsSaveRequest {
     /// Whether HTTP 429 and structured rate-limit errors may be retried.
     /// 是否允许重试 HTTP 429 与结构化限流错误。
     retry_429: bool,
-    /// Complete case-insensitive retry keyword list; an empty list disables keyword retry.
-    /// 完整的不区分大小写重试关键词列表；空列表表示关闭关键词重试。
+    /// Complete retry rule list; each line is a literal keyword or a prefixed regex.
+    /// 完整的重试规则列表；每行是字面关键词或带前缀的正则。
     retry_keywords: Vec<String>,
     /// Dedicated rate-limit retry schedule.
     /// 专用限流重试调度规则。
@@ -355,22 +355,18 @@ fn validate_retry_keywords(keywords: &[String]) -> Result<(), String> {
     let normalized = normalized_retry_keywords(keywords);
     if normalized.len() > PROVIDER_RETRY_KEYWORD_MAX_COUNT {
         return Err(format!(
-            "At most {PROVIDER_RETRY_KEYWORD_MAX_COUNT} retry keywords are allowed."
+            "At most {PROVIDER_RETRY_KEYWORD_MAX_COUNT} retry rules are allowed."
         ));
     }
-    if normalized
-        .iter()
-        .any(|keyword| keyword.chars().count() > PROVIDER_RETRY_KEYWORD_MAX_CHARACTERS)
-    {
-        return Err(format!(
-            "Each retry keyword must be at most {PROVIDER_RETRY_KEYWORD_MAX_CHARACTERS} characters."
-        ));
+    for (index, rule) in normalized.iter().enumerate() {
+        ProviderRetryRule::parse(rule)
+            .map_err(|error| format!("Retry rule {}: {error}", index + 1))?;
     }
     Ok(())
 }
 
-/// Trims keywords and removes blank entries and case-insensitive duplicates, keeping first order.
-/// 修剪关键词，并移除空白条目与不区分大小写的重复项，保留首次出现顺序。
+/// Trims rules and removes blank or duplicate entries, preserving order and regex case.
+/// 修剪规则并移除空白或重复条目，保留顺序及正则表达式的大小写。
 ///
 /// # Parameters
 /// 参数
@@ -386,7 +382,15 @@ fn normalized_retry_keywords(keywords: &[String]) -> Vec<String> {
     keywords
         .iter()
         .map(|keyword| keyword.trim())
-        .filter(|keyword| !keyword.is_empty() && seen.insert(keyword.to_lowercase()))
+        .filter(|rule| {
+            // Literal rules fold case for deduplication; a regex preserves every character.
+            // 字面规则去重时折叠大小写，正则表达式保留每个字符。
+            let key = match rule.strip_prefix(PROVIDER_RETRY_REGEX_PREFIX) {
+                Some(pattern) => (true, pattern.to_owned()),
+                None => (false, rule.to_lowercase()),
+            };
+            !rule.is_empty() && seen.insert(key)
+        })
         .map(String::from)
         .collect()
 }
@@ -535,7 +539,9 @@ mod tests {
             .collect();
         assert!(validate_provider_retry_settings_request(&too_many).is_err());
         let mut too_long = valid_retry_request();
-        too_long.retry_keywords = vec!["k".repeat(PROVIDER_RETRY_KEYWORD_MAX_CHARACTERS + 1)];
+        too_long.retry_keywords = vec!["k".repeat(
+            vulcan_agent_runtime::provider_config::PROVIDER_RETRY_KEYWORD_MAX_CHARACTERS + 1,
+        )];
         assert!(validate_provider_retry_settings_request(&too_long).is_err());
         let mut cleared = valid_retry_request();
         cleared.retry_keywords = Vec::new();
@@ -547,5 +553,22 @@ mod tests {
             summary.default_retry_keywords,
             default_provider_retry_keywords()
         );
+    }
+
+    /// Verifies settings reject malformed regexes and preserve case-distinct valid patterns.
+    /// 验证设置拒绝无效正则，并保留大小写不同的有效表达式。
+    #[test]
+    fn retry_settings_validate_regex_rules() {
+        // These patterns differ only by case and must remain independently editable.
+        // 两个表达式仅大小写不同，必须各自可编辑。
+        let mut request = valid_retry_request();
+        request.retry_keywords = vec!["regex:Timeout".into(), "regex:timeout".into()];
+        assert!(validate_provider_retry_settings_request(&request).is_ok());
+        assert_eq!(
+            normalized_retry_keywords(&request.retry_keywords),
+            request.retry_keywords
+        );
+        request.retry_keywords.push("regex:[".into());
+        assert!(validate_provider_retry_settings_request(&request).is_err());
     }
 }
