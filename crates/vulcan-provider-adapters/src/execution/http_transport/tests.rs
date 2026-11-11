@@ -41,9 +41,19 @@ async fn http_wire_request_capture_matches_dispatched_api_body() {
         let request = read_test_http_request(&mut stream).await;
         // body is the JSON value the loopback server actually received from reqwest.
         // body 是环回服务器从 reqwest 实际收到的 JSON 值。
-        let (_, body) = request
+        let (headers, body) = request
             .split_once("\r\n\r\n")
             .expect("request should contain a body boundary");
+        assert!(
+            headers
+                .lines()
+                .any(|line| line == "x-gateway-secret: fixture-gateway-secret")
+        );
+        assert!(
+            headers
+                .lines()
+                .any(|line| line == "ocp-apim-subscription-key: fixture-subscription-key")
+        );
         let body: Value = serde_json::from_str(body).expect("request body should be JSON");
         // responseBody completes the normalized stream without adding unrelated behavior.
         // responseBody 完成规范化响应流，不引入无关行为。
@@ -77,6 +87,18 @@ async fn http_wire_request_capture_matches_dispatched_api_body() {
     // route 将 Responses 直接绑定到环回服务器，并禁止协议回退。
     let mut route = pinned_openrouter_route(OPENAI_RESPONSES_PROFILE_ID);
     route.protocol_route.base_url_override = Some(format!("http://{address}"));
+    route.protocol_route.request_headers.extend([
+        (
+            String::from("x-gateway-secret"),
+            String::from("fixture-gateway-secret"),
+        ),
+        (
+            String::from("ocp-apim-subscription-key"),
+            String::from("fixture-subscription-key"),
+        ),
+        (String::from("x-cache-key"), String::from("fixture-cache")),
+        (String::from("x-token-count"), String::from("42")),
+    ]);
     // secret supplies the same credential projection used by ordinary execution.
     // secret 提供常规执行使用的同一凭据投影。
     let secret = crate::CredentialSecretEnvelope::new_api_key(String::from("secret"))
@@ -150,6 +172,10 @@ async fn http_wire_request_capture_matches_dispatched_api_body() {
         captured.headers.get("authorization").map(String::as_str),
         Some("Bearer {APIKEY}")
     );
+    assert_eq!(captured.headers["x-gateway-secret"], "{APIKEY}");
+    assert_eq!(captured.headers["ocp-apim-subscription-key"], "{APIKEY}");
+    assert_eq!(captured.headers["x-cache-key"], "fixture-cache");
+    assert_eq!(captured.headers["x-token-count"], "42");
     assert_eq!(
         captured.headers.get("user-agent").map(String::as_str),
         Some(vulcan_code_user_agent())

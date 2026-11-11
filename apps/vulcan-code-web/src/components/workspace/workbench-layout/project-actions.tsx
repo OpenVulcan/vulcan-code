@@ -163,6 +163,9 @@ interface WorkbenchProjectActionsOptions {
 // useWorkbenchProjectActions owns project, project-settings, icon, order, and skill action callbacks.
 // useWorkbenchProjectActions 持有项目、项目设置、图标、排序与技能动作回调。
 export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptions) {
+  // Read the rendered project list and revision together when reconciling duplicate add receipts.
+  // 对齐重复添加回执时，一起读取已渲染的项目列表和版本。
+  const { projects, revision } = options.workbenchState;
   // t resolves stable WebUI copy keys for the active language.
   // t 根据当前语言解析稳定的 WebUI 文案键。
   const { t, locale } = useI18n();
@@ -462,10 +465,28 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
   // projectFolderStartRef 记住打开的文件夹选择器为何打开：接收所选文件夹的分组，以及新项目是否立即开始会话。
   const projectFolderStartRef = React.useRef<ProjectFolderStart>({});
 
+  // A duplicate add receipt can arrive before React commits the workbench broadcast that superseded it.
+  // 重复的添加回执可能在 React 提交取代它的工作台广播之前到达。
+  const [pendingProjectDraft, setPendingProjectDraft] = React.useState<{ projectId: string; revision: number } | null>(null);
+
+  React.useEffect(() => {
+    if (!pendingProjectDraft || (revision ?? 0) < pendingProjectDraft.revision) {
+      return;
+    }
+    setPendingProjectDraft(null);
+    // Only open a project still present in the applied snapshot, since a newer revision may have removed it.
+    // 只打开已应用快照中仍存在的项目，因为更新的版本可能已移除该项目。
+    const project = projects.find(({ id }) => id === pendingProjectDraft.projectId);
+    if (project) {
+      void handleCreateConversation(project);
+    }
+  }, [handleCreateConversation, pendingProjectDraft, projects, revision]);
+
   // handleCreateProject opens the service-backed project folder picker with the caller's start intent.
   // handleCreateProject 按调用方的启动意图打开服务驱动的项目文件夹选择器。
   const handleCreateProject = React.useCallback((start: ProjectFolderStart = {}) => {
     projectFolderStartRef.current = start;
+    setPendingProjectDraft(null);
     setProjectFolderPickerOpen(true);
   }, []);
 
@@ -492,15 +513,20 @@ export function useWorkbenchProjectActions(options: WorkbenchProjectActionsOptio
     } else if (bindingNotice?.status === "failed") {
       toast.error(bindingNotice.message);
     }
-    // A stale snapshot never reached local state, so the new project has no draft route to open.
-    // 过期快照不会进入本地状态，因此新项目没有可打开的草稿路由。
-    if (!start.startConversation || !applied) {
+    if (!start.startConversation || start !== projectFolderStartRef.current) {
       return;
     }
+    // The receipt identifies the exact added project even when another delivery supplied the workbench state.
+    // 即使工作台状态来自其他投递，本次回执仍标识准确的新增项目。
     const project = projectOwnedByFolder(snapshot.projects, path);
-    if (project) {
-      handleCreateConversation(project);
+    if (!project) {
+      return;
     }
+    if (applied) {
+      void handleCreateConversation(project);
+      return;
+    }
+    setPendingProjectDraft({ projectId: project.id, revision: snapshot.revision ?? 0 });
   }, [applyProjectActionSnapshot, handleCreateConversation, t]);
 
   // handleProjectGroupAction persists one project-group change and applies the authoritative snapshot; it rejects

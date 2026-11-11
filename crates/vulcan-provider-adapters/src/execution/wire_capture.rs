@@ -520,6 +520,36 @@ pub(crate) fn provider_wire_request_capture(
     }
 }
 
+/// Identifies credential-bearing request headers that may arrive as unmarked fixed provider headers.
+/// 识别可能作为未标记的供应商固定请求头传入的凭据头。
+///
+/// `name` is the lowercase name from `HeaderName`; returns whether its terminal fields identify a credential.
+/// `name` 是 `HeaderName` 提供的小写名称；返回其末尾字段是否表示凭据。
+fn is_credential_request_header(name: &str) -> bool {
+    // Match complete terminal fields so headers such as `x-token-count` and `x-cache-key` remain visible.
+    // 匹配完整的末尾字段，使 `x-token-count` 和 `x-cache-key` 等请求头仍可见。
+    let mut fields = name.rsplit(['-', '_', '.']);
+    match fields.next() {
+        Some(
+            "authorization" | "apikey" | "token" | "secret" | "password" | "credential" | "cookie",
+        ) => true,
+        Some("key") => matches!(
+            fields.next(),
+            Some(
+                "api"
+                    | "auth"
+                    | "access"
+                    | "client"
+                    | "gateway"
+                    | "private"
+                    | "signing"
+                    | "subscription"
+            )
+        ),
+        _ => false,
+    }
+}
+
 /// Projects final transport headers into a deterministic secret-safe diagnostic map.
 /// 将最终传输请求头投影为确定性的无秘密诊断映射。
 ///
@@ -538,20 +568,7 @@ fn provider_wire_request_capture_headers(headers: &HeaderMap) -> BTreeMap<String
         .map(|(name, value)| {
             // Use the header's sensitivity flag and known credential headers so ordinary protocol fields stay readable.
             // 使用请求头的敏感标记与已知凭据头，保留普通协议字段供排查。
-            let sensitive = value.is_sensitive()
-                || matches!(
-                    name.as_str(),
-                    "authorization"
-                        | "proxy-authorization"
-                        | "x-api-key"
-                        | "api-key"
-                        | "x-goog-api-key"
-                        | "anthropic-api-key"
-                        | "x-auth-token"
-                        | "x-session-token"
-                        | "cookie"
-                        | "set-cookie"
-                );
+            let sensitive = value.is_sensitive() || is_credential_request_header(name.as_str());
             // Preserve the authentication scheme for diagnosing the wire format.
             // 保留认证方式，便于排查线路格式。
             let value = String::from_utf8_lossy(value.as_bytes());
