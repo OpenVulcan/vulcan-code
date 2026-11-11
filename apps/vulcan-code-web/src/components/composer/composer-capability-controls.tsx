@@ -38,9 +38,6 @@ import {
 } from "@/ui-kit/primitives/alert-dialog";
 import { HOVER_CARD_CLOSE_DELAY_MS, HOVER_CARD_OPEN_DELAY_MS, HoverCard, HoverCardContent, HoverCardTrigger } from "@/ui-kit/primitives/hover-card";
 import { groupProviderToolCapabilities } from "@/components/shared/provider-tool-capability-groups";
-import {
-  ComposerCapabilitySummary,
-} from "@/components/composer/composer-capability-summary";
 import { ProviderToolCapabilityIcon } from "@/components/shared/provider-tool-capability-icon";
 import type {
   ComposerProviderToolSettingsSnapshot,
@@ -86,6 +83,11 @@ import type {
 } from "@/types";
 import { errorMessage } from "@/lib/display-format";
 import { useDedicatedComposer } from "@/components/composer/dedicated/dedicated-session-controls";
+
+// Load the read-only capability summary when its hover card opens.
+// 能力悬浮卡片打开时再加载只读摘要。
+const LazyComposerCapabilitySummary = React.lazy(() => import("@/components/composer/composer-capability-summary")
+  .then(({ ComposerCapabilitySummary }) => ({ default: ComposerCapabilitySummary })));
 
 // Context usage percentages where the indicator turns to warning and to critical; the track bands read the same values.
 // 上下文用量指示转为警告与临界的百分比；进度条区段读取同一值。
@@ -718,14 +720,18 @@ function AiCapabilityControlEditor(props: ComposerAiCapabilityControlProps) {
           </DialogTrigger>
         </HoverCardTrigger>
         <HoverCardContent align="start" className="vk-cap-sum-pop" side="top" sideOffset={8}>
-          <ComposerCapabilitySummary
-            items={summaryItems}
-            onConfigure={() => {
-              setSummaryOpen(false);
-              setOpen(true);
-            }}
-            status={loadStatus}
-          />
+          {summaryOpen ? (
+            <React.Suspense fallback={<StreamPlaceholder label={t("composer.capability.loading")} shape="rows" count={3} />}>
+              <LazyComposerCapabilitySummary
+                items={summaryItems}
+                onConfigure={() => {
+                  setSummaryOpen(false);
+                  setOpen(true);
+                }}
+                status={loadStatus}
+              />
+            </React.Suspense>
+          ) : null}
         </HoverCardContent>
       </HoverCard>
       <DialogContent className="vk-cap-dialog" layout="document" scrollMode="fixed-footer" size="wide">
