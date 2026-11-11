@@ -10,7 +10,7 @@ use serde::de::DeserializeOwned;
 use std::fmt;
 
 use vulcan_ai_contract::{
-    AiErrorCategory, AiExecutionError, DispatchOutcome, ProviderReplayEnvelope,
+    AiErrorCategory, AiExecutionError, AiTransportKind, DispatchOutcome, ProviderReplayEnvelope,
 };
 use vulcan_core::types::{
     ConversationAttachment, ProviderRequestSnapshot as CoreProviderRequestSnapshot,
@@ -1119,9 +1119,21 @@ fn redacted_api_error(error: Option<&AiExecutionError>) -> RedactedApiError {
         | AiErrorCategory::ContentPolicy => ApiErrorCategory::Provider,
         AiErrorCategory::Cancelled | AiErrorCategory::Unclassified => ApiErrorCategory::Unknown,
     };
+    // A response code is authoritative. Before HTTP headers arrive, the host's transport phase is the available code.
+    // 响应错误码是权威来源；HTTP 响应头到达前可用的错误码来自宿主传输阶段。
+    let error_code = match &error.upstream_code {
+        Some(code) => Some(code.clone()),
+        None if error.category == AiErrorCategory::ProviderUnavailable
+            && error.transport == Some(AiTransportKind::Http)
+            && error.stage == "transport" =>
+        {
+            error.subcategory.clone()
+        }
+        None => None,
+    };
     RedactedApiError {
         category,
-        error_code: error.upstream_code.clone(),
+        error_code,
         message: error.message.clone(),
     }
 }

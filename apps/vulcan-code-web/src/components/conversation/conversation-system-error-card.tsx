@@ -1,11 +1,8 @@
 import * as React from "react";
-import { ChevronLeft, ChevronRight, CircleAlert } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 
-import { StatusPill } from "@/components/shared/status";
-import { FeedbackCenterContext } from "@/components/features/feedback/feedback-center-context";
 import { useI18n } from "@/i18n";
 import { Button } from "@/ui-kit/primitives/button";
-import { formatDurationSeconds } from "@/lib/usage-format";
 
 // SystemProviderError describes the structured failure emitted by the public provider contract.
 // SystemProviderError 描述公共 Provider 契约发出的结构化失败信息。
@@ -173,48 +170,10 @@ const SYSTEM_PROVIDER_ERROR_ROUTE_MARKER = " [provider_route: ";
 const AGENTSPACE_RECONCILIATION_SUBCATEGORY =
   "agentspace_result_reconciliation_required";
 
-// UNREPORTABLE_ERROR_CATEGORIES lists failures caused by the account, the provider, the network or the user, not by
-// Vulcan Code: credentials, permissions, balance, rate limits (429), provider overload, outage or an unreachable
-// endpoint (5xx and transport failures), timeouts, content policy and cancellation.
-// UNREPORTABLE_ERROR_CATEGORIES 列出由账号、供应商、网络或用户造成、而非 Vulcan Code 造成的失败：凭据、权限、余额、
-// 限流（429）、供应商过载、故障或无法访问（5xx 与传输失败）、超时、内容策略与取消。
-const UNREPORTABLE_ERROR_CATEGORIES = new Set([
-  "authentication",
-  "permission_denied",
-  "payment_required",
-  "rate_limited",
-  "provider_overloaded",
-  "provider_unavailable",
-  "timeout",
-  "content_policy",
-  "cancelled",
-]);
-
-// CUSTOM_PROVIDER_PREFIX marks providers the user configured; their endpoint, model and limits are the user's settings.
-// CUSTOM_PROVIDER_PREFIX 标记用户自定义的供应商；其地址、模型与上限都是用户的配置。
-const CUSTOM_PROVIDER_PREFIX = "custom:";
-
 // snakeCase normalizes the PascalCase values of legacy text records to the JSON contract spelling.
 // snakeCase 把旧文本记录的 PascalCase 取值归一为 JSON 契约写法。
-function snakeCase(value: string): string {
+export function snakeCase(value: string): string {
   return value.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
-}
-
-// isReportableSystemError returns whether a failure may point at a Vulcan Code defect worth reporting. Failures in
-// UNREPORTABLE_ERROR_CATEGORIES never are. A custom provider is reportable only when the request failed inside Vulcan
-// Code before it was sent; anything its endpoint answered (bad request, wrong path, context limit) is configuration.
-// Other categories of system providers, including future ones, stay reportable.
-// isReportableSystemError 返回该失败是否可能指向值得报告的 Vulcan Code 缺陷。UNREPORTABLE_ERROR_CATEGORIES 中的失败
-// 一律不报告。自定义供应商只有在请求发出前于 Vulcan Code 内失败时才可报告；其地址返回的任何错误（错误请求、路径
-// 错误、上下文上限）都属于配置问题。系统供应商的其他类别（包括今后新增的）仍可报告。
-export function isReportableSystemError(error: SystemProviderError): boolean {
-  if (UNREPORTABLE_ERROR_CATEGORIES.has(snakeCase(error.category))) {
-    return false;
-  }
-  if (error.provider.startsWith(CUSTOM_PROVIDER_PREFIX)) {
-    return snakeCase(error.dispatchOutcome) === "not_dispatched";
-  }
-  return true;
 }
 
 // SYSTEM_PROVIDER_ERROR_FIELD_NAMES lists fields emitted by the legacy text formatter.
@@ -258,13 +217,6 @@ function scalarText(value: unknown): string | null {
 // retryAfterMilliseconds 从 Provider 契约读取归一化的 retry-after 对象。
 function retryAfterMilliseconds(value: unknown): string | null {
   return isRecord(value) ? scalarText(value.delay_milliseconds) : null;
-}
-
-// retryAfterDisplay renders the exact retry delay as seconds; non-numeric text keeps its raw millisecond form instead of becoming zero.
-// retryAfterDisplay 将精确重试等待时长渲染为秒；非数值文本保留原始毫秒形式，不会显示为零。
-function retryAfterDisplay(retryAfterMs: string): string {
-  const milliseconds = Number(retryAfterMs);
-  return Number.isFinite(milliseconds) ? formatDurationSeconds(milliseconds) : `${retryAfterMs} ms`;
 }
 
 // structuredProviderDisplayMessage derives a non-empty summary only from normalized failure facts.
@@ -495,127 +447,16 @@ export function formatSystemProviderErrorJson(error: SystemProviderError): strin
   return JSON.stringify(error.structured, null, 2);
 }
 
-// SystemErrorCard renders a compact error summary with a metadata disclosure panel.
-// SystemErrorCard 渲染紧凑错误摘要与可展开的元数据面板。
-export function SystemErrorCard(props: SystemErrorCardProps) {
-  const { t } = useI18n();
-  // feedback offers a one-click report where the workbench provides the feedback window.
-  // feedback 在工作台提供反馈窗口时提供一键报告。
-  const feedback = React.useContext(FeedbackCenterContext);
-  // reconciliationPending is derived exclusively from the backend-owned closed classification.
-  // reconciliationPending 仅从后端持有的封闭分类派生。
-  const reconciliationPending = isProviderResultReconciliationPending(props.error);
-  const fields: Array<{ label: string; value: string }> = [
-    { label: t("conversation.systemError.category"), value: props.error.category },
-    { label: t("conversation.systemError.stage"), value: props.error.stage },
-    { label: t("conversation.systemError.dispatchOutcome"), value: props.error.dispatchOutcome },
-    {
-      label: t("conversation.systemError.semanticOutput"),
-      value: props.error.semanticOutputObserved
-        ? t("conversation.systemError.true")
-        : t("conversation.systemError.false"),
-    },
-    {
-      label: t("conversation.systemError.retryable"),
-      value: props.error.retryable
-        ? t("conversation.systemError.true")
-        : t("conversation.systemError.false"),
-    },
-  ];
-  if (props.error.httpStatus) {
-    fields.push({ label: t("conversation.systemError.httpStatus"), value: props.error.httpStatus });
-  }
-  if (props.error.subcategory) {
-    fields.push({ label: t("conversation.systemError.subcategory"), value: props.error.subcategory });
-  }
-  if (props.error.upstreamCode) {
-    fields.push({ label: t("conversation.systemError.upstreamCode"), value: props.error.upstreamCode });
-  }
-  if (props.error.retryAfterMs) {
-    fields.push({
-      label: t("conversation.systemError.retryAfter"),
-      value: retryAfterDisplay(props.error.retryAfterMs),
-    });
-  }
-  if (reconciliationPending) {
-    fields.push(
-      {
-        label: t("conversation.systemError.requestIdentifier"),
-        value: props.error.requestId ?? t("conversation.systemError.identifierMissing"),
-      },
-      {
-        label: t("conversation.systemError.requestIdentifierSource"),
-        value: props.error.requestId
-          ? t("conversation.systemError.upstreamErrorPayload")
-          : t("conversation.systemError.identifierMissing"),
-      },
-      {
-        label: t("conversation.systemError.resultConfirmation"),
-        value: t("conversation.systemError.unconfirmed"),
-      },
-      {
-        label: t("conversation.systemError.usageConfirmation"),
-        value: t("conversation.systemError.unconfirmed"),
-      },
-    );
-  }
+// Loads the diagnostic controls only when a conversation contains an error card.
+// 只有会话包含错误卡时才加载诊断控件。
+const ProviderErrorPanel = React.lazy(() => import("./conversation-system-error-panel"));
 
-  // The card is transcript history that remounts on every conversation switch, so it carries no live-region role
-  // (which would also replace the native disclosure semantics of <details>).
-  // 该卡片属于转录历史，每次切换会话都会重新挂载，因此不带实时区域角色（该角色还会覆盖 <details> 原生的展开语义）。
+// Renders the preview and controls for the diagnostic in `props`.
+// 渲染 `props` 中诊断的预览和控件。
+export function SystemErrorCard(props: SystemErrorCardProps) {
   return (
-    <details
-      aria-label={reconciliationPending
-        ? t("conversation.systemError.pendingTitle")
-        : t("conversation.systemError.title")}
-      className="vk-error-card"
-      data-pending={reconciliationPending || undefined}
-    >
-      <summary className="vk-error-summary">
-        <CircleAlert aria-hidden="true" className="vk-error-icon" />
-        <div className="vk-error-message">
-          <span>{t("conversation.systemError.message")}</span>
-          <p>{props.error.message}</p>
-        </div>
-        <ChevronRight aria-hidden="true" className="vk-error-chev" />
-      </summary>
-      <div className="vk-error-details">
-        <div className="vk-error-head">
-          <strong>
-              {reconciliationPending
-                ? t("conversation.systemError.pendingTitle")
-                : t("conversation.systemError.title")}
-          </strong>
-          <StatusPill
-              status={reconciliationPending ? "pending" : "error"}
-              label={reconciliationPending
-                ? t("conversation.systemError.pendingStatus")
-                : t("conversation.systemError.status")}
-          />
-        </div>
-        {feedback && isReportableSystemError(props.error) ? (
-          <Button className="vk-error-report" size="sm" variant="outline" onClick={() => feedback.openFeedback({ source: "error_card", systemError: props.error })}>
-            {t("feedback.reportError")}
-          </Button>
-        ) : null}
-        {reconciliationPending ? (
-          <p className="vk-error-pending">
-            {t("conversation.systemError.pendingNotice")}
-          </p>
-        ) : null}
-        <dl className="vk-facts">
-          {fields.map((field) => (
-            <React.Fragment key={field.label}>
-              <dt>{field.label}</dt>
-              <dd>{field.value}</dd>
-            </React.Fragment>
-          ))}
-        </dl>
-        <div className="vk-error-raw">
-          <span>{t("conversation.systemError.raw")}</span>
-          <pre><code className="language-json">{formatSystemProviderErrorJson(props.error)}</code></pre>
-        </div>
-      </div>
-    </details>
+    <React.Suspense fallback={<div className="vk-error-card vk-error-loading">{props.error.message}</div>}>
+      <ProviderErrorPanel error={props.error} />
+    </React.Suspense>
   );
 }

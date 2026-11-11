@@ -2,7 +2,6 @@
 //! 传输失败与取消投影的真实领域接纳验证。
 
 use super::*;
-use vulcan_ai_contract::AiTransportKind;
 use vulcan_session_core::v1::{
     ProviderRequestBudgetEvidence, ProviderRequestContextBreakdown, ProviderRequestTextMeasurement,
     context::LockedBaselineProjection,
@@ -185,6 +184,59 @@ fn failure_and_cancellation_projections_finish_real_domain_api() {
         ContinuationEligibility::Forbidden,
         3,
     ));
+}
+
+/// Verifies terminal API receipts preserve a provider code or the host's HTTP deadline code.
+/// 验证 API 终态回执保留上游错误码或宿主的 HTTP 截止时间代码。
+#[test]
+fn terminal_receipt_keeps_the_specific_http_error_code_and_endpoint() {
+    // Set the host facts separately so upstream precedence is tested on the same projection.
+    // 单独设置宿主事实，以便在同一投影上验证上游错误码的优先级。
+    let mut error = failure(
+        AiErrorCategory::ProviderUnavailable,
+        Some(AiTransportKind::Http),
+        DispatchOutcome::Unknown,
+    );
+    error.subcategory = Some("response_headers_timeout".into());
+    error.message = "Provider request to `https://provider.invalid/v1/chat/completions` exceeded the response-header timeout.".into();
+    error.retryable = true;
+
+    for (upstream, expected, retry_exhausted) in [
+        (None, "response_headers_timeout", false),
+        (None, "response_headers_timeout", true),
+        (
+            Some("upstream_specific_error"),
+            "upstream_specific_error",
+            false,
+        ),
+    ] {
+        error.upstream_code = upstream.map(str::to_owned);
+        // Exercise the same domain event that the session error card reads.
+        // 验证会话错误卡读取的同一领域事件。
+        let document = assert_domain_accepts(ProviderV1ApiTerminalFacts::failed(
+            request(),
+            &CoreProviderUsageSnapshot::default(),
+            ApiTimings::default(),
+            Some(&error),
+            retry_exhausted,
+            provider_failure_continuation_eligibility(Some(&error), retry_exhausted),
+            3,
+        ));
+        let recorded = document
+            .events()
+            .iter()
+            .find_map(|entry| match &entry.event {
+                EventBody::ApiStats(stats) => stats.error.as_ref(),
+                _ => None,
+            })
+            .expect("terminal API receipt should carry the diagnostic");
+        assert_eq!(recorded.error_code.as_deref(), Some(expected));
+        assert!(
+            recorded
+                .message
+                .contains("https://provider.invalid/v1/chat/completions")
+        );
+    }
 }
 
 /// Raw protocol usage survives public conversion, terminal projection, domain replay and goal accounting.

@@ -156,29 +156,23 @@ button.vk-note:not(:disabled):hover { background: var(--vk-hover); }
 /* Provider error: the message folds the request facts and the raw payload beneath it. */
 .vk-error-card { width: 100%; min-width: 0; border: var(--vk-bw) solid color-mix(in srgb, var(--vk-tone) 35%, var(--vk-line)); border-left: 2px solid var(--vk-tone); background: color-mix(in srgb, var(--vk-tone) 5%, var(--vk-panel)); --vk-tone: var(--vk-bad); }
 .vk-error-card[data-pending] { --vk-tone: var(--vk-warn); }
-/* Keep attempt navigation above the disclosure so paging does not toggle its expanded state. */
-/* 将尝试导航置于折叠详情上方，避免翻页切换其展开状态。 */
+/* Keep attempt navigation above the compact error preview. */
+/* 将尝试导航置于紧凑错误预览上方。 */
 .vk-error-retry-group { width: 100%; min-width: 0; }
 .vk-error-retry-pager { justify-content: flex-end; }
-.vk-error-summary { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: calc(var(--vk-u) * 2.5); align-items: start; padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3); cursor: pointer; list-style: none; }
-.vk-error-summary::-webkit-details-marker { display: none; }
-.vk-error-summary:hover { background: var(--vk-hover); }
-.vk-error-summary:focus-visible { outline-offset: -2px; }
+.vk-error-summary { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: calc(var(--vk-u) * 2.5); align-items: start; }
+.vk-error-summary, .vk-error-loading { padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3); }
 .vk-error-icon { width: 1rem; height: 1rem; margin-top: 2px; color: var(--vk-tone); }
 .vk-error-message { display: grid; gap: 2px; min-width: 0; }
-.vk-error-message > span { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); }
 .vk-error-message > p { display: -webkit-box; margin: 0; overflow: hidden; color: var(--vk-ink); font-size: var(--vk-fs-sm); overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
-.vk-error-card[open] .vk-error-message > p { display: block; }
-.vk-error-chev { width: 0.9rem; height: 0.9rem; margin-top: 3px; color: var(--vk-ink-3); transition: transform var(--vk-t-fast); }
-.vk-error-card[open] .vk-error-chev { transform: rotate(90deg); }
-.vk-error-details { display: grid; gap: calc(var(--vk-u) * 3); padding: calc(var(--vk-u) * 3); border-top: var(--vk-bw) solid var(--vk-line-soft); }
-.vk-error-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: calc(var(--vk-u) * 2); }
-.vk-error-head > strong { font-weight: 600; }
-.vk-error-report { justify-self: start; }
-.vk-error-pending { margin: 0; color: var(--vk-ink-2); font-size: var(--vk-fs-sm); }
-.vk-error-details > .vk-facts { font-size: var(--vk-fs-sm); }
-.vk-error-raw { display: grid; gap: calc(var(--vk-u) * 1.5); min-width: 0; }
-.vk-error-raw > span { color: var(--vk-ink-3); font-family: var(--vk-label-font); font-size: var(--vk-fs-xs); letter-spacing: var(--vk-label-track); text-transform: var(--vk-label-case); }
+.vk-error-meta, .vk-error-footer, .vk-error-actions { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--vk-u) * 2); }
+.vk-error-meta { color: var(--vk-ink-3); font-size: var(--vk-fs-xs); overflow-wrap: anywhere; }
+.vk-error-meta > code { color: var(--vk-ink-2); }
+.vk-error-footer, .vk-error-pending, .vk-error-raw { padding: 0 calc(var(--vk-u) * 3) calc(var(--vk-u) * 2.5); }
+.vk-error-chev { transition: transform var(--vk-t-fast); }
+.vk-error-footer [aria-expanded="true"] .vk-error-chev { transform: rotate(90deg); }
+.vk-error-pending { color: var(--vk-ink-2); font-size: var(--vk-fs-sm); }
+.vk-error-pending > p { margin: calc(var(--vk-u) * 2) 0; }
 .vk-error-raw > pre { max-height: 18rem; margin: 0; overflow: auto; padding: calc(var(--vk-u) * 2.5) calc(var(--vk-u) * 3); border: var(--vk-bw) solid var(--vk-line-soft); background: var(--vk-code-bg); font-family: var(--vk-font-mono); font-size: var(--vk-fs-xs); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* Continue a problem turn: the action, why it is unavailable, and the claim feedback. */

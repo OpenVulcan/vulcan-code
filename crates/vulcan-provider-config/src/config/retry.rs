@@ -1,6 +1,7 @@
 //! Provider retry configuration retained as a host execution policy.
 //! 作为宿主执行策略保留的 Provider 重试配置。
 
+use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 
 /// Hard host ceiling for ordinary transient retries after the initial request.
@@ -60,6 +61,66 @@ pub const PROVIDER_RETRY_KEYWORD_MAX_COUNT: usize = 64;
 /// Maximum character length of one configured retry keyword.
 /// 单个已配置重试关键词的最大字符长度。
 pub const PROVIDER_RETRY_KEYWORD_MAX_CHARACTERS: usize = 200;
+
+/// Prefix that selects a case-sensitive regular expression in a retry rule.
+/// 在重试规则中选择区分大小写正则表达式的前缀。
+pub const PROVIDER_RETRY_REGEX_PREFIX: &str = "regex:";
+
+/// Memory limit applied to both compilation and the search cache of one retry expression.
+/// 单条重试表达式的编译和搜索缓存所用的内存限制。
+const PROVIDER_RETRY_REGEX_SIZE_LIMIT: usize = 256 * 1024;
+
+/// A compiled retry rule shared by settings validation and execution.
+/// 设置校验和运行时共享的已编译重试规则。
+#[derive(Debug, Clone)]
+pub enum ProviderRetryRule {
+    /// Case-insensitive literal substring.
+    /// 不区分大小写的字面子串。
+    Literal(String),
+    /// Regular expression evaluated against the original diagnostic text.
+    /// 针对原始诊断文本匹配的正则表达式。
+    Regex(Regex),
+}
+
+impl ProviderRetryRule {
+    /// Parses one rule line. Returns no rule for a blank line and an error for malformed input.
+    /// 解析一行规则。空行返回无规则，格式有误时返回错误。
+    ///
+    /// `line` is one settings entry, including the optional expression prefix.
+    /// `line` 是一条设置项，可含正则前缀。
+    pub fn parse(line: &str) -> Result<Option<Self>, String> {
+        // Trim the surrounding settings whitespace before validating one line.
+        // 校验单行规则前先移除设置项外围的空白。
+        let line = line.trim();
+        if line.is_empty() {
+            return Ok(None);
+        }
+        if line.contains(['\r', '\n']) {
+            return Err(String::from("Each retry rule must occupy one line."));
+        }
+        if line.chars().count() > PROVIDER_RETRY_KEYWORD_MAX_CHARACTERS {
+            return Err(format!(
+                "Each retry rule must be at most {PROVIDER_RETRY_KEYWORD_MAX_CHARACTERS} characters."
+            ));
+        }
+        // Only the explicit prefix opts in to interpreting the original text as regex syntax.
+        // 只有显式前缀才会把原始文本解释为正则语法。
+        let Some(pattern) = line.strip_prefix(PROVIDER_RETRY_REGEX_PREFIX) else {
+            return Ok(Some(Self::Literal(line.to_lowercase())));
+        };
+        if pattern.trim().is_empty() {
+            return Err(String::from(
+                "A retry regular expression must contain a pattern.",
+            ));
+        }
+        RegexBuilder::new(pattern)
+            .size_limit(PROVIDER_RETRY_REGEX_SIZE_LIMIT)
+            .dfa_size_limit(PROVIDER_RETRY_REGEX_SIZE_LIMIT)
+            .build()
+            .map(|regex| Some(Self::Regex(regex)))
+            .map_err(|error| format!("Invalid retry regular expression: {error}"))
+    }
+}
 
 /// Persisted provider retry behavior shared by public-contract transports.
 /// 公共契约传输链路共享的持久化 Provider 重试行为配置。

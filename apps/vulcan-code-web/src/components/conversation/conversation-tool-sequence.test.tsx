@@ -3,11 +3,16 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/i18n";
+import type { ToolCallEvent } from "@/service/conversation-event-display-projection";
+import { formatToolDuration, SLOW_TOOL_CALL_MS } from "@/conversation/tools/tool-call";
+import { ConversationLiveStreamProvider } from "@/state/conversation-live-stream-context";
+import { ConversationLiveStreamStore } from "@/state/conversation-live-stream-store";
 import type { ConversationRenderItem } from "./conversation-model";
+import { isMergeableToolBlock } from "./conversation-classifiers";
 import { ConversationToolSequenceGroup, groupVisibleProcessBodyEntries } from "./conversation-render-items";
 import { ConversationMeasuredCollapseProvider } from "./conversation-measured-collapse";
 import { CONVERSATION_AUTOMATIC_FOLD_EVENT } from "./conversation-layout-events";
-import { ToolSequenceGroupedContext } from "./conversation-tool-execution";
+import { ToolExecutionBlock, ToolSequenceGroupedContext } from "./conversation-tool-execution";
 import * as React from "react";
 
 // All rows and timers are synthetic; production collapse and expansion-memory components remain mounted.
@@ -40,20 +45,44 @@ function row(id: string, status: "running" | "completed" | "failed" | "stopped" 
   }] };
 }
 
-/** Renders the first production sequence; enabled controls folding; returns completion.
- * 渲染首个生产序列；enabled 控制折叠；返回渲染完成。
+/** Renders the first production sequence with the given folding, run state and row renderer.
+ * 用给定折叠开关、运行状态和记录渲染器渲染首个生产序列。
  */
-async function render(items: ConversationRenderItem[], enabled = true, running = true) {
+async function render(
+  items: ConversationRenderItem[],
+  enabled = true,
+  running = true,
+  renderItem: (item: ConversationRenderItem) => React.ReactNode = (item) => (
+    <div key={item.id} data-tool={item.id} data-tool-status={item.blocks[0].status}>{item.id}</div>
+  ),
+) {
   // entry uses production grouping, including the single-tool case.
   // entry 使用生产分组逻辑，包含单工具情况。
   const entry = groupVisibleProcessBodyEntries("process", items, running)[0];
   if (entry.kind !== "tool-sequence") throw new Error("Expected tool group");
   await act(async () => root.render(<I18nProvider initialLocale="zh-CN">
     <ConversationMeasuredCollapseProvider initialMemory={{}} onMemoryChange={() => {}} scopeId="session">
-      <ConversationToolSequenceGroup {...entry} collapseEnabled={enabled}
-        renderItem={(item) => <div key={item.id} data-tool={item.id}>{item.id}</div>} />
+      <ConversationToolSequenceGroup {...entry} collapseEnabled={enabled} renderItem={renderItem} />
     </ConversationMeasuredCollapseProvider>
   </I18nProvider>));
+}
+
+// Build a shell row with the durable event and timestamps consumed by the production tool card.
+// 构建带持久工具事件与时间戳的命令记录，供实际工具卡消费。
+function shellRow(callId: number, startedAt: number, finishedAt?: number): ConversationRenderItem {
+  // The call keeps its row identity when a terminal result replaces its running event.
+  // 工具终态替换运行事件时保持同一记录身份。
+  const status = finishedAt === undefined ? "running" : "completed";
+  const event: ToolCallEvent = {
+    kind: "tool_call", api_call_id: 1, tool_call_id: callId, request_stream_id: `request-${callId}`,
+    tool_name: "shell_command", input: { title: `Inspect ${callId}`, command: "git status --short" },
+    status, started_at_ms: startedAt, finished_at_ms: finishedAt,
+  };
+  const item = row(`call-${callId}`, status);
+  return {
+    ...item,
+    blocks: item.blocks.map((block) => ({ ...block, rawMetadata: { v1_event: true, v1_tool_event: event, tool_display_state: status } })),
+  };
 }
 
 it.each(["running", "completed", "failed", "stopped"] as const)("shows a single %s tool without a group toggle", async (status) => {
@@ -128,6 +157,40 @@ it("keeps the last card between serial calls instead of closing and reopening th
   window.removeEventListener(CONVERSATION_AUTOMATIC_FOLD_EVENT, folds);
 });
 
+it("settles the visible shell card timer as soon as its tool event completes", async () => {
+  // Mount real tool cards inside the folded group with a prior completed tool.
+  // 在含有先前已完成工具的折叠组中挂载实际工具卡。
+  const liveStore = new ConversationLiveStreamStore();
+  const renderShell = (item: ConversationRenderItem) => (
+    <ConversationLiveStreamProvider store={liveStore}>
+      <ToolExecutionBlock
+        blocks={item.blocks.filter(isMergeableToolBlock)}
+        conversationId={null}
+        expandedToolPresentationIds={new Set()}
+        onOpenMedia={() => undefined}
+        onToolPresentationExpandedChange={() => undefined}
+        sessionRunning
+      />
+    </ConversationLiveStreamProvider>
+  );
+  const startedAt = 10_000;
+  const duration = SLOW_TOOL_CALL_MS + 1_000;
+  const previous = shellRow(1, startedAt - 2_000, startedAt - 1_000);
+  vi.setSystemTime(startedAt);
+  await render([previous, shellRow(2, startedAt)], true, true, renderShell);
+  const card = host.querySelector(".vk-tool[data-state=running]");
+  expect(card).not.toBeNull();
+  expect(card?.querySelector(".vk-tool-elapsed[data-live]")).not.toBeNull();
+
+  await act(async () => vi.advanceTimersByTime(duration));
+  await render([previous, shellRow(2, startedAt, startedAt + duration)], true, true, renderShell);
+  expect(host.querySelector(".vk-tool[data-state=done]")).toBe(card);
+  expect(card?.querySelector(".vk-tool-state .lucide-check")).not.toBeNull();
+  expect(card?.querySelector(".vk-tool-elapsed[data-live]")).toBeNull();
+  await act(async () => vi.advanceTimersByTime(2_000));
+  expect(card?.querySelector(".vk-tool-elapsed")?.textContent).toBe(formatToolDuration(duration));
+});
+
 it("folds once when the run closes", async () => {
   const folds = vi.fn();
   window.addEventListener(CONVERSATION_AUTOMATIC_FOLD_EVENT, folds);
@@ -154,7 +217,7 @@ it("slides the replaced card out above its successor during a 1-for-1 swap", asy
   vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
   await render([row("one"), row("two", "running")]);
   await render([row("one"), row("two"), row("three", "running")]);
-  expect(host.querySelector('.vk-tool-seq-slot[data-leaving] [data-tool="two"]')).not.toBeNull();
+  expect(host.querySelector('.vk-tool-seq-slot[data-leaving] [data-tool="two"][data-tool-status="completed"]')).not.toBeNull();
   expect(host.querySelector('.vk-tool-seq-slot[data-entering] [data-tool="three"]')).not.toBeNull();
   await act(async () => vi.advanceTimersByTime(1_000));
   expect(host.querySelector(".vk-tool-seq-slot[data-leaving]")).toBeNull();

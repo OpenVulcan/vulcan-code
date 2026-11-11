@@ -162,6 +162,10 @@ fieldset.vk-form-stack, fieldset.vk-form-loose { min-width: 0; margin: 0; paddin
 /* ---------- Preference list: ruled rows with title and notes left, one control right ---------- */
 /* 偏好列表：带分隔线的行，左侧标题与说明，右侧单个控件。 */
 .vk-form-prefs { display: grid; align-content: start; max-width: 52rem; }
+.vk-retry-rule-list { display: grid; gap: calc(var(--vk-u) * 2); margin: 0; padding: 0; list-style: none; }
+.vk-retry-rule-list > li { padding: calc(var(--vk-u) * 2) 0; border-bottom: var(--vk-bw) solid var(--vk-line-soft); }
+.vk-retry-rule-list code, .vk-retry-rule-editor code { overflow-wrap: anywhere; }
+.vk-retry-rule-actions { display: flex; flex-wrap: wrap; gap: calc(var(--vk-u) * 2); }
 .vk-form-pref { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: calc(var(--vk-u) * 1.5) calc(var(--vk-u) * 8); padding: calc(var(--vk-u) * 4) 0; border-bottom: var(--vk-bw) solid var(--vk-line-soft); }
 .vk-form-pref:first-child { padding-top: 0; }
 .vk-form-pref:last-child { padding-bottom: 0; border-bottom: 0; }

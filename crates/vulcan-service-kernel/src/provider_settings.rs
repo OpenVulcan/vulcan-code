@@ -4,11 +4,11 @@
 use serde::Deserialize;
 use vulcan_agent_runtime::provider_config::{
     PROVIDER_RATE_LIMIT_RETRY_MAX_DELAY_MS, PROVIDER_RATE_LIMIT_RETRY_MAX_RETRIES,
-    PROVIDER_RETRY_KEYWORD_MAX_CHARACTERS, PROVIDER_RETRY_KEYWORD_MAX_COUNT,
-    PROVIDER_RETRY_MAX_BACKOFF_FACTOR_MILLI, PROVIDER_RETRY_MAX_JITTER_PERCENT,
-    PROVIDER_RETRY_MAX_RETRIES, PROVIDER_RETRY_MIN_BACKOFF_FACTOR_MILLI,
+    PROVIDER_RETRY_KEYWORD_MAX_COUNT, PROVIDER_RETRY_MAX_BACKOFF_FACTOR_MILLI,
+    PROVIDER_RETRY_MAX_JITTER_PERCENT, PROVIDER_RETRY_MAX_RETRIES,
+    PROVIDER_RETRY_MIN_BACKOFF_FACTOR_MILLI, PROVIDER_RETRY_REGEX_PREFIX,
     PersistedProviderRateLimitRetryConfiguration, PersistedProviderRetryConfiguration,
-    ProviderConfigurationFile, default_provider_retry_keywords,
+    ProviderConfigurationFile, ProviderRetryRule, default_provider_retry_keywords,
     normalize_provider_rate_limit_retry_max_retries, normalize_provider_retry_backoff_factor,
 };
 use vulcan_service_api::{
@@ -19,8 +19,8 @@ use vulcan_workspace_store::workspace_store::ProviderApiTraceStore;
 
 use crate::session_goal_lifecycle::registered_session_v1_handle_from_state;
 use crate::{
-    SharedServiceBridgeState, emit_workbench_event, mutate_provider_configuration,
-    refresh_settings_projection_locked, shell_host_from_state,
+    ServiceBridgeState, SharedServiceBridgeState, emit_workbench_event,
+    mutate_provider_configuration, refresh_settings_projection_locked, shell_host_from_state,
 };
 
 /// Provider retry settings save request sent by the WebUI settings page.
@@ -52,8 +52,8 @@ pub(super) struct ProviderRetrySettingsSaveRequest {
     /// Whether HTTP 429 and structured rate-limit errors may be retried.
     /// 是否允许重试 HTTP 429 与结构化限流错误。
     retry_429: bool,
-    /// Complete case-insensitive retry keyword list; an empty list disables keyword retry.
-    /// 完整的不区分大小写重试关键词列表；空列表表示关闭关键词重试。
+    /// Complete retry rule list; each line is a literal keyword or a prefixed regex.
+    /// 完整的重试规则列表；每行是字面关键词或带前缀的正则。
     retry_keywords: Vec<String>,
     /// Dedicated rate-limit retry schedule.
     /// 专用限流重试调度规则。
@@ -125,19 +125,69 @@ pub(super) async fn service_save_provider_retry_settings(
             configuration.retry = persisted_retry.clone();
             Ok(())
         },
-        |guard, configuration| {
-            if let Some(runtime) = guard.agent_runtime.as_ref() {
-                runtime
-                    .configured_inference_service
-                    .update_retry_configuration(&configuration.retry);
-            }
-            refresh_settings_projection_locked(guard, configuration);
-            guard.workbench.clone()
-        },
+        project_saved_provider_retry_settings,
     )
     .await?;
     emit_workbench_event(&app, &workbench);
     Ok(workbench)
+}
+
+/// Appends a single rule to the current retry policy in one configuration transaction.
+/// 在一次配置事务中将单条规则追加到当前重试策略。
+///
+/// `app` publishes the updated workbench, `state` owns the policy, and `rule` is the submitted rule line.
+/// `app` 发布更新后的工作台，`state` 持有策略，`rule` 是提交的一行规则。
+/// Returns success after persistence, or a validation or persistence error.
+/// 持久化完成后返回成功，校验或持久化失败则返回错误。
+pub(super) async fn service_add_provider_retry_rule(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    rule: String,
+) -> Result<(), String> {
+    // Read and append under the same lock so simultaneous additions cannot erase each other.
+    // 在同一把锁内读取并追加，避免同时添加时相互覆盖。
+    let workbench = mutate_provider_configuration(
+        &state,
+        "Failed to add the provider retry rule",
+        |configuration| append_provider_retry_rule(&mut configuration.retry, &rule),
+        project_saved_provider_retry_settings,
+    )
+    .await?;
+    emit_workbench_event(&app, &workbench);
+    Ok(())
+}
+
+/// Appends one nonblank rule to `retry` and returns an error if `rule` would make the list invalid.
+/// 将一条非空规则追加到 `retry`，若 `rule` 使列表无效则返回错误。
+fn append_provider_retry_rule(
+    retry: &mut PersistedProviderRetryConfiguration,
+    rule: &str,
+) -> Result<(), String> {
+    if rule.trim().is_empty() {
+        return Err(String::from("A provider retry rule cannot be blank."));
+    }
+    // Stage the deduplicated list before replacing the current rules.
+    // 先构造去重后的列表，通过校验后才替换当前规则。
+    let mut rules = retry.retry_keywords.clone();
+    rules.push(rule.to_owned());
+    validate_retry_keywords(&rules)?;
+    retry.retry_keywords = normalized_retry_keywords(&rules);
+    Ok(())
+}
+
+/// Projects a committed `configuration` into the runtime and returns the refreshed workbench from `state`.
+/// 将已提交的 `configuration` 应用到运行时，并从 `state` 返回刷新的工作台。
+fn project_saved_provider_retry_settings(
+    state: &mut ServiceBridgeState,
+    configuration: &ProviderConfigurationFile,
+) -> WorkbenchSnapshot {
+    if let Some(runtime) = state.agent_runtime.as_ref() {
+        runtime
+            .configured_inference_service
+            .update_retry_configuration(&configuration.retry);
+    }
+    refresh_settings_projection_locked(state, configuration);
+    state.workbench.clone()
 }
 
 /// Saves the bounded Provider wire-request trace diagnostic switch from system settings.
@@ -355,22 +405,18 @@ fn validate_retry_keywords(keywords: &[String]) -> Result<(), String> {
     let normalized = normalized_retry_keywords(keywords);
     if normalized.len() > PROVIDER_RETRY_KEYWORD_MAX_COUNT {
         return Err(format!(
-            "At most {PROVIDER_RETRY_KEYWORD_MAX_COUNT} retry keywords are allowed."
+            "At most {PROVIDER_RETRY_KEYWORD_MAX_COUNT} retry rules are allowed."
         ));
     }
-    if normalized
-        .iter()
-        .any(|keyword| keyword.chars().count() > PROVIDER_RETRY_KEYWORD_MAX_CHARACTERS)
-    {
-        return Err(format!(
-            "Each retry keyword must be at most {PROVIDER_RETRY_KEYWORD_MAX_CHARACTERS} characters."
-        ));
+    for (index, rule) in normalized.iter().enumerate() {
+        ProviderRetryRule::parse(rule)
+            .map_err(|error| format!("Retry rule {}: {error}", index + 1))?;
     }
     Ok(())
 }
 
-/// Trims keywords and removes blank entries and case-insensitive duplicates, keeping first order.
-/// 修剪关键词，并移除空白条目与不区分大小写的重复项，保留首次出现顺序。
+/// Trims rules and removes blank or duplicate entries, preserving order and regex case.
+/// 修剪规则并移除空白或重复条目，保留顺序及正则表达式的大小写。
 ///
 /// # Parameters
 /// 参数
@@ -386,7 +432,15 @@ fn normalized_retry_keywords(keywords: &[String]) -> Vec<String> {
     keywords
         .iter()
         .map(|keyword| keyword.trim())
-        .filter(|keyword| !keyword.is_empty() && seen.insert(keyword.to_lowercase()))
+        .filter(|rule| {
+            // Literal rules fold case for deduplication; a regex preserves every character.
+            // 字面规则去重时折叠大小写，正则表达式保留每个字符。
+            let key = match rule.strip_prefix(PROVIDER_RETRY_REGEX_PREFIX) {
+                Some(pattern) => (true, pattern.to_owned()),
+                None => (false, rule.to_lowercase()),
+            };
+            !rule.is_empty() && seen.insert(key)
+        })
         .map(String::from)
         .collect()
 }
@@ -535,7 +589,9 @@ mod tests {
             .collect();
         assert!(validate_provider_retry_settings_request(&too_many).is_err());
         let mut too_long = valid_retry_request();
-        too_long.retry_keywords = vec!["k".repeat(PROVIDER_RETRY_KEYWORD_MAX_CHARACTERS + 1)];
+        too_long.retry_keywords = vec!["k".repeat(
+            vulcan_agent_runtime::provider_config::PROVIDER_RETRY_KEYWORD_MAX_CHARACTERS + 1,
+        )];
         assert!(validate_provider_retry_settings_request(&too_long).is_err());
         let mut cleared = valid_retry_request();
         cleared.retry_keywords = Vec::new();
@@ -547,5 +603,43 @@ mod tests {
             summary.default_retry_keywords,
             default_provider_retry_keywords()
         );
+    }
+
+    /// Verifies settings reject malformed regexes and preserve case-distinct valid patterns.
+    /// 验证设置拒绝无效正则，并保留大小写不同的有效表达式。
+    #[test]
+    fn retry_settings_validate_regex_rules() {
+        // These patterns differ only by case and must remain independently editable.
+        // 两个表达式仅大小写不同，必须各自可编辑。
+        let mut request = valid_retry_request();
+        request.retry_keywords = vec!["regex:Timeout".into(), "regex:timeout".into()];
+        assert!(validate_provider_retry_settings_request(&request).is_ok());
+        assert_eq!(
+            normalized_retry_keywords(&request.retry_keywords),
+            request.retry_keywords
+        );
+        request.retry_keywords.push("regex:[".into());
+        assert!(validate_provider_retry_settings_request(&request).is_err());
+    }
+
+    /// Verifies appending a rule preserves settings and rejects invalid input without mutation.
+    /// 验证追加规则保留设置，且拒绝无效输入时不产生变更。
+    #[test]
+    fn append_retry_rule_keeps_existing_policy_and_deduplicates() {
+        // Start with disabled automatic retry to verify adding a rule cannot enable it.
+        // 从关闭自动重试开始，验证添加规则无法开启它。
+        let mut retry = PersistedProviderRetryConfiguration {
+            enabled: false,
+            ..PersistedProviderRetryConfiguration::default()
+        };
+        // Extend the default rules with one expected expression.
+        // 在默认规则后追加一条预期正则。
+        let mut expected = default_provider_retry_keywords();
+        expected.push("regex:^temporary [0-9]+$".into());
+        append_provider_retry_rule(&mut retry, "regex:^temporary [0-9]+$").unwrap();
+        append_provider_retry_rule(&mut retry, " regex:^temporary [0-9]+$ ").unwrap();
+        assert!(append_provider_retry_rule(&mut retry, "regex:[").is_err());
+        assert!(!retry.enabled);
+        assert_eq!(retry.retry_keywords, expected);
     }
 }

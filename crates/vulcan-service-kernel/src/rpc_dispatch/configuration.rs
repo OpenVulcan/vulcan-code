@@ -36,6 +36,7 @@ pub(super) const RPC_METHODS: &[&str] = &[
     "service_open_selected_provider_api_trace_directory",
     "service_clear_selected_provider_api_trace_directory",
     "service_save_provider_retry_settings",
+    "service_add_provider_retry_rule",
     "service_output_style_catalog",
     "service_license_catalog",
     "service_license_body",
@@ -326,6 +327,9 @@ pub(super) async fn dispatch(
                 rpc_required_param(params, "request")?,
             )
             .await,
+        ),
+        "service_add_provider_retry_rule" => rpc_json_result(
+            service_add_provider_retry_rule(app, state, rpc_required_param(params, "rule")?).await,
         ),
         "service_output_style_catalog" => {
             rpc_json_result(service_output_style_catalog(state).await)

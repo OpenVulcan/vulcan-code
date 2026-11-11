@@ -60,6 +60,7 @@ WebUI 展示时阅读。普通业务任务不需要加载这些细节。
   WebUI 命令卡仅在展开且尚无结果时调用 `service_attach_shell_command_output`，收到最近若干行后按
   `shell.command.output.changed` 整段替换，收起即 `service_detach_shell_command_output`，浏览器断开时订阅
   随之取消；调用结束后卡片改为显示可靠结果。工具链中的步骤不提供实时尾部显示。
+- 连续工具的折叠组可在两次调用间保留上一张卡片。保留或离场时按原卡片标识读取最新工具事件，收到终态即停止实时计时并显示对应标记。
 - `auto` 使用用户已配置且当前可检测的默认 Shell；没有用户配置时按平台稳定优先级选择。
 - Windows 当前检测优先级为 `pwsh`、`powershell`、`cmd`、`bash`、`sh`、`zsh`，但只暴露实际
   检测成功的启动器。
