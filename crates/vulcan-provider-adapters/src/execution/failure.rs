@@ -3,6 +3,7 @@
 
 use crate::CredentialExecutionSecret;
 use serde_json::Value;
+use std::error::Error as _;
 use vulcan_ai_contract::{
     AiErrorCategory, AiExecutionError, AiTransportKind, DispatchOutcome, RetryAfterHint,
 };
@@ -302,6 +303,191 @@ pub(crate) fn transport_failure(message: impl Into<String>) -> ProviderExecution
             retry_after: None,
         }),
     }
+}
+
+/// Maximum chained transport causes retained for one recorded transport failure.
+/// 单次已记录传输失败允许保留的传输原因链最大层数。
+pub(crate) const TRANSPORT_FAILURE_MAX_CAUSES: usize = 4;
+
+/// Maximum characters retained from one chained transport cause.
+/// 单个传输原因允许保留的最大字符数。
+pub(crate) const TRANSPORT_FAILURE_MAX_CAUSE_CHARACTERS: usize = 300;
+
+/// Stable phase label describing where one transport attempt stopped.
+/// 描述一次传输尝试停在何处的稳定阶段标签。
+///
+/// The labels are diagnostics only; they never decide dispatch or retry semantics.
+/// 这些标签仅用于诊断，绝不参与分派或重试语义判定。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TransportFailurePhase {
+    /// Connection establishment failed before the HTTP request could be dispatched.
+    /// 连接建立在 HTTP 请求可被分派之前失败。
+    Connect,
+    /// The send exceeded one of its configured timeouts.
+    /// 发送超过其已配置的超时。
+    Timeout,
+    /// The request body could not be written to the transport.
+    /// 请求体无法写入传输层。
+    Body,
+    /// The request could not be built, encoded, or handed to the transport.
+    /// 请求无法构建、编码或交给传输层。
+    Request,
+    /// The transport reported a decoding failure.
+    /// 传输报告了解码失败。
+    Decode,
+    /// A redirect could not be followed.
+    /// 无法跟随重定向。
+    Redirect,
+    /// The peer answered with an error status.
+    /// 对端以错误状态作答。
+    Status,
+    /// The registered response-header bound elapsed before any response header arrived.
+    /// 在任何响应头到达之前，已登记的响应头时限先到期。
+    ResponseHeadersTimeout,
+    /// No specific reqwest failure flag matched.
+    /// 未命中任何具体 reqwest 失败标志。
+    Other,
+}
+
+impl TransportFailurePhase {
+    /// Returns the stable lowercase label written into transport diagnostics.
+    /// 返回写入传输诊断的稳定小写标签。
+    ///
+    /// # Returns
+    /// 返回值
+    /// One fixed ASCII label from the closed phase set.
+    /// 来自封闭阶段集合的一个固定 ASCII 标签。
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Connect => "connect",
+            Self::Timeout => "timeout",
+            Self::Body => "body",
+            Self::Request => "request",
+            Self::Decode => "decode",
+            Self::Redirect => "redirect",
+            Self::Status => "status",
+            Self::ResponseHeadersTimeout => "response_headers_timeout",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// Non-secret evidence describing one stopped transport attempt without changing its classification.
+/// 描述一次中断传输尝试的无秘密证据，且不改变其分类。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TransportFailureEvidence {
+    /// Stable phase label derived from the failure's own evidence.
+    /// 由失败自身证据推导出的稳定阶段标签。
+    pub(crate) phase: TransportFailurePhase,
+    /// Ordered, bounded cause texts below the transport error itself.
+    /// 传输错误本身之下的有序且受限的原因文本。
+    pub(crate) causes: Vec<String>,
+    /// Registered bound in milliseconds when that bound ended the attempt.
+    /// 由已登记时限结束本次尝试时的时限毫秒数。
+    pub(crate) timeout_ms: Option<u64>,
+}
+
+/// Collects secret-safe evidence for one failed HTTP send.
+/// 为一次失败的 HTTP 发送收集无秘密证据。
+///
+/// # Parameters
+/// 参数
+/// `error` is the exact reqwest send error that ended the attempt.
+/// `error` 是结束本次尝试的精确 reqwest 发送错误。
+///
+/// # Returns
+/// 返回值
+/// A stable phase label plus its bounded cause chain, never a dispatch decision.
+/// 稳定阶段标签及其受限原因链，绝不包含分派决策。
+pub(crate) fn http_send_failure_evidence(error: &reqwest::Error) -> TransportFailureEvidence {
+    TransportFailureEvidence {
+        phase: http_send_phase(error),
+        causes: http_send_causes(error),
+        timeout_ms: None,
+    }
+}
+
+/// Builds evidence for one attempt ended by the registered response-header bound.
+/// 为一次被已登记响应头时限结束的尝试构建证据。
+///
+/// # Parameters
+/// 参数
+/// `timeout_ms` is the exact registered response-header bound that expired.
+/// `timeout_ms` 是真正到期的已登记响应头时限。
+///
+/// # Returns
+/// 返回值
+/// Timeout-phase evidence that carries the bound and no cause chain.
+/// 携带该时限且不含原因链的超时阶段证据。
+pub(crate) fn response_headers_timeout_evidence(timeout_ms: u64) -> TransportFailureEvidence {
+    TransportFailureEvidence {
+        phase: TransportFailurePhase::ResponseHeadersTimeout,
+        causes: Vec::new(),
+        timeout_ms: Some(timeout_ms),
+    }
+}
+
+/// Derives the stable send phase from reqwest's own failure flags.
+/// 由 reqwest 自身失败标志推导稳定的发送阶段。
+///
+/// # Parameters
+/// 参数
+/// `error` is the exact reqwest send error.
+/// `error` 是精确的 reqwest 发送错误。
+///
+/// # Returns
+/// 返回值
+/// The first matching flag in the documented precedence order, otherwise `Other`.
+/// 按文档顺序命中的首个标志，否则返回 `Other`。
+fn http_send_phase(error: &reqwest::Error) -> TransportFailurePhase {
+    if error.is_connect() {
+        TransportFailurePhase::Connect
+    } else if error.is_timeout() {
+        TransportFailurePhase::Timeout
+    } else if error.is_body() {
+        TransportFailurePhase::Body
+    } else if error.is_request() {
+        TransportFailurePhase::Request
+    } else if error.is_decode() {
+        TransportFailurePhase::Decode
+    } else if error.is_redirect() {
+        TransportFailurePhase::Redirect
+    } else if error.is_status() {
+        TransportFailurePhase::Status
+    } else {
+        TransportFailurePhase::Other
+    }
+}
+
+/// Walks the source chain below the reqwest error inside the shared bounds.
+/// 在共享边界内遍历 reqwest 错误之下的原因链。
+///
+/// # Parameters
+/// 参数
+/// `error` is the exact reqwest send error.
+/// `error` 是精确的 reqwest 发送错误。
+///
+/// # Returns
+/// 返回值
+/// At most `TRANSPORT_FAILURE_MAX_CAUSES` texts, each truncated to its character bound.
+/// 至多 `TRANSPORT_FAILURE_MAX_CAUSES` 条文本，每条截断到各自的字符上限。
+fn http_send_causes(error: &reqwest::Error) -> Vec<String> {
+    let mut causes = Vec::new();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        if causes.len() >= TRANSPORT_FAILURE_MAX_CAUSES {
+            break;
+        }
+        causes.push(
+            cause
+                .to_string()
+                .chars()
+                .take(TRANSPORT_FAILURE_MAX_CAUSE_CHARACTERS)
+                .collect(),
+        );
+        source = cause.source();
+    }
+    causes
 }
 
 /// Classifies one HTTP request-send failure without guessing whether an established request arrived upstream.

@@ -328,6 +328,9 @@ async fn ordinary_provider_request_trace_shape_is_unchanged() {
         normalized_tool_call_abort: None,
         failure_stage: None,
         failure_message: None,
+        transport_failure_phase: None,
+        transport_failure_causes: None,
+        transport_failure_timeout_ms: None,
         body_sha256: String::new(),
     };
 
@@ -364,5 +367,22 @@ async fn ordinary_provider_request_trace_shape_is_unchanged() {
     assert_eq!(
         published.output["outcome"]["classification"],
         "response_completed"
+    );
+    // The send-failure slots are part of the record shape even when no send failure occurred.
+    // 即使没有发生发送失败，发送失败槽位也属于记录形状的一部分。
+    assert!(
+        published.output["outcome"]
+            .get("transport_failure_phase")
+            .is_some_and(|value| value.is_null())
+    );
+    assert!(
+        published.output["outcome"]
+            .get("transport_failure_causes")
+            .is_some_and(|value| value.is_null())
+    );
+    assert!(
+        published.output["outcome"]
+            .get("transport_failure_timeout_ms")
+            .is_some_and(|value| value.is_null())
     );
 }
