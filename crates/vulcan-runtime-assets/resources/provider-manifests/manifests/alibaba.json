@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "alibaba",
-  "revision": 29,
-  "published_at": "2026-11-11T07:03:23Z",
+  "revision": 30,
+  "published_at": "2026-11-11T07:57:15Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -3479,7 +3479,7 @@
       "description": "Build the reviewed Alibaba Qwen3-ASR message body.",
       "payload": {
         "profile_id": "alibaba.audio.qwen-asr.request.v1",
-        "revision": 1,
+        "revision": 2,
         "steps": [
           {
             "op": "rebuild_json_template",
@@ -3498,7 +3498,12 @@
               "parameters": {
                 "result_format": "message",
                 "asr_options": {
-                  "enable_itn": false,
+                  "enable_itn": {
+                    "$vulcan_coalesce": [
+                      {"$vulcan_ref": {"path": "/enable_itn", "optional": true}},
+                      false
+                    ]
+                  },
                   "language": {"$vulcan_ref": {"path": "/language", "optional": true}}
                 }
               }
@@ -3541,10 +3546,10 @@
     },
     {
       "profile_id": "alibaba.audio.token-plan-asr.request.v1",
-      "description": "Build the verified Alibaba Token Plan Qwen Audio ASR input-audio body.",
+      "description": "Build the Alibaba Qwen Audio ASR input-audio body for Token Plan and Model Studio.",
       "payload": {
         "profile_id": "alibaba.audio.token-plan-asr.request.v1",
-        "revision": 1,
+        "revision": 2,
         "steps": [
           {
             "op": "rebuild_json_template",
@@ -3552,6 +3557,15 @@
               "model": {"$vulcan_model_id": true},
               "input": {
                 "messages": [
+                  {
+                    "$vulcan_if_present": {
+                      "path": "/prompt",
+                      "then": {
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": {"$vulcan_ref": {"path": "/prompt"}}}]
+                      }
+                    }
+                  },
                   {
                     "role": "user",
                     "content": [
@@ -3572,12 +3586,9 @@
                     "mp3"
                   ]
                 },
-                "sample_rate": {
-                  "$vulcan_coalesce": [
-                    {"$vulcan_ref": {"path": "/sample_rate", "optional": true}},
-                    "16000"
-                  ]
-                },
+                "sample_rate": {"$vulcan_ref": {"path": "/sample_rate", "optional": true}},
+                "vocabulary_id": {"$vulcan_ref": {"path": "/vocabulary_id", "optional": true}},
+                "keep_dialect": {"$vulcan_ref": {"path": "/keep_dialect", "optional": true}},
                 "language_hints": {
                   "$vulcan_if_present": {
                     "path": "/language",
@@ -4379,10 +4390,10 @@
     },
     {
       "profile_id": "alibaba.audio.token-plan-asr.response.v1",
-      "description": "Normalize the verified Token Plan Qwen Audio ASR text response.",
+      "description": "Normalize the Alibaba Qwen Audio ASR text response.",
       "payload": {
         "profile_id": "alibaba.audio.token-plan-asr.response.v1",
-        "revision": 2,
+        "revision": 3,
         "steps": [
           {
             "op": "rebuild_json_template",
@@ -4404,7 +4415,7 @@
                 },
                 "otherwise": {
                   "error": {
-                    "message": "Alibaba Token Plan ASR response has no transcript text."
+                    "message": "Alibaba Qwen Audio ASR response has no transcript text."
                   }
                 }
               }
@@ -4805,6 +4816,51 @@
           "source_path": "/audio_path",
           "target_path": "/audio_url",
           "upload_channel_refs": ["inline.audio-data-url"],
+          "mime_types_by_extension": {
+            "mp3": "audio/mpeg",
+            "wav": "audio/wav",
+            "m4a": "audio/mp4",
+            "mp4": "audio/mp4",
+            "aac": "audio/aac",
+            "ogg": "audio/ogg",
+            "flac": "audio/flac",
+            "webm": "audio/webm"
+          },
+          "required": true,
+          "remove_source": true
+        }
+      ],
+      "timeout_ms": 60000,
+      "idempotent": false
+    },
+    {
+      "operation_id": "alibaba.alibaba_qwen_audio_speech_transcribe",
+      "operation": "speech_transcribe",
+      "carrier": "provider_tool",
+      "input_resources": [
+        "audio"
+      ],
+      "output_resources": [],
+      "tool_target_refs": [
+        "model-studio-cn.qwen-audio-3.1-asr-flash.speech-transcribe",
+        "model-studio-singapore.qwen-audio-3.1-asr-flash.speech-transcribe"
+      ],
+      "request_profile_refs": [
+        "alibaba.audio.token-plan-asr.request.v1"
+      ],
+      "response_profile_refs": [
+        "alibaba.audio.token-plan-asr.response.v1"
+      ],
+      "upload_channel_refs": [
+        "inline.audio-data-url"
+      ],
+      "upload_bindings": [
+        {
+          "source_path": "/audio_path",
+          "target_path": "/audio_url",
+          "upload_channel_refs": [
+            "inline.audio-data-url"
+          ],
           "mime_types_by_extension": {
             "mp3": "audio/mpeg",
             "wav": "audio/wav",
@@ -6395,6 +6451,7 @@
             "minLength": 1,
             "type": "string"
           },
+          "enable_itn": {"type": "boolean"},
           "language": {
             "enum": [
               "zh",
@@ -6442,6 +6499,126 @@
       "target_id": "model-studio-cn.qwen3-asr-flash.speech-transcribe",
       "tool_id": "vulcan_speech_transcribe",
       "upstream_target_id": "qwen3-asr-flash"
+    },
+    {
+      "capability": "speech_transcribe",
+      "credential_profile_ids": [
+        "api-key"
+      ],
+      "description": "Transcribe one local audio file with the synchronous Model Studio Qwen Audio 3.1 ASR model.",
+      "display_name": "qwen-audio-3.1-asr-flash Transcribe",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_base_url": "https://dashscope.aliyuncs.com",
+        "endpoint_path": "/api/v1/services/aigc/multimodal-generation/generation",
+        "execution_kind": "http_json_sync"
+      },
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "audio_path": {
+            "description": "Local audio file path.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Audio format matching the local file extension."
+          },
+          "keep_dialect": {
+            "type": "boolean"
+          },
+          "language": {
+            "type": "string",
+            "enum": [
+              "zh",
+              "en",
+              "ja",
+              "ko",
+              "vi",
+              "th",
+              "id",
+              "ms",
+              "tl",
+              "hi",
+              "ar",
+              "fr",
+              "de",
+              "es",
+              "pt",
+              "ru",
+              "it",
+              "nl",
+              "sv",
+              "da",
+              "fi",
+              "no",
+              "el",
+              "pl",
+              "cs",
+              "hu",
+              "ro",
+              "bg",
+              "hr",
+              "sk",
+              "tr",
+              "fa",
+              "mr",
+              "ml",
+              "ne",
+              "ky",
+              "az",
+              "ka",
+              "hy",
+              "sl",
+              "sq",
+              "et",
+              "lv",
+              "lt",
+              "ca",
+              "eu",
+              "gl",
+              "or",
+              "dv",
+              "as",
+              "ku",
+              "tig",
+              "fy",
+              "ba",
+              "be",
+              "tt",
+              "ia",
+              "mhr",
+              "tok"
+            ]
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400
+          },
+          "vocabulary_id": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "audio_path"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "text",
+        "normalized_result_path": "text",
+        "source_path": "/text"
+      },
+      "service_entry_id": "model-studio-cn",
+      "target_id": "model-studio-cn.qwen-audio-3.1-asr-flash.speech-transcribe",
+      "tool_id": "vulcan_speech_transcribe",
+      "upstream_target_id": "qwen-audio-3.1-asr-flash"
     },
     {
         "capability": "image_understand",
@@ -8149,6 +8326,7 @@
             "minLength": 1,
             "type": "string"
           },
+          "enable_itn": {"type": "boolean"},
           "language": {
             "enum": [
               "zh",
@@ -8196,6 +8374,126 @@
       "target_id": "model-studio-singapore.qwen3-asr-flash.speech-transcribe",
       "tool_id": "vulcan_speech_transcribe",
       "upstream_target_id": "qwen3-asr-flash"
+    },
+    {
+      "capability": "speech_transcribe",
+      "credential_profile_ids": [
+        "api-key"
+      ],
+      "description": "Transcribe one local audio file with the synchronous Model Studio Qwen Audio 3.1 ASR model.",
+      "display_name": "qwen-audio-3.1-asr-flash Transcribe",
+      "execution": {
+        "adapter": "generic_json",
+        "authentication": "bearer_authorization",
+        "endpoint_base_url": "https://dashscope-intl.aliyuncs.com",
+        "endpoint_path": "/api/v1/services/aigc/multimodal-generation/generation",
+        "execution_kind": "http_json_sync"
+      },
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "audio_path": {
+            "description": "Local audio file path.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Audio format matching the local file extension."
+          },
+          "keep_dialect": {
+            "type": "boolean"
+          },
+          "language": {
+            "type": "string",
+            "enum": [
+              "zh",
+              "en",
+              "ja",
+              "ko",
+              "vi",
+              "th",
+              "id",
+              "ms",
+              "tl",
+              "hi",
+              "ar",
+              "fr",
+              "de",
+              "es",
+              "pt",
+              "ru",
+              "it",
+              "nl",
+              "sv",
+              "da",
+              "fi",
+              "no",
+              "el",
+              "pl",
+              "cs",
+              "hu",
+              "ro",
+              "bg",
+              "hr",
+              "sk",
+              "tr",
+              "fa",
+              "mr",
+              "ml",
+              "ne",
+              "ky",
+              "az",
+              "ka",
+              "hy",
+              "sl",
+              "sq",
+              "et",
+              "lv",
+              "lt",
+              "ca",
+              "eu",
+              "gl",
+              "or",
+              "dv",
+              "as",
+              "ku",
+              "tig",
+              "fy",
+              "ba",
+              "be",
+              "tt",
+              "ia",
+              "mhr",
+              "tok"
+            ]
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400
+          },
+          "vocabulary_id": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "audio_path"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "kind": "text",
+        "normalized_result_path": "text",
+        "source_path": "/text"
+      },
+      "service_entry_id": "model-studio-singapore",
+      "target_id": "model-studio-singapore.qwen-audio-3.1-asr-flash.speech-transcribe",
+      "tool_id": "vulcan_speech_transcribe",
+      "upstream_target_id": "qwen-audio-3.1-asr-flash"
     },
     {
       "capability": "image_understand",
@@ -10703,32 +11001,35 @@
           "language": {
             "enum": [
               "zh",
-              "yue",
               "en",
               "ja",
-              "de",
               "ko",
-              "ru",
-              "fr",
-              "pt",
-              "ar",
-              "it",
-              "es",
-              "hi",
-              "id",
-              "th",
-              "tr",
-              "uk",
               "vi",
-              "cs",
-              "da",
-              "fil",
-              "fi",
-              "is",
+              "th",
+              "id",
               "ms",
+              "tl",
+              "hi",
+              "ar",
+              "fr",
+              "de",
+              "es",
+              "pt",
+              "ru",
+              "it",
+              "nl",
+              "sv",
+              "da",
+              "fi",
               "no",
+              "el",
               "pl",
-              "sv"
+              "cs",
+              "hu",
+              "ro",
+              "bg",
+              "hr",
+              "sk"
             ],
             "type": "string"
           },
@@ -10736,7 +11037,8 @@
             "default": "16000",
             "minLength": 1,
             "type": "string"
-          }
+          },
+          "vocabulary_id": {"type": "string", "minLength": 1}
         },
         "required": [
           "audio_path"
@@ -10865,32 +11167,35 @@
           "language": {
             "enum": [
               "zh",
-              "yue",
               "en",
               "ja",
-              "de",
               "ko",
-              "ru",
-              "fr",
-              "pt",
-              "ar",
-              "it",
-              "es",
-              "hi",
-              "id",
-              "th",
-              "tr",
-              "uk",
               "vi",
-              "cs",
-              "da",
-              "fil",
-              "fi",
-              "is",
+              "th",
+              "id",
               "ms",
+              "tl",
+              "hi",
+              "ar",
+              "fr",
+              "de",
+              "es",
+              "pt",
+              "ru",
+              "it",
+              "nl",
+              "sv",
+              "da",
+              "fi",
               "no",
+              "el",
               "pl",
-              "sv"
+              "cs",
+              "hu",
+              "ro",
+              "bg",
+              "hr",
+              "sk"
             ],
             "type": "string"
           },
@@ -10898,7 +11203,8 @@
             "default": "16000",
             "minLength": 1,
             "type": "string"
-          }
+          },
+          "vocabulary_id": {"type": "string", "minLength": 1}
         },
         "required": [
           "audio_path"
@@ -11027,32 +11333,35 @@
           "language": {
             "enum": [
               "zh",
-              "yue",
               "en",
               "ja",
-              "de",
               "ko",
-              "ru",
-              "fr",
-              "pt",
-              "ar",
-              "it",
-              "es",
-              "hi",
-              "id",
-              "th",
-              "tr",
-              "uk",
               "vi",
-              "cs",
-              "da",
-              "fil",
-              "fi",
-              "is",
+              "th",
+              "id",
               "ms",
+              "tl",
+              "hi",
+              "ar",
+              "fr",
+              "de",
+              "es",
+              "pt",
+              "ru",
+              "it",
+              "nl",
+              "sv",
+              "da",
+              "fi",
               "no",
+              "el",
               "pl",
-              "sv"
+              "cs",
+              "hu",
+              "ro",
+              "bg",
+              "hr",
+              "sk"
             ],
             "type": "string"
           },
@@ -11060,7 +11369,8 @@
             "default": "16000",
             "minLength": 1,
             "type": "string"
-          }
+          },
+          "vocabulary_id": {"type": "string", "minLength": 1}
         },
         "required": [
           "audio_path"
@@ -11189,32 +11499,35 @@
           "language": {
             "enum": [
               "zh",
-              "yue",
               "en",
               "ja",
-              "de",
               "ko",
-              "ru",
-              "fr",
-              "pt",
-              "ar",
-              "it",
-              "es",
-              "hi",
-              "id",
-              "th",
-              "tr",
-              "uk",
               "vi",
-              "cs",
-              "da",
-              "fil",
-              "fi",
-              "is",
+              "th",
+              "id",
               "ms",
+              "tl",
+              "hi",
+              "ar",
+              "fr",
+              "de",
+              "es",
+              "pt",
+              "ru",
+              "it",
+              "nl",
+              "sv",
+              "da",
+              "fi",
               "no",
+              "el",
               "pl",
-              "sv"
+              "cs",
+              "hu",
+              "ro",
+              "bg",
+              "hr",
+              "sk"
             ],
             "type": "string"
           },
@@ -11222,7 +11535,8 @@
             "default": "16000",
             "minLength": 1,
             "type": "string"
-          }
+          },
+          "vocabulary_id": {"type": "string", "minLength": 1}
         },
         "required": [
           "audio_path"
@@ -12443,6 +12757,18 @@
   "provenance": {
     "status": "migrated",
     "sources": [
+      {
+        "url": "https://help.aliyun.com/zh/model-studio/qwen-audio-asr-http-api",
+        "note": "Official Qwen Audio ASR language codes, recognition arguments, and synchronous output.text. Model Studio Beijing 3.1 and Token Plan Beijing 3.0 returned Italian transcripts with an explicit language hint."
+      },
+      {
+        "url": "https://help.aliyun.com/zh/model-studio/non-realtime-speech-recognition-user-guide",
+        "note": "Model Studio Qwen Audio 3.1 synchronous ASR is documented for Beijing and Singapore. The Beijing shared gateway was live-tested; the Singapore entry follows the documented regional contract."
+      },
+      {
+        "url": "https://help.aliyun.com/zh/model-studio/recording-file-recognition-qwen",
+        "note": "Qwen3 ASR Flash language and inverse text normalization options. The Beijing entry returned an Italian transcript with both options set."
+      },
       {
         "url": "https://help.aliyun.com/zh/model-studio/token-plan-personal-overview",
         "note": "Personal edition catalog and separate native media APIs. The Beijing personal credential was live-probed on 2026-11-10."

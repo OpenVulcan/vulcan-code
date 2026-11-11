@@ -7,14 +7,21 @@ import { toast } from "@/ui-kit/primitives/toast";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/ui-kit/primitives/dialog";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/ui-kit/primitives/hover-card";
 import type { VoiceInputSummary } from "@/types";
-import { VoiceInputCard } from "@/components/composer/composer-panel/voice-input-card";
 import { readVoiceInputDevice, voiceInputAudioConstraints } from "@/components/composer/composer-panel/voice-input-device";
+import { hasBlockingComposerPopup, isComposerTextEntryElement } from "@/components/composer/composer-model";
+import { getWorkspaceInputOwner } from "@/components/workspace/workspace-input-owner";
+import { readVoiceInputShortcut, voiceInputShortcutFromKey } from "./voice-input-shortcut";
 import { encodeVoiceInputWav } from "./voice-input-wav";
 
 // The settings section loads with the quick setup dialog, keeping settings styles out of the workbench chunk.
 // 设置节随快速设置对话框加载，使设置样式不进入工作台分块。
 const LazyVoiceInputSettingsSection = React.lazy(() => import("@/components/features/settings/voice-input-settings")
   .then((module) => ({ default: module.VoiceInputSettingsSection })));
+
+// Load the microphone summary and device picker when the user opens the hover card.
+// 用户打开悬停卡片时加载麦克风摘要与设备选择器。
+const LazyVoiceInputCard = React.lazy(() => import("./voice-input-card")
+  .then((module) => ({ default: module.VoiceInputCard })));
 
 // Keep the browser's native recording formats and encode the completed recording as PCM WAV for ASR.
 // 保留浏览器原生录音格式，录制完成后编码为 PCM WAV 供语音识别使用。
@@ -33,6 +40,9 @@ type VoiceInputPhase = "idle" | "starting" | "recording" | "transcribing";
 // RecordingSession is one press of the button, from opening the microphone to the transcript.
 // RecordingSession 是一次按压，从打开麦克风到得到转写文本。
 interface RecordingSession {
+  // The exact chord that started this recording, or null for a microphone button press.
+  // 启动本次录音的精确组合键，麦克风按钮按压则为 null。
+  shortcut: string | null;
   recorder: MediaRecorder | null;
   stream: MediaStream | null;
   chunks: Blob[];
@@ -53,6 +63,9 @@ export interface VoiceInputButtonProps {
   // Whether the composer currently rejects new input, such as while editing a pending prompt.
   // 输入区当前是否拒绝新输入，例如正在编辑待发送提示词时。
   disabled: boolean;
+  // Identifies the active composer field when another editor owns keyboard input.
+  // 当其他编辑器持有键盘时，用于识别当前输入区文本框。
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   // Inserts one non-empty transcript into the draft.
   // 将一段非空转写文本插入草稿。
   onTranscript: (text: string) => void;
@@ -83,7 +96,7 @@ export function VoiceInputButton(props: VoiceInputButtonProps) {
   const session = React.useRef<RecordingSession | null>(null);
   const configured = props.voiceInput?.configured ?? false;
   const maxDurationSeconds = props.voiceInput?.maxDurationSeconds ?? 0;
-  const { onBusyChange, onTranscript } = props;
+  const { disabled, onBusyChange, onTranscript, textareaRef } = props;
 
   React.useEffect(() => { onBusyChange(phase !== "idle"); }, [onBusyChange, phase]);
 
@@ -123,27 +136,30 @@ export function VoiceInputButton(props: VoiceInputButtonProps) {
       const recording = await encodeVoiceInputWav(new Blob(current.chunks, { type: mimeType }));
       if (session.current !== current) return;
       const { text } = await transcribeVoiceInput(recording);
+      if (session.current !== current) return;
       if (text) onTranscript(text);
       else toast.info(t("composer.voice.noSpeech"));
     } catch (cause) {
-      toast.error(t("composer.voice.failed"), { description: errorMessage(cause) });
+      if (session.current === current) toast.error(t("composer.voice.failed"), { description: errorMessage(cause) });
     } finally {
-      if (session.current === current) session.current = null;
-      setPhase("idle");
+      if (session.current === current) {
+        session.current = null;
+        setPhase("idle");
+      }
     }
   }, [onTranscript, t]);
 
-  // start opens the microphone and records until released or the duration limit is reached.
-  // start 打开麦克风并录音，直到释放或达到时长上限。
-  const start = React.useCallback(async () => {
-    if (session.current || !configured || props.disabled) return;
+  // start opens the microphone for the supplied chord or button press, returning when recording begins or fails.
+  // start 为指定组合键或按钮按压打开麦克风，录音开始或失败后返回。
+  const start = React.useCallback(async (shortcut: string | null = null) => {
+    if (session.current || !configured || disabled) return;
     const mimeType = pickRecordingMimeType();
     if (!mimeType || !navigator.mediaDevices?.getUserMedia) {
       toast.error(t("composer.voice.unsupported"));
       return;
     }
     const current: RecordingSession = {
-      recorder: null, stream: null, chunks: [], startedAt: Date.now(), released: false, cancelled: false, timer: null,
+      shortcut, recorder: null, stream: null, chunks: [], startedAt: Date.now(), released: false, cancelled: false, timer: null,
     };
     session.current = current;
     setCardOpen(false);
@@ -151,15 +167,17 @@ export function VoiceInputButton(props: VoiceInputButtonProps) {
     try {
       current.stream = await navigator.mediaDevices.getUserMedia(voiceInputAudioConstraints(readVoiceInputDevice()));
     } catch (cause) {
+      if (session.current !== current) return;
       session.current = null;
       setPhase("idle");
-      toast.error(t("composer.voice.micUnavailable"), { description: errorMessage(cause) });
+      if (!current.cancelled) toast.error(t("composer.voice.micUnavailable"), { description: errorMessage(cause) });
       return;
     }
     if (current.released) {
       // Released while the microphone was opening: nothing was recorded.
       // 麦克风打开期间已释放：没有录到任何内容。
       current.stream.getTracks().forEach((track) => track.stop());
+      if (session.current !== current) return;
       session.current = null;
       setPhase("idle");
       if (!current.cancelled) toast.info(t("composer.voice.tooShort"));
@@ -180,7 +198,58 @@ export function VoiceInputButton(props: VoiceInputButtonProps) {
       // 到达上限时结束录音，仍会转写。
       if (left <= 0) release(false);
     }, 250);
-  }, [configured, finish, maxDurationSeconds, props.disabled, release, t]);
+  }, [configured, disabled, finish, maxDurationSeconds, release, t]);
+
+  React.useEffect(() => {
+    // Keep keyboard push-to-talk inside the active composer and respect keys claimed by other controls.
+    // 键盘按住说话只作用于当前输入区，并尊重其他控件已处理的按键。
+    const onShortcutDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || !configured || disabled) return;
+      // Read the current binding so a newly saved shortcut applies without reopening the conversation.
+      // 读取当前绑定，使新保存的快捷键无需重开会话即可生效。
+      const shortcut = voiceInputShortcutFromKey(event);
+      if (!shortcut || shortcut !== readVoiceInputShortcut()) return;
+      if (session.current?.shortcut === shortcut) {
+        event.preventDefault();
+        return;
+      }
+      if (event.repeat || session.current || hasBlockingComposerPopup()) return;
+      // Require a visible composer and yield to a terminal or another text field.
+      // 要求输入区可见，并将键盘交还给终端或其他文本输入控件。
+      const textarea = textareaRef.current;
+      const owner = getWorkspaceInputOwner();
+      if (!textarea?.isConnected || textarea.checkVisibility?.() === false
+        || owner.kind === "project_terminal"
+        || (document.activeElement !== textarea && isComposerTextEntryElement(document.activeElement))) return;
+      event.preventDefault();
+      void start(shortcut);
+    };
+    // End the recorded chord even if focus changed or its modifier was released before its main key.
+    // 即使焦点变化或修饰键先于主键松开，也结束该组合键录音。
+    const onShortcutUp = (event: KeyboardEvent) => {
+      const shortcut = session.current?.shortcut;
+      if (!shortcut) return;
+      // A modifier's logical key is shared by the left and right physical keys.
+      // 左右修饰键使用相同的逻辑键名。
+      const keys = shortcut.split("+");
+      if (!keys.includes(event.code) && !keys.includes(event.key)) return;
+      event.preventDefault();
+      release(false);
+    };
+    // Discard a held shortcut when the window loses focus and can no longer observe key release.
+    // 窗口失焦后无法观察松键，丢弃仍按住的快捷键录音。
+    const cancelShortcut = () => {
+      if (session.current?.shortcut) release(true);
+    };
+    window.addEventListener("keydown", onShortcutDown);
+    window.addEventListener("keyup", onShortcutUp, true);
+    window.addEventListener("blur", cancelShortcut);
+    return () => {
+      window.removeEventListener("keydown", onShortcutDown);
+      window.removeEventListener("keyup", onShortcutUp, true);
+      window.removeEventListener("blur", cancelShortcut);
+    };
+  }, [configured, disabled, release, start, textareaRef]);
 
   // Escape cancels an active recording from anywhere in the window.
   // 在窗口任意位置按 Escape 都会取消正在进行的录音。
@@ -229,24 +298,25 @@ export function VoiceInputButton(props: VoiceInputButtonProps) {
           data-state={recording ? "recording" : phase === "transcribing" ? "transcribing" : undefined}
           data-warning={phase === "recording" && remainingSeconds <= WARNING_SECONDS ? "" : undefined}
           onKeyDown={(event) => {
-            if ((event.key === " " || event.key === "Enter") && !event.repeat) {
+            if ((event.key === " " || event.key === "Enter") && !event.repeat
+              && !(event.ctrlKey || event.altKey || event.shiftKey || event.metaKey)) {
               event.preventDefault();
               void start();
             }
           }}
           onKeyUp={(event) => {
-            if (event.key === " " || event.key === "Enter") {
+            if (!session.current?.shortcut && (event.key === " " || event.key === "Enter")) {
               event.preventDefault();
               release(false);
             }
           }}
-          onPointerCancel={() => release(true)}
+          onPointerCancel={() => { if (!session.current?.shortcut) release(true); }}
           onPointerDown={(event) => {
-            if (event.button !== 0 || unavailable) return;
+            if (event.button !== 0 || unavailable || session.current) return;
             event.currentTarget.setPointerCapture(event.pointerId);
             void start();
           }}
-          onPointerUp={() => release(false)}
+          onPointerUp={() => { if (!session.current?.shortcut) release(false); }}
           type="button"
         >
           {phase === "transcribing"
@@ -256,22 +326,24 @@ export function VoiceInputButton(props: VoiceInputButtonProps) {
         </button>
       </HoverCardTrigger>
       <HoverCardContent align="end" className="vk-cap-sum-pop" side="top" sideOffset={8}>
-        <VoiceInputCard
-          configured={configured}
-          maxDurationSeconds={maxDurationSeconds}
-          onConfigure={() => {
-            setCardOpen(false);
-            setSetupOpen(true);
-          }}
-        />
+        <React.Suspense fallback={<p className="vk-cap-sum-note">{t("composer.voice.loading")}</p>}>
+          <LazyVoiceInputCard
+            configured={configured}
+            maxDurationSeconds={maxDurationSeconds}
+            onConfigure={() => {
+              setCardOpen(false);
+              setSetupOpen(true);
+            }}
+          />
+        </React.Suspense>
       </HoverCardContent>
     </HoverCard>
     <Dialog onOpenChange={setSetupOpen} open={setupOpen}>
-      <DialogContent>
+      <DialogContent size="sm">
         <DialogHeader><DialogTitle>{t("composer.voice.title")}</DialogTitle></DialogHeader>
         {setupOpen ? (
           <React.Suspense fallback={<p className="vk-cap-sum-note">{t("composer.voice.loading")}</p>}>
-            <LazyVoiceInputSettingsSection onSaved={() => setSetupOpen(false)} />
+            <LazyVoiceInputSettingsSection />
           </React.Suspense>
         ) : null}
       </DialogContent>

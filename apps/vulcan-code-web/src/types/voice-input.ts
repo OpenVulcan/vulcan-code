@@ -14,7 +14,21 @@ export interface VoiceInputSummary {
 export interface VoiceInputTargetSelection {
   connection_id: string;
   target_id: string;
+  // Optional recognition settings supported by the exact target.
+  // 精确目标支持的可选识别设置。
+  parameters?: VoiceInputParameters;
 }
+
+// Optional recognition settings keyed by the signed tool argument name.
+// 以签名工具参数名称为键的可选识别设置。
+export type VoiceInputParameters = Record<string, string | boolean>;
+
+// A supported argument and the editor control it accepts.
+// 受支持的参数及其对应的编辑控件。
+export type VoiceInputParameter =
+  | { name: "language"; kind: "language"; choices: string[] }
+  | { name: "prompt" | "vocabulary_id"; kind: "text" }
+  | { name: "enable_itn" | "keep_dialect"; kind: "boolean" };
 
 // VoiceInputCandidate is one target that can transcribe a composer recording.
 // VoiceInputCandidate 是一个可以转写输入区录音的目标。
@@ -24,6 +38,9 @@ export interface VoiceInputCandidate {
   providerId: string;
   targetId: string;
   displayName: string;
+  // Model-specific options available to the microphone.
+  // 麦克风可配置的模型专属选项。
+  parameters: VoiceInputParameter[];
 }
 
 // VoiceInputSettingsSnapshot is the saved choice with the usable candidates.

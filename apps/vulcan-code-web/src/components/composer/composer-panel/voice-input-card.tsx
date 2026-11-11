@@ -92,7 +92,7 @@ export function VoiceInputCard(props: VoiceInputCardProps) {
       <div className="vk-cap-sum-foot">
         <button className="vk-cap-sum-action" onClick={props.onConfigure} type="button">
           <Settings2 aria-hidden="true" size={13} />
-          <span>{t(props.configured ? "composer.voice.changeModel" : "composer.voice.configure")}</span>
+          <span>{t("composer.voice.configure")}</span>
           <ChevronRight aria-hidden="true" size={13} />
         </button>
       </div>

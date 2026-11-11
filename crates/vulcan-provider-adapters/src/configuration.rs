@@ -995,7 +995,35 @@ pub struct PersistedAiConfiguration {
     /// absent until the user selects one.
     /// 用户语音输入使用的语音转写目标，与 AI 工具选择相互独立；用户选择前缺失。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub voice_input_selection: Option<ProviderToolTargetSelection>,
+    pub voice_input_selection: Option<VoiceInputSelection>,
+}
+
+/// Stores the microphone target and its optional transcription parameters as one selection.
+/// 将麦克风目标和可选的转写参数保存在同一份选择中。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VoiceInputSelection {
+    /// Exact account that owns the transcription target.
+    /// 持有转写目标的精确账号。
+    pub connection_id: String,
+    /// Exact provider tool target.
+    /// 精确的供应商工具目标。
+    pub target_id: String,
+    /// Explicit model options; an older selection with no options uses the model defaults.
+    /// 显式模型选项；没有选项的旧选择使用模型默认值。
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub parameters: serde_json::Map<String, serde_json::Value>,
+}
+
+impl VoiceInputSelection {
+    /// Returns the exact provider tool identity without including transcription arguments.
+    /// 返回精确的供应商工具身份，不包含转写参数。
+    pub fn target(&self) -> ProviderToolTargetSelection {
+        ProviderToolTargetSelection {
+            connection_id: self.connection_id.clone(),
+            target_id: self.target_id.clone(),
+        }
+    }
 }
 
 /// Shortest accepted background account-usage refresh interval in seconds.

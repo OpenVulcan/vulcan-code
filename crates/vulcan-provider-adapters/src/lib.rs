@@ -63,6 +63,7 @@ pub use oauth::*;
 pub use provider_manifest::*;
 pub use provider_operational_telemetry::*;
 pub use provider_task::{ProviderAsyncTaskPhase, ProviderAsyncTaskRecord};
+pub use provider_tool_execution::canonicalize_provider_tool_arguments;
 pub use registry::*;
 pub use runtime::*;
 pub use upload_engine::resolve_provider_tool_local_path;

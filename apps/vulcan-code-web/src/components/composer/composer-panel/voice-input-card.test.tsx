@@ -14,7 +14,7 @@ const SETTINGS: VoiceInputSettingsSnapshot = {
   selection: { connection_id: "openai-main", target_id: "gpt-transcribe" },
   candidates: [{
     connectionId: "openai-main", connectionDisplayName: "OpenAI main", providerId: "openai",
-    targetId: "gpt-transcribe", displayName: "GPT Transcribe",
+    targetId: "gpt-transcribe", displayName: "GPT Transcribe", parameters: [],
   }],
   maxDurationSeconds: 120,
 };
@@ -78,7 +78,7 @@ it("shows the saved model and lists microphones without browser aliases", async 
   ]);
   expect(radios()[0]!.getAttribute("aria-checked")).toBe("true");
   expect(host.textContent).toContain("composer.voice.micNamesHidden");
-  expect(host.textContent).toContain("composer.voice.changeModel");
+  expect(host.textContent).toContain("composer.voice.configure");
 });
 
 it("remembers the picked microphone and returns to the system default", async () => {

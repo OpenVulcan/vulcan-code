@@ -26,6 +26,13 @@
         "audio_url": {
           "type": "string",
           "minLength": 1
+        },
+        "sample_rate": {
+          "type": "string",
+          "default": "16000"
+        },
+        "language": {
+          "type": "string"
         }
       },
       "required": [
@@ -76,7 +83,8 @@
   ],
   "required_upload_primitives": [],
   "arguments": {
-    "audio_url": "data:audio/webm;base64,GkXfo0E="
+    "audio_url": "data:audio/webm;base64,GkXfo0E=",
+    "language": "it"
   },
   "interactions": [
     {
@@ -101,7 +109,10 @@
         },
         "parameters": {
           "format": "mp3",
-          "sample_rate": "16000"
+          "sample_rate": "16000",
+          "language_hints": [
+            "it"
+          ]
         }
       },
       "response_status": 200,

@@ -203,7 +203,7 @@ pub(crate) fn parse_bounded_provider_json(text: &str, operation: &str) -> Result
 /// 返回值
 /// Canonical validated arguments ready for declarative upload materialization.
 /// 返回可进入声明式上传物化的规范已校验参数。
-pub(crate) fn canonicalize_provider_tool_arguments(
+pub fn canonicalize_provider_tool_arguments(
     target: &ProviderToolTarget,
     mut arguments: Value,
 ) -> Result<Value, String> {

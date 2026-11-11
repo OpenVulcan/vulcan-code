@@ -9,6 +9,7 @@ import { TooltipProvider } from "@/ui-kit/primitives/tooltip";
 import type { VoiceInputSummary } from "@/types";
 import { useComposerVoiceInput } from "./use-composer-voice-input";
 import { saveVoiceInputDevice } from "./voice-input-device";
+import { saveVoiceInputShortcut } from "./voice-input-shortcut";
 import { encodeVoiceInputWav } from "./voice-input-wav";
 
 vi.mock("@/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }), formatMessage: (template: string) => template }));
@@ -92,8 +93,14 @@ async function settle() {
   await act(async () => { frames.splice(0).forEach((frame) => frame(0)); });
 }
 
-async function key(target: EventTarget, type: "keydown" | "keyup", value: string) {
-  await act(async () => { target.dispatchEvent(new KeyboardEvent(type, { key: value, bubbles: true })); });
+// Dispatches a cancelable browser key event and returns it for ownership assertions.
+// 派发可取消的浏览器按键事件，并返回事件用于断言键盘所有权。
+async function key(target: EventTarget, type: "keydown" | "keyup", value: string, options?: KeyboardEventInit) {
+  // Modifier and physical key data mirror a real shortcut event.
+  // 修饰键与物理按键数据模拟真实的快捷键事件。
+  const event = new KeyboardEvent(type, { key: value, bubbles: true, cancelable: true, ...options });
+  await act(async () => { target.dispatchEvent(event); });
+  return event;
 }
 
 beforeEach(() => {
@@ -189,4 +196,50 @@ it("discards the recording on Escape and on a short tap", async () => {
   expect(transcribe).not.toHaveBeenCalled();
   expect(toast.info).toHaveBeenCalledWith("composer.voice.tooShort");
   expect(state.draft).toBe("Hello");
+});
+
+it("records a held shortcut once, stops when its modifier is released, and preserves Ctrl+Enter", async () => {
+  // Exercise shortcut matching after the composer has already mounted.
+  // 验证输入区挂载后新保存的快捷键可以立即匹配。
+  const { textarea } = await render(CONFIGURED);
+  textarea.focus();
+  saveVoiceInputShortcut("Control+Shift+KeyV");
+  transcribe.mockResolvedValue({ text: "world" });
+  expect((await key(textarea, "keydown", "Enter", { code: "Enter", ctrlKey: true })).defaultPrevented).toBe(false);
+  expect((await key(textarea, "keydown", "V", { code: "KeyV", ctrlKey: true, shiftKey: true })).defaultPrevented).toBe(true);
+  await settle();
+  await key(textarea, "keydown", "V", { code: "KeyV", ctrlKey: true, shiftKey: true, repeat: true });
+  expect(getUserMedia).toHaveBeenCalledTimes(1);
+  now += 2_000;
+  await key(window, "keyup", "Control", { code: "ControlLeft", shiftKey: true });
+  await settle();
+  expect(transcribe).toHaveBeenCalledTimes(1);
+  expect(state).toEqual({ draft: "Hello world", busy: false });
+});
+
+it("yields to another editor and discards the held shortcut when the window loses focus", async () => {
+  saveVoiceInputShortcut("F8");
+  // Simulate a focused workbench editor outside the composer.
+  // 模拟输入区之外当前具有焦点的工作台编辑器。
+  const otherEditor = document.createElement("input");
+  host.before(otherEditor);
+  try {
+    // The mounted composer becomes eligible again when focus returns to its textarea.
+    // 焦点回到输入区文本框后，已挂载的输入区再次可以使用快捷键。
+    const { textarea } = await render(CONFIGURED);
+    otherEditor.focus();
+    expect((await key(otherEditor, "keydown", "F8", { code: "F8" })).defaultPrevented).toBe(false);
+    expect(getUserMedia).not.toHaveBeenCalled();
+    textarea.focus();
+    await key(textarea, "keydown", "F8", { code: "F8" });
+    await settle();
+    expect(state.busy).toBe(true);
+    now += 2_000;
+    await act(async () => { window.dispatchEvent(new Event("blur")); });
+    await settle();
+    expect(state.busy).toBe(false);
+    expect(transcribe).not.toHaveBeenCalled();
+  } finally {
+    otherEditor.remove();
+  }
 });

@@ -52,6 +52,7 @@ export function useComposerVoiceInput(options: ComposerVoiceInputOptions): { bus
         disabled={options.disabled}
         onBusyChange={setBusy}
         onTranscript={insertTranscript}
+        textareaRef={textareaRef}
         voiceInput={options.voiceInput}
       />
     ),

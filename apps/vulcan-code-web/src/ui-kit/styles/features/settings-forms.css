@@ -169,6 +169,15 @@ fieldset.vk-form-stack, fieldset.vk-form-loose { min-width: 0; margin: 0; paddin
 .vk-form-pref-text > strong { font-size: var(--vk-fs-sm); font-weight: 500; color: var(--vk-ink); }
 .vk-form-pref > :nth-child(n + 3) { grid-column: 1 / -1; }
 
+/* Keep the transcription model and its description on independent rows at every dialog width. */
+/* 任何对话框宽度下，转写模型选择与说明各占一行。 */
+.vk-form-pref[data-voice-input-settings] { grid-template-columns: minmax(0, 1fr); align-items: start; }
+.vk-btn.vk-voice-model-select { min-width: 0; height: auto; min-height: var(--vk-h-md); padding-block: var(--vk-u); }
+.vk-voice-model-select .vk-combobox-value { white-space: normal; overflow-wrap: anywhere; }
+.vk-voice-input-fields { display: grid; gap: calc(var(--vk-u) * 3); }
+.vk-voice-input-field { display: grid; gap: var(--vk-u); min-width: 0; }
+.vk-voice-shortcut-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: calc(var(--vk-u) * 2); }
+
 /* ---------- Text blocks, wells, meta lines and frames shared by data-heavy pages ---------- */
 /* 数据型页面共用的文本块、底板、元信息行与边框。 */
 .vk-form-w-xs, .vk-form-w-sm, .vk-form-w-md, .vk-form-w-lg { flex: none; }
