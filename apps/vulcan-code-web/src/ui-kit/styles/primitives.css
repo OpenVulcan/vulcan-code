@@ -913,6 +913,19 @@ label.vk-field,
   width: min(24rem, calc(100vw - 32px));
   pointer-events: none;
 }
+/* Keep notices clear of the composer, even when the input expands or moves. */
+/* 输入区展开或移动时，提示仍避开输入区。 */
+:root:has(.vk-composer) .vk-toasts {
+  top: max(16px, env(safe-area-inset-top, 0px));
+  bottom: auto;
+}
+@supports (bottom: anchor(--vk-composer-toast-anchor top, 0px)) {
+  :root:has(.vk-composer) .vk-toasts {
+    top: auto;
+    right: max(16px, env(safe-area-inset-right, 0px), anchor(--vk-composer-toast-anchor right, 0px));
+    bottom: calc(anchor(--vk-composer-toast-anchor top, var(--vk-statusbar-h)) + 12px + env(safe-area-inset-bottom, 0px));
+  }
+}
 .vk-toasts > ol { display: grid; gap: calc(var(--vk-u) * 2); margin: 0; padding: 0; list-style: none; }
 .vk-toast {
   display: flex;

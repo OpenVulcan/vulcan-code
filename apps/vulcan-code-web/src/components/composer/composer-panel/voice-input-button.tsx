@@ -29,6 +29,10 @@ const RECORDING_MIME_TYPES = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg
 // 短于此时长的录音视为轻点，而不是说话。
 const MIN_RECORDING_MS = 500;
 
+// Empty speech is routine feedback and should clear quickly.
+// 无语音是常规提示，应快速消失。
+const NO_SPEECH_TOAST_MS = 1600;
+
 // Give ordinary modifier chords time to arrive before opening the microphone.
 // 打开麦克风前留出时间，等待普通修饰键组合的后续按键。
 const MODIFIER_HOLD_MS = 150;
@@ -158,12 +162,12 @@ export function VoiceInputButton(props: VoiceInputButtonProps) {
       if (session.current !== current) return;
       // Decode after stopping so cancelled recordings never incur conversion or a provider call.
       // 停止后再解码，取消的录音无需转换或调用供应商。
-      const recording = await encodeVoiceInputWav(new Blob(current.chunks, { type: mimeType }));
+      const recording = current.chunks.length ? await encodeVoiceInputWav(new Blob(current.chunks, { type: mimeType })) : null;
       if (session.current !== current) return;
-      const { text } = await transcribeVoiceInput(recording);
+      const text = recording ? (await transcribeVoiceInput(recording)).text.trim() : "";
       if (session.current !== current) return;
       if (text) onTranscript(text);
-      else toast.info(t("composer.voice.noSpeech"));
+      else toast.info(t("composer.voice.noSpeech"), { duration: NO_SPEECH_TOAST_MS });
     } catch (cause) {
       if (session.current === current) toast.error(t("composer.voice.failed"), { description: errorMessage(cause) });
     } finally {

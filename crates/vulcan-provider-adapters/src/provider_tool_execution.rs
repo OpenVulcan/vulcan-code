@@ -275,24 +275,38 @@ pub(crate) async fn execute_provider_tool(
                 target.upstream_target_id.as_str(),
                 canonical_arguments.clone(),
             )?;
-            execute_generic_json_sync_request(
+            // Keep the status available to the speech outcome decoder before formatting failures.
+            // 先保留 HTTP 状态供语音结果解码，再格式化失败。
+            let (status, body) = execute_generic_json_sync_request_with_headers(
                 http,
                 entry,
                 target,
                 secret,
                 &projected_arguments,
                 &target.contract.tool_id,
+                &std::collections::BTreeMap::new(),
             )
-            .await
-            .and_then(|body| {
-                decode_and_project_generic_json_response(
+            .await?;
+            if target.contract.capability == crate::ProviderToolCapabilityKind::SpeechTranscribe
+                && target.contract.output.kind == ProviderToolOutputKind::Text
+            {
+                return decode_speech_text_result(
                     &target.contract.output,
+                    &target.contract.tool_id,
                     response_profiles,
-                    body.as_str(),
-                    target.contract.tool_id.as_str(),
-                    Some(&canonical_arguments),
-                )
-            })
+                    status,
+                    &body,
+                    &canonical_arguments,
+                );
+            }
+            check_generic_json_status(status, &body, &target.contract.tool_id)?;
+            decode_and_project_generic_json_response(
+                &target.contract.output,
+                response_profiles,
+                &body,
+                &target.contract.tool_id,
+                Some(&canonical_arguments),
+            )
         }
         ProviderToolExecutionKind::HttpJsonSse
             if matches!(
@@ -347,6 +361,21 @@ pub(crate) async fn execute_provider_tool(
                             "Provider multipart SSE terminal event could not be serialized: {error}"
                         )
                     })?;
+                    // The terminal event of an accepted speech stream can carry an explicit blank transcript.
+                    // 已成功接收的语音流终止事件可以包含显式空转写。
+                    if target.contract.capability
+                        == crate::ProviderToolCapabilityKind::SpeechTranscribe
+                        && target.contract.output.kind == ProviderToolOutputKind::Text
+                    {
+                        return decode_speech_text_result(
+                            &target.contract.output,
+                            &target.contract.tool_id,
+                            response_profiles,
+                            reqwest::StatusCode::OK,
+                            &body,
+                            &canonical_arguments,
+                        );
+                    }
                     decode_and_project_generic_json_response(
                         &target.contract.output,
                         response_profiles,
@@ -1374,7 +1403,7 @@ async fn start_generic_json_async_task(
         canonical_arguments.clone(),
     )?;
     let start_headers = provider_tool_start_headers(context.target, &canonical_arguments)?;
-    let text = execute_generic_json_sync_request_with_headers(
+    let (status, text) = execute_generic_json_sync_request_with_headers(
         context.http,
         context.entry,
         context.target,
@@ -1384,6 +1413,7 @@ async fn start_generic_json_async_task(
         &start_headers,
     )
     .await?;
+    check_generic_json_status(status, &text, &context.target.contract.tool_id)?;
     let response = decode_and_project_generic_json_value(
         context.response_profiles,
         text.as_str(),
@@ -2714,39 +2744,6 @@ fn aggregate_generic_mcp_text_json(
     .map_err(|error| format!("Provider MCP normalized response could not serialize: {error}"))
 }
 
-/// Executes one synchronous JSON tool request through the generic transport primitive.
-/// 通过通用传输原语执行一次同步 JSON 工具请求。
-///
-/// # Parameters
-/// 参数
-/// All values are immutable snapshots resolved before dispatch; `operation` labels the call
-/// for bounded error reporting.
-/// 所有值均为分派前解析的不可变快照；`operation` 为有界错误报告标记调用。
-///
-/// # Returns
-/// 返回值
-/// The bounded upstream response text, or a controlled transport error.
-/// 返回有界上游响应文本，或受控传输错误。
-async fn execute_generic_json_sync_request<T: Serialize>(
-    http: &reqwest::Client,
-    entry: &ServiceEntry,
-    target: &ProviderToolTarget,
-    secret: &CredentialExecutionSecret,
-    body: &T,
-    operation: &str,
-) -> Result<String, String> {
-    execute_generic_json_sync_request_with_headers(
-        http,
-        entry,
-        target,
-        secret,
-        body,
-        operation,
-        &std::collections::BTreeMap::new(),
-    )
-    .await
-}
-
 /// Executes one generic JSON request with additional phase-scoped fixed headers.
 /// 使用额外阶段限定固定请求头执行一项通用 JSON 请求。
 ///
@@ -2757,8 +2754,8 @@ async fn execute_generic_json_sync_request<T: Serialize>(
 ///
 /// # Returns
 /// 返回值
-/// The bounded upstream response text, or a controlled transport error.
-/// 返回有界上游响应文本，或受控传输错误。
+/// The upstream HTTP status and bounded response text, or a controlled transport error.
+/// 返回上游 HTTP 状态与有界响应文本，或受控传输错误。
 async fn execute_generic_json_sync_request_with_headers<T: Serialize>(
     http: &reqwest::Client,
     entry: &ServiceEntry,
@@ -2767,7 +2764,7 @@ async fn execute_generic_json_sync_request_with_headers<T: Serialize>(
     body: &T,
     operation: &str,
     additional_headers: &std::collections::BTreeMap<String, String>,
-) -> Result<String, String> {
+) -> Result<(reqwest::StatusCode, String), String> {
     let url = provider_tool_url(entry, target);
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -2786,14 +2783,68 @@ async fn execute_generic_json_sync_request_with_headers<T: Serialize>(
         .map_err(|error| format_provider_tool_transport_error(operation, error))?;
     let status = response.status();
     let response_text = read_bounded_provider_response(response, operation).await?;
+    Ok((status, response_text))
+}
+
+/// Checks the upstream `status` using `body` for the bounded `operation` diagnostic.
+/// 检查上游 `status`，使用 `body` 为 `operation` 生成有界诊断。
+fn check_generic_json_status(
+    status: reqwest::StatusCode,
+    body: &str,
+    operation: &str,
+) -> Result<(), String> {
     if !status.is_success() {
-        return Err(format_http_error(
-            operation,
-            status.as_u16(),
-            response_text.as_str(),
-        ));
+        return Err(format_http_error(operation, status.as_u16(), body));
     }
-    Ok(response_text)
+    Ok(())
+}
+
+/// Decodes `body` and HTTP `status` against the frozen output `contract` and response `profiles`.
+/// 按冻结的输出 `contract` 与响应 `profiles` 解码正文 `body` 和 HTTP `status`。
+/// `operation` scopes errors and `arguments` retains the original normalization context.
+/// `operation` 限定诊断范围，`arguments` 保留原归一化上下文。
+/// Only a profile-projected no-speech result can convert a bad request into an empty transcript.
+/// 仅响应配置投影出的无语音结果可以把错误请求转换为空转写。
+fn decode_speech_text_result(
+    contract: &crate::ProviderToolOutputContract,
+    operation: &str,
+    profiles: &[crate::provider_manifest::ResponseProjectionProfile],
+    status: reqwest::StatusCode,
+    body: &str,
+    arguments: &Value,
+) -> Result<ProviderToolExecutionResult, String> {
+    // Other HTTP errors must keep their original diagnostic and never enter response projections.
+    // 其他 HTTP 错误保留原诊断，不进入响应投影。
+    if status != reqwest::StatusCode::BAD_REQUEST || profiles.is_empty() {
+        check_generic_json_status(status, body, operation)?;
+    }
+    let projected = decode_and_project_generic_json_value(profiles, body, operation);
+    if !profiles.is_empty()
+        && projected.as_ref().is_ok_and(|response| {
+            response.as_object().is_some_and(|fields| {
+                fields.len() == 1 && fields.get("no_speech") == Some(&Value::Bool(true))
+            })
+        })
+    {
+        return Ok(ProviderToolExecutionResult {
+            upstream_response_id: None,
+            output: ProviderToolNormalizedOutput::Text(String::new()),
+        });
+    }
+    check_generic_json_status(status, body, operation)?;
+    let response = projected?;
+    if response.get("error").is_none()
+        && response
+            .pointer(&contract.source_path)
+            .and_then(Value::as_str)
+            .is_some_and(|text| text.trim().is_empty())
+    {
+        return Ok(ProviderToolExecutionResult {
+            upstream_response_id: generic_provider_response_id(&response),
+            output: ProviderToolNormalizedOutput::Text(String::new()),
+        });
+    }
+    decode_projected_generic_json_output(contract, &response, Some(arguments))
 }
 
 /// Decodes one generic JSON-sync response through the manifest-owned output contract.
@@ -4050,6 +4101,100 @@ fn format_structured_provider_error(label: &str, status: Option<u16>, body: &Val
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Checks that the bundled speech routes distinguish no speech from other provider failures.
+    /// 检查随包语音路由是否区分无语音结果和其他供应商失败。
+    #[test]
+    fn bundled_bailian_speech_profiles_preserve_no_speech_and_real_errors() {
+        // Read the live manifest and follow each target's operation to its declared response profiles.
+        // 读取当前 Manifest，按每个目标的 Operation 定位其声明的响应配置。
+        let path = vulcan_runtime_assets::source_bundled_provider_manifests_directory()
+            .join("alibaba.json");
+        let manifest: crate::provider_manifest::ProviderManifestV1 =
+            serde_json::from_reader(std::fs::File::open(path).unwrap()).unwrap();
+        let cases = [
+            (
+                "token-plan-personal-cn.qwen-audio-3.0-asr-flash.speech-transcribe",
+                400,
+                "{}",
+                Some(""),
+            ),
+            (
+                "token-plan-personal-cn.qwen-audio-3.0-asr-flash.speech-transcribe",
+                400,
+                r#"{"output":{"text":""}}"#,
+                None,
+            ),
+            (
+                "token-plan-personal-cn.qwen-audio-3.0-asr-flash.speech-transcribe",
+                401,
+                "{}",
+                None,
+            ),
+            (
+                "model-studio-cn.qwen-audio-3.1-asr-flash.speech-transcribe",
+                400,
+                r#"{"code":"CLIENT_ERROR","message":"ASR_RESPONSE_HAVE_NO_WORDS"}"#,
+                Some(""),
+            ),
+            (
+                "model-studio-cn.qwen-audio-3.1-asr-flash.speech-transcribe",
+                400,
+                "{}",
+                None,
+            ),
+            (
+                "model-studio-cn.qwen-audio-3.1-asr-flash.speech-transcribe",
+                200,
+                r#"{"output":{"text":" "}}"#,
+                Some(""),
+            ),
+            (
+                "model-studio-cn.qwen-audio-3.1-asr-flash.speech-transcribe",
+                200,
+                r#"{"output":{"text":"Hello"}}"#,
+                Some("Hello"),
+            ),
+        ];
+        for (target_id, status, body, expected) in cases {
+            let target = manifest
+                .tool_targets
+                .iter()
+                .find(|target| target.target_id == target_id)
+                .unwrap();
+            let operation = manifest
+                .operations
+                .iter()
+                .find(|operation| operation.tool_target_refs.iter().any(|id| id == target_id))
+                .unwrap();
+            let profiles = operation
+                .response_profile_refs
+                .iter()
+                .map(|id| {
+                    manifest
+                        .response_profiles
+                        .iter()
+                        .find(|profile| &profile.profile_id == id)
+                        .and_then(|profile| profile.payload.clone())
+                        .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let result = decode_speech_text_result(
+                &target.output,
+                &target.tool_id,
+                &profiles,
+                reqwest::StatusCode::from_u16(status).unwrap(),
+                body,
+                &serde_json::json!({}),
+            );
+            match expected {
+                Some(expected) => assert!(
+                    matches!(result.unwrap().output, ProviderToolNormalizedOutput::Text(text) if text == expected)
+                ),
+                None => assert!(result.unwrap_err().contains(&format!("status={status}"))),
+            }
+        }
+    }
 
     /// Parallel collection is bounded while its output retains exact request order.
     /// 并行结果收集受并发上限限制，输出仍保留精确请求顺序。

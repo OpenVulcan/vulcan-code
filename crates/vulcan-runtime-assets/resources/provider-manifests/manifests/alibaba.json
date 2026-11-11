@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "alibaba",
-  "revision": 30,
-  "published_at": "2026-11-11T07:57:15Z",
+  "revision": 31,
+  "published_at": "2026-11-11T15:11:09Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -4390,32 +4390,63 @@
     },
     {
       "profile_id": "alibaba.audio.token-plan-asr.response.v1",
-      "description": "Normalize the Alibaba Qwen Audio ASR text response.",
+      "description": "Normalize Alibaba Token Plan ASR text and its observed empty-object no-speech result.",
       "payload": {
         "profile_id": "alibaba.audio.token-plan-asr.response.v1",
-        "revision": 3,
+        "revision": 4,
         "steps": [
           {
             "op": "rebuild_json_template",
             "template": {
-              "$vulcan_if_present": {
-                "path": "/output/text",
-                "non_empty": true,
+              "$vulcan_if_equals": {
+                "path": "",
+                "equals": {},
+                "then": {"no_speech": true},
+                "otherwise": {
+                  "$vulcan_if_present": {
+                    "path": "/output/text",
+                    "then": {
+                      "request_id": {"$vulcan_ref": {"path": "/request_id", "optional": true}},
+                      "text": {"$vulcan_ref": {"path": "/output/text"}}
+                    },
+                    "otherwise": {"error": {"message": "Alibaba Token Plan ASR response is missing transcript text."}}
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "profile_id": "alibaba.audio.model-studio-asr.response.v1",
+      "description": "Normalize Alibaba Model Studio ASR text and its explicit no-words error.",
+      "payload": {
+        "profile_id": "alibaba.audio.model-studio-asr.response.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "rebuild_json_template",
+            "template": {
+              "$vulcan_if_equals": {
+                "path": "/code",
+                "equals": "CLIENT_ERROR",
                 "then": {
-                  "request_id": {
-                    "$vulcan_ref": {
-                      "path": "/request_id"
-                    }
-                  },
-                  "text": {
-                    "$vulcan_ref": {
-                      "path": "/output/text"
-                    }
+                  "$vulcan_if_equals": {
+                    "path": "/message",
+                    "equals": "ASR_RESPONSE_HAVE_NO_WORDS",
+                    "then": {"no_speech": true},
+                    "otherwise": {"error": {"message": "Alibaba Model Studio ASR failed."}}
                   }
                 },
                 "otherwise": {
-                  "error": {
-                    "message": "Alibaba Qwen Audio ASR response has no transcript text."
+                  "$vulcan_if_present": {
+                    "path": "/output/text",
+                    "then": {
+                      "request_id": {"$vulcan_ref": {"path": "/request_id", "optional": true}},
+                      "text": {"$vulcan_ref": {"path": "/output/text"}}
+                    },
+                    "otherwise": {"error": {"message": "Alibaba Model Studio ASR response is missing transcript text."}}
                   }
                 }
               }
@@ -4849,7 +4880,7 @@
         "alibaba.audio.token-plan-asr.request.v1"
       ],
       "response_profile_refs": [
-        "alibaba.audio.token-plan-asr.response.v1"
+        "alibaba.audio.model-studio-asr.response.v1"
       ],
       "upload_channel_refs": [
         "inline.audio-data-url"

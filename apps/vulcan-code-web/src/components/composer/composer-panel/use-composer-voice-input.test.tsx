@@ -152,6 +152,24 @@ it("stays inert until a voice input target is configured", async () => {
   expect(getUserMedia).not.toHaveBeenCalled();
 });
 
+it.each(["local", "provider"])("reports %s no-speech without touching the draft", async (source) => {
+  // The local encoder can detect pure silence, while a provider can return a blank transcript.
+  // 本地编码器可以识别纯静音，供应商也可能返回空转写。
+  if (source === "local") vi.mocked(encodeVoiceInputWav).mockResolvedValueOnce(null);
+  else transcribe.mockResolvedValueOnce({ text: " \n " });
+  const { button } = await render(CONFIGURED);
+  await key(button, "keydown", " ");
+  await settle();
+  now += 1_000;
+  await key(button, "keyup", " ");
+  await settle();
+
+  expect(transcribe).toHaveBeenCalledTimes(source === "local" ? 0 : 1);
+  expect(toast.info).toHaveBeenCalledWith("composer.voice.noSpeech", { duration: expect.any(Number) });
+  expect(toast.error).not.toHaveBeenCalled();
+  expect(state).toEqual({ draft: "Hello", busy: false });
+});
+
 it("enables the microphone after native sign-in only while the cloud route is eligible", async () => {
   // The initial workbench has no explicit target; signing in publishes an eligible account.
   // 初始工作台没有显式目标；登录后发布可用云端的账号。

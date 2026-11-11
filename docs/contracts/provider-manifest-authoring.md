@@ -673,6 +673,10 @@ mcp_http_call
 `signing_primitive` 承担，不能把上传握手冒充 Provider Tool 执行原语。以上能力若要开放，必须先随
 软件实现完整请求、响应、界限和 fixture 契约，远端 JSON 不能自行启用。
 
+文本型 `speech_transcribe` 的同步 JSON 响应与 Multipart SSE 终止事件允许显式空文本。同步供应商在没有识别到语音时返回 HTTP 400 的，
+响应 Profile 可以把经验证的精确响应投影成 `{"no_speech":true}`，宿主将其归一化为空文本。其余 HTTP 错误
+保留原诊断。百炼 Token Plan 和 Model Studio 使用不同的 Profile，分别识别其已验证的空对象与无词错误。
+
 当前上传原语是：
 
 ```text

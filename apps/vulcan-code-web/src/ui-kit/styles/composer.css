@@ -160,6 +160,7 @@
 /* One quiet floating card; typing deepens its edge and lift, a file drag marks it in the signal tone. */
 /* 一张安静的悬浮卡片；输入时加深边缘与浮起感，拖入文件时以信号色标记。 */
 .vk-composer {
+  anchor-name: --vk-composer-toast-anchor;
   width: 100%;
   min-width: 0;
   display: grid;

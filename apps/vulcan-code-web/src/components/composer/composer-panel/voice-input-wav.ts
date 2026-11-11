@@ -14,10 +14,10 @@ const PCM_SAMPLE_BYTES = 2;
  * 解码已录制完成的浏览器音频，返回一个供转写使用的单声道 PCM WAV Blob。
  * @param recording A complete recording produced by MediaRecorder.
  * recording 是 MediaRecorder 生成的完整录音。
- * @returns A WAV blob sampled at 16 kHz.
- * 返回采样率为 16 kHz 的 WAV Blob。
+ * @returns A 16 kHz WAV blob, or null when every encoded PCM sample is silent.
+ * 返回采样率为 16 kHz 的 WAV Blob；所有编码后的 PCM 采样为静音时返回 null。
  */
-export async function encodeVoiceInputWav(recording: Blob): Promise<Blob> {
+export async function encodeVoiceInputWav(recording: Blob): Promise<Blob | null> {
   // The offline decoder resamples to its context rate without playing the microphone recording.
   // 离线解码器会重采样至上下文的采样率，且不会播放麦克风录音。
   const decoder = new OfflineAudioContext(1, 1, VOICE_SAMPLE_RATE);
@@ -50,6 +50,9 @@ export async function encodeVoiceInputWav(recording: Blob): Promise<Blob> {
   // Average channels before quantizing so either input channel can carry speech.
   // 量化前取各声道平均值，保留任一输入声道上的语音。
   const channels = Array.from({ length: audio.numberOfChannels }, (_, channel) => audio.getChannelData(channel));
+  // Use quantized samples to avoid dropping a genuinely quiet recording by an arbitrary loudness cutoff.
+  // 根据量化后的采样判断静音，避免以任意响度阈值丢弃声音较轻的录音。
+  let hasSignal = false;
   for (let frame = 0; frame < audio.length; frame += 1) {
     // Sum this frame across all channels for the mono mix.
     // 累加本帧的各声道采样，用于混合成单声道。
@@ -59,7 +62,8 @@ export async function encodeVoiceInputWav(recording: Blob): Promise<Blob> {
     // 限制量化后平均值的范围，避免满幅采样发生溢出回绕。
     const sample = Math.round(Math.max(-32_768, Math.min(32_767, sum / channels.length * 32_768)));
     wav.setInt16(WAV_HEADER_BYTES + frame * PCM_SAMPLE_BYTES, sample, true);
+    if (sample !== 0) hasSignal = true;
   }
 
-  return new Blob([bytes], { type: "audio/wav" });
+  return hasSignal ? new Blob([bytes], { type: "audio/wav" }) : null;
 }
