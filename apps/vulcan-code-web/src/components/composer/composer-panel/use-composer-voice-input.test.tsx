@@ -83,6 +83,9 @@ function Harness({ voiceInput, initial }: { voiceInput: VoiceInputSummary | null
 
 async function render(voiceInput: VoiceInputSummary | null, initial = "Hello") {
   await act(async () => { root.render(<Harness initial={initial} voiceInput={voiceInput} />); });
+  // Flush the deferred microphone module before interacting with its button.
+  // 操作按钮前先完成麦克风模块的延迟加载。
+  await act(async () => { await vi.dynamicImportSettled(); });
   const textarea = host.querySelector("textarea")!;
   textarea.setSelectionRange(initial.length, initial.length);
   return { button: host.querySelector("button")!, textarea };
@@ -229,15 +232,79 @@ it("records a held shortcut once, stops when its modifier is released, and prese
   // 验证输入区挂载后新保存的快捷键可以立即匹配。
   const { textarea } = await render(CONFIGURED);
   textarea.focus();
-  saveVoiceInputShortcut("Control+Shift+KeyV");
+  saveVoiceInputShortcut("Control+Shift+KeyL");
   transcribe.mockResolvedValue({ text: "world" });
   expect((await key(textarea, "keydown", "Enter", { code: "Enter", ctrlKey: true })).defaultPrevented).toBe(false);
-  expect((await key(textarea, "keydown", "V", { code: "KeyV", ctrlKey: true, shiftKey: true })).defaultPrevented).toBe(true);
+  expect((await key(textarea, "keydown", "L", { code: "KeyL", ctrlKey: true, shiftKey: true })).defaultPrevented).toBe(true);
   await settle();
-  await key(textarea, "keydown", "V", { code: "KeyV", ctrlKey: true, shiftKey: true, repeat: true });
+  await key(textarea, "keydown", "L", { code: "KeyL", ctrlKey: true, shiftKey: true, repeat: true });
   expect(getUserMedia).toHaveBeenCalledTimes(1);
   now += 2_000;
   await key(window, "keyup", "Control", { code: "ControlLeft", shiftKey: true });
+  await settle();
+  expect(transcribe).toHaveBeenCalledTimes(1);
+  expect(state).toEqual({ draft: "Hello world", busy: false });
+});
+
+it("ignores a legacy binding for model selection and accepts a punctuation chord", async () => {
+  // Legacy storage can already contain a key now reserved by the workbench.
+  // 旧版存储中可能已经保存现在由工作台保留的按键。
+  const { textarea } = await render(CONFIGURED);
+  textarea.focus();
+  saveVoiceInputShortcut("Control+KeyM");
+  expect((await key(textarea, "keydown", "m", { code: "KeyM", ctrlKey: true })).defaultPrevented).toBe(false);
+  expect(getUserMedia).not.toHaveBeenCalled();
+
+  saveVoiceInputShortcut("Control+Slash");
+  transcribe.mockResolvedValue({ text: "world" });
+  expect((await key(textarea, "keydown", "/", { code: "Slash", ctrlKey: true })).defaultPrevented).toBe(true);
+  await settle();
+  now += 1_000;
+  await key(textarea, "keyup", "/", { code: "Slash", ctrlKey: true });
+  await settle();
+  expect(transcribe).toHaveBeenCalledTimes(1);
+});
+
+it("holds the physical right Ctrl for voice and yields when it is used in a chord", async () => {
+  // Use the real binding and shortcut lifecycle with controllable hold timers.
+  // 使用真实绑定和快捷键生命周期，并控制长按计时器。
+  saveVoiceInputShortcut("ControlRight");
+  transcribe.mockResolvedValue({ text: "world" });
+  const { textarea } = await render(CONFIGURED);
+  textarea.focus();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    await key(textarea, "keydown", "Control", { code: "ControlLeft", ctrlKey: true });
+    await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+    expect(getUserMedia).not.toHaveBeenCalled();
+    await key(textarea, "keyup", "Control", { code: "ControlLeft" });
+
+    await key(textarea, "keydown", "Control", { code: "ControlRight", ctrlKey: true });
+    expect((await key(textarea, "keydown", "Enter", { code: "Enter", ctrlKey: true })).defaultPrevented).toBe(false);
+    await key(textarea, "keyup", "Enter", { code: "Enter", ctrlKey: true });
+    await key(textarea, "keyup", "Control", { code: "ControlRight" });
+    await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+    expect(getUserMedia).not.toHaveBeenCalled();
+
+    await key(textarea, "keydown", "Control", { code: "ControlRight", ctrlKey: true });
+    await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+    now += 1_000;
+    expect((await key(textarea, "keydown", "c", { code: "KeyC", ctrlKey: true })).defaultPrevented).toBe(false);
+    await key(textarea, "keyup", "c", { code: "KeyC", ctrlKey: true });
+    await key(textarea, "keyup", "Control", { code: "ControlRight" });
+    expect(state.busy).toBe(false);
+    expect(transcribe).not.toHaveBeenCalled();
+
+    await key(textarea, "keydown", "Control", { code: "ControlRight", ctrlKey: true });
+    await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+    now += 1_000;
+    await key(textarea, "keyup", "Control", { code: "ControlLeft", ctrlKey: true });
+    expect(state.busy).toBe(true);
+    await key(textarea, "keyup", "Control", { code: "ControlRight" });
+  } finally {
+    vi.useRealTimers();
+  }
   await settle();
   expect(transcribe).toHaveBeenCalledTimes(1);
   expect(state).toEqual({ draft: "Hello world", busy: false });

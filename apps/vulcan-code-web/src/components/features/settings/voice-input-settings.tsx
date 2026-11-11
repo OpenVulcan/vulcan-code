@@ -6,8 +6,10 @@ import { Input } from "@/ui-kit/primitives/input";
 import { SettingsErrorNotice } from "@/components/features/settings/settings-error-notice";
 import {
   formatVoiceInputShortcut,
+  isVoiceInputModifierKey,
   readVoiceInputShortcut,
   saveVoiceInputShortcut,
+  voiceInputShortcutConflicts,
   voiceInputShortcutFromKey,
 } from "@/components/composer/composer-panel/voice-input-shortcut";
 import { formatMessage, useI18n } from "@/i18n";
@@ -147,9 +149,14 @@ export function VoiceInputSettingsSection() {
   // The editor saves shortcuts locally, independently of the service's model selection.
   // 编辑器在本地保存快捷键，独立于服务端的模型选择。
   const [shortcut, setShortcut] = React.useState(readVoiceInputShortcut);
+  // Wait for release before saving a modifier so the next key can complete a chord.
+  // 修饰键松开后才保存，让后续按键有机会组成组合键。
+  const pendingModifier = React.useRef<string | null>(null);
   // Report capture and storage errors without changing the existing shortcut.
   // 报告捕获或存储错误，同时保留现有快捷键。
-  const [shortcutError, setShortcutError] = React.useState<"invalid" | "save" | null>(null);
+  const [shortcutError, setShortcutError] = React.useState<"conflict" | "invalid" | "save" | null>(
+    () => shortcut && voiceInputShortcutConflicts(shortcut) ? "conflict" : null,
+  );
   // Connect the shortcut label and help to the keyboard capture field.
   // 将快捷键标签和帮助说明与按键捕获输入框关联。
   const shortcutId = React.useId();
@@ -251,18 +258,38 @@ export function VoiceInputSettingsSection() {
     }
   };
 
-  // Capture a chord in the focused field while keeping Tab navigation and Escape dismissal available.
-  // 在焦点输入框捕获组合键，同时保留 Tab 导航与 Escape 关闭。
+  // Captures the focused field's keydown event, leaving Tab and Escape to navigate or dismiss.
+  // 捕获焦点输入框的按下事件，保留 Tab 导航与 Escape 关闭。
   const captureShortcut = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Tab" || event.key === "Escape") return;
+    if (event.key === "Tab" || event.key === "Escape") {
+      pendingModifier.current = null;
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
-    if (event.repeat || /^(?:Alt|Control|Meta|Shift)(?:Left|Right)$/.test(event.code)) return;
+    if (event.repeat) return;
+    const previousModifier = pendingModifier.current;
+    pendingModifier.current = null;
     // An unsupported key leaves the existing binding intact.
     // 不支持的按键保留现有绑定。
     const next = voiceInputShortcutFromKey(event.nativeEvent);
-    if (next) saveShortcut(next);
-    else setShortcutError("invalid");
+    if (isVoiceInputModifierKey(event.code)) {
+      if (!previousModifier) pendingModifier.current = next;
+      return;
+    }
+    if (!next) setShortcutError("invalid");
+    else if (voiceInputShortcutConflicts(next, event.nativeEvent)) setShortcutError("conflict");
+    else saveShortcut(next);
+  };
+
+  // Saves a modifier only when its own physical key is released without another key intervening.
+  // 仅在未按其他键且松开该物理修饰键时保存它。
+  const captureModifierRelease = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (pendingModifier.current !== event.code) return;
+    pendingModifier.current = null;
+    event.preventDefault();
+    event.stopPropagation();
+    saveShortcut(event.code);
   };
 
   return (
@@ -272,6 +299,11 @@ export function VoiceInputSettingsSection() {
         {snapshot ? (
           <p className="vk-form-note">
             {formatMessage(t("settings.voiceInput.hint"), { seconds: snapshot.maxDurationSeconds })}
+          </p>
+        ) : null}
+        {cloud?.status !== "available" ? (
+          <p className="vk-form-note" role="status">
+            {t(cloud ? voiceInputCloudStatusKeys[cloud.status] : "composer.voice.loading")}
           </p>
         ) : null}
       </div>
@@ -286,9 +318,7 @@ export function VoiceInputSettingsSection() {
         searchPlaceholder={t("settings.voiceInput.search")}
         value={savedKey}
       />
-      {cloud?.status !== "available" ? (
-        <p className="vk-form-note">{t(cloud ? voiceInputCloudStatusKeys[cloud.status] : "composer.voice.loading")}</p>
-      ) : cloudSelected ? (
+      {cloudSelected ? (
         <p className="vk-form-note">{t("settings.voiceInput.cloudTitle")}</p>
       ) : null}
       {(direct && !selected) || (cloudSaved && cloud?.status === "available" && !cloudSelected)
@@ -323,10 +353,12 @@ export function VoiceInputSettingsSection() {
             aria-describedby={`${shortcutId}-hint`}
             aria-invalid={shortcutError !== null || undefined}
             id={shortcutId}
+            onBlur={() => { pendingModifier.current = null; }}
             onKeyDown={captureShortcut}
+            onKeyUp={captureModifierRelease}
             placeholder={t("settings.voiceInput.shortcutPlaceholder")}
             readOnly
-            value={shortcut ? formatVoiceInputShortcut(shortcut) : ""}
+            value={shortcut ? formatVoiceInputShortcut(shortcut, t) : ""}
           />
           <Button disabled={!shortcut} onClick={() => saveShortcut(null)} type="button" variant="outline">
             {t("settings.voiceInput.shortcutClear")}
@@ -335,7 +367,8 @@ export function VoiceInputSettingsSection() {
         <p className="vk-form-note" id={`${shortcutId}-hint`}>{t("settings.voiceInput.shortcutHint")}</p>
         {shortcutError ? (
           <p className="vk-field-error" role="alert">
-            {t(shortcutError === "save" ? "settings.voiceInput.shortcutSaveFailed" : "settings.voiceInput.shortcutInvalid")}
+            {t(shortcutError === "save" ? "settings.voiceInput.shortcutSaveFailed"
+              : shortcutError === "conflict" ? "settings.voiceInput.shortcutConflict" : "settings.voiceInput.shortcutInvalid")}
           </p>
         ) : null}
       </div>

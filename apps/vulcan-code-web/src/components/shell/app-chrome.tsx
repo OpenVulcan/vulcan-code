@@ -1,4 +1,5 @@
 import React from "react";
+import { workbenchShortcutAction } from "@/lib/workbench-shortcuts";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -128,8 +129,9 @@ export function GlobalActions(props: {
   // 桌面窗口没有提供缩放的菜单快捷键。
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || !(event.ctrlKey || event.metaKey) || event.altKey) return;
-      const step = event.key === "=" || event.key === "+" ? 1 : event.key === "-" || event.key === "_" ? -1 : event.key === "0" ? 0 : null;
+      if (event.defaultPrevented) return;
+      const action = workbenchShortcutAction(event);
+      const step = action === "textLarger" ? 1 : action === "textSmaller" ? -1 : action === "textDefault" ? 0 : null;
       if (step === null) return;
       event.preventDefault();
       const index = APPEARANCE_TEXT_TIERS.indexOf(getAppearance().text);

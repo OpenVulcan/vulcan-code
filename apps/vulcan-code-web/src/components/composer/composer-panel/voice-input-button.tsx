@@ -9,7 +9,7 @@ import type { VoiceInputSummary } from "@/types";
 import { readVoiceInputDevice, voiceInputAudioConstraints } from "@/components/composer/composer-panel/voice-input-device";
 import { hasBlockingComposerPopup, isComposerTextEntryElement } from "@/components/composer/composer-model";
 import { getWorkspaceInputOwner } from "@/components/workspace/workspace-input-owner";
-import { readVoiceInputShortcut, voiceInputShortcutFromKey } from "./voice-input-shortcut";
+import { isVoiceInputModifierKey, readVoiceInputShortcut, voiceInputShortcutConflicts, voiceInputShortcutFromKey } from "./voice-input-shortcut";
 
 // The settings section loads with the quick setup dialog, keeping settings styles out of the workbench chunk.
 // 设置节随快速设置对话框加载，使设置样式不进入工作台分块。
@@ -28,6 +28,10 @@ const RECORDING_MIME_TYPES = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg
 // Recordings shorter than this are treated as a tap, not speech.
 // 短于此时长的录音视为轻点，而不是说话。
 const MIN_RECORDING_MS = 500;
+
+// Give ordinary modifier chords time to arrive before opening the microphone.
+// 打开麦克风前留出时间，等待普通修饰键组合的后续按键。
+const MODIFIER_HOLD_MS = 150;
 
 // The countdown turns into a warning for the last seconds of a recording.
 // 录音最后几秒的倒计时变为提醒样式。
@@ -222,6 +226,37 @@ export function VoiceInputButton(props: VoiceInputButtonProps) {
   }, [configured, disabled, finish, maxDurationSeconds, release, t]);
 
   React.useEffect(() => {
+    // Track both physical sides so a shared logical modifier flag cannot hide a second key.
+    // 记录左右物理键，避免共用的逻辑修饰键标志掩盖第二个按键。
+    const heldModifiers = new Set<string>();
+    let pending: { code: string; timer: number } | null = null;
+
+    // Cancels a modifier hold that has not opened the microphone yet.
+    // 取消尚未打开麦克风的修饰键长按。
+    const clearPending = () => {
+      if (pending) window.clearTimeout(pending.timer);
+      pending = null;
+    };
+
+    // Allows recording only in a visible composer that still owns keyboard input.
+    // 仅允许在仍持有键盘输入的可见输入区录音。
+    const canStartShortcut = () => {
+      if (session.current || hasBlockingComposerPopup()) return false;
+      const textarea = textareaRef.current;
+      return Boolean(textarea?.isConnected && textarea.checkVisibility?.() !== false
+        && getWorkspaceInputOwner().kind !== "project_terminal"
+        && (document.activeElement === textarea || !isComposerTextEntryElement(document.activeElement)));
+    };
+
+    // Cancels standalone recording before other key handlers see a modifier chord.
+    // 在其他按键处理器收到组合键前，取消单独修饰键启动的录音。
+    const onOtherKeyDown = (event: KeyboardEvent) => {
+      if (isVoiceInputModifierKey(event.code)) heldModifiers.add(event.code);
+      if (pending && pending.code !== event.code) clearPending();
+      const active = session.current?.shortcut;
+      if (active && isVoiceInputModifierKey(active) && active !== event.code) release(true);
+    };
+
     // Keep keyboard push-to-talk inside the active composer and respect keys claimed by other controls.
     // 键盘按住说话只作用于当前输入区，并尊重其他控件已处理的按键。
     const onShortcutDown = (event: KeyboardEvent) => {
@@ -229,25 +264,28 @@ export function VoiceInputButton(props: VoiceInputButtonProps) {
       // Read the current binding so a newly saved shortcut applies without reopening the conversation.
       // 读取当前绑定，使新保存的快捷键无需重开会话即可生效。
       const shortcut = voiceInputShortcutFromKey(event);
-      if (!shortcut || shortcut !== readVoiceInputShortcut()) return;
+      if (!shortcut || shortcut !== readVoiceInputShortcut() || voiceInputShortcutConflicts(shortcut, event)) return;
+      if (isVoiceInputModifierKey(shortcut)) {
+        if (event.repeat || heldModifiers.size !== 1 || pending || !canStartShortcut()) return;
+        pending = { code: shortcut, timer: window.setTimeout(() => {
+          pending = null;
+          if (canStartShortcut() && readVoiceInputShortcut() === shortcut) void start(shortcut);
+        }, MODIFIER_HOLD_MS) };
+        return;
+      }
       if (session.current?.shortcut === shortcut) {
         event.preventDefault();
         return;
       }
-      if (event.repeat || session.current || hasBlockingComposerPopup()) return;
-      // Require a visible composer and yield to a terminal or another text field.
-      // 要求输入区可见，并将键盘交还给终端或其他文本输入控件。
-      const textarea = textareaRef.current;
-      const owner = getWorkspaceInputOwner();
-      if (!textarea?.isConnected || textarea.checkVisibility?.() === false
-        || owner.kind === "project_terminal"
-        || (document.activeElement !== textarea && isComposerTextEntryElement(document.activeElement))) return;
+      if (event.repeat || !canStartShortcut()) return;
       event.preventDefault();
       void start(shortcut);
     };
     // End the recorded chord even if focus changed or its modifier was released before its main key.
     // 即使焦点变化或修饰键先于主键松开，也结束该组合键录音。
     const onShortcutUp = (event: KeyboardEvent) => {
+      heldModifiers.delete(event.code);
+      if (pending?.code === event.code) clearPending();
       const shortcut = session.current?.shortcut;
       if (!shortcut) return;
       // A modifier's logical key is shared by the left and right physical keys.
@@ -260,12 +298,17 @@ export function VoiceInputButton(props: VoiceInputButtonProps) {
     // Discard a held shortcut when the window loses focus and can no longer observe key release.
     // 窗口失焦后无法观察松键，丢弃仍按住的快捷键录音。
     const cancelShortcut = () => {
+      heldModifiers.clear();
+      clearPending();
       if (session.current?.shortcut) release(true);
     };
+    window.addEventListener("keydown", onOtherKeyDown, true);
     window.addEventListener("keydown", onShortcutDown);
     window.addEventListener("keyup", onShortcutUp, true);
     window.addEventListener("blur", cancelShortcut);
     return () => {
+      clearPending();
+      window.removeEventListener("keydown", onOtherKeyDown, true);
       window.removeEventListener("keydown", onShortcutDown);
       window.removeEventListener("keyup", onShortcutUp, true);
       window.removeEventListener("blur", cancelShortcut);

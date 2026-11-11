@@ -1,4 +1,5 @@
 import * as React from "react"
+import { workbenchShortcutAction } from "@/lib/workbench-shortcuts"
 import { SidebarContext, useSidebar, useSidebarNavigation, type SidebarContextValue } from "./sidebar-context"
 import { PanelLeftIcon } from "lucide-react"
 
@@ -94,8 +95,8 @@ function SidebarProvider({
   // Ctrl+B（Cmd+B）可在任意位置像触发按钮一样切换面板；终端内该按键保留给其 shell。
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return
-      if (event.key.toLowerCase() !== "b" || (event.target instanceof Element && event.target.closest(".xterm"))) return
+      if (event.defaultPrevented || workbenchShortcutAction(event) !== "sidebar") return
+      if (event.target instanceof Element && event.target.closest(".xterm")) return
       event.preventDefault()
       toggleSidebar()
     }

@@ -1,4 +1,5 @@
 import React from "react";
+import { workbenchShortcutAction } from "@/lib/workbench-shortcuts";
 import { toast } from "@/ui-kit/primitives/toast";
 import {
   ContextMenu,
@@ -80,7 +81,7 @@ async function readClipboardText(): Promise<string> {
 // isContextMenuKey reports the keyboard shortcuts that open a context menu on Windows and Linux.
 // isContextMenuKey 判断 Windows 与 Linux 上打开右键菜单的键盘快捷键。
 function isContextMenuKey(event: React.KeyboardEvent): boolean {
-  return event.key === "ContextMenu" || (event.shiftKey && event.key === "F10");
+  return event.key === "ContextMenu" || workbenchShortcutAction(event) === "contextMenu";
 }
 
 // keepPointerFocusInComposer stops Radix from focusing items on hover or the menu on leave.

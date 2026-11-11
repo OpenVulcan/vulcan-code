@@ -1,4 +1,5 @@
 import React from "react";
+import { workbenchShortcutAction } from "@/lib/workbench-shortcuts";
 import { ChevronRight, Cpu, Keyboard, MessageSquare, MessagesSquare, Palette, Slash, SquarePen } from "lucide-react";
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandShortcut } from "@/ui-kit/primitives/command";
 import { APPEARANCE_THEMES, setAppearance, useAppearance, type AppearanceTheme } from "@/ui-kit/appearance";
@@ -90,20 +91,15 @@ export function CommandPalette(props: {
   }, [props.open]);
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
-      const key = event.key.toLowerCase();
-      if (event.shiftKey) {
-        if (key === "o" && onNewConversation) {
-          event.preventDefault();
-          onOpenChange(false);
-          onNewConversation();
-        }
-        return;
-      }
-      if (key === "k") {
+      const action = workbenchShortcutAction(event);
+      if (action === "newConversation" && onNewConversation) {
+        event.preventDefault();
+        onOpenChange(false);
+        onNewConversation();
+      } else if (action === "palette") {
         event.preventDefault();
         onOpenChange(!props.open);
-      } else if (key === "m") {
+      } else if (action === "modelPicker") {
         event.preventDefault();
         requestComposerCommand({ kind: "model" });
       }

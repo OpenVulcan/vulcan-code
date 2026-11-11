@@ -1,6 +1,10 @@
 import * as React from "react";
-import { VoiceInputButton } from "@/components/composer/composer-panel/voice-input-button";
 import type { VoiceInputSummary } from "@/types";
+
+// Load the microphone controls after the composer mounts and keep its toolbar space reserved.
+// 输入区挂载后加载麦克风控件，并保留其工具栏位置。
+const VoiceInputButton = React.lazy(() => import("./voice-input-button")
+  .then(({ VoiceInputButton }) => ({ default: VoiceInputButton })));
 
 // Latin words get a separating space; CJK text joins without one.
 // 拉丁文单词之间补空格；中日韩文本直接相连。
@@ -48,13 +52,15 @@ export function useComposerVoiceInput(options: ComposerVoiceInputOptions): { bus
   return {
     busy,
     control: (
-      <VoiceInputButton
-        disabled={options.disabled}
-        onBusyChange={setBusy}
-        onTranscript={insertTranscript}
-        textareaRef={textareaRef}
-        voiceInput={options.voiceInput}
-      />
+      <React.Suspense fallback={<span aria-hidden="true" className="vk-voice" />}>
+        <VoiceInputButton
+          disabled={options.disabled}
+          onBusyChange={setBusy}
+          onTranscript={insertTranscript}
+          textareaRef={textareaRef}
+          voiceInput={options.voiceInput}
+        />
+      </React.Suspense>
     ),
   };
 }

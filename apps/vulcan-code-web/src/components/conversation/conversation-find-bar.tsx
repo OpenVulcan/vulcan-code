@@ -1,4 +1,5 @@
 import React from "react";
+import { workbenchShortcutAction } from "@/lib/workbench-shortcuts";
 import { ChevronDown, ChevronUp, Search, X } from "lucide-react";
 
 import { formatMessage, useI18n, type TranslationKey } from "@/i18n";
@@ -75,8 +76,8 @@ export function ConversationFindBar(props: {
 
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const key = event.key.toLowerCase();
-      if (event.defaultPrevented || !(key === "f" || (key === "g" && canGotoLine)) || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
+      const action = workbenchShortcutAction(event);
+      if (event.defaultPrevented || !(action === "find" || (action === "gotoLine" && canGotoLine))) return;
       const port = scrollRef.current;
       if (!port?.isConnected || (typeof port.checkVisibility === "function" && !port.checkVisibility())) return;
       const target = event.target instanceof Element ? event.target : null;
@@ -91,11 +92,11 @@ export function ConversationFindBar(props: {
       if (!openRef.current) {
         returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
         const selected = window.getSelection()?.toString().trim() ?? "";
-        if (key === "f" && selected && !selected.includes("\n") && selected.length <= 200) setQuery(selected);
+        if (action === "find" && selected && !selected.includes("\n") && selected.length <= 200) setQuery(selected);
         setOpen(true);
       }
-      if (key === "g") setQuery(":");
-      setFocusRequest({ caretAtEnd: key === "g" });
+      if (action === "gotoLine") setQuery(":");
+      setFocusRequest({ caretAtEnd: action === "gotoLine" });
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
