@@ -281,31 +281,6 @@ fn read_compaction_bytes(path: &Path) -> Result<(Vec<u8>, CompactionsDocument), 
     Ok((bytes, document))
 }
 
-#[cfg(test)]
-mod compaction_schema_tests {
-    use super::*;
-
-    /// Verifies the image schema upgrade preserves the exact original ledger and is idempotent.
-    /// 验证图片模式升级保留精确原账本，并支持幂等重复读取。
-    #[test]
-    fn image_compaction_schema_preserves_original_bytes() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(super::super::layout::COMPACTIONS_FILE);
-        let backup = path.with_file_name("compactions.v1.backup.json");
-        let original = br#"{ "contract":"vulcan.session-compactions.v1", "schema_version":1, "session_id":"test", "nodes":[] }"#;
-        std::fs::write(&path, original).unwrap();
-        let document = read_compactions(&path).unwrap();
-        assert_eq!(document.schema_version, COMPACTIONS_SCHEMA_VERSION);
-        assert_eq!(std::fs::read(&backup).unwrap(), original);
-        assert_eq!(read_compactions(&path).unwrap(), document);
-        let mut future = document;
-        future.schema_version += 1;
-        write_json_document(&path, &future, "future compaction fixture").unwrap();
-        assert!(read_compactions(&path).is_err());
-        assert_eq!(std::fs::read(&backup).unwrap(), original);
-    }
-}
-
 /// Validates one contract string and schema version against the frozen V1
 /// contract.
 /// 校验一个契约字符串与 schema 版本是否符合冻结的 V1 契约。
@@ -413,5 +388,30 @@ impl IntoSession for SessionV1Error {
             self.session_id = Some(session_id.to_string());
         }
         self
+    }
+}
+
+#[cfg(test)]
+mod compaction_schema_tests {
+    use super::*;
+
+    /// Verifies the image schema upgrade preserves the exact original ledger and is idempotent.
+    /// 验证图片模式升级保留精确原账本，并支持幂等重复读取。
+    #[test]
+    fn image_compaction_schema_preserves_original_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(super::super::layout::COMPACTIONS_FILE);
+        let backup = path.with_file_name("compactions.v1.backup.json");
+        let original = br#"{ "contract":"vulcan.session-compactions.v1", "schema_version":1, "session_id":"test", "nodes":[] }"#;
+        std::fs::write(&path, original).unwrap();
+        let document = read_compactions(&path).unwrap();
+        assert_eq!(document.schema_version, COMPACTIONS_SCHEMA_VERSION);
+        assert_eq!(std::fs::read(&backup).unwrap(), original);
+        assert_eq!(read_compactions(&path).unwrap(), document);
+        let mut future = document;
+        future.schema_version += 1;
+        write_json_document(&path, &future, "future compaction fixture").unwrap();
+        assert!(read_compactions(&path).is_err());
+        assert_eq!(std::fs::read(&backup).unwrap(), original);
     }
 }
