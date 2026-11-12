@@ -39,6 +39,10 @@ pub const RTK_SUPPRESS_HOOK_WARNING_VARIABLE: &str = "RTK_SUPPRESS_HOOK_WARNING"
 /// 关闭 RTK 遥测的环境变量。
 pub const RTK_TELEMETRY_DISABLED_VARIABLE: &str = "RTK_TELEMETRY_DISABLED";
 
+/// Selects the Claude configuration directory consulted by RTK's text diagnostics.
+/// 指定 RTK 文本诊断所查询的 Claude 配置目录。
+const RTK_CLAUDE_CONFIG_DIR_VARIABLE: &str = "CLAUDE_CONFIG_DIR";
+
 /// Returns the bundled RTK executable when the active output root ships one.
 /// 当前 output 根目录随包提供 RTK 时返回其可执行文件。
 ///
@@ -132,7 +136,56 @@ pub async fn run_rtk_capture(
     environment: &[(String, String)],
     timeout: Duration,
 ) -> Result<String, String> {
-    let child = rtk_command(executable, arguments, cwd, environment)
+    capture_rtk_stdout(
+        rtk_command(executable, arguments, cwd, environment),
+        timeout,
+    )
+    .await
+}
+
+/// Reads the command ranking from the normal RTK database with Claude diagnostics isolated.
+/// 从正常的 RTK 数据库读取命令排行，同时隔离 Claude 诊断。
+///
+/// `executable` is the bundled RTK and `telemetry_disabled` is the saved telemetry setting.
+/// `executable` 是随包 RTK，`telemetry_disabled` 是已保存的遥测设置。
+/// Returns the text report or an error when the isolated invocation cannot complete.
+/// 返回文本报告，隔离后的调用无法完成时返回错误。
+pub async fn run_rtk_command_ranking(
+    executable: &Path,
+    telemetry_disabled: bool,
+) -> Result<String, String> {
+    // The default text view scans Claude transcripts for bypass warnings unrelated to the ranking.
+    // 默认文本视图会扫描 Claude 会话日志以生成绕过提示，排行本身不需要这些日志。
+    let empty_claude_dir = tempfile::Builder::new()
+        .prefix("vulcan-rtk-ranking-")
+        .tempdir()
+        .map_err(|error| format!("failed to isolate RTK command ranking diagnostics: {error}"))?;
+    // Keep the same neutral working directory and RTK tracking environment as the JSON export.
+    // 沿用 JSON 导出的中性工作目录和 RTK 统计环境。
+    let mut command = rtk_command(
+        executable,
+        &["gain", "--text"],
+        executable.parent().unwrap_or(executable),
+        &rtk_invocation_environment(telemetry_disabled),
+    );
+    command.env(RTK_CLAUDE_CONFIG_DIR_VARIABLE, empty_claude_dir.path());
+    // The temporary directory stays alive until the child has finished or timed out.
+    // 临时目录一直保留到子进程完成或超时。
+    capture_rtk_stdout(command, RTK_STATISTICS_TIMEOUT).await
+}
+
+/// Collects the prepared RTK `command` output within `timeout`.
+/// 在 `timeout` 内收集已准备好的 RTK `command` 输出。
+///
+/// Returns decoded stdout on success or a launch, wait, timeout, or exit error.
+/// 成功时返回解码后的标准输出，否则返回启动、等待、超时或退出错误。
+async fn capture_rtk_stdout(
+    mut command: tokio::process::Command,
+    timeout: Duration,
+) -> Result<String, String> {
+    // Retain the child handle so the configured kill-on-drop behavior applies on timeout.
+    // 持有子进程句柄，以便超时时应用已配置的丢弃即终止行为。
+    let child = command
         .spawn()
         .map_err(|error| format!("failed to launch rtk: {error}"))?;
     let output = tokio::time::timeout(timeout, child.wait_with_output())
@@ -342,6 +395,61 @@ pub fn rtk_command_routes(command: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies the ranking child gets an existing empty Claude directory and the parent keeps its configuration.
+    /// 验证排行子进程获得一个已存在的空 Claude 目录，且父进程保留原配置。
+    #[cfg(any(unix, windows))]
+    #[tokio::test]
+    async fn rtk_ranking_isolates_only_the_child_claude_directory() {
+        // The fixture checks the actual arguments and environment received by the spawned process.
+        // 测试替身检查子进程实际收到的参数及环境。
+        let fixture = tempfile::tempdir().expect("create the RTK fixture directory");
+        #[cfg(windows)]
+        let (name, script) = (
+            "rtk.cmd",
+            concat!(
+                "@echo off\r\n",
+                "if not \"%~1 %~2\"==\"gain --text\" exit /b 2\r\n",
+                "if not defined CLAUDE_CONFIG_DIR exit /b 3\r\n",
+                "if not exist \"%CLAUDE_CONFIG_DIR%\\.\" exit /b 4\r\n",
+                "if exist \"%CLAUDE_CONFIG_DIR%\\projects\" exit /b 5\r\n",
+                "echo ranking-ok\r\n",
+            ),
+        );
+        #[cfg(unix)]
+        let (name, script) = (
+            "rtk",
+            concat!(
+                "#!/bin/sh\n",
+                "[ \"$1 $2\" = 'gain --text' ] || exit 2\n",
+                "[ -n \"${CLAUDE_CONFIG_DIR:-}\" ] || exit 3\n",
+                "[ -d \"$CLAUDE_CONFIG_DIR\" ] || exit 4\n",
+                "[ ! -e \"$CLAUDE_CONFIG_DIR/projects\" ] || exit 5\n",
+                "printf '%s\\n' ranking-ok\n",
+            ),
+        );
+        // Create a stand-in for the RTK executable in the same neutral working directory.
+        // 在相同的中性工作目录中创建 RTK 可执行文件的替身。
+        let executable = fixture.path().join(name);
+        std::fs::write(&executable, script).expect("write the RTK fixture");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700))
+                .expect("make the RTK fixture executable");
+        }
+        // Read the parent value without mutating the test runner's environment.
+        // 读取父进程的值，不修改测试进程环境。
+        let parent_config = std::env::var_os(RTK_CLAUDE_CONFIG_DIR_VARIABLE);
+        let stdout = run_rtk_command_ranking(&executable, true)
+            .await
+            .expect("read the fixture's ranking");
+        assert_eq!(stdout.trim(), "ranking-ok");
+        assert_eq!(
+            std::env::var_os(RTK_CLAUDE_CONFIG_DIR_VARIABLE),
+            parent_config
+        );
+    }
 
     /// Routes are found on every line and after every operator, and quoted operators stay text.
     /// 每一行、每个操作符之后的路由都会被找到，引号中的操作符保持为文本。

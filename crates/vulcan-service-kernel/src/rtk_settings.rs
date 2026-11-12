@@ -11,6 +11,7 @@ use std::path::Path;
 use serde::Deserialize;
 use vulcan_host_tools::rtk::{
     RTK_STATISTICS_TIMEOUT, resolve_rtk_executable, rtk_invocation_environment, run_rtk_capture,
+    run_rtk_command_ranking,
 };
 use vulcan_provider_config::provider_config::{
     DEFAULT_RTK_ENABLED_ROUTES, PersistedRtkConfiguration, RTK_EXTENDED_ROUTES, RtkRouteMode,
@@ -193,15 +194,10 @@ async fn load_statistics(executable: &Path, telemetry_disabled: bool) -> RtkStat
     // The JSON export has no command rows, so the ranking comes from the text table; a failure
     // there leaves the ranking empty while the totals stay valid.
     // JSON 导出不含命令行，排名来自文本表；文本表失败时排名为空，汇总仍然有效。
-    let by_command = run_rtk(
-        executable,
-        &["gain", "--text"],
-        telemetry_disabled,
-        RTK_STATISTICS_TIMEOUT,
-    )
-    .await
-    .map(|stdout| parse_gain_by_command(&stdout))
-    .unwrap_or_default();
+    let by_command = run_rtk_command_ranking(executable, telemetry_disabled)
+        .await
+        .map(|stdout| parse_gain_by_command(&stdout))
+        .unwrap_or_default();
     RtkStatisticsSnapshot {
         available: true,
         error: None,

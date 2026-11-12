@@ -96,7 +96,9 @@ WebUI 展示时阅读。普通业务任务不需要加载这些细节。
   检查进程与已改写的命令，不进入终端会话。
 - 统计协议归属为上游 `src/analytics/gain.rs` 与 `src/core/tracking.rs`：汇总保留其超大输入排除口径，
   按命令明细使用加权节省率并允许负值；汇总读取 `gain --all --format json`，按命令明细解析
-  `gain --text`，原始 JSON 汇总不自行重算。上游版本更新时须重新核对以上源码并同步
+  `gain --text`，原始 JSON 汇总不自行重算。排行子进程通过 `CLAUDE_CONFIG_DIR` 指向临时空目录，
+  跳过文本报告附带的 Claude 会话日志扫描，继续读取同一个 RTK 统计数据库。该环境变量仅在排行
+  子进程内生效。上游版本更新时须重新核对以上源码并同步
   [`rtk_settings.rs`](../../crates/vulcan-service-kernel/src/rtk_settings.rs) 的解析与测试。
 - RTK 设置与统计页面由宿主原生提供（WebUI 插件工作区内置页、TUI 插件区页面），服务为
   `service_rtk_settings`、`service_save_rtk_settings`、`service_rtk_statistics` 与
