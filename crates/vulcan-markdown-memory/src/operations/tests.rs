@@ -214,6 +214,91 @@ fn stale_revision_rolls_back_whole_call() {
     assert_eq!(std::fs::read_to_string(&path).expect("read"), before);
 }
 
+/// A stale replace after a rename reports both revisions and leaves the file intact.
+/// 改名后用旧修订替换正文时报告两种修订，并保留文件原样。
+#[test]
+fn rename_then_replace_reports_both_revisions_on_failure() {
+    // Create an isolated store and use its project context for every operation.
+    // 创建隔离存储，并在每次操作中使用同一个项目上下文。
+    let (root, store) = store();
+    let context = project_context(&root);
+    // Seed a persisted node with a stable identifier.
+    // 写入具有稳定标识的节点。
+    let created = write(
+        &store,
+        &context,
+        vec![serde_json::json!({
+            "action": "create", "scope": "space", "section": "conventions",
+            "title": "Old title", "body": "Old body",
+        })],
+    )
+    .expect("seed node");
+    // Capture the original node reference and file before the batch.
+    // 在批次前记录原始节点引用和文件内容。
+    let node = created.operations.first().expect("create receipt");
+    let before = store
+        .read_file_text(MemoryScope::Space, None)
+        .expect("read");
+    // Reuse the same edits to verify the failing and successful revision checks.
+    // 复用相同的编辑操作，分别验证修订校验失败和成功的情况。
+    let rename = serde_json::json!({
+        "action": "rename", "id": node.id, "expectedRevision": node.revision, "title": "New title",
+    });
+    let replace = |revision: &str| {
+        serde_json::json!({
+            "action": "replace", "id": node.id, "expectedRevision": revision, "body": "New body",
+        })
+    };
+    // Both operations start with the revision available before the batch.
+    // 两次操作都使用批次前可用的修订。
+    let error = write(
+        &store,
+        &context,
+        vec![rename.clone(), replace(&node.revision)],
+    )
+    .expect_err("second operation must fail");
+    // Inspect the typed failure and its revision values.
+    // 检查结构化失败及其中的修订值。
+    let MemoryError::Operation { index: 2, source } = error else {
+        panic!("expected failure at the second operation");
+    };
+    let MemoryError::StagedRevisionMismatch {
+        id,
+        expected,
+        staged,
+        committed,
+    } = *source
+    else {
+        panic!("expected a staged revision mismatch");
+    };
+    // Read back the revision from the same document projection used by the memory tools.
+    // 从记忆工具使用的同一文档投影中重新读取修订。
+    let persisted = store
+        .load_scopes(&context)
+        .expect("load")
+        .space
+        .views(MemoryScope::Space)
+        .into_iter()
+        .find(|view| view.id == node.id)
+        .expect("find committed node");
+    assert_eq!(id, node.id);
+    assert_eq!(expected, node.revision);
+    assert_eq!(committed.as_deref(), Some(persisted.revision.as_str()));
+    assert_eq!(persisted.revision, node.revision);
+    assert_ne!(staged, persisted.revision);
+    assert_eq!(
+        store
+            .read_file_text(MemoryScope::Space, None)
+            .expect("read"),
+        before
+    );
+
+    // A batch that supplies the correct intermediate revision still commits in sequence.
+    // 提供正确中间修订的批次仍会按顺序提交。
+    let applied = write(&store, &context, vec![rename, replace(&staged)]).expect("valid batch");
+    assert_eq!(applied.operations.len(), 2);
+}
+
 /// Replace, append and rename keep the node id and change its revision.
 /// 替换、追加与重命名保留节点标识并改变修订。
 #[test]

@@ -31,6 +31,26 @@ pub enum MemoryError {
         /// 当前存储的修订。
         current: String,
     },
+    /// The expected revision differs from the batch state, which differs from the committed snapshot.
+    /// 预期修订与批内状态不符，且批内状态与已提交快照不同。
+    #[error(
+        "Memory node `{id}` has staged revision {staged} in this batch (expected {expected}). Committed revision before the batch: {}. Submit dependent edits in separate calls and read the node after each successful write.",
+        .committed.as_deref().unwrap_or("none for this node ID")
+    )]
+    StagedRevisionMismatch {
+        /// Node identifier used by the operation.
+        /// 当前操作使用的节点标识。
+        id: String,
+        /// Revision supplied by the caller.
+        /// 调用方提供的修订。
+        expected: String,
+        /// Uncommitted revision used for the operation's check.
+        /// 当前操作用于校验的未提交修订。
+        staged: String,
+        /// Revision of this node ID in the original files, if present.
+        /// 此节点标识在原始文件中的修订，可能不存在。
+        committed: Option<String>,
+    },
     /// The project scope is unavailable for this request.
     /// 当前请求无法使用项目层。
     #[error("{0}")]

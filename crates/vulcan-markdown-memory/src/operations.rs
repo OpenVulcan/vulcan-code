@@ -462,19 +462,40 @@ impl WriteSession<'_> {
     /// Finds a node by id across scopes and checks its revision.
     /// 跨层按标识查找节点并校验修订。
     fn locate(&mut self, id: &str, expected_revision: &str) -> Result<NodeView, MemoryError> {
+        // Use the staged view for the optimistic revision check.
+        // 使用批内暂存的节点视图进行乐观修订校验。
         let view = self
             .all_views()?
             .into_iter()
             .find(|view| view.id == id)
             .ok_or_else(|| MemoryError::NodeNotFound(id.to_string()))?;
-        if view.revision != expected_revision.trim() {
+        if view.revision == expected_revision.trim() {
+            return Ok(view);
+        }
+
+        // A rejected batch discards the staged documents, so derive the readable revision
+        // from the original bytes, including the source scope of a staged cross-scope move.
+        // 批次拒绝后会丢弃暂存文档，因此从原始字节获取可读修订，也涵盖跨层移动前的来源层。
+        let committed = self.scopes.iter().find_map(|(&scope, loaded)| {
+            MemoryDocument::parse(loaded.original.as_deref()?)
+                .views(scope)
+                .into_iter()
+                .find(|node| node.id == id)
+                .map(|node| node.revision)
+        });
+        if committed.as_deref() == Some(view.revision.as_str()) {
             return Err(MemoryError::RevisionMismatch {
                 id: id.to_string(),
                 expected: expected_revision.to_string(),
                 current: view.revision,
             });
         }
-        Ok(view)
+        Err(MemoryError::StagedRevisionMismatch {
+            id: id.to_string(),
+            expected: expected_revision.to_string(),
+            staged: view.revision,
+            committed,
+        })
     }
 
     /// Applies one operation.
