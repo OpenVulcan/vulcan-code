@@ -640,3 +640,63 @@ fn postaction_l1_failure_retains_analysis_continuation() -> Result<(), Box<dyn s
     assert!(record.degraded);
     Ok(())
 }
+
+/// Reports the actual failure of a mandatory vector batch without emitting any storage mutation.
+/// 返回必需向量批次的实际失败，不发出存储变更。
+#[test]
+fn vector_rebuild_preserves_embedding_failure() -> Result<(), Box<dyn std::error::Error>> {
+    let (pipeline, snapshot, _) = waiting()?;
+    let command = MaintenanceCommand {
+        subject_id: pipeline.work.subject_id,
+        scope_access: pipeline.work.scope_access,
+        occurred_at_ns: 10,
+        action: MaintenanceAction::RebuildVectors {
+            memory_ids: vec![MemoryId::new("rebuild-memory")?],
+            vector_space_id: pipeline.work.vector_space_id,
+        },
+        mutation_identity: MutationIdentity {
+            operation_id: OperationId::new("rebuild-operation")?,
+            idempotency_key: IdempotencyKey::new("rebuild-key")?,
+            request_fingerprint: format!("fp256:{}", "0".repeat(64)),
+            source_kind: vulcan_memorymesh_core_contracts::MutationSourceKind::HostRpc,
+            request_source_id: "test".to_owned(),
+            observed_at_ns: 10,
+        },
+    };
+    let mut record = CommandRecord {
+        handle: CommandHandle {
+            command_id: CommandId::new("rebuild-command")?,
+            config_snapshot_id: snapshot.id.clone(),
+        },
+        snapshot,
+        status: CommandStatus::Waiting,
+        state: FlowState::MaintenanceRebuildEmbedding {
+            command,
+            memories: Vec::new(),
+        },
+        pending_effect_id: None,
+        pending_effect: None,
+        pending_mutation_idempotency_key: None,
+        next_effect_sequence: 0,
+        last_error: None,
+        mutation_identity: None,
+        received_effects: Vec::new(),
+        checkpoint_command_input: None,
+        degraded: false,
+    };
+    let diagnostic = "Synthetic embedding provider failure";
+    let failure = HostEffectResult::Failure(vulcan_memorymesh_core_contracts::EffectFailure {
+        kind: EffectFailureKind::Embedding,
+        class: FailureClass::Provider,
+        retryable: true,
+        allow_degrade: true,
+        diagnostic: diagnostic.to_owned(),
+    });
+    let error = advance(&mut record, failure).expect_err("mandatory embedding failed");
+    assert_eq!(error.code, ErrorCode::EffectDegraded);
+    assert!(error.diagnostic.contains(diagnostic));
+    assert!(error.retryable);
+    assert!(!record.degraded);
+    assert!(record.pending_effect.is_none());
+    Ok(())
+}

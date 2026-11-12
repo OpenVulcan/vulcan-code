@@ -3333,6 +3333,8 @@
   "memory.maintenance.confirmVectorRebuildTitle": "Перестроить векторы встроенной памяти?",
   "memory.maintenance.confirmVectorRebuildDescription": "Будет перестроено воспоминаний: {memories} (активных {active}, в корзине {recycled}) из проектов: {projects}, ограниченными пакетами: {batches}, с текущим маршрутом эмбеддингов и размерностью {dimension}. Версия предпросмотра и маршрут повторно проверяются перед выполнением.",
   "memory.maintenance.rebuildVectors": "Подтвердить перестроение",
+  "memory.maintenance.vectorRebuildProgress": "Перестроено записей: {memories} из {totalMemories} · Пакетов: {batches} из {totalBatches}",
+  "memory.maintenance.vectorRebuildQuotaWait": "Достигнут лимит запросов. Продолжение через {seconds} с.",
   "memory.maintenance.keepVectorsTitle": "Та же модель: сохранить имеющиеся векторы",
   "memory.maintenance.keepVectorsDescription": "Если вы только сменили поставщика или ретранслятор, а модель эмбеддингов та же, {count} имеющихся векторов текущей размерности можно сохранить, не пересоздавая их по одному. Перед этим одна запись памяти заново кодируется текущим маршрутом для сравнения; при несовпадении ничего не сохраняется. Записи с другой размерностью по-прежнему нужно перестроить.",
   "memory.maintenance.keepVectors": "Сохранить имеющиеся векторы",

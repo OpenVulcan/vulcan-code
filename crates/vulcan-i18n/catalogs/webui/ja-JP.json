@@ -3333,6 +3333,8 @@
   "memory.maintenance.confirmVectorRebuildTitle": "ネイティブメモリのベクトルを再構築しますか？",
   "memory.maintenance.confirmVectorRebuildDescription": "現在の埋め込みルート（次元 {dimension}）を使用して、{projects} 個のプロジェクトにわたる {memories} 件のメモリ（アクティブ {active}、ごみ箱 {recycled}）を {batches} 個の有界バッチで再構築します。実行前にプレビューのバージョンとルートを再検証します。",
   "memory.maintenance.rebuildVectors": "再構築を確認",
+  "memory.maintenance.vectorRebuildProgress": "メモリ {memories}/{totalMemories} 件 · バッチ {batches}/{totalBatches} 件を再構築済み",
+  "memory.maintenance.vectorRebuildQuotaWait": "レート制限に達しました。{seconds} 秒後に再開します。",
   "memory.maintenance.keepVectorsTitle": "同じモデルなら既存ベクトルを引き継ぐ",
   "memory.maintenance.keepVectorsDescription": "プロバイダーや中継を切り替えただけで同じ埋め込みモデルのままなら、現在の次元と一致する既存ベクトル {count} 件を 1 件ずつ再生成せずに引き継げます。引き継ぐ前に、現在のルートで 1 件の記憶を再埋め込みして照合し、一致しなければ引き継ぎません。次元が異なる記憶は再構築が必要です。",
   "memory.maintenance.keepVectors": "既存ベクトルを引き継ぐ",

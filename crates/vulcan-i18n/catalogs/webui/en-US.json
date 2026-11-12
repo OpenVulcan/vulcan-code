@@ -3333,6 +3333,8 @@
   "memory.maintenance.confirmVectorRebuildTitle": "Rebuild native-memory vectors?",
   "memory.maintenance.confirmVectorRebuildDescription": "This rebuilds {memories} memories (active {active}, recycle bin {recycled}) across {projects} projects in {batches} bounded batches using the current embedding route at dimension {dimension}. The preview version and route are revalidated before execution.",
   "memory.maintenance.rebuildVectors": "Confirm rebuild",
+  "memory.maintenance.vectorRebuildProgress": "Rebuilt {memories} of {totalMemories} memories · {batches} of {totalBatches} batches",
+  "memory.maintenance.vectorRebuildQuotaWait": "Rate limit reached. Resuming in {seconds} seconds.",
   "memory.maintenance.keepVectorsTitle": "Same model: keep existing vectors",
   "memory.maintenance.keepVectorsDescription": "If you only switched provider or relay and it is still the same embedding model, the {count} existing vectors with the current dimension can be kept instead of regenerated one by one. Before keeping them, one memory is re-embedded with the current route to compare; if it does not match, nothing is kept. Memories stored with another dimension still need a rebuild.",
   "memory.maintenance.keepVectors": "Keep existing vectors",

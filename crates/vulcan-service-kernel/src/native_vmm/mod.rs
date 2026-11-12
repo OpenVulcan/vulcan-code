@@ -15,6 +15,7 @@ mod resources;
 mod retention_policy;
 mod retrieval_origin;
 mod turn_details;
+mod vector_rebuild_progress;
 
 pub(crate) use client::NativeVmmClient;
 pub(crate) use driver::{

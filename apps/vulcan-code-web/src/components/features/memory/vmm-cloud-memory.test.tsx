@@ -30,7 +30,7 @@ const offer: CloudMemoryOffer = {
 
 // Mounts the production picker with the supplied catalog and captures its submitted choice.
 // 使用所给目录挂载正式选择器，并捕获它提交的选择。
-async function mount(setup: CloudMemorySetup) {
+async function mount(setup: CloudMemorySetup, locale = "en-US") {
   vi.mocked(loadCloudMemorySetup).mockResolvedValue(setup)
   const container = document.body.appendChild(document.createElement("div"))
   const root = createRoot(container)
@@ -41,7 +41,7 @@ async function mount(setup: CloudMemorySetup) {
     const [choice, setChoice] = React.useState<CloudMemoryChoice | null>(null)
     return <VmmCloudMemoryPicker choice={choice} onChoice={(value) => { report(value); setChoice(value) }} />
   }
-  await act(async () => root.render(<I18nProvider initialLocale="en-US"><Host /></I18nProvider>))
+  await act(async () => root.render(<I18nProvider initialLocale={locale}><Host /></I18nProvider>))
   return {
     container,
     report,
@@ -55,10 +55,10 @@ it("requires a fresh model, local PII region, and consent after withdrawal", asy
   const page = await mount({
     status: "selection_changed",
     selectedName: "Withdrawn model",
-    selected: { modelId: "old", consentRevision: "old-revision", accountContext: "site", piiRegion: "en-US", rerank: false },
+    selected: { modelId: "old", consentRevision: "old-revision", accountContext: "site", piiRegion: "zh-CN", rerank: false },
     accountContext: "site",
     catalog: { default_id: offer.id, models: [offer] },
-    piiRegions: ["en-US"],
+    piiRegions: ["en-US", "zh-CN"],
   })
   try {
     const model = page.container.querySelector<HTMLButtonElement>('[aria-labelledby="memory-cloud-model-label"]')!
@@ -68,17 +68,35 @@ it("requires a fresh model, local PII region, and consent after withdrawal", asy
     expect(page.container.querySelectorAll('a[href^="https://example.com/"]')).toHaveLength(4)
     const [rerank, consent] = Array.from(page.container.querySelectorAll<HTMLButtonElement>('[role="checkbox"]'))
     expect(rerank.getAttribute("aria-checked")).toBe("true")
-    expect(consent.disabled).toBe(true)
-    const region = page.container.querySelector<HTMLButtonElement>('[aria-labelledby="memory-cloud-region-label"]')!
-    const name = new Intl.DisplayNames(["en-US"], { type: "language" }).of("en-US")!
-    await chooseMemoryOption(region, name)
     expect(consent.disabled).toBe(false)
+    expect(consent.getAttribute("aria-checked")).toBe("false")
+    const region = page.container.querySelector<HTMLButtonElement>('[aria-labelledby="memory-cloud-region-label"]')!
+    expect(region.textContent).toContain(new Intl.DisplayNames(["en-US"], { type: "language" }).of("zh-CN"))
     await act(async () => consent.click())
     expect(page.report).toHaveBeenLastCalledWith({
-      modelId: "next", consentRevision: "next-revision", accountContext: "site", piiRegion: "en-US", rerank: true,
+      modelId: "next", consentRevision: "next-revision", accountContext: "site", piiRegion: "zh-CN", rerank: true,
     })
     await act(async () => rerank.click())
     expect(page.report).toHaveBeenLastCalledWith(null)
+  } finally {
+    await page.dispose()
+  }
+})
+
+// Uses the supported interface locale as the initial PII region while leaving consent unchecked.
+// 初次配置时使用本机支持的界面语言作为 PII 地区，并保持同意框未勾选。
+it("defaults the local PII region to the interface locale", async () => {
+  const page = await mount({
+    status: "available", selectedName: null, selected: null, accountContext: "site",
+    catalog: { default_id: offer.id, models: [offer] }, piiRegions: ["en-US", "zh-CN"],
+  }, "zh-CN")
+  try {
+    expect(page.report).toHaveBeenLastCalledWith(null)
+    const consent = page.container.querySelectorAll<HTMLButtonElement>('[role="checkbox"]')[1]
+    expect(consent.disabled).toBe(false)
+    expect(consent.getAttribute("aria-checked")).toBe("false")
+    await act(async () => consent.click())
+    expect(page.report).toHaveBeenLastCalledWith(expect.objectContaining({ piiRegion: "zh-CN" }))
   } finally {
     await page.dispose()
   }

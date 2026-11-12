@@ -158,9 +158,34 @@ pub struct Turn {
     /// Carries the dominant user act after successful analysis.
     /// 在成功分析后携带主要用户行为。
     pub user_input_kind: Option<TurnInputKind>,
-    /// Carries compact extracted turn details after successful analysis.
-    /// 在成功分析后携带紧凑的轮次提炼详情。
+    /// Carries extracted details after analysis, which may be empty when the result has no new information.
+    /// 携带分析后的提炼详情，无新增信息时允许为空字符串。
     pub analysis_details: Option<String>,
+}
+
+impl Turn {
+    /// Checks the analysis metadata against this turn's state and the persisted text bounds.
+    /// 按当前轮次状态和持久文本边界校验分析元数据。
+    /// An explicit empty result is valid for a completed analysis; missing metadata still fails.
+    /// 已完成的分析允许显式空结果，但仍拒绝缺失元数据。
+    #[must_use]
+    pub fn has_valid_analysis_metadata(&self) -> bool {
+        let details = self.analysis_details.as_deref();
+        let status_matches = match self.status {
+            TurnStatus::Pending | TurnStatus::AnalysisBypassed | TurnStatus::Corrupted => {
+                self.user_input_kind.is_none() && details.is_none()
+            }
+            TurnStatus::Completed => self.user_input_kind.is_some() && details.is_some(),
+            TurnStatus::ProcessedUnknown => self.user_input_kind.is_none(),
+        };
+        status_matches
+            && details.is_none_or(|text| {
+                text.len() <= crate::MAX_DOMAIN_TEXT_BYTES
+                    && !text.contains('\0')
+                    && (!text.trim().is_empty()
+                        || (self.status == TurnStatus::Completed && text.is_empty()))
+            })
+    }
 }
 
 /// Classifies the representation carried by one recent turn in `PreCheck`.

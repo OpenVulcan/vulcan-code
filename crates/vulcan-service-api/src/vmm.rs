@@ -2547,6 +2547,22 @@ pub struct VmmNativeVectorAdoptionResult {
     pub required_similarity: f64,
 }
 
+/// Live counters for one confirmed rebuild, with the current quota wait in seconds.
+/// 单次已确认重建的实时计数，以及当前限流等待秒数。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmNativeVectorRebuildProgress {
+    /// Number of memories durably rebuilt so far.
+    /// 已持久化重建的记忆数。
+    pub rebuilt_memory_count: u64,
+    /// Number of batches durably committed so far.
+    /// 已持久化提交的批次数。
+    pub batch_count: u64,
+    /// Remaining quota wait, or None while work is proceeding.
+    /// 限流剩余等待时间，正常执行时为空。
+    pub retry_after_seconds: Option<u64>,
+}
+
 /// Result of one confirmed native vector-generation rebuild.
 /// 一次已确认原生向量代次重建的结果。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
@@ -2783,6 +2799,9 @@ pub enum VmmMemoryActionResponse {
     /// Side-effect-free native vector-rebuild preview.
     /// 无副作用的原生向量重建预检。
     NativeVectorRebuildPreview(VmmNativeVectorRebuildPreview),
+    /// Latest counters for the requested rebuild operation, when known.
+    /// 指定重建操作的最新计数，操作未知时为空。
+    NativeVectorRebuildProgress(Option<VmmNativeVectorRebuildProgress>),
     /// Completed native vector-generation rebuild.
     /// 已完成的原生向量代次重建。
     NativeVectorRebuild(VmmNativeVectorRebuildResult),

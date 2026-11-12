@@ -3333,6 +3333,8 @@
   "memory.maintenance.confirmVectorRebuildTitle": "Reconstruire les vecteurs de la mémoire native ?",
   "memory.maintenance.confirmVectorRebuildDescription": "Reconstruit {memories} mémoires (actives {active}, corbeille {recycled}) de {projects} projets en {batches} lots bornés avec la route d’embeddings actuelle, en dimension {dimension}. La version de l’aperçu et la route sont revalidées avant l’exécution.",
   "memory.maintenance.rebuildVectors": "Confirmer la reconstruction",
+  "memory.maintenance.vectorRebuildProgress": "Mémoires reconstruites : {memories} sur {totalMemories} · Lots : {batches} sur {totalBatches}",
+  "memory.maintenance.vectorRebuildQuotaWait": "Limite de requêtes atteinte. Reprise dans {seconds} secondes.",
   "memory.maintenance.keepVectorsTitle": "Même modèle : conserver les vecteurs existants",
   "memory.maintenance.keepVectorsDescription": "Si vous avez seulement changé de fournisseur ou de relais et qu'il s'agit toujours du même modèle d'embeddings, les {count} vecteurs existants à la dimension actuelle peuvent être conservés au lieu d'être régénérés un par un. Avant cela, une mémoire est ré-encodée avec la route actuelle pour comparaison ; en cas d'écart, rien n'est conservé. Les mémoires enregistrées avec une autre dimension doivent toujours être reconstruites.",
   "memory.maintenance.keepVectors": "Conserver les vecteurs existants",

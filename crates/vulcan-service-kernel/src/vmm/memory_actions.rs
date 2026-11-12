@@ -109,6 +109,7 @@ pub(crate) async fn service_run_vmm_memory_action(
             | "native_lexical_rebuild"
             | "native_vector_status"
             | "native_vector_rebuild_preview"
+            | "native_vector_rebuild_progress"
             | "native_vector_rebuild"
             | "native_vector_adoption"
             | "native_recycle_bin"
@@ -922,6 +923,19 @@ async fn service_run_native_vmm_maintenance_action(
                 request_preview,
                 &preview,
                 VmmMemoryActionResponse::NativeVectorRebuildPreview(preview.clone()),
+            )
+        }
+        "native_vector_rebuild_progress" => {
+            let progress = maintenance
+                .vector_rebuild_progress(&request.command_id)
+                .await;
+            native_action_result(
+                action,
+                String::from("Read native VMM vector rebuild progress."),
+                "native_vector_rebuild_progress",
+                request_preview,
+                &progress,
+                VmmMemoryActionResponse::NativeVectorRebuildProgress(progress.clone()),
             )
         }
         "native_vector_rebuild" => {

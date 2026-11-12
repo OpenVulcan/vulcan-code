@@ -1511,7 +1511,24 @@ fn advance(record: &mut CommandRecord, result: HostEffectResult) -> Result<Comma
             })?;
         return mark_uncertain(record, idempotency_key);
     }
-    if matches!(&result, HostEffectResult::Failure(_)) {
+    if let HostEffectResult::Failure(failure) = &result {
+        // Rebuild requires every vector before submitting a storage mutation.
+        // 重建必须取得全部向量才能提交存储变更。
+        if matches!(record.state, FlowState::MaintenanceRebuildEmbedding { .. }) {
+            if failure.kind != EffectFailureKind::Embedding {
+                return Err(effect_type_error(
+                    "maintenance rebuild embedding failure kind",
+                ));
+            }
+            return Err(command_error(
+                ErrorCode::EffectDegraded,
+                format!(
+                    "Native VMM maintenance embedding failed: {}",
+                    failure.diagnostic
+                ),
+            )
+            .with_retryable(failure.retryable));
+        }
         return degrade(record, &result);
     }
     let state = std::mem::replace(&mut record.state, FlowState::Terminal);
@@ -10204,20 +10221,7 @@ fn validate_host_turn(turn: &Turn) -> Result<(), CoreError> {
             .any(|window| window[0].occurred_at_ns > window[1].occurred_at_ns)
         || turn.previous_turn_ids.len() > MAX_DOMAIN_COLLECTION_ITEMS
         || turn.next_turn_ids.len() > MAX_DOMAIN_COLLECTION_ITEMS
-        || turn.analysis_details.as_ref().is_some_and(|details| {
-            normalize_text(details).is_empty()
-                || details.len() > MAX_DOMAIN_TEXT_BYTES
-                || details.contains('\0')
-        })
-        || match turn.status {
-            TurnStatus::Pending | TurnStatus::AnalysisBypassed | TurnStatus::Corrupted => {
-                turn.user_input_kind.is_some() || turn.analysis_details.is_some()
-            }
-            TurnStatus::Completed => {
-                turn.user_input_kind.is_none() || turn.analysis_details.is_none()
-            }
-            TurnStatus::ProcessedUnknown => turn.user_input_kind.is_some(),
-        }
+        || !turn.has_valid_analysis_metadata()
     {
         return Err(effect_type_error(
             "Host turn violates timeline, adjacency, time, or analysis-detail bounds",

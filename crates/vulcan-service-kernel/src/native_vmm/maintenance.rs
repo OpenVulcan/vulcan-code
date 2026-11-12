@@ -4,6 +4,7 @@
 use super::driver::{NativeVmmCoreRuntime, NativeVmmVectorSpaceDescriptor};
 use super::retention_policy;
 use super::turn_details::resolve_turn_details;
+use super::vector_rebuild_progress::VectorRebuildProgress;
 
 #[path = "binding_cache_projection.rs"]
 mod binding_cache_projection;
@@ -997,6 +998,9 @@ pub(crate) struct NativeVmmMaintenance {
     /// Holds the latest exact manual recycle selection independently of policy cleanup.
     /// 独立于策略清洗保存最近的准确人工回收选择。
     removal_preview: Arc<Mutex<Option<manual_removal::PreparedManualRemoval>>>,
+    /// Holds the latest confirmed rebuild's counters independently of the storage gate.
+    /// 独立于存储门保留最近一次已确认重建的计数。
+    vector_rebuild_progress: Arc<RwLock<Option<Arc<VectorRebuildProgress>>>>,
 }
 
 impl NativeVmmMaintenance {
@@ -1361,6 +1365,7 @@ impl NativeVmmMaintenance {
             session_archive_preview: Arc::new(Mutex::new(None)),
             session_restart_preview: Arc::new(Mutex::new(None)),
             removal_preview: Arc::new(Mutex::new(None)),
+            vector_rebuild_progress: Arc::new(RwLock::new(None)),
             retention_last_status: Arc::new(RwLock::new(NativeVmmRetentionStatus {
                 enabled: false,
                 running: false,
@@ -1642,12 +1647,12 @@ impl NativeVmmMaintenance {
                 "The native VMM vector rebuild targets changed; precheck again and confirm.",
             ));
         }
+        let progress = Arc::new(VectorRebuildProgress::new(operation_id.to_owned()));
+        *self.vector_rebuild_progress.write().await = Some(Arc::clone(&progress));
         let active_targets = active_vector_rebuild_targets(&snapshot, &descriptor.vector_space_id);
         let recycle_bin_targets =
             recycle_bin_vector_rebuild_targets(&snapshot, &descriptor.vector_space_id);
         let subject_id = native_vmm_subject_id()?;
-        let mut rebuilt_memory_count = 0_u64;
-        let mut batch_count = 0_u64;
         // Use the same ceiling bound to the confirmation for both storage lanes.
         // 活动区和回收站使用绑定在确认指纹中的同一个批次上限。
         let batch_limit = descriptor.rebuild_batch_limit.get();
@@ -1668,28 +1673,31 @@ impl NativeVmmMaintenance {
                 )?;
                 let result = self
                     .runtime
-                    .run(CoreCommand::Maintenance(MaintenanceCommand {
-                        subject_id: subject_id.clone(),
-                        scope_access: ScopeAccess {
-                            write_scope: scope_id.clone(),
-                            visible_scopes: vec![scope_id.clone()],
+                    .run_vector_rebuild(
+                        MaintenanceCommand {
+                            subject_id: subject_id.clone(),
+                            scope_access: ScopeAccess {
+                                write_scope: scope_id.clone(),
+                                visible_scopes: vec![scope_id.clone()],
+                            },
+                            occurred_at_ns: now_ns,
+                            action: MaintenanceAction::RebuildVectors {
+                                memory_ids: memory_ids.to_vec(),
+                                vector_space_id: descriptor.vector_space_id.clone(),
+                            },
+                            mutation_identity: MutationIdentity {
+                                operation_id: OperationId::new(batch_operation_id.clone())
+                                    .map_err(|error| error.to_string())?,
+                                idempotency_key: IdempotencyKey::new(batch_operation_id.clone())
+                                    .map_err(|error| error.to_string())?,
+                                request_fingerprint: format!("fp256:{}", "0".repeat(64)),
+                                source_kind: MutationSourceKind::HostRpc,
+                                request_source_id: operation_id.to_owned(),
+                                observed_at_ns: now_ns,
+                            },
                         },
-                        occurred_at_ns: now_ns,
-                        action: MaintenanceAction::RebuildVectors {
-                            memory_ids: memory_ids.to_vec(),
-                            vector_space_id: descriptor.vector_space_id.clone(),
-                        },
-                        mutation_identity: MutationIdentity {
-                            operation_id: OperationId::new(batch_operation_id.clone())
-                                .map_err(|error| error.to_string())?,
-                            idempotency_key: IdempotencyKey::new(batch_operation_id.clone())
-                                .map_err(|error| error.to_string())?,
-                            request_fingerprint: format!("fp256:{}", "0".repeat(64)),
-                            source_kind: MutationSourceKind::HostRpc,
-                            request_source_id: operation_id.to_owned(),
-                            observed_at_ns: now_ns,
-                        },
-                    }))
+                        Arc::clone(&progress),
+                    )
                     .await
                     .map_err(|error| error.to_string())?;
                 let CommandResult::Maintenance(result) = result else {
@@ -1707,9 +1715,7 @@ impl NativeVmmMaintenance {
                         "Native VMM Core returned an inconsistent vector rebuild result.",
                     ));
                 }
-                rebuilt_memory_count =
-                    rebuilt_memory_count.saturating_add(u64::from(expected_count));
-                batch_count = batch_count.saturating_add(1);
+                progress.record_batch(u64::from(expected_count));
             }
         }
         for (scope_id, memory_ids) in recycle_bin_targets {
@@ -1736,7 +1742,12 @@ impl NativeVmmMaintenance {
                 )?;
                 let vectors = self
                     .runtime
-                    .embed_maintenance_summaries(&batch_operation_id, &descriptor, summaries)
+                    .embed_maintenance_summaries(
+                        &batch_operation_id,
+                        &descriptor,
+                        summaries,
+                        Some(Arc::clone(&progress)),
+                    )
                     .await?;
                 let current = self.runtime.current_vector_space_descriptor().await?;
                 if current != descriptor {
@@ -1785,8 +1796,7 @@ impl NativeVmmMaintenance {
                         "The native VMM recycle-bin vector rebuild returned an inconsistent batch result.",
                     ));
                 }
-                rebuilt_memory_count = rebuilt_memory_count.saturating_add(expected_count);
-                batch_count = batch_count.saturating_add(1);
+                progress.record_batch(expected_count);
             }
         }
         self.runtime.current_vector_space_id().await?;
@@ -1798,12 +1808,29 @@ impl NativeVmmMaintenance {
                 "The native VMM recycle bin still contains old vector generations; precheck again and continue the rebuild.",
             ));
         }
+        let progress = progress.snapshot();
         Ok(NativeVmmVectorRebuildResult {
             storage_version: final_snapshot.storage_version,
             target_vector_space_id: descriptor.vector_space_id.into_string(),
-            rebuilt_memory_count,
-            batch_count,
+            rebuilt_memory_count: progress.rebuilt_memory_count,
+            batch_count: progress.batch_count,
         })
+    }
+
+    /// Reads committed counts and quota wait for the exact requested rebuild ID.
+    /// 读取指定重建标识的已提交计数和限流等待。
+    /// Returns None before the operation is validated or when a newer rebuild supersedes it.
+    /// 操作尚未通过校验或已被更新的重建取代时返回 None。
+    pub(crate) async fn vector_rebuild_progress(
+        &self,
+        operation_id: &str,
+    ) -> Option<vulcan_service_api::VmmNativeVectorRebuildProgress> {
+        self.vector_rebuild_progress
+            .read()
+            .await
+            .as_ref()
+            .filter(|progress| progress.operation_id == operation_id)
+            .map(|progress| progress.snapshot())
     }
 
     /// Keeps existing same-dimension vectors under the current generation when the route still runs
@@ -1876,6 +1903,7 @@ impl NativeVmmMaintenance {
                     &format!("{operation_id}:adoption-sample:{index}"),
                     &descriptor,
                     vec![sample.summary.clone()],
+                    None,
                 )
                 .await?;
             let [fresh] = fresh.as_slice() else {

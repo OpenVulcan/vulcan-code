@@ -3,9 +3,13 @@ import { act, StrictMode } from "react"
 import { createRoot } from "react-dom/client"
 import { afterAll, beforeAll, expect, it, vi } from "vitest"
 import { I18nProvider, readLocaleMessage } from "@/i18n"
+import { runVmmMemoryAction } from "@/service/memory-actions-service"
+import { formatSkillText } from "@/components/features/featureText"
 import type { VmmMemoryActionResult } from "@/types"
 import { VmmNativeMaintenancePage } from "./vmm-native-maintenance-page"
 import { maintenanceBatch, maintenanceReply } from "./vmm-native-maintenance.test-fixture"
+
+vi.mock("@/service/memory-actions-service", () => ({ runVmmMemoryAction: vi.fn() }))
 
 // The test environment owns React's act flag and restores the original global afterwards.
 // 测试环境拥有 React act 标记，结束后恢复原全局值。
@@ -158,9 +162,58 @@ it("keeps a vector rejection inside its confirmation and restores the exact trig
     await act(async () => { trigger.focus(); trigger.click() })
     const dialog = document.querySelector('[role="alertdialog"]')!
     await act(async () => button("确认重建", dialog).click())
-    expect(run).toHaveBeenLastCalledWith("native_vector_rebuild", { expectedStorageVersion: 19, expectedPreviewFingerprint: "audit-fingerprint", confirmed: true }, { propagateError: true })
+    expect(run).toHaveBeenLastCalledWith("native_vector_rebuild", { expectedStorageVersion: 19, expectedPreviewFingerprint: "audit-fingerprint", confirmed: true }, { propagateError: true, commandId: expect.any(String) })
     expect(dialog.querySelector('[role="alert"]')).not.toBeNull()
     await act(async () => button("取消", dialog).click())
     await vi.waitFor(() => expect(document.activeElement).toBe(trigger))
   } finally { await view.dispose() }
+})
+
+// Reads the same operation during a quota wait and advances only after another batch commits.
+// 限流等待期间查询同一操作，只在又一个批次提交后推进进度。
+it("renders committed rebuild progress and the quota countdown", async () => {
+  vi.useFakeTimers()
+  // Keep the rebuild in flight until the countdown and next committed batch are observed.
+  // 在观察到倒计时和下一个提交批次前，保持重建请求进行中。
+  let finish!: (result: VmmMemoryActionResult) => void
+  const rebuild = new Promise<VmmMemoryActionResult>((resolve) => { finish = resolve })
+  const run = vi.fn((action: string, payload?: Record<string, unknown>, _options?: { commandId?: string }) =>
+    action === "native_vector_rebuild" ? rebuild : Promise.resolve(maintenanceReply(action, payload)))
+  const progress = vi.mocked(runVmmMemoryAction)
+  for (const seconds of [2, 1, null]) {
+    progress.mockResolvedValueOnce({
+      ...maintenanceReply("native_vector_rebuild"),
+      data: { kind: "native_vector_rebuild_progress", value: {
+        rebuiltMemoryCount: seconds === null ? 2 : 1, batchCount: 1, retryAfterSeconds: seconds,
+      } },
+    })
+  }
+  const view = await mount(run)
+  try {
+    await act(async () => button("向量与检索索引").click())
+    await act(async () => button("预检向量重建", view.container).click())
+    const dialog = document.querySelector('[role="alertdialog"]')!
+    await act(async () => button("确认重建", dialog).click())
+    const commandId = run.mock.lastCall?.[2]?.commandId
+    expect(commandId).toEqual(expect.any(String))
+    await act(async () => vi.advanceTimersByTimeAsync(500))
+    expect(progress).toHaveBeenLastCalledWith({ action: "native_vector_rebuild_progress", commandId, scope: "global" })
+    expect(dialog.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("1")
+    expect(dialog.querySelector('[role="status"]')?.textContent).toBe(formatSkillText(
+      readLocaleMessage("zh-CN", "memory.maintenance.vectorRebuildQuotaWait"), { seconds: 2 },
+    ))
+    await act(async () => vi.advanceTimersByTimeAsync(1000))
+    expect(dialog.querySelector('[role="status"]')?.textContent).toBe(formatSkillText(
+      readLocaleMessage("zh-CN", "memory.maintenance.vectorRebuildQuotaWait"), { seconds: 1 },
+    ))
+    expect(dialog.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("1")
+    await act(async () => vi.advanceTimersByTimeAsync(1000))
+    expect(dialog.querySelector('[role="status"]')).toBeNull()
+    expect(dialog.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("2")
+    await act(async () => finish(maintenanceReply("native_vector_rebuild")))
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull()
+  } finally {
+    await view.dispose()
+    vi.useRealTimers()
+  }
 })

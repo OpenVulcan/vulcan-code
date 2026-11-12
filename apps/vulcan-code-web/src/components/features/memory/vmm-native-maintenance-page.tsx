@@ -12,6 +12,7 @@ import {
   AlertDialogTitle,
 } from "@/ui-kit/primitives/alert-dialog"
 import { StreamPlaceholder } from "@/ui-kit/primitives/stream-placeholder"
+import { Progress } from "@/ui-kit/primitives/progress"
 import { Button } from "@/ui-kit/primitives/button"
 import { PageTabs } from "@/components/workspace/workspace-directory-layout"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/ui-kit/primitives/card"
@@ -19,6 +20,7 @@ import { Label } from "@/ui-kit/primitives/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui-kit/primitives/select"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/ui-kit/primitives/tooltip"
 import { useI18n } from "@/i18n"
+import { runVmmMemoryAction } from "@/service/memory-actions-service"
 import { VmmNativeCleanupPreview } from "./vmm-native-cleanup-preview"
 import { VmmNativeLexicalIndex } from "./vmm-native-lexical-index"
 import { VmmNativeRecycleRecords } from "./vmm-native-recycle-records"
@@ -36,6 +38,7 @@ import type {
   VmmNativeLexicalIndexStatus,
   VmmNativeVectorAdoptionResult,
   VmmNativeVectorRebuildPreview,
+  VmmNativeVectorRebuildProgress,
   VmmNativeVectorStatusSummary,
 } from "@/types"
 import { formatDateTime } from "@/lib/display-format"
@@ -66,6 +69,34 @@ interface RecycleConfirmation {
   storageVersion: number
 }
 
+// VectorRebuildProgress shows committed counts against the confirmed preview and any active quota wait.
+// VectorRebuildProgress 按确认的预检结果展示已提交数量及当前限流等待时间。
+function VectorRebuildProgress({ preview, progress, running }: {
+  // The confirmed preview supplies totals for both progress counts.
+  // 已确认的预检结果提供两种进度计数的总数。
+  preview: VmmNativeVectorRebuildPreview
+  // The service snapshot supplies completed counts and remaining wait seconds.
+  // 服务快照提供已完成的计数和剩余等待秒数。
+  progress: VmmNativeVectorRebuildProgress
+  // Show the countdown only while the rebuild is running.
+  // 仅在重建运行期间展示倒计时。
+  running: boolean
+}) {
+  const { t } = useI18n()
+  return (
+    <div className="vk-form-tight">
+      <Progress aria-label={t("memory.maintenance.rebuildVectors")} max={Math.max(1, preview.rebuildMemoryCount)} value={progress.rebuiltMemoryCount} />
+      <p className="vk-form-note">{formatSkillText(t("memory.maintenance.vectorRebuildProgress"), {
+        memories: progress.rebuiltMemoryCount, totalMemories: preview.rebuildMemoryCount,
+        batches: progress.batchCount, totalBatches: preview.batchCount,
+      })}</p>
+      {running && progress.retryAfterSeconds ? <p role="status" className="vk-form-note">{formatSkillText(t("memory.maintenance.vectorRebuildQuotaWait"), {
+        seconds: progress.retryAfterSeconds,
+      })}</p> : null}
+    </div>
+  )
+}
+
 // VmmNativeMaintenancePage renders scheduled cleanup status and the native recycle bin.
 // VmmNativeMaintenancePage 渲染定期清洗状态与原生回收站。
 export function VmmNativeMaintenancePage({ busy, initialView = "recycle", onRunAction }: VmmNativeMaintenancePageProps) {
@@ -79,6 +110,10 @@ export function VmmNativeMaintenancePage({ busy, initialView = "recycle", onRunA
   const [lexicalStatus, setLexicalStatus] = React.useState<VmmNativeLexicalIndexStatus | null>(null)
   const [vectorStatus, setVectorStatus] = React.useState<VmmNativeVectorStatusSummary | null>(null)
   const [vectorPreview, setVectorPreview] = React.useState<VmmNativeVectorRebuildPreview | null>(null)
+  // The confirmed command ID correlates status reads with the running rebuild.
+  // 已确认命令标识将状态读取关联到正在执行的重建。
+  const [activeRebuildId, setActiveRebuildId] = React.useState<string | null>(null)
+  const [rebuildProgress, setRebuildProgress] = React.useState<VmmNativeVectorRebuildProgress | null>(null)
   // The latest keep-vectors outcome is shown in the dialog when refused and on the index tab when done.
   // 最近一次沿用向量的结果：被拒绝时显示在弹窗内，完成时显示在索引页。
   const [vectorAdoption, setVectorAdoption] = React.useState<VmmNativeVectorAdoptionResult | null>(null)
@@ -111,6 +146,28 @@ export function VmmNativeMaintenancePage({ busy, initialView = "recycle", onRunA
   const actionLock = React.useRef(false)
   const [actionPending, setActionPending] = React.useState(false)
   const controlsBusy = busy || cleanupPending || pagePending || actionPending
+
+  React.useEffect(() => {
+    if (!activeRebuildId) return
+    let active = true
+    let timer: ReturnType<typeof setTimeout>
+    // Read outside the exclusive action channel so the rebuild can continue while it is observed.
+    // 在独占动作通道之外读取进度，让重建在被观察时继续执行。
+    const poll = async () => {
+      try {
+        const { data } = await runVmmMemoryAction({
+          action: "native_vector_rebuild_progress", commandId: activeRebuildId, scope: "global",
+        })
+        if (active && data.kind === "native_vector_rebuild_progress" && data.value) setRebuildProgress(data.value)
+      } catch {
+        // The rebuild response owns operation errors; a failed status read can be retried.
+        // 重建响应负责操作错误，状态读取失败可以重试。
+      }
+      if (active) timer = setTimeout(() => void poll(), 1000)
+    }
+    timer = setTimeout(() => void poll(), 500)
+    return () => { active = false; clearTimeout(timer) }
+  }, [activeRebuildId])
 
   // loadStatus refreshes the process-local schedule and latest execution outcome.
   // loadStatus 刷新进程内调度状态与最近执行结果。
@@ -294,6 +351,7 @@ export function VmmNativeMaintenancePage({ busy, initialView = "recycle", onRunA
       }
       setVectorPreview(result.data.value)
       setVectorAdoption(null)
+      setRebuildProgress(null)
       setError(null)
     } catch (cause) {
       if (mounted.current) setError(cause instanceof Error ? cause.message : String(cause))
@@ -307,12 +365,15 @@ export function VmmNativeMaintenancePage({ busy, initialView = "recycle", onRunA
     actionLock.current = true
     setActionPending(true)
     setError(null)
+    const commandId = crypto.randomUUID()
+    setRebuildProgress({ rebuiltMemoryCount: 0, batchCount: 0, retryAfterSeconds: null })
+    setActiveRebuildId(commandId)
     try {
       const result = await onRunAction("native_vector_rebuild", {
         expectedStorageVersion: vectorPreview.storageVersion,
         expectedPreviewFingerprint: vectorPreview.previewFingerprint,
         confirmed: true,
-      }, { propagateError: true })
+      }, { propagateError: true, commandId })
       if (!mounted.current || !result) return
       if (result.data.kind !== "native_vector_rebuild") {
         setError(t("memory.maintenance.invalidResponse"))
@@ -323,7 +384,13 @@ export function VmmNativeMaintenancePage({ busy, initialView = "recycle", onRunA
       await loadPage()
     } catch (cause) {
       if (mounted.current) setError(cause instanceof Error ? cause.message : String(cause))
-    } finally { actionLock.current = false; if (mounted.current) setActionPending(false) }
+    } finally {
+      actionLock.current = false
+      if (mounted.current) {
+        setActiveRebuildId(null)
+        setActionPending(false)
+      }
+    }
   }, [loadPage, onRunAction, t, vectorPreview])
 
   // applyVectorAdoption keeps same-dimension vectors after the service re-embeds one sample to prove
@@ -494,6 +561,9 @@ export function VmmNativeMaintenancePage({ busy, initialView = "recycle", onRunA
                 })}</p>
               ) : null}
             </div>
+          ) : null}
+          {vectorPreview && rebuildProgress ? (
+            <VectorRebuildProgress preview={vectorPreview} progress={rebuildProgress} running={activeRebuildId !== null} />
           ) : null}
           {error ? <p role="alert" className="vk-field-error vk-form-break">{error}</p> : null}
           <AlertDialogFooter>

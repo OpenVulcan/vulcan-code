@@ -1,11 +1,16 @@
 //! Authenticated transport for the OpenVulcan memory-only service.
 //! OpenVulcan 专用记忆服务的认证传输。
 
-use std::{collections::BTreeSet, sync::LazyLock, time::Duration};
+use std::{
+    collections::BTreeSet,
+    sync::LazyLock,
+    time::{Duration, SystemTime},
+};
 
 use reqwest::{Method, header};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
+use vulcan_ai_contract::RetryAfterHint;
 
 use crate::CredentialExecutionSecret;
 
@@ -266,7 +271,7 @@ pub struct MemoryResponse {
 
 /// Stable transport outcomes that carry no upstream body or input text.
 /// 不携带上游响应正文或输入文本的稳定传输结果。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MemoryTransportError {
     /// Sign-in is required for this native endpoint.
     /// 此原生端点要求登录。
@@ -276,7 +281,11 @@ pub enum MemoryTransportError {
     SelectionChanged,
     /// The site's phase quota was reached.
     /// 达到站点阶段限额。
-    RateLimited,
+    RateLimited {
+        /// The wait advertised by the memory service before another request may be admitted.
+        /// 记忆服务声明的下次请求可准入前的等待时间。
+        retry_after: Option<RetryAfterHint>,
+    },
     /// The input exceeded the site's limit.
     /// 输入超过站点限额。
     InputLimit,
@@ -381,7 +390,14 @@ async fn send<T: DeserializeOwned>(
         401 => return Err(Error::SignIn),
         409 => return Err(Error::SelectionChanged),
         413 => return Err(Error::InputLimit),
-        429 => return Err(Error::RateLimited),
+        429 => {
+            return Err(Error::RateLimited {
+                retry_after: crate::execution::parse_retry_after_headers(
+                    response.headers(),
+                    SystemTime::now(),
+                ),
+            });
+        }
         _ => return Err(Error::Unavailable),
     }
     let mut bytes = Vec::new();

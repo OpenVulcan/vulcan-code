@@ -3512,20 +3512,7 @@ fn turn_can_supply_postaction_reference(turn: &Turn) -> bool {
 /// Rejects metadata combinations that contradict the exact durable turn state before storage.
 /// 在数据进入长期存储前拒绝与精确Turn状态矛盾的元数据组合。
 fn validate_turn_analysis_state(turn: &Turn) -> Result<(), String> {
-    let invalid_state = match turn.status {
-        TurnStatus::Pending | TurnStatus::AnalysisBypassed | TurnStatus::Corrupted => {
-            turn.user_input_kind.is_some() || turn.analysis_details.is_some()
-        }
-        TurnStatus::Completed => turn.user_input_kind.is_none() || turn.analysis_details.is_none(),
-        TurnStatus::ProcessedUnknown => turn.user_input_kind.is_some(),
-    };
-    if invalid_state
-        || turn.analysis_details.as_ref().is_some_and(|details| {
-            details.trim().is_empty()
-                || details.len() > vulcan_memorymesh_core_contracts::MAX_DOMAIN_TEXT_BYTES
-                || details.contains('\0')
-        })
-    {
+    if !turn.has_valid_analysis_metadata() {
         return Err(format!(
             "turn analysis metadata conflicts with its durable state: {}",
             turn.id
@@ -3564,6 +3551,10 @@ fn turn_state_metadata_rules_preserve_history_without_claiming_success() {
     completed.user_input_kind = Some(vulcan_memorymesh_core_contracts::TurnInputKind::Statement);
     completed.analysis_details = Some("completed details".to_owned());
     assert!(validate_turn_analysis_state(&completed).is_ok());
+    completed.analysis_details = Some(String::new());
+    assert!(validate_turn_analysis_state(&completed).is_ok());
+    completed.analysis_details = None;
+    assert!(validate_turn_analysis_state(&completed).is_err());
 
     let mut unknown = turn_state_test_fixture(TurnStatus::ProcessedUnknown);
     unknown.analysis_details = Some("historical details with unknown input kind".to_owned());

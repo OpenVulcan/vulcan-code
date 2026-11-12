@@ -3333,6 +3333,8 @@
   "memory.maintenance.confirmVectorRebuildTitle": "确认重建原生记忆向量？",
   "memory.maintenance.confirmVectorRebuildDescription": "将按当前嵌入路由重建 {memories} 条记忆（活动 {active}，回收站 {recycled}），覆盖 {projects} 个项目、{batches} 个有界批次，目标维度为 {dimension}。执行前会再次校验预检版本与路由。",
   "memory.maintenance.rebuildVectors": "确认重建",
+  "memory.maintenance.vectorRebuildProgress": "已重建 {memories}/{totalMemories} 条记忆 · {batches}/{totalBatches} 个批次",
+  "memory.maintenance.vectorRebuildQuotaWait": "达到调用频率限制，等待 {seconds} 秒后继续。",
   "memory.maintenance.keepVectorsTitle": "同一模型可沿用现有向量",
   "memory.maintenance.keepVectorsDescription": "如果只是换了供应商或中转，实际仍是同一个向量模型，可以沿用 {count} 条维度一致的现有向量，无需逐条重新生成。沿用前会用当前路由重新生成一条记忆的向量进行核对，结果不一致就不沿用。维度不同的记忆仍需重建。",
   "memory.maintenance.keepVectors": "沿用现有向量",

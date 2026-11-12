@@ -137,10 +137,13 @@ export function VmmCloudMemoryPicker({ choice, onChoice }: {
         offer.id === previous.modelId && offer.consent_revision === previous.consentRevision)
         ? previous : null
       const saved = next.status === "available" ? next.selected : null
+      // A stale model needs fresh consent, while the same account's local PII choice still applies.
+      // 失效模型需要重新确认，同一账号已选的本机 PII 地区仍可沿用。
+      const savedRegion = next.selected?.accountContext === next.accountContext ? next.selected?.piiRegion : undefined
       const modelId = resume?.modelId ?? saved?.modelId ?? (next.selected ? "" : next.catalog?.default_id ?? "")
       const model = next.catalog?.models.find(({ id }) => id === modelId)
       setOfferId(modelId)
-      setPiiRegion(resume?.piiRegion ?? saved?.piiRegion ?? "")
+      setPiiRegion(resume?.piiRegion ?? savedRegion ?? "")
       setRerank(resume?.rerank ?? saved?.rerank ?? Boolean(model?.providers.some(({ capability }) => capability === "rerank")))
       if (!resume) initialChoice.current(null)
     }).catch(() => {
@@ -153,6 +156,10 @@ export function VmmCloudMemoryPicker({ choice, onChoice }: {
 
   const offer = setup?.catalog?.models.find(({ id }) => id === offerId)
   const rerankAvailable = offer?.providers.some(({ capability }) => capability === "rerank") === true
+  // Default to the current UI locale only when the local PII catalog supports it.
+  // 仅当本机 PII 目录支持时，才默认选用当前界面语言。
+  const effectivePiiRegion = setup?.piiRegions.includes(piiRegion) ? piiRegion
+    : setup?.piiRegions.includes(locale) ? locale : ""
   const languageNames = new Intl.DisplayNames([locale], { type: "language" })
   const retry = () => {
     remembered.current = null
@@ -197,7 +204,7 @@ export function VmmCloudMemoryPicker({ choice, onChoice }: {
         </div>
         <div className="vk-form-stack">
           <Label id="memory-cloud-region-label">{t("memory.cloud.piiRegion")}</Label>
-          <Select value={piiRegion} onValueChange={(value) => { setPiiRegion(value); onChoice(null) }}>
+          <Select value={effectivePiiRegion} onValueChange={(value) => { setPiiRegion(value); onChoice(null) }}>
             <SelectTrigger aria-labelledby="memory-cloud-region-label"><SelectValue placeholder={t("memory.cloud.chooseRegion")} /></SelectTrigger>
             <SelectContent>{setup.piiRegions.map((region) =>
               <SelectItem key={region} value={region}>{languageNames.of(region) ?? region}</SelectItem>
@@ -222,9 +229,12 @@ export function VmmCloudMemoryPicker({ choice, onChoice }: {
           {t("memory.cloud.enableRerank")}
         </label> : null}
         <label className="vk-form-inline">
-          <Checkbox checked={choice !== null} disabled={!piiRegion} onCheckedChange={(checked) => onChoice(checked === true ? {
-            modelId: offer.id, consentRevision: offer.consent_revision, accountContext, piiRegion, rerank,
-          } : null)} />
+          <Checkbox checked={choice !== null} disabled={!effectivePiiRegion} onCheckedChange={(checked) => {
+            if (checked === true) setPiiRegion(effectivePiiRegion)
+            onChoice(checked === true ? {
+              modelId: offer.id, consentRevision: offer.consent_revision, accountContext, piiRegion: effectivePiiRegion, rerank,
+            } : null)
+          }} />
           {t("memory.cloud.consent")}
         </label>
       </> : null}

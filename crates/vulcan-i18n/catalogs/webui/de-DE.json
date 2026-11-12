@@ -3333,6 +3333,8 @@
   "memory.maintenance.confirmVectorRebuildTitle": "Vektoren des nativen Gedächtnisses neu aufbauen?",
   "memory.maintenance.confirmVectorRebuildDescription": "Baut {memories} Erinnerungen (aktiv {active}, Papierkorb {recycled}) aus {projects} Projekten in {batches} begrenzten Stapeln mit der aktuellen Embedding-Route in Dimension {dimension} neu auf. Vorschauversion und Route werden vor der Ausführung erneut geprüft.",
   "memory.maintenance.rebuildVectors": "Neuaufbau bestätigen",
+  "memory.maintenance.vectorRebuildProgress": "{memories} von {totalMemories} Erinnerungen neu aufgebaut · {batches} von {totalBatches} Stapeln",
+  "memory.maintenance.vectorRebuildQuotaWait": "Anfragelimit erreicht. Fortsetzung in {seconds} Sekunden.",
   "memory.maintenance.keepVectorsTitle": "Gleiches Modell: vorhandene Vektoren behalten",
   "memory.maintenance.keepVectorsDescription": "Wenn Sie nur Anbieter oder Relay gewechselt haben und es dasselbe Embedding-Modell ist, können die {count} vorhandenen Vektoren mit der aktuellen Dimension behalten werden, statt sie einzeln neu zu erzeugen. Vorher wird eine Erinnerung über die aktuelle Route neu eingebettet und verglichen; stimmt sie nicht überein, wird nichts übernommen. Erinnerungen mit anderer Dimension müssen weiterhin neu aufgebaut werden.",
   "memory.maintenance.keepVectors": "Vorhandene Vektoren behalten",

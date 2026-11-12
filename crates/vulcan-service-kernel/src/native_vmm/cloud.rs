@@ -765,10 +765,15 @@ fn transport_error(error: MemoryTransportError) -> HostAiError {
             HostAiErrorCode::CapabilityUnavailable,
             "The cloud memory model or its disclosures changed. Choose and confirm a model in Models and Services.",
         ),
-        Error::RateLimited => (
-            HostAiErrorCode::RateLimited,
-            "The cloud memory rate limit was reached.",
-        ),
+        Error::RateLimited { retry_after } => {
+            let mut error = HostAiError::new(
+                HostAiErrorCode::RateLimited,
+                "The cloud memory rate limit was reached.",
+            );
+            error.retryable = retry_after.is_some();
+            error.retry_after = retry_after;
+            return error;
+        }
         Error::InputLimit => (
             HostAiErrorCode::LimitExceeded,
             "The cloud memory input exceeds the site limit.",

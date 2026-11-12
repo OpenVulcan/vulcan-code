@@ -1314,6 +1314,14 @@ export interface VmmNativeVectorAdoptionResult {
   requiredSimilarity: number;
 }
 
+// VmmNativeVectorRebuildProgress gives committed counts and the current quota wait for one rebuild.
+// VmmNativeVectorRebuildProgress 提供一次重建的已提交计数和当前限流等待。
+export interface VmmNativeVectorRebuildProgress {
+  rebuiltMemoryCount: number;
+  batchCount: number;
+  retryAfterSeconds: number | null;
+}
+
 // VmmNativeVectorRebuildResult summarizes one completed native vector-generation rebuild.
 // VmmNativeVectorRebuildResult 汇总一次已完成的原生向量代次重建。
 export interface VmmNativeVectorRebuildResult {
@@ -1677,6 +1685,7 @@ export type VmmMemoryActionResponse =
   | { kind: "native_vector_status"; value: VmmNativeVectorStatusSummary }
   | { kind: "native_vector_rebuild_preview"; value: VmmNativeVectorRebuildPreview }
   | { kind: "native_vector_rebuild"; value: VmmNativeVectorRebuildResult }
+  | { kind: "native_vector_rebuild_progress"; value: VmmNativeVectorRebuildProgress | null }
   | { kind: "native_vector_adoption"; value: VmmNativeVectorAdoptionResult }
   | { kind: "native_recycle_bin"; value: VmmNativeRecycleBinSummary }
   | { kind: "native_recycle_records"; value: VmmNativeRecycleRecordPage }

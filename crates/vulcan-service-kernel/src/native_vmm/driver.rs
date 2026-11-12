@@ -8,6 +8,7 @@
     reason = "the native driver must preserve the frozen HostAiError boundary contract"
 )]
 
+use super::vector_rebuild_progress::VectorRebuildProgress;
 use super::{lexical, llm_contract, prompt, resources::NativeVmmResourceStore};
 use crate::configured_inference::VMM_CONSUMER_PROFILE_ID;
 use vulcan_service_api::{VmmNativeRetentionSettingsSummary, VmmNativeRetrievalPolicySummary};
@@ -28,7 +29,7 @@ use vulcan_ai_contract::{
     EmbeddingRequest, EmbeddingSpaceFingerprint, EmbeddingTask, ExecutionRouteSnapshot,
     HostAiCallContext, HostAiCancellation, HostAiCapabilityHandle, HostAiCapabilityRegistration,
     HostAiCapabilityRequirement, HostAiEmbeddingRequest, HostAiError, HostAiErrorCode, HostAiPort,
-    INFERENCE_CONTRACT_VERSION, InferenceCallerBudget, InferenceCallerContext,
+    HostAiRetryReason, INFERENCE_CONTRACT_VERSION, InferenceCallerBudget, InferenceCallerContext,
     InferenceOperationCapability, InferencePermission, InferenceUsageScope, MessageRole,
     ReasoningEffort, ReasoningOutputPolicy, RerankRequest, RerankText, RerankTruncation,
     ResponsesExecutionRequest, StructuredOutputPolicy,
@@ -414,6 +415,7 @@ impl NativeVmmCoreRuntime {
                 capability: Arc::new(RwLock::new(None)),
                 ai_cancellation: Arc::new(NativeVmmHostAiCancellation::default()),
                 owner_session_id: None,
+                vector_rebuild_progress: None,
                 deleted_vector_rows: 0,
                 embedding_fingerprints: Arc::new(RwLock::new(BTreeMap::new())),
                 storage: Arc::new(RwLock::new(storage)),
@@ -511,6 +513,7 @@ impl NativeVmmCoreRuntime {
         self.run_with_snapshot_and_vector_deletions(
             CoreCommand::MemoryDeleteBatch(command),
             snapshot.id.clone(),
+            None,
         )
         .await
     }
@@ -523,6 +526,31 @@ impl NativeVmmCoreRuntime {
         &self,
         command: CoreCommand,
         host_project_id: &str,
+    ) -> Result<CommandResult, CoreError> {
+        self.run_with_project_policy(command, host_project_id, None)
+            .await
+    }
+
+    /// Runs a rebuild batch with global policy and its operation-owned progress tracker.
+    /// 使用全局策略和操作持有的进度跟踪器运行一个重建批次。
+    /// Returns the durable Core command result or its failure.
+    /// 返回持久化 Core 命令结果或其失败。
+    pub(super) async fn run_vector_rebuild(
+        &self,
+        command: vulcan_memorymesh_core::MaintenanceCommand,
+        progress: Arc<VectorRebuildProgress>,
+    ) -> Result<CommandResult, CoreError> {
+        self.run_with_project_policy(CoreCommand::Maintenance(command), "", Some(progress))
+            .await
+    }
+
+    /// Resolves and freezes the caller's policy before dispatching the command and optional rebuild progress.
+    /// 在分派命令及可选重建进度前解析并冻结调用者的策略。
+    async fn run_with_project_policy(
+        &self,
+        command: CoreCommand,
+        host_project_id: &str,
+        progress: Option<Arc<VectorRebuildProgress>>,
     ) -> Result<CommandResult, CoreError> {
         // snapshot is selected once; activation by another request cannot change its execution identity.
         // snapshot 只选择一次；其他请求的激活不能改变其执行身份。
@@ -538,7 +566,9 @@ impl NativeVmmCoreRuntime {
         } else {
             self.core.active_snapshot()?
         };
-        self.run_with_snapshot(command, snapshot.id.clone()).await
+        self.run_with_snapshot_and_vector_deletions(command, snapshot.id.clone(), progress)
+            .await
+            .map(|(result, _)| result)
     }
 
     /// Runs a command built from an already resolved native policy without re-reading the active default.
@@ -550,7 +580,7 @@ impl NativeVmmCoreRuntime {
         command: CoreCommand,
         snapshot_id: vulcan_memorymesh_core::ConfigSnapshotId,
     ) -> Result<CommandResult, CoreError> {
-        self.run_with_snapshot_and_vector_deletions(command, snapshot_id)
+        self.run_with_snapshot_and_vector_deletions(command, snapshot_id, None)
             .await
             .map(|(result, _)| result)
     }
@@ -563,6 +593,7 @@ impl NativeVmmCoreRuntime {
         &self,
         mut command: CoreCommand,
         snapshot_id: vulcan_memorymesh_core::ConfigSnapshotId,
+        progress: Option<Arc<VectorRebuildProgress>>,
     ) -> Result<(CommandResult, u64), CoreError> {
         if command.is_mutating() {
             let fingerprint =
@@ -577,6 +608,7 @@ impl NativeVmmCoreRuntime {
         // Every AI effect of this command is attributed to the conversation that produced the command.
         // 该命令的全部 AI Effect 都归属产生该命令的会话。
         host.owner_session_id = command_owner_session_id(&command);
+        host.vector_rebuild_progress = progress;
         // This scalar belongs to the worker clone, never to another concurrent command or the runtime template.
         // 此标量归属工作器克隆，绝不归属其他并发命令或运行时模板。
         host.deleted_vector_rows = 0;
@@ -739,6 +771,7 @@ impl NativeVmmCoreRuntime {
         operation_id: &str,
         descriptor: &NativeVmmVectorSpaceDescriptor,
         inputs: Vec<String>,
+        progress: Option<Arc<VectorRebuildProgress>>,
     ) -> Result<Vec<Vec<f32>>, String> {
         if inputs.is_empty() {
             return Err(String::from(
@@ -765,8 +798,9 @@ impl NativeVmmCoreRuntime {
         let context = HostAiCallContext::new(operation_id.to_owned())
             .with_deadline(effect_deadline(EffectDeadlineClass::Maintenance))
             .with_cancellation(Arc::new(NativeVmmHostAiCancellation::default()));
-        match self
-            .host
+        let mut host = self.host.clone();
+        host.vector_rebuild_progress = progress;
+        match host
             .execute_embedding_with_context(context, request_id, &effect)
             .await
             .map_err(|error| error.to_string())?
@@ -1560,6 +1594,9 @@ struct NativeVmmHostDriver {
     /// Conversation session that owns the running command, or `None` for session-less commands.
     /// 持有当前命令的会话；不属于任何会话的命令为 `None`。
     owner_session_id: Option<String>,
+    /// Present only on workers owned by a confirmed vector rebuild.
+    /// 仅在已确认向量重建持有的工作器上存在。
+    vector_rebuild_progress: Option<Arc<VectorRebuildProgress>>,
     /// Physical row deletions for this command driver only, excluding recovered earlier operations.
     /// 仅属于此命令驱动的物理删除行数，不含恢复的先前操作。
     deleted_vector_rows: u64,
@@ -2233,14 +2270,32 @@ impl NativeVmmHostDriver {
         };
         let mut vectors = Vec::with_capacity(effect.inputs.len());
         for texts in effect.inputs.chunks(descriptor.rebuild_batch_limit.get()) {
-            let result = self
-                .cloud_effect(
-                    capability,
-                    context,
-                    MemoryPurpose::Embedding,
-                    serde_json::json!({ "task": task, "texts": texts }),
-                )
-                .await;
+            // Retry only the rejected request, using the same route and logical operation.
+            // 仅重试被拒绝的请求，沿用同一路由与逻辑操作。
+            let mut attempt = context.clone();
+            let result = loop {
+                let result = self
+                    .cloud_effect(
+                        capability,
+                        &attempt,
+                        MemoryPurpose::Embedding,
+                        serde_json::json!({ "task": task, "texts": texts }),
+                    )
+                    .await;
+                if let (Err(error), Some(progress)) = (&result, &self.vector_rebuild_progress) {
+                    match progress.wait_for_quota(&attempt, error).await {
+                        Ok(true) => {
+                            let next = attempt.attempt.saturating_add(1);
+                            attempt =
+                                attempt.with_attempt(next, HostAiRetryReason::ProviderTransient);
+                            continue;
+                        }
+                        Ok(false) => {}
+                        Err(error) => break Err(error),
+                    }
+                }
+                break result;
+            };
             let output = match result {
                 Ok(value) => value,
                 Err(error) => return Ok(ai_failure(EffectFailureKind::Embedding, error)),

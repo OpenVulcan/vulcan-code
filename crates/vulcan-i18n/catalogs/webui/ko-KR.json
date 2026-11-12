@@ -3333,6 +3333,8 @@
   "memory.maintenance.confirmVectorRebuildTitle": "네이티브 메모리 벡터를 재구축할까요?",
   "memory.maintenance.confirmVectorRebuildDescription": "현재 임베딩 경로(차원 {dimension})를 사용해 프로젝트 {projects}개에 걸친 메모리 {memories}개(활성 {active}, 휴지통 {recycled})를 제한된 배치 {batches}개로 재구축합니다. 실행 전에 미리보기 버전과 경로를 다시 검증합니다.",
   "memory.maintenance.rebuildVectors": "재구축 확인",
+  "memory.maintenance.vectorRebuildProgress": "메모리 {memories}/{totalMemories}개 · 배치 {batches}/{totalBatches}개 재구축 완료",
+  "memory.maintenance.vectorRebuildQuotaWait": "호출 빈도 제한에 도달했습니다. {seconds}초 후에 재개합니다.",
   "memory.maintenance.keepVectorsTitle": "같은 모델이면 기존 벡터 유지",
   "memory.maintenance.keepVectorsDescription": "공급자나 중계만 바꾸었고 여전히 같은 임베딩 모델이라면, 현재 차원과 일치하는 기존 벡터 {count}개를 하나씩 다시 생성하지 않고 유지할 수 있습니다. 유지하기 전에 현재 경로로 기억 하나를 다시 임베딩해 비교하며, 일치하지 않으면 유지하지 않습니다. 차원이 다른 기억은 여전히 재구축해야 합니다.",
   "memory.maintenance.keepVectors": "기존 벡터 유지",
