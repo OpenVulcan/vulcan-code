@@ -11,7 +11,8 @@ use serde::de::DeserializeOwned;
 
 use vulcan_session_core::v1::config::MetadataDocument;
 use vulcan_session_core::v1::context::{
-    COMPACTIONS_CONTRACT, CompactionsDocument, RUNTIME_CONTRACT, RuntimeDocument,
+    COMPACTIONS_CONTRACT, COMPACTIONS_SCHEMA_VERSION, CompactionsDocument, RUNTIME_CONTRACT,
+    RuntimeDocument,
 };
 use vulcan_session_core::v1::errors::DomainError;
 
@@ -32,15 +33,14 @@ pub fn write_json_document<T: Serialize>(
             format!("serialize {artifact_kind}: {error}"),
         )
     })?;
-    // Capability rebuilds and all normal publishers share the same stable file lock.
-    // 能力重建和所有正常发布者共用同一个稳定文件锁。
-    let _metadata_guard = if path
-        .file_name()
-        .is_some_and(|name| name == super::layout::METADATA_FILE)
-    {
+    // Schema upgrades and normal publishers share the same stable file lock.
+    // 模式升级和正常发布者共用同一个稳定文件锁。
+    let _publication_guard = if path.file_name().is_some_and(|name| {
+        name == super::layout::METADATA_FILE || name == super::layout::COMPACTIONS_FILE
+    }) {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|error| {
-                SessionV1Error::io(parent, format!("create metadata parent: {error}"))
+                SessionV1Error::io(parent, format!("create {artifact_kind} parent: {error}"))
             })?;
         }
         Some(super::metadata_access::publication_lock(path)?)
@@ -177,22 +177,133 @@ pub fn read_runtime(path: &Path) -> Result<RuntimeDocument, SessionV1Error> {
     Ok(document)
 }
 
-/// Reads the compactions document and validates its frozen contract.
-/// 读取 compactions 文档并校验其冻结契约。
+/// Reads the compaction ledger, upgrading the previous schema under the publisher lock.
+/// 读取压缩账本，在发布锁内升级上一版模式。
+/// Returns the current typed ledger or a format, I/O, or migration error for `path`.
+/// 返回当前强类型账本，或 `path` 对应的格式、读写或迁移错误。
 pub fn read_compactions(path: &Path) -> Result<CompactionsDocument, SessionV1Error> {
-    let document: CompactionsDocument = read_contract_document(
-        path,
-        "compactions",
-        ErrorCode::CompactionCorrupt,
-        COMPACTIONS_CONTRACT,
-    )?;
-    validate_contract(
-        &document.contract,
-        COMPACTIONS_CONTRACT,
-        path,
-        document.schema_version,
-    )?;
+    let (original, mut document) = read_compaction_bytes(path)?;
+    if document.schema_version == COMPACTIONS_SCHEMA_VERSION {
+        return Ok(document);
+    }
+    drop(original);
+    let _publisher = super::metadata_access::publication_lock(path)?;
+    let (original, current) = read_compaction_bytes(path)?;
+    document = current;
+    if document.schema_version == COMPACTIONS_SCHEMA_VERSION {
+        return Ok(document);
+    }
+    // Existing backups are immutable, including after a failed first publication.
+    // 已有备份不可变，包括首次发布失败后的重试。
+    let backup = path.with_file_name("compactions.v1.backup.json");
+    match std::fs::read(&backup) {
+        Ok(bytes) if bytes == original => {}
+        Ok(_) => {
+            return Err(SessionV1Error::io(
+                &backup,
+                "compaction schema backup already contains different bytes",
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            write_file_atomic(&backup, &original, "compaction schema backup")?;
+        }
+        Err(error) => {
+            return Err(SessionV1Error::io(
+                &backup,
+                format!("read compaction schema backup: {error}"),
+            ));
+        }
+    }
+    document.schema_version = COMPACTIONS_SCHEMA_VERSION;
+    let upgraded = serde_json::to_vec(&document).map_err(|error| {
+        SessionV1Error::atomic_write(
+            path,
+            "serialize",
+            format!("serialize upgraded compactions: {error}"),
+        )
+    })?;
+    write_file_atomic(path, &upgraded, "compactions upgrade")?;
     Ok(document)
+}
+
+/// Reads exact bytes and validates the known compaction schema before deserializing its shape.
+/// 读取原始字节，在反序列化结构前校验已知的压缩模式。
+fn read_compaction_bytes(path: &Path) -> Result<(Vec<u8>, CompactionsDocument), SessionV1Error> {
+    let bytes = std::fs::read(path).map_err(|error| match error.kind() {
+        std::io::ErrorKind::NotFound => SessionV1Error::corrupt(
+            ErrorCode::CompactionCorrupt,
+            path,
+            "compactions file does not exist",
+        ),
+        _ => SessionV1Error::io(path, format!("read compactions: {error}")),
+    })?;
+    let header: ContractHeader = serde_json::from_slice(&bytes).map_err(|error| {
+        SessionV1Error::corrupt(
+            ErrorCode::CompactionCorrupt,
+            path,
+            format!("parse compactions header: {error}"),
+        )
+    })?;
+    if header.contract != COMPACTIONS_CONTRACT
+        || !matches!(header.schema_version, 1 | COMPACTIONS_SCHEMA_VERSION)
+    {
+        return Err(SessionV1Error::unsupported(
+            path,
+            format!(
+                "unsupported compactions contract or schema {}",
+                header.schema_version
+            ),
+        ));
+    }
+    let document: CompactionsDocument = serde_json::from_slice(&bytes).map_err(|error| {
+        SessionV1Error::corrupt(
+            ErrorCode::CompactionCorrupt,
+            path,
+            format!("parse compactions: {error}"),
+        )
+    })?;
+    if header.schema_version == 1
+        && document.nodes.iter().any(|node| {
+            let vulcan_session_core::v1::context::CompactionContent::Summary {
+                image_excerpts,
+                image_replay_from_seq,
+                ..
+            } = &node.content;
+            !image_excerpts.is_empty() || image_replay_from_seq.is_some()
+        })
+    {
+        return Err(SessionV1Error::corrupt(
+            ErrorCode::CompactionCorrupt,
+            path,
+            "legacy compactions cannot contain image excerpts",
+        ));
+    }
+    Ok((bytes, document))
+}
+
+#[cfg(test)]
+mod compaction_schema_tests {
+    use super::*;
+
+    /// Verifies the image schema upgrade preserves the exact original ledger and is idempotent.
+    /// 验证图片模式升级保留精确原账本，并支持幂等重复读取。
+    #[test]
+    fn image_compaction_schema_preserves_original_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(super::super::layout::COMPACTIONS_FILE);
+        let backup = path.with_file_name("compactions.v1.backup.json");
+        let original = br#"{ "contract":"vulcan.session-compactions.v1", "schema_version":1, "session_id":"test", "nodes":[] }"#;
+        std::fs::write(&path, original).unwrap();
+        let document = read_compactions(&path).unwrap();
+        assert_eq!(document.schema_version, COMPACTIONS_SCHEMA_VERSION);
+        assert_eq!(std::fs::read(&backup).unwrap(), original);
+        assert_eq!(read_compactions(&path).unwrap(), document);
+        let mut future = document;
+        future.schema_version += 1;
+        write_json_document(&path, &future, "future compaction fixture").unwrap();
+        assert!(read_compactions(&path).is_err());
+        assert_eq!(std::fs::read(&backup).unwrap(), original);
+    }
 }
 
 /// Validates one contract string and schema version against the frozen V1

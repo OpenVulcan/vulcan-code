@@ -36,6 +36,8 @@ use vulcan_workbench_model::{
 };
 use vulcan_workspace_store::{data_plane::HostRuntimeHandle, workspace_store::WorkspaceSnapshot};
 
+pub(crate) mod images;
+
 use super::{
     AgentRuntimeBridge, ServiceBridgeState, SharedServiceBridgeState,
     StreamTaskLaunchFailureCommit, active_reasoning_selection_effort,
@@ -57,6 +59,10 @@ pub(super) const MANUAL_CONTEXT_COMPACTION_TRIGGER: &str = "manual_slash";
 /// Metadata trigger label for host-initiated budget auto-compaction.
 /// 宿主因预算触发自动上下文压缩的元数据触发标签。
 const AUTO_CONTEXT_COMPACTION_TRIGGER: &str = "auto_budget";
+/// Exact reason passed through the physical-request preparation control channel for image pressure.
+/// 图片压力经物理请求准备控制通道传递的精确原因。
+pub(crate) const CONVERSATION_IMAGE_PRESSURE_REASON: &str =
+    "Historical images would consume the inline budget needed by the new conversation images.";
 /// Maximum consecutive automatic compaction failures within one stream execution.
 /// 单个流执行内允许的最大连续自动压缩失败次数。
 const MAX_CONSECUTIVE_AUTO_COMPACTION_FAILURES: usize = 3;

@@ -678,6 +678,8 @@ fn golden_compactions_document() {
             retained_from_seq: Seq::try_new(60).unwrap(),
             content: crate::v1::context::CompactionContent::Summary {
                 text: "compacted".to_string(),
+                image_excerpts: Vec::new(),
+                image_replay_from_seq: None,
             },
             created_at_ms: T,
         }],
@@ -686,7 +688,7 @@ fn golden_compactions_document() {
     let json = serde_json::to_string(&document).unwrap();
     assert_eq!(
         json,
-        r#"{"contract":"vulcan.session-compactions.v1","schema_version":1,"session_id":"sess-1","nodes":[{"compaction_id":1,"api_call_id":4,"api_stats_seq":101,"occurred_at_seq":100,"retained_from_seq":60,"content":{"kind":"summary","text":"compacted"},"created_at_ms":1700000000000}]}"#
+        r#"{"contract":"vulcan.session-compactions.v1","schema_version":2,"session_id":"sess-1","nodes":[{"compaction_id":1,"api_call_id":4,"api_stats_seq":101,"occurred_at_seq":100,"retained_from_seq":60,"content":{"kind":"summary","text":"compacted"},"created_at_ms":1700000000000}]}"#
     );
 }
 

@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use vulcan_ai_contract::{ResourceKind, ResourceReference};
+use vulcan_ai_contract::{ResourceKind, ResourceReference, ResourceSourceKind};
 use vulcan_core::types::ConversationAttachmentKind;
 use vulcan_provider_adapters::{
     PersistedAiConfiguration, ProviderToolCapabilityKind, ResolvedPublicAiSelection,
@@ -144,6 +144,21 @@ pub fn v1_native_media_content(output: &Value) -> Result<Option<Value>, String> 
         return Ok(None);
     };
     Ok(parse_envelope(text)?.map(|_| Value::String(text.to_string())))
+}
+
+/// Returns the previously admitted inline image and its byte length from a durable tool result.
+/// 从持久工具结果返回已准入的内联图片及其字节长度。
+/// Ordinary text and other media return no image; no new file reads or uploads are performed.
+/// 普通文字和其他媒体不返回图片，不执行新的文件读取或上传。
+pub fn compaction_inline_image(output: &Value) -> Result<Option<(ResourceReference, u64)>, String> {
+    let Some(text) = output.as_str() else {
+        return Ok(None);
+    };
+    Ok(parse_envelope(text)?.and_then(|envelope| {
+        (envelope.resource.kind == ResourceKind::Image
+            && envelope.resource.source_kind == ResourceSourceKind::InlineData)
+            .then_some((envelope.resource, envelope.byte_len))
+    }))
 }
 
 /// Retires marked native media `output` recorded before a compaction to its address-only text.

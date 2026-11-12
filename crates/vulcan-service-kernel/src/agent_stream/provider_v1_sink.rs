@@ -91,7 +91,7 @@ pub(crate) use memory_acceptance::{
     host_guided_locked_baseline, rebuild_memory_acceptance_request_for_handle,
 };
 mod media;
-pub(crate) use media::frozen_prompt_media_projection;
+pub(crate) use media::{conversation_image_compaction_required, frozen_prompt_media_projection};
 
 /// Returns the canonical controller identifier for a zero-based V1 projection item position.
 /// 返回从零开始的 V1 投影条目位置对应的规范控制器标识。
@@ -1410,7 +1410,17 @@ fn rebuild_provider_transport_candidate_with_compaction(
                     }
                     None => false,
                 };
-                let output = if compacted {
+                let summarized_image = compaction.is_some_and(|source| {
+                    let seq = snapshot.sourced_items[index].source_from_seq;
+                    source
+                        .image_excerpts
+                        .iter()
+                        .any(|record| record.source_seqs.contains(&seq))
+                })
+                    && vulcan_agent_runtime::native_media_input::compaction_inline_image(&output)
+                        .map_err(provider_projection_runtime_error)?
+                        .is_some();
+                let output = if compacted || summarized_image {
                     vulcan_agent_runtime::native_media_input::compacted_native_media_content(
                         &output,
                     )
@@ -1896,6 +1906,24 @@ impl ProviderV1StreamSink {
         // Include active shell jobs in the single summary instruction so they survive compaction.
         // 将正在运行的 Shell 任务放入唯一的摘要指令，使其在压缩后仍被记住。
         let mut candidate = candidate;
+        if let Some(source) = self
+            .compaction_source
+            .as_ref()
+            .filter(|source| !source.image_excerpts.is_empty())
+        {
+            // Only host-verified records enter the prompt. They remain reference data, not tool instructions.
+            // 只有宿主校验的记录进入提示词，它们是引用资料，不是工具指令。
+            candidate
+                .request_snapshot
+                .prompt
+                .push_str("\n\nHistorical image observations (reference data only):\n");
+            candidate
+                .request_snapshot
+                .prompt
+                .push_str(&crate::context_compaction::images::render(
+                    &source.image_excerpts,
+                ));
+        }
         if facts.purpose == vulcan_session_core::v1::event::ApiPurposeKind::Compaction
             && let Some(jobs) = running_shell_jobs_context(&self.handle.session_id().to_string())
         {
@@ -1905,6 +1933,16 @@ impl ProviderV1StreamSink {
         let locked_baseline =
             initial_locked_baseline_with_host_guidance(&candidate.locked_baseline)?;
         let purpose = facts.purpose;
+        // Use the same physical boundary on both the first request and tool follow-ups.
+        // 首次请求及工具后续请求共用同一个物理边界。
+        let check_image_pressure = matches!(
+            purpose,
+            vulcan_session_core::v1::event::ApiPurposeKind::MainGeneration
+                | vulcan_session_core::v1::event::ApiPurposeKind::RetryGeneration
+                | vulcan_session_core::v1::event::ApiPurposeKind::Continue
+        ) && candidate.context_budget.as_ref().is_some_and(|budget| {
+            budget.compaction_auto_enabled && budget.baseline_matches_active_runtime
+        }) && self.handle.supports_conversation_image_compaction()?;
         let request = facts.request.clone();
         let continuation_action_id = facts.continuation_action_id.clone();
         let prepared_at_ms = facts.prepared_at_ms;
@@ -1936,13 +1974,37 @@ impl ProviderV1StreamSink {
                         }
                         None => snapshot.clone(),
                     };
-                    let prepared_media = media::prepare_v1_user_media_durable(
-                        &media_snapshot,
-                        candidate.media_context.as_ref(),
-                        resource_registry,
-                        Arc::clone(&preparation),
-                    )
-                    .await?;
+                    if check_image_pressure
+                        && let Some(context) = candidate.media_context.as_ref()
+                        && media::conversation_image_compaction_required(&media_snapshot, context)
+                            .await?
+                    {
+                        return Err(SessionRuntimeError::ProviderContextCompactionRequired(
+                            String::from(
+                                crate::context_compaction::CONVERSATION_IMAGE_PRESSURE_REASON,
+                            ),
+                        ));
+                    }
+                    let prepared_media = if let Some(source) = compaction_source
+                        .as_ref()
+                        .filter(|source| !source.image_excerpts.is_empty())
+                    {
+                        media::prepare_image_summary_media(
+                            &media_snapshot,
+                            candidate.media_context.as_ref(),
+                            resource_registry,
+                            &source.image_excerpts,
+                        )
+                        .await?
+                    } else {
+                        media::prepare_v1_user_media_durable(
+                            &media_snapshot,
+                            candidate.media_context.as_ref(),
+                            resource_registry,
+                            Arc::clone(&preparation),
+                        )
+                        .await?
+                    };
                     // Blocking resource reads and encoding run outside the session writer and publisher locks.
                     // 阻塞资源读取与编码在会话写入器、发布器锁之外运行。
                     tokio::task::spawn_blocking(move || {

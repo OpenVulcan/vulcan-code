@@ -621,6 +621,8 @@ async fn context_compaction_fallback_returns_rejected_terminal_outcome() {
             task_id: active_stream_task_id,
         },
         WebuiContextCompactionExecution {
+            image_excerpts: Vec::new(),
+            image_replay_from_seq: None,
             execution,
             retained_from_seq: Seq::try_new(1).expect("valid retained sequence"),
             durability: ProviderV1FinishedDurability::default(),
@@ -742,6 +744,8 @@ async fn context_compaction_without_v1_durability_cannot_write_legacy_checkpoint
             task_id: active_stream_task_id,
         },
         WebuiContextCompactionExecution {
+            image_excerpts: Vec::new(),
+            image_replay_from_seq: None,
             execution,
             retained_from_seq: Seq::try_new(1).expect("valid retained sequence"),
             durability: ProviderV1FinishedDurability::default(),

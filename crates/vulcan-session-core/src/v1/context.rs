@@ -15,7 +15,9 @@ use crate::v1::errors::DomainError;
 use crate::v1::ids::{ApiCallId, CompactionId, Seq};
 
 mod compaction_content;
-pub use compaction_content::CompactionContent;
+pub use compaction_content::{
+    CompactedImageExcerpt, CompactionContent, MAX_COMPACTED_IMAGE_DESCRIPTION_BYTES,
+};
 
 /// File contract of the V1 runtime lock document.
 /// V1 运行时锁定文档的文件契约。
@@ -31,7 +33,7 @@ pub const RUNTIME_SCHEMA_VERSION: u32 = 1;
 
 /// Schema version written into new V1 compactions documents.
 /// 写入新 V1 压缩节点文档的结构版本。
-pub const COMPACTIONS_SCHEMA_VERSION: u32 = 1;
+pub const COMPACTIONS_SCHEMA_VERSION: u32 = 2;
 
 /// Explicit initialization state of the current runtime baseline.
 /// 当前运行时基线的明确初始化状态。
@@ -582,6 +584,8 @@ mod tests {
                 retained_from_seq: Seq::try_new(1).unwrap(),
                 content: CompactionContent::Summary {
                     text: "summary".to_string(),
+                    image_excerpts: Vec::new(),
+                    image_replay_from_seq: None,
                 },
                 created_at_ms: 5,
             }],

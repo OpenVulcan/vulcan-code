@@ -30,7 +30,7 @@ mod request;
 pub(super) mod streaming;
 mod trace;
 
-pub(super) use accumulator::public_usage_to_core;
+pub use accumulator::public_usage_to_core;
 pub(crate) use request::{VulcanPublicContractRequest, project_public_tool_definitions};
 use trace::ProviderApiTraceAttemptState;
 

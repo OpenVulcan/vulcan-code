@@ -916,9 +916,9 @@ impl PublicTurnAccumulator {
 
 /// Converts public usage into the controller's temporary accounting shape.
 /// 将公共用量转换为控制器的临时统计结构。
-pub(in crate::agent_runtime) fn public_usage_to_core(
-    usage: &RequestUsage,
-) -> ProviderUsageSnapshot {
+/// `usage` is the accumulated usage for one physical request. Unknown fields stay absent.
+/// `usage` 是一次物理请求的累计用量，未知字段保持缺省。
+pub fn public_usage_to_core(usage: &RequestUsage) -> ProviderUsageSnapshot {
     ProviderUsageSnapshot {
         update_kind: Some(usage.update_kind),
         input_tokens: known_usage(&usage.input_tokens),

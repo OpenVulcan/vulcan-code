@@ -50,6 +50,8 @@ impl CompactionCommitInput {
             retained_from_seq,
             content: CompactionContent::Summary {
                 text: summary.into(),
+                image_excerpts: Vec::new(),
+                image_replay_from_seq: None,
             },
             locked_baseline,
         }
@@ -155,6 +157,7 @@ impl SessionDocument {
             content,
             locked_baseline,
         } = input;
+        content.validate_images(retained_from_seq, occurred_at_seq)?;
         let locked_sources = locked_baseline.into_locked_sources();
         let started = self
             .events
@@ -200,7 +203,7 @@ impl SessionDocument {
             })
             .max_by_key(|event| event.seq.value());
         match &content {
-            CompactionContent::Summary { text: summary } => {
+            CompactionContent::Summary { text: summary, .. } => {
                 let last_provider_event = last_provider_event.ok_or_else(|| {
                     DomainError::reference("compaction_summary", api_call_id.value())
                 })?;
@@ -465,7 +468,9 @@ impl SessionDocument {
                     field: "api_status",
                 });
             }
-            let CompactionContent::Summary { text: summary } = &node.content;
+            node.content
+                .validate_images(node.retained_from_seq, node.occurred_at_seq)?;
+            let CompactionContent::Summary { text: summary, .. } = &node.content;
             let summary_matches = self.events.iter().any(|event| {
                 if event.seq != node.occurred_at_seq {
                     return false;

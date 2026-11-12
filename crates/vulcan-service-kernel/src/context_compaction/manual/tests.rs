@@ -793,6 +793,8 @@ async fn manual_compaction_rejected_summary_closes_owner_and_preserves_history()
         MANUAL_CONTEXT_COMPACTION_TRIGGER,
         ContextCompactionCommitMode::FinishStandalone { task_id },
         WebuiContextCompactionExecution {
+            image_excerpts: Vec::new(),
+            image_replay_from_seq: None,
             execution: PromptCompactionExecution {
                 compaction_result: CompactionResult::from_model_summary(
                     &plan,

@@ -76,6 +76,8 @@ mod tests {
             retained_from_seq: Seq::try_new(retained).unwrap(),
             content: crate::v1::context::CompactionContent::Summary {
                 text: String::new(),
+                image_excerpts: Vec::new(),
+                image_replay_from_seq: None,
             },
             created_at_ms: 1,
         }

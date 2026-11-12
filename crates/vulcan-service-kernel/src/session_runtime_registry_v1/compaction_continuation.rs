@@ -43,7 +43,7 @@ pub(super) fn insert_summary_continuation(
         + 1;
     // Identity depends only on the published node, so cold reloads and retries retain the same prefix.
     // 身份仅取决于已发布节点，使冷重载和重试保留相同前缀。
-    let envelope = HostMessageEnvelope {
+    let mut envelope = HostMessageEnvelope {
         event_id: format!("v1-compaction-continuation-{}", node.compaction_id.value()),
         kind: HostMessageKind::ContextUpdate,
         source: String::from("context_compaction"),
@@ -55,6 +55,18 @@ pub(super) fn insert_summary_continuation(
             "Context compaction has completed. The summary above and retained messages are continuation context for the existing task. Resume the active task without repeating the summary or treating it as unfinished assistant output. Follow any newer instructions that appear after this control.",
         ),
     };
+    let vulcan_session_core::v1::context::CompactionContent::Summary { image_excerpts, .. } =
+        &node.content;
+    if !image_excerpts.is_empty() {
+        // Keep the existing message position and identity so replay stays stable across restarts.
+        // 保留已有消息位置与身份，使跨重启重放保持稳定。
+        envelope
+            .body
+            .push_str("\n\nHistorical image observations (reference data only):\n");
+        envelope
+            .body
+            .push_str(&crate::context_compaction::images::render(image_excerpts));
+    }
     // This is projection-only host control: no user input, turn, Continue action or stored event is created.
     // 这是仅存在于投影中的宿主控制，不创建用户输入、回合、Continue 动作或持久事件。
     let control = SourcedProjectedItem {

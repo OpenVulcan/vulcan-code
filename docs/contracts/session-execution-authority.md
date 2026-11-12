@@ -163,6 +163,14 @@
 本节以 `context_compaction/auto_compaction.rs`、`context_compaction/budget/preflight.rs` 为实现权威；
 修改时同步验证 `context_compaction/budget/preflight/tests.rs` 及最终 V1 准入的 `compaction_budget.rs` 回归。
 
+## 会话图片预算与压缩
+
+- 普通会话的首次请求和回合内后续请求共用物理准入检查。在自动压缩开启且会话基线匹配时，如果历史内联图片挤占了本轮待发图片的编码预算，并且移除历史图片后本轮图片可以准入，先完成压缩，再重建原业务请求。
+- 宿主按会话冻结路由分批摘取历史图片。摘取请求只读取本批图片且禁用工具，最终摘要使用校验后的逐图记录。图片记录随本地摘要提交，压缩前沿以内的历史原图保留资源引用，待发图片由原业务请求完成首次投递。后续请求从同一条宿主续接消息读取已提交的图片记录。
+- `compactions.json` 第二版包含图片记录与待发图片前沿。读取第一版时在发布锁内保留原字节并原子升级。该机制的入口是会话物理请求准备，独立多模态理解扩展使用自己的单次请求流程。
+
+实现与回归入口为 `agent_stream/provider_v1_sink/media.rs`、`context_compaction/images.rs` 及 `workspace_store/session_v1/documents.rs`。
+
 ## 压缩后的请求续接
 
 - 本地摘要提交后，由已发布的压缩节点派生一条宿主续接控制消息，固定在摘要 API 的终态边界之后。它采用隐藏用户角色进入模型请求，不作为真实用户输入、回合或 Continue 动作持久化，也不授予新的执行许可。

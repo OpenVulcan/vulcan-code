@@ -32,6 +32,12 @@ pub(crate) struct WebuiContextCompactionExecution {
     /// Durable V1 facts produced by the same physical compaction API.
     /// 同一次物理压缩 API 产生的可靠 V1 事实。
     pub(crate) durability: ProviderV1FinishedDurability,
+    /// Host-verified images published only with the completed summary.
+    /// 只随完成摘要一起发布的宿主已校验图片记录。
+    pub(crate) image_excerpts: Vec<vulcan_session_core::v1::context::CompactedImageExcerpt>,
+    /// First pending prompt reserved for business image replay across this summary.
+    /// 此摘要期间为业务图片重放保留的首条待发送提示词。
+    pub(crate) image_replay_from_seq: Option<Seq>,
 }
 
 /// Streams one prompt-compaction request and mirrors provider deltas into WebUI state.
@@ -77,6 +83,10 @@ pub(crate) async fn stream_webui_context_compaction_execution(
     manual_request: Option<
         vulcan_session_core::v1::context_maintenance::ManualCompactionPendingRequest,
     >,
+    images: Option<(
+        Vec<vulcan_session_core::v1::context::CompactedImageExcerpt>,
+        Option<Seq>,
+    )>,
 ) -> Result<WebuiContextCompactionExecution, String> {
     // outputMessageId identifies the visible compaction status output row.
     // outputMessageId 标识可见的压缩状态输出行。
@@ -102,6 +112,21 @@ pub(crate) async fn stream_webui_context_compaction_execution(
             )
         })?.with_manual_compaction_request(manual_request);
     provider_v1_sink.bind_compaction_source(&request.full_context_state)?;
+    let (image_excerpts, image_replay_from_seq) = match images {
+        Some((excerpts, replay_from_seq)) => {
+            provider_v1_sink.attach_compaction_image_excerpts(excerpts.clone())?;
+            (excerpts, replay_from_seq)
+        }
+        None => (
+            crate::session_goal_lifecycle::registered_session_v1_handle_from_state(
+                state, session_id,
+            )?
+            .capture_context_compaction_images()
+            .map_err(|error| error.to_string())?
+            .1,
+            None,
+        ),
+    };
     // providerTelemetryGuard closes an active compaction request if the stream future is dropped.
     // providerTelemetryGuard 在压缩流 Future 被丢弃时关闭活动请求。
     let mut provider_telemetry_guard = ProviderTelemetryHookGuard::new_with_persistence(
@@ -221,6 +246,8 @@ pub(crate) async fn stream_webui_context_compaction_execution(
             execution,
             retained_from_seq,
             durability,
+            image_excerpts,
+            image_replay_from_seq,
         })
     })();
     // The sink, not the latest document request, identifies an early failed summary API.
@@ -428,6 +455,7 @@ pub(crate) fn spawn_webui_context_compaction_task(
                         &budget_note,
                         &trigger,
                         manual_request,
+                        None,
                     )
                     .await
                 }

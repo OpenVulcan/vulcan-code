@@ -239,6 +239,9 @@ pub(crate) struct SessionProviderProjectionSnapshot {
     /// Committed frontier of the current compaction; user media at or before it is delivered as an address only.
     /// 当前压缩的已提交前沿；该前沿及之前的用户媒体仅以地址投递。
     pub(crate) compaction_frontier_seq: Option<Seq>,
+    /// First prompt whose images were reserved for business dispatch across the compaction.
+    /// 跨压缩为业务分派保留图片的首条提示词。
+    pub(crate) image_replay_from_seq: Option<Seq>,
     /// Persisted segment generation that owns the exact event range.
     /// 拥有精确事件区间的持久化分片代次。
     pub(crate) segment_generation: u64,
@@ -2012,6 +2015,52 @@ impl SessionHandle {
         self.capture_durable_projection(SessionProjectionPurpose::CompactionContext)
     }
 
+    /// Checks whether this immutable session type supports host image compaction.
+    /// 检查此不可变会话类型是否支持宿主图片压缩。
+    pub(crate) fn supports_conversation_image_compaction(
+        &self,
+    ) -> Result<bool, SessionRuntimeError> {
+        let document = self
+            .document
+            .lock()
+            .map_err(|_| SessionRuntimeError::DocumentLockPoisoned)?;
+        Ok(document.dedicated_profile().is_none()
+            && document.metadata.child_execution_profile.is_none())
+    }
+
+    /// Captures the exact compaction image sources and their previously committed excerpts.
+    /// 捕获精确的压缩图片来源及其已提交摘取结果。
+    pub(crate) fn capture_context_compaction_images(
+        &self,
+    ) -> Result<
+        (
+            SessionProviderProjectionSnapshot,
+            Vec<vulcan_session_core::v1::context::CompactedImageExcerpt>,
+        ),
+        SessionRuntimeError,
+    > {
+        self.capture_durable_projection_with(
+            SessionProjectionPurpose::CompactionContext,
+            |document| {
+                let Some(id) = document.runtime_lock.current_compaction_id else {
+                    return Ok(Vec::new());
+                };
+                let node = document
+                    .compactions
+                    .iter()
+                    .find(|node| node.compaction_id == id)
+                    .ok_or_else(|| {
+                        DomainError::reference("compaction_image_excerpts", id.value())
+                    })?;
+                let vulcan_session_core::v1::context::CompactionContent::Summary {
+                    image_excerpts,
+                    ..
+                } = &node.content;
+                Ok(image_excerpts.clone())
+            },
+        )
+    }
+
     /// Captures compaction history and its admission source under one publisher/writer boundary.
     /// 在同一个发布器和写入器边界内捕获压缩历史及其准入来源。
     /// Returns a durable projection and opaque source proof; concurrent draft writes are checked at admission.
@@ -2216,7 +2265,13 @@ impl SessionHandle {
         )?;
         // Derive the same fixed control for planning, controller restore and physical request preparation.
         // 为规划、控制器恢复与物理请求准备派生同一条固定控制消息。
+        let mut image_replay_from_seq = None;
         if let Some(summary) = summary_compaction {
+            let vulcan_session_core::v1::context::CompactionContent::Summary {
+                image_replay_from_seq: replay,
+                ..
+            } = &summary.content;
+            image_replay_from_seq = *replay;
             compaction_continuation::insert_summary_continuation(&mut sourced_items, &summary)?;
         }
         let items = sourced_items
@@ -2229,6 +2284,7 @@ impl SessionHandle {
             current_compaction_id,
             preparing_user_prompt_media_seqs,
             compaction_frontier_seq: context_frozen_at,
+            image_replay_from_seq,
             segment_generation,
             document_revision,
             retained_from_seq,

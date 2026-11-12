@@ -2788,6 +2788,8 @@ fn node(id: u64, occurred: u64, retained: u64) -> CompactionNode {
         retained_from_seq: Seq::try_new(retained).unwrap(),
         content: vulcan_session_core::v1::context::CompactionContent::Summary {
             text: String::new(),
+            image_excerpts: Vec::new(),
+            image_replay_from_seq: None,
         },
         created_at_ms: 1,
     }
@@ -2828,7 +2830,10 @@ fn future_runtime_and_compactions_formats_are_unsupported() {
     ] {
         let mut raw: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        raw["schema_version"] = serde_json::json!(2);
+        // Derive a future version independently for each persisted contract.
+        // 根据各持久化契约的当前版本分别派生未来版本。
+        let current = raw["schema_version"].as_u64().unwrap();
+        raw["schema_version"] = serde_json::json!(current + 1);
         raw["field_from_the_future"] = serde_json::json!(true);
         std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
     }
@@ -3453,7 +3458,7 @@ fn fork_reselects_pointer_and_preserves_kept_nodes() {
     let loaded = load_session(&fork_layout).unwrap();
     assert_eq!(loaded.document.compactions.len(), 1);
     let kept = &loaded.document.compactions[0];
-    let vulcan_session_core::v1::context::CompactionContent::Summary { text: summary } =
+    let vulcan_session_core::v1::context::CompactionContent::Summary { text: summary, .. } =
         &kept.content;
     let retained_summary_seq = output
         .events

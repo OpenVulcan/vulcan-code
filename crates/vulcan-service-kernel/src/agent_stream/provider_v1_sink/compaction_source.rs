@@ -17,6 +17,9 @@ pub(super) struct CompactionSourceWindow {
     /// Whether the runtime has confirmed the complete frozen source.
     /// 运行时是否已经确认完整冻结来源。
     prepared: bool,
+    /// Durable-ready excerpts for this attempt, attached only after the full source is verified.
+    /// 此次尝试待持久化的摘取结果，仅在完整来源校验后关联。
+    pub(super) image_excerpts: Vec<vulcan_session_core::v1::context::CompactedImageExcerpt>,
 }
 
 impl CompactionSourceWindow {
@@ -52,6 +55,7 @@ impl CompactionSourceWindow {
             snapshot,
             messages,
             prepared: false,
+            image_excerpts: Vec::new(),
         })
     }
 
@@ -154,6 +158,20 @@ impl CompactionSourceWindow {
 }
 
 impl ProviderV1StreamSink {
+    /// Attaches the already extracted records to this exact bound summary source.
+    /// 将已摘取记录关联到此已绑定的精确摘要来源。
+    pub(crate) fn attach_compaction_image_excerpts(
+        &mut self,
+        excerpts: Vec<vulcan_session_core::v1::context::CompactedImageExcerpt>,
+    ) -> Result<(), String> {
+        let source = self
+            .compaction_source
+            .as_mut()
+            .ok_or("Compaction source is not bound.")?;
+        source.image_excerpts = excerpts;
+        Ok(())
+    }
+
     /// Verifies the bound source belongs to the original child invocation before starting its model stream.
     /// 启动模型流之前，校验已绑定来源属于原子调用。
     /// `turn_id` and `execution_id` come from admitted durable ownership; returns an explicit mismatch without mutation.

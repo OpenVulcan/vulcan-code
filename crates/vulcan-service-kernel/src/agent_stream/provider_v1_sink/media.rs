@@ -11,13 +11,14 @@ use vulcan_provider_adapters::{
     MediaDeliveryTarget, MediaUploadCancellation, MediaUploadFailure,
     PreparedMediaReferenceSnapshot, UploadReferenceScope, media_upload_source_kind,
 };
+use vulcan_session_core::v1::context::CompactedImageExcerpt;
 use vulcan_session_core::v1::{
     UserPromptMediaBinding, UserPromptMediaOrigin, UserPromptMediaRoute, UserPromptResourceBinding,
     UserPromptResourceDelivery, UserPromptResourceDeliveryKind,
 };
 use vulcan_workspace_store::workspace_store::{
     ProjectResourceSource, ProjectResourceUploadReceipt, ProviderBinding, ResourceCatalogEntry,
-    resolve_project_resource_source,
+    project_resource_locator, resolve_project_resource_source,
 };
 
 /// Prepared prompt content and controller budget facts keyed by exact projection position.
@@ -212,7 +213,7 @@ impl PromptResourceCompletion {
 
 /// Closed preparation authority: physical dispatch may freeze new prompts; historical projection is read-only.
 /// 封闭准备权限：物理分派可以冻结新提示词；历史投影是只读的。
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 enum PromptMediaPreparationMode {
     /// The existing physical preparation owns new uploads and partial results; its final API transaction freezes the first request route.
     /// 既有物理准备持有新上传及部分结果；其最终API事务冻结首次请求路线。
@@ -223,6 +224,9 @@ enum PromptMediaPreparationMode {
     /// Simulate new inline delivery but refuse upload side effects and origin publication.
     /// 模拟新内联投递，但拒绝上传副作用及原身份发布。
     Capture,
+    /// Retains image addresses and leaves new prompt media unconsumed for the business request.
+    /// 保留图片地址，将新提示词媒体留给业务请求，不提前消费。
+    ImageSummary(Arc<[CompactedImageExcerpt]>),
 }
 
 /// Prepares exact `snapshot` with frozen `context`, `registry` and explicit `mode` authority.
@@ -240,6 +244,25 @@ async fn prepare_user_media_with_mode(
     Box::pin(prepare_user_media_with_completion(
         snapshot, context, registry, mode, None,
     ))
+    .await
+}
+
+/// Projects the summary's text and resource addresses without consuming pending business media.
+/// 投影摘要文本及资源地址，不消费待发送的业务媒体。
+/// `excerpts` identifies the exact historical occurrences already processed by extraction.
+/// `excerpts` 标识已由摘取处理的精确历史出现。
+pub(super) async fn prepare_image_summary_media(
+    snapshot: &SessionProviderProjectionSnapshot,
+    context: Option<&ProviderRequestMediaContext>,
+    registry: Arc<ProjectResourceCatalogRegistry>,
+    excerpts: &[CompactedImageExcerpt],
+) -> Result<PreparedV1UserMedia, SessionRuntimeError> {
+    prepare_user_media_with_mode(
+        snapshot,
+        context,
+        registry,
+        PromptMediaPreparationMode::ImageSummary(Arc::from(excerpts)),
+    )
     .await
 }
 
@@ -279,6 +302,7 @@ async fn prepare_user_media_with_completion(
     // The worker shares the exact frozen route and session scope.
     // 工作线程共享精确冻结路线及会话作用域。
     let planning_context = context.clone();
+    let planning_mode = mode.clone();
     // The worker checks the same preparation token between exact prompts and resource occurrences.
     // 工作线程在精确提示词及资源出现之间检查同一准备令牌。
     let planning_cancellation = cancellation.0.clone();
@@ -288,7 +312,7 @@ async fn prepare_user_media_with_completion(
         plan_prompts(
             &planning_snapshot,
             &planning_context,
-            mode,
+            planning_mode,
             &planning_cancellation,
         )
     })
@@ -486,15 +510,19 @@ fn plan_prompts(
         }
         // Eligibility comes from Core's first-API frontier, never from a Pending flag alone.
         // 资格来自Core首次API前沿，绝不单凭Pending标志决定。
-        let freeze = mode != PromptMediaPreparationMode::ReadOnly
-            && snapshot
-                .preparing_user_prompt_media_seqs
-                .contains(&sourced.source_from_seq);
+        let pending = snapshot
+            .preparing_user_prompt_media_seqs
+            .contains(&sourced.source_from_seq);
+        let freeze = matches!(
+            mode,
+            PromptMediaPreparationMode::Dispatch | PromptMediaPreparationMode::Capture
+        ) && pending;
         // Compaction retires every earlier media payload; those occurrences keep only their addresses.
         // 压缩使更早的全部媒体载荷失效；这些出现仅保留地址。
-        let compacted = snapshot
-            .compaction_frontier_seq
-            .is_some_and(|frontier| sourced.source_from_seq <= frontier);
+        let compacted = !freeze
+            && snapshot
+                .compaction_frontier_seq
+                .is_some_and(|frontier| sourced.source_from_seq <= frontier);
         // Native counts reset per message while encoded budget remains request-wide.
         // 原生数量按消息重置，编码预算仍覆盖整个请求。
         let mut counts = BTreeMap::<ResourceKind, u64>::new();
@@ -536,6 +564,26 @@ fn plan_prompts(
             // Derive the category only from authoritative MIME, never the physical filename.
             // 仅从权威MIME推导类别，绝不使用物理文件名。
             let kind = resource_kind_from_mime(mime);
+            let compacted = compacted
+                && !(kind == ResourceKind::Image
+                    && snapshot
+                        .image_replay_from_seq
+                        .is_some_and(|replay| sourced.source_from_seq >= replay));
+            // The image batches were read independently, and a summary cannot consume a pending prompt.
+            // 图片已经分批独立摘取，摘要请求不能消费待发送的提示词。
+            let summary_reference_only = match &mode {
+                PromptMediaPreparationMode::ImageSummary(excerpts) => {
+                    pending
+                        || (kind == ResourceKind::Image && {
+                            let locator = project_resource_locator(*id);
+                            excerpts.iter().any(|excerpt| {
+                                excerpt.locator == locator
+                                    && excerpt.source_seqs.contains(&sourced.source_from_seq)
+                            })
+                        })
+                }
+                _ => false,
+            };
             // Original uploaded ownership wins before inspecting the new route or touching its local source.
             // 原上传归属先于新路线检查和本地来源访问生效。
             let prior_delivery = original.map(|origin| &origin.delivery);
@@ -554,6 +602,7 @@ fn plan_prompts(
             // Already-address-only occurrences do not need source inspection or a new target's upload contract.
             // 已为仅地址的出现不需要来源检查或新目标上传契约。
             let attachment_only = compacted
+                || summary_reference_only
                 || target_changed
                 || unproven
                 || matches!(
@@ -629,7 +678,7 @@ fn plan_prompts(
             let mut admission_origin = None;
             // Ownership and preparation eligibility precede soft delivery preferences.
             // 归属及准备资格先于软投递偏好。
-            let decision = if compacted {
+            let decision = if compacted || summary_reference_only {
                 MediaDeliveryDecision::Attachment {
                     reason: MediaDeliveryRejection::CompactedHistory,
                 }
@@ -707,6 +756,96 @@ fn plan_prompts(
         });
     }
     Ok(prompts)
+}
+
+/// Checks whether previously delivered inline images prevent fresh images from fitting the same route.
+/// 检查已投递的历史内联图片是否阻止新图片在同一路由准入。
+/// The two projections share the same source facts and policy. No bytes are read or uploaded.
+/// 两次投影共用来源事实与策略，不读取或上传文件内容。
+pub(crate) async fn conversation_image_compaction_required(
+    snapshot: &SessionProviderProjectionSnapshot,
+    context: &ProviderRequestMediaContext,
+) -> Result<bool, SessionRuntimeError> {
+    if snapshot.preparing_user_prompt_media_seqs.is_empty() {
+        return Ok(false);
+    }
+    // The blocking catalog scan must stop if the physical preparation owner cancels.
+    // 物理准备所有者取消时，阻塞的目录扫描也必须停止。
+    let cancellation = PreparationCancellation(MediaUploadCancellation::new());
+    let token = cancellation.0.clone();
+    let snapshot = snapshot.clone();
+    let context = context.clone();
+    tokio::task::spawn_blocking(move || {
+        let plans = plan_prompts(
+            &snapshot,
+            &context,
+            PromptMediaPreparationMode::Dispatch,
+            &token,
+        )?;
+        history_blocks_new_images(plans, &context, &token)
+    })
+    .await
+    .map_err(|error| SessionRuntimeError::BlockingTaskJoin(error.to_string()))?
+}
+
+/// Simulates retirement of old inline images and returns true only if all blocked new images then fit.
+/// 模拟退役历史内联图片，仅在所有受阻新图片都能准入时返回真。
+fn history_blocks_new_images(
+    plans: Vec<PlannedPrompt>,
+    context: &ProviderRequestMediaContext,
+    cancellation: &MediaUploadCancellation,
+) -> Result<bool, SessionRuntimeError> {
+    // A current image rejected for its own format or size cannot benefit from compacting history.
+    // 当前图片因自身格式或大小被拒绝时，压缩历史无法帮助它。
+    let blocked = |prompt_is_new: bool, resource: &PlannedResource| {
+        prompt_is_new
+            && resource.kind == ResourceKind::Image
+            && resource.upload.is_none()
+            && resource.decision
+                == MediaDeliveryDecision::Attachment {
+                    reason: MediaDeliveryRejection::EncodedBudget,
+                }
+    };
+    if !plans.iter().any(|prompt| {
+        prompt
+            .resources
+            .iter()
+            .any(|resource| blocked(prompt.freeze, resource))
+    }) {
+        return Ok(false);
+    }
+    let mut planner = MediaDeliveryPlanner::new(
+        context.execution.media_delivery_policy,
+        MediaDeliveryPurpose::Conversation,
+    )
+    .map_err(provider_projection_runtime_error)?;
+    for prompt in plans {
+        let mut counts = BTreeMap::<ResourceKind, u64>::new();
+        for mut resource in prompt.resources {
+            ensure_preparation_active(cancellation)?;
+            if !prompt.freeze
+                && resource.kind == ResourceKind::Image
+                && resource.admission_origin == Some(MediaDeliveryOrigin::HistoricalInline)
+            {
+                continue;
+            }
+            let was_blocked = blocked(prompt.freeze, &resource);
+            let count = counts.entry(resource.kind).or_default();
+            replan_resource_for_materialization(&mut resource, context, &mut planner, *count + 1)?;
+            if was_blocked && !matches!(resource.decision, MediaDeliveryDecision::Inline { .. }) {
+                return Ok(false);
+            }
+            if matches!(
+                resource.decision,
+                MediaDeliveryDecision::Inline { .. }
+                    | MediaDeliveryDecision::Upload
+                    | MediaDeliveryDecision::RestoreOriginalUpload
+            ) {
+                *count += 1;
+            }
+        }
+    }
+    Ok(true)
 }
 
 /// Builds the same frozen target for preflight and final admission using `context`, exact `kind` and selected `upload`.

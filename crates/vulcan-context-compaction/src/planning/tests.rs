@@ -3,6 +3,30 @@ use vulcan_context::{
     ContextCompactionPolicy, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind,
 };
 
+/// Image retirement can compact a short conversation while retaining its complete text.
+/// 图片退役可以压缩短会话并完整保留其文本。
+#[test]
+fn image_compaction_can_retain_the_entire_text_tail() {
+    let messages = [test_context_message(
+        "new-image",
+        SessionMessageKind::User,
+        SessionMessageRecordKind::Transcript,
+        "Current prompt",
+    )];
+    let input = || CompactionPlanInput {
+        session_label: "short-conversation",
+        messages: &messages,
+        all_messages: &messages,
+        context_start_message_id: None,
+        source_until_message_id: None,
+        policy: ContextCompactionPolicy::default(),
+    };
+    assert!(plan_context_compaction(input()).is_none());
+    let plan = plan_conversation_image_compaction(input()).expect("image-only compaction plan");
+    assert!(plan.source_messages.is_empty());
+    assert_eq!(plan.tail_selection.retained_message_ids, ["new-image"]);
+}
+
 /// Returns whether text contains CJK characters.
 /// 返回文本是否包含 CJK 字符。
 fn contains_cjk_text(text: &str) -> bool {

@@ -3,7 +3,7 @@
 
 use super::{DirtyFile, SessionDocument, validate_timestamp};
 use crate::v1::DomainError;
-use crate::v1::event::{ConversationEvent, EventBody};
+use crate::v1::event::{ApiPurposeKind, ConversationEvent, EventBody};
 use crate::v1::user_prompt::{
     UserPromptMediaBinding, UserPromptMediaDelivery, UserPromptResourceBinding,
     invalid_prompt_media,
@@ -23,13 +23,16 @@ impl SessionDocument {
         if self.active_api().is_some() {
             return Vec::new();
         }
-        // The last API boundary excludes every earlier pending prompt, regardless of cache state.
-        // 最后一个API边界排除全部更早待准备提示词，与缓存状态无关。
+        // Only a business API can consume a pending prompt. A maintenance summary may finish
+        // between submission and the first delivery of the prompt's media.
+        // 只有业务 API 能消费待发送提示词。维护摘要可能在提交与附件首次投递之间完成。
         let last_api_seq = self
             .events
             .iter()
             .rev()
-            .find(|event| matches!(event.event, EventBody::ApiStarted(_)))
+            .find(|event| {
+                matches!(&event.event, EventBody::ApiStarted(api) if api.purpose != ApiPurposeKind::Compaction)
+            })
             .map(ConversationEvent::seq);
         self.events
             .iter()

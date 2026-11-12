@@ -1649,6 +1649,7 @@ fn spawn_agent_stream_task_with_restart_state(
                             active_stream_task_id,
                             &compaction_request,
                             preparation,
+                            &reason,
                         )
                         .await;
                     match compaction_result {

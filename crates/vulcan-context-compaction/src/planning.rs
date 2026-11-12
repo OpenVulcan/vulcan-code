@@ -25,7 +25,7 @@ pub use models::{
     CompactionInputPruneReport, CompactionPlan, CompactionPlanInput, CompactionResult,
     CompactionSummaryRecord, CompactionTailSelectionReport, PreparedCompactionSource,
 };
-pub use plan::plan_context_compaction;
+pub use plan::{plan_context_compaction, plan_conversation_image_compaction};
 pub use summary::{
     build_compaction_continuation_prompt, build_compaction_continuation_prompt_with_options,
     build_compaction_request_prompt, build_compaction_request_prompt_for_mode,

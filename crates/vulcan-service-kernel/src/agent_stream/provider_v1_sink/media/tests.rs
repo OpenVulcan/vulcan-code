@@ -644,6 +644,7 @@ fn snapshot(
         child_business_execution_id: None,
         preparing_user_prompt_media_seqs: preparing,
         compaction_frontier_seq: None,
+        image_replay_from_seq: None,
         segment_generation: 1,
         document_revision: 1,
         retained_from_seq: Seq::try_new(1).map_err(|error| error.to_string())?,
@@ -1141,6 +1142,86 @@ async fn v1_encoded_budget_and_source_integrity_apply_before_native_delivery()
         )
         .contains("could not be verified")
     );
+    Ok(())
+}
+
+/// Verifies that historical pressure triggers only when retirement lets the new image fit.
+/// 验证仅在退役历史图能让新图准入时触发历史图片压力。
+#[tokio::test]
+async fn v1_image_compaction_preserves_the_new_image_through_follow_up()
+-> Result<(), Box<dyn std::error::Error>> {
+    let project = tempfile::tempdir()?;
+    let registry = Arc::new(ProjectResourceCatalogRegistry::default());
+    let entry = register(project.path(), &registry, &vec![1; 512 * 1024])?;
+    let (context, _) = context(false, false).await?;
+    let pending = UserPromptParameters::for_new_resources(&[entry.resource_id]);
+    let initial = snapshot(
+        project.path(),
+        entry.resource_id,
+        vec![pending.clone(), pending.clone()],
+    )?;
+    let first = prepare_v1_user_media(&initial, Some(&context), Arc::clone(&registry)).await?;
+    let old = first
+        .bindings
+        .iter()
+        .map(|binding| frozen(binding.origin.clone()))
+        .collect::<Vec<_>>();
+    let mut prompts = old.clone();
+    prompts.push(pending.clone());
+    let mut request = snapshot(project.path(), entry.resource_id, prompts)?;
+    assert!(conversation_image_compaction_required(&request, &context).await?);
+    let summary = prepare_image_summary_media(
+        &request,
+        Some(&context),
+        Arc::clone(&registry),
+        &[CompactedImageExcerpt {
+            locator: project_resource_locator(entry.resource_id),
+            source_seqs: request
+                .sourced_items
+                .iter()
+                .take(2)
+                .map(|item| item.source_from_seq)
+                .collect(),
+            sha256: entry.sha256.clone(),
+            description: Some(String::from("Historical image")),
+        }],
+    )
+    .await?;
+    assert!(summary.bindings.is_empty());
+    assert!(summary.prompts.values().all(|prompt| {
+        prompt
+            .content
+            .iter()
+            .all(|item| !matches!(item, ContentItem::Resource { .. }))
+    }));
+
+    // The pending sequence can predate the summary API while still owning its first business send.
+    // 待发送序号可能早于摘要 API，但仍保有首次业务投递权。
+    let pending_seq = request.preparing_user_prompt_media_seqs[0];
+    request.compaction_frontier_seq = Some(pending_seq);
+    request.image_replay_from_seq = Some(pending_seq);
+    assert!(!conversation_image_compaction_required(&request, &context).await?);
+    let resumed = prepare_v1_user_media(&request, Some(&context), Arc::clone(&registry)).await?;
+    assert_eq!(
+        native(&resumed, 2).source_kind,
+        ResourceSourceKind::InlineData
+    );
+    assert!(!metadata(&resumed, 0).is_empty());
+    assert!(!metadata(&resumed, 1).is_empty());
+
+    // A tool follow-up must retain the new image after its first business send froze the origin.
+    // 工具后续请求中，新图首次业务投递冻结原身份后仍保留。
+    let mut prompts = old;
+    prompts.push(frozen(resumed.bindings[0].origin.clone()));
+    let mut follow_up = snapshot(project.path(), entry.resource_id, prompts)?;
+    follow_up.compaction_frontier_seq = Some(pending_seq);
+    follow_up.image_replay_from_seq = Some(pending_seq);
+    let replayed = prepare_v1_user_media(&follow_up, Some(&context), registry).await?;
+    assert_eq!(
+        native(&replayed, 2).source_kind,
+        ResourceSourceKind::InlineData
+    );
+    assert!(!metadata(&replayed, 0).is_empty());
     Ok(())
 }
 

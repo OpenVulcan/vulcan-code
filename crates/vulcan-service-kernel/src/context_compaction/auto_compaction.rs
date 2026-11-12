@@ -38,7 +38,7 @@ pub(crate) async fn maybe_auto_compact_webui_session_before_provider_request(
         active_stream_task_id,
         request,
         preparation,
-        false,
+        AutoCompactionMode::Check,
     )
     .await
 }
@@ -53,6 +53,7 @@ pub(crate) async fn force_auto_compact_webui_session_after_provider_boundary(
     active_stream_task_id: Uuid,
     request: &ExecutionPreparationRequest,
     preparation: &ExecutionPreparation,
+    reason: &str,
 ) -> Result<Option<ExecutionPreparationRequest>, String> {
     maybe_auto_compact_webui_session_with_mode(
         app,
@@ -62,9 +63,28 @@ pub(crate) async fn force_auto_compact_webui_session_after_provider_boundary(
         active_stream_task_id,
         request,
         preparation,
-        true,
+        if reason == CONVERSATION_IMAGE_PRESSURE_REASON {
+            AutoCompactionMode::ImageBudget
+        } else {
+            AutoCompactionMode::ProviderBudget
+        },
     )
     .await
+}
+
+/// Distinguishes a normal check from an already verified physical request pressure signal.
+/// 区分普通检查与已经校验的物理请求压力信号。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AutoCompactionMode {
+    /// Re-evaluate the usual token and cache pressure.
+    /// 重新评估常规 Token 及缓存压力。
+    Check,
+    /// Honor a token budget decision already made by the request owner.
+    /// 采用请求所有者已作出的 Token 预算决定。
+    ProviderBudget,
+    /// Retire images while preserving a fully retained text tail if necessary.
+    /// 退役图片，必要时保留完整文字尾部。
+    ImageBudget,
 }
 
 /// Executes the shared compaction transaction with an explicit trigger mode.
@@ -83,8 +103,9 @@ async fn maybe_auto_compact_webui_session_with_mode(
     active_stream_task_id: Uuid,
     request: &ExecutionPreparationRequest,
     preparation: &ExecutionPreparation,
-    force_compaction: bool,
+    mode: AutoCompactionMode,
 ) -> Result<Option<ExecutionPreparationRequest>, String> {
+    let force_compaction = mode != AutoCompactionMode::Check;
     if !request.prompt_purpose.supports_host_auto_compaction() {
         return Ok(None);
     }
@@ -286,11 +307,12 @@ async fn maybe_auto_compact_webui_session_with_mode(
             "Automatic context compaction context window does not match the frozen model target.",
         ));
     }
-    let compaction_plan = match webui_context_compaction_plan_from_v1(
+    let compaction_plan = match capture_webui_context_compaction_plan(
         state,
         session_id,
         prepared_policy,
         "Automatic context compaction found no history context to compact; this request was stopped to avoid a budget overflow.",
+        mode == AutoCompactionMode::ImageBudget,
     ) {
         Ok(plan) => plan,
         Err(error) => {
@@ -338,21 +360,103 @@ async fn maybe_auto_compact_webui_session_with_mode(
             return Err(error);
         }
     };
-    let terminal_result = stream_webui_context_compaction_execution(
-        app,
-        state,
-        controller_runtime,
-        job_request,
-        session_id,
-        compaction_plan.retained_from_seq,
-        &status_message_id,
-        &budget_note,
-        AUTO_CONTEXT_COMPACTION_TRIGGER,
-        None,
-    )
+    let terminal_result = async {
+        // The same active task owns extraction, summary publication and the business continuation.
+        // 同一个活动任务持有图片摘取、摘要发布和业务续接。
+        let handle = crate::session_goal_lifecycle::registered_session_v1_handle_from_state(
+            state, session_id,
+        )?;
+        let (source, previous) = handle
+            .capture_context_compaction_images()
+            .map_err(|error| error.to_string())?;
+        // If text and image pressure coincide, the same compaction must retire the images with descriptions.
+        // 文本和图片同时产生压力时，同一次压缩必须保留历史图片的摘取内容。
+        let replay_from_seq = source.preparing_user_prompt_media_seqs.first().copied();
+        let execution = match preparation.model_blueprint.frozen_selection.clone() {
+            Some(selection) if replay_from_seq.is_some() => Some(Arc::new(
+                agent_runtime
+                    .public_ai_runtime
+                    .resolve_execution_from_frozen_selection(selection)
+                    .await?,
+            )),
+            _ if mode == AutoCompactionMode::ImageBudget => {
+                return Err(String::from(
+                    "Image compaction lost its frozen route or pending media.",
+                ));
+            }
+            _ => None,
+        };
+        let image_execution = if let Some(execution) = execution {
+            let media_context =
+                vulcan_agent_runtime::agent_runtime::events::ProviderRequestMediaContext {
+                    execution,
+                    session_scope_id: session_id.to_string(),
+                    tool_names: Vec::new(),
+                };
+            if mode == AutoCompactionMode::ImageBudget
+                || crate::agent_stream::conversation_image_compaction_required(
+                    &source,
+                    &media_context,
+                )
+                .await
+                .map_err(|error| error.to_string())?
+            {
+                Some(media_context.execution)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let (image_excerpts, extraction_usage) = if let Some(execution) = image_execution {
+            let (excerpts, usage) = super::images::extract(&source, &execution, previous).await?;
+            let current = handle
+                .capture_context_compaction_planning_snapshot()
+                .map_err(|error| error.to_string())?;
+            if current.segment_generation != source.segment_generation
+                || current.current_compaction_id != source.current_compaction_id
+                || current.open_turn_id != source.open_turn_id
+                || current.sourced_items != source.sourced_items
+            {
+                return Err(String::from(
+                    "Conversation image sources changed during context compaction.",
+                ));
+            }
+            if excerpts.is_empty() {
+                return Err(String::from(
+                    "Image compaction did not find any eligible historical image records.",
+                ));
+            }
+            (excerpts, usage)
+        } else {
+            (previous, Vec::new())
+        };
+        // Text maintenance without image records keeps its existing media boundary.
+        // 没有图片记录的文本维护沿用现有媒体边界。
+        let replay_from_seq = replay_from_seq.filter(|_| !image_excerpts.is_empty());
+        let retained_from_seq = replay_from_seq
+            .map_or(compaction_plan.retained_from_seq, |pending| {
+                compaction_plan.retained_from_seq.min(pending)
+            });
+        stream_webui_context_compaction_execution(
+            app,
+            state,
+            controller_runtime,
+            job_request,
+            session_id,
+            retained_from_seq,
+            &status_message_id,
+            &budget_note,
+            AUTO_CONTEXT_COMPACTION_TRIGGER,
+            None,
+            Some((image_excerpts, replay_from_seq)),
+        )
+        .await
+        .map(|execution| (execution, extraction_usage))
+    }
     .await;
     match terminal_result {
-        Ok(execution) => {
+        Ok((execution, extraction_usage)) => {
             let compaction_usage_segment = context_compaction_usage_segment_from_execution(
                 AUTO_CONTEXT_COMPACTION_TRIGGER,
                 &execution.execution,
@@ -410,6 +514,9 @@ async fn maybe_auto_compact_webui_session_with_mode(
                 request,
                 &refreshed_vmm_state,
             )?;
+            refreshed
+                .embedded_turn_usage_segments
+                .extend(extraction_usage);
             refreshed
                 .embedded_turn_usage_segments
                 .push(compaction_usage_segment);
@@ -518,12 +625,32 @@ pub(crate) fn webui_context_compaction_plan_from_v1(
     policy: ContextCompactionPolicy,
     empty_error: &str,
 ) -> Result<WebuiContextCompactionPlan, String> {
+    capture_webui_context_compaction_plan(state, session_id, policy, empty_error, false)
+}
+
+/// Captures the durable planning source and optionally permits an image-only retirement boundary.
+/// 捕获可靠规划来源，并可允许仅退役图片的边界。
+fn capture_webui_context_compaction_plan(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    policy: ContextCompactionPolicy,
+    empty_error: &str,
+    retain_text_for_images: bool,
+) -> Result<WebuiContextCompactionPlan, String> {
     let handle =
         crate::session_goal_lifecycle::registered_session_v1_handle_from_state(state, session_id)?;
     let (snapshot, source) = handle
         .capture_context_compaction_planning_snapshot_with_source()
         .map_err(|error| format!("failed to capture V1 compaction projection: {error}"))?;
-    plan_webui_context_compaction(state, session_id, policy, empty_error, snapshot, source)
+    plan_webui_context_compaction(
+        state,
+        session_id,
+        policy,
+        empty_error,
+        snapshot,
+        source,
+        retain_text_for_images,
+    )
 }
 
 /// Plans a manual summary for `session_id` from one durable capture of the model and history.
@@ -561,6 +688,7 @@ pub(crate) fn plan_manual_webui_context_compaction(
         "Nothing to compact yet: the whole history still fits in the recent turns that compaction keeps verbatim.",
         snapshot,
         source,
+        false,
     )?;
     Ok((plan, target))
 }
@@ -578,6 +706,7 @@ fn plan_webui_context_compaction(
     empty_error: &str,
     snapshot: crate::session_runtime_registry_v1::SessionProviderProjectionSnapshot,
     source: vulcan_session_core::v1::context_maintenance::ManualContextMaintenanceSource,
+    retain_text_for_images: bool,
 ) -> Result<WebuiContextCompactionPlan, String> {
     let projected_messages = snapshot
         .sourced_items
@@ -595,14 +724,19 @@ fn plan_webui_context_compaction(
     if full_session_messages.is_empty() {
         return Err(empty_error.to_string());
     }
-    let plan = plan_context_compaction(CompactionPlanInput {
+    let input = CompactionPlanInput {
         session_label: &session_id.to_string(),
         messages: &full_session_messages,
         all_messages: &full_session_messages,
         context_start_message_id: None,
         source_until_message_id: None,
         policy,
-    })
+    };
+    let plan = if retain_text_for_images {
+        vulcan_context_compaction::plan_conversation_image_compaction(input)
+    } else {
+        plan_context_compaction(input)
+    }
     .ok_or_else(|| empty_error.to_string())?;
     let retained_message_id = plan
         .tail_selection

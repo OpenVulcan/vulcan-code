@@ -83,6 +83,7 @@ async fn native_read_fixture() -> Result<NativeReadFixture, Box<dyn std::error::
         child_business_execution_id: None,
         preparing_user_prompt_media_seqs: vec![],
         compaction_frontier_seq: None,
+        image_replay_from_seq: None,
         segment_generation: 1,
         document_revision: 1,
         retained_from_seq: Seq::try_new(1)?,

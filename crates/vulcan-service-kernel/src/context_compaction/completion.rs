@@ -393,6 +393,8 @@ pub(crate) async fn finish_webui_context_compaction_execution(
         execution,
         retained_from_seq,
         durability,
+        image_excerpts,
+        image_replay_from_seq,
     } = execution;
     if execution.fallback_used {
         let retry_hint = if trigger == AUTO_CONTEXT_COMPACTION_TRIGGER {
@@ -436,10 +438,18 @@ pub(crate) async fn finish_webui_context_compaction_execution(
     let provider_request_count = execution.provider_request_count;
     // Root and child commits share the exact physical receipt validation.
     // 主子提交共用精确物理回执校验。
-    let commit_input =
+    let mut commit_input =
         verified_compaction_commit_input(&execution, &durability, retained_from_seq)?;
-    let vulcan_session_core::v1::context::CompactionContent::Summary { text: summary_body } =
-        commit_input.content.clone();
+    let vulcan_session_core::v1::context::CompactionContent::Summary {
+        image_excerpts: committed_excerpts,
+        image_replay_from_seq: replay_from_seq,
+        ..
+    } = &mut commit_input.content;
+    *committed_excerpts = image_excerpts;
+    *replay_from_seq = image_replay_from_seq;
+    let vulcan_session_core::v1::context::CompactionContent::Summary {
+        text: summary_body, ..
+    } = commit_input.content.clone();
     let now_ms = i64::try_from(current_unix_millis_value()).map_err(|_| {
         String::from("Current Unix millisecond timestamp exceeds the V1 i64 contract.")
     })?;

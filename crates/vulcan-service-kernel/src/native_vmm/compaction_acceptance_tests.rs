@@ -383,6 +383,8 @@ pub(super) async fn verify(
         crate::context_compaction::MANUAL_CONTEXT_COMPACTION_TRIGGER,
         ContextCompactionCommitMode::FinishStandalone { task_id },
         WebuiContextCompactionExecution {
+            image_excerpts: Vec::new(),
+            image_replay_from_seq: None,
             execution: PromptCompactionExecution {
                 compaction_result: CompactionResult::from_model_summary(&plan, summary),
                 fallback_used: false,

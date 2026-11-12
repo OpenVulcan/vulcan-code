@@ -168,6 +168,8 @@ fn completed_summary(handle: &SessionHandle) -> WebuiContextCompactionExecution 
     });
     durability.locked_baseline = Some(LockedBaselineProjection::empty());
     WebuiContextCompactionExecution {
+        image_excerpts: Vec::new(),
+        image_replay_from_seq: None,
         execution: PromptCompactionExecution {
             compaction_result: CompactionResult::from_model_summary(&plan, summary),
             fallback_used: false,
