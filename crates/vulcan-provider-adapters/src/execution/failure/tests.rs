@@ -308,6 +308,73 @@ fn http_insufficient_quota_is_payment_required() {
     assert!(!failure.error.retryable);
 }
 
+/// Verifies Alibaba Chat routes distinguish token-rate limits from exhausted quota.
+/// 验证百炼 Chat 路由能区分 Token 速率限制和额度耗尽。
+#[test]
+fn http_alibaba_chat_quota_messages_have_distinct_categories() {
+    // The trusted catalog owns the profiles used by ordinary conversation execution.
+    // 可信目录持有普通会话执行所用的 Profile。
+    let catalog = crate::provider_manifest::load_bundled_resolved_catalog();
+    let provider = &catalog.manifest("alibaba").unwrap().descriptor;
+    // Rate limits and monthly quota failures can share the upstream machine code.
+    // 限流与月额度耗尽可能使用相同的上游机器错误码。
+    let cases = [
+        (
+            "Allocated quota exceeded, please increase your quota limit.",
+            AiErrorCategory::RateLimited,
+            true,
+        ),
+        (
+            "Allocated quota exceeded, please increase your quota limit. For details, see: https://www.alibabacloud.com/help/en/model-studio/error-code#token-limit",
+            AiErrorCategory::RateLimited,
+            true,
+        ),
+        (
+            "Your token-plan quota has been exhausted.",
+            AiErrorCategory::PaymentRequired,
+            false,
+        ),
+    ];
+    // Resolve each supported billing and region combination by its actual service entry.
+    // 按实际服务入口定位每种已支持的计费和地区组合。
+    for entry_id in [
+        "token-plan-personal-cn",
+        "token-plan-personal-global",
+        "token-plan-team-cn",
+        "token-plan-team-global",
+        "model-studio-cn",
+        "model-studio-singapore",
+    ] {
+        // Select the exact Chat protocol within the entry, independent of route ordering.
+        // 在入口中按精确 Chat 协议选择路由，独立于路由顺序。
+        let route = provider
+            .service_entries
+            .iter()
+            .find(|entry| entry.id == entry_id)
+            .unwrap()
+            .protocol_routes
+            .iter()
+            .find(|route| route.protocol_profile_id == "openai-chat-completions.v1")
+            .unwrap();
+        for (message, category, retryable) in &cases {
+            // Apply the route's projection before classification as in the HTTP transport.
+            // 和 HTTP 传输一致，在分类前应用路由投影。
+            let body = serde_json::json!({
+                "error": {"code": "insufficient_quota", "type": "insufficient_quota", "message": message}
+            });
+            let projected = crate::execution::project_response_record_text(
+                &route.response_projection_profiles,
+                &body.to_string(),
+            )
+            .unwrap();
+            let error = http_failure(429, None, &projected).error;
+            assert_eq!(&error.category, category, "{entry_id}");
+            assert_eq!(error.retryable, *retryable, "{entry_id}");
+            assert_eq!(error.upstream_code.as_deref(), Some("insufficient_quota"));
+        }
+    }
+}
+
 /// Checks the real Anthropic HTTP 400 billing envelope while preserving the upstream error type.
 /// 检查真实 Anthropic HTTP 400 余额错误封装，同时保留上游错误类型。
 #[test]

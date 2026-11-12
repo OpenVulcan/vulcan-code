@@ -1,8 +1,8 @@
 {
   "schema_version": "vulcan.provider-manifest.v2",
   "provider_id": "alibaba",
-  "revision": 31,
-  "published_at": "2026-11-11T15:11:09Z",
+  "revision": 33,
+  "published_at": "2026-11-12T10:12:31Z",
   "engine_contract": {
     "minimum_manifest_engine": 1,
     "required_protocol_profiles": [
@@ -120,7 +120,7 @@
           "request_profile_refs": [
             "alibaba.token-plan.chat.thinking.v1"
           ],
-          "response_profile_refs": [],
+          "response_profile_refs": ["alibaba.chat.token-rate-limit.v1"],
           "provider_request_id_headers": [],
           "verified": true
         },
@@ -284,7 +284,7 @@
           "request_profile_refs": [
             "alibaba.token-plan.chat.thinking.v1"
           ],
-          "response_profile_refs": [],
+          "response_profile_refs": ["alibaba.chat.token-rate-limit.v1"],
           "provider_request_id_headers": [],
           "verified": true
         },
@@ -443,7 +443,7 @@
           "request_profile_refs": [
             "alibaba.token-plan.chat.thinking.v1"
           ],
-          "response_profile_refs": [],
+          "response_profile_refs": ["alibaba.chat.token-rate-limit.v1"],
           "provider_request_id_headers": [],
           "verified": true
         },
@@ -550,7 +550,7 @@
           "request_profile_refs": [
             "alibaba.token-plan.chat.thinking.v1"
           ],
-          "response_profile_refs": [],
+          "response_profile_refs": ["alibaba.chat.token-rate-limit.v1"],
           "provider_request_id_headers": [],
           "verified": true
         },
@@ -758,7 +758,7 @@
           "request_profile_refs": [
             "alibaba.token-plan.chat.thinking.v1"
           ],
-          "response_profile_refs": [],
+          "response_profile_refs": ["alibaba.chat.token-rate-limit.v1"],
           "provider_request_id_headers": [],
           "verified": true
         },
@@ -951,7 +951,7 @@
           "request_profile_refs": [
             "alibaba.token-plan.chat.thinking.v1"
           ],
-          "response_profile_refs": [],
+          "response_profile_refs": ["alibaba.chat.token-rate-limit.v1"],
           "provider_request_id_headers": [],
           "verified": true
         },
@@ -4164,6 +4164,27 @@
     }
   ],
   "response_profiles": [
+    {
+      "profile_id": "alibaba.chat.token-rate-limit.v1",
+      "description": "Recognize the documented Alibaba Chat token-rate message across Token Plan and Model Studio while preserving other quota errors and the original upstream code.",
+      "payload": {
+        "profile_id": "alibaba.chat.token-rate-limit.v1",
+        "revision": 1,
+        "steps": [
+          {
+            "op": "enum_map",
+            "path": "/error/type",
+            "source": "body_json_pointer",
+            "source_path": "/error/message",
+            "mapping": {
+              "Allocated quota exceeded, please increase your quota limit.": "rate_limit_error",
+              "Allocated quota exceeded, please increase your quota limit. For details, see: https://www.alibabacloud.com/help/en/model-studio/error-code#token-limit": "rate_limit_error"
+            },
+            "unmatched": "keep_literal"
+          }
+        ]
+      }
+    },
     {
       "profile_id": "alibaba.search.mcp-call.response.v1",
       "description": "Normalize bounded embedded MCP page items into generic search records.",
@@ -12788,6 +12809,14 @@
   "provenance": {
     "status": "migrated",
     "sources": [
+      {
+        "url": "https://help.aliyun.com/zh/model-studio/error-code",
+        "note": "Model Studio documents the exact Allocated quota exceeded token-rate message. Its linked variant with insufficient_quota was observed on Beijing Token Plan Personal Chat. Token Plan Personal and Team FAQs document a distinct message for monthly Credits exhaustion."
+      },
+      {
+        "url": "https://www.alibabacloud.com/help/en/model-studio/chatbox",
+        "note": "Both Singapore Token Plan editions use the same OpenAI-compatible Chat base URL; Model Studio pay-as-you-go uses its own base URL and credential."
+      },
       {
         "url": "https://help.aliyun.com/zh/model-studio/qwen-audio-asr-http-api",
         "note": "Official Qwen Audio ASR language codes, recognition arguments, and synchronous output.text. Model Studio Beijing 3.1 and Token Plan Beijing 3.0 returned Italian transcripts with an explicit language hint."

@@ -360,12 +360,12 @@ function renderWorkspace(...args: Parameters<typeof workspaceTree>): string {
 
 // appendRetryRequest adds one physical request to the test history in place.
 // appendRetryRequest 就地向测试历史追加一次物理请求。
-// The failure descriptor carries a diagnostic and the host's optional retry-exhaustion decision.
-// 失败描述提供诊断以及宿主的可选重试耗尽判定。
+// The failure descriptor carries a diagnostic and an optional terminal cause.
+// 失败描述提供诊断及可选终态原因。
 function appendRetryRequest(
   history: ConversationEventSummary[],
   purpose: ApiPurposeKind,
-  failure?: { message: string; exhausted?: boolean },
+  failure?: { message: string; exhausted?: boolean; warning?: "balance" | "network" },
 ): void {
   // Use the next event sequence as a unique fixture API identity.
   // 用下一事件序号作为唯一的夹具 API 标识。
@@ -376,16 +376,19 @@ function appendRetryRequest(
   history.push(eventSummary(apiCallId, { kind: "api_started", api_call_id: apiCallId, purpose, request: route }));
   // Core places the permanent notice immediately after its terminal API statistics.
   // Core 将永久提示紧接着放在终态 API 统计之后。
-  const failureReason = failure?.exhausted ? "retry_exhausted" : "provider_error";
+  const failureReason = failure?.warning === "balance" ? "balance_insufficient"
+    : failure?.warning === "network" ? "network_error"
+    : failure?.exhausted ? "retry_exhausted" : "provider_error";
   history.push(eventSummary(history.length + 1, {
     kind: "api_stats", api_call_id: apiCallId, purpose, ...route, usage: {},
     status: failure ? "failed" : "completed", end_reason: failure ? failureReason : "completed_successfully",
-    ...(failure ? { error: { category: "provider", message: failure.message } } : {}),
+    ...(failure ? { error: { category: failure.warning ?? "provider", message: failure.message } } : {}),
     continuation_eligibility: failure ? "allowed" : "forbidden", timing: { completed_at_ms: 1_000 + history.length + 1 },
   }, "ui_only"));
   if (failure) history.push(eventSummary(history.length + 1, {
-    kind: "display_note", api_call_id: apiCallId, notice_kind: failureReason, reason_code: failureReason,
-    severity: "error", redacted_detail: failure.message,
+    kind: "display_note", api_call_id: apiCallId,
+    notice_kind: failureReason === "network_error" ? "network_disconnected" : failureReason,
+    reason_code: failureReason, severity: failure.warning ? "warning" : "error", redacted_detail: failure.message,
   }, "ui_only"));
 }
 
@@ -400,6 +403,24 @@ function retryDiagnostic(requestId: string): string {
 }
 
 describe("ConversationBranchWorkspaceV1", () => {
+  // Both Core terminal warning types must use the error card, including across history pages.
+  // 两种 Core 终态警告都必须使用错误卡片，包括统计跨历史分页的情况。
+  it.each(["balance", "network"] as const)("renders a %s failure warning as a terminal error card", (warning) => {
+    // Seed a visible prompt and the same terminal facts recorded by Core.
+    // 填入可见的用户输入和与 Core 一致的终态事实。
+    const history = completeTurnEvents().filter(({ event }) => event.kind === "user_input");
+    const diagnostic = "Fixture terminal diagnostic";
+    appendRetryRequest(history, "main_generation", { message: diagnostic, warning });
+    // The partial window represents loading a warning without its preceding API statistics.
+    // 局部窗口代表已加载警告而尚未加载前置 API 统计。
+    const partialHistory = history.filter(({ event }) => event.kind !== "api_stats");
+    for (const events of [history, partialHistory]) {
+      const html = renderWorkspace(events, "inline_output");
+      expect(html).toContain("vk-error-card");
+      expect(html).toContain(diagnostic);
+    }
+  });
+
   it("opens the fork action for a completed turn while a later turn is running", async () => {
     // Keep the completed turn and a distinct live follow-up in the same event window.
     // 在同一事件窗口中保留已完成回合与独立的运行中后续回合。

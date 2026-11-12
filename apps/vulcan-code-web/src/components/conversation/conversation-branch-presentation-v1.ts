@@ -940,10 +940,15 @@ function displayNoteMessage(
   apiStatsByCall: ReadonlyMap<number, ApiStatsBody>,
   t: Translation,
 ): ConversationMessage {
-  if (event.severity === "error") {
-    // The notice's explicit API identity supplies the matching terminal facts when present.
-    // 提示中的显式 API 标识在可用时提供匹配的终态事实。
-    const apiStats = event.api_call_id === undefined ? undefined : apiStatsByCall.get(event.api_call_id);
+  // Match terminal facts by API identity and the Core-owned end reason.
+  // 按 API 标识和 Core 持有的结束原因匹配终态事实。
+  const apiStats = event.api_call_id === undefined ? undefined : apiStatsByCall.get(event.api_call_id);
+  // A history page can begin at a terminal warning whose statistics are on the previous page.
+  // 历史页可能从一条终态警告开始，而对应统计位于上一页。
+  const terminalFailure = apiStats === undefined
+    ? event.notice_kind === "balance_insufficient" || event.notice_kind === "network_disconnected"
+    : apiStats.status === "failed" && apiStats.end_reason === event.reason_code;
+  if (event.severity === "error" || (event.severity === "warning" && terminalFailure)) {
     return {
       ...base,
       role: "system",
@@ -1000,7 +1005,7 @@ function providerErrorBody(
   const error = apiStats?.error;
   // The V1 balance category allows a user to Continue after replenishment, independently of automatic retry.
   // V1 余额类别允许用户充值后主动继续，与自动重试独立。
-  const balanceInsufficient = error?.category === "balance";
+  const balanceInsufficient = error?.category === "balance" || event.notice_kind === "balance_insufficient";
   // Keep the expanded diagnostic compatible with ordinary single failures and paged retries.
   // 使展开诊断兼容普通单次失败及分页重试。
   const payload = compactionProviderError === null ? {

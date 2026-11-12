@@ -205,12 +205,18 @@ impl ProviderExecutionClient {
                 {
                     yield usage_event;
                 }
-                let body = project_response_record_text(&response_profiles, body.as_str())
-                    .map_err(|error| {
-                        let failure = protocol_failure(error);
-                        wire_response_capture.observe_failure("response_projection", &failure);
-                        failure
-                    })?;
+                // Response profiles map JSON objects; a gateway's plain-text error retains its HTTP status.
+                // 响应 Profile 映射 JSON 对象，网关纯文本错误保留其 HTTP 状态。
+                let body = if !response_profiles.is_empty() && body.trim_start().starts_with('{') {
+                    project_response_record_text(&response_profiles, body.as_str())
+                        .map_err(|error| {
+                            let failure = protocol_failure(error);
+                            wire_response_capture.observe_failure("response_projection", &failure);
+                            failure
+                        })?
+                } else {
+                    body
+                };
                 wire_response_capture.set_outcome("http_error_response");
                 // The exact credential is removed before classification bounds any field, so a
                 // truncated field can never keep a credential fragment.
